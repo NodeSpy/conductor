@@ -115,6 +115,7 @@ bots:
 ```
 conductor bot templates --search sre          # installed and registry templates
 conductor bot new platform-sre --from sre/sre # planned on a copy of your config, shown as a diff; --write
+conductor bot new platform-sre --from conductor-packs/sre-bot/sre   # not installed yet: its pack installs in the same change
 conductor bot grant platform-sre pagerduty.acknowledge=reversible
 ```
 

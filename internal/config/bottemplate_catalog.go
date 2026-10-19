@@ -20,29 +20,34 @@ import (
 type TemplateSummary struct {
 	// Ref is what a bot's use: names (installed), or the registry reference
 	// of a template not installed yet.
-	Ref         string         `json:"ref"`
-	Template    string         `json:"template"`
-	Pack        string         `json:"pack"`
-	Version     string         `json:"version"`
-	Description string         `json:"description"`
-	Tags        []string       `json:"tags,omitempty"`
-	Installed   bool           `json:"installed"`
-	Instance    string         `json:"pack_instance,omitempty"`
-	Source      string         `json:"source,omitempty"`
-	Install     string         `json:"install,omitempty"` // the packs: block that installs it
-	Inputs      []InputView    `json:"inputs,omitempty"`
-	Verbs       []VerbView     `json:"verbs,omitempty"`
-	ReadOnly    int            `json:"read_only"`
-	Above       int            `json:"above_observe"`
-	Triggers    []TriggerView  `json:"triggers,omitempty"`
-	Proactive   *ProactiveView `json:"proactive,omitempty"`
-	Model       string         `json:"model,omitempty"`
-	Runtime     string         `json:"runtime,omitempty"`
-	Seed        []string       `json:"seed,omitempty"`
-	Collections []string       `json:"collections,omitempty"`
-	UsedBy      []string       `json:"used_by,omitempty"`
-	Digest      string         `json:"digest"`
-	Charter     string         `json:"charter,omitempty"`
+	Ref         string   `json:"ref"`
+	Template    string   `json:"template"`
+	Pack        string   `json:"pack"`
+	Version     string   `json:"version"`
+	Description string   `json:"description"`
+	Tags        []string `json:"tags,omitempty"`
+	Installed   bool     `json:"installed"`
+	Instance    string   `json:"pack_instance,omitempty"`
+	Source      string   `json:"source,omitempty"`
+	Install     string   `json:"install,omitempty"` // the packs: block that installs it
+	// InstallAs, InstallKey and InstallValue are that block's parts: the
+	// instance name, and use: or source: with its value.
+	InstallAs    string         `json:"install_as,omitempty"`
+	InstallKey   string         `json:"-"`
+	InstallValue string         `json:"-"`
+	Inputs       []InputView    `json:"inputs,omitempty"`
+	Verbs        []VerbView     `json:"verbs,omitempty"`
+	ReadOnly     int            `json:"read_only"`
+	Above        int            `json:"above_observe"`
+	Triggers     []TriggerView  `json:"triggers,omitempty"`
+	Proactive    *ProactiveView `json:"proactive,omitempty"`
+	Model        string         `json:"model,omitempty"`
+	Runtime      string         `json:"runtime,omitempty"`
+	Seed         []string       `json:"seed,omitempty"`
+	Collections  []string       `json:"collections,omitempty"`
+	UsedBy       []string       `json:"used_by,omitempty"`
+	Digest       string         `json:"digest"`
+	Charter      string         `json:"charter,omitempty"`
 	// Identity is the template's suggested identity.
 	Identity *Identity `json:"identity,omitempty"`
 }
@@ -165,7 +170,7 @@ const DefaultRegistry = "https://github.com/" + OfficialPacksRepo
 // that ships templates. A pack that does not load is reported, not fatal.
 // official says the registry is the official one (refs read
 // conductor-packs/<pack>/<template>).
-func RegistryTemplates(dir string, official bool) ([]TemplateSummary, []string) {
+func RegistryTemplates(registry, dir string, official bool) ([]TemplateSummary, []string) {
 	var out []TemplateSummary
 	var problems []string
 	ents, err := os.ReadDir(dir)
@@ -193,17 +198,23 @@ func RegistryTemplates(dir string, official bool) ([]TemplateSummary, []string) 
 			problems = append(problems, fmt.Sprintf("%s: %v", e.Name(), err))
 			continue
 		}
-		use := PacksNamespaceAlias + "/" + e.Name()
+		// The ref names the template in the registry; the install entry
+		// names the pack by its real source (RegistrySource): a git
+		// registry's pack by its git source, so trust governs it.
+		ref := PacksNamespaceAlias + "/" + e.Name()
 		if !official {
-			use = pdir
+			ref = pdir
 		}
+		k, v := RegistrySource(registry, dir, e.Name(), official)
 		for _, n := range sortedLoadedKeys(lts) {
 			lt := lts[n]
 			lt.Instance = e.Name()
 			s := Summarize(lt, false)
-			s.Ref = use + "/" + n
+			s.Ref = ref + "/" + n
 			s.Instance = ""
-			s.Install = fmt.Sprintf("packs: { %s: { use: %s } }", e.Name(), use)
+			s.Source = v
+			s.Install = fmt.Sprintf("packs: { %s: { %s: %s } }", e.Name(), k, v)
+			s.InstallAs, s.InstallKey, s.InstallValue = e.Name(), k, v
 			out = append(out, s)
 		}
 	}

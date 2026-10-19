@@ -769,6 +769,8 @@ func (s *Service) statusOf(name string) map[string]any {
 				t["pending_update"] = p.ID
 			}
 		}
+		// A newer pack in the registry, as conductor last fetched it.
+		t["update"] = config.CheckTemplateUpdate(o, o.Instance)
 		out["template"] = t
 	}
 	if h := rec.Home; h != nil {

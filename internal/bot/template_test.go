@@ -395,3 +395,22 @@ func TestTemplateCheckedOncePerConfig(t *testing.T) {
 		t.Fatal("a reloaded config was not checked")
 	}
 }
+
+// `bot show` names a template bot's source pack and version, and whether an
+// update is available (unknown here: the pack is not from the official
+// registry).
+func TestShowNamesTheTemplatePack(t *testing.T) {
+	f := newTplFixture(t)
+	out, err := f.svc.OperatorOp(context.Background(), "show", map[string]any{"bot": "sre"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl, _ := out["template"].(map[string]any)
+	if tpl["pack"] != "sre-kit" || tpl["version"] != "1.0.0" || tpl["pack_instance"] != "kit" {
+		t.Fatalf("template: %v", tpl)
+	}
+	u, ok := tpl["update"].(config.TemplateUpdate)
+	if !ok || u.Known || !strings.Contains(u.Why, "not from the official registry") {
+		t.Fatalf("update: %#v", tpl["update"])
+	}
+}

@@ -58,7 +58,7 @@ const botUsage = `usage:
     conductor bot approve <bot> <id> --edit-file <f>              # approve a knowledge promotion with your changes
     conductor bot templates [--search <words>] [--registry <dir|git url>] [--installed]   # community bots: templates packs ship
     conductor bot template <ref> [--registry …]                   # one template: inputs, requested verbs, suggestions, charter
-    conductor bot new <name> --from <pack instance>/<template> [--connector in=conn]… [--grant verb=tier]… [--proactive] [--write]
+    conductor bot new <name> --from <instance>/<template> | <registry template> [--registry …] [--allow-unlisted] [--connector in=conn]… [--grant verb=tier]… [--proactive] [--write]   # a registry template's pack installs in the same change
     conductor bot grant <bot> <verb>=<tier>… [--write]            # widen a template bot (validated on a copy, shown as a diff)
     conductor bot template-check <bot>                            # compare its memory with its template now (a newer one → a proposal)
   from a bot session:
@@ -97,7 +97,7 @@ const botUsage = `usage:
     conductor bot proposals [--all]
     conductor bot wait <proposal> [--timeout 30m]`
 
-var botBoolFlags = map[string]bool{"all": true, "everyone": true, "ready": true, "no-labels": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true, "json": true,
+var botBoolFlags = map[string]bool{"all": true, "include-templates": true, "allow-unlisted": true, "everyone": true, "ready": true, "no-labels": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true, "json": true,
 	"installed": true, "proactive": true, "write": true}
 
 // botFlags parses --k v / --k=v, boolean flags, repeated --file, and a
