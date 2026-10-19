@@ -20,7 +20,7 @@ test('production is marked; a fact opens its own page, not the row’s', async (
   await go(page, '#/attention', { fresh: true });
   const row = page.locator('.dl-needs .dl-need', { hasText: 'Replace the production web server' });
   await expect(row.locator('.fx-i.prod')).toContainText('production');
-  await expect(row.locator('.fx-i.t-warn')).toContainText('Changes infrastructure'); // graded: infrastructure is amber, like production
+  await expect(row.locator('.fx-i.t-warning', { hasText: 'Changes infrastructure' })).toHaveCount(1); // graded: infrastructure is amber, like production
   await row.locator('.fx-i.ln', { hasText: 'platform-sre' }).click({ force: true }); // force: on a phone the fact is plain and the tap goes to the row
   // on a desktop the fact opens its own page; on a phone the row is one tap target and opens the item
   if (page.viewportSize().width > 720) await expect(page).toHaveURL(/#\/bots\/platform-sre$/);

@@ -808,12 +808,8 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 .vs-none { font: var(--type-caption); color: var(--color-text-tertiary); } .vs-body > .vs-ref { color: var(--color-text-tertiary); }
 @media (max-width: 720px) { .pk .fb { flex-wrap: wrap; } .pk .fb-bar { flex: 1 1 100%; } .pk-src { margin-left: 0; } }
 /* facts with a tone (45): an update is the most noticeable fact on a row; your own source asks for attention */
-.fx-i.t-new { color: var(--color-text-accent); font-weight: var(--font-weight-bold); } .fx-i.t-new > svg { color: var(--color-text-accent); }
-.fx-i.t-attn { color: var(--color-status-warning-fg); } .fx-i.t-attn > svg { color: var(--color-status-warning-fg); }
 /* risk facts, graded (45b): amber for changing infrastructure (like production), danger for spending money, deleting and
  * widening permissions; reads and reversible changes stay quiet */
-.fx-i.t-warn { color: var(--color-status-warning-fg); font-weight: var(--font-weight-bold); } .fx-i.t-warn > svg { color: var(--color-status-warning-fg); }
-.fx-i.t-danger { color: var(--color-status-danger-fg); font-weight: var(--font-weight-bold); } .fx-i.t-danger > svg { color: var(--color-status-danger-fg); }
 /* One row (47): in a list, a row's title is one line, its description always two (the space reserved, longer text
  * clamped with an ellipsis), its facts one line (a fact that doesn't fit drops whole, never cut); so every row in a
  * list is the same height */
@@ -844,3 +840,15 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 #main > .page:not(.flush) { max-width: calc(1280px - 72px); margin: 0; padding: 8px 36px 56px; }
 @media (max-width: 1100px) { #main > .page:not(.flush) { padding: 8px var(--space-5) 48px; } }
 @media (max-width: 720px) { #main > .page:not(.flush) { padding: 14px max(16px, var(--sar)) 24px max(16px, var(--sal)); } }
+/* the brand's fact tones (design/brand/status/facts.js FACTS_CSS): held is full ink, an update the most noticeable, a
+ * custom source olive-ochre, a change full ink, infrastructure and production amber with a heavier icon, money,
+ * deleting and widening access red with the icon cut out of a solid tile; a service shows its own filled glyph */
+.fx-i .fx-svc { width: 13px; height: 13px; flex: none; color: var(--color-icon-default); } .fx-i .fx-mark { width: 16px; height: 16px; margin: -1.5px -1px; flex: none; color: var(--color-icon-default); }
+.fx-i.t-held, .fx-i.t-held > svg { color: var(--color-fact-held); } .fx-i.t-held { font-weight: 600; }
+.fx-i.t-update, .fx-i.t-update > svg { color: var(--color-fact-update); } .fx-i.t-update { font-weight: var(--font-weight-bold); }
+.fx-i.t-custom, .fx-i.t-custom > svg { color: var(--color-fact-custom); }
+.fx-i.t-change, .fx-i.t-change > svg { color: var(--color-fact-change); } .fx-i.t-change { font-weight: 600; }
+.fx-i.t-warning, .fx-i.t-warning > svg, .fx-i.t-warning .fx-g { color: var(--color-fact-warning); } .fx-i.t-warning { font-weight: var(--font-weight-bold); } .fx-i.t-warning > svg { stroke-width: 2.6; }
+.fx-i.t-danger { color: var(--color-fact-danger); font-weight: var(--font-weight-bold); }
+.fx-tile { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 4px; background: var(--color-fact-danger-tile); flex: none; } .fx-tile > svg { width: 10px; height: 10px; color: var(--color-fact-danger-glyph); stroke-width: 2.6; }
+.fx-prod { display: inline-grid; place-items: center; width: 13px; } .fx-prod svg { width: 10px; height: 10px; }

@@ -1021,3 +1021,19 @@
   --exception-shadow: var(--shadow-2);
   --exception-title: var(--color-emphasis-loud);
 }
+
+/* Fact tones (the facts line's semantic types), from design/brand/tokens/tokens.css (origin/design/brand cb5c517c) */
+:root, [data-theme="light"] { --color-fact-custom: #626437; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --color-fact-custom: #c3c595; } }
+[data-theme="dark"] { --color-fact-custom: #c3c595; }
+:root, [data-theme], [data-density], [data-motion] {
+  --color-fact-quiet: var(--color-text-secondary);
+  --color-fact-held: var(--color-text-primary);
+  --color-fact-update: var(--color-text-accent);
+  --color-fact-production: var(--color-fact-warning);
+  --color-fact-change: var(--color-text-primary);
+  --color-fact-warning: var(--color-status-warning-fg);
+  --color-fact-danger: var(--color-status-danger-fg);
+  --color-fact-danger-tile: var(--color-status-danger-solid);
+  --color-fact-danger-glyph: var(--color-text-inverse);
+}
