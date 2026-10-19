@@ -587,6 +587,14 @@
     if (b == null) return `add ${p}`;
     if (a == null) return `remove ${p}`;
     if (coll === 'file') return 'config.yaml: your edits to its comments and layout';
+    // a bot's or a team's change in words (r5 major 10: the review and the toast led with YAML paths); the path is the
+    // quiet line under it in the review
+    if ((coll === 'bots' || coll === 'teams') && typeof a === 'object' && typeof b === 'object') { const nm = coll === 'bots' && window.UI && UI.botName ? UI.botName(key) : `team ${key}`, top = new Set();
+      const walk = (x, y, pre) => new Set([...Object.keys(x || {}), ...Object.keys(y || {})]).forEach((k) => { if (eq((x || {})[k], (y || {})[k])) return; const xa = (x || {})[k], ya = (y || {})[k]; if (pre === '' && k === 'autonomy' && xa && ya && typeof xa === 'object') walk(xa, ya, 'autonomy.'); else top.add(pre + k); });
+      walk(b, a, '');
+      const W = { avatar: 'a new picture', description: 'its description', team: a.team ? `moves to team ${a.team}` : 'leaves its team', 'autonomy.tiers': 'what it may do', 'autonomy.promote': 'what it does on its own', 'autonomy.shadow': a.autonomy && a.autonomy.shadow ? 'starts practising (nothing it does is real)' : 'stops practising', 'autonomy.ceiling': 'what its bots may do on their own', 'autonomy.spend_cap': 'its spending limit', proactive: 'how often it checks in', operators: 'who approves', peers: 'who it may ask', worker: 'how it runs', skill: 'what it may use', isolation: 'its sandbox', purchases: 'what it may buy', browser: 'its browser', routing: 'who gets its work', collections: 'its knowledge', display_name: 'its name', tagline: 'its tagline', personality: 'its voice', color: 'its colour', disabled: a.disabled ? 'turns it off' : 'turns it on' };
+      const words = [...top].map((k) => W[k] || k.replace(/^autonomy\./, '').replace(/_/g, ' ')); const u = [...new Set(words)];
+      return `${nm}: ${u.slice(0, 3).join(', ')}${u.length > 3 ? ` and ${u.length - 3} more` : ''}`; }
     // a workflow is kept as its text: say what changed in its value (one value: from → to), else that only its comments did
     if (typeof a === 'string' && typeof b === 'string') { let pb, pa; try { pb = Y.parse(b).value; pa = Y.parse(a).value; } catch (e) {}
       if (pb && pa && typeof pa === 'object') { if (eq(pb, pa)) return `${p}: its comments`; b = pb; a = pa; } }

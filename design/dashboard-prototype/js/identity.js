@@ -22,6 +22,8 @@
      secondary beside it (UI.botWho), in code, and under For audit. UI.nm: a bot's name, escaped, for prose and labels
      (anything else, a team or a person, passes through). UI.nameProse: the demo's prose rewritten with the names (the
      fixtures were written with ids); ids inside paths, refs and code (bot:x, x/y, x.verb) are left alone. */
+  /** A risk code in words (r5 major 10): what an action can do, as people say it. */
+  UI.riskWords = (t) => ({ observe: 'only reads', reversible: 'things that can be undone', propose: 'asks you first', commit_money: 'spends money', never: 'never' }[t] || t);
   UI.nm = (b) => UI.esc(UI.botName(String(b || '').replace(/^bot:/, '')));
   UI.nameProse = (t) => { const ids = Object.keys(window.D.identity || {}).filter((b) => (window.D.identity[b] || {}).name); if (!t || !ids.length) return t;
     return String(t).replace(new RegExp(`(^|[^\\w./:@#-])(${ids.map((x) => x.replace(/-/g, '\\-')).join('|')})(?![\\w/@-]|\\.[a-z])`, 'g'), (m0, pre, id) => pre + window.D.identity[id].name); };

@@ -197,7 +197,7 @@
     if (ap.done && !P.length) return doneView();
     ap.done = null;
     if (!P.length) return `<div class="page">${UI.head('Review and apply', { crumbs: [['Config', '#/config'], ['Review and apply']] })}
-      <div class="panel"><div class="empty"><span class="serif">Nothing staged</span>Edit a connector, a bot, a secret reference or a workflow and its change waits here: validated on a copy, shown as a diff, applied with your passkey.<div class="row" style="justify-content:center;margin-top:10px"><a class="btn" href="#/config">Config</a><a class="btn" href="#/connectors">Connectors</a><a class="btn" href="#/workflows">Workflows</a></div></div></div></div>`;
+      <div class="panel"><div class="empty"><span class="serif">Nothing staged</span>Edit a connection, a bot, a secret reference or a workflow and its change waits here: validated on a copy, shown as a diff, applied with your passkey.<div class="row" style="justify-content:center;margin-top:10px"><a class="btn" href="#/config">Config</a><a class="btn" href="#/connectors">Plugins</a><a class="btn" href="#/workflows">Workflows</a></div></div></div></div>`;
     const key = JSON.stringify(P.map((c) => c.id));
     if (ap.checksFor !== key) { ap.checksFor = key; ap.phase = 'check'; ap.ack = false; }
     const before = S.configText(D), cand = S.candidate(), after = S.configText(cand), envB = S.envText(D), envA = S.envText(cand);

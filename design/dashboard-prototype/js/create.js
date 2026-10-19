@@ -36,7 +36,7 @@
     const uses = Object.keys(SCHEMA.connectors).filter((u) => u !== 'git' && (!ctx.uses || ctx.uses.includes(u)));
     const fields = [Object.assign({ k: 'name', type: 'string', req: true, label: 'Name', help: 'How you refer to this connection, e.g. gh-work', validate: taken(() => V().connectors) }, NAME), { k: 'use', type: 'enum', req: true, label: 'Plugin', options: uses.map((u) => [u, `${SCHEMA.connectors[u].label} (${u})`]), def: ctx.use || uses[0] }];
     uses.forEach((u) => SCHEMA.connectors[u].settings.forEach((f) => fields.push(Object.assign({}, f, { k: `${u}__${f.k}`, label: f.k, show: (vals) => (vals.use || ctx.use || uses[0]) === u }))));
-    drawer({ caps: 'new connector instance', title: ctx.use ? `New ${SCHEMA.connectors[ctx.use].label} connector` : 'New connector', intro: 'Settings come from the plugin\'s declaration. Secrets are references, never values.', values: { use: ctx.use || uses[0] }, fields, note: note('connector'), wide: true,
+    drawer({ caps: 'new connection', title: ctx.use ? `New ${SCHEMA.connectors[ctx.use].label} connection` : 'New connector', intro: 'Settings come from the plugin\'s declaration. Secrets are references, never values.', values: { use: ctx.use || uses[0] }, fields, note: note('connector'), wide: true,
       onSubmit: (v) => { const u = v.use || ctx.use || uses[0], n = { use: u }; SCHEMA.connectors[u].settings.forEach((f) => { const x = v[`${u}__${f.k}`]; if (x !== undefined) S.setPath(n, f.k, x); }); stage('connectors', v.name, n, done); } });
   };
   C.runtime = (ctx, done) => drawer({ caps: 'new runtime', title: 'New runtime',

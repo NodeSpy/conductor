@@ -26,7 +26,7 @@
     UI.cm = { st, draw, use };
   };
   UI.act('cm-inst', (el) => { UI.cm.st.inst = el.value.trim(); });
-  UI.act('cm-go', () => { if (!/^[a-z][a-z0-9-]*$/.test(UI.cm.st.inst) || S.view().connectors.some((c) => c.name === UI.cm.st.inst)) { UI.toast('Pick another instance name', 'lowercase, digits, dashes; not one in use', 'fail'); return; } UI.cm.st.phase = 1; UI.cm.draw(); });
+  UI.act('cm-go', () => { if (!/^[a-z][a-z0-9-]*$/.test(UI.cm.st.inst) || S.view().connectors.some((c) => c.name === UI.cm.st.inst)) { UI.toast('Pick another name for the connection', 'lowercase, digits, dashes; not one in use', 'fail'); return; } UI.cm.st.phase = 1; UI.cm.draw(); });
   UI.act('cm-store', () => { const { st, use } = UI.cm, sv = SERVICE[use], keys = sv.keys.map((k) => `${st.inst}-${k.replace('_', '-')}`);
     UI.closeModal();
     UI.stepup({ title: `Store ${keys.length} tokens in the vault`, purpose: 'secret write', ok: 'Store with passkey', what: `{ purpose: <b>secret_write</b>, vault: <b>house</b>, keys: <b>${keys.join(', ')}</b> }` }).then((ok) => { if (!ok) return;

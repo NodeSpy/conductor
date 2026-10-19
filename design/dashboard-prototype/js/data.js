@@ -624,7 +624,7 @@ steps:
       proposals: [
         { id: 'k4', bot: 'platform-sre', from: 'knowledge/alb.md', to: 'alb.md', summary: 'ALB deregistration delay is 30s on every target group', status: 'pending', at: m(25), case: 'c29', diff: ' # ALB\n \n Shared target groups; check deregistration delay before blaming the app.\n+\n+`deregistration_delay` is **30s** on every target group (modules/web/alb.tf).\n' },
         { id: 'k3', bot: 'web-triage', from: 'knowledge/safari.md', to: 'browsers.md', summary: 'Safari 18 flex gap bug: use margin fallback in checkout', status: 'pending', at: m(55), case: 'c33', diff: '+# Browsers\n+\n+Safari 18 mis-sizes flex `gap` inside buttons; checkout uses a margin fallback.\n' },
-        { id: 'k2', bot: 'platform-sre', from: 'runbooks/page-triage.md', to: 'oncall.md', summary: 'Ack within 5 minutes; one case per page', status: 'approved', at: m(3000), approver: 'ops (passkey · laptop)', diff: '' },
+        { id: 'k2', bot: 'platform-sre', from: 'runbooks/page-triage.md', to: 'oncall.md', summary: 'Ack within 5 minutes; one ticket per page', status: 'approved', at: m(3000), approver: 'ops (passkey · laptop)', diff: '' },
       ] },
     finance: null,
   };
@@ -780,13 +780,13 @@ steps:
     { id: 'k4', bot: 'platform-sre', kind: 'knowledge', to: 'knowledge/alb.md', summary: 'ALB deregistration delay is 30s on every target group', status: 'pending', at: new Date(Date.now() - 25 * 60000).toISOString(), case: 'c29',
       content: fm({ kind: 'knowledge', title: 'ALB', statement: 'Shared target groups: deregistration_delay is 30s on every target group; check it before blaming the app.', applies_to: ['alb', 'acme/web'], source: 'modules/web/alb.tf (task c29)', confidence: 'high' }, '') },
     { id: 'k3', bot: 'web-triage', kind: 'knowledge', to: 'knowledge/safari-18-flex-gap.md', summary: 'Safari 18 flex gap bug: use margin fallback in checkout', status: 'pending', at: new Date(Date.now() - 55 * 60000).toISOString(), case: 'c33',
-      content: fm({ kind: 'knowledge', title: 'Safari 18 flex gap', statement: 'Safari 18 mis-sizes flex gap inside buttons; checkout uses a margin fallback.', applies_to: ['acme/web', 'safari'], source: 'task c33 repro', confidence: 'medium' }, '') },
+      content: fm({ kind: 'knowledge', title: 'Safari 18 flex gap', statement: 'Safari 18 mis-sizes flex gap inside buttons; checkout uses a margin fallback.', applies_to: ['acme/web', 'safari'], source: 'reproduced on the ticket “Checkout button misaligned on Safari”', confidence: 'medium' }, '') },
     { id: 'k5', bot: 'web-triage', kind: 'runbook', to: 'runbooks/checkout-errors.md', summary: 'Runbook for checkout 5xx bursts', status: 'pending', at: new Date(Date.now() - 70 * 60000).toISOString(), case: 'c33',
       content: fm({ kind: 'runbook', title: 'Checkout errors', when: 'checkout 5xx above 2% for 5 minutes', steps: [{ do: 'Check the canary' }, { run: 'kubectl rollout undo deploy/web' }, { do: 'Tell #incidents', verb: 'slack-ops.post', run: 'echo hi' }] }, '') },
-    { id: 'k2', bot: 'platform-sre', kind: 'runbook', to: 'runbooks/page-triage.md', summary: 'Ack within 5 minutes; one case per page', status: 'approved', at: new Date(Date.now() - 3000 * 60000).toISOString(), approver: 'ops (passkey · laptop)', content: '' },
+    { id: 'k2', bot: 'platform-sre', kind: 'runbook', to: 'runbooks/page-triage.md', summary: 'Ack within 5 minutes; one ticket per page', status: 'approved', at: new Date(Date.now() - 3000 * 60000).toISOString(), approver: 'ops (passkey · laptop)', content: '' },
   ];
   D.botMemory = {
-    'web-triage': { 'knowledge/checkout-margin.md': fm({ kind: 'knowledge', title: 'Checkout margin fallback', statement: 'Checkout buttons use a margin fallback instead of flex gap, for Safari 18.', applies_to: ['acme/web', 'safari'], source: 'task c33', confidence: 'high' }, '') },
+    'web-triage': { 'knowledge/checkout-margin.md': fm({ kind: 'knowledge', title: 'Checkout margin fallback', statement: 'Checkout buttons use a margin fallback instead of flex gap, for Safari 18.', applies_to: ['acme/web', 'safari'], source: 'the ticket “Checkout button misaligned on Safari”', confidence: 'high' }, '') },
     'billing-sre': { 'knowledge/nat-owners.md': fm({ kind: 'knowledge', title: 'NAT owners', statement: 'Three NAT gateways (api, web, data), all owned by platform.', applies_to: ['nat'], source: 'delegation d3 from platform-sre', confidence: 'medium' }, '') },
   };
   // collections: the operator's own (config, collections:) and those packs ship

@@ -10,23 +10,23 @@
     agent: ['Agent', 'An AI model run for one step with a prompt, in a sandbox. It finishes with the step; a bot is the one that remembers.'],
     team: ['Team', 'A group of bots that share approvers, limits and knowledge. A bot on a team can only be stricter than its team.'],
     pack: ['Pack', 'A bundle of workflows (and sometimes bots) someone else wrote, installed and updated as one unit.'],
-    plugin: ['Plugin', 'Code that teaches conductor a new service or engine, such as a vendor connector. The Plugins page lists them: your connections to services, agent runtimes and code languages.'],
-    connector: ['Connector', 'Your connection to a service (GitHub, Slack, PagerDuty…): the account and the events it delivers.'],
-    verb: ['Verb', 'One action a connector can take, named <instance>.<action>, like gh.comment or slack-ops.post.'],
-    tier: ['Tier', 'How much a bot may do with a verb: observe (read only), reversible (can be undone), propose (asks you first), commit_money (spends money, always asks), never.'],
-    observe: ['observe', 'Reads only. Nothing changes.'],
-    reversible: ['reversible', 'Changes something that can be undone, like a comment or a post. Asks you first unless it is promoted.'],
-    propose: ['propose', 'Asks you first: the bot proposes it and nothing happens until you approve.'],
-    commit_money: ['commit_money', 'Spends real money. Always asks you, within the spend cap.'],
-    never: ['never', 'Refused outright, even if you approve.'],
-    promote: ['Promoted', 'A reversible verb you let the bot run without asking each time. A team ceiling can forbid it.'],
-    ceiling: ['Ceiling', 'The most a team lets its bots be promoted to: reversible, or observe (no bot acts on its own).'],
-    shadow: ['Shadow mode', 'The bot records what it would do, but nothing executes. Use it to watch a new bot before trusting it.'],
+    plugin: ['Plugin', 'Code that teaches conductor a new service, agent runtime or code language. The Plugins page lists them: your connections to services, agent runtimes and code languages.'],
+    connector: ['Connection', 'Your connection to a service (GitHub, Slack, PagerDuty…): the account and the events it delivers. (In config: connectors)'],
+    verb: ['Action', 'One thing a connection can do, like posting a message or commenting on a pull request. In config it is named <connection>.<action>, like gh.comment.'],
+    tier: ['Risk', 'How much an action can change: it only reads, it can be undone, it asks you first, it spends money (always asks), or never. (In config: observe, reversible, propose, commit_money, never.)'],
+    observe: ['Only reads', 'Reads only. Nothing changes. (In config: observe.)'],
+    reversible: ['Can be undone', 'Changes something that can be undone, like a comment or a post. Asks you first unless you let it do it on its own. (In config: reversible.)'],
+    propose: ['Asks you first', 'The bot asks and nothing happens until you approve. (In config: propose.)'],
+    commit_money: ['Spends money', 'Spends real money. Always asks you, within the spending limit. (In config: commit_money.)'],
+    never: ['Never', 'Refused outright, even if you approve.'],
+    promote: ['On its own', 'An action that can be undone, which you let the bot do without asking each time. A team can forbid it. (In config: autonomy.promote.)'],
+    ceiling: ['Team limit', 'The most a team lets its bots do on their own: things that can be undone, or only reading. (In config: autonomy.ceiling.)'],
+    shadow: ['Practice mode', 'The bot records what it would do, but nothing executes. Use it to watch a new bot before trusting it. (In config: autonomy.shadow.)'],
     requester: ['Requester', 'Who asked for the work. A bot never gets more trust than whoever asked it, through every hand-off (this is "provenance").'],
     provenance: ['Provenance', 'Where a request came from. A bot acts with no more trust than the person or event that started it.'],
     widening: ['Widening', 'A change that lets bots or agents do more: a new permission, host, repo or promotion. Widenings are listed before you apply.'],
     digest: ['Digest', 'A fingerprint of exactly what you approve. If anything changes after you sign, the approval no longer matches and is refused.'],
-    case: ['Task', 'One piece of work a bot is handling, like a ticket: what started it, its notes, the approvals it asked for and the result. (conductor’s config and CLI call it a case.)'],
+    case: ['Ticket', 'One piece of work for a bot or a team: what started it, its notes, the approvals it asked for and the result. (In config and the CLI: case)'],
     home: ['Home session', 'The bot\'s ongoing conversation. It is rotated (started fresh) after a number of turns or hours; memory carries over.'],
     turn: ['Turn', 'One reply from the bot\'s model. Counted to rotate sessions and to cap how much a bot may run.'],
     sweep: ['Sweep', 'A bot checking in on its own on a schedule, without an event.'],
@@ -48,5 +48,5 @@
   document.addEventListener('focusin', (e) => { const el = e.target.closest && e.target.closest('.term'); if (el) el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); });
   document.addEventListener('focusout', (e) => { if (e.target.closest && e.target.closest('.term')) document.body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); });
   UI.route('glossary', () => `<div class="page wizard">${UI.head('Glossary', { })}
-    <div class="panel"><dl class="gloss">${Object.entries(G).map(([k, [t, d]]) => `<div id="g-${k}"><dt>${UI.esc(t)}</dt><dd>${UI.esc(d)}</dd></div>`).join('')}</dl></div></div>`);
+    <div class="panel"><dl class="gloss">${Object.entries(G).map(([k, [t, d]]) => `<div id="g-${k}"><dt>${UI.esc(t)}</dt><dd>${UI.esc(d).replace(/\(In config(?: and the CLI)?: ([^)]*)\)/, '<span class="gl-cfg">(in config: <code>$1</code>)</span>')}</dd></div>`).join('')}</dl></div></div>`);
 })();

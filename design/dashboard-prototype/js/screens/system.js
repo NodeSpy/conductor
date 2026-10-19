@@ -67,7 +67,7 @@
       if (!ok) return; const decl = SCHEMA.connectors[pn];
       D.plugins.push({ name: pn, kind: pn === 'lua' ? 'engine' : 'connector', ver: b.dataset.v, src: b.dataset.n, status: 'ok', instances: [], reload: 'in place', update: null });
       audit('plugin_add', `${b.dataset.n}@${b.dataset.v}`); S.save(); UI.rerender();
-      UI.toast(`Installed ${pn}`, decl ? 'add a connector instance to use it' : 'available to code steps', 'ok');
+      UI.toast(`Installed ${pn}`, decl ? 'add a connection to use it' : 'available to code steps', 'ok');
       if (decl) setTimeout(() => connForm(null, pn), 50);
     });
   });
@@ -224,7 +224,7 @@
     const fields = [{ k: 'name', type: 'string', req: true, readonly: !!name, pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'lowercase, digits, dashes', validate: (v) => (!name && D.runtimes.find((r) => r.name === v) ? 'Exists already.' : '') }, { k: 'use', type: 'enum', req: true, options: Object.keys(SCHEMA.runtimes), def: use0 }];
     const seen = new Set(['name', 'use']);
     Object.entries(SCHEMA.runtimes).forEach(([u, d]) => d.settings.forEach((f) => { const key = f.k; if (seen.has(key + '|' + u)) return; seen.add(key + '|' + u); fields.push(Object.assign({}, f, { k: key + '@' + u, label: f.label || key, show: (v) => (v.use || use0) === u })); }));
-    UI.form({ caps: name ? `runtimes.${name}` : 'runtimes:', title: name ? `Edit runtime ${name}` : 'Add a runtime', edit: !!name, wide: true,
+    UI.form({ caps: 'Plugins · agent runtimes', title: name ? `Edit runtime ${name}` : 'Add a runtime', edit: !!name, wide: true,
       values: cur ? Object.assign({ name, use: cur.use }, Object.fromEntries((SCHEMA.runtimes[cur.use] || { settings: [] }).settings.map((f) => [f.k + '@' + cur.use, S.getPath(cur, f.k)]))) : { use: use0 },
       fields, note: 'isolation: none on a runtime runs every agent it launches as you, unsandboxed. That is a widening; applying asks for your passkey.', submit: 'Review change', submitIcon: 'check',
       onSubmit: (v) => { const u = v.use || use0, n = { use: u }; Object.entries(v).forEach(([k, x]) => { const [fk, fu] = k.split('@'); if (fu === u && x !== undefined && x !== '') S.setPath(n, fk, x === true || x === false ? x : x); }); if (n.default === false) delete n.default; UI.staged(S.stage('runtimes', v.name || name, n)); } });
@@ -248,7 +248,7 @@
   UI.act('rt-del', (b) => UI.confirm({ title: `Remove runtime ${b.dataset.r}?`, body: 'Stages removing it. Steps and bots that name it fail validation until they pick another.', ok: 'Stage removal', danger: true }).then((ok) => ok && UI.staged(S.stage('runtimes', b.dataset.r, null))));
   function hostForm(name) {
     const cur = name ? S.staged('hosts', name) : null;
-    UI.form({ caps: name ? `hosts.${name}` : 'hosts:', title: name ? `Edit host ${name}` : 'Add a host', edit: !!name, values: cur ? Object.assign({ name }, cur) : {},
+    UI.form({ caps: 'Plugins · machines', title: name ? `Edit host ${name}` : 'Add a host', edit: !!name, values: cur ? Object.assign({ name }, cur) : {},
       fields: [{ k: 'name', type: 'string', req: true, readonly: !!name, pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'lowercase, digits, dashes', validate: (v) => (!name && D.hosts.find((h) => h.name === v) ? 'Exists already.' : '') }, { k: 'addr', type: 'string', req: true, label: 'Address', ph: 'build-box.tail0000.ts.net' }, { k: 'user', type: 'string', req: true, ph: 'conductor' }, { k: 'env', type: 'map', help: 'Environment for commands run there.' }],
       note: 'Remote agents reach conductor by SSH reverse tunnel to the skill socket only, never the dashboard.', submit: 'Review change', submitIcon: 'check',
       onSubmit: (v) => { const n = { addr: v.addr, user: v.user }; if (v.env) n.env = v.env; UI.staged(S.stage('hosts', v.name || name, n)); } });

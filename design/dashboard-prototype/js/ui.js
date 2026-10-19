@@ -812,7 +812,7 @@
     if (!ch) { UI.toast('No change', 'the node is the same as the live config', 'idle'); return; }
     // the review remembers where you came from: its Back and its Done return there, and the rail keeps that section
     if (opts.go !== false) { if (!D.prefs.returnTo && !location.hash.startsWith('#/config')) { D.prefs.returnTo = { href: location.hash, label: (document.querySelector('#main h1') || {}).textContent || UI.pageTitle() }; S.save(); } UI.go('#/config/apply'); }
-    else UI.toast(`Staged: ${UI.esc(ch.summary)}`, `${D.pending.length} change${D.pending.length > 1 ? 's' : ''} waiting · review in Config → apply`, 'run');
+    else UI.toast(`Staged: ${UI.esc(ch.summary)}`, `Not applied yet · ${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review and apply`, 'run');
   };
   /** A tab bar that doesn't fit never cuts a label: the tabs that don't fit go into a "More" menu at its end, and the
       current tab always stays in view (it takes the place of the last one that fits). Hidden tabs stay in the DOM, so

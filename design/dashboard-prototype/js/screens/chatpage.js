@@ -12,7 +12,8 @@
   const phone = () => innerWidth <= 720;
   const M = (n) => D.bots.find((b) => b.name === n);
   const teamBots = (t) => D.bots.filter((b) => b.cfg && b.cfg.team === t).map((b) => b.name);
-  const leadOf = (t) => { const x = D.teams.find((y) => y.name === t); return (x && ((S.staged('teams', t) || x.cfg || {}).routing || {}).lead) || teamBots(t)[0]; };
+  // the team's lead, or none: nobody is picked silently (r5 major 10); with no lead, what you write goes to everyone
+  const leadOf = (t) => { const x = D.teams.find((y) => y.name === t); return (x && ((S.staged('teams', t) || x.cfg || {}).routing || {}).lead) || null; };
   const working = (b) => UI.botWorking(b);
   // a team is its own picture (its initials unless it has one), never a bot's face
   const stack = (t, size = 'list') => UI.teamAv(t, size);
@@ -60,10 +61,10 @@
   document.addEventListener('click', (e) => { if (lp === -1 && e.target.closest && e.target.closest('.cv-c')) { e.preventDefault(); e.stopPropagation(); lp = 0; } }, true);
   function thread(kind, name) {
     if (kind === 'team') { const t = D.teams.find((x) => x.name === name); if (!t) return '<section class="cv-main fit"><p class="dl-sub">No team by that name.</p></section>';
-      const ms = teamBots(name), lead = leadOf(name), mode = to[name] || 'lead';
-      return `<section class="cv-main fit" data-team="${esc(name)}"><header class="cv-th">${stack(name, 'lg')}<div class="cv-tt"><h2 class="cv-name">team ${esc(name)}</h2><span class="dl-sub">${ms.length} bot${ms.length === 1 ? '' : 's'} · ${esc(UI.botName(lead))} leads and picks up what you ask</span></div><a class="btn sm secondary" href="#/teams/${esc(name)}">Team</a>${more('team:' + name)}</header>
-        <div class="panel chat cv-chat">${UI.chatThread(D.teamChats[name] || [], lead, { empty: `Say hello to team ${esc(name)}. ${esc(UI.botName(lead))} answers first.` })}
-        <div class="cv-to" role="group" aria-label="Who it goes to"><span class="dl-sub">To</span><button type="button" class="cv-chip${mode === 'lead' ? ' on' : ''}" data-act="cv-to" data-t="${esc(name)}" data-v="lead" aria-pressed="${mode === 'lead'}">${UI.botAv(lead, 'xs')}${esc(UI.botName(lead))}, the lead</button><button type="button" class="cv-chip${mode === 'all' ? ' on' : ''}" data-act="cv-to" data-t="${esc(name)}" data-v="all" aria-pressed="${mode === 'all'}">Everyone on the team</button><span class="dl-sub cv-at-hint">or @name one bot</span></div>
+      const ms = teamBots(name), lead = leadOf(name), mode = to[name] || (lead ? 'lead' : 'all'), first = lead || ms[0];
+      return `<section class="cv-main fit" data-team="${esc(name)}"><header class="cv-th">${stack(name, 'lg')}<div class="cv-tt"><h2 class="cv-name">team ${esc(name)}</h2><span class="dl-sub">${ms.length} bot${ms.length === 1 ? '' : 's'} · ${lead ? `${esc(UI.botName(lead))} leads and picks up what you ask` : 'no lead yet: what you write goes to everyone'}</span></div><a class="btn sm secondary" href="#/teams/${esc(name)}">Team</a>${more('team:' + name)}</header>
+        <div class="panel chat cv-chat">${UI.chatThread(D.teamChats[name] || [], first, { empty: `Say hello to team ${esc(name)}. ${lead ? `${esc(UI.botName(lead))} answers first.` : 'Everyone on it can answer.'}` })}
+        <div class="cv-to" role="group" aria-label="Who it goes to"><span class="dl-sub">To</span>${lead ? `<button type="button" class="cv-chip${mode === 'lead' ? ' on' : ''}" data-act="cv-to" data-t="${esc(name)}" data-v="lead" aria-pressed="${mode === 'lead'}">${UI.botAv(lead, 'xs')}${esc(UI.botName(lead))}, the lead</button>` : `<button type="button" class="cv-chip" ${UI.off('This team has no lead yet: pick one on the team page')}>No lead yet</button>`}<button type="button" class="cv-chip${mode === 'all' ? ' on' : ''}" data-act="cv-to" data-t="${esc(name)}" data-v="all" aria-pressed="${mode === 'all'}">Everyone on the team</button><span class="dl-sub cv-at-hint">or @name one bot</span></div>
         ${UI.chatComposer('team:' + name, { to: `team ${name}` })}<div class="cm-drop" aria-hidden="true">${icon('attach')}Drop to attach to your message</div></div></section>`; }
     const m = M(name); if (!m) return '<section class="cv-main fit"><p class="dl-sub">No bot by that name.</p></section>';
     const id = UI.ident(name) || {}, open = D.cases.filter((c) => c.bot === name && c.status === 'open')[0];

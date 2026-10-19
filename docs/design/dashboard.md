@@ -879,6 +879,13 @@ on the ticket.
     option drawn with your other two choices, with a live preview at its sizes; it's in New bot (a new bot starts on a
     combination no other bot has) and in a bot's Settings (picking stages the change and shows it everywhere at once);
   - a tagline and a voice.
+- **The words people read** (`vocab.spec.js` checks every route): practice mode, never shadow; ticket, never case;
+  approval or suggestion, never proposal; connection, never connector; the risks in words (only reads, can be undone,
+  asks you first, spends money, never), never their config codes; dialog kickers in words (Team platform, Plugins ·
+  machines), never `teams:`; a ticket by its title, never "task c29". The config spellings appear only in code, the
+  glossary's "in config" notes and For audit. A staged change says what changed in words ("Atlas: what it may do"),
+  in the toast and the review, with its path under it. A team with no lead says so ("no lead yet: what you write goes
+  to everyone"); New team asks for a lead and never picks one.
 - **One name per bot:** the display name (Atlas) wherever a person reads it: rows, facts, headings, sentences ("led
   by Atlas", "delegated by Atlas → Delta", "Ledger was told"), the filter menus (Bot, Who, Assignee: `who:Atlas`
   finds Atlas's entries, and the audit search matches names), the pickers (New ticket, New team, a team's members) and

@@ -92,7 +92,7 @@ test('the runbook step editor: add, a command and a verb per step, reorder, remo
   await page.locator('[data-act="rp-kind"][data-k="knowledge"]').click();
   await page.locator('[data-act="rp-open"][data-key="knowledge/alb.md"]').click();
   await expect(page.locator('.cites')).toContainText('Latency');
-  await expect(page.locator('.cites')).toContainText('task c29');
+  await expect(page.locator('.cites')).toContainText('SEV2 api p99 latency > 2s'); // a ticket by its title (r5-10)
 });
 
 test('no free path outside a custom collection; declare one, then create in it with a free path', async ({ page }) => {
