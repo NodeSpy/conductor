@@ -3,7 +3,8 @@
 //   KINDS    one icon per kind of object or event (approval, run, bot, PR, incident, Terraform…)
 //   ACTIONS  one icon per kind of action (reads, writes, posts, pushes code, applies infra, spends…)
 //   FLAGS    risk, shown only where a person decides (approvals, proposals, bot permissions) and only
-//            for production, money and destructive or access changes: plain words and one mark
+//            for production, money and destructive or access changes: plain words and one mark, in
+//            the grades of status/facts.js (production amber; money, destroy, access red on a tile)
 //   ENV      production / staging tags, told apart by fill, never by colour alone
 // and one row anatomy: kind · title · where · status · time · action.
 // Icons are Lucide (ISC, lucide-static 1.59.0, 24 grid, 1.75 stroke); the environment glyphs are ours.
@@ -53,19 +54,23 @@ export const STEPS = {
 // Never a meter or bars: bars read as signal strength, not danger.
 export const FLAGS = {
   prod:    { word: 'Changes production', mark: 'production', means: 'Any change (not a read) to a production environment.' },
+  infra:   { word: 'Changes infrastructure', mark: 'hammer', means: 'Applies an infrastructure change or a deploy. Grade 2: amber, like production.' },
   money:   { word: 'Spends money', mark: 'banknote', means: 'A commit_money verb. The words carry the amount.' },
   destroy: { word: 'Destroys', mark: 'trash-2', means: 'Deletes or destroys something stateful, at any tier.' },
   access:  { word: 'Grants access', mark: 'lock-open', means: 'Changes who may do what: IAM, collaborators, grants.' },
 };
-/** Which flag a verb earns, if any: destroy and access first, then money, then production. */
+/** Which flag a verb earns, if any: destroy and access first, then money, then infrastructure, then production. */
 export function flagOf({ action = 'read', tier = 'propose', env = '' }) {
   if (action === 'destroy') return 'destroy';
   if (action === 'perms') return 'access';
   if (tier === 'commit_money' || action === 'spend') return 'money';
+  if (action === 'apply' && tier !== 'observe') return 'infra';
   if (env === 'production' && action !== 'read' && tier !== 'observe') return 'prod';
   return null;
 }
-export const flag = (k, word = FLAGS[k].word) => `<span class="flag" data-flag="${k}">${k === 'prod' ? envGlyph('production') : lucide(FLAGS[k].mark)}<span>${word}</span></span>`;
+// Flags follow the fact grades (status/facts.js): production is grade 2 (amber, the solid square); money,
+// destroy and access are grade 3 (red, the icon knocked out of a solid tile).
+export const flag = (k, word = FLAGS[k].word) => `<span class="flag" data-flag="${k}">${k === 'prod' ? envGlyph('production') : k === 'infra' ? lucide(FLAGS[k].mark, 15) : `<span class="flag-tile">${lucide(FLAGS[k].mark)}</span>`}<span>${word}</span></span>`;
 
 // ---------- environments ----------
 export const ENV = {
@@ -110,7 +115,10 @@ export const SCAN_CSS = `
 /* risk flags: plain words and one mark; only destroys and grants access take colour */
 .flag { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--color-text-primary); white-space: nowrap; }
 .flag .ki { width: 15px; height: 15px; }
-.flag[data-flag="destroy"], .flag[data-flag="access"] { color: var(--color-status-danger-fg); }
+.flag[data-flag="prod"], .flag[data-flag="infra"] { color: var(--color-fact-warning); } .flag[data-flag="infra"] .ki { stroke-width: 2.6; }
+.flag[data-flag="destroy"], .flag[data-flag="access"], .flag[data-flag="money"] { color: var(--color-fact-danger); }
+.flag-tile { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 4px; background: var(--color-fact-danger-tile); flex: none; }
+.flag-tile .ki, .flag-tile svg { width: 10px !important; height: 10px !important; color: var(--color-fact-danger-glyph) !important; stroke-width: 2.6; }
 .c-why .flag { margin-right: 8px; }
 /* environments: told apart by fill and outline */
 .env { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; line-height: 1; padding: 3px 7px 3px 5px; border-radius: 5px; color: var(--color-text-secondary); border: 1px solid var(--color-border-default); white-space: nowrap; }

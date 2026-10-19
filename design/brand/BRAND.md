@@ -16,6 +16,7 @@ This is the single source of truth for how conductor looks, reads and behaves on
 ## Changelog
 
 - **2026-10-18. Bot identity.** Twelve bot faces (`bot-identity/faces/`, ids for `avatar.preset`), seven identity colours that keep clear of every status hue (`--color-bot-*`), where the colour may and may not go, the icon-and-colour option, the initials fallback and voice presets. A new book chapter shows the set in both themes, at both sizes, and the full face × colour grid (every face in every colour, at 48px and 24px).
+- **2026-10-18. Fact types and graded risk.** Every fact in the facts line has a type and its own icon (`status/facts.js`): update available in the accent and bold, the most noticeable; held in full ink with a pin; stays current, within a range and the version quiet, each with its own icon; built in (the conductor mark’s 16px cut), official (a check badge) and custom (a fork, in a new olive-ochre `fact.custom`). Service glyphs (Simple Icons, CC0) replace the generic plug. Risk is graded by what it can do: reads quiet; changes in full ink; **infrastructure and production in amber** with their own icons (“Changes infrastructure” now matches production); money, destroying and widening access in red on a solid tile. The approval flags follow the grades, with a new “Changes infrastructure” flag for applies. This settles the open question of a visual marker for risk.
 - **2026-10-18. Plugins and connections.** The dashboard area is **Plugins** (tabs: Connections · Agent runtimes · Code languages · Machines), in System where Connections was. A configured instance of a service is a **connection**; “connector” is retired from copy. This reverses the earlier advice to avoid the word “plugin” in primary copy.
 - **2026-10-18. One count badge.** Something new or waiting for you (the Needs you nav count, Chat unread in the rail and phone tab bar, the Chat conversation list, an Approvals tab with something pending) is the one orange badge (`--count-badge-*`: accent background, on-accent text). A total is plain text in the count style (“Tickets 4”). No screen draws its own pill. This replaces “a count is an ember numeral”. The mocks follow it.
 - **2026-10-18. Bot faces in Chat.** 40px in the conversation list, 36px on messages, 44px in the chat header; a team shows its lead’s face with “+N”.
@@ -44,7 +45,7 @@ This is the single source of truth for how conductor looks, reads and behaves on
 | Information design | Keep the information; make every item identifiable at a glance (icons for what it is, environment tags, status marks, attention order, one row anatomy). Fold only hashes, ids and raw payloads. | The problem was never the amount; it was having to read every item to know what it was and whether it mattered. |
 | Status | Grouped rows (needs attention → running now → finished) with margin marks: a mark and a word. Passed is green (mark and word) in regular weight. A coloured leading edge only on rows that need someone. No tinted rows, no pills, no step traces in lists. | Green says “passed” at a glance; weight, edge and position keep the rare failure first on a mostly-green screen. |
 | Labels | Status labels, filters, counts and tags each have their own treatment. One count badge, app-wide, for something new or waiting for you; a total is plain text; no other pills. | A pill for everything made states, facts and controls look alike. |
-| Risk | Plain words where someone decides (approvals, a bot’s permissions): “Changes production”, “Spends $1,800”, “Destroys”, “Grants access”. No meters, bars or ladders. | Bars read as signal strength, not danger. The visual marker for risk is still a proposal on the archive, not part of the system. |
+| Risk | Plain words where someone decides (approvals, a bot’s permissions), graded by what it can do, each grade changing the icon and the tone together: reads and reversible quiet; changes something in full ink; infrastructure and production in amber with their own icons; spends money, destroys or widens access in red on a solid tile. No meters, bars or ladders. | Bars read as signal strength, not danger. The bigger warnings must stand out from the everyday ones, by shape as well as colour. |
 | Scale | No view grows linearly with the number of workflows, bots or runs. | One lane per workflow broke at twenty workflows. |
 | Passkey | The fingerprint appears only on actions that authenticate: approve, deny and changes that widen access. Everything else is a normal Apply. Never on “Review”. | The icon promises a signature; using it elsewhere teaches people to ignore it. |
 | Palette | Cream and cocoa surfaces, sand neutrals, one ember accent | Warm paper reads as a product rather than a terminal, and one accent keeps “where do I act?” unambiguous. |
@@ -194,6 +195,29 @@ Every status mark, in a table, card, the run strip, a legend, the overview, the 
 - **One count badge, app-wide (`--count-badge-*`).** Something new or waiting for you is the orange badge: the accent background with on-accent text (6.0:1 light, 4.6:1 dark), 18px high, fully rounded. It is used for the Needs you count in the nav, Chat unread in the rail and the phone tab bar, the Chat conversation list, and an Approvals tab with something pending. A **total** is plain text in the count style, not a badge: “Tickets 4”. **No screen draws its own pill.**
 - **No step trace in lists.** Step detail lives on the run page as a collapsible tree, where a nested workflow call is one node with its own status and the failing path opens by itself.
 - **Every chart mark is explained:** labelled in words beside it (the run strip, `data-labelled`) or listed in its legend. Legends are generated from the same list (`legend()`).
+
+### Fact types: the facts line (`status/facts.js`)
+
+The facts line is the third line of a list row: a few facts a person scans for, each an icon and a value. **Every fact has a type and every type its own icon**, so facts are told apart by shape first. **Tone only where a fact needs attention**; everything else is quiet. The book shows each type, in rows from Plugins and approvals, in both themes (*Components › Fact types*).
+
+| Group | Type · icon | Tone |
+|---|---|---|
+| Updates (one per row) | **update available** `circle-arrow-up` (“2.5.0 available”) | **the accent, bold**: the most noticeable fact in a row, and a link to the update (`fact.update`) |
+| | **held** `pin` (“Held at 1.8.0”) | full ink, 600: you chose it, so visible but not alarming (`fact.held`) |
+| | **stays current** `refresh-cw` · **within a range** `brackets` (“Updates within 0.4.x”) · **version** `tag` | quiet; the version stays quiet even when an update is available |
+| Origin (one per row) | **built in**: the conductor mark’s 16px cut, unaltered · **official** `badge-check` | quiet |
+| | **custom or third-party source** `git-fork` (“Custom · github.com/acme/…”) | **a muted olive-ochre** (`fact.custom`: #626437 light, 5.1:1 or more; #c3c595 dark, 8.1:1 or more), caution-adjacent but neither production’s amber nor ink, because its trust differs |
+| What and where | **service**: the service’s own glyph · bot `bot` · workflow `workflow` · pull request `git-pull-request` · channel `message-square` · site `globe` · agent runtime `terminal` · code language `code` · machine `server` · model `cpu` | quiet; links underlined where they lead somewhere |
+| Risk, graded (where a person decides) | **0** reads `eye` · can be undone `undo-2` | quiet, outlined icon |
+| | **1** changes files `pencil-line` · posts `message-square` · pushes code `git-commit-horizontal` | full ink at 600, outlined icon (quiet caution; `fact.change`) |
+| | **2** changes infrastructure `hammer` (the apply action’s icon, heavier stroke) · production (the solid square) | **warning amber, bold** (`fact.warning`: 5.2:1 or more) |
+| | **3** spends money `banknote` · destroys `trash-2` · widens access `lock-open` | **danger red, bold**, the icon knocked out of a solid red tile (`fact.danger`, `fact.danger-tile`, `fact.danger-glyph`: tile 8.0:1 or more on every surface, glyph 8.5:1 or more on the tile) |
+
+- **Shape and colour change together, never colour alone:** each grade changes the icon’s weight or form (outlined, heavier, solid tile) as well as its tone.
+- **Order:** the signal first (update available, risk), then what and where, then origin and update policy, then the version. One origin fact and one update-policy fact per row; at most two risk facts, the strongest first.
+- **Risk facts appear only where a person decides:** approvals, proposals, a bot’s permissions. The approval flags (`status/rows.js`) use the same grades: “Changes infrastructure” and “Changes production” amber; “Spends…”, “Destroys…” and “Grants access” red on a tile.
+- **Service glyphs** sit in the icon slot: 13px, filled, in the icon colour, never the brand’s own colour, followed by the service’s name in its own casing. They come from Simple Icons (CC0; the marks are their owners’ trademarks, used only to name the service), in `icons/services/`. Simple Icons drops a brand when its owner objects, so some services have none (Slack, AWS, OpenAI today): the plug stands in, or the plugin ships the mark under that brand’s own guidelines. A glyph never stands for a status and is never decoration.
+- **Built in** uses the conductor mark at its minimum size, the 16px cut, in quiet ink; never smaller, never in the accent, never altered.
 
 **Checks.**
 - `tools/status-cvd.mjs` (the dataviz skill’s validator, run pairwise against `bg.surface`) writes `tokens/STATUS-CVD.md`. All marks are ≥ 3:1 on every surface and no two states share a shape. With passed green, colour alone separates most pairs for colour-blind readers; where it doesn’t, shape does: passed vs waiting in light (CVD ΔE 5.6, a filled dot vs an outlined triangle), passed vs needs you in light and passed vs failed in dark (the floor band, a dot vs a diamond or a cross). Passed vs parked is clearly different in hue (ΔE 14–20) and in shape.
@@ -469,4 +493,3 @@ The prototype adopts Daylight in one pass:
 ## Open decisions
 
 1. **Where the brand files live long-term:** `design/brand/` or `.github/brand/`, which sets the README paths.
-2. **The visual marker for risk** (beyond the words): the proposal is on the archive and is not part of the system until it is decided.

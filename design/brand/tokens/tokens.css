@@ -349,6 +349,7 @@
   --color-bot-stone-bg: #c4bcb4;
   --color-bot-stone-rule: #423c36;
   --color-bot-stone-fg: #2a231c;
+  --color-fact-custom: #626437;
   --shadow-0: none;
   --shadow-1: 0 1px 2px 0 rgb(60 40 20 / 0.06), 0 6px 18px -10px rgb(60 40 20 / 0.16);
   --shadow-2: 0 2px 4px 0 rgb(60 40 20 / 0.06), 0 12px 30px -14px rgb(60 40 20 / 0.22);
@@ -483,6 +484,7 @@
     --color-bot-stone-bg: #423c36;
     --color-bot-stone-rule: #c4bcb4;
     --color-bot-stone-fg: #f4eee4;
+    --color-fact-custom: #c3c595;
     --shadow-0: none;
     --shadow-1: 0 1px 2px 0 rgb(0 0 0 / 0.3);
     --shadow-2: 0 8px 24px -12px rgb(0 0 0 / 0.45);
@@ -621,6 +623,7 @@
   --color-bot-stone-bg: #423c36;
   --color-bot-stone-rule: #c4bcb4;
   --color-bot-stone-fg: #f4eee4;
+  --color-fact-custom: #c3c595;
   --shadow-0: none;
   --shadow-1: 0 1px 2px 0 rgb(0 0 0 / 0.3);
   --shadow-2: 0 8px 24px -12px rgb(0 0 0 / 0.45);
@@ -715,6 +718,15 @@
 
 /* ---------- aliases (re-resolved wherever theme, density or motion changes) ---------- */
 :root, [data-theme], [data-density], [data-motion] {
+  --color-fact-quiet: var(--color-text-secondary);
+  --color-fact-held: var(--color-text-primary);
+  --color-fact-update: var(--color-text-accent);
+  --color-fact-production: var(--color-fact-warning);
+  --color-fact-change: var(--color-text-primary);
+  --color-fact-warning: var(--color-status-warning-fg);
+  --color-fact-danger: var(--color-status-danger-fg);
+  --color-fact-danger-tile: var(--color-status-danger-solid);
+  --color-fact-danger-glyph: var(--color-text-inverse);
   --type-display-xl-family: var(--font-family-serif);
   --type-display-xl-size: 4.5rem;
   --type-display-xl-weight: var(--font-weight-semibold);
