@@ -534,7 +534,8 @@ lockfile's `resolved:` sha is what actually reproduces the fetch, and re-running
 
 ```
 conductor init [--allow-unlisted] # fetch the packs: block, write the lockfile, preview the effect
-conductor pack list               # configured instances + lock status
+conductor pack list [--include-templates] [--json]   # configured instances, lock status and what each ships
+conductor pack search [<words>] [--registry <dir|git url>] [--installed] [--include-templates] [--json]   # the catalog (below)
 conductor pack plan               # preview what the packs add (agents, skill grants, armed triggers)
 conductor pack add <source>       # fetch a pack, show its install review + a ready-to-paste block
 conductor pack lint <pack-dir>    # validate a pack is well-formed (author tooling)
@@ -556,6 +557,42 @@ vendored tree + lockfile and tells you which `packs:` block to delete.
 
 Typical flow: edit `packs:` → `conductor init` → `conductor pack plan` → arm a
 trigger → `conductor validate`.
+
+### The catalog
+
+`conductor pack search` lists the packs a registry offers (the official one
+by default) after the ones you have installed. Each pack says what it
+**ships**: its workflows, triggers, checks, model fleets, policy, bot
+templates, and the collections and seed documents those templates carry.
+Conductor reads this from the pack's manifest, never from a label the pack
+gives itself:
+
+```
+* flows                  1.0.0     review workflows
+    ships: 1 workflows
+  mixed                  1.0.0     a template and a workflow
+    ships: 1 bot templates, 1 workflows
+    install: packs: { mixed: { use: conductor-packs/mixed } }
+(1 template-only pack(s) not shown — find them with `conductor bot templates`; --include-templates lists them here)
+```
+
+A pack that ships **only bot templates** (with their collections and seeds)
+is *template-only*. It's left out of `pack search` and `pack list` by
+default, because it belongs to creating a bot ([[Bot-Templates]]), where
+`conductor bot templates` finds it and `conductor bot new --from` installs
+it. `--include-templates` shows it in the pack catalog too.
+
+`install` is the `packs:` entry that installs a pack, using its real source:
+the official repo by name (`use: conductor-packs/<pack>`); a git registry's
+pack by its git source (`source: github.com/acme/packs//<pack>`, or
+`git::<url>//<pack>` for ssh and `file://`), so `pack_trust` governs it like
+any remote pack; a local registry's by its path.
+
+For the dashboard, the control socket's `packs` op (`cmd: "bot"`) serves the
+same catalog: `search`, `registry`, `installed`, `include_templates` →
+`{ packs: [ { name, version, description, contents: { kinds, counts },
+template_only, installed, pack_instance, source, install } ],
+hidden_template_packs }`.
 
 ## Authoring a pack
 

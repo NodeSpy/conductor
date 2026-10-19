@@ -474,6 +474,29 @@ registrations. Suggested triggers are written disarmed; one whose event is
 taken (a cron schedule drives exactly one trigger) is skipped with a note,
 which is what lets several bots come from one template.
 
+### The catalog and installing from it
+
+- **Content kinds are derived, never declared.** `ManifestContents` counts
+  what the manifest holds. *Template-only* means bot templates plus only
+  what templates carry (collections, seed). The general pack catalog
+  (`pack search`, `pack list`, the `packs` op) hides such packs by default,
+  because they belong to creating a bot.
+- **One change installs pack and bot.** A registry template's `bot new`
+  inserts the `packs:` entry, resolves it into a private copy of the config
+  directory (state dir, 0700, removed after) with the same resolver
+  `conductor init` uses, and plans the bot there. The diff is against the
+  real config. `--write` writes the config, then resolves for real, and
+  restores the original if that fails.
+- **Trust.** The registry's install source is the pack's real source:
+  bare `host/path//pack` for https, so ordinary `pack_trust` patterns match
+  it; `git::` for ssh and file. It's never conductor's own clone, which as a
+  local path would have skipped trust. `AutoInstallTrusted` additionally
+  requires the explicit step for a third-party remote source even without
+  a `pack_trust` block, because the operator never typed it. The resolver's
+  own allowlist check runs after.
+- **Update availability** reads the official registry's cached clone only
+  (`bot show` must not fetch) and compares versions with `CompareVersions`.
+
 ### Left out
 
 - Templates of a pack's DEPENDENCIES are not addressable (only top-level
