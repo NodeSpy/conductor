@@ -24,8 +24,8 @@ test('a connector instance created from inside a workflow step; one combined dif
   await pickNew(page, '[data-card="comment"] select[data-picker="connector"]');
   await page.fill('#d-name', 'gh-bot');
   await page.fill('#d-github__app_id', '777001');
-  await page.locator('#d-github__private_key-pick').selectOption({ index: 2 });
-  await page.locator('#d-github__webhook_secret-pick').selectOption({ index: 2 });
+  await page.locator('#d-github__private_key-pick').click(); await page.locator('#d-github__private_key-list [data-act="vs-choose"]').first().click();
+  await page.locator('#d-github__webhook_secret-pick').click(); await page.locator('#d-github__webhook_secret-list [data-act="vs-choose"]').nth(1).click();
   await page.locator('#dr-submit').click();
   await expect(page.locator('.cdrawer')).toHaveCount(0);
   await expect(page.locator('[data-card="comment"] select[data-picker="connector"]')).toHaveValue('gh-bot');
@@ -44,7 +44,7 @@ test('a vault entry created from inside a login created from inside a binding (v
   await pickNew(page, '#f-cred');
   await page.fill('#d-name', 'docs-admin'); await page.fill('#d-origin', 'https://docs.example.com');
   await page.fill('#d-username-in', 'svc-docs-91');
-  await page.locator('#d-password-pick').selectOption('__new__');
+  await page.locator('#d-password-pick').click(); await page.locator('#d-password-list [data-act="vs-new"]').click();
   await page.fill('#d-key', 'docs-admin-pw'); await page.fill('#d-value', 's3cret-value-xyz');
   await page.locator('#dr-submit').last().click();
   await page.locator('#su-go').click();

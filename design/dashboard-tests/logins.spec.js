@@ -49,7 +49,7 @@ test('username & password: TOTP preview, password stored write-only behind a pas
 test('from a vault: browse 1Password items (labels only); one item fills all three fields with vault references', async ({ page }) => {
   await go(page, '#/browser/add', { fresh: true });
   await page.locator('[data-act="la-method"][data-m="vault"]').click();
-  await expect(page.locator('#la-items .item')).toHaveCount(5);
+  await expect(page.locator('#la-items .item')).toHaveCount(await page.evaluate(() => D.opItems.length)); // every 1Password item, labels only
   await page.fill('#la-q', 'graf');
   await expect(page.locator('#la-items .item')).toHaveCount(1);
   await page.locator('#la-items [data-act="la-item"]').first().click();

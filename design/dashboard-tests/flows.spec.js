@@ -19,8 +19,8 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
     await expect(page.locator('[data-field="name"].bad')).toBeVisible();
     await expect(page.locator('[data-field="bot_token"]')).toBeVisible();
     await page.fill('#f-name', 'slack-eng');
-    await page.selectOption('#f-bot_token-pick', { index: 2 });
-    await page.selectOption('#f-app_token-pick', { index: 3 });
+    await page.locator('#f-bot_token-pick').click(); await page.locator('#f-bot_token-list [data-act="vs-choose"]').nth(1).click();
+    await page.locator('#f-app_token-pick').click(); await page.locator('#f-app_token-list [data-act="vs-choose"]').nth(2).click();
     await page.fill('#f-default_channel-in', '#eng');
     await submit(page);
     await expect(page.locator('.diff')).toContainText('slack-eng:');
