@@ -30,7 +30,7 @@ test('assign a bot from its definition; the team ceiling and team tiers are enfo
   await page.locator('[data-act="df-review"]').click();
   await applyStaged(page);
   await go(page, '#/bots/release-scribe');
-  await expect(page.locator('.dl-crumbs')).toContainText('Bots › platform › release-scribe');
+  await expect(page.locator('.dl-crumbs')).toHaveText(/Bots\s*›\s*platform\s*›\s*release-scribe/);
   // finance's ceiling is observe: no bot on it may run anything without asking
   await go(page, '#/bots/billing-sre/access');
   await page.locator('[data-act="can-more"][data-v="slack-ops.post"]').click();

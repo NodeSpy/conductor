@@ -57,8 +57,8 @@
     { k: 'conn', label: 'Connected to', multi: true, plural: 'services', options: () => tally(bots.flatMap((m) => connsOf(m.name))) },
     { k: 'group', label: 'Group by', view: true, keepOrder: true, def: 'team', title: 'Group by', find: 'Group by', options: () => [{ v: 'team', label: 'Team' }, { v: 'none', label: 'None' }] }], onChange: () => UI.rerender({ keepScroll: true }) });
   const cbx = (m) => `<input type="checkbox" class="cbx m-cbx" data-act="bv-sel" data-m="${esc(m.name)}" aria-label="Select ${esc(m.name)}"${bv.sel.has(m.name) ? ' checked' : ''}>`;
-  const row = (m, o = {}) => `<li class="m-row${archived(m.name) ? ' off' : ''}" data-bot="${esc(m.name)}"><span class="m-sel">${cbx(m)}</span><span class="dl-bot-av sm">${esc(m.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span>
-    <a class="m-main" href="#/bots/${m.name}"><b>${esc(m.name)}</b><span class="dl-why">${esc(cfgOf('bots', m.name).description || m.desc || '')}</span>${facts(m, o)}</a>
+  const row = (m, o = {}) => `<li class="m-row${archived(m.name) ? ' off' : ''}" data-bot="${esc(m.name)}"><span class="m-sel">${cbx(m)}</span>${UI.botAv(m.name, 'md')}
+    <a class="m-main" href="#/bots/${m.name}"><b>${esc(UI.botName(m.name))}</b>${UI.botName(m.name) !== m.name ? ` <span class="bav-id">${esc(m.name)}</span>` : ''}<span class="dl-why">${esc(cfgOf('bots', m.name).description || m.desc || '')}</span>${facts(m, o)}</a>
     <span class="m-st">${quiet(m)}</span><button type="button" class="icon-btn" data-act="bv-more" data-m="${esc(m.name)}" aria-label="More for ${esc(m.name)}">${icon('more')}</button></li>`;
   const isOpen = (key, i, total) => (bv.open && key in bv.open ? bv.open[key] : total <= 40 || i === 0);
   const teamSection = (t, ms, i, total) => { const open = isOpen(t, i, total), lead = leadOf(t), prac = ms.filter((m) => practice(m.name)).length, need = ms.reduce((a, m) => a + needOf(m.name), 0), shown = ms.filter(keep);

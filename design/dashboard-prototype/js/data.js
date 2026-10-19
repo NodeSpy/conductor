@@ -948,3 +948,32 @@ window.D.packMembers = {
     { id: 'c43', stage: 'draft', bot: 'homelab', title: 'Idea: move the nightly backups to object storage', status: 'open', requester: 'bot:homelab', cls: 'peer', opened: m(600), workers: 0, proposals: 0, priority: 'low', labels: ['backup', 'idea'], desc: 'nas-01 missed a backup this week. Copying the nightly snapshot to object storage would give an off-site copy and alert when one is missing. Rough cost: a few dollars a month.', notes: [{ at: m(590), who: 'bot:homelab', text: 'Drafted this after the missed backup. I won’t start until you mark it ready.', ack: true }] },
     { id: 'c44', stage: 'draft', team: 'platform', title: 'Write a runbook for a failed certificate renewal', status: 'open', requester: 'operator:ops', cls: 'operator', opened: m(1500), workers: 0, proposals: 0, priority: 'normal', labels: ['runbook'], desc: 'What to check first, how to renew by hand, and who to tell.', notes: [] });
 })();
+
+/* A bot's identity (items 18b, 25): a display name, a face (avatar.preset) in a colour (avatar.color, option A), a
+ * tagline and a voice. The config id stays the name everywhere it matters; the display name is what chat says. */
+(function () {
+  const D = window.D;
+  D.identity = {
+    'platform-sre': { name: 'Atlas', face: 'focus', color: 'teal', tagline: 'Keeps the platform up; first on every page', voice: 'Terse' },
+    'billing-sre': { name: 'Ledger', face: 'calm', color: 'olive', tagline: 'Watches spend and the monthly forecast', voice: 'Formal' },
+    'web-triage': { name: 'Scout', face: 'curio', color: 'lagoon', tagline: 'Finds the cause of front-end bugs', voice: 'Warm' },
+    'platform-data': { name: 'Delta', face: 'steady', color: 'stone', tagline: 'Keeps the pipelines flowing', voice: 'Plain' },
+    'release-scribe': { name: 'Quill', face: 'wink', color: 'rose', tagline: 'Writes the release notes', voice: 'Warm' },
+    homelab: { name: 'Hearth', face: 'doze', color: 'plum', tagline: 'Looks after the home lab', voice: 'Plain' },
+  };
+  const m = (min) => new Date(Date.now() - min * 60000).toISOString();
+  // a team's group chat: you talk to the whole team; its lead (or its routing) picks it up, or you ask everyone
+  D.teamChats = {
+    platform: [
+      { who: 'op', at: m(26), state: 'delivered', text: 'Checkout p99 jumped after the 14:00 deploy. Can someone look?' },
+      { who: 'bot', bot: 'platform-sre', at: m(25), text: 'I’ll take this one. Scout, can you check the canary while I look at the database?' },
+      { who: 'tool', bot: 'web-triage', at: m(23), kind: 'cmd', text: 'gh.get_check_runs acme/web canary', out: 'canary: 3 checks passed · p99 312ms' },
+      { who: 'bot', bot: 'web-triage', at: m(21), text: 'The canary is clean on web, so the regression is server-side. Back to you, Atlas.' },
+      { who: 'bot', bot: 'platform-sre', at: m(8), text: 'The web servers still run the old image. To roll the new one out I need to replace the production web server, so I’m asking you first.', proposal: 'p12' },
+    ],
+    finance: [{ who: 'bot', bot: 'billing-sre', at: m(90), text: 'The October forecast is ready: **$41.2k**, +6% on September. I’ve asked to post it to #incidents.', proposal: 'p4' }],
+  };
+  D.chatUnread = { 'team:platform': 2, 'web-triage': 1, 'billing-sre': 1 };
+  D.chatPinned = ['platform-sre'];
+  D.chatsVer = 3;
+})();

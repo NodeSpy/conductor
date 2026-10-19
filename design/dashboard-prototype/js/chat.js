@@ -15,8 +15,6 @@
     exts: /\.(png|jpe?g|gif|webp|pdf|txt|log|csv|json|ya?ml|md|ndjson)$/i };
   const ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,application/pdf,text/*,.log,.csv,.json,.yaml,.yml,.md,.ndjson';
   UI.bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`);
-  const initials = (name) => esc(name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2));
-  UI.botAv = (name, cls = 'sm') => `<span class="dl-bot-av ${cls}" aria-hidden="true">${initials(name)}</span>`;
   const URL_RE = /\bhttps?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)]/g;
   const linkOf = (u) => { try { const x = new URL(u); return { url: u, host: x.host, path: (x.pathname + x.search).replace(/^\/$/, '') }; } catch (e) { return null; } };
   const linkify = (html) => html.replace(/\bhttps?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)]/g, (u) => `<a class="dl-link" href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
@@ -34,7 +32,7 @@
     ? `<button class="cm-img" data-act="chat-img" data-mi="${mi}" data-i="${i}" aria-label="Open ${esc(a.name)} larger"><img src="${esc(a.src || a.thumb)}" alt="${esc(a.name)}"></button>`
     : `<button class="cm-file" data-act="chat-img" data-mi="${mi}" data-i="${i}">${icon('file')}<span>${esc(a.name)}</span><span class="dl-sub">${UI.bytes(a.size)}</span></button>`;
   const linkCard = (l) => `<a class="cm-link" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${icon('globe')}<span><b>${esc(l.host)}</b><span class="dl-sub">${esc(l.path || '/')}</span></span></a>`;
-  const stateWord = (c, bot) => c.state === 'queued' ? `<span class="cm-q">${icon('clock')}Queued: delivered when ${esc(bot)} is idle</span>` : c.state === 'delivered' ? '<span>Delivered</span>' : '';
+  const stateWord = (c, bot) => c.state === 'queued' ? `<span class="cm-q">${icon('clock')}Queued: delivered when ${esc(c.toWord || UI.botName(bot))} is idle</span>` : c.state === 'delivered' ? '<span>Delivered</span>' : '';
   // on a bot's own chat, any message can become a ticket for it
   const mk = (mi, o) => (o && o.ticket ? '' : `<button class="cm-mk" data-act="chat-ticket" data-mi="${mi}" aria-label="Make a ticket from this message" title="Make a ticket from this message">${icon('ticket')}</button>`);
   const msg = (c, bot0, mi, o) => { const bot = c.bot || bot0;
@@ -46,8 +44,8 @@
       return `<div class="cm-row cm-op"><div class="cm-meta">${mk(mi, o)}<span>You</span><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span>${stateWord(c, bot)}</div>
         ${c.text ? `<div class="cm-bubble">${linkify(UI.md(c.text))}</div>` : ''}
         ${as.length || ls.length ? `<div class="cm-atts"><span class="cm-given">${icon('attach')}Data you gave it</span>${as.map((a, i) => att(a, i, mi)).join('')}${ls.map(linkCard).join('')}</div>` : ''}</div>`; }
-    if (c.who === 'typing') return `<div class="cm-row cm-bot" id="typing">${UI.botAv(bot)}<div><div class="cm-meta"><b>${esc(bot)}</b><span class="dl-sub">is writing…</span></div><div class="cm-bubble typing"><i></i><i></i><i></i></div></div></div>`;
-    return `<div class="cm-row cm-bot">${UI.botAv(bot)}<div><div class="cm-meta"><b>${esc(bot)}</b><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span>${mk(mi, o)}</div><div class="cm-bubble">${UI.md(c.text)}</div>${c.proposal ? card(c.proposal, bot) : ''}</div></div>`;
+    if (c.who === 'typing') return `<div class="cm-row cm-bot" id="typing" ${UI.botAttrs(bot)}>${UI.botAv(bot, 'md')}<div><div class="cm-meta">${UI.botWho(bot)}<span class="dl-sub">is writing…</span></div><div class="cm-bubble typing"><i></i><i></i><i></i></div></div></div>`;
+    return `<div class="cm-row cm-bot" ${UI.botAttrs(bot)}>${UI.botAv(bot, 'md')}<div><div class="cm-meta">${UI.botWho(bot)}<span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span>${mk(mi, o)}</div><div class="cm-bubble">${UI.md(c.text)}</div>${c.proposal ? card(c.proposal, bot) : ''}</div></div>`;
   };
   /** The thread's rows: consecutive tool calls fold into one group line. */
   UI.chatRows = (L, bot, o) => { const out = []; for (let i = 0; i < L.length; i++) {
@@ -58,7 +56,8 @@
   UI.chatThread = (L, bot, o = {}) => `<div class="cm-thread" id="msgs" role="log" aria-label="${o.ticket ? 'Comments' : `Conversation with ${esc(bot)}`}"${o.ticket ? ` data-t="${esc(o.ticket)}"` : ''}>${L.length ? UI.chatRows(L, bot, o) : `<p class="cm-empty dl-sub">${o.empty || `No conversation yet. Ask ${esc(bot)} anything; it answers here.`}</p>`}</div>`;
   // where a thread's rows live: a bot's home conversation, or a ticket's comments (UI.ticketRows, js/screens/tickets.js)
   const ctx = () => { const k = UI.$('.cm-comp'); return { bot: k && k.dataset.bot, t: k && k.dataset.t }; };
-  const rowsOf = (bot, t) => (t ? UI.ticketRows(t) : D.chats[bot] || []);
+  // a team's group chat lives under the key team:<name>
+  const rowsOf = (bot, t) => (t ? UI.ticketRows(t) : /^team:/.test(bot) ? (D.teamChats[bot.slice(5)] = D.teamChats[bot.slice(5)] || []) : D.chats[bot] || []);
   const redraw = (bot, extra = '', t) => { const box = UI.$('#msgs'); if (!box) return; box.innerHTML = UI.chatRows(rowsOf(bot, t), bot, { ticket: t }) + extra; box.scrollTop = box.scrollHeight; };
   /** Anchor to the newest message whenever the thread is drawn. */
   UI.chatAnchor = () => { const box = UI.$('#msgs'); if (box) box.scrollTop = box.scrollHeight; };
@@ -84,7 +83,7 @@
     return `<div class="cm-comp" data-bot="${esc(bot)}"${o.ticket ? ` data-t="${esc(o.ticket)}"` : ''}><div class="cm-pend" id="cm-pend"${st.items.length ? '' : ' hidden'}>${st.items.map(pendItem).join('')}</div>
       <p class="cm-err" id="cm-err" role="alert"${st.err ? '' : ' hidden'}>${esc(st.err)}</p>
       <div class="cm-in"><div class="cm-field"><button type="button" class="cm-attach" data-act="chat-attach" aria-label="Attach files or images" title="${esc(limitWords)}">${icon('attach')}</button><input type="file" id="cm-file" multiple accept="${ACCEPT}" hidden>
-        <textarea class="cm-ta" id="say" rows="1" placeholder="${o.ticket ? 'Add a comment' : `Message ${esc(bot)}`}" aria-label="${o.ticket ? 'Comment' : `Message ${esc(bot)}`}" aria-describedby="cm-hint"></textarea></div>
+        <textarea class="cm-ta" id="say" rows="1" placeholder="${o.ticket ? 'Add a comment' : `Message ${esc(o.to || UI.botName(bot))}`}" aria-label="${o.ticket ? 'Comment' : `Message ${esc(o.to || UI.botName(bot))}`}" aria-describedby="cm-hint"></textarea></div>
         <button class="btn primary cm-send" data-act="chat-send" data-m="${esc(bot)}"${o.ticket ? ` data-t="${esc(o.ticket)}"` : ''} aria-label="${o.ticket ? 'Post comment' : 'Send'}" title="${o.ticket ? 'Post comment' : 'Send'} (Enter; Shift+Enter for a new line)">${icon('send')}</button></div>
       <span class="sr-only" id="cm-hint">Enter sends; Shift+Enter starts a new line. ${esc(limitWords)}.</span></div>`; };
   /** Add files: check each against the limits, then upload it (the mock of POST …/attachments). */
@@ -124,7 +123,9 @@
   UI.act('chat-send', (b) => { const bot = b.dataset.m, t = b.dataset.t, ta = UI.$('#say'), st = pend(bot), v = ta.value.trim();
     if (st.items.some((a) => a.status === 'uploading')) { st.err = 'Still uploading: it sends once every file is attached'; return drawPend(bot); }
     if (!v && !st.items.length) return UI.nudge(ta, `Type a message for ${bot} first`);
-    if (t) return UI.ticketComment(t, bot, { text: v, attachments: st.items, links: links(bot) }, () => { P[bot] = { items: [], gone: [], err: '' }; ta.value = ''; ta.style.height = ''; drawPend(bot); });
+    const clear = () => { P[bot] = { items: [], gone: [], err: '' }; ta.value = ''; ta.style.height = ''; drawPend(bot); };
+    if (t) return UI.ticketComment(t, bot, { text: v, attachments: st.items, links: links(bot) }, clear);
+    if (/^team:/.test(bot)) return UI.teamSay(bot.slice(5), { text: v, attachments: st.items, links: links(bot) }, clear);
     const L = (D.chats[bot] = D.chats[bot] || []), ls = links(bot).map(({ url, host, path }) => ({ url, host, path }));
     const c = { id: 't' + Date.now().toString(36), who: 'op', at: new Date().toISOString(), text: v, state: 'queued', attachments: st.items.map(({ id, kind, name, mime, size, thumb: t, preview }) => ({ id, kind, name, mime, size, src: t, preview })), links: ls };
     if (!c.attachments.length) delete c.attachments; if (!ls.length) delete c.links;
@@ -132,7 +133,7 @@
     setTimeout(() => { c.state = 'delivered'; S.save(); redraw(bot, msg({ who: 'typing' }, bot)); }, UI.fast ? 60 : 1600);
     setTimeout(() => { L.push({ id: 't' + Date.now().toString(36), who: 'bot', at: new Date().toISOString(), text: c.attachments ? `Thanks, I have ${c.attachments.length === 1 ? 'the file' : `all ${c.attachments.length} files`}. I’ll treat ${c.attachments.length === 1 ? 'it' : 'them'} as data you gave me and report back here. Anything that changes something still comes to you first.` : 'Got it. I’ll work on that as your request and report back here. Anything that changes something still comes to you for approval first.' }); S.save(); redraw(bot); }, UI.fast ? 140 : 3000);
   });
-  UI.chatRedraw = redraw;
+  UI.chatRedraw = redraw; UI.chatRowsOf = rowsOf;
   UI.act('chat-ticket', (b) => { const { bot } = ctx(); UI.go(`#/tickets/new?bot=${encodeURIComponent(bot)}&from=${b.dataset.mi}`); });
   document.addEventListener('keydown', (e) => { if (e.target.id === 'say' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); const b = UI.$('[data-act="chat-send"]'); if (b) b.click(); } });
 })();

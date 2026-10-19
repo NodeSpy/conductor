@@ -58,7 +58,7 @@ test('attach, refuse with the reason, a link card, remove; send is queued until 
   await expect(page.locator('#cm-pend .cm-p', { hasText: 'trace.log' })).not.toHaveClass(/up/);
   await page.locator('[data-act="chat-send"]').click();
   const mine = page.locator('#msgs .cm-op').last();
-  await expect(mine.locator('.cm-q')).toContainText('Queued: delivered when platform-sre is idle');
+  await expect(mine.locator('.cm-q')).toContainText('Queued: delivered when Atlas is idle');
   await expect(mine).toContainText('Delivered');
   await expect(mine.locator('.cm-given')).toHaveText('Data you gave it');
   await expect(mine.locator('.cm-file')).toContainText('trace.log');
@@ -85,7 +85,10 @@ test('side cards and thread speak in words: no ids, no plan jargon, the approval
   expect(side).not.toMatch(/REPLACES|\+\d+ ~\d+ -\d+|operator:|event:/);
   await expect(page.locator('.cm-side .fx').first()).toBeVisible();
   await expect(page.locator('.cm-card', { hasText: 'Replace the production web server' })).toHaveAttribute('href', '#/bots/platform-sre/proposals/p12');
-  await expect(page.locator('.cm-bot .dl-bot-av').first()).toHaveText('ps'); // the bot's identity on its messages
+  // the bot's identity on its messages (option A): its face and its name, and a rule in its colour
+  await expect(page.locator('.cm-bot .bav svg').first()).toBeVisible();
+  await expect(page.locator('.cm-bot .cm-meta').first()).toContainText('Atlas');
+  await expect(page.locator('.cm-bot[data-bc="teal"]').first()).toBeVisible();
   await expect(page.locator('.cm-event .cm-note')).toContainText('Untrusted data');
   await page.locator('[data-act="chat-paseo"]').click();
   await expect(page.locator('.modal')).toContainText('paseo shows all of it');

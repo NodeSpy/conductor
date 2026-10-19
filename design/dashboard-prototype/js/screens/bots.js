@@ -369,7 +369,7 @@
     const role = (S.staged('bots', m.name) || m.cfg || {}).description || m.role || (t ? `A bot on the ${t.name} team` : 'A bot');
     const now = m.shadow ? UI.statusMark('shadow', 'Shadow: practice mode') : m.home === 'live' ? UI.statusMark('run', 'Running') : UI.statusMark('idle', 'Parked');
     return `${UI.crumbs([['Bots', '#/bots'], t ? [t.name, `#/teams/${t.name}`] : null, sub ? [m.name, `#/bots/${m.name}`] : [m.name], ...(sub || [])])}
-      <div class="dl-bothead"><span class="dl-bot-av">${esc(m.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span><div><h1>${esc(m.name)}</h1><p class="dl-lead">${esc(role)}</p>${cur && m.home === 'live' ? `<p class="bot-working">Working on: <a href="#/tickets/${cur.id}">${esc(cur.title)}</a></p>` : ''}</div>${now}
+      <div class="dl-bothead">${UI.botAv(m.name, 'xl')}<div><h1>${esc(UI.botName(m.name))}${UI.botName(m.name) !== m.name ? ` <span class="bav-id h1-id">${esc(m.name)}</span>` : ''}</h1><p class="dl-lead">${esc(role)}</p>${cur && m.home === 'live' ? `<p class="bot-working">Working on: <a href="#/tickets/${cur.id}">${esc(cur.title)}</a></p>` : ''}</div>${now}
         <button class="icon-btn" data-act="bot-more" data-m="${m.name}" aria-label="More for ${esc(m.name)}">${icon('more')}</button></div>`;
   }
   UI.act('bot-more', (b) => { const m = M(b.dataset.m); UI.menu(b, [['Rotate session…', 'updates', 'm-rotate', `data-m="${m.name}"`], ['Sweep now', 'eye', 'm-sweep', m.proactive ? `data-m="${m.name}"` : UI.off('It has no proactive: block in its definition')], ['Deliver an event…', 'send', 'm-deliver', `data-m="${m.name}"`], ['-'], ['Workers', 'workflows', 'strip-go', `data-href="#/bots/${m.name}/workers"`]]); });
@@ -409,7 +409,7 @@
     const task = (c) => `<li><a class="cm-side-a" href="#/tickets/${c.id}"><b>${c.urgent ? UI.mark('wait', { label: 'Urgent' }) + ' ' : ''}${esc(c.title)}</b>${UI.factsLine([{ icon: 'message', value: `Asked by ${askedBy(c)}`, pri: 1, label: 'Who asked' }, { icon: 'clock', value: UI.agoText(c.opened), pri: 2, label: 'Opened' }])}</a></li>`;
     return shell(m, 'chat', `<div class="grid g-side chat-grid">
       <div class="panel chat"><div class="panel-head cm-head"><h3>Home session</h3><span class="dl-sub cm-rule">Your messages reach it between turns, never mid-turn</span>
-        ${paseo ? `<button class="btn sm secondary" data-act="chat-paseo" data-m="${m.name}">${icon('external')}Open in paseo</button>` : '<span class="dl-sub">paseo isn’t reachable, so its own view can’t open</span>'}</div>
+        <a class="btn sm secondary" href="#/chat/bot/${m.name}">${icon('message')}Open in Chat</a>${paseo ? `<button class="btn sm secondary" data-act="chat-paseo" data-m="${m.name}">${icon('external')}Open in paseo</button>` : '<span class="dl-sub">paseo isn’t reachable, so its own view can’t open</span>'}</div>
         ${UI.chatThread(msgs, m.name)}${UI.chatComposer(m.name)}<div class="cm-drop" aria-hidden="true">${icon('attach')}Drop to attach to your message</div></div>
       <div class="stack cm-side">
         ${pp.length ? `<section class="panel cm-need"><div class="panel-head">${UI.statusMark('ember', 'Waiting for you')}${UI.count(pp.length, { hot: true })}</div><ul class="cm-side-l">${pp.map(need).join('')}</ul></section>` : ''}

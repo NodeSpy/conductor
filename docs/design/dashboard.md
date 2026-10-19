@@ -61,7 +61,7 @@ The approved designs are the spec (`design/CONFORMANCE.md` says, screen by scree
 The rail keeps the everyday destinations; the rarely visited system pages share one item.
 
 ```
-Home · Needs you · Activity · Tickets · Workflows · Bots · Browsers
+Home · Chat · Needs you · Activity · Tickets · Workflows · Bots · Browsers
 Settings   Connections · Secrets · Packs · System (Config · Safety · Updates · Logs & audit · Access)
 ```
 
@@ -122,6 +122,7 @@ Some elements are on every screen:
 | `#/workflows`, `#/workflows/<name>` | Workflows, and the builder (Recipe, Config file, Runs, Settings) |
 | `#/bots` | Bots: each team a section, solo bots last (old `#/folders/…` links land here) |
 | `#/bots/<m>/<tab>[/<id>]`, `#/bots/new` | A bot. Tabs: approvals, chat, tickets (`cases`), memory, what it can do, settings; `#/bots/<m>/cases/<id>` opens the ticket |
+| `#/chat`, `#/chat/bot/<m>`, `#/chat/team/<t>` | Chat: your conversations, and one ([§4.4.2](#442-chat-and-a-bots-identity)) |
 | `#/tickets`, `#/tickets/new[?bot=|team=]`, `#/tickets/<id>` | Tickets: the list or board by status; a new ticket; one ticket ([§4.4.1](#441-tickets)) |
 | `#/teams/<t>[/<tab>]` | A team |
 | `#/browser`, `#/browser/<id>`, `#/browser/logins` | Browsers and logins |
@@ -754,6 +755,44 @@ on the ticket.
   becomes the description, the bot the assignee, and the ticket notes where it came from).
 - **A bot's Tickets tab** and **a team's Tickets tab** are the same list, narrowed to that bot or that team and its
   bots, each with New ticket.
+
+#### 4.4.2 Chat, and a bot's identity
+
+**Chat** is a main destination (second in the rail; in the phone's tab bar), laid out like a messaging app
+(direction 1).
+
+- **Conversations** on the left:
+  - each **bot as a person**: its face, its display name, its last message, an unread count, and a mark when it's
+    working now;
+  - each **team as a group**: its members' faces, stacked.
+  - The list runs pinned first, then teams, then bots by recency, with a search that finds any bot or team (it scales
+    to 150 bots: recent conversations plus search, not a roster).
+- **The conversation** on the right is the bot chat (the Chat tab of [§4.4](#44-teams-and-bots-178)): the same
+  thread, composer, attachments, folded tool calls and approval cards. A bot's Chat tab and its conversation here are
+  one conversation, and the tab links here ("Open in Chat").
+- **A team's chat** is a group thread:
+  - you talk to the whole team, and its **lead** (or its routing) picks it up by default;
+  - **Everyone on the team** is an explicit choice that asks every bot;
+  - **@name** addresses one bot.
+  - Every reply is labelled with the bot that wrote it, in its identity.
+- **Phone:** the list, then the conversation on its own screen, with Chat in its breadcrumb.
+
+**A bot's identity** (option A):
+
+- **Fields:**
+  - a display name (the config id stays the name everywhere it matters);
+  - a face from the brand's set (`avatar.preset`: beam, focus, curio, doze, grit, imp, calm, wow, wink, shy, chirp,
+    steady);
+  - a colour from the bot palette (`avatar.color`: olive, lime, teal, lagoon, plum, rose, stone; never a status hue);
+  - a tagline and a voice.
+- **Where it shows:** the face in that colour on rows, the bot page, chat and the conversation list. Its messages carry
+  a thin rule in its colour; there's no tint. Its name is shown with its id, quieter.
+- **No picture:** a bot without one shows its initials.
+- **Config shape:** `bots.<m>.avatar: {preset, color}`, plus `display_name`, `tagline` and `voice` (a builder adds
+  these to conductor).
+- **API:** `GET /api/v1/chat` lists conversations with their last message and unread counts.
+  `POST /api/v1/teams/<t>/say` `{text, to: "lead"|"all"|<bot>, attachments?}` posts to a team's chat, and
+  `GET /api/v1/teams/<t>/transcript` reads it (**NEW**).
 
 ### 4.5 Browsers (#182)
 
