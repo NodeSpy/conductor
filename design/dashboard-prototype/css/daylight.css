@@ -149,10 +149,8 @@
 .dl-bothead .dl-lead { margin-top: 2px; }
 .dl-tabs { display: flex; gap: 26px; border-bottom: var(--border-width) solid var(--color-border-default); margin-top: 22px; overflow-x: auto; scrollbar-width: none; }
 .dl-tabs a { padding: 10px 0 12px; font-weight: var(--font-weight-semibold); color: var(--color-text-secondary); position: relative; white-space: nowrap; }
-.dl-tabs a em { font-style: normal; font-size: var(--type-caption-size); background: var(--color-bg-sunken); color: var(--color-text-secondary); border-radius: 999px; padding: 1px 7px; margin-left: 4px; }
 .dl-tabs a.on { color: var(--color-text-primary); }
 .dl-tabs a.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 3px 3px 0 0; background: var(--color-text-primary); }
-.dl-tabs a em.hot { background: var(--color-accent-default); color: var(--color-text-on-accent); }
 .dl-proposal { box-shadow: var(--shadow-2), inset 3px 0 0 var(--color-accent-default); }
 .dl-kick { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: var(--font-weight-semibold); color: var(--color-text-accent); }
 .dl-ptitle { font: var(--type-h3) !important; font-size: var(--type-h2-size) !important; letter-spacing: normal !important; font-variation-settings: normal !important; margin-top: 10px !important; line-height: 1.25 !important; }
@@ -738,3 +736,5 @@ td.run .fx { margin-top: 4px; }
     background-color: var(--code-bg); background-repeat: no-repeat; background-size: 32px 100%, 32px 100%, 12px 100%, 12px 100%; background-attachment: local, local, scroll, scroll; }
   .b-audit { margin: var(--space-2) 0 var(--space-3); }
 }
+
+.dl-tabs a .count { margin-left: 4px; vertical-align: 1px; }

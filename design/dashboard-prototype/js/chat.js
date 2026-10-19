@@ -42,10 +42,10 @@
         <div class="cm-ev">${esc(c.text)}</div><div class="cm-note">Untrusted data: ${esc(bot)} reads it, never takes orders from it</div></div>`; }
     if (c.who === 'op') { const as = c.attachments || [], ls = c.links || [];
       return `<div class="cm-row cm-op"><div class="cm-meta">${mk(mi, o)}<span>You</span><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span>${stateWord(c, bot)}</div>
-        ${c.text ? `<div class="cm-bubble">${linkify(UI.md(c.text))}</div>` : ''}
+        ${c.text ? `<div class="cm-bubble">${UI.mentionHTML(linkify(UI.md(c.text)))}</div>` : ''}
         ${as.length || ls.length ? `<div class="cm-atts"><span class="cm-given">${icon('attach')}Data you gave it</span>${as.map((a, i) => att(a, i, mi)).join('')}${ls.map(linkCard).join('')}</div>` : ''}</div>`; }
-    if (c.who === 'typing') return `<div class="cm-row cm-bot" id="typing" ${UI.botAttrs(bot)}>${UI.botAv(bot, 'md')}<div><div class="cm-meta">${UI.botWho(bot)}<span class="dl-sub">is writing…</span></div><div class="cm-bubble typing"><i></i><i></i><i></i></div></div></div>`;
-    return `<div class="cm-row cm-bot" ${UI.botAttrs(bot)}>${UI.botAv(bot, 'md')}<div><div class="cm-meta">${UI.botWho(bot)}<span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span>${mk(mi, o)}</div><div class="cm-bubble">${UI.md(c.text)}</div>${c.proposal ? card(c.proposal, bot) : ''}</div></div>`;
+    if (c.who === 'typing') return `<div class="cm-row cm-bot" id="typing" ${UI.botAttrs(bot)}>${UI.botAv(bot, 'msg')}<div><div class="cm-meta">${UI.botWho(bot)}<span class="dl-sub">is writing…</span></div><div class="cm-bubble typing"><i></i><i></i><i></i></div></div></div>`;
+    return `<div class="cm-row cm-bot" ${UI.botAttrs(bot)}>${UI.botAv(bot, 'msg')}<div><div class="cm-meta">${UI.botWho(bot)}<span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span>${mk(mi, o)}</div><div class="cm-bubble">${UI.md(c.text)}</div>${c.proposal ? card(c.proposal, bot) : ''}</div></div>`;
   };
   /** The thread's rows: consecutive tool calls fold into one group line. */
   UI.chatRows = (L, bot, o) => { const out = []; for (let i = 0; i < L.length; i++) {
@@ -83,7 +83,7 @@
     return `<div class="cm-comp" data-bot="${esc(bot)}"${o.ticket ? ` data-t="${esc(o.ticket)}"` : ''}><div class="cm-pend" id="cm-pend"${st.items.length ? '' : ' hidden'}>${st.items.map(pendItem).join('')}</div>
       <p class="cm-err" id="cm-err" role="alert"${st.err ? '' : ' hidden'}>${esc(st.err)}</p>
       <div class="cm-in"><div class="cm-field"><button type="button" class="cm-attach" data-act="chat-attach" aria-label="Attach files or images" title="${esc(limitWords)}">${icon('attach')}</button><input type="file" id="cm-file" multiple accept="${ACCEPT}" hidden>
-        <textarea class="cm-ta" id="say" rows="1" placeholder="${o.ticket ? 'Add a comment' : `Message ${esc(o.to || UI.botName(bot))}`}" aria-label="${o.ticket ? 'Comment' : `Message ${esc(o.to || UI.botName(bot))}`}" aria-describedby="cm-hint"></textarea></div>
+        <span class="cm-tw"><span class="cm-mirror" aria-hidden="true"></span><textarea class="cm-ta" id="say" rows="1" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="mx-pop" placeholder="${o.ticket ? 'Add a comment' : `Message ${esc(o.to || UI.botName(bot))}`}" aria-label="${o.ticket ? 'Comment' : `Message ${esc(o.to || UI.botName(bot))}`}" aria-describedby="cm-hint"></textarea></span></div>
         <button class="btn primary cm-send" data-act="chat-send" data-m="${esc(bot)}"${o.ticket ? ` data-t="${esc(o.ticket)}"` : ''} aria-label="${o.ticket ? 'Post comment' : 'Send'}" title="${o.ticket ? 'Post comment' : 'Send'} (Enter; Shift+Enter for a new line)">${icon('send')}</button></div>
       <span class="sr-only" id="cm-hint">Enter sends; Shift+Enter starts a new line. ${esc(limitWords)}.</span></div>`; };
   /** Add files: check each against the limits, then upload it (the mock of POST …/attachments). */
@@ -123,13 +123,13 @@
   UI.act('chat-send', (b) => { const bot = b.dataset.m, t = b.dataset.t, ta = UI.$('#say'), st = pend(bot), v = ta.value.trim();
     if (st.items.some((a) => a.status === 'uploading')) { st.err = 'Still uploading: it sends once every file is attached'; return drawPend(bot); }
     if (!v && !st.items.length) return UI.nudge(ta, `Type a message for ${bot} first`);
-    const clear = () => { P[bot] = { items: [], gone: [], err: '' }; ta.value = ''; ta.style.height = ''; drawPend(bot); };
+    const clear = () => { P[bot] = { items: [], gone: [], err: '' }; ta.value = ''; ta.style.height = ''; drawPend(bot); ta.dispatchEvent(new Event('input', { bubbles: true })); };
     if (t) return UI.ticketComment(t, bot, { text: v, attachments: st.items, links: links(bot) }, clear);
     if (/^team:/.test(bot)) return UI.teamSay(bot.slice(5), { text: v, attachments: st.items, links: links(bot) }, clear);
     const L = (D.chats[bot] = D.chats[bot] || []), ls = links(bot).map(({ url, host, path }) => ({ url, host, path }));
     const c = { id: 't' + Date.now().toString(36), who: 'op', at: new Date().toISOString(), text: v, state: 'queued', attachments: st.items.map(({ id, kind, name, mime, size, thumb: t, preview }) => ({ id, kind, name, mime, size, src: t, preview })), links: ls };
     if (!c.attachments.length) delete c.attachments; if (!ls.length) delete c.links;
-    L.push(c); P[bot] = { items: [], gone: [], err: '' }; ta.value = ''; ta.style.height = ''; drawPend(bot); S.save(); redraw(bot);
+    L.push(c); P[bot] = { items: [], gone: [], err: '' }; ta.value = ''; ta.style.height = ''; drawPend(bot); ta.dispatchEvent(new Event('input', { bubbles: true })); S.save(); redraw(bot);
     setTimeout(() => { c.state = 'delivered'; S.save(); redraw(bot, msg({ who: 'typing' }, bot)); }, UI.fast ? 60 : 1600);
     setTimeout(() => { L.push({ id: 't' + Date.now().toString(36), who: 'bot', at: new Date().toISOString(), text: c.attachments ? `Thanks, I have ${c.attachments.length === 1 ? 'the file' : `all ${c.attachments.length} files`}. I’ll treat ${c.attachments.length === 1 ? 'it' : 'them'} as data you gave me and report back here. Anything that changes something still comes to you first.` : 'Got it. I’ll work on that as your request and report back here. Anything that changes something still comes to you for approval first.' }); S.save(); redraw(bot); }, UI.fast ? 140 : 3000);
   });
@@ -138,3 +138,62 @@
   document.addEventListener('keydown', (e) => { if (e.target.id === 'say' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); const b = UI.$('[data-act="chat-send"]'); if (b) b.click(); } });
 })();
 UI.afterRender.push((main) => { if (main.querySelector('#msgs')) UI.chatAnchor(); });
+
+/* @mentions in the composer (item 27), like Slack: typing @ opens a list of who you can mention (in a team's chat
+ * its members first, the lead marked, and @everyone; then other bots and teams), filtered as you type; arrows,
+ * Enter or Tab, or a click pick one; Esc closes. A picked mention is a token in the bot's colour (drawn on a layer
+ * behind the field, so the field stays plain text), Backspace takes the whole token, and in a team's chat the To row
+ * follows: a bot you mention is who it goes to; @everyone is everyone on the team. */
+(function () {
+  const esc = UI.esc;
+  const ta = () => UI.$('#say'), comp = () => UI.$('.cm-comp');
+  const teamOf = () => { const b = (comp() || {}).dataset?.bot || ''; return /^team:/.test(b) ? b.slice(5) : ''; };
+  const members = (t) => D.bots.filter((b) => b.cfg && b.cfg.team === t).map((b) => b.name);
+  const leadOf = (t) => { const x = D.teams.find((y) => y.name === t); return (x && ((S.staged('teams', t) || x.cfg || {}).routing || {}).lead) || members(t)[0]; };
+  /** Who can be mentioned here: [{ key, word, sub, kind }]. */
+  const people = () => { const t = teamOf(), out = [];
+    if (t) { out.push({ key: 'everyone', word: 'everyone', sub: `everyone on team ${t}`, kind: 'all' }); const lead = leadOf(t);
+      members(t).forEach((b) => out.push({ key: b, word: UI.botName(b), sub: b + (b === lead ? ' · lead' : ''), kind: 'bot' })); }
+    D.bots.filter((b) => !t || !members(t).includes(b.name)).forEach((b) => out.push({ key: b.name, word: UI.botName(b.name), sub: b.name + (b.cfg && b.cfg.team ? ` · team ${b.cfg.team}` : ''), kind: 'bot' }));
+    D.teams.filter((x) => x.name !== t).forEach((x) => out.push({ key: 'team:' + x.name, word: x.name, sub: `team · ${members(x.name).length} bots`, kind: 'team' }));
+    return out; };
+  // every word a mention can be: a bot's display name or id, a team's name, everyone
+  const words = () => { const m = new Map(); D.bots.forEach((b) => { m.set(UI.botName(b.name).toLowerCase(), b.name); m.set(b.name.toLowerCase(), b.name); }); D.teams.forEach((t) => m.set(t.name.toLowerCase(), 'team:' + t.name)); m.set('everyone', 'everyone'); return m; };
+  const RE = /@([A-Za-z][\w-]*)/g;
+  /** Mentions in a sent message, as tokens. */
+  UI.mentionHTML = (html) => { const w = words(); return html.replace(RE, (all, n) => { const k = w.get(n.toLowerCase()); if (!k) return all; return `<span class="mx-tok"${k.startsWith('team:') || k === 'everyone' ? '' : ` ${UI.botAttrs(k)}`}>@${esc(n)}</span>`; }); };
+  /** The mentions in what's typed: [key…]. */
+  UI.mentionsIn = (text) => { const w = words(), out = []; String(text || '').replace(RE, (a, n) => { const k = w.get(n.toLowerCase()); if (k && !out.includes(k)) out.push(k); }); return out; };
+  // the layer behind the field: the same text, with each mention as a token
+  const mirror = () => { const t = ta(), m = UI.$('.cm-mirror'); if (!t || !m) return; const w = words();
+    m.innerHTML = esc(t.value).replace(RE, (all, n) => { const k = w.get(n.toLowerCase()); return k ? `<mark class="mx-tok"${k.startsWith('team:') || k === 'everyone' ? '' : ` ${UI.botAttrs(k)}`}>${all}</mark>` : all; }) + '​'; m.scrollTop = t.scrollTop; };
+  const st = { open: false, i: 0, items: [], from: 0 };
+  const pop = () => UI.$('#mx-pop');
+  const close = () => { st.open = false; const p = pop(); if (p) p.remove(); const t = ta(); if (t) { t.setAttribute('aria-expanded', 'false'); t.removeAttribute('aria-activedescendant'); } };
+  const draw = () => { let p = pop(); const c = comp(); if (!c) return; if (!p) { p = document.createElement('div'); p.id = 'mx-pop'; p.className = 'mx-pop'; p.setAttribute('role', 'listbox'); p.setAttribute('aria-label', 'Mention'); c.appendChild(p); }
+    p.innerHTML = st.items.length ? st.items.map((x, i) => `<button type="button" class="mx-o${i === st.i ? ' on' : ''}" role="option" id="mx-o${i}" aria-selected="${i === st.i}" data-act="mx-pick" data-i="${i}">${x.kind === 'bot' ? UI.botAv(x.key, 'sm') : `<span class="mx-ic">${UI.icon(x.kind === 'all' ? 'team' : 'team')}</span>`}<b>${x.kind === 'all' ? '@everyone' : esc(x.word)}</b><span class="dl-sub">${esc(x.sub)}</span></button>`).join('') : '<p class="dl-sub mx-none">Nobody by that name.</p>';
+    const t = ta(); t.setAttribute('aria-expanded', 'true'); if (st.items.length) t.setAttribute('aria-activedescendant', 'mx-o' + st.i);
+    const on = p.querySelector('.mx-o.on'); if (on) on.scrollIntoView({ block: 'nearest' }); };
+  const update = () => { const t = ta(); if (!t) return; const before = t.value.slice(0, t.selectionStart), m = before.match(/(^|\s)@([\w-]*)$/);
+    if (!m) return close(); const q = m[2].toLowerCase(); st.from = before.length - m[2].length - 1;
+    st.items = people().filter((x) => !q || x.word.toLowerCase().startsWith(q) || x.key.toLowerCase().replace(/^team:/, '').startsWith(q) || (x.kind === 'all' && 'everyone'.startsWith(q))).slice(0, 8);
+    st.i = Math.min(st.i, Math.max(0, st.items.length - 1)); st.open = true; draw(); };
+  const syncTo = () => { const tm = teamOf(); if (tm && UI.teamToSync) UI.teamToSync(tm, UI.mentionsIn((ta() || {}).value)); };
+  const pick = (i) => { const x = st.items[i], t = ta(); if (!x || !t) return; const word = '@' + (x.kind === 'all' ? 'everyone' : x.word) + ' ';
+    const end = t.selectionStart; t.value = t.value.slice(0, st.from) + word + t.value.slice(end); const at = st.from + word.length; t.setSelectionRange(at, at); close(); mirror(); syncTo(); t.focus(); t.dispatchEvent(new Event('input', { bubbles: true })); };
+  UI.act('mx-pick', (b) => pick(+b.dataset.i));
+  document.addEventListener('input', (e) => { if (e.target.id !== 'say') return; mirror(); update(); syncTo(); });
+  document.addEventListener('click', (e) => { if (st.open && !(e.target.closest && (e.target.closest('#mx-pop') || e.target.id === 'say'))) close(); });
+  document.addEventListener('scroll', (e) => { if (e.target.id === 'say') mirror(); }, true);
+  // keys go to the list while it's open; Backspace right after a mention takes the whole token
+  document.addEventListener('keydown', (e) => { if (e.target.id !== 'say') return; const t = e.target;
+    if (st.open) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopImmediatePropagation(); const n = st.items.length; if (n) { st.i = (st.i + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; draw(); } return; }
+      if ((e.key === 'Enter' || e.key === 'Tab') && st.items.length) { e.preventDefault(); e.stopImmediatePropagation(); pick(st.i); return; }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(); return; }
+    }
+    if (e.key === 'Backspace' && t.selectionStart === t.selectionEnd) { const before = t.value.slice(0, t.selectionStart), m = before.match(/@([A-Za-z][\w-]*)\s?$/);
+      if (m && words().has(m[1].toLowerCase())) { e.preventDefault(); const at = before.length - m[0].length; t.value = t.value.slice(0, at) + t.value.slice(t.selectionStart); t.setSelectionRange(at, at); mirror(); syncTo(); close(); } }
+  }, true);
+  UI.afterRender.push(() => { st.open = false; mirror(); });
+})();

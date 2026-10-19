@@ -309,7 +309,7 @@
   /* ---------- nav ---------- */
   // the rail, as in Daylight's mocks (design/brand/v2): the work, then Settings; only "Needs you" is counted hot
   const navGroups = [
-    ['', [['overview', 'Home', 'overview'], ['chat', 'Chat', 'message', () => (UI.chatUnreadCount ? UI.chatUnreadCount() : 0)], ['attention', 'Needs you', 'attention', () => D.attention.length, true], ['activity', 'Activity', 'live'], ['tickets', 'Tickets', 'ticket'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'globe']]],
+    ['', [['overview', 'Home', 'overview'], ['chat', 'Chat', 'message', () => (UI.chatUnreadCount ? UI.chatUnreadCount() : 0), true], ['attention', 'Needs you', 'attention', () => D.attention.length, true], ['activity', 'Activity', 'live'], ['tickets', 'Tickets', 'ticket'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'globe']]],
     ['Settings', [['connectors', 'Connections', 'connectors'], ['secrets', 'Secrets', 'secrets'], ['extensions', 'Packs', 'extensions'], ['system', 'System', 'settings']]],
   ];
   UI.navGroups = navGroups;
@@ -464,7 +464,7 @@
       <button type="button" class="cell op-btn" data-act="op-menu" aria-label="${D.operator.name}: account and display"><span class="avatar">${D.operator.name.slice(0, 2)}</span></button>`;
     $('#rail-nav').innerHTML = UI.navHTML();
     $('#rail-host').innerHTML = UI.hostCard();
-    $('#tabbar').innerHTML = [['overview', 'Home', 'overview'], ['attention', 'Needs you', 'attention', need, true], ['chat', 'Chat', 'message', UI.chatUnreadCount ? UI.chatUnreadCount() : 0], ['activity', 'Activity', 'live'], ['more', 'More', 'more']].map(([k, l, ic, c, hot]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span>${l}</span>${c ? UI.count(c, { hot: !!hot }) : ''}</a>`).join('');
+    $('#tabbar').innerHTML = [['overview', 'Home', 'overview'], ['attention', 'Needs you', 'attention', need, true], ['chat', 'Chat', 'message', UI.chatUnreadCount ? UI.chatUnreadCount() : 0, true], ['activity', 'Activity', 'live'], ['more', 'More', 'more']].map(([k, l, ic, c, hot]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span>${l}</span>${c ? UI.count(c, { hot: !!hot }) : ''}</a>`).join('');
     UI.setNav((location.hash.replace(/^#\/?/, '') || 'overview').split('/')[0]);
   };
 
@@ -500,7 +500,7 @@
   UI.crumbs = (items) => `<nav class="dl-crumbs" aria-label="Where you are">${items.filter(Boolean).map((it, i, xs) => `${i ? '<span class="sep" aria-hidden="true">›</span>' : ''}${i === xs.length - 1 && !it[1] ? `<span class="cur" aria-current="page">${UI.esc(it[0])}</span>` : `<a href="${it[1]}">${UI.esc(it[0])}</a>`}`).join('')}</nav>`;
   UI.head = (title, opts = {}) => `<div class="page-head"><div>${Array.isArray(opts.crumbs) ? UI.crumbs(opts.crumbs) : opts.crumbs ? `<div class="crumbs">${opts.crumbs}</div>` : ''}<h1${opts.gen ? ' class="gen"' : ''}>${title}</h1>${opts.sub ? `<p class="sub">${String(opts.sub).replace(/^([a-z])/, (c) => c.toUpperCase())}</p>` : ''}${opts.lede ? `<p class="lede">${opts.lede}</p>` : ''}${opts.lede2 ? `<p class="lede-2">${opts.lede2}</p>` : ''}${opts.detail ? `<div class="head-detail">${opts.detail}</div>` : ''}</div>${opts.actions ? `<div class="actions">${opts.actions}</div>` : ''}</div>`;
   /** The System area's own navigation: the rarely visited pages, one sidebar item (Settings → System). */
-  UI.systemTabs = (on) => `<nav class="dl-tabs dl-subnav" aria-label="System">${[['config', 'Config', '#/config'], ['safety', 'Safety', '#/safety', D.daemon.paused ? '!' : ''], ['updates', 'Updates', '#/updates', D.daemon.update && D.daemon.update.blocked ? '!' : ''], ['logs', 'Logs & audit', '#/logs'], ['security', 'Access', '#/security']].map(([k, l, h, n]) => `<a href="${h}" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page"' : ''}>${l}${n ? ` <em class="hot">${n}</em>` : ''}</a>`).join('')}</nav>`;
+  UI.systemTabs = (on) => `<nav class="dl-tabs dl-subnav" aria-label="System">${[['config', 'Config', '#/config'], ['safety', 'Safety', '#/safety', D.daemon.paused ? '!' : ''], ['updates', 'Updates', '#/updates', D.daemon.update && D.daemon.update.blocked ? '!' : ''], ['logs', 'Logs & audit', '#/logs'], ['security', 'Access', '#/security']].map(([k, l, h, n]) => `<a href="${h}" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page"' : ''}>${l}${n ? ` ${UI.count(n, { hot: true })}` : ''}</a>`).join('')}</nav>`;
   UI.tabs = (items, on) => `<div class="tabs" role="tablist">${items.map(([k, l, href, c, hot]) => `<a href="${href}" role="tab" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page" aria-selected="true"' : ''}>${l}${c != null ? ' ' + UI.count(c, { hot }) : ''}</a>`).join('')}</div>`;
   UI.bind = (root, sel, ev, fn) => $$(sel, root).forEach((el) => el.addEventListener(ev, (e) => fn(e, el)));
 

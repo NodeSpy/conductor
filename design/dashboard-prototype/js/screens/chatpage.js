@@ -14,7 +14,8 @@
   const teamBots = (t) => D.bots.filter((b) => b.cfg && b.cfg.team === t).map((b) => b.name);
   const leadOf = (t) => { const x = D.teams.find((y) => y.name === t); return (x && ((S.staged('teams', t) || x.cfg || {}).routing || {}).lead) || teamBots(t)[0]; };
   const working = (b) => (D.workers || []).some((w) => (w.bot || 'platform-sre') === b && w.status === 'run');
-  const stack = (t) => `<span class="cv-stack">${teamBots(t).slice(0, 3).map((b) => UI.botAv(b, 'xs')).join('')}</span>`;
+  // a team is its lead's face, large enough to know, and how many more are on it
+  const stack = (t, size = 'list') => { const ms = teamBots(t), lead = leadOf(t); return `<span class="cv-stack ${size}">${UI.botAv(lead, size)}${ms.length > 1 ? `<i class="cv-more" aria-label="and ${ms.length - 1} more">+${ms.length - 1}</i>` : ''}</span>`; };
   const lastOf = (L) => [...(L || [])].reverse().find((c) => c.who === 'bot' || c.who === 'op');
   const plain = (t) => String(t || '').replace(/\*\*|`/g, '');
   /** Every conversation, newest first: [kind, key, title, last line, when, unread, working]. */
@@ -25,41 +26,62 @@
       out.push({ kind: 'team', key: 'team:' + t.name, href: `#/chat/team/${t.name}`, title: `team ${t.name}`, last: l ? `${l.who === 'op' ? 'You' : UI.botName(l.bot)}: ${plain(l.text)}` : `${teamBots(t.name).length} bots`, at: l ? l.at : null, unread: D.chatUnread['team:' + t.name] || 0, working: teamBots(t.name).some(working) }); });
     return out; };
   const cv = { q: '' };
-  const row = (c, on) => `<li><a class="cv-c${on ? ' on' : ''}" href="${c.href}"${on ? ' aria-current="page"' : ''}>${c.kind === 'team' ? stack(c.key.slice(5)) : UI.botAv(c.key, 'md')}
+  const pinned = (k) => D.chatPinned.includes(k);
+  // a conversation: the row opens it; its pin sits beside it (shown on hover or focus; always on touch), and a
+  // long press on a phone opens the same choices
+  const row = (c, on) => `<li class="cv-li${pinned(c.key) ? ' pinned' : ''}" data-key="${esc(c.key)}"><a class="cv-c${on ? ' on' : ''}" href="${c.href}"${on ? ' aria-current="page"' : ''}>${c.kind === 'team' ? stack(c.key.slice(5)) : UI.botAv(c.key, 'list')}
     <span class="cv-ct"><b>${esc(c.title)}</b>${c.working ? `<span class="cv-work" title="Working now">${UI.mark('run')}</span>` : ''}<span class="dl-sub cv-at">${c.at ? UI.agoText(c.at) : ''}</span><span class="cv-last">${esc(c.last)}</span></span>
-    ${c.unread ? `<span class="cv-un" aria-label="${c.unread} unread">${c.unread}</span>` : ''}</a></li>`;
+    ${c.unread ? UI.count(c.unread, { hot: true, label: `${c.unread} unread`, cls: 'cv-un' }) : ''}</a>
+    <button type="button" class="icon-btn cv-pin" data-act="cv-pin" data-key="${esc(c.key)}" aria-pressed="${pinned(c.key)}" aria-label="${pinned(c.key) ? 'Unpin' : 'Pin'} ${esc(c.title)}" title="${pinned(c.key) ? 'Unpin' : 'Pin to the top'}">${icon('pin')}</button></li>`;
   function list(cur) {
     const all = convs(), q = cv.q.toLowerCase(), hit = (c) => !q || `${c.title} ${c.sub || ''} ${c.last}`.toLowerCase().includes(q);
-    const pinned = all.filter((c) => D.chatPinned.includes(c.key) && hit(c)), teams = all.filter((c) => c.kind === 'team' && !D.chatPinned.includes(c.key) && hit(c));
-    const recent = all.filter((c) => c.kind === 'bot' && !D.chatPinned.includes(c.key) && hit(c)).sort((a, b) => (Date.parse(b.at || 0) || 0) - (Date.parse(a.at || 0) || 0));
+    const pins = D.chatPinned.map((k) => all.find((c) => c.key === k)).filter((c) => c && hit(c)), teams = all.filter((c) => c.kind === 'team' && !pinned(c.key) && hit(c));
+    const recent = all.filter((c) => c.kind === 'bot' && !pinned(c.key) && hit(c)).sort((a, b) => (Date.parse(b.at || 0) || 0) - (Date.parse(a.at || 0) || 0));
     const grp = (h, xs) => (xs.length ? `<h2 class="cv-g">${h}</h2><ul class="cv-l">${xs.map((c) => row(c, c.key === cur)).join('')}</ul>` : '');
-    return `<aside class="cv-list" aria-label="Conversations"><div class="cv-lh"><h1>Chat</h1></div>
+    return `<aside class="cv-list" aria-label="Conversations">
       <label class="dl-search cv-s">${icon('search')}<input id="cv-q" type="search" placeholder="Find a bot or a team" value="${esc(cv.q)}" aria-label="Find a bot or a team" data-on-input="cv-q"></label>
-      ${grp('Pinned', pinned)}${grp('Teams', teams)}${grp(q ? 'Bots' : 'Bots', recent)}${pinned.length + teams.length + recent.length ? '' : '<p class="dl-sub cv-none">No bot or team by that name.</p>'}</aside>`;
+      ${grp('Pinned', pins)}${grp('Teams', teams)}${grp('Bots', recent)}${pins.length + teams.length + recent.length ? '' : '<p class="dl-sub cv-none">No bot or team by that name.</p>'}</aside>`;
   }
   const curKey = () => { const mt = location.hash.match(/#\/chat\/(bot|team)\/([^/?]+)/); return mt ? (mt[1] === 'team' ? 'team:' : '') + decodeURIComponent(mt[2]) : ''; };
   UI.act('cv-q', (el) => { cv.q = el.value; const box = UI.$('.cv-list'); if (!box) return; const pos = el.selectionStart; box.outerHTML = list(curKey()); const q = UI.$('#cv-q'); q.focus(); q.setSelectionRange(pos, pos); });
 
   /* ---------- a conversation ---------- */
   const to = {}; // per team: 'lead' or 'all'
+  const more = (key) => `<button type="button" class="icon-btn" data-act="cv-more" data-key="${esc(key)}" aria-label="More for this conversation">${icon('more')}</button>`;
+  /** Pin or unpin a conversation: pins keep their order, newest pin last, and live with your own read state. */
+  const togglePin = (key) => { D.chatPinned = pinned(key) ? D.chatPinned.filter((k) => k !== key) : D.chatPinned.concat(key); S.save(); UI.rerender({ keepScroll: true }); UI.toast(pinned(key) ? 'Pinned' : 'Unpinned', esc(key.replace(/^team:/, 'team ')), 'ok'); };
+  UI.act('cv-pin', (b) => togglePin(b.dataset.key));
+  const markUnread = (key) => { D.chatUnread[key] = Math.max(1, D.chatUnread[key] || 0); D.chatKeepUnread = key; S.save(); UI.refreshChrome(); UI.go('#/chat'); };
+  UI.act('cv-more', (b) => { const k = b.dataset.key; UI.menu(b, [[pinned(k) ? 'Unpin conversation' : 'Pin conversation', 'pin', 'cv-pin', `data-key="${esc(k)}"`], ['Mark as unread', 'message', 'cv-unread', `data-key="${esc(k)}"`], ['-'], [/^team:/.test(k) ? 'Open the team' : 'Open the bot page', /^team:/.test(k) ? 'team' : 'bots', 'strip-go', `data-href="${/^team:/.test(k) ? `#/teams/${esc(k.slice(5))}` : `#/bots/${esc(k)}`}"`]]); });
+  UI.act('cv-unread', (b) => markUnread(b.dataset.key));
+  // a long press on a conversation (a phone) opens its choices
+  let lp = 0; document.addEventListener('touchstart', (e) => { const li = e.target.closest && e.target.closest('.cv-li'); if (!li) return; clearTimeout(lp); lp = setTimeout(() => { const btn = li.querySelector('.cv-pin'); lp = -1; UI.menu(btn, [[pinned(li.dataset.key) ? 'Unpin conversation' : 'Pin conversation', 'pin', 'cv-pin', `data-key="${esc(li.dataset.key)}"`], ['Mark as unread', 'message', 'cv-unread', `data-key="${esc(li.dataset.key)}"`]]); }, 520); }, { passive: true });
+  ['touchend', 'touchmove', 'touchcancel'].forEach((ev) => document.addEventListener(ev, (e) => { if (lp === -1 && ev === 'touchend' && e.target.closest && e.target.closest('.cv-li')) e.preventDefault(); clearTimeout(lp); if (lp !== -1) lp = 0; }, { passive: false }));
+  document.addEventListener('click', (e) => { if (lp === -1 && e.target.closest && e.target.closest('.cv-c')) { e.preventDefault(); e.stopPropagation(); lp = 0; } }, true);
   function thread(kind, name) {
     if (kind === 'team') { const t = D.teams.find((x) => x.name === name); if (!t) return '<section class="cv-main"><p class="dl-sub">No team by that name.</p></section>';
       const ms = teamBots(name), lead = leadOf(name), mode = to[name] || 'lead';
-      return `<section class="cv-main" data-team="${esc(name)}"><header class="cv-th">${stack(name)}<div class="cv-tt"><b>team ${esc(name)}</b><span class="dl-sub">${ms.length} bot${ms.length === 1 ? '' : 's'} · ${esc(UI.botName(lead))} leads and picks up what you ask</span></div><a class="btn sm secondary" href="#/teams/${esc(name)}">Team</a></header>
+      return `<section class="cv-main" data-team="${esc(name)}"><header class="cv-th">${stack(name, 'lg')}<div class="cv-tt"><b>team ${esc(name)}</b><span class="dl-sub">${ms.length} bot${ms.length === 1 ? '' : 's'} · ${esc(UI.botName(lead))} leads and picks up what you ask</span></div><a class="btn sm secondary" href="#/teams/${esc(name)}">Team</a>${more('team:' + name)}</header>
         <div class="panel chat cv-chat">${UI.chatThread(D.teamChats[name] || [], lead, { empty: `Say hello to team ${esc(name)}. ${esc(UI.botName(lead))} answers first.` })}
         <div class="cv-to" role="group" aria-label="Who it goes to"><span class="dl-sub">To</span><button type="button" class="cv-chip${mode === 'lead' ? ' on' : ''}" data-act="cv-to" data-t="${esc(name)}" data-v="lead" aria-pressed="${mode === 'lead'}">${UI.botAv(lead, 'xs')}${esc(UI.botName(lead))}, the lead</button><button type="button" class="cv-chip${mode === 'all' ? ' on' : ''}" data-act="cv-to" data-t="${esc(name)}" data-v="all" aria-pressed="${mode === 'all'}">Everyone on the team</button><span class="dl-sub cv-at-hint">or @name one bot</span></div>
         ${UI.chatComposer('team:' + name, { to: `team ${name}` })}<div class="cm-drop" aria-hidden="true">${icon('attach')}Drop to attach to your message</div></div></section>`; }
     const m = M(name); if (!m) return '<section class="cv-main"><p class="dl-sub">No bot by that name.</p></section>';
     const id = UI.ident(name) || {}, open = D.cases.filter((c) => c.bot === name && c.status === 'open')[0];
-    return `<section class="cv-main"><header class="cv-th">${UI.botAv(name, 'lg')}<div class="cv-tt"><span>${UI.botWho(name)}</span><span class="dl-sub">${esc(id.tagline || m.desc || '')}${working(name) && open ? ` · working on “${esc(open.title)}”` : ''}</span></div><a class="btn sm secondary" href="#/bots/${esc(name)}">Bot page</a></header>
+    return `<section class="cv-main"><header class="cv-th">${UI.botAv(name, 'lg')}<div class="cv-tt"><span>${UI.botWho(name)}</span><span class="dl-sub">${esc(id.tagline || m.desc || '')}${working(name) && open ? ` · working on “${esc(open.title)}”` : ''}</span></div><a class="btn sm secondary" href="#/bots/${esc(name)}">Bot page</a>${more(name)}</header>
       <div class="panel chat cv-chat">${UI.chatThread(D.chats[name] || [], name, { empty: `No conversation yet. Ask ${esc(UI.botName(name))} anything; it answers here.` })}${UI.chatComposer(name)}<div class="cm-drop" aria-hidden="true">${icon('attach')}Drop to attach to your message</div></div></section>`;
   }
+  /** The To row follows what you @mention: a bot you mention is who it goes to, @everyone is everyone on the team;
+      with no mention it's the lead, or everyone if you chose that. */
+  UI.teamToSync = (team, ments) => { const row = UI.$(`.cv-main[data-team="${team}"] .cv-to`); if (!row) return; const ms = teamBots(team), named = ms.filter((b) => ments.includes(b)), all = ments.includes('everyone');
+    const mode = all ? 'all' : named.length ? 'named' : to[team] || 'lead';
+    row.querySelectorAll('.cv-chip[data-v]').forEach((x) => { const on = x.dataset.v === mode; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on); });
+    let n = row.querySelector('.cv-named'); if (named.length && !all) { if (!n) { n = document.createElement('span'); n.className = 'cv-chip on cv-named'; row.insertBefore(n, row.querySelector('.cv-at-hint')); } n.innerHTML = `${UI.botAv(named[0], 'xs')}${named.map((b) => esc(UI.botName(b))).join(', ')}, as you mentioned`; } else if (n) n.remove(); };
   UI.act('cv-to', (b) => { to[b.dataset.t] = b.dataset.v; b.parentElement.querySelectorAll('.cv-chip').forEach((x) => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on); }); });
 
   /** You, in a team's chat: the lead answers, or everyone does, or the bot you @mention. */
   UI.teamSay = (team, v, done) => { const L = (D.teamChats[team] = D.teamChats[team] || []), ms = teamBots(team), lead = leadOf(team);
-    const named = ms.filter((b) => new RegExp(`@(${b}|${UI.botName(b)})\\b`, 'i').test(v.text));
-    const who = named.length ? named : to[team] === 'all' ? ms : [lead];
+    const ments = UI.mentionsIn(v.text), named = ms.filter((b) => ments.includes(b));
+    const who = ments.includes('everyone') ? ms : named.length ? named : to[team] === 'all' ? ms : [lead];
     const c = { who: 'op', at: now(), text: v.text, state: 'queued', toWord: who.length > 1 ? 'the team' : UI.botName(who[0]) };
     if (v.attachments.length) c.attachments = v.attachments.map(({ id, kind, name, mime, size, thumb, preview }) => ({ id, kind, name, mime, size, src: thumb, preview }));
     if (v.links.length) c.links = v.links.map(({ url, host, path }) => ({ url, host, path }));
@@ -73,10 +95,11 @@
     const all = convs(), first = all.find((c) => D.chatPinned.includes(c.key)) || all[0];
     if (!kind && !phone() && first) { kind = first.kind; name = first.kind === 'team' ? first.key.slice(5) : first.key; }
     const key = kind === 'team' ? 'team:' + name : name;
-    if (key && D.chatUnread[key]) { delete D.chatUnread[key]; S.save(); setTimeout(() => UI.refreshChrome && UI.refreshChrome()); }
+    if (key && D.chatKeepUnread === key) delete D.chatKeepUnread; else if (key && D.chatUnread[key]) { delete D.chatUnread[key]; S.save(); setTimeout(() => UI.refreshChrome && UI.refreshChrome()); }
+    const head = '<div class="dl-phead"><div><h1>Chat</h1></div></div>';
     if (phone()) return kind ? `<div class="page dl-page cv-page cv-one">${UI.crumbs([['Chat', '#/chat'], [kind === 'team' ? `team ${name}` : UI.botName(name)]])}${thread(kind, name)}</div>`
-      : `<div class="page dl-page cv-page cv-one">${list('')}</div>`;
-    return `<div class="page dl-page cv-page"><div class="cv-app">${list(key)}${kind ? thread(kind, name) : '<section class="cv-main"><p class="dl-sub">No conversations yet.</p></section>'}</div></div>`;
+      : `<div class="page dl-page cv-page cv-one">${head}${list('')}</div>`;
+    return `<div class="page dl-page cv-page">${head}<div class="cv-app">${list(key)}${kind ? thread(kind, name) : '<section class="cv-main"><p class="dl-sub">No conversations yet.</p></section>'}</div></div>`;
   }
   UI.route('chat', () => page(), { nav: 'chat' });
   UI.route('chat/:kind/:name', ({ kind, name }) => page(kind, name), { nav: 'chat' });

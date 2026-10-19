@@ -208,6 +208,9 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
   through it, and each state has one look across the app (`status.spec.js`). The words are the brand's nine (Passed,
   Running, Failed, Needs you, Waiting, Parked, Not reached, Shadow, Staged); a mark is used only for a state, never a
   value, count or ratio ("1 failed" has the failed mark; "3 to do" is text).
+- **Counts** (`UI.count`): one count badge app-wide. Something new or waiting for you is the orange badge (`hot`):
+  Needs you, Chat's unread in the rail, the tab bar and the conversation list, and an Approvals tab with something
+  pending. A total is plain text, not a badge ("Tickets 4"). No screen draws its own pill (`chatpage.spec`).
 - **Labels** (`UI.label`): plain words in secondary ink, a middot between neighbours; no box, no fill (the status rule
   allows no capsules). A tier name is a plain config value.
 - **Dialogs** (`UI.modal`, drawers, the command line): open on the dialog itself (Enter does nothing until you move to
@@ -776,6 +779,18 @@ on the ticket.
   - **@name** addresses one bot.
   - Every reply is labelled with the bot that wrote it, in its identity.
 - **Phone:** the list, then the conversation on its own screen, with Chat in its breadcrumb.
+- **@mentions** work like Slack's:
+  - typing @ opens a list of who you can mention: in a team chat, @everyone and the team's members first (the lead
+    marked), then the other bots and teams;
+  - the list filters as you type; arrows with Enter or Tab, or a click, pick one, and Esc closes it;
+  - a mention is a token in the bot's colour, and Backspace removes the whole token;
+  - in a team chat the To row follows: the bot you mention is who it goes to, and @everyone is everyone on the team.
+- **Pins:** pin or unpin a conversation from the pin beside it (shown on hover, always on touch), a long press on a
+  phone, or the conversation's ⋯ (which also offers Mark as unread). The Pinned heading shows only when something is
+  pinned. Pins and read state are per operator (`PUT /api/v1/chat/pins` `{keys[]}`,
+  `POST /api/v1/chat/<key>/read` `{unread?}`).
+- **Sizes:** faces are 40px in the list, 36px on messages and 44px in the header. A team shows its lead's face with
+  "+N".
 
 **A bot's identity** (option A):
 
