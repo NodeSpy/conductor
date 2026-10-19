@@ -71,7 +71,11 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 - Personal details and payment cards (Browsers → Personal details, Payment cards; purchases in Needs you, a bot's
   Approvals and What it can do, receipts on tickets): `js/walletdata.js` (fixtures, the backend's `browser-wallet` and
   purchase shapes; loaded before `scenario.js`), `js/screens/wallet.js`, `css/wallet.css`, `dashboard-tests/wallet.spec.js`;
-  the semantics and what's NEW in `docs/design/dashboard.md` §4.5.1.
+  the semantics and what's NEW in `docs/design/dashboard.md` §4.5.1. Spend limits stack (the lowest wins): `UI.limitLayers`
+  (card, the card for the caller, the bot's `purchases:`, its team's `budget.purchases:`, the ticket's `spend_limit`),
+  shown on the approval, a ticket (`UI.ticketBudget`, New ticket's optional field), a bot's What it can do and a team's
+  Ceilings & scopes (`UI.teamWalletHTML`). The value-source field (`js/valuesource.js`) picks a reference from a lookup
+  (`UI.VS.options/find`), never a typed reference.
 - Screens in `js/screens/`: overview, runs, repo (knowledge by kind), bots (teams, bots), botlist (the Bots page: teams are the page), browser, logins, builder (workflows list + builder), config, secrets, system (packs,
   plugins, updates, connectors, runtimes, hosts, isolation, logs), catalog (`#/extensions/browse`, and the picker behind Add a connector),
   access (sign-in, enroll, passkeys).

@@ -209,7 +209,7 @@ folded. Teams take the bot page's header.
 | Browsers · Logins | compact rows; vault entries one click away | ![](conformance/logins-desktop-light-prototype.jpg) |
 | Browsers · Personal details | the shared rows and table; values masked, sources in words, what a bot may learn per detail; where and who as compact rows (no design source yet: built on the conductor side's semantics, docs/design/dashboard.md §4.5.1) | ![](conformance/personal-details-desktop-light-prototype.jpg) |
 | Browsers · Payment cards | purchases waiting as Needs you rows, cards as compact rows with spend against the limits and Freeze on the row; validate's reminders on the row's attention edge | ![](conformance/payment-cards-desktop-light-prototype.jpg) |
-| A purchase approval | the approved approval card: kicker, plain title, what it asks; the items and total in place of the payload; a subscription or a higher price flagged; card, shop, limits, then; Approve with passkey / Deny… | ![](conformance/purchase-approval-desktop-light-prototype.jpg) |
+| A purchase approval | the approved approval card: kicker, plain title, what it asks; the items and total in place of the payload; a subscription or a higher price flagged; card, shop, every spend limit's room after it with the tightest marked (the lowest wins), then; Approve with passkey / Deny… | ![](conformance/purchase-approval-desktop-light-prototype.jpg) |
 
 ## How conformance is checked
 

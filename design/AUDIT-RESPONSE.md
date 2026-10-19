@@ -301,3 +301,20 @@ busy"), the information design went exception-first (`docs/design/dashboard.md` 
 - New-trigger comment placement (Riley minor): belongs to the real emitter.
 - Planned multi-user previews (queued direction, not an audit finding): not built; the toggle says so.
 - Per-team "needs approval" tags in the step picker (Sam M6 suggestion): risk visuals wait for the brand's proposal (pending review); whether a given bot must ask depends on the bot, which the Safety page and each bot's "What it can do" tab show.
+
+### Personal details, payment cards and spend limits (the owner's ledger items 40, 55 and 56)
+
+Built on the conductor side's own semantics (the browser wallet: profiles, cards, purchases, receipts, and the spend
+limits that stack), with what the dashboard needs that the backend doesn't have marked NEW in dashboard.md §4.5.1.
+- **Done:** Browsers → Personal details and Payment cards; purchase approvals in Needs you and a bot's Approvals; receipts
+  on the ticket; Can buy on a bot (from every layer) and a team's caps; a ticket's spending limit (on the ticket and in
+  New ticket); the freeze switch; spend against limits; the merchant allowlist; buying without asking as an opt-in
+  widening; the passkey only on widening and decisions; every value on the shared value-source field, whose reference is
+  now a lookup (search, keyboard, a chip with ✕, whether it exists and when it changed, never the value).
+- **Left, honestly:** the backend classifies a *new* ticket budget as a widening even though it can only narrow what's
+  spent, so the prototype asks for the passkey there to match it; worth a word with the builders. A card's brand and
+  last four, the passkey signature for a purchase decision, and Needs you items for purchases are NEW for the daemon.
+- **Checks:** wallet.spec (31 tests), the value-source, create, logins, flows, tickets and teams specs, the measuring
+  scripts (desk2, ctr, mob, tb) on every wallet route, and the WebKit iPhone sweep of them. Failures outside these
+  screens (Workflows' sweep overlaps, the memory and knowledge filter inputs, a Secrets filter-pill flake that also
+  fails on base) were left to the main designer and noted in the ledger.
