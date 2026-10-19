@@ -153,7 +153,13 @@ func (p *PurchaseLimits) narrows(team *PurchaseLimits, where, teamName string) e
 	if err := fit(where, p.CardLimits, team.CardLimits); err != nil {
 		return err
 	}
-	for card, l := range p.Cards {
+	// A bot's per-card caps fit the team's overall ones and, when the team
+	// has its own for that card, those.
+	for _, card := range walletKeys(p.Cards) {
+		l := p.Cards[card]
+		if err := fit(where+".cards."+card, l, team.CardLimits); err != nil {
+			return err
+		}
 		if tl, ok := team.Cards[card]; ok {
 			if err := fit(where+".cards."+card, l, tl); err != nil {
 				return err

@@ -109,6 +109,8 @@ func TestTeamCeilingsNarrowNeverWiden(t *testing.T) {
 			"purchases: { per_purchase: 40, per_day: 200, per_month: 501 }", []string{"purchases.per_month 501", "team t's 500"}},
 		{"purchases on a card past the team's on it", "budget: { purchases: { per_purchase: 100, per_day: 200, per_month: 500, cards: { visa: { per_purchase: 20, per_day: 50, per_month: 100 } } } }",
 			"purchases: { per_purchase: 40, per_day: 200, per_month: 300, cards: { visa: { per_purchase: 30, per_day: 50, per_month: 100 } } }", []string{"purchases.cards.visa.per_purchase 30", "team t's 20"}},
+		{"purchases on a card past the team's overall", "budget: { purchases: { per_purchase: 100, per_day: 200, per_month: 500 } }",
+			"purchases: { per_purchase: 40, per_day: 200, per_month: 300, cards: { visa: { per_purchase: 40, per_day: 200, per_month: 600 } } }", []string{"purchases.cards.visa.per_month 600", "team t's 500"}},
 		{"purchases in another currency", "budget: { purchases: { per_purchase: 100, per_day: 200, per_month: 500 } }",
 			"purchases: { per_purchase: 40, per_day: 200, per_month: 300, currency: EUR }", []string{"currency EUR", "team t's USD"}},
 		{"unattended under the default ceiling", "", "autonomy: { tiers: { commit_money: [browser.purchase] }, amounts: { browser.purchase: total }, spend_cap: { per_action: 50, per_period: 100 }, unattended: { browser.purchase: { per_action: 5, per_period: 10, merchants: [\"https://shop.example.com\"] } } }", []string{"autonomy.unattended", `autonomy.ceiling ""`, "commit_money"}},
