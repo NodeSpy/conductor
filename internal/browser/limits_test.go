@@ -343,6 +343,16 @@ func TestProposeUnderATicket(t *testing.T) {
 	if !hasTeam {
 		t.Fatalf("no team layer: %+v", p.Layers)
 	}
+	// The bot's approval re-checks the ticket: lowered to 80 since.
+	budgets := m.Budgets.(fakeBudgets)
+	budgets["bot:shopper/c3"] = CaseBudget{Key: "bot:shopper/c3", Amount: 80, Currency: "USD"}
+	if _, err := m.ApproveBotPurchase(p.ID, "shopper", "p1"); err == nil || !strings.Contains(err.Error(), "over this ticket's 80.00 USD limit: 80.00 USD left") {
+		t.Fatalf("the bot's approval over the ticket: %v", err)
+	}
+	budgets["bot:shopper/c3"] = CaseBudget{Key: "bot:shopper/c3", Amount: 120, Currency: "USD"}
+	if p, err = m.proposePurchase(context.Background(), botCaller, st, args("85"), map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
 	// 90 left under the bot's cap, 35 under the ticket's: the ticket binds.
 	if _, err := m.proposePurchase(context.Background(), botCaller, st, args("50"), map[string]any{}); err == nil || !strings.Contains(err.Error(), "over this ticket's 120.00 USD limit: 35.00 USD left") {
 		t.Fatalf("the second: %v", err)
@@ -424,5 +434,45 @@ func TestLayerWindowsHoldTheirOwn(t *testing.T) {
 	}
 	if got := used(states, "bot shopper", "day"); got != 0 {
 		t.Errorf("a paid purchase counted itself: %.2f", got)
+	}
+}
+
+// A refusal binds the layer that refused, even when another one has less
+// room left.
+func TestRefusalBindsTheRefusingLayer(t *testing.T) {
+	l, _ := ledger(t)
+	card := bigCard()
+	card.Limits.PerPurchase = 30
+	r := SpendRules{Card: card, Who: botCaller, Bot: "shopper",
+		BotLimits: &config.PurchaseLimits{CardLimits: config.CardLimits{PerPurchase: 40, PerDay: 40, PerMonth: 300}}}
+	if _, err := l.ProposeWithin(buyP(25), time.Hour, r); err != nil {
+		t.Fatal(err)
+	}
+	// 35: over the card's 30 a purchase (5 over), and over the bot's day
+	// with 15 left (20 over). The card refuses first and binds.
+	states, err := l.Evaluate(r, buyP(35), "")
+	if err == nil || !strings.Contains(err.Error(), "card visa's 30.00 USD per-purchase") {
+		t.Fatalf("refused: %v", err)
+	}
+	if b := binding(states); b.Layer != "card visa" || b.Window != "purchase" {
+		t.Fatalf("binding: %+v", b)
+	}
+}
+
+// An operator's approval re-checks the caller's identity limits: lowered
+// since the proposal, they refuse it.
+func TestOperatorApprovalRechecksIdentityLimits(t *testing.T) {
+	card := bigCard()
+	card.Identities = []string{caller.Identity}
+	st := Settings{Allow: []string{"shop.example.com"}, Cards: map[string]Card{"visa": card}, PurchaseTTL: time.Minute}
+	m := &Manager{Settings: func() Settings { return st }, Purchases: &Purchases{Dir: t.TempDir()}}
+	p, err := m.proposePurchase(context.Background(), caller, st, map[string]any{"card": "visa", "merchant": shopURL, "total": "25"}, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	card.IdentityLimits = map[string]config.CardLimits{caller.Identity: {PerPurchase: 20, PerDay: 50, PerMonth: 100}}
+	st.Cards["visa"] = card
+	if _, err := m.ApprovePurchase(p.ID, p.Digest, "op"); err == nil || !strings.Contains(err.Error(), "card visa for "+caller.Identity+"'s 20.00 USD per-purchase") {
+		t.Fatalf("approval past the identity limit: %v", err)
 	}
 }

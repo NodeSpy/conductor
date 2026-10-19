@@ -50,6 +50,7 @@ var shopItems = map[string]struct {
 	Plan  bool
 }{
 	"widget": {"Widget", 12.00, false},
+	"drive":  {"Hard drive", 85.00, false},
 	"gadget": {"Gadget", 8.50, false},
 	"plan":   {"Pro plan (monthly)", 5.00, true},
 }
