@@ -224,6 +224,12 @@
   },
   {
    "fam": "status",
+   "word": "In progress",
+   "src": "mark in-progress",
+   "ink": 0.3125
+  },
+  {
+   "fam": "status",
    "word": "Not reached",
    "src": "mark skipped",
    "ink": 0.09375
@@ -343,6 +349,13 @@
    "sim": 0.466
   },
   {
+   "a": "Needs you",
+   "b": "In progress",
+   "fa": "status",
+   "fb": "status",
+   "sim": 0.464
+  },
+  {
    "a": "Login",
    "b": "Applies infra",
    "fa": "kind",
@@ -427,6 +440,13 @@
    "sim": 0.433
   },
   {
+   "a": "Ready",
+   "b": "In progress",
+   "fa": "status",
+   "fb": "status",
+   "sim": 0.433
+  },
+  {
    "a": "Deploy",
    "b": "Production",
    "fa": "kind",
@@ -467,6 +487,13 @@
    "fa": "kind",
    "fb": "status",
    "sim": 0.424
+  },
+  {
+   "a": "Reads",
+   "b": "In progress",
+   "fa": "action",
+   "fb": "status",
+   "sim": 0.423
   },
   {
    "a": "Bot",
@@ -514,6 +541,13 @@
    "a": "Incident",
    "b": "Waiting",
    "fa": "kind",
+   "fb": "status",
+   "sim": 0.408
+  },
+  {
+   "a": "Production",
+   "b": "In progress",
+   "fa": "env",
    "fb": "status",
    "sim": 0.408
   },

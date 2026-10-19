@@ -20,6 +20,7 @@ const LABELS = {
   'needs-you': 'Needs you (accent)',
   staged: 'Staged change, not applied',
   ready: 'Ready: set to start, not started (slate)',
+  'in-progress': 'In progress: started, not executing now (slate)',
 };
 const status = Object.fromEntries(Object.keys(LABELS).map((k) => [k, { label: LABELS[k], svg: read('status')[k] }]));
 fs.writeFileSync(path.join(dir, 'icons.js'),
