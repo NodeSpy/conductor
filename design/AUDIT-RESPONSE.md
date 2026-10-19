@@ -1,5 +1,33 @@
 # UX audit response
 
+## The owner's finish-line ledger (items DA and 38–68b, 2026-10-18/19)
+
+The owner's ledger was the source of truth; each item was closed only with a screenshot looked at and a test, and the
+ledger line names the commit. What changed, by theme:
+- **Measured, not eyeballed** (the desktop audit, DA): the owner's measuring scripts (`desk2`, `tb`, `mob`, `ctr`) are
+  ported as `measure.js`, run on every route at 1440 and 390 in both themes by `measure.spec.js`: one control height,
+  one filter toolbar, the gap between stacked panels, a row's parts on one centre line, closed disclosures centred,
+  fixed row heights (47), card actions in fixed places (51), nothing over its card. `container.spec.js` checks one page
+  container at 1440, 1280 and 1024 (53, 63).
+- **Plugins** (39, 41–45, 44b, 44c, 67): the page renamed, one flat row for connections, runtimes, languages and
+  machines with the brand's fact types and graded risk, per-connection version policy, one compact paged picker.
+- **Lists and pages**: the audit log led by who did it (48); Updates (49) and Secrets (50, 52) trimmed; the Bots page
+  (54, 54b); Workflows' health, without a bot's own workflows (57b, 58); Tickets (59, 60, 60b); the shared time range
+  (61); the composer and attach menu (62); Chat (64, 65); the brand's mascots and picture pickers (66); the runs chart
+  (68: static on Home; 68b: a tooltip per bar on Activity).
+- **Spinner rule** (59, 64): the spinner is only for something executing now (a run, a worker, a reply being written);
+  a state like In progress has the brand's static mark.
+
+Final runs (2026-10-19): the full Chromium suite, desktop and phone, 1094 tests: 901 passed, 191 skipped (tests that
+only run on another project or width), 2 failed (the sweep at 900px: Tickets' board squeezed a title to a word per line;
+fixed, the board scrolls sideways on a tablet; sweep, measure, container and tickets then 42 passed). The measuring
+scripts ran on every route as `measure.spec.js`. The WebKit iPhone 15 sweep (`run-webkit.sh`, OS dark and light ×
+theme auto, light and dark), 510 tests: passed. On the way the sweep found three bugs, fixed: every phone switch (its
+hit area had taken the knob), Workflows on a phone (one word per line), and a filter bar in a narrow card.
+
+Left, honestly: ledger items 1, 14 and 18 wait on the owner; the WebKit iPhone sweep needs Docker (see HANDOFF);
+Activity on a phone has no runs chart (the list is the page there), so the chart's tap is tested on a touch tablet.
+
 ## Round 2 (the four adversarial reports)
 
 Source: `round2-fixes.md` (QA `bugs/REPORT.md`, brand `brand/REPORT.md`, `newcomer/REPORT-r2.md`, `power/REPORT-r2.md`).

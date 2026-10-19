@@ -137,7 +137,7 @@ tr[data-row] .why-line { color: var(--color-text-primary); }
 .dl-hours .hb[data-hbtip].on rect:not(.hb-hit):not(.hb-cap), .dl-hours .hb[data-hbtip]:focus-visible rect:not(.hb-hit):not(.hb-cap) { stroke: var(--color-text-primary); stroke-width: 1.5; vector-effect: non-scaling-stroke; paint-order: stroke; }
 .dl-hours .hb[data-hbtip]:focus-visible .hb-hit { stroke: var(--color-focus-ring); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .dl-card:has(> .hb-tip) { position: relative; }
-.hb-tip { position: absolute; z-index: 5; max-width: min(320px, calc(100% - 16px)); padding: 8px 12px; display: grid; gap: 4px; background: var(--modal-bg, var(--color-bg-raised)); border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-md, 8px); box-shadow: var(--shadow-2, 0 4px 16px rgb(0 0 0 / .18)); font: var(--type-caption); color: var(--color-text-secondary); pointer-events: auto; }
+.hb-tip { position: absolute; z-index: 5; max-width: min(320px, calc(100% - 16px)); padding: 8px 12px; display: grid; gap: 4px; background: var(--modal-bg); border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-2); font: var(--type-caption); color: var(--color-text-secondary); pointer-events: auto; }
 .hb-tip[hidden] { display: none; } .hb-tip-h { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
 .hb-tip-l { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px 12px; } .hb-tip-l li { display: inline-flex; align-items: center; gap: 6px; } .hb-tip-l b { color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
 .hb-tip-f { margin: 0; }

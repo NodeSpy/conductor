@@ -737,3 +737,4 @@ tr.folded { display: none; }
 .cr-zoom { display: flex; align-items: center; gap: 10px; font: var(--type-body-s); } .cr-zoom input { width: 180px; }
 .cr-drop { display: grid; justify-items: center; gap: 6px; width: 100%; max-width: 420px; padding: 28px 16px; border: 1.5px dashed var(--color-border-strong); border-radius: var(--radius-card); background: none; color: var(--color-text-primary); cursor: pointer; text-align: center; } .cr-drop svg { width: 22px; height: 22px; }
 .cr-err { margin: 0; font: var(--type-body-s); color: var(--color-status-danger-fg); }
+@media (min-width: 721px) and (max-width: 1100px) { .tk-board { grid-template-columns: repeat(5, 208px); } } /* a tablet: the board scrolls sideways (it already can) rather than squeeze a title to a word a line */

@@ -37,7 +37,7 @@ bar.
 
 Deliberate differences:
 - **Navigation** follows the later structural decisions: Run history is merged into **Activity**; the Settings group is
-  Connections, Secrets, Packs and **System** (Config, Safety, Updates, Logs & audit and Access, under one item with its
+  Plugins, Packs, Secrets and **System** (Config, Safety, Updates, Logs & audit and Access, under one item with its
   own sub-navigation; old `#/safety` links open the Safety tab). There is no top-bar status menu: what needs a person
   is in Needs you, and the machine card at the rail's foot (More on a phone) says how the machine is and, quietly, its
   update; an update escalates (attention edge on the card, and an item in Needs you) only when it needs a person.
@@ -60,7 +60,8 @@ Source: v2 `overview()` (Daylight), and Home as approved in review.
 
 Matches: Needs you as the mock's list (the mark, a plain title, why, the machine detail
 last in mono, the age, one verb, Review primary for approvals); Running now; Last 12 hours (the figure, hour bars with
-failures stacked in the danger colour, the failures named); For your information.
+failures stacked in the danger colour, the failures named); For your information. The Runs chart is static: no hover,
+no tap, no per-bar readout (the owner's call); its time range is the shared control at the card's right.
 
 Deliberate differences:
 - **No greeting or summary sentence** (removed in review): they carried nothing the tiles and Needs you don't, and the
@@ -92,7 +93,8 @@ Took, ID; the phone's grouped list.
 Deliberate differences:
 - **Run history and Activity are one page** (a structural decision): the filters (status, workflow, bot, and what the connectors publish such as repository and PR),
   the time range (up to all time) and search sit on the page; Finished is paged ("Show 20 more of N").
-- **Runs per hour** for the chosen range sits above the table: the Overview's approved strip, the same size for ten Departure, by request: passed runs are green (bars in a softer green, running blue, failures red on top), and the Passed word and mark are green everywhere, where the approved mock kept passes grey and ink.
+- **Runs per hour** for the chosen range sits above the table: the Overview's approved strip, with a tooltip per bar
+  (hover, tap, or the arrow keys: the time, each kind's count, the failed runs named), the same size for ten Departure, by request: passed runs are green (bars in a softer green, running blue, failures red on top), and the Passed word and mark are green everywhere, where the approved mock kept passes grey and ink.
   workflows or five hundred. The per-workflow lanes are gone (they don't scale).
 - **Selection**: a checkbox column; while anything is checked, the header row becomes a pinned selection bar
   ("3 selected", Retry…, Stop…, Select all N matching, Clear). The same bar serves every list with bulk select.
@@ -196,9 +198,9 @@ folded. Teams take the bot page's header.
 | Screen | What it follows | Prototype |
 |---|---|---|
 | Needs you | Home's Needs you list, every item | ![](conformance/needs-desktop-light-prototype.jpg) |
-| Bots | the chosen direction 1 (teams are the page): each team a section whose header says its rules and builds the team, solo bots last; rows with the facts line and a quiet status mark; no folders | ![](conformance/bots-desktop-light-prototype.jpg) |
-| Workflows | the chosen direction 1: yours, each pack (update, Customize), made-for-bots as one line; an on/off switch, what it does, what starts it | ![](conformance/workflows-desktop-light-prototype.jpg) |
-| Connections | what conductor can use: Services (each service, built in, official or from a source, with its version, an update, and its connections under it), Agent runtimes, Code languages, Machines; Add a service opens one catalog (search, or a git URL) | ![](conformance/connections-desktop-light-prototype.jpg) |
+| Bots | the chosen direction 1 (teams are the page): each team a section whose header (its picture, name, lead and rules) reads as one row; a bot in no team is a top-level row sorted among the teams; rows with the brand's mascot, the facts line and a quiet status mark; Make a team is a bulk action; no folders | ![](conformance/bots-desktop-light-prototype.jpg) |
+| Workflows | the chosen direction 1: yours, each pack (update, Customize); a bot's own workflows aren't listed (they live on the bot); an on/off switch, what it does, what starts it, its health this week (runs and the share failed), a Health filter and Most failing first | ![](conformance/workflows-desktop-light-prototype.jpg) |
+| Plugins | what conductor can use, four tabs drawn as one flat row (the glyph on the name's line, how it is in words, the facts line, one ⋯): Connections (each connection with its service, origin, version policy and version; Group by Service optional; bulk update or hold), Agent runtimes, Code languages, Machines; each Add opens one compact paged picker (search, Origin, a git URL or custom source always beside it) | ![](conformance/connections-desktop-light-prototype.jpg) |
 | Secrets | two tabs, one system: Secrets and Settings (settings and environment variables) share one row (readable name with the exact reference and Copy, used by, value or where it lives, ⋯ Change the value / Copy the reference / Delete) and the same two-sentence explanation; the filter bar; vaults always open at the foot of Secrets with their own Add a vault | ![](conformance/secrets-desktop-light-prototype.jpg) |
 | Packs | packs only (bundles of workflows): Installed and Browse; compact rows; Add a pack opens the catalog; guided overrides | ![](conformance/packs-desktop-light-prototype.jpg) |
 | Pack overrides | roles → compatible connections, triggers with consent, steps via the builder, YAML second | ![](conformance/pack-overrides-desktop-light-prototype.jpg) |
@@ -213,10 +215,20 @@ folded. Teams take the bot page's header.
 
 ## How conformance is checked
 
+The prototype images were re-rendered on 2026-10-19 (`conformance/render.js`, the finish-line state). The approved
+images are kept from their earlier render: the brand has since marked those mocks as archived drafts, and they stay the
+fixed reference.
+
+
 - `dashboard-tests/status.spec.js`: every status goes through the shared mark; one state, one look across the app.
 - `dashboard-tests/sweep.spec.js`: every route at 1440, 900 and 390 pixels: no text and controls overlapping inside a
   card, nothing spilling out of its card, no phrase squeezed to one word per line, no list content centred by accident
   or rows blown up, no dropped interpolation (an unescaped `<name>` or a gap before a full stop).
 - `dashboard-tests/daylight.spec.js`: tokens only, the type floors, the serif only on short titles, no capsules.
+- `dashboard-tests/measure.spec.js` (the owner's measuring scripts, ported: `measure.js`): every route at 1440 and 390,
+  both themes: one control height, one toolbar, the gap between stacked panels, a row's parts on one centre line, a
+  closed disclosure centred, fixed row heights, card actions in fixed places, nothing over its card.
+- `dashboard-tests/container.spec.js`: every route's title and content start and end on Activity's edges at 1440, 1280
+  and 1024 (one page container), the top bar's inset the anchor.
 - `dashboard-tests/iphone.spec.js` (WebKit, iPhone 15): one theme, nothing under Safari's toolbar, the logo at 16px in
   both themes, rendered contrast.

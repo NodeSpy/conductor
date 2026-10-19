@@ -76,12 +76,37 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
   shown on the approval, a ticket (`UI.ticketBudget`, New ticket's optional field), a bot's What it can do and a team's
   Ceilings & scopes (`UI.teamWalletHTML`). The value-source field (`js/valuesource.js`) picks a reference from a lookup
   (`UI.VS.options/find`), never a typed reference.
-- Screens in `js/screens/`: overview, runs, repo (knowledge by kind), bots (teams, bots), botlist (the Bots page: teams are the page), browser, logins, builder (workflows list + builder), config, secrets, system (packs,
-  plugins, updates, connectors, runtimes, hosts, isolation, logs), catalog (`#/extensions/browse`, and the picker behind Add a connector),
+- Shared since the finish-line pass: `js/filter.js` the one filter toolbar (`UI.filterBar`: search with Filter by…,
+  menus, Group by and Sort, the view toggle, a trailing control; `time: true` fields are the shared time range at the
+  far right, `UI.timeField`/`UI.TIME_RANGES`/`UI.withinRange`). `js/chat.js` the one chat (thread, composer with the
+  attach menu, `UI.fitChat` sizing every `.fit` chat panel to the visible viewport). `js/identity.js` pictures: bots draw
+  the brand's mascots (`js/mascots.js`, `mascot-kit.js` vendored verbatim from origin/design/brand 2264e07a:
+  `{shape, eyes, color}` or an uploaded `{image}`), teams their initials, an icon or an image (`UI.ident`,
+  `UI.teamIdent`, `UI.mascotPicker`, `UI.teamPicker`, the crop). `js/brandglyphs.js` the brand's fact icons and service
+  glyphs (generated from origin/design/brand icons.js); `js/kindglyphs.js` the code-language glyphs (Simple Icons and
+  Lucide). The facts line (`UI.factsLine`, `UI.pluginFact`, `UI.actionFact`) takes the brand's fact types (tone: update,
+  held, custom, change, warning, danger; production as the solid square). Status marks (`UI.mark`, `css/marks.css`)
+  include the brand's Ready (hollow dot) and In progress (part-filled capsule, 049d2491); the spinner is only for
+  live execution.
+- Screens in `js/screens/`: overview, runs, tickets (Board and List, a ticket's page), chatpage (Chat), repo (knowledge by kind), bots (teams, bots), botlist (the Bots page: teams are the page), browser, logins, builder (workflows list + builder), config, secrets, system (packs,
+  plugins, updates, connectors, runtimes, hosts, isolation, logs), catalog (`#/extensions/browse`, and the one picker behind Add a connection, a runtime and a language),
   access (sign-in, enroll, passkeys).
 
 ## Done (commits on this branch, newest first)
 
+- **Finish line (the owner's ledger, items DA and 38–68b; 2026-10-18/19)**, each verified with a screenshot and a test:
+  the measured desktop audit (one control height, one toolbar, the stack gap, row centring, centred disclosures; the
+  owner's `desk2/tb/mob/ctr` scripts ported as `measure.spec.js` on every route); one page container
+  (`container.spec.js`); Plugins (renamed from Connections; its four tabs one flat row with fact types, per-connection
+  version policy, one compact paged picker); the audit log led by who did it; Updates and Secrets trimmed; fixed row
+  heights and card actions; the Bots page's team rows and solo bots; Workflows' health; Tickets (Board first, drag within
+  the rules, a flat paged List, In progress a static mark); the composer and attach menu; the top-bar search at the
+  right; Chat (no spinner in the list, "is working…" only while replying, every chat panel fitted to the viewport); the
+  brand's mascots and the picture pickers; Home's chart static and Activity's with a tooltip. Final runs: the full
+  Chromium suite (901 passed, 191 skipped, the 2 failures fixed and re-run green), the WebKit iPhone sweep (510,
+  passed); details in `design/AUDIT-RESPONSE.md`. Ledger and commits: `git log --grep 'design(dashboard)'`.
+  Running a suite: one at a time; `suite.sh` now refuses to start while 127.0.0.1:8799 is still served by an earlier
+  run (that silently tests the old snapshot).
 - **Usability pass** (each screen around its person-level question; `design/AUDIT-RESPONSE.md` "Usability"): Home's
   Needs you tile, the bot page (tasks, waiting approvals, the plain-list permission editor), the run page's one
   recommended step, Activity on a phone, workflow sentences, connection states, Secrets/Packs/Config hierarchy, and a
@@ -139,13 +164,12 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
   on buttons, plain words first.
 - Audit P1 and minors, and everything before them: see `design/AUDIT-RESPONSE.md` and `git log`.
 
-## Open (waiting on the brand designer)
+## Open
 
-- The final **status-and-label system** (margin marks, filter chips, counts, row emphasis): it swaps into
-  `css/marks.css` and the helpers in `js/ui.js` (`UI.statusMark`, `UI.label`, `UI.filterChip`, `UI.selectChip`,
-  `UI.count`, `UI.rowState`, `UI.groupHead`). Screens draw none of this markup themselves.
-- The calm components and tokens the brand designer is adding (quiet rows, tick strips, the answer line): today they are
-  built from existing tokens in `css/screens.css` (search "calm").
+- Nothing waits on the brand designer: the status marks (Ready, In progress), the fact types, the mascots and the
+  icons are vendored from origin/design/brand (re-copy them, never edit them: `js/icons.js` GLYPHS, `js/mascots.js`,
+  `js/brandglyphs.js`, `css/tokens.css`).
+- Ledger items 1, 14 and 18 wait on the owner (each reported with a link).
 
 ## Queued directions (status)
 
@@ -159,7 +183,7 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 | Add a login | done; folder principals removed in step D |
 | Environment variables (scopes, effective env, import, restart via boot guard) | done (`#/secrets/env`) |
 | Packs & plugins catalog (browse/detail/install wizard/sources/trust) | done (routed; lockfile hunk) |
-| Connectors catalog (real builtin vs plugin split, custom git connector) | **not started** (SCHEMA still marks github builtin); facts in summary: builtins web, cron, webhook, rss, command, rest, graphql, kv, sql, memory, workflow, conductor (+ lan, tunnel); everything vendor is an official plugin |
+| Connectors catalog (real builtin vs plugin split, custom git connector) | done: one picker on the real split (the builtins compiled in, every vendor connector an official plugin, your sources; a git URL or custom source always offered); `schema.js` still carries a stale `builtin: true` on a few vendor connectors, which nothing reads |
 | Value-source field | done; changes in step B (canonical vault syntax, no named secrets) |
 | Knowledge kinds | done, on conductor's real kinds and collection locations |
 | Visual QA bar + shared components | done: layout (both themes), iPhone WebKit sweep, dismiss, copy-number, Daylight, home, status and sweep specs |

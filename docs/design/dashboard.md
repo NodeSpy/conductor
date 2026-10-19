@@ -795,7 +795,7 @@ on the ticket.
   status from Draft to Done; each column scrolls inside itself, and Done holds the last 7 days (Show older for the
   rest), so nothing grows without limit. Drag a card to move it, within the rules: Draft ↔ Ready (to Ready asks who
   does it), anything → Done, Done → Ready (reopened); In progress and Waiting on you are conductor's to set, so a drop
-  there says why. On a phone, one column at a time, picked from the status tabs above it. The **List** is one flat
+  there says why. On a tablet the board scrolls sideways (columns keep their width); on a phone, one column at a time, picked from the status tabs above it. The **List** is one flat
   list, 20 to a page, each row's status a fact. The shared filter bar: Assignee (a bot, a team, nobody yet), Status,
   Priority, and under More filters Label. A card or row: the mark, the title, who asked (or drafted it) in words, the
   facts line (assignee, priority when it isn't normal, due, labels), and a button only for a real next action (a
