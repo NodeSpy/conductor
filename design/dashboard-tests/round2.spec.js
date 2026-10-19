@@ -60,7 +60,7 @@ test('Add a connection is the searchable catalog with a git source; the name is 
   await page.locator('[data-act="conn-add"]').click();
   await expect(page.locator('.modal .pk .fb-in')).toBeVisible();
   await expect(page.locator('.modal [data-act="src-add"]').first()).toContainText('git URL or custom source'); // always there, beside the search
-  await expect(page.locator('.modal [data-cat="connector:github"]')).toContainText('official');
+  await expect(page.locator('.modal [data-cat="connector:github"]')).toContainText(/official/i);
   await page.locator('.modal .pk .fb-in').fill('linear');
   await page.locator('.modal [data-act="cat-pick"][data-name="linear"]').click();
   await expect(page.locator('#f-name')).toHaveValue('linear');

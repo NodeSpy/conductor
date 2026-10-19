@@ -234,6 +234,10 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
 - **One row height** (the shared row: `.dl-nt` in a list): the title is one line, the description always takes two
   (clamped with an ellipsis), the facts one line (a fact that doesn't fit drops whole); so the rows of a list are one
   height (`measure.spec`). One action per row: the whole row opens; a button only for a real next action.
+- **One time range** (`UI.timeField`, `UI.TIME_RANGES`): wherever a time range appears (Activity, Logs & audit, a
+  workflow's runs, Home's chart), it's the same control with the same choices (last hour, 12 hours, 24 hours, 7 days,
+  30 days, all time): a clock and "Last 12 hours ▾", its own control at the far right of its row (in the Filter sheet
+  on a phone, except where it's the row's only control).
 - **One page container** on every route: the content starts under the top bar's search, one max-width, one gutter
   (`container.spec`, at 1440, 1280 and 1024).
 - **The audit log** leads with who: their picture (a bot's face, a team's initials, You, a workflow's icon) and name in
@@ -728,13 +732,14 @@ path, and the apply needs an explicit acknowledgement.
 
 **Workflows screen** (`#/workflows`, the same pattern as Bots). It's for managing workflows: **Yours**, then each
 **pack** as a section (its version, **Update to …** when there is one, how many settings you've customised,
-**Customize**), then **Made for bots** as one line (each is on its bot's page, where it's changed). A row: an on/off
+**Customize**). It lists only workflows you can change: a bot's generated workflow (from its watch settings) isn't
+here at all (its runs are in Activity, its settings on the bot's page). A row: an on/off
 switch (yours stages `enabled: false`; a pack's goes through your pack override), the name, what it does in a
 sentence, what starts it in words (a fact), and a quiet mark for a failed or running last run that links to Activity.
 Its menu: open in the builder, run now, duplicate (a copy of yours, switched off), customize in its pack, delete. Bulk
 switch on or off on a desktop. The filter bar: Source, On or off, Last run, and **Group by** (Source or None) at its
 far right (in the Filter sheet on a phone); with None, each row says where it came from as a fact (yours, the pack and
-its version, made for a bot); grouped by source the section says it. The count sits beside the title.
+its version); grouped by source the section says it. The count sits beside the title.
 
 **Create in place.** Every picker that references another entity offers
 **+ New …** as its first option: team → bot, bot → team, step →

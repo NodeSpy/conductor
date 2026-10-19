@@ -114,3 +114,8 @@
   .fb-pill { flex: none; } html .fb-pill .fb-px { position: relative; width: 26px; height: 26px; min-height: 0; } .fb-pill .fb-px::after { content: ''; position: absolute; inset: -9px; } /* a 44px target, drawn small */
 }
 
+.fb-btn.fb-time { margin-left: auto; color: var(--color-text-primary); } .fb-btn.fb-view + .fb-btn.fb-time, .fb-seg + .fb-btn.fb-time { margin-left: 8px; } .fb-btn.fb-time > svg:first-child { color: var(--color-icon-default); } .fb[data-nosearch] { margin: 0; }
+.dl-ch > .fb { margin: 0 0 0 auto; flex: none; } .dl-ch > .fb .fb-bar { flex: none; } @media (max-width: 720px) { .dl-ch > .fb .fb-time { display: inline-flex; } .dl-ch > .fb .fb-phone { display: none; } }
+@media (max-width: 720px) { .fb[data-nosearch] .fb-time { display: inline-flex; margin-left: auto; } .fb[data-nosearch] .fb-phone { display: none; } }
+.dl-ch > .fb, .fb[data-nosearch] { container-type: normal; } /* a bar with only a time range sizes to it */
+@media (max-width: 720px) { .fb[data-nosearch] .fb-bar { flex: 1 1 auto; } }

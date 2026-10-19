@@ -33,7 +33,7 @@
    * Above it, runs per hour for the chosen range (the Overview's strip: the same size for 10 workflows or 500), and
    * the filters, the time range and search on the same page, as far back as you need. */
   const PAGE = 20;
-  const RANGES = [['1h', 'Last hour', 60], ['12h', 'Last 12 hours', 720], ['24h', 'Last 24 hours', 1440], ['7d', 'Last 7 days', 10080], ['all', 'All time', 0]];
+  const RANGES = UI.TIME_RANGES; // the one set of time ranges (61)
   const MINS = Object.fromEntries(RANGES.map(([k, , m]) => [k, m]));
   // the filters, as the shared filter bar keeps them (js/filter.js): several statuses, workflows or bots at once; what a
   // connector's events carry (github.repo:…) is a search qualifier the connector declares (js/connattrs.js)
@@ -105,11 +105,11 @@
   }
   /** Runs per hour for the chosen range: an aggregate strip, failures stacked in the danger colour and named below. */
   function strip(G) {
-    const span = sinceMin() || 10080, n = span <= 60 ? 12 : span <= 1440 ? Math.round(span / 60) : 7, bucket = span / n, w = 960, h = 96;
+    const span = sinceMin() || 10080, n = span <= 60 ? 12 : span <= 1440 ? Math.round(span / 60) : span <= 10080 ? 7 : 30, bucket = span / n, w = 960, h = 96;
     const per = Array.from({ length: n }, () => ({ ok: 0, other: 0, run: 0, fail: 0 }));
     G.all.forEach((r) => { const m = (Date.now() - new Date(r.started)) / 60000; if (m > span) return; const i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(m / bucket))); per[i][UI.runBucket(r)]++; });
     const at = (min) => new Date(Date.now() - min * 60000).toISOString();
-    const when = (i) => { const from = (n - i) * bucket, to = (n - 1 - i) * bucket; return unitOf === 'day' ? new Date(at(from - bucket / 2)).toLocaleDateString(undefined, { weekday: 'long' }) : `${UI.hm(at(from))}–${to ? UI.hm(at(to)) : 'now'}`; };
+    const when = (i) => { const from = (n - i) * bucket, to = (n - 1 - i) * bucket; return unitOf === 'day' ? new Date(at(from - bucket / 2)).toLocaleDateString(undefined, span > 10080 ? { month: 'short', day: 'numeric' } : { weekday: 'long' }) : `${UI.hm(at(from))}–${to ? UI.hm(at(to)) : 'now'}`; };
     const unitOf = span <= 1440 ? 'time' : 'day';
     const bars = UI.stackBars(per, w, h, when);
     const label = (RANGES.find(([v]) => v === av.since) || RANGES[1])[1].toLowerCase().replace('last ', ''), unit = span <= 60 ? '5 minutes' : span <= 1440 ? 'hour' : 'day';
@@ -130,7 +130,7 @@
     ...UI.attrQualifiers(runs),
   ];
   const actBar = () => UI.filterBar({ id: 'act', state: av, placeholder: 'Search, or filter: status:failed', label: 'Search and filter runs',
-    fields: UI.runFields(D.runs).concat([{ k: 'since', label: 'Time', bare: true, keepOrder: true, def: '12h', title: 'Show runs from', find: 'Find a range', hint: '1h, 12h, 24h, 7d, all', options: () => RANGES.map(([v, label]) => ({ v, label })) }]),
+    fields: UI.runFields(D.runs).concat([UI.timeField({ def: '12h', title: 'Show runs from' })]),
     onChange: () => { av.limit = PAGE; actRefresh(); } });
   function activityPage() {
     const G = groups(), wfs = [...new Set(D.runs.map((r) => r.workflow).filter((w) => !w.startsWith('bot:')))].sort(), bots = [...new Set(D.runs.map(botOf).filter(Boolean))].sort();

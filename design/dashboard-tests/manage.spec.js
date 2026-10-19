@@ -88,7 +88,10 @@ test('Workflows: yours, each pack with its update and Customize, made-for-bots a
   await expect(review.locator('h2')).toHaveText('From review');
   await expect(review.locator('[data-act="pack-plan"]')).toContainText('Update to 1.5.0');
   await expect(review.locator('a', { hasText: 'Customize' })).toBeVisible();
-  await expect(page.locator('.m-team[data-src="bot"]')).toContainText('platform-sre');
+  // a bot's generated workflow isn't on Workflows at all (only what you can change): no card, no row, no filter option
+  await expect(page.locator('.m-team[data-src="bot"]')).toHaveCount(0);
+  await expect(page.locator('.m-row[data-wf^="bot:"]')).toHaveCount(0);
+  if (page.viewportSize().width > 720) { await page.locator('.fb[data-fb="wl"] [data-fb-open="source"]').click(); await expect(page.locator('.fb-pop, .fb-menu').last()).not.toContainText(/bot/i); await page.keyboard.press('Escape'); }
   await expect(page.locator('.m-row[data-wf="dep-bump"] .fx-i[title="What starts it"]')).toHaveText('Mondays at 06:00');
   // with Group by None, each row says where it came from
   await groupBy(page, 'wl', 'None');

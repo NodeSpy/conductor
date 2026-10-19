@@ -24,7 +24,7 @@
   const FB = (window.FB = { reg: {} });
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const P = window.ICONS || {};
-  const ic = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || ''}</svg>`;
+  const ic = (n) => `<svg data-ico="${n}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || ''}</svg>`;
   const SHOWN = 40; // a menu never draws more than this; the rest are one keystroke away
   const phone = () => innerWidth <= 720;
   const vals = (f, st) => (f.multi ? [].concat(st[f.k] || []) : st[f.k] && st[f.k] !== (f.def || '') ? [st[f.k]] : []);
@@ -70,7 +70,7 @@
     st.q = free.join(' '); };
 
   /* ---------- markup ---------- */
-  const menus = (cfg) => qf(cfg).filter((f) => !f.group); // a connector's filters are qualifiers, never menus
+  const menus = (cfg) => qf(cfg).filter((f) => !f.group && !f.time); // a connector's filters are qualifiers, never menus; the time range is its own control
   const pillText = (f, st) => { const v = vals(f, st); return `${f.alias || f.k}: ${v.map((x) => (f.value ? f.value(x) : f.path ? pathText(x) : labelOf(f, x))).join(', ')}`; };
   /** The filters that are on, as pills in the field: click one to edit it, ✕ to remove it. */
   const pillsHTML = (cfg) => { const st = cfg.state, on = qf(cfg).filter((f) => isSet(f, st) && !(f.bare && f.def));
@@ -84,18 +84,20 @@
     return f.bare ? `<span class="fb-v">${esc(first)}</span>` : `<span class="fb-l">${esc(f.label)}:</span> <span class="fb-v">${esc(first)}${v.length > 1 ? ` +${v.length - 1}` : ''}</span>`; };
   FB.html = (cfg) => { FB.reg[cfg.id] = cfg; const st = cfg.state, n = qf(cfg).filter((f) => isSet(f, st) && !f.bare).length + (st.q ? 1 : 0), quals = qf(cfg).length > 0;
     const any = qf(cfg).some((f) => isSet(f, st)) || st.q, views = cfg.fields.filter((f) => f.view);
-    return `<div class="fb" data-fb="${cfg.id}">
-      <div class="fb-search${any ? ' has-q' : ''}">${ic('search')}${pillsHTML(cfg)}<input class="fb-in" type="search" value="${esc(st.q || '')}" placeholder="${esc(cfg.placeholder || 'Search')}" aria-label="${esc(cfg.label || 'Search and filter')}" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="fb-ac-${cfg.id}">${quals ? `<button type="button" class="fb-by" data-fb-by title="Every filter you can type, conductor’s and each connection’s">Filter by…</button>` : ''}${any ? `<button type="button" class="fb-x" data-fb-clear aria-label="Clear the search and every filter">${ic('x')}</button>` : ''}
-        <ul class="fb-ac" id="fb-ac-${cfg.id}" role="listbox" hidden></ul></div>
+    return `<div class="fb" data-fb="${cfg.id}"${cfg.noSearch ? ' data-nosearch' : ''}>
+      ${cfg.noSearch ? '' : `<div class="fb-search${any ? ' has-q' : ''}">${ic('search')}${pillsHTML(cfg)}<input class="fb-in" type="search" value="${esc(st.q || '')}" placeholder="${esc(cfg.placeholder || 'Search')}" aria-label="${esc(cfg.label || 'Search and filter')}" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="fb-ac-${cfg.id}">${quals ? `<button type="button" class="fb-by" data-fb-by title="Every filter you can type, conductor’s and each connection’s">Filter by…</button>` : ''}${any ? `<button type="button" class="fb-x" data-fb-clear aria-label="Clear the search and every filter">${ic('x')}</button>` : ''}
+        <ul class="fb-ac" id="fb-ac-${cfg.id}" role="listbox" hidden></ul></div>`}
       <div class="fb-bar" role="group" aria-label="Filters">${menus(cfg).filter((f) => !f.more || isSet(f, st)).map((f) => `<button type="button" class="fb-btn${isSet(f, st) ? ' on' : ''}" data-fb-open="${f.k}" aria-haspopup="listbox" aria-expanded="false">${btnText(f, st)}${ic('chevd')}</button>`).join('')}
         <button type="button" class="fb-phone${n ? ' on' : ''}" data-fb-sheet aria-haspopup="dialog">${ic('filter')}Filter${n ? ` <span class="fb-n">${n}</span>` : ''}</button>
         ${menus(cfg).some((f) => f.more && !isSet(f, st)) ? `<button type="button" class="fb-btn fb-more-btn" data-fb-more aria-haspopup="menu" aria-expanded="false"><span class="fb-l">More filters</span>${ic('chevd')}</button>` : ''}
         ${any ? `<button type="button" class="fb-reset" data-fb-clear>${ic('x')}Clear filters</button>` : ''}
-        ${views.map((f) => `<button type="button" class="fb-btn fb-view" data-fb-open="${f.k}" aria-haspopup="listbox" aria-expanded="false">${btnText(f, st)}${ic('chevd')}</button>`).join('')}${typeof cfg.end === 'function' ? cfg.end() : cfg.end || ''}</div></div>`; };
+        ${views.map((f) => `<button type="button" class="fb-btn fb-view" data-fb-open="${f.k}" aria-haspopup="listbox" aria-expanded="false">${btnText(f, st)}${ic('chevd')}</button>`).join('')}${typeof cfg.end === 'function' ? cfg.end() : cfg.end || ''}
+        ${cfg.fields.filter((f) => f.time).map((f) => `<button type="button" class="fb-btn fb-time${isSet(f, st) ? ' on' : ''}" data-fb-open="${f.k}" aria-haspopup="listbox" aria-expanded="false" title="${esc(f.title || 'Time range')}">${ic('clock')}<span class="fb-v">${esc(labelOf(f, st[f.k] || f.def))}</span>${ic('chevd')}</button>`).join('')}</div></div>`; };
 
   /* ---------- after a change: the field's text, the buttons, the page's list ---------- */
   const commit = (cfg, keepText) => { const root = document.querySelector(`.fb[data-fb="${cfg.id}"]`);
-    if (root) { const input = root.querySelector('.fb-in'), text = input.value, pos = input.selectionStart, focused = document.activeElement === input;
+    if (root && !root.querySelector('.fb-in')) { const fresh = document.createElement('div'); fresh.innerHTML = FB.html(cfg); root.querySelector('.fb-bar').replaceWith(fresh.firstElementChild.querySelector('.fb-bar')); } // a bar with no search (a card's time range)
+    else if (root) { const input = root.querySelector('.fb-in'), text = input.value, pos = input.selectionStart, focused = document.activeElement === input;
       const fresh = document.createElement('div'); fresh.innerHTML = FB.html(cfg); const nb = fresh.firstElementChild;
       root.querySelector('.fb-bar').replaceWith(nb.querySelector('.fb-bar'));
       const op = root.querySelector('.fb-pills'), np = nb.querySelector('.fb-pills'); if (op) op.remove(); if (np) input.before(np);

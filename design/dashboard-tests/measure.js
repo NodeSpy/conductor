@@ -97,15 +97,17 @@ function measure() {
   // gap: stacked panels and cards
   const G = tok('--gap-stack');
   const PANEL = '.panel, .card, section, .tk-group, .dl-card';
-  main.querySelectorAll(PANEL).forEach((c) => {
-    if (!vis(c) || c.closest('.tk-board, .cm, .modal')) return; let n = c.nextElementSibling; while (n && !vis(n)) n = n.nextElementSibling;
+  // stacked: each card and the nearest card below it that shares its column, whatever wraps either of them (a chart
+  // card inside its own <div> touched the table under it, and a siblings-only check never saw it)
+  const cards = [...main.querySelectorAll(PANEL)].filter((c) => vis(c) && !c.closest('.tk-board, .cm, .modal') && !c.parentElement.closest(PANEL));
+  cards.forEach((c) => { const a = box(c);
+    const below = cards.filter((n) => n !== c && !n.contains(c) && !c.contains(n)).map((n) => [n, box(n)]).filter(([, b]) => b.top >= a.bottom - 2 && b.left < a.right - 2 && b.right > a.left + 2).sort((x, y) => x[1].top - y[1].top)[0];
+    if (!below) return; const [n, b] = below, g = b.top - a.bottom;
+    if (g < G - 1) out.push(`gap: ${name(c).slice(0, 40)} → ${name(n).slice(0, 40)} are ${Math.round(g)}px apart (the section gap is ${G})`); });
+  // side by side: cards in one row of a grid start on one line
+  main.querySelectorAll(PANEL).forEach((c) => { if (!vis(c) || c.closest('.tk-board, .cm, .modal')) return; let n = c.nextElementSibling; while (n && !vis(n)) n = n.nextElementSibling;
     if (!n || !n.matches(PANEL)) return; const a = box(c), b = box(n);
-    if (b.top < a.bottom - 2) { // side by side: cards in one row of a grid start on one line
-      if (getComputedStyle(c.parentElement).display.includes('grid') && Math.abs(b.top - a.top) > 1 && b.left >= a.right - 2) out.push(`gap: ${name(c).slice(0, 40)} and ${name(n).slice(0, 40)} sit side by side ${Math.round(Math.abs(b.top - a.top))}px out of line`);
-      return; }
-    if (b.left >= a.right - 2 || b.right <= a.left + 2) return;
-    const g = b.top - a.bottom; if (g < G - 1) out.push(`gap: ${name(c).slice(0, 40)} → ${name(n).slice(0, 40)} are ${Math.round(g)}px apart (the section gap is ${G})`);
-  });
+    if (b.top < a.bottom - 2 && getComputedStyle(c.parentElement).display.includes('grid') && Math.abs(b.top - a.top) > 1 && b.left >= a.right - 2) out.push(`gap: ${name(c).slice(0, 40)} and ${name(n).slice(0, 40)} sit side by side ${Math.round(Math.abs(b.top - a.top))}px out of line`); });
 
   // centre: an icon beside its text
   main.querySelectorAll('svg').forEach((s) => {

@@ -75,16 +75,24 @@
     return `<div class="hb-foot"><ul class="hb-legend">${[['ok', 'Passed'], ['fail', 'Failed'], ['run', 'Running'], ['other', 'Waiting or parked']].map(([k, l]) => `<li><i class="hb-sw hb-sw-${k}" aria-hidden="true"></i>${l} <b>${t[k]}</b></li>`).join('')}</ul><p class="hb-read dl-sub" aria-live="polite">Point at a bar, or tap it, for its runs.</p></div>`; };
   const readBar = (g) => { const card = g.closest('.dl-card'), out = card && card.querySelector('.hb-read'); if (out) out.textContent = g.dataset.say; card.querySelectorAll('.hb.on').forEach((x) => x.classList.toggle('on', x === g)); g.classList.add('on'); };
   ['pointerover', 'focusin', 'click'].forEach((ev) => document.addEventListener(ev, (e) => { const g = e.target.closest && e.target.closest('svg.dl-hours .hb'); if (g) readBar(g); }));
-  /** Runs per hour over the last 12 hours (the mock's hourBars). */
-  const hourBars = (w = 300, h = 96) => { const n = 12, per = Array.from({ length: n }, () => ({ ok: 0, other: 0, run: 0, fail: 0 }));
-    window12().runs.forEach((r) => { const ago = (Date.now() - new Date(r.started)) / 60000, i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(ago / 60))); per[i][FAILED(r) ? 'fail' : UI.runBucket(r)]++; });
-    const hourOf = (i) => { const t = new Date(Date.now() - (n - 1 - i) * 3600000); t.setMinutes(0, 0, 0); const e = new Date(+t + 3600000); return `${UI.hm(t.toISOString())}–${UI.hm(e.toISOString())}`; };
-    const bars = UI.stackBars(per, w, h, hourOf), fails = per.reduce((a, p) => a + p.fail, 0);
-    return `<svg class="dl-hours" viewBox="0 0 ${w} ${h}" role="img" aria-label="Runs per hour, last 12 hours: ${plural(fails, 'failure')}">${bars}<line x1="0" x2="${w}" y1="${h - 17}" y2="${h - 17}" class="hb-axis"/><text x="0" y="${h - 3}" class="hb-ax">12 h ago</text><text x="${w}" y="${h - 3}" class="hb-ax" text-anchor="end">now</text></svg>${UI.barLegend(per)}`; };
+  /** Runs over the chosen range (the mock's hourBars, 61): hours up to a day, then days; the shared time range control
+   *  sits in the card's header. */
+  const ovt = { since: '12h' };
+  const spanOf = () => UI.sinceMin(ovt.since) || 43200;
+  const windowOf = () => { const m = spanOf(), runs = D.runs.filter((r) => ovt.since === 'all' || (Date.now() - new Date(r.started)) / 60000 <= m);
+    return { runs, total: runs.length, ok: runs.filter((r) => r.status === 'ok').length }; };
+  const hourBars = (w = 300, h = 96) => { const span = spanOf(), n = span <= 60 ? 12 : span <= 1440 ? Math.round(span / 60) : span <= 10080 ? 7 : 30, bucket = span / n, per = Array.from({ length: n }, () => ({ ok: 0, other: 0, run: 0, fail: 0 }));
+    windowOf().runs.forEach((r) => { const ago = (Date.now() - new Date(r.started)) / 60000; if (ago > span) return; const i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(ago / bucket))); per[i][FAILED(r) ? 'fail' : UI.runBucket(r)]++; });
+    const at = (min) => new Date(Date.now() - min * 60000).toISOString();
+    const when = (i) => { const from = (n - i) * bucket, to = (n - 1 - i) * bucket; return span > 1440 ? new Date(at(from - bucket / 2)).toLocaleDateString(undefined, span > 10080 ? { month: 'short', day: 'numeric' } : { weekday: 'long' }) : `${UI.hm(at(from))}–${to ? UI.hm(at(to)) : 'now'}`; };
+    const ago = span < 1440 ? `${Math.round(span / 60) || 1} h ago` : span === 1440 ? '24 h ago' : `${Math.round(span / 1440)} days ago`;
+    const bars = UI.stackBars(per, w, h, when), fails = per.reduce((a, p) => a + p.fail, 0);
+    return `<svg class="dl-hours" viewBox="0 0 ${w} ${h}" role="img" aria-label="Runs, ${esc(UI.TIME_RANGES.find(([k]) => k === ovt.since)[1].toLowerCase())}: ${plural(fails, 'failure')}">${bars}<line x1="0" x2="${w}" y1="${h - 17}" y2="${h - 17}" class="hb-axis"/><text x="0" y="${h - 3}" class="hb-ax">${ago}</text><text x="${w}" y="${h - 3}" class="hb-ax" text-anchor="end">now</text></svg>${UI.barLegend(per)}`; };
   function last12() {
-    const w = window12(), fails = w.runs.filter(FAILED).sort((a, b) => new Date(b.finished || b.started) - new Date(a.finished || a.started));
-    const spent = D.runs.filter((r) => (Date.now() - new Date(r.started)) / 60000 <= 720).reduce((a, r) => a + (r.cost || 0), 0);
-    return `<section class="dl-card"><header class="dl-ch"><h2>Last 12 hours</h2></header>
+    const w = windowOf(), fails = w.runs.filter(FAILED).sort((a, b) => new Date(b.finished || b.started) - new Date(a.finished || a.started));
+    const spent = w.runs.reduce((a, r) => a + (r.cost || 0), 0);
+    const tbar = UI.filterBar({ id: 'ovt', state: ovt, noSearch: true, label: 'Time range', fields: [UI.timeField({ def: '12h', title: 'Show runs from', only: ['1h', '12h', '24h', '7d', '30d'] })], onChange: () => UI.rerender({ keepScroll: true }) });
+    return `<section class="dl-card ov-runs"><header class="dl-ch"><h2>Runs</h2>${tbar}</header>
       <div class="dl-stat-line"><b>${w.ok}</b><span>of ${w.total} runs went fine</span>${UI.isApi && UI.isApi() ? `<b class="r">$${spent.toFixed(2)}</b><span>spent</span>` : ''}</div>
       ${hourBars()}
       ${fails.length ? `<p class="dl-foot-note">${UI.mark('fail')}<span>${plural(fails.length, 'failed', 'failed')}: ${fails.slice(0, 4).map((r) => `<a class="dl-link" href="#/runs/${r.id}">${esc(r.workflow.replace(/^bot:/, ''))} at ${UI.failedAt(r)}</a>`).join(', ')}${fails.length > 4 ? ` and ${fails.length - 4} more` : ''}</span></p>` : `<p class="dl-foot-note">${UI.mark('ok')}Nothing failed.</p>`}</section>`;

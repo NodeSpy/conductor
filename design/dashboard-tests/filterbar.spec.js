@@ -58,3 +58,24 @@ test('a pill edits in place, ✕ removes it, Backspace at the start takes the la
   await input.press('Backspace');
   await expect(bar.locator('.fb-pill')).toHaveCount(0);
 });
+
+test('one time range control, everywhere a time range appears: a clock, "Last … ▾", at the far right of its row, the same choices', async ({ page }) => {
+  const phone = page.viewportSize().width <= 720;
+  const check = async (where, scope) => {
+    const t = page.locator(`${scope} .fb-time`);
+    if (phone && !(await t.isVisible())) return; // a phone keeps it in the Filter sheet, except where it's the bar's only control
+    await expect(t, where).toHaveCount(1);
+    await expect(t.locator('svg').first(), where).toHaveAttribute('data-ico', 'clock');
+    await expect(t, where).toContainText(/^(Last|All)/);
+    const [r, bar] = await Promise.all([t.boundingBox(), t.locator('xpath=ancestor::div[contains(@class,"fb ")or@class="fb"][1]').boundingBox()]);
+    expect(Math.abs(r.x + r.width - (bar.x + bar.width)), `${where}: at the far right`).toBeLessThanOrEqual(2);
+  };
+  await go(page, '#/activity', { fresh: true }); await check('Activity', '#main');
+  await go(page, '#/logs/audit'); await check('Audit', '#main');
+  await go(page, '#/logs/daemon'); await check('Daemon log', '#main');
+  await go(page, '#/overview'); await check('Home chart', '.ov-runs');
+  await go(page, '#/workflows/ci-fixer'); await page.locator('.dl-tabs a', { hasText: 'Runs' }).first().click(); await check('a workflow\'s runs', '#main');
+  // the same choices everywhere
+  await go(page, '#/activity');
+  if (!phone) { await page.locator('.fb-time').click(); await expect(page.locator('.fb-opt')).toContainText(['Last hour', 'Last 12 hours', 'Last 24 hours', 'Last 7 days', 'Last 30 days', 'All time']); await page.keyboard.press('Escape'); }
+});

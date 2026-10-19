@@ -229,6 +229,12 @@
   UI.factsLine = (xs) => { xs = (xs || []).filter((f) => f && f.value); if (!xs.length) return '';
     return `<span class="fx">${xs.map((f) => { const ext = /^https?:/.test(f.href || ''), inner = `${f.prod ? `<i class="fx-g fx-prod">${PROD_SQ}</i>` : f.glyph ? f.glyph : f.tone === 'danger' ? `<span class="fx-tile">${UI.icon(f.icon)}</span>` : UI.icon(f.icon || 'dot')}${UI.esc(f.value)}`;
       return `<span class="fx-i${f.href ? ' ln' : ''}${f.risky ? ' hi' : ''}${f.prod ? ' prod t-warning' : ''}${f.tone ? ' t-' + f.tone : ''}" data-pri="${f.pri || 2}"${f.label ? ` title="${UI.esc(f.label)}"` : ''}${f.href ? ` role="link" tabindex="0" data-fx-href="${UI.esc(f.href)}"${ext ? ' data-fx-ext="1"' : ''}` : ''}>${inner}</span>`; }).join('')}</span>`; };
+  /* One time range (61): the same choices everywhere a time range appears (Activity, Logs & audit, a workflow's runs,
+     Home's chart); the filter bar draws it as its own control at the far right, a clock and "Last 12 hours ▾". */
+  UI.TIME_RANGES = [['1h', 'Last hour', 60], ['12h', 'Last 12 hours', 720], ['24h', 'Last 24 hours', 1440], ['7d', 'Last 7 days', 10080], ['30d', 'Last 30 days', 43200], ['all', 'All time', 0]];
+  UI.timeField = (o = {}) => ({ k: o.k || 'since', label: 'Time', time: true, bare: true, keepOrder: true, def: o.def || '12h', title: o.title || 'Show from', find: 'Find a range', hint: '1h, 12h, 24h, 7d, 30d, all', options: () => UI.TIME_RANGES.filter(([v]) => !o.only || o.only.includes(v)).map(([v, label]) => ({ v, label })) });
+  UI.sinceMin = (v) => (UI.TIME_RANGES.find(([k]) => k === v) || [0, 0, 0])[2];
+  UI.withinRange = (iso, v) => { const m = UI.sinceMin(v); return !m || (Date.now() - new Date(iso)) / 60000 <= m; };
   /** The facts a plugin or a connection carries, each its own kind (45; the brand's fact types, design/brand/status/
    *  facts.js): the service (its own glyph; the plug when it has none), where it comes from (built in: the conductor
    *  mark; official; a custom source, toned), how it updates (stays current, held: full ink, within a range), the

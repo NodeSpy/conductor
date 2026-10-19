@@ -876,3 +876,7 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 .m-team-t .fx { flex-wrap: wrap; row-gap: 0; line-height: 20px; max-height: 20px; overflow: hidden; align-items: center; } .m-team-t .fx > .fx-i { white-space: nowrap; flex: none; } /* a fact that doesn't fit drops whole */
 @media (max-width: 720px) { .m-team-t .fx { max-height: none; } .m-team-t .fx > .fx-i { white-space: normal; flex: 0 1 auto; } }
 .bw-sub { margin: 18px 0 8px; font: var(--type-label); color: var(--color-text-secondary); } .tpl-from { margin-bottom: var(--gap-stack); } .tpl-from > svg { flex: none; width: 16px; height: 16px; }
+#act-strip:has(> .dl-card) + .dl-card { margin-top: var(--gap-stack); } /* the chart and the table never touch (61) */
+/* stacked blocks of cards keep the stack gap too, whatever holds them: a header card above a grid of cards, a grid of
+ * tiles above a disclosure, a panel above a grid (measure.spec compares each card with the card below it) */
+:is(.page, .dl-tab-body, .repo) > :is(.panel, .dl-card, .dl-files-d, .dl-tech-d, .grid) + :is(.panel, .dl-card, .dl-files-d, .dl-tech-d, .grid) { margin-top: var(--gap-stack); }
