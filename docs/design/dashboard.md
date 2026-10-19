@@ -76,7 +76,7 @@ Some elements are on every screen:
   an update that failed, is held or waits for an approval), and then that is also in Needs you. On a phone the card
   is at the top of More. Only Needs you carries a hot count. It folds to icons below 1100px; below 720px it becomes a **tab bar**: Home, Needs you, Activity, Bots, More.
 - **⌘K palette**. Jump to any run, bot, workflow or setting, or run an action such as pausing all automation.
-- **Needs you**. One queue of everything that waits on a person: pending approvals, failed runs, questions and
+- **Needs you**. One queue of everything that waits on a person: pending approvals, purchases to approve, failed runs, questions and
   hand-off drafts, browser push approvals, a connection that's down, an update that needs a person, and paused
   automation. It opens on one tile per kind (the same counts as Home's tile and the badge; a tile sets the Kind
   filter), then the shared filter bar (quiet while the list is short), then the list. A filter that hides items says
@@ -125,6 +125,7 @@ Some elements are on every screen:
 | `#/tickets`, `#/tickets/new[?bot=|team=]`, `#/tickets/<id>` | Tickets: the list or board by status; a new ticket; one ticket ([§4.4.1](#441-tickets)) |
 | `#/teams/<t>[/<tab>]` | A team |
 | `#/browser`, `#/browser/<id>`, `#/browser/logins` | Browsers and logins |
+| `#/browser/details[/<profile>\|/new]`, `#/browser/cards[/<card>\|/new]`, `#/browser/purchases/<id>` | Personal details and payment cards, and one purchase ([§4.5.1](#451-personal-details-and-payment-cards)); a bot's waiting purchase opens its proposal |
 | `#/connectors/<connectors\|runtimes\|languages\|hosts>` | Plugins, what conductor can use: Connections (each service with its version, updates and its connections), Agent runtimes, Code languages, Machines; the catalog pages for a service, runtime or language sit under Plugins |
 | `#/secrets`, `#/secrets/settings` | Secrets (the vaults at its foot) and Settings (settings and environment variables; old `#/secrets/env` links land here) |
 | `#/extensions/<packs\|browse>`, `#/extensions/pack/<name>`, `#/extensions/source` | Packs (bundles of workflows only): installed, browse packs, a pack's overrides, add from a source; `#/extensions/plugins` lands on Connections |
@@ -911,6 +912,90 @@ on the ticket.
   pipeline. Adding a site, login, credential or evaluate mode is **widening**
   ([§7.6](#76-packs-overrides-and-narrow-never-widen)).
 
+#### 4.5.1 Personal details and payment cards
+
+The conductor side is built (branch `feat/agent-browser`, wiki *Browser*: "Personal details (profiles)" and
+"Payment cards and purchases"; `config.example.yaml`'s `browser.profiles`, `browser.cards`, `browser.payments`
+and a bot's `autonomy.unattended`). The dashboard drives the control-socket ops that branch adds
+(`browser-wallet`, `browser-profile-add|set|unset|bind|rm`, `browser-card-add|set|unset|bind|rm|freeze|unfreeze`,
+`browser-purchases`, `browser-purchase`, `browser-purchase-decide`), and shows only what they answer: **no answer
+carries a value**, only each field's source (typed and stored write-only, or a vault, environment or secret
+reference). Two more tabs under Browsers: Sessions · Logins · **Personal details** · **Payment cards**.
+
+- **Personal details** (`#/browser/details`). One row per profile: its name and how many details, who may use it,
+  the sites, what a bot may learn, when it was last used. A profile's page (`#/browser/details/<name>`):
+  - **Details:** each field (name, given/family name, email, phone, company, birthday, the address and billing
+    parts, `custom.<x>`) as `••••••••` *set*, where it comes from in words ("1Password · Me/Home/email",
+    "environment variable HOME_PHONE", "typed in, stored write-only"), **Replace the value…** (write-only: typed
+    once or a reference) and Remove.
+  - **What a bot may learn**, per field, hidden by default: whether it's set, a fact (an email's domain, the
+    country, a phone's country code, 18 or older), or the value.
+  - **Where it may be filled:** exact origins, each with the details allowed there ("Fills name, email, phone
+    and the address"); `address`/`billing` cover every part.
+  - **Who may use it:** bots (`bot:<name>`) and teams (`team:<name>`); nobody by default; always only on work
+    the operator asked for (a third party's request, an event or a bot's own check gets nothing).
+  - **Recently filled:** from the audit (profile, details, site, who, ticket; never a value).
+  - **Add personal details** (`#/browser/details/new`): a name, the common details (each typed or a
+    reference), one site and which details there, who, and what a bot may learn.
+- **Payment cards** (`#/browser/cards`). *Waiting for you* (pending purchases), then one row per card: name,
+  brand and last four, kind, who, shops, and spend against its limits; **Freeze** or **Unfreeze** on the row.
+  validate's reminders show on the row and the card: a physical card ("prefer a virtual or single-use card with
+  its own provider limits"), a card with no shop ("nothing can be bought with it"), and nobody able to approve.
+  Then every purchase with its status or receipt. A card's page (`#/browser/cards/<name>`):
+  - **Freeze** in the header, one click (it narrows); **Unfreeze** asks for the passkey (it widens). A card
+    frozen in the config (`frozen: true`) unfreezes there. Pause all automation also stops every payment.
+  - **Spending:** a purchase's limit, then the last 24 hours and the last 30 days, each as spent of the limit
+    with a thin bar (rolling windows, as the ledger counts them), for the card and for each identity limit.
+    Change limits: lowering applies at once, raising asks for the passkey.
+  - **Shops it may pay:** the merchant allowlist, exact origins, **none by default** (a warning says nothing can
+    be bought); Add a shop (passkey), Remove (at once).
+  - **Who may use it**, each with its own limit if it has one; **the card's details** as `•••• 4242` *set* and
+    their sources.
+  - **Add a card** (`#/browser/cards/new`): name, kind (virtual · single-use · physical, with the reminder),
+    number and expiry (required) and CVC and name, each typed or a reference; the three limits (required); a
+    shop (optional: none by default); who.
+- **Purchase approvals.** A purchase waits in **Needs you** (its own kind, **Purchases**, in the tiles, the
+  breakdown and the Kind menu) and, for a bot, in the bot's **Approvals** (it's the bot's proposal for
+  `browser.purchase`, tier `commit_money`; approving the proposal approves the purchase, as `conductor bot
+  approve` does). Anyone else's purchase (an agent you started in a directory, a repo's agent) is decided on
+  `#/browser/purchases/<id>`. The card shows: the items (name, quantity, each) and the total and currency; a
+  **subscription flagged** ("you're approving that it repeats"; never unattended); a purchase that **replaces a
+  higher price at checkout** flagged ("you approved $84.99; the page showed $89.99, so nothing was paid"); the
+  card (name, last four, kind); the shop and whether it's on the card's list; **the limits counting this
+  purchase**, the identity's and the card's (an over-limit one is refused); what happens next (one payment,
+  within the approval's lifetime, `browser.payments.approval_ttl`, default an hour, on that shop's page only,
+  the total re-read, the card filled by conductor, never seen by the agent); why, with the ticket; who asked;
+  **Approve with passkey** / **Deny…** (with a reason the agent is told), and who may approve
+  (`browser.payments.approvers`). A pending purchase lapses too ("expires in 48 min").
+- **Receipts.** After paying, the purchase record holds the order number and the total charged, shown on the
+  purchase, the card and **the ticket** (a *Purchases* panel beside its linked work: waiting, approved, paid with
+  the order number, not paid and why). A confirmation charging more than approved is flagged.
+- **A bot's What it can do.** `browser.purchase` reads "Buy things with a card you allow" under *Asks you
+  first*; it can't be moved to *Does on its own* (money always asks; the item's menu says where to go instead).
+  A **Buying, and your details** card says, per card that names the bot or its team: "**Can buy:** asks you
+  first, up to $120.00 a purchase, at shop.example.com, parts.example.net and backup.example.com, with household
+  (Visa •••• 4242)", its last 30 days against its limit, then **Without asking: never** and the profiles it can
+  fill, where, and what it may learn.
+- **Unattended purchases** (bots only, opt-in, never the default): *Let it buy small things without asking…*
+  stages `autonomy.unattended.browser.purchase: {per_action, per_period, period, merchants}`. The form refuses a
+  cap that doesn't fit inside the bot's `spend_cap`, needs at least one named shop, is off for a bot in shadow
+  mode, and on a team needs the team's `autonomy.ceiling: commit_money`. It says when it applies (your request or
+  the bot's own, never a subscription) and that the card's own shops and limits still hold. It goes through the
+  review as a **widening** (the classifier names it) and the passkey. *Always ask me* removes it. (On the
+  branch, no bot buys unattended until #178's sandbox seam reports the sandbox; the gate and its approvals are in
+  place.)
+- **What asks for the passkey:** anything the backend answers `change: widening` (a new profile or card, a bot
+  or team, a site or a detail at a site, a looser *may learn*, a shop, a higher limit, an unfreeze) and every
+  purchase decision (signed; the CLI signs with the operator's SSH key, the dashboard with a passkey). Freezing,
+  removing, lowering and replacing a value don't.
+- **A config-defined profile or card** (`method: config`) is shown read-only with "Defined in the config"; its
+  controls are disabled with that reason (freezing still works, as the backend allows).
+- **NEW** for the daemon: a card's **brand and last four digits** (`brand`, `last4`) in the `browser-wallet`
+  answer, read once when the number is stored or resolved (the dashboard never receives more of the number); the
+  **WebAuthn signature path** for `browser-purchase-decide` (today SSH-signed by an approver; the dashboard needs
+  the passkey step-up as for bot proposals, §6.6); and **Needs you items** for pending purchases (today a
+  `needs_input` notice carrying the text).
+
 ### 4.6 Workflows and the builder
 
 - **List.** Name, `on:`, owner (your config, a pack, or a bot's
@@ -1396,6 +1481,11 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
 | `POST /api/v1/browser/passkey/register` `{credential}`; `POST …/save` | dedicated passkey via takeover | `browser passkey register` |
 | `DELETE /api/v1/browser/logins/<identity>/<site>` | log out | `browser logout` |
 | `POST /api/v1/browser/cookies/import` | one domain's cookies (upload) | `browser cookies import` |
+| `GET /api/v1/browser/wallet` | profiles and cards (sources, never values), frozen, spend per card and identity (24 h, 30 days) | `browser-wallet` (+ `brand`, `last4` **NEW**) |
+| `POST /api/v1/browser/profiles`, `PATCH …/<name>` (`bind`, `set`, `unset`), `DELETE …/<name>` | add, bind (who, sites and their fields, visible), set a value (write-only), remove; `dry_run` says `change: widening` for the passkey gate | `browser-profile-add\|bind\|set\|unset\|rm` |
+| `POST /api/v1/browser/cards`, `PATCH …/<name>`, `DELETE …/<name>`, `POST …/<name>/freeze\|unfreeze` | add, bind (who, shops, limits), set a value, remove, the kill switch | `browser-card-*` |
+| `GET /api/v1/browser/purchases[?status=pending]`, `GET …/<id>` | the ledger (with its digest and receipt) | `browser-purchases`, `browser-purchase` |
+| `POST /api/v1/browser/purchases/<id>/decision` `{approve\|deny, reason}` | signed decision (a bot's goes through its proposal) | `browser-purchase-decide` (passkey signature **NEW**) |
 
 **Config, secrets, extensions**
 

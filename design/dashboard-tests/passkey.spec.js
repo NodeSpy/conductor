@@ -52,7 +52,7 @@ test('mixing a widening and a non-widening change in one set needs the passkey',
 // apply a widening change, sign in, enrol, the signing sheet's own button) and on the passkeys themselves. Opening,
 // reviewing and navigating never carry it (Review only opens the approval).
 const { ROUTES } = require('./routes');
-const SIGNS = new Set(['p-approve', 'kp-approve', 'kp-bulk', 'apply-go', 'signin', 'enroll', 'cm-store', 'cm-go', 'upd-apply']);
+const SIGNS = new Set(['p-approve', 'kp-approve', 'kp-bulk', 'apply-go', 'signin', 'enroll', 'cm-store', 'cm-go', 'upd-apply', 'w-unfreeze']); // w-unfreeze: unfreezing a card widens, so it signs at once
 test('the passkey glyph sits only on controls that sign', async ({ page }) => {
   test.setTimeout(6 * 60 * 1000);
   const bad = [];

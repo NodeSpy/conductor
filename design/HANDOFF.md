@@ -68,6 +68,10 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 - `index.html` head script picks the theme before paint (explicit wins, else the OS); `?sim=ios` is the
   test-only iPhone emulation (toolbar overlay + safe areas). Asset URLs carry `?v=<stamp>`; bump it on deploys.
 - `js/create.js` create-in-place drawers (`UI.CREATE`). `js/wf.js` workflow engine + validator.
+- Personal details and payment cards (Browsers → Personal details, Payment cards; purchases in Needs you, a bot's
+  Approvals and What it can do, receipts on tickets): `js/walletdata.js` (fixtures, the backend's `browser-wallet` and
+  purchase shapes; loaded before `scenario.js`), `js/screens/wallet.js`, `css/wallet.css`, `dashboard-tests/wallet.spec.js`;
+  the semantics and what's NEW in `docs/design/dashboard.md` §4.5.1.
 - Screens in `js/screens/`: overview, runs, repo (knowledge by kind), bots (teams, bots), botlist (the Bots page: teams are the page), browser, logins, builder (workflows list + builder), config, secrets, system (packs,
   plugins, updates, connectors, runtimes, hosts, isolation, logs), catalog (`#/extensions/browse`, and the picker behind Add a connector),
   access (sign-in, enroll, passkeys).
