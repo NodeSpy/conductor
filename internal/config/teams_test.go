@@ -464,6 +464,9 @@ func TestTicketSettings(t *testing.T) {
 	if _, err := loadBots(t, fmt.Sprintf(base, "{ mark_own_ready: false }", "{ mark_own_ready: true }")); err == nil || !strings.Contains(err.Error(), "widens team platform's tickets.mark_own_ready false") {
 		t.Fatalf("the team's ceiling: %v", err)
 	}
+	if c, err := loadBots(t, fmt.Sprintf(base, "{ mark_own_ready: false }", "{}")); err != nil || c.BotMarksOwnReady("sre") {
+		t.Fatalf("the team's false, the bot silent: %v", err)
+	}
 	if c, err := loadBots(t, fmt.Sprintf(base, "{ mark_own_ready: true }", "{ mark_own_ready: false }")); err != nil || c.BotMarksOwnReady("sre") {
 		t.Fatalf("a bot narrows: %v", err)
 	}

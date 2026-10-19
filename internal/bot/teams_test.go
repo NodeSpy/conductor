@@ -253,7 +253,7 @@ func TestTeamLeadTriagesAndAssigns(t *testing.T) {
 		t.Fatal(err)
 	}
 	bc := f.caseOf(t, "b", res["case"].(string))
-	if bc.Requester != "op" || bc.RequesterClass != ReqOperator || bc.Source != "chat.mention" || !bc.Urgent || bc.Title != "web latency" {
+	if bc.Requester != "op" || bc.RequesterClass != ReqOperator || bc.Source != "chat.mention" || !bc.Urgent || bc.Title != "web latency" || bc.Assignee != "bot:b" {
 		t.Fatalf("the assignee's case is not the original request: %+v", bc)
 	}
 	if bc.Routing.Via != "lead" || bc.Routing.Lead != "lead" || bc.Routing.LeadCase != lc || bc.Routing.Note != "looks like the web tier" {

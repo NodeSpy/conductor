@@ -502,3 +502,29 @@ func TestLedgerSummaryShowsDrafts(t *testing.T) {
 		t.Fatalf("summary:\n%s", s)
 	}
 }
+
+// The guards behind the gate, tested directly: dispatch refuses anything
+// not ready; a ticket left ready (its dispatch failed) is still not set in
+// progress by hand; a refused ready create leaves nothing behind.
+func TestTicketGateGuards(t *testing.T) {
+	f := newTeamFixture(t, nil)
+	ctx := context.Background()
+	d := f.ticket(t, opActor, TicketNew{Title: "x", Assignee: "bot:a"})
+	if err := f.svc.dispatchTicket(ctx, d.Ticket); err == nil || !strings.Contains(err.Error(), "is draft, not ready") {
+		t.Fatalf("dispatching a draft: %v", err)
+	}
+	if f.caseOf(t, "a", d.ID).Status != store.TicketDraft {
+		t.Fatal("a refused dispatch changed the ticket")
+	}
+	_ = f.st.UpdateBot("a", func(r *store.BotRecord) error { r.Cases[d.ID].Status = store.TicketReady; return nil })
+	if _, err := f.svc.TicketSetStatus(ctx, opActor, d.Ticket, store.TicketInProgress, ""); err == nil || !strings.Contains(err.Error(), "picked up by its assignee") {
+		t.Fatalf("ready → in_progress by hand: %v", err)
+	}
+	before, _ := f.svc.Tickets(TicketFilter{Statuses: store.TicketStatuses})
+	if _, err := f.svc.TicketCreate(ctx, TicketActor{Bot: f.homeOf("a")}, TicketNew{Title: "sneaky", Assignee: "bot:a", Ready: true}); err == nil {
+		t.Fatal("a bot created a ready ticket")
+	}
+	if after, _ := f.svc.Tickets(TicketFilter{Statuses: store.TicketStatuses}); len(after) != len(before) {
+		t.Fatalf("a refused ready create left a ticket behind (%d → %d)", len(before), len(after))
+	}
+}
