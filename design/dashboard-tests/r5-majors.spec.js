@@ -125,3 +125,14 @@ test('phone: a vault card\'s Edit starts on the card\'s content edge; the ticket
   const s = await page.evaluate(() => { const el = document.querySelector('.tk-colpick'); return { scrolls: el.scrollWidth > el.clientWidth, cls: el.className, mask: getComputedStyle(el).maskImage || getComputedStyle(el).webkitMaskImage }; });
   if (s.scrolls) { expect(s.cls).toContain('scrolls'); expect(s.mask).not.toBe('none'); }
 });
+
+test('memory: "Who wrote this" and back keeps what you typed in the entry', async ({ page }) => {
+  await go(page, '#/bots/platform-sre/memory', { fresh: true });
+  await page.locator('.repo-side a[data-act="rp-file"], .repo-side .tree a').first().click().catch(() => {});
+  if (!(await page.locator('#ke-form').count())) await page.locator('[data-act="rp-hit"]').first().click().catch(() => {});
+  test.skip(!(await page.locator('#ke-form #ke-title').count()), 'no editable entry open');
+  await page.fill('#ke-title', 'An edit not yet saved');
+  await page.locator('[data-act="rp-blame"]').click();
+  await page.locator('[data-act="rp-blame"]').click();
+  await expect(page.locator('#ke-title')).toHaveValue('An edit not yet saved');
+});

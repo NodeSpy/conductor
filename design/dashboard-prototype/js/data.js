@@ -552,7 +552,7 @@ steps:
   D.workflows.find((w) => w.name === 'release-notes').pack = 'house-style';
 
   /* Chat per bot; memory files; access; preferences; staged changes. */
-  D.chats = { 'platform-sre': D.chat, 'billing-sre': [{ who: 'bot', at: m(30), text: 'Forecast for October is **$41.2k**, +6% on September. I’d like to post it to #incidents, so I’m asking you first.', proposal: 'p4' }], 'web-triage': [] };
+  D.chats = { 'platform-sre': D.chat, 'billing-sre': [{ who: 'bot', at: m(30), text: 'Forecast for October is **$41.2k**, 8% over its $38k budget. I’d like to post it to #incidents, so I’m asking you first.', proposal: 'p4' }], 'web-triage': [] };
   D.memory.files = {
     'knowledge/README.md': '# Knowledge\n\nWhat platform-sre has learned about the systems it runs.\n',
     'knowledge/db-prod-1.md': D.memory.file,
@@ -995,7 +995,7 @@ window.D.packMembers = {
       { who: 'bot', bot: 'web-triage', at: m(21), text: 'The canary is clean on web, so the regression is server-side. Back to you, Atlas.' },
       { who: 'bot', bot: 'platform-sre', at: m(8), text: 'The web servers still run the old image. To roll the new one out I need to replace the production web server, so I’m asking you first.', proposal: 'p12' },
     ],
-    finance: [{ who: 'bot', bot: 'billing-sre', at: m(90), text: 'The October forecast is ready: **$41.2k**, +6% on September. I’ve asked to post it to #incidents.', proposal: 'p4' }],
+    finance: [{ who: 'bot', bot: 'billing-sre', at: m(90), text: 'The October forecast is ready: **$41.2k**, 8% over its $38k budget. I’ve asked to post it to #incidents.', proposal: 'p4' }],
   };
   D.chatUnread = { 'team:platform': 2, 'web-triage': 1, 'billing-sre': 1 };
   D.chatPinned = ['platform-sre'];

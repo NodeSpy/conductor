@@ -229,11 +229,11 @@
    *   UI.factsLine([{ icon, value, href, pri: 1|2|3, risky, prod, label }])  (UI.facts is the details list) */
   /* A facts line that must stay one line (a board card, r5 major 16): what doesn't fit is hidden from the end and a
      quiet '+N' says how many, with them on hover. Runs after every render and on resize. */
-  UI.FX_ONE = '.tk-card .fx';
-  UI.fitFacts = (root = document) => { root.querySelectorAll(UI.FX_ONE).forEach((fx) => {
+  UI.FX_ONE = '.tk-card .fx, .m-team-t .fx';
+  UI.fitFacts = (root = document) => { root.querySelectorAll(UI.FX_ONE).forEach((fx) => { if (fx.classList.contains('fx-all')) return;
     fx.querySelectorAll('.fx-more').forEach((x) => x.remove()); const all = [...fx.children].filter((x) => x.classList.contains('fx-i') || x.classList.contains('fx-g')); all.forEach((x) => { x.hidden = false; }); const items = all.filter((x) => getComputedStyle(x).display !== 'none'); // a phone hides the quiet facts itself
     if (!items.length || fx.offsetParent === null) return; const top = items[0].offsetTop, wrapped = () => items.filter((x) => !x.hidden).some((x) => x.offsetTop > top + 2);
-    if (!wrapped()) return; const more = document.createElement('span'); more.className = 'fx-i fx-more'; fx.appendChild(more); const hidden = [];
+    if (!wrapped()) return; const more = document.createElement('button'); more.type = 'button'; more.className = 'fx-i fx-more'; more.dataset.act = 'fx-more'; fx.appendChild(more); const hidden = [];
     const say = () => { more.textContent = `+${hidden.length}`; more.title = hidden.map((x) => x.textContent.trim()).join(' · '); more.setAttribute('aria-label', `${hidden.length} more: ${more.title}`); };
     for (let i = items.length - 1; i > 0 && (wrapped() || more.offsetTop > top + 2); i--) { items[i].hidden = true; hidden.unshift(items[i]); say(); }
     if (!hidden.length) more.remove(); }); };
@@ -295,11 +295,13 @@
   UI.taskWords = (text, link = false) => UI.esc(text).replace(/\(task (c\d+)\)/g, (m, id) => { const c = (D.cases || []).find((x) => x.id === id); if (!c) return ''; const name = `the ticket “${UI.esc(c.title)}”`;
     return link ? `(<a class="dl-link" href="#/tickets/${id}">${name}</a>)` : `(${name})`; });
   /** A set of runs in words whose parts add up to the whole: "19 went fine · 2 failed · 3 running". */
-  UI.runParts = (rs) => [[rs.filter((r) => r.status === 'ok').length, 'went fine'], [rs.filter((r) => r.status === 'fail' || r.status === 'stopped').length, 'failed'], [rs.filter((r) => r.status === 'run').length, 'running'], [rs.filter((r) => r.status === 'wait').length, 'waiting on you'], [rs.filter((r) => r.status === 'idle').length, 'parked']].filter(([n]) => n).map(([n, t]) => `${n} ${t}`).join(' · ');
+  UI.runParts = (rs) => [[rs.filter((r) => r.status === 'ok').length, 'went fine'], [rs.filter((r) => r.status === 'fail' || r.status === 'stopped').length, 'failed'], [rs.filter((r) => r.status === 'run').length, 'running'], [rs.filter((r) => !['ok', 'fail', 'stopped', 'run', 'idle'].includes(r.status)).length, 'waiting on you'], [rs.filter((r) => r.status === 'idle').length, 'parked']].filter(([n]) => n).map(([n, t]) => `${n} ${t}`).join(' · ');
   /** The tab bars on the page, each as the set of places its tabs go: two renders that share one are tabs of one page. */
   const tabSigs = (root) => [...root.querySelectorAll('.dl-subnav, .tabs, .dl-tabs, [role="tablist"]')].map((t) => [...t.querySelectorAll('a[href]')].map((a) => a.getAttribute('href').split('?')[0]).sort().join(' ')).filter(Boolean);
   UI.render = (opts = {}) => {
     UI.syncRunStats(); UI.syncAttention();
+    // the rail's badge is the same count as the page's (r5 minor: at scale the badge kept an old count while Home had a new one)
+    { const nb = document.querySelector('#rail-nav'); if (nb && UI.navHTML && nb.dataset.need !== String(D.attention.length)) { nb.innerHTML = UI.navHTML(); nb.dataset.need = String(D.attention.length); } }
     const prev = tabSigs($('#main')), prevTop = $('#main').scrollTop;
     let keep = opts.keepScroll ? prevTop : 0;
     cleanup.forEach((f) => f()); cleanup = [];
@@ -832,7 +834,7 @@
     UI.refreshChrome();
     if (!ch) { UI.toast('No change', 'the node is the same as the live config', 'idle'); return; }
     // the review remembers where you came from: its Back and its Done return there, and the rail keeps that section
-    if (opts.go !== false) { if (!D.prefs.returnTo && !location.hash.startsWith('#/config')) { D.prefs.returnTo = { href: location.hash, label: UI.pageName() }; S.save(); } UI.go('#/config/apply'); }
+    if (opts.go !== false) { if (!D.prefs.returnTo && !location.hash.startsWith('#/config')) { const ins = location.hash.match(/^#\/extensions\/install\/(\w+)\/([^/?]+)/); D.prefs.returnTo = ins ? { href: `#/extensions/item/${ins[1]}/${ins[2]}`, label: decodeURIComponent(ins[2]) } : { href: location.hash, label: UI.pageName() }; /* after an install, back to what you installed, not its form (r5) */ S.save(); } UI.go('#/config/apply'); }
     else UI.toast(`Staged: ${UI.esc(ch.summary)}`, `Not applied yet · ${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review and apply`, 'run');
   };
   /** A tab bar that doesn't fit never cuts a label: the tabs that don't fit go into a "More" menu at its end, and the

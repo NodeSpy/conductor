@@ -17,6 +17,8 @@
   UI.avatarSrc = (p) => ((window.D.avatarFiles || {})[p] || p);
   UI.avatarFile = (a, owner) => { if (!a || !a.image || !/^data:image\//.test(a.image)) return a; const ext = (a.image.match(/^data:image\/(png|jpeg|webp)/) || [, 'png'])[1].replace('jpeg', 'jpg'), path = `avatars/${owner}.${ext}`;
     (window.D.avatarFiles = window.D.avatarFiles || {})[path] = a.image; return Object.assign({}, a, { image: path }); };
+  // a facts line's +N (UI.fitFacts) opens the rest in place (a tap works as well as a hover)
+  UI.act('fx-more', (b, e) => { if (e) { e.preventDefault(); e.stopPropagation(); } const fx = b.closest('.fx'); fx.classList.add('fx-all'); fx.querySelectorAll('[hidden]').forEach((x) => { x.hidden = false; }); b.remove(); });
   UI.botName = (b) => (UI.ident(b) || {}).name || b;
   /* One name per bot (r5 major 9): the display name wherever a person reads it; the config id only as the quiet
      secondary beside it (UI.botWho), in code, and under For audit. UI.nm: a bot's name, escaped, for prose and labels

@@ -212,3 +212,14 @@ test('switching the source away and back keeps what that source had', async ({ p
   await expect(vs(page, 'bot_token').locator('.vs-chosen')).toContainText('Slack');
   await expect(vs(page, 'bot_token')).not.toContainText('Not set yet');
 });
+
+// r5 minor: a new connection's credential starts on the vault entry named for its service (Linear → conductor/linear);
+// the filter read a flag the schema never sets, so it never did
+test('a new Linear connection starts on the vault entry conductor/linear', async ({ page }) => {
+  await go(page, '#/connectors/connectors', { fresh: true });
+  await page.locator('[data-act="conn-add"]').first().click();
+  await page.locator('.pk-modal .fb-in').fill('linear');
+  await page.locator('.pk-modal [data-act="cat-pick"][data-name="linear"]').click();
+  await expect(page.locator('#f-api_key')).toHaveValue('{{ vault "store" "conductor/linear" }}');
+  await expect(page.locator('.vs[data-k="api_key"], #f-api_key-pick').first()).not.toContainText('Not set yet');
+});

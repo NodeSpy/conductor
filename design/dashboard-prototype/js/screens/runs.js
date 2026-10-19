@@ -265,8 +265,11 @@
       UI.every(UI.fast ? 400 : 1500, () => { if (lv.n >= LOG.length) return; log.lastElementChild.insertAdjacentHTML('beforebegin', logLine(LOG[lv.n], lv.n, true)); lv.n++; log.scrollTop = log.scrollHeight; }); } };
   }, { nav: 'activity' });
   UI.act('run-tab', (b) => { dv.tab = b.dataset.v; UI.rerender(); });
-  UI.act('run-step', (b) => { dv.sel[b.dataset.run] = b.dataset.step; if (b.dataset.tab) dv.tab = b.dataset.tab; UI.rerender(); });
-  UI.act('run-pick', (b) => { dv.sel[b.dataset.run] = b.dataset.step; dv.tab = b.dataset.tab || dv.tab; UI.rerender(); });
+  // a step the run never reached has nothing to show: selecting it says so and keeps the failing step's outputs, inputs
+  // and log in view (r5 minor, round-3 M10: they disappeared)
+  const notReached = (b) => { const r = D.runs.find((x) => x.id === b.dataset.run), st = r && (UI.runRecord(r).steps || []).find((x) => x.id === b.dataset.step); return st && st.status === 'idle' ? st : null; };
+  UI.act('run-step', (b) => { const nr = notReached(b); if (nr) { UI.toast(`“${esc(nr.id)}” wasn’t reached`, 'the run stopped before it; the step that stopped it stays in view', 'idle'); return; } dv.sel[b.dataset.run] = b.dataset.step; if (b.dataset.tab) dv.tab = b.dataset.tab; UI.rerender(); });
+  UI.act('run-pick', (b) => { if (notReached(b)) return UI.acts['run-step'](b); dv.sel[b.dataset.run] = b.dataset.step; dv.tab = b.dataset.tab || dv.tab; UI.rerender(); });
   // dismissing is reversible, so it asks nothing; its toast carries the Undo
   // the step list is one control to the keyboard: ↑/↓ move the selection (and the step card follows)
   document.addEventListener('keydown', (e) => { if (!['ArrowDown', 'ArrowUp'].includes(e.key) || !e.target.matches || !e.target.matches('.dl-tree .tl')) return;
@@ -341,7 +344,12 @@
       return UI.statTile({ act: 'need-kind', attrs: `data-k="${k}"`, label: (n === 1 ? one : many).replace(/^./, (c) => c.toUpperCase()), value: n, detail: on ? 'showing only these' : old.age ? `oldest ${UI.ageText(old.age)}` : 'waiting on you', on, hot: k !== 'failed' && k !== 'connection' }); }), 'What needs you, by kind'); };
   const needBody = () => { const shown = D.attention.filter(needMatch), all = D.attention.length;
     const note = shown.length < all ? `<p class="need-shown">Showing ${shown.length} of ${all} · <button class="link" data-act="need-clear">Clear</button></p>` : '';
-    return UI.attentionList(/[?&]all=1/.test(location.hash) ? 1e9 : 0, shown, note) + (shown.length || !all ? '' : ''); };
+    // 20 to a page, with where you are and Previous/Next (r5 minor: 61 approvals were one 2,700px list)
+    const sig = JSON.stringify([nv.q, nv.kind, nv.bot, nv.workflow]); if (sig !== nv.sig) { nv.sig = sig; nv.page = 0; } // a new filter starts at its first page
+    const P = 20, pages = Math.max(1, Math.ceil(shown.length / P)); nv.page = Math.min(nv.page || 0, pages - 1); const from = nv.page * P, slice = shown.slice(from, from + P);
+    const pager = pages > 1 ? `<div class="pk-pages need-pages"><span class="dl-sub">${from + 1}–${from + slice.length} of ${shown.length}</span><button class="btn sm" ${nv.page ? 'data-act="need-page" data-d="-1"' : UI.off('The first page')}>${UI.icon('chev', 'flip')}Previous</button><button class="btn sm" ${nv.page < pages - 1 ? 'data-act="need-page" data-d="1"' : UI.off('The last page')}>Next${UI.icon('chev')}</button></div>` : '';
+    return UI.attentionList(1e9, slice, note) + pager; };
+  UI.act('need-page', (b) => { nv.page = (nv.page || 0) + +b.dataset.d; const body = UI.$('#need-body'); if (body) { body.innerHTML = needBody(); body.scrollIntoView({ block: 'start' }); } });
   const needRefresh = () => { const t = UI.$('#need-tiles'), b = UI.$('#need-body'); if (t) t.innerHTML = needTiles(); if (b) b.innerHTML = needBody(); };
   UI.act('need-kind', (b) => { const k = b.dataset.k; nv.kind = nv.kind.length === 1 && nv.kind[0] === k ? [] : [k]; UI.rerender(); });
   UI.act('need-clear', () => { Object.assign(nv, { q: '', kind: [], bot: [], workflow: [] }); UI.connAttrs().forEach((x) => delete nv[x.key]); UI.rerender(); });

@@ -369,7 +369,7 @@
     return first + doing; };
   /** The bot's head, as in the approved mock: avatar, name, what it's for in one line, and what it's doing now. */
   function hero(m, sub) {
-    const t = teamOf(m), open = D.cases.filter((c) => c.bot === m.name && c.status === 'open'), cur = open[0];
+    const t = teamOf(m), open = D.cases.filter((c) => c.bot === m.name && c.status === 'open'), cur = open.find((c) => UI.ticketStatus && UI.ticketStatus(c).k === 'progress') || null; // working on: a ticket in progress, never one that's only ready (r5)
     const role = (S.staged('bots', m.name) || m.cfg || {}).description || m.role || (t ? `A bot on the ${t.name} team` : 'A bot');
     const now = m.shadow ? UI.statusMark('shadow', 'Practice mode') : UI.botWorking(m.name) ? UI.statusMark('run', 'Working') : m.home === 'live' ? '<span class="dl-sub bot-live">Live</span>' : UI.statusMark('idle', 'Parked');
     return `${UI.crumbs([['Bots', '#/bots'], t ? [t.name, `#/teams/${t.name}`] : null, sub ? [UI.botName(m.name), `#/bots/${m.name}`] : [UI.botName(m.name)], ...(sub || [])])}
@@ -389,7 +389,7 @@
     const T = [['proposals', 'Approvals', pc, true], ['chat', 'Chat'], ['tickets', 'Tickets', cases], ['memory', 'Memory'], ['access', 'What it can do'], ['settings', 'Settings']];
     return `<div class="page dl-page${cls ? ' ' + cls : ''}">${hero(m, sub)}
       <nav class="dl-tabs" role="tablist">${T.map(([k, l, n, hot]) => `<a href="#/bots/${m.name}/${k}" role="tab" class="${k === tab ? 'on' : ''}"${k === tab ? ' aria-current="page" aria-selected="true"' : ''}>${l}${n ? ` ${UI.count(n, { hot: !!hot })}` : ''}</a>`).join('')}</nav>
-      <div class="dl-tab-body">${watchNote}${body}</div></div>`;
+      <div class="dl-tab-body">${['chat', 'settings', 'access'].includes(tab) ? watchNote : ''}${body}</div></div>`; // said where you'd act on it, not over an approval (r5)
   }
   UI.act('bot-yaml', (b) => { UI.go(`#/bots/${b.dataset.m}/settings`); setTimeout(() => UI.acts['df-yaml'](), UI.fast ? 30 : 120); });
   UI.act('m-rotate', (b) => { const m = M(b.dataset.m); UI.confirm({ title: 'Rotate the home session?', body: `<p style="margin:0 0 8px">conductor asks the current session for a hand-off note, waits for that turn to settle, launches a fresh session, and only then archives the old one. Its token is revoked at once.</p><div class="kv"><dt>current</dt><dd class="mono">${m.session} · ${m.turns} turns</dd><dt>next</dt><dd class="mono">s${+m.session.slice(1) + 1} · resumes from handoff/${m.session}.md + ledger</dd></div>`, ok: 'Rotate' }).then((ok) => { if (!ok) return; const old = m.session; m.session = 's' + (+old.slice(1) + 1); m.turns = 0; m.age = '0m'; m.home = 'live'; audit('bot_rotate', `${m.name} · ${old} → ${m.session}`); S.save(); UI.rerender(); UI.toast('Rotated', `${old} archived · ${m.session} live`, 'ok'); }); });
@@ -452,7 +452,7 @@
       return `<li class="dl-need proposal-row ${x.status}"><a class="dl-need-a" href="#/bots/${m.name}/proposals/${x.id}"><span class="dl-ng">${UI.mark(PS[x.status] || 'idle', { lg: true, label: pend ? 'Needs you' : x.status })}</span>
         <span class="dl-nt"><b>${esc(x.title || x.summary)}</b><span class="dl-why">${pend ? UI.taskWords(x.ask || x.why || x.summary) : word(x)}</span>${UI.factsLine([UI.envFact(x.env), ...UI.verbFacts(x.verb, x.options), UI.actionFact(x.verb, x.env, x.tier)])}</span>
         <span class="dl-age">${UI.agoText(x.at)}</span><span class="dl-na">${pend ? '<span class="btn sm secondary">Review</span>' : ''}</span></a></li>`; };
-    return shell(m, 'proposals', `<section class="dl-card"><header class="dl-ch"><h2>Waiting for you</h2>${waiting.length ? UI.count(waiting.length, { hot: true }) : ''}</header>${waiting.length ? `<ul class="dl-list">${waiting.map(row).join('')}</ul>` : `<p class="dl-sub">Nothing waits for you. When ${esc(m.name)} wants to do something it has to ask about, it shows up here and in Needs you.</p>`}</section>
+    return shell(m, 'proposals', `<section class="dl-card"><header class="dl-ch"><h2>Waiting for you</h2>${waiting.length ? UI.count(waiting.length, { hot: true }) : ''}</header>${waiting.length ? `<ul class="dl-list">${waiting.slice(0, pv.n || 20).map(row).join('')}</ul>${waiting.length > (pv.n || 20) ? `<p class="dl-foot-note dl-more"><button class="link" data-act="prop-more">Show ${Math.min(20, waiting.length - (pv.n || 20))} more of ${waiting.length - (pv.n || 20)}</button></p>` : ''}` : `<p class="dl-sub">Nothing waits for you. When ${esc(m.name)} wants to do something it has to ask about, it shows up here and in Needs you.</p>`}</section>
       ${past.length ? `<details class="dl-card dl-files-d past-d"${pv.f === 'decided' ? ' open' : ''}><summary class="panel-head"><h3>Past decisions</h3><span class="muted small">${past.length}</span></summary><ul class="dl-list">${past.map(row).join('')}</ul></details>` : ''}`);
   }
   UI.act('prop-f', (b) => { pv.f = b.dataset.v; UI.rerender(); });
@@ -539,6 +539,8 @@
   // a resource in the summary opens the full plan at its block
   UI.act('plan-jump', (b) => { const el = document.getElementById(b.dataset.l); if (!el) return; const d = el.closest('details'); if (d && !d.open) { d.open = true; pv.plan[d.dataset.p] = true; } setTimeout(() => { el.scrollIntoView({ block: 'center' }); el.classList.add('flash-target'); setTimeout(() => el.classList.remove('flash-target'), 1600); }); });
   UI.act('prop-plan-t', (d) => { pv.plan[d.dataset.p] = d.open; });
+  // a bot's approvals: 20 at a time, then 'Show 20 more' (r5 minor: 31 approvals were one 4,100px list)
+  UI.act('prop-more', () => { pv.n = (pv.n || 20) + 20; UI.rerender({ keepScroll: true }); });
   UI.act('p-approve', (b) => { const p = D.proposals.find((x) => x.id === b.dataset.p); UI.approve(p, b.dataset.d, () => { S.save(); UI.rerender(); }); });
 
   /* ---------- memory ---------- */

@@ -67,7 +67,7 @@
         <div class="cv-to" role="group" aria-label="Who it goes to"><span class="dl-sub">To</span>${lead ? `<button type="button" class="cv-chip${mode === 'lead' ? ' on' : ''}" data-act="cv-to" data-t="${esc(name)}" data-v="lead" aria-pressed="${mode === 'lead'}">${UI.botAv(lead, 'xs')}${esc(UI.botName(lead))}, the lead</button>` : `<button type="button" class="cv-chip" ${UI.off('This team has no lead yet: pick one on the team page')}>No lead yet</button>`}<button type="button" class="cv-chip${mode === 'all' ? ' on' : ''}" data-act="cv-to" data-t="${esc(name)}" data-v="all" aria-pressed="${mode === 'all'}">Everyone on the team</button><span class="dl-sub cv-at-hint">or @name one bot</span></div>
         ${UI.chatComposer('team:' + name, { to: `team ${name}` })}<div class="cm-drop" aria-hidden="true">${icon('attach')}Drop to attach to your message</div></div></section>`; }
     const m = M(name); if (!m) return '<section class="cv-main fit"><p class="dl-sub">No bot by that name.</p></section>';
-    const id = UI.ident(name) || {}, open = D.cases.filter((c) => c.bot === name && c.status === 'open')[0];
+    const id = UI.ident(name) || {}, open = D.cases.filter((c) => c.bot === name && c.status === 'open').find((c) => UI.ticketStatus && UI.ticketStatus(c).k === 'progress');
     return `<section class="cv-main fit"><header class="cv-th">${UI.botAv(name, 'lg')}<div class="cv-tt"><h2 class="cv-name">${UI.botWho(name)}</h2><span class="dl-sub">${esc(id.tagline || m.desc || '')}${working(name) && open ? ` · working on “${esc(open.title)}”` : ''}</span></div><a class="btn sm secondary" href="#/bots/${esc(name)}">Bot page</a>${more(name)}</header>
       <div class="panel chat cv-chat">${UI.chatThread(D.chats[name] || [], name, { empty: `No conversation yet. Ask ${esc(UI.botName(name))} anything; it answers here.` })}${UI.chatComposer(name)}<div class="cm-drop" aria-hidden="true">${icon('attach')}Drop to attach to your message</div></div></section>`;
   }
@@ -82,7 +82,7 @@
   /** You, in a team's chat: the lead answers, or everyone does, or the bot you @mention. */
   UI.teamSay = (team, v, done) => { const L = (D.teamChats[team] = D.teamChats[team] || []), ms = teamBots(team), lead = leadOf(team);
     const ments = UI.mentionsIn(v.text), named = ms.filter((b) => ments.includes(b));
-    const who = ments.includes('everyone') ? ms : named.length ? named : to[team] === 'all' ? ms : [lead];
+    const who = ments.includes('everyone') ? ms : named.length ? named : to[team] === 'all' || !lead ? ms : [lead]; // everyone means every member; no lead means everyone
     const c = { who: 'op', at: now(), text: v.text, state: 'queued', toWord: who.length > 1 ? 'the team' : UI.botName(who[0]) };
     if (v.attachments.length) c.attachments = v.attachments.map(({ id, kind, name, mime, size, thumb, preview }) => ({ id, kind, name, mime, size, src: thumb, preview }));
     if (v.links.length) c.links = v.links.map(({ url, host, path }) => ({ url, host, path }));

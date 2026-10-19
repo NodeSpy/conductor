@@ -37,9 +37,10 @@ test('every step is selectable; tabs follow the step (no diff on a command step)
   await expect(page.locator('#run-step .diff')).toContainText('internal/billing/refund.go');
   await page.locator('.dl-tree .tl[data-step="test"]').click();
   await expect(page.locator('#run-step [data-act="run-tab"][data-v="diff"]')).toHaveCount(0);
-  // a step that never ran says so
+  // a step that never ran says so, and the step that stopped the run stays in view (r5, round-3 M10)
   await page.locator('.dl-tree .tl[data-step="push"]').click();
-  await expect(page.locator('#run-step')).toContainText('Not reached');
+  await expect(page.locator('.toast').last()).toContainText('“push” wasn’t reached');
+  await expect(page.locator('#run-step h2')).toHaveText('test');
 });
 
 test('outputs carry no spend while usage display is off; targets never show #0', async ({ page }) => {

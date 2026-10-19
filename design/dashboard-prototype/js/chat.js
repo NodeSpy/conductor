@@ -172,13 +172,14 @@ UI.afterRender.push((main) => { if (main.querySelector('#msgs')) UI.chatAnchor()
   const ta = () => UI.$('#say'), comp = () => UI.$('.cm-comp');
   const teamOf = () => { const b = (comp() || {}).dataset?.bot || ''; return /^team:/.test(b) ? b.slice(5) : ''; };
   const members = (t) => D.bots.filter((b) => b.cfg && b.cfg.team === t).map((b) => b.name);
-  const leadOf = (t) => { const x = D.teams.find((y) => y.name === t); return (x && ((S.staged('teams', t) || x.cfg || {}).routing || {}).lead) || members(t)[0]; };
+  const leadOf = (t) => { const x = D.teams.find((y) => y.name === t); return (x && ((S.staged('teams', t) || x.cfg || {}).routing || {}).lead) || null; }; // no lead is no lead (r5)
   /** Who can be mentioned here: [{ key, word, sub, kind }]. */
   const people = () => { const t = teamOf(), out = [];
     if (t) { out.push({ key: 'everyone', word: 'everyone', sub: `everyone on team ${t}`, kind: 'all' }); const lead = leadOf(t);
       members(t).forEach((b) => out.push({ key: b, word: UI.botName(b), sub: b + (b === lead ? ' · lead' : ''), kind: 'bot' })); }
-    D.bots.filter((b) => !t || !members(t).includes(b.name)).forEach((b) => out.push({ key: b.name, word: UI.botName(b.name), sub: b.name + (b.cfg && b.cfg.team ? ` · team ${b.cfg.team}` : ''), kind: 'bot' }));
-    D.teams.filter((x) => x.name !== t).forEach((x) => out.push({ key: 'team:' + x.name, word: x.name, sub: `team · ${members(x.name).length} bot${members(x.name).length === 1 ? '' : 's'}`, kind: 'team' }));
+    if (t) return out; // a team's chat mentions only the team: everyone, or one of its bots (r5)
+    D.bots.forEach((b) => out.push({ key: b.name, word: UI.botName(b.name), sub: b.name + (b.cfg && b.cfg.team ? ` · team ${b.cfg.team}` : ''), kind: 'bot' }));
+    D.teams.forEach((x) => out.push({ key: 'team:' + x.name, word: x.name, sub: `team · ${members(x.name).length} bot${members(x.name).length === 1 ? '' : 's'}`, kind: 'team' }));
     return out; };
   // every word a mention can be: a bot's display name or id, a team's name, everyone
   const words = () => { const m = new Map(); D.bots.forEach((b) => { m.set(UI.botName(b.name).toLowerCase(), b.name); m.set(b.name.toLowerCase(), b.name); }); D.teams.forEach((t) => m.set(t.name.toLowerCase(), 'team:' + t.name)); m.set('everyone', 'everyone'); return m; };

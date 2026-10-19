@@ -41,11 +41,12 @@
     const dollars = UI.usageMode && UI.usageMode() === 'api';
     const budget = dollars && S.getPath(c, 'budget.spend_cap.per_period') ? `spend capped at $${Number(S.getPath(c, 'budget.spend_cap.per_period')).toLocaleString()}` : S.getPath(c, 'budget.proactive.max_runs_per_day') ? `${S.getPath(c, 'budget.proactive.max_runs_per_day')} self-started runs a day` : dollars && S.getPath(d, 'budget.max_cost_per_day') ? `$${S.getPath(d, 'budget.max_cost_per_day')} a day` : '';
     const fx = [ceil ? { icon: 'shield', value: CEIL[ceil] || ceil, href: `#/teams/${t}/defaults`, pri: 1, label: 'The most its bots may do' } : null, ops.length ? { icon: 'members', value: `approved by ${ops.join(', ')}`, pri: 1, label: 'Who approves' } : null,
-      rules.length || fb ? { icon: 'zap', value: `${rules.length ? `${rules.length} routing rule${rules.length > 1 ? 's' : ''}` : ''}${rules.length && fb ? ' · ' : ''}${fb ? `the rest to ${fb}` : ''}`, href: `#/teams/${t}/routing`, pri: 2, label: 'How work is routed to it' } : { icon: 'zap', value: 'no routing yet', href: `#/teams/${t}/routing`, pri: 2 },
+      rules.length || fb ? { icon: 'zap', value: `${rules.length ? `${rules.length} routing rule${rules.length > 1 ? 's' : ''}` : ''}${rules.length && fb ? ' · ' : ''}${fb ? `the rest to ${UI.botName(fb)}` : ''}`, href: `#/teams/${t}/routing`, pri: 2, label: 'How work is routed to it' } : { icon: 'zap', value: 'no routing yet', href: `#/teams/${t}/routing`, pri: 2 },
       S.getPath(c, 'isolation.sandbox') === 'required' || S.getPath(d, 'isolation') ? { icon: 'obj-sandbox', value: 'sandboxed', pri: 3, label: 'Sandbox' } : null, budget ? { icon: 'dollar', value: budget, pri: 3, label: 'Budget' } : null].filter(Boolean);
     // one line: as many as fit in about 64 characters, then "+N" for the rest (they're on the team's page), never wrapping
-    let n = 0, len = 0; while (n < fx.length && (n === 0 || len + fx[n].value.length + 4 <= 64)) { len += fx[n].value.length + 4; n++; }
-    return UI.factsLine(n < fx.length ? fx.slice(0, n).concat({ icon: 'dot', value: `+${fx.length - n}`, href: `#/teams/${t}/defaults`, label: fx.slice(n).map((f) => f.value).join(' · ') }) : fx); };
+    // one line: the shared collapse (UI.fitFacts) ends it in a +N you can open in place (r5: the old +N used the Ready dot,
+    // showed its contents on hover only and navigated away)
+    return UI.factsLine(fx); };
 
   /* ---------- the page ---------- */
   const bv = { q: '', team: [], mode: [], model: [], conn: [], group: 'team', sel: new Set(), open: null };
@@ -71,7 +72,9 @@
       <div class="m-team-t"><div class="m-team-n">${UI.teamAv(t, 'md')}<h2><a class="link-plain" href="#/teams/${t}">${esc(t)}</a></h2></div><span class="dl-sub m-team-sum">${ms.length} bot${ms.length === 1 ? '' : 's'}${lead ? ` · led by ${UI.nm(lead)}` : ' · no lead yet'}${prac ? ` · ${prac} in practice mode` : ''}</span>${teamFacts(t)}</div>
       <span class="m-st">${need ? `<a class="q-st need" href="#/attention">${UI.mark('ember')}${need} need${need > 1 ? '' : 's'} you</a>` : ''}</span>
       <div class="m-team-a"><button type="button" class="btn sm secondary" data-act="bv-team-add" data-t="${esc(t)}">${icon('plus')}Add a bot</button><a class="btn sm secondary ph-hide" href="#/teams/${t}/defaults">${icon('settings')}Shape the team</a><button type="button" class="icon-btn" data-act="bv-team-more" data-t="${esc(t)}" aria-label="More for team ${esc(t)}">${icon('more')}</button></div></header>
-      ${open ? `<ul class="m-list">${shown.map((m) => row(m)).join('') || '<li class="dl-empty-row">No bot here matches the filter.</li>'}</ul>` : ''}</section>`; };
+      ${open ? `<ul class="m-list">${shown.slice(0, (bv.more || {})[t] ? 1e9 : 10).map((m) => row(m)).join('') || '<li class="dl-empty-row">No bot here matches the filter.</li>'}${shown.length > 10 && !(bv.more || {})[t] ? `<li class="dl-more-row"><button class="link" data-act="bv-more-rows" data-t="${esc(t)}">Show ${shown.length - 10} more on ${esc(t)}</button></li>` : ''}</ul>` : ''}</section>`; };
+  // a team with many bots shows its first 10, then the rest on request (r5 minor: 50 bots were a 4,700px page)
+  UI.act('bv-more-rows', (b) => { (bv.more = bv.more || {})[b.dataset.t] = true; UI.rerender({ keepScroll: true }); });
   function page() {
     const bots = allBots(), teams = D.teams.map((t) => t.name), solo = bots.filter((m) => !teamOf(m.name)), shown = bots.filter(keep), total = bots.length;
     const bulk = bv.sel.size ? `<div class="m-bulk"><b>${bv.sel.size} selected</b><button class="btn sm secondary" data-act="bv-bulk-team">Move to a team…</button><button class="btn sm secondary" data-act="bv-bulk-newteam">${icon('members')}Make a team…</button><button class="btn sm secondary" data-act="bv-bulk-model">Change model…</button><button class="btn sm secondary" data-act="bv-bulk-practice">Practice mode</button><button class="btn sm secondary" data-act="bv-bulk-archive">Archive…</button><button class="link" data-act="bv-sel-clear">Clear</button></div>` : '';
