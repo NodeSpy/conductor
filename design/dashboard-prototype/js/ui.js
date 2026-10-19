@@ -807,11 +807,14 @@
   document.addEventListener('input', (e) => { const r = e.target.closest('.kvedit .kvrow'); if (!r) return; const box = r.parentElement; const rows = $$('.kvrow', box); const lastRow = rows[rows.length - 1]; if (r === lastRow && $$('input', r).some((i) => i.value)) { const nr = document.createElement('div'); nr.className = 'kvrow'; nr.innerHTML = `<input class="input mono" placeholder="key" data-mk="k"><input class="input mono" placeholder="value" data-mk="v"><span style="width:30px"></span>`; box.appendChild(nr); const sp = r.querySelector('span'); if (sp) sp.outerHTML = `<button type="button" class="icon-btn" data-act="map-del" aria-label="Remove row">${UI.icon('trash')}</button>`; } });
 
   /** Stage a config change and offer the pipeline. */
+  /** The page's name in a few words: its heading's own text, without what sits inside it (a count, an id, a badge),
+   *  so a crumb or 'Back to …' reads 'Bots', never 'Bots 6 bots · 2 teams · 2 solo' (r5 major 15). */
+  UI.pageName = () => { const h = document.querySelector('#main h1'); if (!h) return UI.pageTitle(); const own = [...h.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(' ').replace(/\s+/g, ' ').trim(); return (own || h.textContent.trim() || UI.pageTitle()).slice(0, 48); };
   UI.staged = (ch, opts = {}) => {
     UI.refreshChrome();
     if (!ch) { UI.toast('No change', 'the node is the same as the live config', 'idle'); return; }
     // the review remembers where you came from: its Back and its Done return there, and the rail keeps that section
-    if (opts.go !== false) { if (!D.prefs.returnTo && !location.hash.startsWith('#/config')) { D.prefs.returnTo = { href: location.hash, label: (document.querySelector('#main h1') || {}).textContent || UI.pageTitle() }; S.save(); } UI.go('#/config/apply'); }
+    if (opts.go !== false) { if (!D.prefs.returnTo && !location.hash.startsWith('#/config')) { D.prefs.returnTo = { href: location.hash, label: UI.pageName() }; S.save(); } UI.go('#/config/apply'); }
     else UI.toast(`Staged: ${UI.esc(ch.summary)}`, `Not applied yet · ${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review and apply`, 'run');
   };
   /** A tab bar that doesn't fit never cuts a label: the tabs that don't fit go into a "More" menu at its end, and the

@@ -75,3 +75,20 @@ test('installing a pack: the consent sentence wraps, every action and the rest o
   await expect(g).toContainText('It asks for these actions:');
   await expect(g).toContainText('gh.review');
 });
+
+// r5-15: after New team, the review's crumb and its Back button read the Bots page's heading with its count ("Bots 6 bots
+// · 2 teams · 2 solo") and the button ran off the screen. They say "Bots".
+test('after New team: the review says Bots in its crumb and its Back button, which fits', async ({ page }) => {
+  await go(page, '#/bots', { fresh: true });
+  await page.locator('[data-act="team-new"]').first().click();
+  await page.fill('.modal #f-name, .cdrawer #f-name', 'data');
+  await page.locator('.modal [data-listk="bots"] select, .cdrawer [data-listk="bots"] select').first().selectOption('platform-data');
+  await page.locator('.modal .modal-foot .btn.primary, .cdrawer .btn.primary').last().click();
+  await expect(page).toHaveURL(/#\/config\/apply/);
+  await expect(page.locator('#main .dl-crumbs').first()).toContainText(/^\s*Bots\s*›?\s*Review and apply/);
+  await expect(page.locator('#main .dl-crumbs').first()).not.toContainText('bots ·');
+  await applyStaged(page);
+  const back = page.locator('[data-act="return-to"]');
+  await expect(back).toHaveText(/^Back to Bots$/);
+  expect(await back.evaluate((b) => b.getBoundingClientRect().right <= innerWidth)).toBe(true);
+});
