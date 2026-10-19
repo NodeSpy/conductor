@@ -662,7 +662,7 @@ func (s *Service) teamStatus(ctx context.Context, team string, full bool) map[st
 		peers = "none"
 	}
 	out := map[string]any{"team": team, "description": t.Description, "bots": cfg.TeamBots(team),
-		"operators": cfg.TeamOperators(team), "peers": peers}
+		"operators": cfg.TeamOperators(team), "peers": peers, "identity": config.TeamAvatarView(team, t.Avatar)}
 	if r := t.Routing; r != nil {
 		rules := make([]any, 0, len(r.Rules))
 		for i, rule := range r.Rules {

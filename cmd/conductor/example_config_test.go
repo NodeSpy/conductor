@@ -236,7 +236,7 @@ func TestExampleConfigIdentityBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := string(raw)
-	for _, k := range []string{"display_name:", "tagline:", "avatar:", "color:", "personality:", "  tone:", "  style:", "attachments:"} {
+	for _, k := range []string{"display_name:", "tagline:", "avatar: { preset", "color:", "personality:", "  tone:", "  style:", "attachments:", "avatar: { icon: radar"} {
 		old := "    # " + k
 		if strings.Count(doc, old) != 1 {
 			t.Fatalf("the example's identity block: %q appears %d times", old, strings.Count(doc, old))
@@ -264,5 +264,8 @@ func TestExampleConfigIdentityBlock(t *testing.T) {
 	}
 	if l := cfg.Bots["platform-sre"].Attachments; l.MaxFileOr() != 10<<20 || l.MaxFilesOr() != 10 || l.TTL == 0 {
 		t.Fatalf("attachments: %+v", l)
+	}
+	if a := cfg.Teams["platform"].Avatar; a == nil || a.Icon != "radar" || a.Color != "teal" {
+		t.Fatalf("the team's avatar: %+v", a)
 	}
 }

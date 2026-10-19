@@ -36,7 +36,8 @@ import (
 
 // avatarPlan is a planned avatar change.
 type avatarPlan struct {
-	Bot      string `json:"bot"`
+	Bot      string `json:"bot,omitempty"`
+	Team     string `json:"team,omitempty"`
 	Image    string `json:"image,omitempty"` // the path the config will name
 	Replaces bool   `json:"replaces,omitempty"`
 	Bytes    int    `json:"bytes,omitempty"`
@@ -49,8 +50,20 @@ type avatarPlan struct {
 	cfgHash  string
 }
 
-// avatarRel is where a bot's uploaded picture lives, relative to the config.
+// key is what a plan is for: "bot:<name>" or "team:<name>".
+func (p *avatarPlan) key() string {
+	if p.Team != "" {
+		return "team:" + p.Team
+	}
+	return "bot:" + p.Bot
+}
+
+// avatarRel is where a bot's uploaded picture lives, relative to the config;
+// a team's is avatars/team-<name>.png, so a bot and a team of one name never
+// share a file.
 func avatarRel(name string) string { return "avatars/" + name + ".png" }
+
+func teamAvatarRel(name string) string { return "avatars/team-" + name + ".png" }
 
 func sha(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
 
@@ -58,6 +71,12 @@ func sha(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:
 // face (a preset or an icon, with its color) stays as the fallback where an
 // image can't go.
 func planAvatar(cfgPath, name string, img []byte, crop *avatar.Crop) (*avatarPlan, error) {
+	return planAvatarFor(cfgPath, "bot", name, img, crop)
+}
+
+// planAvatarFor is planAvatar for a bot or a team (a team's face is an icon
+// with its color; it has no preset).
+func planAvatarFor(cfgPath, kind, name string, img []byte, crop *avatar.Crop) (*avatarPlan, error) {
 	src, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return nil, err
@@ -66,15 +85,28 @@ func planAvatar(cfgPath, name string, img []byte, crop *avatar.Crop) (*avatarPla
 	if err != nil {
 		return nil, fmt.Errorf("your config does not load as it is: %w", err)
 	}
-	m, ok := cur.Bots[name]
-	if !ok {
-		return nil, fmt.Errorf("no bot %q", name)
+	var cur0 *config.BotAvatar
+	rel, set := avatarRel(name), config.SetBotAvatar
+	plan := &avatarPlan{Bot: name, cfgHash: sha(src)}
+	switch kind {
+	case "team":
+		t, ok := cur.Teams[name]
+		if !ok {
+			return nil, fmt.Errorf("no team %q", name)
+		}
+		cur0, rel, set = t.Avatar, teamAvatarRel(name), config.SetTeamAvatar
+		plan.Bot, plan.Team = "", name
+	default:
+		m, ok := cur.Bots[name]
+		if !ok {
+			return nil, fmt.Errorf("no bot %q", name)
+		}
+		cur0 = m.Avatar
 	}
 	var face config.BotAvatar
-	if m.Avatar != nil {
-		face = config.BotAvatar{Preset: m.Avatar.Preset, Icon: m.Avatar.Icon, Color: m.Avatar.Color}
+	if cur0 != nil {
+		face = config.BotAvatar{Preset: cur0.Preset, Icon: cur0.Icon, Color: cur0.Color}
 	}
-	plan := &avatarPlan{Bot: name, cfgHash: sha(src)}
 	dir := filepath.Dir(cfgPath)
 	var next *config.BotAvatar
 	stagedName := ""
@@ -82,7 +114,7 @@ func planAvatar(cfgPath, name string, img []byte, crop *avatar.Crop) (*avatarPla
 		if plan.png, err = avatar.Normalize(img, crop, avatar.Size); err != nil {
 			return nil, err
 		}
-		plan.Image, plan.Bytes = avatarRel(name), len(plan.png)
+		plan.Image, plan.Bytes = rel, len(plan.png)
 		if _, err := os.Stat(filepath.Join(dir, plan.Image)); err == nil {
 			plan.Replaces = true
 		}
@@ -105,7 +137,7 @@ func planAvatar(cfgPath, name string, img []byte, crop *avatar.Crop) (*avatarPla
 	} else if face != (config.BotAvatar{}) {
 		next = &face
 	}
-	out, err := config.SetBotAvatar(src, name, next)
+	out, err := set(src, name, next)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +145,7 @@ func planAvatar(cfgPath, name string, img []byte, crop *avatar.Crop) (*avatarPla
 	if stagedName != "" {
 		staged := *next
 		staged.Image = stagedName
-		if check, err = config.SetBotAvatar(src, name, &staged); err != nil {
+		if check, err = set(src, name, &staged); err != nil {
 			return nil, err
 		}
 	}
@@ -157,16 +189,20 @@ func writeAvatar(cfgPath string, p *avatarPlan) error {
 }
 
 func printAvatarPlan(p *avatarPlan) {
+	who := "Bot " + p.Bot
+	if p.Team != "" {
+		who = "Team " + p.Team
+	}
 	if p.Image != "" {
 		verb := "writes"
 		if p.Replaces {
 			verb = "replaces"
 		}
-		fmt.Printf("Bot %s: a %d-byte PNG (re-encoded, at most %dpx square, no metadata) — %s %s beside the config\n", p.Bot, p.Bytes, avatar.Size, verb, p.Image)
+		fmt.Printf("%s: a %d-byte PNG (re-encoded, at most %dpx square, no metadata) — %s %s beside the config\n", who, p.Bytes, avatar.Size, verb, p.Image)
 	} else {
-		fmt.Printf("Bot %s: its picture is removed from the config (the file itself is left in place)\n", p.Bot)
+		fmt.Printf("%s: its picture is removed from the config (the file itself is left in place)\n", who)
 	}
-	fmt.Println("  widening: none — a picture changes nothing a bot may do")
+	fmt.Println("  widening: none — a picture changes nothing anyone may do")
 	if p.Valid {
 		fmt.Println("  validated on a copy of your config: ok")
 	} else {
@@ -196,10 +232,17 @@ func parseCrop(s string) (*avatar.Crop, error) {
 	return &avatar.Crop{X: n[0], Y: n[1], Side: n[2]}, nil
 }
 
-func botAvatarCmd(args []string) error {
+func botAvatarCmd(args []string) error { return avatarCmd("bot", args) }
+
+// avatarCmd is `conductor bot|team avatar set|clear …` (a team's picture is
+// an operator's change too: refused in a session).
+func avatarCmd(kind string, args []string) error {
 	cfgPath, rest := configPath(args)
 	pos, fl, _, _ := botFlags(rest)
-	usage := fmt.Errorf("usage: conductor bot avatar set <bot> <file> [--crop x,y,side] [--write]\n       conductor bot avatar clear <bot> [--write]")
+	usage := fmt.Errorf("usage: conductor %[1]s avatar set <%[1]s> <file> [--crop x,y,side] [--write]\n       conductor %[1]s avatar clear <%[1]s> [--write]", kind)
+	if os.Getenv("CONDUCTOR_SKILL_TOKEN") != "" {
+		return fmt.Errorf("refusing: this shell is a conductor agent session — only an operator changes a %s's picture", kind)
+	}
 	if len(pos) < 2 {
 		return usage
 	}
@@ -225,12 +268,12 @@ func botAvatarCmd(args []string) error {
 		if cerr != nil {
 			return cerr
 		}
-		plan, err = planAvatar(cfgPath, pos[1], img, crop)
+		plan, err = planAvatarFor(cfgPath, kind, pos[1], img, crop)
 	case "clear":
 		if len(pos) != 2 {
 			return usage
 		}
-		plan, err = planAvatar(cfgPath, pos[1], nil, nil)
+		plan, err = planAvatarFor(cfgPath, kind, pos[1], nil, nil)
 	default:
 		return usage
 	}
@@ -293,12 +336,12 @@ func (ps *avatarPlans) put(p *avatarPlan) string {
 	return tok
 }
 
-func (ps *avatarPlans) take(tok, name string) (*avatarPlan, bool) {
+func (ps *avatarPlans) take(tok, key string) (*avatarPlan, bool) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	v, ok := ps.plans[tok]
 	delete(ps.plans, tok) // single use: a wrong-bot attempt burns it too
-	if !ok || time.Now().After(v.expires) || v.plan.Bot != name {
+	if !ok || time.Now().After(v.expires) || v.plan.key() != key {
 		return nil, false
 	}
 	return v.plan, true
@@ -312,39 +355,58 @@ func apiErr(w http.ResponseWriter, code int, err error) {
 
 // avatarRoutes adds the avatar endpoints to the operator API:
 //
-//	GET  /v1/bots/{bot}/avatar          its picture, re-encoded (404: none — show the face or initials)
-//	POST /v1/bots/{bot}/avatar/plan     multipart: file [, crop_x, crop_y, crop_side] | clear=1  → a plan with a token
-//	POST /v1/bots/{bot}/avatar/apply    token=…  → writes the planned change
+//	GET  /v1/bots/{name}/avatar          its picture, re-encoded (404: none — show the face or initials)
+//	POST /v1/bots/{name}/avatar/plan     multipart: file [, crop_x, crop_y, crop_side] | clear=1  → a plan with a token
+//	POST /v1/bots/{name}/avatar/apply    token=…  → writes the planned change
+//
+// and the same under /v1/teams/{name}/avatar for a team's picture.
 func avatarRoutes(mux *http.ServeMux, cfg func() *config.Config, cfgPath func() string) {
 	ps := &avatarPlans{}
+	for _, kind := range []string{"bot", "team"} {
+		avatarRoutesFor(mux, ps, kind, cfg, cfgPath)
+	}
+}
+
+// avatarOf is a bot's or a team's avatar (ok false: no such bot or team).
+func avatarOf(cfg *config.Config, kind, name string) (*config.BotAvatar, bool) {
+	if kind == "team" {
+		t, ok := cfg.Teams[name]
+		return t.Avatar, ok
+	}
+	m, ok := cfg.Bots[name]
+	return m.Avatar, ok
+}
+
+func avatarRoutesFor(mux *http.ServeMux, ps *avatarPlans, kind string, cfg func() *config.Config, cfgPath func() string) {
 	type cached struct {
 		key string
 		png []byte
 	}
 	var cmu sync.Mutex
 	cache := map[string]cached{}
-	mux.HandleFunc("GET /v1/bots/{bot}/avatar", func(w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("bot")
-		m, ok := cfg().Bots[name]
+	base := "/v1/" + kind + "s/{name}/avatar"
+	mux.HandleFunc("GET "+base, func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		a, ok := avatarOf(cfg(), kind, name)
 		if !ok {
-			apiErr(w, http.StatusNotFound, fmt.Errorf("unknown bot %q", name))
+			apiErr(w, http.StatusNotFound, fmt.Errorf("unknown %s %q", kind, name))
 			return
 		}
-		if m.Avatar == nil || m.Avatar.ImagePath == "" {
-			apiErr(w, http.StatusNotFound, fmt.Errorf("bot %s has no picture: show its face or its initials (bot show → identity)", name))
+		if a == nil || a.ImagePath == "" {
+			apiErr(w, http.StatusNotFound, fmt.Errorf("%s %s has no picture: show its face or its initials (%s show → identity)", kind, name, kind))
 			return
 		}
-		st, err := os.Stat(m.Avatar.ImagePath)
+		st, err := os.Stat(a.ImagePath)
 		if err != nil {
 			apiErr(w, http.StatusNotFound, err)
 			return
 		}
-		key := fmt.Sprintf("%s|%d|%d", m.Avatar.ImagePath, st.Size(), st.ModTime().UnixNano())
+		key := fmt.Sprintf("%s|%d|%d", a.ImagePath, st.Size(), st.ModTime().UnixNano())
 		cmu.Lock()
 		c, hit := cache[name]
 		cmu.Unlock()
 		if !hit || c.key != key {
-			b, err := os.ReadFile(m.Avatar.ImagePath)
+			b, err := os.ReadFile(a.ImagePath)
 			if err == nil {
 				c.png, err = avatar.Serve(b)
 			}
@@ -363,8 +425,8 @@ func avatarRoutes(mux *http.ServeMux, cfg func() *config.Config, cfgPath func() 
 		w.Header().Set("Cache-Control", "private, no-cache")
 		_, _ = w.Write(c.png)
 	})
-	mux.HandleFunc("POST /v1/bots/{bot}/avatar/plan", func(w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("bot")
+	mux.HandleFunc("POST "+base+"/plan", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
 		path := cfgPath()
 		if path == "" {
 			apiErr(w, http.StatusServiceUnavailable, errors.New("this daemon does not know its config file"))
@@ -410,7 +472,7 @@ func avatarRoutes(mux *http.ServeMux, cfg func() *config.Config, cfgPath func() 
 			}
 		}
 		planFull = false
-		plan, err := planAvatar(path, name, img, crop)
+		plan, err := planAvatarFor(path, kind, name, img, crop)
 		if err != nil {
 			apiErr(w, http.StatusUnprocessableEntity, err)
 			return
@@ -422,11 +484,11 @@ func avatarRoutes(mux *http.ServeMux, cfg func() *config.Config, cfgPath func() 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(out)
 	})
-	mux.HandleFunc("POST /v1/bots/{bot}/avatar/apply", func(w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("bot")
+	mux.HandleFunc("POST "+base+"/apply", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)
 		_ = r.ParseForm()
-		plan, ok := ps.take(r.FormValue("token"), name)
+		plan, ok := ps.take(r.FormValue("token"), kind+":"+name)
 		if !ok {
 			apiErr(w, http.StatusNotFound, errors.New("no such plan (or it expired): plan it again"))
 			return

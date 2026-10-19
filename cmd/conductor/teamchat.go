@@ -14,7 +14,10 @@ const teamUsage = `usage:
   conductor team chats [--as <operator>]                            # every conversation: the last message, your unread count (pinned first)
   conductor team pin <team|bot:<name>> [--at N] [--as <operator>]   # pin a conversation for you (--at: its position, 1 first; moves a pinned one)
   conductor team unpin <team|bot:<name>> [--as <operator>]
-  conductor team pins [--order <conv>,<conv>…] [--as <operator>]    # your pins, in order; --order sets it (every pinned conversation once)`
+  conductor team pins [--order <conv>,<conv>…] [--as <operator>]    # your pins, in order; --order sets it (every pinned conversation once)
+  conductor team show <team>                                        # bots, routing, identity (avatar, initials), knowledge
+  conductor team avatar set <team> <file> [--crop x,y,side] [--write]   # its picture: PNG/JPEG/WebP, re-encoded, avatars/team-<team>.png
+  conductor team avatar clear <team> [--write]`
 
 // cmdTeam is `conductor team …`: the operator's side of team chat.
 func cmdTeam(args []string) error {
@@ -22,10 +25,13 @@ func cmdTeam(args []string) error {
 		fmt.Println(teamUsage)
 		return nil
 	}
+	sub := args[0]
+	if sub == "avatar" {
+		return avatarCmd("team", args[1:]) // refuses a session itself
+	}
 	if os.Getenv("CONDUCTOR_SKILL_TOKEN") != "" {
 		return fmt.Errorf("refusing: this shell is a conductor agent session — a bot answers with `conductor bot reply`")
 	}
-	sub := args[0]
 	cfg, rest, err := loadConfig(args[1:])
 	if err != nil {
 		return err
@@ -77,6 +83,15 @@ func cmdTeam(args []string) error {
 			fmt.Println(chatLineCLI(m))
 		}
 		return nil
+	case "show":
+		if len(pos) != 1 {
+			return fmt.Errorf("%s", teamUsage)
+		}
+		out, _, err := botControl(cfg, "team", map[string]any{"team": pos[0]})
+		if err != nil {
+			return err
+		}
+		return printJSON(out)
 	case "pin", "unpin":
 		if len(pos) != 1 {
 			return fmt.Errorf("%s", teamUsage)

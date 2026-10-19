@@ -363,7 +363,16 @@ func SetBotGrants(src []byte, name string, grants map[string]string) ([]byte, er
 // SetBotAvatar sets a bot's `avatar:` (nil removes it), leaving the rest of
 // the file as it is.
 func SetBotAvatar(src []byte, name string, a *BotAvatar) ([]byte, error) {
-	return editBotEntry(src, name, func(v *yaml.Node) {
+	return editEntry(src, "bots", name, setAvatarNode(a))
+}
+
+// SetTeamAvatar sets a team's `avatar:` (nil removes it).
+func SetTeamAvatar(src []byte, name string, a *BotAvatar) ([]byte, error) {
+	return editEntry(src, "teams", name, setAvatarNode(a))
+}
+
+func setAvatarNode(a *BotAvatar) func(v *yaml.Node) {
+	return func(v *yaml.Node) {
 		at := -1
 		for j := 0; j+1 < len(v.Content); j += 2 {
 			if v.Content[j].Value == "avatar" {
@@ -387,7 +396,7 @@ func SetBotAvatar(src []byte, name string, a *BotAvatar) ([]byte, error) {
 			return
 		}
 		v.Content = append(v.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "avatar"}, m)
-	})
+	}
 }
 
 func mapKey(v *yaml.Node, key string) *yaml.Node {
@@ -402,12 +411,18 @@ func mapKey(v *yaml.Node, key string) *yaml.Node {
 // editBotEntry re-renders one bot's entry in bots: after edit, leaving the
 // rest of the file as it is.
 func editBotEntry(src []byte, name string, edit func(v *yaml.Node)) ([]byte, error) {
-	sec, _, err := findTop(src, "bots")
+	return editEntry(src, "bots", name, edit)
+}
+
+// editEntry re-renders one entry of a top-level section (bots:, teams:)
+// after edit, leaving the rest of the file as it is.
+func editEntry(src []byte, section, name string, edit func(v *yaml.Node)) ([]byte, error) {
+	sec, _, err := findTop(src, section)
 	if err != nil {
 		return nil, err
 	}
 	if !sec.found || sec.val.Kind != yaml.MappingNode || sec.val.Style == yaml.FlowStyle {
-		return nil, fmt.Errorf("no bots: block (in block style) to change")
+		return nil, fmt.Errorf("no %s: block (in block style) to change", section)
 	}
 	lines := strings.Split(string(src), "\n")
 	for i := 0; i+1 < len(sec.val.Content); i += 2 {
@@ -419,7 +434,7 @@ func editBotEntry(src []byte, name string, edit func(v *yaml.Node)) ([]byte, err
 			v.Kind, v.Tag, v.Value = yaml.MappingNode, "", ""
 		}
 		if v.Kind != yaml.MappingNode {
-			return nil, fmt.Errorf("bots.%s is not a block to change", name)
+			return nil, fmt.Errorf("%s.%s is not a block to change", section, name)
 		}
 		next := sec.end + 1
 		if i+2 < len(sec.val.Content) {
@@ -439,5 +454,5 @@ func editBotEntry(src []byte, name string, edit func(v *yaml.Node)) ([]byte, err
 		out = append(out, lines[end:]...)
 		return []byte(strings.Join(out, "\n")), nil
 	}
-	return nil, fmt.Errorf("no bot %q in bots:", name)
+	return nil, fmt.Errorf("no %s %q in %s:", strings.TrimSuffix(section, "s"), name, section)
 }

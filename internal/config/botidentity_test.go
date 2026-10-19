@@ -338,3 +338,62 @@ func TestTemplateAvatarImage(t *testing.T) {
 		t.Fatalf("out of the pack: %v", err)
 	}
 }
+
+// A TEAM'S AVATAR: { icon, color } or { image } (with an icon and color as
+// its fallback face) — never a preset, the bots' mascots; an icon needs its
+// own color (a team has none to lend). Checked like a bot's, naming the team.
+func TestTeamAvatar(t *testing.T) {
+	load := func(t *testing.T, avatar string, files map[string][]byte) (*Config, error) {
+		dir := t.TempDir()
+		SetStateDir(filepath.Join(dir, "state"))
+		t.Cleanup(func() { SetStateDir("") })
+		for name, b := range files {
+			_ = os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755)
+			_ = os.WriteFile(filepath.Join(dir, name), b, 0o644)
+		}
+		p := filepath.Join(dir, "config.yaml")
+		_ = os.WriteFile(p, []byte(botsBase+"teams:\n  platform:\n    routing: { fallback: sre }\n    avatar: "+avatar+"\nbots:\n  sre: { team: platform }\n"), 0o600)
+		return Load(p)
+	}
+	img := testPNG(t)
+	for avatar, want := range map[string]string{
+		"{ icon: radar, color: teal }":                           "",
+		"{ image: avatars/team.png }":                            "",
+		"{ image: avatars/team.png, icon: shield, color: plum }": "",
+		"{ preset: owl }":                                        "avatar.preset: presets (mascots) are for bots — a team's avatar is { icon: <name>, color: <name> } or { image: <file> }",
+		"{ preset: owl, color: teal }":                           "presets (mascots) are for bots",
+		"{ image: avatars/team.png, preset: owl }":               "presets (mascots) are for bots",
+		"{ icon: radar }":                                        "avatar: an icon needs a color (avatar.color)",
+		"{ color: teal }":                                        "avatar: set icon: <name> with color: <name>, or image: <file>",
+		"{ icon: radar, color: red }":                            `avatar.color: "red" is a status color`,
+		"{ icon: dragon, color: teal }":                          `avatar.icon: unknown icon "dragon"`,
+		"{ image: avatars/team.svg }":                            "not SVG",
+		"{ image: avatars/missing.png }":                         "avatar.image: open",
+		"{ image: avatars/poly.png }":                            "bytes after the image's end",
+	} {
+		c, err := load(t, avatar, map[string][]byte{"avatars/team.png": img, "avatars/poly.png": append(append([]byte{}, img...), "<html>"...)})
+		switch {
+		case want == "" && err != nil:
+			t.Errorf("%s: %v", avatar, err)
+		case want != "" && (err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "teams.platform")):
+			t.Errorf("%s: got %v, want %q", avatar, err, want)
+		case want == "" && strings.Contains(avatar, "image") && !strings.HasSuffix(c.Teams["platform"].Avatar.ImagePath, filepath.Join("avatars", "team.png")):
+			t.Errorf("%s: the picture was not resolved: %+v", avatar, c.Teams["platform"].Avatar)
+		}
+	}
+	// Bots keep their presets.
+	if err := validateAvatar(&BotAvatar{Preset: "owl"}, "", true); err != nil {
+		t.Fatalf("a bot's preset: %v", err)
+	}
+	v := TeamAvatarView("platform-ops", nil)
+	if v["initials"] != "PO" || v["name"] != "platform-ops" || v["avatar"] != nil || len(v) != 2 {
+		t.Fatalf("no avatar: initials: %v", v)
+	}
+	v = TeamAvatarView("platform", &BotAvatar{Image: "avatars/team.png"})
+	if v["picture"] != "/v1/teams/platform/avatar" || v["avatar"] == nil {
+		t.Fatalf("a picture: %v", v)
+	}
+	if v := TeamAvatarView("platform", &BotAvatar{Icon: "radar", Color: "teal"}); v["picture"] != nil || v["avatar"] != (BotAvatar{Icon: "radar", Color: "teal"}) {
+		t.Fatalf("an icon: %v", v)
+	}
+}
