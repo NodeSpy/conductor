@@ -1,6 +1,6 @@
 // r5 blocker 4: p12's tiles said 0 Adds while the plan ('Plan: 1 to add, 2 to change, 0 to destroy') and the seal
 // (+1 ~2 −0) said one. The tiles now say what the plan's own summary says; the add that is the replacement says so.
-const { test, expect, go } = require('./fixtures');
+const { test, expect, go, applyStaged } = require('./fixtures');
 
 test('p12: the tiles agree with the plan summary and the seal; the replacement is named as one of the adds', async ({ page }) => {
   await go(page, '#/bots/platform-sre/proposals/p12', { fresh: true });
@@ -89,4 +89,39 @@ test('denying p4 with a reason: the page says Ledger was told why, and nothing r
   const top = page.locator('.dl-proposal > .prop-decided');
   await expect(top).toContainText(/Denied by you/);
   await expect(top).toContainText('Ledger was told why: “Post it to #finance instead”. Nothing runs.');
+});
+
+// r5 blocker 8: a staged change is not in force. The reviewer's repro: Atlas → What it can do → ⋯ on Post a message →
+// Ask me first. It stays under Does on its own, marked "→ Asks you first · not applied yet", with Review and apply at the
+// top; the Bots list keeps the face in force after a mascot change until it's applied.
+test('a narrowed permission stays where it is, marked not applied yet, until you apply it', async ({ page }) => {
+  await go(page, '#/bots/platform-sre/access', { fresh: true });
+  const own = page.locator('.cang[data-s="ok"]'), asks = page.locator('.cang[data-s="ember"]');
+  const v = await own.locator('.can-item').first().locator('.can-id').textContent();
+  await own.locator('.can-item').first().locator('[data-act="can-more"]').click();
+  await page.locator('#pop-menu [data-act]').filter({ hasText: /Ask me first|Ask first/ }).first().click();
+  const moved = own.locator('.can-item', { has: page.locator('.can-id', { hasText: v }) });
+  await expect(moved).toContainText('→ Asks you first · not applied yet');
+  await expect(asks.locator('.can-id', { hasText: v })).toHaveCount(0);
+  const bar = page.locator('.can-pending-bar');
+  await expect(bar).toContainText('isn’t applied yet');
+  expect(await bar.evaluate((e) => e.getBoundingClientRect().top < innerHeight)).toBe(true);
+  await bar.locator('a', { hasText: 'Review and apply' }).click();
+  await applyStaged(page);
+  await go(page, '#/bots/platform-sre/access');
+  await expect(page.locator('.cang[data-s="ember"] .can-id', { hasText: v })).toHaveCount(1);
+  await expect(page.locator('.can-pend')).toHaveCount(0);
+});
+
+test('a new face is not shown as in force on Bots until it is applied', async ({ page }) => {
+  await go(page, '#/bots', { fresh: true });
+  const roseBefore = await page.locator('#main .bav[data-bc="rose"]').count(), tealBefore = await page.locator('#main .bav[data-bc="teal"]').count();
+  await go(page, '#/bots/platform-sre/settings');
+  await page.locator('[data-act="bot-mascot"]').click();
+  await page.locator('[data-act="mk-color"][data-v="rose"]').click();
+  await page.locator('[data-act="mk-use"]').click();
+  await go(page, '#/bots');
+  expect(await page.evaluate(() => UI.ident('platform-sre').color)).toBe('teal');
+  await expect(page.locator('#main .bav[data-bc="rose"]')).toHaveCount(roseBefore);
+  await expect(page.locator('#main .bav[data-bc="teal"]')).toHaveCount(tealBefore);
 });

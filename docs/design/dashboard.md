@@ -294,6 +294,11 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
   Apply for a widening change, sign in, enrol, the signing sheet's own button) and on the passkeys themselves.
   Opening, reviewing and navigating never carry it; "your passkey signs this" is said in the signing sheet, at the
   point of signing (`passkey.spec.js`).
+- **A staged change is not in force, and nothing says it is.** Until you apply it, every place shows what's in force:
+  on What it can do a move stays in its group marked "→ Asks you first · not applied yet" (a new item: "New · not
+  applied yet"; a removal: struck through), with "Your change isn't applied yet" and Review and apply at the top; a new
+  face shows only in the picture field ("Not applied yet") and on the team's header as a pending note, while Bots, Chat
+  and every row keep the face in force until it's applied.
 - **After you decide, the page says so first.** An approval you approved or denied opens on its decision, in place of
   its Needs you kicker and edge: Approved (or Denied) by you, with which passkey, and when; then what happens next
   (conductor checks the plan is unchanged, applies it and posts the result on the ticket; or, denied: the bot was told,

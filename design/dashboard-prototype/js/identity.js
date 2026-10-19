@@ -8,7 +8,9 @@
   const esc = UI.esc, icon = UI.icon;
   // a bot's identity: its runtime name and tagline, and its picture from config (avatar: {shape, eyes, color}) when set,
   // staged changes included, so a picture you just picked shows everywhere at once
-  UI.ident = (b) => { const base = (window.D.identity || {})[b] || null, bot = window.S && S.view && (S.view().bots || []).find((x) => x.name === b), av = bot && bot.cfg && bot.cfg.avatar;
+  // what's in force (r5 blocker 8): the applied config; { staged: true } for the picture field, which shows your pick
+  // marked not applied yet
+  UI.ident = (b, o = {}) => { const base = (window.D.identity || {})[b] || null, bot = (o.staged && window.S && S.view ? S.view().bots : window.D.bots || []).find((x) => x.name === b), av = bot && bot.cfg && bot.cfg.avatar;
     return av && (av.shape || av.image) ? Object.assign({}, base || {}, av.image ? { image: UI.avatarSrc(av.image), shape: null } : av) : base; };
   /* An uploaded picture is a file beside the config (avatar: { image: avatars/<name>.png }: conductor reads a PNG, JPEG
      or WebP from there, never an inline image). The prototype keeps the file's bytes in D.avatarFiles by its path. */
@@ -94,7 +96,7 @@
     const prevA = tp.mode === 'upload' ? (crop.src ? { image: crop.out || crop.src } : {}) : tp.mode === 'icon' ? { icon: a.icon || TEAM_ICONS[0], color: a.color || 'teal' } : {};
     return `<div class="mk-pick"><div class="mk-prev" id="cr-prev">${tpv(t, prevA, 'xl')}<div class="mk-sizes">${tpv(t, prevA, 'lg')}${tpv(t, prevA, 'md')}${tpv(t, prevA, 'sm')}</div><p class="dl-sub">team ${esc(t)}, as it will show</p></div><div class="mk-steps">${body}</div></div>`; };
   const redrawTeam = () => { const b = document.getElementById('mk-body'); if (b) b.innerHTML = teamHTML(); if (tp.mode === 'upload') requestAnimationFrame(previewCrop); };
-  UI.teamPicker = (t, onPick) => { const cur = UI.teamIdent(t); tp = { t, onPick, mode: cur.image ? 'upload' : cur.icon ? 'icon' : 'initials', a: { icon: cur.icon || TEAM_ICONS[0], color: cur.color || 'teal' } };
+  UI.teamPicker = (t, onPick) => { const cur = UI.teamIdent(t, { staged: true }); tp = { t, onPick, mode: cur.image ? 'upload' : cur.icon ? 'icon' : 'initials', a: { icon: cur.icon || TEAM_ICONS[0], color: cur.color || 'teal' } };
     crop = { src: cur.image || '', err: '', w: 256, h: 256, zoom: 1, ox: 0, oy: 0, scale: FR / 256, W: FR, H: FR, out: cur.image || '' }; cropDone = redrawTeam;
     const seg = [['initials', 'Initials'], ['icon', 'Icon and colour'], ['upload', 'Upload a picture']].map(([v, l]) => `<button type="button" class="${tp.mode === v ? 'on' : ''}" data-act="tp-mode" data-v="${v}" aria-pressed="${tp.mode === v}">${l}</button>`).join('');
     UI.modal(`<div class="modal-head"><div><div class="caps">Picture</div><h2>Team ${esc(t)}'s picture</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
@@ -115,7 +117,7 @@
   UI.botWho = (b) => { const n = UI.botName(b); return `<b class="bav-name">${esc(n)}</b>${n !== b ? ` <span class="bav-id">${esc(b)}</span>` : ''}`; };
   /** A team's picture: its own icon in its colour, its uploaded image, or its initials on a tile (never a bot's face).
    *  From config (teams.<t>.avatar), staged changes included, else the demo's identity. */
-  UI.teamIdent = (t) => { const tm = window.S && S.view && (S.view().teams || []).find((x) => x.name === t), av = tm && tm.cfg && tm.cfg.avatar;
+  UI.teamIdent = (t, o = {}) => { const tm = ((o.staged && window.S && S.view ? S.view().teams : window.D.teams) || []).find((x) => x.name === t), av = tm && tm.cfg && tm.cfg.avatar;
     if (tm && tm.cfg) return av ? Object.assign({}, av, av.image ? { image: UI.avatarSrc(av.image) } : {}) : {}; return (window.D.teamIdentity || {})[t] || {}; };
   UI.teamAv = (t, size = 'sm') => UI.teamAvOf(t, UI.teamIdent(t), size);
   UI.teamAvOf = (t, id, size = 'sm') => { id = id || {};

@@ -1,7 +1,7 @@
 // Chat as a main destination (items 20, 25: direction 1, accent A): bots as people and teams as group chats, in the
 // nav on desktop and phone; a team's lead answers, or everyone, or the bot you @mention; every reply says who; the
 // bot's identity (its face in its colour, its name) on its messages.
-const { test, expect, go } = require('./fixtures');
+const { test, expect, go, applyStaged } = require('./fixtures');
 const isPhone = (page) => page.viewportSize().width <= 720;
 
 test('Chat is in the nav; bots are people and teams are groups', async ({ page }) => {
@@ -175,6 +175,12 @@ test('bots are the brand\'s mascots: shape, eyes and colour, a distinct combinat
   await expect(page.locator('.mk-prev .dl-sub')).toHaveText('Capsule · happy arcs · lime');
   await page.locator('[data-act="mk-use"]').click();
   expect(await page.evaluate(() => JSON.stringify(D.pending.at(-1).after.avatar))).toBe('{"shape":"capsule","eyes":"happy","color":"lime"}');
+  // staged, not in force: the field shows the pick, marked not applied yet; the header keeps the face in force (r5-8)
+  await expect(page.locator('.mk-field .bav.mascot[data-bc="lime"]').first()).toBeVisible();
+  await expect(page.locator('.mk-pend')).toContainText('Not applied yet');
+  await expect(page.locator('.dl-bothead .bav.mascot[data-bc="lime"]')).toHaveCount(0);
+  await page.goto(page.url().replace(/#.*/, '#/config/apply')); await applyStaged(page);
+  await go(page, '#/bots/platform-sre/settings');
   await expect(page.locator('.dl-bothead .bav.mascot[data-bc="lime"]').first()).toBeVisible();
 });
 
@@ -192,12 +198,12 @@ test('upload your own picture: PNG, JPEG or WebP up to 2 MB, cropped square, pre
   await expect(page.locator('#cr-prev .bav.img img')).toHaveCount(4); // the preview at page, header, list and row sizes
   await page.locator('#cr-z').fill('1.6');
   await page.locator('[data-act="mk-use"]').click();
-  await expect(page.locator('.dl-bothead .bav.img img').first()).toHaveAttribute('src', /^data:image\/(webp|png)/);
+  await expect(page.locator('.mk-field .bav.img img').first()).toHaveAttribute('src', /^data:image\/(webp|png)/);
   expect(await page.evaluate(() => !!D.pending.at(-1).after.avatar.image)).toBe(true);
   // remove it: back to its mascot
   await page.locator('[data-act="bot-mascot"]').click();
   await page.locator('[data-act="mk-remove"]').click();
-  await expect(page.locator('.dl-bothead .bav.mascot').first()).toBeVisible();
+  await expect(page.locator('.mk-field .bav.mascot').first()).toBeVisible();
 });
 
 test('a team\'s picture: its initials, an icon in a colour, or an upload, never a mascot; it shows wherever the team does', async ({ page }) => {
@@ -208,6 +214,9 @@ test('a team\'s picture: its initials, an icon in a colour, or an upload, never 
   await page.locator('[data-act="tp-mode"][data-v="icon"]').click();
   await page.locator('[data-act="tp-icon"][data-v="radar"]').click(); await page.locator('[data-act="tp-color"][data-v="lagoon"]').click();
   await page.locator('[data-act="tp-use"]').click();
+  await expect(page.locator('.dl-bothead .mk-pend')).toContainText('not applied yet'); // staged: shown as pending (r5-8)
+  await page.goto(page.url().replace(/#.*/, '#/config/apply')); await applyStaged(page);
+  await go(page, '#/teams/platform');
   await expect(page.locator('.dl-bothead .tav[data-bc="lagoon"] svg')).toBeVisible();
   await go(page, '#/chat');
   await expect(page.locator('.cv-li[data-key="team:platform"] .tav[data-bc="lagoon"]')).toBeVisible();

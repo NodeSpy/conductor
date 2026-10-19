@@ -957,3 +957,9 @@ html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radiu
 .prop-decided { display: grid; gap: 4px; padding: 12px 16px; margin: -4px 0 14px; border-radius: var(--radius-md); background: var(--color-bg-sunken); border-left: 3px solid var(--s-solid, var(--color-border-strong)); }
 .prop-decided-h { margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--color-text-primary); } .prop-decided-n { margin: 0; color: var(--color-text-secondary); font: var(--type-body-s); }
 .dl-proposal.decided { box-shadow: var(--shadow-2); } /* decided: no needs-you edge (r5-6) */
+/* a staged change in place, not applied yet (r5 blocker 8) */
+.can-pend { display: flex; align-items: center; gap: 6px; margin-top: 2px; font: var(--type-caption); color: var(--color-status-info-fg); }
+.can-item.removed > div > span:first-child { text-decoration: line-through; color: var(--color-text-tertiary); }
+.dl-card p.can-pending-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; padding: 10px 14px; border-radius: var(--radius-md); background: var(--color-bg-sunken); }
+.dl-card p.can-pending-bar > span:not(.st) { flex: 1 1 240px; }
+.mk-pend { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 0; font: var(--type-caption); color: var(--color-text-secondary); }

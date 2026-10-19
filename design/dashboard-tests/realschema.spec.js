@@ -55,7 +55,7 @@ test('a new mascot and an uploaded picture pass the checks; the upload is a file
   await page.setInputFiles('#cr-file', { name: 'me.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });
   await page.locator('[data-act="mk-use"]').click();
   expect(await page.evaluate(() => D.pending.at(-1).after.avatar.image)).toMatch(/^avatars\/platform-sre\.(png|webp|jpg)$/);
-  await expect(page.locator('.dl-bothead .bav.img img').first()).toHaveAttribute('src', /^data:image\//);
+  await expect(page.locator('.mk-field .bav.img img').first()).toHaveAttribute('src', /^data:image\//);
   v = await page.evaluate(() => S.validate()); expect(v.errors).toEqual([]);
   await page.goto(page.url().replace(/#.*/, '#/config/apply'));
   await applyStaged(page);
