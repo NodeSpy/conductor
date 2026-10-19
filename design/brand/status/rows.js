@@ -22,7 +22,7 @@ export const KINDS = {
   deploy:     { icon: 'rocket', word: 'Deploy', means: 'A release rolling out to an environment.' },
   infra:      { icon: 'layers', word: 'Terraform', means: 'An infrastructure plan or apply.' },
   spend:      { icon: 'receipt', word: 'Cloud spend', means: 'A bill or a purchase: savings plans, reserved instances, budgets.' },
-  connector:  { icon: 'plug', word: 'Connector', means: 'A connection to an outside service (GitHub, Slack, AWS…).' },
+  connector:  { icon: 'plug', word: 'Connection', means: 'A configured instance of an outside service (your GitHub, Slack, AWS…).' },
   credential: { icon: 'key-round', word: 'Login', means: 'A login, credential or secret.' },
   knowledge:  { icon: 'book-open', word: 'Knowledge', means: 'Memory, notes and runbooks a bot keeps.' },
   config:     { icon: 'settings-2', word: 'Config change', means: 'A change to conductor’s own configuration.' },

@@ -53,7 +53,7 @@ const spark = (vals, w = 96, h = 26, cls = '') => {
 // ---------- shell ----------
 const NAV = [['layout-grid', 'Overview', 'overview'], ['bell', 'Needs you', 'needs', quietDay ? 0 : current || scan ? 6 : 5], ['activity', 'Activity', 'activity'], ['workflow', 'Workflows', 'builder'], ['bot', 'Bots', 'approval'], ['globe', 'Browsers', 'browsers', '']];
 // One System area: configuration, credentials, extensions, updates, the audit log and access.
-const NAV2 = [['settings-2', 'Config'], ['key-round', 'Secrets'], ['package', 'Packs'], ['plug', 'Connections'], ['refresh-cw', 'Updates', 1], ['scroll-text', 'Logs & audit'], ['shield-check', 'Access']];
+const NAV2 = [['settings-2', 'Config'], ['key-round', 'Secrets'], ['package', 'Packs'], ['plug', 'Plugins'], ['refresh-cw', 'Updates', 1], ['scroll-text', 'Logs & audit'], ['shield-check', 'Access']];
 const activeOf = { overview: 'overview', run: 'activity', history: 'activity', approval: 'approval', builder: 'builder', activity: 'activity', bot: 'approval', perms: 'approval', picker: 'builder' };
 function shell(body, title) {
   const act = activeOf[s];

@@ -16,6 +16,7 @@ This is the single source of truth for how conductor looks, reads and behaves on
 ## Changelog
 
 - **2026-10-18. Bot identity.** Twelve bot faces (`bot-identity/faces/`, ids for `avatar.preset`), seven identity colours that keep clear of every status hue (`--color-bot-*`), where the colour may and may not go, the icon-and-colour option, the initials fallback and voice presets. A new book chapter shows the set in both themes, at both sizes, and the full face × colour grid (every face in every colour, at 48px and 24px).
+- **2026-10-18. Plugins and connections.** The dashboard area is **Plugins** (tabs: Connections · Agent runtimes · Code languages · Machines), in System where Connections was. A configured instance of a service is a **connection**; “connector” is retired from copy. This reverses the earlier advice to avoid the word “plugin” in primary copy.
 - **2026-10-18. One count badge.** Something new or waiting for you (the Needs you nav count, Chat unread in the rail and phone tab bar, the Chat conversation list, an Approvals tab with something pending) is the one orange badge (`--count-badge-*`: accent background, on-accent text). A total is plain text in the count style (“Tickets 4”). No screen draws its own pill. This replaces “a count is an ember numeral”. The mocks follow it.
 - **2026-10-18. Bot faces in Chat.** 40px in the conversation list, 36px on messages, 44px in the chat header; a team shows its lead’s face with “+N”.
 - **2026-10-18. A softer chart green with a full-green cap.** The passed bar’s fill was too heavy. `status.success.chart` is now green-500 mixed 42% with the surface in light (#a5dbb8) and 40% in dark (#275936), and every passed bar has a 2px cap on top in `status.success.solid` (`run-strip.cap`). The cap is the bar’s edge and meets 3:1 (3.7:1 or more in light, 5.0:1 or more in dark), so the fill may sit under 3:1. The legend swatch shows the cap too. This replaces the heavier fill and the “keep the chart on a card” caveat below.
@@ -91,7 +92,7 @@ What (object icon and word) · title and one line of why · where (bot, target, 
 
 - **Now:** Overview · Needs you · Activity (the run history lives here).
 - **Work:** Workflows · Bots (grouped by team; there are no “members” and no folders) · Browsers.
-- **System:** Config · Secrets · Packs · Connections · Updates · Logs & audit · Access.
+- **System:** Config · Secrets · Packs · Plugins · Updates · Logs & audit · Access. **Plugins** has four tabs: Connections · Agent runtimes · Code languages · Machines.
 - On a phone: Overview · Needs you · Activity · Bots · More.
 
 ---
@@ -269,7 +270,7 @@ Use `font: var(--type-h1); letter-spacing: var(--type-h1-tracking); font-variati
 ## Iconography
 
 - **Set:** [Lucide](https://lucide.dev) (ISC licence). The subset in use is vendored in `icons/lucide/` with its licence.
-- **One icon per kind of thing** (`status/rows.js`): approval `stamp` · run `circle-play` · bot `bot` · team `users` · workflow `workflow` · pull request `git-pull-request` · incident `siren` · deploy `rocket` · Terraform `layers` · cloud spend `receipt` · connector `plug` · login `key-round` · knowledge `book-open` · config change `settings-2`. A run’s state is its status mark beside it, never a different icon.
+- **One icon per kind of thing** (`status/rows.js`): approval `stamp` · run `circle-play` · bot `bot` · team `users` · workflow `workflow` · pull request `git-pull-request` · incident `siren` · deploy `rocket` · Terraform `layers` · cloud spend `receipt` · connection `plug` · login `key-round` · knowledge `book-open` · config change `settings-2`. A run’s state is its status mark beside it, never a different icon.
 - **One icon per kind of action:** reads `eye` · writes / updates `pencil-line` · comments / posts `message-square` · pushes code `git-commit-horizontal` · applies infra `hammer` · spends money `banknote` · deletes / destroys `trash-2` · changes permissions `lock-open`.
 - **Rules:** one meaning per icon, used for nothing else; always next to its word; never decorative; legible at 16px (`tools/icon-check.mjs` measures every glyph’s real 16px pixels).
 - **Environment tags:** Production (solid square, strong outline, bold) · Staging (outlined square with a centre) · Local (dashed circle). Told apart by fill and shape, never by colour alone.
@@ -295,7 +296,7 @@ The book shows each component's states (default, hover, focus, active, disabled,
 - **Buttons:** primary (one per view, for what the person came to do), secondary, ghost and danger (destructive only, always confirmed); sizes sm / md / lg; loading keeps the label and adds the running glyph. Labels are verbs.
 - **Fields:** label above, helper text below that turns into the error message. Errors show on blur or submit, never on an untouched form (the newcomer saw new workflows open “already red with errors”). Edges use `border.control`.
 - **Value source:** the source is a quiet menu inside the field. Secret is the default; Vault item and Environment variable are listed; typed value and setting sit under “Other sources”. This replaces the five-way segmented control on every field.
-- **Choice cards:** for decisions that need a sentence each (permission presets, connector methods). Five at most.
+- **Choice cards:** for decisions that need a sentence each (permission presets, connection methods). Five at most.
 - **Tabs** switch views of one thing, and **segmented controls** switch a setting. Neither navigates.
 - **Tables and dense lists:** the fixed row anatomy; grouped needs attention → running now → finished, with finished rows listed and paged. Text left, numbers right in tabular figures, status as mark + word, ids in mono at the end, focusable rows (j/k, x, Enter), and selection as the accent wash plus a 3px bar. No step traces in rows.
 - **Status labels, filters, counts and tags:** a status label is a mark and a word; a filter is a rectangle that toggles; a tag is a small outlined label. Counts: the one orange count badge for something new or waiting for you, and plain text for a total (see the status vocabulary).
@@ -319,7 +320,7 @@ conductor talks to someone who is nervous about giving an AI access to productio
 7. **Humans read times:** “Mondays at 06:00”, “52 minutes ago”, with the exact value on hover.
 8. **Calm, not cute:** no exclamation marks, “oops”, “please” or “I'm thinking”. Only bots speak in the first person, and only in chat.
 
-**Names:** bot · team · workflow · trigger · step · run · approval · case · pack · plugin · connector · host · login · secret, each defined once in the book’s table and used the same way in the UI, docs, CLI and README. Bots are grouped by team (never “members”; there are no folders); **Activity** holds the run history; **System** is the area for Config, Secrets, Packs, Connections, Updates, Logs & audit and Access.
+**Names:** bot · team · workflow · trigger · step · run · approval · case · pack · plugin · connection · host · login · secret, each defined once in the book’s table and used the same way in the UI, docs, CLI and README. Bots are grouped by team (never “members”; there are no folders); **Activity** holds the run history; **System** is the area for Config, Secrets, Packs, Plugins, Updates, Logs & audit and Access. **Plugins** is the area (and the word in primary copy) for what extends conductor, with tabs Connections · Agent runtimes · Code languages · Machines; a configured instance of a service (your Slack workspace, your GitHub org) is a **connection**, never a “connector” or “integration”.
 
 **Fixed risk vocabulary:** “Does on its own” · “Asks you first” · “Never”, with the tier name second.
 
