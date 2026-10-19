@@ -52,7 +52,7 @@
     const g = grants(), c = {};
     if (bw.description) c.description = bw.description;
     if (bw.team) c.team = bw.team;
-    if (bw.avatar) c.avatar = Object.assign({}, bw.avatar); // its mascot (66)
+    if (bw.avatar) c.avatar = UI.avatarFile(Object.assign({}, bw.avatar), bw.name || 'new-bot'); // its mascot (66), or its picture as a file beside the config
     c.escalation = bw.tell === 'slack' && bw.slack ? `Tell the operator in ${bw.channel} (${bw.slack}.post). Anything urgent also goes to Needs you.` : 'Tell the operator in the dashboard: its chat and Needs you.';
     if (bw.operators.length) c.operators = bw.operators.slice();
     c.worker = { runtime: bw.runtime };

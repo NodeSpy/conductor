@@ -36,7 +36,7 @@
       if (saved.chatsVer !== window.D.chatsVer) { delete saved.chats; delete saved.chat; delete saved.chatsVer; delete saved.teamChats; delete saved.chatUnread; }
       if (saved.ticketsVer !== window.D.ticketsVer) { delete saved.cases; delete saved.ticketsVer; }
       if (saved.auditVer !== window.D.auditVer) { delete saved.audit; delete saved.auditVer; }
-      if (saved.identityVer !== window.D.identityVer) { delete saved.identity; delete saved.identityVer; }
+      if (saved.identityVer !== window.D.identityVer) { delete saved.identity; delete saved.identityVer; delete saved.teams; delete saved.teamIdentity; }
       if (saved.connVer !== window.D.connVer) { delete saved.connectors; delete saved.plugins; delete saved.pluginReleases; delete saved.connVer; }
       // the wallet's fixtures (js/walletdata.js) arrived after some demos were saved: take them, and the proposal and ticket they add
       if (saved.walletVer !== window.D.walletVer) { ['wallet', 'payments', 'purchases', 'proposals', 'cases', 'bots', 'teams', 'charters', 'walletVer', 'ticketsVer'].forEach((k) => delete saved[k]); }
@@ -140,6 +140,37 @@
      (conductor's CollectionSpec: dir, fields {type, required, values}, template, free_paths, writers, from) */
   S.RESERVED_DIRS = ['knowledge', 'runbooks', 'watch', 'log', 'handoff', 'episodes'];
   S.FIELD_TYPES = ['string', 'text', 'list', 'steps', 'enum', 'number', 'bool'];
+  /* A bot's or a team's identity as conductor's loader checks it (botidentity.go validateAvatar and the caps): errors
+     for what it refuses; warnings for a name from the brand's designed set that conductor's placeholder lists don't
+     have yet (realschema.js RS.lists), so the review says so instead of pretending either way. */
+  S.identityIssues = (P, n, team) => { const e = [], w = []; if (!window.RS || !RS.avatar) return { e, w }; const L = RS.lists, a = n.avatar;
+    if (a != null) {
+      if (typeof a !== 'object') e.push(`${P}.avatar: a map (shape, eyes, color · icon, color · image)`);
+      else {
+        const unknown = Object.keys(a).filter((x) => !RS.avatar.has(x)); unknown.forEach((x) => e.push(`${P}.avatar.${x}: not an avatar key (field ${x} not found in type config.BotAvatar)`));
+        if (unknown.length) return { e, w }; // the strict decode stops there
+        const face = !!(a.shape || a.eyes || a.preset);
+        if (face && team) e.push(`${P}.avatar.${a.preset ? 'preset' : a.shape ? 'shape' : 'eyes'}: faces (mascots) are for bots — a team's avatar is { icon: <name>, color: <name> } or { image: <file> }`);
+        else if (a.preset && (a.shape || a.eyes)) e.push(`${P}.avatar.preset is the deprecated spelling of a shape and eyes — set one or the other`);
+        else if (face && a.icon) e.push(`${P}.avatar: a face (shape, eyes) or an icon — not both`);
+        else if (face && !a.shape && !a.preset) e.push(`${P}.avatar.eyes: a face needs a shape (avatar.shape)`);
+        else if (a.icon && !a.color && !(n.color && !team)) e.push(`${P}.avatar: an icon needs a color (avatar.color${team ? '' : ', or the bot\'s color'})`);
+        else if (!face && !a.icon && !a.image) e.push(`${P}.avatar: set ${team ? '' : 'shape: <name> (eyes and color optional), '}icon: <name> with a color, or image: <file>`);
+        else if (a.image && !face && !a.icon && a.color) e.push(`${P}.avatar.color colors a face or an icon; an image has its own`);
+        if (a.image && !/^[^/\\][^\\]*\.(png|jpe?g|webp)$/i.test(String(a.image)) && !/^data:image\/(png|jpeg|webp)/.test(String(a.image))) e.push(`${P}.avatar.image: a PNG, JPEG or WebP file beside the config (a plain relative path)`);
+        if (a.color && L.statusHues.includes(a.color)) e.push(`${P}.avatar.color: ${a.color} is a status hue, never an identity colour`);
+        const off = (k, v, list, what) => { if (v && !list.includes(v)) w.push(`${P}.avatar.${k}: "${v}" is the brand's ${what}; conductor's list (placeholders until the designed set lands) has ${list.join(', ')}`); };
+        off('shape', a.shape, L.shapes, 'mascot shape'); off('eyes', a.eyes, L.eyes, 'eye set'); off('icon', a.icon, L.icons, 'icon'); off('color', a.color, L.colors, 'identity colour');
+      }
+    }
+    if (!team) {
+      const cap = (k, max) => { if (n[k] != null && [...String(n[k])].length > max) e.push(`${P}.${k}: at most ${max} characters`); }; cap('display_name', RS.identityCaps.display_name); cap('tagline', RS.identityCaps.tagline);
+      if (n.color && L.statusHues.includes(n.color)) e.push(`${P}.color: ${n.color} is a status hue, never an identity colour`);
+      if (n.personality != null) { Object.keys(n.personality || {}).forEach((x) => { if (!RS.personality.has(x)) e.push(`${P}.personality.${x}: tone or style`); });
+        if (n.personality.tone && !L.tones.includes(n.personality.tone)) e.push(`${P}.personality.tone: one of ${L.tones.join(', ')}`);
+        if (n.personality.style && new Blob([n.personality.style]).size > RS.identityCaps.style) e.push(`${P}.personality.style: at most ${RS.identityCaps.style} bytes`); }
+    }
+    return { e, w }; };
   S.collErrors = (P, cols, owner) => { const e = [], dirs = {};
     Object.entries(cols || {}).forEach(([name, c]) => { const Q = `${P}.collections.${name}`; c = c || {};
       if (!/^[a-z][a-z0-9_-]{0,39}$/.test(name)) e.push(`${Q}: names are lowercase letters, digits, _ and -, up to 40`);
@@ -214,6 +245,7 @@
       const tiers = S.getPath(n, 'autonomy.tiers') || {}; const seen = {};
       Object.entries(tiers).forEach(([t, vs]) => (vs || []).forEach((v) => { if (seen[v]) e.push(`bots.${k}.autonomy.tiers: ${v} is in both ${seen[v]} and ${t}`); seen[v] = t; }));
       if (window.RS) Object.keys(n).forEach((x) => { if (!RS.bot.has(x)) e.push(`bots.${k}.${x}: not a bot key (field ${x} not found in type config.BotConfig)`); });
+      e.push(...S.identityIssues(`bots.${k}`, n, false).e);
       (S.getPath(n, 'autonomy.promote') || []).forEach((v) => { const tr = S.tierFor({ cfg: n }, v, all).tier; if (!['observe', 'reversible'].includes(tr)) e.push(`bots.${k}.autonomy.promote: ${v} runs at ${tr}; only a reversible-tier verb can be promoted (run without your signature)`); });
       if (n.isolation) { Object.keys(n.isolation).forEach((x) => { if (!['sandbox', 'handoff_workers', 'skip_permission_prompts'].includes(x)) e.push(`bots.${k}.isolation.${x}: not a bot isolation key (sandbox, handoff_workers, skip_permission_prompts)`); }); if (n.isolation.sandbox != null && !['optional', 'required'].includes(n.isolation.sandbox)) e.push(`bots.${k}.isolation.sandbox: optional or required`); }
       if (n.proactive) { if (!n.proactive.every) e.push(`bots.${k}.proactive.every: required (how often it sweeps)`); const ch = n.proactive.checklist || {}; if (!!ch.section === !!ch.file) e.push(`bots.${k}.proactive.checklist: exactly one of section (a charter heading) or file`); }
@@ -222,7 +254,7 @@
       e.push(...S.narrowErrors(k, n, all));
       return e;
     },
-    warn(k, n, all) { const w = []; (n.peers || []).forEach((p) => { const o = byName(all.bots, p); if (o && o.cfg && n.team && o.cfg.team === n.team) { w.push(`bots.${k}.peers: ${p} is in the same team, so they are already peers`); return; } if (o && !((o.cfg && o.cfg.peers) || []).includes(k)) w.push(`bots.${k}.peers: ${p} doesn't list ${k} back, so the link stays closed until it does`); }); if (!S.getPath(n, 'autonomy.shadow') && !all.bots.find((m) => m.name === k)) w.push(`bots.${k}: a new bot normally starts in shadow mode`); return w; },
+    warn(k, n, all) { const w = [...S.identityIssues(`bots.${k}`, n, false).w]; (n.peers || []).forEach((p) => { const o = byName(all.bots, p); if (o && o.cfg && n.team && o.cfg.team === n.team) { w.push(`bots.${k}.peers: ${p} is in the same team, so they are already peers`); return; } if (o && !((o.cfg && o.cfg.peers) || []).includes(k)) w.push(`bots.${k}.peers: ${p} doesn't list ${k} back, so the link stays closed until it does`); }); if (!S.getPath(n, 'autonomy.shadow') && !all.bots.find((m) => m.name === k)) w.push(`bots.${k}: a new bot normally starts in shadow mode`); return w; },
     widens(b, a) {
       const r = [], B = b || {}, A = a || {};
       const bv = new Set(S.getPath(B, 'skill.verbs') || []); (S.getPath(A, 'skill.verbs') || []).forEach((v) => { if (!bv.has(v)) r.push(`adds verb ${v}`); });
@@ -355,6 +387,7 @@
       const e = [];
       if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`team name "${k}": lowercase letters, digits and dashes`);
       if (window.RS) Object.keys(n).forEach((x) => { if (!RS.team.has(x)) e.push(`teams.${k}.${x}: not a team key (field ${x} not found in type config.TeamConfig)`); });
+      e.push(...S.identityIssues(`teams.${k}`, n, true).e);
       const mem = all.bots.filter((m) => m.cfg && m.cfg.team === k).map((m) => m.name);
       e.push(...S.collErrors(`teams.${k}`, n.collections, 'team'));
       const c = S.getPath(n, 'autonomy.ceiling'); if (c != null && !['reversible', 'observe'].includes(c)) e.push(`teams.${k}.autonomy.ceiling: reversible (the most promotion can reach) or observe (no bot promotes anything), not "${c}"`);
@@ -368,7 +401,7 @@
       all.bots.filter((m) => m.cfg && m.cfg.team === k).forEach((m) => e.push(...S.narrowErrors(m.name, m.cfg, all)));
       return e;
     },
-    warn(k, n) { const w = []; if (S.getPath(n, 'knowledge.promotion') === 'direct') w.push(`teams.${k}.knowledge.promotion: direct — a bot's promotion lands as a commit at once when its request's provenance would let a promoted verb run`); return w; },
+    warn(k, n) { const w = [...S.identityIssues(`teams.${k}`, n, true).w]; if (S.getPath(n, 'knowledge.promotion') === 'direct') w.push(`teams.${k}.knowledge.promotion: direct — a bot's promotion lands as a commit at once when its request's provenance would let a promoted verb run`); return w; },
     refs(k, all) { return all.bots.filter((m) => m.cfg && m.cfg.team === k).map((m) => `bots.${m.name}.team`); },
     widens(b, a) { return S.classify('teams', b, a); },
   };

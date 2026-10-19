@@ -846,8 +846,10 @@ on the ticket.
 - **Sizes:** mascots are 40px in the list, 36px on messages and 44px in the header.
 - **A team's picture** is its own, never a bot's mascot: its initials on a tile by default, an icon (from a set that
   leaves out icons that already mean something) in one of the bot colours, or an uploaded picture (the bot upload's
-  rules and crop). The team's ⋯ has Change its picture…; it's `teams.<t>.avatar: {icon, color} | {image} | {initials}`
-  and shows wherever the team does (Chat, Bots, its page, tickets).
+  rules and crop). The team's ⋯ has Change its picture…; it's `teams.<t>.avatar: {icon, color} | {image: <file>}`, and initials
+  are no avatar at all (conductor has no initials key). The icons are conductor's list (radar, shield, wrench, book,
+  bolt, eye, gear, pulse, cloud, database, terminal, chart, bell, key, globe). It shows wherever the team does (Chat,
+  Bots, its page, tickets).
 
 **A bot's identity** (option A):
 
@@ -869,8 +871,13 @@ on the ticket.
   `PUT /api/v1/bots/<bot>/avatar` (multipart; the 256px square) returns `{image}`; config keeps
   `avatar: {image: avatars/<bot>.webp}`.
 - **No picture:** a bot without one shows its initials.
-- **Config shape:** `bots.<m>.avatar: {shape, eyes, color}`, plus `display_name`, `tagline` and `voice` (a builder adds
-  these to conductor).
+- **Config shape** (conductor's `BotConfig` already has it, feat/members `botidentity.go`): `bots.<m>.avatar: {shape,
+  eyes?, color?} | {icon, color} | {image: <png|jpeg|webp file beside the config>}`, plus `color`, `display_name` (40
+  characters), `tagline` (120) and `personality: {tone, style}`; a team has `avatar` too (never a face). An uploaded
+  picture is written as a file (`avatars/<bot>.png`), never inline. The checks refuse what conductor's loader refuses
+  (an unknown key, a face on a team, an icon without a colour, a colour on an image, a status hue). conductor's name
+  lists are placeholders until the designed set lands; the brand's kit names (shapes, eyes, colours) that aren't on
+  them yet are a **warning** on the review that says so, and the lists change with the kit (a one-file change there).
 - **API:** `GET /api/v1/chat` lists conversations with their last message and unread counts.
   `POST /api/v1/teams/<t>/say` `{text, to: "lead"|"all"|<bot>, attachments?}` posts to a team's chat, and
   `GET /api/v1/teams/<t>/transcript` reads it (**NEW**).

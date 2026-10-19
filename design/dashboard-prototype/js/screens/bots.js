@@ -123,7 +123,7 @@
   UI.teamFormWith = (bots) => teamForm(null, bots); // Make a team from the bots you selected
   // the team's own ⋯: on a phone the header keeps one action (New ticket) and the rest are here
   // a team's picture (34): its initials, an icon in a colour, or an upload; staged on the team, shown everywhere at once
-  UI.act('team-pic', (b) => { const t = b.dataset.t; UI.teamPicker(t, (a) => { const c = JSON.parse(JSON.stringify(S.staged('teams', t) || {})); c.avatar = a; UI.staged(S.stage('teams', t, c, `team ${t}'s picture`), { go: false }); UI.rerender({ keepScroll: true }); }); });
+  UI.act('team-pic', (b) => { const t = b.dataset.t; UI.teamPicker(t, (a) => { const c = JSON.parse(JSON.stringify(S.staged('teams', t) || {})); if (a) c.avatar = UI.avatarFile(a, `team-${t}`); else delete c.avatar; UI.staged(S.stage('teams', t, c, `team ${t}'s picture`), { go: false }); UI.rerender({ keepScroll: true }); }); });
   UI.act('team-more', (b) => UI.menu(b, [['Change its picture…', 'image', 'team-pic', `data-t="${b.dataset.t}"`], ['Route an event here…', 'send', 'team-deliver', `data-t="${b.dataset.t}"`], ['Edit team…', 'edit', 'team-edit', `data-t="${b.dataset.t}"`], ['-'], ['Remove this team…', 'trash', 'team-del', `data-t="${b.dataset.t}"`]]));
   UI.act('team-edit', (b) => teamForm(T(b.dataset.t)));
   UI.act('team-del', (b) => {
@@ -699,7 +699,7 @@
   ];
   const dv = { name: null, draft: null, base: null, charter: null };
   // a bot's mascot (66): picked in the shared picker, staged as avatar: {shape, eyes, color} on the bot
-  UI.act('bot-mascot', (b) => { const n = b.dataset.m; UI.mascotPicker(UI.ident(n) && (UI.ident(n).shape || UI.ident(n).image) ? Object.assign({}, (D.identity || {})[n], UI.ident(n)) : { color: UI.botColor(n) }, (av) => { const c = JSON.parse(JSON.stringify(S.staged('bots', n) || {})); c.avatar = av; UI.staged(S.stage('bots', n, c, av.image ? `${n}'s picture: an uploaded image` : `${n}'s mascot: ${av.shape}, ${av.eyes}, ${av.color}`), { go: false }); UI.rerender({ keepScroll: true }); }, `${UI.botName(n)}'s picture`); }); // shown everywhere at once, staged for review
+  UI.act('bot-mascot', (b) => { const n = b.dataset.m; UI.mascotPicker(UI.ident(n) && (UI.ident(n).shape || UI.ident(n).image) ? Object.assign({}, (D.identity || {})[n], UI.ident(n)) : { color: UI.botColor(n) }, (av) => { const c = JSON.parse(JSON.stringify(S.staged('bots', n) || {})); c.avatar = UI.avatarFile(av, n); UI.staged(S.stage('bots', n, c, av.image ? `${n}'s picture: an uploaded image` : `${n}'s mascot: ${av.shape}, ${av.eyes}, ${av.color}`), { go: false }); UI.rerender({ keepScroll: true }); }, `${UI.botName(n)}'s picture`); }); // shown everywhere at once, staged for review
   // a bot template's update happens on the bot's page (38), as a change to the pack it came from
   UI.act('tpl-update', (b) => { const pk = D.packs.find((x) => String((x.cfg || {}).use || '').split('@')[0] === `conductor-packs/${b.dataset.p}`);
     UI.confirm({ title: `Update ${b.dataset.p} to ${b.dataset.v}?`, body: 'Its template, runbooks and knowledge update; your changes to the bot stay. You review the change before it applies.', ok: 'Stage the update' }).then((ok) => { if (!ok || !pk) return; UI.staged(S.stage('packs', pk.name, Object.assign({}, S.staged('packs', pk.name) || pk.cfg, { use: `conductor-packs/${b.dataset.p}@${b.dataset.v}` }), `update ${b.dataset.p} to ${b.dataset.v}`)); }); });

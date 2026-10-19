@@ -185,7 +185,7 @@
     const v = S.validate(), wid = S.widening();
     const dv = UI.diffView(before, after, ap.mode, { sections: true });
     const restoring = P.every((c) => /^restore /.test(c.summary));
-    const blocked = v.errors.length ? `${v.errors.length} error${v.errors.length > 1 ? 's' : ''} block the apply — fix ${v.errors.length > 1 ? 'them' : 'it'} or discard the change` : ap.phase === 'check' ? 'Checks are still running on the copy' : wid.length && !ap.ack ? 'This change widens what agents can do: tick the acknowledgement first' : '';
+    const blocked = v.errors.length ? `${v.errors.length > 1 ? `${v.errors.length} errors block` : '1 error blocks'} the apply — fix ${v.errors.length > 1 ? 'them' : 'it'} or discard the change` : ap.phase === 'check' ? 'Checks are still running on the copy' : wid.length && !ap.ack ? 'This change widens what agents can do: tick the acknowledgement first' : '';
     // computed, never a constant: the config nodes the diff actually touches, and what happened to the comments
     const touched = S.changedPaths(before, after), cm = S.commentDelta(before, after);
     const CHECKS = [
@@ -199,7 +199,7 @@
       ['Widening', wid.length ? `${wid.length} change${wid.length > 1 ? 's' : ''} widen what agents can do: acknowledge them below` : 'your change widens nothing', true, wid.length ? 'wait' : 'ok'],
       ['References resolve', v.errors.some((e) => /vault|no |unreachable|does not exist|names no/.test(e)) ? 'a reference does not resolve (see errors)' : 'every secret, setting, connector and runtime the change references resolves', !v.errors.some((e) => /vault|no |unreachable|does not exist|names no/.test(e))],
     ];
-    const cur = ap.phase === 'check' ? 1 : 2;
+    const cur = ap.phase === 'check' || v.errors.length ? 1 : 2; // a failed check stays on Validate (marked failed), never ticked
     return {
       toString: () => `<div class="page">
         ${UI.head(restoring ? 'Restore a backup' : 'Review and apply', { crumbs: [D.prefs.returnTo ? [D.prefs.returnTo.label, D.prefs.returnTo.href] : ['Config', '#/config'], [restoring ? 'Restore a backup' : 'Review and apply']], sub: `${P.length} staged change${P.length > 1 ? 's' : ''} · +${dv.adds} −${dv.dels}`, actions: `<button class="btn ghost" data-act="discard-all">${icon('trash')}Discard all</button>` })}

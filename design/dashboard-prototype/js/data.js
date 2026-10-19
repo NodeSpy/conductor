@@ -865,7 +865,7 @@ window.D.packMembers = {
   const B = (n) => D.bots.find((b) => b.name === n);
   const plat = T('platform'), fin = T('finance');
   if (plat) plat.cfg = { description: 'Platform services: api, web, infra', operators: ['ops', 'oncall'], autonomy: { ceiling: 'reversible', tiers: { never: ['gh.delete_*'] } }, budget: { proactive: { max_runs_per_day: 10, max_turns_per_day: 120 } }, isolation: { sandbox: 'required' }, browser: { logins: ['console.example.com'], credentials: ['grafana', 'statuspage'] }, knowledge: { repo: 'team-knowledge/platform', promotion: 'proposal' }, routing: { rules: [{ name: 'pd-api', match: { on: 'pd.incident', service: 'api*' }, to: 'platform-sre' }, { name: 'web-issues', match: { on: 'gh.issue_opened', repo: 'acme/web' }, to: 'web-triage' }], lead: 'platform-sre', fallback: 'platform-sre' } };
-  if (fin) fin.cfg = { description: 'Cost, billing and forecasts', operators: ['ops'], autonomy: { ceiling: 'observe' }, budget: { spend_cap: { per_action: 2500, per_period: 6000 } }, isolation: { sandbox: 'required', handoff_workers: false }, routing: { rules: [{ name: 'cost-anomaly', match: { on: 'aws-cost.anomaly' }, to: 'billing-sre' }], fallback: 'billing-sre' } };
+  if (fin) fin.cfg = { description: 'Cost, billing and forecasts', avatar: { icon: 'chart', color: 'olive' }, operators: ['ops'], autonomy: { ceiling: 'observe' }, budget: { spend_cap: { per_action: 2500, per_period: 6000 } }, isolation: { sandbox: 'required', handoff_workers: false }, routing: { rules: [{ name: 'cost-anomaly', match: { on: 'aws-cost.anomaly' }, to: 'billing-sre' }], fallback: 'billing-sre' } };
   const fix = (n, f) => { const b = B(n); if (b && b.cfg) f(b.cfg); };
   D.bots.forEach((b) => { const c = b.cfg || {}; if (c.isolation && c.isolation.mode) c.isolation = c.isolation.mode === 'container' ? { sandbox: 'required' } : {}; if (c.isolation && !Object.keys(c.isolation).length) delete c.isolation; if (c.autonomy && c.autonomy.spend) { c.autonomy.spend_cap = c.autonomy.spend; delete c.autonomy.spend; } if (c.autonomy && Array.isArray(c.autonomy.promote) && !c.autonomy.promote.length) delete c.autonomy.promote; });
   fix('platform-sre', (c) => { c.proactive = { every: '4h', quiet_hours: '22:00-07:00', budget: { max_runs_per_day: 6, max_turns_per_day: 60 }, checklist: { section: 'Proactive checks' }, notify_at: 'high' }; });
@@ -976,7 +976,7 @@ window.D.packMembers = {
 (function () {
   const D = window.D;
   // each bot's mascot (66): a shape, an eye set and a colour from the brand's kit, a distinct combination each
-  D.identityVer = 2;
+  D.identityVer = 3; // 3: a team's picture lives in its config (teams.<t>.avatar), uploads are files beside it
   D.identity = {
     'platform-sre': { name: 'Atlas', shape: 'hex', eyes: 'dots', color: 'teal', tagline: 'Keeps the platform up; first on every page', voice: 'Terse' },
     'billing-sre': { name: 'Ledger', shape: 'shield', eyes: 'sleepy', color: 'olive', tagline: 'Watches spend and the monthly forecast', voice: 'Formal' },
@@ -1004,4 +1004,4 @@ window.D.packMembers = {
 
 /* A team's own picture (item 34): two-letter initials by default; or an icon in a palette colour, or an uploaded
  * image (teams.<t>.avatar: {icon, color} | {image}). Never a bot's face. */
-(function () { window.D.teamIdentity = { finance: { icon: 'dollar', color: 'olive' } }; })();
+(function () { window.D.teamIdentity = {}; })(); // a team's picture is its config's avatar (teams.<t>.avatar)

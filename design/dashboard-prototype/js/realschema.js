@@ -1,8 +1,9 @@
 /* The real config schema, as conductor's loader decodes it (strict: an
  * unknown key is an error). Taken from internal/config on main
  * (connectors.go Step/TriggerSpec/Policy/BudgetPolicy/IsolationConfig,
- * config.go SkillPolicy) and feat/members (bots.go, teams.go) at the time of
- * writing. The prototype's validator uses this so "valid · checked on a copy"
+ * config.go SkillPolicy), feat/members @ 47cb1186 (bots.go, teams.go,
+ * botidentity.go: a bot's identity) and feat/agent-browser @ f129b72b (the
+ * browser, the wallet and purchase limits). Re-sync when those move. The prototype's validator uses this so "valid · checked on a copy"
  * only appears for config the real loader would accept. Keys the dashboard
  * design proposes but conductor doesn't have yet are listed in NEW and are
  * reported as such, never silently accepted. */
@@ -34,10 +35,32 @@
     boolFilterKeys: new Set(['draft', 'author_bot', 'sole_assignee', 'non_author_approval', 'threads_resolved']),
     // proposed with the dashboard (docs/design/dashboard.md), not in conductor yet
     NEW: { trigger: {}, workflow: {}, pack: {} },
-    // bots and teams (feat/members)
-    // purchases: a bot's purchase caps, and a team's budget.purchases (feat/agent-browser: config/bots.go, "Spend limits stack")
-    bot: set('description charter charter_file scope escalation operators memory_repo seed_dir home worker skill autonomy disabled terraform proactive peers team collections isolation browser purchases'),
-    team: set('description collections operators peers delegation autonomy budget isolation credentials browser knowledge routing'),
+    // bots and teams: BotConfig with its inline Identity (avatar, color, display_name, tagline, personality) and
+    // TeamConfig (feat/members botidentity.go, bots.go, teams.go); purchases: a bot's purchase caps and a team's
+    // budget.purchases (feat/agent-browser bots.go, teams.go, "Spend limits stack")
+    bot: set(`description charter charter_file scope escalation operators memory_repo seed_dir home worker skill autonomy
+      disabled terraform proactive peers team folder collections use connectors grant memory attachments isolation browser
+      purchases avatar color display_name tagline personality`),
+    team: set('description folder collections operators peers delegation autonomy budget isolation credentials browser knowledge routing chat avatar'),
+    teamBudget: set('spend_cap proactive purchases'),
+    browserCfg: set('allow chrome evaluate idle_timeout max_browsers max_download_mb max_upload_mb logins credentials container container_engine mailboxes profiles cards payments'),
+    // an avatar (BotAvatar, both bots and teams): a face { shape, eyes?, color? } (bots only), an icon with a colour, or
+    // { image: <png|jpeg|webp file beside the config> }; a deprecated preset reads as a shape and eyes; a team with no
+    // avatar shows its initials (there is no initials key)
+    avatar: set('shape eyes icon color preset image'),
+    personality: set('tone style'),
+    identityCaps: { display_name: 40, tagline: 120, style: 600 },
+    // conductor's name lists today (botidentity.go). Its own comment: "placeholders until the designed set lands — changing
+    // a list is a one-file change". The dashboard draws the brand's designed set (js/mascots.js: 13 shapes, 8 eye sets, the
+    // identity colours in css), so a name off these lists is reported as the brand's, not as an error
+    lists: {
+      shapes: ['circle', 'squircle', 'hexagon', 'shield', 'blob', 'diamond', 'drop', 'star'],
+      eyes: ['round', 'wide', 'sleepy', 'wink', 'visor', 'dots', 'happy', 'focused'],
+      icons: ['radar', 'shield', 'wrench', 'book', 'bolt', 'eye', 'gear', 'pulse', 'cloud', 'database', 'terminal', 'chart', 'bell', 'key', 'globe'],
+      colors: ['indigo', 'violet', 'plum', 'magenta', 'teal', 'ocean', 'slate', 'sand', 'graphite'],
+      statusHues: ['red', 'green', 'amber', 'yellow', 'orange'],
+      tones: ['terse', 'friendly', 'formal', 'warm', 'dry', 'playful'],
+    },
     teamCeilings: ['observe', 'reversible', 'commit_money'], // commit_money: a team's bots may buy unattended (feat/agent-browser)
     tiers: ['observe', 'reversible', 'propose', 'commit_money', 'never'],
   });

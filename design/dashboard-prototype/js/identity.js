@@ -9,7 +9,12 @@
   // a bot's identity: its runtime name and tagline, and its picture from config (avatar: {shape, eyes, color}) when set,
   // staged changes included, so a picture you just picked shows everywhere at once
   UI.ident = (b) => { const base = (window.D.identity || {})[b] || null, bot = window.S && S.view && (S.view().bots || []).find((x) => x.name === b), av = bot && bot.cfg && bot.cfg.avatar;
-    return av && (av.shape || av.image) ? Object.assign({}, base || {}, av.image ? { image: av.image, shape: null } : av) : base; };
+    return av && (av.shape || av.image) ? Object.assign({}, base || {}, av.image ? { image: UI.avatarSrc(av.image), shape: null } : av) : base; };
+  /* An uploaded picture is a file beside the config (avatar: { image: avatars/<name>.png }: conductor reads a PNG, JPEG
+     or WebP from there, never an inline image). The prototype keeps the file's bytes in D.avatarFiles by its path. */
+  UI.avatarSrc = (p) => ((window.D.avatarFiles || {})[p] || p);
+  UI.avatarFile = (a, owner) => { if (!a || !a.image || !/^data:image\//.test(a.image)) return a; const ext = (a.image.match(/^data:image\/(png|jpeg|webp)/) || [, 'png'])[1].replace('jpeg', 'jpg'), path = `avatars/${owner}.${ext}`;
+    (window.D.avatarFiles = window.D.avatarFiles || {})[path] = a.image; return Object.assign({}, a, { image: path }); };
   UI.botName = (b) => (UI.ident(b) || {}).name || b;
   UI.botColor = (b) => (UI.ident(b) || {}).color || 'stone';
   UI.botAttrs = (b) => `data-bc="${UI.botColor(b)}"`;
@@ -78,7 +83,8 @@
     const m = Object.assign({}, pk.m); UI.closeModal(); if (f) f(m); });
   /* A team's picture picker (34): its initials, an icon in one of the bot colours, or an uploaded picture; never a mascot
      (mascots are bots). The icons leave out those that already mean something (nav, objects, status, the passkey). */
-  const TEAM_ICONS = ['dollar', 'rocket', 'book-open', 'cpu', 'layers', 'sun', 'moon', 'hammer', 'code', 'server', 'box'].filter((n) => (window.ICONS || {})[n]);
+  // conductor's avatar icons (RS.lists.icons), each drawn as its av-<name> glyph (kindglyphs.js)
+  const TEAM_ICONS = ((window.RS && RS.lists && RS.lists.icons) || []).filter((n) => (window.ICONS || {})['av-' + n]);
   let tp = null;
   const tpv = (t, a, size) => UI.teamAvOf(t, a, size);
   const teamHTML = () => { const a = tp.a, t = tp.t;
@@ -99,7 +105,7 @@
   UI.act('tp-color', (b) => { tp.a.color = b.dataset.v; redrawTeam(); });
   UI.act('tp-use', () => { const f = tp.onPick; let a;
     if (tp.mode === 'upload') { if (!crop.src) { crop.err = 'Choose a picture first, or pick initials or an icon.'; return redrawTeam(); } a = { image: cropOut(crop) || crop.src }; }
-    else a = tp.mode === 'icon' ? { icon: tp.a.icon, color: tp.a.color } : { initials: true };
+    else a = tp.mode === 'icon' ? { icon: tp.a.icon, color: tp.a.color } : null; // initials: no avatar (conductor has no initials key)
     UI.closeModal(); if (f) f(a); });
   /** A bot's picture field: its mascot now, and Change… (opens the picker). */
   UI.mascotField = (m, act, attrs = '') => `<div class="mk-field">${m.image ? `${pvImg(m.image, 'lg')}<span class="dl-sub">Your picture</span>` : `${pv(m, 'lg')}<span class="dl-sub">${esc(MASCOT.SHAPES.find((x) => x[0] === m.shape)[1])} · ${esc(MASCOT.EYES.find((x) => x[0] === m.eyes)[1].toLowerCase())} · ${esc(m.color)}</span>`}<button type="button" class="btn sm secondary" data-act="${act}" ${attrs}>Change…</button></div>`;
@@ -109,10 +115,11 @@
   UI.botWho = (b) => { const n = UI.botName(b); return `<b class="bav-name">${esc(n)}</b>${n !== b ? ` <span class="bav-id">${esc(b)}</span>` : ''}`; };
   /** A team's picture: its own icon in its colour, its uploaded image, or its initials on a tile (never a bot's face).
    *  From config (teams.<t>.avatar), staged changes included, else the demo's identity. */
-  UI.teamIdent = (t) => { const tm = window.S && S.view && (S.view().teams || []).find((x) => x.name === t), av = tm && tm.cfg && tm.cfg.avatar; return av || (window.D.teamIdentity || {})[t] || {}; };
+  UI.teamIdent = (t) => { const tm = window.S && S.view && (S.view().teams || []).find((x) => x.name === t), av = tm && tm.cfg && tm.cfg.avatar;
+    if (tm && tm.cfg) return av ? Object.assign({}, av, av.image ? { image: UI.avatarSrc(av.image) } : {}) : {}; return (window.D.teamIdentity || {})[t] || {}; };
   UI.teamAv = (t, size = 'sm') => UI.teamAvOf(t, UI.teamIdent(t), size);
   UI.teamAvOf = (t, id, size = 'sm') => { id = id || {};
     if (id.image) return `<span class="bav tav img ${size}" aria-hidden="true"><img src="${esc(id.image)}" alt=""></span>`;
-    if (id.icon) return `<span class="bav tav ${size}" data-bc="${esc(id.color || 'stone')}" aria-hidden="true">${UI.icon(id.icon)}</span>`;
+    if (id.icon) return `<span class="bav tav ${size}" data-bc="${esc(id.color || 'stone')}" aria-hidden="true">${UI.icon((window.ICONS || {})['av-' + id.icon] ? 'av-' + id.icon : id.icon)}</span>`;
     return `<span class="bav tav ini ${size}" aria-hidden="true"><i>${esc(String(t).replace(/[^a-z0-9]/gi, '').slice(0, 2).toLowerCase())}</i></span>`; };
 })();
