@@ -23,7 +23,7 @@ import (
 //
 // A template only requests. Everything that decides what a bot may do, who
 // approves it, where it sits and what it reaches is the operator's:
-// operators, folder, team, connector bindings, secrets, autonomy, sandbox
+// operators, team, connector bindings, secrets, autonomy, sandbox
 // and egress. A template that names any of them is refused by name
 // (forbiddenTemplateKeys), and the verbs it requests are active only where
 // the operator's own `bots.<b>.grant:` says so, at a tier no looser than
@@ -63,6 +63,11 @@ type BotTemplate struct {
 	// shown, never applied.
 	Model   ModelSpec `yaml:"model,omitempty"`
 	Runtime string    `yaml:"runtime,omitempty"`
+	// Folder is removed (removed.go): accepted, ignored, warned about.
+	Folder RemovedField `yaml:"folder,omitempty"`
+	// Identity is a SUGGESTED avatar, color, display name, tagline and
+	// personality (botidentity.go); the operator's own win, field by field.
+	Identity `yaml:",inline"`
 }
 
 // forbiddenTemplateKeys are what a template can never set, with why. Each is
@@ -70,7 +75,6 @@ type BotTemplate struct {
 var forbiddenTemplateKeys = map[string]string{
 	"operators":      "who approves a bot is the operator's choice",
 	"approvers":      "who approves a bot is the operator's choice",
-	"folder":         "where a bot is filed is the operator's choice (by default it follows the pack instance's placement)",
 	"team":           "which team a bot joins is the operator's choice",
 	"secrets":        "secrets are the operator's environment",
 	"skill":          "a template requests verbs (verbs:) and never grants them — the operator grants them (bots.<b>.grant)",
@@ -83,6 +87,7 @@ var forbiddenTemplateKeys = map[string]string{
 	"memory_repo":    "where a bot's memory lives is the operator's choice — ship seed documents with seed:",
 	"seed_dir":       "a template seeds memory from its own pack (seed:), not from a path on the operator's machine",
 	"memory":         "memory limits are the operator's knob",
+	"attachments":    "attachment limits (sizes, types, retention) are the operator's knob",
 	"peers":          "linking bots is a channel for data to cross — the operator's choice",
 	"terraform":      "conductor-executed Terraform binds connectors and repos — environment",
 	"home":           "the home runtime is environment — suggest a model with model:",
@@ -419,6 +424,15 @@ func loadTemplate(name string, t BotTemplate, dir string) (LoadedTemplate, error
 			return lt, fmt.Errorf("proactive.notify_at: %q is not one of %s", p.NotifyAt, strings.Join(FindingSeverities, ", "))
 		}
 	}
+	if err := t.Identity.Validate(); err != nil {
+		return lt, err
+	}
+	a, err := resolveAvatarImage(t.Identity.Avatar, dir, "the pack")
+	if err != nil {
+		return lt, err
+	}
+	t.Identity.Avatar = a
+	lt.T.Identity.Avatar = a
 	if len(t.Runtime) > 200 {
 		return lt, fmt.Errorf("runtime: a short suggestion (at most 200 characters)")
 	}

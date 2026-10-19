@@ -13,7 +13,7 @@ hold, trust and lockfile. There is no second distribution system.
 > **A template only requests.** A bot made from one starts in practice mode
 > with only its read-only verbs. Everything above observe is a widening you
 > grant yourself, one verb at a time, and the template can never set your
-> operators, team, folder, connector bindings, secrets, autonomy, sandbox
+> operators, team, connector bindings, secrets, autonomy, sandbox
 > or egress.
 
 ## Using one
@@ -71,14 +71,54 @@ Bot platform-sre from template sre/sre
 Not written: review the diff, then run the same command with --write.
 ```
 
-Nothing is written without `--write`. Flags:
+Nothing is written without `--write`.
+
+**From a pack you haven't installed.** Name a template the registry offers
+(`conductor bot templates --search …` shows its ref, such as
+`conductor-packs/sre-bot/sre`) and `bot new` installs its pack **in the same
+change**:
+
+```
+conductor bot new platform-sre --from conductor-packs/sre-bot/sre
+Bot platform-sre from template sre-bot/sre
+  installs:    pack sre-bot 2.0.0 (use: conductor-packs/sre-bot) in this change — resolved on --write, as `conductor init` would
+  …
+--- config diff
++packs:
++  sre-bot:
++    use: "conductor-packs/sre-bot"
++bots:
++  platform-sre:
++    use: sre-bot/sre
+…
+```
+
+It's still one reviewable diff: the `packs:` entry and the bot. To validate
+it, conductor resolves the pack into a **private copy** of your config
+directory (under conductor's state, removed afterwards) and runs the full
+validation there. Your config directory, its vendored packs and its
+lockfile don't change until `--write`. Then conductor writes the config and
+resolves the pack, exactly as `conductor init` does; if that fails, it puts
+your config back.
+
+The trust rules are the same as installing by hand, and a third-party
+source still needs its explicit trust step. The official repo, and a pack
+from a local directory, install as they are. A pack from anyone else's
+registry is refused until you trust its source, with a `pack_trust.allow`
+entry or `--allow-unlisted` (as `conductor init` would need). This applies
+even if you have no `pack_trust` block, because you never typed that source
+yourself. A pack instance name that's already in `packs:` is refused too:
+name its template `<instance>/<template>` instead.
+
+Flags:
 
 | flag | what |
 |---|---|
 | `--connector <input>=<connector>` | bind an input (repeatable); an input you have exactly one connector of the type for binds itself |
 | `--grant <verb>=<tier>` | a widening at instantiation (repeatable) — refused past the template's maximum |
-| `--folder <path>` | file the bot somewhere else (default: the pack instance's placement) |
 | `--proactive` | turn on the template's suggested proactive checks (`proactive: {}`) |
+| `--registry <dir\|git url>` | where a registry template comes from (default: the official registry) |
+| `--allow-unlisted` | the trust step for a third-party pack source this change installs |
 
 Suggested triggers are written **disarmed** (`enabled: false`); turn on the
 ones you want. One whose event another trigger already listens on (a cron
@@ -103,7 +143,7 @@ bots:
 `use:` is how a pack's other members are named (`call: review/review-flow`),
 and the field connectors and runtimes already use for "what implements
 this". The rest of the entry is an ordinary bot: anything you set —
-description, charter, escalation, operators, team, folder, autonomy,
+description, charter, escalation, operators, team, autonomy,
 proactive, Terraform — is yours and wins over the template.
 
 **Grants are in the template's vocabulary** (`<input>.<verb>`), so they stay
@@ -149,8 +189,17 @@ conductor bot show platform-sre
   "template": { "ref": "sre/sre", "pack": "sre-bot", "version": "2.0.0", "source": "github.com/NodeSpy/conductor-packs//sre-bot",
                 "digest": "c42f7ca79ad2", "bindings": { "pagerduty": "pd" }, "practice": true,
                 "read_only": [...], "widenings": [...], "ungranted": {...},
-                "applied_version": "2.0.0", "since": "…", "pending_update": "p14" }
+                "applied_version": "2.0.0", "since": "…", "pending_update": "p14",
+                "update": { "known": true, "available": true, "latest": "2.1.0", "checked": "…",
+                            "how": "conductor pack update sre (the template's changes then reach the bot as a proposal you review)" } }
 ```
+
+`update` says whether a newer version of the template's pack is in the
+official registry, as conductor last fetched it (`conductor bot templates`
+and `pack search` refresh it; `bot show` never fetches). It reports
+`known: false`, with why, for a pack from another source, or before the
+registry has been fetched. The dashboard gets the same from the control
+socket's `show` op.
 
 The memory repo's first commit names it too (`memory: initialize from
 template sre/sre (sre-bot 2.0.0)`, with a `Bot-Template:` trailer).
@@ -234,6 +283,9 @@ bots:
       - { name: weekly, on: schedule.weekly-consolidate, action: consolidate }
     proactive: { every: 4h, quiet_hours: "22:00-07:00", checklist: { section: "Proactive checks" }, notify_at: high }
     model: claude-opus-5                # a suggested home model (applied when the operator sets none)
+    display_name: Pager Pal             # a suggested identity: every field optional, each one the operator's to override
+    avatar: { preset: lighthouse }      # or { image: face.png, preset: lighthouse }: a picture inside the pack
+    personality: { tone: friendly, style: "Explain the why behind every step." }
     runtime: "a use: cli runtime with claude-code"   # a suggestion, shown — runtimes are the operator's
 ```
 
@@ -249,6 +301,12 @@ bots:
   `requester`, or `action: consolidate|rotate`.
 - **Proactive** is used only by a bot whose operator writes `proactive: {}`;
   a template never sets a budget.
+- **Identity** (`display_name`, `tagline`, `avatar`, `color`,
+  `personality`) is a suggestion, validated like a bot's
+  ([Bots → Identity](Bots#identity)). A field the operator sets wins. Voice
+  text that came from the template is fenced in the bot's prompt as
+  template-suggested style, below the charter and the rules, and the
+  catalog shows it as `identity`.
 - **Seed** documents are typed, like any memory write: each must be a valid
   document of its kind within its [size cap](Bots#size-limits). `conductor
   pack lint` checks every one; a file that would not seed is a lint problem.
@@ -262,12 +320,12 @@ pack lint`:
 |---|---|
 | `operators`, `approvers` | who approves a bot is the operator's choice |
 | `team` | which team a bot joins is the operator's choice |
-| `folder` | where a bot is filed is the operator's choice (default: the pack instance's placement) |
 | `secrets` | secrets are the operator's environment |
 | `skill`, `grant` | a template requests verbs; the operator grants them |
 | `autonomy` | tiers, practice mode, promotion and spend caps are the operator's |
 | `isolation`, `browser`, `network`, `egress` | a template cannot widen the sandbox, browser logins or egress |
 | `memory_repo`, `seed_dir`, `memory` | where memory lives and its limits are the operator's; seed with `seed:` |
+| `attachments` | attachment sizes, types and retention are the operator's |
 | `peers` | linking bots is a channel for data to cross |
 | `terraform` | it binds connectors and repos — environment |
 | `home`, `worker` | runtimes are environment; suggest a `model:` and a `runtime:` |
@@ -290,9 +348,11 @@ The operator control socket serves the same catalog and plans (`cmd: "bot"`):
 
 | `sub` | args | returns |
 |---|---|---|
-| `templates` | `search`, `registry`, `installed` | `{ templates: [ { ref, template, pack, version, description, tags, installed, install, inputs, verbs, read_only, above_observe, triggers, proactive, model, runtime, seed, collections, used_by, digest } ] }` |
+| `packs` | `search`, `registry`, `installed`, `include_templates` | the pack catalog, each with its content kinds; template-only packs counted in `hidden_template_packs` unless `include_templates` ([[Packs]]) |
+| `templates` | `search`, `registry`, `installed` | `{ templates: [ { ref, template, pack, version, description, tags, installed, install, inputs, verbs, read_only, above_observe, triggers, proactive, model, runtime, identity, seed, collections, used_by, digest } ] }` |
+| `identity_options` | — | the avatar presets, icons, identity colors, status hues, tones and caps (no bot needed) |
 | `template` | `ref`, `registry` | one template, with its `charter` |
-| `template_plan` | `name`, `template`, `connectors`, `grants`, `folder`, `proactive` | `{ bot, template, entry, triggers, diff, valid, error, review, notes, widening }` |
+| `template_plan` | `name`, `template`, `connectors`, `grants`, `proactive`, `registry` | `{ bot, template, entry, triggers, diff, valid, error, review, notes, widening, install }`: a registry template's plan installs its pack (`install`); a third-party source needs a `pack_trust.allow` entry here |
 | `grant_plan` | `bot`, `grants` | the same, for a widening |
 
 A plan writes nothing; `widening: true` is the dashboard's cue to ask for the

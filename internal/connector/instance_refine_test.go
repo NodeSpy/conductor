@@ -473,3 +473,33 @@ func TestInstanceDeclIdenticalOptionHooksOnExistingEventPasses(t *testing.T) {
 		t.Fatalf("identical option_hooks (modulo map order) must not disable the connector: %s", in.DisabledReason)
 	}
 }
+
+// `attachments` invokes a verb (its fetch) on the instance's credentials,
+// the same class as option_hooks: a brand-new per-instance event may not
+// declare it, and a same-named event keeps it identical.
+func TestInstanceDeclCannotAddOrChangeAttachments(t *testing.T) {
+	at := func(fetch string) *sdk.EventSemantics {
+		return &sdk.EventSemantics{Attachments: &sdk.AttachmentsSemantics{List: "files", Fetch: fetch, Content: "content"}}
+	}
+	for name, c := range map[string]struct {
+		typeDecl sdk.Decl
+		inst     sdk.Decl
+	}{
+		"fakeattachnew": {sdk.Decl{}, sdk.Decl{Verbs: []sdk.Verb{{Name: "file_get"}}, Events: []sdk.Event{{Name: "message", Semantics: at("file_get")}}}},
+		"fakeattachchange": {
+			sdk.Decl{Verbs: []sdk.Verb{{Name: "file_get"}, {Name: "mint_token"}}, Events: []sdk.Event{{Name: "message", Semantics: at("file_get")}}},
+			sdk.Decl{Verbs: []sdk.Verb{{Name: "mint_token"}}, Events: []sdk.Event{{Name: "message", Semantics: at("mint_token")}}},
+		},
+		"fakeattachadd": {
+			sdk.Decl{Verbs: []sdk.Verb{{Name: "file_get"}}, Events: []sdk.Event{{Name: "message"}}},
+			sdk.Decl{Events: []sdk.Event{{Name: "message", Semantics: at("file_get")}}},
+		},
+	} {
+		c := c
+		in := buildFakeInstanceConnector(t, name, &fakeInstanceHandler{typeDecl: c.typeDecl,
+			instance: func(string, map[string]any) sdk.Decl { return c.inst }})
+		if !strings.Contains(in.DisabledReason, "message") || !strings.Contains(in.DisabledReason, "attachments") {
+			t.Errorf("%s: DisabledReason = %q, want it to name the event and attachments", name, in.DisabledReason)
+		}
+	}
+}

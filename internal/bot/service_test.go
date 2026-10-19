@@ -29,7 +29,13 @@ type fakeHome struct {
 	failLaunch  error
 	// onSend lets a test act as the agent (e.g. write a handoff).
 	onSend func(agentID, text string)
+	// images are the image paths each send carried; noImages makes the
+	// runtime one that takes none.
+	images   map[string][][]string
+	noImages bool
 }
+
+func (f *fakeHome) AcceptsImages(context.Context, string) bool { return !f.noImages }
 
 func (f *fakeHome) Launch(_ context.Context, spec HomeSpec) (string, error) {
 	f.mu.Lock()
@@ -48,12 +54,14 @@ func (f *fakeHome) Launch(_ context.Context, spec HomeSpec) (string, error) {
 	return id, nil
 }
 
-func (f *fakeHome) Send(_ context.Context, _, id, text string) error {
+func (f *fakeHome) Send(_ context.Context, _, id, text string, images []string) error {
 	f.mu.Lock()
 	if f.sent == nil {
 		f.sent = map[string][]string{}
+		f.images = map[string][][]string{}
 	}
 	f.sent[id] = append(f.sent[id], text)
+	f.images[id] = append(f.images[id], images)
 	cb := f.onSend
 	f.mu.Unlock()
 	if cb != nil {

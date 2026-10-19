@@ -115,14 +115,203 @@ bots:
 ```
 conductor bot templates --search sre          # installed and registry templates
 conductor bot new platform-sre --from sre/sre # planned on a copy of your config, shown as a diff; --write
+conductor bot new platform-sre --from conductor-packs/sre-bot/sre   # not installed yet: its pack installs in the same change
 conductor bot grant platform-sre pagerduty.acknowledge=reversible
 ```
 
 A template only requests: the bot starts in practice mode with only its
 read-only verbs, every widening is your grant (named by `conductor validate`),
-and the template can never set operators, team, folder, connector bindings,
+and the template can never set operators, team, connector bindings,
 secrets, autonomy, sandbox or egress. A newer pack version reaches a bot's
 memory only as a proposal you approve. See [[Bot-Templates]].
+
+### Identity
+
+A bot can have a face and a voice. Every field is optional, and none of them
+changes what the bot may do:
+
+```yaml
+bots:
+  platform-sre:
+    display_name: Night Owl                  # one line, at most 40 characters
+    tagline: Watches the pager so you can sleep.   # one line, at most 120
+    avatar: { preset: owl, color: teal }     # color optional (default: color: below); or { icon: radar, color: teal }
+    # avatar: { image: avatars/platform-sre.png, preset: owl }   # your own picture; the face is its fallback
+    color: indigo                            # the bot's identity color
+    personality:
+      tone: terse                            # terse | friendly | formal | warm | dry | playful
+      style: |                               # free text, at most 600 bytes
+        Lead with the answer, then the evidence. No exclamation marks.
+```
+
+- **Avatar and color.** A face is a `preset` with an optional `color`
+  (default: the bot's `color`), or an `icon` with a color (its own, or the
+  bot's). Both are names from built-in lists, never URLs. Identity colors
+  exclude the status hues (red, green, amber, yellow, orange), so a bot's
+  color never reads as failing or healthy. `conductor bot identity-options`
+  prints the lists. They are placeholders for now and will change with the
+  dashboard. With no avatar, the dashboard shows the bot's initials (from
+  its display name, else its id).
+- **Your own picture.** `avatar: { image: avatars/platform-sre.png }` names a
+  file relative to the config's directory, so it travels with the config. A
+  template names one inside its pack. PNG, JPEG or WebP only, never SVG (it
+  can carry script). Conductor checks it by content and structure, never by
+  name: the signature must match, nothing may follow the image's own end
+  (where a polyglot hides its second format), and there may be no markup in
+  its text metadata. It must decode, stay within 2 MB and 2048px a side, and
+  stay inside the directory (no `..`, no symlink out). An SVG or a polyglot
+  renamed `.png` fails `conductor validate`, naming the bot. A preset or an
+  icon beside the image is the fallback face, for anywhere the picture
+  can't go.
+
+  ```
+  conductor bot avatar set platform-sre me.jpg [--crop x,y,side]   # a diff; --write writes it
+  conductor bot avatar clear platform-sre [--write]
+  ```
+
+  An upload (at most 8 MB) is decoded and **re-encoded**: cropped to a
+  square (the centre, or your crop box), scaled to at most 512px, and
+  written as a PNG with no metadata to `avatars/<bot>.png` beside the
+  config, plus one `avatar:` line. Like any config change it's validated on
+  a copy and shown as a diff, and nothing is written without `--write`.
+  It's not a widening: a picture changes nothing a bot may do. The
+  dashboard does the same through the operator API (below), and gets the
+  picture back re-encoded, whatever the file on disk holds.
+- **Display name** is what the bot calls itself and what a chat connector
+  shows. The config id (`platform-sre`) stays the bot's address everywhere:
+  in commands, in routing, on approvals and in the ledger.
+- **Personality** shapes how the bot writes. Its sessions get the display
+  name, tagline, tone and style in a **voice section** that comes after the
+  charter and every rule and says it is subordinate to them. The text sits
+  inside a fence labelled as operator-written style (or template-suggested,
+  below). A style that reads like an instruction ("ignore the charter",
+  "you may merge") is still only style: the gate, the tiers and the rules are
+  unaffected, and the bot is told to ignore it.
+
+`conductor validate` checks every field against the lists and caps, naming
+the bot and the field. A bot from a [template](Bot-Templates) takes the
+template's suggested identity for any field you leave out. You override
+field by field, and the prompt says when the voice text came from the
+template.
+
+**Outbound messages.** A connector whose verb declares the `identity`
+semantic (a chat post's display-name and icon options, say) gets those
+options filled from the bot's identity whenever the bot calls it. Conductor
+overwrites them, so a bot can't post as someone else. The plugin maps
+conductor's avatar names to its own icons. Conductor has nothing
+connector-specific for this; see
+[plugin contract §2.3](https://github.com/NodeSpy/conductor/blob/main/docs/design/plugin-contract.md#23-verb-semantics).
+A proactive finding's `conductor.*` event also carries `bot_name` (the
+display name) for a trigger that posts it. **A picture never leaves
+conductor this way.** A chat post can only show an image the platform can
+fetch from a reachable URL, or one the connector uploads, and conductor
+serves pictures only on its operator socket: it has no public endpoint, on
+purpose. So connectors get the fallback face (`avatar_preset` or
+`avatar_icon`, and `avatar_color`), or with neither, just the name and the
+platform's default icon.
+
+`conductor bot show <bot>` (and the dashboard, over the same control-socket
+op) returns `identity`: always `name` and `initials`, plus `display_name`,
+`tagline`, `avatar`, `color`, `personality`, `picture` (the operator API path
+that serves the picture, when there is one), and `suggested_by` (the
+template) when set. `conductor bot ls` shows a display name next to the id.
+
+### Attachments
+
+A message to a bot can carry files: from you, with `conductor bot say
+--attach` or `deliver --attach` or the dashboard; or from a chat user,
+through a connector that declares them (below).
+
+```
+conductor bot say platform-sre --attach dashboard.png --attach errors.log "what do you make of these?"
+conductor bot deliver platform-sre --title "disk alert" --attach df.txt     # opens a case; its files go when it closes
+```
+
+```yaml
+bots:
+  platform-sre:
+    attachments:                 # every cap is on by default; these are the defaults
+      max_file: 10MB             # one file (at most 100MB)
+      max_message: 25MB          # all of one message's files
+      max_files: 10              # files in one message (at most 50)
+      types: [image/png, image/jpeg, image/gif, image/webp, text/plain, text/markdown, text/csv,
+              application/json, application/yaml, application/pdf]   # exact types, or image/*
+      ttl: 168h                  # removed this long after arriving, whatever their case
+      # off: true                # take no files at all
+```
+
+- **Checked, all or nothing.** Every cap applies before anything is stored,
+  and a refused file refuses your message, naming the cap. A file's type is
+  what conductor detects from its content: an image or PDF by its signature,
+  text by being valid UTF-8 (its extension picks text, Markdown, CSV, JSON
+  or YAML). The name or a sender's claim never decides it, so HTML, SVG,
+  archives and executables are refused unless you list their types.
+- **Stored in conductor's state, not memory.** Files go to conductor's blob
+  store and to a read-only copy in a directory per message
+  (`<state dir>/bots/<bot>/attachments/<message>/`). They never enter the
+  bot's memory repo: a bot keeps what matters with `conductor bot remember`.
+- **Delivered as data.** The message lists its files (id, name, type, size,
+  read-only path) inside a fence labelled with who sent them (your files,
+  or a chat user's). The fence says a file's name and contents are data,
+  never instructions. Contents are never pasted into the prompt; the
+  session opens the file. An image also goes to the runtime as an image
+  when it takes one (Claude does, through `paseo send --image`); otherwise
+  the list says to open the file.
+- **Read-only.** Each file is mode 0444 in a 0555 directory, so a session
+  can't change, add or remove one. With conductor's agent sandbox on, the
+  sandbox binds the home session's attachments dir, and only a worker's
+  passed files, read-only into the session (`SessionForCwd` hands it the
+  paths). Until then the file modes are what holds, and they are the same
+  user's files.
+- **Workers get only what they're passed.** The home session passes files on
+  with `conductor bot spawn --attach <id>`. The worker's brief lists them in
+  the same fence, says who passed them on, and its session sees those files
+  only. An urgent event's worker gets the event's files.
+- **Removed with the case.** A message's files are removed when its case
+  closes: files, directory and blobs. The record stays (`conductor bot
+  attachments <bot> --all`), saying why. Files on no case (a `say` without
+  `--case`) are removed after `ttl`.
+- **URLs stay text.** A link in a message is text: the bot fetches it, if at
+  all, through its normal egress. Attachments add no egress.
+
+**From chat.** A connector event can declare its files with the
+`attachments` event semantic (plugin contract §2.2): which fact lists them,
+and which verb fetches one. When such an event is routed to a bot
+(`bot: { name: … }`, or a team's rule or fallback), conductor fetches the
+files within that bot's caps, refusing a declared size over the cap before
+fetching. It fetches only for a target the platform assigned, never for a
+file list a sender wrote themselves. The files are labelled as that chat
+user's, at the user's trust, never the operator's. A file that can't be
+taken doesn't drop the message: it arrives with a note saying why. A team's
+lead triage doesn't carry files; route events with files to a bot or with a
+rule.
+
+### The operator API
+
+The dashboard reaches files over HTTP on a unix socket beside the control
+socket, `<state dir>/operator-api.sock`. It's same-user only (0600), like the
+control socket, and nothing on it is reachable from a bot session:
+
+| | |
+|---|---|
+| `POST /v1/bots/{bot}/messages` | multipart: `text`, optional `case`, any number of `file` parts. Capped as the body streams (per file, per message, count), then every cap again. `201` with the attachments |
+| `GET /v1/bots/{bot}/attachments[?all=1]` | the bot's attachments |
+| `GET /v1/bots/{bot}/attachments/{id}` | one record |
+| `GET /v1/bots/{bot}/attachments/{id}/content` | the bytes, always as a download (`Content-Disposition: attachment`, `nosniff`, a sandboxing CSP), never rendered |
+| `GET /v1/bots/{bot}/attachments/{id}/thumbnail[?size=N]` | a PNG thumbnail of a PNG, JPEG or GIF (32–512 px; an image declaring more than 40 megapixels is refused) |
+| `GET /v1/conversations[?operator=]` | every bot's and team's conversation: the last message, that operator's unread count, `pinned` and `position`; their pins first in their order, then the most recent first |
+| `GET /v1/conversations/{id}/messages[?after=N&operator=&mark=1]` | messages after N (`after=-1`: what is new to that operator); `mark=1` marks them read |
+| `POST /v1/conversations/{id}/messages` | send: JSON `{text, operator, to: [...], everyone}`, or multipart with `file` parts (attachments, per member's caps) |
+| `POST /v1/conversations/{id}/read` | `operator`, `upto`: the read mark (never moves back) |
+| `GET /v1/conversations/stream` | live updates: one server-sent `message` event per recorded message |
+| `POST /v1/conversations/{id}/pin` | pin it for an operator: JSON `{operator, position}` (1-based; no position: last; a pinned one moves) |
+| `DELETE /v1/conversations/{id}/pin[?operator=]` | unpin (unpinning one that isn't pinned changes nothing) |
+| `PUT /v1/conversations/pins` | reorder: JSON `{operator, order: [ids…]}`, naming every pinned conversation exactly once |
+| `GET /v1/teams`, `GET /v1/teams/{team}` | every team, or one: bots, routing, `identity` (name, initials, avatar, picture) |
+| `GET /v1/teams/{team}/avatar`, `POST …/avatar/plan`, `POST …/avatar/apply` | a team's picture, served and changed exactly like a bot's (below) |
+| `GET /v1/bots/{bot}/avatar` | the bot's picture, re-encoded as a PNG; `404` when it has none (show its face or initials) |
+| `POST /v1/bots/{bot}/avatar/plan` | multipart: `file` (at most 8 MB) with an optional crop box `crop_x`, `crop_y`, `crop_side`, or `clear=1`. The same plan as `bot avatar set`: re-encoded, validated on a copy, a diff, `widening: false`, and a `token` |
+| `POST /v1/bots/{bot}/avatar/apply` | `token=…`: writes the planned picture and config line. Single use, bound to its bot, 15 minutes, and refused if the config changed since the plan. Reload to see it |
 
 ## The home session
 
@@ -701,36 +890,13 @@ false` keeps consolidated entries in place (they are still consolidated
 once). The audit records each consolidation's outcome
 (`bot_consolidation`) and each archive (`bot_memory_archive`).
 
-## Folders
+## Folders (removed)
 
-Folders organize bots and teams for display, nothing more:
-
-```yaml
-teams:
-  platform: { folder: work/platform, … }
-bots:
-  home-helper: { folder: personal/home, … }   # a solo bot files itself
-```
-
-`conductor bot ls` prints a tree grouped by folder, then team, then bot;
-`--folder work` shows that folder and everything under it, `--flat` one line
-per bot (with its folder and team).
-
-- **Folders have no behavior.** A folder confers no permissions, defaults,
-  isolation, peering or routing; moving a bot or a team to another folder
-  changes nothing it does. **Teams own all behavior.** Two bots in one folder
-  are no more linked than two bots in different folders.
-- **A bot on a team is listed under its team's folder.** A bot that sets its
-  own `folder:` while on a team gets a `conductor validate` warning, and the
-  team's folder wins.
-- A folder is a `/`-separated path: segments are trimmed, may hold letters,
-  digits, `.`, `-` and `_`, and may not be empty, `.` or `..` (at most 8
-  levels, 64 characters a segment). No folder means the root.
-
-Folders are **one organization across entity types**: workflows and triggers
-take `folder:` too ([[Workflows]]), and a bot's synthesized workers are listed
-under the bot's (or its team's) folder. `conductor folders ls [path]` lists
-everything in a folder — teams, bots, workflows, triggers — and below it.
+Folders (display-only filing of bots, teams, workflows and triggers) were
+removed. A `folder:` still in a config loads and is ignored: `conductor
+validate` and the daemon log say `folders were removed; this field is ignored
+and can be deleted`, and it never fails validation. Delete it when convenient. `conductor bot ls` lists bots by team (`--flat`: one
+line per bot).
 
 ## Teams
 
@@ -807,6 +973,36 @@ The `browser:` scope narrows which saved logins and sign-in credentials of
 conductor's agent browser a bot's sessions may use. It never grants
 anything. Until the agent browser is on the daemon, it is checked at load and
 reported by `conductor bot show`, but nothing consumes it.
+
+### A team's avatar
+
+A team can have a face too, with the same shapes and checks as a bot's
+[identity](#identity), except that **presets aren't allowed**: the mascots
+are bots' faces, so a team's avatar is an icon or a picture:
+
+```yaml
+teams:
+  platform:
+    avatar: { icon: radar, color: teal }          # an icon needs its own color (a team has none to lend)
+    # avatar: { image: avatars/team-platform.png, icon: radar, color: teal }   # a picture; the icon is its fallback face
+```
+
+A picture is checked like a bot's (PNG, JPEG or WebP by content, never SVG,
+no polyglot, inside the config's directory, within 2 MB and 2048px). An
+upload is re-encoded the same way: a square PNG of at most 512px with no
+metadata, at `avatars/team-<team>.png`, so a bot and a team with the same
+name never share a file. A preset on a team fails `conductor validate`,
+naming the team. With no avatar, clients show the team's initials.
+
+```
+conductor team show <team>                                 # bots, routing, identity (name, initials, avatar, picture)
+conductor team avatar set <team> <file> [--crop x,y,side]  # a diff; --write writes it
+conductor team avatar clear <team> [--write]
+```
+
+On the operator API: `GET /v1/teams` and `GET /v1/teams/{team}` carry
+`identity`. `GET /v1/teams/{team}/avatar` serves the picture, re-encoded,
+and `POST /v1/teams/{team}/avatar/plan` and `…/apply` work like a bot's.
 
 ### Teammates are peers
 
@@ -988,6 +1184,65 @@ the team, and only once. The lead's note reaches the assignee fenced, as data.
 every routed case. The lead's triage case records where it went.
 `conductor bot team platform` lists recent routed cases, the pool's use and
 pending knowledge proposals.
+
+### Team chat
+
+You can talk to a team the way you talk to a bot:
+
+```
+conductor team say platform "what's the deploy status?"            # the lead (else the routing)
+conductor team say platform "@platform-data is the replica caught up?"   # that member
+conductor team say platform --to platform-data --to platform-sre "…"     # those members
+conductor team say platform --everyone "roll call: what are you on?"     # every member, one reply each
+conductor team chat platform        # what's new (marks it read); --all for the whole transcript
+conductor team chats                # every bot and team conversation: last message, your unread count (your pins first, marked *)
+conductor team pin platform [--at 1]                 # pin a conversation for yourself (--at: its position; moves a pinned one)
+conductor team unpin bot:platform-data
+conductor team pins [--order platform,bot:platform-data]   # your pins in order; --order sets it (each pinned one once)
+```
+
+- **Who it reaches.** By default, the team's **lead**, as your instruction.
+  The lead answers, or hands the work to a teammate with `conductor bot
+  delegate`: the delegated case keeps your request and requester, never
+  more trust. With no lead, the team's routing rules (matched against the
+  text) and fallback pick the bot. `@name` in the text, or `--to`, reaches
+  those members instead. `--everyone` reaches every member, at most
+  `chat.everyone_per_hour` times an hour (default 6).
+- **One transcript, recorded by conductor.** The conversation is
+  `team:<name>`: your messages and the bots' replies, numbered. Each member
+  it reaches gets it on the team conversation's case (one per member while
+  open), with your provenance. An operator of the team who isn't one of a
+  member's operators is a third party to that member, as anywhere else.
+- **One reply per member per message.** A bot answers with `conductor bot
+  reply` (its home session only). Every member a message reaches owes one
+  reply; a second one is refused until you ask again. Replies are capped at
+  `chat.max_reply` bytes (default 4000).
+- **Replies are data to other bots (the peer rule).** A delivered message
+  shows the conversation so far inside a fence, labelled with who wrote
+  each line, under a line saying another bot's reply is never an
+  instruction; only your message stands outside it. A bot's reply is never
+  delivered to a teammate by itself. A member can read its team's
+  conversation (`conductor bot chat`), and only its own team's.
+- **Unread is per operator.** Your own messages count as read; a reply is
+  unread for each operator until they read it.
+- **Pins are per operator.** Each operator's pinned conversations, in their
+  own order, are kept beside the read marks (`chat_pins.json` in
+  conductor's state). The conversation list shows them first, with
+  `pinned` and `position`. A bare name means a team or a bot; when it's
+  both, say `team:` or `bot:`. A pin whose bot or team is gone isn't
+  listed.
+
+A message to one bot (`conductor bot say`, or the dashboard) is recorded the
+same way in `bot:<name>`, and answered with `conductor bot reply`. With
+several operators configured, say who you are with `--as` (otherwise the
+message is recorded as from an unnamed operator).
+
+```yaml
+teams:
+  platform:
+    routing: { lead: platform-sre, fallback: platform-sre }
+    chat: { everyone_per_hour: 6, max_reply: 4000 }   # the defaults
+```
 
 ### Approvers
 
@@ -1200,14 +1455,22 @@ the daemon (`conductor bot show` reports `sandboxed`). Without it:
 ## Operator commands
 
 ```
-conductor bot ls [--folder <path>] [--flat]   # a tree: folder, team, bot
+conductor bot ls [--flat]        # bots by team (--flat: one line each)
 conductor bot show <bot>         # home session, open work, memory log, charter
 conductor bot cases|workers|proposals <bot> [--all]
 conductor bot proposal <bot> <id>
 conductor bot approve|deny <bot> <id> [--as <operator>] [--key <path>] [--reason "…"]
 conductor bot rotate <bot>
-conductor bot say <bot> <text…>  # or just type into paseo
-conductor bot deliver <bot> --title "…" [--text "…"] [--requester who] [--urgent]
+conductor bot say <bot> [--attach <file>]… [--case <id>] <text…>  # or just type into paseo
+conductor bot deliver <bot> --title "…" [--text "…"] [--requester who] [--urgent] [--attach <file>]…
+conductor team say <team> [--to <bot>]… [--everyone] [--as <op>] <text…>   # team chat (below)
+conductor team chat <team|bot:<name>> [--all]   # a conversation: what's new (marks it read)
+conductor team chats                            # every conversation, with your unread count
+conductor bot attachments <bot> [--all]          # the files messages carried (--all: removed ones too)
+conductor bot attachment <bot> <id> [--out <f>]  # one attachment; --out saves its bytes
+conductor bot identity-options   # the avatar, color and tone lists an identity names
+conductor bot avatar set <bot> <file> [--crop x,y,side] [--write]   # its own picture (re-encoded; a diff first)
+conductor bot avatar clear <bot> [--write]
 conductor bot consolidate <bot>
 conductor bot replan <bot> <id>  # re-plan a stale terraform proposal
 conductor bot sweep <bot>        # a proactive sweep now (budget applies)

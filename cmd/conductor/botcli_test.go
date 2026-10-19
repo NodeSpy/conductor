@@ -6,24 +6,19 @@ import (
 )
 
 func botListFixture() map[string]any {
-	b := func(name, folder, team string) any {
+	b := func(name, team string) any {
 		m := map[string]any{"bot": name, "shadow": true, "open_cases": 0, "pending_proposals": 0, "live_workers": 0}
-		if folder != "" {
-			m["folder"] = folder
-		}
 		if team != "" {
 			m["team"] = team
 		}
 		return m
 	}
 	return map[string]any{"bots": []any{
-		b("solo", "", ""),
-		b("platform-sre", "work/platform", "platform"),
-		b("platform-data", "work/platform", "platform"),
-		b("web-sre", "work/platform", ""),
-		b("billing-sre", "work/billing", "billing"),
-		b("home-bot", "personal/home", ""),
-		b("ops-bot", "work", ""),
+		b("solo", ""),
+		b("platform-sre", "platform"),
+		b("platform-data", "platform"),
+		b("web-sre", ""),
+		b("billing-sre", "billing"),
 	}}
 }
 
@@ -41,65 +36,42 @@ func lineNames(s string) []string {
 	return out
 }
 
-func TestBotListTree(t *testing.T) {
-	got := strings.Join(lineNames(botListText(botListFixture(), "", false)), "\n")
+// `conductor bot ls`: bots grouped by team, teamless last, each sorted.
+func TestBotListByTeam(t *testing.T) {
+	got := strings.Join(lineNames(botListText(botListFixture(), false)), "\n")
 	want := strings.Join([]string{
+		"team billing",
+		"  billing-sre",
+		"team platform",
+		"  platform-data",
+		"  platform-sre",
 		"solo",
-		"personal/",
-		"  home/",
-		"    home-bot",
-		"work/",
-		"  ops-bot",
-		"  billing/",
-		"    team billing",
-		"      billing-sre",
-		"  platform/",
-		"    team platform",
-		"      platform-data",
-		"      platform-sre",
-		"    web-sre",
+		"web-sre",
 	}, "\n")
 	if got != want {
-		t.Fatalf("tree:\n%s\nwant:\n%s\nraw:\n%s", got, want, botListText(botListFixture(), "", false))
+		t.Fatalf("listing:\n%s\nwant:\n%s", got, want)
 	}
 }
 
-func TestBotListFolderFilterAndFlat(t *testing.T) {
-	got := strings.Join(lineNames(botListText(botListFixture(), "work/platform", false)), "\n")
-	want := "work/\n  platform/\n    team platform\n      platform-data\n      platform-sre\n    web-sre"
-	if got != want {
-		t.Fatalf("--folder work/platform:\n%s", got)
-	}
-	// Descendants are included; a name prefix is not a folder.
-	w := botListText(botListFixture(), "work", false)
-	for _, n := range []string{"ops-bot", "billing-sre", "platform-sre", "web-sre"} {
-		if !strings.Contains(w, n) {
-			t.Errorf("--folder work lost %s", n)
-		}
-	}
-	if strings.Contains(w, "home-bot") || strings.Contains(w, "solo") {
-		t.Errorf("--folder work kept bots outside it:\n%s", w)
-	}
-	if s := botListText(botListFixture(), "wor", false); !strings.Contains(s, "no bots in folder wor") {
-		t.Errorf("a name prefix matched as a folder:\n%s", s)
-	}
-	flat := botListText(botListFixture(), "", true)
+// `--flat`: one line per bot, its team in a column ("-" for none).
+func TestBotListFlat(t *testing.T) {
+	flat := botListText(botListFixture(), true)
 	lines := strings.Split(strings.TrimRight(flat, "\n"), "\n")
-	if len(lines) != 7 {
+	if len(lines) != 5 {
 		t.Fatalf("--flat: %d lines\n%s", len(lines), flat)
 	}
 	for _, l := range lines {
-		if strings.HasPrefix(l, " ") || strings.HasSuffix(strings.Fields(l)[0], "/") {
-			t.Errorf("--flat has tree structure: %q", l)
+		if strings.HasPrefix(l, " ") || strings.HasPrefix(l, "team ") {
+			t.Errorf("--flat has grouping: %q", l)
 		}
 	}
-	if f := strings.Fields(lines[0]); f[0] != "solo" || f[1] != "/" || f[2] != "-" {
+	if f := strings.Fields(lines[0]); f[0] != "billing-sre" || f[1] != "billing" {
 		t.Errorf("--flat first line: %q", lines[0])
 	}
-	if s := botListText(botListFixture(), "personal", true); strings.Count(s, "\n") != 1 || !strings.Contains(s, "home-bot") {
-		t.Errorf("--flat --folder personal:\n%s", s)
+	if f := strings.Fields(lines[4]); f[0] != "web-sre" || f[1] != "-" {
+		t.Errorf("--flat last line: %q", lines[4])
 	}
-	if s := botListText(map[string]any{}, "", false); s != "no bots\n" {
+	if s := botListText(map[string]any{}, false); s != "no bots\n" {
 		t.Errorf("empty: %q", s)
 	}
 }
@@ -163,5 +135,17 @@ func TestBotMemoryPlainText(t *testing.T) {
 	})
 	if !strings.Contains(out, "1. log/x.md (log) [archived abc123] — T\n   …s…\nBest match first.") {
 		t.Fatalf("recall:\n%s", out)
+	}
+}
+
+// `bot ls` shows a display name; `bot show` (JSON) carries the whole view.
+func TestBotListShowsDisplayName(t *testing.T) {
+	out := botListFixture()
+	bots := out["bots"].([]any)
+	bots[0].(map[string]any)["identity"] = map[string]any{"name": "Night Owl", "initials": "NO", "display_name": "Night Owl"}
+	bots[1].(map[string]any)["identity"] = map[string]any{"name": "platform-sre", "initials": "PS"}
+	s := botListText(out, false)
+	if !strings.Contains(s, `solo `) || !strings.Contains(s, `· shown as "Night Owl"`) || strings.Count(s, "shown as") != 1 {
+		t.Fatalf("listing:\n%s", s)
 	}
 }

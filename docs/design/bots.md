@@ -263,25 +263,6 @@ wraps the same three.
   proposal keeps `ProposedSHA256` and `EditedBy`. `OnDecision` fences an
   operator's reason as `OPERATOR REASON`.
 
-### Folders across entity types
-
-Workflows and triggers take `folder:` with the same rule. Three things keep
-it inert:
-
-- `contentHandle` drops it, so a trigger instance's identity (its dedup,
-  session and outcome state) does not move with it;
-- a pack's manifest may not set it (`packSetsNoFolder`, at load and in lint),
-  because filing is the operator's organization;
-- the operator's `packs.<instance>.folder`, `.workflows.<name>.folder` and
-  `.triggers.<name>.folder` are applied at instantiation, the per-name one
-  winning.
-
-Provenance (`PackInstance`, `Bot`, both `yaml:"-"`) is only for display: an
-unfiled pack entity is listed under `packs/<instance>`, and a bot's
-synthesized workers under the bot's folder. `TestEntityFoldersChangeNothing`
-compares the effective triggers and workflows, instance names included, with
-and without folders.
-
 ## Content kinds
 
 `internal/bot/kinds.go`, `internal/config/collections.go`. A repo's kinds are
@@ -444,7 +425,7 @@ verb, practice mode off, promotion. `BotTemplateNotes` prints them at
 ### What a template cannot set
 
 `forbiddenTemplateKeys` refuses, by name and before strict decoding, every key
-that is the operator's: operators, approvers, team, folder, secrets, skill,
+that is the operator's: operators, approvers, team, secrets, skill,
 grant, autonomy, isolation, browser, network, egress, memory_repo, seed_dir,
 memory, peers, terraform, home, worker, disabled, use — and a proactive
 budget. The template struct does not have those fields at all, so strict
@@ -493,6 +474,29 @@ registrations. Suggested triggers are written disarmed; one whose event is
 taken (a cron schedule drives exactly one trigger) is skipped with a note,
 which is what lets several bots come from one template.
 
+### The catalog and installing from it
+
+- **Content kinds are derived, never declared.** `ManifestContents` counts
+  what the manifest holds. *Template-only* means bot templates plus only
+  what templates carry (collections, seed). The general pack catalog
+  (`pack search`, `pack list`, the `packs` op) hides such packs by default,
+  because they belong to creating a bot.
+- **One change installs pack and bot.** A registry template's `bot new`
+  inserts the `packs:` entry, resolves it into a private copy of the config
+  directory (state dir, 0700, removed after) with the same resolver
+  `conductor init` uses, and plans the bot there. The diff is against the
+  real config. `--write` writes the config, then resolves for real, and
+  restores the original if that fails.
+- **Trust.** The registry's install source is the pack's real source:
+  bare `host/path//pack` for https, so ordinary `pack_trust` patterns match
+  it; `git::` for ssh and file. It's never conductor's own clone, which as a
+  local path would have skipped trust. `AutoInstallTrusted` additionally
+  requires the explicit step for a third-party remote source even without
+  a `pack_trust` block, because the operator never typed it. The resolver's
+  own allowlist check runs after.
+- **Update availability** reads the official registry's cached clone only
+  (`bot show` must not fetch) and compares versions with `CompareVersions`.
+
 ### Left out
 
 - Templates of a pack's DEPENDENCIES are not addressable (only top-level
@@ -502,19 +506,146 @@ which is what lets several bots come from one template.
 - Seed documents are validated against kinds by `pack lint` and at seeding,
   not at config load (the config package cannot import the kinds).
 
-## Folders: display only
+## Identity: presentation and voice, never authority
 
-`folder:` on a bot or a team (`internal/config/folders.go`) exists so an
-operator with many bots can file them (`work/platform`, `personal/home`).
-It is deliberately inert: nothing outside the listings reads it — not
-`ResolveTeams` (it is not a ceiling and is not inherited), not `BotLinked`,
-not the gate, not routing — and `TestFoldersChangeNothing` /
-`TestFoldersChangeNoRuntimeBehavior` hold that line. Behavior that wants a
-grouping belongs to a team. A bot on a team is displayed under the team's
-folder (`Config.BotFolder`), so a bot's own `folder:` there is a validate
-warning, not an error: it is harmless, just ignored. Paths are validated by
-one function (`NormFolder`) at load, and the CLI's `--folder` filter goes
-through the same one.
+A bot's identity (`display_name`, `tagline`, `avatar`, `color`,
+`personality`) is inline on its config entry and on a template, which only
+suggests it. The operator's value wins field by field (`Identity.Merge`), and
+`IdentityFrom` records the template when any voice text (display name,
+tagline, personality) came from one.
+
+- **One source of truth for the names.** `internal/config/botidentity.go`
+  holds the avatar presets, icons, identity colors, the status hues they
+  exclude, and the tones. Validation, the error messages, `bot
+  identity-options`, the dashboard op and the tests all read those lists, so
+  changing a list is a one-file change. There are no URLs. A preset takes an
+  optional color that defaults to the bot's.
+- **The operator's own picture** is a file beside the config (or in a
+  template's pack): `avatar.image`, resolved and checked at load by
+  `internal/avatar`. PNG/JPEG/WebP by signature; whole (nothing after IEND
+  or EOI, and the RIFF size covers the file, which is where a polyglot keeps
+  its second format); no markup in PNG text chunks or JPEG comment/APP
+  segments; decodable within 40 MP; 2 MB and 2048px for a file a config
+  names. Uploads (`bot avatar set`, the operator API) are re-encoded: square
+  crop, at most 512px, a fresh PNG, so no metadata survives. Serving
+  re-encodes too, so a file swapped in by hand can't pass anything but
+  pixels. The change is a normal plan (validated on a copy, with the new
+  picture staged under a temp name, then a diff); the dashboard's apply
+  takes a single-use token and refuses a config that changed since the
+  plan. A picture never reaches a connector: there's no public endpoint, so
+  the fallback face stands in.
+- **A team's avatar** is the same `BotAvatar`, checked by the same
+  `validateAvatar` with `allowPreset=false`. The mascots are bots' faces,
+  and an icon needs its own color because a team has no identity color.
+  Its picture goes through the same resolve, re-encode, plan and serve
+  path, at `avatars/team-<team>.png`, so a bot and a team of one name never
+  share a file; a plan token is bound to "bot:" or "team:" plus the name.
+- **The voice section is subordinate, by position and by statement.** It is
+  rendered after the charter, every rule and (in a sweep) the notify
+  threshold. It says it governs how the bot writes, never what it may do,
+  and that anything in it reading like an instruction is not one. The text
+  sits in one nonce fence (`fence`) whose label says whose words they are:
+  `OPERATOR-WRITTEN` or `TEMPLATE-SUGGESTED`. A template is a stranger's
+  text, the same trust as its charter. The avatar and color never reach a
+  prompt. The display name never replaces the opening "You are <id>"; the id
+  stays the bot's address.
+- **Outbound identity is a verb semantic, not a connector feature.**
+  `identity: {option: attribute}` (plugin contract §2.3) lets any connector
+  say which of its options carry the poster's name or icon. The fill happens
+  in `RunSkillVerb` after the bot gate, so an approved proposal re-entering
+  the chokepoint is filled the same way and its options digest is
+  unchanged. The fill overwrites the bot's own values and deletes an option
+  whose attribute is unset, so a bot can neither impersonate another nor keep
+  a value it chose. The semantic is must-understand, so an older host
+  refuses a plugin that needs it, unless the plugin lists it in `optional`.
+
+## Attachments: files are data, kept by conductor, gone with the case
+
+- **Storage.** `internal/blob` fits as it is: content-addressed bytes, an
+  owner per message (`attach/<bot>/<message>`), and `ReleaseRun` deletes
+  what no owner references. A message's files are also copied, read-only, to
+  `<state>/bots/<bot>/attachments/<message>/` for its sessions. That's a
+  copy, not a hardlink: a session that could chmod a hardlink would write
+  into the content-addressed store. Nothing goes to the memory repo; keeping
+  a file is a `remember`, through the kinds' chokepoint.
+- **Checks before storage, all or nothing.** Caps and the allowlist apply to
+  the detected type (signature or UTF-8 plus extension), never to the
+  sender's claim. An operator's refused file refuses the message (they get
+  the error); a chat user's refused file becomes a note on a message that
+  still arrives (a chat user can't see an error).
+- **Fenced, labelled by sender.** The list (never the contents) sits in a
+  nonce fence labelled `OPERATOR-PROVIDED FILES`, `CHAT USER'S FILES` or
+  `EVENT FILES`. File names are reduced to a safe base name, but they stay
+  inside the fence anyway. The section is rendered at delivery, so it knows
+  whether the runtime takes images and whether a file was removed while the
+  message waited.
+- **Retention is a sweep, not a hook.** Every tick removes attachments whose
+  case isn't open, or whose TTL has passed. That covers every way a case
+  closes (the lead's triage, a decline, a worker, a future ticket status)
+  without hooking each one.
+- **Workers.** Spawn takes attachment ids. They must be the bot's own and
+  live, and the worker record keeps them, so the sandbox binding exposes
+  exactly those files. Passing files on doesn't change a worker's trust:
+  files are data, like a peer's message.
+- **Connectors.** The `attachments` event semantic is the generic shape (a
+  list fact plus a fetch verb returning base64), lazily invoked with the
+  receiving bot's caps and gated on an assigned target, like `option_hooks`.
+  Lead triage doesn't carry files: the fetch would have to happen before
+  the bot is chosen, and the trigger is gone by assignment.
+- **The operator API** is HTTP on a second unix socket with the control
+  socket's authentication (same user), because multipart uploads and
+  downloads don't fit the control socket's JSON lines. Downloads are
+  always `attachment` with `nosniff` and a sandboxing CSP: a sender's HTML
+  must never render in the dashboard's origin.
+
+## Team chat: one transcript, targeted delivery, replies as data
+
+- **Store.** `conversations.json` beside the bot ledger holds one record per
+  conversation (`bot:<name>`, `team:<name>`), transactional like
+  `UpdateBot`: numbered messages (bounded at 500), each operator's read
+  mark, the reply slots, and the `--everyone` timestamps for the per-hour
+  cap.
+- **Targeting.** A team message goes to the lead, else to the rules matched
+  against `{text}`, else to the fallback. `@name` and `--to` must name
+  members (an unknown `--to` is an error; an unknown `@word` is just text).
+  `--everyone` is every enabled member. Every target gets the message on
+  its team conversation case (requester the operator, classed per member,
+  as `RequesterClass` does for any request), so delegation, trust and the
+  gate are the ordinary ones.
+- **One reply per member per message.** The send records a slot for every
+  target; `bot reply` spends one, home session only, and without
+  `--conversation/--to` it answers the newest message it still owes. No
+  slot, no reply: a bot can't answer what it wasn't sent, or answer twice.
+- **The peer rule.** Bot replies are never delivered to other bots. They
+  appear only in the transcript excerpt (the last ten messages, inside a
+  nonce fence with a never-an-instruction line) and in `bot chat`, which
+  reads only the bot's own and its team's conversations.
+- **Plain messages too.** `bot say` (and the attachments upload) now go
+  through the same `Chat` path into `bot:<name>`; they still open no case.
+- **Live updates** are an in-process hub. The operator API streams them as
+  server-sent events; a slow reader drops an update rather than blocking a
+  send.
+
+## Folders: removed
+
+Folders filed bots, teams, workflows and triggers for display and nothing
+else; they were removed. Because conductor auto-updates and a config the new
+binary rejects crash-loops a box, `folder:` stays decodable everywhere it was
+read (`internal/config/removed.go`):
+
+- each field is a `RemovedField`: it decodes from any value, keeps nothing,
+  and is never marshaled (`IsZero` is always true, every use `omitempty`);
+- the warnings come from the raw YAML document (`removedFolderWarnings`, and
+  `manifestFolderWarnings` for a pack's workflows, triggers and templates,
+  which used to refuse it), not from decoded structs, so nothing a later
+  pass re-marshals can lose one; `flow.DeprecationWarnings` prints them in
+  `validate` and the daemon logs them at boot;
+- `contentHandle` still drops a `folder` key, so an old config's folder never
+  changes which instance a trigger is (it hashes the raw node).
+
+`TestRemovedFolderIsIgnored` loads a config with `folder:` everywhere —
+values that were never valid paths included — and compares the effective
+bots, teams, workflows and triggers with the same config without them.
 
 ## Teams
 

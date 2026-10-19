@@ -32,9 +32,8 @@ import (
 type TeamConfig struct {
 	// Description is the team's one-line identity.
 	Description string `yaml:"description,omitempty"`
-	// Folder files the team, and the bots on it, for display only
-	// (folders.go): no behavior.
-	Folder string `yaml:"folder,omitempty"`
+	// Folder is removed (removed.go): accepted, ignored, warned about.
+	Folder RemovedField `yaml:"folder,omitempty"`
 	// Collections are custom content kinds in the team's knowledge repo
 	// (collections.go): written by an operator, or by approved promotion.
 	Collections map[string]Collection `yaml:"collections,omitempty"`
@@ -67,6 +66,45 @@ type TeamConfig struct {
 	// Routing picks who handles work routed to the team (`bot: { team:
 	// … }`). Nil: the team cannot be routed to.
 	Routing *TeamRouting `yaml:"routing,omitempty"`
+	// Chat bounds the team conversation (`conductor team say`).
+	Chat TeamChat `yaml:"chat,omitempty"`
+	// Avatar is the team's face: { icon, color } or { image: <file> }
+	// beside the config (botidentity.go) — never a preset, which are bots'
+	// mascots. None: clients show the team's initials.
+	Avatar *BotAvatar `yaml:"avatar,omitempty"`
+}
+
+// TeamChat bounds a team conversation. On by default.
+type TeamChat struct {
+	// EveryonePerHour caps `--everyone` messages per hour (each reaches
+	// every member: one session turn and one reply each).
+	EveryonePerHour int `yaml:"everyone_per_hour,omitempty"`
+	// MaxReply caps one bot's reply (bytes).
+	MaxReply ByteSize `yaml:"max_reply,omitempty"`
+}
+
+// Team chat defaults and ceilings.
+const (
+	DefaultEveryonePerHour = 6
+	MaxEveryonePerHour     = 60
+	DefaultChatReply       = 4000
+	MaxChatReply           = 16 << 10
+)
+
+// EveryonePerHourOr is the effective fan-out cap.
+func (t TeamChat) EveryonePerHourOr() int {
+	if t.EveryonePerHour > 0 {
+		return t.EveryonePerHour
+	}
+	return DefaultEveryonePerHour
+}
+
+// MaxReplyOr is the effective reply cap.
+func (t TeamChat) MaxReplyOr() int {
+	if t.MaxReply > 0 {
+		return int(t.MaxReply)
+	}
+	return DefaultChatReply
 }
 
 // TeamDelegation bounds delegation chains.
@@ -538,8 +576,17 @@ func inheritTeam(t TeamConfig, m BotConfig) BotConfig {
 // after ResolveTeams, which also catches a Config assembled in code).
 func (c *Config) validateTeams() error {
 	for _, name := range c.TeamNames() {
-		if err := c.validateBotTeam(name, c.Teams[name]); err != nil {
+		t := c.Teams[name]
+		if err := c.validateBotTeam(name, t); err != nil {
 			return fmt.Errorf("config: teams.%s: %w", name, err)
+		}
+		// The team's picture, beside the config: checked and resolved as a
+		// bot's is.
+		if a, err := resolveAvatarImage(t.Avatar, c.baseDir, "the config's directory"); err != nil {
+			return fmt.Errorf("config: teams.%s: %w", name, err)
+		} else if a != t.Avatar {
+			t.Avatar = a
+			c.Teams[name] = t
 		}
 	}
 	for _, name := range sortedBotKeys(c.Bots) {
@@ -562,8 +609,14 @@ func (c *Config) validateBotTeam(name string, t TeamConfig) error {
 	if !validBotName(name) {
 		return fmt.Errorf("name must be lowercase letters, digits, - or _")
 	}
-	if _, err := NormFolder(t.Folder); err != nil {
-		return fmt.Errorf("folder: %w", err)
+	if err := validateAvatar(t.Avatar, "", false); err != nil {
+		return err
+	}
+	if t.Chat.EveryonePerHour < 0 || t.Chat.EveryonePerHour > MaxEveryonePerHour {
+		return fmt.Errorf("chat.everyone_per_hour: want 1 to %d, got %d", MaxEveryonePerHour, t.Chat.EveryonePerHour)
+	}
+	if t.Chat.MaxReply < 0 || t.Chat.MaxReply > MaxChatReply {
+		return fmt.Errorf("chat.max_reply: want 1 to %d bytes, got %d", MaxChatReply, t.Chat.MaxReply)
 	}
 	if err := validateCollections(t.Collections, true); err != nil {
 		return err

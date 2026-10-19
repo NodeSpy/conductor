@@ -319,6 +319,9 @@ func (b *cliBackend) Send(ctx context.Context, opts SendOptions) (SendResult, er
 	if opts.JSON {
 		args = append(args, "--json")
 	}
+	for _, img := range opts.Images {
+		args = append(args, "--image", img)
+	}
 	cmd := b.exec.paseoCmd(ctx, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

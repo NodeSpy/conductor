@@ -510,9 +510,8 @@ type WorkflowDef struct {
 	// the agent sandbox for the whole workflow. A pack cannot set it to
 	// loosen its own sandbox (see checkPackSandboxLoosening).
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
-	// Folder files the workflow for display only (folders.go): no behavior.
-	// A pack's workflow cannot set it; the operator does, in packs:.
-	Folder string `yaml:"folder,omitempty"`
+	// Folder is removed (removed.go): accepted, ignored, warned about.
+	Folder RemovedField `yaml:"folder,omitempty"`
 	// PackInstance is the pack instance a workflow came from (display).
 	PackInstance string `yaml:"-"`
 }
@@ -705,10 +704,8 @@ type TriggerSpec struct {
 	Repo string `yaml:"repo,omitempty"`
 	// Shadow previews this trigger's work without dispatching.
 	Shadow *bool `yaml:"shadow,omitempty"`
-	// Folder files the trigger for display only (folders.go): no behavior,
-	// and not part of an instance's identity. A pack's trigger cannot set
-	// it; the operator does, in packs:.
-	Folder string `yaml:"folder,omitempty"`
+	// Folder is removed (removed.go): accepted, ignored, warned about.
+	Folder RemovedField `yaml:"folder,omitempty"`
 	// PackInstance / Bot: where a trigger came from — a pack instance, or a
 	// bot's synthesized workers (display).
 	PackInstance string `yaml:"-"`

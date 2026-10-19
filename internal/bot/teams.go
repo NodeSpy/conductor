@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/store"
 )
@@ -48,6 +49,8 @@ type TeamEvent struct {
 	Urgent                               bool
 	// Fields are the event's own fields, for routing rules.
 	Fields map[string]any
+	// files fetches the event's files (flow.BotRoute.Files).
+	files func(ctx context.Context, maxFiles int, maxFile int64) ([]connector.File, error)
 }
 
 // TeamRepo is a team's knowledge repo handle (nil without knowledge:).
@@ -143,7 +146,7 @@ func (s *Service) RouteTeam(ctx context.Context, ev TeamEvent) (map[string]any, 
 			rt.Reason = "no rule matched"
 		}
 	}
-	ev2 := Event{Bot: rt.Assignee, Source: ev.Source, Title: ev.Title, Text: ev.Text, Urgent: ev.Urgent}
+	ev2 := Event{Bot: rt.Assignee, Source: ev.Source, Title: ev.Title, Text: ev.Text, Urgent: ev.Urgent, files: ev.files}
 	id, err := s.deliverRouted(ctx, ev2, who, class, rt, "")
 	if err != nil {
 		return nil, err
@@ -242,6 +245,11 @@ func (s *Service) startTriage(ctx context.Context, ev TeamEvent, lead, who, clas
 	payload := ev.Text
 	if len(payload) > maxPayload {
 		payload = payload[:maxPayload]
+	}
+	if ev.files != nil {
+		// Triage is asynchronous and the event's files would have to be
+		// fetched now for a bot not chosen yet: they are not carried.
+		payload += "\n\n(This event came with files, which a lead's triage does not pass on: route events with files to a bot, or with a rule.)"
 	}
 	var cs store.Case
 	err := s.Ledger.UpdateBot(lead, func(r *store.BotRecord) error {

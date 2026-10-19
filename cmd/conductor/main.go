@@ -159,8 +159,8 @@ func main() {
 		err = cmdSecret(args)
 	case "bot", "bots":
 		err = cmdBot(args)
-	case "folders":
-		err = cmdFolders(args)
+	case "team":
+		err = cmdTeam(args)
 	case "workflows":
 		err = cmdWorkflows(args)
 	case "init":
@@ -206,7 +206,6 @@ usage:
   conductor force <kind> <owner/repo>#<n>  force an action for a target now (via the running daemon)
   conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
   conductor report [--days N]           activity summary: dispatches by kind/outcome + attention + usage (per usage.mode)
-  conductor folders ls [path] [--flat]  everything filed in a folder: teams, bots, workflows, triggers (display only)
   conductor usage [--since 24h]         model usage per runtime/model: what conductor observed, and what usage.sources report
   conductor runs [<id>] [--limit N]     recorded executions: list, or one run's step detail
   conductor runs retry <id> [--from <step>] [--force-replay]  re-run a recorded execution (recorded inputs pinned)
@@ -227,8 +226,9 @@ usage:
   conductor unlock                      seed the default vault key for non-interactive restarts
   conductor mcp memory --socket <path>  stdio MCP server: memory + skill broker (agent-facing)
   conductor bot <cmd> …             bots: ls/show/cases/proposals/approve/deny/rotate/say/deliver (conductor bot help)
+  conductor team say|chat|chats …   talk to a team: its lead, @bot, or --everyone (conductor team help)
   conductor mcp callable --token <name> [--config PATH]  stdio MCP server: invoke callable workflows (external MCP clients)
-  conductor workflows ls [--folder p] [--flat]   config workflows + triggers as a folder tree; saved workflows (review|rm)
+  conductor workflows ls                 config workflows and triggers; saved workflows (review|rm)
   conductor init [--config PATH] [--allow-unlisted]  fetch the packs: block, write the lockfile, preview
   conductor pack list|plan              list configured packs; preview what they add
   conductor pack add <source>           fetch a pack, show its install review + a ready-to-paste block
@@ -559,6 +559,11 @@ func cmdRun(args []string) error {
 	defer st.Close()
 
 	notifier := notify.New(logf, st.Audit)
+	// A removed key (folder:) loads and is ignored; the log says so, once
+	// per boot, so an operator can delete it.
+	for _, w := range cfg.RemovedFieldWarnings() {
+		logf("config: %s", w)
+	}
 	// Every lifecycle event feeds the conductor.* source (ordinary triggers
 	// alert on them); the source's loop guard keeps a notification
 	// workflow's own events from re-feeding.
@@ -1142,6 +1147,7 @@ func cmdRun(args []string) error {
 		}
 		bots.start(ctx, hub)
 		botCtl = bots.svc
+		go serveOperatorAPI(ctx, operatorAPISockPath(cfg), bots.operatorAPI(), logf)
 	}
 	connector.SetSweepHook(func(_ context.Context, instance string) (int, error) {
 		n := 0

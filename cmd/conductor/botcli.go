@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -28,8 +30,11 @@ import (
 
 const botUsage = `usage:
   operator:
-    conductor bot ls [--folder <path>] [--flat]   # a tree: folder, team, bot
-    conductor bot show <bot>
+    conductor bot ls [--flat]                # bots by team (--flat: one line each)
+    conductor bot show <bot>                 # status, identity (name, initials, avatar, voice), template
+    conductor bot identity-options           # the avatar presets, icons, colors and tones an identity may name
+    conductor bot avatar set <bot> <file> [--crop x,y,side] [--write]   # its own picture: PNG/JPEG/WebP, re-encoded, avatars/<bot>.png
+    conductor bot avatar clear <bot> [--write]
     conductor bot cases <bot> [--all]
     conductor bot workers <bot>
     conductor bot delegations <bot> [--all]
@@ -38,8 +43,10 @@ const botUsage = `usage:
     conductor bot approve <bot> <id> [--as <operator>] [--key <path>] [--reason "…"]
     conductor bot deny <bot> <id> [--as <operator>] [--key <path>] [--reason "…"]
     conductor bot rotate <bot>
-    conductor bot say <bot> <text…>
-    conductor bot deliver <bot> --title "…" [--text "…"] [--requester who] [--urgent]
+    conductor bot say <bot> [--attach <file>]… [--case <id>] <text…>   # files: removed when the case closes, else after attachments.ttl
+    conductor bot deliver <bot> --title "…" [--text "…"] [--requester who] [--urgent] [--attach <file>]…
+    conductor bot attachments <bot> [--all]                         # the files messages carried (--all: removed ones too)
+    conductor bot attachment <bot> <id> [--out <file>]              # one attachment's record; --out saves its bytes
     conductor bot consolidate <bot>
     conductor bot replan <bot> <id>          # re-plan a stale terraform proposal
     conductor bot sweep <bot>                # run a proactive sweep now (budget still applies)
@@ -51,7 +58,7 @@ const botUsage = `usage:
     conductor bot approve <bot> <id> --edit-file <f>              # approve a knowledge promotion with your changes
     conductor bot templates [--search <words>] [--registry <dir|git url>] [--installed]   # community bots: templates packs ship
     conductor bot template <ref> [--registry …]                   # one template: inputs, requested verbs, suggestions, charter
-    conductor bot new <name> --from <pack instance>/<template> [--connector in=conn]… [--grant verb=tier]… [--folder f] [--proactive] [--write]
+    conductor bot new <name> --from <instance>/<template> | <registry template> [--registry …] [--allow-unlisted] [--connector in=conn]… [--grant verb=tier]… [--proactive] [--write]   # a registry template's pack installs in the same change
     conductor bot grant <bot> <verb>=<tier>… [--write]            # widen a template bot (validated on a copy, shown as a diff)
     conductor bot template-check <bot>                            # compare its memory with its template now (a newer one → a proposal)
   from a bot session:
@@ -66,9 +73,11 @@ const botUsage = `usage:
     conductor bot case open --title "…" [--summary "…"]
     conductor bot case note <case> --text "…"
     conductor bot case close <case> --outcome "…"
-    conductor bot spawn [--case <id>] [--title "…"] --brief "…" [--group <label>] [--verbs a,b] [--read-only] [--handoff]
+    conductor bot spawn [--case <id>] [--title "…"] --brief "…" [--group <label>] [--verbs a,b] [--read-only] [--handoff] [--attach <attachment id>]…
     conductor bot tell <worker|group> "<instructions>"     # to your own workers (home session)
     conductor bot report "<progress>"                      # to your parent (a worker)
+    conductor bot reply [--conversation <id> --to <n>] "…" # answer an operator's chat message (once per message; home session)
+    conductor bot chat [--conversation <id>] [--last N]    # your conversation, or your team's, as data
     conductor bot instructions [--wait 5m]                 # new instructions from your parent (a worker); --wait blocks for them
     conductor bot join (<group> | --case <id> --group <label>) [--timeout 30m]
     conductor bot ask <bot> [--case <id>] "<text>"        # a linked peer bot (data only)
@@ -86,7 +95,7 @@ const botUsage = `usage:
     conductor bot proposals [--all]
     conductor bot wait <proposal> [--timeout 30m]`
 
-var botBoolFlags = map[string]bool{"all": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true, "json": true,
+var botBoolFlags = map[string]bool{"all": true, "include-templates": true, "allow-unlisted": true, "everyone": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true, "json": true,
 	"installed": true, "proactive": true, "write": true}
 
 // botFlags parses --k v / --k=v, boolean flags, repeated --file, and a
@@ -117,7 +126,7 @@ func botFlags(args []string) (pos []string, flags map[string]string, files []str
 			files = append(files, v)
 			continue
 		}
-		if k == "field" && flags[k] != "" { // repeatable: --field k=v …
+		if (k == "field" || k == "attach") && flags[k] != "" { // repeatable: --field k=v …, --attach <f> …
 			flags[k] += "\x00" + v
 			continue
 		}
@@ -128,7 +137,8 @@ func botFlags(args []string) (pos []string, flags map[string]string, files []str
 
 var operatorOnly = map[string]bool{"ls": true, "list": true, "show": true, "workers": true, "proposal": true,
 	"approve": true, "deny": true, "rotate": true, "say": true, "deliver": true, "consolidate": true,
-	"sweep": true, "sweeps": true, "teams": true, "knowledge": true, "memory": true, "template-check": true}
+	"sweep": true, "sweeps": true, "teams": true, "knowledge": true, "memory": true, "template-check": true,
+	"attachments": true, "attachment": true}
 
 func cmdBot(args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
@@ -138,6 +148,14 @@ func cmdBot(args []string) error {
 	sub := args[0]
 	inSession := os.Getenv("CONDUCTOR_SKILL_TOKEN") != ""
 	switch sub {
+	case "identity-options":
+		// The built-in lists an identity is validated against.
+		return printJSON(config.IdentityOptions())
+	case "avatar":
+		if inSession {
+			return fmt.Errorf("refusing: this shell is a conductor agent session — only an operator changes a bot's picture")
+		}
+		return botAvatarCmd(args[1:])
 	case "templates", "template", "new", "grant":
 		if inSession {
 			return fmt.Errorf("refusing: this shell is a conductor agent session — only an operator instantiates bots and grants them verbs")
@@ -211,6 +229,11 @@ func botAgent(sub string, args []string) error {
 			a["read_only"] = true
 			delete(a, "read-only")
 		}
+		if fl["attach"] != "" {
+			// Attachment ids this bot received, passed on to the worker.
+			a["attachments"] = strings.Split(fl["attach"], "\x00")
+			delete(a, "attach")
+		}
 	case "tell":
 		if len(pos) < 2 {
 			return fmt.Errorf("usage: conductor bot tell <worker|group> \"<instructions>\"")
@@ -220,6 +243,12 @@ func botAgent(sub string, args []string) error {
 		if t := strings.Join(pos, " "); t != "" {
 			a["text"] = t
 		}
+	case "reply":
+		if len(pos) == 0 {
+			return fmt.Errorf("usage: conductor bot reply [--conversation <id> --to <message #>] \"<text>\"")
+		}
+		a["text"] = strings.Join(pos, " ")
+	case "chat":
 	case "ask":
 		if len(pos) < 2 {
 			return fmt.Errorf("usage: conductor bot ask <bot> [--case <id>] \"<text>\"")
@@ -357,6 +386,10 @@ func botAgent(sub string, args []string) error {
 		printMem(mem, out)
 		return nil
 	}
+	if t, ok := out["conversation"].(string); ok && sub == "chat" && fl["json"] == "" {
+		fmt.Println(t)
+		return nil
+	}
 	if msg, ok := out["message"].(string); ok && len(out) <= 7 {
 		fmt.Println(msg)
 	}
@@ -481,15 +514,11 @@ func botOperator(sub string, args []string) error {
 	case "knowledge", "memory":
 		return botRepoEdit(cfg, sub, pos, fl)
 	case "ls", "list":
-		folder, err := config.NormFolder(fl["folder"])
-		if err != nil {
-			return fmt.Errorf("--folder: %w", err)
-		}
 		out, _, err := botControl(cfg, "list", map[string]any{})
 		if err != nil {
 			return err
 		}
-		fmt.Print(botListText(out, folder, fl["flat"] == "true"))
+		fmt.Print(botListText(out, fl["flat"] == "true"))
 		return nil
 	case "teams":
 	case "team":
@@ -517,13 +546,48 @@ func botOperator(sub string, args []string) error {
 		}
 		a["id"] = pos[1]
 	case "say":
-		if err := needBot(2); err != nil {
+		if fl["attach"] == "" {
+			if err := needBot(2); err != nil {
+				return err
+			}
+		} else if err := needBot(1); err != nil {
 			return err
 		}
 		a["text"] = strings.Join(pos[1:], " ")
+		if err := attachFiles(a, fl["attach"]); err != nil {
+			return err
+		}
 	case "deliver":
 		if err := needBot(1); err != nil {
 			return err
+		}
+		if err := attachFiles(a, fl["attach"]); err != nil {
+			return err
+		}
+	case "attachments":
+		if err := needBot(1); err != nil {
+			return err
+		}
+	case "attachment":
+		if err := needBot(2); err != nil {
+			return err
+		}
+		a["id"] = pos[1]
+		if out := fl["out"]; out != "" {
+			a["data"] = true
+			res, _, err := botControl(cfg, sub, a)
+			if err != nil {
+				return err
+			}
+			b, err := base64.StdEncoding.DecodeString(fmt.Sprint(res["data"]))
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(out, b, 0o600); err != nil {
+				return err
+			}
+			fmt.Printf("%v (%v, %d bytes) → %s\n", res["name"], res["media_type"], len(b), out)
+			return nil
 		}
 	case "approve", "deny":
 		if err := needBot(2); err != nil {
@@ -753,34 +817,22 @@ func botRepoEdit(cfg *config.Config, repoKind string, pos []string, fl map[strin
 	return nil
 }
 
-// botListText renders `conductor bot ls`: a tree grouped by folder, then
-// team, then bot — or, with flat, one line per bot. A folder filter keeps
-// that folder and everything under it.
-func botListText(out map[string]any, folder string, flat bool) string {
+// botListText renders `conductor bot ls`: bots grouped by team (teamless
+// last), or with flat one line per bot with its team.
+func botListText(out map[string]any, flat bool) string {
 	ms, _ := out["bots"].([]any)
-	type row struct{ folder, team, bot, line string }
+	type row struct{ team, bot, line string }
 	var rows []row
 	for _, x := range ms {
 		m, _ := x.(map[string]any)
-		f, _ := m["folder"].(string)
-		if folder != "" && f != folder && !strings.HasPrefix(f, folder+"/") {
-			continue
-		}
 		t, _ := m["team"].(string)
-		rows = append(rows, row{f, t, fmt.Sprint(m["bot"]), botLine(m)})
+		rows = append(rows, row{t, fmt.Sprint(m["bot"]), botLine(m)})
 	}
 	if len(rows) == 0 {
-		if folder != "" {
-			return fmt.Sprintf("no bots in folder %s\n", folder)
-		}
 		return "no bots\n"
 	}
-	// Folder, then team (teamless last), then bot.
 	sort.Slice(rows, func(i, j int) bool {
 		a, b := rows[i], rows[j]
-		if a.folder != b.folder {
-			return a.folder < b.folder
-		}
 		if (a.team == "") != (b.team == "") {
 			return a.team != ""
 		}
@@ -790,38 +842,21 @@ func botListText(out map[string]any, folder string, flat bool) string {
 		return a.bot < b.bot
 	})
 	var sb strings.Builder
-	if flat {
-		for _, r := range rows {
-			fmt.Fprintf(&sb, "%-16s %-20s %-14s %s\n", r.bot, orRoot(r.folder), orDashCLI(r.team), r.line)
-		}
-		return sb.String()
-	}
-	var printed []string // the folder segments already printed
-	lastTeam, lastFolder := "\x00", "\x00"
+	lastTeam := "\x00"
 	for _, r := range rows {
-		var segs []string
-		if r.folder != "" {
-			segs = strings.Split(r.folder, "/")
+		if flat {
+			fmt.Fprintf(&sb, "%-16s %-14s %s\n", r.bot, orDashCLI(r.team), r.line)
+			continue
 		}
-		if r.folder != lastFolder {
-			common := 0
-			for common < len(printed) && common < len(segs) && printed[common] == segs[common] {
-				common++
-			}
-			for d := common; d < len(segs); d++ {
-				fmt.Fprintf(&sb, "%s%s/\n", strings.Repeat("  ", d), segs[d])
-			}
-			printed, lastFolder, lastTeam = segs, r.folder, "\x00"
-		}
-		ind := strings.Repeat("  ", len(segs))
 		if r.team != lastTeam {
 			if r.team != "" {
-				fmt.Fprintf(&sb, "%steam %s\n", ind, r.team)
+				fmt.Fprintf(&sb, "team %s\n", r.team)
 			}
 			lastTeam = r.team
 		}
+		ind := ""
 		if r.team != "" {
-			ind += "  "
+			ind = "  "
 		}
 		fmt.Fprintf(&sb, "%s%-16s %s\n", ind, r.bot, r.line)
 	}
@@ -837,14 +872,11 @@ func botLine(m map[string]any) string {
 	if m["shadow"] == true {
 		mode = "shadow"
 	}
-	return fmt.Sprintf("%-6s %s · %v open cases · %v pending proposals · %v workers", mode, home, m["open_cases"], m["pending_proposals"], m["live_workers"])
-}
-
-func orRoot(f string) string {
-	if f == "" {
-		return "/"
+	line := fmt.Sprintf("%-6s %s · %v open cases · %v pending proposals · %v workers", mode, home, m["open_cases"], m["pending_proposals"], m["live_workers"])
+	if id, ok := m["identity"].(map[string]any); ok && id["display_name"] != nil {
+		line += fmt.Sprintf(" · shown as %q", id["display_name"])
 	}
-	return f
+	return line
 }
 
 func orDashCLI(t string) string {
@@ -852,6 +884,36 @@ func orDashCLI(t string) string {
 		return "-"
 	}
 	return t
+}
+
+// attachFiles reads the files a message carries (--attach, repeatable) into
+// the control request. The daemon applies the bot's caps; this only refuses
+// what could never pass.
+func attachFiles(a map[string]any, list string) error {
+	delete(a, "attach")
+	if list == "" {
+		return nil
+	}
+	var files []any
+	for _, p := range strings.Split(list, "\x00") {
+		st, err := os.Stat(p)
+		if err != nil {
+			return fmt.Errorf("--attach %s: %w", p, err)
+		}
+		if !st.Mode().IsRegular() {
+			return fmt.Errorf("--attach %s: not a regular file", p)
+		}
+		if st.Size() > config.MaxAttachFile {
+			return fmt.Errorf("--attach %s: %d bytes, over conductor's ceiling of %d", p, st.Size(), config.MaxAttachFile)
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return fmt.Errorf("--attach %s: %w", p, err)
+		}
+		files = append(files, map[string]any{"name": filepath.Base(p), "data": base64.StdEncoding.EncodeToString(b)})
+	}
+	a["attachments"] = files
+	return nil
 }
 
 // botDecide signs and submits an approval or denial.

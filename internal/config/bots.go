@@ -111,9 +111,8 @@ type BotConfig struct {
 	// Team is the one team (teams:) this bot belongs to, if any. Its
 	// defaults are this bot's ceilings (teams.go).
 	Team TeamName `yaml:"team,omitempty"`
-	// Folder files the bot for display only (folders.go): no behavior. A
-	// bot on a team is listed under its team's folder instead.
-	Folder string `yaml:"folder,omitempty"`
+	// Folder is removed (removed.go): accepted, ignored, warned about.
+	Folder RemovedField `yaml:"folder,omitempty"`
 	// Collections are custom content kinds in the bot's memory repo, beside
 	// the built-ins (collections.go).
 	Collections map[string]Collection `yaml:"collections,omitempty"`
@@ -135,10 +134,20 @@ type BotConfig struct {
 	// Origin is where a template bot came from — computed at load, never
 	// written.
 	Origin *BotOrigin `yaml:"-"`
+	// Identity is how the bot presents: avatar, color, display_name, tagline,
+	// personality (botidentity.go). Presentation only.
+	Identity `yaml:",inline"`
+	// IdentityFrom names the template a display name, tagline or
+	// personality came from ("" when the operator wrote them) — computed.
+	IdentityFrom string `yaml:"-"`
 	// Memory bounds what the bot's sessions read from and write to its
 	// memory repo: the prompt's index budget, the per-read cap, the
 	// per-kind document caps (memlimits.go). On by default.
 	Memory MemoryLimits `yaml:"memory,omitempty"`
+	// Attachments bounds the files a message can carry to the bot: sizes,
+	// count, media types and how long they are kept (attachments.go). On by
+	// default.
+	Attachments AttachmentLimits `yaml:"attachments,omitempty"`
 	// Isolation is the bot's session policy (inherited from its team,
 	// and only ever stricter).
 	Isolation BotIsolation `yaml:"isolation,omitempty"`
@@ -690,6 +699,13 @@ func (c *Config) BotRepoDir(name string) string {
 	return filepath.Join(StateDir(), "bots", name, "memory")
 }
 
+// BotAttachmentsDir is where the bot's attachments are kept for its
+// sessions: a read-only directory per message, in conductor's state and
+// never in the memory repo (even one the operator placed elsewhere).
+func (c *Config) BotAttachmentsDir(name string) string {
+	return filepath.Join(StateDir(), "bots", name, "attachments")
+}
+
 // BotSeedDir is the bot's seed directory, resolved ("" when unset).
 func (c *Config) BotSeedDir(name string) string {
 	m := c.Bots[name]
@@ -975,6 +991,14 @@ func (c *Config) validateBots() error {
 		if err := c.validateBot(name, m); err != nil {
 			return fmt.Errorf("config: bots.%s: %w", name, err)
 		}
+		// The operator's own avatar image, beside the config (a template's
+		// was resolved in its pack).
+		if a, err := resolveAvatarImage(m.Avatar, c.baseDir, "the config's directory"); err != nil {
+			return fmt.Errorf("config: bots.%s: %w", name, err)
+		} else if a != m.Avatar {
+			m.Avatar = a
+			c.Bots[name] = m
+		}
 	}
 	for i, l := range c.BotLinks {
 		if len(l) != 2 || l[0] == l[1] {
@@ -1025,14 +1049,17 @@ func (c *Config) validateBot(name string, m BotConfig) error {
 	if !validBotName(name) {
 		return fmt.Errorf("name must be lowercase letters, digits, - or _")
 	}
-	if _, err := NormFolder(m.Folder); err != nil {
-		return fmt.Errorf("folder: %w", err)
+	if err := m.Identity.Validate(); err != nil {
+		return err
 	}
 	if err := validateCollections(m.Collections, false); err != nil {
 		return err
 	}
 	if err := m.Memory.validate(false); err != nil {
 		return fmt.Errorf("memory.%w", err)
+	}
+	if err := m.Attachments.validate(); err != nil {
+		return fmt.Errorf("attachments.%w", err)
 	}
 	if m.Charter != "" && m.CharterFile != "" {
 		return fmt.Errorf("set charter or charter_file, not both")
@@ -1219,7 +1246,7 @@ func (c *Config) BotWarnings() []string {
 			}
 		}
 	}
-	return append(append(out, c.TeamWarnings()...), c.FolderWarnings()...)
+	return append(out, c.TeamWarnings()...)
 }
 
 // SkipsPrompts reports whether a paseo mode skips tool-permission prompts.

@@ -43,6 +43,9 @@ func TestExampleConfigValidates(t *testing.T) {
 	if !cfg.HasConnectors() {
 		t.Fatal("example config should be on the connectors schema")
 	}
+	if w := cfg.RemovedFieldWarnings(); len(w) != 0 {
+		t.Errorf("the example config still uses a removed field: %v", w)
+	}
 	stack, err := buildFlowStack(cfg, nil, nil, true)
 	if err != nil {
 		t.Fatalf("the example config must pass semantic validation: %v", err)
@@ -222,5 +225,47 @@ func TestStarterConfigFreshSeedLayout(t *testing.T) {
 	}
 	if _, err := buildFlowStack(cfg, nil, nil, true); err != nil {
 		t.Fatalf("drop-in config must validate: %v", err)
+	}
+}
+
+// The example's commented identity and attachments lines are valid as
+// written: uncommented, they load and every field lands.
+func TestExampleConfigIdentityBlock(t *testing.T) {
+	raw, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(raw)
+	for _, k := range []string{"display_name:", "tagline:", "avatar: { preset", "color:", "personality:", "  tone:", "  style:", "attachments:", "avatar: { icon: radar"} {
+		old := "    # " + k
+		if strings.Count(doc, old) != 1 {
+			t.Fatalf("the example's identity block: %q appears %d times", old, strings.Count(doc, old))
+		}
+		doc = strings.Replace(doc, old, "    "+k, 1)
+	}
+	keyPath := writeTempRSAKey(t)
+	doc = strings.Replace(doc, "~/.config/conductor/github-app.pem", keyPath, 1)
+	for _, v := range []string{"GH_WEBHOOK_SECRET", "GH_SMEE_URL", "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "CW_SECRET", "GH_PAT",
+		"CONDUCTOR_INVOKE_TOKEN", "CONDUCTOR_INVOKE_HMAC"} {
+		t.Setenv(v, "dummy-"+v)
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("the uncommented identity block: %v", err)
+	}
+	id := cfg.Bots["platform-sre"].Identity
+	if id.DisplayName != "Night Owl" || id.Tagline == "" || id.Avatar == nil || id.Avatar.Preset != "owl" || id.Color != "indigo" ||
+		id.Personality == nil || id.Personality.Tone != "terse" || id.Personality.Style == "" {
+		t.Fatalf("identity: %+v", id)
+	}
+	if l := cfg.Bots["platform-sre"].Attachments; l.MaxFileOr() != 10<<20 || l.MaxFilesOr() != 10 || l.TTL == 0 {
+		t.Fatalf("attachments: %+v", l)
+	}
+	if a := cfg.Teams["platform"].Avatar; a == nil || a.Icon != "radar" || a.Color != "teal" {
+		t.Fatalf("the team's avatar: %+v", a)
 	}
 }

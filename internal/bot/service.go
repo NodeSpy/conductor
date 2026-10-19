@@ -13,7 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/blob"
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/store"
 )
@@ -34,8 +36,12 @@ import (
 type HomeLauncher interface {
 	// Launch starts a home agent in spec.Cwd and returns its agent id.
 	Launch(ctx context.Context, spec HomeSpec) (string, error)
-	// Send delivers one message and returns when the turn is done.
-	Send(ctx context.Context, bot, agentID, text string) error
+	// Send delivers one message, with images attached when the runtime takes
+	// them (AcceptsImages), and returns when the turn is done.
+	Send(ctx context.Context, bot, agentID, text string, images []string) error
+	// AcceptsImages reports whether the bot's home runtime takes images
+	// with a message; otherwise an image is a file the session opens.
+	AcceptsImages(ctx context.Context, bot string) bool
 	// State is "running", "idle", … or "gone".
 	State(ctx context.Context, bot, agentID string) (string, error)
 	// Retire archives an agent conductor launched, revokes its session, and
@@ -73,6 +79,13 @@ type Event struct {
 	Title     string
 	Text      string // the payload (data)
 	Urgent    bool
+	// Attachments are files the event carried (an operator's): checked
+	// against the bot's caps before the case opens, and refused with it.
+	Attachments []AttachmentIn
+	// files fetches a connector event's files (flow.BotRoute.Files) once
+	// the receiving bot is known. A chat user's files that can't be taken
+	// don't refuse their message: it arrives with a note saying why.
+	files func(ctx context.Context, maxFiles int, maxFile int64) ([]connector.File, error)
 }
 
 // Service is the bot service.
@@ -83,6 +96,10 @@ type Service struct {
 	Exec    *Executor
 	Home    HomeLauncher
 	Workers WorkerLauncher
+	// Blobs stores attachments (nil: messages can't carry files).
+	Blobs *blob.Store
+
+	chat chatHub
 	// SessionRoot is where per-session worktrees live (each live agent its
 	// own cwd). Default ~/.conductor/runs, which conductor's paseo project
 	// prune already covers.
@@ -336,6 +353,7 @@ func (s *Service) Tick(ctx context.Context, name string) {
 		return
 	}
 	s.expireTriage(ctx, name)
+	s.sweepAttachments(name, m.Attachments)
 	s.maybeCheckTemplate(ctx, name)
 	if err := s.sandboxGate(name, m); err != nil {
 		// Nothing of this bot starts until the sandbox does.
@@ -414,8 +432,17 @@ func (s *Service) revoke(dispatchID string) {
 
 // enqueue adds a message to the home inbox (durable) and wakes delivery.
 func (s *Service) enqueue(name, caseID, text string) {
+	s.enqueueMsg(name, store.InboxMsg{CaseID: caseID, Text: text})
+}
+
+// enqueueMsg queues a message (its ID reserved already, or minted here).
+func (s *Service) enqueueMsg(name string, msg store.InboxMsg) {
 	_ = s.Ledger.UpdateBot(name, func(r *store.BotRecord) error {
-		r.Inbox = append(r.Inbox, &store.InboxMsg{ID: r.NextID("m"), CaseID: caseID, Text: text, Created: s.now()})
+		if msg.ID == "" {
+			msg.ID = r.NextID("m")
+		}
+		msg.Created = s.now()
+		r.Inbox = append(r.Inbox, &msg)
 		// Keep delivered history bounded.
 		if n := len(r.Inbox); n > 200 {
 			keep := r.Inbox[:0]
@@ -437,11 +464,40 @@ func (s *Service) enqueue(name, caseID, text string) {
 // Say queues a message from the operator side into the home conversation
 // (the operator can equally just type into paseo).
 func (s *Service) Say(name, text string) error {
-	if _, err := s.bot(name); err != nil {
-		return err
+	_, err := s.SayWith(name, text, nil, "")
+	return err
+}
+
+// SayWith is Say with files, optionally on one of the bot's open cases (the
+// files are then removed when it closes; otherwise after attachments.ttl).
+// It returns the message's attachments.
+func (s *Service) SayWith(name, text string, files []AttachmentIn, caseID string) ([]*store.Attachment, error) {
+	return s.SayAs("", name, text, files, caseID)
+}
+
+// SayAs is SayWith as a named operator (""; the only one, or an unnamed
+// operator when several are configured): recorded in the bot's
+// conversation, delivered through Chat.
+func (s *Service) SayAs(op, name, text string, files []AttachmentIn, caseID string) ([]*store.Attachment, error) {
+	m, err := s.Chat(context.Background(), ChatSend{Conversation: BotConversation(name), Operator: op, Text: text, Files: files,
+		CaseID: caseID, anyOperator: op == ""})
+	if err != nil {
+		return nil, err
 	}
-	s.enqueue(name, "", "[conductor: message from your operator]\n"+text)
-	return nil
+	var out []*store.Attachment
+	for _, a := range liveAttachments(s.Ledger.Bot(name), m.Attachments) {
+		a := a
+		out = append(out, &a)
+	}
+	return out, nil
+}
+
+func attachmentIDs(atts []*store.Attachment) []string {
+	out := make([]string, len(atts))
+	for i, a := range atts {
+		out[i] = a.ID
+	}
+	return out
 }
 
 // deliver sends every pending inbox message as one turn, when the home
@@ -456,11 +512,11 @@ func (s *Service) deliver(ctx context.Context, name string) {
 		return
 	}
 	var ids []string
-	var parts []string
+	var pending []*store.InboxMsg
 	for _, m := range rec.Inbox {
 		if m.Delivered.IsZero() {
 			ids = append(ids, m.ID)
-			parts = append(parts, m.Text)
+			pending = append(pending, m)
 		}
 	}
 	if len(ids) == 0 {
@@ -469,6 +525,21 @@ func (s *Service) deliver(ctx context.Context, name string) {
 	st, err := s.Home.State(ctx, name, rec.Home.AgentID)
 	if err != nil || st == "running" || st == "gone" {
 		return
+	}
+	// A message's files: images go to the runtime as images where it takes
+	// them; every file is listed, fenced, with its read-only path.
+	takesImages := s.Home.AcceptsImages(ctx, name)
+	var parts, images []string
+	for _, m := range pending {
+		atts := liveAttachments(rec, m.Attachments)
+		asImg := map[string]bool{}
+		for _, a := range atts {
+			if takesImages && a.Removed.IsZero() && imageInput(a.MediaType) {
+				asImg[a.ID] = true
+				images = append(images, a.Path)
+			}
+		}
+		parts = append(parts, m.Text+AttachmentSection(atts, asImg, ""))
 	}
 	text := strings.Join(parts, "\n\n")
 	if len(parts) > 1 {
@@ -480,7 +551,7 @@ func (s *Service) deliver(ctx context.Context, name string) {
 	}
 	sctx, cancel := context.WithTimeout(ctx, to)
 	defer cancel()
-	err = s.Home.Send(sctx, name, rec.Home.AgentID, text)
+	err = s.Home.Send(sctx, name, rec.Home.AgentID, text, images)
 	_ = s.Ledger.UpdateBot(name, func(r *store.BotRecord) error {
 		want := map[string]bool{}
 		for _, id := range ids {
@@ -587,7 +658,7 @@ func (s *Service) collectHandoff(ctx context.Context, name string, old *store.Ho
 		hctx, cancel := context.WithTimeout(ctx, to)
 		defer cancel()
 		msg := fmt.Sprintf("[conductor] Your session is being rotated (%s). Write your handoff NOW so a fresh session can continue with no lost context: what you are in the middle of, what you promised whom, what to watch for, and anything you learned that is not yet in knowledge/. Run:\n  conductor bot handoff --text \"…\"\nThen reply \"handoff written\".", reason)
-		if err := s.Home.Send(hctx, name, old.AgentID, msg); err != nil {
+		if err := s.Home.Send(hctx, name, old.AgentID, msg, nil); err != nil {
 			s.logf("%s: handoff request: %v", name, err)
 		}
 		// A send returns when the agent STOPS — which includes stopping on a
@@ -647,6 +718,24 @@ func (s *Service) Deliver(ctx context.Context, ev Event) (string, error) {
 	return s.deliverCase(ctx, ev, who, class, nil, "")
 }
 
+// eventAttachments checks an event's files against the bot's caps — before
+// its case opens, so a refused file refuses the event — and reserves the
+// message they will arrive with.
+func (s *Service) eventAttachments(ev Event) (types []string, msg string, err error) {
+	if len(ev.Attachments) == 0 {
+		return nil, "", nil
+	}
+	m, err := s.bot(ev.Bot)
+	if err != nil {
+		return nil, "", err
+	}
+	if types, err = checkAttachments(m.Attachments, ev.Attachments); err != nil {
+		return nil, "", err
+	}
+	msg, err = s.reserveMessage(ev.Bot)
+	return types, msg, err
+}
+
 // deliverCase opens a case attributed to (who, class) — already decided by
 // the caller, never by the event — with its routing record, if team-routed,
 // and delivers it: the inbox, and a worker at once for an urgent event. A
@@ -654,9 +743,34 @@ func (s *Service) Deliver(ctx context.Context, ev Event) (string, error) {
 func (s *Service) deliverCase(ctx context.Context, ev Event, who, class string, rt *store.Routing, pre string) (string, error) {
 	title := eventTitle(ev.Title, ev.Text, ev.Source)
 	src := srcOr(ev.Source)
+	filesNote := ""
+	if ev.files != nil && len(ev.Attachments) == 0 {
+		lim := s.Cfg().Bots[ev.Bot].Attachments
+		var err error
+		if lim.Off {
+			err = errors.New("this bot takes no attachments")
+		} else {
+			var got []connector.File
+			if got, err = ev.files(ctx, lim.MaxFilesOr(), lim.MaxFileOr()); err == nil {
+				for _, f := range got {
+					ev.Attachments = append(ev.Attachments, AttachmentIn{Name: f.Name, Data: f.Data})
+				}
+				if _, err = checkAttachments(lim, ev.Attachments); err != nil {
+					ev.Attachments = nil
+				}
+			}
+		}
+		if err != nil {
+			filesNote = "(The files that came with this event were not accepted: " + oneLine(err.Error(), 300) + ")"
+		}
+	}
+	types, msgID, err := s.eventAttachments(ev)
+	if err != nil {
+		return "", err
+	}
 	now := s.now()
 	var c store.Case
-	err := s.Ledger.UpdateBot(ev.Bot, func(r *store.BotRecord) error {
+	err = s.Ledger.UpdateBot(ev.Bot, func(r *store.BotRecord) error {
 		id := r.NextID("c")
 		if r.Cases == nil {
 			r.Cases = map[string]*store.Case{}
@@ -680,20 +794,24 @@ func (s *Service) deliverCase(ctx context.Context, ev Event, who, class string, 
 		ae["team"], ae["via"] = rt.Team, rt.Via
 	}
 	s.audit(ae)
-	note := ""
+	note := filesNote
+	atts, err := s.storeAttachments(ev.Bot, msgID, c.ID, ev.Attachments, types, attachOrigin{Source: src, Requester: who, Class: class})
+	if err != nil {
+		note = strings.TrimSpace(note + "\n(The event's files could not be stored: " + err.Error() + ")")
+	}
 	if ev.Urgent {
 		brief := "URGENT event — triage it now. Investigate, act within your autonomy, propose anything beyond it, and escalate per your charter if needed. Report what you found and did.\n\n" + EventMessage(c, ev.Text, "")
-		w, err := s.Spawn(ctx, Actor{Bot: ev.Bot, Role: config.BotRoleHome}, SpawnRequest{CaseID: c.ID, Brief: brief, byConductor: true})
+		w, err := s.Spawn(ctx, Actor{Bot: ev.Bot, Role: config.BotRoleHome}, SpawnRequest{CaseID: c.ID, Brief: brief, byConductor: true, Attachments: attachmentIDs(atts)})
 		if err != nil {
-			note = "(conductor could not start a worker for this urgent event: " + err.Error() + " — handle it yourself.)"
+			note = strings.TrimSpace(note + "\n(conductor could not start a worker for this urgent event: " + err.Error() + " — handle it yourself.)")
 		} else {
-			note = fmt.Sprintf("(Urgent: conductor already started worker %s on this case; it will report here.)", w.ID)
+			note = strings.TrimSpace(note + fmt.Sprintf("\n(Urgent: conductor already started worker %s on this case; it will report here.)", w.ID))
 		}
 	}
 	if rt != nil {
 		note = strings.TrimSpace(RoutingNote(c) + "\n" + pre + "\n" + note)
 	}
-	s.enqueue(ev.Bot, c.ID, EventMessage(c, ev.Text, note))
+	s.enqueueMsg(ev.Bot, store.InboxMsg{ID: msgID, CaseID: c.ID, Text: EventMessage(c, ev.Text, note), Attachments: attachmentIDs(atts)})
 	return c.ID, nil
 }
 
@@ -714,6 +832,9 @@ type SpawnRequest struct {
 	// observe: anything else it calls becomes a proposal.
 	Verbs    []string
 	ReadOnly bool
+	// Attachments are attachment ids the parent passes on: the worker sees
+	// these files (read-only, fenced with their provenance) and no others.
+	Attachments []string
 	// consolidates are the log entries a consolidation worker is given
 	// (archive.go).
 	consolidates map[string]string
@@ -797,6 +918,11 @@ func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.W
 		if cc.Status != "open" {
 			return fmt.Errorf("case %s is closed", caseID)
 		}
+		for _, id := range req.Attachments {
+			if a := liveAttachments(*r, []string{id}); len(a) == 0 || !a[0].Removed.IsZero() {
+				return fmt.Errorf("--attach %s: no such attachment on bot %s (or it was removed)", id, c.Bot)
+			}
+		}
 		onCase := 0
 		for _, x := range r.Workers {
 			if x.CaseID == caseID && liveWorker(x) {
@@ -819,7 +945,7 @@ func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.W
 		w = store.Worker{ID: wid, CaseID: caseID, Brief: req.Brief, Handoff: req.Handoff, HistoryID: hid,
 			Dispatch: hid + ":" + config.BotWorkerStepID, Cwd: s.sessionDir(c.Bot, wid), Status: "starting", Started: now,
 			Parent: parent, Requester: tWho, RequesterClass: tClass, Verbs: req.Verbs, ReadOnly: req.ReadOnly,
-			Consolidates: req.consolidates}
+			Consolidates: req.consolidates, Attachments: req.Attachments}
 		if r.Workers == nil {
 			r.Workers = map[string]*store.Worker{}
 		}
@@ -861,8 +987,16 @@ func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.W
 	if req.Handoff {
 		trig = config.BotHandoffTrigger(c.Bot)
 	}
+	prompt := WorkerPrompt(s.Cfg(), c.Bot, &cs, w.ID, req.Brief, s.MemoryIndex(ctx, c.Bot, cs.Title+" "+req.Brief))
+	if len(req.Attachments) > 0 {
+		by := "Your parent, the home session,"
+		if req.byConductor {
+			by = "Conductor"
+		}
+		prompt += "\n## Files passed to you\n" + AttachmentSection(liveAttachments(s.Ledger.Bot(c.Bot), req.Attachments), nil, by)
+	}
 	inputs := map[string]any{
-		"prompt":                WorkerPrompt(s.Cfg(), c.Bot, &cs, w.ID, req.Brief, s.MemoryIndex(ctx, c.Bot, cs.Title+" "+req.Brief)),
+		"prompt":                prompt,
 		"workdir":               w.Cwd,
 		"worker":                w.ID,
 		dispatch.BotContextCase: w.CaseID,
@@ -872,7 +1006,8 @@ func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.W
 		return fail(fmt.Errorf("start worker: %w", err))
 	}
 	s.audit(map[string]any{"event": "bot_worker", "bot": c.Bot, "worker": w.ID, "case": w.CaseID, "handoff": req.Handoff, "group": w.Group,
-		"parent": w.Parent, "requester": w.Requester, "requester_class": w.RequesterClass, "verbs": w.Verbs, "read_only": w.ReadOnly, "action": "spawn"})
+		"parent": w.Parent, "requester": w.Requester, "requester_class": w.RequesterClass, "verbs": w.Verbs, "read_only": w.ReadOnly,
+		"attachments": w.Attachments, "action": "spawn"})
 	s.logf("%s: worker %s started on case %s", c.Bot, w.ID, w.CaseID)
 	return w, nil
 }
@@ -896,6 +1031,9 @@ func (s *Service) findWorker(dispatchID, historyID string) (string, store.Worker
 // case, and the DISPATCH, which is what a rotation or a finish revokes by.
 type SessionBinding struct {
 	Identity, Bot, Role, Session, Dispatch, CaseID string
+	// ReadOnly are paths the sandbox binds into the session READ-ONLY: a
+	// home session's attachments dir; a worker's passed attachments only.
+	ReadOnly []string
 }
 
 // SessionForCwd is the cwd → session lookup conductor's sandbox endpoint
@@ -914,12 +1052,18 @@ func (s *Service) SessionForCwd(cwd string) (SessionBinding, bool) {
 		rec := s.Ledger.Bot(name)
 		if h := rec.Home; h != nil && filepath.Clean(h.Cwd) == clean {
 			return SessionBinding{Identity: SessionIdentity(name, h.ID), Bot: name, Role: config.BotRoleHome,
-				Session: h.ID, Dispatch: h.Dispatch}, true
+				Session: h.ID, Dispatch: h.Dispatch, ReadOnly: []string{s.Cfg().BotAttachmentsDir(name)}}, true
 		}
 		for _, w := range rec.Workers {
 			if w.Handoff && (w.Status == "starting" || w.Status == "running") && filepath.Clean(w.Cwd) == clean {
+				var ro []string
+				for _, a := range liveAttachments(rec, w.Attachments) {
+					if a.Removed.IsZero() {
+						ro = append(ro, a.Path)
+					}
+				}
 				return SessionBinding{Identity: SessionIdentity(name, w.ID), Bot: name, Role: config.BotRoleWorker,
-					Session: w.ID, Dispatch: w.Dispatch, CaseID: w.CaseID}, true
+					Session: w.ID, Dispatch: w.Dispatch, CaseID: w.CaseID, ReadOnly: ro}, true
 			}
 		}
 	}

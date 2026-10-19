@@ -102,13 +102,16 @@ func TestBotNewPlan(t *testing.T) {
 		{config.TemplateBotDraft{Name: "keeper"}, "kit/keeper", `a bot named "keeper" exists`},
 		{config.TemplateBotDraft{Name: "k3", Grants: map[string]string{"store.delete": "reversible"}}, "kit/keeper", "looser than template kit/keeper allows — at most propose"},
 		{config.TemplateBotDraft{Name: "k3", Grants: map[string]string{"store.drop": "never"}}, "kit/keeper", "does not request it"},
-		{config.TemplateBotDraft{Name: "k3"}, "conductor-packs/demo-kit/keeper", "not an installed template"},
 		{config.TemplateBotDraft{Name: "k3", Connectors: map[string]string{"nope": "state"}}, "kit/keeper", "not an input of template"},
 		{config.TemplateBotDraft{Name: "Bad Name"}, "kit/keeper", "lowercase letters"},
 	} {
 		if _, err := planNewBot(p, bad.d, bad.ref); err == nil || !strings.Contains(err.Error(), bad.want) {
 			t.Errorf("%+v %s: %v (want %q)", bad.d, bad.ref, err, bad.want)
 		}
+	}
+	// A registry ref the registry doesn't have (a local registry: no network).
+	if _, err := planNewBotOpts(p, config.TemplateBotDraft{Name: "k3"}, "conductor-packs/demo-kit/nope", newBotOpts{Registry: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "no such template in the registry") {
+		t.Errorf("an unknown registry template: %v", err)
 	}
 	// `conductor bot grant`: a widening on a copy.
 	g, err := planGrant(p, "keeper", map[string]string{"store.delete": "propose"})

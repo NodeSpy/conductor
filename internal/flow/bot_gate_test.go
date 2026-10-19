@@ -3,8 +3,12 @@ package flow
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/config"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 type stubGate struct {
@@ -71,5 +75,76 @@ func TestRunSkillVerbBotGate(t *testing.T) {
 	}
 	if g.calls != before {
 		t.Fatal("a non-bot grant consulted the bot gate")
+	}
+}
+
+// A BOT SPEAKS AS ITSELF. A verb whose connector declares the identity
+// semantic gets its identity options filled from the calling bot's config,
+// overwriting what the bot passed (it can't post as another bot), and an
+// attribute the bot doesn't set removes the option. The name falls back to
+// the config id. A grant with no bot is untouched.
+func TestRunSkillVerbBotIdentity(t *testing.T) {
+	r := capRunner(t)
+	st := newFakeState(t, "svc")
+	r.Bots = &stubGate{v: BotVerdict{Allow: true}}
+	r.Cfg.Bots = map[string]config.BotConfig{
+		"sre": {Identity: config.Identity{DisplayName: "Night Owl", Avatar: &config.BotAvatar{Preset: "owl"}}},
+		"ops": {},
+	}
+	id := func(bot string) SkillIdentity {
+		return SkillIdentity{Agent: "bot:" + bot, Verbs: []string{"svc.say"}, Bot: bot, BotRole: "home"}
+	}
+	spoof := func() map[string]any {
+		return map[string]any{"text": "hi", "username": "Release Manager", "icon": "lighthouse", "color": "teal"}
+	}
+	last := func() map[string]any { c := st.snapshot(); return c[len(c)-1].Opts }
+
+	if _, err := r.RunSkillVerb(context.Background(), id("sre"), "svc.say", spoof()); err != nil {
+		t.Fatal(err)
+	}
+	if o := last(); o["username"] != "Night Owl" || o["icon"] != "owl" || o["text"] != "hi" {
+		t.Fatalf("sre's post: %v", o)
+	}
+	if _, has := last()["color"]; has {
+		t.Fatalf("an unset attribute kept the bot's own value: %v", last())
+	}
+	if _, err := r.RunSkillVerb(context.Background(), id("ops"), "svc.say", spoof()); err != nil {
+		t.Fatal(err)
+	}
+	if o := last(); o["username"] != "ops" || o["icon"] != nil {
+		t.Fatalf("a bot with no identity posts as its id, with no icon: %v", o)
+	}
+	// A bot that isn't in the config (a stale grant) gets every identity
+	// option removed, never kept.
+	if _, err := r.RunSkillVerb(context.Background(), id("gone"), "svc.say", spoof()); err != nil {
+		t.Fatal(err)
+	}
+	if o := last(); o["username"] != nil || o["icon"] != nil {
+		t.Fatalf("an unknown bot kept identity options: %v", o)
+	}
+	// Not a bot: nothing is filled.
+	plain := id("sre")
+	plain.Bot, plain.BotRole = "", ""
+	if _, err := r.RunSkillVerb(context.Background(), plain, "svc.say", spoof()); err != nil {
+		t.Fatal(err)
+	}
+	if o := last(); o["username"] != "Release Manager" {
+		t.Fatalf("a non-bot call was rewritten: %v", o)
+	}
+}
+
+// The engine fills exactly the attributes the plugin contract names: a
+// plugin may map any of them, and the engine has a value for each.
+func TestBotIdentityAttributesMatchTheContract(t *testing.T) {
+	full := config.Identity{DisplayName: "N", Tagline: "t", Color: "plum", Avatar: &config.BotAvatar{Icon: "radar", Color: "teal"}}
+	var got []string
+	for k := range full.Attributes("sre") {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	want := append([]string(nil), sdk.IdentityAttributes...)
+	sort.Strings(want)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("engine attributes %v, contract %v", got, want)
 	}
 }

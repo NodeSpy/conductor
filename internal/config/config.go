@@ -276,6 +276,9 @@ type Config struct {
 	// what applying them to bots found worth saying (BotTemplateNotes).
 	templates     map[string]map[string]LoadedTemplate `yaml:"-"`
 	templateNotes []string                             `yaml:"-"`
+	// removedWarnings name removed keys still in the config or its packs
+	// (removed.go).
+	removedWarnings []string `yaml:"-"`
 }
 
 // Update configures periodic self-update checks.
@@ -901,6 +904,7 @@ func Load(path string) (*Config, error) {
 		if err := strictUnmarshal(expanded, &c); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
+		c.removedWarnings = removedFolderWarnings(expanded)
 	} else {
 		// TWO PASSES over the same import traversal, so the settings a file
 		// declares reach every OTHER file's body and no traversal logic is
@@ -935,6 +939,7 @@ func Load(path string) (*Config, error) {
 		if err := strictUnmarshal(out, &c); err != nil {
 			return nil, fmt.Errorf("parse merged config: %w", err)
 		}
+		c.removedWarnings = removedFolderWarnings(out)
 	}
 	// A `${settings.X}` that survived into a real field names nothing declared
 	// — the typo, caught here rather than as a mystery value at dispatch.
@@ -1339,9 +1344,6 @@ func (c *Config) Validate() error {
 		}
 	}
 	if err := c.validateUsage(); err != nil {
-		return err
-	}
-	if err := c.validateEntityFolders(); err != nil {
 		return err
 	}
 	if err := c.validatePricing(); err != nil {

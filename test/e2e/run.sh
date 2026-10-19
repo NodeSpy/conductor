@@ -2342,7 +2342,6 @@ group_L_templates() {
   assert_contains "$out" '"pack": "demo-kit"' L L2-pack "L2 ... the pack"
   assert_contains "$out" '"version": "1.0.0"' L L2-version "L2 ... and its version"
   assert_contains "$out" '"practice": true' L L2-practice "L2 it starts in practice mode"
-  assert_contains "$out" '"folder": "packs/kit"' L L2-folder "L2 it is filed under its pack instance"
   wait_for 60 cexec conductor-bots paseo _creds "bot keeper" || { bad "L3 keeper's home session" L L3-launch "no fake-paseo agent titled 'bot keeper'"; return; }
   creds="$(cexec conductor-bots paseo _creds "bot keeper")"
   tok="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_SKILL_TOKEN=//p' | head -1)"

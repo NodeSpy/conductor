@@ -1036,11 +1036,6 @@ callable:
 #       - { on: github.pull_request, filter: { repo: [me/api] } }
 # ---------------------------------------------------------------------------
 triggers:
-  # A trigger (and a workflow) can be filed in a folder for display only —
-  # `conductor workflows ls --folder work`, `conductor folders ls work`. No behavior:
-  #   - { on: manual, name: release-notes, folder: work/platform, steps: [ … ] }
-  # A pack's own workflows/triggers are filed by YOU, in its packs: entry
-  # (packs.<instance>.folder / .workflows.<name>.folder / .triggers.<name>.folder).
   # Near-identical triggers can share a base: a trigger `extends: <name>` inherits
   # another's steps/filter/policy/options (options deep-merge; filter and steps
   # replace when set), and a base marked `abstract: true` never fires and is
@@ -1502,16 +1497,30 @@ bots:
       tools, propose fixes, and escalate per the policy below. Keep runbooks
       and the infra map in your memory current.
     # charter_file: bots/platform-sre.md      # or keep the charter in a file
+    # Identity (wiki: Bots → Identity): presentation and voice only, never permissions.
+    # Faces and colors are names from built-in lists (`conductor bot identity-options`), never URLs.
+    # display_name: Night Owl                    # what it calls itself and chat shows; the id stays its address
+    # tagline: Watches the pager so you can sleep.
+    # avatar: { preset: owl, color: teal }       # or { icon: radar, color: teal }; none: the dashboard shows initials
+    #                                            # or your own picture: { image: avatars/platform-sre.png, preset: owl }
+    #                                            #   (`conductor bot avatar set platform-sre me.jpg`: re-encoded, PNG/JPEG/WebP, no SVG)
+    # color: indigo                              # identity colors exclude status hues (red, green, amber, …)
+    # personality:                               # a voice section in its prompt, fenced, below the charter and rules
+    #   tone: terse                              # terse | friendly | formal | warm | dry | playful
+    #   style: "Lead with the answer, then the evidence."   # at most 600 bytes
     escalation: "Page the operator if a sev1 is not mitigated in 15 minutes or you are unsure."
     # memory_repo: ~/bots/platform-sre        # default <state dir>/bots/platform-sre/memory
     # seed_dir: .conductor/packs/platform-sre    # seed a NEW memory repo with a pack's knowledge/ + runbooks/
     # operators: [ops]                           # default: the team's operators, else every operator
     team: platform                               # at most one team (teams: below); bots without one are unaffected
-    # folder: work/platform                      # display only (`conductor bot ls`); on a team, the team's folder wins
     # Memory is typed: knowledge/, runbooks/, watch/, digests/ (built-in kinds with frontmatter
     # schemas — `conductor bot kinds`), log/ and handoff/ (conductor's). Custom kinds:
     # collections:
     #   postmortems: { from: .conductor/packs/platform-sre/collections/postmortems.yaml }   # one a pack ships
+    # Files on messages (`conductor bot say --attach`, the dashboard, a chat connector's attachments
+    # semantic) live in conductor's state, never in memory, and go when their case closes
+    # (wiki: Bots → Attachments). Every cap is on by default:
+    # attachments: { max_file: 10MB, max_message: 25MB, max_files: 10, ttl: 168h }   # types: [image/*, text/plain, …]
     # Sessions read memory through a budgeted index, ranked recall and reads in parts
     # (wiki: Bots → Reading memory). Every limit is on by default; a bigger value loosens it:
     # memory:
@@ -1576,12 +1585,12 @@ bots:
   #     pagerduty.get_incident: observe
   #     pagerduty.list_incidents: observe
   #     pagerduty.acknowledge: reversible        # a widening
-  #   # description:, escalation:, operators:, team:, folder:, autonomy: … — yours, and yours win
+  #   # description:, escalation:, operators:, team:, autonomy: … — yours, and yours win
 
 teams:
   platform:
     description: "Platform services: the shared runtime, its data stores and deploys"
-    folder: work/platform                        # display only: files the team and its bots in `conductor bot ls` — no permissions, defaults or routing
+    # avatar: { icon: radar, color: teal }       # or { image: avatars/team-platform.png } (`conductor team avatar set`); no presets — those are bots'
     knowledge: { promotion: proposal }           # a shared repo every bot reads; promotions need an operator of the team
                                                  # + index_budget (default 2k), read_max, recall_limit, max_bytes: { knowledge, runbook, watch }
     collections:                                 # a custom document kind in the team's knowledge (wiki: Bots → Content kinds)
@@ -1617,8 +1626,8 @@ teams:
     #   lead: platform-sre                       # else the lead triages (a read-only worker) and runs `conductor bot assign`
     #   fallback: platform-sre                   # else, or unassigned after timeout:, the fallback (required)
     #   # timeout: 10m
-  # billing: { description: "Billing and invoicing", folder: work/billing }   # isolated from platform unless bot_links: pairs bots
-# A solo bot files itself:  bots: { home-helper: { folder: personal/home, … } }
+    # chat: { everyone_per_hour: 6, max_reply: 4000 }   # `conductor team say`: --everyone per hour; one bot reply's bytes
+  # billing: { description: "Billing and invoicing" }   # isolated from platform unless bot_links: pairs bots
 
 # bot_links:                                # operator-side peer links: each pair may message each other.
 #   - [platform-sre, billing-sre]              # Linking two bots is a channel for data to cross between them —
@@ -1680,8 +1689,6 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #       review-flow/post:   { workspace: local }  #   …or <workflow>[<n>] for a step with no id:
 #     models:
 #       reviewer: claude-opus-5                   # OVERRIDE a bundled fleet
-#     folder: work/review                         # file its workflows + triggers (display only;
-#     workflows: { review-flow: { folder: work/review/flows } }   #   a pack cannot set folder: itself)
 #     on:                                          # its triggers, by qualified name
 #       github.pull_request: { filter: { not_label_any: [wip] } }
 #     # Scope lives on the CONNECTOR, not the pack: each trigger binds to your

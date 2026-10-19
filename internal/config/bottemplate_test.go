@@ -76,10 +76,25 @@ func loadTemplateCfg(t *testing.T, manifest, body string) (*Config, string, erro
 // loadTemplateCfgConn is loadTemplateCfg with more connectors.
 func loadTemplateCfgConn(t *testing.T, manifest, conns, body string) (*Config, string, error) {
 	t.Helper()
+	return loadTemplateCfgFull(t, manifest, conns, body, nil)
+}
+
+// loadTemplateCfgWith is loadTemplateCfg with extra files written by prep
+// (given the config's directory) before the load.
+func loadTemplateCfgWith(t *testing.T, manifest, body string, prep func(dir string)) (*Config, string, error) {
+	t.Helper()
+	return loadTemplateCfgFull(t, manifest, "", body, prep)
+}
+
+func loadTemplateCfgFull(t *testing.T, manifest, conns, body string, prep func(dir string)) (*Config, string, error) {
+	t.Helper()
 	dir := t.TempDir()
 	SetStateDir(filepath.Join(dir, "state"))
 	t.Cleanup(func() { SetStateDir("") })
 	writeSREKit(t, dir, manifest)
+	if prep != nil {
+		prep(dir)
+	}
 	p := filepath.Join(dir, "config.yaml")
 	base := strings.Replace(botsBase, "connectors:\n", "connectors:\n"+conns, 1)
 	if err := os.WriteFile(p, []byte(base+"packs:\n  kit: { use: ./packs/sre-kit }\n"+body), 0o600); err != nil {
@@ -115,9 +130,6 @@ func TestTemplateBotTakesBehaviorNotVerbs(t *testing.T) {
 	}
 	if !m.Autonomy.ShadowMode() || m.Origin == nil || !m.Origin.Practice || len(m.Origin.Widenings) != 0 {
 		t.Fatalf("not in practice mode / widenings: %+v", m.Origin)
-	}
-	if m.Folder != "packs/kit" {
-		t.Fatalf("folder: %q", m.Folder)
 	}
 	if _, ok := m.Collections["postmortems"]; !ok {
 		t.Fatal("the template's collection")
@@ -288,22 +300,15 @@ bots:
 	if err == nil || !strings.Contains(err.Error(), "ceiling observe") {
 		t.Fatalf("a template bot past its team's ceiling: %v", err)
 	}
-	c, _, err := loadTemplateCfg(t, sreKitManifest, "teams:\n  platform: { routing: { fallback: sre }, folder: work/p }\nbots:\n  sre: { use: kit/first-line, team: platform }\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Bots["sre"].Folder != "" {
-		t.Fatalf("a team bot got the pack's folder: %q", c.Bots["sre"].Folder)
-	}
 }
 
 // A TEMPLATE CANNOT SET what is the operator's: every forbidden key fails
 // the pack, by name.
 func TestTemplateForbiddenKeys(t *testing.T) {
-	values := map[string]string{"operators": "[ops]", "approvers": "[ops]", "folder": "x/y", "team": "platform", "secrets": "{ a: b }",
+	values := map[string]string{"operators": "[ops]", "approvers": "[ops]", "team": "platform", "secrets": "{ a: b }",
 		"skill": "{ verbs: [gh.merge] }", "grant": "{ gh.merge: observe }", "autonomy": "{ shadow: false }", "isolation": "{ sandbox: optional }",
 		"browser": "{ logins: [x.example.com] }", "network": "[x:443]", "egress": "[x:443]", "memory_repo": "/tmp/m", "seed_dir": "/tmp/s",
-		"memory": "{ index_budget: 60k }", "peers": "[other]", "terraform": "{ plan_connector: x }", "home": "{ mode: bypass }",
+		"memory": "{ index_budget: 60k }", "attachments": "{ max_file: 500MB }", "peers": "[other]", "terraform": "{ plan_connector: x }", "home": "{ mode: bypass }",
 		"worker": "{ runtime: x }", "disabled": "true", "use": "kit/other", "charter_digest": "abc"}
 	// The list is fixed here, not read from the map: dropping a key from
 	// forbiddenTemplateKeys must fail this test.
@@ -471,7 +476,7 @@ func TestTemplateCatalog(t *testing.T) {
 		t.Fatalf("installed: %+v", in)
 	}
 	reg := filepath.Join(filepath.Dir(p), "packs")
-	ts, problems := RegistryTemplates(reg, true)
+	ts, problems := RegistryTemplates(DefaultRegistry, reg, true)
 	if len(problems) != 0 || len(ts) != 1 || ts[0].Ref != "conductor-packs/sre-kit/first-line" || !strings.Contains(ts[0].Install, "use: conductor-packs/sre-kit") {
 		t.Fatalf("registry: %+v %v", ts, problems)
 	}

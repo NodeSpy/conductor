@@ -88,6 +88,10 @@ func DeprecationWarnings(cfg *config.Config) []string {
 	for _, name := range names {
 		walk("workflows."+name, cfg.Workflows[name].Steps)
 	}
+	// Removed keys still in the config (folder:): ignored, never an error.
+	for _, w := range cfg.RemovedFieldWarnings() {
+		warn(w)
+	}
 	return warns
 }
 

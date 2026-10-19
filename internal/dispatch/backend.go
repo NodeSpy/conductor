@@ -200,6 +200,8 @@ type SendOptions struct {
 	ID     string
 	Prompt string
 	JSON   bool
+	// Images are local image files attached to the message (`--image`).
+	Images []string
 }
 
 // SendResult is the output of a Send call. Stderr is the raw captured stderr

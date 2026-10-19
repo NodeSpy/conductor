@@ -367,6 +367,21 @@ func (d *Dispatcher) Send(ctx context.Context, id, prompt string) error {
 	return d.sendToAgent(ctx, id, prompt)
 }
 
+// SendImages is Send with image files attached (`paseo send --image`).
+func (d *Dispatcher) SendImages(ctx context.Context, id, prompt string, images []string) error {
+	if err := checkPromptSize(prompt); err != nil {
+		return err
+	}
+	res, err := d.backend().Send(ctx, SendOptions{ID: id, Prompt: prompt, Images: images})
+	if err != nil {
+		if s := strings.TrimSpace(res.Stderr); s != "" {
+			return fmt.Errorf("%w: %s", err, truncate(s, 300))
+		}
+		return err
+	}
+	return nil
+}
+
 // SendCapture delivers a follow-up prompt and waits for the turn to finish
 // (`paseo send` waits by default), returning the completed turn's JSON
 // output — the same capture shape as `paseo run --json`. The supervise loop
