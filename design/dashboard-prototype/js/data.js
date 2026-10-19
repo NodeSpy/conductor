@@ -153,7 +153,9 @@
   // (uploaded first, then referenced by id) and says whether it was delivered or is queued until the bot is idle
   D.chatsVer = 2;
   D.chat = [
-    { id: 't1', who: 'event', at: m(48), case: 'c29', source: 'PagerDuty', text: 'pd.incident · SEV2 · api p99 latency > 2s for 10m (acme/api, us-east)', fenced: true },
+    { id: 't1', who: 'event', at: m(48), case: 'c29', source: 'PagerDuty', on: 'pd.incident', text: 'pd.incident · SEV2 · api p99 latency > 2s for 10m (acme/api, us-east)', fenced: true,
+      // what the connector declares about the event: its kind, a headline, how severe, and the fields worth a glance
+      ev: { kind: 'incident', title: 'api p99 latency above 2s for 10 minutes', severity: 'SEV2', level: 'high', url: 'https://acme.pagerduty.com/incidents/Q3RT8K', fields: [['service', 'acme/api'], ['region', 'us-east'], ['for', '10 min']] } },
     { id: 't2', who: 'bot', at: m(47), text: 'I’ve opened a ticket for this incident. Checking the runbook `runbooks/latency.md` first, then I’ll have two read-only workers pull the last hour of p99 by route and the deploy log.' },
     { id: 't3', who: 'tool', at: m(47), kind: 'spawn', readOnly: true, brief: 'p99 by route, last 60m', text: 'conductor bot spawn --task c29 --group recon --read-only "p99 by route, last 60m"', out: 'worker w31 started · read-only · group recon' },
     { id: 't4', who: 'tool', at: m(46), kind: 'spawn', readOnly: true, brief: 'deploys and config changes, last 3h', text: 'conductor bot spawn --task c29 --group recon --read-only "deploys + config changes, last 3h"', out: 'worker w32 started · read-only · group recon' },
@@ -975,5 +977,5 @@ window.D.packMembers = {
   };
   D.chatUnread = { 'team:platform': 2, 'web-triage': 1, 'billing-sre': 1 };
   D.chatPinned = ['platform-sre'];
-  D.chatsVer = 3;
+  D.chatsVer = 4;
 })();

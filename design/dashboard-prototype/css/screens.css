@@ -149,8 +149,15 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 .cm-out { margin: var(--space-1) 0 0; padding: var(--space-2) var(--space-3); max-height: 9.5em; overflow: auto; background: var(--code-bg); border: var(--border-width) solid var(--code-border); border-radius: var(--radius-control); font-family: var(--font-family-mono); font-size: var(--type-code-s-size); line-height: 1.5; color: var(--code-fg); white-space: pre; }
 /* an event: quiet, its source and task in words; the untrusted note stays, small and plain */
 .cm-event { max-width: 100%; align-self: stretch; }
-.cm-ev { padding: var(--space-2) var(--space-3); border: var(--border-width) dashed var(--color-border-default); border-radius: var(--radius-control); font: var(--type-body-s); color: var(--color-text-secondary); overflow-wrap: anywhere; }
-.cm-note { margin-top: var(--space-1); font: var(--type-caption); color: var(--color-text-tertiary); }
+/* an incoming event: a solid card, the source and time, a plain headline, its facts and links; a severe one carries
+   the attention edge; the "data, not orders" label is a legible line, not a whisper */
+.cm-evc { display: grid; gap: var(--space-1_5); padding: var(--space-3) var(--space-4); border-radius: var(--radius-card); background: var(--color-bg-raised); border: var(--border-width) solid var(--color-border-default); box-shadow: inset 3px 0 0 var(--color-border-strong); }
+.cm-evc[data-sev="high"] { box-shadow: inset 3px 0 0 var(--color-accent-default); border-color: color-mix(in srgb, var(--color-accent-default) 35%, var(--color-border-default)); }
+.cm-evh { display: flex; align-items: center; gap: var(--space-2); font: var(--type-body-s); font-weight: var(--font-weight-semibold); color: var(--color-text-secondary); } .cm-evh svg { width: 16px; height: 16px; color: var(--color-icon-default); } .cm-evh .dl-sub { margin-left: auto; font-weight: 400; }
+.cm-evc[data-sev="high"] .cm-evh svg { color: var(--color-text-accent); }
+.cm-evt { font: var(--type-body-l, var(--type-body-m)); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); }
+.cm-evnote { display: flex; align-items: center; gap: var(--space-1_5); margin: var(--space-1) 0 0; font: var(--type-body-s); color: var(--color-text-secondary); } .cm-evnote svg { width: 14px; height: 14px; flex: none; color: var(--color-icon-default); }
+.cm-evraw > summary { display: inline-flex; align-items: center; gap: var(--space-1); cursor: pointer; list-style: none; font: var(--type-caption); color: var(--color-text-tertiary); } .cm-evraw > summary::-webkit-details-marker { display: none; } .cm-evraw svg { width: 12px; height: 12px; } .cm-evraw[open] > summary svg { transform: rotate(90deg); }
 /* an approval the bot asks for, in the thread */
 .cm-card { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: var(--space-3); align-items: center; margin-top: var(--space-2); padding: var(--space-3); border-radius: var(--radius-card); border: var(--border-width) solid var(--color-border-default); background: var(--color-bg-raised); color: inherit; text-decoration: none; max-width: 62ch; }
 .cm-card.pend { box-shadow: inset 3px 0 0 var(--color-accent-default); } .cm-card:hover { border-color: var(--color-border-strong); }

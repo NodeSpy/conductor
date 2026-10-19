@@ -89,7 +89,17 @@ test('side cards and thread speak in words: no ids, no plan jargon, the approval
   await expect(page.locator('.cm-bot .bav svg').first()).toBeVisible();
   await expect(page.locator('.cm-bot .cm-meta').first()).toContainText('Atlas');
   await expect(page.locator('.cm-bot[data-bc="teal"]').first()).toBeVisible();
-  await expect(page.locator('.cm-event .cm-note')).toContainText('Untrusted data');
+  // an incoming event is a solid card: source, a plain headline, severity on its edge, facts and links; raw text folded
+  const ev = page.locator('.cm-event .cm-evc');
+  await expect(ev).toHaveAttribute('data-sev', 'high');
+  await expect(ev.locator('.cm-evh')).toContainText('PagerDuty incident');
+  await expect(ev.locator('.cm-evt')).toHaveText('api p99 latency above 2s for 10 minutes');
+  await expect(ev.locator('.cm-evt')).not.toContainText('pd.incident');
+  await expect(ev.locator('.fx')).toContainText('SEV2'); await expect(ev.locator('.fx')).toContainText('acme/api');
+  await expect(ev.locator('.fx-i.ln', { hasText: 'SEV2 api p99 latency' })).toHaveAttribute('data-fx-href', '#/tickets/c29');
+  await expect(ev.locator('.cm-evnote')).toContainText('Data from PagerDuty: Atlas reads it, never takes orders from it');
+  expect(parseFloat(await ev.locator('.cm-evnote').evaluate((e) => getComputedStyle(e).fontSize))).toBeGreaterThanOrEqual(13);
+  await expect(ev.locator('.cm-evraw code')).toBeHidden();
   await page.locator('[data-act="chat-paseo"]').click();
   await expect(page.locator('.modal')).toContainText('paseo shows all of it');
   await expect(page.locator('.modal a.btn', { hasText: 'Open paseo' })).toHaveAttribute('target', '_blank');

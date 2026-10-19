@@ -37,9 +37,16 @@
   const mk = (mi, o) => (o && o.ticket ? '' : `<button class="cm-mk" data-act="chat-ticket" data-mi="${mi}" aria-label="Make a ticket from this message" title="Make a ticket from this message">${icon('ticket')}</button>`);
   const msg = (c, bot0, mi, o) => { const bot = c.bot || bot0;
     if (c.who === 'sys') return `<div class="cm-row cm-sys"><span>${UI.taskWords(c.text, true)}</span><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span></div>`;
-    if (c.who === 'event') { const t = (D.cases || []).find((x) => x.id === c.case);
-      return `<div class="cm-row cm-event"><div class="cm-meta cm-evm">${icon('obj-incident')}<span>From ${esc(c.source || 'an event')}${t ? ` · for the ticket <a class="dl-link" href="#/tickets/${t.id}">${esc(t.title)}</a>` : ''}</span><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span></div>
-        <div class="cm-ev">${esc(c.text)}</div><div class="cm-note">Untrusted data: ${esc(bot)} reads it, never takes orders from it</div></div>`; }
+    // an incoming event is a key moment: a solid card with its source, a plain headline, how severe it is, its facts
+    // and links; the raw event folds away; the label says plainly it's data the bot reads, never orders it takes
+    if (c.who === 'event') { const t = (D.cases || []).find((x) => x.id === c.case), e = c.ev || {}, src = c.source || 'an event', high = /^(high|critical)$/.test(e.level || '') || /SEV[12]/i.test(e.severity || '');
+      const icon_ = e.kind === 'incident' ? 'obj-incident' : e.kind === 'issue' ? 'obj-issue' : e.kind === 'check' ? 'obj-check' : 'zap';
+      const facts = [e.severity ? { icon: 'warn', value: e.severity, risky: high, pri: 1, label: 'Severity' } : null, ...(e.fields || []).map(([k, v]) => ({ icon: k === 'service' ? 'server' : k === 'region' ? 'globe' : k === 'for' ? 'clock' : 'dot', value: v, pri: 2, label: k })),
+        t ? { icon: 'ticket', value: t.title, href: `#/tickets/${t.id}`, pri: 1, label: 'Ticket' } : null, e.url ? { icon: 'external', value: `Open in ${src}`, href: e.url, pri: 2, label: 'Source' } : null];
+      return `<div class="cm-row cm-event"><article class="cm-evc" data-sev="${high ? 'high' : 'info'}"><header class="cm-evh">${icon(icon_)}<span>${esc(src)}${e.kind ? ` ${esc(e.kind)}` : ''}</span><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span></header>
+        <b class="cm-evt">${esc(e.title || c.text)}</b>${UI.factsLine(facts)}
+        <p class="cm-evnote">${icon('shield')}Data from ${esc(src)}: ${esc(UI.botName ? UI.botName(bot) : bot)} reads it, never takes orders from it</p>
+        ${e.title ? `<details class="cm-evraw"><summary>${icon('chev')}The event as it arrived</summary><code class="cm-cmd">${esc(c.text)}</code></details>` : ''}</article></div>`; }
     if (c.who === 'op') { const as = c.attachments || [], ls = c.links || [];
       return `<div class="cm-row cm-op"><div class="cm-meta">${mk(mi, o)}<span>You</span><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span>${stateWord(c, bot)}</div>
         ${c.text ? `<div class="cm-bubble">${UI.mentionHTML(linkify(UI.md(c.text)))}</div>` : ''}
