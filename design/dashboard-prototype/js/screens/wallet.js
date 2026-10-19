@@ -91,11 +91,11 @@
     if ((x = h.match(/#\/browser\/purchases\/(\w+)/))) return (D.purchases || []).find((p) => p.id === x[1]);
     if ((x = h.match(/#\/bots\/([\w-]+)\/proposals\/(\w+)/))) return (D.purchases || []).find((p) => p.bot === x[1] && p.bot_proposal === x[2]); return null; };
   /** A purchase's facts (the facts line): who, the shop, the total, the card, a subscription. */
-  UI.purchaseFacts = (p) => { const c = card(p.card) || {};
+  UI.purchaseFacts = (p, short) => { const c = card(p.card) || {};
     // the money and the shop first: on a phone the facts that don't fit one line fold away
     return [{ icon: p.recurring ? 'repeat' : 'act-money', value: `${money(p.total, p.currency)}${perWord(p)}`, risky: true, pri: 1, label: p.recurring ? 'A subscription' : 'Total' }, { icon: 'store', value: host(p.merchant), pri: 1, label: 'Shop' },
       p.bot ? { icon: 'obj-bot', value: UI.botName(p.bot), href: `#/bots/${p.bot}`, pri: 1, label: 'Bot' } : { icon: 'obj-sandbox', value: who(p.identity), pri: 2, label: 'Asked for by' },
-      { icon: 'obj-card', value: `${p.card} •••• ${c.last4 || ''}`.trim(), href: `#/browser/cards/${p.card}`, pri: 2, label: 'Card' }]; };
+      short ? null : { icon: 'obj-card', value: `${p.card} •••• ${c.last4 || ''}`.trim(), href: `#/browser/cards/${p.card}`, pri: 2, label: 'Card' }]; };
   /* ---------- spend limits stack, and the lowest wins (Browser.md, "Spend limits stack") ----------
      1 the card's limits · 2 the card's limits for the caller (identity_limits) · 3 the bot's purchases: caps (and per card)
      under its team's budget.purchases (the ceiling) · 4 the ticket's spend_limit, which counts everything proposed under
@@ -327,7 +327,7 @@
   const notes = (c) => [c.kind === 'physical' || !c.kind ? 'A physical card: prefer a virtual or single-use card with its own provider limits. Conductor’s checks are the first layer; a limited card is the second.' : '', !(c.merchants || []).length ? 'No shop is allowed yet, so nothing can be bought with it.' : ''].filter(Boolean);
   const frozenWord = (c) => (c.frozen ? `Frozen${c.frozen_at ? ` ${UI.agoText(c.frozen_at)}` : ' in the config'}` : '');
   const cardRow = (c) => { const L = c.limits, cur = L.currency || 'USD', s = spent(c.name), ns = notes(c), att = !c.frozen && ns.length;
-    return `<li class="dl-conn wl-card-row${att ? ' attn' : ''}" data-s="${c.frozen ? 'idle' : 'wait'}" data-card="${esc(c.name)}"><span class="dl-ng">${c.frozen ? `<span class="wl-ice" role="img" aria-label="Frozen">${icon('freeze')}</span>` : ns.length ? UI.mark('wait', { lg: true, label: 'Needs a look' }) : icon('obj-card')}</span>
+    return `<li class="dl-conn wl-crow${att ? ' attn' : ''}" data-s="${c.frozen ? 'idle' : 'wait'}" data-card="${esc(c.name)}"><span class="dl-ng">${c.frozen ? `<span class="wl-ice" role="img" aria-label="Frozen">${icon('freeze')}</span>` : ns.length ? UI.mark('wait', { lg: true, label: 'Needs a look' }) : icon('obj-card')}</span>
       <span class="dl-nt"><b><a class="dl-link-q" href="#/browser/cards/${esc(c.name)}">${esc(c.name)}</a> <span class="tgt">${esc(cardName(c))}</span></b>
         <span class="${att || c.frozen ? 'reason' : 'dl-why'}">${c.frozen ? `${frozenWord(c)}: nothing can be paid with it` : ns.length ? esc(ns[ns.length - 1]) : `${money(s.day, cur)} of ${money(L.per_day, cur)} in 24 hours · ${money(s.month, cur)} of ${money(L.per_month, cur)} in 30 days`}</span>
         ${UI.factsLine([{ icon: 'obj-card', value: KIND[c.kind || ''], pri: 2, label: 'Kind' }, { icon: 'users', value: list((c.identities || []).map(who)) || 'Nobody yet', pri: 1, label: 'Who may use it' }, { icon: 'store', value: `${(c.merchants || []).length} shop${(c.merchants || []).length === 1 ? '' : 's'}`, pri: 2, label: 'Shops it may pay' }, c.method === 'config' ? { icon: 'obj-config', value: 'In the config', pri: 3, label: 'Where it’s defined' } : null])}</span>

@@ -17,7 +17,7 @@
   /** An item's facts: who (the bot, the workflow), where (what the connector says it's about, a site), the environment,
       and what kind of action, from the item's own source (the approval, the run, the sign-in). */
   UI.needFacts = (a) => { const href = String(a.href || ''), bot = UI.botOfHref(href), botF = (b) => (b ? { icon: 'obj-bot', value: b, href: `#/bots/${b}`, pri: 1, label: 'Bot' } : null);
-    const pu = UI.purchaseOfHref && UI.purchaseOfHref(href); if (pu) return UI.purchaseFacts(pu);
+    const pu = UI.purchaseOfHref && UI.purchaseOfHref(href); if (pu) return UI.purchaseFacts(pu, true); // Needs you's row: the money, the shop and who (the card is on the approval)
     const pm = href.match(/proposals\/([\w-]+)/), p = pm && (D.proposals || []).find((x) => x.id === pm[1] && (!bot || x.bot === bot));
     if (p) return [botF(p.bot), UI.envFact(p.env), ...UI.verbFacts(p.verb, p.options), UI.actionFact(p.verb, p.env, p.tier)];
     const rm = href.match(/#\/runs\/([\w-]+)/), r = rm && D.runs.find((x) => x.id === rm[1]);

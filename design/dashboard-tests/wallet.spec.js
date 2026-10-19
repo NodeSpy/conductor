@@ -139,10 +139,10 @@ test('add a card: the shared value fields, $ amounts, shops as rows each checked
 
 test('cards: spend against the limits, warnings from validate, and the card never shown beyond its last four', async ({ page }) => {
   await go(page, '#/browser/cards', { fresh: true });
-  const household = page.locator('.wl-card-row[data-card="household"]');
+  const household = page.locator('.wl-crow[data-card="household"]');
   await expect(household).toContainText('Visa •••• 4242');
   await expect(household).toContainText('$12.50 of $200.00 in 24 hours');
-  await expect(page.locator('.wl-card-row[data-card="spare"]')).toContainText('No shop is allowed yet');
+  await expect(page.locator('.wl-crow[data-card="spare"]')).toContainText('No shop is allowed yet');
   await go(page, '#/browser/cards/spare');
   await expect(page.locator('.wl-note')).toHaveCount(2);
   await expect(page.locator('.wl-note').first()).toContainText('prefer a virtual or single-use card');
