@@ -55,13 +55,13 @@ test('a double-click on Review and apply stages one bot, never a nameless second
   expect(bots).toEqual(['qa-bot']);
 });
 
-test('Add a connector is the searchable catalog with a git source; the instance name is prefilled (bugs B1/B2, power N6)', async ({ page }) => {
+test('Add a connection is the searchable catalog with a git source; the name is prefilled (bugs B1/B2, power N6)', async ({ page }) => {
   await go(page, '#/connectors', { fresh: true });
   await page.locator('[data-act="conn-add"]').click();
-  await expect(page.locator('.modal #cat-q')).toBeVisible();
-  await expect(page.locator('.modal [data-act="src-add"]')).toContainText('from git');
-  await expect(page.locator('.modal [data-cat="connector:github"]')).toContainText('official plugin');
-  await page.fill('.modal #cat-q', 'linear');
+  await expect(page.locator('.modal .pk .fb-in')).toBeVisible();
+  await expect(page.locator('.modal [data-act="src-add"]').first()).toContainText('git URL or custom source'); // always there, beside the search
+  await expect(page.locator('.modal [data-cat="connector:github"]')).toContainText('official');
+  await page.locator('.modal .pk .fb-in').fill('linear');
   await page.locator('.modal [data-act="cat-pick"][data-name="linear"]').click();
   await expect(page.locator('#f-name')).toHaveValue('linear');
 });
@@ -77,7 +77,7 @@ test('a connection says which bots reach it, from their grants (power N4)', asyn
   await go(page, '#/connectors', { fresh: true });
   const row = page.locator('.conn-row', { hasText: 'tf-apply' });
   await expect(row).toContainText('used by 1 bot');
-  await expect(row.locator('[title]')).toHaveAttribute('title', 'reached by platform-sre (asks first)');
+  await expect(row.locator('[title^="reached by"]')).toHaveAttribute('title', 'reached by platform-sre (asks first)');
 });
 
 test('the approval names who can approve, from the bot\'s operators (power N14)', async ({ page }) => {

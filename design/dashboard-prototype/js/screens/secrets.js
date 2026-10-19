@@ -101,9 +101,10 @@
   const refOf = (s) => { const [vv, kk] = keyOf(s.ref); return `{{ vault "${vv}" "${kk}" }}`; };
   const copyBtn = (v, what) => `<button class="btn sm ghost sec-copy" data-act="sec-copy" data-v="${esc(v)}" aria-label="Copy the reference to ${esc(what)}">${icon('copy')}Copy</button>`;
   /** The shared explanation: what each is, and how a field uses it (with the exact syntax to copy). */
-  const explain = () => `<div class="sec-explain" aria-label="Secrets and settings">
-    <div><b>${icon('lock')}A secret</b> is write-only: it’s stored in a vault and never shown again, not here and not to an agent. A field uses it as <code class="mono">{{ vault "house" "gh-app-key" }}</code>.</div>
-    <div><b>${icon('settings')}A setting</b> is a plain value your config and workflows read, visible to anyone who can read the config. A field uses it as <code class="mono">\${settings.org}</code>; an environment variable as <code class="mono">\${env.NAME}</code>.</div></div>`;
+  // each tab says what its own kind is, in one line (50)
+  const explain = (tab) => (tab === 'settings'
+    ? `<p class="sec-explain">${icon('settings')}<span><b>A setting</b> is a plain value your config reads, visible to anyone who can read the config: <code class="mono">\${settings.org}</code>, or an environment variable as <code class="mono">\${env.NAME}</code>.</span></p>`
+    : `<p class="sec-explain">${icon('lock')}<span><b>A secret</b> is write-only: stored in a vault and never shown again, not here and not to an agent. A field uses it as <code class="mono">{{ vault "house" "gh-app-key" }}</code>.</span></p>`);
   /** One row, the same for both: name and exact reference · used by · value or where it lives · ⋯ */
   const row = ({ id, name, ref, uses, value, note, menu, open, extra }) => `<li class="sec-row${open ? ' open' : ''}${!uses.length ? ' unused' : ''}" data-secret="${esc(id)}">
     <div class="sec-line">${extra ? `<button type="button" class="sec-main" data-act="sec-open" data-s="${esc(id)}" aria-expanded="${!!open}">` : '<div class="sec-main">'}<span class="sec-name"><b>${esc(name)}</b><span class="sec-ref mono">${esc(ref)}</span></span>
@@ -140,7 +141,7 @@
   UI.route('secrets', () => `<div class="page dl-page">
     <div class="dl-phead"><div><h1>Secrets</h1></div><div class="dl-actions tight"><button class="btn primary" data-act="secret-add">${icon('key')}Add a secret</button></div></div>
     ${tabsHTML('secrets')}
-    ${explain()}
+    ${explain('secrets')}
     ${failBanner()}
     ${secBar()}
     <div class="panel"><ul class="dl-list sec-list" id="sec-body">${rows()}</ul><div class="panel-foot small muted">${icon('eyeoff')} No screen, API route or log line returns a secret’s value; values are redacted from logs and the audit trail.</div></div>
@@ -156,7 +157,7 @@
     return `<div class="page dl-page">
     <div class="dl-phead"><div><h1>Secrets</h1></div><div class="dl-actions tight"><button class="btn primary" data-act="setting-add">${icon('plus')}Add a setting</button></div></div>
     ${tabsHTML('settings')}
-    ${explain()}
+    ${explain('settings')}
     <div class="section-title"><h2>Settings</h2><span class="caps">read anywhere in config as \${settings.NAME}</span></div>
     <div class="panel"><ul class="dl-list sec-list">${settingRows()}</ul><div class="panel-foot"><span class="muted small grow">A change is checked on a copy of the config before it applies.</span><a class="btn sm primary" href="#/config/apply" ${pendN ? '' : UI.off('Nothing changed here yet')}>Review${pendN ? ` ${pendN}` : ''}</a></div></div>
     ${UI.envSectionHTML ? UI.envSectionHTML(row) : ''}

@@ -62,7 +62,7 @@ The rail keeps the everyday destinations; the rarely visited system pages share 
 
 ```
 Home · Chat · Needs you · Activity · Tickets · Workflows · Bots · Browsers
-Settings   Plugins · Secrets · Packs · System (Config · Safety · Updates · Logs & audit · Access)
+Settings   Plugins · Packs · Secrets · System (Config · Safety · Updates · Logs & audit · Access)
 ```
 
 Some elements are on every screen:
@@ -225,6 +225,19 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
 - **Titles**: a page's title is 34px in the serif (27.2px on a phone); a generated, machine-written title (a run's, a
   ticket's, a browser session's) is the long title, the sans at the h2 size; a bot's or team's header on a phone is
   24px beside its picture. These are measured on every route, desktop and phone, both themes (`measure.spec`).
+- **Facts have kinds** (`UI.pluginFact`, `UI.actionFact`): each kind its own icon, and a tone only where it's a
+  signal. An update available is the most noticeable (accent, bold); your own source and production ask for attention
+  (amber; production keeps its mark); changing infrastructure is amber; spending money, deleting and widening
+  permissions are the strongest (danger); reads and reversible changes stay quiet. Origin: built in, official, your
+  source. Version: stays current, held, within a range. A service shows its own glyph, never a generic plug.
+- **One row height** (the shared row: `.dl-nt` in a list): the title is one line, the description always takes two
+  (clamped with an ellipsis), the facts one line (a fact that doesn't fit drops whole); so the rows of a list are one
+  height (`measure.spec`). One action per row: the whole row opens; a button only for a real next action.
+- **One page container** on every route: the content starts under the top bar's search, one max-width, one gutter
+  (`container.spec`, at 1440, 1280 and 1024).
+- **The audit log** leads with who: their picture (a bot's face, a team's initials, You, a workflow's icon) and name in
+  bold, then what happened in a specific sentence, then the facts line (what it's about, where, the passkey used); an
+  agent's action is its bot's or workflow's, with "its triage agent" as a fact.
 - **Labels** (`UI.label`): plain words in secondary ink, a middot between neighbours; no box, no fill (the status rule
   allows no capsules). A tier name is a plain config value.
 - **Dialogs** (`UI.modal`, drawers, the command line): open on the dialog itself (Enter does nothing until you move to
@@ -1016,11 +1029,22 @@ on the ticket.
   sources.
 - **Plugins and connections are one page: Plugins.** A plugin is what teaches conductor a service (or an agent
   runtime, or a code language), and a connection is a configured use of it, so they live together on **Plugins**,
-  under "what conductor can use": the **Connections** tab lists each service (built in, official, or from a source) with its
-  version, an update when there is one (Update…, with the step-up), Keep at this version / Show permissions / Remove
-  in its ⋯ menu, and its connections under it, each saying whether it's working; a service with no connection yet
-  offers Connect. **Add a service** opens one searchable catalog (the official registry) with "from a git URL" in the
-  same flow. **Agent runtimes** and **Code languages** (the engines behind code steps) list theirs the same way.
+  under "what conductor can use": the **Connections** tab is one flat list of connections (no service headers, no
+  "Another"): each row is the connection's name, whether it's working ("Connected and working: 1,240 events came in
+  today · used by 4 bots"), then the facts line: the service (its own glyph), where the plugin comes from (built in,
+  official, or your source), its version and how it moves, an update when there is one, and production. Search,
+  Service ▾ and Status ▾ filter it; Group by Service is there when wanted (None by default). **Versions are per
+  connection**: `use: github` stays current, `github@^2.0` stays within a range, `github@v2.0.0` is held, and two
+  connections may run different versions of one plugin side by side. A row's ⋯ has Update now, Hold at this version,
+  Stay current, Stay within…, Choose a version… (the releases with their notes) and the plugin's permissions; each is
+  a normal config change (staged, reviewed, applied); select several to update or hold them at once. **Add a
+  connection** opens one picker: the filter bar (search, Origin, Category) with "Add from a git URL or custom source"
+  always beside it (and offered when nothing matches); a compact list, what you use first, then the popular ones,
+  then A to Z, 20 to a page; one action per row (Choose, or Install & configure); one entry per service (a copy in your
+  own source is a choice inside it). A new GitHub or Slack connection offers two ways in, side by side: **Connect with
+  GitHub** (recommended: conductor creates the app and fills everything in) or **I already have an app** (the fields).
+  A connection's identifier is its **Name** ("how you refer to this connection, e.g. gh-work"); an empty secret says
+  "Not set yet" in words; the reference it writes shows only once you've picked one. **Agent runtimes** and **Code languages** (the engines behind code steps) list theirs the same way.
   Whether an update hot-reloads (`SameReloadSurface`) or restarts is in its detail. The word "plugin" stays in the
   technical layer. **Packs** are only bundles of workflows, with their own Browse.
 - **Updates.**

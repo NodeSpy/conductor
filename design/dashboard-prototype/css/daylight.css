@@ -778,3 +778,69 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
  * buttons sit on that line's centre */
 .sec-main { align-items: first baseline; }
 .sec-line { align-items: start; } .sec-line > :is(.btn, .icon-btn) { margin-top: calc(10px + 10px - var(--control-h) / 2); }
+/* the Connections tab (44b): one flat list; a row is its name, whether it's working, then the service, origin and
+ * version as facts; a checkbox for bulk updates */
+.cn-list { padding: 0 var(--pad-card); margin: 0; }
+.cn-row { grid-template-columns: 20px minmax(0, 1fr) auto; }
+.cn-row .dl-nt { display: grid; gap: 2px; }
+.cn-sel { display: grid; place-items: center; align-self: center; }
+.cn-bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-radius: var(--radius-card); background: var(--color-bg-sunken); margin-bottom: var(--gap-stack); }
+.cn-group .cn-gh { padding: var(--pad-card) var(--pad-card) 0; margin: 0; }
+.cn-rels { margin: 12px 0 0; } .cn-rel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 0; border-top: var(--border-width) solid var(--color-border-subtle); } .cn-rel .dl-nt { display: grid; gap: 2px; }
+/* the add-a-connection picker (41): the filter bar with the custom-source action beside it; a compact paged list */
+.pk-top > .fb { margin: 0; } .pk-src { flex: none; margin-left: auto; }
+.pk-list { margin: 12px 0 0; } .pk-row { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; padding: 10px 0; border-top: var(--border-width) solid var(--color-border-subtle); }
+.pk-row .dl-nt { display: grid; gap: 2px; }
+.pk-pages { display: flex; align-items: center; gap: 8px; justify-content: flex-end; padding-top: 12px; border-top: var(--border-width) solid var(--color-border-subtle); } .pk-pages .dl-sub { margin-right: auto; }
+.pk-none { padding: 24px 0; display: grid; gap: 12px; justify-items: start; }
+@media (max-width: 720px) { .pk-row { grid-template-columns: 26px minmax(0, 1fr); } .pk-row .dl-na { grid-column: 2; } }
+/* A callout is neutral (info isn't purple: purple is practice mode); a callout with an action puts its text and the
+ * action in a row with a gap, the action centred, wrapping under the text when narrow (42) */
+.callout.info { border-color: var(--color-border-default); background: var(--color-bg-raised); }
+.callout:has(> .btn) { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; } .callout:has(> .btn) > .grow { flex: 1 1 260px; min-width: 0; } .callout > .btn { flex: none; }
+/* a new GitHub or Slack connection: two ways in, side by side; the fields show once you choose to fill them in */
+.conn-paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.conn-path { display: grid; gap: 6px; align-content: start; justify-items: start; padding: var(--pad-card); border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-card); background: var(--color-bg-raised); }
+.conn-path.conn-rec { border-color: var(--color-accent-default); } .conn-path p { margin: 0 0 6px; }
+.conn-paths.manual .conn-path:not(.conn-rec) { border-color: var(--color-text-primary); }
+.modal:has(.conn-paths:not(.manual)) #gen-form :is(.field, .form-note), .modal:has(.conn-paths:not(.manual)) #gen-submit, .modal:has(.conn-paths:not(.manual)) .conn-say { display: none; }
+.conn-say { margin: 0 0 12px; }
+.vs-none { font: var(--type-caption); color: var(--color-text-tertiary); } .vs-body > .vs-ref { color: var(--color-text-tertiary); }
+@media (max-width: 720px) { .pk .fb { flex-wrap: wrap; } .pk .fb-bar { flex: 1 1 100%; } .pk-src { margin-left: 0; } }
+/* facts with a tone (45): an update is the most noticeable fact on a row; your own source asks for attention */
+.fx-i.t-new { color: var(--color-text-accent); font-weight: var(--font-weight-bold); } .fx-i.t-new > svg { color: var(--color-text-accent); }
+.fx-i.t-attn { color: var(--color-status-warning-fg); } .fx-i.t-attn > svg { color: var(--color-status-warning-fg); }
+/* risk facts, graded (45b): amber for changing infrastructure (like production), danger for spending money, deleting and
+ * widening permissions; reads and reversible changes stay quiet */
+.fx-i.t-warn { color: var(--color-status-warning-fg); font-weight: var(--font-weight-bold); } .fx-i.t-warn > svg { color: var(--color-status-warning-fg); }
+.fx-i.t-danger { color: var(--color-status-danger-fg); font-weight: var(--font-weight-bold); } .fx-i.t-danger > svg { color: var(--color-status-danger-fg); }
+/* One row (47): in a list, a row's title is one line, its description always two (the space reserved, longer text
+ * clamped with an ellipsis), its facts one line (a fact that doesn't fit drops whole, never cut); so every row in a
+ * list is the same height */
+.dl-list > li .dl-nt { display: grid; gap: 2px; align-content: start; }
+.dl-list > li .dl-nt > b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl-list > li .dl-nt > :is(.dl-why, .reason) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; min-height: 2lh; }
+.dl-list > li .dl-nt > .fx { flex-wrap: wrap; row-gap: 0; max-height: 1.5rem; overflow: hidden; }
+.dl-list > li .dl-nt > :is(.dl-why, .reason) ~ :is(.dl-why, .reason) { display: none; } /* one description per row: a second line goes in the first */
+.dl-list:has(.dl-nt > :is(.dl-why, .reason)) > li .dl-nt:has(> b:first-child):not(:has(> :is(.dl-why, .reason)))::after { content: ''; height: 2lh; } /* a row without a description keeps its space */
+.dl-list:has(.dl-nt > .fx) > li .dl-nt:has(> b:first-child):not(:has(> .fx))::before { content: ''; height: 1.5rem; order: 9; } /* and without facts, theirs */
+.dl-list > li .dl-nt > .fx { height: 1.5rem; align-items: center; margin: 0; }
+@container (max-width: 420px) { .fb-search { min-width: 0; max-width: none; } }
+.upd-sub { display: grid; gap: 10px; padding-left: 14px; border-left: var(--border-width) solid var(--color-border-subtle); }
+/* the audit log (48): who first, their picture and name in bold, then what happened and the facts line */
+.au-row > summary { align-items: center; }
+.au-row > summary > :is(.bav, .tav, .avatar, .sc-ic) { flex: none; }
+.au-you { width: 24px; height: 24px; font: var(--type-caption); font-weight: var(--font-weight-bold); }
+.au-main { flex: 1; min-width: 0; display: grid; gap: 2px; } .au-main .au-what b { font-weight: var(--font-weight-bold); }
+.modal:focus-visible { outline: none; } /* the dialog holds focus only until you move into it; its own ring adds nothing */
+.dl-list > li .dl-nt > :is(.dl-why, .reason) { line-height: 20px; min-height: 40px; } /* the attention line and the plain one take the same two lines */
+.dl-list > li .dl-nt > b { line-height: 22px; }
+@media (max-width: 720px) { .dl-conn .dl-na { flex-direction: row; align-items: center; } } /* a row's actions on one line, so rows keep one height */
+/* Secrets: each tab's own explainer, one compact line (50) */
+.sec-explain { display: flex; align-items: baseline; gap: 8px; margin: 0 0 var(--gap-stack); font: var(--type-body-s); color: var(--color-text-secondary); } .sec-explain > svg { flex: none; width: 15px; height: 15px; align-self: center; color: var(--color-icon-default); } .sec-explain b { color: var(--color-text-primary); }
+@media (max-width: 720px) { .sec-explain { display: flex; margin: 0 0 var(--gap-stack); padding: 0; } }
+/* One page container on every route (53): the content's left edge sits under the top bar's search, one max-width, one
+ * gutter; no screen has its own (the older .page centred itself 75px further right at other widths) */
+#main > .page:not(.flush) { max-width: calc(1280px - 72px); margin: 0; padding: 8px 36px 56px; }
+@media (max-width: 1100px) { #main > .page:not(.flush) { padding: 8px var(--space-5) 48px; } }
+@media (max-width: 720px) { #main > .page:not(.flush) { padding: 14px max(16px, var(--sar)) 24px max(16px, var(--sal)); } }

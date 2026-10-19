@@ -77,7 +77,7 @@
     if (src === 'env') return sel('env', optsEnv(), `${fd.label || fd.k}: env var`, 'env');
     if (src === 'setting') return sel('setting', optsSetting(), `${fd.label || fd.k}: setting`);
     const curRef = cur.vault ? `${cur.vault}/${cur.path}` : '';
-    return `<div class="vs-vault"><select class="select mono vs-pick vs-vsel" id="${id}-pick" data-picker="secret" data-ctx='${esc(JSON.stringify({ sensitive: !!fd.sensitive }))}' data-ret="ref" data-on-change="vs-pick" aria-label="${esc(fd.label || fd.k)}: vault entry"><option value="">pick an entry…</option>${optsVault().map(([v, l]) => `<option value="${esc(v)}"${curRef === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}${curRef && !optsVault().some(([v]) => v === curRef) ? `<option value="${esc(curRef)}" selected>${esc(cur.label)}</option>` : ''}<option value="__new__">+ New vault entry…</option></select><button type="button" class="btn sm" data-act="vs-vault">${icon('search')}Browse…</button></div><div class="vs-ref mono tiny${cur.ref ? '' : ' muted'}">${cur.ref ? esc(cur.ref) : 'writes {{ vault "&lt;vault&gt;" "&lt;key&gt;" }}'}</div><div class="vs-same"></div>`;
+    return `<div class="vs-vault"><select class="select mono vs-pick vs-vsel" id="${id}-pick" data-picker="secret" data-ctx='${esc(JSON.stringify({ sensitive: !!fd.sensitive }))}' data-ret="ref" data-on-change="vs-pick" aria-label="${esc(fd.label || fd.k)}: vault entry"><option value="">pick an entry…</option>${optsVault().map(([v, l]) => `<option value="${esc(v)}"${curRef === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}${curRef && !optsVault().some(([v]) => v === curRef) ? `<option value="${esc(curRef)}" selected>${esc(cur.label)}</option>` : ''}<option value="__new__">+ New vault entry…</option></select><button type="button" class="btn sm" data-act="vs-vault">${icon('search')}Browse…</button></div><div class="vs-ref mono tiny"${cur.ref ? '' : ' hidden'}>${cur.ref ? esc(cur.ref) : ''}</div><div class="vs-same"></div>`;
   }
   VS.html = (fd, val, id) => {
     const p = VS.parse(val);
@@ -98,14 +98,14 @@
   let seq = 0;
   VS.refresh = (el, quiet) => {
     const m = meta(el), v = hid(el).value, chk = el.querySelector('.vs-check'), msg = el.querySelector('.vs-msg');
-    const ref = el.querySelector('.vs-ref'); if (ref) { const p = VS.parse(v); ref.textContent = p.src === 'vault' ? p.ref : 'writes {{ vault "<vault>" "<key>" }}'; ref.classList.toggle('muted', p.src !== 'vault'); }
+    const ref = el.querySelector('.vs-ref'); if (ref) { const p = VS.parse(v); ref.textContent = p.src === 'vault' ? p.ref : ''; ref.hidden = p.src !== 'vault'; } // the reference it writes, quietly, once there is one
     const blocked = VS.blocked(m.sensitive, v), warn = VS.warn(m.sensitive, v) || (VS.parse(v).retired ? 'op:// references are retired: pick the entry again to write {{ vault "op" "…" }}' : '');
     msg.innerHTML = blocked ? `<div class="vs-err">${icon('x')}${esc(blocked)}</div>` : warn ? `<div class="vs-warn">${icon('warn')}${esc(warn)} <a class="link" href="#/secrets">Secrets</a></div>` : '';
     el.classList.toggle('blocked', !!blocked);
     const pending = el.dataset.pending === '1';
     if (pending) { chk.innerHTML = UI.statusMark('idle', 'write-only · stored on save', { cls: 'vs-st wait', sm: true }); }
     else if (el.dataset.src === 'typed') chk.innerHTML = m.sensitive && hid(el).dataset.set ? UI.statusMark('ok', 'set', { cls: 'vs-st ok', sm: true }) : '';
-    else if (!v) chk.innerHTML = UI.statusMark('idle', 'not set', { cls: 'vs-st', sm: true });
+    else if (!v) chk.innerHTML = '<span class="vs-st vs-none">Not set yet</span>'; // plain words: a status mark is for a run's state
     else {
       const my = ++seq; el.dataset.seq = my; chk.innerHTML = UI.statusMark('run', 'checking…', { cls: 'vs-st run', sm: true });
       setTimeout(() => { if (el.dataset.seq != my) return; const r = VS.resolve(hid(el).value); chk.innerHTML = r.state === 'ok' ? UI.statusMark('success', 'resolves', { cls: 'vs-st ok', tip: r.why, sm: true }) : r.state === 'fail' ? UI.statusMark('fail', `doesn't resolve: ${esc(r.why)}`, { cls: 'vs-st fail', sm: true }) : ''; el.dataset.resolve = r.state; }, UI.fast ? 15 : 260);

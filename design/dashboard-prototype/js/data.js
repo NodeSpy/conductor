@@ -319,18 +319,21 @@ Primary Postgres for the platform services (acme/api, acme/web).
     { v: 'v0.71.1', date: '2026-10-09', notes: ['Remove a run’s directory when its workspace is reclaimed'], current: false },
   ];
 
+  // who did it is who you'd name: an agent is attributed to the bot or workflow it works for (by), and each entry says
+  // what happened in a sentence (what); the raw record stays in detail, behind the row
   D.audit = [
-    { ts: m(1), event: 'memory_remember', who: 'bot:platform-sre', detail: 'knowledge/db-prod-1.md · commit 8e1f0aa · task c31' },
-    { ts: m(3), event: 'browser_action', who: 'agent:triage@acme/app', detail: 'await-approval · app.example.com/login/approve · logged_in: app.example.com' },
-    { ts: m(3), event: 'browser_fill', who: 'agent:triage@acme/app', detail: 'credential app · origin https://app.example.com · field password · len 24' },
-    { ts: m(5), event: 'dashboard_session', who: 'operator:ops', detail: 'passkey assertion · credential laptop · 127.0.0.1' },
-    { ts: m(7), event: 'bot_proposal', who: 'bot:platform-sre', detail: 'p12 tf-apply.apply · planned +1 ~2 -0 · plan sha a4c1e09b…' },
-    { ts: m(31), event: 'verb', who: 'r-7f11', detail: 'gh.review acme/api#480 · as bot' },
-    { ts: m(52), event: 'workflow_failed', who: 'r-7ef0', detail: 'ci-fixer · step test · acme/web#1288' },
-    { ts: m(70), event: 'egress_denied', who: 'agent:fixer@acme/web', detail: 'pastebin.com:443' },
-    { ts: m(1500), event: 'bot_approval', who: 'operator:ops', detail: 'p8 approved · webauthn · credential laptop · digest 5d9a…' },
-    { ts: m(1440), event: 'config_apply', who: 'operator:ops', detail: 'bots.platform-sre.proactive.every 6h → 4h · backup cfg-20261015-1412 · validated on copy' },
+    { ts: m(1), event: 'memory_remember', who: 'bot:platform-sre', what: 'saved what it learned about db-prod-1 to its memory', detail: 'knowledge/db-prod-1.md · commit 8e1f0aa · task c31' },
+    { ts: m(3), event: 'browser_action', who: 'agent:triage@acme/app', by: 'bot:web-triage', what: 'waited in a browser for your approval to sign in to app.example.com', detail: 'await-approval · app.example.com/login/approve · logged_in: app.example.com' },
+    { ts: m(3), event: 'browser_fill', who: 'agent:triage@acme/app', by: 'bot:web-triage', what: 'filled in the saved password for app.example.com', detail: 'credential app · origin https://app.example.com · field password · len 24' },
+    { ts: m(5), event: 'dashboard_session', who: 'operator:ops', what: 'signed in to the dashboard with the laptop passkey', detail: 'passkey assertion · credential laptop · 127.0.0.1' },
+    { ts: m(7), event: 'bot_proposal', who: 'bot:platform-sre', what: 'asked to replace the production web server', detail: 'p12 tf-apply.apply · planned +1 ~2 -0 · plan sha a4c1e09b…' },
+    { ts: m(31), event: 'verb', who: 'r-7f11', what: 'posted a review on acme/api#480', detail: 'gh.review acme/api#480 · as bot' },
+    { ts: m(52), event: 'workflow_failed', who: 'r-7ef0', what: 'failed at the test step on acme/web#1288', detail: 'ci-fixer · step test · acme/web#1288' },
+    { ts: m(70), event: 'egress_denied', who: 'agent:fixer@acme/web', by: 'wf:ci-fixer', what: 'was stopped from reaching pastebin.com (not an allowed site)', detail: 'pastebin.com:443' },
+    { ts: m(1500), event: 'bot_approval', who: 'operator:ops', what: 'approved the /search cache change, with the laptop passkey', detail: 'p8 approved · webauthn · credential laptop · digest 5d9a…' },
+    { ts: m(1440), event: 'config_apply', who: 'operator:ops', what: 'applied a change: platform-sre checks in every 4 h (was every 6 h)', detail: 'bots.platform-sre.proactive.every 6h → 4h · backup cfg-20261015-1412 · validated on copy' },
   ];
+  D.auditVer = 2;
 
   D.configHistory = [
     { id: 'cfg-20261016-0912', at: m(50), who: 'ops (dashboard)', summary: 'triggers[ci-fixer].policy.budget.max_cost_usd 1.50 → 2.00', status: 'live' },
@@ -346,14 +349,22 @@ Primary Postgres for the platform services (acme/api, acme/web).
   const V = (vault, key) => `{{ vault "${vault}" "${key}" }}`;
   const CC = {
     gh: { use: 'github', app_id: 123456, private_key: V('house', 'gh-app-key'), webhook_secret: V('house', 'gh-webhook'), webhook: 'smee', sweep: 'adaptive 30s', repos: ['acme/*'] },
-    'slack-ops': { use: 'slack', bot_token: V('op', 'Agents/Slack/bot-token'), app_token: V('op', 'Agents/Slack/app-token'), mode: 'socket', default_channel: '#ops' },
+    'slack-ops': { use: 'slack@^1.6', bot_token: V('op', 'Agents/Slack/bot-token'), app_token: V('op', 'Agents/Slack/app-token'), mode: 'socket', default_channel: '#ops' },
     pd: { use: 'pagerduty', token: V('store', 'conductor/pd'), webhook_path: '/pd', services: ['PAPI01', 'PWEB02'] },
     kv: { use: 'kv', store: 'state' },
     'tf-plan': { use: 'terraform', engine: 'tofu', role: 'READ' },
-    'tf-apply': { use: 'terraform', engine: 'tofu', role: 'WRITE' },
+    'tf-apply': { use: 'terraform@v0.3.2', engine: 'tofu', role: 'WRITE' }, // held at an older build beside tf-plan's
     handoff: { use: 'web', listen: '127.0.0.1:8099', ttl: '30m' },
   };
   D.connectors.forEach((c) => (c.cfg = CC[c.name]));
+  // each plugin's releases, newest first, with what changed (a connection may take any of them: Choose a version…)
+  D.pluginReleases = {
+    github: [{ v: 'v2.0.0', date: 'Sep 30', notes: 'Check runs and review threads as events; faster webhook catch-up.' }, { v: 'v1.9.2', date: 'Aug 12', notes: 'Fixes duplicate events after a webhook redelivery.' }, { v: 'v1.9.0', date: 'Jul 28', notes: 'Adds the label and milestone verbs.' }],
+    slack: [{ v: 'v1.7.0', date: 'Oct 14', notes: 'Threads as events; posts can update their own earlier message.' }, { v: 'v1.6.1', date: 'Sep 2', notes: 'Fixes reconnects in Socket Mode.' }, { v: 'v1.6.0', date: 'Aug 20', notes: 'Adds scheduled messages.' }],
+    pagerduty: [{ v: 'v1.2.0', date: 'Sep 9', notes: 'Incident notes as events.' }, { v: 'v1.1.4', date: 'Jul 3', notes: 'Fixes acknowledging an incident twice.' }],
+    terraform: [{ v: 'v0.4.0', date: 'Oct 1', notes: 'OpenTofu 1.8; plans show moved resources.' }, { v: 'v0.3.2', date: 'Aug 18', notes: 'Fixes a lock left behind after a cancelled apply.' }],
+  };
+  D.connVer = 2;
   const RC = {
     paseo: { use: 'paseo', bin: 'paseo', default: true },
     'claude-cli': { use: 'cli', tool: 'claude-code', isolation: { mode: 'namespace' } },

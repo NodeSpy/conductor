@@ -4,8 +4,8 @@
 /* one layout everywhere: a light toolbar above the content. A compact search field at input height (it grows while
    focused or holding qualifiers), the menus on the same row, wrapping only when they don't fit */
 .fb { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 16px 0 14px; }
-.fb-search { flex: 0 1 340px; min-width: 240px; transition: flex-basis var(--motion-duration-fast, .15s) var(--motion-easing-out, ease-out); }
-.fb-search:focus-within, .fb-search.has-q { flex-basis: 480px; }
+.fb-search { flex: 1 1 340px; max-width: 560px; min-width: 240px; transition: flex-basis var(--motion-duration-fast, .15s) var(--motion-easing-out, ease-out); }
+/* the field takes the room the row has (never growing on focus, which would push the menus to a second line) */
 .fb-bar { flex: 1 1 auto; }
 .fb-search { position: relative; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 8px 0 12px; border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-control); background: var(--color-bg-field); }
 .fb-search > svg { width: 16px; height: 16px; flex: none; color: var(--color-icon-default); }
@@ -113,4 +113,4 @@
   .fb-search { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
   .fb-pill { flex: none; } html .fb-pill .fb-px { position: relative; width: 26px; height: 26px; min-height: 0; } .fb-pill .fb-px::after { content: ''; position: absolute; inset: -9px; } /* a 44px target, drawn small */
 }
-.fb-search.has-q { flex-basis: 560px; }
+

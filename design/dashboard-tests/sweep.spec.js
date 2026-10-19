@@ -35,7 +35,7 @@ const audit = () => {
     for (const a of ctl) { const ra = a.getBoundingClientRect();
       for (const b of leaves) { if (a === b || a.contains(b) || b.contains(a)) continue; const rb = b.getBoundingClientRect();
         const ix = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left), iy = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
-        if (ix > 4 && iy > 4 && !clipped(b, card)) out.push(`overlaps: ${label(a)} over ${label(b)}`); } }
+        if (ix > 4 && iy > 4 && !clipped(a, card) && !clipped(b, card)) out.push(`overlaps: ${label(a)} over ${label(b)}`); } } // content scrolled under a pinned header is clipped, not on top
   }
   // extreme wrapping: a phrase of three or more words laid out one word per line (counted from the text's own line boxes)
   document.querySelectorAll('#main *, .modal *').forEach((el) => { const t = ownText(el), words = t.split(/\s+/).filter(Boolean).length; if (words < 3 || el.closest('svg, .sr-only, .site, pre, .dl-code, textarea')) return; if (!vis(el)) return;

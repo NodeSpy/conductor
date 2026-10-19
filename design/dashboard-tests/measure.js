@@ -9,6 +9,7 @@
 //   lines    a row of three or more text columns (a name over its id, where it's used, its value) reads across:
 //            the columns' first lines share a centre when any of them runs to a second line (or a one-line column
 //            sits on the row's centre)
+//   rowh     the rows of a list are one height: a title line, two lines of description, a facts line
 //   title    a page's title is the size for its kind of page (a list page, a detail page)
 //   over     nothing runs past the right edge of the window
 //   clip     no text cut off without an ellipsis or a wrap
@@ -26,7 +27,7 @@ function measure() {
   const mid = (r) => (r.top + r.bottom) / 2;
   const kids = (e) => [...e.children].flatMap((x) => (getComputedStyle(x).display === 'contents' ? kids(x) : [x]));
   // a control: something you press or type in, drawn as a box
-  const CONTROL = 'button, a.btn, input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]), select, .seg, [role=radiogroup], .fb-search, .icon-btn';
+  const CONTROL = 'button, a.btn, span.btn, input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]), select, .seg, [role=radiogroup], .fb-search, .icon-btn';
   const isControl = (k) => k.matches(CONTROL) && !k.matches('.link, .switch, .fb-pv, .fb-px, .cm-mk, .tab-more, [role=tab], .tabs > *, .dl-tabs > *, .chip, .pin, .cv-pin, .tk-chip, .count') && !k.closest('.tabs, .dl-tabs, .cm-tools, .fb-search, .seg, .def-form .row-in, .cm-p, .hb, .site');
 
   // row: controls side by side in one row
@@ -57,6 +58,14 @@ function measure() {
       if (!multi(cells[i]) && !multi(cells[j])) continue; const fa = firstLine(cells[i]), fb = firstLine(cells[j]); if (!fa || !fb) continue;
       const centred = (x, y, fx) => !multi(x) && Math.abs(mid(fx) - mid(box(y))) <= 2; // a one-line cell on the row's centre
       const d = Math.abs(mid(fa) - mid(fb)); if (d > 3 && Math.abs(fa.bottom - fb.bottom) > 3 && !centred(cells[i], cells[j], fa) && !centred(cells[j], cells[i], fb)) out.push(`lines: ${name(cells[i]).slice(0, 34)} and ${name(cells[j]).slice(0, 34)} start ${Math.round(d)}px apart in one row`); } });
+
+  // rowh: the rows of one list (the shared row: title, description, facts) are one height
+  main.querySelectorAll('.dl-list').forEach((l) => { if (!vis(l) || l.closest('.modal, .tk-board')) return; const rs = [...l.children].filter((li) => vis(li) && li.querySelector('.dl-nt > b:first-child') && !li.querySelector('input:not([type=checkbox]), select, textarea')); // the shared row: a title, then its description and facts (a row holding a form is a form)
+    // a row's height inside its padding (the first row under a heading may sit closer to it; that's the list's edge)
+    const inner = (e) => { const cs = getComputedStyle(e); return box(e).height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - parseFloat(cs.borderTopWidth) - parseFloat(cs.borderBottomWidth); };
+    const rowH = (li) => Math.round(li.children.length === 1 ? inner(li.children[0]) : inner(li)); // a row wrapped in one link or box: measure that box
+    if (rs.length < 2) return; const hs = rs.map(rowH), lo = Math.min(...hs), hi = Math.max(...hs);
+    if (hi - lo > 1) out.push(`rowh: rows of one list are ${lo}px to ${hi}px tall: ${name(rs[hs.indexOf(lo)]).slice(0, 40)} / ${name(rs[hs.indexOf(hi)]).slice(0, 40)}`); });
 
   // toolbar: the filter bar is one component, every control in it the control height, one centre line
   main.querySelectorAll('.fb').forEach((fb) => {

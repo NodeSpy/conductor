@@ -22,11 +22,12 @@ test('New bot: a bad Slack channel blocks Next with the reason; watching nothing
   await expect(page.locator('[data-act="bw-next"]')).toHaveCount(1);
 });
 
-test('a connection’s instance name can’t be one that is already taken', async ({ page }) => {
+test('a connection’s name can’t be one that is already taken', async ({ page }) => {
   await go(page, '#/connectors', { fresh: true });
   await page.locator('[data-act="conn-add"]').click();
-  await page.fill('.modal #cat-q', 'github');
+  await page.locator('.modal .pk .fb-in').fill('github');
   await page.locator('.modal [data-act="cat-pick"][data-name="github"]').click();
+  await page.locator('[data-act="conn-manual"]').click();
   await page.fill('#f-name', 'gh');
   await page.locator('#gen-submit').click();
   await expect(page.locator('.modal')).toContainText(/taken|exists|already/i);

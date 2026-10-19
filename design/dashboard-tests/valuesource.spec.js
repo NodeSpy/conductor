@@ -15,6 +15,7 @@ async function slackForm(page) {
   await go(page, '#/connectors/connectors', { fresh: true });
   await page.locator('[data-act="conn-add"]').first().click();
   await page.locator('[data-act="conn-pick"][data-u="slack"], [data-act="cat-pick"][data-name="slack"]').first().click();
+  await page.locator('[data-act="conn-manual"]').click(); // fill it in yourself, rather than Connect with Slack
   await expect(vs(page, 'bot_token')).toBeVisible();
 }
 async function toCreds(page, method = 'password') {

@@ -7,8 +7,11 @@ test('Connect with Slack: manifest, install, tokens into the vault, connector st
   await go(page, '#/connectors/connectors', { fresh: true });
   await page.locator('[data-act="conn-add"]').first().click();
   await page.locator('[data-act="cat-pick"][data-kind="connector"][data-name="slack"]').click();
-  await expect(page.locator('.conn-manifest')).toContainText('No tokens yet?');
-  await expect(page.locator('.vs[data-vs="bot_token"]')).toBeVisible(); // the manual form is still here
+  // two ways in, side by side: Connect with Slack (recommended), or fill it in yourself
+  await expect(page.locator('.conn-paths .conn-rec')).toContainText('Connect with Slack');
+  await expect(page.locator('.vs[data-vs="bot_token"]')).toBeHidden();
+  await page.locator('[data-act="conn-manual"]').click();
+  await expect(page.locator('.vs[data-vs="bot_token"]')).toBeVisible(); // the manual form, once you choose it
   await page.locator('[data-act="conn-manifest"]').click();
   await page.fill('#cm-inst', 'slack-team');
   await page.locator('.modal details summary').click();

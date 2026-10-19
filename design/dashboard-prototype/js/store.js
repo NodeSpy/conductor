@@ -35,6 +35,8 @@
       // a saved demo keeps its own conversations unless the chat fixture's shape has moved on since
       if (saved.chatsVer !== window.D.chatsVer) { delete saved.chats; delete saved.chat; delete saved.chatsVer; delete saved.teamChats; delete saved.chatUnread; }
       if (saved.ticketsVer !== window.D.ticketsVer) { delete saved.cases; delete saved.ticketsVer; }
+      if (saved.auditVer !== window.D.auditVer) { delete saved.audit; delete saved.auditVer; }
+      if (saved.connVer !== window.D.connVer) { delete saved.connectors; delete saved.plugins; delete saved.pluginReleases; delete saved.connVer; }
       Object.keys(saved).forEach((k) => (window.D[k] = saved[k]));
       return true;
     } catch (e) { return false; }
@@ -107,7 +109,7 @@
       Object.entries(n).forEach(([fk, fv]) => { const r = vref(fv); if (r && r.vault !== 'env') { const v = byName(all.vaults, r.vault); if (!v) e.push(`connectors.${k}.${fk}: vault "${r.vault}" is not defined`); else if (v.status === 'fail') e.push(`connectors.${k}.${fk}: vault "${r.vault}" is unreachable (its unlock token expired)`); } });
       return e;
     },
-    warn(k, n) { const d = window.SCHEMA.connectors[n.use]; return d && d.registry && !D().plugins.find((p) => p.name === n.use) ? [`plugin ${n.use} is not installed: conductor init fetches ${d.registry}@${d.ver} on apply`] : []; },
+    warn(k, n) { const u = String(n.use || '').split('@')[0], d = window.SCHEMA.connectors[u]; return d && d.registry && !D().plugins.find((p) => p.name === u) ? [`plugin ${u} is not installed: conductor init fetches ${d.registry}@${d.ver} on apply`] : []; },
   });
   listColl('runtimes', () => D().runtimes, {
     label: 'runtime', href: () => '#/connectors/runtimes',

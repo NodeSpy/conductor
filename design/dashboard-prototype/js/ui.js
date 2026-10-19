@@ -226,14 +226,28 @@
    *   UI.factsLine([{ icon, value, href, pri: 1|2|3, risky, prod, label }])  (UI.facts is the details list) */
   UI.factsLine = (xs) => { xs = (xs || []).filter((f) => f && f.value); if (!xs.length) return '';
     return `<span class="fx">${xs.map((f) => { const ext = /^https?:/.test(f.href || ''), inner = `${f.prod ? `<i class="fx-g">${UI.glyph('warning')}</i>` : UI.icon(f.icon || 'dot')}${UI.esc(f.value)}`;
-      return `<span class="fx-i${f.href ? ' ln' : ''}${f.risky ? ' hi' : ''}${f.prod ? ' prod' : ''}" data-pri="${f.pri || 2}"${f.label ? ` title="${UI.esc(f.label)}"` : ''}${f.href ? ` role="link" tabindex="0" data-fx-href="${UI.esc(f.href)}"${ext ? ' data-fx-ext="1"' : ''}` : ''}>${inner}</span>`; }).join('')}</span>`; };
+      return `<span class="fx-i${f.href ? ' ln' : ''}${f.risky ? ' hi' : ''}${f.prod ? ' prod' : ''}${f.tone ? ' t-' + f.tone : ''}" data-pri="${f.pri || 2}"${f.label ? ` title="${UI.esc(f.label)}"` : ''}${f.href ? ` role="link" tabindex="0" data-fx-href="${UI.esc(f.href)}"${ext ? ' data-fx-ext="1"' : ''}` : ''}>${inner}</span>`; }).join('')}</span>`; };
+  /** The facts a plugin or a connection carries, each its own kind with its own icon (45): the service (its own glyph),
+   *  where the plugin comes from (built in, official, or your source: that one asks for attention), the version and
+   *  how it moves (stays current, held, within a range), an update (the most noticeable), and production (its mark). */
+  UI.pluginFact = {
+    service: (u) => { const d = (window.SCHEMA && SCHEMA.connectors[u]) || {}; return { icon: d.icon || 'obj-connector', value: d.label || u, label: 'Service' }; },
+    origin: (o, src) => (o === 'builtin' ? { icon: 'zap', value: 'built in', label: 'Comes with conductor' } : o === 'official' ? { icon: 'shield', value: 'official', label: 'From the official registry' } : { icon: 'link', value: src ? `your source ${src}` : 'your source', tone: 'attn', label: 'From a source you added' }),
+    version: (v) => (!v || !v.ver ? null : v.kind === 'pinned' ? { icon: 'pin', value: `${v.ver} · held`, label: 'Held at this version until you change it' } : v.kind === 'range' ? { icon: 'branch', value: `${v.ver} · within ${v.range}`, label: `Takes new releases within ${v.range}` } : { icon: 'updates', value: `${v.ver} · stays current`, label: 'Takes every new release' }),
+    latest: (ver) => (ver ? { icon: 'obj-update', value: ver, label: 'The newest release' } : null),
+    update: (ver) => (ver ? { icon: 'download', value: `update ${ver} available`, tone: 'new', label: 'A newer release' } : null),
+    env: (env) => (!env ? null : /^prod/i.test(env) ? { prod: true, value: 'production', label: 'Production' } : { icon: 'server', value: String(env).toLowerCase(), label: 'Environment' }),
+  };
   // a fact's link inside a row that is itself a link: it opens the fact's own page, never the row's
   const fxGo = (el, e) => { e.preventDefault(); e.stopPropagation(); const h = el.dataset.fxHref; if (el.dataset.fxExt) UI.toast('Opens outside the dashboard', UI.esc(h), 'idle'); else UI.go(h); };
   document.addEventListener('click', (e) => { const el = e.target.closest && e.target.closest('[data-fx-href]'); if (el) fxGo(el, e); }, true);
   document.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[data-fx-href]')) fxGo(e.target, e); }, true);
   /** What kind of action, in words, with its icon and whether it's risky: from the verb and where it lands. */
   const ACT_FACT = { read: ['act-read', 'Reads'], post: ['act-post', 'Posts a message'], push: ['act-push', 'Pushes code'], change: ['act-change', 'Changes a setting'], infra: ['act-infra', 'Changes infrastructure'], money: ['act-money', 'Spends money'], destroy: ['act-destroy', 'Deletes things'], permission: ['act-permission', 'Changes permissions'] };
-  UI.actionFact = (verb, env, tier) => { const a = UI.actionOf(verb), [icon, value] = ACT_FACT[a] || ACT_FACT.change; return { icon, value, pri: 2, risky: UI.riskOf({ verb, env, tier }).level >= 3, label: 'What it does' }; };
+  // graded prominence (45b): what can't be taken back or costs money is the strongest (danger); changing infrastructure is
+  // amber, like production; reads and reversible changes stay quiet
+  const ACT_TONE = { money: 'danger', destroy: 'danger', permission: 'danger', infra: 'warn' };
+  UI.actionFact = (verb, env, tier) => { const a = UI.actionOf(verb), [icon, value] = ACT_FACT[a] || ACT_FACT.change; return { icon, value, pri: 2, tone: ACT_TONE[a], risky: !ACT_TONE[a] && UI.riskOf({ verb, env, tier }).level >= 3, label: 'What it does' }; };
   UI.envFact = (env) => (env ? { icon: 'server', value: env, prod: env === 'production', pri: 1, label: 'Environment' } : null);
   /** A ticket id in prose ("(task c29)", the ledger's word) said in words: the task's own name; as a link where the page can carry one. */
   UI.taskWords = (text, link = false) => UI.esc(text).replace(/\(task (c\d+)\)/g, (m, id) => { const c = (D.cases || []).find((x) => x.id === id); if (!c) return ''; const name = `the ticket “${UI.esc(c.title)}”`;
@@ -310,7 +324,7 @@
   // the rail, as in Daylight's mocks (design/brand/v2): the work, then Settings; only "Needs you" is counted hot
   const navGroups = [
     ['', [['overview', 'Home', 'overview'], ['chat', 'Chat', 'message', () => (UI.chatUnreadCount ? UI.chatUnreadCount() : 0), true], ['attention', 'Needs you', 'attention', () => D.attention.length, true], ['activity', 'Activity', 'live'], ['tickets', 'Tickets', 'ticket'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'globe']]],
-    ['Settings', [['connectors', 'Plugins', 'connectors'], ['secrets', 'Secrets', 'secrets'], ['extensions', 'Packs', 'extensions'], ['system', 'System', 'settings']]],
+    ['Settings', [['connectors', 'Plugins', 'connectors'], ['extensions', 'Packs', 'extensions'], ['secrets', 'Secrets', 'secrets'], ['system', 'System', 'settings']]],
   ];
   UI.navGroups = navGroups;
   UI.pageTitle = (nav) => { const k = nav || (location.hash.replace(/^#\/?/, '') || 'overview').split(/[/?]/)[0]; const map = { live: 'activity', runs: 'activity', teams: 'bots', folders: 'bots', config: 'system', updates: 'system', logs: 'system', security: 'system', safety: 'system', more: 'more', preferences: 'preferences' }; const key = map[k] || k; const hit = navGroups.flatMap(([, x]) => x).find(([n]) => n === key); return hit ? hit[1] : key === 'more' ? 'More' : key === 'preferences' ? 'Preferences' : key === 'glossary' ? 'Glossary' : 'conductor'; };
@@ -353,7 +367,7 @@
     UI.closeModal();
     const s = document.createElement('div');
     s.className = 'scrim'; s.id = 'scrim';
-    s.innerHTML = `<div class="modal ${opts.wide ? 'wide' : ''}" role="dialog" aria-modal="true" tabindex="-1"><span class="sheet-grip only-phone" aria-hidden="true"></span>${html}</div>`;
+    s.innerHTML = `<div class="modal ${opts.wide ? 'wide' : ''} ${opts.cls || ''}" role="dialog" aria-modal="true" tabindex="-1"><span class="sheet-grip only-phone" aria-hidden="true"></span>${html}</div>`;
     s.addEventListener('click', (e) => { if (e.target === s && !opts.sticky) UI.dismissModal(); });
     s._opener = document.activeElement;
     document.body.appendChild(s);
