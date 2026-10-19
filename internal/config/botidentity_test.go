@@ -12,8 +12,8 @@ import (
 	"testing"
 )
 
-// IDENTITY VALIDATION: an avatar is a preset, or an icon with a color, from
-// the built-in lists (never a URL or a file); colors exclude status hues;
+// IDENTITY VALIDATION: an avatar is a face (a shape, eyes and a color, each
+// from its own list), or an icon with a color, from the built-in lists (never a URL or a file); colors exclude status hues;
 // the display name and tagline are one capped line; a personality names a
 // known tone and a capped style.
 func TestBotIdentityValidate(t *testing.T) {
@@ -24,27 +24,42 @@ func TestBotIdentityValidate(t *testing.T) {
 		want string // "" = valid
 	}{
 		{"empty", Identity{}, ""},
-		{"preset", Identity{Avatar: &BotAvatar{Preset: "owl"}}, ""},
+		{"face", Identity{Avatar: &BotAvatar{Shape: "hexagon", Eyes: "sleepy", Color: "teal"}}, ""},
+		{"shape only", Identity{Avatar: &BotAvatar{Shape: "circle"}}, ""},
+		{"preset (deprecated)", Identity{Avatar: &BotAvatar{Preset: "owl"}}, ""},
 		{"icon+color", Identity{Avatar: &BotAvatar{Icon: "radar", Color: "teal"}}, ""},
-		{"all", Identity{Avatar: &BotAvatar{Preset: "fox"}, Color: "indigo", DisplayName: "Night Owl", Tagline: "Watches the pager so you can sleep.",
+		{"all", Identity{Avatar: &BotAvatar{Shape: "diamond", Eyes: "wink"}, Color: "indigo", DisplayName: "Night Owl", Tagline: "Watches the pager so you can sleep.",
 			Personality: &BotPersonality{Tone: "terse", Style: "Lead with the answer.\n\tThen the evidence."}}, ""},
 		{"tone only", Identity{Personality: &BotPersonality{Tone: "dry"}}, ""},
 		{"style only", Identity{Personality: &BotPersonality{Style: "Short sentences."}}, ""},
 		{"caps exactly", Identity{DisplayName: strings.Repeat("é", MaxDisplayName), Tagline: strings.Repeat("t", MaxTagline),
 			Personality: &BotPersonality{Style: strings.Repeat("s", MaxStyle)}}, ""},
 
-		{"unknown preset", Identity{Avatar: &BotAvatar{Preset: "dragon"}}, `avatar.preset: unknown preset "dragon" (presets: robot, owl`},
+		{"unknown shape", Identity{Avatar: &BotAvatar{Shape: "dragon"}}, `avatar.shape: unknown shape "dragon" (shapes: circle, squircle`},
+		{"unknown eyes", Identity{Avatar: &BotAvatar{Shape: "circle", Eyes: "lasers"}}, `avatar.eyes: unknown eyes "lasers" (eyes: round, wide`},
+		{"a shape is not eyes", Identity{Avatar: &BotAvatar{Shape: "circle", Eyes: "hexagon"}}, `avatar.eyes: unknown eyes "hexagon"`},
+		{"eyes are not a shape", Identity{Avatar: &BotAvatar{Shape: "wink"}}, `avatar.shape: unknown shape "wink"`},
+		{"eyes without a shape", Identity{Avatar: &BotAvatar{Eyes: "wink"}}, "avatar.eyes: a face needs a shape (avatar.shape)"},
+		{"shape is a URL", Identity{Avatar: &BotAvatar{Shape: "https://example.com/a.png"}}, "avatar.shape: unknown shape"},
+		{"face and icon", Identity{Avatar: &BotAvatar{Shape: "circle", Icon: "radar"}}, "avatar: a face (shape, eyes) or an icon — not both"},
+		{"face with the bot's color", Identity{Avatar: &BotAvatar{Shape: "circle"}, Color: "plum"}, ""},
+		{"face, bad color", Identity{Avatar: &BotAvatar{Shape: "circle", Color: "red"}}, `avatar.color: "red" is a status color`},
+		{"face, unknown color", Identity{Avatar: &BotAvatar{Shape: "circle", Color: "beige"}}, `avatar.color: unknown color "beige"`},
+		{"unknown preset", Identity{Avatar: &BotAvatar{Preset: "dragon"}}, `avatar.preset: unknown preset "dragon" (presets: anvil, compass`},
 		{"preset is a URL", Identity{Avatar: &BotAvatar{Preset: "https://example.com/a.png"}}, "avatar.preset: unknown preset"},
-		{"preset and icon", Identity{Avatar: &BotAvatar{Preset: "owl", Icon: "radar"}}, "avatar: a preset or an icon — not both"},
+		{"preset and icon", Identity{Avatar: &BotAvatar{Preset: "owl", Icon: "radar"}}, "avatar: a face (shape, eyes) or an icon — not both"},
+		{"preset and a shape", Identity{Avatar: &BotAvatar{Preset: "owl", Shape: "circle"}}, "avatar.preset is the deprecated spelling of a shape and eyes — set one or the other"},
+		{"preset and eyes", Identity{Avatar: &BotAvatar{Preset: "owl", Eyes: "wink"}}, "set one or the other"},
 		{"preset with a color", Identity{Avatar: &BotAvatar{Preset: "owl", Color: "teal"}}, ""},
 		{"preset, bad color", Identity{Avatar: &BotAvatar{Preset: "owl", Color: "red"}}, `avatar.color: "red" is a status color`},
 		{"icon with the bot's color", Identity{Avatar: &BotAvatar{Icon: "radar"}, Color: "plum"}, ""},
 		{"icon without any color", Identity{Avatar: &BotAvatar{Icon: "radar"}}, "avatar: an icon needs a color (avatar.color, or the bot's color)"},
-		{"color without a face", Identity{Avatar: &BotAvatar{Color: "teal"}}, "avatar: set preset: <face> (color optional), icon: <name> with a color, or image: <file>"},
+		{"color without a face", Identity{Avatar: &BotAvatar{Color: "teal"}}, "avatar: set shape: <name> (eyes and color optional), icon: <name> with a color, or image: <file>"},
 		{"image", Identity{Avatar: &BotAvatar{Image: "avatars/sre.png"}}, ""},
 		{"image, jpeg", Identity{Avatar: &BotAvatar{Image: "a/b/sre.JPEG"}}, ""},
-		{"image with a fallback face", Identity{Avatar: &BotAvatar{Image: "avatars/sre.webp", Preset: "owl", Color: "teal"}}, ""},
-		{"image and a color alone", Identity{Avatar: &BotAvatar{Image: "avatars/sre.png", Color: "teal"}}, "avatar.color colors a preset or an icon; an image has its own"},
+		{"image with a fallback face", Identity{Avatar: &BotAvatar{Image: "avatars/sre.webp", Shape: "circle", Eyes: "wide", Color: "teal"}}, ""},
+		{"image with a fallback preset", Identity{Avatar: &BotAvatar{Image: "avatars/sre.webp", Preset: "owl"}}, ""},
+		{"image and a color alone", Identity{Avatar: &BotAvatar{Image: "avatars/sre.png", Color: "teal"}}, "avatar.color colors a face or an icon; an image has its own"},
 		{"image svg", Identity{Avatar: &BotAvatar{Image: "avatars/sre.svg"}}, `avatar.image: "avatars/sre.svg": a PNG, JPEG or WebP file (.png, .jpg, .jpeg, .webp) — not SVG`},
 		{"image gif", Identity{Avatar: &BotAvatar{Image: "sre.gif"}}, "a PNG, JPEG or WebP file"},
 		{"image url", Identity{Avatar: &BotAvatar{Image: "https://example.com/a.png"}}, "must be a path relative to the config's directory (e.g. avatars/bot.png) — no URLs"},
@@ -52,7 +67,7 @@ func TestBotIdentityValidate(t *testing.T) {
 		{"image home", Identity{Avatar: &BotAvatar{Image: "~/a.png"}}, "must be a path relative"},
 		{"image escapes", Identity{Avatar: &BotAvatar{Image: "../../a.png"}}, `avatar.image: "../../a.png" leaves the config's directory`},
 		{"image escapes after clean", Identity{Avatar: &BotAvatar{Image: "avatars/../../a.png"}}, "leaves the config's directory"},
-		{"empty avatar", Identity{Avatar: &BotAvatar{}}, "avatar: set preset"},
+		{"empty avatar", Identity{Avatar: &BotAvatar{}}, "avatar: set shape"},
 		{"unknown icon", Identity{Avatar: &BotAvatar{Icon: "./me.svg", Color: "teal"}}, `avatar.icon: unknown icon "./me.svg" (icons: radar`},
 		{"unknown avatar color", Identity{Avatar: &BotAvatar{Icon: "radar", Color: "beige"}}, `avatar.color: unknown color "beige" (colors: indigo`},
 		{"status avatar color", Identity{Avatar: &BotAvatar{Icon: "radar", Color: "red"}}, `avatar.color: "red" is a status color`},
@@ -145,8 +160,12 @@ func TestTemplateSuggestsIdentity(t *testing.T) {
 	if sre.IdentityFrom != "kit/first-line" {
 		t.Fatalf("sre's voice came partly from the template: from %q", sre.IdentityFrom)
 	}
-	if p := c.Bots["plain"]; p.Identity.DisplayName != "Pager Pal" || p.Identity.Avatar.Preset != "lighthouse" || p.IdentityFrom != "kit/first-line" {
+	if p := c.Bots["plain"]; p.Identity.DisplayName != "Pager Pal" || p.IdentityFrom != "kit/first-line" ||
+		*p.Identity.Avatar != (BotAvatar{Shape: "drop", Eyes: "focused", PresetAlias: "lighthouse"}) {
 		t.Fatalf("an un-overridden bot takes the suggestion: %+v from %q", p.Identity, p.IdentityFrom)
+	}
+	if w := strings.Join(c.BotWarnings(), "\n"); strings.Contains(w, "avatar.preset") {
+		t.Fatalf("a template's preset warned the operator: %s", w)
 	}
 	// All the voice text is the operator's (the avatar and color may still
 	// be the template's: they never reach the prompt).
@@ -219,7 +238,7 @@ func TestBotIdentityAttributesAndView(t *testing.T) {
 // duplicates, and no identity color is a status hue.
 func TestIdentityListsAreSound(t *testing.T) {
 	name := regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
-	for list, xs := range map[string][]string{"presets": AvatarPresets, "icons": AvatarIcons, "colors": IdentityColors,
+	for list, xs := range map[string][]string{"shapes": AvatarShapes, "eyes": AvatarEyes, "presets": AvatarPresetNames(), "icons": AvatarIcons, "colors": IdentityColors,
 		"status_hues": StatusHues, "tones": PersonalityTones} {
 		if len(xs) == 0 {
 			t.Errorf("%s: empty", list)
@@ -237,8 +256,14 @@ func TestIdentityListsAreSound(t *testing.T) {
 			t.Errorf("identity color %q is a status hue", c)
 		}
 	}
+	// Every deprecated preset reads as a shape and eyes from the lists.
+	for p, f := range AvatarPresetAliases {
+		if !oneOf(AvatarShapes, f.Shape) || !oneOf(AvatarEyes, f.Eyes) {
+			t.Errorf("preset %s reads as %+v, not names from the lists", p, f)
+		}
+	}
 	o := IdentityOptions()
-	if !reflect.DeepEqual(o["presets"], AvatarPresets) || !reflect.DeepEqual(o["colors"], IdentityColors) || !reflect.DeepEqual(o["icons"], AvatarIcons) ||
+	if !reflect.DeepEqual(o["shapes"], AvatarShapes) || !reflect.DeepEqual(o["eyes"], AvatarEyes) || !reflect.DeepEqual(o["preset_aliases"], AvatarPresetAliases) || o["presets"] != nil || !reflect.DeepEqual(o["colors"], IdentityColors) || !reflect.DeepEqual(o["icons"], AvatarIcons) ||
 		!reflect.DeepEqual(o["tones"], PersonalityTones) || !reflect.DeepEqual(o["status_hues"], StatusHues) {
 		t.Fatalf("the options are not the lists: %v", o)
 	}
@@ -273,12 +298,12 @@ func TestBotAvatarImageLoads(t *testing.T) {
 		return Load(p)
 	}
 	img := testPNG(t)
-	c, err := load(t, map[string][]byte{"avatars/sre.png": img}, "{ image: avatars/sre.png, preset: owl }")
+	c, err := load(t, map[string][]byte{"avatars/sre.png": img}, "{ image: avatars/sre.png, shape: circle, eyes: wide }")
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := c.Bots["sre"].Avatar
-	if a.Image != "avatars/sre.png" || !strings.HasSuffix(a.ImagePath, filepath.Join("avatars", "sre.png")) || !filepath.IsAbs(a.ImagePath) || a.Preset != "owl" {
+	if a.Image != "avatars/sre.png" || !strings.HasSuffix(a.ImagePath, filepath.Join("avatars", "sre.png")) || !filepath.IsAbs(a.ImagePath) || a.Shape != "circle" || a.Eyes != "wide" {
 		t.Fatalf("avatar: %+v", a)
 	}
 	for name, c := range map[string]struct {
@@ -327,7 +352,7 @@ func TestTemplateAvatarImage(t *testing.T) {
 	if a := c.Bots["sre"].Avatar; a == nil || a.Image != "face.png" || !strings.HasSuffix(a.ImagePath, filepath.Join(".conductor", "packs", "kit", "face.png")) {
 		t.Fatalf("the template's picture: %+v", a)
 	}
-	if a := c.Bots["own"].Avatar; a.Preset != "fox" || a.Image != "" {
+	if a := c.Bots["own"].Avatar; a.Shape != "diamond" || a.Eyes != "sleepy" || a.Image != "" {
 		t.Fatalf("the operator's avatar: %+v", a)
 	}
 	if _, _, err := loadTemplateCfgWith(t, manifest, "", write(t, []byte("<svg/>"))); err == nil || !strings.Contains(err.Error(), "SVG is not accepted") {
@@ -360,9 +385,11 @@ func TestTeamAvatar(t *testing.T) {
 		"{ icon: radar, color: teal }":                           "",
 		"{ image: avatars/team.png }":                            "",
 		"{ image: avatars/team.png, icon: shield, color: plum }": "",
-		"{ preset: owl }":                                        "avatar.preset: presets (mascots) are for bots — a team's avatar is { icon: <name>, color: <name> } or { image: <file> }",
-		"{ preset: owl, color: teal }":                           "presets (mascots) are for bots",
-		"{ image: avatars/team.png, preset: owl }":               "presets (mascots) are for bots",
+		"{ shape: circle, color: teal }":                         "avatar.shape: faces (mascots) are for bots — a team's avatar is { icon: <name>, color: <name> } or { image: <file> }",
+		"{ eyes: wink, color: teal }":                            "avatar.eyes: faces (mascots) are for bots",
+		"{ image: avatars/team.png, shape: circle, eyes: wide }": "faces (mascots) are for bots",
+		"{ preset: owl }":                                        "avatar.preset: faces (mascots) are for bots",
+		"{ preset: owl, color: teal }":                           "faces (mascots) are for bots",
 		"{ icon: radar }":                                        "avatar: an icon needs a color (avatar.color)",
 		"{ color: teal }":                                        "avatar: set icon: <name> with color: <name>, or image: <file>",
 		"{ icon: radar, color: red }":                            `avatar.color: "red" is a status color`,
@@ -381,9 +408,9 @@ func TestTeamAvatar(t *testing.T) {
 			t.Errorf("%s: the picture was not resolved: %+v", avatar, c.Teams["platform"].Avatar)
 		}
 	}
-	// Bots keep their presets.
-	if err := validateAvatar(&BotAvatar{Preset: "owl"}, "", true); err != nil {
-		t.Fatalf("a bot's preset: %v", err)
+	// Bots keep their faces.
+	if err := validateAvatar(&BotAvatar{Shape: "circle", Eyes: "wide"}, "", true); err != nil {
+		t.Fatalf("a bot's face: %v", err)
 	}
 	v := TeamAvatarView("platform-ops", nil)
 	if v["initials"] != "PO" || v["name"] != "platform-ops" || v["avatar"] != nil || len(v) != 2 {
@@ -395,5 +422,56 @@ func TestTeamAvatar(t *testing.T) {
 	}
 	if v := TeamAvatarView("platform", &BotAvatar{Icon: "radar", Color: "teal"}); v["picture"] != nil || v["avatar"] != (BotAvatar{Icon: "radar", Color: "teal"}) {
 		t.Fatalf("an icon: %v", v)
+	}
+}
+
+// THE DEPRECATED PRESET: `avatar: { preset: owl }` still loads, read as its
+// shape and eyes (the color kept beside them); validate says so for the
+// operator's own config, never for a template's; connectors still get
+// avatar_preset while a config writes one.
+func TestAvatarPresetAlias(t *testing.T) {
+	c, err := loadBots(t, `bots:
+  sre:
+    avatar: { preset: owl, color: teal }
+  new:
+    avatar: { shape: hexagon, eyes: wink }
+    color: plum
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := *c.Bots["sre"].Avatar; a != (BotAvatar{Shape: "circle", Eyes: "wide", Color: "teal", PresetAlias: "owl"}) {
+		t.Fatalf("the preset's face: %+v", a)
+	}
+	w := strings.Join(c.BotWarnings(), "\n")
+	if !strings.Contains(w, `bots.sre: avatar.preset is deprecated — preset "owl" is { shape: circle, eyes: wide }`) || strings.Contains(w, "bots.new: avatar") {
+		t.Fatalf("warnings:\n%s", w)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(strings.Join(c.BotWarnings(), "\n"), "avatar.preset is deprecated"); n != 1 {
+		t.Fatalf("the warning %d times", n)
+	}
+	a := c.Bots["sre"].Identity.Attributes("sre")
+	if a["avatar_shape"] != "circle" || a["avatar_eyes"] != "wide" || a["avatar_color"] != "teal" || a["avatar_preset"] != "owl" {
+		t.Fatalf("a preset's attributes: %v", a)
+	}
+	a = c.Bots["new"].Identity.Attributes("new")
+	if a["avatar_shape"] != "hexagon" || a["avatar_eyes"] != "wink" || a["avatar_color"] != "plum" || a["avatar_preset"] != "" {
+		t.Fatalf("a face's attributes: %v", a)
+	}
+	if v := c.Bots["sre"].Identity.View("sre", ""); v["avatar"] != (BotAvatar{Shape: "circle", Eyes: "wide", Color: "teal", PresetAlias: "owl"}) {
+		t.Fatalf("view: %v", v)
+	}
+	for _, p := range AvatarPresetNames() {
+		r := resolveAvatarPreset(&BotAvatar{Preset: p})
+		if r.Preset != "" || r.PresetAlias != p || r.Shape != AvatarPresetAliases[p].Shape || r.Eyes != AvatarPresetAliases[p].Eyes || (Identity{Avatar: r}).Validate() != nil {
+			t.Errorf("preset %s: %+v", p, r)
+		}
+	}
+	shared := &BotAvatar{Preset: "fox"}
+	if resolveAvatarPreset(shared); shared.Preset != "fox" || shared.Shape != "" {
+		t.Fatalf("resolving changed a shared avatar: %+v", shared)
 	}
 }

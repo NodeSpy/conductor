@@ -112,7 +112,7 @@ func TestVoiceSectionNamesATemplateSuggestion(t *testing.T) {
 
 // No voice text, no section: an avatar and a color are presentation only.
 func TestNoVoiceSectionWithoutVoiceText(t *testing.T) {
-	for _, id := range []config.Identity{{}, {Avatar: &config.BotAvatar{Preset: "owl"}, Color: "teal"}, {Personality: &config.BotPersonality{Style: "  \n"}}} {
+	for _, id := range []config.Identity{{}, {Avatar: &config.BotAvatar{Shape: "circle", Eyes: "wide"}, Color: "teal"}, {Personality: &config.BotPersonality{Style: "  \n"}}} {
 		f, prompts := voicePrompts(t, id, "")
 		if VoiceSection(f.cfg, "sre") != "" {
 			t.Errorf("%+v: a voice section", id)
@@ -128,14 +128,14 @@ func TestNoVoiceSectionWithoutVoiceText(t *testing.T) {
 // `conductor bot show` and `ls` (and the dashboard, over the same op) carry
 // the identity: always a name and initials, plus whatever is set.
 func TestShowCarriesIdentity(t *testing.T) {
-	f, _ := voicePrompts(t, config.Identity{DisplayName: "Night Owl", Avatar: &config.BotAvatar{Preset: "owl"},
+	f, _ := voicePrompts(t, config.Identity{DisplayName: "Night Owl", Avatar: &config.BotAvatar{Shape: "circle", Eyes: "wide"},
 		Personality: &config.BotPersonality{Tone: "dry"}}, "kit/first-line")
 	out, err := f.svc.OperatorOp(context.Background(), "show", map[string]any{"bot": "sre"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	id, _ := out["identity"].(map[string]any)
-	if id["name"] != "Night Owl" || id["initials"] != "NO" || id["avatar"] != (config.BotAvatar{Preset: "owl"}) ||
+	if id["name"] != "Night Owl" || id["initials"] != "NO" || id["avatar"] != (config.BotAvatar{Shape: "circle", Eyes: "wide"}) ||
 		id["suggested_by"] != "kit/first-line" || id["personality"] != (config.BotPersonality{Tone: "dry"}) {
 		t.Fatalf("show's identity: %v", id)
 	}

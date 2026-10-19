@@ -32,7 +32,7 @@ const botUsage = `usage:
   operator:
     conductor bot ls [--flat]                # bots by team (--flat: one line each)
     conductor bot show <bot>                 # status, identity (name, initials, avatar, voice), template
-    conductor bot identity-options           # the avatar presets, icons, colors and tones an identity may name
+    conductor bot identity-options           # the avatar shapes, eyes, icons, colors and tones an identity may name
     conductor bot avatar set <bot> <file> [--crop x,y,side] [--write]   # its own picture: PNG/JPEG/WebP, re-encoded, avatars/<bot>.png
     conductor bot avatar clear <bot> [--write]
     conductor bot cases <bot> [--all]

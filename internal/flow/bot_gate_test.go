@@ -88,7 +88,7 @@ func TestRunSkillVerbBotIdentity(t *testing.T) {
 	st := newFakeState(t, "svc")
 	r.Bots = &stubGate{v: BotVerdict{Allow: true}}
 	r.Cfg.Bots = map[string]config.BotConfig{
-		"sre": {Identity: config.Identity{DisplayName: "Night Owl", Avatar: &config.BotAvatar{Preset: "owl"}}},
+		"sre": {Identity: config.Identity{DisplayName: "Night Owl", Avatar: &config.BotAvatar{Shape: "circle", Eyes: "wide"}}},
 		"ops": {},
 	}
 	id := func(bot string) SkillIdentity {
@@ -102,7 +102,7 @@ func TestRunSkillVerbBotIdentity(t *testing.T) {
 	if _, err := r.RunSkillVerb(context.Background(), id("sre"), "svc.say", spoof()); err != nil {
 		t.Fatal(err)
 	}
-	if o := last(); o["username"] != "Night Owl" || o["icon"] != "owl" || o["text"] != "hi" {
+	if o := last(); o["username"] != "Night Owl" || o["icon"] != "circle" || o["text"] != "hi" {
 		t.Fatalf("sre's post: %v", o)
 	}
 	if _, has := last()["color"]; has {

@@ -465,7 +465,11 @@ func TestValidateSemanticsIdentity(t *testing.T) {
 		return Decl{Verbs: []Verb{{Name: "post", Options: opts, Open: open, Semantics: &VerbSemantics{Identity: m}}}}
 	}
 	opts := Schema{"text": {Type: "string"}, "username": {Type: "string"}, "icon_emoji": {Type: "string"}}
-	if p := ValidateSemantics(post(opts, false, map[string]string{"username": "name", "icon_emoji": "avatar_preset"})); len(p) != 0 {
+	if p := ValidateSemantics(post(opts, false, map[string]string{"username": "name", "icon_emoji": "avatar_shape", "text": "avatar_eyes"})); len(p) != 0 {
+		t.Fatalf("a good identity mapping reported %q", p)
+	}
+	// avatar_preset is deprecated, still known: plugins that map it keep loading.
+	if p := ValidateSemantics(post(opts, false, map[string]string{"icon_emoji": "avatar_preset"})); len(p) != 0 {
 		t.Fatalf("a good identity mapping reported %q", p)
 	}
 	p := strings.Join(ValidateSemantics(post(opts, false, map[string]string{"username": "email"})), "\n")
