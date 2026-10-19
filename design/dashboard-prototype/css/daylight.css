@@ -944,3 +944,12 @@ html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radiu
 }
 .m-team-h > .m-team-a:empty { display: none; } /* a section with no actions has no empty action row (a phone stacks it under the title) */
 .dl-changes > div { flex-wrap: wrap; } .dl-changes > div > small { flex-basis: 100%; font: var(--type-caption); } /* the Adds tile says when an add is a replacement (r5-4) */
+/* a dialog with a body and a foot: its head and its buttons stay put and only the body scrolls, so a confirm or a deny
+   is never below the screen (r5 blocker 5: the iPhone's Deny sat at 726 in a 664 viewport) */
+.modal:has(> .modal-body):has(> .modal-foot) { display: flex; flex-direction: column; overflow: hidden; }
+.modal:has(> .modal-body):has(> .modal-foot) > .modal-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.modal:has(> .modal-body):has(> .modal-foot) > :not(.modal-body) { flex: none; }
+/* a signing sheet's words come first (r5 blocker 5): what you sign, in a list when there are several; its payload is folded */
+.su-sum { display: grid; gap: 8px; color: var(--color-text-primary); } .su-lede { margin: 0; }
+.su-list { margin: 0; padding-left: 18px; display: grid; gap: 4px; font: var(--type-body-s); color: var(--color-text-secondary); } .su-list.warn li::marker { color: var(--color-status-warning-fg); }
+.seal-what { margin: 4px 0 0; }

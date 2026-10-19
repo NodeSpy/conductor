@@ -266,7 +266,10 @@
   UI.act('apply-go', () => {
     const P = D.pending, digest = Math.random().toString(16).slice(2, 10), wid = S.widening();
     if (!wid.length) { const entry = S.apply(); D.audit.unshift({ ts: new Date().toISOString(), event: 'config_apply', who: 'operator:ops', detail: `${P.length || 1} change(s) · no widening, no passkey · session · backup ${entry && entry.id}` }); ap.done = { entry, stage: 0, pk: false }; UI.refreshChrome(); UI.render(); return; }
-    UI.stepup({ title: `Apply ${P.length} change${P.length > 1 ? 's' : ''}`, purpose: 'config apply', what: `{ purpose: <b>config_apply</b>, base_sha: <b>${D.daemon.config_sha}</b>, diff_sha256: <b>${digest}…</b>, changes: <b>${P.length}</b> }`, ok: 'Apply with passkey' }).then((ok) => {
+    // in words first: each change as staged, then what widens (why the passkey); the hashes under For audit
+    const summary = `<p class="su-lede">You're applying ${P.length === 1 ? 'this change' : `these ${P.length} changes`} to conductor's config:</p><ul class="su-list">${P.slice(0, 8).map((c) => `<li>${esc(c.summary || S.describe(c.coll, c.key, c.before, c.after))}</li>`).join('')}${P.length > 8 ? `<li class="dim">and ${P.length - 8} more</li>` : ''}</ul>
+      <p class="su-lede"><b>Why your passkey:</b> ${wid.length === 1 ? 'it lets bots or agents do more' : `${wid.length} parts let bots or agents do more`}:</p><ul class="su-list warn">${wid.slice(0, 6).map((w) => `<li>${esc(w.text)}</li>`).join('')}${wid.length > 6 ? `<li class="dim">and ${wid.length - 6} more</li>` : ''}</ul>`;
+    UI.stepup({ title: `Apply ${P.length} change${P.length > 1 ? 's' : ''}`, purpose: 'Config · apply', summary, what: `{ purpose: <b>config_apply</b>, base_sha: <b>${D.daemon.config_sha}</b>, diff_sha256: <b>${digest}…</b>, changes: <b>${P.length}</b> }`, ok: 'Apply with passkey' }).then((ok) => {
       if (!ok) return;
       const entry = S.apply();
       ap.done = { entry, stage: 0, pk: true };

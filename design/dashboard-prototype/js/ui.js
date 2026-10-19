@@ -444,18 +444,29 @@
    * simulated. */
   /** The authenticator this device would use (recorded with the decision, not assumed). */
   UI.authenticator = () => (innerWidth <= 720 ? 'phone · Face ID' : 'laptop · Touch ID');
+  /** A verb in words: its plugin's label for it (slack-ops.post → "Post a message"), else the verb itself. */
+  UI.verbLabel = (verb) => { const [inst, v] = String(verb || '').split('.'), c = (window.D.connectors || []).find((x) => x.name === inst), use = c ? c.use : inst, d = window.SCHEMA && SCHEMA.connectors[use] && SCHEMA.connectors[use].verbs && SCHEMA.connectors[use].verbs[v]; return d && d.label ? d.label : verb; };
+  /** What a signing sheet says first (r5 blocker 5): the decision in plain words, who asked (their display name) and
+   *  on which ticket (its title), and what will happen; the exact payload and its digest are folded under For audit. */
+  UI.sealWords = (p, deny) => { const E = UI.esc, who = UI.botName ? UI.botName(p.bot) : p.bot, tk = (window.D.cases || []).find((c) => c.id === p.case), n = (x) => (x === 1 ? '1' : String(x));
+    const what = p.kind === 'terraform'
+      ? `<dt>What happens</dt><dd>Terraform applies the reviewed plan to <b>${E(p.tf.repo)}</b>, ${E(p.tf.dir)} (the ${E(p.tf.workspace)} workspace)</dd><dt>Changes</dt><dd>Adds ${n(p.tf.add)}${p.tf.replaces.length && p.tf.add ? ' (the replacement)' : ''}, changes ${n(p.tf.change)}, ${p.tf.replaces.length ? `<b>replaces ${p.tf.replaces.length === 1 ? 'a server' : p.tf.replaces.length + ' resources'}</b> (${E(p.tf.replaces.join(', '))}), ` : ''}destroys ${p.tf.destroy ? n(p.tf.destroy) : 'nothing'}</dd>`
+      : `<dt>What happens</dt><dd>${E(UI.verbLabel(p.verb))}${Object.keys(p.options || {}).length ? `: ${Object.entries(p.options).filter(([k]) => !/^(store|namespace)$/.test(k)).map(([k, v]) => `${E(k.replace(/_/g, ' '))} <b>${E(String(typeof v === 'object' ? JSON.stringify(v) : v).slice(0, 140))}${String(v).length > 140 ? '…' : ''}</b>`).join(', ')}` : ''}</dd>`;
+    return `<div class="seal-words">${deny ? 'You\'re denying' : 'You\'re approving'} <b>${E(p.title || p.summary)}</b>, which ${E(who)} asked for${tk ? ` on the ticket “${E(tk.title)}”` : ''}.</div>
+      <dl class="kv small seal-what">${what}${p.impact ? `<dt>Effect</dt><dd>${E(p.impact)}</dd>` : ''}${p.reversible ? `<dt>Undo</dt><dd>${E(p.reversible)}</dd>` : ''}</dl>`; };
   UI.approve = (p, decision = 'approve', onDone) => {
-    const deny = decision === 'deny', dev = UI.authenticator();
+    const deny = decision === 'deny', dev = UI.authenticator(), who = UI.botName ? UI.botName(p.bot) : p.bot;
     const s = UI.modal(`
-      <div class="modal-head"><div><div class="caps" style="margin-bottom:6px">${p.bot} · ${p.id} · case ${p.case}</div><h2>${deny ? 'Deny' : 'Approve'}: ${UI.esc(p.title || p.summary)}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
+      <div class="modal-head"><div><div class="caps" style="margin-bottom:6px">Approval · from ${UI.esc(who)}</div><h2>${deny ? 'Deny' : 'Approve'}: ${UI.esc(p.title || p.summary)}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
       <div class="modal-body stack">
-        <div class="seal-words">${deny ? 'You\'re denying' : 'You\'re approving'} <b>${UI.esc(p.title || p.summary)}</b>, proposed by <b>${p.bot}</b>.${p.impact ? ` <span class="dim">${UI.esc(p.impact)}</span>` : ''}</div>
+        ${UI.sealWords(p, deny)}
         ${UI.requesterBanner ? UI.requesterBanner(p) : ''}
-        ${p.kind === 'terraform' ? `<div class="kv small"><dt>action</dt><dd class="mono">terraform apply · ${p.tf.repo} · ${p.tf.dir} · ${p.tf.workspace}</dd><dt>plan</dt><dd class="mono">+${p.tf.add} ~${p.tf.change} -${p.tf.destroy} · ${UI.statusMark('wait', `replaces ${p.tf.replaces.join(', ')}`, { sm: true })}</dd></div>` : UI.payloadHTML ? UI.payloadHTML(p) : ''}
-        ${deny ? `<div class="field"><label for="seal-reason">Tell the bot why <span class="opt">optional</span></label><textarea class="textarea" id="seal-reason" rows="2" maxlength="500" placeholder="e.g. Not in #incidents; post it to #finance instead."></textarea></div>` : ''}
-        <details class="tech"><summary>The exact payload the passkey signs</summary><div class="digest">{ bot: <b>${p.bot}</b>, proposal: <b>${p.id}</b>, decision: <b>${decision}</b>, action_sha256: <b>${p.digest.replace('sha256:', '')}</b>, nonce: <b>7Qx2…f9</b> }</div></details>
+        ${deny ? `<div class="field"><label for="seal-reason">Tell ${UI.esc(who)} why <span class="opt">optional</span></label><textarea class="textarea" id="seal-reason" rows="2" maxlength="500" placeholder="e.g. Not in #incidents; post it to #finance instead."></textarea></div>` : ''}
+        <details class="tech"><summary>For audit: the exact request and the digest your passkey signs</summary>
+          ${p.kind === 'terraform' ? `<div class="kv small"><dt>action</dt><dd class="mono">terraform apply · ${p.tf.repo}@${String(p.tf.commit).slice(0, 12)} · ${p.tf.dir} · ${p.tf.workspace}</dd><dt>plan</dt><dd class="mono">+${p.tf.add} ~${p.tf.change} -${p.tf.destroy} · plan sha256 ${String(p.tf.plan_sha).slice(0, 16)}…</dd></div>` : UI.payloadHTML ? UI.payloadHTML(p) : ''}
+          <div class="digest">{ bot: <b>${p.bot}</b>, proposal: <b>${p.id}</b>, case: <b>${p.case || '—'}</b>, decision: <b>${decision}</b>, action_sha256: <b>${p.digest.replace('sha256:', '')}</b>, nonce: <b>7Qx2…f9</b> }</div></details>
         <div class="seal" id="seal">
-          <div id="seal-msg"><b>Confirm with your passkey</b><div class="muted small">User verification required · this assertion covers only this action</div></div>
+          <div id="seal-msg"><b>Confirm with your passkey</b><div class="muted small">It covers only this decision, once</div></div>
         </div>
       </div>
       <div class="modal-foot"><span class="proto-note" style="margin-right:auto">authenticator simulated</span><button class="btn ghost" data-close>Cancel</button><button class="btn ${deny ? 'danger' : 'primary'}" id="seal-go">${UI.icon('passkey')}${deny ? 'Deny with passkey' : 'Approve with passkey'}</button></div>`, { sticky: true });
@@ -632,9 +643,11 @@
     obs.observe(document.body, { childList: true });
   });
   /** A step-up passkey assertion over `what` (simulated authenticator). */
-  UI.stepup = ({ title, what, purpose = 'step-up', ok = 'Confirm with passkey', danger = false }) => new Promise((res) => {
-    const [s, close] = layer(`<div class="modal-head"><div><div class="caps">${purpose} · fresh passkey assertion</div><h2>${title}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
-      <div class="modal-body"><div class="panel inset" style="padding:10px 12px"><div class="caps" style="margin-bottom:4px">You are signing</div><div class="digest">${what}</div></div>
+  /* summary: what you're signing, in words, first; what: the exact payload, folded under For audit (r5 blocker 5). A
+     caller with no summary yet still shows the payload open. */
+  UI.stepup = ({ title, what, summary, purpose = 'step-up', ok = 'Confirm with passkey', danger = false }) => new Promise((res) => {
+    const [s, close] = layer(`<div class="modal-head"><div><div class="caps">${purpose}</div><h2>${title}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
+      <div class="modal-body">${summary ? `<div class="su-sum">${summary}</div><details class="tech"><summary>For audit: the exact payload your passkey signs</summary><div class="digest">${what}</div></details>` : `<div class="panel inset" style="padding:10px 12px"><div class="caps" style="margin-bottom:4px">You are signing</div><div class="digest">${what}</div></div>`}
         <div class="seal" id="su-seal">
         <div id="su-msg"><b>Confirm with your passkey</b><div class="muted small">User verification required · bound to this request's digest · single use, 2 min</div></div></div></div>
       <div class="modal-foot"><span class="proto-note" style="margin-right:auto">authenticator simulated</span><button class="btn ghost" data-close>Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" id="su-go">${UI.icon('passkey')}${ok}</button></div>`, { sticky: true });

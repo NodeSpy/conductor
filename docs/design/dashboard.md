@@ -294,6 +294,11 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
   Apply for a widening change, sign in, enrol, the signing sheet's own button) and on the passkeys themselves.
   Opening, reviewing and navigating never carry it; "your passkey signs this" is said in the signing sheet, at the
   point of signing (`passkey.spec.js`).
+- **A signing sheet says what you sign in words first.** The decision, who asked (their display name) and on which
+  ticket (its title), what happens (for Terraform: what it adds, changes, replaces and destroys, matching the plan's own
+  summary), the effect and how to undo it; a config apply lists each change as staged and why the passkey (each
+  widening in words). The exact payload and its digest are folded under **For audit**. The sheet's head and buttons
+  stay put and only its body scrolls, so Approve, Deny and Apply are on screen on an iPhone, above Safari's toolbar.
 - **Empty states** (`UI.empty`): a short human title, why it's empty, the one next step. No illustration.
 - **Toasts** (`UI.toast`): past tense and specific, a status glyph, 6 seconds (errors stay until dismissed), above
   the phone tab bar. **Dialogs** for decisions, **drawers** for create-in-place beside a list (layered over a dialog
