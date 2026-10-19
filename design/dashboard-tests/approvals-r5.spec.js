@@ -59,3 +59,34 @@ for (const decision of ['approve', 'deny']) {
     expect(g.bt).toBeGreaterThan(0);
   });
 }
+
+// r5 blocker 6: after you decide, the page says so at the top (what, by whom, when, what's next), the toast says what
+// you decided in words, and the audit log records it specifically ("You approved “…”"), not "You decided an approval".
+test('approving p12: the page opens on the decision, the toast and the audit log say what was approved', async ({ page }) => {
+  await go(page, '#/bots/platform-sre/proposals/p12', { fresh: true });
+  await page.locator('[data-act="p-approve"][data-d="approve"]').click();
+  await page.locator('#seal-go').click();
+  await expect(page.locator('.toast').last()).toContainText('Approved: Replace the production web server');
+  await expect(page.locator('.toast').last()).not.toContainText(/p12|digest|HEAD/);
+  const top = page.locator('.dl-proposal > .prop-decided');
+  await expect(top).toBeVisible();
+  await expect(top).toContainText(/Approved by you \(passkey .+\) · just now/);
+  await expect(top).toContainText('Next: conductor checks the plan is unchanged, applies it, and posts the result on the ticket.');
+  expect(await top.evaluate((e) => e.getBoundingClientRect().top < innerHeight)).toBe(true);
+  await expect(page.locator('.dl-proposal .dl-decide')).toHaveCount(0);
+  await expect(page.locator('.dl-proposal .dl-kick')).toHaveCount(0); // no "Needs you" kicker left
+  expect(await page.locator('.dl-proposal').evaluate((e) => getComputedStyle(e).boxShadow)).not.toMatch(/inset/); // nor its edge
+  await go(page, '#/logs/audit');
+  await expect(page.locator('#main')).toContainText('You approved “Replace the production web server” (Atlas’s approval), with the');
+  await expect(page.locator('#main')).not.toContainText('decided an approval');
+});
+
+test('denying p4 with a reason: the page says Ledger was told why, and nothing runs', async ({ page }) => {
+  await go(page, '#/bots/billing-sre/proposals/p4', { fresh: true });
+  await page.locator('[data-act="p-approve"][data-d="deny"]').click();
+  await page.fill('#seal-reason', 'Post it to #finance instead.');
+  await page.locator('#seal-go').click();
+  const top = page.locator('.dl-proposal > .prop-decided');
+  await expect(top).toContainText(/Denied by you/);
+  await expect(top).toContainText('Ledger was told why: “Post it to #finance instead”. Nothing runs.');
+});

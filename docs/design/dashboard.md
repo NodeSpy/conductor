@@ -294,6 +294,12 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
   Apply for a widening change, sign in, enrol, the signing sheet's own button) and on the passkeys themselves.
   Opening, reviewing and navigating never carry it; "your passkey signs this" is said in the signing sheet, at the
   point of signing (`passkey.spec.js`).
+- **After you decide, the page says so first.** An approval you approved or denied opens on its decision, in place of
+  its Needs you kicker and edge: Approved (or Denied) by you, with which passkey, and when; then what happens next
+  (conductor checks the plan is unchanged, applies it and posts the result on the ticket; or, denied: the bot was told,
+  with your reason, and nothing runs). The toast says the same by title, never by id or digest, and the audit log
+  records it specifically: "You approved “Replace the production web server” (Atlas’s approval), with the laptop
+  passkey".
 - **A signing sheet says what you sign in words first.** The decision, who asked (their display name) and on which
   ticket (its title), what happens (for Terraform: what it adds, changes, replaces and destroys, matching the plan's own
   summary), the effect and how to undo it; a config apply lists each change as staged and why the passkey (each

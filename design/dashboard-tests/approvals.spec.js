@@ -21,7 +21,7 @@ test('the seal modal says what you approve, shows the payload, and records the a
   await expect(page.locator('.seal-words')).toContainText("You're approving Post the monthly forecast to #incidents");
   await expect(page.locator('.modal .pl-long')).toContainText('October forecast');
   await page.locator('#seal-go').click();
-  await expect(page.locator('.dl-decided')).toContainText('Approved');
+  await expect(page.locator('.prop-decided')).toContainText('Approved');
   const who = await page.evaluate(() => D.proposals.find((p) => p.id === 'p4').approver);
   expect(who).toContain(isPhone(page) ? 'phone' : 'laptop');
   // the page never fades to blank after the decision
@@ -33,7 +33,7 @@ test('deny with a reason: the reason reaches the bot', async ({ page }) => {
   await page.locator('[data-act="p-approve"][data-d="deny"]').first().click();
   await page.fill('#seal-reason', 'Not in #incidents; post it to #finance.');
   await page.locator('#seal-go').click();
-  await expect(page.locator('.dl-decided')).toContainText('post it to #finance');
+  await expect(page.locator('.prop-decided')).toContainText('post it to #finance');
   expect(await page.evaluate(() => D.chats['billing-sre'].slice(-1)[0].text)).toContain('post it to #finance');
 });
 

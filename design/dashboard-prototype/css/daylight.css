@@ -953,3 +953,7 @@ html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radiu
 .su-sum { display: grid; gap: 8px; color: var(--color-text-primary); } .su-lede { margin: 0; }
 .su-list { margin: 0; padding-left: 18px; display: grid; gap: 4px; font: var(--type-body-s); color: var(--color-text-secondary); } .su-list.warn li::marker { color: var(--color-status-warning-fg); }
 .seal-what { margin: 4px 0 0; }
+/* a decided approval opens on its decision (r5 blocker 6) */
+.prop-decided { display: grid; gap: 4px; padding: 12px 16px; margin: -4px 0 14px; border-radius: var(--radius-md); background: var(--color-bg-sunken); border-left: 3px solid var(--s-solid, var(--color-border-strong)); }
+.prop-decided-h { margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--color-text-primary); } .prop-decided-n { margin: 0; color: var(--color-text-secondary); font: var(--type-body-s); }
+.dl-proposal.decided { box-shadow: var(--shadow-2); } /* decided: no needs-you edge (r5-6) */

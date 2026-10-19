@@ -478,7 +478,11 @@
         $('#seal-msg', s).innerHTML = deny ? '<b>Denied</b><div class="muted small">Signed decision recorded · the bot is told</div>' : `<b>Approved · executing</b><div class="muted small">Verified against operator <span class="mono">ops</span> · credential “${dev}”</div>`;
         p.status = deny ? 'denied' : 'approved'; p.approver = `ops (passkey · ${dev.split(' · ')[0]})`; if (reason.trim()) p.reason = reason.trim();
         if (deny && reason.trim()) (D.chats[p.bot] = D.chats[p.bot] || []).push({ who: 'op', at: new Date().toISOString(), text: `Denied ${p.id}: ${reason.trim()}` });
-        setTimeout(() => { UI.closeModal(); UI.toast(deny ? `Denied ${p.id}` : `Approved ${p.id}`, deny ? (reason.trim() ? 'your reason went to the bot' : 'decision signed') : (p.kind === 'terraform' ? 'conductor re-checks the plan hash, HEAD, and a clean tree, then applies' : 'the gate re-runs exactly the signed digest'), deny ? 'fail' : 'ok'); D.attention = D.attention.filter((a) => !a.href.includes(p.id) && !(a.sub || '').includes(p.id)); D.audit.unshift({ ts: new Date().toISOString(), event: 'bot_approval', who: 'operator:ops', detail: `${p.id} · ${decision} · ${dev}${reason.trim() ? ' · reason given' : ''}`, run: '' }); if (onDone) onDone(); }, UI.fast ? 40 : 900);
+        p.decidedAt = new Date().toISOString();
+        // the toast and the audit log say what was decided, by its title (r5 blocker 6: 'Approved p12 · the gate re-runs
+        // exactly the signed digest', 'You decided an approval'); the page itself swaps to its decided state
+        const ttl = p.title || p.summary, dv = dev.split(' · ')[0];
+        setTimeout(() => { UI.closeModal(); UI.toast(deny ? `Denied: ${UI.esc(ttl)}` : `Approved: ${UI.esc(ttl)}`, deny ? `${UI.esc(who)} was told${reason.trim() ? ', with your reason' : ''}. Nothing runs.` : (p.kind === 'terraform' ? 'conductor checks the plan is unchanged, applies it, and posts the result on the ticket' : 'it runs once, exactly as you approved it'), deny ? 'fail' : 'ok'); D.attention = D.attention.filter((a) => !a.href.includes(p.id) && !(a.sub || '').includes(p.id)); D.audit.unshift({ ts: p.decidedAt, event: 'bot_approval', who: 'operator:ops', what: `${deny ? 'denied' : 'approved'} “${ttl}” (${who}’s approval), with the ${dv} passkey${deny && reason.trim() ? ', and said why' : ''}`, detail: `${p.id} · ${decision} · ${dev}${reason.trim() ? ' · reason given' : ''}`, run: '' }); if (onDone) onDone(); }, UI.fast ? 40 : 900);
       }, UI.fast ? 40 : 1600);
     });
   };
