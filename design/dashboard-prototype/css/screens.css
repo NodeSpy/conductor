@@ -711,3 +711,9 @@ tr.folded { display: none; }
 .def-bar .link { display: inline-flex; align-items: center; gap: var(--space-1); } .def-bar .link svg { width: 14px; height: 14px; }
 .def-yaml-d { margin-top: var(--space-3); }
 @media (max-width: 720px) { .def-bar .def-state { flex-basis: 100%; } .def-bar.dirty { bottom: var(--space-2); } }
+/* a bot's mascot (66): the kit's named paints take the bot's colour tokens; a silhouette needs no tile behind it */
+.bav.mascot { background: none; }
+.bav.mascot svg { width: 100%; height: 100%; }
+.bav.mascot [fill="face"] { fill: var(--bot-face); } .bav.mascot [stroke="face"] { stroke: var(--bot-face); }
+.bav.mascot [fill="ink"] { fill: var(--bot-ink); } .bav.mascot [stroke="ink"] { stroke: var(--bot-ink); }
+.bav.mascot [fill="rim"] { fill: var(--color-bot-rim); } .bav.mascot [stroke="rim"] { stroke: var(--color-bot-rim); }

@@ -36,6 +36,7 @@
       if (saved.chatsVer !== window.D.chatsVer) { delete saved.chats; delete saved.chat; delete saved.chatsVer; delete saved.teamChats; delete saved.chatUnread; }
       if (saved.ticketsVer !== window.D.ticketsVer) { delete saved.cases; delete saved.ticketsVer; }
       if (saved.auditVer !== window.D.auditVer) { delete saved.audit; delete saved.auditVer; }
+      if (saved.identityVer !== window.D.identityVer) { delete saved.identity; delete saved.identityVer; }
       if (saved.connVer !== window.D.connVer) { delete saved.connectors; delete saved.plugins; delete saved.pluginReleases; delete saved.connVer; }
       // the wallet's fixtures (js/walletdata.js) arrived after some demos were saved: take them, and the proposal and ticket they add
       if (saved.walletVer !== window.D.walletVer) { ['wallet', 'payments', 'purchases', 'proposals', 'cases', 'bots', 'charters', 'walletVer', 'ticketsVer'].forEach((k) => delete saved[k]); }

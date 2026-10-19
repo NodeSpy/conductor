@@ -975,13 +975,15 @@ window.D.packMembers = {
  * tagline and a voice. The config id stays the name everywhere it matters; the display name is what chat says. */
 (function () {
   const D = window.D;
+  // each bot's mascot (66): a shape, an eye set and a colour from the brand's kit, a distinct combination each
+  D.identityVer = 2;
   D.identity = {
-    'platform-sre': { name: 'Atlas', face: 'focus', color: 'teal', tagline: 'Keeps the platform up; first on every page', voice: 'Terse' },
-    'billing-sre': { name: 'Ledger', face: 'calm', color: 'olive', tagline: 'Watches spend and the monthly forecast', voice: 'Formal' },
-    'web-triage': { name: 'Scout', face: 'curio', color: 'lagoon', tagline: 'Finds the cause of front-end bugs', voice: 'Warm' },
-    'platform-data': { name: 'Delta', face: 'steady', color: 'stone', tagline: 'Keeps the pipelines flowing', voice: 'Plain' },
-    'release-scribe': { name: 'Quill', face: 'wink', color: 'rose', tagline: 'Writes the release notes', voice: 'Warm' },
-    homelab: { name: 'Hearth', face: 'doze', color: 'plum', tagline: 'Looks after the home lab', voice: 'Plain' },
+    'platform-sre': { name: 'Atlas', shape: 'hex', eyes: 'dots', color: 'teal', tagline: 'Keeps the platform up; first on every page', voice: 'Terse' },
+    'billing-sre': { name: 'Ledger', shape: 'shield', eyes: 'sleepy', color: 'olive', tagline: 'Watches spend and the monthly forecast', voice: 'Formal' },
+    'web-triage': { name: 'Scout', shape: 'bean', eyes: 'ovals', color: 'lagoon', tagline: 'Finds the cause of front-end bugs', voice: 'Warm' },
+    'platform-data': { name: 'Delta', shape: 'octa', eyes: 'rings', color: 'stone', tagline: 'Keeps the pipelines flowing', voice: 'Plain' },
+    'release-scribe': { name: 'Quill', shape: 'petal', eyes: 'happy', color: 'rose', tagline: 'Writes the release notes', voice: 'Warm' },
+    homelab: { name: 'Hearth', shape: 'cushion', eyes: 'up', color: 'plum', tagline: 'Looks after the home lab', voice: 'Plain' },
   };
   const m = (min) => new Date(Date.now() - min * 60000).toISOString();
   // a team's group chat: you talk to the whole team; its lead (or its routing) picks it up, or you ask everyone
