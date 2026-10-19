@@ -213,7 +213,7 @@ test('a bot’s purchase waits in Needs you and its Approvals: shop, items, tota
   await expect(page).toHaveURL(/#\/bots\/homelab\/proposals\/p14/);
   await page.locator('[data-act="p-approve"][data-d="approve"]').first().click();
   await page.locator('#seal-go').click();
-  await expect(page.locator('.dl-decided')).toContainText('Approved');
+  await expect(page.locator('.wl-done')).toContainText('Approved by you');
   expect(await page.evaluate(() => UI.puStatus(D.purchases.find((p) => p.id === 'pu7')))).toBe('approved');
   await go(page, '#/attention');
   await expect(page.locator('.dl-need', { hasText: 'NAS hard drive' })).toHaveCount(0);
@@ -223,10 +223,10 @@ test('a subscription is flagged; approving and denying are signed with the passk
   await go(page, '#/browser/purchases/pu8', { fresh: true });
   await expect(page.locator('.wl-flag')).toContainText('A subscription: it charges $6.00 every month');
   await page.locator('[data-act="w-pu-decide"][data-d="deny"]').click();
-  await page.locator('#f-reason').fill('Not this month.');
-  await page.locator('#gen-submit').click();
-  await passkey(page).click();
-  await expect(page.locator('.dl-decided')).toContainText('Denied by ops: “Not this month.”');
+  await page.locator('#seal-reason').fill('Not this month.');
+  await page.locator('#seal-go').click();
+  await expect(page.locator('.wl-done')).toContainText('Denied by you');
+  await expect(page.locator('.wl-done')).toContainText('“Not this month.”');
   await go(page, '#/attention');
   await expect(page.locator('.dl-need', { hasText: 'Off-site backup' })).toHaveCount(0);
 });
@@ -342,4 +342,52 @@ test('a refusal names the layer that stopped it and what is left', async ({ page
   await go(page, '#/tickets/c39', { fresh: true });
   const words = await page.evaluate(() => { const ls = UI.limitLayers({ cardN: 'household', bot: 'homelab', caseId: 'c39', total: 24 }); return ls.filter((l) => l.over).map((l) => UI.refusalWords(l, ls.cur)); });
   expect(words).toContain('over this ticket’s $120.00 limit: $17.51 left');
+});
+
+
+// Round 5 (items 5, 6, 7): the purchase signing sheet in words, a decided state at the top, a ticket's limit on every ticket.
+test('the purchase signing sheet says what you agree to in words; ids and the digest only under For audit; its confirm row on screen', async ({ page }) => {
+  for (const [route, act] of [['#/bots/homelab/proposals/p14', '[data-act="p-approve"][data-d="approve"]'], ['#/browser/purchases/pu8', '[data-act="w-pu-decide"][data-d="approve"]']]) {
+    await go(page, route, { fresh: true });
+    await page.locator(act).first().click();
+    const sheet = page.locator('.modal.wl-seal');
+    await expect(sheet.locator('.seal-words')).toContainText('You’re letting');
+    const text = await sheet.evaluate((m) => [...m.querySelectorAll(':scope > .modal-head, .seal-words, .wl-seal-where')].map((e) => e.innerText).join('\n'));
+    for (const bad of ['{"name"', 'recurring false', 'browser.purchase', 'case c', 'proposed by', 'sha256', 'p14', 'pu8']) expect(text, `no “${bad}” before For audit`).not.toContain(bad);
+    await expect(sheet.locator('.wl-seal-audit')).not.toHaveAttribute('open', '');
+    await expect(sheet.locator('.wl-seal-audit')).toContainText('sha256');
+    const fits = await page.locator('#seal-go').evaluate((b) => { const r = b.getBoundingClientRect(), vh = (window.visualViewport ? visualViewport.height : innerHeight); return r.bottom <= vh && r.top >= 0; });
+    expect(fits, 'the confirm button is on screen').toBe(true);
+    await page.locator('.modal.wl-seal [data-close]').last().click();
+  }
+});
+
+test('after you decide a purchase, its top says what happened, by whom, when and what next; the needs-you edge goes', async ({ page }) => {
+  await go(page, '#/bots/homelab/proposals/p14', { fresh: true });
+  await page.locator('[data-act="p-approve"][data-d="approve"]').first().click();
+  await page.locator('#seal-go').click();
+  const done = page.locator('.dl-proposal > .wl-done');
+  await expect(done).toContainText('Approved by you');
+  await expect(done).toContainText('may pay once');
+  await expect(page.locator('.dl-proposal')).toHaveClass(/decided/);
+  await expect(page.locator('.dl-proposal .dl-kick')).toHaveCount(0);
+  expect(await done.evaluate((e) => e.getBoundingClientRect().top < innerHeight / 2)).toBe(true);
+  await go(page, '#/logs/audit');
+  await expect(page.locator('#main')).toContainText('approved a purchase');
+});
+
+test('a ticket’s spending limit shows on every ticket that has one (a team’s, a draft); the draft sheet says Save draft; no case words', async ({ page }) => {
+  await go(page, '#/tickets/new?team=platform', { fresh: true });
+  await page.locator('#tk-title').fill('Order a spare SSD for the build box');
+  await page.locator('#w-nt-b > summary').click();
+  await page.locator('[data-money="budget"]').fill('50');
+  await page.locator('[data-act="tk-create"][data-stage="draft"]').click();
+  await expect(page.locator('#su-go')).toContainText('Save draft with passkey');
+  const sheet = await page.locator('.modal').innerText();
+  expect(sheet).not.toMatch(/new_case|case:/);
+  expect(sheet).toContain('saved as a draft');
+  await page.locator('#su-go').click();
+  await expect(page).toHaveURL(/#\/tickets\/c\d+$/);
+  await expect(page.locator('.wl-tkb')).toContainText('$50.00 left of $50.00');
+  await expect(page.locator('.wl-tkb')).toContainText('whichever bot on team platform takes it');
 });

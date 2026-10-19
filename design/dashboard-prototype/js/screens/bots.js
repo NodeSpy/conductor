@@ -497,6 +497,7 @@
       what changes, where / effect / undo, who started it, the decision, and the technical details folded. */
   function proposalDetail(m, p) {
     const tf = p.tf, pend = p.status === 'pending', t = teamOf(m);
+    const puDone = !pend && p.kind === 'purchase' && UI.purchaseDecided ? UI.purchaseDecided((D.purchases || []).find((x) => x.id === p.purchase) || {}) : '';
     const ask = p.ask || (tf ? `${m.name} wants to run terraform apply on ${p.env || tf.workspace}.` : `${m.name} wants to ${esc(String(p.summary || p.verb))}.`);
     const pc = tf ? planHTML(D.tfPlan || '').counts : null;
     const changes = tf ? `<div class="dl-changes">${[[PLAN_WORD.create, pc.create, '', pc.addsReplace ? (pc.addsReplace === pc.create ? 'the replacement' : `${pc.addsReplace} a replacement`) : ''], [PLAN_WORD.update, pc.update], [PLAN_WORD.replace, pc.replace, 'wait'], [PLAN_WORD.destroy, pc.destroy, 'fail']].map(([l, n, st, note]) => `<div${n && st ? ` data-s="${st}"` : ''}><b>${n}</b><span>${l}</span>${note ? `<small class="dl-sub">${note}</small>` : ''}</div>`).join('')}
@@ -522,7 +523,7 @@
       ${p.why ? `<div class="dl-pwhy"><span class="dl-lbl">Why</span><p>${UI.taskWords(p.why, true)}</p></div>` : ''}
       ${where.length ? `<dl class="dl-where">${where.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>` : ''}
       <p class="dl-origin">${origin}</p>${pend || p.status !== 'shadow' ? '' : decided}${plan}<p class="dl-sub prop-can-link"><a class="dl-link" href="#/bots/${m.name}/access">What ${esc(m.name)} may do on its own, and what it asks first →</a></p>${audit}`;
-    const card = `<article class="dl-card dl-proposal${pend ? '' : ' decided'}">${pend ? `<div class="dl-kick">${UI.mark('ember')}Needs you · <span class="nowrap">asked ${UI.agoText(p.at)}</span>${p.expires ? ` · <span class="nowrap">expires in ${UI.humanSpan(p.expires)}</span>` : ''}</div>` : p.status === 'shadow' ? `<div class="dl-kick dl-sub">${UI.agoText(p.at)}</div>` : decidedTop(p, m)}
+    const card = `<article class="dl-card dl-proposal${pend ? '' : ' decided'}">${pend ? `<div class="dl-kick">${UI.mark('ember')}Needs you · <span class="nowrap">asked ${UI.agoText(p.at)}</span>${p.expires ? ` · <span class="nowrap">expires in ${UI.humanSpan(p.expires)}</span>` : ''}</div>` : p.status === 'shadow' ? `<div class="dl-kick dl-sub">${UI.agoText(p.at)}</div>` : puDone || decidedTop(p, m)}
       <h2 class="dl-ptitle">${esc(p.title || p.summary)}</h2><p class="dl-ask">${ask}</p>
       <div class="prop-body">${body}</div>
       ${pend ? `<div class="dl-decide prop-decide"><button class="btn lg primary" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve with passkey</button><button class="btn lg secondary" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny…</button><span class="hint">${(() => { const ops = S.effective(m).operators.v || []; return ops.length ? `Only ${ops.map(esc).join(' or ')} can approve.` : 'Any operator can approve.'; })()}</span></div>` : p.status === 'shadow' ? decided : ''}</article>`;

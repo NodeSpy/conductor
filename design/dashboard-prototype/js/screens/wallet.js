@@ -154,8 +154,6 @@
   /** The receipt, after the fact: the order number and what was charged, flagged when it's more than you approved. */
   const receiptHTML = (p) => { const r = p.receipt; if (!r) return '';
     return `<div class="wl-receipt${r.note ? ' flag' : ''}"><span class="dl-lbl">Receipt</span><p>${r.note ? UI.mark('wait') : UI.mark('ok')}<span>Order <b class="mono">${esc(r.order_number || '—')}</b> · ${money(r.total, r.currency || p.currency)} charged · ${UI.agoText(r.at)}${r.note ? `<br><b>${esc(r.note)}</b> You were notified; the card’s own provider limits are what stop this.` : ''}</span></p></div>`; };
-  const decidedWords = (p) => { const s = UI.puStatus(p), by = p.approver ? ` by ${esc(p.approver)}` : '';
-    return { pending: '', approved: `Approved${by}${p.unattended ? ' (without asking: under its own cap)' : ''}. ${esc(byWord(p))} may pay once, before ${UI.hm(p.expires)}.`, used: `Approved${by}; paying now.`, completed: `Approved${by}${p.unattended ? ' (without asking: under its own cap)' : ''}, and paid.`, denied: `Denied${by}${p.reason ? `: “${esc(p.reason)}”` : ''}.`, refused: `Not paid. ${esc(p.reason || '')}`, expired: 'Expired before it was used. Nothing was paid.' }[s] || ''; };
 
   /* ---------- the tab bar every Browsers page shares ---------- */
   UI.browserTabs = (on) => UI.tabs([['sessions', 'Sessions', '#/browser', D.browsers.length], ['logins', 'Logins', '#/browser/logins', D.access.credentials.length + D.access.logins.length],
@@ -163,6 +161,8 @@
 
   /* ---------- the passkey gate: only a widening change asks ---------- */
   const audit = (event, detail) => D.audit.unshift({ ts: now(), event, who: 'operator:ops', detail, run: '' });
+  /** What a widening signs, in words (the passkey sheet's digest box is monospace; a sentence isn't). */
+  const say = (html) => `<span class="wl-say">${html}</span>`;
   const gate = (widens, title, what, fn, ok = 'Confirm with passkey') => { if (!widens) { fn(); return; } UI.stepup({ title, purpose: 'widening', ok, what }).then((y) => { if (y) fn(); }); };
   const done = (msg, sub) => { S.save(); UI.rerender(); UI.toast(msg, sub || '', 'ok'); };
   const cfgOnly = (x) => (x.editable === false ? UI.off(`${x.name} is defined in the config: change it there`) : '');
@@ -206,7 +206,7 @@
   }
   const editP = (name, fn) => { const p = profile(name); fn(p); p.updated = now(); };
   UI.act('w-vis', (sel) => { const p = profile(sel.dataset.p), f = sel.dataset.f, before = (p.visible || {})[f] || 'hidden', v = sel.value, wider = RANK[v] > RANK[before];
-    gate(wider, `Let bots learn more about ${esc(fieldWord(f).toLowerCase())}`, `{ profile: <b>${esc(p.name)}</b>, field: <b>${esc(f)}</b>, visible: <b>${before} → ${v}</b> }`, () => { editP(p.name, (x) => { x.visible = x.visible || {}; if (v === 'hidden') delete x.visible[f]; else x.visible[f] = v; }); audit('browser_profile_bind', `profile ${p.name} · ${f} visible ${v}`); done('Saved', `a bot may learn ${visWord(f, v)}`); }, 'Allow with passkey');
+    gate(wider, `Let bots learn more about ${esc(fieldWord(f).toLowerCase())}`, say(`Bots using <b>${esc(p.name)}</b> may learn <b>${esc(learnWord(f, v) || 'nothing')}</b> (before: ${esc(before === 'hidden' ? 'nothing' : learnWord(f, before))}).`), () => { editP(p.name, (x) => { x.visible = x.visible || {}; if (v === 'hidden') delete x.visible[f]; else x.visible[f] = v; }); audit('browser_profile_bind', `profile ${p.name} · ${f} visible ${v}`); done('Saved', `a bot may learn ${visWord(f, v)}`); }, 'Allow with passkey');
     if (wider) sel.value = before; });
   UI.act('w-field-more', (b) => UI.menu(b, [['Replace the value…', 'updates', 'w-field-set', `data-p="${b.dataset.p}" data-f="${b.dataset.f}"`], ['-'], ['Remove this detail…', 'trash', 'w-field-rm', `data-p="${b.dataset.p}" data-f="${b.dataset.f}"`]]));
   UI.act('w-prof-more', (b) => { const p = profile(b.dataset.p); UI.menu(b, [['See it in the audit log', 'logs', 'w-go', 'data-h="#/logs/audit"'], ['-'], ['Remove these details…', 'trash', 'w-prof-rm', p.editable === false ? UI.off('Defined in the config: remove it there') : `data-p="${esc(p.name)}"`]]); });
@@ -260,14 +260,14 @@
       ...fc.map((f) => ({ k: 'f_' + f.replace('.', '_'), type: 'bool', label: f === 'address' ? 'The address' : f === 'billing' ? 'The billing address' : fieldWord(f), on: 'fill it here' }))],
       note: 'The browser must already be allowed to reach this site.', submit: 'Add with passkey', submitIcon: 'passkey',
       onSubmit: (v) => { const fields = fc.filter((f) => v['f_' + f.replace('.', '_')]); if (!fields.length) return 'Pick at least one detail to fill there.'; const origin = v.origin.replace(/\/$/, '');
-        UI.closeModal(); gate(true, `Fill ${esc(p.name)} on ${esc(host(origin))}`, `{ profile: <b>${esc(p.name)}</b>, add_site: <b>${esc(origin)}</b>, fields: <b>${esc(fields.join(', '))}</b> }`, () => { editP(p.name, (x) => { const cur = (x.sites || []).find((s) => s.origin === origin); if (cur) cur.fields = [...new Set(cur.fields.concat(fields))]; else (x.sites = x.sites || []).push({ origin, fields }); }); audit('browser_profile_bind', `profile ${p.name} · site ${origin} · widening`); done('Added', `${esc(p.name)} may be filled on ${esc(host(origin))}`); }, 'Add with passkey'); return false; } }); });
+        UI.closeModal(); gate(true, `Fill ${esc(p.name)} on ${esc(host(origin))}`, say(`<b>${esc(p.name)}</b> may be filled on <b>${esc(host(origin))}</b>: ${esc(list(fields.map(siteFieldWord)))}.`), () => { editP(p.name, (x) => { const cur = (x.sites || []).find((s) => s.origin === origin); if (cur) cur.fields = [...new Set(cur.fields.concat(fields))]; else (x.sites = x.sites || []).push({ origin, fields }); }); audit('browser_profile_bind', `profile ${p.name} · site ${origin} · widening`); done('Added', `${esc(p.name)} may be filled on ${esc(host(origin))}`); }, 'Add with passkey'); return false; } }); });
   UI.act('w-site-rm', (b) => UI.confirm({ title: `Stop filling ${esc(b.dataset.p)} on ${esc(host(b.dataset.o))}?`, body: 'Nothing from these details is filled there any more. This takes effect at once.', ok: 'Remove', danger: true }).then((ok) => { if (!ok) return; editP(b.dataset.p, (p) => { p.sites = p.sites.filter((s) => s.origin !== b.dataset.o); }); audit('browser_profile_bind', `profile ${b.dataset.p} · removed site ${b.dataset.o}`); done('Removed', `not filled on ${esc(host(b.dataset.o))} any more`); }));
   // bots and teams, by name (a team covers the bots on it)
   const idOpts = (have) => S.view().bots.map((b) => ['bot:' + b.name, `${UI.botName(b.name)} (${b.name})${b.cfg && b.cfg.team ? ` · team ${b.cfg.team}` : ''}`]).concat(S.view().teams.map((t) => ['team:' + t.name, `Team ${t.name}: every bot on it`])).filter(([v]) => !have.includes(v));
   UI.act('w-who-add', (b) => { const isCard = b.dataset.kind === 'card', x = isCard ? card(b.dataset.n) : profile(b.dataset.n);
     UI.form({ caps: esc(x.name), title: isCard ? 'Let a bot or team use this card' : 'Let a bot or team use these details', fields: [{ k: 'id', type: 'enum', req: true, label: 'Who', options: idOpts(x.identities || []) }],
       note: isCard ? 'It can propose purchases with the card; every one still waits for your approval.' : 'Only on work you asked for.', submit: 'Allow with passkey', submitIcon: 'passkey',
-      onSubmit: (v) => { UI.closeModal(); gate(true, `Let ${esc(who(v.id))} use ${esc(x.name)}`, `{ ${isCard ? 'card' : 'profile'}: <b>${esc(x.name)}</b>, bind: <b>${esc(v.id)}</b> }`, () => { x.identities = (x.identities || []).concat([v.id]); x.updated = now(); audit(`browser_${isCard ? 'card' : 'profile'}_bind`, `${isCard ? 'card' : 'profile'} ${x.name} · bind ${v.id} · widening`); done('Allowed', `${esc(who(v.id))} may use ${esc(x.name)}`); }, 'Allow with passkey'); return false; } }); });
+      onSubmit: (v) => { UI.closeModal(); gate(true, `Let ${esc(who(v.id))} use ${esc(x.name)}`, say(`<b>${esc(who(v.id))}</b> may use ${isCard ? 'the card' : 'the personal details'} <b>${esc(x.name)}</b>.`), () => { x.identities = (x.identities || []).concat([v.id]); x.updated = now(); audit(`browser_${isCard ? 'card' : 'profile'}_bind`, `${isCard ? 'card' : 'profile'} ${x.name} · bind ${v.id} · widening`); done('Allowed', `${esc(who(v.id))} may use ${esc(x.name)}`); }, 'Allow with passkey'); return false; } }); });
   UI.act('w-who-rm', (b) => { const isCard = b.dataset.kind === 'card', x = isCard ? card(b.dataset.n) : profile(b.dataset.n);
     UI.confirm({ title: `Stop ${esc(who(b.dataset.id))} using ${esc(x.name)}?`, body: isCard ? 'It can no longer propose purchases with this card. Purchases already approved for it lapse unused.' : 'It can no longer fill these details.', ok: 'Remove', danger: true }).then((ok) => { if (!ok) return; x.identities = x.identities.filter((i) => i !== b.dataset.id); if (isCard && x.identity_limits) delete x.identity_limits[b.dataset.id]; x.updated = now(); audit(`browser_${isCard ? 'card' : 'profile'}_bind`, `${isCard ? 'card' : 'profile'} ${x.name} · unbind ${b.dataset.id}`); done('Removed', `${esc(who(b.dataset.id))} can’t use ${esc(x.name)} any more`); }); });
 
@@ -318,7 +318,7 @@
     if (n) { const first = f.querySelector('.field.bad input, .field.bad select'); if (first) first.focus(); return; }
     const err = UI.$('#w-np-err'), vals = readValues(f); if (!vals) return; if (!Object.keys(vals).length) { err.textContent = 'Give at least one detail.'; err.classList.remove('hide'); return; } err.classList.add('hide');
     const visible = {}; f.querySelectorAll('[data-vf]:checked').forEach((x) => { if (vals[x.dataset.vf]) visible[x.dataset.vf] = 'fact'; });
-    gate(true, `Add personal details: ${esc(name)}`, `{ profile: <b>${esc(name)}</b>, fields: <b>${esc(Object.keys(vals).join(', '))}</b>, site: <b>${esc(origin)}</b>, bind: <b>${esc(ids.join(', '))}</b>, values: <b>write-only, not shown</b> }`, () => {
+    gate(true, `Add personal details: ${esc(name)}`, say(`New personal details <b>${esc(name)}</b>: ${esc(list(Object.keys(vals).map((k) => fieldWord(k).toLowerCase())))}, stored write-only and never shown, filled on <b>${esc(host(origin))}</b> for <b>${esc(list(ids.map(who)))}</b>.`), () => {
       clearTyped(f); D.wallet.profiles.push({ name, method: 'stored', editable: true, added: now(), updated: now(), identities: ids, fields: vals, sites: [{ origin, fields: sitef }], visible });
       audit('browser_profile_add', `profile ${name} · ${ids.join(', ')} · values not recorded · widening`); S.save(); UI.go(`#/browser/details/${name}`); UI.toast('Saved', `${esc(name)}: values stored write-only`, 'ok'); }, 'Save with passkey'); });
 
@@ -380,18 +380,18 @@
   UI.act('w-card-rm', (b) => UI.confirm({ title: `Remove ${esc(b.dataset.c)}?`, body: 'Its stored values are deleted and nothing more can be bought with it. Approved purchases lapse unused. Receipts stay.', ok: 'Remove', danger: true }).then((ok) => { if (!ok) return; D.wallet.cards = W().cards.filter((x) => x.name !== b.dataset.c); audit('browser_card_remove', `card ${b.dataset.c}`); S.save(); UI.go('#/browser/cards'); UI.toast('Removed', `${esc(b.dataset.c)} is gone`, 'ok'); }));
   // the kill switch: freezing is one click (it narrows); unfreezing widens, so it asks for your passkey
   UI.act('w-freeze', (b) => { const c = card(b.dataset.c); c.frozen = true; c.frozen_at = now(); audit('browser_card_freeze', `card ${c.name}`); S.save(); UI.rerender(); UI.toast(`${esc(c.name)} is frozen`, 'nothing is paid with it until you unfreeze it', 'ok'); });
-  UI.act('w-unfreeze', (b) => { const c = card(b.dataset.c); gate(true, `Unfreeze ${esc(c.name)}`, `{ card: <b>${esc(c.name)}</b>, unfreeze: <b>true</b> }`, () => { c.frozen = false; delete c.frozen_at; audit('browser_card_unfreeze', `card ${c.name} · widening`); done(`${esc(c.name)} is in use again`, 'purchases with it can be proposed again'); }, 'Unfreeze with passkey'); });
+  UI.act('w-unfreeze', (b) => { const c = card(b.dataset.c); gate(true, `Unfreeze ${esc(c.name)}`, say(`The card <b>${esc(c.name)}</b> (${esc(cardName(c))}) can be used again.`), () => { c.frozen = false; delete c.frozen_at; audit('browser_card_unfreeze', `card ${c.name} · widening`); done(`${esc(c.name)} is in use again`, 'purchases with it can be proposed again'); }, 'Unfreeze with passkey'); });
   UI.act('w-merch-add', (b) => { const c = card(b.dataset.c);
     UI.form({ caps: esc(c.name), title: 'Add a shop', intro: 'The card is filled only on this exact address, and only for a purchase you approve.', fields: [{ k: 'origin', type: 'string', req: true, label: 'The shop’s address', ph: 'https://shop.example.com', validate: (v) => originErr(v) || ((c.merchants || []).includes(String(v).replace(/\/$/, '')) ? 'Already on the list.' : '') }],
       note: 'The browser must already be allowed to reach it. A checkout inside another site’s frame (hosted payment fields) isn’t filled yet.', submit: 'Add with passkey', submitIcon: 'passkey',
-      onSubmit: (v) => { const o = v.origin.replace(/\/$/, ''); UI.closeModal(); gate(true, `Let ${esc(c.name)} pay ${esc(host(o))}`, `{ card: <b>${esc(c.name)}</b>, add_merchant: <b>${esc(o)}</b> }`, () => { c.merchants = (c.merchants || []).concat([o]); c.updated = now(); audit('browser_card_bind', `card ${c.name} · merchant ${o} · widening`); done('Added', `${esc(c.name)} may pay ${esc(host(o))}`); }, 'Add with passkey'); return false; } }); });
+      onSubmit: (v) => { const o = v.origin.replace(/\/$/, ''); UI.closeModal(); gate(true, `Let ${esc(c.name)} pay ${esc(host(o))}`, say(`The card <b>${esc(c.name)}</b> may pay at <b>${esc(host(o))}</b>.`), () => { c.merchants = (c.merchants || []).concat([o]); c.updated = now(); audit('browser_card_bind', `card ${c.name} · merchant ${o} · widening`); done('Added', `${esc(c.name)} may pay ${esc(host(o))}`); }, 'Add with passkey'); return false; } }); });
   UI.act('w-merch-rm', (b) => UI.confirm({ title: `Stop ${esc(b.dataset.c)} paying ${esc(host(b.dataset.o))}?`, body: 'Nothing more is bought there with this card. Takes effect at once.', ok: 'Remove', danger: true }).then((ok) => { if (!ok) return; const c = card(b.dataset.c); c.merchants = c.merchants.filter((x) => x !== b.dataset.o); audit('browser_card_bind', `card ${c.name} · removed merchant ${b.dataset.o}`); done('Removed', `${esc(c.name)} won’t pay ${esc(host(b.dataset.o))} any more`); }));
   const LIMF = [['per_purchase', 'A purchase'], ['per_day', 'A day (24 hours)'], ['per_month', '30 days']];
   UI.act('w-limits', (b) => { const c = card(b.dataset.c), cur = c.limits.currency || 'USD';
     const fm = UI.form({ caps: esc(c.name), title: 'Change the limits', intro: `In ${esc(cur)}. Raising one asks for your passkey; lowering one doesn’t.`, edit: true, values: Object.assign({}, c.limits),
       fields: LIMF.map(([k, l]) => ({ k, type: 'number', req: true, label: l, validate: (v) => (typeof v === 'number' && v > 0 ? '' : 'An amount above 0.') })), submit: 'Save', submitIcon: 'check',
       onSubmit: (v) => { if (v.per_purchase > v.per_day || v.per_day > v.per_month) return 'A purchase’s limit fits inside a day’s, and a day’s inside 30 days’.'; const up = LIMF.some(([k]) => v[k] > c.limits[k]); UI.closeModal();
-        gate(up, `Raise ${esc(c.name)}’s limits`, `{ card: <b>${esc(c.name)}</b>, limits: <b>${LIMF.map(([k]) => `${k} ${c.limits[k]} → ${v[k]}`).join(', ')}</b> }`, () => { LIMF.forEach(([k]) => { c.limits[k] = v[k]; }); c.updated = now(); audit('browser_card_bind', `card ${c.name} · limits${up ? ' · widening' : ''}`); done('Saved', 'the new limits apply to the next purchase'); }, 'Save with passkey'); return false; } }); moneyize(fm, LIMF.map(([k]) => k)); });
+        gate(up, `Raise ${esc(c.name)}’s limits`, say(`The card <b>${esc(c.name)}</b>’s limits become ${LIMF.map(([k, l]) => `${l.toLowerCase()} ${money(c.limits[k])} → <b>${money(v[k])}</b>`).join(', ')}.`), () => { LIMF.forEach(([k]) => { c.limits[k] = v[k]; }); c.updated = now(); audit('browser_card_bind', `card ${c.name} · limits${up ? ' · widening' : ''}`); done('Saved', 'the new limits apply to the next purchase'); }, 'Save with passkey'); return false; } }); moneyize(fm, LIMF.map(([k]) => k)); });
 
   /* ---------- Add a card ---------- */
   function newCardPage() {
@@ -420,7 +420,7 @@
     const vals = readValues(f); if (!vals) n++;
     if (vals && !vals.number) { needValue(f, 'number'); n++; } if (vals && !vals.expiry) { needValue(f, 'expiry'); n++; }
     if (n) { const first = f.querySelector('.field.bad input, .field.bad select'); if (first) first.focus(); return; }
-    gate(true, `Add a card: ${esc(name)}`, `{ card: <b>${esc(name)}</b>, kind: <b>${kind}</b>, bind: <b>${esc(ids.join(', '))}</b>, merchants: <b>${esc(ms.xs.join(', ') || 'none')}</b>, limits: <b>${lim.per_purchase} / ${lim.per_day} / ${lim.per_month} USD</b>, values: <b>write-only, not shown</b> }`, () => {
+    gate(true, `Add a card: ${esc(name)}`, say(`A new ${esc(KIND[kind].toLowerCase())} <b>${esc(name)}</b> for <b>${esc(list(ids.map(who)))}</b>, ${ms.xs.length ? `at ${esc(list(ms.xs.map(host)))}` : 'at no shop yet'}, up to ${money(lim.per_purchase)} a purchase, ${money(lim.per_day)} a day and ${money(lim.per_month)} in 30 days. Its details are stored write-only.`), () => {
       clearTyped(f); const fields = {}; [['number', 'number'], ['expiry', 'expiry'], ['cvc', 'cvc'], ['cardname', 'name']].forEach(([a, k]) => { if (vals[a]) fields[k] = vals[a]; });
       // NEW: the last four digits and the brand come from the daemon when it stores the number (a typed one is never echoed)
       D.wallet.cards.push({ name, method: 'stored', editable: true, kind, brand: 'Visa', last4: '4242', added: now(), updated: now(), fields, merchants: ms.xs, identities: ids, limits: Object.assign({ currency: 'USD' }, lim), identity_limits: {}, frozen: false });
@@ -434,27 +434,66 @@
     const origin = /^operator:/.test(p.requester || '') ? `${icon('users')}Asked for by ${p.requester === 'operator:ops' ? 'you' : esc(p.requester.slice(9))}${/^dir:/.test(p.identity) ? `, in an agent you started in <span class="mono">${esc(p.identity.slice(4))}</span>` : ''}.` : `${icon('warn')}Asked for by <span class="mono">${esc(p.requester || 'someone else')}</span>.`;
     const ticket = p.case && (D.cases || []).find((x) => x.id === p.case);
     const auditD = `<details class="dl-audit-d"><summary>${icon('chev')}For audit: the purchase, its identity and the digest your passkey signs</summary><dl class="dl-facts"><dt>Purchase</dt><dd class="mono">${esc(p.id)}</dd><dt>Card</dt><dd class="mono">${esc(p.card)}</dd><dt>Merchant</dt><dd class="mono">${esc(p.merchant)}</dd><dt>Identity</dt><dd class="mono">${esc(p.identity)}</dd>${p.bot_proposal ? `<dt>Bot proposal</dt><dd class="mono">${esc(p.bot)} ${esc(p.bot_proposal)}</dd>` : ''}${p.supersedes ? `<dt>Replaces</dt><dd class="mono">${esc(p.supersedes)}</dd>` : ''}<dt>Digest</dt><dd class="mono">${esc(p.digest)}</dd><dt>Signed by</dt><dd>${p.approver ? esc(p.approver) : 'not yet: your passkey signs this digest'}</dd></dl></details>`;
-    const card2 = `<article class="dl-card dl-proposal wl-pu">${pend ? `<div class="dl-kick">${UI.mark('ember')}Needs you · <span class="nowrap">asked ${UI.agoText(p.created)}</span>${p.expires ? ` · <span class="nowrap">expires in ${UI.humanSpan(Math.max(1, Math.round((Date.parse(p.expires) - Date.now()) / 60000)) + 'm')}</span>` : ''}</div>` : `<div class="dl-kick dl-sub">${UI.statusMark(s, word, { sm: true })} · ${UI.agoText(p.created)}</div>`}
+    const card2 = `<article class="dl-card dl-proposal wl-pu${pend ? '' : ' decided'}">${pend ? `<div class="dl-kick">${UI.mark('ember')}Needs you · <span class="nowrap">asked ${UI.agoText(p.created)}</span>${p.expires ? ` · <span class="nowrap">expires in ${UI.humanSpan(Math.max(1, Math.round((Date.parse(p.expires) - Date.now()) / 60000)) + 'm')}</span>` : ''}</div>` : UI.purchaseDecided(p) || `<div class="dl-kick dl-sub">${UI.statusMark(s, word, { sm: true })} · ${UI.agoText(p.created)}</div>`}
       <h2 class="dl-ptitle">${esc(UI.purchaseTitle(p))}</h2>${pend ? `<p class="dl-ask">${ask}</p>` : ''}
       <div class="prop-body">${UI.purchaseWhat(p)}
         ${p.why ? `<div class="dl-pwhy"><span class="dl-lbl">Why</span><p>${UI.taskWords(p.why, true)}</p></div>` : ''}
         <p class="dl-origin">${origin}</p>
-        ${pend ? '' : `<p class="dl-decided">${UI.statusMark(s, word)} ${decidedWords(p)}</p>`}${receiptHTML(p)}
+        ${receiptHTML(p)}
         ${ticket ? `<p class="dl-sub prop-can-link"><a class="dl-link" href="#/tickets/${ticket.id}">The ticket: ${esc(ticket.title)} →</a></p>` : ''}${auditD}</div>
       ${pend ? `<div class="dl-decide prop-decide"><button class="btn lg primary" data-act="w-pu-decide" data-p="${esc(p.id)}" data-d="approve">${icon('passkey')}Approve with passkey</button><button class="btn lg secondary" data-act="w-pu-decide" data-p="${esc(p.id)}" data-d="deny">Deny…</button><span class="hint">${ops.length ? `Only ${esc(ops.join(' or '))} can approve.` : 'No operator can approve yet.'}${c.frozen ? ' The card is frozen: unfreeze it first.' : ''}</span></div>` : ''}</article>`;
     return `<div class="page dl-page wl-page">${UI.crumbs([['Browsers', '#/browser'], ['Payment cards', '#/browser/cards'], [UI.purchaseTitle(p)]])}<div class="prop-single">${card2}</div></div>`;
   }
+  /* ---------- the signing sheet: what you're agreeing to in words first; ids and the digest only under For audit ----------
+     One sheet for every purchase decision: a bot's (its approval) and an agent's (the purchase page). Its confirm row stays on
+     screen on a phone (the body scrolls between the title and the buttons). */
+  const askedWord = (p) => (/^operator:/.test(p.requester || '') ? (p.requester === 'operator:ops' ? 'you' : p.requester.slice(9)) : p.requester ? `someone else (${p.requester})` : 'you');
+  const itemsList = (p) => list((p.items || []).map((it) => `${it.qty > 1 ? `${it.qty} × ` : ''}${it.name}`)) || 'a purchase';
+  /** Sign a purchase decision. `onSigned(reason, device)` applies it once the passkey answers. */
+  UI.purchaseSeal = (p, deny, onSigned) => { const c = card(p.card) || {}, tk = p.case && ticketOf(p.case), by = byWord(p), cur = p.currency, dev = UI.authenticator();
+    const ls = deny ? [] : UI.limitLayers({ cardN: p.card, bot: p.bot, identity: p.identity, caseId: p.case, total: p.total, excludeId: p.id }), bind = ls.find((l) => l.bind);
+    const say = deny ? `You’re refusing to let <b>${esc(by)}</b> buy ${esc(itemsList(p))} for ${money(p.total, cur)}${perWord(p)}. Nothing is paid, and ${esc(by)} is told.`
+      : `You’re letting <b>${esc(by)}</b> buy <b>${esc(itemsList(p))}</b> for <b>${money(p.total, cur)}</b>${p.recurring ? `, charged every ${esc(p.interval || 'period')} until it’s cancelled at the shop` : ', once'}, at ${esc(host(p.merchant))}, with the ${esc(p.card)} card.`;
+    const s2 = UI.modal(`<div class="modal-head"><div><div class="caps">${deny ? 'Deny' : 'Approve'} a purchase · signed with your passkey</div><h2>${deny ? 'Deny' : 'Approve'}: ${esc(UI.purchaseTitle(p))}</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+      <div class="modal-body wl-seal-body"><p class="seal-words">${say}</p>
+        <dl class="dl-where wl-seal-where"><dt>Total</dt><dd><b>${money(p.total, cur)}</b> ${esc(cur)}${p.recurring ? ` every ${esc(p.interval || 'period')}: a subscription` : ', one payment'}</dd>
+          <dt>Card</dt><dd>${esc(p.card)} · ${esc(cardName(c))}</dd><dt>Shop</dt><dd>${esc(host(p.merchant))}</dd>
+          <dt>For</dt><dd>${tk ? `the ticket “${esc(tk.title)}”, ` : ''}asked for by ${esc(askedWord(p))}</dd>
+          ${bind ? `<dt>Tightest limit</dt><dd>${esc(bind.key === 'ticket' ? 'This ticket’s budget' : bind.name)}: ${roomWords(bind, ls.cur)}</dd>` : ''}
+          ${deny ? '' : `<dt>Then</dt><dd>${esc(by)} may pay once, within ${esc(ttlWord())}, on ${esc(host(p.merchant))}’s checkout page. Conductor fills the card itself; ${esc(by)} never sees it.</dd>`}</dl>
+        ${deny ? `<div class="field"><label for="seal-reason">Tell ${esc(by)} why <span class="opt">optional</span></label><textarea class="textarea" id="seal-reason" rows="2" maxlength="500" placeholder="e.g. Not this month."></textarea></div>` : ''}
+        <details class="dl-audit-d wl-seal-audit"><summary>${icon('chev')}For audit: what your passkey signs</summary><dl class="dl-facts"><dt>Purchase</dt><dd class="mono">${esc(p.id)}</dd>${p.bot_proposal ? `<dt>The bot’s approval</dt><dd class="mono">${esc(p.bot)} · ${esc(p.bot_proposal)}</dd>` : ''}${p.case ? `<dt>Ticket</dt><dd class="mono">${esc(p.case)}</dd>` : ''}<dt>Merchant</dt><dd class="mono">${esc(p.merchant)}</dd><dt>Identity</dt><dd class="mono">${esc(p.identity)}</dd><dt>Decision</dt><dd class="mono">${deny ? 'deny' : 'approve'}</dd><dt>Digest</dt><dd class="mono">${esc(p.digest)}</dd></dl></details>
+        <div class="seal" id="seal"><div id="seal-msg"><b>Confirm with your passkey</b><div class="muted small">This signature covers only this purchase, once.</div></div></div></div>
+      <div class="modal-foot"><span class="proto-note">authenticator simulated</span><button class="btn ghost" data-close>Cancel</button><button class="btn ${deny ? 'danger' : 'primary'}" id="seal-go">${icon('passkey')}${deny ? 'Deny with passkey' : 'Approve with passkey'}</button></div>`, { sticky: true, cls: 'wl-seal' });
+    UI.$('#seal-go', s2).addEventListener('click', (e) => { const seal = UI.$('#seal', s2), reason = deny ? ((UI.$('#seal-reason', s2) || {}).value || '').trim() : ''; e.currentTarget.disabled = true; seal.classList.add('signing');
+      UI.$('#seal-msg', s2).innerHTML = `<b>Confirm on your ${esc(dev.split(' · ')[0])}…</b>`;
+      setTimeout(() => { seal.classList.remove('signing'); seal.classList.add(deny ? 'denied' : 'done'); UI.$('#seal-msg', s2).innerHTML = `<b>${deny ? 'Denied' : 'Approved'}</b>`;
+        setTimeout(() => { UI.closeModal(); onSigned(reason, dev); const mn = UI.$('#main'); if (mn && mn.scrollTo) mn.scrollTo(0, 0); window.scrollTo(0, 0); }, UI.fast ? 30 : 400); }, UI.fast ? 40 : 900); }); };
+  /** A bot's purchase is its approval: sign it here, and the approval and the purchase both say so. */
+  UI.approvePurchase = (prop, decision, onDone) => { const pu = (D.purchases || []).find((x) => x.id === prop.purchase); if (!pu) return false; const deny = decision === 'deny';
+    UI.purchaseSeal(pu, deny, (reason, dev) => { Object.assign(prop, { status: deny ? 'denied' : 'approved', approver: `ops (passkey · ${dev.split(' · ')[0]})`, decided: now() }); if (reason) prop.reason = reason;
+      Object.assign(pu, { approver: 'ops', decided: now() }); if (reason) pu.reason = reason; if (!deny) pu.expires = new Date(Date.now() + 36e5).toISOString();
+      if (deny) (D.chats[prop.bot] = D.chats[prop.bot] || []).push({ who: 'op', at: now(), text: `Denied buying ${itemsList(pu)}${reason ? `: ${reason}` : '.'}` });
+      D.attention = D.attention.filter((a) => !String(a.href).includes(`/proposals/${prop.id}`));
+      audit(deny ? 'browser_purchase_deny' : 'browser_purchase_approve', `${UI.botName(prop.bot)}: ${itemsList(pu)} for ${pu.total.toFixed(2)} ${pu.currency} at ${host(pu.merchant)}${pu.case ? ` · ticket ${pu.case}` : ''}${reason ? ' · reason given' : ''}`);
+      S.save(); UI.refreshChrome(); UI.toast(deny ? 'Denied' : 'Approved', deny ? `${esc(UI.botName(prop.bot))} won’t buy it; it was told` : `${esc(UI.botName(prop.bot))} may pay once, within ${esc(ttlWord())}`, deny ? 'fail' : 'ok'); if (onDone) onDone(); });
+    return true; };
+  /** After you decide: what happened, by whom, when, and what's next, at the top of the purchase (a bot's or an agent's). */
+  UI.purchaseDecided = (p) => { const st = UI.puStatus(p), r = p.receipt, by = byWord(p), when = p.decided ? UI.agoText(p.decided) : '', who = /^ops/.test(p.approver || '') ? 'you' : p.approver || '';
+    const [mk, head, next] = st === 'approved' ? ['ok', `Approved${who ? ` by ${who}` : ''}`, `${by} may pay once${p.expires ? `, before ${UI.hm(p.expires)}` : ''}, on ${host(p.merchant)}’s checkout page. The receipt will show here.`]
+      : st === 'denied' ? ['fail', `Denied${who ? ` by ${who}` : ''}`, `Nothing was paid. ${by} was told${p.reason ? `: “${p.reason}”` : '.'}`]
+      : st === 'completed' ? [r && r.note ? 'wait' : 'ok', r && r.note ? 'Paid, more than you approved' : 'Paid', r ? `Order ${r.order_number}, ${money(r.total, r.currency || p.currency)} charged${r.note ? `. ${r.note}` : ''}.` : '']
+      : st === 'used' ? ['run', 'Paying now', `${by} is at the checkout; the receipt will show here.`]
+      : st === 'refused' ? ['fail', 'Not paid', p.reason || ''] : st === 'expired' ? ['idle', 'Expired', 'The approval lapsed unused. Nothing was paid.'] : [null];
+    if (!mk) return ''; return `<div class="wl-done" data-s="${mk}">${UI.mark(mk, { lg: true })}<div><b>${esc(head)}</b>${when ? ` <span class="dl-sub">· ${esc(when)}</span>` : ''}${next ? `<p>${esc(next)}</p>` : ''}</div></div>`; };
+
   // approve or deny: signed with your passkey (the CLI signs with the operator's SSH key; the dashboard with a passkey)
   UI.act('w-pu-decide', (b) => { const p = (D.purchases || []).find((x) => x.id === b.dataset.p), deny = b.dataset.d === 'deny', c = card(p.card) || {};
     if (!deny && c.frozen) return UI.toast(`${esc(p.card)} is frozen`, 'unfreeze it before approving a purchase with it', 'fail');
-    const sign = (reason) => UI.stepup({ title: `${deny ? 'Deny' : 'Approve'}: ${esc(UI.purchaseTitle(p))}`, purpose: 'purchase decision', ok: deny ? 'Deny with passkey' : 'Approve with passkey', danger: deny,
-      what: `{ purchase: <b>${esc(p.id)}</b>, decision: <b>${deny ? 'deny' : 'approve'}</b>, card: <b>${esc(p.card)}</b>, merchant: <b>${esc(p.merchant)}</b>, total: <b>${p.total.toFixed(2)} ${esc(p.currency)}</b>, recurring: <b>${p.recurring ? p.interval : 'no'}</b>, digest: <b>${esc(p.digest.replace('sha256:', '').slice(0, 16))}…</b> }` }).then((ok) => {
-      if (!ok) return; Object.assign(p, { status: deny ? 'denied' : 'approved', approver: 'ops', decided: now() }); if (reason) p.reason = reason; if (!deny) p.expires = new Date(Date.now() + 36e5).toISOString();
-      audit('browser_purchase_' + (deny ? 'deny' : 'approve'), `purchase ${p.id} · ${p.total.toFixed(2)} ${p.currency} at ${host(p.merchant)}`);
+    UI.purchaseSeal(p, deny, (reason) => { Object.assign(p, { status: deny ? 'denied' : 'approved', approver: 'ops', decided: now() }); if (reason) p.reason = reason; if (!deny) p.expires = new Date(Date.now() + 36e5).toISOString();
+      audit('browser_purchase_' + (deny ? 'deny' : 'approve'), `${byWord(p)}: ${itemsList(p)} for ${p.total.toFixed(2)} ${p.currency} at ${host(p.merchant)}${reason ? ' · reason given' : ''}`);
       D.attention = D.attention.filter((a) => !String(a.href).includes(p.id)); S.save(); UI.rerender(); UI.refreshChrome();
-      UI.toast(deny ? 'Denied' : 'Approved', deny ? 'nothing will be paid' : `it may pay once, within ${esc(ttlWord())}`, deny ? 'fail' : 'ok'); });
-    if (!deny) return sign('');
-    UI.form({ caps: 'deny', title: 'Deny this purchase', fields: [{ k: 'reason', type: 'text', label: 'Why (the agent is told)', ph: 'Not this month.' }], submit: 'Next', onSubmit: (v) => { UI.closeModal(); setTimeout(() => sign((v.reason || '').trim()), 0); return false; } }); });
+      UI.toast(deny ? 'Denied' : 'Approved', deny ? 'nothing will be paid' : `it may pay once, within ${esc(ttlWord())}`, deny ? 'fail' : 'ok'); }); });
 
   /* ---------- the routes ---------- */
   UI.walletPage = (sec) => (sec === 'details' ? detailsPage() : cardsPage());
@@ -486,14 +525,15 @@
     if (!a && !b) return 'neutral'; if (!a) return 'narrowing';
     if (!b || amt(a) > amt(b) || a.currency !== b.currency || (b.card && a.card !== b.card) || ((b.merchants || []).length && (!(a.merchants || []).length || a.merchants.some((m) => !b.merchants.includes(m))))) return 'widening';
     return 'narrowing'; };
-  UI.ticketBudget = (c) => { if (!c.bot) return ''; const sl = c.spend_limit, nm = UI.botName(c.bot);
-    if (!sl) return `<section class="panel wl-tkb"><div class="panel-head"><h3>Spending limit</h3></div><div class="panel-body"><p class="dl-sub">None: what ${esc(nm)} buys for this ticket is held to its own caps and the card’s limits.</p><button class="btn sm secondary" data-act="w-tkb" data-t="${c.id}">${icon('plus')}Set a spending limit</button></div></section>`;
+  UI.ticketBudget = (c) => { const sl = c.spend_limit, nm = c.bot ? UI.botName(c.bot) : c.team ? `whichever bot on team ${c.team} takes it` : 'whoever takes it';
+    if (!sl && !c.bot && !c.team) return '';
+    if (!sl) return `<section class="panel wl-tkb"><div class="panel-head"><h3>Spending limit</h3></div><div class="panel-body"><p class="dl-sub">None: what ${esc(nm)} buys for this ticket is held to ${c.bot ? 'its' : 'their'} own caps and the card’s limits.</p><button class="btn sm secondary" data-act="w-tkb" data-t="${c.id}">${icon('plus')}Set a spending limit</button></div></section>`;
     const amt = Number(sl.amount), cm = UI.ticketCommitted(c.id), left = Math.max(0, Math.round((amt - cm.all) * 100) / 100), w = clampWarn(c.bot, sl);
     return `<section class="panel wl-tkb"><div class="panel-head"><h3>Spending limit</h3><span class="dl-sp"></span><button class="btn sm secondary" data-act="w-tkb" data-t="${c.id}">Change</button></div><div class="panel-body">
       <p class="wl-tkb-big"><b>${money(left, sl.currency)}</b> left of ${money(amt, sl.currency)}</p>${meter(cm.all, amt, sl.currency)}
       <p class="dl-sub">${money(cm.paid, sl.currency)} paid${cm.waiting ? ` · ${money(cm.waiting, sl.currency)} waiting or approved` : ''}. A denied or refused purchase frees its share; what’s left never moves to another ticket.</p>
       ${sl.card || (sl.merchants || []).length ? `<p class="dl-sub">${sl.card ? `Only with ${esc(sl.card)}` : 'With any card it may use'}${(sl.merchants || []).length ? `, only at ${esc(list(sl.merchants.map(host)))}` : ''}.</p>` : ''}
-      ${w ? `<p class="wl-flag">${UI.mark('wait')}<span>${esc(w)}</span></p>` : ''}</div></section>`; };
+      ${c.bot ? '' : `<p class="dl-sub">It applies to ${esc(nm)}.</p>`}${w ? `<p class="wl-flag">${UI.mark('wait')}<span>${esc(w)}</span></p>` : ''}</div></section>`; };
   /** The fields: an amount ($ inside), optionally one card and some shops (each an exact origin). */
   const budgetFields = (bot, sl = {}) => { const cards = W().cards.filter((c) => !bot || forBot(c.identities, (S.view().bots.find((b) => b.name === bot) || { name: bot })));
     return `${moneyField('budget', 'Up to, for this ticket', 'Everything proposed under it counts until it’s denied, refused or expires.')}
@@ -513,7 +553,7 @@
       <div class="modal-foot">${before ? '<button class="btn ghost danger-text" id="w-tkb-rm" style="margin-right:auto">Remove the limit</button>' : ''}<button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="w-tkb-go">Save</button></div>`);
     const root = UI.$('#w-tkb', s2); fillBudget(root, before);
     const apply = (next) => { const ch = budgetChange(before, next); UI.closeModal();
-      gate(ch === 'widening', `${next ? 'Let it spend up to ' + money(Number(next.amount)) : 'Remove the limit'} on this ticket`, `{ bot: <b>${esc(c.bot)}</b>, case: <b>${esc(c.id)}</b>, spend_limit: <b>${next ? esc(`${next.amount} ${next.currency}${next.card ? ' · ' + next.card : ''}${next.merchants ? ' · ' + next.merchants.join(', ') : ''}`) : 'none'}</b> }`, () => {
+      gate(ch === 'widening', `${next ? 'Let it spend up to ' + money(Number(next.amount)) : 'Remove the limit'} on this ticket`, say(next ? `The ticket <b>“${esc(c.title)}”</b> may spend up to <b>${money(Number(next.amount))}</b>${next.card ? `, only with ${esc(next.card)}` : ''}${(next.merchants || []).length ? `, only at ${esc(list(next.merchants.map(host)))}` : ''}.` : `The ticket <b>“${esc(c.title)}”</b> has no spending limit of its own.`), () => {
         if (next) c.spend_limit = next; else delete c.spend_limit; audit('browser_case_budget', `ticket ${c.id} · ${next ? `${next.amount} ${next.currency}` : 'removed'} · ${ch}`);
         const w = clampWarn(c.bot, next); done(next ? 'Spending limit saved' : 'Spending limit removed', w || (next ? `${money(Number(next.amount))} for this ticket` : 'purchases fall back to its own caps and the card’s')); }, 'Save with passkey'); };
     UI.$('#w-tkb-go', s2).addEventListener('click', () => { const next = readBudget(root, true); if (next) apply(next); });
@@ -522,7 +562,7 @@
   UI.ticketBudgetFields = () => `<details class="tk-l wl-tkb-new" id="w-nt-b"><summary class="dl-lbl">${icon('chev')}Spending limit <span class="opt">optional</span></summary><div class="wl-tkb-body">${budgetFields('')}</div></details>`;
   UI.readTicketBudget = (root) => { const d = root.querySelector('#w-nt-b'); if (!d) return undefined; const r = readBudget(d, false); if (r === null) d.open = true; return r; };
   /** A new budget widens (the backend's rule), so a ticket created with one asks for the passkey first. */
-  UI.ticketBudgetGate = (title, sl, fn) => gate(true, `Let “${esc(title)}” spend up to ${money(Number(sl.amount))}`, `{ new_case: <b>${esc(title)}</b>, spend_limit: <b>${esc(`${sl.amount} ${sl.currency}${sl.card ? ' · ' + sl.card : ''}`)}</b> }`, fn, 'Create with passkey');
+  UI.ticketBudgetGate = (title, sl, fn, stage = 'ready') => gate(true, `${stage === 'draft' ? 'Save the draft' : 'Create the ticket'} with a spending limit of ${money(Number(sl.amount))}`, say(`A new ticket <b>“${esc(title)}”</b>, ${stage === 'draft' ? 'saved as a draft' : 'ready to start'}, that may spend up to <b>${money(Number(sl.amount))}</b>${sl.card ? `, only with ${esc(sl.card)}` : ''}${(sl.merchants || []).length ? `, only at ${esc(list(sl.merchants.map(host)))}` : ''}.`), fn, stage === 'draft' ? 'Save draft with passkey' : 'Create with passkey');
 
   /* ---------- a bot's What it can do: Can buy, buying without asking, the details it can fill ---------- */
   const forBot = (ids, m) => (ids || []).some((i) => i === 'bot:' + m.name || (m.cfg && m.cfg.team && i === 'team:' + m.cfg.team));

@@ -253,7 +253,7 @@
     D.cases.unshift(c); if (who) assign(c, who); c.notes = c.notes.filter((n) => !/^Assigned to/.test(n.text) || who); if (!who) delete c.routed; else c.routed = who.startsWith('team:') ? { by: 'direct', team: who.slice(5), to: `team ${who.slice(5)}`, requester_kept: true } : { by: 'direct', to: who, requester_kept: true };
     audit('ticket_new', `${id} · ${title.slice(0, 60)} · ${assignee(c)}`); nv.files = []; nv.err = ''; S.save(); UI.refreshChrome(); UI.go(`#/tickets/${id}`); UI.toast(stage === 'draft' ? 'Draft saved' : 'Ticket created', esc(stage === 'draft' ? 'Nobody starts on it until you mark it ready' : `${assignee(c)} may start on it`), 'ok'); };
     // a new spending limit is a widening (the backend's rule), so it asks for the passkey first
-    if (sl) UI.ticketBudgetGate(title, sl, create); else create(); });
+    if (sl) UI.ticketBudgetGate(title, sl, create, stage); else create(); });
   document.addEventListener('submit', (e) => { if (e.target.matches && e.target.matches('.tk-form')) { e.preventDefault(); UI.$('[data-act="tk-create"][data-stage="ready"]').click(); } });
 
   /* ---------- a bot's tickets and a team's tickets: the same rows, narrowed ---------- */

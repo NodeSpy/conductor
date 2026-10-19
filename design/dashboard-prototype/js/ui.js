@@ -455,6 +455,7 @@
     return `<div class="seal-words">${deny ? 'You\'re denying' : 'You\'re approving'} <b>${E(p.title || p.summary)}</b>, which ${E(who)} asked for${tk ? ` on the ticket “${E(tk.title)}”` : ''}.</div>
       <dl class="kv small seal-what">${what}${p.impact ? `<dt>Effect</dt><dd>${E(p.impact)}</dd>` : ''}${p.reversible ? `<dt>Undo</dt><dd>${E(p.reversible)}</dd>` : ''}</dl>`; };
   UI.approve = (p, decision = 'approve', onDone) => {
+    if (p && p.kind === 'purchase' && UI.approvePurchase && UI.approvePurchase(p, decision, onDone)) return; // a purchase signs on its own sheet (wallet.js)
     const deny = decision === 'deny', dev = UI.authenticator(), who = UI.botName ? UI.botName(p.bot) : p.bot;
     const s = UI.modal(`
       <div class="modal-head"><div><div class="caps" style="margin-bottom:6px">Approval · from ${UI.esc(who)}</div><h2>${deny ? 'Deny' : 'Approve'}: ${UI.esc(p.title || p.summary)}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
