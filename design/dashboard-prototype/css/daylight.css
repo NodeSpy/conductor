@@ -620,7 +620,7 @@ button.dl-tile { font: inherit; text-align: left; color: inherit; cursor: pointe
 .sec-val { color: var(--color-text-primary); overflow-wrap: anywhere; }
 .sec-when svg { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; }
 .sec-copy { flex: none; }
-.vaults { margin-top: 28px; } .vaults .section-title, #env .section-title { display: flex; align-items: center; gap: 12px; } .vaults-add { margin-left: auto; }
+.vaults { margin-top: 28px; } .vaults .section-title, #env .section-title, #settings .section-title { display: flex; align-items: center; gap: 12px; } .vaults-add { margin-left: auto; }
 #env { margin-top: 28px; }
 @media (max-width: 720px) { .sec-explain { grid-template-columns: 1fr; } .sec-copy { display: none; } }
 .sec-name .sec-ref { background: none; border: 0; padding: 0; margin: 0; font-size: 12px; color: var(--color-text-tertiary); }
@@ -635,7 +635,7 @@ button.dl-tile { font: inherit; text-align: left; color: inherit; cursor: pointe
 .svc-list > .dl-conn { margin-left: 18px; }
 .svc-list > .svc-empty { margin-left: 18px; padding: 8px 0 12px; list-style: none; }
 @media (max-width: 720px) { .svc-list > .svc-head { flex-wrap: wrap; } .svc-list > .dl-conn, .svc-list > .svc-empty { margin-left: 0; } }
-@media (max-width: 720px) { .vaults .section-title, #env .section-title { flex-wrap: wrap; } .vaults .section-title h2, #env .section-title h2 { flex: 1 1 100%; } .vaults-add { margin-left: 0; }
+@media (max-width: 720px) { .vaults .section-title, #env .section-title, #settings .section-title { flex-wrap: wrap; } .vaults .section-title h2, #env .section-title h2, #settings .section-title h2 { flex: 1 1 100%; } .vaults-add { margin-left: 0; }
   .svc-head .svc-name { flex: 1 1 160px; } .svc-head .dl-na { margin-left: auto; } }
 /* the facts line (UI.facts): one object icon and one value per fact, quiet ink, gaps not separators; a fact that
    leads somewhere is underlined; a risky action in bold ink; production with the warning mark in its colour. On a
@@ -853,3 +853,25 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 .fx-i.t-danger { color: var(--color-fact-danger); font-weight: var(--font-weight-bold); }
 .fx-tile { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 4px; background: var(--color-fact-danger-tile); flex: none; } .fx-tile > svg { width: 10px; height: 10px; color: var(--color-fact-danger-glyph); stroke-width: 2.6; }
 .fx-prod { display: inline-grid; place-items: center; width: 13px; } .fx-prod svg { width: 10px; height: 10px; }
+/* the Settings tab (52): the review bar only when something's changed */
+.set-review { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; justify-content: space-between; padding: 10px 16px; margin: 0 0 var(--gap-stack); border: var(--border-width) solid var(--color-accent-default); border-radius: var(--radius-card); background: var(--color-accent-subtle); font: var(--type-body-s); }
+#settings + #env, #settings { margin-top: var(--gap-stack); }
+/* the Bots page's team header (54): one aligned row (the chevron, picture and name on one line, the actions on that
+ * line too), then the summary, then the rules as one facts line ("+N" for the rest, never wrapping); bots not on a
+ * team are plain rows in a card with no group header */
+.m-team-h { align-items: start; }
+.m-team-h > .m-tog, .m-team-h > .m-st, .m-team-h > .m-team-a { min-height: var(--control-h); display: flex; align-items: center; }
+.m-team-n { display: flex; align-items: center; gap: 10px; min-height: var(--control-h); }
+.m-team-t .m-team-sum { display: block; margin: 2px 0 0; }
+.m-team-t .fx { flex-wrap: nowrap; overflow: hidden; margin-top: 6px; }
+.m-solo { padding-top: 4px; }
+.m-main b .bav-id { font-weight: normal; margin-left: 6px; }
+/* Card actions in fixed places (51): a card's action bar sits at its bottom, Edit (the first) at the left content edge
+ * and Delete (the last) at the right; cards in a row are one height, so their bars line up */
+.grid:has(> * > .card-acts), .cat-grid { align-items: stretch; }
+.grid > :is(.panel, .dl-card):has(> .card-acts), .cat-card { display: flex; flex-direction: column; }
+.card-acts { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 12px; }
+.card-acts > .btn.ghost:first-child { margin-left: -12px; } .card-acts > .btn.ghost:last-child:not(:first-child) { margin-right: -12px; }
+.section-title:has(> .btn) { align-items: center; }
+.m-team-t .fx { flex-wrap: wrap; row-gap: 0; line-height: 20px; max-height: 20px; overflow: hidden; align-items: center; } .m-team-t .fx > .fx-i { white-space: nowrap; flex: none; } /* a fact that doesn't fit drops whole */
+@media (max-width: 720px) { .m-team-t .fx { max-height: none; } .m-team-t .fx > .fx-i { white-space: normal; flex: 0 1 auto; } }

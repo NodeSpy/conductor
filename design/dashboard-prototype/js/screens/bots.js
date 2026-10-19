@@ -52,10 +52,10 @@
   const leadOf = (t) => (t && t.cfg && t.cfg.routing && t.cfg.routing.lead) || null;
   UI.leadOf = leadOf;
   /* the team form: conductor's teams.<t> keys (feat/members teams.go) */
-  function teamForm(t) {
+  function teamForm(t, withBots) {
     const isNew = !t, c = t ? staged('teams', t.name) : { operators: ['ops'], autonomy: { ceiling: 'reversible' }, isolation: { sandbox: 'required' } };
     const g = (p) => S.getPath(c, p);
-    const initial = isNew ? { ceiling: 'reversible', sandbox: 'required', peers: 'team' } : { description: c.description, operators: c.operators, ceiling: g('autonomy.ceiling') || 'reversible', shadow: !!g('autonomy.shadow'), sandbox: g('isolation.sandbox') || 'optional', handoff: g('isolation.handoff_workers') !== false, peers: c.peers || 'team', depth: g('delegation.max_depth'), pool_runs: g('budget.proactive.max_runs_per_day'), pool_turns: g('budget.proactive.max_turns_per_day'), pool_tokens: g('budget.proactive.max_tokens_per_day'), pool_cost: g('budget.proactive.max_cost_per_day'), cap_action: g('budget.spend_cap.per_action'), cap_period: g('budget.spend_cap.per_period'), secrets_via: g('credentials.secrets_via') || 'none', allow_secrets: g('credentials.allow_secrets'), logins: g('browser.logins'), credentials: g('browser.credentials'), repo: g('knowledge.repo'), promotion: g('knowledge.promotion') || 'proposal', lead: g('routing.lead'), fallback: g('routing.fallback') };
+    const initial = isNew ? { ceiling: 'reversible', sandbox: 'required', peers: 'team', bots: withBots || [] } : { description: c.description, operators: c.operators, ceiling: g('autonomy.ceiling') || 'reversible', shadow: !!g('autonomy.shadow'), sandbox: g('isolation.sandbox') || 'optional', handoff: g('isolation.handoff_workers') !== false, peers: c.peers || 'team', depth: g('delegation.max_depth'), pool_runs: g('budget.proactive.max_runs_per_day'), pool_turns: g('budget.proactive.max_turns_per_day'), pool_tokens: g('budget.proactive.max_tokens_per_day'), pool_cost: g('budget.proactive.max_cost_per_day'), cap_action: g('budget.spend_cap.per_action'), cap_period: g('budget.spend_cap.per_period'), secrets_via: g('credentials.secrets_via') || 'none', allow_secrets: g('credentials.allow_secrets'), logins: g('browser.logins'), credentials: g('browser.credentials'), repo: g('knowledge.repo'), promotion: g('knowledge.promotion') || 'proposal', lead: g('routing.lead'), fallback: g('routing.fallback') };
     UI.form({ caps: isNew ? 'teams:' : `teams.${t.name}`, title: isNew ? 'New team' : `Edit team ${t.name}`, wide: true,
       intro: 'A team groups bots: they share approvers and ceilings, and a bot on it can only be stricter. Teams are the unit for shared access.',
       values: initial,
@@ -120,6 +120,7 @@
   }
   const Y_clone = (o) => JSON.parse(JSON.stringify(o));
   UI.act('team-new', () => teamForm(null));
+  UI.teamFormWith = (bots) => teamForm(null, bots); // Make a team from the bots you selected
   // the team's own ⋯: on a phone the header keeps one action (New ticket) and the rest are here
   UI.act('team-more', (b) => UI.menu(b, [['Route an event here…', 'send', 'team-deliver', `data-t="${b.dataset.t}"`], ['Edit team…', 'edit', 'team-edit', `data-t="${b.dataset.t}"`], ['-'], ['Remove this team…', 'trash', 'team-del', `data-t="${b.dataset.t}"`]]));
   UI.act('team-edit', (b) => teamForm(T(b.dataset.t)));

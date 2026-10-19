@@ -10,11 +10,20 @@ test('Bots: each team is a section that says its rules and builds the team; solo
   await expect(plat.locator('h2')).toHaveText('platform');
   await expect(plat.locator('.m-team-h')).toContainText('led by platform-sre');
   await expect(plat.locator('.m-team-h .fx-i[title="The most its bots may do"]')).toBeVisible();
-  await expect(plat.locator('.m-team-h .fx-i[title="Who approves"]')).toContainText('approved by');
+  await expect(plat.locator('.m-team-h .fx-i', { hasText: /^\+\d+$/ })).toHaveAttribute('title', /approved by/); // the rest of its rules, on one line as +N
   await expect(plat.locator('[data-act="bv-team-add"]')).toBeVisible();
   await expect(plat.locator('a', { hasText: 'Shape the team' })).toHaveAttribute('href', '#/teams/platform/defaults');
   await expect(plat.locator('.m-row[data-bot="platform-sre"] .fx-i[title="Leads its team"]')).toBeVisible();
-  await expect(page.locator('.m-team[data-team="solo"]')).toContainText('not on a team');
+  // no Solo group: bots not on a team are plain rows (no header); Make a team is a bulk action on the bots you pick
+  await expect(page.locator('.m-team[data-team="solo"] .m-team-h')).toHaveCount(0);
+  await expect(page.locator('.m-team[data-team="solo"] .m-row[data-bot="release-scribe"]')).toBeVisible();
+  if (page.viewportSize().width > 720) { // selecting bots is a desktop feature
+    await page.locator('.m-row[data-bot="release-scribe"] .m-cbx').check();
+    await expect(page.locator('.m-bulk [data-act="bv-bulk-newteam"]')).toBeVisible();
+    await page.locator('[data-act="bv-sel-clear"]').click();
+  }
+  // a team's header: its name, then the summary, then its rules on one line, '+N' for the rest
+  if (page.viewportSize().width > 720) expect(await plat.locator('.m-team-h .fx').evaluate((e) => e.getBoundingClientRect().height < 30)).toBe(true); // a phone lets them wrap
   // no needs-you / working-now sections: status is a quiet mark that links there
   await expect(page.locator('#main h2', { hasText: /need you|working now/i })).toHaveCount(0);
   await expect(plat.locator('.m-row[data-bot="platform-sre"] .q-st')).toHaveAttribute('href', '#/attention');

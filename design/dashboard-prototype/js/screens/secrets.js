@@ -8,6 +8,10 @@
   const VIC = { conductor: 'lock', onepassword: 'key', pass: 'key', hashicorp: 'server', file: 'file', env: 'terminal' };
   const now = () => new Date().toISOString();
   const sv = { q: '', vault: [], kept: [], used: [] };
+  // the Settings tab's filter (52): one live search and filter bar across settings and environment variables
+  const stv = UI.settingsView = { q: '', kind: [], scope: [], used: [] };
+  UI.settingKeep = (kind, name, text, used, scope) => (!stv.kind.length || stv.kind.includes(kind)) && (!stv.used.length || stv.used.includes(used ? 'used' : 'unused'))
+    && (!stv.scope.length || kind !== 'env' || stv.scope.includes(String(scope || '').split(':')[0])) && (!stv.q || `${name} ${text || ''}`.toLowerCase().includes(stv.q.toLowerCase()));
   const vaultOf = (s) => D.vaults.find((v) => v.name === s.vault);
   const IN = { all: () => true, stored: (s) => !!s.set, referenced: (s) => !s.set, unused: (s) => !s.used.length };
   const match = (s) => (!sv.vault.length || sv.vault.includes(s.vault)) && (!sv.kept.length || sv.kept.some((k) => (k === 'here' ? IN.stored(s) : IN.referenced(s)))) && (!sv.used.length || sv.used.some((k) => (k === 'used' ? s.used.length : IN.unused(s))))
@@ -130,7 +134,7 @@
       <span class="k">${icon(VIC[v.type])} ${esc(v.name)} <span class="dl-sub" style="text-transform:none;letter-spacing:0;margin-left:auto">${esc(VNAME[v.type] || v.type)}</span></span>
       <span class="row">${v.status === 'fail' ? UI.statusMark('fail', 'Can’t be reached') : UI.statusMark('ok', v.status === 'unlocked' ? 'Unlocked' : 'Reachable')}${S.find('vaults', v.name) ? ' ' + UI.statusMark('staged', 'Changed, not applied') : ''}</span>
       <span class="d">${v.writable ? 'conductor can store values here' : 'values are set in the vault itself'}${how ? `; unlocked with ${esc(how)}` : ''}.</span>
-      <div class="row" style="gap:4px"><button class="btn sm ghost" data-act="vault-edit" data-v="${esc(v.name)}">${icon('edit')}Edit</button><button class="btn sm ghost" data-act="vault-del" data-v="${esc(v.name)}" aria-label="Remove vault ${esc(v.name)}">${icon('trash')}</button></div></div>`; }).join('')}</div></section>`;
+      <div class="card-acts"><button class="btn sm ghost" data-act="vault-edit" data-v="${esc(v.name)}">${icon('edit')}Edit</button><button class="btn sm ghost" data-act="vault-del" data-v="${esc(v.name)}" aria-label="Remove vault ${esc(v.name)}">${icon('trash')}</button></div></div>`; }).join('')}</div></section>`;
   const secBar = () => UI.filterBar({ id: 'sec', state: sv, placeholder: 'Find a secret by name, vault or what uses it', label: 'Find and filter secrets', fields: [
     { k: 'vault', label: 'Vault', multi: true, options: () => D.vaults.map((v) => ({ v: v.name, label: `${v.name} · ${VNAME[v.type] || v.type}`, n: D.secrets.filter((s) => s.vault === v.name).length })) },
     { k: 'kept', label: 'Stored', multi: true, keepOrder: true, title: 'Where its value is kept', options: () => [{ v: 'here', label: 'Stored by conductor', n: D.secrets.filter(IN.stored).length }, { v: 'external', label: 'Kept in its own vault', n: D.secrets.filter(IN.referenced).length }] },
@@ -150,17 +154,25 @@
   /* ---------- the Settings tab: plain values, in the same rows ---------- */
 
   const settingRows = () => { const pend = (k) => S.find('settings', k);
-    return D.settings.concat(D.pending.filter((c) => c.coll === 'settings' && c.before == null).map((c) => ({ name: c.key, value: c.after, used: 0, isNew: true }))).map((x) => { const p = pend(x.name), v = p ? p.after : x.value;
+    return D.settings.concat(D.pending.filter((c) => c.coll === 'settings' && c.before == null).map((c) => ({ name: c.key, value: c.after, used: 0, isNew: true }))).filter((x) => UI.settingKeep('setting', x.name, String(x.value), x.used)).map((x) => { const p = pend(x.name), v = p ? p.after : x.value;
       return row({ id: 'settings.' + x.name, name: x.name.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()), ref: `\${settings.${x.name}}`, uses: x.used ? [`${x.used} place${x.used === 1 ? '' : 's'} in config`] : [], menu: 'setting-more', open: false,
         value: p && p.after == null ? UI.statusMark('staged', 'Removal not applied') : `<span class="mono sec-val">${esc(v)}</span>${p || x.isNew ? ' ' + UI.statusMark('staged', 'Changed, not applied') : ''}${x.chains ? ' <span class="dl-sub">· built from another setting</span>' : ''}${x.env ? ' <span class="dl-sub">· from an environment variable</span>' : ''}` }); }).join(''); };
-  UI.route('secrets/settings', () => { const pendN = D.pending.filter((c) => c.coll === 'settings' || c.coll === 'env').length;
+  const setBar = () => { const env = S.view().env || [];
+    return UI.filterBar({ id: 'set', state: stv, placeholder: 'Find a setting or a variable by name or value', label: 'Find and filter settings and environment variables', fields: [
+      { k: 'kind', label: 'Kind', multi: true, keepOrder: true, options: () => [{ v: 'setting', label: 'Settings', n: D.settings.length }, { v: 'env', label: 'Environment variables', n: env.length }] },
+      { k: 'scope', label: 'For', multi: true, keepOrder: true, title: 'Who an environment variable is for', options: () => [['daemon', 'conductor itself'], ['runtime', 'A runtime’s agents'], ['host', 'A machine’s commands']].map(([v, label]) => ({ v, label, n: env.filter((e) => e.scope.split(':')[0] === v).length })).filter((o) => o.n) },
+      { k: 'used', label: 'Used', multi: true, keepOrder: true, title: 'Whether the config uses it', options: () => [{ v: 'used', label: 'Used in config' }, { v: 'unused', label: 'Not used yet' }] }],
+      onChange: () => UI.rerender({ keepScroll: true }) }); };
+  UI.route('secrets/settings', () => { const pendN = D.pending.filter((c) => c.coll === 'settings' || c.coll === 'env').length, rowsS = settingRows();
     return `<div class="page dl-page">
-    <div class="dl-phead"><div><h1>Secrets</h1></div><div class="dl-actions tight"><button class="btn primary" data-act="setting-add">${icon('plus')}Add a setting</button></div></div>
+    <div class="dl-phead"><div><h1>Secrets</h1></div></div>
     ${tabsHTML('settings')}
     ${explain('settings')}
-    <div class="section-title"><h2>Settings</h2><span class="caps">read anywhere in config as \${settings.NAME}</span></div>
-    <div class="panel"><ul class="dl-list sec-list">${settingRows()}</ul><div class="panel-foot"><span class="muted small grow">A change is checked on a copy of the config before it applies.</span><a class="btn sm primary" href="#/config/apply" ${pendN ? '' : UI.off('Nothing changed here yet')}>Review${pendN ? ` ${pendN}` : ''}</a></div></div>
-    ${UI.envSectionHTML ? UI.envSectionHTML(row) : ''}
+    ${setBar()}
+    ${pendN ? `<div class="set-review" role="status"><span><b>${pendN} change${pendN > 1 ? 's' : ''}</b>, not applied yet. Each is checked on a copy of the config before it applies.</span><a class="btn sm primary" href="#/config/apply">Review ${pendN}</a></div>` : ''}
+    ${!stv.kind.length || stv.kind.includes('setting') ? `<section id="settings"><div class="section-title"><h2>Settings</h2><span class="caps">read in config as \${settings.NAME}</span><button class="btn sm secondary vaults-add" data-act="setting-add">${icon('plus')}Add a setting</button></div>
+    <div class="panel"><ul class="dl-list sec-list">${rowsS || '<li class="dl-empty-row dl-sub">No setting matches.</li>'}</ul></div></section>` : ''}
+    ${UI.envSectionHTML && (!stv.kind.length || stv.kind.includes('env')) ? UI.envSectionHTML(row) : ''}
   </div>`; }, { nav: 'secrets' });
   UI.act('sec-open', (b) => { ov.open = ov.open === b.dataset.s ? null : b.dataset.s; const el = UI.$('#sec-body'); if (el) el.innerHTML = rows(); });
   // copied: the button says so where you clicked (a menu item, which closes, says it in a toast)

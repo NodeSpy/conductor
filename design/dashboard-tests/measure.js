@@ -9,6 +9,8 @@
 //   lines    a row of three or more text columns (a name over its id, where it's used, its value) reads across:
 //            the columns' first lines share a centre when any of them runs to a second line (or a one-line column
 //            sits on the row's centre)
+//   cards    cards side by side in a grid are one height; a card's action bar sits at its bottom, its first action at
+//            the left content edge and its last at the right
 //   rowh     the rows of a list are one height: a title line, two lines of description, a facts line
 //   title    a page's title is the size for its kind of page (a list page, a detail page)
 //   over     nothing runs past the right edge of the window
@@ -58,6 +60,21 @@ function measure() {
       if (!multi(cells[i]) && !multi(cells[j])) continue; const fa = firstLine(cells[i]), fb = firstLine(cells[j]); if (!fa || !fb) continue;
       const centred = (x, y, fx) => !multi(x) && Math.abs(mid(fx) - mid(box(y))) <= 2; // a one-line cell on the row's centre
       const d = Math.abs(mid(fa) - mid(fb)); if (d > 3 && Math.abs(fa.bottom - fb.bottom) > 3 && !centred(cells[i], cells[j], fa) && !centred(cells[j], cells[i], fb)) out.push(`lines: ${name(cells[i]).slice(0, 34)} and ${name(cells[j]).slice(0, 34)} start ${Math.round(d)}px apart in one row`); } });
+
+  // cards: actions in fixed places, cards in a row one height
+  main.querySelectorAll('*').forEach((g) => { if (!vis(g) || g.closest('.modal')) return; const cs = getComputedStyle(g); if (!cs.display.includes('grid')) return;
+    const cards = kids(g).filter((k) => vis(k) && k.matches('.panel, .dl-card, .cat-card') && k.querySelector(':scope > .card-acts, :scope > .cc-act, :scope > .panel-foot'));
+    if (cards.length < 2) return; const rows = new Map(); cards.forEach((c) => { const t = Math.round(box(c).top); rows.set(t, (rows.get(t) || []).concat(c)); });
+    rows.forEach((rc) => { if (rc.length < 2) return; const hs = rc.map((c) => Math.round(box(c).height)); if (Math.max(...hs) - Math.min(...hs) > 1) out.push(`cards: cards in one row are ${Math.min(...hs)}px to ${Math.max(...hs)}px tall: ${name(rc[0]).slice(0, 40)}`);
+      rc.forEach((c) => { const bar = c.querySelector(':scope > .card-acts, :scope > .cc-act, :scope > .panel-foot'), cr = box(c), ccs = getComputedStyle(c), b = box(bar);
+        const gapB = cr.bottom - parseFloat(ccs.paddingBottom) - parseFloat(ccs.borderBottomWidth) - b.bottom; if (Math.abs(gapB) > 2) out.push(`cards: the actions of ${name(c).slice(0, 40)} sit ${Math.round(gapB)}px above the card's bottom`);
+        const btns = [...bar.querySelectorAll(':scope > .btn, :scope > a.btn, :scope > button')].filter(vis); if (btns.length < 2) return;
+        const lab = (x) => { const r = document.createRange(); r.selectNodeContents(x); const rr = [...r.getClientRects()].filter((q) => q.width); return rr.length ? { l: Math.min(...rr.map((q) => q.left)), r: Math.max(...rr.map((q) => q.right)) } : { l: box(x).left, r: box(x).right }; };
+        const cl = cr.left + parseFloat(ccs.paddingLeft) + parseFloat(ccs.borderLeftWidth), crr = cr.right - parseFloat(ccs.paddingRight) - parseFloat(ccs.borderRightWidth);
+        const drawn = (x) => { const q = getComputedStyle(x); return (q.borderLeftWidth !== '0px' && !/rgba\(0, 0, 0, 0\)|transparent/.test(q.borderLeftColor)) || !/rgba\(0, 0, 0, 0\)|transparent/.test(q.backgroundColor); }; // a ghost button's edge is its label
+        const first = btns[0], last = btns[btns.length - 1], fl = drawn(first) ? box(first).left : lab(first).l, lr = drawn(last) ? box(last).right : lab(last).r;
+        if (Math.abs(fl - cl) > 3) out.push(`cards: the first action of ${name(c).slice(0, 40)} starts ${Math.round(fl - cl)}px from the content edge`);
+        if (Math.abs(crr - lr) > 3) out.push(`cards: the last action of ${name(c).slice(0, 40)} ends ${Math.round(crr - lr)}px from the content edge`); }); }); });
 
   // rowh: the rows of one list (the shared row: title, description, facts) are one height
   main.querySelectorAll('.dl-list').forEach((l) => { if (!vis(l) || l.closest('.modal, .tk-board')) return; const rs = [...l.children].filter((li) => vis(li) && li.querySelector('.dl-nt > b:first-child') && !li.querySelector('input:not([type=checkbox]), select, textarea')); // the shared row: a title, then its description and facts (a row holding a form is a form)

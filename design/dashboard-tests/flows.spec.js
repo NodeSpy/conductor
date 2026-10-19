@@ -11,8 +11,9 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
     await go(page, '#/connectors/connectors');
     await page.locator('[data-act="conn-add"]').click();
     await page.locator('[data-act="cat-pick"][data-kind="connector"][data-name="slack"]').click();
-    await expect(page.locator('.modal h2')).toHaveText('Add a Slack connector');
-    // required fields come from the plugin's declaration (the instance name is prefilled; empty it to see it's required)
+    await expect(page.locator('.modal h2')).toHaveText('Add a Slack connection');
+    await page.locator('[data-act="conn-manual"]').click(); // fill it in yourself, rather than Connect with Slack
+    // required fields come from the plugin's declaration (the name is prefilled; empty it to see it's required)
     await page.fill('#f-name', '');
     await submit(page);
     await expect(page.locator('[data-field="name"].bad')).toBeVisible();
@@ -285,8 +286,12 @@ test.describe('packs and plugins', () => {
   test('services: update one with step-up on Plugins, install a new one into a new connection', async ({ page }) => {
     await go(page, '#/extensions/plugins'); // the old Plugins tab lands on the Plugins page
     await expect(page).toHaveURL(/#\/connectors\/connectors/);
-    await page.locator('.svc-head[data-svc="slack"] [data-act="plugin-update"]').click(); await page.locator('#su-go').click();
-    await expect(page.locator('.svc-head[data-svc="slack"]')).toContainText('v1.7.0');
+    // a connection's own ⋯: Update now (slack-ops stays within ^1.6, so it takes v1.7.0 with the plugin's update)
+    const slack = page.locator('.cn-row[data-c="slack-ops"]');
+    await expect(slack.locator('.fx-i.t-update')).toContainText('v1.7.0 available');
+    await slack.locator('[data-act="conn-more"]').click(); await page.locator('#pop-menu [data-act="cn-update"]').click(); await page.locator('#su-go').click();
+    await expect(slack.locator('.fx-i', { hasText: 'v1.7.0' })).toHaveCount(1);
+    await expect(slack.locator('.fx-i.t-update')).toHaveCount(0);
     await go(page, '#/extensions/install/connector/aws-cost');
     await expect(page.locator('.nav a[data-nav="connectors"].on')).toHaveCount(1); // a service's pages sit under Plugins (the rail, hidden on a phone, still marks it)
     await page.fill('#f-inst', 'aws'); await page.fill('#f-set__role_arn', 'arn:aws:iam::000000000000:role/cost-read');
