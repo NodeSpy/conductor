@@ -16,6 +16,9 @@ export const STATES = {
   waiting: { word: 'Waiting',   glyph: 'warning',   mark: '--color-status-warning-solid', fg: '--color-status-warning-fg',    shape: 'outlined triangle', attn: true },
   parked:  { word: 'Parked',    glyph: 'neutral',   mark: '--color-status-neutral-solid', fg: null,                           shape: 'pause bars' },
   shadow:  { word: 'Shadow',    glyph: 'shadow',    mark: '--color-status-info-solid',    fg: '--color-status-info-fg',       shape: 'half disc' },
+  // Being written, not submitted (a draft ticket): the In progress capsule as a dashed outline, in slate.
+  // Dashed means not yet real, as on the staged ring. Never the dash, which is Not reached.
+  draft:   { word: 'Draft',     glyph: 'draft',     mark: '--color-status-neutral-solid', fg: null,                           shape: 'dashed capsule' },
   // Set to start, not started yet (a ticket or task in Ready): the passed dot, not yet filled, in the parked slate.
   ready:   { word: 'Ready',     glyph: 'ready',     mark: '--color-status-neutral-solid', fg: null,                           shape: 'hollow dot' },
   // Started and not done, but not executing this second (a ticket in progress): a capsule, partly filled,
@@ -26,7 +29,7 @@ export const STATES = {
 };
 // Not a status: an edit that hasn't been applied. Running blue, but a dashed ring, never an arc.
 // Glyph keys used by older helpers → their state.
-export const GLYPH_STATE = { success: 'passed', danger: 'failed', warning: 'waiting', running: 'running', neutral: 'parked', skipped: 'skipped', ready: 'ready', 'in-progress': 'in-progress', shadow: 'shadow', 'needs-you': 'needs', staged: 'staged' };
+export const GLYPH_STATE = { success: 'passed', danger: 'failed', warning: 'waiting', running: 'running', neutral: 'parked', skipped: 'skipped', draft: 'draft', ready: 'ready', 'in-progress': 'in-progress', shadow: 'shadow', 'needs-you': 'needs', staged: 'staged' };
 export const CHANGE = { staged: { word: 'Not applied', glyph: 'staged', mark: '--color-status-running-solid', fg: '--color-status-running-fg', shape: 'dashed ring' } };
 const ALL = { ...STATES, ...CHANGE };
 

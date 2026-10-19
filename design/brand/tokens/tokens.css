@@ -878,7 +878,7 @@
   --radius-control: var(--radius-md);
   --radius-box: var(--radius-md);
   --radius-badge: var(--radius-xs);
-  --radius-chip: var(--radius-sm);
+  --radius-chip: var(--radius-pill);
   --radius-card: var(--radius-lg);
   --radius-overlay: var(--radius-xl);
   --radius-sheet: var(--radius-2xl);
@@ -962,6 +962,7 @@
   --segmented-fg: var(--color-text-secondary);
   --segmented-fg-active: var(--color-text-primary);
   --segmented-height: var(--size-control-sm);
+  --segmented-radius: var(--radius-chip);
   --table-header-fg: var(--color-text-tertiary);
   --table-row-h: var(--size-row);
   --table-row-hover: var(--color-state-hover);

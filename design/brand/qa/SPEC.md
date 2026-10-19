@@ -20,7 +20,7 @@ Anything on a screen that isn’t in one of these is a deviation. Nothing on the
 - **Greetings** (“Good afternoon, …”) and **header sentences that restate what is on the screen.**
 - **The sunrise motif,** or any illustration made from the mark, and any altered, decorated or animated logo. Empty states are a plain sentence and an action, if there is one.
 - **Meters or bars as risk or autonomy markers.** Risk is words, where someone decides.
-- **Pills and capsules** for status, filters or tags, and **any count badge other than the one orange badge** (`--count-badge-*`, only for something new or waiting for you; a total is plain text); **tinted rows**; **step-dot traces in lists.**
+- **Pills and capsules** for status labels, tags or rows (pills are only the shared filter chip, applied-filter token, view toggle and count badge), and **any count badge other than the one orange badge** (`--count-badge-*`, only for something new or waiting for you; a total is plain text); **tinted rows**; **step-dot traces in lists.**
 - **Run tabs** and **previous/next** between runs; **export buttons**; **Pause/Run on the Overview**; **captions that explain obvious controls.**
 - **The fingerprint** on anything that doesn’t authenticate (it belongs only on approve, deny and changes that widen access), including “Review” buttons.
 - **Old names:** “Run history” (it is Activity), “Members” (they are bots, in folders), settings outside the one System area.

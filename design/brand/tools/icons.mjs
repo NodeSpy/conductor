@@ -19,6 +19,7 @@ const LABELS = {
   running: 'Running (rotates)', neutral: 'Parked, idle (slate)', skipped: 'Skipped, cancelled', shadow: 'Shadow mode: observes, never acts',
   'needs-you': 'Needs you (accent)',
   staged: 'Staged change, not applied',
+  draft: 'Draft: being written, not submitted (slate)',
   ready: 'Ready: set to start, not started (slate)',
   'in-progress': 'In progress: started, not executing now (slate)',
 };

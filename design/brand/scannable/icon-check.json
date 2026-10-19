@@ -218,6 +218,12 @@
   },
   {
    "fam": "status",
+   "word": "Draft",
+   "src": "mark draft",
+   "ink": 0.15625
+  },
+  {
+   "fam": "status",
    "word": "Ready",
    "src": "mark ready",
    "ink": 0.19140625
@@ -270,6 +276,13 @@
    "fa": "status",
    "fb": "status",
    "sim": 0.542
+  },
+  {
+   "a": "Draft",
+   "b": "In progress",
+   "fa": "status",
+   "fb": "status",
+   "sim": 0.5
   },
   {
    "a": "Command",
