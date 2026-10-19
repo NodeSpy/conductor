@@ -919,6 +919,7 @@ teams:
       tiers: { never: [aws.iam_*] }   # classified into every bot; the strictest tier wins
     budget:
       spend_cap: { per_action: 500, per_period: 2000, period: 720h }
+      purchases: { per_purchase: 100, per_day: 200, per_month: 500 }  # browser purchases: a ceiling for its bots
       proactive: { max_runs_per_day: 12, max_tokens_per_day: 5m }   # a POOL for the whole team, in any units
     isolation: { sandbox: required, handoff_workers: false, skip_permission_prompts: false }
     credentials: { secrets_via: broker, allow_secrets: [house/pd-token] }
@@ -954,6 +955,7 @@ config: bots.platform-sre: autonomy.spend_cap.per_action 2000 exceeds team platf
 | `autonomy.shadow: true` | `autonomy.shadow` | — | `shadow: false` |
 | `autonomy.tiers` | merged into its tiers (the strictest wins) | a stricter tier | a bot pattern the team classes stricter (`observe: [kv.set]` under the team's `propose: [kv.*]`) |
 | `budget.spend_cap` | `autonomy.spend_cap` | a lower `per_action`/`per_period`, a longer `period` | higher, shorter, another currency |
+| `budget.purchases` | `purchases` (with each per-card cap) | a lower `per_purchase`/`per_day`/`per_month`, overall and per card | higher, another currency |
 | `budget.proactive` | `proactive.budget` (and it is a pool, below) | lower, **per unit**: each of runs / turns / tokens / dollars the pool caps | higher in any unit the pool caps |
 | `isolation.sandbox: required` | `isolation.sandbox` | — | `optional` |
 | `isolation.handoff_workers: false` | likewise | — | `true` |
@@ -1340,6 +1342,22 @@ autonomy:
   Both caps are checked in the ledger write that records the spend.
 - Anything else is a proposal.
 - The card's own merchants and limits apply either way.
+
+**Purchase caps and a ticket's budget.** `purchases:` caps what the bot buys
+through the browser: per purchase, per day and per 30 days, optionally
+tighter per card. Its team's `budget.purchases:` is the ceiling. A case can
+carry a `spend_limit`, a budget for that one task, set with
+`conductor browser budget <bot> <case> --amount 120.00`. These stack with the
+card's limits and the lowest wins. Each check names the layer that decided:
+"over this ticket's 120.00 USD limit: 35.00 USD left". See [[Browser]],
+"Spend limits stack". A bot template can't set `purchases:`; caps are the
+operator's.
+
+```yaml
+bots:
+  shopper:
+    purchases: { per_purchase: 40, per_day: 100, per_month: 300, cards: { shopping: { per_purchase: 25, per_day: 50, per_month: 150 } } }
+```
 
 ### Terraform changes
 

@@ -48,7 +48,8 @@ conductor browser vault-items <vault> [--query Q] | vault-item <vault> <item>   
 conductor browser profile add|set|unset|bind|rm …   personal details conductor fills by meaning (never shown to an agent)
 conductor browser card add|set|unset|bind|freeze|unfreeze|rm …   payment cards: merchants, limits, the kill switch
 conductor browser purchases [--status pending] | purchase show|approve|deny <id>   purchase approvals (signed with your operator key)
-conductor browser spend                    profiles, cards, spend per card and identity
+conductor browser spend                    profiles, cards, spend per card, identity, bot and team
+conductor browser budget <bot> <case> [--amount N [--currency C] [--card X] [--merchant O]… | --clear]   a ticket's spend budget
 conductor browser <action> …               (inside an agent) open, snapshot, click, fill, login --credential, … — conductor browser --help
 conductor bot ls [--flat]  bots by team (operator)
 conductor bot show|cases|workers|proposals …  bots: state, open work, proposals (operator)

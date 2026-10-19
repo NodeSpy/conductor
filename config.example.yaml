@@ -1371,6 +1371,8 @@ sandbox:
 #   #     merchants: ["https://shop.example.com"]  # none by default: nothing can be bought
 #   #     identities: ["bot:shopper"]
 #   #     limits: { per_purchase: 50, per_day: 100, per_month: 300, currency: USD }
+#   #     # spend limits stack and the lowest wins: these, identity_limits:, a bot's purchases: and its
+#   #     # team's budget.purchases:, and a ticket's budget (conductor browser budget BOT CASE --amount 120)
 #   # payments: { approvers: [daniel], approval_ttl: 1h }   # operators: entries with an ssh_key
 #
 # Hand-offs (background: true agent steps on paseo) and detached launches
@@ -1556,6 +1558,7 @@ bots:
       #   unattended:                  # opt-in, a widening: a commit_money verb runs WITHOUT approval under a smaller cap
       #     browser.purchase: { per_action: 10, per_period: 30, period: 24h, merchants: ["https://shop.example.com"] }
       approval_ttl: 24h
+    # purchases: { per_purchase: 40, per_day: 100, per_month: 300 }   # browser purchases (per card: cards: { shopping: {…} }); ≤ the team's budget.purchases
     # proactive:                                 # OFF unless set: read-only sweeps on a schedule (wiki: Bots → Proactive sweeps)
     #   every: 4h
     #   quiet_hours: "22:00-07:00"               # no sweep starts in this window (local time; timezone: to pin a zone)
@@ -1612,6 +1615,7 @@ teams:
     #   tiers: { never: [gh.delete_*] }          # classified into every bot (the strictest tier wins)
     # budget:
     #   spend_cap: { per_action: 500, per_period: 2000, period: 720h }   # each bot's commit_money cap fits inside
+    #   purchases: { per_purchase: 100, per_day: 200, per_month: 500 }   # browser purchases: each bot's purchases: fits inside
     #   proactive: { max_runs_per_day: 12, max_tokens_per_day: 5m }      # a POOL: all bots' sweeps together, rolling 24h; per unit
     # isolation:
     #   sandbox: required                        # bots start only while conductor's agent sandbox is on

@@ -578,9 +578,11 @@ browser:
   a reply, a log, the run record or a screenshot. A page echoing the number
   (in full, in groups of four, with dashes) is scrubbed, and the card's fields
   are masked in screenshots. `evaluate` stays off in that browser.
-- **Limits.** Per purchase, per day and per month, for the card and for each
-  identity, bot or team you list. They are checked when a purchase is
-  proposed, approved and paid.
+- **Limits.** Per purchase, per day and per 30 days, for the card and for
+  each identity, bot or team you list. A bot's or team's own caps and a
+  ticket's budget stack on top, and the lowest wins (see
+  [Spend limits stack](#spend-limits-stack)). They are checked when a
+  purchase is proposed, approved and paid.
 - **Recurring charges** are flagged. A subscription needs your explicit
   approval for its recurring nature, and never runs unattended.
 - **Merchants.** Each card has its own allowlist of exact origins; none by
@@ -623,6 +625,88 @@ browser:
   Anything else is a proposal you approve with `conductor bot approve`.
 - **The card still applies.** Its own merchant list and limits hold either
   way.
+
+### Spend limits stack
+
+Every purchase is held to every layer that applies, and **the lowest wins**.
+No layer can widen another:
+
+1. **The card's limits**: `limits:` (per purchase, per day, per 30 days).
+2. **The card's limits for the caller**: `identity_limits:` for its
+   identity, bot or team.
+3. **The bot's and its team's caps**: `purchases:` on the bot,
+   `budget.purchases:` on its team. Optionally tighter per card. A team's
+   are ceilings for its bots: `conductor validate` refuses a bot cap above
+   its team's.
+4. **The ticket's budget**: a `spend_limit` on the case the purchase is made
+   for.
+
+```yaml
+teams:
+  ops:
+    budget:
+      purchases: { per_purchase: 100, per_day: 200, per_month: 500, currency: USD }
+bots:
+  shopper:
+    team: ops
+    purchases:                                   # each cap ≤ the team's
+      per_purchase: 40
+      per_day: 100
+      per_month: 300
+      cards:
+        shopping: { per_purchase: 25, per_day: 50, per_month: 150 }
+```
+
+All three caps are required wherever caps are set. A bot without
+`purchases:` is held to its team's.
+
+**A ticket's budget** is set on a bot's case, for one task: "buy a hard
+drive, up to $120".
+
+```sh
+conductor browser budget shopper c3 --amount 120.00 --currency USD   [--card shopping] [--merchant https://shop.example.com]…
+conductor browser budget shopper c3              # what it holds and what is left
+conductor browser budget shopper c3 --clear
+```
+
+- **What counts.** Every purchase proposed under the case counts against
+  its budget for its whole life: pending, approved, being paid, paid.
+- **What frees budget.** A purchase you deny, or one that is refused or
+  expires, frees its share.
+- **No carry-over.** Unspent budget is never moved anywhere else.
+- **Optional restrictions.** `--card` and `--merchant` hold the budget to one
+  card and to those exact origins.
+- **No budget.** A case without one falls back to the other layers.
+- **Clamping.** A ticket's budget can never exceed the layers above it. A
+  budget above the lowest 30-day cap of the bot, its team or the card is
+  clamped there at every check, and setting one warns you.
+
+On a bot's case the record is
+`spend_limit: { amount: "120.00", currency: USD, card: …, merchants: […] }`.
+A bot's home session acts for the case the gate holds it to (its
+least-trusted open case), so that case's budget applies. A worker acts for
+its own.
+
+**Every check names the layer that decided.** Proposing, approving and the
+fill each evaluate every layer in one locked write, so two purchases can't
+jointly overrun a budget. Each records the binding layer: the one that
+refused, or else the one the purchase leaves the least room in. A refusal
+says which layer and what is left:
+
+```text
+refused: over this ticket's 120.00 USD limit: 35.00 USD left
+refused: over bot shopper's 40.00 USD per-purchase limit
+refused: over team ops's 200.00 USD daily limit: 15.00 USD left
+```
+
+`conductor browser purchase show pu7` and the approval prompt list the
+remaining amount per layer, and whether the purchase would be refused now.
+`conductor browser spend` adds per-bot and per-team rows.
+
+**On the operator API (read-only):** `GET /v1/purchases`,
+`GET /v1/purchases/{id}` (with `remaining_by_layer`), `GET /v1/spend`,
+`GET /v1/bots/{bot}/cases/{case}/budget`. A decision, and setting a budget,
+stay control-socket operations.
 
 ## What an agent can and can't learn or do
 

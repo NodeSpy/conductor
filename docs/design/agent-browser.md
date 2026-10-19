@@ -537,7 +537,48 @@ stored write-only. Code: `internal/browser/wallet.go` (types, the store),
   (`Gate.RequesterClass`), and `groupsFor` gives `bot:<name>` and
   `team:<team>`.
 
+**Spend limits stack; the lowest wins.**
+- **The layers:**
+  - the card's `limits`;
+  - its `identity_limits` for the caller;
+  - the bot's `purchases:` and its team's `budget.purchases:` (each
+    optionally per card);
+  - the ticket's `spend_limit`.
+
+  Each is evaluated as windows (per purchase, a day, 30 days; a ticket's
+  whole life) by one function, `evaluate`, over the ledger. A spend entry
+  records the bot and team it was made for, so a bot's window counts only
+  its own spend and a team's counts its bots'.
+- **Narrow, never widen.**
+  - Config refuses a bot's caps above its team's: overall, per card, and a
+    bot's per-card caps against the team's overall ones.
+  - A bot template can't set `purchases:`.
+  - A ticket's budget above the lowest 30-day cap of the layers over it is
+    clamped there at every check. The `browser-case-budget` op warns when
+    one is set.
+- **The ticket's budget** is read through a small interface (`CaseBudgets`:
+  a case reference to amount, currency, optional card and merchants, and
+  the key its spend counts under). The default reads the case ledger's
+  `spend_limit`, and a ticket store can supply its own.
+  - **What counts:** every purchase proposed under the case, while pending,
+    approved, being paid or paid.
+  - **What frees it:** a purchase that is refused, denied or expired.
+  - Unspent budget is never transferable.
+  - A home session acts for the case the gate holds it to.
+- **Check points.** Propose (`ProposeWithin`), approve (`ApproveWithin`,
+  also on the bot path) and the fill (`Consume`) each evaluate every layer
+  inside the ledger's locked write: two proposals can't jointly overrun a
+  ticket. Each records the layers, the stage and the binding layer (the
+  refusing one, or else the one with the least room left).
+  - A refusal names the layer and what is left.
+  - The approval view carries `remaining_by_layer` and `would_refuse`.
+  - The operator API serves these read-only; a budget is set only over the
+    control socket.
+
 **Classification for the dashboard.**
+- **Ticket budgets:** a new, larger, re-currencied, card-freed or
+  merchant-widened budget is a widening; a smaller, removed or newly
+  restricted one is a narrowing.
 - **Widening:** adding a profile or card, a binding, a site or field, a
   merchant, a higher limit or a looser identity limit, a visibility raised,
   an unfreeze.
@@ -757,6 +798,17 @@ no browser.
    - **The caps:** the period boundary, an identity limit through a group, a
      purchase in another currency, two unattended purchases racing the bot
      ledger.
+   - **The stack:**
+     - overrun a ticket's budget with two proposals racing (both evaluated
+       under the ledger's lock);
+     - free budget by letting an approval expire and then paying it;
+     - reuse a refused purchase's share;
+     - move a ticket's unspent budget to another case;
+     - widen a bot past its team, overall or per card, through config or a
+       template;
+     - set a ticket above the bot's 30-day cap and spend past the cap;
+     - have a home session name a richer case than the gate holds it to;
+     - spend another bot's daily room.
    - **Autonomy:** make a bot buy unattended without the opt-in, in shadow,
      unsandboxed, for an event or a third party, recurring, at an unnamed or
      lookalike merchant; or a template or team that widens it.
@@ -808,6 +860,13 @@ no browser.
   sandbox"). A bot's sandboxed workers can use profiles and propose
   purchases.
 - **SMS codes and receipts by email** are follow-ups.
+- **A ticket's budget is a bot case's** (`bot:<name>/<case>`). A ticket
+  store plugs in through `CaseBudgets` and can give a stable key, so a
+  ticket handed between bots keeps one count. Until then a hand-off starts
+  a new count under the new case. An operator's own sessions have no ticket
+  layer.
+- **Limits don't convert currencies.** A layer in USD refuses a purchase in
+  EUR rather than guess a rate.
 
 ## 10. Found on the way (outside the browser)
 
