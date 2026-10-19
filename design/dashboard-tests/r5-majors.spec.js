@@ -62,3 +62,16 @@ test('retry: one at a time, labelled plainly, with a note; the first run links t
   await expect(page).toHaveURL(new RegExp(`#/runs/${id}$`));
   expect(await page.evaluate(() => D.runs.filter((x) => x.retry_of === 'r-7ef0' && x.status === 'run').length)).toBe(1);
 });
+
+// r5-13: the pack-install consent sentence was clipped (the panel borrowed the plan's code style, white-space: pre);
+// now it wraps inside its callout on a desktop and an iPhone.
+test('installing a pack: the consent sentence wraps, every action and the rest of it visible', async ({ page }) => {
+  await go(page, '#/extensions/install/pack/pr-review-team', { fresh: true });
+  const g = page.locator('.grants-loud');
+  await expect(g).toBeVisible();
+  const m = await g.evaluate((e) => ({ ws: getComputedStyle(e).whiteSpace, over: e.scrollWidth - e.clientWidth }));
+  expect(m.ws).not.toBe('pre');
+  expect(m.over, 'nothing overflows the callout').toBeLessThanOrEqual(1);
+  await expect(g).toContainText('It asks for these actions:');
+  await expect(g).toContainText('gh.review');
+});
