@@ -701,3 +701,13 @@ tr.folded { display: none; }
 .tav img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .m-team-n { display: flex; align-items: center; gap: var(--space-2); }
 .m-team-n h2 { margin: 0; }
+
+/* a form at full width; its issues above an action bar that sticks to the bottom while there are unsaved changes
+   (Edit as YAML is a quiet link there, a button with Show advanced on) */
+.def-issues { display: grid; gap: var(--space-2); margin-top: var(--space-3); } .def-issues:empty { display: none; }
+.def-bar { display: flex; align-items: center; gap: var(--space-2) var(--space-3); flex-wrap: wrap; margin-top: var(--space-3); padding: var(--space-3) var(--pad-card); border-radius: var(--radius-card); background: var(--color-bg-surface); border: var(--border-width) solid var(--color-border-subtle); }
+.def-bar.dirty { position: sticky; bottom: var(--space-3); z-index: 4; box-shadow: var(--shadow-2, var(--shadow-1)); border-color: var(--color-border-default); }
+.def-bar .def-state { margin-right: auto; font: var(--type-body-s); color: var(--color-text-secondary); } .def-bar.dirty .def-state { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
+.def-bar .link { display: inline-flex; align-items: center; gap: var(--space-1); } .def-bar .link svg { width: 14px; height: 14px; }
+.def-yaml-d { margin-top: var(--space-3); }
+@media (max-width: 720px) { .def-bar .def-state { flex-basis: 100%; } .def-bar.dirty { bottom: var(--space-2); } }

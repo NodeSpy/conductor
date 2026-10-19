@@ -98,7 +98,9 @@ test.describe('bots', () => {
     await go(page, '#/bots/platform-sre/settings');
     await page.fill('[id="f-df_proactive_every"]', '2h');
     await page.locator('[id="f-df_proactive_every"]').blur();
-    await expect(page.locator('#df-yaml')).toContainText('every: 2h');
+    await page.locator('[data-act="df-yaml"]').click();
+    await expect(page.locator('#df-yaml-ed .ced-ta')).toHaveValue(/every: 2h/);
+    await page.locator('.modal [data-close]').first().click();
     await page.locator('[data-act="df-review"]').click();
     await expect(page.locator('.diff')).toContainText('every: 2h');
     await applyStaged(page);
