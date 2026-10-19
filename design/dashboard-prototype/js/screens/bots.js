@@ -615,7 +615,7 @@
     const c = m.cfg || {}, sv = S.getPath(c, 'skill.verbs'), verbs = Array.isArray(sv) ? sv : sv ? Object.keys(sv) : [];
     const promote = S.getPath(c, 'autonomy.promote') || [], shadow = S.getPath(c, 'autonomy.shadow') || S.getPath((teamOf(m) || { cfg: {} }).cfg, 'autonomy.shadow');
     const out = { own: [], asks: [], never: [], shadow: !!shadow };
-    const label = (v) => { const d = SCHEMA.verb(v.replace(/\*$/, '')) || null, bw = UI.builtinVerbWords && UI.builtinVerbWords(v); if (bw) return `${bw} (${v})`; return d ? `${d.label.replace(/^./, (x) => x.toLowerCase())} (${v})` : v.endsWith('*') ? `${patternWords(v)} (${v})` : v; };
+    const label = (v) => { if (m.tellVerb === v) return `tell you in ${m.tellWhere || 'your channel'} (${v})`; const d = SCHEMA.verb(v.replace(/\*$/, '')) || null, bw = UI.builtinVerbWords && UI.builtinVerbWords(v); if (bw) return `${bw} (${v})`; return d ? `${d.label.replace(/^./, (x) => x.toLowerCase())} (${v})` : v.endsWith('*') ? `${patternWords(v)} (${v})` : v; };
     verbs.forEach((v) => { const t = S.tierFor({ cfg: c, name: m.name }, v).tier, mode = UI.verbMode(Object.assign({}, m, { cfg: c }), v); const it = { v, t, text: label(v) }; (mode === 'never' ? out.never : mode === 'own' ? out.own : out.asks).push(it); }); void promote;
     return out;
   };

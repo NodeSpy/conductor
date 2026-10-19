@@ -14,9 +14,9 @@
     custom: { icon: 'sparkle', title: 'Something else', desc: 'Start blank and pick what it watches yourself.', name: 'my-bot', description: '', events: [] },
   };
   const PRESETS = {
-    read: { title: 'Read only', desc: 'Looks things up. Anything that changes something is never done.' },
-    post: { title: 'Can comment and post', desc: 'Looks things up, comments and posts on its own. Asks you before anything else.' },
-    ask: { title: 'Asks before anything else', desc: 'Looks things up on its own. Comments, posts and every other change wait for your approval.' },
+    read: { title: 'Read only', desc: 'Looks things up and tells you where you chose. Anything that changes something is never done.' },
+    post: { title: 'Can comment and post', desc: 'Looks things up, comments and posts on its own, and tells you where you chose. Asks you before anything else.' },
+    ask: { title: 'Asks before anything else', desc: 'Looks things up and tells you where you chose, on its own. Comments, posts anywhere else and every other change wait for your approval.' },
   };
   const STEPS = ['Purpose', 'Watches', 'Tells you where', 'What it may do', 'Review'];
   // a new bot starts with a mascot no other bot has (66); you can change it on the first step
@@ -87,11 +87,11 @@
     if (bw.at === 2) { const slacks = conns().filter((c) => c.use === 'slack');
       return `<div class="choice-grid two">${UI.choice({ act: 'bw-tell', attrs: 'data-v="dashboard"', on: bw.tell === 'dashboard', icon: 'grid', title: 'Here, in the dashboard', desc: 'Its chat, and Needs you for anything you have to decide.' })}${UI.choice({ act: 'bw-tell', attrs: 'data-v="slack"', on: bw.tell === 'slack', icon: 'send', title: 'In a Slack channel', desc: 'Posts updates to a channel you pick (decisions still come to Needs you).', off: slacks.length ? '' : 'No Slack connector yet; add one under Connectors.' })}</div>
       ${bw.tell === 'slack' ? `<div class="row wrap" style="gap:12px"><div class="field"><label for="bw-slack">Slack connector</label><select class="select mono" id="bw-slack" data-on-change="bw-set" data-k="slack">${slacks.map((c) => `<option${bw.slack === c.name ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div><div class="field grow"><label for="bw-channel">Channel</label><input class="input mono" id="bw-channel" value="${esc(bw.channel)}" data-on-input="bw-set" data-k="channel"></div></div>` : ''}`; }
-    if (bw.at === 3) { const g = grants(), draft = { name: bw.name, cfg: botCfg() };
+    if (bw.at === 3) { const g = grants(), draft = { name: bw.name, cfg: botCfg(), tellVerb: bw.tell === 'slack' && bw.slack ? `${bw.slack}.post` : null, tellWhere: bw.channel }; // the channel it tells you in is named as that (r5 major 11)
       return `<div class="choice-grid three">${Object.entries(PRESETS).map(([k, p]) => UI.choice({ act: 'bw-preset', attrs: `data-v="${k}"`, on: bw.preset === k, icon: k === 'read' ? 'eye' : k === 'post' ? 'send' : 'lock', title: p.title, desc: p.desc })).join('')}</div>
-      ${!g.promoteOK ? `<div class="callout small">${icon('lock')} Team ${esc(bw.team)} lets no bot act on its own (its ceiling is <b>observe</b>), so comments and posts will ask you first.</div>` : ''}
+      ${!g.promoteOK ? `<div class="callout small">${icon('lock')} On team ${esc(bw.team)} a bot does on its own only things that read, so comments and posts will ask you first.</div>` : ''}
       <div class="panel"><div class="panel-head"><h3>What ${esc(bw.name)} can do</h3><span class="muted small">from the services it watches${bw.tell === 'slack' ? ' and the channel it tells you in' : ''}</span></div><div class="panel-body">${g.verbs.length ? UI.botCanHTML(draft, true) : '<div class="muted small">Nothing yet: it watches no service it could act on. It can still chat with you.</div>'}</div></div>
-      <label class="row" style="gap:10px">${UI.switchBtn(bw.shadow, 'bw-shadow', 'aria-label="Start in shadow mode"')}<span><b>Start in shadow mode</b> <span class="muted small">it records what it would do, and nothing runs until you turn shadow off on its page</span></span></label>
+      <label class="row" style="gap:10px">${UI.switchBtn(bw.shadow, 'bw-shadow', 'aria-label="Start in practice mode"')}<span><b>Start in practice mode</b> <span class="muted small">it says what it would do, and nothing it does is real until you turn practice mode off on its page</span></span></label>
       <details class="panel adv"><summary class="panel-head"><h3>Advanced</h3><span class="muted small">where its workers run, who approves, how long an approval lasts</span></summary><div class="panel-body stack" style="gap:12px">
         <div class="row wrap" style="gap:12px"><div class="field"><label for="bw-rt">Worker runtime</label><select class="select mono" id="bw-rt" data-on-change="bw-set" data-k="runtime">${S.view().runtimes.map((r) => `<option${bw.runtime === r.name ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
           <div class="field"><label for="bw-ttl">An approval lasts</label><select class="select mono" id="bw-ttl" data-on-change="bw-set" data-k="ttl">${['1h', '8h', '24h', '72h'].map((x) => `<option${bw.ttl === x ? ' selected' : ''}>${x}</option>`).join('')}</select></div></div>
