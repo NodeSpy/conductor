@@ -19,7 +19,7 @@
     ask: { title: 'Asks before anything else', desc: 'Looks things up on its own. Comments, posts and every other change wait for your approval.' },
   };
   const STEPS = ['Purpose', 'Watches', 'Tells you where', 'What it may do', 'Review'];
-  const fresh = () => ({ at: 0, purpose: null, name: '', description: '', team: '', events: new Set(), repos: 'acme/api', sweep: false, every: '4h', tell: 'dashboard', slack: '', channel: '#ops', preset: 'ask', shadow: true, runtime: 'claude-cli', operators: [], ttl: '24h' });
+  const fresh = () => ({ at: 0, template: null, purpose: null, name: '', description: '', team: '', events: new Set(), repos: 'acme/api', sweep: false, every: '4h', tell: 'dashboard', slack: '', channel: '#ops', preset: 'ask', shadow: true, runtime: 'claude-cli', operators: [], ttl: '24h' });
   let bw = fresh();
 
   const conns = () => S.view().connectors;
@@ -62,7 +62,11 @@
   const nameErr = () => (!/^[a-z][a-z0-9-]*$/.test(bw.name) ? 'lowercase letters, digits and dashes' : bw.name.length > 40 ? 'at most 40 characters' : S.view().bots.some((b) => b.name === bw.name) ? 'a bot by that name exists' : '');
   function stepHTML() {
     const v = S.view();
-    if (bw.at === 0) return `<div class="choice-grid">${Object.entries(PURPOSES).map(([k, p]) => UI.choice({ act: 'bw-purpose', attrs: `data-p="${k}"`, on: bw.purpose === k, icon: p.icon, title: p.title, desc: p.desc })).join('')}</div>
+    // community bots (38): a pack's bot templates are offered here, never on Packs; picking one installs its pack in the
+    // same review as the bot. Opened from a pack ("Includes 1 bot template"), only that pack's templates show.
+    const from = new URLSearchParams(location.hash.split('?')[1] || '').get('from'), tpl = (UI.botTemplates ? UI.botTemplates() : []).filter((t) => !from || t.pack === from);
+    const tplHTML = tpl.length ? `<h3 class="bw-sub">${from ? `From ${esc(from)}` : 'Or start from a community bot'}</h3><div class="choice-grid">${tpl.map((t) => UI.choice({ act: 'bw-tpl', attrs: `data-pack="${esc(t.pack)}" data-t="${esc(t.name)}"`, on: !!(bw.template && bw.template.pack === t.pack && bw.template.name === t.name), icon: 'bots', title: t.name, desc: `${t.does} From ${t.pack} ${t.ver} (${t.by}).` })).join('')}</div>` : '';
+    if (bw.at === 0) return `${from ? tplHTML : ''}<div class="choice-grid">${Object.entries(PURPOSES).map(([k, p]) => UI.choice({ act: 'bw-purpose', attrs: `data-p="${k}"`, on: bw.purpose === k && !bw.template, icon: p.icon, title: p.title, desc: p.desc })).join('')}</div>${from ? '' : tplHTML}
       ${bw.purpose ? `<div class="stack" style="gap:12px;margin-top:6px">
         <div class="field${nameErr() ? ' bad' : ''}" data-field="name"><label for="bw-name">Name <span class="req">*</span></label><input class="input mono" id="bw-name" value="${esc(bw.name)}" data-on-input="bw-set" data-k="name" autocomplete="off"><div class="hint">How you'll refer to it, in chat and in config.</div><div class="ferr" role="alert">${nameErr()}</div></div>
         <div class="field"><label for="bw-desc">What it's for, in a line</label><input class="input" id="bw-desc" value="${esc(bw.description)}" data-on-input="bw-set" data-k="description" placeholder="Triages incidents for the API"></div>
@@ -111,7 +115,9 @@
         ${bw.at < STEPS.length - 1 ? `<button class="btn primary" ${why ? UI.off(why) : 'data-act="bw-next"'}>Next</button>` : `<button class="btn primary" data-act="bw-create">${icon('check')}Review and apply</button>`}</footer>
     </section>`; }, { nav: 'bots', after: (p, main) => { const s = main.querySelector('.nb-sheet'); if (s && !s.contains(document.activeElement)) s.focus({ preventScroll: true }); } });
   const redraw = () => UI.rerender();
-  UI.act('bw-purpose', (b) => { const p = PURPOSES[b.dataset.p], prev = bw.purpose && PURPOSES[bw.purpose]; bw.purpose = b.dataset.p; if (!bw.name || (prev && bw.name === prev.name)) bw.name = p.name; if (!bw.description || (prev && bw.description === prev.description)) bw.description = p.description; bw.events = new Set(p.events.filter((k) => events().some((e) => e.key === k))); redraw(); });
+  UI.act('bw-tpl', (b) => { const t = (UI.botTemplates ? UI.botTemplates() : []).find((x) => x.pack === b.dataset.pack && x.name === b.dataset.t); if (!t) return; const p = PURPOSES[t.purpose] || PURPOSES.custom;
+    bw.template = { pack: t.pack, ver: t.ver, name: t.name }; bw.purpose = t.purpose; if (!bw.name || Object.values(PURPOSES).some((x) => x.name === bw.name)) bw.name = S.view().bots.some((x) => x.name === t.bot) ? `${t.bot}-2` : t.bot; bw.description = t.does.split('.')[0]; bw.events = new Set(p.events.filter((k) => events().some((e) => e.key === k))); redraw(); });
+  UI.act('bw-purpose', (b) => { bw.template = null; const p = PURPOSES[b.dataset.p], prev = bw.purpose && PURPOSES[bw.purpose]; bw.purpose = b.dataset.p; if (!bw.name || (prev && bw.name === prev.name)) bw.name = p.name; if (!bw.description || (prev && bw.description === prev.description)) bw.description = p.description; bw.events = new Set(p.events.filter((k) => events().some((e) => e.key === k))); redraw(); });
   UI.act('bw-set', (el) => { bw[el.dataset.k] = el.value; if (el.tagName === 'SELECT') { redraw(); return; } const f = el.closest('.field');
     if (el.dataset.k === 'name' && f) { const e = nameErr(); f.classList.toggle('bad', !!e); f.querySelector('.ferr').textContent = e; }
     // every field re-checks Next as you type (a channel, the name), not only on the next render
@@ -134,5 +140,9 @@
   UI.act('bw-cancel', () => { bw = fresh(); });
   document.addEventListener('click', (e) => { if (e.target.classList && e.target.classList.contains('nb-scrim')) UI.acts['bw-close'](); }); // a click beside the sheet closes it
   document.addEventListener('keydown', (e) => { if (e.key !== 'Escape' || location.hash.split('?')[0] !== '#/bots/new' || document.querySelector('.modal, .drawer-scrim, #pop-menu, .fb-menu, .palette')) return; e.preventDefault(); UI.acts['bw-close'](); }, true); // capture: decided before any dialog's own Esc closes it
-  UI.act('bw-create', () => { if (bw.at !== STEPS.length - 1 || nameErr() || canNext()) return; const name = bw.name; S.stage('bots', name, botCfg(), `new bot ${name}`); chosenEvents().forEach((e) => S.stage('workflows', trigName(e), trigYAML(e), `trigger ${trigName(e)} hands ${e.on} to ${name}`)); D.prefs.returnTo = { href: `#/bots/${name}`, label: name }; bw = fresh(); UI.staged(D.pending[D.pending.length - 1]); });
+  UI.act('bw-create', () => { if (bw.at !== STEPS.length - 1 || nameErr() || canNext()) return; const name = bw.name, tp = bw.template;
+    // from a community bot: its pack installs in the same review (when it isn't already), and the bot remembers its source
+    if (tp && !S.view().packs.some((x) => String((x.cfg || {}).use || '').split('@')[0] === `conductor-packs/${tp.pack}`)) S.stage('packs', tp.pack, { use: `conductor-packs/${tp.pack}@${tp.ver}`, hold: true }, `install ${tp.pack} for its bot template ${tp.name}`);
+    if (tp) { D.botTemplates = D.botTemplates || {}; D.botTemplates[name] = { pack: tp.pack, ver: tp.ver, name: tp.name }; }
+    S.stage('bots', name, botCfg(), `new bot ${name}${tp ? ` from ${tp.pack} ${tp.ver}` : ''}`); chosenEvents().forEach((e) => S.stage('workflows', trigName(e), trigYAML(e), `trigger ${trigName(e)} hands ${e.on} to ${name}`)); D.prefs.returnTo = { href: `#/bots/${name}`, label: name }; bw = fresh(); UI.staged(D.pending[D.pending.length - 1]); });
 })();

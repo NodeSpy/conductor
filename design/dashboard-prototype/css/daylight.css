@@ -864,7 +864,7 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 .m-team-n { display: flex; align-items: center; gap: 10px; min-height: var(--control-h); }
 .m-team-t .m-team-sum { display: block; margin: 2px 0 0; }
 .m-team-t .fx { flex-wrap: nowrap; overflow: hidden; margin-top: 6px; }
-.m-solo { padding-top: 4px; }
+.m-solo { padding-top: 4px; padding-bottom: 4px; } .m-solo > .m-list { border-top: 0; } /* a bot on its own: a card of one row, no divider */
 .m-main b .bav-id { font-weight: normal; margin-left: 6px; }
 /* Card actions in fixed places (51): a card's action bar sits at its bottom, Edit (the first) at the left content edge
  * and Delete (the last) at the right; cards in a row are one height, so their bars line up */
@@ -875,3 +875,4 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 .section-title:has(> .btn) { align-items: center; }
 .m-team-t .fx { flex-wrap: wrap; row-gap: 0; line-height: 20px; max-height: 20px; overflow: hidden; align-items: center; } .m-team-t .fx > .fx-i { white-space: nowrap; flex: none; } /* a fact that doesn't fit drops whole */
 @media (max-width: 720px) { .m-team-t .fx { max-height: none; } .m-team-t .fx > .fx-i { white-space: normal; flex: 0 1 auto; } }
+.bw-sub { margin: 18px 0 8px; font: var(--type-label); color: var(--color-text-secondary); } .tpl-from { margin-bottom: var(--gap-stack); } .tpl-from > svg { flex: none; width: 16px; height: 16px; }

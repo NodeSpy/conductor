@@ -252,8 +252,12 @@ test.describe('packs and plugins', () => {
     await expect(page.locator('.diff').first()).toContainText('pr-review-team@1.5.0');
     await applyStaged(page);
     expect(await state(page, () => D.packs.find((p) => p.name === 'review').ver)).toBe('1.5.0');
+    // sre-bot ships only a bot template: it isn't on Packs; its steps are reached from the bot made from it
     await go(page, '#/extensions/packs');
-    await page.locator('a[href="#/extensions/pack/sre-bot"]').first().click();
+    await expect(page.locator('.pack-row', { hasText: 'sre-bot' })).toHaveCount(0);
+    await go(page, '#/bots/platform-sre/settings');
+    await expect(page.locator('.tpl-from')).toContainText('sre-bot 0.9.0');
+    await page.locator('.tpl-from a[href="#/extensions/pack/sre-bot"]').click();
     // the guided overrides: the step override is listed, with a way back to the pack's default
     await expect(page.locator('.dl-card', { hasText: 'Your overrides' })).toContainText('sweep/check');
     // the same block as YAML: a step the pack doesn't have is refused with the names it does have

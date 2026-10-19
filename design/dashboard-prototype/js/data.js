@@ -365,6 +365,8 @@ Primary Postgres for the platform services (acme/api, acme/web).
     terraform: [{ v: 'v0.4.0', date: 'Oct 1', notes: 'OpenTofu 1.8; plans show moved resources.' }, { v: 'v0.3.2', date: 'Aug 18', notes: 'Fixes a lock left behind after a cancelled apply.' }],
   };
   D.connVer = 2;
+  // which bots were made from a pack's bot template (conductor records it; the bot's page shows it and updates it there)
+  D.botTemplates = { 'platform-sre': { pack: 'sre-bot', ver: '0.9.0', name: 'SRE on-call' } };
   const RC = {
     paseo: { use: 'paseo', bin: 'paseo', default: true },
     'claude-cli': { use: 'cli', tool: 'claude-code', isolation: { mode: 'namespace' } },

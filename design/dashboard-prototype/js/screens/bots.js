@@ -693,6 +693,9 @@
     { k: 'peers', type: 'select-multi', label: 'Peers (bots it may message)', options: () => S.view().bots.map((b) => b.name), create: 'bot', createLabel: 'New bot', help: 'Teammates are already peers. A link needs both bots to list each other (or an operator bot_links pair).' },
   ];
   const dv = { name: null, draft: null, base: null, charter: null };
+  // a bot template's update happens on the bot's page (38), as a change to the pack it came from
+  UI.act('tpl-update', (b) => { const pk = D.packs.find((x) => String((x.cfg || {}).use || '').split('@')[0] === `conductor-packs/${b.dataset.p}`);
+    UI.confirm({ title: `Update ${b.dataset.p} to ${b.dataset.v}?`, body: 'Its template, runbooks and knowledge update; your changes to the bot stay. You review the change before it applies.', ok: 'Stage the update' }).then((ok) => { if (!ok || !pk) return; UI.staged(S.stage('packs', pk.name, Object.assign({}, S.staged('packs', pk.name) || pk.cfg, { use: `conductor-packs/${b.dataset.p}@${b.dataset.v}` }), `update ${b.dataset.p} to ${b.dataset.v}`)); }); });
   function settings(m, isNew) {
     const key = isNew ? '$new' : m.name;
     const q = new URLSearchParams((location.hash.split('?')[1] || ''));
@@ -711,7 +714,9 @@
     // the form takes the full width; its YAML is one click away (Edit as YAML, here and in the bot's ⋯), not a second
     // column; what's wrong sits above the action bar, which sticks to the bottom while there are unsaved changes
     const adv = !!D.prefs.advanced;
-    const body = `<div class="stack def-form" data-bot="${esc(key)}"><div class="panel"><div class="panel-head"><h3>Identity &amp; charter</h3></div><div class="panel-body def-grid">
+    const tpl = !isNew && (D.botTemplates || {})[m.name], tplUpd = tpl && UI.botTemplates && (UI.botTemplates().find((t) => t.pack === tpl.pack) || {}).update;
+    const tplHTML = tpl ? `<div class="callout info tpl-from">${icon('bots')}<span class="grow">Made from <b>${esc(tpl.name)}</b>, in <b>${esc(tpl.pack)} ${esc(tpl.ver)}</b> (official)${tplUpd ? ` · <b>${esc(tplUpd)}</b> is available` : ''}. Your changes to its charter, knowledge and permissions stay when it updates. <a class="link" href="#/extensions/pack/${esc(tpl.pack)}">The pack’s steps and runbooks</a></span>${tplUpd ? `<button type="button" class="btn sm secondary" data-act="tpl-update" data-p="${esc(tpl.pack)}" data-v="${esc(tplUpd)}">Update to ${esc(tplUpd)}…</button>` : ''}</div>` : '';
+    const body = `${tplHTML}<div class="stack def-form" data-bot="${esc(key)}"><div class="panel"><div class="panel-head"><h3>Identity &amp; charter</h3></div><div class="panel-body def-grid">
           ${isNew ? UI.fieldHTML({ k: 'df.$name', type: 'string', req: true, label: 'Name', ph: 'e.g. data-steward' }, dv.newName) : ''}
           ${fields}
         </div></div></div>

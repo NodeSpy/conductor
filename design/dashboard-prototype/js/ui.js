@@ -28,7 +28,7 @@
   /* ---------- status marks, labels, filter chips, counts, row states (css/marks.css) ----------
    * The only way screens draw these. The brand's final status-and-label system swaps in here and in marks.css. */
   // state → Daylight mark and default word (design/brand/status/marks.js STATES)
-  const SG = { ok: ['success', 'Passed'], success: ['success', 'Passed'], run: ['running', 'Running'], wait: ['warning', 'Waiting'], fail: ['danger', 'Failed'], idle: ['neutral', 'Parked'], shadow: ['shadow', 'Shadow'], ember: ['needs-you', 'Needs you'], skip: ['skipped', 'Not reached'], staged: ['staged', 'Not applied'], ready: ['ready', 'Ready'] }; // ready: set to start, not started (a plain ring; ‖ is parked)
+  const SG = { ok: ['success', 'Passed'], success: ['success', 'Passed'], run: ['running', 'Running'], wait: ['warning', 'Waiting'], fail: ['danger', 'Failed'], idle: ['neutral', 'Parked'], shadow: ['shadow', 'Shadow'], ember: ['needs-you', 'Needs you'], skip: ['skipped', 'Not reached'], staged: ['staged', 'Not applied'], ready: ['ready', 'Ready'] }; // ready: set to start, not started (the brand's hollow dot: Passed not yet filled; ‖ is parked)
   /** The mark alone (a 12px state shape in its state colour), for margins, trees and lanes. */
   UI.mark = (s, o = {}) => { const g = SG[s] || SG.idle; return `<span class="st mk-only${o.lg ? ' lg' : ''}" data-s="${s}"${o.label ? ` role="img" aria-label="${UI.esc(o.label === true ? g[1] : o.label)}"` : ''}><i>${UI.glyph(g[0])}</i></span>`; };
   /** A status mark: mark + word (marks.js status()). opts: { cls, sm, lg, tip, id } */
