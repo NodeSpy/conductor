@@ -64,7 +64,7 @@
 .wl-ll { color: var(--color-text-tertiary); }
 .wl-lv { font-variant-numeric: tabular-nums; }
 .wl-lrow:not(:has(.wl-meter)) .wl-lv { grid-column: 2 / -1; }
-.wl-meter { display: block; height: 6px; border-radius: var(--radius-xs); background: var(--color-bg-overlay); overflow: hidden; }
+.wl-meter { display: block; height: 6px; border-radius: var(--radius-xs); background: var(--color-border-default); overflow: hidden; }
 .wl-meter > i { display: block; height: 100%; background: var(--color-icon-default); border-radius: var(--radius-xs); }
 .wl-meter > i[data-hi="1"] { background: var(--color-status-warning-solid); }
 .dl-card > .wl-limits + .dl-sub { margin: 16px 0 0; }

@@ -282,7 +282,7 @@
       ${D.daemon && D.daemon.paused ? `<div class="callout warn small wl-gapb">${icon('pause')}<span><b>All automation is paused,</b> so nothing is paid until you resume it. <a class="dl-link" href="#/safety?show=pause">Safety</a></span></div>` : ''}
       ${wait.length ? `<section class="dl-card wl-gapb"><header class="dl-ch"><h2>Waiting for you</h2>${UI.count(wait.length, { hot: true })}</header><ul class="dl-list dl-needs">${wait.map(puRow).join('')}</ul></section>` : ''}
       <section class="dl-card"><header class="dl-ch"><h2>Cards</h2></header>${W().cards.length ? `<ul class="dl-list dl-conns wl-flushl">${W().cards.map(cardRow).join('')}</ul>` : UI.empty({ title: 'No cards yet', body: 'Add a virtual or single-use card with its own limits; bots can then propose purchases with it for you to approve.', action: `<a class="btn sm secondary" href="#/browser/cards/new">Add a card</a>`, small: true })}
-        <p class="dl-sub wl-foot">${icon('shield')} ${ap.length ? `${esc(list(ap))} approve${ap.length === 1 ? 's' : ''} purchases, each with a passkey. An approval is used once, within ${esc(UI.humanSpan((D.payments || {}).approval_ttl || '1h'))}.` : '<b>Nobody can approve a purchase yet</b> (no operator has a key), so every purchase will wait.'} Pause all automation also stops every payment.</p></section>
+        <p class="dl-sub wl-foot">${icon('shield')} ${ap.length ? `${esc(list(ap))} approve${ap.length === 1 ? 's' : ''} purchases, each with a passkey. An approval is used once, within ${esc(ttlWord())}.` : '<b>Nobody can approve a purchase yet</b> (no operator has a key), so every purchase will wait.'} Pause all automation also stops every payment.</p></section>
       <section class="dl-card wl-gap"><header class="dl-ch"><h2>Purchases</h2><span class="dl-sub">receipts and decisions</span></header>${past.length ? `<ul class="dl-list dl-needs">${past.map(puRow).join('')}</ul>` : '<p class="dl-sub">Nothing bought yet.</p>'}</section></div>`; };
 
   function cardPage(c) {
@@ -388,7 +388,7 @@
       if (!ok) return; Object.assign(p, { status: deny ? 'denied' : 'approved', approver: 'ops', decided: now() }); if (reason) p.reason = reason; if (!deny) p.expires = new Date(Date.now() + 36e5).toISOString();
       audit('browser_purchase_' + (deny ? 'deny' : 'approve'), `purchase ${p.id} · ${p.total.toFixed(2)} ${p.currency} at ${host(p.merchant)}`);
       D.attention = D.attention.filter((a) => !String(a.href).includes(p.id)); S.save(); UI.rerender(); UI.refreshChrome();
-      UI.toast(deny ? 'Denied' : 'Approved', deny ? 'nothing will be paid' : `it may pay once, within ${esc(UI.humanSpan((D.payments || {}).approval_ttl || '1h'))}`, deny ? 'fail' : 'ok'); });
+      UI.toast(deny ? 'Denied' : 'Approved', deny ? 'nothing will be paid' : `it may pay once, within ${esc(ttlWord())}`, deny ? 'fail' : 'ok'); });
     if (!deny) return sign('');
     UI.form({ caps: 'deny', title: 'Deny this purchase', fields: [{ k: 'reason', type: 'text', label: 'Why (the agent is told)', ph: 'Not this month.' }], submit: 'Next', onSubmit: (v) => { UI.closeModal(); setTimeout(() => sign((v.reason || '').trim()), 0); return false; } }); });
 
