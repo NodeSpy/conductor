@@ -154,6 +154,10 @@ type TeamBudget struct {
 	// that sets none inherits it), and no sweep starts once the team's
 	// sweeps have used it up.
 	Proactive *ProactiveBudget `yaml:"proactive,omitempty"`
+	// Purchases are the team's purchase caps: they apply to every bot of
+	// the team (each bot's own spend), and a bot's purchases: can only
+	// narrow them.
+	Purchases *PurchaseLimits `yaml:"purchases,omitempty"`
 }
 
 // BotIsolation is a bot's (or a team's) session policy. Unset fields
@@ -407,6 +411,9 @@ func checkTeamCeilings(team string, t TeamConfig, m BotConfig) error {
 		}
 	}
 	a := m.Autonomy
+	if err := m.Purchases.narrows(t.Budget.Purchases, "purchases", team); err != nil {
+		return err
+	}
 	if len(a.Unattended) > 0 && t.Autonomy.Ceiling != TierCommitMoney {
 		return fmt.Errorf("autonomy.unattended buys without approval, above team %s's autonomy.ceiling %q — the team must set autonomy.ceiling: %s", team, t.Autonomy.Ceiling, TierCommitMoney)
 	}
@@ -653,6 +660,9 @@ func (c *Config) validateBotTeam(name string, t TeamConfig) error {
 				return fmt.Errorf("autonomy.tiers.%s: bad pattern %q", tier, p)
 			}
 		}
+	}
+	if err := t.Budget.Purchases.check("budget.purchases"); err != nil {
+		return err
 	}
 	if sc := t.Budget.SpendCap; sc != nil {
 		if sc.PerAction <= 0 || sc.PerPeriod <= 0 {

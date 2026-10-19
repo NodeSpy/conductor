@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -18,6 +20,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/skill"
+	"github.com/NodeSpy/conductor/internal/store"
 	"github.com/NodeSpy/conductor/internal/vaults"
 )
 
@@ -44,6 +47,7 @@ var browserWalletOps = map[string]bool{
 	"browser-card-add": true, "browser-card-set": true, "browser-card-unset": true, "browser-card-bind": true, "browser-card-rm": true,
 	"browser-card-freeze": true, "browser-card-unfreeze": true,
 	"browser-wallet": true, "browser-purchases": true, "browser-purchase": true, "browser-purchase-decide": true,
+	"browser-case-budget": true,
 }
 
 // browserWalletReq is a wallet command's body.
@@ -73,6 +77,16 @@ type browserWalletReq struct {
 	Reason     string                       `json:"reason,omitempty"`
 	DryRun     bool                         `json:"dry_run,omitempty"`
 	Via        string                       `json:"via,omitempty"`
+	// browser-case-budget: a bot's case and its spend_limit (Clear drops
+	// it; Show only reads).
+	Bot       string   `json:"bot,omitempty"`
+	Case      string   `json:"case,omitempty"`
+	Amount    string   `json:"amount,omitempty"`
+	Currency  string   `json:"currency,omitempty"`
+	Card      string   `json:"card,omitempty"`
+	BMerchant []string `json:"budget_merchants,omitempty"`
+	Clear     bool     `json:"clear,omitempty"`
+	Show      bool     `json:"show,omitempty"`
 }
 
 // walletSettings converts the config's profiles and cards.
@@ -88,6 +102,23 @@ func walletSettings(cfg *config.Config, st *browser.Settings) {
 		return &browser.SecretRef{Vault: r.Vault, Key: r.Key, Named: r.Named, Env: r.Env, Literal: r.Literal}
 	}
 	st.PurchaseTTL = b.Payments.ApprovalTTLOr()
+	for name, bc := range cfg.Bots {
+		if st.BotTeam == nil {
+			st.BotTeam, st.BotPurchases = map[string]string{}, map[string]*config.PurchaseLimits{}
+		}
+		st.BotTeam[name] = string(bc.Team)
+		if bc.Purchases != nil {
+			st.BotPurchases[name] = bc.Purchases
+		}
+	}
+	for name, tc := range cfg.Teams {
+		if tc.Budget.Purchases != nil {
+			if st.TeamPurchases == nil {
+				st.TeamPurchases = map[string]*config.PurchaseLimits{}
+			}
+			st.TeamPurchases[name] = tc.Budget.Purchases
+		}
+	}
 	if len(b.Profiles) > 0 {
 		st.Profiles = map[string]browser.Profile{}
 	}
@@ -446,7 +477,17 @@ func browserWalletControl(cfg *config.Config, m *browser.Manager, req controlReq
 		if err != nil || !ok {
 			return fail(fmt.Errorf("browser: no purchase %s", q.Purchase))
 		}
-		return data(map[string]any{"purchase": p, "approvers": cfg.PaymentApprovers()})
+		// The approval's view: every layer's remaining budget as it stands
+		// now (this purchase not counted), and at the last check.
+		now, nowErr := m.PurchaseLayers(p)
+		out := map[string]any{"purchase": p, "approvers": cfg.PaymentApprovers(), "remaining_by_layer": browser.RemainingByLayer(now)}
+		if nowErr != nil {
+			out["would_refuse"] = strings.TrimPrefix(nowErr.Error(), "browser: refused: ")
+		}
+		return data(out)
+
+	case "browser-case-budget":
+		return caseBudgetOp(cfg, m, q, data, fail, audit)
 
 	case "browser-purchase-decide":
 		if m.Purchases == nil {
@@ -559,7 +600,14 @@ Purchases:
   purchase show ID
   purchase approve ID [--as OPERATOR] [--key FILE] [--reason TEXT]   signed with your operator key
   purchase deny ID [--as OPERATOR] [--key FILE] [--reason TEXT]
-  spend                                     profiles, cards, and spend per card and identity
+  spend                                     profiles, cards, and spend per card, identity, bot and team
+
+Spend limits stack and the lowest wins: the card's, the card's per identity,
+the bot's (bots.<b>.purchases), its team's (teams.<t>.budget.purchases), and a
+ticket's spend_limit:
+  budget BOT CASE                           a ticket's budget: committed, remaining, its purchases
+  budget BOT CASE --amount 120.00 [--currency USD] [--card C] [--merchant ORIGIN]… [--dry-run]
+  budget BOT CASE --clear
 `
 
 // browserWalletCmd is the operator's wallet commands.
@@ -660,6 +708,15 @@ func browserWalletCmd(cmd string, rest []string) error {
 		return pos[1], nil
 	}
 	switch cmd {
+	case "budget":
+		// conductor browser budget BOT CASE [--amount N [--currency C] [--card X] [--merchant O]… | --clear] [--dry-run]
+		if len(pos) != 2 {
+			return fmt.Errorf("usage: conductor browser budget BOT CASE [--amount 120.00 [--currency USD] [--card C] [--merchant ORIGIN]… | --clear] [--dry-run]")
+		}
+		q := browserWalletReq{Bot: pos[0], Case: pos[1], Amount: one(multi, "amount"), Currency: one(multi, "currency"), Card: one(multi, "card"),
+			BMerchant: list(multi, "merchant"), Clear: bools["clear"], DryRun: bools["dry-run"]}
+		q.Show = q.Amount == "" && !q.Clear
+		return show(call("browser-case-budget", q))
 	case "spend":
 		return show(call("browser-wallet", browserWalletReq{}))
 	case "purchases":
@@ -740,8 +797,10 @@ func purchaseDecide(sock map[string]any, decision, id string, multi map[string][
 		return err
 	}
 	var v struct {
-		Purchase  browser.Purchase `json:"purchase"`
-		Approvers []string         `json:"approvers"`
+		Purchase  browser.Purchase     `json:"purchase"`
+		Approvers []string             `json:"approvers"`
+		Remaining []browser.LayerState `json:"remaining_by_layer"`
+		Would     string               `json:"would_refuse"`
 	}
 	if err := json.Unmarshal(resp.Data, &v); err != nil {
 		return err
@@ -775,6 +834,24 @@ func purchaseDecide(sock map[string]any, decision, id string, multi map[string][
 			}
 			return ""
 		}(), p.Why)
+	if p.CaseRef != "" {
+		fmt.Printf("  under ticket %s\n", p.CaseRef)
+	}
+	for _, l := range v.Remaining {
+		mark := " "
+		if l.Binding {
+			mark = "*"
+		}
+		fmt.Printf("  %s %-40s %-8s %.2f of %.2f %s left%s\n", mark, l.Layer, l.Window, l.Remaining, l.Limit, l.Currency, func() string {
+			if l.Note != "" {
+				return " (" + l.Note + ")"
+			}
+			return ""
+		}())
+	}
+	if v.Would != "" && decision == "approve" {
+		fmt.Printf("  as things stand, the approval is refused: %s\n", v.Would)
+	}
 	key := one(multi, "key")
 	if key == "" {
 		f, err := os.CreateTemp("", "conductor-operator-*.pub")
@@ -841,7 +918,8 @@ func botPurchase(ctx context.Context, c browser.Principal, p browser.Purchase) (
 		items = append(items, fmt.Sprintf("%dx %s", max(it.Qty, 1), it.Name))
 	}
 	opts := map[string]any{"purchase": p.ID, "card": p.Card, "merchant": p.Merchant, "total": p.Total, "currency": p.Currency,
-		"recurring": p.Recurring, "interval": p.Interval, "items": strings.Join(items, ", "), "why": p.Why}
+		"recurring": p.Recurring, "interval": p.Interval, "items": strings.Join(items, ", "), "why": p.Why,
+		"ticket": p.CaseRef, "binding_limit": p.Binding}
 	v, err := g.CheckVerb(ctx, botFlowIdentity(c), BrowserPurchaseVerb, opts)
 	if err != nil {
 		return "", false, err
@@ -903,4 +981,218 @@ func botGroups(id skill.Identity) []string {
 		}
 	}
 	return out
+}
+
+// browserLedger is the daemon's store (the case ledger tickets' budgets
+// are read from).
+var browserLedger atomic.Pointer[store.Store]
+
+// ledgerBudgets is the default CaseBudgets: a case's spend_limit in the bot
+// ledger, counted under the case's own reference. (A ticket store may
+// answer with its ticket's stable id as the key instead.)
+type ledgerBudgets struct{}
+
+func (ledgerBudgets) CaseBudget(caseRef string) (browser.CaseBudget, bool) {
+	st := browserLedger.Load()
+	bot, caseID, ok := parseCaseRef(caseRef)
+	if st == nil || !ok {
+		return browser.CaseBudget{}, false
+	}
+	c := st.Bot(bot).Cases[caseID]
+	if c == nil || c.SpendLimit == nil {
+		return browser.CaseBudget{}, false
+	}
+	amt, err := browser.ParseSpendLimit(c.SpendLimit.Amount)
+	if err != nil {
+		// An unreadable budget allows nothing (never falls back to none).
+		amt = 0
+	}
+	return browser.CaseBudget{Key: caseRef, Amount: amt, Currency: strings.ToUpper(c.SpendLimit.Currency),
+		Card: c.SpendLimit.Card, Merchants: c.SpendLimit.Merchants}, true
+}
+
+// parseCaseRef reads "bot:<name>/<case>".
+func parseCaseRef(ref string) (bot, caseID string, ok bool) {
+	rest, ok := strings.CutPrefix(ref, "bot:")
+	if !ok {
+		return "", "", false
+	}
+	bot, caseID, ok = strings.Cut(rest, "/")
+	return bot, caseID, ok && bot != "" && caseID != ""
+}
+
+// caseBudgetOp sets, clears or shows a bot case's (ticket's) spend_limit.
+// A new or larger budget widens what may be spent; a smaller one, or none,
+// narrows. A budget above a layer's 30-day cap is clamped there (warned).
+func caseBudgetOp(cfg *config.Config, m *browser.Manager, q *browserWalletReq, data func(any) controlResponse, fail func(error) controlResponse, audit func(map[string]any)) controlResponse {
+	st := browserLedger.Load()
+	if st == nil {
+		return fail(fmt.Errorf("browser: no case ledger on this daemon"))
+	}
+	c := st.Bot(q.Bot).Cases[q.Case]
+	if c == nil {
+		return fail(fmt.Errorf("browser: bot %s has no case %s", q.Bot, q.Case))
+	}
+	ref := browser.CaseRef(q.Bot, q.Case)
+	standing := func() map[string]any {
+		out := map[string]any{"bot": q.Bot, "case": q.Case, "ticket": ref, "spend_limit": c.SpendLimit}
+		if m.Purchases != nil {
+			used, list := m.Purchases.Committed(ref)
+			out["committed"], out["purchases"] = used, list
+			if c.SpendLimit != nil {
+				if amt, err := browser.ParseSpendLimit(c.SpendLimit.Amount); err == nil {
+					out["remaining"] = math.Max(0, math.Round((amt-used)*100)/100)
+				}
+			}
+		}
+		if w := budgetClampWarning(cfg, q.Bot, c.SpendLimit); w != "" {
+			out["warning"] = w
+		}
+		return out
+	}
+	if q.Show {
+		return data(standing())
+	}
+	var next *store.SpendLimit
+	if !q.Clear {
+		amt, err := browser.ParseSpendLimit(q.Amount)
+		if err != nil {
+			return fail(fmt.Errorf("browser: %v", err))
+		}
+		cur := strings.ToUpper(q.Currency)
+		if cur == "" {
+			cur = "USD"
+		}
+		if len(cur) != 3 {
+			return fail(fmt.Errorf("browser: currency is an ISO code (USD, EUR, …)"))
+		}
+		for _, mo := range q.BMerchant {
+			if browser.CheckOrigin(mo) != nil {
+				return fail(fmt.Errorf("browser: merchant %q is not an exact origin", mo))
+			}
+		}
+		next = &store.SpendLimit{Amount: strconv.FormatFloat(amt, 'f', 2, 64), Currency: cur, Card: q.Card, Merchants: q.BMerchant}
+	}
+	change := classifyBudget(c.SpendLimit, next)
+	if q.DryRun {
+		return data(map[string]any{"change": change, "dry_run": true, "warning": budgetClampWarning(cfg, q.Bot, next)})
+	}
+	if err := st.UpdateBot(q.Bot, func(r *store.BotRecord) error {
+		cs := r.Cases[q.Case]
+		if cs == nil {
+			return fmt.Errorf("case %s vanished", q.Case)
+		}
+		cs.SpendLimit = next
+		return nil
+	}); err != nil {
+		return fail(err)
+	}
+	c.SpendLimit = next
+	audit(map[string]any{"action": "case-budget", "bot": q.Bot, "case": q.Case, "spend_limit": next, "change": change, "outcome": "ok"})
+	out := standing()
+	out["change"] = change
+	return data(out)
+}
+
+// classifyBudget: a new or larger budget, or one freed from a card or a
+// merchant list, widens; a smaller one or none narrows.
+func classifyBudget(before, after *store.SpendLimit) string {
+	amt := func(l *store.SpendLimit) float64 {
+		if l == nil {
+			return 0
+		}
+		f, _ := browser.ParseSpendLimit(l.Amount)
+		return f
+	}
+	switch {
+	case after == nil && before == nil:
+		return changeNeutral
+	case after == nil:
+		return changeNarrowing
+	case before == nil, amt(after) > amt(before), after.Currency != before.Currency,
+		before.Card != "" && after.Card != before.Card,
+		len(before.Merchants) > 0 && (len(after.Merchants) == 0 || widensList(before.Merchants, after.Merchants)):
+		return changeWidening
+	case amt(after) < amt(before), before.Card == "" && after.Card != "",
+		len(before.Merchants) == 0 && len(after.Merchants) > 0, len(after.Merchants) < len(before.Merchants):
+		return changeNarrowing
+	}
+	return changeNeutral
+}
+
+// budgetClampWarning says when a ticket's budget exceeds a 30-day cap of
+// the layers above it (the bot's, its team's, the card's): it is clamped
+// there at every check.
+func budgetClampWarning(cfg *config.Config, bot string, l *store.SpendLimit) string {
+	if l == nil {
+		return ""
+	}
+	amt, err := browser.ParseSpendLimit(l.Amount)
+	if err != nil {
+		return ""
+	}
+	lowest, by := amt, ""
+	consider := func(name string, cl config.CardLimits) {
+		if cl.CurrencyOr() == strings.ToUpper(l.Currency) && cl.PerMonth > 0 && cl.PerMonth < lowest {
+			lowest, by = cl.PerMonth, name
+		}
+	}
+	b := cfg.Bots[bot]
+	if pl := b.Purchases; pl != nil {
+		consider("bot "+bot, pl.CardLimits)
+		if cl, ok := pl.Cards[l.Card]; ok {
+			consider("bot "+bot+" on card "+l.Card, cl)
+		}
+	}
+	if t := string(b.Team); t != "" {
+		if pl := cfg.Teams[t].Budget.Purchases; pl != nil {
+			consider("team "+t, pl.CardLimits)
+			if cl, ok := pl.Cards[l.Card]; ok {
+				consider("team "+t+" on card "+l.Card, cl)
+			}
+		}
+	}
+	if l.Card != "" && cfg.Browser != nil {
+		if cd, ok := cfg.Browser.Cards[l.Card]; ok {
+			consider("card "+l.Card, cd.Limits)
+		}
+	}
+	if by == "" {
+		return ""
+	}
+	return fmt.Sprintf("the ticket's budget %.2f %s is clamped to %s's 30-day limit %.2f — a ticket can never exceed the layers above it", amt, l.Currency, by, lowest)
+}
+
+// browserAPIRoutes are the wallet's read-only routes on the operator API
+// (the dashboard's Needs-you purchases, spend, a ticket's budget). A
+// decision stays a signed control-socket op; nothing here returns a value.
+func browserAPIRoutes(mux *http.ServeMux) {
+	serve := func(w http.ResponseWriter, cmd string, q browserWalletReq) {
+		cfg, m := browserCfg.Load(), browserMgr.Load()
+		w.Header().Set("Content-Type", "application/json")
+		if cfg == nil || m == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "the browser is not configured on this daemon"})
+			return
+		}
+		r := browserWalletControl(cfg, m, controlRequest{Cmd: cmd, Wallet: &q})
+		if r.Error != "" {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": r.Error})
+			return
+		}
+		_, _ = w.Write(r.Data)
+	}
+	mux.HandleFunc("GET /v1/purchases", func(w http.ResponseWriter, r *http.Request) {
+		serve(w, "browser-purchases", browserWalletReq{Status: r.URL.Query().Get("status")})
+	})
+	mux.HandleFunc("GET /v1/purchases/{id}", func(w http.ResponseWriter, r *http.Request) {
+		serve(w, "browser-purchase", browserWalletReq{Purchase: r.PathValue("id")})
+	})
+	mux.HandleFunc("GET /v1/spend", func(w http.ResponseWriter, r *http.Request) {
+		serve(w, "browser-wallet", browserWalletReq{})
+	})
+	mux.HandleFunc("GET /v1/bots/{bot}/cases/{case}/budget", func(w http.ResponseWriter, r *http.Request) {
+		serve(w, "browser-case-budget", browserWalletReq{Bot: r.PathValue("bot"), Case: r.PathValue("case"), Show: true})
+	})
 }

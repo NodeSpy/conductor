@@ -90,6 +90,79 @@ func (l CardLimits) Caps() []SpendCap {
 // CurrencyOr is the limits' currency.
 func (l CardLimits) CurrencyOr() string { return SpendCap{Currency: l.Currency}.CurrencyOr() }
 
+// PurchaseLimits are a bot's or a team's purchase caps (per purchase, per
+// day, per 30 days) and, optionally, tighter ones per card. They stack
+// with the card's own limits and a ticket's spend_limit: every layer
+// applies, and the lowest wins. A team's are ceilings for its bots.
+type PurchaseLimits struct {
+	CardLimits `yaml:",inline"`
+	Cards      map[string]CardLimits `yaml:"cards,omitempty"`
+}
+
+// ForCard is the limits that apply with one card: the overall ones, and
+// the card's own (tighter) ones when set — as two layers.
+func (p *PurchaseLimits) ForCard(card string) []CardLimits {
+	if p == nil {
+		return nil
+	}
+	out := []CardLimits{p.CardLimits}
+	if c, ok := p.Cards[card]; ok {
+		out = append(out, c)
+	}
+	return out
+}
+
+func (p *PurchaseLimits) check(where string) error {
+	if p == nil {
+		return nil
+	}
+	if err := p.CardLimits.check(where); err != nil {
+		return err
+	}
+	for card, l := range p.Cards {
+		if err := l.check(where + ".cards." + card); err != nil {
+			return err
+		}
+		if l.CurrencyOr() != p.CurrencyOr() {
+			return fmt.Errorf("%s.cards.%s: currency %s differs from %s", where, card, l.CurrencyOr(), p.CurrencyOr())
+		}
+	}
+	return nil
+}
+
+// narrows refuses a bot's limits past its team's (each cap, overall and
+// per card): a bot can only narrow.
+func (p *PurchaseLimits) narrows(team *PurchaseLimits, where, teamName string) error {
+	if p == nil || team == nil {
+		return nil
+	}
+	if p.CurrencyOr() != team.CurrencyOr() {
+		return fmt.Errorf("%s currency %s differs from team %s's %s", where, p.CurrencyOr(), teamName, team.CurrencyOr())
+	}
+	fit := func(what string, b, t CardLimits) error {
+		switch {
+		case b.PerPurchase > t.PerPurchase:
+			return fmt.Errorf("%s.per_purchase %g exceeds team %s's %g", what, b.PerPurchase, teamName, t.PerPurchase)
+		case b.PerDay > t.PerDay:
+			return fmt.Errorf("%s.per_day %g exceeds team %s's %g", what, b.PerDay, teamName, t.PerDay)
+		case b.PerMonth > t.PerMonth:
+			return fmt.Errorf("%s.per_month %g exceeds team %s's %g", what, b.PerMonth, teamName, t.PerMonth)
+		}
+		return nil
+	}
+	if err := fit(where, p.CardLimits, team.CardLimits); err != nil {
+		return err
+	}
+	for card, l := range p.Cards {
+		if tl, ok := team.Cards[card]; ok {
+			if err := fit(where+".cards."+card, l, tl); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // BrowserPayments are how purchases are approved.
 type BrowserPayments struct {
 	// Approvers are the operators (operators:, each with an ssh_key) who

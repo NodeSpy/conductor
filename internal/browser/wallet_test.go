@@ -32,6 +32,12 @@ func ledger(t *testing.T) (*Purchases, *clock) {
 
 var caller = Principal{Identity: "agent:t@o/r", Requester: RequesterOperator}
 
+// checkL evaluates every layer for amt more (the card's and the caller's).
+func checkL(l *Purchases, card Card, who Principal, amt float64, cur string) error {
+	_, err := l.Evaluate(SpendRules{Card: card, Who: who, Bot: who.Bot}, Purchase{Total: amt, Currency: cur, Merchant: "https://shop.example.com"}, "")
+	return err
+}
+
 func propose(t *testing.T, l *Purchases, total float64) Purchase {
 	t.Helper()
 	p, err := l.Propose(Purchase{Card: "visa", Merchant: "https://shop.example.com", Total: total, Currency: "USD", Identity: caller.Identity}, time.Hour)
@@ -47,7 +53,7 @@ func TestPurchaseApprovalSingleUseAndExpiry(t *testing.T) {
 	l, ck := ledger(t)
 	card := testCardDef()
 	p := propose(t, l, 12)
-	if _, err := l.Consume(p.ID, caller, card); err == nil || !strings.Contains(err.Error(), "not approved") {
+	if _, err := l.Consume(p.ID, caller, SpendRules{Card: card, Who: caller}); err == nil || !strings.Contains(err.Error(), "not approved") {
 		t.Fatalf("a pending purchase was spent: %v", err)
 	}
 	if _, err := l.Approve(p.ID, "another digest", "op", time.Minute, false); err == nil {
@@ -59,20 +65,20 @@ func TestPurchaseApprovalSingleUseAndExpiry(t *testing.T) {
 	if _, err := l.Approve(p.ID, p.Digest, "op", time.Minute, false); err == nil {
 		t.Fatal("approved twice")
 	}
-	if _, err := l.Consume(p.ID, Principal{Identity: "agent:other@o/r"}, card); err == nil || !strings.Contains(err.Error(), "another session") {
+	if _, err := l.Consume(p.ID, Principal{Identity: "agent:other@o/r"}, SpendRules{Card: card, Who: caller}); err == nil || !strings.Contains(err.Error(), "another session") {
 		t.Fatalf("another session spent it: %v", err)
 	}
-	if _, err := l.Consume(p.ID, caller, card); err != nil {
+	if _, err := l.Consume(p.ID, caller, SpendRules{Card: card, Who: caller}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.Consume(p.ID, caller, card); err == nil || !strings.Contains(err.Error(), "already used") {
+	if _, err := l.Consume(p.ID, caller, SpendRules{Card: card, Who: caller}); err == nil || !strings.Contains(err.Error(), "already used") {
 		t.Fatalf("a second use: %v", err)
 	}
 	// Expiry: approved, then its minute passes.
 	q := propose(t, l, 5)
 	l.Approve(q.ID, q.Digest, "op", time.Minute, false)
 	ck.t = ck.t.Add(time.Minute)
-	if _, err := l.Consume(q.ID, caller, card); err == nil || !strings.Contains(err.Error(), "expired") {
+	if _, err := l.Consume(q.ID, caller, SpendRules{Card: card, Who: caller}); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("an expired approval: %v", err)
 	}
 	if got, _, _ := l.Get(q.ID); got.Status != PurchaseExpired {
@@ -88,7 +94,7 @@ func TestPurchaseApprovalSingleUseAndExpiry(t *testing.T) {
 	s := propose(t, l, 5)
 	l.Approve(s.ID, s.Digest, "op", time.Minute, false)
 	ck.t = ck.t.Add(time.Minute - time.Nanosecond)
-	if _, err := l.Consume(s.ID, caller, card); err != nil {
+	if _, err := l.Consume(s.ID, caller, SpendRules{Card: card, Who: caller}); err != nil {
 		t.Fatalf("just inside the minute: %v", err)
 	}
 }
@@ -121,16 +127,16 @@ func TestCardLimitsAndPeriodBoundary(t *testing.T) {
 		if _, err := l.Approve(p.ID, p.Digest, "op", time.Hour, false); err != nil {
 			t.Fatal(err)
 		}
-		_, err := l.Consume(p.ID, caller, card)
+		_, err := l.Consume(p.ID, caller, SpendRules{Card: card, Who: caller})
 		return err
 	}
-	if err := l.CheckLimits(card, caller, 30.01, "USD"); err == nil {
+	if err := checkL(l, card, caller, 30.01, "USD"); err == nil {
 		t.Fatal("over per_purchase")
 	}
-	if err := l.CheckLimits(card, caller, 30, "USD"); err != nil {
+	if err := checkL(l, card, caller, 30, "USD"); err != nil {
 		t.Fatalf("exactly per_purchase: %v", err)
 	}
-	if err := l.CheckLimits(card, caller, 10, "EUR"); err == nil {
+	if err := checkL(l, card, caller, 10, "EUR"); err == nil {
 		t.Fatal("another currency")
 	}
 	if err := spend(30); err != nil {
@@ -139,7 +145,7 @@ func TestCardLimitsAndPeriodBoundary(t *testing.T) {
 	if err := spend(20); err != nil {
 		t.Fatalf("exactly the day's 50: %v", err)
 	}
-	if err := spend(0.01); err == nil || !strings.Contains(err.Error(), "24h") {
+	if err := spend(0.01); err == nil || !strings.Contains(err.Error(), "daily limit") {
 		t.Fatalf("over the day: %v", err)
 	}
 	// A refused consumption spent its approval.
@@ -147,7 +153,7 @@ func TestCardLimitsAndPeriodBoundary(t *testing.T) {
 		t.Fatalf("the refused purchase is recorded: %+v", ps)
 	}
 	ck.t = ck.t.Add(24*time.Hour - time.Second)
-	if err := l.CheckLimits(card, caller, 1, "USD"); err == nil {
+	if err := checkL(l, card, caller, 1, "USD"); err == nil {
 		t.Fatal("a second before the day ends, the day is still full")
 	}
 	ck.t = ck.t.Add(time.Second)
@@ -158,17 +164,17 @@ func TestCardLimitsAndPeriodBoundary(t *testing.T) {
 		t.Fatalf("100 in the month exactly: %v", err)
 	}
 	ck.t = ck.t.Add(48 * time.Hour)
-	if err := spend(1); err == nil || !strings.Contains(err.Error(), "720h") {
+	if err := spend(1); err == nil || !strings.Contains(err.Error(), "30-day limit") {
 		t.Fatalf("over the month: %v", err)
 	}
 	// An identity's limit: only its own spend counts against it.
 	l2, _ := ledger(t)
 	card.IdentityLimits = map[string]config.CardLimits{"bot:shopper": {PerPurchase: 5, PerDay: 5, PerMonth: 10, Currency: "USD"}}
 	bot := Principal{Identity: "agent:b@o/r", Groups: []string{"bot:shopper"}, Bot: "shopper"}
-	if err := l2.CheckLimits(card, bot, 6, "USD"); err == nil || !strings.Contains(err.Error(), "bot:shopper") {
+	if err := checkL(l2, card, bot, 6, "USD"); err == nil || !strings.Contains(err.Error(), "bot:shopper") {
 		t.Fatalf("the bot's per-purchase: %v", err)
 	}
-	if err := l2.CheckLimits(card, caller, 6, "USD"); err != nil {
+	if err := checkL(l2, card, caller, 6, "USD"); err != nil {
 		t.Fatalf("someone else's limit applied: %v", err)
 	}
 }

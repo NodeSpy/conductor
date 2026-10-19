@@ -990,6 +990,7 @@ func cmdRun(args []string) error {
 	}
 	defer stopSandbox()
 	// The browser (after the sandbox, whose identities it serves).
+	browserLedger.Store(st)
 	defer wireBrowser(ctx, cfg, notifier, st.Audit, logf)()
 	if cfg.AgentSandboxOn() && !cfg.DryRun {
 		// The sandboxed paseo provider entries this daemon's paseo
@@ -1623,7 +1624,8 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		"browser-login-usage", "browser-login-check", "browser-login-test", "browser-vault-items", "browser-vault-item",
 		"browser-profile-add", "browser-profile-set", "browser-profile-unset", "browser-profile-bind", "browser-profile-rm",
 		"browser-card-add", "browser-card-set", "browser-card-unset", "browser-card-bind", "browser-card-rm",
-		"browser-card-freeze", "browser-card-unfreeze", "browser-wallet", "browser-purchases", "browser-purchase", "browser-purchase-decide":
+		"browser-card-freeze", "browser-card-unfreeze", "browser-wallet", "browser-purchases", "browser-purchase", "browser-purchase-decide",
+		"browser-case-budget":
 		writeControlResp(conn, browserControl(conn, req))
 	case "retry":
 		if retry == nil {

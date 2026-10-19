@@ -107,6 +107,19 @@ type Case struct {
 	// Delegation is set on a case another bot delegated to this one: the
 	// edge it came in on, and the ancestry the loop guard checks.
 	Delegation *DelegationRef `json:"delegation,omitempty"`
+	// SpendLimit is the case's (the ticket's) spend budget: what every
+	// purchase proposed under it may add up to over its whole life, never
+	// transferable. Read through the browser's CaseBudgets.
+	SpendLimit *SpendLimit `json:"spend_limit,omitempty"`
+}
+
+// SpendLimit is a ticket's spend budget: {amount: "50.00", currency:
+// "USD", card: <optional>, merchants: [<optional>]}.
+type SpendLimit struct {
+	Amount    string   `json:"amount"`
+	Currency  string   `json:"currency"`
+	Card      string   `json:"card,omitempty"`
+	Merchants []string `json:"merchants,omitempty"`
 }
 
 // Delegation is one delegation edge, kept by the delegating bot: what it

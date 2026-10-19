@@ -309,7 +309,8 @@ func TestTemplateForbiddenKeys(t *testing.T) {
 		"skill": "{ verbs: [gh.merge] }", "grant": "{ gh.merge: observe }", "autonomy": "{ shadow: false }", "isolation": "{ sandbox: optional }",
 		"browser": "{ logins: [x.example.com] }", "network": "[x:443]", "egress": "[x:443]", "memory_repo": "/tmp/m", "seed_dir": "/tmp/s",
 		"memory": "{ index_budget: 60k }", "attachments": "{ max_file: 500MB }", "peers": "[other]", "terraform": "{ plan_connector: x }", "home": "{ mode: bypass }",
-		"worker": "{ runtime: x }", "disabled": "true", "use": "kit/other", "charter_digest": "abc"}
+		"worker": "{ runtime: x }", "disabled": "true", "use": "kit/other", "charter_digest": "abc",
+		"purchases": "{ per_purchase: 500, per_day: 500, per_month: 500 }"}
 	// The list is fixed here, not read from the map: dropping a key from
 	// forbiddenTemplateKeys must fail this test.
 	if len(values) != len(forbiddenTemplateKeys) {

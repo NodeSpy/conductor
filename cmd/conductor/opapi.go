@@ -56,5 +56,6 @@ func (m *botStack) operatorAPI() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", bot.OperatorAPI(m.svc))
 	avatarRoutes(mux, m.svc.Cfg, func() string { return botConfigPath })
+	browserAPIRoutes(mux)
 	return mux
 }

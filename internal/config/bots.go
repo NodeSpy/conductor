@@ -155,6 +155,11 @@ type BotConfig struct {
 	// bot's sessions may use (nil: whatever the browser config allows its
 	// identity).
 	Browser *BotBrowser `yaml:"browser,omitempty"`
+	// Purchases are the bot's own purchase caps (per purchase, per day, per
+	// 30 days, optionally per card): another layer under the card's limits,
+	// its team's and a ticket's spend_limit — the lowest wins. Inside its
+	// team's budget.purchases.
+	Purchases *PurchaseLimits `yaml:"purchases,omitempty"`
 }
 
 // BotProactive configures proactive sweeps. A sweep is a cli worker that
@@ -1184,6 +1189,9 @@ func (c *Config) validateBot(name string, m BotConfig) error {
 		if sc.PerAction > sc.PerPeriod {
 			return fmt.Errorf("autonomy.spend_cap: per_action exceeds per_period")
 		}
+	}
+	if err := m.Purchases.check("purchases"); err != nil {
+		return err
 	}
 	for pat, u := range a.Unattended {
 		where := "autonomy.unattended." + pat

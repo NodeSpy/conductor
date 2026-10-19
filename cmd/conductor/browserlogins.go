@@ -612,7 +612,7 @@ Pick from a vault (metadata only, never a value):
 // credFlags parses a credential command's flags: repeatable, comma lists.
 func credFlags(args []string) (pos []string, multi map[string][]string, bools map[string]bool) {
 	multi, bools = map[string][]string{}, map[string]bool{}
-	boolean := map[string]bool{"approval": true, "session": true, "dry-run": true, "stdin": true, "password-stdin": true, "otp-stdin": true, "json": true}
+	boolean := map[string]bool{"approval": true, "session": true, "dry-run": true, "clear": true, "stdin": true, "password-stdin": true, "otp-stdin": true, "json": true}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if !strings.HasPrefix(a, "--") || len(a) == 2 {

@@ -35,6 +35,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
@@ -80,6 +81,11 @@ type Settings struct {
 	Profiles    map[string]Profile
 	Cards       map[string]Card
 	PurchaseTTL time.Duration
+	// BotPurchases / TeamPurchases are bots' and teams' purchase caps, and
+	// BotTeam each bot's team (limits.go).
+	BotPurchases  map[string]*config.PurchaseLimits
+	TeamPurchases map[string]*config.PurchaseLimits
+	BotTeam       map[string]string
 }
 
 // LoginSiteConfig is one opted-in site: who may use it, and what further
@@ -129,6 +135,8 @@ type Manager struct {
 	Purchases   *Purchases
 	Paused      func() bool
 	BotPurchase func(ctx context.Context, c Principal, p Purchase) (proposal string, unattended bool, err error)
+	// Budgets reads a ticket's spend_limit (nil: no ticket layer).
+	Budgets CaseBudgets
 	// OnPurchase tells the operator a purchase waits on them (Needs you).
 	OnPurchase func(p Purchase)
 	// Store is the logins the operator added at runtime (nil = none): they

@@ -96,6 +96,9 @@ func purchaseView(p Purchase) map[string]any {
 	if p.Supersedes != "" {
 		out["supersedes"] = p.Supersedes
 	}
+	if p.Binding != "" {
+		out["binding_limit"] = p.Binding
+	}
 	switch p.Status {
 	case PurchasePending:
 		out["note"] = "waiting for the operator's approval — check with conductor browser purchase-status " + p.ID
@@ -183,17 +186,21 @@ func (m *Manager) proposePurchase(ctx context.Context, c Principal, st Settings,
 	for i := range p.Items {
 		p.Items[i].Name = clip(p.Items[i].Name, 120)
 	}
-	if err := m.Purchases.CheckLimits(card, c, total, cur); err != nil {
-		return Purchase{}, refuse("%v", err)
+	// The ticket it is proposed under: its spend_limit is a layer.
+	p.CaseRef = CaseRef(c.Bot, c.CaseID)
+	rules := m.rulesFor(st, card, p)
+	if rules.Budget != nil {
+		p.BudgetKey = rules.Budget.Key
 	}
 	ttl := st.PurchaseTTL
 	if ttl <= 0 {
 		ttl = time.Hour
 	}
-	p, err = m.Purchases.Propose(p, ttl)
+	p, err = m.Purchases.ProposeWithin(p, ttl, rules)
 	if err != nil {
 		return Purchase{}, err
 	}
+	entry["binding"] = p.Binding
 	entry["purchase"], entry["total"], entry["currency"], entry["recurring"] = p.ID, p.Total, p.Currency, p.Recurring
 	if c.Bot != "" {
 		if m.BotPurchase == nil {
@@ -206,7 +213,7 @@ func (m *Manager) proposePurchase(ctx context.Context, c Principal, st Settings,
 			return Purchase{}, refuse("%v", err)
 		}
 		if unattended && !p.Recurring {
-			p, err = m.Purchases.Approve(p.ID, p.Digest, "unattended (bot "+c.Bot+")", ttl, true)
+			p, err = m.Purchases.ApproveWithin(p.ID, p.Digest, "unattended (bot "+c.Bot+")", ttl, true, rules)
 			entry["unattended"] = true
 			return p, err
 		}
@@ -236,7 +243,7 @@ func (m *Manager) ApprovePurchase(id, digest, operator string) (Purchase, error)
 	if cd, ok := st.Cards[p.Card]; !ok || cd.Frozen || !cd.merchantAllowed(p.Merchant) {
 		return Purchase{}, fmt.Errorf("browser: purchase %s: card %s is gone, frozen, or no longer allows %s", id, p.Card, p.Merchant)
 	}
-	out, err := m.Purchases.Approve(id, digest, operator, ttlOr(st.PurchaseTTL), false)
+	out, err := m.Purchases.ApproveWithin(id, digest, operator, ttlOr(st.PurchaseTTL), false, m.rulesFor(st, st.Cards[p.Card], p))
 	if err == nil {
 		m.audit(map[string]any{"event": "browser", "action": "purchase-approve", "purchase": id, "card": p.Card, "merchant": p.Merchant,
 			"total": p.Total, "currency": p.Currency, "recurring": p.Recurring, "by": "operator", "operator": operator, "outcome": "ok"})
@@ -254,7 +261,12 @@ func (m *Manager) ApproveBotPurchase(id, bot, proposal string) (Purchase, error)
 	if err != nil || !ok || p.Bot != bot || p.BotProposal != proposal {
 		return Purchase{}, fmt.Errorf("browser: purchase %s is not bot %s's proposal %s", id, bot, proposal)
 	}
-	out, err := m.Purchases.Approve(id, p.Digest, "bot proposal "+proposal, ttlOr(m.settings().PurchaseTTL), false)
+	st := m.settings()
+	cd, ok := st.Cards[p.Card]
+	if !ok || cd.Frozen || !cd.merchantAllowed(p.Merchant) {
+		return Purchase{}, fmt.Errorf("browser: purchase %s: card %s is gone, frozen, or no longer allows %s", id, p.Card, p.Merchant)
+	}
+	out, err := m.Purchases.ApproveWithin(id, p.Digest, "bot proposal "+proposal, ttlOr(st.PurchaseTTL), false, m.rulesFor(st, cd, p))
 	if err == nil {
 		m.audit(map[string]any{"event": "browser", "action": "purchase-approve", "purchase": id, "bot": bot, "proposal": proposal, "outcome": "ok"})
 	}
@@ -786,13 +798,15 @@ func (m *Manager) pay(ctx context.Context, s *session, in *Instance, t *tab, c P
 			np := p
 			np.Total, np.Supersedes, np.Why = seen, p.ID, "the checkout's total changed from the approved "+strconv.FormatFloat(p.Total, 'f', 2, 64)
 			np.BotProposal, np.Approver, np.Receipt, np.Reason = "", "", nil, ""
-			if q, perr := m.Purchases.Propose(np, ttlOr(st.PurchaseTTL)); perr == nil {
-				if m.OnPurchase != nil {
-					m.OnPurchase(q)
-				}
-				entry["new_purchase"] = q.ID
-				return nil, refuse("%s — a new purchase %s for %.2f %s waits for approval", strings.TrimPrefix(err.Error(), "browser: refused: "), q.ID, seen, p.Currency)
+			q, perr := m.Purchases.ProposeWithin(np, ttlOr(st.PurchaseTTL), m.rulesFor(st, card, np))
+			if perr != nil {
+				return nil, refuse("%s — and %.2f %s is not proposed again: %s", strings.TrimPrefix(err.Error(), "browser: refused: "), seen, p.Currency, strings.TrimPrefix(perr.Error(), "browser: refused: "))
 			}
+			if m.OnPurchase != nil {
+				m.OnPurchase(q)
+			}
+			entry["new_purchase"] = q.ID
+			return nil, refuse("%s — a new purchase %s for %.2f %s waits for approval", strings.TrimPrefix(err.Error(), "browser: refused: "), q.ID, seen, p.Currency)
 		}
 		return nil, err
 	}
@@ -811,7 +825,7 @@ func (m *Manager) pay(ctx context.Context, s *session, in *Instance, t *tab, c P
 		return nil, refuse("no card number and expiry field on this page's own document (a card form inside an embedded frame is not supported)")
 	}
 	// Spend the approval (single-use) and re-check the limits now.
-	if _, err := m.Purchases.Consume(id, c, card); err != nil {
+	if _, err := m.Purchases.Consume(id, c, m.rulesFor(st, card, p)); err != nil {
 		return nil, err
 	}
 	m.recordCardUse(c, p, "consumed")

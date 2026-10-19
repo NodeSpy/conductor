@@ -154,6 +154,7 @@ func wireBrowser(ctx context.Context, cfg *config.Config, notifier *notify.Notif
 		Purchases:   &browser.Purchases{Dir: cfg.BrowserStateDir()},
 		Paused:      pausedFor(cfg),
 		BotPurchase: botPurchase,
+		Budgets:     ledgerBudgets{},
 		OnPurchase: func(p browser.Purchase) {
 			msg := fmt.Sprintf("purchase %s waits for your approval: %.2f %s at %s on card %s (conductor browser purchase approve %s)", p.ID, p.Total, p.Currency, p.Merchant, p.Card, p.ID)
 			if p.Bot != "" {
@@ -214,6 +215,13 @@ func wireBrowser(ctx context.Context, cfg *config.Config, notifier *notify.Notif
 func browserCaller(token string, id skill.Identity) (browser.Principal, error) {
 	c := browser.Principal{Key: browser.SessionKey(token), Agent: id.Agent, Repo: id.Repo, Dispatch: id.Dispatch, Requester: requesterFor(id), Groups: groupsFor(id),
 		Bot: id.Bot, BotRole: id.BotRole, CaseID: id.CaseID}
+	if c.Bot != "" && c.CaseID == "" {
+		// A home session names no case: it acts for the case the gate holds
+		// it to (the least-trusted open one) — whose ticket budget applies.
+		if g := browserBotGate.Load(); g != nil {
+			_, c.CaseID = g.RequesterClass(botFlowIdentity(c))
+		}
+	}
 	switch {
 	case id.Sandbox != nil:
 		c.Identity, c.Workspace, c.Egress, c.Deny = id.Sandbox.Identity, id.Sandbox.Workspace, id.Sandbox.Egress, id.Sandbox.Deny
@@ -450,7 +458,7 @@ The operator's (on the daemon's control socket):
                                            (conductor browser credential --help)
   vault-items VAULT [--query Q] | vault-item VAULT ITEM
                                            a vault's items for picking — names and fields, never a value
-  profile … | card … | purchases | purchase show|approve|deny ID | spend
+  profile … | card … | purchases | purchase show|approve|deny ID | spend | budget BOT CASE …
                                            personal details, payment cards, purchase approvals, spend
                                            (conductor browser profile --help)
   --config PATH / --socket PATH            which daemon
@@ -471,7 +479,7 @@ func cmdBrowser(args []string) int {
 		err = browserOperator(args[0], args[1:])
 	case "credential", "credentials":
 		err = browserCredentialCmd(args[1:])
-	case "profile", "card", "purchases", "spend":
+	case "profile", "card", "purchases", "spend", "budget":
 		err = browserWalletCmd(args[0], args[1:])
 	case "purchase":
 		// The operator's purchase show|approve|deny; else the agent proposes one.

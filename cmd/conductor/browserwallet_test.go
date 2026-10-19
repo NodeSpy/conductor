@@ -179,6 +179,9 @@ func TestBotPurchaseThroughTheGate(t *testing.T) {
 		Amounts:  map[string]string{BrowserPurchaseVerb: "total"},
 		SpendCap: &config.SpendCap{PerAction: 50, PerPeriod: 100},
 	}}}
+	cfg.Browser.Cards = map[string]config.BrowserCard{"visa": {Number: &config.BrowserSecretRef{Env: "N"}, Expiry: &config.BrowserSecretRef{Env: "E"},
+		Merchants: []string{"https://shop.example.com"}, Identities: []string{"agent:shopper@home"},
+		Limits: config.CardLimits{PerPurchase: 30, PerDay: 50, PerMonth: 100}}}
 	st, err := store.Open(store.Options{StatePath: filepath.Join(t.TempDir(), "s.json")})
 	if err != nil {
 		t.Fatal(err)
