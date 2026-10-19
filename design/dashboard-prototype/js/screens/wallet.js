@@ -93,7 +93,7 @@
   /** A purchase's facts (the facts line): who, the shop, the total, the card, a subscription. */
   UI.purchaseFacts = (p, short) => { const c = card(p.card) || {};
     // the money and the shop first: on a phone the facts that don't fit one line fold away
-    return [{ icon: p.recurring ? 'repeat' : 'act-money', value: `${money(p.total, p.currency)}${perWord(p)}`, risky: true, pri: 1, label: p.recurring ? 'A subscription' : 'Total' }, { icon: 'store', value: host(p.merchant), pri: 1, label: 'Shop' },
+    return [Object.assign(UI.actionFact('browser.purchase'), { value: `${money(p.total, p.currency)}${perWord(p)}`, pri: 1, label: p.recurring ? 'A subscription' : 'Total' }) /* the shared money fact: danger, its glyph cut out of a solid tile */, { icon: 'store', value: host(p.merchant), pri: 1, label: 'Shop' },
       p.bot ? { icon: 'obj-bot', value: UI.botName(p.bot), href: `#/bots/${p.bot}`, pri: 1, label: 'Bot' } : { icon: 'obj-sandbox', value: who(p.identity), pri: 2, label: 'Asked for by' },
       short ? null : { icon: 'obj-card', value: `${p.card} •••• ${c.last4 || ''}`.trim(), href: `#/browser/cards/${p.card}`, pri: 2, label: 'Card' }]; };
   /* ---------- spend limits stack, and the lowest wins (Browser.md, "Spend limits stack") ----------
@@ -135,7 +135,7 @@
   /** The layers on an approval: what each leaves after this purchase, the tightest marked; an over-limit one is a refusal. */
   const layersHTML = (p) => { const ls = UI.limitLayers({ cardN: p.card, bot: p.bot, identity: p.identity, caseId: p.case, total: p.total, excludeId: p.id }), cur = ls.cur, over = ls.filter((l) => l.over);
     return `<ul class="wl-layers">${ls.map((l) => `<li class="${l.bind ? 'bind' : ''}${l.over ? ' over' : ''}">${l.over ? UI.mark('fail') : l.bind ? UI.mark('wait') : '<i></i>'}<span>${l.key === 'ticket' ? `This ticket’s budget` : esc(l.name)}</span><b>${roomWords(l, cur)}</b>${l.bind && !l.over ? '<span class="wl-tight">the tightest</span>' : ''}</li>`).join('')}</ul>
-      ${over.length ? `<p class="wl-flag">${UI.mark('fail')}<span><b>Conductor would refuse this now:</b> ${esc(UI.refusalWords(over[0], cur))}.</span></p>` : ''}`; };
+      ${over.length ? `<p class="wl-flag">${UI.mark('fail')}<span><b>If you approve it now, conductor refuses it:</b> ${esc(UI.refusalWords(over[0], cur))}.</span></p>` : ''}`; };
   /** What a purchase buys and on what terms: the items and total, a subscription flagged, the card and shop, the limits,
       what happens after you approve. A bot's approval page and this page's approval both draw it. */
   UI.purchaseWhat = (pOrProp) => { const p = pOrProp.purchase && typeof pOrProp.purchase === 'string' ? (D.purchases || []).find((x) => x.id === pOrProp.purchase) : pOrProp; if (!p) return '';
@@ -149,8 +149,8 @@
       <dl class="dl-where wl-where"><dt>Card</dt><dd><a class="dl-link" href="#/browser/cards/${esc(p.card)}">${esc(p.card)}</a> · ${esc(cardName(c))} · ${esc(KIND[c.kind || ''].toLowerCase())}${c.frozen ? ` · ${UI.statusMark('idle', 'frozen', { sm: true })}` : ''}</dd>
         <dt>Shop</dt><dd>${esc(host(p.merchant))} <span class="dl-sub">· ${(c.merchants || []).includes(p.merchant) ? 'one of the shops this card may pay' : 'not on this card’s list'}</span></dd>
         <dt>Limits</dt><dd><span class="dl-sub">What each limit leaves after this purchase; the lowest wins:</span>${layersHTML(p)}</dd>
-        <dt>Then</dt><dd>${esc(byWord(p))} may pay once, within ${esc(ttlWord())}, on ${esc(host(p.merchant))}’s checkout page. Conductor checks the page shows this total, fills the card itself and reads the receipt; if the page asks for more, nothing is paid and you’re asked again. ${p.bot ? esc(UI.botName(p.bot)) : 'The agent'} never sees the card.</dd>
-        <dt>Undo</dt><dd>Conductor can’t undo a purchase; a refund is the shop’s.</dd></dl>`; };
+        <dt>Then</dt><dd>${esc(byWord(p))} may pay once, within ${esc(ttlWord())}, on ${esc(host(p.merchant))}’s checkout page. First conductor checks the page shows this total, fills the card itself and reads the receipt; if the page asks for more, nothing is paid and you’re asked again. ${p.bot ? esc(UI.botName(p.bot)) : 'The agent'} never sees the card.</dd>
+        <dt>Undo</dt><dd>There’s no undo in conductor; a refund is the shop’s.</dd></dl>`; };
   /** The receipt, after the fact: the order number and what was charged, flagged when it's more than you approved. */
   const receiptHTML = (p) => { const r = p.receipt; if (!r) return '';
     return `<div class="wl-receipt${r.note ? ' flag' : ''}"><span class="dl-lbl">Receipt</span><p>${r.note ? UI.mark('wait') : UI.mark('ok')}<span>Order <b class="mono">${esc(r.order_number || '—')}</b> · ${money(r.total, r.currency || p.currency)} charged · ${UI.agoText(r.at)}${r.note ? `<br><b>${esc(r.note)}</b> You were notified; the card’s own provider limits are what stop this.` : ''}</span></p></div>`; };
@@ -174,7 +174,7 @@
       <span class="dl-nt"><b>${esc(p.name)} <span class="tgt">${n} detail${n === 1 ? '' : 's'}</span></b><span class="dl-why">For ${esc(list((p.identities || []).map(who)) || 'nobody yet')} · on ${esc(list((p.sites || []).map((s) => host(s.origin))) || 'no site yet')}${learn.length ? ` · may learn ${esc(list(learns(p)))}` : ' · learns nothing about them'}</span>
       ${UI.factsLine([p.method === 'config' ? { icon: 'obj-config', value: 'In the config', pri: 2, label: 'Where it’s defined' } : null])}</span>
       <span class="dl-age">${used ? `used ${UI.agoText(used.ts)}` : 'not used yet'}</span><span class="dl-na"><span class="btn sm secondary">Open</span></span></a></li>`; };
-  const detailsPage = () => `<div class="page dl-page wl-page">${UI.head('Personal details', { crumbs: [['Browsers', '#/browser'], ['Personal details']], lede2: 'Conductor types these into forms for a bot. The bot never receives a value.', actions: `<a class="btn primary" href="#/browser/details/new">${icon('plus')}Add personal details</a>` })}
+  const detailsPage = () => `<div class="page dl-page wl-page">${UI.head('Personal details', { crumbs: [['Browsers', '#/browser'], ['Personal details']], lede2: 'A bot asks for these by what they mean, and conductor types them into the form; the bot never receives a value.', actions: `<a class="btn primary" href="#/browser/details/new">${icon('plus')}Add personal details</a>` })}
     ${UI.browserTabs('details')}
     <section class="dl-card">${W().profiles.length ? `<ul class="dl-list">${W().profiles.map(profRow).join('')}</ul>` : UI.empty({ title: 'No personal details yet', body: 'Add a set of details (a name, an email, an address) for a bot to fill in on the sites you choose.', action: `<a class="btn sm secondary" href="#/browser/details/new">Add personal details</a>`, small: true })}</section>
     <div class="wz-notes wl-notes">${[['lock', 'Values never come back', 'After you save one, the page says set, never the value; the bot asks for a detail by what it means.'], ['globe', 'Only where you say', 'A detail is filled only on a site you list, and only the details you allow there.'], ['users', 'Only for your own requests', 'A request from someone else, an event or a bot’s own check gets nothing.']].map(([i, t, d]) => `<div class="wz-note">${icon(i)}<b>${t}</b><span>${d}</span></div>`).join('')}</div></div>`;
@@ -324,7 +324,7 @@
 
   /* ---------- Payment cards ---------- */
   /** validate's reminders about a card (WalletNotes), in words. */
-  const notes = (c) => [c.kind === 'physical' || !c.kind ? 'A physical card: prefer a virtual or single-use card with its own provider limits. Conductor’s checks are the first layer; a limited card is the second.' : '', !(c.merchants || []).length ? 'No shop is allowed yet, so nothing can be bought with it.' : ''].filter(Boolean);
+  const notes = (c) => [c.kind === 'physical' || !c.kind ? 'A physical card: prefer a virtual or single-use card with its own provider limits, the second layer behind conductor’s own checks.' : '', !(c.merchants || []).length ? 'No shop is allowed yet, so nothing can be bought with it.' : ''].filter(Boolean);
   const frozenWord = (c) => (c.frozen ? `Frozen${c.frozen_at ? ` ${UI.agoText(c.frozen_at)}` : ' in the config'}` : '');
   const cardRow = (c) => { const L = c.limits, cur = L.currency || 'USD', s = spent(c.name), ns = notes(c), att = !c.frozen && ns.length;
     return `<li class="dl-conn wl-crow${att ? ' attn' : ''}" data-s="${c.frozen ? 'idle' : 'wait'}" data-card="${esc(c.name)}"><span class="dl-ng">${c.frozen ? `<span class="wl-ice" role="img" aria-label="Frozen">${icon('freeze')}</span>` : ns.length ? UI.mark('wait', { lg: true, label: 'Needs a look' }) : icon('obj-card')}</span>
@@ -411,7 +411,7 @@
         <div class="wizard-foot"><a class="btn ghost" href="#/browser/cards">Cancel</a><span class="spacer"></span><button type="button" class="btn primary" data-act="w-nc-save">${icon('passkey')}Save with passkey</button></div>
       </form></div>`;
   }
-  UI.act('w-kind', (b) => { b.parentElement.querySelectorAll('button').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); UI.$('#w-nc-kh').textContent = b.dataset.v === 'physical' ? 'Conductor will remind you to prefer a virtual or single-use card.' : b.dataset.v === 'single-use' ? 'A single-use card: good for one purchase.' : 'A virtual card with its own limits: good.'; });
+  UI.act('w-kind', (b) => { b.parentElement.querySelectorAll('button').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); UI.$('#w-nc-kh').textContent = b.dataset.v === 'physical' ? 'A physical card works, but conductor will remind you to prefer a virtual or single-use one.' : b.dataset.v === 'single-use' ? 'A single-use card: good for one purchase.' : 'A virtual card with its own limits: good.'; });
   UI.act('w-nc-save', () => { const f = UI.$('#w-nc'), name = UI.$('#w-nc-name').value.trim(), ms = rowsOf(UI.$('#w-nc'), 'merchants'), ids = whoOf(UI.$('#w-nc')), kind = (f.querySelector('#w-nc-kind .on') || {}).dataset.v || 'virtual';
     let n = 0; n += bad(f, 'name', !/^[A-Za-z0-9_-]{1,40}$/.test(name) ? 'Letters, digits, - and _, up to 40.' : card(name) ? 'A card by that name exists.' : '') ? 1 : 0;
     const lim = {}; LIMF.forEach(([k]) => { const v = moneyOf(f, k); lim[k] = v; n += bad(f, k, v > 0 ? '' : 'An amount in dollars, above 0 (up to two decimals).') ? 1 : 0; });
@@ -460,7 +460,7 @@
           <dt>Card</dt><dd>${esc(p.card)} · ${esc(cardName(c))}</dd><dt>Shop</dt><dd>${esc(host(p.merchant))}</dd>
           <dt>For</dt><dd>${tk ? `the ticket “${esc(tk.title)}”, ` : ''}asked for by ${esc(askedWord(p))}</dd>
           ${bind ? `<dt>Tightest limit</dt><dd>${esc(bind.key === 'ticket' ? 'This ticket’s budget' : bind.name)}: ${roomWords(bind, ls.cur)}</dd>` : ''}
-          ${deny ? '' : `<dt>Then</dt><dd>${esc(by)} may pay once, within ${esc(ttlWord())}, on ${esc(host(p.merchant))}’s checkout page. Conductor fills the card itself; ${esc(by)} never sees it.</dd>`}</dl>
+          ${deny ? '' : `<dt>Then</dt><dd>${esc(by)} may pay once, within ${esc(ttlWord())}, on ${esc(host(p.merchant))}’s checkout page. ${esc(by)} never sees the card: conductor fills it itself.</dd>`}</dl>
         ${deny ? `<div class="field"><label for="seal-reason">Tell ${esc(by)} why <span class="opt">optional</span></label><textarea class="textarea" id="seal-reason" rows="2" maxlength="500" placeholder="e.g. Not this month."></textarea></div>` : ''}
         <details class="dl-audit-d wl-seal-audit"><summary>${icon('chev')}For audit: what your passkey signs</summary><dl class="dl-facts"><dt>Purchase</dt><dd class="mono">${esc(p.id)}</dd>${p.bot_proposal ? `<dt>The bot’s approval</dt><dd class="mono">${esc(p.bot)} · ${esc(p.bot_proposal)}</dd>` : ''}${p.case ? `<dt>Ticket</dt><dd class="mono">${esc(p.case)}</dd>` : ''}<dt>Merchant</dt><dd class="mono">${esc(p.merchant)}</dd><dt>Identity</dt><dd class="mono">${esc(p.identity)}</dd><dt>Decision</dt><dd class="mono">${deny ? 'deny' : 'approve'}</dd><dt>Digest</dt><dd class="mono">${esc(p.digest)}</dd></dl></details>
         <div class="seal" id="seal"><div id="seal-msg"><b>Confirm with your passkey</b><div class="muted small">This signature covers only this purchase, once.</div></div></div></div>

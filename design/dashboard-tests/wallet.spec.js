@@ -276,7 +276,7 @@ test('the approval lists what each limit leaves after the purchase, the tightest
   await page.evaluate(() => { D.cases.find((c) => c.id === 'c39').spend_limit.amount = '100.00'; S.save(); });
   await go(page, '#/bots/homelab/proposals/p14');
   await expect(page.locator('.wl-layers li.over')).toContainText('This ticket’s budget');
-  await expect(page.locator('.dl-proposal')).toContainText('Conductor would refuse this now: over this ticket’s $100.00 limit: $87.50 left');
+  await expect(page.locator('.dl-proposal')).toContainText('If you approve it now, conductor refuses it: over this ticket’s $100.00 limit: $87.50 left');
 });
 
 test('a ticket’s spending limit: what is left, paid and waiting; lowering needs no passkey, raising does, and above a 30-day cap it warns', async ({ page }) => {
