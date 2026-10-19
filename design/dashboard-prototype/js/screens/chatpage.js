@@ -14,8 +14,8 @@
   const teamBots = (t) => D.bots.filter((b) => b.cfg && b.cfg.team === t).map((b) => b.name);
   const leadOf = (t) => { const x = D.teams.find((y) => y.name === t); return (x && ((S.staged('teams', t) || x.cfg || {}).routing || {}).lead) || teamBots(t)[0]; };
   const working = (b) => (D.workers || []).some((w) => (w.bot || 'platform-sre') === b && w.status === 'run');
-  // a team is its lead's face, large enough to know, and how many more are on it
-  const stack = (t, size = 'list') => { const ms = teamBots(t), lead = leadOf(t); return `<span class="cv-stack ${size}">${UI.botAv(lead, size)}${ms.length > 1 ? `<i class="cv-more" aria-label="and ${ms.length - 1} more">+${ms.length - 1}</i>` : ''}</span>`; };
+  // a team is its own picture (its initials unless it has one), never a bot's face
+  const stack = (t, size = 'list') => UI.teamAv(t, size);
   const lastOf = (L) => [...(L || [])].reverse().find((c) => c.who === 'bot' || c.who === 'op');
   const plain = (t) => String(t || '').replace(/\*\*|`/g, '');
   /** Every conversation, newest first: [kind, key, title, last line, when, unread, working]. */
@@ -23,7 +23,7 @@
     const out = D.bots.map((b) => { const L = D.chats[b.name] || [], l = lastOf(L);
       return { kind: 'bot', key: b.name, href: `#/chat/bot/${b.name}`, title: UI.botName(b.name), sub: b.name, last: l ? `${l.who === 'op' ? 'You: ' : ''}${plain(l.text)}` : UI.ident(b.name) ? UI.ident(b.name).tagline : 'No messages yet', at: l ? l.at : null, unread: D.chatUnread[b.name] || 0, working: working(b.name) }; });
     D.teams.forEach((t) => { const L = D.teamChats[t.name] || [], l = lastOf(L);
-      out.push({ kind: 'team', key: 'team:' + t.name, href: `#/chat/team/${t.name}`, title: `team ${t.name}`, last: l ? `${l.who === 'op' ? 'You' : UI.botName(l.bot)}: ${plain(l.text)}` : `${teamBots(t.name).length} bots`, at: l ? l.at : null, unread: D.chatUnread['team:' + t.name] || 0, working: teamBots(t.name).some(working) }); });
+      out.push({ kind: 'team', key: 'team:' + t.name, href: `#/chat/team/${t.name}`, title: t.name, sub: 'team', last: l ? `${l.who === 'op' ? 'You' : UI.botName(l.bot)}: ${plain(l.text)}` : `${teamBots(t.name).length} bots`, at: l ? l.at : null, unread: D.chatUnread['team:' + t.name] || 0, working: teamBots(t.name).some(working) }); });
     return out; };
   const cv = { q: '' };
   const pinned = (k) => D.chatPinned.includes(k);

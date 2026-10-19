@@ -12,9 +12,10 @@ test('Chat is in the nav; bots are people and teams are groups', async ({ page }
   await expect(page).toHaveURL(/#\/chat/);
   const list = page.locator('.cv-list');
   await expect(list.locator('.cv-c', { hasText: 'Atlas' }).first().locator('.bav svg')).toBeVisible(); // a bot is a face and a name
-  const team = list.locator('.cv-c', { hasText: 'team platform' });
-  await expect(team.locator('.cv-stack .bav')).toHaveCount(1); // a team is its lead's face, large enough to know,
-  await expect(team.locator('.cv-more')).toHaveText('+2'); // and how many more are on it
+  const team = list.locator('.cv-li[data-key="team:platform"] .cv-c');
+  await expect(team.locator('.tav.ini')).toHaveText('pl'); // a team is its own picture: its initials, never a bot's face
+  await expect(team.locator('b')).toHaveText('platform'); // the Teams heading says it's a team
+  await expect(list.locator('.cv-li[data-key="team:finance"] .tav svg')).toBeVisible(); // or the icon it was given
   await expect(list.locator('.cv-c', { hasText: 'Scout' }).locator('.cv-un')).toHaveText('1');
   await page.fill('#cv-q', 'ledg');
   await expect(list.locator('.cv-c', { hasText: 'Ledger' }).first()).toBeVisible();
@@ -56,7 +57,7 @@ test('phone: the list, then the conversation on its own screen with Chat in its 
   test.skip(!isPhone(page), 'phone only');
   await go(page, '#/chat', { fresh: true });
   await expect(page.locator('.cv-main')).toHaveCount(0);
-  await page.locator('.cv-c', { hasText: 'team platform' }).click();
+  await page.locator('.cv-li[data-key="team:platform"] .cv-c').click();
   await expect(page.locator('.cv-list')).toHaveCount(0);
   await expect(page.locator('.dl-crumbs')).toContainText('Chat');
   await expect(page.locator('#say')).toBeVisible();

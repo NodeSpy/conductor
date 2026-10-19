@@ -693,3 +693,11 @@ tr.folded { display: none; }
 .mx-ic { width: 24px; height: 24px; display: grid; place-items: center; color: var(--color-icon-default); } .mx-ic svg { width: 16px; height: 16px; }
 .mx-none { margin: 0; padding: var(--space-2); }
 @media (max-width: 720px) { .mx-pop { left: 0; width: 100%; max-height: 40vh; } .mx-o { min-height: 44px; } }
+
+/* a team's picture: its initials on a tile by default, or its icon in its colour, or its image */
+.tav.ini { background: var(--color-bg-sunken); border: var(--border-width) solid var(--color-border-default); color: var(--color-text-primary); }
+.tav.ini i { font-family: var(--font-family-serif); font-weight: 600; font-size: 15px; } .tav.ini.xl i, .tav.ini.lg i { font-size: 22px; } .tav.ini.xs i, .tav.ini.sm i { font-size: 12.5px; font-family: var(--font-family-sans); }
+.tav[data-bc] { background: var(--bot-face); color: var(--bot-ink); } .tav[data-bc] svg { width: 56%; height: 56%; }
+.tav img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.m-team-n { display: flex; align-items: center; gap: var(--space-2); }
+.m-team-n h2 { margin: 0; }

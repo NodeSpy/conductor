@@ -979,3 +979,7 @@ window.D.packMembers = {
   D.chatPinned = ['platform-sre'];
   D.chatsVer = 4;
 })();
+
+/* A team's own picture (item 34): two-letter initials by default; or an icon in a palette colour, or an uploaded
+ * image (teams.<t>.avatar: {icon, color} | {image}). Never a bot's face. */
+(function () { window.D.teamIdentity = { finance: { icon: 'dollar', color: 'olive' } }; })();
