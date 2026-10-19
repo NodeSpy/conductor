@@ -227,6 +227,18 @@
    * carries the warning mark and colour. IDs and hashes never: they're on the detail page. On a phone the low-value
    * facts (pri 3) drop first and the rest wrap under.
    *   UI.factsLine([{ icon, value, href, pri: 1|2|3, risky, prod, label }])  (UI.facts is the details list) */
+  /* A facts line that must stay one line (a board card, r5 major 16): what doesn't fit is hidden from the end and a
+     quiet '+N' says how many, with them on hover. Runs after every render and on resize. */
+  UI.FX_ONE = '.tk-card .fx';
+  UI.fitFacts = (root = document) => { root.querySelectorAll(UI.FX_ONE).forEach((fx) => {
+    fx.querySelectorAll('.fx-more').forEach((x) => x.remove()); const all = [...fx.children].filter((x) => x.classList.contains('fx-i') || x.classList.contains('fx-g')); all.forEach((x) => { x.hidden = false; }); const items = all.filter((x) => getComputedStyle(x).display !== 'none'); // a phone hides the quiet facts itself
+    if (!items.length || fx.offsetParent === null) return; const top = items[0].offsetTop, wrapped = () => items.filter((x) => !x.hidden).some((x) => x.offsetTop > top + 2);
+    if (!wrapped()) return; const more = document.createElement('span'); more.className = 'fx-i fx-more'; fx.appendChild(more); const hidden = [];
+    const say = () => { more.textContent = `+${hidden.length}`; more.title = hidden.map((x) => x.textContent.trim()).join(' · '); more.setAttribute('aria-label', `${hidden.length} more: ${more.title}`); };
+    for (let i = items.length - 1; i > 0 && (wrapped() || more.offsetTop > top + 2); i--) { items[i].hidden = true; hidden.unshift(items[i]); say(); }
+    if (!hidden.length) more.remove(); }); };
+  (UI.afterRender = UI.afterRender || []).push(() => { UI.fitFacts(); setTimeout(() => UI.fitFacts(), 200); });
+  window.addEventListener('resize', () => UI.fitFacts()); if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => UI.fitFacts()); // widths change when the fonts arrive
   UI.factsLine = (xs) => { xs = (xs || []).filter((f) => f && f.value); if (!xs.length) return '';
     return `<span class="fx">${xs.map((f) => { if (f.icon === 'obj-bot' && UI.botName && f.value) f = Object.assign({}, f, { value: UI.botName(String(f.value)) }); /* a bot is named by its display name (r5-9) */ const ext = /^https?:/.test(f.href || ''), inner = `${f.prod ? `<i class="fx-g fx-prod">${PROD_SQ}</i>` : f.glyph ? f.glyph : f.tone === 'danger' ? `<span class="fx-tile">${UI.icon(f.icon)}</span>` : UI.icon(f.icon || 'dot')}${UI.esc(f.value)}`;
       return `<span class="fx-i${f.href ? ' ln' : ''}${f.risky ? ' hi' : ''}${f.prod ? ' prod t-warning' : ''}${f.tone ? ' t-' + f.tone : ''}" data-pri="${f.pri || 2}"${f.label ? ` title="${UI.esc(f.label)}"` : ''}${f.href ? ` role="link" tabindex="0" data-fx-href="${UI.esc(f.href)}"${ext ? ' data-fx-ext="1"' : ''}` : ''}>${inner}</span>`; }).join('')}</span>`; };
@@ -319,7 +331,7 @@
     { const pt = $('#ph-title'); if (pt) pt.textContent = 'Not found'; $$('[data-nav]').forEach((a) => a.classList.remove('on')); } // the header never keeps the last page's name
     $('#main').innerHTML = `<div class="page"><div class="empty"><span class="serif">No such page</span><a class="btn" href="#/overview">Back to overview</a></div></div>`;
   };
-  UI.afterRender = [];
+  UI.afterRender = UI.afterRender || []; // hooks pushed earlier in this file (UI.fitFacts) stay
   // belt and braces: overflow:hidden can still be scrolled by script, focus or find-in-page; the window and the main
   // column snap back to their left edge if anything ever moves them sideways
   addEventListener('scroll', () => { if (scrollX) scrollTo(0, scrollY); }, { passive: true });

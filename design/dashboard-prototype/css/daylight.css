@@ -963,3 +963,15 @@ html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radiu
 .dl-card p.can-pending-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; padding: 10px 14px; border-radius: var(--radius-md); background: var(--color-bg-sunken); }
 .dl-card p.can-pending-bar > span:not(.st) { flex: 1 1 240px; }
 .mk-pend { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 0; font: var(--type-caption); color: var(--color-text-secondary); }
+.fx-more { color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; } .fx > [hidden] { display: none !important; } /* a one-line facts line ends in +N (r5 major 16) */
+/* r5 major 16 (measured): a ticket's comments are as tall as they are (up to the window), never a fixed-height box with
+   an empty band above them; a suggestion's checkbox sits on its buttons' centre line; a card's edge ghost buttons
+   start and end on the card's content edge (their icon and their box both); the phone's ticket status switcher fades at
+   the edge it scrolls past; the memory path's hint is its own line under the path */
+.panel.chat.tk-chat { height: auto; min-height: 0; max-height: calc(var(--dvh) - 200px); }
+.panel.chat.tk-chat > .cm-thread { flex: 0 1 auto; }
+.item.kprop > .cbx { margin-top: 10px; } /* its centre on the buttons (36px controls, 16px box) */
+.card-acts > .btn.ghost:first-child { margin-left: 0; padding-left: 0; } .card-acts > .btn.ghost:last-child:not(:first-child) { margin-right: 0; padding-right: 0; }
+.card-acts > .btn.ghost:first-child:hover, .card-acts > .btn.ghost:last-child:hover { background: none; text-decoration: underline; text-underline-offset: 3px; }
+.ke-path { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: baseline; } .ke-path > .muted { grid-column: 2; }
+@media (max-width: 720px) { .tk-colpick.scrolls { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); } .tk-colpick.scrolls.at-end { mask-image: none; -webkit-mask-image: none; } }

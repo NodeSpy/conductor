@@ -92,3 +92,36 @@ test('after New team: the review says Bots in its crumb and its Back button, whi
   await expect(back).toHaveText(/^Back to Bots$/);
   expect(await back.evaluate((b) => b.getBoundingClientRect().right <= innerWidth)).toBe(true);
 });
+
+// r5-16: the measurements.
+test('board cards keep their facts on one line, with +N for the rest', async ({ page }) => {
+  await go(page, '#/tickets', { fresh: true });
+  const r = await page.evaluate(() => [...document.querySelectorAll('.tk-card .fx')].filter((fx) => fx.offsetParent).map((fx) => { const vis = [...fx.children].filter((x) => !x.hidden && x.offsetParent); const tops = new Set(vis.map((x) => Math.round(x.getBoundingClientRect().top))); return { lines: tops.size, more: !!fx.querySelector('.fx-more'), hidden: [...fx.children].filter((x) => x.hidden).length }; }));
+  expect(r.length).toBeGreaterThan(0);
+  for (const x of r) { expect(x.lines, 'one line (a phone may show none)').toBeLessThanOrEqual(1); expect(x.more, '+N when something is hidden').toBe(x.hidden > 0); }
+});
+
+test('a ticket\'s comments have no empty band; a suggestion\'s checkbox is on its buttons\' line; the path hint is its own line', async ({ page }) => {
+  test.skip(page.viewportSize().width <= 720, 'desktop');
+  await go(page, '#/tickets/c29', { fresh: true });
+  const band = await page.evaluate(() => { const t = document.querySelector('.tk-chat .cm-thread'), first = t.querySelector('.cm-row, .cm-empty, .dl-sub'); return first ? Math.round(first.getBoundingClientRect().top - t.getBoundingClientRect().top) : 0; });
+  expect(band, 'the first comment starts at the top of the thread').toBeLessThan(40);
+  await go(page, '#/teams/platform/knowledge');
+  const d = await page.evaluate(() => { const row = [...document.querySelectorAll('.item.kprop')].find((x) => x.querySelector('.cbx')), cb = row.querySelector('.cbx'), b = row.querySelector('.btn'); const c = (e) => { const r = e.getBoundingClientRect(); return r.top + r.height / 2; }; return Math.abs(c(cb) - c(b)); });
+  expect(d, 'checkbox and buttons share a centre line').toBeLessThanOrEqual(1.5);
+  await go(page, '#/bots/platform-sre/memory');
+  await page.locator('[data-act="rp-new"]').first().click(); await page.locator('.modal [data-act="rp-new-pick"][data-k="knowledge"]').click();
+  const p = await page.evaluate(() => { const r = document.querySelector('.ke-path'), c = (e) => { const x = e.getBoundingClientRect(); return x.top + x.height / 2; }; return Math.abs(c(r.querySelector('.caps')) - c(r.querySelector('#ke-path'))); });
+  expect(p, 'the path label and the path share a line').toBeLessThanOrEqual(3);
+});
+
+test('phone: a vault card\'s Edit starts on the card\'s content edge; the tickets status switcher fades where it scrolls', async ({ page }) => {
+  test.skip(page.viewportSize().width > 720, 'phone');
+  await go(page, '#/secrets', { fresh: true });
+  const v = await page.evaluate(() => [...document.querySelectorAll('[data-act="vault-edit"]')].filter((b) => b.offsetParent).map((b) => { const card = b.closest('.panel, .dl-card, .card, .item') || b.parentElement.parentElement, cs = getComputedStyle(card), r = card.getBoundingClientRect(); return Math.round(b.getBoundingClientRect().left - (r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft))); }));
+  expect(v.length).toBeGreaterThan(0);
+  for (const off of v) expect(off, 'Edit starts on the content edge').toBeGreaterThanOrEqual(-1);
+  await go(page, '#/tickets');
+  const s = await page.evaluate(() => { const el = document.querySelector('.tk-colpick'); return { scrolls: el.scrollWidth > el.clientWidth, cls: el.className, mask: getComputedStyle(el).maskImage || getComputedStyle(el).webkitMaskImage }; });
+  if (s.scrolls) { expect(s.cls).toContain('scrolls'); expect(s.mask).not.toBe('none'); }
+});

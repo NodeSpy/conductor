@@ -42,6 +42,8 @@
   const by = (c) => (statusOf(c) === 'draft' ? `drafted by ${esc(askedBy(c).replace(' (a bot)', ''))}` : `asked by ${esc(askedBy(c))}`);
   // the whole row opens the ticket; a button only for a real next action: a draft is marked ready, a ticket waiting on
   // you opens what it waits for (the approval)
+  // the phone's status switcher scrolls: a fade at its edge until it's scrolled to the end (r5 major 16)
+  (UI.afterRender = UI.afterRender || []).push(() => document.querySelectorAll('.tk-colpick').forEach((el) => { const f = () => { el.classList.toggle('scrolls', el.scrollWidth > el.clientWidth + 1); el.classList.toggle('at-end', el.scrollLeft + el.clientWidth >= el.scrollWidth - 2); }; el.onscroll = f; f(); }));
   UI.ticketAct = (c) => { const s = UI.ticketStatus(c), wait = s.k === 'waiting' && (D.proposals || []).find((p) => p.case === c.id && p.status === 'pending');
     return s.k === 'draft' ? `<span class="btn sm secondary" role="button" tabindex="0" data-act="tk-ready" data-t="${c.id}">Mark ready…</span>` : wait ? `<span class="btn sm secondary" role="link" tabindex="0" data-fx-href="#/bots/${wait.bot}/proposals/${wait.id}">Review</span>` : ''; };
   UI.ticketRow = (c, o = {}) => { const s = UI.ticketStatus(c), act = UI.ticketAct(c);
