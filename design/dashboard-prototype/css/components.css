@@ -425,3 +425,5 @@ th.sel, td.sel { width: 30px; padding-right: 0 !important; }
 .nb-foot { margin: 0; padding: 12px 22px; border-top: var(--border-width) solid var(--color-border-subtle); }
 .nb-esc { font-size: 12.5px; }
 @media (max-width: 720px) { .nb-sheet { inset: 0; top: 0; bottom: var(--fixb, 0); transform: none; width: auto; border: 0; border-radius: 0; } .nb-head { padding-top: calc(12px + var(--sat, 0px)); } .nb-esc { display: none; } .nb-foot { padding-bottom: calc(12px + var(--sab, 0px)); } }
+/* phone: a full-screen sheet (New bot) is the whole screen: the tab bar steps aside until it closes */
+@media (max-width: 720px) { body:has(.nb-sheet) .tabbar { display: none; } }

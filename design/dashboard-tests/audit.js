@@ -18,7 +18,7 @@ const audit = () => {
   // the tab bar and primary actions: fully above the toolbar, and the topmost thing at their centre
   const hidden = [];
   const check = (el, what) => { const r = el.getBoundingClientRect(); if (r.bottom > ovTop + 0.5) { hidden.push(`${what} ${label(el)} bottom=${Math.round(r.bottom)} > toolbar ${Math.round(ovTop)}`); return; } const t = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); if (!t || !(el === t || el.contains(t) || t.contains(el))) hidden.push(`${what} ${label(el)} covered by ${t ? label(t) : 'nothing'}`); };
-  document.querySelectorAll('#tabbar a').forEach((a) => check(a, 'tab'));
+  document.querySelectorAll('#tabbar a').forEach((a) => { if (visible(a)) check(a, 'tab'); }); // a full-screen sheet hides the tab bar
   // contrast of rendered text
   const low = [], weak = []; let n = 0;
   const seen = new Set();
@@ -33,7 +33,7 @@ const audit = () => {
 
 /** Scroll each primary action into view inside the app's scroller, then check it isn't covered. */
 const primaries = () => { const ov = document.getElementById('sim-toolbar'), ovTop = ov ? ov.getBoundingClientRect().top : innerHeight, out = [];
-  document.querySelectorAll('.page-head .actions .btn, .btn.primary, .wizard-foot .btn, .sticky-decide .btn').forEach((el) => { const r0 = el.getBoundingClientRect(); if (!r0.width || el.closest('.modal, .cdrawer, #pop-menu')) return; el.scrollIntoView({ block: 'center', behavior: 'instant' }); const r = el.getBoundingClientRect(); const t = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); if (r.bottom > ovTop + 0.5 || !(t && (el === t || el.contains(t)))) out.push(`${el.textContent.trim().slice(0, 30)} at ${Math.round(r.top)}–${Math.round(r.bottom)} covered by ${t ? t.tagName + (t.id ? '#' + t.id : '') + '.' + String(t.className).split(' ')[0] : 'nothing'}`); });
+  document.querySelectorAll('.page-head .actions .btn, .btn.primary, .wizard-foot .btn, .sticky-decide .btn').forEach((el) => { const r0 = el.getBoundingClientRect(); if (!r0.width || el.closest('.modal, .cdrawer, #pop-menu, [inert]')) return; el.scrollIntoView({ block: 'center', behavior: 'instant' }); const r = el.getBoundingClientRect(); const t = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); if (r.bottom > ovTop + 0.5 || !(t && (el === t || el.contains(t)))) out.push(`${el.textContent.trim().slice(0, 30)} at ${Math.round(r.top)}–${Math.round(r.bottom)} covered by ${t ? t.tagName + (t.id ? '#' + t.id : '') + '.' + String(t.className).split(' ')[0] : 'nothing'}`); });
   return out; };
 
 module.exports = { audit, primaries };
