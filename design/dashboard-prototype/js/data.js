@@ -173,7 +173,7 @@
   D.cases = [
     { id: 'c31', title: 'Record db-prod-1 failover drill outcome', status: 'open', requester: 'operator:ops', cls: 'operator', opened: m(30), workers: 0, proposals: 0 },
     { id: 'c29', title: 'SEV2 api p99 latency > 2s', status: 'open', requester: 'event:pd.incident', cls: 'event', opened: m(48), workers: 2, proposals: 1, urgent: true },
-    { id: 'c27', title: 'FINDING high · cost jump 44% on nat-gateway', status: 'open', requester: 'proactive (sweep x4)', cls: 'proactive', opened: m(260), workers: 0, proposals: 0 },
+    { id: 'c27', title: 'NAT gateway costs jumped 44% this week', status: 'open', requester: 'proactive (sweep x4)', cls: 'proactive', opened: m(260), workers: 0, proposals: 0 },
     { id: 'c24', title: 'Can you bump the cache TTL for /search?', status: 'open', requester: 'chat:U-THIRD', cls: 'user', opened: m(380), workers: 1, proposals: 1 },
     { id: 'c19', title: 'Peer: billing-sre asks for NAT gateway owners', status: 'closed', requester: 'bot:billing-sre', cls: 'peer', opened: m(1600), workers: 0, proposals: 0 },
     { id: 'c12', title: 'Weekly runbook consolidation', status: 'closed', requester: 'operator:ops', cls: 'operator', opened: m(4000), workers: 1, proposals: 0 },
@@ -608,7 +608,7 @@ steps:
   D.cases.find((c) => c.id === 'c12').routed = R({ by: 'direct', to: 'platform-sre' });
   D.cases.push(
     { id: 'c33', bot: 'web-triage', title: 'Checkout button misaligned on Safari', status: 'open', requester: 'event:gh.issue_opened', cls: 'event', opened: m(70), workers: 0, proposals: 0, routed: R({ by: 'rule', rule: 'web-issues', team: 'platform', to: 'web-triage' }) },
-    { id: 'c34', bot: 'web-triage', title: 'pd: web 5xx elevated on /cart', status: 'open', requester: 'event:pd.incident', cls: 'event', opened: m(18), workers: 1, proposals: 0, urgent: true, routed: R({ by: 'rule', rule: 'pd-api', team: 'platform', via: 'lead', lead: 'platform-sre', to: 'web-triage', note: 'lead assigned: web owns /cart' }) },
+    { id: 'c34', bot: 'web-triage', title: 'Web errors are up on the cart page', status: 'open', requester: 'event:pd.incident', cls: 'event', opened: m(18), workers: 1, proposals: 0, urgent: true, routed: R({ by: 'rule', rule: 'pd-api', team: 'platform', via: 'lead', lead: 'platform-sre', to: 'web-triage', note: 'lead assigned: web owns /cart' }) },
     { id: 'c7', bot: 'billing-sre', title: 'Monthly forecast for October', status: 'open', requester: 'chat:U-THIRD', cls: 'user', opened: m(40), workers: 0, proposals: 1, routed: R({ by: 'direct', to: 'billing-sre' }) },
   );
   D.teamKnowledge = {
@@ -952,7 +952,7 @@ window.D.packMembers = {
   set('c7', { priority: 'normal', labels: ['finance'], due: inD(3), desc: 'Post the October forecast for AWS spend to #incidents with the main drivers.' });
   set('c38', { priority: 'high', labels: ['backup'], desc: 'The nightly backup of nas-01 didn’t run. Find out why and re-run it.' });
   set('c36', { priority: 'high', labels: ['incident', 'web'] });
-  D.ticketsVer = 2;
+  D.ticketsVer = 3;
   D.cases.forEach((c) => { c.priority = c.priority || 'normal'; c.labels = c.labels || []; c.stage = c.stage || 'ready'; });
   D.cases.push(
     { id: 'c40', team: 'platform', title: 'Rotate the staging TLS certificate before it expires', status: 'open', requester: 'operator:ops', cls: 'operator', opened: m(95), workers: 0, proposals: 0, priority: 'high', labels: ['security'], due: inD(5), desc: 'The staging certificate expires in 9 days. Rotate it with the usual process and confirm the new expiry.', notes: [] },

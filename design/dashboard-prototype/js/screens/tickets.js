@@ -17,7 +17,7 @@
   UI.ticketTeam = teamOf;
   /** Where a ticket stands, in words: draft and ready are set by a person; in progress and waiting on you follow from
       the work; done or declined close it. [word, mark] */
-  const STATUS = { draft: ['Draft', 'skip'], ready: ['Ready', 'idle'], progress: ['In progress', 'run'], waiting: ['Waiting on you', 'ember'], done: ['Done', 'ok'], declined: ['Declined', 'fail'] };
+  const STATUS = { draft: ['Draft', 'skip'], ready: ['Ready', 'ready'], progress: ['In progress', 'run'], waiting: ['Waiting on you', 'ember'], done: ['Done', 'ok'], declined: ['Declined', 'fail'] };
   const ORDER = ['draft', 'ready', 'progress', 'waiting', 'done', 'declined'];
   const statusOf = (c) => c.status === 'closed' ? (c.declined ? 'declined' : 'done') : c.stage === 'draft' ? 'draft' : (D.proposals || []).some((p) => p.case === c.id && p.status === 'pending') ? 'waiting'
     : c.workers > 0 || (D.delegations || []).some((d) => d.parent === c.id && d.status === 'running') ? 'progress' : 'ready';
@@ -33,10 +33,13 @@
     ...(c.labels || []).map((l) => ({ icon: 'tag', value: l, pri: 3, label: 'Label' }))];
   /** A ticket's row: the same anatomy as every list (mark, title, a line in words, the facts, the age, the action). */
   const by = (c) => (statusOf(c) === 'draft' ? `drafted by ${esc(askedBy(c).replace(' (a bot)', ''))}` : `asked by ${esc(askedBy(c))}`);
-  UI.ticketRow = (c, o = {}) => { const s = UI.ticketStatus(c), verb = s.k === 'draft' ? 'Open' : s.k === 'waiting' ? 'Review' : '';
+  // the whole row opens the ticket; a button only for a real next action: a draft is marked ready, a ticket waiting on
+  // you opens what it waits for (the approval)
+  UI.ticketRow = (c, o = {}) => { const s = UI.ticketStatus(c), wait = s.k === 'waiting' && (D.proposals || []).find((p) => p.case === c.id && p.status === 'pending');
+    const act = s.k === 'draft' ? `<span class="btn sm secondary" role="button" tabindex="0" data-act="tk-ready" data-t="${c.id}">Mark ready…</span>` : wait ? `<span class="btn sm secondary" role="link" tabindex="0" data-fx-href="#/bots/${wait.bot}/proposals/${wait.id}">Review</span>` : '';
     return `<li class="dl-need tk-row" data-s="${s.mark}" data-t="${c.id}"><a class="dl-need-a" href="${o.base || '#/tickets'}/${c.id}"><span class="dl-ng">${UI.mark(s.mark, { lg: true, label: s.word })}</span>
       <span class="dl-nt"><b>${esc(c.title)}</b><span class="dl-why">${o.byStatus ? by(c).replace(/^./, (x) => x.toUpperCase()) : `${s.word} · ${by(c)}`}</span>${UI.factsLine(UI.ticketFacts(c, o))}</span>
-      <span class="dl-age">${UI.agoText(c.opened)}</span><span class="dl-na">${verb ? `<span class="btn sm secondary">${verb}</span>` : ''}</span></a></li>`; };
+      <span class="dl-age">${UI.agoText(c.opened)}</span><span class="dl-na">${act}</span></a></li>`; };
 
   /* ---------- the comment thread: notes as chat rows ---------- */
   UI.ticketRows = (id) => { const c = T(id); return ((c && c.notes) || []).map((n) => { const w = String(n.who || '');

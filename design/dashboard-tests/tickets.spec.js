@@ -137,3 +137,20 @@ test('make a ticket from a chat message; old task links open the ticket', async 
   await expect(page.locator('.dl-tabs a[aria-current="page"]')).toContainText('Tickets');
   await expect(page.locator('.tk-head h1')).toHaveText('SEV2 api p99 latency > 2s');
 });
+
+test('Ready has its own mark (not parked); the row opens, and a button only for a real next action; titles read as people write them', async ({ page }) => {
+  await go(page, '#/tickets', { fresh: true });
+  const ready = page.locator('#tk-ready .tk-row').first();
+  await expect(ready.locator('.st').first()).toHaveAttribute('data-s', 'ready');
+  await expect(page.locator('.tk-row .st[data-s="idle"]')).toHaveCount(0); // ‖ means parked, nowhere here
+  // a draft's action marks it ready; a ready or in-progress row has none; waiting on you opens what it waits for
+  await expect(page.locator('#tk-draft .tk-row').first().locator('[data-act="tk-ready"]')).toHaveText('Mark ready…');
+  await expect(page.locator('#tk-ready .tk-row .dl-na .btn')).toHaveCount(0);
+  const wait = page.locator('#tk-waiting .tk-row', { hasText: 'SEV2 api p99 latency' });
+  await expect(wait.locator('.dl-na .btn')).toHaveAttribute('data-fx-href', /#\/bots\/[\w-]+\/proposals\/p\d+/);
+  for (const t of await page.locator('.tk-row .dl-nt > b').allTextContents()) expect(t, 'a machine prefix in a title').not.toMatch(/^(FINDING|[a-z]{2,4}:)\s/);
+  // Mark ready from the row, without opening the ticket
+  await page.locator('#tk-draft .tk-row', { hasText: 'Write a runbook' }).locator('[data-act="tk-ready"]').click();
+  await expect(page).toHaveURL(/#\/tickets$/);
+  await expect(page.locator('#tk-ready .tk-row', { hasText: 'Write a runbook' })).toBeVisible();
+});
