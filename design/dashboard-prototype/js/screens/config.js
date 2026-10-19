@@ -105,22 +105,42 @@
 
   /* ---------- raw editor ---------- */
   const raw = { text: null, base: null, err: null };
+  /* A hand edit becomes node edits plus the file itself (r5 blocker 3): each section the dashboard models is compared by
+     value (a node whose value didn't change is not touched, whatever its spacing), the browser's credentials by name,
+     and the file rides along so its comments, blank lines and unmodelled sections are kept as written. A whitespace-only
+     edit changes nothing. Before anything is staged, the result is checked against what you wrote: if any value would
+     come out different (an edit the dashboard can't map yet), nothing is staged and the editor says which, so nothing is
+     ever dropped silently. Returns { changes, unmapped }. */
   function rawToChanges(text) {
     const p = YAML.parse(text), v = p.value || {}, meta = p.meta, lines = text.split('\n');
-    const out = [];
-    const cmp = (coll, key, node) => { const cur = S.staged(coll, key); if (!YAML.eq(cur, node)) out.push([coll, key, node]); };
+    const out = [], live = S.configText(S.candidate());
+    const norm = (t) => t.split('\n').map((l) => l.replace(/\s+$/, '')).filter((l) => l !== '').join('\n');
+    if (norm(text) === norm(live)) return { changes: [], unmapped: [] }; // whitespace only
+    const cmp = (coll, key, node) => { const cur = S.staged(coll, key); if (!YAML.eq(cur == null ? null : cur, node == null ? null : node)) out.push([coll, key, node]); };
     const mapSec = (coll, obj) => { const keys = new Set([...C()[coll].keys(), ...Object.keys(obj || {})]); keys.forEach((k) => cmp(coll, k, obj && k in obj ? obj[k] : null)); };
     mapSec('settings', v.settings); mapSec('vaults', v.vaults); mapSec('connectors', v.connectors); mapSec('hosts', v.hosts); mapSec('runtimes', v.runtimes);
-    mapSec('operators', v.operators); mapSec('bots', v.bots); mapSec('packs', v.packs);
-    mapSec('identities', v.browser && v.browser.identities); mapSec('credentials', v.browser && v.browser.credentials);
+    mapSec('operators', v.operators); mapSec('teams', v.teams); mapSec('bots', v.bots); mapSec('packs', v.packs); mapSec('models', v.models);
+    ['pack_trust', 'plugin_trust'].forEach((k) => cmp('trust', k, v[k] || null));
+    // the browser section in its real shape: credentials by name; allow, logins and evaluate are drawn from the
+    // identities (Browsers), so a hand edit of those is reported below rather than guessed at
+    const creds = Object.fromEntries(((v.browser || {}).credentials || []).filter((c) => c && c.name).map((c) => [c.name, c]));
+    mapSec('credentials', creds);
     if (v.sandbox) cmp('sandbox', 'sandbox', v.sandbox);
     if (v.update) cmp('update', 'update', v.update);
-    const slice = (m, dedent) => lines.slice(m.line - 1, m.end).map((l) => l.slice(dedent)).join('\n') + '\n';
+    // workflows and triggers are kept as their text (their comments are theirs); a change is staged only when the value
+    // changed. Lines are dedented by up to the block's indent, never more, so an outdented comment keeps its #
+    const dedent = (ls, n) => ls.map((l) => l.replace(new RegExp(`^ {0,${n}}`), '')).join('\n') + '\n';
+    const wcmp = (name, y) => { const cur = S.staged('workflows', name); let same = false; try { same = cur != null && YAML.eq(YAML.parse(cur).value, YAML.parse(y).value); } catch (e) {} if (!same) out.push(['workflows', name, y]); };
     const seen = new Set();
-    (v.triggers || []).forEach((t, i) => { const m = meta[`triggers.${i}`]; if (!m || !t || !t.name) return; seen.add(t.name); let y = slice(m, 4); y = y.replace(/^\s*-\s*/, ''); cmp('workflows', t.name, y); });
-    Object.keys(v.workflows || {}).forEach((name) => { const m = meta[`workflows.${name}`]; seen.add(name); const y = 'name: ' + name + '\n' + lines.slice(m.line, m.end).map((l) => l.slice(4)).join('\n') + '\n'; cmp('workflows', name, y); });
-    C().workflows.keys().forEach((k) => { if (!seen.has(k)) out.push(['workflows', k, null]); });
-    return out;
+    (v.triggers || []).forEach((t, i) => { const m = meta[`triggers.${i}`] || meta[`triggers[name=${t && t.name}]`]; if (!m || !t || !t.name) return; seen.add(t.name); const y = dedent(lines.slice(m.line - 1, m.end), 4).replace(/^\s*-\s*/, ''); wcmp(t.name, y); });
+    Object.keys(v.workflows || {}).forEach((name) => { const m = meta[`workflows.${name}`]; seen.add(name); wcmp(name, 'name: ' + name + '\n' + dedent(lines.slice(m.line, m.end), 4)); });
+    // a workflow of yours that's gone from the file is removed (a pack's or a bot's is never in the file)
+    C().workflows.keys().forEach((k) => { if (seen.has(k)) return; const w = S.view().workflows.find((x) => x.name === k); if (w && w.source === 'config' && w.yaml) out.push(['workflows', k, null]); });
+    out.push(['file', 'config.yaml', text]);
+    // the guard: stage nothing that would come out different from what was written
+    const cand = S.candidate(window.D.pending.concat(out.map(([coll, key, after]) => ({ coll, key, after, before: S.staged(coll, key) }))));
+    let unmapped = []; try { unmapped = S.changedPaths(text, S.configText(cand)); } catch (e) {}
+    return { changes: out, unmapped };
   }
   UI.route('config/raw', () => {
     const at = (location.hash.split('at=')[1] || '').split('&')[0];
@@ -160,10 +180,12 @@
   UI.act('raw-goto', (a) => { const ed = UI.$('#raw-ed'); const n = +a.dataset.line; UI.$$('.tree a').forEach((x) => x.classList.toggle('on', x === a)); UI.editorMark(ed, { hl: [n] }); UI.editorScrollTo(ed, n); });
   UI.act('raw-revert', () => { raw.text = raw.base; raw.err = null; UI.rerender(); });
   UI.act('raw-review', () => {
-    let ch;
-    try { ch = rawToChanges(raw.text); } catch (e) { raw.err = e; UI.rerender(); return; }
-    if (!ch.length) { UI.toast('No node changed', 'whitespace or comment-only edits outside a workflow don\'t change config', 'idle'); return; }
-    ch.forEach(([coll, key, node]) => S.stage(coll, key, node, null));
+    let r;
+    try { r = rawToChanges(raw.text); } catch (e) { raw.err = e; UI.rerender(); return; }
+    if (r.unmapped.length) { raw.err = { message: `The dashboard can't stage ${r.unmapped.length === 1 ? 'this edit' : 'these edits'} from the file yet: ${r.unmapped.slice(0, 4).join(', ')}${r.unmapped.length > 4 ? '…' : ''}. ${r.unmapped.some((x) => /^browser\.(allow|logins|evaluate)/.test(x)) ? 'Edit sign-in sites and logins on Browsers. ' : ''}Nothing was staged.` }; UI.rerender(); return; }
+    if (!r.changes.length) { UI.toast('Nothing changed', 'only spacing changed; config is the same', 'idle'); return; }
+    const nodes = r.changes.filter(([coll]) => coll !== 'file');
+    r.changes.forEach(([coll, key, node]) => S.stage(coll, key, node, coll === 'file' ? (nodes.length ? 'config.yaml as you wrote it (its comments and layout)' : 'config.yaml: comments and layout only') : null));
     raw.text = null; UI.refreshChrome(); UI.go('#/config/apply');
   });
 

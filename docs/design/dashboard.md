@@ -1144,7 +1144,13 @@ reference). Two more tabs under Browsers: Sessions · Logins · **Personal detai
   editor, or the raw editor scrolled to that node.
 - **Raw editor.** CodeMirror with YAML mode, schema completion from
   `conductor schema`, an outline, and node breadcrumbs. Raw edits are parsed
-  into the same node tree, so they go through the same pipeline.
+  into the same node tree, so they go through the same pipeline. A hand edit changes only what you changed: each
+  node is compared by value (spacing alone stages nothing), and the file itself rides along, so its comments, blank
+  lines and the sections the dashboard doesn't model are kept as written, and every unchanged node is written byte
+  for byte; one value is one changed line. The staged item says what changed (`triggers[name=ci-fixer]
+  .policy.budget.max_cost_usd: 2 → 3`). An edit the dashboard can't map yet (the browser's sign-in sites, logins
+  and evaluate are drawn from its identities) is refused in the editor with the reason, and nothing is staged; a
+  top-level key conductor doesn't have fails the checks (`field … not found in type config.Config`).
 - **Applied changes.** The history of backups, with **Restore**, which is the
   pipeline in reverse ([§7.5](#75-rollback)).
 - **Apply pipeline.** Edit → Validate on a copy → Review diff → Apply →

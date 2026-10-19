@@ -388,6 +388,15 @@
     validate(k, n) { const e = []; if (!['pack_trust', 'plugin_trust'].includes(k)) e.push(`${k}: pack_trust or plugin_trust`); Object.keys(n || {}).forEach((x) => { if (x !== 'allow') e.push(`${k}.${x}: not a trust key (allow)`); }); if (n && n.allow && !Array.isArray(n.allow)) e.push(`${k}.allow: a list of source globs`); return e; },
     refs: () => [],
   };
+  /* the file as edited by hand: its comments, blank lines and the sections the dashboard doesn't model ride along with
+     the node edits a raw edit makes (S.configText) */
+  C.file = { section: 'file', file: 'config.yaml', label: 'the file as you wrote it', href: () => '#/config/raw',
+    keys: () => (D().configFile ? ['config.yaml'] : []), get: () => D().configFile || null, set: (k, t) => { D().configFile = t || null; },
+    path: () => 'config.yaml',
+    validate(k, t) { const e = []; if (!t) return e; let v; try { v = Y.parse(t).value || {}; } catch (x) { return [`config.yaml would not parse: ${x.message}`]; }
+      Object.keys(v).forEach((x) => { if (!S.CONFIG_KEYS.has(x)) e.push(`config.yaml: ${x}: field ${x} not found in type config.Config`); }); return e; },
+    refs: () => [],
+  };
   C.teams = { section: 'teams', file: 'config.yaml', label: 'team', href: (k) => `#/teams/${k}`,
     keys: () => D().teams.map((t) => t.name), get: (k) => { const t = byName(D().teams, k); return t ? clone(t.cfg) : null; },
     set: (k, n) => { const L = D().teams; if (n == null) return drop(L, k); const t = byName(L, k); if (t) t.cfg = n; else L.push({ name: k, cfg: n }); },
@@ -502,7 +511,20 @@
 
   /* ---------- config.yaml, generated from the state ---------- */
   const HEAD = { pack_trust: 'pack_trust: — where third-party packs may come from', plugin_trust: 'plugin_trust: — where third-party plugins may come from', settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', models: 'models: — fleets of acceptable models', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents with their own memory', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser: which sites bots may use, and how they sign in', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', bot_links: 'bot_links: — operator-side links: each pair of bots may message each other', usage: 'usage: — where plan limits and tokens come from (the display mode is a browser preference)', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
+  /* config.yaml as written. Once the file has been edited by hand (D.configFile), it is the source of its formatting:
+     every node the dashboard models is taken from the state, everything else (comments, blank lines, sections the
+     prototype doesn't model) is kept from the file, and a node whose value didn't change is written byte for byte
+     (YAML.emit). So a no-op edit changes nothing and a one-value edit changes one line (r5 blocker 3). */
+  S.MODELLED = ['settings', 'vaults', 'connectors', 'hosts', 'runtimes', 'models', 'sandbox', 'operators', 'teams', 'bots', 'bot_links', 'browser', 'packs', 'pack_trust', 'plugin_trust', 'usage', 'update', 'workflows', 'triggers'];
+  S.CONFIG_KEYS = new Set('imports integrations notify handoff handoffs controllers control paseo_bin connectors runtimes hosts engines models stores vaults memory operators bots bot_links teams workflows triggers policy checks pricing usage secrets callable sandbox browser store update dry_run adopt_open_workspaces agent_guidance settings packs pack_trust plugin_trust'.split(' ')); // config.go Config (feat/agent-browser)
   S.configText = (state) => {
+    const st = state || window.D, gen = S.generatedText(st);
+    if (!st.configFile) return gen;
+    let F, G; try { F = Y.parse(st.configFile); G = Y.parse(gen).value || {}; } catch (e) { return gen; }
+    const v = Y.clone(F.value || {}); S.MODELLED.forEach((k) => { if (k in G) v[k] = G[k]; else delete v[k]; });
+    return Y.emit(v, F.meta);
+  };
+  S.generatedText = (state) => {
     const st = state || window.D; const out = ['# conductor config — ops-box', '# managed by hand and by the dashboard; comments and unknown keys are kept', ''];
     const sec = (h, obj) => { if (obj == null || (typeof obj === 'object' && !Object.keys(obj).length)) return; out.push('# ' + HEAD[h]); out.push(Y.stringify({ [h]: obj })); out.push(''); };
     sec('settings', Object.fromEntries(st.settings.map((s) => [s.name, s.value])));
@@ -564,10 +586,16 @@
     const p = C[coll].path(key);
     if (b == null) return `add ${p}`;
     if (a == null) return `remove ${p}`;
+    if (coll === 'file') return 'config.yaml: your edits to its comments and layout';
+    // a workflow is kept as its text: say what changed in its value (one value: from → to), else that only its comments did
+    if (typeof a === 'string' && typeof b === 'string') { let pb, pa; try { pb = Y.parse(b).value; pa = Y.parse(a).value; } catch (e) {}
+      if (pb && pa && typeof pa === 'object') { if (eq(pb, pa)) return `${p}: its comments`; b = pb; a = pa; } }
     if (typeof a !== 'object') return `${p}: ${String(b).split('\n')[0].slice(0, 40)} → ${String(a).split('\n')[0].slice(0, 40)}`;
-    const ch = []; const walk = (x, y, pre) => { const ks = new Set([...Object.keys(x || {}), ...Object.keys(y || {})]); ks.forEach((k) => { const xa = x ? x[k] : undefined, ya = y ? y[k] : undefined; if (eq(xa, ya)) return; if (xa && ya && typeof xa === 'object' && typeof ya === 'object' && !Array.isArray(xa)) walk(xa, ya, pre + k + '.'); else ch.push(pre + k); }); };
+    const ch = []; const walk = (x, y, pre) => { const ks = new Set([...Object.keys(x || {}), ...Object.keys(y || {})]); ks.forEach((k) => { const xa = x ? x[k] : undefined, ya = y ? y[k] : undefined; if (eq(xa, ya)) return; if (xa && ya && typeof xa === 'object' && typeof ya === 'object' && !Array.isArray(xa)) walk(xa, ya, pre + k + '.'); else ch.push([pre + k, xa, ya]); }); };
     walk(b, a, '');
-    return `${p}: ${ch.slice(0, 3).join(', ')}${ch.length > 3 ? ` +${ch.length - 3} more` : ''}`;
+    const val = (x) => (x == null ? '∅' : typeof x === 'object' ? JSON.stringify(x).slice(0, 30) : String(x).slice(0, 30));
+    if (ch.length === 1) return `${p}.${ch[0][0]}: ${val(ch[0][1])} → ${val(ch[0][2])}`;
+    return `${p}: ${ch.slice(0, 3).map((x) => x[0]).join(', ')}${ch.length > 3 ? ` +${ch.length - 3} more` : ''}`;
   };
   /** A copy of the state with the given changes applied. */
   /** What `conductor validate` on the copy prints for this state: the loader's own messages, exit status. */
