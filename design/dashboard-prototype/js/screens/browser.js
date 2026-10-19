@@ -18,7 +18,7 @@
   /* ---------- list ---------- */
   UI.route('browser', () => `<div class="page">
     ${UI.head('Browsers', { lede2: 'conductor’s Chromium: one per agent session, sandboxed.', actions: `<a class="btn" href="#/browser/add">${icon('key')}Add a login</a><a class="btn" href="#/browser/passkey">${icon('plus')}Register a passkey</a>` })}
-    ${UI.tabs([['sessions', 'Sessions', '#/browser', D.browsers.length], ['logins', 'Logins', '#/browser/logins', D.access.credentials.length + D.access.logins.length]], 'sessions')}
+    ${UI.browserTabs('sessions')}
     <div class="grid g3">${D.browsers.map((b) => `
       <a class="panel btile" href="#/browser/${b.id}">
         <div class="thumb"><div class="mini" style="height:238%">${SITES[b.id]()}</div>${b.status === 'wait' ? `<span class="ctrl-banner wait">${icon('hold')}Waiting on you</span>` : ''}</div>
@@ -131,6 +131,7 @@
     if (id === 'seed') { setTimeout(() => UI.go('#/browser/takeover')); return ''; }
     if (id === 'add') return UI.addLoginPage();
     if (id === 'logins') return UI.loginsPage();
+    if (id === 'details' || id === 'cards') return UI.walletPage(id);
     if (id === 'takeover') return seed(false);
     if (id === 'passkey') return seed(true);
     const b = D.browsers.find((x) => x.id === id);

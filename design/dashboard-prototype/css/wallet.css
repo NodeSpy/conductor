@@ -1,0 +1,141 @@
+/* Personal details and payment cards (js/screens/wallet.js): Browsers → Personal details and Payment cards, a purchase,
+   and the purchase and buying parts of a bot's approval, its What it can do and a ticket. Built on the shared
+   components (dl-card, dl-list rows, dl-conn rows, the facts line, the approval card); tokens only. */
+
+.wl-page .lede-2 { max-width: 46em; }
+.wl-gap { margin-top: var(--gap-stack, 20px); }
+.wl-gapb { margin-bottom: var(--gap-stack, 20px); }
+.wl-page > .tabs + .dl-card, .wl-page > .tabs + .wl-gapb { margin-top: 0; }
+.wl-cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.wl-cols + .dl-card, .wl-cols + section { margin-top: var(--gap-stack, 20px); }
+.wl-side { gap: var(--gap-stack, 20px); }
+.wl-notes { margin-top: var(--gap-stack, 20px); }
+.wl-foot { margin: 12px 0 0; display: flex; gap: 6px; align-items: baseline; }
+.wl-foot svg { width: 14px; height: 14px; flex: none; transform: translateY(2px); color: var(--color-icon-default); }
+.dl-card > .wl-foot { padding: 0; }
+.dl-card.dl-flush > .wl-foot { padding: 0 var(--pad-card) var(--pad-card); }
+
+/* rows inside a card (the shared dl-conn rows sit in panels with their own side padding) */
+.dl-card > .dl-conns.wl-flushl { padding: 0; }
+.dl-card > .dl-conns.wl-flushl > .dl-conn.attn { margin-left: calc(-1 * var(--pad-card)); padding-left: calc(var(--pad-card) - 3px); }
+.dl-conn .dl-na { flex-wrap: nowrap; }
+.wl-card-row .dl-nt a { color: inherit; text-decoration: none; }
+.wl-card-row .dl-nt a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* a config-defined profile or card, and validate's reminders */
+.wl-cfg, .wl-note { display: flex; flex-wrap: nowrap; gap: 10px; align-items: flex-start; margin-bottom: var(--gap-stack, 20px); }
+.wl-cfg > span, .wl-note > span, .wl-tip > span { min-width: 0; flex: 1; }
+.wl-cfg > svg { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--color-icon-default); }
+.wl-note .st { margin-top: 3px; }
+
+/* the details table: masked values, their sources, what a bot may learn */
+.wl-tblwrap { overflow-x: auto; }
+.wl-fields th[scope="row"] { font: var(--type-body-m); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); border-bottom: var(--border-width) solid var(--color-border-subtle); white-space: nowrap; }
+.wl-fields td { height: 52px; }
+.wl-masked { font-family: var(--font-family-mono); letter-spacing: 0.08em; color: var(--color-text-secondary); }
+.wl-src { color: var(--color-text-secondary); font: var(--type-body-s); overflow-wrap: anywhere; min-width: 12em; }
+.wl-vis { min-width: 12em; }
+.wl-audit { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; font: var(--type-body-m); }
+.wl-audit > .dl-sub { white-space: nowrap; }
+
+/* a value: typed once, or a reference */
+.wl-valrow { display: flex; gap: 8px; align-items: stretch; }
+.wl-valrow .seg { flex: none; box-sizing: border-box; }
+.wl-valrow .seg button { min-height: 0; }
+.wl-valrow .input { flex: 1; min-width: 0; }
+.wl-val.bad .input { border-color: var(--color-status-danger-solid); }
+.wl-val .ferr { color: var(--color-status-danger-fg); font: var(--type-body-s); }
+.wl-form { display: grid; gap: 16px; max-width: 880px; }
+.wl-form > .wl-h { margin: 8px 0 -8px; font: var(--type-h3); font-family: var(--font-family-sans); font-variation-settings: normal; letter-spacing: normal; }
+.wl-form > p.dl-sub { margin: 0; }
+.wl-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; }
+.wl-grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 20px; }
+.wl-checks { display: flex; flex-wrap: wrap; gap: 6px 20px; }
+.wl-checks label { min-height: 32px; }
+.wl-tip { display: flex; flex-wrap: nowrap; gap: 10px; align-items: flex-start; }
+.wl-tip > svg { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--color-icon-default); }
+.flabel { display: block; font: var(--type-label); color: var(--color-text-secondary); margin-bottom: 6px; }
+
+/* spend against the limits: a figure and a thin bar, never a risk meter */
+.wl-limits { display: grid; gap: 10px; }
+.wl-limits + .wl-limits { margin-top: 18px; padding-top: 16px; border-top: var(--border-width) solid var(--color-border-subtle); }
+.wl-limits h3 { margin: 0; font: var(--type-label); color: var(--color-text-secondary); }
+.wl-lrow { display: grid; grid-template-columns: 9.5em 12em minmax(80px, 160px); justify-content: start; gap: 4px 14px; align-items: center; font: var(--type-body-m); }
+.wl-ll { color: var(--color-text-tertiary); }
+.wl-lv { font-variant-numeric: tabular-nums; }
+.wl-lrow:not(:has(.wl-meter)) .wl-lv { grid-column: 2 / -1; }
+.wl-meter { display: block; height: 6px; border-radius: var(--radius-xs); background: var(--color-bg-overlay); overflow: hidden; }
+.wl-meter > i { display: block; height: 100%; background: var(--color-icon-default); border-radius: var(--radius-xs); }
+.wl-meter > i[data-hi="1"] { background: var(--color-status-warning-solid); }
+.dl-card > .wl-limits + .dl-sub { margin: 16px 0 0; }
+
+/* the freeze switch and the card's state */
+.wl-frozen, .wl-live { display: flex; gap: 16px; align-items: center; justify-content: space-between; margin-bottom: var(--gap-stack, 20px); }
+.wl-frozen p, .wl-live p { margin: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; min-width: 0; }
+.wl-frozen p { align-items: flex-start; }
+.wl-ice { display: inline-grid; place-items: center; color: var(--color-status-info-fg); flex: none; }
+.wl-ice > svg { width: 16px; height: 16px; }
+.wl-frozen .wl-ice { margin-top: 3px; }
+.wl-card-row[data-frozen] .reason { color: var(--color-text-secondary); }
+.wl-frozen .btn, .wl-live .btn { flex: none; }
+.wl-empty { margin: 0; display: flex; gap: 10px; align-items: flex-start; color: var(--color-text-secondary); }
+.wl-empty .st { margin-top: 3px; }
+.wl-cfacts { margin-top: 4px; }
+
+/* a purchase: what it buys, a subscription flagged, the terms */
+.wl-items { width: 100%; border-collapse: collapse; margin-top: 6px; font: var(--type-body-m); max-width: 40em; }
+.wl-items th { text-align: left; font: var(--type-label); color: var(--color-text-tertiary); padding: 6px 12px 6px 0; border-bottom: var(--border-width) solid var(--color-border-default); }
+.wl-items td { padding: 10px 12px 10px 0; border-bottom: var(--border-width) solid var(--color-border-subtle); }
+.wl-items .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wl-items th.num { padding-right: 0; } .wl-items td.num:last-child { padding-right: 0; }
+.wl-items tfoot td { border-bottom: 0; padding-top: 12px; }
+.wl-items tfoot b { font-size: 17px; }
+.wl-flag { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0 0; max-width: 44em; line-height: 1.5; }
+.wl-flag .st { margin-top: 4px; }
+.wl-where dd { overflow-wrap: anywhere; }
+.wl-lim { display: block; }
+.wl-lim + .wl-lim { margin-top: 4px; color: var(--color-text-secondary); }
+.wl-receipt { margin-top: 18px; display: grid; gap: 4px; }
+.wl-receipt p { margin: 0; display: flex; gap: 10px; align-items: flex-start; line-height: 1.5; }
+.wl-receipt .st { margin-top: 4px; }
+
+/* a bot's buying, on What it can do */
+.wl-bot { margin-top: var(--gap-stack, 20px); }
+.wl-cans { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.wl-can p, .wl-un p, .wl-fills p { margin: 0 0 8px; line-height: 1.5; max-width: 52em; }
+.wl-un { margin-top: 16px; padding-top: 14px; border-top: var(--border-width) solid var(--color-border-subtle); display: flex; gap: 16px; align-items: center; justify-content: space-between; }
+.wl-un p { margin: 0; }
+.wl-un .btn { flex: none; }
+.wl-fills { margin-top: 16px; padding-top: 14px; border-top: var(--border-width) solid var(--color-border-subtle); }
+.wl-bot > .dl-sub { margin: 12px 0 0; }
+
+@media (max-width: 1100px) { .wl-cols { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 720px) {
+  .wl-grid2, .wl-grid3 { grid-template-columns: minmax(0, 1fr); }
+  .wl-valrow { flex-direction: column; align-items: stretch; }
+  .wl-valrow .seg { align-self: flex-start; }
+  .wl-valrow .input { flex: none; }
+  .wl-valrow .seg button { min-height: 40px; }
+  .wl-card-row { grid-template-columns: 18px minmax(0, 1fr); }
+  .wl-card-row > .dl-na { grid-column: 2; flex-direction: row; justify-content: flex-start; }
+  .wl-lrow { grid-template-columns: minmax(0, 1fr) auto; }
+  .wl-lrow .wl-meter { grid-column: 1 / -1; }
+  .wl-lrow:not(:has(.wl-meter)) .wl-lv { grid-column: auto; }
+  .wl-frozen, .wl-live, .wl-un { flex-direction: column; align-items: stretch; }
+  .wl-frozen .btn, .wl-live .btn, .wl-un .btn { align-self: flex-start; }
+  .wl-audit { flex-direction: column; gap: 2px; }
+  .wl-fields thead { display: none; }
+  .wl-fields, .wl-fields tbody, .wl-fields tr, .wl-fields th, .wl-fields td { display: block; }
+  .wl-fields tr { display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 4px 8px; padding: 12px var(--pad-card); border-bottom: var(--border-width) solid var(--color-border-subtle); }
+  .wl-fields th[scope="row"] { border: 0; padding: 0; grid-column: 1; }
+  .wl-fields td { height: auto; border: 0; padding: 0; grid-column: 1; }
+  .wl-fields td.num { grid-column: 2; grid-row: 1 / span 2; align-self: start; }
+  .wl-vis { width: 100%; }
+  .dl-card > .dl-conns.wl-flushl > .dl-conn.attn { margin-left: calc(-1 * var(--pad-card)); padding-left: calc(var(--pad-card) - 3px); }
+}
+/* the details table keeps the card's padding at its edges */
+@media (min-width: 721px) {
+  .wl-fields tr > :first-child { padding-left: var(--pad-card); }
+  .wl-fields tr > :last-child { padding-right: calc(var(--pad-card) - 10px); }
+  .wl-fields tbody tr:last-child > * { border-bottom: 0; }
+}

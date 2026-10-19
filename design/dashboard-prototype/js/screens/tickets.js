@@ -109,10 +109,10 @@
   /** A ticket: on its own page under Tickets, or inside a bot's Tickets tab (the breadcrumb says which). */
   UI.ticketBody = (id, o = {}) => { const c = T(id);
     const k = K(), m = k.M(c.bot), s = UI.ticketStatus(c), open = c.status !== 'closed', team = teamOf(c);
-    const props = (D.proposals || []).filter((p) => p.case === c.id), workers = (D.workers || []).filter((w) => w.case === c.id), dels = (D.delegations || []).filter((d) => d.parent === c.id || d.child === c.id);
+    const props = (D.proposals || []).filter((p) => p.case === c.id && p.kind !== 'purchase'), workers = (D.workers || []).filter((w) => w.case === c.id), dels = (D.delegations || []).filter((d) => d.parent === c.id || d.child === c.id);
     const canDel = open && m && UI.delegationReach(m.name).some((r) => r.ok);
     const key = 't:' + c.id, draft = s.k === 'draft';
-    const hist = [{ at: c.opened, t: c.stage === 'draft' || /^bot:/.test(c.requester || '') ? `Drafted by ${askedBy(c).replace(' (a bot)', '')}` : `Opened by ${askedBy(c)}` }].concat(c.routed ? [{ at: c.opened, t: (([x]) => x.toUpperCase() + x.slice(1))(k.routeLabel(c.routed).replace(/<[^>]+>/g, '')) }] : [])
+    const hist = [{ at: c.opened, t: c.stage === 'draft' || /^bot:/.test(c.requester || '') ? `Drafted by ${askedBy(c).replace(' (a bot)', '')}` : `Opened by ${askedBy(c)}` }].concat(c.routed ? [{ at: c.opened, t: ((x) => x.charAt(0).toUpperCase() + x.slice(1))(k.routeLabel(c.routed).replace(/<[^>]+>/g, '')) }] : [])
       .concat(D.audit.filter((a) => new RegExp(`\\b${c.id}\\b`).test(a.detail || '')).map((a) => ({ at: a.ts, t: histWord(a) }))).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
     const ctl = (k2, label, val, opts) => `<div class="tk-f"><span class="dl-lbl">${label}</span><button class="tk-pick" data-act="tk-set" data-k="${k2}" data-t="${c.id}" aria-label="${label}: ${esc(val)}. Change">${esc(val)}${icon('chevd')}</button></div>`;
     return `<section class="dl-card case-head tk-head"><div class="tk-ht">${UI.mark(s.mark, { lg: true, label: s.word })}<h1 class="case-title dl-h1-long">${esc(c.title)}</h1><button class="icon-btn" data-act="tk-more" data-t="${c.id}" aria-label="More for this ticket">${icon('more')}</button></div>
@@ -138,10 +138,11 @@
             ${ctl('priority', 'Priority', priWord(c.priority))}${ctl('due', 'Due', c.due ? `${c.due} · ${dueWord(c.due)}` : 'No date')}${ctl('labels', 'Labels', (c.labels || []).join(', ') || 'None')}</div></section>
           ${props.length || workers.length ? `<section class="panel"><div class="panel-head"><h3>Linked work</h3></div><ul class="cm-side-l">${props.map((p) => `<li><a class="cm-side-a" href="#/bots/${p.bot}/proposals/${p.id}"><b>${UI.mark(p.status === 'pending' ? 'ember' : p.status === 'executed' || p.status === 'approved' ? 'ok' : 'idle')} ${esc(p.title || p.summary)}</b>${UI.factsLine([UI.envFact(p.env), UI.actionFact(p.verb, p.env, p.tier)])}<span class="dl-sub">${p.status === 'pending' ? 'Waiting for you' : esc(p.status)}</span></a></li>`).join('')}
             ${workers.map((w) => `<li><a class="cm-side-a" href="${w.run ? `#/runs/${w.run}` : `#/bots/${w.bot || c.bot}/workers`}"><b>${UI.mark(w.status === 'run' ? 'run' : w.status === 'ok' ? 'ok' : 'idle')} ${esc(w.brief || 'A worker')}</b><span class="dl-sub">${w.readOnly ? 'Read-only worker' : 'Worker'} · ${w.status === 'run' ? 'running' : 'finished'}</span></a></li>`).join('')}</ul></section>` : ''}
+          ${UI.ticketPurchases ? UI.ticketPurchases(c) : ''}
           <section class="panel"><div class="panel-head"><h3>History</h3></div><ol class="tk-hist">${hist.map((h) => `<li><span>${esc(h.t)}</span><span class="dl-sub">${UI.agoText(h.at)}</span></li>`).join('')}</ol></section>
         </div></div>`;
   };
-  const histWord = (a) => ({ ticket_comment: 'You commented', ticket_assign: 'Assigned', ticket_edit: 'Edited', ticket_ready: 'Marked ready', ticket_decline: 'Declined', ticket_new: 'Created', bot_case_close: 'Marked done', bot_case_reopen: 'Reopened', bot_case_note: 'You commented', bot_route: 'Reassigned', bot_delegate: 'Part handed off', bot_delegate_done: 'A hand-off reported back' }[a.event] || a.event.replace(/_/g, ' '));
+  const histWord = (a) => ({ browser_profile_fill: 'Your details were filled in', browser_purchase_approve: 'You approved a purchase', browser_purchase_deny: 'You denied a purchase', ticket_comment: 'You commented', ticket_assign: 'Assigned', ticket_edit: 'Edited', ticket_ready: 'Marked ready', ticket_decline: 'Declined', ticket_new: 'Created', bot_case_close: 'Marked done', bot_case_reopen: 'Reopened', bot_case_note: 'You commented', bot_route: 'Reassigned', bot_delegate: 'Part handed off', bot_delegate_done: 'A hand-off reported back' }[a.event] || a.event.replace(/_/g, ' '));
   UI.afterRender.push((main) => { const t = main.querySelector('.tk-chat #msgs'); if (t) t.scrollTop = t.scrollHeight; });
 
   /* ---------- changing a ticket ---------- */

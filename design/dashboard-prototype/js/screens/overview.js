@@ -9,14 +9,15 @@
   /* ---------- needs you: the mock's list (mark · title, why, detail · age · one verb) ---------- */
   // the verb is the first thing you'll do on the page it opens, the same for every item of a kind: review an approval,
   // answer a question, approve a sign-in, see why a run failed, fix a connection, resume automation
-  const VERB = { approval: 'Review', failed: 'See why', needs_input: 'Answer', browser: 'Approve', connection: 'Fix it', paused: 'Resume', update: 'Review' };
+  const VERB = { approval: 'Review', purchase: 'Review', failed: 'See why', needs_input: 'Answer', browser: 'Approve', connection: 'Fix it', paused: 'Resume', update: 'Review' };
   // everything here waits on a person, so it all takes the needs-you mark; only a failure has its own
-  const MARK = { approval: 'ember', failed: 'fail', needs_input: 'ember', browser: 'ember' };
+  const MARK = { approval: 'ember', purchase: 'ember', failed: 'fail', needs_input: 'ember', browser: 'ember' };
   // the rows of a list are peers: every row's action looks the same, in a fixed-width column so the times and the
   // buttons line up; what's more urgent says so with its mark and its place in the list, never with a louder button
   /** An item's facts: who (the bot, the workflow), where (what the connector says it's about, a site), the environment,
       and what kind of action, from the item's own source (the approval, the run, the sign-in). */
   UI.needFacts = (a) => { const href = String(a.href || ''), bot = UI.botOfHref(href), botF = (b) => (b ? { icon: 'obj-bot', value: b, href: `#/bots/${b}`, pri: 1, label: 'Bot' } : null);
+    const pu = UI.purchaseOfHref && UI.purchaseOfHref(href); if (pu) return UI.purchaseFacts(pu);
     const pm = href.match(/proposals\/([\w-]+)/), p = pm && (D.proposals || []).find((x) => x.id === pm[1] && (!bot || x.bot === bot));
     if (p) return [botF(p.bot), UI.envFact(p.env), ...UI.verbFacts(p.verb, p.options), UI.actionFact(p.verb, p.env, p.tier)];
     const rm = href.match(/#\/runs\/([\w-]+)/), r = rm && D.runs.find((x) => x.id === rm[1]);
@@ -30,7 +31,7 @@
   UI.needItem = needItem;
   /** The kinds of thing that wait on a person, one vocabulary for Home's tile, Needs you's breakdown and its Kind menu:
       [kind, one, many, icon]. */
-  UI.NEED_KINDS = [['approval', 'approval', 'approvals', 'hand'], ['failed', 'failed run', 'failed runs', 'x'], ['needs_input', 'question', 'questions', 'message'], ['browser', 'sign-in', 'sign-ins', 'login'], ['connection', 'connection', 'connections', 'obj-connector'], ['update', 'update', 'updates', 'obj-update'], ['paused', 'pause', 'pauses', 'pause']];
+  UI.NEED_KINDS = [['approval', 'approval', 'approvals', 'hand'], ['purchase', 'purchase', 'purchases', 'act-money'], ['failed', 'failed run', 'failed runs', 'x'], ['needs_input', 'question', 'questions', 'message'], ['browser', 'sign-in', 'sign-ins', 'login'], ['connection', 'connection', 'connections', 'obj-connector'], ['update', 'update', 'updates', 'obj-update'], ['paused', 'pause', 'pauses', 'pause']];
   /** "3 approvals · 1 failed run": each count kept with its noun (a no-break space), so a wrap never orphans a number. */
   UI.needBreakdown = (items) => UI.NEED_KINDS.map(([k, one, many]) => [items.filter((a) => a.kind === k).length, one, many]).filter(([n]) => n).map(([n, one, many]) => `${n}\u00a0${n === 1 ? one : many}`).join(' · ');
   UI.attentionList = (limit, list, note = '') => {
