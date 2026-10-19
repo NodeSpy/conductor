@@ -234,6 +234,13 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
 - **One row height** (the shared row: `.dl-nt` in a list): the title is one line, the description always takes two
   (clamped with an ellipsis), the facts one line (a fact that doesn't fit drops whole); so the rows of a list are one
   height (`measure.spec`). One action per row: the whole row opens; a button only for a real next action.
+- **A chat fits the screen** (the Chat page, a bot's Chat tab): the conversation panel takes what's left of the visible
+  viewport below the page's head and tabs, so only its thread scrolls and the composer is always on screen; it refits
+  when the window, a phone's rotation or its keyboard changes it. Beside it, the conversation list or a bot's waiting
+  approvals and open work are no taller (they scroll inside); where the layout stacks, a bot's side panels become one
+  line of links above the chat. While a bot is replying, the thread says "Atlas is working…" (typing dots); the Chat
+  list carries no spinner, and the selected conversation is marked in neutral ink, never the orange that means it
+  needs you.
 - **The composer** (chat and ticket comments, one component): the field with the paperclip inside it, and the send
   button at the field's exact height and radius on its bottom edge (the field grows upward). The paperclip opens what
   you can attach: Upload a file, Photo or image, Paste a link, From a vault item (its reference; the value is never
@@ -242,7 +249,7 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
   workflow's runs, Home's chart), it's the same control with the same choices (last hour, 12 hours, 24 hours, 7 days,
   30 days, all time): a clock and "Last 12 hours ▾", its own control at the far right of its row (in the Filter sheet
   on a phone, except where it's the row's only control).
-- **One page container** on every route: the content starts under the top bar's search, one max-width, one gutter
+- **One page container** on every route: the content starts on the page gutter (the top bar's own inset; the search sits at the top bar's right, next to your avatar), one max-width, one gutter
   (`container.spec`, at 1440, 1280 and 1024).
 - **The audit log** leads with who: their picture (a bot's face, a team's initials, You, a workflow's icon) and name in
   bold, then what happened in a specific sentence, then the facts line (what it's about, where, the passkey used); an

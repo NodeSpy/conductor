@@ -141,3 +141,18 @@ test('Chat reads as a page: the title like any page, the list and the conversati
   expect(Math.round((await page.locator('#msgs .cm-bot .bav').first().boundingBox()).width)).toBe(36);
   expect(Math.round((await page.locator('.cv-th .bav').first().boundingBox()).width)).toBe(44);
 });
+
+test('no spinner in the Chat list; the thread says "is working…" only while a reply is coming; the selected row is neutral, never the needs-you orange', async ({ page }) => {
+  await go(page, '#/chat/bot/homelab', { fresh: true });
+  await expect(page.locator('.cv-list .st[data-s="run"]')).toHaveCount(0);
+  if (page.viewportSize().width > 720) {
+    const edge = await page.locator('.cv-c.on').evaluate((e) => getComputedStyle(e).boxShadow);
+    const accent = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--color-accent-default').trim());
+    expect(edge).not.toContain(accent);
+    expect(edge).not.toMatch(/rgb\(2[0-9]{2}, 1[0-9]{2}, [0-9]{1,2}\)/); // no orange
+  }
+  await expect(page.locator('#typing')).toHaveCount(0);
+  await page.fill('#say', 'Anything new on the cart errors?'); await page.locator('#say').press('Enter');
+  await expect(page.locator('#typing .cm-meta')).toContainText('is working…');
+  await expect(page.locator('#typing')).toHaveCount(0, { timeout: 8000 }); // gone once it has replied
+});

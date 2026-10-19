@@ -79,11 +79,11 @@ test('dropped files attach; an image in the thread opens larger', async ({ page 
 
 test('side cards and thread speak in words: no ids, no plan jargon, the approval inline', async ({ page }) => {
   await go(page, '#/bots/platform-sre/chat', { fresh: true });
-  const side = await page.locator('.cm-side').innerText();
+  const side = await page.locator('.cm-side').evaluate((e) => e.textContent); // on a phone it's folded into a line of links (65); its words still hold
   const ids = await page.evaluate(() => [...D.proposals, ...D.cases].map((x) => x.id));
   for (const id of ids) expect(side, 'no ids').not.toMatch(new RegExp(`\\b${id}\\b`));
   expect(side).not.toMatch(/REPLACES|\+\d+ ~\d+ -\d+|operator:|event:/);
-  await expect(page.locator('.cm-side .fx').first()).toBeVisible();
+  if (page.viewportSize().width > 1100) await expect(page.locator('.cm-side .fx').first()).toBeVisible(); else await expect(page.locator('.cm-side-line')).toContainText('waiting for you');
   await expect(page.locator('.cm-card', { hasText: 'Replace the production web server' })).toHaveAttribute('href', '#/bots/platform-sre/proposals/p12');
   // the bot's identity on its messages (option A): its face and its name, and a rule in its colour
   await expect(page.locator('.cm-bot .bav svg').first()).toBeVisible();
@@ -112,7 +112,7 @@ test('phone: a full-height chat with the composer pinned in view', async ({ page
   await page.waitForTimeout(100);
   const r = await page.evaluate(() => { const c = document.querySelector('.chat').getBoundingClientRect(), k = document.querySelector('.cm-comp').getBoundingClientRect(), bar = document.querySelector('.tabbar, .mobile-nav, nav.bottom, #tabbar');
     return { h: c.height, vh: innerHeight, compBottom: k.bottom, barTop: bar ? bar.getBoundingClientRect().top : innerHeight }; });
-  expect(r.h).toBeGreaterThan(r.vh * 0.6);
+  expect(r.h).toBeGreaterThan(r.vh * 0.5); // it fits what's left below the bot's head and tabs (65)
   expect(r.compBottom).toBeLessThanOrEqual(r.barTop + 1);
 });
 
@@ -158,3 +158,31 @@ test('the composer: the send button is the field’s height and radius, on its b
   await page.locator('#gen-submit').click();
   await expect(page.locator('#cm-pend .cm-p[data-kind="ref"]')).toContainText('its value is never shown');
 });
+
+// Item 65: every chat surface fits the screen: only the thread scrolls, the composer is always on it, and a resize refits
+const fits = (page) => page.evaluate(() => {
+  const main = document.getElementById('main'), comp = main.querySelector('.cm-comp'), box = main.querySelector('#msgs'), bar = document.getElementById('tabbar');
+  const bottom = Math.min(innerHeight, bar && bar.offsetParent ? bar.getBoundingClientRect().top : innerHeight), r = comp.getBoundingClientRect();
+  return { compBottom: Math.round(r.bottom), compTop: Math.round(r.top), bottom: Math.round(bottom), pageScrolls: main.scrollHeight - main.clientHeight > 1, threadScrolls: box ? box.scrollHeight > box.clientHeight : false };
+});
+for (const route of ['#/chat/bot/platform-sre', '#/chat/team/platform', '#/bots/platform-sre/chat', '#/tickets/c29']) {
+  test(`fits the screen at three sizes, and refits on resize · ${route}`, async ({ page }) => {
+    const phone = page.viewportSize().width <= 720, sizes = phone ? [[390, 844], [375, 667], [414, 740]] : [[1440, 900], [1280, 720], [1024, 640]];
+    const ticket = route.startsWith('#/tickets');
+    for (const [w, h] of sizes) {
+      await page.setViewportSize({ width: w, height: h });
+      await go(page, route, { fresh: true });
+      if (ticket) await page.locator('.tk-chat .cm-comp').scrollIntoViewIfNeeded(); // a ticket's comments are part of its page
+      const f = await fits(page);
+      expect(f.compBottom, `${route} at ${w}×${h}: the composer is on screen`).toBeLessThanOrEqual(f.bottom + 1);
+      expect(f.compTop, `${route} at ${w}×${h}: the composer is on screen`).toBeGreaterThanOrEqual(0);
+      if (!ticket) expect(f.pageScrolls, `${route} at ${w}×${h}: only the thread scrolls`).toBe(false);
+    }
+    if (!ticket) { // a resize in place refits it
+      const [w, h] = sizes[0]; await page.setViewportSize({ width: w, height: h - 140 }); await page.waitForTimeout(150);
+      const f = await fits(page);
+      expect(f.compBottom, `${route}: refits after a resize`).toBeLessThanOrEqual(f.bottom + 1);
+      expect(f.pageScrolls).toBe(false);
+    }
+  });
+}

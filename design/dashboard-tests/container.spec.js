@@ -1,5 +1,5 @@
-// One page container on every route (ledger item 53): the title and the content start on Activity's left edge (under
-// the top bar's search) and end on its right edge, at 1440, 1280 and 1024; no screen has its own wrapper.
+// One page container on every route (ledger items 53, 63): the title and the content start on Activity's left edge (the
+// page gutter, the top bar's own inset; the search sits at the right, next to the avatar) and end on its right edge, at 1440, 1280 and 1024; no screen has its own wrapper.
 const { test, expect, go } = require('./fixtures');
 const { ROUTES } = require('./routes');
 
@@ -16,6 +16,12 @@ for (const w of [1440, 1280, 1024]) {
     await page.setViewportSize({ width: w, height: 900 });
     await go(page, '#/activity', { fresh: true });
     const ref = await edges(page);
+    // the reference itself sits on the top bar's inset (63: the search moved right; the gutter is the anchor), and the
+    // search is at the top bar's right, next to the avatar
+    const bar = await page.evaluate(() => { const st = document.querySelector('.strip'), r = st.getBoundingClientRect(), cs = getComputedStyle(st), q = st.querySelector('.search').getBoundingClientRect(), av = st.querySelector('.op-btn').getBoundingClientRect(); return { inset: Math.round(r.left + parseFloat(cs.paddingLeft)), searchRight: Math.round(q.right), avLeft: Math.round(av.left) }; });
+    expect(Math.abs(ref.left - bar.inset), 'the page gutter is the top bar\'s inset').toBeLessThanOrEqual(1);
+    expect(bar.avLeft - bar.searchRight, 'the search sits just before the avatar').toBeGreaterThanOrEqual(0);
+    expect(bar.avLeft - bar.searchRight, 'the search sits just before the avatar').toBeLessThanOrEqual(40);
     const bad = [];
     for (const r of ROUTES) {
       await go(page, r, { fresh: true });

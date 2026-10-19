@@ -409,8 +409,11 @@
     const paseo = ((D.daemon || {}).paseo || {}).status === 'ok';
     const need = (p) => `<li><a class="cm-side-a" href="#/bots/${m.name}/proposals/${p.id}"><b>${esc(p.title || p.summary)}</b>${UI.factsLine([UI.envFact(p.env), UI.actionFact(p.verb, p.env, p.tier)])}<span class="cm-side-f"><span class="btn sm secondary">Review</span><span class="dl-sub">expires in ${esc(p.expires)}</span></span></a></li>`;
     const task = (c) => `<li><a class="cm-side-a" href="#/tickets/${c.id}"><b>${c.urgent ? UI.mark('wait', { label: 'Urgent' }) + ' ' : ''}${esc(c.title)}</b>${UI.factsLine([{ icon: 'message', value: `Asked by ${askedBy(c)}`, pri: 1, label: 'Who asked' }, { icon: 'clock', value: UI.agoText(c.opened), pri: 2, label: 'Opened' }])}</a></li>`;
-    return shell(m, 'chat', `<div class="grid g-side chat-grid">
-      <div class="panel chat"><div class="panel-head cm-head"><h3>Home session</h3><span class="dl-sub cm-rule">Your messages reach it between turns, never mid-turn</span>
+    // on a phone the side panels repeat the Approvals and Tickets tabs: one line of links above the chat instead, so the
+    // chat fits the screen (65)
+    const sideLine = `<p class="cm-side-line">${pp.length ? `<a class="dl-link" href="#/bots/${m.name}/proposals">${UI.mark('ember')} ${pp.length} waiting for you</a>` : ''}<a class="dl-link" href="#/bots/${m.name}/cases">Working on ${open.length}</a></p>`;
+    return shell(m, 'chat', `${sideLine}<div class="grid g-side chat-grid">
+      <div class="panel chat fit"><div class="panel-head cm-head"><h3>Home session</h3><span class="dl-sub cm-rule">Your messages reach it between turns, never mid-turn</span>
         <a class="btn sm secondary" href="#/chat/bot/${m.name}">${icon('message')}Open in Chat</a>${paseo ? `<button class="btn sm secondary" data-act="chat-paseo" data-m="${m.name}">${icon('external')}Open in paseo</button>` : '<span class="dl-sub">paseo isn’t reachable, so its own view can’t open</span>'}</div>
         ${UI.chatThread(msgs, m.name)}${UI.chatComposer(m.name)}<div class="cm-drop" aria-hidden="true">${icon('attach')}Drop to attach to your message</div></div>
       <div class="stack cm-side">

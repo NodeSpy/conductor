@@ -647,7 +647,7 @@ tr.folded { display: none; }
 .cv-page .cv-g { font: var(--type-caption); font-family: var(--font-family-sans); font-weight: var(--font-weight-semibold); text-transform: uppercase; letter-spacing: .06em; color: var(--color-text-tertiary); margin: var(--space-3) var(--space-2) var(--space-1); }
 .cv-l { list-style: none; margin: 0; padding: 0; }
 .cv-c { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: var(--space-3); align-items: center; padding: var(--space-2); border-radius: var(--radius-control); color: inherit; text-decoration: none; min-height: 52px; }
-.cv-c:hover { background: var(--color-state-hover); } .cv-c.on { background: color-mix(in srgb, var(--color-text-primary) 9%, transparent); box-shadow: inset 3px 0 0 var(--color-accent-default); } .cv-c.on b { color: var(--color-text-primary); }
+.cv-c:hover { background: var(--color-state-hover); } .cv-c.on { background: color-mix(in srgb, var(--color-text-primary) 9%, transparent); box-shadow: inset 3px 0 0 var(--color-text-secondary); } /* the selection is neutral: orange is for what needs you */ .cv-c.on b { color: var(--color-text-primary); }
 .cv-ct { display: grid; grid-template-columns: auto auto 1fr; gap: 0 var(--space-1_5); align-items: center; min-width: 0; }
 .cv-ct b { font-weight: var(--font-weight-semibold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .cv-ct .cv-at { justify-self: end; font: var(--type-caption); white-space: nowrap; }
 .cv-work .st { gap: 0; } .cv-last { grid-column: 1 / -1; font: var(--type-body-s); color: var(--color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

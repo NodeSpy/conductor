@@ -836,7 +836,7 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 /* Secrets: each tab's own explainer, one compact line (50) */
 .sec-explain { display: flex; align-items: baseline; gap: 8px; margin: 0 0 var(--gap-stack); font: var(--type-body-s); color: var(--color-text-secondary); } .sec-explain > svg { flex: none; width: 15px; height: 15px; align-self: center; color: var(--color-icon-default); } .sec-explain b { color: var(--color-text-primary); }
 @media (max-width: 720px) { .sec-explain { display: flex; margin: 0 0 var(--gap-stack); padding: 0; } }
-/* One page container on every route (53): the content's left edge sits under the top bar's search, one max-width, one
+/* One page container on every route (53, re-anchored by 63): the content's left edge is the page gutter, the top bar's own inset; one max-width, one
  * gutter; no screen has its own (the older .page centred itself 75px further right at other widths) */
 #main > .page:not(.flush) { max-width: calc(1280px - 72px); margin: 0; padding: 8px 36px 56px; }
 @media (max-width: 1100px) { #main > .page:not(.flush) { padding: 8px var(--space-5) 48px; } }
@@ -905,3 +905,14 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 /* the composer (62): the send button is the field's exact height and radius, on its bottom edge as the field grows */
 html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radius: var(--radius-control); }
 @media (max-width: 720px) { html .cm-in .cm-send { width: 46px; height: 46px; min-height: 46px; } } /* the field is 46 on a phone (a 44px paperclip in its border) */
+/* the top bar (63): the search sits at the right, next to the avatar; the page's left edge is its own gutter */
+@media (min-width: 721px) { .strip > .ph-brand { order: 0; } .strip .spacer { order: 1; } .strip .cell.staged { order: 2; } .strip > .search { order: 3; } .strip .op-btn { order: 4; } }
+/* a bot's Chat tab (65): the panel fits the screen below the head and tabs (sized in chat.js); on a phone the side
+ * panels become one line of links above it */
+.chat.fit { min-height: 320px; } @media (max-width: 720px) { .chat.fit, .cv-main.fit { min-height: 240px; } }
+.cm-side-line { display: none; }
+@media (max-width: 1100px) { .cm-side-line { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 10px; font: var(--type-body-s); } .chat-grid > .cm-side { display: none; } } /* where the grid stacks, the side panels would land under the chat */
+#main > .page:has(.chat.fit, .cv-main.fit) { padding-bottom: 0; } /* the fitted chat keeps its own gap above the bottom edge */
+.chat-grid > .cm-side.fit-side { overflow-y: auto; overscroll-behavior: contain; align-content: start; }
+
+.cv-main.fit { min-height: 320px; } /* sized in chat.js, like a bot's Chat tab (65) */

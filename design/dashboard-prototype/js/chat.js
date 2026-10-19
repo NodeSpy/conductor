@@ -53,7 +53,7 @@
       return `<div class="cm-row cm-op"><div class="cm-meta">${mk(mi, o)}<span>You</span><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span>${stateWord(c, bot)}</div>
         ${c.text ? `<div class="cm-bubble">${UI.mentionHTML(linkify(UI.md(c.text)))}</div>` : ''}
         ${as.length || ls.length ? `<div class="cm-atts"><span class="cm-given">${icon('attach')}Data you gave it</span>${as.map((a, i) => att(a, i, mi)).join('')}${ls.map(linkCard).join('')}</div>` : ''}</div>`; }
-    if (c.who === 'typing') return `<div class="cm-row cm-bot" id="typing" ${UI.botAttrs(bot)}>${UI.botAv(bot, 'msg')}<div><div class="cm-meta">${UI.botWho(bot)}<span class="dl-sub">is writing…</span></div><div class="cm-bubble typing"><i></i><i></i><i></i></div></div></div>`;
+    if (c.who === 'typing') return `<div class="cm-row cm-bot" id="typing" ${UI.botAttrs(bot)}>${UI.botAv(bot, 'msg')}<div><div class="cm-meta">${UI.botWho(bot)}<span class="dl-sub">is working…</span></div><div class="cm-bubble typing"><i></i><i></i><i></i></div></div></div>`;
     return `<div class="cm-row cm-bot" ${UI.botAttrs(bot)}>${UI.botAv(bot, 'msg')}<div><div class="cm-meta">${UI.botWho(bot)}<span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span>${mk(mi, o)}</div><div class="cm-bubble">${UI.md(c.text)}</div>${c.proposal ? card(c.proposal, bot) : ''}</div></div>`;
   };
   /** The thread's rows: consecutive tool calls fold into one group line. */
@@ -226,5 +226,18 @@ UI.afterRender.push((main) => { if (main.querySelector('#msgs')) UI.chatAnchor()
   const vv = window.visualViewport; if (!vv) return;
   const set = () => document.documentElement.style.setProperty('--vvh', Math.round(vv.height) + 'px');
   vv.addEventListener('resize', set); set();
+  /* A chat panel that is a page's main part (a bot's Chat tab) fits what's left of the visible viewport below the
+     page's head and tabs (65): only its thread scrolls, the composer is always on screen, and it refits on resize
+     (a phone's keyboard, a rotated phone, a resized window). A fixed offset can't know how tall the head above is. */
+  const fit = () => { const main = document.getElementById('main'); if (!main) return; const bar = document.getElementById('tabbar'), barTop = bar && bar.offsetParent ? bar.getBoundingClientRect().top : Infinity;
+    main.querySelectorAll('.chat.fit, .cv-main.fit').forEach((c) => { const box = c.querySelector('#msgs'), atEnd = !box || !c.dataset.fitted || box.scrollHeight - box.scrollTop - box.clientHeight < 40; c.dataset.fitted = '1'; const bottom = Math.min(vv.height + vv.offsetTop, barTop, innerHeight) - (innerWidth <= 720 ? 12 : 24), top = c.getBoundingClientRect().top + main.scrollTop; // where it sits with the page at its top
+      c.style.height = `${Math.max(innerWidth <= 720 ? 240 : 320, Math.floor(bottom - top))}px`;
+      // what sits beside it (a bot's waiting approvals and open work) is no taller: it scrolls inside itself
+      if (box && atEnd) box.scrollTop = box.scrollHeight; // the newest message stays in view, unless you'd scrolled up to read
+      const list = c.parentElement && c.parentElement.querySelector(':scope > .cv-list'); if (list && innerWidth > 720) list.style.maxHeight = c.style.height; // the conversation list beside it is no taller
+      const side = c.parentElement && c.parentElement.querySelector(':scope > .cm-side'); if (side) { side.classList.add('fit-side'); side.style.maxHeight = innerWidth > 720 ? c.style.height : ''; } }); };
+  UI.fitChat = fit;
+  vv.addEventListener('resize', fit); addEventListener('resize', fit);
+  if (UI.afterRender) UI.afterRender.push(() => requestAnimationFrame(fit));
   document.addEventListener('focusin', (e) => { if (e.target.id !== 'say' || innerWidth > 720) return; const p = e.target.closest('.cv-main, .chat'); if (p) setTimeout(() => p.scrollIntoView({ block: 'end', behavior: 'instant' }), 60); });
 })();
