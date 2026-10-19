@@ -177,3 +177,25 @@ test('bots are the brand\'s mascots: shape, eyes and colour, a distinct combinat
   expect(await page.evaluate(() => JSON.stringify(D.pending.at(-1).after.avatar))).toBe('{"shape":"capsule","eyes":"happy","color":"lime"}');
   await expect(page.locator('.dl-bothead .bav.mascot[data-bc="lime"]').first()).toBeVisible();
 });
+
+test('upload your own picture: PNG, JPEG or WebP up to 2 MB, cropped square, previewed, shown everywhere; wrong type and too large say why', async ({ page }) => {
+  await go(page, '#/bots/platform-sre/settings', { fresh: true });
+  await page.locator('[data-act="bot-mascot"]').click();
+  await page.locator('[data-act="mk-mode"][data-v="upload"]').click();
+  await page.setInputFiles('#cr-file', { name: 'anim.gif', mimeType: 'image/gif', buffer: Buffer.from('GIF89a') });
+  await expect(page.locator('.cr-err')).toContainText('Use a PNG, JPEG or WebP');
+  await page.setInputFiles('#cr-file', { name: 'huge.png', mimeType: 'image/png', buffer: Buffer.alloc(3 * 1024 * 1024) });
+  await expect(page.locator('.cr-err')).toContainText('the limit is 2 MB');
+  const png = await page.evaluate(() => { const c = document.createElement('canvas'); c.width = 400; c.height = 300; const x = c.getContext('2d'); x.fillStyle = '#3a8'; x.fillRect(0, 0, 400, 300); x.fillStyle = '#fff'; x.fillRect(150, 100, 100, 100); return c.toDataURL('image/png').split(',')[1]; });
+  await page.setInputFiles('#cr-file', { name: 'me.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });
+  await expect(page.locator('#cr-frame img')).toBeVisible();
+  await expect(page.locator('#cr-prev .bav.img img')).toHaveCount(4); // the preview at page, header, list and row sizes
+  await page.locator('#cr-z').fill('1.6');
+  await page.locator('[data-act="mk-use"]').click();
+  await expect(page.locator('.dl-bothead .bav.img img').first()).toHaveAttribute('src', /^data:image\/(webp|png)/);
+  expect(await page.evaluate(() => !!D.pending.at(-1).after.avatar.image)).toBe(true);
+  // remove it: back to its mascot
+  await page.locator('[data-act="bot-mascot"]').click();
+  await page.locator('[data-act="mk-remove"]').click();
+  await expect(page.locator('.dl-bothead .bav.mascot').first()).toBeVisible();
+});

@@ -728,3 +728,12 @@ tr.folded { display: none; }
 .mk-opt[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
 .mk-field { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; } .mk-row { display: flex; align-items: center; gap: 16px; } .mk-lbl { font: var(--type-label); }
 @media (max-width: 720px) { .mk-pick { grid-template-columns: 1fr; } .mk-prev { position: static; } .mk-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+/* an uploaded picture (25b): a square crop you drag and zoom; shown wherever a mascot would be */
+.bav.img { background: var(--color-bg-sunken); overflow: hidden; } .bav.img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mk-mode { margin: 0 var(--pad-card, 24px) 12px; } .mk-sizes .bav { flex: none; }
+.cr { display: grid; gap: 12px; justify-items: start; }
+.cr-frame { position: relative; width: 240px; height: 240px; overflow: hidden; border-radius: 12px; background: var(--color-bg-sunken); cursor: grab; touch-action: none; box-shadow: inset 0 0 0 1px var(--color-border-default); }
+.cr-frame img { position: absolute; left: 0; top: 0; max-width: none; user-select: none; transform-origin: 0 0; }
+.cr-zoom { display: flex; align-items: center; gap: 10px; font: var(--type-body-s); } .cr-zoom input { width: 180px; }
+.cr-drop { display: grid; justify-items: center; gap: 6px; width: 100%; max-width: 420px; padding: 28px 16px; border: 1.5px dashed var(--color-border-strong); border-radius: var(--radius-card); background: none; color: var(--color-text-primary); cursor: pointer; text-align: center; } .cr-drop svg { width: 22px; height: 22px; }
+.cr-err { margin: 0; font: var(--type-body-s); color: var(--color-status-danger-fg); }

@@ -858,6 +858,11 @@ on the ticket.
   - a tagline and a voice.
 - **Where it shows:** the mascot in that colour on rows, the bot page, chat and the conversation list. Its messages carry
   a thin rule in its colour; there's no tint. Its name is shown with its id, quieter.
+- **Or your own picture:** the picker's second choice, Upload a picture: PNG, JPEG or WebP up to 2 MB (a wrong type or
+  a larger file says which and why), cropped to a square you drag and zoom, with the preview at page, header, list and
+  row sizes; replace it, or remove it to go back to the mascot. It shows everywhere the mascot would.
+  `PUT /api/v1/bots/<bot>/avatar` (multipart; the 256px square) returns `{image}`; config keeps
+  `avatar: {image: avatars/<bot>.webp}`.
 - **No picture:** a bot without one shows its initials.
 - **Config shape:** `bots.<m>.avatar: {shape, eyes, color}`, plus `display_name`, `tagline` and `voice` (a builder adds
   these to conductor).
