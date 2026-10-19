@@ -33,7 +33,9 @@ for (const theme of ['dark', 'light']) {
         expect(await fill('hb-ok')).toBe(await resolve(page, 'var(--color-status-success-chart)'));
         expect(await fill('hb-run')).toBe(await resolve(page, 'var(--color-status-running-solid)'));
         expect(await fill('hb-fail')).toBe(await resolve(page, 'var(--color-status-danger-solid)'));
-        expect(contrast(await fill('hb-ok'), await resolve(page, 'var(--color-bg-surface)')), `${route} passed bars`).toBeGreaterThanOrEqual(3);
+        // the soft fill is calm; the bar's edge is its cap in the full success green, 3:1 or more
+        expect(contrast(await fill('hb-cap'), await resolve(page, 'var(--color-bg-surface)')), `${route} passed bars' edge`).toBeGreaterThanOrEqual(3);
+        expect(await fill('hb-ok')).not.toBe(await fill('hb-cap'));
         // in each bar the failure is the top segment
         const order = await svg.evaluate((el) => { const xs = {}; el.querySelectorAll('rect').forEach((r) => { (xs[r.getAttribute('x')] = xs[r.getAttribute('x')] || []).push([+r.getAttribute('y'), r.getAttribute('class')]); });
           return Object.values(xs).filter((v) => v.some(([, c]) => c === 'hb-fail')).map((v) => v.sort((a, b) => a[0] - b[0])[0][1]); });
@@ -44,3 +46,20 @@ for (const theme of ['dark', 'light']) {
     });
   });
 }
+
+test('every bar starts on the axis; a legend names each kind with its count; a bar reads out its runs', async ({ page }) => {
+  for (const route of ['#/activity', '#/overview']) {
+    await go(page, route, { fresh: true });
+    const svg = page.locator('#main svg.dl-hours').first();
+    const r = await svg.evaluate((el) => { const ax = +el.querySelector('.hb-axis').getAttribute('y1');
+      return { ax, bottoms: [...el.querySelectorAll('.hb')].map((g) => { const rs = [...g.querySelectorAll('rect:not(.hb-hit)')]; return rs.length ? Math.max(...rs.map((x) => +x.getAttribute('y') + +x.getAttribute('height'))) : null; }).filter((x) => x != null) }; });
+    for (const b of r.bottoms) expect(Math.abs(b - r.ax), `${route}: a bar's bottom vs the axis`).toBeLessThan(0.01);
+    const legend = page.locator('#main .hb-legend').first();
+    for (const k of ['Passed', 'Failed', 'Running', 'Waiting or parked']) await expect(legend).toContainText(k);
+    const sum = await legend.locator('b').allTextContents();
+    expect(sum.reduce((a, x) => a + +x, 0)).toBeGreaterThan(0);
+    const bar = svg.locator('.hb').filter({ has: page.locator('.hb-fail') }).first();
+    await bar.dispatchEvent('click');
+    await expect(page.locator('#main .hb-read').first()).toContainText(/\d+ failed/);
+  }
+});

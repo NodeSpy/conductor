@@ -108,14 +108,17 @@
     const span = sinceMin() || 10080, n = span <= 60 ? 12 : span <= 1440 ? Math.round(span / 60) : 7, bucket = span / n, w = 960, h = 96;
     const per = Array.from({ length: n }, () => ({ ok: 0, other: 0, run: 0, fail: 0 }));
     G.all.forEach((r) => { const m = (Date.now() - new Date(r.started)) / 60000; if (m > span) return; const i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(m / bucket))); per[i][UI.runBucket(r)]++; });
-    const bars = UI.stackBars(per, w, h);
+    const at = (min) => new Date(Date.now() - min * 60000).toISOString();
+    const when = (i) => { const from = (n - i) * bucket, to = (n - 1 - i) * bucket; return unitOf === 'day' ? new Date(at(from - bucket / 2)).toLocaleDateString(undefined, { weekday: 'long' }) : `${UI.hm(at(from))}–${to ? UI.hm(at(to)) : 'now'}`; };
+    const unitOf = span <= 1440 ? 'time' : 'day';
+    const bars = UI.stackBars(per, w, h, when);
     const label = (RANGES.find(([v]) => v === av.since) || RANGES[1])[1].toLowerCase().replace('last ', ''), unit = span <= 60 ? '5 minutes' : span <= 1440 ? 'hour' : 'day';
     const fails = G.all.filter((r) => (r.status === 'fail' || r.status === 'stopped') && (Date.now() - new Date(r.started)) / 60000 <= span);
     // failures from before the range aren't listed either; say how many still wait for a look, one click from showing them
     const older = (() => { if (!sinceMin()) return 0; const keep = av.since, m = sinceMin(); av.since = 'all'; const n = D.runs.filter((r) => (r.status === 'fail' || r.status === 'stopped') && actMatch(r) && Date.now() - new Date(r.started) > m * 60000).length; av.since = keep; return n; })();
     const olderNote = older ? ` <button class="link" data-act="act-all-time">${older} older failure${older > 1 ? 's' : ''} · show all time</button>` : '';
     return `<section class="dl-card dl-strip"><header class="dl-ch"><h2>Runs per ${unit}</h2><span class="dl-sub">${sinceMin() ? `the last ${label}` : 'the last 7 days'}</span></header>
-      <svg class="dl-hours" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Runs per ${unit}: ${fails.length} failed">${bars}<line x1="0" x2="${w}" y1="${h - 17}" y2="${h - 17}" class="hb-axis"/></svg><div class="dl-axis"><span>${sinceMin() ? `${label.replace(/^hour$/, '1 hour')} ago` : '7 days ago'}</span><span>now</span></div>
+      <svg class="dl-hours" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Runs per ${unit}: ${fails.length} failed">${bars}<line x1="0" x2="${w}" y1="${h - 17}" y2="${h - 17}" class="hb-axis"/></svg><div class="dl-axis"><span>${sinceMin() ? `${label.replace(/^hour$/, '1 hour')} ago` : '7 days ago'}</span><span>now</span></div>${UI.barLegend(per)}
       ${fails.length ? `<p class="dl-foot-note">${UI.mark('fail')}<span>${fails.length} failed: ${fails.slice(0, 4).map((r) => `<a class="dl-link" href="#/runs/${r.id}">${esc(r.workflow.replace(/^bot:/, ''))} at ${UI.failedAt(r)}</a>`).join(', ')}${fails.length > 4 ? ` and ${fails.length - 4} more` : ''}.${olderNote}</span></p>` : `<p class="dl-foot-note">${UI.mark('ok')}<span>Nothing failed ${sinceMin() ? `in the last ${label.replace(/^hour$/, 'hour')}` : 'in the last 7 days'}.${olderNote}</span></p>`}</section>`;
   }
   /** The filter bar's fields for a list of runs: each menu offers what's actually there, with how many of each. */

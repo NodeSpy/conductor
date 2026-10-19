@@ -325,7 +325,7 @@ normally" sat beside failed runs), so the page opens on the figures, with Needs 
 3. **Needs you**: the mark, a plain title, why, the machine detail last, the age, one verb (Review is primary for
    approvals); See all.
 4. Beside it: **Running now** (at most three, longest-running first, then "+N more running →"; hidden when nothing
-   runs), **Last 12 hours** (the figure, runs per hour: passed in a softer green (`--color-status-success-chart`, 3:1 or more), waiting or parked neutral, running blue, failures red on top, the failures named),
+   runs), **Last 12 hours** (the figure, runs per hour: every bar on the axis; passed in a soft green with a full-green cap (`--color-status-success-chart` and `-solid`), waiting or parked neutral, running blue, failures red on top; a legend with each kind's count, and a bar's runs read out on hover, focus or tap; the failures named),
    **For your information** (an update that installs itself, a sandbox block).
 5. **Get started**, only while something is left: the remaining steps, the next one as the primary button, what's done
    in one quiet line.
@@ -398,7 +398,7 @@ needs me?", as far back as you need.
 - **The sentence**: "Last 12 hours: 15 runs. 3 need attention, 3 are running and 9 finished."
 - **Filters on the page**: search (repo, PR, run id, error), status, workflow, bot, what the connectors publish (a repository, a pull request), and the time range
   (last hour, 12 hours, 24 hours, 7 days, all time). Old `#/runs?…` links land here with the same filters.
-- **Runs per hour** for the range: the Overview's strip (passed green, running blue, failures red on top), failures named. It is the same size for ten
+- **Runs per hour** for the range: the Overview's strip (every bar on the axis; passed a soft green with a full-green cap, running blue, failures red on top, waiting or parked neutral), with a legend and counts, a bar's runs on hover, focus or tap, and the failures named. It is the same size for ten
   workflows or five hundred (the per-workflow lanes were removed: they grow with every workflow).
 - **The grouped table**, as on the approved status column: **Needs attention · N** (failed runs and runs waiting on
   a person: the reason in its state's colour under the name, a leading edge, one action: Open, or Answer), **Running

@@ -126,6 +126,17 @@ tr[data-row] .why-line { color: var(--color-text-primary); }
 /* phone: a list chip's remove button is a 44px target (the chip keeps its size; the button reaches past it) */
 @media (max-width: 720px) { .chip-x { min-height: 36px; } .chip-x button, .chip-del { width: 36px; height: 44px; margin: -4px -2px -4px 0; } }
 
-/* ---- runs per hour (UI.stackBars): passed in a softer green, waiting or parked neutral, running blue, failures red on
-   top so the rare one pops first ---- */
-.dl-hours .hb-ok { fill: var(--color-status-success-chart); } .dl-hours .hb-other { fill: var(--color-border-strong); } .dl-hours .hb-run { fill: var(--color-status-running-solid); } .dl-hours .hb-fail { fill: var(--color-status-danger-solid); }
+/* ---- runs per hour (UI.stackBars): passed in a soft green with a 2px cap in the full success green (the cap is the
+   bar's edge, 3:1 and up, so the fill can stay calm), waiting or parked neutral, running blue, failures red on top so
+   the rare one pops first; every bar starts on the axis. A bar under the pointer, focus or a tap is outlined and its
+   runs are read out under the chart, beside the legend. ---- */
+.dl-hours .hb-ok { fill: var(--color-status-success-chart); } .dl-hours .hb-cap { fill: var(--color-status-success-solid); }
+.dl-hours .hb-other { fill: var(--color-border-strong); } .dl-hours .hb-run { fill: var(--color-status-running-solid); } .dl-hours .hb-fail { fill: var(--color-status-danger-solid); }
+.dl-hours .hb-hit { fill: transparent; } .dl-hours .hb { cursor: pointer; outline: none; }
+.dl-hours .hb.on .hb-hit, .dl-hours .hb:focus-visible .hb-hit { fill: var(--color-state-hover); }
+.hb-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-4); margin-top: var(--space-2); }
+.hb-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font: var(--type-caption); color: var(--color-text-secondary); }
+.hb-legend li { display: inline-flex; align-items: center; gap: 6px; } .hb-legend b { color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
+.hb-sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.hb-sw-ok { background: var(--color-status-success-chart); box-shadow: inset 0 2px 0 var(--color-status-success-solid); } .hb-sw-fail { background: var(--color-status-danger-solid); } .hb-sw-run { background: var(--color-status-running-solid); } .hb-sw-other { background: var(--color-border-strong); }
+.hb-read { margin: 0; font: var(--type-caption); }
