@@ -65,28 +65,76 @@ test('add a site: the exact address only, and it widens', async ({ page }) => {
   expect(await page.evaluate(() => D.wallet.profiles[0].sites.find((s) => s.origin === 'https://store.example.org').fields)).toEqual(['email']);
 });
 
-test('add personal details: required fields, a typed value is stored write-only and cleared, then the passkey', async ({ page }) => {
+const src = async (page, k, s) => { const el = page.locator(`.vs[data-vs="${k}"]`).first(); await el.locator('.vs-srcbtn').click(); await el.locator(`[data-act="vs-src"][data-v="${s}"]`).click(); };
+const lookup = async (page, sel, q, ref) => { const inp = page.locator(sel); await inp.click(); await inp.fill(q); await page.locator(`${sel.replace(/-pick$/, '-list')} [data-act="vs-choose"][data-ref*="${ref}"]`).first().click(); };
+
+test('add personal details: the shared value field (typed write-only, or a vault item from the lookup; never a setting), several bots or teams, then the passkey', async ({ page }) => {
   await go(page, '#/browser/details/new', { fresh: true });
   await page.locator('[data-act="w-np-save"]').click();
   await expect(page.locator('[data-field="name"].bad')).toBeVisible();
   await expect(page.locator('[data-field="who"].bad')).toBeVisible();
+  await expect(page.locator('#main')).not.toContainText('--profile');
   await page.locator('#w-np-name').fill('travel');
-  await page.locator('#wv-email').fill('someone@example.com');
-  await page.locator('[data-wv="name"] [data-act="w-src"][data-v="ref"]').click();
-  await page.locator('#wv-name').fill('not a reference');
+  await page.locator('#wv-email-in').fill('someone@example.com');
+  await src(page, 'name', 'vault');
+  await lookup(page, '#wv-name-pick', 'home name', 'Me/Home/name');
+  await expect(page.locator('.vs[data-vs="name"] .vs-chosen')).toContainText('Home');
+  await src(page, 'phone', 'setting');
+  await lookup(page, '#wv-phone-pick', 'org', 'settings.org');
   await page.locator('#w-np-origin').fill('https://trips.example.com');
-  await page.locator('#w-np-who').selectOption('bot:homelab');
+  await page.locator('#w-np [data-listk="who"] select').selectOption('bot:homelab');
+  await page.locator('#w-np [data-listk="who"] select').selectOption('team:finance');
   await page.locator('[data-act="w-np-save"]').click();
-  await expect(page.locator('[data-wv="name"].bad')).toContainText('A reference such as');
-  await page.locator('#wv-name').fill('{{ vault "op" "Me/Travel/name" }}');
+  await expect(page.locator('[data-field="phone"].bad')).toContainText('Not from a setting');
+  await page.locator('.vs[data-vs="phone"] [data-act="vs-clear"]').click();
   await page.locator('[data-act="w-np-save"]').click();
   await passkey(page).click();
   await expect(page).toHaveURL(/#\/browser\/details\/travel$/);
   const p = await page.evaluate(() => D.wallet.profiles.find((x) => x.name === 'travel'));
   expect(p.fields.email).toEqual({ kind: 'stored', source: '' });
-  expect(p.fields.name.kind).toBe('vault');
+  expect(p.fields.name).toEqual({ kind: 'vault', source: '{{ vault "op" "Me/Home/name" }}' });
+  expect(p.fields.phone).toBeUndefined();
+  expect(p.identities).toEqual(['bot:homelab', 'team:finance']);
   expect(JSON.stringify(await page.evaluate(() => D))).not.toContain('someone@example.com');
   await expect(page.locator('#main')).not.toContainText('someone@example.com');
+});
+
+test('add a card: the shared value fields, $ amounts, shops as rows each checked, several bots or teams, inside the page container', async ({ page }) => {
+  await go(page, '#/browser/cards/new', { fresh: true });
+  const [h1, ref] = await page.evaluate(() => [document.querySelector('#main h1').getBoundingClientRect().left, document.querySelector('#w-nc').getBoundingClientRect().left]);
+  await go(page, '#/activity');
+  expect(await page.evaluate(() => document.querySelector('#main h1').getBoundingClientRect().left)).toBeCloseTo(h1, 0);
+  expect(ref).toBeCloseTo(h1, 0);
+  await go(page, '#/browser/cards/new');
+  await expect(page.locator('#main')).not.toContainText('--card');
+  await expect(page.locator('.wl-money')).toHaveCount(3);
+  await expect(page.locator('[data-money="per_purchase"]')).toHaveAttribute('placeholder', 'Amount');
+  await page.locator('#w-nc-name').fill('travel');
+  await page.locator('#wv-number-in').fill('4242424242424242');
+  await src(page, 'expiry', 'vault');
+  await lookup(page, '#wv-expiry-pick', 'household expiry', 'Cards/Household/expiry');
+  await page.locator('[data-money="per_purchase"]').fill('$40');
+  await page.locator('[data-money="per_day"]').fill('80');
+  await page.locator('[data-money="per_month"]').fill('200.50');
+  await page.locator('[data-act="w-row-add"]').click(); await page.locator('[data-row="merchants"]').last().fill('shop.example.org/cart');
+  await page.locator('[data-act="w-row-add"]').click(); await page.locator('[data-row="merchants"]').last().fill('https://trips.example.com');
+  await page.locator('#w-nc [data-listk="who"] select').selectOption('bot:homelab');
+  await page.locator('#w-nc [data-listk="who"] select').selectOption('team:finance');
+  await page.locator('[data-act="w-nc-save"]').click();
+  // only the wrong row is marked, with the reason
+  await expect(page.locator('[data-row="merchants"].wl-bad')).toHaveCount(1);
+  await expect(page.locator('[data-field="merchants"] .ferr')).toContainText('shop.example.org/cart');
+  await page.locator('.wl-row').first().locator('[data-act="w-row-rm"]').click();
+  await page.locator('[data-act="w-nc-save"]').click();
+  await passkey(page).click();
+  await expect(page).toHaveURL(/#\/browser\/cards\/travel$/);
+  const c = await page.evaluate(() => D.wallet.cards.find((x) => x.name === 'travel'));
+  expect(c.limits).toMatchObject({ per_purchase: 40, per_day: 80, per_month: 200.5 });
+  expect(c.merchants).toEqual(['https://trips.example.com']);
+  expect(c.identities).toEqual(['bot:homelab', 'team:finance']);
+  expect(c.fields.number.kind).toBe('stored');
+  expect(c.fields.expiry.source).toBe('{{ vault "op" "Cards/Household/expiry" }}');
+  expect(JSON.stringify(await page.evaluate(() => D))).not.toContain('4242424242424242');
 });
 
 test('cards: spend against the limits, warnings from validate, and the card never shown beyond its last four', async ({ page }) => {

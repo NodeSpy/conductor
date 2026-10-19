@@ -38,14 +38,19 @@
 .wl-audit { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; font: var(--type-body-m); }
 .wl-audit > .dl-sub { white-space: nowrap; }
 
-/* a value: typed once, or a reference */
-.wl-valrow { display: flex; gap: 8px; align-items: stretch; }
-.wl-valrow .seg { flex: none; box-sizing: border-box; }
-.wl-valrow .seg button { min-height: 0; }
-.wl-valrow .input { flex: 1; min-width: 0; }
-.wl-val.bad .input { border-color: var(--color-status-danger-solid); }
-.wl-val .ferr { color: var(--color-status-danger-fg); font: var(--type-body-s); }
-.wl-form { display: grid; gap: 16px; max-width: 880px; }
+/* an amount: the $ inside the field; an allowlist: one exact address a row */
+.wl-money { position: relative; display: flex; align-items: center; }
+.wl-money > span { position: absolute; left: 12px; color: var(--color-text-tertiary); font: var(--type-body-m); pointer-events: none; }
+.wl-money > .input { width: 100%; padding-left: 26px; }
+.wl-rows { display: grid; gap: 8px; }
+.wl-rows:empty { display: none; }
+.wl-row { display: flex; gap: 8px; align-items: center; }
+.wl-row > .input { flex: 1; min-width: 0; }
+.wl-row > .input.wl-bad { border-color: var(--input-border-error, var(--color-status-danger-solid)); }
+.field[data-field="merchants"] .ferr { color: var(--color-status-danger-fg); font: var(--type-body-s); }
+.wl-row-add { justify-self: start; margin-top: 8px; }
+.field[data-field="merchants"] { display: grid; }
+.wl-form { display: grid; gap: 16px; }
 .wl-form > .wl-h { margin: 8px 0 -8px; font: var(--type-h3); font-family: var(--font-family-sans); font-variation-settings: normal; letter-spacing: normal; }
 .wl-form > p.dl-sub { margin: 0; }
 .wl-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; }
@@ -54,6 +59,7 @@
 .wl-checks label { min-height: 32px; }
 .wl-tip { display: flex; flex-wrap: nowrap; gap: 10px; align-items: flex-start; }
 .wl-tip > svg { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--color-icon-default); }
+.flabel .opt { margin-left: 6px; font-weight: 400; color: var(--color-text-tertiary); }
 .flabel { display: block; font: var(--type-label); color: var(--color-text-secondary); margin-bottom: 6px; }
 
 /* spend against the limits: a figure and a thin bar, never a risk meter */
@@ -112,10 +118,6 @@
 @media (max-width: 1100px) { .wl-cols { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 720px) {
   .wl-grid2, .wl-grid3 { grid-template-columns: minmax(0, 1fr); }
-  .wl-valrow { flex-direction: column; align-items: stretch; }
-  .wl-valrow .seg { align-self: flex-start; }
-  .wl-valrow .input { flex: none; }
-  .wl-valrow .seg button { min-height: 40px; }
   .wl-card-row { grid-template-columns: 18px minmax(0, 1fr); }
   .wl-card-row > .dl-na { grid-column: 2; flex-direction: row; justify-content: flex-start; }
   .wl-lrow { grid-template-columns: minmax(0, 1fr) auto; }

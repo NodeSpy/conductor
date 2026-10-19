@@ -181,35 +181,44 @@
   UI.act('w-prof-rm', (b) => UI.confirm({ title: `Remove ${esc(b.dataset.p)}?`, body: 'Its stored values are deleted, and no bot can fill these details anywhere. Values from a vault stay in the vault.', ok: 'Remove', danger: true }).then((ok) => { if (!ok) return; D.wallet.profiles = W().profiles.filter((x) => x.name !== b.dataset.p); audit('browser_profile_remove', `profile ${b.dataset.p}`); S.save(); UI.go('#/browser/details'); UI.toast('Removed', `${esc(b.dataset.p)} is gone`, 'ok'); }));
   UI.act('w-field-rm', (b) => UI.confirm({ title: `Remove ${esc(fieldWord(b.dataset.f).toLowerCase())} from ${esc(b.dataset.p)}?`, body: 'Bots can no longer fill it. A typed value is deleted; a vault keeps its own.', ok: 'Remove', danger: true }).then((ok) => { if (!ok) return; editP(b.dataset.p, (p) => { delete p.fields[b.dataset.f]; if (p.visible) delete p.visible[b.dataset.f]; }); audit('browser_profile_unset', `profile ${b.dataset.p} · ${b.dataset.f}`); done('Removed', `${esc(fieldWord(b.dataset.f))} is no longer set`); }));
   /** A value: typed once (write-only), or a reference to a vault, an environment variable or a secret. */
-  const valueField = (k, label, opt = true) => `<div class="field wl-val" data-wv="${esc(k)}"><label for="wv-${esc(k)}">${esc(label)} ${opt ? '<span class="opt">optional</span>' : '<span class="req" aria-label="required">*</span>'}</label>
-    <div class="wl-valrow"><div class="seg sm" role="group" aria-label="${esc(label)}: how to give it"><button type="button" class="on" aria-pressed="true" data-act="w-src" data-v="typed">Type it</button><button type="button" aria-pressed="false" data-act="w-src" data-v="ref">A reference</button></div>
-      <input class="input" type="password" autocomplete="off" id="wv-${esc(k)}" data-src="typed" placeholder="stored write-only"></div><div class="ferr" role="alert"></div></div>`;
-  UI.act('w-src', (b) => { const box = b.closest('.wl-val'), inp = box.querySelector('input'); box.querySelectorAll('[data-act="w-src"]').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
-    inp.value = ''; inp.dataset.src = b.dataset.v; inp.type = b.dataset.v === 'typed' ? 'password' : 'text'; inp.classList.toggle('mono', b.dataset.v === 'ref'); inp.placeholder = b.dataset.v === 'typed' ? 'stored write-only' : '{{ vault "op" "Me/Home/email" }}'; inp.focus(); });
-  const REF = /^(\{\{\s*vault\s+"[\w-]+"\s+"[^"]+"\s*\}\}|\$\{(env|secret)\.[A-Z_][A-Z0-9_]*\})$/;
-  /** Read the value fields: { field: {kind, source} }, clearing what was typed. Returns null (and marks the bad ones) on an error. */
-  const readValues = (root) => { const out = {}; let bad = 0;
-    root.querySelectorAll('.wl-val').forEach((box) => { const inp = box.querySelector('input'), v = inp.value.trim(), err = box.querySelector('.ferr'); err.textContent = ''; box.classList.remove('bad'); if (!v) return;
-      if (inp.dataset.src === 'ref' && !REF.test(v)) { err.textContent = 'A reference such as {{ vault "op" "Me/Home/email" }}, ${env.NAME} or ${secret.NAME}.'; box.classList.add('bad'); bad++; return; }
-      out[box.dataset.wv] = inp.dataset.src === 'ref' ? { kind: /vault/.test(v) ? 'vault' : /env\./.test(v) ? 'env' : 'secret', source: v } : { kind: 'stored', source: '' }; });
-    if (bad) return null; root.querySelectorAll('.wl-val input[data-src="typed"]').forEach((i) => { i.value = ''; }); return out; };
-  UI.act('w-field-set', (b) => { const p = profile(b.dataset.p), f = b.dataset.f;
-    const s = UI.modal(`<div class="modal-head"><div><div class="caps">write-only</div><h2>Replace ${esc(fieldWord(f).toLowerCase())}</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
-      <div class="modal-body stack" id="w-set">${valueField(f, fieldWord(f), false)}<div class="hint">The page will say set, never the value.</div></div>
+  /** A value: the app's value-source field (UI.VS): a typed value, write-only (the daemon's `--stdin`: it goes to the
+      wallet's sealed store and never comes back), or a vault item (with Browse…) or an environment variable, as a
+      reference. A setting is plain config, so the field itself refuses it for these sensitive values. */
+  const valueField = (k, label, opt = true, help = '') => UI.fieldHTML({ k, type: 'value', sensitive: true, label, req: !opt, defaultSrc: 'typed', typedPh: 'Type it once: stored write-only', sources: ['typed', 'vault', 'env', 'setting'], help }, '', 'wv-');
+  /** Read the value fields: { field: {kind, source} }, marking the bad ones; null on an error. Typed values stay in
+      their inputs until clearTyped() (after the save is confirmed). */
+  const readValues = (root) => { const out = {}; let n = 0;
+    root.querySelectorAll('.vs').forEach((el) => { const k = el.dataset.vs, box = el.closest('.field'), err = box.querySelector('.ferr'), v = el.querySelector('input[type=hidden]').value.trim(), p = UI.VS.parse(v);
+      box.classList.remove('bad'); err.textContent = '';
+      if (el.dataset.pending === '1') { out[k] = { kind: 'stored', source: '' }; return; }
+      if (!v) return;
+      const why = UI.VS.blocked(true, v) ? 'Not from a setting: pick a vault item or an environment variable, or type it.' : p.retired ? 'Pick the vault item again.' : '';
+      if (why) { box.classList.add('bad'); err.textContent = why; n++; return; }
+      out[k] = { kind: p.src, source: v }; });
+    return n ? null : out; };
+  const needValue = (root, k) => { const box = root.querySelector(`[data-vs="${k}"]`).closest('.field'); box.classList.add('bad'); box.querySelector('.ferr').textContent = 'Required: type it, or pick where it comes from.'; };
+  /** Forget what was typed once it's saved: the page never holds a value afterwards. */
+  const clearTyped = (root) => root.querySelectorAll('.vs[data-pending="1"]').forEach((el) => { el.querySelector('.vs-in').value = ''; el.dataset.pending = ''; UI.VS.refresh(el, true); });
+  /** Replace one value (a profile's detail or a card's): neutral, so no passkey; write-only either way. */
+  const replaceModal = (caps, title, label, onSave) => { const s = UI.modal(`<div class="modal-head"><div><div class="caps">${caps}</div><h2>${title}</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+      <div class="modal-body stack" id="w-set">${valueField('v', label, false, 'The page will say set, never the value.')}</div>
       <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="w-set-go">Save</button></div>`);
-    UI.$('#w-set-go', s).addEventListener('click', () => { const v = readValues(UI.$('#w-set', s)); if (!v) return; if (!v[f]) { const box = UI.$('.wl-val', s); box.classList.add('bad'); box.querySelector('.ferr').textContent = 'Required.'; return; }
-      editP(p.name, (x) => { x.fields[f] = v[f]; }); audit('browser_profile_set', `profile ${p.name} · ${f} · value not recorded`); UI.closeModal(); done('Saved', `${esc(fieldWord(f))} is set`); }); });
+    UI.$('#w-set-go', s).addEventListener('click', () => { const root = UI.$('#w-set', s), v = readValues(root); if (!v) return; if (!v.v) return needValue(root, 'v'); clearTyped(root); UI.closeModal(); onSave(v.v); }); };
+  UI.act('w-field-set', (b) => { const p = profile(b.dataset.p), f = b.dataset.f;
+    replaceModal('write-only', `Replace ${esc(fieldWord(f).toLowerCase())}`, fieldWord(f), (v) => { editP(p.name, (x) => { x.fields[f] = v; }); audit('browser_profile_set', `profile ${p.name} · ${f} · value not recorded`); done('Saved', `${esc(fieldWord(f))} is set`); }); });
+  UI.act('w-card-set', (b) => { const c = card(b.dataset.c), f = b.dataset.f, w = CARDF[f];
+    replaceModal('write-only', `Replace the ${esc(w.toLowerCase())}`, w, (v) => { c.fields = c.fields || {}; c.fields[f] = v; c.updated = now(); audit('browser_card_set', `card ${c.name} · ${f} · value not recorded`); done('Saved', `the ${esc(w.toLowerCase())} is set`); }); });
   const FIELDS_ALL = ['name', 'given_name', 'family_name', 'email', 'phone', 'company', 'birthday', 'address.line1', 'address.line2', 'address.city', 'address.region', 'address.postal_code', 'address.country', 'billing.line1', 'billing.line2', 'billing.city', 'billing.region', 'billing.postal_code', 'billing.country'];
   UI.act('w-field-add', (b) => { const p = profile(b.dataset.p), free = FIELDS_ALL.filter((f) => !(p.fields || {})[f]);
     const s = UI.modal(`<div class="modal-head"><div><div class="caps">${esc(p.name)}</div><h2>Add a detail</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
       <div class="modal-body stack" id="w-fa"><div class="field"><label for="w-fa-f">Which detail <span class="req" aria-label="required">*</span></label><select class="select" id="w-fa-f">${free.map((f) => `<option value="${f}">${esc(fieldWord(f))}</option>`).join('')}<option value="custom">Something else…</option></select></div>
         <div class="field hide" id="w-fa-cbox"><label for="w-fa-c">Its name</label><input class="input mono" id="w-fa-c" placeholder="loyalty_number"><div class="hint">Letters, digits and _; the bot asks for custom.&lt;name&gt;.</div><div class="ferr" role="alert"></div></div>
-        ${valueField('v', 'Value', false)}<div class="hint">Adding a detail doesn’t fill it anywhere yet: add it to a site below.</div></div>
+        ${valueField('v', 'Value', false, 'Adding a detail doesn’t fill it anywhere yet: add it to a site below.')}</div>
       <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="w-fa-go">Add</button></div>`);
     const sel = UI.$('#w-fa-f', s); sel.addEventListener('change', () => UI.$('#w-fa-cbox', s).classList.toggle('hide', sel.value !== 'custom'));
     UI.$('#w-fa-go', s).addEventListener('click', () => { let f = sel.value; if (f === 'custom') { const c = UI.$('#w-fa-c', s).value.trim(); if (!/^[a-z0-9_]{1,40}$/.test(c)) { UI.$('#w-fa-cbox', s).classList.add('bad'); UI.$('#w-fa-cbox .ferr', s).textContent = 'Letters, digits and _, up to 40.'; return; } f = 'custom.' + c; }
-      const v = readValues(UI.$('#w-fa', s)); if (!v) return; if (!v.v) { const box = UI.$('.wl-val', s); box.classList.add('bad'); box.querySelector('.ferr').textContent = 'Required.'; return; }
-      editP(p.name, (x) => { x.fields[f] = v.v; }); audit('browser_profile_set', `profile ${p.name} · ${f} · value not recorded`); UI.closeModal(); done('Added', `${esc(fieldWord(f))} is set`); }); });
+      const root = UI.$('#w-fa', s), v = readValues(root); if (!v) return; if (!v.v) return needValue(root, 'v'); clearTyped(root);
+      UI.closeModal(); editP(p.name, (x) => { x.fields[f] = v.v; }); audit('browser_profile_set', `profile ${p.name} · ${f} · value not recorded`); done('Added', `${esc(fieldWord(f))} is set`); }); });
   const ORIGIN = /^https?:\/\/[a-z0-9.-]+(:\d{1,5})?$/i;
   const originErr = (v) => (ORIGIN.test(v || '') ? '' : 'The exact address: https:// and the host, with a port if it has one; no path.');
   const fieldChoices = (p) => { const ks = Object.keys(p.fields || {}), out = []; ks.forEach((k) => { const top = /^(address|billing)\./.test(k) ? k.split('.')[0] : k; if (!out.includes(top)) out.push(top); }); return out; };
@@ -229,19 +238,39 @@
   UI.act('w-who-rm', (b) => { const isCard = b.dataset.kind === 'card', x = isCard ? card(b.dataset.n) : profile(b.dataset.n);
     UI.confirm({ title: `Stop ${esc(who(b.dataset.id))} using ${esc(x.name)}?`, body: isCard ? 'It can no longer propose purchases with this card. Purchases already approved for it lapse unused.' : 'It can no longer fill these details.', ok: 'Remove', danger: true }).then((ok) => { if (!ok) return; x.identities = x.identities.filter((i) => i !== b.dataset.id); if (isCard && x.identity_limits) delete x.identity_limits[b.dataset.id]; x.updated = now(); audit(`browser_${isCard ? 'card' : 'profile'}_bind`, `${isCard ? 'card' : 'profile'} ${x.name} · unbind ${b.dataset.id}`); done('Removed', `${esc(who(b.dataset.id))} can’t use ${esc(x.name)} any more`); }); });
 
+  /* ---------- form parts the add pages share ---------- */
+  /** An amount in dollars: the $ inside the field, no example number that could pass for a real limit. */
+  const moneyField = (k, label, help = '') => `<div class="field" data-field="${k}"><label for="w-m-${k}">${label} <span class="req" aria-label="required">*</span></label><div class="wl-money"><span aria-hidden="true">$</span><input class="input mono" id="w-m-${k}" data-money="${k}" inputmode="decimal" autocomplete="off" placeholder="Amount"></div>${help ? `<div class="hint">${help}</div>` : ''}<div class="ferr" role="alert"></div></div>`;
+  const moneyOf = (root, k) => { const v = String((root.querySelector(`[data-money="${k}"]`) || {}).value || '').replace(/[$,\s]/g, ''); return /^\d+(\.\d{1,2})?$/.test(v) ? Number(v) : NaN; };
+  /** Put the $ inside a shared form's amount inputs (Change limits, buying without asking). */
+  const moneyize = (root, keys) => keys.forEach((k) => { const i = root.querySelector(`#f-${k}`); if (!i || i.parentElement.classList.contains('wl-money')) return; const w = document.createElement('div'); w.className = 'wl-money'; w.innerHTML = '<span aria-hidden="true">$</span>'; i.replaceWith(w); w.appendChild(i); i.placeholder = 'Amount'; });
+  /** An allowlist: one exact address a row, added and removed row by row, each checked as an origin. */
+  const rowHTML = (k, v = '') => `<div class="wl-row"><input class="input mono" data-row="${k}" value="${esc(v)}" placeholder="https://shop.example.com" aria-label="A shop’s exact address" autocomplete="off"><button type="button" class="icon-btn" data-act="w-row-rm" aria-label="Remove this shop">${icon('trash')}</button></div>`;
+  const rowsField = (k, label, help) => `<div class="field" data-field="${k}"><span class="flabel">${label} <span class="opt">optional</span></span><div class="wl-rows" data-rows="${k}"></div><button type="button" class="btn sm secondary wl-row-add" data-act="w-row-add" data-k="${k}">${icon('plus')}Add a shop</button><div class="hint">${help}</div><div class="ferr" role="alert"></div></div>`;
+  UI.act('w-row-add', (b) => { const box = b.parentElement.querySelector('.wl-rows'); box.insertAdjacentHTML('beforeend', rowHTML(b.dataset.k)); box.lastElementChild.querySelector('input').focus(); });
+  UI.act('w-row-rm', (b) => { const r = b.closest('.wl-row'), f = r.closest('.field'); r.remove(); f.classList.remove('bad'); f.querySelector('.ferr').textContent = ''; });
+  /** The rows' addresses, or an error naming the first that isn't an exact origin (or repeats). */
+  const rowsOf = (root, k) => { const xs = [...root.querySelectorAll(`[data-row="${k}"]`)].map((i) => i.value.trim().replace(/\/$/, '')).filter(Boolean), badOne = xs.find((x) => originErr(x)), dup = xs.find((x, i) => xs.indexOf(x) !== i);
+    // only the row that's wrong is marked, with the reason under the list
+    root.querySelectorAll(`[data-row="${k}"]`).forEach((i) => { const v = i.value.trim().replace(/\/$/, ''), wrong = v && (originErr(v) || xs.indexOf(v) !== xs.lastIndexOf(v)); i.classList.toggle('wl-bad', !!wrong); i.setAttribute('aria-invalid', wrong ? 'true' : 'false'); });
+    return { xs, err: badOne ? `“${badOne}”: ${originErr(badOne)}` : dup ? `${host(dup)} is listed twice.` : '' }; };
+  /** Who may use it: bots and teams, several at once (the backend's identities is a list), with the shared picker. */
+  const whoField = (help) => UI.fieldHTML({ k: 'who', type: 'select-multi', req: true, label: 'Who may use it', options: idOpts([]), help }, [], 'w-');
+  const whoOf = (root) => [...root.querySelectorAll('[data-listk="who"] .chip-x .mono')].map((x) => x.textContent);
+
   /* ---------- Add personal details ---------- */
   const NEWF = ['name', 'email', 'phone', 'address.line1', 'address.city', 'address.region', 'address.postal_code', 'address.country'];
   function newProfilePage() {
     return `<div class="page dl-page wl-page">${UI.head('Add personal details', { crumbs: [['Browsers', '#/browser'], ['Personal details', '#/browser/details'], ['Add personal details']] })}
-      <form class="wz-card wl-form" id="w-np" novalidate>
-        <div class="field" data-field="name"><label for="w-np-name">Name for this set <span class="req" aria-label="required">*</span></label><input class="input mono" id="w-np-name" placeholder="home" autocomplete="off"><div class="hint">What a bot asks for: <span class="mono">--profile home</span>. Letters, digits, - and _.</div><div class="ferr" role="alert"></div></div>
-        <h3 class="wl-h">The details</h3><p class="dl-sub">Type a value once (it’s stored write-only) or give a reference to a vault, an environment variable or a secret. Leave out what you don’t need.</p>
+      <form class="dl-card wl-form" id="w-np" novalidate>
+        <div class="field" data-field="name"><label for="w-np-name">Name for this set <span class="req" aria-label="required">*</span></label><input class="input mono" id="w-np-name" placeholder="home" autocomplete="off"><div class="hint">How you and your bots refer to these details. Letters, digits, - and _.</div><div class="ferr" role="alert"></div></div>
+        <h3 class="wl-h">The details</h3><p class="dl-sub">Each one typed once (stored write-only, never shown again) or from a vault item or an environment variable. Leave out what you don’t need.</p>
         <div class="wl-grid2">${NEWF.map((f) => valueField(f, fieldWord(f))).join('')}</div>
         <h3 class="wl-h">Where, and which details</h3>
         <div class="field" data-field="origin"><label for="w-np-origin">Site (its exact address) <span class="req" aria-label="required">*</span></label><input class="input mono" id="w-np-origin" placeholder="https://shop.example.com"><div class="hint">The browser must already be allowed to reach it. Add more sites afterwards.</div><div class="ferr" role="alert"></div></div>
         <div class="field" data-field="sitef"><span class="flabel">Fill there</span><div class="wl-checks">${[['name', 'Name'], ['email', 'Email'], ['phone', 'Phone'], ['address', 'The address']].map(([k, l]) => `<label class="row small"><input type="checkbox" class="cbx" data-sf="${k}" checked> ${l}</label>`).join('')}</div><div class="ferr" role="alert"></div></div>
         <h3 class="wl-h">Who may use it</h3>
-        <div class="field" data-field="who"><label for="w-np-who">Bot or team <span class="req" aria-label="required">*</span></label><select class="select" id="w-np-who"><option value="">Choose…</option>${idOpts([]).map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select><div class="hint">Nobody can use it until you choose. Only on work you asked for.</div><div class="ferr" role="alert"></div></div>
+        ${whoField('Bots and teams; nobody can use it until you add one. Only on work you asked for.')}
         <h3 class="wl-h">What a bot may learn</h3><p class="dl-sub">Nothing, unless you tick it. A fact helps a bot reason without the value.</p>
         <div class="wl-checks">${[['email', 'The email’s domain'], ['address.country', 'The country'], ['phone', 'The phone’s country code']].map(([k, l]) => `<label class="row small"><input type="checkbox" class="cbx" data-vf="${k}"> ${l}</label>`).join('')}</div>
         <div class="form-err callout danger small hide" role="alert" id="w-np-err"></div>
@@ -249,16 +278,16 @@
       </form></div>`;
   }
   const bad = (root, k, msg) => { const box = root.querySelector(`[data-field="${k}"]`); box.classList.toggle('bad', !!msg); box.querySelector('.ferr').textContent = msg || ''; return !!msg; };
-  UI.act('w-np-save', () => { const f = UI.$('#w-np'), name = UI.$('#w-np-name').value.trim(), origin = UI.$('#w-np-origin').value.trim().replace(/\/$/, ''), id = UI.$('#w-np-who').value;
+  UI.act('w-np-save', () => { const f = UI.$('#w-np'), name = UI.$('#w-np-name').value.trim(), origin = UI.$('#w-np-origin').value.trim().replace(/\/$/, ''), ids = whoOf(UI.$('#w-np'));
     let n = 0; n += bad(f, 'name', !/^[A-Za-z0-9_-]{1,40}$/.test(name) ? 'Letters, digits, - and _, up to 40.' : profile(name) ? 'Personal details by that name exist.' : '') ? 1 : 0;
-    n += bad(f, 'origin', originErr(origin)) ? 1 : 0; n += bad(f, 'who', id ? '' : 'Choose who may use it.') ? 1 : 0;
+    n += bad(f, 'origin', originErr(origin)) ? 1 : 0; n += bad(f, 'who', ids.length ? '' : 'Add at least one bot or team.') ? 1 : 0;
     const sitef = [...f.querySelectorAll('[data-sf]:checked')].map((x) => x.dataset.sf); n += bad(f, 'sitef', sitef.length ? '' : 'Pick at least one.') ? 1 : 0;
     if (n) { const first = f.querySelector('.field.bad input, .field.bad select'); if (first) first.focus(); return; }
     const err = UI.$('#w-np-err'), vals = readValues(f); if (!vals) return; if (!Object.keys(vals).length) { err.textContent = 'Give at least one detail.'; err.classList.remove('hide'); return; } err.classList.add('hide');
     const visible = {}; f.querySelectorAll('[data-vf]:checked').forEach((x) => { if (vals[x.dataset.vf]) visible[x.dataset.vf] = 'fact'; });
-    gate(true, `Add personal details: ${esc(name)}`, `{ profile: <b>${esc(name)}</b>, fields: <b>${esc(Object.keys(vals).join(', '))}</b>, site: <b>${esc(origin)}</b>, bind: <b>${esc(id)}</b>, values: <b>write-only, not shown</b> }`, () => {
-      D.wallet.profiles.push({ name, method: 'stored', editable: true, added: now(), updated: now(), identities: [id], fields: vals, sites: [{ origin, fields: sitef }], visible });
-      audit('browser_profile_add', `profile ${name} · ${id} · values not recorded · widening`); S.save(); UI.go(`#/browser/details/${name}`); UI.toast('Saved', `${esc(name)}: values stored write-only`, 'ok'); }, 'Save with passkey'); });
+    gate(true, `Add personal details: ${esc(name)}`, `{ profile: <b>${esc(name)}</b>, fields: <b>${esc(Object.keys(vals).join(', '))}</b>, site: <b>${esc(origin)}</b>, bind: <b>${esc(ids.join(', '))}</b>, values: <b>write-only, not shown</b> }`, () => {
+      clearTyped(f); D.wallet.profiles.push({ name, method: 'stored', editable: true, added: now(), updated: now(), identities: ids, fields: vals, sites: [{ origin, fields: sitef }], visible });
+      audit('browser_profile_add', `profile ${name} · ${ids.join(', ')} · values not recorded · widening`); S.save(); UI.go(`#/browser/details/${name}`); UI.toast('Saved', `${esc(name)}: values stored write-only`, 'ok'); }, 'Save with passkey'); });
 
   /* ---------- Payment cards ---------- */
   /** validate's reminders about a card (WalletNotes), in words. */
@@ -270,6 +299,7 @@
         <span class="${att || c.frozen ? 'reason' : 'dl-why'}">${c.frozen ? `${frozenWord(c)}: nothing can be paid with it` : ns.length ? esc(ns[ns.length - 1]) : `${money(s.day, cur)} of ${money(L.per_day, cur)} in 24 hours · ${money(s.month, cur)} of ${money(L.per_month, cur)} in 30 days`}</span>
         ${UI.factsLine([{ icon: 'obj-card', value: KIND[c.kind || ''], pri: 2, label: 'Kind' }, { icon: 'users', value: list((c.identities || []).map(who)) || 'Nobody yet', pri: 1, label: 'Who may use it' }, { icon: 'store', value: `${(c.merchants || []).length} shop${(c.merchants || []).length === 1 ? '' : 's'}`, pri: 2, label: 'Shops it may pay' }, c.method === 'config' ? { icon: 'obj-config', value: 'In the config', pri: 3, label: 'Where it’s defined' } : null])}</span>
       <span class="dl-na">${freezeBtn(c, 'sm')}<a class="btn sm secondary" href="#/browser/cards/${esc(c.name)}">Open</a></span></li>`; };
+  const CARDF = { number: 'Number', expiry: 'Expiry', cvc: 'Security code', name: 'Name on the card' };
   const freezeBtn = (c, sz = '') => (c.frozen ? `<button class="btn ${sz} secondary" data-act="w-unfreeze" data-c="${esc(c.name)}" ${c.frozen && !c.frozen_at ? UI.off('Frozen in the config (frozen: true): unfreeze it there') : ''}>${icon('passkey')}Unfreeze</button>` : `<button class="btn ${sz} secondary" data-act="w-freeze" data-c="${esc(c.name)}">${icon('freeze')}Freeze</button>`);
   const puRow = (p) => { const [s, word] = pst(p), r = p.receipt;
     return `<li class="dl-need" data-s="${s}"><a class="dl-need-a" href="${puHref(p)}"><span class="dl-ng">${UI.mark(r && r.note ? 'wait' : s, { lg: true, label: word })}</span>
@@ -311,7 +341,7 @@
             ${(c.identities || []).length ? `<ul class="dl-list dl-conns wl-flushl">${c.identities.map(whoRow).join('')}</ul>` : '<p class="dl-sub">Nobody yet.</p>'}</section>
         </div></div>
       <section class="dl-card wl-gap"><header class="dl-ch"><h2>Purchases with this card</h2></header>${P.length ? `<ul class="dl-list dl-needs">${P.map(puRow).join('')}</ul>` : '<p class="dl-sub">Nothing bought with it yet.</p>'}</section>
-      <section class="dl-card wl-gap"><header class="dl-ch"><h2>The card’s details</h2><span class="dl-sub">never shown, never sent to a bot</span></header><dl class="dl-facts wl-cfacts">${['number', 'expiry', 'cvc', 'name'].map((k) => { const f = (c.fields || {})[k]; return `<dt>${{ number: 'Number', expiry: 'Expiry', cvc: 'Security code', name: 'Name on the card' }[k]}</dt><dd>${f ? `<span class="wl-masked">${k === 'number' ? `•••• ${esc(c.last4 || '')}` : '••••'}</span> <span class="dl-sub">set · ${esc(srcWord(f))}</span>` : '<span class="dl-sub">not set</span>'}</dd>`; }).join('')}</dl></section></div>`;
+      <section class="dl-card wl-gap"><header class="dl-ch"><h2>The card’s details</h2><span class="dl-sub">never shown, never sent to a bot</span></header><ul class="dl-list dl-conns wl-flushl">${Object.keys(CARDF).map((k) => { const f = (c.fields || {})[k]; return `<li class="dl-conn"><span class="dl-ng">${icon('lock')}</span><span class="dl-nt"><b>${CARDF[k]}</b><span class="dl-why">${f ? `<span class="wl-masked">${k === 'number' ? `•••• ${esc(c.last4 || '')}` : '••••'}</span> set · ${esc(srcWord(f))}` : 'Not set'}</span></span><span class="dl-na"><button class="btn sm secondary" ${ed ? `data-act="w-card-set" data-c="${esc(c.name)}" data-f="${k}"` : cfgOnly(c)}>${f ? 'Replace' : 'Set'}</button></span></li>`; }).join('')}</ul></section></div>`;
   }
   UI.act('w-card-more', (b) => { const c = card(b.dataset.c); UI.menu(b, [['See it in the audit log', 'logs', 'w-go', 'data-h="#/logs/audit"'], ['-'], ['Remove this card…', 'trash', 'w-card-rm', c.editable === false ? UI.off('Defined in the config: remove it there') : `data-c="${esc(c.name)}"`]]); });
   UI.act('w-card-rm', (b) => UI.confirm({ title: `Remove ${esc(b.dataset.c)}?`, body: 'Its stored values are deleted and nothing more can be bought with it. Approved purchases lapse unused. Receipts stay.', ok: 'Remove', danger: true }).then((ok) => { if (!ok) return; D.wallet.cards = W().cards.filter((x) => x.name !== b.dataset.c); audit('browser_card_remove', `card ${b.dataset.c}`); S.save(); UI.go('#/browser/cards'); UI.toast('Removed', `${esc(b.dataset.c)} is gone`, 'ok'); }));
@@ -325,43 +355,43 @@
   UI.act('w-merch-rm', (b) => UI.confirm({ title: `Stop ${esc(b.dataset.c)} paying ${esc(host(b.dataset.o))}?`, body: 'Nothing more is bought there with this card. Takes effect at once.', ok: 'Remove', danger: true }).then((ok) => { if (!ok) return; const c = card(b.dataset.c); c.merchants = c.merchants.filter((x) => x !== b.dataset.o); audit('browser_card_bind', `card ${c.name} · removed merchant ${b.dataset.o}`); done('Removed', `${esc(c.name)} won’t pay ${esc(host(b.dataset.o))} any more`); }));
   const LIMF = [['per_purchase', 'A purchase'], ['per_day', 'A day (24 hours)'], ['per_month', '30 days']];
   UI.act('w-limits', (b) => { const c = card(b.dataset.c), cur = c.limits.currency || 'USD';
-    UI.form({ caps: esc(c.name), title: 'Change the limits', intro: `In ${esc(cur)}. Raising one asks for your passkey; lowering one doesn’t.`, edit: true, values: Object.assign({}, c.limits),
+    const fm = UI.form({ caps: esc(c.name), title: 'Change the limits', intro: `In ${esc(cur)}. Raising one asks for your passkey; lowering one doesn’t.`, edit: true, values: Object.assign({}, c.limits),
       fields: LIMF.map(([k, l]) => ({ k, type: 'number', req: true, label: l, validate: (v) => (typeof v === 'number' && v > 0 ? '' : 'An amount above 0.') })), submit: 'Save', submitIcon: 'check',
       onSubmit: (v) => { if (v.per_purchase > v.per_day || v.per_day > v.per_month) return 'A purchase’s limit fits inside a day’s, and a day’s inside 30 days’.'; const up = LIMF.some(([k]) => v[k] > c.limits[k]); UI.closeModal();
-        gate(up, `Raise ${esc(c.name)}’s limits`, `{ card: <b>${esc(c.name)}</b>, limits: <b>${LIMF.map(([k]) => `${k} ${c.limits[k]} → ${v[k]}`).join(', ')}</b> }`, () => { LIMF.forEach(([k]) => { c.limits[k] = v[k]; }); c.updated = now(); audit('browser_card_bind', `card ${c.name} · limits${up ? ' · widening' : ''}`); done('Saved', 'the new limits apply to the next purchase'); }, 'Save with passkey'); return false; } }); });
+        gate(up, `Raise ${esc(c.name)}’s limits`, `{ card: <b>${esc(c.name)}</b>, limits: <b>${LIMF.map(([k]) => `${k} ${c.limits[k]} → ${v[k]}`).join(', ')}</b> }`, () => { LIMF.forEach(([k]) => { c.limits[k] = v[k]; }); c.updated = now(); audit('browser_card_bind', `card ${c.name} · limits${up ? ' · widening' : ''}`); done('Saved', 'the new limits apply to the next purchase'); }, 'Save with passkey'); return false; } }); moneyize(fm, LIMF.map(([k]) => k)); });
 
   /* ---------- Add a card ---------- */
   function newCardPage() {
     return `<div class="page dl-page wl-page">${UI.head('Add a card', { crumbs: [['Browsers', '#/browser'], ['Payment cards', '#/browser/cards'], ['Add a card']] })}
-      <form class="wz-card wl-form" id="w-nc" novalidate>
+      <form class="dl-card wl-form" id="w-nc" novalidate>
         <div class="callout small wl-tip">${icon('shield')}<span><b>Use a limited card.</b> A virtual or single-use card with its own limits (a masked card from 1Password, Privacy.com, Stripe Issuing) is the second layer behind conductor’s checks.</span></div>
-        <div class="field" data-field="name"><label for="w-nc-name">Name for this card <span class="req" aria-label="required">*</span></label><input class="input mono" id="w-nc-name" placeholder="household" autocomplete="off"><div class="hint">What a bot proposes a purchase with: <span class="mono">--card household</span>.</div><div class="ferr" role="alert"></div></div>
+        <div class="field" data-field="name"><label for="w-nc-name">Name for this card <span class="req" aria-label="required">*</span></label><input class="input mono" id="w-nc-name" placeholder="household" autocomplete="off"><div class="hint">How you and your bots refer to this card, on purchases and receipts. Letters, digits, - and _.</div><div class="ferr" role="alert"></div></div>
         <div class="field" data-field="kind"><span class="flabel">Kind</span><div class="seg" role="group" aria-label="Kind" id="w-nc-kind">${[['virtual', 'Virtual'], ['single-use', 'Single-use'], ['physical', 'Physical']].map(([k, l], i) => `<button type="button" data-act="w-kind" data-v="${k}" class="${i ? '' : 'on'}" aria-pressed="${!i}">${l}</button>`).join('')}</div><div class="hint" id="w-nc-kh">A virtual card with its own limits: good.</div></div>
-        <h3 class="wl-h">The card</h3><p class="dl-sub">Type each once (stored write-only) or give a reference. The page will only ever show the last four digits.</p>
+        <h3 class="wl-h">The card</h3><p class="dl-sub">Each typed once (stored write-only) or from a vault item or an environment variable. The page will only ever show the last four digits.</p>
         <div class="wl-grid2">${valueField('number', 'Card number', false)}${valueField('expiry', 'Expiry (MM/YY)', false)}${valueField('cvc', 'Security code')}${valueField('cardname', 'Name on the card')}</div>
-        <h3 class="wl-h">Limits</h3><p class="dl-sub">Required. In US dollars; checked when a purchase is proposed, approved and paid.</p>
-        <div class="wl-grid3">${LIMF.map(([k, l]) => `<div class="field" data-field="${k}"><label for="w-nc-${k}">${l} <span class="req" aria-label="required">*</span></label><input class="input mono" id="w-nc-${k}" inputmode="decimal" placeholder="${{ per_purchase: 50, per_day: 100, per_month: 300 }[k]}"><div class="ferr" role="alert"></div></div>`).join('')}</div>
+        <h3 class="wl-h">Limits</h3><p class="dl-sub">In US dollars; checked when a purchase is proposed, when you approve it and when it’s paid. A purchase fits inside a day, and a day inside 30 days.</p>
+        <div class="wl-grid3">${LIMF.map(([k, l]) => moneyField(k, l)).join('')}</div>
         <h3 class="wl-h">Where, and who</h3>
-        <div class="field" data-field="merchant"><label for="w-nc-merchant">A shop it may pay <span class="opt">optional</span></label><input class="input mono" id="w-nc-merchant" placeholder="https://shop.example.com"><div class="hint">None by default: until you add one, nothing can be bought with it.</div><div class="ferr" role="alert"></div></div>
-        <div class="field" data-field="who"><label for="w-nc-who">Bot or team <span class="req" aria-label="required">*</span></label><select class="select" id="w-nc-who"><option value="">Choose…</option>${idOpts([]).map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select><div class="hint">It may propose purchases; each one waits for your approval.</div><div class="ferr" role="alert"></div></div>
+        ${rowsField('merchants', 'Shops it may pay', 'Each shop’s exact address (https:// and the host). None by default: until you add one, nothing can be bought with it.')}
+        ${whoField('Bots and teams. Each may propose purchases; every one waits for your approval.')}
         <div class="form-err callout danger small hide" role="alert" id="w-nc-err"></div>
         <div class="wizard-foot"><a class="btn ghost" href="#/browser/cards">Cancel</a><span class="spacer"></span><button type="button" class="btn primary" data-act="w-nc-save">${icon('passkey')}Save with passkey</button></div>
       </form></div>`;
   }
   UI.act('w-kind', (b) => { b.parentElement.querySelectorAll('button').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); UI.$('#w-nc-kh').textContent = b.dataset.v === 'physical' ? 'Conductor will remind you to prefer a virtual or single-use card.' : b.dataset.v === 'single-use' ? 'A single-use card: good for one purchase.' : 'A virtual card with its own limits: good.'; });
-  UI.act('w-nc-save', () => { const f = UI.$('#w-nc'), name = UI.$('#w-nc-name').value.trim(), merchant = UI.$('#w-nc-merchant').value.trim().replace(/\/$/, ''), id = UI.$('#w-nc-who').value, kind = (f.querySelector('#w-nc-kind .on') || {}).dataset.v || 'virtual';
+  UI.act('w-nc-save', () => { const f = UI.$('#w-nc'), name = UI.$('#w-nc-name').value.trim(), ms = rowsOf(UI.$('#w-nc'), 'merchants'), ids = whoOf(UI.$('#w-nc')), kind = (f.querySelector('#w-nc-kind .on') || {}).dataset.v || 'virtual';
     let n = 0; n += bad(f, 'name', !/^[A-Za-z0-9_-]{1,40}$/.test(name) ? 'Letters, digits, - and _, up to 40.' : card(name) ? 'A card by that name exists.' : '') ? 1 : 0;
-    const lim = {}; LIMF.forEach(([k]) => { const v = Number(UI.$('#w-nc-' + k).value.trim()); lim[k] = v; n += bad(f, k, v > 0 ? '' : 'An amount above 0.') ? 1 : 0; });
+    const lim = {}; LIMF.forEach(([k]) => { const v = moneyOf(f, k); lim[k] = v; n += bad(f, k, v > 0 ? '' : 'An amount in dollars, above 0 (up to two decimals).') ? 1 : 0; });
     if (!n && (lim.per_purchase > lim.per_day || lim.per_day > lim.per_month)) n += bad(f, 'per_purchase', 'A purchase fits inside a day, and a day inside 30 days.') ? 1 : 0;
-    n += bad(f, 'merchant', merchant ? originErr(merchant) : '') ? 1 : 0; n += bad(f, 'who', id ? '' : 'Choose who may use it.') ? 1 : 0;
+    { const box = f.querySelector('[data-field="merchants"]'); box.querySelector('.ferr').textContent = ms.err; if (ms.err) n++; } n += bad(f, 'who', ids.length ? '' : 'Add at least one bot or team.') ? 1 : 0;
     const vals = readValues(f); if (!vals) n++;
-    const err = UI.$('#w-nc-err'); if (vals && (!vals.number || !vals.expiry)) { err.textContent = 'The card number and expiry are required.'; err.classList.remove('hide'); n++; } else err.classList.add('hide');
+    if (vals && !vals.number) { needValue(f, 'number'); n++; } if (vals && !vals.expiry) { needValue(f, 'expiry'); n++; }
     if (n) { const first = f.querySelector('.field.bad input, .field.bad select'); if (first) first.focus(); return; }
-    gate(true, `Add a card: ${esc(name)}`, `{ card: <b>${esc(name)}</b>, kind: <b>${kind}</b>, bind: <b>${esc(id)}</b>, merchants: <b>${esc(merchant || 'none')}</b>, limits: <b>${lim.per_purchase} / ${lim.per_day} / ${lim.per_month} USD</b>, values: <b>write-only, not shown</b> }`, () => {
-      const fields = {}; [['number', 'number'], ['expiry', 'expiry'], ['cvc', 'cvc'], ['cardname', 'name']].forEach(([a, k]) => { if (vals[a]) fields[k] = vals[a]; });
+    gate(true, `Add a card: ${esc(name)}`, `{ card: <b>${esc(name)}</b>, kind: <b>${kind}</b>, bind: <b>${esc(ids.join(', '))}</b>, merchants: <b>${esc(ms.xs.join(', ') || 'none')}</b>, limits: <b>${lim.per_purchase} / ${lim.per_day} / ${lim.per_month} USD</b>, values: <b>write-only, not shown</b> }`, () => {
+      clearTyped(f); const fields = {}; [['number', 'number'], ['expiry', 'expiry'], ['cvc', 'cvc'], ['cardname', 'name']].forEach(([a, k]) => { if (vals[a]) fields[k] = vals[a]; });
       // NEW: the last four digits and the brand come from the daemon when it stores the number (a typed one is never echoed)
-      D.wallet.cards.push({ name, method: 'stored', editable: true, kind, brand: 'Visa', last4: '4242', added: now(), updated: now(), fields, merchants: merchant ? [merchant] : [], identities: [id], limits: Object.assign({ currency: 'USD' }, lim), identity_limits: {}, frozen: false });
-      audit('browser_card_add', `card ${name} · ${id} · values not recorded · widening`); S.save(); UI.go(`#/browser/cards/${name}`); UI.toast('Card added', `${esc(name)}: values stored write-only`, 'ok'); }, 'Save with passkey'); });
+      D.wallet.cards.push({ name, method: 'stored', editable: true, kind, brand: 'Visa', last4: '4242', added: now(), updated: now(), fields, merchants: ms.xs, identities: ids, limits: Object.assign({ currency: 'USD' }, lim), identity_limits: {}, frozen: false });
+      audit('browser_card_add', `card ${name} · ${ids.join(', ')} · values not recorded · widening`); S.save(); UI.go(`#/browser/cards/${name}`); UI.toast('Card added', `${esc(name)}: values stored write-only`, 'ok'); }, 'Save with passkey'); });
 
   /* ---------- a purchase ---------- */
   function purchasePage(p) {
@@ -432,15 +462,15 @@
   UI.act('w-un-on', (b) => { const m = S.view().bots.find((x) => x.name === b.dataset.m), cfg = JSON.parse(JSON.stringify(S.staged('bots', m.name) || m.cfg)), cap = S.getPath(cfg, 'autonomy.spend_cap') || {};
     const shops = [...new Set(W().cards.filter((c) => forBot(c.identities, m) && !c.frozen).flatMap((c) => c.merchants || []))], team = cfg.team && S.view().teams.find((t) => t.name === cfg.team);
     if (team && S.getPath(team.cfg, 'autonomy.ceiling') !== 'commit_money') return UI.toast('Not on this team', `team ${esc(team.name)}’s ceiling keeps every purchase an approval`, 'fail');
-    UI.form({ caps: `bot ${esc(m.name)} · a widening`, title: 'Buy small things without asking', intro: `${esc(UI.botName(m.name))} may buy without your approval only under these caps, at the shops you tick, and only when you or it asked (never someone else, an event or a check). A subscription always asks.`,
-      fields: [{ k: 'per_action', type: 'number', req: true, label: 'Up to, a purchase (USD)', ph: '10', validate: (v) => (!(v > 0) ? 'An amount above 0.' : cap.per_action != null && v > cap.per_action ? `It must fit inside its spend cap: ${money(cap.per_action)} an action.` : '') },
-        { k: 'per_period', type: 'number', req: true, label: 'Up to, in total (USD)', ph: '30', validate: (v, all) => (!(v > 0) ? 'An amount above 0.' : v < all.per_action ? 'At least one purchase’s worth.' : cap.per_period != null && v > cap.per_period ? `It must fit inside its spend cap: ${money(cap.per_period)} a period.` : '') },
+    const fm = UI.form({ caps: `bot ${esc(m.name)} · a widening`, title: 'Buy small things without asking', intro: `${esc(UI.botName(m.name))} may buy without your approval only under these caps, at the shops you tick, and only when you or it asked (never someone else, an event or a check). A subscription always asks.`,
+      fields: [{ k: 'per_action', type: 'number', req: true, label: 'Up to, a purchase', validate: (v) => (!(v > 0) ? 'An amount above 0.' : cap.per_action != null && v > cap.per_action ? `It must fit inside its spend cap: ${money(cap.per_action)} an action.` : '') },
+        { k: 'per_period', type: 'number', req: true, label: 'Up to, in total', validate: (v, all) => (!(v > 0) ? 'An amount above 0.' : v < all.per_action ? 'At least one purchase’s worth.' : cap.per_period != null && v > cap.per_period ? `It must fit inside its spend cap: ${money(cap.per_period)} a period.` : '') },
         { k: 'period', type: 'seg', label: 'Every', options: [['24h', '24 hours'], ['168h', '7 days'], ['720h', '30 days']], def: '24h' },
         ...shops.map((o, i) => ({ k: 'shop' + i, type: 'bool', label: host(o), on: 'it may buy here without asking' }))],
       note: 'Each purchase still counts against the card’s own limits and shops, and against its spend cap. You review the change before it applies.', submit: 'Review change', submitIcon: 'check',
       onSubmit: (v) => { const merchants = shops.filter((o, i) => v['shop' + i]); if (!merchants.length) return 'Tick at least one shop.';
         const A = (cfg.autonomy = cfg.autonomy || {}); A.unattended = A.unattended || {}; A.unattended[UNV] = { per_action: v.per_action, per_period: v.per_period, period: v.period || '24h', merchants };
-        UI.staged(S.stage('bots', m.name, cfg, `let ${m.name} buy up to ${money(v.per_action)} without asking`)); } }); });
+        UI.staged(S.stage('bots', m.name, cfg, `let ${m.name} buy up to ${money(v.per_action)} without asking`)); } }); moneyize(fm, ['per_action', 'per_period']); });
   UI.act('w-un-off', (b) => { const m = S.view().bots.find((x) => x.name === b.dataset.m), cfg = JSON.parse(JSON.stringify(S.staged('bots', m.name) || m.cfg));
     if (cfg.autonomy && cfg.autonomy.unattended) { delete cfg.autonomy.unattended[UNV]; if (!Object.keys(cfg.autonomy.unattended).length) delete cfg.autonomy.unattended; }
     UI.staged(S.stage('bots', m.name, cfg, `${m.name} asks before every purchase`)); });

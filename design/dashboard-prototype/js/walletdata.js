@@ -43,10 +43,18 @@
         merchants: ['https://tools.example.org'], identities: ['team:finance'],
         limits: { per_purchase: 50, per_day: 50, per_month: 120, currency: 'USD' }, identity_limits: {}, frozen: true, frozen_at: m(11500) },
       { name: 'spare', method: 'config', editable: false, kind: 'physical', brand: 'Visa', last4: '5556', added: m(40000), updated: m(40000),
-        fields: { number: { kind: 'secret', source: '${secret.SPARE_CARD_NUMBER}' }, expiry: { kind: 'secret', source: '${secret.SPARE_CARD_EXPIRY}' } },
+        fields: { number: E('SPARE_CARD_NUMBER'), expiry: E('SPARE_CARD_EXPIRY') },
         merchants: [], identities: [], limits: { per_purchase: 25, per_day: 25, per_month: 50, currency: 'USD' }, identity_limits: {}, frozen: false },
     ],
   };
+  // what those references point at, so the value-source lookup finds them (labels and dates only: no value anywhere)
+  const T = (title, vault, fields, days) => ({ vault, title, website: '', fields, changed: m(days * 1440) });
+  D.opItems.push(T('Home', 'Me', [['name', 'text'], ['email', 'email'], ['phone', 'text'], ['street', 'text'], ['city', 'text'], ['region', 'text'], ['postcode', 'text'], ['country', 'text']], 9),
+    T('Work', 'Me', [['name', 'text'], ['email', 'email'], ['phone', 'text']], 40), T('Spare', 'Cards', [['number', 'concealed'], ['expiry', 'text']], 60), T('Household', 'Cards', [['number', 'concealed'], ['expiry', 'text'], ['cvc', 'concealed'], ['name', 'text']], 6),
+    T('Software', 'Cards', [['number', 'concealed'], ['expiry', 'text'], ['cvc', 'concealed']], 21));
+  D.env.push({ scope: 'daemon', name: 'HOME_PHONE', value: '{{ vault "op" "Me/Home/phone" }}', plain: false }, { scope: 'daemon', name: 'WORK_PHONE', value: '{{ vault "op" "Me/Work/phone" }}', plain: false },
+    { scope: 'daemon', name: 'SPARE_CARD_NUMBER', value: '{{ vault "op" "Cards/Spare/number" }}', plain: false }, { scope: 'daemon', name: 'SPARE_CARD_EXPIRY', value: '{{ vault "op" "Cards/Spare/expiry" }}', plain: false });
+  D.secrets.push({ name: 'house/work/company', ref: 'house/work/company', vault: 'house', key: 'work/company', alias: '', set: m(40000), used: ['browser.profiles.work.fields.company'] });
   // browser.payments: who may approve (operators with a key), and how long an approval may be used (single-use either way)
   D.payments = { approvers: ['ops'], approval_ttl: '1h' };
 
