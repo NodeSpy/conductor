@@ -248,7 +248,7 @@ func TestWalletPurchase(t *testing.T) {
 		t.Fatalf("p2: %s", got.Status)
 	}
 	// Over the per-purchase cap; another merchant; a frozen card; a pause.
-	w.refused(op, "purchase", map[string]any{"card": "visa", "merchant": w.a, "total": "30.01"}, "per-action cap 30.00")
+	w.refused(op, "purchase", map[string]any{"card": "visa", "merchant": w.a, "total": "30.01"}, "over card visa's 30.00 USD per-purchase limit")
 	w.refused(op, "purchase", map[string]any{"card": "visa", "merchant": w.b, "total": "5"}, "not one of card visa's merchants")
 	p3 := w.propose(op, "12.00", w.a)["purchase"].(string)
 	w.approve(p3)

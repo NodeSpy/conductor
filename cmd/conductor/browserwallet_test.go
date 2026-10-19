@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +17,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/browser"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/flow"
+	"github.com/NodeSpy/conductor/internal/skill"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -221,5 +225,152 @@ func TestBotPurchaseThroughTheGate(t *testing.T) {
 	u, _ := m.Purchases.Propose(browser.Purchase{Card: "visa", Merchant: "https://shop.example.com", Total: 9, Currency: "USD", Identity: c.Identity, Bot: "shopper"}, time.Hour)
 	if _, unattended, err := botPurchase(context.Background(), c, u); err != nil || !unattended {
 		t.Fatalf("unattended: %v %v", unattended, err)
+	}
+}
+
+// A ticket's budget: set (a widening, clamped with a warning past a layer's
+// 30-day cap), lowered and cleared (narrowing), read back with what it
+// holds — through the op, the ledger's CaseBudgets, a purchase's view and
+// the operator API.
+func TestCaseBudgetOpAndAPI(t *testing.T) {
+	call, m, cfg := walletRig(t)
+	cfg.Bots = map[string]config.BotConfig{"shopper": {Team: "ops", Purchases: &config.PurchaseLimits{CardLimits: config.CardLimits{PerPurchase: 100, PerDay: 200, PerMonth: 300}}}}
+	cfg.Teams = map[string]config.TeamConfig{"ops": {Budget: config.TeamBudget{Purchases: &config.PurchaseLimits{CardLimits: config.CardLimits{PerPurchase: 150, PerDay: 200, PerMonth: 250}}}}}
+	cfg.Browser.Cards = map[string]config.BrowserCard{"visa": {Number: &config.BrowserSecretRef{Env: "N"}, Expiry: &config.BrowserSecretRef{Env: "E"},
+		Merchants: []string{"https://shop.example.com"}, Identities: []string{"bot:shopper"},
+		Limits: config.CardLimits{PerPurchase: 500, PerDay: 1000, PerMonth: 2000}}}
+	st, err := store.Open(store.Options{StatePath: filepath.Join(t.TempDir(), "s.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.UpdateBot("shopper", func(r *store.BotRecord) error {
+		r.Cases = map[string]*store.Case{"c3": {ID: "c3", Status: "open", RequesterClass: "operator", Title: "buy a hard drive"}}
+		return nil
+	})
+	browserLedger.Store(st)
+	defer browserLedger.Store(nil)
+	m.Budgets = ledgerBudgets{}
+	data := func(r controlResponse) map[string]any {
+		var v map[string]any
+		_ = json.Unmarshal(r.Data, &v)
+		return v
+	}
+	r := call("browser-case-budget", browserWalletReq{Bot: "shopper", Case: "c3", Amount: "500", Currency: "usd", DryRun: true})
+	if v := data(r); v["change"] != changeWidening || !strings.Contains(fmt.Sprint(v["warning"]), "clamped to team ops's 30-day limit 250.00") {
+		t.Fatalf("dry run: %+v %v", v, r.Error)
+	}
+	if st.Bot("shopper").Cases["c3"].SpendLimit != nil {
+		t.Fatal("a dry run wrote the budget")
+	}
+	if v := data(call("browser-case-budget", browserWalletReq{Bot: "shopper", Case: "c3", Amount: "120", Currency: "USD"})); v["change"] != changeWidening || v["warning"] != nil {
+		t.Fatalf("set 120: %+v", v)
+	}
+	if got := st.Bot("shopper").Cases["c3"].SpendLimit; got == nil || got.Amount != "120.00" || got.Currency != "USD" {
+		t.Fatalf("stored: %+v", got)
+	}
+	b, ok := ledgerBudgets{}.CaseBudget("bot:shopper/c3")
+	if !ok || b.Amount != 120 || b.Key != "bot:shopper/c3" {
+		t.Fatalf("CaseBudget: %+v %v", b, ok)
+	}
+	if _, ok := (ledgerBudgets{}).CaseBudget("bot:shopper/c9"); ok {
+		t.Fatal("a case without a budget has one")
+	}
+	// A purchase under it: its view carries every layer's remaining.
+	p, err := m.Purchases.ProposeWithin(browser.Purchase{Card: "visa", Merchant: "https://shop.example.com", Total: 85, Currency: "USD",
+		Identity: "agent:shopper@home", Bot: "shopper", CaseRef: "bot:shopper/c3", BudgetKey: "bot:shopper/c3"}, time.Hour,
+		browser.SpendRules{Card: m.Effective().Cards["visa"], Who: browser.Principal{Identity: "agent:shopper@home", Bot: "shopper"}, Bot: "shopper", Budget: &b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := string(call("browser-purchase", browserWalletReq{Purchase: p.ID}).Data)
+	for _, w := range []string{`"remaining_by_layer"`, `"layer":"ticket bot:shopper/c3"`, `"layer":"bot shopper"`, `"layer":"team ops"`, `"layer":"card visa"`} {
+		if !strings.Contains(view, w) {
+			t.Fatalf("the approval's view lacks %s: %s", w, view)
+		}
+	}
+	if v := data(call("browser-case-budget", browserWalletReq{Bot: "shopper", Case: "c3", Show: true})); v["committed"] != 85.0 || v["remaining"] != 35.0 {
+		t.Fatalf("show: %+v", v)
+	}
+	// The operator API, read-only.
+	mux := http.NewServeMux()
+	browserAPIRoutes(mux)
+	for path, want := range map[string]string{
+		"/v1/bots/shopper/cases/c3/budget": `"remaining":35`,
+		"/v1/purchases/" + p.ID:            `"remaining_by_layer"`,
+		"/v1/purchases?status=pending":     `"id":"` + p.ID + `"`,
+		"/v1/spend":                        `"cards"`,
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("%s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	// Lowered, then cleared: narrowing.
+	if v := data(call("browser-case-budget", browserWalletReq{Bot: "shopper", Case: "c3", Amount: "90"})); v["change"] != changeNarrowing {
+		t.Fatalf("lowered: %+v", v)
+	}
+	if v := data(call("browser-case-budget", browserWalletReq{Bot: "shopper", Case: "c3", Clear: true})); v["change"] != changeNarrowing {
+		t.Fatalf("cleared: %+v", v)
+	}
+	for _, q := range []browserWalletReq{{Bot: "shopper", Case: "c9", Amount: "5"}, {Bot: "shopper", Case: "c3", Amount: "0"},
+		{Bot: "shopper", Case: "c3", Amount: "5", Currency: "DOLLARS"}, {Bot: "shopper", Case: "c3", Amount: "5", BMerchant: []string{"https://*.example.com"}}} {
+		if r := call("browser-case-budget", q); r.Error == "" {
+			t.Errorf("%+v accepted", q)
+		}
+	}
+}
+
+func TestClassifyBudget(t *testing.T) {
+	l := func(a string, card string, ms ...string) *store.SpendLimit {
+		return &store.SpendLimit{Amount: a, Currency: "USD", Card: card, Merchants: ms}
+	}
+	for name, c := range map[string]struct {
+		before, after *store.SpendLimit
+		want          string
+	}{
+		"new":                {nil, l("10", ""), changeWidening},
+		"raised":             {l("10", ""), l("11", ""), changeWidening},
+		"lowered":            {l("10", ""), l("9", ""), changeNarrowing},
+		"cleared":            {l("10", ""), nil, changeNarrowing},
+		"same":               {l("10", ""), l("10.00", ""), changeNeutral},
+		"card added":         {l("10", ""), l("10", "visa"), changeNarrowing},
+		"card changed":       {l("10", "visa"), l("10", "amex"), changeWidening},
+		"merchants dropped":  {l("10", "", "https://a.example"), l("10", ""), changeWidening},
+		"merchant added":     {l("10", "", "https://a.example"), l("10", "", "https://a.example", "https://b.example"), changeWidening},
+		"merchants narrowed": {l("10", ""), l("10", "", "https://a.example"), changeNarrowing},
+		"currency":           {l("10", ""), &store.SpendLimit{Amount: "10", Currency: "EUR"}, changeWidening},
+	} {
+		if got := classifyBudget(c.before, c.after); got != c.want {
+			t.Errorf("%s: %s, want %s", name, got, c.want)
+		}
+	}
+}
+
+// A bot's home session names no case: the browser holds it to the case the
+// gate does (the least-trusted open one), whose ticket budget applies.
+func TestBrowserCallerHomeCase(t *testing.T) {
+	cfg := &config.Config{Bots: map[string]config.BotConfig{"shopper": {}}}
+	browserCfg.Store(cfg)
+	defer browserCfg.Store(nil)
+	st, err := store.Open(store.Options{StatePath: filepath.Join(t.TempDir(), "s.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.UpdateBot("shopper", func(r *store.BotRecord) error {
+		r.Cases = map[string]*store.Case{"c1": {ID: "c1", Status: "open", RequesterClass: "operator"}, "c2": {ID: "c2", Status: "open", RequesterClass: "user"}}
+		return nil
+	})
+	browserBotGate.Store(&bot.Gate{Cfg: func() *config.Config { return cfg }, Ledger: st, Sandbox: jail(true)})
+	defer browserBotGate.Store(nil)
+	id := skill.Identity{Agent: "bot:shopper", Bot: "shopper", BotRole: config.BotRoleHome,
+		Sandbox: &skill.SandboxBinding{Identity: "agent:shopper@home", Workspace: t.TempDir()}}
+	c, err := browserCaller("tok", id)
+	if err != nil || c.CaseID != "c2" || c.Requester != "user" {
+		t.Fatalf("home: %+v %v", c, err)
+	}
+	id.BotRole, id.CaseID = config.BotRoleWorker, "c1"
+	if c, _ := browserCaller("tok", id); c.CaseID != "c1" {
+		t.Fatalf("a worker keeps its own case: %+v", c)
 	}
 }

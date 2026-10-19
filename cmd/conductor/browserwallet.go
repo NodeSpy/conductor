@@ -1067,7 +1067,7 @@ func caseBudgetOp(cfg *config.Config, m *browser.Manager, q *browserWalletReq, d
 			return fail(fmt.Errorf("browser: currency is an ISO code (USD, EUR, …)"))
 		}
 		for _, mo := range q.BMerchant {
-			if browser.CheckOrigin(mo) != nil {
+			if browser.ExactOrigin(strings.TrimSuffix(mo, "/")) != nil {
 				return fail(fmt.Errorf("browser: merchant %q is not an exact origin", mo))
 			}
 		}

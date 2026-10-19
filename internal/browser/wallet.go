@@ -315,6 +315,10 @@ func checkCardRecord(c *CardRecord) error {
 	return nil
 }
 
+// ExactOrigin refuses anything but an exact scheme://host[:port] (no
+// wildcard, path, query or userinfo): a merchant, a profile's site.
+func ExactOrigin(s string) error { return exactOrigin(s) }
+
 // exactOrigin refuses anything but scheme://host[:port].
 func exactOrigin(s string) error {
 	u, err := url.Parse(s)

@@ -2204,7 +2204,7 @@ group_PAY_wallet() {
     pay_expect "$probe" second-use 'refused:*completed*'
     pay_expect "$probe" decision2 approved
     pay_expect "$probe" price-bump 'refused:*higher than the approved 12.00*'
-    pay_expect "$probe" over-cap 'refused:*per-action cap 30.00*'
+    pay_expect "$probe" over-cap "refused:*over card e2ecard's 30.00 * per-purchase limit*"
     pay_expect "$probe" other-merchant "refused:*not one of card e2ecard's merchants*"
   else
     bad "PAY the wallet probe ran" PAY probe "no finished WALLET_PROBE.md"

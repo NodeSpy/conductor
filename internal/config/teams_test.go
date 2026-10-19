@@ -99,6 +99,18 @@ func TestTeamCeilingsNarrowNeverWiden(t *testing.T) {
 		{"domain wider than a host", "browser: { logins: [app.example.com] }", "browser: { logins: [\"*.example.com\"] }", []string{`"*.example.com"`}},
 		{"host outside a domain", "browser: { logins: [\"*.example.com\"] }", "browser: { logins: [app.example.org] }", []string{`"app.example.org"`, `browser.logins [*.example.com]`}},
 		{"browser credential outside", "browser: { credentials: [app] }", "browser: { credentials: [admin] }", []string{`browser.credentials "admin"`, "browser.credentials [app]"}},
+		{"purchases inside the team's", "budget: { purchases: { per_purchase: 100, per_day: 200, per_month: 500 } }",
+			"purchases: { per_purchase: 40, per_day: 200, per_month: 300 }", nil},
+		{"purchases per purchase past the team's", "budget: { purchases: { per_purchase: 100, per_day: 200, per_month: 500 } }",
+			"purchases: { per_purchase: 101, per_day: 200, per_month: 300 }", []string{"purchases.per_purchase 101", "team t's 100"}},
+		{"purchases per day past the team's", "budget: { purchases: { per_purchase: 100, per_day: 200, per_month: 500 } }",
+			"purchases: { per_purchase: 40, per_day: 201, per_month: 300 }", []string{"purchases.per_day 201", "team t's 200"}},
+		{"purchases per month past the team's", "budget: { purchases: { per_purchase: 100, per_day: 200, per_month: 500 } }",
+			"purchases: { per_purchase: 40, per_day: 200, per_month: 501 }", []string{"purchases.per_month 501", "team t's 500"}},
+		{"purchases on a card past the team's on it", "budget: { purchases: { per_purchase: 100, per_day: 200, per_month: 500, cards: { visa: { per_purchase: 20, per_day: 50, per_month: 100 } } } }",
+			"purchases: { per_purchase: 40, per_day: 200, per_month: 300, cards: { visa: { per_purchase: 30, per_day: 50, per_month: 100 } } }", []string{"purchases.cards.visa.per_purchase 30", "team t's 20"}},
+		{"purchases in another currency", "budget: { purchases: { per_purchase: 100, per_day: 200, per_month: 500 } }",
+			"purchases: { per_purchase: 40, per_day: 200, per_month: 300, currency: EUR }", []string{"currency EUR", "team t's USD"}},
 		{"unattended under the default ceiling", "", "autonomy: { tiers: { commit_money: [browser.purchase] }, amounts: { browser.purchase: total }, spend_cap: { per_action: 50, per_period: 100 }, unattended: { browser.purchase: { per_action: 5, per_period: 10, merchants: [\"https://shop.example.com\"] } } }", []string{"autonomy.unattended", `autonomy.ceiling ""`, "commit_money"}},
 		{"unattended under a reversible ceiling", "autonomy: { ceiling: reversible }", "autonomy: { tiers: { commit_money: [browser.purchase] }, amounts: { browser.purchase: total }, spend_cap: { per_action: 50, per_period: 100 }, unattended: { browser.purchase: { per_action: 5, per_period: 10, merchants: [\"https://shop.example.com\"] } } }", []string{"autonomy.unattended", "reversible"}},
 		{"unattended under a commit_money ceiling", "autonomy: { ceiling: commit_money }", "autonomy: { tiers: { commit_money: [browser.purchase] }, amounts: { browser.purchase: total }, spend_cap: { per_action: 50, per_period: 100 }, unattended: { browser.purchase: { per_action: 5, per_period: 10, merchants: [\"https://shop.example.com\"] } } }", nil},
@@ -470,6 +482,26 @@ func TestTeamChatLimits(t *testing.T) {
 			t.Errorf("%s: %v", body, err)
 		case want != "" && (err == nil || !strings.Contains(err.Error(), want)):
 			t.Errorf("%s: got %v, want %q", body, err, want)
+		}
+	}
+}
+
+// A bot's or team's purchases: every cap is required and ordered, and a
+// per-card one is in the same currency.
+func TestPurchaseLimitsValidation(t *testing.T) {
+	good := "bots:\n  m: { purchases: { per_purchase: 40, per_day: 100, per_month: 300, cards: { visa: { per_purchase: 20, per_day: 50, per_month: 100 } } } }\n"
+	if _, err := loadTeams(t, good); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"no month":        "bots:\n  m: { purchases: { per_purchase: 40, per_day: 100 } }\n",
+		"day under buy":   "bots:\n  m: { purchases: { per_purchase: 40, per_day: 30, per_month: 300 } }\n",
+		"card currency":   "bots:\n  m: { purchases: { per_purchase: 40, per_day: 100, per_month: 300, cards: { visa: { per_purchase: 20, per_day: 50, per_month: 100, currency: EUR } } } }\n",
+		"team no limit":   "teams:\n  t: { budget: { purchases: { per_purchase: 0, per_day: 1, per_month: 2 } } }\n",
+		"team card order": "teams:\n  t: { budget: { purchases: { per_purchase: 5, per_day: 10, per_month: 20, cards: { v: { per_purchase: 9, per_day: 8, per_month: 20 } } } } }\n",
+	} {
+		if _, err := loadTeams(t, body); err == nil {
+			t.Errorf("%s: accepted", name)
 		}
 	}
 }
