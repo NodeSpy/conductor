@@ -82,8 +82,10 @@ type Store struct {
 	botLocksMu   sync.Mutex
 	botLocks     map[string]*sync.Mutex
 
-	// Operator conversations with bots and teams (conversations.go).
+	// Operator conversations with bots and teams (conversations.go), and
+	// each operator's pinned conversations, in order.
 	convs map[string]*Conversation
+	pins  map[string][]string
 }
 
 // Options configure a Store.
@@ -171,6 +173,7 @@ func Open(o Options) (*Store, error) {
 	s.loadOutcomeState()
 	s.loadBots()
 	s.loadConversations()
+	s.loadPins()
 	a, err := openAudit(o.AuditPath, o.AuditMaxSize)
 	if err != nil {
 		return nil, err

@@ -33,6 +33,9 @@ import (
 //	POST /v1/conversations/{id}/messages              → send: JSON {text, operator, to, everyone}, or multipart with file parts
 //	POST /v1/conversations/{id}/read                  → operator, upto: the read mark
 //	GET  /v1/conversations/stream                     → live updates (server-sent events)
+//	POST   /v1/conversations/{id}/pin                 → pin for an operator: JSON {operator, position} (position: 1-based; none: last)
+//	DELETE /v1/conversations/{id}/pin[?operator=]     → unpin
+//	PUT    /v1/conversations/pins                     → reorder: JSON {operator, order: [ids…]}, every pinned id once
 //
 // {id} is bot:<name> or team:<name>. operator names who is reading or
 // writing (unread state is per operator); it may be left out when one
@@ -55,6 +58,9 @@ func OperatorAPI(s *Service) http.Handler {
 	mux.HandleFunc("GET /v1/conversations/{id}/messages", s.apiConversationMessages)
 	mux.HandleFunc("POST /v1/conversations/{id}/messages", s.apiConversationSend)
 	mux.HandleFunc("POST /v1/conversations/{id}/read", s.apiConversationRead)
+	mux.HandleFunc("POST /v1/conversations/{id}/pin", s.apiConversationPin)
+	mux.HandleFunc("DELETE /v1/conversations/{id}/pin", s.apiConversationUnpin)
+	mux.HandleFunc("PUT /v1/conversations/pins", s.apiConversationPins)
 	return mux
 }
 
@@ -345,4 +351,49 @@ func (s *Service) apiConversationStream(w http.ResponseWriter, r *http.Request) 
 			fl.Flush()
 		}
 	}
+}
+
+func (s *Service) apiConversationPin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Operator string `json:"operator"`
+		Position int    `json:"position"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		apiError(w, http.StatusBadRequest, err)
+		return
+	}
+	pins, err := s.ChatPin(body.Operator, r.PathValue("id"), body.Position)
+	if err != nil {
+		apiError(w, http.StatusUnprocessableEntity, err)
+		return
+	}
+	apiJSON(w, http.StatusOK, map[string]any{"pins": pins})
+}
+
+func (s *Service) apiConversationUnpin(w http.ResponseWriter, r *http.Request) {
+	pins, err := s.ChatUnpin(r.URL.Query().Get("operator"), r.PathValue("id"))
+	if err != nil {
+		apiError(w, http.StatusUnprocessableEntity, err)
+		return
+	}
+	apiJSON(w, http.StatusOK, map[string]any{"pins": pins})
+}
+
+func (s *Service) apiConversationPins(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Operator string   `json:"operator"`
+		Order    []string `json:"order"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		apiError(w, http.StatusBadRequest, err)
+		return
+	}
+	pins, err := s.ChatReorder(body.Operator, body.Order)
+	if err != nil {
+		apiError(w, http.StatusUnprocessableEntity, err)
+		return
+	}
+	apiJSON(w, http.StatusOK, map[string]any{"pins": pins})
 }

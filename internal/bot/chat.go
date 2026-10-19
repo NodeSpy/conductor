@@ -546,10 +546,15 @@ type ConversationSummary struct {
 	Name   string             `json:"name"`
 	Last   *store.ChatMessage `json:"last,omitempty"`
 	Unread int                `json:"unread"`
+	// Pinned and Position (1-based, 0 when not pinned) are this
+	// operator's pins.
+	Pinned   bool `json:"pinned"`
+	Position int  `json:"position,omitempty"`
 }
 
 // Conversations lists every bot's and team's conversation for op: the last
-// message and op's unread count, the most recent first.
+// message and op's unread count — op's pinned ones first, in op's order,
+// then the rest, the most recent first.
 func (s *Service) Conversations(op string) ([]ConversationSummary, error) {
 	op, err := s.ChatOperator(op)
 	if err != nil {
@@ -577,7 +582,25 @@ func (s *Service) Conversations(op string) ([]ConversationSummary, error) {
 	for _, b := range cfg.BotNames() {
 		add("bot", b)
 	}
+	pos := map[string]int{}
+	if p := s.pinLedger(); p != nil {
+		for i, id := range p.ChatPins(op) {
+			pos[id] = i + 1
+		}
+	}
+	n := 0
+	for i := range out {
+		if p, ok := pos[out[i].ID]; ok {
+			out[i].Pinned, out[i].Position = true, p
+			n++
+		}
+	}
 	sort.SliceStable(out, func(i, j int) bool {
+		pi, pj := out[i].Position, out[j].Position
+		switch {
+		case pi > 0 || pj > 0:
+			return pi > 0 && (pj == 0 || pi < pj)
+		}
 		a, b := out[i].Last, out[j].Last
 		switch {
 		case a == nil || b == nil:
@@ -585,7 +608,150 @@ func (s *Service) Conversations(op string) ([]ConversationSummary, error) {
 		}
 		return a.At.After(b.At)
 	})
+	// A pin whose bot or team is gone keeps its place in the stored order but
+	// is not listed; positions shown are the listed order.
+	for i := 0; i < n; i++ {
+		out[i].Position = i + 1
+	}
 	return out, nil
+}
+
+// pinLedger is the store's pins side.
+type pinLedger interface {
+	ChatPins(op string) []string
+	UpdateChatPins(op string, fn func(pins []string) ([]string, error)) error
+}
+
+func (s *Service) pinLedger() pinLedger {
+	p, _ := s.Ledger.(pinLedger)
+	return p
+}
+
+// ResolveConversation turns what an operator typed into a conversation id:
+// bot:<name> or team:<name> as is, or a bare name that is a team or a bot
+// (both: say which).
+func (s *Service) ResolveConversation(arg string) (string, error) {
+	if strings.Contains(arg, ":") {
+		if _, _, err := s.ParseConversation(arg); err != nil {
+			return "", err
+		}
+		return arg, nil
+	}
+	cfg := s.Cfg()
+	_, team := cfg.Teams[arg]
+	_, botErr := s.bot(arg)
+	switch {
+	case team && botErr == nil:
+		return "", fmt.Errorf("%q is both a team and a bot: say team:%s or bot:%s", arg, arg, arg)
+	case team:
+		return TeamConversation(arg), nil
+	case botErr == nil:
+		return BotConversation(arg), nil
+	}
+	return "", fmt.Errorf("%q is not a team or a bot", arg)
+}
+
+// ChatPin pins a conversation for op: at the end, or at position at
+// (1-based; a pinned one moves there).
+func (s *Service) ChatPin(op, conv string, at int) ([]string, error) {
+	op, err := s.ChatOperator(op)
+	if err != nil {
+		return nil, err
+	}
+	if _, _, err := s.ParseConversation(conv); err != nil {
+		return nil, err
+	}
+	p := s.pinLedger()
+	if p == nil {
+		return nil, errors.New("no conversations on this daemon")
+	}
+	if at < 0 {
+		return nil, fmt.Errorf("position %d: want 1 or more", at)
+	}
+	var out []string
+	err = p.UpdateChatPins(op, func(pins []string) ([]string, error) {
+		pins = without(pins, conv)
+		if at == 0 || at > len(pins) {
+			pins = append(pins, conv)
+		} else {
+			pins = append(pins[:at-1], append([]string{conv}, pins[at-1:]...)...)
+		}
+		out = pins
+		return pins, nil
+	})
+	return out, err
+}
+
+// ChatUnpin unpins a conversation for op (unpinning one that isn't pinned
+// changes nothing).
+func (s *Service) ChatUnpin(op, conv string) ([]string, error) {
+	op, err := s.ChatOperator(op)
+	if err != nil {
+		return nil, err
+	}
+	p := s.pinLedger()
+	if p == nil {
+		return nil, errors.New("no conversations on this daemon")
+	}
+	var out []string
+	err = p.UpdateChatPins(op, func(pins []string) ([]string, error) {
+		out = without(pins, conv)
+		return out, nil
+	})
+	return out, err
+}
+
+// ChatReorder sets the order of op's pins: order must name exactly the
+// conversations op has pinned.
+func (s *Service) ChatReorder(op string, order []string) ([]string, error) {
+	op, err := s.ChatOperator(op)
+	if err != nil {
+		return nil, err
+	}
+	p := s.pinLedger()
+	if p == nil {
+		return nil, errors.New("no conversations on this daemon")
+	}
+	err = p.UpdateChatPins(op, func(pins []string) ([]string, error) {
+		have := map[string]bool{}
+		for _, id := range pins {
+			have[id] = true
+		}
+		seen := map[string]bool{}
+		for _, id := range order {
+			if !have[id] {
+				return nil, fmt.Errorf("%s is not pinned (pinned: %s)", id, strings.Join(pins, ", "))
+			}
+			if seen[id] {
+				return nil, fmt.Errorf("%s is listed twice", id)
+			}
+			seen[id] = true
+		}
+		if len(seen) != len(pins) {
+			var missing []string
+			for _, id := range pins {
+				if !seen[id] {
+					missing = append(missing, id)
+				}
+			}
+			return nil, fmt.Errorf("the order leaves out %s: name every pinned conversation", strings.Join(missing, ", "))
+		}
+		return append([]string(nil), order...), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return order, nil
+}
+
+func without(xs []string, x string) []string {
+	out := xs[:0:0]
+	for _, v := range xs {
+		if v != x {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // ChatMessages are a conversation's messages after seq (-1: after op's read

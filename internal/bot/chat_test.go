@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -441,5 +442,162 @@ func TestTeamChatEdges(t *testing.T) {
 	r, err := f.svc.ChatReply(ctx, f.homeOf("lead"), "", 0, "answering")
 	if err != nil || r.ReplyTo != m2.Seq {
 		t.Fatalf("the default reply answered #%d, want the newest (#%d): %v", r.ReplyTo, m2.Seq, err)
+	}
+}
+
+// PINS, PER OPERATOR: pinned conversations list first, in the operator's
+// order, with their position; another operator's list is untouched; pin
+// --at inserts or moves; unpin is idempotent; a reorder names every pin
+// exactly once.
+func TestChatPins(t *testing.T) {
+	f := newTeamFixture(t, nil)
+	ctx := context.Background()
+	f.chat(t, ChatSend{Text: "newest activity is the team's"})
+	list := func(op string) []ConversationSummary {
+		cs, err := f.svc.Conversations(op)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cs
+	}
+	ids := func(cs []ConversationSummary, pinnedOnly bool) string {
+		var out []string
+		for _, c := range cs {
+			if pinnedOnly && !c.Pinned {
+				continue
+			}
+			out = append(out, fmt.Sprintf("%s@%d", c.ID, c.Position))
+		}
+		return strings.Join(out, " ")
+	}
+	if _, err := f.svc.ChatPin("op", "bot:solo", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.ChatPin("op", "bot:c", 0); err != nil {
+		t.Fatal(err)
+	}
+	cs := list("op")
+	if ids(cs, true) != "bot:solo@1 bot:c@2" || cs[0].ID != "bot:solo" || cs[2].ID != "team:platform" || cs[2].Pinned {
+		t.Fatalf("pinned first, in order, then by activity: %s / %+v", ids(cs, true), cs[2])
+	}
+	if ids(list("op2"), true) != "" {
+		t.Fatal("op's pins showed for op2")
+	}
+	// --at inserts, and moves a pinned one.
+	if p, _ := f.svc.ChatPin("op", "team:platform", 1); strings.Join(p, ",") != "team:platform,bot:solo,bot:c" {
+		t.Fatalf("pin at 1: %v", p)
+	}
+	if p, _ := f.svc.ChatPin("op", "bot:solo", 3); strings.Join(p, ",") != "team:platform,bot:c,bot:solo" {
+		t.Fatalf("move to 3: %v", p)
+	}
+	if p, _ := f.svc.ChatPin("op", "bot:c", 99); strings.Join(p, ",") != "team:platform,bot:solo,bot:c" {
+		t.Fatalf("past the end: %v", p)
+	}
+	// Unpin, twice.
+	if p, err := f.svc.ChatUnpin("op", "bot:solo"); err != nil || strings.Join(p, ",") != "team:platform,bot:c" {
+		t.Fatalf("unpin: %v %v", p, err)
+	}
+	if p, err := f.svc.ChatUnpin("op", "bot:solo"); err != nil || len(p) != 2 {
+		t.Fatalf("unpin again: %v %v", p, err)
+	}
+	// Reorder: every pin, once.
+	if p, err := f.svc.ChatReorder("op", []string{"bot:c", "team:platform"}); err != nil || strings.Join(p, ",") != "bot:c,team:platform" {
+		t.Fatalf("reorder: %v %v", p, err)
+	}
+	for order, want := range map[string]string{
+		"bot:c":                     "the order leaves out team:platform",
+		"bot:c,team:platform,bot:a": "bot:a is not pinned",
+		"bot:c,bot:c":               "bot:c is listed twice",
+	} {
+		if _, err := f.svc.ChatReorder("op", strings.Split(order, ",")); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", order, err)
+		}
+	}
+	if ids(list("op"), true) != "bot:c@1 team:platform@2" {
+		t.Fatalf("a refused reorder changed the order: %s", ids(list("op"), true))
+	}
+	// Refusals: an unknown conversation, an unknown operator, a negative
+	// position.
+	for _, err := range []error{
+		func() error { _, err := f.svc.ChatPin("op", "bot:nobody", 0); return err }(),
+		func() error { _, err := f.svc.ChatPin("mallory", "bot:a", 0); return err }(),
+		func() error { _, err := f.svc.ChatPin("op", "bot:a", -1); return err }(),
+	} {
+		if err == nil {
+			t.Error("a bad pin was accepted")
+		}
+	}
+	// A pin whose bot is gone is not listed, and the positions close up.
+	_, _ = f.svc.ChatPin("op", "bot:a", 1)
+	m := f.cfg.Bots["a"]
+	m.Disabled = true
+	f.cfg.Bots["a"] = m
+	if got := ids(list("op"), true); got != "bot:c@1 team:platform@2" {
+		t.Fatalf("a disabled bot's pin: %s", got)
+	}
+	_ = ctx
+}
+
+// What an operator types: bot:/team: as is, a bare team or bot name, never
+// an ambiguous one.
+func TestResolveConversation(t *testing.T) {
+	f := newTeamFixture(t, func(c *config.Config) {
+		c.Teams["solo"] = config.TeamConfig{} // a team named like a bot
+	})
+	for in, want := range map[string]string{"platform": "team:platform", "lead": "bot:lead", "bot:a": "bot:a", "team:billing": "team:billing"} {
+		if got, err := f.svc.ResolveConversation(in); err != nil || got != want {
+			t.Errorf("%s: %q %v", in, got, err)
+		}
+	}
+	if _, err := f.svc.ResolveConversation("solo"); err == nil || !strings.Contains(err.Error(), "both a team and a bot") {
+		t.Fatalf("ambiguous: %v", err)
+	}
+	if _, err := f.svc.ResolveConversation("nobody"); err == nil {
+		t.Fatal("an unknown name")
+	}
+}
+
+// The pin endpoints: pin, reorder, unpin — and the list reports them.
+func TestChatPinAPI(t *testing.T) {
+	f := newTeamFixture(t, nil)
+	srv := httptest.NewServer(OperatorAPI(f.svc))
+	defer srv.Close()
+	do := func(method, path, body string) int {
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode
+	}
+	if c := do("POST", "/v1/conversations/bot:a/pin", `{"operator":"op"}`); c != 200 {
+		t.Fatalf("pin: %d", c)
+	}
+	if c := do("POST", "/v1/conversations/team:platform/pin", `{"operator":"op","position":1}`); c != 200 {
+		t.Fatalf("pin at 1: %d", c)
+	}
+	if c := do("PUT", "/v1/conversations/pins", `{"operator":"op","order":["bot:a","team:platform"]}`); c != 200 {
+		t.Fatalf("reorder: %d", c)
+	}
+	if c := do("PUT", "/v1/conversations/pins", `{"operator":"op","order":["bot:a"]}`); c != http.StatusUnprocessableEntity {
+		t.Fatalf("an incomplete reorder: %d", c)
+	}
+	resp, _ := http.Get(srv.URL + "/v1/conversations?operator=op")
+	var list struct {
+		Conversations []ConversationSummary `json:"conversations"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&list)
+	if c := list.Conversations; c[0].ID != "bot:a" || !c[0].Pinned || c[0].Position != 1 || c[1].ID != "team:platform" || c[1].Position != 2 || c[2].Pinned {
+		t.Fatalf("list: %+v", c[:3])
+	}
+	if c := do("DELETE", "/v1/conversations/bot:a/pin?operator=op", ""); c != 200 {
+		t.Fatalf("unpin: %d", c)
+	}
+	if c := do("POST", "/v1/conversations/bot:nobody/pin", `{"operator":"op"}`); c != http.StatusUnprocessableEntity {
+		t.Fatalf("an unknown conversation: %d", c)
+	}
+	if p := f.st.ChatPins("op"); len(p) != 1 || p[0] != "team:platform" {
+		t.Fatalf("stored: %v", p)
 	}
 }

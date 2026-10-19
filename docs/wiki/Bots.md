@@ -298,11 +298,14 @@ control socket, and nothing on it is reachable from a bot session:
 | `GET /v1/bots/{bot}/attachments/{id}` | one record |
 | `GET /v1/bots/{bot}/attachments/{id}/content` | the bytes, always as a download (`Content-Disposition: attachment`, `nosniff`, a sandboxing CSP), never rendered |
 | `GET /v1/bots/{bot}/attachments/{id}/thumbnail[?size=N]` | a PNG thumbnail of a PNG, JPEG or GIF (32–512 px; an image declaring more than 40 megapixels is refused) |
-| `GET /v1/conversations[?operator=]` | every bot's and team's conversation: the last message and that operator's unread count, the most recent first |
+| `GET /v1/conversations[?operator=]` | every bot's and team's conversation: the last message, that operator's unread count, `pinned` and `position`; their pins first in their order, then the most recent first |
 | `GET /v1/conversations/{id}/messages[?after=N&operator=&mark=1]` | messages after N (`after=-1`: what is new to that operator); `mark=1` marks them read |
 | `POST /v1/conversations/{id}/messages` | send: JSON `{text, operator, to: [...], everyone}`, or multipart with `file` parts (attachments, per member's caps) |
 | `POST /v1/conversations/{id}/read` | `operator`, `upto`: the read mark (never moves back) |
 | `GET /v1/conversations/stream` | live updates: one server-sent `message` event per recorded message |
+| `POST /v1/conversations/{id}/pin` | pin it for an operator: JSON `{operator, position}` (1-based; no position: last; a pinned one moves) |
+| `DELETE /v1/conversations/{id}/pin[?operator=]` | unpin (unpinning one that isn't pinned changes nothing) |
+| `PUT /v1/conversations/pins` | reorder: JSON `{operator, order: [ids…]}`, naming every pinned conversation exactly once |
 | `GET /v1/bots/{bot}/avatar` | the bot's picture, re-encoded as a PNG; `404` when it has none (show its face or initials) |
 | `POST /v1/bots/{bot}/avatar/plan` | multipart: `file` (at most 8 MB) with an optional crop box `crop_x`, `crop_y`, `crop_side`, or `clear=1`. The same plan as `bot avatar set`: re-encoded, validated on a copy, a diff, `widening: false`, and a `token` |
 | `POST /v1/bots/{bot}/avatar/apply` | `token=…`: writes the planned picture and config line. Single use, bound to its bot, 15 minutes, and refused if the config changed since the plan. Reload to see it |
@@ -1159,7 +1162,10 @@ conductor team say platform "@platform-data is the replica caught up?"   # that 
 conductor team say platform --to platform-data --to platform-sre "…"     # those members
 conductor team say platform --everyone "roll call: what are you on?"     # every member, one reply each
 conductor team chat platform        # what's new (marks it read); --all for the whole transcript
-conductor team chats                # every bot and team conversation: last message, your unread count
+conductor team chats                # every bot and team conversation: last message, your unread count (your pins first, marked *)
+conductor team pin platform [--at 1]                 # pin a conversation for yourself (--at: its position; moves a pinned one)
+conductor team unpin bot:platform-data
+conductor team pins [--order platform,bot:platform-data]   # your pins in order; --order sets it (each pinned one once)
 ```
 
 - **Who it reaches.** By default, the team's **lead**, as your instruction.
@@ -1186,6 +1192,12 @@ conductor team chats                # every bot and team conversation: last mess
   conversation (`conductor bot chat`), and only its own team's.
 - **Unread is per operator.** Your own messages count as read; a reply is
   unread for each operator until they read it.
+- **Pins are per operator.** Each operator's pinned conversations, in their
+  own order, are kept beside the read marks (`chat_pins.json` in
+  conductor's state). The conversation list shows them first, with
+  `pinned` and `position`. A bare name means a team or a bot; when it's
+  both, say `team:` or `bot:`. A pin whose bot or team is gone isn't
+  listed.
 
 A message to one bot (`conductor bot say`, or the dashboard) is recorded the
 same way in `bot:<name>`, and answered with `conductor bot reply`. With

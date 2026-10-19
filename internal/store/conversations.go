@@ -150,3 +150,63 @@ func (c Conversation) Unread(op string) int {
 	}
 	return n
 }
+
+// PINS: each operator's pinned conversations, in the order they chose —
+// per operator, like the read marks, in chat_pins.json beside the
+// transcripts (one ordered list per operator, so a reorder is one write).
+
+func (s *Store) pinsPath() string {
+	if s.path == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(s.path), "chat_pins.json")
+}
+
+func (s *Store) loadPins() {
+	s.pins = map[string][]string{}
+	p := s.pinsPath()
+	if p == "" {
+		return
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	if err := json.Unmarshal(b, &s.pins); err != nil || s.pins == nil {
+		_ = os.Rename(p, fmt.Sprintf("%s.corrupt-%d", p, time.Now().Unix()))
+		s.pins = map[string][]string{}
+	}
+}
+
+// ChatPins is op's pinned conversations, in order.
+func (s *Store) ChatPins(op string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.pins[op]...)
+}
+
+// UpdateChatPins edits op's pins under a lock and persists them.
+func (s *Store) UpdateChatPins(op string, fn func(pins []string) ([]string, error)) error {
+	ml := s.botLock("pins:" + op)
+	ml.Lock()
+	defer ml.Unlock()
+	s.mu.Lock()
+	next, err := fn(append([]string(nil), s.pins[op]...))
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	if s.pins == nil {
+		s.pins = map[string][]string{}
+	}
+	if len(next) == 0 {
+		delete(s.pins, op)
+	} else {
+		s.pins[op] = next
+	}
+	s.mu.Unlock()
+	return s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.pins, "", " ")
+		return b, s.pinsPath(), err
+	})
+}
