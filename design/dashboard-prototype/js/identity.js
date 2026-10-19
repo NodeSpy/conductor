@@ -76,15 +76,43 @@
   UI.act('mk-use', () => { const f = pk.onPick;
     if (pk.mode === 'upload') { if (!crop.src) { crop.err = 'Choose a picture first, or switch back to a mascot.'; return redrawPick(); } const out = cropOut(crop) || crop.src; UI.closeModal(); if (f) f({ image: out }); return; }
     const m = Object.assign({}, pk.m); UI.closeModal(); if (f) f(m); });
+  /* A team's picture picker (34): its initials, an icon in one of the bot colours, or an uploaded picture; never a mascot
+     (mascots are bots). The icons leave out those that already mean something (nav, objects, status, the passkey). */
+  const TEAM_ICONS = ['dollar', 'rocket', 'book-open', 'cpu', 'layers', 'sun', 'moon', 'hammer', 'code', 'server', 'box'].filter((n) => (window.ICONS || {})[n]);
+  let tp = null;
+  const tpv = (t, a, size) => UI.teamAvOf(t, a, size);
+  const teamHTML = () => { const a = tp.a, t = tp.t;
+    const body = tp.mode === 'icon' ? `<h3>Icon</h3><div class="mk-grid">${TEAM_ICONS.map((ic) => `<button type="button" class="mk-opt${a.icon === ic ? ' on' : ''}" data-act="tp-icon" data-v="${ic}" aria-pressed="${a.icon === ic}">${tpv(t, { icon: ic, color: a.color || 'teal' }, 'lg')}<span>${esc(ic.replace(/-/g, ' '))}</span></button>`).join('')}</div>
+        <h3>Colour</h3><div class="mk-grid mk-cols">${COLORS.map((c) => `<button type="button" class="mk-opt${a.color === c ? ' on' : ''}" data-act="tp-color" data-v="${c}" aria-pressed="${a.color === c}">${tpv(t, { icon: a.icon || TEAM_ICONS[0], color: c }, 'lg')}<span>${c[0].toUpperCase() + c.slice(1)}</span></button>`).join('')}</div>`
+      : tp.mode === 'upload' ? UI.cropHTML(crop) : `<p class="dl-sub">Its first two letters on a tile: <b>${esc(String(t).replace(/[^a-z0-9]/gi, '').slice(0, 2).toLowerCase())}</b>. The default.</p>`;
+    const prevA = tp.mode === 'upload' ? (crop.src ? { image: crop.out || crop.src } : {}) : tp.mode === 'icon' ? { icon: a.icon || TEAM_ICONS[0], color: a.color || 'teal' } : {};
+    return `<div class="mk-pick"><div class="mk-prev" id="cr-prev">${tpv(t, prevA, 'xl')}<div class="mk-sizes">${tpv(t, prevA, 'lg')}${tpv(t, prevA, 'md')}${tpv(t, prevA, 'sm')}</div><p class="dl-sub">team ${esc(t)}, as it will show</p></div><div class="mk-steps">${body}</div></div>`; };
+  const redrawTeam = () => { const b = document.getElementById('mk-body'); if (b) b.innerHTML = teamHTML(); if (tp.mode === 'upload') requestAnimationFrame(previewCrop); };
+  UI.teamPicker = (t, onPick) => { const cur = UI.teamIdent(t); tp = { t, onPick, mode: cur.image ? 'upload' : cur.icon ? 'icon' : 'initials', a: { icon: cur.icon || TEAM_ICONS[0], color: cur.color || 'teal' } };
+    crop = { src: cur.image || '', err: '', w: 256, h: 256, zoom: 1, ox: 0, oy: 0, scale: FR / 256, W: FR, H: FR, out: cur.image || '' }; cropDone = redrawTeam;
+    const seg = [['initials', 'Initials'], ['icon', 'Icon and colour'], ['upload', 'Upload a picture']].map(([v, l]) => `<button type="button" class="${tp.mode === v ? 'on' : ''}" data-act="tp-mode" data-v="${v}" aria-pressed="${tp.mode === v}">${l}</button>`).join('');
+    UI.modal(`<div class="modal-head"><div><div class="caps">Picture</div><h2>Team ${esc(t)}'s picture</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+      <div class="seg mk-mode" role="group" aria-label="Kind of picture">${seg}</div><div class="modal-body" id="mk-body">${teamHTML()}</div>
+      <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-act="tp-use">Use this picture</button></div>`, { wide: true }); };
+  UI.act('tp-mode', (b) => { tp.mode = b.dataset.v; b.parentElement.querySelectorAll('button').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', String(x === b)); }); redrawTeam(); });
+  UI.act('tp-icon', (b) => { tp.a.icon = b.dataset.v; redrawTeam(); });
+  UI.act('tp-color', (b) => { tp.a.color = b.dataset.v; redrawTeam(); });
+  UI.act('tp-use', () => { const f = tp.onPick; let a;
+    if (tp.mode === 'upload') { if (!crop.src) { crop.err = 'Choose a picture first, or pick initials or an icon.'; return redrawTeam(); } a = { image: cropOut(crop) || crop.src }; }
+    else a = tp.mode === 'icon' ? { icon: tp.a.icon, color: tp.a.color } : { initials: true };
+    UI.closeModal(); if (f) f(a); });
   /** A bot's picture field: its mascot now, and Change… (opens the picker). */
   UI.mascotField = (m, act, attrs = '') => `<div class="mk-field">${m.image ? `${pvImg(m.image, 'lg')}<span class="dl-sub">Your picture</span>` : `${pv(m, 'lg')}<span class="dl-sub">${esc(MASCOT.SHAPES.find((x) => x[0] === m.shape)[1])} · ${esc(MASCOT.EYES.find((x) => x[0] === m.eyes)[1].toLowerCase())} · ${esc(m.color)}</span>`}<button type="button" class="btn sm secondary" data-act="${act}" ${attrs}>Change…</button></div>`;
   /** Is the bot executing right now (a worker of its running)? The spinner is for that alone (59); a live session that's
    *  idle is not "running". */
   UI.botWorking = (b) => (window.D.workers || []).some((w) => (w.bot || 'platform-sre') === b && w.status === 'run');
   UI.botWho = (b) => { const n = UI.botName(b); return `<b class="bav-name">${esc(n)}</b>${n !== b ? ` <span class="bav-id">${esc(b)}</span>` : ''}`; };
-  /** A team's picture: its own icon in its colour, its uploaded image, or its initials on a tile (never a bot's face). */
-  UI.teamAv = (t, size = 'sm') => { const id = (window.D.teamIdentity || {})[t] || {};
-    if (id.image) return `<span class="bav tav ${size}" aria-hidden="true"><img src="${esc(id.image)}" alt=""></span>`;
+  /** A team's picture: its own icon in its colour, its uploaded image, or its initials on a tile (never a bot's face).
+   *  From config (teams.<t>.avatar), staged changes included, else the demo's identity. */
+  UI.teamIdent = (t) => { const tm = window.S && S.view && (S.view().teams || []).find((x) => x.name === t), av = tm && tm.cfg && tm.cfg.avatar; return av || (window.D.teamIdentity || {})[t] || {}; };
+  UI.teamAv = (t, size = 'sm') => UI.teamAvOf(t, UI.teamIdent(t), size);
+  UI.teamAvOf = (t, id, size = 'sm') => { id = id || {};
+    if (id.image) return `<span class="bav tav img ${size}" aria-hidden="true"><img src="${esc(id.image)}" alt=""></span>`;
     if (id.icon) return `<span class="bav tav ${size}" data-bc="${esc(id.color || 'stone')}" aria-hidden="true">${UI.icon(id.icon)}</span>`;
     return `<span class="bav tav ini ${size}" aria-hidden="true"><i>${esc(String(t).replace(/[^a-z0-9]/gi, '').slice(0, 2).toLowerCase())}</i></span>`; };
 })();

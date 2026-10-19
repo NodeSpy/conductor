@@ -199,3 +199,16 @@ test('upload your own picture: PNG, JPEG or WebP up to 2 MB, cropped square, pre
   await page.locator('[data-act="mk-remove"]').click();
   await expect(page.locator('.dl-bothead .bav.mascot').first()).toBeVisible();
 });
+
+test('a team\'s picture: its initials, an icon in a colour, or an upload, never a mascot; it shows wherever the team does', async ({ page }) => {
+  await go(page, '#/teams/platform', { fresh: true });
+  await page.locator('[data-act="team-more"]').first().click(); await page.locator('#pop-menu [data-act="team-pic"]').click();
+  await expect(page.locator('[data-act="tp-mode"]')).toHaveText(['Initials', 'Icon and colour', 'Upload a picture']);
+  await expect(page.locator('.modal .bav.mascot')).toHaveCount(0); // mascots are bots
+  await page.locator('[data-act="tp-mode"][data-v="icon"]').click();
+  await page.locator('[data-act="tp-icon"][data-v="rocket"]').click(); await page.locator('[data-act="tp-color"][data-v="lagoon"]').click();
+  await page.locator('[data-act="tp-use"]').click();
+  await expect(page.locator('.dl-bothead .tav[data-bc="lagoon"] svg')).toBeVisible();
+  await go(page, '#/chat');
+  await expect(page.locator('.cv-li[data-key="team:platform"] .tav[data-bc="lagoon"]')).toBeVisible();
+});

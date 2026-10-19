@@ -122,7 +122,9 @@
   UI.act('team-new', () => teamForm(null));
   UI.teamFormWith = (bots) => teamForm(null, bots); // Make a team from the bots you selected
   // the team's own ⋯: on a phone the header keeps one action (New ticket) and the rest are here
-  UI.act('team-more', (b) => UI.menu(b, [['Route an event here…', 'send', 'team-deliver', `data-t="${b.dataset.t}"`], ['Edit team…', 'edit', 'team-edit', `data-t="${b.dataset.t}"`], ['-'], ['Remove this team…', 'trash', 'team-del', `data-t="${b.dataset.t}"`]]));
+  // a team's picture (34): its initials, an icon in a colour, or an upload; staged on the team, shown everywhere at once
+  UI.act('team-pic', (b) => { const t = b.dataset.t; UI.teamPicker(t, (a) => { const c = JSON.parse(JSON.stringify(S.staged('teams', t) || {})); c.avatar = a; UI.staged(S.stage('teams', t, c, `team ${t}'s picture`), { go: false }); UI.rerender({ keepScroll: true }); }); });
+  UI.act('team-more', (b) => UI.menu(b, [['Change its picture…', 'image', 'team-pic', `data-t="${b.dataset.t}"`], ['Route an event here…', 'send', 'team-deliver', `data-t="${b.dataset.t}"`], ['Edit team…', 'edit', 'team-edit', `data-t="${b.dataset.t}"`], ['-'], ['Remove this team…', 'trash', 'team-del', `data-t="${b.dataset.t}"`]]));
   UI.act('team-edit', (b) => teamForm(T(b.dataset.t)));
   UI.act('team-del', (b) => {
     const t = T(b.dataset.t), ms = botsOf(t.name);

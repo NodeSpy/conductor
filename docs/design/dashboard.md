@@ -251,7 +251,7 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
   on a phone, except where it's the row's only control).
 - **One page container** on every route: the content starts on the page gutter (the top bar's own inset; the search sits at the top bar's right, next to your avatar), one max-width, one gutter
   (`container.spec`, at 1440, 1280 and 1024).
-- **The audit log** leads with who: their picture (a bot's face, a team's initials, You, a workflow's icon) and name in
+- **The audit log** leads with who: their picture (a bot's mascot, a team's picture, You, a workflow's icon) and name in
   bold, then what happened in a specific sentence, then the facts line (what it's about, where, the passkey used); an
   agent's action is its bot's or workflow's, with "its triage agent" as a fact.
 - **Labels** (`UI.label`): plain words in secondary ink, a middot between neighbours; no box, no fill (the status rule
@@ -841,8 +841,11 @@ on the ticket.
   phone, or the conversation's ⋯ (which also offers Mark as unread). The Pinned heading shows only when something is
   pinned. Pins and read state are per operator (`PUT /api/v1/chat/pins` `{keys[]}`,
   `POST /api/v1/chat/<key>/read` `{unread?}`).
-- **Sizes:** mascots are 40px in the list, 36px on messages and 44px in the header. A team shows its lead's face with
-  "+N".
+- **Sizes:** mascots are 40px in the list, 36px on messages and 44px in the header.
+- **A team's picture** is its own, never a bot's mascot: its initials on a tile by default, an icon (from a set that
+  leaves out icons that already mean something) in one of the bot colours, or an uploaded picture (the bot upload's
+  rules and crop). The team's ⋯ has Change its picture…; it's `teams.<t>.avatar: {icon, color} | {image} | {initials}`
+  and shows wherever the team does (Chat, Bots, its page, tickets).
 
 **A bot's identity** (option A):
 
