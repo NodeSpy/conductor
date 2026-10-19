@@ -231,7 +231,7 @@ var botCtl *bot.Service
 // configured key — the socket alone never approves anything.
 func handleBotControl(ctx context.Context, conn net.Conn, req controlRequest, log func(string, ...any)) {
 	switch req.Sub {
-	case "templates", "template", "template_plan", "grant_plan":
+	case "templates", "template", "template_plan", "grant_plan", "packs":
 		// The catalog and the plans need no bot to exist yet: the dashboard's
 		// New bot flow starts here.
 		templateControl(conn, req)

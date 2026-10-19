@@ -476,7 +476,7 @@ func TestTemplateCatalog(t *testing.T) {
 		t.Fatalf("installed: %+v", in)
 	}
 	reg := filepath.Join(filepath.Dir(p), "packs")
-	ts, problems := RegistryTemplates(reg, true)
+	ts, problems := RegistryTemplates(DefaultRegistry, reg, true)
 	if len(problems) != 0 || len(ts) != 1 || ts[0].Ref != "conductor-packs/sre-kit/first-line" || !strings.Contains(ts[0].Install, "use: conductor-packs/sre-kit") {
 		t.Fatalf("registry: %+v %v", ts, problems)
 	}

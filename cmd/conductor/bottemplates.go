@@ -18,7 +18,7 @@ import (
 //
 //	conductor bot templates [--search <words>] [--registry <dir|git url>] [--installed]
 //	conductor bot template <ref> [--registry …]
-//	conductor bot new <name> --from <pack instance>/<template> [--connector in=conn]… [--grant verb=tier]… [--proactive] [--write]
+//	conductor bot new <name> --from <pack instance>/<template> | <registry template> [--registry …] [--allow-unlisted] [--connector in=conn]… [--grant verb=tier]… [--proactive] [--write]
 //	conductor bot grant <bot> <verb>=<tier>… [--write]
 //
 // `new` and `grant` are config changes, made the way every config change is
@@ -46,7 +46,11 @@ type botPlan struct {
 	// Widening says the change widens what the bot may do: the dashboard
 	// asks for the passkey before writing it.
 	Widening bool   `json:"widening"`
-	Config   string `json:"-"`
+	// Install is the pack this change installs with its bot (a registry
+	// template's).
+	Install *packInstall `json:"install,omitempty"`
+	Config  string       `json:"-"`
+	orig    string
 }
 
 // planFull says a plan runs the full `conductor validate` pipeline on its
@@ -93,6 +97,34 @@ func notesFor(cfg *config.Config, name string) []string {
 
 // planNewBot instantiates a template into a new bot, on a copy.
 func planNewBot(cfgPath string, d config.TemplateBotDraft, ref string) (*botPlan, error) {
+	return planNewBotOpts(cfgPath, d, ref, newBotOpts{})
+}
+
+// newBotOpts: the registry a registry template comes from, and the explicit
+// trust step for a third-party pack source.
+type newBotOpts struct {
+	Registry      string
+	AllowUnlisted bool
+}
+
+// packInstall is the pack a plan installs with its bot.
+type packInstall struct {
+	Instance string `json:"instance"`
+	Key      string `json:"key"`
+	Source   string `json:"source"`
+	Version  string `json:"version,omitempty"`
+
+	allowUnlisted bool
+}
+
+// planNewBotOpts plans a new bot from a template: an installed one
+// (<instance>/<template>), or a registry's — whose pack is installed in the
+// SAME change. That change is still one reviewable diff: the packs: entry
+// and the bot. Its pack is resolved, with the same trust rules as `conductor
+// init` (and a third-party source's explicit trust step), into a private
+// copy of the config directory, where the whole change is validated; nothing
+// in the config directory changes until --write.
+func planNewBotOpts(cfgPath string, d config.TemplateBotDraft, ref string, o newBotOpts) (*botPlan, error) {
 	src, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return nil, err
@@ -101,28 +133,149 @@ func planNewBot(cfgPath string, d config.TemplateBotDraft, ref string) (*botPlan
 	if err != nil {
 		return nil, fmt.Errorf("your config does not load as it is: %w", err)
 	}
-	if strings.Count(ref, "/") > 1 {
-		return nil, fmt.Errorf("--from %s: not an installed template — install its pack first (see `conductor bot templates --search …`: it prints the packs: block), run `conductor init`, then name it <pack instance>/<template>", ref)
-	}
-	lt, err := cur.Template(ref)
-	if err != nil {
-		return nil, err
-	}
 	if _, exists := cur.Bots[d.Name]; exists {
 		return nil, fmt.Errorf("a bot named %q exists", d.Name)
 	}
+	if strings.Count(ref, "/") <= 1 {
+		lt, err := cur.Template(ref)
+		if err != nil {
+			return nil, err
+		}
+		return planTemplateBot(cfgPath, src, src, d, ref, lt)
+	}
+	// A registry template: install its pack in the same change.
+	t, err := registryTemplate(ref, o.Registry)
+	if err != nil {
+		return nil, err
+	}
+	if _, taken := cur.Packs[t.InstallAs]; taken {
+		return nil, fmt.Errorf("--from %s: a pack instance named %q is already in packs: — name its template <instance>/<template> (`conductor bot templates --installed`)", ref, t.InstallAs)
+	}
+	if !cur.PackTrust.AutoInstallTrusted(t.InstallKey, t.InstallValue, o.AllowUnlisted) {
+		return nil, fmt.Errorf("--from %s: its pack comes from a third-party source, %s — trust it first: add it to pack_trust.allow, or re-run with --allow-unlisted (as `conductor init` would need)", ref, t.InstallValue)
+	}
+	entry := fmt.Sprintf("%s:\n  %s: %q\n", t.InstallAs, t.InstallKey, t.InstallValue)
+	withPack, err := config.InsertTopLevel(src, "packs", entry)
+	if err != nil {
+		return nil, err
+	}
+	tmp, tmpCfg, err := privateConfigCopy(cfgPath, withPack)
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	resolve := config.ResolvePacks
+	if o.AllowUnlisted {
+		resolve = config.ResolvePacksAllowingUnlisted
+	}
+	if _, err := resolve(tmpCfg); err != nil {
+		return nil, fmt.Errorf("installing pack %s (%s): %w", t.InstallAs, t.InstallValue, err)
+	}
+	tcur, err := config.Load(tmpCfg)
+	if err != nil {
+		return nil, fmt.Errorf("with pack %s installed, the config does not load: %w", t.InstallAs, err)
+	}
+	local := t.InstallAs + "/" + t.Template
+	lt, err := tcur.Template(local)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := planTemplateBot(tmpCfg, src, withPack, d, local, lt)
+	if err != nil {
+		return nil, err
+	}
+	plan.Install = &packInstall{Instance: t.InstallAs, Key: t.InstallKey, Source: t.InstallValue, Version: t.Version, allowUnlisted: o.AllowUnlisted}
+	plan.Notes = append([]string{fmt.Sprintf("installs pack %s %s from %s in this change (resolved and validated in a private copy of your config directory)", t.InstallAs, t.Version, t.InstallValue)}, plan.Notes...)
+	return plan, nil
+}
+
+// registryTemplate finds a registry's template by its ref.
+func registryTemplate(ref, registry string) (config.TemplateSummary, error) {
+	dir, official, err := config.RegistryDir(registry)
+	if err != nil {
+		return config.TemplateSummary{}, err
+	}
+	ts, _ := config.RegistryTemplates(registry, dir, official)
+	for _, t := range ts {
+		if t.Ref == ref {
+			return t, nil
+		}
+	}
+	return config.TemplateSummary{}, fmt.Errorf("--from %s: no such template in the registry (`conductor bot templates --search …` lists them)", ref)
+}
+
+// privateConfigCopy copies the config directory (not .git) into a private
+// directory under conductor's state, with text as the config file: where a
+// change that installs a pack is resolved and validated without touching
+// the real directory.
+func privateConfigCopy(cfgPath string, text []byte) (dir, path string, err error) {
+	root := filepath.Join(config.StateDir(), "plans")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", "", err
+	}
+	dir, err = os.MkdirTemp(root, "copy-")
+	if err != nil {
+		return "", "", err
+	}
+	src := filepath.Dir(cfgPath)
+	err = filepath.Walk(src, func(p string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		if rel == "." {
+			return nil
+		}
+		if fi.IsDir() && (fi.Name() == ".git" || strings.HasPrefix(p, root)) {
+			return filepath.SkipDir
+		}
+		dst := filepath.Join(dir, rel)
+		switch {
+		case fi.IsDir():
+			return os.MkdirAll(dst, 0o700)
+		case fi.Mode().IsRegular():
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(dst, b, fi.Mode().Perm()|0o600)
+		case fi.Mode()&os.ModeSymlink != 0:
+			t, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(t, dst)
+		}
+		return nil // sockets, devices: not config
+	})
+	if err != nil {
+		os.RemoveAll(dir)
+		return "", "", err
+	}
+	path = filepath.Join(dir, filepath.Base(cfgPath))
+	if err := os.WriteFile(path, text, 0o600); err != nil {
+		os.RemoveAll(dir)
+		return "", "", err
+	}
+	return dir, path, nil
+}
+
+// planTemplateBot plans the bot entry (and its suggested triggers) over
+// base, validated beside validatePath; the diff is against orig.
+func planTemplateBot(validatePath string, orig, base []byte, d config.TemplateBotDraft, ref string, lt config.LoadedTemplate) (*botPlan, error) {
+	src := base
 	d.Template = lt
 	entry, err := config.BotEntryYAML(d)
 	if err != nil {
 		return nil, err
 	}
-	plan := &botPlan{Bot: d.Name, Template: ref, Entry: entry}
+	plan := &botPlan{Bot: d.Name, Template: ref, Entry: entry, orig: string(orig)}
 	step1, err := config.InsertTopLevel(src, "bots", entry)
 	if err != nil {
 		return nil, err
 	}
 	final := step1
-	c1, verr := validateCopy(cfgPath, step1, false)
+	c1, verr := validateCopy(validatePath, step1, false)
 	if verr == nil {
 		// An optional input left unbound: its read-only grants stay out of
 		// the entry (they would turn on silently once such a connector
@@ -160,7 +313,7 @@ func planNewBot(cfgPath string, d config.TemplateBotDraft, ref string) (*botPlan
 		if final, err = config.InsertTopLevel(step1, "triggers", trig); err != nil {
 			return nil, err
 		}
-		c2, err := validateCopy(cfgPath, final, planFull)
+		c2, err := validateCopy(validatePath, final, planFull)
 		if err != nil {
 			verr = err
 		} else {
@@ -172,7 +325,7 @@ func planNewBot(cfgPath string, d config.TemplateBotDraft, ref string) (*botPlan
 	if verr != nil {
 		plan.Error = verr.Error()
 	}
-	plan.Diff = bot.UnifiedDiff(string(src), string(final))
+	plan.Diff = bot.UnifiedDiff(string(orig), string(final))
 	plan.Config = string(final)
 	plan.Widening = len(d.Grants) > 0 && anyAbove(d.Grants)
 	return plan, nil
@@ -256,7 +409,7 @@ func templateList(cfgPath, search, registry string, installedOnly, full bool) (m
 		if err != nil {
 			out["registry_error"] = err.Error()
 		} else {
-			reg, problems := config.RegistryTemplates(dir, official)
+			reg, problems := config.RegistryTemplates(registry, dir, official)
 			installed := map[string]bool{}
 			for _, t := range all {
 				installed[t.Pack+"/"+t.Template] = true
@@ -336,10 +489,10 @@ func botTemplatesCmd(sub string, args []string) error {
 		return fmt.Errorf("no template %q (`conductor bot templates` lists them)", pos[0])
 	case "new":
 		if len(pos) != 1 || fl["from"] == "" {
-			return fmt.Errorf("usage: conductor bot new <name> --from <pack instance>/<template> [--connector input=connector]… [--grant verb=tier]… [--proactive] [--write]")
+			return fmt.Errorf("usage: conductor bot new <name> --from <pack instance>/<template> | <registry template> [--registry <dir|git url>] [--allow-unlisted] [--connector input=connector]… [--grant verb=tier]… [--proactive] [--write]\n  (a registry template's pack is installed in the same change)")
 		}
 		d := config.TemplateBotDraft{Name: pos[0], Connectors: multi("connector"), Grants: multi("grant"), Proactive: fl["proactive"] != ""}
-		plan, err := planNewBot(cfgPath, d, fl["from"])
+		plan, err := planNewBotOpts(cfgPath, d, fl["from"], newBotOpts{Registry: fl["registry"], AllowUnlisted: fl["allow-unlisted"] == "true"})
 		if err != nil {
 			return err
 		}
@@ -380,15 +533,43 @@ func finishPlan(cfgPath string, plan *botPlan, fl map[string]string) error {
 		fmt.Println("\nNot written: review the diff, then run the same command with --write.")
 		return nil
 	}
-	if err := writeConfig(cfgPath, plan.Config); err != nil {
+	if err := writePlan(cfgPath, plan); err != nil {
 		return err
 	}
 	fmt.Printf("\nWritten to %s. `conductor reload` (or a restart) loads it.\n", cfgPath)
 	return nil
 }
 
+// writePlan writes a valid plan. One that installs a pack also resolves it
+// into the config directory — the same step as `conductor init`, with the
+// same trust rules — and puts the config back if that fails.
+func writePlan(cfgPath string, plan *botPlan) error {
+	if !plan.Valid {
+		return fmt.Errorf("the change does not validate — nothing written")
+	}
+	if err := writeConfig(cfgPath, plan.Config); err != nil {
+		return err
+	}
+	if in := plan.Install; in != nil {
+		resolve := config.ResolvePacks
+		if in.allowUnlisted {
+			resolve = config.ResolvePacksAllowingUnlisted
+		}
+		if _, err := resolve(cfgPath); err != nil {
+			if rerr := writeConfig(cfgPath, plan.orig); rerr != nil {
+				return fmt.Errorf("installing pack %s: %v — and putting your config back failed: %v", in.Instance, err, rerr)
+			}
+			return fmt.Errorf("installing pack %s: %w — your config is as it was", in.Instance, err)
+		}
+	}
+	return nil
+}
+
 func printPlan(p *botPlan) {
 	fmt.Printf("Bot %s from template %s\n", p.Bot, p.Template)
+	if in := p.Install; in != nil {
+		fmt.Printf("  installs:    pack %s %s (%s: %s) in this change — resolved on --write, as `conductor init` would\n", in.Instance, in.Version, in.Key, in.Source)
+	}
 	if r := p.Review; r != nil {
 		var b []string
 		for _, in := range sortedStrKeys(r.Bindings) {
@@ -586,10 +767,15 @@ func templateControl(conn net.Conn, req controlRequest) {
 			}
 		}
 	case "template_plan":
-		out, err = planNewBot(botConfigPath, config.TemplateBotDraft{Name: str("name"), Connectors: strMap("connectors"), Grants: strMap("grants"),
-			Proactive: str("proactive") == "true"}, str("template"))
+		// The dashboard plans a registry template's pack install too; the
+		// explicit trust step for a third-party source is the operator's
+		// pack_trust.allow (there is no --allow-unlisted here).
+		out, err = planNewBotOpts(botConfigPath, config.TemplateBotDraft{Name: str("name"), Connectors: strMap("connectors"), Grants: strMap("grants"),
+			Proactive: str("proactive") == "true"}, str("template"), newBotOpts{Registry: str("registry")})
 	case "grant_plan":
 		out, err = planGrant(botConfigPath, str("bot"), strMap("grants"))
+	case "packs":
+		out, err = packCatalog(botConfigPath, str("search"), str("registry"), str("installed") == "true", str("include_templates") == "true")
 	}
 	if err != nil {
 		writeControlResp(conn, controlResponse{Error: err.Error()})

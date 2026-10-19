@@ -30,6 +30,11 @@ type TemplateSummary struct {
 	Instance    string         `json:"pack_instance,omitempty"`
 	Source      string         `json:"source,omitempty"`
 	Install     string         `json:"install,omitempty"` // the packs: block that installs it
+	// InstallAs, InstallKey and InstallValue are that block's parts: the
+	// instance name, and use: or source: with its value.
+	InstallAs    string `json:"install_as,omitempty"`
+	InstallKey   string `json:"-"`
+	InstallValue string `json:"-"`
 	Inputs      []InputView    `json:"inputs,omitempty"`
 	Verbs       []VerbView     `json:"verbs,omitempty"`
 	ReadOnly    int            `json:"read_only"`
@@ -165,7 +170,7 @@ const DefaultRegistry = "https://github.com/" + OfficialPacksRepo
 // that ships templates. A pack that does not load is reported, not fatal.
 // official says the registry is the official one (refs read
 // conductor-packs/<pack>/<template>).
-func RegistryTemplates(dir string, official bool) ([]TemplateSummary, []string) {
+func RegistryTemplates(registry, dir string, official bool) ([]TemplateSummary, []string) {
 	var out []TemplateSummary
 	var problems []string
 	ents, err := os.ReadDir(dir)
@@ -193,17 +198,23 @@ func RegistryTemplates(dir string, official bool) ([]TemplateSummary, []string) 
 			problems = append(problems, fmt.Sprintf("%s: %v", e.Name(), err))
 			continue
 		}
-		use := PacksNamespaceAlias + "/" + e.Name()
+		// The ref names the template in the registry; the install entry
+		// names the pack by its real source (RegistrySource): a git
+		// registry's pack by its git source, so trust governs it.
+		ref := PacksNamespaceAlias + "/" + e.Name()
 		if !official {
-			use = pdir
+			ref = pdir
 		}
+		k, v := RegistrySource(registry, dir, e.Name(), official)
 		for _, n := range sortedLoadedKeys(lts) {
 			lt := lts[n]
 			lt.Instance = e.Name()
 			s := Summarize(lt, false)
-			s.Ref = use + "/" + n
+			s.Ref = ref + "/" + n
 			s.Instance = ""
-			s.Install = fmt.Sprintf("packs: { %s: { use: %s } }", e.Name(), use)
+			s.Source = v
+			s.Install = fmt.Sprintf("packs: { %s: { %s: %s } }", e.Name(), k, v)
+			s.InstallAs, s.InstallKey, s.InstallValue = e.Name(), k, v
 			out = append(out, s)
 		}
 	}
