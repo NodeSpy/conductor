@@ -45,7 +45,7 @@ type botPlan struct {
 	Notes    []string          `json:"notes,omitempty"`
 	// Widening says the change widens what the bot may do: the dashboard
 	// asks for the passkey before writing it.
-	Widening bool   `json:"widening"`
+	Widening bool `json:"widening"`
 	// Install is the pack this change installs with its bot (a registry
 	// template's).
 	Install *packInstall `json:"install,omitempty"`

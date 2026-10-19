@@ -156,7 +156,10 @@ func TestPackCatalog(t *testing.T) {
 
 func registryRef(t *testing.T, url, tmpl string) string {
 	t.Helper()
-	for _, x := range func() []any { o, _ := templateList("/nonexistent", "", url, false, false); return o["templates"].([]any) }() {
+	for _, x := range func() []any {
+		o, _ := templateList("/nonexistent", "", url, false, false)
+		return o["templates"].([]any)
+	}() {
 		if m := x.(map[string]any); m["template"] == tmpl {
 			return m["ref"].(string)
 		}

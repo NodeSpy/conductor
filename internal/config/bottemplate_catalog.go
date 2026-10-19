@@ -20,34 +20,34 @@ import (
 type TemplateSummary struct {
 	// Ref is what a bot's use: names (installed), or the registry reference
 	// of a template not installed yet.
-	Ref         string         `json:"ref"`
-	Template    string         `json:"template"`
-	Pack        string         `json:"pack"`
-	Version     string         `json:"version"`
-	Description string         `json:"description"`
-	Tags        []string       `json:"tags,omitempty"`
-	Installed   bool           `json:"installed"`
-	Instance    string         `json:"pack_instance,omitempty"`
-	Source      string         `json:"source,omitempty"`
-	Install     string         `json:"install,omitempty"` // the packs: block that installs it
+	Ref         string   `json:"ref"`
+	Template    string   `json:"template"`
+	Pack        string   `json:"pack"`
+	Version     string   `json:"version"`
+	Description string   `json:"description"`
+	Tags        []string `json:"tags,omitempty"`
+	Installed   bool     `json:"installed"`
+	Instance    string   `json:"pack_instance,omitempty"`
+	Source      string   `json:"source,omitempty"`
+	Install     string   `json:"install,omitempty"` // the packs: block that installs it
 	// InstallAs, InstallKey and InstallValue are that block's parts: the
 	// instance name, and use: or source: with its value.
-	InstallAs    string `json:"install_as,omitempty"`
-	InstallKey   string `json:"-"`
-	InstallValue string `json:"-"`
-	Inputs      []InputView    `json:"inputs,omitempty"`
-	Verbs       []VerbView     `json:"verbs,omitempty"`
-	ReadOnly    int            `json:"read_only"`
-	Above       int            `json:"above_observe"`
-	Triggers    []TriggerView  `json:"triggers,omitempty"`
-	Proactive   *ProactiveView `json:"proactive,omitempty"`
-	Model       string         `json:"model,omitempty"`
-	Runtime     string         `json:"runtime,omitempty"`
-	Seed        []string       `json:"seed,omitempty"`
-	Collections []string       `json:"collections,omitempty"`
-	UsedBy      []string       `json:"used_by,omitempty"`
-	Digest      string         `json:"digest"`
-	Charter     string         `json:"charter,omitempty"`
+	InstallAs    string         `json:"install_as,omitempty"`
+	InstallKey   string         `json:"-"`
+	InstallValue string         `json:"-"`
+	Inputs       []InputView    `json:"inputs,omitempty"`
+	Verbs        []VerbView     `json:"verbs,omitempty"`
+	ReadOnly     int            `json:"read_only"`
+	Above        int            `json:"above_observe"`
+	Triggers     []TriggerView  `json:"triggers,omitempty"`
+	Proactive    *ProactiveView `json:"proactive,omitempty"`
+	Model        string         `json:"model,omitempty"`
+	Runtime      string         `json:"runtime,omitempty"`
+	Seed         []string       `json:"seed,omitempty"`
+	Collections  []string       `json:"collections,omitempty"`
+	UsedBy       []string       `json:"used_by,omitempty"`
+	Digest       string         `json:"digest"`
+	Charter      string         `json:"charter,omitempty"`
 	// Identity is the template's suggested identity.
 	Identity *Identity `json:"identity,omitempty"`
 }
