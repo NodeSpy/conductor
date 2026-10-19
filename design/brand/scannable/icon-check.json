@@ -218,6 +218,12 @@
   },
   {
    "fam": "status",
+   "word": "Ready",
+   "src": "mark ready",
+   "ink": 0.19140625
+  },
+  {
+   "fam": "status",
    "word": "Not reached",
    "src": "mark skipped",
    "ink": 0.09375
@@ -230,6 +236,13 @@
    "fa": "action",
    "fb": "step",
    "sim": 0.585
+  },
+  {
+   "a": "Needs you",
+   "b": "Ready",
+   "fa": "status",
+   "fb": "status",
+   "sim": 0.583
   },
   {
    "a": "Command",
@@ -303,6 +316,13 @@
   },
   {
    "a": "Parked",
+   "b": "Ready",
+   "fa": "status",
+   "fb": "status",
+   "sim": 0.468
+  },
+  {
+   "a": "Parked",
    "b": "Shadow",
    "fa": "status",
    "fb": "status",
@@ -311,6 +331,13 @@
   {
    "a": "Connection",
    "b": "Shadow",
+   "fa": "kind",
+   "fb": "status",
+   "sim": 0.466
+  },
+  {
+   "a": "Connection",
+   "b": "Ready",
    "fa": "kind",
    "fb": "status",
    "sim": 0.466

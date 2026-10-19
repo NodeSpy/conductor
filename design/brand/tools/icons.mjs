@@ -19,6 +19,7 @@ const LABELS = {
   running: 'Running (rotates)', neutral: 'Parked, idle (slate)', skipped: 'Skipped, cancelled', shadow: 'Shadow mode: observes, never acts',
   'needs-you': 'Needs you (accent)',
   staged: 'Staged change, not applied',
+  ready: 'Ready: set to start, not started (slate)',
 };
 const status = Object.fromEntries(Object.keys(LABELS).map((k) => [k, { label: LABELS[k], svg: read('status')[k] }]));
 fs.writeFileSync(path.join(dir, 'icons.js'),
