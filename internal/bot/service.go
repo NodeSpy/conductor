@@ -1478,6 +1478,10 @@ func (s *Service) closeCase(ctx context.Context, bot, caseID, outcome, status, b
 		if cc == nil {
 			return fmt.Errorf("no case %q", caseID)
 		}
+		if store.Closed(cc.Status) {
+			// Once: a second close would report a delegation twice.
+			return fmt.Errorf("case %s (ticket %s) is already %s", caseID, cc.Ticket, cc.Status)
+		}
 		if cc.Status != status {
 			addHistory(cc, s.now(), by, cc.Status+" → "+status+": "+oneLine(outcome, 300))
 		}

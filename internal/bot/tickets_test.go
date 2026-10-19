@@ -528,3 +528,25 @@ func TestTicketGateGuards(t *testing.T) {
 		t.Fatalf("a refused ready create left a ticket behind (%d → %d)", len(before), len(after))
 	}
 }
+
+// A ticket closes once: closing it again (`bot case close` after `bot
+// ticket done`) is refused, and its delegation is reported back once.
+func TestTicketClosesOnce(t *testing.T) {
+	f := newTeamFixture(t, nil)
+	ctx := context.Background()
+	v := f.ticket(t, opActor, TicketNew{Title: "lag", Assignee: "bot:lead", Ready: true})
+	out, err := f.svc.Delegate(ctx, f.homeOf("lead"), "b", "check the lag", v.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc := f.caseOf(t, "b", out["peer_case"].(string))
+	if _, err := f.svc.TicketSetStatus(ctx, TicketActor{Bot: f.homeOf("b")}, bc.Ticket, store.TicketDone, "fine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.CaseClose(ctx, f.homeOf("b"), bc.ID, "fine again"); err == nil || !strings.Contains(err.Error(), "is already done") {
+		t.Fatalf("a second close: %v", err)
+	}
+	if n := strings.Count(f.unreadText("lead"), "fine"); n != 1 {
+		t.Fatalf("the delegation was reported %d times", n)
+	}
+}
