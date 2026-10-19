@@ -3,6 +3,7 @@
 package browser
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -225,17 +226,23 @@ func TestWalletPurchase(t *testing.T) {
 	w.do(op, "open", map[string]any{"url": w.a + "/checkout"})
 	place = refOf(t, w.do(op, "snapshot", nil)["snapshot"].(string), "Place order")
 	w.refused(op, "pay", map[string]any{"purchase": p2, "submit": place}, "higher than the approved 12.00")
-	if pend, _ := w.m.Purchases.List(PurchasePending); len(pend) != 1 || pend[0].Total != 15 || pend[0].Supersedes != p2 {
+	pend, _ := w.m.Purchases.List(PurchasePending)
+	if len(pend) != 1 || pend[0].Total != 15 || pend[0].Supersedes != p2 {
 		t.Fatalf("the new approval: %+v", pend)
 	}
-	// Approved purchase p2 was not spent by the refusal: still usable once
-	// the price is back.
-	w.shop.Bump = 0
+	// The new one replaces it: p2 is retired, never paid at either price.
+	if got, _, _ := w.m.Purchases.Get(p2); got.Status != PurchaseRefused || !strings.Contains(got.Reason, "superseded by "+pend[0].ID) {
+		t.Fatalf("p2 after the bump: %s %s", got.Status, got.Reason)
+	}
+	w.refused(op, "pay", map[string]any{"purchase": p2, "submit": place}, "refused")
+	p2 = pend[0].ID
+	w.approve(p2)
 	// The page raises the price once the card is typed: cleared, nothing placed.
 	w.shop.BumpAfterFill = 5
 	w.do(op, "open", map[string]any{"url": w.a + "/checkout"})
 	place = refOf(t, w.do(op, "snapshot", nil)["snapshot"].(string), "Place order")
 	w.refused(op, "pay", map[string]any{"purchase": p2, "submit": place}, "the total changed after the card was filled")
+	w.shop.Bump = 0
 	w.shop.BumpAfterFill = 0
 	if orders, _ := w.shop.Snapshot(); len(orders) != 1 {
 		t.Fatalf("an order was placed: %+v", orders)
@@ -289,5 +296,79 @@ func TestWalletPurchase(t *testing.T) {
 	w.refused(other, "pay", map[string]any{"purchase": p3, "submit": place2}, "no purchase")
 	// evaluate is off where a card was filled.
 	w.refused(op, "evaluate", map[string]any{"expr": "1"}, "evaluate is off")
+	w.noLeak()
+}
+
+// A bot's purchase under a ticket, through a real checkout: the fill
+// re-checks the ticket (a budget lowered after the approval refuses the
+// pay); approving re-checks it; a price bump's new purchase goes through
+// the bot's gate, replaces the old one, and is held to the ticket.
+func TestWalletBotTicket(t *testing.T) {
+	w := newWalletRig(t)
+	budgets := fakeBudgets{"bot:shopper/c1": {Key: "bot:shopper/c1", Amount: 20, Currency: "USD"}}
+	w.m.Budgets = budgets
+	n := 0
+	w.m.BotPurchase = func(ctx context.Context, c Principal, p Purchase) (string, bool, error) {
+		n++
+		return fmt.Sprintf("bp%d", n), false, nil
+	}
+	setBudget := func(amt float64) {
+		b := budgets["bot:shopper/c1"]
+		b.Amount = amt
+		budgets["bot:shopper/c1"] = b
+	}
+	bot := w.caller("k-bot", RequesterOperator)
+	bot.Bot, bot.BotRole, bot.CaseID, bot.Groups = "shopper", config.BotRoleWorker, "c1", []string{"bot:shopper"}
+	approve := func(id string) error {
+		p, _, _ := w.m.Purchases.Get(id)
+		_, err := w.m.ApproveBotPurchase(id, "shopper", p.BotProposal)
+		return err
+	}
+	checkout := func() string {
+		w.do(bot, "open", map[string]any{"url": w.a + "/checkout"})
+		return refOf(t, w.do(bot, "snapshot", nil)["snapshot"].(string), "Place order")
+	}
+	w.do(bot, "open", map[string]any{"url": w.a + "/cart/add?item=widget"})
+
+	// Approved within its 20; the ticket lowered to 10 before the pay.
+	p1 := w.propose(bot, "12.00", w.a)["purchase"].(string)
+	if err := approve(p1); err != nil {
+		t.Fatal(err)
+	}
+	setBudget(10)
+	w.refused(bot, "pay", map[string]any{"purchase": p1, "submit": checkout()}, "over this ticket's 10.00 USD limit: 10.00 USD left")
+	if orders, _ := w.shop.Snapshot(); len(orders) != 0 {
+		t.Fatalf("an order under a spent ticket: %+v", orders)
+	}
+
+	// A price bump: the new purchase is the bot's gate's, replaces p2.
+	setBudget(20)
+	p2 := w.propose(bot, "12.00", w.a)["purchase"].(string)
+	if err := approve(p2); err != nil {
+		t.Fatal(err)
+	}
+	w.shop.Bump = 3
+	w.refused(bot, "pay", map[string]any{"purchase": p2, "submit": checkout()}, "waits for approval")
+	pend, _ := w.m.Purchases.List(PurchasePending)
+	if len(pend) != 1 || pend[0].Total != 15 || pend[0].Supersedes != p2 || pend[0].BotProposal == "" || pend[0].BudgetKey != "bot:shopper/c1" {
+		t.Fatalf("the new purchase: %+v", pend)
+	}
+	// Approving re-checks the ticket: 15 over its 14.
+	setBudget(14)
+	if err := approve(pend[0].ID); err == nil || !strings.Contains(err.Error(), "over this ticket's 14.00 USD limit: 14.00 USD left") {
+		t.Fatalf("approve over the ticket: %v", err)
+	}
+	// A bump past the ticket is not proposed again.
+	w.shop.Bump = 0
+	p3 := w.propose(bot, "12.00", w.a)["purchase"].(string)
+	if err := approve(p3); err != nil {
+		t.Fatal(err)
+	}
+	w.shop.Bump = 3
+	w.refused(bot, "pay", map[string]any{"purchase": p3, "submit": checkout()}, "is not proposed again: over this ticket's 14.00 USD limit: 14.00 USD left")
+	if got, _, _ := w.m.Purchases.Get(p3); got.Status != PurchaseApproved {
+		t.Fatalf("a re-proposal refused leaves p3 as it was: %s", got.Status)
+	}
+	w.shop.Bump = 0
 	w.noLeak()
 }

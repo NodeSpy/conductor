@@ -274,19 +274,32 @@ func (l *Purchases) Propose(p Purchase, ttl time.Duration) (Purchase, error) {
 
 // ProposeWithin is Propose with every spend layer evaluated in the same
 // locked write (two proposals cannot jointly overrun a ticket's budget):
-// refused, nothing is recorded.
+// refused, nothing is recorded. A proposal that supersedes another (the
+// checkout's price moved) replaces it: the old one, not yet paid, is
+// refused in the same write and does not count against the new one.
 func (l *Purchases) ProposeWithin(p Purchase, ttl time.Duration, r SpendRules) (Purchase, error) {
 	var out Purchase
 	var refusal error
 	err := l.update(func(f *purchasesFile) error {
 		l.expireLocked(f)
-		layers, err := evaluate(f, r, p, "", l.now())
+		var old *Purchase
+		if q := f.Purchases[p.Supersedes]; p.Supersedes != "" && q != nil && (q.Status == PurchasePending || q.Status == PurchaseApproved) {
+			old = q
+		}
+		exclude := ""
+		if old != nil {
+			exclude = old.ID
+		}
+		layers, err := evaluate(f, r, p, exclude, l.now())
 		if err != nil {
 			refusal = err
 			return nil
 		}
 		f.Next++
 		p.ID = fmt.Sprintf("pu%d", f.Next)
+		if old != nil {
+			old.Status, old.Reason = PurchaseRefused, "superseded by "+p.ID+" (the checkout's total changed)"
+		}
 		p.Status, p.Created = PurchasePending, l.now()
 		p.Total = round2(p.Total)
 		p.Expires = p.Created.Add(ttl)

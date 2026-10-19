@@ -103,11 +103,20 @@ func TestTicketBudgetAccumulates(t *testing.T) {
 	if _, err := l.ApproveWithin(a.ID, a.Digest, "op", time.Hour, false, r); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := l.ProposeWithin(buyP(50), time.Hour, r); err == nil || !strings.Contains(err.Error(), "35.00 USD left") {
+		t.Fatalf("an approved purchase counts: %v", err)
+	}
 	if _, err := l.Consume(a.ID, botCaller, r); err != nil {
 		t.Fatal(err)
 	}
 	if used, ids := l.Committed("bot:shopper/c3"); used != 85 || len(ids) != 1 {
 		t.Fatalf("paid counts: %v %v", used, ids)
+	}
+	if _, err := l.Complete(a.ID, Receipt{OrderNumber: "FS-1", Total: 85}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.ProposeWithin(buyP(50), time.Hour, r); err == nil || !strings.Contains(err.Error(), "35.00 USD left") {
+		t.Fatalf("a completed purchase counts: %v", err)
 	}
 	if _, err := l.ProposeWithin(buyP(35.01), time.Hour, r); err == nil {
 		t.Fatal("35.01 after 85 paid")
@@ -119,6 +128,9 @@ func TestTicketBudgetAccumulates(t *testing.T) {
 	// Denied: freed.
 	if _, err := l.Deny(b.ID, "op", "no"); err != nil {
 		t.Fatal(err)
+	}
+	if used, ids := l.Committed("bot:shopper/c3"); used != 85 || len(ids) != 1 {
+		t.Fatalf("a denied purchase is not committed: %v %v", used, ids)
 	}
 	c, err := l.ProposeWithin(buyP(35), time.Hour, r)
 	if err != nil {
@@ -310,8 +322,9 @@ func (f fakeBudgets) CaseBudget(ref string) (CaseBudget, bool) { b, ok := f[ref]
 func TestProposeUnderATicket(t *testing.T) {
 	card := bigCard()
 	st := Settings{Allow: []string{"shop.example.com"}, Cards: map[string]Card{"visa": card}, PurchaseTTL: time.Minute,
-		BotPurchases: map[string]*config.PurchaseLimits{"shopper": {CardLimits: config.CardLimits{PerPurchase: 90, PerDay: 200, PerMonth: 300}}},
-		BotTeam:      map[string]string{"shopper": "ops"}}
+		BotPurchases:  map[string]*config.PurchaseLimits{"shopper": {CardLimits: config.CardLimits{PerPurchase: 90, PerDay: 200, PerMonth: 300}}},
+		TeamPurchases: map[string]*config.PurchaseLimits{"ops": {CardLimits: config.CardLimits{PerPurchase: 100, PerDay: 300, PerMonth: 400}}},
+		BotTeam:       map[string]string{"shopper": "ops"}}
 	m := &Manager{Settings: func() Settings { return st }, Purchases: &Purchases{Dir: t.TempDir()},
 		Budgets:     fakeBudgets{"bot:shopper/c3": {Key: "bot:shopper/c3", Amount: 120, Currency: "USD"}},
 		BotPurchase: func(ctx context.Context, c Principal, p Purchase) (string, bool, error) { return "p1", false, nil }}
@@ -322,6 +335,14 @@ func TestProposeUnderATicket(t *testing.T) {
 	if err != nil || p.CaseRef != "bot:shopper/c3" || p.BudgetKey != "bot:shopper/c3" || p.Checked != "proposed" || !strings.HasPrefix(p.Binding, "bot shopper (purchase)") || p.Layers[len(p.Layers)-1].Layer != "ticket bot:shopper/c3" {
 		t.Fatalf("under the ticket: %+v %v", p, err)
 	}
+	// The bot's team is a layer too, read from the settings.
+	hasTeam := false
+	for _, s := range p.Layers {
+		hasTeam = hasTeam || s.Layer == "team ops"
+	}
+	if !hasTeam {
+		t.Fatalf("no team layer: %+v", p.Layers)
+	}
 	// 90 left under the bot's cap, 35 under the ticket's: the ticket binds.
 	if _, err := m.proposePurchase(context.Background(), botCaller, st, args("50"), map[string]any{}); err == nil || !strings.Contains(err.Error(), "over this ticket's 120.00 USD limit: 35.00 USD left") {
 		t.Fatalf("the second: %v", err)
@@ -331,5 +352,77 @@ func TestProposeUnderATicket(t *testing.T) {
 	c2.CaseID = "c9"
 	if _, err := m.proposePurchase(context.Background(), c2, st, args("91"), map[string]any{}); err == nil || !strings.Contains(err.Error(), "bot shopper's 90.00 USD per-purchase") {
 		t.Fatalf("the bot's cap: %v", err)
+	}
+}
+
+// Each layer's window holds its own: a bot's, that bot's spend; a team's,
+// its bots' (not an outside bot's); a team's cap on one card, its bots'
+// spend on that card. A paid purchase's view does not count itself.
+func TestLayerWindowsHoldTheirOwn(t *testing.T) {
+	l, _ := ledger(t)
+	team := &config.PurchaseLimits{CardLimits: config.CardLimits{PerPurchase: 100, PerDay: 500, PerMonth: 900},
+		Cards: map[string]config.CardLimits{"visa": {PerPurchase: 60, PerDay: 80, PerMonth: 200}}}
+	rulesOf := func(who Principal, teamName string) SpendRules {
+		r := SpendRules{Card: bigCard(), Who: who, Bot: who.Bot, Team: teamName,
+			BotLimits: &config.PurchaseLimits{CardLimits: config.CardLimits{PerPurchase: 100, PerDay: 300, PerMonth: 600}}}
+		if teamName != "" {
+			r.TeamLimits = team
+		}
+		return r
+	}
+	pay := func(who Principal, teamName string, amt float64) Purchase {
+		t.Helper()
+		r := rulesOf(who, teamName)
+		p := buyP(amt)
+		p.Identity, p.Bot, p.CaseRef, p.BudgetKey = who.Identity, who.Bot, "", ""
+		q, err := l.ProposeWithin(p, time.Hour, r)
+		if err == nil {
+			_, err = l.ApproveWithin(q.ID, q.Digest, "op", time.Hour, false, r)
+		}
+		if err == nil {
+			q, err = l.Consume(q.ID, who, r)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return q
+	}
+	helper := Principal{Identity: "agent:helper@home", Bot: "helper", Groups: []string{"bot:helper", "team:ops"}}
+	outsider := Principal{Identity: "agent:solo@home", Bot: "solo", Groups: []string{"bot:solo"}}
+	mine := pay(botCaller, "ops", 30)
+	pay(helper, "ops", 20)
+	pay(outsider, "", 70)
+	used := func(states []LayerState, layer, window string) float64 {
+		for _, s := range states {
+			if s.Layer == layer && s.Window == window {
+				return s.Used
+			}
+		}
+		t.Fatalf("no %s (%s) in %+v", layer, window, states)
+		return 0
+	}
+	states, err := l.Evaluate(rulesOf(botCaller, "ops"), buyP(5), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		layer string
+		want  float64
+	}{{"card visa", 120}, {"bot shopper", 30}, {"team ops", 50}, {"team ops on card visa", 50}} {
+		if got := used(states, c.layer, "day"); got != c.want {
+			t.Errorf("%s day: used %.2f, want %.2f", c.layer, got, c.want)
+		}
+	}
+	// The team's 80 a day on this card: 30 left of it decides a 31.
+	if _, err := l.Evaluate(rulesOf(botCaller, "ops"), buyP(31), ""); err == nil || !strings.Contains(err.Error(), "team ops on card visa's 80.00 USD daily limit: 30.00 USD left") {
+		t.Fatalf("the team's per-card day: %v", err)
+	}
+	// A paid purchase's own view leaves itself out.
+	states, err = l.Evaluate(rulesOf(botCaller, "ops"), mine, mine.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := used(states, "bot shopper", "day"); got != 0 {
+		t.Errorf("a paid purchase counted itself: %.2f", got)
 	}
 }

@@ -202,6 +202,13 @@ func (m *Manager) proposePurchase(ctx context.Context, c Principal, st Settings,
 	}
 	entry["binding"] = p.Binding
 	entry["purchase"], entry["total"], entry["currency"], entry["recurring"] = p.ID, p.Total, p.Currency, p.Recurring
+	return m.routeProposal(ctx, c, p, ttl, rules, entry)
+}
+
+// routeProposal sends a recorded proposal on: a bot's to its gate (a
+// proposal for its operators, or unattended within its opt-in), an
+// agent's to Needs you.
+func (m *Manager) routeProposal(ctx context.Context, c Principal, p Purchase, ttl time.Duration, rules SpendRules, entry map[string]any) (Purchase, error) {
 	if c.Bot != "" {
 		if m.BotPurchase == nil {
 			m.Purchases.Refuse(p.ID, "no bot gate on this daemon")
@@ -798,14 +805,19 @@ func (m *Manager) pay(ctx context.Context, s *session, in *Instance, t *tab, c P
 			np := p
 			np.Total, np.Supersedes, np.Why = seen, p.ID, "the checkout's total changed from the approved "+strconv.FormatFloat(p.Total, 'f', 2, 64)
 			np.BotProposal, np.Approver, np.Receipt, np.Reason = "", "", nil, ""
-			q, perr := m.Purchases.ProposeWithin(np, ttlOr(st.PurchaseTTL), m.rulesFor(st, card, np))
+			// A bot's goes through its gate, as a fresh proposal would.
+			rules := m.rulesFor(st, card, np)
+			q, perr := m.Purchases.ProposeWithin(np, ttlOr(st.PurchaseTTL), rules)
+			if perr == nil {
+				q, perr = m.routeProposal(ctx, c, q, ttlOr(st.PurchaseTTL), rules, map[string]any{})
+			}
 			if perr != nil {
 				return nil, refuse("%s — and %.2f %s is not proposed again: %s", strings.TrimPrefix(err.Error(), "browser: refused: "), seen, p.Currency, strings.TrimPrefix(perr.Error(), "browser: refused: "))
 			}
-			if m.OnPurchase != nil {
-				m.OnPurchase(q)
-			}
 			entry["new_purchase"] = q.ID
+			if q.Status == PurchaseApproved {
+				return nil, refuse("%s — a new purchase %s for %.2f %s is approved (unattended): pay that one", strings.TrimPrefix(err.Error(), "browser: refused: "), q.ID, seen, p.Currency)
+			}
 			return nil, refuse("%s — a new purchase %s for %.2f %s waits for approval", strings.TrimPrefix(err.Error(), "browser: refused: "), q.ID, seen, p.Currency)
 		}
 		return nil, err

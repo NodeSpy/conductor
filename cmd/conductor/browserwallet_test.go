@@ -374,3 +374,28 @@ func TestBrowserCallerHomeCase(t *testing.T) {
 		t.Fatalf("a worker keeps its own case: %+v", c)
 	}
 }
+
+// The clamp warning weighs every layer above a ticket: the bot's (and its
+// caps on the budget's card), its team's, and the budget's card.
+func TestBudgetClampWarning(t *testing.T) {
+	cfg := &config.Config{
+		Bots: map[string]config.BotConfig{"shopper": {Purchases: &config.PurchaseLimits{CardLimits: config.CardLimits{PerPurchase: 50, PerDay: 100, PerMonth: 400},
+			Cards: map[string]config.CardLimits{"visa": {PerPurchase: 50, PerDay: 100, PerMonth: 200}}}}},
+		Browser: &config.BrowserConfig{Cards: map[string]config.BrowserCard{"small": {Limits: config.CardLimits{PerPurchase: 20, PerDay: 40, PerMonth: 60}}}},
+	}
+	for _, c := range []struct {
+		limit store.SpendLimit
+		want  string
+	}{
+		{store.SpendLimit{Amount: "300", Currency: "USD"}, ""},
+		{store.SpendLimit{Amount: "500", Currency: "USD"}, "clamped to bot shopper's 30-day limit 400.00"},
+		{store.SpendLimit{Amount: "300", Currency: "USD", Card: "visa"}, "clamped to bot shopper on card visa's 30-day limit 200.00"},
+		{store.SpendLimit{Amount: "100", Currency: "USD", Card: "small"}, "clamped to card small's 30-day limit 60.00"},
+		{store.SpendLimit{Amount: "500", Currency: "EUR"}, ""},
+	} {
+		got := budgetClampWarning(cfg, "shopper", &c.limit)
+		if c.want == "" && got != "" || c.want != "" && !strings.Contains(got, c.want) {
+			t.Errorf("%+v: %q, want %q", c.limit, got, c.want)
+		}
+	}
+}
