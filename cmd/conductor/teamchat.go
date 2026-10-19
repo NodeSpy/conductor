@@ -11,7 +11,10 @@ const teamUsage = `usage:
       # default: the team's lead (else its routing); @bot in the text or --to reaches that member;
       # --everyone reaches every member (one reply each; chat.everyone_per_hour caps it)
   conductor team chat <team|bot:<name>> [--as <operator>] [--all]   # the transcript (new messages; --all: every one) — marks them read
-  conductor team chats [--as <operator>]                            # every conversation: the last message, your unread count`
+  conductor team chats [--as <operator>]                            # every conversation: the last message, your unread count (pinned first)
+  conductor team pin <team|bot:<name>> [--at N] [--as <operator>]   # pin a conversation for you (--at: its position, 1 first; moves a pinned one)
+  conductor team unpin <team|bot:<name>> [--as <operator>]
+  conductor team pins [--order <conv>,<conv>…] [--as <operator>]    # your pins, in order; --order sets it (every pinned conversation once)`
 
 // cmdTeam is `conductor team …`: the operator's side of team chat.
 func cmdTeam(args []string) error {
@@ -74,6 +77,46 @@ func cmdTeam(args []string) error {
 			fmt.Println(chatLineCLI(m))
 		}
 		return nil
+	case "pin", "unpin":
+		if len(pos) != 1 {
+			return fmt.Errorf("%s", teamUsage)
+		}
+		a["conversation"] = pos[0]
+		if sub == "pin" {
+			a["at"] = fl["at"]
+		}
+		out, _, err := botControl(cfg, "chat_"+sub, a)
+		if err != nil {
+			return err
+		}
+		printPins(out)
+		return nil
+	case "pins":
+		if fl["order"] != "" {
+			a["order"] = strings.Split(fl["order"], ",")
+			out, _, err := botControl(cfg, "chat_reorder", a)
+			if err != nil {
+				return err
+			}
+			printPins(out)
+			return nil
+		}
+		out, _, err := botControl(cfg, "chats", a)
+		if err != nil {
+			return err
+		}
+		cs, _ := out["conversations"].([]any)
+		n := 0
+		for _, x := range cs {
+			if c, _ := x.(map[string]any); c["pinned"] == true {
+				n++
+				fmt.Printf("%v. %v\n", c["position"], c["id"])
+			}
+		}
+		if n == 0 {
+			fmt.Println("no pinned conversations")
+		}
+		return nil
 	case "chats":
 		out, _, err := botControl(cfg, "chats", a)
 		if err != nil {
@@ -86,11 +129,26 @@ func cmdTeam(args []string) error {
 			if l, ok := c["last"].(map[string]any); ok {
 				last = fmt.Sprintf("%v: %v", l["from"], oneLineCLI(fmt.Sprint(l["text"]), 60))
 			}
-			fmt.Printf("%-24v %3v unread  %s\n", c["id"], c["unread"], last)
+			pin := " "
+			if c["pinned"] == true {
+				pin = "*"
+			}
+			fmt.Printf("%s %-24v %3v unread  %s\n", pin, c["id"], c["unread"], last)
 		}
 		return nil
 	}
 	return fmt.Errorf("unknown team command %q\n%s", sub, teamUsage)
+}
+
+// printPins prints an operator's pins, in order.
+func printPins(out map[string]any) {
+	ps, _ := out["pins"].([]any)
+	if len(ps) == 0 {
+		fmt.Println("no pinned conversations")
+	}
+	for i, p := range ps {
+		fmt.Printf("%d. %v\n", i+1, p)
+	}
 }
 
 func chatLineCLI(m map[string]any) string {

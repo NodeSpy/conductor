@@ -64,3 +64,29 @@ func TestConversations(t *testing.T) {
 		t.Fatalf("an unused conversation: %+v", e)
 	}
 }
+
+// Pins are per operator, ordered, and persist; an empty list removes the
+// operator's entry.
+func TestChatPinsStore(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	s, _ := Open(Options{StatePath: p})
+	_ = s.UpdateChatPins("op", func([]string) ([]string, error) { return []string{"team:platform", "bot:sre"}, nil })
+	_ = s.UpdateChatPins("op2", func([]string) ([]string, error) { return []string{"bot:sre"}, nil })
+	s2, _ := Open(Options{StatePath: p})
+	if got := s2.ChatPins("op"); len(got) != 2 || got[0] != "team:platform" || got[1] != "bot:sre" {
+		t.Fatalf("op's pins after a reopen: %v", got)
+	}
+	if got := s2.ChatPins("op2"); len(got) != 1 {
+		t.Fatalf("op2's pins: %v", got)
+	}
+	got := s2.ChatPins("op")
+	got[0] = "changed"
+	if s2.ChatPins("op")[0] != "team:platform" {
+		t.Fatal("a reader mutated the store")
+	}
+	_ = s2.UpdateChatPins("op", func([]string) ([]string, error) { return nil, nil })
+	s3, _ := Open(Options{StatePath: p})
+	if len(s3.ChatPins("op")) != 0 || len(s3.ChatPins("op2")) != 1 {
+		t.Fatalf("after unpinning everything: %v %v", s3.ChatPins("op"), s3.ChatPins("op2"))
+	}
+}

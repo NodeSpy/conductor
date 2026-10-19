@@ -32,3 +32,12 @@ func TestTeamSayEveryoneIsABoolFlag(t *testing.T) {
 		t.Fatalf("pos %v, flags %v", pos, fl)
 	}
 }
+
+// The pin commands are in the usage, and pins print in order.
+func TestTeamPinsCLI(t *testing.T) {
+	for _, want := range []string{"conductor team pin <team|bot:<name>> [--at N]", "conductor team unpin", "conductor team pins [--order"} {
+		if !strings.Contains(teamUsage, want) {
+			t.Errorf("usage lacks %q", want)
+		}
+	}
+}

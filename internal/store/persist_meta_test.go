@@ -31,6 +31,7 @@ var persistExceptions = map[string]string{
 	// The same for conversations.json.
 	"loadConversations": "boot-time move-aside of a corrupt transcript file, before any writer",
 	"loadTickets":       "boot-time move-aside of a corrupt tickets file, before any writer",
+	"loadPins":          "boot-time move-aside of a corrupt pins file, before any writer",
 	// A history record's path is derived from its OWN run id
 	// (historyFile(dir, rec.ID)), so there is no concurrent save of the same
 	// file to lose an update to — the condition persist() exists to prevent

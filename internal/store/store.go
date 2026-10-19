@@ -82,8 +82,10 @@ type Store struct {
 	botLocksMu   sync.Mutex
 	botLocks     map[string]*sync.Mutex
 
-	// Operator conversations with bots and teams (conversations.go).
+	// Operator conversations with bots and teams (conversations.go), and
+	// each operator's pinned conversations, in order.
 	convs map[string]*Conversation
+	pins  map[string][]string
 
 	// Tickets no bot holds yet, and the ticket counter (tickets.go).
 	tickets ticketFile
@@ -174,6 +176,7 @@ func Open(o Options) (*Store, error) {
 	s.loadOutcomeState()
 	s.loadBots()
 	s.loadConversations()
+	s.loadPins()
 	s.loadTickets()
 	if err := s.migrateTickets(); err != nil {
 		return nil, err

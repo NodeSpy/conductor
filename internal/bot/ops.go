@@ -542,6 +542,36 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 			return nil, err
 		}
 		return map[string]any{"conversations": toList(cs)}, nil
+	case "chat_pin", "chat_unpin":
+		conv, err := s.ResolveConversation(str(args, "conversation"))
+		if err != nil {
+			return nil, err
+		}
+		var pins []string
+		if sub == "chat_pin" {
+			at, _ := strconv.Atoi(str(args, "at"))
+			pins, err = s.ChatPin(str(args, "as"), conv, at)
+		} else {
+			pins, err = s.ChatUnpin(str(args, "as"), conv)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"conversation": conv, "pins": pins}, nil
+	case "chat_reorder":
+		var order []string
+		for _, a := range listArg(args, "order") {
+			conv, err := s.ResolveConversation(a)
+			if err != nil {
+				return nil, err
+			}
+			order = append(order, conv)
+		}
+		pins, err := s.ChatReorder(str(args, "as"), order)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"pins": pins}, nil
 	case "attachments":
 		if err := need(); err != nil {
 			return nil, err
