@@ -90,7 +90,7 @@ export function bot() {
   const recent = S.FINISHED.filter((x) => x.ctx[0] === 'platform-sre');
   return `<div class="crumbs"><a>Bots</a>${chev}<a>work / platform</a></div>
     <div class="bothead"><span class="bot-av">${lucide('bot', 24)}</span><div><h1>platform-sre</h1><p class="lead">Keeps production healthy for the platform team</p></div>${status('running', 'Working on case c31')}</div>
-    <nav class="tabs"><a>Chat</a><a>Cases <em>4</em></a><a class="on">Proposals <em>${props.length}</em></a><a>Memory</a><a>Access</a><a>Definition</a></nav>
+    <nav class="tabs"><a>Chat</a><a>Cases <em>4</em></a><a class="on">Proposals <em class="hot">${props.length}</em></a><a>Memory</a><a>Access</a><a>Definition</a></nav>
     <section class="card cur-card" style="margin-top:20px">${rows([['needs', props], ['fine', recent, '<em><a class="link">All of its runs</a></em>']])}</section>`;
 }
 

@@ -160,8 +160,11 @@
 .c-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--s-solid); display: inline-block; flex: none; }
 .c-dot.live { box-shadow: 0 0 0 0 var(--s-solid); animation: c-pulse var(--motion-duration-pulse) infinite; }
 @keyframes c-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--s-solid) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 7px transparent; } }
-/* Counts, filters and tags each have their own treatment; none of them is a pill. */
-.c-count { display: inline; font: var(--type-label); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-text-accent); }
+/* The one count badge, app-wide: something new or waiting for you. A total is plain text in the count
+   style (.c-total). Filters and tags have their own treatment; no screen draws its own pill. */
+.c-count { display: inline-grid; place-items: center; box-sizing: border-box; min-width: var(--count-badge-min-width); height: var(--count-badge-height); padding: 0 var(--count-badge-pad-x); border-radius: var(--count-badge-radius); background: var(--count-badge-bg); color: var(--count-badge-fg); font: 700 11.5px/1 var(--font-family-sans); font-variant-numeric: tabular-nums; vertical-align: 1px; }
+.cb-demo { display: flex; flex-wrap: wrap; gap: 10px 26px; align-items: center; font: var(--type-label); font-weight: 600; color: var(--color-text-primary); } .cb-demo > span { display: inline-flex; align-items: center; gap: 8px; } .cb-demo svg { width: 16px; height: 16px; color: var(--color-icon-muted); } .cb-tab { gap: 6px !important; }
+.c-total { font: var(--type-label); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--color-text-tertiary); }
 .c-chip { display: inline-flex; align-items: center; gap: var(--space-1_5); height: var(--size-control-sm); padding: 0 var(--space-2_5, 10px); border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-control); background: var(--color-bg-surface); font: var(--type-label); color: var(--color-text-secondary); }
 .c-chip svg { width: 13px; height: 13px; }
 .c-chip.is-hover { border-color: var(--color-border-strong); color: var(--color-text-primary); }

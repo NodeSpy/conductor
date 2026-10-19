@@ -154,7 +154,7 @@ function approvalPage() {
   const P = C.PROPOSAL;
   const head = `<div class="crumbs"><a>Bots</a>${ic('chevron-right')}<a>work / platform</a></div>
     <div class="bothead"><span class="bot-av">ps</span><div><h1>${P.bot}</h1><p class="lead">${P.role}</p></div><span class="badge" data-s="running">${gl('running', 'spin')}${P.status}</span></div>
-    <nav class="tabs"><a class="on">Approvals <em>2</em></a><a>Chat</a><a>Cases <em>4</em></a><a>Memory</a><a>What it can do</a><a>Settings</a></nav>`;
+    <nav class="tabs"><a class="on">Approvals <em class="hot">2</em></a><a>Chat</a><a>Cases <em>4</em></a><a>Memory</a><a>What it can do</a><a>Settings</a></nav>`;
   const card = `<article class="card proposal"><div class="kick">${gl('needs-you')}Needs you · asked 8 minutes ago · ${P.expires.toLowerCase()}</div>
     <h2 class="ptitle">${P.title}</h2><p class="ask">${P.ask}</p>
     <div class="pwhy"><span class="lbl">Why</span><p>${P.why}</p></div>
@@ -245,7 +245,7 @@ function botBefore() {
   const B = C.BOT;
   const head = `<div class="crumbs"><a>Bots</a>${ic('chevron-right')}<a>${B.folder}</a></div>
     <div class="bothead"><span class="bot-av">ps</span><div><h1>${B.name}</h1><p class="lead">${B.role}</p></div><span class="badge" data-s="running">${gl('running', 'spin')}${B.status}</span></div>
-    <nav class="tabs"><a class="on">Overview</a><a>Approvals <em>1</em></a><a>Chat</a><a>Cases <em>4</em></a><a>Memory <em>${B.memory}</em></a><a>What it can do</a><a>Settings</a></nav>`;
+    <nav class="tabs"><a class="on">Overview</a><a>Approvals <em class="hot">1</em></a><a>Chat</a><a>Cases <em>4</em></a><a>Memory <em>${B.memory}</em></a><a>What it can do</a><a>Settings</a></nav>`;
   const stats = `<section class="statrow bot-stats">${B.stats.map(([l, v, sub], i) => `<div class="${i === 2 ? 'alert acc' : ''}"><span class="lbl">${l}</span><b>${v}</b><span class="d">${sub}</span>${i === 0 ? spark(B.week, 80, 22) : ''}</div>`).join('')}</section>`;
   const pend = `<section class="card needs"><header class="ch"><h2>Waiting on you</h2><span class="count-pill">1</span></header><ul class="list">${B.pending.map((p) => `<li class="need" data-s="accent"><span class="ng">${gl('needs-you')}</span><div class="nt"><b>${p.title}</b><span class="why">${p.why}</span><span class="tech mono">p12 · infra@3f2a9c1d</span></div><span class="age">${p.age}</span><span class="na"><button class="btn primary sm">Review</button></span></li>`).join('')}</ul></section>`;
   const runs = `<section class="card flush"><header class="ch pad"><h2>Recent runs</h2><span class="sp"></span><a class="link">All runs</a></header><table class="tbl runs"><thead><tr><th>Status</th><th>Run</th><th>When</th><th class="num">Took</th><th class="num">Cost</th><th class="id-h">ID</th></tr></thead><tbody>${B.runs.map((r) => `<tr><td>${badge(r[0])}</td><td><b>${r[1]}</b> <span class="tgt">${r[2]}</span></td><td class="sub nowrap">${r[3]}</td><td class="num">${r[4] || '…'}</td><td class="num">${r[5]}</td><td class="mono id">${r[6]}</td></tr>`).join('')}</tbody></table></section>`;

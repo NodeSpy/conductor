@@ -1464,54 +1464,6 @@
   "pass": true
  },
  {
-  "token": "semantic.color.status.success.chart",
-  "css": "--color-status-success-chart",
-  "theme": "dark",
-  "on": "semantic.color.bg.surface",
-  "fg": "#27864c",
-  "bg": "#26211c",
-  "ratio": 3.49,
-  "min": 3,
-  "level": "AA large / UI",
-  "pass": true
- },
- {
-  "token": "semantic.color.status.success.chart",
-  "css": "--color-status-success-chart",
-  "theme": "dark",
-  "on": "semantic.color.bg.raised",
-  "fg": "#27864c",
-  "bg": "#2e2822",
-  "ratio": 3.19,
-  "min": 3,
-  "level": "AA large / UI",
-  "pass": true
- },
- {
-  "token": "semantic.color.status.success.chart",
-  "css": "--color-status-success-chart",
-  "theme": "light",
-  "on": "semantic.color.bg.surface",
-  "fg": "#2ba163",
-  "bg": "#fffdf9",
-  "ratio": 3.24,
-  "min": 3,
-  "level": "AA large / UI",
-  "pass": true
- },
- {
-  "token": "semantic.color.status.success.chart",
-  "css": "--color-status-success-chart",
-  "theme": "light",
-  "on": "semantic.color.bg.raised",
-  "fg": "#2ba163",
-  "bg": "#ffffff",
-  "ratio": 3.29,
-  "min": 3,
-  "level": "AA large / UI",
-  "pass": true
- },
- {
   "token": "semantic.color.status.warning.fg",
   "css": "--color-status-warning-fg",
   "theme": "dark",
@@ -4368,6 +4320,78 @@
   "pass": true
  },
  {
+  "token": "component.run-strip.cap",
+  "css": "--run-strip-cap",
+  "theme": "dark",
+  "on": "semantic.color.bg.canvas",
+  "fg": "#28ad5e",
+  "bg": "#1d1915",
+  "ratio": 6.01,
+  "min": 3,
+  "level": "AA",
+  "pass": true
+ },
+ {
+  "token": "component.run-strip.cap",
+  "css": "--run-strip-cap",
+  "theme": "dark",
+  "on": "semantic.color.bg.surface",
+  "fg": "#28ad5e",
+  "bg": "#26211c",
+  "ratio": 5.49,
+  "min": 3,
+  "level": "AA",
+  "pass": true
+ },
+ {
+  "token": "component.run-strip.cap",
+  "css": "--run-strip-cap",
+  "theme": "dark",
+  "on": "semantic.color.bg.raised",
+  "fg": "#28ad5e",
+  "bg": "#2e2822",
+  "ratio": 5.01,
+  "min": 3,
+  "level": "AA",
+  "pass": true
+ },
+ {
+  "token": "component.run-strip.cap",
+  "css": "--run-strip-cap",
+  "theme": "light",
+  "on": "semantic.color.bg.canvas",
+  "fg": "#059149",
+  "bg": "#f7f3ec",
+  "ratio": 3.68,
+  "min": 3,
+  "level": "AA large / UI",
+  "pass": true
+ },
+ {
+  "token": "component.run-strip.cap",
+  "css": "--run-strip-cap",
+  "theme": "light",
+  "on": "semantic.color.bg.surface",
+  "fg": "#059149",
+  "bg": "#fffdf9",
+  "ratio": 4.01,
+  "min": 3,
+  "level": "AA large / UI",
+  "pass": true
+ },
+ {
+  "token": "component.run-strip.cap",
+  "css": "--run-strip-cap",
+  "theme": "light",
+  "on": "semantic.color.bg.raised",
+  "fg": "#059149",
+  "bg": "#ffffff",
+  "ratio": 4.08,
+  "min": 3,
+  "level": "AA large / UI",
+  "pass": true
+ },
+ {
   "token": "component.run-strip.waiting",
   "css": "--run-strip-waiting",
   "theme": "dark",
@@ -4436,6 +4460,30 @@
   "bg": "#f7f3ec",
   "ratio": 5.24,
   "min": 3,
+  "level": "AA",
+  "pass": true
+ },
+ {
+  "token": "component.count-badge.fg",
+  "css": "--count-badge-fg",
+  "theme": "dark",
+  "on": "component.count-badge.bg",
+  "fg": "#380e00",
+  "bg": "#ff6a2b",
+  "ratio": 5.97,
+  "min": 4.5,
+  "level": "AA",
+  "pass": true
+ },
+ {
+  "token": "component.count-badge.fg",
+  "css": "--count-badge-fg",
+  "theme": "light",
+  "on": "component.count-badge.bg",
+  "fg": "#ffffff",
+  "bg": "#cc4a0e",
+  "ratio": 4.61,
+  "min": 4.5,
   "level": "AA",
   "pass": true
  }

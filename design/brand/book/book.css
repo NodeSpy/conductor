@@ -473,7 +473,7 @@ body { font-variation-settings: 'SOFT' 100, 'WONK' 0; }  /* Fraunces' soft axis;
 .pt-ov { display: grid; gap: var(--space-4); }
 .pt-ov-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-3); }
 .pt-ov-cols > div { border-top: 2px solid var(--color-border-default); padding-top: 8px; }
-.pt-ov-cols h4 { margin: 0 0 4px; font: var(--type-h4); } .pt-ov-cols h4 span { color: var(--color-text-tertiary); font-weight: 400; }
+.pt-ov-cols h4 { margin: 0 0 4px; font: var(--type-h4); } .pt-ov-cols h4 span:not(.c-count) { color: var(--color-text-tertiary); font-weight: 400; }
 .ia-more summary { cursor: pointer; font: var(--type-caption); color: var(--color-text-tertiary); margin-top: 4px; }
 
 /* Bot identity */
@@ -506,6 +506,7 @@ body { font-variation-settings: 'SOFT' 100, 'WONK' 0; }  /* Fraunces' soft axis;
 .bf-fallback b { font-weight: 600; }
 .bf-place { display: grid; gap: var(--space-4); max-width: 640px; }
 .bf-hd { display: flex; gap: 14px; align-items: center; } .bf-hd b { display: block; font: var(--type-h3); } .bf-hd span { color: var(--color-text-secondary); font: var(--type-body-s); }
-.bf-msg { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; padding: 10px 14px; background: var(--color-bg-surface); border-radius: var(--radius-md); box-shadow: inset 3px 0 0 var(--bot-rule); }
+.bf-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; } .bf-list li { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 10px; border-radius: var(--radius-md); } .bf-list li:first-child { background: var(--color-bg-surface); } .bf-list b { display: flex; gap: 6px; align-items: baseline; font-weight: 600; } .bf-list div span { display: block; color: var(--color-text-secondary); font: var(--type-body-s); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bf-msg { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; padding: 10px 14px; background: var(--color-bg-surface); border-radius: var(--radius-md); box-shadow: inset 3px 0 0 var(--bot-rule); }
 .bf-msg b { font-weight: 600; } .bf-msg p { margin: 2px 0 0; color: var(--color-text-primary); }
 .bf-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; } .bf-row b { font-weight: 600; } .bf-note { font: var(--type-caption); color: var(--color-text-tertiary); }

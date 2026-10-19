@@ -32,7 +32,7 @@ export const excRow = ({ state, title, sentence = '', age = '', action = '' }) =
 export const excRows = (rows, { terse = false } = {}) => `<ul class="calm-rows${terse ? ' terse' : ''}">${rows.map(excRow).join('')}</ul>`;
 
 /** Runs per hour, aggregated: one column per bucket, stacked from the ground: passed (the soft success
- *  fill), waiting or parked (a warm neutral), running (blue), failed (red, on top, with the failed mark
+ *  body with a 2px full-green cap), waiting or parked (a warm neutral), running (blue), failed (red, on top, with the failed mark
  *  above it and its count when more than one). 2px gaps between the layers. No lanes; the caption names
  *  each layer with its count. `hours`: [[passed, failed, waiting?, running?], …], oldest first. */
 const RS_LAYERS = [['passed', 'rs-bar'], ['waiting', 'rs-wait'], ['running', 'rs-run'], ['failed', 'rs-fail']];
@@ -52,7 +52,9 @@ export function runStrip(hours, { axis = ['12 h ago', 'now'] } = {}) {
         // than 4 units and a waiting or running one than 3, so one run among many still shows.
         const gap = j ? 2 : 0, h = Math.max(r[k] * unit - gap, { passed: 1, waiting: 3, running: 3, failed: 4 }[k]);
         y -= gap + h;
-        g += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" class="${cls}">${tip}</rect>`;
+        // A passed bar is the full-green cap with the soft body inset 2px below it, so the cap is its edge.
+        if (k === 'passed') g += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" class="rs-cap">${tip}</rect>${h > 3 ? `<rect x="${x.toFixed(1)}" y="${(y + 2).toFixed(1)}" width="${bw.toFixed(1)}" height="${(h - 2).toFixed(1)}" rx="2" class="rs-bar">${tip}</rect>` : ''}`;
+        else g += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" class="${cls}">${tip}</rect>`;
       });
       if (r.failed) {
         const cx = x + bw / 2, cy = y - 9;
@@ -87,9 +89,9 @@ export const CALM_CSS = `
 .at-glance dd span{font-size:13px;color:var(--color-text-tertiary)}
 @media (max-width:600px){.at-glance{grid-template-columns:repeat(3,1fr)}.at-glance>div:nth-child(4){padding-left:0;border-left:0}.at-glance>div:nth-child(n+4){border-top:1px solid var(--color-border-subtle)}}
 .run-strip{margin:0}.run-strip>svg{display:block;width:100%;height:auto;overflow:visible}.run-strip>.rs-p{display:none}@media (max-width:600px){.run-strip>.rs-d{display:none}.run-strip>.rs-p{display:block}}
-.run-strip .rs-bar{fill:var(--run-strip-bar,var(--color-status-success-chart))}.run-strip .rs-wait{fill:var(--run-strip-waiting,var(--color-text-tertiary))}.run-strip .rs-run{fill:var(--run-strip-running,var(--color-status-running-solid))}.run-strip .rs-fail{fill:var(--run-strip-failed,var(--color-status-danger-solid))}
+.run-strip .rs-bar{fill:var(--run-strip-bar,var(--color-status-success-chart))}.run-strip .rs-cap{fill:var(--run-strip-cap,var(--color-status-success-solid))}.run-strip .rs-wait{fill:var(--run-strip-waiting,var(--color-text-tertiary))}.run-strip .rs-run{fill:var(--run-strip-running,var(--color-status-running-solid))}.run-strip .rs-fail{fill:var(--run-strip-failed,var(--color-status-danger-solid))}
 .run-strip .rs-k{display:inline-flex;align-items:center;gap:5px;font-weight:500}.run-strip .rs-k i{display:inline-block;width:10px;height:10px;border-radius:2px}
-.run-strip .rs-k i.rs-bar{background:var(--run-strip-bar,var(--color-status-success-chart))}.run-strip .rs-k i.rs-wait{background:var(--run-strip-waiting,var(--color-text-tertiary))}.run-strip .rs-k i.rs-run{background:var(--run-strip-running,var(--color-status-running-solid))}
+.run-strip .rs-k i.rs-bar{background:var(--run-strip-bar,var(--color-status-success-chart));box-shadow:inset 0 2px 0 var(--run-strip-cap,var(--color-status-success-solid))}.run-strip .rs-k i.rs-wait{background:var(--run-strip-waiting,var(--color-text-tertiary))}.run-strip .rs-k i.rs-run{background:var(--run-strip-running,var(--color-status-running-solid))}
 .run-strip .rs-n{font-size:11.5px;font-weight:700;fill:var(--color-status-danger-fg)}
 .run-strip figcaption{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:6px;font-size:12px;color:var(--color-text-tertiary)}
 .run-strip figcaption b{display:inline-flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:4px 12px;font-size:13px;font-weight:600;color:var(--color-text-secondary)}
