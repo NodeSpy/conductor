@@ -5,18 +5,23 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // ticketOp serves the ticket ops for an operator (the control socket) and a
 // bot's session (its token) alike; the actor decides what is allowed.
 //
-//	ticket_new     title, description, assignee, priority, due, labels, ready, attachments
+//	ticket_new     title, description, assignee, priority, due, labels, ready, attachments, spend_limit
 //	ticket_list    assignee, holder, status, priority, label, q
 //	ticket_show    ticket
-//	ticket_edit    ticket, title, description, priority, due ("" clears), labels
+//	ticket_edit    ticket, title, description, priority, due ("" clears), labels, spend_limit
 //	ticket_assign  ticket, to
 //	ticket_comment ticket, text, attachments
 //	ticket_status  ticket, to (ready | in_progress | waiting | done | declined | draft | reopen), note
+//
+// spend_limit is {amount, currency, card, merchants}, or an amount with
+// currency, card and merchants beside it; null or "none" clears it.
 func (s *Service) ticketOp(ctx context.Context, a TicketActor, sub string, args map[string]any) (map[string]any, error) {
 	view := func(v TicketView, err error) (map[string]any, error) {
 		if err != nil {
@@ -34,9 +39,13 @@ func (s *Service) ticketOp(ctx context.Context, a TicketActor, sub string, args 
 		if err != nil {
 			return nil, err
 		}
+		_, limit, err := spendArg(args)
+		if err != nil {
+			return nil, err
+		}
 		return view(s.TicketCreate(ctx, a, TicketNew{Title: str(args, "title"), Description: str(args, "description"),
 			Assignee: str(args, "assignee"), Priority: str(args, "priority"), Due: due, Labels: listArg(args, "labels"),
-			Ready: boolArg(args, "ready"), Files: files}))
+			Ready: boolArg(args, "ready"), Files: files, SpendLimit: limit}))
 	case "ticket_list":
 		f := TicketFilter{Assignee: str(args, "assignee"), Holder: str(args, "holder"), Priority: str(args, "priority"),
 			Label: str(args, "label"), Query: str(args, "q"), Statuses: listArg(args, "status")}
@@ -95,6 +104,13 @@ func (s *Service) ticketOp(ctx context.Context, a TicketActor, sub string, args 
 			ls := listArg(args, "labels")
 			ch.Labels = &ls
 		}
+		present, limit, err := spendArg(args)
+		if err != nil {
+			return nil, err
+		}
+		if present {
+			ch.SpendLimit = &limit
+		}
 		return view(s.TicketEdit(ctx, a, str(args, "ticket"), ch))
 	case "ticket_assign":
 		return view(s.TicketAssign(ctx, a, str(args, "ticket"), str(args, "to")))
@@ -108,6 +124,29 @@ func (s *Service) ticketOp(ctx context.Context, a TicketActor, sub string, args 
 		return view(s.TicketSetStatus(ctx, a, str(args, "ticket"), str(args, "to"), str(args, "note")))
 	}
 	return nil, fmt.Errorf("unknown ticket op %q", sub)
+}
+
+// spendArg reads a spend limit: spend_limit as an object {amount, currency,
+// card, merchants}, or as an amount with currency, card and merchants beside
+// it; null or "none" clears it. present false: not mentioned.
+func spendArg(args map[string]any) (present bool, limit *store.SpendLimit, err error) {
+	v, ok := args["spend_limit"]
+	if !ok {
+		return false, nil, nil
+	}
+	switch x := v.(type) {
+	case nil:
+		return true, nil, nil
+	case map[string]any:
+		return true, &store.SpendLimit{Amount: str(x, "amount"), Currency: str(x, "currency"), Card: str(x, "card"), Merchants: strs(x, "merchants")}, nil
+	case string, float64, int:
+		amt := strings.TrimSpace(fmt.Sprint(x))
+		if amt == "" || amt == "none" {
+			return true, nil, nil
+		}
+		return true, &store.SpendLimit{Amount: amt, Currency: str(args, "currency"), Card: str(args, "card"), Merchants: listArg(args, "merchants")}, nil
+	}
+	return false, nil, fmt.Errorf("spend_limit: an amount, or {amount, currency, card, merchants}")
 }
 
 // isTicketOp reports a ticket op.

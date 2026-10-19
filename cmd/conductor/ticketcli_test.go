@@ -46,3 +46,34 @@ func TestTicketRequest(t *testing.T) {
 		t.Fatalf("in a session: %v", err)
 	}
 }
+
+// --spend-limit with its currency, card and repeatable merchants; none
+// clears it; show prints the limit and what has been spent.
+func TestTicketSpendLimitCLI(t *testing.T) {
+	pos, fl, _, _ := botFlags([]string{"buy", "a", "drive", "--spend-limit", "120", "--currency", "EUR", "--card", "visa", "--merchant", "https://a.example.com", "--merchant", "https://b.example.com"})
+	_, a, err := ticketRequest("new", pos, fl)
+	if err != nil || a["spend_limit"] != "120" || a["currency"] != "EUR" || a["card"] != "visa" ||
+		strings.Join(a["merchants"].([]string), ",") != "https://a.example.com,https://b.example.com" {
+		t.Fatalf("new: %v %v", a, err)
+	}
+	pos, fl, _, _ = botFlags([]string{"T-1", "--spend-limit", "none"})
+	if _, a, _ = ticketRequest("edit", pos, fl); a["spend_limit"] != "none" {
+		t.Fatalf("edit none: %v", a)
+	}
+	pos, fl, _, _ = botFlags([]string{"T-1", "--priority", "high"})
+	if _, a, _ = ticketRequest("edit", pos, fl); a["spend_limit"] != nil {
+		t.Fatalf("an edit not naming the limit touched it: %v", a)
+	}
+	out := ticketText(map[string]any{"ticket": "T-1", "title": "buy a drive", "status": "in_progress",
+		"spend_limit": map[string]any{"amount": "120.00", "currency": "USD", "card": "visa"},
+		"spent":       map[string]any{"known": true, "spent": "75.50", "remaining": "44.50", "currency": "USD"}})
+	if !strings.Contains(out, "spend limit: 120.00 USD on card visa") || !strings.Contains(out, "spent so far: 75.50 (44.50 left)") {
+		t.Fatalf("show:\n%s", out)
+	}
+	out = ticketText(map[string]any{"ticket": "T-1", "title": "x", "status": "draft",
+		"spend_limit": map[string]any{"amount": "5.00", "currency": "USD"},
+		"spent":       map[string]any{"known": false, "currency": "USD", "why": "no purchase ledger on this daemon"}})
+	if !strings.Contains(out, "spent so far: unknown (no purchase ledger on this daemon)") {
+		t.Fatalf("show, no ledger:\n%s", out)
+	}
+}

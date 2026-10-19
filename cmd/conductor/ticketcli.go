@@ -11,9 +11,11 @@ import (
 const ticketUsage = `usage:
   conductor ticket new "<title>" [--description "…" | --description-file <f>] [--assignee bot:<b>|team:<t>]
                         [--priority low|normal|high|urgent] [--due YYYY-MM-DD] [--label <l>]… [--ready] [--attach <file>]…
+                        [--spend-limit <amount> [--currency USD] [--card <name>] [--merchant https://…]…]
   conductor ticket list [--assignee bot:<b>|team:<t>|none] [--holder <bot>] [--status <s>[,…]] [--priority <p>] [--label <l>] [--search "…"] [--all]
   conductor ticket show <T-n>
   conductor ticket edit <T-n> [--title "…"] [--description "…"] [--priority <p>] [--due YYYY-MM-DD|none] [--label <l>]… [--no-labels]
+                        [--spend-limit <amount>|none [--currency …] [--card …] [--merchant …]…]   # only you set or raise it (a widening)
   conductor ticket assign <T-n> <bot:<b>|team:<t>|none>
   conductor ticket comment <T-n> "<text>" [--attach <file>]…
   conductor ticket ready|wait|done|decline|draft|reopen <T-n> ["<note>"]
@@ -61,6 +63,7 @@ func ticketRequest(sub string, pos []string, fl map[string]string) (string, map[
 		}
 		a["description"], a["assignee"], a["priority"], a["due"] = d, fl["assignee"], fl["priority"], fl["due"]
 		a["labels"], a["ready"] = labels(), fl["ready"] == "true"
+		spendFlags(a, fl)
 		if err := attachFiles(a, fl["attach"]); err != nil {
 			return "", nil, err
 		}
@@ -103,6 +106,7 @@ func ticketRequest(sub string, pos []string, fl map[string]string) (string, map[
 		} else if fl["no-labels"] == "true" {
 			a["labels"] = []string{}
 		}
+		spendFlags(a, fl)
 		return "ticket_edit", a, nil
 	case "assign":
 		if err := need(2); err != nil {
@@ -128,6 +132,18 @@ func ticketRequest(sub string, pos []string, fl map[string]string) (string, map[
 		return "ticket_status", a, nil
 	}
 	return "", nil, fmt.Errorf("unknown ticket command %q\n%s", sub, ticketUsage)
+}
+
+// spendFlags carries --spend-limit (with --currency, --card, --merchant…).
+func spendFlags(a map[string]any, fl map[string]string) {
+	v, ok := fl["spend-limit"]
+	if !ok {
+		return
+	}
+	a["spend_limit"], a["currency"], a["card"] = v, fl["currency"], fl["card"]
+	if fl["merchant"] != "" {
+		a["merchants"] = strings.Split(fl["merchant"], "\x00")
+	}
 }
 
 // cmdTicket is `conductor ticket …`: the operator's tickets.
@@ -213,6 +229,23 @@ func ticketText(t map[string]any) string {
 		fmt.Fprintf(&b, "   ready by: %s", r)
 	}
 	fmt.Fprintln(&b)
+	if l, ok := t["spend_limit"].(map[string]any); ok {
+		fmt.Fprintf(&b, "  spend limit: %v %v", l["amount"], l["currency"])
+		if c, _ := l["card"].(string); c != "" {
+			fmt.Fprintf(&b, " on card %s", c)
+		}
+		if ms, ok := l["merchants"].([]any); ok && len(ms) > 0 {
+			fmt.Fprintf(&b, " at %v", ms)
+		}
+		if sp, ok := t["spent"].(map[string]any); ok {
+			if sp["known"] == true {
+				fmt.Fprintf(&b, "   spent so far: %v (%v left)", sp["spent"], sp["remaining"])
+			} else {
+				fmt.Fprintf(&b, "   spent so far: unknown (%v)", sp["why"])
+			}
+		}
+		fmt.Fprintln(&b)
+	}
 	if ls, ok := t["labels"].([]any); ok && len(ls) > 0 {
 		var l []string
 		for _, x := range ls {

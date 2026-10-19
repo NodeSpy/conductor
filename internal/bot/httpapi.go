@@ -457,7 +457,7 @@ func (s *Service) apiTicketPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	edit := map[string]any{"ticket": tid}
-	for _, k := range []string{"title", "description", "priority", "due", "labels"} {
+	for _, k := range []string{"title", "description", "priority", "due", "labels", "spend_limit"} {
 		if v, ok := args[k]; ok {
 			edit[k] = v
 		}

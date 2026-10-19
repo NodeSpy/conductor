@@ -660,6 +660,16 @@ tagline, personality) came from one.
   where). A bot's ledger keeps a closed copy with `moved_to`, because the
   lead's triage case and its delegations still point at it. Lookups and
   lists skip such copies.
+- **Spend limit.** `Case.spend_limit` (`{amount, currency, card,
+  merchants}`) lives on the ticket record itself, so the browser's payments
+  and tickets read the same field. A purchase names a bot and its case id;
+  payments call `Service.TicketSpend(bot, caseID)` for the limit and what has
+  gone. Spending is read through the `SpendLedger` interface, summed over
+  every copy of the ticket. A daemon without a ledger reports it as unknown,
+  never as zero. Amounts are decimal strings, compared in cents.
+  `spendLimitWidens` defines a widening as setting, clearing, raising, or a
+  new currency, card or merchant. Only an operator may make one; a bot's
+  edit must narrow.
 
 ## Folders: removed
 

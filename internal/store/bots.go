@@ -129,6 +129,19 @@ type Case struct {
 	// MovedTo is set on the copy a ticket left behind when it moved
 	// ("bot:<name>/<case>"); the live ticket is where it went.
 	MovedTo string `json:"moved_to,omitempty"`
+	// SpendLimit caps what may be spent on the ticket (the browser's
+	// purchases, keyed by the bot and this case id). Only an operator sets
+	// or raises it.
+	SpendLimit *SpendLimit `json:"spend_limit,omitempty"`
+}
+
+// SpendLimit is a ticket's spending cap: an amount (a decimal string, "50.00")
+// in a currency, optionally on one card and at some merchants (origins).
+type SpendLimit struct {
+	Amount    string   `json:"amount"`
+	Currency  string   `json:"currency"`
+	Card      string   `json:"card,omitempty"`
+	Merchants []string `json:"merchants,omitempty"`
 }
 
 // TicketComment is one comment on a ticket.

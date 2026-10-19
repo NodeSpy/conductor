@@ -128,7 +128,7 @@ func botFlags(args []string) (pos []string, flags map[string]string, files []str
 			files = append(files, v)
 			continue
 		}
-		if (k == "field" || k == "attach" || k == "label") && flags[k] != "" { // repeatable: --field k=v …, --attach <f> …, --label <l> …
+		if (k == "field" || k == "attach" || k == "label" || k == "merchant") && flags[k] != "" { // repeatable: --field k=v …, --attach <f> …, --label <l> …, --merchant <origin> …
 			flags[k] += "\x00" + v
 			continue
 		}

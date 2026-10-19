@@ -99,6 +99,8 @@ type TicketView struct {
 	Holder string         `json:"holder,omitempty"` // the bot that holds it ("" in a queue)
 	Queue  string         `json:"queue,omitempty"`
 	Links  map[string]any `json:"links,omitempty"`
+	// Spent is what has gone against its spend limit (set when it has one).
+	Spent *SpendStatus `json:"spent,omitempty"`
 }
 
 // findTicket finds the live copy of a ticket (never a moved-away stub).
@@ -235,6 +237,7 @@ type TicketNew struct {
 	Labels                                 []string
 	Ready                                  bool
 	Files                                  []AttachmentIn
+	SpendLimit                             *store.SpendLimit
 }
 
 func checkTicketText(title, desc string) error {
@@ -330,6 +333,13 @@ func (s *Service) TicketCreate(ctx context.Context, a TicketActor, n TicketNew) 
 	if err := checkPriority(n.Priority); err != nil {
 		return TicketView{}, err
 	}
+	limit, err := NormalizeSpendLimit(n.SpendLimit)
+	if err != nil {
+		return TicketView{}, err
+	}
+	if _, err := checkSpendChange(a, nil, limit); err != nil {
+		return TicketView{}, err
+	}
 	if n.Ready {
 		if err := s.mayMarkReady(a, a.String(), assignee); err != nil {
 			return TicketView{}, err
@@ -357,8 +367,11 @@ func (s *Service) TicketCreate(ctx context.Context, a TicketActor, n TicketNew) 
 	who, class := s.requesterFor(a, assignee)
 	c := store.Case{Ticket: tid, Title: strings.TrimSpace(n.Title), Description: n.Description, Status: store.TicketDraft,
 		Priority: n.Priority, Due: n.Due, Labels: labels, Assignee: assignee, CreatedBy: a.String(),
-		Source: "ticket", Requester: who, RequesterClass: class, Created: now, Updated: now}
+		Source: "ticket", Requester: who, RequesterClass: class, Created: now, Updated: now, SpendLimit: limit}
 	addHistory(&c, now, a.String(), "created ("+orNone(assignee)+", draft)")
+	if limit != nil {
+		addHistory(&c, now, a.String(), "spend limit "+spendText(limit))
+	}
 	loc, err := s.placeTicket(c, assignee)
 	if err != nil {
 		return TicketView{}, err
@@ -650,7 +663,7 @@ func (s *Service) findTicketExcept(tid string, not ticketLoc) (store.Case, ticke
 func carryTicket(dst *store.Case, src *store.Case, bot string, at time.Time) {
 	dst.Ticket, dst.Description, dst.Priority, dst.Due = src.Ticket, src.Description, src.Priority, src.Due
 	dst.Labels, dst.CreatedBy, dst.ReadyBy = src.Labels, src.CreatedBy, src.ReadyBy
-	dst.Comments, dst.History = src.Comments, src.History
+	dst.Comments, dst.History, dst.SpendLimit = src.Comments, src.History, src.SpendLimit
 	// A team's ticket stays the team's, whichever member works it; a bot's
 	// is the bot's that now holds it.
 	dst.Assignee = src.Assignee
@@ -673,6 +686,9 @@ func TicketMessage(c store.Case, why string) string {
 	if len(c.Labels) > 0 {
 		meta += " | labels " + strings.Join(c.Labels, ", ")
 	}
+	if c.SpendLimit != nil {
+		meta += " | spend limit " + spendText(c.SpendLimit)
+	}
 	return fmt.Sprintf("[conductor: %s — %s, case %s]\n%s\nWork it, then:\n  conductor bot ticket comment %s \"…\"     # progress, a question (your operator reads it)\n  conductor bot ticket wait %s \"…\"        # waiting on your operator\n  conductor bot ticket done %s \"…\"        # finished (or: decline %s \"why\")",
 		meta, why, c.ID, fence("TICKET", c.Title+"\n\n"+c.Description), c.Ticket, c.Ticket, c.Ticket, c.Ticket)
 }
@@ -684,6 +700,8 @@ type TicketChanges struct {
 	Title, Description, Priority *string
 	Due                          **time.Time
 	Labels                       *[]string
+	// SpendLimit sets (or, pointing at nil, clears) the spend limit.
+	SpendLimit **store.SpendLimit
 }
 
 func (s *Service) TicketEdit(ctx context.Context, a TicketActor, tid string, ch TicketChanges) (TicketView, error) {
@@ -715,9 +733,27 @@ func (s *Service) TicketEdit(ctx context.Context, a TicketActor, tid string, ch 
 			return TicketView{}, err
 		}
 	}
+	var limit *store.SpendLimit
+	widening := ""
+	if ch.SpendLimit != nil {
+		if limit, err = NormalizeSpendLimit(*ch.SpendLimit); err != nil {
+			return TicketView{}, err
+		}
+		if widening, err = checkSpendChange(a, c.SpendLimit, limit); err != nil {
+			return TicketView{}, err
+		}
+	}
 	now := s.now()
 	err = s.updateTicket(loc, func(cc *store.Case) error {
 		var what []string
+		if ch.SpendLimit != nil && !sameSpendLimit(cc.SpendLimit, limit) {
+			w := "spend limit " + spendText(limit)
+			if widening != "" {
+				w += " (a WIDENING: " + widening + ")"
+			}
+			cc.SpendLimit = limit
+			what = append(what, w)
+		}
 		if ch.Title != nil && title != cc.Title {
 			cc.Title = title
 			what = append(what, "title")
@@ -747,7 +783,7 @@ func (s *Service) TicketEdit(ctx context.Context, a TicketActor, tid string, ch 
 	if err != nil {
 		return TicketView{}, err
 	}
-	s.audit(map[string]any{"event": "bot_ticket", "action": "edit", "ticket": tid, "by": a.String()})
+	s.audit(map[string]any{"event": "bot_ticket", "action": "edit", "ticket": tid, "by": a.String(), "widening": widening})
 	s.publishTicket(tid)
 	return s.TicketShow(tid)
 }
@@ -919,6 +955,10 @@ func (s *Service) TicketShow(tid string) (TicketView, error) {
 		return TicketView{}, err
 	}
 	v := TicketView{Case: c, Holder: loc.Bot, Queue: loc.Queue}
+	if c.SpendLimit != nil {
+		st := s.ticketSpent(tid, c.SpendLimit)
+		v.Spent = &st
+	}
 	if loc.Bot != "" {
 		rec := s.Ledger.Bot(loc.Bot)
 		links := map[string]any{}

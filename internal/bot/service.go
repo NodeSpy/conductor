@@ -101,6 +101,9 @@ type Service struct {
 	Workers WorkerLauncher
 	// Blobs stores attachments (nil: messages can't carry files).
 	Blobs *blob.Store
+	// Spend is the purchase ledger a ticket's spend limit is read against
+	// (the browser's payments; nil: nothing known spent).
+	Spend SpendLedger
 
 	chat      chatHub
 	ticketHub ticketHub
