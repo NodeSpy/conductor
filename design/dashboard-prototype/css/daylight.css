@@ -1002,3 +1002,5 @@ html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radiu
 button.fx-more { border: 0; background: none; padding: 0 2px; font: inherit; color: var(--color-text-tertiary); cursor: pointer; } button.fx-more:hover { color: var(--color-text-primary); text-decoration: underline; }
 .m-team-t .fx.fx-all { max-height: none; flex-wrap: wrap; }
 .dl-more-row { padding: 10px 0; list-style: none; }
+/* toasts stay clear of a chat's composer and its Send button (r5 minor: a toast covered Send in team chat) */
+body:has(#main .cv-main.fit, #main .chat.fit) .toasts { top: calc(var(--space-5) + 56px); bottom: auto !important; }

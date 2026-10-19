@@ -72,7 +72,7 @@ test('installing a pack: the consent sentence wraps, every action and the rest o
   const m = await g.evaluate((e) => ({ ws: getComputedStyle(e).whiteSpace, over: e.scrollWidth - e.clientWidth }));
   expect(m.ws).not.toBe('pre');
   expect(m.over, 'nothing overflows the callout').toBeLessThanOrEqual(1);
-  await expect(g).toContainText('It asks for these actions:');
+  await expect(g).toContainText('It asks to:');
   await expect(g).toContainText('gh.review');
 });
 
