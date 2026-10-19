@@ -82,16 +82,16 @@
     if (!v.length) return `<span class="fb-l">${esc(f.label)}</span>`;
     const first = f.value ? f.value(v[0]) : f.path ? pathText(v[0]) : labelOf(f, v[0]);
     return f.bare ? `<span class="fb-v">${esc(first)}</span>` : `<span class="fb-l">${esc(f.label)}:</span> <span class="fb-v">${esc(first)}${v.length > 1 ? ` +${v.length - 1}` : ''}</span>`; };
-  FB.html = (cfg) => { FB.reg[cfg.id] = cfg; const st = cfg.state, n = qf(cfg).filter((f) => isSet(f, st) && !f.bare).length + (st.q ? 1 : 0), quals = cfg.fields.some((f) => f.group);
+  FB.html = (cfg) => { FB.reg[cfg.id] = cfg; const st = cfg.state, n = qf(cfg).filter((f) => isSet(f, st) && !f.bare).length + (st.q ? 1 : 0), quals = qf(cfg).length > 0;
     const any = qf(cfg).some((f) => isSet(f, st)) || st.q, views = cfg.fields.filter((f) => f.view);
     return `<div class="fb" data-fb="${cfg.id}">
-      <div class="fb-search${any ? ' has-q' : ''}">${ic('search')}${pillsHTML(cfg)}<input class="fb-in" type="search" value="${esc(st.q || '')}" placeholder="${esc(cfg.placeholder || 'Search')}" aria-label="${esc(cfg.label || 'Search and filter')}" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="fb-ac-${cfg.id}">${quals ? `<button type="button" class="fb-by" data-fb-by title="Every qualifier you can search by, by connector">Filter by…</button>` : ''}${any ? `<button type="button" class="fb-x" data-fb-clear aria-label="Clear the search and every filter">${ic('x')}</button>` : ''}
+      <div class="fb-search${any ? ' has-q' : ''}">${ic('search')}${pillsHTML(cfg)}<input class="fb-in" type="search" value="${esc(st.q || '')}" placeholder="${esc(cfg.placeholder || 'Search')}" aria-label="${esc(cfg.label || 'Search and filter')}" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="fb-ac-${cfg.id}">${quals ? `<button type="button" class="fb-by" data-fb-by title="Every filter you can type, conductor’s and each connection’s">Filter by…</button>` : ''}${any ? `<button type="button" class="fb-x" data-fb-clear aria-label="Clear the search and every filter">${ic('x')}</button>` : ''}
         <ul class="fb-ac" id="fb-ac-${cfg.id}" role="listbox" hidden></ul></div>
       <div class="fb-bar" role="group" aria-label="Filters">${menus(cfg).filter((f) => !f.more || isSet(f, st)).map((f) => `<button type="button" class="fb-btn${isSet(f, st) ? ' on' : ''}" data-fb-open="${f.k}" aria-haspopup="listbox" aria-expanded="false">${btnText(f, st)}${ic('chevd')}</button>`).join('')}
         <button type="button" class="fb-phone${n ? ' on' : ''}" data-fb-sheet aria-haspopup="dialog">${ic('filter')}Filter${n ? ` <span class="fb-n">${n}</span>` : ''}</button>
         ${menus(cfg).some((f) => f.more && !isSet(f, st)) ? `<button type="button" class="fb-btn fb-more-btn" data-fb-more aria-haspopup="menu" aria-expanded="false"><span class="fb-l">More filters</span>${ic('chevd')}</button>` : ''}
         ${any ? `<button type="button" class="fb-reset" data-fb-clear>${ic('x')}Clear filters</button>` : ''}
-        ${views.map((f) => `<button type="button" class="fb-btn fb-view" data-fb-open="${f.k}" aria-haspopup="listbox" aria-expanded="false">${btnText(f, st)}${ic('chevd')}</button>`).join('')}</div></div>`; };
+        ${views.map((f) => `<button type="button" class="fb-btn fb-view" data-fb-open="${f.k}" aria-haspopup="listbox" aria-expanded="false">${btnText(f, st)}${ic('chevd')}</button>`).join('')}${typeof cfg.end === 'function' ? cfg.end() : cfg.end || ''}</div></div>`; };
 
   /* ---------- after a change: the field's text, the buttons, the page's list ---------- */
   const commit = (cfg, keepText) => { const root = document.querySelector(`.fb[data-fb="${cfg.id}"]`);

@@ -4,9 +4,9 @@
 const { test, expect, go } = require('./fixtures');
 
 const DRILL = [
-  ['#/bots/platform-sre/proposals/p12', ['Bots', 'platform', 'platform-sre', 'Approvals'], 'Replace the production web server'],
-  ['#/bots/platform-sre/cases/c29', ['Bots', 'platform', 'platform-sre', 'Tickets'], 'SEV2 api p99 latency > 2s'],
-  ['#/bots/platform-sre', ['Bots', 'platform'], 'platform-sre'],
+  ['#/bots/platform-sre/proposals/p12', ['Bots', 'platform', 'Atlas', 'Approvals'], 'Replace the production web server'],
+  ['#/bots/platform-sre/cases/c29', ['Bots', 'platform', 'Atlas', 'Tickets'], 'SEV2 api p99 latency > 2s'],
+  ['#/bots/platform-sre', ['Bots', 'platform'], 'Atlas'],
   ['#/teams/platform/routing', ['Bots'], 'platform'],
   ['#/tickets/c29', ['Tickets'], 'SEV2 api p99 latency > 2s'],
   ['#/tickets/new', ['Tickets'], 'New ticket'],

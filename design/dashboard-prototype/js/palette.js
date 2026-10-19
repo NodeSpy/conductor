@@ -31,7 +31,7 @@
     add('action', 'New workflow', () => { UI.go('#/workflows'); setTimeout(() => UI.acts['wf-new'] && UI.acts['wf-new'](document.createElement('button')), 60); }, { icon: 'plus', words: 'create trigger recipe' });
     add('action', 'New team', () => { UI.go('#/bots'); setTimeout(act('team-new'), 60); }, { icon: 'plus' });
     add('action', 'Add a login', go('#/browser/add'), { icon: 'passkey', words: 'credential password site browser' });
-    add('action', 'Connect a service (Slack, GitHub…)', go('#/connectors/connectors'), { icon: 'plus', words: 'connector slack github pagerduty add integrate' });
+    add('action', 'Connect a service (Slack, GitHub…)', go('#/connectors/connectors'), { icon: 'plus', words: 'connector connection plugin slack github pagerduty add integrate' });
     add('action', D.daemon.paused ? 'Resume automation' : 'Pause all automation', () => UI.acts.pause(), { icon: 'pause', words: 'stop halt dispatch emergency kill' });
     add('action', 'Review and apply staged changes', go('#/config/apply'), { icon: 'check', words: 'apply diff staged', hint: D.pending.length ? `${D.pending.length} staged` : 'nothing staged' });
     add('action', 'Switch to the ' + (document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark') + ' theme', () => UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'), { icon: 'sun', words: 'theme dark light mode' });

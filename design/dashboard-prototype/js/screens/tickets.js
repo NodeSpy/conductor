@@ -61,7 +61,7 @@
       && (!tv.status.length || tv.status.includes(s)) && (!tv.priority.length || tv.priority.includes(c.priority)) && (!tv.label.length || (c.labels || []).some((l) => tv.label.includes(l)))
       && (!tv.q || `${c.title} ${c.desc || ''} ${c.bot || ''} ${c.team || ''} ${(c.labels || []).join(' ')}`.toLowerCase().includes(tv.q.toLowerCase())); };
   const tally = (xs) => { const mm = new Map(); xs.forEach((x) => mm.set(x, (mm.get(x) || 0) + 1)); return mm; };
-  const bar = (list) => UI.filterBar({ id: 'tk', state: tv, placeholder: 'Find a ticket, or filter: status:draft', label: 'Find and filter tickets', fields: [
+  const bar = (list) => UI.filterBar({ id: 'tk', state: tv, end: viewCtl, placeholder: 'Find a ticket, or filter: status:draft', label: 'Find and filter tickets', fields: [
     { k: 'who', label: 'Assignee', multi: true, alias: 'assignee', options: () => { const m = tally(list.map((c) => c.bot || (c.team ? 'team:' + c.team : 'nobody')));
       D.teams.forEach((t) => { if (!m.has('team:' + t.name)) m.set('team:' + t.name, 0); });
       return [...m].map(([v, n]) => ({ v, label: v === 'nobody' ? 'Nobody yet' : v.startsWith('team:') ? `team ${v.slice(5)}` : v, n: v.startsWith('team:') ? list.filter((c) => c.team === v.slice(5) || teamOf(c) === v.slice(5)).length : n })).filter((o) => o.n); } },
@@ -75,7 +75,7 @@
   /** The list, or the board: one column per status, from draft to done (done and declined fold on the list). */
   const col = (k, xs, o) => `<section class="tk-col" data-col="${k}"><header class="tk-colh">${UI.mark(STATUS[k][1])}<h2>${STATUS[k][0]}</h2>${UI.count(xs.length, { hot: k === 'waiting' && xs.length > 0 })}</header>
     <ul class="tk-cards">${xs.sort(byPri).map((c) => `<li class="tk-card" data-t="${c.id}"><a href="${o.base || '#/tickets'}/${c.id}"><b>${esc(c.title)}</b><span class="dl-why">${by(c).replace(/^./, (x) => x.toUpperCase())}</span>${UI.factsLine(UI.ticketFacts(c, o))}</a></li>`).join('') || `<li class="tk-none dl-sub">${k === 'draft' ? 'No drafts. Write one, or a bot will when it has an idea.' : 'None'}</li>`}</ul></section>`;
-  const viewCtl = () => `<div class="seg tk-view" role="group" aria-label="Show as">${[['list', 'List'], ['board', 'Board']].map(([v, l]) => `<button type="button" data-act="tk-view" data-v="${v}" aria-pressed="${tv.view === v}">${icon(v === 'list' ? 'logs' : 'grid')}${l}</button>`).join('')}</div>`;
+  const viewCtl = () => `<div class="seg fb-seg tk-view" role="group" aria-label="Show as">${[['list', 'List'], ['board', 'Board']].map(([v, l]) => `<button type="button" data-act="tk-view" data-v="${v}" aria-pressed="${tv.view === v}">${icon(v === 'list' ? 'logs' : 'grid')}${l}</button>`).join('')}</div>`;
   UI.ticketList = (list, o = {}) => { const shown = list.filter(keep), open = shown.filter((c) => c.status !== 'closed'), closed = shown.filter((c) => c.status === 'closed');
     let body = '';
     if (tv.view === 'board') body = `<div class="tk-board">${ORDER.filter((k) => k !== 'declined').map((k) => col(k, shown.filter((c) => statusOf(c) === k || (k === 'done' && statusOf(c) === 'declined')), o)).join('')}</div>`;
@@ -85,8 +85,9 @@
       else ORDER.filter((k) => k !== 'done' && k !== 'declined').forEach((k) => { const xs = open.filter((c) => statusOf(c) === k); if (xs.length) body += section(STATUS[k][0], xs, Object.assign({ byStatus: true, id: 'tk-' + k, sub: k === 'draft' ? 'Ideas you and the bots are shaping. Nobody starts work on a draft until someone marks it ready.' : '' }, o)); });
       if (closed.length) body += `<details class="dl-card dl-files-d past-d"><summary class="panel-head"><h3>Done or declined</h3><span class="muted small">${closed.length}</span></summary><ul class="dl-list">${closed.sort(byPri).map((c) => UI.ticketRow(c, o)).join('')}</ul></details>`;
     }
+    if (body && tv.view !== 'board') body = `<div class="tk-groups">${body}</div>`;
     const filtered = shown.length < list.length;
-    return `<div class="tk-bar">${bar(list)}${viewCtl()}</div>${filtered ? `<p class="dl-sub tk-showing">Showing ${shown.length} of ${list.length} · <button class="link" data-act="tk-clear">Clear</button></p>` : ''}${body || `<p class="dl-sub">${filtered ? 'No ticket matches.' : o.none || 'No tickets yet.'}</p>`}`; };
+    return `${bar(list)}${filtered ? `<p class="dl-sub tk-showing">Showing ${shown.length} of ${list.length} · <button class="link" data-act="tk-clear">Clear</button></p>` : ''}${body || `<p class="dl-sub">${filtered ? 'No ticket matches.' : o.none || 'No tickets yet.'}</p>`}`; };
   UI.act('tk-view', (b) => { tv.view = b.dataset.v; UI.rerender({ keepScroll: true }); });
   UI.act('tk-clear', () => { Object.assign(tv, { q: '', who: [], status: [], priority: [], label: [] }); UI.rerender({ keepScroll: true }); });
 
@@ -114,7 +115,7 @@
     const hist = [{ at: c.opened, t: c.stage === 'draft' || /^bot:/.test(c.requester || '') ? `Drafted by ${askedBy(c).replace(' (a bot)', '')}` : `Opened by ${askedBy(c)}` }].concat(c.routed ? [{ at: c.opened, t: (([x]) => x.toUpperCase() + x.slice(1))(k.routeLabel(c.routed).replace(/<[^>]+>/g, '')) }] : [])
       .concat(D.audit.filter((a) => new RegExp(`\\b${c.id}\\b`).test(a.detail || '')).map((a) => ({ at: a.ts, t: histWord(a) }))).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
     const ctl = (k2, label, val, opts) => `<div class="tk-f"><span class="dl-lbl">${label}</span><button class="tk-pick" data-act="tk-set" data-k="${k2}" data-t="${c.id}" aria-label="${label}: ${esc(val)}. Change">${esc(val)}${icon('chevd')}</button></div>`;
-    return `<section class="dl-card case-head tk-head"><div class="tk-ht">${UI.mark(s.mark, { lg: true, label: s.word })}<h1 class="case-title">${esc(c.title)}</h1><button class="icon-btn" data-act="tk-more" data-t="${c.id}" aria-label="More for this ticket">${icon('more')}</button></div>
+    return `<section class="dl-card case-head tk-head"><div class="tk-ht">${UI.mark(s.mark, { lg: true, label: s.word })}<h1 class="case-title dl-h1-long">${esc(c.title)}</h1><button class="icon-btn" data-act="tk-more" data-t="${c.id}" aria-label="More for this ticket">${icon('more')}</button></div>
         <p class="dl-sub case-state">${s.word}${c.urgent && open ? ' · <b class="danger-text">urgent</b>' : ''} · ${draft ? `${by(c)} ${UI.agoText(c.opened)}` : `${open ? 'opened' : 'closed'} ${UI.agoText(c.opened)} by ${esc(askedBy(c))}`}</p>
         ${UI.factsLine(UI.ticketFacts(c))}
         ${draft ? `<div class="tk-ready"><p><b>A draft.</b> ${c.bot || c.team ? `${esc(assignee(c))} can help shape it, but won’t start` : 'Nobody works on it'} until you mark it ready${c.bot || c.team ? '' : ', and it needs someone to do it first'}.</p><button class="btn primary" data-act="tk-ready" data-t="${c.id}">${icon('check')}Mark ready</button></div>` : ''}

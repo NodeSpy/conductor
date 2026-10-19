@@ -5,9 +5,9 @@
  * When the brand's mocks change, change this file to match, and nothing else. */
 
 .dl-page { max-width: calc(1280px - 72px); margin: 0; padding: 8px 36px 56px; }
-.dl-page h1 { font: var(--type-display); font-size: 34px; line-height: 1.12; font-variation-settings: var(--type-display-variation); letter-spacing: -0.015em; margin: 0; }
+.dl-page h1 { font: var(--type-display); font-size: var(--title-page); line-height: 1.12; font-variation-settings: var(--type-display-variation); letter-spacing: -0.015em; margin: 0; }
 /* a generated title (a run's, a case's) is long and machine-written: the sans, per the serif rule (BRAND.md) */
-.dl-page h1.dl-h1-long { font: var(--type-h3); font-size: var(--type-h2-size); letter-spacing: normal; line-height: 1.25; max-width: 34em; font-variation-settings: normal; }
+.dl-page h1.dl-h1-long, #main h1.dl-h1-long { font: var(--type-h3); font-size: var(--type-h2-size); letter-spacing: normal; line-height: 1.25; max-width: 34em; font-variation-settings: normal; }
 .dl-page h2 { font: var(--type-h2); font-family: var(--font-family-serif); font-size: 21px; line-height: 1.25; font-weight: 600; font-variation-settings: var(--type-display-variation); letter-spacing: -0.009em; margin: 0; }
 .dl-lead { font: var(--type-body-l); color: var(--color-text-secondary); margin: 8px 0 0; max-width: 46em; }
 .dl-lead b { color: var(--color-text-primary); font-weight: var(--font-weight-bold); }
@@ -197,7 +197,7 @@
 @media (max-width: 1100px) { .dl-page { padding: 8px var(--space-5) 48px; } .dl-cols { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 720px) {
   .dl-page { padding: 14px max(16px, var(--sar)) 24px max(16px, var(--sal)); }
-  .dl-page h1 { font-size: calc(34px * .8); }
+  .dl-page h1 { font-size: var(--title-page-phone); }
 
   .dl-lead { font: var(--type-body-m); }
   .dl-cols { gap: 14px; margin-top: 14px; } .dl-col-main, .dl-col-side { gap: 14px; }
@@ -697,7 +697,7 @@ td.run .fx { margin-top: 4px; }
   .dl-bothead > div { grid-column: 2; grid-row: 1; min-width: 0; }
   .dl-bothead > .st, .dl-bothead > .bot-now { grid-column: 2; grid-row: 2; margin-left: 0; justify-self: start; }
   .dl-bothead > .icon-btn { grid-column: 3; grid-row: 1; justify-self: end; }
-  .dl-bothead h1 { font-size: 24px; line-height: 1.15; overflow-wrap: anywhere; }
+  .dl-bothead h1 { font-size: var(--title-head-phone); line-height: 1.15; overflow-wrap: anywhere; }
   .dl-bothead .bot-working { margin-top: 2px; } .dl-bothead + .dl-actions { margin-top: 10px; } .dl-bothead ~ .dl-tabs { margin-top: 8px; } .dl-bothead { row-gap: 4px; }
   .dl-bothead .dl-lead { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; } .dl-bothead .bot-working { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dl-bothead .dl-lead { font: var(--type-body-s); }
@@ -738,3 +738,43 @@ td.run .fx { margin-top: 4px; }
 }
 
 .dl-tabs a .count { margin-left: 4px; vertical-align: 1px; }
+
+/* ---------- one control height, one stack gap (desktop-audit.md §1, §3) ----------
+ * Every button, icon button, input, select, segmented control and filter menu is --control-h tall: 36px, 32px in
+ * the compact density, 44px on a phone. Controls side by side always line up; .sm only tightens the padding and the
+ * type; an icon button beside a button is the button's height; .lg (44px) is a page's one big call to action.
+ * Stacked cards and panels keep --gap-stack between them: 20px, 14px on a phone. */
+:root, [data-density] { --control-h: 36px; --control-h-touch: 44px; --title-page: 34px; --title-page-phone: 27.2px; --title-head-phone: 24px; }
+[data-density="compact"] { --control-h: 32px; }
+@media (max-width: 720px) { html[data-density] { --control-h: 44px; --gap-stack: 14px; } }
+html .btn, html .btn.sm, html .dl-page .btn, html .dl-page .btn.sm { height: var(--control-h); min-height: var(--control-h); }
+html .icon-btn, html .icon-btn.sm:is(.btn ~ *, :has(~ .btn)) { width: var(--control-h); height: var(--control-h); min-height: var(--control-h); }
+html .input:not(textarea), html .select { height: var(--control-h); min-height: var(--control-h); box-sizing: border-box; }
+html .seg { height: var(--control-h); box-sizing: border-box; align-items: stretch; } html .seg button { min-height: 0; }
+html .fb-search { min-height: var(--control-h); } html .fb-btn, html .fb-reset, html .fb-phone { height: var(--control-h); min-height: var(--control-h); }
+.fb-search .fb-in { align-self: stretch; min-height: calc(var(--control-h) - 2 * var(--border-width) - 6px); }
+.stack:has(> :is(.panel, .dl-card, .card) + :is(.panel, .dl-card, .card)) { gap: var(--gap-stack); }
+.dl-cols, .dl-col-main, .dl-col-side { gap: var(--gap-stack); }
+.tk-groups { display: grid; gap: var(--gap-stack); }
+/* a row's parts share its centre line: a heading beside its button, a line of text beside an action */
+.dl-actions { align-items: center; }
+.dl-ch:has(> .btn, > .icon-btn, > .dl-na, > .tools, > a.btn) { align-items: center; }
+.m-team, .past-d, :is(.page, .dl-tab-body, .wl-main) > :is(.panel, .dl-card, .dl-tech-d) + :is(.panel, .dl-card, .dl-tech-d) { margin-top: var(--gap-stack); }
+.tk-groups > *, .stack > *, .dl-col-main > *, .dl-col-side > * { margin-top: 0; }
+/* a narrow filter bar (a side panel) keeps its field one line: Filter by… folds into typing */
+.fb { container-type: inline-size; }
+@container (max-width: 420px) { .fb-by { display: none; } }
+:is(.panel, .dl-card) + .dl-tech-d { margin-top: var(--gap-stack); }
+/* A disclosure's header is centred in its card, closed or open (desktop-audit.md, 19:45): the same space above and
+ * below the title, so a closed card's title sits in its middle; an open one keeps that header and its body follows. */
+details > summary.panel-head { padding-top: var(--space-3); padding-bottom: var(--space-3); }
+.dl-audit-d { padding-bottom: 6px; } .dl-audit-d > summary { display: flex; width: fit-content; }
+details.panel.tech { padding-top: 0; border-top-style: solid; }
+.svc-list > .svc-head { padding: 13px 0; } .svc-list > .svc-head:first-child { padding-top: 6px; padding-bottom: 6px; }
+/* one page title: every page's, the older page heads and the sign-in gate too (a generated title is the long one) */
+#main .page-head h1:not(.dl-h1-long), #main .gate h1 { font-size: var(--title-page); }
+@media (max-width: 720px) { #main .page-head h1:not(.dl-h1-long), #main .gate h1 { font-size: var(--title-page-phone); } }
+/* a setting's row reads across on its first line: the name, where it's used and its value share a baseline; the
+ * buttons sit on that line's centre */
+.sec-main { align-items: first baseline; }
+.sec-line { align-items: start; } .sec-line > :is(.btn, .icon-btn) { margin-top: calc(10px + 10px - var(--control-h) / 2); }

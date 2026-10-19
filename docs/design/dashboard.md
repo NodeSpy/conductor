@@ -62,7 +62,7 @@ The rail keeps the everyday destinations; the rarely visited system pages share 
 
 ```
 Home · Chat · Needs you · Activity · Tickets · Workflows · Bots · Browsers
-Settings   Connections · Secrets · Packs · System (Config · Safety · Updates · Logs & audit · Access)
+Settings   Plugins · Secrets · Packs · System (Config · Safety · Updates · Logs & audit · Access)
 ```
 
 Some elements are on every screen:
@@ -125,7 +125,7 @@ Some elements are on every screen:
 | `#/tickets`, `#/tickets/new[?bot=|team=]`, `#/tickets/<id>` | Tickets: the list or board by status; a new ticket; one ticket ([§4.4.1](#441-tickets)) |
 | `#/teams/<t>[/<tab>]` | A team |
 | `#/browser`, `#/browser/<id>`, `#/browser/logins` | Browsers and logins |
-| `#/connectors/<connectors\|runtimes\|languages\|hosts>` | Connections, what conductor can use: Services (each service with its version, updates and connections), Agent runtimes, Code languages, Machines; the catalog pages for a service, runtime or language sit under Connections |
+| `#/connectors/<connectors\|runtimes\|languages\|hosts>` | Plugins, what conductor can use: Connections (each service with its version, updates and its connections), Agent runtimes, Code languages, Machines; the catalog pages for a service, runtime or language sit under Plugins |
 | `#/secrets`, `#/secrets/settings` | Secrets (the vaults at its foot) and Settings (settings and environment variables; old `#/secrets/env` links land here) |
 | `#/extensions/<packs\|browse>`, `#/extensions/pack/<name>`, `#/extensions/source` | Packs (bundles of workflows only): installed, browse packs, a pack's overrides, add from a source; `#/extensions/plugins` lands on Connections |
 | `#/safety` | System → Safety: the sandbox, what each bot may do, and Pause all automation |
@@ -210,6 +210,21 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
 - **Counts** (`UI.count`): one count badge app-wide. Something new or waiting for you is the orange badge (`hot`):
   Needs you, Chat's unread in the rail, the tab bar and the conversation list, and an Approvals tab with something
   pending. A total is plain text, not a badge ("Tickets 4"). No screen draws its own pill (`chatpage.spec`).
+- **One control height** (`--control-h`): every button, icon button, input, select, segmented control and filter
+  menu is 36px (32px in the compact density, 44px on a phone), so controls side by side line up; `.sm` only tightens
+  padding and type; an icon button beside a button takes its height; `.lg` (44px) is a page's one big call to action.
+- **One toolbar**: every list's filter bar is the one component, in one order: the search field (pills, then the text,
+  then Filter by…), conductor's filter menus, More filters, Clear filters, then Group by and a view toggle, all at the
+  control height on one centre line.
+- **One stack gap** (`--gap-stack`): 20px between stacked cards and panels (14px on a phone), never touching; cards
+  side by side in a grid start on one line.
+- **Centred**: a row's parts share its centre line (a heading beside its button, a status word beside an action); a
+  row of columns reads across on its first lines; a collapsed disclosure's title sits in the middle of its card, the
+  same space above and below, and keeps that header when open; a single-line button, chip, pill or row has equal
+  space above and below its text.
+- **Titles**: a page's title is 34px in the serif (27.2px on a phone); a generated, machine-written title (a run's, a
+  ticket's, a browser session's) is the long title, the sans at the h2 size; a bot's or team's header on a phone is
+  24px beside its picture. These are measured on every route, desktop and phone, both themes (`measure.spec`).
 - **Labels** (`UI.label`): plain words in secondary ink, a middot between neighbours; no box, no fill (the status rule
   allows no capsules). A tier name is a plain config value.
 - **Dialogs** (`UI.modal`, drawers, the command line): open on the dialog itself (Enter does nothing until you move to
@@ -999,9 +1014,9 @@ on the ticket.
   **Add / update / remove / hold** are `packs:` edits plus the fetch and lock
   that `conductor init` does, all validated on a copy. `pack_trust:` limits
   sources.
-- **Plugins are not a page of their own.** A plugin is what teaches conductor a service (or an agent runtime, or a
-  code language), and a connection is a configured use of it, so they live together on **Connections**, under "what
-  conductor can use": the **Services** tab lists each service (built in, official, or from a source) with its
+- **Plugins and connections are one page: Plugins.** A plugin is what teaches conductor a service (or an agent
+  runtime, or a code language), and a connection is a configured use of it, so they live together on **Plugins**,
+  under "what conductor can use": the **Connections** tab lists each service (built in, official, or from a source) with its
   version, an update when there is one (Update…, with the step-up), Keep at this version / Show permissions / Remove
   in its ⋯ menu, and its connections under it, each saying whether it's working; a service with no connection yet
   offers Connect. **Add a service** opens one searchable catalog (the official registry) with "from a git URL" in the

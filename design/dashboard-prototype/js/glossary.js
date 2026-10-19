@@ -10,7 +10,7 @@
     agent: ['Agent', 'An AI model run for one step with a prompt, in a sandbox. It finishes with the step; a bot is the one that remembers.'],
     team: ['Team', 'A group of bots that share approvers, limits and knowledge. A bot on a team can only be stricter than its team.'],
     pack: ['Pack', 'A bundle of workflows (and sometimes bots) someone else wrote, installed and updated as one unit.'],
-    plugin: ['Plugin', 'Code that teaches conductor a new service or engine, such as a vendor connector.'],
+    plugin: ['Plugin', 'Code that teaches conductor a new service or engine, such as a vendor connector. The Plugins page lists them: your connections to services, agent runtimes and code languages.'],
     connector: ['Connector', 'Your connection to a service (GitHub, Slack, PagerDuty…): the account and the events it delivers.'],
     verb: ['Verb', 'One action a connector can take, named <instance>.<action>, like gh.comment or slack-ops.post.'],
     tier: ['Tier', 'How much a bot may do with a verb: observe (read only), reversible (can be undone), propose (asks you first), commit_money (spends money, always asks), never.'],

@@ -5,24 +5,17 @@ const { test, expect, go, applyStaged, headAction } = require('./fixtures');
 
 const pickNew = async (page, sel) => { await page.locator(sel).selectOption('__new__'); await expect(page.locator('.cdrawer')).toBeVisible(); };
 
-test('team page: "Add a bot" creates a new bot on the team, applies, and lands back on the team', async ({ page }) => {
+test('team page: "Add a bot" offers the team\'s bots and others, and opens New bot on the team', async ({ page }) => {
   await go(page, '#/teams/platform');
   // the picker starts empty (no bot is moved by default); creating one is its last choice
   await expect(page.locator('#team-add-sel option').first()).toHaveText('Choose a bot…');
   await expect(page.locator('#team-add-sel option').last()).toHaveText(/Create a new bot in this team/);
   await expect(page.locator('#team-add-sel')).toContainText('billing-sre (moves from finance)');
   await page.locator('#team-add-sel').selectOption('__new__');
-  await expect(page).toHaveURL(/#\/bots\/new\/settings\?team=platform/);
-  await expect(page.locator('.page-head .sub')).toContainText(/on team platform/i);
-  await expect(page.locator('#f-df_team')).toHaveValue('platform');
-  await expect(page.locator('.inh-hint').first()).toContainText('team platform'); // inherited, narrowable
-  await page.fill('[id="f-df__name"]', 'platform-cost'); await page.locator('[id="f-df__name"]').blur();
-  await page.locator('[data-act="df-review"]').click();
-  await expect(page.locator('.diff')).toContainText('platform-cost:');
-  await expect(page.locator('.diff')).toContainText('team: platform');
-  await applyStaged(page);
-  await expect(page).toHaveURL(/#\/teams\/platform$/, { timeout: 8000 });
-  await expect(page.locator('.panel', { hasText: 'Bots on this team' })).toContainText('platform-cost');
+  await expect(page).toHaveURL(/#\/bots\/new\?team=platform/); // the one New bot: the sheet, on this team
+  await expect(page.locator('.nb-sheet')).toBeVisible();
+  await page.locator('[data-act="bw-purpose"]').first().click();
+  await expect(page.locator('#bw-team')).toHaveValue('platform');
 });
 
 test('a connector instance created from inside a workflow step; one combined diff', async ({ page }) => {

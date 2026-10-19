@@ -109,7 +109,7 @@ test('the enforced egress allowlist (deny: true with egress) validates; advisory
 test('the phone header names the section on every page, followed in the app (bugs B7, newcomer N4)', async ({ page }) => {
   test.skip(!isPhone(page), 'phone only');
   await go(page, '#/overview', { fresh: true });
-  for (const [tab, title] of [['activity', 'Activity'], ['bots', 'Bots'], ['attention', 'Needs you'], ['overview', 'Home']]) {
+  for (const [tab, title] of [['activity', 'Activity'], ['chat', 'Chat'], ['attention', 'Needs you'], ['overview', 'Home']]) {
     await page.locator(`#tabbar [data-nav="${tab}"]`).click();
     await expect(page.locator('#ph-title')).toHaveText(title);
   }
@@ -177,7 +177,7 @@ test('disabled buttons use the disabled tokens at full opacity (brand M5)', asyn
 });
 
 test('page titles match the nav (brand M11)', async ({ page }) => {
-  for (const [r, t] of [['#/connectors', 'Connections'], ['#/extensions', 'Packs'], ['#/secrets', 'Secrets']]) {
+  for (const [r, t] of [['#/connectors', 'Plugins'], ['#/extensions', 'Packs'], ['#/secrets', 'Secrets']]) {
     await go(page, r, { fresh: true });
     await expect(page.locator('#main h1').first()).toHaveText(t);
   }

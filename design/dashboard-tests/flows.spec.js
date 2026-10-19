@@ -106,20 +106,13 @@ test.describe('bots', () => {
     await applyStaged(page);
     expect(await state(page, () => D.bots[0].cfg.proactive.every)).toBe('2h');
   });
-  test('define a new bot, in shadow mode, with charter and scope', async ({ page }) => {
-    await go(page, '#/bots/new/settings');
-    await page.fill('[id="f-df__name"]', 'docs-steward');
-    await page.fill('[id="f-df_description"]', 'Keeps the API docs honest');
-    await page.locator('[id="f-df_description"]').blur();
-    await page.fill('#df-charter', 'Review docs PRs; never merge.');
-    await page.locator('#df-charter').blur();
-    await page.locator('[data-act="df-review"]').click();
-    await expect(page.locator('.diff')).toContainText('docs-steward:');
-    await expect(page.locator('.diff')).toContainText('shadow: true');
-    await applyStaged(page);
-    await go(page, '#/bots');
-    await expect(page.locator('.m-row[data-bot="docs-steward"]')).toContainText('practice mode');
-    expect(await page.evaluate(() => D.bots.find((b) => b.name === 'docs-steward').cfg.autonomy.shadow)).toBe(true);
+  test('one New bot: the old full-page form opens the New bot sheet, on the team it came from', async ({ page }) => {
+    await go(page, '#/bots/new/settings?team=platform');
+    await expect(page).toHaveURL(/#\/bots\/new\?team=platform$/);
+    await expect(page.locator('.nb-sheet')).toBeVisible();
+    await page.locator('[data-act="bw-purpose"]').first().click();
+    await expect(page.locator('#bw-team')).toHaveValue('platform');
+    await expect(page.locator('a[href="#/bots/new/settings"]')).toHaveCount(0);
   });
   test('access: tier change and promotion are widening config edits; add verb; bind and unbind a credential', async ({ page }) => {
     await go(page, '#/bots/platform-sre/access');
@@ -289,13 +282,13 @@ test.describe('packs and plugins', () => {
     const names = await state(page, () => D.packs.map((p) => p.name));
     expect(names).toContain('hygiene'); expect(names).not.toContain('house-style');
   });
-  test('services: update one with step-up on Connections, install a new one into a new connection', async ({ page }) => {
-    await go(page, '#/extensions/plugins'); // the old Plugins tab lands on Connections
+  test('services: update one with step-up on Plugins, install a new one into a new connection', async ({ page }) => {
+    await go(page, '#/extensions/plugins'); // the old Plugins tab lands on the Plugins page
     await expect(page).toHaveURL(/#\/connectors\/connectors/);
     await page.locator('.svc-head[data-svc="slack"] [data-act="plugin-update"]').click(); await page.locator('#su-go').click();
     await expect(page.locator('.svc-head[data-svc="slack"]')).toContainText('v1.7.0');
     await go(page, '#/extensions/install/connector/aws-cost');
-    await expect(page.locator('.nav a[data-nav="connectors"].on')).toHaveCount(1); // a service's pages sit under Connections (the rail, hidden on a phone, still marks it)
+    await expect(page.locator('.nav a[data-nav="connectors"].on')).toHaveCount(1); // a service's pages sit under Plugins (the rail, hidden on a phone, still marks it)
     await page.fill('#f-inst', 'aws'); await page.fill('#f-set__role_arn', 'arn:aws:iam::000000000000:role/cost-read');
     await page.locator('[data-act="iw-review"]').click();
     await applyStaged(page);

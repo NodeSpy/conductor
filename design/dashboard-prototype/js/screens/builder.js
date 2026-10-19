@@ -681,7 +681,7 @@
       let newId;
       mutate((v) => { const list = WF.at(v, loc); if (!Array.isArray(list)) { if (loc.length === 1) v.steps = []; } const L = WF.at(v, loc) || (v.steps = []); const node = makeStep(v, item); newId = node.id || null; L.splice(i, 0, node); });
       if (newId) { B.open.add(newId); B.sel = newId; drawList(); const c = document.getElementById('card-' + newId); if (c) { c.scrollIntoView({ block: 'center' }); c.classList.add('just-added'); } }
-      if (item.notInstalled) UI.toast(`${esc(item.sub.split(' · ')[0])} needs a plugin`, 'add the connector in Connections; the validator flags it until then', 'wait');
+      if (item.notInstalled) UI.toast(`${esc(item.sub.split(' · ')[0])} needs a plugin`, 'add the connector in Plugins → Connections; the validator flags it until then', 'wait');
     }, { inBranch: loc.length > 1 });
   });
   UI.act('wf-br-add', (b) => { const loc = locOf(b.dataset.loc); let nid; mutate((v) => { const g = WF.at(v, loc); nid = uniqueId(v, 'branch-' + 'abcdefgh'[g.parallel.length]); g.parallel.push([{ id: nid, log: 'new branch' }]); }); if (nid) { B.open.add(nid); drawList(); } });

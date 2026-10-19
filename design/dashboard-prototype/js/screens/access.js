@@ -26,7 +26,7 @@
         <div class="field"><label for="en-name">Name this passkey</label><input class="input" id="en-name" value="${['phone · Face ID', 'desktop · Windows Hello', 'yubikey'][n % 3]}"></div>
         <div class="field"><label>Register on</label>${UI.seg([['tailnet', D.daemon.magicdns], ['localhost', 'localhost only']], en.rp, 'en-rp')}<div class="hint">The tailnet name (the default) works from this box and your phone; this page hands a one-time ticket to <span class="mono">https://${D.daemon.magicdns}:7788/enroll</span>, here or by QR on another device. A localhost-only passkey works only on the box.</div></div>
         <div class="callout warn small" data-count="passkeys:${n}">${n ? `You already have ${n} passkey${n > 1 ? 's' : ''}, so adding a ${ordinal(n + 1)} also needs one of them: you confirm with an existing passkey before the new one registers.` : 'This is your first passkey: the pairing code is the proof.'} Every enrollment is audited and fires <span class="mono">conductor.dashboard_enrolled</span>.</div>
-        <div class="wizard-foot"><button class="btn ghost" data-act="en-cancel">Cancel</button><span class="spacer"></span><button class="btn lg primary" data-act="enroll">${icon('passkey')}Create passkey</button></div>
+        <div class="wizard-foot"><button class="btn lg ghost" data-act="en-cancel">Cancel</button><span class="spacer"></span><button class="btn lg primary" data-act="enroll">${icon('passkey')}Create passkey</button></div>
       </div></div>`) };
   }, { nav: 'security' });
 

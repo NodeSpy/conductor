@@ -85,8 +85,7 @@
       <details class="panel adv"><summary class="panel-head"><h3>Advanced</h3><span class="muted small">where its workers run, who approves, how long an approval lasts</span></summary><div class="panel-body stack" style="gap:12px">
         <div class="row wrap" style="gap:12px"><div class="field"><label for="bw-rt">Worker runtime</label><select class="select mono" id="bw-rt" data-on-change="bw-set" data-k="runtime">${S.view().runtimes.map((r) => `<option${bw.runtime === r.name ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
           <div class="field"><label for="bw-ttl">An approval lasts</label><select class="select mono" id="bw-ttl" data-on-change="bw-set" data-k="ttl">${['1h', '8h', '24h', '72h'].map((x) => `<option${bw.ttl === x ? ' selected' : ''}>${x}</option>`).join('')}</select></div></div>
-        <div class="field"><label>Who may approve <span class="opt">none ticked = ${bw.team ? `team ${esc(bw.team)}'s approvers` : 'every operator'}</span></label><div class="row wrap" style="gap:12px">${Object.keys(S.view().operatorsCfg || {}).map((o) => `<label class="row small"><input type="checkbox" class="cbx" data-on-change="bw-op" data-k="${esc(o)}"${bw.operators.includes(o) ? ' checked' : ''}>${esc(o)}</label>`).join('')}</div></div>
-        <a class="link small" href="#/bots/new/settings">Open the full definition form instead</a></div></details>`; }
+        <div class="field"><label>Who may approve <span class="opt">none ticked = ${bw.team ? `team ${esc(bw.team)}'s approvers` : 'every operator'}</span></label><div class="row wrap" style="gap:12px">${Object.keys(S.view().operatorsCfg || {}).map((o) => `<label class="row small"><input type="checkbox" class="cbx" data-on-change="bw-op" data-k="${esc(o)}"${bw.operators.includes(o) ? ' checked' : ''}>${esc(o)}</label>`).join('')}</div></div></div></details>`; }
     const c = botCfg(), evs = chosenEvents();
     return `<div class="panel"><div class="list">
         <div class="item"><span class="caps" style="width:120px">bot</span><span class="grow"><b class="mono">${esc(bw.name)}</b> ${bw.description ? `<span class="muted">· ${esc(bw.description)}</span>` : ''}${bw.team ? ' ' + tag('team ' + bw.team) : ''}${c.autonomy.shadow ? ' ' + tag('shadow', 'wait') : ''}</span></div>
@@ -100,7 +99,8 @@
   /* New bot is a large sheet over the Bots page (the chosen option A): you can see where you came from; a ✕ where people
      look for it, Esc, or the scrim closes it (asking first only once something's been entered); a thin progress line
      instead of a big stepper; full screen on a phone. */
-  UI.route('bots/new', () => { const why = canNext(), pct = Math.round(((bw.at + 1) / STEPS.length) * 100);
+  UI.route('bots/new', () => { const qt = new URLSearchParams(location.hash.split('?')[1] || '').get('team'); if (qt && bw.at === 0 && !bw.purpose && D.teams.some((t) => t.name === qt)) bw.team = qt; // New bot from a team's page starts on that team
+    const why = canNext(), pct = Math.round(((bw.at + 1) / STEPS.length) * 100);
     return `${UI.botsPage ? `<div class="nb-under" aria-hidden="true" inert>${UI.botsPage()}</div>` : ''}<div class="nb-scrim" aria-hidden="true"></div>
     <section class="nb-sheet" role="dialog" aria-modal="true" aria-labelledby="nb-title" tabindex="-1">
       <header class="nb-head"><button type="button" class="icon-btn nb-x bw-close" data-act="bw-close" aria-label="Close the new bot (Esc)">${icon('x')}<span class="sr-only">Close</span></button>
