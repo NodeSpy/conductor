@@ -342,6 +342,9 @@ func TestTicketDelegatedWorkComesBack(t *testing.T) {
 		t.Fatal("the outcome did not come back to the lead")
 	}
 	bt, _ := f.svc.TicketShow(bc.Ticket)
+	if bt.CreatedBy != "bot:lead" || len(bt.History) == 0 || bt.History[0].What != "created (in_progress)" {
+		t.Fatalf("a delegated ticket's creator and history: %s %+v", bt.CreatedBy, bt.History)
+	}
 	if len(bt.Comments) != 1 || bt.Comments[0].By != "bot:b" || bt.Links["delegated_from"] != "lead/"+v.ID {
 		t.Fatalf("b's ticket: %+v", bt)
 	}

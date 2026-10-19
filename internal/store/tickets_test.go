@@ -40,6 +40,9 @@ func TestTicketMigration(t *testing.T) {
 	if c2.CreatedBy != "operator:ops" || c1.CreatedBy != "pd.incident" || c3.CreatedBy != "bot:web" {
 		t.Fatalf("created by: %s %s %s", c2.CreatedBy, c1.CreatedBy, c3.CreatedBy)
 	}
+	if len(c2.History) != 1 || c2.History[0].What != "migrated from a case (open → in_progress)" || c2.History[0].By != "operator:ops" {
+		t.Fatalf("migration history: %+v", c2.History)
+	}
 	disk, _ := os.ReadFile(filepath.Join(dir, "bots.json"))
 	if strings.Contains(string(disk), `"status": "open"`) || !strings.Contains(string(disk), `"ticket": "T-2"`) {
 		t.Fatalf("not written back:\n%s", disk)

@@ -196,13 +196,15 @@ func caseOrder(a, b *Case) bool {
 // migrateCase brings one pre-ticket case to a ticket (true when it changed).
 func migrateCase(c *Case, bot string, next func() string) bool {
 	changed := false
+	was := c.Status
 	switch c.Status {
 	case "open":
 		c.Status, changed = TicketInProgress, true
 	case "closed":
 		c.Status, changed = TicketDone, true
 	}
-	if c.Ticket == "" {
+	fresh := c.Ticket == ""
+	if fresh {
 		c.Ticket, changed = next(), true
 	}
 	if c.Assignee == "" {
@@ -218,12 +220,21 @@ func migrateCase(c *Case, bot string, next func() string) bool {
 	if c.CreatedBy == "" {
 		c.CreatedBy, changed = createdByOf(c), true
 	}
+	if fresh && len(c.History) == 0 {
+		what := "created (" + c.Status + ")"
+		if was == "open" || was == "closed" {
+			what = "migrated from a case (" + was + " → " + c.Status + ")"
+		}
+		c.History = append(c.History, TicketChange{At: c.Created, By: c.CreatedBy, What: what})
+	}
 	return changed
 }
 
 // createdByOf names who opened a pre-ticket case.
 func createdByOf(c *Case) string {
 	switch {
+	case c.Delegation != nil && c.Delegation.From != "":
+		return "bot:" + c.Delegation.From // a delegation: the delegating bot wrote it
 	case c.RequesterClass == "operator" && c.Requester != "":
 		return "operator:" + c.Requester
 	case strings.HasPrefix(c.Requester, "bot:"):
