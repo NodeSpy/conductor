@@ -368,7 +368,7 @@
   function hero(m, sub) {
     const t = teamOf(m), open = D.cases.filter((c) => c.bot === m.name && c.status === 'open'), cur = open[0];
     const role = (S.staged('bots', m.name) || m.cfg || {}).description || m.role || (t ? `A bot on the ${t.name} team` : 'A bot');
-    const now = m.shadow ? UI.statusMark('shadow', 'Shadow: practice mode') : m.home === 'live' ? UI.statusMark('run', 'Running') : UI.statusMark('idle', 'Parked');
+    const now = m.shadow ? UI.statusMark('shadow', 'Shadow: practice mode') : UI.botWorking(m.name) ? UI.statusMark('run', 'Working') : m.home === 'live' ? '<span class="dl-sub bot-live">Live</span>' : UI.statusMark('idle', 'Parked');
     return `${UI.crumbs([['Bots', '#/bots'], t ? [t.name, `#/teams/${t.name}`] : null, sub ? [UI.botName(m.name), `#/bots/${m.name}`] : [UI.botName(m.name)], ...(sub || [])])}
       <div class="dl-bothead">${UI.botAv(m.name, 'xl')}<div><h1>${esc(UI.botName(m.name))}${UI.botName(m.name) !== m.name ? ` <span class="bav-id h1-id">${esc(m.name)}</span>` : ''}</h1><p class="dl-lead">${esc(role)}</p>${cur && m.home === 'live' ? `<p class="bot-working">Working on: <a href="#/tickets/${cur.id}">${esc(cur.title)}</a></p>` : ''}</div>${now}
         <button class="icon-btn" data-act="bot-more" data-m="${m.name}" aria-label="More for ${esc(m.name)}">${icon('more')}</button></div>`;

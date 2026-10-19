@@ -42,6 +42,9 @@
   UI.act('mk-use', () => { const m = Object.assign({}, pk.m), f = pk.onPick; UI.closeModal(); if (f) f(m); });
   /** A bot's picture field: its mascot now, and Change… (opens the picker). */
   UI.mascotField = (m, act, attrs = '') => `<div class="mk-field">${pv(m, 'lg')}<span class="dl-sub">${esc(MASCOT.SHAPES.find((x) => x[0] === m.shape)[1])} · ${esc(MASCOT.EYES.find((x) => x[0] === m.eyes)[1].toLowerCase())} · ${esc(m.color)}</span><button type="button" class="btn sm secondary" data-act="${act}" ${attrs}>Change…</button></div>`;
+  /** Is the bot executing right now (a worker of its running)? The spinner is for that alone (59); a live session that's
+   *  idle is not "running". */
+  UI.botWorking = (b) => (window.D.workers || []).some((w) => (w.bot || 'platform-sre') === b && w.status === 'run');
   UI.botWho = (b) => { const n = UI.botName(b); return `<b class="bav-name">${esc(n)}</b>${n !== b ? ` <span class="bav-id">${esc(b)}</span>` : ''}`; };
   /** A team's picture: its own icon in its colour, its uploaded image, or its initials on a tile (never a bot's face). */
   UI.teamAv = (t, size = 'sm') => { const id = (window.D.teamIdentity || {})[t] || {};

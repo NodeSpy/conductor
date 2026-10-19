@@ -620,7 +620,7 @@ button.dl-tile { font: inherit; text-align: left; color: inherit; cursor: pointe
 .sec-val { color: var(--color-text-primary); overflow-wrap: anywhere; }
 .sec-when svg { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; }
 .sec-copy { flex: none; }
-.vaults { margin-top: 28px; } .vaults .section-title, #env .section-title, #settings .section-title { display: flex; align-items: center; gap: 12px; } .vaults-add { margin-left: auto; }
+.vaults { margin-top: 28px; } .vaults .section-title, #env .section-title, #settings .section-title, .sec-title { display: flex; align-items: center; gap: 12px; } .vaults-add { margin-left: auto; }
 #env { margin-top: 28px; }
 @media (max-width: 720px) { .sec-explain { grid-template-columns: 1fr; } .sec-copy { display: none; } }
 .sec-name .sec-ref { background: none; border: 0; padding: 0; margin: 0; font-size: 12px; color: var(--color-text-tertiary); }
@@ -635,7 +635,7 @@ button.dl-tile { font: inherit; text-align: left; color: inherit; cursor: pointe
 .svc-list > .dl-conn { margin-left: 18px; }
 .svc-list > .svc-empty { margin-left: 18px; padding: 8px 0 12px; list-style: none; }
 @media (max-width: 720px) { .svc-list > .svc-head { flex-wrap: wrap; } .svc-list > .dl-conn, .svc-list > .svc-empty { margin-left: 0; } }
-@media (max-width: 720px) { .vaults .section-title, #env .section-title, #settings .section-title { flex-wrap: wrap; } .vaults .section-title h2, #env .section-title h2, #settings .section-title h2 { flex: 1 1 100%; } .vaults-add { margin-left: 0; }
+@media (max-width: 720px) { .vaults .section-title, #env .section-title, #settings .section-title, .sec-title { flex-wrap: wrap; } .vaults .section-title h2, #env .section-title h2, #settings .section-title h2 { flex: 1 1 100%; } .vaults-add { margin-left: 0; }
   .svc-head .svc-name { flex: 1 1 160px; } .svc-head .dl-na { margin-left: auto; } }
 /* the facts line (UI.facts): one object icon and one value per fact, quiet ink, gaps not separators; a fact that
    leads somewhere is underlined; a risky action in bold ink; production with the warning mark in its colour. On a

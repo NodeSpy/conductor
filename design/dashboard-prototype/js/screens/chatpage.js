@@ -13,7 +13,7 @@
   const M = (n) => D.bots.find((b) => b.name === n);
   const teamBots = (t) => D.bots.filter((b) => b.cfg && b.cfg.team === t).map((b) => b.name);
   const leadOf = (t) => { const x = D.teams.find((y) => y.name === t); return (x && ((S.staged('teams', t) || x.cfg || {}).routing || {}).lead) || teamBots(t)[0]; };
-  const working = (b) => (D.workers || []).some((w) => (w.bot || 'platform-sre') === b && w.status === 'run');
+  const working = (b) => UI.botWorking(b);
   // a team is its own picture (its initials unless it has one), never a bot's face
   const stack = (t, size = 'list') => UI.teamAv(t, size);
   const lastOf = (L) => [...(L || [])].reverse().find((c) => c.who === 'bot' || c.who === 'op');

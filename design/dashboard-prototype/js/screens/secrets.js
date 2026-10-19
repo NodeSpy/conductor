@@ -143,11 +143,12 @@
     return `<div class="callout danger small" style="margin-bottom:14px">${UI.statusMark('fail', '')}<span class="grow"><b>${esc(bad.name)} can’t be reached:</b> ${how ? `${esc(how)}, which unlocks it, ` : 'its unlock '}expired 2 h ago. Nothing uses ${esc(bad.name)} yet, so no connection is affected.</span><a class="btn sm secondary" href="#/secrets?show=vault-${esc(bad.name)}">See the vault</a></div>`; };
   const tabsHTML = (on) => UI.tabs([['secrets', 'Secrets', '#/secrets', D.secrets.length], ['settings', 'Settings', '#/secrets/settings', D.settings.length + (S.view().env || []).length]], on);
   UI.route('secrets', () => `<div class="page dl-page">
-    <div class="dl-phead"><div><h1>Secrets</h1></div><div class="dl-actions tight"><button class="btn primary" data-act="secret-add">${icon('key')}Add a secret</button></div></div>
+    <div class="dl-phead"><div><h1>Secrets</h1></div></div>
     ${tabsHTML('secrets')}
     ${explain('secrets')}
     ${failBanner()}
     ${secBar()}
+    <div class="section-title sec-title"><h2>Secrets</h2><span class="caps">used in config as {{ vault "…" "…" }}</span><button class="btn sm secondary vaults-add" data-act="secret-add">${icon('plus')}Add a secret</button></div>
     <div class="panel"><ul class="dl-list sec-list" id="sec-body">${rows()}</ul><div class="panel-foot small muted">${icon('eyeoff')} No screen, API route or log line returns a secret’s value; values are redacted from logs and the audit trail.</div></div>
     ${vaultsHTML()}
   </div>`, { nav: 'secrets' });
