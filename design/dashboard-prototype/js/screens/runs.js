@@ -256,7 +256,7 @@
       <div class="dl-phead"><div><h1 class="dl-h1-long">${title}</h1>${lead ? `<p class="dl-lead">${lead}</p>` : ''}</div>${UI.statusMark(UI.runS(r.status), UI.runWord(r.status), { lg: true })}</div>
       <div class="dl-actions">${actions}</div>
       <div class="dl-cols"><div class="dl-col-main">
-        <section class="dl-card"><header class="dl-ch"><h2>What happened</h2><span class="dl-sub">${rec.steps.length} steps · ${r.status === 'run' ? 'running' : UI.durText(rec.total)}</span></header>${tree(r, rec, s.id)}</section>
+        <section class="dl-card"><header class="dl-ch"><h2>What happened</h2><span class="dl-sub">${rec.steps.length} step${rec.steps.length === 1 ? '' : 's'} · ${r.status === 'run' ? 'running' : UI.durText(rec.total)}</span></header>${tree(r, rec, s.id)}</section>
         ${stepCard(r, rec, s)}</div>
         <div class="dl-col-side"><section class="dl-card"><header class="dl-ch"><h2>Details</h2></header>${UI.facts(facts)}${auditFacts}</section>
           <details class="dl-card dl-files-d run-audit"><summary class="panel-head"><h3>Audit trail</h3><span class="muted small">${audit.length} event${audit.length === 1 ? '' : 's'} for this run</span></summary><ul class="dl-list">${audit.slice(0, 6).map((a) => `<li class="dl-audit"><span class="dl-nt"><b>${esc(a.event.replace(/_/g, ' '))}</b><span class="dl-why">${esc(a.detail || '')}</span></span><span class="dl-age">${UI.agoText(a.ts)}</span></li>`).join('')}</ul><p class="dl-foot-note"><a class="dl-link" href="#/logs/audit?run=${r.id}">The full audit log for this run →</a></p></details></div></div>

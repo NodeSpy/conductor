@@ -30,12 +30,12 @@
   const quiet = (m) => { const n = needOf(m.name); return n ? `<a class="q-st need" href="#/attention">${UI.mark('ember')}${n} need${n > 1 ? '' : 's'} you</a>` : UI.botWorking(m.name) ? `<a class="q-st" href="#/activity?bot=${encodeURIComponent(m.name)}">${UI.mark('run')}Working</a>` : ''; }; // the spinner only while it executes
   const facts = (m, o = {}) => UI.factsLine([o.team ? (teamOf(m.name) ? { icon: 'obj-team', value: teamOf(m.name), href: `#/teams/${teamOf(m.name)}`, pri: 1, label: 'Team' } : { icon: 'obj-team', value: 'solo', pri: 1, label: 'Not on a team' }) : null,
     teamOf(m.name) && leadOf(teamOf(m.name)) === m.name ? { icon: 'sparkle', value: 'lead', pri: 1, label: 'Leads its team' } : null,
-    archived(m.name) ? { icon: 'box', value: 'archived', pri: 1, label: 'Switched off' } : practice(m.name) ? { icon: 'ghost', value: 'practice mode', pri: 1, label: 'Proposes, never acts' } : { icon: 'play', value: 'live', pri: 3, label: 'Acts as allowed' },
+    archived(m.name) ? { icon: 'box', value: 'archived', pri: 1, label: 'Switched off' } : practice(m.name) ? { icon: 'ghost', value: 'practice mode', pri: 1, label: 'Says what it would do, never acts' } : null /* acting for real is the default: no word for it (r5: 'live' collided with a session's Live) */,
     { icon: 'shield', value: mayWords(m), href: `#/bots/${m.name}/access`, pri: 2, label: 'What it may do' },
     connsOf(m.name).length ? { icon: 'link', value: connsOf(m.name).join(', '), pri: 2, label: 'Connected to' } : null, { icon: 'code', value: modelOf(m.name), pri: 3, label: 'Model or runtime' }]);
 
   /* ---------- a team, in words ---------- */
-  const CEIL = { observe: 'Its bots only read', reversible: 'Its bots do undoable things on their own; ask before the rest', propose: 'Its bots ask before anything that changes something', commit_money: 'Its bots may spend within the budget' };
+  const CEIL = { observe: 'Its bots only read', reversible: 'On their own, its bots do only things that can be undone; they ask before the rest', propose: 'Its bots ask before anything that changes something', commit_money: 'Its bots may spend within the budget' };
   const teamFacts = (t) => { const c = cfgOf('teams', t), d = c.defaults || {}, ceil = S.getPath(c, 'autonomy.ceiling') || S.getPath(d, 'autonomy.max_tier'), ops = c.operators || d.operators || [], rules = S.getPath(c, 'routing.rules') || [], fb = S.getPath(c, 'routing.fallback');
     // dollar budgets only when spend is shown (usage display: api); otherwise the run budget, never a dollar figure
     const dollars = UI.usageMode && UI.usageMode() === 'api';

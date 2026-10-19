@@ -157,7 +157,7 @@ test('details change in place; a ticket shows its linked work', async ({ page })
   await page.locator('#gen-submit').click();
   await expect(page.locator('.tk-head .fx')).toContainText('Scout');
   await expect(page.locator('.tk-hist')).toContainText('Assigned');
-  await go(page, '#/bots/web-triage/cases');
+  await go(page, '#/bots/web-triage/tickets');
   await expect(page.locator('.dl-tabs a[aria-current="page"]')).toContainText('Tickets');
   await reveal(page, 'SEV2 api p99 latency');
   await expect(page.locator('.tk-card', { hasText: 'SEV2 api p99 latency' })).toBeVisible();
@@ -174,7 +174,7 @@ test('make a ticket from a chat message; old task links open the ticket', async 
   await page.locator('[data-act="tk-create"][data-stage="ready"]').click();
   await expect(page.locator('.tk-chat')).toContainText('Made from a message in platform-sre’s chat');
   // a ticket opened from a bot's Tickets tab stays in the bot's page, the tab selected and the path in the breadcrumb
-  await go(page, '#/bots/platform-sre/cases/c29');
+  await go(page, '#/bots/platform-sre/tickets/c29');
   await expect(page.locator('.dl-crumbs')).toHaveText(/Bots\s*›\s*platform\s*›\s*Atlas\s*›\s*Tickets\s*›\s*SEV2 api p99 latency > 2s/);
   await expect(page.locator('.dl-tabs a[aria-current="page"]')).toContainText('Tickets');
   await expect(page.locator('.tk-head h1')).toHaveText('SEV2 api p99 latency > 2s');

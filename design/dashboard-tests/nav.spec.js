@@ -5,7 +5,7 @@ const { test, expect, go } = require('./fixtures');
 
 const DRILL = [
   ['#/bots/platform-sre/proposals/p12', ['Bots', 'platform', 'Atlas', 'Approvals'], 'Replace the production web server'],
-  ['#/bots/platform-sre/cases/c29', ['Bots', 'platform', 'Atlas', 'Tickets'], 'SEV2 api p99 latency > 2s'],
+  ['#/bots/platform-sre/tickets/c29', ['Bots', 'platform', 'Atlas', 'Tickets'], 'SEV2 api p99 latency > 2s'],
   ['#/bots/platform-sre', ['Bots', 'platform'], 'Atlas'],
   ['#/teams/platform/routing', ['Bots'], 'platform'],
   ['#/tickets/c29', ['Tickets'], 'SEV2 api p99 latency > 2s'],
@@ -38,7 +38,7 @@ for (const [route, links, here] of DRILL) {
 }
 
 test('a tab drilled into keeps its tab selected; the content starts the standard gap below the tabs', async ({ page }) => {
-  for (const [route, tab] of [['#/bots/platform-sre/cases/c29', 'Tickets'], ['#/bots/platform-sre/cases', 'Tickets'], ['#/bots/platform-sre/chat', 'Chat'], ['#/teams/platform/routing', 'Routing']]) {
+  for (const [route, tab] of [['#/bots/platform-sre/tickets/c29', 'Tickets'], ['#/bots/platform-sre/tickets', 'Tickets'], ['#/bots/platform-sre/chat', 'Chat'], ['#/teams/platform/routing', 'Routing']]) {
     await go(page, route, { fresh: true });
     const tabs = page.locator('#main .dl-tabs:not(.dl-subnav), #main .tabs').first();
     await expect(tabs.locator('[aria-current="page"], .on').first()).toContainText(tab);

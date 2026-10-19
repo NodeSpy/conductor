@@ -120,8 +120,8 @@ test('links are pairs of bots (bot_links), never whole teams; a lead change is a
 /* ---------- bots: solo or on a team; delegation between teammates ---------- */
 
 test('old member links land on the bots pages', async ({ page }) => {
-  await go(page, '#/members/platform-sre/cases');
-  await expect(page).toHaveURL(/#\/bots\/platform-sre\/cases/);
+  await go(page, '#/members/platform-sre/tickets');
+  await expect(page).toHaveURL(/#\/bots\/platform-sre\/tickets/);
   await expect(page.locator('.page-head, .dl-bothead').first()).toContainText('platform-sre');
   await go(page, '#/bots');
   await expect(page.locator('#main h1')).toContainText('Bots');
@@ -129,7 +129,7 @@ test('old member links land on the bots pages', async ({ page }) => {
 });
 
 test('a case shows its delegation edges with status and the reported result', async ({ page }) => {
-  await go(page, '#/bots/platform-sre/cases/c29');
+  await go(page, '#/bots/platform-sre/tickets/c29');
   const d1 = page.locator('.item.deleg[data-deleg="d1"]');
   await expect(d1).toContainText('delegated by Atlas → Delta');
   await expect(d1).toContainText('done');
@@ -143,20 +143,20 @@ test('a case shows its delegation edges with status and the reported result', as
 });
 
 test('closing a delegated case reports its result back to the delegating case', async ({ page }) => {
-  await go(page, '#/bots/web-triage/cases/c36');
+  await go(page, '#/bots/web-triage/tickets/c36');
   await expect(page.locator('.item.deleg.inbound')).toContainText('running');
   await page.fill('#say', 'Canary shows the same p99 step at 14:03.');
   await page.locator('#say').press('Enter');
   await expect(page.locator('#msgs .cm-op')).toContainText('Canary shows the same p99 step');
   await page.locator('[data-act="case-close"]').click();
   await expect(page.locator('.item.deleg.inbound')).toContainText('done');
-  await go(page, '#/bots/platform-sre/cases/c29');
+  await go(page, '#/bots/platform-sre/tickets/c29');
   await expect(page.locator('.item.deleg[data-deleg="d2"] .deleg-result')).toContainText('Canary shows the same p99 step');
   await expect(page.locator('.tk-chat #msgs')).toContainText('Reporting back on the part I was handed: Canary shows the same p99 step');
 });
 
 test('have a bot delegate to a teammate; the child case works under the original requester', async ({ page }) => {
-  await go(page, '#/bots/platform-sre/cases/c29');
+  await go(page, '#/bots/platform-sre/tickets/c29');
   await page.locator('[data-act="case-delegate"]').click();
   await page.selectOption('#f-to', 'platform-data');
   await page.fill('#f-task', 'Split p99 by AMI for the incident window and report the worst route.');
@@ -172,7 +172,7 @@ test('have a bot delegate to a teammate; the child case works under the original
 
 test('across teams, delegation exists only between linked bots; a bot with no link has no one to delegate to', async ({ page }) => {
   // billing-sre and platform-sre list each other as peers: linked
-  await go(page, '#/bots/billing-sre/cases/c7');
+  await go(page, '#/bots/billing-sre/tickets/c7');
   await page.locator('[data-act="case-delegate"]').click();
   await page.selectOption('#f-to', 'platform-sre');
   await page.fill('#f-task', 'Which NAT gateways does platform own?');
@@ -186,7 +186,7 @@ test('across teams, delegation exists only between linked bots; a bot with no li
   await expect(page.locator('[data-field="to"] .ferr')).toContainText("aren't linked");
   await page.locator('.modal [data-close]').first().click();
   // a solo bot with no links can't delegate at all
-  await go(page, '#/bots/release-scribe/cases');
+  await go(page, '#/bots/release-scribe/tickets');
   await headAction(page, '[data-act="m-deliver"]');
   await page.fill('#f-title', 'Draft notes for v2.14'); await page.locator('#gen-submit').click();
   await expect(page.locator('button', { hasText: 'Hand off part of it' })).toHaveAttribute('aria-disabled', 'true');

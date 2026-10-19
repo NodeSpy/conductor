@@ -261,7 +261,7 @@
   /* ---------- a bot's tickets and a team's tickets: the same rows, narrowed ---------- */
   UI.botTickets = (m) => { const list = D.cases.filter((c) => c.bot === m.name);
     return `<section class="tk-in"><header class="dl-ch tk-inh"><p class="dl-sub">Tickets assigned to ${UI.nm(m.name)}: from you, a chat, an event or its own checks. It keeps its notes on each and the parts it hands to teammates.</p><span class="dl-sp"></span><a class="btn sm secondary" href="#/tickets/new?bot=${encodeURIComponent(m.name)}">${icon('plus')}New ticket for it</a></header>
-      ${UI.ticketList(list, { noAssignee: true, base: `#/bots/${m.name}/cases`, none: `Nothing assigned to ${esc(m.name)}.` })}</section>`; };
+      ${UI.ticketList(list, { noAssignee: true, base: `#/bots/${m.name}/tickets`, none: `Nothing assigned to ${esc(m.name)}.` })}</section>`; };
   UI.teamTickets = (t) => { const list = D.cases.filter((c) => c.team === t.name || teamOf(c) === t.name);
     return `<section class="tk-in"><header class="dl-ch tk-inh"><p class="dl-sub">Tickets for team ${esc(t.name)} and its bots. One for the team goes to its lead or routing, which picks a bot.</p><span class="dl-sp"></span><a class="btn sm secondary" href="#/tickets/new?team=${encodeURIComponent(t.name)}">${icon('plus')}New ticket for the team</a></header>
       ${UI.ticketList(list, { none: `No tickets for ${esc(t.name)}.` })}</section>`; };

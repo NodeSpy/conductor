@@ -403,7 +403,7 @@ Primary Postgres for the platform services (acme/api, acme/web).
     skill: { verbs: ['gh.get_*', 'gh.label', 'gh.comment'] }, autonomy: { shadow: true, tiers: { observe: ['gh.get_*'], propose: ['gh.label', 'gh.comment'] }, promote: [], approval_ttl: '24h' } });
   D.charters = {
     'platform-sre': 'You are the platform services\' first-line SRE. Triage pages, investigate with read-only tools, propose fixes, and escalate per the policy below.\n\n## Proactive checks\n- error budgets for api and web\n- NAT and egress cost vs last week\n',
-    'billing-sre': 'You watch cost and billing. Forecast monthly spend, flag jumps over 20%, and never move money without an approved proposal.\n',
+    'billing-sre': 'You watch cost and billing. Forecast monthly spend, flag jumps over 20%, and never move money without an approval.\n',
     'web-triage': 'Label and route new issues on acme/web. Ask for reproduction steps when missing.\n',
   };
   D.identities = [

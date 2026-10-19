@@ -95,7 +95,7 @@
     const syn = [{ ts: r.started, event: 'run_started', who: r.id, detail: `${r.workflow} · ${r.trigger}${UI.runTarget(r) ? ' · ' + UI.runTarget(r) : ''}` }];
     rec.steps.filter((s) => s.kind === 'verb' && s.status === 'ok').forEach((s) => syn.push({ ts: at(s.t0 + s.ms), event: 'verb', who: r.id, detail: `${s.what}${UI.runTarget(r) ? ' ' + UI.runTarget(r) : ''} · step ${s.id}` }));
     rec.steps.filter((s) => s.diff && s.status === 'ok').forEach((s) => syn.push({ ts: at(s.t0 + s.ms), event: 'agent_commit', who: r.id, detail: `step ${s.id} · ${s.diff.file}` }));
-    if (r.status === 'ok' && r.finished) syn.push({ ts: r.finished, event: 'workflow_done', who: r.id, detail: `${r.workflow} · ${rec.steps.length} steps` });
+    if (r.status === 'ok' && r.finished) syn.push({ ts: r.finished, event: 'workflow_done', who: r.id, detail: `${r.workflow} · ${rec.steps.length} step${rec.steps.length === 1 ? '' : 's'}` });
     const seen = new Set(own.map((a) => a.event)); return own.concat(syn.filter((a) => !(a.event === 'workflow_failed' && seen.has(a.event)))).sort((a, b) => new Date(b.ts) - new Date(a.ts)); };
   /** "What happened / What you can do" for a run, in words. */
   UI.runStory = (r) => { const rec = UI.runRecord(r), f = rec.steps.find((s) => s.id === rec.failAt);

@@ -178,7 +178,7 @@ UI.afterRender.push((main) => { if (main.querySelector('#msgs')) UI.chatAnchor()
     if (t) { out.push({ key: 'everyone', word: 'everyone', sub: `everyone on team ${t}`, kind: 'all' }); const lead = leadOf(t);
       members(t).forEach((b) => out.push({ key: b, word: UI.botName(b), sub: b + (b === lead ? ' · lead' : ''), kind: 'bot' })); }
     D.bots.filter((b) => !t || !members(t).includes(b.name)).forEach((b) => out.push({ key: b.name, word: UI.botName(b.name), sub: b.name + (b.cfg && b.cfg.team ? ` · team ${b.cfg.team}` : ''), kind: 'bot' }));
-    D.teams.filter((x) => x.name !== t).forEach((x) => out.push({ key: 'team:' + x.name, word: x.name, sub: `team · ${members(x.name).length} bots`, kind: 'team' }));
+    D.teams.filter((x) => x.name !== t).forEach((x) => out.push({ key: 'team:' + x.name, word: x.name, sub: `team · ${members(x.name).length} bot${members(x.name).length === 1 ? '' : 's'}`, kind: 'team' }));
     return out; };
   // every word a mention can be: a bot's display name or id, a team's name, everyone
   const words = () => { const m = new Map(); D.bots.forEach((b) => { m.set(UI.botName(b.name).toLowerCase(), b.name); m.set(b.name.toLowerCase(), b.name); }); D.teams.forEach((t) => m.set(t.name.toLowerCase(), 'team:' + t.name)); m.set('everyone', 'everyone'); return m; };

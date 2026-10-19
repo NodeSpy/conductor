@@ -975,3 +975,6 @@ html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radiu
 .card-acts > .btn.ghost:first-child:hover, .card-acts > .btn.ghost:last-child:hover { background: none; text-decoration: underline; text-underline-offset: 3px; }
 .ke-path { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: baseline; } .ke-path > .muted { grid-column: 2; }
 @media (max-width: 720px) { .tk-colpick.scrolls { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); } .tk-colpick.scrolls.at-end { mask-image: none; -webkit-mask-image: none; } }
+/* a secret's row leads with its name; its exact reference shows when you open it (and ⋯ Copy the reference), never as a
+   louder mono line under every name (r5 minor) */
+.sec-row:not(.open) .sec-ref { display: none; }

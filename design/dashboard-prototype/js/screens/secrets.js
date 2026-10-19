@@ -148,7 +148,7 @@
     ${explain('secrets')}
     ${failBanner()}
     ${secBar()}
-    <div class="section-title sec-title"><h2>Secrets</h2><span class="caps">used in config as {{ vault "…" "…" }}</span><button class="btn sm secondary vaults-add" data-act="secret-add">${icon('plus')}Add a secret</button></div>
+    <div class="section-title sec-title"><h2>In your vaults</h2><button class="btn sm secondary vaults-add" data-act="secret-add">${icon('plus')}Add a secret</button></div>
     <div class="panel"><ul class="dl-list sec-list" id="sec-body">${rows()}</ul><div class="panel-foot small muted">${icon('eyeoff')} No screen, API route or log line returns a secret’s value; values are redacted from logs and the audit trail.</div></div>
     ${vaultsHTML()}
   </div>`, { nav: 'secrets' });

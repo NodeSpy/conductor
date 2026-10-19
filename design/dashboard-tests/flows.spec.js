@@ -144,7 +144,7 @@ test.describe('bots', () => {
     expect(await state(page, () => D.access.credentials.some((c) => c.name === 'grafana'))).toBe(false);
   });
   test('ledger operations are immediate: deliver, note, close, revoke a login, memory commit, stop a worker', async ({ page }) => {
-    await go(page, '#/bots/platform-sre/cases');
+    await go(page, '#/bots/platform-sre/tickets');
     await headAction(page, '[data-act="m-deliver"]');
     await page.fill('#f-title', 'Check the NAT gateway bill'); await submit(page);
     await expect(page.locator('.case-head')).toContainText(/delivered to/i);

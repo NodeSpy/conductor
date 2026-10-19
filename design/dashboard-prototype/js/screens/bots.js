@@ -69,20 +69,20 @@
         { k: 'shadow', type: 'bool', label: 'Practice mode', on: 'every bot on the team says what it would do; nothing it does is real' },
         { k: 'sandbox', type: 'seg', label: 'Sandbox', options: [['required', 'always'], ['optional', 'when it’s on']], help: 'Always: its bots start only while conductor’s sandbox is on.' },
         { k: 'handoff', type: 'bool', label: 'Sessions you can take over', on: 'its bots may start a session a person can take over' },
-        { section: 'Talking and delegating', k: 'peers', type: 'seg', label: 'Teammates', options: [['team', 'may message each other'], ['none', 'only explicit links']] },
-        { k: 'depth', type: 'number', label: 'Delegation · most hops', ph: '3 (default)' },
-        { section: 'Budgets', k: 'pool_runs', type: 'number', label: 'Proactive sweeps · runs / day (shared pool)' },
-        { k: 'pool_turns', type: 'number', label: 'Proactive sweeps · model turns / day' },
-        { k: 'pool_tokens', type: 'string', label: 'Proactive sweeps · tokens / day', ph: '500k' },
-        { k: 'pool_cost', type: 'number', label: 'Proactive sweeps · USD / day (model spend)', show: () => UI.isApi() },
+        { section: 'Talking and handing off', k: 'peers', type: 'seg', label: 'Its bots', options: [['team', 'may message each other'], ['none', 'only explicit links']] },
+        { k: 'depth', type: 'number', label: 'Hand-offs · how many times work may be passed on', ph: '3 (default)' },
+        { section: 'Budgets', k: 'pool_runs', type: 'number', label: 'Check-ins on their own · a day (shared by its bots)' },
+        { k: 'pool_turns', type: 'number', label: 'Check-ins · model replies a day' },
+        { k: 'pool_tokens', type: 'string', label: 'Check-ins · tokens a day', ph: '500k' },
+        { k: 'pool_cost', type: 'number', label: 'Check-ins · model spend a day (USD)', show: () => UI.isApi() },
         { k: 'cap_action', type: 'number', label: 'Cloud spending limit · per action', help: 'Real money a bot may commit in one approved action. Not model spend.' },
-        { k: 'cap_period', type: 'number', label: 'Cloud spend cap · per 30 days' },
-        { section: 'Shared access', k: 'secrets_via', type: 'seg', label: 'Secrets via', options: [['none', 'none'], ['broker', 'broker (single-use grants)'], ['env', 'env']] },
-        { k: 'allow_secrets', type: 'select-multi', label: 'Vault entries the broker may issue', options: S.view().secrets.map((x) => x.ref), show: (v) => v.secrets_via === 'broker' },
+        { k: 'cap_period', type: 'number', label: 'Cloud spending limit · per 30 days' },
+        { section: 'Shared access', k: 'secrets_via', type: 'seg', label: 'How its bots get secrets', options: [['none', 'they don’t'], ['broker', 'one use at a time, when asked'], ['env', 'in their environment']] },
+        { k: 'allow_secrets', type: 'select-multi', label: 'Vault entries its bots may be given', options: S.view().secrets.map((x) => x.ref), show: (v) => v.secrets_via === 'broker' },
         { k: 'logins', type: 'list', label: 'Saved logins bots may use (sites)', ph: 'console.example.com' },
         { k: 'credentials', type: 'select-multi', label: 'Sign-in credentials bots may use', options: S.view().access.credentials.map((x) => x.name), create: 'credential', createLabel: 'Add a login' },
-        { section: 'Knowledge and routing', k: 'repo', type: 'string', label: 'Team knowledge repo', ph: 'team-knowledge/<team>', help: 'Optional. The team\'s shared knowledge.' },
-        { k: 'promotion', type: 'seg', label: 'Promotion', options: [['proposal', 'an operator approves'], ['direct', 'lands at once']], show: (v) => !!v.repo },
+        { section: 'Knowledge and routing', k: 'repo', type: 'string', label: 'Where its knowledge is kept', ph: 'team-knowledge/<team>', help: 'Optional. The team\'s shared knowledge.' },
+        { k: 'promotion', type: 'seg', label: 'Adding to its knowledge', options: [['proposal', 'an operator approves'], ['direct', 'lands at once']], show: (v) => !!v.repo },
         isNew ? null : { k: 'lead', type: 'enum', label: 'Lead (triages what no rule matched)', options: botsOf(t.name).map((m) => m.name), create: 'bot', createCtx: { team: t.name }, createLabel: 'New bot on this team' },
         isNew ? null : { k: 'fallback', type: 'enum', label: 'Fallback (when the lead can\'t triage)', options: botsOf(t.name).map((m) => m.name) },
       ].filter(Boolean),
@@ -145,7 +145,7 @@
     const c = staged('teams', t.name) || t.cfg, ms = botsOf(t.name);
     const pend = c.knowledge ? R.pending('team:' + t.name) : 0;
     // the bot page's header (crumbs, avatar, name, one line): what's true of the whole team, in words, never capsules
-    const lead = leadOf({ cfg: c }), ceilW = { observe: 'only read', reversible: 'do undoable things' }[S.getPath(c, 'autonomy.ceiling') || 'reversible'] || S.getPath(c, 'autonomy.ceiling');
+    const lead = leadOf({ cfg: c }), ceilW = { observe: 'only read', reversible: 'do things that can be undone' }[S.getPath(c, 'autonomy.ceiling') || 'reversible'] || S.getPath(c, 'autonomy.ceiling');
     return `<div class="page dl-page team-page">${UI.crumbs([['Bots', '#/bots'], [t.name]])}
       <div class="dl-bothead">${UI.teamAv(t.name, 'xl')}<div><h1>${esc(t.name)}</h1>${S.find('teams', t.name) && JSON.stringify((S.staged('teams', t.name) || {}).avatar || null) !== JSON.stringify((t.cfg || {}).avatar || null) ? `<p class="mk-pend">${UI.teamAvOf(t.name, UI.teamIdent(t.name, { staged: true }), 'xs')}A new picture, not applied yet · <a class="dl-link" href="#/config/apply">Review and apply</a></p>` : ''}<p class="dl-lead">${ms.length} bot${ms.length === 1 ? '' : 's'}${lead ? `, led by ${UI.nm(lead)}` : ''}. ${(c.operators || []).length ? `${(c.operators || []).map(esc).join(' or ')} approve${(c.operators || []).length === 1 ? 's' : ''}` : 'Any operator approves'}; on their own, its bots may ${ceilW}.</p></div>${S.find('teams', t.name) ? UI.statusMark('staged', 'Change not applied') : ''}
         <button class="icon-btn" data-act="team-more" data-t="${t.name}" aria-label="More for team ${esc(t.name)}">${icon('more')}</button></div>
@@ -386,7 +386,7 @@
   function shell(m, tab, body, cls = '', sub) {
     const pc = pending(m.name).length, w = UI.botWatches(m.name), cases = D.cases.filter((c) => c.bot === m.name && c.status === 'open').length;
     const watchNote = !w.triggers.length && !w.sweep ? `<div class="callout wait watch-empty" style="margin:0 0 14px">${UI.statusMark('wait', `<b>${UI.nm(m.name)} isn't watching anything yet.</b>`)} <span class="grow">No trigger hands it events and it doesn't check in on its own, so it only answers when someone talks to it: you here, or anyone in a chat it's in.</span><button class="btn sm primary" data-act="bot-watch-add" data-m="${m.name}">${icon('plus')}Choose what it watches</button></div>` : '';
-    const T = [['proposals', 'Approvals', pc, true], ['chat', 'Chat'], ['cases', 'Tickets', cases], ['memory', 'Memory'], ['access', 'What it can do'], ['settings', 'Settings']];
+    const T = [['proposals', 'Approvals', pc, true], ['chat', 'Chat'], ['tickets', 'Tickets', cases], ['memory', 'Memory'], ['access', 'What it can do'], ['settings', 'Settings']];
     return `<div class="page dl-page${cls ? ' ' + cls : ''}">${hero(m, sub)}
       <nav class="dl-tabs" role="tablist">${T.map(([k, l, n, hot]) => `<a href="#/bots/${m.name}/${k}" role="tab" class="${k === tab ? 'on' : ''}"${k === tab ? ' aria-current="page" aria-selected="true"' : ''}>${l}${n ? ` ${UI.count(n, { hot: !!hot })}` : ''}</a>`).join('')}</nav>
       <div class="dl-tab-body">${watchNote}${body}</div></div>`;
@@ -414,14 +414,14 @@
     const task = (c) => `<li><a class="cm-side-a" href="#/tickets/${c.id}"><b>${c.urgent ? UI.mark('wait', { label: 'Urgent' }) + ' ' : ''}${esc(c.title)}</b>${UI.factsLine([{ icon: 'message', value: `Asked by ${askedBy(c)}`, pri: 1, label: 'Who asked' }, { icon: 'clock', value: UI.agoText(c.opened), pri: 2, label: 'Opened' }])}</a></li>`;
     // on a phone the side panels repeat the Approvals and Tickets tabs: one line of links above the chat instead, so the
     // chat fits the screen (65)
-    const sideLine = `<p class="cm-side-line">${pp.length ? `<a class="dl-link" href="#/bots/${m.name}/proposals">${UI.mark('ember')} ${pp.length} waiting for you</a>` : ''}<a class="dl-link" href="#/bots/${m.name}/cases">Working on ${open.length}</a></p>`;
+    const sideLine = `<p class="cm-side-line">${pp.length ? `<a class="dl-link" href="#/bots/${m.name}/proposals">${UI.mark('ember')} ${pp.length} waiting for you</a>` : ''}<a class="dl-link" href="#/bots/${m.name}/tickets">Working on ${open.length}</a></p>`;
     return shell(m, 'chat', `${sideLine}<div class="grid g-side chat-grid">
       <div class="panel chat fit"><div class="panel-head cm-head"><h3>Home session</h3><span class="dl-sub cm-rule">Your messages reach it between turns, never mid-turn</span>
         <a class="btn sm secondary" href="#/chat/bot/${m.name}">${icon('message')}Open in Chat</a>${paseo ? `<button class="btn sm secondary" data-act="chat-paseo" data-m="${m.name}">${icon('external')}Open in paseo</button>` : '<span class="dl-sub">paseo isn’t reachable, so its own view can’t open</span>'}</div>
         ${UI.chatThread(msgs, m.name)}${UI.chatComposer(m.name)}<div class="cm-drop" aria-hidden="true">${icon('attach')}Drop to attach to your message</div></div>
       <div class="stack cm-side">
         ${pp.length ? `<section class="panel cm-need"><div class="panel-head">${UI.statusMark('ember', 'Waiting for you')}${UI.count(pp.length, { hot: true })}</div><ul class="cm-side-l">${pp.map(need).join('')}</ul></section>` : ''}
-        <section class="panel"><div class="panel-head"><h3>Working on</h3><a class="btn sm ghost" style="margin-left:auto" href="#/bots/${m.name}/cases">All tickets</a></div>${open.length ? `<ul class="cm-side-l">${open.map(task).join('')}</ul>` : '<p class="dl-sub cm-side-none">Nothing open.</p>'}</section>
+        <section class="panel"><div class="panel-head"><h3>Working on</h3><a class="btn sm ghost" style="margin-left:auto" href="#/bots/${m.name}/tickets">All tickets</a></div>${open.length ? `<ul class="cm-side-l">${open.map(task).join('')}</ul>` : '<p class="dl-sub cm-side-none">Nothing open.</p>'}</section>
       </div></div>`);
   }
 
@@ -429,9 +429,9 @@
   // a bot's Tickets tab: the tickets assigned to it (js/screens/tickets.js); a ticket opens on its own page
   function cases(m, sub) {
     const c = sub && D.cases.find((x) => x.id === sub);
-    if (c) return shell(m, 'cases', UI.ticketBody(c.id, { base: `#/bots/${m.name}/cases` }), 'tk-page', [['Tickets', `#/bots/${m.name}/cases`], [c.title]]);
+    if (c) return shell(m, 'tickets', UI.ticketBody(c.id, { base: `#/bots/${m.name}/tickets` }), 'tk-page', [['Tickets', `#/bots/${m.name}/tickets`], [c.title]]);
     if (sub) { setTimeout(() => location.replace(`#/tickets/${sub}`)); return ''; }
-    return shell(m, 'cases', UI.botTickets(m));
+    return shell(m, 'tickets', UI.botTickets(m));
   }
   document.addEventListener('click', (e) => { const tr = e.target.closest('tr[data-href]'); if (tr && !e.target.closest('a,button,input,label,select,.sel')) UI.go(tr.dataset.href); });
   UI.act('case-close', (b) => { const c = D.cases.find((x) => x.id === b.dataset.c); c.status = c.status === 'open' ? 'closed' : 'open'; if (c.status === 'open') delete c.declined;
@@ -701,7 +701,7 @@
     { k: 'autonomy.shadow', type: 'bool', label: 'Practice mode', on: 'it says what it would do; nothing is done', sec: 'Autonomy' },
     { k: 'autonomy.approval_ttl', type: 'duration', label: 'Approval expires after', help: 'A request you haven’t answered by then lapses.' },
     { k: 'autonomy.spend_cap.per_action', type: 'number', label: 'Cloud spending limit · per action', cloud: true, help: 'Real money one approved action may commit. Not model spend.' },
-    { k: 'autonomy.spend_cap.per_period', type: 'number', label: 'Cloud spend cap · per 30 days', cloud: true },
+    { k: 'autonomy.spend_cap.per_period', type: 'number', label: 'Cloud spending limit · per 30 days', cloud: true },
     { k: 'proactive.every', type: 'duration', label: 'Sweep every', sec: 'Proactive sweeps', help: 'Empty: no sweeps (a bot opts in).' },
     { k: 'proactive.checklist.section', type: 'string', label: 'Checklist: a charter section', ph: 'Proactive checks', help: 'What every sweep works through: a heading in the charter, or a file below (exactly one).' },
     { k: 'proactive.checklist.file', type: 'string', label: '…or a checklist file', ph: 'bots/<name>-checks.md' },
@@ -801,7 +801,8 @@
     const m = M(name);
     if (!m) return `<div class="page"><div class="empty"><span class="serif">No bot named ${esc(name)}</span><a class="btn" href="#/bots">Bots</a></div></div>`;
     switch (tab || (pending(m.name).length ? 'proposals' : 'chat')) {
-      case 'cases': return cases(m, sub);
+      case 'cases': setTimeout(() => location.replace(location.hash.replace('/cases', '/tickets'))); return ''; // the old link (r5: tickets, not cases)
+      case 'tickets': return cases(m, sub);
       case 'proposals': return proposals(m, sub);
       case 'memory': return memory(m);
       case 'workers': return workers(m);
