@@ -442,6 +442,9 @@ func loadTemplate(name string, t BotTemplate, dir string) (LoadedTemplate, error
 	h.Write(b)
 	h.Write([]byte(lt.Charter))
 	lt.Digest = hex.EncodeToString(h.Sum(nil))[:12]
+	// A deprecated preset reads as its shape and eyes — after the digest,
+	// so a template that names one doesn't read as changed.
+	lt.T.Identity.Avatar = resolveAvatarPreset(lt.T.Identity.Avatar)
 	return lt, nil
 }
 

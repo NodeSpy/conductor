@@ -68,14 +68,14 @@ func teamAvatarRel(name string) string { return "avatars/team-" + name + ".png" 
 func sha(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
 
 // planAvatar plans setting (img non-nil) or clearing a bot's picture. Its
-// face (a preset or an icon, with its color) stays as the fallback where an
+// face (a shape and eyes, or an icon, with its color) stays as the fallback where an
 // image can't go.
 func planAvatar(cfgPath, name string, img []byte, crop *avatar.Crop) (*avatarPlan, error) {
 	return planAvatarFor(cfgPath, "bot", name, img, crop)
 }
 
 // planAvatarFor is planAvatar for a bot or a team (a team's face is an icon
-// with its color; it has no preset).
+// with its color; it has no face).
 func planAvatarFor(cfgPath, kind, name string, img []byte, crop *avatar.Crop) (*avatarPlan, error) {
 	src, err := os.ReadFile(cfgPath)
 	if err != nil {
@@ -105,7 +105,7 @@ func planAvatarFor(cfgPath, kind, name string, img []byte, crop *avatar.Crop) (*
 	}
 	var face config.BotAvatar
 	if cur0 != nil {
-		face = config.BotAvatar{Preset: cur0.Preset, Icon: cur0.Icon, Color: cur0.Color}
+		face = config.BotAvatar{Shape: cur0.Shape, Eyes: cur0.Eyes, Preset: cur0.Preset, Icon: cur0.Icon, Color: cur0.Color}
 	}
 	dir := filepath.Dir(cfgPath)
 	var next *config.BotAvatar

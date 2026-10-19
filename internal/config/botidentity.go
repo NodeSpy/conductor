@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -17,13 +18,45 @@ import (
 //
 // THE NAME LISTS BELOW ARE THE ONE SOURCE OF TRUTH: validation, the
 // catalog, `conductor bot show` and the dashboard API all read them. They are
-// placeholders until the dashboard's options are settled — changing a list is
+// placeholders until the designed set lands — changing a list is
 // a one-file change. No URLs: an avatar is a name from a list, or the
 // operator's own picture — a PNG, JPEG or WebP file beside the config (never
 // SVG), checked by content and re-encoded whenever conductor serves it.
 
-// AvatarPresets are the precanned avatars (`avatar: { preset: … }`).
-var AvatarPresets = []string{"robot", "owl", "fox", "octopus", "lighthouse", "satellite", "compass", "anvil"}
+// A bot's face is mix-and-match: `avatar: { shape: …, eyes: …, color: … }`,
+// each a name from its own list.
+
+// AvatarShapes are the shapes a face may take.
+var AvatarShapes = []string{"circle", "squircle", "hexagon", "shield", "blob", "diamond", "drop", "star"}
+
+// AvatarEyes are the eyes a face may wear.
+var AvatarEyes = []string{"round", "wide", "sleepy", "wink", "visor", "dots", "happy", "focused"}
+
+// AvatarFace is a shape with its eyes.
+type AvatarFace struct {
+	Shape string `json:"shape"`
+	Eyes  string `json:"eyes"`
+}
+
+// AvatarPresetAliases keep the old precanned faces loading: DEPRECATED
+// `avatar: { preset: owl }` reads as the shape and eyes named here.
+var AvatarPresetAliases = map[string]AvatarFace{
+	"robot":      {"squircle", "visor"},
+	"owl":        {"circle", "wide"},
+	"fox":        {"diamond", "sleepy"},
+	"octopus":    {"blob", "dots"},
+	"lighthouse": {"drop", "focused"},
+	"satellite":  {"hexagon", "round"},
+	"compass":    {"star", "happy"},
+	"anvil":      {"shield", "focused"},
+}
+
+// AvatarPresetNames are the deprecated preset names, sorted.
+func AvatarPresetNames() []string {
+	out := mapKeys(AvatarPresetAliases)
+	sort.Strings(out)
+	return out
+}
 
 // AvatarIcons are the icons an avatar may pair with a color
 // (`avatar: { icon: …, color: … }`).
@@ -48,20 +81,49 @@ const (
 	MaxStyle       = 600 // bytes
 )
 
-// BotAvatar is a precanned avatar, or an icon with a color — exactly one.
+// BotAvatar is a face (a shape, with eyes), or an icon with a color — at
+// most one — and optionally the operator's own picture.
 type BotAvatar struct {
-	// Preset is a face from AvatarPresets; Icon one from AvatarIcons. At
-	// most one. Color colors either (default: the bot's identity color).
+	// Shape (AvatarShapes) and Eyes (AvatarEyes) make a face; Icon is one
+	// from AvatarIcons instead. Color colors either (default: the bot's
+	// identity color).
+	Shape string `yaml:"shape,omitempty" json:"shape,omitempty"`
+	Eyes  string `yaml:"eyes,omitempty" json:"eyes,omitempty"`
+	Icon  string `yaml:"icon,omitempty" json:"icon,omitempty"`
+	Color string `yaml:"color,omitempty" json:"color,omitempty"`
+	// Preset is DEPRECATED: a name from AvatarPresetAliases, read at load
+	// as its shape and eyes (resolveAvatarPreset), which leaves it empty.
 	Preset string `yaml:"preset,omitempty" json:"preset,omitempty"`
-	Icon   string `yaml:"icon,omitempty" json:"icon,omitempty"`
-	Color  string `yaml:"color,omitempty" json:"color,omitempty"`
+	// PresetAlias is the preset a face was read from (computed).
+	PresetAlias string `yaml:"-" json:"-"`
 	// Image is the operator's own picture: a PNG, JPEG or WebP file,
 	// relative to the config's directory (a template's: relative to its
-	// pack), so it travels with the config. A preset or an icon beside it is
-	// the face shown where an image can't go.
+	// pack), so it travels with the config. A face or an icon beside it is
+	// what shows where an image can't go.
 	Image string `yaml:"image,omitempty" json:"image,omitempty"`
 	// ImagePath is Image resolved at load (computed).
 	ImagePath string `yaml:"-" json:"-"`
+}
+
+// resolveAvatarPreset reads a deprecated preset as its shape and eyes, on a
+// copy (a template's avatar may be shared).
+func resolveAvatarPreset(a *BotAvatar) *BotAvatar {
+	if a == nil || a.Preset == "" {
+		return a
+	}
+	f, ok := AvatarPresetAliases[a.Preset]
+	if !ok {
+		return a // validation names it
+	}
+	cp := *a
+	cp.Shape, cp.Eyes, cp.PresetAlias, cp.Preset = f.Shape, f.Eyes, a.Preset, ""
+	return &cp
+}
+
+// presetWarning is what validate says about a deprecated preset.
+func presetWarning(where string, a *BotAvatar) string {
+	f := AvatarPresetAliases[a.PresetAlias]
+	return fmt.Sprintf("%s: avatar.preset is deprecated — preset %q is { shape: %s, eyes: %s }; write those instead (a color still goes beside them)", where, a.PresetAlias, f.Shape, f.Eyes)
 }
 
 // resolveAvatarImage resolves an avatar image inside dir (the config's
@@ -137,7 +199,11 @@ func checkName(field, kind, s string, list []string) error {
 	if oneOf(list, s) {
 		return nil
 	}
-	return fmt.Errorf("%s: unknown %s %q (%ss: %s)", field, kind, s, kind, strings.Join(list, ", "))
+	plural := kind
+	if !strings.HasSuffix(kind, "s") {
+		plural += "s"
+	}
+	return fmt.Errorf("%s: unknown %s %q (%s: %s)", field, kind, s, plural, strings.Join(list, ", "))
 }
 
 func checkColor(field, s string) error {
@@ -204,10 +270,10 @@ func (id Identity) Validate() error {
 	return nil
 }
 
-// validateAvatar checks an avatar: a bot's (allowPreset; defaultColor is
-// the bot's identity color an icon may take) or a team's — never a preset:
-// the mascots are for bots, and a team has no color of its own to lend.
-func validateAvatar(a *BotAvatar, defaultColor string, allowPreset bool) error {
+// validateAvatar checks an avatar: a bot's (allowFace; defaultColor is the
+// bot's identity color an icon may take) or a team's — never a face: the
+// mascots are for bots, and a team has no color of its own to lend.
+func validateAvatar(a *BotAvatar, defaultColor string, allowFace bool) error {
 	if a == nil {
 		return nil
 	}
@@ -216,33 +282,55 @@ func validateAvatar(a *BotAvatar, defaultColor string, allowPreset bool) error {
 			return err
 		}
 	}
-	if a.Preset != "" && !allowPreset {
-		return fmt.Errorf("avatar.preset: presets (mascots) are for bots — a team's avatar is { icon: <name>, color: <name> } or { image: <file> }")
+	face := a.Shape != "" || a.Eyes != "" || a.Preset != ""
+	if face && !allowFace {
+		field := "avatar.shape"
+		switch {
+		case a.Preset != "":
+			field = "avatar.preset"
+		case a.Shape == "":
+			field = "avatar.eyes"
+		}
+		return fmt.Errorf("%s: faces (mascots) are for bots — a team's avatar is { icon: <name>, color: <name> } or { image: <file> }", field)
 	}
 	switch {
-	case a.Preset != "" && a.Icon != "":
-		return fmt.Errorf("avatar: a preset or an icon — not both")
+	case a.Preset != "" && (a.Shape != "" || a.Eyes != ""):
+		return fmt.Errorf("avatar.preset is the deprecated spelling of a shape and eyes — set one or the other")
+	case face && a.Icon != "":
+		return fmt.Errorf("avatar: a face (shape, eyes) or an icon — not both")
 	case a.Preset != "":
-		if err := checkName("avatar.preset", "preset", a.Preset, AvatarPresets); err != nil {
+		if err := checkName("avatar.preset", "preset", a.Preset, AvatarPresetNames()); err != nil {
 			return err
+		}
+	case face:
+		if a.Shape == "" {
+			return fmt.Errorf("avatar.eyes: a face needs a shape (avatar.shape)")
+		}
+		if err := checkName("avatar.shape", "shape", a.Shape, AvatarShapes); err != nil {
+			return err
+		}
+		if a.Eyes != "" {
+			if err := checkName("avatar.eyes", "eyes", a.Eyes, AvatarEyes); err != nil {
+				return err
+			}
 		}
 	case a.Icon != "":
 		if err := checkName("avatar.icon", "icon", a.Icon, AvatarIcons); err != nil {
 			return err
 		}
 		if a.Color == "" && defaultColor == "" {
-			if !allowPreset {
+			if !allowFace {
 				return fmt.Errorf("avatar: an icon needs a color (avatar.color)")
 			}
 			return fmt.Errorf("avatar: an icon needs a color (avatar.color, or the bot's color)")
 		}
 	case a.Image == "":
-		if !allowPreset {
+		if !allowFace {
 			return fmt.Errorf("avatar: set icon: <name> with color: <name>, or image: <file>")
 		}
-		return fmt.Errorf("avatar: set preset: <face> (color optional), icon: <name> with a color, or image: <file>")
+		return fmt.Errorf("avatar: set shape: <name> (eyes and color optional), icon: <name> with a color, or image: <file>")
 	case a.Color != "":
-		return fmt.Errorf("avatar.color colors a preset or an icon; an image has its own")
+		return fmt.Errorf("avatar.color colors a face or an icon; an image has its own")
 	}
 	if a.Color != "" {
 		if err := checkColor("avatar.color", a.Color); err != nil {
@@ -317,8 +405,14 @@ func (id Identity) Attributes(botID string) map[string]string {
 	out := map[string]string{"name": name, "id": botID, "initials": Initials(botID, id.DisplayName),
 		"tagline": id.Tagline, "color": id.Color}
 	if a := id.Avatar; a != nil {
-		out["avatar_preset"], out["avatar_icon"], out["avatar_color"] = a.Preset, a.Icon, a.Color
-		if a.Color == "" && (a.Preset != "" || a.Icon != "") {
+		out["avatar_shape"], out["avatar_eyes"], out["avatar_icon"], out["avatar_color"] = a.Shape, a.Eyes, a.Icon, a.Color
+		// avatar_preset is deprecated: set only when the face was written
+		// as a preset.
+		out["avatar_preset"] = a.PresetAlias
+		if a.Preset != "" {
+			out["avatar_preset"] = a.Preset
+		}
+		if a.Color == "" && (a.Shape != "" || a.Preset != "" || a.Icon != "") {
 			out["avatar_color"] = id.Color // a face takes the bot's color by default
 		}
 	}
@@ -345,7 +439,7 @@ func (id Identity) View(botID, from string) map[string]any {
 		out["avatar"] = *id.Avatar
 		if id.Avatar.Image != "" {
 			// The operator API serves it, re-encoded; elsewhere the face (a
-			// preset or an icon) or the initials stand in.
+			// face or an icon) or the initials stand in.
 			out["picture"] = "/v1/bots/" + botID + "/avatar"
 		}
 	}
@@ -360,7 +454,9 @@ func (id Identity) View(botID, from string) map[string]any {
 
 // IdentityOptions are the lists, for the dashboard's pickers.
 func IdentityOptions() map[string]any {
-	return map[string]any{"presets": AvatarPresets, "icons": AvatarIcons, "colors": IdentityColors,
+	return map[string]any{"shapes": AvatarShapes, "eyes": AvatarEyes, "icons": AvatarIcons, "colors": IdentityColors,
 		"tones": PersonalityTones, "status_hues": StatusHues,
-		"caps": map[string]int{"display_name": MaxDisplayName, "tagline": MaxTagline, "style": MaxStyle}}
+		"caps": map[string]int{"display_name": MaxDisplayName, "tagline": MaxTagline, "style": MaxStyle},
+		// Deprecated: the shape and eyes each old preset reads as.
+		"preset_aliases": AvatarPresetAliases}
 }

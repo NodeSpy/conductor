@@ -135,8 +135,8 @@ bots:
   platform-sre:
     display_name: Night Owl                  # one line, at most 40 characters
     tagline: Watches the pager so you can sleep.   # one line, at most 120
-    avatar: { preset: owl, color: teal }     # color optional (default: color: below); or { icon: radar, color: teal }
-    # avatar: { image: avatars/platform-sre.png, preset: owl }   # your own picture; the face is its fallback
+    avatar: { shape: circle, eyes: wide, color: teal }   # mix and match; eyes and color optional; or { icon: radar, color: teal }
+    # avatar: { image: avatars/platform-sre.png, shape: circle, eyes: wide }   # your own picture; the face is its fallback
     color: indigo                            # the bot's identity color
     personality:
       tone: terse                            # terse | friendly | formal | warm | dry | playful
@@ -144,14 +144,26 @@ bots:
         Lead with the answer, then the evidence. No exclamation marks.
 ```
 
-- **Avatar and color.** A face is a `preset` with an optional `color`
-  (default: the bot's `color`), or an `icon` with a color (its own, or the
-  bot's). Both are names from built-in lists, never URLs. Identity colors
+- **Avatar and color.** A face is mix-and-match: a `shape`, with optional
+  `eyes` and an optional `color` (default: the bot's `color`). Each comes
+  from its own list, so `eyes: hexagon` fails. Instead of a face, an avatar
+  can be an `icon` with a color (its own, or the bot's). All of them are
+  names from built-in lists, never URLs. Identity colors
   exclude the status hues (red, green, amber, yellow, orange), so a bot's
   color never reads as failing or healthy. `conductor bot identity-options`
-  prints the lists. They are placeholders for now and will change with the
-  dashboard. With no avatar, the dashboard shows the bot's initials (from
-  its display name, else its id).
+  prints the lists. They are placeholders until the designed set lands.
+  With no avatar, the dashboard shows the bot's initials (from its display
+  name, else its id).
+- **`preset:` is deprecated.** The old precanned faces still load:
+  `avatar: { preset: owl }` reads as the shape and eyes it stands for
+  (`{ shape: circle, eyes: wide }`), and any `color` beside it is kept.
+  `conductor validate` warns and names the replacement.
+  `conductor bot identity-options` lists every preset's pair under
+  `preset_aliases`. A preset beside a shape or eyes fails validation: use
+  one spelling or the other. Setting a picture with `conductor bot avatar
+  set` rewrites a preset line as its shape and eyes. A template that still
+  names a preset loads the same way, without warning you, because only the
+  template's author can change it.
 - **Your own picture.** `avatar: { image: avatars/platform-sre.png }` names a
   file relative to the config's directory, so it travels with the config. A
   template names one inside its pack. PNG, JPEG or WebP only, never SVG (it
@@ -160,9 +172,9 @@ bots:
   (where a polyglot hides its second format), and there may be no markup in
   its text metadata. It must decode, stay within 2 MB and 2048px a side, and
   stay inside the directory (no `..`, no symlink out). An SVG or a polyglot
-  renamed `.png` fails `conductor validate`, naming the bot. A preset or an
-  icon beside the image is the fallback face, for anywhere the picture
-  can't go.
+  renamed `.png` fails `conductor validate`, naming the bot. A face or an
+  icon beside the image is the fallback, for anywhere the picture can't
+  go.
 
   ```
   conductor bot avatar set platform-sre me.jpg [--crop x,y,side]   # a diff; --write writes it
@@ -206,9 +218,11 @@ display name) for a trigger that posts it. **A picture never leaves
 conductor this way.** A chat post can only show an image the platform can
 fetch from a reachable URL, or one the connector uploads, and conductor
 serves pictures only on its operator socket: it has no public endpoint, on
-purpose. So connectors get the fallback face (`avatar_preset` or
-`avatar_icon`, and `avatar_color`), or with neither, just the name and the
-platform's default icon.
+purpose. So connectors get the fallback face (`avatar_shape` and
+`avatar_eyes`, or `avatar_icon`, with `avatar_color`), or with neither,
+just the name and the platform's default icon. The deprecated
+`avatar_preset` is still filled while a bot's config writes its face as a
+preset, so a plugin that maps it keeps working.
 
 `conductor bot show <bot>` (and the dashboard, over the same control-socket
 op) returns `identity`: always `name` and `initials`, plus `display_name`,
@@ -979,8 +993,9 @@ reported by `conductor bot show`, but nothing consumes it.
 ### A team's avatar
 
 A team can have a face too, with the same shapes and checks as a bot's
-[identity](#identity), except that **presets aren't allowed**: the mascots
-are bots' faces, so a team's avatar is an icon or a picture:
+[identity](#identity), except that **faces aren't allowed** (no `shape`,
+`eyes` or `preset`): the mascots are bots' faces, so a team's avatar is an
+icon or a picture:
 
 ```yaml
 teams:
@@ -993,7 +1008,7 @@ A picture is checked like a bot's (PNG, JPEG or WebP by content, never SVG,
 no polyglot, inside the config's directory, within 2 MB and 2048px). An
 upload is re-encoded the same way: a square PNG of at most 512px with no
 metadata, at `avatars/team-<team>.png`, so a bot and a team with the same
-name never share a file. A preset on a team fails `conductor validate`,
+name never share a file. A face on a team fails `conductor validate`,
 naming the team. With no avatar, clients show the team's initials.
 
 ```

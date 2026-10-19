@@ -946,9 +946,18 @@ func (c *Config) validateBots() error {
 			return fmt.Errorf("config: operators.%s: ssh_key must be a public key line (\"ssh-ed25519 AAAA…\")", name)
 		}
 	}
-	for name, m := range c.Bots {
+	for _, name := range sortedBotKeys(c.Bots) {
+		m := c.Bots[name]
 		if err := c.validateBot(name, m); err != nil {
 			return fmt.Errorf("config: bots.%s: %w", name, err)
+		}
+		// A deprecated preset reads as its shape and eyes. A template's
+		// was read in its pack, so one left here is the operator's own (and
+		// a second Validate finds none, keeping the warning).
+		if m.Avatar != nil && m.Avatar.Preset != "" {
+			m.Avatar = resolveAvatarPreset(m.Avatar)
+			c.Bots[name] = m
+			c.avatarWarnings = append(c.avatarWarnings, presetWarning("bots."+name, m.Avatar))
 		}
 		// The operator's own avatar image, beside the config (a template's
 		// was resolved in its pack).
@@ -1176,6 +1185,7 @@ func (c *Config) BotWarnings() []string {
 			}
 		}
 	}
+	out = append(out, c.avatarWarnings...)
 	return append(out, c.TeamWarnings()...)
 }
 

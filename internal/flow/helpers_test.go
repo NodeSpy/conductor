@@ -131,7 +131,7 @@ var fakeDecl = &connector.TypeDecl{
 				"icon":     {Type: connector.TString},
 				"color":    {Type: connector.TString},
 			},
-			Semantics: &sdk.VerbSemantics{Identity: map[string]string{"username": "name", "icon": "avatar_preset", "color": "color"}},
+			Semantics: &sdk.VerbSemantics{Identity: map[string]string{"username": "name", "icon": "avatar_shape", "color": "color"}},
 		},
 		{
 			// An event's file, base64 in `content`: the fetch verb of an

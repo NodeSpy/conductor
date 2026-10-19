@@ -278,13 +278,16 @@ type VerbSemantics struct {
 //   - id: the config id;
 //   - initials;
 //   - tagline;
-//   - avatar_preset, avatar_icon, avatar_color: names from conductor's built-in
-//     avatar lists, never a URL or file; the plugin maps them to its own icons;
+//   - avatar_shape, avatar_eyes, avatar_icon, avatar_color: names from
+//     conductor's built-in avatar lists, never a URL or file; the plugin maps
+//     them to its own icons;
+//   - avatar_preset: DEPRECATED — the old preset name, set only when a bot's
+//     config still writes its face as one;
 //   - color: the bot's identity color name.
 //
 // An attribute the bot doesn't set fills its option with "", and the engine
 // then leaves that option out.
-var IdentityAttributes = []string{"name", "id", "initials", "tagline", "avatar_preset", "avatar_icon", "avatar_color", "color"}
+var IdentityAttributes = []string{"name", "id", "initials", "tagline", "avatar_shape", "avatar_eyes", "avatar_icon", "avatar_color", "color", "avatar_preset"}
 
 // ReadsRevision: the verb that reads a target's current revision and state.
 // States maps each generic state (open, closed, accepted) to the verb's own

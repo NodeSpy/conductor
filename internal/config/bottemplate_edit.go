@@ -386,7 +386,7 @@ func setAvatarNode(a *BotAvatar) func(v *yaml.Node) {
 			return
 		}
 		m := &yaml.Node{Kind: yaml.MappingNode, Style: yaml.FlowStyle}
-		for _, kv := range [][2]string{{"image", a.Image}, {"preset", a.Preset}, {"icon", a.Icon}, {"color", a.Color}} {
+		for _, kv := range [][2]string{{"image", a.Image}, {"shape", a.Shape}, {"eyes", a.Eyes}, {"preset", a.Preset}, {"icon", a.Icon}, {"color", a.Color}} {
 			if kv[1] != "" {
 				m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: kv[0]}, &yaml.Node{Kind: yaml.ScalarNode, Value: kv[1]})
 			}
