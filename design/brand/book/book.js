@@ -6,7 +6,7 @@ import { STATES as STATUS_STATES, CHANGE, GLYPH_STATE, mark, injectMarkCSS } fro
 import { summaryLine, quietState, exception as calmException, excRows, runStrip, byWorkflow, atAGlance, injectCalmCSS } from '../status/calm.js';
 import { ACTIVITY } from '../v2/data.js';
 import { FACES, faceSVG } from '../bot-identity/faces.js';
-import { MASCOT_DIRECTIONS, MASCOT_EXPRESSIONS, mascotSVG } from '../bot-identity/mascots.js';
+import { SHAPES, EYES, WITHDRAWN, allowed, kitSVG } from '../bot-identity/mascot-kit.js';
 import { FACT_TYPES, RISK_GRADES, fact, facts, serviceGlyph, injectFactsCSS } from '../status/facts.js';
 import { SERVICES } from '../icons/icons.js';
 import { env as scanEnv, rows as scanRows, KINDS, ACTIONS, ENV, lucide as rowIcon, injectScanCSS } from '../status/rows.js';
@@ -703,12 +703,21 @@ const facesGrid = (t) => `<div class="bf-grid">${FACES.map(([id, name, expr], k)
 const recolourMatrix = (t) => `<div class="bf-matrix" style="--cols:${BOT_COLOURS.length}"><span></span>${BOT_COLOURS.map((c) => `<span class="bf-ch">${c}</span>`).join('')}
   ${FACES.map(([id]) => `<span class="bf-rh">${id}</span>${BOT_COLOURS.map((c) => `<span class="bf-cell">${face(id, c, t, 48)}${face(id, c, t, 24)}</span>`).join('')}`).join('')}</div>
   <div class="bf-big">${BOT_COLOURS.map((c, k) => face(FACES[k % FACES.length][0], c, t, 96)).join('')}</div>`;
-const HL = { light: 'rgba(255,255,255,.5)', dark: 'rgba(255,255,255,.14)' };
-const mface = (d, id, k, c, t, size) => mascotSVG(d.id, id, MASCOT_EXPRESSIONS[k % MASCOT_EXPRESSIONS.length], { fill: botFill(c, t), ink: botInk(c, t), rim: RIM[t], hl: HL[t], size });
-const mascotDemo = (d) => (t) => `<div class="bd-hero">${d.mascots.map(([id, name], k) => { const c = BOT_COLOURS[k % BOT_COLOURS.length]; return `<figure>${mface(d, id, k, c, t, 96)}<div class="bf-small">${mface(d, id, k, c, t, 48)}${mface(d, id, k, c, t, 24)}</div><figcaption><b>${name}</b> · ${MASCOT_EXPRESSIONS[k]}</figcaption></figure>`; }).join('')}</div>
-  <div class="bd-strip">${d.mascots.map(([id], k) => `<div>${BOT_COLOURS.map((c) => mface(d, id, k, c, t, 24)).join('')}</div>`).join('')}</div>
-  <div class="bd-row"><span class="bd-in">${mface(d, d.mascots[1][0], 1, 'teal', t, 24)}<b>Platform watch</b></span><span class="bd-in"><i style="background:${botFill('plum', t)};color:${botInk('plum', t)}">BS</i><b>billing-sre</b></span><span class="bd-in">${mface(d, d.mascots[5][0], 5, 'olive', t, 24)}<b>Triage</b></span><span class="bd-in">${mface(d, d.mascots[3][0], 3, 'rose', t, 24)}<b>Nightly</b></span></div>`;
-const directions = () => MASCOT_DIRECTIONS.map((d, k) => `<div class="bd-dir"><h4><span>${'AB'[k]}</span>${d.name}</h4><p>${d.note}</p>${pair(mascotDemo(d))}</div>`).join('');
+const kface = (sh, ey, c, t, size) => kitSVG(sh, ey, { fill: botFill(c, t), ink: botInk(c, t), rim: RIM[t], size });
+const colourOf = (i) => BOT_COLOURS[i % BOT_COLOURS.length];
+const kitShapes = (t) => `<div class="kt-row">${SHAPES.map(([id, name, from], i) => `<figure>${kface(id, 'dots', colourOf(i), t, 96)}<div class="bf-small">${kface(id, 'dots', colourOf(i), t, 48)}${kface(id, 'dots', colourOf(i), t, 24)}</div><figcaption><b>${name}</b> · ${from}</figcaption></figure>`).join('')}</div>`;
+const kitEyes = (t) => `<div class="kt-row">${EYES.map(([id, name, reads], i) => `<figure>${kface('tilt', id, colourOf(i + 2), t, 96)}<div class="bf-small">${kface('tilt', id, colourOf(i + 2), t, 48)}${kface('tilt', id, colourOf(i + 2), t, 24)}</div><figcaption><b>${name}</b> · ${reads}</figcaption></figure>`).join('')}</div>`;
+const kitGrid = (t) => `<div class="kt-grid" style="--cols:${EYES.length}"><span></span>${EYES.map(([, n]) => `<span class="kt-h">${n}</span>`).join('')}
+  ${SHAPES.map(([sh, name], i) => `<span class="kt-r">${name}</span>${EYES.map(([ey]) => `<span class="kt-c">${allowed(sh, ey) ? kface(sh, ey, colourOf(i), t, 96) : '<i title="Not used: a single eye under a round top reads as the logo">—</i>'}</span>`).join('')}`).join('')}</div>`;
+const kitPicker = (t) => `<div class="kt-pick" data-theme-pick="${t}" data-shape="tilt" data-eyes="dots" data-colour="teal">
+  <div class="kt-steps">
+    <div><h5>1 · Shape</h5><div class="kt-opts">${SHAPES.map(([id, name]) => `<button type="button" class="kt-o${id === 'tilt' ? ' on' : ''}" data-pick="shape" data-v="${id}" aria-label="${name}">${kface(id, 'dots', 'stone', t, 40)}</button>`).join('')}</div></div>
+    <div><h5>2 · Eyes</h5><div class="kt-opts" data-eyes-opts>${EYES.map(([id, name]) => `<button type="button" class="kt-o${id === 'dots' ? ' on' : ''}" data-pick="eyes" data-v="${id}" aria-label="${name}">${kface('tilt', id, 'stone', t, 40)}</button>`).join('')}</div></div>
+    <div><h5>3 · Colour</h5><div class="kt-opts">${BOT_COLOURS.map((c) => `<button type="button" class="kt-o kt-sw${c === 'teal' ? ' on' : ''}" data-pick="colour" data-v="${c}" aria-label="${c}"><i style="background:${botFill(c, t)}"></i></button>`).join('')}</div></div>
+  </div>
+  <div class="kt-prev"><div data-prev>${kface('tilt', 'dots', 'teal', t, 96)}</div><div class="kt-prev-row" data-prev-row>${kface('tilt', 'dots', 'teal', t, 24)}<b>Platform watch</b></div><button type="button" class="c-btn primary sm" tabindex="-1">Use this picture</button></div>
+</div>`;
+const KIT_SIZES = [96, 48, 24];
 const initials = (name) => name.split(/[-\s_]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 const fallbackDemo = (t) => `<div class="bf-fallback">${[['platform-sre', 'teal'], ['billing-sre', 'plum'], ['pr-review', 'rose'], ['triage', 'olive']].map(([n, c]) => `<span><i style="background:${botFill(c, t)};color:${botInk(c, t)}">${initials(n)}</i><b>${n}</b></span>`).join('')}
   <span><i style="background:${botFill('lagoon', t)};color:${botInk('lagoon', t)}">${rowIcon('telescope', 18)}</i><b>Icon and colour</b></span></div>`;
@@ -724,10 +733,21 @@ const VOICES = [
   ['Playful', 'A light touch in chat only, never in approvals, errors or risk.', 'db-prod-1 is getting full (86%). Task opened; I’ll go see what grew.'],
 ];
 ch('bots', 'Bot identity', 'A bot is recognisable at a glance: its face, its colour, its display name and tagline, and how it writes. The face and colour are its own; they never stand for a state.',
-  [['bot-directions', 'Style directions (for review)'], ['bot-faces', 'Faces'], ['bot-colours', 'Colours'], ['bot-rules', 'Where the colour goes'], ['bot-own', 'An icon of your own, and the fallback'], ['bot-voice', 'Voice presets'], ['bot-files', 'Files']],
+  [['bot-directions-2', 'Mascots, round two (for review)'], ['bot-faces', 'Faces'], ['bot-colours', 'Colours'], ['bot-rules', 'Where the colour goes'], ['bot-own', 'An icon of your own, and the fallback'], ['bot-voice', 'Voice presets'], ['bot-files', 'Files']],
   () => `
-  ${sub('bot-directions', 'Style directions (for review)', 'Two directions for the mascots, six each, before the full set of about twelve is drawn in the chosen one. Each mascot is one solid silhouette in the bot’s colour with a pair of eyes in the theme’s ink, and nothing else: no mouth, no cheeks, no outline. Expression comes from the eyes alone: their size, tilt and spacing (curious, focused, calm, sleepy, sceptical, delighted). Our own shape vocabulary, from the system’s radii and proportions; never derived from the logo (no open arch, no single dot under a curve). Each is shown at 96, 48 and 24px, in every identity colour at 24px, and in a list beside an initials tile.')}
-  ${directions()}
+  ${sub('bot-directions-2', 'Mascots, round two: mix and match (for review)', 'Any body shape, any eye set, any identity colour: three separate choices. Round one is withdrawn. One solid silhouette in the bot’s colour and the eyes in the theme’s ink, nothing else; never derived from the logo (no open arch, and a single eye only on angular shapes, because a dot under a round top reads as the mark).')}
+  <div class="kt-rule"><b>The eye rule.</b> Expression comes from eye shape, size, spacing, gaze and simple lids, never from narrowing or slanting. No eye is a squint or a slit, none is tilted, and none may evoke an ethnicity, a culture or a body type. <b>Each eye set below was reviewed against this rule</b>, and the review is written next to it.</div>
+  <div class="c-table-wrap"><table class="c-table kt-review"><thead><tr><th>Eye set</th><th>Reads as</th><th>Review against the eye rule</th></tr></thead><tbody>${EYES.map(([, n, reads, rev]) => `<tr><td><b>${n}</b></td><td>${reads}</td><td>${rev}</td></tr>`).join('')}</tbody></table></div>
+  <p class="kt-withdrawn"><b>Withdrawn, never to return:</b> ${WITHDRAWN.join('; ')}.</p>
+  <h4 class="cap">Shapes: the best of Facet and Pebble, and three new (${SHAPES.length})</h4>
+  ${stack(kitShapes)}
+  <h4 class="cap">Eye sets (${EYES.length}), shown on Tilt</h4>
+  ${stack(kitEyes)}
+  <h4 class="cap" id="bot-mix">Mix and match: every shape with every eye set</h4>
+  <div class="kt-size" role="group" aria-label="Grid size">${KIT_SIZES.map((n) => `<button type="button" data-kit-size="${n}"${n === 48 ? ' class="on"' : ''}>${n}px</button>`).join('')}</div>
+  ${stack(kitGrid)}
+  <h4 class="cap">The picker: shape, then eyes, then colour</h4>
+  ${pair(kitPicker)}
   ${sub('bot-faces', 'Faces', 'The current set, to be replaced by the chosen direction. Twelve friendly robot faces, each with its own head shape and expression. The head takes the bot’s colour and the features are drawn in the theme’s ink, so any face works with any colour. Drawn to read at 24px (rows, the facts line) and to look good at 96px (the bot page, the chat header). They are Daylight’s own drawings, never derived from the logo: no arches and no dot under an arch.')}
   ${pair(facesGrid)}
   ${sub('bot-colours', 'Colours', 'Seven identity colours, every one at least 20° of hue from every status colour (danger, needs-you ember, waiting, passed, running, shadow) and a different lightness and chroma from the status marks, so a bot’s colour never reads as a state. Pastel in light, deep in dark; the face is AA on every fill. Any face takes any colour: the full grid, every face in every colour, at 48px and 24px:')}
@@ -865,3 +885,20 @@ const links = [...document.querySelectorAll('#toc > ol > li > a')];
 const io = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) for (const a of links) a.classList.toggle('on', a.getAttribute('href') === '#' + e.target.id); }, { rootMargin: '-30% 0px -65% 0px' });
 for (const s of document.querySelectorAll('section.ch, #principles')) io.observe(s);
 if (location.hash) document.querySelector(location.hash)?.scrollIntoView();
+
+// Mascot kit: the grid's size switch and the picker (shape, then eyes, then colour).
+document.addEventListener('click', (e) => {
+  const sz = e.target.closest('[data-kit-size]');
+  if (sz) { for (const b of document.querySelectorAll('[data-kit-size]')) b.classList.toggle('on', b === sz); for (const g of document.querySelectorAll('.kt-grid')) g.style.setProperty('--kt', `${sz.dataset.kitSize}px`); return; }
+  const o = e.target.closest('[data-pick]'); if (!o) return;
+  const pk = o.closest('.kt-pick'), t = pk.dataset.themePick, k = o.dataset.pick;
+  pk.dataset[k] = o.dataset.v;
+  for (const b of pk.querySelectorAll(`[data-pick="${k}"]`)) b.classList.toggle('on', b === o);
+  const { shape, eyes, colour } = pk.dataset;
+  // Eyes follow the chosen shape; the single eye is greyed out on round-topped shapes.
+  for (const b of pk.querySelectorAll('[data-pick="eyes"]')) { b.innerHTML = kface(shape, b.dataset.v, 'stone', t, 40); b.disabled = !allowed(shape, b.dataset.v); }
+  const ey = allowed(shape, eyes) ? eyes : 'dots'; pk.dataset.eyes = ey;
+  for (const b of pk.querySelectorAll('[data-pick="eyes"]')) b.classList.toggle('on', b.dataset.v === ey);
+  pk.querySelector('[data-prev]').innerHTML = kface(shape, ey, colour, t, 96);
+  pk.querySelector('[data-prev-row]').innerHTML = `${kface(shape, ey, colour, t, 24)}<b>Platform watch</b>`;
+});
