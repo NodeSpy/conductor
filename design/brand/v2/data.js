@@ -21,7 +21,7 @@ export const RUNNING = [
   { wf: 'platform-sre', target: 'case c31', doing: 'Investigating db-prod-1 disk usage', step: 1, of: 1, since: '11 min' },
 ];
 // runs per hour, last 12h (oldest first): [ok, failed]
-export const HOURLY = [[1, 0], [2, 0], [1, 0], [0, 0], [2, 1], [1, 0], [3, 0], [1, 0], [2, 0], [1, 1], [2, 0], [2, 0]];
+export const HOURLY = [[1, 0], [2, 0], [1, 0], [0, 0], [2, 1], [1, 0], [3, 0], [1, 0], [2, 0], [1, 1], [1, 0, 1], [1, 0, 1, 4]]; // [passed, failed, waiting, running], oldest first
 export const STATS = { runs: 20, fine: 18, failed: 2, cost: '$8.40', costTrend: [4.1, 6.8, 5.2, 7.9, 3.3, 2.1, 8.4, 9.7, 6.2, 5.5, 7.1, 11.9, 8.8, 6.4], approvals: 2 };
 
 // Lanes for the score: minutes ago of each run, and its state.
@@ -135,7 +135,7 @@ export const QUIET_LANES = [
 // (runs per hour, failures marked) plus the exceptions grouped by workflow; healthy workflows collapse
 // to a count. One lane per workflow doesn't scale to this, so it isn't used.
 export const ACTIVITY = {
-  hours: [[14, 0], [11, 0], [9, 0], [8, 0], [16, 1], [21, 0], [24, 0], [19, 0], [22, 0], [18, 0], [23, 1], [17, 1]], // [fine, failed], oldest first
+  hours: [[14, 0], [11, 0], [9, 0], [8, 0], [16, 1], [21, 0], [24, 0], [19, 0], [22, 0], [18, 0], [21, 1, 2], [12, 1, 1, 4]], // [passed, failed, waiting, running], oldest first
   exceptions: [
     { workflow: 'ci-fixer', runs: 41, items: [
       { state: 'failed', title: 'Couldn’t fix acme/web#1288', sentence: '2 tests fail after its change; nothing was pushed', age: '52 min ago', action: '<button class="btn secondary sm">Open</button>' },

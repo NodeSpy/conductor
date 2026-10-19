@@ -31,34 +31,42 @@ export const excRow = ({ state, title, sentence = '', age = '', action = '' }) =
 /** `terse`: the titles are already sentences, so on a phone the detail line is dropped. */
 export const excRows = (rows, { terse = false } = {}) => `<ul class="calm-rows${terse ? ' terse' : ''}">${rows.map(excRow).join('')}</ul>`;
 
-/** Runs over time, aggregated: one quiet column per bucket (height = runs), the failed mark above any
- *  bucket with failures (with its count when more than one). No lanes, no legend: the marks are
- *  labelled in words beside the strip. `hours`: [[fine, failed], …], oldest first. */
+/** Runs per hour, aggregated: one column per bucket, stacked from the ground: passed (the soft success
+ *  fill), waiting or parked (a warm neutral), running (blue), failed (red, on top, with the failed mark
+ *  above it and its count when more than one). 2px gaps between the layers. No lanes; the caption names
+ *  each layer with its count. `hours`: [[passed, failed, waiting?, running?], …], oldest first. */
+const RS_LAYERS = [['passed', 'rs-bar'], ['waiting', 'rs-wait'], ['running', 'rs-run'], ['failed', 'rs-fail']];
 export function runStrip(hours, { axis = ['12 h ago', 'now'] } = {}) {
+  const rows = hours.map(([ok, bad, wait = 0, run = 0]) => ({ passed: ok, waiting: wait, running: run, failed: bad }));
+  const sum = (k) => rows.reduce((a, r) => a + r[k], 0), total = rows.reduce((a, r) => a + r.passed + r.waiting + r.running + r.failed, 0);
   const svg = (width, height, size) => {
-    const n = hours.length, top = 18, max = Math.max(...hours.map(([a, b]) => a + b), 1), slot = width / n, bw = Math.max(slot - 3, 2);
+    const n = rows.length, top = 18, slot = width / n, bw = Math.max(slot - 3, 2);
+    const max = Math.max(...rows.map((r) => r.passed + r.waiting + r.running + r.failed), 1), unit = (height - top) / max;
     let g = '';
-    hours.forEach(([ok, bad], i) => {
-      // Passed runs in the soft success fill; failures stacked on top in red, with a 2px gap between.
-      const unit = (height - top) / max, h = (ok + bad) * unit, hOk = ok * unit, x = i * slot + (slot - bw) / 2;
-      const tip = `<title>${ok + bad} runs: ${ok} passed${bad ? `, ${bad} failed` : ''}</title>`;
-      if (ok) g += `<rect x="${x.toFixed(1)}" y="${(height - hOk).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(hOk, 1).toFixed(1)}" rx="2" class="rs-bar">${tip}</rect>`;
-      // A non-zero failure count is never thinner than 4 units, so one red run among many still shows.
-      const hBad = Math.max(bad * unit - (ok ? 2 : 0), 4);
-      if (bad) g += `<rect x="${x.toFixed(1)}" y="${(height - hOk - (ok ? 2 : 0) - hBad).toFixed(1)}" width="${bw.toFixed(1)}" height="${hBad.toFixed(1)}" rx="2" class="rs-fail">${tip}</rect>`;
-      if (bad) {
-        const cx = x + bw / 2, cy = height - hOk - (ok ? 2 : 0) - Math.max(bad * unit - (ok ? 2 : 0), 4) - 9;
-        g += chartMark('failed', cx, cy, size, `${bad} failed`).replace('<svg ', '<svg data-labelled="1" ');
-        if (bad > 1) g += `<text x="${(cx + 8).toFixed(1)}" y="${(cy + 4).toFixed(1)}" class="rs-n">${bad}</text>`;
+    rows.forEach((r, i) => {
+      const x = i * slot + (slot - bw) / 2, layers = RS_LAYERS.filter(([k]) => r[k]);
+      const tip = `<title>${r.passed + r.waiting + r.running + r.failed} runs: ${layers.map(([k]) => `${r[k]} ${k}`).join(', ')}</title>`;
+      let y = height;
+      layers.forEach(([k, cls], j) => {
+        // Every layer above the first gives up 2px to the gap below it. A failed layer is never thinner
+        // than 4 units and a waiting or running one than 3, so one run among many still shows.
+        const gap = j ? 2 : 0, h = Math.max(r[k] * unit - gap, { passed: 1, waiting: 3, running: 3, failed: 4 }[k]);
+        y -= gap + h;
+        g += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" class="${cls}">${tip}</rect>`;
+      });
+      if (r.failed) {
+        const cx = x + bw / 2, cy = y - 9;
+        g += chartMark('failed', cx, cy, size, `${r.failed} failed`).replace('<svg ', '<svg data-labelled="1" ');
+        if (r.failed > 1) g += `<text x="${(cx + 8).toFixed(1)}" y="${(cy + 4).toFixed(1)}" class="rs-n">${r.failed}</text>`;
       }
     });
     return g;
   };
-  const total = hours.reduce((a, [x, y]) => a + x + y, 0), failed = hours.reduce((a, [, y]) => a + y, 0);
-  const label = `${total} runs over the last ${hours.length} hours, ${failed} failed`;
+  const failed = sum('failed'), parts = RS_LAYERS.slice(0, 3).filter(([k]) => sum(k)).map(([k, cls]) => `<span class="rs-k"><i class="${cls}"></i>${sum(k)} ${k}</span>`);
+  const label = `${total} runs over the last ${hours.length} hours: ${RS_LAYERS.filter(([k]) => sum(k)).map(([k]) => `${sum(k)} ${k}`).join(', ')}`;
   // Two drawings of the same data, so marks stay legible: a wide one, and a narrow one for phones.
   return `<figure class="run-strip" data-item><svg class="rs-d" viewBox="0 0 860 64" role="img" aria-label="${label}">${svg(860, 64, 12)}</svg><svg class="rs-p" viewBox="0 0 340 60" role="img" aria-label="${label}">${svg(340, 60, 11)}</svg>
-    <figcaption><span>${axis[0]}</span><b>${total} runs · ${mark('failed')} ${failed} failed</b><span>${axis[1]}</span></figcaption></figure>`;
+    <figcaption><span>${axis[0]}</span><b>${total} runs ${parts.join('')}${failed ? `<span class="rs-k">${mark('failed')} ${failed} failed</span>` : ''}</b><span>${axis[1]}</span></figcaption></figure>`;
 }
 
 /** Exceptions grouped by workflow. `groups`: [{ workflow, runs, items: [excRow args…] }]; `healthy`:
@@ -79,10 +87,13 @@ export const CALM_CSS = `
 .at-glance dd span{font-size:13px;color:var(--color-text-tertiary)}
 @media (max-width:600px){.at-glance{grid-template-columns:repeat(3,1fr)}.at-glance>div:nth-child(4){padding-left:0;border-left:0}.at-glance>div:nth-child(n+4){border-top:1px solid var(--color-border-subtle)}}
 .run-strip{margin:0}.run-strip>svg{display:block;width:100%;height:auto;overflow:visible}.run-strip>.rs-p{display:none}@media (max-width:600px){.run-strip>.rs-d{display:none}.run-strip>.rs-p{display:block}}
-.run-strip .rs-bar{fill:var(--run-strip-bar,var(--color-status-success-chart))}.run-strip .rs-fail{fill:var(--run-strip-failed,var(--color-status-danger-solid))}
+.run-strip .rs-bar{fill:var(--run-strip-bar,var(--color-status-success-chart))}.run-strip .rs-wait{fill:var(--run-strip-waiting,var(--color-text-tertiary))}.run-strip .rs-run{fill:var(--run-strip-running,var(--color-status-running-solid))}.run-strip .rs-fail{fill:var(--run-strip-failed,var(--color-status-danger-solid))}
+.run-strip .rs-k{display:inline-flex;align-items:center;gap:5px;font-weight:500}.run-strip .rs-k i{display:inline-block;width:10px;height:10px;border-radius:2px}
+.run-strip .rs-k i.rs-bar{background:var(--run-strip-bar,var(--color-status-success-chart))}.run-strip .rs-k i.rs-wait{background:var(--run-strip-waiting,var(--color-text-tertiary))}.run-strip .rs-k i.rs-run{background:var(--run-strip-running,var(--color-status-running-solid))}
 .run-strip .rs-n{font-size:11.5px;font-weight:700;fill:var(--color-status-danger-fg)}
 .run-strip figcaption{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:6px;font-size:12px;color:var(--color-text-tertiary)}
-.run-strip figcaption b{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--color-text-secondary)}
+.run-strip figcaption b{display:inline-flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:4px 12px;font-size:13px;font-weight:600;color:var(--color-text-secondary)}
+.run-strip figcaption>span{white-space:nowrap}@media (max-width:600px){.run-strip figcaption{flex-wrap:wrap}.run-strip figcaption b{order:3;flex-basis:100%;justify-content:flex-start}}
 .by-wf .bw-g{margin-top:18px}.by-wf h4{display:flex;align-items:baseline;gap:10px;margin:0 0 6px;font-size:15px}
 .by-wf h4 b{font-weight:700;color:var(--color-text-primary)}.by-wf h4 span{font-size:13px;font-weight:400;color:var(--color-text-tertiary)}
 .by-wf > .calm-summary{margin-top:18px}
