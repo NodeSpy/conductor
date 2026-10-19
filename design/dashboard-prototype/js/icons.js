@@ -137,5 +137,6 @@ window.GLYPHS = {
 "shadow": "<circle cx=\"8\" cy=\"8\" r=\"5.2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\"/><path d=\"M8 2.8a5.2 5.2 0 0 1 0 10.4z\" fill=\"currentColor\" stroke=\"none\"/>",
 "needs-you": "<path d=\"M8 1.9l6.1 6.1L8 14.1 1.9 8z\" fill=\"currentColor\" stroke=\"none\"/>",
 "ready": "<circle cx=\"8\" cy=\"8\" r=\"3.6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/>",
+"in-progress": "<rect x=\"2.2\" y=\"4.9\" width=\"11.6\" height=\"6.2\" rx=\"3.1\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\"/><rect x=\"3.8\" y=\"6.5\" width=\"5\" height=\"3\" rx=\"1.5\" fill=\"currentColor\"/>",
 "staged": "<circle cx=\"8\" cy=\"8\" r=\"5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-dasharray=\"2.6 1.9\"/>"
 };

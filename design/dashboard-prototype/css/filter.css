@@ -119,3 +119,6 @@
 @media (max-width: 720px) { .fb[data-nosearch] .fb-time { display: inline-flex; margin-left: auto; } .fb[data-nosearch] .fb-phone { display: none; } }
 .dl-ch > .fb, .fb[data-nosearch] { container-type: normal; } /* a bar with only a time range sizes to it */
 @media (max-width: 720px) { .fb[data-nosearch] .fb-bar { flex: 1 1 auto; } }
+/* a narrow bar (a side column, a card): the search takes the width there is and never spills out of its card; it is
+   here, after the base rule, so it wins */
+@container (max-width: 420px) { .fb-search { min-width: 0; max-width: none; flex: 1 1 100%; } .fb-search .fb-in { min-width: 60px; } }

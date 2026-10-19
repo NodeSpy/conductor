@@ -196,3 +196,25 @@ test('Ready has its own mark (not parked); a card opens, and a button only for a
   await expect(page).toHaveURL(/#\/tickets$/);
   await show('ready'); await expect(col('ready').locator('.tk-card', { hasText: 'Write a runbook' })).toBeVisible();
 });
+
+// In progress is a state, not activity (59): the brand's static part-filled capsule, never the spinner; a row says
+// "a worker is running" (with the spinner) only while one executes now, else its last activity when that says more
+// than its age, flagged once nothing has happened for a day
+test('In progress: a static mark; the spinner only while a worker of it is running; a stalled one shows its last activity', async ({ page }) => {
+  await go(page, '#/tickets', { fresh: true });
+  const head = page.locator('.tk-col[data-col="progress"] .tk-colh [data-s="progress"]');
+  await expect(head).toHaveCount(1);
+  expect(await head.locator('rect').count(), 'the capsule').toBe(2);
+  expect(await head.evaluate((e) => getComputedStyle(e.querySelector('svg')).animationName)).toBe('none');
+  expect(await page.locator('#main [data-s="run"]').count(), 'no spinner on Tickets while nothing executes').toBe(0);
+  const id = await page.evaluate(() => D.cases.find((c) => UI.ticketStatus(c).k === 'progress').id);
+  await page.evaluate((cid) => { D.workers.push({ id: 'w-t59', case: cid, status: 'run', brief: 'a check', started: new Date().toISOString() }); UI.rerender(); }, id);
+  const card = page.locator(`.tk-card[data-t="${id}"]`);
+  await expect(card).toContainText('a worker is running');
+  await expect(card.locator('[data-s="run"]')).toHaveCount(1);
+  await page.evaluate((cid) => { D.workers = D.workers.filter((w) => w.id !== 'w-t59'); const c = D.cases.find((x) => x.id === cid); c.opened = new Date(Date.now() - 3 * 864e5).toISOString(); delete c.updated; (D.delegations || []).forEach((d) => { if (d.parent === cid) d.started = c.opened; }); UI.rerender(); }, id);
+  if (await page.evaluate((cid) => UI.ticketStatus(D.cases.find((x) => x.id === cid)).k, id) === 'progress') {
+    await expect(card).toContainText(/last activity \d+d ago/);
+    await expect(card.locator('[data-s="run"]')).toHaveCount(0);
+  }
+});

@@ -59,22 +59,47 @@
   /** Runs per hour over the last 12 hours, failures stacked on top in the danger colour (the mock's hourBars). */
   /** One bar per bucket, stacked from the axis: passed (a soft green with a full-green cap), waiting or parked
       (neutral), running (blue), failed (red, on top, so the rare failure pops first). Every bar starts on the axis;
-      the 2px gap sits under each upper segment, never under the stack. Each bar is focusable and says its bucket in
-      words (hover, focus or tap shows it under the chart). per[i] = { ok, other, run, fail }; when(i) names bucket i. */
+      the 2px gap sits under each upper segment, never under the stack. per[i] = { ok, other, run, fail }; when(i)
+      names bucket i. Static by default (68: Home's chart has no hover and no per-bar info); o.tip makes each bar a
+      stop with a tooltip (68b, Activity): its time, each kind with its swatch and count, and the failed runs named
+      (o.failed(i) lists them), on hover, focus (arrow keys move between bars) or tap. */
   const SEG = [['ok', 'hb-ok', 'Passed'], ['other', 'hb-other', 'Waiting or parked'], ['run', 'hb-run', 'Running'], ['fail', 'hb-fail', 'Failed']];
   UI.runBucket = (r) => (r.status === 'fail' || r.status === 'stopped' ? 'fail' : r.status === 'ok' ? 'ok' : r.status === 'run' ? 'run' : 'other');
   UI.barWords = (p) => { const xs = SEG.filter(([k]) => p[k]).map(([k, , l]) => `${p[k]} ${l.toLowerCase()}`); return xs.length ? xs.join(', ') : 'no runs'; };
-  UI.stackBars = (per, w, h, when = (i) => `bar ${i + 1}`) => { const base = h - 17, n = per.length, mx = Math.max(4, ...per.map((p) => p.ok + p.other + p.run + p.fail)), bw = w / n - 6;
+  const tipHTML = (p, when, failed) => `<b class="hb-tip-h">${esc(when)}</b>${SEG.some(([k]) => p[k]) ? `<ul class="hb-tip-l">${SEG.filter(([k]) => p[k]).map(([k, , l]) => `<li><i class="hb-sw hb-sw-${k}" aria-hidden="true"></i>${l} <b>${p[k]}</b></li>`).join('')}</ul>` : '<span class="dl-sub">No runs</span>'}${failed && failed.length ? `<p class="hb-tip-f">${failed.slice(0, 3).map((r) => `<a class="dl-link" href="#/runs/${r.id}">${esc(r.workflow.replace(/^bot:/, ''))} at ${UI.failedAt(r)}</a>`).join(', ')}${failed.length > 3 ? ` and ${failed.length - 3} more` : ''}</p>` : ''}`;
+  UI.stackBars = (per, w, h, when = (i) => `bar ${i + 1}`, o = {}) => { const base = h - 17, n = per.length, mx = Math.max(4, ...per.map((p) => p.ok + p.other + p.run + p.fail)), bw = w / n - 6;
     return per.map((p, i) => { const x = i * (w / n) + 3; let y = base; const segs = SEG.filter(([k]) => p[k]);
       const rects = segs.map(([k, cls], j) => { const hh = (p[k] / mx) * (h - 22); y -= hh; const g = j ? 2 : 0;
         return `<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(0, hh - g)}" rx="2" class="${cls}"/>${k === 'ok' ? `<rect x="${x}" y="${y}" width="${bw}" height="${Math.min(2, hh - g)}" class="hb-cap"/>` : ''}`; }).join('');
+      if (!o.tip) return `<g class="hb">${rects}</g>`;
       const say = `${when(i)}: ${UI.barWords(p)}`;
-      return `<g class="hb" tabindex="0" role="img" aria-label="${UI.esc(say)}" data-say="${UI.esc(say)}"><rect class="hb-hit" x="${x - 3}" y="0" width="${w / n}" height="${base}"/>${rects}</g>`; }).join(''); };
-  /** The chart's legend: each kind with its swatch and its count for the range; and the line that reads out a bar. */
+      return `<g class="hb" tabindex="${i === n - 1 ? 0 : -1}" role="img" aria-label="${UI.esc(say)}" data-i="${i}" data-hbtip="${UI.esc(tipHTML(p, when(i), o.failed && o.failed(i)))}"><rect class="hb-hit" x="${x - 3}" y="0" width="${w / n}" height="${base}"/>${rects}</g>`; }).join(''); };
+  /** The chart's legend: each kind with its swatch and its count for the range (no per-bar readout: 68). */
   UI.barLegend = (per) => { const t = { ok: 0, other: 0, run: 0, fail: 0 }; per.forEach((p) => Object.keys(t).forEach((k) => { t[k] += p[k]; }));
-    return `<div class="hb-foot"><ul class="hb-legend">${[['ok', 'Passed'], ['fail', 'Failed'], ['run', 'Running'], ['other', 'Waiting or parked']].map(([k, l]) => `<li><i class="hb-sw hb-sw-${k}" aria-hidden="true"></i>${l} <b>${t[k]}</b></li>`).join('')}</ul><p class="hb-read dl-sub" aria-live="polite">Point at a bar, or tap it, for its runs.</p></div>`; };
-  const readBar = (g) => { const card = g.closest('.dl-card'), out = card && card.querySelector('.hb-read'); if (out) out.textContent = g.dataset.say; card.querySelectorAll('.hb.on').forEach((x) => x.classList.toggle('on', x === g)); g.classList.add('on'); };
-  ['pointerover', 'focusin', 'click'].forEach((ev) => document.addEventListener(ev, (e) => { const g = e.target.closest && e.target.closest('svg.dl-hours .hb'); if (g) readBar(g); }));
+    return `<div class="hb-foot"><ul class="hb-legend">${[['ok', 'Passed'], ['fail', 'Failed'], ['run', 'Running'], ['other', 'Waiting or parked']].map(([k, l]) => `<li><i class="hb-sw hb-sw-${k}" aria-hidden="true"></i>${l} <b>${t[k]}</b></li>`).join('')}</ul></div>`; };
+  /* the tooltip (68b): one per chart card, above the bar, kept inside the card (never clipped at its edges, never over
+     the legend); it stays while the pointer is on the bar or on the tooltip itself (its links are clickable); Esc,
+     a tap elsewhere or leaving closes it */
+  let tipT = 0;
+  const tipOf = (card) => card.querySelector('.hb-tip') || card.appendChild(Object.assign(document.createElement('div'), { className: 'hb-tip', role: 'tooltip' }));
+  const tipHide = (card) => { (card ? [card] : document.querySelectorAll('.hb-tipped')).forEach((c) => { c.classList.remove('hb-tipped'); c.querySelectorAll('.hb.on').forEach((x) => x.classList.remove('on')); const t = c.querySelector('.hb-tip'); if (t) t.hidden = true; }); };
+  const tipShow = (g) => { clearTimeout(tipT); const card = g.closest('.dl-card'); if (!card) return; tipHide(); const t = tipOf(card); t.innerHTML = g.dataset.hbtip; t.hidden = false; g.classList.add('on'); card.classList.add('hb-tipped');
+    // above the chart, over its bar: it never covers a bar (so the next one can still be pointed at) or the legend
+    // below; at the card's edges it slides inward; near the window's top it may rise over the card's header
+    const cr = card.getBoundingClientRect(), br = g.getBoundingClientRect(), top = g.ownerSVGElement.getBoundingClientRect().top;
+    const tw = t.offsetWidth, th = t.offsetHeight, x = Math.min(Math.max(8, br.left + br.width / 2 - cr.left - tw / 2), cr.width - tw - 8), y = Math.max(8 - cr.top, top - cr.top - th - 6);
+    t.style.left = `${x}px`; t.style.top = `${y}px`; };
+  document.addEventListener('pointerover', (e) => { const g = e.target.closest && e.target.closest('svg.dl-hours .hb[data-hbtip]'); if (g && e.pointerType !== 'touch') tipShow(g); else if (e.target.closest && e.target.closest('.hb-tip')) clearTimeout(tipT); });
+  document.addEventListener('pointerout', (e) => { if (e.pointerType === 'touch' || !(e.target.closest && e.target.closest('svg.dl-hours .hb[data-hbtip], .hb-tip'))) return; const to = e.relatedTarget; if (to && to.closest && to.closest('svg.dl-hours .hb[data-hbtip], .hb-tip')) return; tipT = setTimeout(() => tipHide(), 160); });
+  document.addEventListener('focusin', (e) => { const g = e.target.closest && e.target.closest('svg.dl-hours .hb[data-hbtip]'); if (g) tipShow(g); });
+  // a tap toggles: open, or closed if it was already open when the finger went down (the tap's focus opens it first)
+  let wasOn = false;
+  document.addEventListener('pointerdown', (e) => { const g = e.target.closest && e.target.closest('svg.dl-hours .hb[data-hbtip]'); wasOn = !!(g && g.classList.contains('on')); });
+  document.addEventListener('click', (e) => { const g = e.target.closest && e.target.closest('svg.dl-hours .hb[data-hbtip]'); if (g) { if (wasOn && e.pointerType === 'touch') tipHide(); else tipShow(g); } else if (!(e.target.closest && e.target.closest('.hb-tip'))) tipHide(); });
+  document.addEventListener('keydown', (e) => { const g = e.target.closest && e.target.closest('svg.dl-hours .hb[data-hbtip]');
+    if (e.key === 'Escape' && document.querySelector('.hb-tipped')) { tipHide(); return; } if (!g) return;
+    const all = [...g.parentNode.querySelectorAll('.hb[data-hbtip]')], i = all.indexOf(g), to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: all.length - 1 }[e.key];
+    if (to == null) return; e.preventDefault(); const nx = all[Math.max(0, Math.min(all.length - 1, to))]; all.forEach((x) => x.setAttribute('tabindex', x === nx ? '0' : '-1')); nx.focus(); });
   /** Runs over the chosen range (the mock's hourBars, 61): hours up to a day, then days; the shared time range control
    *  sits in the card's header. */
   const ovt = { since: '12h' };

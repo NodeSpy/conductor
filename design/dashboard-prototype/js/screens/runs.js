@@ -107,11 +107,12 @@
   function strip(G) {
     const span = sinceMin() || 10080, n = span <= 60 ? 12 : span <= 1440 ? Math.round(span / 60) : span <= 10080 ? 7 : 30, bucket = span / n, w = 960, h = 96;
     const per = Array.from({ length: n }, () => ({ ok: 0, other: 0, run: 0, fail: 0 }));
-    G.all.forEach((r) => { const m = (Date.now() - new Date(r.started)) / 60000; if (m > span) return; const i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(m / bucket))); per[i][UI.runBucket(r)]++; });
+    const failedIn = Array.from({ length: n }, () => []);
+    G.all.forEach((r) => { const m = (Date.now() - new Date(r.started)) / 60000; if (m > span) return; const i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(m / bucket))), k = UI.runBucket(r); per[i][k]++; if (k === 'fail') failedIn[i].push(r); });
     const at = (min) => new Date(Date.now() - min * 60000).toISOString();
     const when = (i) => { const from = (n - i) * bucket, to = (n - 1 - i) * bucket; return unitOf === 'day' ? new Date(at(from - bucket / 2)).toLocaleDateString(undefined, span > 10080 ? { month: 'short', day: 'numeric' } : { weekday: 'long' }) : `${UI.hm(at(from))}–${to ? UI.hm(at(to)) : 'now'}`; };
     const unitOf = span <= 1440 ? 'time' : 'day';
-    const bars = UI.stackBars(per, w, h, when);
+    const bars = UI.stackBars(per, w, h, when, { tip: true, failed: (i) => failedIn[i] }); // a tooltip per bar (68b)
     const label = (RANGES.find(([v]) => v === av.since) || RANGES[1])[1].toLowerCase().replace('last ', ''), unit = span <= 60 ? '5 minutes' : span <= 1440 ? 'hour' : 'day';
     const fails = G.all.filter((r) => (r.status === 'fail' || r.status === 'stopped') && (Date.now() - new Date(r.started)) / 60000 <= span);
     // failures from before the range aren't listed either; say how many still wait for a look, one click from showing them

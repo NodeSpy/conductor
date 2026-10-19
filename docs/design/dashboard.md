@@ -371,7 +371,7 @@ normally" sat beside failed runs), so the page opens on the figures, with Needs 
 3. **Needs you**: the mark, a plain title, why, the machine detail last, the age, one verb (Review is primary for
    approvals); See all.
 4. Beside it: **Running now** (at most three, longest-running first, then "+N more running →"; hidden when nothing
-   runs), **Last 12 hours** (the figure, runs per hour: every bar on the axis; passed in a soft green with a full-green cap (`--color-status-success-chart` and `-solid`), waiting or parked neutral, running blue, failures red on top; a legend with each kind's count, and a bar's runs read out on hover, focus or tap; the failures named),
+   runs), **Last 12 hours** (the figure, runs per hour: every bar on the axis; passed in a soft green with a full-green cap (`--color-status-success-chart` and `-solid`), waiting or parked neutral, running blue, failures red on top; a legend with each kind's count and the failures named, as links; the chart itself is static: no hover, no tap, no per-bar readout),
    **For your information** (an update that installs itself, a sandbox block).
 5. **Get started**, only while something is left: the remaining steps, the next one as the primary button, what's done
    in one quiet line.
@@ -444,7 +444,7 @@ needs me?", as far back as you need.
 - **The sentence**: "Last 12 hours: 15 runs. 3 need attention, 3 are running and 9 finished."
 - **Filters on the page**: search (repo, PR, run id, error), status, workflow, bot, what the connectors publish (a repository, a pull request), and the time range
   (last hour, 12 hours, 24 hours, 7 days, all time). Old `#/runs?…` links land here with the same filters.
-- **Runs per hour** for the range: the Overview's strip (every bar on the axis; passed a soft green with a full-green cap, running blue, failures red on top, waiting or parked neutral), with a legend and counts, a bar's runs on hover, focus or tap, and the failures named. It is the same size for ten
+- **Runs per hour** for the range: the Overview's strip (every bar on the axis; passed a soft green with a full-green cap, running blue, failures red on top, waiting or parked neutral), with a legend and counts and the failures named. Each bar has a tooltip (hover, tap on a touch screen, or focus: the bars are one tab stop and the arrow keys, Home and End move along them): the time, each kind there with its swatch and count, and the failed runs named as links. It sits above the chart over its bar, inside the card, never over a bar or the legend; Esc, a tap elsewhere or leaving closes it; its bar gets a quiet outline, never a shaded column. No readout line under the chart. It is the same size for ten
   workflows or five hundred (the per-workflow lanes were removed: they grow with every workflow).
 - **The grouped table**, as on the approved status column: **Needs attention · N** (failed runs and runs waiting on
   a person: the reason in its state's colour under the name, a leading edge, one action: Open, or Answer), **Running
@@ -785,7 +785,9 @@ on the ticket.
     marks ready), and only with an assignee set (a bot, or a team whose routing or lead picks one). A ready ticket can
     go back to draft, which pauses work.
   - **In progress** (a worker or a hand-off is running) and **waiting on you** (an approval it asked for is pending)
-    follow from the work; nobody sets them by hand.
+    follow from the work; nobody sets them by hand. In progress is a state, not activity: its mark is the brand's
+    static part-filled capsule, never the spinner. A ticket says "a worker is running" (with the spinner) only while
+    one executes now; otherwise its last activity, when that says more than its age, flagged after a quiet day.
   - **Done** (Mark done) or **declined** (Decline: closed without being done) close it; either can be reopened.
 - **What it says.** Title, description, priority (urgent, high, normal, low), an optional due date, labels, and
   attachments (the chat's attachment rules and limits, [§5.3](#53-endpoints)).

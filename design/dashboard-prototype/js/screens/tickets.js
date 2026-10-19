@@ -17,7 +17,7 @@
   UI.ticketTeam = teamOf;
   /** Where a ticket stands, in words: draft and ready are set by a person; in progress and waiting on you follow from
       the work; done or declined close it. [word, mark] */
-  const STATUS = { draft: ['Draft', 'skip'], ready: ['Ready', 'ready'], progress: ['In progress', 'run'], waiting: ['Waiting on you', 'ember'], done: ['Done', 'ok'], declined: ['Declined', 'fail'] };
+  const STATUS = { draft: ['Draft', 'skip'], ready: ['Ready', 'ready'], progress: ['In progress', 'progress'], waiting: ['Waiting on you', 'ember'], done: ['Done', 'ok'], declined: ['Declined', 'fail'] };
   const ORDER = ['draft', 'ready', 'progress', 'waiting', 'done', 'declined'];
   const statusOf = (c) => c.status === 'closed' ? (c.declined ? 'declined' : 'done') : c.stage === 'draft' ? 'draft' : (D.proposals || []).some((p) => p.case === c.id && p.status === 'pending') ? 'waiting'
     : c.workers > 0 || (D.delegations || []).some((d) => d.parent === c.id && d.status === 'running') ? 'progress' : 'ready';
@@ -30,7 +30,14 @@
   UI.ticketFacts = (c, o = {}) => [o.noAssignee ? null : c.bot ? { icon: 'obj-bot', value: c.bot, href: `#/bots/${c.bot}`, pri: 1, label: 'Assigned to' } : c.team ? { icon: 'team', value: `team ${c.team}`, href: `#/teams/${c.team}`, pri: 1, label: 'Assigned to the team' } : null,
     c.priority === 'urgent' || c.priority === 'high' ? { icon: 'warn', value: priWord(c.priority), risky: c.priority === 'urgent', pri: 1, label: 'Priority' } : null,
     c.due && c.status !== 'closed' ? { icon: 'calendar', value: dueWord(c.due), risky: /overdue|today/.test(dueWord(c.due)), pri: 2, label: 'Due' } : null,
-    ...(c.labels || []).map((l) => ({ icon: 'tag', value: l, pri: 3, label: 'Label' }))];
+    ...liveFacts(c), ...(c.labels || []).map((l) => ({ icon: 'tag', value: l, pri: 3, label: 'Label' }))];
+  // in progress is a state, not activity (59): its mark is static; only while a worker of it is executing now does the
+  // row say so, with the spinner; otherwise its last activity, so a ticket that has stalled is visible
+  const liveFacts = (c) => { if (UI.ticketStatus(c).k !== 'progress') return []; const ws = (D.workers || []).filter((w) => w.case === c.id), live = ws.filter((w) => w.status === 'run');
+    if (live.length) return [{ glyph: UI.mark('run'), value: live.length === 1 ? 'a worker is running' : `${live.length} workers are running`, pri: 1, label: 'Executing now' }];
+    const t = [c.updated, c.opened, ...ws.map((w) => w.started)].filter(Boolean).sort().pop(), old = t && Date.now() - Date.parse(t) > 864e5;
+    if (!t || (t === c.opened && !old)) return []; // the row's age already says it
+    return [{ icon: 'clock', value: `last activity ${UI.ago(t)} ago`, risky: old, pri: 2, label: old ? 'Nothing has happened on it for over a day' : 'Its last activity' }]; };
   /** A ticket's row: the same anatomy as every list (mark, title, a line in words, the facts, the age, the action). */
   const by = (c) => (statusOf(c) === 'draft' ? `drafted by ${esc(askedBy(c).replace(' (a bot)', ''))}` : `asked by ${esc(askedBy(c))}`);
   // the whole row opens the ticket; a button only for a real next action: a draft is marked ready, a ticket waiting on

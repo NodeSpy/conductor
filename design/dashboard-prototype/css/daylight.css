@@ -711,7 +711,7 @@ td.run .fx { margin-top: 4px; }
 @media (max-width: 720px) {
   html .btn, html a.btn, html button.btn, .dl-page .btn, .dl-page .btn.sm, .page .btn.sm, html .fb-btn, html .fb-phone, html .m-tog, html .ref-btn, html .plus, html .chip, html .issue, html .cm-attach, html .tab-more { min-height: 44px; }
   html .icon-btn { min-width: 44px; min-height: 44px; }
-  html .switch { position: relative; } .switch::after { content: ""; position: absolute; inset: -10px -6px; }
+  html .switch { position: relative; } .switch::before { content: ""; position: absolute; inset: -12px -4px; } /* the hit area; ::after is the knob */
 }
 
 /* phone: a row's own ⋯ sits at its top right beside the title, and its button under the text, so the text keeps the
@@ -822,7 +822,7 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 .dl-list:has(.dl-nt > .fx) > li .dl-nt:has(> b:first-child):not(:has(> .fx))::before { content: ''; height: 1.5rem; order: 9; } /* and without facts, theirs */
 .dl-list > li .dl-nt > .fx { height: 1.5rem; align-items: center; align-content: flex-start; margin: 0; }
 .dl-list > li .dl-nt > .fx > .fx-i { min-height: 1.5rem; } /* each line of facts fills the clip, so facts that wrap sit wholly below it, never cut in half */
-@container (max-width: 420px) { .fb-search { min-width: 0; max-width: none; } }
+/* (the narrow-bar rule for .fb-search is in filter.css, which loads after this file) */
 .upd-sub { display: grid; gap: 10px; padding-left: 14px; border-left: var(--border-width) solid var(--color-border-subtle); }
 /* the audit log (48): who first, their picture and name in bold, then what happened and the facts line */
 .au-row > summary { align-items: center; }
@@ -901,7 +901,7 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 .wf-health { display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-secondary); font: var(--type-body-s); white-space: nowrap; }
 .wf-health.fail { font-weight: var(--font-weight-semibold); } /* its tone is in marks.css */
 .wf-strip { display: inline-flex; gap: 2px; align-items: flex-end; height: 14px; } .wf-strip i { width: 4px; height: 14px; border-radius: 1px; } /* its colours are in marks.css */
-@media (max-width: 720px) { .m-row[data-wf] { grid-template-columns: 22px 32px minmax(0, 1fr) 36px; } .wf-strip { display: none; } }
+@media (max-width: 720px) { .m-row[data-wf] { grid-template-columns: 44px minmax(0, 1fr) 36px; } .wf-strip { display: none; } } /* a phone: the switch, the workflow, its ⋯; its health under it */
 /* the composer (62): the send button is the field's exact height and radius, on its bottom edge as the field grows */
 html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radius: var(--radius-control); }
 @media (max-width: 720px) { html .cm-in .cm-send { width: 46px; height: 46px; min-height: 46px; } } /* the field is 46 on a phone (a 44px paperclip in its border) */
@@ -942,3 +942,4 @@ html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radiu
   .pk-row .pk-l1 > .dl-why { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; white-space: normal; }
   .pk-row > .dl-nt > .fx { grid-column: 2; grid-row: 2; align-self: center; } .pk-row > .dl-na { grid-column: 3; grid-row: 2; align-self: center; }
 }
+.m-team-h > .m-team-a:empty { display: none; } /* a section with no actions has no empty action row (a phone stacks it under the title) */
