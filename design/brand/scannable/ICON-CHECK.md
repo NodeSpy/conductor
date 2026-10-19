@@ -19,7 +19,7 @@ Result: 37 glyphs; 0 outside the ink range; 0 pairs too alike.
 | kind | Deploy | Lucide `rocket` | 33% |
 | kind | Terraform | Lucide `layers` | 33% |
 | kind | Cloud spend | Lucide `receipt` | 34% |
-| kind | Connector | Lucide `plug` | 23% |
+| kind | Connection | Lucide `plug` | 23% |
 | kind | Login | Lucide `key-round` | 25% |
 | kind | Knowledge | Lucide `book-open` | 30% |
 | kind | Config change | Lucide `settings-2` | 19% |
