@@ -246,20 +246,25 @@ func TestBotNewInstallKeepsTrustAndValidate(t *testing.T) {
 	if _, err := planNewBotOpts(p2, config.TemplateBotDraft{Name: "sre"}, ref, newBotOpts{Registry: url}); err == nil || !strings.Contains(err.Error(), "trust it first") {
 		t.Fatalf("not allowlisted: %v", err)
 	}
-	// Validation still decides: a grant past the template's maximum.
+	// Validation still decides: an input bound to a connector the config
+	// lacks — caught only by validating the whole change, in the copy.
 	p3 := catalogConfig(t, "")
-	bad, err := planNewBotOpts(p3, config.TemplateBotDraft{Name: "sre", Grants: map[string]string{"store.set": "commit_money"}}, ref, newBotOpts{Registry: url, AllowUnlisted: true})
-	if err == nil && bad.Valid {
-		t.Fatal("a plan granting past the template's maximum validated")
+	bad, err := planNewBotOpts(p3, config.TemplateBotDraft{Name: "sre", Connectors: map[string]string{"store": "nope"}}, ref, newBotOpts{Registry: url, AllowUnlisted: true})
+	if err != nil {
+		t.Fatalf("an invalid change should plan (invalid), not fail: %v", err)
 	}
-	if err == nil {
-		before, _ := os.ReadFile(p3)
-		if werr := writePlan(p3, bad); werr == nil {
-			t.Fatal("an invalid plan was written")
-		}
-		if now, _ := os.ReadFile(p3); string(now) != string(before) {
-			t.Fatal("an invalid plan changed the config")
-		}
+	if bad.Valid || bad.Error == "" || bad.Install == nil {
+		t.Fatalf("a plan binding a missing connector validated: %+v", bad)
+	}
+	before, _ := os.ReadFile(p3)
+	if werr := writePlan(p3, bad); werr == nil {
+		t.Fatal("an invalid plan was written")
+	}
+	if now, _ := os.ReadFile(p3); string(now) != string(before) {
+		t.Fatal("an invalid plan changed the config")
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(p3), ".conductor")); err == nil {
+		t.Fatal("an invalid plan installed its pack")
 	}
 	// A resolve that fails on --write: the config is put back.
 	p4 := catalogConfig(t, "")
@@ -267,16 +272,15 @@ func TestBotNewInstallKeepsTrustAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, _ := os.ReadFile(p4)
+	before4, _ := os.ReadFile(p4)
 	plan.Install.allowUnlisted = false
-	_ = os.WriteFile(p4, before, 0o600)
 	// The written config now refuses the source the plan resolved with the
 	// flag, which this write no longer has: the resolve fails.
 	plan.Config += "pack_trust:\n  allow: [\"github.com/nobody/*\"]\n"
 	if err := writePlan(p4, plan); err == nil || !strings.Contains(err.Error(), "your config is as it was") {
 		t.Fatalf("a failed resolve on write: %v", err)
 	}
-	if now, _ := os.ReadFile(p4); string(now) != string(before) {
+	if now, _ := os.ReadFile(p4); string(now) != string(before4) {
 		t.Fatal("the config was not put back")
 	}
 }
