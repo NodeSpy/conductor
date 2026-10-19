@@ -181,10 +181,14 @@
   document.addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; const d = document.querySelector('.vs-menu[open]'); if (d) { d.open = false; e.preventDefault(); const s = d.querySelector('summary'); if (s) s.focus(); } }, true);
   UI.act('vs-src', (b) => {
     const el = b.closest('.vs'), m = meta(el), src = b.dataset.v; if (el.dataset.src === src) { VS.markSrc(el, src, m); return; }
-    el.dataset.src = src; el.dataset.pending = '';
+    // each source keeps what you gave it: switching away and back brings it back (r5 major 14: Vault item → Secret →
+    // Vault item read 'Not set yet' and the configured key was gone)
+    const mem = (el._vsMem = el._vsMem || {}), h = hid(el); mem[el.dataset.src] = { value: h.value, set: h.dataset.set, pending: el.dataset.pending };
+    const back = mem[src] || { value: '' };
+    el.dataset.src = src; el.dataset.pending = back.pending || '';
     VS.markSrc(el, src, m);
-    hid(el).value = ''; delete hid(el).dataset.set;
-    el.querySelector('.vs-body').innerHTML = body(m, src, '', el.dataset.id);
+    h.value = back.value || ''; if (back.set != null) h.dataset.set = back.set; else delete h.dataset.set;
+    el.querySelector('.vs-body').innerHTML = body(m, src, back.value || '', el.dataset.id);
     VS.refresh(el);
     if (src !== 'typed') { const q = el.querySelector('.vs-q'); if (q) q.focus(); }
   });

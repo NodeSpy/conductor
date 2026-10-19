@@ -199,3 +199,16 @@ test('a reference is a lookup: type to search, pick with the keyboard, a chip wi
   await page.locator('.cdrawer [data-act="vs-choose"]').click();
   await expect(hidden(page, 'bot_token')).toHaveValue('{{ vault "op" "Cards/Household/cvc" }}');
 });
+
+// r5 major 14: switching the source away and back kept nothing (the configured vault item read 'Not set yet'); each
+// source keeps what you gave it.
+test('switching the source away and back keeps what that source had', async ({ page }) => {
+  await slackForm(page);
+  await lookup(page, '#f-bot_token-pick', 'slack bot', 'Agents/Slack/bot-token');
+  await src(page, 'bot_token', 'env');
+  await expect(hidden(page, 'bot_token')).toHaveValue('');
+  await src(page, 'bot_token', 'vault');
+  await expect(hidden(page, 'bot_token')).toHaveValue('{{ vault "op" "Agents/Slack/bot-token" }}');
+  await expect(vs(page, 'bot_token').locator('.vs-chosen')).toContainText('Slack');
+  await expect(vs(page, 'bot_token')).not.toContainText('Not set yet');
+});
