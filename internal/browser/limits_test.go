@@ -445,7 +445,14 @@ func TestRefusalBindsTheRefusingLayer(t *testing.T) {
 	card.Limits.PerPurchase = 30
 	r := SpendRules{Card: card, Who: botCaller, Bot: "shopper",
 		BotLimits: &config.PurchaseLimits{CardLimits: config.CardLimits{PerPurchase: 40, PerDay: 40, PerMonth: 300}}}
-	if _, err := l.ProposeWithin(buyP(25), time.Hour, r); err != nil {
+	a, err := l.ProposeWithin(buyP(25), time.Hour, r)
+	if err == nil {
+		_, err = l.ApproveWithin(a.ID, a.Digest, "op", time.Hour, false, r)
+	}
+	if err == nil {
+		_, err = l.Consume(a.ID, botCaller, r)
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	// 35: over the card's 30 a purchase (5 over), and over the bot's day
