@@ -68,6 +68,10 @@ type TeamConfig struct {
 	Routing *TeamRouting `yaml:"routing,omitempty"`
 	// Chat bounds the team conversation (`conductor team say`).
 	Chat TeamChat `yaml:"chat,omitempty"`
+	// Avatar is the team's face: { icon, color } or { image: <file> }
+	// beside the config (botidentity.go) — never a preset, which are bots'
+	// mascots. None: clients show the team's initials.
+	Avatar *BotAvatar `yaml:"avatar,omitempty"`
 }
 
 // TeamChat bounds a team conversation. On by default.
@@ -568,8 +572,17 @@ func inheritTeam(t TeamConfig, m BotConfig) BotConfig {
 // after ResolveTeams, which also catches a Config assembled in code).
 func (c *Config) validateTeams() error {
 	for _, name := range c.TeamNames() {
-		if err := c.validateBotTeam(name, c.Teams[name]); err != nil {
+		t := c.Teams[name]
+		if err := c.validateBotTeam(name, t); err != nil {
 			return fmt.Errorf("config: teams.%s: %w", name, err)
+		}
+		// The team's picture, beside the config: checked and resolved as a
+		// bot's is.
+		if a, err := resolveAvatarImage(t.Avatar, c.baseDir, "the config's directory"); err != nil {
+			return fmt.Errorf("config: teams.%s: %w", name, err)
+		} else if a != t.Avatar {
+			t.Avatar = a
+			c.Teams[name] = t
 		}
 	}
 	for _, name := range sortedBotKeys(c.Bots) {
@@ -591,6 +604,9 @@ func (c *Config) validateTeams() error {
 func (c *Config) validateBotTeam(name string, t TeamConfig) error {
 	if !validBotName(name) {
 		return fmt.Errorf("name must be lowercase letters, digits, - or _")
+	}
+	if err := validateAvatar(t.Avatar, "", false); err != nil {
+		return err
 	}
 	if t.Chat.EveryonePerHour < 0 || t.Chat.EveryonePerHour > MaxEveryonePerHour {
 		return fmt.Errorf("chat.everyone_per_hour: want 1 to %d, got %d", MaxEveryonePerHour, t.Chat.EveryonePerHour)

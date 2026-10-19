@@ -306,6 +306,8 @@ control socket, and nothing on it is reachable from a bot session:
 | `POST /v1/conversations/{id}/pin` | pin it for an operator: JSON `{operator, position}` (1-based; no position: last; a pinned one moves) |
 | `DELETE /v1/conversations/{id}/pin[?operator=]` | unpin (unpinning one that isn't pinned changes nothing) |
 | `PUT /v1/conversations/pins` | reorder: JSON `{operator, order: [ids…]}`, naming every pinned conversation exactly once |
+| `GET /v1/teams`, `GET /v1/teams/{team}` | every team, or one: bots, routing, `identity` (name, initials, avatar, picture) |
+| `GET /v1/teams/{team}/avatar`, `POST …/avatar/plan`, `POST …/avatar/apply` | a team's picture, served and changed exactly like a bot's (below) |
 | `GET /v1/bots/{bot}/avatar` | the bot's picture, re-encoded as a PNG; `404` when it has none (show its face or initials) |
 | `POST /v1/bots/{bot}/avatar/plan` | multipart: `file` (at most 8 MB) with an optional crop box `crop_x`, `crop_y`, `crop_side`, or `clear=1`. The same plan as `bot avatar set`: re-encoded, validated on a copy, a diff, `widening: false`, and a `token` |
 | `POST /v1/bots/{bot}/avatar/apply` | `token=…`: writes the planned picture and config line. Single use, bound to its bot, 15 minutes, and refused if the config changed since the plan. Reload to see it |
@@ -970,6 +972,36 @@ The `browser:` scope narrows which saved logins and sign-in credentials of
 conductor's agent browser a bot's sessions may use. It never grants
 anything. Until the agent browser is on the daemon, it is checked at load and
 reported by `conductor bot show`, but nothing consumes it.
+
+### A team's avatar
+
+A team can have a face too, with the same shapes and checks as a bot's
+[identity](#identity), except that **presets aren't allowed**: the mascots
+are bots' faces, so a team's avatar is an icon or a picture:
+
+```yaml
+teams:
+  platform:
+    avatar: { icon: radar, color: teal }          # an icon needs its own color (a team has none to lend)
+    # avatar: { image: avatars/team-platform.png, icon: radar, color: teal }   # a picture; the icon is its fallback face
+```
+
+A picture is checked like a bot's (PNG, JPEG or WebP by content, never SVG,
+no polyglot, inside the config's directory, within 2 MB and 2048px). An
+upload is re-encoded the same way: a square PNG of at most 512px with no
+metadata, at `avatars/team-<team>.png`, so a bot and a team with the same
+name never share a file. A preset on a team fails `conductor validate`,
+naming the team. With no avatar, clients show the team's initials.
+
+```
+conductor team show <team>                                 # bots, routing, identity (name, initials, avatar, picture)
+conductor team avatar set <team> <file> [--crop x,y,side]  # a diff; --write writes it
+conductor team avatar clear <team> [--write]
+```
+
+On the operator API: `GET /v1/teams` and `GET /v1/teams/{team}` carry
+`identity`. `GET /v1/teams/{team}/avatar` serves the picture, re-encoded,
+and `POST /v1/teams/{team}/avatar/plan` and `…/apply` work like a bot's.
 
 ### Teammates are peers
 

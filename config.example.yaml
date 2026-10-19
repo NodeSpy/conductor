@@ -1490,6 +1490,7 @@ bots:
 teams:
   platform:
     description: "Platform services: the shared runtime, its data stores and deploys"
+    # avatar: { icon: radar, color: teal }       # or { image: avatars/team-platform.png } (`conductor team avatar set`); no presets — those are bots'
     knowledge: { promotion: proposal }           # a shared repo every bot reads; promotions need an operator of the team
                                                  # + index_budget (default 2k), read_max, recall_limit, max_bytes: { knowledge, runbook, watch }
     collections:                                 # a custom document kind in the team's knowledge (wiki: Bots → Content kinds)

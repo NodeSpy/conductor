@@ -28,6 +28,8 @@ import (
 //	GET  /v1/bots/{bot}/attachments/{id}/content      → its bytes (always a download)
 //	GET  /v1/bots/{bot}/attachments/{id}/thumbnail[?size=N]   → a PNG thumbnail of an image
 //
+//	GET  /v1/teams                                    → every team: bots, routing, identity (avatar, initials)
+//	GET  /v1/teams/{team}                             → one team, in full
 //	GET  /v1/conversations[?operator=]                → bots' and teams' conversations: last message, unread
 //	GET  /v1/conversations/{id}/messages[?after=N&operator=&mark=1]   → messages after N (mark=1: read)
 //	POST /v1/conversations/{id}/messages              → send: JSON {text, operator, to, everyone}, or multipart with file parts
@@ -53,6 +55,8 @@ func OperatorAPI(s *Service) http.Handler {
 	mux.HandleFunc("GET /v1/bots/{bot}/attachments/{id}", s.apiAttachment)
 	mux.HandleFunc("GET /v1/bots/{bot}/attachments/{id}/content", s.apiAttachmentContent)
 	mux.HandleFunc("GET /v1/bots/{bot}/attachments/{id}/thumbnail", s.apiAttachmentThumbnail)
+	mux.HandleFunc("GET /v1/teams", s.apiTeams)
+	mux.HandleFunc("GET /v1/teams/{team}", s.apiTeam)
 	mux.HandleFunc("GET /v1/conversations", s.apiConversations)
 	mux.HandleFunc("GET /v1/conversations/stream", s.apiConversationStream)
 	mux.HandleFunc("GET /v1/conversations/{id}/messages", s.apiConversationMessages)
@@ -396,4 +400,21 @@ func (s *Service) apiConversationPins(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	apiJSON(w, http.StatusOK, map[string]any{"pins": pins})
+}
+
+func (s *Service) apiTeams(w http.ResponseWriter, r *http.Request) {
+	out := []any{}
+	for _, t := range s.Cfg().TeamNames() {
+		out = append(out, s.teamStatus(r.Context(), t, false))
+	}
+	apiJSON(w, http.StatusOK, map[string]any{"teams": out})
+}
+
+func (s *Service) apiTeam(w http.ResponseWriter, r *http.Request) {
+	t := r.PathValue("team")
+	if _, ok := s.Cfg().Teams[t]; !ok {
+		apiError(w, http.StatusNotFound, fmt.Errorf("unknown team %q", t))
+		return
+	}
+	apiJSON(w, http.StatusOK, s.teamStatus(r.Context(), t, true))
 }

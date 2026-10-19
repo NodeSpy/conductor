@@ -242,3 +242,97 @@ func TestBotAvatarAPI(t *testing.T) {
 		t.Fatalf("unknown bot: %d", w.Code)
 	}
 }
+
+// A TEAM'S PICTURE goes through the same pipeline: re-encoded, planned on a
+// copy, written as avatars/team-<name>.png (never a bot's file) with one
+// avatar line on the team; its icon is kept as the fallback; the API plans,
+// applies and serves it, and a team's token never applies to a bot.
+func TestTeamAvatarSet(t *testing.T) {
+	p := avatarConfig(t)
+	src, _ := os.ReadFile(p)
+	src = []byte(strings.Replace(string(src), "    description: first-line SRE   # keep this comment\n", "    description: first-line SRE   # keep this comment\n    team: platform\n", 1))
+	src = append(src, []byte("teams:\n  platform:\n    description: the platform team\n    routing: { fallback: sre }\n    avatar: { icon: radar, color: teal }\n")...)
+	_ = os.WriteFile(p, src, 0o600)
+	plan, err := planAvatarFor(p, "team", "platform", photo(t, 400, 300), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Valid || plan.Image != "avatars/team-platform.png" || plan.Team != "platform" || plan.Bot != "" {
+		t.Fatalf("plan: %+v", plan)
+	}
+	if !strings.Contains(plan.Diff, "+    avatar: {image: avatars/team-platform.png, icon: radar, color: teal}") {
+		t.Fatalf("diff:\n%s", plan.Diff)
+	}
+	if err := writeAvatar(p, plan); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := cfg.Teams["platform"].Avatar; a.Image != "avatars/team-platform.png" || a.ImagePath == "" || a.Icon != "radar" {
+		t.Fatalf("loaded: %+v", a)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(p), "avatars", "platform.png")); err == nil {
+		t.Fatal("a team's picture landed at a bot's path")
+	}
+	if _, err := planAvatarFor(p, "team", "nope", photo(t, 8, 8), nil); err == nil || !strings.Contains(err.Error(), `no team "nope"`) {
+		t.Fatalf("an unknown team: %v", err)
+	}
+	if _, err := planAvatarFor(p, "team", "platform", []byte("<svg/>"), nil); err == nil || !strings.Contains(err.Error(), "SVG") {
+		t.Fatalf("an SVG: %v", err)
+	}
+	clr, err := planAvatarFor(p, "team", "platform", nil, nil)
+	if err != nil || !strings.Contains(clr.Diff, "+    avatar: {icon: radar, color: teal}") {
+		t.Fatalf("clear keeps the icon: %+v %v", clr, err)
+	}
+	// The API.
+	cur := cfg
+	mux := http.NewServeMux()
+	avatarRoutes(mux, func() *config.Config { return cur }, func() string { return p })
+	defer func() { planFull = true }()
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/v1/teams/platform/avatar", nil))
+	if w.Code != 200 || avatar.Format(w.Body.Bytes()) != "png" {
+		t.Fatalf("serve: %d", w.Code)
+	}
+	var b bytes.Buffer
+	mw := multipart.NewWriter(&b)
+	fw, _ := mw.CreateFormFile("file", "t.png")
+	_, _ = fw.Write(photo(t, 64, 64))
+	_ = mw.Close()
+	r := httptest.NewRequest("POST", "/v1/teams/platform/avatar/plan", &b)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	var out map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	tok, _ := out["token"].(string)
+	if w.Code != 200 || out["team"] != "platform" || tok == "" {
+		t.Fatalf("plan: %d %s", w.Code, w.Body)
+	}
+	apply := func(path, tok string) int {
+		r := httptest.NewRequest("POST", path, strings.NewReader(url.Values{"token": {tok}}.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w.Code
+	}
+	if c := apply("/v1/bots/platform/avatar/apply", tok); c != http.StatusNotFound {
+		t.Fatalf("a team's token applied to a bot: %d", c)
+	}
+	if w := httptest.NewRecorder(); true {
+		mux.ServeHTTP(w, httptest.NewRequest("GET", "/v1/teams/nope/avatar", nil))
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("an unknown team's picture: %d", w.Code)
+		}
+	}
+}
+
+// `conductor team avatar` is an operator's: refused in a session.
+func TestTeamAvatarRefusesASession(t *testing.T) {
+	t.Setenv("CONDUCTOR_SKILL_TOKEN", "x")
+	if err := cmdTeam([]string{"avatar", "set", "platform", "x.png"}); err == nil || !strings.Contains(err.Error(), "only an operator changes a team's picture") {
+		t.Fatalf("in a session: %v", err)
+	}
+}

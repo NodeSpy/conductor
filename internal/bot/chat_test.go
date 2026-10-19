@@ -601,3 +601,41 @@ func TestChatPinAPI(t *testing.T) {
 		t.Fatalf("stored: %v", p)
 	}
 }
+
+// `team show` and the API carry a team's identity: initials always, the
+// avatar when set.
+func TestTeamIdentity(t *testing.T) {
+	f := newTeamFixture(t, func(c *config.Config) {
+		tc := c.Teams["platform"]
+		tc.Avatar = &config.BotAvatar{Icon: "radar", Color: "teal"}
+		c.Teams["platform"] = tc
+	})
+	out, err := f.svc.OperatorOp(context.Background(), "team", map[string]any{"team": "platform"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := out["identity"].(map[string]any)
+	if id["initials"] != "P" || id["avatar"] != (config.BotAvatar{Icon: "radar", Color: "teal"}) {
+		t.Fatalf("team show: %v", id)
+	}
+	srv := httptest.NewServer(OperatorAPI(f.svc))
+	defer srv.Close()
+	resp, _ := http.Get(srv.URL + "/v1/teams")
+	var list struct {
+		Teams []map[string]any `json:"teams"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&list)
+	byName := map[string]map[string]any{}
+	for _, tm := range list.Teams {
+		byName[tm["team"].(string)] = tm["identity"].(map[string]any)
+	}
+	if byName["billing"]["initials"] != "B" || byName["billing"]["avatar"] != nil || byName["platform"]["avatar"] == nil {
+		t.Fatalf("teams: %v", byName)
+	}
+	if r, _ := http.Get(srv.URL + "/v1/teams/platform"); r.StatusCode != 200 {
+		t.Fatalf("one team: %d", r.StatusCode)
+	}
+	if r, _ := http.Get(srv.URL + "/v1/teams/nope"); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("an unknown team: %d", r.StatusCode)
+	}
+}

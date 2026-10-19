@@ -165,36 +165,8 @@ func checkLine(field, s string, max int) error {
 
 // Validate checks the identity fields against the lists and caps.
 func (id Identity) Validate() error {
-	if a := id.Avatar; a != nil {
-		if a.Image != "" {
-			if err := checkAvatarImageName(a.Image); err != nil {
-				return err
-			}
-		}
-		switch {
-		case a.Preset != "" && a.Icon != "":
-			return fmt.Errorf("avatar: a preset or an icon — not both")
-		case a.Preset != "":
-			if err := checkName("avatar.preset", "preset", a.Preset, AvatarPresets); err != nil {
-				return err
-			}
-		case a.Icon != "":
-			if err := checkName("avatar.icon", "icon", a.Icon, AvatarIcons); err != nil {
-				return err
-			}
-			if a.Color == "" && id.Color == "" {
-				return fmt.Errorf("avatar: an icon needs a color (avatar.color, or the bot's color)")
-			}
-		case a.Image == "":
-			return fmt.Errorf("avatar: set preset: <face> (color optional), icon: <name> with a color, or image: <file>")
-		case a.Color != "":
-			return fmt.Errorf("avatar.color colors a preset or an icon; an image has its own")
-		}
-		if a.Color != "" {
-			if err := checkColor("avatar.color", a.Color); err != nil {
-				return err
-			}
-		}
+	if err := validateAvatar(id.Avatar, id.Color, true); err != nil {
+		return err
 	}
 	if id.Color != "" {
 		if err := checkColor("color", id.Color); err != nil {
@@ -230,6 +202,68 @@ func (id Identity) Validate() error {
 		}
 	}
 	return nil
+}
+
+// validateAvatar checks an avatar: a bot's (allowPreset; defaultColor is
+// the bot's identity color an icon may take) or a team's — never a preset:
+// the mascots are for bots, and a team has no color of its own to lend.
+func validateAvatar(a *BotAvatar, defaultColor string, allowPreset bool) error {
+	if a == nil {
+		return nil
+	}
+	if a.Image != "" {
+		if err := checkAvatarImageName(a.Image); err != nil {
+			return err
+		}
+	}
+	if a.Preset != "" && !allowPreset {
+		return fmt.Errorf("avatar.preset: presets (mascots) are for bots — a team's avatar is { icon: <name>, color: <name> } or { image: <file> }")
+	}
+	switch {
+	case a.Preset != "" && a.Icon != "":
+		return fmt.Errorf("avatar: a preset or an icon — not both")
+	case a.Preset != "":
+		if err := checkName("avatar.preset", "preset", a.Preset, AvatarPresets); err != nil {
+			return err
+		}
+	case a.Icon != "":
+		if err := checkName("avatar.icon", "icon", a.Icon, AvatarIcons); err != nil {
+			return err
+		}
+		if a.Color == "" && defaultColor == "" {
+			if !allowPreset {
+				return fmt.Errorf("avatar: an icon needs a color (avatar.color)")
+			}
+			return fmt.Errorf("avatar: an icon needs a color (avatar.color, or the bot's color)")
+		}
+	case a.Image == "":
+		if !allowPreset {
+			return fmt.Errorf("avatar: set icon: <name> with color: <name>, or image: <file>")
+		}
+		return fmt.Errorf("avatar: set preset: <face> (color optional), icon: <name> with a color, or image: <file>")
+	case a.Color != "":
+		return fmt.Errorf("avatar.color colors a preset or an icon; an image has its own")
+	}
+	if a.Color != "" {
+		if err := checkColor("avatar.color", a.Color); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TeamAvatarView is a team's avatar as `team show` and the dashboard read
+// it: always a name and initials (what a client shows with no avatar),
+// plus the avatar and its picture's path when set.
+func TeamAvatarView(team string, a *BotAvatar) map[string]any {
+	out := map[string]any{"name": team, "initials": Initials(team, "")}
+	if a != nil {
+		out["avatar"] = *a
+		if a.Image != "" {
+			out["picture"] = "/v1/teams/" + team + "/avatar"
+		}
+	}
+	return out
 }
 
 // Merge fills what id leaves unset from fallback (a template's suggestion):

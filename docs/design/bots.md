@@ -511,6 +511,12 @@ tagline, personality) came from one.
   takes a single-use token and refuses a config that changed since the
   plan. A picture never reaches a connector: there's no public endpoint, so
   the fallback face stands in.
+- **A team's avatar** is the same `BotAvatar`, checked by the same
+  `validateAvatar` with `allowPreset=false`. The mascots are bots' faces,
+  and an icon needs its own color because a team has no identity color.
+  Its picture goes through the same resolve, re-encode, plan and serve
+  path, at `avatars/team-<team>.png`, so a bot and a team of one name never
+  share a file; a plan token is bound to "bot:" or "team:" plus the name.
 - **The voice section is subordinate, by position and by statement.** It is
   rendered after the charter, every rule and (in a sweep) the notify
   threshold. It says it governs how the bot writes, never what it may do,
