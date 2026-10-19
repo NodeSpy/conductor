@@ -835,8 +835,6 @@ no browser.
   keys). Register a dedicated one.
 - **There's no live view of an agent's browser**, only `peek`.
 - **The container path is unproven on a real Mac** (section 1a).
-- **`bot:` and `team:` bindings match no session yet.** They need bots (#178)
-  to wire `groupsFor`. Until then they fail closed.
 - **A test sign-in's default success check is a heuristic**: off every page
   a step was submitted from, and no password or code field left. A site
   that answers a failure elsewhere needs the login's own `check` (a URL

@@ -773,9 +773,6 @@ These are the limits that still hold:
   private keys. Register a separate passkey for the agent instead.
 - **No live view of an agent's browser.** You get a `peek` screenshot. The
   interactive view belongs to the planned dashboard.
-- **`bot:` and `team:` bindings** match nothing until bots are wired to
-  report which bot or team a session acts for. Until then they fail closed:
-  nobody gets the login.
 - **A test sign-in guesses success by default.** It looks for having left the
   pages it submitted from, with no password or code field left. If a site
   shows its failures elsewhere, give the login `--check-url` or
