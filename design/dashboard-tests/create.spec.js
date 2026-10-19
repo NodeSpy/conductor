@@ -93,7 +93,7 @@ test('every entity picker has a create option', async ({ page }) => {
   await go(page, '#/workflows/assess-and-post');
   await go(page, '#/workflows/incident-intake'); await audit('bot step');
   await go(page, '#/connectors/connectors'); await page.locator('[data-act="conn-add"]').click(); await page.locator('[data-act="cat-pick"][data-kind="connector"][data-name="slack"]').click(); await audit('connector settings'); await close();
-  await go(page, '#/connectors/runtimes'); await page.locator('[data-act="rt-add"]').click(); await audit('runtime form'); await close();
+  await go(page, '#/connectors/runtimes'); await page.locator('[data-act="rt-add"]').click(); await page.locator('[data-act="cat-pick"][data-kind="runtime"][data-name="paseo"]').click(); await audit('runtime form'); await close();
   await go(page, '#/secrets'); await page.locator('[data-act="secret-add"]').click(); await audit('secret form'); await close();
   await go(page, '#/bots'); await page.locator('[data-act="bv-more"][data-m="homelab"]').click(); await page.locator('#pop-menu [data-act="bv-move"]').click(); await audit('move dialog'); await close();
   await go(page, '#/browser/takeover'); await audit('sign-in takeover wizard');

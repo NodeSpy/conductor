@@ -1190,7 +1190,16 @@ reference). Two more tabs under Browsers: Sessions · Logins · **Personal detai
   own source is a choice inside it). A new GitHub or Slack connection offers two ways in, side by side: **Connect with
   GitHub** (recommended: conductor creates the app and fills everything in) or **I already have an app** (the fields).
   A connection's identifier is its **Name** ("how you refer to this connection, e.g. gh-work"); an empty secret says
-  "Not set yet" in words; the reference it writes shows only once you've picked one. **Agent runtimes** and **Code languages** (the engines behind code steps) list theirs the same way.
+  "Not set yet" in words; the reference it writes shows only once you've picked one. **Agent runtimes**, **Code languages** (the engines behind code steps) and **Machines** are
+  the same flat row: the glyph on the name's line (each language its own: a terminal for cli, the JavaScript, Go,
+  Lua and WebAssembly marks, braces for jq and yq, a function for CEL; a runtime its tool's; a server for a machine),
+  how it is in plain words (a language says where it's used: "Used by 1 workflow step, in pr-review", linked; never
+  `run: js`), the facts line (origin, how it updates, version; sandboxed or not for a runtime; address and user for a
+  machine) and one ⋯ on every row: Update now, Hold or Stay current, permissions and Remove for an added one; "Show
+  where it's used" for a built-in language (it comes with conductor and updates with it); Edit, Test the connection
+  and Remove for a machine. No inner footer. **Add a runtime** and **Add a language** open the same picker as a
+  connection: one tight row each (the glyph, the name and a one-line plain description, then the facts), "Installed"
+  instead of a button for what is already there; only the list scrolls, with a fade at its foot while more is below.
   Whether an update hot-reloads (`SameReloadSurface`) or restarts is in its detail. The word "plugin" stays in the
   technical layer. **Packs** are only bundles of workflows, with their own Browse.
 - **Updates.**

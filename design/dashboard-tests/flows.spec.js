@@ -45,21 +45,22 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
   });
   test('runtime add / edit / delete, unsandboxed runtime is a widening', async ({ page }) => {
     await go(page, '#/connectors/runtimes');
-    await page.locator('[data-act="rt-add"]').click();
+    await page.locator('[data-act="rt-add"]').click(); // the picker first (67), then its form
+    await page.locator('[data-act="cat-pick"][data-kind="runtime"][data-name="acp"]').click();
     await page.fill('#f-name', 'gemini');
-    await page.selectOption('#f-use', 'acp');
+    await expect(page.locator('#f-use')).toHaveValue('acp');
     await page.fill('[id="f-agent_acp"]', 'gemini');
     await submit(page);
     await applyStaged(page);
     await go(page, '#/connectors/runtimes');
-    await expect(page.locator('tr', { hasText: 'gemini' })).toBeVisible();
-    await page.locator('[data-act="rt-edit"][data-r="oc"]').click();
+    await expect(page.locator('.pl-row[data-k="gemini"]')).toBeVisible();
+    await page.locator('[data-act="rt-more"][data-r="oc"]').click(); await page.locator('#pop-menu [data-act="rt-edit"]').click();
     await page.selectOption('[id="f-isolation_mode_opencode"]', '');
     await submit(page);
     await expect(page.locator('.tag', { hasText: 'widens: isolation: removed from the runtime' })).toBeVisible();
     await applyStaged(page, { expectWidening: true });
     await go(page, '#/connectors/runtimes');
-    await page.locator('[data-act="rt-del"][data-r="deck"]').click();
+    await page.locator('[data-act="rt-more"][data-r="deck"]').click(); await page.locator('#pop-menu [data-act="rt-del"]').click();
     await page.locator('#cf-ok').click();
     await applyStaged(page);
     expect(await state(page, () => D.runtimes.map((r) => r.name))).not.toContain('deck');
@@ -71,9 +72,9 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
     await submit(page);
     await applyStaged(page);
     await go(page, '#/connectors/hosts');
-    await page.locator('[data-act="host-test"][data-h="lab-box"]').click();
-    await expect(page.locator('tr', { hasText: 'lab-box' })).toContainText('reachable');
-    await page.locator('[data-act="host-del"][data-h="gpu-box"]').click();
+    await page.locator('[data-act="host-more"][data-h="lab-box"]').click(); await page.locator('#pop-menu [data-act="host-test"]').click();
+    await expect(page.locator('.pl-row[data-k="lab-box"]')).toContainText(/reachable/i);
+    await page.locator('[data-act="host-more"][data-h="gpu-box"]').click(); await page.locator('#pop-menu [data-act="host-del"]').click();
     await page.locator('#cf-ok').click();
     await expect(page.locator('#chk-state')).toContainText('failed');
     await expect(page.locator('.callout.danger')).toContainText('runtimes.gpu-box.host');

@@ -252,6 +252,11 @@
     update: (ver) => (ver ? { icon: 'circle-arrow-up', value: `${ver} available`, tone: 'update', label: 'A newer version can be installed' } : null),
     env: (env) => (!env ? null : /^prod/i.test(env) ? { prod: true, value: 'Production', label: 'Production' } : { icon: 'server', value: String(env).toLowerCase(), label: 'Environment' }),
   };
+  // a code language's or an agent runtime's own glyph, where the brand has one (67); null for the generic icon
+  // (a brand mark where the language has one, else a Lucide icon: a terminal for a command, braces for jq/yq, a function for CEL)
+  const KIND_GLYPH = { engine: { 'go-embed': 'go', go: 'go', python: 'python', ts: 'typescript', typescript: 'typescript', js: 'javascript', javascript: 'javascript', lua: 'lua', wasm: 'webassembly' }, runtime: { claude: 'claude', 'claude-code': 'claude', container: 'docker' } };
+  const KIND_ICON = { engine: { cli: 'terminal', command: 'terminal', cel: 'square-function', jq: 'braces', yq: 'braces', starlark: 'star', risor: 'binary' }, runtime: { cli: 'terminal' } };
+  UI.kindGlyph = (kind, name) => { const g = (KIND_GLYPH[kind] || {})[name], i = (KIND_ICON[kind] || {})[name]; return g ? svcGlyph(g) : i ? UI.icon(i, 'fx-ico') : null; };
   // the production square (the env glyph): production is never plain text, and never the waiting triangle
   const PROD_SQ = '<svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><rect x=".5" y=".5" width="9" height="9" rx="1.8" fill="currentColor"/></svg>';
   // a fact's link inside a row that is itself a link: it opens the fact's own page, never the row's

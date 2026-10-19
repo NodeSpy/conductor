@@ -916,3 +916,29 @@ html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radiu
 .chat-grid > .cm-side.fit-side { overflow-y: auto; overscroll-behavior: contain; align-content: start; }
 
 .cv-main.fit { min-height: 320px; } /* sized in chat.js, like a bot's Chat tab (65) */
+/* the add-a-… pickers (67): row buttons sit flat (no shadow); what you already have says Installed */
+.pk-row .btn { box-shadow: none; } .pk-inst { white-space: nowrap; }
+/* the add-a-plugin picker (67): a fixed frame (title, filter bar, pager) and only the list scrolls, with a fade at its
+   foot while more rows are below; each row tight: the glyph on the name's line, the name and a one-line description
+   on line one, the facts on line two */
+.modal.pk-modal { display: flex; flex-direction: column; overflow: hidden; }
+.pk-modal .modal-body.pk { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+.pk-modal #pk-body { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+.pk-modal .pk-list { overflow: auto; min-height: 0; overscroll-behavior: contain; }
+.pk-modal .pk-list.more { mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent); -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent); }
+.pk-modal .pk-pages { flex: none; }
+.pk-row { align-items: start; padding: 10px 0; } .pk-row > .sc-ic { margin-top: -2px; } .pk-row > .dl-na { align-self: center; }
+.pk-row .dl-nt { gap: 4px; } .pk-l1 { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.pk-l1 > b { flex: none; } .pk-l1 > .dl-why { min-height: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 720px) { .pk-l1 { display: grid; gap: 2px; } .pk-l1 > .dl-why { white-space: normal; } }
+/* a plugin row's glyph sits on its name's line, not between its lines */
+.pl-row > .dl-ng { align-self: start; margin-top: 2px; } .pl-row > .dl-ng > .fx-svc { width: 16px; height: 16px; color: var(--color-icon-default); }
+.pl-row .dl-why a { white-space: nowrap; color: inherit; text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 2px; }
+/* a phone picker row: the glyph and name on line one, the description (two lines at most) under it, then the facts
+   with the action at their right, so Installed or Install never takes a line of its own */
+@media (max-width: 720px) {
+  .pk-row { grid-template-columns: 26px minmax(0, 1fr) auto; gap: 4px 12px; } .pk-list > .pk-row > .dl-nt { display: contents; }
+  .pk-row > .sc-ic { grid-column: 1; grid-row: 1; } .pk-row .pk-l1 { grid-column: 2 / 4; grid-row: 1; }
+  .pk-row .pk-l1 > .dl-why { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; white-space: normal; }
+  .pk-row > .dl-nt > .fx { grid-column: 2; grid-row: 2; align-self: center; } .pk-row > .dl-na { grid-column: 3; grid-row: 2; align-self: center; }
+}
