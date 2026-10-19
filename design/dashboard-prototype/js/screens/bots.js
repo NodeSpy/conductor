@@ -472,7 +472,12 @@
     const groups = Object.keys(PLAN_WORD).map((k) => [k, res.filter(([a]) => a === k)]).filter(([, xs]) => xs.length);
     const jump = groups.length ? `<div class="plan-jump">${groups.map(([k, xs]) => `<span class="pj pj-${k}"><b>${PLAN_WORD[k]}</b> ${xs.map(([, r, i]) => `<a href="#" data-act="plan-jump" data-l="plan-${i}" class="mono">${esc(r)}</a>`).join(', ')}</span>`).join('')}</div>` : '';
     const count = (k) => res.filter(([a]) => a === k).length;
-    return { jump, body, counts: { create: count('create'), update: count('update'), replace: count('replace'), destroy: count('destroy') } }; }
+    // the tiles say what the plan's own summary says (r5 blocker 4: they counted '# … will be created' headers and said
+    // 0 adds beside 'Plan: 1 to add'); a replacement is one of the adds, and the tile says so
+    const sum = (String(t).match(/Plan:\s*(\d+) to add, (\d+) to change, (\d+) to destroy/) || []).slice(1).map(Number);
+    const counts = sum.length ? { create: sum[0], update: sum[1], replace: count('replace'), destroy: sum[2] } : { create: count('create'), update: count('update'), replace: count('replace'), destroy: count('destroy') };
+    counts.addsReplace = Math.min(counts.create, counts.replace); // adds that are a replacement's new copy
+    return { jump, body, counts }; }
   /** Who asked, in words: a non-operator requester gets a banner, never just a colored chip. */
   UI.requesterBanner = (p) => {
     const r = p.requester || '';
@@ -494,7 +499,7 @@
     const tf = p.tf, pend = p.status === 'pending', t = teamOf(m);
     const ask = p.ask || (tf ? `${m.name} wants to run terraform apply on ${p.env || tf.workspace}.` : `${m.name} wants to ${esc(String(p.summary || p.verb))}.`);
     const pc = tf ? planHTML(D.tfPlan || '').counts : null;
-    const changes = tf ? `<div class="dl-changes">${[[PLAN_WORD.create, pc.create], [PLAN_WORD.update, pc.update], [PLAN_WORD.replace, pc.replace, 'wait'], [PLAN_WORD.destroy, pc.destroy, 'fail']].map(([l, n, st]) => `<div${n && st ? ` data-s="${st}"` : ''}><b>${n}</b><span>${l}</span></div>`).join('')}
+    const changes = tf ? `<div class="dl-changes">${[[PLAN_WORD.create, pc.create, '', pc.addsReplace ? (pc.addsReplace === pc.create ? 'the replacement' : `${pc.addsReplace} a replacement`) : ''], [PLAN_WORD.update, pc.update], [PLAN_WORD.replace, pc.replace, 'wait'], [PLAN_WORD.destroy, pc.destroy, 'fail']].map(([l, n, st, note]) => `<div${n && st ? ` data-s="${st}"` : ''}><b>${n}</b><span>${l}</span>${note ? `<small class="dl-sub">${note}</small>` : ''}</div>`).join('')}
       ${tf.replaces.length ? `<p class="dl-chg-note">${UI.mark('wait')}<span><b>Replaces ${tf.replaces.length} ${tf.replaces.length === 1 ? 'server' : 'resources'}</b> (${tf.replaces.map(esc).join(', ')}). Stateful things such as databases are never replaced without a separate rule.</span></p>` : ''}</div>`
       : `<div class="dl-pwhy"><span class="dl-lbl">Exactly what runs</span>${UI.payloadHTML(p)}</div>`;
     const where = p.kind === 'purchase' ? [] : [['Where', p.env ? `${p.env[0].toUpperCase()}${p.env.slice(1)}${tf ? ` · workspace ${esc(tf.workspace)}` : ''}` : tf ? `workspace ${esc(tf.workspace)}` : ''], ['Effect', esc(p.impact || '')], ['Undo', esc(p.reversible ? p.reversible.replace(/^./, (c) => c.toUpperCase()) : 'conductor can’t undo this')]].filter(([, v]) => v);

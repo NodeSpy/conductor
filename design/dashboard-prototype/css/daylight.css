@@ -943,3 +943,4 @@ html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radiu
   .pk-row > .dl-nt > .fx { grid-column: 2; grid-row: 2; align-self: center; } .pk-row > .dl-na { grid-column: 3; grid-row: 2; align-self: center; }
 }
 .m-team-h > .m-team-a:empty { display: none; } /* a section with no actions has no empty action row (a phone stacks it under the title) */
+.dl-changes > div { flex-wrap: wrap; } .dl-changes > div > small { flex-basis: 100%; font: var(--type-caption); } /* the Adds tile says when an add is a replacement (r5-4) */
