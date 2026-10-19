@@ -212,8 +212,8 @@ test('bot memory: edit, pin, who wrote it; the log is annotated or flagged, neve
   await page.locator('[data-act="rp-file-menu"]').click(); await page.locator('#pop-menu [data-act="rp-pin"]').click();
   await expect(page.locator('.kind-entries .entry.on .pin')).toBeVisible();
   await page.locator('[data-act="rp-blame"]').click();
-  await expect(page.locator('.bl-group.bot').first()).toContainText('platform-sre');
-  await expect(page.locator('.bl-group.operator').first()).toContainText('ops (operator)');
+  await expect(page.locator('.bl-group.bot').first()).toContainText('Atlas');
+  await expect(page.locator('.bl-group.operator').first()).toContainText('you');
   await page.locator('[data-act="rp-kind"][data-k="log"]').click();
   await expect(page.locator('#ke-form')).toHaveCount(0);
   await expect(page.locator('.repo-ed')).toContainText('history isn\'t rewritten');

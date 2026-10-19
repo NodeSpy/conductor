@@ -82,14 +82,14 @@ test('routing: add a rule, try it on a past event, route work with provenance ke
   await page.selectOption('#f-event', 'ev-pd');
   await page.locator('#gen-submit').click();
   await expect(page).toHaveURL(/#\/tickets\/c\d+/);
-  await expect(page.locator('.tk-head .fx')).toContainText('platform-sre');
+  await expect(page.locator('.tk-head .fx')).toContainText('Atlas');
   await expect(page.locator('.case-head')).toContainText('routed to platform by rule pd-api');
-  await expect(page.locator('.case-head')).toContainText('→ platform-sre');
+  await expect(page.locator('.case-head')).toContainText('→ Atlas');
   await expect(page.locator('.case-head')).toContainText('event:pd.incident');
   // an operator reassignment is recorded too, requester still kept
   await go(page, '#/tickets/c33');
   await page.locator('[data-act="tk-set"][data-k="who"]').click(); await page.selectOption('#f-who', 'platform-sre'); await page.locator('#gen-submit').click();
-  await expect(page.locator('.case-head')).toContainText('reassigned by operator ops to platform-sre');
+  await expect(page.locator('.case-head')).toContainText('reassigned by operator ops to Atlas');
   await expect(page.locator('.case-head')).toContainText('event:gh.issue_opened');
 });
 
@@ -106,7 +106,7 @@ test('knowledge: approve a promotion with a passkey; a bot proposes one from mem
 
 test('links are pairs of bots (bot_links), never whole teams; a lead change is a routing edit', async ({ page }) => {
   await go(page, '#/teams/platform');
-  await expect(page.locator('.panel:has(h3:text-is("Links"))')).toContainText('platform-sre ↔ billing-sre');
+  await expect(page.locator('.panel:has(h3:text-is("Links"))')).toContainText('Atlas ↔ Ledger'); // display names (r5-9)
   await page.locator('[data-act="botlink-add"]').click();
   await page.selectOption('#f-a', 'web-triage'); await page.selectOption('#f-b', 'homelab');
   await page.locator('#gen-submit').click();
@@ -131,14 +131,14 @@ test('old member links land on the bots pages', async ({ page }) => {
 test('a case shows its delegation edges with status and the reported result', async ({ page }) => {
   await go(page, '#/bots/platform-sre/cases/c29');
   const d1 = page.locator('.item.deleg[data-deleg="d1"]');
-  await expect(d1).toContainText('delegated by platform-sre → platform-data');
+  await expect(d1).toContainText('delegated by Atlas → Delta');
   await expect(d1).toContainText('done');
   await expect(d1.locator('.deleg-result')).toContainText('p99 regression starts 14:03');
   await expect(page.locator('.item.deleg[data-deleg="d2"]')).toContainText('running');
   // the recipient's child case carries the original requester
-  await page.locator('.item.deleg[data-deleg="d1"] a', { hasText: 'platform-data' }).click();
+  await page.locator('.item.deleg[data-deleg="d1"] a', { hasText: 'Delta' }).click();
   await expect(page).toHaveURL(/#\/tickets\/c35/);
-  await expect(page.locator('.case-head')).toContainText('delegated by platform-sre → platform-data from ticket c29');
+  await expect(page.locator('.case-head')).toContainText('delegated by Atlas → Delta from ticket c29');
   await expect(page.locator('.case-head')).toContainText('event:pd.incident');
 });
 
@@ -162,9 +162,9 @@ test('have a bot delegate to a teammate; the child case works under the original
   await page.fill('#f-task', 'Split p99 by AMI for the incident window and report the worst route.');
   await page.locator('#gen-submit').click();
   const edge = page.locator('.item.deleg', { hasText: 'Split p99 by AMI' });
-  await expect(edge).toContainText('delegated by platform-sre → platform-data');
+  await expect(edge).toContainText('delegated by Atlas → Delta');
   await expect(edge).toContainText('running');
-  await edge.locator('a', { hasText: 'platform-data' }).click();
+  await edge.locator('a', { hasText: 'Delta' }).click();
   await expect(page.locator('.case-head')).toContainText('event:pd.incident');
   await go(page, '#/teams/platform');
   await expect(page.locator('.panel', { hasText: 'Delegations' }).first()).toContainText('Split p99 by AMI');

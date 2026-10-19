@@ -60,7 +60,7 @@
     const e = UI.plainError ? UI.plainError(r) : r.error || ''; return `${r.failed_step ? `Failed at “${esc(r.failed_step)}”` : 'Failed'}${e ? `: ${esc(e)}` : ''}${/\.$/.test(e) ? '' : '.'}`; };
   // a run's name, then its facts (the bot, what the connector says it's about); with nothing to show, its target in words
   const runFacts = (r) => { const b = UI.botOfRun(r); return [b && !String(r.workflow).startsWith('bot:') ? { icon: 'obj-bot', value: b, href: `#/bots/${b}`, pri: 2, label: 'Bot' } : null, ...UI.itemFacts(r).map((f) => ({ ...f, pri: /#/.test(f.value) ? 1 : 3 }))].filter(Boolean); };
-  const runName = (r) => `<b>${esc(r.workflow.replace(/^bot:/, ''))}</b>${runFacts(r).length ? '' : ` <span class="tgt">${target(r)}</span>`}`;
+  const runName = (r) => `<b>${String(r.workflow).startsWith('bot:') ? UI.nm(r.workflow) : esc(r.workflow)}</b>${runFacts(r).length ? '' : ` <span class="tgt">${target(r)}</span>`}`;
   const runFx = (r) => UI.factsLine(runFacts(r));
   const statusCell = (r) => UI.statusMark(UI.runS(r.status), UI.runWord(r.status));
   // the same verbs as Needs you, every row's button the same size (rows are peers)
@@ -127,7 +127,7 @@
   UI.runFields = (runs) => [
     { k: 'status', label: 'Status', multi: true, plural: 'statuses', keepOrder: true, hint: 'failed, running, waiting…', options: () => STATUSES.map(([v, label, f]) => ({ v, label, n: runs.filter(f).length })) },
     { k: 'workflow', label: 'Workflow', multi: true, options: () => count(runs.filter((r) => !r.workflow.startsWith('bot:')).map((r) => r.workflow)).map(([v, n]) => ({ v, label: v, n })) },
-    { k: 'bot', label: 'Bot', multi: true, options: () => count(runs.map((r) => UI.botOfRun(r))).map(([v, n]) => ({ v, label: v, n })) },
+    { k: 'bot', label: 'Bot', multi: true, options: () => count(runs.map((r) => UI.botOfRun(r))).map(([v, n]) => ({ v, label: UI.botName(v), n })) },
     ...UI.attrQualifiers(runs),
   ];
   const actBar = () => UI.filterBar({ id: 'act', state: av, placeholder: 'Search, or filter: status:failed', label: 'Search and filter runs',
@@ -316,7 +316,7 @@
   const tally = (xs) => { const m = new Map(); xs.filter(Boolean).forEach((x) => m.set(x, (m.get(x) || 0) + 1)); return [...m].map(([v, n]) => ({ v, label: v, n })); };
   const needFields = () => { const A = D.attention, F = A.map(factsOf);
     return [{ k: 'kind', label: 'Kind', multi: true, keepOrder: true, plural: 'kinds', hint: 'approval, failed, question, sign-in', options: () => UI.NEED_KINDS.map(([v, , many]) => ({ v, label: many[0].toUpperCase() + many.slice(1), n: A.filter((a) => a.kind === v).length })).filter((o) => o.n) },
-      { k: 'bot', label: 'Bot', multi: true, options: () => tally(F.map((f) => f.bot)) },
+      { k: 'bot', label: 'Bot', multi: true, options: () => tally(F.map((f) => f.bot)).map((o) => Object.assign(o, { label: UI.botName(o.v) })) },
       { k: 'workflow', label: 'Workflow', multi: true, options: () => tally(F.map((f) => f.workflow)) },
       ...UI.attrQualifiers(A, itemAttrs)]; };
   // one tile per kind, Home's tile in Home's grid (the same counts as Home's Needs you tile and the badge); a tile

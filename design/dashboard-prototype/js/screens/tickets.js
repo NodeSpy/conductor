@@ -22,9 +22,9 @@
   const statusOf = (c) => c.status === 'closed' ? (c.declined ? 'declined' : 'done') : c.stage === 'draft' ? 'draft' : (D.proposals || []).some((p) => p.case === c.id && p.status === 'pending') ? 'waiting'
     : c.workers > 0 || (D.delegations || []).some((d) => d.parent === c.id && d.status === 'running') ? 'progress' : 'ready';
   UI.ticketStatus = (c) => { const k = statusOf(c); return { k, word: STATUS[k][0], mark: STATUS[k][1] }; };
-  const assignee = (c) => (c.bot ? c.bot : c.team ? `team ${c.team}` : 'Nobody yet');
+  const assignee = (c) => (c.bot ? UI.botName(c.bot) : c.team ? `team ${c.team}` : 'Nobody yet');
   /** Who asked (or, for a draft, who wrote it), in words. */
-  const askedBy = (c) => { const r = String(c.requester || ''); return /^operator:/.test(r) ? (r === 'operator:ops' ? 'you' : r.slice(9)) : /^event:pd/.test(r) ? 'a PagerDuty incident' : /^event:gh/.test(r) ? 'a GitHub event' : /^event:/.test(r) ? 'an event' : /^chat:/.test(r) ? 'someone in chat' : c.cls === 'proactive' ? 'a routine check' : /^bot:/.test(r) ? `${r.slice(4)} (a bot)` : r || 'someone'; };
+  const askedBy = (c) => { const r = String(c.requester || ''); return /^operator:/.test(r) ? (r === 'operator:ops' ? 'you' : r.slice(9)) : /^event:pd/.test(r) ? 'a PagerDuty incident' : /^event:gh/.test(r) ? 'a GitHub event' : /^event:/.test(r) ? 'an event' : /^chat:/.test(r) ? 'someone in chat' : c.cls === 'proactive' ? 'a routine check' : /^bot:/.test(r) ? `${UI.botName(r.slice(4))} (a bot)` : r || 'someone'; };
   const dueWord = (d) => { if (!d) return ''; const days = Math.round((Date.parse(d + 'T12:00:00') - Date.now()) / 86400000); return days < 0 ? `overdue by ${-days} day${days === -1 ? '' : 's'}` : days === 0 ? 'due today' : days === 1 ? 'due tomorrow' : `due in ${days} days`; };
   /** A ticket's facts: who has it, priority when it isn't normal, when it's due, its labels. */
   UI.ticketFacts = (c, o = {}) => [o.noAssignee ? null : c.bot ? { icon: 'obj-bot', value: c.bot, href: `#/bots/${c.bot}`, pri: 1, label: 'Assigned to' } : c.team ? { icon: 'team', value: `team ${c.team}`, href: `#/teams/${c.team}`, pri: 1, label: 'Assigned to the team' } : null,
@@ -77,7 +77,7 @@
   const bar = (list) => UI.filterBar({ id: 'tk', state: tv, end: viewCtl, placeholder: 'Find a ticket, or filter: status:draft', label: 'Find and filter tickets', fields: [
     { k: 'who', label: 'Assignee', multi: true, alias: 'assignee', options: () => { const m = tally(list.map((c) => c.bot || (c.team ? 'team:' + c.team : 'nobody')));
       D.teams.forEach((t) => { if (!m.has('team:' + t.name)) m.set('team:' + t.name, 0); });
-      return [...m].map(([v, n]) => ({ v, label: v === 'nobody' ? 'Nobody yet' : v.startsWith('team:') ? `team ${v.slice(5)}` : v, n: v.startsWith('team:') ? list.filter((c) => c.team === v.slice(5) || teamOf(c) === v.slice(5)).length : n })).filter((o) => o.n); } },
+      return [...m].map(([v, n]) => ({ v, label: v === 'nobody' ? 'Nobody yet' : v.startsWith('team:') ? `team ${v.slice(5)}` : UI.botName(v), n: v.startsWith('team:') ? list.filter((c) => c.team === v.slice(5) || teamOf(c) === v.slice(5)).length : n })).filter((o) => o.n); } },
     { k: 'status', label: 'Status', multi: true, keepOrder: true, options: () => ORDER.map((v) => ({ v, label: STATUS[v][0], n: list.filter((c) => statusOf(c) === v).length })).filter((o) => o.n) },
     { k: 'priority', label: 'Priority', multi: true, keepOrder: true, options: () => PRI.map(([v, label]) => ({ v, label, n: list.filter((c) => c.priority === v).length })).filter((o) => o.n) },
     { k: 'label', label: 'Label', multi: true, more: true, options: () => [...tally(list.flatMap((c) => c.labels || []))].map(([v, n]) => ({ v, label: v, n })) }],
@@ -166,7 +166,7 @@
       <div class="grid g-side tk-grid">
         <div class="stack">
           <section class="dl-card tk-desc"><header class="dl-ch"><h2>Description</h2><span class="dl-sp"></span><button class="btn sm ghost" data-act="tk-edit" data-t="${c.id}">${icon('edit')}Edit</button></header>${c.desc ? `<p class="tk-body">${UI.md(c.desc)}</p>` : '<p class="dl-sub">No description.</p>'}</section>
-          <section class="panel chat tk-chat"><div class="panel-head"><h3>Comments</h3><span class="dl-sub">${c.bot ? `${esc(c.bot)} reads them and answers here` : 'The bot that takes it reads them'}</span></div>
+          <section class="panel chat tk-chat"><div class="panel-head"><h3>Comments</h3><span class="dl-sub">${c.bot ? `${UI.nm(c.bot)} reads them and answers here` : 'The bot that takes it reads them'}</span></div>
             ${UI.chatThread(UI.ticketRows(c.id), c.bot || 'conductor', { ticket: c.id, empty: 'No comments yet.' })}${UI.chatComposer(key, { ticket: c.id })}<div class="cm-drop" aria-hidden="true">${icon('attach')}Drop to attach to your comment</div></section>
           ${dels.length ? `<div class="panel"><div class="panel-head"><h3>Hand-offs</h3><span class="muted small">parts handed to teammates; results report back here</span></div><div class="list">${dels.map((d) => (d.child === c.id ? k.edgeHTML(d).replace('class="item deleg"', 'class="item deleg inbound"') : k.edgeHTML(d))).join('')}</div></div>` : ''}
         </div>
@@ -184,7 +184,7 @@
   UI.afterRender.push((main) => { const t = main.querySelector('.tk-chat #msgs'); if (t) t.scrollTop = t.scrollHeight; });
 
   /* ---------- changing a ticket ---------- */
-  const whoOptions = () => [['', 'Nobody yet']].concat(D.teams.map((t) => ['team:' + t.name, `team ${t.name}: its lead or routing picks a bot`]), D.bots.map((b) => [b.name, `${b.name}${b.cfg && b.cfg.team ? ' · ' + b.cfg.team : ' · solo'}`]));
+  const whoOptions = () => [['', 'Nobody yet']].concat(D.teams.map((t) => ['team:' + t.name, `team ${t.name}: its lead or routing picks a bot`]), D.bots.map((b) => [b.name, `${UI.botName(b.name)}${b.cfg && b.cfg.team ? ' · team ' + b.cfg.team : ' · no team'}`]));
   const assign = (c, v) => { const was = assignee(c); if (!v) { delete c.bot; delete c.team; } else if (v.startsWith('team:')) { c.team = v.slice(5); delete c.bot; } else { c.bot = v; c.team = ((K().teamOf(K().M(v)) || {}).name) || undefined; if (!c.team) delete c.team; }
     c.routed = Object.assign({}, c.routed || {}, { by: 'operator', from: was, to: assignee(c).replace('Nobody yet', 'nobody'), team: c.team, requester_kept: true });
     (c.notes = c.notes || []).push({ at: now(), who: 'conductor', text: `Assigned to ${assignee(c)} by you` }); audit('ticket_assign', `${c.id} → ${assignee(c)}`); };
@@ -258,7 +258,7 @@
 
   /* ---------- a bot's tickets and a team's tickets: the same rows, narrowed ---------- */
   UI.botTickets = (m) => { const list = D.cases.filter((c) => c.bot === m.name);
-    return `<section class="tk-in"><header class="dl-ch tk-inh"><p class="dl-sub">Tickets assigned to ${esc(m.name)}: from you, a chat, an event or its own checks. It keeps its notes on each and the parts it hands to teammates.</p><span class="dl-sp"></span><a class="btn sm secondary" href="#/tickets/new?bot=${encodeURIComponent(m.name)}">${icon('plus')}New ticket for it</a></header>
+    return `<section class="tk-in"><header class="dl-ch tk-inh"><p class="dl-sub">Tickets assigned to ${UI.nm(m.name)}: from you, a chat, an event or its own checks. It keeps its notes on each and the parts it hands to teammates.</p><span class="dl-sp"></span><a class="btn sm secondary" href="#/tickets/new?bot=${encodeURIComponent(m.name)}">${icon('plus')}New ticket for it</a></header>
       ${UI.ticketList(list, { noAssignee: true, base: `#/bots/${m.name}/cases`, none: `Nothing assigned to ${esc(m.name)}.` })}</section>`; };
   UI.teamTickets = (t) => { const list = D.cases.filter((c) => c.team === t.name || teamOf(c) === t.name);
     return `<section class="tk-in"><header class="dl-ch tk-inh"><p class="dl-sub">Tickets for team ${esc(t.name)} and its bots. One for the team goes to its lead or routing, which picks a bot.</p><span class="dl-sp"></span><a class="btn sm secondary" href="#/tickets/new?team=${encodeURIComponent(t.name)}">${icon('plus')}New ticket for the team</a></header>

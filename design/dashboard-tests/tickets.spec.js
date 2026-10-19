@@ -15,10 +15,10 @@ test('Tickets is in the nav; the Board first, drafts its first column; cards in 
   const drafts = page.locator('.tk-col[data-col="draft"]');
   await expect(drafts.locator('h2')).toHaveText('Draft');
   await expect(drafts.locator('.tk-card')).toHaveCount(4);
-  await expect(drafts.locator('.tk-card', { hasText: 'Idea: move the nightly backups' })).toContainText('Drafted by homelab');
+  await expect(drafts.locator('.tk-card', { hasText: 'Idea: move the nightly backups' })).toContainText('Drafted by Hearth');
   const urgent = page.locator('.tk-card', { hasText: 'SEV2 api p99 latency' });
   await expect(urgent.locator('.fx-i.hi')).toContainText('Urgent');
-  await expect(urgent.locator('.fx')).toContainText('platform-sre');
+  await expect(urgent.locator('.fx')).toContainText('Atlas');
   for (const t of await page.locator('.tk-card').allTextContents()) expect(t).not.toMatch(/\bc\d{2}\b/);
 });
 
@@ -155,7 +155,7 @@ test('details change in place; a ticket shows its linked work', async ({ page })
   await page.locator('[data-act="tk-set"][data-k="who"]').click();
   await page.selectOption('#f-who', 'web-triage');
   await page.locator('#gen-submit').click();
-  await expect(page.locator('.tk-head .fx')).toContainText('web-triage');
+  await expect(page.locator('.tk-head .fx')).toContainText('Scout');
   await expect(page.locator('.tk-hist')).toContainText('Assigned');
   await go(page, '#/bots/web-triage/cases');
   await expect(page.locator('.dl-tabs a[aria-current="page"]')).toContainText('Tickets');

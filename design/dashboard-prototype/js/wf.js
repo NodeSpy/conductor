@@ -55,7 +55,7 @@
       case 'assert': return `assert ${t(s.assert, 50)}`;
       case 'fail': return `fail “${t(s.fail, 50)}”`;
       case 'parallel': return `${s.parallel.length} branches, joined before the next step`;
-      case 'bot': { const b = isObj(s.bot) ? s.bot : { name: s.bot }; return b.team ? `to team ${b.team} · its rules, else the lead` : `to bot ${b.name}${b.title ? ' · “' + t(b.title, 40) + '”' : ''}`; }
+      case 'bot': { const b = isObj(s.bot) ? s.bot : { name: s.bot }; return b.team ? `to team ${b.team} · its rules, else the lead` : `to ${window.UI && UI.botName ? UI.botName(b.name) : b.name}${b.title ? ' · “' + t(b.title, 40) + '”' : ''}`; }
       default: return 'no step type: add uses:, type: agent, use:, decide:, call: …';
     }
   };

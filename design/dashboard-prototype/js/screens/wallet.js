@@ -289,7 +289,7 @@
     return { xs, err: badOne ? `“${badOne}”: ${originErr(badOne)}` : dup ? `${host(dup)} is listed twice.` : '' }; };
   /** Who may use it: bots and teams, several at once (the backend's identities is a list), with the shared picker. */
   const whoField = (help) => UI.fieldHTML({ k: 'who', type: 'select-multi', req: true, label: 'Who may use it', options: idOpts([]), help }, [], 'w-');
-  const whoOf = (root) => [...root.querySelectorAll('[data-listk="who"] .chip-x .mono')].map((x) => x.textContent);
+  const whoOf = (root) => [...root.querySelectorAll('[data-listk="who"] .chip-x [data-v]')].map((x) => x.dataset.v);
 
   /* ---------- Add personal details ---------- */
   const NEWF = ['name', 'email', 'phone', 'address.line1', 'address.city', 'address.region', 'address.postal_code', 'address.country'];

@@ -18,7 +18,7 @@
      the actions in a row that never covers the content; full width, so nothing is squeezed into a side column */
   const plainChange = (h) => { if (h.plain) return h.plain; const t = String(h.summary || ''); let m;
     if ((m = t.match(/^triggers\[([^\]]+)\]\.policy\.budget\.max_cost_usd (\S+) → (\S+)/))) return `${+m[3] > +m[2] ? 'Raised' : 'Lowered'} ${m[1]}’s budget per run from $${m[2]} to $${m[3]}`;
-    if ((m = t.match(/^bots\.([\w-]+)\.proactive\.every (\S+) → (\S+)/))) return `${m[1]} now checks in every ${UI.humanSpan(m[3])} (was every ${UI.humanSpan(m[2])})`;
+    if ((m = t.match(/^bots\.([\w-]+)\.proactive\.every (\S+) → (\S+)/))) return `${UI.botName(m[1])} now checks in every ${UI.humanSpan(m[3])} (was every ${UI.humanSpan(m[2])})`;
     if ((m = t.match(/connectors\.([\w-]+) added/))) return `Added the connection ${m[1]}`;
     if ((m = t.match(/^packs\.([\w-]+)\.steps\.(\S+)\.model (\S+)/))) return `The ${m[1]} pack’s “${m[2].split('/').pop()}” step uses the model ${m[3]}`;
     return t; };

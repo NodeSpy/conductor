@@ -116,8 +116,8 @@
   UI.runDur = (r) => (r.finished ? UI.durText(new Date(r.finished) - new Date(r.started)) : '…');
   /** A run's plain headline (what it is doing or did, in words); the workflow name and ids follow in the detail line. */
   const RUN_WHAT = { 'ci-fixer': ['Fixing a failing check', 'Fixed a failing check', 'Couldn’t fix a failing check'], 'pr-review': ['Reviewing a pull request', 'Reviewed a pull request', 'Couldn’t review a pull request'], 'issue-triage': ['Triaging a new issue', 'Triaged a new issue', 'Couldn’t triage an issue'], 'dep-bump': ['Bumping dependencies', 'Bumped dependencies', 'Couldn’t bump dependencies'], 'release-notes': ['Drafting release notes', 'Drafted release notes', 'Couldn’t draft release notes'], 'incident-intake': ['Taking in an incident', 'Took in an incident', 'Couldn’t take in an incident'], 'assess-and-post': ['Assessing and posting', 'Assessed and posted', 'Couldn’t assess and post'] };
-  UI.runTitle = (r) => { const bot = String(r.workflow || '').startsWith('bot:') ? r.workflow.slice(4) : null; const i = r.status === 'run' ? 0 : ['fail', 'stopped'].includes(r.status) ? 2 : 1;
-    if (r.status === 'wait') return `Waiting for your answer${bot ? ` (${bot})` : ''}`; if (r.status === 'idle') return `${String(r.workflow).replace(/^bot:/, '')} is parked`;
+  UI.runTitle = (r) => { const bot = String(r.workflow || '').startsWith('bot:') ? (UI.botName ? UI.botName(r.workflow.slice(4)) : r.workflow.slice(4)) : null; const i = r.status === 'run' ? 0 : ['fail', 'stopped'].includes(r.status) ? 2 : 1;
+    if (r.status === 'wait') return `Waiting for your answer${bot ? ` (${bot})` : ''}`; if (r.status === 'idle') return `${String(r.workflow).startsWith('bot:') && UI.botName ? UI.botName(r.workflow.slice(4)) : r.workflow} is parked`;
     if (bot) return [`${bot} is working`, `${bot} finished a task`, `${bot}’s task failed`][i]; const w = RUN_WHAT[r.workflow]; return w ? w[i] : [`Running ${r.workflow}`, `${r.workflow} finished`, `${r.workflow} failed`][i]; };
   /** A run's error in plain words; the raw text stays on the run's record and in the step log. */
   UI.plainError = (r) => { const e = String(r.error || ''); let m;
@@ -189,7 +189,7 @@
       their hand-written words; new ones are written from their source. */
   UI.syncAttention = () => { if (!window.D || !D.attention || !D.proposals) return;
     const dismissed = new Set(D.dismissed || []), want = [], ago = (iso) => (iso ? UI.ago(iso) : '');
-    D.proposals.filter((p) => p.status === 'pending' && UI.live(p)).forEach((p) => want.push({ kind: p.kind === 'purchase' ? 'purchase' : 'approval', href: `#/bots/${p.bot}/proposals/${p.id}`, title: `${p.verb} · ${p.id}`, sub: `${p.bot} · case ${p.case}`, plain: p.title || p.summary || p.verb, why: p.kind === 'purchase' ? p.why || `${p.bot} asks before it buys` : `${p.bot} asks before it does this`, verb: 'Review', age: ago(p.at) }));
+    D.proposals.filter((p) => p.status === 'pending' && UI.live(p)).forEach((p) => want.push({ kind: p.kind === 'purchase' ? 'purchase' : 'approval', href: `#/bots/${p.bot}/proposals/${p.id}`, title: `${p.verb} · ${p.id}`, sub: `${p.bot} · case ${p.case}`, plain: p.title || p.summary || p.verb, why: p.kind === 'purchase' ? p.why || `${UI.botName ? UI.botName(p.bot) : p.bot} asks before it buys` : `${UI.botName ? UI.botName(p.bot) : p.bot} asks before it does this`, verb: 'Review', age: ago(p.at) }));
     // a purchase that isn't a bot's (a bot's is its proposal, above) waits for your signed approval too
     (D.purchases || []).filter((p) => !p.bot && UI.puStatus && UI.puStatus(p) === 'pending').forEach((p) => want.push({ kind: 'purchase', href: `#/browser/purchases/${p.id}`, title: `purchase ${p.id}`, sub: p.merchant, plain: UI.purchaseTitle(p), why: p.why || 'An agent asks before it buys', verb: 'Review', age: ago(p.created) }));
     D.runs.filter((r) => r.status === 'fail' && Date.now() - new Date(r.finished || r.started) < 864e5).forEach((r) => want.push({ kind: 'failed', href: `#/runs/${r.id}`, title: `${r.workflow} failed${UI.runTarget(r) ? ' on ' + UI.runTarget(r) : ''}`, sub: r.error || '', plain: `${r.workflow.replace(/^bot:/, '')} failed${UI.runTarget(r) ? ' on ' + UI.runTarget(r) : ''}`, why: r.error || '', verb: 'Open', age: ago(r.finished || r.started) }));
@@ -228,7 +228,7 @@
    * facts (pri 3) drop first and the rest wrap under.
    *   UI.factsLine([{ icon, value, href, pri: 1|2|3, risky, prod, label }])  (UI.facts is the details list) */
   UI.factsLine = (xs) => { xs = (xs || []).filter((f) => f && f.value); if (!xs.length) return '';
-    return `<span class="fx">${xs.map((f) => { const ext = /^https?:/.test(f.href || ''), inner = `${f.prod ? `<i class="fx-g fx-prod">${PROD_SQ}</i>` : f.glyph ? f.glyph : f.tone === 'danger' ? `<span class="fx-tile">${UI.icon(f.icon)}</span>` : UI.icon(f.icon || 'dot')}${UI.esc(f.value)}`;
+    return `<span class="fx">${xs.map((f) => { if (f.icon === 'obj-bot' && UI.botName && f.value) f = Object.assign({}, f, { value: UI.botName(String(f.value)) }); /* a bot is named by its display name (r5-9) */ const ext = /^https?:/.test(f.href || ''), inner = `${f.prod ? `<i class="fx-g fx-prod">${PROD_SQ}</i>` : f.glyph ? f.glyph : f.tone === 'danger' ? `<span class="fx-tile">${UI.icon(f.icon)}</span>` : UI.icon(f.icon || 'dot')}${UI.esc(f.value)}`;
       return `<span class="fx-i${f.href ? ' ln' : ''}${f.risky ? ' hi' : ''}${f.prod ? ' prod t-warning' : ''}${f.tone ? ' t-' + f.tone : ''}" data-pri="${f.pri || 2}"${f.label ? ` title="${UI.esc(f.label)}"` : ''}${f.href ? ` role="link" tabindex="0" data-fx-href="${UI.esc(f.href)}"${ext ? ' data-fx-ext="1"' : ''}` : ''}>${inner}</span>`; }).join('')}</span>`; };
   /* One time range (61): the same choices everywhere a time range appears (Activity, Logs & audit, a workflow's runs,
      Home's chart); the filter bar draws it as its own control at the far right, a clock and "Last 12 hours ▾". */
@@ -721,7 +721,9 @@
       case 'seg': input = `<div class="seg" role="group" data-segk="${fd.k}">${fd.options.map((o) => { const [ov, ol, dis] = Array.isArray(o) ? o : [o, o]; const on = String(ov) === String(val === '' ? fd.def : val); return `<button type="button" data-v="${UI.esc(ov)}" ${dis ? UI.off(dis) : 'data-act="form-seg"'} aria-pressed="${on}" class="${on ? 'on' : ''}">${ol}</button>`; }).join('')}</div><input type="hidden" id="${id}" data-k="${fd.k}" value="${UI.esc(val === '' ? fd.def ?? '' : val)}">`; break;
       case 'list': case 'select-multi': {
         const items = Array.isArray(val) ? val : val ? String(val).split(/,\s*/) : [];
-        input = `<div class="listed" data-listk="${fd.k}" id="${id}">${items.map((x) => `<span class="chip-x"><span class="mono">${UI.esc(x)}</span><button type="button" data-act="list-del" aria-label="Remove ${UI.esc(x)}">${UI.icon('x')}</button></span>`).join('')}
+        // a chip shows its option's label (a bot by its name), and keeps its value in data-v (r5-9)
+        const labOf = (x) => { const o = (fd.options || []).map((o2) => (Array.isArray(o2) ? o2 : [o2, o2])).find(([ov]) => ov === x); return o ? o[1] : x; };
+        input = `<div class="listed" data-listk="${fd.k}" id="${id}">${items.map((x) => `<span class="chip-x"><span class="${labOf(x) === x ? 'mono' : 'chip-l'}" data-v="${UI.esc(x)}">${UI.esc(labOf(x))}</span><button type="button" data-act="list-del" aria-label="Remove ${UI.esc(labOf(x))}">${UI.icon('x')}</button></span>`).join('')}
           ${fd.type === 'select-multi' ? `<select class="select mono list-add-sel" data-on-change="list-add-sel" ${UI.pickerAttrs(fd)} aria-label="Add ${UI.esc(lbl)}"><option value="">+ add…</option>${UI.createOpt(fd)}${(fd.options || []).map((o) => (Array.isArray(o) ? o : [o, o])).filter(([o]) => !items.includes(o)).map(([o, l]) => `<option value="${UI.esc(o)}">${UI.esc(l)}</option>`).join('')}</select>` : `<input class="input mono list-add" placeholder="${UI.esc(fd.ph || 'add, then Enter')}" data-k-list="${fd.k}"><button type="button" class="btn sm" data-act="list-add">${UI.icon('plus')}Add</button>`}</div>`; break;
       }
       case 'map': {
@@ -736,7 +738,7 @@
   };
   UI.readField = (root, fd) => {
     const id = fieldId(fd.k, (root.closest && root.closest('[data-pre]') ? root.closest('[data-pre]').dataset.pre : '') || 'f-');
-    if (fd.type === 'list' || fd.type === 'select-multi') return $$(`[data-listk="${fd.k}"] .chip-x .mono`, root).map((x) => x.textContent);
+    if (fd.type === 'list' || fd.type === 'select-multi') return $$(`[data-listk="${fd.k}"] .chip-x [data-v]`, root).map((x) => x.dataset.v);
     if (fd.type === 'map') { const o = {}; $$(`[data-mapk="${fd.k}"] .kvrow`, root).forEach((r) => { const k = $('[data-mk=k]', r).value.trim(), v = $('[data-mk=v]', r).value.trim(); if (k) o[k] = /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v === 'true' ? true : v === 'false' ? false : v; }); return o; }
     const el = root.querySelector('#' + id); if (!el) return undefined;
     if (fd.type === 'bool') return el.checked;
@@ -795,10 +797,10 @@
   };
   // form control behaviours (shared by modal forms and inline editors)
   UI.act('form-seg', (b) => { const seg = b.closest('[data-segk]'); $$('button', seg).forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); const h = seg.parentElement.querySelector(`input[data-k="${seg.dataset.segk}"]`); h.value = b.dataset.v; h.dispatchEvent(new Event('input', { bubbles: true })); });
-  const listAdd = (box, v) => { v = v.trim(); if (!v) return; if ($$('.chip-x .mono', box).some((x) => x.textContent === v)) return; const sp = document.createElement('span'); sp.className = 'chip-x'; sp.innerHTML = `<span class="mono">${UI.esc(v)}</span><button type="button" data-act="list-del" aria-label="Remove ${UI.esc(v)}">${UI.icon('x')}</button>`; const anchor = box.querySelector('.list-add, .list-add-sel'); box.insertBefore(sp, anchor); box.dispatchEvent(new Event('input', { bubbles: true })); };
+  const listAdd = (box, v, label) => { v = v.trim(); if (!v) return; if ($$('.chip-x [data-v]', box).some((x) => x.dataset.v === v)) return; const l = label || v, sp = document.createElement('span'); sp.className = 'chip-x'; sp.innerHTML = `<span class="${l === v ? 'mono' : 'chip-l'}" data-v="${UI.esc(v)}">${UI.esc(l)}</span><button type="button" data-act="list-del" aria-label="Remove ${UI.esc(l)}">${UI.icon('x')}</button>`; const anchor = box.querySelector('.list-add, .list-add-sel'); box.insertBefore(sp, anchor); box.dispatchEvent(new Event('input', { bubbles: true })); };
   UI.nudge = (inp, msg) => { inp.classList.remove('shake'); void inp.offsetWidth; inp.classList.add('shake'); if (msg) inp.placeholder = msg; inp.focus(); };
   UI.act('list-add', (b) => { const box = b.closest('.listed'), inp = $('.list-add', box); if (!inp.value.trim()) return UI.nudge(inp, 'type a value first'); listAdd(box, inp.value); inp.value = ''; inp.focus(); });
-  UI.act('list-add-sel', (sel) => { const box = sel.closest('.listed'); listAdd(box, sel.value); const o = sel.querySelector(`option[value="${CSS.escape(sel.value)}"]`) || [...sel.options].find((x) => x.value === sel.value); if (o && o.value) o.remove(); sel.value = ''; });
+  UI.act('list-add-sel', (sel) => { const box = sel.closest('.listed'), o = sel.querySelector(`option[value="${CSS.escape(sel.value)}"]`) || [...sel.options].find((x) => x.value === sel.value); listAdd(box, sel.value, o && o.textContent); if (o && o.value) o.remove(); sel.value = ''; });
   UI.act('list-del', (b) => { const box = b.closest('.listed'); b.closest('.chip-x').remove(); box.dispatchEvent(new Event('input', { bubbles: true })); });
   UI.act('map-del', (b) => { const box = b.closest('.kvedit'); b.closest('.kvrow').remove(); box.dispatchEvent(new Event('input', { bubbles: true })); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches('.list-add') && !e.target.dataset.wfListadd) { e.preventDefault(); const box = e.target.closest('.listed'); listAdd(box, e.target.value); e.target.value = ''; } });

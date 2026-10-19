@@ -161,7 +161,7 @@
     return lines.map((l, i) => ({ line: l, c: owners[i] }));
   };
   R.pending = (id) => R.get(id).proposals.filter((p) => p.status === 'pending').length;
-  const whoLabel = (c) => (c.kind === 'operator' ? 'ops (operator)' : c.who.replace('bot:', ''));
+  const whoLabel = (c) => (c.kind === 'operator' ? 'you' : UI.botName(c.who.replace('bot:', '')));
   const whoChip = (c) => `${UI.label(esc(whoLabel(c)), { cls: 'who ' + c.kind, icon: c.kind === 'operator' ? 'users' : 'bots' })}${c.case && caseHref(c.case) ? ` <a class="link mono tiny" href="${caseHref(c.case)}">${c.case}</a>` : ''}`;
   const readers = (r) => (r.kind === 'team' ? botsOfTeam(r.name) : [r.name]);
 

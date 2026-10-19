@@ -18,6 +18,16 @@
   UI.avatarFile = (a, owner) => { if (!a || !a.image || !/^data:image\//.test(a.image)) return a; const ext = (a.image.match(/^data:image\/(png|jpeg|webp)/) || [, 'png'])[1].replace('jpeg', 'jpg'), path = `avatars/${owner}.${ext}`;
     (window.D.avatarFiles = window.D.avatarFiles || {})[path] = a.image; return Object.assign({}, a, { image: path }); };
   UI.botName = (b) => (UI.ident(b) || {}).name || b;
+  /* One name per bot (r5 major 9): the display name wherever a person reads it; the config id only as the quiet
+     secondary beside it (UI.botWho), in code, and under For audit. UI.nm: a bot's name, escaped, for prose and labels
+     (anything else, a team or a person, passes through). UI.nameProse: the demo's prose rewritten with the names (the
+     fixtures were written with ids); ids inside paths, refs and code (bot:x, x/y, x.verb) are left alone. */
+  UI.nm = (b) => UI.esc(UI.botName(String(b || '').replace(/^bot:/, '')));
+  UI.nameProse = (t) => { const ids = Object.keys(window.D.identity || {}).filter((b) => (window.D.identity[b] || {}).name); if (!t || !ids.length) return t;
+    return String(t).replace(new RegExp(`(^|[^\\w./:@#-])(${ids.map((x) => x.replace(/-/g, '\\-')).join('|')})(?![\\w/@-]|\\.[a-z])`, 'g'), (m0, pre, id) => pre + window.D.identity[id].name); };
+  // the demo's prose, once: approvals, Needs you, tickets, config history and the audit sentences
+  (() => { const D = window.D, P = UI.nameProse, fix = (xs, ks) => (xs || []).forEach((x) => ks.forEach((k) => { if (typeof x[k] === 'string') x[k] = P(x[k]); }));
+    fix(D.proposals, ['why', 'title', 'ask', 'impact']); fix(D.attention, ['title', 'sub', 'why', 'plain']); fix(D.cases, ['title', 'desc']); fix(D.configHistory, ['summary']); fix(D.audit, ['what']); })();
   UI.botColor = (b) => (UI.ident(b) || {}).color || 'stone';
   UI.botAttrs = (b) => `data-bc="${UI.botColor(b)}"`;
   /* A bot's mascot (66; the brand's kit, js/mascots.js): a body shape, an eye set and an identity colour, three

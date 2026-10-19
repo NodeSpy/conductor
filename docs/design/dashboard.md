@@ -879,6 +879,11 @@ on the ticket.
     option drawn with your other two choices, with a live preview at its sizes; it's in New bot (a new bot starts on a
     combination no other bot has) and in a bot's Settings (picking stages the change and shows it everywhere at once);
   - a tagline and a voice.
+- **One name per bot:** the display name (Atlas) wherever a person reads it: rows, facts, headings, sentences ("led
+  by Atlas", "delegated by Atlas → Delta", "Ledger was told"), the filter menus (Bot, Who, Assignee: `who:Atlas`
+  finds Atlas's entries, and the audit search matches names), the pickers (New ticket, New team, a team's members) and
+  the signing sheets. The config id is the quiet secondary beside the name, in code and paths, and under For audit.
+  `names.spec.js` scans every route for an id where the name belongs.
 - **Where it shows:** the mascot in that colour on rows, the bot page, chat and the conversation list. Its messages carry
   a thin rule in its colour; there's no tint. Its name is shown with its id, quieter.
 - **Or your own picture:** the picker's second choice, Upload a picture: PNG, JPEG or WebP up to 2 MB (a wrong type or

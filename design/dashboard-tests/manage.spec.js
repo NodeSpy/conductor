@@ -8,7 +8,7 @@ test('Bots: each team is a section that says its rules and builds the team; solo
   await go(page, '#/bots', { fresh: true });
   const plat = page.locator('.m-team[data-team="platform"]');
   await expect(plat.locator('h2')).toHaveText('platform');
-  await expect(plat.locator('.m-team-h')).toContainText('led by platform-sre');
+  await expect(plat.locator('.m-team-h')).toContainText('led by Atlas');
   await expect(plat.locator('.m-team-h .fx-i[title="The most its bots may do"]')).toBeVisible();
   await expect(plat.locator('.m-team-h .fx-i', { hasText: /^\+\d+$/ })).toHaveAttribute('title', /approved by/); // the rest of its rules, on one line as +N
   await expect(plat.locator('[data-act="bv-team-add"]')).toBeVisible();
