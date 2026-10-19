@@ -717,3 +717,14 @@ tr.folded { display: none; }
 .bav.mascot [fill="face"] { fill: var(--bot-face); } .bav.mascot [stroke="face"] { stroke: var(--bot-face); }
 .bav.mascot [fill="ink"] { fill: var(--bot-ink); } .bav.mascot [stroke="ink"] { stroke: var(--bot-ink); }
 .bav.mascot [fill="rim"] { fill: var(--color-bot-rim); } .bav.mascot [stroke="rim"] { stroke: var(--color-bot-rim); }
+/* the mascot picker (66): the live preview at its sizes, then shape, eyes and colour, each drawn with your other choices */
+.mk-pick { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 24px; align-items: start; }
+.mk-prev { position: sticky; top: 0; display: grid; gap: 12px; justify-items: center; padding: 16px; border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-card); background: var(--color-bg-sunken); text-align: center; }
+.mk-prev > .bav.xl { width: 112px; height: 112px; } .mk-sizes { display: flex; gap: 12px; align-items: center; }
+.mk-steps h3 { margin: 0 0 8px; font: var(--type-label); color: var(--color-text-secondary); } .mk-steps h3:not(:first-child) { margin-top: 18px; }
+.mk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+.mk-opt { display: grid; justify-items: center; gap: 4px; padding: 8px 4px; border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-secondary); font: var(--type-caption); cursor: pointer; }
+.mk-opt:hover { border-color: var(--color-border-strong); } .mk-opt.on { border-color: var(--color-text-primary); box-shadow: 0 0 0 1px var(--color-text-primary); color: var(--color-text-primary); }
+.mk-opt[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+.mk-field { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; } .mk-row { display: flex; align-items: center; gap: 16px; } .mk-lbl { font: var(--type-label); }
+@media (max-width: 720px) { .mk-pick { grid-template-columns: 1fr; } .mk-prev { position: static; } .mk-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }

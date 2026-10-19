@@ -156,3 +156,24 @@ test('no spinner in the Chat list; the thread says "is working…" only while a 
   await expect(page.locator('#typing .cm-meta')).toContainText('is working…');
   await expect(page.locator('#typing')).toHaveCount(0, { timeout: 8000 }); // gone once it has replied
 });
+
+test('bots are the brand\'s mascots: shape, eyes and colour, a distinct combination each; the picker goes shape → eyes → colour', async ({ page }) => {
+  await go(page, '#/bots', { fresh: true });
+  const combos = await page.evaluate(() => S.view().bots.map((b) => { const i = UI.ident(b.name) || {}; return `${i.shape}/${i.eyes}/${i.color}`; }));
+  expect(combos.every((c) => !/undefined/.test(c)), 'every bot has a mascot').toBe(true);
+  expect(new Set(combos.map((c) => c.split('/').slice(0, 2).join('/'))).size, 'no two bots share a shape and eyes').toBe(combos.length);
+  await expect(page.locator('.bav:not(.tav):not(.mascot)')).toHaveCount(0); // no old faces, no initials for a known bot
+  await go(page, '#/bots/platform-sre/settings');
+  await page.locator('[data-act="bot-mascot"]').click();
+  await expect(page.locator('.mk-steps h3')).toHaveText(['1 · Shape', '2 · Eyes', '3 · Colour']);
+  await expect(page.locator('[data-act="mk-shape"]')).toHaveCount(13);
+  await expect(page.locator('[data-act="mk-eyes"]')).toHaveCount(8);
+  await page.locator('[data-act="mk-shape"][data-v="capsule"]').click();
+  await expect(page.locator('[data-act="mk-eyes"][data-v="single"]')).toHaveAttribute('aria-disabled', 'true'); // never a single eye under a round top
+  await page.locator('[data-act="mk-eyes"][data-v="happy"]').click();
+  await page.locator('[data-act="mk-color"][data-v="lime"]').click();
+  await expect(page.locator('.mk-prev .dl-sub')).toHaveText('Capsule · happy arcs · lime');
+  await page.locator('[data-act="mk-use"]').click();
+  expect(await page.evaluate(() => JSON.stringify(D.pending.at(-1).after.avatar))).toBe('{"shape":"capsule","eyes":"happy","color":"lime"}');
+  await expect(page.locator('.dl-bothead .bav.mascot[data-bc="lime"]').first()).toBeVisible();
+});

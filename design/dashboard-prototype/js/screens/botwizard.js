@@ -19,7 +19,11 @@
     ask: { title: 'Asks before anything else', desc: 'Looks things up on its own. Comments, posts and every other change wait for your approval.' },
   };
   const STEPS = ['Purpose', 'Watches', 'Tells you where', 'What it may do', 'Review'];
-  const fresh = () => ({ at: 0, template: null, purpose: null, name: '', description: '', team: '', events: new Set(), repos: 'acme/api', sweep: false, every: '4h', tell: 'dashboard', slack: '', channel: '#ops', preset: 'ask', shadow: true, runtime: 'claude-cli', operators: [], ttl: '24h' });
+  // a new bot starts with a mascot no other bot has (66); you can change it on the first step
+  const freeMascot = () => { const used = new Set((S.view().bots || []).map((b) => { const i = UI.ident(b.name); return i && i.shape ? `${i.shape}/${i.eyes}` : ''; })), cs = ['lime', 'lagoon', 'plum', 'olive', 'rose', 'teal', 'stone'];
+    for (const sh of window.MASCOT ? MASCOT.SHAPES.map((x) => x[0]) : ['hex']) for (const ey of ['dots', 'ovals', 'rings', 'wide', 'up', 'happy', 'sleepy']) if (!used.has(`${sh}/${ey}`) && (!window.MASCOT || MASCOT.allowed(sh, ey))) return { shape: sh, eyes: ey, color: cs[used.size % cs.length] };
+    return { shape: 'hex', eyes: 'dots', color: 'teal' }; };
+  const fresh = () => ({ at: 0, avatar: null, template: null, purpose: null, name: '', description: '', team: '', events: new Set(), repos: 'acme/api', sweep: false, every: '4h', tell: 'dashboard', slack: '', channel: '#ops', preset: 'ask', shadow: true, runtime: 'claude-cli', operators: [], ttl: '24h' });
   let bw = fresh();
 
   const conns = () => S.view().connectors;
@@ -48,6 +52,7 @@
     const g = grants(), c = {};
     if (bw.description) c.description = bw.description;
     if (bw.team) c.team = bw.team;
+    if (bw.avatar) c.avatar = Object.assign({}, bw.avatar); // its mascot (66)
     c.escalation = bw.tell === 'slack' && bw.slack ? `Tell the operator in ${bw.channel} (${bw.slack}.post). Anything urgent also goes to Needs you.` : 'Tell the operator in the dashboard: its chat and Needs you.';
     if (bw.operators.length) c.operators = bw.operators.slice();
     c.worker = { runtime: bw.runtime };
@@ -69,6 +74,7 @@
     if (bw.at === 0) return `${from ? tplHTML : ''}<div class="choice-grid">${Object.entries(PURPOSES).map(([k, p]) => UI.choice({ act: 'bw-purpose', attrs: `data-p="${k}"`, on: bw.purpose === k && !bw.template, icon: p.icon, title: p.title, desc: p.desc })).join('')}</div>${from ? '' : tplHTML}
       ${bw.purpose ? `<div class="stack" style="gap:12px;margin-top:6px">
         <div class="field${nameErr() ? ' bad' : ''}" data-field="name"><label for="bw-name">Name <span class="req">*</span></label><input class="input mono" id="bw-name" value="${esc(bw.name)}" data-on-input="bw-set" data-k="name" autocomplete="off"><div class="hint">How you'll refer to it, in chat and in config.</div><div class="ferr" role="alert">${nameErr()}</div></div>
+        <div class="field"><label>Its mascot</label>${UI.mascotField(bw.avatar || (bw.avatar = freeMascot()), 'bw-mascot')}</div>
         <div class="field"><label for="bw-desc">What it's for, in a line</label><input class="input" id="bw-desc" value="${esc(bw.description)}" data-on-input="bw-set" data-k="description" placeholder="Triages incidents for the API"></div>
         <div class="row wrap" style="gap:12px"><div class="field grow"><label for="bw-team">Team</label><select class="select" id="bw-team" data-on-change="bw-set" data-k="team"><option value="">none (a solo bot)</option>${v.teams.map((t) => `<option value="${esc(t.name)}"${bw.team === t.name ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select><div class="hint">A team shares approvers, limits and knowledge; its bots can only be stricter.</div></div>
         </div></div>` : ''}`;
@@ -115,6 +121,7 @@
         ${bw.at < STEPS.length - 1 ? `<button class="btn primary" ${why ? UI.off(why) : 'data-act="bw-next"'}>Next</button>` : `<button class="btn primary" data-act="bw-create">${icon('check')}Review and apply</button>`}</footer>
     </section>`; }, { nav: 'bots', after: (p, main) => { const s = main.querySelector('.nb-sheet'); if (s && !s.contains(document.activeElement)) s.focus({ preventScroll: true }); } });
   const redraw = () => UI.rerender();
+  UI.act('bw-mascot', () => UI.mascotPicker(bw.avatar, (av) => { bw.avatar = av; redraw(); }, `${bw.name || 'Its'} mascot`));
   UI.act('bw-tpl', (b) => { const t = (UI.botTemplates ? UI.botTemplates() : []).find((x) => x.pack === b.dataset.pack && x.name === b.dataset.t); if (!t) return; const p = PURPOSES[t.purpose] || PURPOSES.custom;
     bw.template = { pack: t.pack, ver: t.ver, name: t.name }; bw.purpose = t.purpose; if (!bw.name || Object.values(PURPOSES).some((x) => x.name === bw.name)) bw.name = S.view().bots.some((x) => x.name === t.bot) ? `${t.bot}-2` : t.bot; bw.description = t.does.split('.')[0]; bw.events = new Set(p.events.filter((k) => events().some((e) => e.key === k))); redraw(); });
   UI.act('bw-purpose', (b) => { bw.template = null; const p = PURPOSES[b.dataset.p], prev = bw.purpose && PURPOSES[bw.purpose]; bw.purpose = b.dataset.p; if (!bw.name || (prev && bw.name === prev.name)) bw.name = p.name; if (!bw.description || (prev && bw.description === prev.description)) bw.description = p.description; bw.events = new Set(p.events.filter((k) => events().some((e) => e.key === k))); redraw(); });

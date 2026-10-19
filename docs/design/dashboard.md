@@ -841,21 +841,25 @@ on the ticket.
   phone, or the conversation's ⋯ (which also offers Mark as unread). The Pinned heading shows only when something is
   pinned. Pins and read state are per operator (`PUT /api/v1/chat/pins` `{keys[]}`,
   `POST /api/v1/chat/<key>/read` `{unread?}`).
-- **Sizes:** faces are 40px in the list, 36px on messages and 44px in the header. A team shows its lead's face with
+- **Sizes:** mascots are 40px in the list, 36px on messages and 44px in the header. A team shows its lead's face with
   "+N".
 
 **A bot's identity** (option A):
 
 - **Fields:**
   - a display name (the config id stays the name everywhere it matters);
-  - a face from the brand's set (`avatar.preset`: beam, focus, curio, doze, grit, imp, calm, wow, wink, shy, chirp,
-    steady);
-  - a colour from the bot palette (`avatar.color`: olive, lime, teal, lagoon, plum, rose, stone; never a status hue);
+  - a **mascot** from the brand's mix-and-match kit (`design/brand/bot-identity/mascot-kit.js`, vendored as
+    `js/mascots.js`, the one avatar module): a body shape (`avatar.shape`: hex, lozenge, capsule, quarter, notch,
+    shield, bean, twin, petal, tilt, egg, cushion, octa), an eye set (`avatar.eyes`: dots, ovals, rings, single, wide,
+    up, happy, sleepy; the single eye only on angular shapes) and a colour from the bot palette (`avatar.color`:
+    olive, lime, teal, lagoon, plum, rose, stone; never a status hue). The **picker** goes shape → eyes → colour, each
+    option drawn with your other two choices, with a live preview at its sizes; it's in New bot (a new bot starts on a
+    combination no other bot has) and in a bot's Settings (picking stages the change and shows it everywhere at once);
   - a tagline and a voice.
-- **Where it shows:** the face in that colour on rows, the bot page, chat and the conversation list. Its messages carry
+- **Where it shows:** the mascot in that colour on rows, the bot page, chat and the conversation list. Its messages carry
   a thin rule in its colour; there's no tint. Its name is shown with its id, quieter.
 - **No picture:** a bot without one shows its initials.
-- **Config shape:** `bots.<m>.avatar: {preset, color}`, plus `display_name`, `tagline` and `voice` (a builder adds
+- **Config shape:** `bots.<m>.avatar: {shape, eyes, color}`, plus `display_name`, `tagline` and `voice` (a builder adds
   these to conductor).
 - **API:** `GET /api/v1/chat` lists conversations with their last message and unread counts.
   `POST /api/v1/teams/<t>/say` `{text, to: "lead"|"all"|<bot>, attachments?}` posts to a team's chat, and
