@@ -379,6 +379,15 @@
     if (n.isolation && n.isolation.handoff_workers === true && S.getPath(tc, 'isolation.handoff_workers') === false) e.push(`bots.${k}.isolation.handoff_workers: team ${t.name} allows cli workers only`);
     return e;
   };
+  /* pack_trust: and plugin_trust: (config.go PackTrustConfig): where third-party packs and plugins may come from, an
+     allow list of source globs. One node each; trusting a source from git stages it here, through the review. */
+  C.trust = { section: 'trust', file: 'config.yaml', label: 'trusted source list', href: () => '#/extensions/browse',
+    keys: () => Object.keys(D().trust || {}), get: (k) => { const t = (D().trust || {})[k]; return t ? clone(t) : null; },
+    set: (k, n) => { D().trust = D().trust || {}; if (n == null) delete D().trust[k]; else D().trust[k] = n; },
+    path: (k) => k,
+    validate(k, n) { const e = []; if (!['pack_trust', 'plugin_trust'].includes(k)) e.push(`${k}: pack_trust or plugin_trust`); Object.keys(n || {}).forEach((x) => { if (x !== 'allow') e.push(`${k}.${x}: not a trust key (allow)`); }); if (n && n.allow && !Array.isArray(n.allow)) e.push(`${k}.allow: a list of source globs`); return e; },
+    refs: () => [],
+  };
   C.teams = { section: 'teams', file: 'config.yaml', label: 'team', href: (k) => `#/teams/${k}`,
     keys: () => D().teams.map((t) => t.name), get: (k) => { const t = byName(D().teams, k); return t ? clone(t.cfg) : null; },
     set: (k, n) => { const L = D().teams; if (n == null) return drop(L, k); const t = byName(L, k); if (t) t.cfg = n; else L.push({ name: k, cfg: n }); },
@@ -458,6 +467,11 @@
       if (B.peers === 'none' && A.peers !== 'none') r.push('peers: teammates may message each other');
       if (S.getPath(B, 'isolation.handoff_workers') === false && S.getPath(A, 'isolation.handoff_workers') !== false) r.push('isolation.handoff_workers: hand-off sessions allowed');
     } else if (coll === 'botLinks') { if (isNew) r.push(`bot_links: ${A[0]} and ${A[1]} may message each other`); }
+    else if (coll === 'trust') {
+      // a new allowed source lets its publisher's code run here (as a plugin subprocess, or a pack's workflows and agents)
+      added(S.getPath(B, 'allow'), S.getPath(A, 'allow')).forEach((x) => r.push(`allow: trusts ${x}: its code may run here`));
+      if (B && !A) r.push('removed: every remote source is allowed again');
+    }
     else if (coll === 'workflows') {
       const bs = stepsOf(B), as = stepsOf(A), byId = (ss, id) => ss.find((x) => x.id === id) || {};
       as.forEach((st, i) => { const prev = st.id ? byId(bs, st.id) : bs[i] || {}; const P = `steps[${st.id || i}]`;
@@ -487,7 +501,7 @@
   S.ORDER = ['settings', 'vaults', 'secrets', 'connectors', 'hosts', 'runtimes', 'sandbox', 'operators', 'teams', 'bots', 'botLinks', 'env', 'identities', 'credentials', 'packs', 'update', 'workflows'];
 
   /* ---------- config.yaml, generated from the state ---------- */
-  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', models: 'models: — fleets of acceptable models', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents with their own memory', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser: which sites bots may use, and how they sign in', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', bot_links: 'bot_links: — operator-side links: each pair of bots may message each other', usage: 'usage: — where plan limits and tokens come from (the display mode is a browser preference)', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
+  const HEAD = { pack_trust: 'pack_trust: — where third-party packs may come from', plugin_trust: 'plugin_trust: — where third-party plugins may come from', settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', models: 'models: — fleets of acceptable models', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents with their own memory', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser: which sites bots may use, and how they sign in', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', bot_links: 'bot_links: — operator-side links: each pair of bots may message each other', usage: 'usage: — where plan limits and tokens come from (the display mode is a browser preference)', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
   S.configText = (state) => {
     const st = state || window.D; const out = ['# conductor config — ops-box', '# managed by hand and by the dashboard; comments and unknown keys are kept', ''];
     const sec = (h, obj) => { if (obj == null || (typeof obj === 'object' && !Object.keys(obj).length)) return; out.push('# ' + HEAD[h]); out.push(Y.stringify({ [h]: obj })); out.push(''); };
@@ -514,6 +528,7 @@
     if (st.access.credentials.length) br.credentials = st.access.credentials.map((c) => Object.assign({ name: c.name }, c.cfg));
     sec('browser', br);
     sec('packs', Object.fromEntries(st.packs.map((p) => [p.name, p.cfg])));
+    ['pack_trust', 'plugin_trust'].forEach((k) => { if (st.trust && st.trust[k]) sec(k, st.trust[k]); });
     if (st.usageCfg && st.usageCfg.source) sec('usage', { source: st.usageCfg.source });
     sec('update', st.updateCfg);
     const item = (y) => y.replace(/\n$/, '').split('\n').map((l, i) => (i === 0 ? '  - ' + l : l ? '    ' + l : l)).join('\n');

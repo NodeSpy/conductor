@@ -1194,7 +1194,10 @@ reference). Two more tabs under Browsers: Sessions · Logins · **Personal detai
   Stay current, Stay within…, Choose a version… (the releases with their notes) and the plugin's permissions; each is
   a normal config change (staged, reviewed, applied); select several to update or hold them at once. **Add a
   connection** opens one picker: the filter bar (search, Origin, Category) with "Add from a git URL or custom source"
-  always beside it (and offered when nothing matches); a compact list, what you use first, then the popular ones,
+  always beside it (and offered when nothing matches). That opens **Add a custom connection from git** (a source:
+  owner/repo, a git URL or ./path, and a ref), then **Trust this third-party source?** with what it declares (egress,
+  commands, env, sandbox); Trust and add stages `plugin_trust: { allow: [<source>] }` (`pack_trust:` for a pack
+  source), a widening that asks for the passkey on apply, and the picker shows the new item to pick; a compact list, what you use first, then the popular ones,
   then A to Z, 20 to a page; one action per row (Choose, or Install & configure); one entry per service (a copy in your
   own source is a choice inside it). A new GitHub or Slack connection offers two ways in, side by side: **Connect with
   GitHub** (recommended: conductor creates the app and fills everything in) or **I already have an app** (the fields).

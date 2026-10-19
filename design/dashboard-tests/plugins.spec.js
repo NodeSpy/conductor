@@ -3,7 +3,7 @@
 // in or not), with no inner footer; a language says where it's used ("1 workflow step, in …", linked), never "run: js";
 // the add pickers are the connection picker: tight rows (one line of name and description, then facts), "Installed"
 // for what is already there, no shadowed button, and only the list scrolls, with a fade while more is below.
-const { test, expect, go } = require('./fixtures');
+const { test, expect, go, applyStaged } = require('./fixtures');
 
 test('every Plugins tab draws the connection row with one ⋯ per row and a glyph on the name line', async ({ page }) => {
   for (const tab of ['connectors', 'runtimes', 'languages', 'hosts']) {
@@ -62,4 +62,42 @@ test('the add-a-runtime picker opens first, and the runtime and machine ⋯ menu
   await go(page, '#/connectors/hosts', { fresh: true });
   await page.locator('[data-act="host-more"]').first().click();
   for (const l of ['Test the connection', 'Edit…', 'Remove…']) await expect(page.locator('.menu, [role="menu"]').getByText(l, { exact: true })).toBeVisible();
+});
+
+// r5 blocker 2: "Add from a git URL" fetched, closed and did nothing (the form's close removed the trust review it had
+// just opened). The reviewers' repro: Plugins → Add a connection → Add from a git URL → a source and a ref → Fetch and
+// review → the trust review → Trust and add → the item is in the picker and the trust entry is staged.
+for (const src of ['https://github.com/acme/conductor-plugin-foo.git', 'acme/conductor-statuspage']) {
+  test(`a custom connection from git (${src}): fetch, the trust review, trust and add, then pick it`, async ({ page }) => {
+    await go(page, '#/connectors/connectors', { fresh: true });
+    await page.locator('[data-act="conn-add"]').first().click();
+    await page.locator('.pk-modal [data-act="src-add"]').first().click();
+    await expect(page.locator('.modal h2')).toHaveText('Add a custom connection from git');
+    await page.fill('[data-k="src"], #f-src', src); await page.fill('[data-k="ref"], #f-ref', 'v1.2.0');
+    await page.getByRole('button', { name: 'Fetch and review' }).click();
+    await expect(page.locator('.modal h2')).toHaveText('Trust this third-party source?');
+    await page.waitForTimeout(400);
+    await expect(page.locator('.modal h2'), 'it stays open').toHaveText('Trust this third-party source?');
+    await page.locator('#trust-go').click();
+    await expect(page.locator('#trust-ack').locator('xpath=..')).toBeVisible(); // nudged: the ack comes first
+    await page.locator('#trust-ack').check(); await page.locator('#trust-go').click();
+    const name = src.split('/').pop().replace(/\.git$/, '').replace(/^conductor-/, '');
+    await expect(page.locator(`.pk-modal .pk-row[data-cat="connector:${name}"]`)).toBeVisible();
+    expect(await page.evaluate(() => D.pending.filter((c) => c.coll === 'trust').length)).toBe(1);
+    expect(await page.evaluate(() => { const c = D.pending.find((x) => x.coll === 'trust'); return c.key + ' ' + JSON.stringify(c.after); })).toContain('plugin_trust');
+    expect(await page.evaluate(() => JSON.stringify(D.pending.find((c) => c.coll === 'trust').after))).toContain(src.replace(/^https:\/\//, '').replace(/\.git$/, ''));
+  });
+}
+
+test('the staged trust entry is conductor\'s plugin_trust: allow list, it passes the checks and applies', async ({ page }) => {
+  await go(page, '#/connectors/connectors', { fresh: true });
+  await page.locator('[data-act="conn-add"]').first().click();
+  await page.locator('.pk-modal [data-act="src-add"]').first().click();
+  await page.fill('[data-k="src"], #f-src', 'acme/conductor-statuspage');
+  await page.getByRole('button', { name: 'Fetch and review' }).click();
+  await page.locator('#trust-ack').check(); await page.locator('#trust-go').click();
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => S.configText(S.candidate(D.pending)))).toMatch(/\nplugin_trust: \{ allow: \[acme\/conductor-statuspage\] \}\n/);
+  await page.goto(page.url().replace(/#.*/, '#/config/apply'));
+  await applyStaged(page, { expectWidening: true });
 });
