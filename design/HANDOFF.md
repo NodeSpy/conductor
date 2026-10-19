@@ -41,7 +41,7 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Code map (prototype)
 
-- `css/tokens.css` is a verbatim copy of Daylight's generated tokens (origin/design/brand `design/brand/tokens/tokens.css`):
+- `css/tokens.css` is a verbatim copy of Daylight's generated tokens (origin/design/brand `design/brand/tokens/tokens.css` @ a9477b9c, re-synced in round 5):
   re-copy it, never edit it. `css/app.css` base + shell + core components, `css/marks.css` the only place status marks,
   labels, filter chips, counts, row states and grouped-list heads are drawn, `css/components.css` shared patterns,
   `css/screens.css` screens, `css/builder.css` the builder. No raw colours anywhere but tokens.css (daylight.spec).

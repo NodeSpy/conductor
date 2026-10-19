@@ -17,7 +17,7 @@
   UI.ticketTeam = teamOf;
   /** Where a ticket stands, in words: draft and ready are set by a person; in progress and waiting on you follow from
       the work; done or declined close it. [word, mark] */
-  const STATUS = { draft: ['Draft', 'skip'], ready: ['Ready', 'ready'], progress: ['In progress', 'progress'], waiting: ['Waiting on you', 'ember'], done: ['Done', 'ok'], declined: ['Declined', 'fail'] };
+  const STATUS = { draft: ['Draft', 'draft'], ready: ['Ready', 'ready'], progress: ['In progress', 'progress'], waiting: ['Waiting on you', 'ember'], done: ['Done', 'ok'], declined: ['Declined', 'fail'] };
   const ORDER = ['draft', 'ready', 'progress', 'waiting', 'done', 'declined'];
   const statusOf = (c) => c.status === 'closed' ? (c.declined ? 'declined' : 'done') : c.stage === 'draft' ? 'draft' : (D.proposals || []).some((p) => p.case === c.id && p.status === 'pending') ? 'waiting'
     : c.workers > 0 || (D.delegations || []).some((d) => d.parent === c.id && d.status === 'running') ? 'progress' : 'ready';

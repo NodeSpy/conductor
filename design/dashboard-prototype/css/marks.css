@@ -19,7 +19,7 @@
 [data-s="run"], [data-s="staged"] { --mk: var(--color-status-running-solid); --s-fg: var(--color-status-running-fg); --s-border: var(--color-status-running-border); --s-solid: var(--color-status-running-solid); --s-bg: var(--color-status-running-bg); }
 [data-s="wait"] { --mk: var(--color-status-warning-solid); --s-fg: var(--color-status-warning-fg); --s-border: var(--color-status-warning-border); --s-solid: var(--color-status-warning-solid); --s-bg: var(--color-status-warning-bg); }
 [data-s="fail"] { --mk: var(--color-status-danger-solid); --s-fg: var(--color-status-danger-fg); --s-border: var(--color-status-danger-border); --s-solid: var(--color-status-danger-solid); --s-bg: var(--color-status-danger-bg); }
-[data-s="idle"], [data-s="skip"], [data-s="ready"], [data-s="progress"] { --mk: var(--color-status-neutral-solid); --s-fg: var(--color-status-neutral-fg); --s-border: var(--color-status-neutral-border); --s-solid: var(--color-status-neutral-solid); --s-bg: var(--color-status-neutral-bg); }
+[data-s="idle"], [data-s="skip"], [data-s="ready"], [data-s="progress"], [data-s="draft"] { --mk: var(--color-status-neutral-solid); --s-fg: var(--color-status-neutral-fg); --s-border: var(--color-status-neutral-border); --s-solid: var(--color-status-neutral-solid); --s-bg: var(--color-status-neutral-bg); }
 [data-s="shadow"] { --mk: var(--color-status-info-solid); --s-fg: var(--color-status-info-fg); --s-border: var(--color-status-info-border); --s-solid: var(--color-status-info-solid); --s-bg: var(--color-status-info-bg); }
 [data-s="ember"] { --mk: var(--color-accent-default); --s-fg: var(--color-text-accent); --s-border: var(--color-accent-default); --s-solid: var(--color-accent-default); --s-bg: var(--color-accent-subtle); }
 
@@ -63,7 +63,7 @@
 
 /* ---- count: a plain tabular number; ember only where a person is needed ---- */
 .count { display: inline-grid; place-items: center; font: var(--type-caption); font-weight: var(--font-weight-semibold); color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
-.count.hot { min-width: 20px; height: 20px; padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--color-accent-default); color: var(--color-text-on-accent); font-weight: var(--font-weight-bold); }
+.count.hot { min-width: var(--count-badge-min-width); height: var(--count-badge-height); padding: 0 var(--count-badge-pad-x); border-radius: var(--count-badge-radius); background: var(--count-badge-bg); color: var(--count-badge-fg); font-weight: var(--font-weight-bold); line-height: var(--count-badge-height); } /* the brand's count badge: 18px (r5) */
 
 /* ---- row state: only a row that needs someone (failed, waiting on you, needs you) carries a thin leading edge in
  * its state's colour; running and passing rows don't. The reason line under the name says why. ---- */
@@ -130,8 +130,8 @@ tr[data-row] .why-line { color: var(--color-text-primary); }
    bar's edge, 3:1 and up, so the fill can stay calm), waiting or parked neutral, running blue, failures red on top so
    the rare one pops first; every bar starts on the axis. A bar under the pointer, focus or a tap is outlined and its
    runs are read out under the chart, beside the legend. ---- */
-.dl-hours .hb-ok { fill: var(--color-status-success-chart); } .dl-hours .hb-cap { fill: var(--color-status-success-solid); }
-.dl-hours .hb-other { fill: var(--color-border-strong); } .dl-hours .hb-run { fill: var(--color-status-running-solid); } .dl-hours .hb-fail { fill: var(--color-status-danger-solid); }
+.dl-hours .hb-ok { fill: var(--run-strip-bar); } .dl-hours .hb-cap { fill: var(--run-strip-cap); }
+.dl-hours .hb-other { fill: var(--run-strip-waiting); } /* the brand's waiting bar (r5) */ .dl-hours .hb-run { fill: var(--color-status-running-solid); } .dl-hours .hb-fail { fill: var(--color-status-danger-solid); }
 /* bars are static (68); Activity's carry a tooltip (68b): a quiet outline on the bar it describes, no shaded column */
 .dl-hours .hb-hit { fill: transparent; } .dl-hours .hb[data-hbtip] { cursor: default; outline: none; }
 .dl-hours .hb[data-hbtip].on rect:not(.hb-hit):not(.hb-cap), .dl-hours .hb[data-hbtip]:focus-visible rect:not(.hb-hit):not(.hb-cap) { stroke: var(--color-text-primary); stroke-width: 1.5; vector-effect: non-scaling-stroke; paint-order: stroke; }
@@ -145,7 +145,7 @@ tr[data-row] .why-line { color: var(--color-text-primary); }
 .hb-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font: var(--type-caption); color: var(--color-text-secondary); }
 .hb-legend li { display: inline-flex; align-items: center; gap: 6px; } .hb-legend b { color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
 .hb-sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-.hb-sw-ok { background: var(--color-status-success-chart); box-shadow: inset 0 2px 0 var(--color-status-success-solid); } .hb-sw-fail { background: var(--color-status-danger-solid); } .hb-sw-run { background: var(--color-status-running-solid); } .hb-sw-other { background: var(--color-border-strong); }
+.hb-sw-ok { background: var(--color-status-success-chart); box-shadow: inset 0 2px 0 var(--color-status-success-solid); } .hb-sw-fail { background: var(--color-status-danger-solid); } .hb-sw-run { background: var(--color-status-running-solid); } .hb-sw-other { background: var(--run-strip-waiting); }
 
 /* a workflow's health (58): the failure tone at 20% failed or more; the last-20 strip in the chart colours */
 .wf-health.fail { color: var(--color-status-danger-fg); }

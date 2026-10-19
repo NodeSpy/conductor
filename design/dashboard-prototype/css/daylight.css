@@ -67,7 +67,7 @@
 .dl-stat-line b.r { font-size: 20px; }
 .dl-stat-line span { color: var(--color-text-secondary); font-size: 13.5px; }
 .dl-hours { width: 100%; height: auto; display: block; }
-.dl-hours .hb-axis { stroke: var(--color-border-default); } .dl-hours .hb-ax { font: 11px var(--font-family-sans); fill: var(--color-text-tertiary); }
+.dl-hours .hb-axis { stroke: var(--color-border-default); } .dl-hours .hb-ax { font: 11.5px var(--font-family-sans); fill: var(--color-text-tertiary); }
 .dl-foot-note { display: flex; gap: 8px; align-items: center; font: var(--type-body-s); color: var(--color-text-secondary); margin: 8px 0 0; }
 
 /* buttons as the mock draws them (the prototype's .btn carries the brand values; sizes here) */
@@ -88,7 +88,7 @@
 .dl-tbl tbody:first-of-type tr.gh td { padding-top: 8px; }
 .dl-tbl tr.gh b { font-weight: var(--font-weight-bold); }
 .dl-tbl tr.gh .gn { margin-left: 8px; font-size: 12.5px; color: var(--color-text-tertiary); }
-.dl-tbl .g-attn tr.gh .gn { background: var(--color-accent-default); color: var(--color-text-on-accent); font-weight: var(--font-weight-bold); border-radius: 999px; padding: 1px 8px; }
+.dl-tbl .g-attn tr.gh .gn { background: var(--color-accent-default); color: var(--color-text-on-accent); font-weight: var(--font-weight-bold); border-radius: var(--radius-chip); padding: 1px 8px; }
 .dl-tbl tr.attn td { height: auto; padding-top: 12px; padding-bottom: 12px; }
 .dl-tbl tr.attn td:first-child { box-shadow: inset 3px 0 0 var(--s-solid); }
 .dl-tbl .reason { display: block; font-size: 13.5px; font-weight: var(--font-weight-semibold); color: var(--s-fg); margin-top: 2px; white-space: normal; }
@@ -105,7 +105,7 @@
 .dl-search svg { width: 16px; height: 16px; flex: none; }
 .dl-search input { border: 0; background: transparent; font: var(--type-body-s); color: var(--color-text-primary); outline: none; width: 100%; min-width: 0; }
 .dl-search:focus-within { outline: var(--border-focus) solid var(--color-focus-ring); outline-offset: 1px; }
-.dl-chip { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px; border-radius: 999px; border: var(--border-width) solid var(--color-border-default); font-size: 13.5px; color: var(--color-text-secondary); background: transparent; position: relative; }
+.dl-chip { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px; border-radius: var(--radius-chip); border: var(--border-width) solid var(--color-border-default); font-size: 13.5px; color: var(--color-text-secondary); background: transparent; position: relative; }
 .dl-chip svg { width: 15px; height: 15px; flex: none; }
 .dl-chip select { appearance: none; border: 0; background: transparent; font: inherit; color: inherit; cursor: pointer; padding-right: 2px; outline: none; }
 .dl-chip.on { border-color: var(--color-text-primary); color: var(--color-text-primary); }
@@ -252,7 +252,7 @@
 .dl-audit { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 10px 0; }
 .dl-list > li.dl-audit:first-child { padding-top: 2px; }
 .dl-axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--color-text-tertiary); margin-top: 2px; }
-.dl-filters .chip { border-radius: 999px; height: 34px; min-height: 34px; font-size: 13.5px; }
+.dl-filters .chip { border-radius: var(--radius-chip); height: 34px; min-height: 34px; font-size: 13.5px; }
 .dl-prefs { display: grid; gap: 10px; margin-bottom: 12px; }
 .dl-keep { margin: 14px 2px 0; }
 .dl-runs-card { overflow: clip; }
@@ -889,7 +889,7 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 .tk-colpick { display: none; }
 @media (max-width: 720px) {
   .tk-colpick { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 0 0 var(--gap-stack); }
-  .tk-colpick > button { flex: none; min-height: 44px; padding: 0 14px; border-radius: 999px; border: var(--border-width) solid var(--color-border-default); background: var(--color-bg-surface); color: var(--color-text-secondary); font: var(--type-body-s); }
+  .tk-colpick > button { flex: none; min-height: 44px; padding: 0 14px; border-radius: var(--radius-chip); border: var(--border-width) solid var(--color-border-default); background: var(--color-bg-surface); color: var(--color-text-secondary); font: var(--type-body-s); }
   .tk-colpick > button[aria-selected="true"] { border-color: var(--color-text-primary); color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
   .tk-board > .tk-col:not(.on) { display: none; }
   .tk-cards { max-height: none; overflow: visible; }
@@ -978,3 +978,11 @@ html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radiu
 /* a secret's row leads with its name; its exact reference shows when you open it (and ⋯ Copy the reference), never as a
    louder mono line under every name (r5 minor) */
 .sec-row:not(.open) .sec-ref { display: none; }
+/* the mascot's rim (the kit's third paint): none in light, a faint light edge in dark so a dark face holds its shape.
+   The prototype's own token, not the brand's (css/tokens.css is a verbatim copy of origin/design/brand's) */
+:root, [data-theme="light"] { --color-bot-rim: transparent; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --color-bot-rim: color-mix(in srgb, var(--color-text-primary) 18%, transparent); } }
+[data-theme="dark"] { --color-bot-rim: color-mix(in srgb, var(--color-text-primary) 18%, transparent); }
+/* the phone tab bar's count is the brand's badge too: 18px (r5) */
+@media (max-width: 720px) { .tabbar a .count.hot { height: var(--count-badge-height); min-width: var(--count-badge-min-width); line-height: var(--count-badge-height); padding: 0 var(--count-badge-pad-x); } }
+.tk-view, .tk-view > button { border-radius: var(--segmented-radius); } /* the view toggle is a pill (BRAND.md, a9477b9c) */
