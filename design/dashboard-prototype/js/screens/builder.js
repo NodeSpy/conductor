@@ -24,24 +24,32 @@
    * made for bots as one line (each is on its bot's page). A row: an on/off switch, the name, what it does in a sentence,
    * what starts it, and a quiet mark for a failed or running last run that links to Activity. Folders are gone. */
   const enc = encodeURIComponent;
-  const wl = { q: '', source: [], on: [], last: [], group: 'source', open: null };
+  const wl = { q: '', source: [], on: [], health: [], sort: 'name', group: 'source', open: null };
   UI.wlSel = UI.wlSel || new Set();
   const yamlOf = (w) => S.staged('workflows', w.name) || w.yaml || '';
   const packCfg = (inst) => S.staged('packs', inst) || (D.packs.find((p) => p.name === inst) || {}).cfg || {};
   const isOn = (w) => { const o = UI.wfOwner(w); if (o === 'pack') { const t = (packCfg(UI.packOf(w)).triggers || {})[w.name]; return !(t && t.enabled === false); } return !/^enabled:\s*false/m.test(yamlOf(w)); };
-  const lastOf = (w) => (D.runs.some((r) => r.workflow === w.name && r.status === 'run') ? 'running' : w.fail24 ? 'failing' : 'fine');
+  /* A workflow's recent health (58), not whether it's running this second: its runs this week and the share that failed
+     (the failure tone at 20% or more), the last 20 results as a strip, a link to those runs in Activity. */
+  const FAIL_AT = 0.2;
+  const health = (w) => { const mine = D.runs.filter((r) => r.workflow === w.name), wk = mine.filter((r) => UI.withinRange(r.started, '7d')), ended = wk.filter((r) => ['ok', 'fail', 'stopped'].includes(r.status));
+    const n = w.runs24 != null ? Math.max(wk.length, Math.round(w.runs24 * 7)) : wk.length, rate = w.ok != null && w.runs24 ? 1 - w.ok : ended.length ? ended.filter((r) => r.status !== 'ok').length / ended.length : 0;
+    return { n, rate, key: !n ? 'none' : rate >= FAIL_AT ? 'failing' : rate > 0 ? 'some' : 'healthy', last: mine.slice(0, 20) }; };
+  const order = (xs) => (wl.sort === 'failing' ? xs.slice().sort((a, b) => health(b).rate - health(a).rate || health(b).n - health(a).n || a.name.localeCompare(b.name)) : xs); // Most failing first
+  const healthMark = (w) => { const h = health(w), pct = Math.round(h.rate * 100);
+    const strip = h.last.length >= 3 ? `<span class="wf-strip" aria-hidden="true">${h.last.slice().reverse().map((r) => `<i data-s="${UI.runS(r.status)}"></i>`).join('')}</span>` : '';
+    return `<a class="q-st wf-health${h.key === 'failing' ? ' fail' : ''}" href="#/activity?wf=${enc(w.name)}&since=7d" title="Its runs in Activity">${strip}<span>${h.n ? `${h.n} run${h.n === 1 ? '' : 's'} this week · ${pct}% failed` : 'No runs this week'}</span></a>`; };
   const srcKey = (w) => (UI.wfOwner(w) === 'pack' ? `pack:${UI.packOf(w)}` : UI.wfOwner(w));
   const split = (w) => [UI.wfWhen(w), UI.wfDoes(w)];
-  const keepWf = (w) => (!wl.source.length || wl.source.includes(srcKey(w))) && (!wl.on.length || wl.on.includes(isOn(w) ? 'on' : 'off')) && (!wl.last.length || wl.last.includes(lastOf(w)))
+  const keepWf = (w) => (!wl.source.length || wl.source.includes(srcKey(w))) && (!wl.on.length || wl.on.includes(isOn(w) ? 'on' : 'off')) && (!(wl.health || []).length || wl.health.includes(health(w).key))
     && (!wl.q || `${w.name} ${UI.wfSentence(w)} ${w.on}`.toLowerCase().includes(wl.q.toLowerCase()));
-  const lastMark = (w) => { const l = lastOf(w); return l === 'failing' ? `<a class="q-st fail" href="#/activity?workflow=${enc(w.name)}&status=fail">${UI.mark('fail')}Failed today</a>` : l === 'running' ? `<a class="q-st" href="#/activity?workflow=${enc(w.name)}&status=run">${UI.mark('run')}Running</a>` : ''; };
   const srcFact = (w) => { const o = UI.wfOwner(w); if (o === 'pack') { const p = D.packs.find((x) => x.name === UI.packOf(w)) || {}; return { icon: 'obj-pack', value: `${UI.packOf(w)}${p.ver && p.ver !== 'local' ? ' ' + p.ver : ''}`, href: `#/extensions/pack/${enc(UI.packOf(w))}`, pri: 1, label: 'From a pack' }; }
     return o === 'bot' ? { icon: 'obj-bot', value: `made for ${w.name.slice(4)}`, href: `#/bots/${enc(w.name.slice(4))}`, pri: 1, label: 'Made for a bot' } : { icon: 'edit', value: 'yours', pri: 1, label: 'In your config' }; };
   const wfRow = (w, o2 = {}) => { const [starts, does] = split(w), on = isOn(w), o = UI.wfOwner(w), cust = o === 'pack' && ((packCfg(UI.packOf(w)).triggers || {})[w.name] || (packCfg(UI.packOf(w)).steps || {})[w.name]);
     return `<li class="m-row${on ? '' : ' off'}" data-wf="${esc(w.name)}"><span class="m-sel">${o === 'bot' ? '' : `<input type="checkbox" class="cbx m-cbx" data-act="wl-sel" data-name="${esc(w.name)}" aria-label="Select ${esc(w.name)}"${UI.wlSel.has(w.name) ? ' checked' : ''}>`}</span>
       <span class="m-sw">${w.fresh ? '' : UI.switchBtn(on, 'wl-toggle', `data-name="${esc(w.name)}" aria-label="${on ? 'Switch off' : 'Switch on'} ${esc(w.name)}"`)}</span>
       <a class="m-main" href="#/workflows/${enc(w.name)}"><b>${esc(w.name.replace(/^bot:/, ''))}</b><span class="dl-why">${esc(does)}</span>${UI.factsLine([o2.source ? srcFact(w) : null, { icon: /schedule|every|cron|Mondays|night|day at/i.test(starts) ? 'clock' : 'zap', value: starts, pri: 1, label: 'What starts it' }, cust ? { icon: 'edit', value: 'customised', pri: 2, label: 'You changed some of its settings' } : null, w.fresh ? { icon: 'edit', value: 'draft, not applied', pri: 1 } : null])}</a>
-      <span class="m-st">${lastMark(w)}</span><button type="button" class="icon-btn" data-act="wl-more" data-name="${esc(w.name)}" aria-label="More for ${esc(w.name)}">${icon('more')}</button></li>`; };
+      <span class="m-st">${healthMark(w)}</span><button type="button" class="icon-btn" data-act="wl-more" data-name="${esc(w.name)}" aria-label="More for ${esc(w.name)}">${icon('more')}</button></li>`; };
   const wfAll = () => { const staged = D.pending.filter((c) => c.coll === 'workflows'), drafts = Object.keys(D.drafts || {});
     const fresh = [...new Set([...staged.filter((c) => c.before == null).map((c) => c.key), ...drafts.filter((n) => !D.workflows.find((w) => w.name === n))])];
     return S.view().workflows.filter((w) => !fresh.includes(w.name) || D.workflows.find((x) => x.name === w.name)).concat(fresh.filter((n) => !S.view().workflows.find((w) => w.name === n)).map((n) => ({ name: n, on: 'draft', runs24: 0, ok: 1, source: 'config', fresh: true }))); };
@@ -56,14 +64,15 @@
     const bar = UI.filterBar({ id: 'wl', state: wl, placeholder: 'Find a workflow, or filter: source:yours', label: 'Find and filter workflows', fields: [
       { k: 'source', label: 'Source', multi: true, keepOrder: true, plural: 'sources', options: () => [['config', 'Yours'], ...packs.map((p) => [`pack:${p.name}`, `From ${p.name}`])].map(([v, label]) => ({ v, label, n: src.get(v) || 0 })).filter((o) => o.n) },
       { k: 'on', label: 'On or off', multi: true, keepOrder: true, options: () => [['on', 'On'], ['off', 'Off']].map(([v, label]) => ({ v, label, n: all.filter((w) => (isOn(w) ? 'on' : 'off') === v).length })).filter((o) => o.n) },
-      { k: 'last', label: 'Last run', multi: true, keepOrder: true, plural: 'results', options: () => [['failing', 'Failed today'], ['running', 'Running'], ['fine', 'Fine']].map(([v, label]) => ({ v, label, n: all.filter((w) => lastOf(w) === v).length })).filter((o) => o.n) },
+      { k: 'health', label: 'Health', multi: true, keepOrder: true, title: 'How it’s done this week', options: () => [['failing', 'Failing (20% or more)'], ['some', 'Some failures'], ['healthy', 'Healthy'], ['none', 'No runs this week']].map(([v, label]) => ({ v, label, n: all.filter((w) => health(w).key === v).length })).filter((o) => o.n) },
+      { k: 'sort', label: 'Sort', view: true, keepOrder: true, def: 'name', title: 'Sort', find: 'Sort', options: () => [{ v: 'name', label: 'Name' }, { v: 'failing', label: 'Most failing first' }] },
       { k: 'group', label: 'Group by', view: true, keepOrder: true, def: 'source', title: 'Group by', find: 'Group by', options: () => [{ v: 'source', label: 'Source' }, { v: 'none', label: 'None' }] }], onChange: () => UI.rerender({ keepScroll: true }) });
     const bulk = UI.wlSel.size ? `<div class="m-bulk"><b>${UI.wlSel.size} selected</b><button class="btn sm secondary" data-act="wl-bulk-enable" data-v="true">Switch on</button><button class="btn sm secondary" data-act="wl-bulk-enable" data-v="false">Switch off</button><button class="link" data-act="wl-bulk-clear">Clear</button></div>` : '';
-    const groups = wl.group === 'none' ? `<section class="dl-card m-team"><ul class="m-list m-flat">${shown.filter((w) => UI.wfOwner(w) !== 'bot').sort((a, b) => a.name.localeCompare(b.name)).map((w) => wfRow(w, { source: true })).join('') || '<li class="dl-empty-row">No workflow matches.</li>'}</ul></section>`
-      : (!wl.source.length || wl.source.includes('config') ? section('config', 'Yours', `${mine.length} in your config${mine.filter((w) => !isOn(w)).length ? ` · ${mine.filter((w) => !isOn(w)).length} off` : ''}`, '', mine.filter(keepWf).map(wfRow).join(''), isOpenWl('config', true)) : '')
+    const groups = wl.group === 'none' ? `<section class="dl-card m-team"><ul class="m-list m-flat">${order(shown.filter((w) => UI.wfOwner(w) !== 'bot').sort((a, b) => a.name.localeCompare(b.name))).map((w) => wfRow(w, { source: true })).join('') || '<li class="dl-empty-row">No workflow matches.</li>'}</ul></section>`
+      : (!wl.source.length || wl.source.includes('config') ? section('config', 'Yours', `${mine.length} in your config${mine.filter((w) => !isOn(w)).length ? ` · ${mine.filter((w) => !isOn(w)).length} off` : ''}`, '', order(mine.filter(keepWf)).map(wfRow).join(''), isOpenWl('config', true)) : '')
         + packs.filter((p) => !wl.source.length || wl.source.includes(`pack:${p.name}`)).map((p, i) => { const xs = all.filter((w) => UI.wfOwner(w) === 'pack' && UI.packOf(w) === p.name), cfg = S.staged('packs', p.name) || p.cfg || {}, upd = p.update && !String(cfg.use || '').endsWith('@' + p.update);
           return section(`pack:${p.name}`, `From ${esc(p.name)}`, `${xs.length} workflow${xs.length === 1 ? '' : 's'} · ${p.ver === 'local' ? 'your own pack' : `pack ${esc(p.ver)}`}${p.overrides ? ` · ${p.overrides} customised setting${p.overrides === 1 ? '' : 's'}` : ''}`,
-            `${upd ? `<button class="btn sm secondary" data-act="pack-plan" data-p="${esc(p.name)}" data-update="1">${icon('updates')}Update to ${esc(p.update)}…</button>` : ''}<a class="btn sm secondary" href="#/extensions/pack/${enc(p.name)}">Customize</a>`, xs.filter(keepWf).map(wfRow).join(''), isOpenWl(`pack:${p.name}`, !big && i < 2)); }).join('');
+            `${upd ? `<button class="btn sm secondary" data-act="pack-plan" data-p="${esc(p.name)}" data-update="1">${icon('updates')}Update to ${esc(p.update)}…</button>` : ''}<a class="btn sm secondary" href="#/extensions/pack/${enc(p.name)}">Customize</a>`, order(xs.filter(keepWf)).map(wfRow).join(''), isOpenWl(`pack:${p.name}`, !big && i < 2)); }).join('');
     return `<div class="page dl-page m-page">
       <div class="dl-phead"><div><h1>Workflows <span class="h1-count">${all.length} workflow${all.length === 1 ? '' : 's'} · ${all.filter((w) => !isOn(w)).length} off${shown.length < all.length ? ` · showing ${shown.length}` : ''}</span></h1><p class="lede-2">A ${UI.term('workflow')} is a fixed recipe: when something happens, run these steps. Want an AI to decide what to do? Hand the event to a <a class="link" href="#/bots">bot</a>.</p></div><div class="dl-actions tight"><button class="btn primary" data-act="wf-new">${icon('plus')}New workflow</button></div></div>
       ${bar}
@@ -211,13 +220,13 @@
   UI.wfWhen = (w) => { const v = parsed(w), srcs = v.on || v.triggers ? WF.sources(v) : [], ons = String(w.on || '').split(/\s*·\s*/), firstOn = ons[0];
     if (/schedule/.test(w.on || '') && UI.humanOn(w.on) !== w.on) return UI.humanOn(w.on).replace(/ \(schedule\)$/, '').replace(/^./, (c) => c.toUpperCase());
     return srcs.length ? `${whenWords(srcs)}${filterWords(v.filter) ? ' ' + filterWords(v.filter) : ''}` : w.kind === 'workflow' || /call/.test(w.on) ? 'When another workflow calls it' : ons.every((o) => EV_WORDS[o]) ? ons.map((o, i) => (i ? EV_WORDS[o].replace(/^A /, 'a ') : EV_WORDS[o].replace(/^./, (c) => c.toUpperCase()))).join(' or ') : EV_WORDS[firstOn] || 'When it’s triggered'; };
-  UI.wfDoes = (w) => { const v = parsed(w), bot = String(w.name).startsWith('bot:') ? w.name.slice(4) : ''; if (v.description) return String(v.description).replace(/^./, (c) => c.toUpperCase()); if (bot) return `Hands it to ${bot}`;
+  UI.wfDoes = (w) => { const v = parsed(w), bot = String(w.name).startsWith('bot:') ? w.name.slice(4) : ''; const desc = v.description || w.description; if (desc) return String(desc).replace(/^./, (c) => c.toUpperCase()); if (bot) return `Hands it to ${bot}`;
     const steps = w.steps && w.steps.length ? w.steps : S.deriveGraph(w.yaml || ''), did = [];
     const add = (x) => { if (x && !did.includes(x)) did.push(x); };
     steps.forEach((st) => { const k = st.kind || (st.uses ? 'uses' : ''); if (k === 'agent') add('an agent works on it'); else if (k === 'code') add('runs a command'); else if (st.bot) add('hands it to a bot'); else if (st.uses || k === 'uses') { const d = SCHEMA.verb(String(st.uses || '')); if (d && !d.read) add(third(d.label)); } });
     const list = did.slice(0, 3), tail = list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}` : list[0] || 'it runs its steps';
     return tail.replace(/^./, (c) => c.toUpperCase()); };
-  UI.wfSentence = (w) => { const v = parsed(w); if (v.description) return UI.wfDoes(w); return `${UI.wfWhen(w)}: ${UI.wfDoes(w).replace(/^./, (c) => c.toLowerCase())}`; };
+  UI.wfSentence = (w) => { const v = parsed(w); if (v.description || w.description) return UI.wfDoes(w); return `${UI.wfWhen(w)}: ${UI.wfDoes(w).replace(/^./, (c) => c.toLowerCase())}`; };
   const whenWords = (srcs) => (srcs.length ? srcs.map((x) => EV_WORDS[x.on] || (SCHEMA.event && SCHEMA.event(x.on) && SCHEMA.event(x.on).label) || (/^timer\./.test(x.on) ? 'On its schedule' : x.on)).join(' or ') : 'Nothing starts it yet');
   const filterWords = (f) => { if (!isObj(f)) return ''; const out = []; if (f.repo) out.push(`on ${[].concat(f.repo).join(' or ')}`); if (f.not_label_any) out.push(`unless it’s labelled “${[].concat(f.not_label_any).join('” or “')}”`); if (f.label_any) out.push(`only when labelled “${[].concat(f.label_any).join('” or “')}”`); Object.keys(f).filter((k) => !['repo', 'not_label_any', 'label_any'].includes(k)).forEach((k) => out.push(`with ${k.replace(/_/g, ' ')} ${[].concat(f[k]).join(' or ')}`)); return out.join(', '); };
   function triggerCard() {

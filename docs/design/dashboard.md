@@ -234,6 +234,10 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
 - **One row height** (the shared row: `.dl-nt` in a list): the title is one line, the description always takes two
   (clamped with an ellipsis), the facts one line (a fact that doesn't fit drops whole); so the rows of a list are one
   height (`measure.spec`). One action per row: the whole row opens; a button only for a real next action.
+- **The composer** (chat and ticket comments, one component): the field with the paperclip inside it, and the send
+  button at the field's exact height and radius on its bottom edge (the field grows upward). The paperclip opens what
+  you can attach: Upload a file, Photo or image, Paste a link, From a vault item (its reference; the value is never
+  shown, to you or the bot), Attach a run or ticket; on a phone it's an action sheet.
 - **One time range** (`UI.timeField`, `UI.TIME_RANGES`): wherever a time range appears (Activity, Logs & audit, a
   workflow's runs, Home's chart), it's the same control with the same choices (last hour, 12 hours, 24 hours, 7 days,
   30 days, all time): a clock and "Last 12 hours ▾", its own control at the far right of its row (in the Filter sheet
@@ -735,9 +739,13 @@ path, and the apply needs an explicit acknowledgement.
 **Customize**). It lists only workflows you can change: a bot's generated workflow (from its watch settings) isn't
 here at all (its runs are in Activity, its settings on the bot's page). A row: an on/off
 switch (yours stages `enabled: false`; a pack's goes through your pack override), the name, what it does in a
-sentence, what starts it in words (a fact), and a quiet mark for a failed or running last run that links to Activity.
+sentence (a real one: the workflow's own description, never "it runs its steps"), what starts it in words (a fact),
+and its **recent health**, not whether it's running this second: its runs this week and the share that failed ("28
+runs this week · 25% failed", in the failure tone at 20% or more), the last 20 results as a small strip, a link to
+those runs in Activity.
 Its menu: open in the builder, run now, duplicate (a copy of yours, switched off), customize in its pack, delete. Bulk
-switch on or off on a desktop. The filter bar: Source, On or off, Last run, and **Group by** (Source or None) at its
+switch on or off on a desktop. The filter bar: Source, On or off, **Health** (failing, some failures, healthy, no runs
+this week), **Sort** (name, or most failing first), and **Group by** (Source or None) at its
 far right (in the Filter sheet on a phone); with None, each row says where it came from as a fact (yours, the pack and
 its version); grouped by source the section says it. The count sits beside the title.
 
@@ -774,11 +782,15 @@ on the ticket.
   - **Done** (Mark done) or **declined** (Decline: closed without being done) close it; either can be reopened.
 - **What it says.** Title, description, priority (urgent, high, normal, low), an optional due date, labels, and
   attachments (the chat's attachment rules and limits, [§5.3](#53-endpoints)).
-- **Tickets** (a rail item after Activity). A **list** grouped by status (or by assignee, or not at all), done and
-  declined folded at the end; or a **board**, one column per status from Draft to Done (on a phone the columns
-  stack). The shared filter bar: Assignee (a bot, a team, nobody yet), Status, Priority, and under More filters Label.
-  Each row is the list row: the mark, the title, who asked (or drafted it) in words, the facts line (assignee,
-  priority when it isn't normal, due, labels), the age and the action.
+- **Tickets** (a rail item after Activity). The **Board** by default (your choice is remembered): one column per
+  status from Draft to Done; each column scrolls inside itself, and Done holds the last 7 days (Show older for the
+  rest), so nothing grows without limit. Drag a card to move it, within the rules: Draft ↔ Ready (to Ready asks who
+  does it), anything → Done, Done → Ready (reopened); In progress and Waiting on you are conductor's to set, so a drop
+  there says why. On a phone, one column at a time, picked from the status tabs above it. The **List** is one flat
+  list, 20 to a page, each row's status a fact. The shared filter bar: Assignee (a bot, a team, nobody yet), Status,
+  Priority, and under More filters Label. A card or row: the mark, the title, who asked (or drafted it) in words, the
+  facts line (assignee, priority when it isn't normal, due, labels), and a button only for a real next action (a
+  draft: Mark ready…; waiting on you: Review, which opens the approval). The same on a bot's and a team's Tickets.
 - **A ticket's page.** The title, where it stands in words and the facts line; on a draft, **Mark ready** first and
   prominent, with what it means; Mark done or Reopen, Decline, Hand off part of it (a delegation,
   [§4.4](#44-teams-and-bots-178)); how it was routed in one line; the ids and the recorded requester folded "for

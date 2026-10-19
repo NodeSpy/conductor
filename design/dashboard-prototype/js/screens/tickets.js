@@ -35,10 +35,11 @@
   const by = (c) => (statusOf(c) === 'draft' ? `drafted by ${esc(askedBy(c).replace(' (a bot)', ''))}` : `asked by ${esc(askedBy(c))}`);
   // the whole row opens the ticket; a button only for a real next action: a draft is marked ready, a ticket waiting on
   // you opens what it waits for (the approval)
-  UI.ticketRow = (c, o = {}) => { const s = UI.ticketStatus(c), wait = s.k === 'waiting' && (D.proposals || []).find((p) => p.case === c.id && p.status === 'pending');
-    const act = s.k === 'draft' ? `<span class="btn sm secondary" role="button" tabindex="0" data-act="tk-ready" data-t="${c.id}">Mark ready…</span>` : wait ? `<span class="btn sm secondary" role="link" tabindex="0" data-fx-href="#/bots/${wait.bot}/proposals/${wait.id}">Review</span>` : '';
+  UI.ticketAct = (c) => { const s = UI.ticketStatus(c), wait = s.k === 'waiting' && (D.proposals || []).find((p) => p.case === c.id && p.status === 'pending');
+    return s.k === 'draft' ? `<span class="btn sm secondary" role="button" tabindex="0" data-act="tk-ready" data-t="${c.id}">Mark ready…</span>` : wait ? `<span class="btn sm secondary" role="link" tabindex="0" data-fx-href="#/bots/${wait.bot}/proposals/${wait.id}">Review</span>` : ''; };
+  UI.ticketRow = (c, o = {}) => { const s = UI.ticketStatus(c), act = UI.ticketAct(c);
     return `<li class="dl-need tk-row" data-s="${s.mark}" data-t="${c.id}"><a class="dl-need-a" href="${o.base || '#/tickets'}/${c.id}"><span class="dl-ng">${UI.mark(s.mark, { lg: true, label: s.word })}</span>
-      <span class="dl-nt"><b>${esc(c.title)}</b><span class="dl-why">${o.byStatus ? by(c).replace(/^./, (x) => x.toUpperCase()) : `${s.word} · ${by(c)}`}</span>${UI.factsLine(UI.ticketFacts(c, o))}</span>
+      <span class="dl-nt"><b>${esc(c.title)}</b><span class="dl-why">${o.byStatus || o.statusFact ? by(c).replace(/^./, (x) => x.toUpperCase()) : `${s.word} · ${by(c)}`}</span>${UI.factsLine((o.statusFact ? [{ glyph: UI.glyph(UI.markGlyph ? UI.markGlyph(s.mark) : s.mark), value: s.word, pri: 1, label: 'Status' }] : []).concat(UI.ticketFacts(c, o)))}</span>
       <span class="dl-age">${UI.agoText(c.opened)}</span><span class="dl-na">${act}</span></a></li>`; };
 
   /* ---------- the comment thread: notes as chat rows ---------- */
@@ -57,7 +58,9 @@
   };
 
   /* ---------- the list ---------- */
-  const tv = { q: '', who: [], status: [], priority: [], label: [], group: 'status', view: 'list' };
+  const tv = { q: '', who: [], status: [], priority: [], label: [], page: 0, older: false, col: '' };
+  // the Board by default (60); your choice is remembered (per operator)
+  const viewOf = () => (D.prefs && D.prefs.ticketView) || 'board';
   const allLabels = () => [...new Set(D.cases.flatMap((c) => c.labels || []))].sort();
   const keep = (c) => { const s = statusOf(c);
     return (!tv.who.length || tv.who.includes(c.bot || (c.team ? 'team:' + c.team : 'nobody')) || (c.team && tv.who.includes('team:' + c.team)) || (!c.bot && !c.team && tv.who.includes('nobody')) || (c.bot && tv.who.includes('team:' + teamOf(c))))
@@ -70,29 +73,54 @@
       return [...m].map(([v, n]) => ({ v, label: v === 'nobody' ? 'Nobody yet' : v.startsWith('team:') ? `team ${v.slice(5)}` : v, n: v.startsWith('team:') ? list.filter((c) => c.team === v.slice(5) || teamOf(c) === v.slice(5)).length : n })).filter((o) => o.n); } },
     { k: 'status', label: 'Status', multi: true, keepOrder: true, options: () => ORDER.map((v) => ({ v, label: STATUS[v][0], n: list.filter((c) => statusOf(c) === v).length })).filter((o) => o.n) },
     { k: 'priority', label: 'Priority', multi: true, keepOrder: true, options: () => PRI.map(([v, label]) => ({ v, label, n: list.filter((c) => c.priority === v).length })).filter((o) => o.n) },
-    { k: 'label', label: 'Label', multi: true, more: true, options: () => [...tally(list.flatMap((c) => c.labels || []))].map(([v, n]) => ({ v, label: v, n })) },
-    { k: 'group', label: 'Group by', view: true, keepOrder: true, def: 'status', title: 'Group by', find: 'Group by', options: () => [{ v: 'status', label: 'Status' }, { v: 'who', label: 'Assignee' }, { v: 'none', label: 'None' }] }],
-    onChange: () => UI.rerender({ keepScroll: true }) });
+    { k: 'label', label: 'Label', multi: true, more: true, options: () => [...tally(list.flatMap((c) => c.labels || []))].map(([v, n]) => ({ v, label: v, n })) }],
+    onChange: () => { tv.page = 0; UI.rerender({ keepScroll: true }); } });
   const byPri = (a, b) => PRI.findIndex(([k]) => k === a.priority) - PRI.findIndex(([k]) => k === b.priority) || Date.parse(b.opened) - Date.parse(a.opened);
   const section = (title, rows, o = {}) => `<section class="dl-card tk-sec"${o.id ? ` id="${o.id}"` : ''}><header class="dl-ch"><h2>${title}</h2>${UI.count(rows.length, { hot: !!o.hot })}${o.sub ? `<span class="dl-sub">${o.sub}</span>` : ''}</header><ul class="dl-list">${rows.sort(byPri).map((c) => UI.ticketRow(c, o)).join('')}</ul></section>`;
-  /** The list, or the board: one column per status, from draft to done (done and declined fold on the list). */
-  const col = (k, xs, o) => `<section class="tk-col" data-col="${k}"><header class="tk-colh">${UI.mark(STATUS[k][1])}<h2>${STATUS[k][0]}</h2>${UI.count(xs.length, { hot: k === 'waiting' && xs.length > 0 })}</header>
-    <ul class="tk-cards">${xs.sort(byPri).map((c) => `<li class="tk-card" data-t="${c.id}"><a href="${o.base || '#/tickets'}/${c.id}"><b>${esc(c.title)}</b><span class="dl-why">${by(c).replace(/^./, (x) => x.toUpperCase())}</span>${UI.factsLine(UI.ticketFacts(c, o))}</a></li>`).join('') || `<li class="tk-none dl-sub">${k === 'draft' ? 'No drafts. Write one, or a bot will when it has an idea.' : 'None'}</li>`}</ul></section>`;
-  const viewCtl = () => `<div class="seg fb-seg tk-view" role="group" aria-label="Show as">${[['list', 'List'], ['board', 'Board']].map(([v, l]) => `<button type="button" data-act="tk-view" data-v="${v}" aria-pressed="${tv.view === v}">${icon(v === 'list' ? 'logs' : 'grid')}${l}</button>`).join('')}</div>`;
-  UI.ticketList = (list, o = {}) => { const shown = list.filter(keep), open = shown.filter((c) => c.status !== 'closed'), closed = shown.filter((c) => c.status === 'closed');
-    let body = '';
-    if (tv.view === 'board') body = `<div class="tk-board">${ORDER.filter((k) => k !== 'declined').map((k) => col(k, shown.filter((c) => statusOf(c) === k || (k === 'done' && statusOf(c) === 'declined')), o)).join('')}</div>`;
-    else {
-      if (tv.group === 'none') body += open.length ? section('Open', open, o) : '';
-      else if (tv.group === 'who') { const g = new Map(); open.forEach((c) => { const k = assignee(c); g.set(k, (g.get(k) || []).concat(c)); }); [...g].sort((a, b) => a[0].localeCompare(b[0])).forEach(([k, xs]) => { body += section(esc(k), xs, Object.assign({}, o, { noAssignee: true })); }); }
-      else ORDER.filter((k) => k !== 'done' && k !== 'declined').forEach((k) => { const xs = open.filter((c) => statusOf(c) === k); if (xs.length) body += section(STATUS[k][0], xs, Object.assign({ byStatus: true, id: 'tk-' + k, sub: k === 'draft' ? 'Ideas you and the bots are shaping. Nobody starts work on a draft until someone marks it ready.' : '' }, o)); });
-      if (closed.length) body += `<details class="dl-card dl-files-d past-d"><summary class="panel-head"><h3>Done or declined</h3><span class="muted small">${closed.length}</span></summary><ul class="dl-list">${closed.sort(byPri).map((c) => UI.ticketRow(c, o)).join('')}</ul></details>`;
+  /* The board (60, 60b): one column per status, Draft to Done; each column scrolls inside itself, Done holds the last
+     7 days (Show older for the rest); drag a card to move it, within the rules (conductor alone moves a ticket into In
+     progress or Waiting on you). On a phone, one column at a time. The list: one flat list, 20 to a page, its status a
+     fact. Nothing grows without limit. */
+  const WEEK = 7 * 864e5, recent = (c) => Date.now() - Date.parse(c.closedAt || c.updated || c.opened) <= WEEK;
+  const card = (c, o) => `<li class="tk-card" data-t="${c.id}" draggable="true"><a href="${o.base || '#/tickets'}/${c.id}" draggable="false"><b>${esc(c.title)}</b><span class="dl-why">${by(c).replace(/^./, (x) => x.toUpperCase())}</span>${UI.factsLine(UI.ticketFacts(c, o))}${UI.ticketAct(c) ? `<span class="tk-card-act">${UI.ticketAct(c)}</span>` : ''}</a></li>`;
+  const col = (k, xs, o, extra = '') => `<section class="tk-col${tv.col === k ? ' on' : ''}" data-col="${k}" aria-label="${STATUS[k][0]}"><header class="tk-colh">${UI.mark(STATUS[k][1])}<h2>${STATUS[k][0]}</h2>${UI.count(xs.length, { hot: k === 'waiting' && xs.length > 0 })}</header>
+    <ul class="tk-cards">${xs.sort(byPri).map((c) => card(c, o)).join('') || `<li class="tk-none dl-sub">${k === 'draft' ? 'No drafts. Write one, or a bot will when it has an idea.' : 'None'}</li>`}${extra}</ul></section>`;
+  const viewCtl = () => `<div class="seg fb-seg tk-view" role="group" aria-label="Show as">${[['board', 'Board'], ['list', 'List']].map(([v, l]) => `<button type="button" data-act="tk-view" data-v="${v}" aria-pressed="${viewOf() === v}" aria-label="${l}">${icon(v === 'list' ? 'logs' : 'grid')}<span class="tk-vl">${l}</span></button>`).join('')}</div>`;
+  const PAGE = 20;
+  UI.ticketList = (list, o = {}) => { const shown = list.filter(keep); let body = '';
+    if (viewOf() === 'board') {
+      const cols = ORDER.filter((k) => k !== 'declined'), of = (k) => shown.filter((c) => statusOf(c) === k || (k === 'done' && statusOf(c) === 'declined'));
+      if (!tv.col || !cols.includes(tv.col)) tv.col = cols.find((k) => of(k).length) || 'draft';
+      const done = of('done'), doneShown = tv.older ? done : done.filter(recent), olderN = done.length - doneShown.length;
+      const more = olderN ? `<li class="tk-older"><button type="button" class="btn sm ghost" data-act="tk-older">Show ${olderN} older</button></li>` : tv.older && done.some((c) => !recent(c)) ? `<li class="tk-older"><button type="button" class="btn sm ghost" data-act="tk-older">Only the last 7 days</button></li>` : '';
+      const pick = `<div class="tk-colpick" role="tablist" aria-label="Status">${cols.map((k) => `<button type="button" role="tab" data-act="tk-col" data-v="${k}" aria-selected="${tv.col === k}">${STATUS[k][0]} <span class="dl-sub">${(k === 'done' ? doneShown : of(k)).length}</span></button>`).join('')}</div>`;
+      body = `${pick}<div class="tk-board" data-base="${esc(o.base || '#/tickets')}">${cols.map((k) => k === 'done' ? col(k, doneShown, o, more) : col(k, of(k), o)).join('')}</div>`;
+    } else {
+      const all = shown.slice().sort((a, b) => ORDER.indexOf(statusOf(a)) - ORDER.indexOf(statusOf(b)) || byPri(a, b)), pages = Math.max(1, Math.ceil(all.length / PAGE)); tv.page = Math.min(tv.page, pages - 1);
+      const from = tv.page * PAGE, xs = all.slice(from, from + PAGE);
+      body = all.length ? `<section class="dl-card tk-sec tk-flat"><ul class="dl-list">${xs.map((c) => UI.ticketRow(c, Object.assign({ statusFact: true }, o))).join('')}</ul>${pages > 1 ? `<div class="pk-pages"><span class="dl-sub">${from + 1}–${from + xs.length} of ${all.length}</span><button class="btn sm" ${tv.page ? 'data-act="tk-page" data-d="-1"' : UI.off('The first page')}>${icon('chev', 'flip')}Previous</button><button class="btn sm" ${tv.page < pages - 1 ? 'data-act="tk-page" data-d="1"' : UI.off('The last page')}>Next${icon('chev')}</button></div>` : ''}</section>` : '';
     }
-    if (body && tv.view !== 'board') body = `<div class="tk-groups">${body}</div>`;
     const filtered = shown.length < list.length;
     return `${bar(list)}${filtered ? `<p class="dl-sub tk-showing">Showing ${shown.length} of ${list.length} · <button class="link" data-act="tk-clear">Clear</button></p>` : ''}${body || `<p class="dl-sub">${filtered ? 'No ticket matches.' : o.none || 'No tickets yet.'}</p>`}`; };
-  UI.act('tk-view', (b) => { tv.view = b.dataset.v; UI.rerender({ keepScroll: true }); });
-  UI.act('tk-clear', () => { Object.assign(tv, { q: '', who: [], status: [], priority: [], label: [] }); UI.rerender({ keepScroll: true }); });
+  UI.act('tk-view', (b) => { D.prefs = D.prefs || {}; D.prefs.ticketView = b.dataset.v; S.save(); UI.rerender({ keepScroll: true }); });
+  UI.act('tk-page', (b) => { tv.page += +b.dataset.d; UI.rerender(); });
+  UI.act('tk-older', () => { tv.older = !tv.older; UI.rerender({ keepScroll: true }); });
+  UI.act('tk-col', (b) => { tv.col = b.dataset.v; UI.rerender({ keepScroll: true }); });
+  // drag a card to another column: within the rules, or a word on why not
+  const move = (id, to) => { const c = T(id); if (!c) return; const from = statusOf(c); if (from === to || (to === 'done' && from === 'declined')) return;
+    const note = (t) => { (c.notes = c.notes || []).push({ at: now(), who: 'conductor', text: t }); };
+    if (to === 'progress') return UI.toast('conductor moves it there', 'a ticket is in progress once its bot starts on it', 'idle');
+    if (to === 'waiting') return UI.toast('conductor moves it there', 'a ticket waits on you when its bot asks you something', 'idle');
+    if (to === 'draft') { if (from !== 'ready') return UI.toast('Only a ready ticket goes back to draft', 'work has started on this one', 'idle'); c.stage = 'draft'; note('Moved back to draft by you'); }
+    else if (to === 'ready') { if (from === 'draft') return UI.acts['tk-ready']({ dataset: { t: id } }); if (from !== 'done' && from !== 'declined') return UI.toast('It’s already under way', 'conductor moves it back when its work is done', 'idle'); c.status = 'open'; c.declined = false; c.stage = 'ready'; note('Reopened by you'); }
+    else if (to === 'done') { c.status = 'closed'; c.declined = false; c.closedAt = now(); note('Marked done by you'); }
+    audit('ticket_move', `${c.id} ${from} → ${to}`); S.save(); UI.rerender({ keepScroll: true }); UI.toast(STATUS[to][0], esc(c.title), 'ok'); };
+  UI.ticketMove = move;
+  document.addEventListener('dragstart', (e) => { const li = e.target.closest && e.target.closest('.tk-card[data-t]'); if (!li) return; e.dataTransfer.setData('text/x-ticket', li.dataset.t); e.dataTransfer.effectAllowed = 'move'; li.classList.add('drag'); });
+  document.addEventListener('dragend', (e) => { const li = e.target.closest && e.target.closest('.tk-card'); if (li) li.classList.remove('drag'); document.querySelectorAll('.tk-col.over').forEach((x) => x.classList.remove('over')); });
+  document.addEventListener('dragover', (e) => { const col2 = e.target.closest && e.target.closest('.tk-col[data-col]'); if (!col2) return; e.preventDefault(); document.querySelectorAll('.tk-col.over').forEach((x) => x !== col2 && x.classList.remove('over')); col2.classList.add('over'); });
+  document.addEventListener('drop', (e) => { const col2 = e.target.closest && e.target.closest('.tk-col[data-col]'); if (!col2) return; e.preventDefault(); col2.classList.remove('over'); const id = e.dataTransfer.getData('text/x-ticket'); if (id) move(id, col2.dataset.col); });
+  UI.act('tk-clear', () => { Object.assign(tv, { q: '', who: [], status: [], priority: [], label: [], page: 0 }); UI.rerender({ keepScroll: true }); });
 
   UI.route('tickets/:id?', ({ id }) => {
     if (id === 'new') return newTicket();

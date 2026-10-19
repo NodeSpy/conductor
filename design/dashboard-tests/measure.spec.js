@@ -35,8 +35,8 @@ test('the filter toolbar is one component: the same parts on every page, one hei
   await go(page, '#/tickets', { fresh: true });
   const seg = page.locator('#main .fb .fb-bar .seg.tk-view');
   await expect(seg).toBeVisible();
-  if (!phone) {
-    const [g, s] = await Promise.all([page.locator('#main .fb .fb-view').boundingBox(), seg.boundingBox()]);
+  if (!phone) { // on the bar's centre line, after the menus
+    const [g, s] = await Promise.all([page.locator('#main .fb .fb-btn').first().boundingBox(), seg.boundingBox()]);
     expect(Math.abs((g.y + g.height / 2) - (s.y + s.height / 2))).toBeLessThanOrEqual(1);
     expect(s.x).toBeGreaterThan(g.x);
   }

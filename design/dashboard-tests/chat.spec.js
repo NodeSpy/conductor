@@ -134,3 +134,27 @@ test('the composer is pinned to the bottom of a full-height panel: it stays put 
   const e = await page.evaluate(() => { const t = document.querySelector('#msgs').getBoundingClientRect(), n = document.querySelector('.cm-empty').getBoundingClientRect(); return Math.abs((n.top + n.bottom) / 2 - (t.top + t.bottom) / 2); });
   expect(e).toBeLessThan(4);
 });
+
+test('the composer: the send button is the field’s height and radius, on its bottom edge; the paperclip opens what you can attach', async ({ page }) => {
+  for (const route of ['#/bots/platform-sre/chat', '#/tickets/c29']) {
+    await go(page, route, { fresh: true });
+    const [f, b] = await Promise.all([page.locator('.cm-field').first().boundingBox(), page.locator('.cm-send').first().boundingBox()]);
+    expect(Math.abs(f.height - b.height), `${route}: same height`).toBeLessThanOrEqual(1);
+    expect(Math.abs((f.y + f.height) - (b.y + b.height)), `${route}: same bottom edge`).toBeLessThanOrEqual(1);
+    const [rf, rb] = await Promise.all([page.locator('.cm-field').first().evaluate((e) => getComputedStyle(e).borderTopLeftRadius), page.locator('.cm-send').first().evaluate((e) => getComputedStyle(e).borderTopLeftRadius)]);
+    expect(rb, `${route}: same radius`).toBe(rf);
+  }
+  await go(page, '#/bots/platform-sre/chat', { fresh: true });
+  await page.locator('[data-act="chat-attach"]').click();
+  await expect(page.locator('#pop-menu [role="menuitem"]')).toHaveText(['Upload a file', 'Photo or image', 'Paste a link', 'From a vault item', 'Attach a run or ticket']);
+  if (page.viewportSize().width <= 720) await expect(page.locator('#pop-menu')).toHaveClass(/as-sheet/);
+  await page.locator('#pop-menu [data-act="cm-att-obj"]').click();
+  await page.selectOption('#f-o', { index: 1 });
+  await page.locator('#gen-submit').click();
+  await expect(page.locator('#cm-pend .cm-p[data-kind="obj"]')).toContainText('a ticket');
+  await page.locator('[data-act="chat-attach"]').click();
+  await page.locator('#pop-menu [data-act="cm-att-ref"]').click();
+  await page.selectOption('#f-ref', { index: 1 });
+  await page.locator('#gen-submit').click();
+  await expect(page.locator('#cm-pend .cm-p[data-kind="ref"]')).toContainText('its value is never shown');
+});

@@ -880,3 +880,28 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 /* stacked blocks of cards keep the stack gap too, whatever holds them: a header card above a grid of cards, a grid of
  * tiles above a disclosure, a panel above a grid (measure.spec compares each card with the card below it) */
 :is(.page, .dl-tab-body, .repo) > :is(.panel, .dl-card, .dl-files-d, .dl-tech-d, .grid) + :is(.panel, .dl-card, .dl-files-d, .dl-tech-d, .grid) { margin-top: var(--gap-stack); }
+/* the ticket board (60, 60b): each column scrolls inside itself, so nothing grows without limit; a column takes a card
+ * you drag over it; on a phone, one column at a time, picked from the status tabs above it */
+.tk-cards { max-height: max(320px, calc(100dvh - 340px)); overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
+.tk-col.over { border-color: var(--color-accent-default); background: color-mix(in srgb, var(--color-accent-subtle) 60%, var(--color-bg-sunken)); }
+.tk-card[draggable="true"] { cursor: grab; } .tk-card.drag { opacity: .5; }
+.tk-older { list-style: none; } .tk-older .btn { width: 100%; justify-content: center; }
+.tk-colpick { display: none; }
+@media (max-width: 720px) {
+  .tk-colpick { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 0 0 var(--gap-stack); }
+  .tk-colpick > button { flex: none; min-height: 44px; padding: 0 14px; border-radius: 999px; border: var(--border-width) solid var(--color-border-default); background: var(--color-bg-surface); color: var(--color-text-secondary); font: var(--type-body-s); }
+  .tk-colpick > button[aria-selected="true"] { border-color: var(--color-text-primary); color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
+  .tk-board > .tk-col:not(.on) { display: none; }
+  .tk-cards { max-height: none; overflow: visible; }
+}
+.tk-card-act { display: flex; margin-top: 8px; }
+@media (max-width: 720px) { .tk-view .tk-vl { display: none; } .tk-view button { padding: 0 12px; } } /* on a phone the view toggle is its two icons, so the search keeps its width */
+/* a workflow's health (58): its runs this week and the share that failed (the failure tone at 20%), the last 20 results */
+.m-row[data-wf] { grid-template-columns: 22px 32px minmax(0, 1fr) minmax(220px, auto) 36px; }
+.wf-health { display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-secondary); font: var(--type-body-s); white-space: nowrap; }
+.wf-health.fail { font-weight: var(--font-weight-semibold); } /* its tone is in marks.css */
+.wf-strip { display: inline-flex; gap: 2px; align-items: flex-end; height: 14px; } .wf-strip i { width: 4px; height: 14px; border-radius: 1px; } /* its colours are in marks.css */
+@media (max-width: 720px) { .m-row[data-wf] { grid-template-columns: 22px 32px minmax(0, 1fr) 36px; } .wf-strip { display: none; } }
+/* the composer (62): the send button is the field's exact height and radius, on its bottom edge as the field grows */
+html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radius: var(--radius-control); }
+@media (max-width: 720px) { html .cm-in .cm-send { width: 46px; height: 46px; min-height: 46px; } } /* the field is 46 on a phone (a 44px paperclip in its border) */

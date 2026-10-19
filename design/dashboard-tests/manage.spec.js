@@ -115,3 +115,22 @@ test('no folders anywhere: no folder menu, button, crumb or word on any page; ol
   await go(page, '#/folders/work');
   await expect(page).toHaveURL(/#\/bots$/);
 });
+
+test('a workflow shows its recent health, not "Running": runs this week and the share that failed, a link to them, a Health filter, Most failing first', async ({ page }) => {
+  await go(page, '#/workflows', { fresh: true });
+  const ci = page.locator('.m-row[data-wf="ci-fixer"] .wf-health');
+  await expect(ci).toContainText(/\d+ runs this week · \d+% failed/);
+  await expect(ci).toHaveClass(/fail/); // 20% or more failed: the failure tone
+  await expect(ci).toHaveAttribute('href', /#\/activity\?wf=ci-fixer&since=7d/);
+  await expect(page.locator('.m-row[data-wf="dep-bump"] .wf-health')).not.toHaveClass(/fail/);
+  await expect(page.locator('.m-row .q-st', { hasText: /^Running$/ })).toHaveCount(0);
+  // descriptions are sentences, never "It runs its steps"
+  for (const t of await page.locator('.m-row[data-wf] .dl-why').allTextContents()) expect(t).not.toMatch(/^(It runs its steps|An agent works on it|Runs a command)/);
+  if (page.viewportSize().width > 720) {
+    await page.locator('.fb[data-fb="wl"] [data-fb-open="sort"]').click(); await page.locator('.fb-opt', { hasText: 'Most failing first' }).click();
+    await expect(page.locator('.m-team[data-src="config"] .m-row').first()).toHaveAttribute('data-wf', 'ci-fixer');
+    await page.locator('.fb[data-fb="wl"] [data-fb-open="health"]').click(); await page.locator('.fb-opt', { hasText: 'Failing' }).click(); await page.keyboard.press('Escape');
+    const n = await page.locator('.m-row[data-wf]').count(); expect(n).toBeGreaterThan(0);
+    await expect(page.locator('.m-row[data-wf] .wf-health.fail')).toHaveCount(n); // only the failing ones
+  }
+});

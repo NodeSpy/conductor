@@ -140,3 +140,7 @@ tr[data-row] .why-line { color: var(--color-text-primary); }
 .hb-sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 .hb-sw-ok { background: var(--color-status-success-chart); box-shadow: inset 0 2px 0 var(--color-status-success-solid); } .hb-sw-fail { background: var(--color-status-danger-solid); } .hb-sw-run { background: var(--color-status-running-solid); } .hb-sw-other { background: var(--color-border-strong); }
 .hb-read { margin: 0; font: var(--type-caption); }
+
+/* a workflow's health (58): the failure tone at 20% failed or more; the last-20 strip in the chart colours */
+.wf-health.fail { color: var(--color-status-danger-fg); }
+.wf-strip i { background: var(--color-status-success-chart); } .wf-strip i[data-s="fail"] { background: var(--color-status-danger-solid); } .wf-strip i[data-s="run"] { background: var(--color-status-running-solid); } .wf-strip i[data-s="idle"], .wf-strip i[data-s="wait"] { background: var(--color-status-neutral-solid); }

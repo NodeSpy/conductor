@@ -28,7 +28,9 @@
   const card = (id, bot) => { const p = (D.proposals || []).find((x) => x.id === id && (!bot || x.bot === bot)); if (!p) return '';
     const pend = p.status === 'pending', st = pend ? 'Waiting for you' : p.status[0].toUpperCase() + p.status.slice(1);
     return `<a class="cm-card${pend ? ' pend' : ''}" href="#/bots/${p.bot}/proposals/${p.id}">${UI.mark(pend ? 'ember' : p.status === 'executed' || p.status === 'approved' ? 'ok' : 'fail')}<span class="cm-ct"><b>${esc(p.title || p.summary)}</b>${UI.factsLine([UI.envFact(p.env), UI.actionFact(p.verb, p.env, p.tier)])}<span class="dl-sub">${st}${pend && p.expires ? ` · expires in ${esc(p.expires)}` : ''}</span></span>${pend ? '<span class="btn sm secondary">Review</span>' : ''}</a>`; };
-  const att = (a, i, mi) => a.kind === 'image'
+  const att = (a, i, mi) => a.kind === 'obj' ? `<a class="cm-file" href="${esc(a.href)}">${icon(a.obj === 'ticket' ? 'ticket' : 'runs')}<span>${esc(a.name)}</span><span class="dl-sub">${a.obj}</span></a>`
+    : a.kind === 'ref' ? `<span class="cm-file">${icon('key')}<span>${esc(a.name)}</span><span class="dl-sub">vault reference · value never shown</span></span>`
+    : a.kind === 'image'
     ? `<button class="cm-img" data-act="chat-img" data-mi="${mi}" data-i="${i}" aria-label="Open ${esc(a.name)} larger"><img src="${esc(a.src || a.thumb)}" alt="${esc(a.name)}"></button>`
     : `<button class="cm-file" data-act="chat-img" data-mi="${mi}" data-i="${i}">${icon('file')}<span>${esc(a.name)}</span><span class="dl-sub">${UI.bytes(a.size)}</span></button>`;
   const linkCard = (l) => `<a class="cm-link" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${icon('globe')}<span><b>${esc(l.host)}</b><span class="dl-sub">${esc(l.path || '/')}</span></span></a>`;
@@ -78,8 +80,8 @@
   const P = (UI._chatPend = UI._chatPend || {}); // per bot: { items: [], gone: Set of dismissed link URLs, err }
   const pend = (bot) => (P[bot] = P[bot] || { items: [], gone: [], err: '' });
   const typeOf = (f) => { const t = LIMITS.types.find(([, re]) => re.test(f.type || '')); return t ? t[0] : LIMITS.exts.test(f.name) ? (/\.(png|jpe?g|gif|webp)$/i.test(f.name) ? 'image' : 'file') : null; };
-  const pendItem = (a, i) => `<span class="cm-p${a.status === 'uploading' ? ' up' : ''}" data-i="${i}">${a.kind === 'image' && a.thumb ? `<img src="${a.thumb}" alt="">` : icon(a.kind === 'link' ? 'globe' : 'file')}
-    <span class="cm-pt"><b>${esc(a.kind === 'link' ? a.host : a.name)}</b><span class="dl-sub">${a.kind === 'link' ? 'link · shown as a card' : a.status === 'uploading' ? 'uploading…' : UI.bytes(a.size)}</span></span>
+  const pendItem = (a, i) => `<span class="cm-p${a.status === 'uploading' ? ' up' : ''}" data-i="${i}" data-kind="${a.kind}">${a.kind === 'image' && a.thumb ? `<img src="${a.thumb}" alt="">` : icon(a.kind === 'link' ? 'globe' : a.kind === 'ref' ? 'key' : a.kind === 'obj' ? (a.obj === 'ticket' ? 'ticket' : 'runs') : 'file')}
+    <span class="cm-pt"><b>${esc(a.kind === 'link' ? a.host : a.name)}</b><span class="dl-sub">${a.kind === 'link' ? 'link · shown as a card' : a.kind === 'ref' ? 'a vault reference · its value is never shown' : a.kind === 'obj' ? `a ${a.obj}` : a.status === 'uploading' ? 'uploading…' : UI.bytes(a.size)}</span></span>
     <button class="icon-btn sm" data-act="chat-unattach" data-i="${i}" aria-label="Remove ${esc(a.kind === 'link' ? a.url : a.name)}">${icon('x')}</button></span>`;
   const links = (bot) => { const ta = UI.$('#say'), st = pend(bot); return [...new Set(((ta && ta.value) || '').match(URL_RE) || [])].filter((u) => !st.gone.includes(u)).map(linkOf).filter(Boolean).map((l) => ({ kind: 'link', ...l })); };
   const drawPend = (bot) => { const el = UI.$('#cm-pend'); if (!el) return; const st = pend(bot), all = [...st.items, ...links(bot)];
@@ -112,7 +114,21 @@
     try { c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', 0.8)); } catch (e) { res(src); } }; im.onerror = () => res(src); im.src = src; });
   UI.chatAddFiles = addFiles;
   const botOf = () => (UI.$('.cm-comp') || {}).dataset?.bot;
-  UI.act('chat-attach', () => { const f = UI.$('#cm-file'); if (f) f.click(); });
+  // the paperclip opens what you can attach (62): a file, a photo, a link, a vault item (its reference; the value is
+  // never shown), a run or a ticket; on a phone the same menu is an action sheet
+  let attachFor = null;
+  UI.act('chat-attach', (b) => { attachFor = (b.closest('.cm-comp') || {}).dataset ? b.closest('.cm-comp').dataset.bot : null;
+    UI.menu(b, [['Upload a file', 'file', 'cm-att-file'], ['Photo or image', 'image', 'cm-att-img'], ['Paste a link', 'globe', 'cm-att-link'], ['-'], ['From a vault item', 'key', 'cm-att-ref', D.secrets && D.secrets.length ? '' : UI.off('No vault items yet')], ['Attach a run or ticket', 'runs', 'cm-att-obj']]); });
+  UI.act('cm-att-file', () => { const f = UI.$('#cm-file'); if (f) { f.accept = ACCEPT; f.click(); } });
+  UI.act('cm-att-img', () => { const f = UI.$('#cm-file'); if (f) { f.accept = 'image/*'; f.click(); setTimeout(() => { f.accept = ACCEPT; }, 500); } });
+  UI.act('cm-att-link', () => UI.form({ caps: 'Attach', title: 'Paste a link', fields: [{ k: 'url', type: 'string', req: true, label: 'Link', ph: 'https://…', pattern: /^https?:\/\/\S+$/, patternMsg: 'A web address, starting https://' }], submit: 'Attach',
+    onSubmit: (v) => { const ta = UI.$('#say'); if (ta) { ta.value = `${ta.value ? ta.value.replace(/\s*$/, ' ') : ''}${v.url} `; ta.dispatchEvent(new Event('input', { bubbles: true })); } if (attachFor) drawPend(attachFor); } }));
+  const keyOf = (x) => x.key || String(x.ref || '').split('/').slice(1).join('/');
+  UI.act('cm-att-ref', () => UI.form({ caps: 'Attach', title: 'From a vault item', intro: '<p class="dl-sub">It attaches the reference; the value is never shown, here or to the bot.</p>', fields: [{ k: 'ref', type: 'enum', req: true, label: 'Vault item', options: (S.view().secrets || []).map((x) => [`${x.vault}:${keyOf(x)}`, `${x.vault} · ${keyOf(x)}`]) }], submit: 'Attach',
+    onSubmit: (v) => { if (!attachFor) return; const [vault, ...k] = v.ref.split(':'); pend(attachFor).items.push({ kind: 'ref', name: `${vault} · ${k.join(':')}`, ref: `{{ vault "${vault}" "${k.join(':')}" }}` }); drawPend(attachFor); } }));
+  UI.act('cm-att-obj', () => UI.form({ caps: 'Attach', title: 'Attach a run or ticket', fields: [{ k: 'o', type: 'enum', req: true, label: 'Run or ticket', options: [...(D.cases || []).filter((c) => c.status !== 'closed').slice(0, 12).map((c) => [`t:${c.id}`, `Ticket · ${c.title}`]), ...D.runs.slice(0, 12).map((r) => [`r:${r.id}`, `Run · ${UI.runTitle ? UI.runTitle(r) : r.workflow} (${UI.agoText(r.started)})`])] }], submit: 'Attach',
+    onSubmit: (v) => { if (!attachFor) return; const [k, id] = v.o.split(':'), c = k === 't' && (D.cases || []).find((x) => x.id === id), r = k === 'r' && D.runs.find((x) => x.id === id);
+      pend(attachFor).items.push({ kind: 'obj', obj: k === 't' ? 'ticket' : 'run', id, name: c ? c.title : r ? (UI.runTitle ? UI.runTitle(r) : r.workflow) : id, href: k === 't' ? `#/tickets/${id}` : `#/runs/${id}` }); drawPend(attachFor); } }));
   UI.act('chat-unattach', (b) => { const bot = botOf(), st = pend(bot), i = +b.dataset.i;
     if (i < st.items.length) st.items.splice(i, 1); else { const l = links(bot)[i - st.items.length]; if (l) st.gone.push(l.url); }
     st.err = ''; drawPend(bot); const ta = UI.$('#say'); if (ta) ta.focus(); });

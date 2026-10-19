@@ -41,7 +41,7 @@
   // workflows: steps run in list order; parallel: [[…],[…]] branches join before the next step.
   // `needs` here is the graph the dashboard DERIVES from that order (not a config key).
   D.workflows = [
-    { name: 'pr-review', source: 'pack review', on: 'gh.review_requested', runs24: 31, ok: 0.94, cost24: 6.12, steps: [
+    { name: 'pr-review', source: 'pack review', description: 'Reviews each pull request you ask for, from several angles, and posts one combined review', on: 'gh.review_requested', runs24: 31, ok: 0.94, cost24: 6.12, steps: [
       { id: 'fetch', kind: 'uses', uses: 'gh.pr_diff', needs: [] },
       { id: 'lint', kind: 'code', run: 'js', needs: ['fetch'] },
       { id: 'review', kind: 'agent', runtime: 'claude-cli', model: 'reviewer', gate: 'review/no-todos', needs: ['fetch'] },
@@ -176,6 +176,7 @@
     { id: 'c27', title: 'NAT gateway costs jumped 44% this week', status: 'open', requester: 'proactive (sweep x4)', cls: 'proactive', opened: m(260), workers: 0, proposals: 0 },
     { id: 'c24', title: 'Can you bump the cache TTL for /search?', status: 'open', requester: 'chat:U-THIRD', cls: 'user', opened: m(380), workers: 1, proposals: 1 },
     { id: 'c19', title: 'Peer: billing-sre asks for NAT gateway owners', status: 'closed', requester: 'bot:billing-sre', cls: 'peer', opened: m(1600), workers: 0, proposals: 0 },
+    { id: 'c08', team: 'platform', title: 'Retire the old deploy keys', status: 'closed', requester: 'operator:ops', cls: 'operator', opened: m(20000), closedAt: m(14000), workers: 0, proposals: 0 }, // done over a week ago: on the board behind 'Show older'
     { id: 'c12', title: 'Weekly runbook consolidation', status: 'closed', requester: 'operator:ops', cls: 'operator', opened: m(4000), workers: 1, proposals: 0 },
   ];
 
@@ -422,6 +423,7 @@ Primary Postgres for the platform services (acme/api, acme/web).
   /* Workflows: the YAML is the source; the list and graph are derived. */
   const WY = {
     'ci-fixer': `name: ci-fixer
+description: When a check fails on a pull request, works out why, fixes it on the branch and pushes the fix
 on: gh.check_failed
 filter: { repo: [acme/api, acme/web], not_label_any: [wip] }   # never touch drafts
 policy:
@@ -454,6 +456,7 @@ steps:
 # owner: platform (a trailing comment, kept as written)
 `,
     'issue-triage': `name: issue-triage
+description: Reads each new issue, labels it and says who should look at it
 on: gh.issue_opened
 filter: { repo: [acme/api, acme/web] }
 steps:
@@ -469,6 +472,7 @@ steps:
     options: { repo: "{{.repo}}", number: "{{.number}}", labels: ["{{.classify.text}}"] }
 `,
     'dep-bump': `name: dep-bump
+description: Every Monday, bumps outdated dependencies and posts what changed
 on: timer.weekly                   # Mondays 06:00
 steps:
   - id: bump
@@ -480,6 +484,7 @@ steps:
     options: { channel: "#deps", text: "dep-bump opened {{.bump.text}}" }
 `,
     alert: `name: alert
+description: "Tells #ops when a run fails, asks for you or needs an answer"
 on: [conductor.escalate, conductor.needs_input, conductor.failed]
 steps:
   - id: post
@@ -529,6 +534,7 @@ steps:
 `,
     'release-notes': `# shipped by ./packs/house-style
 name: release-notes
+description: Drafts release notes from what merged since the last release and posts them for review
 on: gh.release
 steps:
   - id: draft
@@ -655,6 +661,7 @@ steps:
 
   /* A trigger that hands work to a team: the team's rules (or its lead) pick the bot. */
   D.workflows.splice(6, 0, { name: 'incident-intake', source: 'config', kind: 'trigger', on: 'pd.incident', runs24: 2, ok: 1, cost24: 0, steps: [], yaml: `name: incident-intake
+description: Turns a high-urgency PagerDuty incident into a ticket for the on-call bot
 on: pd.incident
 filter: { urgency: high }
 steps:
@@ -954,7 +961,7 @@ window.D.packMembers = {
   set('c7', { priority: 'normal', labels: ['finance'], due: inD(3), desc: 'Post the October forecast for AWS spend to #incidents with the main drivers.' });
   set('c38', { priority: 'high', labels: ['backup'], desc: 'The nightly backup of nas-01 didn’t run. Find out why and re-run it.' });
   set('c36', { priority: 'high', labels: ['incident', 'web'] });
-  D.ticketsVer = 3;
+  D.ticketsVer = 4;
   D.cases.forEach((c) => { c.priority = c.priority || 'normal'; c.labels = c.labels || []; c.stage = c.stage || 'ready'; });
   D.cases.push(
     { id: 'c40', team: 'platform', title: 'Rotate the staging TLS certificate before it expires', status: 'open', requester: 'operator:ops', cls: 'operator', opened: m(95), workers: 0, proposals: 0, priority: 'high', labels: ['security'], due: inD(5), desc: 'The staging certificate expires in 9 days. Rotate it with the usual process and confirm the new expiry.', notes: [] },

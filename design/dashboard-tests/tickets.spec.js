@@ -4,20 +4,22 @@
 // ticket, a ticket's page with its comments (the chat component), a bot's and a team's Tickets tabs, a ticket made
 // from a chat message.
 const { test, expect, go } = require('./fixtures');
+// on a phone the board shows one column at a time: open the one a ticket is in
+const reveal = async (page, title) => { if (page.viewportSize().width > 720) return; const k = await page.locator('.tk-card', { hasText: title }).first().evaluate((e) => e.closest('.tk-col').dataset.col); await page.locator(`.tk-colpick [data-v="${k}"]`).click(); };
 
-test('Tickets is in the nav; drafts first; rows in words with the facts line, no ids', async ({ page }) => {
+test('Tickets is in the nav; the Board first, drafts its first column; cards in words with the facts line, no ids', async ({ page }) => {
   await go(page, '#/tickets', { fresh: true });
   await expect(page.locator('#main h1')).toContainText('Tickets');
   if (page.viewportSize().width > 720) await expect(page.locator('#rail-nav [data-nav="tickets"]')).toHaveClass(/on/);
-  const drafts = page.locator('#tk-draft');
+  await expect(page.locator('[data-act="tk-view"][data-v="board"]')).toHaveAttribute('aria-pressed', 'true');
+  const drafts = page.locator('.tk-col[data-col="draft"]');
   await expect(drafts.locator('h2')).toHaveText('Draft');
-  await expect(drafts).toContainText('Nobody starts work on a draft until someone marks it ready');
-  await expect(drafts.locator('.tk-row')).toHaveCount(4);
-  await expect(drafts.locator('.tk-row', { hasText: 'Idea: move the nightly backups' })).toContainText('Drafted by homelab');
-  const urgent = page.locator('.tk-row', { hasText: 'SEV2 api p99 latency' });
+  await expect(drafts.locator('.tk-card')).toHaveCount(4);
+  await expect(drafts.locator('.tk-card', { hasText: 'Idea: move the nightly backups' })).toContainText('Drafted by homelab');
+  const urgent = page.locator('.tk-card', { hasText: 'SEV2 api p99 latency' });
   await expect(urgent.locator('.fx-i.hi')).toContainText('Urgent');
   await expect(urgent.locator('.fx')).toContainText('platform-sre');
-  for (const t of await page.locator('.tk-row .dl-nt').allTextContents()) expect(t).not.toMatch(/\bc\d{2}\b/);
+  for (const t of await page.locator('.tk-card').allTextContents()) expect(t).not.toMatch(/\bc\d{2}\b/);
 });
 
 test('nothing about outside ticket systems', async ({ page }) => {
@@ -29,26 +31,64 @@ test('nothing about outside ticket systems', async ({ page }) => {
 
 test('the filter bar narrows by status and label, and says what it hides', async ({ page }) => {
   await go(page, '#/tickets', { fresh: true });
-  const all = await page.locator('.tk-row').count();
+  const all = await page.locator('.tk-card').count();
   await page.fill('#main .fb-in', 'status:draft');
   await page.keyboard.press('Enter');
-  await expect(page.locator('.tk-row')).toHaveCount(4);
+  await expect(page.locator('.tk-card')).toHaveCount(4);
   await expect(page.locator('.tk-showing')).toContainText('Showing 4 of');
   await page.locator('[data-act="tk-clear"]').click();
-  await expect(page.locator('.tk-row')).toHaveCount(all);
+  await expect(page.locator('.tk-card')).toHaveCount(all);
   await page.fill('#main .fb-in', 'label:incident');
   await page.keyboard.press('Enter');
-  for (const t of await page.locator('.tk-row .fx').allTextContents()) expect(t).toContain('incident');
+  for (const t of await page.locator('.tk-card .fx').allTextContents()) expect(t).toContain('incident');
 });
 
-test('the board: one column per status, drafts first; on a phone the columns stack', async ({ page }) => {
+test('the board: one column per status, drafts first, each scrolling inside itself; on a phone one column at a time', async ({ page }) => {
   await go(page, '#/tickets', { fresh: true });
-  await page.locator('[data-act="tk-view"][data-v="board"]').click();
   await expect(page.locator('.tk-col h2')).toHaveText(['Draft', 'Ready', 'In progress', 'Waiting on you', 'Done']);
   await expect(page.locator('.tk-col[data-col="draft"] .tk-card')).toHaveCount(4);
-  await expect(page.locator('.tk-col[data-col="waiting"] .tk-card', { hasText: 'SEV2 api p99 latency' })).toBeVisible();
   expect(await page.evaluate(() => { const m = document.getElementById('main'); return m.scrollWidth <= m.clientWidth + 1; })).toBe(true);
-  if (page.viewportSize().width <= 720) { const xs = await page.locator('.tk-col').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().left))); expect(new Set(xs).size).toBe(1); }
+  if (page.viewportSize().width <= 720) {
+    await expect(page.locator('.tk-col:visible')).toHaveCount(1); // one column at a time, picked above it
+    await page.locator('.tk-colpick [data-v="waiting"]').click();
+    await expect(page.locator('.tk-col[data-col="waiting"]')).toBeVisible();
+    await expect(page.locator('.tk-col[data-col="draft"]')).toBeHidden();
+  } else {
+    await expect(page.locator('.tk-col[data-col="waiting"] .tk-card', { hasText: 'SEV2 api p99 latency' })).toBeVisible();
+    for (const k of ['draft', 'ready', 'done']) expect(await page.locator(`.tk-col[data-col="${k}"] .tk-cards`).evaluate((e) => getComputedStyle(e).overflowY), k).toBe('auto');
+  }
+});
+
+test('Done holds the last 7 days, Show older for the rest; the List is one flat list, paged, its status a fact; the choice is remembered', async ({ page }) => {
+  await go(page, '#/tickets', { fresh: true });
+  const phone = page.viewportSize().width <= 720;
+  if (phone) await page.locator('.tk-colpick [data-v="done"]').click();
+  const done = page.locator('.tk-col[data-col="done"]');
+  await expect(done.locator('.tk-card', { hasText: 'Retire the old deploy keys' })).toHaveCount(0);
+  await done.locator('[data-act="tk-older"]').click();
+  await expect(done.locator('.tk-card', { hasText: 'Retire the old deploy keys' })).toHaveCount(1);
+  await page.locator('[data-act="tk-view"][data-v="list"]').click();
+  await expect(page.locator('.tk-flat .tk-row').first()).toBeVisible();
+  await expect(page.locator('.tk-sec h2')).toHaveCount(0); // no grouping
+  await expect(page.locator('.tk-flat .tk-row', { hasText: 'SEV2 api p99 latency' }).locator('.fx-i[title="Status"]')).toHaveText('Waiting on you');
+  expect(await page.locator('.tk-flat .tk-row').count()).toBeLessThanOrEqual(20);
+  await go(page, '#/tickets');
+  await expect(page.locator('[data-act="tk-view"][data-v="list"]')).toHaveAttribute('aria-pressed', 'true'); // remembered
+});
+
+test('drag a card to change its status, within the rules', async ({ page }) => {
+  test.skip(page.viewportSize().width <= 720, 'dragging is a desktop gesture; a phone moves a ticket from its page');
+  await go(page, '#/tickets', { fresh: true });
+  const drag = async (title, to) => page.locator('.tk-card', { hasText: title }).dragTo(page.locator(`.tk-col[data-col="${to}"]`));
+  await drag('Rotate the staging TLS certificate', 'done');
+  await expect(page.locator('.tk-col[data-col="done"] .tk-card', { hasText: 'Rotate the staging TLS certificate' })).toBeVisible();
+  await drag('Rotate the staging TLS certificate', 'ready'); // reopened
+  await expect(page.locator('.tk-col[data-col="ready"] .tk-card', { hasText: 'Rotate the staging TLS certificate' })).toBeVisible();
+  await drag('Rotate the staging TLS certificate', 'progress'); // only conductor moves a ticket there
+  await expect(page.locator('.toast').last()).toContainText('conductor moves it there');
+  await expect(page.locator('.tk-col[data-col="ready"] .tk-card', { hasText: 'Rotate the staging TLS certificate' })).toBeVisible();
+  await drag('Rotate the staging TLS certificate', 'draft');
+  await expect(page.locator('.tk-col[data-col="draft"] .tk-card', { hasText: 'Rotate the staging TLS certificate' })).toBeVisible();
 });
 
 test('a draft: no work starts; Mark ready asks who does it, then it is ready for them', async ({ page }) => {
@@ -67,7 +107,8 @@ test('a draft: no work starts; Mark ready asks who does it, then it is ready for
   await expect(page.locator('.tk-chat')).toContainText('Marked ready by you');
   await expect(page.locator('.tk-head .fx')).toContainText('team platform');
   await go(page, '#/teams/platform/tickets');
-  await expect(page.locator('.tk-row', { hasText: 'Try a cheaper instance type' })).toBeVisible();
+  await reveal(page, 'Try a cheaper instance type');
+  await expect(page.locator('.tk-card', { hasText: 'Try a cheaper instance type' })).toBeVisible();
 });
 
 test('Create, ready to start needs someone to do it', async ({ page }) => {
@@ -118,7 +159,8 @@ test('details change in place; a ticket shows its linked work', async ({ page })
   await expect(page.locator('.tk-hist')).toContainText('Assigned');
   await go(page, '#/bots/web-triage/cases');
   await expect(page.locator('.dl-tabs a[aria-current="page"]')).toContainText('Tickets');
-  await expect(page.locator('.tk-row', { hasText: 'SEV2 api p99 latency' })).toBeVisible();
+  await reveal(page, 'SEV2 api p99 latency');
+  await expect(page.locator('.tk-card', { hasText: 'SEV2 api p99 latency' })).toBeVisible();
 });
 
 test('make a ticket from a chat message; old task links open the ticket', async ({ page }) => {
@@ -138,19 +180,19 @@ test('make a ticket from a chat message; old task links open the ticket', async 
   await expect(page.locator('.tk-head h1')).toHaveText('SEV2 api p99 latency > 2s');
 });
 
-test('Ready has its own mark (not parked); the row opens, and a button only for a real next action; titles read as people write them', async ({ page }) => {
+test('Ready has its own mark (not parked); a card opens, and a button only for a real next action; titles read as people write them', async ({ page }) => {
   await go(page, '#/tickets', { fresh: true });
-  const ready = page.locator('#tk-ready .tk-row').first();
-  await expect(ready.locator('.st').first()).toHaveAttribute('data-s', 'ready');
-  await expect(page.locator('.tk-row .st[data-s="idle"]')).toHaveCount(0); // ‖ means parked, nowhere here
-  // a draft's action marks it ready; a ready or in-progress row has none; waiting on you opens what it waits for
-  await expect(page.locator('#tk-draft .tk-row').first().locator('[data-act="tk-ready"]')).toHaveText('Mark ready…');
-  await expect(page.locator('#tk-ready .tk-row .dl-na .btn')).toHaveCount(0);
-  const wait = page.locator('#tk-waiting .tk-row', { hasText: 'SEV2 api p99 latency' });
-  await expect(wait.locator('.dl-na .btn')).toHaveAttribute('data-fx-href', /#\/bots\/[\w-]+\/proposals\/p\d+/);
-  for (const t of await page.locator('.tk-row .dl-nt > b').allTextContents()) expect(t, 'a machine prefix in a title').not.toMatch(/^(FINDING|[a-z]{2,4}:)\s/);
-  // Mark ready from the row, without opening the ticket
-  await page.locator('#tk-draft .tk-row', { hasText: 'Write a runbook' }).locator('[data-act="tk-ready"]').click();
+  const col = (k) => page.locator(`.tk-col[data-col="${k}"]`);
+  const show = async (k) => { if (page.viewportSize().width <= 720) await page.locator(`.tk-colpick [data-v="${k}"]`).click(); };
+  await expect(col('ready').locator('.tk-colh .st')).toHaveAttribute('data-s', 'ready');
+  await expect(page.locator('.tk-board .st[data-s="idle"]')).toHaveCount(0); // ‖ means parked, nowhere here
+  // a draft's action marks it ready; a ready card has none; waiting on you opens what it waits for
+  await show('draft'); await expect(col('draft').locator('.tk-card').first().locator('[data-act="tk-ready"]')).toHaveText('Mark ready…');
+  await show('ready'); await expect(col('ready').locator('.tk-card .btn')).toHaveCount(0);
+  await show('waiting'); await expect(col('waiting').locator('.tk-card', { hasText: 'SEV2 api p99 latency' }).locator('.btn')).toHaveAttribute('data-fx-href', /#\/bots\/[\w-]+\/proposals\/p\d+/);
+  for (const t of await page.locator('.tk-card b').allTextContents()) expect(t, 'a machine prefix in a title').not.toMatch(/^(FINDING|[a-z]{2,4}:)\s/);
+  // Mark ready from the card, without opening the ticket
+  await show('draft'); await col('draft').locator('.tk-card', { hasText: 'Write a runbook' }).locator('[data-act="tk-ready"]').click();
   await expect(page).toHaveURL(/#\/tickets$/);
-  await expect(page.locator('#tk-ready .tk-row', { hasText: 'Write a runbook' })).toBeVisible();
+  await show('ready'); await expect(col('ready').locator('.tk-card', { hasText: 'Write a runbook' })).toBeVisible();
 });
