@@ -37,7 +37,7 @@ const audit = (page) => page.evaluate(() => {
     if (bs.length < 3) return; const rows = new Map(); bs.forEach((b) => { const t = Math.round(b.getBoundingClientRect().top / 4); rows.set(t, (rows.get(t) || 0) + 1); });
     const counts = [...rows.values()]; if (counts.length > 1 && counts[counts.length - 1] === 1 && counts[0] > 1) out.push(`orphan: ${name(bs[bs.length - 1])} alone under ${counts[0]} buttons`); });
   // tap targets
-  main.querySelectorAll('button, a.btn, .icon-btn, [role="tab"]').forEach((b) => { if (!vis(b) || b.closest('.cm-tools, .tk-pick, .cm-mk, .fx, .cm-img, .cm-file, .seg, .tabs, .dl-tabs')) return; if (b.matches('.link, .cm-mk, .switch, summary *')) return;
+  main.querySelectorAll('button, a.btn, .icon-btn, [role="tab"]').forEach((b) => { if (!vis(b) || b.closest('.cm-tools, .tk-pick, .cm-mk, .fx, .cm-img, .cm-file, .seg, .tabs, .dl-tabs')) return; if (b.matches('.link, .cm-mk, .switch, summary *, .fb-px')) return; // a pill's ✕ draws small over a 44px target
     const r = b.getBoundingClientRect(); if (r.height < 43) out.push(`tap: ${name(b)} is ${Math.round(r.height)}px tall`); });
   // the bottom bar
   const bar = document.getElementById('tabbar'); if (bar && vis(bar)) { main.scrollTo({ top: main.scrollHeight, behavior: 'instant' }); const last = [...main.querySelectorAll('.page > *')].filter(vis).pop();

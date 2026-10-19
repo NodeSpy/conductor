@@ -194,8 +194,9 @@ test.describe('secrets and vars', () => {
     // no op:// anywhere: one reference syntax
     expect(await page.locator('#sec-body').textContent()).not.toContain('op://');
     // filters
-    await page.fill('.fb[data-fb="sec"] .fb-in', 'used:unused');
+    await page.fill('.fb[data-fb="sec"] .fb-in', 'used:unused'); await page.locator('.fb[data-fb="sec"] .fb-in').press('Enter');
     await expect(page.locator('#sec-body li[data-secret="house/sentry-dsn"]')).toBeVisible();
+    await page.locator('.fb[data-fb="sec"] .fb-pill .fb-px').click();
     await page.fill('.fb[data-fb="sec"] .fb-in', 'slack');
     await expect(page.locator('#sec-body li[data-secret]')).toHaveCount(2);
     await page.locator('[data-act="sec-more"][data-s="op/Agents/Slack/bot-token"]').click();

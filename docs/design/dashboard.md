@@ -98,11 +98,10 @@ Some elements are on every screen:
   **conductor's own filters** (Kind, Status, Bot, Workflow, Team, Mode, Time) are always
   there. **Every other filter is published by a connector** ([§5.0](#50-connector-attributes-and-the-filters-they-publish)):
   GitHub publishes Repo and PR (and Branch, Author, Label, Check), PagerDuty Service and Urgency, Slack Channel, and
-  a third-party connector its own, the same way. A connector's primary filters are menus beside conductor's (Repo ▾
-  PR ▾ when GitHub is configured); the rest are under **More filters ▾**, grouped by connector; a set one gets its own
-  button. Every published filter is also a **search qualifier**, namespaced by connector (`github.repo:acme/web`,
+  a third-party connector its own, the same way. A connector's filters are never menus in the row (the
+  row keeps conductor's own concepts, so it never crowds): each is a **search qualifier**, namespaced by connector (`github.repo:acme/web`,
   `pagerduty.service:api`) with a short alias when no other configured connector uses the name (`repo:`); typing, or
-  "Filter by…" inside the field, lists them grouped by connector, and values autocomplete from the items in view.
+  "Filter by…" inside the field, lists them grouped by connector, and values autocomplete from the items in view. A qualifier applies only when a value is picked or Enter is pressed, never half-typed. The filters that are on (typed, picked or set from a menu: one state) are **pills inside the field**, quiet outlines ("status: Failed, Parked ✕"): a click puts it back as its qualifier to edit, ✕ removes it, Backspace at the start of the text selects and then removes the last, arrows move between them, Delete removes; free text stays text after the pills; on a phone the pills scroll sideways in the field.
   Only configured connectors' filters appear, and only those that match something in the current list (no GitHub
   connection, or nothing from GitHub here: no Repo menu). Screen code never names a connector field; the same
   declarations drive a row's connector facts and what a run is "about" ("acme/web#1288").
@@ -1173,7 +1172,8 @@ This is part of the **one plugin contract**: every connector (built in, official
 cases for built-ins) declares, alongside its events and verbs, the attributes its items carry and the filters it
 publishes. Each attribute: `name`, `label`, `icon`, `type` (string, number, enum, list), `from` (where the value
 sits in an event's fields), `format` and `link` (how it reads, where it opens), `display` (a fact on a row),
-`search` (it's a published filter), `menu` (a primary filter: its own menu by default), `multi` (several values at
+`search` (it's a published filter), `menu` (a primary filter: listed first among its connector's qualifiers; it
+no longer puts a menu in the filter row), `multi` (several values at
 once; the default) and `values` (where the choices come from: `items`, the items in view, or `enum`). The dashboard
 API serves these for each configured connection, and the dashboard never hard-codes any of them:
 
@@ -1186,8 +1186,8 @@ GET /api/v1/connectors/attrs
      target: "{repo}#{number}" }, …]
 ```
 
-- `search` attributes are published filters: a menu each when `menu` (the rest under More filters), and qualifiers
-  `<connector>.<name>:` (alias `<name>:` when unique among configured connections); a filter appears only when a
+- `search` attributes are published filters: qualifiers in the search field only (never menus in the row; `menu`
+  ones are listed first in "Filter by…"), `<connector>.<name>:` (alias `<name>:` when unique among configured connections); a filter appears only when a
   value of it is in the list in view. The list endpoints accept them (`GET /api/v1/runs?github.repo=acme/web`) and
   `GET /api/v1/connectors/attrs/values?key=github.repo&prefix=acme/` serves autocomplete values.
 - `display` attributes are a row's connector facts; `format` says how a value reads, `link` where it opens.

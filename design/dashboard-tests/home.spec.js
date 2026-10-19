@@ -78,7 +78,7 @@ test('the Running tile opens Activity filtered to running', async ({ page }) => 
   await go(page, '#/overview', { fresh: true });
   await page.locator('.dl-glance .dl-tile[href="#/activity?status=run"]').click();
   await expect(page).toHaveURL(/#\/activity\?status=run/);
-  await expect(page.locator('.fb[data-fb="act"] .fb-in')).toHaveValue('status:running');
+  await expect(page.locator('.fb[data-fb="act"] .fb-pill')).toContainText(/status: Running/i);
   await expect(page.locator('#act-tbl tbody.g-attn')).toHaveCount(0);
 });
 

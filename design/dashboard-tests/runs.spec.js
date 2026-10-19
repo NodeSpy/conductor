@@ -71,7 +71,7 @@ test('compare two runs: step status, durations, and the outputs diff with word h
 test('a run page: the Activity crumb keeps the filters and scroll; labelled details; whole-run actions only', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 600 });
   await go(page, '#/activity', { fresh: true });
-  await page.locator('.fb[data-fb="act"] .fb-in').fill('since:24h');
+  await page.locator('.fb[data-fb="act"] .fb-in').fill('since:24h'); await page.locator('.fb[data-fb="act"] .fb-in').press('Enter');
   await expect(page.locator('#act-tbl tbody tr, #act-phone li').first()).toBeVisible();
   await page.evaluate(() => { const m = document.getElementById('main'); m.style.scrollBehavior = 'auto'; m.scrollTop = 240; });
   // where you were when you left (the filter's re-render may have moved it, by scroll anchoring)
@@ -94,7 +94,7 @@ test('a run page: the Activity crumb keeps the filters and scroll; labelled deta
   await page.locator('.run-nav a', { hasText: 'Activity' }).click();
   await expect(page).toHaveURL(/#\/activity$/);
   await expect.poll(() => page.evaluate(() => document.getElementById('main').scrollTop)).toBe(top);
-  await expect(page.locator('.fb[data-fb="act"] .fb-in')).toHaveValue('since:24h');
+  await expect(page.locator('.fb[data-fb="act"] [data-fb-open="since"]')).toContainText(/24 hours/);
 });
 
 test('Open in paseo is on the step with a live paseo session, never on a run without one', async ({ page }) => {
@@ -131,7 +131,7 @@ test('a running step offers "Restart this step", which stops the run first (Canc
 test('old links: Run history and the live pages land on Activity and the run page', async ({ page }) => {
   await go(page, '#/runs?wf=ci-fixer', { fresh: true });
   await expect(page).toHaveURL(/#\/activity$/);
-  await expect(page.locator('.fb[data-fb="act"] .fb-in')).toHaveValue('workflow:ci-fixer');
+  await expect(page.locator('.fb[data-fb="act"] .fb-pill')).toContainText('workflow: ci-fixer');
   await go(page, '#/live/r-7f3a');
   await expect(page).toHaveURL(/#\/runs\/r-7f3a$/);
   await expect(page.locator('.nav a[data-nav="runs"]')).toHaveCount(0); // no Run history in the rail

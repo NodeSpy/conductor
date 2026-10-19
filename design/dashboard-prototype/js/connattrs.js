@@ -15,8 +15,8 @@
  *   UI.runTarget(run)     what the run's event is about, in the connector's own words ("acme/web#1288"), or ''
  *   UI.itemLinks(run)     [{ label, href }]: where the connector says its items open (the pull request on GitHub)
  *   UI.eventFields(run)   the event's own fields, for a retry to carry over
- *   UI.attrQualifiers(items) the filters the connectors publish, for the filter bar: a menu each for the primary ones,
- *                         the rest under More filters, and every one a search qualifier; only those with a value
+ *   UI.attrQualifiers(items) the filters the connectors publish, for the filter bar: search qualifiers only (never a
+ *                         menu in the row; the primary ones listed first); only those with a value
  *                         in the items in view (no GitHub connection or nothing from GitHub here: no Repo menu) */
 (function () {
   const view = () => (window.S && S.view ? S.view() : window.D);

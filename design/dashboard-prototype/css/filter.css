@@ -98,3 +98,19 @@
 .fb-view { margin-left: auto; color: var(--color-text-secondary); } .fb-view .fb-v { color: var(--color-text-primary); }
 .fb-reset + .fb-view, .fb-view:only-of-type { margin-left: auto; } .fb-bar:has(.fb-view) .fb-reset { margin-left: 0; }
 
+
+/* the filters that are on, as quiet outline pills inside the field (not status capsules): the value edits, ✕ removes;
+   many wrap; on a phone they scroll sideways in the field */
+.fb-search { height: auto; min-height: 36px; flex-wrap: wrap; row-gap: 4px; padding-top: 3px; padding-bottom: 3px; }
+.fb-search .fb-in { flex: 1 1 120px; min-width: 120px; }
+.fb-pills { display: contents; }
+.fb-pill { display: inline-flex; align-items: center; max-width: 100%; border: var(--border-width) solid var(--color-border-default); border-radius: 999px; background: var(--color-bg-surface); font: var(--type-body-s); color: var(--color-text-primary); }
+.fb-pill .fb-pv { border: 0; background: none; font: inherit; color: inherit; padding: 2px 4px 2px 10px; cursor: text; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; border-radius: 999px 0 0 999px; }
+.fb-pill .fb-px { border: 0; background: none; color: var(--color-icon-default); display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; cursor: pointer; margin-right: 2px; } .fb-pill .fb-px svg { width: 13px; height: 13px; }
+.fb-pill .fb-px:hover { color: var(--color-text-primary); background: var(--color-state-hover); }
+.fb-pill:focus-within, .fb-pill.sel { border-color: var(--color-text-primary); box-shadow: 0 0 0 1px var(--color-text-primary); }
+@media (max-width: 720px) {
+  .fb-search { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .fb-pill { flex: none; } html .fb-pill .fb-px { position: relative; width: 26px; height: 26px; min-height: 0; } .fb-pill .fb-px::after { content: ''; position: absolute; inset: -9px; } /* a 44px target, drawn small */
+}
+.fb-search.has-q { flex-basis: 560px; }

@@ -23,12 +23,8 @@ test('screen code names no connector field: they come from the connector’s dec
 test('Activity: the filters GitHub publishes are menus (Repo ▾, PR ▾) and qualifiers (repo:, github.repo:), offered by connector', async ({ page }) => {
   await go(page, '#/activity', { fresh: true });
   const bar = page.locator('.fb[data-fb="act"]');
-  if (page.viewportSize().width > 720) {
-    await expect(bar.locator('[data-fb-open="github.repo"]')).toHaveText(/Repo/);
-    await expect(bar.locator('[data-fb-open="github.pr"]')).toHaveText(/PR/);
-    // nothing in view came from PagerDuty's services or Slack's channels: they aren't offered
-    await expect(bar.locator('[data-fb-open="pagerduty.service"], [data-fb-open="slack.channel"]')).toHaveCount(0);
-  }
+  // a connector's filters are qualifiers only: never a menu in the row (item 35)
+  await expect(bar.locator('[data-fb-open="github.repo"], [data-fb-open="github.pr"], [data-fb-open="pagerduty.service"], [data-fb-open="slack.channel"]')).toHaveCount(0);
   const input = bar.locator('.fb-in');
   await input.fill('');
   await input.focus();
@@ -37,12 +33,20 @@ test('Activity: the filters GitHub publishes are menus (Repo ▾, PR ▾) and qu
   await expect(bar.locator('.fb-ac')).not.toContainText('linear');
   // the short alias and the namespaced key are the same filter
   const keep = async () => page.evaluate(() => [...document.querySelectorAll('#act-tbl tr[data-href], #act-phone a[href^="#/runs/"]')].filter((x) => x.getClientRects().length).map((x) => x.getAttribute('data-href') || x.getAttribute('href')));
-  await input.fill('repo:acme/web');
+  const all = await keep();
+  // half-typed, nothing applies; Enter (or a pick) applies it, as a pill
+  await input.fill('repo:acme/we');
+  expect(await keep()).toEqual(all);
+  await input.fill('repo:acme/web'); await input.press('Enter');
+  await expect(bar.locator('.fb-pill', { hasText: 'repo: acme/web' })).toBeVisible();
+  await expect(input).toHaveValue('');
   const a = await keep();
   expect(a.length).toBeGreaterThan(0);
   expect(await page.evaluate((hs) => hs.every((h) => { const r = D.runs.find((x) => '#/runs/' + x.id === h); return r && UI.itemAttrs(r)['github.repo'] === 'acme/web'; }), a)).toBe(true);
-  await input.fill('github.repo:acme/web');
+  await bar.locator('.fb-pill .fb-px').click();
+  await input.fill('github.repo:acme/web'); await input.press('Enter');
   expect(await keep()).toEqual(a);
+  await bar.locator('.fb-pill .fb-px').click();
   // a value autocompletes from the runs in view
   await input.fill('repo:acme/a');
   await expect(bar.locator('.fb-ac li[data-i]').first()).toContainText('acme/api');
@@ -61,7 +65,7 @@ test('only active connectors publish: with no GitHub connection there is no Repo
 test('Needs you: the same qualifiers, and "Showing N of M" whenever one hides anything', async ({ page }) => {
   await go(page, '#/attention', { fresh: true });
   const bar = page.locator('.fb[data-fb="need"]');
-  await bar.locator('.fb-in').fill('repo:acme/web');
+  await bar.locator('.fb-in').fill('repo:acme/web'); await bar.locator('.fb-in').press('Enter');
   await expect(page.locator('.need-shown')).toContainText(/Showing \d+ of \d+/);
   await expect(page.locator('#need-body .dl-need').first()).toContainText('acme/web');
   await bar.locator('.fb-in').press('Escape'); // the suggestions close, as when a person moves on

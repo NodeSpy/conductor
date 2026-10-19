@@ -254,7 +254,7 @@ test('unsaved changes are guarded; browse by kind with tag filters; search spans
   await page.fill('.fb[data-fb="rp"] .fb-in', 'about:nat'); await page.locator('.fb[data-fb="rp"] .fb-in').press('Enter');
   await expect(page.locator('.kind-entries .entry')).toHaveCount(1);
   await expect(page.locator('.kind-entries')).toContainText('Infra map');
-  await page.fill('.fb[data-fb="rp"] .fb-in', ''); await page.locator('.fb[data-fb="rp"] .fb-in').press('Enter');
+  await page.locator('.fb[data-fb="rp"] .fb-pill .fb-px').click();
   await page.fill('#ke-title', 'changed');
   await page.evaluate(() => { location.hash = '#/overview'; });
   await expect(page.locator('.modal, .cdrawer').first()).toContainText('aren\'t saved');
