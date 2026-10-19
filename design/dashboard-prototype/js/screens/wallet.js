@@ -96,13 +96,46 @@
     return [{ icon: p.recurring ? 'repeat' : 'act-money', value: `${money(p.total, p.currency)}${perWord(p)}`, risky: true, pri: 1, label: p.recurring ? 'A subscription' : 'Total' }, { icon: 'store', value: host(p.merchant), pri: 1, label: 'Shop' },
       p.bot ? { icon: 'obj-bot', value: UI.botName(p.bot), href: `#/bots/${p.bot}`, pri: 1, label: 'Bot' } : { icon: 'obj-sandbox', value: who(p.identity), pri: 2, label: 'Asked for by' },
       { icon: 'obj-card', value: `${p.card} •••• ${c.last4 || ''}`.trim(), href: `#/browser/cards/${p.card}`, pri: 2, label: 'Card' }]; };
-  /** The limits a purchase is checked against, with what's been charged: the card's, and the identity's on top. */
-  const limitLines = (p) => { const c = card(p.card); if (!c) return []; const L = c.limits, cur = L.currency || 'USD', il = (c.identity_limits || {})[p.identity] || (p.bot && (c.identity_limits || {})['bot:' + p.bot]);
-    const s = spent(c.name), si = spent(c.name, p.identity), out = [];
-    const line = (lbl, l, sp) => { const xs = [[p.total, l.per_purchase, 'a purchase'], [sp.day + p.total, l.per_day, 'in 24 hours'], [sp.month + p.total, l.per_month, 'in 30 days']], over = xs.some(([a, b]) => a > b + 1e-9);
-      return `${over ? UI.mark('fail') + ' ' : ''}<b>${lbl}</b> ${xs.map(([a, b, w]) => `${money(a, cur)} of ${money(b, cur)} ${w}`).join(' · ')}${over ? ' <b>(over: conductor refuses it)</b>' : ''}`; };
-    if (il) out.push(line(`${esc(byWord(p))}’s limits:`, il, si));
-    out.push(line('The card’s limits:', L, s)); return out; };
+  /* ---------- spend limits stack, and the lowest wins (Browser.md, "Spend limits stack") ----------
+     1 the card's limits · 2 the card's limits for the caller (identity_limits) · 3 the bot's purchases: caps (and per card)
+     under its team's budget.purchases (the ceiling) · 4 the ticket's spend_limit, which counts everything proposed under
+     it for its whole life (pending, approved, being paid, paid; a denied, refused or expired one frees its share). */
+  const botCfgOf = (bot) => S.staged('bots', bot) || ((S.view().bots.find((b) => b.name === bot) || {}).cfg) || {};
+  const teamCfgOf = (t) => S.staged('teams', t) || ((S.view().teams.find((x) => x.name === t) || {}).cfg) || {};
+  const ticketOf = (id) => (D.cases || []).find((c) => c.id === id);
+  const FREE = new Set(['denied', 'refused', 'expired']);
+  /** What a ticket's budget holds: everything proposed under it that isn't denied, refused or expired. */
+  UI.ticketCommitted = (caseId) => { const ps = (D.purchases || []).filter((p) => p.case === caseId && !FREE.has(UI.puStatus(p)));
+    return { all: ps.reduce((n, p) => n + charged(p), 0), paid: ps.filter((p) => PAID.has(UI.puStatus(p))).reduce((n, p) => n + charged(p), 0), waiting: ps.filter((p) => !PAID.has(UI.puStatus(p))).reduce((n, p) => n + p.total, 0), list: ps }; };
+  const spentWhere = (pred) => { const t = Date.now(), out = { day: 0, month: 0 };
+    (D.purchases || []).filter((p) => PAID.has(UI.puStatus(p)) && pred(p)).forEach((p) => { const age = t - Date.parse((p.receipt && p.receipt.at) || p.decided || p.created); if (age <= 864e5) out.day += charged(p); if (age <= 30 * 864e5) out.month += charged(p); });
+    return out; };
+  const inTeam = (bot, t) => botCfgOf(bot).team === t;
+  const DIMW = { per_purchase: 'per-purchase', per_day: 'daily', per_month: '30-day' };
+  /** Every layer that applies to a purchase of `total` on `cardN` for `who` (bot or identity) under ticket `caseId`, each
+      with the room it leaves: [{ key, name, says, limit, left, dim, over }]; the binding one has the least room. */
+  UI.limitLayers = ({ cardN, bot, identity, caseId, total = 0, excludeId }) => { const c = card(cardN), out = [], cur = (c && c.limits.currency) || 'USD';
+    const not = (p) => p.id !== excludeId;
+    const caps = (key, name, says, L, sp) => { if (!L) return; [['per_purchase', total], ['per_day', sp.day + total], ['per_month', sp.month + total]].forEach(([d, used]) => { if (L[d] == null) return; const left = L[d] - used;
+        const cur2 = out.find((x) => x.key === key); if (!cur2 || left < cur2.left) { if (cur2) out.splice(out.indexOf(cur2), 1); out.push({ key, name, says, limit: L[d], left: Math.round(left * 100) / 100, before: Math.round((left + total) * 100) / 100, dim: d, over: left < -0.004 }); } }); };
+    if (caseId) { const tk = ticketOf(caseId), sl = tk && tk.spend_limit; if (sl) { const amt = Number(sl.amount), used = (D.purchases || []).filter((p) => p.case === caseId && !FREE.has(UI.puStatus(p)) && not(p)).reduce((n, p) => n + charged(p), 0), left = amt - used - total;
+      out.push({ key: 'ticket', name: 'This ticket', says: 'this ticket’s', limit: amt, left: Math.round(left * 100) / 100, before: Math.round((left + total) * 100) / 100, dim: 'total', over: left < -0.004, ticket: tk }); } }
+    if (bot) { const bc = botCfgOf(bot).purchases, nm = UI.botName(bot), sp = spentWhere((p) => p.bot === bot && not(p));
+      caps('bot', `${nm}’s own caps`, `bot ${bot}’s`, bc, sp);
+      if (bc && bc.cards && bc.cards[cardN]) caps('botcard', `${nm}’s caps on ${cardN}`, `bot ${bot}’s ${cardN}`, bc.cards[cardN], spentWhere((p) => p.bot === bot && p.card === cardN && not(p)));
+      const t = botCfgOf(bot).team, tc = t && S.getPath(teamCfgOf(t), 'budget.purchases');
+      if (tc) { caps('team', `Team ${t}’s caps`, `team ${t}’s`, tc, spentWhere((p) => p.bot && inTeam(p.bot, t) && not(p))); if (tc.cards && tc.cards[cardN]) caps('teamcard', `Team ${t}’s caps on ${cardN}`, `team ${t}’s ${cardN}`, tc.cards[cardN], spentWhere((p) => p.bot && inTeam(p.bot, t) && p.card === cardN && not(p))); } }
+    if (c) { const ids = [identity, bot && 'bot:' + bot, bot && botCfgOf(bot).team && 'team:' + botCfgOf(bot).team].filter(Boolean), il = ids.map((i) => (c.identity_limits || {})[i]).find(Boolean), iid = ids.find((i) => (c.identity_limits || {})[i]);
+      if (il) caps('caller', `The card’s limits for ${who(iid)}`, `card ${cardN}’s ${who(iid)}`, il, spentWhere((p) => p.card === cardN && (p.identity === iid || (iid.startsWith('bot:') && p.bot === iid.slice(4))) && not(p)));
+      caps('card', `The card’s limits`, `card ${cardN}’s`, c.limits, spentWhere((p) => p.card === cardN && not(p))); }
+    out.cur = cur; const bind = out.slice().sort((x, y) => x.left - y.left)[0]; if (bind) bind.bind = true; return out; };
+  /** A refusal, in the backend's words: which layer stopped it and what is left in it. */
+  UI.refusalWords = (l, cur = 'USD') => `over ${l.says} ${money(l.limit, cur)} ${l.dim === 'total' ? '' : DIMW[l.dim] + ' '}limit${l.dim === 'per_purchase' ? '' : `: ${money(Math.max(0, l.before), cur)} left`}`.replace(/  +/g, ' ');
+  const roomWords = (l, cur) => (l.over ? `over by ${money(-l.left, cur)}` : l.dim === 'total' ? `${money(l.left, cur)} left of ${money(l.limit, cur)}` : l.dim === 'per_purchase' ? `${money(l.left, cur)} under the ${money(l.limit, cur)} per-purchase cap` : `${money(l.left, cur)} left ${l.dim === 'per_day' ? 'today' : 'in 30 days'}, of ${money(l.limit, cur)}`);
+  /** The layers on an approval: what each leaves after this purchase, the tightest marked; an over-limit one is a refusal. */
+  const layersHTML = (p) => { const ls = UI.limitLayers({ cardN: p.card, bot: p.bot, identity: p.identity, caseId: p.case, total: p.total, excludeId: p.id }), cur = ls.cur, over = ls.filter((l) => l.over);
+    return `<ul class="wl-layers">${ls.map((l) => `<li class="${l.bind ? 'bind' : ''}${l.over ? ' over' : ''}">${l.over ? UI.mark('fail') : l.bind ? UI.mark('wait') : '<i></i>'}<span>${l.key === 'ticket' ? `This ticket’s budget` : esc(l.name)}</span><b>${roomWords(l, cur)}</b>${l.bind && !l.over ? '<span class="wl-tight">the tightest</span>' : ''}</li>`).join('')}</ul>
+      ${over.length ? `<p class="wl-flag">${UI.mark('fail')}<span><b>Conductor would refuse this now:</b> ${esc(UI.refusalWords(over[0], cur))}.</span></p>` : ''}`; };
   /** What a purchase buys and on what terms: the items and total, a subscription flagged, the card and shop, the limits,
       what happens after you approve. A bot's approval page and this page's approval both draw it. */
   UI.purchaseWhat = (pOrProp) => { const p = pOrProp.purchase && typeof pOrProp.purchase === 'string' ? (D.purchases || []).find((x) => x.id === pOrProp.purchase) : pOrProp; if (!p) return '';
@@ -115,7 +148,7 @@
         ${sup ? `<p class="wl-flag">${UI.mark('wait')}<span><b>Asks again for a higher price.</b> You approved ${money(sup.total, sup.currency)}; at checkout the page showed ${money(p.total, cur)}, so nothing was paid and it asks you for what the page shows.</span></p>` : ''}</div>
       <dl class="dl-where wl-where"><dt>Card</dt><dd><a class="dl-link" href="#/browser/cards/${esc(p.card)}">${esc(p.card)}</a> · ${esc(cardName(c))} · ${esc(KIND[c.kind || ''].toLowerCase())}${c.frozen ? ` · ${UI.statusMark('idle', 'frozen', { sm: true })}` : ''}</dd>
         <dt>Shop</dt><dd>${esc(host(p.merchant))} <span class="dl-sub">· ${(c.merchants || []).includes(p.merchant) ? 'one of the shops this card may pay' : 'not on this card’s list'}</span></dd>
-        <dt>Limits</dt><dd><span class="dl-sub">Counting this purchase:</span>${limitLines(p).map((l) => `<span class="wl-lim">${l}</span>`).join('')}</dd>
+        <dt>Limits</dt><dd><span class="dl-sub">What each limit leaves after this purchase; the lowest wins:</span>${layersHTML(p)}</dd>
         <dt>Then</dt><dd>${esc(byWord(p))} may pay once, within ${esc(ttlWord())}, on ${esc(host(p.merchant))}’s checkout page. Conductor checks the page shows this total, fills the card itself and reads the receipt; if the page asks for more, nothing is paid and you’re asked again. ${p.bot ? esc(UI.botName(p.bot)) : 'The agent'} never sees the card.</dd>
         <dt>Undo</dt><dd>Conductor can’t undo a purchase; a refund is the shop’s.</dd></dl>`; };
   /** The receipt, after the fact: the order number and what was charged, flagged when it's more than you approved. */
@@ -440,6 +473,57 @@
     return `<section class="panel wl-tk"><div class="panel-head"><h3>Purchases</h3></div><ul class="cm-side-l">${P.map((p) => { const [s, word] = pst(p), r = p.receipt;
       return `<li><a class="cm-side-a" href="${puHref(p)}"><b>${UI.mark(r && r.note ? 'wait' : s)} ${esc(itemsWord(p))}</b><span class="dl-sub">${r ? `${r.note ? 'Charged more than approved' : 'Paid'} · order <span class="mono">${esc(r.order_number)}</span> · ${money(r.total, r.currency)}` : `${esc(word)} · ${money(p.total, p.currency)}${perWord(p)}`} · ${esc(host(p.merchant))}</span></a></li>`; }).join('')}</ul></section>`; };
 
+  /* ---------- a ticket's spending limit: spend_limit { amount, currency, card, merchants } on a bot's case ---------- */
+  /** The lowest 30-day cap above a ticket's budget (its bot's, the bot's on that card, its team's, the card's): a budget
+      above it is clamped there at every check, and setting one says so. */
+  const lowest30 = (bot, cardN) => { const xs = [], bc = botCfgOf(bot).purchases, t = botCfgOf(bot).team, tc = t && S.getPath(teamCfgOf(t), 'budget.purchases'), c = cardN && card(cardN);
+    if (bc) { xs.push([bc.per_month, `${UI.botName(bot)}’s 30-day cap`]); if (bc.cards && bc.cards[cardN]) xs.push([bc.cards[cardN].per_month, `${UI.botName(bot)}’s 30-day cap on ${cardN}`]); }
+    if (tc) xs.push([tc.per_month, `team ${t}’s 30-day cap`]); if (c) xs.push([c.limits.per_month, `card ${cardN}’s 30-day limit`]);
+    return xs.sort((x, y) => x[0] - y[0])[0]; };
+  const clampWarn = (bot, sl) => { if (!sl || !bot) return ''; const lo = lowest30(bot, sl.card); return lo && Number(sl.amount) > lo[0] ? `Above ${lo[1]} (${money(lo[0])}), so it counts as ${money(lo[0])}, never more.` : ''; };
+  /** The backend's classification of a budget change: a new or larger one (or a looser card or shop) widens. */
+  const budgetChange = (b, a) => { const amt = (x) => (x ? Number(x.amount) : 0);
+    if (!a && !b) return 'neutral'; if (!a) return 'narrowing';
+    if (!b || amt(a) > amt(b) || a.currency !== b.currency || (b.card && a.card !== b.card) || ((b.merchants || []).length && (!(a.merchants || []).length || a.merchants.some((m) => !b.merchants.includes(m))))) return 'widening';
+    return 'narrowing'; };
+  UI.ticketBudget = (c) => { if (!c.bot) return ''; const sl = c.spend_limit, nm = UI.botName(c.bot);
+    if (!sl) return `<section class="panel wl-tkb"><div class="panel-head"><h3>Spending limit</h3></div><div class="panel-body"><p class="dl-sub">None: what ${esc(nm)} buys for this ticket is held to its own caps and the card’s limits.</p><button class="btn sm secondary" data-act="w-tkb" data-t="${c.id}">${icon('plus')}Set a spending limit</button></div></section>`;
+    const amt = Number(sl.amount), cm = UI.ticketCommitted(c.id), left = Math.max(0, Math.round((amt - cm.all) * 100) / 100), w = clampWarn(c.bot, sl);
+    return `<section class="panel wl-tkb"><div class="panel-head"><h3>Spending limit</h3><span class="dl-sp"></span><button class="btn sm secondary" data-act="w-tkb" data-t="${c.id}">Change</button></div><div class="panel-body">
+      <p class="wl-tkb-big"><b>${money(left, sl.currency)}</b> left of ${money(amt, sl.currency)}</p>${meter(cm.all, amt, sl.currency)}
+      <p class="dl-sub">${money(cm.paid, sl.currency)} paid${cm.waiting ? ` · ${money(cm.waiting, sl.currency)} waiting or approved` : ''}. A denied or refused purchase frees its share; what’s left never moves to another ticket.</p>
+      ${sl.card || (sl.merchants || []).length ? `<p class="dl-sub">${sl.card ? `Only with ${esc(sl.card)}` : 'With any card it may use'}${(sl.merchants || []).length ? `, only at ${esc(list(sl.merchants.map(host)))}` : ''}.</p>` : ''}
+      ${w ? `<p class="wl-flag">${UI.mark('wait')}<span>${esc(w)}</span></p>` : ''}</div></section>`; };
+  /** The fields: an amount ($ inside), optionally one card and some shops (each an exact origin). */
+  const budgetFields = (bot, sl = {}) => { const cards = W().cards.filter((c) => !bot || forBot(c.identities, (S.view().bots.find((b) => b.name === bot) || { name: bot })));
+    return `${moneyField('budget', 'Up to, for this ticket', 'Everything proposed under it counts until it’s denied, refused or expires.')}
+      <div class="field" data-field="bcard"><label for="w-bcard">Only with this card <span class="opt">optional</span></label><select class="select" id="w-bcard"><option value="">Any card it may use</option>${cards.map((c) => `<option value="${esc(c.name)}"${sl.card === c.name ? ' selected' : ''}>${esc(c.name)} · ${esc(cardName(c))}</option>`).join('')}</select><div class="ferr" role="alert"></div></div>
+      ${rowsField('bmerch', 'Only at these shops', 'Optional: none means any shop the card may pay.')}`; };
+  const fillBudget = (root, sl) => { if (!sl) return; const i = root.querySelector('[data-money="budget"]'); if (i) i.value = Number(sl.amount).toFixed(2); const box = root.querySelector('[data-rows="bmerch"]'); (sl.merchants || []).forEach((m) => box.insertAdjacentHTML('beforeend', rowHTML('bmerch', m))); };
+  /** Read the budget fields: undefined when left empty, null (with the reasons shown) when wrong. */
+  const readBudget = (root, required) => { const raw = (root.querySelector('[data-money="budget"]') || {}).value || '', ms = rowsOf(root, 'bmerch'), mbox = root.querySelector('[data-field="bmerch"]');
+    mbox.querySelector('.ferr').textContent = ms.err;
+    if (!raw.trim() && !ms.xs.length && !root.querySelector('#w-bcard').value && !required) { bad(root, 'budget', ''); return undefined; }
+    const amt = moneyOf(root, 'budget'), e1 = bad(root, 'budget', amt > 0 ? '' : 'An amount in dollars, above 0 (up to two decimals).');
+    if (e1 || ms.err) return null;
+    const sl = { amount: amt.toFixed(2), currency: 'USD' }, cd = root.querySelector('#w-bcard').value; if (cd) sl.card = cd; if (ms.xs.length) sl.merchants = ms.xs; return sl; };
+  UI.act('w-tkb', (b) => { const c = ticketOf(b.dataset.t), before = c.spend_limit || null;
+    const s2 = UI.modal(`<div class="modal-head"><div><div class="caps">${esc(c.title)}</div><h2>${before ? 'Change the spending limit' : 'Set a spending limit'}</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+      <div class="modal-body stack" id="w-tkb">${budgetFields(c.bot, before || {})}<p class="dl-sub" id="w-tkb-warn"></p></div>
+      <div class="modal-foot">${before ? '<button class="btn ghost danger-text" id="w-tkb-rm" style="margin-right:auto">Remove the limit</button>' : ''}<button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="w-tkb-go">Save</button></div>`);
+    const root = UI.$('#w-tkb', s2); fillBudget(root, before);
+    const apply = (next) => { const ch = budgetChange(before, next); UI.closeModal();
+      gate(ch === 'widening', `${next ? 'Let it spend up to ' + money(Number(next.amount)) : 'Remove the limit'} on this ticket`, `{ bot: <b>${esc(c.bot)}</b>, case: <b>${esc(c.id)}</b>, spend_limit: <b>${next ? esc(`${next.amount} ${next.currency}${next.card ? ' · ' + next.card : ''}${next.merchants ? ' · ' + next.merchants.join(', ') : ''}`) : 'none'}</b> }`, () => {
+        if (next) c.spend_limit = next; else delete c.spend_limit; audit('browser_case_budget', `ticket ${c.id} · ${next ? `${next.amount} ${next.currency}` : 'removed'} · ${ch}`);
+        const w = clampWarn(c.bot, next); done(next ? 'Spending limit saved' : 'Spending limit removed', w || (next ? `${money(Number(next.amount))} for this ticket` : 'purchases fall back to its own caps and the card’s')); }, 'Save with passkey'); };
+    UI.$('#w-tkb-go', s2).addEventListener('click', () => { const next = readBudget(root, true); if (next) apply(next); });
+    const rm = UI.$('#w-tkb-rm', s2); if (rm) rm.addEventListener('click', () => apply(null)); });
+  /** New ticket: an optional spending limit (the ticket store records spend_limit on the case). */
+  UI.ticketBudgetFields = () => `<details class="tk-l wl-tkb-new" id="w-nt-b"><summary class="dl-lbl">${icon('chev')}Spending limit <span class="opt">optional</span></summary><div class="wl-tkb-body">${budgetFields('')}</div></details>`;
+  UI.readTicketBudget = (root) => { const d = root.querySelector('#w-nt-b'); if (!d) return undefined; const r = readBudget(d, false); if (r === null) d.open = true; return r; };
+  /** A new budget widens (the backend's rule), so a ticket created with one asks for the passkey first. */
+  UI.ticketBudgetGate = (title, sl, fn) => gate(true, `Let “${esc(title)}” spend up to ${money(Number(sl.amount))}`, `{ new_case: <b>${esc(title)}</b>, spend_limit: <b>${esc(`${sl.amount} ${sl.currency}${sl.card ? ' · ' + sl.card : ''}`)}</b> }`, fn, 'Create with passkey');
+
   /* ---------- a bot's What it can do: Can buy, buying without asking, the details it can fill ---------- */
   const forBot = (ids, m) => (ids || []).some((i) => i === 'bot:' + m.name || (m.cfg && m.cfg.team && i === 'team:' + m.cfg.team));
   const UNV = 'browser.purchase';
@@ -448,14 +532,21 @@
     if (!cards.length && !profs.length && !canVerb) return '';
     const un = (S.getPath(cfg, 'autonomy.unattended') || {})[UNV];
     const shadow = S.getPath(cfg, 'autonomy.shadow');
-    const cardLine = (c) => { const L = c.limits, cur = L.currency || 'USD', il = (c.identity_limits || {})['bot:' + m.name] || (m.cfg && m.cfg.team && (c.identity_limits || {})['team:' + m.cfg.team]), cap = il ? Math.min(il.per_purchase, L.per_purchase) : L.per_purchase, s = spent(c.name, 'bot:' + m.name), mo = il ? il.per_month : L.per_month;
-      return `<li class="wl-can"><p><b>Can buy:</b> ${c.frozen ? `nothing with <a class="dl-link" href="#/browser/cards/${esc(c.name)}">${esc(c.name)}</a> while it’s frozen.` : (c.merchants || []).length ? `asks you first, up to ${money(cap, cur)} a purchase, at ${esc(list(c.merchants.map(host)))}, with <a class="dl-link" href="#/browser/cards/${esc(c.name)}">${esc(c.name)}</a> (${esc(cardName(c))}).` : `nothing yet: <a class="dl-link" href="#/browser/cards/${esc(c.name)}">${esc(c.name)}</a> has no shop.`}</p>
-        <div class="wl-lrow"><span class="wl-ll">Last 30 days</span><span class="wl-lv"><b>${money(s.month, cur)}</b> of ${money(mo, cur)}</span>${meter(s.month, mo, cur)}</div></li>`; };
+    // the effective caps on a card: the lowest of every layer above a ticket, each dimension on its own
+    const effOn = (c) => { const L = [['bot', cfg.purchases], ['botcard', cfg.purchases && cfg.purchases.cards && cfg.purchases.cards[c.name]], ['team', cfg.team && S.getPath(teamCfgOf(cfg.team), 'budget.purchases')], ['caller', (c.identity_limits || {})['bot:' + m.name] || (cfg.team && (c.identity_limits || {})['team:' + cfg.team])], ['card', c.limits]].filter(([, x]) => x);
+      const W2 = { card: 'the card', caller: `the card for ${UI.botName(m.name)}`, bot: 'its own cap', botcard: `its cap on ${c.name}`, team: `team ${cfg.team}` };
+      const out = {}; ['per_purchase', 'per_day', 'per_month'].forEach((d) => { const [k, v] = L.filter(([, x]) => x[d] != null).sort((x, y) => x[1][d] - y[1][d])[0] || []; out[d] = { v: v && v[d], by: W2[k] }; }); return out; };
+    const cardLine = (c) => { const cur = c.limits.currency || 'USD', e = effOn(c), s = spentWhere((p) => p.bot === m.name && p.card === c.name);
+      return `<li class="wl-can"><p><b>Can buy:</b> ${c.frozen ? `nothing with <a class="dl-link" href="#/browser/cards/${esc(c.name)}">${esc(c.name)}</a> while it’s frozen.` : (c.merchants || []).length ? `asks you first, up to ${money(e.per_purchase.v, cur)} a purchase, ${money(e.per_day.v, cur)} a day and ${money(e.per_month.v, cur)} in 30 days, at ${esc(list(c.merchants.map(host)))}, with <a class="dl-link" href="#/browser/cards/${esc(c.name)}">${esc(c.name)}</a> (${esc(cardName(c))}).` : `nothing yet: <a class="dl-link" href="#/browser/cards/${esc(c.name)}">${esc(c.name)}</a> has no shop.`}</p>
+        <p class="dl-sub wl-by">The lowest limit wins: a purchase is set by ${esc(e.per_purchase.by)}, a day by ${esc(e.per_day.by)}, 30 days by ${esc(e.per_month.by)}. A ticket’s spending limit can only lower them.</p>
+        <div class="wl-lrow"><span class="wl-ll">Last 30 days</span><span class="wl-lv"><b>${money(s.month, cur)}</b> of ${money(e.per_month.v, cur)}</span>${meter(s.month, e.per_month.v, cur)}</div></li>`; };
+    const pc = cfg.purchases, tcap = cfg.team && S.getPath(teamCfgOf(cfg.team), 'budget.purchases');
+    const capsLine = `<div class="wl-caps"><p><b>Its own caps:</b> ${pc ? `${money(pc.per_purchase)} a purchase, ${money(pc.per_day)} a day, ${money(pc.per_month)} in 30 days${pc.cards ? `, tighter on ${esc(list(Object.keys(pc.cards)))}` : ''}.` : `none: it’s held to ${tcap ? `team ${esc(cfg.team)}’s caps and ` : ''}the card’s limits.`}${tcap ? ` Team ${esc(cfg.team)}’s are its ceiling: ${money(tcap.per_purchase)} · ${money(tcap.per_day)} · ${money(tcap.per_month)}.` : ''}</p><button class="btn sm secondary" ${canVerb ? `data-act="w-caps" data-kind="bot" data-n="${esc(m.name)}"` : UI.off(`${m.name} can’t buy at all yet`)}>${pc ? 'Change its caps' : 'Set its own caps'}</button></div>`;
     const unLine = un ? `<p><b>Without asking:</b> up to ${money(un.per_action)} a purchase and ${money(un.per_period)} every ${esc(UI.humanSpan(un.period || '24h'))}, at ${esc(list((un.merchants || []).map(host)))}; only for your requests or its own, never a subscription.</p><button class="btn sm secondary" data-act="w-un-off" data-m="${esc(m.name)}">Always ask me</button>`
       : `<p><b>Without asking:</b> never. Every purchase waits for your approval.</p><button class="btn sm secondary" ${!canVerb ? UI.off(`${m.name} can’t buy at all yet`) : shadow ? UI.off(`${m.name} is in practice mode: nothing it does runs`) : `data-act="w-un-on" data-m="${esc(m.name)}"`}>Let it buy small things without asking…</button>`;
     return `<section class="dl-card wl-bot" id="wl-bot"><header class="dl-ch"><h2>Buying, and your details</h2></header>
       ${canVerb || cards.length ? `<ul class="wl-cans">${cards.map(cardLine).join('') || `<li class="wl-can"><p><b>Can buy:</b> nothing yet: no card names ${esc(m.name)}. <a class="dl-link" href="#/browser/cards">Payment cards</a></p></li>`}</ul>
-        <div class="wl-un${un ? ' on' : ''}">${unLine}</div>` : ''}
+        ${capsLine}<div class="wl-un${un ? ' on' : ''}">${unLine}</div>` : ''}
       ${profs.length ? `<div class="wl-fills"><p><b>Fills your details:</b> ${profs.map((p) => `<a class="dl-link" href="#/browser/details/${esc(p.name)}">${esc(p.name)}</a> on ${esc(list(p.sites.map((s) => `${host(s.origin)} (${list(s.fields.map(siteFieldWord))})`)))}`).join('; ')}. It never sees them${profs.some((p) => learns(p).length) ? `; it may learn ${esc(list([...new Set(profs.flatMap(learns))]))}` : ''}.</p></div>` : ''}
       <p class="dl-sub">The card never reaches it: conductor fills it, only on a shop’s page, only for a purchase you approved.</p></section>`; };
   // buying without asking: bots only, opt-in, a widening; under its spend cap, at named shops (it goes through Review)
@@ -474,6 +565,27 @@
   UI.act('w-un-off', (b) => { const m = S.view().bots.find((x) => x.name === b.dataset.m), cfg = JSON.parse(JSON.stringify(S.staged('bots', m.name) || m.cfg));
     if (cfg.autonomy && cfg.autonomy.unattended) { delete cfg.autonomy.unattended[UNV]; if (!Object.keys(cfg.autonomy.unattended).length) delete cfg.autonomy.unattended; }
     UI.staged(S.stage('bots', m.name, cfg, `${m.name} asks before every purchase`)); });
+  /** A bot's purchases: or a team's budget.purchases: all three caps, each in dollars; a bot's can't exceed its team's.
+      Through the review (it's config): raising a cap widens, setting or lowering one narrows. */
+  const CAPF = [['per_purchase', 'A purchase'], ['per_day', 'A day (24 hours)'], ['per_month', '30 days']];
+  UI.act('w-caps', (b) => { const isBot = b.dataset.kind === 'bot', n = b.dataset.n, cfg = JSON.parse(JSON.stringify(isBot ? botCfgOf(n) : teamCfgOf(n))), path = isBot ? 'purchases' : 'budget.purchases', cur = S.getPath(cfg, path);
+    const ceil = isBot && cfg.team && S.getPath(teamCfgOf(cfg.team), 'budget.purchases'), floor = !isBot && S.view().bots.filter((x) => (x.cfg || {}).team === n && (x.cfg || {}).purchases).map((x) => [x.name, x.cfg.purchases]);
+    const s2 = UI.modal(`<div class="modal-head"><div><div class="caps">${isBot ? `bot ${esc(n)}` : `team ${esc(n)}`} · ${esc(path)}</div><h2>${isBot ? 'What it may spend' : 'What its bots may spend'}</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+      <div class="modal-body stack" id="w-caps"><p class="dl-sub">${isBot ? `On top of the card’s limits${ceil ? ` and inside team ${esc(cfg.team)}’s caps (${money(ceil.per_purchase)} · ${money(ceil.per_day)} · ${money(ceil.per_month)})` : ''}. The lowest wins.` : 'A ceiling for every bot on the team: a bot’s own caps can only be lower.'} All three are needed.</p>
+        <div class="wl-grid3">${CAPF.map(([k, l]) => moneyField(k, l)).join('')}</div><div class="form-err callout danger small hide" role="alert" id="w-caps-err"></div></div>
+      <div class="modal-foot">${cur ? `<button class="btn ghost danger-text" id="w-caps-rm" style="margin-right:auto">${isBot ? 'Use the team’s and the card’s' : 'No team caps'}</button>` : ''}<button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="w-caps-go">Review change</button></div>`);
+    const root = UI.$('#w-caps', s2); if (cur) CAPF.forEach(([k]) => { root.querySelector(`[data-money="${k}"]`).value = Number(cur[k]).toFixed(2); });
+    const stage = (next) => { if (next) S.setPath(cfg, path, Object.assign({}, cur && cur.cards ? { cards: cur.cards } : {}, next, { currency: 'USD' })); else if (isBot) delete cfg.purchases; else if (cfg.budget) delete cfg.budget.purchases;
+      UI.closeModal(); UI.staged(S.stage(isBot ? 'bots' : 'teams', n, cfg, `${isBot ? 'bot' : 'team'} ${n}: purchase caps ${next ? CAPF.map(([k]) => next[k]).join(' / ') : 'removed'}`)); };
+    UI.$('#w-caps-go', s2).addEventListener('click', () => { const v = {}; let bad2 = 0; CAPF.forEach(([k]) => { v[k] = moneyOf(root, k); bad2 += bad(root, k, v[k] > 0 ? '' : 'An amount in dollars, above 0.') ? 1 : 0; }); if (bad2) return;
+      const err = UI.$('#w-caps-err', s2), why = v.per_purchase > v.per_day || v.per_day > v.per_month ? 'A purchase fits inside a day, and a day inside 30 days.' : ceil && CAPF.some(([k]) => v[k] > ceil[k]) ? `Above team ${cfg.team}’s caps: a bot’s can only be lower (${CAPF.filter(([k]) => v[k] > ceil[k]).map(([k, l]) => `${l.toLowerCase()} ${money(ceil[k])}`).join(', ')}).` : floor && floor.length && floor.some(([, c]) => CAPF.some(([k]) => c[k] > v[k])) ? `Below ${list(floor.filter(([, c]) => CAPF.some(([k]) => c[k] > v[k])).map(([x]) => UI.botName(x)))}’s own caps: lower theirs first.` : '';
+      err.textContent = why; err.classList.toggle('hide', !why); if (!why) stage(v); });
+    const rm = UI.$('#w-caps-rm', s2); if (rm) rm.addEventListener('click', () => stage(null)); });
+  /** A team's What its bots may spend, on its Ceilings & scopes tab. */
+  UI.teamWalletHTML = (t) => { const tc = S.getPath(teamCfgOf(t.name), 'budget.purchases'), bots = S.view().bots.filter((x) => (x.cfg || {}).team === t.name);
+    return `<section class="dl-card wl-team"><header class="dl-ch"><h2>What its bots may spend</h2><span class="dl-sp"></span><button class="btn sm secondary" data-act="w-caps" data-kind="team" data-n="${esc(t.name)}">${tc ? 'Change' : 'Set caps'}</button></header>
+      <p>${tc ? `<b>Can buy:</b> each bot up to ${money(tc.per_purchase)} a purchase, ${money(tc.per_day)} a day and ${money(tc.per_month)} in 30 days, as a ceiling: a bot’s own caps, a card’s limits and a ticket’s spending limit can only be lower.` : 'No team caps: each bot is held to its own caps and the cards’ limits.'}</p>
+      ${tc ? `<ul class="dl-list wl-teamb">${bots.map((x) => { const pc = (x.cfg || {}).purchases, sp = spentWhere((p) => p.bot === x.name); return `<li class="wl-audit"><span>${UI.botAv ? UI.botAv(x.name, 'xs') : ''} <b>${esc(UI.botName(x.name))}</b> ${pc ? `its own: ${money(pc.per_purchase)} · ${money(pc.per_day)} · ${money(pc.per_month)}` : 'uses the team’s caps'}</span><span class="dl-sub">${money(sp.month)} in 30 days</span></li>`; }).join('')}</ul>` : ''}</section>`; };
   /** browser.purchase in a bot's lists, in words. */
   UI.builtinVerbWords = (v) => ({ 'browser.purchase': 'buy things with a card you allow' }[v] || null);
 })();

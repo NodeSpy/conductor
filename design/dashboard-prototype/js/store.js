@@ -39,7 +39,7 @@
       if (saved.identityVer !== window.D.identityVer) { delete saved.identity; delete saved.identityVer; }
       if (saved.connVer !== window.D.connVer) { delete saved.connectors; delete saved.plugins; delete saved.pluginReleases; delete saved.connVer; }
       // the wallet's fixtures (js/walletdata.js) arrived after some demos were saved: take them, and the proposal and ticket they add
-      if (saved.walletVer !== window.D.walletVer) { ['wallet', 'payments', 'purchases', 'proposals', 'cases', 'bots', 'charters', 'walletVer', 'ticketsVer'].forEach((k) => delete saved[k]); }
+      if (saved.walletVer !== window.D.walletVer) { ['wallet', 'payments', 'purchases', 'proposals', 'cases', 'bots', 'teams', 'charters', 'walletVer', 'ticketsVer'].forEach((k) => delete saved[k]); }
       Object.keys(saved).forEach((k) => (window.D[k] = saved[k]));
       return true;
     } catch (e) { return false; }
@@ -405,9 +405,14 @@
       added(B.peers, A.peers).forEach((p) => r.push(`peers: may message ${p}`));
       if ((S.getPath(A, 'skill.secrets_via') || 'none') !== 'none' && (S.getPath(B, 'skill.secrets_via') || 'none') === 'none') r.push(`skill.secrets_via: ${S.getPath(A, 'skill.secrets_via')} (the agent can obtain secrets)`);
       added(S.getPath(B, 'skill.allow_secrets'), S.getPath(A, 'skill.allow_secrets')).forEach((x) => r.push(`skill.allow_secrets: ${x}`));
+      // a raised purchase cap (purchases:) lets the bot spend more; setting caps where none were, or lowering one, narrows
+      const capsUp = (bp, ap, where) => { if (!bp || !ap) return; ['per_purchase', 'per_day', 'per_month'].forEach((k) => { if (Number(ap[k]) > Number(bp[k])) r.push(`${where}.${k}: raised from ${bp[k]} to ${ap[k]}`); }); };
+      capsUp(S.getPath(B, 'purchases'), S.getPath(A, 'purchases'), 'purchases');
+      if (S.getPath(B, 'purchases') && !S.getPath(A, 'purchases')) r.push('purchases: removed (held to its team’s and the cards’ limits instead)');
       // buying without a per-purchase approval (autonomy.unattended: a commit_money verb under its own cap) is always a widening
       Object.entries(S.getPath(A, 'autonomy.unattended') || {}).forEach(([v, u]) => { const was = (S.getPath(B, 'autonomy.unattended') || {})[v]; if (!was || (u.per_action || 0) > (was.per_action || 0) || (u.per_period || 0) > (was.per_period || 0) || added(was.merchants, u.merchants).length) r.push(`autonomy.unattended: ${v} runs without your approval, up to ${u.per_action} a purchase and ${u.per_period} every ${u.period || '24h'}, at ${(u.merchants || []).join(', ')}`); });
     } else if (coll === 'teams') {
+      { const bp = S.getPath(B, 'budget.purchases'), ap = S.getPath(A, 'budget.purchases'); if (bp && ap) ['per_purchase', 'per_day', 'per_month'].forEach((k) => { if (Number(ap[k]) > Number(bp[k])) r.push(`budget.purchases.${k}: raised from ${bp[k]} to ${ap[k]} for every bot`); }); if (bp && !ap) r.push('budget.purchases: removed (bots are held to their own caps and the cards’ only)'); }
       if ((S.getPath(B, 'autonomy.ceiling') || 'reversible') === 'observe' && (S.getPath(A, 'autonomy.ceiling') || 'reversible') === 'reversible') r.push('autonomy.ceiling: raised to reversible (bots may promote reversible verbs)');
       if (S.getPath(B, 'autonomy.shadow') === true && S.getPath(A, 'autonomy.shadow') !== true) r.push('autonomy.shadow: bots leave shadow mode');
       tiersLoosened(S.getPath(B, 'autonomy.tiers'), S.getPath(A, 'autonomy.tiers'), 'autonomy.tiers');

@@ -35,9 +35,10 @@
     // proposed with the dashboard (docs/design/dashboard.md), not in conductor yet
     NEW: { trigger: {}, workflow: {}, pack: {} },
     // bots and teams (feat/members)
-    bot: set('description charter charter_file scope escalation operators memory_repo seed_dir home worker skill autonomy disabled terraform proactive peers team collections isolation browser'),
+    // purchases: a bot's purchase caps, and a team's budget.purchases (feat/agent-browser: config/bots.go, "Spend limits stack")
+    bot: set('description charter charter_file scope escalation operators memory_repo seed_dir home worker skill autonomy disabled terraform proactive peers team collections isolation browser purchases'),
     team: set('description collections operators peers delegation autonomy budget isolation credentials browser knowledge routing'),
-    teamCeilings: ['observe', 'reversible'],
+    teamCeilings: ['observe', 'reversible', 'commit_money'], // commit_money: a team's bots may buy unattended (feat/agent-browser)
     tiers: ['observe', 'reversible', 'propose', 'commit_money', 'never'],
   });
   /** The base key of a filter key: not_draft → draft. */

@@ -15,7 +15,7 @@
   const D = window.D, now = Date.now(), m = (min) => new Date(now - min * 60000).toISOString(), at = (min) => new Date(now + min * 60000).toISOString();
   let demo = 'calm';
   try { demo = localStorage.getItem('cd-demo') || 'calm'; } catch (e) {}
-  D.walletVer = 1;
+  D.walletVer = 2;
   const V = (key) => ({ kind: 'vault', source: `{{ vault "op" "${key}" }}` }), E = (name) => ({ kind: 'env', source: `\${env.${name}}` }), ST = { kind: 'stored', source: '' };
 
   D.wallet = {
@@ -95,12 +95,18 @@
     hl.cfg.autonomy.tiers.commit_money = ['browser.purchase'];
     hl.cfg.autonomy.amounts = { 'browser.purchase': 'total' };
     hl.cfg.autonomy.spend_cap = { per_action: 150, per_period: 400, period: '720h', currency: 'USD' };
+    // its own purchase caps (bots.<name>.purchases: all three, optionally tighter per card); the lowest layer wins
+    hl.cfg.purchases = { per_purchase: 100, per_day: 150, per_month: 300, currency: 'USD' };
     hl.open = 2; hl.pending = 1;
     D.charters.homelab = 'Keep an eye on the home lab. Report missed backups and expiring certificates. Buy replacement parts only through a purchase you approve; never change anything else.\n';
   }
-  D.cases.push({ id: 'c39', bot: 'homelab', title: 'Replace the failing disk in nas-01', status: 'open', requester: 'operator:ops', cls: 'operator', opened: m(45), workers: 0, proposals: 1,
+  // a team's purchase caps are the ceiling for its bots (teams.<name>.budget.purchases)
+  const fin = D.teams.find((t) => t.name === 'finance'); if (fin) { fin.cfg.budget = Object.assign({}, fin.cfg.budget, { purchases: { per_purchase: 50, per_day: 100, per_month: 250, currency: 'USD' } }); }
+  D.cases.push({ id: 'c39', bot: 'homelab', title: 'Replace the failing disk in nas-01', spend_limit: { amount: '120.00', currency: 'USD', card: 'household', merchants: ['https://shop.example.com', 'https://parts.example.net'] }, status: 'open', requester: 'operator:ops', cls: 'operator', opened: m(45), workers: 0, proposals: 1,
     priority: 'high', desc: 'Disk 2 reports reallocated sectors. Order a matching 4 TB drive and a spare cable, shipped home.', routed: { by: 'direct', to: 'homelab', requester_kept: true },
-    notes: [{ at: m(12), who: 'bot:homelab', text: 'The shop raised the drive to $89.99 at checkout, so conductor stopped and asked you again. The cable is ordered (PX-20418).' }] });
+    notes: [{ at: m(12), who: 'bot:homelab', text: 'The shop raised the drive to $89.99 at checkout, so conductor stopped and asked you again. The cable is ordered (PX-20418).' },
+      { at: m(9), who: 'bot:homelab', text: 'I tried to add a drive caddy ($24.00 at parts.example.net). Conductor refused it: over this ticket’s $120.00 limit, $17.51 left. Raise the limit if you want it too.', refusal: { layer: 'ticket', limit: 120, left: 17.51, currency: 'USD' } }] });
+  D.audit.push({ ts: m(9), event: 'browser_purchase_refused', who: 'bot:homelab', detail: 'card household · 24.00 USD at https://parts.example.net · ticket c39 · refused: over this ticket’s 120.00 USD limit: 17.51 USD left', run: '' });
   // the bot's proposal for pu7 (its gate's side of the same purchase)
   D.proposals.push({ id: 'p14', bot: 'homelab', kind: 'purchase', verb: 'browser.purchase', tier: 'commit_money', status: 'pending', case: 'c39', requester: 'operator:ops', cls: 'operator', at: m(12), expires: '48m',
     title: 'Buy a 4 TB NAS hard drive for $89.99', summary: 'browser.purchase on shop.example.com: 89.99 USD with card household', purchase: 'pu7',

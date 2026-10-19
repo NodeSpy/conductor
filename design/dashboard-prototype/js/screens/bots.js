@@ -275,7 +275,7 @@
     const subset = (a, b) => !b || (a || []).every((x) => b.includes(x));
     const ceiling = S.getPath(c, 'autonomy.ceiling') || 'reversible';
     const pool = S.getPath(c, 'budget.proactive');
-    return teamShell(t, 'defaults', `<div class="callout small" style="margin-bottom:12px">A bot on a team can only be <b>stricter</b>: approvers from the team's list, promotions no higher than the ceiling, the team's tier classifications and sandbox, sweeps inside the shared pool, logins inside the team's scope. Anything wider is refused when the config is validated, naming the team value it breaks.</div>
+    return teamShell(t, 'defaults', `${UI.teamWalletHTML ? UI.teamWalletHTML(t) : ''}<div class="callout small" style="margin-bottom:12px">A bot on a team can only be <b>stricter</b>: approvers from the team's list, promotions no higher than the ceiling, the team's tier classifications and sandbox, sweeps inside the shared pool, logins inside the team's scope. Anything wider is refused when the config is validated, naming the team value it breaks.</div>
       <div class="panel"><div class="panel-head"><h3>Team values and what each bot does with them</h3><div class="tools"><button class="btn sm" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit team</button></div></div>
       <table class="tbl responsive inherit-tbl"><thead><tr><th>setting</th><th>team</th>${effs.map((x) => `<th><a href="#/bots/${x.m.name}/settings">${x.m.name}</a></th>`).join('')}</tr></thead><tbody>
         ${row('approvers', (c.operators || []).join(', ') || 'every operator', ({ e }) => `<span class="mono">${(e.operators.v || []).join(', ') || '—'}</span> ${badge(e.operators.src, subset(e.operators.v, c.operators))}`)}

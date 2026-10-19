@@ -169,11 +169,11 @@
             ${ctl('priority', 'Priority', priWord(c.priority))}${ctl('due', 'Due', c.due ? `${c.due} · ${dueWord(c.due)}` : 'No date')}${ctl('labels', 'Labels', (c.labels || []).join(', ') || 'None')}</div></section>
           ${props.length || workers.length ? `<section class="panel"><div class="panel-head"><h3>Linked work</h3></div><ul class="cm-side-l">${props.map((p) => `<li><a class="cm-side-a" href="#/bots/${p.bot}/proposals/${p.id}"><b>${UI.mark(p.status === 'pending' ? 'ember' : p.status === 'executed' || p.status === 'approved' ? 'ok' : 'idle')} ${esc(p.title || p.summary)}</b>${UI.factsLine([UI.envFact(p.env), UI.actionFact(p.verb, p.env, p.tier)])}<span class="dl-sub">${p.status === 'pending' ? 'Waiting for you' : esc(p.status)}</span></a></li>`).join('')}
             ${workers.map((w) => `<li><a class="cm-side-a" href="${w.run ? `#/runs/${w.run}` : `#/bots/${w.bot || c.bot}/workers`}"><b>${UI.mark(w.status === 'run' ? 'run' : w.status === 'ok' ? 'ok' : 'idle')} ${esc(w.brief || 'A worker')}</b><span class="dl-sub">${w.readOnly ? 'Read-only worker' : 'Worker'} · ${w.status === 'run' ? 'running' : 'finished'}</span></a></li>`).join('')}</ul></section>` : ''}
-          ${UI.ticketPurchases ? UI.ticketPurchases(c) : ''}
+          ${UI.ticketBudget ? UI.ticketBudget(c) : ''}${UI.ticketPurchases ? UI.ticketPurchases(c) : ''}
           <section class="panel"><div class="panel-head"><h3>History</h3></div><ol class="tk-hist">${hist.map((h) => `<li><span>${esc(h.t)}</span><span class="dl-sub">${UI.agoText(h.at)}</span></li>`).join('')}</ol></section>
         </div></div>`;
   };
-  const histWord = (a) => ({ browser_profile_fill: 'Your details were filled in', browser_purchase_approve: 'You approved a purchase', browser_purchase_deny: 'You denied a purchase', ticket_comment: 'You commented', ticket_assign: 'Assigned', ticket_edit: 'Edited', ticket_ready: 'Marked ready', ticket_decline: 'Declined', ticket_new: 'Created', bot_case_close: 'Marked done', bot_case_reopen: 'Reopened', bot_case_note: 'You commented', bot_route: 'Reassigned', bot_delegate: 'Part handed off', bot_delegate_done: 'A hand-off reported back' }[a.event] || a.event.replace(/_/g, ' '));
+  const histWord = (a) => ({ browser_case_budget: 'Spending limit changed', browser_purchase_refused: 'A purchase was refused', browser_profile_fill: 'Your details were filled in', browser_purchase_approve: 'You approved a purchase', browser_purchase_deny: 'You denied a purchase', ticket_comment: 'You commented', ticket_assign: 'Assigned', ticket_edit: 'Edited', ticket_ready: 'Marked ready', ticket_decline: 'Declined', ticket_new: 'Created', bot_case_close: 'Marked done', bot_case_reopen: 'Reopened', bot_case_note: 'You commented', bot_route: 'Reassigned', bot_delegate: 'Part handed off', bot_delegate_done: 'A hand-off reported back' }[a.event] || a.event.replace(/_/g, ' '));
   UI.afterRender.push((main) => { const t = main.querySelector('.tk-chat #msgs'); if (t) t.scrollTop = t.scrollHeight; });
 
   /* ---------- changing a ticket ---------- */
@@ -221,6 +221,7 @@
           <label class="tk-l"><span class="dl-lbl">Priority</span><select class="select" id="tk-pri">${PRI.map(([v, l]) => `<option value="${v}"${v === 'normal' ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
         <div class="tk-row2"><label class="tk-l"><span class="dl-lbl">Due</span><input class="input" type="date" id="tk-due"></label>
           <label class="tk-l"><span class="dl-lbl">Labels</span><input class="input" id="tk-labels" placeholder="bug, web" list="tk-label-list"><datalist id="tk-label-list">${allLabels().map((l) => `<option value="${esc(l)}">`).join('')}</datalist></label></div>
+        ${UI.ticketBudgetFields ? UI.ticketBudgetFields() : ''}
         <input type="hidden" id="tk-from" value="${msg ? esc(bot + ':' + from) : ''}">
         <div class="dl-actions"><button class="btn primary" type="button" data-act="tk-create" data-stage="ready">${icon('check')}Create, ready to start</button><button class="btn secondary" type="button" data-act="tk-create" data-stage="draft">${icon('edit')}Save as a draft</button><a class="btn ghost" href="${bot ? `#/bots/${bot}/chat` : '#/tickets'}">Cancel</a></div></form></div>`;
   }
@@ -238,10 +239,14 @@
     const c = { id, title, desc: UI.$('#tk-desc').value.trim(), status: 'open', requester: 'operator:ops', cls: 'operator', opened: now(), workers: 0, proposals: 0, stage, priority: UI.$('#tk-pri').value || 'normal',
       labels: UI.$('#tk-labels').value.split(',').map((x) => x.trim()).filter(Boolean), notes: [] };
     if (UI.$('#tk-due').value) c.due = UI.$('#tk-due').value;
+    const sl = UI.readTicketBudget ? UI.readTicketBudget(btn.closest('form')) : undefined; if (sl === null) return; if (sl) c.spend_limit = sl;
+    const create = () => {
     if (nv.files.length) c.notes.push({ at: now(), who: 'operator:ops', text: '', state: 'delivered', attachments: nv.files.slice() });
     if (from) c.notes.unshift({ at: now(), who: 'conductor', text: `Made from a message in ${from.split(':')[0]}’s chat` });
     D.cases.unshift(c); if (who) assign(c, who); c.notes = c.notes.filter((n) => !/^Assigned to/.test(n.text) || who); if (!who) delete c.routed; else c.routed = who.startsWith('team:') ? { by: 'direct', team: who.slice(5), to: `team ${who.slice(5)}`, requester_kept: true } : { by: 'direct', to: who, requester_kept: true };
-    audit('ticket_new', `${id} · ${title.slice(0, 60)} · ${assignee(c)}`); nv.files = []; nv.err = ''; S.save(); UI.refreshChrome(); UI.go(`#/tickets/${id}`); UI.toast(stage === 'draft' ? 'Draft saved' : 'Ticket created', esc(stage === 'draft' ? 'Nobody starts on it until you mark it ready' : `${assignee(c)} may start on it`), 'ok'); });
+    audit('ticket_new', `${id} · ${title.slice(0, 60)} · ${assignee(c)}`); nv.files = []; nv.err = ''; S.save(); UI.refreshChrome(); UI.go(`#/tickets/${id}`); UI.toast(stage === 'draft' ? 'Draft saved' : 'Ticket created', esc(stage === 'draft' ? 'Nobody starts on it until you mark it ready' : `${assignee(c)} may start on it`), 'ok'); };
+    // a new spending limit is a widening (the backend's rule), so it asks for the passkey first
+    if (sl) UI.ticketBudgetGate(title, sl, create); else create(); });
   document.addEventListener('submit', (e) => { if (e.target.matches && e.target.matches('.tk-form')) { e.preventDefault(); UI.$('[data-act="tk-create"][data-stage="ready"]').click(); } });
 
   /* ---------- a bot's tickets and a team's tickets: the same rows, narrowed ---------- */

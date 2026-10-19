@@ -1020,6 +1020,31 @@ reference). Two more tabs under Browsers: Sessions · Logins · **Personal detai
   review as a **widening** (the classifier names it) and the passkey. *Always ask me* removes it. (On the
   branch, no bot buys unattended until #178's sandbox seam reports the sandbox; the gate and its approvals are in
   place.)
+- **Spend limits stack, and the lowest wins** (backend: Browser.md "Spend limits stack"; `internal/browser/limits.go`).
+  The layers: the card's `limits`; the card's `identity_limits` for the caller; the bot's `purchases:` (per purchase,
+  per day, per 30 days, all three, optionally tighter per card) under its team's `budget.purchases:` (a ceiling: a
+  bot's caps can't exceed it); and the ticket's `spend_limit: { amount, currency, card, merchants }` on a bot's case.
+  - **The approval card** lists every layer that applies with the room it leaves after this purchase ("This ticket's
+    budget: $17.51 left of $120.00", "Hearth's own caps: $10.01 under the $100.00 per-purchase cap") and marks the
+    tightest (the binding layer: the one it leaves the least room in). Over a layer, it says "Conductor would refuse
+    this now: over this ticket's $100.00 limit: $87.50 left", the backend's refusal words.
+  - **A ticket** (beside its purchases) shows its spending limit: what's left of the amount, what's paid and what's
+    waiting or approved (everything proposed under it counts; a denied, refused or expired purchase frees its share;
+    nothing carries over), its card and shops, and a warning when it's above a 30-day cap above it ("it counts as
+    $300.00, never more"). Set, Change and Remove; **New ticket** has an optional Spending limit (amount, one card,
+    shops). A new or larger budget, another card or a looser shop list is a widening (the backend's
+    `classifyBudget`), so it asks for the passkey; a smaller one or none doesn't.
+  - **A bot's What it can do:** "Can buy: asks you first, up to $100.00 a purchase, $150.00 a day and $300.00 in 30
+    days … with household", which layer sets each, its 30-day spend, and **Its own caps** with Change/Set (through
+    the review: raising a cap is a widening; refused above its team's).
+  - **A team's Ceilings & scopes:** **What its bots may spend** (`budget.purchases`), each bot's own caps or "uses the
+    team's caps", its 30-day spend; Change/Set caps (refused below a bot's own).
+  - **Refusals name the limit:** a refused proposal never becomes a purchase record, so the refusal reaches the
+    ticket (the bot says it in the comments, in the backend's words: "over this ticket's $120.00 limit, $17.51
+    left") and the ticket's history and the audit log ("A purchase was refused").
+  - NEW for the dashboard: none beyond the API the backend already lists (`GET /v1/purchases/{id}` with
+    `remaining_by_layer`, `GET /v1/spend` with per-bot and per-team rows, `GET /v1/bots/{bot}/cases/{case}/budget`;
+    setting a budget is the control-socket `browser-case-budget`). The prototype computes the same from its ledger.
 - **What asks for the passkey:** anything the backend answers `change: widening` (a new profile or card, a bot
   or team, a site or a detail at a site, a looser *may learn*, a shop, a higher limit, an unfreeze) and every
   purchase decision (signed; the CLI signs with the operator's SSH key, the dashboard with a passkey). Freezing,

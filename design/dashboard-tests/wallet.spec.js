@@ -205,7 +205,7 @@ test('a bot’s purchase waits in Needs you and its Approvals: shop, items, tota
   const card = page.locator('.dl-proposal');
   await expect(card.locator('.wl-items')).toContainText('4 TB NAS hard drive');
   await expect(card).toContainText('Asks again for a higher price');
-  await expect(card).toContainText('Hearth’s limits:');
+  await expect(card).toContainText('Hearth’s own caps');
   await expect(card).toContainText('never sees the card');
   await expect(card.locator('[data-act="p-approve"][data-d="approve"]')).toContainText('Approve with passkey');
   // the purchase page of a waiting bot purchase is its proposal
@@ -244,7 +244,7 @@ test('receipts: on the ticket, and a charge above the approval is flagged', asyn
 test('What it can do says what a bot can buy; buying without asking is an opt-in widening under its spend cap', async ({ page }) => {
   await go(page, '#/bots/homelab/access', { fresh: true });
   const box = page.locator('#wl-bot');
-  await expect(box).toContainText('Can buy: asks you first, up to $120.00 a purchase, at shop.example.com, parts.example.net and backup.example.com');
+  await expect(box).toContainText('Can buy: asks you first, up to $100.00 a purchase, $150.00 a day and $300.00 in 30 days, at shop.example.com, parts.example.net and backup.example.com');
   await expect(box).toContainText('Without asking: never');
   await expect(box).toContainText('Fills your details');
   await expect(page.locator('.cang[data-s="ember"]')).toContainText('Buy things with a card you allow');
@@ -262,4 +262,84 @@ test('What it can do says what a bot can buy; buying without asking is an opt-in
   await applyStaged(page, { expectWidening: true });
   await go(page, '#/bots/homelab/access');
   await expect(page.locator('#wl-bot')).toContainText('Without asking: up to $10.00 a purchase');
+});
+
+// Ledger 56: spend limits stack (card → the card for the caller → the bot's purchases: under its team's budget.purchases →
+// the ticket's spend_limit), and the lowest wins; refusals name the layer and what's left.
+test('the approval lists what each limit leaves after the purchase, the tightest marked; over one, it says conductor would refuse', async ({ page }) => {
+  await go(page, '#/bots/homelab/proposals/p14', { fresh: true });
+  const ls = page.locator('.wl-layers li');
+  await expect(ls).toHaveCount(4);
+  await expect(ls.filter({ hasText: 'This ticket’s budget' })).toContainText('$17.51 left of $120.00');
+  await expect(page.locator('.wl-layers li.bind')).toContainText('Hearth’s own caps');
+  await expect(page.locator('.wl-layers li.bind')).toContainText('the tightest');
+  await page.evaluate(() => { D.cases.find((c) => c.id === 'c39').spend_limit.amount = '100.00'; S.save(); });
+  await go(page, '#/bots/homelab/proposals/p14');
+  await expect(page.locator('.wl-layers li.over')).toContainText('This ticket’s budget');
+  await expect(page.locator('.dl-proposal')).toContainText('Conductor would refuse this now: over this ticket’s $100.00 limit: $87.50 left');
+});
+
+test('a ticket’s spending limit: what is left, paid and waiting; lowering needs no passkey, raising does, and above a 30-day cap it warns', async ({ page }) => {
+  await go(page, '#/tickets/c39', { fresh: true });
+  const panel = page.locator('.wl-tkb');
+  await expect(panel).toContainText('$17.51 left of $120.00');
+  await expect(panel).toContainText('$12.50 paid · $89.99 waiting or approved');
+  await expect(panel).toContainText('Only with household, only at shop.example.com and parts.example.net');
+  await expect(page.locator('.tk-chat')).toContainText('over this ticket’s $120.00 limit, $17.51 left');
+  await panel.locator('[data-act="w-tkb"]').click();
+  await page.locator('[data-money="budget"]').fill('110');
+  await page.locator('#w-tkb-go').click();
+  await expect(passkey(page)).toHaveCount(0);
+  await expect(page.locator('.wl-tkb')).toContainText('$7.51 left of $110.00');
+  await page.locator('.wl-tkb [data-act="w-tkb"]').click();
+  await page.locator('[data-money="budget"]').fill('350');
+  await page.locator('#w-tkb-go').click();
+  await passkey(page).click();
+  await expect(page.locator('.wl-tkb')).toContainText('left of $350.00');
+  await expect(page.locator('.wl-tkb .wl-flag')).toContainText('Above Hearth’s 30-day cap ($300.00)');
+});
+
+test('a new ticket can carry a spending limit (a widening: the passkey), held to one card and some shops', async ({ page }) => {
+  await go(page, '#/tickets/new?bot=homelab', { fresh: true });
+  await page.locator('#tk-title').fill('Buy a spare fan for nas-01');
+  await page.locator('#w-nt-b > summary').click();
+  await page.locator('[data-money="budget"]').fill('abc');
+  await page.locator('[data-act="tk-create"][data-stage="ready"]').click();
+  await expect(page.locator('[data-field="budget"] .ferr')).toContainText('An amount in dollars');
+  await page.locator('[data-money="budget"]').fill('$30');
+  await page.locator('#w-bcard').selectOption('household');
+  await page.locator('#w-nt-b [data-act="w-row-add"]').click(); await page.locator('[data-row="bmerch"]').fill('https://parts.example.net');
+  await page.locator('[data-act="tk-create"][data-stage="ready"]').click();
+  await passkey(page).click();
+  await expect(page).toHaveURL(/#\/tickets\/c\d+$/);
+  await expect(page.locator('.wl-tkb')).toContainText('$30.00 left of $30.00');
+  const sl = await page.evaluate(() => D.cases[0].spend_limit);
+  expect(sl).toEqual({ amount: '30.00', currency: 'USD', card: 'household', merchants: ['https://parts.example.net'] });
+});
+
+test('Can buy on a bot comes from the whole stack; its own caps can only be lower than its team’s; a raised cap is a widening in review', async ({ page }) => {
+  await go(page, '#/bots/homelab/access', { fresh: true });
+  await expect(page.locator('#wl-bot')).toContainText('up to $100.00 a purchase, $150.00 a day and $300.00 in 30 days');
+  await expect(page.locator('#wl-bot .wl-by')).toContainText('a purchase is set by its own cap');
+  await page.locator('[data-act="w-caps"][data-n="homelab"]').click();
+  await page.locator('[data-money="per_purchase"]').fill('120');
+  await page.locator('#w-caps-go').click();
+  await expect(page.locator('#main')).toContainText('purchases.per_purchase: raised from 100 to 120');
+  await applyStaged(page, { expectWidening: true });
+  // a team's caps are the ceiling: Ledger (billing-sre, team finance) can't go above $50.00 a purchase
+  await go(page, '#/teams/finance/defaults');
+  await expect(page.locator('.wl-team')).toContainText('each bot up to $50.00 a purchase');
+  await page.evaluate(() => { const b = D.bots.find((x) => x.name === 'billing-sre'); b.cfg.skill.verbs.push('browser.purchase'); D.wallet.cards[1].identities.push('bot:billing-sre'); S.save(); });
+  await go(page, '#/bots/billing-sre/access');
+  await expect(page.locator('#wl-bot')).toContainText('Its own caps: none');
+  await page.locator('[data-act="w-caps"][data-n="billing-sre"]').click();
+  await page.locator('[data-money="per_purchase"]').fill('60'); await page.locator('[data-money="per_day"]').fill('90'); await page.locator('[data-money="per_month"]').fill('200');
+  await page.locator('#w-caps-go').click();
+  await expect(page.locator('#w-caps-err')).toContainText('Above team finance’s caps');
+});
+
+test('a refusal names the layer that stopped it and what is left', async ({ page }) => {
+  await go(page, '#/tickets/c39', { fresh: true });
+  const words = await page.evaluate(() => { const ls = UI.limitLayers({ cardN: 'household', bot: 'homelab', caseId: 'c39', total: 24 }); return ls.filter((l) => l.over).map((l) => UI.refusalWords(l, ls.cur)); });
+  expect(words).toContain('over this ticket’s $120.00 limit: $17.51 left');
 });
