@@ -117,10 +117,15 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 .bot-card:hover { border-color: var(--color-border-strong); }
 .bot-card h3 { margin: 0; font: var(--type-h3); }
 /* the bot chat (js/chat.js): a normal chat scroller, newest at the bottom; a short thread sits against the composer */
-.chat { position: relative; } .chat-grid { align-items: start; } /* as tall as the conversation; the thread scrolls once it reaches the screen: never an empty block */
+/* every chat surface (Chat, a bot's Chat tab, a ticket's comments) is a full-height panel: the composer is pinned to
+   its bottom, the messages scroll above it anchored to the bottom (a short thread sits right above the composer; an
+   empty one shows its note in the middle), and as the composer grows the thread shrinks, so nothing moves under you.
+   --chat-h is the panel's height: the visible viewport (above a phone's keyboard) less the chrome above it. */
+.chat { position: relative; display: flex; flex-direction: column; height: var(--chat-h, calc(var(--dvh) - 150px)); min-height: 360px; } .chat-grid { align-items: start; }
+.chat > .panel-head, .chat > .cv-to, .chat > .cm-comp { flex: none; }
 .cm-head { flex-wrap: wrap; gap: var(--space-1) var(--space-3); } .cm-head .cm-rule { flex: 1; min-width: 12ch; } .cm-head .btn svg { width: 14px; height: 14px; }
-.cm-thread { max-height: max(320px, calc(var(--dvh) - 440px)); min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: var(--space-4) var(--pad-card); display: flex; flex-direction: column; gap: var(--space-4); }
-.cm-empty { text-align: center; margin: auto 0 0; }
+.cm-thread { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: var(--space-4) var(--pad-card); display: flex; flex-direction: column; gap: var(--space-4); }
+.cm-thread > :first-child { margin-top: auto; } .cm-thread > .cm-empty:only-child { margin: auto; text-align: center; }
 .cm-row { max-width: 78%; }
 .cm-meta { display: flex; gap: var(--space-2); align-items: baseline; font: var(--type-caption); color: var(--color-text-secondary); margin-bottom: var(--space-1); flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 .cm-meta b { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); } .cm-meta svg { width: 14px; height: 14px; align-self: center; color: var(--color-icon-default); }
@@ -190,7 +195,7 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 @media (max-width: 720px) {
   /* a full-height chat: the thread scrolls, the composer stays pinned above the tab bar and the safe area */
   .chat-grid { display: flex; flex-direction: column; }
-  .chat { border-radius: var(--radius-card); } .chat .cm-thread { max-height: calc(var(--dvh) - 320px - var(--sab)); }
+  .chat { border-radius: var(--radius-card); --chat-h: calc(var(--vvh, var(--dvh)) - 136px - var(--sab)); }
   .cm-thread { padding: var(--space-3) var(--pad-card); } .cm-row { max-width: 92%; } .cm-tools { margin-left: 0; max-width: 100%; }
   .cm-bot { grid-template-columns: 28px minmax(0, 1fr); gap: var(--space-2); } .cm-bot .dl-bot-av.sm { width: 28px; height: 28px; font-size: var(--type-caption-size); }
   .cm-head .cm-rule { display: none; }
@@ -550,8 +555,7 @@ tr.folded { display: none; }
 .tk-ht { display: flex; gap: var(--space-3); align-items: center; } .tk-ht .case-title { margin: 0; font: var(--type-h3); font-size: var(--type-h2-size); letter-spacing: normal; font-variation-settings: normal; } /* a ticket's title is a sentence: sans, like any long title */
 .tk-head .case-state, .tk-head .case-route { margin: 0; }
 .tk-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.tk-chat .cm-thread { max-height: max(320px, calc(var(--dvh) - 320px)); }
-.tk-chat .cm-thread { min-height: 120px; }
+.tk-chat { --chat-h: calc(var(--dvh) - 200px); }
 .tk-fields { display: grid; padding: 0 var(--pad-card) var(--space-3); }
 .tk-f { display: grid; grid-template-columns: 9.5em minmax(0, 1fr); gap: var(--space-2); align-items: center; padding: var(--space-1_5) 0; border-top: var(--border-width) solid var(--color-border-subtle); }
 .tk-f:first-child { border-top: 0; }
@@ -664,8 +668,8 @@ tr.folded { display: none; }
 }
 
 .dl-bothead > .bav { align-self: start; } .h1-id { font-family: var(--font-family-sans); font-size: var(--type-body-s-size, 14px); font-weight: 400; letter-spacing: 0; vertical-align: middle; }
-.cv-chat .cm-thread { max-height: max(320px, calc(var(--dvh) - 330px)); }
-@media (max-width: 720px) { .dl-bothead > .bav.xl { width: 44px; height: 44px; border-radius: 12px; grid-column: 1; grid-row: 1 / span 2; } .cv-chat .cm-thread { max-height: calc(var(--dvh) - 420px - var(--sab)); } }
+.cv-main { height: calc(var(--dvh) - 160px); display: flex; flex-direction: column; } .cv-main > .cv-th { flex: none; } .cv-main > .cv-chat { flex: 1 1 auto; height: auto; min-height: 0; }
+@media (max-width: 720px) { .dl-bothead > .bav.xl { width: 44px; height: 44px; border-radius: 12px; grid-column: 1; grid-row: 1 / span 2; } .cv-main { height: calc(var(--vvh, var(--dvh)) - 172px - var(--sab)); } }
 
 /* @mentions: the token layer sits exactly behind the field (the same font, padding and wrapping), the field's text
    draws over it; the popover opens above the composer */

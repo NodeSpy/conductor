@@ -33,7 +33,8 @@ const measure = (page) => page.evaluate(() => {
     }
     card.querySelectorAll('img, svg, canvas, input:not([type=hidden]), textarea, select, button, .cm-ta').forEach((el) => { if (visible(el) && !el.closest('[hidden]')) content.push(el.getBoundingClientRect()); });
     // 2. no large empty band (unless the card says it's empty)
-    if (c.height > 160 && !card.querySelector('.empty, .cm-empty, .dl-empty-row')) {
+    // a chat panel is full height by design (item 33): the space above a short thread is the thread's
+    if (c.height > 160 && !card.querySelector('.empty, .cm-empty, .dl-empty-row') && !card.matches('.chat, .cv-main')) {
       const ys = content.map((r) => [Math.max(r.top, c.top), Math.min(r.bottom, c.bottom)]).filter(([a, b]) => b > a).sort((a, b) => a[0] - b[0]);
       let last = c.top, gap = 0; for (const [a, b] of ys) { gap = Math.max(gap, a - last); last = Math.max(last, b); } gap = Math.max(gap, c.bottom - last);
       if (gap > c.height * 0.5) out.push(`${label}: an empty band of ${Math.round(gap)}px in a ${Math.round(c.height)}px card`);

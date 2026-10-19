@@ -16,7 +16,7 @@ test('no gap between messages at any count; the newest sits against the composer
     for (let k = 0; k < 3; k++) {
       const g = await gaps(page);
       for (const x of g.out) expect(x, `${bot}: gap between messages`).toBeLessThanOrEqual(g.tok + 1);
-      expect(Math.abs(g.tail), `${bot}: the newest message is at the bottom`).toBeLessThanOrEqual(2);
+      if (!(await page.locator('#msgs .cm-empty').count())) expect(Math.abs(g.tail), `${bot}: the newest message is at the bottom`).toBeLessThanOrEqual(2);
       await page.fill('#say', `Message ${k + 1}`); await page.locator('#say').press('Enter');
       await expect(page.locator('#msgs .cm-bot').last()).toContainText(/Got it/);
     }
@@ -106,13 +106,21 @@ test('phone: a full-height chat with the composer pinned in view', async ({ page
   expect(r.compBottom).toBeLessThanOrEqual(r.barTop + 1);
 });
 
-test('the chat card is exactly as tall as its conversation: no empty block above or below, short or long', async ({ page }) => {
-  for (const bot of ['billing-sre', 'platform-sre']) {
-    await go(page, `#/bots/${bot}/chat`, { fresh: true });
-    const r = await page.evaluate(() => { const c = document.querySelector('.chat'), kids = [...c.children].filter((k) => getComputedStyle(k).position !== 'absolute' && k.offsetHeight);
-      const t = document.querySelector('#msgs'), rows = [...t.children], first = rows[0].getBoundingClientRect().top - t.getBoundingClientRect().top;
-      return { card: c.getBoundingClientRect().height, sum: kids.reduce((a, k) => a + k.getBoundingClientRect().height, 0) + 2, first: Math.round(first - parseFloat(getComputedStyle(t).paddingTop)) }; });
-    expect(Math.abs(r.card - r.sum), `${bot}: card ${r.card} vs content ${r.sum}`).toBeLessThanOrEqual(3);
-    if (bot === 'billing-sre') expect(r.first, 'a short thread starts at the top of the card').toBeLessThanOrEqual(2);
+test('the composer is pinned to the bottom of a full-height panel: it stays put while you type, on empty, short and long threads', async ({ page }) => {
+  for (const route of ['#/chat/bot/web-triage', '#/bots/billing-sre/chat', '#/chat/team/platform']) {
+    await go(page, route, { fresh: true });
+    await page.locator('#say').click(); await page.waitForTimeout(150); // focusing brings the panel into view on a phone
+    const at = () => page.evaluate(() => { const c = document.querySelector('.cm-comp').getBoundingClientRect(), p = document.querySelector('.chat').getBoundingClientRect(), t = document.querySelector('#msgs').getBoundingClientRect(); return { comp: Math.round(c.bottom), panel: Math.round(p.height), pBottom: Math.round(p.bottom), thread: Math.round(t.height) }; });
+    const a = await at();
+    expect(Math.abs(a.comp - a.pBottom), `${route}: the composer is at the panel's bottom`).toBeLessThanOrEqual(2);
+    await page.keyboard.type('one'); for (const l of ['two', 'three', 'four']) { await page.keyboard.press('Shift+Enter'); await page.keyboard.type(l); }
+    const b = await at();
+    expect(Math.abs(b.comp - a.comp), `${route}: the composer's bottom edge moved while typing`).toBeLessThanOrEqual(1);
+    expect(b.panel, `${route}: the panel's height`).toBe(a.panel);
+    expect(b.thread, `${route}: the thread shrinks as the composer grows`).toBeLessThan(a.thread);
   }
+  // an empty thread shows its note in the middle
+  await go(page, '#/chat/bot/web-triage', { fresh: true });
+  const e = await page.evaluate(() => { const t = document.querySelector('#msgs').getBoundingClientRect(), n = document.querySelector('.cm-empty').getBoundingClientRect(); return Math.abs((n.top + n.bottom) / 2 - (t.top + t.bottom) / 2); });
+  expect(e).toBeLessThan(4);
 });

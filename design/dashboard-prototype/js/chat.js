@@ -197,3 +197,11 @@ UI.afterRender.push((main) => { if (main.querySelector('#msgs')) UI.chatAnchor()
   }, true);
   UI.afterRender.push(() => { st.open = false; mirror(); });
 })();
+/* the visible viewport's height (above a phone's keyboard and Safari's toolbar) for the full-height chat panel; when
+   you start typing on a phone the panel comes fully into view, its composer above the keyboard */
+(function () {
+  const vv = window.visualViewport; if (!vv) return;
+  const set = () => document.documentElement.style.setProperty('--vvh', Math.round(vv.height) + 'px');
+  vv.addEventListener('resize', set); set();
+  document.addEventListener('focusin', (e) => { if (e.target.id !== 'say' || innerWidth > 720) return; const p = e.target.closest('.cv-main, .chat'); if (p) setTimeout(() => p.scrollIntoView({ block: 'end', behavior: 'instant' }), 60); });
+})();
