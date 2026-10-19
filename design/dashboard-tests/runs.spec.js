@@ -72,7 +72,11 @@ test('a run page: the Activity crumb keeps the filters and scroll; labelled deta
   await page.setViewportSize({ width: 1280, height: 600 });
   await go(page, '#/activity', { fresh: true });
   await page.locator('.fb[data-fb="act"] .fb-in').fill('since:24h');
-  const top = await page.evaluate(() => { const m = document.getElementById('main'); m.style.scrollBehavior = 'auto'; m.scrollTop = 240; return m.scrollTop; });
+  await expect(page.locator('#act-tbl tbody tr, #act-phone li').first()).toBeVisible();
+  await page.evaluate(() => { const m = document.getElementById('main'); m.style.scrollBehavior = 'auto'; m.scrollTop = 240; });
+  // where you were when you left (the filter's re-render may have moved it, by scroll anchoring)
+  await page.waitForTimeout(150);
+  const top = await page.evaluate(() => document.getElementById('main').scrollTop);
   expect(top).toBeGreaterThan(100);
   await page.evaluate(() => { location.hash = '#/runs/r-7f3a'; });
   // one run per page: a way back, no tabs and no previous/next
