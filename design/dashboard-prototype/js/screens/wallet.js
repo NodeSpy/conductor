@@ -92,8 +92,9 @@
     if ((x = h.match(/#\/bots\/([\w-]+)\/proposals\/(\w+)/))) return (D.purchases || []).find((p) => p.bot === x[1] && p.bot_proposal === x[2]); return null; };
   /** A purchase's facts (the facts line): who, the shop, the total, the card, a subscription. */
   UI.purchaseFacts = (p) => { const c = card(p.card) || {};
-    return [p.bot ? { icon: 'obj-bot', value: UI.botName(p.bot), href: `#/bots/${p.bot}`, pri: 1, label: 'Bot' } : { icon: 'obj-sandbox', value: who(p.identity), pri: 2, label: 'Asked for by' },
-      { icon: 'store', value: host(p.merchant), pri: 1, label: 'Shop' }, { icon: p.recurring ? 'repeat' : 'act-money', value: `${money(p.total, p.currency)}${perWord(p)}`, risky: true, pri: 1, label: p.recurring ? 'A subscription' : 'Total' },
+    // the money and the shop first: on a phone the facts that don't fit one line fold away
+    return [{ icon: p.recurring ? 'repeat' : 'act-money', value: `${money(p.total, p.currency)}${perWord(p)}`, risky: true, pri: 1, label: p.recurring ? 'A subscription' : 'Total' }, { icon: 'store', value: host(p.merchant), pri: 1, label: 'Shop' },
+      p.bot ? { icon: 'obj-bot', value: UI.botName(p.bot), href: `#/bots/${p.bot}`, pri: 1, label: 'Bot' } : { icon: 'obj-sandbox', value: who(p.identity), pri: 2, label: 'Asked for by' },
       { icon: 'obj-card', value: `${p.card} •••• ${c.last4 || ''}`.trim(), href: `#/browser/cards/${p.card}`, pri: 2, label: 'Card' }]; };
   /** The limits a purchase is checked against, with what's been charged: the card's, and the identity's on top. */
   const limitLines = (p) => { const c = card(p.card); if (!c) return []; const L = c.limits, cur = L.currency || 'USD', il = (c.identity_limits || {})[p.identity] || (p.bot && (c.identity_limits || {})['bot:' + p.bot]);

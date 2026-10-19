@@ -820,7 +820,8 @@ details.panel.tech { padding-top: 0; border-top-style: solid; }
 .dl-list > li .dl-nt > :is(.dl-why, .reason) ~ :is(.dl-why, .reason) { display: none; } /* one description per row: a second line goes in the first */
 .dl-list:has(.dl-nt > :is(.dl-why, .reason)) > li .dl-nt:has(> b:first-child):not(:has(> :is(.dl-why, .reason)))::after { content: ''; height: 2lh; } /* a row without a description keeps its space */
 .dl-list:has(.dl-nt > .fx) > li .dl-nt:has(> b:first-child):not(:has(> .fx))::before { content: ''; height: 1.5rem; order: 9; } /* and without facts, theirs */
-.dl-list > li .dl-nt > .fx { height: 1.5rem; align-items: center; margin: 0; }
+.dl-list > li .dl-nt > .fx { height: 1.5rem; align-items: center; align-content: flex-start; margin: 0; }
+.dl-list > li .dl-nt > .fx > .fx-i { min-height: 1.5rem; } /* each line of facts fills the clip, so facts that wrap sit wholly below it, never cut in half */
 @container (max-width: 420px) { .fb-search { min-width: 0; max-width: none; } }
 .upd-sub { display: grid; gap: 10px; padding-left: 14px; border-left: var(--border-width) solid var(--color-border-subtle); }
 /* the audit log (48): who first, their picture and name in bold, then what happened and the facts line */
