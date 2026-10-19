@@ -9,21 +9,29 @@
     if (!ok) return; const r = D.runs.find((x) => x.id === b.dataset.run); r.status = 'stopped'; r.finished = now(); r.error = 'stopped by operator ops'; r.steps.forEach((s) => { if (s.status === 'run') s.status = 'stopped'; });
     D.audit.unshift({ ts: now(), event: 'run_stop', who: 'operator:ops', detail: `${r.id} · ${r.workflow} · grace 10s`, run: r.id }); S.save(); UI.refreshChrome(); UI.go('#/runs/' + r.id); UI.toast(`Stopped ${r.id}`, 'retry it from any step', 'fail');
   }));
-  UI.act('restart-step', (b) => { const r = D.runs.find((x) => x.id === b.dataset.run); UI.confirm({ title: `Restart ${esc(b.dataset.from)}?`, body: `This stops ${r.id} first (the step gets a short grace to checkpoint), then starts a retry from <b>${esc(b.dataset.from)}</b>. Steps before it are replayed from their recorded outputs; what this step did so far is discarded.`, ok: 'Stop and restart', cancel: 'Keep it running', danger: true }).then((ok) => { if (!ok) return;
+  UI.act('restart-step', (b) => { const r = D.runs.find((x) => x.id === b.dataset.run); if (runningRetry(r)) { UI.go('#/runs/' + runningRetry(r).id); return; } UI.confirm({ title: `Restart ${esc(b.dataset.from)}?`, body: `This stops ${r.id} first (the step gets a short grace to checkpoint), then starts a retry from <b>${esc(b.dataset.from)}</b>. Steps before it are replayed from their recorded outputs; what this step did so far is discarded.`, ok: 'Stop and restart', cancel: 'Keep it running', danger: true }).then((ok) => { if (!ok) return;
     r.status = 'stopped'; r.finished = now(); r.failed_step = b.dataset.from; r.error = 'stopped by operator:ops to restart ' + b.dataset.from; r.steps.forEach((s) => { if (s.status === 'run') s.status = 'stopped'; }); D.audit.unshift({ ts: now(), event: 'run_stop', who: 'operator:ops', detail: `${r.id} · ${r.workflow} · grace 10s · restart ${b.dataset.from}`, run: r.id });
     const steps = graphOf(r), from = steps.findIndex((s) => s.id === b.dataset.from), id = 'r-' + Math.random().toString(16).slice(2, 6);
-    D.runs.unshift({ id, workflow: r.workflow, trigger: r.trigger + ' (retry)', ...UI.eventFields(r), status: 'run', started: now(), cost: 0, retry_of: r.id, steps: steps.map((s, i) => ({ id: s.id, status: i < from ? 'ok' : i === from ? 'run' : 'idle', duration_ms: i < from ? 900 : 0, cost_usd: 0, started: i === from ? now() : undefined })) });
-    D.audit.unshift({ ts: now(), event: 'run_retry', who: 'operator:ops', detail: `${id} · retry_of ${r.id} · from ${b.dataset.from}`, run: id }); S.save(); UI.refreshChrome(); UI.go('#/runs/' + id); UI.toast(`Restarted ${b.dataset.from}`, `${r.id} stopped · ${id} running`, 'run'); }); });
+    r.retried_by = id; D.runs.unshift({ id, workflow: r.workflow, trigger: r.trigger + ' (retry)', ...UI.eventFields(r), status: 'run', started: now(), cost: 0, retry_of: r.id, retry_from: b.dataset.from, by: 'operator:ops', steps: steps.map((s, i) => ({ id: s.id, status: i < from ? 'ok' : i === from ? 'run' : 'idle', duration_ms: i < from ? 900 : 0, cost_usd: 0, started: i === from ? now() : undefined })) });
+    D.audit.unshift({ ts: now(), event: 'run_retry', who: 'operator:ops', what: `restarted “${b.dataset.from}” of ${r.workflow}`, detail: `${id} · retry_of ${r.id} · from ${b.dataset.from}`, run: id }); S.save(); UI.refreshChrome(); UI.go('#/runs/' + id); UI.toast(`Restarted “${esc(b.dataset.from)}”`, 'the stopped run links to it', 'run'); }); });
+  // one retry at a time (r5 major 12: Retry worked twice and two retries ran side by side); a retry in progress is
+  // opened instead
+  const runningRetry = (r) => D.runs.find((x) => x.retry_of === r.id && x.status === 'run');
   UI.act('retry', (b) => {
-    const r = D.runs.find((x) => x.id === b.dataset.run), steps = graphOf(r);
+    const r = D.runs.find((x) => x.id === b.dataset.run), steps = graphOf(r), busy = runningRetry(r);
+    if (busy) { UI.toast('It’s already being retried', `opened the retry that’s running (${esc(busy.id)})`, 'run'); UI.go('#/runs/' + busy.id); return; }
+    const failedAt = r.failed_step || (UI.runRecord(r) || {}).failAt;
     UI.form({ caps: `${esc(r.workflow.replace(/^bot:/, ''))}${UI.runTarget(r) ? ' on ' + UI.runTarget(r) : ''}`, title: 'Retry from a step', intro: 'Re-runs the pinned trigger. Steps before the chosen one are replayed from their recorded outputs; nothing they did is repeated.',
-      fields: [{ k: 'from', type: 'enum', label: 'Resume from', req: true, options: steps.map((s) => [s.id, s.id + (s.id === (r.failed_step || b.dataset.from) ? ' (selected)' : '')]).concat([['$start', 'the beginning']]), def: b.dataset.from || r.failed_step || (steps[0] || {}).id }, { k: 'force', type: 'bool', label: 'Force replay', on: 'also re-run steps that already succeeded' }],
+      fields: [{ k: 'from', type: 'enum', label: 'Start again from', req: true, options: steps.map((s) => [s.id, s.id + (s.id === failedAt ? ' (where it failed)' : '')]).concat([['$start', 'the beginning']]), def: b.dataset.from || failedAt || (steps[0] || {}).id },
+        { k: 'note', type: 'text', label: 'Tell the agent', opt: true, ph: 'e.g. the test expects half-even rounding', help: 'Optional. It reads this before it starts again.' },
+        { k: 'force', type: 'bool', label: 'Run the earlier steps again too', on: 'otherwise they’re replayed from what they recorded' }],
       submit: 'Retry', submitIcon: 'play',
       onSubmit: (v) => {
-        const id = 'r-' + Math.random().toString(16).slice(2, 6); const from = v.from === '$start' ? 0 : steps.findIndex((s) => s.id === v.from);
-        D.runs.unshift({ id, workflow: r.workflow, trigger: r.trigger + ' (retry)', ...UI.eventFields(r), status: 'run', started: now(), cost: 0, retry_of: r.id, steps: steps.map((s, i) => ({ id: s.id, status: i < from && !v.force ? 'ok' : i === from ? 'run' : 'idle', duration_ms: i < from ? 900 : 0, cost_usd: 0, started: i === from ? now() : undefined })) });
+        if (runningRetry(r)) { UI.go('#/runs/' + runningRetry(r).id); return; } // a second click
+        const id = 'r-' + Math.random().toString(16).slice(2, 6); const from = v.from === '$start' ? 0 : steps.findIndex((s) => s.id === v.from); r.retried_by = id;
+        D.runs.unshift({ id, workflow: r.workflow, trigger: r.trigger + ' (retry)', ...UI.eventFields(r), status: 'run', started: now(), cost: 0, retry_of: r.id, retry_from: v.from === '$start' ? (steps[0] || {}).id : v.from, note: (v.note || '').trim() || undefined, by: 'operator:ops', steps: steps.map((s, i) => ({ id: s.id, status: i < from && !v.force ? 'ok' : i === from ? 'run' : 'idle', duration_ms: i < from ? 900 : 0, cost_usd: 0, started: i === from ? now() : undefined })) });
         D.audit.unshift({ ts: now(), event: 'run_retry', who: 'operator:ops', detail: `${id} · retry_of ${r.id} · from ${v.from}${v.force ? ' · force_replay' : ''}`, run: id });
-        S.save(); UI.refreshChrome(); UI.go('#/runs/' + id);
+        S.save(); UI.refreshChrome(); UI.go('#/runs/' + id); UI.toast(`Retrying from “${esc(v.from === '$start' ? 'the beginning' : v.from)}”`, 'the first run links to it', 'run');
       } });
   });
 
@@ -197,9 +205,13 @@
   let LOG = D.liveLog;
   // each running run streams its own workflow's lines (never another workflow's fixture): ci-fixer's live tail, or the
   // lines its run record writes for each step it has reached
-  const logOf = (run) => { if (run.workflow === 'ci-fixer') return D.liveLog;
+  // a run's log is its own (r5 major 12: a retry's log was the fixture's, timed before it started, with another repo's
+  // identity): the agent's identity names this run's repository, and the times start when its step did
+  const ownRepo = (run, lines) => (run.repo ? lines.map(([a, k, t]) => [a, k, String(t).replace(/(identity agent:[\w-]+@)[\w./-]+/, `$1${run.repo}`)]) : lines);
+  const logOf = (run) => { if (run.workflow === 'ci-fixer') return ownRepo(run, D.liveLog);
     const rec = UI.runRecord(run); return rec.steps.filter((s) => s.status !== 'idle').flatMap((s) => (s.status === 'run' && (D.liveLogs || {})[run.workflow] ? D.liveLogs[run.workflow] : s.log).map(([k, t]) => [s.id, k, t])); };
-  const logLine = ([src, kind, text], i, fresh) => `<span class="ln ${kind === 'err' ? 'fail' : ''}${fresh ? ' new' : ''}"><i>${new Date(Date.now() - (LOG.length - i) * 17000).toTimeString().slice(0, 8)}</i><span class="src">${esc(src)}</span> ${esc(text)}</span>`;
+  let LOG_T0 = 0; // when the running step started: its first line is then, never before
+  const logLine = ([src, kind, text], i, fresh) => `<span class="ln ${kind === 'err' ? 'fail' : ''}${fresh ? ' new' : ''}"><i>${new Date(Math.min(Date.now(), (LOG_T0 || Date.now() - LOG.length * 17000) + i * Math.max(1000, Math.min(17000, (Date.now() - (LOG_T0 || Date.now() - LOG.length * 17000)) / Math.max(1, LOG.length))))).toTimeString().slice(0, 8)}</i><span class="src">${esc(src)}</span> ${esc(text)}</span>`;
   /** Only a step with a live paseo session has somewhere to open: an agent on a paseo runtime, a hand-off, a bot's home session. */
   const paseoOf = (r, s) => (s.kind === 'agent' && /^paseo/.test(String(s.what || 'paseo'))) || s.kind === 'bot' || s.kind === 'handoff' || String(r.workflow).startsWith('bot:');
   function stepCard(r, rec, s) {
@@ -221,13 +233,15 @@
     if (!r) return `<div class="page dl-page">${UI.crumbs([['Activity', '#/activity'], ['A run that isn’t here']])}${UI.empty({ title: `There is no run ${esc(id)}`, body: 'It may be older than the 14 days runs are kept.', action: '<a class="btn" href="#/activity">Back to Activity</a>' })}</div>`;
     const rec = UI.runRecord(r), sel = dv.sel[r.id] || (r.steps.find((x) => x.status === 'run') || {}).id || rec.failAt || rec.waitAt || (rec.steps.find((x) => x.kind === 'agent') || rec.steps[rec.steps.length - 1]).id, s = rec.steps.find((x) => x.id === sel) || rec.steps[0];
     const story = UI.runStory(r), audit = UI.runAudit(r), same = D.runs.filter((x) => x.workflow === r.workflow && x.id !== r.id && x.status !== 'run'), inNeeds = D.attention.some((a) => a.href === '#/runs/' + r.id);
-    if (r.status === 'run') LOG = logOf(r);
+    if (r.status === 'run') { LOG = logOf(r); const rs = r.steps.find((x) => x.status === 'run'); LOG_T0 = new Date((rs && rs.started) || r.started).getTime(); }
     const title = `${esc(UI.runTitle(r))}${UI.runTarget(r) ? ` on ${esc(UI.runTarget(r))}` : ''}`;
-    const lead = story ? story.happened : r.status === 'run' ? `${trigWords(r)} ${UI.agoText(r.started)}; now on step <b>${esc((r.steps.find((x) => x.status === 'run') || s).id)}</b>.` : r.status === 'ok' ? `Finished in ${UI.runDur(r)}; every step passed.` : '';
+    const orig = r.retry_of && D.runs.find((x) => x.id === r.retry_of), retry = r.retried_by && D.runs.find((x) => x.id === r.retried_by);
+    const lead = r.retry_of && r.status === 'run' ? `You retried it from “${esc(r.retry_from || '')}” ${UI.agoText(r.started)}${r.note ? `, telling the agent: “${esc(r.note)}”` : ''}. The first run: <a class="dl-link" href="#/runs/${esc(r.retry_of)}">${orig ? esc(UI.runTitle(orig)) : esc(r.retry_of)}</a>, ${orig ? esc(trigWords(orig).replace(/^./, (c) => c.toLowerCase())) : ''} ${orig ? UI.agoText(orig.started) : ''}. Now on step <b>${esc((r.steps.find((x) => x.status === 'run') || s).id)}</b>.` : story ? story.happened : r.status === 'run' ? `${trigWords(r)} ${UI.agoText(r.started)}; now on step <b>${esc((r.steps.find((x) => x.status === 'run') || s).id)}</b>.` : r.status === 'ok' ? `Finished in ${UI.runDur(r)}; every step passed.` : '';
     const links = UI.itemLinks(r), prBtn = links.length ? `<a class="btn secondary" href="#/runs/${r.id}" ${UI.off(`${links[0].label} (not in the prototype)`)}>${icon('external')}${esc(links[0].label.replace(/ on \w+$/, ''))}</a>` : '';
     // one recommended next step, with its reason in a line; everything else in the ⋯ menu
     const at = rec.steps.findIndex((x) => x.id === rec.failAt), maker = at > 0 ? rec.steps.slice(0, at).reverse().find((x) => x.diff) : null, failed = rec.steps[at];
-    const rec1 = r.status === 'run' ? null : ['fail', 'stopped', 'idle'].includes(r.status)
+    // the first run of a retry points to it, and that is its one next step (r5 major 12)
+    const rec1 = retry && r.status !== 'run' ? { href: `#/runs/${retry.id}`, label: retry.status === 'run' ? 'Open the retry' : 'Open its retry', why: `You retried it ${UI.agoText(retry.started)} from “${esc(retry.retry_from || '')}”; it ${retry.status === 'run' ? 'is running now' : retry.status === 'ok' ? 'passed' : retry.status === 'fail' ? 'failed too' : 'stopped'}.` } : r.status === 'run' ? null : ['fail', 'stopped', 'idle'].includes(r.status)
       ? (maker && failed && failed.kind !== 'agent' ? { act: `data-act="retry" data-run="${r.id}" data-from="${esc(maker.id)}"`, label: `Retry from “${esc(maker.id)}”…`, why: `“${esc(rec.failAt)}” failed on the change “${esc(maker.id)}” made, so redo that step; its agent sees the failure.` }
         : r.status === 'idle' ? { act: `data-act="retry" data-run="${r.id}" data-from=""`, label: 'Run it now…', why: 'It was held before any step ran.' } : { act: `data-act="retry" data-run="${r.id}" data-from="${esc(rec.failAt || '')}"`, label: `Retry${rec.failAt ? ` from “${esc(rec.failAt)}”` : ''}…`, why: '' })
       : r.status === 'wait' ? { href: '#/attention', label: 'Answer it', why: 'It’s waiting for your answer before it goes on.' } : null;

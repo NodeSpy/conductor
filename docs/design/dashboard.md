@@ -294,6 +294,14 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
   Apply for a widening change, sign in, enrol, the signing sheet's own button) and on the passkeys themselves.
   Opening, reviewing and navigating never carry it; "your passkey signs this" is said in the signing sheet, at the
   point of signing (`passkey.spec.js`).
+- **Retry is one at a time and says what it is.** Retry opens a dialog that names the step where it failed ("fix
+  (where it failed)"), takes an optional note to the agent, and starts one retry: while it runs, Retry on the first run
+  opens it instead, and the first run's one next step is "Open the retry". The retry says it's a retry ("You retried it
+  from “fix” 2 min ago, telling the agent …; the first run: …"), and its log is its own: its times start when its step
+  did, and the agent's identity names its repository.
+- **Nothing is lost, nothing widens by one click.** Typing in a page's search never loses what you typed in an entry
+  you're editing, nor the search's focus; turning the sandbox off asks first, says what it means, and is staged like
+  any change.
 - **A staged change is not in force, and nothing says it is.** Until you apply it, every place shows what's in force:
   on What it can do a move stays in its group marked "→ Asks you first · not applied yet" (a new item: "New · not
   applied yet"; a removal: struck through), with "Your change isn't applied yet" and Review and apply at the top; a new

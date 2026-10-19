@@ -411,12 +411,16 @@ ${D.pending.filter((x) => x.coll === 'connectors' && x.before == null).map((x) =
         ${D.containers.length ? `<ul class="dl-list">${D.containers.map((c) => `<li class="acc-row"><div class="dl-nt"><b>${/^bot:/.test(c.identity) ? UI.nm(c.identity) : esc(c.identity.replace(/^runtime:/, 'runtime '))}</b><span class="dl-why">${c.stopped ? 'stopped; the next run starts it again' : `running for ${UI.humanSpan(c.up)}`} · ${c.size} of files</span></div><span class="dl-na">${c.stopped ? '' : `<button class="btn sm secondary" data-act="ctr-stop" data-i="${c.identity}">Stop</button>`}<button class="icon-btn" data-act="ctr-more" data-i="${c.identity}" aria-label="More for ${esc(c.identity)}">${icon('more')}</button></span></li>`).join('')}</ul>` : '<p class="dl-sub">No containers are running.</p>'}</section>
       <details class="dl-card dl-tech-d acc-tech"><summary>${icon('chev')}Details</summary><dl class="dl-facts"><dt>Identities</dt><dd>${d.sandbox.identities}, each with its own home under <span class="mono">&lt;state&gt;/agent-state</span></dd><dt>Pushing code</dt><dd>fast-forward only, re-signed with your SSH key</dd><dt>The dashboard</dt><dd>its own addresses are always refused by the egress proxy, whatever the list says</dd><dt>Backend</dt><dd class="mono">${d.sandbox.backend} · ${d.sandbox.containers} containers</dd></dl></details>
     </div></div>`; };
-  UI.act('sb-toggle', () => editSb((c) => (c.agents = c.agents === 'off' ? 'on' : 'off')));
+  // turning the sandbox off is a widening: say what it means and ask first (r5 major 12: one click turned it off);
+  // turning it on needs no confirm
+  UI.act('sb-toggle', () => { const cur = (S.staged('sandbox', 'sandbox') || D.sandboxCfg || {}).agents;
+    if (cur === 'off') return editSb((c) => (c.agents = 'on'));
+    UI.confirm({ title: 'Turn the sandbox off?', body: 'Agents would run as you, with your files and your network: nothing confines what they touch. It’s staged like any change, and applying it asks for your passkey.', ok: 'Stage turning it off', danger: true })
+      .then((ok) => { if (ok) editSb((c) => (c.agents = 'off')); }); });
   UI.act('sb-kind', (el) => editSb((c) => (c.backend = el.value)));
   UI.act('ctr-stop', (b) => { const c = D.containers.find((x) => x.identity === b.dataset.i); if (c) c.stopped = true; S.save(); UI.rerender(); UI.toast(`Stopped ${b.dataset.i.replace(/^\w+:/, '')}’s container`, 'its files are kept; the next run starts it again', 'ok'); });
   UI.act('ctr-more', (b) => UI.menu(b, [['Remove the container and its files…', 'trash', 'ctr-archive', `data-i="${b.dataset.i}"`]]));
   const editSb = (fn) => { const c = clone(S.staged('sandbox', 'sandbox')); fn(c); S.stage('sandbox', 'sandbox', c); UI.refreshChrome(); UI.rerender(); };
-  UI.act('sb-agents', (b) => editSb((c) => (c.agents = b.dataset.v)));
   UI.act('sb-backend', (b) => editSb((c) => (c.backend = b.dataset.v)));
   UI.act('sb-eg-del', (b) => editSb((c) => (c.egress = (c.egress || []).filter((e) => e !== b.dataset.e))));
   UI.act('sb-eg-add', () => { const v = UI.$('#sb-eg-new').value.trim(); if (!v) { UI.$('#sb-eg-new').focus(); UI.$('#sb-eg-new').classList.add('shake'); return; } editSb((c) => { c.egress = c.egress || []; if (!c.egress.includes(v)) c.egress.push(v); }); });

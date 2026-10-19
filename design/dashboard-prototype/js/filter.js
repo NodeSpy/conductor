@@ -103,7 +103,11 @@
       const op = root.querySelector('.fb-pills'), np = nb.querySelector('.fb-pills'); if (op) op.remove(); if (np) input.before(np);
       const x = root.querySelector('.fb-x'), nx = nb.querySelector('.fb-x'); if (x && !nx) x.remove(); else if (!x && nx) input.after(nx);
       if (keepText) { input.value = text; if (focused) input.setSelectionRange(pos, pos); } else input.value = cfg.state.q || '';  root.querySelector('.fb-search').classList.toggle('has-q', !!FB.serialize(cfg)); }
-    if (cfg.onChange) cfg.onChange(cfg.state); };
+    const was = root && root.querySelector('.fb-in'), wasFocused = was && document.activeElement === was, wasText = was && was.value, wasPos = was && was.selectionStart;
+    if (cfg.onChange) cfg.onChange(cfg.state);
+    // a page that redraws on a change (Memory) replaced the field you're typing in: the new one takes the focus, the text
+    // and the caret, so typing goes on (r5 major 12: the second letter went nowhere, or into the entry being edited)
+    if (wasFocused) { const ni = document.querySelector(`.fb[data-fb="${cfg.id}"] .fb-in`); if (ni && ni !== document.activeElement) { if (keepText) ni.value = wasText; ni._quiet = true; ni.focus(); try { ni.setSelectionRange(wasPos, wasPos); } catch (e) {} } } };
   FB.clear = (cfg) => { qf(cfg).forEach((f) => { cfg.state[f.k] = f.multi ? [] : f.def || ''; }); cfg.state.q = ''; commit(cfg); };
 
   /* ---------- the searchable select menu ---------- */
@@ -206,7 +210,7 @@
   // typing searches the free text as you go; a qualifier waits for a pick or Enter
   document.addEventListener('input', (e) => { if (!e.target.matches('.fb-in')) return; const cfg = cfgOf(e.target); if (!cfg) return; const q = freeText(e.target.value); if (q !== (cfg.state.q || '')) { cfg.state.q = q; commit(cfg, true); } suggest(cfg, e.target); });
   const applyTyped = (cfg, input) => { const rest = FB.apply(cfg, input.value); cfg.state.q = freeText(rest); input.value = rest; commit(cfg, true); };
-  document.addEventListener('focusin', (e) => { if (e.target.matches('.fb-in')) { const cfg = cfgOf(e.target); if (cfg) suggest(cfg, e.target); } });
+  document.addEventListener('focusin', (e) => { if (e.target.matches('.fb-in')) { if (e.target._quiet) { e.target._quiet = false; return; } const cfg = cfgOf(e.target); if (cfg) suggest(cfg, e.target); } }); // a refocus after a redraw opens nothing
   document.addEventListener('focusout', (e) => { if (e.target.matches('.fb-in')) setTimeout(() => { if (document.activeElement !== e.target) hideAc(e.target); }, 120); });
   document.addEventListener('keydown', (e) => { if (!e.target.matches('.fb-in')) return; const cfg = cfgOf(e.target), input = e.target, ac = input._ac;
     const items = [...input.parentNode.querySelectorAll('.fb-ac li[data-i]')];
