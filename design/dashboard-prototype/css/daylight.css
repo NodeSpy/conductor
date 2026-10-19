@@ -986,3 +986,16 @@ html .cm-in .cm-send { width: 44px; height: 44px; min-height: 44px; border-radiu
 /* the phone tab bar's count is the brand's badge too: 18px (r5) */
 @media (max-width: 720px) { .tabbar a .count.hot { height: var(--count-badge-height); min-width: var(--count-badge-min-width); line-height: var(--count-badge-height); padding: 0 var(--count-badge-pad-x); } }
 .tk-view, .tk-view > button { border-radius: var(--segmented-radius); } /* the view toggle is a pill (BRAND.md, a9477b9c) */
+/* round-5 minors (phone and layout) */
+/* a chat's header keeps to two lines on a phone: its tagline and what it's working on clamp (the whole line on hover) */
+@media (max-width: 720px) { .cv-th .cv-tt .dl-sub { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; } }
+/* Needs you on a phone: the kinds are one row of compact counts you can scroll, so the first item is on the first screen */
+@media (max-width: 720px) { #need-tiles > * { display: flex !important; flex-wrap: nowrap !important; gap: 8px; overflow-x: auto; scrollbar-width: none; margin-bottom: 12px; grid-template-columns: none !important; } #need-tiles .dl-tile { flex: none; min-width: 0; min-height: 44px; padding: 8px 12px; align-items: center; display: flex; align-items: baseline; gap: 6px; } #need-tiles .dl-tile > b { font-size: 20px; order: -1; margin: 0; } #need-tiles .dl-tile > .d { display: none; } }
+/* Tickets on a phone: the status chip names the column, so the column doesn't name itself again */
+@media (max-width: 720px) { .tk-board > .tk-col > .tk-colh { display: none; } }
+/* an approval: a count of 0 is quiet; on a phone, Why comes before the counts */
+.dl-changes > div.zero { background: none; border: var(--border-width) dashed var(--color-border-subtle); } .dl-changes > div.zero > b, .dl-changes > div.zero > span { color: var(--color-text-tertiary); }
+@media (max-width: 720px) { .dl-proposal .prop-body { display: flex; flex-direction: column; } .dl-proposal .prop-body > .dl-pwhy:not(.prop-what) { order: -1; margin-bottom: 14px; } }
+/* a diff on a phone wraps its lines rather than run past the screen */
+/* a diff wider than the screen scrolls, and fades at the edge it scrolls past */
+.diff.scrolls:not(.at-end) { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }

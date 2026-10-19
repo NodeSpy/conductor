@@ -239,6 +239,12 @@
     if (!hidden.length) more.remove(); }); };
   (UI.afterRender = UI.afterRender || []).push(() => { UI.fitFacts(); setTimeout(() => UI.fitFacts(), 200); });
   window.addEventListener('resize', () => UI.fitFacts()); if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => UI.fitFacts()); // widths change when the fonts arrive
+  /* text cut short with an ellipsis says the whole of itself on hover (r5 minor: 'Working on: Record db-prod-1 fail…',
+     chat previews, card titles had no way to read the rest) */
+  UI.titleTruncated = (root = document.querySelector('#main')) => { if (!root) return; root.querySelectorAll('*').forEach((e) => { if (e.children.length > 2 || e.title || !e.textContent.trim()) return; const cs = getComputedStyle(e); if (cs.textOverflow !== 'ellipsis' && !(cs.webkitLineClamp && cs.webkitLineClamp !== 'none')) return; if (e.scrollWidth > e.clientWidth + 1 || e.scrollHeight > e.clientHeight + 1) e.title = e.textContent.replace(/\s+/g, ' ').trim(); }); };
+  (UI.afterRender = UI.afterRender || []).push(() => setTimeout(() => UI.titleTruncated(), 60));
+  // anything that scrolls sideways says so at its edge (a diff on a phone, r5)
+  (UI.afterRender = UI.afterRender || []).push(() => document.querySelectorAll('#main .diff').forEach((el) => { const f = () => { el.classList.toggle('scrolls', el.scrollWidth > el.clientWidth + 1); el.classList.toggle('at-end', el.scrollLeft + el.clientWidth >= el.scrollWidth - 2); }; el.addEventListener('scroll', f, { passive: true }); f(); }));
   UI.factsLine = (xs) => { xs = (xs || []).filter((f) => f && f.value); if (!xs.length) return '';
     return `<span class="fx">${xs.map((f) => { if (f.icon === 'obj-bot' && UI.botName && f.value) f = Object.assign({}, f, { value: UI.botName(String(f.value)) }); /* a bot is named by its display name (r5-9) */ const ext = /^https?:/.test(f.href || ''), inner = `${f.prod ? `<i class="fx-g fx-prod">${PROD_SQ}</i>` : f.glyph ? f.glyph : f.tone === 'danger' ? `<span class="fx-tile">${UI.icon(f.icon)}</span>` : UI.icon(f.icon || 'dot')}${UI.esc(f.value)}`;
       return `<span class="fx-i${f.href ? ' ln' : ''}${f.risky ? ' hi' : ''}${f.prod ? ' prod t-warning' : ''}${f.tone ? ' t-' + f.tone : ''}" data-pri="${f.pri || 2}"${f.label ? ` title="${UI.esc(f.label)}"` : ''}${f.href ? ` role="link" tabindex="0" data-fx-href="${UI.esc(f.href)}"${ext ? ' data-fx-ext="1"' : ''}` : ''}>${inner}</span>`; }).join('')}</span>`; };

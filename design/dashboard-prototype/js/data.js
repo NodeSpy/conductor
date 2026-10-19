@@ -778,7 +778,7 @@ steps:
   };
   tk.proposals = [
     { id: 'k4', bot: 'platform-sre', kind: 'knowledge', to: 'knowledge/alb.md', summary: 'ALB deregistration delay is 30s on every target group', status: 'pending', at: new Date(Date.now() - 25 * 60000).toISOString(), case: 'c29',
-      content: fm({ kind: 'knowledge', title: 'ALB', statement: 'Shared target groups: deregistration_delay is 30s on every target group; check it before blaming the app.', applies_to: ['alb', 'acme/web'], source: 'modules/web/alb.tf (task c29)', confidence: 'high' }, '') },
+      content: fm({ kind: 'knowledge', title: 'ALB', statement: 'Shared target groups: deregistration_delay is 30s on every target group; check it before blaming the app.', applies_to: ['alb', 'acme/web'], source: 'modules/web/alb.tf and the SEV2 latency ticket', confidence: 'high' }, '') },
     { id: 'k3', bot: 'web-triage', kind: 'knowledge', to: 'knowledge/safari-18-flex-gap.md', summary: 'Safari 18 flex gap bug: use margin fallback in checkout', status: 'pending', at: new Date(Date.now() - 55 * 60000).toISOString(), case: 'c33',
       content: fm({ kind: 'knowledge', title: 'Safari 18 flex gap', statement: 'Safari 18 mis-sizes flex gap inside buttons; checkout uses a margin fallback.', applies_to: ['acme/web', 'safari'], source: 'reproduced on the ticket “Checkout button misaligned on Safari”', confidence: 'medium' }, '') },
     { id: 'k5', bot: 'web-triage', kind: 'runbook', to: 'runbooks/checkout-errors.md', summary: 'Runbook for checkout 5xx bursts', status: 'pending', at: new Date(Date.now() - 70 * 60000).toISOString(), case: 'c33',

@@ -15,10 +15,12 @@ test('Needs you: kind tiles match Home and the badge, filter on click, and say w
   expect(sum).toBe(badge);
   // the same tile as Home's: the same padding, number and label type, and width in the same grid
   const style = (t) => { const cs = getComputedStyle(t); return [cs.padding, getComputedStyle(t.querySelector('b')).fontSize, getComputedStyle(t.querySelector('.dl-lbl')).fontSize, Math.round(t.getBoundingClientRect().width)]; };
-  const h = await tiles.first().evaluate(style);
-  await go(page, '#/overview');
-  const hh = await page.locator('.dl-glance .dl-tile').first().evaluate(style);
-  expect(h).toEqual(hh);
+  if (page.viewportSize().width > 720) { const h = await tiles.first().evaluate(style);
+    await go(page, '#/overview');
+    const hh = await page.locator('.dl-glance .dl-tile').first().evaluate(style);
+    expect(h).toEqual(hh);
+  } else { // a phone: the kinds are one compact row, so the first item is on the first screen (r5)
+    expect(await page.locator('#need-body li, #need-body .dl-need').first().evaluate((e) => e.getBoundingClientRect().top < innerHeight - 120)).toBe(true); }
   await go(page, '#/attention');
   const first = tiles.first(), n = +(await first.locator('b').textContent());
   await first.click();
