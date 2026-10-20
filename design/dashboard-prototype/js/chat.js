@@ -113,6 +113,14 @@
   const thumb = (src) => new Promise((res) => { const im = new Image(); im.onload = () => { const s = Math.min(1, 640 / Math.max(im.width, im.height)), c = document.createElement('canvas'); c.width = Math.max(1, im.width * s); c.height = Math.max(1, im.height * s);
     try { c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', 0.8)); } catch (e) { res(src); } }; im.onerror = () => res(src); im.src = src; });
   UI.chatAddFiles = addFiles;
+  /** The chat's attach rules wherever else a file is attached (a memory entry's evidence): the same types, the same size
+      limit and the same thumbnails, uploaded the same way (POST …/attachments → an id). Resolves {a} or {err}. */
+  UI.chatAccept = ACCEPT;
+  UI.attachFile = (f) => new Promise((res) => { const k = typeOf(f), name = f.name || 'file';
+    if (!k) return res({ err: `${name} wasn’t attached: only images, PDF and text files can be attached` });
+    if (f.size > LIMITS.bytes) return res({ err: `${name} wasn’t attached: it’s ${UI.bytes(f.size)}, and the limit is ${UI.bytes(LIMITS.bytes)} each` });
+    const a = { kind: k, name, mime: f.type || 'text/plain', size: f.size, id: 'att_' + Math.random().toString(16).slice(2, 6) };
+    if (k === 'image' && f.size && typeof FileReader !== 'undefined') { const r = new FileReader(); r.onload = () => thumb(r.result).then((t) => { a.thumb = t; res({ a }); }); r.onerror = () => res({ a }); r.readAsDataURL(f); } else res({ a }); });
   const botOf = () => (UI.$('.cm-comp') || {}).dataset?.bot;
   // the paperclip opens what you can attach (62): a file, a photo, a link, a vault item (its reference; the value is
   // never shown), a run or a ticket; on a phone the same menu is an action sheet

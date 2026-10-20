@@ -756,7 +756,7 @@ steps:
   const D = window.D;
   const fm = (o, body) => '---\n' + YAML.stringify(o).replace(/\n?$/, '\n') + '---\n' + (body || '');
   D.memory.files = {
-    'knowledge/db-prod-1.md': fm({ kind: 'knowledge', title: 'db-prod-1', statement: 'Primary Postgres for the platform services (acme/api, acme/web): Postgres 16, Multi-AZ, db.r6g.2xlarge.', applies_to: ['db-prod-1', 'postgres', 'acme/api'], source: 'RDS console; the failover drill on 2026-10-16', confidence: 'high' },
+    'knowledge/db-prod-1.md': fm({ kind: 'knowledge', title: 'db-prod-1', statement: 'Primary Postgres for the platform services (acme/api, acme/web): Postgres 16, Multi-AZ, db.r6g.2xlarge.', applies_to: ['db-prod-1', 'postgres', 'acme/api'], evidence: [{ note: 'RDS console during the failover drill' }, { ticket: 'c31' }, { run: 'r-7f3a' }], confidence: 'high' },
       '- **Failover drill:** 2026-10-16 — promoted standby in 48s; app reconnect\n  storm capped by pgbouncer `max_client_conn`. No data loss.\n\nSee [[runbooks/page-triage]] and [[runbooks/latency]].\n'),
     'knowledge/infra-map.md': fm({ kind: 'knowledge', title: 'Infra map', statement: 'api runs on ECS in us-east-1 behind the shared ALB; web is an EC2 ASG on launch template web.', applies_to: ['acme/api', 'acme/web', 'nat'], source: 'terraform state, modules/web and modules/api', confidence: 'high' }, '- NAT gateways: api, web, data (owners: platform)\n'),
     'knowledge/alb.md': fm({ kind: 'knowledge', title: 'ALB', statement: 'deregistration_delay is 30s on every target group.', applies_to: ['alb', 'acme/web'], source: 'modules/web/alb.tf', confidence: 'high' }, ''),

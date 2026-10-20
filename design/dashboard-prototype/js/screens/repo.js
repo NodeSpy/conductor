@@ -49,7 +49,7 @@
   const F = (k, type, o = {}) => Object.assign({ k, type }, o);
   const KINDS = (UI.KINDS = {
     knowledge: { id: 'knowledge', label: 'Knowledge', one: 'knowledge entry', icon: 'sparkle', dir: 'knowledge', repos: ['team', 'bot'], body: 'What is true, and why you believe it', template: '',
-      fields: [F('title', 'string', { req: true }), F('applies_to', 'list', { label: 'Applies to', ph: 'service or resource', help: 'Services and resources this is about. Used to filter and to find it.' }), F('evidence', 'text', { req: true, rows: 2, label: 'Evidence', help: 'Why you believe it: a ticket, a file, a dashboard, a test.' }), F('confidence', 'enum', { req: true, options: ['low', 'medium', 'high'], def: 'medium' })],
+      fields: [F('title', 'string', { req: true }), F('applies_to', 'list', { label: 'Applies to', ph: 'service or resource', help: 'Services and resources this is about. Used to filter and to find it.' }), F('evidence', 'evidence', { req: true, label: 'Evidence', help: 'Why you believe it: a ticket, a run, a pull request, a file, a link or a note.' }), F('confidence', 'enum', { req: true, options: ['low', 'medium', 'high'], def: 'medium' })],
       who: { team: 'You write directly; bots promote from their memory, with your approval.', bot: 'You and the bot write directly.' } },
     runbook: { id: 'runbook', label: 'Runbooks', one: 'runbook', icon: 'workflows', dir: 'runbooks', repos: ['team', 'bot'], body: 'Notes on the procedure',
       fields: [F('title', 'string', { req: true }), F('when_to_use', 'text', { req: true, rows: 2, label: 'When to use', help: 'The trigger or the symptoms.' }), F('prerequisites', 'list', { ph: 'access, a change window, a tool' }), F('steps', 'steps', { req: true }), F('verification', 'text', { req: true, rows: 2, help: 'How you know it worked.' }), F('rollback', 'text', { req: true, rows: 2, help: 'How to undo it, or "nothing to roll back".' }), F('owner', 'string', { req: true, ph: 'a bot, a team or a person' })],
@@ -84,12 +84,13 @@
     if (declared && declared !== (kind.coll || kind.id)) e.push(`kind: says "${declared}", but ${kind.dir}/ holds ${kind.label.toLowerCase()}`);
     kind.fields.forEach((f) => {
       const v = fm[f.k], empty = v == null || v === '' || (Array.isArray(v) && !v.length);
-      if (f.req && empty) { e.push(`${f.k}: missing required field (${f.type === 'steps' ? 'at least one step' : f.type})`); return; }
+      if (f.req && empty) { e.push(`${f.k}: missing required field (${f.type === 'steps' ? 'at least one step' : f.type === 'evidence' ? 'at least one piece of evidence' : f.type})`); return; }
       if (empty) return;
       if (f.type === 'string' && (typeof v !== 'string' || /\n/.test(v))) e.push(`${f.k}: want one line`);
       if (f.type === 'enum' && !f.options.includes(v)) e.push(`${f.k}: ${v} is not one of ${f.options.join(', ')}`);
       if ((f.type === 'list' || f.type === 'steps') && !Array.isArray(v)) e.push(`${f.k}: want a list`);
       else if (f.type === 'list' || f.type === 'steps') v.forEach((x, i) => { if (typeof x !== 'string' || !x.trim()) e.push(`${f.k}: item ${i + 1}: want a non-empty string`); });
+      if (f.type === 'evidence' && typeof v !== 'string') { if (!Array.isArray(v)) e.push(`${f.k}: want text or a list`); else v.forEach((x, i) => { const k = x && typeof x === 'object' ? Object.keys(EVK).filter((y) => x[y] != null) : []; if (k.length !== 1 || !String(x[k[0]]).trim()) e.push(`${f.k}: item ${i + 1}: want one of ${Object.keys(EVK).join(', ')}`); }); }
       if (f.type === 'number' && typeof v !== 'number') e.push(`${f.k}: want a number`);
       if (f.type === 'bool' && typeof v !== 'boolean') e.push(`${f.k}: want true or false`);
     });
@@ -175,7 +176,7 @@
   function openEntry(r, kind, entry, draft) {
     ev.repo = r.id; ev.kind = kind.id; ev.key = entry ? entry.key : null; ev.isNew = !entry; ev.conflict = null; ev.proposal = null; ev.blame = false; ev.view = 'kinds';
     const d = draft || (entry ? { fm: JSON.parse(JSON.stringify(entry.fm)), body: entry.body || '', free: entry && kind.free ? entry.path.slice(kind.dir.length + 1).replace(/\.md$/, '') : '' } : { fm: {}, body: kind.template || '', free: '' });
-    ev.draft = d; ev.steps = stepsFrom(d.fm);
+    ev.draft = d; ev.steps = stepsFrom(d.fm); ev.evidence = evFrom(d.fm.evidence);
     ev.base = draft && !entry ? serialize(kind, { fm: {}, body: kind.template || '', free: '' }) : entry ? serialize(kind, { fm: entry.fm, body: entry.body || '', free: d.free }) : serialize(kind, d);
     ev.baseSha = entry ? R.version(r, entry.path) : null;
     r.open = ev.key; r.openKind = kind.id; S.save();
@@ -183,8 +184,9 @@
   function readDraft(kind) {
     const f = UI.$('#ke-form'); if (!f) return ev.draft;
     syncSteps();
-    const fm = UI.formValues(f, kind.fields.filter((x) => x.type !== 'steps'));
+    const fm = UI.formValues(f, kind.fields.filter((x) => x.type !== 'steps' && x.type !== 'evidence'));
     if (kind.fields.some((x) => x.type === 'steps')) fm.steps = stepsTo(ev.steps);
+    if (kind.fields.some((x) => x.type === 'evidence')) fm.evidence = evTo(ev.evidence);
     const ta = UI.$('#rp-ed .ced-ta'), fr = UI.$('#ke-free');
     return { fm, body: ta ? ta.value : (ev.draft || {}).body || '', free: fr ? fr.value.trim() : '' };
   }
@@ -217,6 +219,45 @@
         <div class="rb-act"><select class="select sm" data-sk="type" data-act-change="rb-type" aria-label="Step ${i + 1}: command or verb"><option value=""${!s.type ? ' selected' : ''}>no command</option><option value="run"${s.type === 'run' ? ' selected' : ''}>run a command</option><option value="verb"${s.type === 'verb' ? ' selected' : ''}>call a verb</option></select>${s.type ? `<input class="input mono" data-sk="arg" value="${esc(s.arg)}" ${s.type === 'verb' ? 'list="rb-verbs" placeholder="connector.verb"' : 'placeholder="the command"'} aria-label="Step ${i + 1}: ${s.type === 'verb' ? 'verb' : 'command'}">` : ''}</div></div>
       <div class="rb-ctl"><button type="button" class="icon-btn sm" ${i ? `data-act="rb-up" data-i="${i}"` : UI.off('Already the first step')} aria-label="Move step ${i + 1} up">↑</button><button type="button" class="icon-btn sm" ${i < ev.steps.length - 1 ? `data-act="rb-down" data-i="${i}"` : UI.off('Already the last step')} aria-label="Move step ${i + 1} down">↓</button><button type="button" class="icon-btn sm" data-act="rb-del" data-i="${i}" aria-label="Remove step ${i + 1}">${icon('trash')}</button></div></div>`).join('') || '<div class="muted small">No steps yet.</div>'}</div>
     <button type="button" class="btn sm" data-act="rb-add">${icon('plus')}Add a step</button><datalist id="rb-verbs">${verbList().map((v) => `<option value="${esc(v)}">`).join('')}</datalist>`;
+  /* Evidence (71): a list of things, not one box of text. Each item is a ticket, a run, a pull request or issue (read
+     through a connection), a file or image (the chat's attach rules; the file is an attachment, the entry keeps its
+     id), a link, or a note. Conductor writes evidence as one string today: a string loads as one note, and one note
+     saves back as that plain string, so existing files are unchanged. */
+  const EVK = { ticket: ['ticket', 'Ticket'], run: ['runs', 'Run'], ref: ['branch', 'Pull request or issue'], file: ['file', 'File or image'], url: ['globe', 'Link'], note: ['edit', 'Note'] };
+  const evKind = (x) => Object.keys(EVK).find((k) => x[k] != null);
+  const evFrom = (v) => (v == null || v === '' ? [] : typeof v === 'string' ? [{ note: v }] : Array.isArray(v) ? v.filter((x) => x && typeof x === 'object' && evKind(x)).map((x) => Object.assign({}, x)) : []);
+  const evTo = (xs) => (!xs.length ? '' : xs.length === 1 && evKind(xs[0]) === 'note' && Object.keys(xs[0]).length === 1 ? xs[0].note : xs.map((x) => Object.assign({}, x)));
+  const refHref = (r) => { const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(r || ''); return m ? `https://github.com/${m[1]}/issues/${m[2]}` : ''; };
+  const evLabel = (x) => { const k = evKind(x);
+    if (k === 'ticket') { const c = (D.cases || []).find((y) => y.id === x.ticket); return c ? c.title : 'A ticket'; }
+    if (k === 'run') { const r = (D.runs || []).find((y) => y.id === x.run); return r ? `${r.workflow} on ${r.repo}${r.number ? ` #${r.number}` : ''}` : 'A run'; }
+    if (k === 'url') { try { const u = new URL(x.url); return u.host + u.pathname.replace(/\/$/, ''); } catch (e) { return x.url; } }
+    return String(x[k]); };
+  UI.evidenceWords = (v) => evFrom(v).map((x) => `${EVK[evKind(x)][1]}: ${evLabel(x)}`).join(' · ');
+  const evChip = (x, i) => { const k = evKind(x), [ic, word] = EVK[k], label = evLabel(x), th = k === 'file' && (D.evThumbs || {})[x.attachment];
+    const href = k === 'ticket' ? caseHref(x.ticket) || '' : k === 'run' ? `#/runs/${x.run}` : k === 'ref' ? refHref(x.ref) : k === 'url' ? x.url : '';
+    const inner = `${th ? `<img src="${esc(th)}" alt="">` : icon(ic)}<span class="ev-t">${esc(label)}</span>`, out = k === 'ref' || k === 'url' ? ' target="_blank" rel="noopener noreferrer"' : '';
+    return `<span class="ev-chip ev-${k}" data-i="${i}" title="${esc(`${word}: ${label}`)}">${href ? `<a href="${esc(href)}"${out}>${inner}</a>` : k === 'note' ? `<button type="button" data-act="ev-note" data-i="${i}" aria-label="Edit the note: ${esc(label)}">${inner}</button>` : `<span>${inner}</span>`}<button type="button" class="ev-x" data-act="ev-rm" data-i="${i}" aria-label="Remove ${esc(word.toLowerCase())}: ${esc(label)}">${icon('x')}</button></span>`; };
+  const evHTML = () => `<div class="ev-list" id="ke-evid">${ev.evidence.map(evChip).join('')}<button type="button" class="btn sm ev-add" data-act="ev-add" aria-haspopup="menu">${icon('plus')}Add evidence</button></div><input type="file" id="ev-file" class="hide" multiple accept="${esc(UI.chatAccept || '')}" aria-label="Attach a file or image as evidence">`;
+  const redrawEv = (focus) => { const w = UI.$('[data-field="evidence"] .ev-wrap'); if (!w) return; w.innerHTML = evHTML(); const fe = UI.$('[data-field="evidence"]'); fe.classList.remove('bad'); (UI.$('.ferr', fe) || {}).textContent = ''; later(); if (focus !== false) { const a = UI.$('.ev-add', w); if (a) a.focus({ preventScroll: true }); } };
+  const evPut = (x) => { if (!ev.evidence.some((y) => JSON.stringify(y) === JSON.stringify(x))) ev.evidence.push(x); redrawEv(); };
+  const evAddBtn = () => UI.$('[data-field="evidence"] .ev-add');
+  UI.act('ev-add', (b) => UI.menu(b, Object.keys(EVK).map((k) => [`${EVK[k][1]}…`, EVK[k][0], 'ev-new', `data-k="${k}"`])));
+  UI.act('ev-new', (b) => { const k = b.dataset.k, at = evAddBtn(); if (!at) return;
+    const have = (kk) => ev.evidence.filter((x) => x[kk] != null).map((x) => x[kk]);
+    if (k === 'ticket') { const xs = (D.cases || []).filter((c) => !have('ticket').includes(c.id)).slice(0, 8); return setTimeout(() => UI.menu(at, xs.length ? xs.map((c) => [esc(c.title), 'ticket', 'ev-put', `data-k="ticket" data-v="${c.id}"`]) : [['No other tickets', 'ticket', 'ev-none', 'aria-disabled="true" data-reason="Every ticket is already here"']]), 0); }
+    if (k === 'run') { const xs = (D.runs || []).filter((r) => !have('run').includes(r.id)).slice(0, 8); return setTimeout(() => UI.menu(at, xs.map((r) => [esc(`${r.workflow} on ${r.repo}${r.number ? ` #${r.number}` : ''} · ${UI.ago ? UI.ago(r.started) + ' ago' : r.id}`), 'runs', 'ev-put', `data-k="run" data-v="${r.id}"`])), 0); }
+    if (k === 'file') return UI.$('#ev-file').click();
+    if (k === 'ref') return UI.form({ title: 'Add a pull request or issue', intro: 'Read through your GitHub connection.', fields: [{ k: 'ref', type: 'string', req: true, label: 'Pull request or issue', ph: 'acme/web#1288', help: 'owner/repo#number' }], submit: 'Add', onSubmit: (v) => { const r = v.ref.trim(); if (!refHref(r)) return 'Write it as owner/repo#number, like acme/web#1288.'; evPut({ ref: r }); } });
+    if (k === 'url') return UI.form({ title: 'Add a link', fields: [{ k: 'url', type: 'string', req: true, label: 'Link', ph: 'https://…', help: 'A dashboard, a doc, a status page' }], submit: 'Add', onSubmit: (v) => { const u = v.url.trim(); if (!/^https?:\/\/\S+\.\S+/.test(u)) return 'Write a full link, starting https://'; evPut({ url: u }); } });
+    if (k === 'note') return UI.form({ title: 'Add a note', fields: [{ k: 'note', type: 'text', req: true, label: 'Note', ph: 'What you saw, and where' }], submit: 'Add', onSubmit: (v) => { evPut({ note: v.note.trim() }); } }); });
+  UI.act('ev-put', (b) => evPut({ [b.dataset.k]: b.dataset.v }));
+  UI.act('ev-rm', (b) => { ev.evidence.splice(+b.dataset.i, 1); redrawEv(); });
+  UI.act('ev-note', (b) => { const i = +b.dataset.i; UI.form({ title: 'Edit the note', edit: true, values: { note: ev.evidence[i].note }, fields: [{ k: 'note', type: 'text', req: true, label: 'Note' }], submit: 'Save note', onSubmit: (v) => { ev.evidence[i] = { note: v.note.trim() }; redrawEv(); } }); });
+  document.addEventListener('change', (e) => { if (e.target.id !== 'ev-file') return; const files = [...e.target.files]; e.target.value = '';
+    Promise.all(files.map((f) => UI.attachFile(f))).then((rs) => { const errs = rs.filter((r) => r.err).map((r) => r.err); D.evThumbs = D.evThumbs || {};
+      rs.filter((r) => r.a).forEach(({ a }) => { if (a.thumb) D.evThumbs[a.id] = a.thumb; ev.evidence.push({ file: a.name, attachment: a.id }); }); S.save(); redrawEv();
+      if (errs.length) { const fe = UI.$('[data-field="evidence"]'); fe.classList.add('bad'); UI.$('.ferr', fe).textContent = errs.join('. '); } }); });
   const redrawSteps = () => { const f = UI.$('[data-field="steps"] .rb-wrap'); if (f) f.innerHTML = stepsHTML(); later(); };
   UI.act('rb-add', () => { syncSteps(); ev.steps.push({ do: '', type: '', arg: '' }); redrawSteps(); const rows = UI.$$('#rb-steps [data-sk="do"]'); if (rows.length) rows[rows.length - 1].focus(); });
   UI.act('rb-del', (b) => { syncSteps(); ev.steps.splice(+b.dataset.i, 1); redrawSteps(); });
@@ -306,7 +347,7 @@
     const errs = ev.isNew ? [] : validate(kind, d.fm);
     const c = kind.id === 'knowledge' || kind.id === 'runbook' ? cites(r, path) : null;
     const blame = ev.blame && !ev.isNew;
-    const fieldsHTML = kind.fields.map((f) => (f.type === 'steps' ? `<div class="field" data-field="steps"><label>Steps <span class="req">*</span></label><div class="rb-wrap">${stepsHTML()}</div><div class="ferr" role="alert"></div></div>` : UI.fieldHTML(f, d.fm[f.k] != null ? d.fm[f.k] : f.def != null && ev.isNew ? f.def : '', 'ke-'))).join('');
+    const fieldsHTML = kind.fields.map((f) => (f.type === 'evidence' ? `<div class="field" data-field="evidence"><label>${esc(f.label)}${f.req ? ' <span class="req">*</span>' : ''}</label><div class="ev-wrap">${evHTML()}</div><div class="hint">${esc(f.help)}</div><div class="ferr" role="alert"></div></div>` : f.type === 'steps' ? `<div class="field" data-field="steps"><label>Steps <span class="req">*</span></label><div class="rb-wrap">${stepsHTML()}</div><div class="ferr" role="alert"></div></div>` : UI.fieldHTML(f, d.fm[f.k] != null ? d.fm[f.k] : f.def != null && ev.isNew ? f.def : '', 'ke-'))).join('');
     return `<div class="panel repo-ed ke" data-kind="${kind.id}">
       <div class="panel-head ed-head">${backBtn()}${UI.label(esc(kind.label), { cls: 'kind-tag', icon: kind.icon })}<b class="grow ellipsis" title="${esc(d.fm.title || d.fm.what || '')}">${ev.isNew ? `New ${esc(kind.one)}` : esc(d.fm.title || d.fm.what || path)}</b>${UI.label(`unsaved`, { s: 'wait', cls: 'hide', attrs: 'id="ke-dirty"' })}${ev.proposal ? tag('approving ' + ev.proposal + ' with changes', 'wait') : ''}
         <div class="tools">${ev.isNew ? '' : `<button class="btn sm ghost${ev.blame ? ' on' : ''}" data-act="rp-blame" aria-pressed="${ev.blame}" aria-label="Who wrote this">${icon('bots')}<span class="rp-bl-t">Who wrote this</span></button><button class="btn sm ghost" data-act="rp-file-menu" data-repo="${id}" aria-label="Entry actions">${icon('more')}</button>`}</div></div>
@@ -356,7 +397,7 @@
         return `<div class="item kprop" style="align-items:flex-start" data-prop="${p.id}">${p.status === 'pending' ? `<input type="checkbox" class="cbx" data-on-change="kp-sel" data-id="${p.id}" ${ev.sel.has(p.id) ? 'checked' : ''} aria-label="Select ${p.id}">` : UI.st(p.status.startsWith('approved') ? 'ok' : 'fail', '')}
         <div class="grow small"><div class="row wrap" style="gap:6px">${UI.label(esc(k.label), { cls: 'kind-tag', icon: k.icon })}<b>${esc(p.summary)}</b></div>${UI.factsLine([{ icon: 'obj-bot', value: p.bot, href: `#/bots/${p.bot}`, pri: 1, label: 'Proposed by' }, { icon: 'file', value: p.to, pri: 2, label: 'Goes to' }, (() => { const c = p.case && (D.cases || []).find((x) => x.id === p.case); return c ? { icon: 'ticket', value: c.title, href: `#/tickets/${c.id}`, pri: 3, label: 'For the ticket' } : null; })(), { icon: 'clock', value: `${ago(p.at)} ago`, pri: 2, label: 'Proposed' }, p.approver ? { icon: 'obj-approval', value: p.approver, pri: 3, label: 'Decided by' } : null])}${p.reason ? `<div class="tiny">${UI.statusMark('fail', `denied: ${esc(p.reason)}`, { sm: true })}</div>` : ''}
           ${errs.length ? `<div class="schema-errs"><b>Fails the ${esc(k.one)} schema</b><ul>${errs.map((e) => `<li class="mono">${esc(e)}</li>`).join('')}</ul></div>` : ''}
-          ${p.status === 'pending' && !errs.length ? (r.files[p.to] != null ? UI.diffView(r.files[p.to], p.content, 'unified', { file: p.to }).html : `<div class="prop-fields">${k.fields.filter((f) => x.fm[f.k] != null && f.type !== 'steps').map((f) => `<div><span class="caps">${esc(f.label || f.k.replace(/_/g, ' '))}</span> ${esc(Array.isArray(x.fm[f.k]) ? x.fm[f.k].join(', ') : x.fm[f.k])}</div>`).join('')}</div>`) : ''}</div>
+          ${p.status === 'pending' && !errs.length ? (r.files[p.to] != null ? UI.diffView(r.files[p.to], p.content, 'unified', { file: p.to }).html : `<div class="prop-fields">${k.fields.filter((f) => x.fm[f.k] != null && f.type !== 'steps').map((f) => `<div><span class="caps">${esc(f.label || f.k.replace(/_/g, ' '))}</span> ${esc(f.type === 'evidence' ? UI.evidenceWords(x.fm[f.k]) : Array.isArray(x.fm[f.k]) ? x.fm[f.k].join(', ') : x.fm[f.k])}</div>`).join('')}</div>`) : ''}</div>
         ${p.status === 'pending' ? `<div class="row wrap kp-acts" style="gap:4px"><button class="btn sm primary" ${errs.length ? UI.off(`Fails the ${k.one} schema: ${errs[0]}${errs.length > 1 ? ` (+${errs.length - 1} more)` : ''}. Approve it with changes, or deny it.`) : `data-act="kp-approve" data-repo="${r.id}" data-id="${p.id}"`}>${icon('passkey')}Approve</button><button class="btn sm" data-act="kp-edit" data-repo="${r.id}" data-id="${p.id}">${icon('edit')}Approve with changes</button><button class="btn sm secondary" data-act="kp-deny" data-repo="${r.id}" data-id="${p.id}">Deny</button></div>` : tag(p.status, p.status.startsWith('approved') ? 'ok' : 'fail')}</div>`; }).join('') || '<div class="item small muted">No proposals.</div>'}</div></div>`;
   }
   function searchHTML(r) {

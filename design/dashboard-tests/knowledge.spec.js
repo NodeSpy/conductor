@@ -12,6 +12,8 @@ const files = (page, id) => page.evaluate((i) => R.get(i).files, id);
 // A bot's memory on a phone shows the list or the entry (69b): these step to the one the next line taps.
 const listOn = async (page) => { const b = page.locator('[data-act="rp-list"]'); if (await b.isVisible()) await b.click(); };
 const entryOn = async (page) => { if (!(await page.locator('.repo-ed').first().isVisible())) await page.locator('.kind-entries .entry.on').click(); };
+// Evidence is a list of things (71); a note is one of them
+const addNote = async (page, text) => { await page.locator('[data-field="evidence"] .ev-add').click(); await page.locator('.menu [data-act="ev-new"][data-k="note"]').click(); await page.fill('#f-note', text); await page.locator('#gen-submit').click(); };
 const newKind = async (page, k) => { await page.locator('[data-act="rp-new"]').first().click(); await page.locator(`[data-act="rp-new-pick"][data-k="${k}"]`).click(); };
 const addTo = async (page, k, v) => { const i = page.locator(`#ke-form [data-listk="${k}"] input.list-add`); await i.fill(v); await i.press('Enter'); };
 const save = (page) => page.locator('[data-act="rp-save"]').click();
@@ -30,7 +32,7 @@ test('New… creates each kind, and the path is derived from kind and title (nev
   await page.fill('#ke-title', 'Cache TTLs');
   await expect(page.locator('#ke-path')).toHaveText('knowledge/cache-ttls.md');
   await addTo(page, 'applies_to', 'acme/api');
-  await page.fill('#ke-evidence', 'modules/api/cache.tf');
+  await addNote(page, 'modules/api/cache.tf'); // one note saves as the plain string conductor writes today
   await ta(page).fill('The /search cache TTL is 300s.');
   await page.fill('#rp-msg', 'knowledge: cache TTLs');
   await save(page);
@@ -169,7 +171,8 @@ test('approve with changes, deny with a reason, bulk approve', async ({ page }) 
   await go(page, '#/teams/platform/knowledge', { fresh: true });
   await page.locator('[data-act="kp-edit"][data-id="k4"]').click();
   await expect(ta(page)).toHaveValue(/deregistration_delay. is \*\*30s\*\*|deregistration_delay is 30s/);
-  await page.fill('#ke-evidence', 'modules/web/alb.tf, checked 2026-10-16');
+  await page.locator('[data-field="evidence"] [data-act="ev-note"]').first().click(); // its evidence was a string: one note, edited in place
+  await page.fill('#f-note', 'modules/web/alb.tf, checked 2026-10-16'); await page.locator('#gen-submit').click();
   await page.locator('[data-act="rp-save"]', { hasText: 'Approve with changes' }).click();
   await page.locator('#su-go').click();
   await expect(page.locator('.kprop[data-prop="k4"]')).toContainText('approved (edited)');
@@ -280,5 +283,5 @@ test('unsaved changes are guarded; browse by kind with tag filters; search spans
   await page.fill('.fb[data-fb="rp"] .fb-in', 'deregistration'); await page.locator('.fb[data-fb="rp"] .fb-in').press('Enter');
   await page.locator('.search-res [data-act="rp-hit"][data-repo="bot:platform-sre"]').first().click();
   await expect(page).toHaveURL(/#\/bots\/platform-sre\/memory/);
-  await expect(page.locator('#ke-evidence, #rp-ed .ced-ta').first()).toBeVisible();
+  await expect(page.locator('[data-field="evidence"] .ev-add, #rp-ed .ced-ta').first()).toBeVisible();
 });

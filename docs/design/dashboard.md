@@ -655,7 +655,43 @@ writes it:
 | Collection | declared on the team (`teams.<t>.collections`) or the bot (`bots.<b>.collections`), or by a pack via `from:`, e.g. `postmortems/` | the collection's `fields` (`{type, required, values}`; types string, text, list, steps, enum, number, bool) and `template`; free paths only with `free_paths: true` | `writers`: a team's `operator` / `proposal`, a bot's `operator` / `bots` |
 
 `*` required. These are conductor's content kinds (`internal/bot/kinds.go` on
-the bots branch); the dashboard adds no fields of its own.
+the bots branch); the dashboard adds no fields of its own, with one proposed
+change below (knowledge `evidence` as a typed list).
+
+**Evidence is a list of things** (proposed). A knowledge entry's Evidence is
+a row of chips, each one thing that shows why it's true: a **ticket** (picked
+from conductor's tickets, shown by its title and linking to it), a **run**,
+a **pull request or issue** (`owner/repo#number`, read through a GitHub
+connection), a **file or image** (the chat's attach rules: the same types,
+size limit and thumbnails; the file is an attachment and the entry keeps its
+id, not the bytes), a **link**, or a **note**. *Add evidence* opens a menu
+of those; each chip opens what it names, a note's chip edits it, and every
+chip comes off with its ✕. A short entry is one row, never a tall box.
+In the front matter:
+
+```yaml
+evidence:
+  - note: RDS console during the failover drill
+  - ticket: c31
+  - run: r-7f3a
+  - ref: acme/web#1288
+  - url: https://grafana.example.com/d/db-prod
+  - file: rds-failover.png
+    attachment: att_3f9c
+```
+
+> **Schema change, flagged for the backend.** On `feat/members`,
+> `internal/bot/kinds.go` declares knowledge `evidence` as
+> `{Type: "text", Required: true}`: one string. The list above needs a new
+> field type (say `evidence`: a string, or a list of one-key maps whose key is
+> one of `ticket run ref url note file`, `file` also carrying `attachment`),
+> accepted by the kind check on an operator save, a bot's write, a proposal,
+> a promotion and an import. It stays compatible: a plain string still
+> validates and loads as one note, and a list of one note is written back as
+> that string, so every existing file and every bot that writes a string
+> keeps working. The bot prompt (`internal/bot/prompts.go`) can keep asking
+> for a string until bots are taught the list. Attachment ids need the
+> attachment store the chat uses to be readable from a memory entry.
 
 An entry is markdown with front matter (`kind:` plus the fields), so the
 files stay readable in git and the same schema check runs everywhere: on an
@@ -1610,6 +1646,7 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
 | `GET /api/v1/teams`, `GET /api/v1/teams/<t>` | teams, bots, effective defaults (inherited / narrowed per bot), routing, links | **NEW** teams follow-up to #178 |
 | `POST /api/v1/teams/<t>/deliver` `{title, text \| event}` | route work to a team: rules, else the lead | **NEW** |
 | `GET /api/v1/{teams/<t>/knowledge,bots/<m>/memory}/{tree,file,log,blame}?path&ref` | a repo: tree, a file with its version, history (per file or repo), blame-lite | `memrepo` reads + **NEW** blame |
+| knowledge `evidence` as a typed list (above) | the kind check accepts a string or a list of `{ticket \| run \| ref \| url \| note \| file+attachment}` | **CHANGE** to `internal/bot/kinds.go` (a new field type); strings keep loading |
 | `POST …/commit` `{path, content, base, message}` | operator write → one commit (`Authored-By: operator`); **409** with their version and diff when `base` is stale | **NEW** operator write in `memrepo` |
 | `POST …/move` `{from, to}`, `DELETE …/file?path`, `POST …/revert` `{sha}` | rename/move, delete, revert as a new commit | **NEW** |
 | `POST …/import` `{files[] \| {connector, repo, path}}` | upload or import markdown → one commit | **NEW** (repo import via a read verb) |

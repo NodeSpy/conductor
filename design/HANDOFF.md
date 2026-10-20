@@ -94,6 +94,11 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **Item 71, Evidence as a list of things (2026-10-20):** a knowledge entry's Evidence is chips (a ticket, a run, a pull
+  request or issue, a file or image through the chat's attach rules, a link, a note) added from "Add evidence"; a plain
+  string loads as one note and one note saves back as that string. **Needs a conductor schema change** (knowledge
+  `evidence` is `text` in `internal/bot/kinds.go` on feat/members): see dashboard.md, "Evidence is a list of things".
+  `evidence.spec.js` covers it.
 - **Items 69d–69g, the markdown editor (2026-10-20):** one unit set apart from the form (border, its own bar with the
   Edit/Split/Preview switch, a code-tinted Markdown pane, a divider, the Preview on the reading surface, each labelled),
   opening in Split. Line numbers stay (69f over 69e's idea of dropping them) in a ruled gutter of their own, only as
@@ -196,6 +201,8 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
   icons are vendored from origin/design/brand (re-copy them, never edit them: `js/icons.js` GLYPHS, `js/mascots.js`,
   `js/brandglyphs.js`, `css/tokens.css`).
 - Ledger items 1, 14 and 18 wait on the owner (each reported with a link).
+- Item 71 waits on the backend: knowledge `evidence` as a typed list is a conductor schema change (`internal/bot/kinds.go`
+  declares it `text` today); the prototype mocks the list and keeps plain strings loading.
 
 ## Queued directions (status)
 
