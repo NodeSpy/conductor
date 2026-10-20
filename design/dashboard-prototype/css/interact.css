@@ -240,6 +240,7 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .md-bar { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; background: var(--md-bar); border-bottom: 1px solid var(--color-border-default); }
 .md-hint { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; font-size: var(--type-caption-size); color: var(--color-text-tertiary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .md-hint svg { width: 13px; height: 13px; flex: none; }
+.md-hint .md-chip { font-family: var(--font-family-mono); font-size: 11.5px; color: var(--color-text-secondary); background: var(--color-bg-surface); border: 1px solid var(--color-border-subtle); border-radius: 4px; padding: 0 5px; line-height: 18px; } /* a code chip: the syntax to type, not a value */
 .md-bar .seg { flex: none; margin-left: auto; }
 .md-unit .ed-panes { min-height: 0; }
 .md-unit .ed-panes.mode-edit .ed-pv, .md-unit .ed-panes.mode-preview .ed-src { display: none; }
@@ -251,13 +252,13 @@ button.node { font: inherit; color: inherit; text-align: left; }
    in it (--gw, set in ui.js); each number muted, right-aligned against the rule and on its line's first row however
    far the line wraps. An easy line height and even padding; both layers share every metric, so the caret still sits
    on the letters. */
-.md-unit .ed-src { --gw: 32px; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--color-border-default); background: linear-gradient(to right, var(--md-gutter) 0 var(--gw), var(--color-border-default) var(--gw) calc(var(--gw) + 1px), var(--md-code) calc(var(--gw) + 1px)); }
-.md-unit .ed-src .md-pl { padding: 10px 16px 0 calc(var(--gw, 32px) + 11px); }
+.md-unit .ed-src { --gw: 34px; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--color-border-default); background: linear-gradient(to right, var(--md-gutter) 0 var(--gw), var(--color-border-strong) var(--gw) calc(var(--gw) + 1px), var(--md-code) calc(var(--gw) + 1px)); }
+.md-unit .ed-src .md-pl { padding: 10px 16px 0 calc(var(--gw, 34px) + 15px); }
 .md-unit .ed-pv .md-pl { padding: 10px 16px 0; }
-.ced.prose-ed .ced-hl .ln { padding: 0 16px 0 calc(var(--gw, 32px) + 11px); }
-.ced.prose-ed .ced-hl .ln::before { width: var(--gw, 32px); padding: 0 7px 0 0; text-align: right; color: var(--code-gutter); font-variant-numeric: tabular-nums; }
+.ced.prose-ed .ced-hl .ln { padding: 0 16px 0 calc(var(--gw, 34px) + 15px); } /* number · 10px · rule · 14px · text */
+.ced.prose-ed .ced-hl .ln::before { box-sizing: border-box; width: var(--gw, 34px); padding: 0 10px 0 0; text-align: right; color: var(--code-gutter); font-variant-numeric: tabular-nums; }
 .ced.prose-ed .ced-hl { padding: 8px 0 14px; }
-.ced.prose-ed .ced-ta { padding: 8px 16px 14px calc(var(--gw, 32px) + 11px); }
+.ced.prose-ed .ced-ta { padding: 8px 16px 14px calc(var(--gw, 34px) + 15px); }
 .ced.prose-ed .ced-hl, .ced.prose-ed .ced-ta { line-height: 1.75; }
 .md-unit .ed-src > .ced { flex: 1 1 auto; }
 .md-unit .ed-src .ced .ced-ta:focus { box-shadow: inset 0 0 0 2px var(--color-focus-ring); }

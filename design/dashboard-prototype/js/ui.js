@@ -903,10 +903,11 @@
   window.addEventListener('resize', () => UI.editorGrow());
   (UI.afterRender = UI.afterRender || []).push(() => { UI.editorGrow(); setTimeout(() => UI.editorGrow(), 200); });
   /* A prose editor's gutter is as wide as its line numbers (69g): two digits' width at least, four at most, measured in
-     the editor's own font, with a little room either side; set as --gw on its pane so the rule runs the pane's height. */
+     the editor's own font, with room on either side of the digits; set as --gw on its pane so the rule runs the pane's
+     full height. */
   UI.gutterFit = (c) => { const ta = c && c.querySelector('.ced-ta'); if (!ta || !c.classList.contains('prose-ed')) return; const d = Math.min(4, Math.max(2, String(ta.value.split('\n').length).length)); if (c._gd === d) return; c._gd = d;
     const cx = UI._gcx || (UI._gcx = document.createElement('canvas').getContext('2d')), cs = getComputedStyle(ta); cx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
-    (c.closest('.ed-src') || c).style.setProperty('--gw', `${Math.ceil(d * cx.measureText('0').width + 14)}px`); };
+    (c.closest('.ed-src') || c).style.setProperty('--gw', `${Math.ceil(d * cx.measureText('0').width + 18)}px`); }; // 8px before the digits, 10px between them and the rule
   document.addEventListener('input', (e) => { if (e.target.classList.contains('ced-ta')) UI.gutterFit(e.target.parentNode); });
   (UI.afterRender = UI.afterRender || []).push(() => document.querySelectorAll('.ced.prose-ed').forEach(UI.gutterFit));
   document.addEventListener('input', (e) => { if (e.target.classList.contains('ced-ta')) { const root = e.target.closest('.ced'); const pre = root.querySelector('.ced-hl'); pre.innerHTML = edLines(e.target.value, root.dataset.lang, {}); } });

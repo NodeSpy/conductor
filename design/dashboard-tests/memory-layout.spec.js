@@ -83,6 +83,9 @@ for (const route of ['#/bots/platform-sre/memory', '#/teams/platform/knowledge']
     await expect(unit.locator('.md-bar [data-act="rp-mode"]')).toHaveCount(3); // the switch lives in the unit
     await expect(unit.locator('.ed-src .md-pl')).toHaveText('Markdown');
     await expect(unit.locator('.ed-pv .md-pl')).toHaveText('Preview');
+    // the bar's help reads as help: plain words, the syntax in a code chip, never a raw token on its own
+    await expect(unit.locator('.md-hint')).toHaveText('Link another entry with [[name]]');
+    await expect(unit.locator('.md-hint code.md-chip')).toHaveText('[[name]]');
     const c = await unit.evaluate((u) => { const cs = (e, p) => getComputedStyle(e, p), src = u.querySelector('.ed-src'), pv = u.querySelector('.ed-pv'), input = document.querySelector('#ke-form .input'), ced = u.querySelector('.ced'), ta = ced.querySelector('.ced-ta'), ln = ced.querySelector('.ced-hl .ln');
       // the pane's background: gutter colour to 44px, the hairline at 44–45px, then the code tint (the stops of one gradient)
       const bg = cs(src).backgroundImage, stops = bg.match(/(rgba?|color)\([^)]*\)/g) || [];
@@ -91,7 +94,7 @@ for (const route of ['#/bots/platform-sre/memory', '#/teams/platform/knowledge']
       const gw = parseFloat(cs(src).getPropertyValue('--gw')), cx = document.createElement('canvas').getContext('2d'); cx.font = `${cs(ta).fontSize} ${cs(ta).fontFamily}`;
       return { gw, ch: cx.measureText('0').width, lines: ta.value.split('\n').length, border: cs(u).borderTopStyle, radius: parseFloat(cs(u).borderTopLeftRadius), stops, rule: bg.includes(`${gw}px, `) && bg.includes(`${gw + 1}px`), fullHeight: Math.abs(src.getBoundingClientRect().height - src.clientHeight - 0) < 3,
         preview: cs(pv).backgroundColor, input: input ? cs(input).backgroundColor : null, divider: cs(src).borderRightStyle, stacked: pv.getBoundingClientRect().top >= src.getBoundingClientRect().bottom - 1, pvTop: cs(pv).borderTopStyle,
-        numContent: num.content, numAlign: num.textAlign, numColor: num.color, textColor: cs(ln).color, numTop: num.top, numEnd: parseFloat(num.width) - parseFloat(num.paddingRight), textX: rg.getBoundingClientRect().left - left, taX: parseFloat(cs(ta).paddingLeft),
+        numContent: num.content, numAlign: num.textAlign, numColor: num.color, textColor: cs(ln).color, numTop: num.top, numBox: num.boxSizing, numEnd: parseFloat(num.width) - parseFloat(num.paddingRight), textX: rg.getBoundingClientRect().left - left, taX: parseFloat(cs(ta).paddingLeft),
         lh: parseFloat(cs(ta).lineHeight) / parseFloat(cs(ta).fontSize), hlLh: cs(ta.previousElementSibling).lineHeight, taLh: cs(ta).lineHeight }; });
     expect(c.border).toBe('solid'); expect(c.radius).toBeGreaterThan(0);
     // gutter, hairline, code (each two-position stop computes as two): the rule runs the pane's full height
@@ -104,17 +107,19 @@ for (const route of ['#/bots/platform-sre/memory', '#/teams/platform/knowledge']
     expect(c.numContent).not.toBe('none'); expect(c.numAlign).toBe('right'); expect(c.numColor).not.toBe(c.textColor); // numbers kept, right-aligned, muted
     expect(c.numTop).toBe('0px'); // on its line's first row, however far the line wraps
     expect(c.lines).toBeLessThan(100);
-    expect(c.gw).toBeLessThanOrEqual(2 * c.ch + 16); // two digits' width and a little room, no wide empty band
-    expect(c.gw - c.numEnd).toBeLessThanOrEqual(8); // the numbers close against the rule
-    expect(c.textX - c.gw).toBeGreaterThanOrEqual(8); expect(c.textX - c.gw).toBeLessThanOrEqual(14); // the text close after it
+    expect(c.gw).toBeLessThanOrEqual(2 * c.ch + 20); // two digits' width and room either side, no wide empty band
+    // clear air: number · gap · rule · gap · text (the number's box is border-box, so its padding is inside the gutter)
+    expect(c.numBox).toBe('border-box');
+    expect(c.gw - c.numEnd).toBeGreaterThanOrEqual(8); expect(c.gw - c.numEnd).toBeLessThanOrEqual(12);
+    expect(c.textX - c.gw - 1).toBeGreaterThanOrEqual(12); expect(c.textX - c.gw - 1).toBeLessThanOrEqual(16);
     expect(Math.abs(c.textX - c.taX)).toBeLessThan(1); // the highlighted copy and the textarea start together
     expect(c.lh).toBeGreaterThanOrEqual(1.7); expect(c.hlLh).toBe(c.taLh);
     // the gutter grows with the numbers (three digits past 99 lines) and stops at four digits' width
     const ta = unit.locator('.ced-ta'), gw = () => unit.locator('.ed-src').evaluate((e) => parseFloat(getComputedStyle(e).getPropertyValue('--gw')));
     const put = (v) => ta.evaluate((t, v) => { t.value = v; t.dispatchEvent(new Event('input', { bubbles: true })); }, v); // as typing would, without typing 12,000 lines
     await put('line\n'.repeat(120)); const g3 = await gw();
-    expect(g3).toBeGreaterThan(c.gw + c.ch - 1); expect(g3).toBeLessThanOrEqual(3 * c.ch + 16);
-    await put('x\n'.repeat(12000)); expect(await gw()).toBeLessThanOrEqual(4 * c.ch + 16);
+    expect(g3).toBeGreaterThan(c.gw + c.ch - 1); expect(g3).toBeLessThanOrEqual(3 * c.ch + 20);
+    await put('x\n'.repeat(12000)); expect(await gw()).toBeLessThanOrEqual(4 * c.ch + 20);
   });
 }
 

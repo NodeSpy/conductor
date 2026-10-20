@@ -685,8 +685,8 @@ operator save, on a bot proposal or promotion, and on import.
   **the list or the entry**; the entry's head leads with a Back control to
   the list.
 - **The markdown editor is one unit**, set apart from the form fields
-  above it: its own border and bar (a hint that `[[path]]` links to another
-  entry, and the Edit / Split / Preview switch), a code-tinted **Markdown**
+  above it: its own border and bar (plain help, *Link another entry with*
+  and `[[name]]` as a code chip, and the Edit / Split / Preview switch), a code-tinted **Markdown**
   pane, a divider, and the **Preview** on the reading surface, each pane
   labelled. It **opens in Split** (two readable half-width panes, stacked on
   a phone), and the chosen mode holds from entry to entry. Every markdown
@@ -695,9 +695,10 @@ operator save, on a bot proposal or promotion, and on import.
 - **Line numbers sit in a gutter of their own**: a slightly different
   background and a full-height hairline rule before the text, so the
   numbers never read as content. The gutter is only as wide as its numbers
-  (two digits' width, growing to four as the file grows); each number is
-  muted, right-aligned against the rule and on its line's first row however
-  far the line wraps. Long lines **wrap** rather than run off the pane; the
+  (two digits' width, growing to four as the file grows), with clear air on
+  both sides of the rule: number, 10px, rule, 14px, text. Each number is
+  muted, right-aligned and on its line's first row however far the line
+  wraps. Long lines **wrap** rather than run off the pane; the
   line height is easy and the padding even.
 - **It is as tall as its text** (five lines at least), grows as you type,
   and past a cap (the screen less the entry's head, the field's label and
