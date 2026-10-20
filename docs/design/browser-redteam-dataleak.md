@@ -153,10 +153,19 @@ the field, but that is the same-origin boundary — the page is the party being
 signed in and already receives the value.
 
 **7 — error-path echo.** Action errors are returned without the value scrub, so
-every error path that touches a secret was reviewed: `secret()` returns the
-source's error (or "returned nothing"), never the value; `fieldSet` / `walletSet`
-refusals name the field and the reason, never the value; `selectOption` echoes
-only the agent's own argument. No filled value reaches an error message.
+every error path that touches a secret was reviewed and fuzzed: `secret()`
+returns the source's error (or "returned nothing"), never the value;
+`fieldSet` / `walletSet` refusals name the field and the reason, never the value;
+`selectOption` echoes only the agent's own argument.
+`TestRedteamErrorPathsNeverEchoValue` forces a battery of failures — wrong field,
+unknown ref/credential/field, lookalike origin, and an oversized (>640 KB)
+unicode password actually set into a field — and asserts no error carries the
+password, the TOTP seed or the sentinel. `TestRedteamOpaqueOriginFillRefused`
+confirms a `data:` / `about:blank` page is never a fill target and fetches
+nothing. A `wait` is likewise not an oracle: the body is scrubbed of values ≥ 4
+chars before the text match (a short value reaches `innerText` only through
+same-origin script, the documented short-value boundary, and the filled field's
+own value is never in `innerText`).
 
 **8 — JavaScript injection to capture the value at fill time.** The threat: the
 agent installs an `input`/`change`/`keydown` listener, a `MutationObserver`, or
