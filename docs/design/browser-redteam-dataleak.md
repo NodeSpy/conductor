@@ -15,6 +15,16 @@ Focus (attacker A): in-page extraction and the fill path — read-back,
 DOM/snapshot/screenshot, shadow/iframe, origin/field TOCTOU, timing/clipboard,
 error paths.
 
+This branch also carries a fifth conductor-side fix from the companion review of
+the system/egress surface: **a malicious merchant smuggling the CVC back through
+a receipt's order-number text** (`readReceipt` scrubbed with the verbatim scrub,
+which does not hold a short value; fixed with a short-value scrub applied only to
+values conductor extracts from a page's own text). See
+`docs/design/browser-redteam-exfil.md`. The accepted same-origin limitation
+(a site already running hostile script can transform a value past any scrub) is
+written up in `docs/wiki/Browser.md` ("What this guarantees, and the one thing it
+cannot").
+
 ## Summary
 
 | # | Attack | Verdict |

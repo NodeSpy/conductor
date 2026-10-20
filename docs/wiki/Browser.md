@@ -276,8 +276,39 @@ After a fill, in that browser:
   a side-effect-free expression could read a filled field and transform it
   past any scrub.
 
-Page JavaScript **on the credential's own origin** can read a field it is
-given; that is how browsers work, and why the origin binding matters.
+### What this guarantees, and the one thing it cannot
+
+conductor makes the agent **blind to the verbatim value** everywhere conductor
+controls: the fill runs in an isolated world the page's scripts cannot reach,
+the filled field is masked in every snapshot and screenshot (by its node, so
+even a value too short to scrub — a CVC, a region code — is hidden), the value
+is scrubbed from page text, titles, URLs and anything conductor reads back out
+of a page (a receipt's order number included), `evaluate` is off for the life of
+the browser, and the agent cannot inject script of its own.
+
+What conductor **cannot** do is make a page that is *already running hostile
+script on the credential's own origin* safe. Such a script is same-origin with
+the field: it can read the value the moment it is filled and, because it can
+transform the value first (base64, reversed, split — anything), it can defeat a
+text scrub, which can only match the value verbatim. This is the web's
+same-origin boundary, not something the redaction layer can close — a site you
+let conductor sign into is a site you trust with that credential.
+
+That is exactly why the two things around the fill matter:
+
+- **Origins are exact and operator-chosen.** A credential, profile or card fills
+  only on the specific scheme + host + port the operator configured (a card only
+  on its listed merchants). A lookalike host, a redirect, a subdomain, an
+  embedded frame or any page the agent itself stands up is refused. So the only
+  script that could read a filled value is one already on a site the operator
+  decided to trust.
+- **Egress is allowlisted.** Even a hostile first-party script can only send what
+  it reads to hosts on the browser's allowlist, through conductor's proxy —
+  there is no open path off the box.
+
+In short: conductor stops the *agent* from ever seeing a filled value, and binds
+every fill to operator-trusted origins with bounded egress. It does not, and
+cannot, defend a credential against a site that is itself already compromised.
 
 ### Adding logins (what the dashboard drives)
 
