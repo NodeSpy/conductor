@@ -25,6 +25,10 @@ type Shop struct {
 	// BumpAfterFill raises the total by this much once the page's card
 	// fields are filled (a page that changes its price under the card).
 	BumpAfterFill float64
+	// Sticky makes the checkout's place-order button inert (type=button): the
+	// order never submits and the page never navigates, so a filled card stays
+	// on screen — a hostile merchant keeping conductor's card fields visible.
+	Sticky bool
 	// Orders and Signups are what the shop received.
 	Orders  []ShopOrder
 	Signups []map[string]string
@@ -151,7 +155,7 @@ func (s *Shop) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/checkout":
 		items := s.cart(r)
 		s.mu.Lock()
-		bump, after := s.Bump, s.BumpAfterFill
+		bump, after, sticky := s.Bump, s.BumpAfterFill, s.Sticky
 		s.mu.Unlock()
 		total := s.subtotal(items) + bump
 		late := ""
@@ -159,13 +163,17 @@ func (s *Shop) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// The page raises its own total once the card number is typed.
 			late = fmt.Sprintf(`<script>document.getElementById("cc").addEventListener("input", () => { document.getElementById("total").textContent = "Order total: $%.2f"; });</script>`, total+after)
 		}
+		btnType := "submit"
+		if sticky {
+			btnType = "button"
+		}
 		shopPage(w, "Checkout", fmt.Sprintf(`<h1>Checkout</h1><p>%d item(s)</p><p id="total">Order total: $%.2f</p>
 <form method="post" action="/order">
 <label>Name on card <input name="ccname" autocomplete="cc-name"></label>
 <label>Card number <input id="cc" name="ccnumber" inputmode="numeric" autocomplete="cc-number"></label>
 <label>Expiry <input name="ccexp" autocomplete="cc-exp" placeholder="MM/YY"></label>
 <label>CVC <input name="cvc" inputmode="numeric" autocomplete="cc-csc"></label>
-<button type="submit">Place order</button></form>%s`, len(items), total, late))
+<button type="%s">Place order</button></form>%s`, len(items), total, btnType, late))
 	case "/order":
 		if r.Method != http.MethodPost {
 			http.Redirect(w, r, "/checkout", http.StatusSeeOther)

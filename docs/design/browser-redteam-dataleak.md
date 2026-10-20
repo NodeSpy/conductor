@@ -20,7 +20,7 @@ error paths.
 | # | Attack | Verdict |
 |---|--------|---------|
 | 1 | Read-back of a filled value via `evaluate` (`.value`, `defaultValue`, `FormData`, `getComputedStyle`, selection, submit-and-read) | PASS — `evaluate` is off for the life of a browser where any value was filled |
-| 2 | Value in `snapshot` / a11y tree / console `logs` | PASS — filled node's value masked by node id; whole reply scrubbed of values ≥4 chars; no `logs` verb exists |
+| 2 | **Value in a `snapshot` (a11y tree)** | **LEAK (fixed)** — the browser mirrors a filled value into a `StaticText` descendant of the field; a short value (CVC `987`, region `IL`) was printed as `- text: 987`, masked only on the field's own node |
 | 3 | **Value in a `screenshot`** | **LEAK (fixed)** — short values (CVC, region code) were not masked |
 | 4 | Shadow DOM / iframe fill-and-read | PASS — fill refuses any node not in the main frame's own top document; open shadow roots masked in screenshots |
 | 5 | Origin / field confusion + resolve→fill TOCTOU | PASS — exact origin, egress-narrowed login browser, atomic re-check in the setter |
@@ -30,7 +30,62 @@ error paths.
 | 9 | Browser extension / raw CDP / profile or flag tampering | PASS — fixed minimal flag set, `--disable-extensions`, `--remote-debugging-pipe` (no port), namespace/Seatbelt sandbox (#179) |
 | 10 | Keypress capture below the page | PASS — credentials are filled by the `.value` setter + `input`/`change` dispatch, never keystrokes; no `keydown`/`beforeinput`/`keypress` is emitted |
 
-**Leaks found: 1. All patched: yes.**
+**Leaks found: 2. All patched: yes.** Both proven end-to-end on the real headless
+Chromium conductor drives (not a mock): a sandboxed `chromium` process, driven
+through the real `Do(...)` verbs, the sentinel actually filled into the real page,
+and the leak read from the real `snapshot` / `screenshot` output.
+
+---
+
+## Attack 2 — short filled values were printed in a snapshot (LEAK → fixed)
+
+### The hole
+
+Chromium's accessibility tree represents a filled text field's value **twice**:
+as the field node's `value`, and as a `StaticText` descendant node that mirrors
+the displayed glyphs. conductor masked only the first — it replaced the filled
+field node's AX `value` with the mark, keyed on that node's backend id. The
+mirror `StaticText` is a *different* node (a different backend id, not in
+`secretNodes`), and the snapshot renderer printed it as a plain `- text: …` line.
+
+A value ≥ 4 chars was still caught by the whole-reply text scrub, but a value
+under 4 — a card **CVC** or a region code, deliberately kept out of the scrub —
+was neither scrubbed nor on the masked node. The agent just calls
+`conductor browser snapshot` and reads it.
+
+### Evidence (before the fix, on the real browser)
+
+`TestRealCVCNotInSnapshotOrScreenshot` (a hostile merchant with an inert
+place-order button keeps the filled checkout on screen) and
+`TestRealAXTreeShortValueStructure`:
+
+```
+LEAK: the snapshot shows the CVC: "- text: 987"
+LEAK: the rendered snapshot shows the region value: "- text: IL"
+```
+
+The parent chain confirms the mirror is a descendant of the masked field:
+`StaticText "IL" (backend 92) → generic (57) → textbox (backend 33, the filled,
+masked field)`.
+
+### The fix
+
+The snapshot renderer now renders a filled field's **whole subtree quiet**: when
+it walks a node whose backend id is in `secretNodes`, it suppresses the
+`StaticText` the browser mirrors the value into (the field's own value already
+shows the mark). Value-agnostic — it needs no copy of the secret and works for
+any length — and exactly aligned with the existing node-masking boundary.
+
+`internal/browser/snapshot.go`: `snapshot` passes the secret-node set to
+`renderAX`, which ORs `secret[n.BackendID]` into the subtree's `quiet` flag.
+
+### Evidence (after the fix)
+
+`TestRealCVCNotInSnapshotOrScreenshot` passes: the CVC is in neither the snapshot
+(no `- text: 987`, field shows the mark) nor the screenshot pixels, while
+`in.eval` confirms the page really holds `987` (the fill worked — the agent just
+cannot see it). `TestRealAXTreeShortValueStructure` confirms the region is gone
+from the rendered snapshot though still present in the raw AX tree.
 
 ---
 
@@ -109,19 +164,26 @@ page it does not control and screenshots it.
 
 ## Attacks that held (PASS)
 
-**1 — read-back via `evaluate`.** After any fill (credential, profile or card),
-`evaluate` is refused for the rest of that browser's life ("evaluate is off in a
-browser where a credential was filled"), closing `.value`, `defaultValue`,
-attribute reads, `getComputedStyle(-webkit-text-security)`, selection APIs,
-`FormData(form)`, and submit-to-own-endpoint-then-read. Confirmed for a profile
-fill in `TestRedteamOnlyShortValueScreenshotMasked`; for credential and card in
-the existing `TestCredentialRedaction` / `TestWalletPurchase`.
+**1 — read-back via `evaluate`.** The defense is *not* V8's `throwOnSideEffect`
+(reading is not a side effect) — it is a hard lockout: `evaluate` is refused for
+the life of a browser where any value was filled, *before the expression runs*,
+so no transform/encoding can smuggle a value past the scrub.
+`TestRealEvaluateReadbackLocked` runs 21 read-back expressions on the real
+browser after a real password fill — `.value`, `.defaultValue`,
+`getAttribute('value')`, every `attributes` walk, `getComputedStyle`,
+`validationMessage`, `document.activeElement.value`, `cloneNode().outerHTML`,
+`XMLSerializer`, `new FormData(form)`, `form.elements['password'].value`,
+`JSON.stringify`, unary `+`, `.length`, a `charCodeAt` oracle, `btoa(...)`,
+reverse, `structuredClone`, `:valid` matching, `documentElement.outerHTML` — and
+every one is refused with "credential was filled". `TestRealCardFillLocksEvaluate`
+proves the same after a real PAN/CVC fill, even on the confirmation page.
 
-**2 — snapshot / a11y / logs.** The filled node's accessibility value is
-replaced with the fixed mark by node id; the whole reply (snapshot text, tab
-titles, dialogs, URLs) is scrubbed of every value ≥ 4 chars before it leaves. No
-`logs` / console verb is exposed to the agent (`Actions` has none), and the
-browser never enables `Runtime`/`Log` console capture for the agent.
+**2 — snapshot / a11y value mirror — now fixed.** See *Attack 2* above: the
+field node's value is masked and its mirror `StaticText` subtree is now quiet;
+the whole reply (snapshot text, tab titles, dialogs, URLs) is additionally
+scrubbed of every value ≥ 4 chars. No `logs` / console verb is exposed to the
+agent (`Actions` has none), and the browser never enables `Runtime`/`Log`
+console capture for the agent.
 
 **4 — shadow DOM / iframe.** `fieldCheck`, `fieldSet` and `walletSet` each
 refuse a node whose `ownerDocument` is not the frame's own document or whose
@@ -230,6 +292,13 @@ CONDUCTOR_TEST_CHROME=<chrome> go test ./internal/browser/ \
   -run 'TestRedteam|TestCredentialOriginBinding|TestCredentialRedaction|TestWalletPurchase'
 ```
 
-Regression tests: `internal/browser/redteam_dataleak_test.go` (the patched
-screenshot leak) and `internal/browser/redteam_inject_test.go` (evaluate is
-read-only — the anti-injection linchpin).
+Regression tests:
+- `internal/browser/redteam_realbrowser_test.go` — the real-browser batteries:
+  21-variant `evaluate` read-back lockout, the a11y value-mirror snapshot leak,
+  the CVC in neither snapshot nor screenshot on a hostile sticky checkout, and
+  the card-fill evaluate lockout.
+- `internal/browser/redteam_dataleak_test.go` — the patched screenshot leak.
+- `internal/browser/redteam_inject_test.go` — evaluate is read-only (the
+  anti-injection linchpin).
+- `internal/browser/redteam_edge_test.go` — error paths never echo a value;
+  opaque origins refuse the fill.
