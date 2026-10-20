@@ -222,7 +222,12 @@ exactly (scheme + lowercased host + port, optional path prefix) against the
 browser's own `securityOrigin`, never the page's word. A lookalike host
 (`127.0.0.1` vs `localhost`), a redirect off the bound host (dies at the
 login browser's narrowed egress proxy), a path-bound credential off its path,
-and a cross-origin framed login are all refused (`TestCredentialOriginBinding`).
+and a cross-origin framed login are all refused (`TestCredentialOriginBinding`,
+real browser). `TestRedteamLookalikeOriginsRefused` pins `check()` against the
+full lookalike list — suffix host (`…example.com.evil.test`), hyphen
+(`grafana-example.com`), trailing dot, port variant, scheme downgrade, a
+subdomain, a punycode homoglyph, a `user@host` trick, and the opaque/empty
+origin — accepting only the exact origin (host matched case-insensitively).
 A credential fills only in the separate, logged-in browser whose egress is
 narrowed to the credential's own hosts — never beside the agent's page in the
 anonymous browser. The setter (`fieldSet` / `walletSet`) re-verifies
