@@ -20,6 +20,15 @@ the wallet designer's.
 - **Minors:** all four reports' remaining items (words, phone, brand conformance with tokens.css re-synced from the
   brand, behaviour at scale), listed in the ledger as r5-minors, with the three left as designed and why.
 
+Final runs (2026-10-19, after round 5):
+- **Full Chromium suite** (desktop and phone, 1184 tests): 980 passed, 195 skipped (tests that only run on another project or width), 9 failed. The 9 had three causes:
+  - a connector field read in screen code;
+  - not-reached run steps the crawl counted as dead buttons (now disabled steps that say why);
+  - a Safety test that found a bot by its config id.
+  All three are fixed, and those tests then passed (26). A later re-run with the fix was invalidated by a killed snapshot server, so the scoped re-run is the result.
+- **WebKit iPhone 15 sweep:** 510 passed.
+- **The measuring scripts** ran on every route as measure.spec, inside the full run.
+
 ## The owner's finish-line ledger (items DA and 38–68b, 2026-10-18/19)
 
 The owner's ledger was the source of truth; each item was closed only with a screenshot looked at and a test, and the
