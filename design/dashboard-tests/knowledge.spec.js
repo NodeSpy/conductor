@@ -6,7 +6,7 @@
 // save, history, revert, pins, blame, conflicts.
 const { test, expect, go, applyStaged } = require('./fixtures');
 
-const ta = (page) => page.locator('#rp-ed .ced-ta');
+const ta = (page) => page.locator('#rp-md');
 const head = (page, id) => page.evaluate((i) => { const c = R.get(i).log[0]; return { who: c.who, kind: c.kind, msg: c.msg, n: c.changes.length, trailers: c.trailers || '', paths: c.changes.map((x) => x.path) }; }, id);
 const files = (page, id) => page.evaluate((i) => R.get(i).files, id);
 // A bot's memory on a phone shows the list or the entry (69b): these step to the one the next line taps.
@@ -283,5 +283,5 @@ test('unsaved changes are guarded; browse by kind with tag filters; search spans
   await page.fill('.fb[data-fb="rp"] .fb-in', 'deregistration'); await page.locator('.fb[data-fb="rp"] .fb-in').press('Enter');
   await page.locator('.search-res [data-act="rp-hit"][data-repo="bot:platform-sre"]').first().click();
   await expect(page).toHaveURL(/#\/bots\/platform-sre\/memory/);
-  await expect(page.locator('[data-field="evidence"] .ev-add, #rp-ed .ced-ta').first()).toBeVisible();
+  await expect(page.locator('[data-field="evidence"] .ev-add, #rp-md').first()).toBeVisible();
 });

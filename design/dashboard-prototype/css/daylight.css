@@ -1004,3 +1004,8 @@ button.fx-more { border: 0; background: none; padding: 0 2px; font: inherit; col
 .dl-more-row { padding: 10px 0; list-style: none; }
 /* toasts stay clear of a chat's composer and its Send button (r5 minor: a toast covered Send in team chat) */
 body:has(#main .cv-main.fit, #main .chat.fit, #main .repo-grid.fit) .toasts { top: calc(var(--space-5) + 56px); bottom: auto !important; }
+
+/* A field's focus is a quiet ring, never the accent (accent ember is for primary actions). The brand sets
+   --input-border-focus to --color-focus-ring (ember); every field here, the markdown editor included, uses this
+   neutral one instead. Raised with the brand designer: drop this override if the brand token changes. */
+:root, [data-theme], [data-density], [data-motion] { --input-border-focus: var(--color-icon-default); }

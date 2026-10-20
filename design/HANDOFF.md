@@ -94,6 +94,12 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **The markdown editor, reset (2026-10-20):** the hand-built split view with a line-number gutter (items 69d–69g) is
+  replaced by `UI.mdEditor` (ui.js), the GitHub comment-box pattern: Write | Preview tabs, a plain monospace textarea,
+  a small toolbar with keys, files by paste/drop/click through the chat's attach rules, `[[` suggestions, Side by side
+  as an option. It is a field type (`type: 'markdown'`) used for a memory entry's body, a collection's body template,
+  a ticket's description and the import paste. Every field's focus is now a quiet neutral ring (a `daylight.css`
+  override of the brand's ember `--input-border-focus`; raised with the brand designer).
 - **Item 71, Evidence as a list of things (2026-10-20):** a knowledge entry's Evidence is chips (a ticket, a run, a pull
   request or issue, a file or image through the chat's attach rules, a link, a note) added from "Add evidence"; a plain
   string loads as one note and one note saves back as that string. **Needs a conductor schema change** (knowledge
@@ -201,6 +207,8 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
   icons are vendored from origin/design/brand (re-copy them, never edit them: `js/icons.js` GLYPHS, `js/mascots.js`,
   `js/brandglyphs.js`, `css/tokens.css`).
 - Ledger items 1, 14 and 18 wait on the owner (each reported with a link).
+- The brand sets `--input-border-focus` to the ember accent; the prototype overrides it to a neutral ring (ember is for
+  primary actions). Waits on the brand designer to adopt or reject.
 - Item 71 waits on the backend: knowledge `evidence` as a typed list is a conductor schema change (`internal/bot/kinds.go`
   declares it `text` today); the prototype mocks the list and keeps plain strings loading.
 

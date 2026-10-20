@@ -156,9 +156,9 @@ test.describe('bots', () => {
     await page.locator('[data-act="login-revoke"]').click(); await page.locator('#cf-ok').click();
     await expect(page.locator('.panel', { hasText: 'Saved browser sessions' })).toContainText('No saved logins');
     await go(page, '#/bots/platform-sre/memory');
-    await page.locator('#rp-ed .ced-ta').fill('# db-prod-1\n\nPgbouncer pool: 200.\n');
+    await page.locator('#rp-md').fill('# db-prod-1\n\nPgbouncer pool: 200.\n');
     await page.locator('[data-act="rp-save"]').click();
-    await expect(page.locator('#rp-prev')).toContainText('Pgbouncer pool: 200.');
+    await expect(page.locator('#rp-md-prev')).toContainText('Pgbouncer pool: 200.');
     await go(page, '#/bots/platform-sre/workers');
     await page.locator('[data-act="w-stop"]').first().click(); await page.locator('#cf-ok').click();
     await expect(page.locator('.wk-row[data-w="w41"]')).toContainText('Stopped');

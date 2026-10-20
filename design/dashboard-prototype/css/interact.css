@@ -213,11 +213,7 @@ button.node { font: inherit; color: inherit; text-align: left; }
    below the fold, and a stuck bar would ride up over the card's own head */
 .repo-grid.fit > .repo-ed > .ed-bar { position: sticky; bottom: 0; z-index: 2; background: var(--color-bg-surface); border-radius: 0 0 var(--radius-card) var(--radius-card); }
 .repo-ed > .ed-bar > .ed-foot { border-top: 0; }
-/* the markdown: as tall as its text (a few lines at least), growing as you type, scrolling inside itself past a cap */
 .ke { --ed-max: min(560px, var(--ed-cap, 420px)); }
-.ke .ed-panes { min-height: 0; }
-.ke .ced.wrap .ced-ta { max-height: var(--ed-max); }
-.ke .ed-prev { max-height: var(--ed-max); overflow-y: auto; }
 .rp-back { display: none; } .rp-back svg { transform: rotate(180deg); }
 /* Its head: the title with New… beside it, the repo a quiet line under both */
 .repo-side > .panel-head.rp-side-head { flex-wrap: wrap; align-items: center; row-gap: 2px; }
@@ -233,39 +229,6 @@ button.node { font: inherit; color: inherit; text-align: left; }
 /* the line number sits in a fixed gutter so the highlighted text starts exactly where the textarea's does (52px) */
 .ced .ced-hl .ln { padding-left: 52px; }
 .ced .ced-hl .ln::before { position: absolute; left: 0; top: 0; width: 44px; }
-.ke .ed-panes { align-items: stretch; }
-/* The markdown editor is one unit (69d), set apart from the form fields: its own border and bar, a code-tinted Markdown
-   pane, a divider, then the Preview on the reading surface; each pane labelled */
-.md-unit { --md-bar: color-mix(in srgb, var(--code-bg) 93%, var(--color-text-primary)); border: 1px solid var(--color-border-default); border-radius: var(--radius-box); overflow: hidden; background: var(--color-bg-surface); box-shadow: var(--shadow-1); }
-.md-bar { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; background: var(--md-bar); border-bottom: 1px solid var(--color-border-default); }
-.md-hint { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; font-size: var(--type-caption-size); color: var(--color-text-tertiary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.md-hint svg { width: 13px; height: 13px; flex: none; }
-.md-hint .md-chip { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); color: var(--color-text-secondary); background: var(--color-bg-surface); border: 1px solid var(--color-border-subtle); border-radius: 4px; padding: 0 5px; line-height: 18px; } /* a code chip: the syntax to type, not a value */
-.md-bar .seg { flex: none; margin-left: auto; }
-.md-unit .ed-panes { min-height: 0; }
-.md-unit .ed-panes.mode-edit .ed-pv, .md-unit .ed-panes.mode-preview .ed-src { display: none; }
-.md-unit .ed-panes.mode-edit, .md-unit .ed-panes.mode-preview { grid-template-columns: 1fr; }
-.md-pl { font: var(--type-label); font-size: var(--type-caption-size); color: var(--color-text-tertiary); padding: 6px 12px 2px; flex: none; } /* the brand's caps label */
-.md-unit { --md-code: color-mix(in srgb, var(--code-bg) 95%, var(--color-text-primary)); --md-gutter: color-mix(in srgb, var(--code-bg) 88%, var(--color-text-primary)); } /* the pane's own tint: a step off the sunken colour the form's inputs use */
-/* The Markdown pane (69e–69g): line numbers in a gutter of their own, a slightly different background with a full-height
-   hairline rule between it and the text, so the numbers never read as content; the gutter only as wide as the numbers
-   in it (--gw, set in ui.js); each number muted, right-aligned against the rule and on its line's first row however
-   far the line wraps. An easy line height and even padding; both layers share every metric, so the caret still sits
-   on the letters. */
-.md-unit .ed-src { --gw: 34px; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--color-border-default); background: linear-gradient(to right, var(--md-gutter) 0 var(--gw), var(--color-border-strong) var(--gw) calc(var(--gw) + 1px), var(--md-code) calc(var(--gw) + 1px)); }
-.md-unit .ed-src .md-pl { padding: 10px 16px 0 calc(var(--gw, 34px) + 15px); }
-.md-unit .ed-pv .md-pl { padding: 10px 16px 0; }
-.ced.prose-ed .ced-hl .ln { padding: 0 16px 0 calc(var(--gw, 34px) + 15px); } /* number · 10px · rule · 14px · text */
-.ced.prose-ed .ced-hl .ln::before { box-sizing: border-box; width: var(--gw, 34px); padding: 0 10px 0 0; text-align: right; color: var(--code-gutter); font-variant-numeric: tabular-nums; }
-.ced.prose-ed .ced-hl { padding: 8px 0 14px; }
-.ced.prose-ed .ced-ta { padding: 8px 16px 14px calc(var(--gw, 34px) + 15px); }
-.ced.prose-ed .ced-hl, .ced.prose-ed .ced-ta { line-height: 1.75; }
-.md-unit .ed-src > .ced { flex: 1 1 auto; }
-.md-unit .ed-src .ced .ced-ta:focus { box-shadow: inset 0 0 0 2px var(--color-focus-ring); }
-.md-unit .ed-pv { display: flex; flex-direction: column; min-width: 0; background: var(--color-bg-surface); }
-.md-unit .ed-pv .ed-prev { padding: 8px 16px 14px; }
-.md-unit .ed-panes.mode-preview .ed-src, .md-unit .ed-panes.mode-edit .ed-src { border-right: 0; }
-.ed-panes.mode-edit .ed-src { border-right: 0; }
 .rp-commit .grow { min-width: 0; } .rp-commit-by { margin-top: 2px; }
 .repo-side .tree a .pin { margin-left: auto; font-size: var(--type-caption-size); }
 .repo-side .tree a .dirty-dot { margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--color-status-warning-solid); }
@@ -312,8 +275,6 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .rp-blame-pop { max-height: calc(100% - 150px); } .rp-blame-pop .bl-group { grid-template-columns: 1fr; } .rp-blame-pop .bl-who { flex-direction: row; gap: 8px; align-items: baseline; } /* the Save bar stays in view below it */
 .ed-foot #rp-msg { flex: 1 0 100%; } .ed-foot .btn.primary { flex: 1 1 auto; } /* the message on its own line, then Discard and Save */
 .ed-panes { grid-template-columns: 1fr; } .ed-panes.mode-split .ed-prev { border-top: 1px solid var(--color-border-subtle); }
-.md-unit .ed-panes.mode-split .ed-prev { border-top: 0; } .md-unit .ed-panes.mode-split .ed-pv { border-top: 1px solid var(--color-border-default); }
-.md-unit .ed-src { border-right: 0; }
 .ed-src { border-right: 0; }
 .bl-group { grid-template-columns: 1fr; }
 }
@@ -364,3 +325,49 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .ev-add { height: 32px; }
 [data-field="evidence"].bad .ev-list { outline: 1px solid var(--color-status-danger-solid); outline-offset: 3px; border-radius: 6px; }
 @media (max-width: 720px) { .ev-chip { height: 46px; } .ev-add { height: 44px; } .ev-x { width: 44px; } .ev-t { max-width: 22ch; } } /* 44px to tap inside the chip's border */
+
+/* The markdown editor (UI.mdEditor): the GitHub comment box, plain on purpose. One bordered box that looks like every
+   other field (the same border, background and focus ring): a head with Write | Preview tabs and a small toolbar, a
+   plain monospace textarea as tall as its text (five lines at least, scrolling inside past a cap), the preview at the
+   same height, and a quiet foot saying files can be pasted, dropped or chosen. */
+.md-ed { --ed-max: min(560px, var(--ed-cap, 420px)); position: relative; border: var(--border-width) solid var(--input-border); border-radius: var(--radius-control); background: var(--input-bg); }
+.md-ed:focus-within { border-color: var(--input-border-focus); box-shadow: 0 0 0 1px var(--input-border-focus); }
+.md-ed.drop { border-style: dashed; border-color: var(--input-border-focus); }
+.md-head { display: flex; align-items: flex-end; gap: 8px; padding: 6px 6px 0; border-bottom: var(--border-width) solid var(--color-border-subtle); background: var(--color-bg-raised); border-radius: var(--radius-control) var(--radius-control) 0 0; }
+.md-tabs { display: flex; gap: 2px; }
+.md-tab { padding: 6px 14px; border: var(--border-width) solid transparent; border-bottom: 0; border-radius: var(--radius-control) var(--radius-control) 0 0; background: none; font: inherit; font-size: var(--type-body-s-size); color: var(--color-text-secondary); cursor: pointer; margin-bottom: -1px; }
+.md-tab:hover { color: var(--color-text-primary); }
+.md-tab[aria-selected="true"] { background: var(--input-bg); border-color: var(--color-border-subtle); color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
+.md-tools { display: flex; align-items: center; gap: 2px; margin-left: auto; padding-bottom: 4px; }
+.md-tool { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: var(--radius-xs, 4px); background: none; color: var(--color-icon-default); cursor: pointer; }
+.md-tool svg { width: 16px; height: 16px; }
+.md-tool:hover, .md-tool[aria-pressed="true"] { background: var(--color-bg-overlay); color: var(--color-text-primary); }
+.md-sep { width: 1px; height: 16px; margin: 0 4px; background: var(--color-border-subtle); }
+.md-ed.mode-preview .md-tools > :not([data-act="md-mode"]):not(.md-sep), .md-ed.mode-preview .md-sep { display: none; }
+.md-body { position: relative; }
+.md-ta { display: block; width: 100%; min-height: 120px; max-height: var(--ed-max); padding: 10px 12px; border: 0; background: transparent; resize: none; overflow-y: auto; font-family: var(--font-family-mono); font-size: var(--type-code-size); line-height: 1.6; color: var(--color-text-primary); }
+.md-ta::placeholder { color: var(--input-placeholder); }
+.md-ta:focus, .md-ta:focus-visible { outline: none; box-shadow: none; } /* the box shows focus, as a field does */
+.md-prev { padding: 10px 16px; min-height: var(--md-h, 120px); max-height: var(--ed-max); overflow-y: auto; max-width: none; }
+.md-prev .md-none { color: var(--color-text-tertiary); }
+.md-prev .md-img { max-width: 100%; max-height: 240px; border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-subtle); }
+.md-prev .md-file { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); padding: 1px 6px; border-radius: 4px; background: var(--color-bg-raised); border: var(--border-width) solid var(--color-border-subtle); }
+.md-ed.mode-write .md-prev, .md-ed.mode-preview .md-ta { display: none; }
+.md-ed.mode-split .md-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.md-ed.mode-split .md-prev { border-left: var(--border-width) solid var(--color-border-subtle); }
+.md-foot { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-top: var(--border-width) dashed var(--color-border-subtle); font-size: var(--type-caption-size); color: var(--color-text-tertiary); cursor: pointer; border-radius: 0 0 var(--radius-control) var(--radius-control); }
+.md-foot:hover { color: var(--color-text-secondary); }
+.md-foot svg { width: 13px; height: 13px; flex: none; }
+.md-chip { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); padding: 0 4px; border-radius: 4px; background: var(--color-bg-raised); border: var(--border-width) solid var(--color-border-subtle); }
+.md-err:empty { display: none; } .md-err { padding: 6px 12px; font-size: var(--type-caption-size); color: var(--color-status-danger-fg, var(--color-status-danger-solid)); }
+.md-ac { position: absolute; z-index: var(--z-popover); width: 280px; max-height: 260px; overflow-y: auto; padding: 4px; background: var(--color-bg-raised); border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-card); box-shadow: var(--shadow-3); }
+.md-ac-i { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--radius-control); background: none; text-align: left; font: inherit; font-size: var(--type-body-s-size); color: var(--color-text-primary); cursor: pointer; }
+.md-ac-i[aria-selected="true"], .md-ac-i:hover { background: var(--color-bg-overlay); }
+.md-ac-k { color: var(--color-text-tertiary); font-size: var(--type-caption-size); }
+.md-ac-v { grid-column: 1 / -1; color: var(--color-text-tertiary); font-size: var(--type-code-s-size); }
+@media (max-width: 720px) {
+  .md-ed.mode-split .md-body { grid-template-columns: minmax(0, 1fr); } .md-ed.mode-split .md-prev { border-left: 0; border-top: var(--border-width) solid var(--color-border-subtle); }
+  .md-tool { width: 44px; height: 44px; } .md-tab { min-height: 44px; padding: 11px 16px; } .md-sep { margin: 0; } /* 44px to tap */
+  .md-head { flex-wrap: wrap; } .md-tools { order: -1; width: 100%; margin-left: 0; justify-content: space-between; padding: 0 0 4px; } /* the toolbar on its own row, above the tabs */
+  .md-foot { align-items: flex-start; } .md-foot svg { margin-top: 2px; }
+}

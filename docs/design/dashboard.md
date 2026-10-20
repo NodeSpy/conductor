@@ -720,27 +720,26 @@ operator save, on a bot proposal or promotion, and on import.
   commit* and *Promote to team …* are in the entry's ⋯. On a phone it is
   **the list or the entry**; the entry's head leads with a Back control to
   the list.
-- **The markdown editor is one unit**, set apart from the form fields
-  above it: its own border and bar (plain help, *Link another entry with*
-  and `[[name]]` as a code chip, and the Edit / Split / Preview switch), a code-tinted **Markdown**
-  pane, a divider, and the **Preview** on the reading surface, each pane
-  labelled. It **opens in Split** (two readable half-width panes, stacked on
-  a phone), and the chosen mode holds from entry to entry. Every markdown
-  body is edited in it: a bot's memory, a team's knowledge, runbooks and
-  your own collections.
-- **Line numbers sit in a gutter of their own**: a slightly different
-  background and a full-height hairline rule before the text, so the
-  numbers never read as content. The gutter is only as wide as its numbers
-  (two digits' width, growing to four as the file grows), with clear air on
-  both sides of the rule: number, 10px, rule, 14px, text. Each number is
-  muted, right-aligned and on its line's first row however far the line
-  wraps. Long lines **wrap** rather than run off the pane; the
-  line height is easy and the padding even.
-- **It is as tall as its text** (five lines at least), grows as you type,
-  and past a cap (the screen less the entry's head, the field's label and
-  the Save bar; at most 560px) scrolls inside itself. The highlighted copy
-  and the textarea under it share one font, one line height and one gutter,
-  so the caret and a selection sit on the letters.
+- **The markdown editor is the GitHub comment box**, plain on purpose (it
+  replaces an earlier hand-built split view with line numbers): one box that
+  looks like every other field, with **Write | Preview** tabs, a small
+  toolbar (bold, italic, list, link, code, attach; ⌘/Ctrl+B, I, K and E),
+  a **plain monospace textarea** with no line numbers, and a quiet foot:
+  *Paste, drop, or click to add files*. Files go through the chat's attach
+  rules; an image goes in as `![name](attachment:id)` and shows in the
+  preview, any other file as a link. Typing `[[` suggests the other entries
+  in the repo (↑↓, Enter or Tab, Esc). **Side by side** is a toolbar option,
+  never the default, and the chosen mode holds. The textarea is as tall as
+  its text (five lines at least), grows as you type and scrolls inside
+  itself past a cap; on a long entry the line being typed stays above the
+  stuck Save bar. Focused, the box takes the same quiet ring as every other
+  field. It is the one markdown editor: a bot's memory, a team's knowledge,
+  runbooks and collections, a collection's body template, a ticket's
+  description and the import's paste box.
+- **Focus is quiet, never the accent.** The brand's `--input-border-focus`
+  is the ember accent; the prototype overrides it (in `daylight.css`, not
+  the vendored tokens) to a neutral ring for every field, because ember is
+  for primary actions. Raised with the brand designer.
 - **Who wrote this** is a popover under its button, over the entry and
   never in its place: each part of the saved file beside the commit that
   last changed it. The button reads as pressed while it is open; its ✕,
@@ -2502,8 +2501,8 @@ backup you can restore. Things to try:
 - **Teams:** Bots → a team's Add a bot; select two bots and Move to a team; Shape the team.
 - **Create in place:** on team `platform`, *Add a bot* → *Create a new bot
   in this team*. In a workflow step, the account picker → *New connector*.
-- **Knowledge:** team `platform` → Knowledge: New file, edit (Split by
-  default: the markdown beside its preview), Save; *Approve with changes* on `k4`; *Simulate a bot commit*
+- **Knowledge:** team `platform` → Knowledge: New file, edit (Write, or
+  Preview, or Side by side from the toolbar), Save; *Approve with changes* on `k4`; *Simulate a bot commit*
   while editing to see a conflict.
 - **Teams:** Bots → `platform` → Defaults (inherits / narrows),
   Routing (try a rule), Route work here, Knowledge (approve a promotion).

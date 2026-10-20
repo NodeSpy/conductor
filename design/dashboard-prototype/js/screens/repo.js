@@ -24,6 +24,8 @@
     return E.replace(/^(\s*[-*+]|\s*\d+\.)\s/, '<span class="y-a">$&</span>').replace(/\*\*([^*]+)\*\*/g, '<b>**$1**</b>').replace(/`([^`]+)`/g, '<span class="y-s">`$1`</span>').replace(/\[\[([^\]]+)\]\]/g, '<span class="y-n">[[$1]]</span>').replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<span class="y-n">[$1]($2)</span>');
   };
   const inline = (t) => esc(t).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[^*])\*([^*]+)\*/g, '$1<i>$2</i>').replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/!\[([^\]]*)\]\(attachment:(att_[0-9a-z]+)\)/g, (m, alt, id) => ((D.attThumbs || {})[id] ? `<img class="md-img" src="${D.attThumbs[id]}" alt="${alt}">` : `<span class="md-file">${alt || 'image'}</span>`))
+    .replace(/\[([^\]]+)\]\(attachment:(att_[0-9a-z]+)\)/g, '<span class="md-file">$1</span>')
     .replace(/\[\[([^\]]+)\]\]/g, '<span class="wikilink">$1</span>').replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   UI.mdRender = (src) => {
     const out = []; let list = null, code = null, para = [];
@@ -167,7 +169,7 @@
   const readers = (r) => (r.kind === 'team' ? botsOfTeam(r.name) : [r.name]);
 
   /* ---------- editor state ---------- */
-  const ev = { repo: null, kind: null, key: null, isNew: false, base: '', baseSha: null, steps: [], mode: 'split', blame: false, proposal: null, conflict: null, q: '', tags: [], view: 'kinds', file: null, hist: 'file', sel: new Set(), draft: null, phList: false, railTop: 0 };
+  const ev = { repo: null, kind: null, key: null, isNew: false, base: '', baseSha: null, steps: [], blame: false, proposal: null, conflict: null, q: '', tags: [], view: 'kinds', file: null, hist: 'file', sel: new Set(), draft: null, phList: false, railTop: 0 };
   const pathOf = () => (ev.key ? ev.key.split('#')[0] : null);
   // a step is one line of text (conductor's runbook steps are strings); a command or verb rides along as "(run: `cmd`)" / "(verb: x)"
   const stepsFrom = (fm) => (Array.isArray(fm.steps) ? fm.steps : []).map((st) => { if (st && typeof st === 'object') return { do: st.do || '', type: st.verb ? 'verb' : st.run ? 'run' : '', arg: st.verb || st.run || '' }; const m = String(st || '').match(/^(.*?)\s*\((run|verb): `?([^`)]*)`?\)\s*$/); return m ? { do: m[1], type: m[2], arg: m[3] } : { do: String(st || ''), type: '', arg: '' }; });
@@ -187,7 +189,7 @@
     const fm = UI.formValues(f, kind.fields.filter((x) => x.type !== 'steps' && x.type !== 'evidence'));
     if (kind.fields.some((x) => x.type === 'steps')) fm.steps = stepsTo(ev.steps);
     if (kind.fields.some((x) => x.type === 'evidence')) fm.evidence = evTo(ev.evidence);
-    const ta = UI.$('#rp-ed .ced-ta'), fr = UI.$('#ke-free');
+    const ta = UI.$('#rp-md'), fr = UI.$('#ke-free');
     return { fm, body: ta ? ta.value : (ev.draft || {}).body || '', free: fr ? fr.value.trim() : '' };
   }
   const isDirty = () => { const r = ev.repo && R.get(ev.repo), kind = r && ev.kind && kindById(r, ev.kind); if (!kind || kind.readonly || !UI.$('#ke-form')) return false; return serialize(kind, readDraft(kind)) !== ev.base; };
@@ -204,7 +206,6 @@
     enable(UI.$('[data-act="rp-discard"]'), (dirty || ev.isNew) && !ev.proposal, 'No unsaved changes');
     const t = UI.$('#ke-dirty'); if (t) t.classList.toggle('hide', !dirty || !!ev.proposal);
     const p = UI.$('#ke-path'); if (p) p.textContent = derive(kind, titleOf(kind, d.fm) || '', d.free);
-    const pv = UI.$('#rp-prev'); if (pv) pv.innerHTML = UI.mdRender(d.body);
   }
   let rdT; const later = () => { clearTimeout(rdT); rdT = setTimeout(refreshDirty, 60); };
   ['input', 'change'].forEach((t) => document.addEventListener(t, (e) => { if (e.target.closest && e.target.closest('#ke-form')) refreshDirty(); }));
@@ -234,7 +235,7 @@
     if (k === 'url') { try { const u = new URL(x.url); return u.host + u.pathname.replace(/\/$/, ''); } catch (e) { return x.url; } }
     return String(x[k]); };
   UI.evidenceWords = (v) => evFrom(v).map((x) => `${EVK[evKind(x)][1]}: ${evLabel(x)}`).join(' · ');
-  const evChip = (x, i) => { const k = evKind(x), [ic, word] = EVK[k], label = evLabel(x), th = k === 'file' && (D.evThumbs || {})[x.attachment];
+  const evChip = (x, i) => { const k = evKind(x), [ic, word] = EVK[k], label = evLabel(x), th = k === 'file' && (D.attThumbs || {})[x.attachment];
     const href = k === 'ticket' ? caseHref(x.ticket) || '' : k === 'run' ? `#/runs/${x.run}` : k === 'ref' ? refHref(x.ref) : k === 'url' ? x.url : '';
     const inner = `${th ? `<img src="${esc(th)}" alt="">` : icon(ic)}<span class="ev-t">${esc(label)}</span>`, out = k === 'ref' || k === 'url' ? ' target="_blank" rel="noopener noreferrer"' : '';
     return `<span class="ev-chip ev-${k}" data-i="${i}" title="${esc(`${word}: ${label}`)}">${href ? `<a href="${esc(href)}"${out}>${inner}</a>` : k === 'note' ? `<button type="button" data-act="ev-note" data-i="${i}" aria-label="Edit the note: ${esc(label)}">${inner}</button>` : `<span>${inner}</span>`}<button type="button" class="ev-x" data-act="ev-rm" data-i="${i}" aria-label="Remove ${esc(word.toLowerCase())}: ${esc(label)}">${icon('x')}</button></span>`; };
@@ -255,8 +256,8 @@
   UI.act('ev-rm', (b) => { ev.evidence.splice(+b.dataset.i, 1); redrawEv(); });
   UI.act('ev-note', (b) => { const i = +b.dataset.i; UI.form({ title: 'Edit the note', edit: true, values: { note: ev.evidence[i].note }, fields: [{ k: 'note', type: 'text', req: true, label: 'Note' }], submit: 'Save note', onSubmit: (v) => { ev.evidence[i] = { note: v.note.trim() }; redrawEv(); } }); });
   document.addEventListener('change', (e) => { if (e.target.id !== 'ev-file') return; const files = [...e.target.files]; e.target.value = '';
-    Promise.all(files.map((f) => UI.attachFile(f))).then((rs) => { const errs = rs.filter((r) => r.err).map((r) => r.err); D.evThumbs = D.evThumbs || {};
-      rs.filter((r) => r.a).forEach(({ a }) => { if (a.thumb) D.evThumbs[a.id] = a.thumb; ev.evidence.push({ file: a.name, attachment: a.id }); }); S.save(); redrawEv();
+    Promise.all(files.map((f) => UI.attachFile(f))).then((rs) => { const errs = rs.filter((r) => r.err).map((r) => r.err); D.attThumbs = D.attThumbs || {};
+      rs.filter((r) => r.a).forEach(({ a }) => { if (a.thumb) D.attThumbs[a.id] = a.thumb; ev.evidence.push({ file: a.name, attachment: a.id }); }); S.save(); redrawEv();
       if (errs.length) { const fe = UI.$('[data-field="evidence"]'); fe.classList.add('bad'); UI.$('.ferr', fe).textContent = errs.join('. '); } }); });
   const redrawSteps = () => { const f = UI.$('[data-field="steps"] .rb-wrap'); if (f) f.innerHTML = stepsHTML(); later(); };
   UI.act('rb-add', () => { syncSteps(); ev.steps.push({ do: '', type: '', arg: '' }); redrawSteps(); const rows = UI.$$('#rb-steps [data-sk="do"]'); if (rows.length) rows[rows.length - 1].focus(); });
@@ -316,7 +317,10 @@
     const rail = g.querySelector('.rp-rail'); UI.editorGrow();
     if (!g.dataset.placed) { g.dataset.placed = '1'; if (rail) rail.scrollTop = ev.railTop; } }; // once per drawing: a resize keeps where you scrolled
   UI.fitMem = fitMem;
-  document.addEventListener('input', (e) => { if (e.target.closest && e.target.closest('.repo-grid.fit')) requestAnimationFrame(fitMem); });
+  document.addEventListener('input', (e) => { if (!e.target.closest || !e.target.closest('.repo-grid.fit')) return; requestAnimationFrame(fitMem);
+    // the line being typed stays above the stuck Save bar (the browser only keeps it inside the scrolling page)
+    const ta = e.target; if (!ta.classList.contains('md-ta')) return; requestAnimationFrame(() => { const bar = UI.$('.repo-grid.fit .ed-bar'), main = document.getElementById('main'); if (!bar || !main) return;
+      const y = ta.getBoundingClientRect().top + UI.caretXY(ta).y + 8, top = bar.getBoundingClientRect().top; if (y > top) main.scrollBy({ top: y - top, behavior: 'instant' }); }); });
   addEventListener('resize', fitMem); if (window.visualViewport) visualViewport.addEventListener('resize', fitMem);
   (UI.afterRender = UI.afterRender || []).push(() => requestAnimationFrame(fitMem));
   /* Who wrote this (70): a popover under its button, over the entry, never in place of it. It closes on its ✕, on Esc
@@ -333,11 +337,10 @@
   UI.act('rp-blame-x', () => blameClose(true));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !e.defaultPrevented && UI.$('#rp-blame-pop') && !document.querySelector('#pop-menu, #scrim, .drawer-scrim')) { e.preventDefault(); blameClose(true); } }, true);
   document.addEventListener('pointerdown', (e) => { const pop = UI.$('#rp-blame-pop'); if (pop && !pop.contains(e.target) && !e.target.closest('[data-act="rp-blame"]')) blameClose(false); }, true);
-  /* The markdown editor (69d): one unit, set apart from the form around it. Its own border and bar (with the Edit /
-     Split / Preview switch), a code-tinted Markdown pane with a quiet gutter, a divider, and a Preview on the reading
-     surface; each pane labelled. Opens in Split; as tall as its content (69c); prose, so no line numbers (69e). Every markdown body is edited here. */
-  const mdUnit = (text, label) => `<div class="md-unit mode-${ev.mode}"><div class="md-bar"><span class="md-hint" title="Write the path of another entry in double square brackets, e.g. [[runbooks/page-triage]], to link to it">${icon('link')}Link another entry with <code class="md-chip">[[name]]</code></span>${UI.seg([['edit', 'Edit'], ['split', 'Split'], ['preview', 'Preview']], ev.mode, 'rp-mode', 'aria-label="How to show the markdown"')}</div>
-    <div class="ed-panes mode-${ev.mode}"><div class="ed-src"><div class="md-pl" aria-hidden="true">Markdown</div>${UI.editor({ id: 'rp-ed', text, lang: 'md', act: 'rp-input', minRows: 5, wrap: true, prose: true, label: label + ' (markdown)' })}</div><div class="ed-pv"><div class="md-pl" aria-hidden="true">Preview</div><div class="ed-prev prose" id="rp-prev" aria-label="Preview">${UI.mdRender(text)}</div></div></div></div>`;
+  /* The markdown body is written in the shared editor (UI.mdEditor, the GitHub comment-box pattern); [[ suggests the other
+     entries in this repo. */
+  const mdUnit = (text, label) => { const r = R.get(ev.repo), here = pathOf();
+    return UI.mdEditor({ id: 'rp-md', text, label, placeholder: 'What is true, and why you believe it', links: () => kindsFor(r).filter((k) => k.dir).flatMap((k) => entriesOf(r, k).filter((e) => e.path !== here).map((e) => ({ v: e.path.replace(/\.md$/, ''), label: e.title, kind: k.one }))) }); };
   const backBtn = () => `<button class="icon-btn sm rp-back" data-act="rp-list" aria-label="Back to the list" data-tip="The list">${icon('chev')}</button>`;
   function editorHTML(r, kind) {
     const id = r.id, d = ev.draft || { fm: {}, body: '' }, path = ev.isNew ? derive(kind, titleOf(kind, d.fm) || '', d.free) : pathOf();
@@ -415,7 +418,6 @@
   UI.act('rp-file', (a) => { ev.file = a.dataset.path; ev.phList = false; rerender(); });
   UI.act('rp-list', () => { keepDraft(); ev.phList = true; rerender(); });
   UI.act('rp-as-kind', (b) => { const r = repoOf(b), k = kindOfPath(r, b.dataset.path), e = entriesOf(r, k).find((x) => x.path === b.dataset.path); if (e) openEntry(r, k, e); rerender(); });
-  UI.act('rp-mode', (b) => { const ta = UI.$('#rp-ed .ced-ta'); if (ta && ev.draft) ev.draft.body = ta.value; const r = R.get(ev.repo), k = kindById(r, ev.kind); if (k && UI.$('#ke-form')) { const d = readDraft(k); ev.draft = d; } ev.mode = b.dataset.v; ev.blame = false; rerender(); });
   UI.act('rp-blame', () => (UI.$('#rp-blame-pop') ? blameClose(true) : blameOpen()));
   UI.act('rp-hist', (b) => { const r = R.get(ev.repo), k = r && kindById(r, ev.kind); if (k && UI.$('#ke-form')) ev.draft = readDraft(k); ev.hist = b.dataset.v; rerender(); });
   UI.act('rp-q', (el) => { ev.q = el.value.trim(); rerender(); });
@@ -550,7 +552,7 @@
     const s = UI.modal(`<div class="modal-head"><div><div class="caps">${esc(r.id)}</div><h2>Import markdown</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
       <div class="modal-body stack">${UI.seg([['drop', 'Drop files'], ['paste', 'Paste'], ['repo', 'From a repo']], 'drop', 'up-mode')}
         <div class="up-pane" data-pane="drop"><label class="dropzone" id="up-drop">${icon('upload')}<span><b>Drop markdown files here</b> or choose them</span><input type="file" id="up-file" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple aria-label="Choose markdown files"></label><div id="up-list" class="small muted"></div></div>
-        <div class="up-pane hide" data-pane="paste"><div class="field"><label for="up-text">Paste markdown</label><textarea class="textarea mono" id="up-text" rows="9" placeholder="# Failover&#10;&#10;## Steps&#10;1. …"></textarea></div></div>
+        <div class="up-pane hide" data-pane="paste"><div class="field"><label>Paste markdown</label>${UI.mdEditor({ id: 'up-text', label: 'Paste markdown', placeholder: '# Failover\n\n## Steps\n1. …' })}</div></div>
         <div class="up-pane hide" data-pane="repo"><div class="grid g2"><div class="field"><label for="up-repo">Repo</label><input class="input mono" id="up-repo" value="acme/infra"></div><div class="field"><label for="up-src">Path in repo</label><input class="input mono" id="up-src" value="docs/runbooks/failover.md"></div></div><div class="hint">Fetched through the gh connector (read).</div></div>
         <div class="callout small">Next you confirm which kind each file becomes. Nothing is placed by path.</div></div>
       <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="up-go">Next: map into kinds ${icon('chev')}</button></div>`, { wide: true });
@@ -606,7 +608,7 @@
         { k: 'name', type: 'string', req: true, readonly: !!owner, pattern: /^[a-z][a-z0-9_-]{0,39}$/, patternMsg: 'lowercase letters, digits, _ and -, up to 40', validate: (v, all) => (!owner && allColls().some((c) => c.owner === all.owner && c.name === v) ? 'That team or bot already has a collection by that name.' : '') },
         { k: 'dir', type: 'string', label: 'Directory', ph: 'defaults to the name', validate: (v) => { const d = String(v || '').replace(/\/$/, ''); return d && !/^[a-z][a-z0-9_-]*(\/[a-z0-9_-]+)*$/.test(d) ? 'A relative folder such as notes/vendors' : d && S.RESERVED_DIRS.includes(d.split('/')[0]) ? `${d.split('/')[0]}/ belongs to a built-in kind` : ''; } },
         { k: 'fields', type: 'list', label: 'Fields (besides title)', ph: 'severity!:enum(sev1|sev2|sev3)', help: 'name:type, one per line; type is string, text, list, steps, number, bool or enum(a|b|c). Add ! after the name for a required field.', validate: (v) => { const bad = (v || []).find((f) => !FIELD_LINE.test(f)); return bad ? `"${bad}" is not name:type (or name!:type)` : ''; } },
-        { k: 'template', type: 'text', label: 'Body template (markdown)', ph: '## Timeline\n\n## Root cause\n' },
+        { k: 'template', type: 'markdown', label: 'Body template', ph: '## Timeline\n\n## Root cause\n' },
         { k: 'free_paths', type: 'bool', label: 'Free paths', on: 'let writers choose a path inside the directory (otherwise the path follows the title)' },
         { k: 'writers', type: 'select-multi', req: true, label: 'Who writes', options: [['operator', 'operator (you, from the dashboard)'], ['proposal', 'proposal (team bots propose, you approve)'], ['bots', 'bots (the bot writes its own memory)']], help: 'A team takes operator and proposal; a bot takes operator and bots.', validate: (v, all) => { const W = String(all.owner || owner || '').startsWith('team:') ? ['operator', 'proposal'] : ['operator', 'bots']; const bad = (v || []).find((w) => !W.includes(w)); return bad ? `${bad} isn't a writer for a ${String(all.owner || owner).split(':')[0]}; use ${W.join(' or ')}` : ''; } }],
       submit: 'Review change', submitIcon: 'check',
