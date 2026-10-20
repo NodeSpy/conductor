@@ -898,7 +898,7 @@
   UI.editorSet = (root, text, o = {}) => { const ta = root.querySelector('.ced-ta'); if (ta.value !== text) { const pos = ta.selectionStart; ta.value = text; if (document.activeElement === ta) ta.setSelectionRange(Math.min(pos, text.length), Math.min(pos, text.length)); } UI.editorMark(root, o); };
   UI.editorScrollTo = (root, line) => { const ta = root.querySelector('.ced-ta'); const y = (line - 1) * 19.55; if (ta.scrollHeight > ta.clientHeight) ta.scrollTop = Math.max(0, y - 60); else { const sc = root.closest('.ced-scroll') || $('#main'); const r = root.getBoundingClientRect(); sc.scrollTop += r.top + y - 140; } };
   // A wrapping editor never scrolls inside: it grows with its text (lines wrap, the page scrolls), so the highlight layer and the textarea always line up
-  UI.editorGrow = (root) => { (root ? [root] : document.querySelectorAll('.ced.wrap')).forEach((c) => { const ta = c.querySelector('.ced-ta'); if (!ta || !ta.offsetParent) return; ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }); };
+  UI.editorGrow = (root) => { (root ? [root] : document.querySelectorAll('.ced.wrap')).forEach((c) => { const ta = c.querySelector('.ced-ta'); if (!ta || !ta.offsetParent || c.closest('.repo-grid.fit')) return; /* a fitted editor scrolls inside itself instead */ ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }); };
   document.addEventListener('input', (e) => { if (e.target.classList.contains('ced-ta') && e.target.parentNode.classList.contains('wrap')) UI.editorGrow(e.target.parentNode); });
   window.addEventListener('resize', () => UI.editorGrow());
   (UI.afterRender = UI.afterRender || []).push(() => { UI.editorGrow(); setTimeout(() => UI.editorGrow(), 200); });

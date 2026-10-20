@@ -99,7 +99,7 @@ test('knowledge: approve a promotion with a passkey; a bot proposes one from mem
   await page.locator('#su-go').click();
   await expect(page.locator('#rp-ed .ced-ta')).toHaveValue(/30s/);
   await go(page, '#/bots/web-triage/memory');
-  await page.locator('[data-act="rp-promote"]').click();
+  await page.locator('.repo-ed [data-act="rp-file-menu"]').click(); await page.locator('.menu [data-act="rp-promote"]').click();
   await expect(page).toHaveURL(/#\/teams\/platform\/knowledge/);
   await expect(page.locator('.item', { hasText: 'Promote knowledge entry “Checkout margin fallback” from web-triage' })).toContainText('Approve');
 });

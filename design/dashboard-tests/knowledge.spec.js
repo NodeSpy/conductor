@@ -9,6 +9,9 @@ const { test, expect, go, applyStaged } = require('./fixtures');
 const ta = (page) => page.locator('#rp-ed .ced-ta');
 const head = (page, id) => page.evaluate((i) => { const c = R.get(i).log[0]; return { who: c.who, kind: c.kind, msg: c.msg, n: c.changes.length, trailers: c.trailers || '', paths: c.changes.map((x) => x.path) }; }, id);
 const files = (page, id) => page.evaluate((i) => R.get(i).files, id);
+// A bot's memory on a phone shows the list or the entry (69b): these step to the one the next line taps.
+const listOn = async (page) => { const b = page.locator('[data-act="rp-list"]'); if (await b.isVisible()) await b.click(); };
+const entryOn = async (page) => { if (!(await page.locator('.repo-ed').first().isVisible())) await page.locator('.kind-entries .entry.on').click(); };
 const newKind = async (page, k) => { await page.locator('[data-act="rp-new"]').first().click(); await page.locator(`[data-act="rp-new-pick"][data-k="${k}"]`).click(); };
 const addTo = async (page, k, v) => { const i = page.locator(`#ke-form [data-listk="${k}"] input.list-add`); await i.fill(v); await i.press('Enter'); };
 const save = (page) => page.locator('[data-act="rp-save"]').click();
@@ -89,6 +92,7 @@ test('the runbook step editor: add, a command and a verb per step, reorder, remo
   expect(t).toMatch(/steps:\n\s+- "?Drain the worker \(run: `systemctl stop worker`\)"?\n\s+- Start it again\n\s+- "?Tell #ops \(verb: slack-ops.post\)"?/);
   // knowledge shows what cites it; runbooks show the cases they were used in
   await go(page, '#/bots/platform-sre/memory');
+  await listOn(page);
   await page.locator('[data-act="rp-kind"][data-k="knowledge"]').click();
   await page.locator('[data-act="rp-open"][data-key="knowledge/alb.md"]').click();
   await expect(page.locator('.cites')).toContainText('Latency');
@@ -205,16 +209,21 @@ test('import maps markdown into a kind: a runbook is detected and confirmed', as
 
 test('bot memory: edit, pin, who wrote it; the log is annotated or flagged, never rewritten', async ({ page }) => {
   await go(page, '#/bots/platform-sre/memory', { fresh: true });
+  await listOn(page);
   await page.locator('[data-act="rp-open"][data-key="knowledge/db-prod-1.md"]').click();
   await ta(page).fill((await ta(page).inputValue()).replace('No data loss.', 'No data loss. Pool size 200.'));
   await save(page);
   expect(await head(page, 'bot:platform-sre')).toMatchObject({ who: 'operator:ops' });
   await page.locator('[data-act="rp-file-menu"]').click(); await page.locator('#pop-menu [data-act="rp-pin"]').click();
+  await listOn(page);
   await expect(page.locator('.kind-entries .entry.on .pin')).toBeVisible();
+  await entryOn(page);
   await page.locator('[data-act="rp-blame"]').click();
   await expect(page.locator('.bl-group.bot').first()).toContainText('Atlas');
   await expect(page.locator('.bl-group.operator').first()).toContainText('you');
+  await listOn(page);
   await page.locator('[data-act="rp-kind"][data-k="log"]').click();
+  await entryOn(page);
   await expect(page.locator('#ke-form')).toHaveCount(0);
   await expect(page.locator('.repo-ed')).toContainText('history isn\'t rewritten');
   const before = (await files(page, 'bot:platform-sre'))['log/2026-10-16-c29.md'];
@@ -235,10 +244,11 @@ test('bot memory: edit, pin, who wrote it; the log is annotated or flagged, neve
 
 test('a bot commits while you edit: the conflict is shown and you rebase explicitly', async ({ page }) => {
   await go(page, '#/bots/platform-sre/memory', { fresh: true });
+  await listOn(page);
   await page.locator('[data-act="rp-kind"][data-k="runbook"]').click();
   await page.locator('[data-act="rp-open"][data-key="runbooks/latency.md"]').click();
   await ta(page).fill('Check the CDN cache hit rate too.\n');
-  await page.locator('[data-act="rp-sim"]').click();
+  await page.locator('.repo-ed [data-act="rp-file-menu"]').click(); await page.locator('.menu [data-act="rp-sim"]').click();
   await save(page);
   await expect(page.locator('.conflict')).toContainText('Conflict');
   await page.locator('[data-act="rp-rebase"]').click();
@@ -251,16 +261,19 @@ test('a bot commits while you edit: the conflict is shown and you rebase explici
 test('unsaved changes are guarded; browse by kind with tag filters; search spans team knowledge and bot memory', async ({ page }) => {
   await go(page, '#/bots/platform-sre/memory', { fresh: true });
   // the shared filter bar: a qualifier narrows to what an entry applies to
+  await listOn(page);
   await page.fill('.fb[data-fb="rp"] .fb-in', 'about:nat'); await page.locator('.fb[data-fb="rp"] .fb-in').press('Enter');
   await expect(page.locator('.kind-entries .entry')).toHaveCount(1);
   await expect(page.locator('.kind-entries')).toContainText('Infra map');
   await page.locator('.fb[data-fb="rp"] .fb-pill .fb-px').click();
+  await entryOn(page);
   await page.fill('#ke-title', 'changed');
   await page.evaluate(() => { location.hash = '#/overview'; });
   await expect(page.locator('.modal, .cdrawer').first()).toContainText('aren\'t saved');
   await page.locator('#cf-cancel, .modal [data-close]').first().click();
   await expect(page).toHaveURL(/memory/);
   await page.locator('[data-act="rp-discard"]').click(); await page.locator('#cf-ok').click();
+  await listOn(page);
   await page.fill('.fb[data-fb="rp"] .fb-in', 'Safari'); await page.locator('.fb[data-fb="rp"] .fb-in').press('Enter');
   await expect(page.locator('.search-res')).toHaveCount(1);
   await go(page, '#/teams/platform/knowledge');

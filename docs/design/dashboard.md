@@ -669,17 +669,32 @@ operator save, on a bot proposal or promotion, and on import.
   that declares `free_paths: true`, and stays inside its directory.
 - **Layout:** the entry is the work, so it takes the wide column; *What it
   knows* (title, a quiet line with the entry count and the repo, and a
-  normal **New…** button) and **History** stack in the narrow column beside
-  it (under it on a phone). The page is capped in width, so a third column
-  only ever squeezed the entry. **Import markdown…** lives in the New…
-  sheet, not as a loose icon in the head.
-- **The markdown body opens in Edit** and is at least a screen tall; it
-  grows with its text (the page scrolls, never the field) and **wraps long
-  lines** rather than running them off the pane. Split puts the source and
-  the preview side by side at half the entry's width each (stacked on a
-  phone), and the chosen mode holds from entry to entry. The highlighted
-  copy and the textarea under it share one font and one gutter, so the
-  caret and a selection sit on the letters.
+  normal **New…** button) and **History** stack in the narrow rail beside
+  it. The page is capped in width, so a third column only ever squeezed
+  the entry. **Import markdown…** lives in the New… sheet, not as a loose
+  icon in the head.
+- **A bot's memory fits the screen**, as a bot's Chat tab does: the
+  page itself never scrolls. The rail scrolls by itself; the entry is a
+  column whose head and **Save bar** (commit message, Discard, Save, and
+  the line saying what saving does) stay on screen while its body scrolls,
+  and both keep their place across redraws. *Simulate a bot commit* and
+  *Promote to team …* are in the entry's ⋯. On a phone it is **the list or
+  the entry**, each filling the screen; the entry's head leads with a Back
+  control to the list. (A team's knowledge, with its proposals above,
+  scrolls as a page.)
+- **The markdown body opens in Edit** and **wraps long lines** rather than
+  running them off the pane. Fitted, it is the height of the entry's body,
+  so scrolled to it fills the view, and it scrolls inside itself; on a
+  team's page it grows with its text. Split puts the source and the preview
+  side by side at half the entry's width each (stacked on a phone), and the
+  chosen mode holds from entry to entry. The highlighted copy and the
+  textarea under it share one font and one gutter, so the caret and a
+  selection sit on the letters.
+- **Who wrote this** is a popover under its button, over the entry and
+  never in its place: each part of the saved file beside the commit that
+  last changed it. The button reads as pressed while it is open; its ✕,
+  Esc and a click anywhere else close it, and focus returns to the
+  button.
 - **Browsing is by kind** (Knowledge / Runbooks / Watch / Log / Handoff /
   collections) with counts, search, and filters by applies-to tag. A
   **Files** view exists as a secondary, read-mostly view: raw files, with
@@ -702,9 +717,9 @@ operator save, on a bot proposal or promotion, and on import.
   (field-wise: the fields you changed win, the body merges line by line),
   overwrite theirs, or keep theirs. Unsaved changes are guarded on
   navigation.
-- **History** per entry and per repo: author (operator or bot, with a case
-  link), the diff, **revert** as a new commit, and **who wrote this**
-  (blame-lite).
+- **History** per entry and per repo: author (operator or bot, with a
+  link to its ticket), the diff, **revert** as a new commit, and **who
+  wrote this** (blame-lite, the popover above).
 - **Proposals and promotion** (team repos) show the kind and are validated
   against its schema. A malformed proposal (say, a runbook with an empty or
   non-string step, or no rollback) lists the schema errors, and *Approve* is

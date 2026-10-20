@@ -547,7 +547,7 @@
   const memOf = (m) => { if (m.name === 'platform-sre') return D.memory; D.memories = D.memories || {}; return (D.memories[m.name] = D.memories[m.name] || { files: { 'knowledge/README.md': `# ${m.name}\n\nWhat ${m.name} has learned.\n` }, log: [], open: 'knowledge/README.md' }); };
   const mv = { edit: false };
   function memory(m) {
-    return shell(m, 'memory', `<div class="callout small" style="margin-bottom:12px">${UI.nm(m.name)} writes its own memory as it works. You can read, correct, pin and delete what it knows; every save is one commit authored by you.</div>${UI.repoView('bot:' + m.name, { title: `Memory repo of ${UI.botName(m.name)}` })}`);
+    return shell(m, 'memory', `${UI.repoView('bot:' + m.name, { title: `Memory repo of ${UI.botName(m.name)}` })}`);
   }
   const sha = () => Math.random().toString(16).slice(2, 9);
   document.addEventListener('input', (e) => { if (e.target.id !== 'mem-text') return; const b = UI.$('#mem-commit'); const m = M(b.dataset.m), mem = memOf(m); const same = e.target.value === mem.files[mem.open || Object.keys(mem.files)[0]]; if (same) { b.setAttribute('aria-disabled', 'true'); b.dataset.reason = b.dataset.tip = 'Nothing changed yet: edit the file first'; } else { b.removeAttribute('aria-disabled'); delete b.dataset.reason; delete b.dataset.tip; } });

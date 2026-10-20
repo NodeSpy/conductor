@@ -199,8 +199,24 @@ button.node { font: inherit; color: inherit; text-align: left; }
 }
 /* knowledge & memory repos */
 /* The entry is the work: it takes the wide column. What it knows and History stack on the left (the page is capped in width, so a third column only ever squeezed the entry) */
-.repo-grid { grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "side ed" "hist ed"; align-items: start; }
-.repo-grid > .repo-side { grid-area: side; } .repo-grid > .repo-hist { grid-area: hist; } .repo-grid > :not(.repo-side):not(.repo-hist) { grid-area: ed; }
+.repo-grid { grid-template-columns: 260px minmax(0, 1fr); align-items: start; }
+.rp-rail { display: flex; flex-direction: column; gap: var(--gap-stack, 16px); min-width: 0; }
+/* A bot's memory fits the screen (69b; the grid's height is set in repo.js): nothing below it, the page never scrolls.
+   The rail scrolls by itself; the entry is a column whose head and Save bar stay put while its body scrolls. */
+#main > .page:has(.repo-grid.fit) { padding-bottom: 0; }
+.repo-grid.fit { align-items: stretch; grid-template-rows: minmax(0, 1fr); min-height: 0; }
+.repo-grid.fit > .rp-rail { overflow-y: auto; overscroll-behavior: contain; min-height: 0; padding-bottom: 2px; }
+.repo-grid.fit > .rp-rail > .panel { flex: none; }
+.repo-grid.fit > .panel { min-height: 0; max-height: 100%; overflow-y: auto; overscroll-behavior: contain; }
+.repo-grid.fit > .repo-ed.ke:has(> .ed-body) { display: flex; flex-direction: column; overflow: hidden; }
+.repo-grid.fit > .repo-ed > .panel-head, .repo-grid.fit > .repo-ed > .ed-foot, .repo-grid.fit > .repo-ed > .ed-sign { flex: none; }
+.repo-grid.fit > .repo-ed > .ed-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.repo-grid.fit > .repo-ed > .ed-foot { border-top: 1px solid var(--color-border-subtle); }
+.repo-grid.fit .ke .ced.wrap .ced-ta { height: var(--ed-h, 320px) !important; min-height: 0 !important; overflow-y: auto; scrollbar-gutter: stable; }
+.repo-grid.fit .ke .ced.wrap .ced-hl { scrollbar-gutter: stable; }
+.repo-grid.fit .ke .ed-panes { min-height: 0; height: var(--ed-h, 320px); }
+.repo-grid.fit .ke .ed-prev { overflow-y: auto; }
+.rp-back { display: none; } .rp-back svg { transform: rotate(180deg); }
 /* Its head: the title with New… beside it, the repo a quiet line under both */
 .repo-side > .panel-head.rp-side-head { flex-wrap: wrap; align-items: center; row-gap: 2px; }
 .rp-side-head > h3 { flex: 1 1 0; min-width: 0; }
@@ -234,6 +250,14 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .ed-foot { flex-wrap: wrap; gap: 6px; }
 .ed-sign { padding: 4px 14px 10px; }
 .blame { padding: 8px 0; }
+/* Who wrote this (70): a popover under its button, over the entry (which stays where it was), never in its place */
+.repo-ed { position: relative; }
+.rp-blame-pop { position: absolute; z-index: var(--z-popover); top: 52px; right: 12px; width: min(540px, calc(100% - 24px)); max-height: min(70vh, calc(100% - 64px)); /* top: set under its button in repo.js */ display: flex; flex-direction: column; background: var(--color-bg-raised); border: 1px solid var(--color-border-default); border-radius: var(--radius-card); box-shadow: var(--shadow-3); animation: pop .14s var(--motion-easing-out); }
+.rp-blame-pop:focus { outline: none; } .rp-blame-pop:focus-visible { box-shadow: var(--shadow-3), 0 0 0 2px var(--color-focus-ring); }
+.rp-bp-head { display: flex; gap: 8px; align-items: flex-start; padding: 12px 12px 8px 16px; border-bottom: 1px solid var(--color-border-subtle); flex: none; }
+.rp-bp-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; padding: 6px 0; }
+.rp-blame-pop .bl-group { grid-template-columns: 150px minmax(0, 1fr); }
+.repo-ed .ed-head [data-act="rp-blame"].on { background: var(--color-accent-subtle); color: var(--color-text-primary); box-shadow: inset 0 0 0 1px var(--color-border-strong); }
 .bl-group { display: grid; grid-template-columns: 210px minmax(0, 1fr); border-left: 3px solid var(--color-border-strong); margin: 0 0 2px; }
 .bl-group.operator { border-left-color: var(--color-accent-default); } .bl-group.bot { border-left-color: var(--color-icon-default); }
 .bl-who { padding: 6px 10px; display: flex; flex-direction: column; gap: 2px; background: var(--color-bg-rail); }
@@ -246,7 +270,16 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .kprop .cbx { margin-top: 3px; }
 @media (max-width: 1100px) { .repo-grid { grid-template-columns: 220px minmax(0, 1fr); } }
 @media (max-width: 720px) {
-.repo-grid { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: auto; grid-template-areas: "side" "ed" "hist"; }
+.repo-grid { grid-template-columns: minmax(0, 1fr) !important; }
+.repo-grid:not(.fit) > .rp-rail { display: contents; } .repo-grid:not(.fit) .repo-hist { order: 2; }
+/* a phone shows the list or the entry, each filling the screen; the entry's head leads with the way back */
+.repo-grid.fit { grid-template-rows: minmax(0, 1fr); }
+.repo-grid.fit.ph-entry > .rp-rail, .repo-grid.fit.ph-list > :not(.rp-rail) { display: none !important; }
+.repo-grid.fit .rp-back { display: inline-flex; margin-left: -6px; }
+.repo-ed .ed-head .rp-bl-t { display: none; } /* Who wrote this: its icon, named for a screen reader */
+.repo-grid.fit > .repo-ed > .ed-head { flex-wrap: nowrap; }
+.rp-blame-pop { max-height: calc(100% - 150px); } .rp-blame-pop .bl-group { grid-template-columns: 1fr; } .rp-blame-pop .bl-who { flex-direction: row; gap: 8px; align-items: baseline; } /* the Save bar stays in view below it */
+.ed-foot #rp-msg { flex: 1 0 100%; } .ed-foot .btn.primary { flex: 1 1 auto; } /* the message on its own line, then Discard and Save */
 .ke .ced.wrap .ced-ta { min-height: max(260px, calc(var(--dvh) - 320px)) !important; }
 .ed-panes { grid-template-columns: 1fr; } .ed-panes.mode-split .ed-prev { border-top: 1px solid var(--color-border-subtle); }
 .ed-src { border-right: 0; }

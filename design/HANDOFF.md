@@ -94,6 +94,11 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **Items 69b and 70, the Memory tab (2026-10-20):** a bot's memory fits the screen like a chat: the page never
+  scrolls, the rail and the entry's body scroll themselves and keep their place across redraws, the Save bar is always
+  on screen (Simulate and Promote moved into the entry's ⋯), and a phone shows the list or the entry with a Back control.
+  Who wrote this is a popover under its button (✕, Esc, click-away; pressed while open) instead of replacing the editor.
+  `memory-layout.spec.js` checks the fit at 1440×900, 1280×720 and 390×844, and the popover's three ways to close.
 - **Item 69, a bot's Memory tab (2026-10-20):** the sidebar head is a title, a quiet entries-and-repo line and a
   normal New… (Import moved into the New… sheet); the entry takes the wide column with What it knows and History
   stacked beside it; the markdown opens in Edit, starts a screen tall, grows with its text and wraps long lines (Split
