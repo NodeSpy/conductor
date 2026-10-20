@@ -24,6 +24,28 @@ func TestScrubAllShort(t *testing.T) {
 	}
 }
 
+// TestScrubTransforms pins that scrub redacts the common reversible encodings a
+// hostile page script could use to slip a filled value past a literal scrub
+// (LEAK 2 defense-in-depth), and leaves ordinary text alone.
+func TestScrubTransforms(t *testing.T) {
+	in := &Instance{}
+	const pw = "SENTINEL-PW-9f3a1b2c"
+	in.remember(1, pw)
+	for name, s := range map[string]string{
+		"literal":  "x " + pw + " y",
+		"reversed": "x " + reverseStr(pw) + " y",
+		"base64":   "x U0VOVElORUwtUFctOWYzYTFiMmM= y",
+	} {
+		if got := in.scrub(s); strings.Contains(got, pw) || got == s {
+			t.Fatalf("scrub(%s) did not redact: %q", name, got)
+		}
+	}
+	// Ordinary text is untouched.
+	if got := in.scrub("the quick brown fox"); got != "the quick brown fox" {
+		t.Fatalf("scrub over-redacted ordinary text: %q", got)
+	}
+}
+
 // TestWalletCVCReceiptExfil (red team, attacker B — exfiltration/propagation).
 //
 // The card's CVC is filled with no text-scrub (walletfill.go: cvc returns a

@@ -2,6 +2,8 @@ package browser
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -885,14 +887,64 @@ func (in *Instance) secretValues() []string {
 // Redacted is what a filled value reads as.
 const Redacted = "[redacted]"
 
-// scrub replaces every filled value in s.
+// scrub replaces every filled value in s, and the common reversible encodings
+// of it (reverse, base64, hex, percent). A page script on a filled value's own
+// origin can read the field and surface a transform of it in the DOM, which a
+// verb that returns page text (snapshot, title, tabs) would otherwise hand the
+// agent past a literal scrub — the same transform-past-scrub weakness that is
+// why evaluate is refused after a fill (snapshot cannot be refused).
+//
+// This is defense-in-depth, not a guarantee: an arbitrary transform (XOR, a
+// rotation, a custom split) still defeats any scrub. The guarantees that bound
+// a hostile script on the origin are the egress narrowing (it cannot phone the
+// value out) and binding credentials to origins you trust.
 func (in *Instance) scrub(s string) string {
 	for _, v := range in.secretValues() {
-		if v != "" {
-			s = strings.ReplaceAll(s, v, Redacted)
+		if v == "" {
+			continue
+		}
+		s = strings.ReplaceAll(s, v, Redacted)
+		for _, f := range secretForms(v) {
+			s = strings.ReplaceAll(s, f, Redacted)
 		}
 	}
 	return s
+}
+
+// secretForms are the common reversible encodings of a filled value a hostile
+// page script might surface to slip it past a literal scrub. Only for values
+// long enough that an encoding won't collide with ordinary page content.
+func secretForms(v string) []string {
+	if len(v) < 6 {
+		return nil // short values (a CVC, a region code) are node-masked only
+	}
+	b := []byte(v)
+	forms := []string{
+		reverseStr(v),
+		base64.StdEncoding.EncodeToString(b),
+		base64.RawStdEncoding.EncodeToString(b),
+		base64.URLEncoding.EncodeToString(b),
+		base64.RawURLEncoding.EncodeToString(b),
+		hex.EncodeToString(b),
+		strings.ToUpper(hex.EncodeToString(b)),
+		url.QueryEscape(v),
+		url.PathEscape(v),
+	}
+	out := forms[:0:0]
+	for _, f := range forms {
+		if f != "" && f != v {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func reverseStr(s string) string {
+	r := []rune(s)
+	for i, j := 0, len(r)-1; i < j; i, j = i+1, j-1 {
+		r[i], r[j] = r[j], r[i]
+	}
+	return string(r)
 }
 
 // scrubAll replaces every filled value, including the short ones kept out of

@@ -127,6 +127,91 @@ Commit: see `git log` for `redteam: the CVC is scrubbed from a receipt's own tex
 
 ---
 
+## LEAK 2 — a filled value, transformed by page script, is read back through `snapshot`
+
+**Severity: medium–high. Demonstrated end-to-end on the real headless browser.**
+Breaks the wiki's claim that a filled value is *"scrubbed from … snapshots, page
+text, titles, URLs"* and never *"enters the agent's … snapshots."*
+
+### The hole
+
+The scrub is a **literal string replace**. The design itself notes this is not a
+guarantee against transforms — which is exactly why `evaluate` is refused after a
+fill ("a side-effect-free expression could read a filled field and transform it
+past any string scrub; only refusing it is a guarantee"). But the **same
+transform-past-scrub weakness applies to `snapshot`, `tabs` and the title**, fed
+not by the agent's `evaluate` (which is off) but by **page script on the filled
+value's own origin** — which the design already acknowledges can read the field.
+
+Proof (`TestTransformExfilViaSnapshot`, real browser): a login page carries
+script that, the instant conductor fills the password, reads the field, reverses
+it and base64-encodes it, and writes both into a sibling text node and an
+`aria-label`. `snapshot` then returned:
+
+```
+- textbox "Password" [ref=e11] [focused, value="«filled by conductor»"]
+  - text: ••••••••••••••••••••
+- text: REV:c2b1a3f9-WP-LENITNES B64:U0VOVElORUwtUFctOWYzYTFiMmM=
+```
+
+The field node is masked, but the transformed copies sail through the literal
+scrub. A malicious agent reads the password out of its own `snapshot` reply —
+**even though the egress narrowing blocks that hostile script from phoning the
+value out itself.** The snapshot read-back defeats the egress containment.
+
+### The fix (defense-in-depth) and the honest residual
+
+`scrub` now also redacts the **common reversible encodings** of each filled
+value (reverse, base64 std/url/raw, hex upper/lower, percent) for values ≥ 6
+chars (`secretForms`, `credentials.go`). This closes the demonstrated vectors
+(`TestTransformExfilViaSnapshot` passes after the fix) and the ones an attacker
+reaches for first, across every page-text reply (`snapshot`, `tabs`, title,
+downloads, `wait`), and — via `scrubAll` — the receipt.
+
+**This is defense-in-depth, not a guarantee, and I will not pretend otherwise.**
+Confirmed still leaking on the real browser (characterization run, not
+committed): a **char-code** transform `83.69.78.84.…` is read straight out of
+`snapshot`. XOR, a rotation, or a custom split are equally uncatchable by any
+scrub. `snapshot` cannot be refused the way `evaluate` is, so the literal/encoded
+scrub is best-effort redaction of echoes, **not** a boundary. The real controls
+that bound a hostile script on a filled origin are:
+
+- **Origin trust** — a credential fills only on its exact bound origin; binding
+  it to an origin that runs hostile script is the operator's trust decision (the
+  wiki's "bind to exact origins you trust / prefer agent-specific credentials").
+- **Egress narrowing** — a *non-colluding* compromised third-party script on the
+  origin cannot send the value anywhere (the logged-in browser reaches only the
+  credential's hosts). The snapshot read-back is the gap this leak exposes; the
+  fix closes the common encodings and documents the rest.
+- **Redundancy for agent-controlled origins** — if the agent controls the
+  origin's content, that origin's own server already received the value; snapshot
+  adds nothing there.
+
+**Recommendation for the design:** state plainly (as it already does for
+`evaluate`) that `snapshot`/page-text verbs carry the same transform caveat —
+the scrub redacts literal and common-encoded echoes, and a hostile script on a
+*trusted* origin can still surface a value through an arbitrary transform. The
+guarantee is origin trust + egress, not the scrub.
+
+Commit: see `git log` for `redteam: scrub common transforms of a filled value from page text`.
+
+---
+
+## PASS — evaluate read-back after a fill (the operator's prime suspicion)
+
+Proven on the real browser (`TestEvaluateReadbackBlockedAfterFill`): with the
+identity **opted in** to `evaluate`, after `login` fills the password every
+read-back expression is refused — `.value`, `.defaultValue`,
+`.getAttribute('value')`, a `FormData` dump, `document.activeElement.value`,
+`getSelection().toString()`, `.outerHTML`, `btoa(value)`, `.length`, and a
+whole-form `new FormData(form)` serialization. None run, because `evaluate` is
+**off for the life of a browser once any value is filled** (`in.filled()`, set by
+`remember` on every credential/profile/card fill, *before* the value is set —
+fail-closed). The guarantee does not rest on `throwOnSideEffect` (reading is not
+a side effect); it rests on refusing `evaluate` outright. The transform read-back
+the operator suspected therefore cannot run through `evaluate` — but it can
+through page script + `snapshot`, which is LEAK 2 above.
+
 ## PASS — credential / profile / card fill into an agent-controlled page
 
 The operator's priority angle. Attacked every listed vector; all fail closed.
@@ -206,16 +291,17 @@ beacons everything it sees to its own server. Conductor signs in; then:
   globals/prototypes, so main-world pollution of `Object.prototype`, `fetch`,
   `JSON`, etc. does not affect it.
 
-**Inherent residual (documented, not a conductor break):** an *ordinary* `input`
-listener still fires and sees the value — exactly as it would for a real user's
-keystrokes. That is "a site sees what is typed into it". The test asserts this
-happened (the page's own server did receive the value) and that nothing of it
-crossed to the agent. The mitigation is the design's: bind credentials, profiles
-and cards to **exact origins you trust**, and prefer agent-specific
-credentials/limited cards. No fill method that lets the site function can hide
-the value from the site's own non-malicious event listeners (CDP
-`Input.insertText` and trusted events fire listeners too); only setter-override
-interception is blocked, which conductor already does.
+**Residual — and where it stops being inherent (see LEAK 2):** an *ordinary*
+`input` listener still fires and sees the value — exactly as it would for a real
+user's keystrokes ("a site sees what is typed into it"). The hostile page then
+sending it to **its own origin** is inherent. But the hostile page surfacing a
+*transform* of it in the DOM so the **agent** reads it through `snapshot` is a
+real leak (LEAK 2) — the literal scrub missed it; the fix redacts common
+encodings and the residual (arbitrary transforms) is bounded by origin trust +
+egress, not the scrub. No fill method that lets the site function can hide the
+value from the site's own event listeners (CDP `Input.insertText` and trusted
+events fire listeners too); only setter-override interception is blocked, which
+conductor already does.
 
 ## PASS — browser extensions, CDP endpoint, launch flags, process isolation
 
