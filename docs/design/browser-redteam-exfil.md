@@ -173,6 +173,79 @@ Filling into a page the agent controls **on the exact bound origin** is not a
 conductor break — it is the inherent "a site sees what is typed into it", which
 the design documents and bounds with exact origins and limited cards.
 
+## PASS — in-page JS injection / prototype poisoning / keypress capture
+
+Operator's added direction: even on the correct allowed origin, assume hostile
+script runs in the page (stored/reflected XSS, a third-party widget, a
+compromised dependency, or the agent's own `evaluate`), and assume the agent
+wants to sniff keystrokes below the page. Proven by
+`TestCredentialFillUnobservableByPageScript`: a login page carries hostile
+script that (a) redefines `HTMLInputElement.prototype.value`'s setter in the
+main world, (b) adds capture-phase `keydown` and `input` window listeners, and
+beacons everything it sees to its own server. Conductor signs in; then:
+
+- **Prototype poisoning does not intercept the fill.** The overridden setter
+  was invoked **0 times** — conductor sets the value through the *isolated
+  world's* own pristine `HTMLInputElement.prototype` descriptor
+  (`fieldSet`/`walletSet`), which the page's main-world redefinition cannot
+  reach. The sign-in still succeeded, proving the correct value was set.
+- **No observable keystrokes.** The fill emitted **0** `keydown` events. A fill
+  sets the value and dispatches only `input`/`change`; it never uses
+  `Input.dispatchKeyEvent`. Form submit uses `form.requestSubmit()`, not a
+  synthesised Enter. A page-level or below-page keylogger sees nothing. (The
+  agent-directed `type`/`press` verbs do use CDP key events, but those carry no
+  secret.)
+- **The value never reached the agent.** The password sentinel is in no reply,
+  no audit entry and no workspace file; `evaluate` is refused after the fill, so
+  the agent cannot read back what the hostile listener stashed.
+- **The agent cannot inject the hook itself.** `evaluate` is opt-in per
+  identity, runs with V8 `throwOnSideEffect` (adding a listener, overriding a
+  setter, registering a service worker and polluting a global are all side
+  effects and are rejected), and is off entirely once any value is filled in
+  that browser. Conductor's fill code runs in an isolated world with its own
+  globals/prototypes, so main-world pollution of `Object.prototype`, `fetch`,
+  `JSON`, etc. does not affect it.
+
+**Inherent residual (documented, not a conductor break):** an *ordinary* `input`
+listener still fires and sees the value — exactly as it would for a real user's
+keystrokes. That is "a site sees what is typed into it". The test asserts this
+happened (the page's own server did receive the value) and that nothing of it
+crossed to the agent. The mitigation is the design's: bind credentials, profiles
+and cards to **exact origins you trust**, and prefer agent-specific
+credentials/limited cards. No fill method that lets the site function can hide
+the value from the site's own non-malicious event listeners (CDP
+`Input.insertText` and trusted events fire listeners too); only setter-override
+interception is blocked, which conductor already does.
+
+## PASS — browser extensions, CDP endpoint, launch flags, process isolation
+
+Operator's added direction (attacks the browser process, not a page):
+
+- **Extensions are off and the flag set is fixed.** `ChromeArgs` is a hardcoded
+  list the agent has no input into: `--disable-extensions`,
+  `--disable-component-extensions-with-background-pages`,
+  `--disable-default-apps`, and **no** `--load-extension`. The agent cannot pass
+  flags, and the browser inherits conductor's (sandbox-wrapped) environment, not
+  the agent's, so `CHROME_*`/`CHROMIUM_FLAGS`/a PAC URL/`--proxy-server`/
+  `--host-rules`/`--auto-open-devtools` cannot be injected.
+- **No CDP endpoint the agent can reach.** CDP runs over
+  `--remote-debugging-pipe` (fds 3/4), **not** a port — there is no
+  `--remote-debugging-port`. The agent holds only the skill socket and
+  conductor's mediated verbs; it cannot attach its own CDP client to call
+  `Input`, `Network.getResponseBody` or `Page.captureSnapshot`.
+- **The profile is ephemeral and conductor's, not the agent's.** The
+  `--user-data-dir` lives under conductor's per-browser dir (0700), is created
+  fresh and deleted on close; the agent has no filesystem path to it, so it
+  cannot drop an extension or edit `Preferences`/`Secure Preferences` between
+  launches.
+- **Process/memory isolation is the #179 sandbox layer.** Conductor launches the
+  browser in its own user/mount/pid/net namespaces (Linux) or Seatbelt/container
+  (macOS), separate from the agent's sandbox. The agent cannot run processes in
+  the browser's space, read `/proc/<pid>/mem`, its stdin/ptys, or a core dump.
+  Container mode (#183) only strengthens this (no network, `--cap-drop ALL`,
+  read-only root, no host bind). The egress proxy and fixed flags are the
+  browser-layer controls; the process/memory boundary is the sandbox layer.
+
 ## PASS — 2FA / passkey relay
 
 - **TOTP / emailed codes** are filled through `fillField`, which `remember`s the
@@ -184,6 +257,21 @@ the design documents and bounds with exact origins and limited cards.
   speak; the authenticator holds only that one credential, is attached only
   while the page is on the bound origin, and is removed in a `defer` after the
   sign-in. The agent gets no assertion material it could relay.
+
+## Flagged for reconciliation (attacker A's readback domain)
+
+The CVC's root cause — short filled values are kept out of the general text
+scrub (`scrub`/`scrubAny`), only node-masked — is now closed for the path
+conductor itself extracts a value from (the receipt, via `scrubAll`). The same
+root cause may admit a **snapshot** readback that belongs to attacker A
+(attacks 1–2): hostile page script (on an agent-controlled checkout) could copy
+the CVC out of the masked card input into a *different* element or input, which
+the a11y snapshot renders and `scrubAny` (which uses `scrub`, not `scrubAll`)
+would not redact because the CVC is short. This was not independently confirmed
+here and overlaps A's area; the `secretsShort` set added for the receipt fix is
+the hook a snapshot-side fix would reuse (with the documented short-value
+over-redaction trade-off that the profile section already accepts). Left for A /
+reconciliation rather than patched here to avoid conflicting edits.
 
 ## PASS — propagation into workers / memory / hand-off / tickets / audit
 
