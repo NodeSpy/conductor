@@ -56,7 +56,7 @@ button.link { background: none; border: 0; padding: 0; font: inherit; cursor: po
 /* editable code */
 .ced { position: relative; font-family: var(--font-family-mono); font-size: var(--type-code-s-size); line-height: 1.7; }
 .ced .ced-hl { margin: 0; border: 0; border-radius: 0; min-height: 100%; position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
-.ced .ced-ta { position: relative; display: block; width: 100%; margin: 0; border: 0; outline: 0; resize: vertical; background: transparent; color: transparent; caret-color: var(--color-text-primary); font: inherit; line-height: inherit; tab-size: 2; padding: 8px 14px 8px 52px; white-space: pre; overflow: auto; letter-spacing: normal; word-spacing: normal; }
+.ced .ced-ta { position: relative; display: block; width: 100%; margin: 0; border: 0; outline: 0; resize: vertical; background: transparent; color: transparent; caret-color: var(--color-text-primary); font: var(--type-code); tab-size: 2; padding: 8px 14px 8px 52px; white-space: pre; overflow: auto; letter-spacing: normal; word-spacing: normal; }
 .ced .ced-ta::selection { background: color-mix(in srgb, var(--color-icon-default) 30%, transparent); color: transparent; }
 .ced .ced-ta:focus { box-shadow: inset 0 0 0 1px var(--color-border-strong); }
 .ced[data-readonly] .ced-ta { caret-color: transparent; }
@@ -198,7 +198,27 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .filters .roll { display: none; }
 }
 /* knowledge & memory repos */
-.repo-grid { grid-template-columns: 250px minmax(0, 1fr) 300px; align-items: start; }
+/* The entry is the work: it takes the wide column. What it knows and History stack on the left (the page is capped in width, so a third column only ever squeezed the entry) */
+.repo-grid { grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "side ed" "hist ed"; align-items: start; }
+.repo-grid > .repo-side { grid-area: side; } .repo-grid > .repo-hist { grid-area: hist; } .repo-grid > :not(.repo-side):not(.repo-hist) { grid-area: ed; }
+/* Its head: the title with New… beside it, the repo a quiet line under both */
+.repo-side > .panel-head.rp-side-head { flex-wrap: wrap; align-items: center; row-gap: 2px; }
+.rp-side-head > h3 { flex: 1 1 0; min-width: 0; }
+.rp-side-head > .btn { flex: none; }
+.rp-side-head > .rp-side-repo { flex: 1 0 100%; }
+/* A wrapping editor: lines wrap instead of running off the pane; it grows with its text and starts a screen tall */
+/* the textarea types under the highlighted copy (.code's font, set above): phones must not boost one layer's font and not the other's */
+.ced, .ced * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+.ced.wrap .ced-ta { white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden; resize: none; }
+.ced.wrap .ced-hl .ln { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* the line number sits in a fixed gutter so the highlighted text starts exactly where the textarea's does (52px) */
+.ced .ced-hl .ln { padding-left: 52px; }
+.ced .ced-hl .ln::before { position: absolute; left: 0; top: 0; width: 44px; }
+.ke .ced.wrap .ced-ta { min-height: max(320px, calc(var(--dvh) - 240px)) !important; }
+.ke .ed-panes { align-items: stretch; }
+.ke .ed-prev { max-height: none; }
+.ed-panes.mode-edit .ed-src { border-right: 0; }
+.rp-commit .grow { min-width: 0; } .rp-commit-by { margin-top: 2px; }
 .repo-side .tree a .pin { margin-left: auto; font-size: var(--type-caption-size); }
 .repo-side .tree a .dirty-dot { margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--color-status-warning-solid); }
 .repo-ed .readers { padding: 6px 14px; border-bottom: 1px solid var(--color-border-subtle); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
@@ -224,9 +244,10 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .dropzone.over { border-color: var(--color-accent-default); background: var(--color-accent-subtle); }
 .dropzone input { font-size: var(--type-caption-size); }
 .kprop .cbx { margin-top: 3px; }
-@media (max-width: 1100px) { .repo-grid { grid-template-columns: 220px minmax(0, 1fr); } .repo-hist { grid-column: 1 / -1; } }
+@media (max-width: 1100px) { .repo-grid { grid-template-columns: 220px minmax(0, 1fr); } }
 @media (max-width: 720px) {
-.repo-grid { grid-template-columns: minmax(0, 1fr) !important; }
+.repo-grid { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: auto; grid-template-areas: "side" "ed" "hist"; }
+.ke .ced.wrap .ced-ta { min-height: max(260px, calc(var(--dvh) - 320px)) !important; }
 .ed-panes { grid-template-columns: 1fr; } .ed-panes.mode-split .ed-prev { border-top: 1px solid var(--color-border-subtle); }
 .ed-src { border-right: 0; }
 .bl-group { grid-template-columns: 1fr; }

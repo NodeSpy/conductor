@@ -162,11 +162,11 @@
   };
   R.pending = (id) => R.get(id).proposals.filter((p) => p.status === 'pending').length;
   const whoLabel = (c) => (c.kind === 'operator' ? 'you' : UI.botName(c.who.replace('bot:', '')));
-  const whoChip = (c) => `${UI.label(esc(whoLabel(c)), { cls: 'who ' + c.kind, icon: c.kind === 'operator' ? 'users' : 'bots' })}${c.case && caseHref(c.case) ? ` <a class="link mono tiny" href="${caseHref(c.case)}">${c.case}</a>` : ''}`;
+  const whoChip = (c) => `${UI.label(esc(whoLabel(c)), { cls: 'who ' + c.kind, icon: c.kind === 'operator' ? 'users' : 'bots' })}${c.case && caseHref(c.case) ? ` <a class="link tiny" href="${caseHref(c.case)}" title="${esc(((D.cases || []).find((x) => x.id === c.case) || {}).title || 'Its ticket')}">ticket</a>` : ''}`;
   const readers = (r) => (r.kind === 'team' ? botsOfTeam(r.name) : [r.name]);
 
   /* ---------- editor state ---------- */
-  const ev = { repo: null, kind: null, key: null, isNew: false, base: '', baseSha: null, steps: [], mode: 'split', blame: false, proposal: null, conflict: null, q: '', tags: [], view: 'kinds', file: null, hist: 'file', sel: new Set(), draft: null };
+  const ev = { repo: null, kind: null, key: null, isNew: false, base: '', baseSha: null, steps: [], mode: 'edit', blame: false, proposal: null, conflict: null, q: '', tags: [], view: 'kinds', file: null, hist: 'file', sel: new Set(), draft: null };
   const pathOf = () => (ev.key ? ev.key.split('#')[0] : null);
   // a step is one line of text (conductor's runbook steps are strings); a command or verb rides along as "(run: `cmd`)" / "(verb: x)"
   const stepsFrom = (fm) => (Array.isArray(fm.steps) ? fm.steps : []).map((st) => { if (st && typeof st === 'object') return { do: st.do || '', type: st.verb ? 'verb' : st.run ? 'run' : '', arg: st.verb || st.run || '' }; const m = String(st || '').match(/^(.*?)\s*\((run|verb): `?([^`)]*)`?\)\s*$/); return m ? { do: m[1], type: m[2], arg: m[3] } : { do: String(st || ''), type: '', arg: '' }; });
@@ -237,7 +237,8 @@
       return `<div class="kind-grp${on ? ' on' : ''}"><a href="#" class="kind-row" data-act="rp-kind" data-repo="${id}" data-k="${k.id}" aria-expanded="${on}">${icon(k.icon)}<span class="grow">${esc(k.label)}${k.pack ? ` ${UI.label(`pack ${esc(k.pack)}`, { cls: 'origin custom' })}` : ''}</span>${UI.count(`${ev.q || ev.tags.length ? `${shown.length}/` : ''}${es.length}`)}</a>
         ${on ? `<div class="kind-entries">${shown.map((e) => `<a href="#" class="f entry${e.key === ev.key ? ' on' : ''}" data-act="rp-open" data-repo="${id}" data-key="${esc(e.key)}" data-k="${k.id}"><span class="ellipsis grow" title="${esc(e.title)}">${esc(e.title)}</span>${pins.includes(e.path) ? `<span class="pin" title="pinned: always in context">${icon('pin')}</span>` : ''}${e.err ? UI.label(`invalid`, { s: 'fail' }) : ''}</a>`).join('') || `<div class="muted tiny" style="padding:6px 12px">${es.length ? 'Nothing matches.' : 'None yet.'}</div>`}</div>` : ''}</div>`; };
     const files = Object.keys(r.files).filter(visible).sort();
-    const side = `<div class="panel repo-side"><div class="panel-head"><h3 class="ellipsis" title="${esc(opts.title || id)}">${esc(r.kind === 'team' ? 'Team knowledge' : 'What it knows')}</h3><div class="tools"><button class="btn sm primary" data-act="rp-new" data-repo="${id}">${icon('plus')}New…</button><button class="icon-btn sm" data-act="rp-upload" data-repo="${id}" data-tip="Import markdown into a kind" aria-label="Import">${icon('upload')}</button></div></div>
+    const nEntries = kinds.reduce((n, k) => n + (k.dir || k.file ? entriesOf(r, k).length : 0), 0);
+    const side = `<div class="panel repo-side"><div class="panel-head rp-side-head"><h3 class="ellipsis">${esc(r.kind === 'team' ? 'Team knowledge' : 'What it knows')}</h3><button class="btn sm" data-act="rp-new" data-repo="${id}" title="Write a new entry, or import markdown">${icon('plus')}New…</button><div class="tiny muted ellipsis rp-side-repo" title="${esc(opts.title || id)}">${nEntries} entr${nEntries === 1 ? 'y' : 'ies'} · ${opts.repo ? `<span class="mono">${esc(opts.repo)}</span>` : 'its own repo'}</div></div>
       <div class="panel-body tight stack tight rp-find" style="padding:8px">${UI.filterBar({ id: 'rp', state: ev, placeholder: r.kind === 'team' ? 'Find in team knowledge' : 'Find in its memory', label: 'Find and filter knowledge', fields: tags.length ? [{ k: 'tags', label: 'About', alias: 'about', multi: true, title: 'What it applies to', options: () => tags.map((t) => ({ v: t, label: t, n: kinds.flatMap((k) => (k.dir || k.file ? entriesOf(r, k) : [])).filter((e) => (e.fm.applies_to || []).includes(t)).length })) }] : [], onChange: () => { keepDraft(); UI.rerender({ keepScroll: true }); } })}
         ${UI.seg([['kinds', 'By kind'], ['files', 'Files']], ev.view, 'rp-view')}</div>
       ${ev.q && ev.view === 'kinds' ? searchHTML(r) : ''}
@@ -249,7 +250,7 @@
     return `<div class="repo" data-repo="${id}">${r.kind === 'team' ? proposalsHTML(r) : ''}
       <div class="grid repo-grid">${side}${main}
         <div class="panel repo-hist"><div class="panel-head"><h3>History</h3><div class="tools">${UI.seg([['file', 'this entry'], ['repo', 'repo']], ev.hist, 'rp-hist')}</div></div>
-          <div class="list">${hist.slice(0, 30).map((c) => `<div class="item" style="align-items:flex-start"><span class="mono tiny" style="color:var(--color-text-accent)">${c.sha}</span><div class="grow small"><div>${esc(c.msg)}</div><div class="tiny">${whoChip(c)} <span class="muted mono">· ${ago(c.at)} ago</span></div>${ev.hist === 'repo' ? `<div class="mono tiny muted">${c.changes.filter((ch) => visible(ch.path)).map((ch) => esc(ch.from && ch.from !== ch.path ? `${ch.from} → ${ch.path}` : ch.path)).join(', ')}</div>` : ''}</div>
+          <div class="list">${hist.slice(0, 30).map((c) => `<div class="item rp-commit" style="align-items:flex-start"><div class="grow small"><div>${esc(c.msg)}</div><div class="tiny rp-commit-by">${whoChip(c)} <span class="muted">· ${ago(c.at)} ago</span> <span class="mono muted" title="Commit">${c.sha}</span></div>${ev.hist === 'repo' ? `<div class="mono tiny muted">${c.changes.filter((ch) => visible(ch.path)).map((ch) => esc(ch.from && ch.from !== ch.path ? `${ch.from} → ${ch.path}` : ch.path)).join(', ')}</div>` : ''}</div>
             <button class="icon-btn sm" data-act="rp-diff" data-repo="${id}" data-sha="${c.sha}" aria-label="Diff ${c.sha}" data-tip="Diff">${icon('eye')}</button><button class="icon-btn sm" data-act="rp-revert" data-repo="${id}" data-sha="${c.sha}" aria-label="Revert ${c.sha}" data-tip="Revert as a new commit">${icon('undo')}</button></div>`).join('') || '<div class="item small muted">No commits yet.</div>'}</div></div>
       </div></div>`;
   };
@@ -275,7 +276,7 @@
         ${kind.free ? `<div class="field" data-field="free"><label for="ke-free">Path in ${esc(kind.dir)}/ <span class="opt">this collection allows free paths</span></label><div class="ke-free"><span class="mono muted">${esc(kind.dir)}/</span><input class="input mono" id="ke-free" value="${esc(d.free || '')}" placeholder="${esc(slug(d.fm.title || 'my-entry'))}" aria-label="Path inside ${esc(kind.dir)}"><span class="mono muted">.md</span></div><div class="ferr" role="alert"></div></div>` : ''}
         ${fieldsHTML}
         ${kind.body ? `<div class="field"><div class="row"><label>${esc(kind.body)} <span class="opt">markdown</span></label><span style="margin-left:auto">${UI.seg([['edit', 'Edit'], ['split', 'Split'], ['preview', 'Preview']], ev.mode, 'rp-mode')}</span></div>
-          <div class="ed-panes mode-${ev.mode}"><div class="ed-src">${UI.editor({ id: 'rp-ed', text: d.body || '', lang: 'md', act: 'rp-input', minRows: 8, label: kind.body + ' (markdown)' })}</div><div class="ed-prev prose" id="rp-prev">${UI.mdRender(d.body || '')}</div></div></div>` : ''}
+          <div class="ed-panes mode-${ev.mode}"><div class="ed-src">${UI.editor({ id: 'rp-ed', text: d.body || '', lang: 'md', act: 'rp-input', minRows: 8, wrap: true, label: kind.body + ' (markdown)' })}</div><div class="ed-prev prose" id="rp-prev">${UI.mdRender(d.body || '')}</div></div></div>` : ''}
       </form>`}
       ${c && !ev.isNew ? `<div class="cites small"><div class="caps">${kind.id === 'runbook' ? 'used in' : 'cited by'}</div>${c.runbooks.map((x) => `<a class="cite-link" href="#" data-act="rp-hit" data-repo="${x.repo}" data-key="${esc(x.path)}">${icon('workflows')}${esc(x.title)}</a>`).join('')}${c.cases.map((x) => caseHref(x) ? `<a class="cite-link" href="${caseHref(x)}">${icon('runs')}${esc(((D.cases || []).find((c) => c.id === x) || {}).title || 'a ticket')}</a>` : `<span class="cite-link">${icon('runs')}${esc(x)}</span>`).join('')}${c.logs.map((x) => `<a class="cite-link" href="#" data-act="rp-hit" data-repo="${x.repo}" data-key="${esc(x.path)}">${icon('clock')}${esc(x.title)}</a>`).join('')}${!c.runbooks.length && !c.cases.length && !c.logs.length ? '<span class="muted">nothing yet</span>' : ''}</div>` : ''}
       <div class="form-err callout danger small hide" id="ke-err" role="alert"></div>
@@ -284,7 +285,7 @@
         ${team && tk && tk.cfg.knowledge && !ev.isNew && (kind.id === 'knowledge' || kind.id === 'runbook') ? `<button class="btn sm" data-act="rp-promote" data-repo="${id}">${icon('upload')}Promote to team ${esc(team)}</button>` : ''}
         <button class="btn sm ghost" data-act="rp-discard" ${ev.isNew ? '' : UI.off('No unsaved changes')}>${ev.isNew ? 'Cancel' : 'Discard'}</button>
         <button class="btn primary" data-act="rp-save" data-repo="${id}" ${ev.proposal ? '' : UI.off(ev.isNew ? 'Fill in the fields first' : 'Nothing to save yet: change a field first')}>${icon('commit')}${ev.proposal ? 'Approve with changes' : 'Save · one commit'}</button></div>
-      <div class="muted tiny ed-sign">Saved as you: <span class="mono">Authored-By: operator:ops · Edited-Via: dashboard</span>. No approval: operator provenance is trusted.</div></div>`;
+      <div class="muted tiny ed-sign">${ev.proposal ? `Saving approves the bot's proposal with your changes, as one commit in your name.` : `Saving makes one commit in your name, marked as edited in the dashboard. Your own edits go straight in: they need no approval.`}</div></div>`;
   }
   function readHTML(r, kind) {
     const e = entriesOf(r, kind).find((x) => x.key === ev.key); if (!e) return '';
@@ -400,7 +401,7 @@
     UI.toast(`${who} committed to ${esc(p)}`, dirty ? 'saving now will show a conflict' : 'load it to see the change', 'run');
   });
   /* New… : choose a kind; the path follows from it */
-  const newEntry = (r, k) => { openEntry(r, k, null); ev.mode = 'split'; rerender(); setTimeout(() => { const t = UI.$('#ke-title, #ke-what'), a = document.activeElement; if (t && !(a && a.closest && a.closest('#ke-form'))) t.focus(); }, 30); }; // never steal focus from a field already being typed in
+  const newEntry = (r, k) => { openEntry(r, k, null); rerender(); setTimeout(() => { const t = UI.$('#ke-title, #ke-what'), a = document.activeElement; if (t && !(a && a.closest && a.closest('#ke-form'))) t.focus(); }, 30); }; // never steal focus from a field already being typed in
   UI.act('rp-new-kind', (b) => { const r = repoOf(b); guardThen(() => newEntry(r, kindById(r, b.dataset.k))); });
   UI.act('rp-new', (b) => {
     const r = repoOf(b);
@@ -408,7 +409,7 @@
       UI.modal(`<div class="modal-head"><div><div class="caps">${esc(r.id)}</div><h2>New…</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
         <div class="modal-body stack"><p class="small dim" style="margin:0">Pick what you're writing. Its kind decides where it lives and what it needs: knowledge goes in knowledge/, runbooks in runbooks/.</p>
           <div class="choice-grid">${kindsFor(r).map((k) => UI.choice({ act: 'rp-new-pick', attrs: `data-repo="${r.id}" data-k="${k.id}"`, icon: k.icon, title: esc(k.coll ? `${k.label}` : k.one.replace(/^./, (c) => c.toUpperCase())), desc: esc(`${k.dir}/ · ${(k.fields || []).map((f) => f.k.replace(/_/g, ' ')).join(', ')}${k.free ? ' · free paths' : ''}${k.pack ? ` · from pack ${k.pack}` : ''}`), off: writable(r, k) })).join('')}</div></div>
-        <div class="modal-foot"><a class="btn ghost" href="#/config/collections">Declare a collection…</a><button class="btn ghost" data-close>Cancel</button></div>`, { wide: true });
+        <div class="modal-foot"><button class="btn" data-act="rp-upload" data-repo="${r.id}">${icon('upload')}Import markdown…</button><a class="btn ghost" href="#/config/collections">Declare a collection…</a><button class="btn ghost" data-close>Cancel</button></div>`, { wide: true });
     });
   });
   UI.act('rp-new-pick', (b) => { const r = repoOf(b); UI.closeModal(); newEntry(r, kindById(r, b.dataset.k)); });
@@ -462,7 +463,7 @@
   }
   UI.act('rp-map-file', (b) => { const r = repoOf(b); importMap(r, [{ name: b.dataset.path, text: r.files[b.dataset.path] }]); });
   UI.act('rp-upload', (b) => {
-    const r = repoOf(b);
+    const r = repoOf(b); if (b.closest('.modal')) UI.closeModal();
     const s = UI.modal(`<div class="modal-head"><div><div class="caps">${esc(r.id)}</div><h2>Import markdown</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
       <div class="modal-body stack">${UI.seg([['drop', 'Drop files'], ['paste', 'Paste'], ['repo', 'From a repo']], 'drop', 'up-mode')}
         <div class="up-pane" data-pane="drop"><label class="dropzone" id="up-drop">${icon('upload')}<span><b>Drop markdown files here</b> or choose them</span><input type="file" id="up-file" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple aria-label="Choose markdown files"></label><div id="up-list" class="small muted"></div></div>
@@ -494,7 +495,7 @@
   const deny = (r, ps, reason) => { ps.forEach((p) => { p.status = 'denied'; p.reason = reason; ev.sel.delete(p.id); (D.chats[p.bot] = D.chats[p.bot] || []).push({ who: 'op', at: now(), text: `Denied knowledge proposal ${p.id} (${p.to}): ${reason}` }); D.audit.unshift({ ts: now(), event: 'team_knowledge_denied', who: 'operator:ops', detail: `${r.id} · ${p.id} · ${p.bot} · reason sent to the bot`, run: '' }); }); S.save(); rerender(); };
   const denyForm = (r, ps) => UI.form({ caps: `${r.id} · ${ps.map((p) => p.id).join(', ')}`, title: ps.length > 1 ? `Deny ${ps.length} proposals` : `Deny ${ps[0].id}`, fields: [{ k: 'reason', type: 'text', req: true, label: 'Reason (goes back to the proposing bot)', ph: 'e.g. Already covered in knowledge/alb.md; link to it instead.' }], submit: 'Deny', onSubmit: (v) => deny(r, ps, v.reason) });
   UI.act('kp-approve', (b) => { const r = repoOf(b), p = r.proposals.find((x) => x.id === b.dataset.id); if (perrs(r, p).length) return; UI.stepup({ title: `Approve: ${esc(p.summary)}`, purpose: 'Team knowledge', summary: `<p class="su-lede">You're approving ${esc(UI.botName(p.bot))}'s suggestion for the ${esc(r.name)} team's knowledge: <b>${esc(p.summary)}</b>. It's written as one commit to ${esc(p.to)}.</p>`, ok: 'Approve with passkey', what: `{ team: <b>${esc(r.name)}</b>, proposal: <b>${p.id}</b>, kind: <b>${esc(p.kind)}</b>, bot: <b>${esc(p.bot)}</b>, path: <b>${esc(p.to)}</b> }` }).then((ok) => { if (ok) { approve(r, [p]); UI.toast(`Approved: ${esc(p.summary)}`, `written to ${esc(p.to)}`, 'ok'); } }); });
-  UI.act('kp-edit', (b) => { const r = repoOf(b), p = r.proposals.find((x) => x.id === b.dataset.id); guardThen(() => { const k = pkind(r, p), x = FM.parse(p.content || ''), existing = entriesOf(r, k).find((e) => e.path === p.to); openEntry(r, k, existing || null, { fm: x.fm, body: x.body, free: '' }); ev.proposal = p.id; ev.mode = 'split'; rerender(); later(); const ed = UI.$('.repo-ed'); if (ed) ed.scrollIntoView({ block: 'start' }); const errs = validate(k, x.fm, x.fm.kind); if (errs.length) setTimeout(() => showErrs(k, errs), 30); }); });
+  UI.act('kp-edit', (b) => { const r = repoOf(b), p = r.proposals.find((x) => x.id === b.dataset.id); guardThen(() => { const k = pkind(r, p), x = FM.parse(p.content || ''), existing = entriesOf(r, k).find((e) => e.path === p.to); openEntry(r, k, existing || null, { fm: x.fm, body: x.body, free: '' }); ev.proposal = p.id; rerender(); later(); const ed = UI.$('.repo-ed'); if (ed) ed.scrollIntoView({ block: 'start' }); const errs = validate(k, x.fm, x.fm.kind); if (errs.length) setTimeout(() => showErrs(k, errs), 30); }); });
   UI.act('kp-deny', (b) => { const r = repoOf(b); denyForm(r, [r.proposals.find((x) => x.id === b.dataset.id)]); });
   UI.act('kp-bulk', (b) => { const r = repoOf(b), ps = r.proposals.filter((p) => ev.sel.has(p.id) && p.status === 'pending'); if (b.dataset.d === 'deny') return denyForm(r, ps); const bad = ps.filter((p) => perrs(r, p).length); if (bad.length) { UI.toast(`${bad.map((p) => p.id).join(', ')} fail${bad.length > 1 ? '' : 's'} the schema`, 'approve with changes or deny; untick to approve the rest', 'fail'); return; } UI.stepup({ title: `Approve ${ps.length} proposals`, purpose: 'team knowledge', ok: 'Approve with passkey', what: `{ team: <b>${esc(r.name)}</b>, proposals: <b>${ps.map((p) => p.id).join(', ')}</b> }` }).then((ok) => { if (ok) { approve(r, ps); UI.toast(`Approved ${ps.length}`, 'one commit each, the bot as author', 'ok'); } }); });
 

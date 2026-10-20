@@ -667,6 +667,19 @@ operator save, on a bot proposal or promotion, and on import.
   (slug), shown read-only, and **renaming is changing the title** (one commit
   that moves the file). A free path field appears only inside a collection
   that declares `free_paths: true`, and stays inside its directory.
+- **Layout:** the entry is the work, so it takes the wide column; *What it
+  knows* (title, a quiet line with the entry count and the repo, and a
+  normal **New…** button) and **History** stack in the narrow column beside
+  it (under it on a phone). The page is capped in width, so a third column
+  only ever squeezed the entry. **Import markdown…** lives in the New…
+  sheet, not as a loose icon in the head.
+- **The markdown body opens in Edit** and is at least a screen tall; it
+  grows with its text (the page scrolls, never the field) and **wraps long
+  lines** rather than running them off the pane. Split puts the source and
+  the preview side by side at half the entry's width each (stacked on a
+  phone), and the chosen mode holds from entry to entry. The highlighted
+  copy and the textarea under it share one font and one gutter, so the
+  caret and a selection sit on the letters.
 - **Browsing is by kind** (Knowledge / Runbooks / Watch / Log / Handoff /
   collections) with counts, search, and filters by applies-to tag. A
   **Files** view exists as a secondary, read-mostly view: raw files, with
@@ -678,7 +691,10 @@ operator save, on a bot proposal or promotion, and on import.
   links and case notes).
 - **Every save is one commit authored by the operator** (`Authored-By:
   operator:<name>`, `Edited-Via: dashboard`) with an optional message. No
-  approval: operator provenance is trusted. It is a session operation, not a
+  approval: operator provenance is trusted. Under the Save button the page
+  says it in words, never the trailers: *Saving makes one commit in your
+  name, marked as edited in the dashboard. Your own edits go straight in:
+  they need no approval.* It is a session operation, not a
   step-up ([§6.5](#65-step-up)). A save that fails the kind's schema is
   refused with the field errors.
 - **Conflicts:** if a bot committed to the entry after it was opened, saving
@@ -2419,8 +2435,8 @@ backup you can restore. Things to try:
 - **Teams:** Bots → a team's Add a bot; select two bots and Move to a team; Shape the team.
 - **Create in place:** on team `platform`, *Add a bot* → *Create a new bot
   in this team*. In a workflow step, the account picker → *New connector*.
-- **Knowledge:** team `platform` → Knowledge: New file, edit, Split
-  preview, Save; *Approve with changes* on `k4`; *Simulate a bot commit*
+- **Knowledge:** team `platform` → Knowledge: New file, edit (Edit by
+  default; Split for a side-by-side preview), Save; *Approve with changes* on `k4`; *Simulate a bot commit*
   while editing to see a conflict.
 - **Teams:** Bots → `platform` → Defaults (inherits / narrows),
   Routing (try a rule), Route work here, Knowledge (approve a promotion).

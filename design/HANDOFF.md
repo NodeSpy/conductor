@@ -94,6 +94,11 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **Item 69, a bot's Memory tab (2026-10-20):** the sidebar head is a title, a quiet entries-and-repo line and a
+  normal New… (Import moved into the New… sheet); the entry takes the wide column with What it knows and History
+  stacked beside it; the markdown opens in Edit, starts a screen tall, grows with its text and wraps long lines (Split
+  is two half-width panes); the save footer is in words. Every code editor's two layers now share one font and one
+  gutter (the caret drifted a pixel a line and sat 4px off). Checked by `memory-layout.spec.js`, desktop and phone.
 - **Round 5 (the final adversarial audit, 2026-10-19):** the blockers, majors and minors in `r5-fixes.md`, each
   re-run as the reviewer's repro (`design/AUDIT-RESPONSE.md` "Round 5"). New checks: `realschema.spec.js` (config the
   UI writes is config conductor accepts), `rawedit.spec.js` (a hand edit changes only what you changed),

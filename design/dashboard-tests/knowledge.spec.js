@@ -182,7 +182,7 @@ test('approve with changes, deny with a reason, bulk approve', async ({ page }) 
 
 test('import maps markdown into a kind: a runbook is detected and confirmed', async ({ page }) => {
   await go(page, '#/teams/platform/knowledge', { fresh: true });
-  await page.locator('[data-act="rp-upload"]').click();
+  await page.locator('.repo-side [data-act="rp-new"]').click(); await page.locator('.modal [data-act="rp-upload"]').click();
   await page.locator('[data-act="up-mode"][data-v="paste"]').click();
   await page.fill('#up-text', '# Rotate the TLS cert\n\n## When\nThe cert expires within 14 days.\n\n## Steps\n1. Issue a new cert: `tailscale cert ops-box`\n2. Reload the listener\n3. Check the expiry\n\n## Verify\nopenssl shows the new expiry.\n\n## Rollback\nRestore the previous cert files.\n');
   await page.locator('#up-go').click();
@@ -194,7 +194,7 @@ test('import maps markdown into a kind: a runbook is detected and confirmed', as
   expect(t).toContain('Issue a new cert (run: `tailscale cert ops-box`)'); expect(t).toContain('verification: openssl shows the new expiry.'); expect(t).toContain('rollback: Restore the previous cert files.');
   await expect(page.locator('#ke-path')).toHaveText('runbooks/rotate-the-tls-cert.md');
   // a note mapped as knowledge: the note becomes the body, the evidence says where it came from
-  await page.locator('[data-act="rp-upload"]').click();
+  await page.locator('.repo-side [data-act="rp-new"]').click(); await page.locator('.modal [data-act="rp-upload"]').click();
   await page.setInputFiles('#up-file', { name: 'oncall-v2.md', mimeType: 'text/markdown', buffer: Buffer.from('# On-call v2\n\nPrimary rotates weekly.\n') });
   await page.locator('#up-go').click();
   await expect(page.locator('.im-row')).toContainText('detected: knowledge entry');
