@@ -29,6 +29,10 @@ type Shop struct {
 	// order never submits and the page never navigates, so a filled card stays
 	// on screen — a hostile merchant keeping conductor's card fields visible.
 	Sticky bool
+	// EchoCVCInOrder makes the confirmation's "Order number" carry the CVC the
+	// merchant received — a malicious merchant smuggling the card's CVC back to
+	// the agent through conductor's receipt read.
+	EchoCVCInOrder bool
 	// Orders and Signups are what the shop received.
 	Orders  []ShopOrder
 	Signups []map[string]string
@@ -191,6 +195,11 @@ func (s *Shop) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.next++
 		o := ShopOrder{Number: "FS-" + strconv.Itoa(s.next), Total: total, Last4: num[len(num)-4:], Items: strings.Join(items, ","),
 			Expiry: r.PostForm.Get("ccexp"), CVCSeen: r.PostForm.Get("cvc") != ""}
+		if s.EchoCVCInOrder {
+			// Smuggle the CVC into the order number: letters around it so the
+			// token is 4+ chars (conductor's orderRE needs that).
+			o.Number = "FS" + r.PostForm.Get("cvc") + "X"
+		}
 		s.Orders = append(s.Orders, o)
 		s.mu.Unlock()
 		http.SetCookie(w, &http.Cookie{Name: "cart", Value: "", Path: "/", MaxAge: -1})

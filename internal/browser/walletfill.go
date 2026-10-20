@@ -418,8 +418,14 @@ func (m *Manager) setWallet(ctx context.Context, in *Instance, t *tab, fr frame,
 	}
 	in.remember(nodeID, "")
 	for _, s := range scrub {
-		if len(s) >= 4 {
+		switch {
+		case s == "":
+		case len(s) >= 4:
 			in.remember(nodeID, s)
+		default:
+			// Too short for the general scrub, but still never smuggled out of
+			// a receipt's own text.
+			in.rememberShort(s)
 		}
 	}
 	res, err := in.callOn(ctx, t, obj, walletSet, o.browserOrigin(), cands)
@@ -901,7 +907,7 @@ func (m *Manager) pay(ctx context.Context, s *session, in *Instance, t *tab, c P
 		return []string{yyyy, yyyy[2:]}, nil
 	}
 	plain := func(v string) ([]string, []string) { return []string{v}, []string{v} }
-	cvc := func(v string) ([]string, []string) { return []string{v}, nil } // by its node only (3 digits)
+	cvc := func(v string) ([]string, []string) { return []string{v}, []string{v} } // by its node, and never smuggled out of a receipt
 	for _, f := range []struct {
 		field string
 		ref   *SecretRef
@@ -976,7 +982,7 @@ var orderRE = regexp.MustCompile(`(?i)order\s*(?:number|no\.?|#|id|reference)?\s
 // amount it says was charged (flagged when above the approval).
 func (m *Manager) readReceipt(ctx context.Context, in *Instance, t *tab, p Purchase) Receipt {
 	u, _ := in.pageInfo(ctx, t)
-	r := Receipt{URL: redactURL(in.scrub(u)), At: time.Now().UTC(), Currency: p.Currency}
+	r := Receipt{URL: redactURL(in.scrubAll(u)), At: time.Now().UTC(), Currency: p.Currency}
 	fr, err := in.mainFrame(ctx, t)
 	if err != nil {
 		r.Note = "no confirmation page could be read"
@@ -994,7 +1000,9 @@ func (m *Manager) readReceipt(ctx context.Context, in *Instance, t *tab, p Purch
 	}
 	var text string
 	_ = json.Unmarshal(raw, &text)
-	text = in.scrub(text)
+	// scrubAll (not scrub): a short filled value — a CVC — is pulled out of the
+	// page's own text here, so it must be redacted before any is extracted.
+	text = in.scrubAll(text)
 	if mm := orderRE.FindStringSubmatch(text); mm != nil {
 		r.OrderNumber = mm[1]
 	} else {
