@@ -825,6 +825,20 @@ func (in *Instance) remember(nodeID int64, v string) {
 	}
 }
 
+// rememberShort records a filled value too short for the general scrub (a
+// CVC, a 2-letter region). It is not scrubbed from every reply (that would
+// shred the page), but it is scrubbed where conductor pulls a value out of a
+// page's own text — a receipt's order number — so a merchant cannot smuggle
+// it back to the agent there.
+func (in *Instance) rememberShort(v string) {
+	if v == "" {
+		return
+	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.secretsShort = append(in.secretsShort, v)
+}
+
 // noteSubmit records the page a sign-in step was submitted from.
 func (in *Instance) noteSubmit(pageURL string) {
 	u, err := url.Parse(pageURL)
@@ -874,6 +888,22 @@ const Redacted = "[redacted]"
 // scrub replaces every filled value in s.
 func (in *Instance) scrub(s string) string {
 	for _, v := range in.secretValues() {
+		if v != "" {
+			s = strings.ReplaceAll(s, v, Redacted)
+		}
+	}
+	return s
+}
+
+// scrubAll replaces every filled value, including the short ones kept out of
+// the general scrub. Used only where conductor extracts a value from a page's
+// own text (a receipt), never on a whole reply (it would shred the page).
+func (in *Instance) scrubAll(s string) string {
+	s = in.scrub(s)
+	in.mu.Lock()
+	short := append([]string(nil), in.secretsShort...)
+	in.mu.Unlock()
+	for _, v := range short {
 		if v != "" {
 			s = strings.ReplaceAll(s, v, Redacted)
 		}
