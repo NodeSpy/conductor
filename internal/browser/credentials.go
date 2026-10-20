@@ -821,8 +821,37 @@ func (in *Instance) remember(nodeID int64, v string) {
 	}
 	in.secretNodes[nodeID] = true
 	if len(v) > 0 {
-		in.secrets = append(in.secrets, v)
+		in.maskVals = append(in.maskVals, v)
+		if len(v) >= 4 {
+			in.secrets = append(in.secrets, v)
+		}
 	}
+}
+
+// rememberDisplay records the text the page shows for a filled field (a
+// select's option label), so the wait comparison cannot be an oracle for it.
+func (in *Instance) rememberDisplay(v string) {
+	if v == "" {
+		return
+	}
+	in.mu.Lock()
+	in.maskVals = append(in.maskVals, v)
+	in.mu.Unlock()
+}
+
+// scrubWait blanks every filled value and displayed label from s. It is for
+// the wait comparison only — never returned to the agent — so it removes short
+// values too (which the reply scrub leaves, to avoid shredding real text).
+func (in *Instance) scrubWait(s string) string {
+	in.mu.Lock()
+	vals := append([]string(nil), in.maskVals...)
+	in.mu.Unlock()
+	for _, v := range vals {
+		if v != "" {
+			s = strings.ReplaceAll(s, v, Redacted)
+		}
+	}
+	return s
 }
 
 // noteSubmit records the page a sign-in step was submitted from.

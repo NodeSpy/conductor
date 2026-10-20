@@ -249,6 +249,33 @@ func TestRealSelectLabelNotInSnapshot(t *testing.T) {
 	w.noLeak()
 }
 
+// TestRealWaitNotSelectOracle: a filled <select>'s option label reaches
+// document.body.innerText (unlike a text input's value), so `wait` — which
+// matches the agent's text against that body — could be brute-forced as an
+// oracle for the filled country (or a card expiry month/year select). The wait
+// comparison now blinds every filled value and displayed label, so the match
+// cannot confirm one.
+func TestRealWaitNotSelectOracle(t *testing.T) {
+	w := newWalletRig(t)
+	op := w.caller("k-op", RequesterOperator)
+	w.do(op, "open", map[string]any{"url": w.a + "/signup"})
+	w.do(op, "fill-form", map[string]any{"profile": "personal"})
+	// The label really is on the page (the fill worked) ...
+	s, _ := w.m.session(op)
+	in := s.active
+	tb, _ := in.current(context.Background())
+	if v, _ := in.eval(context.Background(), tb, `(document.body && document.body.innerText) || ""`); !strings.Contains(string(v), "United States") {
+		t.Fatal("the country was not filled")
+	}
+	// ... but the agent-facing wait cannot confirm it (it times out).
+	if err := w.fail(op, "wait", map[string]any{"text": "United States", "timeout": 1.0}); !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("LEAK: wait confirmed the filled country label (an oracle): %v", err)
+	}
+	// A control: ordinary page text (never filled) still matches.
+	w.do(op, "wait", map[string]any{"text": "Create an account", "timeout": 2.0})
+	w.noLeak()
+}
+
 // TestRealCardFillLocksEvaluate: a full real purchase — propose, approve, pay
 // (the PAN/CVC filled on the real checkout) — then every attempt to read the
 // card back through evaluate is refused, even on the confirmation page.

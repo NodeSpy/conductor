@@ -22,6 +22,7 @@ error paths.
 | 1 | Read-back of a filled value via `evaluate` (`.value`, `defaultValue`, `FormData`, `getComputedStyle`, selection, submit-and-read) | PASS — `evaluate` is off for the life of a browser where any value was filled |
 | 2 | **Value in a `snapshot` (a11y tree)** | **LEAK (fixed)** — the browser mirrors a filled value into the field's subtree: a `StaticText` for an input (CVC `987`, region `IL` → `- text: 987`) and a selected `<option>` for a select (country, card expiry → `- option "United States"`); only the field's own node was masked |
 | 3 | **Value in a `screenshot`** | **LEAK (fixed)** — short values (CVC, region code) were not masked |
+| 3b | **`wait` as an oracle for a filled `<select>`** | **LEAK (fixed)** — a select's option label reaches `innerText`; `wait` matched it, brute-forceable for card expiry / country |
 | 4 | Shadow DOM / iframe fill-and-read | PASS — fill refuses any node not in the main frame's own top document; open shadow roots masked in screenshots |
 | 5 | Origin / field confusion + resolve→fill TOCTOU | PASS — exact origin, egress-narrowed login browser, atomic re-check in the setter |
 | 6 | Timing / clipboard / keyboard / mutation observer | PASS within model — all require page script, and `evaluate` is off; a page on the exact bound origin already holds the value it was filled with |
@@ -30,10 +31,22 @@ error paths.
 | 9 | Browser extension / raw CDP / profile or flag tampering | PASS — fixed minimal flag set, `--disable-extensions`, `--remote-debugging-pipe` (no port), namespace/Seatbelt sandbox (#179) |
 | 10 | Keypress capture below the page | PASS — credentials are filled by the `.value` setter + `input`/`change` dispatch, never keystrokes; no `keydown`/`beforeinput`/`keypress` is emitted |
 
-**Leaks found: 2. All patched: yes.** Both proven end-to-end on the real headless
-Chromium conductor drives (not a mock): a sandboxed `chromium` process, driven
-through the real `Do(...)` verbs, the sentinel actually filled into the real page,
-and the leak read from the real `snapshot` / `screenshot` output.
+**Leaks found: 4 (all in the short-value / a11y-mirror masking family). All
+patched: yes.** Every one proven end-to-end on the real headless Chromium
+conductor drives (not a mock): a sandboxed `chromium` process, driven through the
+real `Do(...)` verbs, the sentinel actually filled into the real page, and the
+leak read from the real `snapshot` / `screenshot` / `wait` output. The four bugs:
+
+1. a screenshot did not mask a filled value under 4 chars (its field was masked
+   only by value-text search, which excludes short values) — *Attack 3*;
+2. a snapshot printed the `StaticText` the browser mirrors a filled value into
+   (a short CVC/region) — *Attack 2*;
+3. a snapshot printed the selected `<option>` label of a filled `<select>`
+   (country, card expiry) — *Attack 2*, found only after the first snapshot fix
+   and closed by suppressing the field's whole subtree;
+4. `wait` matched the agent's text against a page body that includes a filled
+   `<select>`'s option label, making it a brute-force oracle for the filled
+   value (card expiry month/year, country) — *Attack 7*.
 
 ---
 
@@ -234,10 +247,19 @@ unknown ref/credential/field, lookalike origin, and an oversized (>640 KB)
 unicode password actually set into a field — and asserts no error carries the
 password, the TOTP seed or the sentinel. `TestRedteamOpaqueOriginFillRefused`
 confirms a `data:` / `about:blank` page is never a fill target and fetches
-nothing. A `wait` is likewise not an oracle: the body is scrubbed of values ≥ 4
-chars before the text match (a short value reaches `innerText` only through
-same-origin script, the documented short-value boundary, and the filled field's
-own value is never in `innerText`).
+nothing.
+
+`wait` is not an oracle (*fixed — leak 3b*). A text input's value never reaches
+`document.body.innerText`, so `wait text=<cvc>` always times out. But a
+`<select>`'s option label **is** in `innerText`: `wait text="United States"`
+matched a filled country, a brute-forceable oracle for the country or a card
+expiry month/year select (`TestRealWaitNotSelectOracle`, which fails before the
+fix — the label is on the page, yet the agent-facing `wait` must not confirm it).
+The fix records each filled field's *displayed* text (a select's selected-option
+label, via `walletDisplay`) and blinds the `wait` comparison with every filled
+value and label — `scrubWait`, which removes short values too. Over-removing a
+short code is safe here, unlike in the reply scrub: the `wait` body is never
+returned to the agent, only matched, so at worst a guess times out.
 
 **8 — JavaScript injection to capture the value at fill time.** The threat: the
 agent installs an `input`/`change`/`keydown` listener, a `MutationObserver`, or

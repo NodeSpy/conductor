@@ -429,8 +429,23 @@ func (m *Manager) setWallet(ctx context.Context, in *Instance, t *tab, fr frame,
 	if why := strings.Trim(string(res), `"`); why != "" {
 		return refuse("cannot fill it: %s", why)
 	}
+	// The text the page now shows for the field — a select's option label is
+	// not the stored value and reaches innerText, where a wait could oracle it.
+	if disp, derr := in.callOn(ctx, t, obj, walletDisplay); derr == nil {
+		var d string
+		if json.Unmarshal(disp, &d) == nil {
+			in.rememberDisplay(d)
+		}
+	}
 	return nil
 }
+
+// walletDisplay reads the text the page shows for a filled field: a select's
+// selected option label, else the field's value.
+const walletDisplay = `function(){
+	if (this instanceof HTMLSelectElement) { const o = this.options[this.selectedIndex]; return o ? o.text.trim() : ""; }
+	return (this.value || "");
+}`
 
 // fillProfile fills one field of a profile into the node ref names.
 func (m *Manager) fillProfile(ctx context.Context, in *Instance, t *tab, c Principal, st Settings, name, field string, nodeID int64, allow []string, entry map[string]any) error {

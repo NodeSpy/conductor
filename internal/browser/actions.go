@@ -350,7 +350,7 @@ func (in *Instance) waitFor(ctx context.Context, t *tab, text, gone, url string,
 		ok := true
 		if url != "" {
 			u, _ := in.pageInfo(ctx, t)
-			ok = strings.Contains(in.scrub(u), url)
+			ok = strings.Contains(in.scrubWait(u), url)
 		}
 		if ok && (text != "" || gone != "") {
 			c, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -358,7 +358,7 @@ func (in *Instance) waitFor(ctx context.Context, t *tab, text, gone, url string,
 			cancel()
 			var body string
 			ok = err == nil && json.Unmarshal(v, &body) == nil
-			body = in.scrub(body)
+			body = in.scrubWait(body)
 			ok = ok && (text == "" || strings.Contains(body, text)) && (gone == "" || !strings.Contains(body, gone))
 		}
 		if ok {
