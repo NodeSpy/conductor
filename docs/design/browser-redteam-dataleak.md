@@ -285,6 +285,36 @@ could install, which it cannot) observes nothing. Lower still, an OS/X11
 keylogger or a read of the browser's `/proc/<pid>/mem` would require the agent to
 share the browser's process space, which the namespace/Seatbelt sandbox forbids.
 
+## Inherent boundary — proven on the real browser, not conductor-fixable
+
+A page whose **own script** already runs on the credential's exact trusted origin
+can read and exfiltrate the filled value, and can defeat the literal scrub by
+transforming it first. `TestRealTransformReflectionBoundary` proves this
+end-to-end: a page that base64-encodes the filled code into its own visible text
+produces, in the agent's real snapshot, `- text: MzA4Mjkw` — which decodes to the
+code. conductor's scrub removes the *verbatim* value (the realistic reflection,
+asserted), but cannot un-transform arbitrary encodings (base64, reverse, XOR,
+char-code arrays, …).
+
+This is the web same-origin boundary, and it is **outside the fill/redaction
+path**:
+
+- The agent cannot create this script itself — `evaluate` is read-only and off
+  after a fill (attack 1/8), so the agent cannot inject the reflecting/encoding
+  code. The script must *already* be on the origin (stored/reflected XSS, a
+  hostile third-party widget, a compromised dependency).
+- Such a script is same-origin with the field and can read `.value` on a timer
+  with no help from conductor; suppressing conductor's `input`/`change` dispatch
+  would not close it and would break legitimate sign-ins.
+- conductor cannot distinguish a hostile `btoa(password)` in page text from
+  ordinary content, so it cannot redact it without breaking usable snapshots.
+
+The mitigations are the ones conductor already enforces around this boundary:
+only ever filling on the operator's exact configured origin, and the egress
+allowlist/proxy (attacker B's area) bounding where such a script could send the
+value. Reported here for honesty; it does not count among the patched leaks,
+which are the conductor-side masking bugs (attacks 2 and 3).
+
 ## Running the checks
 
 ```

@@ -4,6 +4,7 @@ package browser
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -185,6 +186,34 @@ func TestRealCVCNotInSnapshotOrScreenshot(t *testing.T) {
 		t.Errorf("LEAK: the CVC field is not masked in the screenshot")
 	}
 	w.noLeak()
+}
+
+// TestRealTransformReflectionBoundary: conductor scrubs a value a page reflects
+// back verbatim (the realistic case), but a page whose OWN script transforms the
+// value first (base64) beats a literal substring scrub. This documents the
+// inherent boundary: it needs attacker script already on the credential's exact
+// trusted origin (the agent cannot inject it — evaluate is read-only), and
+// conductor cannot un-transform arbitrary encodings. Not a fill/redaction-path
+// bug; the mitigation is the operator trusting the origin + the egress allowlist.
+func TestRealTransformReflectionBoundary(t *testing.T) {
+	r := newCredRig(t)
+	c := r.caller("op", RequesterOperator)
+	r.do(c, "open", map[string]any{"url": r.bound + "/codefield-xform"})
+	snap := r.do(c, "snapshot", nil)["snapshot"].(string)
+	r.do(c, "fill-credential", map[string]any{"credential": "site", "field": "otp", "ref": refOf(t, snap, "textbox", "Code")})
+	s, _ := r.m.session(c)
+	code := s.active.secretValues()[0]
+	after := r.do(c, "snapshot", nil)["snapshot"].(string)
+	// What conductor DOES guarantee: the verbatim value never appears.
+	if strings.Contains(after, code) {
+		t.Errorf("the raw value was not scrubbed from the snapshot")
+	}
+	// What it cannot: a hostile script's base64 of the value. Documented, not
+	// asserted away — proving the boundary is real, not hand-waved.
+	b64 := base64.StdEncoding.EncodeToString([]byte(code))
+	if strings.Contains(after, b64) {
+		t.Logf("inherent boundary: a hostile same-origin script exfiltrated base64(value) (%s) via the page's own text; requires XSS on the trusted origin", b64)
+	}
 }
 
 // TestRealCardFillLocksEvaluate: a full real purchase — propose, approve, pay
