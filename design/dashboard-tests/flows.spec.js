@@ -156,7 +156,7 @@ test.describe('bots', () => {
     await page.locator('[data-act="login-revoke"]').click(); await page.locator('#cf-ok').click();
     await expect(page.locator('.panel', { hasText: 'Saved browser sessions' })).toContainText('No saved logins');
     await go(page, '#/bots/platform-sre/memory');
-    await page.locator('#rp-md').fill('# db-prod-1\n\nPgbouncer pool: 200.\n');
+    await page.evaluate(() => UI.mdSet('rp-md', '# db-prod-1\n\nPgbouncer pool: 200.\n'));
     await page.locator('[data-act="rp-save"]').click();
     await expect(page.locator('#rp-md-prev')).toContainText('Pgbouncer pool: 200.');
     await go(page, '#/bots/platform-sre/workers');

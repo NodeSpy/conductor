@@ -1,6 +1,6 @@
 // A bot's Memory tab, laid out for writing: the head is a title, a quiet repo line and a New… button that never
 // collide; the entry takes the wide column (What it knows and History stack beside it); the markdown is written in the
-// plain GitHub-style editor; the footer says what saving does in words.
+// CodeMirror markdown editor; the footer says what saving does in words.
 const { test, expect, go } = require('./fixtures');
 
 const box = (l) => l.evaluate((e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height, r: r.right, b: r.bottom }; });
@@ -35,75 +35,83 @@ test('Memory: the entry gets the wide column; History is not wider than the entr
   expect(h.y).toBeGreaterThan(s.b - 1);
 });
 
-// The markdown editor is reset to the GitHub comment-box pattern (superseding 69d–69h's hand-rolled split and gutter):
-// Write | Preview tabs, a plain monospace textarea with no line numbers, a small toolbar, Side by side only as an
-// option, and the same quiet focus ring as every other field, never the accent. One editor wherever markdown is
-// written.
+// The markdown editor is CodeMirror 6 (superseding 69i's plain textarea and every hand-built gutter before it): markdown
+// highlighting with [[name]] links shown as links, the library's own line numbers, soft-wrapped lines, Write | Preview
+// tabs (Side by side as an option), and the same quiet focus ring as every other field, never the accent. One editor
+// wherever markdown is written.
+const view = (page) => page.locator('.md-ed .md-cm').first();
+const setMd = (page, t) => page.evaluate((x) => UI.mdSet('rp-md', x), t);
+const select = (page, a, z) => page.evaluate(([a, z]) => { const v = document.querySelector('.md-cm')._view; v.dispatch({ selection: { anchor: a, head: z } }); v.focus(); }, [a, z]);
 for (const route of ['#/bots/platform-sre/memory', '#/teams/platform/knowledge']) {
-  test(`the markdown editor is the plain comment box: Write | Preview, a textarea, no line numbers, a field's focus: ${route}`, async ({ page }) => {
+  test(`the markdown editor is CodeMirror: highlighting, its own line numbers, Write | Preview, a field's focus: ${route}`, async ({ page }) => {
     await go(page, route);
-    const ed = page.locator('.md-ed').first(), ta = ed.locator('textarea.md-ta');
+    const ed = page.locator('.md-ed').first();
     await expect(ed.locator('.md-tab[aria-selected="true"]')).toHaveText('Write');
     await expect(ed.locator('.md-tab')).toHaveText(['Write', 'Preview']);
-    await expect(ta).toBeVisible();
-    await expect(ed.locator('.ced, .ln, .ced-hl')).toHaveCount(0); // a plain textarea: no overlay, no line numbers
-    expect(await ta.evaluate((t) => /mono/i.test(getComputedStyle(t).fontFamily))).toBe(true);
+    await expect(ed.locator('.cm-editor')).toBeVisible();
+    await expect(ed.locator('textarea.md-src')).toBeHidden(); // the field the form reads, kept in step
+    // the library's line numbers: one per line of the text, right-aligned, in a gutter of its own
+    const g = await ed.evaluate((e) => { const v = e.querySelector('.md-cm')._view, nums = [...e.querySelectorAll('.cm-lineNumbers .cm-gutterElement')].filter((x) => /^\d+$/.test(x.textContent) && getComputedStyle(x).visibility !== 'hidden'); // (CodeMirror keeps one hidden, to size the gutter)
+      return { lines: v.state.doc.lines, shown: nums.length, align: nums.length ? getComputedStyle(nums[0]).textAlign : '', gutterBg: getComputedStyle(e.querySelector('.cm-gutters')).backgroundColor, codeBg: getComputedStyle(e.querySelector('.cm-editor')).backgroundColor, wrap: e.querySelector('.cm-content').classList.contains('cm-lineWrapping') }; });
+    expect(g.shown).toBe(g.lines); expect(g.align).toBe('right'); expect(g.gutterBg).not.toBe(g.codeBg); expect(g.wrap).toBe(true);
     for (const f of ['bold', 'italic', 'list', 'link', 'code']) await expect(ed.locator(`.md-tool[data-act="md-fmt"][data-f="${f}"]`)).toHaveCount(1);
-    await expect(ed.locator('.md-tool[data-act="md-attach"]')).toHaveCount(1);
     await expect(ed.locator('.md-tool[aria-label="Side by side"]')).toHaveAttribute('aria-pressed', 'false'); // an option, not the default
+    // markdown is highlighted: a heading, bold, inline code and a [[name]] link each look like what they are
+    await setMdIn(page, ed, '## Heading\n\n**bold** and `code` and [[runbooks/latency]]\n');
+    const h = await ed.evaluate((e) => { const col = (sel) => { const x = [...e.querySelectorAll('.cm-line span')].find((s) => s.textContent.includes(sel)); return x ? getComputedStyle(x).color + '|' + getComputedStyle(x).fontWeight : null; }; return { plain: getComputedStyle(e.querySelector('.cm-line')).color, head: col('Heading'), bold: col('bold'), code: col('code'), wiki: !!e.querySelector('.cm-wikilink') }; });
+    expect(h.head).not.toBeNull(); expect(h.head.split('|')[1]).toBe('700'); expect(h.bold.split('|')[1]).toBe('700');
+    expect(h.code.split('|')[0]).not.toBe(h.plain); expect(h.wiki).toBe(true);
     // focus: the box takes the same ring as any other field, and it is not the accent
     const inp = page.locator('#ke-form .input').first(); await inp.focus();
-    const settled = (l) => expect.poll(() => l.evaluate((e) => getComputedStyle(e).borderTopColor), { intervals: [100, 100, 200, 300] }); // fields ease their border colour
-    let field = ''; await expect.poll(async () => { const a = await inp.evaluate((e) => getComputedStyle(e).borderTopColor); const same = a === field; field = a; return same; }, { intervals: [150, 150, 300] }).toBe(true);
-    await ta.focus();
-    await settled(ed).toBe(field);
-    const c = await ed.evaluate((e) => ({ border: getComputedStyle(e).borderTopColor, accent: getComputedStyle(document.querySelector('.btn.primary') || document.body).backgroundColor, outline: getComputedStyle(e.querySelector('.md-ta')).outlineStyle }));
-    expect(c.border).not.toBe(c.accent);
-    expect(c.outline).toBe('none');
-    // Preview shows the rendered markdown in place of the textarea; Write brings it back
+    let field = ''; await expect.poll(async () => { const a = await inp.evaluate((e) => getComputedStyle(e).borderTopColor); const same = a === field; field = a; return same; }, { intervals: [150, 150, 300] }).toBe(true); // fields ease their border colour
+    await ed.locator('.cm-content').click();
+    await expect.poll(() => ed.evaluate((e) => getComputedStyle(e).borderTopColor)).toBe(field);
+    const accent = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--color-accent-default').trim());
+    expect(await ed.evaluate((e) => getComputedStyle(e).borderTopColor)).not.toBe(accent);
+    // Preview shows the rendered markdown in place of the editor; Write brings it back
     await ed.locator('.md-tab[data-v="preview"]').click();
-    await expect(ta).toBeHidden(); await expect(ed.locator('.md-prev')).toBeVisible();
-    await expect(ed.locator('.md-tools [data-act="md-fmt"]').first()).toBeHidden(); // nothing to format in a preview
+    await expect(ed.locator('.cm-editor')).toBeHidden(); await expect(ed.locator('.md-prev h3, .md-prev h2').first()).toHaveText('Heading');
     await ed.locator('.md-tab[data-v="write"]').click();
-    await expect(ta).toBeVisible(); await expect(ed.locator('.md-prev')).toBeHidden();
+    await expect(ed.locator('.cm-editor')).toBeVisible(); await expect(ed.locator('.md-prev')).toBeHidden();
   });
 }
+const setMdIn = (page, ed, t) => ed.evaluate((e, x) => UI.mdSet(e.dataset.md, x), t);
 
-test('the markdown editor: the toolbar and its keys, [[ suggestions, files by choosing, Side by side, sized to its text', async ({ page }) => {
+test('the markdown editor: the toolbar and its keys, [[ completion, files by choosing, Side by side, sized to its text', async ({ page }) => {
   await go(page, '#/bots/platform-sre/memory', { fresh: true });
-  const ed = page.locator('.md-ed'), ta = page.locator('#rp-md');
-  const h0 = (await box(ta)).h;
-  expect(await ta.evaluate((t) => t.scrollHeight <= t.clientHeight + 2)).toBe(true); // as tall as its text
-  await ta.fill('one two');
-  await ta.evaluate((t) => t.setSelectionRange(4, 7));
+  const ed = page.locator('.md-ed'), val = () => page.locator('#rp-md').inputValue();
+  const h0 = (await box(view(page))).h;
+  await setMd(page, 'one two'); await select(page, 4, 7);
   await ed.locator('[data-f="bold"]').click();
-  await expect(ta).toHaveValue('one **two**');
-  await ta.evaluate((t) => { t.value = 'plain'; t.setSelectionRange(0, 5); });
-  await ta.press(process.platform === 'darwin' ? 'Meta+i' : 'Control+i');
-  await expect(ta).toHaveValue('_plain_');
-  await ta.evaluate((t) => { t.value = 'a\nb'; t.setSelectionRange(0, 3); });
+  expect(await val()).toBe('one **two**');
+  await setMd(page, 'plain'); await select(page, 0, 5);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+i' : 'Control+i');
+  expect(await val()).toBe('_plain_');
+  await setMd(page, 'a\nb'); await select(page, 0, 3);
   await ed.locator('[data-f="list"]').click();
-  await expect(ta).toHaveValue('- a\n- b');
-  expect((await box(ta)).h).toBeLessThan(h0 + 1); // a short text is a short box
-  // [[ suggests the other entries: narrow, then Enter puts the path in
-  await ta.press('End'); await ta.type('\nSee [[lat');
-  await expect(ed.locator('.md-ac .md-ac-i').first()).toContainText('Latency');
-  await ta.press('Enter');
-  await expect(ta).toHaveValue(/See \[\[runbooks\/latency\]\]$/);
-  await expect(ed.locator('.md-ac')).toHaveCount(0);
+  expect(await val()).toBe('- a\n- b');
+  expect((await box(view(page))).h).toBeLessThan(h0 + 1); // a short text is a short box
+  // [[ completes the other entries: narrow, then Enter puts the path in, closed
+  await ed.locator('.cm-content').click(); await page.keyboard.press('Control+End');
+  await page.keyboard.type('\nSee [[lat');
+  await expect(page.locator('.cm-tooltip-autocomplete li').first()).toContainText('runbooks/latency');
+  await page.waitForTimeout(150); // CodeMirror takes no Enter for 75ms after the list opens, so a fast typist doesn't pick by accident
+  await page.keyboard.press('Enter');
+  expect(await val()).toMatch(/See \[\[runbooks\/latency\]\]$/);
+  await expect(ed.locator('.cm-wikilink').last()).toHaveText('[[runbooks/latency]]');
   // files through the chat's attach rules: an image goes in as markdown and shows in the preview; a type it can't take is refused in words
   await page.setInputFiles('#rp-md-file', [{ name: 'graph.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64') }, { name: 'x.exe', mimeType: 'application/x-msdownload', buffer: Buffer.from('MZ') }]);
-  await expect(ta).toHaveValue(/!\[graph\.png\]\(attachment:att_[0-9a-f]+\)\n$/);
+  await expect.poll(val).toMatch(/!\[graph\.png\]\(attachment:att_[0-9a-f]+\)\n$/);
   await expect(ed.locator('.md-err')).toContainText('x.exe wasn’t attached');
-  // Side by side: both at once, preview kept up to date
+  // Side by side: both at once, the preview kept up to date
   await ed.locator('.md-tool[aria-label="Side by side"]').click();
   await expect(ed).toHaveClass(/mode-split/);
-  await expect(ta).toBeVisible(); await expect(ed.locator('.md-prev img.md-img')).toBeVisible();
-  await ta.press('End'); await ta.type('\n**fresh**');
+  await expect(ed.locator('.cm-editor')).toBeVisible(); await expect(ed.locator('.md-prev img.md-img')).toBeVisible();
+  await ed.locator('.cm-content').click(); await page.keyboard.press('Control+End'); await page.keyboard.type('**fresh**');
   await expect(ed.locator('.md-prev')).toContainText('fresh');
-  // it grows as you type and scrolls inside itself past its cap
-  await ta.evaluate((t) => { t.value += '\nline'.repeat(80); t.dispatchEvent(new Event('input', { bubbles: true })); });
-  const m = await ta.evaluate((t) => ({ ch: t.clientHeight, sh: t.scrollHeight }));
+  // it grows with the text and scrolls inside itself past its cap
+  await setMd(page, 'line\n'.repeat(80));
+  const m = await ed.evaluate((e) => { const sc = e.querySelector('.cm-scroller'); return { ch: sc.clientHeight, sh: sc.scrollHeight }; });
   expect(m.sh).toBeGreaterThan(m.ch); expect(m.ch).toBeLessThanOrEqual(561);
 });
 
@@ -180,8 +188,8 @@ test('Memory: a short entry on a tall screen is a short card, Save right under i
   expect(Math.abs(g.barBottom - g.cardBottom)).toBeLessThanOrEqual(2); // its Save bar is its foot, not floating below
   expect(g.sh).toBeLessThanOrEqual(g.ch + 1); // and the page has nothing to scroll
   // the three-line markdown is a few lines tall, not a box
-  const ta = await page.locator('#rp-md').evaluate((t) => ({ h: t.clientHeight, sh: t.scrollHeight }));
-  expect(ta.sh).toBeLessThanOrEqual(ta.h + 2); expect(ta.h).toBeLessThanOrEqual(160);
+  const ta = await page.locator('.md-ed .cm-scroller').evaluate((t) => ({ h: t.clientHeight, sh: t.scrollHeight }));
+  expect(ta.sh).toBeLessThanOrEqual(ta.h + 2); expect(ta.h).toBeLessThanOrEqual(170);
 });
 
 // 70: Who wrote this opened in place of the whole editor, with no clear way back. It is a popover under its button: the

@@ -23,7 +23,7 @@
     if (/^```/.test(raw)) return `<span class="y-c">${E}</span>`;
     return E.replace(/^(\s*[-*+]|\s*\d+\.)\s/, '<span class="y-a">$&</span>').replace(/\*\*([^*]+)\*\*/g, '<b>**$1**</b>').replace(/`([^`]+)`/g, '<span class="y-s">`$1`</span>').replace(/\[\[([^\]]+)\]\]/g, '<span class="y-n">[[$1]]</span>').replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<span class="y-n">[$1]($2)</span>');
   };
-  const inline = (t) => esc(t).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[^*])\*([^*]+)\*/g, '$1<i>$2</i>').replace(/`([^`]+)`/g, '<code>$1</code>')
+  const inline = (t) => esc(t).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[^*])\*([^*]+)\*/g, '$1<i>$2</i>').replace(/(^|[^\w])_([^_\n]+)_(?!\w)/g, '$1<i>$2</i>').replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/!\[([^\]]*)\]\(attachment:(att_[0-9a-z]+)\)/g, (m, alt, id) => ((D.attThumbs || {})[id] ? `<img class="md-img" src="${D.attThumbs[id]}" alt="${alt}">` : `<span class="md-file">${alt || 'image'}</span>`))
     .replace(/\[([^\]]+)\]\(attachment:(att_[0-9a-z]+)\)/g, '<span class="md-file">$1</span>')
     .replace(/\[\[([^\]]+)\]\]/g, '<span class="wikilink">$1</span>').replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
@@ -317,10 +317,7 @@
     const rail = g.querySelector('.rp-rail'); UI.editorGrow();
     if (!g.dataset.placed) { g.dataset.placed = '1'; if (rail) rail.scrollTop = ev.railTop; } }; // once per drawing: a resize keeps where you scrolled
   UI.fitMem = fitMem;
-  document.addEventListener('input', (e) => { if (!e.target.closest || !e.target.closest('.repo-grid.fit')) return; requestAnimationFrame(fitMem);
-    // the line being typed stays above the stuck Save bar (the browser only keeps it inside the scrolling page)
-    const ta = e.target; if (!ta.classList.contains('md-ta')) return; requestAnimationFrame(() => { const bar = UI.$('.repo-grid.fit .ed-bar'), main = document.getElementById('main'); if (!bar || !main) return;
-      const y = ta.getBoundingClientRect().top + UI.caretXY(ta).y + 8, top = bar.getBoundingClientRect().top; if (y > top) main.scrollBy({ top: y - top, behavior: 'instant' }); }); });
+  document.addEventListener('input', (e) => { if (e.target.closest && e.target.closest('.repo-grid.fit')) requestAnimationFrame(fitMem); }); // (the editor keeps the typed line clear of the stuck Save bar itself)
   addEventListener('resize', fitMem); if (window.visualViewport) visualViewport.addEventListener('resize', fitMem);
   (UI.afterRender = UI.afterRender || []).push(() => requestAnimationFrame(fitMem));
   /* Who wrote this (70): a popover under its button, over the entry, never in place of it. It closes on its ✕, on Esc
@@ -552,7 +549,7 @@
     const s = UI.modal(`<div class="modal-head"><div><div class="caps">${esc(r.id)}</div><h2>Import markdown</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
       <div class="modal-body stack">${UI.seg([['drop', 'Drop files'], ['paste', 'Paste'], ['repo', 'From a repo']], 'drop', 'up-mode')}
         <div class="up-pane" data-pane="drop"><label class="dropzone" id="up-drop">${icon('upload')}<span><b>Drop markdown files here</b> or choose them</span><input type="file" id="up-file" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple aria-label="Choose markdown files"></label><div id="up-list" class="small muted"></div></div>
-        <div class="up-pane hide" data-pane="paste"><div class="field"><label>Paste markdown</label>${UI.mdEditor({ id: 'up-text', label: 'Paste markdown', placeholder: '# Failover\n\n## Steps\n1. …' })}</div></div>
+        <div class="up-pane hide" data-pane="paste"><div class="field"><label>Paste markdown</label>${UI.mdEditor({ id: 'up-text', label: 'Paste markdown', placeholder: 'Paste a markdown file here' })}</div></div>
         <div class="up-pane hide" data-pane="repo"><div class="grid g2"><div class="field"><label for="up-repo">Repo</label><input class="input mono" id="up-repo" value="acme/infra"></div><div class="field"><label for="up-src">Path in repo</label><input class="input mono" id="up-src" value="docs/runbooks/failover.md"></div></div><div class="hint">Fetched through the gh connector (read).</div></div>
         <div class="callout small">Next you confirm which kind each file becomes. Nothing is placed by path.</div></div>
       <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="up-go">Next: map into kinds ${icon('chev')}</button></div>`, { wide: true });

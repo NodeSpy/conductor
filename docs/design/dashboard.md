@@ -720,22 +720,27 @@ operator save, on a bot proposal or promotion, and on import.
   commit* and *Promote to team …* are in the entry's ⋯. On a phone it is
   **the list or the entry**; the entry's head leads with a Back control to
   the list.
-- **The markdown editor is the GitHub comment box**, plain on purpose (it
-  replaces an earlier hand-built split view with line numbers): one box that
-  looks like every other field, with **Write | Preview** tabs, a small
-  toolbar (bold, italic, list, link, code, attach; ⌘/Ctrl+B, I, K and E),
-  a **plain monospace textarea** with no line numbers, and a quiet foot:
-  *Paste, drop, or click to add files*. Files go through the chat's attach
-  rules; an image goes in as `![name](attachment:id)` and shows in the
-  preview, any other file as a link. Typing `[[` suggests the other entries
-  in the repo (↑↓, Enter or Tab, Esc). **Side by side** is a toolbar option,
-  never the default, and the chosen mode holds. The textarea is as tall as
-  its text (five lines at least), grows as you type and scrolls inside
-  itself past a cap; on a long entry the line being typed stays above the
-  stuck Save bar. Focused, the box takes the same quiet ring as every other
-  field. It is the one markdown editor: a bot's memory, a team's knowledge,
-  runbooks and collections, a collection's body template, a ticket's
-  description and the import's paste box.
+- **The markdown editor is CodeMirror 6** in the box every comment editor
+  has (it replaces a plain textarea, and before that a hand-built split view
+  with its own line numbers): **Write | Preview** tabs and a small toolbar
+  (bold, italic, list, link, code, attach; ⌘/Ctrl+B, I, K and E) over the
+  editor itself, on its own code surface. Markdown is highlighted from the
+  brand's code tokens (headings, bold, italics, inline code, links, quotes;
+  the markup characters muted), `[[name]]` shows as a link, the library's
+  own **line numbers** sit in a quieter gutter, long lines soft-wrap, and
+  Enter continues a list. Typing `[[` completes from the repo's other
+  entries (with each one's title and kind). Files go in by paste, drop or
+  the paperclip, through the chat's attach rules; an image goes in as
+  `![name](attachment:id)` and shows in the preview. **Side by side** is a
+  toolbar option, never the default, and the chosen mode holds. It is as
+  tall as its text (five lines at least) and scrolls inside itself past a
+  cap; on a long entry the cursor stays above the stuck Save bar. Focused,
+  the box takes the same quiet ring as every other field. A hidden field
+  carries the text, so forms read it like any other. It is the one markdown
+  editor: a bot's memory, a team's knowledge, runbooks and collections, a
+  collection's body template, a ticket's description and the import's paste
+  box. CodeMirror is bundled with the app (`vendor/codemirror`: pinned
+  versions, `build.sh`, the licence), never loaded from a CDN.
 - **Focus is quiet, never the accent.** The brand's `--input-border-focus`
   is the ember accent; the prototype overrides it (in `daylight.css`, not
   the vendored tokens) to a neutral ring for every field, because ember is

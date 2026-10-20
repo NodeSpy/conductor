@@ -894,10 +894,11 @@
   };
   const edLines = (text, lang, o = {}) => text.split('\n').map((l, i) => `<span class="ln${(o.hl || []).includes(i + 1) ? ' hl' : ''}${(o.err || []).includes(i + 1) ? ' err' : ''}" data-ln="${i + 1}">${UI.codeLine(l, lang) || ' '}</span>`).join('');
   /** UI.editor({ id, text, lang, err, hl, minRows, act, label }) — act fires on input (debounce in the handler). */
-  /* The markdown editor: the GitHub comment-box pattern, deliberately plain. Write | Preview tabs, a plain monospace
-     textarea (no line numbers), a small toolbar (bold, italic, list, link, code, attach), files by paste, drop or click
-     (the chat's attach rules), [[ suggesting other entries, and Side by side as an option, never the default. Focused,
-     it looks like every other field. One editor wherever markdown is written.
+  /* The markdown editor: CodeMirror 6 (vendor/codemirror, window.CM) in the box every comment editor has. Write |
+     Preview tabs (Side by side as an option), a small toolbar (bold, italic, list, link, code, attach), markdown
+     highlighting with [[name]] links shown as links, the library's own line numbers, soft-wrapped lines, files by paste,
+     drop or click (the chat's attach rules), and [[ completing other entries. Focused, the box takes the ring every
+     field takes. A hidden textarea (#id) carries the text, so forms read and write it like any other field.
      o: { id, text, label, placeholder, links: () => [{ v, label, kind }] } */
   UI.mdModes = UI.mdModes || {}; UI.mdLinks = UI.mdLinks || {};
   UI.mdEditor = (o) => { const m = UI.mdModes[o.id] || 'write', esc = UI.esc, ic = UI.icon; if (o.links) UI.mdLinks[o.id] = o.links;
@@ -905,62 +906,96 @@
     return `<div class="md-ed mode-${m}" data-md="${o.id}">
       <div class="md-head"><div class="md-tabs" role="tablist" aria-label="${esc(o.label)}"><button type="button" role="tab" class="md-tab" data-act="md-mode" data-v="write" aria-selected="${m !== 'preview'}">Write</button><button type="button" role="tab" class="md-tab" data-act="md-mode" data-v="preview" aria-selected="${m === 'preview'}">Preview</button></div>
         <div class="md-tools" role="toolbar" aria-label="Formatting">${tool('bold', 'Bold', 'bold', mod + 'B')}${tool('italic', 'Italic', 'italic', mod + 'I')}${tool('list', 'Bulleted list', 'list')}${tool('link', 'Link', 'link', mod + 'K')}${tool('code', 'Code', 'code', mod + 'E')}<button type="button" class="md-tool" data-act="md-attach" aria-label="Attach a file" data-tip="Attach a file">${ic('attach')}</button><span class="md-sep" aria-hidden="true"></span><button type="button" class="md-tool" data-act="md-mode" data-v="${m === 'split' ? 'write' : 'split'}" aria-pressed="${m === 'split'}" aria-label="Side by side" data-tip="Side by side">${ic('split')}</button></div></div>
-      <div class="md-body"><textarea id="${o.id}" class="md-ta" spellcheck="true" rows="5" aria-label="${esc(o.label)} (markdown)" placeholder="${esc(o.placeholder || 'Write in markdown')}" aria-autocomplete="list" aria-expanded="false">${esc(o.text || '')}</textarea><div class="md-prev prose" id="${o.id}-prev" role="tabpanel" aria-label="Preview">${UI.mdRender(o.text || '') || '<p class="md-none">Nothing to preview</p>'}</div></div>
+      <div class="md-body"><div class="md-cm" data-ph="${esc(o.placeholder || 'Write in markdown')}" data-label="${esc(o.label)} (markdown)"></div><textarea id="${o.id}" class="md-src" hidden aria-hidden="true" tabindex="-1">${esc(o.text || '')}</textarea><div class="md-prev prose" id="${o.id}-prev" role="tabpanel" aria-label="Preview">${UI.mdRender(o.text || '') || '<p class="md-none">Nothing to preview</p>'}</div></div>
       <label class="md-foot" for="${o.id}-file">${ic('attach')}<span>Paste, drop, or click to add files${o.links ? ` · <code class="md-chip">[[</code> links another entry` : ''}</span></label><div class="md-err" role="alert"></div><input type="file" id="${o.id}-file" class="hide" multiple accept="${esc(UI.chatAccept || '')}" data-md-file="${o.id}"></div>`; };
-  const mdOf = (el) => el && el.closest('.md-ed'), mdTa = (ed) => ed.querySelector('.md-ta');
-  const mdChanged = (ta) => { ta.dispatchEvent(new Event('input', { bubbles: true })); };
-  UI.mdGrow = (ta) => { if (!ta || !ta.offsetParent) return; const st = ta.scrollTop; ta.style.height = 'auto'; ta.style.height = `${ta.scrollHeight + 1}px`; ta.scrollTop = st; ta.closest('.md-ed').style.setProperty('--md-h', `${ta.offsetHeight}px`); };
-  const mdPreview = (ed) => { const p = ed.querySelector('.md-prev'); if (p) p.innerHTML = UI.mdRender(mdTa(ed).value) || '<p class="md-none">Nothing to preview</p>'; };
-  UI.act('md-mode', (b) => { const ed = mdOf(b), m = b.dataset.v, ta = mdTa(ed); UI.mdModes[ed.dataset.md] = m; ed.className = `md-ed mode-${m}`;
+  const mdOf = (el) => el && el.closest('.md-ed'), mdView = (ed) => ed && ed.querySelector('.md-cm') && ed.querySelector('.md-cm')._view, mdSrc = (ed) => ed.querySelector('.md-src');
+  /** Set or read an editor's text from outside (a reload, a rebase, a test): the editor and its field stay in step. */
+  UI.mdSet = (id, text) => { const src = document.getElementById(id), ed = mdOf(src), v = mdView(ed); if (v) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text } }); else if (src) { src.value = text; src.dispatchEvent(new Event('input', { bubbles: true })); } };
+  UI.mdGet = (id) => { const src = document.getElementById(id); return src ? src.value : ''; };
+  const mdPreview = (ed) => { const p = ed.querySelector('.md-prev'); if (p) p.innerHTML = UI.mdRender(mdSrc(ed).value) || '<p class="md-none">Nothing to preview</p>'; };
+  UI.act('md-mode', (b) => { const ed = mdOf(b), m = b.dataset.v, v = mdView(ed); UI.mdModes[ed.dataset.md] = m; const hh = ed.querySelector('.md-cm').offsetHeight; if (hh) ed.style.setProperty('--md-h', `${hh}px`); /* the preview opens at the editor's height */ ed.className = `md-ed mode-${m}`;
     ed.querySelectorAll('.md-tab').forEach((t) => t.setAttribute('aria-selected', String((t.dataset.v === 'preview') === (m === 'preview'))));
     const sp = ed.querySelector('.md-tools [data-act="md-mode"]'); sp.dataset.v = m === 'split' ? 'write' : 'split'; sp.setAttribute('aria-pressed', String(m === 'split'));
-    mdPreview(ed); if (m !== 'preview') { UI.mdGrow(ta); if (b.classList.contains('md-tab')) ta.focus({ preventScroll: true }); } });
+    mdPreview(ed); if (v && m !== 'preview') { v.requestMeasure(); if (b.classList.contains('md-tab')) v.focus(); } });
   /* formatting: wrap or prefix the selection, as GitHub's toolbar does, and leave the useful part selected */
-  const mdFmt = (ta, f) => { const a = ta.selectionStart, z = ta.selectionEnd, v = ta.value, sel = v.slice(a, z); let ins, s0, s1;
+  const mdFmt = (v, f) => { if (!v) return false; const { from: a, to: z } = v.state.selection.main, sel = v.state.sliceDoc(a, z); let ins, s0, s1;
     if (f === 'bold' || f === 'italic' || (f === 'code' && !sel.includes('\n'))) { const w = f === 'bold' ? '**' : f === 'italic' ? '_' : '`', t = sel || (f === 'code' ? 'code' : 'text'); ins = w + t + w; s0 = a + w.length; s1 = s0 + t.length; }
     else if (f === 'code') { ins = '```\n' + sel + '\n```'; s0 = a + 4; s1 = s0 + sel.length; }
     else if (f === 'list') { const ls = (sel || 'item').split('\n'); ins = ls.map((l) => (/^\s*[-*] /.test(l) ? l : '- ' + l)).join('\n'); s0 = a + (sel ? 0 : 2); s1 = a + ins.length; }
     else if (f === 'link') { const t = sel || 'text'; ins = `[${t}](https://)`; s0 = a + t.length + 3; s1 = s0 + 8; }
-    ta.focus(); ta.setRangeText(ins, a, z, 'end'); ta.setSelectionRange(s0, s1); mdChanged(ta); };
-  UI.act('md-fmt', (b) => mdFmt(mdTa(mdOf(b)), b.dataset.f));
+    v.dispatch({ changes: { from: a, to: z, insert: ins }, selection: { anchor: s0, head: s1 }, scrollIntoView: true }); v.focus(); return true; };
+  UI.act('md-fmt', (b) => mdFmt(mdView(mdOf(b)), b.dataset.f));
   UI.act('md-attach', (b) => mdOf(b).querySelector('input[type=file]').click());
   /* files: the chat's attach rules; an image goes in as ![name](attachment:id) and shows in the preview, any other file as a link */
-  const mdFiles = (ed, files) => { const ta = mdTa(ed), err = ed.querySelector('.md-err'); err.textContent = '';
+  const mdFiles = (ed, files) => { const v = mdView(ed), err = ed.querySelector('.md-err'); err.textContent = '';
     Promise.all([...files].map((f) => (UI.attachFile ? UI.attachFile(f) : Promise.resolve({ err: 'Attaching isn’t available here' })))).then((rs) => {
       const ok = rs.filter((r) => r.a).map(({ a }) => { if (a.thumb) (D.attThumbs = D.attThumbs || {})[a.id] = a.thumb; return `${a.kind === 'image' ? '!' : ''}[${a.name.replace(/[[\]]/g, '')}](attachment:${a.id})`; });
-      if (ok.length) { const p = ta.selectionEnd, pre = p && ta.value[p - 1] !== '\n' ? '\n' : ''; ta.focus(); ta.setRangeText(pre + ok.join('\n') + '\n', p, p, 'end'); mdChanged(ta); if (window.S && S.save) S.save(); }
+      if (ok.length && v) { const p = v.state.selection.main.head, pre = p && v.state.sliceDoc(p - 1, p) !== '\n' ? '\n' : '', ins = pre + ok.join('\n') + '\n'; v.dispatch({ changes: { from: p, insert: ins }, selection: { anchor: p + ins.length }, scrollIntoView: true }); v.focus(); if (window.S && S.save) S.save(); }
       err.textContent = rs.filter((r) => r.err).map((r) => r.err).join('. '); }); };
   document.addEventListener('change', (e) => { const id = e.target.dataset && e.target.dataset.mdFile; if (!id) return; mdFiles(mdOf(e.target), e.target.files); e.target.value = ''; });
-  document.addEventListener('paste', (e) => { const ta = e.target.closest && e.target.closest('.md-ta'); const fs = e.clipboardData && [...e.clipboardData.files]; if (ta && fs && fs.length) { e.preventDefault(); mdFiles(mdOf(ta), fs); } });
   document.addEventListener('dragover', (e) => { const ed = e.target.closest && e.target.closest('.md-ed'); if (ed && e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); ed.classList.add('drop'); } });
   document.addEventListener('dragleave', (e) => { const ed = e.target.closest && e.target.closest('.md-ed'); if (ed && !ed.contains(e.relatedTarget)) ed.classList.remove('drop'); });
-  document.addEventListener('drop', (e) => { const ed = e.target.closest && e.target.closest('.md-ed'); if (!ed || !e.dataTransfer || !e.dataTransfer.files.length) return; e.preventDefault(); ed.classList.remove('drop'); mdFiles(ed, e.dataTransfer.files); });
-  /* [[ suggests other entries: type to narrow, ↑↓ to move, Enter or Tab to put it in, Esc to close */
-  const caretXY = (ta) => { const m = document.createElement('div'), cs = getComputedStyle(ta);
-    ['fontFamily', 'fontSize', 'lineHeight', 'letterSpacing', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderLeftWidth', 'boxSizing', 'tabSize'].forEach((k) => { m.style[k] = cs[k]; });
-    Object.assign(m.style, { position: 'absolute', visibility: 'hidden', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', width: `${ta.clientWidth}px`, top: '0', left: '-9999px' });
-    m.textContent = ta.value.slice(0, ta.selectionStart); const k = document.createElement('span'); k.textContent = '​'; m.appendChild(k); document.body.appendChild(m);
-    const xy = { x: k.offsetLeft, y: k.offsetTop + parseFloat(cs.lineHeight || 20) - ta.scrollTop }; m.remove(); return xy; };
-  UI.caretXY = caretXY;
-  const acClose = (ed) => { const p = ed && ed.querySelector('.md-ac'); if (p) p.remove(); const ta = ed && mdTa(ed); if (ta) ta.setAttribute('aria-expanded', 'false'); };
-  const acOpen = (ta) => { const ed = mdOf(ta), q = /\[\[([^\]\n]*)$/.exec(ta.value.slice(0, ta.selectionStart)), list = UI.mdLinks[ta.id];
-    if (!q || !list) return acClose(ed); const t = q[1].toLowerCase(), xs = list().filter((x) => !t || x.v.toLowerCase().includes(t) || (x.label || '').toLowerCase().includes(t)).slice(0, 8);
-    let p = ed.querySelector('.md-ac'); if (!xs.length) return acClose(ed);
-    if (!p) { p = document.createElement('div'); p.className = 'md-ac'; p.setAttribute('role', 'listbox'); p.id = ta.id + '-ac'; ed.querySelector('.md-body').appendChild(p); ta.setAttribute('aria-controls', p.id); }
-    p.innerHTML = xs.map((x, i) => `<button type="button" role="option" class="md-ac-i" data-act="md-ac-pick" data-v="${UI.esc(x.v)}" aria-selected="${i === 0}"><span>${UI.esc(x.label || x.v)}</span><span class="md-ac-k">${UI.esc(x.kind || '')}</span><span class="mono md-ac-v">${UI.esc(x.v)}</span></button>`).join('');
-    const xy = caretXY(ta); p.style.left = `${Math.min(xy.x + ta.offsetLeft, ta.offsetLeft + ta.clientWidth - 280)}px`; p.style.top = `${ta.offsetTop + xy.y + 4}px`; ta.setAttribute('aria-expanded', 'true'); };
-  const acPick = (ta, v) => { const a = ta.selectionStart, q = /\[\[([^\]\n]*)$/.exec(ta.value.slice(0, a)); if (!q) return; const after = ta.value.slice(a, a + 2) === ']]' ? 2 : 0; ta.setRangeText(`[[${v}]]`, a - q[0].length, a + after, 'end'); acClose(mdOf(ta)); ta.focus(); mdChanged(ta); };
-  UI.act('md-ac-pick', (b) => acPick(mdTa(mdOf(b)), b.dataset.v));
-  document.addEventListener('input', (e) => { const ta = e.target; if (!ta.classList || !ta.classList.contains('md-ta')) return; UI.mdGrow(ta); const ed = mdOf(ta); if (!ed.classList.contains('mode-write')) mdPreview(ed); acOpen(ta); });
-  document.addEventListener('keydown', (e) => { const ta = e.target; if (!ta.classList || !ta.classList.contains('md-ta')) return; const ed = mdOf(ta), p = ed.querySelector('.md-ac');
-    if (p) { const xs = [...p.querySelectorAll('.md-ac-i')], i = xs.findIndex((x) => x.getAttribute('aria-selected') === 'true');
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = (i + (e.key === 'ArrowDown' ? 1 : xs.length - 1)) % xs.length; xs.forEach((x, j) => x.setAttribute('aria-selected', String(j === n))); return; }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acPick(ta, xs[Math.max(0, i)].dataset.v); return; }
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); acClose(ed); return; } }
-    if ((e.metaKey || e.ctrlKey) && !e.altKey) { const f = { b: 'bold', i: 'italic', k: 'link', e: 'code' }[e.key.toLowerCase()]; if (f) { e.preventDefault(); mdFmt(ta, f); } } }, true);
-  document.addEventListener('click', (e) => { document.querySelectorAll('.md-ac').forEach((p) => { if (!p.contains(e.target)) acClose(mdOf(p)); }); });
-  (UI.afterRender = UI.afterRender || []).push(() => document.querySelectorAll('.md-ta').forEach(UI.mdGrow));
-  addEventListener('resize', () => document.querySelectorAll('.md-ta').forEach(UI.mdGrow));
+  /* The CodeMirror setup: a theme drawn from the Daylight tokens (so light and dark follow the page), highlighting
+     from the same tokens, [[name]] marked as a link, [[ completing from the editor's list. */
+  const CMX = window.CM ? (() => { const C = window.CM, t = C.tags;
+    const theme = C.EditorView.theme({
+      '&': { color: 'var(--color-text-primary)', backgroundColor: 'var(--md-code)', fontSize: 'var(--type-code-size)' },
+      '&.cm-focused': { outline: 'none' },
+      '.cm-scroller': { fontFamily: 'var(--font-family-mono)', lineHeight: '1.65', overflow: 'auto' },
+      '.cm-content': { padding: '10px 0', caretColor: 'var(--color-text-primary)' },
+      '.cm-line': { padding: '0 14px 0 12px' },
+      '.cm-gutters': { backgroundColor: 'var(--md-gutter)', color: 'var(--code-gutter)', border: 'none', borderRight: 'var(--border-width) solid var(--color-border-default)' },
+      '.cm-lineNumbers .cm-gutterElement': { padding: '0 10px 0 12px', minWidth: '2ch', fontVariantNumeric: 'tabular-nums' },
+      '.cm-activeLine': { backgroundColor: 'var(--md-active)' }, '.cm-activeLineGutter': { backgroundColor: 'var(--md-active)', color: 'var(--color-text-secondary)' },
+      '&:not(.cm-focused) .cm-activeLine, &:not(.cm-focused) .cm-activeLineGutter': { backgroundColor: 'transparent' },
+      '.cm-cursor': { borderLeftColor: 'var(--color-text-primary)' },
+      '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': { backgroundColor: 'var(--md-selection) !important' },
+      '.cm-placeholder': { color: 'var(--input-placeholder)' },
+      '.cm-wikilink': { color: 'var(--color-code-number)', textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: '3px' },
+      '.cm-tooltip': { backgroundColor: 'var(--color-bg-raised)', border: 'var(--border-width) solid var(--color-border-default)', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-3)', overflow: 'hidden' },
+      '.cm-tooltip.cm-tooltip-autocomplete > ul': { fontFamily: 'var(--font-family-sans, inherit)', maxHeight: '240px', padding: '4px', minWidth: '0' },
+      '.cm-tooltip.cm-tooltip-autocomplete': { maxWidth: 'min(560px, calc(100vw - 24px))' },
+      '.cm-tooltip.cm-tooltip-autocomplete > ul > li': { padding: '6px 8px', borderRadius: 'var(--radius-control)', color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      '.cm-tooltip-autocomplete ul li[aria-selected]': { backgroundColor: 'var(--color-bg-overlay)', color: 'var(--color-text-primary)' },
+      '.cm-completionLabel': { fontFamily: 'var(--font-family-mono)', fontSize: 'var(--type-code-s-size)' },
+      '.cm-completionDetail': { marginLeft: '10px', fontStyle: 'normal', color: 'var(--color-text-tertiary)', fontSize: 'var(--type-caption-size)' },
+    });
+    const hl = C.HighlightStyle.define([
+      { tag: t.heading, fontWeight: '700', color: 'var(--color-code-key)' },
+      { tag: t.strong, fontWeight: '700' }, { tag: t.emphasis, fontStyle: 'italic' }, { tag: t.strikethrough, textDecoration: 'line-through' },
+      { tag: [t.link, t.url], color: 'var(--color-code-number)' },
+      { tag: t.monospace, color: 'var(--md-code-fg)' }, { tag: t.quote, color: 'var(--color-code-comment)', fontStyle: 'italic' },
+      { tag: [t.processingInstruction, t.meta, t.contentSeparator, t.labelName], color: 'var(--color-code-punct)' },
+    ]);
+    const wiki = new C.MatchDecorator({ regexp: /\[\[[^\]\n]+\]\]/g, decoration: C.Decoration.mark({ class: 'cm-wikilink' }) });
+    const wikiLinks = C.ViewPlugin.fromClass(class { constructor(v) { this.decorations = wiki.createDeco(v); } update(u) { this.decorations = wiki.updateDeco(u, this.decorations); } }, { decorations: (x) => x.decorations });
+    const wikiComplete = (id) => (ctx) => { const m = ctx.matchBefore(/\[\[[^\]\n]*/); const list = UI.mdLinks[id]; if (!m || !list) return null;
+      const closed = ctx.state.sliceDoc(ctx.pos, ctx.pos + 2) === ']]';
+      return { from: m.from + 2, validFor: /^[^\]\n]*$/, options: list().map((x) => ({ label: x.v, detail: x.label && x.label !== x.v ? `${x.label}${x.kind ? ` · ${x.kind}` : ''}` : x.kind, apply: closed ? x.v : x.v + ']]' })) }; };
+    return { theme, hl, wikiLinks, wikiComplete }; })() : null;
+  const mdMount = (host) => { const C = window.CM, ed = mdOf(host), src = mdSrc(ed), id = ed.dataset.md; if (!C || host._view) return; host.dataset.ready = '1';
+    const fmtKey = (f) => (v) => mdFmt(v, f);
+    const view = new C.EditorView({ parent: host, state: C.EditorState.create({ doc: src.value, extensions: [
+      C.lineNumbers(), C.highlightActiveLine(), C.highlightActiveLineGutter(), C.history(), C.drawSelection(), C.EditorView.lineWrapping,
+      C.markdown({ base: C.markdownLanguage }), C.syntaxHighlighting(CMX.hl), CMX.wikiLinks, CMX.theme,
+      C.autocompletion({ override: [CMX.wikiComplete(id)], icons: false }),
+      C.placeholder(host.dataset.ph || ''),
+      C.keymap.of([{ key: 'Mod-b', run: fmtKey('bold') }, { key: 'Mod-i', run: fmtKey('italic') }, { key: 'Mod-k', run: fmtKey('link') }, { key: 'Mod-e', run: fmtKey('code') }, ...C.completionKeymap, ...C.historyKeymap, ...C.defaultKeymap]),
+      C.EditorView.contentAttributes.of({ 'aria-label': host.dataset.label || 'Markdown', 'aria-multiline': 'true' }),
+      // the line being typed stays clear of a stuck Save bar below it
+
+      C.EditorView.domEventHandlers({
+        paste: (e) => { const fs = e.clipboardData && [...e.clipboardData.files]; if (fs && fs.length) { e.preventDefault(); mdFiles(ed, fs); return true; } return false; },
+        drop: (e) => { const fs = e.dataTransfer && [...e.dataTransfer.files]; ed.classList.remove('drop'); if (fs && fs.length) { e.preventDefault(); mdFiles(ed, fs); return true; } return false; } }),
+      // the cursor stays clear of a stuck Save bar below it (not with scrollMargins: CodeMirror hides tooltips inside those)
+      C.EditorView.updateListener.of((u) => { if (!u.selectionSet && !u.docChanged) return; const bar = document.querySelector('.repo-grid.fit .ed-bar'), main = document.getElementById('main'); if (!bar || !main || !u.view.hasFocus) return;
+        u.view.requestMeasure({ read: (v) => v.coordsAtPos(v.state.selection.main.head), write: (c) => { if (!c) return; const over = c.bottom + 12 - bar.getBoundingClientRect().top; if (over > 0) main.scrollBy({ top: over, behavior: 'instant' }); } }); }),
+      C.EditorView.updateListener.of((u) => { if (!u.docChanged) return; src.value = u.state.doc.toString(); if (!ed.classList.contains('mode-write')) mdPreview(ed); src.dispatchEvent(new Event('input', { bubbles: true })); }),
+    ] }) });
+    host._view = view; };
+  const mdMountAll = (root) => (root || document).querySelectorAll('.md-cm:not([data-ready])').forEach(mdMount);
+  (UI.afterRender = UI.afterRender || []).push(() => mdMountAll());
+  new MutationObserver((ms) => { if (ms.some((m) => [...m.addedNodes].some((n) => n.nodeType === 1 && (n.matches('.md-cm') || n.querySelector('.md-cm'))))) mdMountAll(); }).observe(document.documentElement, { childList: true, subtree: true });
   UI.editor = (o) => `<div class="ced${o.wrap ? ' wrap' : ''}${o.prose ? ' prose-ed' : ''}" data-lang="${o.lang || 'yaml'}" id="${o.id}"><pre class="code ced-hl" aria-hidden="true">${edLines(o.text, o.lang || 'yaml', o)}</pre><textarea class="ced-ta" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="${UI.esc(o.label || 'YAML')}" ${o.act ? `data-on-input="${o.act}"` : ''} ${o.readonly ? 'readonly' : ''} style="min-height:${(o.minRows || 8) * 19.5 + 16}px">${UI.esc(o.text)}</textarea></div>`;
   UI.editorMark = (root, o) => { const pre = root.querySelector('.ced-hl'), ta = root.querySelector('.ced-ta'); pre.innerHTML = edLines(ta.value, root.dataset.lang, o); if (root.classList.contains('wrap') && UI.editorGrow) UI.editorGrow(root); pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; };
   UI.editorSet = (root, text, o = {}) => { const ta = root.querySelector('.ced-ta'); if (ta.value !== text) { const pos = ta.selectionStart; ta.value = text; if (document.activeElement === ta) ta.setSelectionRange(Math.min(pos, text.length), Math.min(pos, text.length)); } UI.editorMark(root, o); };

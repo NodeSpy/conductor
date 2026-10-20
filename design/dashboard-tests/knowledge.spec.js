@@ -6,7 +6,8 @@
 // save, history, revert, pins, blame, conflicts.
 const { test, expect, go, applyStaged } = require('./fixtures');
 
-const ta = (page) => page.locator('#rp-md');
+const ta = (page) => page.locator('#rp-md'); // the field CodeMirror writes through (hidden)
+const setMd = (page, t) => page.evaluate((x) => UI.mdSet('rp-md', x), t);
 const head = (page, id) => page.evaluate((i) => { const c = R.get(i).log[0]; return { who: c.who, kind: c.kind, msg: c.msg, n: c.changes.length, trailers: c.trailers || '', paths: c.changes.map((x) => x.path) }; }, id);
 const files = (page, id) => page.evaluate((i) => R.get(i).files, id);
 // A bot's memory on a phone shows the list or the entry (69b): these step to the one the next line taps.
@@ -33,7 +34,7 @@ test('New… creates each kind, and the path is derived from kind and title (nev
   await expect(page.locator('#ke-path')).toHaveText('knowledge/cache-ttls.md');
   await addTo(page, 'applies_to', 'acme/api');
   await addNote(page, 'modules/api/cache.tf'); // one note saves as the plain string conductor writes today
-  await ta(page).fill('The /search cache TTL is 300s.');
+  await setMd(page, 'The /search cache TTL is 300s.');
   await page.fill('#rp-msg', 'knowledge: cache TTLs');
   await save(page);
   expect(await head(page, 'team:platform')).toMatchObject({ who: 'operator:ops', kind: 'operator', msg: 'knowledge: cache TTLs', paths: ['knowledge/cache-ttls.md'] });
@@ -191,7 +192,7 @@ test('import maps markdown into a kind: a runbook is detected and confirmed', as
   await go(page, '#/teams/platform/knowledge', { fresh: true });
   await page.locator('.repo-side [data-act="rp-new"]').click(); await page.locator('.modal [data-act="rp-upload"]').click();
   await page.locator('[data-act="up-mode"][data-v="paste"]').click();
-  await page.fill('#up-text', '# Rotate the TLS cert\n\n## When\nThe cert expires within 14 days.\n\n## Steps\n1. Issue a new cert: `tailscale cert ops-box`\n2. Reload the listener\n3. Check the expiry\n\n## Verify\nopenssl shows the new expiry.\n\n## Rollback\nRestore the previous cert files.\n');
+  await page.evaluate((x) => UI.mdSet('up-text', x), '# Rotate the TLS cert\n\n## When\nThe cert expires within 14 days.\n\n## Steps\n1. Issue a new cert: `tailscale cert ops-box`\n2. Reload the listener\n3. Check the expiry\n\n## Verify\nopenssl shows the new expiry.\n\n## Rollback\nRestore the previous cert files.\n');
   await page.locator('#up-go').click();
   await expect(page.locator('.im-row')).toContainText('detected: runbook');
   await expect(page.locator('.im-row')).toContainText('runbooks/rotate-the-tls-cert.md');
@@ -214,7 +215,7 @@ test('bot memory: edit, pin, who wrote it; the log is annotated or flagged, neve
   await go(page, '#/bots/platform-sre/memory', { fresh: true });
   await listOn(page);
   await page.locator('[data-act="rp-open"][data-key="knowledge/db-prod-1.md"]').click();
-  await ta(page).fill((await ta(page).inputValue()).replace('No data loss.', 'No data loss. Pool size 200.'));
+  await setMd(page, (await ta(page).inputValue()).replace('No data loss.', 'No data loss. Pool size 200.'));
   await save(page);
   expect(await head(page, 'bot:platform-sre')).toMatchObject({ who: 'operator:ops' });
   await page.locator('[data-act="rp-file-menu"]').click(); await page.locator('#pop-menu [data-act="rp-pin"]').click();
@@ -250,7 +251,7 @@ test('a bot commits while you edit: the conflict is shown and you rebase explici
   await listOn(page);
   await page.locator('[data-act="rp-kind"][data-k="runbook"]').click();
   await page.locator('[data-act="rp-open"][data-key="runbooks/latency.md"]').click();
-  await ta(page).fill('Check the CDN cache hit rate too.\n');
+  await setMd(page, 'Check the CDN cache hit rate too.\n');
   await page.locator('.repo-ed [data-act="rp-file-menu"]').click(); await page.locator('.menu [data-act="rp-sim"]').click();
   await save(page);
   await expect(page.locator('.conflict')).toContainText('Conflict');
@@ -283,5 +284,5 @@ test('unsaved changes are guarded; browse by kind with tag filters; search spans
   await page.fill('.fb[data-fb="rp"] .fb-in', 'deregistration'); await page.locator('.fb[data-fb="rp"] .fb-in').press('Enter');
   await page.locator('.search-res [data-act="rp-hit"][data-repo="bot:platform-sre"]').first().click();
   await expect(page).toHaveURL(/#\/bots\/platform-sre\/memory/);
-  await expect(page.locator('[data-field="evidence"] .ev-add, #rp-md').first()).toBeVisible();
+  await expect(page.locator('[data-field="evidence"] .ev-add, .md-ed .cm-content').first()).toBeVisible();
 });

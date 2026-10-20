@@ -53,6 +53,7 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 - `js/data.js` fake state (several dated addenda at the end: usage, logins, typed knowledge, env).
 - `js/schema.js` plugin/connector/verb/event declarations. `js/store.js` collections, staging, the config
   pipeline (`S.stage`, `S.view`, `S.configText`, `S.envText`, `S.validate`, `S.apply`).
+- `vendor/codemirror/`: the bundled CodeMirror 6 (window.CM) the markdown editor uses; rebuild with its `build.sh`.
 - `js/ui.js` router, forms (`UI.form`, `UI.fieldHTML`), drawers, guarded dismissal (`UI.dismissModal`), shared
   component helpers (`UI.choice`, `UI.chosen`, `UI.stepper`, `UI.statusMark`, `UI.mark`, `UI.facts`, `UI.bulkBar`
   (the selection bar), `UI.systemTabs`, `UI.ph` (escapes plain placeholders in prose)). `css/daylight.css` holds the
@@ -94,6 +95,13 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **The markdown editor is CodeMirror 6 (2026-10-20):** replaces the plain textarea (69i) and every hand-built gutter
+  before it. `UI.mdEditor` (ui.js) mounts CodeMirror into the Write | Preview box: markdown highlighting from the code
+  tokens, `[[name]]` as links, the library's line numbers, soft wrap, `[[` completion, files by paste/drop/click
+  through the chat's attach rules, Side by side as an option. The text goes through a hidden `#id` field, so
+  `UI.formValues`, `readDraft` and tests read it as before; set it with `UI.mdSet(id, text)`. CodeMirror is bundled in
+  `dashboard-prototype/vendor/codemirror/` (pinned `package.json`, `entry.js`, `build.sh` → `codemirror.min.js`,
+  `LICENSE.txt`; rebuild with `vendor/codemirror/build.sh`).
 - **The markdown editor, reset (2026-10-20):** the hand-built split view with a line-number gutter (items 69d–69g) is
   replaced by `UI.mdEditor` (ui.js), the GitHub comment-box pattern: Write | Preview tabs, a plain monospace textarea,
   a small toolbar with keys, files by paste/drop/click through the chat's attach rules, `[[` suggestions, Side by side
