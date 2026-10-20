@@ -20,7 +20,7 @@ error paths.
 | # | Attack | Verdict |
 |---|--------|---------|
 | 1 | Read-back of a filled value via `evaluate` (`.value`, `defaultValue`, `FormData`, `getComputedStyle`, selection, submit-and-read) | PASS — `evaluate` is off for the life of a browser where any value was filled |
-| 2 | **Value in a `snapshot` (a11y tree)** | **LEAK (fixed)** — the browser mirrors a filled value into a `StaticText` descendant of the field; a short value (CVC `987`, region `IL`) was printed as `- text: 987`, masked only on the field's own node |
+| 2 | **Value in a `snapshot` (a11y tree)** | **LEAK (fixed)** — the browser mirrors a filled value into the field's subtree: a `StaticText` for an input (CVC `987`, region `IL` → `- text: 987`) and a selected `<option>` for a select (country, card expiry → `- option "United States"`); only the field's own node was masked |
 | 3 | **Value in a `screenshot`** | **LEAK (fixed)** — short values (CVC, region code) were not masked |
 | 4 | Shadow DOM / iframe fill-and-read | PASS — fill refuses any node not in the main frame's own top document; open shadow roots masked in screenshots |
 | 5 | Origin / field confusion + resolve→fill TOCTOU | PASS — exact origin, egress-narrowed login browser, atomic re-check in the setter |
@@ -41,16 +41,24 @@ and the leak read from the real `snapshot` / `screenshot` output.
 
 ### The hole
 
-Chromium's accessibility tree represents a filled text field's value **twice**:
-as the field node's `value`, and as a `StaticText` descendant node that mirrors
-the displayed glyphs. conductor masked only the first — it replaced the filled
-field node's AX `value` with the mark, keyed on that node's backend id. The
-mirror `StaticText` is a *different* node (a different backend id, not in
-`secretNodes`), and the snapshot renderer printed it as a plain `- text: …` line.
+Chromium's accessibility tree represents a filled field's value **twice**: on the
+field node (its `value`), and in the field's subtree, where the browser mirrors
+the displayed value as its own node(s):
 
-A value ≥ 4 chars was still caught by the whole-reply text scrub, but a value
+- for an `<input>`/`<textarea>`: a `StaticText` descendant (`- text: 987`);
+- for a `<select>`: the selected `<option>` as a named node
+  (`- option "United States" [selected]`).
+
+conductor masked only the field node's own `value`, keyed on its backend id. The
+mirror nodes are *different* nodes (different backend ids, not in `secretNodes`),
+and the renderer printed them.
+
+The scrub covered the `StaticText` case for a value ≥ 4 chars, but not a value
 under 4 — a card **CVC** or a region code, deliberately kept out of the scrub —
-was neither scrubbed nor on the masked node. The agent just calls
+and not the `<select>` label at all (the stored value is a short code like `US`,
+while the *displayed* leak is the full name `United States`, which the scrub
+never holds). This bites card data directly: a checkout with **expiry
+month/year as `<select>`s** would print the expiry. The agent just calls
 `conductor browser snapshot` and reads it.
 
 ### Evidence (before the fix, on the real browser)
@@ -70,14 +78,16 @@ masked field)`.
 
 ### The fix
 
-The snapshot renderer now renders a filled field's **whole subtree quiet**: when
-it walks a node whose backend id is in `secretNodes`, it suppresses the
-`StaticText` the browser mirrors the value into (the field's own value already
-shows the mark). Value-agnostic — it needs no copy of the secret and works for
-any length — and exactly aligned with the existing node-masking boundary.
+The snapshot renderer now **suppresses the entire subtree** of a filled field:
+when it walks a node whose backend id is in `secretNodes`, every descendant
+(the mirror `StaticText`, the selected `<option>`, anything else the browser
+puts there) is dropped — the field's own line already shows the mark.
+Value-agnostic: it needs no copy of the secret and works for any length and any
+field type.
 
 `internal/browser/snapshot.go`: `snapshot` passes the secret-node set to
-`renderAX`, which ORs `secret[n.BackendID]` into the subtree's `quiet` flag.
+`renderAX`, which walks with an `inSecret` flag — set on a filled field's
+children, it short-circuits the whole subtree.
 
 ### Evidence (after the fix)
 

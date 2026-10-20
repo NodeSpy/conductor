@@ -216,6 +216,39 @@ func TestRealTransformReflectionBoundary(t *testing.T) {
 	}
 }
 
+// TestRealSelectLabelNotInSnapshot: a filled <select> (a country here; a card
+// expiry month/year on a real checkout) masks the combobox value, but the
+// browser also exposes the selected <option> as its own a11y node whose name is
+// the label ("United States"). That label — the value in human form, and not
+// caught by the value scrub when the stored value is a short code like "US" —
+// must not render. The whole subtree of a filled field is suppressed.
+func TestRealSelectLabelNotInSnapshot(t *testing.T) {
+	w := newWalletRig(t)
+	op := w.caller("k-op", RequesterOperator)
+	w.do(op, "open", map[string]any{"url": w.a + "/signup"})
+	w.do(op, "fill-form", map[string]any{"profile": "personal"})
+	rendered := w.do(op, "snapshot", nil)["snapshot"].(string)
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.Contains(line, "United States") {
+			t.Errorf("LEAK: the snapshot shows the selected country label: %q", strings.TrimSpace(line))
+		}
+	}
+	// The country field itself is still present, marked filled.
+	var seen bool
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.Contains(line, "Country") && (strings.Contains(line, "combobox") || strings.Contains(line, "textbox")) {
+			seen = true
+			if !strings.Contains(line, FilledMark) {
+				t.Errorf("the country field is not marked filled: %q", strings.TrimSpace(line))
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("the country field vanished from the snapshot")
+	}
+	w.noLeak()
+}
+
 // TestRealCardFillLocksEvaluate: a full real purchase — propose, approve, pay
 // (the PAN/CVC filled on the real checkout) — then every attempt to read the
 // card back through evaluate is refused, even on the confirmation page.

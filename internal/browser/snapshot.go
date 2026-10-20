@@ -139,15 +139,20 @@ func renderAX(nodes []axNode, max int, secret map[int64]bool) (string, map[strin
 		lines++
 	}
 	var lastText string
-	var walk func(n *axNode, depth int, quiet bool)
-	walk = func(n *axNode, depth int, quiet bool) {
-		if n == nil {
+	// inSecret is set while walking below a filled field: the browser mirrors
+	// the value into that subtree (StaticText for an input, a selected option
+	// for a select), so none of it is rendered — the field's own line already
+	// shows the mark.
+	var walk func(n *axNode, depth int, quiet, inSecret bool)
+	walk = func(n *axNode, depth int, quiet, inSecret bool) {
+		if n == nil || inSecret {
 			return
 		}
 		role := n.Role.str()
 		name := strings.TrimSpace(collapse(n.Name.str()))
 		next := depth
 		childQuiet := quiet
+		childSecret := false
 		switch {
 		case n.Ignored || transparent[role]:
 		case role == "StaticText":
@@ -174,13 +179,14 @@ func renderAX(nodes []axNode, max int, secret map[int64]bool) (string, map[strin
 			emit(depth, line)
 			lastText = ""
 			next = depth + 1
-			childQuiet = quiet || labelled[role] || secret[n.BackendID]
+			childQuiet = quiet || labelled[role]
+			childSecret = secret[n.BackendID]
 		}
 		for _, c := range n.ChildIDs {
-			walk(byID[c], next, childQuiet)
+			walk(byID[c], next, childQuiet, childSecret)
 		}
 	}
-	walk(root, 0, false)
+	walk(root, 0, false, false)
 	if cut > 0 {
 		fmt.Fprintf(&b, "… (snapshot truncated at %d bytes; pass --max to see more)\n", max)
 	}
