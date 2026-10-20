@@ -38,8 +38,9 @@ test('every step is selectable; tabs follow the step (no diff on a command step)
   await page.locator('.dl-tree .tl[data-step="test"]').click();
   await expect(page.locator('#run-step [data-act="run-tab"][data-v="diff"]')).toHaveCount(0);
   // a step that never ran says so, and the step that stopped the run stays in view (r5, round-3 M10)
-  await page.locator('.dl-tree .tl[data-step="push"]').click();
-  await expect(page.locator('.toast').last()).toContainText('“push” wasn’t reached');
+  const push = page.locator('.dl-tree .tl', { hasText: 'push' });
+  await expect(push).toHaveAttribute('aria-disabled', 'true');
+  await expect(push).toHaveAttribute('data-tip', /Not reached/);
   await expect(page.locator('#run-step h2')).toHaveText('test');
 });
 

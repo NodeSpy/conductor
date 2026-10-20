@@ -199,7 +199,7 @@
     if (out.choice != null) return `Decided it’s ${/^[aeiou]/i.test(String(out.choice)) ? 'an' : 'a'} ${esc(String(out.choice).replace(/_/g, ' '))}${out.confidence != null ? `, ${Math.round(out.confidence * 100)}% sure` : ''}`;
     if (out.exit_code === 0) return 'Passed: every check came back clean';
     return out.summary || (lines[0] || 'Done').replace(/^fetched /, 'Fetched '); };
-  const tree = (r, rec, sel) => `<ol class="dl-tree">${rec.steps.map((s, i) => `<li class="${s.status === 'fail' ? 'failed' : s.status === 'idle' ? 'skipped' : ''}"><button type="button" class="tl${s.id === sel ? ' on' : ''}" data-act="run-step" data-run="${r.id}" data-step="${s.id}" aria-pressed="${s.id === sel}"><span class="tn">${i + 1}</span>${UI.mark(STEP_S[s.status] || 'skip', { label: true })}<span class="tt"><b>${esc(s.id)}</b><span>${esc(stepSentence(r, s))}</span></span><span></span><em>${s.t0 != null ? UI.durText(s.ms) : ''}</em></button></li>`).join('')}</ol>`;
+  const tree = (r, rec, sel) => `<ol class="dl-tree">${rec.steps.map((s, i) => `<li class="${s.status === 'fail' ? 'failed' : s.status === 'idle' ? 'skipped' : ''}"><button type="button" class="tl${s.id === sel ? ' on' : ''}" ${s.status === 'idle' ? UI.off('Not reached: the run stopped before this step') : `data-act="run-step" data-run="${r.id}" data-step="${s.id}"`} aria-pressed="${s.id === sel}"><span class="tn">${i + 1}</span>${UI.mark(STEP_S[s.status] || 'skip', { label: true })}<span class="tt"><b>${esc(s.id)}</b><span>${esc(stepSentence(r, s))}</span></span><span></span><em>${s.t0 != null ? UI.durText(s.ms) : ''}</em></button></li>`).join('')}</ol>`;
   // the run's live log, in the running step's card
   const lv = { follow: true, n: 9 };
   let LOG = D.liveLog;
@@ -207,7 +207,7 @@
   // lines its run record writes for each step it has reached
   // a run's log is its own (r5 major 12: a retry's log was the fixture's, timed before it started, with another repo's
   // identity): the agent's identity names this run's repository, and the times start when its step did
-  const ownRepo = (run, lines) => (run.repo ? lines.map(([a, k, t]) => [a, k, String(t).replace(/(identity agent:[\w-]+@)[\w./-]+/, `$1${run.repo}`)]) : lines);
+  const ownRepo = (run, lines) => { const where = String(UI.runTarget(run) || '').split('#')[0]; return where ? lines.map(([a, k, t]) => [a, k, String(t).replace(/(identity agent:[\w-]+@)[\w./-]+/, `$1${where}`)]) : lines; }; // where it runs, from the event's declared attributes
   const logOf = (run) => { if (run.workflow === 'ci-fixer') return ownRepo(run, D.liveLog);
     const rec = UI.runRecord(run); return rec.steps.filter((s) => s.status !== 'idle').flatMap((s) => (s.status === 'run' && (D.liveLogs || {})[run.workflow] ? D.liveLogs[run.workflow] : s.log).map(([k, t]) => [s.id, k, t])); };
   let LOG_T0 = 0; // when the running step started: its first line is then, never before

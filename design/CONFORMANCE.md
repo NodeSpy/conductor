@@ -167,6 +167,10 @@ Deliberate differences:
 | phone, light | ![](conformance/approval-phone-light-approved.jpg) | ![](conformance/approval-phone-light-prototype.jpg) |
 | phone, dark | ![](conformance/approval-phone-dark-approved.jpg) | ![](conformance/approval-phone-dark-prototype.jpg) |
 
+Round 5 additions to the approval: its risk facts under the title (production, changes infrastructure); the counts
+take the plan's own summary (an add that is the replacement says so) and a count of 0 is quiet; once decided, it opens
+on the decision (who, when, what's next); the passkey sheet says what you sign in words first.
+
 ## The workflow builder
 
 Source: v2 `builderPage()`.

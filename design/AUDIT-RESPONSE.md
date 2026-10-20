@@ -1,5 +1,25 @@
 # UX audit response
 
+## Round 5 (the final adversarial audit, 2026-10-19)
+
+Source: `r5-fixes.md` (the four REPORT-r5.md files and the owner's measurements). Each blocker and major was re-run as
+the reviewer's own repro, now a test (`realschema`, `plugins`, `rawedit`, `approvals-r5`, `names`, `vocab`,
+`r5-majors`, `valuesource`); the purchase sheet, a ticket's spend limit and the purchase parts of the decided state are
+the wallet designer's.
+- **Blockers:** a bot can be created and its face changed (the schema follows conductor's real BotConfig; uploads are
+  files; a team's initials are no avatar); a connection from a git URL stages `plugin_trust` and is a widening; a hand
+  edit of config.yaml changes only what you changed (no-op: nothing; one value: one line; comments and unmodelled
+  sections kept; what can't be mapped is refused, never dropped); an approval's tiles follow its plan; signing sheets
+  say what you sign in words, with the digest under For audit, and their buttons stay on an iPhone's screen; a decided
+  approval opens on its decision; a staged change is never shown as in force.
+- **Majors:** one name per bot (the display name; the id beside it, in code, for audit; `who:Atlas` works); the words
+  (practice mode, ticket, approval, connection, the risks in words, no config kickers); New bot's presets agree with
+  their lists; one retry at a time, linked both ways, its own log; edits and search focus survive redraws; the sandbox
+  asks before it turns off; the pack consent wraps; the value-source field keeps each source's value; Back says the
+  page's name; the owner's measurements (+N facts, comments, checkbox, card edges, scroll fades, the path line).
+- **Minors:** all four reports' remaining items (words, phone, brand conformance with tokens.css re-synced from the
+  brand, behaviour at scale), listed in the ledger as r5-minors, with the three left as designed and why.
+
 ## The owner's finish-line ledger (items DA and 38–68b, 2026-10-18/19)
 
 The owner's ledger was the source of truth; each item was closed only with a screenshot looked at and a test, and the

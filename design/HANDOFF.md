@@ -94,6 +94,12 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **Round 5 (the final adversarial audit, 2026-10-19):** the blockers, majors and minors in `r5-fixes.md`, each
+  re-run as the reviewer's repro (`design/AUDIT-RESPONSE.md` "Round 5"). New checks: `realschema.spec.js` (config the
+  UI writes is config conductor accepts), `rawedit.spec.js` (a hand edit changes only what you changed),
+  `names.spec.js` and `vocab.spec.js` (every route scanned for config ids and retired words), `approvals-r5.spec.js`,
+  `r5-majors.spec.js`. `js/realschema.js` mirrors feat/members 47cb1186 and feat/agent-browser f129b72b; re-sync it
+  when they move. config.yaml keeps your hand edits (`D.configFile`: comments, layout, unmodelled sections).
 - **Finish line (the owner's ledger, items DA and 38–68b; 2026-10-18/19)**, each verified with a screenshot and a test:
   the measured desktop audit (one control height, one toolbar, the stack gap, row centring, centred disclosures; the
   owner's `desk2/tb/mob/ctr` scripts ported as `measure.spec.js` on every route); one page container
