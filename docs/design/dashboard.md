@@ -673,23 +673,25 @@ operator save, on a bot proposal or promotion, and on import.
   it. The page is capped in width, so a third column only ever squeezed
   the entry. **Import markdown…** lives in the New… sheet, not as a loose
   icon in the head.
-- **A bot's memory fits the screen**, as a bot's Chat tab does: the
-  page itself never scrolls. The rail scrolls by itself; the entry is a
-  column whose head and **Save bar** (commit message, Discard, Save, and
-  the line saying what saving does) stay on screen while its body scrolls,
-  and both keep their place across redraws. *Simulate a bot commit* and
-  *Promote to team …* are in the entry's ⋯. On a phone it is **the list or
-  the entry**, each filling the screen; the entry's head leads with a Back
-  control to the list. (A team's knowledge, with its proposals above,
-  scrolls as a page.)
-- **The markdown body opens in Edit** and **wraps long lines** rather than
-  running them off the pane. Fitted, it is the height of the entry's body,
-  so scrolled to it fills the view, and it scrolls inside itself; on a
-  team's page it grows with its text. Split puts the source and the preview
-  side by side at half the entry's width each (stacked on a phone), and the
-  chosen mode holds from entry to entry. The highlighted copy and the
-  textarea under it share one font and one gutter, so the caret and a
-  selection sit on the letters.
+- **A bot's memory fits its content**, and never makes up height. The
+  entry is as tall as what's in it: a short one is a short card with its
+  **Save bar** (commit message, Discard, Save, and the line saying what
+  saving does) right under it, and nothing to scroll. When the entry is
+  taller than the screen, the page scrolls and the Save bar sticks to the
+  bottom of the screen until the card's end, where it is the card's own
+  foot again. The rail (What it knows, History) is capped at the screen,
+  scrolls by itself and stays in view as the page scrolls. *Simulate a bot
+  commit* and *Promote to team …* are in the entry's ⋯. On a phone it is
+  **the list or the entry**; the entry's head leads with a Back control to
+  the list.
+- **The markdown body opens in Edit**, is as tall as its text (five lines at
+  least), grows as you type, and past a cap (the screen less the entry's
+  head, the field's label and the Save bar; at most 560px) scrolls inside
+  itself. It **wraps long lines** rather than running them off the pane.
+  Split puts the source and the preview side by side at half the entry's
+  width each (stacked on a phone), and the chosen mode holds from entry to
+  entry. The highlighted copy and the textarea under it share one font and
+  one gutter, so the caret and a selection sit on the letters.
 - **Who wrote this** is a popover under its button, over the entry and
   never in its place: each part of the saved file beside the commit that
   last changed it. The button reads as pressed while it is open; its ✕,

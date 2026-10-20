@@ -40,17 +40,21 @@ test('Memory: the markdown opens in Edit, fills the screen and wraps; Split show
   await expect(page.locator('[data-act="rp-mode"][data-v="edit"]')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('.ed-panes')).toHaveClass(/mode-edit/);
   await expect(page.locator('#rp-prev')).toBeHidden();
-  // the editor is the height of the entry's scrolling body (less its label), so scrolled to, it fills the view
-  const ta = page.locator('#rp-ed .ced-ta'), body = await box(page.locator('.repo-ed > .ed-body'));
-  expect((await box(ta)).h).toBeGreaterThan(Math.max(150, body.h - 90));
-  // a long line wraps: nothing runs off the pane; the editor scrolls inside itself and the highlight scrolls with it
+  // the editor is as tall as its text: a few lines at least, growing as you type
+  const ta = page.locator('#rp-ed .ced-ta'), h0 = (await box(ta)).h;
+  const text = await ta.evaluate((t) => [...t.previousElementSibling.querySelectorAll('.ln')].reduce((n, l) => n + l.getBoundingClientRect().height, 0)); // its lines as wrapped
+  expect(h0).toBeGreaterThan(90); expect(h0).toBeLessThanOrEqual(Math.max(5 * 21, text) + 24);
+  await ta.click(); await page.keyboard.press('Control+End'); await page.keyboard.type('one more\ntwo more\nthree more\n');
+  expect((await box(ta)).h).toBeGreaterThan(h0 + 40);
+  // a long line wraps: nothing runs off the pane; past its cap the editor scrolls inside itself, the highlight with it
   await ta.click(); await page.keyboard.press('Control+End');
-  await page.keyboard.type(`${'a long line that keeps going '.repeat(40)}\n`);
+  await page.keyboard.type(`${'a long line that keeps going '.repeat(90)}\n`);
   const m = await ta.evaluate((t) => { const hl = t.previousElementSibling; return { sw: t.scrollWidth, cw: t.clientWidth, sh: t.scrollHeight, hsh: hl.scrollHeight, top: t.scrollTop, htop: hl.scrollTop, hcw: hl.clientWidth }; });
   expect(m.sw).toBeLessThanOrEqual(m.cw + 1);
   expect(m.hcw).toBe(m.cw); // both layers wrap at the same width (the scrollbar's gutter is kept in both)
   expect(Math.abs(m.hsh - m.sh)).toBeLessThanOrEqual(2);
   expect(m.top).toBeGreaterThan(0); expect(Math.abs(m.htop - m.top)).toBeLessThanOrEqual(1);
+  expect(await ta.evaluate((t) => t.clientHeight)).toBeLessThanOrEqual(561); // capped
   await page.locator('[data-act="rp-mode"][data-v="split"]').click();
   await expect(page.locator('#rp-prev')).toBeVisible();
   const src = await box(page.locator('.ed-src')), prev = await box(page.locator('#rp-prev'));
@@ -85,34 +89,32 @@ test('every code editor: the highlighted text and the textarea line up', async (
   }
 });
 
-// 69b: the page fits the screen like a chat (65): it never scrolls, the Save bar is always on screen, and the rail and
-// the entry's body scroll inside themselves. On a phone it is the list or the entry, each filling the screen.
+// 69b + 69c: a bot's memory fits its content and never manufactures height. A short entry is a short card with the
+// Save bar right under it and nothing to scroll; a long one scrolls the page with the Save bar stuck to the bottom of
+// the screen, landing right under the card at the end. The rail is capped at the screen and scrolls by itself. On a
+// phone it is the list or the entry.
+const geom = (page) => page.evaluate(() => { const main = document.getElementById('main'), card = document.querySelector('.repo-ed'), bar = document.querySelector('.repo-ed > .ed-bar'), rail = document.querySelector('.rp-rail'), mr = main.getBoundingClientRect();
+  const r = (e) => e.getBoundingClientRect(); const cb = r(card).bottom + main.scrollTop - mr.top, rb = rail && rail.offsetParent ? r(rail).bottom + main.scrollTop - mr.top : 0;
+  return { sh: main.scrollHeight, ch: main.clientHeight, mainBottom: mr.bottom, cardBottom: r(card).bottom, barBottom: r(bar).bottom, barTop: r(bar).top, contentEnd: Math.max(cb, rb) }; });
 for (const [w, h] of [[1440, 900], [1280, 720], [390, 844]]) {
-  test(`Memory fits the viewport at ${w}×${h}: the page never scrolls, Save is on screen, the columns scroll themselves`, async ({ page }) => {
+  test(`Memory at ${w}×${h}: a long entry scrolls the page with Save stuck to the screen's bottom, and no made-up height`, async ({ page }) => {
     test.skip((page.viewportSize().width <= 720) !== (w <= 720), 'sized per project');
     await page.setViewportSize({ width: w, height: h });
     await go(page, '#/bots/platform-sre/memory');
     await page.waitForTimeout(100);
-    const fits = () => page.evaluate(() => { const main = document.getElementById('main'), se = document.scrollingElement; return main.scrollHeight <= main.clientHeight + 1 && se.scrollHeight <= se.clientHeight + 1; });
-    const onScreen = async (sel) => { const b = await box(page.locator(sel)); return b.h > 0 && b.y >= 0 && b.b <= h; };
-    expect(await fits()).toBe(true);
-    expect(await onScreen('[data-act="rp-save"]')).toBe(true);
-    expect(await onScreen('.ed-sign')).toBe(true);
-    const body = page.locator('.repo-ed > .ed-body');
-    expect(await body.evaluate((e) => e.scrollHeight > e.clientHeight && getComputedStyle(e).overflowY === 'auto')).toBe(true);
-    await body.evaluate((e) => { e.scrollTop = e.scrollHeight; });
-    expect(await onScreen('[data-act="rp-save"]')).toBe(true);
-    expect(await fits()).toBe(true);
-    // a redraw (Split) keeps the body where it was scrolled to
-    const split = page.locator('[data-act="rp-mode"][data-v="split"]');
-    await split.scrollIntoViewIfNeeded(); // where the click would scroll it to anyway
-    const before = await body.evaluate((e) => e.scrollTop);
-    expect(before).toBeGreaterThan(40);
-    await split.click();
-    await expect.poll(async () => Math.abs((await page.locator('.repo-ed > .ed-body').evaluate((e) => e.scrollTop)) - before)).toBeLessThan(40);
+    let g = await geom(page);
+    expect(g.cardBottom).toBeGreaterThan(g.mainBottom); // db-prod-1's form is taller than this screen
+    expect(g.sh).toBeGreaterThan(g.ch); // so the page scrolls
+    expect(g.sh - g.contentEnd).toBeLessThanOrEqual(64); // by no more than its content (plus the page's own padding)
+    expect(g.barBottom).toBeLessThanOrEqual(g.mainBottom + 1); expect(g.barBottom).toBeGreaterThan(g.mainBottom - 3); // stuck to the bottom of the screen
+    await page.evaluate(() => { const m = document.getElementById('main'); m.scrollTo({ top: m.scrollHeight, behavior: 'instant' }); });
+    await page.waitForTimeout(100);
+    g = await geom(page);
+    expect(Math.abs(g.barBottom - g.cardBottom)).toBeLessThanOrEqual(2); // at the end it is the card's own foot
+    expect(g.barBottom).toBeLessThanOrEqual(g.mainBottom + 1);
     if (w > 720) {
       const rail = page.locator('.rp-rail');
-      expect(await rail.evaluate((e) => getComputedStyle(e).overflowY === 'auto' && e.clientHeight > 200)).toBe(true);
+      expect(await rail.evaluate((e) => { const c = getComputedStyle(e); return c.overflowY === 'auto' && c.position === 'sticky' && e.getBoundingClientRect().height <= document.getElementById('main').clientHeight; })).toBe(true);
       await expect(page.locator('.rp-rail .repo-hist')).toHaveCount(1);
       await expect(page.locator('[data-act="rp-list"]')).toBeHidden();
     } else {
@@ -120,14 +122,29 @@ for (const [w, h] of [[1440, 900], [1280, 720], [390, 844]]) {
       await page.locator('[data-act="rp-list"]').click();
       await expect(page.locator('.rp-rail')).toBeVisible();
       await expect(page.locator('.repo-ed')).toBeHidden();
-      expect(await fits()).toBe(true);
       await page.locator('.kind-entries [data-act="rp-open"]', { hasText: 'ALB' }).click();
       await expect(page.locator('.repo-ed .ed-head')).toContainText('ALB');
       await expect(page.locator('.rp-rail')).toBeHidden();
-      expect(await onScreen('[data-act="rp-save"]')).toBe(true);
+      g = await geom(page);
+      expect(g.barBottom).toBeLessThanOrEqual(g.mainBottom + 1);
     }
   });
 }
+
+test('Memory: a short entry on a tall screen is a short card, Save right under it, nothing to scroll', async ({ page }) => {
+  test.skip(page.viewportSize().width <= 720, 'desktop');
+  await page.setViewportSize({ width: 1440, height: 1300 });
+  await go(page, '#/bots/platform-sre/memory');
+  await page.locator('.kind-entries [data-act="rp-open"]', { hasText: 'ALB' }).click();
+  await page.waitForTimeout(100);
+  const g = await geom(page);
+  expect(g.cardBottom).toBeLessThan(g.mainBottom - 40); // a short card, ending well above the bottom
+  expect(Math.abs(g.barBottom - g.cardBottom)).toBeLessThanOrEqual(2); // its Save bar is its foot, not floating below
+  expect(g.sh).toBeLessThanOrEqual(g.ch + 1); // and the page has nothing to scroll
+  // the three-line markdown is a few lines tall, not a box
+  const ta = await page.locator('#rp-ed .ced-ta').evaluate((t) => ({ h: t.clientHeight, text: [...t.previousElementSibling.querySelectorAll('.ln')].reduce((n, l) => n + l.getBoundingClientRect().height, 0) }));
+  expect(ta.h).toBeLessThanOrEqual(Math.max(5 * 21, ta.text) + 24);
+});
 
 // 70: Who wrote this opened in place of the whole editor, with no clear way back. It is a popover under its button: the
 // entry stays put, the button reads as pressed, and ✕, Esc and a click elsewhere each close it.
@@ -141,7 +158,7 @@ test('Who wrote this is a popover over the entry, never in its place, and closes
   await expect(page.locator('[data-act="rp-save"]')).toBeVisible();
   const pb = await box(pop), bb = await box(btn);
   expect(pb.y).toBeGreaterThanOrEqual(bb.b - 1); expect(pb.y - bb.b).toBeLessThan(24); // anchored just under its button
-  expect(pb.b).toBeLessThanOrEqual((await box(page.locator('.repo-ed > .ed-foot'))).y); // and ends above the Save bar
+  expect(pb.b).toBeLessThanOrEqual((await box(page.locator('.repo-ed > .ed-bar'))).y + 1); // and ends above the Save bar
   await page.keyboard.press('Escape');
   await expect(pop).toHaveCount(0); await expect(btn).toHaveAttribute('aria-pressed', 'false'); await expect(btn).toBeFocused();
   await open();

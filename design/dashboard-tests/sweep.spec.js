@@ -33,7 +33,7 @@ const audit = () => {
     const pinned = (el) => { for (let q = el; q && q !== card; q = q.parentElement) { if (/sticky|fixed/.test(getComputedStyle(q).position)) return true; } return false; };
     const ctl = leaves.filter((el) => el.matches('button, a.btn, input, select, textarea') && !pinned(el));
     for (const a of ctl) { const ra = a.getBoundingClientRect();
-      for (const b of leaves) { if (a === b || a.contains(b) || b.contains(a)) continue; const rb = b.getBoundingClientRect();
+      for (const b of leaves) { if (a === b || a.contains(b) || b.contains(a) || pinned(b)) continue; const rb = b.getBoundingClientRect(); // nor what a pinned bar covers as the page scrolls under it
         const ix = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left), iy = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
         if (ix > 4 && iy > 4 && !clipped(a, card) && !clipped(b, card)) out.push(`overlaps: ${label(a)} over ${label(b)}`); } } // content scrolled under a pinned header is clipped, not on top
   }

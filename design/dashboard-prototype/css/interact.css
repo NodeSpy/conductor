@@ -201,21 +201,23 @@ button.node { font: inherit; color: inherit; text-align: left; }
 /* The entry is the work: it takes the wide column. What it knows and History stack on the left (the page is capped in width, so a third column only ever squeezed the entry) */
 .repo-grid { grid-template-columns: 260px minmax(0, 1fr); align-items: start; }
 .rp-rail { display: flex; flex-direction: column; gap: var(--gap-stack, 16px); min-width: 0; }
-/* A bot's memory fits the screen (69b; the grid's height is set in repo.js): nothing below it, the page never scrolls.
-   The rail scrolls by itself; the entry is a column whose head and Save bar stay put while its body scrolls. */
-#main > .page:has(.repo-grid.fit) { padding-bottom: 0; }
-.repo-grid.fit { align-items: stretch; grid-template-rows: minmax(0, 1fr); min-height: 0; }
-.repo-grid.fit > .rp-rail { overflow-y: auto; overscroll-behavior: contain; min-height: 0; padding-bottom: 2px; }
+/* A bot's memory fits its content (69b, 69c; --fit-h is set in repo.js): nothing manufactures empty height. The entry is
+   as tall as what's in it; when that runs past the screen the page scrolls and the Save bar sticks to the screen's
+   bottom, and a short entry is a short card with the bar right under it. The rail is capped at the screen below the
+   head and tabs, scrolls by itself, and stays in view while the page scrolls. */
+.repo-grid.fit { align-items: start; }
+.repo-grid.fit > .rp-rail { position: sticky; top: 12px; max-height: var(--fit-h, none); overflow-y: auto; overscroll-behavior: contain; padding-bottom: 2px; }
 .repo-grid.fit > .rp-rail > .panel { flex: none; }
-.repo-grid.fit > .panel { min-height: 0; max-height: 100%; overflow-y: auto; overscroll-behavior: contain; }
-.repo-grid.fit > .repo-ed.ke:has(> .ed-body) { display: flex; flex-direction: column; overflow: hidden; }
-.repo-grid.fit > .repo-ed > .panel-head, .repo-grid.fit > .repo-ed > .ed-foot, .repo-grid.fit > .repo-ed > .ed-sign { flex: none; }
-.repo-grid.fit > .repo-ed > .ed-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.repo-grid.fit > .repo-ed > .ed-foot { border-top: 1px solid var(--color-border-subtle); }
-.repo-grid.fit .ke .ced.wrap .ced-ta { height: var(--ed-h, 320px) !important; min-height: 0 !important; overflow-y: auto; scrollbar-gutter: stable; }
-.repo-grid.fit .ke .ced.wrap .ced-hl { scrollbar-gutter: stable; }
-.repo-grid.fit .ke .ed-panes { min-height: 0; height: var(--ed-h, 320px); }
-.repo-grid.fit .ke .ed-prev { overflow-y: auto; }
+.repo-ed > .ed-bar { border-top: 1px solid var(--color-border-subtle); }
+/* sticky only on a bot's memory, where the card starts high on the page; on a team's knowledge the proposals push it
+   below the fold, and a stuck bar would ride up over the card's own head */
+.repo-grid.fit > .repo-ed > .ed-bar { position: sticky; bottom: 0; z-index: 2; background: var(--color-bg-surface); border-radius: 0 0 var(--radius-card) var(--radius-card); }
+.repo-ed > .ed-bar > .ed-foot { border-top: 0; }
+/* the markdown: as tall as its text (a few lines at least), growing as you type, scrolling inside itself past a cap */
+.ke { --ed-max: min(560px, var(--ed-cap, 420px)); }
+.ke .ed-panes { min-height: 0; }
+.ke .ced.wrap .ced-ta { max-height: var(--ed-max); }
+.ke .ed-prev { max-height: var(--ed-max); overflow-y: auto; }
 .rp-back { display: none; } .rp-back svg { transform: rotate(180deg); }
 /* Its head: the title with New… beside it, the repo a quiet line under both */
 .repo-side > .panel-head.rp-side-head { flex-wrap: wrap; align-items: center; row-gap: 2px; }
@@ -225,14 +227,13 @@ button.node { font: inherit; color: inherit; text-align: left; }
 /* A wrapping editor: lines wrap instead of running off the pane; it grows with its text and starts a screen tall */
 /* the textarea types under the highlighted copy (.code's font, set above): phones must not boost one layer's font and not the other's */
 .ced, .ced * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-.ced.wrap .ced-ta { white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden; resize: none; }
+.ced.wrap .ced-ta { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; overflow-y: auto; resize: none; scrollbar-gutter: stable; }
+.ced.wrap .ced-hl { scrollbar-gutter: stable; } /* both layers keep the scrollbar's gutter, so they wrap at one width */
 .ced.wrap .ced-hl .ln { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* the line number sits in a fixed gutter so the highlighted text starts exactly where the textarea's does (52px) */
 .ced .ced-hl .ln { padding-left: 52px; }
 .ced .ced-hl .ln::before { position: absolute; left: 0; top: 0; width: 44px; }
-.ke .ced.wrap .ced-ta { min-height: max(320px, calc(var(--dvh) - 240px)) !important; }
 .ke .ed-panes { align-items: stretch; }
-.ke .ed-prev { max-height: none; }
 .ed-panes.mode-edit .ed-src { border-right: 0; }
 .rp-commit .grow { min-width: 0; } .rp-commit-by { margin-top: 2px; }
 .repo-side .tree a .pin { margin-left: auto; font-size: var(--type-caption-size); }
@@ -273,14 +274,12 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .repo-grid { grid-template-columns: minmax(0, 1fr) !important; }
 .repo-grid:not(.fit) > .rp-rail { display: contents; } .repo-grid:not(.fit) .repo-hist { order: 2; }
 /* a phone shows the list or the entry, each filling the screen; the entry's head leads with the way back */
-.repo-grid.fit { grid-template-rows: minmax(0, 1fr); }
 .repo-grid.fit.ph-entry > .rp-rail, .repo-grid.fit.ph-list > :not(.rp-rail) { display: none !important; }
 .repo-grid.fit .rp-back { display: inline-flex; margin-left: -6px; }
 .repo-ed .ed-head .rp-bl-t { display: none; } /* Who wrote this: its icon, named for a screen reader */
 .repo-grid.fit > .repo-ed > .ed-head { flex-wrap: nowrap; }
 .rp-blame-pop { max-height: calc(100% - 150px); } .rp-blame-pop .bl-group { grid-template-columns: 1fr; } .rp-blame-pop .bl-who { flex-direction: row; gap: 8px; align-items: baseline; } /* the Save bar stays in view below it */
 .ed-foot #rp-msg { flex: 1 0 100%; } .ed-foot .btn.primary { flex: 1 1 auto; } /* the message on its own line, then Discard and Save */
-.ke .ced.wrap .ced-ta { min-height: max(260px, calc(var(--dvh) - 320px)) !important; }
 .ed-panes { grid-template-columns: 1fr; } .ed-panes.mode-split .ed-prev { border-top: 1px solid var(--color-border-subtle); }
 .ed-src { border-right: 0; }
 .bl-group { grid-template-columns: 1fr; }

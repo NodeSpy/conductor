@@ -166,7 +166,7 @@
   const readers = (r) => (r.kind === 'team' ? botsOfTeam(r.name) : [r.name]);
 
   /* ---------- editor state ---------- */
-  const ev = { repo: null, kind: null, key: null, isNew: false, base: '', baseSha: null, steps: [], mode: 'edit', blame: false, proposal: null, conflict: null, q: '', tags: [], view: 'kinds', file: null, hist: 'file', sel: new Set(), draft: null, phList: false, railTop: 0, bodyTop: 0 };
+  const ev = { repo: null, kind: null, key: null, isNew: false, base: '', baseSha: null, steps: [], mode: 'edit', blame: false, proposal: null, conflict: null, q: '', tags: [], view: 'kinds', file: null, hist: 'file', sel: new Set(), draft: null, phList: false, railTop: 0 };
   const pathOf = () => (ev.key ? ev.key.split('#')[0] : null);
   // a step is one line of text (conductor's runbook steps are strings); a command or verb rides along as "(run: `cmd`)" / "(verb: x)"
   const stepsFrom = (fm) => (Array.isArray(fm.steps) ? fm.steps : []).map((st) => { if (st && typeof st === 'object') return { do: st.do || '', type: st.verb ? 'verb' : st.run ? 'run' : '', arg: st.verb || st.run || '' }; const m = String(st || '').match(/^(.*?)\s*\((run|verb): `?([^`)]*)`?\)\s*$/); return m ? { do: m[1], type: m[2], arg: m[3] } : { do: String(st || ''), type: '', arg: '' }; });
@@ -227,7 +227,7 @@
   /* ---------- the view ---------- */
   UI.repoView = (id, opts = {}) => {
     const r = R.get(id), kinds = kindsFor(r);
-    if (ev.repo !== id) { ev.repo = id; ev.railTop = 0; ev.bodyTop = 0; ev.phList = false; ev.q = ''; ev.tags = []; ev.view = 'kinds'; ev.key = null; ev.kind = null; const k = kindById(r, r.openKind) || (r.open && kindOfPath(r, r.open.split('#')[0])) || kinds[0]; const es = entriesOf(r, k), e = es.find((x) => x.key === r.open) || es[0]; if (e) openEntry(r, k, e); else ev.kind = k.id; }
+    if (ev.repo !== id) { ev.repo = id; ev.railTop = 0; ev.phList = false; ev.q = ''; ev.tags = []; ev.view = 'kinds'; ev.key = null; ev.kind = null; const k = kindById(r, r.openKind) || (r.open && kindOfPath(r, r.open.split('#')[0])) || kinds[0]; const es = entriesOf(r, k), e = es.find((x) => x.key === r.open) || es[0]; if (e) openEntry(r, k, e); else ev.kind = k.id; }
     let kind = kindById(r, ev.kind) || kinds[0];
     if (ev.key && !ev.isNew && !entriesOf(r, kind).some((x) => x.key === ev.key)) { const e = entriesOf(r, kind)[0]; if (e) openEntry(r, kind, e); else { ev.key = null; } }
     const pins = (r.files['.pins'] || '').split('\n').filter(Boolean);
@@ -247,9 +247,9 @@
           <div class="dl-sub rp-coll"><a class="dl-link" href="#/config/collections">Your own kinds of entry…</a></div>`}</div>`;
     // A bot's memory fits the screen (69b): the rail and the entry scroll inside themselves, the Save bar stays on screen.
     // On a phone it shows the list or the entry, never both stacked into a long page.
-    // where the rail and the entry's body were scrolled, read from the page being replaced (the same entry keeps its place)
+    // where the rail was scrolled, read from the page being replaced
     const at = `${ev.kind}|${ev.key}|${ev.view}|${ev.file}|${ev.isNew}`, was = document.querySelector(`#main .repo-grid.fit[data-repo="${id}"]`);
-    if (was) { const wb = was.querySelector('.ed-body'), wr = was.querySelector('.rp-rail'); ev.bodyTop = was.dataset.at === at && wb ? wb.scrollTop : 0; if (wr && wr.offsetParent) ev.railTop = wr.scrollTop; }
+    if (was) { const wr = was.querySelector('.rp-rail'); if (wr && wr.offsetParent) ev.railTop = wr.scrollTop; }
     const fit = r.kind === 'bot', phList = ev.phList || !(ev.key || ev.isNew || (ev.view === 'files' && ev.file));
     const hist = r.log.filter((c) => ev.hist === 'repo' || c.changes.some((ch) => ch.path === pathOf() || ch.from === pathOf()));
     const main = ev.view === 'files' && ev.file ? rawHTML(r) : ev.key || ev.isNew ? (kind.readonly ? readHTML(r, kind) : editorHTML(r, kind)) : `<div class="panel"><div class="empty"><span class="serif">No ${esc(kind.label.toLowerCase())} yet</span><span>${esc(kind.who[r.kind] || '')}</span>${writable(r, kind) ? '' : `<button class="btn primary" data-act="rp-new-kind" data-repo="${id}" data-k="${kind.id}">${icon('plus')}New ${esc(kind.one)}</button>`}</div></div>`;
@@ -261,17 +261,21 @@
         ${main}
       </div></div>`;
   };
-  /* Fit a bot's memory to the screen (69b, the chat panel's rule from 65): the grid takes what's left below the head and
-     tabs; the rail and the entry's body scroll inside themselves and keep their place across redraws; the markdown
-     editor is the body's height, so scrolled to, it fills the view and scrolls inside itself. */
+  /* A bot's memory fits its content (69b, 69c): the entry is as tall as what's in it and the page scrolls when that's
+     long, with the Save bar sticky at the bottom of the screen; a short entry is a short card with the bar right under
+     it. The rail is capped at what's left of the screen below the head and tabs (--fit-h) and scrolls by itself; the
+     markdown grows as you type up to a cap, then scrolls inside itself. */
   const fitMem = () => { const main = document.getElementById('main'), g = main && main.querySelector('.repo-grid.fit'); if (!g) return;
     const vv = window.visualViewport || { height: innerHeight, offsetTop: 0 }, bar = document.getElementById('tabbar'), barTop = bar && bar.offsetParent ? bar.getBoundingClientRect().top : Infinity, phone = innerWidth <= 720;
     const bottom = Math.min(vv.height + vv.offsetTop, barTop, innerHeight) - (phone ? 12 : 24), top = g.getBoundingClientRect().top + main.scrollTop;
-    g.style.height = `${Math.max(phone ? 300 : 360, Math.floor(bottom - top))}px`;
-    const body = g.querySelector('.ed-body'), rail = g.querySelector('.rp-rail');
-    if (body) g.style.setProperty('--ed-h', `${Math.max(160, body.clientHeight - 64)}px`);
-    if (!g.dataset.placed) { g.dataset.placed = '1'; if (body) body.scrollTop = ev.bodyTop; if (rail) rail.scrollTop = ev.railTop; } }; // once per drawing: a resize keeps where you scrolled
+    const fitH = Math.max(phone ? 300 : 360, Math.floor(bottom - top)), card = g.querySelector(':scope > .repo-ed');
+    // the rail's cap: what's left of the screen below the tabs; once the entry is taller (the page scrolls anyway), up to a full screen as it sticks
+    g.style.setProperty('--fit-h', `${Math.max(fitH, Math.min(main.clientHeight - 24, card ? Math.floor(card.offsetHeight) : 0))}px`);
+    g.style.setProperty('--ed-cap', `${Math.max(200, main.clientHeight - (phone ? 200 : 240))}px`); // the markdown's cap: the screen less the entry's head, the field's label and the Save bar
+    const rail = g.querySelector('.rp-rail'); UI.editorGrow();
+    if (!g.dataset.placed) { g.dataset.placed = '1'; if (rail) rail.scrollTop = ev.railTop; } }; // once per drawing: a resize keeps where you scrolled
   UI.fitMem = fitMem;
+  document.addEventListener('input', (e) => { if (e.target.closest && e.target.closest('.repo-grid.fit')) requestAnimationFrame(fitMem); });
   addEventListener('resize', fitMem); if (window.visualViewport) visualViewport.addEventListener('resize', fitMem);
   (UI.afterRender = UI.afterRender || []).push(() => requestAnimationFrame(fitMem));
   /* Who wrote this (70): a popover under its button, over the entry, never in place of it. It closes on its ✕, on Esc
@@ -283,7 +287,7 @@
   }
   const blameClose = (focusBack) => { ev.blame = false; const pop = UI.$('#rp-blame-pop'), b = UI.$('[data-act="rp-blame"]'); if (pop) pop.remove(); if (b) { b.classList.remove('on'); b.setAttribute('aria-pressed', 'false'); if (focusBack) b.focus({ preventScroll: true }); } };
   const blameOpen = () => { const r = R.get(ev.repo), head = UI.$('.repo-ed.ke > .ed-head'), b = UI.$('[data-act="rp-blame"]'); if (!r || !head) return; ev.blame = true; head.insertAdjacentHTML('afterend', blamePop(r, pathOf())); if (b) { b.classList.add('on'); b.setAttribute('aria-pressed', 'true'); } blamePlace(); UI.$('#rp-blame-pop').focus({ preventScroll: true }); };
-  const blamePlace = () => { const pop = UI.$('#rp-blame-pop'), b = UI.$('[data-act="rp-blame"]'), ed = pop && pop.closest('.repo-ed'); if (!pop || !b || !ed) return; const er = ed.getBoundingClientRect(), top = Math.round(b.getBoundingClientRect().bottom - er.top + 6), foot = ed.querySelector(':scope > .ed-foot'), stop = foot ? foot.getBoundingClientRect().top - er.top - 8 : er.height - 12; pop.style.top = `${top}px`; pop.style.maxHeight = `${Math.max(180, Math.min(stop - top, innerHeight * 0.7))}px`; }; // it ends above the Save bar
+  const blamePlace = () => { const pop = UI.$('#rp-blame-pop'), b = UI.$('[data-act="rp-blame"]'), ed = pop && pop.closest('.repo-ed'); if (!pop || !b || !ed) return; const er = ed.getBoundingClientRect(), top = Math.round(b.getBoundingClientRect().bottom - er.top + 6), foot = ed.querySelector(':scope > .ed-bar'), stop = foot ? foot.getBoundingClientRect().top - er.top - 8 : er.height - 12; pop.style.top = `${top}px`; pop.style.maxHeight = `${Math.max(180, Math.min(stop - top, innerHeight * 0.7))}px`; }; // it ends above the Save bar
   (UI.afterRender = UI.afterRender || []).push(blamePlace); addEventListener('resize', blamePlace);
   UI.act('rp-blame-x', () => blameClose(true));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !e.defaultPrevented && UI.$('#rp-blame-pop') && !document.querySelector('#pop-menu, #scrim, .drawer-scrim')) { e.preventDefault(); blameClose(true); } }, true);
@@ -310,14 +314,14 @@
         ${kind.free ? `<div class="field" data-field="free"><label for="ke-free">Path in ${esc(kind.dir)}/ <span class="opt">this collection allows free paths</span></label><div class="ke-free"><span class="mono muted">${esc(kind.dir)}/</span><input class="input mono" id="ke-free" value="${esc(d.free || '')}" placeholder="${esc(slug(d.fm.title || 'my-entry'))}" aria-label="Path inside ${esc(kind.dir)}"><span class="mono muted">.md</span></div><div class="ferr" role="alert"></div></div>` : ''}
         ${fieldsHTML}
         ${kind.body ? `<div class="field"><div class="row"><label>${esc(kind.body)} <span class="opt">markdown</span></label><span style="margin-left:auto">${UI.seg([['edit', 'Edit'], ['split', 'Split'], ['preview', 'Preview']], ev.mode, 'rp-mode')}</span></div>
-          <div class="ed-panes mode-${ev.mode}"><div class="ed-src">${UI.editor({ id: 'rp-ed', text: d.body || '', lang: 'md', act: 'rp-input', minRows: 8, wrap: true, label: kind.body + ' (markdown)' })}</div><div class="ed-prev prose" id="rp-prev">${UI.mdRender(d.body || '')}</div></div></div>` : ''}
+          <div class="ed-panes mode-${ev.mode}"><div class="ed-src">${UI.editor({ id: 'rp-ed', text: d.body || '', lang: 'md', act: 'rp-input', minRows: 5, wrap: true, label: kind.body + ' (markdown)' })}</div><div class="ed-prev prose" id="rp-prev">${UI.mdRender(d.body || '')}</div></div></div>` : ''}
       </form>`}
       ${c && !ev.isNew ? `<div class="cites small"><div class="caps">${kind.id === 'runbook' ? 'used in' : 'cited by'}</div>${c.runbooks.map((x) => `<a class="cite-link" href="#" data-act="rp-hit" data-repo="${x.repo}" data-key="${esc(x.path)}">${icon('workflows')}${esc(x.title)}</a>`).join('')}${c.cases.map((x) => caseHref(x) ? `<a class="cite-link" href="${caseHref(x)}">${icon('runs')}${esc(((D.cases || []).find((c) => c.id === x) || {}).title || 'a ticket')}</a>` : `<span class="cite-link">${icon('runs')}${esc(x)}</span>`).join('')}${c.logs.map((x) => `<a class="cite-link" href="#" data-act="rp-hit" data-repo="${x.repo}" data-key="${esc(x.path)}">${icon('clock')}${esc(x.title)}</a>`).join('')}${!c.runbooks.length && !c.cases.length && !c.logs.length ? '<span class="muted">nothing yet</span>' : ''}</div>` : ''}
       <div class="form-err callout danger small hide" id="ke-err" role="alert"></div></div>
-      <div class="panel-foot ed-foot"><input class="input grow" id="rp-msg" placeholder="Commit message (optional)" aria-label="Commit message">
+      <div class="ed-bar"><div class="panel-foot ed-foot"><input class="input grow" id="rp-msg" placeholder="Commit message (optional)" aria-label="Commit message">
         <button class="btn sm ghost" data-act="rp-discard" ${ev.isNew ? '' : UI.off('No unsaved changes')}>${ev.isNew ? 'Cancel' : 'Discard'}</button>
         <button class="btn primary" data-act="rp-save" data-repo="${id}" ${ev.proposal ? '' : UI.off(ev.isNew ? 'Fill in the fields first' : 'Nothing to save yet: change a field first')}>${icon('commit')}${ev.proposal ? 'Approve with changes' : 'Save · one commit'}</button></div>
-      <div class="muted tiny ed-sign">${ev.proposal ? `Saving approves the bot's proposal with your changes, as one commit in your name.` : `Saving makes one commit in your name, marked as edited here. Your own edits need no approval.`}</div></div>`;
+      <div class="muted tiny ed-sign">${ev.proposal ? `Saving approves the bot's proposal with your changes, as one commit in your name.` : `Saving makes one commit in your name, marked as edited here. Your own edits need no approval.`}</div></div></div>`;
   }
   function readHTML(r, kind) {
     const e = entriesOf(r, kind).find((x) => x.key === ev.key); if (!e) return '';
