@@ -947,6 +947,21 @@ func reverseStr(s string) string {
 	return string(r)
 }
 
+// secretMaskValues are the filled values and their common encodings, for the
+// screenshot mask — the same transform coverage scrub gives page text.
+func (in *Instance) secretMaskValues() []string {
+	vals := in.secretValues()
+	out := make([]string, 0, len(vals)*8)
+	for _, v := range vals {
+		if v == "" {
+			continue
+		}
+		out = append(out, v)
+		out = append(out, secretForms(v)...)
+	}
+	return out
+}
+
 // scrubAll replaces every filled value, including the short ones kept out of
 // the general scrub. Used only where conductor extracts a value from a page's
 // own text (a receipt), never on a whole reply (it would shred the page).
@@ -1024,10 +1039,13 @@ const secretRectsJS = `function(secrets, full){
 // filled value. A browser with filled values whose boxes cannot be found
 // gives no screenshot at all.
 func (in *Instance) maskSecrets(ctx context.Context, t *tab, shot []byte, full bool) ([]byte, error) {
-	secrets := in.secretValues()
-	if len(secrets) == 0 {
+	if len(in.secretValues()) == 0 {
 		return shot, nil
 	}
+	// Mask the literal value and its common encodings: a visible base64/reversed
+	// copy of a filled value a page script rendered must be blacked out too, the
+	// same transform coverage as scrub (LEAK 2).
+	secrets := in.secretMaskValues()
 	fail := func(err error) ([]byte, error) {
 		return nil, fmt.Errorf("browser: a credential was filled in this browser and its fields could not be masked (%v) — no screenshot", err)
 	}

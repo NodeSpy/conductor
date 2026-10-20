@@ -3,7 +3,6 @@
 package browser
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -89,11 +88,14 @@ func TestWalletCVCReceiptExfil(t *testing.T) {
 	if got.Receipt != nil && strings.Contains(got.Receipt.OrderNumber, cvc) {
 		t.Fatalf("LEAK: the CVC was persisted to the ledger's order_number: %q", got.Receipt.OrderNumber)
 	}
-	// 4. The audit log.
+	// 4. The audit log. Check only the fields that carry page-derived values
+	//    (the order number / charge / receipt note), not the whole entry — the
+	//    merchant's random port can coincidentally contain the 3-digit CVC.
 	for _, e := range w.audit.find("card-completed") {
-		b, _ := json.Marshal(e)
-		if strings.Contains(string(b), cvc) {
-			t.Fatalf("LEAK: the CVC reached the audit: %s", b)
+		for _, k := range []string{"order_number", "receipt_note"} {
+			if v, _ := e[k].(string); strings.Contains(v, cvc) {
+				t.Fatalf("LEAK: the CVC reached the audit %s: %q", k, v)
+			}
 		}
 	}
 
