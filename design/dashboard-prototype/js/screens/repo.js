@@ -166,7 +166,7 @@
   const readers = (r) => (r.kind === 'team' ? botsOfTeam(r.name) : [r.name]);
 
   /* ---------- editor state ---------- */
-  const ev = { repo: null, kind: null, key: null, isNew: false, base: '', baseSha: null, steps: [], mode: 'edit', blame: false, proposal: null, conflict: null, q: '', tags: [], view: 'kinds', file: null, hist: 'file', sel: new Set(), draft: null, phList: false, railTop: 0 };
+  const ev = { repo: null, kind: null, key: null, isNew: false, base: '', baseSha: null, steps: [], mode: 'split', blame: false, proposal: null, conflict: null, q: '', tags: [], view: 'kinds', file: null, hist: 'file', sel: new Set(), draft: null, phList: false, railTop: 0 };
   const pathOf = () => (ev.key ? ev.key.split('#')[0] : null);
   // a step is one line of text (conductor's runbook steps are strings); a command or verb rides along as "(run: `cmd`)" / "(verb: x)"
   const stepsFrom = (fm) => (Array.isArray(fm.steps) ? fm.steps : []).map((st) => { if (st && typeof st === 'object') return { do: st.do || '', type: st.verb ? 'verb' : st.run ? 'run' : '', arg: st.verb || st.run || '' }; const m = String(st || '').match(/^(.*?)\s*\((run|verb): `?([^`)]*)`?\)\s*$/); return m ? { do: m[1], type: m[2], arg: m[3] } : { do: String(st || ''), type: '', arg: '' }; });
@@ -292,6 +292,11 @@
   UI.act('rp-blame-x', () => blameClose(true));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !e.defaultPrevented && UI.$('#rp-blame-pop') && !document.querySelector('#pop-menu, #scrim, .drawer-scrim')) { e.preventDefault(); blameClose(true); } }, true);
   document.addEventListener('pointerdown', (e) => { const pop = UI.$('#rp-blame-pop'); if (pop && !pop.contains(e.target) && !e.target.closest('[data-act="rp-blame"]')) blameClose(false); }, true);
+  /* The markdown editor (69d): one unit, set apart from the form around it. Its own border and bar (with the Edit /
+     Split / Preview switch), a code-tinted Markdown pane with a quiet gutter, a divider, and a Preview on the reading
+     surface; each pane labelled. Opens in Split; as tall as its content (69c); prose, so no line numbers (69e). Every markdown body is edited here. */
+  const mdUnit = (text, label) => `<div class="md-unit mode-${ev.mode}"><div class="md-bar"><span class="md-hint">${icon('file')}<span class="mono">[[path]]</span> links to another entry</span>${UI.seg([['edit', 'Edit'], ['split', 'Split'], ['preview', 'Preview']], ev.mode, 'rp-mode', 'aria-label="How to show the markdown"')}</div>
+    <div class="ed-panes mode-${ev.mode}"><div class="ed-src"><div class="md-pl" aria-hidden="true">Markdown</div>${UI.editor({ id: 'rp-ed', text, lang: 'md', act: 'rp-input', minRows: 5, wrap: true, prose: true, label: label + ' (markdown)' })}</div><div class="ed-pv"><div class="md-pl" aria-hidden="true">Preview</div><div class="ed-prev prose" id="rp-prev" aria-label="Preview">${UI.mdRender(text)}</div></div></div></div>`;
   const backBtn = () => `<button class="icon-btn sm rp-back" data-act="rp-list" aria-label="Back to the list" data-tip="The list">${icon('chev')}</button>`;
   function editorHTML(r, kind) {
     const id = r.id, d = ev.draft || { fm: {}, body: '' }, path = ev.isNew ? derive(kind, titleOf(kind, d.fm) || '', d.free) : pathOf();
@@ -313,8 +318,7 @@
       ${`<form class="ke-form stack" id="ke-form" data-pre="ke-" novalidate onsubmit="return false">
         ${kind.free ? `<div class="field" data-field="free"><label for="ke-free">Path in ${esc(kind.dir)}/ <span class="opt">this collection allows free paths</span></label><div class="ke-free"><span class="mono muted">${esc(kind.dir)}/</span><input class="input mono" id="ke-free" value="${esc(d.free || '')}" placeholder="${esc(slug(d.fm.title || 'my-entry'))}" aria-label="Path inside ${esc(kind.dir)}"><span class="mono muted">.md</span></div><div class="ferr" role="alert"></div></div>` : ''}
         ${fieldsHTML}
-        ${kind.body ? `<div class="field"><div class="row"><label>${esc(kind.body)} <span class="opt">markdown</span></label><span style="margin-left:auto">${UI.seg([['edit', 'Edit'], ['split', 'Split'], ['preview', 'Preview']], ev.mode, 'rp-mode')}</span></div>
-          <div class="ed-panes mode-${ev.mode}"><div class="ed-src">${UI.editor({ id: 'rp-ed', text: d.body || '', lang: 'md', act: 'rp-input', minRows: 5, wrap: true, label: kind.body + ' (markdown)' })}</div><div class="ed-prev prose" id="rp-prev">${UI.mdRender(d.body || '')}</div></div></div>` : ''}
+        ${kind.body ? `<div class="field"><label>${esc(kind.body)}</label>${mdUnit(d.body || '', kind.body)}</div>` : ''}
       </form>`}
       ${c && !ev.isNew ? `<div class="cites small"><div class="caps">${kind.id === 'runbook' ? 'used in' : 'cited by'}</div>${c.runbooks.map((x) => `<a class="cite-link" href="#" data-act="rp-hit" data-repo="${x.repo}" data-key="${esc(x.path)}">${icon('workflows')}${esc(x.title)}</a>`).join('')}${c.cases.map((x) => caseHref(x) ? `<a class="cite-link" href="${caseHref(x)}">${icon('runs')}${esc(((D.cases || []).find((c) => c.id === x) || {}).title || 'a ticket')}</a>` : `<span class="cite-link">${icon('runs')}${esc(x)}</span>`).join('')}${c.logs.map((x) => `<a class="cite-link" href="#" data-act="rp-hit" data-repo="${x.repo}" data-key="${esc(x.path)}">${icon('clock')}${esc(x.title)}</a>`).join('')}${!c.runbooks.length && !c.cases.length && !c.logs.length ? '<span class="muted">nothing yet</span>' : ''}</div>` : ''}
       <div class="form-err callout danger small hide" id="ke-err" role="alert"></div></div>

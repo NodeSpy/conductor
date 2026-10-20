@@ -684,14 +684,26 @@ operator save, on a bot proposal or promotion, and on import.
   commit* and *Promote to team …* are in the entry's ⋯. On a phone it is
   **the list or the entry**; the entry's head leads with a Back control to
   the list.
-- **The markdown body opens in Edit**, is as tall as its text (five lines at
-  least), grows as you type, and past a cap (the screen less the entry's
-  head, the field's label and the Save bar; at most 560px) scrolls inside
-  itself. It **wraps long lines** rather than running them off the pane.
-  Split puts the source and the preview side by side at half the entry's
-  width each (stacked on a phone), and the chosen mode holds from entry to
-  entry. The highlighted copy and the textarea under it share one font and
-  one gutter, so the caret and a selection sit on the letters.
+- **The markdown editor is one unit**, set apart from the form fields
+  above it: its own border and bar (a hint that `[[path]]` links to another
+  entry, and the Edit / Split / Preview switch), a code-tinted **Markdown**
+  pane, a divider, and the **Preview** on the reading surface, each pane
+  labelled. It **opens in Split** (two readable half-width panes, stacked on
+  a phone), and the chosen mode holds from entry to entry. Every markdown
+  body is edited in it: a bot's memory, a team's knowledge, runbooks and
+  your own collections.
+- **Line numbers sit in a gutter of their own**: a slightly different
+  background and a full-height hairline rule before the text, so the
+  numbers never read as content. The gutter is only as wide as its numbers
+  (two digits' width, growing to four as the file grows); each number is
+  muted, right-aligned against the rule and on its line's first row however
+  far the line wraps. Long lines **wrap** rather than run off the pane; the
+  line height is easy and the padding even.
+- **It is as tall as its text** (five lines at least), grows as you type,
+  and past a cap (the screen less the entry's head, the field's label and
+  the Save bar; at most 560px) scrolls inside itself. The highlighted copy
+  and the textarea under it share one font, one line height and one gutter,
+  so the caret and a selection sit on the letters.
 - **Who wrote this** is a popover under its button, over the entry and
   never in its place: each part of the saved file beside the commit that
   last changed it. The button reads as pressed while it is open; its ✕,
@@ -2452,8 +2464,8 @@ backup you can restore. Things to try:
 - **Teams:** Bots → a team's Add a bot; select two bots and Move to a team; Shape the team.
 - **Create in place:** on team `platform`, *Add a bot* → *Create a new bot
   in this team*. In a workflow step, the account picker → *New connector*.
-- **Knowledge:** team `platform` → Knowledge: New file, edit (Edit by
-  default; Split for a side-by-side preview), Save; *Approve with changes* on `k4`; *Simulate a bot commit*
+- **Knowledge:** team `platform` → Knowledge: New file, edit (Split by
+  default: the markdown beside its preview), Save; *Approve with changes* on `k4`; *Simulate a bot commit*
   while editing to see a conflict.
 - **Teams:** Bots → `platform` → Defaults (inherits / narrows),
   Routing (try a rule), Route work here, Knowledge (approve a promotion).

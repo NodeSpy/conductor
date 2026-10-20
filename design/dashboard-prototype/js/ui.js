@@ -893,7 +893,7 @@
   };
   const edLines = (text, lang, o = {}) => text.split('\n').map((l, i) => `<span class="ln${(o.hl || []).includes(i + 1) ? ' hl' : ''}${(o.err || []).includes(i + 1) ? ' err' : ''}" data-ln="${i + 1}">${UI.codeLine(l, lang) || ' '}</span>`).join('');
   /** UI.editor({ id, text, lang, err, hl, minRows, act, label }) — act fires on input (debounce in the handler). */
-  UI.editor = (o) => `<div class="ced${o.wrap ? ' wrap' : ''}" data-lang="${o.lang || 'yaml'}" id="${o.id}"><pre class="code ced-hl" aria-hidden="true">${edLines(o.text, o.lang || 'yaml', o)}</pre><textarea class="ced-ta" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="${UI.esc(o.label || 'YAML')}" ${o.act ? `data-on-input="${o.act}"` : ''} ${o.readonly ? 'readonly' : ''} style="min-height:${(o.minRows || 8) * 19.5 + 16}px">${UI.esc(o.text)}</textarea></div>`;
+  UI.editor = (o) => `<div class="ced${o.wrap ? ' wrap' : ''}${o.prose ? ' prose-ed' : ''}" data-lang="${o.lang || 'yaml'}" id="${o.id}"><pre class="code ced-hl" aria-hidden="true">${edLines(o.text, o.lang || 'yaml', o)}</pre><textarea class="ced-ta" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="${UI.esc(o.label || 'YAML')}" ${o.act ? `data-on-input="${o.act}"` : ''} ${o.readonly ? 'readonly' : ''} style="min-height:${(o.minRows || 8) * 19.5 + 16}px">${UI.esc(o.text)}</textarea></div>`;
   UI.editorMark = (root, o) => { const pre = root.querySelector('.ced-hl'), ta = root.querySelector('.ced-ta'); pre.innerHTML = edLines(ta.value, root.dataset.lang, o); if (root.classList.contains('wrap') && UI.editorGrow) UI.editorGrow(root); pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; };
   UI.editorSet = (root, text, o = {}) => { const ta = root.querySelector('.ced-ta'); if (ta.value !== text) { const pos = ta.selectionStart; ta.value = text; if (document.activeElement === ta) ta.setSelectionRange(Math.min(pos, text.length), Math.min(pos, text.length)); } UI.editorMark(root, o); };
   UI.editorScrollTo = (root, line) => { const ta = root.querySelector('.ced-ta'); const y = (line - 1) * 19.55; if (ta.scrollHeight > ta.clientHeight) ta.scrollTop = Math.max(0, y - 60); else { const sc = root.closest('.ced-scroll') || $('#main'); const r = root.getBoundingClientRect(); sc.scrollTop += r.top + y - 140; } };
@@ -902,6 +902,13 @@
   document.addEventListener('input', (e) => { if (e.target.classList.contains('ced-ta') && e.target.parentNode.classList.contains('wrap')) UI.editorGrow(e.target.parentNode); });
   window.addEventListener('resize', () => UI.editorGrow());
   (UI.afterRender = UI.afterRender || []).push(() => { UI.editorGrow(); setTimeout(() => UI.editorGrow(), 200); });
+  /* A prose editor's gutter is as wide as its line numbers (69g): two digits' width at least, four at most, measured in
+     the editor's own font, with a little room either side; set as --gw on its pane so the rule runs the pane's height. */
+  UI.gutterFit = (c) => { const ta = c && c.querySelector('.ced-ta'); if (!ta || !c.classList.contains('prose-ed')) return; const d = Math.min(4, Math.max(2, String(ta.value.split('\n').length).length)); if (c._gd === d) return; c._gd = d;
+    const cx = UI._gcx || (UI._gcx = document.createElement('canvas').getContext('2d')), cs = getComputedStyle(ta); cx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+    (c.closest('.ed-src') || c).style.setProperty('--gw', `${Math.ceil(d * cx.measureText('0').width + 14)}px`); };
+  document.addEventListener('input', (e) => { if (e.target.classList.contains('ced-ta')) UI.gutterFit(e.target.parentNode); });
+  (UI.afterRender = UI.afterRender || []).push(() => document.querySelectorAll('.ced.prose-ed').forEach(UI.gutterFit));
   document.addEventListener('input', (e) => { if (e.target.classList.contains('ced-ta')) { const root = e.target.closest('.ced'); const pre = root.querySelector('.ced-hl'); pre.innerHTML = edLines(e.target.value, root.dataset.lang, {}); } });
   document.addEventListener('scroll', (e) => { if (e.target.classList && e.target.classList.contains('ced-ta')) { const pre = e.target.previousElementSibling; pre.scrollTop = e.target.scrollTop; pre.scrollLeft = e.target.scrollLeft; } }, true);
   document.addEventListener('keydown', (e) => { if (e.key === 'Tab' && e.target.classList.contains('ced-ta') && !e.shiftKey) { e.preventDefault(); const ta = e.target, a = ta.selectionStart; ta.setRangeText('  ', a, ta.selectionEnd, 'end'); ta.dispatchEvent(new Event('input', { bubbles: true })); } });

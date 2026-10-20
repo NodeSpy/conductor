@@ -1,5 +1,5 @@
 // A bot's Memory tab, laid out for writing: the head is a title, a quiet repo line and a New… button that never
-// collide; the entry takes the wide column (What it knows and History stack beside it); the markdown opens in Edit,
+// collide; the entry takes the wide column (What it knows and History stack beside it); the markdown opens in Split,
 // fills the screen and wraps its lines; the footer says what saving does in words.
 const { test, expect, go } = require('./fixtures');
 
@@ -35,10 +35,16 @@ test('Memory: the entry gets the wide column; History is not wider than the entr
   expect(h.y).toBeGreaterThan(s.b - 1);
 });
 
-test('Memory: the markdown opens in Edit, fills the screen and wraps; Split shows two readable panes', async ({ page }) => {
+// 69d supersedes 69's Edit default: the markdown opens in Split, two readable panes.
+test('Memory: the markdown opens in Split (two readable panes), is as tall as its text, grows, wraps and caps', async ({ page }) => {
   await go(page, '#/bots/platform-sre/memory');
-  await expect(page.locator('[data-act="rp-mode"][data-v="edit"]')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('.ed-panes')).toHaveClass(/mode-edit/);
+  await expect(page.locator('[data-act="rp-mode"][data-v="split"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.ed-panes')).toHaveClass(/mode-split/);
+  await expect(page.locator('#rp-prev')).toBeVisible();
+  const src = await box(page.locator('.ed-src')), prev = await box(page.locator('#rp-prev'));
+  expect(Math.min(src.w, prev.w)).toBeGreaterThan(page.viewportSize().width <= 720 ? 280 : 300);
+  expect(await page.locator('#rp-ed .ced-ta').evaluate((t) => t.scrollWidth - t.clientWidth)).toBeLessThanOrEqual(1);
+  await page.locator('[data-act="rp-mode"][data-v="edit"]').click();
   await expect(page.locator('#rp-prev')).toBeHidden();
   // the editor is as tall as its text: a few lines at least, growing as you type
   const ta = page.locator('#rp-ed .ced-ta'), h0 = (await box(ta)).h;
@@ -55,19 +61,62 @@ test('Memory: the markdown opens in Edit, fills the screen and wraps; Split show
   expect(Math.abs(m.hsh - m.sh)).toBeLessThanOrEqual(2);
   expect(m.top).toBeGreaterThan(0); expect(Math.abs(m.htop - m.top)).toBeLessThanOrEqual(1);
   expect(await ta.evaluate((t) => t.clientHeight)).toBeLessThanOrEqual(561); // capped
-  await page.locator('[data-act="rp-mode"][data-v="split"]').click();
-  await expect(page.locator('#rp-prev')).toBeVisible();
-  const src = await box(page.locator('.ed-src')), prev = await box(page.locator('#rp-prev'));
-  expect(Math.min(src.w, prev.w)).toBeGreaterThan(page.viewportSize().width <= 720 ? 280 : 300);
-  const sw = await page.locator('#rp-ed .ced-ta').evaluate((t) => t.scrollWidth - t.clientWidth);
-  expect(sw).toBeLessThanOrEqual(1);
   // the choice holds for the next entry
   const back = page.locator('[data-act="rp-list"]'); if (await back.isVisible()) await back.click();
   await page.locator('.kind-entries [data-act="rp-open"]', { hasText: 'ALB' }).click();
   const discard = page.locator('.modal [data-act], .modal button', { hasText: 'Discard' });
   if (await discard.count()) await discard.first().click();
-  await expect(page.locator('.ed-panes')).toHaveClass(/mode-split/);
+  await expect(page.locator('.ed-panes')).toHaveClass(/mode-edit/);
 });
+
+// 69d: the editor and its preview read as one unit, set apart from the form fields above: a bordered container with its
+// own bar (holding the Edit/Split/Preview switch), a code-tinted Markdown pane, a divider, and the Preview on the reading
+// surface; each pane labelled. 69f (over 69e): the line numbers stay, in a gutter of its own with a full-height hairline
+// rule before the text, muted and right-aligned, each on its line's first row; an easy line height. 69g: the gutter is
+// only as wide as its numbers (two digits' width up to four), the numbers close against the rule and the text close
+// after it. Every markdown body goes through it (a team's knowledge too).
+for (const route of ['#/bots/platform-sre/memory', '#/teams/platform/knowledge']) {
+  test(`the markdown editor is one distinct unit, its line numbers in a ruled gutter: ${route}`, async ({ page }) => {
+    await go(page, route);
+    const unit = page.locator('.md-unit').first();
+    await expect(unit).toBeVisible();
+    await expect(unit.locator('.md-bar [data-act="rp-mode"]')).toHaveCount(3); // the switch lives in the unit
+    await expect(unit.locator('.ed-src .md-pl')).toHaveText('Markdown');
+    await expect(unit.locator('.ed-pv .md-pl')).toHaveText('Preview');
+    const c = await unit.evaluate((u) => { const cs = (e, p) => getComputedStyle(e, p), src = u.querySelector('.ed-src'), pv = u.querySelector('.ed-pv'), input = document.querySelector('#ke-form .input'), ced = u.querySelector('.ced'), ta = ced.querySelector('.ced-ta'), ln = ced.querySelector('.ced-hl .ln');
+      // the pane's background: gutter colour to 44px, the hairline at 44–45px, then the code tint (the stops of one gradient)
+      const bg = cs(src).backgroundImage, stops = bg.match(/(rgba?|color)\([^)]*\)/g) || [];
+      const num = cs(ln, '::before'), w = document.createTreeWalker(ln, NodeFilter.SHOW_TEXT), t = w.nextNode(), rg = document.createRange(); rg.setStart(t, 0); rg.setEnd(t, 1);
+      const left = ced.getBoundingClientRect().left;
+      const gw = parseFloat(cs(src).getPropertyValue('--gw')), cx = document.createElement('canvas').getContext('2d'); cx.font = `${cs(ta).fontSize} ${cs(ta).fontFamily}`;
+      return { gw, ch: cx.measureText('0').width, lines: ta.value.split('\n').length, border: cs(u).borderTopStyle, radius: parseFloat(cs(u).borderTopLeftRadius), stops, rule: bg.includes(`${gw}px, `) && bg.includes(`${gw + 1}px`), fullHeight: Math.abs(src.getBoundingClientRect().height - src.clientHeight - 0) < 3,
+        preview: cs(pv).backgroundColor, input: input ? cs(input).backgroundColor : null, divider: cs(src).borderRightStyle, stacked: pv.getBoundingClientRect().top >= src.getBoundingClientRect().bottom - 1, pvTop: cs(pv).borderTopStyle,
+        numContent: num.content, numAlign: num.textAlign, numColor: num.color, textColor: cs(ln).color, numTop: num.top, numEnd: parseFloat(num.width) - parseFloat(num.paddingRight), textX: rg.getBoundingClientRect().left - left, taX: parseFloat(cs(ta).paddingLeft),
+        lh: parseFloat(cs(ta).lineHeight) / parseFloat(cs(ta).fontSize), hlLh: cs(ta.previousElementSibling).lineHeight, taLh: cs(ta).lineHeight }; });
+    expect(c.border).toBe('solid'); expect(c.radius).toBeGreaterThan(0);
+    // gutter, hairline, code (each two-position stop computes as two): the rule runs the pane's full height
+    const [gutter, rule, code] = [c.stops[0], c.stops[2], c.stops[c.stops.length - 1]];
+    expect(c.rule).toBe(true);
+    expect(gutter).not.toBe(code); expect(rule).not.toBe(gutter); expect(rule).not.toBe(code); // a gutter of its own, a visible rule
+    expect(code).not.toBe(c.preview); // the markdown pane is code-tinted; the preview is the reading surface
+    expect(code).not.toBe(c.input); // and both read differently from the form's own fields
+    expect(c.stacked ? c.pvTop : c.divider).toBe('solid'); // a divider between the panes (on top of the preview when stacked)
+    expect(c.numContent).not.toBe('none'); expect(c.numAlign).toBe('right'); expect(c.numColor).not.toBe(c.textColor); // numbers kept, right-aligned, muted
+    expect(c.numTop).toBe('0px'); // on its line's first row, however far the line wraps
+    expect(c.lines).toBeLessThan(100);
+    expect(c.gw).toBeLessThanOrEqual(2 * c.ch + 16); // two digits' width and a little room, no wide empty band
+    expect(c.gw - c.numEnd).toBeLessThanOrEqual(8); // the numbers close against the rule
+    expect(c.textX - c.gw).toBeGreaterThanOrEqual(8); expect(c.textX - c.gw).toBeLessThanOrEqual(14); // the text close after it
+    expect(Math.abs(c.textX - c.taX)).toBeLessThan(1); // the highlighted copy and the textarea start together
+    expect(c.lh).toBeGreaterThanOrEqual(1.7); expect(c.hlLh).toBe(c.taLh);
+    // the gutter grows with the numbers (three digits past 99 lines) and stops at four digits' width
+    const ta = unit.locator('.ced-ta'), gw = () => unit.locator('.ed-src').evaluate((e) => parseFloat(getComputedStyle(e).getPropertyValue('--gw')));
+    const put = (v) => ta.evaluate((t, v) => { t.value = v; t.dispatchEvent(new Event('input', { bubbles: true })); }, v); // as typing would, without typing 12,000 lines
+    await put('line\n'.repeat(120)); const g3 = await gw();
+    expect(g3).toBeGreaterThan(c.gw + c.ch - 1); expect(g3).toBeLessThanOrEqual(3 * c.ch + 16);
+    await put('x\n'.repeat(12000)); expect(await gw()).toBeLessThanOrEqual(4 * c.ch + 16);
+  });
+}
 
 test('Memory: the save footer says what saving does in words, no trailer jargon', async ({ page }) => {
   await go(page, '#/bots/platform-sre/memory');

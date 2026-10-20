@@ -94,6 +94,11 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **Items 69d–69g, the markdown editor (2026-10-20):** one unit set apart from the form (border, its own bar with the
+  Edit/Split/Preview switch, a code-tinted Markdown pane, a divider, the Preview on the reading surface, each labelled),
+  opening in Split. Line numbers stay (69f over 69e's idea of dropping them) in a ruled gutter of their own, only as
+  wide as the numbers (two digits up to four), each muted, right-aligned and on its line's first row; an easy line
+  height and even padding. `memory-layout.spec.js` checks the unit on a bot's memory and a team's knowledge.
 - **Item 69c, the Memory tab fits its content (2026-10-20):** corrects 69b's always-fill. The entry is as tall as
   what's in it; a short one is a short card with the Save bar right under it, a long one scrolls the page with the Save
   bar sticky at the screen's bottom. The markdown is as tall as its text (five lines at least), grows as you type and

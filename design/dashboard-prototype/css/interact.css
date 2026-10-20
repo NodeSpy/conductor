@@ -234,6 +234,36 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .ced .ced-hl .ln { padding-left: 52px; }
 .ced .ced-hl .ln::before { position: absolute; left: 0; top: 0; width: 44px; }
 .ke .ed-panes { align-items: stretch; }
+/* The markdown editor is one unit (69d), set apart from the form fields: its own border and bar, a code-tinted Markdown
+   pane, a divider, then the Preview on the reading surface; each pane labelled */
+.md-unit { --md-bar: color-mix(in srgb, var(--code-bg) 93%, var(--color-text-primary)); border: 1px solid var(--color-border-default); border-radius: var(--radius-box); overflow: hidden; background: var(--color-bg-surface); box-shadow: var(--shadow-1); }
+.md-bar { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; background: var(--md-bar); border-bottom: 1px solid var(--color-border-default); }
+.md-hint { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; font-size: var(--type-caption-size); color: var(--color-text-tertiary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.md-hint svg { width: 13px; height: 13px; flex: none; }
+.md-bar .seg { flex: none; margin-left: auto; }
+.md-unit .ed-panes { min-height: 0; }
+.md-unit .ed-panes.mode-edit .ed-pv, .md-unit .ed-panes.mode-preview .ed-src { display: none; }
+.md-unit .ed-panes.mode-edit, .md-unit .ed-panes.mode-preview { grid-template-columns: 1fr; }
+.md-pl { font: var(--type-label); font-size: var(--type-caption-size); color: var(--color-text-tertiary); padding: 6px 12px 2px; flex: none; } /* the brand's caps label */
+.md-unit { --md-code: color-mix(in srgb, var(--code-bg) 95%, var(--color-text-primary)); --md-gutter: color-mix(in srgb, var(--code-bg) 88%, var(--color-text-primary)); } /* the pane's own tint: a step off the sunken colour the form's inputs use */
+/* The Markdown pane (69e–69g): line numbers in a gutter of their own, a slightly different background with a full-height
+   hairline rule between it and the text, so the numbers never read as content; the gutter only as wide as the numbers
+   in it (--gw, set in ui.js); each number muted, right-aligned against the rule and on its line's first row however
+   far the line wraps. An easy line height and even padding; both layers share every metric, so the caret still sits
+   on the letters. */
+.md-unit .ed-src { --gw: 32px; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--color-border-default); background: linear-gradient(to right, var(--md-gutter) 0 var(--gw), var(--color-border-default) var(--gw) calc(var(--gw) + 1px), var(--md-code) calc(var(--gw) + 1px)); }
+.md-unit .ed-src .md-pl { padding: 10px 16px 0 calc(var(--gw, 32px) + 11px); }
+.md-unit .ed-pv .md-pl { padding: 10px 16px 0; }
+.ced.prose-ed .ced-hl .ln { padding: 0 16px 0 calc(var(--gw, 32px) + 11px); }
+.ced.prose-ed .ced-hl .ln::before { width: var(--gw, 32px); padding: 0 7px 0 0; text-align: right; color: var(--code-gutter); font-variant-numeric: tabular-nums; }
+.ced.prose-ed .ced-hl { padding: 8px 0 14px; }
+.ced.prose-ed .ced-ta { padding: 8px 16px 14px calc(var(--gw, 32px) + 11px); }
+.ced.prose-ed .ced-hl, .ced.prose-ed .ced-ta { line-height: 1.75; }
+.md-unit .ed-src > .ced { flex: 1 1 auto; }
+.md-unit .ed-src .ced .ced-ta:focus { box-shadow: inset 0 0 0 2px var(--color-focus-ring); }
+.md-unit .ed-pv { display: flex; flex-direction: column; min-width: 0; background: var(--color-bg-surface); }
+.md-unit .ed-pv .ed-prev { padding: 8px 16px 14px; }
+.md-unit .ed-panes.mode-preview .ed-src, .md-unit .ed-panes.mode-edit .ed-src { border-right: 0; }
 .ed-panes.mode-edit .ed-src { border-right: 0; }
 .rp-commit .grow { min-width: 0; } .rp-commit-by { margin-top: 2px; }
 .repo-side .tree a .pin { margin-left: auto; font-size: var(--type-caption-size); }
@@ -281,6 +311,8 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .rp-blame-pop { max-height: calc(100% - 150px); } .rp-blame-pop .bl-group { grid-template-columns: 1fr; } .rp-blame-pop .bl-who { flex-direction: row; gap: 8px; align-items: baseline; } /* the Save bar stays in view below it */
 .ed-foot #rp-msg { flex: 1 0 100%; } .ed-foot .btn.primary { flex: 1 1 auto; } /* the message on its own line, then Discard and Save */
 .ed-panes { grid-template-columns: 1fr; } .ed-panes.mode-split .ed-prev { border-top: 1px solid var(--color-border-subtle); }
+.md-unit .ed-panes.mode-split .ed-prev { border-top: 0; } .md-unit .ed-panes.mode-split .ed-pv { border-top: 1px solid var(--color-border-default); }
+.md-unit .ed-src { border-right: 0; }
 .ed-src { border-right: 0; }
 .bl-group { grid-template-columns: 1fr; }
 }
