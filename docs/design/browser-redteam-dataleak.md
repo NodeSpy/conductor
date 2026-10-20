@@ -26,6 +26,9 @@ error paths.
 | 5 | Origin / field confusion + resolve→fill TOCTOU | PASS — exact origin, egress-narrowed login browser, atomic re-check in the setter |
 | 6 | Timing / clipboard / keyboard / mutation observer | PASS within model — all require page script, and `evaluate` is off; a page on the exact bound origin already holds the value it was filled with |
 | 7 | Error-path echo of a value | PASS — no error message embeds a filled value; `secret()` returns the source's error, never a value |
+| 8 | JS injection to capture at fill time (agent hook, prototype pollution, service worker, main-world setter override) | PASS — `evaluate` is read-only and off after a fill; the fill runs in an isolated world's pristine setter; no agent data is concatenated into evaluated JS |
+| 9 | Browser extension / raw CDP / profile or flag tampering | PASS — fixed minimal flag set, `--disable-extensions`, `--remote-debugging-pipe` (no port), namespace/Seatbelt sandbox (#179) |
+| 10 | Keypress capture below the page | PASS — credentials are filled by the `.value` setter + `input`/`change` dispatch, never keystrokes; no `keydown`/`beforeinput`/`keypress` is emitted |
 
 **Leaks found: 1. All patched: yes.**
 
@@ -155,6 +158,62 @@ source's error (or "returned nothing"), never the value; `fieldSet` / `walletSet
 refusals name the field and the reason, never the value; `selectOption` echoes
 only the agent's own argument. No filled value reaches an error message.
 
+**8 — JavaScript injection to capture the value at fill time.** The threat: the
+agent installs an `input`/`change`/`keydown` listener, a `MutationObserver`, or
+overrides the `value` setter / `setAttribute` / `execCommand` *before* conductor
+fills, so the fill triggers its hook and hands it the plaintext.
+
+- *The agent's own script is blocked at the source.* The only verb that runs the
+  agent's JavaScript is `evaluate`, and it is read-only: V8's `throwOnSideEffect`
+  refuses any expression that writes. `TestRedteamEvaluateNoSideEffect` fires a
+  battery — `addEventListener`, `Object.defineProperty` / `__defineSetter__` on
+  `HTMLInputElement.prototype`, `new MutationObserver(...).observe`,
+  `Object.prototype` pollution, reassigning `window.fetch`, writing a global, a
+  title, a `value`, an attribute, `localStorage`, `document.cookie`,
+  `navigator.clipboard.readText`, `execCommand` — and every one is refused. And
+  `evaluate` is off entirely once any value is filled, so even a hook that
+  somehow landed could not be read back through it.
+- *No agent data reaches evaluated JS.* Every script conductor runs in a page is
+  fixed text; the agent's values are passed as `callFunctionOn` arguments, never
+  concatenated into source. The one built selector (`markedNodeAttr`) uses only
+  conductor's own field names and is double-escaped.
+- *The fill resists main-world pollution.* The value is assigned in a fresh
+  **isolated world** (`Page.createIsolatedWorld`) whose `HTMLInputElement.prototype`
+  is pristine — a page that polluted the main world's prototype, or defined an own
+  `value` setter on the element, is bypassed because the fill calls the isolated
+  world's native setter with `set.call(this, v)`.
+- *Residual (inherent, out of conductor's control):* a page on the exact bound
+  origin that **already** runs attacker script (stored/reflected XSS, a hostile
+  third-party widget, a compromised dependency) is same-origin with the field and
+  can read its value after the fill, or siphon the form's own POST. conductor's
+  guarantee is scoped to "the configured origin is trustworthy"; it stops the
+  *agent* from injecting the capturing script and never types the value as
+  keystrokes, but it cannot make a compromised login origin safe. This is the web
+  same-origin boundary, documented, not a conductor defect.
+
+**9 — browser extension, raw CDP, profile/flag tampering.** The browser is
+launched with a fixed, minimal flag set the agent cannot extend (`ChromeArgs`):
+`--disable-extensions`, `--disable-component-extensions-with-background-pages`,
+no `--load-extension`, and `PasswordLeakDetection` disabled so Chrome itself
+never sends a filled credential's hash prefix out. The DevTools protocol runs
+over `--remote-debugging-pipe` — an inherited fd, not a TCP port — so nothing
+can attach its own CDP client to call `Input` or `Network.getResponseBody`. The
+profile lives under the browser's sandbox dir, and the browser runs in its own
+user + mount + pid + network namespace (Linux) or under Seatbelt (macOS) with
+only its dir and (read-only) install visible, its sole network conductor's proxy.
+The agent is a separate process that speaks only conductor's mediated verbs; it
+cannot drop an extension, edit `Preferences`, reach the pipe, or set
+`--proxy-server` / `--host-rules` / `CHROME_*`. These process-boundary guarantees
+are the agent sandbox's (#179); container mode (#183) only tightens them.
+
+**10 — keypress capture below the page.** Credentials, profile fields and card
+data are never typed: the fill assigns `.value` through the isolated world's
+setter and dispatches only synthetic `input` and `change` events — no `keydown`,
+`keypress` or `beforeinput`. A capture-phase key listener (even one the agent
+could install, which it cannot) observes nothing. Lower still, an OS/X11
+keylogger or a read of the browser's `/proc/<pid>/mem` would require the agent to
+share the browser's process space, which the namespace/Seatbelt sandbox forbids.
+
 ## Running the checks
 
 ```
@@ -162,5 +221,6 @@ CONDUCTOR_TEST_CHROME=<chrome> go test ./internal/browser/ \
   -run 'TestRedteam|TestCredentialOriginBinding|TestCredentialRedaction|TestWalletPurchase'
 ```
 
-Regression tests for the patched leak:
-`internal/browser/redteam_dataleak_test.go`.
+Regression tests: `internal/browser/redteam_dataleak_test.go` (the patched
+screenshot leak) and `internal/browser/redteam_inject_test.go` (evaluate is
+read-only — the anti-injection linchpin).
