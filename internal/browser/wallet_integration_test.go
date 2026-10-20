@@ -208,6 +208,17 @@ func TestWalletPurchase(t *testing.T) {
 	if !strings.Contains(conf, "FS-1001") || strings.Contains(conf, "4242 4242") {
 		t.Fatalf("the confirmation (its card echo scrubbed): %s", conf)
 	}
+	// The page's source, read after a real card was filled: structure, the
+	// order number, but no card value.
+	src := w.do(op, "source", map[string]any{})["source"].(string)
+	if !strings.Contains(src, "FS-1001") {
+		t.Fatalf("source should show the confirmation: %s", src)
+	}
+	for _, s := range []string{testCard, "4242 4242 4242 4242", "4242424242424242"} {
+		if strings.Contains(src, s) {
+			t.Fatalf("source leaked the card %q", s)
+		}
+	}
 	w.do(op, "screenshot", map[string]any{"path": "conf.png"})
 	got, _, _ := w.m.Purchases.Get(id)
 	if got.Receipt == nil || got.Receipt.OrderNumber != "FS-1001" || got.Receipt.Note != "" {

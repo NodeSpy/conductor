@@ -226,7 +226,7 @@ func SessionKey(token string) string {
 
 // Actions are the agent's verbs.
 var Actions = []string{
-	"open", "snapshot", "click", "fill", "type", "select", "press", "scroll", "wait",
+	"open", "snapshot", "source", "click", "fill", "type", "select", "press", "scroll", "wait",
 	"screenshot", "evaluate", "back", "forward", "reload", "tabs", "tab-new", "tab-select",
 	"tab-close", "downloads", "upload", "status", "close",
 	"login", "fill-credential", "await-approval",
@@ -891,6 +891,19 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 			return nil, err
 		}
 		out["snapshot"], out["refs"] = text, n
+	case "source":
+		max := int(num("max", 25000))
+		if max <= 0 || max > 200000 {
+			max = 25000
+		}
+		text, truncated, err := in.source(ctx, t, max)
+		if err != nil {
+			return nil, err
+		}
+		out["source"], out["bytes"] = text, len(text)
+		if truncated {
+			out["truncated"] = true
+		}
 	case "click":
 		if err := in.click(ctx, t, ref); err != nil {
 			return nil, err
