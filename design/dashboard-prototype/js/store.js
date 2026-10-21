@@ -12,10 +12,12 @@
  * beside the node (item.status, item.detail) and is never written. */
 (function () {
   const S = (window.S = {});
-  const KEY = 'cd-proto-state-v6';
+  // Bump the version to give every browser a fresh demo on its next load: saved state under an older key is dropped.
+  const KEY = (S.KEY = 'cd-proto-state-v7');
+  try { Object.keys(localStorage).filter((k) => /^cd-proto-state-v\d+(:at)?$/.test(k) && !k.startsWith(KEY)).forEach((k) => localStorage.removeItem(k)); } catch (e) {}
   const Y = window.YAML;
   const clone = Y.clone, eq = Y.eq;
-  const SEED = clone(window.D);
+  const SEED = clone(window.D), SEED_AT = Date.now(); // the fixtures, anchored to this page load
 
   /* ---------- persistence ---------- */
   S.save = () => { S._ver = (S._ver || 0) + 1; try { localStorage.setItem(KEY, JSON.stringify(window.D)); localStorage.setItem(KEY + ':at', String(Date.now())); } catch (e) {} };
@@ -45,8 +47,8 @@
     } catch (e) { return false; }
   };
   S.reset = () => {
-    try { localStorage.removeItem(KEY); } catch (e) {}
-    const fresh = clone(SEED);
+    try { localStorage.removeItem(KEY); localStorage.removeItem(KEY + ':at'); } catch (e) {}
+    const fresh = clone(SEED); shiftTimes(fresh, Date.now() - SEED_AT); // as fresh as a new visit, however long the tab was open
     Object.keys(window.D).forEach((k) => delete window.D[k]);
     Object.assign(window.D, fresh);
     seedHistory();

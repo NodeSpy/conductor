@@ -638,7 +638,7 @@
   UI.switchBtn = (on, act, attrs = '') => `<button type="button" role="switch" class="switch${on ? ' on' : ''}" aria-checked="${!!on}" data-act="${act}" ${attrs}></button>`;
   /** Demo data (prototype only): which fake day to show, chosen per browser (js/scenario.js), or reset the current one. */
   UI.DEMOS = [['calm', 'A mostly healthy day', 'Dozens of runs; one approval and one failure need you'], ['quiet', 'All quiet', 'Nothing needs you; every system healthy'], ['full', 'Everything at once', 'Every kind of exception, to try each flow']];
-  UI.setDemo = (k) => { try { localStorage.setItem('cd-demo', k); localStorage.removeItem('cd-proto-state-v6'); } catch (e) {} location.reload(); };
+  UI.setDemo = (k) => { try { localStorage.setItem('cd-demo', k); localStorage.removeItem(S.KEY); localStorage.removeItem(S.KEY + ':at'); } catch (e) {} location.reload(); };
   UI.act('demo-menu', (b) => UI.menu(b, UI.DEMOS.map(([k, t]) => [`${D.demo === k ? '● ' : ''}${t}`, k === 'quiet' ? 'check' : k === 'full' ? 'grid' : 'sun', 'demo-set', `data-k="${k}"`]).concat([['-'], ['Reset this day’s demo data', 'undo', 'reset-demo']])));
   UI.act('demo-set', (b) => { UI.closeMenu(); UI.setDemo(b.dataset.k); });
   /** Pause or resume dispatch: weighty, so it says what it does and asks first. Lives in System → Safety (and ⌘K). */

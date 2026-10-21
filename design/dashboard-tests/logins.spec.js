@@ -6,7 +6,7 @@ const { test, expect, go, isPhone, applyStaged, headAction } = require('./fixtur
 const PASSWORD = 'hunter2-Very-Secret';
 const SEED = 'JBSWY3DPEHPK3PXP';
 async function leaked(page, ...values) {
-  return page.evaluate((vs) => { const hay = document.documentElement.outerHTML + JSON.stringify(window.D) + (localStorage.getItem('cd-proto-state-v6') || ''); const inputs = [...document.querySelectorAll('input')].map((i) => i.value).join('\n'); return vs.filter((v) => hay.includes(v) || inputs.includes(v)); }, values);
+  return page.evaluate((vs) => { const hay = document.documentElement.outerHTML + JSON.stringify(window.D) + (localStorage.getItem('cd-proto-state-v7') || ''); const inputs = [...document.querySelectorAll('input')].map((i) => i.value).join('\n'); return vs.filter((v) => hay.includes(v) || inputs.includes(v)); }, values);
 }
 async function bind(page, name, origin, who) {
   await page.fill('#f-name', name);

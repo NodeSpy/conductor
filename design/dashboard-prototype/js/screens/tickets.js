@@ -134,7 +134,7 @@
   UI.route('tickets/:id?', ({ id }) => {
     if (id === 'new') return newTicket();
     if (id) return detail(id);
-    const list = D.cases, open = list.filter((c) => c.status !== 'closed').length, drafts = list.filter((c) => statusOf(c) === 'draft').length;
+    const list = D.cases, drafts = list.filter((c) => statusOf(c) === 'draft').length, open = list.filter((c) => c.status !== 'closed').length - drafts; // the parts add up: open work, then drafts not yet started
     return `<div class="page dl-page tk-page"><div class="dl-phead"><div><h1>Tickets <span class="h1-count">${open} open${drafts ? ` · ${drafts} draft${drafts > 1 ? 's' : ''}` : ''}</span></h1>
       <p class="lede-2">A ticket is one piece of work for a team or a bot. Drafts are ideas you and the bots shape together; work starts only once someone marks a ticket ready.</p></div>
       <div class="dl-actions"><a class="btn primary" href="#/tickets/new">${icon('plus')}New ticket</a></div></div>

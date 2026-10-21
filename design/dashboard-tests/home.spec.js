@@ -6,7 +6,7 @@
 // only what's left. No sunrise, no "Since you last looked", no lanes.
 const { test, expect, go } = require('./fixtures');
 
-const day = async (page, demo) => { await page.evaluate((d) => { localStorage.setItem('cd-demo', d); localStorage.removeItem('cd-proto-state-v6'); }, demo); };
+const day = async (page, demo) => { await page.evaluate((d) => { localStorage.setItem('cd-demo', d); localStorage.removeItem('cd-proto-state-v7'); }, demo); };
 
 test('Home: no greeting or summary line; At a glance, Needs you with one action each, the last 12 hours, For your information', async ({ page }) => {
   await go(page, '#/overview', { fresh: true });

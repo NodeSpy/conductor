@@ -47,6 +47,6 @@ test('import: secret-looking values go to the vault, never into the file', async
   await expect(page).toHaveURL(/#\/config\/apply/);
   const staged = await page.evaluate(() => D.pending.filter((c) => c.coll === 'env').map((c) => [c.key, c.after.value]));
   expect(staged).toEqual(expect.arrayContaining([['daemon:REGION', 'eu-west-1'], ['daemon:DEPLOY_TOKEN', '{{ vault "house" "env-deploy-token" }}']]));
-  const hay = await page.evaluate(() => document.documentElement.outerHTML + JSON.stringify(D) + localStorage.getItem('cd-proto-state-v6'));
+  const hay = await page.evaluate(() => document.documentElement.outerHTML + JSON.stringify(D) + localStorage.getItem('cd-proto-state-v7'));
   expect(hay).not.toContain('tok-not-a-real-one-9911');
 });
