@@ -269,7 +269,9 @@ func TestCaseBudgetOpAndAPI(t *testing.T) {
 		t.Fatalf("stored: %+v", got)
 	}
 	b, ok := ledgerBudgets{}.CaseBudget("bot:shopper/c3")
-	if !ok || b.Amount != 120 || b.Key != "bot:shopper/c3" {
+	// The accrual is keyed by the case's stable ticket id (migrated to T-1), not
+	// its per-copy reference, so a reassigned ticket keeps one lifetime count (H2).
+	if !ok || b.Amount != 120 || b.Key != "T-1" {
 		t.Fatalf("CaseBudget: %+v %v", b, ok)
 	}
 	if _, ok := (ledgerBudgets{}).CaseBudget("bot:shopper/c9"); ok {
@@ -277,13 +279,13 @@ func TestCaseBudgetOpAndAPI(t *testing.T) {
 	}
 	// A purchase under it: its view carries every layer's remaining.
 	p, err := m.Purchases.ProposeWithin(browser.Purchase{Card: "visa", Merchant: "https://shop.example.com", Total: 85, Currency: "USD",
-		Identity: "agent:shopper@home", Bot: "shopper", CaseRef: "bot:shopper/c3", BudgetKey: "bot:shopper/c3"}, time.Hour,
+		Identity: "agent:shopper@home", Bot: "shopper", CaseRef: "bot:shopper/c3", BudgetKey: b.Key}, time.Hour,
 		browser.SpendRules{Card: m.Effective().Cards["visa"], Who: browser.Principal{Identity: "agent:shopper@home", Bot: "shopper"}, Bot: "shopper", Budget: &b})
 	if err != nil {
 		t.Fatal(err)
 	}
 	view := string(call("browser-purchase", browserWalletReq{Purchase: p.ID}).Data)
-	for _, w := range []string{`"remaining_by_layer"`, `"layer":"ticket bot:shopper/c3"`, `"layer":"bot shopper"`, `"layer":"team ops"`, `"layer":"card visa"`} {
+	for _, w := range []string{`"remaining_by_layer"`, `"layer":"ticket T-1"`, `"layer":"bot shopper"`, `"layer":"team ops"`, `"layer":"card visa"`} {
 		if !strings.Contains(view, w) {
 			t.Fatalf("the approval's view lacks %s: %s", w, view)
 		}

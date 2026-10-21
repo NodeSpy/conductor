@@ -1026,8 +1026,22 @@ func (ledgerBudgets) CaseBudget(caseRef string) (browser.CaseBudget, bool) {
 		// An unreadable budget allows nothing (never falls back to none).
 		amt = 0
 	}
-	return browser.CaseBudget{Key: caseRef, Amount: amt, Currency: strings.ToUpper(c.SpendLimit.Currency),
+	return browser.CaseBudget{Key: caseBudgetKey(caseRef, c), Amount: amt, Currency: strings.ToUpper(c.SpendLimit.Currency),
 		Card: c.SpendLimit.Card, Merchants: c.SpendLimit.Merchants}, true
+}
+
+// caseBudgetKey is the accrual key a case's purchases count under. A ticket's
+// spend_limit is a LIFETIME cap, but a ticket moves between bots as separate
+// case copies (tickets.go: TicketAssign → placeTicket mints a fresh case id,
+// carryTicket copies the limit). Keying by the ticket's STABLE id makes every
+// copy count against one budget — otherwise a reassigned ticket's cap resets
+// and it can overspend N×. A case with no ticket id (none exists once migrated,
+// but defend anyway) falls back to its own per-copy reference.
+func caseBudgetKey(caseRef string, c *store.Case) string {
+	if c != nil && c.Ticket != "" {
+		return c.Ticket
+	}
+	return caseRef
 }
 
 // parseCaseRef reads "bot:<name>/<case>".
@@ -1056,7 +1070,10 @@ func caseBudgetOp(cfg *config.Config, m *browser.Manager, q *browserWalletReq, d
 	standing := func() map[string]any {
 		out := map[string]any{"bot": q.Bot, "case": q.Case, "ticket": ref, "spend_limit": c.SpendLimit}
 		if m.Purchases != nil {
-			used, list := m.Purchases.Committed(ref)
+			// Committed spend is counted under the same key enforcement uses —
+			// the ticket's stable id — so a moved ticket's report spans every
+			// copy, matching the lifetime cap (H2).
+			used, list := m.Purchases.Committed(caseBudgetKey(ref, c))
 			out["committed"], out["purchases"] = used, list
 			if c.SpendLimit != nil {
 				if amt, err := browser.ParseSpendLimit(c.SpendLimit.Amount); err == nil {
