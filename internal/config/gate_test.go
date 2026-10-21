@@ -86,6 +86,26 @@ func TestGateValidation(t *testing.T) {
 	}
 }
 
+// A team: step's max_workers is 1..16, or 0 for the default: the bounds
+// themselves are accepted, one past either side is refused, naming the field.
+func TestTeamStepMaxWorkersBounds(t *testing.T) {
+	for _, tc := range []struct {
+		n  int
+		ok bool
+	}{{0, true}, {1, true}, {16, true}, {17, false}, {-1, false}, {-16, false}} {
+		c := gateBase(t)
+		c.Triggers = []TriggerSpec{{On: "gh.release", Steps: []Step{{ID: "fanout", Prompt: "p",
+			Team: &TeamSpec{Planner: "w/fixer", Worker: "w/fixer", MaxWorkers: tc.n}}}}}
+		err := c.Validate()
+		switch {
+		case tc.ok && err != nil:
+			t.Errorf("max_workers: %d: %v", tc.n, err)
+		case !tc.ok && (err == nil || !strings.Contains(err.Error(), "team.max_workers must be 1..16 (0 = default 4)")):
+			t.Errorf("max_workers: %d: got %v, want it refused", tc.n, err)
+		}
+	}
+}
+
 func TestGateOnTriggerAndWorkflowValidated(t *testing.T) {
 	c := gateBase(t)
 	c.Triggers = []TriggerSpec{{On: "gh.release", Gate: &GateSpec{Run: []string{"ghost"}},
