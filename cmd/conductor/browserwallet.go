@@ -983,6 +983,25 @@ func botGroups(id skill.Identity) []string {
 	return out
 }
 
+// botBrowserNarrowing is the bot's bots.<name>.browser subset of logins
+// (sites) and credentials (names) its sessions may use. nil lists mean no
+// narrowing; a set BotBrowser caps the session to exactly its entries, so the
+// grant is intersected with it at access time (ForPrincipal). It never grants.
+func botBrowserNarrowing(id skill.Identity) (logins, credentials []string) {
+	if id.Bot == "" {
+		return nil, nil
+	}
+	cfg := browserCfg.Load()
+	if cfg == nil {
+		return nil, nil
+	}
+	b := cfg.Bots[id.Bot].Browser
+	if b == nil {
+		return nil, nil
+	}
+	return b.Logins, b.Credentials
+}
+
 // browserLedger is the daemon's store (the case ledger tickets' budgets
 // are read from).
 var browserLedger atomic.Pointer[store.Store]

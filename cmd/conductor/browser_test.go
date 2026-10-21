@@ -51,6 +51,41 @@ func TestBrowserCallerBinding(t *testing.T) {
 	}
 }
 
+// TestBrowserCallerBotNarrowing (C1): a bot session's Principal carries its
+// bots.<name>.browser narrowing, so the enforcement at ForPrincipal binds at
+// runtime — not just a team binding that would reach the whole team's set.
+func TestBrowserCallerBotNarrowing(t *testing.T) {
+	cfg := &config.Config{Bots: map[string]config.BotConfig{
+		"intern": {Team: "platform", Browser: &config.BotBrowser{Logins: []string{"status.example.com"}, Credentials: []string{"app"}}},
+		"lead":   {Team: "platform"}, // no browser block: no narrowing
+	}}
+	browserCfg.Store(cfg)
+	defer browserCfg.Store(nil)
+
+	c, err := browserCaller("tok", skill.Identity{Bot: "intern", BotRole: "member",
+		Sandbox: &skill.SandboxBinding{Identity: "agent:intern@o/r", Workspace: "/w"}})
+	if err != nil {
+		t.Fatalf("intern: %v", err)
+	}
+	if !reflect.DeepEqual(c.BotCredentials, []string{"app"}) || !reflect.DeepEqual(c.BotLogins, []string{"status.example.com"}) {
+		t.Fatalf("narrowing not carried onto the Principal: logins=%v creds=%v", c.BotLogins, c.BotCredentials)
+	}
+	sensitive := browser.Credential{Name: "sensitive", Identities: []string{"team:platform"}}
+	if sensitive.ForPrincipal(c) {
+		t.Fatal("C1: at runtime the narrowed bot reached a team credential it was denied")
+	}
+
+	// A bot with no browser block gets no narrowing (nil → whole team set).
+	lead, err := browserCaller("tok", skill.Identity{Bot: "lead",
+		Sandbox: &skill.SandboxBinding{Identity: "agent:lead@o/r", Workspace: "/w"}})
+	if err != nil {
+		t.Fatalf("lead: %v", err)
+	}
+	if lead.BotCredentials != nil || lead.BotLogins != nil {
+		t.Fatalf("an un-narrowed bot must carry nil narrowing: logins=%v creds=%v", lead.BotLogins, lead.BotCredentials)
+	}
+}
+
 func TestSplitBrowserArgs(t *testing.T) {
 	pos, f := splitBrowserArgs([]string{"e3", "hello", "world", "--submit", "--ref", "e4", "--dy=200", "--", "--x"})
 	if !reflect.DeepEqual(pos, []string{"e3", "hello", "world", "--x"}) || f["submit"] != true || f["ref"] != "e4" || f["dy"] != "200" {

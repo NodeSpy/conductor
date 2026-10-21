@@ -213,8 +213,9 @@ func wireBrowser(ctx context.Context, cfg *config.Config, notifier *notify.Notif
 // (bound into the token at mint, else its dispatch's registered workspace),
 // its provenance, and a session of its own.
 func browserCaller(token string, id skill.Identity) (browser.Principal, error) {
+	botLogins, botCreds := botBrowserNarrowing(id)
 	c := browser.Principal{Key: browser.SessionKey(token), Agent: id.Agent, Repo: id.Repo, Dispatch: id.Dispatch, Requester: requesterFor(id), Groups: groupsFor(id),
-		Bot: id.Bot, BotRole: id.BotRole, CaseID: id.CaseID}
+		Bot: id.Bot, BotRole: id.BotRole, CaseID: id.CaseID, BotLogins: botLogins, BotCredentials: botCreds}
 	if c.Bot != "" && c.CaseID == "" {
 		// A home session names no case: it acts for the case the gate holds
 		// it to (the least-trusted open one) — whose ticket budget applies.

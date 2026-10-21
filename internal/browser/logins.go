@@ -48,6 +48,12 @@ type Principal struct {
 	// Groups are the bots and teams the session acts for ("bot:<name>",
 	// "team:<name>"): a login bound to one of them is bound to it.
 	Groups []string
+	// BotLogins / BotCredentials narrow a bot session to a subset of the
+	// logins (sites) and sign-in credentials (names) its identity and groups
+	// would otherwise reach (bots.<name>.browser). nil means no narrowing (a
+	// plain agent, or a bot with no browser block); a non-nil list — even
+	// empty — caps the session to exactly its entries. It never grants.
+	BotLogins, BotCredentials []string
 	// Bot / BotRole / CaseID are a bot session's binding (a purchase goes
 	// through the bot's gate).
 	Bot, BotRole, CaseID string
@@ -100,8 +106,24 @@ func (l LoginSite) For(identity string) bool {
 }
 
 // ForPrincipal reports whether the site is opted in for the caller: its
-// identity, or a bot or team it acts for (an exact bot:/team: binding).
+// identity, or a bot or team it acts for (an exact bot:/team: binding), and —
+// for a real login site — within the bot's own browser.logins narrowing.
 func (l LoginSite) ForPrincipal(p Principal) bool {
+	if !l.grantedTo(p) {
+		return false
+	}
+	// A bot that narrows bots.<name>.browser.logins may use only the sites it
+	// kept, even when a team: binding would otherwise reach a broader one — the
+	// narrowing never grants, it only caps. Site is "" for the Credential /
+	// wallet wrappers that reuse this method; their narrowing is by name.
+	if l.Site != "" && p.BotLogins != nil && !siteWithin(p.BotLogins, l.Site) {
+		return false
+	}
+	return true
+}
+
+// grantedTo is the identity/group binding check, without any bot narrowing.
+func (l LoginSite) grantedTo(p Principal) bool {
 	if l.For(p.Identity) {
 		return true
 	}
@@ -111,6 +133,23 @@ func (l LoginSite) ForPrincipal(p Principal) bool {
 		}
 		for _, g := range p.Groups {
 			if g == b {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// siteWithin reports whether a login site is covered by a narrowing list: an
+// exact entry, or a "*.domain" entry covering a host (or narrower pattern)
+// under it — the same coverage config uses when it validates the subset.
+func siteWithin(list []string, site string) bool {
+	for _, s := range list {
+		if s == site {
+			return true
+		}
+		if dom, ok := strings.CutPrefix(s, "*."); ok {
+			if h := strings.TrimPrefix(site, "*."); strings.HasSuffix(h, "."+dom) {
 				return true
 			}
 		}

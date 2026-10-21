@@ -117,9 +117,21 @@ func (c Credential) For(identity string) bool {
 }
 
 // ForPrincipal reports whether the credential is bound to the caller: its
-// identity, or a bot or team it acts for.
+// identity, or a bot or team it acts for — and, for a bot that narrows
+// bots.<name>.browser.credentials, that the credential's name is one it kept.
 func (c Credential) ForPrincipal(p Principal) bool {
-	return LoginSite{Identities: c.Identities}.ForPrincipal(p)
+	if !(LoginSite{Identities: c.Identities}).ForPrincipal(p) {
+		return false
+	}
+	if p.BotCredentials != nil {
+		for _, name := range p.BotCredentials {
+			if name == c.Name {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }
 
 // AllOrigins is every exact origin the credential may fill on.
