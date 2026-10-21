@@ -160,3 +160,8 @@ func (h *HashicorpVault) Write(ctx context.Context, key, value string) error {
 	h.c.put(key, value)
 	return nil
 }
+
+// ReadFresh implements FreshReader.
+func (h *HashicorpVault) ReadFresh(ctx context.Context, key string) (string, error) {
+	return freshRead(ctx, &h.c, key, h.Read)
+}

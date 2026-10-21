@@ -75,8 +75,8 @@ type controllerRunner struct {
 	// declared bound_to_target): the only ones StopTarget stops.
 	bound map[string]bool
 	// byDispatch binds a dispatch id to the session it opened, and inflight
-	// marks the dispatches Dispatch is still blocked on: how the agent's own
-	// step.done (whose token carries only the dispatch id) resolves here.
+	// marks a dispatch whose Dispatch call is still running: a step.done
+	// (token-bound to the dispatch id) resolves through them.
 	byDispatch map[string]string
 	inflight   map[string]bool
 }
@@ -112,9 +112,8 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	}
 
 	if req.DispatchID != "" {
-		// In flight from before the agent starts until the turn's output is
-		// captured: a step.done it sends meanwhile defers to the step
-		// boundary instead of closing the session under the capture.
+		// In flight from before the session opens: an agent can call
+		// step.done during its first turn, before NewSession returns.
 		r.mu.Lock()
 		r.inflight[req.DispatchID] = true
 		r.mu.Unlock()
@@ -168,6 +167,9 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	r.byPR[bucket]++
 	if req.Trigger.BoundToTarget() {
 		r.bound[id] = true
+	}
+	if req.DispatchID != "" {
+		r.byDispatch[req.DispatchID] = id
 	}
 	r.mu.Unlock()
 
@@ -346,16 +348,23 @@ func (r *controllerRunner) Archive(ctx context.Context, agentID string) error {
 }
 
 // AgentForDispatch resolves a done call's token-bound dispatch id to the
-// session that dispatch opened here ("" when unknown).
+// session that dispatch opened ("" when it is not this runner's, or gone).
 func (r *controllerRunner) AgentForDispatch(dispatchID string) string {
+	if dispatchID == "" {
+		return ""
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.byDispatch[dispatchID]
 }
 
-// DispatchInFlight reports a dispatch whose foreground turn Dispatch is still
-// blocked on: its step.done defers to the step-boundary archive.
+// DispatchInFlight reports a dispatch whose Dispatch call is still running
+// (a foreground turn conductor is blocked on): its done defers to the step
+// boundary, where the runner's own archive reclaims the session.
 func (r *controllerRunner) DispatchInFlight(dispatchID string) bool {
+	if dispatchID == "" {
+		return false
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.inflight[dispatchID]
@@ -376,8 +385,8 @@ func (r *controllerRunner) forget(id string) {
 	delete(r.live, id)
 	delete(r.stopped, id)
 	delete(r.bound, id)
-	for d, a := range r.byDispatch {
-		if a == id {
+	for d, sid := range r.byDispatch {
+		if sid == id {
 			delete(r.byDispatch, d)
 		}
 	}

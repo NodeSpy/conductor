@@ -191,7 +191,13 @@ func (b *rpcBackend) Clone(ctx context.Context, opts CloneOptions) error {
 }
 
 func (b *rpcBackend) Send(ctx context.Context, opts SendOptions) (SendResult, error) {
-	out, err := b.invoke(ctx, "send", map[string]any{"id": opts.ID, "prompt": opts.Prompt, "json": opts.JSON})
+	params := map[string]any{"id": opts.ID, "prompt": opts.Prompt, "json": opts.JSON}
+	if len(opts.Images) > 0 {
+		// Only when there are some: a plugin that predates images never sees
+		// the key on an ordinary send.
+		params["images"] = opts.Images
+	}
+	out, err := b.invoke(ctx, "send", params)
 	if err != nil {
 		// Stderr is unavailable over RPC — the plugin's error message already
 		// carries the same stdout-JSON-else-stderr detail cliBackend surfaces.

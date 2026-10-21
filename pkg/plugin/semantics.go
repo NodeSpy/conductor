@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -44,8 +45,29 @@ type EventSemantics struct {
 	// feedback (an acknowledgement when work starts, a note when it
 	// finishes or fails). See OptionHook.
 	OptionHooks []OptionHook `json:"option_hooks,omitempty"`
+	// Attachments: the event can carry files (a chat message's uploads),
+	// which the engine fetches through a verb when it routes the event to a
+	// bot. See AttachmentsSemantics.
+	Attachments *AttachmentsSemantics `json:"attachments,omitempty"`
 	// Optional lists semantic keys an older host may ignore.
 	Optional []string `json:"optional,omitempty"`
+}
+
+// AttachmentsSemantics: the files an event carries. List names the event
+// fact holding them (a list of objects); Name and Size name each item's file
+// name and byte size. Fetch is the verb the engine calls for one file, with
+// Args (verb option → template over the item's fields); its output named
+// Content holds the file's bytes, base64-encoded. The engine fetches only
+// for an `assigned` target (the fetch spends the instance's credentials on
+// whatever file the event names), only files within the receiving bot's
+// caps, and treats the files as the sender's data.
+type AttachmentsSemantics struct {
+	List    string            `json:"list"`
+	Name    string            `json:"name,omitempty"`
+	Size    string            `json:"size,omitempty"`
+	Fetch   string            `json:"fetch"`
+	Args    map[string]string `json:"args,omitempty"`
+	Content string            `json:"content"`
 }
 
 // OptionHook: when the operator sets `options.<Option>` on a trigger using
@@ -241,8 +263,28 @@ type VerbSemantics struct {
 	HostOnly          bool               `json:"host_only,omitempty"`
 	TargetArgs        map[string]string  `json:"target_args,omitempty"`
 	Exposes           *Exposes           `json:"exposes,omitempty"`
-	Optional          []string           `json:"optional,omitempty"`
+	// Identity maps verb options to bot identity attributes (IdentityAttributes):
+	// when a bot calls this verb, the engine fills each named option with
+	// that bot's attribute, e.g. a chat post's `username` from `name`. A bot
+	// can't set these options itself. The engine overwrites them, so a bot
+	// never posts as anyone else.
+	Identity map[string]string `json:"identity,omitempty"`
+	Optional []string          `json:"optional,omitempty"`
 }
+
+// IdentityAttributes are the bot identity attributes a verb's `identity`
+// semantic may name:
+//   - name: the display name, or the config id when there is none;
+//   - id: the config id;
+//   - initials;
+//   - tagline;
+//   - avatar_preset, avatar_icon, avatar_color: names from conductor's built-in
+//     avatar lists, never a URL or file; the plugin maps them to its own icons;
+//   - color: the bot's identity color name.
+//
+// An attribute the bot doesn't set fills its option with "", and the engine
+// then leaves that option out.
+var IdentityAttributes = []string{"name", "id", "initials", "tagline", "avatar_preset", "avatar_icon", "avatar_color", "color"}
 
 // ReadsRevision: the verb that reads a target's current revision and state.
 // States maps each generic state (open, closed, accepted) to the verb's own
@@ -384,9 +426,9 @@ type PreflightSemantics struct {
 var semanticKeys = map[string][]string{
 	"event": {"target", "revision", "checkout", "closes_target", "bound_to_target", "completion", "cursor",
 		"attempts", "priority", "feedback", "verification_failed", "remediate", "author", "labels",
-		"private", "secret", "conversation_reply", "option_hooks"},
+		"private", "secret", "conversation_reply", "option_hooks", "attachments"},
 	"verb": {"reads_revision", "mints_credential", "opens_conversation", "conversation_post", "host_only",
-		"target_args", "exposes"},
+		"target_args", "exposes", "identity"},
 	"connection": {"credentials", "scope", "poll", "translate", "listeners", "preflight"},
 }
 
@@ -596,6 +638,14 @@ func ValidateSemantics(d Decl) []string {
 		if s.Priority != "" && s.Priority != "interactive" && s.Priority != "normal" {
 			p = append(p, path+".priority: must be interactive or normal")
 		}
+		if a := s.Attachments; a != nil {
+			if a.List == "" || a.Fetch == "" || a.Content == "" {
+				p = append(p, path+".attachments: list, fetch and content are required")
+			}
+			if a.Fetch != "" {
+				need(path+".attachments.fetch", a.Fetch)
+			}
+		}
 		if s.Author != nil && s.Author.Login == "" {
 			p = append(p, path+".author.login: required")
 		}
@@ -655,6 +705,14 @@ func ValidateSemantics(d Decl) []string {
 				if _, ok := v.Options[x.Path]; !ok {
 					p = append(p, fmt.Sprintf("%s.exposes.path: names option %q, which verb %q does not declare", path, x.Path, v.Name))
 				}
+			}
+		}
+		for opt, attr := range s.Identity {
+			if !slices.Contains(IdentityAttributes, attr) {
+				p = append(p, fmt.Sprintf("%s.identity.%s: unknown identity attribute %q (one of %s)", path, opt, attr, strings.Join(IdentityAttributes, ", ")))
+			}
+			if _, ok := v.Options[opt]; !ok && !v.Open {
+				p = append(p, fmt.Sprintf("%s.identity: names option %q, which verb %q does not declare", path, opt, v.Name))
 			}
 		}
 		if s.MintsCredential != nil && !s.HostOnly {

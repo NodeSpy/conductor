@@ -76,6 +76,10 @@ type NetForward struct {
 	Chdir      string      // working directory inside the jail (the launch's own dir)
 	Relays     []Relay     // extra in-sandbox loopback ports piped to host-side unix sockets
 	Exposes    []Expose    // in-sandbox loopback ports served on host-side unix sockets
+	// PassFDs hands the launch's inherited descriptors 3..3+PassFDs-1 on to
+	// the payload (a browser's CDP pipe, --remote-debugging-pipe): the
+	// forwarder otherwise runs it with stdio alone.
+	PassFDs int
 	// Agent (macOS) is the agent jail's Seatbelt extras; ProxyPort the
 	// loopback egress proxy port its restricted network may reach.
 	Agent     *AgentProfile
@@ -109,6 +113,7 @@ type EnterOpts struct {
 	Chdir   string      // working directory to re-enter after the pivot ("" = stay)
 	Relays  []Relay     // extra loopback ports to pipe to unix sockets
 	Exposes []Expose    // in-sandbox loopback ports to serve on host unix sockets
+	PassFDs int         // inherited fds 3.. handed on to the payload
 	Argv    []string    // the real launch to exec once the plumbing is up
 }
 
@@ -227,7 +232,21 @@ func RunEnter(opt EnterOpts) int {
 	cmd := execChild(opt.Argv, jailed || len(opt.Masks) > 0)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = os.Environ()
-	if err := cmd.Run(); err != nil {
+	var passed []*os.File
+	for i := 0; i < opt.PassFDs; i++ {
+		passed = append(passed, os.NewFile(uintptr(3+i), fmt.Sprintf("fd%d", 3+i)))
+	}
+	cmd.ExtraFiles = passed
+	err := cmd.Start()
+	// The payload holds its own copies: ours closed, its end of a pipe is
+	// the only one, and the launcher sees EOF the moment it exits.
+	for _, f := range passed {
+		f.Close()
+	}
+	if err == nil {
+		err = cmd.Wait()
+	}
+	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
 			return ee.ExitCode()
 		}

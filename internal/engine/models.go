@@ -150,3 +150,10 @@ func exactPin(spec config.ModelSpec) string {
 	}
 	return acceptable[0]
 }
+
+// ResolveModel is resolveModel for callers outside a flow step — a bot's
+// home session launches through the same fleet ladder and roster every agent
+// step does.
+func (e *Engine) ResolveModel(ctx context.Context, step config.Step) (model, runtime, provider string) {
+	return e.resolveModel(ctx, step)
+}

@@ -54,6 +54,10 @@ type LocalWrapDeps struct {
 	// host-side unix sockets, for the launcher to connect to (Linux; macOS
 	// has no network namespace and reaches the port directly).
 	Exposes []Expose
+	// PassFDs hands the launch's descriptors 3..3+PassFDs-1 through the
+	// in-sandbox forwarder to the payload (a browser's CDP pipe). macOS's
+	// sandbox-exec execs the payload directly and passes them anyway.
+	PassFDs int
 	// Agent carries the macOS agent-jail extras (scratch home, shim dir,
 	// exec denials, narrowed Mach services, the proxy port); ignored on Linux,
 	// where the same intent is expressed as ExtraBinds.
@@ -190,6 +194,7 @@ func WrapLocalCommand(spec *Spec, argv []string, dir string, env []string, deps 
 		// only way the agent reaches its local model router.
 		nf.Relays = deps.Relays
 		nf.Exposes = deps.Exposes
+		nf.PassFDs = deps.PassFDs
 	}
 	if err := spec.Check(CheckGOOS, CheckGeteuid(), CheckLookPath); err != nil {
 		return nil, nil, cleanup, err

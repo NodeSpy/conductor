@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
+	"github.com/NodeSpy/conductor/internal/browser"
 	"github.com/NodeSpy/conductor/internal/confdir"
 	"net"
 	"os"
@@ -74,6 +75,10 @@ func main() {
 		// Launched by conductor itself inside a namespace/container; not a
 		// user-facing command.
 		os.Exit(runSandboxNet(args))
+	case "browser":
+		// `conductor browser …`: an agent's browser (over its skill
+		// socket), or the operator's browser commands (the control socket).
+		os.Exit(cmdBrowser(args))
 	case "sandbox":
 		// `conductor sandbox exec -- <agent>`: run an agent CLI under the
 		// agent sandbox with the daemon's policy for this directory (paseo's
@@ -108,6 +113,8 @@ func main() {
 		err = cmdStatus(args)
 	case "report":
 		err = cmdReport(args)
+	case "usage":
+		err = cmdUsage(args)
 	case "runs":
 		err = cmdRuns(args)
 	case "watch":
@@ -150,6 +157,10 @@ func main() {
 		err = cmdSkillMemory(args)
 	case "secret":
 		err = cmdSecret(args)
+	case "bot", "bots":
+		err = cmdBot(args)
+	case "team":
+		err = cmdTeam(args)
 	case "workflows":
 		err = cmdWorkflows(args)
 	case "init":
@@ -194,7 +205,8 @@ usage:
   conductor sweep --now [--config PATH] signal the running daemon to sweep now
   conductor force <kind> <owner/repo>#<n>  force an action for a target now (via the running daemon)
   conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
-  conductor report [--days N]           activity summary: dispatches by kind/outcome + attention + spend
+  conductor report [--days N]           activity summary: dispatches by kind/outcome + attention + usage (per usage.mode)
+  conductor usage [--since 24h]         model usage per runtime/model: what conductor observed, and what usage.sources report
   conductor runs [<id>] [--limit N]     recorded executions: list, or one run's step detail
   conductor runs retry <id> [--from <step>] [--force-replay]  re-run a recorded execution (recorded inputs pinned)
   conductor watch [<run-id>] [--json]   tail the live run event stream (steps, gates, outcomes)
@@ -213,8 +225,10 @@ usage:
   conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
   conductor unlock                      seed the default vault key for non-interactive restarts
   conductor mcp memory --socket <path>  stdio MCP server: memory + skill broker (agent-facing)
+  conductor bot <cmd> …             bots: ls/show/cases/proposals/approve/deny/rotate/say/deliver (conductor bot help)
+  conductor team say|chat|chats …   talk to a team: its lead, @bot, or --everyone (conductor team help)
   conductor mcp callable --token <name> [--config PATH]  stdio MCP server: invoke callable workflows (external MCP clients)
-  conductor workflows ls|review|rm      manage saved (agent-promoted) workflows
+  conductor workflows ls                 config workflows and triggers; saved workflows (review|rm)
   conductor init [--config PATH] [--allow-unlisted]  fetch the packs: block, write the lockfile, preview
   conductor pack list|plan              list configured packs; preview what they add
   conductor pack add <source>           fetch a pack, show its install review + a ready-to-paste block
@@ -269,6 +283,11 @@ func loadConfig(args []string) (*config.Config, []string, error) {
 	// loads them at runtime, without needing to export anything by hand.
 	loadEnvFile(filepath.Join(filepath.Dir(path), "conductor.env"))
 	cfg, err := config.Load(path)
+	if err == nil {
+		// usage.mode: what every report and notification of this process may
+		// show of model usage (display only; caps enforce in every mode).
+		cost.SetDisplayMode(cfg.UsageMode())
+	}
 	return cfg, rest, err
 }
 
@@ -331,6 +350,12 @@ func cmdValidate(args []string) error {
 	defer stack.Close()
 	// Deprecation + skill + isolation lint: warnings, never failures.
 	for _, w := range flow.DeprecationWarnings(cfg) {
+		fmt.Printf("warning: %s\n", w)
+	}
+	for _, w := range cfg.BotWarnings() {
+		fmt.Printf("warning: %s\n", w)
+	}
+	for _, w := range cfg.WalletNotes() {
 		fmt.Printf("warning: %s\n", w)
 	}
 	for _, w := range flow.IsolationWarnings(cfg) {
@@ -401,6 +426,11 @@ func cmdValidate(args []string) error {
 	// a problem to flag), and every one of them was already logged above
 	// (connector.Build's own logf call), hence "see above" rather than
 	// repeating the reason here.
+	// Template bots: where each came from, what it may do, every widening —
+	// never silent.
+	for _, n := range cfg.BotTemplateNotes() {
+		fmt.Println("notice: " + n)
+	}
 	disabled := disabledConnectorNames(cfg, stack)
 	if len(disabled) == 0 {
 		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)\n",
@@ -512,6 +542,7 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	botConfigPath, _ = configPath(args)
 
 	st, err := store.Open(store.Options{
 		StatePath:      cfg.Store.StateFile,
@@ -528,6 +559,11 @@ func cmdRun(args []string) error {
 	defer st.Close()
 
 	notifier := notify.New(logf, st.Audit)
+	// A removed key (folder:) loads and is ignored; the log says so, once
+	// per boot, so an operator can delete it.
+	for _, w := range cfg.RemovedFieldWarnings() {
+		logf("config: %s", w)
+	}
 	// Every lifecycle event feeds the conductor.* source (ordinary triggers
 	// alert on them); the source's loop guard keeps a notification
 	// workflow's own events from re-feeding.
@@ -786,6 +822,14 @@ func cmdRun(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Bots (docs/design/bots.md): the gate on the skill chokepoint, the
+	// bot: routing step, home sessions on paseo, cli workers through the
+	// manual-trigger path. nil without a bots: section.
+	var bots *botStack
+	if stack != nil {
+		bots = buildBots(cfg, st, stack.Runner, reg, hold, eng, notifier, logf)
+	}
+
 	// The live agent-tool socket: with a memory: section configured — or any
 	// profile opted into the conductor skill (#36 §12) — serve the tool
 	// socket beside the state file and publish the launch command runtimes
@@ -900,6 +944,9 @@ func cmdRun(args []string) error {
 						}
 						return runner.SkillVerbCatalog(id.Policy.Verbs), nil
 					}
+					if bots != nil {
+						ops.Bot = bots.agentOp(sb)
+					}
 					ops.RunVerb = func(vctx context.Context, token, uses string, options map[string]any, peer memory.Peer) (map[string]any, error) {
 						id, err := sb.Authorize(token, asPeer(peer))
 						if err != nil {
@@ -915,6 +962,7 @@ func cmdRun(args []string) error {
 							Number: id.Number, Verbs: id.Policy.Verbs,
 							Scopes: id.Policy.VerbScopes, Context: id.Context, Sem: id.Sem,
 							TargetTrusted: id.TargetTrusted, Dispatch: id.Dispatch,
+							Bot: id.Bot, BotRole: id.BotRole, CaseID: id.CaseID,
 						}, uses, options)
 					}
 				}
@@ -941,6 +989,9 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer stopSandbox()
+	// The browser (after the sandbox, whose identities it serves).
+	browserLedger.Store(st)
+	defer wireBrowser(ctx, cfg, notifier, st.Audit, logf)()
 	if cfg.AgentSandboxOn() && !cfg.DryRun {
 		// The sandboxed paseo provider entries this daemon's paseo
 		// dispatches name: written (merged, conductor's own only) at every
@@ -1086,10 +1137,19 @@ func cmdRun(args []string) error {
 	defer connector.SetConductorOps(nil)
 	// handoff.done: the agent releasing its own live hand-off (skill surface),
 	// resolved through the engine's live-hand-off registry.
-	connector.SetStepOps(func() *connector.StepOps { return eng.StepOps() })
+	connector.SetStepOps(bots.wrapStepOps(func() *connector.StepOps { return eng.StepOps() }))
 	defer connector.SetStepOps(nil)
 	// A connector's declared poll verb: the same nudge the SIGUSR1 handler
 	// runs, for that instance.
+	if bots != nil {
+		var hub *flow.EventHub
+		if stack != nil {
+			hub = stack.Runner.Events
+		}
+		bots.start(ctx, hub)
+		botCtl = bots.svc
+		go serveOperatorAPI(ctx, operatorAPISockPath(cfg), bots.operatorAPI(), logf)
+	}
 	connector.SetSweepHook(func(_ context.Context, instance string) (int, error) {
 		n := 0
 		for _, ig := range igs {
@@ -1357,11 +1417,15 @@ func controlSockPath(cfg *config.Config) string {
 }
 
 type controlRequest struct {
-	Cmd         string `json:"cmd"`
-	Integration string `json:"integration,omitempty"`
-	Kind        string `json:"kind,omitempty"`
-	Repo        string `json:"repo,omitempty"`
-	Number      int    `json:"number,omitempty"`
+	Cmd string `json:"cmd"`
+	// bot: the sub-command (Sub) and its arguments (Args) — the operator
+	// face of bots (`conductor bot …`). Approvals arrive here, signed.
+	Sub         string         `json:"sub,omitempty"`
+	Args        map[string]any `json:"args,omitempty"`
+	Integration string         `json:"integration,omitempty"`
+	Kind        string         `json:"kind,omitempty"`
+	Repo        string         `json:"repo,omitempty"`
+	Number      int            `json:"number,omitempty"`
 	// run: the manual trigger's name and its CLI-provided inputs.
 	Name   string         `json:"name,omitempty"`
 	Inputs map[string]any `json:"inputs,omitempty"`
@@ -1396,6 +1460,22 @@ type controlRequest struct {
 	// spawn of a provider): a cwd that may not be a workspace gets the
 	// tool's scratch workspace instead of a refusal.
 	Scratch bool `json:"scratch,omitempty"`
+	// browser-* (the operator's browser commands): the identity and site
+	// of a saved session, a credential, cookies or a passkey to save, a
+	// live session to peek at.
+	Identity   string           `json:"identity,omitempty"`
+	Site       string           `json:"site,omitempty"`
+	Credential string           `json:"credential,omitempty"`
+	Session    string           `json:"session,omitempty"`
+	Source     string           `json:"source,omitempty"`
+	Cookies    []browser.Cookie `json:"cookies,omitempty"`
+	Passkey    *browser.Passkey `json:"passkey,omitempty"`
+	// Login is a browser-login-* / browser-vault-* command's body
+	// (browserlogins.go).
+	Login *browserLoginReq `json:"login,omitempty"`
+	// Wallet is a browser-profile-* / -card-* / -purchase* / -wallet
+	// command's body (browserwallet.go).
+	Wallet *browserWalletReq `json:"wallet,omitempty"`
 }
 
 type controlResponse struct {
@@ -1406,6 +1486,10 @@ type controlResponse struct {
 	// Policy answers sandbox-policy: the launch's sandbox, with a token
 	// minted for this launch alone.
 	Policy *agentsandbox.Policy `json:"policy,omitempty"`
+	// Data answers a browser-* command.
+	Data json.RawMessage `json:"data,omitempty"`
+	// Result is a bot command's structured answer.
+	Result map[string]any `json:"result,omitempty"`
 }
 
 // callableGate authorizes + audits a control-socket `run` that the MCP callable
@@ -1488,6 +1572,8 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		return
 	}
 	switch req.Cmd {
+	case "bot":
+		handleBotControl(ctx, conn, req, log)
 	case "force":
 		n, err := forceOnIntegrations(ctx, igs, req, emit)
 		if err != nil {
@@ -1533,6 +1619,14 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		streamRunEvents(ctx, conn, events, req.RunID, log)
 	case "sandbox-policy":
 		writeControlResp(conn, sandboxPolicyResponse(conn, req, log))
+	case "browser-logins", "browser-cookies-save", "browser-logout", "browser-sessions", "browser-peek", "browser-takeover", "browser-passkey-save",
+		"browser-login-add", "browser-login-set", "browser-login-unset", "browser-login-bind", "browser-login-remove", "browser-login-list",
+		"browser-login-usage", "browser-login-check", "browser-login-test", "browser-vault-items", "browser-vault-item",
+		"browser-profile-add", "browser-profile-set", "browser-profile-unset", "browser-profile-bind", "browser-profile-rm",
+		"browser-card-add", "browser-card-set", "browser-card-unset", "browser-card-bind", "browser-card-rm",
+		"browser-card-freeze", "browser-card-unfreeze", "browser-wallet", "browser-purchases", "browser-purchase", "browser-purchase-decide",
+		"browser-case-budget":
+		writeControlResp(conn, browserControl(conn, req))
 	case "retry":
 		if retry == nil {
 			writeControlResp(conn, controlResponse{Error: "retry is not available (no flow runner configured)"})
@@ -1590,6 +1684,7 @@ func runManualTrigger(ctx context.Context, manual map[string]connector.CompiledT
 		Title:     "manual run: " + ct.Spec.Name,
 		Context:   trigCtx,
 		Force:     true, // bypass dedup gates — an on-demand run always runs
+		Operator:  !req.Callable,
 		Action:    act,
 		HistoryID: req.HistoryID, // "" unless a caller (the §13 invoke surface) pinned it
 	})
@@ -1799,20 +1894,61 @@ func sendControl(cfg *config.Config, req controlRequest) (controlResponse, error
 // signalSweepNow tells the running daemon to run a catch-up sweep immediately by
 // sending it SIGUSR1 (pid read from the pidfile).
 func signalSweepNow(cfg *config.Config) error {
-	p := pidPath(cfg)
-	b, err := os.ReadFile(p)
+	pid, err := signalDaemon(cfg, syscall.SIGUSR1)
 	if err != nil {
-		return fmt.Errorf("read pidfile %s — is the daemon running? %w", p, err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		return fmt.Errorf("bad pidfile %s: %w", p, err)
-	}
-	if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil {
-		return fmt.Errorf("signal daemon (pid %d): %w", pid, err)
+		return err
 	}
 	fmt.Printf("signaled conductor (pid %d) to run a sweep now\n", pid)
 	return nil
+}
+
+// signalProcess is syscall.Kill. Tests replace it, so no test sends a real
+// signal.
+var signalProcess = syscall.Kill
+
+// isConductorProcess reports whether pid runs conductor: its command
+// line's program is conductor, by name (Linux, /proc). Without /proc only a pid > 1
+// is trusted, as before. A var, so tests decide.
+var isConductorProcess = func(pid int) bool {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		if _, perr := os.Stat("/proc/self"); perr == nil {
+			return false // /proc exists and the pid is gone (or not readable)
+		}
+		return pid > 1
+	}
+	prog, _, _ := strings.Cut(string(b), "\x00")
+	return filepath.Base(prog) == "conductor"
+}
+
+// signalDaemon reads the daemon's pid from the pidfile and sends it sig. A pid
+// must be > 1: kill(-1) signals every process the caller may signal, kill(0)
+// the caller's own group, and a negative pid a whole group, so a corrupt or
+// hostile pidfile must never reach syscall.Kill.
+func signalDaemon(cfg *config.Config, sig syscall.Signal) (int, error) {
+	p := pidPath(cfg)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return 0, fmt.Errorf("read pidfile %s — is the daemon running? %w", p, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return 0, fmt.Errorf("bad pidfile %s: %w", p, err)
+	}
+	// Never 0 or a negative pid (a group, or every process the caller may
+	// signal). Any other only when it is a conductor process: a stale
+	// pidfile's pid may now be anyone's, and pid 1 is legitimately the
+	// daemon in a container (where conductor is the init), never otherwise.
+	if pid <= 0 {
+		return 0, fmt.Errorf("bad pidfile %s: pid %d is not a daemon process", p, pid)
+	}
+	if !isConductorProcess(pid) {
+		return 0, fmt.Errorf("pidfile %s: pid %d is not a conductor process (a stale pidfile?) — nothing was signalled", p, pid)
+	}
+	if err := signalProcess(pid, sig); err != nil {
+		return 0, fmt.Errorf("signal daemon (pid %d): %w", pid, err)
+	}
+	return pid, nil
 }
 
 // cmdReload signals the running daemon to re-read its config. Config is read at
@@ -1831,17 +1967,9 @@ func cmdReload(args []string) error {
 // canonical "reread config" signal, which the daemon handles by re-execing
 // itself so the new config loads at boot.
 func signalReload(cfg *config.Config) error {
-	p := pidPath(cfg)
-	b, err := os.ReadFile(p)
+	pid, err := signalDaemon(cfg, syscall.SIGHUP)
 	if err != nil {
-		return fmt.Errorf("read pidfile %s — is the daemon running? %w", p, err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		return fmt.Errorf("bad pidfile %s: %w", p, err)
-	}
-	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
-		return fmt.Errorf("signal daemon (pid %d): %w", pid, err)
+		return err
 	}
 	fmt.Printf("signaled conductor (pid %d) to reload its config\n", pid)
 	return nil

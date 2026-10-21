@@ -47,6 +47,12 @@ settings:
 `${env.NAME}` reads the process environment, which is where `conductor.env`
 ends up: park a value there and the setting picks it up with no other wiring.
 
+**A setting is never a secret's source.** A field that holds a secret (a
+browser credential's password or code, a mailbox's password) refuses
+`${settings.NAME}` at load. Name the secret where it lives instead: a vault
+reference, or `${env.NAME}` as the whole field, read when the value is used
+([[Secrets]]).
+
 ### It fails loudly, on purpose
 
 A parameter that silently becomes empty turns an allowlist entry into one that

@@ -90,6 +90,11 @@ type Trigger struct {
 	// catch-up triggers are skipped (don't re-nudge) while fresh events are queued
 	// to that agent.
 	CatchUp bool
+	// Operator marks a trigger the operator fired themselves, locally
+	// (`conductor run` on the control socket, not the MCP callable face):
+	// its dispatches' requester is the operator. The zero value — every
+	// event, every remote invocation — is not.
+	Operator bool
 	// Force marks a manually-injected trigger (`conductor force`): the engine
 	// bypasses its dedup / liveness / backoff gates so the action runs now, even if
 	// it thinks the state is already handled. The kill switch and pause still apply.

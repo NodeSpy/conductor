@@ -47,6 +47,67 @@ jobs:
       - name: canary — conductor sandbox exec around a fake agent
         run: bash test/sandbox-canary/run.sh
 
+  # conductor's browser for agents (docs/wiki/Browser.md): a real Chrome in
+  # the real sandbox against a local test site (no external network) — the
+  # multi-step task, the proxy-enforced allowlist, logged-in sessions gated
+  # by provenance, workspace confinement, evaluate gating, and credentials
+  # (password, TOTP, push approval, a passkey through the virtual
+  # authenticator) with origin binding and redaction.
+  browser:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: allow unprivileged user namespaces (Ubuntu's AppArmor restricts them)
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+      - name: which browser
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then ls -d "/Applications/Google Chrome.app" "/Applications/Chromium.app" 2>/dev/null || true
+          else command -v google-chrome google-chrome-stable chromium chromium-browser || true; fi
+      - name: browser packages, real browser and sandbox required
+        shell: bash
+        env:
+          CONDUCTOR_REQUIRE_BROWSER: "1"
+          CONDUCTOR_REQUIRE_SANDBOX: "1"
+        run: |
+          go test -race -count=1 -v ./internal/browser/...
+          go test -race -count=1 -run 'TestBrowser|TestSplitBrowser|TestValidateBrowser|TestReadFresh' ./cmd/conductor/ ./internal/config/ ./internal/vaults/
+      - name: the browser in a container — the whole suite again, Chromium's own sandbox on inside
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CONDUCTOR_REQUIRE_BROWSER: "1"
+          CONDUCTOR_TEST_CONTAINER: "1"
+          CONDUCTOR_TEST_ENGINE: docker
+        run: |
+          go test -count=1 -timeout 30m -v -run 'TestBrowser[A-Z]|TestCredential[A-Z]|TestContainer' ./internal/browser/
+          docker ps -a --filter label=conductor.browser=1 --format '{{.Names}}' | xargs -r docker rm -f
+      - name: the operator's takeover in a real window (Linux a virtual display, macOS the runner's window server)
+        shell: bash
+        env:
+          CONDUCTOR_REQUIRE_BROWSER: "1"
+          CONDUCTOR_TEST_HEADED: "1"
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -yq xvfb; }
+            xvfb-run -a go test -count=1 -v -run 'TestHeadedTakeover' ./internal/browser/
+          else
+            go test -count=1 -v -run 'TestHeadedTakeover' ./internal/browser/
+          fi
+      - name: the macOS sandbox's denials for the browser
+        if: always() && runner.os == 'macOS'
+        run: |
+          log show --last 15m --style compact --predicate 'eventMessage CONTAINS "deny"' 2>/dev/null | grep -i -E 'chrom|google' | sed -E 's/^.*Sandbox: //; s/\([0-9]+\)//; s/[0-9a-f]{8}-[0-9a-f-]{27}/<id>/g' | sort | uniq -c | sort -rn | head -80 || true
+
   paseo:
     runs-on: ubuntu-latest
     steps:

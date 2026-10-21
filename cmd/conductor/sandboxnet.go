@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
@@ -57,6 +58,14 @@ func runSandboxNet(args []string) int {
 				return 2
 			}
 			opt.Exposes = append(opt.Exposes, sandbox.Expose{Unix: u, Dial: d})
+			i++
+		case args[i] == "--pass-fds" && i+1 < len(args):
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil || n < 0 || n > 8 {
+				fmt.Fprintf(os.Stderr, "sandbox-net: --pass-fds wants a count (0-8)\n")
+				return 2
+			}
+			opt.PassFDs = n
 			i++
 		case args[i] == "--chdir" && i+1 < len(args):
 			opt.Chdir = args[i+1]
