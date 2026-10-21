@@ -1271,6 +1271,7 @@ func (c *Config) BotWarnings() []string {
 			}
 		}
 		out = append(out, c.cardCrossRefNotes("bots."+name+".purchases", m.Purchases)...)
+		out = append(out, c.browserNarrowingNotes("bots."+name+".browser", m.Browser)...)
 	}
 	out = append(out, c.avatarWarnings...)
 	return append(out, c.TeamWarnings()...)

@@ -500,6 +500,61 @@ func noneIfEmpty(s string) string {
 	return s
 }
 
+// browserNarrowingNotes warns when a bot's or team's browser: narrowing names a
+// login site or credential that is NOT defined under the top-level
+// browser.logins[] / browser.credentials[]. The narrowing only CAPS what a
+// session reaches (ForPrincipal intersects it with the real definitions, C1); it
+// never grants. At runtime a login entry that covers no real browser.logins
+// site, or a credential name with no definition, silently caps the session to
+// nothing for it — the agent's browser unexpectedly has no login, discovered
+// only mid-session, with no sign at load (checkTeamCeilings validates the
+// bot<=team ceiling, never existence against the definitions it narrows). A
+// warning, not a hard error: it fails closed, and the top-level browser: block
+// may legitimately be absent on a daemon that is not the one serving the
+// browser.
+func (c *Config) browserNarrowingNotes(where string, b *BotBrowser) []string {
+	if b == nil || (len(b.Logins) == 0 && len(b.Credentials) == 0) {
+		return nil
+	}
+	var realSites []string
+	realCreds := map[string]bool{}
+	if c.Browser != nil {
+		for _, l := range c.Browser.Logins {
+			realSites = append(realSites, l.Site)
+		}
+		for _, cr := range c.Browser.Credentials {
+			realCreds[cr.Name] = true
+		}
+	}
+	var out []string
+	for _, site := range b.Logins {
+		if len(realSites) == 0 {
+			out = append(out, fmt.Sprintf("%s.logins: %q narrows browser logins, but no browser.logins are configured — this narrowing silently leaves the session no saved login at all", where, site))
+			continue
+		}
+		covers := false
+		for _, rs := range realSites {
+			if siteWithin([]string{site}, rs) {
+				covers = true
+				break
+			}
+		}
+		if !covers {
+			out = append(out, fmt.Sprintf("%s.logins: %q matches no site in browser.logins [%s] — a typo silently caps this session to no login for it", where, site, strings.Join(realSites, ", ")))
+		}
+	}
+	for _, name := range b.Credentials {
+		if len(realCreds) == 0 {
+			out = append(out, fmt.Sprintf("%s.credentials: %q narrows browser credentials, but no browser.credentials are configured — this narrowing silently leaves the session no credential at all", where, name))
+			continue
+		}
+		if !realCreds[name] {
+			out = append(out, fmt.Sprintf("%s.credentials: %q names no credential in browser.credentials — a typo silently caps this session to none", where, name))
+		}
+	}
+	return out
+}
+
 // siteWithin reports whether a login site is covered by a list of sites: an
 // exact entry, or a "*.domain" entry covering it (a host under the domain, or
 // a narrower "*.sub.domain" pattern).
@@ -780,6 +835,7 @@ func (c *Config) TeamWarnings() []string {
 			out = append(out, fmt.Sprintf("teams.%s: browser: scopes logins for conductor's agent browser; until it is on this daemon bot sessions use no saved login at all", name))
 		}
 		out = append(out, c.cardCrossRefNotes("teams."+name+".budget.purchases", t.Budget.Purchases)...)
+		out = append(out, c.browserNarrowingNotes("teams."+name+".browser", t.Browser)...)
 	}
 	return out
 }
