@@ -5,8 +5,10 @@
 // A secret reference is one of:
 //
 //	env:GH_PAT                       process environment / conductor.env (the baseline)
+//	${env.GH_PAT}                    the same, in the settings: spelling (read at use, not at load)
 //	{{ vault "<name>" "<key>" }}     a vaults: entry, via the VaultRead hook
 //	{{ .vaults.<name>.<key> }}       the field spelling of the same
+//	{{secret "<name>/<key>"}}        a named secret: the same entry, as the broker names it
 //
 // The retired scheme URIs (op://, pass:, vault:, file:) are still RECOGNIZED
 // by IsRef but resolve to an error pointing at the vaults migration — an
@@ -91,6 +93,9 @@ func IsRef(s string) bool {
 	if IsVaultRef(s) {
 		return true
 	}
+	if src, err := ParseSource(s); err == nil && (src.Kind == SourceEnv || src.Kind == SourceSecret) {
+		return true
+	}
 	switch {
 	case strings.HasPrefix(s, "env:"),
 		strings.HasPrefix(s, "op://"),
@@ -134,6 +139,14 @@ func (r *Resolver) Resolve(ctx context.Context, ref string) (string, error) {
 func (r *Resolver) resolve(ctx context.Context, ref string) (string, error) {
 	if name, key, ok := ParseVaultRef(ref); ok {
 		return r.resolveVaultRef(ctx, name, key)
+	}
+	if src, err := ParseSource(ref); err == nil {
+		switch src.Kind {
+		case SourceSecret:
+			return r.resolveVaultRef(ctx, src.Vault, src.Key)
+		case SourceEnv:
+			ref = "env:" + src.Env
+		}
 	}
 	switch {
 	case strings.HasPrefix(ref, "env:"):

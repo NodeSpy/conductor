@@ -1,0 +1,35 @@
+# The bots daemon (groups Z and L). No LLM: the fake paseo records each home
+# session's prompt, and the harness acts as a session with its token.
+#
+# Group Z: one bot whose memory repo is seeded, so its home session's first
+# prompt carries a memory index. The index budget is small on purpose, so a
+# handful of seeded documents already overflows it.
+#
+# Group L: a bot instantiated from a TEMPLATE a pack ships (community bots).
+# entrypoint-bots.sh copies this file somewhere writable, vendors the pack
+# (`conductor init`) and fills in the operator's key.
+runtimes:
+  paseo: { use: paseo, bin: /usr/local/bin/fakepaseo, default: true }
+  clibot: { use: cli, tool: claude-code }
+operators:
+  ops: { ssh_key: "@OPS_PUB@" }
+connectors:
+  state: { use: kv }
+  timer: { use: cron, schedules: { weekly: { cron: "0 9 * * 1" } } }
+packs:
+  kit: { use: ./packs/demo-kit }
+bots:
+  memo:
+    description: "e2e bot for memory reads"
+    seed_dir: /fixtures/bot-seed
+    worker: { runtime: clibot, timeout: 2m }
+    memory:
+      index_budget: 1k
+      read_max: 400
+  keeper:
+    use: kit/keeper
+    grant: { store.get: observe, store.contains: observe }
+    worker: { runtime: clibot, timeout: 2m }
+store:
+  state_file: /data/state.json
+  audit_log: /data/audit.jsonl

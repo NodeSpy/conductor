@@ -57,7 +57,36 @@ type SkillIdentity struct {
 	// Sem is the originating trigger's declared semantics (daemon-side, like
 	// Context): its target scope answers ContextScope.
 	Sem *sdk.EventSemantics
+	// Bot binds this grant to a bot (docs/design/bots.md): every verb
+	// it calls passes that bot's autonomy gate after the access and scope
+	// checks below. BotRole is home | worker; CaseID the case a worker was
+	// launched for. All three are minted daemon-side from config and the
+	// ledger, never asserted by the agent.
+	Bot     string `json:"bot,omitempty"`
+	BotRole string `json:"bot_role,omitempty"`
+	CaseID  string `json:"case_id,omitempty"`
 }
+
+// BotGate is the bots' autonomy gate (internal/bot). RunSkillVerb
+// consults it for every call whose grant is bound to a bot, AFTER the
+// profile and resource checks — it can only narrow what the grant admits,
+// never widen it. A nil gate with a bot-bound grant fails closed.
+type BotGate interface {
+	CheckVerb(ctx context.Context, id SkillIdentity, uses string, options map[string]any) (BotVerdict, error)
+}
+
+// BotVerdict is the gate's answer. Allow runs the verb; otherwise Output
+// (non-nil) is what the agent gets back instead of running it — a proposal
+// handle — and a non-nil error from CheckVerb is a refusal.
+type BotVerdict struct {
+	Allow  bool
+	Output map[string]any
+}
+
+// MatchVerbPattern is the skill-grant matcher (path globs, conductor.* exact
+// only), exported so the bot gate classifies verbs with the same rules
+// the grant admits them by.
+func MatchVerbPattern(patterns []string, uses string) bool { return matchAny(patterns, uses) }
 
 // OwnRepo is the repo this grant's dispatch may treat as its own — the same
 // core.OwnRepo rule every other representation of a dispatch uses. Read this
@@ -586,6 +615,19 @@ func skillVerbUniverse(reg *connector.Registry) []string {
 	return out
 }
 
+// applyBotIdentity fills a verb's identity-mapped options (option -> attribute)
+// from a bot's attributes. An attribute the bot doesn't have removes the
+// option, so a value the bot passed itself never survives.
+func applyBotIdentity(options map[string]any, mapping, attrs map[string]string) {
+	for opt, attr := range mapping {
+		if v := attrs[attr]; v != "" {
+			options[opt] = v
+		} else {
+			delete(options, opt)
+		}
+	}
+}
+
 // RunSkillVerb executes one verb on behalf of a token-authorized agent.
 func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string, options map[string]any) (map[string]any, error) {
 	t := core.Trigger{
@@ -670,6 +712,40 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	if err := r.checkSkillVerbResources(r.planPolicy(), t, uses, options, id.ScopesFor(uses)); err != nil {
 		return deny(r.redactErr(err))
 	}
+	// THE BOT GATE. A bot-bound grant has passed access and scope; the
+	// bot's autonomy tiers now decide whether this call runs, becomes a
+	// proposal for operator approval, or is refused. Same chokepoint, one
+	// more narrowing step — no second enforcement path.
+	if id.Bot != "" {
+		if r.Bots == nil {
+			return deny("bot-bound grant but no bot gate on this daemon")
+		}
+		v, err := r.Bots.CheckVerb(ctx, id, uses, options)
+		if err != nil {
+			return deny(r.redactErr(err))
+		}
+		if !v.Allow {
+			r.auditSkillVerb(t, id.Agent, uses, options, "proposed", nil)
+			return v.Output, nil
+		}
+	}
+	// A BOT SPEAKS AS ITSELF. A verb whose connector declares an `identity`
+	// semantic (option -> identity attribute: a chat post's display name or
+	// icon) gets those options filled from the bot's config, overwriting
+	// whatever the bot passed, so a bot never posts as anyone else. This runs
+	// after the gate, so an approved proposal re-entering here is filled
+	// with the same values, and its options digest is unaffected.
+	if id.Bot != "" {
+		if vd, ok := in.Decl.Verb(verb); ok && vd.Semantics != nil && len(vd.Semantics.Identity) > 0 {
+			var attrs map[string]string
+			if r.Cfg != nil {
+				if m, ok := r.Cfg.Bots[id.Bot]; ok {
+					attrs = m.Identity.Attributes(id.Bot)
+				}
+			}
+			applyBotIdentity(options, vd.Semantics.Identity, attrs)
+		}
+	}
 	// handoff.* / step.* act on the CALLER's own dispatch: inject the
 	// token-bound identity so `done` releases the agent this token was minted
 	// for, never one it names. The dispatch id is the authoritative handle (it
@@ -678,6 +754,11 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	// leading-underscore option is daemon-internal); we overwrite unconditionally.
 	if connName == "handoff" || connName == "step" {
 		options["__handoff_agent"] = id.Agent
+		options["__dispatch"] = id.Dispatch
+	}
+	// git.* pushes the CALLER's own workspace: the dispatch comes from the
+	// token, never from an option (an agent names no ref and no workspace).
+	if connName == "git" {
 		options["__dispatch"] = id.Dispatch
 	}
 	// Identity is a per-verb concern: a verb's own `as:` option (when it has

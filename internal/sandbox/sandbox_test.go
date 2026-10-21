@@ -44,7 +44,20 @@ func TestWrapLocalUser(t *testing.T) {
 	}
 }
 
+// withBackend pins the namespace backend WrapLocal renders for (CheckGOOS):
+// the wrapper is computed, never run, so each backend's shape is asserted on
+// every host. seatbelt_wrap_test.go holds the darwin counterparts.
+func withBackend(t *testing.T, goos string) {
+	t.Helper()
+	old := CheckGOOS
+	CheckGOOS = goos
+	t.Cleanup(func() { CheckGOOS = old })
+}
+
+// The Linux backend: user namespaces (+ a network namespace for deny, a
+// systemd-run scope for limits).
 func TestWrapLocalNamespace(t *testing.T) {
+	withBackend(t, "linux")
 	s := FromConfig(&config.IsolationConfig{Mode: "namespace"})
 	argv, err := s.WrapLocal([]string{"tool"}, "/wt", nil, nil)
 	if err != nil {
@@ -303,6 +316,7 @@ func TestEgressBareHostIsHTTPSOnly(t *testing.T) {
 // re-enters through the sandbox-net forwarder, whose unix socket is the only
 // path out.
 func TestWrapLocalEnforcedEgress(t *testing.T) {
+	withBackend(t, "linux") // the namespace half; the container half is OS-independent
 	nf := &NetForward{Self: "/usr/bin/conductor", UnixSocket: "/tmp/egress.sock"}
 
 	ns := FromConfig(&config.IsolationConfig{Mode: "namespace",

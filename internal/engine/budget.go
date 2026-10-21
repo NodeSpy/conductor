@@ -136,5 +136,5 @@ func (e *Engine) recordUsage(t core.Trigger, identity, runtimeName, stepID, runI
 		"runtime": runtimeName, "step": stepID,
 		"run": runID, "workflow": wfScope, "model": u.Model,
 		"input_tokens": u.InputTokens, "output_tokens": u.OutputTokens,
-		"tokens": u.TotalTokens, "cost_usd": u.CostUSD, "approximate": u.Approximate})
+		"tokens": u.TotalTokens, "turns": u.Turns, "cost_usd": u.CostUSD, "approximate": u.Approximate})
 }

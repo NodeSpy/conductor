@@ -150,7 +150,19 @@ type Config struct {
 	// Memory is the shared agent memory (`memory:` section): durable notes
 	// with provenance and scope, written by verbs/agents and injected into
 	// opted-in agent prompts. Nil = memory not configured (no default).
-	Memory    *MemoryConfig          `yaml:"memory"`
+	Memory *MemoryConfig `yaml:"memory"`
+	// Operators are the humans who may approve bot proposals, and Bots
+	// the persistent conversational agents (bots.go). Both optional.
+	Operators map[string]OperatorConfig `yaml:"operators"`
+	Bots      map[string]BotConfig      `yaml:"bots"`
+	// BotLinks are operator-side peer links: each pair of bots may
+	// message each other (`conductor bot ask`), as if both listed the
+	// other under peers:. No link, no messages.
+	BotLinks [][]string `yaml:"bot_links,omitempty"`
+	// Teams group bots (teams.go): shared ceilings, intra-team peering,
+	// an optional knowledge repo, routing. Optional; a bot names its
+	// team.
+	Teams     map[string]TeamConfig  `yaml:"teams,omitempty"`
 	Workflows map[string]WorkflowDef `yaml:"workflows"`
 	// Triggers is the `triggers:` section. It decodes from the list form or
 	// the named/qualified MAP form, where the key is the trigger's stable
@@ -166,6 +178,9 @@ type Config struct {
 	// (#36 §14). Model prices drift; the built-ins are coarse defaults and
 	// every estimated figure is marked approximate.
 	Pricing *PricingConfig `yaml:"pricing"`
+	// Usage is how usage is reported (usage.mode, default off) and where
+	// plan-window data comes from (usage.sources). Display only.
+	Usage *UsageConfig `yaml:"usage"`
 	// SecretRefs is the named `secrets:` block: name -> secret reference
 	// (env:/op://…), readable in templates as {{.secrets.<name>}}.
 	SecretRefs map[string]string `yaml:"secrets"`
@@ -176,6 +191,13 @@ type Config struct {
 	// and get a structured result back. Off unless configured. See
 	// CallableConfig and internal/callable.
 	Callable CallableConfig `yaml:"callable"`
+
+	// Sandbox is the agent sandbox (SandboxConfig): on by default.
+	Sandbox *SandboxConfig `yaml:"sandbox,omitempty"`
+
+	// Browser is conductor's browser for agents (BrowserConfig): off unless
+	// configured.
+	Browser *BrowserConfig `yaml:"browser,omitempty"`
 
 	Store  Store  `yaml:"store"`
 	Update Update `yaml:"update"`
@@ -248,6 +270,15 @@ type Config struct {
 	// one that merely DECLARES packs. Only the former can answer "which
 	// plugins does this config need?" completely — see PluginRefsComplete.
 	packsInstantiated bool `yaml:"-"`
+
+	// templates are the bot templates each top-level pack instance ships
+	// (by instance, then template name), loaded with the packs; templateNotes
+	// what applying them to bots found worth saying (BotTemplateNotes).
+	templates     map[string]map[string]LoadedTemplate `yaml:"-"`
+	templateNotes []string                             `yaml:"-"`
+	// removedWarnings name removed keys still in the config or its packs
+	// (removed.go).
+	removedWarnings []string `yaml:"-"`
 }
 
 // Update configures periodic self-update checks.
@@ -873,6 +904,7 @@ func Load(path string) (*Config, error) {
 		if err := strictUnmarshal(expanded, &c); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
+		c.removedWarnings = removedFolderWarnings(expanded)
 	} else {
 		// TWO PASSES over the same import traversal, so the settings a file
 		// declares reach every OTHER file's body and no traversal logic is
@@ -907,6 +939,7 @@ func Load(path string) (*Config, error) {
 		if err := strictUnmarshal(out, &c); err != nil {
 			return nil, fmt.Errorf("parse merged config: %w", err)
 		}
+		c.removedWarnings = removedFolderWarnings(out)
 	}
 	// A `${settings.X}` that survived into a real field names nothing declared
 	// — the typo, caught here rather than as a mystery value at dispatch.
@@ -929,9 +962,31 @@ func Load(path string) (*Config, error) {
 	if err := c.instantiatePacks(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
+	// Bots instantiated from a pack's templates take their charter, seed,
+	// collections and the verbs their operator granted — before collections,
+	// teams and bot validation see them, so a template bot is checked (and
+	// held to its team's ceilings) like any other.
+	if err := c.applyBotTemplates(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
 	// Trigger `extends:` resolves + abstract bases are stripped BEFORE
 	// normalization, so a child can inherit a base's `on:` and bases (which may
 	// carry no `on:`) never reach the on:-required / manual-name checks.
+	// Each bot expands into its two synthesized worker triggers (`on:
+	// manual`), here so they pass through normalization and validation like
+	// any trigger the operator wrote. No-op without `bots:`.
+	// Teams resolve first: each bot's team defaults are filled in (and a
+	// bot setting past its team's ceiling refused) before the bot's
+	// worker triggers copy its grant.
+	if err := c.resolveCollections(); err != nil {
+		return nil, err
+	}
+	if err := c.ResolveTeams(); err != nil {
+		return nil, err
+	}
+	if err := c.expandBots(); err != nil {
+		return nil, err
+	}
 	if err := c.resolveTriggerExtends(); err != nil {
 		return nil, err
 	}
@@ -1093,6 +1148,12 @@ var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // line-splitting implementation went out of its way to do and what a node
 // walk gets for free: comments are not scalar values.
 func expandEnv(path string, b []byte) ([]byte, error) {
+	// A secret field must name its source, read when the value is used —
+	// never take one substituted into the config here (see
+	// checkSecretSources).
+	if err := checkSecretSources(path, b); err != nil {
+		return nil, err
+	}
 	var missing []string
 	seen := map[string]bool{}
 	out, err := SubstituteRefs(b, envRe, func(ref string) (string, bool) {
@@ -1262,7 +1323,16 @@ func (c *Config) Validate() error {
 	if err := c.validateMemory(); err != nil {
 		return err
 	}
+	if err := c.validateSandbox(); err != nil {
+		return err
+	}
+	if err := c.validateBrowser(); err != nil {
+		return err
+	}
 	if err := c.validateSessions(); err != nil {
+		return err
+	}
+	if err := c.validateBots(); err != nil {
 		return err
 	}
 	if c.Policy != nil {
@@ -1272,6 +1342,9 @@ func (c *Config) Validate() error {
 		if err := validateBudget("policy", c.Policy.Budget); err != nil {
 			return err
 		}
+	}
+	if err := c.validateUsage(); err != nil {
+		return err
 	}
 	if err := c.validatePricing(); err != nil {
 		return err

@@ -120,7 +120,7 @@ func TestStartCLIProcTruncatesFloodingOutput(t *testing.T) {
 	}
 	// ~3 MiB of a single byte, well past the 1 MiB cap.
 	argv := []string{"sh", "-c", "head -c 3145728 /dev/zero | tr '\\0' a"}
-	proc, err := startCLIProc(context.Background(), "", nil, argv, "")
+	proc, err := startCLIProc(context.Background(), "", nil, argv, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

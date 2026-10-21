@@ -112,8 +112,12 @@ type Engine struct {
 	// owner maps a live agent id → the runner that dispatched it, so
 	// archive_when_done closes the session on the transport that opened it
 	// rather than always on paseo. See archiveAgent.
-	ownerMu     sync.Mutex
-	owner       map[string]Dispatcher
+	ownerMu sync.Mutex
+	owner   map[string]Dispatcher
+	// byDispatch maps a dispatch id → the non-paseo runner it went to, from
+	// before the runner starts: an agent's step.done names only its
+	// dispatch, and must resolve on the transport that launched it.
+	byDispatch  map[string]Dispatcher
 	controllers *controller.Registry // resolves which controller runs each agent
 	broker      *controller.Broker   // owns one live session per PR (interactive hand-off); nil = disabled
 	notif       Notifier
@@ -284,9 +288,11 @@ func New(o Options) *Engine {
 	}
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
-		owner:  map[string]Dispatcher{},
-		broker: o.Broker,
-		author: o.Author, log: log,
+		owner: map[string]Dispatcher{},
+
+		byDispatch: map[string]Dispatcher{},
+		broker:     o.Broker,
+		author:     o.Author, log: log,
 		hold:        o.Hold,
 		affinity:    o.Affinity,
 		pausePath:   o.PausePath,
@@ -508,6 +514,7 @@ func (e *Engine) capabilityCard(sk *config.SkillPolicy) string {
 // including for session: profiles on runtimes without session persistence
 // (one-shot/cli), which stay fresh-per-event and lean on shared memory.
 func (e *Engine) dispatchAgent(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
+	e.rememberDispatch(req.DispatchID, runner)
 	// A detach launch is always a fresh, unbound agent: it never joins a
 	// runtime's session pool (that would deliver its prompt to a live
 	// conductor-held session, or bind the new agent to one).
@@ -568,6 +575,37 @@ func (e *Engine) rememberDispatcher(agentID string, runner Dispatcher) {
 		}
 	}
 	e.owner[agentID] = runner
+}
+
+// rememberDispatch records the non-paseo runner a dispatch went to (bounded
+// like the owner table; an evicted entry falls back to the paseo
+// dispatcher, the old behaviour).
+func (e *Engine) rememberDispatch(dispatchID string, runner Dispatcher) {
+	if dispatchID == "" || runner == nil || runner == e.disp {
+		return
+	}
+	e.ownerMu.Lock()
+	defer e.ownerMu.Unlock()
+	if len(e.byDispatch) >= maxTrackedOwners {
+		for k := range e.byDispatch {
+			delete(e.byDispatch, k)
+			if len(e.byDispatch) < maxTrackedOwners {
+				break
+			}
+		}
+	}
+	e.byDispatch[dispatchID] = runner
+}
+
+// dispatcherFor is the runner a dispatch went to (the paseo dispatcher when
+// it is not a recorded non-paseo one).
+func (e *Engine) dispatcherFor(dispatchID string) Dispatcher {
+	e.ownerMu.Lock()
+	defer e.ownerMu.Unlock()
+	if r := e.byDispatch[dispatchID]; r != nil {
+		return r
+	}
+	return e.disp
 }
 
 // maxTrackedOwners caps the agent→runner table. Far above any plausible count

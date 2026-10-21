@@ -45,6 +45,15 @@ type acpController struct {
 	cwds map[string]string
 }
 
+// tool is the agent CLI this runtime launches (its command), for the agent
+// sandbox's tool state and model endpoints.
+func (c *acpController) tool() string {
+	if len(c.command) > 0 {
+		return c.command[0]
+	}
+	return c.name
+}
+
 func (c *acpController) rememberCwd(id, cwd string) {
 	if id == "" || cwd == "" {
 		return
@@ -110,7 +119,7 @@ func (c *acpController) Model() SessionModel {
 // and CheckoutPR is always true (conductor supplies the worktree as the session
 // cwd). The connection is closed before returning; NewSession opens its own.
 func (c *acpController) Initialize(ctx context.Context) (Capabilities, error) {
-	client, cleanup, err := c.connect(ctx, "", nil, acp.DelegateFuncs{}, "", resumeOpts(c.iso, false))
+	client, cleanup, err := c.connect(ctx, "", nil, acp.DelegateFuncs{}, "", withAgent(resumeOpts(c.iso, false), c.tool(), nil, false))
 	if err != nil {
 		return Capabilities{SessionModel: c.Model(), Transport: TransportACP, CheckoutPR: true}, err
 	}
@@ -166,7 +175,12 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	// its own context, cancelled only by Close — not by the request ctx returning.
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Step.Host, launchOptsFor(c.iso, spec.Request))
+	req := spec.Request
+	opt := withAgent(launchOptsFor(c.iso, req), c.tool(), &req, false)
+	if sandboxApplies(resolveHost(c.host, spec.Request.Step.Host), opt) {
+		prompt += sandboxNote(req)
+	}
+	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Step.Host, opt)
 	if err != nil {
 		scancel()
 		return nil, err
@@ -232,7 +246,15 @@ func (c *acpController) memoryServers(spec Spec) []acp.McpServer {
 func (c *acpController) ResumeSession(ctx context.Context, id string, agentAuthored bool, h Handler) (Session, error) {
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, "", nil, del, "", resumeOpts(c.iso, agentAuthored))
+	opt := withAgent(resumeOpts(c.iso, agentAuthored), c.tool(), nil, false)
+	cwd := ""
+	if sandboxApplies("", opt) {
+		// A sandboxed agent restarts where its session worked: the
+		// workspace is what it is shown, and its identity's tool state
+		// (where the session is) is keyed by the workspace's registration.
+		cwd = c.cwdFor(id)
+	}
+	client, cleanup, err := c.connect(sctx, cwd, nil, del, "", opt)
 	if err != nil {
 		scancel()
 		return nil, err
@@ -306,7 +328,7 @@ func spawnACP(_ context.Context, command []string, cwd string, env []string, del
 	if scrubEnv {
 		base = sandbox.MinimalEnv()
 	}
-	cmd.Env = append(base, localEnv...)
+	cmd.Env = launchEnv(host, opt, base, localEnv)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		revoke()

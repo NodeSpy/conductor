@@ -68,6 +68,11 @@ hand-off stays runtime-native — the notification tells you to open the live
 agent (paseo's interactive surface). The agent is protected from reclaim either
 way.
 
+With the agent sandbox on (the default), the agent you drive is sandboxed —
+its paseo title ends `[sandboxed]`. `isolation: { mode: none }` on the step or
+its workflow, in your own config, runs it unsandboxed, as you
+([[Isolation#hand-offs-and-opting-a-workflow-out]]).
+
 ## Reactive watch (`watch:`)
 
 A hand-off is held open until a human closes it — but the world can make it

@@ -100,6 +100,18 @@ func (c *Config) warnSharedAnchorIDs() {
 
 func (c *Config) validateSteps() error {
 	c.warnSharedAnchorIDs()
+	// A trigger's / workflow's isolation: is its agent steps' default.
+	for i, tr := range c.Triggers {
+		if err := c.validateScopeIsolation(ScopeForTrigger(tr, i).String(), tr.Isolation, tr.Steps); err != nil {
+			return err
+		}
+	}
+	for _, name := range sortedNames(c.Workflows) {
+		wf := c.Workflows[name]
+		if err := c.validateScopeIsolation("workflow "+name, wf.Isolation, wf.Steps); err != nil {
+			return err
+		}
+	}
 	var firstErr error
 	fail := func(err error) {
 		if firstErr == nil {

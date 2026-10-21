@@ -416,7 +416,9 @@ type HostConfig struct {
 // profile → runtime). It only applies to launches conductor performs itself
 // (acp / cli / opencode / agent-deck runtimes, host scripts) — a paseo
 // runtime's agents are children of the paseo daemon, which conductor cannot
-// wrap (validate rejects the combination).
+// wrap (validate rejects the combination). The one exception is `{mode:
+// none}`: on a paseo step or runtime it launches through paseo's plain
+// provider instead of the conductor-owned sandboxed entry.
 type IsolationConfig struct {
 	// Mode selects the wrapper: user | namespace | container.
 	Mode string `yaml:"mode"`
@@ -503,6 +505,15 @@ type WorkflowDef struct {
 	// Gate is the default quality gate (#36 §16) for this workflow's agent
 	// steps (a step's own gate wins).
 	Gate *GateSpec `yaml:"gate,omitempty"`
+	// Isolation is the default isolation: for this workflow's agent steps (a
+	// step's own wins) — `{mode: none}` is the operator's explicit opt-out of
+	// the agent sandbox for the whole workflow. A pack cannot set it to
+	// loosen its own sandbox (see checkPackSandboxLoosening).
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// Folder is removed (removed.go): accepted, ignored, warned about.
+	Folder RemovedField `yaml:"folder,omitempty"`
+	// PackInstance is the pack instance a workflow came from (display).
+	PackInstance string `yaml:"-"`
 }
 
 // InputSpec declares one workflow input.
@@ -693,9 +704,20 @@ type TriggerSpec struct {
 	Repo string `yaml:"repo,omitempty"`
 	// Shadow previews this trigger's work without dispatching.
 	Shadow *bool `yaml:"shadow,omitempty"`
+	// Folder is removed (removed.go): accepted, ignored, warned about.
+	Folder RemovedField `yaml:"folder,omitempty"`
+	// PackInstance / Bot: where a trigger came from — a pack instance, or a
+	// bot's synthesized workers (display).
+	PackInstance string `yaml:"-"`
+	Bot          string `yaml:"-"`
 	// Gate is the default quality gate (#36 §16) for every agent step of
 	// this trigger that doesn't carry its own.
 	Gate *GateSpec `yaml:"gate,omitempty"`
+	// Isolation is the default isolation: for every agent step of this
+	// trigger (and the workflows it calls) that doesn't carry its own —
+	// `{mode: none}` is the operator's explicit opt-out of the agent sandbox
+	// for the whole workflow, a hand-off's included.
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
 	// Callable opts a manual trigger into the inbound invoke surface (#36 §13):
 	// `callable: true` makes it reachable via `POST /invoke/<name>`. Unset/false
 	// (the default) means an external caller can never fire it — the entry point
@@ -963,6 +985,13 @@ type Step struct {
 	// detach is a capability the operator grants, never one an agent can take
 	// for itself. Needs a paseo runtime.
 	Detach bool `yaml:"detach,omitempty"`
+	// BoundBot / BoundBotRole mark a step SYNTHESIZED for a bot's workers
+	// (bots.go expandBots): the session token minted for it carries the
+	// bot binding, which is what puts every verb it calls through that
+	// bot's autonomy gate. Never decoded from YAML — an operator cannot
+	// write it and an agent-authored plan cannot claim it.
+	BoundBot     string `yaml:"-"`
+	BoundBotRole string `yaml:"-"`
 
 	// command form (also carries workdir/env for agent/code forms), and the
 	// argv the `cli` engine runs. A list of words, or one string (see Argv).
@@ -1035,6 +1064,9 @@ type Step struct {
 	// the principled form of a bare `sleep:` before a state-dependent step —
 	// see WaitSpec. `until:` is its condition clause, not a standalone form.
 	WaitFor *WaitSpec `yaml:"wait_for,omitempty"`
+	// Bot is the `bot:` helper — route this event into a bot
+	// (bots.go), or rotate / consolidate one. See BotStep.
+	Bot *BotStep `yaml:"bot,omitempty"`
 
 	// Watch makes an interactive hand-off REACTIVE: while it waits for a human,
 	// conductor polls a read verb and, when a rule's condition holds, runs a
@@ -1829,7 +1861,10 @@ func (c *Config) validateConnectors() error {
 		}
 		if rt.Isolation != nil {
 			if rt.BuiltinType() == "paseo" {
-				return fmt.Errorf("config: runtime %q: isolation cannot apply to a paseo runtime (its agents are the paseo daemon's children) — use an acp/cli/opencode/agent-deck runtime, or paseo's own sandboxing", name)
+				if err := validatePaseoIsolation(fmt.Sprintf("runtime %q", name), rt.Isolation); err != nil {
+					return err
+				}
+				continue
 			}
 			if err := validateIsolation("runtime "+name, rt.Isolation, rt.Host != ""); err != nil {
 				return err
@@ -2112,8 +2147,10 @@ func validateDetach(w string, s Step) error {
 		{"gate:", s.Gate != nil},
 		// Everything below would be silently ignored by a detach launch
 		// (no isolation shim, no env, a fresh branch-off worktree of its
-		// own, no guidance/memory appended), so it is refused instead.
-		{"isolation:", s.Isolation != nil},
+		// own, no guidance/memory appended), so it is refused instead —
+		// except `isolation: {mode: none}`, the operator's opt-out of the
+		// agent sandbox, which the launch does honor (the plain provider).
+		{"isolation: other than {mode: none} (the only isolation a detached launch takes: the sandbox opt-out)", s.Isolation != nil && !s.Isolation.OptsOut()},
 		{"env:", len(s.Env) > 0},
 		{"workdir:", s.WorkDir != ""},
 		{"checkout:", s.Checkout != ""},

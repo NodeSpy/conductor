@@ -2,12 +2,14 @@ package flow
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // The flow side of spend budgets (#36 §14). The workflow-scope budget is the
@@ -64,19 +66,56 @@ type costAccKey struct{}
 type costAcc struct {
 	mu          sync.Mutex
 	tokens      int
+	turns       int
 	usd         float64
 	approximate bool // any contributing figure was estimated
+	byModel     map[[2]string]*store.ModelUsage
 }
 
-func (a *costAcc) add(u cost.Usage) {
+func (a *costAcc) add(runtime string, u cost.Usage) {
 	if a == nil {
 		return
 	}
 	a.mu.Lock()
 	a.tokens += u.TotalTokens
+	a.turns += u.Turns
 	a.usd += u.CostUSD
 	a.approximate = a.approximate || u.Approximate
+	k := [2]string{runtime, u.Model}
+	if a.byModel == nil {
+		a.byModel = map[[2]string]*store.ModelUsage{}
+	}
+	m := a.byModel[k]
+	if m == nil {
+		m = &store.ModelUsage{Runtime: runtime, Model: u.Model}
+		a.byModel[k] = m
+	}
+	m.Runs++
+	m.Turns += u.Turns
+	m.Tokens += u.TotalTokens
+	m.CostUSD += u.CostUSD
+	m.Approximate = m.Approximate || u.Approximate
 	a.mu.Unlock()
+}
+
+// usage is the run's spend per runtime and model, sorted.
+func (a *costAcc) usage() []store.ModelUsage {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]store.ModelUsage, 0, len(a.byModel))
+	for _, m := range a.byModel {
+		out = append(out, *m)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Runtime != out[j].Runtime {
+			return out[i].Runtime < out[j].Runtime
+		}
+		return out[i].Model < out[j].Model
+	})
+	return out
 }
 
 // totals snapshots the tally.
@@ -87,6 +126,16 @@ func (a *costAcc) totals() (tokens int, usd float64, approximate bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.tokens, a.usd, a.approximate
+}
+
+// turnsTotal is the run's model turns so far.
+func (a *costAcc) turnsTotal() int {
+	if a == nil {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.turns
 }
 
 // withCostAcc attaches a fresh accumulator to the run's context.
@@ -124,8 +173,8 @@ func (r *Runner) checkBudget(ctx context.Context, runtimeName string, est cost.U
 // record always accumulate; the engine's meter/audit service runs when wired,
 // settling the dispatch's reservation.
 func (r *Runner) recordUsage(ctx context.Context, t core.Trigger, identity, runtimeName, stepID string, res *cost.Reservation, u cost.Usage) {
-	costAccFrom(ctx).add(u)
-	historySetCost(ctx, stepID, u)
+	costAccFrom(ctx).add(runtimeName, u)
+	historySetCost(ctx, stepID, runtimeName, u)
 	if r.Agents.RecordUsage == nil {
 		return
 	}
@@ -144,13 +193,13 @@ func (r *Runner) recordUsage(ctx context.Context, t core.Trigger, identity, runt
 // double-charge the same estimate.
 func (r *Runner) recordBackgroundEstimate(ctx context.Context, t core.Trigger, identity, runtimeName, stepID string, est cost.Usage) {
 	est.Approximate = true
-	costAccFrom(ctx).add(est)
-	historySetCost(ctx, stepID, est)
+	costAccFrom(ctx).add(runtimeName, est)
+	historySetCost(ctx, stepID, runtimeName, est)
 	_, scope := budgetFrom(ctx)
 	r.audit(map[string]any{"event": "agent_usage", "repo": t.Target.Repo,
 		"number": t.Target.Number, "kind": t.Kind, "agent": identity, "runtime": runtimeName, "step": stepID,
 		"run": memory.SourceFrom(ctx).Run, "workflow": scope, "model": est.Model,
 		"input_tokens": est.InputTokens, "output_tokens": est.OutputTokens,
-		"tokens": est.TotalTokens, "cost_usd": est.CostUSD, "approximate": true,
+		"tokens": est.TotalTokens, "turns": est.Turns, "cost_usd": est.CostUSD, "approximate": true,
 		"background": true})
 }

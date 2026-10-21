@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/NodeSpy/conductor/internal/cost"
 	"strings"
 	"testing"
 	"time"
@@ -38,12 +39,12 @@ func TestTallyAudit(t *testing.T) {
 
 func TestTallySpend(t *testing.T) {
 	lines := strings.Join([]string{
-		`{"ts":"2026-09-05T10:00:00Z","event":"agent_usage","repo":"o/r","kind":"review","workflow":"gh.pr/nightly","tokens":1000,"cost_usd":0.5,"approximate":false}`,
-		`{"ts":"2026-09-05T11:00:00Z","event":"agent_usage","repo":"o/r","kind":"fix","tokens":500,"cost_usd":0.25,"approximate":true}`,
-		`{"ts":"2026-09-06T09:00:00Z","event":"agent_usage","repo":"o/x","kind":"fix","tokens":200,"cost_usd":0.1}`,
+		`{"ts":"2026-09-05T10:00:00Z","event":"agent_usage","repo":"o/r","kind":"review","workflow":"gh.pr/nightly","runtime":"claude-cli","model":"claude-x","tokens":1000,"turns":4,"cost_usd":0.5,"approximate":false}`,
+		`{"ts":"2026-09-05T11:00:00Z","event":"agent_usage","repo":"o/r","kind":"fix","runtime":"codex-cli","model":"gpt-y","tokens":500,"turns":2,"cost_usd":0.25,"approximate":true}`,
+		`{"ts":"2026-09-06T09:00:00Z","event":"agent_usage","repo":"o/x","kind":"fix","runtime":"claude-cli","model":"claude-x","tokens":200,"turns":1,"cost_usd":0.1}`,
 		`{"ts":"2026-09-05T12:00:00Z","event":"budget_shed","scope":"global","reason":"$5 of $5"}`,
 		`{"ts":"2020-01-01T00:00:00Z","event":"agent_usage","repo":"old/old","tokens":9999,"cost_usd":99}`, // before cutoff
-		`{"event":"dispatch","kind":"review","outcome":"ok"}`,                                              // not a usage row
+		`{"event":"dispatch","kind":"review","outcome":"ok"}`, // not a usage row
 		`not json`,
 	}, "\n")
 	cutoff := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
@@ -51,24 +52,52 @@ func TestTallySpend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Runs != 3 || s.Tokens != 1700 || s.USD != 0.85 {
-		t.Fatalf("totals: %+v", s)
+	if s.Runs != 3 || s.Sheds != 1 {
+		t.Fatalf("runs/sheds: %+v", s)
 	}
-	if s.ApproxRuns != 1 || s.Sheds != 1 {
-		t.Fatalf("approx/sheds: %+v", s)
+	// Per runtime / model, never summed across providers.
+	if len(s.ByModel) != 2 {
+		t.Fatalf("by model: %+v", s.ByModel)
 	}
-	if c := s.ByRepo["o/r"]; c == nil || c.Tokens != 1500 || c.Runs != 2 {
-		t.Fatalf("by repo: %+v", s.ByRepo["o/r"])
+	if c := s.ByModel["claude-cli / claude-x"]; c == nil || c.Tokens != 1200 || c.Turns != 5 || c.Runs != 2 || c.ApproxRuns != 0 {
+		t.Fatalf("claude: %+v", c)
+	}
+	if c := s.ByModel["codex-cli / gpt-y"]; c == nil || c.Tokens != 500 || c.Turns != 2 || c.ApproxRuns != 1 {
+		t.Fatalf("codex: %+v", c)
+	}
+	if c := s.ByRepo["o/r  [claude-cli / claude-x]"]; c == nil || c.Tokens != 1000 || c.Runs != 1 {
+		t.Fatalf("by repo is not split by model: %+v", s.ByRepo)
 	}
 	// A workflow scope groups under its name; kind is the fallback.
-	if c := s.ByKind["gh.pr/nightly"]; c == nil || c.Tokens != 1000 {
+	if c := s.ByKind["gh.pr/nightly  [claude-cli / claude-x]"]; c == nil || c.Tokens != 1000 {
 		t.Fatalf("by workflow: %+v", s.ByKind)
 	}
-	if c := s.ByKind["fix"]; c == nil || c.Runs != 2 {
+	if c := s.ByKind["fix  [codex-cli / gpt-y]"]; c == nil || c.Runs != 1 {
 		t.Fatalf("by kind fallback: %+v", s.ByKind)
 	}
-	if c := s.ByDay["2026-09-05"]; c == nil || c.Runs != 2 {
+	if c := s.ByDay["2026-09-05  [claude-cli / claude-x]"]; c == nil || c.Runs != 1 {
 		t.Fatalf("by day: %+v", s.ByDay)
+	}
+
+	// The printed section follows usage.mode.
+	defer cost.SetDisplayMode("")
+	out := func(mode string) string {
+		cost.SetDisplayMode(mode)
+		o, _ := captureStdout(t, func() error { printSpend(s); return nil })
+		return o
+	}
+	if o := out(""); strings.Contains(o, "tok") || strings.Contains(o, "$") || !strings.Contains(o, "budget sheds: 1") {
+		t.Fatalf("off (the default) shows usage:\n%s", o)
+	}
+	o := out("subscription")
+	if !strings.Contains(o, "observed by conductor") || !strings.Contains(o, "claude-cli / claude-x") || !strings.Contains(o, "codex-cli / gpt-y") || strings.Contains(o, "$") {
+		t.Fatalf("subscription:\n%s", o)
+	}
+	if strings.Contains(o, "1.7k") || strings.Contains(o, "1700") {
+		t.Fatalf("subscription summed providers:\n%s", o)
+	}
+	if o := out("api"); !strings.Contains(o, "$    0.60") || !strings.Contains(o, "$    0.25") {
+		t.Fatalf("api shows no per-model dollars:\n%s", o)
 	}
 }
 

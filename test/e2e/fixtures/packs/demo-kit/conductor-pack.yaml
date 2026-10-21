@@ -1,0 +1,24 @@
+# e2e (group L): a bot template a pack ships — the community-bot path.
+pack:
+  name: demo-kit
+  version: 1.0.0
+  description: a demo bot template for the e2e suite
+  tags: [demo, state]
+  requires: { conductor: ">=0.1.0" }
+bots:
+  keeper:
+    description: Keeps an eye on the shared state store
+    charter_file: charter.md
+    seed: seed
+    connectors:
+      store: { use: kv, desc: "the store it reads" }
+      schedule: { use: cron, required: false }
+    verbs:
+      store.get: observe
+      store.contains: observe
+      store.set: { max: reversible, why: "fix a stale value" }
+      store.delete: propose
+    triggers:
+      - { name: weekly, on: schedule.weekly, action: consolidate, desc: "weekly memory consolidation" }
+    model: claude-opus-5
+    runtime: "a use: cli runtime"
