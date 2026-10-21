@@ -215,6 +215,8 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .repo-ed > .ed-bar > .ed-foot { border-top: 0; }
 .ke { --ed-max: min(560px, var(--ed-cap, 420px)); }
 .rp-back { display: none; } .rp-back svg { transform: rotate(180deg); }
+.rp-resume { display: none; } /* a phone's list: the way back to the entry being written */
+@media (max-width: 720px) { .repo-grid.fit .rp-resume { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 0 14px; border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-card); background: var(--color-bg-surface); font: inherit; font-weight: var(--font-weight-semibold); color: var(--color-text-primary); text-align: left; cursor: pointer; } .rp-resume svg { width: 16px; height: 16px; flex: none; color: var(--color-icon-default); } }
 /* Its head: the title with New… beside it, the repo a quiet line under both */
 .repo-side > .panel-head.rp-side-head { flex-wrap: wrap; align-items: center; row-gap: 2px; }
 .rp-side-head > h3 { flex: 1 1 0; min-width: 0; }

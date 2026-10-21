@@ -211,9 +211,10 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Open
 
-- Nothing waits on the brand designer: the status marks (Ready, In progress), the fact types, the mascots and the
+- Only the focus ring (below) waits on the brand designer. The status marks (Ready, In progress), the fact types, the mascots and the
   icons are vendored from origin/design/brand (re-copy them, never edit them: `js/icons.js` GLYPHS, `js/mascots.js`,
-  `js/brandglyphs.js`, `css/tokens.css`).
+  `js/brandglyphs.js`, `css/tokens.css`). The markdown toolbar's bold, italic and list icons were added to `js/icons.js`
+  from lucide-static 1.59.0, as the other Lucide icons there were.
 - Ledger items 1, 14 and 18 wait on the owner (each reported with a link).
 - The brand sets `--input-border-focus` to the ember accent; the prototype overrides it to a neutral ring (ember is for
   primary actions). Waits on the brand designer to adopt or reject.

@@ -21,11 +21,15 @@ test('New bot, Asks before anything else, telling you in Slack: the preset and t
 // r5-12: the regressions.
 test('memory: what you typed survives a search in its memory', async ({ page }) => {
   await go(page, '#/bots/platform-sre/memory', { fresh: true });
+  const phone = page.viewportSize().width <= 720, list = async () => { if (phone) await page.locator('[data-act="rp-list"]').click(); }; // a phone shows the list or the entry
+  await list();
   await page.locator('[data-act="rp-new"]').first().click();
   await page.locator('.modal [data-act="rp-new-pick"][data-k="knowledge"]').click();
   await page.fill('#ke-title', 'Cache TTLs are per route');
+  await list();
   await page.locator('.rp-find .fb-in').click(); await page.keyboard.type('runbook', { delay: 30 }); // as a person types
   await expect(page.locator('.rp-find .fb-in')).toHaveValue('runbook'); // every letter lands in the search
+  if (phone) { await expect(page.locator('.rp-resume')).toContainText('Back to the new knowledge entry'); await page.locator('.rp-resume').click(); } // the list leads back to the draft
   await expect(page.locator('#ke-title')).toHaveValue('Cache TTLs are per route'); // and the entry keeps what you typed
 });
 
