@@ -68,6 +68,9 @@ type TeamConfig struct {
 	Routing *TeamRouting `yaml:"routing,omitempty"`
 	// Chat bounds the team conversation (`conductor team say`).
 	Chat TeamChat `yaml:"chat,omitempty"`
+	// Tickets: the team's default priority, and whether its bots may mark
+	// their own tickets ready (tickets.go).
+	Tickets TicketSettings `yaml:"tickets,omitempty"`
 	// Avatar is the team's face: { icon, color } or { image: <file> }
 	// beside the config (botidentity.go) — never a preset, which are bots'
 	// mascots. None: clients show the team's initials.
@@ -409,6 +412,9 @@ func checkTeamCeilings(team string, t TeamConfig, m BotConfig) error {
 	if t.Autonomy.Ceiling == TierObserve && len(a.Promote) > 0 {
 		return fmt.Errorf("autonomy.promote [%s] promotes to %s, above team %s's autonomy.ceiling %s", strings.Join(a.Promote, ", "), TierReversible, team, TierObserve)
 	}
+	if t.Tickets.MarkOwnReady != nil && !*t.Tickets.MarkOwnReady && m.Tickets.MarkOwnReady != nil && *m.Tickets.MarkOwnReady {
+		return fmt.Errorf("tickets.mark_own_ready true widens team %s's tickets.mark_own_ready false", team)
+	}
 	if t.Autonomy.Shadow != nil && *t.Autonomy.Shadow && a.Shadow != nil && !*a.Shadow {
 		return fmt.Errorf("autonomy.shadow false widens team %s's autonomy.shadow true", team)
 	}
@@ -610,6 +616,9 @@ func (c *Config) validateBotTeam(name string, t TeamConfig) error {
 	}
 	if t.Chat.EveryonePerHour < 0 || t.Chat.EveryonePerHour > MaxEveryonePerHour {
 		return fmt.Errorf("chat.everyone_per_hour: want 1 to %d, got %d", MaxEveryonePerHour, t.Chat.EveryonePerHour)
+	}
+	if err := t.Tickets.validate(true); err != nil {
+		return err
 	}
 	if t.Chat.MaxReply < 0 || t.Chat.MaxReply > MaxChatReply {
 		return fmt.Errorf("chat.max_reply: want 1 to %d bytes, got %d", MaxChatReply, t.Chat.MaxReply)

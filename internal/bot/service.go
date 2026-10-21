@@ -82,6 +82,9 @@ type Event struct {
 	// Attachments are files the event carried (an operator's): checked
 	// against the bot's caps before the case opens, and refused with it.
 	Attachments []AttachmentIn
+	// ticket, when set, is the ready ticket this delivery picks up: the case
+	// is that ticket, carried into the bot's ledger.
+	ticket *store.Case
 	// files fetches a connector event's files (flow.BotRoute.Files) once
 	// the receiving bot is known. A chat user's files that can't be taken
 	// don't refuse their message: it arrives with a note saying why.
@@ -98,8 +101,12 @@ type Service struct {
 	Workers WorkerLauncher
 	// Blobs stores attachments (nil: messages can't carry files).
 	Blobs *blob.Store
+	// Spend is the purchase ledger a ticket's spend limit is read against
+	// (the browser's payments; nil: nothing known spent).
+	Spend SpendLedger
 
-	chat chatHub
+	chat      chatHub
+	ticketHub ticketHub
 	// SessionRoot is where per-session worktrees live (each live agent its
 	// own cwd). Default ~/.conductor/runs, which conductor's paseo project
 	// prune already covers.
@@ -775,8 +782,14 @@ func (s *Service) deliverCase(ctx context.Context, ev Event, who, class string, 
 		if r.Cases == nil {
 			r.Cases = map[string]*store.Case{}
 		}
-		cc := &store.Case{ID: id, Title: title, Status: "open", Urgent: ev.Urgent, Source: src,
+		cc := &store.Case{ID: id, Title: title, Status: store.TicketInProgress, Urgent: ev.Urgent, Source: src,
 			Requester: who, RequesterClass: class, Created: now, Updated: now}
+		if t := ev.ticket; t != nil {
+			carryTicket(cc, t, ev.Bot, now)
+		} else {
+			// An event's ticket: created ready, picked up at once.
+			addHistory(cc, now, src, "created ready and picked up by bot:"+ev.Bot)
+		}
 		if rt != nil {
 			cp := *rt
 			cp.AssigneeCase = id
@@ -811,7 +824,17 @@ func (s *Service) deliverCase(ctx context.Context, ev Event, who, class string, 
 	if rt != nil {
 		note = strings.TrimSpace(RoutingNote(c) + "\n" + pre + "\n" + note)
 	}
-	s.enqueueMsg(ev.Bot, store.InboxMsg{ID: msgID, CaseID: c.ID, Text: EventMessage(c, ev.Text, note), Attachments: attachmentIDs(atts)})
+	if fresh := s.Ledger.Bot(ev.Bot).Cases[c.ID]; fresh != nil {
+		c = *fresh // with its ticket id, minted when it was stored
+	}
+	text := EventMessage(c, ev.Text, note)
+	if ev.ticket != nil && ev.Source == "ticket" {
+		if c.Description == "" && ev.Text != "" {
+			c.Description = ev.Text
+		}
+		text = TicketMessage(c, "assigned to you") + strings.TrimRight("\n"+note, "\n")
+	}
+	s.enqueueMsg(ev.Bot, store.InboxMsg{ID: msgID, CaseID: c.ID, Text: text, Attachments: attachmentIDs(atts)})
 	return c.ID, nil
 }
 
@@ -908,15 +931,16 @@ func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.W
 			if r.Cases == nil {
 				r.Cases = map[string]*store.Case{}
 			}
-			r.Cases[caseID] = &store.Case{ID: caseID, Title: title, Status: "open", Source: "bot",
+			r.Cases[caseID] = &store.Case{ID: caseID, Title: title, Status: store.TicketInProgress, Source: "bot",
 				Requester: pWho, RequesterClass: pClass, Created: now, Updated: now}
 		}
 		cc := r.Cases[caseID]
 		if cc == nil {
 			return fmt.Errorf("no case %s", caseID)
 		}
-		if cc.Status != "open" {
-			return fmt.Errorf("case %s is closed", caseID)
+		// THE DISPATCH GATE: no worker starts on a ticket that isn't ready.
+		if err := dispatchable(cc); err != nil {
+			return err
 		}
 		for _, id := range req.Attachments {
 			if a := liveAttachments(*r, []string{id}); len(a) == 0 || !a[0].Removed.IsZero() {
@@ -1408,7 +1432,7 @@ func (s *Service) CaseOpen(c Actor, title, summary string) (store.Case, error) {
 		if r.Cases == nil {
 			r.Cases = map[string]*store.Case{}
 		}
-		cc := &store.Case{ID: id, Title: oneLine(title, 200), Summary: summary, Status: "open", Source: "bot",
+		cc := &store.Case{ID: id, Title: oneLine(title, 200), Summary: summary, Status: store.TicketInProgress, Source: "bot",
 			RequesterClass: ReqBot, Created: now, Updated: now}
 		r.Cases[id] = cc
 		out = *cc
@@ -1442,7 +1466,7 @@ func (s *Service) CaseClose(ctx context.Context, c Actor, caseID, outcome string
 	if c.Role != config.BotRoleHome {
 		return errors.New("only the home session closes cases")
 	}
-	cs, err := s.closeCase(ctx, c.Bot, caseID, outcome)
+	cs, err := s.closeCase(ctx, c.Bot, caseID, outcome, store.TicketDone, "bot:"+c.Bot)
 	if cs.ID != "" { // closed, even if its episode could not be written
 		s.reportDelegation(c.Bot, cs, DelegationDone, outcome)
 	}
@@ -1450,14 +1474,21 @@ func (s *Service) CaseClose(ctx context.Context, c Actor, caseID, outcome string
 }
 
 // closeCase closes a case and writes its outcome to the episodic log.
-func (s *Service) closeCase(ctx context.Context, bot, caseID, outcome string) (store.Case, error) {
+func (s *Service) closeCase(ctx context.Context, bot, caseID, outcome, status, by string) (store.Case, error) {
 	var cs store.Case
 	err := s.Ledger.UpdateBot(bot, func(r *store.BotRecord) error {
 		cc := r.Cases[caseID]
 		if cc == nil {
 			return fmt.Errorf("no case %q", caseID)
 		}
-		cc.Status, cc.Outcome, cc.Updated = "closed", outcome, s.now()
+		if store.Closed(cc.Status) {
+			// Once: a second close would report a delegation twice.
+			return fmt.Errorf("case %s (ticket %s) is already %s", caseID, cc.Ticket, cc.Status)
+		}
+		if cc.Status != status {
+			addHistory(cc, s.now(), by, cc.Status+" → "+status+": "+oneLine(outcome, 300))
+		}
+		cc.Status, cc.Outcome, cc.Updated = status, outcome, s.now()
 		cs = *cc
 		return nil
 	})
@@ -1475,13 +1506,13 @@ func (s *Service) Cases(bot string, all bool) []store.Case {
 	rec := s.Ledger.Bot(bot)
 	var out []store.Case
 	for _, c := range rec.Cases {
-		if all || c.Status == "open" {
+		if all || !store.Closed(c.Status) {
 			out = append(out, *c)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if (out[i].Status == "open") != (out[j].Status == "open") {
-			return out[i].Status == "open"
+		if store.Closed(out[i].Status) != store.Closed(out[j].Status) {
+			return !store.Closed(out[i].Status)
 		}
 		return out[i].Created.After(out[j].Created)
 	})

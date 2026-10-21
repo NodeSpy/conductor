@@ -77,6 +77,8 @@ const botUsage = `usage:
     conductor bot tell <worker|group> "<instructions>"     # to your own workers (home session)
     conductor bot report "<progress>"                      # to your parent (a worker)
     conductor bot reply [--conversation <id> --to <n>] "…" # answer an operator's chat message (once per message; home session)
+    conductor bot ticket new "<title>" [--description "…"] [--assignee …] [--label <l>]…   # an idea: a DRAFT (an operator marks it ready)
+    conductor bot ticket list|show|edit|assign|comment|wait|done|decline …             # the tickets you hold or wrote (conductor ticket help)
     conductor bot chat [--conversation <id>] [--last N]    # your conversation, or your team's, as data
     conductor bot instructions [--wait 5m]                 # new instructions from your parent (a worker); --wait blocks for them
     conductor bot join (<group> | --case <id> --group <label>) [--timeout 30m]
@@ -95,7 +97,7 @@ const botUsage = `usage:
     conductor bot proposals [--all]
     conductor bot wait <proposal> [--timeout 30m]`
 
-var botBoolFlags = map[string]bool{"all": true, "include-templates": true, "allow-unlisted": true, "everyone": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true, "json": true,
+var botBoolFlags = map[string]bool{"all": true, "include-templates": true, "allow-unlisted": true, "everyone": true, "ready": true, "no-labels": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true, "json": true,
 	"installed": true, "proactive": true, "write": true}
 
 // botFlags parses --k v / --k=v, boolean flags, repeated --file, and a
@@ -126,7 +128,7 @@ func botFlags(args []string) (pos []string, flags map[string]string, files []str
 			files = append(files, v)
 			continue
 		}
-		if (k == "field" || k == "attach") && flags[k] != "" { // repeatable: --field k=v …, --attach <f> …
+		if (k == "field" || k == "attach" || k == "label" || k == "merchant") && flags[k] != "" { // repeatable: --field k=v …, --attach <f> …, --label <l> …, --merchant <origin> …
 			flags[k] += "\x00" + v
 			continue
 		}
@@ -243,6 +245,27 @@ func botAgent(sub string, args []string) error {
 		if t := strings.Join(pos, " "); t != "" {
 			a["text"] = t
 		}
+	case "ticket", "tickets":
+		if len(pos) == 0 {
+			return fmt.Errorf("usage: conductor bot ticket new|list|show|edit|assign|comment|ready|wait|done|decline|draft|reopen …\n%s", ticketUsage)
+		}
+		op, ta, err := ticketRequest(pos[0], pos[1:], fl)
+		if err != nil {
+			return err
+		}
+		out, err := botAgentCall(op, ta)
+		if err != nil {
+			return err
+		}
+		if fl["json"] != "" {
+			return printJSON(out)
+		}
+		if op == "ticket_list" {
+			fmt.Print(ticketListText(out))
+		} else {
+			fmt.Print(ticketText(out))
+		}
+		return nil
 	case "reply":
 		if len(pos) == 0 {
 			return fmt.Errorf("usage: conductor bot reply [--conversation <id> --to <message #>] \"<text>\"")

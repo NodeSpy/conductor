@@ -356,7 +356,7 @@ func (s *Service) sweepAttachments(name string, lim config.AttachmentLimits) {
 			continue
 		}
 		switch c := rec.Cases[a.CaseID]; {
-		case a.CaseID != "" && (c == nil || c.Status != "open"):
+		case a.CaseID != "" && (c == nil || store.Closed(c.Status)):
 			why[a.ID] = "case " + a.CaseID + " closed"
 		case now.Sub(a.Created) >= lim.TTLOr():
 			why[a.ID] = "ttl " + lim.TTLOr().String()

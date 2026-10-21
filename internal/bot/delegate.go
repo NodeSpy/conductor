@@ -127,7 +127,7 @@ func (s *Service) Delegate(ctx context.Context, c Actor, to, task, caseID string
 		if r.Cases == nil {
 			r.Cases = map[string]*store.Case{}
 		}
-		cc := &store.Case{ID: id, Title: oneLine("delegated by "+from+": "+task, 200), Status: "open",
+		cc := &store.Case{ID: id, Title: oneLine("delegated by "+from+": "+task, 200), Status: store.TicketInProgress,
 			Source: PeerRequester(from), Requester: who, RequesterClass: class, Payload: task,
 			Delegation: ref, Created: now, Updated: now}
 		r.Cases[id] = cc
@@ -166,8 +166,13 @@ func (s *Service) Delegate(ctx context.Context, c Actor, to, task, caseID string
 func delegatorCase(r *store.BotRecord, caseID, to, task, pClass, pWho string, now time.Time) (*store.Case, error) {
 	if caseID != "" {
 		cs := r.Cases[caseID]
-		if cs == nil || cs.Status != "open" {
-			return nil, fmt.Errorf("no open case %q", caseID)
+		if cs == nil {
+			return nil, fmt.Errorf("no case %q", caseID)
+		}
+		// THE DISPATCH GATE: no delegation hangs off a draft (or a closed)
+		// ticket.
+		if err := dispatchable(cs); err != nil {
+			return nil, err
 		}
 		return cs, nil
 	}
@@ -175,7 +180,7 @@ func delegatorCase(r *store.BotRecord, caseID, to, task, pClass, pWho string, no
 		r.Cases = map[string]*store.Case{}
 	}
 	id := r.NextID("c")
-	cs := &store.Case{ID: id, Title: oneLine("delegated to "+to+": "+task, 200), Status: "open", Source: "bot",
+	cs := &store.Case{ID: id, Title: oneLine("delegated to "+to+": "+task, 200), Status: store.TicketInProgress, Source: "bot",
 		Requester: pWho, RequesterClass: pClass, Created: now, Updated: now}
 	r.Cases[id] = cs
 	return cs, nil
@@ -188,7 +193,7 @@ func delegatorCase(r *store.BotRecord, caseID, to, task, pClass, pWho string, no
 func delegationChain(r *store.BotRecord, bot string) []string {
 	var open []*store.Case
 	for _, c := range r.Cases {
-		if c.Status == "open" && c.Delegation != nil {
+		if store.Active(c.Status) && c.Delegation != nil {
 			open = append(open, c)
 		}
 	}
@@ -268,10 +273,10 @@ func (s *Service) Decline(ctx context.Context, c Actor, caseID, reason string) (
 	if !ok || cs.Delegation == nil {
 		return nil, fmt.Errorf("case %q is not a delegated case", caseID)
 	}
-	if cs.Status != "open" {
+	if !store.Active(cs.Status) {
 		return nil, fmt.Errorf("case %s is already closed", caseID)
 	}
-	closed, err := s.closeCase(ctx, c.Bot, caseID, "declined: "+reason)
+	closed, err := s.closeCase(ctx, c.Bot, caseID, "declined: "+reason, store.TicketDeclined, "bot:"+c.Bot)
 	if closed.ID != "" {
 		s.reportDelegation(c.Bot, closed, DelegationDeclined, reason)
 	}

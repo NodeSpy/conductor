@@ -45,7 +45,7 @@ func homeQuery(rec store.BotRecord) string {
 	var parts []string
 	var open []*store.Case
 	for _, c := range rec.Cases {
-		if c.Status == "open" {
+		if store.Active(c.Status) {
 			open = append(open, c)
 		}
 	}

@@ -146,6 +146,8 @@ func main() {
 		err = cmdBot(args)
 	case "team":
 		err = cmdTeam(args)
+	case "ticket", "tickets":
+		err = cmdTicket(args)
 	case "workflows":
 		err = cmdWorkflows(args)
 	case "init":
@@ -212,6 +214,7 @@ usage:
   conductor mcp memory --socket <path>  stdio MCP server: memory + skill broker (agent-facing)
   conductor bot <cmd> …             bots: ls/show/cases/proposals/approve/deny/rotate/say/deliver (conductor bot help)
   conductor team say|chat|chats …   talk to a team: its lead, @bot, or --everyone (conductor team help)
+  conductor ticket new|list|show|… tickets: draft → ready → in_progress → waiting → done | declined (conductor ticket help)
   conductor mcp callable --token <name> [--config PATH]  stdio MCP server: invoke callable workflows (external MCP clients)
   conductor workflows ls                 config workflows and triggers; saved workflows (review|rm)
   conductor init [--config PATH] [--allow-unlisted]  fetch the packs: block, write the lockfile, preview

@@ -216,6 +216,11 @@ const homeRules = `
   arrives as a case: work it, then ` + "`conductor bot case close <case> --outcome \"…\"`" + `
   sends the outcome back; if it is not yours, ` + "`conductor bot decline <case> \"why\"`" + `.
   A chain cannot loop back to a bot already in it, and has a maximum depth.
+- Every case is a TICKET (T-<n>). For an idea worth doing later — yours, or
+  a follow-up — write a DRAFT: ` + "`conductor bot ticket new \"<title>\" --description \"…\" [--assignee …]`" + `.
+  Nothing starts on a draft: an operator reads it and marks it ready. On a
+  ticket you hold: ` + "`conductor bot ticket comment|wait|done|decline <T-n> \"…\"`" + `
+  (wait = waiting on your operator).
 - Urgent events already have a worker running when they reach you; check on
   it rather than starting a second one.
 - When conductor asks for a HANDOFF (before your session is rotated), write
@@ -312,7 +317,11 @@ func caseIDOf(c *store.Case) string {
 
 // EventMessage frames a routed event for the home inbox.
 func EventMessage(c store.Case, payload, note string) string {
-	hdr := fmt.Sprintf("[conductor event — case %s | source: %s | requester: %s (%s)", c.ID, c.Source, orDash(c.Requester), c.RequesterClass)
+	ref := c.ID
+	if c.Ticket != "" {
+		ref += " · ticket " + c.Ticket
+	}
+	hdr := fmt.Sprintf("[conductor event — case %s | source: %s | requester: %s (%s)", ref, c.Source, orDash(c.Requester), c.RequesterClass)
 	if c.Urgent {
 		hdr += " | URGENT"
 	}
@@ -340,7 +349,7 @@ func LedgerSummary(rec store.BotRecord) string {
 	var b strings.Builder
 	var open []*store.Case
 	for _, c := range rec.Cases {
-		if c.Status == "open" {
+		if store.Active(c.Status) {
 			open = append(open, c)
 		}
 	}
@@ -353,10 +362,26 @@ func LedgerSummary(rec store.BotRecord) string {
 		if c.Urgent {
 			u = " URGENT"
 		}
-		fmt.Fprintf(&b, "- case %s%s: %s (from %s, requester %s/%s, opened %s)\n", c.ID, u, oneLine(c.Title, 100), c.Source, orDash(c.Requester), c.RequesterClass, c.Created.Format(time.RFC3339))
+		ref := c.ID
+		if c.Ticket != "" {
+			ref += " (" + c.Ticket + ", " + strings.ReplaceAll(c.Status, "_", " ") + ")"
+		}
+		fmt.Fprintf(&b, "- case %s%s: %s (from %s, requester %s/%s, opened %s)\n", ref, u, oneLine(c.Title, 100), c.Source, orDash(c.Requester), c.RequesterClass, c.Created.Format(time.RFC3339))
 		if s := strings.TrimSpace(c.Summary); s != "" {
 			fmt.Fprintf(&b, "    notes: %s\n", oneLine(s, 300))
 		}
+	}
+	var drafts []*store.Case
+	for _, c := range rec.Cases {
+		if c.Status == store.TicketDraft {
+			drafts = append(drafts, c)
+		}
+	}
+	sort.Slice(drafts, func(i, j int) bool { return drafts[i].Created.Before(drafts[j].Created) })
+	for _, c := range drafts {
+		// Ideas: nothing has started on them, and nothing should until an
+		// operator marks them ready.
+		fmt.Fprintf(&b, "- draft %s: %s (written by %s; an idea — nothing starts on it until it is marked ready)\n", c.Ticket, oneLine(c.Title, 100), orDash(c.CreatedBy))
 	}
 	var props []*store.Proposal
 	for _, p := range rec.Proposals {
@@ -508,7 +533,7 @@ func SweepPrompt(cfg *config.Config, name string, rec store.BotRecord, sweepID, 
 	b.WriteString("## Already tracked (open cases — do not report again unless worse; reuse the key)\n\n")
 	var open []*store.Case
 	for _, c := range rec.Cases {
-		if c.Status == "open" {
+		if store.Active(c.Status) {
 			open = append(open, c)
 		}
 	}

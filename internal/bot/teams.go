@@ -51,6 +51,8 @@ type TeamEvent struct {
 	Fields map[string]any
 	// files fetches the event's files (flow.BotRoute.Files).
 	files func(ctx context.Context, maxFiles int, maxFile int64) ([]connector.File, error)
+	// ticket is the ready ticket this routing picks up.
+	ticket *store.Case
 }
 
 // TeamRepo is a team's knowledge repo handle (nil without knowledge:).
@@ -146,7 +148,7 @@ func (s *Service) RouteTeam(ctx context.Context, ev TeamEvent) (map[string]any, 
 			rt.Reason = "no rule matched"
 		}
 	}
-	ev2 := Event{Bot: rt.Assignee, Source: ev.Source, Title: ev.Title, Text: ev.Text, Urgent: ev.Urgent, files: ev.files}
+	ev2 := Event{Bot: rt.Assignee, Source: ev.Source, Title: ev.Title, Text: ev.Text, Urgent: ev.Urgent, files: ev.files, ticket: ev.ticket}
 	id, err := s.deliverRouted(ctx, ev2, who, class, rt, "")
 	if err != nil {
 		return nil, err
@@ -257,9 +259,13 @@ func (s *Service) startTriage(ctx context.Context, ev TeamEvent, lead, who, clas
 		if r.Cases == nil {
 			r.Cases = map[string]*store.Case{}
 		}
-		c := &store.Case{ID: id, Title: title, Status: "open", Urgent: ev.Urgent, Source: srcOr(ev.Source),
+		c := &store.Case{ID: id, Title: title, Status: store.TicketInProgress, Urgent: ev.Urgent, Source: srcOr(ev.Source),
 			Requester: who, RequesterClass: class, Team: ev.Team, Payload: payload, Created: now, Updated: now,
 			Routing: &store.Routing{Team: ev.Team, Via: "lead", Lead: lead, LeadCase: id, State: "triage", At: now}}
+		if t := ev.ticket; t != nil {
+			// The ticket itself goes to the lead's triage.
+			carryTicket(c, t, lead, now)
+		}
 		r.Cases[id] = c
 		cs = *c
 		return nil
@@ -271,7 +277,7 @@ func (s *Service) startTriage(ctx context.Context, ev TeamEvent, lead, who, clas
 	if _, err := s.Spawn(ctx, Actor{Bot: lead, Role: config.BotRoleHome}, SpawnRequest{CaseID: cs.ID, Brief: brief, ReadOnly: true, byConductor: true}); err != nil {
 		_ = s.Ledger.UpdateBot(lead, func(r *store.BotRecord) error {
 			if c := r.Cases[cs.ID]; c != nil {
-				c.Status, c.Outcome, c.Updated = "closed", "triage could not start: "+oneLine(err.Error(), 200), s.now()
+				c.Status, c.Outcome, c.Updated = store.TicketDone, "triage could not start: "+oneLine(err.Error(), 200), s.now()
 				c.Routing.State = "failed"
 			}
 			return nil
@@ -355,7 +361,7 @@ func (s *Service) assignTriage(ctx context.Context, team, lead, caseID, to, via,
 		if c == nil || c.Routing == nil || c.Routing.LeadCase != caseID {
 			return fmt.Errorf("case %s is not a triage case of team %s", caseID, team)
 		}
-		if c.Routing.State != "triage" || c.Status != "open" {
+		if c.Routing.State != "triage" || !store.Active(c.Status) {
 			return fmt.Errorf("case %s is not awaiting triage (%s%s)", caseID, c.Routing.State, assignedTo(c.Routing))
 		}
 		c.Routing.State, c.Routing.Assignee = "assigned", to
@@ -381,6 +387,12 @@ func (s *Service) assignTriage(ctx context.Context, team, lead, caseID, to, via,
 		msg = fmt.Sprintf("Team %s's lead %s assigned this to you, with a note:\n%s", team, lead, fence("TRIAGE NOTE", note))
 	}
 	ev := Event{Bot: to, Source: cs.Source, Title: cs.Title, Text: cs.Payload, Urgent: cs.Urgent}
+	if cs.Ticket != "" {
+		// The same ticket moves on to the teammate; the lead's copy closes,
+		// pointing where it went.
+		t := cs
+		ev.ticket = &t
+	}
 	id, err := s.deliverRouted(ctx, ev, who, class, rt, msg)
 	if err != nil {
 		_ = s.Ledger.UpdateBot(lead, func(r *store.BotRecord) error {
@@ -395,8 +407,11 @@ func (s *Service) assignTriage(ctx context.Context, team, lead, caseID, to, via,
 		if c := r.Cases[caseID]; c != nil && c.Routing != nil {
 			c.Routing.AssigneeCase = id
 			c.Routing.Reason = reason
-			c.Status, c.Updated = "closed", s.now()
+			c.Status, c.Updated = store.TicketDone, s.now()
 			c.Outcome = fmt.Sprintf("assigned to %s (case %s) via %s", to, id, via)
+			if c.Ticket != "" {
+				c.MovedTo = "bot:" + to + "/" + id
+			}
 		}
 		return nil
 	})
@@ -439,7 +454,7 @@ func (s *Service) expireTriage(ctx context.Context, name string) {
 	}
 	var due []string
 	for _, c := range s.Ledger.Bot(name).Cases {
-		if c.Status == "open" && c.Routing != nil && c.Routing.State == "triage" && s.now().Sub(c.Created) >= t.Routing.TimeoutD() {
+		if store.Active(c.Status) && c.Routing != nil && c.Routing.State == "triage" && s.now().Sub(c.Created) >= t.Routing.TimeoutD() {
 			due = append(due, c.ID)
 		}
 	}
