@@ -95,6 +95,11 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **Fresh demo for every browser (2026-10-21):** saved state moved to `cd-proto-state-v7` (`S.KEY` in `js/store.js`);
+  a load drops any older `cd-proto-state-v*` key, so the next visit is the fresh demo with times anchored to that load.
+  Reset demo data restores the same fresh demo, re-timed to the moment of the reset. To refresh everyone again, bump
+  `S.KEY`. Checked on the live site: old v6 state dropped, the calm day's counts agree (Needs you 3 = its tiles = the
+  badge; runs 43 = 38 fine + 1 failed + 3 running + 1 parked; chat unread 4 = the badge; tickets 11 open + 4 drafts).
 - **Phase 0, the prototype frozen as the spec (2026-10-20):** 69j (CodeMirror), 70 (Who wrote this as a popover) and 71
   (Evidence as a list) were re-verified live on the current build at 1440×900, 1280×720 and 390×844 with no console
   errors; the Memory layout (69–69c) holds on desktop and phone. Final runs on f74e79e1:
