@@ -405,8 +405,9 @@ const walletClear = `function(){
 }`
 
 // setWallet fills one node with a value conductor read, after the field
-// checks, and remembers it for the scrub (a value under 4 characters only
-// by its node: scrubbing "CA" or "123" from every reply would shred it).
+// checks, and remembers it for the scrub. A value under 4 characters (a CVC,
+// a region code) is masked by its node and scrubbed from every reply via
+// secretsShort, the same as a longer one.
 func (m *Manager) setWallet(ctx context.Context, in *Instance, t *tab, fr frame, o origin, nodeID int64, cands []string, scrub []string) error {
 	w, err := in.world(ctx, t, fr.ID)
 	if err != nil {
@@ -423,8 +424,8 @@ func (m *Manager) setWallet(ctx context.Context, in *Instance, t *tab, fr frame,
 		case len(s) >= 4:
 			in.remember(nodeID, s)
 		default:
-			// Too short for the general scrub, but still never smuggled out of
-			// a receipt's own text.
+			// Under 4 chars: kept in secretsShort, which secretValues returns,
+			// so it is scrubbed from every reply and refused in a download.
 			in.rememberShort(s)
 		}
 	}

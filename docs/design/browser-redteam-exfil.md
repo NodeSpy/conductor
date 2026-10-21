@@ -195,3 +195,40 @@ CVC channel above and is now scrubbed fail-closed. The receipt URL is
 `scrubAll`'d and `redactURL`'d (query/fragment/userinfo dropped). No profile,
 credential or card value is written to the ledger, a hand-off note, a ticket,
 or the audit.
+
+---
+
+## Follow-up (H1) — the `len < 4` cutoff is removed; short values are covered everywhere
+
+The receipt fix above kept short values (`secretsShort`) out of `scrub`/
+`scrubAny` on purpose, scrubbing them *only* on the receipt path (`scrubAll`),
+to avoid shredding a page that happened to contain `"987"` or `"CA"`. The
+integration security review (C1/H1) found that scoping is the gap, not the
+mitigation: an echo of a 3-digit CVC or a 2-digit expiry part **elsewhere** on
+the page — a confirmation element distinct from the `cc-csc` input, an
+order-review PDF — still reached the agent's next `snapshot` / `source` /
+`screenshot` / `evaluate` read, and a downloaded file holding the plain CVC was
+not refused (`refuseSecretFile` re-applied the same `len(v) >= 4` guard). The
+exact-filled input node was masked by id at any length, so the leak was
+specifically the echo, not the field.
+
+The fix closes the cutoff at the single chokepoint instead of per call site:
+
+- `remember` routes a short filled value into `secretsShort` instead of
+  dropping it from both scrub sets.
+- `secretValues()` returns `secrets` **and** `secretsShort`, and every
+  agent-visible path already reads it — `scrub`/`scrubAny` (replies, snapshots,
+  source, evaluate), `secretRectsJS` (the screenshot rect search), and
+  `refuseSecretFile` (the download guard, whose own `len(v) >= 4` guard is
+  removed). `scrubAll` is now an alias of `scrub`, kept at the receipt call
+  sites to mark where a value is pulled out of a page's own text.
+
+A short value is therefore scrubbed from every reply and refused in a download,
+the same as a long one; the page-shred tradeoff is accepted — a redacted box
+where a CVC would print beats leaking the CVC. The node mask is unchanged, so
+the exact field is still masked by id regardless of length.
+
+Proof: `TestShortSecretCoveredEverywhere` (scrub, scrubAny, `secretValues`, the
+download guard). `TestScrubAllShort` now pins that `scrub` removes a short value
+from a general reply too. `TestRedteamOnlyShortValueScreenshotMasked` asserts a
+short-only fill is a scrubbable value, not invisible to the general paths.

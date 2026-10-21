@@ -42,10 +42,11 @@ type Instance struct {
 	// select's option label); used to blind the wait comparison, which the
 	// agent never reads, so over-scrubbing a short value there is safe.
 	maskVals []string
-	// secretsShort are filled values too short (< 4 chars: a CVC, a region
-	// code) to scrub from every reply without shredding it — kept apart and
-	// used only where conductor extracts a value out of a page's own text (a
-	// receipt's order number), so such a value can never be smuggled back.
+	// secretsShort are filled values under 4 chars (a CVC, an expiry part).
+	// They are kept apart from secrets only so the > 4 and < 4 fills stay
+	// legible, but secretValues() returns both, so a short value is scrubbed
+	// from every agent-visible path (reply, snapshot, source, screenshot,
+	// download) the same as a long one — never smuggled back out of the page.
 	secretsShort []string
 
 	// onDownload is told when a download completes (the manager moves it

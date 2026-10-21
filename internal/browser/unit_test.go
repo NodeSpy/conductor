@@ -599,8 +599,13 @@ func TestBoundaries(t *testing.T) {
 	if refuseSecretFile(f, []string{"abcd"}) == nil {
 		t.Fatal("a 4-character filled value in a download")
 	}
-	if refuseSecretFile(f, []string{"abc"}) != nil {
-		t.Fatal("a value under 4 characters is too short to match safely")
+	// H1: a short filled value (a CVC, an expiry part) is matched too — the
+	// old len<4 cutoff let a downloaded file echoing it through.
+	if refuseSecretFile(f, []string{"abc"}) == nil {
+		t.Fatal("a value under 4 characters in a download must be refused too")
+	}
+	if refuseSecretFile(f, []string{""}) != nil {
+		t.Fatal("an empty value never matches")
 	}
 	if got := safeName(strings.Repeat("a", 116) + ".txt"); len(got) != 120 || got != strings.Repeat("a", 116)+".txt" {
 		t.Fatalf("a name of exactly 120 stays: %d", len(got))

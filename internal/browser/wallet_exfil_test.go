@@ -7,16 +7,16 @@ import (
 	"testing"
 )
 
-// TestScrubAllShort pins the split: a short filled value (a CVC, a region
-// code) is NOT scrubbed from a whole reply (scrub), so the page is not
-// shredded, but IS scrubbed where conductor pulls a value out of a page's own
-// text (scrubAll) — the receipt path.
+// TestScrubAllShort pins the H1 fix: a short filled value (a CVC, a region
+// code) is scrubbed from a general reply (scrub) as well as the receipt path
+// (scrubAll) — both read secretValues(), which now returns the short values
+// too. The exact field is separately masked by its node id.
 func TestScrubAllShort(t *testing.T) {
 	in := &Instance{}
 	in.remember(7, "hunter22") // a normal (long) secret
 	in.rememberShort("987")    // a CVC
-	if got := in.scrub("pay 987 with hunter22"); got != "pay 987 with "+Redacted {
-		t.Fatalf("scrub must leave a short value in a general reply: %q", got)
+	if got := in.scrub("pay 987 with hunter22"); got != "pay "+Redacted+" with "+Redacted {
+		t.Fatalf("scrub must remove a short value from a general reply too: %q", got)
 	}
 	if got := in.scrubAll("order 987 paid with hunter22"); got != "order "+Redacted+" paid with "+Redacted {
 		t.Fatalf("scrubAll must remove the short value too: %q", got)

@@ -110,8 +110,9 @@ func TestRedteamShortValueScreenshotMasked(t *testing.T) {
 }
 
 // TestRedteamOnlyShortValueScreenshotMasked: when the ONLY value filled in a
-// browser is under 4 characters, secretValues() is empty — the masking used to
-// return the screenshot untouched. The field must still be masked.
+// browser is under 4 characters, the field must still be masked — and (H1) the
+// short value is now in secretValues(), so the screenshot rect search and every
+// other agent-visible path cover it, not only the node mask.
 func TestRedteamOnlyShortValueScreenshotMasked(t *testing.T) {
 	w := newWalletRig(t)
 	w.st.Evaluate = []string{"agent:test@*"}
@@ -121,8 +122,8 @@ func TestRedteamOnlyShortValueScreenshotMasked(t *testing.T) {
 	w.do(op, "fill-profile", map[string]any{"profile": "personal", "field": "address.region", "ref": refOf(t, snap, "State")})
 	s, _ := w.m.session(op)
 	in := s.active
-	if len(in.secretValues()) != 0 {
-		t.Fatalf("expected no scrubbable values, got %v", in.secretValues())
+	if len(in.secretValues()) == 0 {
+		t.Fatal("H1: a short filled value must now be a scrubbable value, not invisible to the general paths")
 	}
 	tb, _ := in.current(context.Background())
 	img := decodeShot(t, w, w.do(op, "screenshot", map[string]any{"path": "region.png"}))

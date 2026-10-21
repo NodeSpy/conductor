@@ -138,9 +138,9 @@ func TestRealAXTreeShortValueStructure(t *testing.T) {
 // TestRealCVCNotInSnapshotOrScreenshot: the sharp case. On the real browser,
 // a hostile merchant keeps the checkout on screen after conductor fills the
 // card (a place-order button that never navigates). The agent then snapshots
-// and screenshots. The 3-digit CVC — below the scrub floor — must appear in
-// neither: not as a "- text: 987" line (the a11y value mirror), not as the
-// field's value, and not in the screenshot pixels.
+// and screenshots. The 3-digit CVC — short, but covered the same as a long
+// value now — must appear in neither: not as a "- text: 987" line (the a11y
+// value mirror), not as the field's value, and not in the screenshot pixels.
 func TestRealCVCNotInSnapshotOrScreenshot(t *testing.T) {
 	w := newWalletRig(t)
 	w.shop.Sticky = true

@@ -1392,7 +1392,7 @@ func refuseSecretFile(path string, secrets []string) error {
 		return err
 	}
 	for _, v := range secrets {
-		if len(v) >= 4 && strings.Contains(string(b), v) {
+		if v != "" && strings.Contains(string(b), v) {
 			return fmt.Errorf("the file contains a value filled from a credential — not written to the workspace")
 		}
 	}

@@ -824,7 +824,9 @@ func (m *Manager) usePasskey(ctx context.Context, in *Instance, t *tab, cred Cre
 
 // remember records a filled secret: its value is scrubbed from everything
 // the agent gets back, its field masked in screenshots, and evaluate goes
-// off in this browser.
+// off in this browser. A value under 4 characters (a CVC, an expiry part) is
+// kept apart in secretsShort but still reaches every agent-visible path via
+// secretValues — the exact field is already masked by its node id.
 func (in *Instance) remember(nodeID int64, v string) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -836,6 +838,8 @@ func (in *Instance) remember(nodeID int64, v string) {
 		in.maskVals = append(in.maskVals, v)
 		if len(v) >= 4 {
 			in.secrets = append(in.secrets, v)
+		} else {
+			in.secretsShort = append(in.secretsShort, v)
 		}
 	}
 }
@@ -852,8 +856,8 @@ func (in *Instance) rememberDisplay(v string) {
 }
 
 // scrubWait blanks every filled value and displayed label from s. It is for
-// the wait comparison only — never returned to the agent — so it removes short
-// values too (which the reply scrub leaves, to avoid shredding real text).
+// the wait comparison only — never returned to the agent — so it also removes
+// the displayed labels (maskVals) that the reply scrub leaves.
 func (in *Instance) scrubWait(s string) string {
 	in.mu.Lock()
 	vals := append([]string(nil), in.maskVals...)
@@ -866,11 +870,11 @@ func (in *Instance) scrubWait(s string) string {
 	return s
 }
 
-// rememberShort records a filled value too short for the general scrub (a
-// CVC, a 2-letter region). It is not scrubbed from every reply (that would
-// shred the page), but it is scrubbed where conductor pulls a value out of a
-// page's own text — a receipt's order number — so a merchant cannot smuggle
-// it back to the agent there.
+// rememberShort records a short filled value (a CVC, a 2-letter region) that
+// was read into the page without going through a node remember() — the wallet
+// fill's scrub list. It joins secretsShort, which secretValues() returns, so
+// the value is scrubbed from every agent-visible path, including a receipt's
+// own text where a merchant might echo it.
 func (in *Instance) rememberShort(v string) {
 	if v == "" {
 		return
@@ -916,11 +920,17 @@ func (in *Instance) filled() bool {
 	return len(in.secretNodes) > 0
 }
 
-// secretValues are the values filled in this browser.
+// secretValues are the values filled in this browser — long and short. Every
+// agent-visible path (the reply/snapshot/source/evaluate scrub, the screenshot
+// rect search, the download guard) reads this, so a short value (a CVC, an
+// expiry part) is covered everywhere a long one is, not only its own field.
 func (in *Instance) secretValues() []string {
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	return append([]string(nil), in.secrets...)
+	out := make([]string, 0, len(in.secrets)+len(in.secretsShort))
+	out = append(out, in.secrets...)
+	out = append(out, in.secretsShort...)
+	return out
 }
 
 // Redacted is what a filled value reads as.
@@ -936,20 +946,12 @@ func (in *Instance) scrub(s string) string {
 	return s
 }
 
-// scrubAll replaces every filled value, including the short ones kept out of
-// the general scrub. Used only where conductor extracts a value from a page's
-// own text (a receipt), never on a whole reply (it would shred the page).
+// scrubAll replaces every filled value, long and short. scrub now covers the
+// short values too (secretValues returns both), so this is an alias kept at
+// the receipt-extraction call sites to mark that a value is being pulled out
+// of a page's own text, where leaking a short one would matter most.
 func (in *Instance) scrubAll(s string) string {
-	s = in.scrub(s)
-	in.mu.Lock()
-	short := append([]string(nil), in.secretsShort...)
-	in.mu.Unlock()
-	for _, v := range short {
-		if v != "" {
-			s = strings.ReplaceAll(s, v, Redacted)
-		}
-	}
-	return s
+	return in.scrub(s)
 }
 
 // scrubAny scrubs every string in a reply.
