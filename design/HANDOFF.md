@@ -95,6 +95,17 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **Phase 0, the prototype frozen as the spec (2026-10-20):** 69j (CodeMirror), 70 (Who wrote this as a popover) and 71
+  (Evidence as a list) were re-verified live on the current build at 1440×900, 1280×720 and 390×844 with no console
+  errors; the Memory layout (69–69c) holds on desktop and phone. Final runs on f74e79e1:
+  - full Chromium suite (1214 tests, the measuring scripts included): 1003 passed, 200 skipped, 11 failed. Ten were
+    `net::ERR_NETWORK_CHANGED` (the host's network changing mid-run; the follow-on `UI.x is not a function` errors were
+    scripts that failed to load) and all pass on a clean re-run (20 passed, desktop and phone). One was real: on a
+    phone, going back to a memory's list mid-draft left no way back to an unsaved new entry; the list now leads back
+    to it (f74e79e1), and the regression test walks that path.
+  - measure.spec (every route, 1440 and 390, both themes): no failures, in the full run.
+  - WebKit iPhone 15 sweep (six themes): 510 passed.
+  - CONFORMANCE gains a row for a bot's Memory and its editor, with its render (`conformance/render.js` now renders it).
 - **The markdown editor is CodeMirror 6 (2026-10-20):** replaces the plain textarea (69i) and every hand-built gutter
   before it. `UI.mdEditor` (ui.js) mounts CodeMirror into the Write | Preview box: markdown highlighting from the code
   tokens, `[[name]]` as links, the library's line numbers, soft wrap, `[[` completion, files by paste/drop/click
