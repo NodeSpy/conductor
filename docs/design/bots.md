@@ -515,11 +515,25 @@ suggests it. The operator's value wins field by field (`Identity.Merge`), and
 tagline, personality) came from one.
 
 - **One source of truth for the names.** `internal/config/botidentity.go`
-  holds the avatar presets, icons, identity colors, the status hues they
-  exclude, and the tones. Validation, the error messages, `bot
+  holds the avatar shapes, eyes, icons, identity colors, the status hues
+  they exclude, and the tones. Validation, the error messages, `bot
   identity-options`, the dashboard op and the tests all read those lists, so
-  changing a list is a one-file change. There are no URLs. A preset takes an
-  optional color that defaults to the bot's.
+  changing a list is a one-file change. There are no URLs. A face is
+  mix-and-match: `{shape, eyes, color}`, each part checked against its own
+  list. The shape is required, and eyes and color are optional (the color
+  defaults to the bot's).
+- **`preset:` is a deprecated alias.** `AvatarPresetAliases` maps each old
+  preset to a shape/eyes pair, so configs that already exist keep loading.
+  The bot loop in `validateBots` resolves an operator's preset
+  (`resolveAvatarPreset`, working on a copy, recording `PresetAlias`) and
+  queues a validate warning. A template's preset is resolved in its pack,
+  after the template's digest is taken: the digest doesn't move, and the
+  operator isn't warned about text only the template's author can change.
+  Because a resolved avatar has no `preset`, the avatar writer
+  (`bot avatar set`) rewrites the line as shape and eyes. Connectors get
+  `avatar_shape`/`avatar_eyes`. `avatar_preset` stays in
+  `IdentityAttributes` and is filled with the alias's name, so a plugin that
+  maps it keeps working.
 - **The operator's own picture** is a file beside the config (or in a
   template's pack): `avatar.image`, resolved and checked at load by
   `internal/avatar`. PNG/JPEG/WebP by signature; whole (nothing after IEND
@@ -535,7 +549,7 @@ tagline, personality) came from one.
   plan. A picture never reaches a connector: there's no public endpoint, so
   the fallback face stands in.
 - **A team's avatar** is the same `BotAvatar`, checked by the same
-  `validateAvatar` with `allowPreset=false`. The mascots are bots' faces,
+  `validateAvatar` with `allowFace=false` (no shape, eyes or preset). The mascots are bots' faces,
   and an icon needs its own color because a team has no identity color.
   Its picture goes through the same resolve, re-encode, plan and serve
   path, at `avatars/team-<team>.png`, so a bot and a team of one name never
@@ -625,6 +639,51 @@ tagline, personality) came from one.
 - **Live updates** are an in-process hub. The operator API streams them as
   server-sent events; a slow reader drops an update rather than blocking a
   send.
+
+## Tickets: cases are tickets, and the ready gate
+
+- **One object.** `store.Case` gained the ticket fields (a conductor-wide
+  `T-<n>`, assignee, description, priority, due, labels, created/ready by,
+  comments, history, and `moved_to` on a copy left behind) rather than a
+  second record type. A bot's ledger holds the tickets it holds;
+  `tickets.json` holds the rest (a team's queue of drafts, the unassigned
+  triage queue) and the counter.
+- **Ids are minted at the store chokepoint.** `UpdateBot` gives any case
+  without one an id, an assignee, a priority and its creator, so every
+  existing case-creation site became ticket-creating unchanged. The same
+  function migrates a stored case (open → in_progress, closed → done) at
+  boot, oldest first, written back once.
+- **Statuses replace open/closed with predicates.** `store.Active` (ready,
+  in progress, waiting) wherever work happens: spawn, delegation, decline,
+  peer replies, a conversation case, prompts. `store.Closed` (done,
+  declined) for retention. `!Closed` for trust: a third party's draft still
+  lowers a home session's attribution, because its words are in front of
+  the bot.
+- **The ready gate is one function**, `dispatchable`, called by spawn and by
+  the delegation's case lookup. Routing and delivery happen only from
+  `dispatchTicket`, which runs only on the transition to ready. Who may
+  mark ready: an operator, or a bot for a ticket it wrote, with
+  `mark_own_ready` (a team's false is a ceiling, and on is a validate-named
+  widening).
+- **Assignment authority** reuses the delegation rule (`BotLinked`) plus
+  "its own team" and "unassigned"; a bot touches only tickets it holds or
+  wrote. Moving an active ticket re-dispatches it through delivery or
+  routing with the requester kept; a bot's move takes the less trusted of
+  the ticket's and its own attribution.
+- **Moving.** A queue drops a ticket that leaves it (its history says
+  where). A bot's ledger keeps a closed copy with `moved_to`, because the
+  lead's triage case and its delegations still point at it. Lookups and
+  lists skip such copies.
+- **Spend limit.** `Case.spend_limit` (`{amount, currency, card,
+  merchants}`) lives on the ticket record itself, so the browser's payments
+  and tickets read the same field. A purchase names a bot and its case id;
+  payments call `Service.TicketSpend(bot, caseID)` for the limit and what has
+  gone. Spending is read through the `SpendLedger` interface, summed over
+  every copy of the ticket. A daemon without a ledger reports it as unknown,
+  never as zero. Amounts are decimal strings, compared in cents.
+  `spendLimitWidens` defines a widening as setting, clearing, raising, or a
+  new currency, card or merchant. Only an operator may make one; a bot's
+  edit must narrow.
 
 ## Folders: removed
 

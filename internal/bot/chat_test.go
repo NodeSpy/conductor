@@ -37,7 +37,7 @@ func (f *teamFixture) chat(t *testing.T, req ChatSend) store.ChatMessage {
 func (f *teamFixture) conversationCase(t *testing.T, bot string) store.Case {
 	t.Helper()
 	for _, c := range f.st.Bot(bot).Cases {
-		if c.Conversation == "team:platform" && c.Status == "open" {
+		if c.Conversation == "team:platform" && store.Active(c.Status) {
 			return *c
 		}
 	}

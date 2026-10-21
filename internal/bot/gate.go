@@ -413,8 +413,8 @@ func (g *Gate) requester(id flow.SkillIdentity) (class, who, caseID string) {
 func homeAttribution(rec *store.BotRecord) (class, who, caseID string) {
 	class = ReqBot
 	for _, c := range rec.Cases {
-		if c.Status != "open" {
-			continue
+		if store.Closed(c.Status) {
+			continue // a draft counts too: what a third party wrote is still in front of the bot
 		}
 		r, ok := requesterRank[c.RequesterClass]
 		if !ok {

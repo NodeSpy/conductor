@@ -507,3 +507,38 @@ func TestPurchaseLimitsValidation(t *testing.T) {
 		}
 	}
 }
+
+// tickets.mark_own_ready: off by default; a team's false is a ceiling; on,
+// it is named as a widening. default_priority is a team's.
+func TestTicketSettings(t *testing.T) {
+	base := "teams:\n  platform:\n    routing: { fallback: sre }\n    tickets: %s\nbots:\n  sre:\n    team: platform\n    tickets: %s\n"
+	c, err := loadBots(t, fmt.Sprintf(base, "{ default_priority: high }", "{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BotMarksOwnReady("sre") || c.TicketDefaultPriority("bot:sre") != "high" || c.TicketDefaultPriority("team:platform") != "high" || c.TicketDefaultPriority("") != "normal" {
+		t.Fatalf("defaults: %v %s", c.BotMarksOwnReady("sre"), c.TicketDefaultPriority("bot:sre"))
+	}
+	c, err = loadBots(t, fmt.Sprintf(base, "{ mark_own_ready: true }", "{}"))
+	if err != nil || !c.BotMarksOwnReady("sre") {
+		t.Fatalf("inherited from the team: %v", err)
+	}
+	if !strings.Contains(strings.Join(c.BotWarnings(), "\n"), "bots.sre: may mark the tickets it creates ready (tickets.mark_own_ready) — a WIDENING") {
+		t.Fatalf("no widening warning: %v", c.BotWarnings())
+	}
+	if _, err := loadBots(t, fmt.Sprintf(base, "{ mark_own_ready: false }", "{ mark_own_ready: true }")); err == nil || !strings.Contains(err.Error(), "widens team platform's tickets.mark_own_ready false") {
+		t.Fatalf("the team's ceiling: %v", err)
+	}
+	if c, err := loadBots(t, fmt.Sprintf(base, "{ mark_own_ready: false }", "{}")); err != nil || c.BotMarksOwnReady("sre") {
+		t.Fatalf("the team's false, the bot silent: %v", err)
+	}
+	if c, err := loadBots(t, fmt.Sprintf(base, "{ mark_own_ready: true }", "{ mark_own_ready: false }")); err != nil || c.BotMarksOwnReady("sre") {
+		t.Fatalf("a bot narrows: %v", err)
+	}
+	if _, err := loadBots(t, fmt.Sprintf(base, "{ default_priority: asap }", "{}")); err == nil || !strings.Contains(err.Error(), "default_priority") {
+		t.Fatalf("a bad priority: %v", err)
+	}
+	if _, err := loadBots(t, fmt.Sprintf(base, "{}", "{ default_priority: high }")); err == nil || !strings.Contains(err.Error(), "a team setting") {
+		t.Fatalf("a bot's default_priority: %v", err)
+	}
+}

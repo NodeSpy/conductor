@@ -1503,8 +1503,8 @@ bots:
     # Faces and colors are names from built-in lists (`conductor bot identity-options`), never URLs.
     # display_name: Night Owl                    # what it calls itself and chat shows; the id stays its address
     # tagline: Watches the pager so you can sleep.
-    # avatar: { preset: owl, color: teal }       # or { icon: radar, color: teal }; none: the dashboard shows initials
-    #                                            # or your own picture: { image: avatars/platform-sre.png, preset: owl }
+    # avatar: { shape: circle, eyes: wide, color: teal }   # mix and match; or { icon: radar, color: teal }; none: initials
+    #                                            # or your own picture: { image: avatars/platform-sre.png, shape: circle, eyes: wide }
     #                                            #   (`conductor bot avatar set platform-sre me.jpg`: re-encoded, PNG/JPEG/WebP, no SVG)
     # color: indigo                              # identity colors exclude status hues (red, green, amber, …)
     # personality:                               # a voice section in its prompt, fenced, below the charter and rules
@@ -1593,7 +1593,7 @@ bots:
 teams:
   platform:
     description: "Platform services: the shared runtime, its data stores and deploys"
-    # avatar: { icon: radar, color: teal }       # or { image: avatars/team-platform.png } (`conductor team avatar set`); no presets — those are bots'
+    # avatar: { icon: radar, color: teal }       # or { image: avatars/team-platform.png } (`conductor team avatar set`); no faces — those are bots'
     knowledge: { promotion: proposal }           # a shared repo every bot reads; promotions need an operator of the team
                                                  # + index_budget (default 2k), read_max, recall_limit, max_bytes: { knowledge, runbook, watch }
     collections:                                 # a custom document kind in the team's knowledge (wiki: Bots → Content kinds)
@@ -1631,6 +1631,8 @@ teams:
     #   fallback: platform-sre                   # else, or unassigned after timeout:, the fallback (required)
     #   # timeout: 10m
     # chat: { everyone_per_hour: 6, max_reply: 4000 }   # `conductor team say`: --everyone per hour; one bot reply's bytes
+    # tickets: { default_priority: normal, mark_own_ready: false }   # wiki: Tickets. Only operators mark tickets ready;
+    #                                            # mark_own_ready: true lets the team's bots ready their OWN ideas (a widening)
   # billing: { description: "Billing and invoicing" }   # isolated from platform unless bot_links: pairs bots
 
 # bot_links:                                # operator-side peer links: each pair may message each other.

@@ -2317,6 +2317,29 @@ group_BM_bots() {
   if audit_match conductor-bots '"event":"bot_memory_archive"'; then
     bad "Z6 nothing archived" BM Z6-noarchive "an archive commit was made"
   else ok "Z6 nothing was archived" BM Z6-noarchive; fi
+
+  # Z7: tickets. An operator's ticket is a draft that starts nothing; a
+  # worker can't start on it; a bot's own idea can't mark itself ready;
+  # the operator's ready hands it to the bot.
+  local opt tk tid tcase
+  opt() { cexec conductor-bots conductor ticket "$@" --config /data/cfg/conductor.yaml 2>&1; }
+  out="$(opt new "e2e: rotate the cache keys" --assignee bot:memo --label e2e --json)"
+  tid="$(printf '%s' "$out" | sed -n 's/^ *"ticket": "\(T-[0-9]*\)".*/\1/p' | head -1)"
+  tcase="$(printf '%s' "$out" | sed -n 's/^ *"id": "\(c[0-9]*\)".*/\1/p' | head -1)"
+  assert_contains "$out" '"status": "draft"' BM Z7-draft "Z7 an operator's new ticket is a draft"
+  [ -n "$tid" ] && [ -n "$tcase" ] || { bad "Z7 ticket id" BM Z7-id "no ticket/case id in: $out"; return; }
+  out="$(as_bot spawn --case "$tcase" --brief "do it")"
+  assert_contains "$out" "is a draft: nothing starts on it" BM Z7-gate "Z7 no worker starts on a draft"
+  out="$(as_bot ticket new "e2e: a bot's idea" --assignee bot:memo --json)"
+  tk="$(printf '%s' "$out" | sed -n 's/^ *"ticket": "\(T-[0-9]*\)".*/\1/p' | head -1)"
+  assert_contains "$out" '"created_by": "bot:memo"' BM Z7-idea "Z7 a bot writes its idea as a draft"
+  out="$(as_bot ticket ready "$tk")"
+  assert_contains "$out" "tickets.mark_own_ready is off" BM Z7-noready "Z7 a bot can't mark its own idea ready"
+  out="$(opt ready "$tid")"
+  assert_contains "$out" "status:    in_progress" BM Z7-ready "Z7 the operator's ready hands it to the bot"
+  assert_contains "$out" "ready by: operator:ops" BM Z7-readyby "Z7 ... and records who"
+  out="$(opt list --label e2e)"
+  assert_contains "$out" "$tid" BM Z7-list "Z7 ticket list filters by label"
 }
 
 group_L_templates() {

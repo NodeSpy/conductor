@@ -107,19 +107,56 @@ type Case struct {
 	// Delegation is set on a case another bot delegated to this one: the
 	// edge it came in on, and the ancestry the loop guard checks.
 	Delegation *DelegationRef `json:"delegation,omitempty"`
-	// SpendLimit is the case's (the ticket's) spend budget: what every
-	// purchase proposed under it may add up to over its whole life, never
-	// transferable. Read through the browser's CaseBudgets.
+
+	// TICKET FIELDS (tickets.go): every case is a ticket.
+	//
+	// Ticket is its conductor-wide id (T-<n>), stable as it moves from a
+	// queue to a bot, or from a lead to a teammate; ID is its id in the
+	// ledger that holds it. Assignee is "bot:<name>", "team:<name>" or ""
+	// (the triage queue).
+	Ticket      string     `json:"ticket,omitempty"`
+	Assignee    string     `json:"assignee,omitempty"`
+	Description string     `json:"description,omitempty"`
+	Priority    string     `json:"priority,omitempty"`
+	Due         *time.Time `json:"due,omitempty"`
+	Labels      []string   `json:"labels,omitempty"`
+	// CreatedBy is who wrote it ("operator:<name>", "bot:<name>", or the
+	// event source); ReadyBy who marked it ready.
+	CreatedBy string          `json:"created_by,omitempty"`
+	ReadyBy   string          `json:"ready_by,omitempty"`
+	Comments  []TicketComment `json:"comments,omitempty"`
+	History   []TicketChange  `json:"history,omitempty"`
+	// MovedTo is set on the copy a ticket left behind when it moved
+	// ("bot:<name>/<case>"); the live ticket is where it went.
+	MovedTo string `json:"moved_to,omitempty"`
+	// SpendLimit caps what may be spent on the ticket (the browser's
+	// purchases, keyed by the bot and this case id). Only an operator sets
+	// or raises it.
 	SpendLimit *SpendLimit `json:"spend_limit,omitempty"`
 }
 
-// SpendLimit is a ticket's spend budget: {amount: "50.00", currency:
-// "USD", card: <optional>, merchants: [<optional>]}.
+// SpendLimit is a ticket's spending cap: an amount (a decimal string, "50.00")
+// in a currency, optionally on one card and at some merchants (origins).
 type SpendLimit struct {
 	Amount    string   `json:"amount"`
 	Currency  string   `json:"currency"`
 	Card      string   `json:"card,omitempty"`
 	Merchants []string `json:"merchants,omitempty"`
+}
+
+// TicketComment is one comment on a ticket.
+type TicketComment struct {
+	At          time.Time `json:"at"`
+	By          string    `json:"by"`
+	Text        string    `json:"text"`
+	Attachments []string  `json:"attachments,omitempty"`
+}
+
+// TicketChange is one entry of a ticket's history: who changed what.
+type TicketChange struct {
+	At   time.Time `json:"at"`
+	By   string    `json:"by"`
+	What string    `json:"what"`
 }
 
 // Delegation is one delegation edge, kept by the delegating bot: what it
@@ -557,11 +594,24 @@ func (s *Store) UpdateBot(name string, fn func(*BotRecord) error) error {
 		s.mu.Unlock()
 		return err
 	}
+	minted := false
+	for _, c := range work.Cases {
+		// Every case is a ticket: one a caller just opened gets its id here.
+		if c.Ticket == "" {
+			minted = true
+		}
+		migrateCase(c, name, s.nextTicketLocked)
+	}
 	if s.bots == nil {
 		s.bots = map[string]*BotRecord{}
 	}
 	s.bots[name] = work
 	s.mu.Unlock()
+	if minted {
+		if err := s.saveTickets(); err != nil {
+			return err
+		}
+	}
 	return s.saveBots()
 }
 

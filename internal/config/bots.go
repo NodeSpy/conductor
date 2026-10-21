@@ -148,6 +148,8 @@ type BotConfig struct {
 	// count, media types and how long they are kept (attachments.go). On by
 	// default.
 	Attachments AttachmentLimits `yaml:"attachments,omitempty"`
+	// Tickets: whether the bot may mark its own tickets ready (tickets.go).
+	Tickets TicketSettings `yaml:"tickets,omitempty"`
 	// Isolation is the bot's session policy (inherited from its team,
 	// and only ever stricter).
 	Isolation BotIsolation `yaml:"isolation,omitempty"`
@@ -992,9 +994,18 @@ func (c *Config) validateBots() error {
 			return fmt.Errorf("config: operators.%s: ssh_key must be a public key line (\"ssh-ed25519 AAAA…\")", name)
 		}
 	}
-	for name, m := range c.Bots {
+	for _, name := range sortedBotKeys(c.Bots) {
+		m := c.Bots[name]
 		if err := c.validateBot(name, m); err != nil {
 			return fmt.Errorf("config: bots.%s: %w", name, err)
+		}
+		// A deprecated preset reads as its shape and eyes. A template's
+		// was read in its pack, so one left here is the operator's own (and
+		// a second Validate finds none, keeping the warning).
+		if m.Avatar != nil && m.Avatar.Preset != "" {
+			m.Avatar = resolveAvatarPreset(m.Avatar)
+			c.Bots[name] = m
+			c.avatarWarnings = append(c.avatarWarnings, presetWarning("bots."+name, m.Avatar))
 		}
 		// The operator's own avatar image, beside the config (a template's
 		// was resolved in its pack).
@@ -1065,6 +1076,9 @@ func (c *Config) validateBot(name string, m BotConfig) error {
 	}
 	if err := m.Attachments.validate(); err != nil {
 		return fmt.Errorf("attachments.%w", err)
+	}
+	if err := m.Tickets.validate(false); err != nil {
+		return err
 	}
 	if m.Charter != "" && m.CharterFile != "" {
 		return fmt.Errorf("set charter or charter_file, not both")
@@ -1245,6 +1259,9 @@ func (c *Config) BotWarnings() []string {
 		if len(m.Autonomy.Promote) > 0 {
 			out = append(out, fmt.Sprintf("bots.%s: autonomy.promote takes effect only while bot sessions are sandboxed; until then promoted verbs stay proposals", name))
 		}
+		if c.BotMarksOwnReady(name) {
+			out = append(out, fmt.Sprintf("bots.%s: may mark the tickets it creates ready (tickets.mark_own_ready) — a WIDENING: its own ideas can start work without an operator", name))
+		}
 		if m.Skill == nil || len(m.Skill.Verbs) == 0 {
 			out = append(out, fmt.Sprintf("bots.%s: no skill.verbs — the bot can only observe through memory and its ledger", name))
 		}
@@ -1254,6 +1271,7 @@ func (c *Config) BotWarnings() []string {
 			}
 		}
 	}
+	out = append(out, c.avatarWarnings...)
 	return append(out, c.TeamWarnings()...)
 }
 

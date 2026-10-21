@@ -279,6 +279,9 @@ type Config struct {
 	// removedWarnings name removed keys still in the config or its packs
 	// (removed.go).
 	removedWarnings []string `yaml:"-"`
+	// avatarWarnings name deprecated avatar presets in the config
+	// (validateBots).
+	avatarWarnings []string `yaml:"-"`
 }
 
 // Update configures periodic self-update checks.

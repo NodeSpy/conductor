@@ -69,7 +69,7 @@ func TestBotAvatarSetPlan(t *testing.T) {
 	if !plan.Valid || plan.Widening || plan.Image != "avatars/sre.png" || plan.Replaces {
 		t.Fatalf("plan: %+v", plan)
 	}
-	if !strings.Contains(plan.Diff, "+    avatar: {image: avatars/sre.png, preset: owl, color: teal}") || !strings.Contains(plan.Diff, "-    avatar: { preset: owl, color: teal }") {
+	if !strings.Contains(plan.Diff, "+    avatar: {image: avatars/sre.png, shape: circle, eyes: wide, color: teal}") || !strings.Contains(plan.Diff, "-    avatar: { preset: owl, color: teal }") {
 		t.Fatalf("diff:\n%s", plan.Diff)
 	}
 	if now, _ := os.ReadFile(p); !bytes.Equal(now, before) {
@@ -99,7 +99,7 @@ func TestBotAvatarSetPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a := cfg.Bots["sre"].Avatar; a.Image != "avatars/sre.png" || a.Preset != "owl" || a.Color != "teal" || a.ImagePath == "" {
+	if a := cfg.Bots["sre"].Avatar; a.Image != "avatars/sre.png" || a.Shape != "circle" || a.Eyes != "wide" || a.Color != "teal" || a.ImagePath == "" {
 		t.Fatalf("loaded avatar: %+v", a)
 	}
 	// Again: it replaces the picture. Clearing keeps the face.
@@ -108,7 +108,7 @@ func TestBotAvatarSetPlan(t *testing.T) {
 		t.Fatalf("second set: %+v %v", again, err)
 	}
 	clr, err := planAvatar(p, "sre", nil, nil)
-	if err != nil || !clr.Valid || !strings.Contains(clr.Diff, "+    avatar: {preset: owl, color: teal}") {
+	if err != nil || !clr.Valid || !strings.Contains(clr.Diff, "+    avatar: {shape: circle, eyes: wide, color: teal}") {
 		t.Fatalf("clear: %+v %v", clr, err)
 	}
 	// A bot with no face: set adds image alone; clear removes avatar: entirely.

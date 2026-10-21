@@ -236,7 +236,7 @@ func TestExampleConfigIdentityBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := string(raw)
-	for _, k := range []string{"display_name:", "tagline:", "avatar: { preset", "color:", "personality:", "  tone:", "  style:", "attachments:", "avatar: { icon: radar"} {
+	for _, k := range []string{"display_name:", "tagline:", "avatar: { shape", "color:", "personality:", "  tone:", "  style:", "attachments:", "avatar: { icon: radar"} {
 		old := "    # " + k
 		if strings.Count(doc, old) != 1 {
 			t.Fatalf("the example's identity block: %q appears %d times", old, strings.Count(doc, old))
@@ -258,7 +258,7 @@ func TestExampleConfigIdentityBlock(t *testing.T) {
 		t.Fatalf("the uncommented identity block: %v", err)
 	}
 	id := cfg.Bots["platform-sre"].Identity
-	if id.DisplayName != "Night Owl" || id.Tagline == "" || id.Avatar == nil || id.Avatar.Preset != "owl" || id.Color != "indigo" ||
+	if id.DisplayName != "Night Owl" || id.Tagline == "" || id.Avatar == nil || id.Avatar.Shape != "circle" || id.Avatar.Eyes != "wide" || id.Color != "indigo" ||
 		id.Personality == nil || id.Personality.Tone != "terse" || id.Personality.Style == "" {
 		t.Fatalf("identity: %+v", id)
 	}

@@ -368,7 +368,7 @@ func (s *Service) finishSweep(ctx context.Context, name string, w store.Worker, 
 			if r.Cases == nil {
 				r.Cases = map[string]*store.Case{}
 			}
-			r.Cases[cid] = &store.Case{ID: cid, Title: oneLine("["+f.Severity+"] "+f.Title, 200), Status: "open", Source: "proactive",
+			r.Cases[cid] = &store.Case{ID: cid, Title: oneLine("["+f.Severity+"] "+f.Title, 200), Status: store.TicketInProgress, Source: "proactive",
 				Requester: "sweep " + sw.ID, RequesterClass: ReqProactive, Summary: oneLine(f.Detail, 2000),
 				Key: f.Key, Severity: f.Severity, Created: now, Updated: now}
 			f.CaseID, f.Notified = cid, true
@@ -436,7 +436,7 @@ func openCaseByKey(r *store.BotRecord, key string) *store.Case {
 		return nil
 	}
 	for _, c := range r.Cases {
-		if c.Status == "open" && c.Key == key {
+		if store.Active(c.Status) && c.Key == key {
 			return c
 		}
 	}

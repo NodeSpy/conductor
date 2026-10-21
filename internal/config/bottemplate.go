@@ -89,6 +89,7 @@ var forbiddenTemplateKeys = map[string]string{
 	"memory":         "memory limits are the operator's knob",
 	"purchases":      "purchase caps are the operator's",
 	"attachments":    "attachment limits (sizes, types, retention) are the operator's knob",
+	"tickets":        "whether a bot may mark its own tickets ready is the operator's choice (a widening)",
 	"peers":          "linking bots is a channel for data to cross — the operator's choice",
 	"terraform":      "conductor-executed Terraform binds connectors and repos — environment",
 	"home":           "the home runtime is environment — suggest a model with model:",
@@ -442,6 +443,9 @@ func loadTemplate(name string, t BotTemplate, dir string) (LoadedTemplate, error
 	h.Write(b)
 	h.Write([]byte(lt.Charter))
 	lt.Digest = hex.EncodeToString(h.Sum(nil))[:12]
+	// A deprecated preset reads as its shape and eyes — after the digest,
+	// so a template that names one doesn't read as changed.
+	lt.T.Identity.Avatar = resolveAvatarPreset(lt.T.Identity.Avatar)
 	return lt, nil
 }
 

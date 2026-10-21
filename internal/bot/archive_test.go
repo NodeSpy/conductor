@@ -238,7 +238,7 @@ func TestArchivableSelection(t *testing.T) {
 	_, _ = repo.git(ctx, repo.Dir, "add", "-A")
 	_, _ = repo.git(ctx, repo.Dir, "commit", "-q", "-m", "logs")
 	blobs, _ := repo.logBlobs(ctx)
-	rec := store.BotRecord{Cases: map[string]*store.Case{"c1": {ID: "c1", Status: "closed"}, "c2": {ID: "c2", Status: "open"}}, ConsolidatedDocs: map[string]string{}}
+	rec := store.BotRecord{Cases: map[string]*store.Case{"c1": {ID: "c1", Status: store.TicketDone}, "c2": {ID: "c2", Status: store.TicketInProgress}}, ConsolidatedDocs: map[string]string{}}
 	for p := range files {
 		if !strings.Contains(p, "not-consd") {
 			rec.ConsolidatedDocs[p] = blobs[p]

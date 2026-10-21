@@ -253,7 +253,7 @@ func TestTeamLeadTriagesAndAssigns(t *testing.T) {
 		t.Fatal(err)
 	}
 	bc := f.caseOf(t, "b", res["case"].(string))
-	if bc.Requester != "op" || bc.RequesterClass != ReqOperator || bc.Source != "chat.mention" || !bc.Urgent || bc.Title != "web latency" {
+	if bc.Requester != "op" || bc.RequesterClass != ReqOperator || bc.Source != "chat.mention" || !bc.Urgent || bc.Title != "web latency" || bc.Assignee != "bot:b" {
 		t.Fatalf("the assignee's case is not the original request: %+v", bc)
 	}
 	if bc.Routing.Via != "lead" || bc.Routing.Lead != "lead" || bc.Routing.LeadCase != lc || bc.Routing.Note != "looks like the web tier" {
@@ -268,7 +268,7 @@ func TestTeamLeadTriagesAndAssigns(t *testing.T) {
 		t.Fatal("an urgent routed event did not start the assignee's worker")
 	}
 	tc = f.caseOf(t, "lead", lc)
-	if tc.Status != "closed" || tc.Routing.State != "assigned" || tc.Routing.Assignee != "b" || tc.Routing.AssigneeCase != bc.ID {
+	if tc.Status != store.TicketDone || tc.Routing.State != "assigned" || tc.Routing.Assignee != "b" || tc.Routing.AssigneeCase != bc.ID {
 		t.Fatalf("the lead's case does not record the assignment: %+v %+v", tc, tc.Routing)
 	}
 	if _, err := f.svc.Assign(ctx, wa, lc, "a", ""); err == nil || !strings.Contains(err.Error(), "not awaiting triage (assigned to b)") {
@@ -394,7 +394,7 @@ func TestTeamRoutingNeverUpgradesTrust(t *testing.T) {
 
 func firstOpen(f *teamFixture, bot, title string) string {
 	for _, c := range f.st.Bot(bot).Cases {
-		if c.Status == "open" && c.Title == title {
+		if store.Active(c.Status) && c.Title == title {
 			return c.ID
 		}
 	}

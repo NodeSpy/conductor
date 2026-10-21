@@ -74,7 +74,7 @@ func (s *Service) Ask(ctx context.Context, c Actor, to, text, caseID string) (ma
 		}
 		if caseID != "" {
 			cs := r.Cases[caseID]
-			if cs == nil || cs.Status != "open" {
+			if cs == nil || !store.Active(cs.Status) {
 				return fmt.Errorf("no open case %q", caseID)
 			}
 			if cs.Peer == to {
@@ -92,7 +92,7 @@ func (s *Service) Ask(ctx context.Context, c Actor, to, text, caseID string) (ma
 	// log entry, the inbox.
 	var rc store.Case
 	err = s.Ledger.UpdateBot(to, func(r *store.BotRecord) error {
-		if cs := r.Cases[replyTo]; replyTo != "" && cs != nil && cs.Status == "open" {
+		if cs := r.Cases[replyTo]; replyTo != "" && cs != nil && store.Active(cs.Status) {
 			cs.Summary = strings.TrimSpace(cs.Summary + "\n" + now.UTC().Format("01-02 15:04") + " reply from bot " + from)
 			cs.Updated = now
 			rc = *cs
@@ -101,7 +101,7 @@ func (s *Service) Ask(ctx context.Context, c Actor, to, text, caseID string) (ma
 			if r.Cases == nil {
 				r.Cases = map[string]*store.Case{}
 			}
-			cs := &store.Case{ID: id, Title: oneLine("message from bot "+from+": "+text, 200), Status: "open",
+			cs := &store.Case{ID: id, Title: oneLine("message from bot "+from+": "+text, 200), Status: store.TicketInProgress,
 				Source: PeerRequester(from), Requester: PeerRequester(from), RequesterClass: ReqPeer,
 				Peer: from, PeerCase: caseID, Created: now, Updated: now}
 			r.Cases[id] = cs

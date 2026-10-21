@@ -284,7 +284,7 @@ bots:
     proactive: { every: 4h, quiet_hours: "22:00-07:00", checklist: { section: "Proactive checks" }, notify_at: high }
     model: claude-opus-5                # a suggested home model (applied when the operator sets none)
     display_name: Pager Pal             # a suggested identity: every field optional, each one the operator's to override
-    avatar: { preset: lighthouse }      # or { image: face.png, preset: lighthouse }: a picture inside the pack
+    avatar: { shape: drop, eyes: focused }   # or { image: face.png, shape: drop }: a picture inside the pack
     personality: { tone: friendly, style: "Explain the why behind every step." }
     runtime: "a use: cli runtime with claude-code"   # a suggestion, shown — runtimes are the operator's
 ```
@@ -350,7 +350,7 @@ The operator control socket serves the same catalog and plans (`cmd: "bot"`):
 |---|---|---|
 | `packs` | `search`, `registry`, `installed`, `include_templates` | the pack catalog, each with its content kinds; template-only packs counted in `hidden_template_packs` unless `include_templates` ([[Packs]]) |
 | `templates` | `search`, `registry`, `installed` | `{ templates: [ { ref, template, pack, version, description, tags, installed, install, inputs, verbs, read_only, above_observe, triggers, proactive, model, runtime, identity, seed, collections, used_by, digest } ] }` |
-| `identity_options` | — | the avatar presets, icons, identity colors, status hues, tones and caps (no bot needed) |
+| `identity_options` | — | the avatar shapes, eyes, icons, identity colors, status hues, tones and caps, plus the deprecated presets' pairs (no bot needed) |
 | `template` | `ref`, `registry` | one template, with its `charter` |
 | `template_plan` | `name`, `template`, `connectors`, `grants`, `proactive`, `registry` | `{ bot, template, entry, triggers, diff, valid, error, review, notes, widening, install }`: a registry template's plan installs its pack (`install`); a third-party source needs a `pack_trust.allow` entry here |
 | `grant_plan` | `bot`, `grants` | the same, for a widening |
