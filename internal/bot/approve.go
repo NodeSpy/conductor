@@ -353,9 +353,8 @@ func (x *Executor) execVerb(ctx context.Context, d Decision, p store.Proposal) (
 			q.Status, q.Reason = "failed", err.Error()
 		} else {
 			q.Status, q.Result = "executed", res
-			if q.Tier == config.TierCommitMoney {
-				r.Spend = append(r.Spend, store.SpendEntry{At: x.now(), Amount: q.Amount, Proposal: q.ID})
-			}
+			// The spend was reserved atomically at the gate (reserveSpend)
+			// before the action ran, so it is not appended again here.
 		}
 		out = *q
 		return nil

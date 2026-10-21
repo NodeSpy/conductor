@@ -467,6 +467,89 @@ func TestApproveSpendRecordedAndRechecked(t *testing.T) {
 	}
 }
 
+// TestApprovedSpendCapAtomicUnderConcurrency (M1): two approved $100
+// proposals under a $150 period cap, decided CONCURRENTLY. The cap check and
+// the spend append must be one atomic ledger step, so exactly one is admitted
+// — the other refused — rather than both passing a stale snapshot and jointly
+// reaching $200. Serial decisions were always safe; this exercises the race
+// the old pure-read re-check (checkSpend with a dead atExecution flag) left
+// open.
+//
+// To make the old bug reproduce deterministically (not just probabilistically),
+// each RunVerb blocks AFTER it has consulted the gate until the other side has
+// too, so both would read a zero-spend snapshot before either records. With the
+// fix the gate itself records under the ledger lock, so the second consult
+// fails and never reaches the rendezvous — a timeout releases the one that
+// passed, so the test cannot deadlock.
+func TestApprovedSpendCapAtomicUnderConcurrency(t *testing.T) {
+	f := newExecFixture(t, testBot())
+	var mu sync.Mutex
+	passed := make(chan struct{}, 2)
+	proceed := make(chan struct{})
+	go func() {
+		got, timer := 0, time.After(2*time.Second)
+		for got < 2 {
+			select {
+			case <-passed:
+				got++
+			case <-timer:
+				close(proceed)
+				return
+			}
+		}
+		close(proceed)
+	}()
+	f.x.RunVerb = func(ctx context.Context, id flow.SkillIdentity, uses string, opts map[string]any) (map[string]any, error) {
+		v, err := f.gate.CheckVerb(ctx, id, uses, opts)
+		if err != nil {
+			return nil, err
+		}
+		if !v.Allow {
+			return nil, errors.New("gate did not admit the approved call")
+		}
+		passed <- struct{}{} // both getting here (old code) is the overshoot
+		<-proceed
+		mu.Lock()
+		f.ran = append(f.ran, uses)
+		mu.Unlock()
+		return map[string]any{"ok": true}, nil
+	}
+	a := f.propose(t, "aws.purchase_sp", map[string]any{"total_usd": 100.0})
+	b := f.propose(t, "aws.purchase_sp", map[string]any{"total_usd": 100.0})
+	sigA := f.sign(t, f.op, a, "approve")
+	sigB := f.sign(t, f.op, b, "approve")
+
+	var wg sync.WaitGroup
+	var ok, fail int
+	decide := func(id, sig string) {
+		defer wg.Done()
+		out, err := f.x.Decide(context.Background(), Decision{Bot: "sre", Proposal: id, Operator: "op", Decision: "approve", Signature: sig})
+		mu.Lock()
+		if err == nil && out.Status == "executed" {
+			ok++
+		} else {
+			fail++
+		}
+		mu.Unlock()
+	}
+	wg.Add(2)
+	go decide(a, sigA)
+	go decide(b, sigB)
+	wg.Wait()
+
+	if ok != 1 || fail != 1 {
+		t.Fatalf("M1: want exactly one admitted and one refused, got ok=%d fail=%d", ok, fail)
+	}
+	sp := f.st.Bot("sre").Spend
+	var total float64
+	for _, s := range sp {
+		total += s.Amount
+	}
+	if len(sp) != 1 || total > 150 {
+		t.Fatalf("M1: joint spend overshot the $150 period cap: %+v (total %.2f)", sp, total)
+	}
+}
+
 func TestApprovedContextAdmitsOnlyItsAction(t *testing.T) {
 	f := newExecFixture(t, testBot())
 	pid := f.propose(t, "gh.comment", map[string]any{"body": "hi"})

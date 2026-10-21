@@ -209,7 +209,7 @@ func (g *Gate) CheckVerb(ctx context.Context, id flow.SkillIdentity, uses string
 			return flow.BotVerdict{}, errors.New("proposal is not in the approved state")
 		}
 		if tier == config.TierCommitMoney {
-			if err := g.checkSpend(m, rec, p.Amount, true); err != nil {
+			if err := g.reserveSpend(m, id.Bot, ac.proposal, p.Amount); err != nil {
 				return flow.BotVerdict{}, err
 			}
 		}
@@ -234,7 +234,7 @@ func (g *Gate) CheckVerb(ctx context.Context, id flow.SkillIdentity, uses string
 		if err != nil {
 			return flow.BotVerdict{}, err
 		}
-		if err := g.checkSpend(m, g.Ledger.Bot(id.Bot), amt, false); err != nil {
+		if err := g.checkSpend(m, g.Ledger.Bot(id.Bot), amt); err != nil {
 			return flow.BotVerdict{}, err
 		}
 		if ok, err := g.unattended(id, m, uses, options, amt, cl); err != nil {
@@ -488,9 +488,10 @@ func amountOf(m config.BotConfig, uses string, options map[string]any) (float64,
 	return f, nil
 }
 
-// checkSpend enforces the hard cap. atExecution re-checks the period total
-// at the moment of spending, so two approvals cannot jointly overshoot it.
-func (g *Gate) checkSpend(m config.BotConfig, rec store.BotRecord, amt float64, atExecution bool) error {
+// checkSpend enforces the hard cap against a ledger snapshot. It gates the
+// propose path (no spend has been recorded yet), where a snapshot read is
+// enough; the approved-execution path reserves atomically via reserveSpend.
+func (g *Gate) checkSpend(m config.BotConfig, rec store.BotRecord, amt float64) error {
 	sc := m.Autonomy.SpendCap
 	if sc == nil {
 		return errors.New("commit_money without autonomy.spend_cap")
@@ -498,11 +499,42 @@ func (g *Gate) checkSpend(m config.BotConfig, rec store.BotRecord, amt float64, 
 	if g.Ledger.BotsDegraded() {
 		return errors.New("the bot ledger was unreadable at boot (spend history unknown) — commit_money is refused until an operator restores bots.json")
 	}
-	if err := sc.Check(amt, g.now(), func(since time.Time) float64 { return spentSince(rec, since) }); err != nil {
-		return err
+	return sc.Check(amt, g.now(), func(since time.Time) float64 { return spentSince(rec, since) })
+}
+
+// reserveSpend re-checks the spend cap and records the spend for an approved
+// commit_money proposal in a SINGLE ledger transaction, under the bot's lock.
+// This is the atomic check-and-commit the unattended path already uses
+// (gate.go unattended): two concurrent approvals that each pass a stale
+// snapshot can no longer both append — the second sees the first's spend and
+// is refused. Idempotent per proposal: a proposal already charged (the same
+// execution re-entering the gate) is not charged twice.
+//
+// The spend is reserved before the irreversible action runs (the gate admits
+// the call only after this returns), so a later failure leaves the reservation
+// standing — the conservative over-count the unattended path also accepts, so
+// a cap can never be undershot.
+func (g *Gate) reserveSpend(m config.BotConfig, bot, proposal string, amt float64) error {
+	sc := m.Autonomy.SpendCap
+	if sc == nil {
+		return errors.New("commit_money without autonomy.spend_cap")
 	}
-	_ = atExecution
-	return nil
+	if g.Ledger.BotsDegraded() {
+		return errors.New("the bot ledger was unreadable at boot (spend history unknown) — commit_money is refused until an operator restores bots.json")
+	}
+	return g.Ledger.UpdateBot(bot, func(r *store.BotRecord) error {
+		for _, s := range r.Spend {
+			if s.Proposal == proposal {
+				return nil // already reserved for this proposal
+			}
+		}
+		now := g.now()
+		if err := sc.Check(amt, now, func(since time.Time) float64 { return spentSince(*r, since) }); err != nil {
+			return err
+		}
+		r.Spend = append(r.Spend, store.SpendEntry{At: now, Amount: amt, Proposal: proposal})
+		return nil
+	})
 }
 
 func spentSince(rec store.BotRecord, since time.Time) float64 {
