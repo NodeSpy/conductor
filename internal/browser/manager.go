@@ -218,6 +218,22 @@ func (m *Manager) audit(e map[string]any) {
 	}
 }
 
+// scrubEntry redacts filled secret values from the audit fields that can
+// carry text reflected from the page (url, target) or an error reason, so a
+// page-echoed or path-embedded secret never reaches the audit sink. It must
+// run before the entry is written (m.audit), not after — scrubbing a map the
+// sink has already consumed does nothing.
+func scrubEntry(inst *Instance, e map[string]any) {
+	if inst == nil {
+		return
+	}
+	for _, k := range []string{"url", "target", "reason"} {
+		if v, ok := e[k].(string); ok {
+			e[k] = inst.scrub(v)
+		}
+	}
+}
+
 // SessionKey is the browser session a token stands for.
 func SessionKey(token string) string {
 	h := sha256.Sum256([]byte("browser:" + token))
@@ -294,6 +310,10 @@ func (m *Manager) doWith(ctx context.Context, c Principal, st Settings, action s
 	default:
 		entry["outcome"] = "ok"
 	}
+	// Scrub filled secret values out of the fields that can carry text
+	// reflected from the page (the URL, the action target) or an error
+	// string, BEFORE the entry reaches the audit sink — not after.
+	scrubEntry(inst, entry)
 	m.audit(entry)
 	if name, _ := entry["credential"].(string); name != "" && (action == "login" || action == "fill-credential") {
 		o, _ := entry["origin"].(string)
@@ -307,13 +327,6 @@ func (m *Manager) doWith(ctx context.Context, c Principal, st Settings, action s
 	}
 	if res == nil {
 		res = map[string]any{}
-	}
-	if inst != nil {
-		for _, k := range []string{"url", "target"} {
-			if v, ok := entry[k].(string); ok {
-				entry[k] = inst.scrub(v)
-			}
-		}
 	}
 	res["profile"] = profileName(s, granted)
 	if len(granted) == 0 && why != "" {
