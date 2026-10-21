@@ -79,15 +79,22 @@ func (in *Instance) snapshot(ctx context.Context, t *tab, max int) (string, int,
 		return "", 0, err
 	}
 	// A field conductor filled never shows its value (a CVC or a region
-	// code is too short to scrub from text: its node is what is known).
+	// code is too short to scrub from text: its node is what is known). Its
+	// own AX value is replaced with the mark, and its subtree — where the
+	// browser mirrors the value as StaticText the renderer would otherwise
+	// print — is made quiet.
 	in.mu.Lock()
+	secret := make(map[int64]bool, len(in.secretNodes))
+	for id := range in.secretNodes {
+		secret[id] = true
+	}
 	for i := range r.Nodes {
-		if in.secretNodes[r.Nodes[i].BackendID] && r.Nodes[i].Value != nil {
+		if secret[r.Nodes[i].BackendID] && r.Nodes[i].Value != nil {
 			r.Nodes[i].Value = &axValue{Value: json.RawMessage(`"` + FilledMark + `"`)}
 		}
 	}
 	in.mu.Unlock()
-	text, refs := renderAX(r.Nodes, max)
+	text, refs := renderAX(r.Nodes, max, secret)
 	in.mu.Lock()
 	if t.refs == nil {
 		t.refs = map[string]int64{}
@@ -103,7 +110,10 @@ func (in *Instance) snapshot(ctx context.Context, t *tab, max int) (string, int,
 const FilledMark = "«filled by conductor»"
 
 // renderAX turns an AX tree into the snapshot text, and the refs it shows.
-func renderAX(nodes []axNode, max int) (string, map[string]int64) {
+// secret names the backend ids of filled fields: their subtree is rendered
+// quiet, so the StaticText the browser mirrors a filled value into is not
+// printed (the field's own value is already the mark).
+func renderAX(nodes []axNode, max int, secret map[int64]bool) (string, map[string]int64) {
 	byID := make(map[string]*axNode, len(nodes))
 	for i := range nodes {
 		byID[nodes[i].NodeID] = &nodes[i]
@@ -129,15 +139,20 @@ func renderAX(nodes []axNode, max int) (string, map[string]int64) {
 		lines++
 	}
 	var lastText string
-	var walk func(n *axNode, depth int, quiet bool)
-	walk = func(n *axNode, depth int, quiet bool) {
-		if n == nil {
+	// inSecret is set while walking below a filled field: the browser mirrors
+	// the value into that subtree (StaticText for an input, a selected option
+	// for a select), so none of it is rendered — the field's own line already
+	// shows the mark.
+	var walk func(n *axNode, depth int, quiet, inSecret bool)
+	walk = func(n *axNode, depth int, quiet, inSecret bool) {
+		if n == nil || inSecret {
 			return
 		}
 		role := n.Role.str()
 		name := strings.TrimSpace(collapse(n.Name.str()))
 		next := depth
 		childQuiet := quiet
+		childSecret := false
 		switch {
 		case n.Ignored || transparent[role]:
 		case role == "StaticText":
@@ -165,12 +180,13 @@ func renderAX(nodes []axNode, max int) (string, map[string]int64) {
 			lastText = ""
 			next = depth + 1
 			childQuiet = quiet || labelled[role]
+			childSecret = secret[n.BackendID]
 		}
 		for _, c := range n.ChildIDs {
-			walk(byID[c], next, childQuiet)
+			walk(byID[c], next, childQuiet, childSecret)
 		}
 	}
-	walk(root, 0, false)
+	walk(root, 0, false, false)
 	if cut > 0 {
 		fmt.Fprintf(&b, "… (snapshot truncated at %d bytes; pass --max to see more)\n", max)
 	}

@@ -38,6 +38,15 @@ type Instance struct {
 	// from: a test sign-in that ends on one of them did not get through.
 	submitted []string
 	secrets   []string
+	// maskVals is every filled value AND the text the page displays for it (a
+	// select's option label); used to blind the wait comparison, which the
+	// agent never reads, so over-scrubbing a short value there is safe.
+	maskVals []string
+	// secretsShort are filled values too short (< 4 chars: a CVC, a region
+	// code) to scrub from every reply without shredding it — kept apart and
+	// used only where conductor extracts a value out of a page's own text (a
+	// receipt's order number), so such a value can never be smuggled back.
+	secretsShort []string
 
 	// onDownload is told when a download completes (the manager moves it
 	// into the workspace); it runs on its own goroutine.

@@ -180,6 +180,11 @@ func (s *Site) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/codefield":
 		// A code field whose value the page echoes as text.
 		page(w, "Code", `<h1>Code</h1><label>Code <input name="otp" autocomplete="one-time-code" oninput="document.getElementById('echo').textContent = 'You typed ' + this.value"></label><p id="echo"></p>`)
+	case "/codefield-xform":
+		// A HOSTILE page (stand-in for XSS / a compromised dependency on the
+		// trusted origin): its own script base64-encodes the filled value into
+		// visible text, to beat a literal substring scrub.
+		page(w, "Code", `<h1>Code</h1><label>Code <input name="otp" autocomplete="one-time-code" oninput="document.getElementById('echo').textContent = btoa(this.value)"></label><p id="echo"></p>`)
 	case "/login/otp", "/login/approve", "/login/approve/status", "/passkey/register", "/passkey/login", "/passkey/challenge", "/framed":
 		s.auth(w, r)
 	case "/evil":

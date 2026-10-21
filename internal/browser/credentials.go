@@ -821,8 +821,51 @@ func (in *Instance) remember(nodeID int64, v string) {
 	}
 	in.secretNodes[nodeID] = true
 	if len(v) > 0 {
-		in.secrets = append(in.secrets, v)
+		in.maskVals = append(in.maskVals, v)
+		if len(v) >= 4 {
+			in.secrets = append(in.secrets, v)
+		}
 	}
+}
+
+// rememberDisplay records the text the page shows for a filled field (a
+// select's option label), so the wait comparison cannot be an oracle for it.
+func (in *Instance) rememberDisplay(v string) {
+	if v == "" {
+		return
+	}
+	in.mu.Lock()
+	in.maskVals = append(in.maskVals, v)
+	in.mu.Unlock()
+}
+
+// scrubWait blanks every filled value and displayed label from s. It is for
+// the wait comparison only — never returned to the agent — so it removes short
+// values too (which the reply scrub leaves, to avoid shredding real text).
+func (in *Instance) scrubWait(s string) string {
+	in.mu.Lock()
+	vals := append([]string(nil), in.maskVals...)
+	in.mu.Unlock()
+	for _, v := range vals {
+		if v != "" {
+			s = strings.ReplaceAll(s, v, Redacted)
+		}
+	}
+	return s
+}
+
+// rememberShort records a filled value too short for the general scrub (a
+// CVC, a 2-letter region). It is not scrubbed from every reply (that would
+// shred the page), but it is scrubbed where conductor pulls a value out of a
+// page's own text — a receipt's order number — so a merchant cannot smuggle
+// it back to the agent there.
+func (in *Instance) rememberShort(v string) {
+	if v == "" {
+		return
+	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.secretsShort = append(in.secretsShort, v)
 }
 
 // noteSubmit records the page a sign-in step was submitted from.
@@ -874,6 +917,22 @@ const Redacted = "[redacted]"
 // scrub replaces every filled value in s.
 func (in *Instance) scrub(s string) string {
 	for _, v := range in.secretValues() {
+		if v != "" {
+			s = strings.ReplaceAll(s, v, Redacted)
+		}
+	}
+	return s
+}
+
+// scrubAll replaces every filled value, including the short ones kept out of
+// the general scrub. Used only where conductor extracts a value from a page's
+// own text (a receipt), never on a whole reply (it would shred the page).
+func (in *Instance) scrubAll(s string) string {
+	s = in.scrub(s)
+	in.mu.Lock()
+	short := append([]string(nil), in.secretsShort...)
+	in.mu.Unlock()
+	for _, v := range short {
 		if v != "" {
 			s = strings.ReplaceAll(s, v, Redacted)
 		}
@@ -938,13 +997,27 @@ const secretRectsJS = `function(secrets, full){
 	return {rects: out, width: full ? document.documentElement.scrollWidth : innerWidth};
 }`
 
-// maskSecrets blacks out, in a screenshot, every field and text showing a
-// filled value. A browser with filled values whose boxes cannot be found
-// gives no screenshot at all.
+// secretNodeBoxJS returns a filled node's on-screen box (CSS px, in the
+// capture's coordinates), or null when it has none (removed, or hidden).
+const secretNodeBoxJS = `function(full){
+	const r = this.getBoundingClientRect();
+	if (!(r.width > 0 && r.height > 0)) return null;
+	return [r.left + (full ? scrollX : 0), r.top + (full ? scrollY : 0), r.width, r.height];
+}`
+
+// maskSecrets blacks out, in a screenshot, every field conductor filled and
+// every element whose own text shows a filled value. Filled fields are masked
+// by their node (so a value too short to scrub from text — a CVC, a region
+// code — is hidden the same as it is in a snapshot); text echoes of a value
+// long enough to scrub are masked by that value. A browser where a value was
+// filled but whose boxes cannot be found gives no screenshot at all.
 func (in *Instance) maskSecrets(ctx context.Context, t *tab, shot []byte, full bool) ([]byte, error) {
-	secrets := in.secretValues()
-	if len(secrets) == 0 {
+	if !in.filled() {
 		return shot, nil
+	}
+	secrets := in.secretValues()
+	if secrets == nil {
+		secrets = []string{} // never null: secretRectsJS calls .some on it
 	}
 	fail := func(err error) ([]byte, error) {
 		return nil, fmt.Errorf("browser: a credential was filled in this browser and its fields could not be masked (%v) — no screenshot", err)
@@ -968,10 +1041,49 @@ func (in *Instance) maskSecrets(ctx context.Context, t *tab, shot []byte, full b
 	if err := json.Unmarshal(raw, &r); err != nil || r.Width <= 0 {
 		return fail(fmt.Errorf("no page width"))
 	}
-	if len(r.Rects) == 0 {
+	// Every filled field, by its node — the value's length does not matter.
+	nrects, err := in.secretNodeRects(ctx, t, w, full)
+	if err != nil {
+		return fail(err)
+	}
+	rects := append(r.Rects, nrects...)
+	if len(rects) == 0 {
 		return shot, nil
 	}
-	return maskPNG(shot, r.Rects, r.Width)
+	return maskPNG(shot, rects, r.Width)
+}
+
+// secretNodeRects is the box of every filled field that is still in this
+// frame's document. A node that no longer resolves there (removed, or moved to
+// another document) is skipped — it is not in this capture; one that resolves
+// but cannot be measured fails the screenshot closed.
+func (in *Instance) secretNodeRects(ctx context.Context, t *tab, w int, full bool) ([][4]float64, error) {
+	in.mu.Lock()
+	ids := make([]int64, 0, len(in.secretNodes))
+	for id := range in.secretNodes {
+		ids = append(ids, id)
+	}
+	in.mu.Unlock()
+	var out [][4]float64
+	for _, id := range ids {
+		obj, err := in.resolveIn(ctx, t, id, w)
+		if err != nil {
+			continue // gone from this document: nothing to mask
+		}
+		raw, err := in.callOn(ctx, t, obj, secretNodeBoxJS, full)
+		if err != nil {
+			return nil, err // present but unmeasurable: fail closed
+		}
+		if len(raw) == 0 || string(raw) == "null" {
+			continue
+		}
+		var box [4]float64
+		if err := json.Unmarshal(raw, &box); err != nil {
+			return nil, err
+		}
+		out = append(out, box)
+	}
+	return out, nil
 }
 
 // codeSkew is how much earlier than the sign-in step an emailed code may be
