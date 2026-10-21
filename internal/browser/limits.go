@@ -329,6 +329,36 @@ func (m *Manager) PurchaseLayers(p Purchase) ([]LayerState, error) {
 	return m.Purchases.Evaluate(m.rulesFor(st, cd, p), p, p.ID)
 }
 
+// SpentOnCase sums, in cents, what one bot's case has committed in a currency
+// — the pending/approved/being-paid/paid purchases proposed under it (the same
+// committing set the budget counts). It implements bot.SpendLedger so a
+// ticket's spend view reads the real ledger: ticketSpent asks it per copy
+// (bot + the copy's case id) and sums across copies, matching the lifetime cap
+// enforcement (which counts the same committing statuses under the ticket's
+// stable id). A copy keeps its own case id on the purchase, so this is the
+// per-copy slice of that total.
+func (l *Purchases) SpentOnCase(bot, caseID, currency string) (int64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	f, err := l.loadLocked()
+	if err != nil {
+		return 0, err
+	}
+	l.expireLocked(f)
+	cur := strings.ToUpper(strings.TrimSpace(currency))
+	var cents int64
+	for _, p := range f.Purchases {
+		if p.Bot != bot || p.CaseID != caseID || !committing[p.Status] {
+			continue
+		}
+		if strings.ToUpper(p.Currency) != cur {
+			continue
+		}
+		cents += int64(math.Round(round2(p.Total) * 100))
+	}
+	return cents, nil
+}
+
 // Committed is what a ticket's budget holds now (pending, approved, being
 // paid, paid), and those purchases.
 func (l *Purchases) Committed(key string) (float64, []string) {

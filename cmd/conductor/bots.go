@@ -89,6 +89,11 @@ func buildBots(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *co
 			h, ok := st.GetHistory(hid)
 			return bot.RunUsage{CostUSD: h.CostUSD, Tokens: h.Tokens, Turns: h.Turns, ByModel: h.Usage}, ok
 		},
+		// A ticket's spend view reads the browser's live purchase ledger: it is
+		// wired after buildBots (wireBrowser), so resolve it per call rather than
+		// capture a nil at construction. Without a browser on this daemon the
+		// view reports spend unknown, as before.
+		Spend: spendLedger{},
 	}
 	if notifier != nil {
 		// A proactive finding over the threshold is also a conductor.*
@@ -124,6 +129,21 @@ func buildBots(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *co
 //		Provider: func(base string) (string, bool) { return <the conductor-owned paseo provider entry `conductor paseo setup` made for base, e.g. claude-sandboxed> },
 //	}
 func sandboxSeam() bot.Sandbox { return bot.NoSandbox{} }
+
+// spendLedger is bot.SpendLedger over the daemon's live browser purchase
+// ledger, so a ticket's spend view (conductor ticket show, GET /v1/tickets/{id})
+// reports its real committed spend against its lifetime cap. The browser is
+// wired after the bots (wireBrowser) and may be off, so it resolves the ledger
+// at call time: with no browser the view reports spend unknown, as before.
+type spendLedger struct{}
+
+func (spendLedger) SpentOnCase(bot, caseID, currency string) (int64, error) {
+	m := browserMgr.Load()
+	if m == nil || m.Purchases == nil {
+		return 0, fmt.Errorf("no browser purchase ledger on this daemon")
+	}
+	return m.Purchases.SpentOnCase(bot, caseID, currency)
+}
 
 // botSessionLookup resolves a sandboxed launch's cwd to the live bot session
 // running in it (home or hand-off worker). wireAgentSandbox hands it to the
