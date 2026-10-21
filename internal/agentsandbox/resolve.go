@@ -36,6 +36,15 @@ type Resolver struct {
 	Env []string
 	// GOOS is the platform the launch runs on.
 	GOOS string
+	// Session resolves a cwd that is NOT in the registry to a live bot
+	// session's entry (its identity, its granted skill verbs, its read-only
+	// paths), consulted before a default workspace is built. This is how a
+	// bot's home — or a hand-off worker — keeps its bot identity and verbs
+	// under the sandbox: its session is a PINNED paseo workspace conductor
+	// never registered as a worktree, so `conductor sandbox exec` would
+	// otherwise resolve it to a verb-less `dir:` identity. nil: no bot
+	// sessions on this daemon (the lookup is wired by the bot service).
+	Session func(cwd string) (Entry, bool)
 }
 
 func (r *Resolver) registry() *Registry {
@@ -61,13 +70,18 @@ func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK b
 		return Policy{}, fmt.Errorf("agentsandbox: cwd %q is not absolute", cwd)
 	}
 	if e, ok := r.registry().Lookup(cwd); ok {
-		p, err := r.PolicyForEntry(e, tool, launcherEnv)
-		// The agent starts where it was started, inside its workspace.
-		p.Cwd = canon(cwd)
-		if err == nil && p.Tool == "claude-code" && e.Dispatch != "" && p.Cwd != p.Workspace {
-			err = trustClaudeWorkspace(p.Home, p.Cwd)
+		return r.policyForCwd(e, cwd, tool, launcherEnv)
+	}
+	// A bot session's cwd is not registered as a worktree (it is a pinned
+	// paseo workspace): resolve it to the bot's entry before falling to a
+	// default, so the launch keeps its bot identity and verbs.
+	if r.Session != nil {
+		if e, ok := r.Session(cwd); ok {
+			if e.Workspace == "" {
+				e.Workspace = canon(cwd)
+			}
+			return r.policyForCwd(e, cwd, tool, launcherEnv)
 		}
-		return p, err
 	}
 	ws := canon(cwd)
 	if err := r.defaultAllowed(ws); err != nil {
@@ -83,6 +97,18 @@ func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK b
 		return p, perr
 	}
 	return r.PolicyForEntry(DefaultEntry(ws), tool, launcherEnv)
+}
+
+// policyForCwd builds the policy for an entry whose workspace is the launch's
+// own cwd — a registered workspace, or a live bot session. The agent starts
+// where it was started, inside its workspace.
+func (r *Resolver) policyForCwd(e Entry, cwd, tool string, launcherEnv []string) (Policy, error) {
+	p, err := r.PolicyForEntry(e, tool, launcherEnv)
+	p.Cwd = canon(cwd)
+	if err == nil && p.Tool == "claude-code" && e.Dispatch != "" && p.Cwd != p.Workspace {
+		err = trustClaudeWorkspace(p.Home, p.Cwd)
+	}
+	return p, err
 }
 
 // scratchEntry is a tool's scratch workspace: an empty directory of its

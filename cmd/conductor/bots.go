@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/bot"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
@@ -109,7 +110,7 @@ func buildBots(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *co
 	runner.Bots = gate
 	runner.BotRouter = svc
 	if !sandbox.Active() {
-		logf("bots: %s — sessions are NOT sandboxed until conductor's agent sandbox is on this daemon; promotion beyond observe/propose is refused without it", strings.Join(cfg.BotNames(), ", "))
+		logf("bots: %s — the bot write-promotion seam is off, so promotion beyond observe/propose is refused (home/worker sessions still run under conductor's agent sandbox when it is on)", strings.Join(cfg.BotNames(), ", "))
 	}
 	return &botStack{svc: svc, gate: gate}
 }
@@ -124,13 +125,52 @@ func buildBots(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *co
 //	}
 func sandboxSeam() bot.Sandbox { return bot.NoSandbox{} }
 
-// registerSandboxSessions hands the sandbox endpoint bots' cwd → session
-// lookup, so `conductor sandbox exec` launching a bot's home agent (or a
-// hand-off worker) mints that launch's token with the bot binding and
-// dispatch. A no-op until the sandbox is on main; then, roughly:
-//
-//	sandbox.SetSessionLookup(func(cwd string) (sandbox.Session, bool) { b, ok := svc.SessionForCwd(cwd); … })
-func registerSandboxSessions(svc *bot.Service) { _ = svc.SessionForCwd }
+// botSessionLookup resolves a sandboxed launch's cwd to the live bot session
+// running in it (home or hand-off worker). wireAgentSandbox hands it to the
+// agent sandbox resolver. buildBots runs before wireAgentSandbox, so the
+// lookup is published through this package var rather than set on the resolver
+// directly. nil when no bots are configured.
+var botSessionLookup func(cwd string) (agentsandbox.Entry, bool)
+
+// registerSandboxSessions publishes the cwd → session lookup the agent sandbox
+// consults: `conductor sandbox exec` launching a bot's home agent (or a
+// hand-off worker) then mints that launch's token with the bot binding, its
+// granted skill verbs and the dispatch — instead of the verb-less `dir:`
+// identity a workspace conductor never registered as a worktree would
+// otherwise get (the default-on agent sandbox stripping a bot's identity).
+func registerSandboxSessions(svc *bot.Service) {
+	botSessionLookup = func(cwd string) (agentsandbox.Entry, bool) {
+		b, ok := svc.SessionForCwd(cwd)
+		if !ok {
+			return agentsandbox.Entry{}, false
+		}
+		return botSessionEntry(svc.Cfg(), b), true
+	}
+}
+
+// botSessionEntry is the agent-sandbox entry for a live bot session: its own
+// per-session identity and tool state, the paths bound read-only (a home's
+// attachments, a worker's passed files), and a skill identity carrying the
+// bot binding and its granted verbs — the same grant the non-sandboxed launch
+// path mints via dispatch.SkillIdentityFor, so a bot acts identically with the
+// sandbox on. A hand-off worker additionally gets handoff.done (interactive).
+func botSessionEntry(cfg *config.Config, b bot.SessionBinding) agentsandbox.Entry {
+	pol := dispatch.EffectiveSkillPolicy(cfg.Bots[b.Bot].Skill, b.Role == config.BotRoleWorker)
+	return agentsandbox.Entry{
+		Identity: b.Identity,
+		ReadOnly: b.ReadOnly,
+		Skill: &skill.Identity{
+			Agent:     "bot:" + b.Bot,
+			Repo:      "bot:" + b.Bot,
+			Policy:    pol,
+			Bot:       b.Bot,
+			BotRole:   b.Role,
+			CaseID:    b.CaseID,
+			Dispatch:  b.Dispatch,
+			Requester: skill.RequesterEvent,
+		},
+	}
+}
 
 // revokeDispatch kills every conductor session token minted for a dispatch
 // (the broker's hand-off release path), durable ones included.

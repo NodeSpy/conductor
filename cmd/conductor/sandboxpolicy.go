@@ -92,6 +92,12 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		GitName: name, GitEmail: email,
 		Env:  os.Environ(),
 		GOOS: runtime.GOOS,
+		// A bot's home (or a hand-off worker) runs in a pinned paseo workspace
+		// conductor never registers as a worktree, so `conductor sandbox exec`
+		// would resolve it to a verb-less dir: identity. This lookup (published
+		// by buildBots, which ran earlier) resolves such a cwd to the bot's own
+		// identity and granted verbs. nil when no bots are configured.
+		Session: botSessionLookup,
 	}
 	if err := os.MkdirAll(r.StateRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("agent sandbox state dir %s: %w", r.StateRoot, err)
