@@ -419,6 +419,7 @@ const browserUsage = `usage: conductor browser <action> [args]
 An agent's browser (inside a sandboxed agent; over CONDUCTOR_ENDPOINT):
   open URL                      load a page (only browser.allow sites)
   snapshot [--max N]            the page as text, each control with a ref (e12)
+  source [--max N]              the page's HTML source, read-only, every filled value redacted
   click REF                     click
   fill REF TEXT [--submit]      replace a field's text
   type TEXT [--ref REF] [--submit]  type at a field (or the focus)
@@ -653,6 +654,13 @@ func browserAgent(action string, rest []string) error {
 		fmt.Printf("%s — %v\n%s", resp.Result["title"], resp.Result["url"], snap)
 		if p, ok := resp.Result["profile"].(string); ok && p != "anonymous" {
 			fmt.Printf("(profile: %s)\n", p)
+		}
+		return nil
+	}
+	if src, ok := resp.Result["source"].(string); ok && action == "source" {
+		fmt.Printf("%s — %v\n%s\n", resp.Result["title"], resp.Result["url"], src)
+		if resp.Result["truncated"] == true {
+			fmt.Println("(truncated — pass --max N for more)")
 		}
 		return nil
 	}

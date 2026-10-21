@@ -42,6 +42,7 @@ conductor browser snapshot                 # the page as text; each control has 
 #   - heading "Install" [level=1]
 #   - textbox "Search" [ref=e41]
 #   - link "Download" [ref=e57]
+conductor browser source                   # the page's HTML source, read-only, every value redacted
 conductor browser fill e41 "proxy settings" --submit
 conductor browser click e57
 conductor browser downloads                # → .browser/downloads/<name> in the workspace
@@ -56,6 +57,32 @@ The other actions are `type`, `select`, `press KEY`, `scroll`,
 
 Each launch's token gets its own browser, and an idle one closes after
 `idle_timeout`.
+
+### Reading the page: `snapshot` and `source`
+
+An agent reads a page only through outputs conductor builds — never a raw DOM
+dump, never its own script by default:
+
+- **`snapshot`** is the page as a screen reader sees it: one line per
+  meaningful node, each control with a ref the other actions take. It is what
+  most work needs.
+- **`source`** is the page's **HTML source**, read-only and point-in-time,
+  serialised by conductor node by node so it can **redact structurally** as it
+  writes: a field's value is never emitted (`value="[redacted]"` marks that one
+  exists), a node a secret was filled into is dropped, and the places a value
+  hides — `<script>` and `<style>` bodies, HTML comments, `<template>`
+  contents, `data-*` values, `style` and event-handler attributes — are
+  stripped. Tag names, ids, classes, roles, aria, link targets and visible
+  text survive; a same-origin frame or open shadow root is included with the
+  same redaction, a cross-origin frame's contents never. It is size-capped
+  (`--max`, default 25k, max 200k).
+
+`source` is for reading structure a flat snapshot flattens — a table's shape,
+a form's hidden fields, a widget's markup. It needs **no `evaluate` opt-in**
+and works **after a credential is filled**, so it is the way to read a page you
+have signed into without reaching for a live script. Prefer `snapshot` and
+`source` over `evaluate`, which stays off for most work and entirely once a
+value is filled.
 
 ## The boundary
 
@@ -268,6 +295,9 @@ somehow reached a log line is redacted there too.
 After a fill, in that browser:
 - password and one-time-code values are scrubbed from snapshots, page text,
   titles and URLs;
+- `source` never emits a field's value and strips the markup a value hides in
+  (its structural redaction runs before any scrub), so it stays available
+  after a fill;
 - screenshots black out every field and text showing one;
 - `wait --text` matches only the scrubbed text, so it is never a guessing
   oracle;
@@ -746,7 +776,7 @@ stay control-socket operations.
 | **Logins** | ask conductor to sign it in, on the bound origin | read a password, code, passkey or session cookie |
 | **Personal details** | ask conductor to fill a field, on an opted-in site; learn the facts you made visible | read a value; fill a field on a site or of a kind you didn't allow; use a profile on a third party's request |
 | **Cards** | propose a purchase; pay an approved one, once, on its merchant; see the order number and total | read the number, CVC or expiry; pay without your signed approval (or outside its unattended cap); pay more, elsewhere, or twice; approve its own purchase |
-| **Pages** | see what the page shows, scrubbed of every value conductor filled | run `evaluate` in a browser where a value was filled |
+| **Pages** | see what the page shows (`snapshot`) and its redacted HTML source (`source`), scrubbed of every value conductor filled | read a filled value out of the source; run `evaluate` in a browser where a value was filled |
 
 What a site can do is what any site can: a page on an origin you opted in
 sees the values filled into it. Bind profiles and cards to exact origins you
@@ -798,15 +828,17 @@ These are the limits that still hold:
   rebuilds it at its next start.
 - **Page scripts on a credential's own origin can read the field they were
   given.** That's how browsers work, and it's why a credential is bound to an
-  exact origin.
+  exact origin. `source` is **structurally redacted** — a field's value is
+  never serialised and the markup a value hides in is stripped — so the same
+  residual holds and no more: a hostile script already on the trusted origin
+  could pre-encode a value it was given into ordinary visible text, which
+  `source` keeps (scrubbed as a backstop). Trusted-origin binding and the
+  egress allowlist are what bound that.
 - **SMS codes** are not supported: they need a forwarding service.
 - **Your own passkeys can't be used**, because 1Password doesn't export their
   private keys. Register a separate passkey for the agent instead.
 - **No live view of an agent's browser.** You get a `peek` screenshot. The
   interactive view belongs to the planned dashboard.
-- **`bot:` and `team:` bindings** match nothing until bots are wired to
-  report which bot or team a session acts for. Until then they fail closed:
-  nobody gets the login.
 - **A test sign-in guesses success by default.** It looks for having left the
   pages it submitted from, with no password or code field left. If a site
   shows its failures elsewhere, give the login `--check-url` or

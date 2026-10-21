@@ -290,6 +290,40 @@ What happens after a fill, in that browser:
   A side-effect-free expression can still read a field and transform it
   (reverse, char codes) past any string scrub; only refusing it is a
   guarantee.
+- **`source` stays on, because it cannot carry a value out.** The `source`
+  artifact (below) never emits a field's value and strips the markup a value
+  hides in, structurally, as it serialises — so it is the read path that
+  survives a fill, and the reason `evaluate` can stay off for most work.
+
+### `source`: a read-only, structurally-redacted HTML view
+
+`snapshot` flattens a page to its a11y tree; `source` gives the HTML structure
+for the work that needs it (a table's shape, hidden fields, a widget's
+markup), without ever becoming a way to read a filled value back.
+
+- **Conductor builds the string, node by node.** It sources the DOM over CDP
+  (`DOM.getDocument`, depth −1, pierced) and serialises each node itself. It
+  never returns the browser's raw `outerHTML` and scrubs afterward: the
+  redaction is at the point of serialisation.
+- **Structural redaction, as each node is written:**
+  - a node in `secretNodes` (where a value was filled) has its value, checked
+    state and text dropped, with a `[redacted]` placeholder;
+  - every `<input>`/`<textarea>`/`<select>` has its value dropped whatever its
+    origin (`value="[redacted]"` marks that one exists) — broader than
+    `secretNodes`, so a value the agent typed is consistent and a mis-tracked
+    secret cannot slip through;
+  - `<script>`/`<style>` bodies, HTML comments, `<template>` contents, `data-*`
+    values (key kept), `style` and `on*` handler attributes are stripped — the
+    places a value hides, useless to the agent;
+  - tag names, structure, ids/classes/roles/aria, link `href`s (scrubbed) and
+    visible text (scrubbed) survive;
+  - a same-origin frame and an open shadow root are included with the same
+    redaction; a cross-origin frame's contents never are.
+- **A whole-string scrub is a backstop only**, for a value that reached visible
+  text or a link; the structural redaction is the guarantee, and a test proves
+  the value is absent with that backstop disabled.
+- **Size-capped** like `snapshot` (`--max`, default 25k, max 200k).
+- It needs **no `evaluate` opt-in** and **works after a fill**.
 
 The second factors:
 - **TOTP.** `OTPCode` (RFC 6238; SHA1/256/512, digits, period) computes the
@@ -835,8 +869,6 @@ no browser.
   keys). Register a dedicated one.
 - **There's no live view of an agent's browser**, only `peek`.
 - **The container path is unproven on a real Mac** (section 1a).
-- **`bot:` and `team:` bindings match no session yet.** They need bots (#178)
-  to wire `groupsFor`. Until then they fail closed.
 - **A test sign-in's default success check is a heuristic**: off every page
   a step was submitted from, and no password or code field left. A site
   that answers a failure elsewhere needs the login's own `check` (a URL

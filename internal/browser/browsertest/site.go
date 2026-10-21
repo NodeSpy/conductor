@@ -185,6 +185,30 @@ func (s *Site) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// trusted origin): its own script base64-encodes the filled value into
 		// visible text, to beat a literal substring scrub.
 		page(w, "Code", `<h1>Code</h1><label>Code <input name="otp" autocomplete="one-time-code" oninput="document.getElementById('echo').textContent = btoa(this.value)"></label><p id="echo"></p>`)
+	case "/source-sentinels":
+		// A page for the `source` artifact: a password field and a card
+		// field to fill, with the password constant also planted in every
+		// structurally-redacted spot (a value attribute, a data-*, a script,
+		// a comment, a textarea, an event handler), a same-origin srcdoc
+		// frame, and a cross-origin frame whose contents must never appear.
+		var cross string
+		if c := r.URL.Query().Get("cross"); c != "" {
+			cross = `<iframe src="` + html.EscapeString(c) + `/secret-frame"></iframe>`
+		}
+		page(w, "Source Sentinels", `<h1>Source Sentinels</h1>
+<form>
+<label>Password <input name="password" type="password" autocomplete="current-password"></label>
+<label>Card <input name="card" type="password" autocomplete="cc-number"></label>
+<input type="hidden" name="h" value="`+Password+`">
+<div data-token="`+Password+`">account</div>
+<textarea name="notes">`+Password+`</textarea>
+<button type="button" onclick="var k='`+Password+`'">go</button>
+</form>
+<!-- `+Password+` -->
+<script>var planted = "`+Password+`";</script>
+<iframe srcdoc="<p>SAMEFRAME_MARKER</p>"></iframe>`+cross)
+	case "/secret-frame":
+		page(w, "Frame", `<p>CROSSFRAME_SECRET</p>`)
 	case "/login/otp", "/login/approve", "/login/approve/status", "/passkey/register", "/passkey/login", "/passkey/challenge", "/framed":
 		s.auth(w, r)
 	case "/evil":
