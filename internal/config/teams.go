@@ -779,6 +779,7 @@ func (c *Config) TeamWarnings() []string {
 		if t.Browser != nil {
 			out = append(out, fmt.Sprintf("teams.%s: browser: scopes logins for conductor's agent browser; until it is on this daemon bot sessions use no saved login at all", name))
 		}
+		out = append(out, c.cardCrossRefNotes("teams."+name+".budget.purchases", t.Budget.Purchases)...)
 	}
 	return out
 }

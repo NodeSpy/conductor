@@ -1270,6 +1270,7 @@ func (c *Config) BotWarnings() []string {
 				out = append(out, fmt.Sprintf("bots.%s: peers lists %q, but %s does not list %s back (and no bot_links: entry pairs them) — no messages pass until both sides do", name, peer, peer, name))
 			}
 		}
+		out = append(out, c.cardCrossRefNotes("bots."+name+".purchases", m.Purchases)...)
 	}
 	out = append(out, c.avatarWarnings...)
 	return append(out, c.TeamWarnings()...)

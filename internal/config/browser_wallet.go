@@ -112,6 +112,31 @@ func (p *PurchaseLimits) ForCard(card string) []CardLimits {
 	return out
 }
 
+// cardCrossRefNotes warns when a per-card limit key under a bot's or team's
+// purchases.cards names a card that is NOT configured in browser.cards. The
+// per-card limit is the TIGHTER layer; at runtime it is a plain map lookup
+// (limits.go: r.BotLimits.Cards[card.Name]), so a mistyped name silently
+// misses and that layer never applies — the purchase falls back to the looser
+// overall cap with no sign anything is wrong. Surface it at load / `conductor
+// validate`. A warning, not a hard error, so a stale name never fails the load
+// of an otherwise valid config (the broader cap still binds either way).
+func (c *Config) cardCrossRefNotes(where string, p *PurchaseLimits) []string {
+	if p == nil || len(p.Cards) == 0 {
+		return nil
+	}
+	var out []string
+	for _, card := range walletKeys(p.Cards) {
+		if c.Browser == nil || c.Browser.Cards == nil {
+			out = append(out, fmt.Sprintf("%s.cards.%s: names a card, but no browser.cards are configured — this tighter per-card limit is silently dropped; only the overall cap applies", where, card))
+			continue
+		}
+		if _, ok := c.Browser.Cards[card]; !ok {
+			out = append(out, fmt.Sprintf("%s.cards.%s: no card by that name in browser.cards — a typo silently drops this tighter per-card limit; only the overall cap applies", where, card))
+		}
+	}
+	return out
+}
+
 func (p *PurchaseLimits) check(where string) error {
 	if p == nil {
 		return nil
