@@ -32,6 +32,11 @@ func TestExampleConfigValidates(t *testing.T) {
 	} {
 		t.Setenv(v, "dummy-"+v)
 	}
+	// The worked browser/wallet example references the built-in conductor vault
+	// "house". A real deploy runs `conductor vault init` once; here a throwaway
+	// key stands in for that (as the generated App key above does), so the vault
+	// opens instead of reporting itself disabled for lack of a key.
+	t.Setenv("CONDUCTOR_VAULT_KEY", "dGVzdC12YXVsdC1rZXktbWF0ZXJpYWwtMzItYnl0ZXMh")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)

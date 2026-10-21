@@ -48,6 +48,14 @@
 #   store: { type: pass, prefix: conductor }
 #   files: { type: file, dir: /run/secrets }
 #   hcv:   { type: hashicorp, addr: https://vault.internal, unlock: { token: env:VAULT_TOKEN } }
+#
+# A live vault backs the worked browser/wallet example further down this file
+# (the agent browser's saved logins and the shopping card). The built-in
+# conductor type needs no external service; run `conductor vault init` once to
+# create its key, then add the referenced entries. `conductor validate` passes
+# before that — the vault is simply reported disabled until the key exists.
+vaults:
+  house: { type: conductor }                     # ~/.config/conductor/vault.json
 
 # ---------------------------------------------------------------------------
 # connectors: — external services. Each has two faces: events you can trigger
@@ -723,7 +731,8 @@ models:
 # repo needs a plugin_trust entry.
 # ---------------------------------------------------------------------------
 # connectors:
-#   tickets:
+#   jira:                                   # (a connector INSTANCE name — distinct
+#                                           # from the bots/teams tickets: feature)
 #     use: acme/plugins/jira                # explicit repo, tracks latest 1.x…
 #     # use: acme/plugins/jira@^1.2         # …or constrain it
 #     # use: acme/plugins/jira@v1.2.3       # …or pin it exactly (no auto-update)
@@ -753,7 +762,7 @@ models:
 # OS isolation is still there, as OPT-IN hardening for a locked-down box:
 #
 # connectors:
-#   tickets:
+#   jira:
 #     use: acme/plugins/jira
 #     isolation: { mode: namespace, network: { egress: ["your-org.atlassian.net:443"] } }
 
@@ -1328,6 +1337,36 @@ sandbox:
     # email: you@example.com                  #   (default: git's user.email)
     # sign: false                             # push unsigned (default: refuse to push without a key)
     # at_step_end: false                      # only an explicit git.push pushes
+
+# ---------------------------------------------------------------------------
+# WORKED EXAMPLE — the four feature families together (bots + the agent sandbox
+# above + the agent browser/wallet below + tickets). A LIVE browser: block whose
+# logins, credentials and card the platform-sre bot (bots:, below) narrows and
+# spends against through a ticket's spend_limit, so `conductor validate` exercises
+# the whole combined surface, not each piece in isolation. The documented,
+# commented reference for every browser: field follows this block.
+browser:
+  allow: [status.example.com, shop.example.com]   # "*" (the whole web) is refused
+  logins:                                         # opt in per site AND per identity
+    - site: status.example.com
+      identities: ["bot:platform-sre"]            # then: conductor browser seed --identity … --site …
+  credentials:
+    - name: statuspage
+      origin: https://status.example.com          # exact; a lookalike or a frame is refused
+      identities: ["bot:platform-sre"]
+      username: { vault: house, key: "statuspage/username" }
+      password: { vault: house, key: "statuspage/password" }
+  cards:                                           # every purchase is a signed approval; the card never reaches the agent
+    shopping:
+      kind: virtual                               # prefer a virtual / single-use card with its own provider limits
+      number: { vault: house, key: "cards/shopping/number" }
+      expiry: { vault: house, key: "cards/shopping/expiry" }
+      cvc:    { vault: house, key: "cards/shopping/cvc" }
+      merchants: ["https://shop.example.com"]      # none by default: nothing can be bought
+      identities: ["bot:platform-sre"]
+      limits: { per_purchase: 50, per_day: 100, per_month: 300, currency: USD }
+  payments: { approvers: [ops] }                   # operators: entries with an ssh_key
+
 #
 # A browser for agents (docs/wiki/Browser.md): every sandboxed agent can drive
 # a headless Chromium through `conductor browser …`. Conductor runs it,
@@ -1558,7 +1597,13 @@ bots:
       #   unattended:                  # opt-in, a widening: a commit_money verb runs WITHOUT approval under a smaller cap
       #     browser.purchase: { per_action: 10, per_period: 30, period: 24h, merchants: ["https://shop.example.com"] }
       approval_ttl: 24h
-    # purchases: { per_purchase: 40, per_day: 100, per_month: 300 }   # browser purchases (per card: cards: { shopping: {…} }); ≤ the team's budget.purchases
+    # The four-family worked example (browser: block above, team platform below):
+    # this bot narrows the agent browser to its one login + credential, caps its
+    # browser purchases under the team's budget.purchases, and takes a ticket
+    # policy — a ticket's spend_limit then binds its real purchases (M1 wiring).
+    purchases: { per_purchase: 40, per_day: 100, per_month: 300 }   # ≤ the team's budget.purchases
+    browser: { logins: [status.example.com], credentials: [statuspage] }   # ⊆ team ⊆ browser.logins/credentials
+    tickets: { mark_own_ready: false }             # default_priority is a team setting (below)
     # proactive:                                 # OFF unless set: read-only sweeps on a schedule (wiki: Bots → Proactive sweeps)
     #   every: 4h
     #   quiet_hours: "22:00-07:00"               # no sweep starts in this window (local time; timezone: to pin a zone)
@@ -1606,6 +1651,14 @@ teams:
         template: "## Timeline\n\n## Cause\n\n## Follow-ups\n"
         writers: [operator, proposal]            # a team's: operator / proposal; a bot's: operator / bots
         # max_bytes: 8k                          # one document (default 8k)
+    # The team ceilings for the four-family worked example: its budget.purchases
+    # bounds each bot's purchases:, its browser: list bounds each bot's narrowing,
+    # and its tickets: default applies to the team's tickets.
+    budget:
+      purchases: { per_purchase: 100, per_day: 200, per_month: 500 }   # each bot's purchases: fits inside
+    browser: { logins: [status.example.com], credentials: [statuspage] }   # saved logins bots may narrow from
+    tickets: { default_priority: normal, mark_own_ready: false }   # only operators mark tickets ready;
+                                                                   # mark_own_ready: true lets the team's bots ready their OWN ideas (a widening)
     # operators: [ops]                           # who approves for the team; bots' operators: must be a subset
     # peers: none                                # default team: teammates may `ask` (data) and `delegate` (work) to each other
     # delegation: { max_depth: 3 }               # most hops a `conductor bot delegate` chain may take (1–10, default 3)
@@ -1631,8 +1684,6 @@ teams:
     #   fallback: platform-sre                   # else, or unassigned after timeout:, the fallback (required)
     #   # timeout: 10m
     # chat: { everyone_per_hour: 6, max_reply: 4000 }   # `conductor team say`: --everyone per hour; one bot reply's bytes
-    # tickets: { default_priority: normal, mark_own_ready: false }   # wiki: Tickets. Only operators mark tickets ready;
-    #                                            # mark_own_ready: true lets the team's bots ready their OWN ideas (a widening)
   # billing: { description: "Billing and invoicing" }   # isolated from platform unless bot_links: pairs bots
 
 # bot_links:                                # operator-side peer links: each pair may message each other.
