@@ -156,6 +156,25 @@ func TestHeldOnlyCursorEventsAndDroppedOnClose(t *testing.T) {
 	}
 }
 
+// A parked hand-off is a live agent too, and no flow run ends when it is
+// released (done, idle timeout, a watch rule): its release re-delivers what
+// the live gate held on its target.
+func TestHeldEventRedeliveredWhenAHandoffIsReleased(t *testing.T) {
+	eng, live := heldEngine(t)
+	live.Store(true)
+	tr := reviewTrigger("changes_requested", "h1", "review:6@h1", 600)
+	runsOf(eng, tr)
+	if got := redelivered(eng); len(got) != 0 {
+		t.Fatalf("held while the hand-off is parked, got %v", dedups(got))
+	}
+	live.Store(false)
+	eng.registerLiveHandoff("ag-ho", func() {}, tr.Key(), "review_requested", "review")
+	eng.releaseHandoff(context.Background(), "ag-ho", tr.Key(), "review", func() {}, "agent signalled done")
+	if got := redelivered(eng); len(got) != 1 || got[0].Dedup != "review:6@h1" {
+		t.Fatalf("the hand-off's release must re-deliver the held review, got %v", dedups(got))
+	}
+}
+
 func dedups(ts []core.Trigger) []string {
 	out := make([]string, 0, len(ts))
 	for _, t := range ts {

@@ -87,6 +87,10 @@ func (e *Engine) releaseHandoff(ctx context.Context, agentID, prKey, stepID stri
 	e.hold.Remove(agentID)
 	e.deregisterLiveHandoff(agentID)
 	e.revokeHandoffSession(agentID)
+	// The hand-off was a live agent on its target: what the live gate held
+	// while it was parked goes back through the gates once it is gone. No
+	// flow run ends here (the run that armed it returned long ago).
+	defer e.redeliverHeld(prKey)
 	if agentID == "" || e.affinityOwns(agentID) || e.disp == nil {
 		return
 	}
