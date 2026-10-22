@@ -221,6 +221,7 @@ func (c *cliController) start(ctx context.Context, dir string, env, argv []strin
 // command, and the sandbox wrappers pass it through to the tool.
 // opt carries the dispatch's isolation policy (sandbox wrapper + egress).
 func (c *cliController) launchOn(ctx context.Context, host, dir string, env []string, cmd cliCmd, opt launchOpts) (cliProc, error) {
+	cmd = c.recipe.localBin(host, cmd)
 	opt, revoke := withEgressRevoke(opt)
 	wrapped, localDir, localEnv, _, err := prepareLaunch(host, dir, env, cmd.argv, opt)
 	if err == nil {
@@ -375,6 +376,9 @@ type cliRecipe struct {
 	// decideAnswer extracts the reply from a lean decision run's raw stdout
 	// (nil → answer).
 	decideAnswer func(raw string) string
+	// bin is the executable a built-in recipe runs (`bin:`, else the tool's
+	// default name); "" for an operator `command:`. See localBin.
+	bin string
 }
 
 // cliRecipeFor selects a recipe from the config. An explicit `command:` yields a
@@ -382,6 +386,15 @@ type cliRecipe struct {
 // operator owns that argv, so conductor can't move it to stdin); otherwise the
 // tool/agent name selects a built-in recipe, defaulting to a bare oneshot run
 // of the named binary.
+//
+// `bin:` names the executable a built-in recipe runs in place of its default
+// (`claude`, `codex`, or the tool name itself) — for every launch it makes:
+// the first turn, a --resume, and a decide step's lean session. It is how an
+// operator points the recipe at a wrapper (one that routes credentials, say)
+// rather than whatever the bare name resolves to on PATH. A leading `~` is
+// expanded at launch, and only for a local one (see localBin). `command:`
+// carries its own binary as argv[0], so the two never combine (validation
+// rejects that).
 func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 	tool := cc.Tool
 	if tool == "" {
@@ -397,46 +410,73 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 	}
 	switch tool {
 	case "claude-code", "claude":
+		bin := firstNonEmpty(cc.Bin, "claude")
 		return cliRecipe{
 			tool: "claude-code",
+			bin:  bin,
 			// A fixer runs headless (`-p`), so there is no interactive prompt to
 			// approve tool use — without --dangerously-skip-permissions claude denies
 			// its own Edit/Bash calls and can never modify or commit the checkout.
 			// With no prompt argument, `claude -p` reads the prompt from stdin.
 			launch: func(prompt string) cliCmd {
-				return cliCmd{argv: []string{"claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"}, stdin: prompt}
+				return cliCmd{argv: []string{bin, "-p", "--output-format", "json", "--dangerously-skip-permissions"}, stdin: prompt}
 			},
 			modelArgs: func(m string) []string { return []string{"--model", m} },
 			resume: func(id, prompt string) cliCmd {
-				return cliCmd{argv: []string{"claude", "-p", "--resume", id, "--output-format", "json", "--dangerously-skip-permissions"}, stdin: prompt}
+				return cliCmd{argv: []string{bin, "-p", "--resume", id, "--output-format", "json", "--dangerously-skip-permissions"}, stdin: prompt}
 			},
-			parseID:      parseClaudeSessionID,
-			answer:       parseClaudeResult,
-			failed:       parseClaudeError,
-			model:        ModelResumable,
-			decide:       claudeDecide,
+			parseID: parseClaudeSessionID,
+			answer:  parseClaudeResult,
+			failed:  parseClaudeError,
+			model:   ModelResumable,
+			decide: func(dir, model string, d *config.DecisionLaunch) (cliCmd, string, error) {
+				return claudeDecide(bin, dir, model, d)
+			},
 			decideAnswer: parseClaudeStructured,
 		}
 	case "codex":
+		bin := firstNonEmpty(cc.Bin, "codex")
 		// `-` as the prompt tells `codex exec` to read it from stdin.
 		return cliRecipe{
 			tool:      "codex",
-			launch:    func(prompt string) cliCmd { return cliCmd{argv: []string{"codex", "exec", "-"}, stdin: prompt} },
+			bin:       bin,
+			launch:    func(prompt string) cliCmd { return cliCmd{argv: []string{bin, "exec", "-"}, stdin: prompt} },
 			model:     ModelOneshot,
 			modelArgs: func(m string) []string { return []string{"--model", m} },
-			decide:    codexDecide,
+			decide: func(dir, model string, d *config.DecisionLaunch) (cliCmd, string, error) {
+				return codexDecide(bin, dir, model, d)
+			},
 		}
 	default:
-		bin := tool
+		bin := firstNonEmpty(cc.Bin, tool)
 		if bin == "" {
 			bin = "true" // nothing configured to run
 		}
 		return cliRecipe{
 			tool:   firstNonEmpty(tool, bin),
+			bin:    bin,
 			launch: func(prompt string) cliCmd { return cliCmd{argv: []string{bin, prompt}} },
 			model:  ModelOneshot,
 		}
 	}
+}
+
+// localBin expands a leading `~` in a built-in recipe's executable for a
+// LOCAL launch. A remote launch's argv is shell-quoted into the ssh command,
+// so a local expansion would name this box's home on the other one — it is
+// left for the operator to give that host an absolute path. Only argv[0], and
+// only when it is the recipe's own bin: an operator `command:` is passed
+// through exactly as written.
+func (r cliRecipe) localBin(host string, cmd cliCmd) cliCmd {
+	if host != "" || r.bin == "" || len(cmd.argv) == 0 || cmd.argv[0] != r.bin {
+		return cmd
+	}
+	if exp := expandTilde(r.bin); exp != r.bin {
+		argv := append([]string(nil), cmd.argv...)
+		argv[0] = exp
+		cmd.argv = argv
+	}
+	return cmd
 }
 
 // cmd is the launch command with the RESOLVED model applied. An empty
@@ -455,12 +495,12 @@ func (r cliRecipe) cmd(model, prompt string) cliCmd {
 // --bare: that would also skip OAuth and demand an API key, and a decide
 // session must run on the operator's own claude login like any other. The
 // document (which carries the PR diff) goes on stdin, like every turn.
-func claudeDecide(_ string, model string, d *config.DecisionLaunch) (cliCmd, string, error) {
+func claudeDecide(bin, _ string, model string, d *config.DecisionLaunch) (cliCmd, string, error) {
 	schema, err := json.Marshal(d.Schema)
 	if err != nil {
 		return cliCmd{}, "", fmt.Errorf("decision schema: %w", err)
 	}
-	argv := []string{"claude", "-p",
+	argv := []string{bin, "-p",
 		"--output-format", "json",
 		"--tools", "", // no tools at all — not even read-only ones
 		"--strict-mcp-config", // …and no MCP servers from the operator's config
@@ -495,7 +535,7 @@ func parseClaudeStructured(output string) string {
 // captures alongside stdout, so the answer is read from the file instead.
 // codex takes no separate system prompt, so it leads the prompt, which goes
 // on stdin (`-`).
-func codexDecide(dir, model string, d *config.DecisionLaunch) (cliCmd, string, error) {
+func codexDecide(bin, dir, model string, d *config.DecisionLaunch) (cliCmd, string, error) {
 	schema, err := json.Marshal(d.Schema)
 	if err != nil {
 		return cliCmd{}, "", fmt.Errorf("decision schema: %w", err)
@@ -505,7 +545,7 @@ func codexDecide(dir, model string, d *config.DecisionLaunch) (cliCmd, string, e
 		return cliCmd{}, "", err
 	}
 	answer := filepath.Join(dir, "answer.json")
-	argv := []string{"codex", "exec",
+	argv := []string{bin, "exec",
 		"--output-schema", schemaFile,
 		"--output-last-message", answer,
 		"--sandbox", "read-only",
@@ -606,6 +646,21 @@ func parseClaudeError(output string) error {
 		msg = msg[:maxTurnErrText] + "…"
 	}
 	return fmt.Errorf("agent turn ended in error: %s", msg)
+}
+
+// expandTilde expands a leading ~ or ~/ to the user's home directory.
+func expandTilde(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	return filepath.Join(home, p[2:])
 }
 
 func firstNonEmpty(vals ...string) string {

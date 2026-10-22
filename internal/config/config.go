@@ -464,8 +464,9 @@ type ControllerConfig struct {
 	// Reserved for the cli-controller milestone.
 	Tool    string   `yaml:"tool"`
 	Command []string `yaml:"command"`
-	// Bin is the runtime binary (paseo/agent-deck); for agent-deck it wins over
-	// the command/tool/"agent-deck" bin resolution. For paseo, exactly one
+	// Bin is the runtime binary (paseo/agent-deck/cli); for agent-deck it wins
+	// over the command/tool/"agent-deck" bin resolution, and for a cli runtime
+	// it replaces a built-in recipe's executable (see controller.cliRecipeFor). For paseo, exactly one
 	// distinct Bin may be set across all paseo runtimes/controllers combined
 	// (see cmd/conductor's resolvePaseoBin).
 	Bin string `yaml:"bin"`

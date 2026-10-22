@@ -638,6 +638,7 @@ runtimes:
   # jev:                                            # a DECISION runtime plugin: answers
   #   connection: { api_key: env:JEV_API_KEY }      # decide: steps only, never an agent
   # remote: { use: cli, tool: claude-code, host: build-box }
+  # claude: { use: cli, tool: claude-code, bin: ~/.local/bin/claude-wrapper }  # bin: replaces "claude"
 
 # ---------------------------------------------------------------------------
 # models: — named FLEETS (the spot-fleet model). A fleet is a ranked list of

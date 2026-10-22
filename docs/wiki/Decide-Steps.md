@@ -70,7 +70,9 @@ candidates rather than one winner:
    converted back into v1 answers. No model API key is involved — the runtime's
    own credentials answer.
 
-   On a local `cli` runtime the session is **lean** rather than a full agent:
+   On a local `cli` runtime the session is **lean** rather than a full agent
+   (it runs the runtime's `bin:` when one is set, like every other launch of
+   that runtime — see [[Runtimes]]):
 
    | tool | launch |
    |---|---|
