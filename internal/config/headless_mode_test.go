@@ -83,6 +83,12 @@ func TestHeadlessModeSharedDispatcherMustAgree(t *testing.T) {
 	if got := cfg.PrimaryHeadlessMode(); got.All != "auto" {
 		t.Fatalf("primary = %+v, want the shared runtimes' auto", got)
 	}
+	// A host: runtime runs its own dispatcher over SSH, even with no bin:.
+	remote := strings.Replace(headlessDoc(`  a: { use: paseo, default: true, headless_mode: auto }
+  b: { use: paseo, host: box, headless_mode: none }`), "runtimes:", "hosts:\n  box: { host: box.example }\nruntimes:", 1)
+	if _, err := loadDoc(t, remote); err != nil {
+		t.Fatalf("a host: runtime has its own dispatcher and may differ: %v", err)
+	}
 }
 
 // Both shapes survive a marshal/unmarshal round trip.

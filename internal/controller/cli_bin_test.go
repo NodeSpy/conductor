@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -135,5 +136,20 @@ func TestCLILocalBinLeavesRemoteAndCommandAlone(t *testing.T) {
 	custom := cliRecipeFor(config.ControllerConfig{Command: []string{"~/tool", "--x"}})
 	if got := custom.localBin("", custom.cmd("", "p")).argv[0]; got != "~/tool" {
 		t.Fatalf("an operator command: argv must pass through as written: %q", got)
+	}
+}
+
+// codex's launch runs `bin:` too, with its stdin prompt marker intact.
+func TestCLICodexBinDrivesLaunch(t *testing.T) {
+	l := &fakeLauncher{}
+	c := newCLIController("cx", config.ControllerConfig{Transport: "cli", Tool: "codex", Bin: "/opt/wrap/codex"}, nil)
+	c.launch = l.launch
+	sess, err := c.NewSession(context.Background(), Spec{Request: makeReq("merge_conflict", "go"), Cwd: "/wt"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitSession(t, sess)
+	if got := joinArgs(l.call(0).argv); !strings.HasPrefix(got, "/opt/wrap/codex exec -") {
+		t.Fatalf("codex launch argv = %q", got)
 	}
 }
