@@ -552,6 +552,14 @@ func (s *Service) TicketSetStatus(ctx context.Context, a TicketActor, tid, to, n
 	}
 	now := s.now()
 	err = s.updateTicket(loc, func(cc *store.Case) error {
+		// Re-validate the transition against the LIVE status, not the pre-lock
+		// snapshot: two concurrent moves both pass the earlier check, but the
+		// second sees the first's committed status here and is refused — no
+		// terminal-state overwrite (approve.go does the same inside its
+		// transaction).
+		if !TicketCanMove(cc.Status, to) {
+			return fmt.Errorf("ticket %s is %s: it can't go to %s (from %s: %s)", tid, cc.Status, to, cc.Status, strings.Join(ticketTransitions[cc.Status], ", "))
+		}
 		what := cc.Status + " → " + target
 		if note = strings.TrimSpace(note); note != "" {
 			what += ": " + oneLine(note, 300)
@@ -836,13 +844,32 @@ func (s *Service) TicketAssign(ctx context.Context, a TicketActor, tid, to strin
 		pc, pw, _ := homeAttribution(&rec)
 		class, who = lessTrusted(class, who, pc, pw)
 	}
-	moved := c
-	moved.Assignee, moved.Requester, moved.RequesterClass = assignee, who, class
-	addHistory(&moved, now, a.String(), "assigned "+orNone(c.Assignee)+" → "+orNone(assignee))
+	// assignOnto applies the reassignment to the live record under the lock,
+	// mutating only the fields assignment owns — so a comment or edit a
+	// concurrent op committed between the read above and this write is not
+	// lost (the old code overwrote the whole record with a pre-lock snapshot).
+	assignOnto := func(cc *store.Case, toStatus string) error {
+		if store.Closed(cc.Status) {
+			return fmt.Errorf("ticket %s is %s: reopen it first", tid, cc.Status)
+		}
+		if store.Active(cc.Status) && assignee == "" {
+			return errors.New("an active ticket can't go back to the triage queue: assign it to a bot or a team")
+		}
+		prev := cc.Assignee
+		cc.Assignee, cc.Requester, cc.RequesterClass = assignee, who, class
+		if toStatus != "" {
+			cc.Status = toStatus
+		}
+		addHistory(cc, now, a.String(), "assigned "+orNone(prev)+" → "+orNone(assignee))
+		return nil
+	}
 	if c.Status == store.TicketDraft {
 		if sameHome(loc, assignee) {
-			err = s.updateTicket(loc, func(cc *store.Case) error { *cc = moved; return nil })
+			err = s.updateTicket(loc, func(cc *store.Case) error { return assignOnto(cc, "") })
 		} else {
+			moved := c
+			moved.Assignee, moved.Requester, moved.RequesterClass = assignee, who, class
+			addHistory(&moved, now, a.String(), "assigned "+orNone(c.Assignee)+" → "+orNone(assignee))
 			if _, err = s.placeTicket(moved, assignee); err == nil {
 				if loc.Queue != "" {
 					err = s.removeFromQueue(loc)
@@ -856,8 +883,7 @@ func (s *Service) TicketAssign(ctx context.Context, a TicketActor, tid, to strin
 		}
 	} else {
 		// Active: re-dispatch to the new assignee, from ready.
-		moved.Status = store.TicketReady
-		err = s.updateTicket(loc, func(cc *store.Case) error { *cc = moved; return nil })
+		err = s.updateTicket(loc, func(cc *store.Case) error { return assignOnto(cc, store.TicketReady) })
 		if err == nil {
 			err = s.dispatchTicket(ctx, tid)
 		}
