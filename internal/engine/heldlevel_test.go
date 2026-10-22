@@ -141,18 +141,31 @@ func TestHeldEventRedeliveredWhenTheRunAlreadyEnded(t *testing.T) {
 
 // An event with no cursor only re-reads a condition (a review request, a
 // conflict); replaying it later would act on a stale reading, so it is not
-// held. And the target closing drops what it held.
-func TestHeldOnlyCursorEventsAndDroppedOnClose(t *testing.T) {
+// held.
+func TestCursorlessLevelEventIsNotHeld(t *testing.T) {
 	eng, live := heldEngine(t)
 	live.Store(true)
-	runsOf(eng, reviewTrigger("review_requested", "h1", "reviewreq@h1", 0))
+	if n := runsOf(eng, reviewTrigger("merge_conflict", "h1", "conflict@h1", 0)); n != 0 {
+		t.Fatalf("a live agent is on the target: the conflict must not run, ran %d", n)
+	}
+	live.Store(false)
+	runsOf(eng, flowTrigger("ping:end3"))
+	if got := redelivered(eng); len(got) != 0 {
+		t.Fatalf("a cursor-less event must not be held, got %v", dedups(got))
+	}
+}
+
+// The target closing drops what it held.
+func TestHeldEventDroppedOnClose(t *testing.T) {
+	eng, live := heldEngine(t)
+	live.Store(true)
 	runsOf(eng, reviewTrigger("changes_requested", "h1", "review:5@h1", 500))
 	runsOf(eng, core.Trigger{Source: "enginegate", Instance: "eg", Kind: "_closed",
 		Target: core.Target{Repo: "acme/x", PR: 1, Number: 1}})
 	live.Store(false)
-	runsOf(eng, flowTrigger("ping:end3"))
+	runsOf(eng, flowTrigger("ping:end4"))
 	if got := redelivered(eng); len(got) != 0 {
-		t.Fatalf("nothing may be re-delivered (cursor-less, or its target closed), got %v", dedups(got))
+		t.Fatalf("its target closed: nothing may be re-delivered, got %v", dedups(got))
 	}
 }
 
@@ -172,6 +185,29 @@ func TestHeldEventRedeliveredWhenAHandoffIsReleased(t *testing.T) {
 	eng.releaseHandoff(context.Background(), "ag-ho", tr.Key(), "review", func() {}, "agent signalled done")
 	if got := redelivered(eng); len(got) != 1 || got[0].Dedup != "review:6@h1" {
 		t.Fatalf("the hand-off's release must re-deliver the held review, got %v", dedups(got))
+	}
+}
+
+// The legacy steps: workflow path runs outside the flow runner; its end
+// re-delivers what was held on its target too.
+func TestHeldEventRedeliveredWhenALegacyStepsRunEnds(t *testing.T) {
+	d := &fakeDispatcher{liveAgent: true}
+	e, _ := newEng(t, budgetCfg(nil, nil), d, &fakeNotifier{}, nil)
+	wf := config.Action{Steps: []config.Action{{ID: "one", Type: "agent", Agent: "w/fixer", Prompt: "go"}}}
+	held := agentTrigger("changes_requested", "o/r", 3, "h", "review:7@h", wf)
+	held.Context["feedback_cursor"], held.Context["comment_id"] = int64(700), int64(700)
+	e.process(context.Background(), held)
+	if len(d.reqs) != 0 {
+		t.Fatalf("a live agent is on the PR: nothing may dispatch, got %d", len(d.reqs))
+	}
+	d.liveAgent = false
+	e.process(context.Background(), agentTrigger("merge_conflict", "o/r", 3, "h", "sig", wf))
+	var got []core.Trigger
+	for deadline := time.Now().Add(3 * time.Second); len(got) == 0 && time.Now().Before(deadline); {
+		got = append(got, redelivered(e)...)
+	}
+	if len(got) != 1 || got[0].Dedup != "review:7@h" {
+		t.Fatalf("the legacy run's end must re-deliver the held review, got %v", dedups(got))
 	}
 }
 
