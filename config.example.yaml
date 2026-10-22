@@ -628,6 +628,14 @@ runtimes:
     # silently reroute work to a different one. The boot log names the rung.
     # server: 127.0.0.1:6767                    # endpoint; wins over home:
     # home: ~/paseo-home                        # daemon home
+    # headless_mode:                            # the mode a HEADLESS agent (a step
+    #   claude: auto                            # nobody drives, with no mode: of its
+    #   codex: auto                             # own) launches in. Default: each
+    #                                           # provider's no-prompt mode (claude
+    #                                           # bypassPermissions, codex full-access,
+    #                                           # gemini yolo). One id for every
+    #                                           # provider, a per-provider map, or
+    #                                           # `none` for the provider's default.
     # models:
     #   default: claude-opus-5                  # omit -> bare launch
     #   prefer:  [claude-opus-5, gpt-5.6-sol]   # ranking when a fleet offers a choice
