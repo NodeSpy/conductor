@@ -255,6 +255,18 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 	}
 }
 
+// LocalSkillEnv is SkillEnv for an agent a controller runtime (cli) launches
+// as a local subprocess: the daemon's own socket, and only for a dispatch that
+// may hold creds at all (wantsSkillCreds). nil when there is nothing to offer.
+// Without it a cli agent told to run `conductor call step.done` found no
+// CONDUCTOR_ENDPOINT in its environment.
+func LocalSkillEnv(req Request) map[string]string {
+	if !wantsSkillCreds(req) {
+		return nil
+	}
+	return SkillEnv(req, LocalSkillEndpoint())
+}
+
 // LocalSkillEndpoint is the `unix://` endpoint for a LOCAL dispatched agent —
 // the daemon's own tool socket, or "" when none was published at boot (no
 // memory: section and no skill: profile).

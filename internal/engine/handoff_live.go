@@ -242,13 +242,18 @@ func (e *Engine) doneSignal(ctx context.Context, dispatchID, agentID, reason str
 //     waiting on. This resolves even before the dispatch is bound to its agent:
 //     a foreground paseo run reports the agent id only when it returns, so an
 //     agent calling step.done as its last action is always ahead of the binding;
-//   - otherwise → archive the agent + its workspace now (ledger-gated: the
-//     dispatcher refuses anything conductor didn't launch).
+//   - otherwise → archive the agent + its workspace now, through the runner
+//     that opened it (ledger-gated: it refuses anything conductor didn't
+//     launch).
+//
+// "In flight" and "bound" cover every runtime: the paseo dispatcher's ledger,
+// and the engine's own record of a controller-runtime (cli/acp/opencode)
+// dispatch (dispatchAgent).
 func (e *Engine) StepDone(ctx context.Context, dispatchID, agentID, reason string) error {
-	if resolved := e.disp.AgentForDispatch(dispatchID); resolved != "" {
+	if resolved := e.agentForDispatch(dispatchID); resolved != "" {
 		agentID = resolved
 	}
-	inFlight := dispatchID != "" && e.disp.DispatchInFlight(dispatchID)
+	inFlight := e.dispatchInFlight(dispatchID)
 	if agentID == "" && !inFlight {
 		return fmt.Errorf("step.done: no conductor-launched agent for this session")
 	}
@@ -263,7 +268,8 @@ func (e *Engine) StepDone(ctx context.Context, dispatchID, agentID, reason strin
 		return nil
 	}
 	e.log("step.done from agent %s: %s — reclaiming", agentID, reason)
-	return e.disp.Archive(context.WithoutCancel(ctx), agentID)
+	// Through the runner that opened it (a cli agent is not paseo's).
+	return e.archiveAgent(context.WithoutCancel(ctx), agentID)
 }
 
 // TakeEarlyDone reports, and clears, whether the dispatch's agent called
