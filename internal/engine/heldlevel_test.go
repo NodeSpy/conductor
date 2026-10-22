@@ -218,3 +218,20 @@ func dedups(ts []core.Trigger) []string {
 	}
 	return out
 }
+
+// A grouped trigger's batch run ends through runBatch; its end re-delivers
+// what was held on the batch's target like any other run.
+func TestHeldEventRedeliveredWhenABatchRunEnds(t *testing.T) {
+	eng := buildFlowEngineOn(t, groupRestartCfg, newFlowGateStore())
+	ev := flowTrigger("evt-batch")
+	held := reviewTrigger("changes_requested", "h1", "review:8@h1", 800)
+	eng.held.put(ev.Key(), "changes_requested", held)
+	eng.process(context.Background(), ev)
+	var got []core.Trigger
+	for deadline := time.Now().Add(3 * time.Second); len(got) == 0 && time.Now().Before(deadline); {
+		got = append(got, redelivered(eng)...)
+	}
+	if len(got) != 1 || got[0].Dedup != "review:8@h1" {
+		t.Fatalf("the batch run's end must re-deliver what its target held, got %v", dedups(got))
+	}
+}
