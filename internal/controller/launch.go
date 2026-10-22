@@ -91,6 +91,23 @@ func launchOptsFor(runtimeIso *config.IsolationConfig, req dispatch.Request) lau
 	return launchOpts{iso: iso, agentAuthored: req.AgentAuthored}
 }
 
+// skillSocketReachable reports whether a launch can reach the daemon's skill
+// socket (it lives in the state dir): a local launch that is either not
+// sandboxed or a privileged namespace sandbox, which keeps the uid's full
+// filesystem view. A remote host has no forwarded socket on this path, a
+// namespace sandbox masks the state dir (DaemonMaskPaths), and user/container
+// modes run as another uid or in another filesystem.
+func skillSocketReachable(host string, opt launchOpts) bool {
+	if host != "" {
+		return false
+	}
+	spec := sandbox.FromConfig(opt.iso)
+	if spec == nil || spec.Mode == "" {
+		return true
+	}
+	return spec.Mode == "namespace" && spec.Privileged
+}
+
 // resume returns the opts a profile-less relaunch (ResumeSession, session
 // follow-ups) runs under: the runtime's own isolation, never weaker, plus
 // the ORIGINAL dispatch's agent-authored provenance replayed from the

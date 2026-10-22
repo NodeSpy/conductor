@@ -41,10 +41,12 @@ func (s *markStore) AdvanceCommentID(key, kind string, id int64) error {
 func reviewTrigger(kind, head, dedup string, commentID int64) core.Trigger {
 	return core.Trigger{
 		Source: "enginegate", Instance: "eg", Kind: kind,
-		Target:  core.Target{Repo: "acme/x", PR: 1, Number: 1, HeadSHA: head},
-		Title:   kind,
-		Dedup:   dedup,
-		Context: map[string]any{"msg": dedup, "comment_id": commentID, "comment_kind": store.CommentKindReview},
+		Target: core.Target{Repo: "acme/x", PR: 1, Number: 1, HeadSHA: head},
+		Title:  kind,
+		Dedup:  dedup,
+		// changes_requested's cursor is feedback_cursor (the latest review
+		// submission it covers), new_comment's is comment_id; both ride here.
+		Context: map[string]any{"msg": dedup, "comment_id": commentID, "feedback_cursor": commentID, "comment_kind": store.CommentKindReview},
 		Action:  config.Action{FlowRef: "0:eg.ping"},
 	}
 }

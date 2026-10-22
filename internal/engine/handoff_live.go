@@ -87,6 +87,10 @@ func (e *Engine) releaseHandoff(ctx context.Context, agentID, prKey, stepID stri
 	e.hold.Remove(agentID)
 	e.deregisterLiveHandoff(agentID)
 	e.revokeHandoffSession(agentID)
+	// The hand-off was a live agent on its target: what the live gate held
+	// while it was parked goes back through the gates once it is gone. No
+	// flow run ends here (the run that armed it returned long ago).
+	defer e.redeliverHeld(prKey)
 	if agentID == "" || e.affinityOwns(agentID) || e.disp == nil {
 		return
 	}
@@ -237,24 +241,50 @@ func (e *Engine) doneSignal(ctx context.Context, dispatchID, agentID, reason str
 //   - a live hand-off → full hand-off teardown (watch loop, review channel,
 //     hold) + archive, via handoffDone;
 //   - a dispatch conductor is still blocked on (foreground, in flight) → mark
-//     only: the step-boundary archive reclaims it after the output is captured,
-//     so a done call can never cut off the output conductor is waiting on;
-//   - otherwise → archive the agent + its workspace now (ledger-gated: the
-//     dispatcher refuses anything conductor didn't launch).
+//     only: the step boundary reclaims it after the output is captured (see
+//     TakeEarlyDone), so a done call can never cut off the output conductor is
+//     waiting on. This resolves even before the dispatch is bound to its agent:
+//     a foreground paseo run reports the agent id only when it returns, so an
+//     agent calling step.done as its last action is always ahead of the binding;
+//   - otherwise → archive the agent + its workspace now, through the runner
+//     that opened it (ledger-gated: it refuses anything conductor didn't
+//     launch).
+//
+// "In flight" and "bound" cover every runtime: the paseo dispatcher's ledger,
+// and the engine's own record of a controller-runtime (cli/acp/opencode)
+// dispatch (dispatchAgent).
 func (e *Engine) StepDone(ctx context.Context, dispatchID, agentID, reason string) error {
-	if resolved := e.disp.AgentForDispatch(dispatchID); resolved != "" {
+	if resolved := e.agentForDispatch(dispatchID); resolved != "" {
 		agentID = resolved
 	}
-	if agentID == "" {
+	inFlight := e.dispatchInFlight(dispatchID)
+	if agentID == "" && !inFlight {
 		return fmt.Errorf("step.done: no conductor-launched agent for this session")
 	}
-	if lh := e.lookupLiveHandoff(agentID); lh != nil {
-		return e.handoffDone(ctx, agentID, reason)
+	if agentID != "" {
+		if lh := e.lookupLiveHandoff(agentID); lh != nil {
+			return e.handoffDone(ctx, agentID, reason)
+		}
 	}
-	if dispatchID != "" && e.disp.DispatchInFlight(dispatchID) {
-		e.log("step.done from agent %s (%s) — dispatch still in flight; reclaiming at step boundary", agentID, reason)
+	if inFlight {
+		e.earlyDone.Store(dispatchID, reason)
+		e.log("step.done from dispatch %s (%s) — still in flight; reclaiming at step boundary", dispatchID, reason)
 		return nil
 	}
 	e.log("step.done from agent %s: %s — reclaiming", agentID, reason)
-	return e.disp.Archive(context.WithoutCancel(ctx), agentID)
+	// Through the runner that opened it (a cli agent is not paseo's).
+	return e.archiveAgent(context.WithoutCancel(ctx), agentID)
+}
+
+// TakeEarlyDone reports, and clears, whether the dispatch's agent called
+// step.done while conductor was still blocked on it. The step boundary consults
+// it once the output is captured: an agent that signalled done is reclaimed
+// even when its step keeps agents (archive_when_done: false), since nothing
+// else would ever archive it.
+func (e *Engine) TakeEarlyDone(dispatchID string) bool {
+	if dispatchID == "" {
+		return false
+	}
+	_, ok := e.earlyDone.LoadAndDelete(dispatchID)
+	return ok
 }

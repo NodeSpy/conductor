@@ -295,6 +295,14 @@ group_B_fixer() {
   local CFG=/etc/conductor/controllers.yaml
   b_controller_row grpb/cliclaude  fx_cli_claude  cli        "cli:claude-code"
   b_controller_row grpb/clicodex   fx_cli_codex   cli        "cli:codex"
+  # A cli-runtime agent gets the skill creds a paseo agent gets, and its
+  # step.done (the fake's last action, as a real agent's) is accepted while
+  # conductor is still blocked on the process — not refused as unknown.
+  if wait_for 15 cli_done_accepted "cli:claude-code"; then
+    ok "B cli:claude-code agent's step.done accepted in flight (CONDUCTOR_ENDPOINT set)" B cli-done
+  else
+    bad "B cli agent step.done" B cli-done "no in-flight step.done from the cli:claude-code agent in conductor-ctrl's log"
+  fi
   b_controller_row grpb/acpgemini  fx_acp_gemini  acp        "acp:gemini"
   b_controller_row grpb/acpcodex   fx_acp_codex   acp        "acp:codex-adapter"
   b_controller_row grpb/ocacp      fx_oc_acp      acp        "opencode-acp"
@@ -319,6 +327,10 @@ b_controller_row() {
   else
     bad "B $label backend=$backend" B "$label-backend" "no $backend dispatch for $repo"
   fi
+}
+
+cli_done_accepted() { # runtime label
+  dc logs conductor-ctrl 2>&1 | grep -F "(fakecli finished ($1)) — still in flight; reclaiming at step boundary" >/dev/null
 }
 
 forge_has_conductor_commit() { # repo branch

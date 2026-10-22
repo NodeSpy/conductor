@@ -112,8 +112,16 @@ type Engine struct {
 	// owner maps a live agent id → the runner that dispatched it, so
 	// archive_when_done closes the session on the transport that opened it
 	// rather than always on paseo. See archiveAgent.
-	ownerMu     sync.Mutex
-	owner       map[string]Dispatcher
+	ownerMu sync.Mutex
+	owner   map[string]Dispatcher
+	// ctrlLive / ctrlBound are the step.done ledger for dispatches a
+	// controller runtime (cli/acp/opencode) runs — the paseo dispatcher keeps
+	// its own and never sees these. ctrlLive counts the dispatch ids the
+	// engine is blocked on in dispatchAgent; ctrlBound maps a returned
+	// dispatch id to the agent it launched (a background hand-off's later
+	// done). Both guarded by ownerMu.
+	ctrlLive    map[string]int
+	ctrlBound   map[string]string
 	controllers *controller.Registry // resolves which controller runs each agent
 	broker      *controller.Broker   // owns one live session per PR (interactive hand-off); nil = disabled
 	notif       Notifier
@@ -128,8 +136,10 @@ type Engine struct {
 	ch          chan core.Trigger
 	secrets     *secrets.Resolver       // redacts argv/errors/output tails on audit + log surfaces
 	sem         *slots                  // concurrent-agent cap; nil = unlimited
+	held        heldLevel               // cursor-carrying level events the live gate skipped; see heldlevel.go
 	groupWarn   sync.Map                // FlowRefs whose group key already failed once (log once, not per event)
 	runWait     sync.Map                // "key|run id" → last in-progress status logged (a fail-fast matrix emits dozens of failing_checks per run)
+	earlyDone   sync.Map                // dispatch id → step.done reason, for a done that arrived while its dispatch was in flight (consumed at the step boundary)
 	queuedMu    sync.Mutex              // guards queued
 	queued      map[string]core.Trigger // flow runs waiting for a slot, by queuedFlowKey → newest trigger
 	closedAt    map[string]time.Time    // PR key → when its _closed arrived (guarded by queuedMu); see closedSince
@@ -508,6 +518,79 @@ func (e *Engine) capabilityCard(sk *config.SkillPolicy) string {
 // including for session: profiles on runtimes without session persistence
 // (one-shot/cli), which stay fresh-per-event and lean on shared memory.
 func (e *Engine) dispatchAgent(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
+	// A controller runtime's dispatch is in flight for exactly as long as
+	// this call blocks; record it so a step.done its agent sends meanwhile
+	// resolves (StepDone) the way an in-flight paseo dispatch does.
+	if runner != e.disp && req.DispatchID != "" {
+		e.beginCtrlDispatch(req.DispatchID)
+		ref, err := e.dispatchAgentOn(ctx, runner, req)
+		e.endCtrlDispatch(req.DispatchID, ref.AgentID)
+		return ref, err
+	}
+	return e.dispatchAgentOn(ctx, runner, req)
+}
+
+// beginCtrlDispatch marks a controller-runtime dispatch in flight.
+func (e *Engine) beginCtrlDispatch(id string) {
+	e.ownerMu.Lock()
+	defer e.ownerMu.Unlock()
+	if e.ctrlLive == nil {
+		e.ctrlLive = map[string]int{}
+	}
+	e.ctrlLive[id]++
+}
+
+// endCtrlDispatch clears the in-flight mark and binds the dispatch to the
+// agent it launched (when it launched one), bounded like the owner table.
+func (e *Engine) endCtrlDispatch(id, agentID string) {
+	e.ownerMu.Lock()
+	defer e.ownerMu.Unlock()
+	if e.ctrlLive[id]--; e.ctrlLive[id] <= 0 {
+		delete(e.ctrlLive, id)
+	}
+	if agentID == "" {
+		return
+	}
+	if e.ctrlBound == nil {
+		e.ctrlBound = map[string]string{}
+	}
+	if len(e.ctrlBound) >= maxTrackedOwners {
+		for k := range e.ctrlBound {
+			delete(e.ctrlBound, k)
+			if len(e.ctrlBound) < maxTrackedOwners {
+				break
+			}
+		}
+	}
+	e.ctrlBound[id] = agentID
+}
+
+// agentForDispatch resolves a done call's dispatch id to its agent on any
+// runtime: the paseo ledger first, then the controller-runtime binding.
+func (e *Engine) agentForDispatch(id string) string {
+	if a := e.disp.AgentForDispatch(id); a != "" || id == "" {
+		return a
+	}
+	e.ownerMu.Lock()
+	defer e.ownerMu.Unlock()
+	return e.ctrlBound[id]
+}
+
+// dispatchInFlight reports whether the engine is still blocked on the
+// dispatch, on any runtime.
+func (e *Engine) dispatchInFlight(id string) bool {
+	if id == "" {
+		return false
+	}
+	if e.disp.DispatchInFlight(id) {
+		return true
+	}
+	e.ownerMu.Lock()
+	defer e.ownerMu.Unlock()
+	return e.ctrlLive[id] > 0
+}
+
+func (e *Engine) dispatchAgentOn(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
 	// A detach launch is always a fresh, unbound agent: it never joins a
 	// runtime's session pool (that would deliver its prompt to a live
 	// conductor-held session, or bind the new agent to one).
@@ -761,6 +844,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if t.ClosesTarget() {
 		_ = e.store.Delete(key)
 		e.markClosed(key)
+		e.dropHeld(key)
 		e.log("%s closed; dropped state", tag(t))
 		e.stopFixers(ctx, t)
 		if t.Action == nil {
@@ -869,13 +953,19 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 					e.log("%s retired %d stale hand-off(s) parked on an older revision", tag(t), n)
 				}
 			} else {
-				e.log("%s skipped — an agent is already working/parked for it", tag(t))
+				// An event naming new items (a cursor) is held and re-delivered
+				// when the run ends; one that only re-reads a condition is
+				// skipped, the next poll re-reads it (see heldlevel.go).
+				if !e.holdLevel(ctx, t, act, key, dkind) {
+					e.log("%s skipped — an agent is already working/parked for it", tag(t))
+				}
 				return
 			}
 		}
-		// A live-gated kind never records "done" on dispatch — the sweep re-derives
-		// reality (still dirty? threads unresolved? review pending?) each run, so
-		// culled/failed work isn't abandoned. The backoff below bounds the retries.
+		// A live-gated kind never records "done" on dispatch — the source's poll
+		// re-derives reality (still dirty? review pending?) and a held event is
+		// re-delivered when the run ends, so culled/failed work isn't
+		// abandoned. The backoff below bounds the retries.
 	} else if t.Dedup != "" && e.store.LastSignature(key, dkind) == t.Dedup {
 		return
 	}
@@ -1039,6 +1129,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		go func() {
 			defer e.recoverDispatch(ctx, t, run, "workflow dispatch")
 			if !shadow {
+				defer e.redeliverHeld(key)
 				defer e.release()
 			}
 			e.runSteps(ctx, run, t, act, creds, shadow)

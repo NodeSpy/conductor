@@ -508,9 +508,20 @@ schema directive; other foreground steps get a short "run `step.done` when
 finished" footer; hand-offs get theirs in the hand-off guidance. Where the
 signal is REACHABLE: paseo agents call the `conductor` CLI (creds injected in
 env; remote hosts via the SSH tunnel); ACP and opencode runtimes get the same
-surface as native MCP tools (`step_done`). A bare `cli` one-shot runtime has no
-skill surface — there the step boundary itself is the completion signal
-(conductor is blocked on the process), schema output rides the reply, and the
-footer tells the agent to just finish normally if the command is unavailable.
+surface as native MCP tools (`step_done`). A `cli` runtime agent gets the same
+CLI creds as a paseo agent (`CONDUCTOR_ENDPOINT` + a session token in its
+environment) when it can reach the daemon's socket: a local launch with no
+sandbox, or a `namespace` sandbox with `privileged: true`. A remote `host:`, a
+`namespace` sandbox (which masks the state dir the socket lives in), and
+`user`/`container` modes get none; there the step boundary itself is the
+completion signal (conductor is blocked on the process). On a `cli` runtime,
+schema output always rides the reply, and the footer tells the agent to just
+finish normally if the command is unavailable.
 Reclaim never depends on the call alone: a foreground step is archived at its
 step boundary regardless, and hand-offs have `idle_timeout` as the backstop.
+A `step.done` that arrives while conductor is still blocked on the foreground
+dispatch (the usual case: it is the agent's last action) is held until the step
+boundary, so it never cuts off the output being captured. It is then honored
+even on a step with `archive_when_done: false`. That setting keeps an agent that
+stops without signalling done (to ask you something, say) live in paseo, and
+reclaims one that finished.

@@ -136,6 +136,14 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 
 	host := resolveHost(c.host, spec.Request.Step.Host)
 	opt := launchOptsFor(c.iso, spec.Request)
+	// The skill surface (step.done and any granted verbs) over the daemon's
+	// socket, as paseo agents get it. Only where the agent can reach that
+	// socket: a local launch the sandbox does not mask the state dir from.
+	if skillSocketReachable(host, opt) {
+		for k, v := range dispatch.LocalSkillEnv(spec.Request) {
+			env = append(env, k+"="+v)
+		}
+	}
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
 	cwd, cmd := spec.Cwd, c.recipe.cmd(spec.Request.Model, prompt)
 	var dec *decisionRun

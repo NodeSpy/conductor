@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // StepDone is the merged done signal (step.done + handoff.done). These pin its
@@ -44,6 +46,36 @@ func TestStepDoneInFlightDefersToStepBoundary(t *testing.T) {
 	case got := <-d.archived:
 		t.Fatalf("an in-flight dispatch must not archive on done (got %q) — the step boundary owns it", got)
 	default:
+	}
+	if !e.TakeEarlyDone("disp-1") {
+		t.Fatal("an in-flight done must leave a mark for the step boundary")
+	}
+}
+
+// A foreground paseo run reports its agent id only when it returns, so an agent
+// calling step.done as its last action is always ahead of the dispatch binding.
+// That done must still be accepted (and marked for the step boundary), not
+// refused as unresolvable.
+func TestStepDoneInFlightBeforeBindingIsAccepted(t *testing.T) {
+	d := &fakeDispatcher{
+		archived:    make(chan string, 1),
+		inflightIDs: map[string]bool{"disp-1": true},
+	}
+	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+
+	if err := e.StepDone(context.Background(), "disp-1", "", "done before the run returned"); err != nil {
+		t.Fatalf("an in-flight dispatch's done must be accepted before its agent is bound: %v", err)
+	}
+	select {
+	case got := <-d.archived:
+		t.Fatalf("an in-flight dispatch must not archive on done (got %q)", got)
+	default:
+	}
+	if !e.TakeEarlyDone("disp-1") {
+		t.Fatal("the done must be marked for the step boundary")
+	}
+	if e.TakeEarlyDone("disp-1") {
+		t.Fatal("the mark must be consumed by the first take")
 	}
 }
 
@@ -87,5 +119,62 @@ func TestStepDoneRoutesLiveHandoffThroughTeardown(t *testing.T) {
 		}
 	default:
 		t.Fatal("done on a live hand-off must archive its agent")
+	}
+}
+
+// A controller runtime (cli) runs its dispatch through a runner the paseo
+// ledger never sees. Its agent's step.done — sent as the agent's last action,
+// while the engine is still blocked in dispatchAgent — must resolve as in
+// flight (marked for the step boundary, nothing archived), and a done after
+// the dispatch returned must archive through that runner, not paseo.
+func TestStepDoneControllerRuntimeDispatch(t *testing.T) {
+	paseo := &fakeDispatcher{archived: make(chan string, 1)}
+	e, _ := newEng(t, baseCfg(), paseo, &fakeNotifier{}, nil)
+	cli := &fakeDispatcher{archived: make(chan string, 1)}
+	var doneErr error
+	cli.onDispatch = func(r dispatch.Request) (dispatch.RunRef, error) {
+		doneErr = e.StepDone(context.Background(), r.DispatchID, "", "finished")
+		return dispatch.RunRef{AgentID: "claude-code-1"}, nil
+	}
+
+	if _, err := e.dispatchAgent(context.Background(), cli, dispatch.Request{DispatchID: "disp-cli"}); err != nil {
+		t.Fatal(err)
+	}
+	if doneErr != nil {
+		t.Fatalf("an in-flight cli dispatch's done must be accepted: %v", doneErr)
+	}
+	if !e.TakeEarlyDone("disp-cli") {
+		t.Fatal("the in-flight done must be marked for the step boundary")
+	}
+	if e.dispatchInFlight("disp-cli") {
+		t.Fatal("the dispatch is no longer in flight once dispatchAgent returned")
+	}
+
+	if err := e.StepDone(context.Background(), "disp-cli", "", "late done"); err != nil {
+		t.Fatalf("a done after the dispatch returned must resolve to its agent: %v", err)
+	}
+	select {
+	case got := <-cli.archived:
+		if got != "claude-code-1" {
+			t.Fatalf("archived %q, want the dispatch's agent", got)
+		}
+	case got := <-paseo.archived:
+		t.Fatalf("a cli agent was archived through paseo (%q)", got)
+	default:
+		t.Fatal("a late done must archive the cli agent through its runner")
+	}
+}
+
+// The flow runner reads the in-flight done mark through the services the
+// engine hands it; without that wiring no step boundary ever sees it.
+func TestEarlyDoneReachesTheFlowRunner(t *testing.T) {
+	d := &fakeDispatcher{archived: make(chan string, 1), inflightIDs: map[string]bool{"disp-1": true}}
+	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+	if err := e.StepDone(context.Background(), "disp-1", "", "done"); err != nil {
+		t.Fatal(err)
+	}
+	take := e.flowAgentServices().TakeDone
+	if take == nil || !take("disp-1") {
+		t.Fatal("the flow runner's TakeDone must read the engine's in-flight done mark")
 	}
 }

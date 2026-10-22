@@ -92,7 +92,8 @@ A step is one of seven forms (all share `id` and `if`):
   pings only reviewers whose latest review is CHANGES_REQUESTED on an older
   commit than the PR head and who aren't already requested, on an open PR —
   never someone who has since approved (`only_outstanding: false` re-requests
-  unconditionally). It skips — never fails the flow — when nobody requestable
+  unconditionally). `all_outstanding: true` also pings every other reviewer
+  whose changes-request is still outstanding, not just the ones named. It skips — never fails the flow — when nobody requestable
   is left: the PR author, review bots (`…[bot]`), anyone GitHub rejects as not
   a collaborator, or nobody with changes still outstanding.
   It may also carry `model:` (a fleet, a model id, a wildcard, or an inline
