@@ -5,6 +5,7 @@ package browser
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"io"
 	"net"
 	"os"
@@ -80,41 +81,41 @@ func TestMuxWithTheShim(t *testing.T) {
 		t.Fatalf("proxy channel: %q", line)
 	}
 	// Files in and out of the transfer directory, and only there.
-	if err := m.Put(filepath.Join(xfer, "up", "a.txt"), strings.NewReader("upload body")); err != nil {
+	if err := m.Put(context.Background(), filepath.Join(xfer, "up", "a.txt"), strings.NewReader("upload body")); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(xfer, "up", "a.txt")); string(b) != "upload body" {
 		t.Fatalf("put: %q", b)
 	}
-	if err := m.Put(filepath.Join(xfer, "up", "a.txt"), strings.NewReader("again")); err == nil {
+	if err := m.Put(context.Background(), filepath.Join(xfer, "up", "a.txt"), strings.NewReader("again")); err == nil {
 		t.Fatal("a put over an existing file")
 	}
 	var buf bytes.Buffer
-	if n, err := m.Get(filepath.Join(xfer, "up", "a.txt"), 100, &buf); err != nil || n != 11 || buf.String() != "upload body" {
+	if n, err := m.Get(context.Background(), filepath.Join(xfer, "up", "a.txt"), 100, &buf); err != nil || n != 11 || buf.String() != "upload body" {
 		t.Fatalf("get: %d %v %q", n, err, buf.String())
 	}
-	if _, err := m.Get(filepath.Join(xfer, "up", "a.txt"), 5, io.Discard); err == nil {
+	if _, err := m.Get(context.Background(), filepath.Join(xfer, "up", "a.txt"), 5, io.Discard); err == nil {
 		t.Fatal("a get over the limit")
 	}
 	os.WriteFile(filepath.Join(dir, "secret"), []byte("S"), 0o600)
 	os.Symlink(filepath.Join(dir, "secret"), filepath.Join(xfer, "link"))
 	for _, p := range []string{filepath.Join(dir, "secret"), filepath.Join(xfer, "..", "secret"), filepath.Join(xfer, "link")} {
-		if _, err := m.Get(p, 100, io.Discard); err == nil {
+		if _, err := m.Get(context.Background(), p, 100, io.Discard); err == nil {
 			t.Fatalf("get %s", p)
 		}
 	}
-	if err := m.Put(filepath.Join(xfer, "..", "planted"), strings.NewReader("x")); err == nil {
+	if err := m.Put(context.Background(), filepath.Join(xfer, "..", "planted"), strings.NewReader("x")); err == nil {
 		t.Fatal("a put outside")
 	}
 	// A symlinked directory on the way out, for a put and a get.
 	os.Symlink(dir, filepath.Join(xfer, "ldir"))
-	if err := m.Put(filepath.Join(xfer, "ldir", "planted"), strings.NewReader("x")); err == nil {
+	if err := m.Put(context.Background(), filepath.Join(xfer, "ldir", "planted"), strings.NewReader("x")); err == nil {
 		t.Fatal("a put through a symlinked directory")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "planted")); err == nil {
 		t.Fatal("planted outside the transfer directory")
 	}
-	if _, err := m.Get(filepath.Join(xfer, "ldir", "secret"), 100, io.Discard); err == nil {
+	if _, err := m.Get(context.Background(), filepath.Join(xfer, "ldir", "secret"), 100, io.Discard); err == nil {
 		t.Fatal("a get through a symlinked directory")
 	}
 	// The stream ends: so does the shim (and its browser).

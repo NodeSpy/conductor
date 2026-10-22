@@ -730,7 +730,9 @@ func (m *Manager) landDownload(in *Instance, c Principal, loggedIn bool, d *Down
 	st := m.settings()
 	entry := map[string]any{"action": "download", "identity": c.Identity, "agent": c.Agent, "repo": c.Repo,
 		"url": d.URL, "logged_in": loggedIn, "requester": c.Requester}
-	src, err := in.hostDownload(d.GUID, st.MaxDownload)
+	// A completed download is handled on the browser's event goroutine, off
+	// any request: the transfer bounds itself with its own deadline.
+	src, err := in.hostDownload(context.Background(), d.GUID, st.MaxDownload)
 	if err != nil {
 		in.setDownload(d, func(d *Download) { d.State, d.Err = "refused", err.Error() })
 		entry["outcome"], entry["reason"] = "refused", err.Error()
@@ -1162,7 +1164,7 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 			if _, err := readWorkspace(c.Workspace, rel, c.deny(), st.MaxUpload, dst); err != nil {
 				return nil, refuse("upload %s: %v", rel, err)
 			}
-			bp, err := in.browserPath(dst)
+			bp, err := in.browserPath(ctx, dst)
 			if err != nil {
 				return nil, err
 			}

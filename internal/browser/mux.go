@@ -2,12 +2,14 @@ package browser
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"sync"
+	"time"
 )
 
 // The container mux: a browser in a container is reached over the engine's
@@ -37,6 +39,10 @@ const (
 type Mux struct {
 	w   io.Writer
 	wmu sync.Mutex
+
+	// fileMu serializes this browser's file transfers — one at a time, but
+	// per-Mux, so a stall on one container never blocks another's I/O.
+	fileMu sync.Mutex
 
 	mu    sync.Mutex
 	chans map[uint32]*muxChan
@@ -261,23 +267,31 @@ type fileReq struct {
 	Max  int64  `json:"max,omitempty"`
 }
 
-var fileMu sync.Mutex // one transfer at a time
+// fileXferTimeout bounds one file transfer even when the caller passes no
+// deadline: a shim that stays alive but stops answering can never wedge a
+// transfer (or the lock behind it) forever.
+const fileXferTimeout = 2 * time.Minute
 
 // Get copies a file out of the container's transfer directory (at most max
 // bytes) to w.
-func (m *Mux) Get(path string, max int64, w io.Writer) (int64, error) {
-	return m.transfer(fileReq{Op: "get", Path: path, Max: max}, nil, w)
+func (m *Mux) Get(ctx context.Context, path string, max int64, w io.Writer) (int64, error) {
+	return m.transfer(ctx, fileReq{Op: "get", Path: path, Max: max}, nil, w)
 }
 
 // Put copies r into the container's transfer directory at path.
-func (m *Mux) Put(path string, r io.Reader) error {
-	_, err := m.transfer(fileReq{Op: "put", Path: path}, r, nil)
+func (m *Mux) Put(ctx context.Context, path string, r io.Reader) error {
+	_, err := m.transfer(ctx, fileReq{Op: "put", Path: path}, r, nil)
 	return err
 }
 
-func (m *Mux) transfer(req fileReq, in io.Reader, out io.Writer) (int64, error) {
-	fileMu.Lock()
-	defer fileMu.Unlock()
+func (m *Mux) transfer(ctx context.Context, req fileReq, in io.Reader, out io.Writer) (int64, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, fileXferTimeout)
+		defer cancel()
+	}
+	m.fileMu.Lock()
+	defer m.fileMu.Unlock()
 	replies := make(chan fileMsg, 64)
 	c := &muxChan{file: replies}
 	m.mu.Lock()
@@ -295,6 +309,9 @@ func (m *Mux) transfer(req fileReq, in io.Reader, out io.Writer) (int64, error) 
 	if in != nil {
 		buf := make([]byte, 32<<10)
 		for {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
 			n, err := in.Read(buf)
 			if n > 0 {
 				if err := m.send(frameData, chanFile, buf[:n]); err != nil {
@@ -313,10 +330,22 @@ func (m *Mux) transfer(req fileReq, in io.Reader, out io.Writer) (int64, error) 
 		}
 	}
 	// The reply: data frames, then a status frame ("ok" / "error: …"), then
-	// close.
+	// close. A shim that stalls mid-reply (no EOF, no error) never closes
+	// replies, so the loop also watches ctx — the transfer unblocks on the
+	// deadline instead of holding fileMu forever.
 	var total int64
 	var status string
-	for msg := range replies {
+	for {
+		var msg fileMsg
+		var ok bool
+		select {
+		case <-ctx.Done():
+			return total, ctx.Err()
+		case msg, ok = <-replies:
+		}
+		if !ok {
+			break
+		}
 		if msg.status {
 			status = string(msg.p)
 			continue

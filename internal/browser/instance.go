@@ -131,7 +131,7 @@ func (in *Instance) downloadDir() string {
 
 // hostDownload is a finished download as a host file (fetched out of a
 // container, at most max bytes).
-func (in *Instance) hostDownload(guid string, max int64) (string, error) {
+func (in *Instance) hostDownload(ctx context.Context, guid string, max int64) (string, error) {
 	host := filepath.Join(in.dir, "xfer", "dl", guid)
 	if in.proc.Mux == nil {
 		return host, nil
@@ -143,7 +143,7 @@ func (in *Instance) hostDownload(guid string, max int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_, err = in.proc.Mux.Get(filepath.Join(in.downloadDir(), guid), max, f)
+	_, err = in.proc.Mux.Get(ctx, filepath.Join(in.downloadDir(), guid), max, f)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -156,7 +156,7 @@ func (in *Instance) hostDownload(guid string, max int64) (string, error) {
 
 // browserPath puts a staged host file (under the instance dir) where the
 // browser can open it, and returns that path as the browser sees it.
-func (in *Instance) browserPath(host string) (string, error) {
+func (in *Instance) browserPath(ctx context.Context, host string) (string, error) {
 	if in.proc.Mux == nil {
 		return host, nil
 	}
@@ -170,7 +170,7 @@ func (in *Instance) browserPath(host string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	if err := in.proc.Mux.Put(guest, f); err != nil {
+	if err := in.proc.Mux.Put(ctx, guest, f); err != nil {
 		return "", err
 	}
 	return guest, nil
