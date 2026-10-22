@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/dispatch"
@@ -51,5 +52,30 @@ steps:
 				t.Fatalf("archived %d agents, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// The mark is consumed on every outcome, a failed dispatch included: a mark
+// left behind would outlive its dispatch.
+func TestEarlyDoneConsumedWhenTheDispatchFails(t *testing.T) {
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
+	rig := newTestRunner(t, cfg, buildRegistry(t, cfg))
+	rig.Agents.dispatchFunc = func(_ context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		return dispatch.RunRef{}, errors.New("runtime unreachable")
+	}
+	var taken []string
+	rig.Runner.Agents.TakeDone = func(dispatchID string) bool {
+		taken = append(taken, dispatchID)
+		return true
+	}
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: fix, type: agent, prompt: "fix it", archive_when_done: false }
+`)
+	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "x"}), spec)
+	reqs := rig.Agents.requests()
+	if len(reqs) == 0 || len(taken) != len(reqs) || taken[0] != reqs[0].DispatchID {
+		t.Fatalf("a failed dispatch must still consume its own mark: taken %v, dispatched %d", taken, len(reqs))
 	}
 }

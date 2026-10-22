@@ -164,3 +164,17 @@ func TestStepDoneControllerRuntimeDispatch(t *testing.T) {
 		t.Fatal("a late done must archive the cli agent through its runner")
 	}
 }
+
+// The flow runner reads the in-flight done mark through the services the
+// engine hands it; without that wiring no step boundary ever sees it.
+func TestEarlyDoneReachesTheFlowRunner(t *testing.T) {
+	d := &fakeDispatcher{archived: make(chan string, 1), inflightIDs: map[string]bool{"disp-1": true}}
+	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+	if err := e.StepDone(context.Background(), "disp-1", "", "done"); err != nil {
+		t.Fatal(err)
+	}
+	take := e.flowAgentServices().TakeDone
+	if take == nil || !take("disp-1") {
+		t.Fatal("the flow runner's TakeDone must read the engine's in-flight done mark")
+	}
+}
