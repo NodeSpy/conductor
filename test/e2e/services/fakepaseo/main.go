@@ -97,6 +97,10 @@ func main() {
 	case "_wsarchived":
 		// Harness-only: exit 0 iff the given workspace id is archived.
 		cmdWsArchived(os.Args[2:])
+	case "_modes":
+		// Harness-only: the --mode each agent whose title or repo label
+		// contains the given substring was launched with ("" = none).
+		cmdModes(os.Args[2:])
 	case "_seedws":
 		// Harness-only: seed a workspace record conductor did NOT create (a
 		// stand-in for the user's own worktree) — the ledger regression asserts
@@ -130,6 +134,8 @@ type agent struct {
 	// Env records the --env pairs the run was launched with, so the harness can
 	// act AS the agent (e.g. call step.done with its CONDUCTOR_SKILL_TOKEN).
 	Env map[string]string `json:"env"`
+	// Mode is the provider mode the agent was launched in (`run --mode`).
+	Mode string `json:"mode"`
 }
 
 type workspace struct {
@@ -203,6 +209,7 @@ type parsed struct {
 	cwd         string
 	title       string
 	mode        string // --mode / --worktree-mode strategy
+	launchMode  string // `run --mode`: the provider permission mode
 	prNumber    string
 	newBranch   string
 	base        string
@@ -255,6 +262,9 @@ func parseFlags(args []string) parsed {
 				p.title = v
 			case "--mode", "--worktree-mode":
 				p.mode = v
+				if a == "--mode" {
+					p.launchMode = v
+				}
 			case "--pr-number":
 				p.prNumber = v
 			case "--new-branch":
@@ -367,6 +377,37 @@ func cmdRun(args []string) {
 	// agent for `paseo logs` (the SOFT capture path) regardless of schema mode.
 	replyRaw, hasReply := replyDirective(prompt)
 
+	// Headless agent (`[[needs-noprompt]]`): like a real one finishing a schema
+	// step, it delivers its answer with a Bash tool call, `conductor call
+	// step.done --output '<answer>'`. Launched in a no-prompt mode that call just
+	// runs. In any other mode it raises a permission prompt nobody answers, and
+	// the run fails the way real paseo's does when the prompt stream closes —
+	// immediately here, rather than after paseo's own timeout.
+	if strings.Contains(prompt, "[[needs-noprompt]]") && hasReply {
+		if !noPromptModes[p.launchMode] {
+			withState(func(s *state) { // record it, so the harness can read its mode
+				s.Seq++
+				id := fmt.Sprintf("agent-%d", s.Seq)
+				now := time.Now()
+				s.Agents[id] = &agent{ID: id, Cwd: cwd, Status: "error", Title: p.title, Labels: p.labels,
+					CreatedAt: now, LastUsage: now, Prompt: prompt, Env: p.env, Mode: p.launchMode}
+			})
+			fmt.Println(`{"error":{"code":"RUN_FAILED","message":"Tool permission stream closed before response received (Bash: conductor call step.done, mode ` + strconv.Quote(p.launchMode) + `)"}}`)
+			os.Exit(1)
+		}
+		cmd := exec.Command("sh", "-c", "conductor call step.done --output '"+string(replyRaw)+"'")
+		cmd.Env = os.Environ()
+		for k, v := range p.env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+		if out, cerr := cmd.CombinedOutput(); cerr != nil {
+			replyRaw = []byte("step.done delivery FAILED: " + cerr.Error() + ": " + string(out))
+		} else {
+			replyRaw = []byte("Result delivered via step.done; nothing further in chat.")
+		}
+		hasReply = false // delivered by the call; nothing for --output-schema to echo
+	}
+
 	// Verb-delivered output (the done+output contract): with
 	// FAKE_PASEO_VERB_OUTPUT=1 the "agent" does what a real one is instructed
 	// to — it delivers the canned payload via `conductor call step.done
@@ -395,7 +436,7 @@ func cmdRun(args []string) {
 		s.Agents[id] = &agent{
 			ID: id, Cwd: cwd, Status: "idle", Title: p.title,
 			Labels: p.labels, CreatedAt: now, LastUsage: now,
-			Prompt: prompt, Reply: string(replyRaw), Env: p.env,
+			Prompt: prompt, Reply: string(replyRaw), Env: p.env, Mode: p.launchMode,
 		}
 	})
 	// Conductor parses the launched agent id off stdout JSON AND reads runtime-
@@ -449,6 +490,25 @@ func cmdLogs(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("[User] %s\n%s\n", ag.Prompt, ag.Reply)
+}
+
+// noPromptModes are the paseo provider modes that run a tool call without a
+// permission prompt (claude, codex, gemini) — the ones conductor launches a
+// headless agent in by default.
+var noPromptModes = map[string]bool{"bypassPermissions": true, "full-access": true, "yolo": true}
+
+// cmdModes prints the launch mode of each agent whose title or repo label
+// contains the substring.
+func cmdModes(args []string) {
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	for _, a := range readState().Agents {
+		if strings.Contains(a.Title+" "+a.Labels["repo"], sub) {
+			fmt.Printf("agent=%s mode=%q\n", a.ID, a.Mode)
+		}
+	}
 }
 
 // replyDirective extracts a `[[reply {...json...}]]` marker from the prompt —
@@ -772,9 +832,15 @@ func wsCreate(args []string) {
 // is enough to let an e2e scenario pin a model and prove the resolved
 // Provider reaches `paseo run --provider` (the v0.9.0 regression this harness
 // closes the gap on).
+//
+// The second provider carries paseo's real Claude provider id ("claude"):
+// conductor picks a headless agent's launch mode by provider, so the
+// headless-mode scenarios (group Z) pin its model.
 const (
-	fakeProviderID    = "e2e-claude"
-	fakeProviderModel = "claude-opus-5-e2e"
+	fakeProviderID      = "e2e-claude"
+	fakeProviderModel   = "claude-opus-5-e2e"
+	claudeProviderID    = "claude"
+	claudeProviderModel = "claude-sonnet-5-e2e"
 )
 
 func cmdProvider(args []string) {
@@ -785,15 +851,17 @@ func cmdProvider(args []string) {
 	case "ls":
 		emitJSON([]map[string]string{
 			{"provider": fakeProviderID, "label": "E2E Claude", "status": "available", "enabled": "true"},
+			{"provider": claudeProviderID, "label": "Claude", "status": "available", "enabled": "true"},
 		})
 	case "models":
-		if len(args) < 2 || args[1] != fakeProviderID {
+		switch {
+		case len(args) >= 2 && args[1] == fakeProviderID:
+			emitJSON([]map[string]string{{"model": "Opus 5 (e2e)", "id": fakeProviderModel}})
+		case len(args) >= 2 && args[1] == claudeProviderID:
+			emitJSON([]map[string]string{{"model": "Sonnet 5 (e2e)", "id": claudeProviderModel}})
+		default:
 			emitJSON([]any{})
-			return
 		}
-		emitJSON([]map[string]string{
-			{"model": "Opus 5 (e2e)", "id": fakeProviderModel},
-		})
 	default:
 		os.Exit(0)
 	}

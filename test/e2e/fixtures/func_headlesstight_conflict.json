@@ -1,0 +1,31 @@
+{
+  "action": "synchronize",
+  "installation": {
+    "id": 42
+  },
+  "repository": {
+    "full_name": "func/headlesstight",
+    "name": "headlesstight",
+    "default_branch": "main",
+    "owner": {
+      "login": "func"
+    }
+  },
+  "pull_request": {
+    "number": 1,
+    "state": "open",
+    "draft": false,
+    "title": "func/headlesstight PR under test",
+    "html_url": "https://forge.test/func/headlesstight/pull/1",
+    "head": {
+      "sha": "canned-head-headlesstight-1",
+      "ref": "pr-1"
+    },
+    "base": {
+      "ref": "main"
+    },
+    "user": {
+      "login": "conductor-user"
+    }
+  }
+}

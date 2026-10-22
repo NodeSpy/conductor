@@ -162,6 +162,10 @@ runtimes:
   # execs `claude` on PATH (= fakecli). It has no native --output-schema, so the
   # conductor-owned contract must extract + validate the reply conductor-side.
   clijudge: { use: cli, tool: claude-code }
+  # Z (headless permission modes): a second LOCAL paseo runtime on its own
+  # bin (the image's /usr/local/bin/paseo symlink to the same fake), so it gets
+  # its own dispatcher and can turn the no-prompt default off.
+  paseotight: { use: paseo, bin: /usr/local/bin/paseo, headless_mode: none }
 
 x-templates:
   fixer: &fixer
@@ -620,6 +624,55 @@ triggers:
       - id: tell
         uses: slack.post
         options: { channel: CSCHEMA, text: "SCHEMA-CLI decision={{.assess.decision}}" }
+
+  # Z (headless permission modes, paseo): a decide step's agent is headless —
+  # conductor launched it and nobody drives it — and delivers its answer with
+  # a Bash call, `conductor call step.done --output '…'`. The fake agent
+  # ([[needs-noprompt]]) lets that call run only in a no-prompt mode; in any
+  # other it fails as an unanswered permission prompt does.
+  #
+  #   headlessok     runtime paseo: no mode: on the step, so conductor launches
+  #                  the claude agent in bypassPermissions — the step completes.
+  #   headlesstight  runtime paseotight (headless_mode: none): no mode is
+  #                  injected, the call is refused, and the step falls to its
+  #                  default — proving the injection, not the fake, did it.
+  - on: gh.merge_conflict
+    name: headlessok
+    filter: { repo: ["func/headlessok"] }
+    steps:
+      - id: flaky
+        runtime: paseo
+        model: claude-sonnet-5-e2e
+        decide:
+          state: "{{.repo}}#{{.pr}}"
+          questions:
+            flaky:
+              type: noul
+              instructions: >-
+                Is the failure flaky? [[needs-noprompt]] [[reply {"answers":{"flaky":0.9}}]]
+          default: { flaky: { noul: 0 } }
+      - id: tell
+        uses: slack.post
+        options: { channel: CHEADLESS, text: "HEADLESS-OK flaky={{.flaky.flaky.noul}} by={{index .flaky \"_by\"}}" }
+
+  - on: gh.merge_conflict
+    name: headlesstight
+    filter: { repo: ["func/headlesstight"] }
+    steps:
+      - id: flaky
+        runtime: paseotight
+        model: claude-sonnet-5-e2e
+        decide:
+          state: "{{.repo}}#{{.pr}}"
+          questions:
+            flaky:
+              type: noul
+              instructions: >-
+                Is the failure flaky? [[needs-noprompt]] [[reply {"answers":{"flaky":0.9}}]]
+          default: { flaky: { noul: 0 } }
+      - id: tell
+        uses: slack.post
+        options: { channel: CHEADLESS, text: "HEADLESS-TIGHT flaky={{.flaky.flaky.noul}} by={{index .flaky \"_by\"}}" }
 
   # U — the unified `filter:` (docs/design/unified-filter.md): the ONE filter
   # key, whose YAML SHAPE is its boolean structure. Phase 2 folded routing in

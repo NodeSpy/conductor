@@ -1789,6 +1789,7 @@ main() {
   group_X_listeners
   group_Y_listeners_github_smee
   group_W_stepdone
+  group_Z_headless_mode
   print_matrix
   [ "$FAIL" -eq 0 ]
 }
@@ -1845,6 +1846,45 @@ group_W_stepdone() {
     bad "W user workspace untouched" W foreign "conductor archived a workspace it did not create"
   else
     ok "W user workspace untouched (ownership ledger)" W foreign
+  fi
+}
+
+# Z — headless permission modes on paseo (internal/dispatch/headless_mode.go).
+# A decide step's agent is headless: conductor launched it, nobody drives it,
+# and it delivers its answer with a Bash call to `conductor call step.done`.
+# The fake agent ([[needs-noprompt]]) lets that call run only in a no-prompt
+# mode, and fails like an unanswered permission prompt otherwise.
+#
+#   Z1–Z2  headlessok: no mode: on the step → conductor launches the claude
+#          agent in bypassPermissions → the call runs, the step completes.
+#   Z3–Z4  headlesstight: the runtime's headless_mode: none → no mode is
+#          injected → the call is refused → the step falls to its default.
+group_Z_headless_mode() {
+  banner "Group Z — headless paseo agents launch in a no-prompt mode (headless_mode: tightens it)"
+  func_reset_sink
+
+  post_webhook_to conductor-conn pull_request func_headlessok_conflict.json >/dev/null
+  if wait_for 60 slack_sink_has "HEADLESS-OK flaky=0.9 by=paseo/claude-sonnet-5-e2e"; then
+    ok "Z1 a headless claude decide step's conductor call ran; the step completed" Z Z1
+  else
+    bad "Z1 headless decide step completes" Z Z1 "no 'HEADLESS-OK flaky=0.9 by=paseo/claude-sonnet-5-e2e' capture"
+  fi
+  if cexec conductor-conn paseo _modes headlessok | grep -q 'mode="bypassPermissions"'; then
+    ok "Z2 its agent was launched with --mode bypassPermissions" Z Z2
+  else
+    bad "Z2 no-prompt mode injected" Z Z2 "modes: $(cexec conductor-conn paseo _modes headlessok | head -3)"
+  fi
+
+  post_webhook_to conductor-conn pull_request func_headlesstight_conflict.json >/dev/null
+  if wait_for 60 slack_sink_has "HEADLESS-TIGHT flaky=0 by=default"; then
+    ok "Z3 headless_mode: none — no mode injected, the call was refused, the step fell to its default" Z Z3
+  else
+    bad "Z3 headless_mode: none" Z Z3 "no 'HEADLESS-TIGHT flaky=0 by=default' capture"
+  fi
+  if cexec conductor-conn paseo _modes headlesstight | grep -q 'mode=""'; then
+    ok "Z4 the tightened runtime's agent was launched with no --mode" Z Z4
+  else
+    bad "Z4 no mode under headless_mode: none" Z Z4 "modes: $(cexec conductor-conn paseo _modes headlesstight | head -3)"
   fi
 }
 
