@@ -25,6 +25,12 @@ import (
 var persistExceptions = map[string]string{
 	// persist() IS the chokepoint; the write it performs is the point.
 	"persist": "the chokepoint itself",
+	// A bots.json that does not parse is moved aside ONCE, at Open, before
+	// any writer exists — a rename of the bad file, not a snapshot save.
+	"loadBots": "boot-time move-aside of a corrupt ledger, before any writer",
+	// The same for conversations.json.
+	"loadConversations": "boot-time move-aside of a corrupt transcript file, before any writer",
+	"loadPins":          "boot-time move-aside of a corrupt pins file, before any writer",
 	// A history record's path is derived from its OWN run id
 	// (historyFile(dir, rec.ID)), so there is no concurrent save of the same
 	// file to lose an update to — the condition persist() exists to prevent

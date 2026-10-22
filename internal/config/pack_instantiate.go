@@ -142,6 +142,7 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	if err != nil {
 		return fmt.Errorf("pack %q: %w", ns, err)
 	}
+	st.cfg.removedWarnings = append(st.cfg.removedWarnings, rawMan.removedWarnings...)
 	// Cycle detection by pack IDENTITY: the same canonical pack name repeating in
 	// the ancestry is a cycle even when reached under a different alias.
 	if contains(req.nameChain, rawMan.Pack.Name) {
@@ -182,6 +183,26 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// gap becomes a visible warning at `conductor init`/`plan`.
 	for _, w := range scanEnvReach(man) {
 		st.warnf("pack %q: %s", ns, w)
+	}
+
+	// Bot templates: validated with the pack (a forbidden key or a broken
+	// file reference fails it), and kept for the top-level instance — a
+	// bot names <instance>/<template>.
+	if len(man.Bots) > 0 {
+		lts, err := loadTemplates(man, req.nodeDir)
+		if err != nil {
+			return fmt.Errorf("pack %q: %w", ns, err)
+		}
+		if len(req.chain) == 1 {
+			if st.cfg.templates == nil {
+				st.cfg.templates = map[string]map[string]LoadedTemplate{}
+			}
+			for n, lt := range lts {
+				lt.Instance, lt.Source = ns, req.inst.Source
+				lts[n] = lt
+			}
+			st.cfg.templates[ns] = lts
+		}
 	}
 
 	// Resolve environment bindings for this node. A binding may be given
@@ -350,6 +371,8 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	for _, name := range sortedWorkflowKeys(man.Workflows) {
 		wf := man.Workflows[name]
 		rw.rewriteWorkflow(&wf)
+		// Provenance, for the listings.
+		wf.PackInstance = ns
 		st.cfg.setWorkflow(rw.workflowName(name), wf)
 	}
 
@@ -428,6 +451,7 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 				arms, ok = merged, true
 			}
 		}
+		tr.PackInstance = ns // provenance, for the listings
 		if !ok || dormant {
 			st.cfg.Triggers = append(st.cfg.Triggers, tr)
 			continue
@@ -806,6 +830,7 @@ func loadPackManifest(nodeDir string) (*PackManifest, error) {
 	if man.Pack.Name == "" {
 		return nil, fmt.Errorf("%s: pack.name is required", PackManifestFile)
 	}
+	man.removedWarnings = manifestFolderWarnings(raw, man.Pack.Name)
 	return &man, nil
 }
 
@@ -1184,5 +1209,6 @@ func cloneTriggerSpec(t TriggerSpec) (TriggerSpec, error) {
 	if err := yaml.Unmarshal(b, &out); err != nil {
 		return TriggerSpec{}, err
 	}
+	out.PackInstance, out.Bot = t.PackInstance, t.Bot // not YAML: provenance
 	return out, nil
 }

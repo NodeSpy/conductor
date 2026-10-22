@@ -178,8 +178,8 @@ arm's own `policy:` (most specific wins).
 This single rule decides what a pack may *ship* vs must *bind*:
 
 - **Define-in-pack** (shipped, namespaced, overridable): `workflows:`, `models:`
-  (fleets), `workflows:`, `policy:`, `checks:`, and its disarmed `triggers:`.
-  Pure behavior.
+  (fleets), `policy:`, `checks:`, its disarmed `triggers:`, and bot templates
+  (`bots:`, [below](#bot-templates)). Pure behavior.
 - **Bind-only** (declared in `requires:`, wired in the block, **never shipped**):
   `connectors:`, `secrets:`, `vaults:`, `stores:`, `runtimes:`, `hosts:`,
   `handoffs:`. Anything carrying credentials, endpoints, or infra identity.
@@ -443,6 +443,48 @@ surface, and that is the only place consent lives.
 Guarantee: a freshly-added pack does **nothing** until you arm a trigger, and a
 github trigger **cannot be armed at all** without explicitly scoping its repos.
 
+## Bot templates
+
+A pack can ship **bots** the way it ships workflows: as templates an
+operator instantiates. A template carries a charter, typed seed documents,
+collections, the connectors it needs (inputs), the verbs it requests — each
+with a maximum tier — and suggested triggers, proactive checks, runtime and
+model:
+
+```yaml
+bots:
+  sre:
+    description: First-line SRE
+    charter_file: charter.md
+    seed: seed
+    connectors: { pagerduty: { use: pagerduty } }
+    verbs:
+      pagerduty.get_incident: observe
+      pagerduty.acknowledge: { max: reversible, why: "stop the re-notifications" }
+    triggers:
+      - { name: page, on: pagerduty.incident, title: "page: {{.title}}", urgent: true }
+```
+
+The operator instantiates it in their own `bots:`, naming it the way a
+pack's other members are named — `<pack instance>/<template>`:
+
+```yaml
+packs:
+  sre: { use: conductor-packs/sre-bot, version: "~> 2.0" }
+bots:
+  platform-sre: { use: sre/sre, grant: { pagerduty.get_incident: observe } }
+```
+
+The bot is the operator's config, not the pack's: a template only
+**requests**, and every verb it requests is active only where the bot's
+`grant:` says so. It follows define behavior / bind environment strictly —
+a template that names operators, a team, connector bindings,
+secrets, autonomy, the sandbox or egress is rejected at load, by name. The
+pack instance carries the version, hold, trust and lockfile for every bot
+made from it, and a newer version reaches those bots' memory only as a
+proposal their operators approve. `conductor bot templates` lists installed
+templates and the registry's, with search. See [[Bot-Templates]].
+
 ## Composition and dependencies
 
 - **Workflows are addressable by qualified name** (`review/review-flow`) — call
@@ -492,7 +534,8 @@ lockfile's `resolved:` sha is what actually reproduces the fetch, and re-running
 
 ```
 conductor init [--allow-unlisted] # fetch the packs: block, write the lockfile, preview the effect
-conductor pack list               # configured instances + lock status
+conductor pack list [--include-templates] [--json]   # configured instances, lock status and what each ships
+conductor pack search [<words>] [--registry <dir|git url>] [--installed] [--include-templates] [--json]   # the catalog (below)
 conductor pack plan               # preview what the packs add (agents, skill grants, armed triggers)
 conductor pack add <source>       # fetch a pack, show its install review + a ready-to-paste block
 conductor pack lint <pack-dir>    # validate a pack is well-formed (author tooling)
@@ -500,7 +543,13 @@ conductor pack show <pack-dir>    # render a pack's docs: settings, requires, ex
 conductor pack remove <instance>  # clear a pack's vendored tree + lockfile entries (alias: rm)
 conductor pack update [--allow-unlisted] # re-resolve the packs: block and diff the lockfile
 conductor update --packs          # alias for `conductor pack update`
+conductor bot templates [--search …] # bot templates installed packs and the registry ship ([[Bot-Templates]])
 ```
+
+`conductor pack lint` also checks a pack's bot templates: the keys a
+template may not set, its file references (inside the pack), its requested
+verbs (inputs it declares, tiers it may name), and every seed document
+against its kind and size cap.
 
 `conductor pack add` and `remove` do **not** edit your config: `add` prints a
 block for you to paste (so you review the binds first), and `remove` clears the
@@ -508,6 +557,42 @@ vendored tree + lockfile and tells you which `packs:` block to delete.
 
 Typical flow: edit `packs:` → `conductor init` → `conductor pack plan` → arm a
 trigger → `conductor validate`.
+
+### The catalog
+
+`conductor pack search` lists the packs a registry offers (the official one
+by default) after the ones you have installed. Each pack says what it
+**ships**: its workflows, triggers, checks, model fleets, policy, bot
+templates, and the collections and seed documents those templates carry.
+Conductor reads this from the pack's manifest, never from a label the pack
+gives itself:
+
+```
+* flows                  1.0.0     review workflows
+    ships: 1 workflows
+  mixed                  1.0.0     a template and a workflow
+    ships: 1 bot templates, 1 workflows
+    install: packs: { mixed: { use: conductor-packs/mixed } }
+(1 template-only pack(s) not shown — find them with `conductor bot templates`; --include-templates lists them here)
+```
+
+A pack that ships **only bot templates** (with their collections and seeds)
+is *template-only*. It's left out of `pack search` and `pack list` by
+default, because it belongs to creating a bot ([[Bot-Templates]]), where
+`conductor bot templates` finds it and `conductor bot new --from` installs
+it. `--include-templates` shows it in the pack catalog too.
+
+`install` is the `packs:` entry that installs a pack, using its real source:
+the official repo by name (`use: conductor-packs/<pack>`); a git registry's
+pack by its git source (`source: github.com/acme/packs//<pack>`, or
+`git::<url>//<pack>` for ssh and `file://`), so `pack_trust` governs it like
+any remote pack; a local registry's by its path.
+
+For the dashboard, the control socket's `packs` op (`cmd: "bot"`) serves the
+same catalog: `search`, `registry`, `installed`, `include_templates` →
+`{ packs: [ { name, version, description, contents: { kinds, counts },
+template_only, installed, pack_instance, source, install } ],
+hidden_template_packs }`.
 
 ## Authoring a pack
 
@@ -607,4 +692,6 @@ The following are **not yet** implemented and are called out honestly:
   namespace. (The manifest-level `memory:` *backend* is bind-only and rejected —
   it selects a store/dir, which is environment.)
 - **Registry / discovery search** — packs are URL/path-addressable; there is no
-  central index yet.
+  central index yet. Bot templates are the exception: `conductor bot templates
+  --search` scans a registry (the official one, or `--registry <dir|git url>`)
+  for the templates its packs ship.

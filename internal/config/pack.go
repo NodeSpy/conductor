@@ -128,6 +128,10 @@ type PackInstance struct {
 	// (N instances of the same trigger, each with its own repos/filters/gate).
 	// See TriggerArms.
 	Triggers map[string]TriggerArms `yaml:"triggers,omitempty"`
+	// Folder and Workflows (whose entries only ever held a folder) are
+	// removed (removed.go): accepted, ignored, warned about.
+	Folder    RemovedField           `yaml:"folder,omitempty"`
+	Workflows map[string]WorkflowArm `yaml:"workflows,omitempty"`
 
 	// Packs instantiates the pack's own pack dependencies (requires.packs),
 	// recursively — the identical default/override/bind surface, one level down.
@@ -285,6 +289,14 @@ type TriggerArm struct {
 	// Gate replaces the shipped trigger's gate. The OPERATOR setting a gate is
 	// the point — it is their check that runs before the pack's steps land.
 	Gate *GateSpec `yaml:"gate,omitempty"`
+	// Folder is removed (removed.go): accepted, ignored, warned about.
+	Folder RemovedField `yaml:"folder,omitempty"`
+}
+
+// WorkflowArm was the operator's per-workflow overlay on a pack's workflow,
+// which only ever held a folder — removed (removed.go): accepted, ignored.
+type WorkflowArm struct {
+	Folder RemovedField `yaml:"folder,omitempty"`
 }
 
 // UnmarshalYAML decodes an arming block, naming the retired `filters:` key
@@ -407,6 +419,12 @@ type PackManifest struct {
 	Triggers  TriggerList            `yaml:"triggers,omitempty"` // shipped DISARMED
 	Policy    *Policy                `yaml:"policy,omitempty"`
 	Checks    map[string]Step        `yaml:"checks,omitempty"`
+	// Bots are bot TEMPLATES (bottemplate.go): behavior an operator
+	// instantiates into real bots, never a bot by itself.
+	Bots map[string]BotTemplate `yaml:"bots,omitempty"`
+
+	// removedWarnings are removed keys found in the manifest (removed.go).
+	removedWarnings []string `yaml:"-"`
 
 	// Bind-only sections — FORBIDDEN here. Captured as raw nodes so an offending
 	// pack is rejected by name (see (*PackManifest).checkNoEnvironment). The

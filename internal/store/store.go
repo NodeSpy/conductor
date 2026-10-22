@@ -75,6 +75,17 @@ type Store struct {
 	engagements  map[string][]Engagement
 	outcomeStats map[string]map[string]int
 	ciFailed     map[string]ciFailMark
+
+	// Bot case ledger (bots.go).
+	bots         map[string]*BotRecord
+	botsDegraded bool
+	botLocksMu   sync.Mutex
+	botLocks     map[string]*sync.Mutex
+
+	// Operator conversations with bots and teams (conversations.go), and
+	// each operator's pinned conversations, in order.
+	convs map[string]*Conversation
+	pins  map[string][]string
 }
 
 // Options configure a Store.
@@ -160,6 +171,9 @@ func Open(o Options) (*Store, error) {
 		return nil, err
 	}
 	s.loadOutcomeState()
+	s.loadBots()
+	s.loadConversations()
+	s.loadPins()
 	a, err := openAudit(o.AuditPath, o.AuditMaxSize)
 	if err != nil {
 		return nil, err

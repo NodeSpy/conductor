@@ -135,6 +135,14 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 	}
 
 	host := resolveHost(c.host, spec.Request.Step.Host)
+	if host == "" {
+		// The conductor skill surface (`conductor call step.done`, the
+		// granted verbs) over the daemon's local socket — the same env the
+		// paseo path hands a local agent.
+		for k, v := range dispatch.SkillEnv(spec.Request, dispatch.LocalSkillEndpoint()) {
+			env = append(env, k+"="+v)
+		}
+	}
 	opt := launchOptsFor(c.iso, spec.Request)
 	// The skill surface (step.done and any granted verbs) over the daemon's
 	// socket, as paseo agents get it. Only where the agent can reach that

@@ -39,6 +39,15 @@ source "$DIR/lib/assert.sh"
 MODE="${MODE:-stub}"
 PROJECT="${PROJECT:-pc-e2e}"
 KEEP="${KEEP:-0}"
+# ONLY="Z" (group letters, space-separated) runs only those groups; groups Z
+# and L alone bring up only their daemon. (Not GROUPS: bash reserves that name.)
+ONLY="${ONLY:-}"
+want() { [ -z "$ONLY" ] || [[ " $ONLY " == *" $1 "* ]]; }
+only_bots() {
+  [ -n "$ONLY" ] || return 1
+  local g
+  for g in $ONLY; do [ "$g" = Z ] || [ "$g" = L ] || return 1; done
+}
 COMPOSE=(docker compose -f "$DIR/docker-compose.yml")
 # Live mode layers an override that swaps the stub controllers for real agents and
 # mounts the operator's credentials (see docker-compose.live.yml + README).
@@ -179,13 +188,19 @@ setup() {
   docker run --rm -v "$DIR/config:/c" conductor-e2e:latest \
     chmod 644 /c/github-app.pem >/dev/null 2>&1
 
+  if only_bots; then
+    dc up -d conductor-bots || { echo "up failed"; dc logs; exit 1; }
+    wait_for 60 cexec conductor-bots test -S /data/control.sock || fatal "conductor-bots daemon not ready (control socket)"
+    echo "stack ready (groups Z/L only)"
+    return
+  fi
   dc up -d || { echo "up failed"; dc logs; exit 1; }
 
   banner "wait for readiness"
   wait_for 60 cexec mock-github  curl -sf http://localhost:8080/_health  || fatal "mock-github not ready"
   wait_for 60 cexec sink-catcher curl -sf http://localhost:8080/_health  || fatal "sink-catcher not ready"
   wait_for 60 cexec forge git ls-remote git://localhost/acme/web.git      || fatal "forge not ready"
-  for c in conductor conductor-ctrl conductor-fail conductor-conn; do
+  for c in conductor conductor-ctrl conductor-fail conductor-conn conductor-bots; do
     wait_for 60 cexec "$c" test -S /data/control.sock || fatal "$c daemon not ready (control socket)"
   done
   echo "stack ready"
@@ -1180,8 +1195,8 @@ group_M_cost() {
   fi
   out="$(conn report 2>&1)"
   case "$out" in
-    *"spend (agent runs):"*"func/cost"*) ok "M \`conductor report\` shows the metered spend for func/cost" M M-report ;;
-    *) bad "M report shows metered spend" M M-report "func/cost not in report spend section" ;;
+    *"usage (observed by conductor"*"func/cost  ["*"\$"*) ok "M \`conductor report\` shows the metered usage for func/cost, per runtime/model, with dollars (usage.mode api)" M M-report ;;
+    *) bad "M report shows metered usage" M M-report "func/cost not in the report's per-model usage section" ;;
   esac
 }
 
@@ -1765,30 +1780,32 @@ main() {
     [ "$FAIL" -eq 0 ]
     return
   fi
-  group_A_resolution
-  group_B_fixer
-  group_I_identity
-  group_G_notify
-  group_H_webhook
-  group_C_session_model
-  group_D_broker
-  group_E_handoff
-  group_F_capability
-  group_J_failure
-  group_K_connectors
-  group_M_cost
-  group_N_budget
-  group_O_gate
-  group_P_blob
-  group_Q_history
-  group_R_watch
-  group_S_callable
-  group_T_output_schema
-  group_U_filter
-  group_V_engine_plugin
-  group_X_listeners
-  group_Y_listeners_github_smee
-  group_W_stepdone
+  want A && group_A_resolution
+  want B && group_B_fixer
+  want I && group_I_identity
+  want G && group_G_notify
+  want H && group_H_webhook
+  want C && group_C_session_model
+  want D && group_D_broker
+  want E && group_E_handoff
+  want F && group_F_capability
+  want J && group_J_failure
+  want K && group_K_connectors
+  want M && group_M_cost
+  want N && group_N_budget
+  want O && group_O_gate
+  want P && group_P_blob
+  want Q && group_Q_history
+  want R && group_R_watch
+  want S && group_S_callable
+  want T && group_T_output_schema
+  want U && group_U_filter
+  want V && group_V_engine_plugin
+  want X && group_X_listeners
+  want Y && group_Y_listeners_github_smee
+  want W && group_W_stepdone
+  want Z && group_Z_bots
+  want L && group_L_templates
   print_matrix
   [ "$FAIL" -eq 0 ]
 }
@@ -1846,6 +1863,165 @@ group_W_stepdone() {
   else
     ok "W user workspace untouched (ownership ledger)" W foreign
   fi
+}
+
+group_Z_bots() {
+  banner "Group Z — bot memory: the index in the prompt, ranked recall, reads in parts, caps"
+
+  # The daemon starts the bot's home session on the fake paseo, which keeps
+  # its first prompt and its conductor creds.
+  wait_for 60 cexec conductor-bots paseo _creds "bot memo" || {
+    bad "Z home session launched" Z launch "no fake-paseo agent titled 'bot memo'"
+    return
+  }
+  local creds tok ep prompt out
+  creds="$(cexec conductor-bots paseo _creds "bot memo")"
+  tok="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_SKILL_TOKEN=//p' | head -1)"
+  ep="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_ENDPOINT=//p' | head -1)"
+  [ -n "$tok" ] && [ -n "$ep" ] || { bad "Z session creds" Z creds "no token/endpoint in the home session's env"; return; }
+  as_bot() { cexec conductor-bots env CONDUCTOR_ENDPOINT="$ep" CONDUCTOR_SKILL_TOKEN="$tok" conductor bot "$@" 2>&1; }
+
+  # Z1: the first prompt carries the memory index — within its budget — and
+  # the read rules, never an instruction to read the repo.
+  prompt="$(cexec conductor-bots paseo _prompt "bot memo")"
+  assert_contains "$prompt" "## Your memory index (9 documents)" Z Z1-index "Z1 the first prompt carries the memory index"
+  assert_contains "$prompt" "RECALL before you open a file" Z Z1-rules "Z1 the prompt says: recall before you open a file"
+  assert_contains "$prompt" "more not shown" Z Z1-budget "Z1 past index_budget the index stops and counts the rest"
+  assert_not_contains "$prompt" "Read README.md and knowledge/" Z Z1-noread "Z1 the prompt no longer says to read knowledge/"
+  local idx
+  idx="$(printf '%s' "$prompt" | awk '/^## Your memory index/{p=1} p&&/^## Where you left off/{exit} p')"
+  if [ "${#idx}" -le 1024 ]; then ok "Z1 the index section is within index_budget (${#idx} <= 1024 bytes)" Z Z1-size
+  else bad "Z1 index within budget" Z Z1-size "index section is ${#idx} bytes, budget 1024"; fi
+
+  # Z2: recall ranks a title/scope/summary match first.
+  out="$(as_bot recall replica lag)"
+  if printf '%s' "$out" | head -1 | grep -qF "1. knowledge/replica-lag.md (knowledge)"; then
+    ok "Z2 recall ranks the matching document first" Z Z2-rank
+  else bad "Z2 recall ranking" Z Z2-rank "first line: $(printf '%s' "$out" | head -1)"; fi
+
+  # Z3: a section read returns that section only; a whole read past
+  # read_max says it was cut and where to read on.
+  out="$(as_bot read runbooks/db-failover.md --section Rollback)"
+  assert_contains "$out" "Repoint back only after" Z Z3-section "Z3 read --section returns the section"
+  assert_not_contains "$out" "Check replica lag" Z Z3-only "Z3 ... and nothing outside it"
+  out="$(as_bot read knowledge/network.md)"
+  assert_contains "$out" "TRUNCATED: showing bytes 0–" Z Z3-cut "Z3 a read past read_max says it was truncated"
+  assert_contains "$out" "== sections: Subnets | Peering | Firewall rules ==" Z Z3-sections "Z3 ... and names the sections"
+
+  # Z4: an oversized write is refused with the exact cap; nothing lands.
+  local big
+  big="$(printf -- '---\ntitle: Too big\nevidence: e\nconfidence: low\n---\n'; head -c 9000 /dev/zero | tr '\0' x)"
+  out="$(as_bot remember --kind knowledge --slug too-big --text "$big")"
+  assert_contains "$out" "over its cap of 8192 bytes (memory.max_bytes.knowledge)" Z Z4-cap "Z4 an oversized document is refused with its cap"
+  if cexec conductor-bots conductor bot memory cat memo knowledge/too-big.md --config /data/cfg/conductor.yaml >/dev/null 2>&1; then
+    bad "Z4 refused write left nothing" Z Z4-nothing "knowledge/too-big.md exists"
+  else ok "Z4 the refused document did not land" Z Z4-nothing; fi
+  out="$(as_bot handoff --text "$(head -c 5000 /dev/zero | tr '\0' h)")"
+  assert_contains "$out" "handoff is 5000 bytes, over its cap of 4096 bytes" Z Z4-handoff "Z4 an oversized handoff is refused with the limit"
+
+  # Z5: a fresh document is in the index and recalled at once (the index
+  # follows every commit).
+  as_bot remember --kind knowledge --slug kestrel --text "$(printf -- '---\ntitle: Kestrel queue\nevidence: e\nconfidence: low\nsummary: The kestrel queue drains at night.\n---\nbody\n')" >/dev/null
+  out="$(as_bot recall kestrel)"
+  assert_contains "$out" "1. knowledge/kestrel.md" Z Z5-fresh "Z5 a new document is recalled right after its commit"
+  out="$(cexec conductor-bots conductor bot memory index memo --kind knowledge --config /data/cfg/conductor.yaml 2>&1)"
+  assert_contains "$out" "knowledge/kestrel.md · knowledge · Kestrel queue · The kestrel queue drains at night." Z Z5-operator "Z5 the operator sees the session's index"
+
+  # Z6: a consolidation that ends without step.done (the fake cli agent
+  # never reports) consolidates and archives nothing.
+  as_bot case open --title "e2e case" >/dev/null
+  local cid
+  cid="$(as_bot cases | sed -n 's/.*"id": *"\(c[0-9]*\)".*/\1/p' | head -1)"
+  as_bot episode --case "$cid" --text "an episode for the archive check" >/dev/null
+  as_bot case close "$cid" --outcome "done" >/dev/null
+  cexec conductor-bots conductor bot consolidate memo --config /data/cfg/conductor.yaml >/dev/null 2>&1
+  if wait_for 60 audit_match conductor-bots '"event":"bot_consolidation"' '"outcome":"not done'; then
+    ok "Z6 a consolidation that never reported done consolidated nothing" Z Z6-consolidation
+  else bad "Z6 unreported consolidation" Z Z6-consolidation "no bot_consolidation 'not done' audit"; fi
+  out="$(cexec conductor-bots conductor bot memory ls memo --config /data/cfg/conductor.yaml 2>&1)"
+  assert_contains "$out" "log/" Z Z6-kept "Z6 the case log is still in the working tree"
+  if audit_match conductor-bots '"event":"bot_memory_archive"'; then
+    bad "Z6 nothing archived" Z Z6-noarchive "an archive commit was made"
+  else ok "Z6 nothing was archived" Z Z6-noarchive; fi
+}
+
+group_L_templates() {
+  banner "Group L — community bots: a pack's template, practice mode, grants, an update as a proposal"
+  local CFG=/data/cfg/conductor.yaml out creds tok ep prompt pid
+  opb() { cexec conductor-bots conductor bot "$@" --config "$CFG" 2>&1; }
+
+  # L1: the catalog — the installed template (and the bot from it), a
+  # registry template not installed (with the packs: block that installs it),
+  # and search.
+  out="$(opb templates --registry /fixtures/packs)"
+  assert_contains "$out" "kit/keeper" L L1-installed "L1 bot templates lists the installed template"
+  assert_contains "$out" "used by keeper" L L1-usedby "L1 ... and the bot made from it"
+  assert_contains "$out" "/fixtures/packs/notes-kit/scribe" L L1-registry "L1 ... and a registry template not installed"
+  assert_contains "$out" "install: packs: { notes-kit: { use: /fixtures/packs/notes-kit } }" L L1-install "L1 ... with the packs: block that installs it"
+  out="$(opb templates --registry /fixtures/packs --search notes)"
+  assert_not_contains "$out" "kit/keeper" L L1-search "L1 search narrows the list"
+
+  # L2: the bot from the template records where it came from, and is in
+  # practice mode with only its read-only verbs.
+  out="$(opb show keeper)"
+  assert_contains "$out" '"ref": "kit/keeper"' L L2-ref "L2 bot show names the template"
+  assert_contains "$out" '"pack": "demo-kit"' L L2-pack "L2 ... the pack"
+  assert_contains "$out" '"version": "1.0.0"' L L2-version "L2 ... and its version"
+  assert_contains "$out" '"practice": true' L L2-practice "L2 it starts in practice mode"
+  wait_for 60 cexec conductor-bots paseo _creds "bot keeper" || { bad "L3 keeper's home session" L L3-launch "no fake-paseo agent titled 'bot keeper'"; return; }
+  creds="$(cexec conductor-bots paseo _creds "bot keeper")"
+  tok="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_SKILL_TOKEN=//p' | head -1)"
+  ep="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_ENDPOINT=//p' | head -1)"
+  out="$(cexec conductor-bots env CONDUCTOR_ENDPOINT="$ep" CONDUCTOR_SKILL_TOKEN="$tok" conductor discover state 2>&1)"
+  assert_contains "$out" "state.get" L L3-read "L3 the session may call the granted read-only verb"
+  assert_not_contains "$out" "state.set" L L3-noset "L3 ... and not a requested verb nobody granted"
+  prompt="$(cexec conductor-bots paseo _prompt "bot keeper")"
+  assert_contains "$prompt" "You keep the shared state tidy." L L3-charter "L3 its prompt carries the template's charter"
+  assert_contains "$prompt" "knowledge/layout.md" L L3-seed "L3 ... and its index the template's seed document"
+
+  # L4: a new bot from the template, planned on a copy and shown as a diff;
+  # a grant past the template's maximum refused; a widening named.
+  out="$(opb new keeper-2 --from kit/keeper)"
+  assert_contains "$out" "read-only:   state.contains, state.get" L L4-readonly "L4 bot new: the read-only verbs it starts with"
+  assert_contains "$out" "widenings:   none" L L4-none "L4 ... no widenings"
+  assert_contains "$out" "validated on a copy of your config: ok" L L4-copy "L4 ... validated on a copy"
+  assert_contains "$out" "+  - name: keeper-2-weekly" L L4-trigger "L4 ... the suggested trigger in the diff"
+  assert_contains "$out" "Not written" L L4-notwritten "L4 ... and nothing written without --write"
+  out="$(opb new keeper-2 --from kit/keeper --grant store.set=observe)"
+  assert_contains "$out" "looser than template kit/keeper allows — at most reversible" L L4-max "L4 a grant past the template's maximum is refused"
+  out="$(opb new keeper-2 --from kit/keeper --grant store.set=reversible --write)"
+  assert_contains "$out" "WIDENING:    state.set at reversible" L L4-widening "L4 a widening is named in the plan"
+  out="$(cexec conductor-bots conductor validate --config "$CFG" 2>&1)"
+  assert_contains "$out" "notice: bot keeper-2: from template kit/keeper (demo-kit 1.0.0): practice mode; read-only: state.contains, state.get; WIDENING: state.set at reversible" L L4-validate "L4 validate names the widening"
+
+  # L5: a newer template version arrives as a proposal, never written over
+  # the bot's memory; approved (signed), it lands.
+  cexec conductor-bots cp -r /fixtures/packs-v2/demo-kit/. /data/cfg/packs/demo-kit/
+  cexec conductor-bots conductor pack update --config "$CFG" >/dev/null 2>&1
+  cexec conductor-bots conductor reload --config "$CFG" >/dev/null 2>&1
+  l_template_proposal() { cexec conductor-bots conductor bot proposals keeper --config "$CFG" 2>/dev/null | grep -q '"kind": "template"'; }
+  if wait_for 90 l_template_proposal; then
+    ok "L5 the new template version became a proposal" L L5-proposal
+  else
+    bad "L5 template update proposal" L L5-proposal "no template proposal for keeper after pack update + reload"
+    return
+  fi
+  pid="$(opb proposals keeper | grep -B3 '"kind": "template"' | sed -n 's/.*"id": *"\(p[0-9]*\)".*/\1/p' | head -1)"
+  [ -n "$pid" ] || pid="$(opb proposals keeper | sed -n 's/.*"id": *"\(p[0-9]*\)".*/\1/p' | head -1)"
+  out="$(opb memory cat keeper knowledge/layout.md)"
+  assert_not_contains "$out" "cache/" L L5-untouched "L5 the bot's memory is untouched until an operator decides"
+  out="$(opb proposal keeper "$pid")"
+  assert_contains "$out" "+Keys live under web/, db/ and cache/." L L5-diff "L5 the proposal shows the change as a diff"
+  assert_contains "$out" "Never delete a key on a guess." L L5-charter "L5 ... the charter change too"
+  out="$(cexec conductor-bots conductor bot approve keeper "$pid" --key /data/ops --as ops --config "$CFG" 2>&1)"
+  assert_contains "$out" "executed" L L5-approve "L5 a signed approval lands it (in practice mode)"
+  out="$(opb memory cat keeper knowledge/layout.md)"
+  assert_contains "$out" "cache/" L L5-landed "L5 the approved document is in memory"
+  out="$(opb memory log keeper)"
+  assert_contains "$out" "template update" L L5-commit "L5 ... as one commit"
+  assert_contains "$out" "operator" L L5-author "L5 ... authored by the operator"
+  out="$(opb show keeper)"
+  assert_contains "$out" '"applied_version": "1.1.0"' L L5-applied "L5 bot show reports the applied version"
 }
 
 main "$@"

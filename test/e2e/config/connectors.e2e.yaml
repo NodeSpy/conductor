@@ -698,6 +698,10 @@ checks:
   always-pass: { use: cli, command: [sh, -c, 'printf %s "{\"pass\": true, \"reason\": \"ok\"}"'] }
   always-fail: { use: cli, command: [sh, -c, 'printf %s "{\"pass\": false, \"reason\": \"still broken\"}"'] }
 
+# usage.mode defaults to off (no usage figures in reports); the M group
+# asserts the report's per-runtime/model usage, with dollars — API billing.
+usage: { mode: api }
+
 policy:
   concurrency: { max_agents: 3 }
 

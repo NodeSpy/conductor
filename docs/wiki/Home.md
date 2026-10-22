@@ -37,6 +37,8 @@ a PR — and the platform is built to direct and contain that:
 - **Governance for autonomous work** — cost/token budgets ([[Cost-Accounting]]),
   OS-enforced isolation with an egress allow-list ([[Isolation]]), and a secret broker
   so agents act *through* conductor without seeing raw secret values ([[Agent-Skill]]).
+- **Bots** — persistent conversational teammates with a charter, git memory, a case
+  ledger, cli workers, and an autonomy gate whose approvals you sign ([[Bots]]).
 - **Multi-agent teams** ([[Teams]]), scoped **memory** across runs ([[Memory]]), and an
   **outcome-learning** loop ([[Outcomes]]).
 
@@ -129,7 +131,7 @@ Setup: [[Installation]] · [[Quickstart]] · [GitHub App setup ↗](https://gith
 
 The model: [[Connectors]] · [[Workflows]] · [[Reuse]] · [[Settings-and-Templating]] · [[Verbs]] · [[Code-Steps]] · [[Stores]] ·
 [[Runtimes]] · [[Steps]] · [[Grouping]] · [[Memory]] · [[Binary-Data]] ·
-[[Agent-Skill]] · [[Policy]] · [[Gates]] · [[Teams]] · [[Outcomes]] ·
+[[Agent-Skill]] · [[Policy]] · [[Gates]] · [[Teams]] · [[Bots]] · [[Outcomes]] ·
 [[Cost-Accounting]] · [[Secrets]] · [[Trust-and-Isolation]] · [[Hosts]] · [[Isolation]]
 
 Connector references: [[Connectors]] · [[Authoring-Connectors]] ·

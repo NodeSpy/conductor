@@ -503,6 +503,10 @@ type WorkflowDef struct {
 	// Gate is the default quality gate (#36 §16) for this workflow's agent
 	// steps (a step's own gate wins).
 	Gate *GateSpec `yaml:"gate,omitempty"`
+	// Folder is removed (removed.go): accepted, ignored, warned about.
+	Folder RemovedField `yaml:"folder,omitempty"`
+	// PackInstance is the pack instance a workflow came from (display).
+	PackInstance string `yaml:"-"`
 }
 
 // InputSpec declares one workflow input.
@@ -693,6 +697,12 @@ type TriggerSpec struct {
 	Repo string `yaml:"repo,omitempty"`
 	// Shadow previews this trigger's work without dispatching.
 	Shadow *bool `yaml:"shadow,omitempty"`
+	// Folder is removed (removed.go): accepted, ignored, warned about.
+	Folder RemovedField `yaml:"folder,omitempty"`
+	// PackInstance / Bot: where a trigger came from — a pack instance, or a
+	// bot's synthesized workers (display).
+	PackInstance string `yaml:"-"`
+	Bot          string `yaml:"-"`
 	// Gate is the default quality gate (#36 §16) for every agent step of
 	// this trigger that doesn't carry its own.
 	Gate *GateSpec `yaml:"gate,omitempty"`
@@ -963,6 +973,13 @@ type Step struct {
 	// detach is a capability the operator grants, never one an agent can take
 	// for itself. Needs a paseo runtime.
 	Detach bool `yaml:"detach,omitempty"`
+	// BoundBot / BoundBotRole mark a step SYNTHESIZED for a bot's workers
+	// (bots.go expandBots): the session token minted for it carries the
+	// bot binding, which is what puts every verb it calls through that
+	// bot's autonomy gate. Never decoded from YAML — an operator cannot
+	// write it and an agent-authored plan cannot claim it.
+	BoundBot     string `yaml:"-"`
+	BoundBotRole string `yaml:"-"`
 
 	// command form (also carries workdir/env for agent/code forms), and the
 	// argv the `cli` engine runs. A list of words, or one string (see Argv).
@@ -1035,6 +1052,9 @@ type Step struct {
 	// the principled form of a bare `sleep:` before a state-dependent step —
 	// see WaitSpec. `until:` is its condition clause, not a standalone form.
 	WaitFor *WaitSpec `yaml:"wait_for,omitempty"`
+	// Bot is the `bot:` helper — route this event into a bot
+	// (bots.go), or rotate / consolidate one. See BotStep.
+	Bot *BotStep `yaml:"bot,omitempty"`
 
 	// Watch makes an interactive hand-off REACTIVE: while it waits for a human,
 	// conductor polls a read verb and, when a rule's condition holds, runs a

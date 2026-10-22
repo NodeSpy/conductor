@@ -16,6 +16,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 	"gopkg.in/yaml.v3"
 )
 
@@ -119,6 +120,25 @@ var fakeDecl = &connector.TypeDecl{
 				"live":    {Type: connector.TBool, Scope: "mode"},
 			},
 			Outputs: connector.Schema{"ok": {Type: connector.TBool}},
+		},
+		{
+			// A chat post that carries the poster's identity: a bot's calls
+			// get username/icon filled from its config (the identity semantic).
+			Name: "say", Desc: "a post that shows who posted it",
+			Options: connector.Schema{
+				"text":     {Type: connector.TString},
+				"username": {Type: connector.TString},
+				"icon":     {Type: connector.TString},
+				"color":    {Type: connector.TString},
+			},
+			Semantics: &sdk.VerbSemantics{Identity: map[string]string{"username": "name", "icon": "avatar_shape", "color": "color"}},
+		},
+		{
+			// An event's file, base64 in `content`: the fetch verb of an
+			// event's `attachments` semantic.
+			Name: "file_get", Desc: "returns one of an event's files",
+			Options: connector.Schema{"id": {Type: connector.TString}},
+			Outputs: connector.Schema{"content": {Type: connector.TString}},
 		},
 		{
 			Name: "download", Desc: "returns raw bytes as a declared binary output (#36 §21)",

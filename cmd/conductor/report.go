@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"github.com/NodeSpy/conductor/internal/cost"
 	"io"
 	"os"
 	"sort"
@@ -192,17 +193,28 @@ func printQuality(q map[string]*qualityCell) {
 	}
 	sort.Strings(keys)
 	fmt.Println("\nagent quality (outcomes):")
-	fmt.Printf("  %-20s %6s %6s %6s %6s %6s %8s %8s %10s\n",
-		"agent", "merged", "closed", "revert", "reject", "gate✓/✗", "accept", "revert%", "$/merged")
+	// $/merged sums an agent's runs, which may span models: shown only in
+	// usage.mode api, where dollars are the one comparable unit.
+	dollars := cost.ShowDollars()
+	hdr := fmt.Sprintf("  %-20s %6s %6s %6s %6s %6s %8s %8s",
+		"agent", "merged", "closed", "revert", "reject", "gate✓/✗", "accept", "revert%")
+	if dollars {
+		hdr += fmt.Sprintf(" %10s", "$/merged")
+	}
+	fmt.Println(hdr)
 	for _, k := range keys {
 		c := q[k]
-		perMerged := "-"
-		if c.Merged > 0 && c.MergedCost > 0 {
-			perMerged = fmt.Sprintf("$%.3f", c.MergedCost/float64(c.Merged))
-		}
-		fmt.Printf("  %-20s %6d %6d %6d %6d %3d/%-3d %7.0f%% %7.0f%% %10s\n",
+		line := fmt.Sprintf("  %-20s %6d %6d %6d %6d %3d/%-3d %7.0f%% %7.0f%%",
 			k, c.Merged, c.Closed, c.Reverted, c.Rejected,
-			c.GatePassed, c.GateEscalated, c.acceptRate()*100, c.revertRate()*100, perMerged)
+			c.GatePassed, c.GateEscalated, c.acceptRate()*100, c.revertRate()*100)
+		if dollars {
+			perMerged := "-"
+			if c.Merged > 0 && c.MergedCost > 0 {
+				perMerged = fmt.Sprintf("$%.3f", c.MergedCost/float64(c.Merged))
+			}
+			line += fmt.Sprintf(" %10s", perMerged)
+		}
+		fmt.Println(line)
 	}
 }
 
@@ -243,26 +255,26 @@ func tallyAudit(r io.Reader, cutoff time.Time) (dispatch map[string]map[string]i
 	return dispatch, attention, sc.Err()
 }
 
-// spendTally aggregates the audit's agent_usage rows (#36 §14): totals plus
-// per-repo / per-day / per-workflow-or-kind breakdowns, and how much of the
-// figure is runtime-reported vs estimated.
+// spendTally aggregates the audit's agent_usage rows (#36 §14) PER RUNTIME
+// AND MODEL — usage is never summed across providers — with per-repo /
+// per-day / per-workflow-or-kind breakdowns inside each, and how much of it
+// is runtime-reported vs estimated.
 type spendTally struct {
-	Tokens, ApproxRuns, Runs int
-	USD                      float64
-	ByRepo, ByDay, ByKind    map[string]*spendCell
-	Sheds                    int // budget_shed rows in the window
+	Runs                  int
+	ByModel               map[string]*spendCell
+	ByRepo, ByDay, ByKind map[string]*spendCell // keyed "<key>  [<runtime> / <model>]"
+	Sheds                 int                   // budget_shed rows in the window
 }
 
 type spendCell struct {
-	Tokens int
-	USD    float64
-	Runs   int
+	Tokens, Turns, Runs, ApproxRuns int
+	USD                             float64
 }
 
 // tallySpend streams the audit log and aggregates agent_usage rows at or
 // after cutoff (same inclusion rule as tallyAudit).
 func tallySpend(r io.Reader, cutoff time.Time) (spendTally, error) {
-	s := spendTally{ByRepo: map[string]*spendCell{}, ByDay: map[string]*spendCell{}, ByKind: map[string]*spendCell{}}
+	s := spendTally{ByModel: map[string]*spendCell{}, ByRepo: map[string]*spendCell{}, ByDay: map[string]*spendCell{}, ByKind: map[string]*spendCell{}}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), 8<<20)
 	for sc.Scan() {
@@ -287,39 +299,47 @@ func tallySpend(r io.Reader, cutoff time.Time) (spendTally, error) {
 		default:
 			continue
 		}
-		tokens := intOf(d["tokens"])
+		tokens, turns := intOf(d["tokens"]), intOf(d["turns"])
 		usd, _ := d["cost_usd"].(float64)
-		s.Tokens += tokens
-		s.USD += usd
+		approx, _ := d["approximate"].(bool)
 		s.Runs++
-		if approx, _ := d["approximate"].(bool); approx {
-			s.ApproxRuns++
-		}
+		rt, _ := d["runtime"].(string)
+		model, _ := d["model"].(string)
+		mk := orUnknown(rt) + " / " + orUnknown(model)
 		bump := func(m map[string]*spendCell, key string) {
-			if key == "" {
-				key = "(unknown)"
-			}
 			c := m[key]
 			if c == nil {
 				c = &spendCell{}
 				m[key] = c
 			}
 			c.Tokens += tokens
+			c.Turns += turns
 			c.USD += usd
 			c.Runs++
+			if approx {
+				c.ApproxRuns++
+			}
 		}
+		bump(s.ByModel, mk)
 		repo, _ := d["repo"].(string)
-		bump(s.ByRepo, repo)
-		bump(s.ByDay, day)
+		bump(s.ByRepo, orUnknown(repo)+"  ["+mk+"]")
+		bump(s.ByDay, orUnknown(day)+"  ["+mk+"]")
 		// The workflow scope names the configured trigger where one is set;
 		// the kind is the fallback grouping.
 		kind, _ := d["workflow"].(string)
 		if kind == "" {
 			kind, _ = d["kind"].(string)
 		}
-		bump(s.ByKind, kind)
+		bump(s.ByKind, orUnknown(kind)+"  ["+mk+"]")
 	}
 	return s, sc.Err()
+}
+
+func orUnknown(s string) string {
+	if s == "" {
+		return "(unknown)"
+	}
+	return s
 }
 
 func intOf(v any) int {
@@ -327,9 +347,17 @@ func intOf(v any) int {
 	return int(f)
 }
 
-// printSpend renders the report's spend section.
+// printSpend renders the report's usage section as usage.mode allows: off,
+// nothing but the budget sheds (enforcement, not usage); subscription, the
+// units conductor observed per runtime/model; api, with dollars.
 func printSpend(s spendTally) {
-	fmt.Println("\nspend (agent runs):")
+	if !cost.ShowUsage() {
+		if s.Sheds > 0 {
+			fmt.Printf("\nbudget sheds: %d\n", s.Sheds)
+		}
+		return
+	}
+	fmt.Println("\nusage (observed by conductor — its own agent runs, per runtime / model):")
 	if s.Runs == 0 {
 		fmt.Println("  (none metered)")
 		if s.Sheds > 0 {
@@ -337,15 +365,10 @@ func printSpend(s spendTally) {
 		}
 		return
 	}
-	approxNote := ""
-	if s.ApproxRuns > 0 {
-		approxNote = fmt.Sprintf("  (~%d/%d runs estimated)", s.ApproxRuns, s.Runs)
-	}
-	fmt.Printf("  total: $%.2f, %s tokens over %d runs ($%.3f/run)%s\n",
-		s.USD, fmtTokens(s.Tokens), s.Runs, s.USD/float64(s.Runs), approxNote)
 	if s.Sheds > 0 {
 		fmt.Printf("  budget sheds: %d\n", s.Sheds)
 	}
+	printSpendCells("by runtime / model", s.ByModel)
 	printSpendCells("by repo", s.ByRepo)
 	printSpendCells("by workflow/kind", s.ByKind)
 	printSpendCells("by day", s.ByDay)
@@ -359,11 +382,23 @@ func printSpendCells(title string, m map[string]*spendCell) {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(i, j int) bool { return m[keys[i]].USD > m[keys[j]].USD })
+	sort.Slice(keys, func(i, j int) bool {
+		if m[keys[i]].Tokens != m[keys[j]].Tokens {
+			return m[keys[i]].Tokens > m[keys[j]].Tokens
+		}
+		return keys[i] < keys[j]
+	})
 	fmt.Printf("  %s:\n", title)
 	for _, k := range keys {
 		c := m[k]
-		fmt.Printf("    %-32s $%8.2f  %10s tok  %4d runs\n", k, c.USD, fmtTokens(c.Tokens), c.Runs)
+		line := fmt.Sprintf("    %-48s %10s tok  %5d turns  %4d runs", k, fmtTokens(c.Tokens), c.Turns, c.Runs)
+		if cost.ShowDollars() {
+			line += fmt.Sprintf("  $%8.2f", c.USD)
+		}
+		if c.ApproxRuns > 0 {
+			line += fmt.Sprintf("  (~%d estimated)", c.ApproxRuns)
+		}
+		fmt.Println(line)
 	}
 }
 
