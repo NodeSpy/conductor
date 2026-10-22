@@ -143,6 +143,7 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 	go func() {
 		defer e.recoverDispatch(rctx, t, run, "flow retry")
 		defer e.release()
+		defer e.redeliverHeld(t.Key())
 		e.flow.Run(rctx, run, t, spec, tidx, nil, false)
 	}()
 	from := orTop(fromStep)

@@ -176,6 +176,8 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 			return // shutdown while waiting — the sweep re-derives on restart
 		}
 		defer e.release()
+		// A run on the target ended: re-deliver what the live gate held for it.
+		defer e.redeliverHeld(t.Key())
 		if t.BoundToTarget() && e.closedSince(t.Key(), queuedAt) {
 			// The target closed while this run waited for a slot: the work
 			// it was bound to is gone.
@@ -321,6 +323,7 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 		return
 	}
 	defer e.release()
+	defer e.redeliverHeld(t.Key())
 	run := e.newFlowRun(t, spec, false)
 	e.flow.Run(ctx, run, t, spec, tidx, &flow.Batch{Key: gkey, Events: events}, false)
 }
@@ -446,6 +449,7 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 			return
 		}
 		defer e.release()
+		defer e.redeliverHeld(t.Key())
 		defer e.recoverDispatch(ctx, t, r, "flow resume")
 		e.flow.Run(ctx, r, t, spec, tidx, nil, false)
 	}()
