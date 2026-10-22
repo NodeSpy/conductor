@@ -98,6 +98,28 @@ func BrowserProbe(dir, prompt string) {
 	_, out, err = br("evaluate", "document.title")
 	line("evaluate", verdict(out, err))
 
+	// source (#190): the read-only, structurally-redacted page source. It needs
+	// no evaluate opt-in and works after sign-in. On a page that plants a marker
+	// in every spot a value hides (a value attribute, data-*, an onclick, a
+	// comment, a script) plus a same-origin srcdoc frame and a cross-origin
+	// frame, `source` must show the structure while emitting none of the planted
+	// marker, include the same-origin frame and never the cross-origin one.
+	yesno := func(b bool) string {
+		if b {
+			return "yes"
+		}
+		return "no"
+	}
+	_, _, _ = br("open", site+"/source-probe?cross=http://127.0.0.1:8090")
+	_, src, serr := br("source")
+	line("source", verdict(src, serr))
+	hasIn := func(s string) bool { return strings.Contains(src, s) }
+	line("source-structure", yesno(hasIn("Source Probe") && hasIn("<form")))
+	line("source-value-redacted", yesno(hasIn(`value="[redacted]"`)))
+	line("source-no-planted-marker", yesno(!hasIn("SCRIPTONLY_MARKER")))
+	line("source-same-origin-frame", yesno(hasIn("SAMEFRAME_MARKER")))
+	line("source-no-cross-frame", yesno(!hasIn("CROSSFRAME_SECRET")))
+
 	m, _, _ = br("open", site+"/account")
 	line("profile", fmt.Sprint(m["profile"]))
 	line("logged-in-note", fmt.Sprint(m["logged_in_note"]))

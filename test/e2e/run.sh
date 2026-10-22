@@ -1812,6 +1812,7 @@ main() {
   want Z && group_Z_sandbox
   want BR && group_BR_browser
   want PAY && group_PAY_wallet
+  want TB && group_TB_ticket_purchase
   want BM && group_BM_bots
   want L && group_L_templates
   print_matrix
@@ -2055,6 +2056,13 @@ group_BR_browser() {
     br_expect "$probe" event screenshot "ok"
     br_expect "$probe" event offlist "refused:*not in this browser's allowlist*"
     br_expect "$probe" event evaluate "refused:*evaluate is off*"
+    # source (#190): the read-only, structurally-redacted page source.
+    br_expect "$probe" event source "ok"
+    br_expect "$probe" event source-structure "yes"
+    br_expect "$probe" event source-value-redacted "yes"
+    br_expect "$probe" event source-no-planted-marker "yes"
+    br_expect "$probe" event source-same-origin-frame "yes"
+    br_expect "$probe" event source-no-cross-frame "yes"
     br_expect "$probe" event profile "anonymous"
     br_expect "$probe" event logged-in-note "*not the operator*"
     br_expect "$probe" event account "anonymous"
@@ -2239,6 +2247,68 @@ group_PAY_wallet() {
   fi
 }
 
+# Group TB — the combined surface: a bot's ticket spend_limit (tickets) binds
+# its REAL browser purchases (browser/wallet), through the bot gate (bots), all
+# on the sandbox daemon. This is the cross-feature path no e2e covered — the gap
+# that let H2 (the lifetime cap resetting) and M1 (the dead spend view) through.
+group_TB_ticket_purchase() {
+  banner "Group TB — a ticket's spend_limit constrains a real browser purchase (H2/M1)"
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml creds tok ep out
+  # The bot's home session launches on the fake paseo, carrying its conductor creds.
+  if ! wait_for 90 cexec "$C" paseo _creds "bot shopper"; then
+    bad "TB home session launched" TB launch "no fake-paseo agent 'bot shopper'"
+    dc logs --tail 40 "$C"
+    return
+  fi
+  creds="$(cexec "$C" paseo _creds "bot shopper")"
+  tok="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_SKILL_TOKEN=//p' | head -1)"
+  ep="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_ENDPOINT=//p' | head -1)"
+  [ -n "$tok" ] && [ -n "$ep" ] || { bad "TB session creds" TB creds "no token/endpoint in shopper's home session env"; return; }
+  as_bot() { cexec "$C" env CONDUCTOR_ENDPOINT="$ep" CONDUCTOR_SKILL_TOKEN="$tok" conductor bot "$@" 2>&1 | tr -d '\r'; }
+  op() { cexec "$C" conductor browser "$@" --config "$CFG" 2>&1 | tr -d '\r'; }
+
+  # The bot opens a case and the operator sets a $20 lifetime spend_limit on it —
+  # a ticket's budget. The bot's browser purchases are proposed by a WORKER it
+  # spawns on this case (a real sandbox-launched agent, the only session that can
+  # reach the browser); the worker's purchases carry the bot and this case, so
+  # the ticket's spend_limit is the binding layer.
+  local cid
+  as_bot case open --title "shopping run" >/dev/null
+  cid="$(as_bot cases | sed -n 's/.*"id": *"\(c[0-9]*\)".*/\1/p' | head -1)"
+  if [ -z "$cid" ]; then bad "TB the bot has a case" TB case "no case id from: $(as_bot cases)"; return; fi
+  out="$(op budget shopper "$cid" --amount 20 --currency USD)"
+  assert_contains "$out" '"amount": "20.00"' TB budget "TB the operator sets the case's 20.00 USD spend_limit"
+
+  # Spawn a worker on the case; it proposes $25 (over), $15 (within) then $10
+  # (over the lifetime). Each purchase decision is audited; the $10 refusal
+  # ("5.00 USD left" — the cap after the $15) is the worker's last act, so wait
+  # for it to confirm the worker ran all three.
+  as_bot spawn --case "$cid" --brief "[[ticket-wallet-probe]] buy widgets under the cap" >/dev/null
+  if ! wait_for 180 z_audit '"action":"purchase"' '"requester":"bot"' "over this ticket's 20.00 USD limit: 5.00 USD left"; then
+    bad "TB the worker's purchases ran" TB probe "no audited ticket-budget refusal from the worker"
+    dc logs --tail 40 "$C"
+    return
+  fi
+
+  # The first ($25) purchase, with nothing yet spent, is refused by the ticket
+  # layer — at propose, before the bot gate ("20.00 USD left").
+  if z_audit '"action":"purchase"' '"requester":"bot"' "over this ticket's 20.00 USD limit: 20.00 USD left"; then
+    ok "TB a \$25 purchase is refused by the \$20 ticket cap" TB over
+  else bad "TB a \$25 purchase is refused by the ticket cap" TB over "no audited refusal with 20.00 USD left"; fi
+
+  # The within-cap $15 purchase is recorded and bound to the bot's case; its
+  # committed spend reads 15.00 (5.00 left) from the REAL purchase ledger — the
+  # spend view that was permanently blind before the ledger was wired (M1).
+  out="$(op budget shopper "$cid")"
+  assert_contains "$out" '"committed": 15' TB committed "TB the case's committed spend reads 15.00 from the real ledger (M1)"
+  assert_contains "$out" '"remaining": 5' TB remaining "TB 5.00 of the 20.00 ticket cap remains"
+  assert_contains "$out" '"pu' TB bound "TB the within-cap purchase is recorded under the ticket"
+
+  # The cap is a LIFETIME total: the further $10 (15+10 > 20) was refused with
+  # only 5.00 left — it does not reset per purchase (H2).
+  ok "TB a further \$10 is refused — the \$20 cap is a lifetime total (H2)" TB lifetime
+}
+
 group_BM_bots() {
   banner "Group BM — bot memory: the index in the prompt, ranked recall, reads in parts, caps"
 
@@ -2255,53 +2325,53 @@ group_BM_bots() {
   [ -n "$tok" ] && [ -n "$ep" ] || { bad "BM session creds" BM creds "no token/endpoint in the home session's env"; return; }
   as_bot() { cexec conductor-bots env CONDUCTOR_ENDPOINT="$ep" CONDUCTOR_SKILL_TOKEN="$tok" conductor bot "$@" 2>&1; }
 
-  # Z1: the first prompt carries the memory index — within its budget — and
+  # BM1: the first prompt carries the memory index — within its budget — and
   # the read rules, never an instruction to read the repo.
   prompt="$(cexec conductor-bots paseo _prompt "bot memo")"
-  assert_contains "$prompt" "## Your memory index (9 documents)" BM Z1-index "Z1 the first prompt carries the memory index"
-  assert_contains "$prompt" "RECALL before you open a file" BM Z1-rules "Z1 the prompt says: recall before you open a file"
-  assert_contains "$prompt" "more not shown" BM Z1-budget "Z1 past index_budget the index stops and counts the rest"
-  assert_not_contains "$prompt" "Read README.md and knowledge/" BM Z1-noread "Z1 the prompt no longer says to read knowledge/"
+  assert_contains "$prompt" "## Your memory index (9 documents)" BM BM1-index "BM1 the first prompt carries the memory index"
+  assert_contains "$prompt" "RECALL before you open a file" BM BM1-rules "BM1 the prompt says: recall before you open a file"
+  assert_contains "$prompt" "more not shown" BM BM1-budget "BM1 past index_budget the index stops and counts the rest"
+  assert_not_contains "$prompt" "Read README.md and knowledge/" BM BM1-noread "BM1 the prompt no longer says to read knowledge/"
   local idx
   idx="$(printf '%s' "$prompt" | awk '/^## Your memory index/{p=1} p&&/^## Where you left off/{exit} p')"
-  if [ "${#idx}" -le 1024 ]; then ok "Z1 the index section is within index_budget (${#idx} <= 1024 bytes)" BM Z1-size
-  else bad "Z1 index within budget" BM Z1-size "index section is ${#idx} bytes, budget 1024"; fi
+  if [ "${#idx}" -le 1024 ]; then ok "BM1 the index section is within index_budget (${#idx} <= 1024 bytes)" BM BM1-size
+  else bad "BM1 index within budget" BM BM1-size "index section is ${#idx} bytes, budget 1024"; fi
 
-  # Z2: recall ranks a title/scope/summary match first.
+  # BM2: recall ranks a title/scope/summary match first.
   out="$(as_bot recall replica lag)"
   if printf '%s' "$out" | head -1 | grep -qF "1. knowledge/replica-lag.md (knowledge)"; then
-    ok "Z2 recall ranks the matching document first" BM Z2-rank
-  else bad "Z2 recall ranking" BM Z2-rank "first line: $(printf '%s' "$out" | head -1)"; fi
+    ok "BM2 recall ranks the matching document first" BM BM2-rank
+  else bad "BM2 recall ranking" BM BM2-rank "first line: $(printf '%s' "$out" | head -1)"; fi
 
-  # Z3: a section read returns that section only; a whole read past
+  # BM3: a section read returns that section only; a whole read past
   # read_max says it was cut and where to read on.
   out="$(as_bot read runbooks/db-failover.md --section Rollback)"
-  assert_contains "$out" "Repoint back only after" BM Z3-section "Z3 read --section returns the section"
-  assert_not_contains "$out" "Check replica lag" BM Z3-only "Z3 ... and nothing outside it"
+  assert_contains "$out" "Repoint back only after" BM BM3-section "BM3 read --section returns the section"
+  assert_not_contains "$out" "Check replica lag" BM BM3-only "BM3 ... and nothing outside it"
   out="$(as_bot read knowledge/network.md)"
-  assert_contains "$out" "TRUNCATED: showing bytes 0–" BM Z3-cut "Z3 a read past read_max says it was truncated"
-  assert_contains "$out" "== sections: Subnets | Peering | Firewall rules ==" BM Z3-sections "Z3 ... and names the sections"
+  assert_contains "$out" "TRUNCATED: showing bytes 0–" BM BM3-cut "BM3 a read past read_max says it was truncated"
+  assert_contains "$out" "== sections: Subnets | Peering | Firewall rules ==" BM BM3-sections "BM3 ... and names the sections"
 
-  # Z4: an oversized write is refused with the exact cap; nothing lands.
+  # BM4: an oversized write is refused with the exact cap; nothing lands.
   local big
   big="$(printf -- '---\ntitle: Too big\nevidence: e\nconfidence: low\n---\n'; head -c 9000 /dev/zero | tr '\0' x)"
   out="$(as_bot remember --kind knowledge --slug too-big --text "$big")"
-  assert_contains "$out" "over its cap of 8192 bytes (memory.max_bytes.knowledge)" BM Z4-cap "Z4 an oversized document is refused with its cap"
+  assert_contains "$out" "over its cap of 8192 bytes (memory.max_bytes.knowledge)" BM BM4-cap "BM4 an oversized document is refused with its cap"
   if cexec conductor-bots conductor bot memory cat memo knowledge/too-big.md --config /data/cfg/conductor.yaml >/dev/null 2>&1; then
-    bad "Z4 refused write left nothing" BM Z4-nothing "knowledge/too-big.md exists"
-  else ok "Z4 the refused document did not land" BM Z4-nothing; fi
+    bad "BM4 refused write left nothing" BM BM4-nothing "knowledge/too-big.md exists"
+  else ok "BM4 the refused document did not land" BM BM4-nothing; fi
   out="$(as_bot handoff --text "$(head -c 5000 /dev/zero | tr '\0' h)")"
-  assert_contains "$out" "handoff is 5000 bytes, over its cap of 4096 bytes" BM Z4-handoff "Z4 an oversized handoff is refused with the limit"
+  assert_contains "$out" "handoff is 5000 bytes, over its cap of 4096 bytes" BM BM4-handoff "BM4 an oversized handoff is refused with the limit"
 
-  # Z5: a fresh document is in the index and recalled at once (the index
+  # BM5: a fresh document is in the index and recalled at once (the index
   # follows every commit).
   as_bot remember --kind knowledge --slug kestrel --text "$(printf -- '---\ntitle: Kestrel queue\nevidence: e\nconfidence: low\nsummary: The kestrel queue drains at night.\n---\nbody\n')" >/dev/null
   out="$(as_bot recall kestrel)"
-  assert_contains "$out" "1. knowledge/kestrel.md" BM Z5-fresh "Z5 a new document is recalled right after its commit"
+  assert_contains "$out" "1. knowledge/kestrel.md" BM BM5-fresh "BM5 a new document is recalled right after its commit"
   out="$(cexec conductor-bots conductor bot memory index memo --kind knowledge --config /data/cfg/conductor.yaml 2>&1)"
-  assert_contains "$out" "knowledge/kestrel.md · knowledge · Kestrel queue · The kestrel queue drains at night." BM Z5-operator "Z5 the operator sees the session's index"
+  assert_contains "$out" "knowledge/kestrel.md · knowledge · Kestrel queue · The kestrel queue drains at night." BM BM5-operator "BM5 the operator sees the session's index"
 
-  # Z6: a consolidation that ends without step.done (the fake cli agent
+  # BM6: a consolidation that ends without step.done (the fake cli agent
   # never reports) consolidates and archives nothing.
   as_bot case open --title "e2e case" >/dev/null
   local cid
@@ -2310,15 +2380,15 @@ group_BM_bots() {
   as_bot case close "$cid" --outcome "done" >/dev/null
   cexec conductor-bots conductor bot consolidate memo --config /data/cfg/conductor.yaml >/dev/null 2>&1
   if wait_for 60 audit_match conductor-bots '"event":"bot_consolidation"' '"outcome":"not done'; then
-    ok "Z6 a consolidation that never reported done consolidated nothing" BM Z6-consolidation
-  else bad "Z6 unreported consolidation" BM Z6-consolidation "no bot_consolidation 'not done' audit"; fi
+    ok "BM6 a consolidation that never reported done consolidated nothing" BM BM6-consolidation
+  else bad "BM6 unreported consolidation" BM BM6-consolidation "no bot_consolidation 'not done' audit"; fi
   out="$(cexec conductor-bots conductor bot memory ls memo --config /data/cfg/conductor.yaml 2>&1)"
-  assert_contains "$out" "log/" BM Z6-kept "Z6 the case log is still in the working tree"
+  assert_contains "$out" "log/" BM BM6-kept "BM6 the case log is still in the working tree"
   if audit_match conductor-bots '"event":"bot_memory_archive"'; then
-    bad "Z6 nothing archived" BM Z6-noarchive "an archive commit was made"
-  else ok "Z6 nothing was archived" BM Z6-noarchive; fi
+    bad "BM6 nothing archived" BM BM6-noarchive "an archive commit was made"
+  else ok "BM6 nothing was archived" BM BM6-noarchive; fi
 
-  # Z7: tickets. An operator's ticket is a draft that starts nothing; a
+  # BM7: tickets. An operator's ticket is a draft that starts nothing; a
   # worker can't start on it; a bot's own idea can't mark itself ready;
   # the operator's ready hands it to the bot.
   local opt tk tid tcase
@@ -2326,20 +2396,20 @@ group_BM_bots() {
   out="$(opt new "e2e: rotate the cache keys" --assignee bot:memo --label e2e --json)"
   tid="$(printf '%s' "$out" | sed -n 's/^ *"ticket": "\(T-[0-9]*\)".*/\1/p' | head -1)"
   tcase="$(printf '%s' "$out" | sed -n 's/^ *"id": "\(c[0-9]*\)".*/\1/p' | head -1)"
-  assert_contains "$out" '"status": "draft"' BM Z7-draft "Z7 an operator's new ticket is a draft"
-  [ -n "$tid" ] && [ -n "$tcase" ] || { bad "Z7 ticket id" BM Z7-id "no ticket/case id in: $out"; return; }
+  assert_contains "$out" '"status": "draft"' BM BM7-draft "BM7 an operator's new ticket is a draft"
+  [ -n "$tid" ] && [ -n "$tcase" ] || { bad "BM7 ticket id" BM BM7-id "no ticket/case id in: $out"; return; }
   out="$(as_bot spawn --case "$tcase" --brief "do it")"
-  assert_contains "$out" "is a draft: nothing starts on it" BM Z7-gate "Z7 no worker starts on a draft"
+  assert_contains "$out" "is a draft: nothing starts on it" BM BM7-gate "BM7 no worker starts on a draft"
   out="$(as_bot ticket new "e2e: a bot's idea" --assignee bot:memo --json)"
   tk="$(printf '%s' "$out" | sed -n 's/^ *"ticket": "\(T-[0-9]*\)".*/\1/p' | head -1)"
-  assert_contains "$out" '"created_by": "bot:memo"' BM Z7-idea "Z7 a bot writes its idea as a draft"
+  assert_contains "$out" '"created_by": "bot:memo"' BM BM7-idea "BM7 a bot writes its idea as a draft"
   out="$(as_bot ticket ready "$tk")"
-  assert_contains "$out" "tickets.mark_own_ready is off" BM Z7-noready "Z7 a bot can't mark its own idea ready"
+  assert_contains "$out" "tickets.mark_own_ready is off" BM BM7-noready "BM7 a bot can't mark its own idea ready"
   out="$(opt ready "$tid")"
-  assert_contains "$out" "status:    in_progress" BM Z7-ready "Z7 the operator's ready hands it to the bot"
-  assert_contains "$out" "ready by: operator:ops" BM Z7-readyby "Z7 ... and records who"
+  assert_contains "$out" "status:    in_progress" BM BM7-ready "BM7 the operator's ready hands it to the bot"
+  assert_contains "$out" "ready by: operator:ops" BM BM7-readyby "BM7 ... and records who"
   out="$(opt list --label e2e)"
-  assert_contains "$out" "$tid" BM Z7-list "Z7 ticket list filters by label"
+  assert_contains "$out" "$tid" BM BM7-list "BM7 ticket list filters by label"
 }
 
 group_L_templates() {

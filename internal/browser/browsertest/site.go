@@ -207,6 +207,27 @@ func (s *Site) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 <!-- `+Password+` -->
 <script>var planted = "`+Password+`";</script>
 <iframe srcdoc="<p>SAMEFRAME_MARKER</p>"></iframe>`+cross)
+	case "/source-probe":
+		// The e2e `source` artifact page: the same structural-redaction spots as
+		// /source-sentinels (a value attribute, a data-*, a comment, a script, an
+		// event handler), a same-origin srcdoc frame and (with ?cross=) a
+		// cross-origin frame — but planting a DISTINCT marker, not the sign-in
+		// Password constant, so the sandboxed browser's own on-disk HTTP cache of
+		// this page is not a credential leak the e2e's leak scan would (rightly)
+		// catch. source must show the structure while emitting none of the marker.
+		var cross string
+		if c := r.URL.Query().Get("cross"); c != "" {
+			cross = `<iframe src="` + html.EscapeString(c) + `/secret-frame"></iframe>`
+		}
+		page(w, "Source Probe", `<h1>Source Probe</h1>
+<form>
+<input name="h" value="SCRIPTONLY_MARKER">
+<div data-token="SCRIPTONLY_MARKER">account</div>
+<button type="button" onclick="var k='SCRIPTONLY_MARKER'">go</button>
+</form>
+<!-- SCRIPTONLY_MARKER -->
+<script>var planted = "SCRIPTONLY_MARKER";</script>
+<iframe srcdoc="<p>SAMEFRAME_MARKER</p>"></iframe>`+cross)
 	case "/secret-frame":
 		page(w, "Frame", `<p>CROSSFRAME_SECRET</p>`)
 	case "/login/otp", "/login/approve", "/login/approve/status", "/passkey/register", "/passkey/login", "/passkey/challenge", "/framed":

@@ -173,6 +173,21 @@ triggers:
 # (it replaces this placeholder in the daemon's copy of the config).
 operators:
   ops: { ssh_key: "ssh-ed25519 AAAA-E2E-OPS-KEY-PLACEHOLDER" }
+# Group TB: a bot whose ticket's spend_limit constrains its REAL browser
+# purchases (the bots + tickets + browser/wallet surface in one daemon). Its
+# home session runs on the fake paseo (pz, resolved to the fake paseo on PATH);
+# its browser purchases go through its gate as commit_money proposals, and a
+# ticket's spend_limit is the binding layer the purchase is evaluated against.
+bots:
+  shopper:
+    description: "e2e bot: a ticket's spend_limit caps its real browser purchases"
+    operators: [ops]
+    home: { runtime: pz }
+    worker: { runtime: cli_claude, timeout: 2m }
+    autonomy:
+      tiers: { commit_money: [browser.purchase] }
+      amounts: { browser.purchase: total }
+      spend_cap: { per_action: 1000, per_period: 1000, period: 24h, currency: USD }
 vaults:
   e2evault:
     type: file
@@ -204,7 +219,7 @@ browser:
       cvc: '{{ vault "e2evault" "card_cvc" }}'
       name: '{{ vault "e2evault" "p_name" }}'
       merchants: ["http://localhost:8091"]
-      identities: ["agent:pay_*"]
+      identities: ["agent:pay_*", "bot:shopper"]
       limits: { per_purchase: 30, per_day: 60, per_month: 100 }
   payments: { approvers: [ops], approval_ttl: 10m }
   logins:
