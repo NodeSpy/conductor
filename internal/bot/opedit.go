@@ -190,8 +190,21 @@ func (r *Repo) Commit(ctx context.Context, id Ident, e Edit) (head string, chang
 		if err != nil {
 			return "", false, err
 		}
+		// Files the target commit DELETED: reverting it only restores them,
+		// verbatim, from git. An operator may not rewrite a system-authored
+		// document (a log entry), but bringing an ARCHIVED one back — exactly
+		// what `conductor` removed — is recovery, not a rewrite, so it is
+		// allowed. A revert that would modify or re-delete such a document is
+		// still refused by the writer check.
+		deleted, err := r.deletedInLocked(ctx, target)
+		if err != nil {
+			return "", false, err
+		}
 		for _, f := range files {
 			if err := ks.CheckRemove(f, WriterOperator); err != nil {
+				if deleted[f] {
+					continue // restoring a deletion, not removing a live doc
+				}
 				return "", false, fmt.Errorf("commit %s: %w", short(target), err)
 			}
 		}
@@ -200,11 +213,24 @@ func (r *Repo) Commit(ctx context.Context, id Ident, e Edit) (head string, chang
 			_, _ = r.git(ctx, r.Dir, "reset", "-q", "--hard", cur)
 			return "", false, fmt.Errorf("commit %s does not revert cleanly onto the head (a later commit changed the same lines) — edit the file instead: %v", short(target), err)
 		}
-		// What the revert leaves must be valid documents, like any write.
+		// What the revert leaves must be valid documents, like any write. A
+		// restored deletion of a system-authored document is checked for
+		// validity but not re-authorized against the operator writer rule —
+		// its bytes are conductor's own, brought back unchanged.
 		for _, f := range files {
 			b, err := os.ReadFile(filepath.Join(r.Dir, f))
 			if err != nil {
 				continue // the revert removes it
+			}
+			if deleted[f] {
+				if k, ok := ks.Of(f); ok && !k.Writable(WriterOperator) {
+					if err := k.Validate(string(b)); err != nil {
+						_, _ = r.git(ctx, r.Dir, "revert", "--abort")
+						_, _ = r.git(ctx, r.Dir, "reset", "-q", "--hard", cur)
+						return "", false, fmt.Errorf("reverting %s would leave an invalid document: %w", short(target), err)
+					}
+					continue
+				}
 			}
 			if _, err := ks.CheckWrite(f, string(b), WriterOperator, ""); err != nil {
 				_, _ = r.git(ctx, r.Dir, "revert", "--abort")
@@ -317,6 +343,24 @@ func (r *Repo) revertableLocked(ctx context.Context, sha string) ([]string, erro
 		return nil, fmt.Errorf("commit %s changes no files", short(sha))
 	}
 	return files, nil
+}
+
+// deletedInLocked is the set of paths a commit deleted (reverting it restores
+// them). Used to allow recovering archived log entries: an operator may not
+// author a system document, but a revert that re-adds one conductor deleted
+// is restoration, not a rewrite.
+func (r *Repo) deletedInLocked(ctx context.Context, sha string) (map[string]bool, error) {
+	out, err := r.git(ctx, r.Dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "--no-renames", "--diff-filter=D", sha)
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]bool{}
+	for _, f := range strings.Split(strings.TrimSpace(out), "\n") {
+		if f != "" {
+			m[f] = true
+		}
+	}
+	return m, nil
 }
 
 // Document statuses (Repo.Inventory).

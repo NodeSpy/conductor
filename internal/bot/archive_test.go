@@ -176,6 +176,59 @@ func TestArchiveOnlyConsolidatedEntries(t *testing.T) {
 	}
 }
 
+// THE DOCUMENTED RECOVERY: an archived episode comes back by reverting the
+// archive commit. The revert re-adds a system-authored log entry — which an
+// operator may not author — but restoring conductor's own deleted bytes is
+// recovery, not a rewrite, so it is allowed.
+func TestArchivedEpisodesRecoverByRevert(t *testing.T) {
+	f := newSvc(t)
+	ctx := context.Background()
+	f.svc.Tick(ctx, "sre")
+	hc := homeCaller(f)
+	repo := f.svc.Repo("sre")
+
+	cs, err := f.svc.CaseOpen(hc, "db failover", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Episode(ctx, hc, cs.ID, "investigated the failover; zanzibar-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.CaseClose(ctx, hc, cs.ID, "fixed"); err != nil {
+		t.Fatal(err)
+	}
+	logPath := repo.EpisodePath(cs.ID, cs.Title, cs.Created)
+
+	w := consolidateNow(t, f)
+	writeDigest(t, f, w)
+	f.svc.WorkerDone(ctx, w.Dispatch, "", map[string]any{"summary": "digest written"})
+
+	if exists(repo.Dir, logPath) {
+		t.Fatal("the consolidated, closed episode was not archived")
+	}
+	head := repo.Head(ctx)
+	if subj := repo.Log(ctx, 1); len(subj) == 0 || !strings.Contains(subj[0], "memory: archive") {
+		t.Fatalf("head is not the archive commit: %v", subj)
+	}
+
+	// Revert the archive commit to bring the episode back (the doc's promise).
+	if _, err := f.svc.OperatorEdit(ctx, "", "sre", "op", "", Edit{Op: EditRevert, Commit: head, Base: head}); err != nil {
+		t.Fatalf("reverting the archive commit was refused: %v", err)
+	}
+	if !exists(repo.Dir, logPath) {
+		t.Fatal("reverting the archive did not restore the episode to the working copy")
+	}
+	text, err := repo.Read(logPath)
+	if err != nil || !strings.Contains(text, "zanzibar-1") {
+		t.Fatalf("restored episode content: %q %v", text, err)
+	}
+	// It reads back as a live document now, and the session's working copy
+	// follows.
+	if home := f.st.Bot("sre").Home; !exists(home.Cwd, logPath) {
+		t.Fatal("the recovered episode did not reach the session's working copy")
+	}
+}
+
 func keys(m map[string]string) []string {
 	var out []string
 	for k := range m {

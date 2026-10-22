@@ -279,8 +279,12 @@ proposal, system), the named kind, and the frontmatter schema.
 - **Writers.** log and handoff are `system`. Conductor composes their paths and
   frontmatter (`Repo.AppendLog`). An operator's only touch on the log is
   `annotate`/`flag`, which append a note (and set `flagged_wrong`) without
-  rewriting history; a revert that would change a log entry is refused by
-  the same writer check.
+  rewriting history; a revert that would *change* a log entry is refused by the
+  same writer check. The one exception is restoration: reverting a commit that
+  *deleted* a log entry (an archive commit) re-adds conductor's own bytes
+  verbatim, so it is allowed — that is how archived episodes come back. The
+  restored document is still validated; only the operator-writer rule is waived
+  for a pure deletion of a system document.
 - **Watch** is a directory, not entries in `watch.md`. One document per item
   gives each its own frontmatter, history and revert, and the chokepoint stays
   one rule per file.
