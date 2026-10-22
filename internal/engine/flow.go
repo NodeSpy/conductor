@@ -554,6 +554,7 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			}
 			go func() { _ = e.archiveAgent(context.Background(), agentID) }()
 		},
+		TakeDone: e.TakeEarlyDone,
 		// The agents/hour cap, shared with the legacy steps: path so a flood
 		// through either is counted against one window.
 		CheckRate: func() error {

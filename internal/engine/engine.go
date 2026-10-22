@@ -130,6 +130,7 @@ type Engine struct {
 	sem         *slots                  // concurrent-agent cap; nil = unlimited
 	groupWarn   sync.Map                // FlowRefs whose group key already failed once (log once, not per event)
 	runWait     sync.Map                // "key|run id" → last in-progress status logged (a fail-fast matrix emits dozens of failing_checks per run)
+	earlyDone   sync.Map                // dispatch id → step.done reason, for a done that arrived while its dispatch was in flight (consumed at the step boundary)
 	queuedMu    sync.Mutex              // guards queued
 	queued      map[string]core.Trigger // flow runs waiting for a slot, by queuedFlowKey → newest trigger
 	closedAt    map[string]time.Time    // PR key → when its _closed arrived (guarded by queuedMu); see closedSince

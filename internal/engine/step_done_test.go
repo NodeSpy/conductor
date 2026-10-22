@@ -45,6 +45,36 @@ func TestStepDoneInFlightDefersToStepBoundary(t *testing.T) {
 		t.Fatalf("an in-flight dispatch must not archive on done (got %q) — the step boundary owns it", got)
 	default:
 	}
+	if !e.TakeEarlyDone("disp-1") {
+		t.Fatal("an in-flight done must leave a mark for the step boundary")
+	}
+}
+
+// A foreground paseo run reports its agent id only when it returns, so an agent
+// calling step.done as its last action is always ahead of the dispatch binding.
+// That done must still be accepted (and marked for the step boundary), not
+// refused as unresolvable.
+func TestStepDoneInFlightBeforeBindingIsAccepted(t *testing.T) {
+	d := &fakeDispatcher{
+		archived:    make(chan string, 1),
+		inflightIDs: map[string]bool{"disp-1": true},
+	}
+	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+
+	if err := e.StepDone(context.Background(), "disp-1", "", "done before the run returned"); err != nil {
+		t.Fatalf("an in-flight dispatch's done must be accepted before its agent is bound: %v", err)
+	}
+	select {
+	case got := <-d.archived:
+		t.Fatalf("an in-flight dispatch must not archive on done (got %q)", got)
+	default:
+	}
+	if !e.TakeEarlyDone("disp-1") {
+		t.Fatal("the done must be marked for the step boundary")
+	}
+	if e.TakeEarlyDone("disp-1") {
+		t.Fatal("the mark must be consumed by the first take")
+	}
 }
 
 func TestStepDoneUnresolvableIsRefused(t *testing.T) {

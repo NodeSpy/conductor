@@ -514,3 +514,9 @@ skill surface — there the step boundary itself is the completion signal
 footer tells the agent to just finish normally if the command is unavailable.
 Reclaim never depends on the call alone: a foreground step is archived at its
 step boundary regardless, and hand-offs have `idle_timeout` as the backstop.
+A `step.done` that arrives while conductor is still blocked on the foreground
+dispatch (the usual case: it is the agent's last action) is held until the step
+boundary, so it never cuts off the output being captured. It is then honored
+even on a step with `archive_when_done: false`. That setting keeps an agent that
+stops without signalling done (to ask you something, say) live in paseo, and
+reclaims one that finished.
