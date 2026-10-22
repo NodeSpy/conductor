@@ -23,6 +23,8 @@ type paseoRuntimeDef struct {
 	Server  string
 	Host    string
 	Default bool
+	// HeadlessMode is the runtime's `headless_mode:` (zero = defaults).
+	HeadlessMode config.HeadlessMode
 }
 
 // paseoRuntimeDefs lists every paseo-type `runtimes:` entry, sorted by name
@@ -31,7 +33,11 @@ func paseoRuntimeDefs(cfg *config.Config) []paseoRuntimeDef {
 	var out []paseoRuntimeDef
 	for name, rt := range cfg.Runtimes {
 		if rt.BuiltinType() == "paseo" {
-			out = append(out, paseoRuntimeDef{Name: name, Bin: rt.Bin, Home: rt.Home, Server: rt.Server, Host: rt.Host, Default: rt.Default})
+			def := paseoRuntimeDef{Name: name, Bin: rt.Bin, Home: rt.Home, Server: rt.Server, Host: rt.Host, Default: rt.Default}
+			if rt.HeadlessMode != nil {
+				def.HeadlessMode = *rt.HeadlessMode
+			}
+			out = append(out, def)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -93,22 +99,7 @@ func expandTilde(p string) string {
 // PATH). Runtimes with a different bin or a host: get their OWN dispatchers
 // (see buildPaseoOverrides), so nothing errors on plurality anymore.
 func resolvePaseoBin(cfg *config.Config) (string, error) {
-	var first string
-	for _, def := range paseoRuntimeDefs(cfg) {
-		if def.Host != "" || def.Bin == "" {
-			continue
-		}
-		if def.Default {
-			return def.Bin, nil
-		}
-		if first == "" {
-			first = def.Bin
-		}
-	}
-	if first != "" {
-		return first, nil
-	}
-	return config.BuiltinPaseoRuntime, nil
+	return cfg.PaseoPrimaryBin(), nil
 }
 
 // buildPaseoOverrides builds a dedicated dispatcher for every paseo runtime
@@ -127,6 +118,7 @@ func buildPaseoOverrides(cfg *config.Config, primaryBin string, retry config.Ret
 			continue // the shared primary dispatcher covers it
 		}
 		d := dispatch.New(bin, retry, dryRun)
+		d.HeadlessMode = def.HeadlessMode
 		ep := paseoEndpointFor(def)
 		d.Home, d.Server = ep.Home(), ep.Server()
 		if def.Host != "" {

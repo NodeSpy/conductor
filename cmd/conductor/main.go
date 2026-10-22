@@ -544,6 +544,8 @@ func cmdRun(args []string) error {
 		return err
 	}
 	disp := dispatch.New(paseoBin, retry, cfg.DryRun)
+	disp.HeadlessMode = cfg.PrimaryHeadlessMode()
+	disp.Logf = logf
 	// Ownership ledger: conductor records every agent + workspace it launches here,
 	// and the reaper archives ONLY ids in it — so it can never touch a workspace
 	// conductor didn't create (the user's own paseo worktrees). Shared across the
@@ -680,6 +682,7 @@ func cmdRun(args []string) error {
 		return err
 	}
 	for name, pd := range paseoOverrides {
+		pd.Logf = logf
 		reg.OverridePaseo(name, pd, pd)
 		where := "bin " + pd.PaseoBin
 		if pd.Remote != nil {
@@ -694,6 +697,10 @@ func cmdRun(args []string) error {
 		d := dispatch.New(rb.Bin, retry, cfg.DryRun)
 		d.SetBackend(rb.Backend)
 		d.Owned = owned
+		if hm := cfg.Runtimes[name].HeadlessMode; hm != nil {
+			d.HeadlessMode = *hm
+		}
+		d.Logf = logf
 		paseoOverrides[name] = d
 		reg.OverridePaseo(name, d, d)
 		logf("runtime %s: dedicated paseo dispatcher (backend-rpc plugin)", name)
