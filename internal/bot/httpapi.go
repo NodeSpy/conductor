@@ -273,15 +273,17 @@ func (s *Service) apiConversationSend(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusNotFound, err)
 		return
 	}
-	limit := int64(MaxChatMessage) + multipartSlack
-	if kind == "bot" {
-		limit += s.Cfg().Bots[name].Attachments.MaxMessageOr()
-	} else {
-		limit += 25 << 20
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if ct == "multipart/form-data" {
+		// The wide cap is only for the multipart branch, where the message's
+		// text rides alongside file parts.
+		limit := int64(MaxChatMessage) + multipartSlack
+		if kind == "bot" {
+			limit += s.Cfg().Bots[name].Attachments.MaxMessageOr()
+		} else {
+			limit += 25 << 20
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		if err := r.ParseMultipartForm(4 << 20); err != nil {
 			apiError(w, bodyErrCode(err), fmt.Errorf("reading the upload: %w", err))
 			return
@@ -304,6 +306,10 @@ func (s *Service) apiConversationSend(w http.ResponseWriter, r *http.Request) {
 			req.Files = append(req.Files, AttachmentIn{Name: fh.Filename, Data: b})
 		}
 	} else {
+		// The JSON path carries only the message text — cap it at the chat
+		// limit plus slack, not the multipart ceiling, so a huge `text` is
+		// refused as it streams rather than buffered and decoded first.
+		r.Body = http.MaxBytesReader(w, r.Body, int64(MaxChatMessage)+64<<10)
 		var body struct {
 			Text     string   `json:"text"`
 			Operator string   `json:"operator"`

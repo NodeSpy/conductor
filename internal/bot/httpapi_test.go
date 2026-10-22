@@ -108,6 +108,34 @@ func TestOperatorAPIAttachments(t *testing.T) {
 	}
 }
 
+// A plain-JSON send is capped on the JSON path, not at the ~26 MB multipart
+// ceiling: a 25 MB `text` is refused as it streams (413), long before
+// MaxChatMessage would reject it after a full buffer-and-decode.
+func TestConversationSendJSONCapped(t *testing.T) {
+	f, _ := attachSvc(t)
+	h := OperatorAPI(f.svc)
+	body := `{"text":"` + strings.Repeat("a", 25<<20) + `"}`
+	w := apiDo(t, h, "POST", "/v1/conversations/bot:sre/messages", strings.NewReader(body), "application/json")
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("a 25MB JSON body was not refused on the JSON path: %d %s", w.Code, truncBody(w.Body.String()))
+	}
+	if n := len(f.st.Bot("sre").Inbox); n != 0 {
+		t.Fatalf("a refused send queued %d messages", n)
+	}
+	// A small JSON send still works (the cap is above MaxChatMessage, not below).
+	ok := apiDo(t, h, "POST", "/v1/conversations/bot:sre/messages", strings.NewReader(`{"text":"hello","operator":"op"}`), "application/json")
+	if ok.Code != http.StatusCreated {
+		t.Fatalf("a small JSON send was refused: %d %s", ok.Code, truncBody(ok.Body.String()))
+	}
+}
+
+func truncBody(s string) string {
+	if len(s) > 200 {
+		return s[:200]
+	}
+	return s
+}
+
 // Size caps hold while the upload streams: a file over max_file and a body
 // over max_message are refused with 413, and nothing is queued.
 func TestOperatorAPISizeChecked(t *testing.T) {
