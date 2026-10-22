@@ -602,6 +602,7 @@ func (s *Store) UpdateBot(name string, fn func(*BotRecord) error) error {
 		}
 		migrateCase(c, name, s.nextTicketLocked)
 	}
+	pruneBotRecord(work)
 	if s.bots == nil {
 		s.bots = map[string]*BotRecord{}
 	}
@@ -613,6 +614,38 @@ func (s *Store) UpdateBot(name string, fn func(*BotRecord) error) error {
 		}
 	}
 	return s.saveBots()
+}
+
+const (
+	// keepBotSpend bounds a bot's spend log, newest kept; the spend-cap
+	// windows it is summed over (default 30 days) sit well inside this.
+	keepBotSpend = 5000
+	// keepClosedCases bounds the closed/declined cases left in the hot
+	// ledger, evicting the oldest first. Active cases are never dropped;
+	// an evicted case's episode remains in the bot's memory and git history.
+	keepClosedCases = 500
+)
+
+// pruneBotRecord bounds the two per-bot fields that otherwise grow for the
+// bot's whole lifetime: the spend log (every op re-marshals it) and the
+// closed cases (every ticket lookup linearly scans them). Both bounds leave
+// everything still in flight untouched.
+func pruneBotRecord(r *BotRecord) {
+	if n := len(r.Spend); n > keepBotSpend {
+		r.Spend = append([]SpendEntry(nil), r.Spend[n-keepBotSpend:]...)
+	}
+	var closed []*Case
+	for _, c := range r.Cases {
+		if Closed(c.Status) {
+			closed = append(closed, c)
+		}
+	}
+	if len(closed) > keepClosedCases {
+		sort.Slice(closed, func(i, j int) bool { return closed[i].Updated.Before(closed[j].Updated) })
+		for _, c := range closed[:len(closed)-keepClosedCases] {
+			delete(r.Cases, c.ID)
+		}
+	}
 }
 
 // saveBots persists the ledger through the store's one write chokepoint.
