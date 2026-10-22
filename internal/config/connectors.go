@@ -183,6 +183,12 @@ type RuntimeConfig struct {
 	// Tool and Command are the bare-CLI recipe for transport: cli.
 	Tool    string   `yaml:"tool,omitempty"`
 	Command []string `yaml:"command,omitempty"`
+	// HeadlessMode is the provider mode a HEADLESS agent on this paseo runtime
+	// launches in — one conductor dispatches and owns, on a step with no
+	// `mode:` of its own, that nobody drives. Unset: each known provider's
+	// no-prompt mode. A mode id applies to every provider, a map per provider,
+	// and "none" injects nothing. See HeadlessMode.
+	HeadlessMode *HeadlessMode `yaml:"headless_mode,omitempty"`
 	// Host names a `hosts:` entry; the runtime's subprocesses run there over
 	// SSH (all its agents launch on that box).
 	Host string `yaml:"host,omitempty"`
@@ -1848,6 +1854,9 @@ func (c *Config) validateConnectors() error {
 		}
 	}
 	if err := c.validateRuntimeDefaults(); err != nil {
+		return err
+	}
+	if err := c.validateHeadlessModes(); err != nil {
 		return err
 	}
 	if err := c.validateChecks(); err != nil {
