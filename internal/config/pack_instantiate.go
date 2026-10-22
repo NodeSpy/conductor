@@ -45,8 +45,9 @@ func (c *Config) PackWarnings() []string { return c.packWarnings }
 // namespaces everything under the instance name, arms disarmed triggers, and
 // merges the result into c. Offline and deterministic — the network fetch is
 // `conductor init` (see pack_resolve.go). A no-op when `packs:` is absent, so
-// configs without packs load byte-for-byte unchanged.
-func (c *Config) instantiatePacks(configDir string) error {
+// configs without packs load byte-for-byte unchanged. packRoot holds the
+// vendor dir and lockfile: the config's own directory, or a PackStage's root.
+func (c *Config) instantiatePacks(packRoot string) error {
 	if len(c.Packs) == 0 {
 		c.packsInstantiated = true // nothing to expand: the config is already whole
 		return nil
@@ -56,7 +57,7 @@ func (c *Config) instantiatePacks(configDir string) error {
 	if err := applyPackSourceDefaults(c.Packs); err != nil {
 		return err
 	}
-	vendor := packVendorDir(configDir)
+	vendor := packVendorDir(packRoot)
 	st := &packInstantiation{cfg: c}
 	for _, name := range sortedPackKeys(c.Packs) {
 		if !validPackAlias(name) {
@@ -74,7 +75,7 @@ func (c *Config) instantiatePacks(configDir string) error {
 	// warn on drift (a vendored file edited after `conductor init`). A warning,
 	// not a hard error, so a benign re-vendor or a missing lockfile never
 	// crash-loops the daemon.
-	st.verifyLockDigests(configDir, vendor)
+	st.verifyLockDigests(packRoot, vendor)
 	c.packWarnings = st.warnings
 	// Every pack expanded: the effective config now carries their steps, so the
 	// derived plugin set is complete (a pack's internal `run: <engine>` is

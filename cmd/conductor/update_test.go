@@ -3,10 +3,13 @@ package main
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // writeFakeConductor writes a shell script standing in for the downloaded
@@ -194,5 +197,166 @@ func TestRefreshDepsRefusesOnConfigLoadError(t *testing.T) {
 	}
 	if pluginRes != nil {
 		t.Fatalf("a config.Load failure must return no plugin resolutions, got %+v", pluginRes)
+	}
+}
+
+// autoUpdatePackRepo is a git repo publishing a minimal pack at tag v1.0.0;
+// release adds the next tagged release with the given conductor floor.
+type autoUpdatePackRepo struct {
+	t    *testing.T
+	repo string
+}
+
+func newAutoUpdatePackRepo(t *testing.T) *autoUpdatePackRepo {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	r := &autoUpdatePackRepo{t: t, repo: t.TempDir()}
+	r.git("init", "-b", "main")
+	r.release("v1.0.0", ">=0.1")
+	return r
+}
+
+func (r *autoUpdatePackRepo) git(args ...string) string {
+	r.t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.repo
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e",
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		r.t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// release commits and tags a pack release; it returns the commit sha.
+func (r *autoUpdatePackRepo) release(tag, floor string) string {
+	r.t.Helper()
+	manifest := `
+pack:
+  name: autopilot
+  version: "` + strings.TrimPrefix(tag, "v") + `"
+  requires:
+    conductor: "` + floor + `"
+workflows:
+  flow:
+    steps:
+      - id: say
+        type: agent
+        name: say
+        workspace: local
+        prompt: release ` + tag + `
+`
+	if err := os.WriteFile(filepath.Join(r.repo, config.PackManifestFile), []byte(manifest), 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+	r.git("add", "-A")
+	r.git("commit", "-m", tag)
+	r.git("tag", tag)
+	return r.git("rev-parse", "HEAD")
+}
+
+// setupAutoUpdatePack writes a config tracking the repo's pack with
+// `~> 1.0`, resolves it as `conductor init` would, and returns the config
+// path. The daemon runs as v0.66.0.
+func setupAutoUpdatePack(t *testing.T, r *autoUpdatePackRepo) string {
+	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	config.SetRuntimeVersion("v0.66.0")
+	t.Cleanup(func() { config.SetRuntimeVersion("dev") })
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	doc := `
+connectors:
+  hook: { use: webhook }
+packs:
+  autopilot:
+    source: git::file://` + r.repo + `
+    version: "~> 1.0"
+`
+	if err := os.WriteFile(cfgPath, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.ResolvePacks(cfgPath); err != nil {
+		t.Fatalf("ResolvePacks: %v", err)
+	}
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("initial config must load: %v", err)
+	}
+	return cfgPath
+}
+
+// TestRefreshDepsLeavesNothingOnDiskWhenAPackUpdateFailsToLoad is #194: an
+// auto-update tick resolving a pack release the config cannot load must
+// leave the vendored tree and lockfile exactly as they were — not merely
+// keep the running daemon's in-memory config — so an unrelated restart hours
+// later boots the last state that loaded instead of coming up degraded.
+func TestRefreshDepsLeavesNothingOnDiskWhenAPackUpdateFailsToLoad(t *testing.T) {
+	r := newAutoUpdatePackRepo(t)
+	cfgPath := setupAutoUpdatePack(t, r)
+	dir := filepath.Dir(cfgPath)
+	lockPath := filepath.Join(dir, config.LockfileName)
+	vendored := filepath.Join(config.PackVendorDir(dir), "autopilot", config.PackManifestFile)
+	lockBefore, _ := os.ReadFile(lockPath)
+	manBefore, _ := os.ReadFile(vendored)
+	lockInfo, _ := os.Stat(lockPath)
+
+	// v1.1.0 satisfies `~> 1.0` but needs a newer daemon.
+	r.release("v1.1.0", ">=99.0")
+	for tick := 0; tick < 2; tick++ {
+		packMoved, _, act := refreshDeps(cfgPath)
+		if act || packMoved {
+			t.Fatalf("tick %d: an update that does not load must not apply (act=%v packMoved=%v)", tick, act, packMoved)
+		}
+	}
+	if lockAfter, _ := os.ReadFile(lockPath); string(lockAfter) != string(lockBefore) {
+		t.Fatalf("the lockfile was rewritten by an update that never applied:\n%s", lockAfter)
+	}
+	if info, _ := os.Stat(lockPath); !info.ModTime().Equal(lockInfo.ModTime()) {
+		t.Fatal("the lockfile was rewritten (mtime moved) by an update that never applied")
+	}
+	if manAfter, _ := os.ReadFile(vendored); string(manAfter) != string(manBefore) {
+		t.Fatal("the vendored pack was replaced by an update that never applied")
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, ".conductor", ".packs-stage-*")); len(left) != 0 {
+		t.Fatalf("staging left %v behind", left)
+	}
+	// The next restart loads what was there before.
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("the on-disk config must still load after the refused update: %v", err)
+	}
+}
+
+// TestRefreshDepsAppliesAPackUpdateThatLoads: the stage is swapped in when
+// the update loads, so the restart that follows boots the new release.
+func TestRefreshDepsAppliesAPackUpdateThatLoads(t *testing.T) {
+	r := newAutoUpdatePackRepo(t)
+	cfgPath := setupAutoUpdatePack(t, r)
+	dir := filepath.Dir(cfgPath)
+
+	want := r.release("v1.1.0", ">=0.1")
+	packMoved, _, act := refreshDeps(cfgPath)
+	if !act || !packMoved {
+		t.Fatalf("a loadable pack update must apply (act=%v packMoved=%v)", act, packMoved)
+	}
+	lock, err := config.ReadLockfile(dir)
+	if err != nil || lock == nil || len(lock.Packs) != 1 {
+		t.Fatalf("lockfile after apply: %+v, %v", lock, err)
+	}
+	if lock.Packs[0].Resolved != want {
+		t.Fatalf("lockfile pins %s, want v1.1.0's %s", lock.Packs[0].Resolved, want)
+	}
+	man, _ := os.ReadFile(filepath.Join(config.PackVendorDir(dir), "autopilot", config.PackManifestFile))
+	if !strings.Contains(string(man), "release v1.1.0") {
+		t.Fatal("the vendored pack was not updated to v1.1.0")
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, ".conductor", ".packs-stage-*")); len(left) != 0 {
+		t.Fatalf("staging left %v behind", left)
+	}
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("the applied config must load: %v", err)
 	}
 }
