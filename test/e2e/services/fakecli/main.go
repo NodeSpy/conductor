@@ -46,7 +46,7 @@ func main() {
 			prompt = readStdin()
 		}
 		_ = fixer.Apply(cwd, "cli:codex", prompt)
-		signalDone("cli:codex")
+		signalDone("cli:codex", prompt)
 		fmt.Println("codex: done")
 	default: // claude / claude-code
 		// claude -p --output-format json [--resume <id>] < prompt
@@ -59,7 +59,7 @@ func main() {
 			runtime = "cli:claude-code(resume)"
 		}
 		_ = fixer.Apply(cwd, runtime, prompt)
-		signalDone(runtime)
+		signalDone(runtime, prompt)
 		// A `[[reply {...}]]` marker is the scripted structured answer for the
 		// output_schema-on-cli scenario (Group T): echo it into the `result`
 		// field so conductor's controller path extracts + validates it, exactly
@@ -74,11 +74,16 @@ func main() {
 	}
 }
 
-// signalDone does what a real agent is told to as its last action: run
-// `conductor call step.done` when conductor handed it the skill creds
-// (CONDUCTOR_ENDPOINT + token in its env). Best-effort, like the agent's: a
-// failure is reported on stderr and the turn finishes normally.
-func signalDone(runtime string) {
+// signalDone does what a real agent does when its prompt ends with the plain
+// step's "WHEN FINISHED: … run `conductor call step.done`" footer and
+// conductor handed it the skill creds (CONDUCTOR_ENDPOINT + token in its
+// env): call it as its last action. A hand-off's prompt says to call it only
+// once the human is done with it, so a hand-off turn never does. Best-effort,
+// like the agent's: a failure is reported on stderr and the turn finishes.
+func signalDone(runtime, prompt string) {
+	if !strings.Contains(prompt, "WHEN FINISHED:") {
+		return
+	}
 	if os.Getenv("CONDUCTOR_ENDPOINT") == "" || os.Getenv("CONDUCTOR_SKILL_TOKEN") == "" {
 		return
 	}
