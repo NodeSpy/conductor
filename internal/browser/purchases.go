@@ -188,7 +188,8 @@ func (l *Purchases) saveLocked(f *purchasesFile) error {
 	return os.Rename(tmp, l.path())
 }
 
-// update runs fn on the ledger under its lock and saves it.
+// update runs fn on the ledger under its lock, bounds its growth, and saves
+// it.
 func (l *Purchases) update(fn func(f *purchasesFile) error) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -199,7 +200,60 @@ func (l *Purchases) update(fn func(f *purchasesFile) error) error {
 	if err := fn(f); err != nil {
 		return err
 	}
+	pruneLocked(f)
 	return l.saveLocked(f)
+}
+
+const (
+	// keepTerminalPurchases bounds the terminal records (expired, refused,
+	// denied, used, completed) the ledger retains, newest kept. Pending and
+	// approved purchases — the ones an operator or a pay still acts on — are
+	// never dropped. Without this an agent can leave a permanent record per
+	// lapsed proposal at zero dollar cost, growing the file and its per-op
+	// marshal without bound.
+	keepTerminalPurchases = 1000
+	// keepSpendEntries bounds the spend log, newest kept; the 30-day spend
+	// windows it is summed over sit well inside this.
+	keepSpendEntries = 5000
+)
+
+// purchaseTerminal reports whether a purchase has reached a final state and
+// is only kept for history.
+func purchaseTerminal(status string) bool {
+	switch status {
+	case PurchaseExpired, PurchaseRefused, PurchaseDenied, PurchaseUsed, PurchaseDone:
+		return true
+	}
+	return false
+}
+
+// purchaseWhen orders a purchase by when it was last decided (else created).
+func purchaseWhen(p *Purchase) time.Time {
+	if !p.Decided.IsZero() {
+		return p.Decided
+	}
+	return p.Created
+}
+
+// pruneLocked evicts terminal purchases past the retention count (oldest
+// first) and trims the spend log to its cap. Pending and approved purchases
+// stay whatever their age.
+func pruneLocked(f *purchasesFile) {
+	var terminal []*Purchase
+	for _, p := range f.Purchases {
+		if purchaseTerminal(p.Status) {
+			terminal = append(terminal, p)
+		}
+	}
+	if len(terminal) > keepTerminalPurchases {
+		sort.Slice(terminal, func(i, j int) bool { return purchaseWhen(terminal[i]).After(purchaseWhen(terminal[j])) })
+		for _, p := range terminal[keepTerminalPurchases:] {
+			delete(f.Purchases, p.ID)
+		}
+	}
+	if n := len(f.Spend); n > keepSpendEntries {
+		f.Spend = append([]SpendEntry(nil), f.Spend[n-keepSpendEntries:]...)
+	}
 }
 
 // Get returns one purchase (expiring it first if its time passed).
