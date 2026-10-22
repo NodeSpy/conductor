@@ -449,6 +449,18 @@ func (m *Manager) session(c Principal) (*session, error) {
 	return s, nil
 }
 
+// setSlot stores a session's browser-instance pointer (s.anon / s.login)
+// under m.mu. The owning session already holds its own s.mu here; taking
+// m.mu as well puts every write of these pointers on the same lock that
+// running() reads them under, so a session's start/stop can't race another
+// session's MaxBrowsers count. (The owner never holds m.mu at these sites,
+// so there is no re-entrancy; lock order stays s.mu → m.mu.)
+func (m *Manager) setSlot(slot **Instance, in *Instance) {
+	m.mu.Lock()
+	*slot = in
+	m.mu.Unlock()
+}
+
 // running counts live browsers.
 func (m *Manager) running() int {
 	m.mu.Lock()
@@ -541,7 +553,7 @@ func (m *Manager) instance(ctx context.Context, s *session, c Principal, st Sett
 	}
 	if *slot != nil {
 		(*slot).Close()
-		*slot = nil
+		m.setSlot(slot, nil)
 	}
 	if len(allow) == 0 {
 		if len(sites) > 0 {
@@ -618,7 +630,7 @@ func (m *Manager) instance(ctx context.Context, s *session, c Principal, st Sett
 		s.sites = sites
 		s.saved = time.Now()
 	}
-	*slot = in
+	m.setSlot(slot, in)
 	m.logf("browser %s: started a %s browser for %s (%d allowed host pattern(s); isolation: %s)", s.id, map[bool]string{true: "logged-in", false: "anonymous"}[len(sites) > 0], c.Identity, len(allow), p.Isolation())
 	if p.Isolation() == "seatbelt" && st.IsolationNote != "" {
 		m.logf("browser %s: WARNING: %s", s.id, st.IsolationNote)
@@ -670,7 +682,8 @@ func (m *Manager) closeLogin(s *session) {
 		s.active = s.anon
 	}
 	s.login.Close()
-	s.login, s.sites = nil, nil
+	m.setSlot(&s.login, nil)
+	s.sites = nil
 }
 
 // saveBack writes a logged-in browser's refreshed session into its jars:
@@ -1270,7 +1283,7 @@ func (m *Manager) closeSession(s *session) {
 	m.closeLogin(s)
 	if s.anon != nil {
 		s.anon.Close()
-		s.anon = nil
+		m.setSlot(&s.anon, nil)
 	}
 	s.active = nil
 }
