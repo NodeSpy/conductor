@@ -77,6 +77,10 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		argv = append(argv, "--thinking", p.Thinking)
 	}
 	argv = append(argv, launchFieldArgs(p)...)
+	// A headless agent with no mode of its own launches in its provider's
+	// no-prompt mode, unless the runtime's headless_mode says otherwise
+	// (headless_mode.go). Never a hand-off or detach: agent.
+	argv = append(argv, d.headlessModeArgs(req)...)
 	strat := effectiveStrategy(req)
 
 	// Before creating a fresh worktree, decide whether this dispatch should

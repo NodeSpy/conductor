@@ -83,8 +83,9 @@ runtimes sharing a `host:`/`isolation:` — the child overrides only `command`).
 | `transport` | `acp` \| `native` \| `cli` |
 | `session_model` | `native` \| `resumable` \| `oneshot` |
 | `default` | the fleet default (at most one across runtimes + legacy controllers) |
-| `bin` | the runtime binary (paseo, agent-deck) |
+| `bin` | the runtime binary: paseo, agent-deck, or — on a `cli` runtime — the executable its built-in `tool:` recipe runs instead of the default name (`claude`, `codex`, or the tool name). `~` is expanded for a local launch. Exclusive with `command:` on a cli runtime; see [The cli runtime](#the-cli-runtime) |
 | `home` | **paseo only** — the daemon home conductor targets. paseo 0.9 gained multi-home daemons and the `--home` selector (default `~/.paseo`); conductor detects the paseo version at boot and passes `--home <home>` on 0.9+, omitting it on older paseo (which has no such flag). `~` is expanded. Empty → the `PASEO_HOME` env, else paseo's own default. Set this when your paseo daemon runs at a non-default home (e.g. `paseo daemon run --home ~/work`) so clones/launches reach it instead of failing with `DAEMON_NOT_RUNNING` |
+| `headless_mode` | **paseo only** — the mode a headless agent launches in (a step nobody drives, with no `mode:` of its own). Default: the provider's no-prompt mode. A mode id applies to every provider, `{ claude: auto, codex: none }` sets it per provider, `none` injects nothing. See [Headless agents and permission modes](#headless-agents-and-permission-modes-paseo) |
 | `tool` / `command` | the bare-CLI recipe for `transport: cli`. A built-in `tool:` (`claude-code`, `codex`) sends the prompt on **stdin**, so prompt size is bounded by the model's context, not the kernel's 128 KiB single-argument limit. A hand-written `command:` gets the prompt as its last argument, so a prompt over ~120 KB fails at launch with a clear error |
 | `session` | the OVERALL session-affinity pool for this runtime: `{ key, idle_ttl, max_lifetime, end_on }`, shared by every step without its own. See [[Steps]] |
 | `budget` | this backend's hard spend cap: `{ window, max_cost_usd, max_tokens }`. A budget caps EXECUTION COST, and the runtime is where execution happens — this is where per-agent budgets moved to. See [[Cost-Accounting]] |
@@ -138,6 +139,90 @@ Everything else — session models, the session broker, capability
 degradation, interactive hand-offs — carries over from the controllers
 design unchanged; a runtime that owns an interactive surface is the default
 hand-off for background review steps ([[Hand-offs]]).
+
+## Headless agents and permission modes (paseo)
+
+A **headless** agent is one conductor launches and owns on a step nobody
+drives: a decide step's session, a review panelist, a fixer. If it starts in
+its provider's default mode, any tool use that mode doesn't cover raises a
+permission prompt. Claude's "Always Ask" covers almost nothing. Nobody is
+there to answer, so the agent waits until paseo gives up, and the step fails
+late with a misleading error. Even the agent's own
+`conductor call step.done` used to fail this way.
+
+So by default conductor launches a headless agent in its provider's
+**no-prompt** mode:
+
+| provider | mode |
+|---|---|
+| `claude` | `bypassPermissions` |
+| `codex` | `full-access` |
+| `gemini` | `yolo` |
+
+A provider not in this table launches with no mode, as before, and conductor
+logs once that its headless agents may hang on a prompt.
+
+What gets the mode, and what doesn't:
+
+- A step's own `mode:` always wins. Conductor adds nothing to a step that
+  sets one (for example `mode: auto` on a panelist).
+- Hand-offs, `detach:` steps, and anything else a person drives never get a
+  mode from conductor.
+- Work queued onto an agent that is already running launches nothing, so it
+  changes nothing either.
+
+**The tradeoff.** A headless agent often reads untrusted text: a PR's diff,
+its description, review comments. In a no-prompt mode it has full tool
+access while it does, so a prompt injection in that text runs with this
+box's permissions. That's the price of steps that finish instead of hanging.
+Tighten it on the paseo runtime:
+
+```yaml
+runtimes:
+  paseo:
+    use: paseo
+    headless_mode: auto                      # one mode id for every provider
+    # headless_mode: { claude: auto, codex: auto-review }   # per provider; unlisted keep the default
+    # headless_mode: none                    # inject nothing: each provider's own default mode
+```
+
+`auto` (claude) lets a model classifier approve or refuse each tool call
+rather than skipping prompts. Under any mode that still prompts, a step whose
+agent hits a prompt hangs as it used to, so choose one that covers what your
+headless steps do. A mode id must be one your paseo provider offers. Paseo
+runtimes that share conductor's default dispatcher (local, same `bin:`) must
+set the same `headless_mode`; give one its own `bin:` to differ.
+
+## The cli runtime
+
+`use: cli` runs a tool as a plain subprocess, one process per turn. `tool:`
+picks a built-in recipe — `claude-code` (alias `claude`) or `codex` — that knows
+the tool's flags: headless mode, prompt on stdin, `--resume` for a follow-up
+(claude-code), and a lean session for a [decide step](Decide-Steps). Any other
+`tool:` name is run as `<tool> <prompt>`.
+
+Each recipe runs its tool by its default name, found on the daemon's `PATH`.
+Set `bin:` to run a different executable instead — a wrapper that routes
+credentials, or a pinned install:
+
+```yaml
+runtimes:
+  claude:
+    use: cli
+    tool: claude-code
+    bin: ~/.local/bin/claude-wrapper   # every launch: first turn, --resume, decide sessions
+```
+
+`bin:` only replaces the executable. The recipe's flags stay the same, so the
+wrapper must pass its arguments and stdin through to the real tool. A leading
+`~` is expanded when the launch is local. On a `host:` runtime the argv is
+quoted into the ssh command, so `~` would not expand on the other box. Give an
+absolute path there, or a bare name on that host's `PATH`.
+
+`command:` is the escape hatch for a tool with no recipe: a full argv with the
+prompt appended as the last argument. It names its own executable
+(`command[0]`), so a cli runtime that sets both `command:` and `bin:` is a
+config error rather than one silently winning.
 
 ## Decision runtimes
 

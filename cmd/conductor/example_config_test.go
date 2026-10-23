@@ -224,3 +224,41 @@ func TestStarterConfigFreshSeedLayout(t *testing.T) {
 		t.Fatalf("drop-in config must validate: %v", err)
 	}
 }
+
+// The example's commented headless_mode block, uncommented as an operator
+// would, still loads and validates — and reaches the primary dispatcher.
+func TestExampleConfigHeadlessModeUncommented(t *testing.T) {
+	raw, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := strings.Replace(string(raw), "~/.config/conductor/github-app.pem", writeTempRSAKey(t), 1)
+	for _, line := range []string{"headless_mode:", "  claude: auto", "  codex: auto"} {
+		commented := "    # " + line
+		if !strings.Contains(doc, commented) {
+			t.Fatalf("example lost its %q line", commented)
+		}
+		doc = strings.Replace(doc, commented, "    "+line, 1)
+	}
+	for _, v := range []string{
+		"GH_WEBHOOK_SECRET", "GH_SMEE_URL", "SLACK_APP_TOKEN",
+		"SLACK_BOT_TOKEN", "CW_SECRET", "GH_PAT",
+		"CONDUCTOR_INVOKE_TOKEN", "CONDUCTOR_INVOKE_HMAC",
+	} {
+		t.Setenv(v, "dummy-"+v)
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if got := cfg.PrimaryHeadlessMode().Providers; got["claude"] != "auto" || got["codex"] != "auto" {
+		t.Fatalf("primary headless_mode = %v", got)
+	}
+}

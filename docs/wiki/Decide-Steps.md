@@ -68,9 +68,14 @@ candidates rather than one winner:
    probability normalization and confidence metrics) and runs **one restricted
    session**: no checkout, one turn, the prompt and schema only. The reply is
    converted back into v1 answers. No model API key is involved — the runtime's
-   own credentials answer.
+   own credentials answer. On paseo the session launches in its provider's
+   no-prompt mode, so the agent's `conductor call step.done` can't stall on a
+   permission prompt nobody answers. Tighten that with the runtime's
+   `headless_mode:` ([Runtimes](Runtimes#headless-agents-and-permission-modes-paseo)).
 
-   On a local `cli` runtime the session is **lean** rather than a full agent:
+   On a local `cli` runtime the session is **lean** rather than a full agent
+   (it runs the runtime's `bin:` when one is set, like every other launch of
+   that runtime — see [[Runtimes]]):
 
    | tool | launch |
    |---|---|

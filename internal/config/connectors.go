@@ -159,7 +159,9 @@ type RuntimeConfig struct {
 	// Default flags the fleet-default runtime (at most one).
 	Default bool `yaml:"default,omitempty"`
 	// Bin is the runtime's binary (paseo/agent-deck); replaces the global
-	// paseo_bin.
+	// paseo_bin. On a cli runtime it is the executable a built-in tool recipe
+	// (claude-code, codex, a bare tool) runs in place of its default name —
+	// exclusive with `command:`, which carries its own.
 	Bin string `yaml:"bin,omitempty"`
 	// Home is the paseo daemon home this runtime targets — the `--home` paseo
 	// 0.9+ selects a local daemon with (paseo 0.9 gained multi-home support and
@@ -181,6 +183,12 @@ type RuntimeConfig struct {
 	// Tool and Command are the bare-CLI recipe for transport: cli.
 	Tool    string   `yaml:"tool,omitempty"`
 	Command []string `yaml:"command,omitempty"`
+	// HeadlessMode is the provider mode a HEADLESS agent on this paseo runtime
+	// launches in — one conductor dispatches and owns, on a step with no
+	// `mode:` of its own, that nobody drives. Unset: each known provider's
+	// no-prompt mode. A mode id applies to every provider, a map per provider,
+	// and "none" injects nothing. See HeadlessMode.
+	HeadlessMode *HeadlessMode `yaml:"headless_mode,omitempty"`
 	// Host names a `hosts:` entry; the runtime's subprocesses run there over
 	// SSH (all its agents launch on that box).
 	Host string `yaml:"host,omitempty"`
@@ -1824,6 +1832,12 @@ func (c *Config) validateConnectors() error {
 		if rt.SessionModel != "" && !map[string]bool{"native": true, "resumable": true, "oneshot": true}[rt.SessionModel] {
 			return fmt.Errorf("config: runtime %q: session_model must be native|resumable|oneshot, got %q", name, rt.SessionModel)
 		}
+		// A cli runtime's `command:` names its own executable (argv[0]), and
+		// `bin:` replaces a built-in recipe's — both set leaves two answers to
+		// "what runs", so it is refused rather than one silently winning.
+		if rt.Bin != "" && len(rt.Command) > 0 && (rt.BuiltinType() == "cli" || rt.Controller().EffectiveTransport() == "cli") {
+			return fmt.Errorf("config: runtime %q: set `bin:` (the executable a built-in tool recipe runs) or `command:` (a full argv whose first element is the executable), not both", name)
+		}
 		if err := c.checkRemoteHostSupport("runtime", name, rt.Host, rt.BuiltinType(), rt.Agent, rt.Controller().EffectiveTransport()); err != nil {
 			return err
 		}
@@ -1840,6 +1854,9 @@ func (c *Config) validateConnectors() error {
 		}
 	}
 	if err := c.validateRuntimeDefaults(); err != nil {
+		return err
+	}
+	if err := c.validateHeadlessModes(); err != nil {
 		return err
 	}
 	if err := c.validateChecks(); err != nil {
