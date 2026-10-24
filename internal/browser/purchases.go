@@ -227,6 +227,23 @@ func purchaseTerminal(status string) bool {
 	return false
 }
 
+// prunable reports whether a terminal record may be evicted. A used or
+// completed purchase that still counts against a ticket's lifetime spend cap
+// (it carries a budget key) is never evicted: the cap is computed by summing
+// the committing purchases under that key (Committed, evaluate's ticket layer),
+// so dropping one would silently free its spend and let the ticket overspend.
+// The zero-cost growth the prune guards against is lapsed proposals — expired,
+// refused, denied — which never carry committed spend and stay prunable.
+func prunable(p *Purchase) bool {
+	if !purchaseTerminal(p.Status) {
+		return false
+	}
+	if committing[p.Status] && p.BudgetKey != "" {
+		return false
+	}
+	return true
+}
+
 // purchaseWhen orders a purchase by when it was last decided (else created).
 func purchaseWhen(p *Purchase) time.Time {
 	if !p.Decided.IsZero() {
@@ -241,7 +258,7 @@ func purchaseWhen(p *Purchase) time.Time {
 func pruneLocked(f *purchasesFile) {
 	var terminal []*Purchase
 	for _, p := range f.Purchases {
-		if purchaseTerminal(p.Status) {
+		if prunable(p) {
 			terminal = append(terminal, p)
 		}
 	}
