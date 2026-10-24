@@ -41,6 +41,13 @@ const (
 	ticketCommentCap     = 500
 )
 
+// ticketMoving marks a draft claimed for a cross-home reassignment: it is set
+// on the source under its lock before the copy is placed, so a concurrent
+// assign of the same draft sees it as already moved and backs off. It never
+// persists — the claimed stub is dropped on success, the claim released on
+// failure.
+const ticketMoving = "(reassigning)"
+
 var labelRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,39}$`)
 
 // dispatchable is THE DISPATCH GATE: work — a worker, a delegation, a
@@ -869,13 +876,38 @@ func (s *Service) TicketAssign(ctx context.Context, a TicketActor, tid, to strin
 		} else {
 			moved := c
 			moved.Assignee, moved.Requester, moved.RequesterClass = assignee, who, class
+			moved.MovedTo = ""
 			addHistory(&moved, now, a.String(), "assigned "+orNone(c.Assignee)+" → "+orNone(assignee))
-			if _, err = s.placeTicket(moved, assignee); err == nil {
-				if loc.Queue != "" {
-					err = s.removeFromQueue(loc)
-				} else {
-					err = s.Ledger.UpdateBot(loc.Bot, func(r *store.BotRecord) error {
-						delete(r.Cases, loc.ID)
+			// Claim the source draft before placing the copy: mark it moving
+			// under its own lock, so a second assign of the same draft racing to
+			// another home finds it already gone (findTicket skips a moved copy)
+			// and backs off — one live copy ever exists, never two. Place the
+			// copy, then drop the claimed stub; if placing fails, release the
+			// claim so the draft is live again.
+			claimed := false
+			err = s.updateTicket(loc, func(cc *store.Case) error {
+				if cc.Status != store.TicketDraft || cc.MovedTo != "" {
+					return fmt.Errorf("ticket %s was reassigned concurrently", tid)
+				}
+				cc.MovedTo = ticketMoving
+				claimed = true
+				return nil
+			})
+			if err == nil {
+				if _, err = s.placeTicket(moved, assignee); err == nil {
+					if loc.Queue != "" {
+						err = s.removeFromQueue(loc)
+					} else {
+						err = s.Ledger.UpdateBot(loc.Bot, func(r *store.BotRecord) error {
+							delete(r.Cases, loc.ID)
+							return nil
+						})
+					}
+				} else if claimed {
+					_ = s.updateTicket(loc, func(cc *store.Case) error {
+						if cc.MovedTo == ticketMoving {
+							cc.MovedTo = ""
+						}
 						return nil
 					})
 				}
