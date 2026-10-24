@@ -48,6 +48,11 @@ func TestExampleConfigValidates(t *testing.T) {
 	if !cfg.HasConnectors() {
 		t.Fatal("example config should be on the connectors schema")
 	}
+	// The shipped example leaves sandbox.agents unset (commented), so bots are
+	// confined by default — config-compat with the seam's default-on wiring.
+	if !cfg.AgentSandboxOn() {
+		t.Fatal("the example config must resolve to sandbox-on (bots confined by default)")
+	}
 	if w := cfg.RemovedFieldWarnings(); len(w) != 0 {
 		t.Errorf("the example config still uses a removed field: %v", w)
 	}

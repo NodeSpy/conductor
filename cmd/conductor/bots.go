@@ -18,6 +18,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/paseosetup"
 	"github.com/NodeSpy/conductor/internal/skill"
 	"github.com/NodeSpy/conductor/internal/store"
 )
@@ -40,7 +41,7 @@ func buildBots(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *co
 		return nil
 	}
 	cfgFn := func() *config.Config { return cfg }
-	sandbox := sandboxSeam()
+	sandbox := sandboxSeam(cfg)
 	gate := &bot.Gate{Cfg: cfgFn, Ledger: st, Sandbox: sandbox}
 	audit := func(e map[string]any) { st.Audit(e) }
 	var tf *bot.Terraform
@@ -120,15 +121,41 @@ func buildBots(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *co
 	return &botStack{svc: svc, gate: gate}
 }
 
-// sandboxSeam is conductor's agent sandbox as bots see it. Until it is on
-// main this is NoSandbox — bot sessions run unconfined and promotion past
-// observe/propose is refused. The switch, once it lands:
+// agentSandboxBuildable reports whether this box can actually build the agent
+// sandbox (an unprivileged user namespace on Linux, sandbox-exec on macOS).
+// Overridable in tests.
+var agentSandboxBuildable = func() bool { return agentsandbox.Probe() == "" }
+
+// sandboxSeam is conductor's agent sandbox as bots see it. Bots are confined
+// by DEFAULT — sandbox.agents defaults to on (config.AgentSandboxOn), and the
+// operator opts out explicitly with sandbox.agents: off. The seam is enforcing
+// only when the sandbox is on AND this box can actually build it: if the
+// platform cannot sandbox, Active() is false and the gate refuses autonomous
+// promotion (fail closed) rather than let an agent run unconfined — the
+// dispatch launch itself is refused too (wireAgentSandbox / Probe).
 //
-//	return bot.SandboxFuncs{
-//		IsActive: func() bool { return <the sandbox is enforcing agent launches> },
-//		Provider: func(base string) (string, bool) { return <the conductor-owned paseo provider entry `conductor paseo setup` made for base, e.g. claude-sandboxed> },
-//	}
-func sandboxSeam() bot.Sandbox { return bot.NoSandbox{} }
+// IsActive is the gate's precondition for promotion past observe/propose.
+// Provider names the conductor-owned paseo provider entry `conductor paseo
+// setup` writes for a base provider (claude → claude-sandboxed), which runs
+// the home session through `conductor sandbox exec`.
+func sandboxSeam(cfg *config.Config) bot.Sandbox {
+	enforcing := cfg.AgentSandboxOn() && agentSandboxBuildable()
+	return bot.SandboxFuncs{
+		IsActive: func() bool { return enforcing },
+		Provider: func(base string) (string, bool) {
+			if !enforcing {
+				return "", false
+			}
+			if strings.TrimSpace(base) == "" {
+				base = dispatch.PaseoDefaultProvider
+			}
+			if strings.HasSuffix(base, paseosetup.Suffix) {
+				return base, true
+			}
+			return base + paseosetup.Suffix, true
+		},
+	}
+}
 
 // spendLedger is bot.SpendLedger over the daemon's live browser purchase
 // ledger, so a ticket's spend view (conductor ticket show, GET /v1/tickets/{id})
