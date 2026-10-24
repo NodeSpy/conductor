@@ -52,6 +52,9 @@ type Mux struct {
 	cdpR *io.PipeReader
 	cdpW *io.PipeWriter
 	done chan struct{}
+	// drainMax is the absolute ceiling on an aborted transfer's quiesce drain
+	// (defaults to fileDrainMax; overridable in tests).
+	drainMax time.Duration
 }
 
 type muxChan struct {
@@ -72,7 +75,7 @@ type fileMsg struct {
 
 // NewMux starts the host side over the shim's stdout (r) and stdin (w).
 func NewMux(r io.Reader, w io.Writer, dial func() (net.Conn, error)) *Mux {
-	m := &Mux{w: w, chans: map[uint32]*muxChan{}, dial: dial, done: make(chan struct{})}
+	m := &Mux{w: w, chans: map[uint32]*muxChan{}, dial: dial, done: make(chan struct{}), drainMax: fileDrainMax}
 	m.cdpR, m.cdpW = io.Pipe()
 	go m.read(bufio.NewReaderSize(r, 1<<20))
 	return m
@@ -278,6 +281,14 @@ const fileXferTimeout = 2 * time.Minute
 // while bytes are in flight); it only fires on silence.
 const fileDrainGrace = 2 * time.Second
 
+// fileDrainMax is the absolute ceiling on an aborted transfer's drain. Because
+// fileDrainGrace resets on every frame, a shim that never goes quiet (buggy,
+// slow to stop, or hostile) would keep the drain alive forever and hold fileMu —
+// stalling every later transfer. This bounds the whole drain regardless of how
+// many frames arrive, so an aborted transfer can never wedge the lock for longer
+// than this.
+const fileDrainMax = 30 * time.Second
+
 // Get copies a file out of the container's transfer directory (at most max
 // bytes) to w.
 func (m *Mux) Get(ctx context.Context, path string, max int64, w io.Writer) (int64, error) {
@@ -416,8 +427,16 @@ func (m *Mux) quiesceFile(c *muxChan) {
 	if replies == nil {
 		return
 	}
+	max := m.drainMax
+	if max <= 0 {
+		max = fileDrainMax
+	}
 	t := time.NewTimer(fileDrainGrace)
 	defer t.Stop()
+	// deadline is the absolute cap: never reset, so no amount of frames can keep
+	// the drain (and fileMu) alive past it.
+	deadline := time.NewTimer(max)
+	defer deadline.Stop()
 	for {
 		select {
 		case _, ok := <-replies:
@@ -431,6 +450,8 @@ func (m *Mux) quiesceFile(c *muxChan) {
 		case <-m.done:
 			return
 		case <-t.C:
+			return
+		case <-deadline.C:
 			return
 		}
 	}
