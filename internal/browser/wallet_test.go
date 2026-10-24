@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -294,21 +295,38 @@ func TestWalletValuesAreWriteOnly(t *testing.T) {
 	}
 	ps, cs, fr, _ := s.Wallet()
 	b, _ := json.Marshal([]any{ps, cs, fr, WithWallet(Settings{}, ps, cs, fr)})
-	hay := []string{string(b)}
+	// Field Set / added / updated are nanosecond timestamps — metadata, not
+	// secrets — and a nanosecond fraction (or the sealed vault's random base64)
+	// coincidentally contains a short value like the 3-digit CVC "987". That is
+	// not a leak; strip timestamps before scanning so the check does not misfire.
+	tsRE := regexp.MustCompile(`\d{4}-\d{2}-\d{2}T[0-9:.]+Z`)
+	strip := func(s string) string { return tsRE.ReplaceAllString(s, "") }
+	// The decrypted listing (what Wallet()/WithWallet expose) must contain none
+	// of the values, long or short — the write-only guarantee.
+	listing := strip(string(b))
+	for _, v := range []string{testCard, "12/34", "987", "jo.private@example.test"} {
+		if strings.Contains(listing, v) {
+			t.Fatalf("a wallet value is readable in the decrypted listing (%s)", v)
+		}
+	}
+	// On disk, the vault is a single sealed blob (random base64), so a short
+	// value substring-collides there by chance. The seal is all-or-nothing, so
+	// the long, collision-free values (the 16-digit card number, the email)
+	// prove no plaintext reaches any file — the CVC in the same vault is sealed
+	// by the same seal.
 	filepath.Walk(s.Dir, func(p string, fi os.FileInfo, err error) error {
-		if err == nil && !fi.IsDir() {
-			x, _ := os.ReadFile(p)
-			hay = append(hay, string(x))
+		if err != nil || fi.IsDir() {
+			return nil
+		}
+		x, _ := os.ReadFile(p)
+		h := strip(string(x))
+		for _, v := range []string{testCard, "jo.private@example.test"} {
+			if strings.Contains(h, v) {
+				t.Fatalf("a wallet value is readable on disk (%s): %s", v, p)
+			}
 		}
 		return nil
 	})
-	for _, h := range hay {
-		for _, v := range []string{testCard, "12/34", "987", "jo.private@example.test"} {
-			if strings.Contains(h, v) {
-				t.Fatalf("a wallet value is readable (%s): %.200s", v, h)
-			}
-		}
-	}
 	if v, err := s.walletValue("card", "visa", "number"); err != nil || v != testCard {
 		t.Fatalf("the fill reads it: %v", err)
 	}
