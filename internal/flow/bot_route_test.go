@@ -55,6 +55,31 @@ func TestBotStepRoutesToATeam(t *testing.T) {
 	}
 }
 
+// A trigger that carries no provenance — the zero Trigger{}, no instance and no
+// kind — must not be stamped with a non-empty-but-meaningless source (the "."
+// the bare instance+"."+kind would produce). It is routed provenance-less (an
+// empty Source) with no requester, so the bot intake's guard drops it to least
+// trust instead of handing a requester-less event full event autonomy.
+func TestBotStepProvenanceLessTriggerHasEmptySource(t *testing.T) {
+	r := capRunner(t)
+	sr := &stubRouter{}
+	r.BotRouter = sr
+	step := config.Step{Bot: &config.BotStep{Name: "sre", Title: "x"}} // no requester:
+	if _, _, err := r.execBot(context.Background(), core.Trigger{}, step, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := sr.got[0]; got.Source != "" || got.Requester != "" {
+		t.Fatalf("a provenance-less trigger stamped source %q / requester %q — want both empty", got.Source, got.Requester)
+	}
+	// A real event still carries its provenance unchanged.
+	if _, _, err := r.execBot(context.Background(), core.Trigger{Instance: "pd", Kind: "incident"}, step, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := sr.got[1]; got.Source != "pd.incident" {
+		t.Fatalf("a real event lost its provenance: source %q", got.Source)
+	}
+}
+
 // AN EVENT'S FILES: a connector that declares `attachments` has its files
 // fetched — through its fetch verb, lazily, within the receiving bot's caps
 // (a declared size over the cap is refused before any fetch) — and only for

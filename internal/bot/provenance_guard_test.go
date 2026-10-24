@@ -58,3 +58,39 @@ func TestSourcedClassProvenanceGuard(t *testing.T) {
 		t.Fatalf("classifyAgainst('') = %q, want %q (its documented contract)", class, ReqEvent)
 	}
 }
+
+// The delivery write-boundary backstops the classify-time guard: even a caller
+// that hands deliverCase an autonomy class for a requester-less AND source-less
+// event cannot write a trusted case — it drops to least trust. This is the
+// structural chokepoint, so a path that reaches the sink without sourcedClass
+// (a ready ticket, a future caller) cannot produce a provenance-less-but-trusted
+// intake.
+func TestDeliverCaseDropsProvenanceLessAutonomy(t *testing.T) {
+	f := newTeamFixture(t, nil)
+	ctx := context.Background()
+	for _, class := range []string{ReqEvent, ReqOperator, ReqBot} {
+		id, err := f.svc.deliverCase(ctx, Event{Bot: "a"}, "", class, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := f.caseOf(t, "a", id); c.RequesterClass != ReqUser {
+			t.Fatalf("deliverCase wrote %q for a provenance-less %s intake, want %q (least trust)", c.RequesterClass, class, ReqUser)
+		}
+	}
+	// A source vouches for the event: an autonomy class with a source is kept.
+	id, err := f.svc.deliverCase(ctx, Event{Bot: "a", Source: "pd.incident"}, "", ReqEvent, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := f.caseOf(t, "a", id); c.RequesterClass != ReqEvent {
+		t.Fatalf("a sourced event was downgraded at the sink: %q", c.RequesterClass)
+	}
+	// A named requester vouches too: an operator with no source is kept.
+	id, err = f.svc.deliverCase(ctx, Event{Bot: "a"}, "op", ReqOperator, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := f.caseOf(t, "a", id); c.RequesterClass != ReqOperator {
+		t.Fatalf("a named operator was downgraded at the sink: %q", c.RequesterClass)
+	}
+}

@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
@@ -32,6 +33,23 @@ type BotRouter interface {
 	RouteBot(ctx context.Context, r BotRoute) (map[string]any, error)
 }
 
+// eventSource is the provenance a `bot:` step stamps on its intake: the
+// trigger's "<instance>.<kind>". A real event always carries an instance (the
+// source adapter sets it) or a kind, and that non-empty source is what lets the
+// bot intake's provenance guard classify a requester-less event as `event`.
+//
+// A trigger with NEITHER — the zero Trigger{} — has no provenance at all, and
+// the bare concatenation would stamp it "." : a non-empty string the guard
+// reads as a real source, handing a requester-less, source-less intake full
+// event autonomy. So a provenance-less trigger is tagged provenance-less (an
+// empty Source), and the guard drops it to least trust, deny-by-default.
+func eventSource(instance, kind string) string {
+	if strings.TrimSpace(instance) == "" && strings.TrimSpace(kind) == "" {
+		return ""
+	}
+	return instance + "." + kind
+}
+
 // execBot runs the `bot:` helper. An agent-authored plan cannot route
 // into a bot: bots are isolated from one another, and an agent's plan
 // is exactly how one bot's session could push work into another's.
@@ -47,7 +65,7 @@ func (r *Runner) execBot(ctx context.Context, t core.Trigger, step config.Step, 
 		}
 		return out, nil
 	}
-	rt := BotRoute{Action: ms.Action, Urgent: ms.Urgent, Source: t.Instance + "." + t.Kind}
+	rt := BotRoute{Action: ms.Action, Urgent: ms.Urgent, Source: eventSource(t.Instance, t.Kind)}
 	if rt.Action == "" {
 		rt.Action = "deliver"
 	}

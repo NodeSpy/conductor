@@ -755,6 +755,18 @@ func (s *Service) eventAttachments(ev Event) (types []string, msg string, err er
 // and delivers it: the inbox, and a worker at once for an urgent event. A
 // pre is a conductor line shown with the event (a lead's fenced note).
 func (s *Service) deliverCase(ctx context.Context, ev Event, who, class string, rt *store.Routing, pre string) (string, error) {
+	// Intake invariant (M2): a provenance-less delivery — an autonomy class with
+	// neither a requester NOR a source to vouch for it — is never written as
+	// trusted, whatever the caller decided. classifyAgainst("") is `event` by its
+	// documented contract, and sourcedClass already drops a requester-less,
+	// source-less intake at the classified entries (Deliver / RouteTeam). This is
+	// that same drop at the shared delivery sink, so a caller that reaches here on
+	// another path (a ready ticket carrying a stored class, or any future one)
+	// cannot smuggle an untrusted, sourceless event into an autonomous tier. The
+	// raw ev.Source is checked, not srcOr's "unknown" placeholder.
+	if autonomyClass[class] && strings.TrimSpace(who) == "" && strings.TrimSpace(ev.Source) == "" {
+		who, class = "", ReqUser
+	}
 	title := eventTitle(ev.Title, ev.Text, ev.Source)
 	src := srcOr(ev.Source)
 	filesNote := ""
