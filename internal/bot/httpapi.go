@@ -54,6 +54,10 @@ import (
 // the files themselves.
 const multipartSlack = 1 << 20
 
+// streamPing is how often an open SSE stream sends a keep-alive comment. A
+// package var so a test can shorten it; production never changes it.
+var streamPing = 25 * time.Second
+
 // OperatorAPI is the operator API's handler.
 func OperatorAPI(s *Service) http.Handler {
 	mux := http.NewServeMux()
@@ -553,7 +557,7 @@ func (s *Service) apiTicketStream(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	_, _ = fmt.Fprint(w, ": connected\n\n")
 	fl.Flush()
-	tick := time.NewTicker(25 * time.Second)
+	tick := time.NewTicker(streamPing)
 	defer tick.Stop()
 	for {
 		select {
