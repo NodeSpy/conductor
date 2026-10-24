@@ -194,6 +194,32 @@ func TestDetachDispatchNoConductorEnv(t *testing.T) {
 	}
 }
 
+// TestDetachDispatchStripsCredentialFromPrompt proves a detached launch strips
+// conductor's credentials BEFORE the prompt is rendered, so a {{.<credential>}}
+// template alias in the prompt resolves to nothing — the secret never reaches
+// the agent through the prompt, the way TestDetachDispatchNoConductorEnv proves
+// it never reaches it through env. This is the other half of detach's "no
+// conductor credential reaches a detached launch in any form".
+func TestDetachDispatchStripsCredentialFromPrompt(t *testing.T) {
+	owned := NewOwnedSet("")
+	req, backend := detachRequest(owned)
+	const secret = "SECRET-APP-TOKEN-xyz"
+	req.Action.Prompt = "deploy with token {{.app_token}}"
+	req.Credentials = Credentials{Templates: map[string]string{"app_token": secret}}
+	d := newDetachDispatcher(backend, owned)
+
+	if _, err := d.Dispatch(context.Background(), req); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	prompt := backend.runCalls[0].Args[1]
+	if strings.Contains(prompt, secret) {
+		t.Fatalf("detach leaked a credential into the rendered prompt: %q", prompt)
+	}
+	if !strings.Contains(prompt, "deploy with token") {
+		t.Fatalf("the prompt body was lost entirely: %q", prompt)
+	}
+}
+
 // TestDetachDispatchNoGuidanceAppended proves the prompt reaches paseo
 // EXACTLY as templated — none of WriteWrapperGuidance/DoneGuidance/
 // HandoffGuidance (flow.go's execAgent skips that whole block for a detach
