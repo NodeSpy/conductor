@@ -743,20 +743,27 @@ func (m *Manager) landDownload(in *Instance, c Principal, loggedIn bool, d *Down
 	st := m.settings()
 	entry := map[string]any{"action": "download", "identity": c.Identity, "agent": c.Agent, "repo": c.Repo,
 		"url": d.URL, "logged_in": loggedIn, "requester": c.Requester}
+	// The download URL and any error reason can carry a credential a page
+	// reflected into the link's path (M3 scrubs doWith's entries; this path
+	// built its own), so scrub every entry here too before it reaches the log.
+	audit := func() {
+		scrubEntry(in, entry)
+		m.audit(entry)
+	}
 	// A completed download is handled on the browser's event goroutine, off
 	// any request: the transfer bounds itself with its own deadline.
 	src, err := in.hostDownload(context.Background(), d.GUID, st.MaxDownload)
 	if err != nil {
 		in.setDownload(d, func(d *Download) { d.State, d.Err = "refused", err.Error() })
 		entry["outcome"], entry["reason"] = "refused", err.Error()
-		m.audit(entry)
+		audit()
 		return
 	}
 	defer os.Remove(src)
 	if err := refuseSecretFile(src, in.secretValues()); err != nil {
 		in.setDownload(d, func(d *Download) { d.State, d.Err = "refused", err.Error() })
 		entry["outcome"], entry["reason"] = "refused", err.Error()
-		m.audit(entry)
+		audit()
 		return
 	}
 	f, err := os.Open(src)
@@ -773,7 +780,7 @@ func (m *Manager) landDownload(in *Instance, c Principal, loggedIn bool, d *Down
 		in.setDownload(d, func(d *Download) { d.State, d.Err = "refused", err.Error() })
 		entry["outcome"], entry["reason"] = "refused", err.Error()
 	}
-	m.audit(entry)
+	audit()
 }
 
 // act performs one action.
