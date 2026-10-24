@@ -37,12 +37,25 @@ func TestShortSecretCoveredEverywhere(t *testing.T) {
 		t.Fatalf("H1: secretValues() omits the short values (screenshot/download blind): %v", in.secretValues())
 	}
 
-	// 4. The download guard refuses a file echoing the 3-digit CVC.
-	f := filepath.Join(t.TempDir(), "receipt.txt")
-	if err := os.WriteFile(f, []byte("thanks! cvc=123 on file\n"), 0o600); err != nil {
-		t.Fatal(err)
+	// 4. The download guard covers the short value without breaking ordinary
+	//    files: a file that merely contains the 3-digit CVC as an incidental
+	//    substring downloads fine (a bare substring scan would refuse it — #4),
+	//    while a file that IS the CVC, or one echoing the long secret, is
+	//    refused.
+	write := func(body string) string {
+		f := filepath.Join(t.TempDir(), "f.txt")
+		if err := os.WriteFile(f, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return f
 	}
-	if err := refuseSecretFile(f, in.secretValues()); err == nil {
-		t.Fatal("H1: a downloaded file containing the 3-digit CVC was not refused")
+	if err := refuseSecretFile(write("thanks! order 1123 total 05 on file\n"), in.secretValues()); err != nil {
+		t.Fatalf("H1: a legitimate file with an incidental short substring was refused: %v", err)
+	}
+	if err := refuseSecretFile(write("123\n"), in.secretValues()); err == nil {
+		t.Fatal("H1: a downloaded file that is the 3-digit CVC was not refused")
+	}
+	if err := refuseSecretFile(write("pw hunt3 leaked\n"), in.secretValues()); err == nil {
+		t.Fatal("H1: a downloaded file echoing the long secret was not refused")
 	}
 }

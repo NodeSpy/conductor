@@ -599,10 +599,16 @@ func TestBoundaries(t *testing.T) {
 	if refuseSecretFile(f, []string{"abcd"}) == nil {
 		t.Fatal("a 4-character filled value in a download")
 	}
-	// H1: a short filled value (a CVC, an expiry part) is matched too — the
-	// old len<4 cutoff let a downloaded file echoing it through.
-	if refuseSecretFile(f, []string{"abc"}) == nil {
-		t.Fatal("a value under 4 characters in a download must be refused too")
+	// #4: a short filled value (a CVC, an expiry part) is matched only when the
+	// file IS the value, not on an incidental substring — a 2-3 char substring
+	// collides with almost any file, so a substring scan would break downloads.
+	if refuseSecretFile(f, []string{"abc"}) != nil {
+		t.Fatal("a file merely containing a 2-3 char secret substring must not be refused")
+	}
+	short := filepath.Join(root, "short")
+	os.WriteFile(short, []byte("abc\n"), 0o600)
+	if refuseSecretFile(short, []string{"abc"}) == nil {
+		t.Fatal("a file that is exactly a short filled value must be refused")
 	}
 	if refuseSecretFile(f, []string{""}) != nil {
 		t.Fatal("an empty value never matches")

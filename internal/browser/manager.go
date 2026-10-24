@@ -1409,6 +1409,15 @@ func (m *Manager) Peek(ctx context.Context, id string) ([]byte, string, error) {
 	return png, redactURL(u), err
 }
 
+// minFileSubstringLen is the shortest filled value the download guard matches
+// as a substring. A 2–3 char value (a CVC, a 2-letter region or expiry part)
+// collides with almost any file — a price, a date, an order number — so
+// refusing a whole file on an incidental hit breaks ordinary downloads. For a
+// value that short the guard refuses only a file that IS the value (the page
+// offered it back verbatim), never one that merely contains it. Longer values
+// stay a substring match: a password echoed anywhere in a file is still caught.
+const minFileSubstringLen = 4
+
 // refuseSecretFile refuses a downloaded file holding a value filled from a
 // credential (a page offering the password back as a file).
 func refuseSecretFile(path string, secrets []string) error {
@@ -1419,9 +1428,18 @@ func refuseSecretFile(path string, secrets []string) error {
 	if err != nil {
 		return err
 	}
+	content := string(b)
+	trimmed := strings.TrimSpace(content)
 	for _, v := range secrets {
-		if v != "" && strings.Contains(string(b), v) {
-			return fmt.Errorf("the file contains a value filled from a credential — not written to the workspace")
+		switch {
+		case v == "":
+			continue
+		case len(v) >= minFileSubstringLen:
+			if strings.Contains(content, v) {
+				return fmt.Errorf("the file contains a value filled from a credential — not written to the workspace")
+			}
+		case trimmed == v:
+			return fmt.Errorf("the file is a value filled from a credential — not written to the workspace")
 		}
 	}
 	return nil
