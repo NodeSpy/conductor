@@ -240,6 +240,9 @@ func (s *Service) bot(name string) (config.BotConfig, error) {
 
 // Start initializes every bot and runs its loop until ctx ends.
 func (s *Service) Start(ctx context.Context) {
+	// Recover any cross-home reassignment a prior run was interrupted mid-way,
+	// before dispatch can act on a half-moved ticket.
+	s.reconcileTicketClaims()
 	for _, team := range s.Cfg().TeamNames() {
 		if repo := s.TeamRepo(team); repo != nil {
 			if err := repo.Init(ctx); err != nil {

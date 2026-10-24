@@ -43,9 +43,11 @@ const (
 
 // ticketMoving marks a draft claimed for a cross-home reassignment: it is set
 // on the source under its lock before the copy is placed, so a concurrent
-// assign of the same draft sees it as already moved and backs off. It never
-// persists — the claimed stub is dropped on success, the claim released on
-// failure.
+// assign of the same draft sees it as already moved and backs off. In the happy
+// path it does not persist — the claimed stub is dropped once the copy is placed
+// and the claim released if the place fails. A crash between the persisted claim
+// and the place (or a post-place source-removal failure) can leave it behind;
+// reconcileTicketClaims sweeps those on startup.
 const ticketMoving = "(reassigning)"
 
 var labelRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,39}$`)
@@ -108,6 +110,59 @@ type TicketView struct {
 	Links  map[string]any `json:"links,omitempty"`
 	// Spent is what has gone against its spend limit (set when it has one).
 	Spent *SpendStatus `json:"spent,omitempty"`
+}
+
+// reconcileTicketClaims recovers cross-home reassignments interrupted by a
+// crash. The claim (MovedTo == ticketMoving) is persisted to the source before
+// the destination copy is placed and the source removed, so an interruption can
+// leave the sentinel behind: the source is invisible to findTicket, and the
+// ticket is lost if no destination copy landed. On startup, for each stub: if a
+// live copy exists elsewhere the move completed — drop the leftover stub; if
+// none exists the move never landed — clear the claim so the source is live
+// again. Run once from Start, before any dispatch.
+func (s *Service) reconcileTicketClaims() {
+	type stub struct {
+		loc    ticketLoc
+		ticket string
+	}
+	var stubs []stub
+	for _, b := range s.ticketBots() {
+		for id, c := range s.Ledger.Bot(b).Cases {
+			if c.MovedTo == ticketMoving {
+				stubs = append(stubs, stub{ticketLoc{Bot: b, ID: id}, c.Ticket})
+			}
+		}
+	}
+	if q := s.queues(); q != nil {
+		for _, name := range q.QueueNames() {
+			for id, c := range q.Queue(name) {
+				if c.MovedTo == ticketMoving {
+					stubs = append(stubs, stub{ticketLoc{Queue: name, ID: id}, c.Ticket})
+				}
+			}
+		}
+	}
+	for _, st := range stubs {
+		if _, _, err := s.findTicket(st.ticket); err == nil {
+			// A live destination copy exists: the move completed, drop the stub.
+			if st.loc.Queue != "" {
+				_ = s.removeFromQueue(st.loc)
+			} else {
+				_ = s.Ledger.UpdateBot(st.loc.Bot, func(r *store.BotRecord) error {
+					delete(r.Cases, st.loc.ID)
+					return nil
+				})
+			}
+			continue
+		}
+		// No destination copy landed: recover the source.
+		_ = s.updateTicket(st.loc, func(cc *store.Case) error {
+			if cc.MovedTo == ticketMoving {
+				cc.MovedTo = ""
+			}
+			return nil
+		})
+	}
 }
 
 // findTicket finds the live copy of a ticket (never a moved-away stub).
@@ -894,7 +949,15 @@ func (s *Service) TicketAssign(ctx context.Context, a TicketActor, tid, to strin
 				return nil
 			})
 			if err == nil {
-				if _, err = s.placeTicket(moved, assignee); err == nil {
+				var dest ticketLoc
+				if dest, err = s.placeTicket(moved, assignee); err == nil {
+					// The destination copy is live. Remove the source stub; if
+					// the removal fails, the move still succeeded, so finalize the
+					// stub to a real moved-away marker rather than leave the
+					// transient claim dangling forever (findTicket skips both, but
+					// only the sentinel is swept on startup). A lingering source
+					// draft (claim released to "") here would duplicate the live
+					// destination, so we point it at the destination instead.
 					if loc.Queue != "" {
 						err = s.removeFromQueue(loc)
 					} else {
@@ -902,6 +965,17 @@ func (s *Service) TicketAssign(ctx context.Context, a TicketActor, tid, to strin
 							delete(r.Cases, loc.ID)
 							return nil
 						})
+					}
+					if err != nil && claimed {
+						_ = s.updateTicket(loc, func(cc *store.Case) error {
+							if cc.MovedTo == ticketMoving {
+								cc.MovedTo = dest.String()
+							}
+							return nil
+						})
+						// The move landed at the destination; the leftover source
+						// stub is cosmetic (and swept on restart), so do not fail.
+						err = nil
 					}
 				} else if claimed {
 					_ = s.updateTicket(loc, func(cc *store.Case) error {
