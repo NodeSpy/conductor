@@ -164,12 +164,15 @@ func sandboxSeam(cfg *config.Config) bot.Sandbox {
 // at call time: with no browser the view reports spend unknown, as before.
 type spendLedger struct{}
 
-func (spendLedger) SpentOnCase(bot, caseID, currency string) (int64, error) {
+func (spendLedger) SpentOnTicket(ticketID, currency string) (int64, error) {
 	m := browserMgr.Load()
 	if m == nil || m.Purchases == nil {
 		return 0, fmt.Errorf("no browser purchase ledger on this daemon")
 	}
-	return m.Purchases.SpentOnCase(bot, caseID, currency)
+	// The ticket's stable id is the budget key its purchases accrue under, so
+	// the committed total spans every copy — the same key the lifetime cap is
+	// enforced against (H2) and durable across the bot ledger's case prune.
+	return m.Purchases.CommittedCents(ticketID, currency)
 }
 
 // botSessionLookup resolves a sandboxed launch's cwd to the live bot session

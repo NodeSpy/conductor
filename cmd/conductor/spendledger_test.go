@@ -15,19 +15,20 @@ import (
 func TestSpendLedgerReadsLiveBrowser(t *testing.T) {
 	// No browser on this daemon: the ledger reports unknown, not a bogus zero.
 	browserMgr.Store(nil)
-	if _, err := (spendLedger{}).SpentOnCase("a", "cA", "USD"); err == nil {
+	if _, err := (spendLedger{}).SpentOnTicket("T-1", "USD"); err == nil {
 		t.Fatal("with no browser the spend ledger must report it cannot tell, not zero")
 	}
 
+	// A committed purchase under the ticket's stable budget key.
 	purch := &browser.Purchases{Dir: t.TempDir()}
 	if _, err := purch.Propose(browser.Purchase{Card: "visa", Merchant: "https://shop.example.com",
-		Total: 42.50, Currency: "USD", Identity: "agent:a@home", Bot: "a", CaseID: "cA"}, time.Hour); err != nil {
+		Total: 42.50, Currency: "USD", Identity: "agent:a@home", Bot: "a", CaseID: "cA", BudgetKey: "T-1"}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	browserMgr.Store(&browser.Manager{Purchases: purch})
 	defer browserMgr.Store(nil)
 
-	cents, err := (spendLedger{}).SpentOnCase("a", "cA", "USD")
+	cents, err := (spendLedger{}).SpentOnTicket("T-1", "USD")
 	if err != nil {
 		t.Fatal(err)
 	}

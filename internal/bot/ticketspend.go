@@ -22,11 +22,14 @@ import (
 // holds or wrote: a smaller amount, fewer merchants, a card pinned.
 
 // SpendLedger is the purchase ledger as tickets see it (the browser's
-// payments implement it): what has been spent on one bot's case, in a
-// currency. A daemon without one reports nothing spent, and says it can't
+// payments implement it): the durable committed total for a ticket, by its
+// stable id, in a currency — the same total the lifetime cap is enforced
+// against. Keying by the ticket (not its per-bot case copies) means the view
+// does not under-report once a reassigned ticket's old copy is pruned from the
+// bot ledger. A daemon without one reports nothing spent, and says it can't
 // tell.
 type SpendLedger interface {
-	SpentOnCase(bot, caseID, currency string) (cents int64, err error)
+	SpentOnTicket(ticketID, currency string) (cents int64, err error)
 }
 
 // MaxSpendMerchants bounds a limit's merchant list.
@@ -168,27 +171,21 @@ type SpendStatus struct {
 	Why       string `json:"why,omitempty"`
 }
 
-// ticketSpent sums what has been spent on every copy of a ticket (it keeps
-// its spend when it moves from one bot to another).
+// ticketSpent reads the durable committed total for a ticket by its stable id
+// (the same key the lifetime cap is enforced against). It does not sum the
+// ticket's per-bot case copies: a reassigned ticket's old copy is closed and
+// eventually pruned from the bot ledger, but its purchases keep the ticket's
+// budget key, so this never under-reports.
 func (s *Service) ticketSpent(tid string, l *store.SpendLimit) SpendStatus {
 	st := SpendStatus{Currency: l.Currency}
 	if s.Spend == nil {
 		st.Why = "no purchase ledger on this daemon"
 		return st
 	}
-	var total int64
-	for _, b := range s.ticketBots() {
-		for id, c := range s.Ledger.Bot(b).Cases {
-			if c.Ticket != tid {
-				continue
-			}
-			n, err := s.Spend.SpentOnCase(b, id, l.Currency)
-			if err != nil {
-				st.Why = err.Error()
-				return st
-			}
-			total += n
-		}
+	total, err := s.Spend.SpentOnTicket(tid, l.Currency)
+	if err != nil {
+		st.Why = err.Error()
+		return st
 	}
 	limit, _ := parseCents(l.Amount)
 	rem := limit - total

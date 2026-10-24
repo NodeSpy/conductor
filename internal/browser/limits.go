@@ -359,6 +359,35 @@ func (l *Purchases) SpentOnCase(bot, caseID, currency string) (int64, error) {
 	return cents, nil
 }
 
+// CommittedCents sums, in cents, what a ticket's budget holds now — the
+// committing purchases under a budget key, in a currency. It is the durable
+// lifetime total the cap is enforced against (the key is the ticket's stable
+// id), independent of whether the bot's case copies still live in the ledger:
+// a reassigned ticket's old copy is closed and eventually pruned from the bot
+// ledger, but its purchases keep their budget key here, so a ticket's spend
+// view reads this and never under-reports.
+func (l *Purchases) CommittedCents(key, currency string) (int64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	f, err := l.loadLocked()
+	if err != nil {
+		return 0, err
+	}
+	l.expireLocked(f)
+	cur := strings.ToUpper(strings.TrimSpace(currency))
+	var cents int64
+	for _, p := range f.Purchases {
+		if p.BudgetKey != key || !committing[p.Status] {
+			continue
+		}
+		if strings.ToUpper(p.Currency) != cur {
+			continue
+		}
+		cents += int64(math.Round(round2(p.Total) * 100))
+	}
+	return cents, nil
+}
+
 // Committed is what a ticket's budget holds now (pending, approved, being
 // paid, paid), and those purchases.
 func (l *Purchases) Committed(key string) (float64, []string) {

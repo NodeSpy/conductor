@@ -12,17 +12,18 @@ import (
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
-// fakeSpend is a purchase ledger: cents spent per bot/case.
+// fakeSpend is a purchase ledger: cents committed per ticket/currency (the
+// durable total, by the ticket's stable id).
 type fakeSpend struct {
 	cents map[string]int64
 	err   error
 }
 
-func (f *fakeSpend) SpentOnCase(bot, caseID, currency string) (int64, error) {
+func (f *fakeSpend) SpentOnTicket(ticketID, currency string) (int64, error) {
 	if f.err != nil {
 		return 0, f.err
 	}
-	return f.cents[bot+"/"+caseID+"/"+currency], nil
+	return f.cents[ticketID+"/"+currency], nil
 }
 
 func limit(amount string, merchants ...string) *store.SpendLimit {
@@ -158,8 +159,9 @@ func TestTicketSpendLimitOnlyOperatorsRaise(t *testing.T) {
 	}
 }
 
-// SPENT SO FAR: read from the purchase ledger over every copy of the
-// ticket; without a ledger, unknown (and said so).
+// SPENT SO FAR: read the ticket's durable committed total (by its stable id,
+// spanning every copy past and present); without a ledger, unknown (and said
+// so).
 func TestTicketSpentSoFar(t *testing.T) {
 	f := newTeamFixture(t, nil)
 	ctx := context.Background()
@@ -172,11 +174,11 @@ func TestTicketSpentSoFar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	led := &fakeSpend{cents: map[string]int64{"a/" + v.ID + "/USD": 4000, "b/" + moved.ID + "/USD": 3550, "b/" + moved.ID + "/EUR": 99999}}
+	led := &fakeSpend{cents: map[string]int64{v.Ticket + "/USD": 7550, v.Ticket + "/EUR": 99999}}
 	f.svc.Spend = led
 	got, _ := f.svc.TicketShow(v.Ticket)
 	if got.Spent == nil || !got.Spent.Known || got.Spent.Spent != "75.50" || got.Spent.Remaining != "44.50" || got.Spent.Currency != "USD" {
-		t.Fatalf("spent across both copies: %+v", got.Spent)
+		t.Fatalf("spent for the ticket: %+v", got.Spent)
 	}
 	lim, st, ok := f.svc.TicketSpend("b", moved.ID)
 	if !ok || lim.Amount != "120.00" || st.Spent != "75.50" {
@@ -185,7 +187,7 @@ func TestTicketSpentSoFar(t *testing.T) {
 	if _, _, ok := f.svc.TicketSpend("a", v.ID); !ok {
 		t.Fatal("the moved-away copy still names the ticket's limit")
 	}
-	led.cents["b/"+moved.ID+"/USD"] = 20000
+	led.cents[v.Ticket+"/USD"] = 20000
 	if got, _ := f.svc.TicketShow(v.Ticket); got.Spent.Remaining != "0.00" {
 		t.Fatalf("over the limit: %+v", got.Spent)
 	}
