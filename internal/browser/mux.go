@@ -272,6 +272,12 @@ type fileReq struct {
 // transfer (or the lock behind it) forever.
 const fileXferTimeout = 2 * time.Minute
 
+// fileDrainGrace bounds how long an aborted transfer waits for the shim to go
+// quiet on the file channel before the lock is freed. It is reset on every
+// frame received, so a shim still streaming is drained in full (no give-up
+// while bytes are in flight); it only fires on silence.
+const fileDrainGrace = 2 * time.Second
+
 // Get copies a file out of the container's transfer directory (at most max
 // bytes) to w.
 func (m *Mux) Get(ctx context.Context, path string, max int64, w io.Writer) (int64, error) {
@@ -284,28 +290,51 @@ func (m *Mux) Put(ctx context.Context, path string, r io.Reader) error {
 	return err
 }
 
-func (m *Mux) transfer(ctx context.Context, req fileReq, in io.Reader, out io.Writer) (int64, error) {
+func (m *Mux) transfer(ctx context.Context, req fileReq, in io.Reader, out io.Writer) (total int64, err error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, fileXferTimeout)
 		defer cancel()
 	}
 	m.fileMu.Lock()
-	defer m.fileMu.Unlock()
 	replies := make(chan fileMsg, 64)
 	c := &muxChan{file: replies}
 	m.mu.Lock()
 	m.chans[chanFile] = c
 	m.mu.Unlock()
+	requested := false
+	clean := false
+	// On a clean finish the shim has already closed its side (replies closed),
+	// so free the slot and the lock here. On an abnormal exit — the caller's
+	// context fired, a write failed, the size limit tripped — the shim may
+	// still be mid-transfer on this one shared channel; releasing now would let
+	// the next transfer register and absorb this one's stale frames (or leave a
+	// put's file open on the shim). Hand the drain to a goroutine that tells the
+	// shim to end, consumes its remaining frames until it goes quiet, and only
+	// then frees the lock. The caller returns now with its error; the next
+	// transfer waits on fileMu until the channel is quiesced. (A sync.Mutex may
+	// be unlocked by a different goroutine than locked it.)
 	defer func() {
+		if requested && !clean {
+			go func() {
+				m.quiesceFile(c)
+				m.mu.Lock()
+				delete(m.chans, chanFile)
+				m.mu.Unlock()
+				m.fileMu.Unlock()
+			}()
+			return
+		}
 		m.mu.Lock()
 		delete(m.chans, chanFile)
 		m.mu.Unlock()
+		m.fileMu.Unlock()
 	}()
 	b, _ := json.Marshal(req)
 	if err := m.send(frameFile, chanFile, b); err != nil {
 		return 0, err
 	}
+	requested = true
 	if in != nil {
 		buf := make([]byte, 32<<10)
 		for {
@@ -333,7 +362,6 @@ func (m *Mux) transfer(ctx context.Context, req fileReq, in io.Reader, out io.Wr
 	// close. A shim that stalls mid-reply (no EOF, no error) never closes
 	// replies, so the loop also watches ctx — the transfer unblocks on the
 	// deadline instead of holding fileMu forever.
-	var total int64
 	var status string
 	for {
 		var msg fileMsg
@@ -361,6 +389,9 @@ func (m *Mux) transfer(ctx context.Context, req fileReq, in io.Reader, out io.Wr
 			}
 		}
 	}
+	// The loop broke on a closed reply channel: the shim finished and closed its
+	// side, so the slot and lock can be freed without draining.
+	clean = true
 	if status != "ok" {
 		if status == "" {
 			status = "the container closed the transfer"
@@ -368,4 +399,39 @@ func (m *Mux) transfer(ctx context.Context, req fileReq, in io.Reader, out io.Wr
 		return total, fmt.Errorf("container transfer: %s", status)
 	}
 	return total, nil
+}
+
+// quiesceFile ends an aborted transfer cleanly. It tells the shim to close the
+// transfer (a pending put's file is closed; a get already closes its own
+// stream), then drains the reply channel until the shim goes quiet — so no
+// stale frame is left to cross into the next transfer. The grace is reset on
+// every frame, so a shim still streaming is drained in full; a shim gone silent
+// (or a dead mux) ends the wait. A shim that resumes streaming after the grace
+// is the one residual window, bounded to mixing this container's own transfers.
+func (m *Mux) quiesceFile(c *muxChan) {
+	_ = m.send(frameClose, chanFile, nil)
+	c.cmu.Lock()
+	replies := c.file
+	c.cmu.Unlock()
+	if replies == nil {
+		return
+	}
+	t := time.NewTimer(fileDrainGrace)
+	defer t.Stop()
+	for {
+		select {
+		case _, ok := <-replies:
+			if !ok {
+				return
+			}
+			if !t.Stop() {
+				<-t.C
+			}
+			t.Reset(fileDrainGrace)
+		case <-m.done:
+			return
+		case <-t.C:
+			return
+		}
+	}
 }
