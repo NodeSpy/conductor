@@ -714,6 +714,13 @@ func RequesterClass(cfg *config.Config, bot, requester string) (string, string) 
 	return classifyAgainst(cfg, cfg.BotOperators(bot), requester)
 }
 
+// RequesterClassFor classifies an intake that carries event provenance (a
+// source): an empty requester is `event` only when the source vouches for it;
+// a requester-less and source-less intake drops to the least trusted class.
+func RequesterClassFor(cfg *config.Config, bot, requester, source string) (string, string) {
+	return sourcedClass(cfg, cfg.BotOperators(bot), requester, source)
+}
+
 // Deliver routes an event into a bot: a case, an inbox message, and —
 // for an urgent event — a worker started immediately, so urgent work never
 // waits behind the home conversation.
@@ -721,7 +728,7 @@ func (s *Service) Deliver(ctx context.Context, ev Event) (string, error) {
 	if _, err := s.bot(ev.Bot); err != nil {
 		return "", err
 	}
-	who, class := RequesterClass(s.Cfg(), ev.Bot, ev.Requester)
+	who, class := RequesterClassFor(s.Cfg(), ev.Bot, ev.Requester, ev.Source)
 	return s.deliverCase(ctx, ev, who, class, nil, "")
 }
 

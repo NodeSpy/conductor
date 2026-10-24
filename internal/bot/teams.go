@@ -81,7 +81,11 @@ func (s *Service) TeamRepo(team string) *Repo {
 	return r
 }
 
-// classifyAgainst is RequesterClass for an explicit operator list.
+// classifyAgainst is RequesterClass for an explicit operator list: the pure
+// mapping of a requester string to (who, class). An empty requester is the
+// `event` tier — its documented contract. The provenance guard that drops a
+// requester-less AND source-less intake to the least trusted class lives at
+// the intake (sourcedClass / RouteTeam / Deliver), where the source is known.
 func classifyAgainst(cfg *config.Config, ops []string, requester string) (string, string) {
 	r := requester
 	if strings.TrimSpace(r) == "" {
@@ -98,6 +102,20 @@ func classifyAgainst(cfg *config.Config, ops []string, requester string) (string
 		}
 	}
 	return r, ReqUser
+}
+
+// sourcedClass classifies an intake against an operator list, then applies the
+// provenance guard: a real event carries a source (an alert, a schedule, a
+// webhook) even when no human requester is named, and stays `event`-autonomous.
+// A truly provenance-less intake — no requester AND no source — drops to the
+// least trusted class, so a forged or defaulted empty intake can never borrow
+// an event's promotion past observe/propose.
+func sourcedClass(cfg *config.Config, ops []string, requester, source string) (string, string) {
+	who, class := classifyAgainst(cfg, ops, requester)
+	if class == ReqEvent && strings.TrimSpace(requester) == "" && strings.TrimSpace(source) == "" {
+		return "", ReqUser
+	}
+	return who, class
 }
 
 // atBot bounds an intake attribution by what the receiving bot makes
@@ -124,7 +142,7 @@ func (s *Service) RouteTeam(ctx context.Context, ev TeamEvent) (map[string]any, 
 	if r == nil {
 		return nil, fmt.Errorf("team %s has no routing:", ev.Team)
 	}
-	who, class := classifyAgainst(cfg, cfg.TeamOperators(ev.Team), ev.Requester)
+	who, class := sourcedClass(cfg, cfg.TeamOperators(ev.Team), ev.Requester, ev.Source)
 	rt := store.Routing{Team: ev.Team, At: s.now()}
 	for i, rule := range r.Rules {
 		if ruleMatches(rule, ev) {
