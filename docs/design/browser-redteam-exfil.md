@@ -208,7 +208,7 @@ mitigation: an echo of a 3-digit CVC or a 2-digit expiry part **elsewhere** on
 the page — a confirmation element distinct from the `cc-csc` input, an
 order-review PDF — still reached the agent's next `snapshot` / `source` /
 `screenshot` / `evaluate` read, and a downloaded file holding the plain CVC was
-not refused (`refuseSecretFile` re-applied the same `len(v) >= 4` guard). The
+not caught (the download guard re-applied the same `len(v) >= 4` cutoff). The
 exact-filled input node was masked by id at any length, so the leak was
 specifically the echo, not the field.
 
@@ -219,13 +219,22 @@ The fix closes the cutoff at the single chokepoint instead of per call site:
 - `secretValues()` returns `secrets` **and** `secretsShort`, and every
   agent-visible path already reads it — `scrub`/`scrubAny` (replies, snapshots,
   source, evaluate), `secretRectsJS` (the screenshot rect search), and
-  `refuseSecretFile` (the download guard, whose own `len(v) >= 4` guard is
-  removed). `scrubAll` is now an alias of `scrub`, kept at the receipt call
-  sites to mark where a value is pulled out of a page's own text.
+  `screenSecretFile` (the download guard). `scrubAll` is now an alias of `scrub`,
+  kept at the receipt call sites to mark where a value is pulled out of a page's
+  own text.
 
-A short value is therefore scrubbed from every reply and refused in a download,
-the same as a long one; the page-shred tradeoff is accepted — a redacted box
-where a CVC would print beats leaking the CVC. The node mask is unchanged, so
+The download guard (`screenSecretFile`, #4) splits by length rather than refuse
+all-or-nothing: a long value (`len(v) >= 4`) present anywhere still refuses the
+whole file (a credential reflected back as a file), but a short value is
+**redacted out of the written content** — the same substring scrub every other
+path applies — instead of either refusing the whole file (a 2–3 char value
+collides with almost any receipt — a price, a date, an order number) or, worse,
+passing it through on an exact-match-only guard. So a downloaded file that embeds
+a 3-char CVC is written with the CVC redacted: not leaked, not refused.
+
+A short value is therefore scrubbed from every reply and from a download's
+content, the same as a long one; the page-shred tradeoff is accepted — a redacted
+box where a CVC would print beats leaking the CVC. The node mask is unchanged, so
 the exact field is still masked by id regardless of length.
 
 Proof: `TestShortSecretCoveredEverywhere` (scrub, scrubAny, `secretValues`, the

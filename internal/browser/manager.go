@@ -20,6 +20,7 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -760,21 +761,18 @@ func (m *Manager) landDownload(in *Instance, c Principal, loggedIn bool, d *Down
 		return
 	}
 	defer os.Remove(src)
-	if err := refuseSecretFile(src, in.secretValues()); err != nil {
+	content, err := screenSecretFile(src, in.secretValues())
+	if err != nil {
 		in.setDownload(d, func(d *Download) { d.State, d.Err = "refused", err.Error() })
 		entry["outcome"], entry["reason"] = "refused", err.Error()
 		audit()
 		return
 	}
-	f, err := os.Open(src)
+	var rel string
+	rel, err = writeWorkspace(c.Workspace, filepath.Join(OutDir, "downloads", safeName(d.Name)), c.deny(), bytes.NewReader(content), st.MaxDownload)
 	if err == nil {
-		defer f.Close()
-		var rel string
-		rel, err = writeWorkspace(c.Workspace, filepath.Join(OutDir, "downloads", safeName(d.Name)), c.deny(), f, st.MaxDownload)
-		if err == nil {
-			in.setDownload(d, func(d *Download) { d.Path = rel })
-			entry["path"], entry["outcome"] = rel, "ok"
-		}
+		in.setDownload(d, func(d *Download) { d.Path = rel })
+		entry["path"], entry["outcome"] = rel, "ok"
 	}
 	if err != nil {
 		in.setDownload(d, func(d *Download) { d.State, d.Err = "refused", err.Error() })
@@ -1416,40 +1414,51 @@ func (m *Manager) Peek(ctx context.Context, id string) ([]byte, string, error) {
 	return png, redactURL(u), err
 }
 
-// minFileSubstringLen is the shortest filled value the download guard matches
-// as a substring. A 2–3 char value (a CVC, a 2-letter region or expiry part)
-// collides with almost any file — a price, a date, an order number — so
-// refusing a whole file on an incidental hit breaks ordinary downloads. For a
-// value that short the guard refuses only a file that IS the value (the page
-// offered it back verbatim), never one that merely contains it. Longer values
-// stay a substring match: a password echoed anywhere in a file is still caught.
+// minFileSubstringLen splits how the download guard treats a filled value by
+// length. A value of this length or more (a password, a full card number) is
+// high-entropy: if it appears anywhere in a downloaded file the file is the
+// credential reflected back, and the whole file is refused. A 2–3 char value
+// (a CVC, a 2-letter region or expiry part) collides with almost any file — a
+// price, a date, an order number — so refusing on it breaks ordinary downloads
+// and matching it exactly leaks the value when it is merely embedded; instead
+// it is redacted from the content the same way scrub() redacts it on every
+// other agent-visible path, and the scrubbed file is written.
 const minFileSubstringLen = 4
 
-// refuseSecretFile refuses a downloaded file holding a value filled from a
-// credential (a page offering the password back as a file).
-func refuseSecretFile(path string, secrets []string) error {
-	if len(secrets) == 0 {
-		return nil
-	}
+// screenSecretFile guards a downloaded file against values filled from a
+// credential. It returns the content to write and, separately, whether to
+// refuse: a long value (>= minFileSubstringLen) present anywhere refuses the
+// whole file (err != nil); a short value is redacted from the returned content
+// (never leaked, never a false-positive refusal). A file with no filled value
+// is returned byte-for-byte.
+func screenSecretFile(path string, secrets []string) ([]byte, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if len(secrets) == 0 {
+		return b, nil
 	}
 	content := string(b)
-	trimmed := strings.TrimSpace(content)
 	for _, v := range secrets {
-		switch {
-		case v == "":
+		if v == "" || len(v) < minFileSubstringLen {
 			continue
-		case len(v) >= minFileSubstringLen:
-			if strings.Contains(content, v) {
-				return fmt.Errorf("the file contains a value filled from a credential — not written to the workspace")
-			}
-		case trimmed == v:
-			return fmt.Errorf("the file is a value filled from a credential — not written to the workspace")
+		}
+		if strings.Contains(content, v) {
+			return nil, fmt.Errorf("the file contains a value filled from a credential — not written to the workspace")
 		}
 	}
-	return nil
+	scrubbed := content
+	for _, v := range secrets {
+		if v == "" || len(v) >= minFileSubstringLen {
+			continue
+		}
+		scrubbed = strings.ReplaceAll(scrubbed, v, Redacted)
+	}
+	if scrubbed == content {
+		return b, nil
+	}
+	return []byte(scrubbed), nil
 }
 
 // LoginAllow is the allowlist of a browser logged in to sites.

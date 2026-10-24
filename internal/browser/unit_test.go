@@ -392,11 +392,14 @@ func TestScrub(t *testing.T) {
 	}
 	f := filepath.Join(t.TempDir(), "d")
 	os.WriteFile(f, []byte("xx hunter22 yy"), 0o600)
-	if refuseSecretFile(f, in.secretValues()) == nil {
+	if _, err := screenSecretFile(f, in.secretValues()); err == nil {
 		t.Fatal("a download holding a filled value")
 	}
 	os.WriteFile(f, []byte("clean"), 0o600)
-	if refuseSecretFile(f, in.secretValues()) != nil || refuseSecretFile(f, nil) != nil {
+	if _, e1 := screenSecretFile(f, in.secretValues()); e1 != nil {
+		t.Fatal("a clean download")
+	}
+	if _, e2 := screenSecretFile(f, nil); e2 != nil {
 		t.Fatal("a clean download")
 	}
 }
@@ -596,21 +599,21 @@ func TestBoundaries(t *testing.T) {
 	}
 	f := filepath.Join(root, "dl")
 	os.WriteFile(f, []byte("xx abcd yy"), 0o600)
-	if refuseSecretFile(f, []string{"abcd"}) == nil {
+	if _, err := screenSecretFile(f, []string{"abcd"}); err == nil {
 		t.Fatal("a 4-character filled value in a download")
 	}
-	// #4: a short filled value (a CVC, an expiry part) is matched only when the
-	// file IS the value, not on an incidental substring — a 2-3 char substring
-	// collides with almost any file, so a substring scan would break downloads.
-	if refuseSecretFile(f, []string{"abc"}) != nil {
-		t.Fatal("a file merely containing a 2-3 char secret substring must not be refused")
+	// #4: a short filled value (a CVC, an expiry part) is never a false-positive
+	// refusal — a 2-3 char substring collides with almost any file — and never
+	// leaks: it is redacted out of the content the same way scrub() does
+	// everywhere else, and the scrubbed file is written.
+	got, err := screenSecretFile(f, []string{"abc"})
+	if err != nil {
+		t.Fatalf("a file merely containing a 2-3 char secret substring must not be refused: %v", err)
 	}
-	short := filepath.Join(root, "short")
-	os.WriteFile(short, []byte("abc\n"), 0o600)
-	if refuseSecretFile(short, []string{"abc"}) == nil {
-		t.Fatal("a file that is exactly a short filled value must be refused")
+	if strings.Contains(string(got), "abc") || !strings.Contains(string(got), Redacted) {
+		t.Fatalf("the short secret was not redacted from the written content: %q", got)
 	}
-	if refuseSecretFile(f, []string{""}) != nil {
+	if _, err := screenSecretFile(f, []string{""}); err != nil {
 		t.Fatal("an empty value never matches")
 	}
 	if got := safeName(strings.Repeat("a", 116) + ".txt"); len(got) != 120 || got != strings.Repeat("a", 116)+".txt" {

@@ -38,10 +38,10 @@ func TestShortSecretCoveredEverywhere(t *testing.T) {
 	}
 
 	// 4. The download guard covers the short value without breaking ordinary
-	//    files: a file that merely contains the 3-digit CVC as an incidental
-	//    substring downloads fine (a bare substring scan would refuse it — #4),
-	//    while a file that IS the CVC, or one echoing the long secret, is
-	//    refused.
+	//    files AND without leaking the value (#4): a short value is redacted from
+	//    the written content the same way scrub() redacts it elsewhere — whether
+	//    it is embedded among other text or is the whole file. A file echoing the
+	//    long secret is still refused outright (the credential reflected back).
 	write := func(body string) string {
 		f := filepath.Join(t.TempDir(), "f.txt")
 		if err := os.WriteFile(f, []byte(body), 0o600); err != nil {
@@ -49,13 +49,20 @@ func TestShortSecretCoveredEverywhere(t *testing.T) {
 		}
 		return f
 	}
-	if err := refuseSecretFile(write("thanks! order 1123 total 05 on file\n"), in.secretValues()); err != nil {
+	// Embedded 3-digit CVC: written, the value redacted, the rest kept.
+	dl, err := screenSecretFile(write("thanks! order 1123 total 05 on file\n"), in.secretValues())
+	if err != nil {
 		t.Fatalf("H1: a legitimate file with an incidental short substring was refused: %v", err)
 	}
-	if err := refuseSecretFile(write("123\n"), in.secretValues()); err == nil {
-		t.Fatal("H1: a downloaded file that is the 3-digit CVC was not refused")
+	if strings.Contains(string(dl), "123") || !strings.Contains(string(dl), "order 1") {
+		t.Fatalf("H1: the CVC was not redacted out of the embedded text, or redaction cut too much: %q", dl)
 	}
-	if err := refuseSecretFile(write("pw hunt3 leaked\n"), in.secretValues()); err == nil {
+	// A file that IS the CVC: written, redacted — not leaked, not refused.
+	if dl, err := screenSecretFile(write("123\n"), in.secretValues()); err != nil || strings.Contains(string(dl), "123") {
+		t.Fatalf("H1: a file that is the 3-digit CVC must be written with the CVC redacted: %q err=%v", dl, err)
+	}
+	// A file echoing the long (>=4) secret is still refused.
+	if _, err := screenSecretFile(write("pw hunt3 leaked\n"), in.secretValues()); err == nil {
 		t.Fatal("H1: a downloaded file echoing the long secret was not refused")
 	}
 }
