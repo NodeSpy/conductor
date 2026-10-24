@@ -26,6 +26,8 @@ func (f *fakeSpend) SpentOnTicket(ticketID, currency string) (int64, error) {
 	return f.cents[ticketID+"/"+currency], nil
 }
 
+func (f *fakeSpend) CloseTicket(string) error { return nil }
+
 func limit(amount string, merchants ...string) *store.SpendLimit {
 	return &store.SpendLimit{Amount: amount, Merchants: merchants}
 }

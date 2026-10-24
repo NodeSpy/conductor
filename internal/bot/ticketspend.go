@@ -30,6 +30,10 @@ import (
 // tell.
 type SpendLedger interface {
 	SpentOnTicket(ticketID, currency string) (cents int64, err error)
+	// CloseTicket reclaims a closed ticket's purchase records (its committing
+	// spend counts toward no open cap once terminal), keyed by the ticket's
+	// stable id. A no-op where no record matches.
+	CloseTicket(ticketID string) error
 }
 
 // MaxSpendMerchants bounds a limit's merchant list.

@@ -1517,6 +1517,14 @@ func (s *Service) closeCase(ctx context.Context, bot, caseID, outcome, status, b
 	if err != nil {
 		return store.Case{}, err
 	}
+	// A closed ticket's purchases count toward no open cap: reclaim them from the
+	// spend ledger so the ledger does not grow a record per purchase forever (#1).
+	// Keyed by the ticket's stable id; a plain (non-ticket) case has none.
+	if s.Spend != nil && cs.Ticket != "" {
+		if err := s.Spend.CloseTicket(cs.Ticket); err != nil {
+			s.logf("%s: prune purchases for closed ticket %s: %v", bot, cs.Ticket, err)
+		}
+	}
 	repo := s.Repo(bot)
 	entry := fmt.Sprintf("## %s — closed\n\nSource: %s · requester: %s (%s)\n\nOutcome: %s\n", s.now().UTC().Format(time.RFC3339), cs.Source, orDash(cs.Requester), cs.RequesterClass, strings.TrimSpace(outcome))
 	_, err = repo.AppendLog(ctx, repo.EpisodePath(cs.ID, cs.Title, cs.Created), logFM(cs), entry, "episode: case "+cs.ID+" closed", map[string]string{"Bot-Case": cs.ID})

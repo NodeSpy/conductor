@@ -16,6 +16,11 @@ func (x purchasesLedger) SpentOnTicket(ticketID, currency string) (int64, error)
 	return x.p.CommittedCents(ticketID, currency)
 }
 
+func (x purchasesLedger) CloseTicket(ticketID string) error {
+	_, err := x.p.PruneTicket(ticketID)
+	return err
+}
+
 // A ticket's spend view must read the durable per-ticket total, not sum the
 // ticket's per-bot case copies: a reassigned ticket's old copy is closed and
 // eventually pruned from the bot ledger, but its spend stays in the purchase

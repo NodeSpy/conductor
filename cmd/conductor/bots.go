@@ -175,6 +175,18 @@ func (spendLedger) SpentOnTicket(ticketID, currency string) (int64, error) {
 	return m.Purchases.CommittedCents(ticketID, currency)
 }
 
+// CloseTicket reclaims a closed ticket's purchase records from the live ledger
+// (its budget key is the ticket's stable id), bounding the ledger's growth (#1).
+// With no browser there is nothing to prune.
+func (spendLedger) CloseTicket(ticketID string) error {
+	m := browserMgr.Load()
+	if m == nil || m.Purchases == nil {
+		return nil
+	}
+	_, err := m.Purchases.PruneTicket(ticketID)
+	return err
+}
+
 // botSessionLookup resolves a sandboxed launch's cwd to the live bot session
 // running in it (home or hand-off worker). wireAgentSandbox hands it to the
 // agent sandbox resolver. buildBots runs before wireAgentSandbox, so the

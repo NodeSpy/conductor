@@ -273,6 +273,32 @@ func pruneLocked(f *purchasesFile) {
 	}
 }
 
+// PruneTicket drops a closed ticket's terminal purchase records. A committing
+// (used/completed) purchase under a ticket's budget key is normally retained
+// forever (prunable keeps it so the lifetime cap can sum it — 90e695bb), but
+// once the ticket is CLOSED its spend counts toward no open cap, so holding one
+// record per purchase across every ticket ever grows the ledger without bound.
+// Called from the ticket-close path with the ticket's stable id (its budget
+// key). Only terminal records are evicted — a still-pending/approved purchase
+// under a closing ticket is left to settle (and the ordinary prune reclaims it).
+// Returns how many were dropped.
+func (l *Purchases) PruneTicket(key string) (int, error) {
+	if key == "" {
+		return 0, nil
+	}
+	n := 0
+	err := l.update(func(f *purchasesFile) error {
+		for id, p := range f.Purchases {
+			if p.BudgetKey == key && purchaseTerminal(p.Status) {
+				delete(f.Purchases, id)
+				n++
+			}
+		}
+		return nil
+	})
+	return n, err
+}
+
 // Get returns one purchase (expiring it first if its time passed).
 func (l *Purchases) Get(id string) (Purchase, bool, error) {
 	var out Purchase
