@@ -254,6 +254,19 @@ type Dispatcher struct {
 	// fresh worktree. Opt-in; set from top-level config.
 	AdoptOpenWorkspaces bool
 
+	// HeadlessMode is the paseo runtime's `headless_mode:` — how a headless
+	// agent's launch mode is chosen (headless_mode.go). The zero value is the
+	// default: each known provider's no-prompt mode.
+	HeadlessMode config.HeadlessMode
+
+	// headlessWarned remembers the providers already logged as having no known
+	// no-prompt mode, so each is logged once.
+	headlessWarned sync.Map
+
+	// Logf, when set, receives the dispatcher's own operational log lines.
+	// nil logs nowhere.
+	Logf func(format string, args ...any)
+
 	// backendImpl is the paseo-daemon Backend this Dispatcher drives. nil (the
 	// default, and every existing construction path) uses cliBackend — the
 	// CLI-shelling implementation that is behavior-identical to the

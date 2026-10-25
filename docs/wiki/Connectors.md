@@ -78,7 +78,14 @@ Like every installed plugin, its events carry the semantics its declaration
 gives them (a `new_comment` dedupes on its comment cursor, a `_closed` ends
 the PR's runs, …) and its targets are taken as the platform assigned them:
 trust in a plugin is decided once, at install (`plugin_trust:`), and after
-that all plugins are equal. `api_base:` is how the plugin reaches GitHub
+that all plugins are equal.
+
+A level event (a review pending, changes requested, a conflict) does not
+start a second run while an agent is already working on the same target. If
+the event names new items — it carries a cursor, as `changes_requested` does
+for the reviews it covers — it is held and delivered again when that run
+ends, so a review submitted mid-run is not lost. An event without a cursor is
+dropped; the connector's next poll reads the condition again. `api_base:` is how the plugin reaches GitHub
 Enterprise Server or a test double — a plugin's environment is scrubbed, so
 it reads no API base from the environment.
 

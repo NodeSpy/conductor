@@ -184,7 +184,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 		}
 		run := e.newFlowRun(t, spec, false)
 		defer e.recoverDispatch(ctx, t, run, "flow dispatch")
-		e.flow.Run(ctx, run, t, spec, tidx, batch, false)
+		e.runFlow(ctx, run, t, spec, tidx, batch)
 	}()
 }
 
@@ -276,6 +276,15 @@ func (e *Engine) coalesceQueued(t core.Trigger) bool {
 
 // runBatch fires a grouped batch: the last event is the representative
 // trigger (freshest context/tokens), the whole burst rides under {{.group.*}}.
+// runFlow runs one (non-shadow) flow run, then re-delivers what the live gate
+// held on its target while it ran (heldlevel.go). Every non-shadow flow run —
+// fresh, batch, resumed, retried — goes through here, so none can end without
+// it. Deferred: a run that panics still ended.
+func (e *Engine) runFlow(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, tidx int, batch *flow.Batch) {
+	defer e.redeliverHeld(t.Key())
+	e.flow.Run(ctx, run, t, spec, tidx, batch, false)
+}
+
 func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 	if len(events) == 0 {
 		return
@@ -322,7 +331,7 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 	}
 	defer e.release()
 	run := e.newFlowRun(t, spec, false)
-	e.flow.Run(ctx, run, t, spec, tidx, &flow.Batch{Key: gkey, Events: events}, false)
+	e.runFlow(ctx, run, t, spec, tidx, &flow.Batch{Key: gkey, Events: events})
 }
 
 // recordBatch writes each grouped event's dedup/attempt/comment-mark state
@@ -447,7 +456,7 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 		}
 		defer e.release()
 		defer e.recoverDispatch(ctx, t, r, "flow resume")
-		e.flow.Run(ctx, r, t, spec, tidx, nil, false)
+		e.runFlow(ctx, r, t, spec, tidx, nil)
 	}()
 }
 
@@ -554,6 +563,7 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			}
 			go func() { _ = e.archiveAgent(context.Background(), agentID) }()
 		},
+		TakeDone: e.TakeEarlyDone,
 		// The agents/hour cap, shared with the legacy steps: path so a flood
 		// through either is counted against one window.
 		CheckRate: func() error {

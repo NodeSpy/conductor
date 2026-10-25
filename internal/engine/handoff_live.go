@@ -87,6 +87,10 @@ func (e *Engine) releaseHandoff(ctx context.Context, agentID, prKey, stepID stri
 	e.hold.Remove(agentID)
 	e.deregisterLiveHandoff(agentID)
 	e.revokeHandoffSession(agentID)
+	// The hand-off was a live agent on its target: what the live gate held
+	// while it was parked goes back through the gates once it is gone. No
+	// flow run ends here (the run that armed it returned long ago).
+	defer e.redeliverHeld(prKey)
 	if agentID == "" || e.affinityOwns(agentID) || e.disp == nil {
 		return
 	}
@@ -237,8 +241,10 @@ func (e *Engine) doneSignal(ctx context.Context, dispatchID, agentID, reason str
 //   - a live hand-off → full hand-off teardown (watch loop, review channel,
 //     hold) + archive, via handoffDone;
 //   - a dispatch conductor is still blocked on (foreground, in flight) → mark
-//     only: the step-boundary archive reclaims it after the output is captured,
-//     so a done call can never cut off the output conductor is waiting on;
+//     only: the step boundary reclaims it after the output is captured (see
+//     TakeEarlyDone), so a done call can never cut off the output conductor is
+//     waiting on. The reason is parked so a step that keeps its agents
+//     (archive_when_done: false) still reclaims one that explicitly signalled;
 //   - otherwise → archive the agent + its workspace now (ledger-gated: the
 //     dispatcher refuses anything conductor didn't launch).
 //
@@ -258,8 +264,11 @@ func (e *Engine) StepDone(ctx context.Context, dispatchID, agentID, reason strin
 	}
 	// A dispatch conductor is still blocked on defers to the step boundary —
 	// before its agent is even bound (paseo binds it when its run returns),
-	// so an eager done mid-run is accepted, not refused.
+	// so an eager done mid-run is accepted, not refused. The reason is parked
+	// for the step boundary (TakeEarlyDone), so a step that keeps its agents
+	// still reclaims one that explicitly signalled.
 	if dispatchID != "" && runner.DispatchInFlight(dispatchID) {
+		e.earlyDone.Store(dispatchID, reason)
 		e.log("step.done from dispatch %s (%s) — still in flight; reclaiming at step boundary", dispatchID, reason)
 		return nil
 	}
@@ -273,6 +282,19 @@ func (e *Engine) StepDone(ctx context.Context, dispatchID, agentID, reason strin
 	return e.disp.Archive(context.WithoutCancel(ctx), agentID)
 }
 
+// TakeEarlyDone reports, and clears, whether the dispatch's agent called
+// step.done while conductor was still blocked on it. The step boundary consults
+// it once the output is captured: an agent that signalled done is reclaimed
+// even when its step keeps agents (archive_when_done: false), since nothing
+// else would ever archive it.
+func (e *Engine) TakeEarlyDone(dispatchID string) bool {
+	if dispatchID == "" {
+		return false
+	}
+	_, ok := e.earlyDone.LoadAndDelete(dispatchID)
+	return ok
+}
+
 // controllerStepDone resolves a done call for a dispatch a controller runtime
 // (cli, acp, …) launched: a foreground dispatch still in flight defers to the
 // step boundary; otherwise the runner that opened the session archives it.
@@ -283,6 +305,7 @@ func (e *Engine) controllerStepDone(ctx context.Context, dispatchID, reason stri
 	}
 	for _, r := range e.controllers.Runners() {
 		if r.DispatchInFlight(dispatchID) {
+			e.earlyDone.Store(dispatchID, reason)
 			e.log("step.done for dispatch %s (%s) — still in flight; reclaiming at step boundary", dispatchID, reason)
 			return true, nil
 		}

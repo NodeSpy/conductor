@@ -199,6 +199,9 @@ type Config struct {
 	// configured.
 	Browser *BrowserConfig `yaml:"browser,omitempty"`
 
+	// Dashboard is the optional local web surface (design §6.2); off by default.
+	Dashboard DashboardConfig `yaml:"dashboard"`
+
 	Store  Store  `yaml:"store"`
 	Update Update `yaml:"update"`
 	DryRun bool   `yaml:"dry_run"`
@@ -498,8 +501,9 @@ type ControllerConfig struct {
 	// Reserved for the cli-controller milestone.
 	Tool    string   `yaml:"tool"`
 	Command []string `yaml:"command"`
-	// Bin is the runtime binary (paseo/agent-deck); for agent-deck it wins over
-	// the command/tool/"agent-deck" bin resolution. For paseo, exactly one
+	// Bin is the runtime binary (paseo/agent-deck/cli); for agent-deck it wins
+	// over the command/tool/"agent-deck" bin resolution, and for a cli runtime
+	// it replaces a built-in recipe's executable (see controller.cliRecipeFor). For paseo, exactly one
 	// distinct Bin may be set across all paseo runtimes/controllers combined
 	// (see cmd/conductor's resolvePaseoBin).
 	Bin string `yaml:"bin"`
@@ -1356,6 +1360,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateCallable(); err != nil {
+		return err
+	}
+	if err := c.validateDashboard(); err != nil {
 		return err
 	}
 	return nil

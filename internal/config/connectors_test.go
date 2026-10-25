@@ -1118,6 +1118,48 @@ triggers:
 	}
 }
 
+// `bin:` is a cli runtime's executable for its built-in recipe, so it loads
+// (alone, or with a tool / host); with `command:` — which names its own
+// executable — it is refused rather than one silently winning.
+func TestCLIRuntimeBin(t *testing.T) {
+	doc := func(rt string) string {
+		return `
+connectors:
+  timer: { use: cron, schedules: { tick: { every: 1h } } }
+hosts:
+  box: { host: box.example }
+runtimes:
+  r: ` + rt + `
+triggers:
+  - on: timer.tick
+    steps: [{ id: t, type: command, command: ["true"] }]
+`
+	}
+	for _, ok := range []string{
+		`{ use: cli, tool: claude-code, bin: ~/.local/bin/claude-wrap }`,
+		`{ use: cli, tool: codex, bin: /opt/codex }`,
+		`{ use: cli, tool: claude-code, bin: /opt/claude, host: box }`,
+		`{ transport: cli, tool: claude-code, bin: /opt/claude }`,
+	} {
+		cfg, err := loadDoc(t, doc(ok))
+		if err != nil {
+			t.Errorf("%s: bin: on a cli runtime must load: %v", ok, err)
+			continue
+		}
+		if cfg.Runtimes["r"].Controller().Bin == "" {
+			t.Errorf("%s: bin: must reach the controller config", ok)
+		}
+	}
+	for _, bad := range []string{
+		`{ use: cli, command: [mytool, --x], bin: /opt/other }`,
+		`{ transport: cli, command: [mytool], bin: /opt/other }`,
+	} {
+		if _, err := loadDoc(t, doc(bad)); err == nil || !strings.Contains(err.Error(), "not both") {
+			t.Errorf("%s: want the bin/command conflict error, got %v", bad, err)
+		}
+	}
+}
+
 // `retry:` is a host-owned connection key any connector may carry: the
 // dispatch retry policy is the first one (by connector name), else defaults.
 func TestDispatchRetryFromAConnector(t *testing.T) {

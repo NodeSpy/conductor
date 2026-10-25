@@ -173,6 +173,10 @@
       "name": "rerequest_review",
       "desc": "re-request review from reviewers whose latest review requested changes on an older commit (skips approvers, pending requests, closed PRs)",
       "options": {
+        "all_outstanding": {
+          "type": "boolean",
+          "desc": "default false: also ping every other reviewer whose latest review is CHANGES_REQUESTED, through the same only_outstanding checks (bots and the PR author are never requested); reviewers may then be empty"
+        },
         "as": {
           "type": "string",
           "enum": [
@@ -205,6 +209,52 @@
       "outputs": {
         "ok": {
           "type": "boolean"
+        },
+        "skipped": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "resolve_threads",
+      "desc": "resolve the PR's review threads a run addressed, named by comment id (any comment in the thread) or thread id — never every open thread",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "comments": {
+          "type": "list",
+          "desc": "review comment ids; each names the thread it is in"
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "seen_through": {
+          "type": "integer",
+          "desc": "a changes_requested event's feedback_cursor: a thread someone else has commented in since then (feedback the run never saw) is left open"
+        },
+        "threads": {
+          "type": "list",
+          "desc": "review thread node ids"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        },
+        "resolved": {
+          "type": "list",
+          "desc": "the thread ids now resolved (including ones already resolved)"
         },
         "skipped": {
           "type": "string"
@@ -1971,7 +2021,7 @@
     },
     {
       "name": "changes_requested",
-      "desc": "a review requested changes, or left inline comments without approving, on your PR (or threads went unresolved) — one event per review",
+      "desc": "a review requested changes, or left inline comments without approving, on your PR (or threads went unresolved) — each run carries every review still waiting on you",
       "context": {
         "author": {
           "type": "string"
@@ -1985,10 +2035,14 @@
         },
         "comment_id": {
           "type": "integer",
-          "desc": "the highest inline comment id the run covers; the engine dispatches a review once on it"
+          "desc": "the highest review comment id the run covers"
         },
         "comment_kind": {
           "type": "string"
+        },
+        "feedback_cursor": {
+          "type": "integer",
+          "desc": "the latest review submission the run covers (submission second and review id); the engine dispatches each submission once on it"
         },
         "head": {
           "type": "string"
@@ -2015,6 +2069,10 @@
         "number": {
           "type": "integer"
         },
+        "outstanding_reviews": {
+          "type": "list",
+          "desc": "reviewers' latest reviews requesting changes on the current head, as {review_id, author, body, url} (absent when none)"
+        },
         "owner": {
           "type": "string"
         },
@@ -2034,7 +2092,7 @@
         },
         "review_comments": {
           "type": "list",
-          "desc": "the feedback to address: the review's inline comments (or, sweep-recovered, each unresolved thread's opening comment) as {author, path, line, body, url}. A review is ONE event — its inline comments never also fire new_comment"
+          "desc": "the feedback to address, from every review still waiting on you (not only the one that fired): each unaddressed thread's opening comment and the comments after your last reply in it, as {id, thread_id, author, path, line, body, url}. A review is ONE event — its inline comments never also fire new_comment"
         },
         "review_comments_omitted": {
           "type": "integer",
@@ -2145,8 +2203,8 @@
           "level": {}
         },
         "cursor": {
-          "id": "comment_id",
-          "stream": "changes_requested:{{.comment_kind}}"
+          "id": "feedback_cursor",
+          "stream": "changes_requested:submitted"
         },
         "feedback": true,
         "author": {

@@ -4,11 +4,50 @@
 # bare-git forge, a mock GitHub API, a notify sink-catcher, and stub controllers —
 # NO production GitHub/smee/repos, NO LLM keys.
 
-.PHONY: build test vet fmt e2e e2e-live e2e-down e2e-packs ship-gate
+.PHONY: build test vet fmt e2e e2e-live e2e-down e2e-packs ship-gate web web-types web-check dashboard-e2e
 
 # Go build / test / static checks.
 build:
 	go build ./...
+
+# --- dashboard web UI (internal/dashboard) ---
+#
+# The SPA source lives in web/ and builds into internal/dashboard/dist/, which
+# is COMMITTED so `go build`/`go install` never need Node (design §8). Node is a
+# build-time dependency only.
+
+# Build the SPA into the embedded dist/. Reproducible from package-lock.json.
+web:
+	cd web && npm ci && npm run build
+
+# Regenerate web/src/api/types.ts from the Go API types (internal/dashboard/api).
+# Dev-time only; the generated file is committed, so a normal build needs no tygo.
+web-types:
+	cd web && go run github.com/gzuidhof/tygo@v0.2.21 generate
+
+# CI check: the committed dist/ must match a fresh build from web/ (reproducible).
+web-check:
+	cd web && npm ci && npm run build
+	@git diff --quiet -- internal/dashboard/dist || \
+		{ echo "internal/dashboard/dist is out of date — run 'make web' and commit the result"; git --no-pager diff --stat -- internal/dashboard/dist; exit 1; }
+	@echo "web-check: dist is reproducible from web/"
+
+# --- dashboard end-to-end (Playwright in Docker) ---
+#
+# Builds a static daemon binary, then runs the Playwright suite inside the pinned
+# Playwright image. A global setup boots a THROWAWAY daemon (its own temp state,
+# HOME and port, dashboard enabled) serving the real embedded SPA, seeds real run
+# history, and tears it down after. Hermetic: no live daemon/config, no secrets,
+# no egress. Runs Chromium desktop + WebKit iPhone 15 (OS dark). See web/e2e/.
+PLAYWRIGHT_IMAGE ?= mcr.microsoft.com/playwright:v1.62.0-noble
+dashboard-e2e:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o web/e2e/.bin/conductor ./cmd/conductor
+	docker run --rm --init --ipc=host \
+	  --user $$(id -u):$$(id -g) \
+	  -e HOME=/tmp -e npm_config_cache=/tmp/.npm -e CI=1 \
+	  -v $(CURDIR):/work -w /work/web/e2e \
+	  $(PLAYWRIGHT_IMAGE) \
+	  sh -c "npm ci && npx playwright test"
 
 test:
 	go test -race ./...

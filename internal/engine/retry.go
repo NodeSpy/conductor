@@ -143,7 +143,7 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 	go func() {
 		defer e.recoverDispatch(rctx, t, run, "flow retry")
 		defer e.release()
-		e.flow.Run(rctx, run, t, spec, tidx, nil, false)
+		e.runFlow(rctx, run, t, spec, tidx, nil)
 	}()
 	from := orTop(fromStep)
 	return fmt.Sprintf("retrying run %s from %s (recorded inputs pinned)", rec.ID, from), nil

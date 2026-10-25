@@ -132,8 +132,10 @@ type Engine struct {
 	ch          chan core.Trigger
 	secrets     *secrets.Resolver       // redacts argv/errors/output tails on audit + log surfaces
 	sem         *slots                  // concurrent-agent cap; nil = unlimited
+	held        heldLevel               // cursor-carrying level events the live gate skipped; see heldlevel.go
 	groupWarn   sync.Map                // FlowRefs whose group key already failed once (log once, not per event)
 	runWait     sync.Map                // "key|run id" → last in-progress status logged (a fail-fast matrix emits dozens of failing_checks per run)
+	earlyDone   sync.Map                // dispatch id → step.done reason, for a done that arrived while its dispatch was in flight (consumed at the step boundary)
 	queuedMu    sync.Mutex              // guards queued
 	queued      map[string]core.Trigger // flow runs waiting for a slot, by queuedFlowKey → newest trigger
 	closedAt    map[string]time.Time    // PR key → when its _closed arrived (guarded by queuedMu); see closedSince
@@ -799,6 +801,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if t.ClosesTarget() {
 		_ = e.store.Delete(key)
 		e.markClosed(key)
+		e.dropHeld(key)
 		e.log("%s closed; dropped state", tag(t))
 		e.stopFixers(ctx, t)
 		if t.Action == nil {
@@ -907,13 +910,19 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 					e.log("%s retired %d stale hand-off(s) parked on an older revision", tag(t), n)
 				}
 			} else {
-				e.log("%s skipped — an agent is already working/parked for it", tag(t))
+				// An event naming new items (a cursor) is held and re-delivered
+				// when the run ends; one that only re-reads a condition is
+				// skipped, the next poll re-reads it (see heldlevel.go).
+				if !e.holdLevel(ctx, t, act, key, dkind) {
+					e.log("%s skipped — an agent is already working/parked for it", tag(t))
+				}
 				return
 			}
 		}
-		// A live-gated kind never records "done" on dispatch — the sweep re-derives
-		// reality (still dirty? threads unresolved? review pending?) each run, so
-		// culled/failed work isn't abandoned. The backoff below bounds the retries.
+		// A live-gated kind never records "done" on dispatch — the source's poll
+		// re-derives reality (still dirty? review pending?) and a held event is
+		// re-delivered when the run ends, so culled/failed work isn't
+		// abandoned. The backoff below bounds the retries.
 	} else if t.Dedup != "" && e.store.LastSignature(key, dkind) == t.Dedup {
 		return
 	}
@@ -1077,6 +1086,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		go func() {
 			defer e.recoverDispatch(ctx, t, run, "workflow dispatch")
 			if !shadow {
+				defer e.redeliverHeld(key)
 				defer e.release()
 			}
 			e.runSteps(ctx, run, t, act, creds, shadow)

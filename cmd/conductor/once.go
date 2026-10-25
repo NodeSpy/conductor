@@ -396,6 +396,8 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 		return err
 	}
 	disp := dispatch.New(paseoBin, retry, false) // NOT dry-run
+	disp.HeadlessMode = cfg.PrimaryHeadlessMode()
+	disp.Logf = logf
 	disp.AdoptOpenWorkspaces = cfg.AdoptOpenWorkspaces
 	endpoint := resolvePaseoEndpoint(cfg)
 	disp.Home, disp.Server = endpoint.Home(), endpoint.Server()

@@ -327,6 +327,14 @@ group_B_fixer() {
   local CFG=/etc/conductor/controllers.yaml
   b_controller_row grpb/cliclaude  fx_cli_claude  cli        "cli:claude-code"
   b_controller_row grpb/clicodex   fx_cli_codex   cli        "cli:codex"
+  # A cli-runtime agent gets the skill creds a paseo agent gets, and its
+  # step.done (the fake's last action, as a real agent's) is accepted while
+  # conductor is still blocked on the process — not refused as unknown.
+  if wait_for 15 cli_done_accepted "cli:claude-code"; then
+    ok "B cli:claude-code agent's step.done accepted in flight (CONDUCTOR_ENDPOINT set)" B cli-done
+  else
+    bad "B cli agent step.done" B cli-done "no in-flight step.done from the cli:claude-code agent in conductor-ctrl's log"
+  fi
   b_controller_row grpb/acpgemini  fx_acp_gemini  acp        "acp:gemini"
   b_controller_row grpb/acpcodex   fx_acp_codex   acp        "acp:codex-adapter"
   b_controller_row grpb/ocacp      fx_oc_acp      acp        "opencode-acp"
@@ -351,6 +359,10 @@ b_controller_row() {
   else
     bad "B $label backend=$backend" B "$label-backend" "no $backend dispatch for $repo"
   fi
+}
+
+cli_done_accepted() { # runtime label
+  dc logs conductor-ctrl 2>&1 | grep -F "(fakecli finished ($1)) — still in flight; reclaiming at step boundary" >/dev/null
 }
 
 forge_has_conductor_commit() { # repo branch
@@ -1815,6 +1827,7 @@ main() {
   want TB && group_TB_ticket_purchase
   want BM && group_BM_bots
   want L && group_L_templates
+  want HM && group_HM_headless_mode
   print_matrix
   [ "$FAIL" -eq 0 ]
 }
@@ -2489,6 +2502,45 @@ group_L_templates() {
   assert_contains "$out" "operator" L L5-author "L5 ... authored by the operator"
   out="$(opb show keeper)"
   assert_contains "$out" '"applied_version": "1.1.0"' L L5-applied "L5 bot show reports the applied version"
+}
+
+# HM — headless permission modes on paseo (internal/dispatch/headless_mode.go).
+# A decide step's agent is headless: conductor launched it, nobody drives it,
+# and it delivers its answer with a Bash call to `conductor call step.done`.
+# The fake agent ([[needs-noprompt]]) lets that call run only in a no-prompt
+# mode, and fails like an unanswered permission prompt otherwise.
+#
+#   HM1–HM2  headlessok: no mode: on the step → conductor launches the claude
+#            agent in bypassPermissions → the call runs, the step completes.
+#   HM3–HM4  headlesstight: the runtime's headless_mode: none → no mode is
+#            injected → the call is refused → the step falls to its default.
+group_HM_headless_mode() {
+  banner "Group HM — headless paseo agents launch in a no-prompt mode (headless_mode: tightens it)"
+  func_reset_sink
+
+  post_webhook_to conductor-conn pull_request func_headlessok_conflict.json >/dev/null
+  if wait_for 60 slack_sink_has "HEADLESS-OK flaky=0.9 by=paseo/claude-sonnet-5-e2e"; then
+    ok "HM1 a headless claude decide step's conductor call ran; the step completed" HM HM1
+  else
+    bad "HM1 headless decide step completes" HM HM1 "no 'HEADLESS-OK flaky=0.9 by=paseo/claude-sonnet-5-e2e' capture"
+  fi
+  if cexec conductor-conn paseo _modes headlessok | grep -q 'mode="bypassPermissions"'; then
+    ok "HM2 its agent was launched with --mode bypassPermissions" HM HM2
+  else
+    bad "HM2 no-prompt mode injected" HM HM2 "modes: $(cexec conductor-conn paseo _modes headlessok | head -3)"
+  fi
+
+  post_webhook_to conductor-conn pull_request func_headlesstight_conflict.json >/dev/null
+  if wait_for 60 slack_sink_has "HEADLESS-TIGHT flaky=0 by=default"; then
+    ok "HM3 headless_mode: none — no mode injected, the call was refused, the step fell to its default" HM HM3
+  else
+    bad "HM3 headless_mode: none" HM HM3 "no 'HEADLESS-TIGHT flaky=0 by=default' capture"
+  fi
+  if cexec conductor-conn paseo _modes headlesstight | grep -q 'mode=""'; then
+    ok "HM4 the tightened runtime's agent was launched with no --mode" HM HM4
+  else
+    bad "HM4 no mode under headless_mode: none" HM HM4 "modes: $(cexec conductor-conn paseo _modes headlesstight | head -3)"
+  fi
 }
 
 main "$@"

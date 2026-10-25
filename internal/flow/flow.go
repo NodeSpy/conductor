@@ -105,6 +105,11 @@ type AgentServices struct {
 	Background func(ctx context.Context, t core.Trigger, stepID, identity string, s config.Step, ref dispatch.RunRef, handoffConn string, actions dispatch.HandoffActions)
 	// Archive soft-deletes a finished non-interactive agent.
 	Archive func(agentID string)
+	// TakeDone reports (and clears) whether a dispatch's agent called
+	// step.done while the dispatch was still in flight. Such an agent is
+	// archived at the step boundary even without archive_when_done. nil =
+	// no done signal (tests).
+	TakeDone func(dispatchID string) bool
 	// CheckBudget vets an agent dispatch against the spend caps (#36 §14):
 	// global, the RUNTIME it executes on (docs/design/agents-removal.md §1 —
 	// a budget caps execution cost on a backend), and the run's workflow-scope budget
@@ -1955,6 +1960,9 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		DispatchID: r.dispatchID(ctx, id),
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
+	// Consumed on every outcome so a mark never outlives its dispatch.
+	doneSignalled := r.Agents.TakeDone != nil && r.Agents.TakeDone(req.DispatchID)
+	archive := step.ArchiveWhenDone || doneSignalled
 	// The dispatch row `conductor report` and the e2e read. Emitted for EVERY
 	// outcome including failure, before the error return below — a dispatch
 	// that failed is exactly the one an operator is looking for.
@@ -2016,7 +2024,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		// those contracts can read it.
 		outputs := extractOutputs(ref.Output)
 		outputs["agent_id"] = ref.AgentID
-		if step.ArchiveWhenDone && ref.AgentID != "" && r.Agents.Archive != nil {
+		if archive && ref.AgentID != "" && r.Agents.Archive != nil {
 			r.Agents.Archive(ref.AgentID)
 		}
 		return outputs, ref.Output, nil
@@ -2081,7 +2089,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			return outputs, ref.Output, fmt.Errorf("agent plan: %w", plErr)
 		}
 	}
-	if step.ArchiveWhenDone && ref.AgentID != "" && r.Agents.Archive != nil {
+	if archive && ref.AgentID != "" && r.Agents.Archive != nil {
 		r.Agents.Archive(ref.AgentID)
 	}
 	// no_progress: an `expect_push` step whose agent left a non-empty proposed diff

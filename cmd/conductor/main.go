@@ -36,6 +36,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/cost"
+	"github.com/NodeSpy/conductor/internal/dashboard"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/engine"
 	"github.com/NodeSpy/conductor/internal/flow"
@@ -593,6 +594,8 @@ func cmdRun(args []string) error {
 		return err
 	}
 	disp := dispatch.New(paseoBin, retry, cfg.DryRun)
+	disp.HeadlessMode = cfg.PrimaryHeadlessMode()
+	disp.Logf = logf
 	// Ownership ledger: conductor records every agent + workspace it launches here,
 	// and the reaper archives ONLY ids in it — so it can never touch a workspace
 	// conductor didn't create (the user's own paseo worktrees). Shared across the
@@ -729,6 +732,7 @@ func cmdRun(args []string) error {
 		return err
 	}
 	for name, pd := range paseoOverrides {
+		pd.Logf = logf
 		reg.OverridePaseo(name, pd, pd)
 		where := "bin " + pd.PaseoBin
 		if pd.Remote != nil {
@@ -743,6 +747,10 @@ func cmdRun(args []string) error {
 		d := dispatch.New(rb.Bin, retry, cfg.DryRun)
 		d.SetBackend(rb.Backend)
 		d.Owned = owned
+		if hm := cfg.Runtimes[name].HeadlessMode; hm != nil {
+			d.HeadlessMode = *hm
+		}
+		d.Logf = logf
 		paseoOverrides[name] = d
 		reg.OverridePaseo(name, d, d)
 		logf("runtime %s: dedicated paseo dispatcher (backend-rpc plugin)", name)
@@ -1061,6 +1069,26 @@ func cmdRun(args []string) error {
 		audit:    st.Audit,
 	}
 	go serveControl(ctx, controlSockPath(cfg), igs, eng.Emit, manualTriggersByName(cfg), eng.RetryRunByID, events, ctlGate, logf)
+
+	// Dashboard (design §6): the local web surface. Off unless a `dashboard:`
+	// block enables it. It runs INSIDE this process and shares the live handles
+	// serveControl uses (cfg, st, the event hub) — never re-dialing the control
+	// socket. Phase 1 binds localhost only, no auth; a config without the block
+	// leaves the daemon exactly as before.
+	if cfg.Dashboard.On() {
+		dash := dashboard.New(dashboard.Deps{
+			Cfg:       cfg,
+			Store:     st,
+			Events:    events,
+			Version:   version,
+			ConfigSHA: configSHA(cfgFile),
+			Paused:    func() bool { _, err := os.Stat(pausePath(cfg)); return err == nil },
+			Log:       logf,
+		})
+		if err := dash.Start(ctx); err != nil {
+			logf("dashboard: not started: %v", err)
+		}
+	}
 
 	// Callable service (#36 §13): the authenticated inbound invoke surface. Off
 	// unless a `callable:` block is configured; mounts on the shared inbound

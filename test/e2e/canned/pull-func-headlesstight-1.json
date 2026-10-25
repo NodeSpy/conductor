@@ -1,0 +1,20 @@
+{
+  "number": 1,
+  "state": "open",
+  "draft": false,
+  "mergeable_state": "dirty",
+  "mergeable": false,
+  "title": "func/headlesstight PR under test",
+  "html_url": "https://forge.test/func/headlesstight/pull/1",
+  "user": {
+    "login": "conductor-user"
+  },
+  "head": {
+    "sha": "canned-head-headlesstight-1",
+    "ref": "pr-1"
+  },
+  "base": {
+    "ref": "main"
+  },
+  "labels": []
+}

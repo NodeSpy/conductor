@@ -305,7 +305,7 @@ to execute belongs here.
 | `wait_for` | Poll a read verb (`uses:`) until `until:` holds or `timeout:` — a helper step. |
 | `model` | Which model to run: a fleet name, a model id, a wildcard, an inline list, or `{ any, required }`. Unset → the runtime's `models.default:`, then a bare launch. See [[Model-Selection]]. |
 | `runtime` | A `runtimes.<name>` entry to run on (default: the `default: true` runtime, else the built-in paseo). See [[Runtimes]]. |
-| `thinking` / `mode` | Runtime launch hints, passed through where the runtime supports them. `mode:` is templated, so a form field or prior step can choose it (`'{{.slack.form.mode \| default "plan"}}'`). |
+| `thinking` / `mode` | Runtime launch hints, passed through where the runtime supports them. `mode:` is templated, so a form field or prior step can choose it (`'{{.slack.form.mode \| default "plan"}}'`). On a paseo runtime, a step nobody drives (not a hand-off or `detach:`) that sets no `mode:` launches in its provider's **no-prompt** mode by default, so a permission prompt can't stall it. A step's own `mode:` always wins. Tighten the default with the runtime's `headless_mode:` — see [Runtimes](Runtimes#headless-agents-and-permission-modes-paseo) for the security tradeoff. |
 | `repo` | The agent step's **checkout** repo (templated; `owner/name` or a git URL), overriding the trigger's own target — e.g. a chat trigger choosing which repo to work in. Validated after templating. It selects the working copy only: forge authority (skill creds, own-repo scope) stays on the trigger's target. With no `checkout:` of its own the step defaults to branch-off, and a trigger's forced checkout-less mode does not apply. Paseo runtimes only. |
 | `images` | A templated list of local files attached to the launch (`paseo run --image`, one per item). An item that is a sole reference to a list — `"{{.dl.images}}"` from `slack.download` — expands to every element. A runtime that can't take images fails the step rather than dropping them. Paseo runtimes only. |
 | `detach` | `true` launches the agent as **your** workspace and forgets it: a fresh branch-off worktree of `repo:` (or the trigger's target; never an existing workspace on that branch), `paseo run -d`, not recorded in conductor's ownership ledger, so conductor never archives, reaps, or messages it. No skill creds, no `CONDUCTOR_*`/token/git-identity env, no appended guidance (the prompt runs exactly as templated), no hold or watch. Outputs `agent_id`, `workspace_id`, `branch`, `path`. Refused together with `background`, `handoff`, `output_schema`, `watch`, `idle_timeout`, `archive_when_done`, `session`, `skill`, `team`, `gate`, `isolation` (other than the sandbox opt-out `{mode: none}`), `env`, `workdir`, `checkout`, `workspace`, `memory`, `guidance`; refused on agent-authored steps; paseo runtimes only. See [[Slack-Handover]]. With the agent sandbox on it launches sandboxed (its title ends `[sandboxed]`): the seeding content can carry other people's messages. Your config's `isolation: { mode: none }` launches it unsandboxed, as you ([[Isolation#hand-offs-and-opting-a-workflow-out]]). |
@@ -509,9 +509,20 @@ schema directive; other foreground steps get a short "run `step.done` when
 finished" footer; hand-offs get theirs in the hand-off guidance. Where the
 signal is REACHABLE: paseo agents call the `conductor` CLI (creds injected in
 env; remote hosts via the SSH tunnel); ACP and opencode runtimes get the same
-surface as native MCP tools (`step_done`). A bare `cli` one-shot runtime has no
-skill surface — there the step boundary itself is the completion signal
-(conductor is blocked on the process), schema output rides the reply, and the
-footer tells the agent to just finish normally if the command is unavailable.
+surface as native MCP tools (`step_done`). A `cli` runtime agent gets the same
+CLI creds as a paseo agent (`CONDUCTOR_ENDPOINT` + a session token in its
+environment) when it can reach the daemon's socket: a local launch with no
+sandbox, or a `namespace` sandbox with `privileged: true`. A remote `host:`, a
+`namespace` sandbox (which masks the state dir the socket lives in), and
+`user`/`container` modes get none; there the step boundary itself is the
+completion signal (conductor is blocked on the process). On a `cli` runtime,
+schema output always rides the reply, and the footer tells the agent to just
+finish normally if the command is unavailable.
 Reclaim never depends on the call alone: a foreground step is archived at its
 step boundary regardless, and hand-offs have `idle_timeout` as the backstop.
+A `step.done` that arrives while conductor is still blocked on the foreground
+dispatch (the usual case: it is the agent's last action) is held until the step
+boundary, so it never cuts off the output being captured. It is then honored
+even on a step with `archive_when_done: false`. That setting keeps an agent that
+stops without signalling done (to ask you something, say) live in paseo, and
+reclaims one that finished.

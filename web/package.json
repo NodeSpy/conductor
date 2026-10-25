@@ -1,0 +1,21 @@
+{
+  "name": "conductor-dashboard",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "conductor's local web dashboard (Preact + signals + Vite). Built into internal/dashboard/dist.",
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "dev": "vite",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@preact/signals": "^2.0.4",
+    "preact": "^10.24.3"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.1",
+    "typescript": "^5.6.3",
+    "vite": "^6.3.5"
+  }
+}
