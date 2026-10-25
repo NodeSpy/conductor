@@ -1404,3 +1404,21 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #   # `*` never crosses a `/`, so `your-org/*` cannot reach `your-org-evil/…`.
 #   # Prefer an exact repo or an org-scoped `org/*` over a partial name like
 #   # `conductor-packs*`, which also admits `conductor-packs2` in that org.
+
+# ---------------------------------------------------------------------------
+# dashboard: — OPTIONAL local web UI (design §6). Off unless enabled, so a
+# config without this block changes nothing. It runs INSIDE the daemon and
+# reads the live config, store and event hub. Phase 1 binds localhost only and
+# has no auth (the tailnet listener, TLS and WebAuthn arrive in a later phase).
+#
+# dashboard:
+#   enabled: true            # off by default; a config without the block is unchanged
+#   listen: [localhost]      # keyword-only — ONLY `localhost` and `tailscale`
+#                            # (no addresses, no 0.0.0.0, no expose:). Phase 1
+#                            # serves `localhost` only; `tailscale` is accepted
+#                            # but not yet bound.
+#   port: 7788               # default 7788; must not collide with an inbound listener
+#
+# Build the UI into the binary with `make web` (needs Node; the built assets are
+# committed, so a normal `go build`/`go install` does not). Reach it at
+# http://localhost:7788 once enabled.
