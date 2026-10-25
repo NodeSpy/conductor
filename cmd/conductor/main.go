@@ -34,6 +34,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/cost"
+	"github.com/NodeSpy/conductor/internal/dashboard"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/engine"
 	"github.com/NodeSpy/conductor/internal/flow"
@@ -982,6 +983,26 @@ func cmdRun(args []string) error {
 		audit:    st.Audit,
 	}
 	go serveControl(ctx, controlSockPath(cfg), igs, eng.Emit, manualTriggersByName(cfg), eng.RetryRunByID, events, ctlGate, logf)
+
+	// Dashboard (design §6): the local web surface. Off unless a `dashboard:`
+	// block enables it. It runs INSIDE this process and shares the live handles
+	// serveControl uses (cfg, st, the event hub) — never re-dialing the control
+	// socket. Phase 1 binds localhost only, no auth; a config without the block
+	// leaves the daemon exactly as before.
+	if cfg.Dashboard.On() {
+		dash := dashboard.New(dashboard.Deps{
+			Cfg:       cfg,
+			Store:     st,
+			Events:    events,
+			Version:   version,
+			ConfigSHA: configSHA(cfgFile),
+			Paused:    func() bool { _, err := os.Stat(pausePath(cfg)); return err == nil },
+			Log:       logf,
+		})
+		if err := dash.Start(ctx); err != nil {
+			logf("dashboard: not started: %v", err)
+		}
+	}
 
 	// Callable service (#36 §13): the authenticated inbound invoke surface. Off
 	// unless a `callable:` block is configured; mounts on the shared inbound
