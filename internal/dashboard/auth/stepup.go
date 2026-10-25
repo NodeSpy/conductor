@@ -1,0 +1,201 @@
+package auth
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/webauthn"
+)
+
+// stepupChallengeLabel domain-separates the step-up challenge from any other
+// WebAuthn ceremony, and binds the assertion to the purpose and the request
+// digest so the signature can be re-verified offline (design §6.5, §6.6).
+const stepupChallengeLabel = "conductor-dashboard-stepup-v1"
+
+// stepupCeremony is an in-flight step-up assertion, bound to the session that
+// asked, the purpose and the digest of the exact request.
+type stepupCeremony struct {
+	rpID     string
+	session  string // the signed-in session id that is stepping up
+	operator string
+	purpose  Purpose
+	digest   string // hex sha256 of the request body (or the approval digest)
+	nonce    []byte
+	wa       webauthn.SessionData
+	expires  time.Time
+}
+
+// stepupToken is a minted single-use step-up grant, bound to {session, purpose,
+// digest} and spent by RequireStepup (design §6.5).
+type stepupToken struct {
+	session  string
+	operator string
+	purpose  Purpose
+	digest   string
+	credID   string
+	expires  time.Time
+}
+
+// stepupChallenge derives the WebAuthn challenge from the label, the per-ceremony
+// nonce, the purpose and the digest, so the operator's signature commits to all of
+// them.
+func stepupChallenge(nonce []byte, purpose Purpose, digest string) []byte {
+	h := sha256.New()
+	h.Write([]byte(stepupChallengeLabel))
+	h.Write([]byte{0})
+	h.Write(nonce)
+	h.Write([]byte{0})
+	h.Write([]byte(purpose))
+	h.Write([]byte{0})
+	h.Write([]byte(digest))
+	return h.Sum(nil)
+}
+
+// BeginStepup starts a step-up for the signed-in session over {purpose, digest}.
+// The assertion is scoped to the session operator's credentials, and its
+// challenge commits to the purpose and digest (design §6.5). It returns a
+// ceremony id and the assertion options.
+func (m *Manager) BeginStepup(listener Listener, sess Session, purpose Purpose, digest string) (ceremonyID string, optionsJSON []byte, err error) {
+	rp, ok := m.rpForListener(listener)
+	if !ok {
+		return "", nil, fmt.Errorf("no RP for listener %q", listener)
+	}
+	if digest == "" {
+		return "", nil, errors.New("step-up needs a request digest")
+	}
+	user := m.userFor(sess.Operator)
+	if len(user.creds) == 0 {
+		return "", nil, errors.New("you have no passkey that can sign this")
+	}
+	var allow []protocol.CredentialDescriptor
+	for _, c := range user.creds {
+		allow = append(allow, protocol.CredentialDescriptor{Type: protocol.PublicKeyCredentialType, CredentialID: c.ID})
+	}
+	nonce, err := m.randBytes(32)
+	if err != nil {
+		return "", nil, err
+	}
+	w := m.wa[rp.ID]
+	opts, session, err := w.BeginLogin(user,
+		webauthn.WithUserVerification(protocol.VerificationRequired),
+		webauthn.WithAllowedCredentials(allow),
+		webauthn.WithChallenge(stepupChallenge(nonce, purpose, digest)),
+	)
+	if err != nil {
+		return "", nil, err
+	}
+	id, err := m.mintID()
+	if err != nil {
+		return "", nil, err
+	}
+	m.mu.Lock()
+	m.gcCeremonies()
+	m.stepups[id] = &stepupCeremony{
+		rpID: rp.ID, session: sess.ID, operator: sess.Operator, purpose: purpose,
+		digest: digest, nonce: nonce, wa: *session, expires: m.now().Add(ceremonyTTL),
+	}
+	m.mu.Unlock()
+	b, err := json.Marshal(opts)
+	return id, b, err
+}
+
+// FinishStepup validates a step-up assertion and mints a single-use step-up
+// token bound to {session, purpose, digest}. The ceremony is consumed.
+func (m *Manager) FinishStepup(ceremonyID string, sess Session, responseJSON []byte) (token string, err error) {
+	m.mu.Lock()
+	ce, ok := m.stepups[ceremonyID]
+	if ok {
+		delete(m.stepups, ceremonyID) // single use
+	}
+	m.mu.Unlock()
+	if !ok {
+		return "", errors.New("unknown or expired step-up challenge")
+	}
+	if m.now().After(ce.expires) {
+		return "", errors.New("step-up challenge expired")
+	}
+	if ce.session != sess.ID || ce.operator != sess.Operator {
+		return "", errors.New("step-up challenge is for a different session")
+	}
+	parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(responseJSON))
+	if err != nil {
+		return "", fmt.Errorf("bad assertion: %w", err)
+	}
+	stored, found := m.deps.Store.CredentialByRawID(ce.rpID, parsed.RawID)
+	if !found || stored.Operator != ce.operator {
+		return "", errors.New("that passkey is not yours")
+	}
+	w := m.wa[ce.rpID]
+	user := waUser{operator: ce.operator, creds: []webauthn.Credential{stored.Cred}}
+	validated, err := w.ValidateLogin(user, ce.wa, parsed)
+	if err != nil {
+		return "", err
+	}
+	if validated.Authenticator.CloneWarning {
+		_ = m.deps.Store.LockCredential(stored.ID)
+		return "", errors.New("that passkey may be cloned and is now locked")
+	}
+	_ = m.deps.Store.UpdateCredentialUse(stored.ID, validated.Authenticator.SignCount)
+	// Rotate the session's step-up freshness.
+	m.deps.Store.MarkStepup(sess.ID, m.now())
+
+	tb, err := m.randBytes(32)
+	if err != nil {
+		return "", err
+	}
+	token = b64(tb)
+	m.mu.Lock()
+	m.tokens[token] = &stepupToken{
+		session: sess.ID, operator: ce.operator, purpose: ce.purpose,
+		digest: ce.digest, credID: stored.ID, expires: m.now().Add(ceremonyTTL),
+	}
+	m.mu.Unlock()
+	m.audit(map[string]any{"event": "dashboard_stepup", "operator": ce.operator, "purpose": string(ce.purpose), "credential": stored.ID})
+	return token, nil
+}
+
+// RequireStepup spends a step-up token: it must exist, be unexpired, belong to
+// this session, and match the purpose and digest of the request it authorizes.
+// It returns the credential id that signed (for the audit line). It is
+// single-use: a valid token is removed whether or not it matched, so a captured
+// token can't be probed against several requests (design §6.5).
+func (m *Manager) RequireStepup(sess Session, purpose Purpose, digest, token string) (credID string, err error) {
+	if token == "" {
+		return "", errors.New("this action needs your passkey")
+	}
+	m.mu.Lock()
+	t, ok := m.tokens[token]
+	if ok {
+		delete(m.tokens, token)
+	}
+	m.mu.Unlock()
+	if !ok {
+		return "", errors.New("step-up token is not valid")
+	}
+	if m.now().After(t.expires) {
+		return "", errors.New("step-up token has expired")
+	}
+	if t.session != sess.ID || t.operator != sess.Operator {
+		return "", errors.New("step-up token is for a different session")
+	}
+	if t.purpose != purpose {
+		return "", fmt.Errorf("step-up token is for %q, not %q", t.purpose, purpose)
+	}
+	if subtle.ConstantTimeCompare([]byte(t.digest), []byte(digest)) != 1 {
+		return "", errors.New("step-up token does not match this request")
+	}
+	return t.credID, nil
+}
+
+// DigestOf is the canonical digest of a request body: hex sha256. Both the
+// step-up ceremony and the endpoint that enforces it compute it the same way.
+func DigestOf(body []byte) string {
+	h := sha256.Sum256(body)
+	return fmt.Sprintf("%x", h[:])
+}
