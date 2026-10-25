@@ -17,6 +17,7 @@ const NAV: { label: string; to?: string; soon?: boolean }[] = [
   { label: 'Plugins & connections', to: 'connections' },
   { label: 'System', to: 'system' },
   { label: 'Logs & audit', to: 'audit' },
+  { label: 'Access', to: 'security' },
 ]
 
 function Mark(): JSX.Element {

@@ -99,18 +99,23 @@ func deviceLabel(r *http.Request) string {
 
 func (m *Manager) handleState(w http.ResponseWriter, r *http.Request) {
 	info := reqInfoFrom(r)
+	// required is true when operators are configured: sign-in is then enforced on
+	// the API, and the SPA shows the sign-in gate. With no operators the dashboard
+	// serves open (a bootstrap box), so the gate stays out of the way.
+	required := m.deps.Operators != nil && len(m.deps.Operators()) > 0
 	sess, err := m.ValidateCookie(r, info.Listener, info.Node)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"signed_in": false})
+		writeJSON(w, http.StatusOK, map[string]any{"signed_in": false, "required": required, "listener": string(info.Listener)})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"signed_in":    true,
-		"operator":     sess.Operator,
-		"listener":     string(sess.Listener),
-		"expires":      sess.Expires.UTC().Format(time.RFC3339),
-		"csrf":         sess.CSRF,
-		"stepup_at":    tsOrEmpty(sess.StepupAt),
+		"signed_in": true,
+		"required":  required,
+		"operator":  sess.Operator,
+		"listener":  string(sess.Listener),
+		"expires":   sess.Expires.UTC().Format(time.RFC3339),
+		"csrf":      sess.CSRF,
+		"stepup_at": tsOrEmpty(sess.StepupAt),
 	})
 }
 

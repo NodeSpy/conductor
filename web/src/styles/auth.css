@@ -1,0 +1,269 @@
+/* Auth screens (design §4.10, §6): the bare sign-in / enrolment gate and the
+   Access screen. Tokens only, so light and dark both come for free. */
+
+/* The gate: a centred card on the canvas, for sign-in and enrolment. */
+.gate {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--color-bg-canvas);
+}
+.gate-card {
+  width: min(560px, 100%);
+  background: var(--color-bg-surface);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-raised, 0 1px 3px rgba(0, 0, 0, 0.1));
+  padding: var(--space-5);
+}
+.gate-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.gate-brand .wordmark {
+  font-family: var(--type-serif, Fraunces, Georgia, serif);
+  font-weight: 600;
+  font-size: 1.25rem;
+  color: var(--color-text-primary);
+}
+.gate-card h1 {
+  font-family: var(--type-serif, Fraunces, Georgia, serif);
+  font-size: 1.6rem;
+  margin: 0 0 var(--space-2);
+  color: var(--color-text-primary);
+}
+.gate-sub {
+  color: var(--color-text-secondary);
+  margin: 0 0 var(--space-4);
+  line-height: 1.5;
+}
+.gate-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+}
+.gate-foot a {
+  margin-left: auto;
+  color: var(--color-text-accent);
+}
+.gate-err {
+  color: var(--color-status-danger-solid, crimson);
+  margin: var(--space-2) 0 0;
+  font-size: var(--type-caption-size);
+}
+
+/* Buttons: primary (ember fill), lg (the one big call to action), sm, danger,
+   block — layered on the base .btn. */
+.btn.primary {
+  background: var(--color-accent-default);
+  border-color: var(--color-accent-default);
+  color: var(--color-bg-inverse, #fff);
+}
+.btn.primary:hover {
+  background: var(--color-accent-hover, var(--color-accent-default));
+  border-color: var(--color-accent-hover, var(--color-accent-default));
+}
+.btn.lg {
+  padding: 11px var(--space-4);
+  font-size: var(--type-body-m-size, 0.95rem);
+}
+.btn.sm {
+  padding: 4px var(--space-2);
+  font-size: var(--type-caption-size);
+}
+.btn.block {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+}
+.btn.danger {
+  color: var(--color-button-danger-fg, crimson);
+  border-color: var(--color-border-default);
+}
+.btn.ghost {
+  border-color: transparent;
+}
+.btn[disabled],
+.btn[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.passkey-glyph {
+  margin-right: 6px;
+}
+
+/* Enrolment form bits. */
+.gate-code {
+  background: var(--color-bg-sunken);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  font-family: var(--type-mono, monospace);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  margin: 0 0 var(--space-4);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--color-text-secondary);
+}
+.gate-field {
+  display: block;
+  margin-bottom: var(--space-3);
+}
+.gate-field label {
+  display: block;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+.gate-field input {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px var(--space-3);
+  border: var(--border-width) solid var(--color-border-control);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-field);
+  color: var(--color-text-primary);
+  font-size: var(--type-body-s-size, 0.9rem);
+}
+.gate-field input:focus {
+  border-color: var(--color-border-strong);
+}
+.seg-choice {
+  display: flex;
+  gap: var(--space-2);
+}
+.seg-choice button {
+  all: unset;
+  cursor: pointer;
+  flex: 1;
+  text-align: center;
+  padding: 8px;
+  border: var(--border-width) solid var(--color-border-control);
+  border-radius: var(--radius-control);
+  color: var(--color-text-secondary);
+  font-size: var(--type-caption-size);
+}
+.seg-choice button.on {
+  border-color: var(--color-accent-default);
+  color: var(--color-text-accent);
+  background: var(--color-accent-subtle);
+}
+.gate-callout {
+  background: var(--color-bg-sunken);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: var(--space-3) 0;
+}
+
+/* Access screen. */
+.acc {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--space-4);
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .acc {
+    grid-template-columns: 1fr;
+  }
+}
+.acc-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.acc-card {
+  background: var(--color-bg-surface);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  padding: var(--space-4);
+}
+.acc-card h2 {
+  font-size: var(--type-body-m-size, 1rem);
+  margin: 0 0 var(--space-3);
+  display: flex;
+  align-items: center;
+}
+.acc-card h2 .btn {
+  margin-left: auto;
+}
+.acc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.acc-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+.acc-row:first-child {
+  border-top: none;
+}
+.acc-row .acc-main {
+  min-width: 0;
+}
+.acc-row b {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.acc-why {
+  display: block;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+}
+.acc-row .acc-act {
+  margin-left: auto;
+}
+.acc-asks {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--color-text-secondary);
+  line-height: 1.7;
+  font-size: var(--type-body-s-size, 0.9rem);
+}
+.acc-note {
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+  font-size: var(--type-caption-size);
+  margin: var(--space-3) 0 0;
+  line-height: 1.5;
+}
+.acc-tech {
+  margin-top: var(--space-2);
+}
+.acc-tech summary {
+  cursor: pointer;
+  color: var(--color-text-accent);
+  font-size: var(--type-caption-size);
+}
+.acc-tech dl {
+  margin: var(--space-3) 0 0;
+}
+.acc-tech dt {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  margin-top: var(--space-2);
+}
+.acc-tech dd {
+  margin: 2px 0 0;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+.acc-locked {
+  color: var(--color-status-danger-solid, crimson);
+  font-size: var(--type-caption-size);
+}

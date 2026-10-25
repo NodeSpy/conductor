@@ -1,5 +1,5 @@
 import type { JSX } from 'preact'
-import { useEffect } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { Shell } from './components/Shell'
 import { Overview } from './routes/Overview'
 import { Config } from './routes/Config'
@@ -8,20 +8,50 @@ import { Packs } from './routes/Packs'
 import { Connections } from './routes/Connections'
 import { System } from './routes/System'
 import { Audit } from './routes/Audit'
+import { Signin } from './routes/Signin'
+import { Enroll } from './routes/Enroll'
+import { Access } from './routes/Access'
 import { load, startLive } from './state'
 import { route } from './router'
+import { refreshState, authState } from './api/auth'
 
 export function App(): JSX.Element {
+  // ready gates the first paint on knowing whether sign-in is required, so the
+  // dashboard never flashes before the Sign-in gate (design §6).
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    void refreshState().finally(() => setReady(true))
+  }, [])
+
+  const path = typeof location !== 'undefined' ? location.pathname.replace(/\/$/, '') : ''
+
+  // Enrolment is a bare, path-routed page the CLI link opens (/enroll#t=…); it
+  // needs no session.
+  if (path === '/enroll') return <Enroll />
+
+  if (!ready) return <div class="gate" />
+
+  const st = authState.value
+  // Sign-in gate: when operators are configured and we're not signed in, nothing
+  // else loads (the API would 401 anyway).
+  if ((st.required && !st.signed_in) || path === '/signin') return <Signin />
+
+  return (
+    <Shell>
+      <Authed />
+    </Shell>
+  )
+}
+
+// Authed is the signed-in (or open) app: it starts the live data once past the
+// gate and routes the hash to a screen.
+function Authed(): JSX.Element {
   useEffect(() => {
     void load()
     const stop = startLive()
     return stop
   }, [])
-  return (
-    <Shell>
-      <Screen />
-    </Shell>
-  )
+  return <Screen />
 }
 
 function Screen(): JSX.Element {
@@ -38,6 +68,9 @@ function Screen(): JSX.Element {
       return <System />
     case 'audit':
       return <Audit />
+    case 'security':
+    case 'access':
+      return <Access />
     default:
       return <Overview />
   }
