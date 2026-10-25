@@ -93,6 +93,8 @@ export async function start(port: number): Promise<Runtime> {
       `  enabled: true`,
       `  listen: [localhost]`,
       `  port: ${port}`,
+      `settings:`,
+      `  greeting: hello`,
       `connectors:`,
       `  box: { use: command }`,
       `triggers:`,
@@ -135,6 +137,50 @@ export async function start(port: number): Promise<Runtime> {
 
 export function readRuntime(): Runtime {
   return JSON.parse(readFileSync(RUNTIME_FILE, 'utf8')) as Runtime
+}
+
+// startIsolated boots a DEDICATED throwaway daemon (its own temp dir, config and
+// port) that is NOT recorded in RUNTIME_FILE — so a test that mutates and
+// reloads the config (the config-edit apply flow re-execs the daemon on SIGHUP)
+// does not disturb the shared daemon the rest of the suite reads. The caller
+// stops it in afterAll. The config carries an editable `settings.greeting`.
+export async function startIsolated(port: number): Promise<Runtime> {
+  const bin = resolveBin()
+  const root = mkdtempSync(path.join(tmpdir(), 'dash-e2e-iso-'))
+  const stateDir = path.join(root, 'state')
+  const home = path.join(root, 'home')
+  const config = path.join(root, 'config.yaml')
+  const logFile = path.join(root, 'daemon.log')
+  const baseURL = `http://127.0.0.1:${port}`
+
+  writeFileSync(
+    config,
+    [
+      `store: { state_file: ${path.join(stateDir, 'state.json')} }`,
+      `dashboard:`,
+      `  enabled: true`,
+      `  listen: [localhost]`,
+      `  port: ${port}`,
+      `settings:`,
+      `  greeting: hello   # inline comment the edit must preserve`,
+      `connectors:`,
+      `  box: { use: command }`,
+      ``,
+    ].join('\n'),
+    { mode: 0o600 },
+  )
+
+  const env = hermeticEnv(home)
+  const out = openSync(logFile, 'a')
+  const child: ChildProcess = spawn(bin, ['run', '--config', config], {
+    env,
+    detached: true,
+    stdio: ['ignore', out, out],
+  })
+  child.unref()
+  if (!child.pid) throw new Error('failed to spawn isolated daemon')
+  await waitForStatus(baseURL)
+  return { bin, config, stateDir, home, port, baseURL, pid: child.pid, logFile }
 }
 
 // trigger dispatches a manual trigger on the running daemon (used mid-test to
