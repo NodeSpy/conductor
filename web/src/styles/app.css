@@ -139,11 +139,25 @@ a {
   padding: var(--pad-page-y) var(--pad-page-x);
   max-width: 1100px;
   width: 100%;
+  /* A grid/flex item defaults to min-width: auto, so without this the page
+   * track refuses to shrink below its content's min-content — the Activity
+   * table's intrinsic width — and drags the whole app wider than a phone
+   * viewport. Letting it shrink is what keeps the layout inside 390px. */
+  min-width: 0;
 }
 .col {
   display: flex;
   flex-direction: column;
   gap: var(--gap-stack);
+  min-width: 0;
+}
+
+/* The Activity table can be wider than a phone; it scrolls inside its own
+ * wrapper rather than pushing the page past the viewport. On desktop it fits,
+ * so no scrollbar appears. */
+.tbl-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ---- banners ---- */

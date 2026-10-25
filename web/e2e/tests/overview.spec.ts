@@ -134,19 +134,13 @@ test('dark mode renders and the Overview screenshot is captured', async ({ page 
   await page.screenshot({ path: path.join(SHOT_DIR, `overview-${testInfo.project.name}.png`), fullPage: true })
 })
 
-test('no horizontal overflow at the viewport width', async ({ page }, testInfo) => {
-  // KNOWN DEFECT, found by this suite: the Phase-1 app shell (left rail) and the
-  // "at a glance" tiles grid never collapse to a mobile layout, so the Overview
-  // overflows ~312px at iPhone-15 width in WebKit (desktop is fine). It is marked
-  // an EXPECTED failure on that project only — so the gate stays honest-green
-  // while the bug exists, and the day someone adds a responsive breakpoint this
-  // test "unexpectedly passes" and Playwright goes red, forcing this guard to be
-  // removed. Until then: desktop must have zero overflow.
-  test.fail(
-    testInfo.project.name === 'webkit-iphone15',
-    'mobile Overview overflows horizontally — no responsive breakpoint in Phase 1',
-  )
-
+test('no horizontal overflow at the viewport width', async ({ page }) => {
+  // The app shell collapses to a phone layout under 860px (the rail becomes a
+  // top bar, the tiles go two-up) and the Activity table scrolls inside its own
+  // wrapper rather than dragging the page wide — so there is zero horizontal
+  // overflow at iPhone-15 width (390px) as well as on desktop. This used to be
+  // an expected failure on webkit-iphone15 (the Phase-1 layout overflowed
+  // ~312px); it is now a hard pass on every project.
   await page.goto('/')
   await expect(page.locator('.tbl')).toBeVisible()
   await page.waitForTimeout(200)

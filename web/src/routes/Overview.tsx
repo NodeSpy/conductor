@@ -241,6 +241,7 @@ function Activity({
         <h2 class="panel-title serif">Activity</h2>
       </div>
       <p class="panel-say">{sentence}</p>
+      <div class="tbl-wrap">
       <table class="tbl">
         <thead>
           <tr>
@@ -266,6 +267,7 @@ function Activity({
           ))}
         </tbody>
       </table>
+      </div>
       {finished.length > shown ? (
         <button class="more-btn" type="button" onClick={() => setShown((s) => s + 20)}>
           Show 20 more of {finished.length}
