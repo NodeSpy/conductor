@@ -209,6 +209,21 @@ func (s *Store) DeleteCredential(id string) (operator string, err error) {
 	return operator, s.save()
 }
 
+// DeleteCredentialsFor removes every passkey an operator has (recovery/reset).
+func (s *Store) DeleteCredentialsFor(operator string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for id, c := range s.creds {
+		if c.Operator == operator {
+			delete(s.creds, id)
+			n++
+		}
+	}
+	_ = s.save()
+	return n
+}
+
 // --- sessions ---
 
 // PutSession stores a session with the hash of its cookie secret.

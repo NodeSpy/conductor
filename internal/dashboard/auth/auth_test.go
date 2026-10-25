@@ -211,9 +211,12 @@ func TestStepupHappyPath(t *testing.T) {
 	}
 	digest := DigestOf([]byte(`{"proposal":"p12","decision":"approve"}`))
 	tok := h.stepup(auth, cred, sess, PurposeApprove, digest)
-	credID, err := h.m.RequireStepup(sess, PurposeApprove, digest, tok)
-	if err != nil || credID == "" {
-		t.Fatalf("RequireStepup: credID=%q err=%v", credID, err)
+	ev, err := h.m.RequireStepup(sess, PurposeApprove, digest, tok)
+	if err != nil || ev.CredID == "" {
+		t.Fatalf("RequireStepup: evidence=%+v err=%v", ev, err)
+	}
+	if ev.AuthenticatorData == "" || ev.ClientDataJSON == "" || ev.Signature == "" {
+		t.Fatalf("step-up evidence must carry the raw assertion for offline re-verification: %+v", ev)
 	}
 	// Single use: the same token can't be spent again.
 	if _, err := h.m.RequireStepup(sess, PurposeApprove, digest, tok); err == nil {
