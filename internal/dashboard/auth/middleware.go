@@ -68,8 +68,13 @@ func (m *Manager) Protect(next http.Handler) http.Handler {
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
+		// script-src stays strict ('self' + trusted types) — agent-authored text is
+		// the XSS vector, and it can never introduce a script. style-src allows
+		// inline style ATTRIBUTES (the SPA uses them for layout); an inline style
+		// cannot execute script, so this doesn't open the script vector, while
+		// 'self' still bars remote stylesheets.
 		h.Set("Content-Security-Policy",
-			"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; "+
+			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "+
 				"connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; "+
 				"frame-ancestors 'none'; require-trusted-types-for 'script'")
 		h.Set("X-Frame-Options", "DENY")

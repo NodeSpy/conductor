@@ -267,3 +267,9 @@
   color: var(--color-status-danger-solid, crimson);
   font-size: var(--type-caption-size);
 }
+.gate-group-label {
+  display: block;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}

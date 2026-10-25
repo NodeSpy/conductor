@@ -32,9 +32,10 @@ export function App(): JSX.Element {
   if (!ready) return <div class="gate" />
 
   const st = authState.value
-  // Sign-in gate: when operators are configured and we're not signed in, nothing
-  // else loads (the API would 401 anyway).
-  if ((st.required && !st.signed_in) || path === '/signin') return <Signin />
+  // Sign-in gate: show Sign-in when we're not signed in and either sign-in is
+  // required (operators configured) or the operator asked for it (/signin). Once
+  // signed in, fall through even on /signin so the dashboard shows.
+  if (!st.signed_in && (st.required || path === '/signin')) return <Signin />
 
   return (
     <Shell>

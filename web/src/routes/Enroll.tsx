@@ -102,8 +102,8 @@ export function Enroll(): JSX.Element {
             onInput={(e) => setName((e.target as HTMLInputElement).value)}
           />
         </label>
-        <label class="gate-field">
-          <span>Register on</span>
+        <div class="gate-field" role="group" aria-label="Register on">
+          <span class="gate-group-label">Register on</span>
           <div class="seg-choice">
             <button type="button" class={rp === 'tailnet' ? 'on' : ''} aria-pressed={rp === 'tailnet'} onClick={() => setRP('tailnet')}>
               Tailnet (this box + your phone)
@@ -112,7 +112,7 @@ export function Enroll(): JSX.Element {
               Localhost only
             </button>
           </div>
-        </label>
+        </div>
         <p class="gate-callout">
           Every enrolment is audited. A second passkey also asks you to confirm with one you already have.
         </p>

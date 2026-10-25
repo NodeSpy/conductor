@@ -18,8 +18,9 @@ export function Signin(): JSX.Element {
     setBusy(true)
     try {
       await signIn()
-      // The app re-renders off authState; drop any leftover path.
-      if (location.pathname !== '/') history.replaceState(null, '', '/#/overview')
+      // Navigate to the dashboard root (a clean load past the /signin path, with
+      // the session cookie now set).
+      location.assign('/#/overview')
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
