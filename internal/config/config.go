@@ -177,6 +177,9 @@ type Config struct {
 	// CallableConfig and internal/callable.
 	Callable CallableConfig `yaml:"callable"`
 
+	// Dashboard is the optional local web surface (design §6.2); off by default.
+	Dashboard DashboardConfig `yaml:"dashboard"`
+
 	Store  Store  `yaml:"store"`
 	Update Update `yaml:"update"`
 	DryRun bool   `yaml:"dry_run"`
@@ -1281,6 +1284,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateCallable(); err != nil {
+		return err
+	}
+	if err := c.validateDashboard(); err != nil {
 		return err
 	}
 	return nil
