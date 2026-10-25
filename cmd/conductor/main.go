@@ -1084,6 +1084,13 @@ func cmdRun(args []string) error {
 			ConfigSHA: configSHA(cfgFile),
 			Paused:    func() bool { _, err := os.Stat(pausePath(cfg)); return err == nil },
 			Log:       logf,
+			// Config-edit pipeline (design §5.3): the dashboard edits the live
+			// config file, validates each candidate on a copy through the
+			// daemon's own load+semantic pass, and reloads via SIGHUP on apply.
+			ConfigPath: cfgFile,
+			Validate:   validateConfigFile,
+			Reload:     func() error { return signalReload(cfg) },
+			AuditPath:  cfg.Store.AuditLog,
 		})
 		if err := dash.Start(ctx); err != nil {
 			logf("dashboard: not started: %v", err)

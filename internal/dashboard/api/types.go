@@ -86,6 +86,212 @@ type RunEventData struct {
 	DurationMS int64  `json:"duration_ms,omitempty"`
 }
 
+// --- Config edit (design §5.3): the backup→validate-on-copy→diff→apply→reload
+// pipeline the Config, Secrets, Packs, Plugins and System screens drive. The
+// shapes mirror internal/configedit (Change, Review, Diff, DiffLine, Effect,
+// HistoryEntry, Applied) so the TS client and the Go pipeline share one
+// contract.
+
+// ConfigResponse is GET /api/v1/config: the live config file, its short sha, the
+// raw text, a generic decoded tree for section rendering, and a flattened list
+// of scalar leaves (path+value) for the settings-style editors.
+type ConfigResponse struct {
+	Path   string         `json:"path"`
+	SHA    string         `json:"sha"`
+	Text   string         `json:"text"`
+	Tree   any            `json:"tree"`   // generic decode of the YAML (maps/lists/scalars)
+	Leaves []ConfigLeaf   `json:"leaves"` // every scalar, by dotted path
+	Staged []ConfigChange `json:"staged"` // the currently staged edits
+}
+
+// ConfigLeaf is one scalar value in the config, addressed by its path segments.
+type ConfigLeaf struct {
+	Path    []string `json:"path"`
+	Section string   `json:"section"`
+	Kind    string   `json:"kind"` // string | int | float | bool | null
+	Value   any      `json:"value"`
+}
+
+// ConfigChange is one staged edit (mirrors configedit.Change).
+type ConfigChange struct {
+	ID      string   `json:"id"`
+	Path    []string `json:"path"`
+	Value   any      `json:"value,omitempty"`
+	Delete  bool     `json:"delete,omitempty"`
+	Summary string   `json:"summary"`
+	Section string   `json:"section"`
+}
+
+// DiffLineDTO is one rendered diff line (mirrors configedit.DiffLine).
+type DiffLineDTO struct {
+	Op      string `json:"op"` // context | add | del
+	Text    string `json:"text"`
+	OldLine int    `json:"old_line,omitempty"`
+	NewLine int    `json:"new_line,omitempty"`
+}
+
+// ReviewResponse is GET /api/v1/config/review and the restore review: the diff,
+// the effects (every change in words), the widening subset to surface loudly,
+// the candidate sha and the step-up confirm token apply must echo.
+type ReviewResponse struct {
+	Changed  bool          `json:"changed"`
+	Added    int           `json:"added"`
+	Removed  int           `json:"removed"`
+	Lines    []DiffLineDTO `json:"lines"`
+	Unified  string        `json:"unified"`
+	Effects  []EffectDTO   `json:"effects"`
+	Widening []EffectDTO   `json:"widening"`
+	SHA      string        `json:"sha"`
+	Token    string        `json:"token"`
+}
+
+// EffectDTO describes one change in words (mirrors configedit.Effect).
+type EffectDTO struct {
+	Path   string `json:"path"`
+	Text   string `json:"text"`
+	Widens bool   `json:"widens"`
+}
+
+// AppliedResponse is POST /api/v1/config/apply and /restore.
+type AppliedResponse struct {
+	SHA         string `json:"sha"`
+	BackupID    string `json:"backup_id,omitempty"`
+	ReloadError string `json:"reload_error,omitempty"`
+	Unchanged   bool   `json:"unchanged,omitempty"`
+}
+
+// HistoryItem is one restorable backup (mirrors configedit.HistoryEntry).
+type HistoryItem struct {
+	ID    string `json:"id"`
+	TS    string `json:"ts"`
+	SHA   string `json:"sha"`
+	Bytes int64  `json:"bytes"`
+}
+
+// StageRequest is POST /api/v1/config/stage.
+type StageRequest struct {
+	Path    []string `json:"path"`
+	Value   any      `json:"value,omitempty"`
+	Delete  bool     `json:"delete,omitempty"`
+	Summary string   `json:"summary,omitempty"`
+}
+
+// ApplyRequest is POST /api/v1/config/apply.
+type ApplyRequest struct {
+	Token string `json:"token"`
+}
+
+// RestoreRequest is POST /api/v1/config/restore and /restore/review.
+type RestoreRequest struct {
+	ID    string `json:"id"`
+	Token string `json:"token,omitempty"`
+}
+
+// --- Section read models (design §5.4): one shape per screen, derived from the
+// live config. Secret VALUES are never included — only names and where they are
+// referenced.
+
+// SecretsResponse is GET /api/v1/secrets: the vaults, the top-level secret refs,
+// and, for each, where in the config it is used.
+type SecretsResponse struct {
+	Vaults  []VaultInfo  `json:"vaults"`
+	Secrets []SecretInfo `json:"secrets"`
+}
+
+// VaultInfo is one named vault (values never rendered).
+type VaultInfo struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+// SecretInfo is one top-level secret ref and its vault/key, with the config
+// paths that reference it.
+type SecretInfo struct {
+	Name   string   `json:"name"`
+	Ref    string   `json:"ref"` // <vault>/<key>
+	UsedBy []string `json:"used_by,omitempty"`
+}
+
+// PacksResponse is GET /api/v1/packs.
+type PacksResponse struct {
+	Packs []PackInfo `json:"packs"`
+}
+
+// PackInfo is one installed pack instance.
+type PackInfo struct {
+	Name    string `json:"name"`
+	Use     string `json:"use"`
+	Version string `json:"version,omitempty"`
+	Hold    bool   `json:"hold"`
+}
+
+// PluginsResponse is GET /api/v1/plugins: the flat plugin list and the version
+// policy, derived from the `use:` references across connectors/runtimes.
+type PluginsResponse struct {
+	Plugins []PluginInfo `json:"plugins"`
+}
+
+// PluginInfo is one plugin referenced by a `use:` entry.
+type PluginInfo struct {
+	Name    string   `json:"name"`    // the plugin name (use ref, minus @version)
+	Version string   `json:"version"` // the pinned version, or "" for floating
+	Pinned  bool     `json:"pinned"`  // true when a @version is set (the version policy)
+	Builtin bool     `json:"builtin"` // a conductor built-in, not fetched
+	UsedBy  []string `json:"used_by"` // the connector/runtime names using it
+}
+
+// ConnectionsResponse is GET /api/v1/connections: connectors, runtimes and hosts
+// as a flat list for the Connections screen.
+type ConnectionsResponse struct {
+	Connectors []NamedUse `json:"connectors"`
+	Runtimes   []NamedUse `json:"runtimes"`
+	Hosts      []HostInfo `json:"hosts"`
+}
+
+// NamedUse is a named connector/runtime and its `use:` reference.
+type NamedUse struct {
+	Name string `json:"name"`
+	Use  string `json:"use"`
+}
+
+// HostInfo is one SSH host target.
+type HostInfo struct {
+	Name string `json:"name"`
+	Host string `json:"host"`
+	User string `json:"user,omitempty"`
+}
+
+// SystemResponse is GET /api/v1/system: the System screen's tabs — version and
+// settings, the Safety posture (the live least-privilege guardrails), and the
+// Updates block.
+type SystemResponse struct {
+	Version   string            `json:"version"`
+	ConfigSHA string            `json:"config_sha"`
+	Settings  map[string]string `json:"settings"`
+	Safety    SafetyInfo        `json:"safety"`
+	Update    UpdateInfo        `json:"update"`
+}
+
+// SafetyInfo summarizes the live security posture for the System → Safety tab.
+type SafetyInfo struct {
+	SandboxAgents   string   `json:"sandbox_agents"` // on | off | "" (default)
+	Egress          []string `json:"egress"`         // named egress hosts (empty = default-deny)
+	DashboardListen []string `json:"dashboard_listen"`
+	Warnings        []string `json:"warnings"` // posture notes (e.g. "agents run unsandboxed")
+}
+
+// UpdateInfo is the System → Updates tab.
+type UpdateInfo struct {
+	Auto     bool   `json:"auto"`
+	Interval string `json:"interval,omitempty"`
+	Apply    string `json:"apply,omitempty"`
+}
+
+// AuditResponse is GET /api/v1/audit: recent audit-log entries, newest first.
+type AuditResponse struct {
+	Entries []map[string]any `json:"entries"`
+}
+
 // Error is one API error. Reads and writes that fail return {error: Error}.
 type Error struct {
 	Code    string `json:"code"`

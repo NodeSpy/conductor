@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/configedit"
 	"github.com/NodeSpy/conductor/internal/dashboard/api"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/store"
@@ -36,6 +37,16 @@ type Deps struct {
 	ConfigSHA string
 	Paused    func() bool // reports whether dispatch is paused (the pause control file)
 	Log       func(string, ...any)
+
+	// Config-edit pipeline (design §5.3). ConfigPath is the live config file;
+	// Validate runs the daemon's own load+semantic pass against a candidate
+	// copy; Reload signals the daemon to re-read its config (SIGHUP). When
+	// ConfigPath is empty the config-edit endpoints report that editing is
+	// unavailable (a read-only dashboard).
+	ConfigPath string
+	Validate   func(path string) error
+	Reload     func() error
+	AuditPath  string // the audit log file (JSONL), for the Logs & audit screen
 }
 
 // Server is the dashboard HTTP server.
@@ -44,6 +55,7 @@ type Server struct {
 	hub     *hub
 	mux     *http.ServeMux
 	started time.Time
+	edit    *configedit.Pipeline // nil when ConfigPath is empty (read-only)
 }
 
 // New builds a dashboard server from its dependencies.
@@ -55,6 +67,13 @@ func New(deps Deps) *Server {
 		deps.Paused = func() bool { return false }
 	}
 	s := &Server{deps: deps, hub: newHub(), mux: http.NewServeMux(), started: time.Now()}
+	if deps.ConfigPath != "" {
+		s.edit = configedit.New(configedit.Options{
+			Path:     deps.ConfigPath,
+			Validate: deps.Validate,
+			Reload:   deps.Reload,
+		})
+	}
 	s.routes()
 	return s
 }
@@ -64,6 +83,27 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
 	s.mux.HandleFunc("GET /api/v1/runs", s.handleRuns)
 	s.mux.HandleFunc("GET /api/v1/events", s.handleEvents)
+
+	// Config-edit pipeline.
+	s.mux.HandleFunc("GET /api/v1/config", s.handleConfig)
+	s.mux.HandleFunc("POST /api/v1/config/stage", s.handleStage)
+	s.mux.HandleFunc("POST /api/v1/config/unstage", s.handleUnstage)
+	s.mux.HandleFunc("POST /api/v1/config/clear", s.handleClear)
+	s.mux.HandleFunc("GET /api/v1/config/review", s.handleReview)
+	s.mux.HandleFunc("GET /api/v1/config/validate", s.handleValidate)
+	s.mux.HandleFunc("POST /api/v1/config/apply", s.handleApply)
+	s.mux.HandleFunc("GET /api/v1/config/history", s.handleHistory)
+	s.mux.HandleFunc("POST /api/v1/config/restore/review", s.handleRestoreReview)
+	s.mux.HandleFunc("POST /api/v1/config/restore", s.handleRestore)
+
+	// Section read models.
+	s.mux.HandleFunc("GET /api/v1/secrets", s.handleSecrets)
+	s.mux.HandleFunc("GET /api/v1/packs", s.handlePacks)
+	s.mux.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
+	s.mux.HandleFunc("GET /api/v1/connections", s.handleConnections)
+	s.mux.HandleFunc("GET /api/v1/system", s.handleSystem)
+	s.mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
+
 	s.mux.Handle("/", spaHandler()) // the embedded SPA, with SPA fallback
 }
 

@@ -218,6 +218,19 @@ func (p *Pipeline) effectsLocked(before []byte) []Effect {
 	return out
 }
 
+// Validate renders the candidate and runs the daemon's load+semantic pass over
+// a copy of it, returning the validation error (nil when it validates). It does
+// not change the live file.
+func (p *Pipeline) Validate() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, after, err := p.candidateLocked()
+	if err != nil {
+		return err
+	}
+	return p.validateCandidate(after)
+}
+
 // Apply validates the candidate on a copy, backs up the live file, writes the
 // candidate atomically, clears the staged set, records history, and reloads.
 // token must be the one minted by the matching Review and must still bind to the
