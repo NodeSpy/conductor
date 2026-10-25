@@ -1,0 +1,12 @@
+{
+  "name": "conductor-dashboard-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Playwright end-to-end tests for the conductor dashboard, run against a throwaway daemon serving the real embedded SPA.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.0"
+  }
+}

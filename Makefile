@@ -4,7 +4,7 @@
 # bare-git forge, a mock GitHub API, a notify sink-catcher, and stub controllers —
 # NO production GitHub/smee/repos, NO LLM keys.
 
-.PHONY: build test vet fmt e2e e2e-live e2e-down e2e-packs ship-gate web web-types web-check
+.PHONY: build test vet fmt e2e e2e-live e2e-down e2e-packs ship-gate web web-types web-check dashboard-e2e
 
 # Go build / test / static checks.
 build:
@@ -31,6 +31,23 @@ web-check:
 	@git diff --quiet -- internal/dashboard/dist || \
 		{ echo "internal/dashboard/dist is out of date — run 'make web' and commit the result"; git --no-pager diff --stat -- internal/dashboard/dist; exit 1; }
 	@echo "web-check: dist is reproducible from web/"
+
+# --- dashboard end-to-end (Playwright in Docker) ---
+#
+# Builds a static daemon binary, then runs the Playwright suite inside the pinned
+# Playwright image. A global setup boots a THROWAWAY daemon (its own temp state,
+# HOME and port, dashboard enabled) serving the real embedded SPA, seeds real run
+# history, and tears it down after. Hermetic: no live daemon/config, no secrets,
+# no egress. Runs Chromium desktop + WebKit iPhone 15 (OS dark). See web/e2e/.
+PLAYWRIGHT_IMAGE ?= mcr.microsoft.com/playwright:v1.62.0-noble
+dashboard-e2e:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o web/e2e/.bin/conductor ./cmd/conductor
+	docker run --rm --init --ipc=host \
+	  --user $$(id -u):$$(id -g) \
+	  -e HOME=/tmp -e npm_config_cache=/tmp/.npm -e CI=1 \
+	  -v $(CURDIR):/work -w /work/web/e2e \
+	  $(PLAYWRIGHT_IMAGE) \
+	  sh -c "npm ci && npx playwright test"
 
 test:
 	go test -race ./...

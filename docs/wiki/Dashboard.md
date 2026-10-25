@@ -62,3 +62,29 @@ never need Node. Node is a build-time dependency only.
 make web         # npm ci && vite build → internal/dashboard/dist
 make web-types   # regenerate web/src/api/types.ts from the Go API types (tygo)
 ```
+
+## End-to-end tests
+
+`web/e2e/` holds a Playwright suite that drives the **real** dashboard — the
+embedded SPA served by a throwaway daemon — in a browser. It runs inside the
+pinned Playwright Docker image and is hermetic: a global setup boots a daemon
+with its own temp state dir, HOME and port (no live daemon, config or secrets
+touched), seeds real run history by dispatching a trivial `command` trigger, and
+tears the daemon down afterwards.
+
+```sh
+make dashboard-e2e   # static daemon build + Playwright in Docker
+```
+
+It covers, on **Chromium desktop and WebKit iPhone 15 (OS dark)**:
+
+- the Overview renders the daemon's real run history (rows/counts asserted
+  against the API);
+- a live run dispatched mid-test updates the Overview over SSE, no reload;
+- `/api/v1/status` is reflected in the UI (version, pid, config sha, dispatch);
+- the app shell, nav and theme render with zero console errors and zero failed
+  network requests on load;
+- no horizontal overflow at desktop and phone widths, and dark mode renders.
+
+Override the image with `PLAYWRIGHT_IMAGE=…` and the daemon port with
+`DASH_E2E_PORT=…`.
