@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!-- Declare both schemes so in-app WebViews never auto-darken the page. -->
+    <meta name="color-scheme" content="light dark" />
+    <title>conductor</title>
+    <link rel="icon" href="/logo/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/logo/apple-touch-icon.svg" />
+    <link rel="preload" href="/fonts/AtkinsonNext.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/Fraunces.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/fonts/fonts.css" />
+    <!-- Set the theme before first paint: an explicit choice wins, else the OS. -->
+    <script>
+      ;(function () {
+        try {
+          var t = localStorage.getItem('theme')
+          if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t)
+        } catch (e) {}
+      })()
+    </script>
+    <script type="module" crossorigin src="/assets/index-CPufs_0x.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-ByhE0WrP.css">
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>
