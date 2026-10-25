@@ -52,17 +52,38 @@ func ApprovalPayload(bot, proposal, digest, decision, edit, reason string) []byt
 		bot, proposal, digest, decision, h(edit), h(reason)))
 }
 
-// Decision is an operator's signed decision on one proposal.
+// Decision is an operator's authenticated decision on one proposal.
 type Decision struct {
 	Bot       string `json:"bot"`
 	Proposal  string `json:"proposal"`
 	Operator  string `json:"operator"`
 	Decision  string `json:"decision"`  // approve | deny
-	Signature string `json:"signature"` // armored SSHSIG
+	Signature string `json:"signature"` // armored SSHSIG (Method ssh)
 	Reason    string `json:"reason,omitempty"`
 	// Edit is approve-with-changes: the final content the operator lands
 	// instead of the proposed text (knowledge promotions only).
 	Edit string `json:"edit,omitempty"`
+	// Method names how the operator was authenticated. "" and "ssh" mean the
+	// SSHSIG over Signature is verified here (the control-socket path). "webauthn"
+	// means an in-process caller (the dashboard, design §6.6) has ALREADY verified
+	// a WebAuthn assertion whose challenge committed to this proposal's approval
+	// digest, mapped the credential to Operator, and checked operator membership;
+	// Decide then runs every other guard unchanged and records WebAuthn for
+	// offline re-verification. The control socket never sets this — it decodes a
+	// Decision without a method, so a socket caller cannot reach the webauthn path.
+	Method string `json:"-"`
+	// WebAuthn is the assertion evidence for the audit when Method is "webauthn"
+	// (the same non-repudiation SSHSIG gives). Required on that path.
+	WebAuthn *WebAuthnEvidence `json:"-"`
+}
+
+// WebAuthnEvidence is a verified dashboard approval's assertion, recorded so the
+// decision can be re-verified offline against the stored public key (design §6.6).
+type WebAuthnEvidence struct {
+	Credential        string // the credential id that signed
+	AuthenticatorData string // base64url
+	ClientDataJSON    string // base64url
+	Signature         string // base64url
 }
 
 // MaxDecisionReason bounds a decision's reason (it reaches the bot).
@@ -172,7 +193,25 @@ func (x *Executor) audit(e map[string]any) {
 	}
 }
 
-// Decide applies an operator's signed decision. It is the ONLY way a
+// withMethod decorates an audit entry with the authentication method and, for a
+// WebAuthn decision, the credential and the raw assertion so it can be
+// re-verified offline (design §6.6). The default SSH path records method "ssh".
+func (d Decision) withMethod(e map[string]any) map[string]any {
+	m := d.Method
+	if m == "" {
+		m = "ssh"
+	}
+	e["method"] = m
+	if m == "webauthn" && d.WebAuthn != nil {
+		e["credential"] = d.WebAuthn.Credential
+		e["authenticator_data"] = d.WebAuthn.AuthenticatorData
+		e["client_data_json"] = d.WebAuthn.ClientDataJSON
+		e["assertion_sig"] = d.WebAuthn.Signature
+	}
+	return e
+}
+
+// Decide applies an operator's authenticated decision. It is the ONLY way a
 // proposal leaves pending.
 func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, error) {
 	cfg := x.Cfg()
@@ -221,12 +260,26 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 		return refuse(fmt.Errorf("%q is not an operator of bot %s", d.Operator, d.Bot))
 	}
 	opCfg := cfg.Operators[d.Operator]
-	verify := x.Verify
-	if verify == nil {
-		verify = VerifyApproval
-	}
-	if err := verify(ctx, d.Operator, opCfg.SSHKey, ApprovalPayload(d.Bot, p.ID, p.Digest, d.Decision, d.Edit, d.Reason), d.Signature); err != nil {
-		return refuse(err)
+	switch d.Method {
+	case "", "ssh":
+		verify := x.Verify
+		if verify == nil {
+			verify = VerifyApproval
+		}
+		if err := verify(ctx, d.Operator, opCfg.SSHKey, ApprovalPayload(d.Bot, p.ID, p.Digest, d.Decision, d.Edit, d.Reason), d.Signature); err != nil {
+			return refuse(err)
+		}
+	case "webauthn":
+		// The dashboard verified the WebAuthn assertion (RP, origin, UV, sign
+		// count) with a challenge bound to this proposal's approval digest, mapped
+		// the credential to the operator, and checked membership, before calling in
+		// process (design §6.6). We still run every other guard below. The evidence
+		// is required so the decision is auditable and offline-verifiable.
+		if d.WebAuthn == nil || d.WebAuthn.Credential == "" {
+			return refuse(errors.New("webauthn decision without assertion evidence"))
+		}
+	default:
+		return refuse(fmt.Errorf("unknown approval method %q", d.Method))
 	}
 	switch {
 	case p.Status == "shadow":
@@ -245,7 +298,7 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 	}
 	if d.Decision == "deny" {
 		out, err := x.transition(d, "denied")
-		x.audit(map[string]any{"bot": d.Bot, "proposal": p.ID, "operator": d.Operator, "decision": "deny", "outcome": "ok"})
+		x.audit(d.withMethod(map[string]any{"bot": d.Bot, "proposal": p.ID, "operator": d.Operator, "decision": "deny", "outcome": "ok"}))
 		if p.Kind == KindTerraform && x.Terraform != nil {
 			x.Terraform.Discard(d.Bot, p.ID)
 		}
@@ -255,7 +308,7 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 	if _, err := x.transition(d, "approved"); err != nil {
 		return refuse(err)
 	}
-	x.audit(map[string]any{"bot": d.Bot, "proposal": p.ID, "operator": d.Operator, "decision": "approve", "outcome": "ok", "uses": p.Uses})
+	x.audit(d.withMethod(map[string]any{"bot": d.Bot, "proposal": p.ID, "operator": d.Operator, "decision": "approve", "outcome": "ok", "uses": p.Uses}))
 	var out store.Proposal
 	var err error
 	switch p.Kind {
