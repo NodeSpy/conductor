@@ -1,17 +1,22 @@
 // The app shell: the left rail (logo, nav, theme), and the page container the
-// one screen renders into. Phase 1 hosts a single route (Overview/Activity);
-// the other rail items are shown disabled so the chrome reads true to the
-// approved design without pretending to route somewhere that isn't built yet.
+// current screen renders into. Nav items with a `to` route via the hash router;
+// items still in a later phase are shown disabled so the chrome reads true to
+// the approved design without pretending to route somewhere that isn't built.
 import type { ComponentChildren, JSX } from 'preact'
 import { conn } from '../state'
+import { route } from '../router'
 
-const NAV: { label: string; active?: boolean; soon?: boolean }[] = [
-  { label: 'Overview', active: true },
+const NAV: { label: string; to?: string; soon?: boolean }[] = [
+  { label: 'Overview', to: '' },
   { label: 'Workflows', soon: true },
   { label: 'Bots', soon: true },
   { label: 'Browsers', soon: true },
-  { label: 'Config', soon: true },
-  { label: 'Logs & audit', soon: true },
+  { label: 'Config', to: 'config' },
+  { label: 'Secrets', to: 'secrets' },
+  { label: 'Packs', to: 'packs' },
+  { label: 'Plugins & connections', to: 'connections' },
+  { label: 'System', to: 'system' },
+  { label: 'Logs & audit', to: 'audit' },
 ]
 
 function Mark(): JSX.Element {
@@ -53,19 +58,22 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
             <span class="wordmark">conductor</span>
           </div>
           <ul class="nav">
-            {NAV.map((n) => (
-              <li>
-                {n.active ? (
-                  <a class="nav-item on" aria-current="page" href="#/">
-                    {n.label}
-                  </a>
-                ) : (
-                  <span class="nav-item soon" aria-disabled="true" title="Arrives in a later phase">
-                    {n.label}
-                  </span>
-                )}
-              </li>
-            ))}
+            {NAV.map((n) => {
+              const active = n.to !== undefined && route.value === n.to
+              return (
+                <li>
+                  {n.to !== undefined ? (
+                    <a class={'nav-item' + (active ? ' on' : '')} aria-current={active ? 'page' : undefined} href={'#/' + n.to}>
+                      {n.label}
+                    </a>
+                  ) : (
+                    <span class="nav-item soon" aria-disabled="true" title="Arrives in a later phase">
+                      {n.label}
+                    </span>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         </div>
         <div class="rail-foot">

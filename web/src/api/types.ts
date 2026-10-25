@@ -101,6 +101,227 @@ export interface RunEventData {
   duration_ms?: number /* int64 */;
 }
 /**
+ * ConfigResponse is GET /api/v1/config: the live config file, its short sha, the
+ * raw text, a generic decoded tree for section rendering, and a flattened list
+ * of scalar leaves (path+value) for the settings-style editors.
+ */
+export interface ConfigResponse {
+  path: string;
+  sha: string;
+  text: string;
+  tree: any; // generic decode of the YAML (maps/lists/scalars)
+  leaves: ConfigLeaf[]; // every scalar, by dotted path
+  staged: ConfigChange[]; // the currently staged edits
+}
+/**
+ * ConfigLeaf is one scalar value in the config, addressed by its path segments.
+ */
+export interface ConfigLeaf {
+  path: string[];
+  section: string;
+  kind: string; // string | int | float | bool | null
+  value: any;
+}
+/**
+ * ConfigChange is one staged edit (mirrors configedit.Change).
+ */
+export interface ConfigChange {
+  id: string;
+  path: string[];
+  value?: any;
+  delete?: boolean;
+  summary: string;
+  section: string;
+}
+/**
+ * DiffLineDTO is one rendered diff line (mirrors configedit.DiffLine).
+ */
+export interface DiffLineDTO {
+  op: string; // context | add | del
+  text: string;
+  old_line?: number /* int */;
+  new_line?: number /* int */;
+}
+/**
+ * ReviewResponse is GET /api/v1/config/review and the restore review: the diff,
+ * the effects (every change in words), the widening subset to surface loudly,
+ * the candidate sha and the step-up confirm token apply must echo.
+ */
+export interface ReviewResponse {
+  changed: boolean;
+  added: number /* int */;
+  removed: number /* int */;
+  lines: DiffLineDTO[];
+  unified: string;
+  effects: EffectDTO[];
+  widening: EffectDTO[];
+  sha: string;
+  token: string;
+}
+/**
+ * EffectDTO describes one change in words (mirrors configedit.Effect).
+ */
+export interface EffectDTO {
+  path: string;
+  text: string;
+  widens: boolean;
+}
+/**
+ * AppliedResponse is POST /api/v1/config/apply and /restore.
+ */
+export interface AppliedResponse {
+  sha: string;
+  backup_id?: string;
+  reload_error?: string;
+  unchanged?: boolean;
+}
+/**
+ * HistoryItem is one restorable backup (mirrors configedit.HistoryEntry).
+ */
+export interface HistoryItem {
+  id: string;
+  ts: string;
+  sha: string;
+  bytes: number /* int64 */;
+}
+/**
+ * StageRequest is POST /api/v1/config/stage.
+ */
+export interface StageRequest {
+  path: string[];
+  value?: any;
+  delete?: boolean;
+  summary?: string;
+}
+/**
+ * ApplyRequest is POST /api/v1/config/apply.
+ */
+export interface ApplyRequest {
+  token: string;
+}
+/**
+ * RestoreRequest is POST /api/v1/config/restore and /restore/review.
+ */
+export interface RestoreRequest {
+  id: string;
+  token?: string;
+}
+/**
+ * SecretsResponse is GET /api/v1/secrets: the vaults, the top-level secret refs,
+ * and, for each, where in the config it is used.
+ */
+export interface SecretsResponse {
+  vaults: VaultInfo[];
+  secrets: SecretInfo[];
+}
+/**
+ * VaultInfo is one named vault (values never rendered).
+ */
+export interface VaultInfo {
+  name: string;
+  type: string;
+}
+/**
+ * SecretInfo is one top-level secret ref and its vault/key, with the config
+ * paths that reference it.
+ */
+export interface SecretInfo {
+  name: string;
+  ref: string; // <vault>/<key>
+  used_by?: string[];
+}
+/**
+ * PacksResponse is GET /api/v1/packs.
+ */
+export interface PacksResponse {
+  packs: PackInfo[];
+}
+/**
+ * PackInfo is one installed pack instance.
+ */
+export interface PackInfo {
+  name: string;
+  use: string;
+  version?: string;
+  hold: boolean;
+}
+/**
+ * PluginsResponse is GET /api/v1/plugins: the flat plugin list and the version
+ * policy, derived from the `use:` references across connectors/runtimes.
+ */
+export interface PluginsResponse {
+  plugins: PluginInfo[];
+}
+/**
+ * PluginInfo is one plugin referenced by a `use:` entry.
+ */
+export interface PluginInfo {
+  name: string; // the plugin name (use ref, minus @version)
+  version: string; // the pinned version, or "" for floating
+  pinned: boolean; // true when a @version is set (the version policy)
+  builtin: boolean; // a conductor built-in, not fetched
+  used_by: string[]; // the connector/runtime names using it
+}
+/**
+ * ConnectionsResponse is GET /api/v1/connections: connectors, runtimes and hosts
+ * as a flat list for the Connections screen.
+ */
+export interface ConnectionsResponse {
+  connectors: NamedUse[];
+  runtimes: NamedUse[];
+  hosts: HostInfo[];
+}
+/**
+ * NamedUse is a named connector/runtime and its `use:` reference.
+ */
+export interface NamedUse {
+  name: string;
+  use: string;
+}
+/**
+ * HostInfo is one SSH host target.
+ */
+export interface HostInfo {
+  name: string;
+  host: string;
+  user?: string;
+}
+/**
+ * SystemResponse is GET /api/v1/system: the System screen's tabs — version and
+ * settings, the Safety posture (the live least-privilege guardrails), and the
+ * Updates block.
+ */
+export interface SystemResponse {
+  version: string;
+  config_sha: string;
+  settings: { [key: string]: string};
+  safety: SafetyInfo;
+  update: UpdateInfo;
+}
+/**
+ * SafetyInfo summarizes the live security posture for the System → Safety tab.
+ */
+export interface SafetyInfo {
+  sandbox_agents: string; // on | off | "" (default)
+  egress: string[]; // named egress hosts (empty = default-deny)
+  dashboard_listen: string[];
+  warnings: string[]; // posture notes (e.g. "agents run unsandboxed")
+}
+/**
+ * UpdateInfo is the System → Updates tab.
+ */
+export interface UpdateInfo {
+  auto: boolean;
+  interval?: string;
+  apply?: string;
+}
+/**
+ * AuditResponse is GET /api/v1/audit: recent audit-log entries, newest first.
+ */
+export interface AuditResponse {
+  entries: { [key: string]: any}[];
+}
+/**
  * Error is one API error. Reads and writes that fail return {error: Error}.
  */
 export interface Error {

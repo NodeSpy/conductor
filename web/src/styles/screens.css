@@ -1,0 +1,281 @@
+/* Styles for the config-edit screens (Config, Secrets, Packs, Plugins &
+ * connections, System, Logs & audit) and the shared review panel. Built on the
+ * same Daylight tokens as app.css — no raw colours. app.css owns the shell,
+ * tiles, runs table and banners; this file adds the forms, tabs, tables, the
+ * diff view and the review/apply panel. */
+
+.screen-title {
+  font-size: var(--type-title-m-size, 1.4rem);
+  margin: 0 0 var(--space-2);
+}
+.muted {
+  color: var(--color-text-tertiary);
+  font-size: var(--type-body-s-size);
+  margin: 0 0 var(--space-3);
+}
+
+/* banner variants beyond app.css's .banner.err */
+.banner.ok {
+  background: var(--color-status-success-bg);
+  border: var(--border-width) solid var(--color-status-success-border);
+  color: var(--color-status-success-fg);
+}
+.banner.attn {
+  background: var(--color-status-warning-bg);
+  border: var(--border-width) solid var(--color-status-warning-border);
+  color: var(--color-status-warning-fg);
+}
+
+/* button variants */
+.btn.primary {
+  background: var(--color-accent-default);
+  border-color: var(--color-accent-default);
+  color: var(--color-text-on-accent);
+}
+.btn.primary:hover {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+.btn.ghost {
+  border-color: transparent;
+  color: var(--color-text-accent);
+}
+.btn.ghost:hover {
+  border-color: var(--color-border-default);
+}
+.btn.sm {
+  padding: 3px var(--space-2);
+  font-size: var(--type-caption-size);
+}
+.btn.danger {
+  color: var(--color-button-danger-fg, var(--color-status-danger-fg));
+}
+.btn.danger:hover {
+  background: var(--color-button-danger-bg-hover, var(--color-status-danger-bg));
+}
+
+/* small inline tag/badge */
+.tag {
+  display: inline-block;
+  padding: 1px var(--space-2);
+  margin: 0 var(--space-1) var(--space-1) 0;
+  border-radius: var(--radius-chip);
+  background: var(--color-status-neutral-bg);
+  color: var(--color-status-neutral-fg);
+  border: var(--border-width) solid var(--color-status-neutral-border);
+  font-size: var(--type-caption-size);
+}
+.tag.warn {
+  background: var(--color-status-warning-bg);
+  color: var(--color-status-warning-fg);
+  border-color: var(--color-status-warning-border);
+}
+
+/* tables */
+.tbl td,
+.tbl th {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  border-bottom: var(--border-width) solid var(--color-border-subtle);
+  vertical-align: top;
+}
+.tbl th {
+  color: var(--color-text-secondary);
+  font-size: var(--type-caption-size);
+  font-weight: 600;
+}
+
+/* fields */
+.fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  position: relative;
+}
+.field-label {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+}
+.field-input {
+  padding: 6px var(--space-2);
+  border-radius: var(--radius-control);
+  border: var(--border-width) solid var(--color-border-control);
+  background: var(--color-bg-field);
+  color: var(--color-text-primary);
+  font-size: var(--type-body-s-size);
+}
+.field-input:focus {
+  outline: 2px solid var(--color-accent-subtle);
+  border-color: var(--color-accent-default);
+}
+.field-check {
+  width: 18px;
+  height: 18px;
+  align-self: start;
+}
+.field-ro {
+  color: var(--color-text-tertiary);
+  font-size: var(--type-body-s-size);
+  word-break: break-word;
+}
+.field.is-staged .field-input,
+.field.is-staged .field-check {
+  border-color: var(--color-accent-default);
+}
+.field-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  font-size: 10px;
+  color: var(--color-text-on-accent);
+  background: var(--color-accent-default);
+  border-radius: var(--radius-chip);
+  padding: 0 var(--space-1);
+}
+
+/* tabs */
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: var(--border-width) solid var(--color-border-default);
+  margin-bottom: var(--space-3);
+}
+.tab {
+  all: unset;
+  cursor: pointer;
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-secondary);
+  border-bottom: 2px solid transparent;
+  font-size: var(--type-body-s-size);
+}
+.tab.on {
+  color: var(--color-text-primary);
+  border-bottom-color: var(--color-accent-default);
+}
+
+/* review panel */
+.review .panel-head,
+.staged-panel .panel-head {
+  justify-content: space-between;
+}
+.row-actions {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+.staged-list,
+.effects,
+.widen-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.staged-list li,
+.effects li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  justify-content: space-between;
+}
+.effects li.widens .eff-text {
+  color: var(--color-status-warning-fg);
+}
+.staged-val {
+  flex: 1;
+  color: var(--color-text-primary);
+}
+.widening {
+  display: block;
+}
+.widen-list {
+  padding: var(--space-1) var(--space-4);
+  list-style: disc;
+}
+.id {
+  color: var(--color-text-tertiary);
+  font-size: var(--type-caption-size);
+}
+
+/* diff */
+.diff {
+  margin: var(--space-3);
+  padding: var(--space-2);
+  background: var(--color-bg-sunken);
+  border-radius: var(--radius-card);
+  overflow-x: auto;
+  font-size: var(--type-caption-size);
+  line-height: 1.5;
+}
+.diff.empty {
+  color: var(--color-text-tertiary);
+}
+.dl {
+  display: flex;
+  white-space: pre;
+}
+.dl .gutter {
+  width: 1.5ch;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.dl.add {
+  background: var(--color-code-add-bg);
+  color: var(--color-code-add-fg);
+}
+.dl.del {
+  background: var(--color-code-del-bg);
+  color: var(--color-code-del-fg);
+}
+
+.validate-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3) var(--space-3);
+}
+.validate-msg.ok {
+  color: var(--color-status-success-fg);
+}
+.validate-msg.error {
+  color: var(--color-status-danger-fg);
+}
+.confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+/* audit */
+.audit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.audit-row {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--color-border-subtle);
+  font-size: var(--type-body-s-size);
+}
+.audit-ts {
+  color: var(--color-text-tertiary);
+  flex: none;
+}
+.audit-event {
+  font-weight: 600;
+  flex: none;
+}
+.audit-rest {
+  color: var(--color-text-secondary);
+  overflow-x: auto;
+}
