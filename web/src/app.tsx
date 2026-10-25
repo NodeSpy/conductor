@@ -11,8 +11,13 @@ import { Audit } from './routes/Audit'
 import { Signin } from './routes/Signin'
 import { Enroll } from './routes/Enroll'
 import { Access } from './routes/Access'
+import { Activity } from './routes/Activity'
+import { RunDetail } from './routes/RunDetail'
+import { Workflows } from './routes/Workflows'
+import { WorkflowDetail } from './routes/WorkflowDetail'
+import { Builder } from './routes/Builder'
 import { load, startLive } from './state'
-import { route } from './router'
+import { route, screen, seg } from './router'
 import { refreshState, authState } from './api/auth'
 
 export function App(): JSX.Element {
@@ -56,7 +61,9 @@ function Authed(): JSX.Element {
 }
 
 function Screen(): JSX.Element {
-  switch (route.value) {
+  // Read route.value so this re-renders on every hash change.
+  void route.value
+  switch (screen()) {
     case 'config':
       return <Config />
     case 'secrets':
@@ -72,6 +79,13 @@ function Screen(): JSX.Element {
     case 'security':
     case 'access':
       return <Access />
+    case 'activity':
+      return <Activity />
+    case 'runs':
+      return seg(1) ? <RunDetail id={seg(1)} /> : <Activity />
+    case 'workflows':
+      if (seg(1) === 'new') return <Builder />
+      return seg(1) ? <WorkflowDetail name={seg(1)} /> : <Workflows />
     default:
       return <Overview />
   }

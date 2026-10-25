@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -73,6 +74,15 @@ type Deps struct {
 	// daemon (the proposal endpoints report so).
 	ApprovalView   func(bot, id string) (digest, summaryJSON string, operators []string, ok bool)
 	DecideProposal func(ctx context.Context, bot, id, decision, operator, reason string, ev StepupEvidence) error
+
+	// Run controls (design §4.3). Retry re-runs a recorded execution from a step
+	// (the engine's RetryRunByID); Stop cancels a live run by its history id;
+	// RunActive reports whether a run is still executing in this process (the
+	// history record lags). All nil on a read-only daemon — the endpoints then
+	// report the control is unavailable.
+	Retry     func(ctx context.Context, id, fromStep string, force bool) (string, error)
+	Stop      func(ctx context.Context, id string) error
+	RunActive func(id string) bool
 }
 
 // StepupEvidence re-exports auth.StepupEvidence so a Deps caller (the daemon)
@@ -116,7 +126,19 @@ func New(deps Deps) *Server {
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
 	s.mux.HandleFunc("GET /api/v1/runs", s.handleRuns)
+	s.mux.HandleFunc("GET /api/v1/runs/{id}", s.handleRunDetail)
+	s.mux.HandleFunc("POST /api/v1/runs/{id}/retry", s.handleRetry)
+	s.mux.HandleFunc("POST /api/v1/runs/{id}/stop", s.handleStop)
 	s.mux.HandleFunc("GET /api/v1/events", s.handleEvents)
+
+	// Workflows (design §4.4).
+	s.mux.HandleFunc("GET /api/v1/workflows", s.handleWorkflows)
+	s.mux.HandleFunc("GET /api/v1/workflows/{name}", s.handleWorkflow)
+	s.mux.HandleFunc("POST /api/v1/workflows/{name}/test", s.handleWorkflowTest)
+
+	// Connector-published filters (design §4.2).
+	s.mux.HandleFunc("GET /api/v1/connectors/attrs", s.handleConnectorAttrs)
+	s.mux.HandleFunc("GET /api/v1/connectors/attrs/values", s.handleAttrValues)
 
 	// Config-edit pipeline.
 	s.mux.HandleFunc("GET /api/v1/config", s.handleConfig)
@@ -250,6 +272,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	q := r.URL.Query()
 	out := make([]api.RunSummary, 0, limit)
 	for _, rec := range recs {
 		if !sinceCut.IsZero() && rec.Started.Before(sinceCut) {
@@ -257,6 +280,11 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		}
 		if !cursorBefore.IsZero() && !rec.Started.Before(cursorBefore) {
 			continue // already returned on a previous page
+		}
+		// Connector-qualifier filters (?github.repo=owner/name). conductor's own
+		// concepts (status/workflow) are filtered client-side in the list.
+		if !matchesAttrs(rec, q) {
+			continue
 		}
 		out = append(out, toSummary(rec))
 		if len(out) >= limit {
@@ -279,6 +307,13 @@ func toSummary(rec store.RunHistory) api.RunSummary {
 	if workflow == "" {
 		workflow = rec.Kind
 	}
+	// A manual run carries conductor's internal "manual:<name>#<hash>" key in
+	// place of a connector target; it is not a repo to display, so drop it (the
+	// workflow name already identifies the run).
+	repo, number := rec.Repo, rec.Number
+	if strings.HasPrefix(repo, "manual:") {
+		repo, number = "", 0
+	}
 	var dur int64
 	switch {
 	case !rec.Finished.IsZero():
@@ -288,7 +323,7 @@ func toSummary(rec store.RunHistory) api.RunSummary {
 	}
 	s := api.RunSummary{
 		ID: rec.ID, Kind: rec.Kind, Workflow: workflow,
-		Repo: rec.Repo, Number: rec.Number, Status: rec.Status,
+		Repo: repo, Number: number, Status: rec.Status,
 		Started: rec.Started.UTC().Format(time.RFC3339Nano),
 		Error:   rec.Error, FailedStep: rec.FailedStep, RetryOf: rec.RetryOf,
 		Steps: len(rec.Steps), Tokens: rec.Tokens, CostUSD: rec.CostUSD,

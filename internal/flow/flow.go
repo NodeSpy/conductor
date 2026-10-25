@@ -230,6 +230,10 @@ type Runner struct {
 	// the `sleep:` helper step both go through it, so neither can block a
 	// shutdown. Injectable for retry tests.
 	sleep func(ctx context.Context, d time.Duration) error
+	// cancelReg maps a live run's history id to its cancel func, so an
+	// operator can Stop a running run (see cancel.go). A pointer so the Runner
+	// stays copyable by value (New takes one by value) without copying a lock.
+	cancelReg *cancelReg
 }
 
 // New builds a Runner with defaults filled in.
@@ -251,6 +255,9 @@ func New(r Runner) *Runner {
 	}
 	if r.Code == nil {
 		r.Code = &code.Executor{}
+	}
+	if r.cancelReg == nil {
+		r.cancelReg = &cancelReg{}
 	}
 	return &r
 }
@@ -413,6 +420,15 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	ctx = r.withRunBudget(ctx, t, spec)
 	ctx, runCost := withCostAcc(ctx)
 	ctx, hist := r.beginHistory(ctx, run, t, spec, shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow))
+	// Register a cancel for this run so an operator can Stop it (cancel.go).
+	// Only a recorded run (its history id is non-empty) is stoppable — a
+	// shadow/dry run has nothing to stop and nothing to retry.
+	if id := hist.runHistoryID(); id != "" {
+		var cancel context.CancelCauseFunc
+		ctx, cancel = context.WithCancelCause(ctx)
+		r.cancelReg.register(id, cancel)
+		defer r.cancelReg.unregister(id)
+	}
 	// Stamp the run's provenance for memory writes: a `uses: memory.remember`
 	// step or hook records where the memory came from with no step plumbing.
 	ctx = memory.WithSource(ctx, memory.Source{Run: run.ID, Trigger: t.Kind, Repo: t.Target.Repo,

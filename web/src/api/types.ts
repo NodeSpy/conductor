@@ -58,6 +58,143 @@ export interface RunsResponse {
   next?: string;
 }
 /**
+ * RunDetailResponse is GET /api/v1/runs/{id}: one execution in full — the run
+ * summary, its steps with per-step I/O and timing, whether it is live in this
+ * process, and the retry back/forward links. It is the display projection of
+ * store.RunHistory; secret values never appear (the records are scrubbed before
+ * they are written).
+ */
+export interface RunDetailResponse {
+  run: RunSummary;
+  live: boolean; // the run is still executing in this daemon
+  trigger?: string; // a human line for what started it
+  steps: RunStep[];
+}
+/**
+ * RunStep is one step's execution record for the run page's step tree and step
+ * card. Inputs/Outputs are rendered as YAML text (scrubbed, checkpoint form);
+ * Diff is a unified diff when the step recorded one in its outputs.
+ */
+export interface RunStep {
+  id: string;
+  index: number /* int */;
+  kind: string; // agent | command | code | verb | decide | handoff | call | step
+  status: string; // ok | failed | skipped | running | idle
+  started?: string;
+  duration_ms?: number /* int64 */;
+  inputs_yaml?: string;
+  outputs_yaml?: string;
+  diff?: string;
+  error?: string;
+  continued_on_error?: boolean;
+  tokens?: number /* int */;
+  cost_usd?: number /* float64 */;
+  runtime?: string;
+  model?: string;
+}
+/**
+ * RetryRequest is POST /api/v1/runs/{id}/retry: re-run a recorded execution
+ * from a step. From is the step id to restart from ("" = the recorded failed
+ * step, else the beginning). Force replays steps the record says already
+ * succeeded (replaying their committed side effects) — never the default.
+ */
+export interface RetryRequest {
+  from?: string;
+  force?: boolean;
+}
+/**
+ * ActionResponse is a plain acknowledgment for retry/stop: a human message and,
+ * for a retry, the new run's id when the engine reports one.
+ */
+export interface ActionResponse {
+  message: string;
+  run_id?: string;
+}
+/**
+ * WorkflowsResponse is GET /api/v1/workflows: every configured trigger as a
+ * workflow, with how many steps it runs and its recent run tally.
+ */
+export interface WorkflowsResponse {
+  workflows: WorkflowSummary[];
+}
+/**
+ * WorkflowSummary is one row of the Workflows list.
+ */
+export interface WorkflowSummary {
+  name: string; // the trigger name, or its on: when unnamed
+  on?: string; // the inbound event (<connector>.<event> | manual)
+  steps: number /* int */; // top-level step count
+  disabled: boolean; // enabled: false
+  manual: boolean; // reachable by `conductor run` / Test
+  runs?: number /* int */; // runs recorded for it (history)
+  failed?: number /* int */;
+  last_run?: string; // RFC3339 of its most recent run
+  last_key?: string; // id of its most recent run (for a link)
+}
+/**
+ * WorkflowDetailResponse is GET /api/v1/workflows/{name}: the workflow's graph
+ * (one node per step, edges from the step order / parallel branches), its YAML
+ * (the trigger spec re-marshalled), and its recent runs.
+ */
+export interface WorkflowDetailResponse {
+  name: string;
+  on?: string;
+  manual: boolean;
+  disabled: boolean;
+  yaml: string;
+  nodes: GraphNode[];
+  runs: RunSummary[];
+}
+/**
+ * GraphNode is one step in a workflow's graph. Needs lists the ids it waits on
+ * (the previous step, or the branch head for a parallel branch). Line is the
+ * 1-based line in YAML where the node is defined, so clicking a node can reveal
+ * it in the YAML pane (node→YAML).
+ */
+export interface GraphNode {
+  id: string;
+  kind: string;
+  label?: string;
+  needs?: string[];
+  line?: number /* int */;
+}
+/**
+ * TestResponse is POST /api/v1/workflows/{name}/test: a dry-run that validates
+ * the workflow resolves (templates, verbs, runtimes) without dispatching any
+ * agent or outbound verb. Ok is true when it would run; Steps echoes the plan.
+ */
+export interface TestResponse {
+  ok: boolean;
+  message: string;
+  nodes?: GraphNode[];
+}
+/**
+ * AttrsResponse is GET /api/v1/connectors/attrs: the search qualifiers the
+ * connectors publish for the filter bar (e.g. github.repo). These are
+ * connector concepts — they are offered as search-qualifier pills, never as
+ * their own filter menu (menus are conductor's own: status, workflow, bot).
+ */
+export interface AttrsResponse {
+  attrs: AttrQualifier[];
+}
+/**
+ * AttrQualifier is one connector-published search qualifier.
+ */
+export interface AttrQualifier {
+  key: string; // the qualifier, "<connector>.<field>" (github.repo)
+  connector: string; // the connector namespace (github)
+  field: string; // repo | number
+  label: string; // human label (Repo)
+}
+/**
+ * AttrValuesResponse is GET /api/v1/connectors/attrs/values?attr=github.repo:
+ * the distinct values present in the run history for that qualifier, for
+ * autocomplete.
+ */
+export interface AttrValuesResponse {
+  values: string[];
+}
+/**
  * EventTopic names a stream a client subscribes to via GET /api/v1/events?topics=.
  */
 export type EventTopic = string;
@@ -194,17 +331,26 @@ export interface StageRequest {
   summary?: string;
 }
 /**
- * ApplyRequest is POST /api/v1/config/apply.
+ * ApplyRequest is POST /api/v1/config/apply. Token is the pipeline confirm token
+ * from the matching review (step-up, candidate-bound). StepupToken is the
+ * WebAuthn step-up token required ONLY when auth is configured AND the staged set
+ * widens a guardrail (auth.PurposeConfigApply); the step-up ceremony's digest is
+ * the pipeline confirm Token.
  */
 export interface ApplyRequest {
   token: string;
+  stepup_token?: string;
 }
 /**
- * RestoreRequest is POST /api/v1/config/restore and /restore/review.
+ * RestoreRequest is POST /api/v1/config/restore and /restore/review. StepupToken
+ * is the WebAuthn step-up token required when auth is configured (a restore
+ * re-writes the whole file, so it always needs step-up under auth); its ceremony
+ * digest is the restore confirm Token.
  */
 export interface RestoreRequest {
   id: string;
   token?: string;
+  stepup_token?: string;
 }
 /**
  * SecretsResponse is GET /api/v1/secrets: the vaults, the top-level secret refs,

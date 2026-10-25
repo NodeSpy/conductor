@@ -4,11 +4,12 @@
 // the approved design without pretending to route somewhere that isn't built.
 import type { ComponentChildren, JSX } from 'preact'
 import { conn } from '../state'
-import { route } from '../router'
+import { route, screen } from '../router'
 
 const NAV: { label: string; to?: string; soon?: boolean }[] = [
   { label: 'Overview', to: '' },
-  { label: 'Workflows', soon: true },
+  { label: 'Activity', to: 'activity' },
+  { label: 'Workflows', to: 'workflows' },
   { label: 'Bots', soon: true },
   { label: 'Browsers', soon: true },
   { label: 'Config', to: 'config' },
@@ -60,7 +61,10 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
           </div>
           <ul class="nav">
             {NAV.map((n) => {
-              const active = n.to !== undefined && route.value === n.to
+              // Highlight the section for its detail pages too (workflows/:name
+              // keeps Workflows lit); Overview ('') only on the exact root.
+              const cur = screen()
+              const active = n.to !== undefined && (n.to === '' ? route.value === '' : cur === n.to)
               return (
                 <li>
                   {n.to !== undefined ? (

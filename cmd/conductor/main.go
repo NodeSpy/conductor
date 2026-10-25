@@ -1097,10 +1097,18 @@ func cmdRun(args []string) error {
 			// a WebAuthn-authenticated decision into the same Executor.Decide the
 			// CLI uses (botCtl is wired just below, so the callbacks resolve it per
 			// call). A lifecycle event lets any connector alert on enroll/reset.
-			Operators:      dashboardOperators(cfg),
-			Lifecycle:      func(event, operator, detail string) { st.Audit(map[string]any{"event": event, "operator": operator, "detail": detail}) },
+			Operators: dashboardOperators(cfg),
+			Lifecycle: func(event, operator, detail string) {
+				st.Audit(map[string]any{"event": event, "operator": operator, "detail": detail})
+			},
 			ApprovalView:   dashboardApprovalView,
 			DecideProposal: dashboardDecide,
+			// Run controls (design §4.3): retry reuses the engine's deliberate
+			// re-run-from-step; stop cancels a live run; RunActive is the
+			// authority on "still running" the history file lags behind.
+			Retry:     eng.RetryRunByID,
+			Stop:      func(ctx context.Context, id string) error { return eng.StopRunByID(id) },
+			RunActive: eng.RunActiveByID,
 		})
 		if err := dash.Start(ctx); err != nil {
 			logf("dashboard: not started: %v", err)

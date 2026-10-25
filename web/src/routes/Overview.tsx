@@ -4,7 +4,7 @@
 // on every SSE run event.
 import type { JSX } from 'preact'
 import { useState } from 'preact/hooks'
-import { status, runs, loadError, liveTick, statusMark } from '../state'
+import { status, runs, loadError, liveTick, statusMark, needsYou, dismiss } from '../state'
 import type { RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
 import { humanDuration, ago, uptime } from '../lib/format'
@@ -24,7 +24,9 @@ export function Overview(): JSX.Element {
   const last12 = all.filter((r) => startedMs(r) >= now - 12 * HOUR)
 
   const running = all.filter((r) => r.status === 'running').sort((a, b) => b.duration_ms - a.duration_ms)
-  const failed = all.filter((r) => r.status === 'failed')
+  // Needs-you is the shared attention aggregator (state.needsYou): failed runs
+  // the operator hasn't dismissed. It refreshes on every SSE attention event.
+  const failed = needsYou(all)
   const finished = all.filter((r) => r.status === 'ok' || r.status === 'retried')
   const longest = running.length ? humanDuration(running[0].duration_ms) : '—'
 
@@ -36,7 +38,7 @@ export function Overview(): JSX.Element {
 
       {/* At a glance */}
       <section class="tiles" aria-label="At a glance">
-        <Tile label="Running" value={String(running.length)} sub={running.length ? `longest ${longest}` : 'nothing running'} href="#/" />
+        <Tile label="Running" value={String(running.length)} sub={running.length ? `longest ${longest}` : 'nothing running'} href="#/activity" />
         <Tile label="Runs · last 12 h" value={String(last12.length)} sub={`${failed12(last12)} failed`} />
         <Tile label="Needs you" value={String(failed.length)} sub={failed.length ? 'failed runs' : 'all clear'} tone={failed.length ? 'attn' : undefined} />
         <Tile label="Version" value={st?.version ?? '…'} sub={st ? `up ${uptime(st.uptime_sec)}` : ''} mono />
@@ -121,9 +123,12 @@ function NeedsYou({ failed, paused }: { failed: RunSummary[]; paused: boolean })
                 <div class="row-meta mono">{r.id}</div>
               </div>
               <div class="row-age">{ago(r.started)}</div>
-              <a class="btn sm" href="#/">
+              <a class="btn sm" href={'#/runs/' + r.id}>
                 Open
               </a>
+              <button class="btn sm ghost" type="button" title="Dismiss from Needs you" onClick={() => dismiss(r.id)}>
+                Dismiss
+              </button>
             </li>
           ))}
         </ul>
@@ -294,7 +299,7 @@ function GroupHead({ title, n, attn }: { title: string; n: number; attn?: boolea
 function Row({ r, rowState, quiet }: { r: RunSummary; rowState?: string; quiet?: boolean }): JSX.Element {
   const m = statusMark(r.status)
   return (
-    <tr class={quiet ? 'quiet' : ''} data-row={rowState}>
+    <tr class={quiet ? 'quiet clickable' : 'clickable'} data-row={rowState} onClick={() => (location.hash = '#/runs/' + r.id)}>
       <td>
         <div class="cell-title">{r.workflow}</div>
         {r.repo ? <div class="cell-sub mono">{r.repo}{r.number ? `#${r.number}` : ''}</div> : null}

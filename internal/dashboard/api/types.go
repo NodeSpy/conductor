@@ -47,6 +47,131 @@ type RunsResponse struct {
 	Next string       `json:"next,omitempty"`
 }
 
+// RunDetailResponse is GET /api/v1/runs/{id}: one execution in full — the run
+// summary, its steps with per-step I/O and timing, whether it is live in this
+// process, and the retry back/forward links. It is the display projection of
+// store.RunHistory; secret values never appear (the records are scrubbed before
+// they are written).
+type RunDetailResponse struct {
+	Run     RunSummary `json:"run"`
+	Live    bool       `json:"live"`              // the run is still executing in this daemon
+	Trigger string     `json:"trigger,omitempty"` // a human line for what started it
+	Steps   []RunStep  `json:"steps"`
+}
+
+// RunStep is one step's execution record for the run page's step tree and step
+// card. Inputs/Outputs are rendered as YAML text (scrubbed, checkpoint form);
+// Diff is a unified diff when the step recorded one in its outputs.
+type RunStep struct {
+	ID               string  `json:"id"`
+	Index            int     `json:"index"`
+	Kind             string  `json:"kind"`   // agent | command | code | verb | decide | handoff | call | step
+	Status           string  `json:"status"` // ok | failed | skipped | running | idle
+	Started          string  `json:"started,omitempty"`
+	DurationMS       int64   `json:"duration_ms,omitempty"`
+	InputsYAML       string  `json:"inputs_yaml,omitempty"`
+	OutputsYAML      string  `json:"outputs_yaml,omitempty"`
+	Diff             string  `json:"diff,omitempty"`
+	Error            string  `json:"error,omitempty"`
+	ContinuedOnError bool    `json:"continued_on_error,omitempty"`
+	Tokens           int     `json:"tokens,omitempty"`
+	CostUSD          float64 `json:"cost_usd,omitempty"`
+	Runtime          string  `json:"runtime,omitempty"`
+	Model            string  `json:"model,omitempty"`
+}
+
+// RetryRequest is POST /api/v1/runs/{id}/retry: re-run a recorded execution
+// from a step. From is the step id to restart from ("" = the recorded failed
+// step, else the beginning). Force replays steps the record says already
+// succeeded (replaying their committed side effects) — never the default.
+type RetryRequest struct {
+	From  string `json:"from,omitempty"`
+	Force bool   `json:"force,omitempty"`
+}
+
+// ActionResponse is a plain acknowledgment for retry/stop: a human message and,
+// for a retry, the new run's id when the engine reports one.
+type ActionResponse struct {
+	Message string `json:"message"`
+	RunID   string `json:"run_id,omitempty"`
+}
+
+// WorkflowsResponse is GET /api/v1/workflows: every configured trigger as a
+// workflow, with how many steps it runs and its recent run tally.
+type WorkflowsResponse struct {
+	Workflows []WorkflowSummary `json:"workflows"`
+}
+
+// WorkflowSummary is one row of the Workflows list.
+type WorkflowSummary struct {
+	Name     string `json:"name"`           // the trigger name, or its on: when unnamed
+	On       string `json:"on,omitempty"`   // the inbound event (<connector>.<event> | manual)
+	Steps    int    `json:"steps"`          // top-level step count
+	Disabled bool   `json:"disabled"`       // enabled: false
+	Manual   bool   `json:"manual"`         // reachable by `conductor run` / Test
+	Runs     int    `json:"runs,omitempty"` // runs recorded for it (history)
+	Failed   int    `json:"failed,omitempty"`
+	LastRun  string `json:"last_run,omitempty"` // RFC3339 of its most recent run
+	LastKey  string `json:"last_key,omitempty"` // id of its most recent run (for a link)
+}
+
+// WorkflowDetailResponse is GET /api/v1/workflows/{name}: the workflow's graph
+// (one node per step, edges from the step order / parallel branches), its YAML
+// (the trigger spec re-marshalled), and its recent runs.
+type WorkflowDetailResponse struct {
+	Name     string       `json:"name"`
+	On       string       `json:"on,omitempty"`
+	Manual   bool         `json:"manual"`
+	Disabled bool         `json:"disabled"`
+	YAML     string       `json:"yaml"`
+	Nodes    []GraphNode  `json:"nodes"`
+	Runs     []RunSummary `json:"runs"`
+}
+
+// GraphNode is one step in a workflow's graph. Needs lists the ids it waits on
+// (the previous step, or the branch head for a parallel branch). Line is the
+// 1-based line in YAML where the node is defined, so clicking a node can reveal
+// it in the YAML pane (node→YAML).
+type GraphNode struct {
+	ID    string   `json:"id"`
+	Kind  string   `json:"kind"`
+	Label string   `json:"label,omitempty"`
+	Needs []string `json:"needs,omitempty"`
+	Line  int      `json:"line,omitempty"`
+}
+
+// TestResponse is POST /api/v1/workflows/{name}/test: a dry-run that validates
+// the workflow resolves (templates, verbs, runtimes) without dispatching any
+// agent or outbound verb. Ok is true when it would run; Steps echoes the plan.
+type TestResponse struct {
+	Ok      bool        `json:"ok"`
+	Message string      `json:"message"`
+	Nodes   []GraphNode `json:"nodes,omitempty"`
+}
+
+// AttrsResponse is GET /api/v1/connectors/attrs: the search qualifiers the
+// connectors publish for the filter bar (e.g. github.repo). These are
+// connector concepts — they are offered as search-qualifier pills, never as
+// their own filter menu (menus are conductor's own: status, workflow, bot).
+type AttrsResponse struct {
+	Attrs []AttrQualifier `json:"attrs"`
+}
+
+// AttrQualifier is one connector-published search qualifier.
+type AttrQualifier struct {
+	Key       string `json:"key"`       // the qualifier, "<connector>.<field>" (github.repo)
+	Connector string `json:"connector"` // the connector namespace (github)
+	Field     string `json:"field"`     // repo | number
+	Label     string `json:"label"`     // human label (Repo)
+}
+
+// AttrValuesResponse is GET /api/v1/connectors/attrs/values?attr=github.repo:
+// the distinct values present in the run history for that qualifier, for
+// autocomplete.
+type AttrValuesResponse struct {
+	Values []string `json:"values"`
+}
+
 // EventTopic names a stream a client subscribes to via GET /api/v1/events?topics=.
 type EventTopic string
 

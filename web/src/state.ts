@@ -3,7 +3,7 @@
 import { signal } from '@preact/signals'
 import { api } from './api/client'
 import { openEvents } from './api/sse'
-import type { StatusResponse, RunSummary } from './api/types'
+import type { StatusResponse, RunSummary, AttrQualifier } from './api/types'
 
 export const status = signal<StatusResponse | null>(null)
 export const runs = signal<RunSummary[]>([])
@@ -11,6 +11,44 @@ export const loadError = signal<string>('')
 export const conn = signal<'connecting' | 'live' | 'reconnecting'>('connecting')
 // liveTick bumps on every received SSE event, so the UI can flash a "live" pulse.
 export const liveTick = signal(0)
+// connAttrs are the connector-published search qualifiers (github.repo, …) the
+// filter bar offers as pills. Loaded once; refreshed when the run set changes.
+export const connAttrs = signal<AttrQualifier[]>([])
+
+// Needs-you / attention aggregator (design §4.1). Runs that need a person —
+// failed runs (the backend's attention topic feeds these) — minus the ones the
+// operator dismissed. Dismissals are local and reversible (an Undo in the UI).
+const DISMISS_KEY = 'needs-dismissed'
+function loadDismissed(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(DISMISS_KEY) || '[]') as string[]
+  } catch {
+    return []
+  }
+}
+export const dismissed = signal<string[]>(loadDismissed())
+
+export function setDismissed(next: string[]): void {
+  dismissed.value = next
+  try {
+    localStorage.setItem(DISMISS_KEY, JSON.stringify(next))
+  } catch {
+    /* storage unavailable (private mode) — keep it in memory only */
+  }
+}
+
+export function dismiss(id: string): void {
+  if (!dismissed.value.includes(id)) setDismissed([...dismissed.value, id])
+}
+export function undismiss(id: string): void {
+  setDismissed(dismissed.value.filter((d) => d !== id))
+}
+
+// needsYou returns the runs needing a person right now, newest first.
+export function needsYou(all: RunSummary[] = runs.value): RunSummary[] {
+  const skip = new Set(dismissed.value)
+  return all.filter((r) => r.status === 'failed' && !skip.has(r.id))
+}
 
 // Mark state keys (data-s) and words, from the run record's status. These are
 // the brand's status vocabulary (css/marks.css): ok→passed, fail→failed,
@@ -38,6 +76,13 @@ export async function load(): Promise<void> {
     loadError.value = ''
   } catch (e) {
     loadError.value = e instanceof Error ? e.message : String(e)
+  }
+  // Connector qualifiers are cheap and change rarely; a failure just leaves the
+  // filter bar without pills, never blocks the page.
+  try {
+    connAttrs.value = (await api.connectorAttrs()).attrs || []
+  } catch {
+    /* no qualifiers available */
   }
 }
 

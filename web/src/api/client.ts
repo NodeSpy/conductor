@@ -17,6 +17,14 @@ import type {
   ConnectionsResponse,
   SystemResponse,
   AuditResponse,
+  RunDetailResponse,
+  ActionResponse,
+  RetryRequest,
+  WorkflowsResponse,
+  WorkflowDetailResponse,
+  TestResponse,
+  AttrsResponse,
+  AttrValuesResponse,
 } from './types'
 
 async function getJSON<T>(path: string): Promise<T> {
@@ -74,6 +82,24 @@ export const api = {
   history: () => getJSON<{ history: HistoryItem[] }>('/api/v1/config/history'),
   restoreReview: (id: string) => sendJSON<ReviewResponse>('POST', '/api/v1/config/restore/review', { id }),
   restore: (id: string, token: string) => sendJSON<AppliedResponse>('POST', '/api/v1/config/restore', { id, token }),
+
+  // --- run detail + controls ---
+  run: (id: string) => getJSON<RunDetailResponse>('/api/v1/runs/' + encodeURIComponent(id)),
+  retryRun: (id: string, req: RetryRequest = {}) =>
+    sendJSON<ActionResponse>('POST', '/api/v1/runs/' + encodeURIComponent(id) + '/retry', req),
+  stopRun: (id: string) =>
+    sendJSON<ActionResponse>('POST', '/api/v1/runs/' + encodeURIComponent(id) + '/stop', {}),
+
+  // --- workflows ---
+  workflows: () => getJSON<WorkflowsResponse>('/api/v1/workflows'),
+  workflow: (name: string) => getJSON<WorkflowDetailResponse>('/api/v1/workflows/' + encodeURIComponent(name)),
+  testWorkflow: (name: string) =>
+    sendJSON<TestResponse>('POST', '/api/v1/workflows/' + encodeURIComponent(name) + '/test', {}),
+
+  // --- connector-published filters ---
+  connectorAttrs: () => getJSON<AttrsResponse>('/api/v1/connectors/attrs'),
+  attrValues: (attr: string) =>
+    getJSON<AttrValuesResponse>('/api/v1/connectors/attrs/values?attr=' + encodeURIComponent(attr)),
 
   // --- section reads ---
   secrets: () => getJSON<SecretsResponse>('/api/v1/secrets'),
