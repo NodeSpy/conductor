@@ -4,6 +4,7 @@ import './styles/tokens.css'
 import './styles/app.css'
 import './styles/screens.css'
 import './styles/read.css'
+import './styles/bots.css'
 
 const root = document.getElementById('app')
 if (root) render(<App />, root)

@@ -1109,6 +1109,10 @@ func cmdRun(args []string) error {
 			Retry:     eng.RetryRunByID,
 			Stop:      func(ctx context.Context, id string) error { return eng.StopRunByID(id) },
 			RunActive: eng.RunActiveByID,
+			// The bots' operator API (design §4.4): the same handler the unix
+			// socket serves (teams, chat, tickets, avatars, read models), mounted
+			// into the web surface under /api. Nil when no bots run here.
+			BotAPI: dashboardBotAPI(bots),
 		})
 		if err := dash.Start(ctx); err != nil {
 			logf("dashboard: not started: %v", err)

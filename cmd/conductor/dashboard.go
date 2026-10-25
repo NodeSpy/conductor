@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -250,6 +251,16 @@ func dashboardDecide(ctx context.Context, botName, id, decision, operator, reaso
 		},
 	})
 	return err
+}
+
+// dashboardBotAPI builds the bots' operator API handler for the web dashboard —
+// the same mux the unix-socket server uses. Nil when no bots run on this daemon,
+// so the dashboard reports the bot endpoints as unavailable rather than 500ing.
+func dashboardBotAPI(bots *botStack) http.Handler {
+	if bots == nil {
+		return nil
+	}
+	return bots.operatorAPI()
 }
 
 // handleDashboardControl serves the daemon side of `conductor dashboard` on the

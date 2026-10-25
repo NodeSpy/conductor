@@ -26,16 +26,25 @@ import type {
   AttrsResponse,
   AttrValuesResponse,
 } from './types'
+import { authState } from './auth'
 
 async function getJSON<T>(path: string): Promise<T> {
-  const res = await fetch(path, { headers: { Accept: 'application/json' } })
+  const res = await fetch(path, { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
   return handle<T>(res)
 }
 
 async function sendJSON<T>(method: string, path: string, body: unknown): Promise<T> {
+  // Mutations carry the per-session CSRF token when signed in (design §6.4); the
+  // __Host session cookie rides along on the same-origin request.
+  const csrf = authState.value.csrf
   const res = await fetch(path, {
     method,
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...(csrf ? { 'X-Conductor-CSRF': csrf } : {}),
+    },
     body: JSON.stringify(body ?? {}),
   })
   return handle<T>(res)

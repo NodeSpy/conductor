@@ -82,6 +82,7 @@ func OperatorAPI(s *Service) http.Handler {
 	mux.HandleFunc("POST /v1/conversations/{id}/pin", s.apiConversationPin)
 	mux.HandleFunc("DELETE /v1/conversations/{id}/pin", s.apiConversationUnpin)
 	mux.HandleFunc("PUT /v1/conversations/pins", s.apiConversationPins)
+	s.registerViewRoutes(mux) // bot roster, detail, proposals (design §4.4)
 	return mux
 }
 

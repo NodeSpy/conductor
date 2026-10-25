@@ -8,9 +8,11 @@ import { route, screen } from '../router'
 
 const NAV: { label: string; to?: string; soon?: boolean }[] = [
   { label: 'Overview', to: '' },
+  { label: 'Chat', to: 'chat' },
   { label: 'Activity', to: 'activity' },
   { label: 'Workflows', to: 'workflows' },
-  { label: 'Bots', soon: true },
+  { label: 'Bots', to: 'bots' },
+  { label: 'Tickets', to: 'tickets' },
   { label: 'Browsers', soon: true },
   { label: 'Config', to: 'config' },
   { label: 'Secrets', to: 'secrets' },
@@ -61,8 +63,8 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
           </div>
           <ul class="nav">
             {NAV.map((n) => {
-              // Highlight the section for its detail pages too (workflows/:name
-              // keeps Workflows lit); Overview ('') only on the exact root.
+              // Highlight the section for its detail pages too (bots/:name keeps
+              // Bots lit); Overview ('') only on the exact root.
               const cur = screen()
               const active = n.to !== undefined && (n.to === '' ? route.value === '' : cur === n.to)
               return (

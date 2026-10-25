@@ -16,6 +16,13 @@ import { RunDetail } from './routes/RunDetail'
 import { Workflows } from './routes/Workflows'
 import { WorkflowDetail } from './routes/WorkflowDetail'
 import { Builder } from './routes/Builder'
+import { Bots } from './routes/Bots'
+import { BotDetail } from './routes/BotDetail'
+import { TeamDetail } from './routes/TeamDetail'
+import { Chat } from './routes/Chat'
+import { Tickets } from './routes/Tickets'
+import { TicketDetail } from './routes/TicketDetail'
+import { Approval } from './routes/Approval'
 import { load, startLive } from './state'
 import { route, screen, seg } from './router'
 import { refreshState, authState } from './api/auth'
@@ -86,6 +93,20 @@ function Screen(): JSX.Element {
     case 'workflows':
       if (seg(1) === 'new') return <Builder />
       return seg(1) ? <WorkflowDetail name={seg(1)} /> : <Workflows />
+    case 'bots':
+      // #/bots, #/bots/<bot>[/<tab>], #/bots/<bot>/proposals/<id> (the approval)
+      if (seg(1) && seg(2) === 'proposals' && seg(3)) return <Approval bot={seg(1)} id={seg(3)} />
+      if (seg(1)) return <BotDetail name={seg(1)} tab={seg(2)} />
+      return <Bots />
+    case 'teams':
+      if (seg(1)) return <TeamDetail name={seg(1)} tab={seg(2)} />
+      return <Bots />
+    case 'chat':
+      // #/chat or #/chat/bot:atlas (the conversation id carries its own colon)
+      return <Chat convId={seg(1) || undefined} />
+    case 'tickets':
+      if (seg(1)) return <TicketDetail num={seg(1)} />
+      return <Tickets />
     default:
       return <Overview />
   }

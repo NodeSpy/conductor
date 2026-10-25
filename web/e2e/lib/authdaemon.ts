@@ -8,6 +8,15 @@ import { mkdtempSync, writeFileSync, openSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
+import { createHash } from 'node:crypto'
+
+// actionDigest mirrors bot.ActionDigest: the sha256 of the canonical verb action
+// (Go marshals the map with sorted keys), so an approval seeded here passes the
+// gate's digest re-check when the approved verb executes.
+function actionDigest(bot: string, uses: string, options: Record<string, unknown>): string {
+  const canonical = JSON.stringify({ bot, kind: 'verb', options, uses, v: 1 })
+  return createHash('sha256').update(canonical).digest('hex')
+}
 
 export interface AuthRuntime {
   bin: string
@@ -82,9 +91,27 @@ export async function startAuthDaemon(port: number): Promise<AuthRuntime> {
       `  claude-cli: { use: cli, tool: claude-code }`,
       `connectors:`,
       `  box: { use: command }`,
+      `teams:`,
+      `  platform:`,
+      `    description: Platform services`,
+      `    operators: [ops]`,
+      `    routing: { lead: atlas, fallback: atlas }`,
       `bots:`,
+      `  atlas:`,
+      `    description: Platform SRE — keeps services healthy`,
+      `    team: platform`,
+      `    operators: [ops]`,
+      `    autonomy: { shadow: false, tiers: { reversible: [box.run] }, promote: [box.run] }`,
+      `    worker: { runtime: claude-cli }`,
+      `    skill: { verbs: [box.run] }`,
+      `    display_name: Atlas`,
+      `    avatar:`,
+      `      shape: hexagon`,
+      `      eyes: round`,
+      `      color: teal`,
       `  sre:`,
-      `    description: SRE`,
+      `    description: Reliability — proposes the risky ones`,
+      `    team: platform`,
       `    operators: [ops]`,
       `    autonomy: { shadow: false }`,
       `    worker: { runtime: claude-cli }`,
@@ -96,6 +123,7 @@ export async function startAuthDaemon(port: number): Promise<AuthRuntime> {
 
   // Seed one pending proposal straight into the ledger (bots.json), so the
   // approval endpoint has something real to decide without running an agent.
+  const options = { command: 'true' }
   const bots = {
     sre: {
       name: 'sre',
@@ -103,14 +131,18 @@ export async function startAuthDaemon(port: number): Promise<AuthRuntime> {
         p1: {
           id: 'p1',
           kind: 'verb',
-          tier: 'act',
+          tier: 'reversible',
           uses: 'box.run',
           status: 'pending',
-          digest: 'e2edigest',
+          // The real canonical digest, so the gate's re-check passes when the
+          // approved verb executes (box.run `true` → success).
+          digest: actionDigest('sre', 'box.run', options),
           requester_class: 'user',
           created: now.toISOString(),
           expires: expires.toISOString(),
-          options: { command: 'true' },
+          options,
+          // The token-bound caller identity the approved verb runs under.
+          identity: { Verbs: ['box.run'], bot: 'sre', bot_role: 'home' },
           summary: 'run a command',
         },
       },

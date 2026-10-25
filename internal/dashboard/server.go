@@ -83,6 +83,13 @@ type Deps struct {
 	Retry     func(ctx context.Context, id, fromStep string, force bool) (string, error)
 	Stop      func(ctx context.Context, id string) error
 	RunActive func(id string) bool
+
+	// BotAPI is the bots' operator API (internal/bot.OperatorAPI plus the avatar
+	// routes), which serves teams, conversations, tickets, messages, attachments
+	// and avatars on `/v1/...`. The dashboard mounts it under `/api/` (design
+	// §4.4), behind the same session guard as every other /api route. Nil when no
+	// bots run on this daemon.
+	BotAPI http.Handler
 }
 
 // StepupEvidence re-exports auth.StepupEvidence so a Deps caller (the daemon)
@@ -160,7 +167,44 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/system", s.handleSystem)
 	s.mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
 
+	// The bots' operator API (design §4.4): teams, conversations (chat), tickets,
+	// messages, attachments, avatars and the bot read models. It serves `/v1/...`,
+	// so we mount it under `/api/` (strip the prefix) on the paths it owns. The
+	// approval view/decision endpoints stay on the dashboard's own auth mux
+	// (authRoutes), which carries the step-up; the more-specific pattern wins, so
+	// the `/api/v1/bots/` subtree below never shadows them.
+	if s.deps.BotAPI != nil {
+		botH := s.botHandler()
+		for _, p := range []string{
+			"/api/v1/bots", "/api/v1/bots/",
+			"/api/v1/teams", "/api/v1/teams/",
+			"/api/v1/conversations", "/api/v1/conversations/",
+			"/api/v1/tickets", "/api/v1/tickets/",
+			"/api/v1/proposals",
+		} {
+			s.mux.Handle(p, botH)
+		}
+	}
+
 	s.mux.Handle("/", spaHandler()) // the embedded SPA, with SPA fallback
+}
+
+// botHandler adapts the bots' operator API (which serves `/v1/...`) to the
+// dashboard's `/api/v1/...` surface: it strips the `/api` prefix and, when a
+// session is signed in and the caller named no operator, injects the session
+// operator so writes are attributed to the signed-in human (design §6.6).
+func (s *Server) botHandler() http.Handler {
+	stripped := http.StripPrefix("/api", s.deps.BotAPI)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if sess, ok := auth.SessionFrom(r); ok && sess.Operator != "" {
+			if r.URL.Query().Get("operator") == "" {
+				q := r.URL.Query()
+				q.Set("operator", sess.Operator)
+				r.URL.RawQuery = q.Encode()
+			}
+		}
+		stripped.ServeHTTP(w, r)
+	})
 }
 
 // Start binds the configured localhost listeners and serves until ctx is
