@@ -1,0 +1,154 @@
+// A dedicated, authenticated throwaway daemon for the auth suite — SEPARATE from
+// the shared open daemon (lib/daemon.ts), so requiring sign-in here never affects
+// the overview/config suites. It boots with an operator (an ed25519 key we
+// generate), a bot with one seeded pending proposal, and the dashboard on its own
+// port, then mints an enrolment ticket via the CLI (SSH-signed with our key).
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
+import { mkdtempSync, writeFileSync, openSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import http from 'node:http'
+
+export interface AuthRuntime {
+  bin: string
+  config: string
+  keyFile: string
+  port: number
+  baseURL: string // http://localhost:<port> — localhost, not 127.0.0.1, so RP "localhost" works
+  pid: number
+  proposalBot: string
+  proposalID: string
+}
+
+function hermeticEnv(home: string): NodeJS.ProcessEnv {
+  return { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, TMPDIR: process.env.TMPDIR ?? '/tmp', TERM: 'dumb' }
+}
+
+function resolveBin(): string {
+  const fromEnv = process.env.CONDUCTOR_BIN
+  const bin = fromEnv ? path.resolve(fromEnv) : path.resolve(__dirname, '..', '.bin', 'conductor')
+  if (!existsSync(bin)) throw new Error(`conductor binary not found at ${bin} (run make dashboard-e2e or set CONDUCTOR_BIN)`)
+  return bin
+}
+
+async function waitForStatus(baseURL: string, timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  let last = ''
+  while (Date.now() < deadline) {
+    const ok = await new Promise<boolean>((resolve) => {
+      const req = http.get(baseURL + '/api/v1/auth/state', (res) => {
+        res.resume()
+        resolve(res.statusCode === 200)
+      })
+      req.on('error', (e) => {
+        last = String(e)
+        resolve(false)
+      })
+      req.setTimeout(1000, () => {
+        req.destroy()
+        resolve(false)
+      })
+    })
+    if (ok) return
+    await new Promise((r) => setTimeout(r, 150))
+  }
+  throw new Error(`auth daemon did not come up at ${baseURL} within ${timeoutMs}ms (last: ${last})`)
+}
+
+export async function startAuthDaemon(port: number): Promise<AuthRuntime> {
+  const bin = resolveBin()
+  const root = mkdtempSync(path.join(tmpdir(), 'dash-auth-e2e-'))
+  const stateDir = path.join(root, 'state')
+  const home = path.join(root, 'home')
+  const config = path.join(root, 'config.yaml')
+  const keyFile = path.join(root, 'id_ed25519')
+  const env = hermeticEnv(home)
+
+  // An ed25519 operator key (no passphrase); its public half is the operator's
+  // ssh_key, and the CLI signs the enrolment ticket with the private half.
+  execFileSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-C', 'ops@e2e', '-f', keyFile], { env, stdio: 'ignore' })
+  const pub = execFileSync('cat', [keyFile + '.pub'], { env }).toString().trim()
+
+  const now = new Date()
+  const expires = new Date(now.getTime() + 60 * 60 * 1000)
+  writeFileSync(
+    config,
+    [
+      `store: { state_file: ${path.join(stateDir, 'state.json')} }`,
+      `operators:`,
+      `  ops: { ssh_key: "${pub}" }`,
+      `dashboard: { enabled: true, listen: [localhost], port: ${port} }`,
+      `runtimes:`,
+      `  claude-cli: { use: cli, tool: claude-code }`,
+      `connectors:`,
+      `  box: { use: command }`,
+      `bots:`,
+      `  sre:`,
+      `    description: SRE`,
+      `    operators: [ops]`,
+      `    autonomy: { shadow: false }`,
+      `    worker: { runtime: claude-cli }`,
+      `    skill: { verbs: [box.run] }`,
+      ``,
+    ].join('\n'),
+    { mode: 0o600 },
+  )
+
+  // Seed one pending proposal straight into the ledger (bots.json), so the
+  // approval endpoint has something real to decide without running an agent.
+  const bots = {
+    sre: {
+      name: 'sre',
+      proposals: {
+        p1: {
+          id: 'p1',
+          kind: 'verb',
+          tier: 'act',
+          uses: 'box.run',
+          status: 'pending',
+          digest: 'e2edigest',
+          requester_class: 'user',
+          created: now.toISOString(),
+          expires: expires.toISOString(),
+          options: { command: 'true' },
+          summary: 'run a command',
+        },
+      },
+    },
+  }
+  execFileSync('mkdir', ['-p', stateDir], { env })
+  writeFileSync(path.join(stateDir, 'bots.json'), JSON.stringify(bots, null, 1), { mode: 0o600 })
+
+  const baseURL = `http://localhost:${port}`
+  const out = openSync(path.join(root, 'daemon.log'), 'a')
+  const child: ChildProcess = spawn(bin, ['run', '--config', config], { env, detached: true, stdio: ['ignore', out, out] })
+  child.unref()
+  if (!child.pid) throw new Error('failed to spawn auth daemon')
+  await waitForStatus(baseURL)
+
+  return { bin, config, keyFile, port, baseURL, pid: child.pid, proposalBot: 'sre', proposalID: 'p1' }
+}
+
+// enroll mints a one-time ticket via the CLI (SSH-signed with our key) and returns
+// the URL secret and pairing code the enrolment page needs.
+export function enroll(rt: AuthRuntime): { secret: string; code: string } {
+  const outBuf = execFileSync(rt.bin, ['dashboard', 'enroll', '--operator', 'ops', '--key', rt.keyFile, '--config', rt.config], {
+    env: hermeticEnv(path.dirname(rt.keyFile)),
+  }).toString()
+  const url = /http:\/\/localhost:\d+\/enroll#t=(\S+)/.exec(outBuf)
+  const code = /pairing code:\s*(\S+)/.exec(outBuf)
+  if (!url || !code) throw new Error('could not parse enroll output:\n' + outBuf)
+  return { secret: url[1], code: code[1] }
+}
+
+export function stop(rt: AuthRuntime): void {
+  try {
+    process.kill(-rt.pid, 'SIGTERM')
+  } catch {
+    try {
+      process.kill(rt.pid, 'SIGTERM')
+    } catch {
+      /* gone */
+    }
+  }
+}
