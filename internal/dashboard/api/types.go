@@ -176,15 +176,24 @@ type StageRequest struct {
 	Summary string   `json:"summary,omitempty"`
 }
 
-// ApplyRequest is POST /api/v1/config/apply.
+// ApplyRequest is POST /api/v1/config/apply. Token is the pipeline confirm token
+// from the matching review (step-up, candidate-bound). StepupToken is the
+// WebAuthn step-up token required ONLY when auth is configured AND the staged set
+// widens a guardrail (auth.PurposeConfigApply); the step-up ceremony's digest is
+// the pipeline confirm Token.
 type ApplyRequest struct {
-	Token string `json:"token"`
+	Token       string `json:"token"`
+	StepupToken string `json:"stepup_token,omitempty"`
 }
 
-// RestoreRequest is POST /api/v1/config/restore and /restore/review.
+// RestoreRequest is POST /api/v1/config/restore and /restore/review. StepupToken
+// is the WebAuthn step-up token required when auth is configured (a restore
+// re-writes the whole file, so it always needs step-up under auth); its ceremony
+// digest is the restore confirm Token.
 type RestoreRequest struct {
-	ID    string `json:"id"`
-	Token string `json:"token,omitempty"`
+	ID          string `json:"id"`
+	Token       string `json:"token,omitempty"`
+	StepupToken string `json:"stepup_token,omitempty"`
 }
 
 // --- Section read models (design §5.4): one shape per screen, derived from the

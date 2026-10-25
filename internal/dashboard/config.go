@@ -13,8 +13,32 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/configedit"
 	"github.com/NodeSpy/conductor/internal/dashboard/api"
+	"github.com/NodeSpy/conductor/internal/dashboard/auth"
 	"gopkg.in/yaml.v3"
 )
+
+// requireStepup enforces a WebAuthn step-up for a privileged config mutation —
+// but ONLY when auth is active. The session guard injects a Session on every
+// /api route when operators are configured; when none are (a bootstrap box or
+// the e2e daemon), SessionFrom returns !ok and this is a no-op, so the pipeline
+// confirm token alone gates the apply. When auth IS active, a widening apply (or
+// any restore) must present a step-up token minted for PurposeConfigApply with
+// the confirm token as its ceremony digest (the one hook the auth half left on
+// this side). Returns true when the request may proceed.
+func (s *Server) requireStepup(w http.ResponseWriter, r *http.Request, digest, stepupToken string, needed bool) bool {
+	if s.auth == nil || !needed {
+		return true
+	}
+	sess, ok := auth.SessionFrom(r)
+	if !ok {
+		return true // auth not active on this route → confirm token alone governs
+	}
+	if _, err := s.auth.RequireStepup(sess, auth.PurposeConfigApply, digest, stepupToken); err != nil {
+		writeError(w, http.StatusForbidden, "stepup_required", err.Error(), "confirm this change with your passkey")
+		return false
+	}
+	return true
+}
 
 // This file implements the config-edit pipeline endpoints (design §5.3) and the
 // per-screen section reads (§5.4). Every mutation goes through one
@@ -202,6 +226,11 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "no_confirm", "apply needs the confirm token from the review (step-up)", "call GET /api/v1/config/review first")
 		return
 	}
+	// A widening apply needs a WebAuthn step-up when auth is active (no-op otherwise).
+	widens, _ := s.edit.Widens()
+	if !s.requireStepup(w, r, req.Token, req.StepupToken, widens) {
+		return
+	}
 	applied, err := s.edit.Apply(req.Token)
 	if err != nil {
 		if errors.Is(err, configedit.ErrStale) {
@@ -261,6 +290,11 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Token == "" {
 		writeError(w, http.StatusBadRequest, "no_confirm", "restore needs the confirm token from the restore review (step-up)", "")
+		return
+	}
+	// A restore re-writes the whole config, so it always needs a step-up when
+	// auth is active (no-op otherwise).
+	if !s.requireStepup(w, r, req.Token, req.StepupToken, true) {
 		return
 	}
 	applied, err := s.edit.Restore(req.ID, req.Token)

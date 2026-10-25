@@ -218,6 +218,24 @@ func (p *Pipeline) effectsLocked(before []byte) []Effect {
 	return out
 }
 
+// Widens reports whether the staged set loosens any least-privilege guardrail
+// (the same classification Review surfaces as its widening list). The dashboard
+// uses it to decide when an apply needs a WebAuthn step-up (auth.PurposeConfigApply).
+func (p *Pipeline) Widens() (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	before, _, err := p.candidateLocked()
+	if err != nil {
+		return false, err
+	}
+	for _, e := range p.effectsLocked(before) {
+		if e.Widens {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Validate renders the candidate and runs the daemon's load+semantic pass over
 // a copy of it, returning the validation error (nil when it validates). It does
 // not change the live file.

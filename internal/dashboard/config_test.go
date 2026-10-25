@@ -221,6 +221,29 @@ func TestWideningSurfaced(t *testing.T) {
 	}
 }
 
+// TestWideningApplyNoAuth locks the step-up guard: with no operators configured
+// (the e2e/bootstrap case), a WIDENING apply still succeeds on the pipeline
+// confirm token alone — the WebAuthn step-up only engages when auth is active.
+func TestWideningApplyNoAuth(t *testing.T) {
+	s, cfgPath, _ := newEditServer(t, func(string) error { return nil })
+	do(t, s, http.MethodPost, "/api/v1/config/stage", api.StageRequest{Path: []string{"sandbox", "agents"}, Value: "off"})
+	rr := do(t, s, http.MethodGet, "/api/v1/config/review", nil)
+	var rev api.ReviewResponse
+	json.Unmarshal(rr.Body.Bytes(), &rev)
+	if len(rev.Widening) != 1 {
+		t.Fatalf("expected the apply to be a widening, got %+v", rev.Effects)
+	}
+	rr = do(t, s, http.MethodPost, "/api/v1/config/apply", api.ApplyRequest{Token: rev.Token})
+	if rr.Code != 200 {
+		t.Fatalf("widening apply without auth should succeed, got %d: %s", rr.Code, rr.Body)
+	}
+	b, _ := os.ReadFile(cfgPath)
+	// yaml quotes "off" to keep it a string (not a YAML-1.1 bool).
+	if !strings.Contains(string(b), `agents: "off"`) {
+		t.Fatalf("widening change not applied:\n%s", b)
+	}
+}
+
 func TestSectionReads(t *testing.T) {
 	s, _, _ := newEditServer(t, nil)
 
