@@ -67,8 +67,8 @@ func isWidening(path []string, before, after any) bool {
 	// unattended autonomy switched on.
 	case last == "unattended" && truthy(after) && !truthy(before):
 		return true
-	// the dashboard exposed beyond localhost would be a widening, but listen is
-	// a list, not a scalar — the dashboard stages that as a section add.
+		// the dashboard exposed beyond localhost would be a widening, but listen is
+		// a list, not a scalar — the dashboard stages that as a section add.
 	}
 	return false
 }

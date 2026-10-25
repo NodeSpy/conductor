@@ -176,8 +176,8 @@ func (d *Document) spliceScalar(val *yaml.Node, rendered string) error {
 	suffix := ""
 	if c := val.LineComment; c != "" {
 		if idx := strings.LastIndex(remainder, c); idx >= 0 {
-			suffix = remainder[idx:]           // the comment itself
-			gap := remainder[:idx]             // value text + spaces before #
+			suffix = remainder[idx:] // the comment itself
+			gap := remainder[:idx]   // value text + spaces before #
 			trimmed := strings.TrimRight(gap, " \t")
 			suffix = gap[len(trimmed):] + suffix // keep the exact whitespace gap
 		}
