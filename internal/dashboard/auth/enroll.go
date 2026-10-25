@@ -207,19 +207,12 @@ func (m *Manager) BeginEnroll(listener Listener, ceremonyID, rp, name string, as
 // validateExistingAssertion checks the "confirm with an existing passkey"
 // assertion against the operator's own credentials (design §6.3).
 func (m *Manager) validateExistingAssertion(rpID string, ce *enrollCeremony, responseJSON []byte) error {
-	parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(responseJSON))
-	if err != nil {
-		return fmt.Errorf("bad assertion: %w", err)
-	}
-	stored, ok := m.deps.Store.CredentialByRawID(rpID, parsed.RawID)
-	if !ok || stored.Operator != ce.operator {
-		return errors.New("that passkey is not one of yours")
-	}
-	w := m.wa[rpID]
-	user := waUser{operator: ce.operator, creds: []webauthn.Credential{stored.Cred}}
-	validated, err := w.ValidateLogin(user, ce.assertReq, parsed)
+	stored, validated, err := m.validateDiscoverable(rpID, ce.assertReq, responseJSON)
 	if err != nil {
 		return err
+	}
+	if stored.Operator != ce.operator {
+		return errors.New("that passkey is not one of yours")
 	}
 	if validated.Authenticator.CloneWarning {
 		_ = m.deps.Store.LockCredential(stored.ID)

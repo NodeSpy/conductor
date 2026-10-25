@@ -90,22 +90,7 @@ func (m *Manager) FinishLogin(ceremonyID string, responseJSON []byte) (operator,
 	if m.now().After(c.expires) {
 		return "", "", false, errors.New("sign-in challenge expired")
 	}
-	parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(responseJSON))
-	if err != nil {
-		return "", "", false, fmt.Errorf("bad assertion: %w", err)
-	}
-	// Map the presented credential to its operator, scoped to THIS RP so a
-	// credential enrolled for localhost cannot be replayed against the tailnet RP.
-	stored, found := m.deps.Store.CredentialByRawID(c.rpID, parsed.RawID)
-	if !found {
-		return "", "", false, errors.New("no such credential on this listener")
-	}
-	if stored.Locked {
-		return "", "", false, errors.New("this credential is locked")
-	}
-	w := m.wa[c.rpID]
-	user := waUser{operator: stored.Operator, creds: []webauthn.Credential{stored.Cred}}
-	validated, err := w.ValidateLogin(user, c.session, parsed)
+	stored, validated, err := m.validateDiscoverable(c.rpID, c.session, responseJSON)
 	if err != nil {
 		return "", "", false, err
 	}
@@ -118,6 +103,34 @@ func (m *Manager) FinishLogin(ceremonyID string, responseJSON []byte) (operator,
 		return "", "", false, err
 	}
 	return stored.Operator, stored.ID, false, nil
+}
+
+// validateDiscoverable verifies a discoverable-login assertion against the one
+// credential it names, scoped to THIS RP so a credential enrolled for localhost
+// cannot be replayed against the tailnet RP. It returns the stored credential
+// (for its id/operator) and the go-webauthn verdict (for the clone warning and
+// the new sign count).
+func (m *Manager) validateDiscoverable(rpID string, session webauthn.SessionData, responseJSON []byte) (*Credential, *webauthn.Credential, error) {
+	parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(responseJSON))
+	if err != nil {
+		return nil, nil, fmt.Errorf("bad assertion: %w", err)
+	}
+	stored, found := m.deps.Store.CredentialByRawID(rpID, parsed.RawID)
+	if !found {
+		return nil, nil, errors.New("no such credential on this listener")
+	}
+	if stored.Locked {
+		return nil, nil, errors.New("this credential is locked")
+	}
+	w := m.wa[rpID]
+	handler := func(rawID, userHandle []byte) (webauthn.User, error) {
+		return waUser{operator: stored.Operator, creds: []webauthn.Credential{stored.Cred}}, nil
+	}
+	validated, err := w.ValidateDiscoverableLogin(handler, session, parsed)
+	if err != nil {
+		return nil, nil, err
+	}
+	return stored, validated, nil
 }
 
 // --- shared helpers ---
