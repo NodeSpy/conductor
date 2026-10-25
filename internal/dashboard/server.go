@@ -23,9 +23,13 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/configedit"
 	"github.com/NodeSpy/conductor/internal/dashboard/api"
+	"github.com/NodeSpy/conductor/internal/dashboard/auth"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/store"
 )
+
+// authStepupEvidence is the type behind the exported StepupEvidence alias.
+type authStepupEvidence = auth.StepupEvidence
 
 // Deps are the live handles the dashboard reads from. They are the SAME handles
 // the daemon and CLI use — nothing here opens a second store or dials a socket.
@@ -47,7 +51,33 @@ type Deps struct {
 	Validate   func(path string) error
 	Reload     func() error
 	AuditPath  string // the audit log file (JSONL), for the Logs & audit screen
+
+	// Auth (design §6). When Operators returns one or more operators the
+	// dashboard enforces passkey sign-in on every /api call and a step-up on
+	// sensitive ones; with no operators configured (a bootstrap box, the e2e
+	// daemons) it serves localhost open, since nobody could sign in anyway. The
+	// map is operator -> authorized_keys public key, for the enrollment SSH gate.
+	Operators func() map[string]string
+	// StateDir is where the auth store lives (<state>/dashboard). Defaults to a
+	// "dashboard" dir beside the state file when empty.
+	StateDir string
+	// Lifecycle fires conductor.* events (dashboard_enrolled, dashboard_reset).
+	Lifecycle func(event, operator, detail string)
+	// Now is an injectable clock (tests); defaults to time.Now.
+	Now func() time.Time
+
+	// Approval bridge (design §6.6). ApprovalView returns a proposal's canonical
+	// approval digest and a human summary rendered from the payload (never agent
+	// text), plus the operators who may decide. DecideProposal applies a decision
+	// authenticated by a verified WebAuthn step-up. Both nil = no bots on this
+	// daemon (the proposal endpoints report so).
+	ApprovalView   func(bot, id string) (digest, summaryJSON string, operators []string, ok bool)
+	DecideProposal func(ctx context.Context, bot, id, decision, operator, reason string, ev StepupEvidence) error
 }
+
+// StepupEvidence re-exports auth.StepupEvidence so a Deps caller (the daemon)
+// need not import the auth subpackage to wire DecideProposal.
+type StepupEvidence = authStepupEvidence
 
 // Server is the dashboard HTTP server.
 type Server struct {
@@ -56,6 +86,8 @@ type Server struct {
 	mux     *http.ServeMux
 	started time.Time
 	edit    *configedit.Pipeline // nil when ConfigPath is empty (read-only)
+	auth    *auth.Manager        // nil until wired in New()
+	tsAPI   localAPI             // tailscaled LocalAPI; nil = the real socket client
 }
 
 // New builds a dashboard server from its dependencies.
@@ -74,7 +106,9 @@ func New(deps Deps) *Server {
 			Reload:   deps.Reload,
 		})
 	}
+	s.buildAuth() // the auth Manager + RPs (authwire.go); logs and no-ops on error
 	s.routes()
+	s.authRoutes() // the proposal-approval endpoints (behind the session guard)
 	return s
 }
 
@@ -119,8 +153,10 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	port := s.deps.Cfg.Dashboard.EffectivePort()
+	// The localhost listener serves plain HTTP (a potentially-trustworthy origin,
+	// so WebAuthn works) with every request tagged as arriving on localhost.
 	srv := &http.Server{
-		Handler:           s.mux,
+		Handler:           s.listenerHandler(auth.ListenerLocalhost),
 		ReadHeaderTimeout: 10 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
@@ -145,9 +181,12 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("dashboard: no localhost listener could be bound on port %d", port)
 	}
 
-	for _, l := range s.deps.Cfg.Dashboard.EffectiveListen() {
-		if l == config.DashboardListenTailscale {
-			s.deps.Log("dashboard: `listen: [tailscale]` is accepted but not yet served (Phase 2); serving localhost only")
+	// The tailnet listener (design §6.2): bind the node's tailnet addresses with
+	// the MagicDNS certificate. It degrades to localhost-only (not fail-closed) if
+	// tailscaled is absent.
+	if s.deps.Cfg.Dashboard.BindsTailscale() {
+		if err := s.startTailnet(ctx, port); err != nil {
+			s.deps.Log("dashboard: tailnet listener not started (%v); serving localhost only", err)
 		}
 	}
 
@@ -159,7 +198,7 @@ func (s *Server) Start(ctx context.Context) error {
 		_ = srv.Shutdown(shutCtx)
 	}()
 
-	s.deps.Log("dashboard: serving on http://localhost:%d (localhost only, no auth — Phase 1)", port)
+	s.deps.Log("dashboard: serving on http://localhost:%d (auth %s)", port, s.authState())
 	return nil
 }
 

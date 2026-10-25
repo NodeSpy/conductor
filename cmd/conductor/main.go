@@ -170,6 +170,8 @@ func main() {
 		err = cmdInit(args)
 	case "pack":
 		err = cmdPack(args)
+	case "dashboard":
+		err = cmdDashboard(args)
 	case "version", "-v", "--version":
 		fmt.Println("conductor", version)
 	case "help", "-h", "--help":
@@ -1091,10 +1093,19 @@ func cmdRun(args []string) error {
 			Validate:   validateConfigFile,
 			Reload:     func() error { return signalReload(cfg) },
 			AuditPath:  cfg.Store.AuditLog,
+			// Auth (design §6): operators gate sign-in; the approval bridge feeds
+			// a WebAuthn-authenticated decision into the same Executor.Decide the
+			// CLI uses (botCtl is wired just below, so the callbacks resolve it per
+			// call). A lifecycle event lets any connector alert on enroll/reset.
+			Operators:      dashboardOperators(cfg),
+			Lifecycle:      func(event, operator, detail string) { st.Audit(map[string]any{"event": event, "operator": operator, "detail": detail}) },
+			ApprovalView:   dashboardApprovalView,
+			DecideProposal: dashboardDecide,
 		})
 		if err := dash.Start(ctx); err != nil {
 			logf("dashboard: not started: %v", err)
 		}
+		dashboardMgr = dash.AuthManager()
 	}
 
 	// Callable service (#36 §13): the authenticated inbound invoke surface. Off
@@ -1612,6 +1623,8 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 	switch req.Cmd {
 	case "bot":
 		handleBotControl(ctx, conn, req, log)
+	case "dashboard":
+		handleDashboardControl(ctx, conn, req, log)
 	case "force":
 		n, err := forceOnIntegrations(ctx, igs, req, emit)
 		if err != nil {

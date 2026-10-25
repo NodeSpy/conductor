@@ -92,7 +92,7 @@ func (m *Manager) BeginStepup(listener Listener, sess Session, purpose Purpose, 
 	if err != nil {
 		return "", nil, err
 	}
-	w := m.wa[rp.ID]
+	w := m.waFor(rp.ID)
 	opts, session, err := w.BeginLogin(user,
 		webauthn.WithUserVerification(protocol.VerificationRequired),
 		webauthn.WithAllowedCredentials(allow),
@@ -142,7 +142,7 @@ func (m *Manager) FinishStepup(ceremonyID string, sess Session, responseJSON []b
 	if !found || stored.Operator != ce.operator {
 		return "", errors.New("that passkey is not yours")
 	}
-	w := m.wa[ce.rpID]
+	w := m.waFor(ce.rpID)
 	user := waUser{operator: ce.operator, creds: []webauthn.Credential{stored.Cred}}
 	validated, err := w.ValidateLogin(user, ce.wa, parsed)
 	if err != nil {

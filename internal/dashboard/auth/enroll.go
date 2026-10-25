@@ -160,7 +160,7 @@ func (m *Manager) BeginEnroll(listener Listener, ceremonyID, rp, name string, as
 	// Second+ passkey: an existing assertion gates it (purpose enroll.second).
 	if ce.needAssert {
 		if assertion == nil {
-			w := m.wa[target.ID]
+			w := m.waFor(target.ID)
 			opts, sess, err := w.BeginDiscoverableLogin(webauthn.WithUserVerification(protocol.VerificationRequired))
 			if err != nil {
 				return false, nil, err
@@ -178,7 +178,7 @@ func (m *Manager) BeginEnroll(listener Listener, ceremonyID, rp, name string, as
 	}
 
 	// Registration options for the new passkey.
-	w := m.wa[target.ID]
+	w := m.waFor(target.ID)
 	user := m.userFor(ce.operator)
 	var excl []protocol.CredentialDescriptor
 	for _, c := range user.creds {
@@ -241,7 +241,7 @@ func (m *Manager) FinishEnroll(ceremonyID, name string, responseJSON []byte) (*C
 	if err != nil {
 		return nil, fmt.Errorf("bad registration: %w", err)
 	}
-	w := m.wa[ce.rpID]
+	w := m.waFor(ce.rpID)
 	user := m.userFor(ce.operator)
 	cred, err := w.CreateCredential(user, ce.regSession, parsed)
 	if err != nil {
@@ -257,7 +257,7 @@ func (m *Manager) FinishEnroll(ceremonyID, name string, responseJSON []byte) (*C
 	if strings.TrimSpace(name) == "" {
 		name = "new passkey"
 	}
-	rp := m.rps[ce.rpID]
+	rp, _ := m.rpByID(ce.rpID)
 	c := &Credential{
 		ID: id, Operator: ce.operator, Name: name, RPID: ce.rpID, Listener: rp.Listener,
 		DeviceBound: deviceBound(cred), Created: m.now(), LastUsed: m.now(), Cred: *cred,

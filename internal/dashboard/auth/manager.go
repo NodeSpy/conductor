@@ -49,7 +49,8 @@ type Deps struct {
 // collaborators together. It is the one object server.go mounts.
 type Manager struct {
 	deps Deps
-	rps  map[string]RP            // by RP ID
+	rpMu sync.RWMutex                  // guards rps/wa (the tailnet RP is added after serving begins)
+	rps  map[string]RP                 // by RP ID
 	wa   map[string]*webauthn.WebAuthn // by RP ID
 	lock *lockout
 
@@ -100,6 +101,15 @@ func NewManager(deps Deps, rps ...RP) (*Manager, error) {
 	return m, nil
 }
 
+// AddRP registers another relying party after construction — the tailnet RP,
+// added once the MagicDNS name is discovered from tailscaled (design §6.2).
+func (m *Manager) AddRP(rp RP) error {
+	m.rpMu.Lock()
+	defer m.rpMu.Unlock()
+	return m.addRP(rp)
+}
+
+// addRP registers a relying party. Caller holds rpMu (or is in construction).
 func (m *Manager) addRP(rp RP) error {
 	w, err := webauthn.New(&webauthn.Config{
 		RPID:          rp.ID,
@@ -121,12 +131,40 @@ func (m *Manager) addRP(rp RP) error {
 
 // rpForListener returns the RP bound to a listener (the first match).
 func (m *Manager) rpForListener(l Listener) (RP, bool) {
+	m.rpMu.RLock()
+	defer m.rpMu.RUnlock()
 	for _, rp := range m.rps {
 		if rp.Listener == l {
 			return rp, true
 		}
 	}
 	return RP{}, false
+}
+
+// waFor returns the WebAuthn instance for an RP id, race-free.
+func (m *Manager) waFor(id string) *webauthn.WebAuthn {
+	m.rpMu.RLock()
+	defer m.rpMu.RUnlock()
+	return m.wa[id]
+}
+
+// rpByID returns the RP record for an id, race-free.
+func (m *Manager) rpByID(id string) (RP, bool) {
+	m.rpMu.RLock()
+	defer m.rpMu.RUnlock()
+	rp, ok := m.rps[id]
+	return rp, ok
+}
+
+// allRPs returns a snapshot of the registered RPs.
+func (m *Manager) allRPs() []RP {
+	m.rpMu.RLock()
+	defer m.rpMu.RUnlock()
+	out := make([]RP, 0, len(m.rps))
+	for _, rp := range m.rps {
+		out = append(out, rp)
+	}
+	return out
 }
 
 // operatorPubKey returns an operator's configured public key, or false when the

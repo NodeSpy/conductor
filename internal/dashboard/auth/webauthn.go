@@ -54,7 +54,7 @@ func (m *Manager) BeginLogin(listener Listener) (ceremonyID string, optionsJSON 
 	if !ok {
 		return "", nil, fmt.Errorf("no RP for listener %q", listener)
 	}
-	w := m.wa[rp.ID]
+	w := m.waFor(rp.ID)
 	assertion, session, err := w.BeginDiscoverableLogin(webauthn.WithUserVerification(protocol.VerificationRequired))
 	if err != nil {
 		return "", nil, err
@@ -122,7 +122,7 @@ func (m *Manager) validateDiscoverable(rpID string, session webauthn.SessionData
 	if stored.Locked {
 		return nil, nil, errors.New("this credential is locked")
 	}
-	w := m.wa[rpID]
+	w := m.waFor(rpID)
 	handler := func(rawID, userHandle []byte) (webauthn.User, error) {
 		return waUser{operator: stored.Operator, creds: []webauthn.Credential{stored.Cred}}, nil
 	}

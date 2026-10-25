@@ -19,7 +19,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/bot"
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dashboard"
 	"github.com/NodeSpy/conductor/internal/dashboard/auth"
 )
 
@@ -189,6 +191,65 @@ func dashboardControl(cfg *config.Config, sub string, a map[string]any) (map[str
 		return nil, "", fmt.Errorf("%s", resp.Error)
 	}
 	return resp.Result, resp.Msg, nil
+}
+
+// dashboardOperators maps every configured operator to its authorized_keys
+// public key, for the dashboard's enrollment SSH gate and sign-in gating.
+func dashboardOperators(cfg *config.Config) func() map[string]string {
+	return func() map[string]string {
+		m := make(map[string]string, len(cfg.Operators))
+		for n, o := range cfg.Operators {
+			m[n] = o.SSHKey
+		}
+		return m
+	}
+}
+
+// dashboardApprovalView is the dashboard's ApprovalView: a proposal's action
+// digest, a human summary rendered from the proposal (never agent text), and the
+// operators who may decide. It reads the live bot stack (botCtl), which is wired
+// after the dashboard starts, so it resolves per call.
+func dashboardApprovalView(botName, id string) (actionSHA, summaryJSON string, operators []string, ok bool) {
+	if botCtl == nil {
+		return "", "", nil, false
+	}
+	rec := botCtl.Ledger.Bot(botName)
+	p := rec.Proposals[id]
+	if p == nil {
+		return "", "", nil, false
+	}
+	cfg := botCtl.Cfg()
+	ops := bot.Approvers(cfg, botName, *p)
+	summary := map[string]any{
+		"kind": p.Kind, "tier": p.Tier, "uses": p.Uses, "summary": p.Summary,
+		"requester_class": p.RequesterClass, "status": p.Status, "case": p.CaseID,
+	}
+	if p.Terraform != nil {
+		summary["terraform"] = map[string]any{
+			"repo": p.Terraform.Repo, "dir": p.Terraform.Dir, "workspace": p.Terraform.Workspace,
+			"add": p.Terraform.Add, "change": p.Terraform.Change, "destroy": p.Terraform.Destroy,
+		}
+	}
+	b, _ := json.Marshal(summary)
+	return p.Digest, string(b), ops, true
+}
+
+// dashboardDecide is the dashboard's DecideProposal: it applies an operator's
+// WebAuthn-authenticated decision through the same Executor.Decide the CLI uses,
+// on the webauthn method with the step-up assertion as evidence (design §6.6).
+func dashboardDecide(ctx context.Context, botName, id, decision, operator, reason string, ev dashboard.StepupEvidence) error {
+	if botCtl == nil || botCtl.Exec == nil {
+		return fmt.Errorf("no bots on this daemon")
+	}
+	_, err := botCtl.Exec.Decide(ctx, bot.Decision{
+		Bot: botName, Proposal: id, Operator: operator, Decision: decision, Reason: reason,
+		Method: "webauthn",
+		WebAuthn: &bot.WebAuthnEvidence{
+			Credential: ev.CredID, AuthenticatorData: ev.AuthenticatorData,
+			ClientDataJSON: ev.ClientDataJSON, Signature: ev.Signature,
+		},
+	})
+	return err
 }
 
 // handleDashboardControl serves the daemon side of `conductor dashboard` on the

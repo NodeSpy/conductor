@@ -67,7 +67,7 @@ type ListenerFact struct {
 
 func (m *Manager) listenerFacts() []ListenerFact {
 	out := []ListenerFact{}
-	for _, rp := range m.rps {
+	for _, rp := range m.allRPs() {
 		out = append(out, ListenerFact{Listener: string(rp.Listener), RPID: rp.ID, Origins: rp.Origins})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Listener < out[j].Listener })
