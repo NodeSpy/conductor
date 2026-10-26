@@ -17,9 +17,9 @@ import (
 
 // Enrollment lifetimes (design §6.3).
 const (
-	ticketTTL     = 10 * time.Minute
-	enrollSkew    = 2 * time.Minute // freshness window on the signed enroll request
-	maxCodeTries  = 3               // pairing-code failures that burn a ticket
+	ticketTTL    = 10 * time.Minute
+	enrollSkew   = 2 * time.Minute // freshness window on the signed enroll request
+	maxCodeTries = 3               // pairing-code failures that burn a ticket
 )
 
 // enrollCeremony is a redeemed ticket mid-registration: the operator it is for,

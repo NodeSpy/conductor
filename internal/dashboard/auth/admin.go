@@ -47,8 +47,8 @@ func (m *Manager) ResetOperator(operator string) (passkeys, sessions int) {
 // how many passkeys and sessions exist, plus whether a live enrollment ticket is
 // outstanding.
 type StatusLine struct {
-	Listeners []ListenerFact        `json:"listeners"`
-	Operators map[string]OpStatus   `json:"operators"`
+	Listeners []ListenerFact      `json:"listeners"`
+	Operators map[string]OpStatus `json:"operators"`
 }
 
 // OpStatus is one operator's enrollment/session counts.

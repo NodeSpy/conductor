@@ -63,7 +63,7 @@ type fakeLocalAPI struct {
 	err   error
 }
 
-func (f *fakeLocalAPI) Status(context.Context) (tsStatus, error) { return tsStatus{}, nil }
+func (f *fakeLocalAPI) Status(context.Context) (tsStatus, error)     { return tsStatus{}, nil }
 func (f *fakeLocalAPI) WhoIs(context.Context, string) (tsWho, error) { return tsWho{}, nil }
 func (f *fakeLocalAPI) CertPair(context.Context, string) (tls.Certificate, error) {
 	f.calls++

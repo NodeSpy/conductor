@@ -16,15 +16,15 @@ import (
 // WebAuthn ceremonies end to end, so the negative cases below exercise the real
 // go-webauthn verification, not a mock.
 type harness struct {
-	t    *testing.T
-	m    *Manager
-	rp   vwa.RelyingParty
-	clk  *clock
+	t   *testing.T
+	m   *Manager
+	rp  vwa.RelyingParty
+	clk *clock
 }
 
 type clock struct{ t time.Time }
 
-func (c *clock) now() time.Time { return c.t }
+func (c *clock) now() time.Time          { return c.t }
 func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 const testOrigin = "http://localhost:7788"

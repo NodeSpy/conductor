@@ -28,8 +28,8 @@ func (u waUser) WebAuthnID() []byte {
 	h := sha256.Sum256([]byte("conductor-dashboard-operator:" + u.operator))
 	return h[:]
 }
-func (u waUser) WebAuthnName() string                   { return u.operator }
-func (u waUser) WebAuthnDisplayName() string            { return u.operator }
+func (u waUser) WebAuthnName() string                       { return u.operator }
+func (u waUser) WebAuthnDisplayName() string                { return u.operator }
 func (u waUser) WebAuthnCredentials() []webauthn.Credential { return u.creds }
 
 // userFor builds a waUser for an operator from the store.

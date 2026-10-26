@@ -148,9 +148,9 @@ func (c *tsLocalAPI) WhoIs(ctx context.Context, remoteAddr string) (tsWho, error
 	}
 	var raw struct {
 		Node struct {
-			Name       string   `json:"Name"`
-			StableID   string   `json:"StableID"`
-			Tags       []string `json:"Tags"`
+			Name     string   `json:"Name"`
+			StableID string   `json:"StableID"`
+			Tags     []string `json:"Tags"`
 		} `json:"Node"`
 		UserProfile struct {
 			LoginName string `json:"LoginName"`

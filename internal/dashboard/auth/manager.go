@@ -58,7 +58,7 @@ type Manager struct {
 	logins  map[string]*ceremony // sign-in challenges, by ceremony id
 	enrolls map[string]*enrollCeremony
 	stepups map[string]*stepupCeremony // in-flight step-up challenges, by ceremony id
-	tokens  map[string]*stepupToken   // minted single-use step-up tokens, by token
+	tokens  map[string]*stepupToken    // minted single-use step-up tokens, by token
 }
 
 // ceremony is an in-flight WebAuthn challenge (login or step-up pre-state).
