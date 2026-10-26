@@ -1113,6 +1113,10 @@ func cmdRun(args []string) error {
 			// socket serves (teams, chat, tickets, avatars, read models), mounted
 			// into the web surface under /api. Nil when no bots run here.
 			BotAPI: dashboardBotAPI(bots),
+			// The browser/wallet surface (§4.5): live sessions, personal details,
+			// payment cards and purchase approvals, over the same control layer the
+			// CLI uses. Reads empty when no browser is configured.
+			Browser: dashboardBrowser{},
 		})
 		if err := dash.Start(ctx); err != nil {
 			logf("dashboard: not started: %v", err)

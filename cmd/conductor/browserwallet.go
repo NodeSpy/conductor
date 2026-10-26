@@ -208,10 +208,24 @@ func browserWalletControl(cfg *config.Config, m *browser.Manager, req controlReq
 	if strings.HasPrefix(req.Cmd, "browser-card") {
 		kind = "card"
 	}
+	// cardMeta derives a card's brand and last four from the number and records
+	// them (design §4.5.1: the only parts of the number the dashboard learns,
+	// read once when the number is stored or resolved). A typed number is read
+	// from the write before it is dropped; a reference is resolved once here.
+	cardMeta := func(number string) {
+		number = strings.TrimSpace(number)
+		if number == "" {
+			return
+		}
+		_ = m.Store.SetCardMeta(q.Name, browser.CardBrand(number), browser.CardLast4(number))
+	}
 	setFields := func() error {
 		for f, v := range q.Values {
 			if err := m.Store.SetWalletValue(kind, q.Name, f, v); err != nil {
 				return err
+			}
+			if kind == "card" && f == "number" {
+				cardMeta(v)
 			}
 		}
 		for f, r := range q.Refs {
@@ -220,6 +234,15 @@ func browserWalletControl(cfg *config.Config, m *browser.Manager, req controlReq
 			}
 			if err := m.Store.SetWalletRef(kind, q.Name, f, r); err != nil {
 				return err
+			}
+			if kind == "card" && f == "number" && m.Secrets != nil {
+				if src, err := secrets.ParseSource(r); err == nil && src.Vault != "" {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					if n, err := m.Secrets(ctx, src.Vault, src.Key); err == nil {
+						cardMeta(n)
+					}
+					cancel()
+				}
 			}
 		}
 		return nil
@@ -559,7 +582,8 @@ func walletCards(st browser.Settings, frozen map[string]time.Time) []map[string]
 			}
 		}
 		v := map[string]any{"name": name, "method": c.Method, "kind": c.Kind, "identities": c.Identities, "merchants": c.Merchants,
-			"limits": c.Limits, "identity_limits": c.IdentityLimits, "frozen": c.Frozen, "fields": fields, "editable": c.Method != browser.MethodConfig}
+			"limits": c.Limits, "identity_limits": c.IdentityLimits, "frozen": c.Frozen, "fields": fields, "editable": c.Method != browser.MethodConfig,
+			"brand": c.Brand, "last4": c.Last4}
 		if t, ok := frozen[name]; ok {
 			v["frozen_at"] = t
 		}

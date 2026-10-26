@@ -111,7 +111,10 @@ func TestLoginStoreHasNoExportedReader(t *testing.T) {
 		"ClearField": true, "HasValue": true, "RecordUse": true, "UsageOf": true, "SetTest": true,
 		// The wallet's: records (sources, freezes) and writes, never a value.
 		"Wallet": true, "PutProfile": true, "PutCard": true, "SetWalletValue": true, "SetWalletRef": true,
-		"ClearWalletField": true, "RemoveWallet": true, "Freeze": true}
+		"ClearWalletField": true, "RemoveWallet": true, "Freeze": true,
+		// SetCardMeta writes a card's brand + last four (derived once from the
+		// number by the caller); it hands back nothing.
+		"SetCardMeta": true}
 	for i := 0; i < typ.NumMethod(); i++ {
 		if n := typ.Method(i).Name; !allowed[n] {
 			t.Errorf("LoginStore.%s is new — is it a way to read a value back?", n)

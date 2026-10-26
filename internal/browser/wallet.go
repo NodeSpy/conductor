@@ -72,6 +72,10 @@ type Card struct {
 	Name                            string
 	Number, Expiry, CVC, HolderName *SecretRef
 	Kind                            string
+	// Brand and Last4 are the only parts of the number the dashboard ever
+	// learns: read once when the number is stored or first resolved, cached
+	// here and in the CardRecord, never more of the number than this.
+	Brand, Last4 string
 	// Merchants are the exact origins it may be filled on (none: nothing).
 	Merchants      []string
 	Identities     []string
@@ -142,9 +146,13 @@ type ProfileRecord struct {
 
 // CardRecord is a stored card (sources, never values).
 type CardRecord struct {
-	Name           string                       `json:"name"`
-	Fields         map[string]FieldSource       `json:"fields,omitempty"`
-	Kind           string                       `json:"kind,omitempty"`
+	Name   string                 `json:"name"`
+	Fields map[string]FieldSource `json:"fields,omitempty"`
+	Kind   string                 `json:"kind,omitempty"`
+	// Brand and Last4 are the card's only visible parts (e.g. "Visa", "4242"),
+	// recorded once when the number is stored or resolved — never more.
+	Brand          string                       `json:"brand,omitempty"`
+	Last4          string                       `json:"last4,omitempty"`
 	Merchants      []string                     `json:"merchants"`
 	Identities     []string                     `json:"identities"`
 	Limits         config.CardLimits            `json:"limits"`
@@ -662,7 +670,7 @@ func WithWallet(st Settings, ps []ProfileRecord, cs []CardRecord, frozen map[str
 		if _, ok := cards[r.Name]; ok {
 			continue
 		}
-		c := Card{Name: r.Name, Kind: r.Kind, Merchants: r.Merchants, Identities: r.Identities, Limits: r.Limits, IdentityLimits: r.IdentityLimits, Method: "stored"}
+		c := Card{Name: r.Name, Kind: r.Kind, Brand: r.Brand, Last4: r.Last4, Merchants: r.Merchants, Identities: r.Identities, Limits: r.Limits, IdentityLimits: r.IdentityLimits, Method: "stored"}
 		for f, fs := range r.Fields {
 			ref := fieldRef("card", r.Name, f, fs)
 			switch f {

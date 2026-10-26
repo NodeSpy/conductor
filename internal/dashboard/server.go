@@ -90,6 +90,11 @@ type Deps struct {
 	// §4.4), behind the same session guard as every other /api route. Nil when no
 	// bots run on this daemon.
 	BotAPI http.Handler
+
+	// Browser is the browser/wallet surface (design §4.5): live sessions with a
+	// screencast and takeover, personal details, payment cards and purchase
+	// approvals. Nil when no browser runs on this daemon.
+	Browser Browser
 }
 
 // StepupEvidence re-exports auth.StepupEvidence so a Deps caller (the daemon)
@@ -125,7 +130,8 @@ func New(deps Deps) *Server {
 	}
 	s.buildAuth() // the auth Manager + RPs (authwire.go); logs and no-ops on error
 	s.routes()
-	s.authRoutes() // the proposal-approval endpoints (behind the session guard)
+	s.authRoutes()    // the proposal-approval endpoints (behind the session guard)
+	s.browserRoutes() // browsers, the wallet and purchase approvals (§4.5)
 	return s
 }
 

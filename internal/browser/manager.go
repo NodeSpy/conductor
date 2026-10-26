@@ -164,6 +164,13 @@ type session struct {
 	last        time.Time
 	saved       time.Time
 	caller      Principal
+
+	// Operator takeover (design §4.5): while leaseBy is set, an operator is
+	// driving the page from the dashboard and the agent's next action waits on
+	// leaseCh (closed on release) rather than running. The agent then resumes
+	// with a fresh snapshot.
+	leaseBy string
+	leaseCh chan struct{}
 }
 
 // settings are the operator's settings with the login store's logins.
@@ -279,6 +286,20 @@ func (m *Manager) doWith(ctx context.Context, c Principal, st Settings, action s
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// While an operator holds the takeover lease, the agent's action waits here
+	// (the lock is released during the wait so the operator can drive), then
+	// resumes once the lease is released or the context ends (design §4.5).
+	for s.leaseBy != "" {
+		ch := s.leaseCh
+		s.mu.Unlock()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			s.mu.Lock()
+			return nil, fmt.Errorf("browser: operator has control (take over released on %v)", ctx.Err())
+		}
+		s.mu.Lock()
+	}
 	s.caller = c
 	s.last = time.Now()
 

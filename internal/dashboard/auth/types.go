@@ -55,34 +55,34 @@ const (
 // the Access screen shows. SignCount mirrors cred.Authenticator.SignCount and is
 // the authority a clone check compares against (design §6.3).
 type Credential struct {
-	ID        string                `json:"id"`   // short, URL-safe handle for the API
-	Operator  string                `json:"operator"`
-	Name      string                `json:"name"` // operator-chosen ("phone · Face ID")
-	RPID      string                `json:"rp_id"`
-	Listener  Listener              `json:"listener"` // which listener's RP it registered under
+	ID          string              `json:"id"` // short, URL-safe handle for the API
+	Operator    string              `json:"operator"`
+	Name        string              `json:"name"` // operator-chosen ("phone · Face ID")
+	RPID        string              `json:"rp_id"`
+	Listener    Listener            `json:"listener"`     // which listener's RP it registered under
 	DeviceBound bool                `json:"device_bound"` // platform attachment / no backup eligibility
-	Created   time.Time             `json:"created"`
-	LastUsed  time.Time             `json:"last_used"`
-	Uses      int                   `json:"uses"`
-	Locked    bool                  `json:"locked"` // a sign-count regression locks the credential
-	Cred      webauthn.Credential   `json:"cred"`
+	Created     time.Time           `json:"created"`
+	LastUsed    time.Time           `json:"last_used"`
+	Uses        int                 `json:"uses"`
+	Locked      bool                `json:"locked"` // a sign-count regression locks the credential
+	Cred        webauthn.Credential `json:"cred"`
 }
 
 // Session is one signed-in browser. It is revocable and bound to the listener
 // (and, on the tailnet, the WhoIs node) it was created on (design §6.3).
 type Session struct {
-	ID        string    `json:"id"`
-	Operator  string    `json:"operator"`
-	Listener  Listener  `json:"listener"`
-	Node      string    `json:"node,omitempty"` // tailnet WhoIs node id, when on the tailnet
-	Device    string    `json:"device"`         // a human label from the User-Agent
-	Addr      string    `json:"addr"`           // the remote address at sign-in
-	CSRF      string    `json:"csrf"`           // the double-submit token
-	Created   time.Time `json:"created"`
-	LastSeen  time.Time `json:"last_seen"`
-	Expires   time.Time `json:"expires"`     // absolute ceiling
-	StepupAt  time.Time `json:"stepup_at"`   // last fresh assertion, for the freshness readout
-	CredID    string    `json:"cred_id"`     // the credential that signed in
+	ID       string    `json:"id"`
+	Operator string    `json:"operator"`
+	Listener Listener  `json:"listener"`
+	Node     string    `json:"node,omitempty"` // tailnet WhoIs node id, when on the tailnet
+	Device   string    `json:"device"`         // a human label from the User-Agent
+	Addr     string    `json:"addr"`           // the remote address at sign-in
+	CSRF     string    `json:"csrf"`           // the double-submit token
+	Created  time.Time `json:"created"`
+	LastSeen time.Time `json:"last_seen"`
+	Expires  time.Time `json:"expires"`   // absolute ceiling
+	StepupAt time.Time `json:"stepup_at"` // last fresh assertion, for the freshness readout
+	CredID   string    `json:"cred_id"`   // the credential that signed in
 }
 
 // token is the opaque secret behind a cookie value. The Session.ID is the
@@ -95,13 +95,15 @@ type Session struct {
 type Purpose string
 
 const (
-	PurposeApprove       Purpose = "approve"        // approve/deny a bot proposal (digest = the approval digest)
-	PurposeConfigApply   Purpose = "config.apply"   // a config apply/restore that WIDENS
-	PurposeSecretWrite   Purpose = "secret.write"   // store or rotate a secret
-	PurposeBrowserTake   Purpose = "browser.takeover"
-	PurposeUpdateNow     Purpose = "update.apply"
-	PurposePackChange    Purpose = "pack.change"    // pack/plugin add/remove
-	PurposeEnrollSecond  Purpose = "enroll.second"  // enrol another passkey
+	PurposeApprove        Purpose = "approve"      // approve/deny a bot proposal (digest = the approval digest)
+	PurposeConfigApply    Purpose = "config.apply" // a config apply/restore that WIDENS
+	PurposeSecretWrite    Purpose = "secret.write" // store or rotate a secret
+	PurposeBrowserTake    Purpose = "browser.takeover"
+	PurposeBrowserWrite   Purpose = "browser.write"    // a wallet change that WIDENS (new profile/card, a binding, a site, a shop, a higher limit, an unfreeze)
+	PurposePurchase       Purpose = "browser.purchase" // approve/deny a purchase (digest = the purchase decision digest)
+	PurposeUpdateNow      Purpose = "update.apply"
+	PurposePackChange     Purpose = "pack.change"   // pack/plugin add/remove
+	PurposeEnrollSecond   Purpose = "enroll.second" // enrol another passkey
 	PurposeKnowledgePromo Purpose = "knowledge.promote"
 )
 
