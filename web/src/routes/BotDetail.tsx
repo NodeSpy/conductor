@@ -13,6 +13,7 @@ import { ReviewPanel } from '../components/ReviewPanel'
 import { TicketTable } from './Tickets'
 import { staged, loadConfig, stage, cfgError } from '../configStore'
 import { go } from '../router'
+import { BotWallet } from './BotWallet'
 
 const TABS = ['chat', 'tickets', 'approvals', 'memory', 'access', 'settings'] as const
 type Tab = (typeof TABS)[number]
@@ -187,6 +188,7 @@ function BotAccess({ bot }: { bot: BotData }): JSX.Element {
         </div>
       </div>
       <p class="muted tier-ladder">Tiers: observe &lt; reversible &lt; propose &lt; commit money &lt; never.</p>
+      <BotWallet bot={bot.bot} team={bot.team} />
     </section>
   )
 }

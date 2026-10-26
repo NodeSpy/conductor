@@ -23,6 +23,7 @@ import { Chat } from './routes/Chat'
 import { Tickets } from './routes/Tickets'
 import { TicketDetail } from './routes/TicketDetail'
 import { Approval } from './routes/Approval'
+import { Browsers } from './routes/Browsers'
 import { load, startLive } from './state'
 import { route, screen, seg } from './router'
 import { refreshState, authState } from './api/auth'
@@ -107,6 +108,9 @@ function Screen(): JSX.Element {
     case 'tickets':
       if (seg(1)) return <TicketDetail num={seg(1)} />
       return <Tickets />
+    case 'browser':
+      // #/browser, #/browser/<id|logins|add|details|cards>, #/browser/purchases/<id>
+      return <Browsers />
     default:
       return <Overview />
   }

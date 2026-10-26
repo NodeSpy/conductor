@@ -3,8 +3,10 @@
 // history (Activity merged in) below. Everything is live: the signals refresh
 // on every SSE run event.
 import type { JSX } from 'preact'
-import { useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { status, runs, loadError, liveTick, statusMark, needsYou, dismiss } from '../state'
+import { browser, type Purchase } from '../api/browser'
+import { PurchaseRow } from './Purchase'
 import type { RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
 import { humanDuration, ago, uptime } from '../lib/format'
@@ -48,6 +50,8 @@ export function Overview(): JSX.Element {
           aggregator is Phase 2). Leads the page. */}
       <NeedsYou failed={failed} paused={st?.paused ?? false} />
 
+      <PurchasesWaiting />
+
       <div class="split">
         <RunningNow running={running} />
         <Last12 runs={last12} />
@@ -63,6 +67,33 @@ export function Overview(): JSX.Element {
 
 function failed12(last12: RunSummary[]): number {
   return last12.filter((r) => r.status === 'failed').length
+}
+
+// PurchasesWaiting surfaces pending purchases in Needs you (design §4.5.1 — a
+// purchase waits here as its own kind, Purchases). Self-contained: it loads once
+// and shows nothing until there is something to approve.
+function PurchasesWaiting(): JSX.Element | null {
+  const [pending, setPending] = useState<Purchase[]>([])
+  useEffect(() => {
+    browser
+      .purchases('pending')
+      .then((r) => setPending(r.purchases || []))
+      .catch(() => setPending([]))
+  }, [])
+  if (pending.length === 0) return null
+  return (
+    <section class="panel" aria-label="Purchases waiting for you">
+      <div class="panel-head">
+        <h2 class="panel-title serif">Purchases</h2>
+        <span class="count hot">{pending.length}</span>
+      </div>
+      <ul class="dl-list">
+        {pending.map((p) => (
+          <PurchaseRow key={p.id} p={p} />
+        ))}
+      </ul>
+    </section>
+  )
 }
 
 function Tile({

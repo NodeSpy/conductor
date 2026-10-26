@@ -13,7 +13,7 @@ const NAV: { label: string; to?: string; soon?: boolean }[] = [
   { label: 'Workflows', to: 'workflows' },
   { label: 'Bots', to: 'bots' },
   { label: 'Tickets', to: 'tickets' },
-  { label: 'Browsers', soon: true },
+  { label: 'Browsers', to: 'browser' },
   { label: 'Config', to: 'config' },
   { label: 'Secrets', to: 'secrets' },
   { label: 'Packs', to: 'packs' },
