@@ -85,7 +85,7 @@ function sign(challenge: string): string {
 // pasteSSH completes an SSH panel (on the sign-in page or in the step-up dialog)
 // by the paste route. A touch device opens the panel on the approve tab.
 async function pasteSSH(scope: Locator | Page): Promise<void> {
-  await scope.getByRole('tab', { name: 'Sign on this computer' }).click()
+  await scope.getByRole('tab', { name: 'Sign on this device' }).click()
   const challenge = ((await scope.getByTestId('ssh-challenge').textContent()) ?? '').trim()
   expect(challenge).toMatch(/^conductor-dashboard-(login|stepup) v1 /)
   await scope.getByTestId('ssh-signature').fill(sign(challenge))
@@ -153,6 +153,10 @@ test('a plain-HTTP origin says it is unencrypted and offers no passkey', async (
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible()
   await expect(page.getByTestId('plain-http-notice')).toBeVisible()
   await expect(page.getByTestId('transport')).toContainText('Plain HTTP')
+  // The footer names the address this browser used, never an internal listener name.
+  await expect(page.getByTestId('transport')).toContainText(new URL(remote).host)
+  await expect(page.getByTestId('transport')).not.toContainText('bind:')
+  await expect(page.getByTestId('signin-operator')).toHaveAttribute('placeholder', /operator/)
   // The SSH key is the primary method; no passkey button, no passkey chip.
   await expect(page.getByTestId('ssh-begin')).toBeVisible()
   await expect(page.getByTestId('signin-button')).toHaveCount(0)
@@ -211,7 +215,7 @@ test('set a password and an authenticator from Access, confirming with the SSH k
 
   // The authenticator: read the key, compute the current code, confirm.
   await page.getByTestId('totp-start').click()
-  totpSecret = ((await page.getByTestId('totp-secret').textContent()) ?? '').trim()
+  totpSecret = ((await page.getByTestId('totp-secret').textContent()) ?? '').replace(/\s+/g, '')
   expect(totpSecret).toMatch(/^[A-Z2-7]{16,}$/)
   await expect(page.locator('img.totp-qr')).toBeVisible()
   await noHorizontalOverflow(page)
@@ -222,7 +226,38 @@ test('set a password and an authenticator from Access, confirming with the SSH k
   await pasteSSH(dialog)
   await expect(dialog).toHaveCount(0)
   await expect(page.getByTestId('access-msg')).toContainText('Authenticator app set up')
+  await expect(page.getByTestId('totp-state')).toContainText(/Set up (just now|\d+ min ago)/)
+  await expect(page.getByTestId('totp-state')).not.toContainText('ago ago')
+  await expect(page.locator('.acc-note', { hasText: 'A session ends after' })).not.toContainText(/\d+m0s|\dh0m/)
   await shot(page, info, 'access')
+})
+
+test('replace the authenticator app: the old one works until the new one is confirmed', async ({}, info) => {
+  test.setTimeout(60_000)
+  await page.goto('/#/security')
+  await page.getByTestId('totp-replace').click()
+  await expect(page.getByTestId('totp-replace-note')).toBeVisible()
+  // The manual key reads in 4-character blocks.
+  const shown = ((await page.getByTestId('totp-secret').textContent()) ?? '').trim()
+  expect(shown).toMatch(/^([A-Z2-7]{4} )+[A-Z2-7]{1,4}$/)
+  const next = shown.replace(/\s+/g, '')
+  await shot(page, info, 'totp-replace')
+
+  // Until confirmed, the old app's code still confirms a step-up — here, for
+  // the replacement itself.
+  const code = await freshCode()
+  totpSecret = next
+  lastStep = -1
+  await page.getByTestId('totp-code').fill(await freshCode())
+  await page.getByTestId('totp-confirm').click()
+  const dialog = page.getByTestId('stepup-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByTestId('stepup-what')).toContainText('Replace your authenticator app')
+  await dialog.getByTestId('stepup-method-totp').click()
+  await dialog.getByTestId('stepup-totp-code').fill(code)
+  await dialog.getByTestId('stepup-totp-submit').click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByTestId('access-msg')).toContainText('Authenticator app replaced')
 })
 
 test('sign in with a password and an authenticator code', async ({ browser }, info) => {
@@ -289,6 +324,15 @@ test('approve a proposal with an authenticator-code step-up', async ({}, info) =
 
   const dialog = pwPage.getByTestId('stepup-dialog')
   await expect(dialog).toContainText('Approve or deny')
+  // The sheet carries the action it confirms, pretty-printed and readable in
+  // place: it sits over the page that showed it.
+  const action = dialog.getByTestId('stepup-action')
+  await expect(action).toBeVisible()
+  await expect(action).toContainText('box.run')
+  expect(((await action.textContent()) ?? '').split('\n').length, 'pretty-printed over several lines').toBeGreaterThan(2)
+  await fitsInside(action, dialog)
+  const cancel = (await dialog.getByTestId('stepup-cancel').boundingBox())!
+  expect(cancel.height, 'Cancel is a 44px tap target').toBeGreaterThanOrEqual(44)
   // No passkey on plain HTTP; the SSH key and the authenticator are offered.
   await expect(dialog.getByTestId('stepup-method-passkey')).toHaveCount(0)
   await expect(dialog.getByTestId('stepup-method-ssh')).toBeVisible()

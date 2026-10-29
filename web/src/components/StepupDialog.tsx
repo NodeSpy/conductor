@@ -17,6 +17,7 @@ import {
   stepupSSHPoll,
   type Method,
   type SSHChallenge,
+  type StepupDetail,
   type StepupRequest,
 } from '../api/auth'
 import { SSHPanel, methodLabel } from './AuthBits'
@@ -34,6 +35,44 @@ const purposeLabel: Record<string, string> = {
   'pack.change': 'Add or remove a pack or plugin',
 }
 
+// prettyAction renders an action for reading: JSON indented, a JSON string
+// parsed first, anything else as text.
+export function prettyAction(v: unknown): string {
+  if (typeof v === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(v), null, 2)
+    } catch {
+      return v
+    }
+  }
+  return JSON.stringify(v, null, 2) ?? String(v)
+}
+
+// What: the action being confirmed, in full, inside the sheet — the sheet sits
+// over the page that showed it, so it has to carry it.
+function What({ detail, digest }: { detail?: StepupDetail; digest: string }): JSX.Element {
+  return (
+    <div class="stepup-what" data-testid="stepup-what">
+      {detail ? <p class="stepup-what-title">{detail.what}</p> : null}
+      {detail?.lines?.length ? (
+        <ul class="stepup-lines">
+          {detail.lines.map((l) => (
+            <li>{l}</li>
+          ))}
+        </ul>
+      ) : null}
+      {detail && detail.action !== undefined && detail.action !== null ? (
+        <pre class="stepup-action" data-testid="stepup-action" tabIndex={0}>
+          {prettyAction(detail.action)}
+        </pre>
+      ) : null}
+      <p class="acc-note stepup-digest">
+        Confirmation digest <span class="mono">{digest.slice(0, 12)}</span>… (approve-login shows the same)
+      </p>
+    </div>
+  )
+}
+
 export function StepupDialog(): JSX.Element | null {
   const req = stepupRequest.value
   if (!req) return null
@@ -47,6 +86,7 @@ function Dialog({ req }: { req: StepupRequest }): JSX.Element {
   const [err, setErr] = useState('')
   const [code, setCode] = useState('')
   const [password, setPassword] = useState('')
+  const [pwCode, setPwCode] = useState('')
   const [ch, setCh] = useState<SSHChallenge | null>(null)
 
   const cancel = () => req.reject(new Error('confirmation cancelled'))
@@ -88,6 +128,7 @@ function Dialog({ req }: { req: StepupRequest }): JSX.Element {
       <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="stepup-title" data-testid="stepup-dialog">
         <h2 id="stepup-title">Confirm it's you</h2>
         <p class="gate-sub">{purposeLabel[req.purpose] ?? req.purpose}</p>
+        <What detail={req.detail} digest={req.digest} />
 
         {methods.length === 0 ? (
           <p class="gate-err" role="alert">
@@ -158,7 +199,7 @@ function Dialog({ req }: { req: StepupRequest }): JSX.Element {
           <form
             onSubmit={(e) => {
               e.preventDefault()
-              void run(() => stepupPassword(req.purpose, req.digest, password))
+              void run(() => stepupPassword(req.purpose, req.digest, password, pwCode))
             }}
           >
             <label class="gate-field">
@@ -168,6 +209,18 @@ function Dialog({ req }: { req: StepupRequest }): JSX.Element {
                 autocomplete="current-password"
                 value={password}
                 onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
+              />
+            </label>
+            <label class="gate-field">
+              <span class="gate-group-label">Authenticator code (if you set one up)</span>
+              <input
+                class="mono"
+                inputMode="numeric"
+                autocomplete="one-time-code"
+                maxLength={7}
+                value={pwCode}
+                data-testid="stepup-password-code"
+                onInput={(e) => setPwCode((e.target as HTMLInputElement).value)}
               />
             </label>
             <button class="btn primary lg block" type="submit" disabled={busy || !password}>

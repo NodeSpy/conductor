@@ -34,13 +34,15 @@ async function copyText(text: string): Promise<boolean> {
   return ok
 }
 
-export function CopyBlock({ text, label, testid }: { text: string; label?: string; testid?: string }): JSX.Element {
+// CopyBlock shows display (default: text) and copies text.
+export function CopyBlock(props: { text: string; display?: string; label?: string; testid?: string; words?: boolean }): JSX.Element {
+  const { text, label, testid } = props
   const [copied, setCopied] = useState('')
   return (
     <div class="copy-block">
       {label ? <span class="gate-group-label">{label}</span> : null}
-      <pre class="gate-code copy-text" data-testid={testid}>
-        {text}
+      <pre class={'gate-code copy-text' + (props.words ? ' words' : '')} data-testid={testid}>
+        {props.display ?? text}
       </pre>
       <button
         class="btn sm"
@@ -129,13 +131,14 @@ export function SSHPanel(props: {
 
   const origin = location.origin
   const keygen = `printf '%s' ${shellQuote(ch.challenge)} | ssh-keygen -Y sign -n ${ch.namespace} -f ~/.ssh/id_ed25519`
+  const digest = /\bdigest=(\S+)/.exec(ch.challenge)?.[1] ?? ''
   const approve = `conductor dashboard approve-login ${ch.login_code} --url ${origin} --operator ${operator}`
 
   return (
     <div class="ssh-panel" data-testid="ssh-panel">
       <div class="seg-choice" role="tablist" aria-label="How to sign">
         <button type="button" role="tab" class={tab === 'paste' ? 'on' : ''} aria-selected={tab === 'paste'} onClick={() => setTab('paste')}>
-          Sign on this computer
+          Sign on this device
         </button>
         <button type="button" role="tab" class={tab === 'approve' ? 'on' : ''} aria-selected={tab === 'approve'} onClick={() => setTab('approve')}>
           Approve from another device
@@ -174,13 +177,14 @@ export function SSHPanel(props: {
       ) : (
         <div class="ssh-step">
           <p class="acc-note">On any computer with your SSH key and conductor installed, run:</p>
-          <CopyBlock text={approve} testid="ssh-approve-command" />
+          <CopyBlock text={approve} testid="ssh-approve-command" words />
           <div class="login-code" aria-label="Login code" data-testid="login-code">
             {ch.login_code}
           </div>
           <p class="acc-note" role="status">
-            Waiting for approval… It shows this device and asks you to confirm. The code works once and expires at{' '}
-            {new Date(ch.expires).toLocaleTimeString()}.
+            Waiting for approval… The command on the other machine shows this request (this device, its address and when
+            it started){digest ? <> and the confirmation digest <span class="mono">{digest.slice(0, 12)}</span>…</> : null},
+            then asks you to confirm. The code works once and expires at {new Date(ch.expires).toLocaleTimeString()}.
           </p>
         </div>
       )}

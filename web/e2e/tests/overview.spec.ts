@@ -28,12 +28,16 @@ test('app shell, nav and theme render with zero console errors and zero failed r
   // Shell chrome.
   await expect(page.locator('.rail .wordmark')).toHaveText('conductor')
   await expect(page.locator('.nav-item.on[aria-current="page"]')).toHaveText('Overview')
+  // On a phone the nav sits behind the menu button.
+  const phone = !!test.info().project.use.isMobile
+  if (phone) await page.getByTestId('menu-button').click()
   // Workflows, Activity, Bots and Browsers are all live nav links now.
   await expect(page.locator('a.nav-item', { hasText: 'Workflows' })).toBeVisible()
   await expect(page.locator('a.nav-item', { hasText: 'Activity' })).toBeVisible()
   await expect(page.locator('a.nav-item', { hasText: 'Bots' })).toBeVisible()
   await expect(page.locator('a.nav-item', { hasText: 'Browsers' })).toBeVisible()
   await expect(page.locator('.theme-btn')).toBeVisible()
+  if (phone) await page.getByTestId('menu-button').click()
 
   // The page actually rendered its content.
   await expect(page.locator('.tbl')).toBeVisible()

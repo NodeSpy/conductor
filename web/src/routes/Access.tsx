@@ -23,11 +23,17 @@ import {
 } from '../api/auth'
 import { passkeysUsable } from '../lib/webauthn'
 import { CopyBlock, methodLabel, methodPhrase } from '../components/AuthBits'
-import { ago } from '../lib/format'
+import { ago, goDuration } from '../lib/format'
 import '../styles/auth.css'
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
+}
+
+// groupKey shows a base32 key in 4-character blocks for typing; copying takes
+// the key without the spaces.
+function groupKey(k: string): string {
+  return k.replace(/(.{4})(?=.)/g, '$1 ')
 }
 
 function sessionHow(s: SessionRow): string {
@@ -121,7 +127,8 @@ export function Access(): JSX.Element {
     }
   }
   const onTOTPConfirm = async () => {
-    if (await act('totp', () => totpConfirm(data, otp.trim()), 'Authenticator app set up.')) setTOTP(null)
+    const done = data.totp.set ? 'Authenticator app replaced. The old one no longer works.' : 'Authenticator app set up.'
+    if (await act('totp', () => totpConfirm(data, otp.trim()), done)) setTOTP(null)
   }
   const onAddPasskey = async () => {
     const name = prompt('Name this passkey', 'this device')
@@ -170,7 +177,7 @@ export function Access(): JSX.Element {
                     {k.locked ? <span class="acc-locked"> · locked (possible clone)</span> : null}
                     <span class="acc-why">
                       {k.device_bound ? 'Stays on this device' : 'Synced to your other devices'} · {k.rp_id} · last
-                      used {k.last_used ? ago(k.last_used) + ' ago' : 'never'}
+                      used {k.last_used ? ago(k.last_used) : 'never'}
                     </span>
                   </div>
                   <span class="acc-act">
@@ -203,7 +210,7 @@ export function Access(): JSX.Element {
                 <div class="acc-main">
                   <b>Password</b>
                   <span class="acc-why" data-testid="password-state">
-                    {data.password.set ? `Set ${ago(data.password.set_at)} ago` : 'Not set'}
+                    {data.password.set ? `Set ${ago(data.password.set_at)}` : 'Not set'}
                     {!canPassword ? ' · password sign-in is off in the config' : ''}
                   </span>
                 </div>
@@ -244,14 +251,19 @@ export function Access(): JSX.Element {
                 <div class="acc-main">
                   <b>Authenticator app</b>
                   <span class="acc-why" data-testid="totp-state">
-                    {data.totp.set ? `Set up ${ago(data.totp.set_at)} ago` : 'Not set up'}
+                    {data.totp.set ? `Set up ${ago(data.totp.set_at)}` : 'Not set up'}
                   </span>
                 </div>
                 <span class="acc-act">
                   {data.totp.set ? (
-                    <button class="btn sm ghost" type="button" disabled={!!busy} onClick={() => act('totp', () => removeTOTP(data), 'Authenticator app removed.')}>
-                      Remove
-                    </button>
+                    <>
+                      <button class="btn sm" type="button" disabled={!!busy || !!totp} onClick={onTOTPStart} data-testid="totp-replace">
+                        Replace…
+                      </button>
+                      <button class="btn sm ghost" type="button" disabled={!!busy} onClick={() => act('totp', () => removeTOTP(data), 'Authenticator app removed.')}>
+                        Remove
+                      </button>
+                    </>
                   ) : (
                     <button class="btn sm" type="button" disabled={!!busy || !!totp} onClick={onTOTPStart} data-testid="totp-start">
                       Set up…
@@ -264,8 +276,13 @@ export function Access(): JSX.Element {
                   <div class="totp-setup">
                     <img class="totp-qr" src={totp.qr} alt="QR code for your authenticator app" width={180} height={180} />
                     <div class="totp-side">
+                      {data.totp.set ? (
+                        <p class="acc-note" data-testid="totp-replace-note">
+                          A new key for your app. The one you have keeps working until you confirm this one with a code.
+                        </p>
+                      ) : null}
                       <p class="acc-note">Scan it, or type this key into the app (time-based, 6 digits, 30 seconds):</p>
-                      <CopyBlock text={totp.secret} testid="totp-secret" />
+                      <CopyBlock text={totp.secret} display={groupKey(totp.secret)} testid="totp-secret" words />
                     </div>
                   </div>
                   <form
@@ -280,7 +297,7 @@ export function Access(): JSX.Element {
                     </label>
                     <div class="row-actions">
                       <button class="btn primary" type="submit" disabled={!!busy || otp.trim().length < 6} data-testid="totp-confirm">
-                        {busy === 'totp' ? 'Checking…' : 'Turn on'}
+                        {busy === 'totp' ? 'Checking…' : data.totp.set ? 'Replace' : 'Turn on'}
                       </button>
                       <button class="btn ghost" type="button" onClick={() => setTOTP(null)}>
                         Cancel
@@ -314,7 +331,7 @@ export function Access(): JSX.Element {
                       {s.current ? ' (this one)' : ''}
                     </b>
                     <span class="acc-why">
-                      {sessionHow(s)} · signed in {s.created ? ago(s.created) + ' ago' : ''}
+                      {sessionHow(s)} · signed in {s.created ? ago(s.created) : ''}
                     </span>
                   </div>
                   <span class="acc-act">
@@ -328,7 +345,7 @@ export function Access(): JSX.Element {
               ))}
             </ul>
             <p class="acc-note">
-              A session ends after {data.session_policy.idle} idle, or {data.session_policy.max} at most.
+              A session ends after {goDuration(data.session_policy.idle)} idle, or {goDuration(data.session_policy.max)} at most.
             </p>
           </section>
         </div>
@@ -361,8 +378,9 @@ export function Access(): JSX.Element {
               ))}
               <dt>Wrong passkey, password or code</dt>
               <dd>
-                5 failed tries in 15 minutes locks that client for 15 minutes, doubling each time. Wrong passwords and
-                authenticator codes also lock that operator's password and code sign-in the same way.
+                5 failed tries in 15 minutes locks that client (an IPv6 client by its /64) for 15 minutes, doubling each
+                time; tries running at once count before they finish. Wrong passwords and authenticator codes also lock
+                that operator's password and code sign-in the same way; passkey and SSH sign-in stay open.
               </dd>
               <dt>Enrolment links</dt>
               <dd>3 an hour, one live at a time.</dd>

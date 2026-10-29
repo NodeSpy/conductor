@@ -55,6 +55,20 @@ export function ReviewPanel({ stagedCount }: { stagedCount: number }): JSX.Eleme
             </div>
           ) : null}
 
+          {rev.guarded && rev.guarded.length ? (
+            <div class="banner attn guarded" role="note" data-testid="review-guarded">
+              <strong>This changes who can sign in, or how:</strong>
+              <ul class="widen-list">
+                {rev.guarded.map((g) => (
+                  <li>
+                    {g.text} <span class="mono id">{g.path}</span>
+                  </li>
+                ))}
+              </ul>
+              Applying it asks you to confirm it's you.
+            </div>
+          ) : null}
+
           <ul class="effects">
             {(rev.effects ?? []).map((e) => (
               <li class={e.widens ? 'widens' : ''}>

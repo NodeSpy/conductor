@@ -143,8 +143,18 @@ export async function signOut(): Promise<void> {
 export interface StepupRequest {
   purpose: string
   digest: string
+  detail?: StepupDetail
   resolve: (token: string) => void
   reject: (e: Error) => void
+}
+
+// StepupDetail is what the sheet shows of the action being confirmed, so the
+// operator reads exactly what they approve without leaving it: a one-line
+// summary, optional effect lines, and the action itself (pretty-printed).
+export interface StepupDetail {
+  what: string
+  lines?: string[]
+  action?: unknown
 }
 
 export const stepupRequest = signal<StepupRequest | null>(null)
@@ -153,12 +163,13 @@ export const stepupRequest = signal<StepupRequest | null>(null)
 // they have (the StepupDialog), and returns a single-use token to put in
 // X-Conductor-Stepup on the sensitive request. Callers don't know or care which
 // method was used.
-export function stepUp(purpose: string, digest: string): Promise<string> {
+export function stepUp(purpose: string, digest: string, detail?: StepupDetail): Promise<string> {
   stepupRequest.value?.reject(new Error('superseded by another confirmation'))
   return new Promise<string>((resolve, reject) => {
     stepupRequest.value = {
       purpose,
       digest,
+      detail,
       resolve: (t) => {
         stepupRequest.value = null
         resolve(t)
@@ -186,8 +197,8 @@ export async function stepupTOTP(purpose: string, digest: string, code: string):
   return stepupToken(await send<{ token: string }>('POST', '/api/v1/auth/stepup/totp', { purpose, digest, code }))
 }
 
-export async function stepupPassword(purpose: string, digest: string, password: string): Promise<string> {
-  return stepupToken(await send<{ token: string }>('POST', '/api/v1/auth/stepup/password', { purpose, digest, password }))
+export async function stepupPassword(purpose: string, digest: string, password: string, code: string): Promise<string> {
+  return stepupToken(await send<{ token: string }>('POST', '/api/v1/auth/stepup/password', { purpose, digest, password, code }))
 }
 
 export const stepupSSHBegin = (purpose: string, digest: string) =>
@@ -320,12 +331,12 @@ export const access = () => get<AccessData>('/api/v1/access')
 const credentialPurpose = 'credential.change'
 
 export async function setPassword(d: AccessData, password: string): Promise<void> {
-  const token = await stepUp(credentialPurpose, d.credential_digests['password.set'])
+  const token = await stepUp(credentialPurpose, d.credential_digests['password.set'], { what: 'Set or change your dashboard password' })
   await sendStepped('POST', '/api/v1/auth/password', token, { password })
 }
 
 export async function removePassword(d: AccessData): Promise<void> {
-  const token = await stepUp(credentialPurpose, d.credential_digests['password.remove'])
+  const token = await stepUp(credentialPurpose, d.credential_digests['password.remove'], { what: 'Remove your dashboard password' })
   await sendStepped('DELETE', '/api/v1/auth/password', token)
 }
 
@@ -333,18 +344,20 @@ export const totpBegin = () => send<TOTPEnrollment>('POST', '/api/v1/auth/totp/b
 
 export async function totpConfirm(d: AccessData, code: string): Promise<void> {
   // Activating the authenticator is a credential change, so it asks for a confirmation.
-  const token = await stepUp(credentialPurpose, d.credential_digests['totp.set'])
+  const token = await stepUp(credentialPurpose, d.credential_digests['totp.set'], {
+    what: d.totp.set ? 'Replace your authenticator app with the new one' : 'Set up your authenticator app',
+  })
   await sendStepped('POST', '/api/v1/auth/totp/confirm', token, { code })
 }
 
 export async function removeTOTP(d: AccessData): Promise<void> {
-  const token = await stepUp(credentialPurpose, d.credential_digests['totp.remove'])
+  const token = await stepUp(credentialPurpose, d.credential_digests['totp.remove'], { what: 'Remove your authenticator app' })
   await sendStepped('DELETE', '/api/v1/auth/totp', token)
 }
 
 // addPasskeyHere registers a passkey for the hostname this page is on.
 export async function addPasskeyHere(d: AccessData, name: string): Promise<void> {
-  const token = await stepUp(credentialPurpose, d.credential_digests['passkey.add'])
+  const token = await stepUp(credentialPurpose, d.credential_digests['passkey.add'], { what: `Add a passkey named "${name}"` })
   const begin = await sendStepped<{ ceremony_id: string; options: unknown }>('POST', '/api/v1/passkeys/register/begin', token, { name })
   const response = await createCredential(begin.options as { publicKey: Record<string, unknown> })
   await send('POST', '/api/v1/passkeys/register/finish', { ceremony_id: begin.ceremony_id, name, response })
@@ -373,6 +386,9 @@ export const approvalView = (bot: string, id: string) =>
 export async function decideProposal(bot: string, id: string, decision: 'approve' | 'deny'): Promise<void> {
   const view = await approvalView(bot, id)
   const digest = decision === 'approve' ? view.digests.approve : view.digests.deny
-  const token = await stepUp('approve', digest)
+  const token = await stepUp('approve', digest, {
+    what: `${decision === 'approve' ? 'Approve' : 'Deny'} ${bot}'s proposal ${id}`,
+    action: view.summary,
+  })
   await sendStepped('POST', `/api/v1/bots/${encodeURIComponent(bot)}/proposals/${encodeURIComponent(id)}/decision`, token, { decision })
 }

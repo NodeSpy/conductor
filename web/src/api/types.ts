@@ -292,6 +292,16 @@ export interface ReviewResponse {
   unified: string;
   effects: EffectDTO[];
   widening: EffectDTO[];
+  /**
+   * Guarded lists the changes to who can sign in or how (operators, the
+   * dashboard's auth, listeners and session).
+   */
+  guarded: EffectDTO[];
+  /**
+   * Stepup is true when applying needs a step-up (a widening or a guarded
+   * change) while sign-in is on.
+   */
+  stepup: boolean;
   sha: string;
   token: string;
 }
@@ -333,9 +343,10 @@ export interface StageRequest {
 /**
  * ApplyRequest is POST /api/v1/config/apply. Token is the pipeline confirm token
  * from the matching review (step-up, candidate-bound). StepupToken is the
- * WebAuthn step-up token required ONLY when auth is configured AND the staged set
- * widens a guardrail (auth.PurposeConfigApply); the step-up ceremony's digest is
- * the pipeline confirm Token.
+ * step-up token required ONLY when auth is configured AND the review says so
+ * (ReviewResponse.Stepup: the staged set widens a guardrail or changes who can
+ * sign in; auth.PurposeConfigApply); the step-up ceremony's digest is the
+ * pipeline confirm Token.
  */
 export interface ApplyRequest {
   token: string;
@@ -343,7 +354,7 @@ export interface ApplyRequest {
 }
 /**
  * RestoreRequest is POST /api/v1/config/restore and /restore/review. StepupToken
- * is the WebAuthn step-up token required when auth is configured (a restore
+ * is the step-up token required when auth is configured (a restore
  * re-writes the whole file, so it always needs step-up under auth); its ceremony
  * digest is the restore confirm Token.
  */

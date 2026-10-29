@@ -5,6 +5,7 @@
 // signals mirror its responses rather than owning the source of truth.
 import { signal } from '@preact/signals'
 import { api, validateStream } from './api/client'
+import { authState, stepUp } from './api/auth'
 import type { ConfigResponse, ConfigChange, ReviewResponse, AppliedResponse } from './api/types'
 
 export const config = signal<ConfigResponse | null>(null)
@@ -99,7 +100,14 @@ export async function apply(): Promise<void> {
   }
   try {
     busy.value = true
-    const res = await api.apply(rev.token)
+    // A change that widens a guardrail or touches who can sign in needs a
+    // step-up when sign-in is on; the sheet lists what the apply does.
+    let stepupToken: string | undefined
+    if (rev.stepup && authState.value.signed_in) {
+      const lines = [...(rev.guarded ?? []), ...(rev.widening ?? []), ...(rev.effects ?? [])].map((e) => e.text)
+      stepupToken = await stepUp('config.apply', rev.token, { what: 'Apply this config change', lines: [...new Set(lines)] })
+    }
+    const res = await api.apply(rev.token, stepupToken)
     applyResult.value = res
     review.value = null
     staged.value = []

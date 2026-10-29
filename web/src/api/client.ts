@@ -87,7 +87,8 @@ export const api = {
   unstage: (id: string) => sendJSON<{ staged: ConfigChange[] }>('POST', '/api/v1/config/unstage', { id }),
   clearStaged: () => sendJSON<{ staged: ConfigChange[] }>('POST', '/api/v1/config/clear', {}),
   review: () => getJSON<ReviewResponse>('/api/v1/config/review'),
-  apply: (token: string) => sendJSON<AppliedResponse>('POST', '/api/v1/config/apply', { token }),
+  apply: (token: string, stepupToken?: string) =>
+    sendJSON<AppliedResponse>('POST', '/api/v1/config/apply', { token, ...(stepupToken ? { stepup_token: stepupToken } : {}) }),
   history: () => getJSON<{ history: HistoryItem[] }>('/api/v1/config/history'),
   restoreReview: (id: string) => sendJSON<ReviewResponse>('POST', '/api/v1/config/restore/review', { id }),
   restore: (id: string, token: string) => sendJSON<AppliedResponse>('POST', '/api/v1/config/restore', { id, token }),

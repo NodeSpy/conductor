@@ -3,6 +3,7 @@
 // items still in a later phase are shown disabled so the chrome reads true to
 // the approved design without pretending to route somewhere that isn't built.
 import type { ComponentChildren, JSX } from 'preact'
+import { useEffect, useState } from 'preact/hooks'
 import { conn } from '../state'
 import { route, screen } from '../router'
 
@@ -53,15 +54,42 @@ function currentTheme(): 'light' | 'dark' | 'auto' {
 export function Shell({ children }: { children: ComponentChildren }): JSX.Element {
   const theme = currentTheme()
   const cycle = () => setTheme(theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto')
+  // On a phone the nav folds behind a menu button so each page opens on its
+  // content; it closes again on navigation and on Escape.
+  const [open, setOpen] = useState(false)
+  useEffect(() => setOpen(false), [route.value])
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    addEventListener('keydown', onKey)
+    return () => removeEventListener('keydown', onKey)
+  }, [open])
   return (
     <div class="app">
-      <nav class="rail" aria-label="Primary">
+      <nav class={'rail' + (open ? ' open' : '')} aria-label="Primary">
         <div class="rail-top">
           <div class="brand">
             <Mark />
             <span class="wordmark">conductor</span>
+            <button
+              class="menu-btn"
+              type="button"
+              aria-expanded={open}
+              aria-controls="primary-nav"
+              data-testid="menu-button"
+              onClick={() => setOpen(!open)}
+            >
+              <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
+                {open ? (
+                  <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                ) : (
+                  <path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                )}
+              </svg>
+              {open ? 'Close' : 'Menu'}
+            </button>
           </div>
-          <ul class="nav">
+          <ul class="nav" id="primary-nav">
             {NAV.map((n) => {
               // Highlight the section for its detail pages too (bots/:name keeps
               // Bots lit); Overview ('') only on the exact root.

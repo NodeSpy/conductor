@@ -562,29 +562,74 @@ tr.quiet td {
   }
 }
 
+.menu-btn {
+  display: none;
+}
+
 /* ---- responsive: phone ---- */
+/* The rail becomes a slim top bar; the nav folds behind the menu button so a
+   page opens on its own content, not on fourteen links. */
 @media (max-width: 860px) {
   .app {
     grid-template-columns: 1fr;
+    align-content: start;
   }
   .rail {
-    position: static;
+    position: sticky;
+    top: 0;
+    z-index: 20;
     height: auto;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
+    max-height: 100dvh;
+    overflow-y: auto;
+    padding: var(--space-2) var(--space-4);
+    border-right: 0;
+    border-bottom: var(--border-width) solid var(--color-border-subtle);
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: var(--space-2);
   }
   .rail-top {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-  }
-  .nav {
-    flex-direction: row;
-    flex-wrap: wrap;
+    display: block;
   }
   .brand {
     padding: 0;
+    min-height: 44px;
+  }
+  .menu-btn {
+    all: unset;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0 var(--space-3);
+    border-radius: var(--radius-control);
+    border: var(--border-width) solid var(--color-border-default);
+    color: var(--color-text-primary);
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .menu-btn:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+  .rail .nav,
+  .rail .rail-foot {
+    display: none;
+  }
+  .rail.open .nav {
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-2) 0;
+  }
+  .rail.open .rail-foot {
+    display: flex;
+    padding-bottom: var(--space-2);
+  }
+  .nav-item {
+    padding: 12px var(--space-3);
   }
   .tiles {
     grid-template-columns: repeat(2, 1fr);

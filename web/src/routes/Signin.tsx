@@ -68,9 +68,14 @@ export function Signin(): JSX.Element {
         autocomplete="username"
         autocapitalize="none"
         spellcheck={false}
+        placeholder="your operator name"
+        aria-describedby="operator-hint"
         data-testid="signin-operator"
         onInput={(e) => setOperator((e.target as HTMLInputElement).value)}
       />
+      <span class="field-hint" id="operator-hint">
+        The name you're listed under in conductor's config (<span class="mono">operators:</span>).
+      </span>
     </label>
   )
 
@@ -203,7 +208,7 @@ export function Signin(): JSX.Element {
         <div class="gate-foot" data-testid="transport">
           <span>
             {transport === 'https' ? 'HTTPS' : transport === 'localhost' ? 'localhost (this computer)' : 'Plain HTTP — not encrypted'}
-            {st.listener ? ` · ${st.listener}` : ''}
+            {location.host ? ` · ${location.host}` : ''}
           </span>
         </div>
       </div>

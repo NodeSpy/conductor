@@ -218,7 +218,7 @@ export async function walletOp(cmd: string, req: Record<string, unknown>): Promi
   if (res.status === 401) {
     const b = (await res.clone().json().catch(() => ({}))) as { stepup?: { purpose: string; digest: string } }
     if (b.stepup) {
-      const token = await stepUp(b.stepup.purpose, b.stepup.digest)
+      const token = await stepUp(b.stepup.purpose, b.stepup.digest, { what: `Wallet change: ${cmd}`, action: req })
       res = await fetch('/api/v1/browser/op', {
         method: 'POST',
         credentials: 'same-origin',
@@ -251,7 +251,7 @@ export async function takeover(id: string): Promise<void> {
   if (res.status === 401) {
     const b = (await res.clone().json().catch(() => ({}))) as { stepup?: { purpose: string; digest: string } }
     if (b.stepup) {
-      const token = await stepUp(b.stepup.purpose, b.stepup.digest)
+      const token = await stepUp(b.stepup.purpose, b.stepup.digest, { what: `Take over browser session ${id}` })
       res = await fetch(`/api/v1/browser/sessions/${encodeURIComponent(id)}/takeover`, {
         method: 'POST',
         credentials: 'same-origin',
@@ -296,7 +296,10 @@ export const purchaseApproval = (id: string) =>
 export async function decidePurchase(id: string, decision: 'approve' | 'deny', reason = ''): Promise<void> {
   const view = await purchaseApproval(id)
   const digest = decision === 'approve' ? view.digests.approve : view.digests.deny
-  const token = await stepUp(view.purpose, digest)
+  const token = await stepUp(view.purpose, digest, {
+    what: `${decision === 'approve' ? 'Approve' : 'Deny'} purchase ${id}`,
+    action: view.summary,
+  })
   await fetch(`/api/v1/browser/purchases/${encodeURIComponent(id)}/decision`, {
     method: 'POST',
     credentials: 'same-origin',

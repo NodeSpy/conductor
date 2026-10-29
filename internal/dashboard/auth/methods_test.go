@@ -218,6 +218,36 @@ func TestTOTPEnrollConfirm(t *testing.T) {
 	}
 }
 
+// Replacing an authenticator: the old one keeps working until the new one is
+// confirmed with a code from it, then only the new one does.
+func TestTOTPReplaceKeepsOldUntilConfirmed(t *testing.T) {
+	h := newHarness(t)
+	old := setTOTP(t, h.m, "ops")
+	_, sess, _ := h.m.CreateSession("ops", ListenerLocalhost, "", "t", "127.0.0.1", "")
+	en, err := h.m.BeginTOTP(sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.clk.advance(30 * time.Second)
+	if err := h.m.checkTOTP("ops", codeAt(t, old, h.clk.now())); err != nil {
+		t.Fatalf("the old authenticator must work while the new one is unconfirmed: %v", err)
+	}
+	if err := h.m.ConfirmTOTP(sess, codeAt(t, old, h.clk.now())); err == nil && codeAt(t, old, h.clk.now()) != codeAt(t, en.Secret, h.clk.now()) {
+		t.Fatal("a code from the old authenticator must not confirm the new one")
+	}
+	h.clk.advance(30 * time.Second)
+	if err := h.m.ConfirmTOTP(sess, codeAt(t, en.Secret, h.clk.now())); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	h.clk.advance(30 * time.Second)
+	if err := h.m.checkTOTP("ops", codeAt(t, old, h.clk.now())); err == nil {
+		t.Fatal("after confirming, the old authenticator must stop working")
+	}
+	if err := h.m.checkTOTP("ops", codeAt(t, en.Secret, h.clk.now())); err != nil {
+		t.Fatalf("the new authenticator must work: %v", err)
+	}
+}
+
 // --- password sign-in policy ---
 
 func TestPasswordOnlyRejectedByDefault(t *testing.T) {

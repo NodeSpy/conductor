@@ -64,7 +64,8 @@
 .btn.primary {
   background: var(--color-accent-default);
   border-color: var(--color-accent-default);
-  color: var(--color-bg-inverse, #fff);
+  /* the on-accent token clears WCAG AA on the fill and its hover, both themes */
+  color: var(--color-text-on-accent);
 }
 .btn.primary:hover {
   background: var(--color-accent-hover, var(--color-accent-default));
@@ -136,6 +137,15 @@
 }
 .gate-field input:focus {
   border-color: var(--color-border-strong);
+}
+.gate-field input::placeholder {
+  color: var(--color-text-tertiary);
+}
+.field-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
 }
 .seg-choice {
   display: flex;
@@ -384,6 +394,13 @@
   max-width: 100%;
   box-sizing: border-box;
 }
+/* A shell command breaks only between words; a token too long for the line
+   scrolls rather than splitting mid-word. */
+.copy-text.words {
+  word-break: normal;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
 .login-code {
   font-family: var(--type-mono, monospace);
   font-size: 1.8rem;
@@ -472,6 +489,43 @@
   justify-content: flex-end;
   margin-top: var(--space-3);
 }
+.dialog-foot .btn {
+  min-height: 44px;
+  min-width: 88px;
+}
+/* What the step-up confirms, readable in full inside the sheet. */
+.stepup-what {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-control);
+  border: var(--border-width) solid var(--color-border-subtle);
+  background: var(--color-bg-sunken);
+}
+.stepup-what-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+.stepup-lines {
+  margin: var(--space-2) 0 0;
+  padding-left: 1.2em;
+  color: var(--color-text-secondary);
+}
+.stepup-action {
+  margin: var(--space-2) 0 0;
+  max-height: 40dvh;
+  overflow: auto;
+  font-family: var(--type-mono, monospace);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+}
+.stepup-what .stepup-digest {
+  margin: var(--space-2) 0 0;
+}
 @media (max-width: 560px) {
   .dialog-backdrop {
     align-items: flex-end;
@@ -485,5 +539,10 @@
   }
   .gate-card {
     padding: var(--space-4);
+  }
+  /* 16px keeps iOS Safari from zooming the page when a field takes focus. */
+  .gate-field input,
+  .gate-field textarea {
+    font-size: 16px;
   }
 }

@@ -309,9 +309,10 @@ type StageRequest struct {
 
 // ApplyRequest is POST /api/v1/config/apply. Token is the pipeline confirm token
 // from the matching review (step-up, candidate-bound). StepupToken is the
-// step-up token required ONLY when auth is configured AND the staged set
-// widens a guardrail (auth.PurposeConfigApply); the step-up ceremony's digest is
-// the pipeline confirm Token.
+// step-up token required ONLY when auth is configured AND the review says so
+// (ReviewResponse.Stepup: the staged set widens a guardrail or changes who can
+// sign in; auth.PurposeConfigApply); the step-up ceremony's digest is the
+// pipeline confirm Token.
 type ApplyRequest struct {
 	Token       string `json:"token"`
 	StepupToken string `json:"stepup_token,omitempty"`
