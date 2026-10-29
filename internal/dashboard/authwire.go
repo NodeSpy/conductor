@@ -348,7 +348,7 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if !s.authEnforced() {
-		writeError(w, http.StatusForbidden, "auth_required", "approvals need a signed-in operator with a passkey", "enrol an operator first")
+		writeError(w, http.StatusForbidden, "auth_required", "approvals need a signed-in operator", "enrol an operator first")
 		return
 	}
 	sess, ok := auth.SessionFrom(r)

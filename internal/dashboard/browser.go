@@ -331,7 +331,7 @@ func (s *Server) handleBrowserPurchaseDecision(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if !s.authEnforced() {
-		writeError(w, http.StatusForbidden, "auth_required", "a purchase decision needs a signed-in operator with a passkey", "enrol an operator first")
+		writeError(w, http.StatusForbidden, "auth_required", "a purchase decision needs a signed-in operator", "enrol an operator first")
 		return
 	}
 	sess, ok := auth.SessionFrom(r)
@@ -360,7 +360,7 @@ func (s *Server) handleBrowserPurchaseDecision(w http.ResponseWriter, r *http.Re
 	digest := purchaseDigest(id, actionSHA, req.Decision)
 	ev, err := s.auth.RequireStepup(sess, auth.PurposePurchase, digest, r.Header.Get(auth.StepupHeader))
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "stepup_required", err.Error(), "touch your passkey to decide")
+		writeError(w, http.StatusUnauthorized, "stepup_required", err.Error(), "confirm it's you to decide")
 		return
 	}
 	if err := s.deps.Browser.DecidePurchase(r.Context(), id, req.Decision, sess.Operator, req.Reason, ev); err != nil {
