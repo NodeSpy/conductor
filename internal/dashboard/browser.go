@@ -312,11 +312,14 @@ func (s *Server) handleBrowserPurchaseApproval(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusNotFound, "no_purchase", "no such purchase", "")
 		return
 	}
+	approve, deny := purchaseDigest(id, actionSHA, "approve"), purchaseDigest(id, actionSHA, "deny")
+	s.labels.note(auth.PurposePurchase, approve, "approve purchase "+id+": "+compactJSON(summary))
+	s.labels.note(auth.PurposePurchase, deny, "deny purchase "+id+": "+compactJSON(summary))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"purchase": id, "action_sha256": actionSHA,
 		"digests": map[string]string{
-			"approve": purchaseDigest(id, actionSHA, "approve"),
-			"deny":    purchaseDigest(id, actionSHA, "deny"),
+			"approve": approve,
+			"deny":    deny,
 		},
 		"summary": json.RawMessage(nonEmptyJSON(summary)), "operators": operators,
 		"purpose": string(auth.PurposePurchase),

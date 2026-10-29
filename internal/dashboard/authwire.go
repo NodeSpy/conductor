@@ -8,6 +8,7 @@ package dashboard
 // config-edit owner's server.go stays small.
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -64,6 +65,9 @@ func (s *Server) buildAuth() {
 		Lifecycle:   s.deps.Lifecycle,
 		Now:         s.deps.Now,
 		Policy:      &pol,
+		// approve-login shows what a step-up confirms: the server noted the
+		// action behind each digest it handed out (stepupdesc.go).
+		DescribeStepup: s.labels.describe,
 	}, rps...)
 	if err != nil {
 		s.deps.Log("dashboard: auth manager: %v; serving without sign-in", err)
@@ -309,11 +313,14 @@ func (s *Server) handleApprovalView(w http.ResponseWriter, r *http.Request) {
 	// The client steps up over the digest for the decision it is about to make;
 	// the server recomputes the same digest in handleApprovalDecision, so the
 	// client only forwards it (no client-side hashing that could drift).
+	approve, deny := approvalDigest(bot, id, actionSHA, "approve"), approvalDigest(bot, id, actionSHA, "deny")
+	s.labels.note(auth.PurposeApprove, approve, "approve bot "+bot+"'s proposal "+id+": "+compactJSON(summary))
+	s.labels.note(auth.PurposeApprove, deny, "deny bot "+bot+"'s proposal "+id+": "+compactJSON(summary))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"bot": bot, "proposal": id, "action_sha256": actionSHA,
 		"digests": map[string]string{
-			"approve": approvalDigest(bot, id, actionSHA, "approve"),
-			"deny":    approvalDigest(bot, id, actionSHA, "deny"),
+			"approve": approve,
+			"deny":    deny,
 		},
 		"summary": json.RawMessage(nonEmptyJSON(summary)), "operators": operators,
 		"purpose": string(auth.PurposeApprove),
@@ -382,6 +389,15 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 }
 
 // nonEmptyJSON returns s if it is non-empty JSON, else a JSON null.
+// compactJSON is a JSON summary on one line, for a step-up label.
+func compactJSON(s string) string {
+	var b bytes.Buffer
+	if err := json.Compact(&b, []byte(s)); err != nil {
+		return strings.Join(strings.Fields(s), " ")
+	}
+	return b.String()
+}
+
 func nonEmptyJSON(s string) []byte {
 	if strings.TrimSpace(s) == "" {
 		return []byte("null")

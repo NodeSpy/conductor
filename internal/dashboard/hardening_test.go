@@ -211,3 +211,60 @@ func TestLoopbackBindTransport(t *testing.T) {
 		t.Fatalf("the localhost name is a relying party: %+v", rps)
 	}
 }
+
+// approve-login shows what a step-up confirms: a step-up begun over a proposal's
+// approval digest carries the server's own summary of that proposal into the
+// pending view the CLI prints before it signs.
+func TestApproveLoginShowsTheAction(t *testing.T) {
+	s := New(Deps{
+		Cfg:      &config.Config{Dashboard: config.DashboardConfig{Enabled: true}},
+		StateDir: t.TempDir(),
+		Operators: func() map[string]string {
+			return map[string]string{"ops": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake ops@box"}
+		},
+		ApprovalView: func(bot, id string) (string, string, []string, bool) {
+			return "abc123", `{"verb": "box.run", "command": "rm -rf /srv/data"}`, []string{"ops"}, bot == "b1" && id == "p1"
+		},
+	})
+	h := s.listenerHandler(auth.ListenerLocalhost)
+	vr := auth.WithConn(httptest.NewRequest("POST", "/", nil), auth.ConnInfo{Listener: auth.ListenerLocalhost, Transport: auth.TransportLocalhost})
+	ck, _, err := s.auth.CreateSessionFor(vr, "ops", auth.MethodSSH, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &browserClient{t: t, h: h, host: "localhost:7788", addr: "127.0.0.1:5555", cookie: ck}
+	var state struct{ CSRF string }
+	_ = json.Unmarshal(c.do("GET", "/api/v1/auth/state", nil).Body.Bytes(), &state)
+	c.csrf = state.CSRF
+	var view struct{ Digests map[string]string }
+	if rr := c.do("GET", "/api/v1/bots/b1/proposals/p1/approval", nil); rr.Code != 200 {
+		t.Fatalf("approval view: %d %s", rr.Code, rr.Body)
+	} else {
+		_ = json.Unmarshal(rr.Body.Bytes(), &view)
+	}
+	var begun struct {
+		LoginCode string `json:"login_code"`
+	}
+	rr := c.do("POST", "/api/v1/auth/stepup/ssh/begin", map[string]string{"purpose": string(auth.PurposeApprove), "digest": view.Digests["approve"]})
+	_ = json.Unmarshal(rr.Body.Bytes(), &begun)
+	if begun.LoginCode == "" {
+		t.Fatalf("step-up begin: %d %s", rr.Code, rr.Body)
+	}
+	cli := &browserClient{t: t, h: h, host: "localhost:7788", addr: "127.0.0.1:6666"}
+	var pending auth.SSHPendingView
+	_ = json.Unmarshal(cli.do("POST", "/api/v1/auth/ssh/pending", map[string]string{"code": begun.LoginCode}).Body.Bytes(), &pending)
+	if !strings.Contains(pending.Summary, "approve bot b1's proposal p1") || !strings.Contains(pending.Summary, "rm -rf /srv/data") {
+		t.Fatalf("the pending view must say what is approved: %+v", pending)
+	}
+	if pending.Digest != view.Digests["approve"] || pending.Started == "" || pending.Addr == "" {
+		t.Fatalf("the pending view must carry digest, start and address: %+v", pending)
+	}
+	// A digest the server never handed out has no description to borrow.
+	rr = c.do("POST", "/api/v1/auth/stepup/ssh/begin", map[string]string{"purpose": string(auth.PurposeApprove), "digest": strings.Repeat("0", 64)})
+	_ = json.Unmarshal(rr.Body.Bytes(), &begun)
+	pending = auth.SSHPendingView{}
+	_ = json.Unmarshal(cli.do("POST", "/api/v1/auth/ssh/pending", map[string]string{"code": begun.LoginCode}).Body.Bytes(), &pending)
+	if pending.Summary != "" {
+		t.Fatalf("an unknown digest must not be described: %q", pending.Summary)
+	}
+}

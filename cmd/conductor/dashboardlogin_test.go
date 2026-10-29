@@ -20,6 +20,14 @@ import (
 // localhost listener), with operator "ops" holding a fresh ed25519 key.
 func approveFixture(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
+	srv, key, _ := approveFixtureWith(t, nil)
+	return srv, key
+}
+
+// approveFixtureWith is approveFixture with a DescribeStepup hook, returning the
+// Manager too (to mint a session for a step-up).
+func approveFixtureWith(t *testing.T, describe func(string, auth.Purpose, string) string) (*httptest.Server, string, *auth.Manager) {
+	t.Helper()
 	if _, err := exec.LookPath("ssh-keygen"); err != nil {
 		t.Skip("ssh-keygen not on PATH")
 	}
@@ -33,7 +41,8 @@ func approveFixture(t *testing.T) (*httptest.Server, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := auth.NewManager(auth.Deps{Store: st, Operators: func() map[string]string { return map[string]string{"ops": strings.TrimSpace(string(pub))} }})
+	m, err := auth.NewManager(auth.Deps{Store: st, DescribeStepup: describe,
+		Operators: func() map[string]string { return map[string]string{"ops": strings.TrimSpace(string(pub))} }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +51,7 @@ func approveFixture(t *testing.T) (*httptest.Server, string) {
 		mux.ServeHTTP(w, auth.WithReqInfo(r, auth.ListenerLocalhost, "", ""))
 	}))
 	t.Cleanup(srv.Close)
-	return srv, key
+	return srv, key, m
 }
 
 func post(t *testing.T, url string, body any) (*http.Response, map[string]any) {
@@ -112,5 +121,96 @@ func TestApproveLoginCLI(t *testing.T) {
 func TestDashboardSignOnlyChallenges(t *testing.T) {
 	if err := dashboardSign(string(auth.EnrollPayload("ops", time.Now())), map[string]string{"key": "/nonexistent"}); err == nil {
 		t.Fatal("sign must refuse anything that isn't a dashboard login/step-up challenge")
+	}
+}
+
+// captureStderr runs fn with os.Stderr redirected and returns what it wrote.
+func captureStderr(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	done := make(chan []byte)
+	go func() { b, _ := io.ReadAll(r); done <- b }()
+	ferr := fn()
+	w.Close()
+	os.Stderr = old
+	return string(<-done), ferr
+}
+
+// A relay can't be told apart from the operator's own browser, so approve-login
+// shows everything it knows before asking: where the request came from, the
+// device it claims to be, when it started, and that a code someone sent you
+// signs them in.
+func TestApproveLoginShowsTheRequest(t *testing.T) {
+	srv, key := approveFixture(t)
+	b, _ := json.Marshal(map[string]string{"operator": "ops"})
+	req, _ := http.NewRequest("POST", srv.URL+"/api/v1/auth/ssh/begin", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh) AppleWebKit Chrome/141 Safari")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var begun auth.SSHChallengeView
+	_ = json.NewDecoder(resp.Body).Decode(&begun)
+	resp.Body.Close()
+
+	out, err := captureStderr(t, func() error {
+		return dashboardApproveLogin(begun.Code, map[string]string{"url": srv.URL, "operator": "ops", "key": key, "yes": "true"})
+	})
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	for _, want := range []string{"Sign-in request for operator ops", "from:", "127.0.0.1", "device:", "Chrome", "started:", "ago)", "If someone sent you this code"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("approve-login output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// For a step-up it also shows the action: the purpose, the dashboard's summary
+// of it and the start of the digest the waiting page shows.
+func TestApproveLoginShowsTheStepupAction(t *testing.T) {
+	digest := strings.Repeat("ab", 32)
+	srv, key, m := approveFixtureWith(t, func(_ string, p auth.Purpose, d string) string {
+		if p == auth.PurposeApprove && d == digest {
+			return "approve bot b1's proposal p1: box.run rm -rf /srv/data"
+		}
+		return ""
+	})
+	sr := auth.WithReqInfo(httptest.NewRequest("POST", "/", nil), auth.ListenerLocalhost, "", "")
+	ck, sess, err := m.CreateSessionFor(sr, "ops", auth.MethodSSH, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(map[string]string{"purpose": string(auth.PurposeApprove), "digest": digest})
+	req, _ := http.NewRequest("POST", srv.URL+"/api/v1/auth/stepup/ssh/begin", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(auth.CSRFHeader, sess.CSRF)
+	req.AddCookie(ck)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var begun auth.SSHChallengeView
+	_ = json.NewDecoder(resp.Body).Decode(&begun)
+	resp.Body.Close()
+	if begun.Code == "" {
+		t.Fatalf("step-up begin: %d", resp.StatusCode)
+	}
+	out, err := captureStderr(t, func() error {
+		return dashboardApproveLogin(begun.Code, map[string]string{"url": srv.URL, "operator": "ops", "key": key, "yes": "true"})
+	})
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	for _, want := range []string{"Confirmation request for operator ops", "purpose:", "approve", "action:", "rm -rf /srv/data", "digest:", digest[:12]} {
+		if !strings.Contains(out, want) {
+			t.Errorf("approve-login output lacks %q:\n%s", want, out)
+		}
 	}
 }

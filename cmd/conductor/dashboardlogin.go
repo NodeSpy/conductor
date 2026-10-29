@@ -160,14 +160,9 @@ func dashboardApproveLogin(code string, fl map[string]string) error {
 	if p.Namespace != pend.Namespace {
 		return fmt.Errorf("refusing: the challenge's namespace doesn't match its kind")
 	}
-	what := "Sign-in"
-	if p.Kind == "stepup" {
-		what = fmt.Sprintf("Confirmation (%s)", p.Fields["purpose"])
-	}
-	fmt.Fprintf(os.Stderr, "%s request for operator %s\n  from:    %s (%s)\n  on:      %s\n  expires: %s\n",
-		what, op, pend.Device, pend.Addr, origin, pend.Expires)
+	printPending(os.Stderr, pend, p, origin, time.Now())
 	if fl["yes"] != "true" {
-		if !confirmTTY("Approve it? Only if you started it yourself just now. [y/N] ") {
+		if !confirmTTY("Approve it? [y/N] ") {
 			return fmt.Errorf("not approved")
 		}
 	}
@@ -185,6 +180,85 @@ func dashboardApproveLogin(code string, fl map[string]string) error {
 	}
 	fmt.Fprintln(os.Stderr, "approved — the waiting page continues now")
 	return nil
+}
+
+// printPending shows the operator what they are about to approve — who asked,
+// from where, when, and for a step-up the action it confirms — before the y/N.
+// Nothing here can stop a relay (someone who sends you their code is asking you
+// to sign them in), so it says so; a passkey is the method that resists that.
+func printPending(w io.Writer, pend auth.SSHPendingView, p auth.ParsedChallenge, origin string, now time.Time) {
+	if p.Kind == "stepup" {
+		fmt.Fprintf(w, "Confirmation request for operator %s\n", pend.Operator)
+	} else {
+		fmt.Fprintf(w, "Sign-in request for operator %s\n", pend.Operator)
+	}
+	row := func(k, v string) { fmt.Fprintf(w, "  %-9s %s\n", k+":", v) }
+	row("from", orUnknown(strings.TrimSpace(pend.Addr)))
+	row("device", orUnknown(strings.TrimSpace(pend.Device))+" (as the requesting browser describes itself)")
+	row("started", whenAgo(pend.Started, now))
+	row("on", origin)
+	row("expires", whenAgo(pend.Expires, now))
+	if p.Kind == "stepup" {
+		row("purpose", p.Fields["purpose"])
+		if pend.Summary != "" {
+			row("action", pend.Summary)
+		} else {
+			row("action", "not described by the dashboard — check the waiting page")
+		}
+		if d := p.Fields["digest"]; d != "" {
+			row("digest", digestPrefix(d)+"… (the waiting page shows the same)")
+		}
+	}
+	fmt.Fprintln(w, "Approve only a request you started yourself, on this dashboard, just now.")
+	fmt.Fprintln(w, "If someone sent you this code, approving it signs them in as you.")
+}
+
+// whenAgo renders an RFC 3339 time as local clock time plus how long ago (or
+// from now) it is.
+func whenAgo(ts string, now time.Time) string {
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return orUnknown(ts)
+	}
+	d := now.Sub(t).Round(time.Second)
+	rel := ""
+	switch {
+	case d > -time.Second && d < time.Second:
+		rel = "now"
+	case d > 0:
+		rel = shortDuration(d) + " ago"
+	default:
+		rel = "in " + shortDuration(-d)
+	}
+	return t.Local().Format("15:04:05 MST") + " (" + rel + ")"
+}
+
+// shortDuration is "45s", "3m 20s", "2h 5m".
+func shortDuration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		m, s := int(d.Minutes()), int(d.Seconds())%60
+		if s == 0 {
+			return fmt.Sprintf("%dm", m)
+		}
+		return fmt.Sprintf("%dm %ds", m, s)
+	default:
+		h, m := int(d.Hours()), int(d.Minutes())%60
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh %dm", h, m)
+	}
+}
+
+// digestPrefix is the first 12 characters of a step-up digest.
+func digestPrefix(d string) string {
+	if len(d) > 12 {
+		return d[:12]
+	}
+	return d
 }
 
 // confirmTTY asks a yes/no question on the terminal (stdin when there's no tty).

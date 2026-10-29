@@ -110,6 +110,7 @@ type Server struct {
 	edit    *configedit.Pipeline // nil when ConfigPath is empty (read-only)
 	auth    *auth.Manager        // nil until wired in New()
 	tsAPI   localAPI             // tailscaled LocalAPI; nil = the real socket client
+	labels  *stepupLabels        // what each handed-out step-up digest confirms, for approve-login
 }
 
 // New builds a dashboard server from its dependencies.
@@ -120,7 +121,7 @@ func New(deps Deps) *Server {
 	if deps.Paused == nil {
 		deps.Paused = func() bool { return false }
 	}
-	s := &Server{deps: deps, hub: newHub(), mux: http.NewServeMux(), started: time.Now()}
+	s := &Server{deps: deps, hub: newHub(), mux: http.NewServeMux(), started: time.Now(), labels: newStepupLabels(deps.Now)}
 	if deps.ConfigPath != "" {
 		s.edit = configedit.New(configedit.Options{
 			Path:     deps.ConfigPath,

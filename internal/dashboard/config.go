@@ -162,7 +162,20 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "review", err.Error(), "the staged edits do not apply cleanly to the current config")
 		return
 	}
+	s.noteReview(rev, "apply a config change")
 	writeJSON(w, http.StatusOK, reviewDTO(rev))
+}
+
+// noteReview records what a step-up over the review's confirm token applies.
+func (s *Server) noteReview(rev configedit.Review, what string) {
+	var texts []string
+	for _, e := range rev.Effects {
+		texts = append(texts, e.Text)
+	}
+	if len(texts) == 0 {
+		texts = []string{fmt.Sprintf("%d lines added, %d removed", rev.Diff.Added, rev.Diff.Removed)}
+	}
+	s.labels.note(auth.PurposeConfigApply, rev.Token, what+": "+effectsText(texts))
 }
 
 func reviewDTO(rev configedit.Review) api.ReviewResponse {
@@ -298,6 +311,7 @@ func (s *Server) handleRestoreReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "restore_review", err.Error(), "")
 		return
 	}
+	s.noteReview(rev, "restore config backup "+req.ID)
 	writeJSON(w, http.StatusOK, reviewDTO(rev))
 }
 
