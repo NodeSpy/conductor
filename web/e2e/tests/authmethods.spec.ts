@@ -118,6 +118,15 @@ async function noHorizontalOverflow(p: Page): Promise<void> {
   expect(over, 'page scrolls sideways').toBeLessThanOrEqual(1)
 }
 
+// fitsInside checks an element sits within its container's box (a full-width
+// button whose padding is added to 100% pokes out of its card on WebKit).
+async function fitsInside(inner: Locator, outer: Locator): Promise<void> {
+  const a = (await inner.boundingBox())!
+  const b = (await outer.boundingBox())!
+  expect(a.x, 'starts inside its container').toBeGreaterThanOrEqual(b.x - 0.5)
+  expect(a.x + a.width, 'ends inside its container').toBeLessThanOrEqual(b.x + b.width + 0.5)
+}
+
 async function shot(p: Page, info: TestInfo, name: string): Promise<void> {
   mkdirSync(SHOT_DIR, { recursive: true })
   await p.screenshot({ path: path.join(SHOT_DIR, `authmethods-${name}-${info.project.name}.png`), fullPage: true })
@@ -149,6 +158,7 @@ test('a plain-HTTP origin says it is unencrypted and offers no passkey', async (
   await expect(page.getByTestId('signin-button')).toHaveCount(0)
   await expect(page.getByTestId('method-passkey')).toHaveCount(0)
   await expect(page.getByTestId('method-password')).toBeVisible()
+  await fitsInside(page.getByTestId('ssh-begin'), page.locator('.gate-card'))
   await noHorizontalOverflow(page)
   await shot(page, info, 'signin-dark')
 
@@ -284,6 +294,7 @@ test('approve a proposal with an authenticator-code step-up', async ({}, info) =
   await expect(dialog.getByTestId('stepup-method-ssh')).toBeVisible()
   await dialog.getByTestId('stepup-method-totp').click()
   await dialog.getByTestId('stepup-totp-code').fill(await freshCode())
+  await fitsInside(dialog.getByTestId('stepup-totp-submit'), dialog)
   await noHorizontalOverflow(pwPage)
   await shot(pwPage, info, 'stepup-totp')
   await dialog.getByTestId('stepup-totp-submit').click()

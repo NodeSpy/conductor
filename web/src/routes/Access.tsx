@@ -22,7 +22,7 @@ import {
   type TOTPEnrollment,
 } from '../api/auth'
 import { passkeysUsable } from '../lib/webauthn'
-import { CopyBlock, methodLabel } from '../components/AuthBits'
+import { CopyBlock, methodLabel, methodPhrase } from '../components/AuthBits'
 import { ago } from '../lib/format'
 import '../styles/auth.css'
 
@@ -137,7 +137,7 @@ export function Access(): JSX.Element {
       <h1 class="screen-title">Access</h1>
       <p class="panel-sub" style="margin:0 0 16px">
         <b>Only operators can sign in</b>, with{' '}
-        {data.auth_policy.methods.map((m) => methodLabel[m].toLowerCase()).join(', ')}
+        {data.auth_policy.methods.map((m) => methodPhrase[m]).join(', ')}
         {data.auth_policy.methods.includes('password') && needsTOTP ? ' (with an authenticator code)' : ''}.
       </p>
       {msg ? (
@@ -345,7 +345,7 @@ export function Access(): JSX.Element {
             </ul>
             <p class="acc-note" data-testid="stepup-methods">
               You can confirm with:{' '}
-              {data.stepup_methods.length ? data.stepup_methods.map((m) => methodLabel[m].toLowerCase()).join(', ') : 'nothing on this connection'}
+              {data.stepup_methods.length ? data.stepup_methods.map((m) => methodPhrase[m]).join(', ') : 'nothing on this connection'}
               . Everything else uses your signed-in session.
             </p>
           </section>

@@ -682,3 +682,68 @@ func TestPasskeyOfferedOnlyOnSecureContextWithRP(t *testing.T) {
 		t.Fatal("a passkey ceremony must not begin on plain HTTP")
 	}
 }
+
+func TestSSHChallengeBindings(t *testing.T) {
+	h := newMethodsHarness(t, nil)
+	ctx := context.Background()
+	plain := func() *http.Request { return req("POST", "/x", "10.0.0.5:7791", onPlainHTTP, nil) }
+
+	// A challenge is bound to the transport it was issued on, not only the
+	// listener and host.
+	v, err := h.m.BeginSSHLogin(plain(), "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := req("POST", "/x", "10.0.0.5:7791", ConnInfo{Listener: onPlainHTTP.Listener, Transport: TransportHTTPS}, nil)
+	if _, err := h.m.FinishSSHLogin(ctx, other, v.ID, h.key.sign(t, LoginNamespace, v.Text)); err == nil {
+		t.Fatal("a sign-in challenge must not finish on another transport")
+	}
+
+	// A sign-in challenge is not a step-up challenge, nor the reverse.
+	_, sess, _ := h.m.CreateSession("ops", ListenerLocalhost, "", "t", "127.0.0.1", "")
+	login, _ := h.m.BeginSSHLogin(localReq(), "ops")
+	if _, err := h.m.FinishSSHStepup(ctx, localReq(), sess, login.ID, h.key.sign(t, LoginNamespace, login.Text)); err == nil {
+		t.Fatal("a signed sign-in challenge must not mint a step-up")
+	}
+	step, _ := h.m.BeginSSHStepup(localReq(), sess, PurposeApprove, "d")
+	if _, err := h.m.FinishSSHLogin(ctx, localReq(), step.ID, h.key.sign(t, StepupNamespace, step.Text)); err == nil {
+		t.Fatal("a signed step-up challenge must not sign in")
+	}
+
+	// A step-up challenge belongs to the session that asked for it.
+	_, sess2, _ := h.m.CreateSession("ops", ListenerLocalhost, "", "t", "127.0.0.1", "")
+	step, _ = h.m.BeginSSHStepup(localReq(), sess, PurposeApprove, "d")
+	if _, err := h.m.FinishSSHStepup(ctx, localReq(), sess2, step.ID, h.key.sign(t, StepupNamespace, step.Text)); err == nil {
+		t.Fatal("another session must not finish this session's step-up challenge")
+	}
+}
+
+func TestPasswordStepupNeedsBothKnobs(t *testing.T) {
+	for name, pol := range map[string]Policy{
+		"totp still required": {Methods: []Method{MethodPasskey, MethodPassword}, PasswordRequiresTOTP: true, Stepup: []Method{MethodPassword}},
+		"no password sign-in": {Methods: []Method{MethodPasskey}, PasswordRequiresTOTP: false, Stepup: []Method{MethodPassword}},
+	} {
+		h := newHarness(t)
+		_ = h.m.SetPassword("ops", "a long enough password")
+		p := pol
+		h.m.deps.Policy = &p
+		_, sess, _ := h.m.CreateSession("ops", ListenerLocalhost, "", "t", "127.0.0.1", "")
+		if _, err := h.m.PasswordStepup(sess, PurposeApprove, "d", "a long enough password"); err == nil {
+			t.Fatalf("%s: a password must not step up", name)
+		}
+	}
+}
+
+func TestSecureCookieBoundToTransport(t *testing.T) {
+	h := newMethodsHarness(t, nil)
+	ck, _, err := h.m.CreateSessionFor(req("POST", "/x", "box.example:7790", onHTTPS, nil), "ops", MethodSSH, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same listener and cookie name, another transport: refused.
+	r := req("GET", "/x", "box.example:7790", ConnInfo{Listener: onHTTPS.Listener, Transport: TransportLocalhost}, nil)
+	r.AddCookie(ck)
+	if _, err := h.m.ValidateCookie(r, onHTTPS.Listener, ""); err == nil {
+		t.Fatal("an HTTPS session must not validate on another transport")
+	}
+}

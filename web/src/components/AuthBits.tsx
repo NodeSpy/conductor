@@ -65,6 +65,14 @@ export const methodLabel: Record<Method, string> = {
   totp: 'Authenticator code',
 }
 
+// methodPhrase names a method inside a sentence.
+export const methodPhrase: Record<Method, string> = {
+  passkey: 'passkey',
+  ssh: 'SSH key',
+  password: 'password',
+  totp: 'authenticator code',
+}
+
 // SSHPanel shows one SSH challenge two ways: the command to sign it here and a
 // box to paste the signature, or the login code to approve from any machine with
 // the key (`conductor dashboard approve-login`). It polls for the approval while
