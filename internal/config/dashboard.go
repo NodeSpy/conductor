@@ -46,6 +46,88 @@ type DashboardConfig struct {
 	// Session bounds a signed-in session's lifetime (design §6.3). Defaults:
 	// idle 30m, max 12h.
 	Session DashboardSession `yaml:"session"`
+	// Auth picks the sign-in and step-up methods. Absent = every method,
+	// password only with TOTP, step-up by passkey, SSH or TOTP.
+	Auth DashboardAuth `yaml:"auth"`
+	// Bind adds listeners on explicit addresses, each with the hostnames it
+	// answers to (a Host allowlist, against DNS rebinding) and an optional TLS
+	// certificate. Plain HTTP off loopback needs allow_plain_http: true.
+	Bind []DashboardBind `yaml:"bind,omitempty"`
+}
+
+// Dashboard sign-in / step-up method names (dashboard.auth).
+const (
+	DashboardMethodPasskey  = "passkey"
+	DashboardMethodSSH      = "ssh"
+	DashboardMethodPassword = "password"
+	DashboardMethodTOTP     = "totp"
+)
+
+// DashboardAuth is the `dashboard.auth:` block.
+type DashboardAuth struct {
+	// Methods are the enabled sign-in methods: passkey, ssh, password. Absent
+	// means all three; an explicit empty list is refused.
+	Methods []string `yaml:"methods"`
+	// PasswordRequiresTOTP makes a password sign-in also need a TOTP code (the
+	// default). Setting it false allows a password alone — an explicit loosen.
+	PasswordRequiresTOTP *bool `yaml:"password_requires_totp"`
+	// Stepup are the methods that satisfy a step-up: passkey, ssh, totp, and
+	// password (only with password_requires_totp: false). Absent means passkey,
+	// ssh, totp.
+	Stepup []string `yaml:"stepup"`
+}
+
+// EffectiveMethods returns the sign-in methods, defaulted.
+func (a DashboardAuth) EffectiveMethods() []string {
+	if a.Methods == nil {
+		return []string{DashboardMethodPasskey, DashboardMethodSSH, DashboardMethodPassword}
+	}
+	return a.Methods
+}
+
+// PasswordNeedsTOTP reports whether a password needs a TOTP code (default true).
+func (a DashboardAuth) PasswordNeedsTOTP() bool {
+	return a.PasswordRequiresTOTP == nil || *a.PasswordRequiresTOTP
+}
+
+// EffectiveStepup returns the step-up methods, defaulted.
+func (a DashboardAuth) EffectiveStepup() []string {
+	if a.Stepup == nil {
+		return []string{DashboardMethodPasskey, DashboardMethodSSH, DashboardMethodTOTP}
+	}
+	return a.Stepup
+}
+
+// DashboardBind is one `dashboard.bind:` listener.
+type DashboardBind struct {
+	// Address is host:port to bind ("0.0.0.0:7790", "192.168.1.5:7790").
+	Address string `yaml:"address"`
+	// Hostnames are the Host values the listener answers to; any other Host is
+	// refused. With TLS, each non-IP hostname is a passkey relying party.
+	Hostnames []string `yaml:"hostnames"`
+	// CertFile and KeyFile are a PEM pair; both set = HTTPS, both empty = HTTP.
+	CertFile string `yaml:"cert_file,omitempty"`
+	KeyFile  string `yaml:"key_file,omitempty"`
+	// AllowPlainHTTP acknowledges serving plain HTTP on a non-loopback address:
+	// the session cookie and everything else cross the network unencrypted.
+	AllowPlainHTTP bool `yaml:"allow_plain_http,omitempty"`
+}
+
+// TLS reports whether the listener serves HTTPS.
+func (b DashboardBind) TLS() bool { return b.CertFile != "" && b.KeyFile != "" }
+
+// Loopback reports whether the address is a loopback address (plain HTTP there
+// is a secure context and needs no acknowledgment).
+func (b DashboardBind) Loopback() bool {
+	host, _, err := net.SplitHostPort(b.Address)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // DashboardTailscale is the `dashboard.tailscale:` sub-block (§6.2): how the
@@ -60,7 +142,30 @@ type DashboardTailscale struct {
 	// AllowUsers, when non-empty, narrows further: only these tailnet users
 	// (WhoIs login names) may reach the listener, on top of the passkey.
 	AllowUsers []string `yaml:"allow_users,omitempty"`
+	// TLS is on (the default: HTTPS with the MagicDNS cert) or off (plain HTTP
+	// on the tailnet addresses — WireGuard already encrypts the hop; WhoIs is
+	// still enforced; passkeys aren't offered, the other methods work).
+	TLS DashboardTLS `yaml:"tls"`
 }
+
+// DashboardTLS is `dashboard.tailscale.tls:` — on (default) or off.
+type DashboardTLS struct{ Off bool }
+
+// UnmarshalYAML accepts on/off (or true/false).
+func (t *DashboardTLS) UnmarshalYAML(n *yaml.Node) error {
+	switch strings.ToLower(strings.TrimSpace(n.Value)) {
+	case "on", "true", "":
+		t.Off = false
+	case "off", "false":
+		t.Off = true
+	default:
+		return fmt.Errorf("dashboard.tailscale.tls: %q is not valid — use on or off", n.Value)
+	}
+	return nil
+}
+
+// TLSOn reports whether the tailnet listener serves HTTPS.
+func (d DashboardTailscale) TLSOn() bool { return !d.TLS.Off }
 
 // DashboardCert is the `dashboard.tailscale.cert:` value: either the keyword
 // "auto" (the LocalAPI cert for the MagicDNS name, the default) or an explicit
@@ -187,6 +292,15 @@ func (c *Config) validateDashboard() error {
 	if d.Port < 0 || d.Port > 65535 {
 		return fmt.Errorf("config: dashboard.port: %d is out of range (1–65535)", d.Port)
 	}
+	if err := d.Auth.validate(); err != nil {
+		return err
+	}
+	if err := d.validateBind(); err != nil {
+		return err
+	}
+	if d.Tailscale.TLS.Off && !d.Tailscale.Cert.Auto() {
+		return fmt.Errorf("config: dashboard.tailscale.cert is set but tailscale.tls is off — drop one")
+	}
 	if !d.Enabled {
 		return nil
 	}
@@ -233,4 +347,94 @@ func portFromListen(listen string) int {
 		return 0
 	}
 	return p
+}
+
+// validate checks dashboard.auth: known, non-duplicate methods; a non-empty
+// list when given; and password as a step-up only with the password-only knob.
+func (a DashboardAuth) validate() error {
+	check := func(key string, list []string, allowed ...string) error {
+		if list != nil && len(list) == 0 {
+			return fmt.Errorf("config: dashboard.auth.%s: name at least one method (or remove the key for the default)", key)
+		}
+		seen := map[string]bool{}
+		for i, m := range list {
+			ok := false
+			for _, x := range allowed {
+				if m == x {
+					ok = true
+				}
+			}
+			if !ok {
+				return fmt.Errorf("config: dashboard.auth.%s[%d]: %q is not a method here — use %s", key, i, m, strings.Join(allowed, ", "))
+			}
+			if seen[m] {
+				return fmt.Errorf("config: dashboard.auth.%s: %q is listed twice", key, m)
+			}
+			seen[m] = true
+		}
+		return nil
+	}
+	if err := check("methods", a.Methods, DashboardMethodPasskey, DashboardMethodSSH, DashboardMethodPassword); err != nil {
+		return err
+	}
+	if err := check("stepup", a.Stepup, DashboardMethodPasskey, DashboardMethodSSH, DashboardMethodTOTP, DashboardMethodPassword); err != nil {
+		return err
+	}
+	hasPassword := false
+	for _, m := range a.EffectiveMethods() {
+		if m == DashboardMethodPassword {
+			hasPassword = true
+		}
+	}
+	if !a.PasswordNeedsTOTP() && !hasPassword {
+		return fmt.Errorf("config: dashboard.auth.password_requires_totp: false has no effect without password in auth.methods — remove it")
+	}
+	for _, m := range a.Stepup {
+		if m == DashboardMethodPassword && (a.PasswordNeedsTOTP() || !hasPassword) {
+			return fmt.Errorf("config: dashboard.auth.stepup: password counts as a step-up only with password in auth.methods and password_requires_totp: false (a password alone is not a full credential otherwise)")
+		}
+	}
+	return nil
+}
+
+// validateBind checks the dashboard.bind listeners.
+func (d DashboardConfig) validateBind() error {
+	seen := map[string]bool{}
+	for i, b := range d.Bind {
+		where := fmt.Sprintf("config: dashboard.bind[%d]", i)
+		host, port, err := net.SplitHostPort(b.Address)
+		if err != nil || port == "" {
+			return fmt.Errorf("%s.address: %q must be host:port (e.g. 0.0.0.0:7790)", where, b.Address)
+		}
+		if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+			return fmt.Errorf("%s.address: port %q is out of range", where, port)
+		} else if p == d.EffectivePort() {
+			return fmt.Errorf("%s.address: port %d is the dashboard's own port (localhost/tailscale bind it) — use another", where, p)
+		}
+		if host != "" && host != "localhost" && net.ParseIP(host) == nil {
+			return fmt.Errorf("%s.address: %q must be an IP address (or localhost)", where, host)
+		}
+		if seen[b.Address] {
+			return fmt.Errorf("%s.address: %q is bound twice", where, b.Address)
+		}
+		seen[b.Address] = true
+		if len(b.Hostnames) == 0 {
+			return fmt.Errorf("%s.hostnames: name the hostnames (or IPs) browsers use to reach it — any other Host is refused (DNS rebinding)", where)
+		}
+		for j, h := range b.Hostnames {
+			if h == "" || strings.ContainsAny(h, "/:@ ") && net.ParseIP(strings.Trim(h, "[]")) == nil {
+				return fmt.Errorf("%s.hostnames[%d]: %q must be a bare hostname or IP (no scheme, port or path)", where, j, h)
+			}
+		}
+		if (b.CertFile == "") != (b.KeyFile == "") {
+			return fmt.Errorf("%s: TLS needs both cert_file and key_file", where)
+		}
+		if b.TLS() && b.AllowPlainHTTP {
+			return fmt.Errorf("%s: allow_plain_http is for listeners without TLS — remove it", where)
+		}
+		if !b.TLS() && !b.Loopback() && !b.AllowPlainHTTP {
+			return fmt.Errorf("%s: plain HTTP on %s sends the session cookie unencrypted — add cert_file/key_file, or set allow_plain_http: true to accept that", where, b.Address)
+		}
+	}
+	return nil
 }

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dashboard/auth"
 )
 
@@ -52,6 +53,8 @@ func (s *Server) buildAuth() {
 	if s.deps.Store != nil {
 		auditFn = s.deps.Store.Audit
 	}
+	pol := authPolicy(s.deps.Cfg.Dashboard.Auth)
+	rps := append([]auth.RP{localhostRP}, bindRPs(s.deps.Cfg.Dashboard.Bind)...)
 	mgr, err := auth.NewManager(auth.Deps{
 		Store:       st,
 		Operators:   s.deps.Operators,
@@ -60,7 +63,8 @@ func (s *Server) buildAuth() {
 		Audit:       auditFn,
 		Lifecycle:   s.deps.Lifecycle,
 		Now:         s.deps.Now,
-	}, localhostRP)
+		Policy:      &pol,
+	}, rps...)
 	if err != nil {
 		s.deps.Log("dashboard: auth manager: %v; serving without sign-in", err)
 		return
@@ -85,16 +89,37 @@ func (s *Server) authEnforced() bool {
 
 func (s *Server) authState() string {
 	if s.authEnforced() {
-		return "required (passkey)"
+		return "required (" + strings.Join(s.deps.Cfg.Dashboard.Auth.EffectiveMethods(), ", ") + ")"
 	}
 	return "open — no operators configured"
 }
 
-// listenerHandler builds the full handler chain for one listener: security
-// headers, the listener/peer tag, then the dispatch (auth routes, guarded API,
-// or the public SPA).
+// authPolicy resolves the dashboard.auth block into the auth layer's policy.
+func authPolicy(a config.DashboardAuth) auth.Policy {
+	conv := func(in []string) []auth.Method {
+		out := make([]auth.Method, 0, len(in))
+		for _, m := range in {
+			out = append(out, auth.Method(m))
+		}
+		return out
+	}
+	return auth.Policy{
+		Methods:              conv(a.EffectiveMethods()),
+		PasswordRequiresTOTP: a.PasswordNeedsTOTP(),
+		Stepup:               conv(a.EffectiveStepup()),
+	}
+}
+
+// listenerHandler builds the full handler chain for the localhost listener:
+// security headers, the Host allowlist (a rebinding page can't drive an open
+// localhost dashboard), the listener tag, then the dispatch (auth routes,
+// guarded API, or the public SPA).
 func (s *Server) listenerHandler(l auth.Listener) http.Handler {
 	return auth.SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hostAllowed(r.Host, "", nil, 0) {
+			http.Error(w, "host not allowed", http.StatusForbidden)
+			return
+		}
 		r = auth.WithReqInfo(r, l, "", "")
 		s.dispatch(w, r)
 	}))
@@ -153,17 +178,21 @@ func (s *Server) startTailnet(ctx context.Context, port int) error {
 	if status.MagicDNSName == "" || len(status.IPs) == 0 {
 		return fmt.Errorf("tailscaled reports no MagicDNS name or addresses")
 	}
-	// The passkey RP on the tailnet is the MagicDNS name.
-	if s.auth != nil {
+	tlsOn := s.deps.Cfg.Dashboard.Tailscale.TLSOn()
+	// The passkey RP on the tailnet is the MagicDNS name — over TLS only: with
+	// tls: off the origin isn't a secure context and passkeys can't work.
+	if s.auth != nil && tlsOn {
 		origin := fmt.Sprintf("https://%s:%d", status.MagicDNSName, port)
 		if err := s.auth.AddRP(auth.RP{ID: status.MagicDNSName, Origins: []string{origin}, Listener: auth.ListenerTailscale}); err != nil {
 			return fmt.Errorf("tailnet RP: %w", err)
 		}
 	}
 
-	tlsCfg, err := s.tailnetTLS(status.MagicDNSName)
-	if err != nil {
-		return err
+	var tlsCfg *tls.Config
+	if tlsOn {
+		if tlsCfg, err = s.tailnetTLS(status.MagicDNSName); err != nil {
+			return err
+		}
 	}
 	tcfg := s.deps.Cfg.Dashboard.Tailscale
 	handler := auth.SecurityHeaders(s.tailnetGuard(api, status, port))
@@ -184,7 +213,13 @@ func (s *Server) startTailnet(ctx context.Context, port int) error {
 		}
 		bound++
 		go func(ln net.Listener, addr string) {
-			if err := srv.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
+			var err error
+			if tlsOn {
+				err = srv.ServeTLS(ln, "", "")
+			} else {
+				err = srv.Serve(ln)
+			}
+			if err != nil && err != http.ErrServerClosed {
 				s.deps.Log("dashboard: tailnet serve %s stopped: %v", addr, err)
 			}
 		}(ln, addr)
@@ -193,8 +228,12 @@ func (s *Server) startTailnet(ctx context.Context, port int) error {
 		return fmt.Errorf("no tailnet address could be bound")
 	}
 	go func() { <-ctx.Done(); _ = srv.Close() }()
-	s.deps.Log("dashboard: serving on https://%s:%d (tailnet; allow_tagged=%v, %d allow_users)",
-		status.MagicDNSName, port, tcfg.AllowTagged, len(tcfg.AllowUsers))
+	scheme := "https"
+	if !tlsOn {
+		scheme = "http"
+	}
+	s.deps.Log("dashboard: serving on %s://%s:%d (tailnet; tls=%v, allow_tagged=%v, %d allow_users)",
+		scheme, status.MagicDNSName, port, tlsOn, tcfg.AllowTagged, len(tcfg.AllowUsers))
 	return nil
 }
 
@@ -235,7 +274,11 @@ func (s *Server) tailnetGuard(api localAPI, status tsStatus, port int) http.Hand
 			http.Error(w, reason, http.StatusForbidden)
 			return
 		}
-		r = auth.WithReqInfo(r, auth.ListenerTailscale, who.Node, who.Login)
+		transport := auth.TransportHTTPS
+		if !tcfg.TLSOn() {
+			transport = auth.TransportHTTP // WireGuard encrypts the hop, but the browser sees plain HTTP
+		}
+		r = auth.WithConn(r, auth.ConnInfo{Listener: auth.ListenerTailscale, Node: who.Node, User: who.Login, Transport: transport})
 		s.dispatch(w, r)
 	})
 }
@@ -328,7 +371,7 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 	digest := approvalDigest(bot, id, actionSHA, req.Decision)
 	ev, err := s.auth.RequireStepup(sess, auth.PurposeApprove, digest, r.Header.Get(auth.StepupHeader))
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "stepup_required", err.Error(), "touch your passkey to approve")
+		writeError(w, http.StatusUnauthorized, "stepup_required", err.Error(), "confirm it's you to approve")
 		return
 	}
 	if err := s.deps.DecideProposal(r.Context(), bot, id, req.Decision, sess.Operator, req.Reason, ev); err != nil {

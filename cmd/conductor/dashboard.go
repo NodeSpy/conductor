@@ -36,10 +36,18 @@ const dashboardUsage = `conductor dashboard — the local web dashboard
     conductor dashboard enroll --operator <name> [--key <ssh private key>]
     conductor dashboard reset  --operator <name> [--key <ssh private key>]
     conductor dashboard status
+    conductor dashboard approve-login <code> --url <dashboard url> --operator <name> [--key <ssh key>] [--yes]
+    conductor dashboard sign '<challenge>' [--key <ssh key>]
 
 enroll prints a one-time localhost link (open it on THIS machine within 10m) and
-a pairing code. reset removes an operator's passkeys and sessions. Both are
-signed with the operator's SSH key (ssh-agent, a hardware key, or --key).`
+a pairing code. reset removes an operator's passkeys, password, authenticator
+and sessions. Both are signed with the operator's SSH key (ssh-agent, a
+hardware key, or --key) over the control socket.
+
+approve-login signs the sign-in (or confirmation) request a dashboard page shows
+as a login code, from any machine with the key, and posts it to --url; the
+waiting page then continues. sign prints the signature for a challenge the page
+shows, to paste back. Neither needs the daemon socket or a session.`
 
 func cmdDashboard(args []string) error {
 	if len(args) == 0 {
@@ -52,6 +60,9 @@ func cmdDashboard(args []string) error {
 		return fmt.Errorf("refusing: this shell is a conductor agent session — enroll and reset are for an operator, from their own shell with their own key")
 	}
 	sub := args[0]
+	if sub == "approve-login" || sub == "sign" {
+		return dashboardSSHCommand(sub, args[1:])
+	}
 	cfg, rest, err := loadConfig(args[1:])
 	if err != nil {
 		return err
@@ -147,7 +158,14 @@ func dashboardStatus(cfg *config.Config) error {
 		if b, _ := s["live_ticket"].(bool); b {
 			live = " · enrollment link live"
 		}
-		fmt.Printf("operator %s: %v passkey(s), %v session(s)%s\n", n, s["passkeys"], s["sessions"], live)
+		extra := ""
+		if b, _ := s["password"].(bool); b {
+			extra += " · password"
+		}
+		if b, _ := s["totp"].(bool); b {
+			extra += " · authenticator"
+		}
+		fmt.Printf("operator %s: %v passkey(s), %v session(s)%s%s\n", n, s["passkeys"], s["sessions"], extra, live)
 	}
 	return nil
 }
@@ -236,21 +254,34 @@ func dashboardApprovalView(botName, id string) (actionSHA, summaryJSON string, o
 }
 
 // dashboardDecide is the dashboard's DecideProposal: it applies an operator's
-// WebAuthn-authenticated decision through the same Executor.Decide the CLI uses,
-// on the webauthn method with the step-up assertion as evidence (design §6.6).
+// stepped-up decision through the same Executor.Decide the CLI uses (design
+// §6.6). A passkey step-up goes on the webauthn method with the assertion as
+// evidence; any other step-up (SSH, TOTP) on the dashboard method with what
+// verified it.
 func dashboardDecide(ctx context.Context, botName, id, decision, operator, reason string, ev dashboard.StepupEvidence) error {
 	if botCtl == nil || botCtl.Exec == nil {
 		return fmt.Errorf("no bots on this daemon")
 	}
-	_, err := botCtl.Exec.Decide(ctx, bot.Decision{
-		Bot: botName, Proposal: id, Operator: operator, Decision: decision, Reason: reason,
-		Method: "webauthn",
-		WebAuthn: &bot.WebAuthnEvidence{
+	_, err := botCtl.Exec.Decide(ctx, dashboardDecision(botName, id, decision, operator, reason, ev))
+	return err
+}
+
+// dashboardDecision maps a dashboard step-up's evidence onto a bot.Decision.
+func dashboardDecision(botName, id, decision, operator, reason string, ev dashboard.StepupEvidence) bot.Decision {
+	d := bot.Decision{Bot: botName, Proposal: id, Operator: operator, Decision: decision, Reason: reason}
+	if ev.Method == "" || ev.Method == auth.MethodPasskey {
+		d.Method = "webauthn"
+		d.WebAuthn = &bot.WebAuthnEvidence{
 			Credential: ev.CredID, AuthenticatorData: ev.AuthenticatorData,
 			ClientDataJSON: ev.ClientDataJSON, Signature: ev.Signature,
-		},
-	})
-	return err
+		}
+		return d
+	}
+	d.Method = "dashboard"
+	d.Dashboard = &bot.DashboardStepup{
+		Method: string(ev.Method), SSHNamespace: ev.SSHNamespace, SSHPayload: ev.SSHPayload, SSHSignature: ev.SSHSignature,
+	}
+	return d
 }
 
 // dashboardBotAPI builds the bots' operator API handler for the web dashboard —

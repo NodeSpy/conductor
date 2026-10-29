@@ -37,9 +37,9 @@ func (m *Manager) passkeyList(operator string) []PasskeyView {
 
 // SessionView is the Access screen's shape for one session.
 type SessionView struct {
-	ID       string `json:"id"`
-	Device   string `json:"device"`
-	Addr     string `json:"addr"`
+	ID        string `json:"id"`
+	Device    string `json:"device"`
+	Addr      string `json:"addr"`
 	Listener  string `json:"listener"`
 	Method    string `json:"method"`
 	Transport string `json:"transport"`

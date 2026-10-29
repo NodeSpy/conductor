@@ -45,3 +45,33 @@ func TestDecideWebAuthnNonOperatorRefused(t *testing.T) {
 		t.Fatal("a non-operator must not approve, even with webauthn evidence")
 	}
 }
+
+// The dashboard's non-passkey step-up path (SSH, TOTP): evidence with a method
+// is required, membership is still checked, and the audit names the method.
+func TestDecideDashboardStepupPath(t *testing.T) {
+	f := newExecFixture(t, testBot())
+	pid := f.propose(t, "gh.comment", map[string]any{"body": "hi"})
+	if _, err := f.x.Decide(context.Background(), Decision{
+		Bot: "sre", Proposal: pid, Operator: "op", Decision: "approve", Method: "dashboard",
+	}); err == nil {
+		t.Fatal("a dashboard decision with no step-up evidence must be refused")
+	}
+	if _, err := f.x.Decide(context.Background(), Decision{
+		Bot: "sre", Proposal: pid, Operator: "intruder", Decision: "approve", Method: "dashboard",
+		Dashboard: &DashboardStepup{Method: "totp"},
+	}); err == nil {
+		t.Fatal("a non-operator must not approve on the dashboard path")
+	}
+	d := Decision{
+		Bot: "sre", Proposal: pid, Operator: "op", Decision: "approve", Method: "dashboard",
+		Dashboard: &DashboardStepup{Method: "ssh", SSHNamespace: "ns", SSHPayload: "p", SSHSignature: "s"},
+	}
+	out, err := f.x.Decide(context.Background(), d)
+	if err != nil || out.Status != "executed" {
+		t.Fatalf("dashboard approve: status=%q err=%v", out.Status, err)
+	}
+	e := d.withMethod(map[string]any{})
+	if e["method"] != "dashboard" || e["stepup_method"] != "ssh" || e["ssh_sig"] != "s" {
+		t.Fatalf("audit must record the step-up method and SSH evidence: %v", e)
+	}
+}

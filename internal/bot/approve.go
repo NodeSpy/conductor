@@ -75,6 +75,23 @@ type Decision struct {
 	// WebAuthn is the assertion evidence for the audit when Method is "webauthn"
 	// (the same non-repudiation SSHSIG gives). Required on that path.
 	WebAuthn *WebAuthnEvidence `json:"-"`
+	// Dashboard is the step-up evidence when Method is "dashboard": the
+	// dashboard verified a step-up other than a passkey (an SSH signature over a
+	// challenge committing to this approval's digest, or a TOTP code) bound to
+	// the same per-decision digest, before calling in process. Required on that
+	// path; like "webauthn", the control socket can never set it.
+	Dashboard *DashboardStepup `json:"-"`
+}
+
+// DashboardStepup records how a dashboard step-up that wasn't a passkey was
+// verified. For SSH the challenge text, namespace and signature re-verify
+// offline with ssh-keygen against operators.<name>.ssh_key; a TOTP step-up has
+// nothing a third party could re-verify and records only the method.
+type DashboardStepup struct {
+	Method       string // ssh | totp | password
+	SSHNamespace string
+	SSHPayload   string
+	SSHSignature string
 }
 
 // WebAuthnEvidence is a verified dashboard approval's assertion, recorded so the
@@ -208,6 +225,14 @@ func (d Decision) withMethod(e map[string]any) map[string]any {
 		e["client_data_json"] = d.WebAuthn.ClientDataJSON
 		e["assertion_sig"] = d.WebAuthn.Signature
 	}
+	if m == "dashboard" && d.Dashboard != nil {
+		e["stepup_method"] = d.Dashboard.Method
+		if d.Dashboard.SSHSignature != "" {
+			e["ssh_namespace"] = d.Dashboard.SSHNamespace
+			e["ssh_payload"] = d.Dashboard.SSHPayload
+			e["ssh_sig"] = d.Dashboard.SSHSignature
+		}
+	}
 	return e
 }
 
@@ -277,6 +302,13 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 		// is required so the decision is auditable and offline-verifiable.
 		if d.WebAuthn == nil || d.WebAuthn.Credential == "" {
 			return refuse(errors.New("webauthn decision without assertion evidence"))
+		}
+	case "dashboard":
+		// The dashboard verified a non-passkey step-up bound to this proposal's
+		// per-decision digest (see Dashboard). The method is required so the
+		// audit says how the operator was authenticated.
+		if d.Dashboard == nil || d.Dashboard.Method == "" {
+			return refuse(errors.New("dashboard decision without step-up evidence"))
 		}
 	default:
 		return refuse(fmt.Errorf("unknown approval method %q", d.Method))

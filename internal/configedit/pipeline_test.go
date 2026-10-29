@@ -188,3 +188,21 @@ func TestRestoreFlow(t *testing.T) {
 		t.Fatalf("restore did not revert greeting:\n%s", got)
 	}
 }
+
+func TestDashboardAuthLooseningIsWidening(t *testing.T) {
+	for _, c := range []struct {
+		path          []string
+		before, after any
+		want          bool
+	}{
+		{[]string{"dashboard", "auth", "password_requires_totp"}, nil, false, true},
+		{[]string{"dashboard", "auth", "password_requires_totp"}, false, true, false},
+		{[]string{"dashboard", "bind", "0", "allow_plain_http"}, nil, true, true},
+		{[]string{"dashboard", "tailscale", "tls"}, "on", "off", true},
+		{[]string{"dashboard", "tailscale", "tls"}, "off", "on", false},
+	} {
+		if got := isWidening(c.path, c.before, c.after); got != c.want {
+			t.Errorf("%v %v→%v: widening=%v, want %v", c.path, c.before, c.after, got, c.want)
+		}
+	}
+}

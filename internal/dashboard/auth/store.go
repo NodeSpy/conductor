@@ -28,9 +28,9 @@ type Store struct {
 	now func() time.Time
 
 	mu      sync.Mutex
-	creds   map[string]*Credential   // by credential ID
-	sess    map[string]*sessionRec   // by session ID
-	tickets map[string]*EnrollTicket // by operator (one live ticket each)
+	creds   map[string]*Credential     // by credential ID
+	sess    map[string]*sessionRec     // by session ID
+	tickets map[string]*EnrollTicket   // by operator (one live ticket each)
 	secrets map[string]*OperatorSecret // password + TOTP, by operator
 }
 
@@ -55,9 +55,9 @@ type sessionRec struct {
 }
 
 type persisted struct {
-	Creds   []*Credential   `json:"credentials"`
-	Sess    []*sessionRec   `json:"sessions"`
-	Tickets []*EnrollTicket `json:"tickets"`
+	Creds   []*Credential     `json:"credentials"`
+	Sess    []*sessionRec     `json:"sessions"`
+	Tickets []*EnrollTicket   `json:"tickets"`
 	Secrets []*OperatorSecret `json:"operator_secrets,omitempty"`
 }
 

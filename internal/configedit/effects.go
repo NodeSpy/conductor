@@ -69,6 +69,14 @@ func isWidening(path []string, before, after any) bool {
 		return true
 		// the dashboard exposed beyond localhost would be a widening, but listen is
 		// a list, not a scalar — the dashboard stages that as a section add.
+	// dashboard sign-in loosened: a password allowed without TOTP, plain HTTP
+	// acknowledged on a dashboard listener, or the tailnet listener's TLS off.
+	case p == "dashboard.auth.password_requires_totp" && !truthy(after) && fmt.Sprintf("%v", after) != "":
+		return true
+	case contains(path, "dashboard") && last == "allow_plain_http" && truthy(after) && !truthy(before):
+		return true
+	case p == "dashboard.tailscale.tls" && (fmt.Sprintf("%v", after) == "off" || fmt.Sprintf("%v", after) == "false"):
+		return true
 	}
 	return false
 }

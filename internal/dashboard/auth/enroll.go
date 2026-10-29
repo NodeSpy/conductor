@@ -32,7 +32,7 @@ type enrollCeremony struct {
 	regSession  webauthn.SessionData
 	assertReq   webauthn.SessionData // the "confirm with an existing passkey" challenge
 	needAssert  bool
-	registering bool // regSession is set and finish may proceed
+	registering bool   // regSession is set and finish may proceed
 	totpSecret  string // the authenticator offered by the password path, until confirmed
 	expires     time.Time
 }

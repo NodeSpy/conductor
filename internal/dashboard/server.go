@@ -261,6 +261,13 @@ func (s *Server) Start(ctx context.Context) error {
 			s.deps.Log("dashboard: tailnet listener not started (%v); serving localhost only", err)
 		}
 	}
+	// Explicit listeners (dashboard.bind). A failure is logged, not fatal: the
+	// localhost listener still serves, as with the tailnet one.
+	for _, b := range s.deps.Cfg.Dashboard.Bind {
+		if err := s.startBind(ctx, b); err != nil {
+			s.deps.Log("dashboard: %v", err)
+		}
+	}
 
 	// Close the server when ctx is cancelled (the daemon re-execs on reload).
 	go func() {

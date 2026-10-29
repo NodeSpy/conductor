@@ -191,3 +191,133 @@ callable:
 		t.Fatalf("error should report the collision, got: %v", err)
 	}
 }
+
+// --- sign-in methods, listeners (dashboard-auth-methods) ---
+
+func TestDashboardAuthDefaultsWithoutBlock(t *testing.T) {
+	cfg, err := loadDoc(t, dashBase+`
+dashboard:
+  enabled: true
+  listen: [localhost, tailscale]
+`)
+	if err != nil {
+		t.Fatalf("a config without dashboard.auth must keep loading: %v", err)
+	}
+	a := cfg.Dashboard.Auth
+	if got := strings.Join(a.EffectiveMethods(), ","); got != "passkey,ssh,password" {
+		t.Errorf("default methods = %s", got)
+	}
+	if !a.PasswordNeedsTOTP() {
+		t.Error("password requires TOTP by default")
+	}
+	if got := strings.Join(a.EffectiveStepup(), ","); got != "passkey,ssh,totp" {
+		t.Errorf("default stepup = %s", got)
+	}
+	if !cfg.Dashboard.Tailscale.TLSOn() {
+		t.Error("tailnet TLS is on by default")
+	}
+}
+
+func TestDashboardAuthValidation(t *testing.T) {
+	for _, c := range []struct {
+		name, block, wantErr string
+	}{
+		{"unknown method", `auth: { methods: [passkey, magic] }`, "magic"},
+		{"totp is not a sign-in method", `auth: { methods: [totp] }`, "totp"},
+		{"empty methods", `auth: { methods: [] }`, "at least one"},
+		{"duplicate", `auth: { methods: [ssh, ssh] }`, "twice"},
+		{"password stepup needs the knob", `auth: { stepup: [password] }`, "password_requires_totp: false"},
+		{"unknown stepup", `auth: { stepup: [sms] }`, "sms"},
+		{"empty stepup", `auth: { stepup: [] }`, "at least one"},
+		{"password_requires_totp without password", `auth: { methods: [passkey], password_requires_totp: false }`, "password"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := loadDoc(t, dashBase+"\ndashboard:\n  enabled: true\n  "+c.block+"\n")
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("want an error naming %q, got %v", c.wantErr, err)
+			}
+		})
+	}
+	cfg, err := loadDoc(t, dashBase+`
+dashboard:
+  enabled: true
+  auth:
+    methods: [password]
+    password_requires_totp: false
+    stepup: [password, totp]
+`)
+	if err != nil {
+		t.Fatalf("the explicit password-only setup loads: %v", err)
+	}
+	if cfg.Dashboard.Auth.PasswordNeedsTOTP() {
+		t.Error("password_requires_totp: false must be honoured")
+	}
+}
+
+func TestDashboardBindListeners(t *testing.T) {
+	for _, c := range []struct {
+		name, block, wantErr string
+	}{
+		{"needs hostnames", `bind: [{ address: "192.168.1.5:7790" }]`, "hostnames"},
+		{"plain http off loopback needs the ack", `bind: [{ address: "192.168.1.5:7790", hostnames: [box.lan] }]`, "allow_plain_http"},
+		{"wildcard plain needs the ack", `bind: [{ address: "0.0.0.0:7790", hostnames: [box.lan] }]`, "allow_plain_http"},
+		{"cert without key", `bind: [{ address: "0.0.0.0:7790", hostnames: [box.lan], cert_file: a.crt }]`, "key_file"},
+		{"bad address", `bind: [{ address: "box.lan", hostnames: [box.lan], allow_plain_http: true }]`, "address"},
+		{"hostname with scheme", `bind: [{ address: "0.0.0.0:7790", hostnames: ["https://box.lan"], allow_plain_http: true }]`, "hostname"},
+		{"collides with the dashboard port", `bind: [{ address: "0.0.0.0:7788", hostnames: [box.lan], allow_plain_http: true }]`, "7788"},
+		{"ack on TLS is meaningless", `bind: [{ address: "0.0.0.0:7790", hostnames: [box.lan], cert_file: a.crt, key_file: a.key, allow_plain_http: true }]`, "allow_plain_http"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := loadDoc(t, dashBase+"\ndashboard:\n  enabled: true\n  "+c.block+"\n")
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("want an error naming %q, got %v", c.wantErr, err)
+			}
+		})
+	}
+	cfg, err := loadDoc(t, dashBase+`
+dashboard:
+  enabled: true
+  bind:
+    - { address: "0.0.0.0:7790", hostnames: [box.lan, 192.168.1.5], cert_file: /etc/c.crt, key_file: /etc/c.key }
+    - { address: "192.168.1.5:7791", hostnames: [192.168.1.5], allow_plain_http: true }
+    - { address: "127.0.0.1:7792", hostnames: [localhost] }
+`)
+	if err != nil {
+		t.Fatalf("valid binds: %v", err)
+	}
+	b := cfg.Dashboard.Bind
+	if len(b) != 3 || !b[0].TLS() || b[1].TLS() || b[1].Loopback() || !b[2].Loopback() {
+		t.Fatalf("bind parsed wrong: %+v", b)
+	}
+}
+
+func TestDashboardTailscaleTLS(t *testing.T) {
+	cfg, err := loadDoc(t, dashBase+`
+dashboard:
+  enabled: true
+  listen: [tailscale]
+  tailscale: { tls: off }
+`)
+	if err != nil {
+		t.Fatalf("tls: off loads: %v", err)
+	}
+	if cfg.Dashboard.Tailscale.TLSOn() {
+		t.Error("tls: off must turn tailnet TLS off")
+	}
+	if _, err := loadDoc(t, dashBase+`
+dashboard:
+  enabled: true
+  listen: [tailscale]
+  tailscale: { tls: sometimes }
+`); err == nil {
+		t.Fatal("tls must be on or off")
+	}
+	if _, err := loadDoc(t, dashBase+`
+dashboard:
+  enabled: true
+  listen: [tailscale]
+  tailscale: { tls: off, cert: { cert_file: a.crt, key_file: a.key } }
+`); err == nil {
+		t.Fatal("a cert with tls: off is a contradiction")
+	}
+}
