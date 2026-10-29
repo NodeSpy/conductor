@@ -246,7 +246,16 @@ It covers, on **Chromium desktop and WebKit iPhone 15 (OS dark)**:
 - `/api/v1/status` is reflected in the UI (version, pid, config sha, dispatch);
 - the app shell, nav and theme render with zero console errors and zero failed
   network requests on load;
-- no horizontal overflow at desktop and phone widths, and dark mode renders.
+- no horizontal overflow at desktop and phone widths, and dark mode renders;
+- the sign-in methods, through a plain-HTTP listener on the container's
+  non-loopback address: no passkey offered and the unencrypted notice shown,
+  SSH sign-in by pasted signature, setting a password and authenticator from
+  Access (confirmed with the SSH key), password + code sign-in (codes computed
+  in the test), sign-in approved with `conductor dashboard approve-login`, and a
+  proposal approved with an authenticator-code step-up.
+
+The passkey suites (enrolment, passkey sign-in and step-up) use Chromium's
+virtual authenticator and run on Chromium only.
 
 Override the image with `PLAYWRIGHT_IMAGE=…` and the daemon port with
 `DASH_E2E_PORT=…`.
