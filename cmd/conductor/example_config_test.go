@@ -317,3 +317,45 @@ func TestExampleConfigHeadlessModeUncommented(t *testing.T) {
 		t.Fatalf("primary headless_mode = %v", got)
 	}
 }
+
+// TestExampleDashboardBlockLoads uncomments the documented dashboard: block in
+// config.example.yaml, appends it to a minimal config and loads it, so the
+// documented options (auth methods, tailscale tls, bind listeners) stay valid.
+func TestExampleDashboardBlockLoads(t *testing.T) {
+	raw, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	var block []string
+	for i, l := range lines {
+		if l != "# dashboard:" {
+			continue
+		}
+		for _, b := range lines[i:] {
+			if b == "#" || !strings.HasPrefix(b, "# ") {
+				break
+			}
+			block = append(block, strings.TrimPrefix(b, "# "))
+		}
+		break
+	}
+	if len(block) < 10 {
+		t.Fatalf("documented dashboard block not found (%d lines)", len(block))
+	}
+	doc := "connectors:\n  timer:\n    use: cron\n    schedules: { tick: { every: 1h } }\n" +
+		"triggers:\n  - on: timer.tick\n    steps: [{ id: t, type: command, command: [\"true\"] }]\n" +
+		strings.Join(block, "\n") + "\n"
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("the documented dashboard block must load: %v\n%s", err, strings.Join(block, "\n"))
+	}
+	d := cfg.Dashboard
+	if !d.Enabled || len(d.Bind) != 2 || !d.Tailscale.TLSOn() || !d.Auth.PasswordNeedsTOTP() {
+		t.Fatalf("documented block parsed wrong: %+v", d)
+	}
+}

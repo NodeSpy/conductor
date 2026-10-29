@@ -1797,16 +1797,43 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 # ---------------------------------------------------------------------------
 # dashboard: — OPTIONAL local web UI (design §6). Off unless enabled, so a
 # config without this block changes nothing. It runs INSIDE the daemon and
-# reads the live config, store and event hub. Phase 1 binds localhost only and
-# has no auth (the tailnet listener, TLS and WebAuthn arrive in a later phase).
+# reads the live config, store and event hub. With operators configured, every
+# API call needs a signed-in operator (see docs/wiki/Dashboard.md).
 #
 # dashboard:
 #   enabled: true            # off by default; a config without the block is unchanged
-#   listen: [localhost]      # keyword-only — ONLY `localhost` and `tailscale`
-#                            # (no addresses, no 0.0.0.0, no expose:). Phase 1
-#                            # serves `localhost` only; `tailscale` is accepted
-#                            # but not yet bound.
+#   listen: [localhost, tailscale]  # keywords only: `localhost` (127.0.0.1 + ::1,
+#                            # plain HTTP) and `tailscale` (the node's tailnet
+#                            # addresses). Explicit addresses go under bind:.
 #   port: 7788               # default 7788; must not collide with an inbound listener
+#   tailscale:
+#     tls: on                # on (default): HTTPS with the MagicDNS cert.
+#                            # off: plain HTTP on the tailnet addresses — WireGuard
+#                            # encrypts the hop and WhoIs is still checked, but the
+#                            # browser sees plain HTTP, so passkeys aren't offered.
+#     allow_tagged: false    # refuse tagged nodes (servers, CI)
+#   session: { idle: 30m, max: 12h }
+#   auth:
+#     methods: [passkey, ssh, password]  # sign-in methods (this is the default).
+#                            # passkey is only offered on HTTPS or localhost with a
+#                            # relying-party hostname; ssh signs a challenge with
+#                            # operators.<name>.ssh_key; password needs TOTP.
+#     password_requires_totp: true       # default. false allows a password alone —
+#                            # anyone who learns it signs in; set it only knowingly.
+#     stepup: [passkey, ssh, totp]       # what confirms approvals and widening
+#                            # changes (default). `password` is accepted here only
+#                            # with password_requires_totp: false.
+#   bind:                    # extra listeners on explicit addresses
+#     - address: 0.0.0.0:7790
+#       hostnames: [conductor.home.arpa]   # REQUIRED Host allowlist (DNS rebinding);
+#                            # with TLS each non-IP hostname is a passkey relying party
+#       cert_file: /etc/conductor/tls/dashboard.crt
+#       key_file: /etc/conductor/tls/dashboard.key
+#     - address: 192.168.1.20:7791
+#       hostnames: [192.168.1.20]
+#       allow_plain_http: true             # REQUIRED for plain HTTP off loopback: the
+#                            # session cookie crosses the network unencrypted.
+#                            # A warning is logged at boot.
 #
 # Build the UI into the binary with `make web` (needs Node; the built assets are
 # committed, so a normal `go build`/`go install` does not). Reach it at
