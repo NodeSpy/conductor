@@ -60,6 +60,10 @@ dashboard:
 - Without a certificate, an entry on a non-loopback address needs
   `allow_plain_http: true`, and the daemon logs a warning at boot. On plain HTTP
   the session cookie and everything on the page cross the network unencrypted.
+- An entry on a loopback address without a certificate is a secure context only
+  when its hostnames are loopback names (`localhost`, `127.0.0.1`, `::1`). Under
+  any other name (`box.lan` pointing at 127.0.0.1) browsers treat it as plain
+  HTTP, so passkeys are not offered there.
 
 ## Signing in
 
@@ -80,7 +84,7 @@ accepted on the kind of connection it was created on.
 The SSH key in `operators.<name>.ssh_key` needs no setup in the dashboard.
 Pick **SSH key**, enter the operator name, and either:
 
-- **Sign on this computer** — run the command the page shows (it pipes the
+- **Sign on this device** — run the command the page shows (it pipes the
   challenge into `ssh-keygen -Y sign -n conductor-dashboard-login`), or
   `conductor dashboard sign '<challenge>' --key <key>`, and paste the signature.
 - **Approve from another device** — the page shows an 8-character login code.
@@ -90,27 +94,41 @@ Pick **SSH key**, enter the operator name, and either:
   conductor dashboard approve-login ABCD-EFGH --url https://box.example:7790 --operator ops
   ```
 
-  The command fetches the request, refuses it unless the challenge names the
-  same origin as `--url` and the same operator, shows where the request came
-  from, asks for confirmation (`--yes` skips the question), signs it and posts
-  the signature. The waiting page signs in within a couple of seconds.
+  The command fetches the request and refuses it unless the challenge names the
+  same origin as `--url` and the same operator. It then shows the address the
+  request came from, the device it says it is, when it started and when it
+  expires — and for a confirmation (step-up) what is being confirmed and the
+  first 12 characters of its digest, which the waiting page shows too. It asks
+  before signing (`--yes` skips the question), signs it and posts the
+  signature. The waiting page signs in within a couple of seconds.
+
+  **Approve only a request you started yourself, just now.** A look-alike page
+  can start a sign-in on your real dashboard and show you its code; the command
+  can't tell that apart from your own browser, and approving it signs the other
+  side in as you. The same goes for pasting a signature the page asks for.
+  Passkeys don't have this weakness: the browser ties a passkey to the site
+  it's actually on.
 
 The challenge is bound to the operator, the page's origin and a nonce, and
 expires after 5 minutes. A login code works once, allows 3 wrong signatures,
-and is only accepted from the listener and host that created it. Pending
-challenges are capped per client.
+and is only accepted on the listener, host and kind of connection that created
+it. Pending challenges are capped per client, per network and overall;
+confirmations have their own cap per session.
 
 ### Password and authenticator app
 
 Set a password from **Access** (signed in by any method), or from the one-time
 enrolment link (`conductor dashboard enroll`, then choose "A password +
-authenticator"). In Access, **Authenticator app** shows a QR code and the key;
-it becomes active once you enter a current code from the app.
+authenticator"). In Access, **Authenticator app** shows a QR code and the key
+(in 4-character blocks; **Copy** copies it without spaces); it becomes active
+once you enter a current code from the app. **Replace…** does the same with a
+new key: your current app keeps working until a code from the new one confirms
+it.
 
 - Passwords are 12 to 256 characters, stored as an argon2id hash.
 - Codes are RFC 6238 TOTP (SHA-1, 30 seconds, 6 digits). A code from one step
-  before or after the current one is accepted, and a code (or any earlier one)
-  is accepted only once.
+  before or after the current one is accepted, and each code is accepted only
+  once.
 - By default a password signs in only together with a code.
   `auth.password_requires_totp: false` lets an operator with no authenticator
   sign in with the password alone; an operator who has one still enters a code.
@@ -118,19 +136,23 @@ it becomes active once you enter a current code from the app.
   and code sign-in and confirmations for 15 minutes, doubling up to 4
   hours, whichever client they come from. Passkey and SSH
   sign-in are not affected by that lock. Every method also counts failures per
-  client.
+  client (an IPv6 client by its /64). Guesses sent at the same moment count
+  before they are checked, so a burst gets no more tries than a sequence.
 - Lost the authenticator or the password: `conductor dashboard reset
   --operator <name>` (signed with the SSH key) removes the operator's passkeys,
   password, authenticator and sessions.
 
 ### Confirming sensitive actions (step-up)
 
-Approvals, purchases, widening config changes, secrets, browser take-over and
-credential changes ask you to confirm first. The dialog offers the methods
+Approvals, purchases, config changes that widen a guardrail or touch sign-in,
+secrets, browser take-over and credential changes ask you to confirm first.
+The dialog shows what you are confirming — the proposal's or purchase's action
+in full, or the config change's effects — and the start of its digest. The dialog offers the methods
 `auth.stepup` allows that you have on this connection: passkey, SSH key (paste
 or approve-login, as above, in the `conductor-dashboard-stepup` namespace) or an
 authenticator code. A password confirms only with
-`password_requires_totp: false` and `password` listed in `stepup`. The
+`password_requires_totp: false` and `password` listed in `stepup`, and needs
+the authenticator code too when you have one. The
 confirmation is single use, bound to the action, and the audit log records the
 method.
 
@@ -147,10 +169,20 @@ dashboard:
     stepup: [passkey, ssh, totp]        # default
 ```
 
-A config without `auth:` uses these defaults. Setting
-`password_requires_totp: false`, `allow_plain_http: true` or
-`tailscale.tls: off` from the dashboard's config editor counts as a widening
-change and needs a confirmation.
+A config without `auth:` uses these defaults. From the dashboard's config
+editor, any change to `operators`, `imports` or the dashboard's `auth`, `bind`,
+`listen`, `tailscale` or `session` needs a confirmation, as does a widening
+change such as `password_requires_totp: false`, `allow_plain_http: true` or
+`tailscale.tls: off`. The editor judges the whole new config, including what
+it loads through imports and packs, not only the value you edited.
+
+Every sign-in endpoint accepts only same-origin JSON requests: a request from
+another site, or a body that isn't `application/json`, is refused before it is
+looked at.
+
+**On plain HTTP, anyone who can change traffic on the way can change the page
+itself**, and with it what a code, password or signature you enter confirms.
+Use plain HTTP only on a network you trust.
 
 `conductor dashboard status` lists, per operator, passkeys, sessions, and
 whether a password and an authenticator are set.
@@ -250,9 +282,12 @@ It covers, on **Chromium desktop and WebKit iPhone 15 (OS dark)**:
 - the sign-in methods, through a plain-HTTP listener on the container's
   non-loopback address: no passkey offered and the unencrypted notice shown,
   SSH sign-in by pasted signature, setting a password and authenticator from
-  Access (confirmed with the SSH key), password + code sign-in (codes computed
-  in the test), sign-in approved with `conductor dashboard approve-login`, and a
-  proposal approved with an authenticator-code step-up.
+  Access (confirmed with the SSH key), replacing the authenticator (confirmed
+  with the old one), password + code sign-in (codes computed in the test),
+  sign-in approved with `conductor dashboard approve-login`, and a proposal
+  approved with an authenticator-code step-up whose dialog shows the action;
+- on the iPhone, every route opens on its content with the nav folded behind
+  the menu button.
 
 The passkey suites (enrolment, passkey sign-in and step-up) use Chromium's
 virtual authenticator and run on Chromium only.
