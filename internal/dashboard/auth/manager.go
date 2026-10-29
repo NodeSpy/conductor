@@ -35,6 +35,11 @@ type Deps struct {
 	// VerifySSH checks an SSHSIG over payload against operator's pubKey in the
 	// enrollment namespace. Defaults to ssh-keygen (verifySSHSig); tests inject.
 	VerifySSH func(ctx context.Context, operator, pubKey string, payload []byte, sig string) error
+	// VerifySSHNS checks an SSHSIG in a named namespace (SSH sign-in and SSH
+	// step-up). Defaults to ssh-keygen (VerifySSHSigNS).
+	VerifySSHNS func(ctx context.Context, namespace, operator, pubKey string, payload []byte, sig string) error
+	// Policy is the resolved dashboard.auth block; nil = DefaultPolicy.
+	Policy *Policy
 	// Audit records every auth event. Optional.
 	Audit func(map[string]any)
 	// Lifecycle fires conductor.* events (dashboard_enrolled, dashboard_reset).
@@ -50,20 +55,25 @@ type Deps struct {
 type Manager struct {
 	deps Deps
 	rpMu sync.RWMutex                  // guards rps/wa (the tailnet RP is added after serving begins)
-	rps  map[string]RP                 // by RP ID
-	wa   map[string]*webauthn.WebAuthn // by RP ID
+	rps  map[string]RP                 // by rpKey(listener, RP ID)
+	wa   map[string]*webauthn.WebAuthn // by rpKey(listener, RP ID)
 	lock *lockout
+	hash chan struct{} // bounds concurrent argon2id hashes (each takes ~19 MiB)
 
 	mu      sync.Mutex
 	logins  map[string]*ceremony // sign-in challenges, by ceremony id
 	enrolls map[string]*enrollCeremony
 	stepups map[string]*stepupCeremony // in-flight step-up challenges, by ceremony id
 	tokens  map[string]*stepupToken    // minted single-use step-up tokens, by token
+	sshCh   map[string]*sshChallenge   // in-flight SSH sign-in / step-up challenges, by id
+	sshCode map[string]string          // login code -> challenge id
+	totpNew map[string]*totpPending    // TOTP enrolments awaiting a confirming code, by session id
+	regs    map[string]*sessionReg     // signed-in passkey registrations, by ceremony id
 }
 
 // ceremony is an in-flight WebAuthn challenge (login or step-up pre-state).
 type ceremony struct {
-	rpID    string
+	rpID    string // the rpKey
 	session webauthn.SessionData
 	expires time.Time
 }
@@ -79,6 +89,9 @@ func NewManager(deps Deps, rps ...RP) (*Manager, error) {
 	if deps.VerifySSH == nil {
 		deps.VerifySSH = verifySSHSig
 	}
+	if deps.VerifySSHNS == nil {
+		deps.VerifySSHNS = VerifySSHSigNS
+	}
 	if deps.SessionIdle <= 0 {
 		deps.SessionIdle = 30 * time.Minute
 	}
@@ -88,10 +101,15 @@ func NewManager(deps Deps, rps ...RP) (*Manager, error) {
 	m := &Manager{
 		deps: deps, rps: map[string]RP{}, wa: map[string]*webauthn.WebAuthn{},
 		lock:    newLockout(deps.Now),
+		hash:    make(chan struct{}, 2),
 		logins:  map[string]*ceremony{},
 		enrolls: map[string]*enrollCeremony{},
 		stepups: map[string]*stepupCeremony{},
 		tokens:  map[string]*stepupToken{},
+		sshCh:   map[string]*sshChallenge{},
+		sshCode: map[string]string{},
+		totpNew: map[string]*totpPending{},
+		regs:    map[string]*sessionReg{},
 	}
 	for _, rp := range rps {
 		if err := m.addRP(rp); err != nil {
@@ -124,35 +142,54 @@ func (m *Manager) addRP(rp RP) error {
 	if err != nil {
 		return fmt.Errorf("auth: webauthn for RP %q: %w", rp.ID, err)
 	}
-	m.rps[rp.ID] = rp
-	m.wa[rp.ID] = w
+	m.rps[rpKey(rp.Listener, rp.ID)] = rp
+	m.wa[rpKey(rp.Listener, rp.ID)] = w
 	return nil
 }
 
-// rpForListener returns the RP bound to a listener (the first match).
+// rpKey indexes an RP by the listener it serves and its id: two listeners may
+// share an RP id (a loopback bind and the localhost listener) with different
+// origins.
+func rpKey(l Listener, id string) string { return string(l) + "|" + id }
+
+// rpForListener returns the RP bound to a listener (the first by id).
 func (m *Manager) rpForListener(l Listener) (RP, bool) {
+	return m.rpFor(l, "")
+}
+
+// rpFor returns the RP for a request: on listener l, whose id is the request's
+// host. host "" picks the listener's first RP (by id), for callers that don't
+// have a request. A host with no RP (an IP literal, a plain-HTTP hostname) has
+// none, and passkeys are not offered there.
+func (m *Manager) rpFor(l Listener, host string) (RP, bool) {
 	m.rpMu.RLock()
 	defer m.rpMu.RUnlock()
+	if host != "" {
+		rp, ok := m.rps[rpKey(l, strings.ToLower(host))]
+		return rp, ok
+	}
+	var best RP
+	found := false
 	for _, rp := range m.rps {
-		if rp.Listener == l {
-			return rp, true
+		if rp.Listener == l && (!found || rp.ID < best.ID) {
+			best, found = rp, true
 		}
 	}
-	return RP{}, false
+	return best, found
 }
 
-// waFor returns the WebAuthn instance for an RP id, race-free.
-func (m *Manager) waFor(id string) *webauthn.WebAuthn {
+// waFor returns the WebAuthn instance for an rpKey, race-free.
+func (m *Manager) waFor(key string) *webauthn.WebAuthn {
 	m.rpMu.RLock()
 	defer m.rpMu.RUnlock()
-	return m.wa[id]
+	return m.wa[key]
 }
 
-// rpByID returns the RP record for an id, race-free.
-func (m *Manager) rpByID(id string) (RP, bool) {
+// rpByID returns the RP record for an rpKey, race-free.
+func (m *Manager) rpByID(key string) (RP, bool) {
 	m.rpMu.RLock()
 	defer m.rpMu.RUnlock()
-	rp, ok := m.rps[id]
+	rp, ok := m.rps[key]
 	return rp, ok
 }
 
@@ -209,6 +246,22 @@ func (m *Manager) gcCeremonies() {
 	for tok, t := range m.tokens {
 		if now.After(t.expires) {
 			delete(m.tokens, tok)
+		}
+	}
+	for id, c := range m.sshCh {
+		if now.After(c.expires) {
+			delete(m.sshCh, id)
+			m.unindexCode(c)
+		}
+	}
+	for id, p := range m.totpNew {
+		if now.After(p.expires) {
+			delete(m.totpNew, id)
+		}
+	}
+	for id, r := range m.regs {
+		if now.After(r.expires) {
+			delete(m.regs, id)
 		}
 	}
 }

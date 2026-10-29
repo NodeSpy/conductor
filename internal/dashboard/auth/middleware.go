@@ -11,9 +11,20 @@ import (
 // node and login the peer resolved to. The auth layer reads it to bind sessions
 // and pick the right RP.
 type reqInfo struct {
-	Listener Listener
-	Node     string // tailnet node id (stable), empty on localhost
-	User     string // tailnet login name, empty on localhost
+	Listener  Listener
+	Node      string    // tailnet node id (stable), empty on localhost
+	User      string    // tailnet login name, empty on localhost
+	Transport Transport // how the request arrived (cookie choice, passkey offer)
+	Host      string    // the request's Host, port stripped, lowercased
+}
+
+// ConnInfo is what a listener wrapper knows about a request before the auth
+// layer sees it.
+type ConnInfo struct {
+	Listener  Listener
+	Node      string
+	User      string
+	Transport Transport // empty = the listener's default
 }
 
 type ctxKey int
@@ -26,14 +37,24 @@ const (
 // WithReqInfo returns r carrying the listener/peer facts. server.go calls this in
 // the listener wrapper.
 func WithReqInfo(r *http.Request, l Listener, node, user string) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), ctxReq, reqInfo{Listener: l, Node: node, User: user}))
+	return WithConn(r, ConnInfo{Listener: l, Node: node, User: user})
+}
+
+// WithConn returns r carrying the listener, peer and transport facts.
+func WithConn(r *http.Request, c ConnInfo) *http.Request {
+	t := c.Transport
+	if t == "" {
+		t = defaultTransport(c.Listener)
+	}
+	info := reqInfo{Listener: c.Listener, Node: c.Node, User: c.User, Transport: t, Host: hostOnly(r.Host)}
+	return r.WithContext(context.WithValue(r.Context(), ctxReq, info))
 }
 
 func reqInfoFrom(r *http.Request) reqInfo {
 	if v, ok := r.Context().Value(ctxReq).(reqInfo); ok {
 		return v
 	}
-	return reqInfo{Listener: ListenerLocalhost}
+	return reqInfo{Listener: ListenerLocalhost, Transport: TransportLocalhost, Host: hostOnly(r.Host)}
 }
 
 // SessionFrom returns the session a protected handler is running under.

@@ -27,10 +27,13 @@ func (m *Manager) AuthorizeReset(ctx context.Context, operator string, issued ti
 }
 
 // ResetOperator is `conductor dashboard reset`: it removes an operator's
-// passkeys, sessions and any live enrollment ticket, so first enrollment applies
-// again. It audits and fires conductor.dashboard_reset (design §6.3).
+// passkeys, password, TOTP authenticator, sessions and any live enrollment
+// ticket, so first enrollment applies again. It is the recovery path for a lost
+// authenticator (there are no recovery codes). It audits and fires
+// conductor.dashboard_reset (design §6.3).
 func (m *Manager) ResetOperator(operator string) (passkeys, sessions int) {
 	passkeys = m.deps.Store.DeleteCredentialsFor(operator)
+	_ = m.deps.Store.UpdateOperatorSecret(operator, func(o *OperatorSecret) { *o = OperatorSecret{Operator: operator} })
 	for _, s := range m.deps.Store.SessionsFor(operator) {
 		_ = m.deps.Store.DeleteSession(s.ID)
 		sessions++
@@ -56,6 +59,8 @@ type OpStatus struct {
 	Passkeys   int  `json:"passkeys"`
 	Sessions   int  `json:"sessions"`
 	LiveTicket bool `json:"live_ticket"`
+	Password   bool `json:"password"`
+	TOTP       bool `json:"totp"`
 }
 
 // Status reports the dashboard's auth state for every configured operator.
@@ -64,10 +69,13 @@ func (m *Manager) Status() StatusLine {
 	if m.deps.Operators != nil {
 		for op := range m.deps.Operators() {
 			_, live := m.deps.Store.Ticket(op)
+			rec, _ := m.deps.Store.OperatorSecret(op)
 			out.Operators[op] = OpStatus{
 				Passkeys:   len(m.deps.Store.CredentialsFor(op)),
 				Sessions:   len(m.deps.Store.SessionsFor(op)),
 				LiveTicket: live,
+				Password:   rec.PasswordHash != "",
+				TOTP:       rec.TOTPSecret != "",
 			}
 		}
 	}

@@ -43,14 +43,22 @@ type stepupToken struct {
 	expires  time.Time
 }
 
-// StepupEvidence is the verified assertion behind a step-up: the credential and
-// the raw authenticator data / client data / signature (base64url), enough to
-// re-verify the signature offline against the stored public key (design §6.6).
+// StepupEvidence is what verified a step-up. Method names it; for a passkey it
+// is the credential and the raw authenticator data / client data / signature
+// (base64url), enough to re-verify the signature offline against the stored
+// public key (design §6.6); for SSH it is the signed challenge text, its
+// namespace and the armored SSHSIG, re-verifiable with ssh-keygen against
+// operators.<name>.ssh_key. A TOTP or password step-up leaves nothing a third
+// party could re-verify, and records only the method.
 type StepupEvidence struct {
+	Method            Method
 	CredID            string
 	AuthenticatorData string
 	ClientDataJSON    string
 	Signature         string
+	SSHNamespace      string
+	SSHPayload        string
+	SSHSignature      string
 }
 
 // stepupChallenge derives the WebAuthn challenge from the label, the per-ceremony
@@ -73,9 +81,17 @@ func stepupChallenge(nonce []byte, purpose Purpose, digest string) []byte {
 // challenge commits to the purpose and digest (design §6.5). It returns a
 // ceremony id and the assertion options.
 func (m *Manager) BeginStepup(listener Listener, sess Session, purpose Purpose, digest string) (ceremonyID string, optionsJSON []byte, err error) {
-	rp, ok := m.rpForListener(listener)
+	return m.BeginStepupFor(listener, "", sess, purpose, digest)
+}
+
+// BeginStepupFor is BeginStepup on the RP for (listener, host).
+func (m *Manager) BeginStepupFor(listener Listener, host string, sess Session, purpose Purpose, digest string) (ceremonyID string, optionsJSON []byte, err error) {
+	if !m.policy().StepupAllowed(MethodPasskey) {
+		return "", nil, errors.New("passkey step-up is not enabled (dashboard.auth.stepup)")
+	}
+	rp, ok := m.rpFor(listener, host)
 	if !ok {
-		return "", nil, fmt.Errorf("no RP for listener %q", listener)
+		return "", nil, errors.New("passkeys are not available on this connection")
 	}
 	if digest == "" {
 		return "", nil, errors.New("step-up needs a request digest")
@@ -92,7 +108,8 @@ func (m *Manager) BeginStepup(listener Listener, sess Session, purpose Purpose, 
 	if err != nil {
 		return "", nil, err
 	}
-	w := m.waFor(rp.ID)
+	key := rpKey(rp.Listener, rp.ID)
+	w := m.waFor(key)
 	opts, session, err := w.BeginLogin(user,
 		webauthn.WithUserVerification(protocol.VerificationRequired),
 		webauthn.WithAllowedCredentials(allow),
@@ -108,7 +125,7 @@ func (m *Manager) BeginStepup(listener Listener, sess Session, purpose Purpose, 
 	m.mu.Lock()
 	m.gcCeremonies()
 	m.stepups[id] = &stepupCeremony{
-		rpID: rp.ID, session: sess.ID, operator: sess.Operator, purpose: purpose,
+		rpID: key, session: sess.ID, operator: sess.Operator, purpose: purpose,
 		digest: digest, nonce: nonce, wa: *session, expires: m.now().Add(ceremonyTTL),
 	}
 	m.mu.Unlock()
@@ -138,7 +155,8 @@ func (m *Manager) FinishStepup(ceremonyID string, sess Session, responseJSON []b
 	if err != nil {
 		return "", fmt.Errorf("bad assertion: %w", err)
 	}
-	stored, found := m.deps.Store.CredentialByRawID(ce.rpID, parsed.RawID)
+	rp, _ := m.rpByID(ce.rpID)
+	stored, found := m.deps.Store.CredentialByRawID(rp.ID, parsed.RawID)
 	if !found || stored.Operator != ce.operator {
 		return "", errors.New("that passkey is not yours")
 	}
@@ -153,28 +171,49 @@ func (m *Manager) FinishStepup(ceremonyID string, sess Session, responseJSON []b
 		return "", errors.New("that passkey may be cloned and is now locked")
 	}
 	_ = m.deps.Store.UpdateCredentialUse(stored.ID, validated.Authenticator.SignCount)
-	// Rotate the session's step-up freshness.
-	m.deps.Store.MarkStepup(sess.ID, m.now())
-
-	ev := StepupEvidence{
+	return m.mintStepup(sess, ce.purpose, ce.digest, StepupEvidence{
+		Method:            MethodPasskey,
 		CredID:            stored.ID,
 		AuthenticatorData: b64(parsed.Raw.AssertionResponse.AuthenticatorData),
 		ClientDataJSON:    b64(parsed.Raw.AssertionResponse.ClientDataJSON),
 		Signature:         b64(parsed.Raw.AssertionResponse.Signature),
+	})
+}
+
+// mintStepup issues the single-use step-up token every method ends in, bound to
+// {session, purpose, digest} with a short expiry. The caller has verified the
+// evidence; callers that spend the token (RequireStepup) never see which method
+// minted it, only the evidence it carries for the audit.
+func (m *Manager) mintStepup(sess Session, purpose Purpose, digest string, ev StepupEvidence) (string, error) {
+	if digest == "" {
+		return "", errors.New("step-up needs a request digest")
+	}
+	if !m.policy().StepupAllowed(ev.Method) {
+		return "", fmt.Errorf("%s step-up is not enabled (dashboard.auth.stepup)", ev.Method)
 	}
 	tb, err := m.randBytes(32)
 	if err != nil {
 		return "", err
 	}
-	token = b64(tb)
+	token := b64(tb)
+	m.deps.Store.MarkStepup(sess.ID, m.now())
 	m.mu.Lock()
+	m.gcCeremonies()
 	m.tokens[token] = &stepupToken{
-		session: sess.ID, operator: ce.operator, purpose: ce.purpose,
-		digest: ce.digest, evidence: ev, expires: m.now().Add(ceremonyTTL),
+		session: sess.ID, operator: sess.Operator, purpose: purpose,
+		digest: digest, evidence: ev, expires: m.now().Add(ceremonyTTL),
 	}
 	m.mu.Unlock()
-	m.audit(map[string]any{"event": "dashboard_stepup", "operator": ce.operator, "purpose": string(ce.purpose), "credential": stored.ID})
+	m.audit(map[string]any{"event": "dashboard_stepup", "operator": sess.Operator, "purpose": string(purpose),
+		"method": string(ev.Method), "credential": ev.CredID})
 	return token, nil
+}
+
+// CredentialDigest is the step-up digest for adding or removing a sign-in
+// credential (PurposeCredential): it names the operator and the action, so a
+// token minted to add a TOTP authenticator can't remove a password.
+func CredentialDigest(operator, action string) string {
+	return DigestOf([]byte("conductor-dashboard-credential-v1\x00" + operator + "\x00" + action))
 }
 
 // RequireStepup spends a step-up token: it must exist, be unexpired, belong to

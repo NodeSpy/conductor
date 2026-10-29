@@ -35,6 +35,7 @@ func (m *Manager) Mux() *http.ServeMux {
 	mux.HandleFunc("DELETE /api/v1/sessions", m.handleSessionsDeleteAll)
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", m.handleSessionDelete)
 	mux.HandleFunc("GET /api/v1/access", m.handleAccess)
+	m.methodRoutes(mux)
 
 	return mux
 }
@@ -103,19 +104,28 @@ func (m *Manager) handleState(w http.ResponseWriter, r *http.Request) {
 	// the API, and the SPA shows the sign-in gate. With no operators the dashboard
 	// serves open (a bootstrap box), so the gate stays out of the way.
 	required := m.deps.Operators != nil && len(m.deps.Operators()) > 0
+	pol := m.policy()
 	sess, err := m.ValidateCookie(r, info.Listener, info.Node)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"signed_in": false, "required": required, "listener": string(info.Listener)})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"signed_in": false, "required": required, "listener": string(info.Listener),
+			"transport": string(info.Transport), "methods": m.SignInMethods(r),
+			"password_needs_totp": pol.PasswordRequiresTOTP,
+		})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"signed_in": true,
-		"required":  required,
-		"operator":  sess.Operator,
-		"listener":  string(sess.Listener),
-		"expires":   sess.Expires.UTC().Format(time.RFC3339),
-		"csrf":      sess.CSRF,
-		"stepup_at": tsOrEmpty(sess.StepupAt),
+		"signed_in":           true,
+		"required":            required,
+		"operator":            sess.Operator,
+		"listener":            string(sess.Listener),
+		"transport":           string(info.Transport),
+		"method":              string(sess.EffectiveMethod()),
+		"expires":             sess.Expires.UTC().Format(time.RFC3339),
+		"csrf":                sess.CSRF,
+		"stepup_at":           tsOrEmpty(sess.StepupAt),
+		"stepup_methods":      m.StepupMethods(r, sess),
+		"password_needs_totp": pol.PasswordRequiresTOTP,
 	})
 }
 
@@ -126,7 +136,15 @@ func (m *Manager) handleLoginBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	info := reqInfoFrom(r)
-	id, opts, err := m.BeginLogin(info.Listener)
+	if !m.policy().SignIn(MethodPasskey) {
+		writeErr(w, http.StatusForbidden, "method_disabled", "passkey sign-in is not enabled", "")
+		return
+	}
+	if _, ok := m.passkeyRP(r); !ok {
+		writeErr(w, http.StatusBadRequest, "no_passkeys_here", "passkeys need HTTPS (or localhost) on a hostname with a relying party", "sign in with SSH or a password")
+		return
+	}
+	id, opts, err := m.BeginLoginFor(info.Listener, info.Host)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "login_begin", err.Error(), "")
 		return
@@ -154,15 +172,7 @@ func (m *Manager) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "login_failed", err.Error(), "")
 		return
 	}
-	m.lock.Succeed(key)
-	info := reqInfoFrom(r)
-	ck, sess, err := m.CreateSession(operator, info.Listener, info.Node, deviceLabel(r), r.RemoteAddr, credID)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "session", err.Error(), "")
-		return
-	}
-	http.SetCookie(w, ck)
-	writeJSON(w, http.StatusOK, map[string]any{"operator": operator, "csrf": sess.CSRF})
+	m.signedIn(w, r, operator, MethodPasskey, credID)
 }
 
 func (m *Manager) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +198,7 @@ func (m *Manager) handleStepupBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	info := reqInfoFrom(r)
-	id, opts, err := m.BeginStepup(info.Listener, sess, Purpose(req.Purpose), req.Digest)
+	id, opts, err := m.BeginStepupFor(info.Listener, info.Host, sess, Purpose(req.Purpose), req.Digest)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "stepup_begin", err.Error(), "")
 		return
@@ -385,7 +395,7 @@ func (m *Manager) handleSessionsDeleteAll(w http.ResponseWriter, r *http.Request
 		return
 	}
 	m.audit(map[string]any{"event": "dashboard_logout_all", "operator": sess.Operator})
-	http.SetCookie(w, m.clearCookie())
+	http.SetCookie(w, m.clearCookie(reqInfoFrom(r).Transport))
 	writeJSON(w, http.StatusOK, map[string]any{"signed_out": true})
 }
 
@@ -393,6 +403,13 @@ func (m *Manager) handleAccess(w http.ResponseWriter, r *http.Request) {
 	sess, ok := m.authed(w, r)
 	if !ok {
 		return
+	}
+	pol := m.policy()
+	rec, _ := m.deps.Store.OperatorSecret(sess.Operator)
+	_, passkeyHere := m.passkeyRP(r)
+	digests := map[string]string{}
+	for _, a := range []string{"password.set", "password.remove", "totp.set", "totp.remove", "passkey.add"} {
+		digests[a] = CredentialDigest(sess.Operator, a)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"operator":  sess.Operator,
@@ -403,6 +420,15 @@ func (m *Manager) handleAccess(w http.ResponseWriter, r *http.Request) {
 			"idle": m.deps.SessionIdle.String(),
 			"max":  m.deps.SessionMax.String(),
 		},
+		"password":     map[string]any{"set": rec.PasswordHash != "", "set_at": tsOrEmpty(rec.PasswordSet)},
+		"totp":         map[string]any{"set": rec.TOTPSecret != "", "set_at": tsOrEmpty(rec.TOTPSet)},
+		"passkey_here": passkeyHere,
+		"auth_policy": map[string]any{
+			"methods": pol.Methods, "password_requires_totp": pol.PasswordRequiresTOTP, "stepup": pol.Stepup,
+		},
+		"stepup_methods":     m.StepupMethods(r, sess),
+		"credential_digests": digests,
+		"transport":          string(reqInfoFrom(r).Transport),
 	})
 }
 

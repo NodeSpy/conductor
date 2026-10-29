@@ -16,6 +16,12 @@ import (
 // hardware key then asks the human). It signs in the dashboard-enroll namespace
 // so the signature can only ever authorize an enrollment.
 func SignEnrollTicket(ctx context.Context, key string, payload []byte) (string, error) {
+	return SignSSH(ctx, key, EnrollNamespace, payload)
+}
+
+// SignSSH signs payload in namespace with ssh-keygen (`conductor dashboard sign`
+// and approve-login use it for the login and step-up namespaces).
+func SignSSH(ctx context.Context, key, namespace string, payload []byte) (string, error) {
 	dir, err := os.MkdirTemp("", "conductor-enroll-sign-")
 	if err != nil {
 		return "", err
@@ -25,7 +31,7 @@ func SignEnrollTicket(ctx context.Context, key string, payload []byte) (string, 
 	if err := os.WriteFile(msg, payload, 0o600); err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, "ssh-keygen", "-Y", "sign", "-q", "-f", key, "-n", EnrollNamespace, msg)
+	cmd := exec.CommandContext(ctx, "ssh-keygen", "-Y", "sign", "-q", "-f", key, "-n", namespace, msg)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	cmd.Stdin = os.Stdin // a passphrase / confirmation prompt reaches the operator

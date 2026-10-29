@@ -14,6 +14,26 @@ var errNoSession = errors.New("not signed in")
 // Set-Cookie to write. The cookie value is "<id>.<secret>"; only the secret's
 // hash is stored, so the Sessions list can never be turned back into a cookie.
 func (m *Manager) CreateSession(operator string, l Listener, node, device, addr, credID string) (*http.Cookie, Session, error) {
+	return m.createSession(Session{
+		Operator: operator, Listener: l, Node: node, Device: device, Addr: addr, CredID: credID,
+		Method: MethodPasskey, Transport: defaultTransport(l),
+	})
+}
+
+// CreateSessionFor mints a session for a request that just signed in by method:
+// the listener, node, transport, host, device and address come from the request.
+func (m *Manager) CreateSessionFor(r *http.Request, operator string, method Method, credID string) (*http.Cookie, Session, error) {
+	info := reqInfoFrom(r)
+	return m.createSession(Session{
+		Operator: operator, Listener: info.Listener, Node: info.Node,
+		Device: deviceLabel(r), Addr: r.RemoteAddr, CredID: credID,
+		Method: method, Transport: info.Transport, Host: info.Host,
+	})
+}
+
+// createSession fills the id, secret, CSRF token and lifetimes into a session
+// template, stores it and returns the cookie for its transport.
+func (m *Manager) createSession(tmpl Session) (*http.Cookie, Session, error) {
 	idb, err := m.randBytes(16)
 	if err != nil {
 		return nil, Session{}, err
@@ -27,17 +47,24 @@ func (m *Manager) CreateSession(operator string, l Listener, node, device, addr,
 		return nil, Session{}, err
 	}
 	now := m.now()
-	sess := Session{
-		ID: b64(idb), Operator: operator, Listener: l, Node: node,
-		Device: device, Addr: addr, CSRF: b64(csrfB),
-		Created: now, LastSeen: now, Expires: now.Add(m.deps.SessionMax), CredID: credID,
-	}
+	sess := tmpl
+	sess.ID, sess.CSRF = b64(idb), b64(csrfB)
+	sess.Created, sess.LastSeen, sess.Expires = now, now, now.Add(m.deps.SessionMax)
 	secret := b64(secretB)
 	if err := m.deps.Store.PutSession(sess, secret); err != nil {
 		return nil, Session{}, err
 	}
-	m.audit(map[string]any{"event": "dashboard_signin", "operator": operator, "session": sess.ID, "listener": string(l)})
-	return m.cookie(sess.ID+"."+secret, sess.Expires), sess, nil
+	m.audit(map[string]any{"event": "dashboard_signin", "operator": sess.Operator, "session": sess.ID,
+		"listener": string(sess.Listener), "method": string(sess.EffectiveMethod()), "transport": string(sess.Transport)})
+	return m.cookie(sessTransport(sess), sess.ID+"."+secret, sess.Expires), sess, nil
+}
+
+// sessTransport is the transport a session's cookie lives on.
+func sessTransport(s Session) Transport {
+	if s.Transport == "" {
+		return defaultTransport(s.Listener)
+	}
+	return s.Transport
 }
 
 // RotateSecret issues a new cookie secret for an existing session (fixation
@@ -52,14 +79,17 @@ func (m *Manager) RotateSecret(sess Session) (*http.Cookie, error) {
 	if err := m.deps.Store.PutSession(sess, secret); err != nil {
 		return nil, err
 	}
-	return m.cookie(sess.ID+"."+secret, sess.Expires), nil
+	return m.cookie(sessTransport(sess), sess.ID+"."+secret, sess.Expires), nil
 }
 
 // ValidateCookie resolves the request's session cookie to a live Session,
 // enforcing the idle and absolute lifetimes and the listener/node binding
 // (design §6.3). It touches LastSeen on success.
 func (m *Manager) ValidateCookie(r *http.Request, l Listener, node string) (Session, error) {
-	ck, err := r.Cookie(SessionCookie)
+	transport := reqInfoFrom(r).Transport
+	// Only the cookie for this transport is read: a plain-HTTP cookie is never
+	// accepted on a secure connection, nor the reverse.
+	ck, err := r.Cookie(cookieName(transport))
 	if err != nil || ck.Value == "" {
 		return Session{}, errNoSession
 	}
@@ -93,6 +123,9 @@ func (m *Manager) ValidateCookie(r *http.Request, l Listener, node string) (Sess
 	if l == ListenerTailscale && sess.Node != "" && sess.Node != node {
 		return Session{}, errors.New("session is for a different tailnet node")
 	}
+	if sessTransport(sess) != transport {
+		return Session{}, errors.New("session is for a different transport")
+	}
 	m.deps.Store.TouchSession(id, now)
 	sess.LastSeen = now
 	return sess, nil
@@ -100,7 +133,8 @@ func (m *Manager) ValidateCookie(r *http.Request, l Listener, node string) (Sess
 
 // Logout revokes the request's session and returns a clearing cookie.
 func (m *Manager) Logout(r *http.Request) *http.Cookie {
-	if ck, err := r.Cookie(SessionCookie); err == nil {
+	transport := reqInfoFrom(r).Transport
+	if ck, err := r.Cookie(cookieName(transport)); err == nil {
 		if id, _, ok := strings.Cut(ck.Value, "."); ok {
 			if sess, ok := m.deps.Store.Session(id); ok {
 				m.audit(map[string]any{"event": "dashboard_logout", "operator": sess.Operator, "session": id})
@@ -108,24 +142,26 @@ func (m *Manager) Logout(r *http.Request) *http.Cookie {
 			_ = m.deps.Store.DeleteSession(id)
 		}
 	}
-	return m.clearCookie()
+	return m.clearCookie(transport)
 }
 
-// cookie builds the __Host session cookie: Secure, HttpOnly, SameSite=Strict,
-// Path=/, no Domain (the prefix forbids one). On http://localhost browsers treat
-// the origin as secure, so Secure is accepted there too (design §6.3).
-func (m *Manager) cookie(value string, expires time.Time) *http.Cookie {
+// cookie builds the session cookie for a transport. On a secure context it is
+// the __Host cookie: Secure, HttpOnly, SameSite=Strict, Path=/, no Domain (the
+// prefix forbids one); browsers treat http://localhost as secure, so Secure is
+// accepted there too (design §6.3). On plain HTTP off loopback the browser would
+// drop a Secure cookie, so it is the unprefixed HttpOnly, SameSite=Strict one.
+func (m *Manager) cookie(t Transport, value string, expires time.Time) *http.Cookie {
 	return &http.Cookie{
-		Name: SessionCookie, Value: value, Path: "/",
-		Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
+		Name: cookieName(t), Value: value, Path: "/",
+		Secure: t.Secure(), HttpOnly: true, SameSite: http.SameSiteStrictMode,
 		Expires: expires,
 	}
 }
 
-func (m *Manager) clearCookie() *http.Cookie {
+func (m *Manager) clearCookie(t Transport) *http.Cookie {
 	return &http.Cookie{
-		Name: SessionCookie, Value: "", Path: "/",
-		Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
+		Name: cookieName(t), Value: "", Path: "/",
+		Secure: t.Secure(), HttpOnly: true, SameSite: http.SameSiteStrictMode,
 		MaxAge: -1,
 	}
 }

@@ -40,10 +40,13 @@ type SessionView struct {
 	ID       string `json:"id"`
 	Device   string `json:"device"`
 	Addr     string `json:"addr"`
-	Listener string `json:"listener"`
-	Created  string `json:"created"`
-	LastSeen string `json:"last_seen"`
-	Current  bool   `json:"current"`
+	Listener  string `json:"listener"`
+	Method    string `json:"method"`
+	Transport string `json:"transport"`
+	Host      string `json:"host,omitempty"`
+	Created   string `json:"created"`
+	LastSeen  string `json:"last_seen"`
+	Current   bool   `json:"current"`
 }
 
 func (m *Manager) sessionList(current Session) []SessionView {
@@ -51,6 +54,7 @@ func (m *Manager) sessionList(current Session) []SessionView {
 	for _, s := range m.deps.Store.SessionsFor(current.Operator) {
 		out = append(out, SessionView{
 			ID: s.ID, Device: s.Device, Addr: s.Addr, Listener: string(s.Listener),
+			Method: string(s.EffectiveMethod()), Transport: string(sessTransport(s)), Host: s.Host,
 			Created: tsOrEmpty(s.Created), LastSeen: tsOrEmpty(s.LastSeen),
 			Current: s.ID == current.ID,
 		})

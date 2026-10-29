@@ -83,6 +83,23 @@ type Session struct {
 	Expires  time.Time `json:"expires"`   // absolute ceiling
 	StepupAt time.Time `json:"stepup_at"` // last fresh assertion, for the freshness readout
 	CredID   string    `json:"cred_id"`   // the credential that signed in
+	// Method is how the session signed in (passkey, ssh, password); empty on a
+	// session created before methods existed, which was a passkey.
+	Method Method `json:"method,omitempty"`
+	// Transport is how the browser reached the dashboard at sign-in. The cookie
+	// is only accepted back on the same transport; empty (an older session) means
+	// a secure one (localhost or the tailnet's TLS).
+	Transport Transport `json:"transport,omitempty"`
+	Host      string    `json:"host,omitempty"` // the Host it signed in on
+}
+
+// EffectiveMethod is the session's sign-in method, defaulting to passkey for a
+// session that predates the field.
+func (s Session) EffectiveMethod() Method {
+	if s.Method == "" {
+		return MethodPasskey
+	}
+	return s.Method
 }
 
 // token is the opaque secret behind a cookie value. The Session.ID is the
@@ -105,6 +122,9 @@ const (
 	PurposePackChange     Purpose = "pack.change"   // pack/plugin add/remove
 	PurposeEnrollSecond   Purpose = "enroll.second" // enrol another passkey
 	PurposeKnowledgePromo Purpose = "knowledge.promote"
+	// PurposeCredential adds or removes a sign-in credential while signed in: a
+	// password, a TOTP authenticator, a passkey (digest = CredentialDigest(op, action)).
+	PurposeCredential Purpose = "credential.change"
 )
 
 // EnrollTicket is a one-time enrollment grant minted by `conductor dashboard

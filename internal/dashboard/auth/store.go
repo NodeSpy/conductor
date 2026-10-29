@@ -31,6 +31,21 @@ type Store struct {
 	creds   map[string]*Credential   // by credential ID
 	sess    map[string]*sessionRec   // by session ID
 	tickets map[string]*EnrollTicket // by operator (one live ticket each)
+	secrets map[string]*OperatorSecret // password + TOTP, by operator
+}
+
+// OperatorSecret is an operator's password and TOTP authenticator. The password
+// is an argon2id PHC string; the TOTP secret is the raw shared key (base32), so
+// this file is as sensitive as the authenticator app itself — it stays 0600
+// under a 0700 dir like the rest of the store. TOTPLastStep is the newest time
+// step a code was accepted for; a code for that step or older is a replay.
+type OperatorSecret struct {
+	Operator     string    `json:"operator"`
+	PasswordHash string    `json:"password_hash,omitempty"`
+	PasswordSet  time.Time `json:"password_set,omitempty"`
+	TOTPSecret   string    `json:"totp_secret,omitempty"`
+	TOTPSet      time.Time `json:"totp_set,omitempty"`
+	TOTPLastStep int64     `json:"totp_last_step,omitempty"`
 }
 
 // sessionRec is a Session plus the secret hash that authenticates its cookie.
@@ -43,6 +58,7 @@ type persisted struct {
 	Creds   []*Credential   `json:"credentials"`
 	Sess    []*sessionRec   `json:"sessions"`
 	Tickets []*EnrollTicket `json:"tickets"`
+	Secrets []*OperatorSecret `json:"operator_secrets,omitempty"`
 }
 
 // OpenStore loads (or creates) the auth store rooted at dir. now defaults to
@@ -56,7 +72,7 @@ func OpenStore(dir string, now func() time.Time) (*Store, error) {
 	}
 	// Tighten an inherited-looser mode (MkdirAll won't narrow an existing dir).
 	_ = os.Chmod(dir, 0o700)
-	s := &Store{dir: dir, now: now, creds: map[string]*Credential{}, sess: map[string]*sessionRec{}, tickets: map[string]*EnrollTicket{}}
+	s := &Store{dir: dir, now: now, creds: map[string]*Credential{}, sess: map[string]*sessionRec{}, tickets: map[string]*EnrollTicket{}, secrets: map[string]*OperatorSecret{}}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
@@ -86,6 +102,9 @@ func (s *Store) load() error {
 	for _, t := range p.Tickets {
 		s.tickets[t.Operator] = t
 	}
+	for _, o := range p.Secrets {
+		s.secrets[o.Operator] = o
+	}
 	return nil
 }
 
@@ -101,6 +120,12 @@ func (s *Store) save() error {
 	for _, t := range s.tickets {
 		p.Tickets = append(p.Tickets, t)
 	}
+	for _, o := range s.secrets {
+		if o.PasswordHash != "" || o.TOTPSecret != "" {
+			p.Secrets = append(p.Secrets, o)
+		}
+	}
+	sort.Slice(p.Secrets, func(i, j int) bool { return p.Secrets[i].Operator < p.Secrets[j].Operator })
 	sort.Slice(p.Creds, func(i, j int) bool { return p.Creds[i].Created.Before(p.Creds[j].Created) })
 	b, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
@@ -348,6 +373,51 @@ func (s *Store) DeleteTicket(operator string) error {
 	defer s.mu.Unlock()
 	delete(s.tickets, operator)
 	return s.save()
+}
+
+// --- password + TOTP ---
+
+// OperatorSecret returns a copy of an operator's password/TOTP record.
+func (s *Store) OperatorSecret(operator string) (OperatorSecret, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.secrets[operator]
+	if !ok {
+		return OperatorSecret{Operator: operator}, false
+	}
+	return *o, true
+}
+
+// UpdateOperatorSecret applies fn to an operator's record (created if absent)
+// and saves. fn runs under the store lock.
+func (s *Store) UpdateOperatorSecret(operator string, fn func(*OperatorSecret)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.secrets[operator]
+	if !ok {
+		o = &OperatorSecret{Operator: operator}
+		s.secrets[operator] = o
+	}
+	fn(o)
+	if o.PasswordHash == "" && o.TOTPSecret == "" {
+		delete(s.secrets, operator)
+	}
+	return s.save()
+}
+
+// UseTOTPStep records that a code for step was accepted, atomically refusing a
+// step at or before the last accepted one (replay protection across requests
+// racing on the same code).
+func (s *Store) UseTOTPStep(operator string, step int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.secrets[operator]
+	if !ok || o.TOTPSecret == "" || step <= o.TOTPLastStep {
+		return false
+	}
+	o.TOTPLastStep = step
+	_ = s.save()
+	return true
 }
 
 // --- helpers ---

@@ -50,11 +50,17 @@ func (m *Manager) userFor(operator string) waUser {
 // returns a ceremony id (opaque, carried back on finish) and the publicKey
 // request options as JSON for navigator.credentials.get.
 func (m *Manager) BeginLogin(listener Listener) (ceremonyID string, optionsJSON []byte, err error) {
-	rp, ok := m.rpForListener(listener)
+	return m.BeginLoginFor(listener, "")
+}
+
+// BeginLoginFor starts a passkey sign-in on the RP for (listener, host).
+func (m *Manager) BeginLoginFor(listener Listener, host string) (ceremonyID string, optionsJSON []byte, err error) {
+	rp, ok := m.rpFor(listener, host)
 	if !ok {
-		return "", nil, fmt.Errorf("no RP for listener %q", listener)
+		return "", nil, fmt.Errorf("passkeys are not available on %q (no relying party for this host)", host)
 	}
-	w := m.waFor(rp.ID)
+	key := rpKey(rp.Listener, rp.ID)
+	w := m.waFor(key)
 	assertion, session, err := w.BeginDiscoverableLogin(webauthn.WithUserVerification(protocol.VerificationRequired))
 	if err != nil {
 		return "", nil, err
@@ -65,7 +71,7 @@ func (m *Manager) BeginLogin(listener Listener) (ceremonyID string, optionsJSON 
 	}
 	m.mu.Lock()
 	m.gcCeremonies()
-	m.logins[id] = &ceremony{rpID: rp.ID, session: *session, expires: m.now().Add(ceremonyTTL)}
+	m.logins[id] = &ceremony{rpID: key, session: *session, expires: m.now().Add(ceremonyTTL)}
 	m.mu.Unlock()
 	b, err := json.Marshal(assertion)
 	if err != nil {
@@ -110,19 +116,23 @@ func (m *Manager) FinishLogin(ceremonyID string, responseJSON []byte) (operator,
 // cannot be replayed against the tailnet RP. It returns the stored credential
 // (for its id/operator) and the go-webauthn verdict (for the clone warning and
 // the new sign count).
-func (m *Manager) validateDiscoverable(rpID string, session webauthn.SessionData, responseJSON []byte) (*Credential, *webauthn.Credential, error) {
+func (m *Manager) validateDiscoverable(key string, session webauthn.SessionData, responseJSON []byte) (*Credential, *webauthn.Credential, error) {
 	parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(responseJSON))
 	if err != nil {
 		return nil, nil, fmt.Errorf("bad assertion: %w", err)
 	}
-	stored, found := m.deps.Store.CredentialByRawID(rpID, parsed.RawID)
+	rp, ok := m.rpByID(key)
+	if !ok {
+		return nil, nil, errors.New("unknown relying party")
+	}
+	stored, found := m.deps.Store.CredentialByRawID(rp.ID, parsed.RawID)
 	if !found {
 		return nil, nil, errors.New("no such credential on this listener")
 	}
 	if stored.Locked {
 		return nil, nil, errors.New("this credential is locked")
 	}
-	w := m.waFor(rpID)
+	w := m.waFor(key)
 	handler := func(rawID, userHandle []byte) (webauthn.User, error) {
 		return waUser{operator: stored.Operator, creds: []webauthn.Credential{stored.Cred}}, nil
 	}
