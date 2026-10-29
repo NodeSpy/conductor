@@ -115,7 +115,7 @@ it becomes active once you enter a current code from the app.
   `auth.password_requires_totp: false` lets an operator with no authenticator
   sign in with the password alone; an operator who has one still enters a code.
 - 5 wrong passwords or codes within 15 minutes lock that operator's password
-  and code sign-in (and code confirmations) for 15 minutes, doubling up to 4
+  and code sign-in and confirmations for 15 minutes, doubling up to 4
   hours, whichever client they come from. Passkey and SSH
   sign-in are not affected by that lock. Every method also counts failures per
   client.
