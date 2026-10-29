@@ -4,11 +4,11 @@ Conductor serves a local web dashboard from inside the daemon. It reads the
 daemon's live state — the loaded config, the run store and the event hub — and
 streams run activity over Server-Sent Events. It is off by default.
 
-> **Phase 1 (foundation).** Today the dashboard binds `localhost` only, has no
-> authentication, and ships one screen: Overview/Activity. The tailnet listener,
-> TLS and WebAuthn sign-in, and the remaining screens are built on top of this
-> foundation. See [`docs/design/dashboard.md`](../design/dashboard.md) for the
-> full design.
+With operators configured, every API call needs a signed-in operator: by
+passkey, by signing a challenge with the operator's SSH key, or by password plus
+an authenticator-app code (see [Signing in](#signing-in)). The sign-in methods
+are described in
+[`docs/design/dashboard-auth-methods.md`](../design/dashboard-auth-methods.md).
 
 ## Enable it
 
@@ -17,18 +17,143 @@ Add a `dashboard:` block to your config:
 ```yaml
 dashboard:
   enabled: true          # off by default; a config without the block is unchanged
-  listen: [localhost]    # keyword-only: ONLY `localhost` and `tailscale`
-                         # (no bind addresses, no 0.0.0.0, no expose:)
+  listen: [localhost]    # keywords only: `localhost` and `tailscale`
   port: 7788             # default 7788; must not collide with an inbound listener
 ```
 
 Reload the daemon and open `http://localhost:7788`.
 
-- `listen` takes **keywords only**. Phase 1 serves `localhost`; `tailscale` is
-  accepted by config but not yet bound.
+- `listen` takes **keywords only**: `localhost` (127.0.0.1 and ::1) and
+  `tailscale` (the node's tailnet addresses, HTTPS with the MagicDNS
+  certificate). Other addresses go under `bind:` (below).
 - The port must not collide with a webhook/callable inbound listener — that is a
   config error.
 - The block is validated at load, so a typo is named at startup, not at runtime.
+- Every listener checks the request's `Host` header against the names it
+  serves. The localhost listener answers only to `localhost`, `127.0.0.1` and
+  `[::1]`; a reverse proxy in front of it must pass one of those as `Host`, or
+  use a `bind:` entry with its own hostnames.
+
+### Other listeners: `tailscale.tls` and `bind`
+
+```yaml
+dashboard:
+  tailscale:
+    tls: off               # default on. off: plain HTTP on the tailnet addresses
+  bind:
+    - address: 0.0.0.0:7790
+      hostnames: [conductor.home.arpa]
+      cert_file: /etc/conductor/tls/dashboard.crt
+      key_file: /etc/conductor/tls/dashboard.key
+    - address: 192.168.1.20:7791
+      hostnames: [192.168.1.20]
+      allow_plain_http: true
+```
+
+- `tailscale.tls: off` serves the tailnet listener over plain HTTP. WireGuard
+  still encrypts the hop and the peer is still checked with Tailscale WhoIs,
+  but the browser sees plain HTTP, so passkeys are not offered there.
+- A `bind` entry is an IP and port (not the dashboard port), and `hostnames` is
+  required: requests with any other `Host` are refused.
+- With `cert_file` and `key_file` the entry serves HTTPS, and each non-IP
+  hostname is a passkey relying party.
+- Without a certificate, an entry on a non-loopback address needs
+  `allow_plain_http: true`, and the daemon logs a warning at boot. On plain HTTP
+  the session cookie and everything on the page cross the network unencrypted.
+
+## Signing in
+
+| Connection | Passkey | SSH key | Password + code |
+|---|---|---|---|
+| `localhost` | yes | yes | yes |
+| HTTPS (tailnet, `bind` with a certificate) | yes, on a hostname | yes | yes |
+| Plain HTTP (`tailscale.tls: off`, `bind` without a certificate) | no | yes | yes |
+
+Browsers only allow passkeys in a secure context (HTTPS, or localhost) on a
+hostname. On plain HTTP the sign-in page and the app show an "Unencrypted
+connection" notice, and the session cookie is a plain `HttpOnly`,
+`SameSite=Strict` cookie instead of a `__Host-` `Secure` one. A session is only
+accepted on the kind of connection it was created on.
+
+### First sign-in from another machine: the SSH key
+
+The SSH key in `operators.<name>.ssh_key` needs no setup in the dashboard.
+Pick **SSH key**, enter the operator name, and either:
+
+- **Sign on this computer** — run the command the page shows (it pipes the
+  challenge into `ssh-keygen -Y sign -n conductor-dashboard-login`), or
+  `conductor dashboard sign '<challenge>' --key <key>`, and paste the signature.
+- **Approve from another device** — the page shows an 8-character login code.
+  On any machine with the key and conductor installed, run:
+
+  ```sh
+  conductor dashboard approve-login ABCD-EFGH --url https://box.example:7790 --operator ops
+  ```
+
+  The command fetches the request, refuses it unless the challenge names the
+  same origin as `--url` and the same operator, shows where the request came
+  from, asks for confirmation (`--yes` skips the question), signs it and posts
+  the signature. The waiting page signs in within a couple of seconds.
+
+The challenge is bound to the operator, the page's origin and a nonce, and
+expires after 5 minutes. A login code works once, allows 3 wrong signatures,
+and is only accepted from the listener and host that created it. Pending
+challenges are capped per client.
+
+### Password and authenticator app
+
+Set a password from **Access** (signed in by any method), or from the one-time
+enrolment link (`conductor dashboard enroll`, then choose "A password +
+authenticator"). In Access, **Authenticator app** shows a QR code and the key;
+it becomes active once you enter a current code from the app.
+
+- Passwords are 12 to 256 characters, stored as an argon2id hash.
+- Codes are RFC 6238 TOTP (SHA-1, 30 seconds, 6 digits). A code from one step
+  before or after the current one is accepted, and a code (or any earlier one)
+  is accepted only once.
+- By default a password signs in only together with a code.
+  `auth.password_requires_totp: false` lets an operator with no authenticator
+  sign in with the password alone; an operator who has one still enters a code.
+- 5 wrong passwords or codes within 15 minutes lock that operator's password
+  and code sign-in (and code confirmations) for 15 minutes, doubling up to 4
+  hours, whichever client they come from. Passkey and SSH
+  sign-in are not affected by that lock. Every method also counts failures per
+  client.
+- Lost the authenticator or the password: `conductor dashboard reset
+  --operator <name>` (signed with the SSH key) removes the operator's passkeys,
+  password, authenticator and sessions.
+
+### Confirming sensitive actions (step-up)
+
+Approvals, purchases, widening config changes, secrets, browser take-over and
+credential changes ask you to confirm first. The dialog offers the methods
+`auth.stepup` allows that you have on this connection: passkey, SSH key (paste
+or approve-login, as above, in the `conductor-dashboard-stepup` namespace) or an
+authenticator code. A password confirms only with
+`password_requires_totp: false` and `password` listed in `stepup`. The
+confirmation is single use, bound to the action, and the audit log records the
+method.
+
+Adding or removing a password, authenticator or passkey from Access is itself
+confirmed this way.
+
+### Configuration
+
+```yaml
+dashboard:
+  auth:
+    methods: [passkey, ssh, password]   # default
+    password_requires_totp: true        # default
+    stepup: [passkey, ssh, totp]        # default
+```
+
+A config without `auth:` uses these defaults. Setting
+`password_requires_totp: false`, `allow_plain_http: true` or
+`tailscale.tls: off` from the dashboard's config editor counts as a widening
+change and needs a confirmation.
+
+`conductor dashboard status` lists, per operator, passkeys, sessions, and
+whether a password and an authenticator are set.
 
 ## What it shows
 

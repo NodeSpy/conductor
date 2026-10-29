@@ -393,6 +393,22 @@ func TestStepupByPasswordNeedsKnob(t *testing.T) {
 	})
 }
 
+func TestPasswordStepupLocksOperator(t *testing.T) {
+	h := newHarness(t)
+	_ = h.m.SetPassword("ops", "a long enough password")
+	pol := DefaultPolicy()
+	pol.PasswordRequiresTOTP = false
+	pol.Stepup = append(pol.Stepup, MethodPassword)
+	h.m.deps.Policy = &pol
+	_, sess, _ := h.m.CreateSession("ops", ListenerLocalhost, "", "t", "127.0.0.1", "")
+	for i := 0; i < loginMaxFails; i++ {
+		_, _ = h.m.PasswordStepup(sess, PurposeApprove, "d", "not the password")
+	}
+	if _, err := h.m.PasswordStepup(sess, PurposeApprove, "d", "a long enough password"); err == nil {
+		t.Fatal("after repeated wrong passwords the right one must wait out the operator lock")
+	}
+}
+
 func TestStepupListHonoured(t *testing.T) {
 	pol := DefaultPolicy()
 	pol.Stepup = []Method{MethodSSH}

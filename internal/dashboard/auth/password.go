@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
@@ -195,9 +196,15 @@ func (m *Manager) PasswordStepup(sess Session, purpose Purpose, digest, pw strin
 	if !m.policy().StepupAllowed(MethodPassword) {
 		return "", errors.New("password step-up is not enabled (dashboard.auth.stepup)")
 	}
+	opKey := operatorLockKey(sess.Operator)
+	if locked, until := m.lock.Locked(opKey); locked {
+		return "", fmt.Errorf("too many wrong passwords — try again after %s", until.UTC().Format(time.RFC3339))
+	}
 	rec, _ := m.deps.Store.OperatorSecret(sess.Operator)
 	if !m.verifyPassword(rec.PasswordHash, pw) {
+		m.lock.Fail(opKey)
 		return "", errors.New("wrong password")
 	}
+	m.lock.Succeed(opKey)
 	return m.mintStepup(sess, purpose, digest, StepupEvidence{Method: MethodPassword})
 }
