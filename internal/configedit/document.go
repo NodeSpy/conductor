@@ -158,7 +158,7 @@ func (d *Document) SetScalar(path []string, value any) error {
 
 	oldSrc, oldRoot := d.src, d.root
 	switch {
-	case loc.found() && !structured && loc.val.Kind == yaml.ScalarNode:
+	case loc.found() && !structured && loc.val.Kind == yaml.ScalarNode && !isBlockScalar(loc.val):
 		err = d.spliceScalar(loc.val, rendered)
 	case loc.found():
 		err = d.replaceEntry(loc, path, value)
@@ -477,7 +477,7 @@ func childIndentOf(m *yaml.Node) int {
 func mappingBlockEnd(m *yaml.Node, lines []string) int {
 	last := 0
 	for _, c := range m.Content {
-		if e := nodeMaxLine(c); e > last {
+		if e := nodeMaxLine(c, lines); e > last {
 			last = e
 		}
 	}
@@ -498,7 +498,7 @@ func blockEndLine(val, key *yaml.Node, lines []string) int {
 	if key != nil {
 		floor = key.Line
 	}
-	last := nodeMaxLine(val)
+	last := nodeMaxLine(val, lines)
 	if floor > last {
 		last = floor
 	}
@@ -507,21 +507,64 @@ func blockEndLine(val, key *yaml.Node, lines []string) int {
 
 // nodeMaxLine returns the greatest 1-based line touched by a node (so, as a
 // 0-based "one past the end" it is this value).
-func nodeMaxLine(n *yaml.Node) int {
+func nodeMaxLine(n *yaml.Node, lines []string) int {
 	if n == nil {
 		return 0
 	}
 	m := n.Line
 	for _, c := range n.Content {
-		if e := nodeMaxLine(c); e > m {
+		if e := nodeMaxLine(c, lines); e > m {
 			m = e
 		}
 	}
-	// account for a block scalar's own extra lines
-	if n.Kind == yaml.ScalarNode && strings.Contains(n.Value, "\n") {
-		m += strings.Count(strings.TrimRight(n.Value, "\n"), "\n")
+	if isBlockScalar(n) {
+		if e := blockScalarEnd(n, lines); e > m {
+			m = e
+		}
 	}
 	return m
+}
+
+func isBlockScalar(n *yaml.Node) bool {
+	return n.Kind == yaml.ScalarNode && n.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0
+}
+
+// blockScalarEnd returns the 1-based last source line of a literal (|) or
+// folded (>) scalar. It reads the text, not the decoded value: folding and
+// chomping mean the value's line count doesn't match the source. The content is
+// every following line indented past the indicator's line; trailing blank lines
+// belong to it only with keep chomping (|+, >+).
+func blockScalarEnd(n *yaml.Node, lines []string) int {
+	i := n.Line - 1
+	if i < 0 || i >= len(lines) {
+		return n.Line
+	}
+	head := stripEOL(lines[i])
+	base := indentOf(head)
+	keep := false
+	if c := n.Column - 1; c >= 0 && c < len(head) {
+		indicator := strings.Fields(head[c:])
+		keep = len(indicator) > 0 && strings.Contains(indicator[0], "+")
+	}
+	last := n.Line
+	for j := i + 1; j < len(lines); j++ {
+		line := stripEOL(lines[j])
+		if strings.TrimSpace(line) == "" {
+			if keep {
+				last = j + 1
+			}
+			continue
+		}
+		if indentOf(line) <= base {
+			break
+		}
+		last = j + 1
+	}
+	return last
+}
+
+func indentOf(s string) int {
+	return len(s) - len(strings.TrimLeft(s, " "))
 }
 
 func pathOrRoot(path []string) string {
