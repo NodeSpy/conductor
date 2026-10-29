@@ -177,6 +177,11 @@ func TestAuthEndpointsRefuseCrossSite(t *testing.T) {
 	if rr := call(h.m, "POST", "/api/v1/auth/ssh/begin", "localhost:7788", "127.0.0.1:50003", onLocalhost, map[string]string{"operator": "ops"}, own); rr.Code != http.StatusOK {
 		t.Fatalf("a same-origin request was refused: %d %s", rr.Code, rr.Body)
 	}
+	// A default port is the same origin whichever side spells it out.
+	if rr := call(h.m, "POST", "/api/v1/auth/ssh/begin", "box.example:443", "203.0.113.9:1", onHTTPS, map[string]string{"operator": "ops"},
+		map[string]string{"Origin": "https://box.example", "Sec-Fetch-Site": "same-origin"}); rr.Code == http.StatusForbidden {
+		t.Fatalf("Host with :443 against an Origin without it: %d %s", rr.Code, rr.Body)
+	}
 	// A DELETE without a JSON Content-Type is refused too.
 	r := httptest.NewRequest("DELETE", "/api/v1/sessions", nil)
 	r.Host, r.RemoteAddr = "localhost:7788", "127.0.0.1:1"

@@ -38,6 +38,8 @@ func TestClassifyWholeCandidate(t *testing.T) {
 		{"tailscale tls off", guardedSample + "  tailscale: {tls: off}\n", "dashboard.tailscale.tls", true},
 		{"listen widened", strings.Replace(guardedSample, "[localhost]", "[localhost, tailscale]", 1), "", true},
 		{"session", guardedSample + "  session: {idle: 10m}\n", "", true},
+		{"add an import", "imports: [more.yaml]\n" + guardedSample, "", true},
+		{"unparsable", guardedSample + "  : [\n", "", true},
 		{"sandbox off via its parent", "sandbox: {agents: off}\n" + guardedSample, "sandbox.agents", false},
 		{"a bot's description", strings.Replace(guardedSample, "description: one", "description: two", 1), "", false},
 	} {
@@ -149,5 +151,34 @@ func TestStepupComparesEffectiveConfig(t *testing.T) {
 	}
 	if !rev.Stepup {
 		t.Fatal("a change to the loaded operators must need a step-up")
+	}
+}
+
+// When either side can't be loaded for the comparison, the answer errs towards
+// asking: the edit needs a step-up.
+func TestStepupWhenTheLoadedConfigCantBeCompared(t *testing.T) {
+	path := writeCfg(t, guardedSample+"settings:\n  source: a\n")
+	p := New(Options{
+		Path: path,
+		Guarded: func(file string) (any, error) {
+			b, err := os.ReadFile(file)
+			if err != nil {
+				return nil, err
+			}
+			if strings.Contains(string(b), "source: b") {
+				return nil, errors.New("does not load")
+			}
+			return "same", nil
+		},
+	})
+	if _, err := p.Stage(Change{Path: []string{"settings", "source"}, Value: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	rev, err := p.Review()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rev.Stepup {
+		t.Fatal("a candidate that can't be loaded for the comparison must need a step-up")
 	}
 }
