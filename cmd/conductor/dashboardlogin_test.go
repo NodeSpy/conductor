@@ -165,7 +165,7 @@ func TestApproveLoginShowsTheRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	for _, want := range []string{"Sign-in request for operator ops", "from:", "127.0.0.1", "device:", "Chrome", "started:", "ago)", "If someone sent you this code"} {
+	for _, want := range []string{"Sign-in request for operator ops", "from:", "127.0.0.1", "device:", "Chrome", "started:", "If someone sent you this code"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("approve-login output lacks %q:\n%s", want, out)
 		}
@@ -211,6 +211,24 @@ func TestApproveLoginShowsTheStepupAction(t *testing.T) {
 	for _, want := range []string{"Confirmation request for operator ops", "purpose:", "approve", "action:", "rm -rf /srv/data", "digest:", digest[:12]} {
 		if !strings.Contains(out, want) {
 			t.Errorf("approve-login output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestWhenAgo(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, c := range []struct {
+		at   time.Time
+		want string
+	}{
+		{now, "(now)"},
+		{now.Add(-45 * time.Second), "(45s ago)"},
+		{now.Add(-200 * time.Second), "(3m 20s ago)"},
+		{now.Add(5 * time.Minute), "(in 5m)"},
+		{now.Add(-125 * time.Minute), "(2h 5m ago)"},
+	} {
+		if got := whenAgo(c.at.Format(time.RFC3339), now); !strings.HasSuffix(got, c.want) {
+			t.Errorf("whenAgo(%v) = %q, want suffix %q", c.at, got, c.want)
 		}
 	}
 }
