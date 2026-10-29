@@ -401,6 +401,10 @@
   overflow-wrap: normal;
   overflow-x: auto;
 }
+/* WebKit also breaks after a hyphen ("--" / "url"); each word stays whole. */
+.copy-text.words .w {
+  white-space: nowrap;
+}
 .login-code {
   font-family: var(--type-mono, monospace);
   font-size: 1.8rem;
@@ -492,6 +496,9 @@
 .dialog-foot .btn {
   min-height: 44px;
   min-width: 88px;
+  box-sizing: border-box;
+  justify-content: center;
+  font-size: var(--type-body-s-size, 0.9rem);
 }
 /* What the step-up confirms, readable in full inside the sheet. */
 .stepup-what {

@@ -42,7 +42,14 @@ export function CopyBlock(props: { text: string; display?: string; label?: strin
     <div class="copy-block">
       {label ? <span class="gate-group-label">{label}</span> : null}
       <pre class={'gate-code copy-text' + (props.words ? ' words' : '')} data-testid={testid}>
-        {props.display ?? text}
+        {props.words
+          ? (props.display ?? text).split(' ').map((w, i) => (
+              <>
+                {i ? ' ' : ''}
+                <span class="w">{w}</span>
+              </>
+            ))
+          : (props.display ?? text)}
       </pre>
       <button
         class="btn sm"

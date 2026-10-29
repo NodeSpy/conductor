@@ -254,7 +254,7 @@ function Dialog({ req }: { req: StepupRequest }): JSX.Element {
           </p>
         ) : null}
         <div class="dialog-foot">
-          <button class="btn ghost" type="button" onClick={cancel} data-testid="stepup-cancel">
+          <button class="btn" type="button" onClick={cancel} data-testid="stepup-cancel">
             Cancel
           </button>
         </div>

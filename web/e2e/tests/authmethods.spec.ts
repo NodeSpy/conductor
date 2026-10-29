@@ -292,6 +292,9 @@ test('sign in from another device: approve the login code with the CLI', async (
     const code = ((await p.getByTestId('login-code').textContent()) ?? '').trim()
     expect(code).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/)
     await expect(p.getByTestId('ssh-approve-command')).toContainText(`approve-login ${code} --url ${remote} --operator ops`)
+    // The command wraps only between words: no word (not even "--url") splits.
+    const rects = await p.getByTestId('ssh-approve-command').locator('.w').evaluateAll((els) => els.map((e) => e.getClientRects().length))
+    expect(Math.max(...rects), 'a word of the command split across lines').toBe(1)
 
     // The CLI fetches the pending challenge, checks it names this origin and
     // operator, signs it with the key and approves; the waiting page polls in.
