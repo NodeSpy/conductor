@@ -37,7 +37,7 @@ test.beforeAll(async ({ browser, browserName }) => {
 
   const { secret, code } = enroll(rt)
   await page.goto(`${rt.baseURL}/enroll#t=${secret}`)
-  await expect(page.getByRole('heading', { name: 'Enrol a passkey' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Enrol', exact: true })).toBeVisible()
   await page.getByTestId('enroll-code').fill(code)
   await page.getByTestId('enroll-name').fill('e2e laptop')
   await page.getByRole('button', { name: 'Localhost only', exact: true }).click()
@@ -87,7 +87,8 @@ test('approving a purchase needs a passkey step-up and records the decision', as
   await expect(page.getByTestId('approve')).toBeVisible()
 
   await page.getByTestId('approve').click()
-  // The virtual authenticator satisfies the step-up automatically; the decision
-  // lands and the screen confirms it.
+  // The step-up dialog offers the passkey first; the virtual authenticator
+  // satisfies it automatically, the decision lands and the screen confirms it.
+  await page.getByTestId('stepup-passkey').click()
   await expect(page.getByTestId('purchase-done')).toContainText('Approved', { timeout: 15_000 })
 })

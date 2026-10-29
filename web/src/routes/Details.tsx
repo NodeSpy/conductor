@@ -274,7 +274,7 @@ function NewProfile(): JSX.Element {
         </label>
         <div class="row-actions">
           <button class="btn primary" type="button" disabled={busy || !name} onClick={() => void save()}>
-            {busy ? 'Touch your passkey…' : 'Save with passkey'}
+            {busy ? 'Confirming…' : 'Save…'}
           </button>
         </div>
       </section>

@@ -5,7 +5,7 @@
 // port, then mints an enrolment ticket via the CLI (SSH-signed with our key).
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, writeFileSync, openSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, networkInterfaces } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import { createHash } from 'node:crypto'
@@ -27,6 +27,25 @@ export interface AuthRuntime {
   pid: number
   proposalBot: string
   proposalID: string
+  remoteURL?: string // http://<non-loopback ip>:<port> — the plain-HTTP bind listener, when asked for
+}
+
+// Options for a daemon that also listens on a non-loopback address.
+export interface AuthDaemonOptions {
+  // A dashboard.bind listener on this port over plain HTTP (allow_plain_http),
+  // at the first non-loopback IPv4 address of the machine (the container's).
+  bindPort?: number
+}
+
+// externalIPv4 is the first non-internal IPv4 address — inside the e2e container
+// its bridge address, which a browser treats as a non-secure, non-localhost origin.
+export function externalIPv4(): string {
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family === 'IPv4' && !a.internal) return a.address
+    }
+  }
+  throw new Error('no non-loopback IPv4 address to bind the plain-HTTP listener to')
 }
 
 function hermeticEnv(home: string): NodeJS.ProcessEnv {
@@ -64,7 +83,7 @@ async function waitForStatus(baseURL: string, timeoutMs = 30_000): Promise<void>
   throw new Error(`auth daemon did not come up at ${baseURL} within ${timeoutMs}ms (last: ${last})`)
 }
 
-export async function startAuthDaemon(port: number): Promise<AuthRuntime> {
+export async function startAuthDaemon(port: number, opts: AuthDaemonOptions = {}): Promise<AuthRuntime> {
   const bin = resolveBin()
   const root = mkdtempSync(path.join(tmpdir(), 'dash-auth-e2e-'))
   const stateDir = path.join(root, 'state')
@@ -78,6 +97,18 @@ export async function startAuthDaemon(port: number): Promise<AuthRuntime> {
   execFileSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-C', 'ops@e2e', '-f', keyFile], { env, stdio: 'ignore' })
   const pub = execFileSync('cat', [keyFile + '.pub'], { env }).toString().trim()
 
+  const ip = opts.bindPort ? externalIPv4() : ''
+  const dashboard = opts.bindPort
+    ? [
+        `dashboard:`,
+        `  enabled: true`,
+        `  listen: [localhost]`,
+        `  port: ${port}`,
+        `  bind:`,
+        `    - { address: "${ip}:${opts.bindPort}", hostnames: ["${ip}"], allow_plain_http: true }`,
+      ]
+    : [`dashboard: { enabled: true, listen: [localhost], port: ${port} }`]
+
   const now = new Date()
   const expires = new Date(now.getTime() + 60 * 60 * 1000)
   writeFileSync(
@@ -86,7 +117,7 @@ export async function startAuthDaemon(port: number): Promise<AuthRuntime> {
       `store: { state_file: ${path.join(stateDir, 'state.json')} }`,
       `operators:`,
       `  ops: { ssh_key: "${pub}" }`,
-      `dashboard: { enabled: true, listen: [localhost], port: ${port} }`,
+      ...dashboard,
       `runtimes:`,
       `  claude-cli: { use: cli, tool: claude-code }`,
       `connectors:`,
@@ -157,8 +188,10 @@ export async function startAuthDaemon(port: number): Promise<AuthRuntime> {
   child.unref()
   if (!child.pid) throw new Error('failed to spawn auth daemon')
   await waitForStatus(baseURL)
+  const remoteURL = opts.bindPort ? `http://${ip}:${opts.bindPort}` : undefined
+  if (remoteURL) await waitForStatus(remoteURL)
 
-  return { bin, config, keyFile, port, baseURL, pid: child.pid, proposalBot: 'sre', proposalID: 'p1' }
+  return { bin, config, keyFile, port, baseURL, pid: child.pid, proposalBot: 'sre', proposalID: 'p1', remoteURL }
 }
 
 // enroll mints a one-time ticket via the CLI (SSH-signed with our key) and returns

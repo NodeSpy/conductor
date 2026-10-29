@@ -211,7 +211,7 @@ export function AddLogin(): JSX.Element {
           <div class="row-actions">
             <button class="btn ghost" type="button" onClick={() => setStep(method === 'takeover' ? 'method' : 'creds')}>Back</button>
             <button class="btn primary" type="button" disabled={busy || !name || !origin} onClick={() => void save()}>
-              {busy ? 'Touch your passkey…' : 'Review & apply'}
+              {busy ? 'Confirming…' : 'Review & apply'}
             </button>
           </div>
         </section>

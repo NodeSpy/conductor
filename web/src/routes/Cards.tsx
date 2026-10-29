@@ -321,7 +321,7 @@ function NewCard(): JSX.Element {
           <input value={bind} placeholder="bot:shopper, team:platform" onInput={(e) => setBind((e.target as HTMLInputElement).value)} /></label>
         <div class="row-actions">
           <button class="btn primary" type="button" disabled={busy || !name} onClick={() => void save()}>
-            {busy ? 'Touch your passkey…' : 'Save with passkey'}
+            {busy ? 'Confirming…' : 'Save…'}
           </button>
         </div>
       </section>

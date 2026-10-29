@@ -115,7 +115,7 @@ export function BrowserSessionView({ id }: { id: string }): JSX.Element {
             </button>
           ) : (
             <button class="btn primary" type="button" disabled={busy} data-testid="takeover" onClick={() => void doTakeover()}>
-              {busy ? 'Touch your passkey…' : 'Take over'}
+              {busy ? 'Confirming…' : 'Take over'}
             </button>
           )}
         </div>

@@ -273,3 +273,216 @@
   color: var(--color-text-secondary);
   margin-bottom: 4px;
 }
+
+/* --- sign-in methods, step-up dialog, SSH challenge (dashboard-auth-methods) --- */
+
+/* The plain-HTTP notice: on the gate and above every signed-in screen. */
+.plain-http {
+  background: var(--color-status-warning-bg);
+  border: var(--border-width) solid var(--color-status-warning-border);
+  color: var(--color-status-warning-fg);
+  border-radius: var(--radius-card);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--type-caption-size);
+  line-height: 1.5;
+  margin: 0 0 var(--space-4);
+}
+
+/* Method chips: the other ways to sign in / confirm, one tap each. */
+.method-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+}
+.chip {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  padding: 6px 12px;
+  min-height: 32px;
+  border: var(--border-width) solid var(--color-border-control);
+  border-radius: 999px;
+  color: var(--color-text-secondary);
+  font-size: var(--type-caption-size);
+  background: var(--color-bg-surface);
+}
+.chip:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+}
+.chip.on {
+  border-color: var(--color-accent-default);
+  color: var(--color-text-accent);
+  background: var(--color-accent-subtle);
+}
+.chip:focus-visible,
+.seg-choice button:focus-visible {
+  outline: 2px solid var(--color-accent-default);
+  outline-offset: 2px;
+}
+.other-ways {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+/* Text areas and selects inside gate fields match the inputs. */
+.gate-field textarea {
+  all: unset;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  padding: 8px var(--space-3);
+  border: var(--border-width) solid var(--color-border-control);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-field);
+  color: var(--color-text-primary);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: pre;
+  overflow: auto;
+  min-height: 7rem;
+}
+.gate-field textarea:focus {
+  border-color: var(--color-border-strong);
+}
+
+/* SSH challenge panel. Long single-line commands wrap anywhere, never overflow. */
+.ssh-panel .seg-choice {
+  margin-bottom: var(--space-3);
+}
+.ssh-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.ssh-step .acc-note {
+  margin: 0;
+}
+.copy-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+.copy-block .gate-code {
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.copy-text {
+  user-select: all;
+  -webkit-user-select: all;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  white-space: pre-wrap;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.login-code {
+  font-family: var(--type-mono, monospace);
+  font-size: 1.8rem;
+  letter-spacing: 0.12em;
+  text-align: center;
+  padding: var(--space-3);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-sunken);
+  color: var(--color-text-primary);
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+/* TOTP enrolment: QR beside the key, stacked on narrow screens. The QR keeps a
+   white quiet zone in dark mode so a camera can read it. */
+.totp-setup {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin: 0 0 var(--space-3);
+  width: 100%;
+}
+.totp-qr {
+  background: #fff;
+  padding: 8px;
+  border-radius: var(--radius-control);
+  width: 180px;
+  height: 180px;
+  image-rendering: pixelated;
+  flex: none;
+}
+.totp-side {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.acc-row.acc-form {
+  display: block;
+}
+.acc-row .acc-act {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.row-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* The step-up dialog: a centred card; a bottom sheet on a phone. */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 300);
+  background: rgb(0 0 0 / 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+.dialog {
+  width: min(520px, 100%);
+  max-height: calc(100dvh - 2 * var(--space-4));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.3);
+  padding: var(--space-5);
+}
+.dialog h2 {
+  font-family: var(--type-serif, Fraunces, Georgia, serif);
+  font-size: 1.35rem;
+  margin: 0 0 var(--space-1, 4px);
+}
+.dialog .gate-sub {
+  margin-bottom: var(--space-3);
+}
+.dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-3);
+}
+@media (max-width: 560px) {
+  .dialog-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .dialog {
+    width: 100%;
+    max-height: 92dvh;
+    border-radius: var(--radius-card) var(--radius-card) 0 0;
+    padding: var(--space-4) var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  }
+  .gate-card {
+    padding: var(--space-4);
+  }
+}

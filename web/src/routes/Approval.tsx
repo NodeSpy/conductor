@@ -1,7 +1,8 @@
 // The approval screen (design §6.6): a proposal's canonical payload and digest,
 // rendered from the daemon (never agent text), with a colourised Terraform plan
-// when it's a plan. Approve or Deny steps up over the per-decision digest with a
-// WebAuthn assertion; the decision itself is a no-tabs choice in the view.
+// when it's a plan. Approve or Deny steps up over the per-decision digest (a
+// passkey, SSH key or authenticator code); the decision itself is a no-tabs
+// choice in the view.
 import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { approvalView, decideProposal, type ApprovalView } from '../api/auth'
@@ -26,7 +27,8 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
       await decideProposal(bot, id, decision)
       setDone(decision)
     } catch (e) {
-      setErr(String(e))
+      const t = e instanceof Error ? e.message : String(e)
+      if (!/cancelled/.test(t)) setErr(t)
     } finally {
       setBusy('')
     }
@@ -51,7 +53,7 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
     <div class="col approval-screen" data-proposal={id}>
       <a class="back" href={`#/bots/${bot}/approvals`}>← {bot}'s approvals</a>
       <h1 class="screen-title serif">Approve this?</h1>
-      <p class="muted">Review exactly what {bot} would do. Your decision is signed with your passkey and bound to this plan, so it can never be replayed onto a different action.</p>
+      <p class="muted">Review exactly what {bot} would do. You confirm your decision (passkey, SSH key or authenticator code), and the confirmation is bound to this plan, so it can never be replayed onto a different action.</p>
 
       {err ? <div class="banner err" role="alert">{err}</div> : null}
 
@@ -87,10 +89,10 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
         <p class="muted">May be decided by: {view.operators.join(', ') || 'a configured operator'}.</p>
         <div class="row-actions approval-actions">
           <button class="btn primary" type="button" disabled={!!busy} data-testid="approve" onClick={() => void decide('approve')}>
-            {busy === 'approve' ? 'Touch your passkey…' : 'Approve with passkey'}
+            {busy === 'approve' ? 'Confirming…' : 'Approve…'}
           </button>
           <button class="btn ghost danger" type="button" disabled={!!busy} data-testid="deny" onClick={() => void decide('deny')}>
-            {busy === 'deny' ? 'Touch your passkey…' : 'Deny with passkey'}
+            {busy === 'deny' ? 'Confirming…' : 'Deny…'}
           </button>
         </div>
       </section>

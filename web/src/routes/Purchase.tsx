@@ -80,7 +80,7 @@ export function Purchase({ id }: { id: string }): JSX.Element {
       <div class="col browsers">
         <a class="back" href="#/browser/cards">← Payment cards</a>
         <div class="banner ok" role="status" data-testid="purchase-done">
-          {done === 'approve' ? 'Approved' : 'Denied'} — the decision is signed with your passkey and recorded.
+          {done === 'approve' ? 'Approved' : 'Denied'} — the decision is confirmed and recorded.
         </div>
       </div>
     )
@@ -146,11 +146,11 @@ export function Purchase({ id }: { id: string }): JSX.Element {
           ) : null}
           <div class="row-actions">
             <button class="btn lg primary" type="button" disabled={!!busy} data-testid="approve" onClick={() => void decide('approve')}>
-              {busy === 'approve' ? 'Touch your passkey…' : 'Approve with passkey'}
+              {busy === 'approve' ? 'Confirming…' : 'Approve…'}
             </button>
             {denying ? (
               <button class="btn lg ghost danger" type="button" disabled={!!busy} data-testid="deny-confirm" onClick={() => void decide('deny')}>
-                {busy === 'deny' ? 'Touch your passkey…' : 'Deny with passkey'}
+                {busy === 'deny' ? 'Confirming…' : 'Deny…'}
               </button>
             ) : (
               <button class="btn lg ghost" type="button" onClick={() => setDenying(true)} data-testid="deny">Deny…</button>

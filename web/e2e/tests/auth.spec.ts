@@ -37,7 +37,7 @@ test.beforeAll(async ({ browser, browserName }) => {
   // Enrol a passkey via the CLI's one-time localhost link, then sign in.
   const { secret, code } = enroll(rt)
   await page.goto(`${rt.baseURL}/enroll#t=${secret}`)
-  await expect(page.getByRole('heading', { name: 'Enrol a passkey' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Enrol', exact: true })).toBeVisible()
   await page.getByTestId('enroll-code').fill(code)
   await page.getByTestId('enroll-name').fill('e2e laptop')
   await page.getByRole('button', { name: 'Localhost only', exact: true }).click()

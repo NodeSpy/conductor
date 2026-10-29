@@ -27,6 +27,8 @@ import { Browsers } from './routes/Browsers'
 import { load, startLive } from './state'
 import { route, screen, seg } from './router'
 import { refreshState, authState } from './api/auth'
+import { StepupDialog } from './components/StepupDialog'
+import { PlainHTTPNotice } from './components/AuthBits'
 
 export function App(): JSX.Element {
   // ready gates the first paint on knowing whether sign-in is required, so the
@@ -52,7 +54,9 @@ export function App(): JSX.Element {
 
   return (
     <Shell>
+      {st.transport === 'http' ? <PlainHTTPNotice /> : null}
       <Authed />
+      <StepupDialog />
     </Shell>
   )
 }

@@ -23,6 +23,13 @@ export function webauthnSupported(): boolean {
   return typeof window !== 'undefined' && !!window.PublicKeyCredential && !!navigator.credentials
 }
 
+// passkeysUsable reports whether a passkey ceremony can run on this page: the
+// browser has WebAuthn AND the page is a secure context (HTTPS or localhost) —
+// browsers refuse WebAuthn on plain HTTP elsewhere.
+export function passkeysUsable(): boolean {
+  return typeof window !== 'undefined' && window.isSecureContext === true && webauthnSupported()
+}
+
 // PkOptions is the server's PublicKey options (base64url strings). We keep it
 // loose because the shape is the WebAuthn spec's and we only rewrite a few fields.
 export interface PkOptions {
