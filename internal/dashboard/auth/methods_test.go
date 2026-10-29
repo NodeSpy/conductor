@@ -630,7 +630,7 @@ func TestCookiePerTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ck.Name != PlainSessionCookie || ck.Secure || !ck.HttpOnly || ck.SameSite != http.SameSiteStrictMode {
+	if !strings.HasPrefix(ck.Name, PlainSessionCookie+"_") || ck.Secure || !ck.HttpOnly || ck.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("plain-HTTP cookie: %+v", ck)
 	}
 	r := req("GET", "/x", "10.0.0.5:7791", onPlainHTTP, nil)
@@ -641,17 +641,24 @@ func TestCookiePerTransport(t *testing.T) {
 
 	secure := req("POST", "/x", "box.example:7790", onHTTPS, nil)
 	ck2, _, _ := h.m.CreateSessionFor(secure, "ops", MethodPassword, "")
-	if ck2.Name != SessionCookie || !ck2.Secure || !ck2.HttpOnly {
+	if !strings.HasPrefix(ck2.Name, SessionCookie+"_") || !ck2.Secure || !ck2.HttpOnly {
 		t.Fatalf("HTTPS cookie: %+v", ck2)
 	}
 	local, _, _ := h.m.CreateSessionFor(localReq(), "ops", MethodSSH, "")
 	if local.Name != SessionCookie || !local.Secure {
 		t.Fatalf("localhost cookie: %+v", local)
 	}
+	// Cookies ignore the port: a bind listener answering on localhost must not
+	// overwrite the localhost listener's cookie, nor another bind's.
+	loopBind := ConnInfo{Listener: Listener("bind:127.0.0.1:7792"), Transport: TransportLocalhost}
+	lb, _, _ := h.m.CreateSessionFor(req("POST", "/x", "localhost:7792", loopBind, nil), "ops", MethodSSH, "")
+	if lb.Name == local.Name || lb.Name == ck2.Name {
+		t.Fatalf("a bind listener's cookie shares a name: %q (localhost %q, other bind %q)", lb.Name, local.Name, ck2.Name)
+	}
 
 	// A session cookie is only read back on its own transport.
 	cross := req("GET", "/x", "box.example:7790", onHTTPS, nil)
-	cross.AddCookie(&http.Cookie{Name: SessionCookie, Value: ck.Value})
+	cross.AddCookie(&http.Cookie{Name: ck2.Name, Value: ck.Value})
 	if _, err := h.m.ValidateCookie(cross, onHTTPS.Listener, ""); err == nil {
 		t.Fatal("a plain-HTTP session must not validate on another transport")
 	}

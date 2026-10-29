@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"sync"
 	"time"
 )
@@ -31,7 +33,8 @@ type Pipeline struct {
 
 	path     string             // the live config file
 	validate func(string) error // run the daemon's load+validate pass on a path
-	reload   func() error       // signal the daemon to re-read its config (SIGHUP)
+	guarded  func(string) (any, error)
+	reload   func() error // signal the daemon to re-read its config (SIGHUP)
 	now      func() time.Time
 
 	staged []Change
@@ -54,12 +57,18 @@ type Options struct {
 	Validate func(string) error
 	Reload   func() error
 	Now      func() time.Time // injectable clock for tests
+	// Guarded loads the config at path and returns the part that decides who
+	// can sign in to the dashboard and how (operators, dashboard auth,
+	// listeners, session) in comparable form. Edits are compared on it as well
+	// as on the text, so a change that reaches those settings through imports or
+	// packs still needs a step-up. Optional.
+	Guarded func(path string) (any, error)
 }
 
 // New builds a Pipeline. Validate and Reload may be nil (validate then accepts
 // anything and reload is a no-op) — the dashboard always wires both.
 func New(opt Options) *Pipeline {
-	p := &Pipeline{path: opt.Path, validate: opt.Validate, reload: opt.Reload, now: opt.Now}
+	p := &Pipeline{path: opt.Path, validate: opt.Validate, reload: opt.Reload, now: opt.Now, guarded: opt.Guarded}
 	if p.validate == nil {
 		p.validate = func(string) error { return nil }
 	}
@@ -170,6 +179,12 @@ type Review struct {
 	Widening []Effect `json:"widening"` // the subset that loosens a guardrail
 	SHA      string   `json:"sha"`      // sha256 of the candidate (the apply confirm binds to this)
 	Token    string   `json:"token"`    // the step-up confirm token apply must echo
+	// Guarded names the changed parts that decide who can sign in to the
+	// dashboard and how (operators, dashboard auth/listeners/session).
+	Guarded []Effect `json:"guarded"`
+	// Stepup is whether applying needs a step-up: something widens, or
+	// something guarded changes.
+	Stepup bool `json:"stepup"`
 }
 
 // Effect describes one change in words, with its YAML path.
@@ -189,18 +204,52 @@ func (p *Pipeline) Review() (Review, error) {
 		return Review{}, err
 	}
 	diff := ComputeDiff(before, after)
+	widening, guarded := p.classifyLocked(before, after)
 	effects := p.effectsLocked(before)
-	var widening []Effect
-	for _, e := range effects {
-		if e.Widens {
-			widening = append(widening, e)
+	for i := range effects {
+		// A staged change widens when any loosened leaf sits under its path.
+		for _, w := range widening {
+			if w.Path == effects[i].Path || strings.HasPrefix(w.Path, effects[i].Path+".") {
+				effects[i].Widens = true
+			}
 		}
 	}
 	sum := sha256.Sum256(after)
 	sha := hex.EncodeToString(sum[:])
 	tok := randID()
 	p.tokens.Store(tok, sha)
-	return Review{Diff: diff, Effects: effects, Widening: widening, SHA: sha[:12], Token: tok}, nil
+	return Review{Diff: diff, Effects: effects, Widening: widening, Guarded: guarded,
+		Stepup: len(widening) > 0 || len(guarded) > 0, SHA: sha[:12], Token: tok}, nil
+}
+
+// classifyLocked is classify over the text, plus — with a Guarded loader — a
+// comparison of what the loaded config ends up with. A config that can't be
+// loaded for the comparison counts as changed, so the answer errs towards
+// asking for a step-up.
+func (p *Pipeline) classifyLocked(before, after []byte) (widening, guarded []Effect) {
+	widening, guarded = classify(before, after)
+	if p.guarded == nil || len(guarded) > 0 {
+		return widening, guarded
+	}
+	was, errWas := p.guarded(p.path)
+	now, errNow := p.loadCandidate(after)
+	if errWas != nil || errNow != nil || !reflect.DeepEqual(was, now) {
+		guarded = append(guarded, Effect{Path: "(loaded config)",
+			Text: "changes the operators or the dashboard's sign-in settings the loaded config ends up with"})
+	}
+	return widening, guarded
+}
+
+// loadCandidate runs the Guarded loader on b, written beside the config so
+// relative imports resolve as they will after apply.
+func (p *Pipeline) loadCandidate(b []byte) (any, error) {
+	var out any
+	err := p.withCandidateFile(b, func(name string) error {
+		var err error
+		out, err = p.guarded(name)
+		return err
+	})
+	return out, err
 }
 
 // effectsLocked describes every staged change in words, flagging wideners.
@@ -216,24 +265,6 @@ func (p *Pipeline) effectsLocked(before []byte) []Effect {
 		out = append(out, Effect{Path: pathKey(c.Path), Text: text, Widens: widens})
 	}
 	return out
-}
-
-// Widens reports whether the staged set loosens any least-privilege guardrail
-// (the same classification Review surfaces as its widening list). The dashboard
-// uses it to decide when an apply needs a WebAuthn step-up (auth.PurposeConfigApply).
-func (p *Pipeline) Widens() (bool, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	before, _, err := p.candidateLocked()
-	if err != nil {
-		return false, err
-	}
-	for _, e := range p.effectsLocked(before) {
-		if e.Widens {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // Validate renders the candidate and runs the daemon's load+semantic pass over
@@ -254,6 +285,14 @@ func (p *Pipeline) Validate() error {
 // token must be the one minted by the matching Review and must still bind to the
 // candidate being applied.
 func (p *Pipeline) Apply(token string) (Applied, error) {
+	return p.ApplyWith(token, nil)
+}
+
+// ApplyWith is Apply with a gate: after the token is matched to the candidate,
+// and before anything is written, gate is told whether this exact candidate
+// needs a step-up (Review.Stepup) and may refuse. It runs under the pipeline
+// lock, so the answer can't go stale between the check and the write.
+func (p *Pipeline) ApplyWith(token string, gate func(needsStepup bool) error) (Applied, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -267,6 +306,12 @@ func (p *Pipeline) Apply(token string) (Applied, error) {
 	v, ok := p.tokens.Load(token)
 	if !ok || v.(string) != sha {
 		return Applied{}, ErrStale
+	}
+	if gate != nil {
+		widening, guarded := p.classifyLocked(before, after)
+		if err := gate(len(widening) > 0 || len(guarded) > 0); err != nil {
+			return Applied{}, err
+		}
 	}
 
 	if ComputeDiff(before, after).Changed == false {
@@ -316,8 +361,13 @@ type Applied struct {
 // validateCandidate writes b to a scratch file in the config's directory and
 // runs the validate pass against it.
 func (p *Pipeline) validateCandidate(b []byte) error {
-	dir := filepath.Dir(p.path)
-	tmp, err := os.CreateTemp(dir, ".conductor-candidate-*.yaml")
+	return p.withCandidateFile(b, p.validate)
+}
+
+// withCandidateFile writes b to a scratch file beside the config, runs fn on
+// it, and removes it.
+func (p *Pipeline) withCandidateFile(b []byte, fn func(string) error) error {
+	tmp, err := os.CreateTemp(filepath.Dir(p.path), ".conductor-candidate-*.yaml")
 	if err != nil {
 		return err
 	}
@@ -330,7 +380,7 @@ func (p *Pipeline) validateCandidate(b []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return p.validate(name)
+	return fn(name)
 }
 
 func randID() string {

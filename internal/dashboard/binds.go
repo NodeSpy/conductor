@@ -27,16 +27,27 @@ func bindListener(b config.DashboardBind) auth.Listener {
 	return auth.Listener("bind:" + b.Address)
 }
 
-// bindTransport is how browsers reach a bind entry.
+// bindTransport is how browsers reach a bind entry. A loopback address is a
+// secure context only when every hostname is a loopback name: a browser treats
+// http://box.lan as insecure even when it resolves to 127.0.0.1.
 func bindTransport(b config.DashboardBind) auth.Transport {
 	switch {
 	case b.TLS():
 		return auth.TransportHTTPS
-	case b.Loopback():
+	case b.Loopback() && loopbackNames(b.Hostnames):
 		return auth.TransportLocalhost
 	default:
 		return auth.TransportHTTP
 	}
+}
+
+func loopbackNames(hosts []string) bool {
+	for _, h := range hosts {
+		if !isLoopbackName(strings.ToLower(bareHost(h))) {
+			return false
+		}
+	}
+	return len(hosts) > 0
 }
 
 // bindRPs are the passkey relying parties the bind entries serve: each non-IP
@@ -101,7 +112,7 @@ func (s *Server) bindHandler(b config.DashboardBind) http.Handler {
 // non-loopback plain listener never starts unacknowledged.
 func (s *Server) startBind(ctx context.Context, b config.DashboardBind) error {
 	t := bindTransport(b)
-	if t == auth.TransportHTTP && !b.AllowPlainHTTP {
+	if t == auth.TransportHTTP && !b.Loopback() && !b.AllowPlainHTTP {
 		return fmt.Errorf("dashboard.bind %s: plain HTTP off loopback needs allow_plain_http: true", b.Address)
 	}
 	var tlsCfg *tls.Config
@@ -134,7 +145,10 @@ func (s *Server) startBind(ctx context.Context, b config.DashboardBind) error {
 		}
 	}()
 	go func() { <-ctx.Done(); _ = srv.Close() }()
-	if t == auth.TransportHTTP {
+	if t == auth.TransportHTTP && b.Loopback() {
+		s.deps.Log("dashboard: serving plain HTTP on loopback %s (%s): browsers don't treat these names as a secure context, so passkeys are not offered",
+			b.Address, strings.Join(b.Hostnames, ", "))
+	} else if t == auth.TransportHTTP {
 		s.deps.Log("dashboard: WARNING serving plain HTTP on %s (%s): session cookies and everything else cross the network unencrypted; passkeys are not offered (dashboard.bind allow_plain_http)",
 			b.Address, strings.Join(b.Hostnames, ", "))
 	} else {

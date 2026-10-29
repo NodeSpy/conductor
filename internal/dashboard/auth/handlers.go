@@ -473,7 +473,8 @@ func (m *Manager) handleSessionsDeleteAll(w http.ResponseWriter, r *http.Request
 		return
 	}
 	m.audit(map[string]any{"event": "dashboard_logout_all", "operator": sess.Operator})
-	http.SetCookie(w, m.clearCookie(reqInfoFrom(r).Transport))
+	info := reqInfoFrom(r)
+	http.SetCookie(w, m.clearCookie(info.Listener, info.Transport))
 	writeJSON(w, http.StatusOK, map[string]any{"signed_out": true})
 }
 

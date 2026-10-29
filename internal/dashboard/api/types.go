@@ -266,8 +266,14 @@ type ReviewResponse struct {
 	Unified  string        `json:"unified"`
 	Effects  []EffectDTO   `json:"effects"`
 	Widening []EffectDTO   `json:"widening"`
-	SHA      string        `json:"sha"`
-	Token    string        `json:"token"`
+	// Guarded lists the changes to who can sign in or how (operators, the
+	// dashboard's auth, listeners and session).
+	Guarded []EffectDTO `json:"guarded"`
+	// Stepup is true when applying needs a step-up (a widening or a guarded
+	// change) while sign-in is on.
+	Stepup bool   `json:"stepup"`
+	SHA    string `json:"sha"`
+	Token  string `json:"token"`
 }
 
 // EffectDTO describes one change in words (mirrors configedit.Effect).

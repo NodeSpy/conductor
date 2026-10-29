@@ -125,6 +125,7 @@ func (p *Pipeline) RestoreReview(id string) (Review, []byte, error) {
 	sha := hex.EncodeToString(sum[:])
 	tok := randID()
 	p.tokens.Store(tok, sha)
+	widening, guarded := p.classifyLocked(before, after)
 	rev := Review{
 		Diff:  diff,
 		SHA:   sha[:12],
@@ -133,6 +134,9 @@ func (p *Pipeline) RestoreReview(id string) (Review, []byte, error) {
 			Path: "(restore)",
 			Text: fmt.Sprintf("restores the config to backup %s", id),
 		}},
+		Widening: widening,
+		Guarded:  guarded,
+		Stepup:   true, // a restore rewrites the whole file: always confirmed
 	}
 	return rev, after, nil
 }

@@ -17,27 +17,37 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// requireStepup enforces a step-up (any allowed method) for a privileged config mutation —
-// but ONLY when auth is active. The session guard injects a Session on every
-// /api route when operators are configured; when none are (a bootstrap box or
-// the e2e daemon), SessionFrom returns !ok and this is a no-op, so the pipeline
-// confirm token alone gates the apply. When auth IS active, a widening apply (or
-// any restore) must present a step-up token minted for PurposeConfigApply with
-// the confirm token as its ceremony digest (the one hook the auth half left on
-// this side). Returns true when the request may proceed.
-func (s *Server) requireStepup(w http.ResponseWriter, r *http.Request, digest, stepupToken string, needed bool) bool {
-	if s.auth == nil || !needed {
-		return true
+// stepupCheck enforces a step-up (any allowed method) for a privileged config
+// mutation — but ONLY when auth is active. The session guard injects a Session
+// on every /api route when operators are configured; when none are (a bootstrap
+// box or the e2e daemon), SessionFrom returns !ok and this is a no-op, so the
+// pipeline confirm token alone gates the apply. When auth IS active, the apply
+// must present a step-up token minted for PurposeConfigApply with the confirm
+// token as its ceremony digest.
+func (s *Server) stepupCheck(r *http.Request, digest, stepupToken string) error {
+	if s.auth == nil {
+		return nil
 	}
 	sess, ok := auth.SessionFrom(r)
 	if !ok {
-		return true // auth not active on this route → confirm token alone governs
+		return nil // auth not active on this route → confirm token alone governs
 	}
-	if _, err := s.auth.RequireStepup(sess, auth.PurposeConfigApply, digest, stepupToken); err != nil {
-		writeError(w, http.StatusForbidden, "stepup_required", err.Error(), "confirm it's you, then try again")
+	_, err := s.auth.RequireStepup(sess, auth.PurposeConfigApply, digest, stepupToken)
+	return err
+}
+
+// requireStepup is stepupCheck for a mutation that always needs one; it writes
+// the 403 and returns false when the step-up is missing.
+func (s *Server) requireStepup(w http.ResponseWriter, r *http.Request, digest, stepupToken string) bool {
+	if err := s.stepupCheck(r, digest, stepupToken); err != nil {
+		writeStepupRequired(w, err)
 		return false
 	}
 	return true
+}
+
+func writeStepupRequired(w http.ResponseWriter, err error) {
+	writeError(w, http.StatusForbidden, "stepup_required", err.Error(), "confirm it's you, then try again")
 }
 
 // This file implements the config-edit pipeline endpoints (design §5.3) and the
@@ -158,7 +168,7 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 func reviewDTO(rev configedit.Review) api.ReviewResponse {
 	out := api.ReviewResponse{
 		Changed: rev.Diff.Changed, Added: rev.Diff.Added, Removed: rev.Diff.Removed,
-		Unified: rev.Diff.Unified, SHA: rev.SHA, Token: rev.Token,
+		Unified: rev.Diff.Unified, SHA: rev.SHA, Token: rev.Token, Stepup: rev.Stepup,
 	}
 	for _, l := range rev.Diff.Lines {
 		out.Lines = append(out.Lines, api.DiffLineDTO{Op: string(l.Op), Text: l.Text, OldLine: l.OldLine, NewLine: l.NewLine})
@@ -168,6 +178,9 @@ func reviewDTO(rev configedit.Review) api.ReviewResponse {
 	}
 	for _, e := range rev.Widening {
 		out.Widening = append(out.Widening, api.EffectDTO{Path: e.Path, Text: e.Text, Widens: e.Widens})
+	}
+	for _, e := range rev.Guarded {
+		out.Guarded = append(out.Guarded, api.EffectDTO{Path: e.Path, Text: e.Text})
 	}
 	return out
 }
@@ -227,11 +240,19 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A widening or sign-in-affecting apply needs a step-up when auth is active.
-	widens, _ := s.edit.Widens()
-	if !s.requireStepup(w, r, req.Token, req.StepupToken, widens) {
+	// The pipeline decides that under its lock, on the exact candidate it is
+	// about to write, so nothing staged between review and apply slips past.
+	var refused error
+	applied, err := s.edit.ApplyWith(req.Token, func(need bool) error {
+		if need {
+			refused = s.stepupCheck(r, req.Token, req.StepupToken)
+		}
+		return refused
+	})
+	if refused != nil {
+		writeStepupRequired(w, refused)
 		return
 	}
-	applied, err := s.edit.Apply(req.Token)
 	if err != nil {
 		if errors.Is(err, configedit.ErrStale) {
 			writeError(w, http.StatusConflict, "stale", err.Error(), "review the change again")
@@ -294,7 +315,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	// A restore re-writes the whole config, so it always needs a step-up when
 	// auth is active (no-op otherwise).
-	if !s.requireStepup(w, r, req.Token, req.StepupToken, true) {
+	if !s.requireStepup(w, r, req.Token, req.StepupToken) {
 		return
 	}
 	applied, err := s.edit.Restore(req.ID, req.Token)

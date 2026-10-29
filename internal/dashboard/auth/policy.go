@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"net/http"
 	"strings"
@@ -102,12 +104,21 @@ func (t Transport) Scheme() string {
 // accepts.
 const PlainSessionCookie = "conductor_session"
 
-// cookieName is the session cookie name for a transport.
-func cookieName(t Transport) string {
+// cookieName is the session cookie name for a listener and transport. Cookies
+// ignore the port, so two listeners answering on one hostname (a loopback bind
+// named localhost and the localhost listener) would overwrite each other's
+// cookie under one name; a bind listener's cookie carries a suffix derived from
+// its address.
+func cookieName(l Listener, t Transport) string {
+	name := PlainSessionCookie
 	if t.Secure() {
-		return SessionCookie
+		name = SessionCookie
 	}
-	return PlainSessionCookie
+	if strings.HasPrefix(string(l), "bind:") {
+		sum := sha256.Sum256([]byte(l))
+		name += "_" + hex.EncodeToString(sum[:4])
+	}
+	return name
 }
 
 // defaultTransport is the transport a listener implies when the caller did not

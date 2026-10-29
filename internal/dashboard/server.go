@@ -126,6 +126,7 @@ func New(deps Deps) *Server {
 			Path:     deps.ConfigPath,
 			Validate: deps.Validate,
 			Reload:   deps.Reload,
+			Guarded:  guardedConfig,
 		})
 	}
 	s.buildAuth() // the auth Manager + RPs (authwire.go); logs and no-ops on error
@@ -514,4 +515,22 @@ func writeSSE(w http.ResponseWriter, ev api.Event) {
 		fmt.Fprintf(w, "event: %s\n", ev.Topic)
 	}
 	fmt.Fprintf(w, "data: %s\n\n", b)
+}
+
+// guardedConfig is the part of the loaded config that decides who can sign in
+// to the dashboard and how. The config pipeline compares it before and after an
+// edit, so a change that reaches it through imports or packs needs a step-up.
+func guardedConfig(path string) (any, error) {
+	c, err := config.Load(path)
+	if err != nil {
+		return nil, err
+	}
+	return struct {
+		Operators map[string]config.OperatorConfig
+		Auth      config.DashboardAuth
+		Bind      []config.DashboardBind
+		Listen    []string
+		Tailscale config.DashboardTailscale
+		Session   config.DashboardSession
+	}{c.Operators, c.Dashboard.Auth, c.Dashboard.Bind, c.Dashboard.Listen, c.Dashboard.Tailscale, c.Dashboard.Session}, nil
 }

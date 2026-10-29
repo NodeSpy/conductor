@@ -34,14 +34,26 @@ func TestHostAllowedRebinding(t *testing.T) {
 	magic := "box.tailnet.ts.net"
 	ips := []string{"100.64.0.1", "fd7a:115c:a1e0::1"}
 	ok := func(h string) bool { return hostAllowed(h, magic, ips, 7788) }
-	for _, good := range []string{"localhost", "localhost:7788", "127.0.0.1", "box.tailnet.ts.net", "box.tailnet.ts.net:7788", "100.64.0.1:7788", "[fd7a:115c:a1e0::1]:7788"} {
+	for _, good := range []string{"box.tailnet.ts.net", "box.tailnet.ts.net:7788", "100.64.0.1:7788", "[fd7a:115c:a1e0::1]:7788"} {
 		if !ok(good) {
 			t.Errorf("host %q should be allowed", good)
 		}
 	}
-	for _, bad := range []string{"evil.example.com", "attacker.com:7788", "box.tailnet.ts.net.evil.com"} {
+	// The loopback names belong to the localhost listener only.
+	for _, bad := range []string{"evil.example.com", "attacker.com:7788", "box.tailnet.ts.net.evil.com", "localhost:7788", "127.0.0.1"} {
 		if ok(bad) {
-			t.Errorf("host %q should be refused (rebinding defence)", bad)
+			t.Errorf("host %q should be refused on the tailnet", bad)
+		}
+	}
+	local := func(h string) bool { return hostAllowed(h, "", nil, 0) }
+	for _, good := range []string{"localhost", "localhost:7788", "127.0.0.1", "[::1]:7788"} {
+		if !local(good) {
+			t.Errorf("host %q should be allowed on the localhost listener", good)
+		}
+	}
+	for _, bad := range []string{"box.tailnet.ts.net", "evil.example.com", "localhost.evil.com"} {
+		if local(bad) {
+			t.Errorf("host %q should be refused on the localhost listener", bad)
 		}
 	}
 }

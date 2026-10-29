@@ -245,17 +245,14 @@ func peerAllowed(who tsWho, allowTagged bool, allowUsers []string) (bool, string
 }
 
 // hostAllowed is the Host-header allowlist that defeats DNS rebinding (design
-// §6.2): only localhost, the MagicDNS name and the node's tailnet IPs are
-// accepted on a request.
+// §6.2). The localhost listener (magicDNS "" and no ips) accepts only the
+// loopback names; the tailnet listener only its MagicDNS name and tailnet IPs —
+// never a loopback name, so a tailnet peer can't present itself under the
+// localhost listener's origin.
 func hostAllowed(host, magicDNS string, ips []string, port int) bool {
-	h := host
-	if hh, _, err := net.SplitHostPort(host); err == nil {
-		h = hh
-	}
-	h = strings.TrimSuffix(h, ".")
-	h = strings.Trim(h, "[]") // IPv6 literal
-	if h == "localhost" || h == "127.0.0.1" || h == "::1" {
-		return true
+	h := bareHost(host)
+	if magicDNS == "" && len(ips) == 0 {
+		return isLoopbackName(h)
 	}
 	if magicDNS != "" && strings.EqualFold(h, magicDNS) {
 		return true
@@ -266,4 +263,20 @@ func hostAllowed(host, magicDNS string, ips []string, port int) bool {
 		}
 	}
 	return false
+}
+
+// bareHost strips the port, brackets and a trailing dot from a Host header.
+func bareHost(host string) string {
+	h := host
+	if hh, _, err := net.SplitHostPort(host); err == nil {
+		h = hh
+	}
+	h = strings.TrimSuffix(h, ".")
+	return strings.Trim(h, "[]") // IPv6 literal
+}
+
+// isLoopbackName reports whether h names this machine's loopback: the names a
+// browser treats as a secure context over plain HTTP.
+func isLoopbackName(h string) bool {
+	return h == "localhost" || h == "127.0.0.1" || h == "::1"
 }

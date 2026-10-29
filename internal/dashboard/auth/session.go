@@ -56,7 +56,7 @@ func (m *Manager) createSession(tmpl Session) (*http.Cookie, Session, error) {
 	}
 	m.audit(map[string]any{"event": "dashboard_signin", "operator": sess.Operator, "session": sess.ID,
 		"listener": string(sess.Listener), "method": string(sess.EffectiveMethod()), "transport": string(sess.Transport)})
-	return m.cookie(sessTransport(sess), sess.ID+"."+secret, sess.Expires), sess, nil
+	return m.cookie(sess.Listener, sessTransport(sess), sess.ID+"."+secret, sess.Expires), sess, nil
 }
 
 // sessTransport is the transport a session's cookie lives on.
@@ -79,7 +79,7 @@ func (m *Manager) RotateSecret(sess Session) (*http.Cookie, error) {
 	if err := m.deps.Store.PutSession(sess, secret); err != nil {
 		return nil, err
 	}
-	return m.cookie(sessTransport(sess), sess.ID+"."+secret, sess.Expires), nil
+	return m.cookie(sess.Listener, sessTransport(sess), sess.ID+"."+secret, sess.Expires), nil
 }
 
 // ValidateCookie resolves the request's session cookie to a live Session,
@@ -87,9 +87,9 @@ func (m *Manager) RotateSecret(sess Session) (*http.Cookie, error) {
 // (design §6.3). It touches LastSeen on success.
 func (m *Manager) ValidateCookie(r *http.Request, l Listener, node string) (Session, error) {
 	transport := reqInfoFrom(r).Transport
-	// Only the cookie for this transport is read: a plain-HTTP cookie is never
-	// accepted on a secure connection, nor the reverse.
-	ck, err := r.Cookie(cookieName(transport))
+	// Only the cookie for this listener and transport is read: a plain-HTTP
+	// cookie is never accepted on a secure connection, nor the reverse.
+	ck, err := r.Cookie(cookieName(l, transport))
 	if err != nil || ck.Value == "" {
 		return Session{}, errNoSession
 	}
@@ -133,8 +133,8 @@ func (m *Manager) ValidateCookie(r *http.Request, l Listener, node string) (Sess
 
 // Logout revokes the request's session and returns a clearing cookie.
 func (m *Manager) Logout(r *http.Request) *http.Cookie {
-	transport := reqInfoFrom(r).Transport
-	if ck, err := r.Cookie(cookieName(transport)); err == nil {
+	info := reqInfoFrom(r)
+	if ck, err := r.Cookie(cookieName(info.Listener, info.Transport)); err == nil {
 		if id, _, ok := strings.Cut(ck.Value, "."); ok {
 			if sess, ok := m.deps.Store.Session(id); ok {
 				m.audit(map[string]any{"event": "dashboard_logout", "operator": sess.Operator, "session": id})
@@ -142,7 +142,7 @@ func (m *Manager) Logout(r *http.Request) *http.Cookie {
 			_ = m.deps.Store.DeleteSession(id)
 		}
 	}
-	return m.clearCookie(transport)
+	return m.clearCookie(info.Listener, info.Transport)
 }
 
 // cookie builds the session cookie for a transport. On a secure context it is
@@ -150,17 +150,17 @@ func (m *Manager) Logout(r *http.Request) *http.Cookie {
 // prefix forbids one); browsers treat http://localhost as secure, so Secure is
 // accepted there too (design §6.3). On plain HTTP off loopback the browser would
 // drop a Secure cookie, so it is the unprefixed HttpOnly, SameSite=Strict one.
-func (m *Manager) cookie(t Transport, value string, expires time.Time) *http.Cookie {
+func (m *Manager) cookie(l Listener, t Transport, value string, expires time.Time) *http.Cookie {
 	return &http.Cookie{
-		Name: cookieName(t), Value: value, Path: "/",
+		Name: cookieName(l, t), Value: value, Path: "/",
 		Secure: t.Secure(), HttpOnly: true, SameSite: http.SameSiteStrictMode,
 		Expires: expires,
 	}
 }
 
-func (m *Manager) clearCookie(t Transport) *http.Cookie {
+func (m *Manager) clearCookie(l Listener, t Transport) *http.Cookie {
 	return &http.Cookie{
-		Name: cookieName(t), Value: "", Path: "/",
+		Name: cookieName(l, t), Value: "", Path: "/",
 		Secure: t.Secure(), HttpOnly: true, SameSite: http.SameSiteStrictMode,
 		MaxAge: -1,
 	}
