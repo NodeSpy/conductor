@@ -65,8 +65,9 @@ func SessionFrom(r *http.Request) (Session, bool) {
 
 // Protect gates /api behind a valid session and CSRF, and binds the session to
 // the listener and node the request arrived on. It is the middleware every
-// non-auth API route sits behind (design §6: Host → Origin → session → CSRF, with
-// Host/Origin done in the listener wrapper upstream).
+// non-auth API route sits behind (design §6: Host → session → CSRF). The Host
+// allowlist runs in each listener's wrapper upstream; a cross-site page can't
+// pass the CSRF check, which needs a custom header (a preflight) and the token.
 func (m *Manager) Protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info := reqInfoFrom(r)

@@ -17,7 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// requireStepup enforces a WebAuthn step-up for a privileged config mutation —
+// requireStepup enforces a step-up (any allowed method) for a privileged config mutation —
 // but ONLY when auth is active. The session guard injects a Session on every
 // /api route when operators are configured; when none are (a bootstrap box or
 // the e2e daemon), SessionFrom returns !ok and this is a no-op, so the pipeline
@@ -34,7 +34,7 @@ func (s *Server) requireStepup(w http.ResponseWriter, r *http.Request, digest, s
 		return true // auth not active on this route → confirm token alone governs
 	}
 	if _, err := s.auth.RequireStepup(sess, auth.PurposeConfigApply, digest, stepupToken); err != nil {
-		writeError(w, http.StatusForbidden, "stepup_required", err.Error(), "confirm this change with your passkey")
+		writeError(w, http.StatusForbidden, "stepup_required", err.Error(), "confirm it's you, then try again")
 		return false
 	}
 	return true
@@ -226,7 +226,7 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "no_confirm", "apply needs the confirm token from the review (step-up)", "call GET /api/v1/config/review first")
 		return
 	}
-	// A widening apply needs a WebAuthn step-up when auth is active (no-op otherwise).
+	// A widening or sign-in-affecting apply needs a step-up when auth is active.
 	widens, _ := s.edit.Widens()
 	if !s.requireStepup(w, r, req.Token, req.StepupToken, widens) {
 		return

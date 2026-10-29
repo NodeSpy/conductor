@@ -38,7 +38,9 @@ type Store struct {
 // is an argon2id PHC string; the TOTP secret is the raw shared key (base32), so
 // this file is as sensitive as the authenticator app itself — it stays 0600
 // under a 0700 dir like the rest of the store. TOTPLastStep is the newest time
-// step a code was accepted for; a code for that step or older is a replay.
+// step a code was accepted for and TOTPUsed the steps accepted near it: a code
+// for a used step is a replay, and so is one older than any window that could
+// contain the newest.
 type OperatorSecret struct {
 	Operator     string    `json:"operator"`
 	PasswordHash string    `json:"password_hash,omitempty"`
@@ -46,6 +48,7 @@ type OperatorSecret struct {
 	TOTPSecret   string    `json:"totp_secret,omitempty"`
 	TOTPSet      time.Time `json:"totp_set,omitempty"`
 	TOTPLastStep int64     `json:"totp_last_step,omitempty"`
+	TOTPUsed     []int64   `json:"totp_used,omitempty"`
 }
 
 // sessionRec is a Session plus the secret hash that authenticates its cookie.
@@ -406,18 +409,37 @@ func (s *Store) UpdateOperatorSecret(operator string, fn func(*OperatorSecret)) 
 }
 
 // UseTOTPStep records that a code for step was accepted, atomically refusing a
-// step at or before the last accepted one (replay protection across requests
-// racing on the same code).
+// step already used, or older than any acceptance window that holds the newest
+// used step (replay protection, including requests racing on the same code).
+// Each step is spent on its own, so a code accepted one step early (a phone a
+// little ahead) doesn't refuse the operator's genuine current code.
 func (s *Store) UseTOTPStep(operator string, step int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	o, ok := s.secrets[operator]
-	if !ok || o.TOTPSecret == "" || step <= o.TOTPLastStep {
+	if !ok || o.TOTPSecret == "" || step < o.TOTPLastStep-2*totpSkew {
 		return false
 	}
-	o.TOTPLastStep = step
+	for _, u := range o.TOTPUsed {
+		if u == step {
+			return false
+		}
+	}
+	o.TOTPLastStep = max(o.TOTPLastStep, step)
+	o.TOTPUsed = append(spentSince(o.TOTPUsed, o.TOTPLastStep-2*totpSkew), step)
 	_ = s.save()
 	return true
+}
+
+// spentSince keeps the used steps at or after floor.
+func spentSince(used []int64, floor int64) []int64 {
+	var out []int64
+	for _, u := range used {
+		if u >= floor {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // --- helpers ---

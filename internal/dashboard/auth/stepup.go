@@ -223,7 +223,7 @@ func CredentialDigest(operator, action string) string {
 // token can't be probed against several requests (design §6.5).
 func (m *Manager) RequireStepup(sess Session, purpose Purpose, digest, token string) (StepupEvidence, error) {
 	if token == "" {
-		return StepupEvidence{}, errors.New("this action needs your passkey")
+		return StepupEvidence{}, errors.New("this action needs you to confirm it's you (a step-up)")
 	}
 	m.mu.Lock()
 	t, ok := m.tokens[token]

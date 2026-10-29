@@ -2,11 +2,16 @@ package auth
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,13 +33,19 @@ const (
 	loginChallengePrefix  = "conductor-dashboard-login v1 "
 	stepupChallengePrefix = "conductor-dashboard-stepup v1 "
 
-	sshChallengeTTL     = 5 * time.Minute
-	maxSSHPending       = 256 // across all clients
-	maxSSHPendingClient = 5   // per client key
-	maxSSHCodeTries     = 3   // wrong signatures against a code before it burns
-	sshKindLogin        = "login"
-	sshKindStepup       = "stepup"
-	loginCodeAlphabet   = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no 0/O, 1/I
+	sshChallengeTTL = 5 * time.Minute
+	// Pending sign-in challenges need no session, so they are capped per client
+	// (clientKey), per network (clientNetwork: an IPv4 /24, an IPv6 /48) and
+	// overall. Step-up challenges belong to a signed-in session and are capped
+	// per session instead, so sign-in traffic can never crowd them out.
+	maxSSHPending        = 4096
+	maxSSHPendingClient  = 5
+	maxSSHPendingNetwork = 32
+	maxSSHPendingSession = 5
+	maxSSHCodeTries      = 3 // wrong signatures against a code before it burns
+	sshKindLogin         = "login"
+	sshKindStepup        = "stepup"
+	loginCodeAlphabet    = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no 0/O, 1/I
 )
 
 // safeOperator is the operator-name shape SSH challenges accept: it appears in
@@ -62,6 +73,8 @@ type sshChallenge struct {
 	device    string // the requesting browser, shown by approve-login
 	addr      string
 	client    string // lockout/pending bucket
+	network   string // the client's network, for the per-network pending cap
+	started   time.Time
 	expires   time.Time
 	tries     int    // wrong signatures (paste or code)
 	approved  string // the verified signature, once approve-login posted it
@@ -83,9 +96,14 @@ type SSHPendingView struct {
 	Challenge string `json:"challenge"`
 	Namespace string `json:"namespace"`
 	Purpose   string `json:"purpose,omitempty"`
-	Device    string `json:"device"`
-	Addr      string `json:"addr"`
+	Device    string `json:"device"`  // the requesting browser, from its User-Agent (the requester controls it)
+	Addr      string `json:"addr"`    // the address the request came from
+	Started   string `json:"started"` // when the request began
 	Expires   string `json:"expires"`
+	// A step-up's action: its digest and, when the dashboard knows it, what
+	// it is in words.
+	Digest  string `json:"digest,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 // SSHChallengeText builds the one-line text a challenge asks the operator to
@@ -196,18 +214,13 @@ func (m *Manager) beginSSH(r *http.Request, kind, operator string, sess Session,
 		listener: info.Listener, host: info.Host, transport: info.Transport,
 		text:      SSHChallengeText(kind, operator, origin, purpose, digest, b64(nonce), exp),
 		namespace: ns, session: sess.ID, purpose: purpose, digest: digest,
-		device: deviceLabel(r), addr: r.RemoteAddr, client: clientKey(r), expires: exp,
+		device: deviceLabel(r), addr: r.RemoteAddr, client: clientKey(r), network: clientNetwork(r),
+		started: m.now(), expires: exp,
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.gcCeremonies()
-	perClient := 0
-	for _, c := range m.sshCh {
-		if c.client == ch.client {
-			perClient++
-		}
-	}
-	if len(m.sshCh) >= maxSSHPending || perClient >= maxSSHPendingClient {
+	if !m.sshRoomLocked(ch) {
 		return SSHChallengeView{}, errors.New("too many SSH challenges waiting — finish or let one expire first")
 	}
 	if _, dup := m.sshCode[code]; dup {
@@ -216,6 +229,33 @@ func (m *Manager) beginSSH(r *http.Request, kind, operator string, sess Session,
 	m.sshCh[ch.id] = ch
 	m.sshCode[code] = ch.id
 	return SSHChallengeView{ID: ch.id, Text: ch.text, Namespace: ns, Code: FormatLoginCode(code), Expires: exp.UTC().Format(time.RFC3339)}, nil
+}
+
+// sshRoomLocked reports whether ch fits under the pending caps. Caller holds m.mu.
+func (m *Manager) sshRoomLocked(ch *sshChallenge) bool {
+	if ch.kind == sshKindStepup {
+		n := 0
+		for _, c := range m.sshCh {
+			if c.kind == sshKindStepup && c.session == ch.session {
+				n++
+			}
+		}
+		return n < maxSSHPendingSession
+	}
+	total, client, network := 0, 0, 0
+	for _, c := range m.sshCh {
+		if c.kind != sshKindLogin {
+			continue
+		}
+		total++
+		if c.client == ch.client {
+			client++
+		}
+		if c.network == ch.network {
+			network++
+		}
+	}
+	return total < maxSSHPending && client < maxSSHPendingClient && network < maxSSHPendingNetwork
 }
 
 // BeginSSHLogin issues a sign-in challenge for operator on this connection. It
@@ -270,16 +310,36 @@ func (m *Manager) lookupSSH(r *http.Request, id, kind string, sess Session) (ssh
 
 // verifySSHChallenge checks sig over the stored challenge text with the
 // operator's configured key, in the challenge's namespace.
+//
+// An unknown operator (or one without a key) is verified against a throwaway
+// key nobody holds, with the same error, so neither the answer nor the time it
+// takes says whether the operator exists.
 func (m *Manager) verifySSHChallenge(ctx context.Context, ch sshChallenge, sig string) error {
 	pub, ok := m.operatorPubKey(ch.operator)
 	if !ok {
-		return errors.New("the signature does not verify")
+		pub = unheldSSHKey()
 	}
-	if err := m.deps.VerifySSHNS(ctx, ch.namespace, ch.operator, pub, []byte(ch.text), sig); err != nil {
-		return errors.New("the signature does not verify for this operator, challenge and namespace")
+	if err := m.deps.VerifySSHNS(ctx, ch.namespace, ch.operator, pub, []byte(ch.text), sig); err != nil || !ok {
+		return errSSHVerify
 	}
 	return nil
 }
+
+var errSSHVerify = errors.New("the signature does not verify for this operator, challenge and namespace")
+
+// unheldSSHKey is an ed25519 public key whose private half was discarded at
+// birth: no signature verifies against it.
+var unheldSSHKey = sync.OnceValue(func() string {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		pub = make(ed25519.PublicKey, ed25519.PublicKeySize)
+	}
+	field := func(b []byte) []byte {
+		return append(binary.BigEndian.AppendUint32(nil, uint32(len(b))), b...)
+	}
+	blob := append(field([]byte("ssh-ed25519")), field(pub)...)
+	return "ssh-ed25519 " + base64.StdEncoding.EncodeToString(blob)
+})
 
 // consumeSSH removes a challenge if it is still present, reporting whether this
 // caller won it (two racing finishes can both verify; only one spends it).
@@ -391,8 +451,12 @@ func (m *Manager) mintSSHStepup(sess Session, ch sshChallenge, sig string) (stri
 }
 
 // codeChallenge returns a snapshot of the live challenge behind a login code.
-func (m *Manager) codeChallenge(code string) (sshChallenge, bool) {
+// A code is only found on the listener, host and transport it was issued on,
+// like the challenge id (lookupSSH): the most exposed listener can't serve as a
+// code oracle for the others.
+func (m *Manager) codeChallenge(r *http.Request, code string) (sshChallenge, bool) {
 	code = normalizeLoginCode(code)
+	info := reqInfoFrom(r)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	id, ok := m.sshCode[code]
@@ -403,30 +467,65 @@ func (m *Manager) codeChallenge(code string) (sshChallenge, bool) {
 	if !ok || m.now().After(ch.expires) || ch.approved != "" {
 		return sshChallenge{}, false
 	}
+	if ch.listener != info.Listener || ch.host != info.Host || ch.transport != info.Transport {
+		return sshChallenge{}, false
+	}
 	return *ch, true
+}
+
+// describeStepup is what a step-up confirms, in words, for approve-login.
+func (m *Manager) describeStepup(ch sshChallenge) string {
+	if ch.purpose == PurposeCredential {
+		for _, a := range credentialActions {
+			if CredentialDigest(ch.operator, a.action) == ch.digest {
+				return a.text
+			}
+		}
+	}
+	if m.deps.DescribeStepup != nil {
+		if s := m.deps.DescribeStepup(ch.operator, ch.purpose, ch.digest); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// credentialActions are the credential changes a step-up can confirm.
+var credentialActions = []struct{ action, text string }{
+	{"password.set", "set or change your dashboard password"},
+	{"password.remove", "remove your dashboard password"},
+	{"totp.set", "set up or replace your authenticator app"},
+	{"totp.remove", "remove your authenticator app"},
+	{"passkey.add", "add a passkey"},
 }
 
 // PendingSSH describes the request behind a login code for approve-login to
 // show before it signs. It needs no session: the code only reveals what the
 // operator is about to approve, and approving needs their signature.
-func (m *Manager) PendingSSH(code string) (SSHPendingView, error) {
-	ch, ok := m.codeChallenge(code)
+func (m *Manager) PendingSSH(r *http.Request, code string) (SSHPendingView, error) {
+	ch, ok := m.codeChallenge(r, code)
 	if !ok {
 		return SSHPendingView{}, errors.New("no pending request with that code (it may have expired or been used)")
 	}
-	return SSHPendingView{
+	v := SSHPendingView{
 		Kind: ch.kind, Operator: ch.operator, Challenge: ch.text, Namespace: ch.namespace,
 		Purpose: string(ch.purpose), Device: ch.device, Addr: ch.addr,
+		Started: ch.started.UTC().Format(time.RFC3339),
 		Expires: ch.expires.UTC().Format(time.RFC3339),
-	}, nil
+	}
+	if ch.kind == sshKindStepup {
+		v.Digest = ch.digest
+		v.Summary = m.describeStepup(ch)
+	}
+	return v, nil
 }
 
 // ApproveSSH verifies a signature posted against a login code (from
 // approve-login on another device) and marks the challenge approved, so the
 // waiting page's next poll receives its session or step-up token. The code is
 // single use: a success spends it; three wrong signatures burn it.
-func (m *Manager) ApproveSSH(ctx context.Context, code, sig string) error {
-	ch, ok := m.codeChallenge(code)
+func (m *Manager) ApproveSSH(ctx context.Context, r *http.Request, code, sig string) error {
+	ch, ok := m.codeChallenge(r, code)
 	if !ok {
 		return errors.New("no pending request with that code (it may have expired or been used)")
 	}

@@ -86,6 +86,9 @@ func req(method, path, host string, c ConnInfo, body any) *http.Request {
 	}
 	r.Host = host
 	r.RemoteAddr = "192.0.2.10:5555"
+	if method != http.MethodGet {
+		r.Header.Set("Content-Type", "application/json") // as the SPA sends it
+	}
 	return WithConn(r, c)
 }
 
@@ -357,7 +360,7 @@ func TestStepupBySSH(t *testing.T) {
 	// Cross-device: approve-login against the code, then the page's poll gets
 	// the token.
 	v, _ = h.m.BeginSSHStepup(localReq(), sess, PurposeApprove, "d2")
-	if err := h.m.ApproveSSH(context.Background(), v.Code, h.key.sign(t, StepupNamespace, v.Text)); err != nil {
+	if err := h.m.ApproveSSH(context.Background(), localReq(), v.Code, h.key.sign(t, StepupNamespace, v.Text)); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	tok, done, err := h.m.PollSSHStepup(localReq(), sess, v.ID)
@@ -374,18 +377,18 @@ func TestStepupByPasswordNeedsKnob(t *testing.T) {
 	h := newHarness(t)
 	_ = h.m.SetPassword("ops", "a long enough password")
 	_, sess, _ := h.m.CreateSession("ops", ListenerLocalhost, "", "t", "127.0.0.1", "")
-	if _, err := h.m.PasswordStepup(sess, PurposeApprove, "d", "a long enough password"); err == nil {
+	if _, err := h.m.PasswordStepup(sess, PurposeApprove, "d", "a long enough password", ""); err == nil {
 		t.Fatal("by default a password re-entry must not satisfy a step-up")
 	}
 	pol := DefaultPolicy()
 	pol.PasswordRequiresTOTP = false
 	pol.Stepup = append(pol.Stepup, MethodPassword)
 	h.m.deps.Policy = &pol
-	if _, err := h.m.PasswordStepup(sess, PurposeApprove, "d", "not the password"); err == nil {
+	if _, err := h.m.PasswordStepup(sess, PurposeApprove, "d", "not the password", ""); err == nil {
 		t.Fatal("a wrong password must not step up")
 	}
 	assertStepupBinding(t, h.m, sess, func(p Purpose, d string) string {
-		tok, err := h.m.PasswordStepup(sess, p, d, "a long enough password")
+		tok, err := h.m.PasswordStepup(sess, p, d, "a long enough password", "")
 		if err != nil {
 			t.Fatalf("password step-up: %v", err)
 		}
@@ -402,9 +405,9 @@ func TestPasswordStepupLocksOperator(t *testing.T) {
 	h.m.deps.Policy = &pol
 	_, sess, _ := h.m.CreateSession("ops", ListenerLocalhost, "", "t", "127.0.0.1", "")
 	for i := 0; i < loginMaxFails; i++ {
-		_, _ = h.m.PasswordStepup(sess, PurposeApprove, "d", "not the password")
+		_, _ = h.m.PasswordStepup(sess, PurposeApprove, "d", "not the password", "")
 	}
-	if _, err := h.m.PasswordStepup(sess, PurposeApprove, "d", "a long enough password"); err == nil {
+	if _, err := h.m.PasswordStepup(sess, PurposeApprove, "d", "a long enough password", ""); err == nil {
 		t.Fatal("after repeated wrong passwords the right one must wait out the operator lock")
 	}
 }
@@ -524,7 +527,7 @@ func TestApproveLoginCode(t *testing.T) {
 	if len(v.Code) != 9 || v.Code[4] != '-' {
 		t.Fatalf("login code shape: %q", v.Code)
 	}
-	pend, err := h.m.PendingSSH(strings.ToLower(v.Code))
+	pend, err := h.m.PendingSSH(localReq(), strings.ToLower(v.Code))
 	if err != nil || pend.Challenge != v.Text || pend.Operator != "ops" || pend.Kind != "login" {
 		t.Fatalf("pending: %+v err=%v", pend, err)
 	}
@@ -533,13 +536,13 @@ func TestApproveLoginCode(t *testing.T) {
 		t.Fatalf("poll before approve: done=%v err=%v", done, err)
 	}
 	sig := h.key.sign(t, LoginNamespace, v.Text)
-	if err := h.m.ApproveSSH(ctx, v.Code, sig); err != nil {
+	if err := h.m.ApproveSSH(ctx, localReq(), v.Code, sig); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	if err := h.m.ApproveSSH(ctx, v.Code, sig); err == nil {
+	if err := h.m.ApproveSSH(ctx, localReq(), v.Code, sig); err == nil {
 		t.Fatal("a code is single-use")
 	}
-	if _, err := h.m.PendingSSH(v.Code); err == nil {
+	if _, err := h.m.PendingSSH(localReq(), v.Code); err == nil {
 		t.Fatal("a spent code no longer shows the request")
 	}
 	// Only the page that began it (same host) collects the session, once.
@@ -561,19 +564,19 @@ func TestApproveLoginCodeBindingExpiryAndTries(t *testing.T) {
 	a, _ := h.m.BeginSSHLogin(localReq(), "ops")
 	b, _ := h.m.BeginSSHLogin(localReq(), "ops")
 	// Binding: a's code with a signature over b's text is refused.
-	if err := h.m.ApproveSSH(ctx, a.Code, h.key.sign(t, LoginNamespace, b.Text)); err == nil {
+	if err := h.m.ApproveSSH(ctx, localReq(), a.Code, h.key.sign(t, LoginNamespace, b.Text)); err == nil {
 		t.Fatal("a code must only accept a signature over its own challenge")
 	}
 	// Tries: the third wrong signature burns the code.
 	for i := 0; i < maxSSHCodeTries-1; i++ {
-		_ = h.m.ApproveSSH(ctx, a.Code, "garbage")
+		_ = h.m.ApproveSSH(ctx, localReq(), a.Code, "garbage")
 	}
-	if err := h.m.ApproveSSH(ctx, a.Code, h.key.sign(t, LoginNamespace, a.Text)); err == nil {
+	if err := h.m.ApproveSSH(ctx, localReq(), a.Code, h.key.sign(t, LoginNamespace, a.Text)); err == nil {
 		t.Fatal("after three wrong signatures the code is burned")
 	}
 	// Expiry.
 	h.clk.advance(sshChallengeTTL + time.Second)
-	if err := h.m.ApproveSSH(ctx, b.Code, h.key.sign(t, LoginNamespace, b.Text)); err == nil {
+	if err := h.m.ApproveSSH(ctx, localReq(), b.Code, h.key.sign(t, LoginNamespace, b.Text)); err == nil {
 		t.Fatal("an expired code must fail")
 	}
 }
@@ -728,7 +731,7 @@ func TestPasswordStepupNeedsBothKnobs(t *testing.T) {
 		p := pol
 		h.m.deps.Policy = &p
 		_, sess, _ := h.m.CreateSession("ops", ListenerLocalhost, "", "t", "127.0.0.1", "")
-		if _, err := h.m.PasswordStepup(sess, PurposeApprove, "d", "a long enough password"); err == nil {
+		if _, err := h.m.PasswordStepup(sess, PurposeApprove, "d", "a long enough password", ""); err == nil {
 			t.Fatalf("%s: a password must not step up", name)
 		}
 	}

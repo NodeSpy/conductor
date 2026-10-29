@@ -2,7 +2,9 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -14,8 +16,57 @@ const maxBody = 1 << 20
 // Mux returns the auth, enrollment and Access routes. They are mounted directly
 // (not behind Protect): each handler does exactly the auth it needs, because
 // sign-in and enrollment happen BEFORE there is a session. server.go wraps the
-// rest of /api with Protect.
-func (m *Manager) Mux() *http.ServeMux {
+// rest of /api with Protect. Every route sits behind sameOriginJSON.
+func (m *Manager) Mux() http.Handler {
+	m.muxOnce.Do(func() { m.mux = sameOriginJSON(m.routes()) })
+	return m.mux
+}
+
+// sameOriginJSON refuses what a cross-site page could send: a request whose
+// Origin is not this page's own, a browser fetch marked cross-site or
+// same-site, and any non-GET request without a JSON body type — a cross-site
+// "simple" request (text/plain, a form) needs no preflight, so the Content-Type
+// is what makes a foreign page's POST impossible without the browser asking
+// first. A request with no Origin and no Sec-Fetch-Site (the CLI) passes the
+// first two checks.
+func sameOriginJSON(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if o := r.Header.Get("Origin"); o != "" && !sameOrigin(o, requestOrigin(r)) {
+			writeErr(w, http.StatusForbidden, "cross_origin", "this request came from another site", "")
+			return
+		}
+		if s := r.Header.Get("Sec-Fetch-Site"); s != "" && s != "same-origin" && s != "none" {
+			writeErr(w, http.StatusForbidden, "cross_origin", "this request came from another site", "")
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			ct := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))
+			if ct != "application/json" {
+				writeErr(w, http.StatusUnsupportedMediaType, "content_type", "send the request body as application/json", "")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// sameOrigin compares two origins, ignoring case and a default port.
+func sameOrigin(a, b string) bool {
+	return canonOrigin(a) == canonOrigin(b)
+}
+
+func canonOrigin(o string) string {
+	o = strings.ToLower(strings.TrimSpace(o))
+	switch {
+	case strings.HasPrefix(o, "https://") && strings.HasSuffix(o, ":443"):
+		o = strings.TrimSuffix(o, ":443")
+	case strings.HasPrefix(o, "http://") && strings.HasSuffix(o, ":80"):
+		o = strings.TrimSuffix(o, ":80")
+	}
+	return o
+}
+
+func (m *Manager) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/v1/auth/state", m.handleState)
@@ -64,18 +115,45 @@ func readJSON(r *http.Request, v any) error {
 	return json.Unmarshal(b, v)
 }
 
-// clientKey is the lockout bucket for a request: the peer address (and tailnet
-// node, when present), so one client's failures don't lock another's.
+// clientKey is the lockout bucket for a request: the tailnet node when there is
+// one, else the peer address — an IPv4 address, or an IPv6 /64 (the unit one
+// host or one customer is usually given) — so one client's failures don't lock
+// another's.
 func clientKey(r *http.Request) string {
-	info := reqInfoFrom(r)
-	if info.Node != "" {
+	if info := reqInfoFrom(r); info.Node != "" {
 		return "node:" + info.Node
 	}
-	host := r.RemoteAddr
-	if h, _, ok := strings.Cut(host, ":"); ok && h != "" {
+	return "addr:" + addrPrefix(r.RemoteAddr, 32, 64)
+}
+
+// clientNetwork is the coarser bucket a client's network shares: an IPv4 /24 or
+// an IPv6 /48 (a tailnet node is its own network). It bounds what one network
+// can hold of a shared table, however many addresses it has.
+func clientNetwork(r *http.Request) string {
+	if info := reqInfoFrom(r); info.Node != "" {
+		return "node:" + info.Node
+	}
+	return "net:" + addrPrefix(r.RemoteAddr, 24, 48)
+}
+
+// addrPrefix is the remote address's IP masked to v4 or v6 bits, as a prefix;
+// an address that doesn't parse is used as given.
+func addrPrefix(remote string, v4, v6 int) string {
+	host := remote
+	if h, _, err := net.SplitHostPort(remote); err == nil {
 		host = h
 	}
-	return "addr:" + host
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i] // an IPv6 zone
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return host
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return fmt.Sprintf("%s/%d", ip4.Mask(net.CIDRMask(v4, 32)), v4)
+	}
+	return fmt.Sprintf("%s/%d", ip.Mask(net.CIDRMask(v6, 128)), v6)
 }
 
 func deviceLabel(r *http.Request) string {
@@ -161,17 +239,17 @@ func (m *Manager) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
 		return
 	}
-	key := clientKey(r)
-	if locked, until := m.lock.Locked(key); locked {
-		writeErr(w, http.StatusTooManyRequests, "locked", "too many sign-in attempts — try again shortly", "locked until "+until.UTC().Format(time.RFC3339))
+	a, ok := m.reserve(w, clientKey(r))
+	if !ok {
 		return
 	}
 	operator, credID, _, err := m.FinishLogin(req.CeremonyID, req.Response)
 	if err != nil {
-		m.lock.Fail(key)
+		a.Fail()
 		writeErr(w, http.StatusUnauthorized, "login_failed", err.Error(), "")
 		return
 	}
+	a.Succeed()
 	m.signedIn(w, r, operator, MethodPasskey, credID)
 }
 

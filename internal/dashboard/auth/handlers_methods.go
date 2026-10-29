@@ -16,8 +16,8 @@ func (m *Manager) methodRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/ssh/finish", m.handleSSHFinish)
 	mux.HandleFunc("POST /api/v1/auth/ssh/poll", m.handleSSHPoll)
 	// approve-login's two calls: no session, no CSRF — the signature is the
-	// credential, and a cross-site page can't send a JSON body without a
-	// preflight the server never answers.
+	// credential. sameOriginJSON (Mux) keeps a cross-site page from sending
+	// them.
 	mux.HandleFunc("POST /api/v1/auth/ssh/pending", m.handleSSHPending)
 	mux.HandleFunc("POST /api/v1/auth/ssh/approve", m.handleSSHApprove)
 
@@ -89,6 +89,17 @@ func (m *Manager) StepupMethods(r *http.Request, sess Session) []Method {
 	return out
 }
 
+// reserve reserves one guess on the given lockout buckets (lockout.Begin),
+// writing a 429 when that is refused.
+func (m *Manager) reserve(w http.ResponseWriter, keys ...string) (*attempt, bool) {
+	a, until, ok := m.lock.Begin(keys...)
+	if !ok {
+		writeErr(w, http.StatusTooManyRequests, "locked", "too many failed attempts — try again shortly", "locked until "+until.UTC().Format(time.RFC3339))
+		return nil, false
+	}
+	return a, true
+}
+
 // lockedOut writes a 429 when the client is locked out.
 func (m *Manager) lockedOut(w http.ResponseWriter, key string) bool {
 	if locked, until := m.lock.Locked(key); locked {
@@ -123,17 +134,14 @@ func (m *Manager) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
 		return
 	}
-	key := clientKey(r)
-	if m.lockedOut(w, key) {
-		return
-	}
 	if !m.policy().SignIn(MethodPassword) {
 		writeErr(w, http.StatusForbidden, "method_disabled", "password sign-in is not enabled", "")
 		return
 	}
 	op := strings.TrimSpace(req.Operator)
-	if err := m.PasswordLogin(op, req.Password, req.Code); err != nil {
-		m.lock.Fail(key)
+	// The guess is counted (client and operator) inside, before the hash; a
+	// refusal while either is locked counts against neither.
+	if err := m.passwordLoginFrom(clientKey(r), op, req.Password, req.Code); err != nil {
 		code := http.StatusUnauthorized
 		if err == errLocked {
 			code = http.StatusTooManyRequests
@@ -174,16 +182,17 @@ func (m *Manager) handleSSHFinish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
 		return
 	}
-	key := clientKey(r)
-	if m.lockedOut(w, key) {
+	a, ok := m.reserve(w, clientKey(r))
+	if !ok {
 		return
 	}
 	op, err := m.FinishSSHLogin(r.Context(), r, req.ID, req.Signature)
 	if err != nil {
-		m.lock.Fail(key)
+		a.Fail()
 		writeErr(w, http.StatusUnauthorized, "login_failed", err.Error(), "")
 		return
 	}
+	a.Succeed()
 	m.signedIn(w, r, op, MethodSSH, "")
 }
 
@@ -215,16 +224,19 @@ func (m *Manager) handleSSHPending(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
 		return
 	}
-	key := clientKey(r)
-	if m.lockedOut(w, key) {
+	a, ok := m.reserve(w, clientKey(r))
+	if !ok {
 		return
 	}
-	v, err := m.PendingSSH(req.Code)
+	v, err := m.PendingSSH(r, req.Code)
 	if err != nil {
-		m.lock.Fail(key) // guessing codes counts toward the lockout
+		a.Fail() // guessing codes counts toward the lockout
 		writeErr(w, http.StatusNotFound, "no_pending", err.Error(), "")
 		return
 	}
+	// Finding a code is not a success that clears failures: the client may
+	// have begun that challenge itself.
+	a.Release()
 	writeJSON(w, http.StatusOK, v)
 }
 
@@ -237,15 +249,16 @@ func (m *Manager) handleSSHApprove(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
 		return
 	}
-	key := clientKey(r)
-	if m.lockedOut(w, key) {
+	a, ok := m.reserve(w, clientKey(r))
+	if !ok {
 		return
 	}
-	if err := m.ApproveSSH(r.Context(), req.Code, req.Signature); err != nil {
-		m.lock.Fail(key)
+	if err := m.ApproveSSH(r.Context(), r, req.Code, req.Signature); err != nil {
+		a.Fail()
 		writeErr(w, http.StatusUnauthorized, "approve_failed", err.Error(), "")
 		return
 	}
+	a.Release()
 	writeJSON(w, http.StatusOK, map[string]any{"approved": true})
 }
 
@@ -351,17 +364,11 @@ func (m *Manager) handleStepupPassword(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	opKey := operatorLockKey(sess.Operator)
-	if m.lockedOut(w, opKey) {
-		return
-	}
-	tok, err := m.PasswordStepup(sess, Purpose(req.Purpose), req.Digest, req.Password)
+	tok, err := m.PasswordStepup(sess, Purpose(req.Purpose), req.Digest, req.Password, req.Code)
 	if err != nil {
-		m.lock.Fail(opKey)
 		writeErr(w, http.StatusUnauthorized, "stepup_failed", err.Error(), "")
 		return
 	}
-	m.lock.Succeed(opKey)
 	m.stepupDone(w, sess, tok)
 }
 

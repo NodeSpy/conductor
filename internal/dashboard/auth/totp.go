@@ -118,15 +118,15 @@ func (m *Manager) TOTPStepup(sess Session, purpose Purpose, digest, code string)
 	if !m.policy().StepupAllowed(MethodTOTP) {
 		return "", errors.New("TOTP step-up is not enabled (dashboard.auth.stepup)")
 	}
-	opKey := operatorLockKey(sess.Operator)
-	if locked, until := m.lock.Locked(opKey); locked {
+	a, until, ok := m.lock.Begin(operatorLockKey(sess.Operator))
+	if !ok {
 		return "", fmt.Errorf("too many wrong codes — try again after %s", until.UTC().Format(time.RFC3339))
 	}
 	if err := m.checkTOTP(sess.Operator, code); err != nil {
-		m.lock.Fail(opKey)
+		a.Fail()
 		return "", err
 	}
-	m.lock.Succeed(opKey)
+	a.Succeed()
 	return m.mintStepup(sess, purpose, digest, StepupEvidence{Method: MethodTOTP})
 }
 
@@ -198,7 +198,7 @@ func (m *Manager) activateTOTP(operator, secret, code string, done func()) error
 		return errors.New("that code doesn't match — check the time on your device and try the next code")
 	}
 	if err := m.deps.Store.UpdateOperatorSecret(operator, func(o *OperatorSecret) {
-		o.TOTPSecret, o.TOTPSet, o.TOTPLastStep = secret, m.now(), step
+		o.TOTPSecret, o.TOTPSet, o.TOTPLastStep, o.TOTPUsed = secret, m.now(), step, []int64{step}
 	}); err != nil {
 		return err
 	}
@@ -212,7 +212,7 @@ func (m *Manager) activateTOTP(operator, secret, code string, done func()) error
 // ClearTOTP removes an operator's authenticator.
 func (m *Manager) ClearTOTP(operator string) error {
 	if err := m.deps.Store.UpdateOperatorSecret(operator, func(o *OperatorSecret) {
-		o.TOTPSecret, o.TOTPSet, o.TOTPLastStep = "", timeZero, 0
+		o.TOTPSecret, o.TOTPSet, o.TOTPLastStep, o.TOTPUsed = "", timeZero, 0, nil
 	}); err != nil {
 		return err
 	}

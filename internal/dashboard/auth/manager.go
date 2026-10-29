@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,11 @@ type Deps struct {
 	// Lifecycle fires conductor.* events (dashboard_enrolled, dashboard_reset).
 	// Optional.
 	Lifecycle func(event, operator, detail string)
+	// DescribeStepup says in words what a step-up for (purpose, digest) would
+	// confirm — e.g. the bot proposal whose action has that digest — for
+	// approve-login to show before it signs. "" when it doesn't know. Optional;
+	// credential changes are described here regardless.
+	DescribeStepup func(operator string, purpose Purpose, digest string) string
 	// Now and Rand are injectable for deterministic tests.
 	Now  func() time.Time
 	Rand io.Reader
@@ -54,11 +60,14 @@ type Deps struct {
 // collaborators together. It is the one object server.go mounts.
 type Manager struct {
 	deps Deps
-	rpMu sync.RWMutex                  // guards rps/wa (the tailnet RP is added after serving begins)
-	rps  map[string]RP                 // by rpKey(listener, RP ID)
-	wa   map[string]*webauthn.WebAuthn // by rpKey(listener, RP ID)
-	lock *lockout
-	hash chan struct{} // bounds concurrent argon2id hashes (each takes ~19 MiB)
+
+	muxOnce sync.Once
+	mux     http.Handler                  // the auth routes behind sameOriginJSON, built once
+	rpMu    sync.RWMutex                  // guards rps/wa (the tailnet RP is added after serving begins)
+	rps     map[string]RP                 // by rpKey(listener, RP ID)
+	wa      map[string]*webauthn.WebAuthn // by rpKey(listener, RP ID)
+	lock    *lockout
+	hash    chan struct{} // bounds concurrent argon2id hashes (each takes ~19 MiB)
 
 	mu      sync.Mutex
 	logins  map[string]*ceremony // sign-in challenges, by ceremony id

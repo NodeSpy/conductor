@@ -136,24 +136,46 @@ func (m *Manager) ClearPassword(operator string) error {
 // failure returns the same error, so the response doesn't say which part was
 // wrong or whether the operator exists.
 func (m *Manager) PasswordLogin(operator, pw, code string) error {
+	return m.passwordLoginFrom("", operator, pw, code)
+}
+
+// passwordLoginFrom is PasswordLogin for a request from client: the guess is
+// reserved on the client's and the operator's lockout buckets before the hash
+// runs, so a concurrent burst can't have more guesses evaluated than the lockout
+// allows. A refused reservation counts against neither bucket.
+func (m *Manager) passwordLoginFrom(client, operator, pw, code string) error {
 	pol := m.policy()
 	if !pol.SignIn(MethodPassword) {
 		return errors.New("password sign-in is not enabled (dashboard.auth.methods)")
 	}
-	opKey := operatorLockKey(operator)
-	if locked, _ := m.lock.Locked(opKey); locked {
+	a, _, ok := m.lock.Begin(guessKeys(client, operator)...)
+	if !ok {
 		return errLocked
 	}
 	rec, _ := m.deps.Store.OperatorSecret(operator)
-	if !m.operatorExists(operator) {
+	if !safeOperator.MatchString(operator) || !m.operatorExists(operator) {
 		rec = OperatorSecret{} // a password for a removed operator never signs in
 	}
 	if err := m.passwordFactors(pol, operator, rec, pw, code); err != nil {
-		m.lock.Fail(opKey)
+		a.Fail()
 		return err
 	}
-	m.lock.Succeed(opKey)
+	a.Succeed()
 	return nil
+}
+
+// guessKeys are the lockout buckets a guess at operator's secrets counts
+// against: the client's (when known) and the operator's — only for a
+// well-formed name, so an attacker's arbitrary strings make no buckets.
+func guessKeys(client, operator string) []string {
+	var keys []string
+	if client != "" {
+		keys = append(keys, client)
+	}
+	if safeOperator.MatchString(operator) {
+		keys = append(keys, operatorLockKey(operator))
+	}
+	return keys
 }
 
 // passwordFactors checks the password and, when policy or enrolment asks for
@@ -192,19 +214,26 @@ func (m *Manager) operatorExists(operator string) bool {
 
 // PasswordStepup checks a password re-entry for a step-up. Policy decides
 // whether it may (only with the password-only knob on).
-func (m *Manager) PasswordStepup(sess Session, purpose Purpose, digest, pw string) (string, error) {
+func (m *Manager) PasswordStepup(sess Session, purpose Purpose, digest, pw, code string) (string, error) {
 	if !m.policy().StepupAllowed(MethodPassword) {
 		return "", errors.New("password step-up is not enabled (dashboard.auth.stepup)")
 	}
-	opKey := operatorLockKey(sess.Operator)
-	if locked, until := m.lock.Locked(opKey); locked {
-		return "", fmt.Errorf("too many wrong passwords — try again after %s", until.UTC().Format(time.RFC3339))
+	a, until, ok := m.lock.Begin(operatorLockKey(sess.Operator))
+	if !ok {
+		return "", fmt.Errorf("too many wrong attempts — try again after %s", until.UTC().Format(time.RFC3339))
 	}
 	rec, _ := m.deps.Store.OperatorSecret(sess.Operator)
 	if !m.verifyPassword(rec.PasswordHash, pw) {
-		m.lock.Fail(opKey)
-		return "", errors.New("wrong password")
+		a.Fail()
+		return "", errors.New("wrong password or code")
 	}
-	m.lock.Succeed(opKey)
+	// With an authenticator the password alone is not enough, here as at sign-in.
+	if rec.TOTPSecret != "" {
+		if err := m.checkTOTP(sess.Operator, code); err != nil {
+			a.Fail()
+			return "", errors.New("wrong password or code")
+		}
+	}
+	a.Succeed()
 	return m.mintStepup(sess, purpose, digest, StepupEvidence{Method: MethodPassword})
 }

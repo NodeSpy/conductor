@@ -175,7 +175,7 @@ func (s *Server) handleBrowserOp(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.auth.RequireStepup(sess, auth.PurposeBrowserWrite, digest, r.Header.Get(auth.StepupHeader)); err != nil {
 			// Tell the client the digest + purpose to step up over, then retry.
 			writeJSON(w, http.StatusUnauthorized, map[string]any{
-				"error":  map[string]string{"code": "stepup_required", "message": err.Error(), "hint": "confirm this change with your passkey"},
+				"error":  map[string]string{"code": "stepup_required", "message": err.Error(), "hint": "confirm it's you, then try again"},
 				"stepup": map[string]string{"purpose": string(auth.PurposeBrowserWrite), "digest": digest},
 			})
 			return
@@ -213,7 +213,7 @@ func (s *Server) handleBrowserTakeover(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := s.auth.RequireStepup(sess, auth.PurposeBrowserTake, takeoverDigest(id), r.Header.Get(auth.StepupHeader)); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{
-				"error":  map[string]string{"code": "stepup_required", "message": err.Error(), "hint": "touch your passkey to take over"},
+				"error":  map[string]string{"code": "stepup_required", "message": err.Error(), "hint": "confirm it's you to take over"},
 				"stepup": map[string]string{"purpose": string(auth.PurposeBrowserTake), "digest": takeoverDigest(id)},
 			})
 			return

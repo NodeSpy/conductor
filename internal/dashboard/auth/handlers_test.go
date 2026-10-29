@@ -18,6 +18,9 @@ func reqOn(method, path string, l Listener, node string, body string) *http.Requ
 		r = httptest.NewRequest(method, path, nil)
 	}
 	r.RemoteAddr = "127.0.0.1:5555"
+	if method != http.MethodGet {
+		r.Header.Set("Content-Type", "application/json") // as the SPA sends it
+	}
 	return WithReqInfo(r, l, node, "")
 }
 
