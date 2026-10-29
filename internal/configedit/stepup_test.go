@@ -77,6 +77,13 @@ func TestStepupThroughPipeline(t *testing.T) {
 		{"remove an operator", Change{Path: []string{"operators", "ops"}, Delete: true}, true},
 		{"session idle", Change{Path: []string{"dashboard", "session", "idle"}, Value: "10m"}, true},
 		{"a bot's description", Change{Path: []string{"bots", "b1", "description"}, Value: "two"}, false},
+		// New sections: these used to fail with "re-parse after edit" instead of
+		// reaching review; they must now review cleanly and still need a step-up.
+		{"add an operator", Change{Path: []string{"operators", "mallory"}, Value: map[string]any{"ssh_key": "ssh-ed25519 AAAA m"}}, true},
+		{"replace all operators", Change{Path: []string{"operators"}, Value: map[string]any{"ops": map[string]any{"ssh_key": "ssh-ed25519 AAAA x"}}}, true},
+		{"add dashboard.auth", Change{Path: []string{"dashboard", "auth"}, Value: map[string]any{"password_requires_totp": false}}, true},
+		{"a leaf under a new section", Change{Path: []string{"dashboard", "auth", "methods"}, Value: []any{"ssh"}}, true},
+		{"a new bot section", Change{Path: []string{"bots", "b2"}, Value: map[string]any{"description": "new"}}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p, _, _ := newPipe(t, sample, nil)

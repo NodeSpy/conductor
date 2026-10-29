@@ -124,35 +124,57 @@ func (d *Document) Get(path []string) (any, bool) {
 // is a no-op (the text is left exactly as it was), so staging a value back to
 // itself produces an empty diff.
 //
-// When the final path segment names a key that does not yet exist in an
-// existing mapping, the key/value pair is inserted; creating whole missing
-// parent sections is not supported (SetScalar returns an error naming the
-// missing section) — the dashboard stages those as section adds, not scalar
-// edits.
+// value may be a scalar, a map or a list (the shapes a JSON request decodes
+// to). A scalar written over an existing scalar is spliced in place, keeping
+// the line's inline comment. Anything structural rewrites only the one entry it
+// names: a new key is inserted at the end of its mapping, an existing entry's
+// block is replaced, and a bare "section:" with nothing under it is filled.
+// Missing parent sections are created. Every edit is all-or-nothing: if the
+// result does not parse, or does not read back as value at path, the text is
+// left exactly as it was and an error is returned. Refused outright: a parent
+// written in flow style ({...}), a path through a YAML alias, an index past the
+// end of a list, replacing a list item with a structure, and a multi-line
+// string (it has no single-line form).
 func (d *Document) SetScalar(path []string, value any) error {
 	if len(path) == 0 {
 		return fmt.Errorf("configedit: empty path")
 	}
-	rendered, err := renderScalar(value)
+	structured := isStructured(value)
+	var rendered string
+	if !structured {
+		r, err := renderScalar(value)
+		if err != nil {
+			return err
+		}
+		rendered = r
+	}
+	loc, err := d.locate(path)
 	if err != nil {
 		return err
 	}
+	if loc.found() && scalarEqual(loc.val, value) {
+		return nil // no-op: leave the text byte-for-byte
+	}
 
-	val, parent, _, found := d.node(path)
-	if found {
-		if val.Kind != yaml.ScalarNode {
-			return fmt.Errorf("configedit: %s is not a scalar", strings.Join(path, "."))
-		}
-		if scalarEqual(val, value) {
-			return nil // no-op: leave the text byte-for-byte
-		}
-		return d.spliceScalar(val, rendered)
+	oldSrc, oldRoot := d.src, d.root
+	switch {
+	case loc.found() && !structured && loc.val.Kind == yaml.ScalarNode:
+		err = d.spliceScalar(loc.val, rendered)
+	case loc.found():
+		err = d.replaceEntry(loc, path, value)
+	default:
+		err = d.createEntry(loc, path, value)
 	}
-	// Not found: the last segment is a missing key in an existing mapping.
-	if parent != nil && parent.Kind == yaml.MappingNode {
-		return d.insertKey(path, rendered)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("configedit: cannot set %s: section %q does not exist", strings.Join(path, "."), parentPath(path))
+	// The edit must land where it was aimed: a mis-indented insert can parse
+	// cleanly yet attach the key to a different section.
+	if got, _, _, ok := d.node(path); !ok || !scalarEqual(got, value) {
+		d.src, d.root = oldSrc, oldRoot
+		return fmt.Errorf("configedit: setting %s did not produce the requested value; the file is unchanged", strings.Join(path, "."))
+	}
+	return nil
 }
 
 // spliceScalar rewrites the value token of an existing scalar node in place,
@@ -184,48 +206,166 @@ func (d *Document) spliceScalar(val *yaml.Node, rendered string) error {
 	}
 	newLine := prefix + rendered + suffix + eol
 	lines[ln] = newLine
-	d.src = []byte(strings.Join(lines, ""))
-	return d.reparse()
+	return d.commit([]byte(strings.Join(lines, "")))
 }
 
-// insertKey adds a new key/value pair to the mapping named by path[:len-1].
-// The new line is indented to match the mapping's existing children and placed
-// at the end of the mapping's block.
-func (d *Document) insertKey(path []string, rendered string) error {
-	parentSegs := path[:len(path)-1]
-	key := path[len(path)-1]
+// location is how far a path resolves in the document.
+type location struct {
+	n, depth int        // path length; how many segments resolved
+	val      *yaml.Node // the node at path[:depth] (nil at depth 0)
+	parent   *yaml.Node // the mapping or sequence holding val
+	key      *yaml.Node // val's key, when parent is a mapping
+	viaAlias bool       // a step before val went through a YAML alias
+}
 
-	var mapping *yaml.Node
-	if len(parentSegs) == 0 {
-		mapping = d.mapping()
-	} else {
-		v, _, _, ok := d.node(parentSegs)
-		if !ok {
-			return fmt.Errorf("configedit: cannot add %s: section %q does not exist", strings.Join(path, "."), strings.Join(parentSegs, "."))
+func (l location) found() bool { return l.depth == l.n }
+
+// locate walks path as far as it resolves. A missing mapping key, or reaching
+// a scalar, stops the walk without error; an index past the end of a list is
+// an error, since there is nothing sensible to create.
+func (d *Document) locate(path []string) (location, error) {
+	l := location{n: len(path)}
+	container := d.mapping()
+	if container == nil {
+		if d.root != nil && len(d.root.Content) > 0 {
+			return l, fmt.Errorf("configedit: the config's top level is not a mapping")
 		}
-		mapping = resolveAlias(v)
+		return l, nil // empty document
 	}
-	if mapping == nil || mapping.Kind != yaml.MappingNode {
-		return fmt.Errorf("configedit: %q is not a mapping", strings.Join(parentSegs, "."))
+	for l.depth < len(path) {
+		seg := path[l.depth]
+		var k, v *yaml.Node
+		switch container.Kind {
+		case yaml.MappingNode:
+			k, v = mapChild(container, seg)
+		case yaml.SequenceNode:
+			idx, err := strconv.Atoi(seg)
+			if err != nil || idx < 0 || idx >= len(container.Content) {
+				return l, fmt.Errorf("configedit: %s has no item %q", pathOrRoot(path[:l.depth]), seg)
+			}
+			v = container.Content[idx]
+		default:
+			return l, nil // a scalar: createEntry decides whether it can hold a section
+		}
+		if v == nil {
+			return l, nil
+		}
+		l.parent, l.key, l.val = container, k, v
+		l.depth++
+		if l.depth < len(path) {
+			r := resolveAlias(v)
+			if r != v {
+				l.viaAlias = true
+			}
+			container = r
+		}
 	}
+	return l, nil
+}
 
+// createEntry adds path, which resolves only to loc.depth, creating whatever
+// sections are missing below the deepest one that exists.
+func (d *Document) createEntry(loc location, path []string, value any) error {
+	if loc.viaAlias {
+		return fmt.Errorf("configedit: %s goes through a YAML alias; edit the anchored section instead", strings.Join(path, "."))
+	}
+	rest := path[loc.depth:]
+	if d.mapping() == nil { // empty document: the first top-level key
+		text, err := renderEntry("", rest[0], nest(rest[1:], value), 0)
+		if err != nil {
+			return err
+		}
+		src := d.src
+		if len(src) > 0 && src[len(src)-1] != '\n' {
+			src = append(append([]byte{}, src...), '\n')
+		}
+		return d.commit(append(append([]byte{}, src...), text...))
+	}
+	container := d.mapping()
+	if loc.depth > 0 {
+		container = resolveAlias(loc.val)
+	}
+	switch {
+	case container.Kind == yaml.MappingNode:
+		if container.Style&yaml.FlowStyle != 0 {
+			return fmt.Errorf("configedit: %s is written in flow style ({...}); edit it by hand", pathOrRoot(path[:loc.depth]))
+		}
+		return d.insertEntry(container, rest[0], nest(rest[1:], value))
+	case container == loc.val && container.Kind == yaml.ScalarNode && container.Tag == "!!null" && loc.key != nil:
+		// "section:" with nothing under it.
+		return d.replaceEntry(loc, path[:loc.depth], nest(rest, value))
+	default:
+		return fmt.Errorf("configedit: cannot set %s: %s is a value, not a section", strings.Join(path, "."), pathOrRoot(path[:loc.depth]))
+	}
+}
+
+// insertEntry appends key: value to a block mapping, indented like its
+// existing children.
+func (d *Document) insertEntry(mapping *yaml.Node, key string, value any) error {
 	indent := childIndentOf(mapping)
+	text, err := renderEntry(strings.Repeat(" ", indent), key, value, indent)
+	if err != nil {
+		return err
+	}
 	lines := splitLinesKeepEnds(d.src)
-	insertAt := mappingBlockEnd(mapping, lines)
-	newLine := strings.Repeat(" ", indent) + key + ": " + rendered + "\n"
-
+	at := mappingBlockEnd(mapping, lines)
 	out := make([]string, 0, len(lines)+1)
-	out = append(out, lines[:insertAt]...)
-	out = append(out, newLine)
-	out = append(out, lines[insertAt:]...)
-	// Ensure the line before the insert ends with a newline.
-	if insertAt > 0 {
-		if _, eol := splitEOL(out[insertAt-1]); eol == "" {
-			out[insertAt-1] += "\n"
+	out = append(out, lines[:at]...)
+	if at > 0 {
+		if _, eol := splitEOL(out[at-1]); eol == "" {
+			out[at-1] += "\n"
 		}
 	}
-	d.src = []byte(strings.Join(out, ""))
-	return d.reparse()
+	out = append(out, text)
+	out = append(out, lines[at:]...)
+	return d.commit([]byte(strings.Join(out, "")))
+}
+
+// replaceEntry rewrites the whole entry (key line through the end of its
+// value's block) for the mapping key at loc. The key's head comment and
+// everything outside the entry stay as written.
+func (d *Document) replaceEntry(loc location, path []string, value any) error {
+	if loc.viaAlias {
+		return fmt.Errorf("configedit: %s goes through a YAML alias; edit the anchored section instead", strings.Join(path, "."))
+	}
+	if loc.key == nil || loc.parent == nil {
+		return fmt.Errorf("configedit: replacing list item %s with a section isn't supported; edit the list", strings.Join(path, "."))
+	}
+	if loc.parent.Style&yaml.FlowStyle != 0 {
+		return fmt.Errorf("configedit: %s sits in a flow-style section ({...}); edit it by hand", strings.Join(path, "."))
+	}
+	lines := splitLinesKeepEnds(d.src)
+	start := loc.key.Line - 1
+	end := blockEndLine(loc.val, loc.key, lines)
+	if start < 0 || start >= len(lines) || end > len(lines) || end <= start {
+		return fmt.Errorf("configedit: cannot locate %s to replace", strings.Join(path, "."))
+	}
+	line, _ := splitEOL(lines[start])
+	col := loc.key.Column - 1
+	if col < 0 || col > len(line) {
+		return fmt.Errorf("configedit: key column out of range for %s", strings.Join(path, "."))
+	}
+	// line[:col] is the indent, or "  - " for the first key of a list item.
+	text, err := renderEntry(line[:col], loc.key.Value, value, col)
+	if err != nil {
+		return err
+	}
+	out := append([]string{}, lines[:start]...)
+	out = append(out, text)
+	out = append(out, lines[end:]...)
+	return d.commit([]byte(strings.Join(out, "")))
+}
+
+// commit adopts new text only if it parses; otherwise the document is left
+// exactly as it was.
+func (d *Document) commit(src []byte) error {
+	old := d.src
+	d.src = src
+	if err := d.reparse(); err != nil {
+		d.src = old
+		return err
+	}
+	return nil
 }
 
 // Delete removes the key/value pair (or sequence element) at path.
@@ -256,8 +396,7 @@ func (d *Document) Delete(path []string) error {
 	}
 	out := append([]string{}, lines[:start]...)
 	out = append(out, lines[end:]...)
-	d.src = []byte(strings.Join(out, ""))
-	return d.reparse()
+	return d.commit([]byte(strings.Join(out, "")))
 }
 
 // reparse re-reads the tree after a text edit so subsequent edits see correct
@@ -325,16 +464,12 @@ func scalarEqual(node *yaml.Node, v any) bool {
 }
 
 // childIndentOf returns the column (0-based) at which a mapping's children are
-// indented, inferred from its first child key. Defaults to the mapping's own
-// indent + 2 when it has no children.
+// indented, inferred from its first child key (column 0 for the top level).
 func childIndentOf(m *yaml.Node) int {
-	if len(m.Content) > 0 && m.Content[0].Column > 1 {
+	if len(m.Content) > 0 {
 		return m.Content[0].Column - 1
 	}
-	if m.Column > 1 {
-		return m.Column - 1
-	}
-	return 2
+	return m.Column + 1
 }
 
 // mappingBlockEnd returns the 0-based line index just past the last line of a
@@ -389,11 +524,11 @@ func nodeMaxLine(n *yaml.Node) int {
 	return m
 }
 
-func parentPath(path []string) string {
-	if len(path) <= 1 {
-		return "(root)"
+func pathOrRoot(path []string) string {
+	if len(path) == 0 {
+		return "the top level"
 	}
-	return strings.Join(path[:len(path)-1], ".")
+	return strings.Join(path, ".")
 }
 
 // splitLinesKeepEnds splits text into lines, each retaining its trailing "\n"
@@ -427,3 +562,68 @@ func splitEOL(line string) (content, eol string) {
 }
 
 func stripEOL(line string) string { c, _ := splitEOL(line); return c }
+
+// isStructured reports whether v is a map or a list (as JSON decodes them).
+func isStructured(v any) bool {
+	if v == nil {
+		return false
+	}
+	switch reflect.ValueOf(v).Kind() {
+	case reflect.Map, reflect.Slice, reflect.Array:
+		return true
+	}
+	return false
+}
+
+// nest wraps value in one single-key map per segment: nest([a b], v) = {a: {b: v}}.
+func nest(segs []string, value any) any {
+	for i := len(segs) - 1; i >= 0; i-- {
+		value = map[string]any{segs[i]: value}
+	}
+	return value
+}
+
+// renderEntry renders "key: value" as complete lines. prefix is written before
+// the key on the first line (indent, or "  - " for a list item's first key);
+// keyCol is the key's column, which nested lines are indented two past.
+func renderEntry(prefix, key string, value any, keyCol int) (string, error) {
+	k, err := renderScalar(key)
+	if err != nil {
+		return "", err
+	}
+	if !isStructured(value) {
+		v, err := renderScalar(value)
+		if err != nil {
+			return "", err
+		}
+		return prefix + k + ": " + v + "\n", nil
+	}
+	rv := reflect.ValueOf(value)
+	if rv.Len() == 0 {
+		if rv.Kind() == reflect.Map {
+			return prefix + k + ": {}\n", nil
+		}
+		return prefix + k + ": []\n", nil
+	}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(value); err != nil {
+		return "", fmt.Errorf("configedit: render %s: %w", key, err)
+	}
+	if err := enc.Close(); err != nil {
+		return "", fmt.Errorf("configedit: render %s: %w", key, err)
+	}
+	pad := strings.Repeat(" ", keyCol+2)
+	var b strings.Builder
+	b.WriteString(prefix + k + ":\n")
+	body := strings.Split(buf.String(), "\n")
+	for _, ln := range body[:len(body)-1] { // the encoder ends with a newline
+		if ln == "" {
+			b.WriteString("\n")
+			continue
+		}
+		b.WriteString(pad + ln + "\n")
+	}
+	return b.String(), nil
+}

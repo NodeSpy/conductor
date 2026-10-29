@@ -159,13 +159,6 @@ func TestInsertMissingKey(t *testing.T) {
 	}
 }
 
-func TestMissingSectionErrors(t *testing.T) {
-	d := mustParse(t, "settings:\n  concurrency: 4\n")
-	if err := d.SetScalar([]string{"nope", "deep", "key"}, 1); err == nil {
-		t.Fatal("expected error for a missing parent section")
-	}
-}
-
 func TestSequenceIndexPath(t *testing.T) {
 	src := "hosts:\n  list:\n    - alpha\n    - beta\n"
 	d := mustParse(t, src)
@@ -195,9 +188,17 @@ func TestDeleteKey(t *testing.T) {
 	}
 }
 
+// An empty file is a valid empty document; the first edit creates the
+// top-level mapping (as Parse documents).
 func TestParseEmpty(t *testing.T) {
 	d := mustParse(t, "")
-	if err := d.SetScalar([]string{"a"}, 1); err == nil {
-		t.Fatal("expected error setting into an empty document root")
+	if err := d.SetScalar([]string{"a"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetScalar([]string{"b", "c"}, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(d.Bytes()); got != "a: 1\nb:\n  c: x\n" {
+		t.Fatalf("got:\n%s", got)
 	}
 }
