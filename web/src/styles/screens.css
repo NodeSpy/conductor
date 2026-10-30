@@ -197,8 +197,8 @@
   min-width: 0;
   max-height: 16rem;
   overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  /* JSON keeps its lines: a long one scrolls inside the box, never breaks mid-word */
+  white-space: pre;
   font-size: var(--font-size-sm);
 }
 .widening {

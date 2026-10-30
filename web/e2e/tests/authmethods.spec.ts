@@ -94,11 +94,13 @@ async function pasteSSH(scope: Locator | Page): Promise<void> {
 
 // --- pages ---
 
-async function newDeviceContext(browser: Browser, info: TestInfo, colorScheme: 'dark' | 'light' = 'dark'): Promise<BrowserContext> {
+// A device context like the project's, in the project's colour scheme unless
+// a test asks for one.
+async function newDeviceContext(browser: Browser, info: TestInfo, colorScheme?: 'dark' | 'light'): Promise<BrowserContext> {
   const u = info.project.use
   return browser.newContext({
     baseURL: remote,
-    colorScheme,
+    colorScheme: colorScheme ?? (u.colorScheme === 'light' ? 'light' : 'dark'),
     viewport: u.viewport,
     userAgent: u.userAgent,
     deviceScaleFactor: u.deviceScaleFactor,
