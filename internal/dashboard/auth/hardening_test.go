@@ -486,3 +486,23 @@ func TestSSHAndStepupClaimsHold(t *testing.T) {
 		t.Error("sign-in TOTP code reused for step-up")
 	}
 }
+
+// A repeated Origin or Sec-Fetch-Site is refused if any value is foreign, not
+// only the first.
+func TestRepeatedOriginHeadersAllChecked(t *testing.T) {
+	h := newMethodsHarness(t, nil)
+	for name, hdr := range map[string]http.Header{
+		"second origin foreign": {"Origin": {"http://localhost:7788", "https://evil.example"}},
+		"second fetch site":     {"Sec-Fetch-Site": {"same-origin", "cross-site"}},
+	} {
+		r := httptest.NewRequest("POST", "/api/v1/auth/ssh/begin", strings.NewReader(`{"operator":"ops"}`))
+		r.Host, r.RemoteAddr = "localhost:7788", "127.0.0.1:1"
+		r.Header = hdr
+		r.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.m.Mux().ServeHTTP(rr, WithConn(r, onLocalhost))
+		if rr.Code != http.StatusForbidden {
+			t.Errorf("%s: %d %s", name, rr.Code, rr.Body)
+		}
+	}
+}

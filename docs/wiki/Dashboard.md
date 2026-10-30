@@ -228,8 +228,11 @@ another site, or a body that isn't `application/json`, is refused before it is
 looked at.
 
 **On plain HTTP, anyone who can change traffic on the way can change the page
-itself**, and with it what a code, password or signature you enter confirms.
-Use plain HTTP only on a network you trust.
+itself**, and with it what a code, password or signature you enter confirms,
+and the shell command the page offers to copy for SSH signing. On plain HTTP,
+sign with `conductor dashboard approve-login <code>` instead of pasting a
+command from the page: it reads the request from the dashboard itself and
+prints what it confirms. Use plain HTTP only on a network you trust.
 
 A session rests on the credential it signed in with. Changing an operator's
 `ssh_key` ends the sessions signed in with the old key; setting a new password

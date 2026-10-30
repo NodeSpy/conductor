@@ -96,7 +96,10 @@ export function SSHPanel(props: {
 }): JSX.Element {
   const { ch, operator } = props
   const coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches
-  const [tab, setTab] = useState<'paste' | 'approve'>(coarse ? 'approve' : 'paste')
+  // On plain HTTP off this machine the page (and the command it offers) can be
+  // rewritten on the way; approve-login reads the request from the server.
+  const plain = location.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)
+  const [tab, setTab] = useState<'paste' | 'approve'>(coarse || plain ? 'approve' : 'paste')
   const [sig, setSig] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -157,6 +160,13 @@ export function SSHPanel(props: {
             Run this where your SSH key is (use your key's path; a <span class="mono">.pub</span> path works when the key
             is in ssh-agent), then paste the whole signature below.
           </p>
+          {plain ? (
+            <p class="banner attn" role="note" data-testid="ssh-plain-warning">
+              This page came over plain HTTP, so anyone who can change traffic on the way could have changed this command.
+              Read it before you run it, or use <b>Approve from another device</b>: approve-login reads the request from the
+              dashboard itself.
+            </p>
+          ) : null}
           <CopyBlock text={keygen} testid="ssh-command" />
           <span class="acc-note">
             Or <span class="mono">conductor dashboard sign {'<challenge>'}</span>. The challenge on its own:

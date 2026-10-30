@@ -28,16 +28,21 @@ func (m *Manager) Mux() http.Handler {
 // "simple" request (text/plain, a form) needs no preflight, so the Content-Type
 // is what makes a foreign page's POST impossible without the browser asking
 // first. A request with no Origin and no Sec-Fetch-Site (the CLI) passes the
-// first two checks.
+// first two checks. Every value of a repeated header is checked, not just the
+// first.
 func sameOriginJSON(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if o := r.Header.Get("Origin"); o != "" && !sameOrigin(o, requestOrigin(r)) {
-			writeErr(w, http.StatusForbidden, "cross_origin", "this request came from another site", "")
-			return
+		for _, o := range r.Header.Values("Origin") {
+			if o != "" && !sameOrigin(o, requestOrigin(r)) {
+				writeErr(w, http.StatusForbidden, "cross_origin", "this request came from another site", "")
+				return
+			}
 		}
-		if s := r.Header.Get("Sec-Fetch-Site"); s != "" && s != "same-origin" && s != "none" {
-			writeErr(w, http.StatusForbidden, "cross_origin", "this request came from another site", "")
-			return
+		for _, s := range r.Header.Values("Sec-Fetch-Site") {
+			if s != "" && s != "same-origin" && s != "none" {
+				writeErr(w, http.StatusForbidden, "cross_origin", "this request came from another site", "")
+				return
+			}
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			ct := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))

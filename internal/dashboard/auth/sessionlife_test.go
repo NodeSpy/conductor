@@ -3,6 +3,7 @@ package auth
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -138,5 +139,34 @@ func TestPasswordChangeHandlerEndsOtherSessions(t *testing.T) {
 	}
 	if err := validate(m, other); err == nil {
 		t.Fatal("another session on the old password must end")
+	}
+}
+
+// A step-up rotates the cookie secret but keeps the session: the old cookie
+// stops working, the list still has one session, and the audit records a
+// step-up, not a sign-in.
+func TestStepupRotatesWithoutANewSession(t *testing.T) {
+	g := newSessionRig(t)
+	m := g.manager(12 * time.Hour)
+	secret := setTOTP(t, m, "ops")
+	var events []string
+	m.deps.Audit = func(e map[string]any) { events = append(events, e["event"].(string)) }
+	r := WithConn(httptest.NewRequest("POST", "/", nil), onLocalhost)
+	ck, sess, _ := m.CreateSessionFor(r, "ops", MethodSSH, "")
+	events = nil
+	rr := call(m, "POST", "/api/v1/auth/stepup/totp", "localhost:7788", "127.0.0.1:1", onLocalhost,
+		map[string]string{"purpose": string(PurposeApprove), "digest": "d", "code": codeAt(t, secret, g.clk.now())},
+		map[string]string{"Cookie": ck.Name + "=" + ck.Value, CSRFHeader: sess.CSRF})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("totp step-up: %d %s", rr.Code, rr.Body)
+	}
+	if validate(m, ck) == nil {
+		t.Fatal("the pre-step-up cookie must stop working (rotated)")
+	}
+	if list := m.sessionList(sess); len(list) != 1 || list[0].ID != sess.ID {
+		t.Fatalf("a step-up keeps the one session: %+v", list)
+	}
+	if strings.Join(events, ",") != "dashboard_stepup" {
+		t.Fatalf("audit events: %v", events)
 	}
 }

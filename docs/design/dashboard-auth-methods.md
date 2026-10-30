@@ -389,9 +389,13 @@ session list and `dashboard status` count live sessions only.
 - **Plain HTTP, active.** An attacker who can modify traffic rewrites the page
   itself. Every code, password or signature the operator then enters can
   confirm an action of the attacker's choosing, and the page can show
-  anything. The only check outside the page is `approve-login`, which prints
-  the server's own description of a step-up. Plain HTTP means trusting
-  everything on the path; use it only where that is true.
+  anything. That includes the shell command the SSH sign-in and confirmation
+  dialogs offer to copy (`printf … | ssh-keygen -Y sign …`): a rewritten page
+  can offer a different command, run in the terminal that holds the operator's
+  key. The only check outside the page is `approve-login`, which prints the
+  server's own description of a step-up and is the way to sign from a plain
+  HTTP page. Plain HTTP means trusting everything on the path; use it only
+  where that is true.
 - **Password.** Phishable and guessable. It requires TOTP by default; guessing
   is bounded per client and per operator; and only the explicit knob makes a
   password a step-up method.
