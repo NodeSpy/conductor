@@ -46,18 +46,33 @@ type SessionView struct {
 	Host      string `json:"host,omitempty"`
 	Created   string `json:"created"`
 	LastSeen  string `json:"last_seen"`
+	Expires   string `json:"expires"` // the latest it can last (session.max applied)
 	Current   bool   `json:"current"`
 }
 
+// sessionList is the operator's live sessions: one that has expired, gone
+// idle or lost its credential is not listed (it no longer signs anything in).
 func (m *Manager) sessionList(current Session) []SessionView {
 	out := []SessionView{}
-	for _, s := range m.deps.Store.SessionsFor(current.Operator) {
+	for _, s := range m.liveSessions(current.Operator) {
 		out = append(out, SessionView{
 			ID: s.ID, Device: s.Device, Addr: s.Addr, Listener: string(s.Listener),
 			Method: string(s.EffectiveMethod()), Transport: string(sessTransport(s)), Host: s.Host,
-			Created: tsOrEmpty(s.Created), LastSeen: tsOrEmpty(s.LastSeen),
+			Created: tsOrEmpty(s.Created), LastSeen: tsOrEmpty(s.LastSeen), Expires: tsOrEmpty(m.expiresAt(s)),
 			Current: s.ID == current.ID,
 		})
+	}
+	return out
+}
+
+// liveSessions are operator's sessions that still sign in.
+func (m *Manager) liveSessions(operator string) []Session {
+	var out []Session
+	now := m.now()
+	for _, s := range m.deps.Store.SessionsFor(operator) {
+		if m.sessionEnded(s, now) == "" {
+			out = append(out, s)
+		}
 	}
 	return out
 }

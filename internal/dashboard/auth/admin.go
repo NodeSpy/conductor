@@ -105,7 +105,7 @@ func (m *Manager) Status() StatusLine {
 			rec, _ := m.deps.Store.OperatorSecret(op)
 			out.Operators[op] = OpStatus{
 				Passkeys:   len(m.deps.Store.CredentialsFor(op)),
-				Sessions:   len(m.deps.Store.SessionsFor(op)),
+				Sessions:   len(m.liveSessions(op)),
 				LiveTicket: live,
 				Password:   rec.PasswordHash != "",
 				TOTP:       rec.TOTPSecret != "",

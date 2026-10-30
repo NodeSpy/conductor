@@ -91,6 +91,10 @@ type Session struct {
 	// a secure one (localhost or the tailnet's TLS).
 	Transport Transport `json:"transport,omitempty"`
 	Host      string    `json:"host,omitempty"` // the Host it signed in on
+	// Cred fingerprints the credential an SSH or password session rests on
+	// (the operator's ssh_key; the password hash and authenticator secret).
+	// When it changes, the session ends (credFingerprint).
+	Cred string `json:"cred,omitempty"`
 }
 
 // EffectiveMethod is the session's sign-in method, defaulting to passkey for a

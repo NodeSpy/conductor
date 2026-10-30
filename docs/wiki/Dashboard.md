@@ -218,7 +218,14 @@ looked at.
 itself**, and with it what a code, password or signature you enter confirms.
 Use plain HTTP only on a network you trust.
 
-`conductor dashboard status` lists, per operator, passkeys, sessions, and
+A session rests on the credential it signed in with. Changing an operator's
+`ssh_key` ends the sessions signed in with the old key; setting a new password
+or authenticator ends the password sessions, except the one that made the
+change. Removing an operator ends all of theirs. Lowering `session.max` applies
+to sessions that already exist. The session list on **Access** shows live
+sessions only, each with the latest it can last.
+
+`conductor dashboard status` lists, per operator, passkeys, live sessions, and
 whether a password and an authenticator are set.
 
 ## What it shows

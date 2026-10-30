@@ -66,7 +66,7 @@ func newStepupRig(t *testing.T, authExtra string) *stepupRig {
 	}
 	h := s.bindHandler(cfg.Dashboard.Bind[0])
 	r := browserRequest(cfg.Dashboard.Bind[0])
-	ck, _, err := s.auth.CreateSessionFor(r, "ops", auth.MethodPassword, "")
+	ck, _, err := s.auth.CreateSessionFor(r, "ops", auth.MethodSSH, "")
 	if err != nil {
 		t.Fatal(err)
 	}

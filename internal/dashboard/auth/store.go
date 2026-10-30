@@ -322,6 +322,16 @@ func (s *Store) TouchSession(id string, t time.Time) bool {
 	return true
 }
 
+// SetSessionCred rebinds a session to the credential it now rests on.
+func (s *Store) SetSessionCred(id, cred string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.sess[id]; ok {
+		r.Session.Cred = cred
+		_ = s.save()
+	}
+}
+
 // MarkStepup records a fresh step-up time on the session (for the freshness
 // readout and rotation).
 func (s *Store) MarkStepup(id string, t time.Time) {

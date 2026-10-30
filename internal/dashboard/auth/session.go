@@ -48,6 +48,7 @@ func (m *Manager) createSession(tmpl Session) (*http.Cookie, Session, error) {
 	}
 	now := m.now()
 	sess := tmpl
+	sess.Cred = m.credFingerprint(sess.Operator, sess.EffectiveMethod())
 	sess.ID, sess.CSRF = b64(idb), b64(csrfB)
 	sess.Created, sess.LastSeen, sess.Expires = now, now, now.Add(m.deps.SessionMax)
 	secret := b64(secretB)
@@ -105,13 +106,10 @@ func (m *Manager) ValidateCookie(r *http.Request, l Listener, node string) (Sess
 		return Session{}, errNoSession
 	}
 	now := m.now()
-	if now.After(sess.Expires) {
+	if why := m.sessionEnded(sess, now); why != "" {
 		_ = m.deps.Store.DeleteSession(id)
-		return Session{}, errors.New("session expired")
-	}
-	if now.Sub(sess.LastSeen) > m.deps.SessionIdle {
-		_ = m.deps.Store.DeleteSession(id)
-		return Session{}, errors.New("session idle too long")
+		m.audit(map[string]any{"event": "dashboard_session_ended", "operator": sess.Operator, "session": sess.ID, "why": why})
+		return Session{}, errors.New(why)
 	}
 	// A cookie is bound to the listener it was created on: a localhost cookie
 	// never works on the tailnet, and vice versa.
@@ -129,6 +127,71 @@ func (m *Manager) ValidateCookie(r *http.Request, l Listener, node string) (Sess
 	m.deps.Store.TouchSession(id, now)
 	sess.LastSeen = now
 	return sess, nil
+}
+
+// expiresAt is when a session ends at the latest: its stored ceiling, or
+// session.max after it began if that is sooner (a shortened max applies to
+// sessions that already exist).
+func (m *Manager) expiresAt(s Session) time.Time {
+	if cap := s.Created.Add(m.deps.SessionMax); cap.Before(s.Expires) {
+		return cap
+	}
+	return s.Expires
+}
+
+// sessionEnded says why a session is no longer live, or "".
+func (m *Manager) sessionEnded(s Session, now time.Time) string {
+	switch {
+	case now.After(m.expiresAt(s)):
+		return "session expired"
+	case now.Sub(s.LastSeen) > m.deps.SessionIdle:
+		return "session idle too long"
+	case !m.operatorExists(s.Operator):
+		return "the operator is no longer configured"
+	}
+	switch s.EffectiveMethod() {
+	case MethodSSH, MethodPassword:
+		if fp := m.credFingerprint(s.Operator, s.EffectiveMethod()); fp == "" || fp != s.Cred {
+			return "the credential this session signed in with has changed — sign in again"
+		}
+	}
+	return ""
+}
+
+// credFingerprint identifies the credential a session by method rests on: the
+// operator's configured ssh_key for SSH; the password hash and authenticator
+// secret for a password. "" when there is none, or for a passkey (removing a
+// passkey deletes its sessions).
+func (m *Manager) credFingerprint(operator string, method Method) string {
+	var material string
+	switch method {
+	case MethodSSH:
+		if m.deps.Operators == nil {
+			return ""
+		}
+		f := strings.Fields(m.deps.Operators()[operator])
+		if len(f) < 2 {
+			return ""
+		}
+		material = "ssh\x00" + f[0] + "\x00" + f[1]
+	case MethodPassword:
+		rec, _ := m.deps.Store.OperatorSecret(operator)
+		if rec.PasswordHash == "" {
+			return ""
+		}
+		material = "password\x00" + rec.PasswordHash + "\x00" + rec.TOTPSecret
+	default:
+		return ""
+	}
+	return hashHex(material)
+}
+
+// rebind moves the operator's own session onto the credential it just
+// changed (with a step-up): the other sessions resting on the old one end.
+func (m *Manager) rebind(sess Session) {
+	if fp := m.credFingerprint(sess.Operator, sess.EffectiveMethod()); fp != "" {
+		m.deps.Store.SetSessionCred(sess.ID, fp)
+	}
 }
 
 // Logout revokes the request's session and returns a clearing cookie.

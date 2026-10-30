@@ -124,7 +124,7 @@ func TestStolenSessionCannotSwapSSHKey(t *testing.T) {
 	vr := httptest.NewRequest("POST", "/", nil)
 	vr.Host, vr.RemoteAddr = "box.lan:7795", "192.0.2.50:1111"
 	vr = auth.WithConn(vr, auth.ConnInfo{Listener: bindListener(cfg.Dashboard.Bind[0]), Transport: auth.TransportHTTP})
-	ck, _, err := s.auth.CreateSessionFor(vr, "ops", auth.MethodPassword, "")
+	ck, _, err := s.auth.CreateSessionFor(vr, "ops", auth.MethodSSH, "")
 	if err != nil {
 		t.Fatal(err)
 	}

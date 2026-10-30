@@ -303,6 +303,8 @@ export interface SessionRow {
   host?: string
   created: string
   last_seen: string
+  /** the latest it lasts (session.max applied); idle time can end it sooner */
+  expires: string
   current: boolean
 }
 

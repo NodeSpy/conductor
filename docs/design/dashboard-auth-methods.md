@@ -302,6 +302,24 @@ passkeys, sessions, Access):
 
 The CLI sends no `Origin` and the JSON content type, so it is unaffected.
 
+## 4b. Session lifetime
+
+A session records a fingerprint of the credential it signed in with: the
+operator's `ssh_key` for SSH, the password hash and TOTP secret for a password.
+Every request checks it, so:
+
+- changing `ssh_key` ends the sessions signed in with the old key (a rotated key
+  stops being a way in at once, not at `session.max`);
+- setting a password or an authenticator, or clearing the authenticator, ends
+  the operator's password sessions; the session that made the change is moved
+  onto the new credential and stays;
+- removing an operator ends their sessions.
+
+A session ends at the earlier of its own expiry and `created + session.max`
+under the current config, so lowering `session.max` applies to sessions that
+already exist. An ended session is deleted when it is next presented, and the
+session list and `dashboard status` count live sessions only.
+
 ## 5. Transports and listeners
 
 | Listener | Transport | Passkey RP |

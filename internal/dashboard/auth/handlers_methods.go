@@ -409,6 +409,7 @@ func (m *Manager) handlePasswordSet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "password", err.Error(), "")
 		return
 	}
+	m.rebind(sess) // other sessions on the old password end
 	writeJSON(w, http.StatusOK, map[string]any{"password": true})
 }
 
@@ -469,6 +470,7 @@ func (m *Manager) handleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "totp", err.Error(), "")
 		return
 	}
+	m.rebind(sess)
 	writeJSON(w, http.StatusOK, map[string]any{"totp": true})
 }
 
@@ -481,6 +483,7 @@ func (m *Manager) handleTOTPClear(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "totp", err.Error(), "")
 		return
 	}
+	m.rebind(sess)
 	writeJSON(w, http.StatusOK, map[string]any{"totp": false})
 }
 

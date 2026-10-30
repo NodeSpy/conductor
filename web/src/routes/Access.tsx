@@ -23,7 +23,7 @@ import {
 } from '../api/auth'
 import { passkeysUsable } from '../lib/webauthn'
 import { CopyBlock, methodLabel, methodPhrase } from '../components/AuthBits'
-import { ago, goDuration } from '../lib/format'
+import { ago, goDuration, humanDuration } from '../lib/format'
 import '../styles/auth.css'
 
 function errText(e: unknown): string {
@@ -332,6 +332,7 @@ export function Access(): JSX.Element {
                     </b>
                     <span class="acc-why">
                       {sessionHow(s)} · signed in {s.created ? ago(s.created) : ''}
+                      {s.expires ? ` · ends within ${humanDuration(new Date(s.expires).getTime() - Date.now())}` : ''}
                     </span>
                   </div>
                   <span class="acc-act">

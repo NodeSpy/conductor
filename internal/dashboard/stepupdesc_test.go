@@ -77,7 +77,7 @@ func TestStepupDescriptionsArePerSessionAndBound(t *testing.T) {
 
 	// A second session of the same operator floods reviews.
 	r := browserRequest(g.s.deps.Cfg.Dashboard.Bind[0])
-	ck, _, err := g.s.auth.CreateSessionFor(r, "ops", auth.MethodPassword, "")
+	ck, _, err := g.s.auth.CreateSessionFor(r, "ops", auth.MethodSSH, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestStepupLabelsExpire(t *testing.T) {
 	l := newStepupLabels(func() time.Time { return now })
 	g := newStepupRig(t, "")
 	r := browserRequest(g.s.deps.Cfg.Dashboard.Bind[0])
-	_, sess, _ := g.s.auth.CreateSessionFor(r, "ops", auth.MethodPassword, "")
+	_, sess, _ := g.s.auth.CreateSessionFor(r, "ops", auth.MethodSSH, "")
 	l.note(auth.WithSession(r, sess), auth.PurposeApprove, "d1", "text")
 	if l.describe(sess.ID, auth.PurposeApprove, "d1") != "text" || l.describe("other", auth.PurposeApprove, "d1") != "" {
 		t.Fatal("a label belongs to its session")

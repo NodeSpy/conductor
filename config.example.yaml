@@ -1812,7 +1812,7 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #                            # encrypts the hop and WhoIs is still checked, but the
 #                            # browser sees plain HTTP, so passkeys aren't offered.
 #     allow_tagged: false    # refuse tagged nodes (servers, CI)
-#   session: { idle: 30m, max: 12h }
+#   session: { idle: 30m, max: 12h }  # a shorter max also ends existing sessions
 #   auth:
 #     methods: [passkey, ssh, password]  # sign-in methods (this is the default).
 #                            # passkey is only offered on HTTPS or localhost with a
