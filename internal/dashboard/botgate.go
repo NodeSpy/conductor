@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/auditctx"
+	"github.com/NodeSpy/conductor/internal/configedit"
 	"github.com/NodeSpy/conductor/internal/dashboard/auth"
 )
 
@@ -133,6 +134,38 @@ var botStepups = map[string]func(a BotAuthority, r *http.Request, body map[strin
 	"PATCH /v1/tickets/{id}": func(a BotAuthority, r *http.Request, body map[string]any) (bool, string) {
 		return a.TicketSpendWidens(r.PathValue("id"), body, true)
 	},
+}
+
+// botOwnHandlers are routes the dashboard serves itself instead of the bot
+// API's handler. An avatar apply writes the config file, so on the dashboard
+// it stages the change as a config edit for the session instead: the config
+// pipeline then reviews, confirms (per config_stepup), backs up, audits and
+// applies it under the editor's lock, like every other config change.
+var botOwnHandlers = map[string]func(s *Server) http.Handler{
+	"POST /v1/bots/{name}/avatar/apply":  func(s *Server) http.Handler { return s.avatarStage("bot") },
+	"POST /v1/teams/{name}/avatar/apply": func(s *Server) http.Handler { return s.avatarStage("team") },
+}
+
+func (s *Server) avatarStage(kind string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.edit == nil || s.deps.AvatarStage == nil {
+			writeError(w, http.StatusConflict, "read_only", "this dashboard can't edit the config", "")
+			return
+		}
+		name := r.PathValue("name")
+		path, value, del, err := s.deps.AvatarStage(kind, name, r.FormValue("token"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, "avatar_plan", err.Error(), "plan it again")
+			return
+		}
+		ch, err := s.edits(r).Stage(configedit.Change{Path: path, Value: value, Delete: del, Summary: kind + " " + name + "'s picture"})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "stage", err.Error(), "")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"staged": true, "path": ch.Path, "value": ch.Value, "delete": ch.Delete,
+			"next": "review and apply it on the Config screen"})
+	})
 }
 
 // BotWriteRuled reports whether the chokepoint has a rule for a write route.
@@ -266,12 +299,16 @@ func (s *Server) botGate(rt BotRoute) http.Handler {
 				}
 			}
 		}
+		h := rt.Handler
+		if own := botOwnHandlers[rt.Pattern]; own != nil {
+			h = own(s)
+		}
 		if targets == nil {
-			rt.Handler.ServeHTTP(w, r2)
+			h.ServeHTTP(w, r2)
 			return
 		}
 		sw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
-		rt.Handler.ServeHTTP(sw, r2)
+		h.ServeHTTP(sw, r2)
 		s.audit(r2, "dashboard.botapi", "", "route", rt.Pattern, "target", strings.Join(targets, ","), "status", strconv.Itoa(sw.code))
 	})
 }

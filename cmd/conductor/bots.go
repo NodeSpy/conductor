@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
@@ -27,6 +28,9 @@ import (
 type botStack struct {
 	svc  *bot.Service
 	gate *bot.Gate
+
+	avatarsOnce sync.Once
+	avatars     *avatarPlans
 }
 
 // buildBots assembles the bot service from the daemon's existing

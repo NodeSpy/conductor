@@ -59,9 +59,26 @@ type routeAdder interface {
 // endpoints (config changes, planned here in cmd) and the wallet reads.
 func (m *botStack) operatorRoutes() bot.Routes {
 	rs := bot.OperatorRoutes(m.svc)
-	avatarRoutes(&rs, m.svc.Cfg, func() string { return botConfigPath })
+	avatarRoutes(&rs, m.avatarPlans(), m.svc.Cfg, func() string { return botConfigPath })
 	browserAPIRoutes(&rs)
 	return rs
+}
+
+// avatarPlans is the avatar plans the operator API's routes share (the socket
+// and the dashboard each mount them).
+func (m *botStack) avatarPlans() *avatarPlans {
+	m.avatarsOnce.Do(func() { m.avatars = &avatarPlans{} })
+	return m.avatars
+}
+
+// dashboardAvatarStage takes a planned avatar change (by its plan token) and
+// stages it as a config edit: the dashboard's avatar apply.
+func (m *botStack) dashboardAvatarStage(kind, name, token string) ([]string, any, bool, error) {
+	plan, ok := m.avatarPlans().take(token, kind+":"+name)
+	if !ok {
+		return nil, nil, false, errors.New("no such plan (or it expired): plan it again")
+	}
+	return stageAvatar(botConfigPath, plan)
 }
 
 // operatorAPI is operatorRoutes on one handler, for the unix socket.

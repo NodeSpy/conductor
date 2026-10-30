@@ -188,8 +188,13 @@ bots:
   config, plus one `avatar:` line. Like any config change it's validated on
   a copy and shown as a diff, and nothing is written without `--write`.
   It's not a widening: a picture changes nothing a bot may do. The
-  dashboard does the same through the operator API (below), and gets the
-  picture back re-encoded, whatever the file on disk holds.
+  dashboard plans the same way through the operator API (below), and gets
+  the picture back re-encoded, whatever the file on disk holds. Its apply
+  doesn't write the config: it stages the change in your config edits, and
+  you review and apply it like any other config change, with a confirmation
+  when `config_stepup` asks for one, a backup and an audit entry. The
+  picture is written at once under a name of its own content
+  (`avatars/<bot>-<hash>.png`), which nothing uses until that apply.
 - **Display name** is what the bot calls itself and what a chat connector
   shows. The config id (`platform-sre`) stays the bot's address everywhere:
   in commands, in routing, on approvals and in the ledger.
@@ -331,7 +336,7 @@ refused, and a write on a bot, team or ticket needs one of its operators (see
 | `GET /v1/teams/{team}/avatar`, `POST …/avatar/plan`, `POST …/avatar/apply` | a team's picture, served and changed exactly like a bot's (below) |
 | `GET /v1/bots/{bot}/avatar` | the bot's picture, re-encoded as a PNG; `404` when it has none (show its face or initials) |
 | `POST /v1/bots/{bot}/avatar/plan` | multipart: `file` (at most 8 MB) with an optional crop box `crop_x`, `crop_y`, `crop_side`, or `clear=1`. The same plan as `bot avatar set`: re-encoded, validated on a copy, a diff, `widening: false`, and a `token` |
-| `POST /v1/bots/{bot}/avatar/apply` | `token=…`: writes the planned picture and config line. Single use, bound to its bot, 15 minutes, and refused if the config changed since the plan. Reload to see it |
+| `POST /v1/bots/{bot}/avatar/apply` | `token=…`: writes the planned picture and config line. Single use, bound to its bot, 15 minutes, and refused if the config changed since the plan. Reload to see it. On the dashboard it stages the change in your config edits instead (above) |
 
 ## The home session
 

@@ -48,6 +48,7 @@ type avatarPlan struct {
 	Config   string `json:"-"`
 	png      []byte
 	cfgHash  string
+	next     *config.BotAvatar // the avatar the entry ends with (nil: none)
 }
 
 // key is what a plan is for: "bot:<name>" or "team:<name>".
@@ -137,6 +138,7 @@ func planAvatarFor(cfgPath, kind, name string, img []byte, crop *avatar.Crop) (*
 	} else if face != (config.BotAvatar{}) {
 		next = &face
 	}
+	plan.next = next
 	out, err := set(src, name, next)
 	if err != nil {
 		return nil, err
@@ -186,6 +188,77 @@ func writeAvatar(cfgPath string, p *avatarPlan) error {
 		}
 	}
 	return writeConfig(cfgPath, p.Config)
+}
+
+// stageAvatar turns a valid plan into a config edit for the dashboard's
+// config pipeline, which reviews, confirms (per config_stepup), backs up,
+// audits and applies it under its own lock like any other edit. The picture
+// is written now, under a name of its own content
+// (avatars/<name>-<sha>.png), which nothing references until that apply; the
+// entity's other unreferenced pictures of that form are removed, so uploads
+// can't pile up.
+func stageAvatar(cfgPath string, p *avatarPlan) (path []string, value any, del bool, err error) {
+	if !p.Valid {
+		return nil, nil, false, errors.New("the change does not validate — nothing staged")
+	}
+	kind, name, rel := "bots", p.Bot, avatarRel(p.Bot)
+	if p.Team != "" {
+		kind, name, rel = "teams", p.Team, teamAvatarRel(p.Team)
+	}
+	path = []string{kind, name, "avatar"}
+	if p.next == nil {
+		return path, nil, true, nil
+	}
+	a := *p.next
+	if p.png != nil {
+		stem := strings.TrimSuffix(rel, ".png")
+		a.Image = stem + "-" + sha(p.png)[:12] + ".png"
+		dir := filepath.Dir(cfgPath)
+		dst := filepath.Join(dir, a.Image)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return nil, nil, false, err
+		}
+		tmp := dst + ".conductor-new"
+		if err := os.WriteFile(tmp, p.png, 0o644); err != nil {
+			return nil, nil, false, err
+		}
+		if err := os.Rename(tmp, dst); err != nil {
+			return nil, nil, false, err
+		}
+		live := ""
+		if cur, err := config.Load(cfgPath); err == nil {
+			if la, ok := avatarOf(cur, strings.TrimSuffix(kind, "s"), name); ok && la != nil {
+				live = filepath.Clean(la.Image)
+			}
+		}
+		olds, _ := filepath.Glob(filepath.Join(dir, stem+"-*.png"))
+		for _, o := range olds {
+			r, _ := filepath.Rel(dir, o)
+			if r != filepath.Clean(a.Image) && r != live && isContentName(strings.TrimPrefix(strings.TrimSuffix(filepath.Base(o), ".png"), filepath.Base(stem)+"-")) {
+				_ = os.Remove(o)
+			}
+		}
+	}
+	v := map[string]any{}
+	for k, x := range map[string]string{"image": a.Image, "shape": a.Shape, "eyes": a.Eyes, "preset": a.Preset, "icon": a.Icon, "color": a.Color} {
+		if x != "" {
+			v[k] = x
+		}
+	}
+	return path, v, false, nil
+}
+
+// isContentName reports a stageAvatar content suffix: 12 lowercase hex digits.
+func isContentName(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func printAvatarPlan(p *avatarPlan) {
@@ -359,9 +432,10 @@ func apiErr(w http.ResponseWriter, code int, err error) {
 //	POST /v1/bots/{name}/avatar/plan     multipart: file [, crop_x, crop_y, crop_side] | clear=1  → a plan with a token
 //	POST /v1/bots/{name}/avatar/apply    token=…  → writes the planned change
 //
-// and the same under /v1/teams/{name}/avatar for a team's picture.
-func avatarRoutes(mux routeAdder, cfg func() *config.Config, cfgPath func() string) {
-	ps := &avatarPlans{}
+// and the same under /v1/teams/{name}/avatar for a team's picture. On the
+// dashboard, apply stages the change into the session's config edits instead
+// (dashboardAvatarStage): the config pipeline writes it.
+func avatarRoutes(mux routeAdder, ps *avatarPlans, cfg func() *config.Config, cfgPath func() string) {
 	for _, kind := range []string{"bot", "team"} {
 		avatarRoutesFor(mux, ps, kind, cfg, cfgPath)
 	}

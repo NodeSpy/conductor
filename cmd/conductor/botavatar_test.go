@@ -17,6 +17,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/avatar"
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/configedit"
 )
 
 func avatarConfig(t *testing.T) string {
@@ -159,7 +160,7 @@ func TestBotAvatarAPI(t *testing.T) {
 	}
 	cur := cfg
 	mux := http.NewServeMux()
-	avatarRoutes(mux, func() *config.Config { return cur }, func() string { return p })
+	avatarRoutes(mux, &avatarPlans{}, func() *config.Config { return cur }, func() string { return p })
 	defer func() { planFull = true }()
 	do := func(method, path string, body *bytes.Buffer, ctype string) *httptest.ResponseRecorder {
 		if body == nil {
@@ -289,7 +290,7 @@ func TestTeamAvatarSet(t *testing.T) {
 	// The API.
 	cur := cfg
 	mux := http.NewServeMux()
-	avatarRoutes(mux, func() *config.Config { return cur }, func() string { return p })
+	avatarRoutes(mux, &avatarPlans{}, func() *config.Config { return cur }, func() string { return p })
 	defer func() { planFull = true }()
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest("GET", "/v1/teams/platform/avatar", nil))
@@ -334,5 +335,63 @@ func TestTeamAvatarRefusesASession(t *testing.T) {
 	t.Setenv("CONDUCTOR_SKILL_TOKEN", "x")
 	if err := cmdTeam([]string{"avatar", "set", "platform", "x.png"}); err == nil || !strings.Contains(err.Error(), "only an operator changes a team's picture") {
 		t.Fatalf("in a session: %v", err)
+	}
+}
+
+// The dashboard's avatar apply stages a config edit instead of writing the
+// config: the picture lands under a name of its own content that nothing
+// references yet, the live config is untouched, and the edit — applied by the
+// config pipeline — names it and loads. A second upload for the same bot
+// replaces the first unreferenced picture rather than piling up.
+func TestDashboardAvatarApplyStagesAConfigEdit(t *testing.T) {
+	p := avatarConfig(t)
+	before, _ := os.ReadFile(p)
+	m := &botStack{}
+	defer func(old string) { botConfigPath = old }(botConfigPath)
+	botConfigPath = p
+	stageOne := func(img []byte, crop *avatar.Crop) (string, map[string]any) {
+		plan, err := planAvatarFor(p, "bot", "sre", img, crop)
+		if err != nil || !plan.Valid {
+			t.Fatalf("plan: %v %+v", err, plan)
+		}
+		tok := m.avatarPlans().put(plan)
+		path, value, del, err := m.dashboardAvatarStage("bot", "sre", tok)
+		if err != nil || del || strings.Join(path, ".") != "bots.sre.avatar" {
+			t.Fatalf("stage: %v %v %v", path, del, err)
+		}
+		if _, _, _, err := m.dashboardAvatarStage("bot", "sre", tok); err == nil {
+			t.Fatal("a plan token stages once")
+		}
+		v := value.(map[string]any)
+		return v["image"].(string), v
+	}
+	img1, _ := stageOne(photo(t, 64, 64), nil)
+	if after, _ := os.ReadFile(p); string(after) != string(before) {
+		t.Fatal("staging wrote the config")
+	}
+	if !strings.HasPrefix(img1, "avatars/sre-") || !isContentName(strings.TrimSuffix(strings.TrimPrefix(img1, "avatars/sre-"), ".png")) {
+		t.Fatalf("image name %q", img1)
+	}
+	img2, value := stageOne(photo(t, 64, 64), &avatar.Crop{X: 0, Y: 0, Side: 20})
+	if img1 == img2 {
+		t.Fatal("two different pictures got one name")
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(p), img1)); !os.IsNotExist(err) {
+		t.Fatal("an earlier unreferenced upload was left behind")
+	}
+	pipe := configedit.New(configedit.Options{Path: p, Validate: func(c string) error { _, err := config.Load(c); return err }})
+	if _, err := pipe.Stage(configedit.Change{Path: []string{"bots", "sre", "avatar"}, Value: value}); err != nil {
+		t.Fatal(err)
+	}
+	rev, err := pipe.Review()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pipe.Apply(rev.Token); err != nil {
+		t.Fatalf("the staged avatar edit applies: %v", err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil || cfg.Bots["sre"].Avatar == nil || cfg.Bots["sre"].Avatar.Image != img2 {
+		t.Fatalf("after apply: %v %+v", err, cfg.Bots["sre"].Avatar)
 	}
 }

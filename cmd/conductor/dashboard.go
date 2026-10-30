@@ -337,6 +337,16 @@ func dashboardBotRoutes(bots *botStack) ([]dashboard.BotRoute, dashboard.BotAuth
 	return out, bots.svc
 }
 
+// dashboardAvatarStageFor is the dashboard's avatar apply: it stages the
+// planned change as a config edit, and the config pipeline writes it. Nil with
+// no bots.
+func dashboardAvatarStageFor(bots *botStack) func(kind, name, token string) ([]string, any, bool, error) {
+	if bots == nil {
+		return nil
+	}
+	return bots.dashboardAvatarStage
+}
+
 // handleDashboardControl serves the daemon side of `conductor dashboard` on the
 // control socket. It runs only when the dashboard is enabled (dashboardMgr set).
 func handleDashboardControl(ctx context.Context, conn net.Conn, req controlRequest, log func(string, ...any)) {

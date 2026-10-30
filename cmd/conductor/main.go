@@ -1115,6 +1115,7 @@ func cmdRun(args []string) error {
 			// into the web surface under /api behind the session chokepoint. Nil
 			// when no bots run here.
 			BotRoutes: botRoutes, BotAuthority: botAuthority,
+			AvatarStage: dashboardAvatarStageFor(bots),
 			// The browser/wallet surface (§4.5): live sessions, personal details,
 			// payment cards and purchase approvals, over the same control layer the
 			// CLI uses. Reads empty when no browser is configured.

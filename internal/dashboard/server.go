@@ -92,6 +92,13 @@ type Deps struct {
 	// the chokepoint's questions. Nil when no bots run on this daemon.
 	BotRoutes    []BotRoute
 	BotAuthority BotAuthority
+	// AvatarStage takes a planned bot or team avatar change by its plan token
+	// and returns it as a config edit (path, value, or a delete), having
+	// written the picture under a name nothing references yet. The dashboard's
+	// avatar apply stages that edit for the session, so the config pipeline
+	// reviews, confirms, backs up, audits and applies it. Nil: avatar apply is
+	// refused.
+	AvatarStage func(kind, name, token string) (path []string, value any, del bool, err error)
 
 	// Browser is the browser/wallet surface (design §4.5): live sessions with a
 	// screencast and takeover, personal details, payment cards and purchase

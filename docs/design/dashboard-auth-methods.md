@@ -387,6 +387,12 @@ mounted route:
   currency or card, adding merchants or clearing it. It is the same purpose
   the wallet's own widening changes use, decided by the bot service's own
   classification. Lowering a limit needs none.
+- An avatar apply writes the config file on the socket. On the dashboard it
+  stages the planned change in the session's config edits instead, so the
+  config pipeline reviews, confirms (per `config_stepup`), backs up, audits
+  and applies it under the editor's lock. The picture is written at once
+  under a name of its own content, which nothing references until that
+  apply. Unreferenced earlier uploads for the same bot or team are removed.
 - A write route with no rule at the chokepoint is refused. A test walks the
   daemon's real route list and fails on any write route without a rule.
 - Reads follow the bot API's own rules: any operator reads any conversation.

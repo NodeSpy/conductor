@@ -328,7 +328,7 @@ The bots' operator API (the same routes `operator-api.sock` serves, see
 | `POST /api/v1/conversations/{id}/read` · `POST`/`DELETE /conversations/{id}/pin` · `PUT /conversations/pins` | your read marks and pins |
 | `GET /api/v1/tickets` · `/tickets/{id}` · `/tickets/stream` | tickets |
 | `POST /api/v1/tickets` · `PATCH /tickets/{id}` · `POST /tickets/{id}/comments` | create, edit, assign, move and comment on tickets |
-| `POST /api/v1/{bots,teams}/{name}/avatar/plan` · `/avatar/apply` | plan and stage an avatar change |
+| `POST /api/v1/{bots,teams}/{name}/avatar/plan` · `/avatar/apply` | plan an avatar change, and stage it in your config edits (apply it from the Config screen) |
 | `GET /api/v1/bots/{bot}/cases/{case}/budget` | a case's spend limit and what is left |
 
 On the dashboard you are the operator: a request that names another operator

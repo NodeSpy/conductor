@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -115,6 +116,12 @@ func newBotRig(t *testing.T, record bool) *botRig {
 		Operators: func() map[string]string { return map[string]string{"ops": opsKey.pub, "dev": devKey.pub} },
 		Log:       func(string, ...any) {},
 		BotRoutes: routes, BotAuthority: svc,
+		AvatarStage: func(kind, name, token string) ([]string, any, bool, error) {
+			if token != "plan-1" {
+				return nil, nil, false, errors.New("no such plan")
+			}
+			return []string{kind + "s", name, "avatar"}, map[string]any{"image": "avatars/" + name + "-0123456789ab.png"}, false, nil
+		},
 	})
 	h := g.s.bindHandler(cfg.Dashboard.Bind[0])
 	signin := func(op, addr string) *browserClient {
@@ -254,6 +261,9 @@ func TestBotAPIEveryRouteRefusesAnotherOperator(t *testing.T) {
 			rr := g.dev.raw(method, path, a.ctype, []byte(a.body))
 			if rt.Pattern == "POST /v1/tickets" || strings.HasPrefix(rt.Pattern, "PATCH /v1/tickets/") || strings.HasSuffix(rt.Pattern, "/comments") {
 				continue // need a ticket dev owns: TestBotAPIWritesNeedAnOperatorOfTheTarget
+			}
+			if botOwnHandlers[rt.Pattern] != nil {
+				continue // the dashboard serves it: TestBotAPIAvatarApplyOnlyStages
 			}
 			if rr.Code != http.StatusOK || len(g.hits[rt.Pattern]) != before+1 {
 				t.Errorf("%s: dev as itself: %d %s", rt.Pattern, rr.Code, rr.Body)
@@ -455,4 +465,42 @@ func (c *browserClient) doWith(method, path string, body any, stepup string) *ht
 	rr := httptest.NewRecorder()
 	c.h.ServeHTTP(rr, r)
 	return rr
+}
+
+// An avatar apply from the dashboard never writes the config: it stages the
+// change in the session's config edits, which then need a review and (per
+// config_stepup) a confirmation like any other config change. Only an
+// operator of the bot or team may stage it.
+func TestBotAPIAvatarApplyOnlyStages(t *testing.T) {
+	g := newBotRig(t, false)
+	before := mustRead(t, g.s.deps.ConfigPath)
+	if rr := g.dev.raw("POST", "/api/v1/bots/sre/avatar/apply", "application/x-www-form-urlencoded", []byte("token=plan-1")); rr.Code != http.StatusForbidden {
+		t.Fatalf("dev staging sre's picture: %d %s", rr.Code, rr.Body)
+	}
+	rr := g.dev.raw("POST", "/api/v1/bots/devbot/avatar/apply", "application/x-www-form-urlencoded", []byte("token=plan-1"))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"staged":true`) {
+		t.Fatalf("apply: %d %s", rr.Code, rr.Body)
+	}
+	if mustRead(t, g.s.deps.ConfigPath) != before {
+		t.Fatal("an avatar apply wrote the config")
+	}
+	var cfg struct {
+		Staged []struct{ Path []string } `json:"staged"`
+	}
+	_ = json.Unmarshal(g.dev.do("GET", "/api/v1/config", nil).Body.Bytes(), &cfg)
+	if len(cfg.Staged) != 1 || strings.Join(cfg.Staged[0].Path, ".") != "bots.devbot.avatar" {
+		t.Fatalf("staged: %+v", cfg.Staged)
+	}
+	var rev struct {
+		Stepup      bool
+		Description string
+	}
+	_ = json.Unmarshal(g.dev.do("GET", "/api/v1/config/review", nil).Body.Bytes(), &rev)
+	if !rev.Stepup || !strings.Contains(rev.Description, `bots.devbot.avatar.image: (none) → "avatars/devbot-0123456789ab.png"`) {
+		t.Fatalf("the review must ask for a confirmation and name the picture: %+v", rev)
+	}
+	_ = json.Unmarshal(g.ops.do("GET", "/api/v1/config", nil).Body.Bytes(), &cfg)
+	if len(cfg.Staged) != 0 {
+		t.Fatal("another session sees dev's staged picture")
+	}
 }
