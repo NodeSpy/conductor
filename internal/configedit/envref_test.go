@@ -76,3 +76,14 @@ func TestMergedKeys(t *testing.T) {
 		t.Fatalf("the shared section changed:\n%s", d.Bytes())
 	}
 }
+
+// A new value with flow syntax characters, written inside {...} or [...],
+// is quoted so it stays one value.
+func TestSetFlowValueWithFlowCharacters(t *testing.T) {
+	d := mustParse(t, withRefs)
+	mustSet(t, d, []string{"hooks", "list", "1"}, "a, b]")
+	mustSet(t, d, []string{"hooks", "sign", "header"}, "{x}#y")
+	if v, _ := d.Get([]string{"hooks", "list", "0"}); v != "${A}" {
+		t.Fatalf("neighbour disturbed:\n%s", d.Bytes())
+	}
+}
