@@ -32,6 +32,7 @@ const purposeLabel: Record<string, string> = {
   'browser.purchase': 'Approve or deny a purchase',
   'credential.change': 'Change how you sign in',
   'update.apply': 'Apply an update',
+  'run.replay': 'Re-run steps of a run that already ran',
   'pack.change': 'Add or remove a pack or plugin',
 }
 

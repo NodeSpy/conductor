@@ -50,3 +50,34 @@ test('an unknown run id shows the empty state', async ({ page }) => {
   await expect(page.locator('.empty h2')).toContainText('does-not-exist')
   await expect(page.locator('.empty a', { hasText: 'Back to Activity' })).toBeVisible()
 })
+
+test('a forced retry asks to confirm, showing the steps it runs again', async ({ page }) => {
+  const run = await firstRun(page.request)
+  // The server's answer to a forced retry on a signed-in dashboard: a
+  // run.replay step-up with its description of what runs again.
+  let sent: Record<string, unknown> | null = null
+  await page.route(`**/api/v1/runs/${run.id}/retry`, async (route) => {
+    sent = route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: { code: 'stepup_required', message: 'a step-up is required', hint: '' },
+        stepup: {
+          purpose: 'run.replay',
+          digest: 'a'.repeat(43),
+          description: `re-run run ${run.id} from the beginning, forcing a replay\nthese steps already succeeded and run again:\n  - post`,
+        },
+      }),
+    })
+  })
+  await page.goto(`/#/runs/${run.id}`)
+  await page.locator('.run-actions .btn', { hasText: 'Retry' }).click()
+  await page.locator('.retry-form .field-check input').check()
+  await page.locator('.retry-form .btn.primary', { hasText: 'Retry' }).click()
+  const dialog = page.getByTestId('stepup-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('Re-run steps of a run that already ran')
+  await expect(page.getByTestId('stepup-description')).toContainText('these steps already succeeded and run again')
+  expect(sent).toMatchObject({ force: true })
+})

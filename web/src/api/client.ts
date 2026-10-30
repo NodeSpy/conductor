@@ -26,7 +26,7 @@ import type {
   AttrsResponse,
   AttrValuesResponse,
 } from './types'
-import { authState } from './auth'
+import { authState, stepUp } from './auth'
 import { parseSafe, readJSON } from './safe'
 
 async function getJSON<T>(path: string): Promise<T> {
@@ -49,6 +49,39 @@ async function sendJSON<T>(method: string, path: string, body: unknown): Promise
     body: JSON.stringify(body ?? {}),
   })
   return handle<T>(res)
+}
+
+// retryRun retries a run. A forced retry (re-running steps that already
+// succeeded) comes back 401 with a step-up to confirm, described by the
+// server with the steps it replays; we confirm and send it once more.
+async function retryRun(id: string, req: RetryRequest): Promise<ActionResponse> {
+  const path = '/api/v1/runs/' + encodeURIComponent(id) + '/retry'
+  const send = (stepup?: string) => {
+    const csrf = authState.value.csrf
+    return fetch(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(csrf ? { 'X-Conductor-CSRF': csrf } : {}),
+        ...(stepup ? { 'X-Conductor-Stepup': stepup } : {}),
+      },
+      body: JSON.stringify(req),
+    })
+  }
+  let res = await send()
+  if (res.status === 401) {
+    const b = (await readJSON(res.clone()).catch(() => ({}))) as { stepup?: { purpose: string; digest: string; description?: string } }
+    if (b.stepup) {
+      const token = await stepUp(b.stepup.purpose, b.stepup.digest, {
+        what: `Re-run ${id}, repeating steps that already ran`,
+        description: b.stepup.description,
+      })
+      res = await send(token)
+    }
+  }
+  return handle<ActionResponse>(res)
 }
 
 async function handle<T>(res: Response): Promise<T> {
@@ -96,8 +129,7 @@ export const api = {
 
   // --- run detail + controls ---
   run: (id: string) => getJSON<RunDetailResponse>('/api/v1/runs/' + encodeURIComponent(id)),
-  retryRun: (id: string, req: RetryRequest = {}) =>
-    sendJSON<ActionResponse>('POST', '/api/v1/runs/' + encodeURIComponent(id) + '/retry', req),
+  retryRun: (id: string, req: RetryRequest = {}) => retryRun(id, req),
   stopRun: (id: string) =>
     sendJSON<ActionResponse>('POST', '/api/v1/runs/' + encodeURIComponent(id) + '/stop', {}),
 

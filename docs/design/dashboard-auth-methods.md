@@ -350,6 +350,13 @@ challenge.
   digest names the operator and the action. Together with the config step-up
   (§1), a stolen session cookie cannot add a credential or change an
   operator's key without a confirmation.
+- **Forced retries.** `POST /api/v1/runs/{id}/retry` with `force: true`
+  re-runs steps the record says already succeeded, so what they did happens
+  again (a posted comment, a push, a command). It needs a step-up with the
+  purpose `run.replay`, its digest bound to the run and the starting step.
+  The description names the run, its trigger, where it starts, and each
+  step that already succeeded and runs again. A plain retry never repeats
+  what a succeeded step did, so it stays on the session alone.
 - **Password step-up** needs the authenticator code as well when the operator
   has an authenticator, as at sign-in, and counts against the operator lock.
 - **UI.** One dialog serves every caller. It offers the step-up methods the

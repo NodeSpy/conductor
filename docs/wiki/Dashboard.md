@@ -172,8 +172,10 @@ Approvals and purchases, config changes and restores (per `config_stepup`,
 below; a new bot avatar is a config change), loosening a browser wallet limit
 or a ticket's spend limit, giving a ticket's spend limit to a bot (assigning
 the ticket to another bot, or reopening it; see
-[Tickets → Spend limit](Tickets#spend-limit)), browser take-over and
-credential changes ask you to confirm first.
+[Tickets → Spend limit](Tickets#spend-limit)), a retry that runs again steps
+that already succeeded ("Run the earlier steps again too"), browser take-over
+and credential changes ask you to confirm first. A plain retry, which only
+replays what earlier steps recorded, needs no confirmation.
 The dialog shows the dashboard's own description of what you are confirming,
 the same text `approve-login` prints, and the start of its digest. For a
 proposal or a purchase that is the canonical action (a proposal's verb and

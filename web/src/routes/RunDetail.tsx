@@ -351,7 +351,10 @@ function RetryForm({
       </label>
       <label class="field-check">
         <input type="checkbox" checked={force} onChange={(e) => setForce((e.target as HTMLInputElement).checked)} />
-        <span>Run the earlier steps again too <span class="muted">(otherwise they're replayed from what they recorded)</span></span>
+        <span>
+          Run the earlier steps again too{' '}
+          <span class="muted">(otherwise they're replayed from what they recorded; running them again repeats what they did, so with sign-in on it asks you to confirm)</span>
+        </span>
       </label>
       {err ? <div class="banner err">{err}</div> : null}
       <div class="run-actions">

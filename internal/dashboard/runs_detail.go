@@ -9,6 +9,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dashboard/api"
+	"github.com/NodeSpy/conductor/internal/dashboard/auth"
 	"github.com/NodeSpy/conductor/internal/store"
 	"gopkg.in/yaml.v3"
 )
@@ -180,12 +181,84 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
+	// A plain retry is the session's: it never repeats what a step already
+	// did. A forced one re-runs steps that succeeded, replaying their side
+	// effects (a posted comment, a push), so with sign-in on it needs a
+	// step-up bound to the run and the starting step, described with the
+	// steps it replays.
+	if req.Force && s.authEnforced() {
+		sess, ok := auth.SessionFrom(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "sign in to continue", "")
+			return
+		}
+		digest := retryDigest(id, req.From)
+		if _, err := s.auth.RequireStepup(sess, auth.PurposeRunReplay, digest, r.Header.Get(auth.StepupHeader)); err != nil {
+			desc := s.retryDescription(id, req.From)
+			s.labels.note(r, auth.PurposeRunReplay, digest, desc)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":  map[string]string{"code": "stepup_required", "message": err.Error(), "hint": "confirm it's you to re-run what already ran"},
+				"stepup": map[string]string{"purpose": string(auth.PurposeRunReplay), "digest": digest, "description": desc},
+			})
+			return
+		}
+	}
 	msg, err := s.deps.Retry(r.Context(), id, req.From, req.Force)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "retry_failed", err.Error(), "")
 		return
 	}
 	writeJSON(w, http.StatusOK, api.ActionResponse{Message: msg, RunID: retryRunID(msg)})
+}
+
+// retryDigest binds a forced retry's step-up to the run and the step it
+// starts from.
+func retryDigest(id, from string) string {
+	b, _ := json.Marshal(map[string]any{"v": "1", "ns": "conductor-dashboard-retry", "run": id, "from": from, "force": true})
+	return auth.DigestOf(b)
+}
+
+// retryDescription says what a forced retry of run id from step from does:
+// the run, where it starts, and each step that already succeeded and runs
+// again. The start is resolved as the engine resolves it (the step named,
+// else where the run failed, else the beginning).
+func (s *Server) retryDescription(id, from string) string {
+	rec, ok := s.deps.Store.GetHistory(id)
+	if !ok {
+		return auth.SafeText("re-run run " + id + " with --force-replay (no record of it here)")
+	}
+	start, startIdx := from, 0
+	if start == "" {
+		start = rec.FailedStep
+	}
+	where := "the beginning"
+	if st, ok := rec.Step(start); ok {
+		startIdx, where = st.Index, "step "+start
+	}
+	kinds := map[string]string{}
+	for _, st := range s.runSteps(rec) {
+		kinds[st.ID] = st.Kind
+	}
+	var replay []string
+	for _, st := range rec.Steps {
+		if st.Index >= startIdx && st.Status == "ok" {
+			if k := kinds[st.ID]; k != "" && k != "step" {
+				replay = append(replay, st.ID+" ("+k+")")
+			} else {
+				replay = append(replay, st.ID)
+			}
+		}
+	}
+	lines := []string{"re-run run " + id + " (" + triggerWords(rec) + ") from " + where + ", forcing a replay"}
+	if len(replay) == 0 {
+		lines = append(lines, "no step that already succeeded is in range; any that did would run again")
+	} else {
+		lines = append(lines, "these steps already succeeded and run again, repeating what they did (a posted comment, a push, a command):")
+		for _, st := range replay {
+			lines = append(lines, "  - "+st)
+		}
+	}
+	return strings.Join(auth.SafeLines(strings.Join(lines, "\n")), "\n")
 }
 
 // retryRunID best-effort extracts a new run id (r-xxxx / a flow id) from the

@@ -370,6 +370,7 @@ export function Access(): JSX.Element {
                 Loosening a browser wallet limit or a ticket's spend limit, or giving a spend limit to another bot
                 (assigning or reopening its ticket)
               </li>
+              <li>Retrying a run so that steps that already succeeded run again</li>
               <li>Taking over a browser a bot is signed in to</li>
               <li>Adding or removing a way to sign in</li>
             </ul>
