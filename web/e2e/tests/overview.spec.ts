@@ -44,7 +44,7 @@ test('app shell, nav and theme render with zero console errors and zero failed r
   await expect(page.locator('.tiles .tile')).toHaveCount(4)
 
   // The SSE stream connected (the dot flips to live).
-  await expect(page.locator('.conn')).toHaveAttribute('data-conn', 'live')
+  await expect(page.locator('.conn:visible')).toHaveAttribute('data-conn', 'live')
 
   // Give late assets (on-demand mono font, favicon) a moment to settle.
   await page.waitForTimeout(600)
@@ -84,7 +84,7 @@ test('Overview renders the real run history from the daemon', async ({ page }) =
 test('a live run updates the Overview over SSE without a reload', async ({ page, daemon }) => {
   await page.goto('/')
   await expect(page.locator('.tbl')).toBeVisible()
-  await expect(page.locator('.conn')).toHaveAttribute('data-conn', 'live')
+  await expect(page.locator('.conn:visible')).toHaveAttribute('data-conn', 'live')
 
   const before = await activityRows(page).count()
   const tickBefore = Number(await page.locator('.col').getAttribute('data-tick'))

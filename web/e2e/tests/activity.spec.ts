@@ -63,7 +63,7 @@ test('the runs-per-hour bar reveals a tooltip on hover', async ({ page }) => {
 test('a live run appears in Activity over SSE without a reload', async ({ page, daemon }) => {
   await page.goto('/#/activity')
   await expect(page.locator('.tbl')).toBeVisible()
-  await expect(page.locator('.conn')).toHaveAttribute('data-conn', 'live')
+  await expect(page.locator('.conn:visible')).toHaveAttribute('data-conn', 'live')
 
   const before = await dataRows(page).count()
   const tickBefore = Number(await page.locator('.col').getAttribute('data-tick'))
