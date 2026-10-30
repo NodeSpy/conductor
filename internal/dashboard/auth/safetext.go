@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/NodeSpy/conductor/internal/safetext"
 )
 
 // SafeText makes server- or user-supplied text safe to print on one line of a
@@ -29,7 +31,7 @@ func SafeText(s string) string {
 			b.WriteString(`\t`)
 		case r < 0x20 || r == 0x7f:
 			fmt.Fprintf(&b, `\x%02x`, r)
-		case unsafeRune(r):
+		case safetext.Invisible(r):
 			fmt.Fprintf(&b, `\u%04x`, r)
 		default:
 			b.WriteRune(r)
@@ -53,31 +55,9 @@ func needsEscape(s string) bool {
 		return true
 	}
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f || unsafeRune(r) {
+		if safetext.Control(r) {
 			return true
 		}
-	}
-	return false
-}
-
-// unsafeRune reports the non-ASCII runes that change how surrounding text is
-// shown without being visible themselves: C1 controls, bidi embeddings,
-// overrides, isolates and marks, zero-width characters and the Unicode line
-// and paragraph separators.
-func unsafeRune(r rune) bool {
-	switch {
-	case r >= 0x80 && r <= 0x9f:
-		return true
-	case r == 0x061c, r == 0x200e, r == 0x200f:
-		return true
-	case r >= 0x202a && r <= 0x202e:
-		return true
-	case r >= 0x2066 && r <= 0x2069:
-		return true
-	case r >= 0x200b && r <= 0x200d, r == 0x2060, r == 0xfeff:
-		return true
-	case r == 0x2028, r == 0x2029:
-		return true
 	}
 	return false
 }

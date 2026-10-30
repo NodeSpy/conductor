@@ -325,3 +325,22 @@ func TestApplyAuditNamesWhoAndWhere(t *testing.T) {
 		t.Fatalf("the apply and its step-up must name the same session: %v %v", seen["dashboard.config.apply"], seen["dashboard_stepup"])
 	}
 }
+
+// A staged ssh_key carrying terminal escapes fails validation, and an apply
+// with a valid step-up still refuses it: the file is unchanged.
+func TestStagedSSHKeyWithControlsIsRefused(t *testing.T) {
+	g := newStepupRig(t, "")
+	rev := g.stage(t, api.StageRequest{Path: []string{"operators", "ops", "ssh_key"},
+		Value: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIkVUk x\r\x1b[2K\x1b[1A  action:   wording only\x1b[K"})
+	if rr := g.c.do("GET", "/api/v1/config/validate", nil); !strings.Contains(rr.Body.String(), "ssh_key contains a carriage return") {
+		t.Fatalf("validate must refuse the key: %s", rr.Body)
+	}
+	tok := g.sshStepup(t, rev.Token)
+	rr := g.c.do("POST", "/api/v1/config/apply", api.ApplyRequest{Token: rev.Token, StepupToken: tok})
+	if rr.Code == http.StatusOK || !strings.Contains(rr.Body.String(), "ssh_key contains a carriage return") {
+		t.Fatalf("apply must refuse the key: %d %s", rr.Code, rr.Body)
+	}
+	if b, _ := os.ReadFile(g.cfgPath); string(b) != g.cfgText {
+		t.Fatal("a refused apply changed the config file")
+	}
+}

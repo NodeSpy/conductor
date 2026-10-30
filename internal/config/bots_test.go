@@ -405,3 +405,51 @@ bot_links:
 		}
 	}
 }
+
+// An ssh_key with a control, bidi or zero-width character is refused at load,
+// hand-edited or staged from the dashboard, with what it is and where. A block
+// scalar's trailing newline is not part of the key and still loads.
+func TestOperatorSSHKeyRefusesControlCharacters(t *testing.T) {
+	const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"
+	load := func(t *testing.T, opBlock string) error {
+		t.Helper()
+		dir := t.TempDir()
+		SetStateDir(filepath.Join(dir, "state"))
+		t.Cleanup(func() { SetStateDir("") })
+		p := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(p, []byte("connectors:\n  box: { use: command }\noperators:\n  ops:\n"+opBlock), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(p)
+		return err
+	}
+	esc := func(hex string) string { return "\\" + "u" + hex } // a YAML \u escape
+	for _, c := range []struct {
+		name, value, want string
+	}{
+		{"terminal escapes", `"` + key + ` x\r\e[2K\e[1A  action:   wording only"`, "a carriage return (U+000D) at byte 46"},
+		{"escape", `"` + key + ` x\e[2K"`, "an escape character (U+001B)"},
+		{"tab", `"` + key + `\tops@box"`, "a tab (U+0009)"},
+		{"inner newline", `"` + key + `\nops@box"`, "a newline (U+000A)"},
+		{"C1", `"` + key + ` x\x9b2K"`, "a control character (U+009B)"},
+		{"bidi override", `"` + key + ` ops` + esc("202e") + `xob@"`, "an invisible formatting character (U+202E)"},
+		{"zero width", `"` + key + esc("200b") + ` ops@box"`, "an invisible formatting character (U+200B)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := load(t, "    ssh_key: "+c.value+"\n")
+			if err == nil || !strings.Contains(err.Error(), "operators.ops: ssh_key contains "+c.want) {
+				t.Fatalf("want a refusal naming %q, got %v", c.want, err)
+			}
+		})
+	}
+	for name, block := range map[string]string{
+		"plain":                  "    ssh_key: \"" + key + " ops@box\"\n",
+		"non-ASCII comment":      "    ssh_key: \"" + key + " Zoë Müller\"\n",
+		"folded block scalar":    "    ssh_key: >\n      " + key + " ops@box\n",
+		"surrounding whitespace": "    ssh_key: \"  " + key + " ops@box \"\n",
+	} {
+		if err := load(t, block); err != nil {
+			t.Errorf("%s: a valid key must load: %v", name, err)
+		}
+	}
+}

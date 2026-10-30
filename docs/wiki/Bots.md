@@ -90,10 +90,11 @@ bots:
 ```
 
 Both sections are optional; a config without them behaves exactly as before.
-`conductor validate` checks them (unknown operators, a home runtime that is not
-paseo, a worker runtime that is, tiers, the spend cap) and warns about a bot
-with no operators, no verbs, a promotion that cannot take effect yet, or
-a home mode that skips permission prompts. A `skill.verbs` entry that could
+`conductor validate` checks them (unknown operators, an `ssh_key` that is not a
+public key line or contains a control, bidi or zero-width character, a home
+runtime that is not paseo, a worker runtime that is, tiers, the spend cap) and
+warns about a bot with no operators, no verbs, a promotion that cannot take
+effect yet, or a home mode that skips permission prompts. A `skill.verbs` entry that could
 reach the `terraform.apply_connector` is an error.
 
 ### Community bots

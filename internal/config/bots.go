@@ -7,6 +7,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/NodeSpy/conductor/internal/safetext"
 )
 
 // BOTS (docs/design/bots.md, docs/wiki/Bots.md): persistent,
@@ -989,6 +992,13 @@ func (c *Config) validateBots() error {
 		if !validBotName(name) {
 			return fmt.Errorf("config: operators.%s: name must be lowercase letters, digits, - or _", name)
 		}
+		// A public key line is printable text. A control, bidi or zero-width
+		// character (or invalid UTF-8) is never part of a valid key, and one
+		// can disguise the key wherever it is shown. Surrounding whitespace
+		// (a block scalar's trailing newline) is not part of the key.
+		if r, at := safetext.FirstControl(strings.TrimSpace(op.SSHKey)); at >= 0 {
+			return fmt.Errorf("config: operators.%s: ssh_key contains %s at byte %d; a public key line is printable text only (\"ssh-ed25519 AAAA… comment\")", name, describeRune(r), at)
+		}
 		k := strings.Fields(op.SSHKey)
 		if len(k) < 2 || !strings.HasPrefix(k[0], "ssh-") && !strings.HasPrefix(k[0], "ecdsa-") && !strings.HasPrefix(k[0], "sk-") {
 			return fmt.Errorf("config: operators.%s: ssh_key must be a public key line (\"ssh-ed25519 AAAA…\")", name)
@@ -1424,4 +1434,24 @@ func (c *Config) validateBotTerraform(m BotConfig, t *BotTerraform) error {
 		}
 	}
 	return nil
+}
+
+// describeRune names a character refused in a config value: its code point
+// and, for the common ones, what it is.
+func describeRune(r rune) string {
+	switch {
+	case r == utf8.RuneError:
+		return "invalid UTF-8"
+	case r == '\t':
+		return "a tab (U+0009)"
+	case r == '\n':
+		return "a newline (U+000A)"
+	case r == '\r':
+		return "a carriage return (U+000D)"
+	case r == 0x1b:
+		return "an escape character (U+001B)"
+	case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
+		return fmt.Sprintf("a control character (%U)", r)
+	}
+	return fmt.Sprintf("an invisible formatting character (%U)", r)
 }

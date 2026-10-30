@@ -1538,6 +1538,7 @@ browser:
 operators:
   ops:
     ssh_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample operator@laptop"
+    # (printable text only: a control, bidi or zero-width character is refused)
     aliases: ["slack:U0EXAMPLE"] # chat ids that ARE this operator when an event names them
 bots:
   platform-sre:
