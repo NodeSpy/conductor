@@ -24,13 +24,14 @@ import (
 // against the bound while the guess is in flight, so a concurrent burst can't
 // have more guesses evaluated than the bound allows. Lookups create no state,
 // and entries that no longer constrain anything are collected. The operator
-// buckets are persisted (persist), so a restart doesn't hand out fresh guesses.
+// buckets are persisted (persist) when a lock is set or cleared, so a restart
+// doesn't lift a lock; failures short of one aren't written.
 type lockout struct {
 	now       func() time.Time
 	mu        sync.Mutex
 	m         map[string]*lockState
 	lastSweep time.Time
-	persist   func(map[string]LockRecord) // the operator buckets, after each change; optional
+	persist   func(map[string]LockRecord) // the operator buckets, when a lock is set or cleared; optional
 }
 
 type lockState struct {
@@ -226,22 +227,29 @@ func (a *attempt) resolve(f func(string, *lockState, time.Time)) {
 	}
 	a.done = true
 	now := l.now()
+	changed := false
 	for _, k := range a.keys {
 		s, ok := l.m["login:"+k]
 		if !ok {
 			continue
 		}
 		s.inFlight--
+		was := s.lockLen
 		f(k, s, now)
-	}
-	l.sweep(now)
-	for _, k := range a.keys {
-		if strings.HasPrefix(k, "op:") {
-			l.saveOps()
-			break
+		if strings.HasPrefix(k, "op:") && lockTransition(was, s.lockLen) {
+			changed = true
 		}
 	}
+	l.sweep(now)
+	if changed {
+		l.saveOps()
+	}
 }
+
+// lockTransition reports an operator bucket's lock state changing: a lock set
+// or lengthened, or a lock's memory cleared by a success. Only these are
+// persisted; a failure that doesn't lock rewrites nothing.
+func lockTransition(was, now time.Duration) bool { return was != now }
 
 // Succeed clears a sign-in key's failure history (a sign-in that needed no
 // reserved guess, e.g. a cross-device approval collected by the page).
@@ -249,8 +257,9 @@ func (l *lockout) Succeed(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if s, ok := l.m["login:"+key]; ok {
+		was := s.lockLen
 		s.fails, s.lockLen, s.lockUntil = nil, 0, time.Time{}
-		if strings.HasPrefix(key, "op:") {
+		if strings.HasPrefix(key, "op:") && lockTransition(was, 0) {
 			l.saveOps()
 		}
 	}

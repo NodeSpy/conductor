@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -236,5 +237,152 @@ func TestNetworkBucketNeverBlocksSSHOrPasskeys(t *testing.T) {
 				t.Fatalf("login/finish from a fresh address on the throttled network: %d %s", rr.Code, rr.Body)
 			}
 		})
+	}
+}
+
+// On loopback any local process can begin sign-ins, so pending SSH sign-ins
+// are kept per operator name and a new one evicts that name's oldest rather
+// than being refused: no number of begins, for other names or for the
+// operator, blocks the operator's own. Names that aren't configured
+// operators behave the same from outside but never hold a configured
+// operator's slot.
+func TestLoopbackPendingSSHIsPerOperator(t *testing.T) {
+	h := newMethodsHarness(t, nil)
+	begin := func(addr, op string) (*httptest.ResponseRecorder, SSHChallengeView) {
+		rr := call(h.m, "POST", "/api/v1/auth/ssh/begin", "localhost:7788", addr, onLocalhost, map[string]string{"operator": op}, nil)
+		var v SSHChallengeView
+		_ = json.Unmarshal(rr.Body.Bytes(), &v)
+		return rr, v
+	}
+	live := func(id string) bool {
+		h.m.mu.Lock()
+		defer h.m.mu.Unlock()
+		_, ok := h.m.sshCh[id]
+		return ok
+	}
+	// The reviewer's repro: nobody1..4 from 127.0.0.1 and ::1, then ops.
+	for _, addr := range []string{"127.0.0.1:1", "[::1]:1"} {
+		for i := 1; i <= 4; i++ {
+			if rr, _ := begin(addr, fmt.Sprintf("nobody%d", i)); rr.Code != http.StatusOK {
+				t.Fatalf("an unknown name's begin must look like any other: %d %s", rr.Code, rr.Body)
+			}
+		}
+	}
+	// A flood of unknown names stays in its own share.
+	for i := 0; i < 2*maxSSHGhosts; i++ {
+		begin("127.0.0.1:2", fmt.Sprintf("ghost%d", i))
+	}
+	rr, first := begin("127.0.0.1:3", "ops")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("the operator's own begin on localhost: %d %s", rr.Code, rr.Body)
+	}
+	for i := 0; i < 2*maxSSHGhosts; i++ {
+		begin("127.0.0.1:2", fmt.Sprintf("ghost-b%d", i))
+	}
+	if !live(first.ID) {
+		t.Fatal("unknown names evicted the operator's challenge")
+	}
+	// The same name, known or not: the 4th begin succeeds and the 1st goes.
+	for _, op := range []string{"ops", "nobody9"} {
+		var ids []string
+		for i := 0; i < maxSSHPendingClient+1; i++ {
+			rr, v := begin("127.0.0.1:4", op)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("%s begin %d: %d %s", op, i, rr.Code, rr.Body)
+			}
+			ids = append(ids, v.ID)
+		}
+		if live(ids[0]) || !live(ids[len(ids)-1]) {
+			t.Fatalf("%s: the oldest must give way to the newest", op)
+		}
+	}
+	h.m.mu.Lock()
+	ghosts := 0
+	for _, c := range h.m.sshCh {
+		if c.ghost {
+			ghosts++
+		}
+	}
+	h.m.mu.Unlock()
+	if ghosts > maxSSHGhosts {
+		t.Fatalf("%d ghost challenges held", ghosts)
+	}
+}
+
+// Operator buckets are for configured operators. Guesses at names that don't
+// exist never create a persisted bucket or rewrite the store, and are bounded
+// in memory; a locked unknown name is refused in the same words as a locked
+// operator. The store is written when a lock is set or cleared, not on every
+// failure.
+func TestOperatorBucketsAreForConfiguredOperators(t *testing.T) {
+	h := newMethodsHarness(t, nil)
+	_ = h.m.SetPassword("ops", "a long enough password")
+	writes := 0
+	inner := h.m.lock.persist
+	h.m.lock.persist = func(l map[string]LockRecord) { writes++; inner(l) }
+	login := func(addr, op, pw string) *httptest.ResponseRecorder {
+		return call(h.m, "POST", "/api/v1/auth/password/login", "localhost:7788", addr, onLocalhost, map[string]string{"operator": op, "password": pw}, nil)
+	}
+	// A flood of names from rotating loopback networks (the network throttle
+	// doesn't bind there).
+	for i := 0; i < 200; i++ {
+		login(fmt.Sprintf("127.%d.%d.1:1", i/250, i%250), fmt.Sprintf("ghost%04d", i), "wrong guess xx")
+	}
+	slots := map[string]bool{}
+	for i := 0; i < 20000; i++ {
+		b := h.m.operatorBucket(fmt.Sprintf("name%05d", i))
+		if !strings.HasPrefix(b, ghostLockPrefix) {
+			t.Fatalf("an unknown name's bucket: %q", b)
+		}
+		slots[b] = true
+	}
+	if len(slots) > ghostLockSlots || h.m.operatorBucket("ops") != operatorLockKey("ops") {
+		t.Fatalf("%d slots for unknown names", len(slots))
+	}
+	if writes != 0 {
+		t.Fatalf("guesses at unknown names wrote the store %d times", writes)
+	}
+	h.m.lock.mu.Lock()
+	n := 0
+	for k := range h.m.lock.m {
+		if strings.HasPrefix(k, "login:op:") {
+			t.Errorf("a bucket for an unknown name: %s", k)
+		}
+		if strings.HasPrefix(k, "login:"+ghostLockPrefix) {
+			n++
+		}
+	}
+	h.m.lock.mu.Unlock()
+	if n > ghostLockSlots {
+		t.Fatalf("%d ghost buckets", n)
+	}
+	if recs := h.m.deps.Store.Locks(); len(recs) != 0 {
+		t.Fatalf("persisted: %v", recs)
+	}
+
+	// Four wrong guesses at ops write nothing; the fifth locks and writes once.
+	for i := 0; i < loginMaxFails-1; i++ {
+		login(fmt.Sprintf("10.9.%d.1:1", i), "ops", "wrong guess xx")
+	}
+	if writes != 0 {
+		t.Fatalf("failures short of a lock wrote the store %d times", writes)
+	}
+	login("10.9.9.1:1", "ops", "wrong guess xx")
+	if writes != 1 {
+		t.Fatalf("the lock wrote the store %d times, want 1", writes)
+	}
+
+	// The same refusal for a locked unknown name as for the locked operator.
+	for i := 0; i < loginMaxFails; i++ {
+		login(fmt.Sprintf("10.8.%d.1:1", i), "nobody", "wrong guess xx")
+	}
+	ghost, real := login("10.7.0.1:1", "nobody", "x"), login("10.7.1.1:1", "ops", "x")
+	if ghost.Code != http.StatusTooManyRequests || real.Code != http.StatusTooManyRequests {
+		t.Fatalf("locked: %d %d", ghost.Code, real.Code)
+	}
+	gm := strings.ReplaceAll(errMessage(ghost), "nobody", "NAME")
+	rm := strings.ReplaceAll(errMessage(real), "ops", "NAME")
+	if gm != rm {
+		t.Fatalf("an unknown name's lock reads differently:\n%s\n%s", gm, rm)
 	}
 }

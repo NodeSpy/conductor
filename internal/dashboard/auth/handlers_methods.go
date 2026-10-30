@@ -143,7 +143,7 @@ func (m *Manager) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	op := strings.TrimSpace(req.Operator)
 	// The guess is counted (client, network and operator) inside, before the
 	// hash; a refusal while any is locked counts against none.
-	if err := m.passwordLoginFrom(lockKeys(r, guessSecret, op), op, req.Password, req.Code); err != nil {
+	if err := m.passwordLoginFrom(lockKeys(r, guessSecret, m.operatorBucket(op)), op, req.Password, req.Code); err != nil {
 		code := http.StatusUnauthorized
 		var locked lockedError
 		if errors.As(err, &locked) {

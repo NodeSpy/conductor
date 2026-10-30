@@ -44,10 +44,19 @@ const (
 	maxSSHPendingClient  = 3
 	maxSSHPendingNetwork = 256
 	maxSSHPendingSession = 5
-	maxSSHCodeTries      = 3 // wrong signatures against a code before it burns
-	sshKindLogin         = "login"
-	sshKindStepup        = "stepup"
-	loginCodeAlphabet    = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no 0/O, 1/I
+	// On loopback every local process shares one address, so a client cap
+	// would let any of them block the operator's sign-in. There, pending
+	// sign-ins are kept per operator name instead: maxSSHPendingClient each,
+	// and a new begin evicts that name's oldest rather than being refused.
+	// Begins for names that aren't configured operators ("ghosts") behave the
+	// same from outside but live in their own share (maxSSHGhosts, oldest
+	// evicted first), so they never hold a configured operator's slot or the
+	// table's.
+	maxSSHGhosts      = 256
+	maxSSHCodeTries   = 3 // wrong signatures against a code before it burns
+	sshKindLogin      = "login"
+	sshKindStepup     = "stepup"
+	loginCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no 0/O, 1/I
 )
 
 // safeOperator is the operator-name shape SSH challenges accept: it appears in
@@ -81,6 +90,10 @@ type sshChallenge struct {
 	expires   time.Time
 	tries     int    // wrong signatures (paste or code)
 	approved  string // the verified signature, once approve-login posted it
+	// loop: a sign-in begun on loopback. ghost: one for an operator who isn't
+	// configured (it can never verify).
+	loop, ghost bool
+	seq         uint64 // begin order, for evicting the oldest
 }
 
 // SSHChallengeView is what the browser gets back from a begin.
@@ -227,6 +240,10 @@ func (m *Manager) beginSSH(r *http.Request, kind, operator string, sess Session,
 		device: deviceLabel(r), addr: r.RemoteAddr, client: clientKey(r), network: clientNetwork(r),
 		started: m.now(), expires: exp,
 	}
+	if kind == sshKindLogin && loopbackRequest(r) {
+		ch.loop = true
+		ch.ghost = m.deps.Operators == nil || m.deps.Operators()[operator] == ""
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.gcCeremonies()
@@ -236,12 +253,15 @@ func (m *Manager) beginSSH(r *http.Request, kind, operator string, sess Session,
 	if _, dup := m.sshCode[code]; dup {
 		return SSHChallengeView{}, errors.New("login code collision — try again")
 	}
+	m.sshSeq++
+	ch.seq = m.sshSeq
 	m.sshCh[ch.id] = ch
 	m.sshCode[code] = ch.id
 	return SSHChallengeView{ID: ch.id, Text: ch.text, Namespace: ns, Code: FormatLoginCode(code), Expires: exp.UTC().Format(time.RFC3339)}, nil
 }
 
-// sshRoomLocked reports whether ch fits under the pending caps. Caller holds m.mu.
+// sshRoomLocked reports whether ch fits under the pending caps, evicting what
+// a loopback begin replaces. Caller holds m.mu.
 func (m *Manager) sshRoomLocked(ch *sshChallenge) bool {
 	if ch.kind == sshKindStepup {
 		n := 0
@@ -252,9 +272,20 @@ func (m *Manager) sshRoomLocked(ch *sshChallenge) bool {
 		}
 		return n < maxSSHPendingSession
 	}
+	if ch.loop {
+		// This name's own pending sign-ins on loopback, and (for a ghost)
+		// every ghost: past the cap, the oldest goes.
+		m.evictOldestLocked(func(c *sshChallenge) bool {
+			return c.kind == sshKindLogin && c.loop && c.ghost == ch.ghost && c.operator == ch.operator
+		}, maxSSHPendingClient)
+		if ch.ghost {
+			m.evictOldestLocked(func(c *sshChallenge) bool { return c.ghost }, maxSSHGhosts)
+		}
+		return true
+	}
 	total, client, network := 0, 0, 0
 	for _, c := range m.sshCh {
-		if c.kind != sshKindLogin {
+		if c.kind != sshKindLogin || c.ghost {
 			continue
 		}
 		total++
@@ -266,6 +297,29 @@ func (m *Manager) sshRoomLocked(ch *sshChallenge) bool {
 		}
 	}
 	return total < maxSSHPending && client < maxSSHPendingClient && network < maxSSHPendingNetwork
+}
+
+// evictOldestLocked drops the oldest challenges that match until
+// fewer than max remain. Caller holds m.mu.
+func (m *Manager) evictOldestLocked(match func(*sshChallenge) bool, max int) {
+	for {
+		var oldest *sshChallenge
+		n := 0
+		for _, c := range m.sshCh {
+			if !match(c) {
+				continue
+			}
+			n++
+			if oldest == nil || c.seq < oldest.seq {
+				oldest = c
+			}
+		}
+		if n < max || oldest == nil {
+			return
+		}
+		delete(m.sshCh, oldest.id)
+		m.unindexCode(oldest)
+	}
 }
 
 // BeginSSHLogin issues a sign-in challenge for operator on this connection. It

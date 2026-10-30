@@ -81,6 +81,7 @@ type Manager struct {
 	tokens  map[string]*stepupToken    // minted single-use step-up tokens, by token
 	sshCh   map[string]*sshChallenge   // in-flight SSH sign-in / step-up challenges, by id
 	sshCode map[string]string          // login code -> challenge id
+	sshSeq  uint64                     // challenges begun, numbering each
 	totpNew map[string]*totpPending    // TOTP enrolments awaiting a confirming code, by session id
 	regs    map[string]*sessionReg     // signed-in passkey registrations, by ceremony id
 }

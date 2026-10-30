@@ -159,8 +159,9 @@ const (
 // loopback connection there is no client bucket: every local process shares
 // 127.0.0.1, so one could otherwise lock the operator's own browser out of
 // SSH and passkeys. Guessable paths keep their network throttle and operator
-// lock there, which is what bounds guessing.
-func lockKeys(r *http.Request, g guess, operator string) []string {
+// lock there, which is what bounds guessing. opBucket is the guessed
+// operator's bucket (Manager.operatorBucket; "" for none).
+func lockKeys(r *http.Request, g guess, opBucket string) []string {
 	var keys []string
 	if !loopbackRequest(r) {
 		keys = append(keys, clientKey(r))
@@ -168,8 +169,8 @@ func lockKeys(r *http.Request, g guess, operator string) []string {
 	if g != guessCredential {
 		keys = append(keys, clientNetwork(r))
 	}
-	if g == guessSecret && safeOperator.MatchString(operator) {
-		keys = append(keys, operatorLockKey(operator))
+	if g == guessSecret && opBucket != "" {
+		keys = append(keys, opBucket)
 	}
 	return keys
 }

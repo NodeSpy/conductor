@@ -142,7 +142,13 @@ conductor-dashboard-stepup v1 operator=ops origin=... purpose=approve digest=<sh
 - Pending sign-in challenges are capped at 3 per client (one address), 256 per
   network (an IPv4 /24 or an IPv6 /64) and 4096 overall. A neighbour needs 86
   addresses on the operator's network, each refreshed every 5 minutes, to fill
-  its share; the network cap only stops one network holding the whole table. Step-up challenges have their own
+  its share; the network cap only stops one network holding the whole table.
+  On loopback every local process shares one address, so the cap there is 3
+  per operator name: a fourth begin for the same name replaces that name's
+  oldest, and nothing one name does fills another's share. A begin for a name
+  that is not a configured operator gets the same answer as any other, holds
+  no place in the counts above, and lives in its own table of at most 256
+  (oldest replaced first). Step-up challenges have their own
   cap of 5 per session, so a flood of sign-in challenges cannot stop a
   signed-in operator from confirming.
 
@@ -257,8 +263,14 @@ challenge.
   lock a different address out of SSH or passkeys.
 - **Per operator.** Password and TOTP failures, including TOTP and password
   step-up attempts, also count against the operator, whichever client they come
-  from. The operator buckets and their doubling are kept in `auth.json`, so a
-  restart (every config apply reloads the daemon) doesn't reset them.
+  from. Only configured operators have a bucket. A name that isn't one counts
+  in one of 1024 in-memory buckets chosen by a hash of the name, so its
+  failures are bounded like anyone's, the answer gives no hint whether the
+  operator exists, and an attacker can't grow the persisted table by inventing
+  names. The operator buckets and their doubling are kept in `auth.json`, so a
+  restart (every config apply reloads the daemon) doesn't reset them. The file
+  is written when a bucket locks or unlocks or its doubling changes, not on
+  every failure.
 - **Loopback.** Every local process reaches the localhost listener from
   127.0.0.1 or ::1, so a client bucket there would let any local user lock the
   operator's own browser out. On loopback there is no client bucket: SSH and

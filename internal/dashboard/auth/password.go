@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -136,8 +138,8 @@ func (m *Manager) ClearPassword(operator string) error {
 // wrong or whether the operator exists.
 func (m *Manager) PasswordLogin(operator, pw, code string) error {
 	var keys []string
-	if safeOperator.MatchString(operator) {
-		keys = []string{operatorLockKey(operator)}
+	if b := m.operatorBucket(operator); b != "" {
+		keys = []string{b}
 	}
 	return m.passwordLoginFrom(keys, operator, pw, code)
 }
@@ -153,6 +155,9 @@ func (m *Manager) passwordLoginFrom(keys []string, operator, pw, code string) er
 	}
 	a, until, refused, ok := m.lock.Begin(keys...)
 	if !ok {
+		if strings.HasPrefix(refused, ghostLockPrefix) {
+			refused = operatorLockKey(operator) // worded as any operator's lock
+		}
 		return lockedError{lockMessage(refused, until)}
 	}
 	rec, _ := m.deps.Store.OperatorSecret(operator)
@@ -193,6 +198,33 @@ func (e lockedError) Error() string { return e.msg }
 // operatorLockKey is the lockout bucket for guessable-secret failures (password,
 // TOTP) against one operator, whatever client they come from.
 func operatorLockKey(operator string) string { return "op:" + operator }
+
+// OPERATOR BUCKETS are for configured operators: they lock, they are
+// persisted, and the lock message names the operator. A guess at a name that
+// isn't configured counts against one of ghostLockSlots in-memory buckets
+// instead, chosen by a hash of the name. These are never persisted and are
+// bounded however many names are tried. The refusal reads as the named
+// operator's lock, so guessing passwords doesn't tell anyone which names
+// exist.
+const (
+	ghostLockPrefix = "opghost:"
+	ghostLockSlots  = 1024
+)
+
+// operatorBucket is the lockout bucket a password or code guess at operator
+// counts against: its own for a configured operator, a ghost slot for any
+// other well-formed name, "" for a malformed one.
+func (m *Manager) operatorBucket(operator string) string {
+	if !safeOperator.MatchString(operator) {
+		return ""
+	}
+	if m.operatorExists(operator) {
+		return operatorLockKey(operator)
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(operator))
+	return ghostLockPrefix + strconv.Itoa(int(h.Sum32()%ghostLockSlots))
+}
 
 // operatorExists reports whether operator is configured.
 func (m *Manager) operatorExists(operator string) bool {

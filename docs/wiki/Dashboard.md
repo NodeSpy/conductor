@@ -129,7 +129,9 @@ The challenge is bound to the operator, the page's origin and a nonce, and
 expires after 5 minutes. A login code works once, allows 3 wrong signatures,
 and is only accepted on the listener, host and kind of connection that created
 it. Pending challenges are capped per client, per network and overall;
-confirmations have their own cap per session.
+confirmations have their own cap per session. On localhost the cap is 3 per
+operator name, and a fourth sign-in for the same name replaces its oldest, so
+another local user can't fill your share.
 
 ### Password and authenticator app
 
@@ -155,7 +157,9 @@ it.
   failures per address (IPv4 or IPv6), and password and login-code guesses
   are throttled per network (an IPv4 /24 or IPv6 /64, 50 in 15 minutes), so a
   neighbour on the same LAN can't lock you out of SSH or passkeys. On
-  localhost only the operator lock and the throttle apply. Guesses sent at the
+  localhost only the operator lock and the throttle apply. Guesses at a name
+  that isn't a configured operator are throttled the same way but leave no
+  record in `auth.json`. Guesses sent at the
   same moment count before they are checked, so a burst gets no more tries
   than a sequence. The error says which of these refused you.
 - Lost the authenticator or the password: `conductor dashboard reset
