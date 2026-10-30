@@ -400,7 +400,7 @@ func TestIndexNewestFirst(t *testing.T) {
 	commitAt := func(slug, body, date string) {
 		t.Helper()
 		_ = os.WriteFile(filepath.Join(repo.Dir, "knowledge", slug+".md"), []byte(know("Doc "+slug, "", "", body)), 0o600)
-		cmd := exec.Command("git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-q", "-m", slug, "--", "knowledge/"+slug+".md")
+		cmd := exec.Command("git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "maintenance.autoDetach=false", "commit", "-q", "-m", slug, "--", "knowledge/"+slug+".md")
 		_, _ = repo.git(ctx, repo.Dir, "add", "--", "knowledge/"+slug+".md")
 		cmd.Dir = repo.Dir
 		cmd.Env = append(os.Environ(), "GIT_COMMITTER_DATE="+date, "GIT_AUTHOR_DATE="+date, "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")

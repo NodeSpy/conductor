@@ -312,7 +312,8 @@ func (t *Terraform) Plan(ctx context.Context, bot, pid string) store.Proposal {
 	src := filepath.Join(wd, "src")
 	env := roleEnv(role)
 	git := func(args ...string) (string, error) {
-		o, e, err := t.run(ctx, wd, env, "git", args...)
+		// automatic maintenance in the command, not detached past it
+		o, e, err := t.run(ctx, wd, env, "git", append([]string{"-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false"}, args...)...)
 		if err != nil {
 			return o, fmt.Errorf("git %s: %v: %s", args[0], err, tail(e, 400))
 		}

@@ -94,7 +94,9 @@ func (r *Repo) now() time.Time {
 }
 
 // git runs one git command in the repo, isolated from the operator's own git
-// configuration's side effects (signing prompts, hooks).
+// configuration's side effects (signing prompts, hooks). Git's automatic
+// maintenance after a write runs inside the command rather than detached, so
+// nothing is still writing to the repo once the command returns.
 func (r *Repo) git(ctx context.Context, dir string, args ...string) (string, error) {
 	return r.gitAs(ctx, r.Bot, dir, args...)
 }
@@ -125,7 +127,7 @@ func (r *Repo) gitAs(ctx context.Context, author, dir string, args ...string) (s
 
 // gitIdent is git with id as the author.
 func (r *Repo) gitIdent(ctx context.Context, id Ident, dir string, args ...string) (string, error) {
-	full := append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "init.defaultBranch=main"}, args...)
+	full := append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "init.defaultBranch=main", "-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
 	name, email := id.Name, id.Email
