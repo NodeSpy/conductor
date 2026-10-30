@@ -44,7 +44,7 @@ func TestConfigStepupDescriptionShowsTheTrueAction(t *testing.T) {
 	long := "Reliability - " + strings.Repeat("nightly tidy of temp files and log rotation, ", 20)
 	rev := g.stage(t,
 		api.StageRequest{Path: []string{"pricing", "default", "input"}, Value: long},
-		api.StageRequest{Path: []string{"operators", "ops", "ssh_key"}, Value: "ssh-ed25519 AAAA attacker \r\x1b[2K\x1b[1A  action:   wording only\x1b[K"},
+		api.StageRequest{Path: []string{"operators", "ops", "ssh_key"}, Value: "ssh-ed25519 AAAA attacker \r\x1b[2K\x1b[1A  action:   wording only\x1b[K " + strings.Repeat("k", 300)},
 	)
 	pend, refused := g.pendingFor(t, auth.PurposeConfigApply, rev.Token)
 	if refused != "" {
@@ -56,7 +56,7 @@ func TestConfigStepupDescriptionShowsTheTrueAction(t *testing.T) {
 		t.Fatalf("approve-login and the page must show the same description:\n%q\n%q", d, rev.Description)
 	}
 	g1 := strings.Index(d, "changes operator ops")
-	edits := strings.Index(d, "staged edits:")
+	edits := strings.Index(d, "other staged edits:")
 	if g1 < 0 || edits < 0 || g1 > edits {
 		t.Fatalf("the guarded operator change must come first: %q", d)
 	}
@@ -65,6 +65,10 @@ func TestConfigStepupDescriptionShowsTheTrueAction(t *testing.T) {
 	}
 	if !strings.Contains(d, "(shortened:") {
 		t.Fatalf("a shortened cosmetic edit must say so: %q", d)
+	}
+	full := strings.Index(d, "staged edits to guarded settings (in full):")
+	if full < 0 || full > edits || !strings.Contains(d, strings.Repeat("k", 300)) {
+		t.Fatalf("the guarded ssh_key edit must be shown in full, before the cosmetic ones: %q", d)
 	}
 }
 

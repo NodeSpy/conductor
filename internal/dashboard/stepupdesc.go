@@ -92,8 +92,9 @@ func (l *stepupLabels) describe(session string, purpose auth.Purpose, digest str
 	return v.text
 }
 
-// Shortening applies to the staged edits only (cosmetic: the guarded and
-// widening lists above them already name everything that needs the step-up).
+// Shortening applies only to staged edits outside every guarded and widening
+// path (cosmetic ones); an edit under one is shown in full, so the operator
+// reads the exact new ssh_key or command, not its first characters.
 const (
 	descEditMax  = 20  // staged edits listed
 	descEditRune = 200 // characters per staged edit
@@ -101,8 +102,8 @@ const (
 
 // describeConfig is a config apply's or restore's description: what, then
 // every guarded section and every widening change in full, then the staged
-// edits (shortened, and said so), then the diff size. Every value in it is made
-// safe to print.
+// edits under them in full, then the other staged edits (shortened, and said
+// so), then the diff size. Every value in it is made safe to print.
 func describeConfig(what string, rev configedit.Review) string {
 	var b strings.Builder
 	b.WriteString(auth.SafeText(what))
@@ -117,11 +118,20 @@ func describeConfig(what string, rev configedit.Review) string {
 	}
 	list("guarded (why it needs this confirmation):", rev.Guarded)
 	list("loosens a guardrail:", rev.Widening)
-	if len(rev.Effects) > 0 {
-		b.WriteString("\nstaged edits:")
-		for i, e := range rev.Effects {
+	var guarded, cosmetic []configedit.Effect
+	for _, e := range rev.Effects {
+		if underAny(e.Path, rev.Guarded) || underAny(e.Path, rev.Widening) {
+			guarded = append(guarded, e)
+		} else {
+			cosmetic = append(cosmetic, e)
+		}
+	}
+	list("staged edits to guarded settings (in full):", guarded)
+	if len(cosmetic) > 0 {
+		b.WriteString("\nother staged edits:")
+		for i, e := range cosmetic {
 			if i == descEditMax {
-				fmt.Fprintf(&b, "\n  … and %d more staged edits (not shown here; the page lists them all)", len(rev.Effects)-descEditMax)
+				fmt.Fprintf(&b, "\n  … and %d more (not shown here; the page lists them all)", len(cosmetic)-descEditMax)
 				break
 			}
 			t := []rune(e.Text)
@@ -133,6 +143,17 @@ func describeConfig(what string, rev configedit.Review) string {
 	}
 	fmt.Fprintf(&b, "\ndiff: %d lines added, %d removed", rev.Diff.Added, rev.Diff.Removed)
 	return b.String()
+}
+
+// underAny reports whether the dotted path is one of es's paths or under one;
+// "(config)" (the config as a whole) covers every path.
+func underAny(path string, es []configedit.Effect) bool {
+	for _, e := range es {
+		if e.Path == "(config)" || path == e.Path || strings.HasPrefix(path, e.Path+".") {
+			return true
+		}
+	}
+	return false
 }
 
 // describeAction is an approval's or purchase's description: the decision,

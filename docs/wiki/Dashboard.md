@@ -171,8 +171,9 @@ the same text `approve-login` prints, and the start of its digest. For a
 proposal or a purchase that is the canonical action (a proposal's verb and
 options, a purchase's merchant, items, total and card), pretty-printed, with
 the requester's own summary after it on a line marked as theirs. For a config
-change it is every guarded section and every widening change, in full, then
-the staged edits (shortened past 20, and marked when they are). Control and
+change it is every guarded section and every widening change, then every
+staged edit under them, all in full, then the other staged edits (shortened
+past 20 or 200 characters, and marked when they are). Control and
 bidi characters show as escapes such as `\x1b` or `\u202e`, in the dialog and
 in the terminal. The dialog offers the methods
 `auth.stepup` allows that you have on this connection: passkey, SSH key (paste

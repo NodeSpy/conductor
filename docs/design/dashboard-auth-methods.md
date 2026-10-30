@@ -163,7 +163,8 @@ challenge.
   a browser take-over refused for want of a step-up), it records for that
   session what confirming the digest does, built from its own data:
   - a config apply lists every guarded section and every widening change
-    first, in full, then the staged edits, then the diff size. Only the staged
+    first, then the staged edits under a guarded or widening path, all in
+    full, then the other staged edits, then the diff size. Only those other
     edits can be shortened (at most 20, 200 characters each), and the text
     says when they are;
   - an approval or a purchase shows the canonical action the digest pins (a
