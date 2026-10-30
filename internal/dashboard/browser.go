@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -174,9 +175,11 @@ func (s *Server) handleBrowserOp(w http.ResponseWriter, r *http.Request) {
 		digest := auth.DigestOf(raw)
 		if _, err := s.auth.RequireStepup(sess, auth.PurposeBrowserWrite, digest, r.Header.Get(auth.StepupHeader)); err != nil {
 			// Tell the client the digest + purpose to step up over, then retry.
+			desc := describeWalletOp(env.Cmd, env.Req)
+			s.labels.note(r, auth.PurposeBrowserWrite, digest, desc)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{
 				"error":  map[string]string{"code": "stepup_required", "message": err.Error(), "hint": "confirm it's you, then try again"},
-				"stepup": map[string]string{"purpose": string(auth.PurposeBrowserWrite), "digest": digest},
+				"stepup": map[string]string{"purpose": string(auth.PurposeBrowserWrite), "digest": digest, "description": desc},
 			})
 			return
 		}
@@ -189,6 +192,17 @@ func (s *Server) handleBrowserOp(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// describeWalletOp is a widening wallet change's description: the command and
+// its request, pretty-printed in full.
+func describeWalletOp(cmd string, req json.RawMessage) string {
+	var b strings.Builder
+	b.WriteString(auth.SafeText("a wallet change that widens what a bot can do: " + cmd))
+	for _, l := range auth.SafeLines(prettyJSON(req)) {
+		b.WriteString("\n  " + l)
+	}
+	return b.String()
 }
 
 // --- takeover (step-up lease) + input + screencast ---
@@ -212,9 +226,11 @@ func (s *Server) handleBrowserTakeover(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := s.auth.RequireStepup(sess, auth.PurposeBrowserTake, takeoverDigest(id), r.Header.Get(auth.StepupHeader)); err != nil {
+			desc := auth.SafeText("take over browser session " + id + ": you drive the browser while the bot waits")
+			s.labels.note(r, auth.PurposeBrowserTake, takeoverDigest(id), desc)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{
 				"error":  map[string]string{"code": "stepup_required", "message": err.Error(), "hint": "confirm it's you to take over"},
-				"stepup": map[string]string{"purpose": string(auth.PurposeBrowserTake), "digest": takeoverDigest(id)},
+				"stepup": map[string]string{"purpose": string(auth.PurposeBrowserTake), "digest": takeoverDigest(id), "description": desc},
 			})
 			return
 		}
@@ -313,15 +329,18 @@ func (s *Server) handleBrowserPurchaseApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	approve, deny := purchaseDigest(id, actionSHA, "approve"), purchaseDigest(id, actionSHA, "deny")
-	s.labels.note(auth.PurposePurchase, approve, "approve purchase "+id+": "+compactJSON(summary))
-	s.labels.note(auth.PurposePurchase, deny, "deny purchase "+id+": "+compactJSON(summary))
+	approveDesc := describeAction("approve purchase "+id, summary)
+	denyDesc := describeAction("deny purchase "+id, summary)
+	s.labels.note(r, auth.PurposePurchase, approve, approveDesc)
+	s.labels.note(r, auth.PurposePurchase, deny, denyDesc)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"purchase": id, "action_sha256": actionSHA,
 		"digests": map[string]string{
 			"approve": approve,
 			"deny":    deny,
 		},
-		"summary": json.RawMessage(nonEmptyJSON(summary)), "operators": operators,
+		"descriptions": map[string]string{"approve": approveDesc, "deny": denyDesc},
+		"summary":      json.RawMessage(nonEmptyJSON(summary)), "operators": operators,
 		"purpose": string(auth.PurposePurchase),
 	})
 }

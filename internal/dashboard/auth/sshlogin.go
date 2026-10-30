@@ -70,6 +70,7 @@ type sshChallenge struct {
 	session   string // step-up: the session that asked
 	purpose   Purpose
 	digest    string
+	summary   string // step-up: what it confirms, bound when it began
 	device    string // the requesting browser, shown by approve-login
 	addr      string
 	client    string // lockout/pending bucket
@@ -209,10 +210,17 @@ func (m *Manager) beginSSH(r *http.Request, kind, operator string, sess Session,
 		ns = StepupNamespace
 	}
 	exp := m.now().Add(sshChallengeTTL)
+	summary := ""
+	if kind == sshKindStepup {
+		if summary = m.describeStepup(sess.ID, operator, purpose, digest); summary == "" {
+			return SSHChallengeView{}, ErrNotDescribed
+		}
+	}
 	ch := &sshChallenge{
 		id: b64(idb), code: code, kind: kind, operator: operator,
 		listener: info.Listener, host: info.Host, transport: info.Transport,
 		text:      SSHChallengeText(kind, operator, origin, purpose, digest, b64(nonce), exp),
+		summary:   summary,
 		namespace: ns, session: sess.ID, purpose: purpose, digest: digest,
 		device: deviceLabel(r), addr: r.RemoteAddr, client: clientKey(r), network: clientNetwork(r),
 		started: m.now(), expires: exp,
@@ -279,6 +287,10 @@ func (m *Manager) BeginSSHStepup(r *http.Request, sess Session, purpose Purpose,
 	}
 	return m.beginSSH(r, sshKindStepup, sess.Operator, sess, purpose, digest)
 }
+
+// ErrNotDescribed refuses an SSH step-up for an action the dashboard never
+// described to this session: approve-login would have nothing true to show.
+var ErrNotDescribed = errors.New("the dashboard has no description of this action for your session, so it can't be confirmed by SSH — reload the page and try again")
 
 // lookupSSH returns a snapshot of the challenge id for the request, checking it
 // is live, of kind, and bound to this listener, host and transport (a
@@ -473,19 +485,19 @@ func (m *Manager) codeChallenge(r *http.Request, code string) (sshChallenge, boo
 	return *ch, true
 }
 
-// describeStepup is what a step-up confirms, in words, for approve-login.
-func (m *Manager) describeStepup(ch sshChallenge) string {
-	if ch.purpose == PurposeCredential {
+// describeStepup is what a step-up by session over (purpose, digest)
+// confirms, in words, for approve-login.
+func (m *Manager) describeStepup(session, operator string, purpose Purpose, digest string) string {
+	if purpose == PurposeCredential {
 		for _, a := range credentialActions {
-			if CredentialDigest(ch.operator, a.action) == ch.digest {
+			if CredentialDigest(operator, a.action) == digest {
 				return a.text
 			}
 		}
+		return ""
 	}
-	if m.deps.DescribeStepup != nil {
-		if s := m.deps.DescribeStepup(ch.operator, ch.purpose, ch.digest); s != "" {
-			return s
-		}
+	if m.deps.DescribeStepup != nil && session != "" {
+		return m.deps.DescribeStepup(session, purpose, digest)
 	}
 	return ""
 }
@@ -515,7 +527,7 @@ func (m *Manager) PendingSSH(r *http.Request, code string) (SSHPendingView, erro
 	}
 	if ch.kind == sshKindStepup {
 		v.Digest = ch.digest
-		v.Summary = m.describeStepup(ch)
+		v.Summary = ch.summary
 	}
 	return v, nil
 }

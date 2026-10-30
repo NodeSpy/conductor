@@ -5,6 +5,7 @@
 // widening change or a purchase decision also carries a step-up token. No answer
 // ever carries a value — only each field's source (design §4.5.1).
 import { authState, stepUp } from './auth'
+import { readJSON } from './safe'
 
 function csrf(): string {
   return authState.value.csrf || ''
@@ -14,7 +15,7 @@ async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`
     try {
-      const b = (await res.json()) as { error?: string | { message?: string } }
+      const b = (await readJSON(res)) as { error?: string | { message?: string } }
       if (typeof b.error === 'string') message = b.error
       else if (b.error?.message) message = b.error.message
     } catch {
@@ -22,7 +23,7 @@ async function handle<T>(res: Response): Promise<T> {
     }
     throw new Error(message)
   }
-  return (await res.json()) as T
+  return (await readJSON(res)) as T
 }
 
 function get<T>(path: string): Promise<T> {
@@ -216,9 +217,9 @@ export async function walletOp(cmd: string, req: Record<string, unknown>): Promi
     body,
   })
   if (res.status === 401) {
-    const b = (await res.clone().json().catch(() => ({}))) as { stepup?: { purpose: string; digest: string } }
+    const b = (await readJSON(res.clone()).catch(() => ({}))) as { stepup?: { purpose: string; digest: string; description?: string } }
     if (b.stepup) {
-      const token = await stepUp(b.stepup.purpose, b.stepup.digest, { what: `Wallet change: ${cmd}`, action: req })
+      const token = await stepUp(b.stepup.purpose, b.stepup.digest, { what: `Wallet change: ${cmd}`, description: b.stepup.description, action: req })
       res = await fetch('/api/v1/browser/op', {
         method: 'POST',
         credentials: 'same-origin',
@@ -249,9 +250,9 @@ export async function takeover(id: string): Promise<void> {
     headers: { Accept: 'application/json', 'X-Conductor-CSRF': csrf() },
   })
   if (res.status === 401) {
-    const b = (await res.clone().json().catch(() => ({}))) as { stepup?: { purpose: string; digest: string } }
+    const b = (await readJSON(res.clone()).catch(() => ({}))) as { stepup?: { purpose: string; digest: string; description?: string } }
     if (b.stepup) {
-      const token = await stepUp(b.stepup.purpose, b.stepup.digest, { what: `Take over browser session ${id}` })
+      const token = await stepUp(b.stepup.purpose, b.stepup.digest, { what: `Take over browser session ${id}`, description: b.stepup.description })
       res = await fetch(`/api/v1/browser/sessions/${encodeURIComponent(id)}/takeover`, {
         method: 'POST',
         credentials: 'same-origin',
@@ -285,6 +286,7 @@ interface PurchaseApproval {
   purchase: string
   action_sha256: string
   digests: { approve: string; deny: string }
+  descriptions: { approve: string; deny: string }
   summary: unknown
   operators: string[] | null
   purpose: string
@@ -298,7 +300,7 @@ export async function decidePurchase(id: string, decision: 'approve' | 'deny', r
   const digest = decision === 'approve' ? view.digests.approve : view.digests.deny
   const token = await stepUp(view.purpose, digest, {
     what: `${decision === 'approve' ? 'Approve' : 'Deny'} purchase ${id}`,
-    action: view.summary,
+    description: decision === 'approve' ? view.descriptions.approve : view.descriptions.deny,
   })
   await fetch(`/api/v1/browser/purchases/${encodeURIComponent(id)}/decision`, {
     method: 'POST',

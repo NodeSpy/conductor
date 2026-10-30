@@ -12,7 +12,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -160,6 +162,9 @@ func dashboardApproveLogin(code string, fl map[string]string) error {
 	if p.Namespace != pend.Namespace {
 		return fmt.Errorf("refusing: the challenge's namespace doesn't match its kind")
 	}
+	if p.Kind == "stepup" && strings.TrimSpace(pend.Summary) == "" {
+		return fmt.Errorf("refusing: the dashboard didn't say what this confirmation is for, so there is nothing to check it against — don't approve an action you can't read")
+	}
 	printPending(os.Stderr, pend, p, origin, time.Now())
 	if fl["yes"] != "true" {
 		if !confirmTTY("Approve it? [y/N] ") {
@@ -186,27 +191,32 @@ func dashboardApproveLogin(code string, fl map[string]string) error {
 // from where, when, and for a step-up the action it confirms — before the y/N.
 // Nothing here can stop a relay (someone who sends you their code is asking you
 // to sign them in), so it says so; a passkey is the method that resists that.
+//
+// Everything the server sent is printed through auth.SafeText: control, bidi
+// and zero-width characters show as escapes, so nothing it says can move the
+// cursor, erase a line or reorder what the operator reads. The action is
+// printed in full, one line per line.
 func printPending(w io.Writer, pend auth.SSHPendingView, p auth.ParsedChallenge, origin string, now time.Time) {
+	safe := auth.SafeText
 	if p.Kind == "stepup" {
-		fmt.Fprintf(w, "Confirmation request for operator %s\n", pend.Operator)
+		fmt.Fprintf(w, "Confirmation request for operator %s\n", safe(pend.Operator))
 	} else {
-		fmt.Fprintf(w, "Sign-in request for operator %s\n", pend.Operator)
+		fmt.Fprintf(w, "Sign-in request for operator %s\n", safe(pend.Operator))
 	}
 	row := func(k, v string) { fmt.Fprintf(w, "  %-9s %s\n", k+":", v) }
-	row("from", orUnknown(strings.TrimSpace(pend.Addr)))
-	row("device", orUnknown(strings.TrimSpace(pend.Device))+" (as the requesting browser describes itself)")
-	row("started", whenAgo(pend.Started, now))
-	row("on", origin)
-	row("expires", whenAgo(pend.Expires, now))
+	row("from", safe(orUnknown(strings.TrimSpace(pend.Addr))))
+	row("device", safe(orUnknown(strings.TrimSpace(pend.Device)))+" (as the requesting browser describes itself)")
+	row("started", safe(whenAgo(pend.Started, now)))
+	row("on", safe(origin))
+	row("expires", safe(whenAgo(pend.Expires, now)))
 	if p.Kind == "stepup" {
-		row("purpose", p.Fields["purpose"])
-		if pend.Summary != "" {
-			row("action", pend.Summary)
-		} else {
-			row("action", "not described by the dashboard — check the waiting page")
+		row("purpose", safe(p.Fields["purpose"]))
+		row("action", "")
+		for _, l := range auth.SafeLines(strings.TrimRight(pend.Summary, "\n")) {
+			fmt.Fprintf(w, "    %s\n", l)
 		}
 		if d := p.Fields["digest"]; d != "" {
-			row("digest", digestPrefix(d)+"… (the waiting page shows the same)")
+			row("digest", safe(digestPrefix(d))+"… (the waiting page shows the same)")
 		}
 	}
 	fmt.Fprintln(w, "Approve only a request you started yourself, on this dashboard, just now.")
@@ -286,6 +296,13 @@ func postJSON(hc *http.Client, u string, body any, out any) error {
 	req.Header.Set("Accept", "application/json")
 	resp, err := hc.Do(req)
 	if err != nil {
+		var unknownCA x509.UnknownAuthorityError
+		if errors.As(err, &unknownCA) {
+			return fmt.Errorf("reach the dashboard: %w\n"+
+				"The dashboard's certificate isn't signed by a CA this machine trusts (a self-signed bind cert, say). "+
+				"Point SSL_CERT_FILE at that certificate, e.g. SSL_CERT_FILE=/etc/conductor/tls/dashboard.crt conductor dashboard approve-login …, "+
+				"rather than switching to a plain-HTTP listener", err)
+		}
 		return fmt.Errorf("reach the dashboard: %w", err)
 	}
 	defer resp.Body.Close()
@@ -295,9 +312,9 @@ func postJSON(hc *http.Client, u string, body any, out any) error {
 			Error struct{ Message string } `json:"error"`
 		}
 		if json.Unmarshal(raw, &e) == nil && e.Error.Message != "" {
-			return fmt.Errorf("dashboard: %s", e.Error.Message)
+			return fmt.Errorf("dashboard: %s", auth.SafeText(e.Error.Message))
 		}
-		return fmt.Errorf("dashboard: %s: %s", resp.Status, strings.TrimSpace(string(raw)))
+		return fmt.Errorf("dashboard: %s: %s", auth.SafeText(resp.Status), auth.SafeText(strings.TrimSpace(string(raw))))
 	}
 	if out != nil {
 		return json.Unmarshal(raw, out)

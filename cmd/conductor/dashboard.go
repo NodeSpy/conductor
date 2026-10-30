@@ -10,6 +10,7 @@ package main
 // agent session, as `bot approve` does.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dashboard"
 	"github.com/NodeSpy/conductor/internal/dashboard/auth"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // dashboardMgr is the live dashboard auth Manager, set when the dashboard starts
@@ -106,7 +108,7 @@ func dashboardEnroll(cfg *config.Config, fl map[string]string) error {
 	code, _ := out["pairing_code"].(string)
 	port := cfg.Dashboard.EffectivePort()
 	fmt.Printf("operator %s: open this on THIS machine within 10m (single use):\n  %s\npairing code: %s\n",
-		op, auth.EnrollURL(port, secret), code)
+		auth.SafeText(op), auth.SafeText(auth.EnrollURL(port, secret)), auth.SafeText(code))
 	return nil
 }
 
@@ -129,9 +131,13 @@ func dashboardReset(cfg *config.Config, fl map[string]string) error {
 		return err
 	}
 	if msg != "" {
-		fmt.Println(msg)
+		fmt.Println(auth.SafeText(msg))
 	} else {
-		fmt.Printf("reset %s: %v passkey(s), %v session(s) removed; first enrollment applies again\n", op, out["passkeys"], out["sessions"])
+		removed, _ := out["removed"].(string)
+		if removed == "" {
+			removed = fmt.Sprintf("%v passkey(s) and %v session(s) removed", out["passkeys"], out["sessions"])
+		}
+		fmt.Printf("reset %s: %s; first enrollment applies again\n", auth.SafeText(op), auth.SafeText(removed))
 	}
 	return nil
 }
@@ -144,7 +150,7 @@ func dashboardStatus(cfg *config.Config) error {
 	ls, _ := out["listeners"].([]any)
 	for _, l := range ls {
 		m, _ := l.(map[string]any)
-		fmt.Printf("listener %v: RP %v  %v\n", m["listener"], m["rp_id"], m["origins"])
+		fmt.Printf("listener %s: RP %s  %s\n", safeAny(m["listener"]), safeAny(m["rp_id"]), safeAny(m["origins"]))
 	}
 	ops, _ := out["operators"].(map[string]any)
 	names := make([]string, 0, len(ops))
@@ -165,10 +171,13 @@ func dashboardStatus(cfg *config.Config) error {
 		if b, _ := s["totp"].(bool); b {
 			extra += " · authenticator"
 		}
-		fmt.Printf("operator %s: %v passkey(s), %v session(s)%s%s\n", n, s["passkeys"], s["sessions"], extra, live)
+		fmt.Printf("operator %s: %v passkey(s), %v session(s)%s%s\n", auth.SafeText(n), s["passkeys"], s["sessions"], extra, live)
 	}
 	return nil
 }
+
+// safeAny prints a value from the daemon through auth.SafeText.
+func safeAny(v any) string { return auth.SafeText(fmt.Sprint(v)) }
 
 // signDashboard signs payload with the operator's key: a --key private key file,
 // or the configured public key through the ssh-agent (a confirming agent or a
@@ -239,18 +248,48 @@ func dashboardApprovalView(botName, id string) (actionSHA, summaryJSON string, o
 	}
 	cfg := botCtl.Cfg()
 	ops := bot.Approvers(cfg, botName, *p)
-	summary := map[string]any{
-		"kind": p.Kind, "tier": p.Tier, "uses": p.Uses, "summary": p.Summary,
-		"requester_class": p.RequesterClass, "status": p.Status, "case": p.CaseID,
+	return p.Digest, approvalSummary(*p), ops, true
+}
+
+// approvalSummary is the approval view's JSON: under "action" the canonical
+// action the digest pins (kind, uses and options as proposed, or the
+// terraform, knowledge or template change), which is what the operator
+// confirms; display fields beside it; and the requester's own summary under
+// "requester_summary", which nothing checks.
+func approvalSummary(p store.Proposal) string {
+	action := map[string]any{"kind": p.Kind}
+	if p.Uses != "" {
+		action["uses"] = p.Uses
+	}
+	if p.Options != nil {
+		action["options"] = p.Options
 	}
 	if p.Terraform != nil {
-		summary["terraform"] = map[string]any{
-			"repo": p.Terraform.Repo, "dir": p.Terraform.Dir, "workspace": p.Terraform.Workspace,
-			"add": p.Terraform.Add, "change": p.Terraform.Change, "destroy": p.Terraform.Destroy,
-		}
+		action["terraform"] = p.Terraform
 	}
-	b, _ := json.Marshal(summary)
-	return p.Digest, string(b), ops, true
+	if p.Knowledge != nil {
+		action["knowledge"] = p.Knowledge
+	}
+	if p.Template != nil {
+		action["template"] = p.Template
+	}
+	if p.Amount != 0 {
+		action["amount"] = p.Amount
+	}
+	return marshalPlain(map[string]any{
+		"action": action, "tier": p.Tier, "requester_class": p.RequesterClass,
+		"status": p.Status, "case": p.CaseID, "requester_summary": p.Summary,
+	})
+}
+
+// marshalPlain is json.Marshal without HTML escaping, so a command reads as
+// written (> stays >) when the view is pretty-printed for the operator.
+func marshalPlain(v any) string {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(v)
+	return strings.TrimSpace(b.String())
 }
 
 // dashboardDecide is the dashboard's DecideProposal: it applies an operator's
@@ -326,9 +365,10 @@ func handleDashboardControl(ctx context.Context, conn net.Conn, req controlReque
 			writeControlResp(conn, controlResponse{Error: err.Error()})
 			return
 		}
-		pk, se := dashboardMgr.ResetOperator(str("operator"))
-		log("dashboard: reset operator %s (%d passkeys, %d sessions)", str("operator"), pk, se)
-		writeControlResp(conn, controlResponse{OK: true, Result: map[string]any{"passkeys": pk, "sessions": se}})
+		res := dashboardMgr.ResetOperator(str("operator"))
+		log("dashboard: reset operator %s (%s)", str("operator"), res)
+		writeControlResp(conn, controlResponse{OK: true, Result: map[string]any{"passkeys": res.Passkeys, "sessions": res.Sessions,
+			"password": res.Password, "totp": res.TOTP, "ticket": res.Ticket, "removed": res.String()}})
 	case "status":
 		s := dashboardMgr.Status()
 		b, _ := json.Marshal(s)

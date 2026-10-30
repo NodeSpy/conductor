@@ -8,7 +8,6 @@ package dashboard
 // config-edit owner's server.go stays small.
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -346,14 +345,17 @@ func (s *Server) handleApprovalView(w http.ResponseWriter, r *http.Request) {
 	// the server recomputes the same digest in handleApprovalDecision, so the
 	// client only forwards it (no client-side hashing that could drift).
 	approve, deny := approvalDigest(bot, id, actionSHA, "approve"), approvalDigest(bot, id, actionSHA, "deny")
-	s.labels.note(auth.PurposeApprove, approve, "approve bot "+bot+"'s proposal "+id+": "+compactJSON(summary))
-	s.labels.note(auth.PurposeApprove, deny, "deny bot "+bot+"'s proposal "+id+": "+compactJSON(summary))
+	approveDesc := describeAction("approve bot "+bot+"'s proposal "+id, summary)
+	denyDesc := describeAction("deny bot "+bot+"'s proposal "+id, summary)
+	s.labels.note(r, auth.PurposeApprove, approve, approveDesc)
+	s.labels.note(r, auth.PurposeApprove, deny, denyDesc)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"bot": bot, "proposal": id, "action_sha256": actionSHA,
 		"digests": map[string]string{
 			"approve": approve,
 			"deny":    deny,
 		},
+		"descriptions": map[string]string{"approve": approveDesc, "deny": denyDesc},
 		"summary": json.RawMessage(nonEmptyJSON(summary)), "operators": operators,
 		"purpose": string(auth.PurposeApprove),
 	})
@@ -421,15 +423,6 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 }
 
 // nonEmptyJSON returns s if it is non-empty JSON, else a JSON null.
-// compactJSON is a JSON summary on one line, for a step-up label.
-func compactJSON(s string) string {
-	var b bytes.Buffer
-	if err := json.Compact(&b, []byte(s)); err != nil {
-		return strings.Join(strings.Fields(s), " ")
-	}
-	return b.String()
-}
-
 func nonEmptyJSON(s string) []byte {
 	if strings.TrimSpace(s) == "" {
 		return []byte("null")

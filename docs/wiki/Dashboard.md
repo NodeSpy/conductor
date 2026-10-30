@@ -100,7 +100,17 @@ Pick **SSH key**, enter the operator name, and either:
   expires — and for a confirmation (step-up) what is being confirmed and the
   first 12 characters of its digest, which the waiting page shows too. It asks
   before signing (`--yes` skips the question), signs it and posts the
-  signature. The waiting page signs in within a couple of seconds.
+  signature. The waiting page signs in within a couple of seconds. A
+  confirmation the dashboard didn't describe is refused outright.
+
+  Against a `bind` listener with a certificate your machine doesn't trust (one
+  you made yourself), point `SSL_CERT_FILE` at that certificate rather than
+  using a plain-HTTP listener:
+
+  ```sh
+  SSL_CERT_FILE=/etc/conductor/tls/dashboard.crt \
+    conductor dashboard approve-login ABCD-EFGH --url https://conductor.home.arpa:7790 --operator ops
+  ```
 
   **Approve only a request you started yourself, just now.** A look-alike page
   can start a sign-in on your real dashboard and show you its code; the command
@@ -146,8 +156,15 @@ it.
 
 Approvals, purchases, config changes and restores, secrets, browser take-over
 and credential changes ask you to confirm first.
-The dialog shows what you are confirming — the proposal's or purchase's action
-in full, or the config change's effects — and the start of its digest. The dialog offers the methods
+The dialog shows the dashboard's own description of what you are confirming,
+the same text `approve-login` prints, and the start of its digest. For a
+proposal or a purchase that is the canonical action (a proposal's verb and
+options, a purchase's merchant, items, total and card), pretty-printed, with
+the requester's own summary after it on a line marked as theirs. For a config
+change it is every guarded section and every widening change, in full, then
+the staged edits (shortened past 20, and marked when they are). Control and
+bidi characters show as escapes such as `\x1b` or `\u202e`, in the dialog and
+in the terminal. The dialog offers the methods
 `auth.stepup` allows that you have on this connection: passkey, SSH key (paste
 or approve-login, as above, in the `conductor-dashboard-stepup` namespace) or an
 authenticator code. A password confirms only with

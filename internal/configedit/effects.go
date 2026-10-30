@@ -180,6 +180,9 @@ func guardedEffect(path []string) (rank int, e Effect) {
 	if len(path) == 0 {
 		return len(guardedSections), Effect{Path: "(config)", Text: "changes the config as a whole"}
 	}
+	if path[0] == "operators" && len(path) > 1 {
+		return 0, Effect{Path: pathKey(path[:2]), Text: fmt.Sprintf("changes operator %s: whether and with which SSH key they can sign in to the dashboard", path[1])}
+	}
 	for i, g := range guardedSections {
 		if hasPrefix(path, g.path) {
 			return i, Effect{Path: pathKey(g.path), Text: g.text}

@@ -100,12 +100,12 @@ export async function apply(): Promise<void> {
   }
   try {
     busy.value = true
-    // A change that widens a guardrail or touches who can sign in needs a
-    // step-up when sign-in is on; the sheet lists what the apply does.
+    // With sign-in on, an apply needs a step-up (every apply by default, see
+    // dashboard.auth.config_stepup); the sheet shows the server's description
+    // of what it does, guarded and widening effects first.
     let stepupToken: string | undefined
     if (rev.stepup && authState.value.signed_in) {
-      const lines = [...(rev.guarded ?? []), ...(rev.widening ?? []), ...(rev.effects ?? [])].map((e) => e.text)
-      stepupToken = await stepUp('config.apply', rev.token, { what: 'Apply this config change', lines: [...new Set(lines)] })
+      stepupToken = await stepUp('config.apply', rev.token, { what: 'Apply this config change', description: rev.description })
     }
     const res = await api.apply(rev.token, stepupToken)
     applyResult.value = res

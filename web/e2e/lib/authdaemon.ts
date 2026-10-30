@@ -174,7 +174,9 @@ export async function startAuthDaemon(port: number, opts: AuthDaemonOptions = {}
           options,
           // The token-bound caller identity the approved verb runs under.
           identity: { Verbs: ['box.run'], bot: 'sre', bot_role: 'home' },
-          summary: 'run a command',
+          // The requester's words, with a bidi override the dashboard must
+          // show as an escape.
+          summary: 'run a command' + String.fromCharCode(0x202e) + 'gnorw',
         },
       },
     },

@@ -169,28 +169,19 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "review", err.Error(), "the staged edits do not apply cleanly to the current config")
 		return
 	}
-	s.noteReview(rev, "apply a config change")
-	writeJSON(w, http.StatusOK, s.reviewDTO(rev))
+	writeJSON(w, http.StatusOK, s.reviewDTO(r, rev, "apply a config change"))
 }
 
-// noteReview records what a step-up over the review's confirm token applies.
-func (s *Server) noteReview(rev configedit.Review, what string) {
-	var texts []string
-	for _, e := range rev.Effects {
-		texts = append(texts, e.Text)
-	}
-	if len(texts) == 0 {
-		texts = []string{fmt.Sprintf("%d lines added, %d removed", rev.Diff.Added, rev.Diff.Removed)}
-	}
-	s.labels.note(auth.PurposeConfigApply, rev.Token, what+": "+effectsText(texts))
-}
-
-// reviewDTO renders a review. Stepup is what apply will ask for: the
-// pipeline's answer, or always with config_stepup: all and sign-in on.
-func (s *Server) reviewDTO(rev configedit.Review) api.ReviewResponse {
+// reviewDTO renders a review and records, for r's session, what a step-up
+// over its token confirms. Stepup is what apply will ask for: the pipeline's
+// answer, or always with config_stepup: all and sign-in on.
+func (s *Server) reviewDTO(r *http.Request, rev configedit.Review, what string) api.ReviewResponse {
+	desc := describeConfig(what, rev)
+	s.labels.note(r, auth.PurposeConfigApply, rev.Token, desc)
 	out := api.ReviewResponse{
 		Changed: rev.Diff.Changed, Added: rev.Diff.Added, Removed: rev.Diff.Removed,
 		Unified: rev.Diff.Unified, SHA: rev.SHA, Token: rev.Token, Stepup: rev.Stepup || s.stepupEveryApply(),
+		Description: desc,
 	}
 	for _, l := range rev.Diff.Lines {
 		out.Lines = append(out.Lines, api.DiffLineDTO{Op: string(l.Op), Text: l.Text, OldLine: l.OldLine, NewLine: l.NewLine})
@@ -322,8 +313,7 @@ func (s *Server) handleRestoreReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "restore_review", err.Error(), "")
 		return
 	}
-	s.noteReview(rev, "restore config backup "+req.ID)
-	writeJSON(w, http.StatusOK, s.reviewDTO(rev))
+	writeJSON(w, http.StatusOK, s.reviewDTO(r, rev, "restore config backup "+req.ID))
 }
 
 func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {

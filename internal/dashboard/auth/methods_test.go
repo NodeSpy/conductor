@@ -60,11 +60,12 @@ func newMethodsHarness(t *testing.T, pol *Policy) *methodsHarness {
 	clk := &clock{t: time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)}
 	st.now = clk.now
 	m, err := NewManager(Deps{
-		Store:     st,
-		Operators: func() map[string]string { return map[string]string{"ops": key.pub, "other": key.pub} },
-		VerifySSH: func(ctx context.Context, operator, pubKey string, payload []byte, sig string) error { return nil },
-		Policy:    pol,
-		Now:       clk.now,
+		Store:          st,
+		Operators:      func() map[string]string { return map[string]string{"ops": key.pub, "other": key.pub} },
+		VerifySSH:      func(ctx context.Context, operator, pubKey string, payload []byte, sig string) error { return nil },
+		Policy:         pol,
+		Now:            clk.now,
+		DescribeStepup: describeAny,
 	},
 		RP{ID: "localhost", Origins: []string{testOrigin}, Listener: ListenerLocalhost},
 		RP{ID: "box.example", Origins: []string{"https://box.example:7790"}, Listener: Listener("bind:0.0.0.0:7790")},

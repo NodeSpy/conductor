@@ -223,7 +223,7 @@ func TestApproveLoginShowsTheAction(t *testing.T) {
 			return map[string]string{"ops": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake ops@box"}
 		},
 		ApprovalView: func(bot, id string) (string, string, []string, bool) {
-			return "abc123", `{"verb": "box.run", "command": "rm -rf /srv/data"}`, []string{"ops"}, bot == "b1" && id == "p1"
+			return "abc123", `{"action": {"kind": "verb", "uses": "box.run", "options": {"command": "rm -rf /srv/data"}}, "requester_summary": "clean up temp files"}`, []string{"ops"}, bot == "b1" && id == "p1"
 		},
 	})
 	h := s.listenerHandler(auth.ListenerLocalhost)
@@ -253,18 +253,23 @@ func TestApproveLoginShowsTheAction(t *testing.T) {
 	cli := &browserClient{t: t, h: h, host: "localhost:7788", addr: "127.0.0.1:6666"}
 	var pending auth.SSHPendingView
 	_ = json.Unmarshal(cli.do("POST", "/api/v1/auth/ssh/pending", map[string]string{"code": begun.LoginCode}).Body.Bytes(), &pending)
-	if !strings.Contains(pending.Summary, "approve bot b1's proposal p1") || !strings.Contains(pending.Summary, "rm -rf /srv/data") {
-		t.Fatalf("the pending view must say what is approved: %+v", pending)
+	if !strings.Contains(pending.Summary, "approve bot b1's proposal p1") || !strings.Contains(pending.Summary, `"command": "rm -rf /srv/data"`) ||
+		!strings.Contains(pending.Summary, `"uses": "box.run"`) {
+		t.Fatalf("the pending view must show the canonical action: %+v", pending)
+	}
+	// The requester's words come after the action, labelled as theirs.
+	if i, j := strings.Index(pending.Summary, "rm -rf"), strings.Index(pending.Summary, "the requester's own words (not checked): clean up temp files"); j < 0 || j < i {
+		t.Fatalf("the requester's summary must follow the action, labelled: %q", pending.Summary)
 	}
 	if pending.Digest != view.Digests["approve"] || pending.Started == "" || pending.Addr == "" {
 		t.Fatalf("the pending view must carry digest, start and address: %+v", pending)
 	}
-	// A digest the server never handed out has no description to borrow.
+	// A digest the server never handed this session has no description, and
+	// an SSH step-up over it is refused rather than shown undescribed.
+	begun.LoginCode = ""
 	rr = c.do("POST", "/api/v1/auth/stepup/ssh/begin", map[string]string{"purpose": string(auth.PurposeApprove), "digest": strings.Repeat("0", 64)})
 	_ = json.Unmarshal(rr.Body.Bytes(), &begun)
-	pending = auth.SSHPendingView{}
-	_ = json.Unmarshal(cli.do("POST", "/api/v1/auth/ssh/pending", map[string]string{"code": begun.LoginCode}).Body.Bytes(), &pending)
-	if pending.Summary != "" {
-		t.Fatalf("an unknown digest must not be described: %q", pending.Summary)
+	if rr.Code == 200 || begun.LoginCode != "" || !strings.Contains(rr.Body.String(), "no description") {
+		t.Fatalf("an undescribed step-up must be refused: %d %s", rr.Code, rr.Body)
 	}
 }

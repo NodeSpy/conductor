@@ -4,6 +4,7 @@
 // exactly what the daemon's hub replays from its ring (design §5.2). We add
 // topic routing, the `reset` signal (refetch snapshots), and connection state.
 import type { RunEventData } from './types'
+import { parseSafe } from './safe'
 
 export interface EventHandlers {
   onRun?: (d: RunEventData) => void
@@ -23,7 +24,7 @@ export function openEvents(topics: string[], h: EventHandlers): () => void {
 
   const parse = (e: MessageEvent): RunEventData | undefined => {
     try {
-      return JSON.parse(e.data).data as RunEventData
+      return parseSafe<{ data: RunEventData }>(e.data).data
     } catch {
       return undefined
     }
@@ -39,7 +40,7 @@ export function openEvents(topics: string[], h: EventHandlers): () => void {
   // `reset` carries no topic, so EventSource delivers it as the default message.
   es.addEventListener('message', (e) => {
     try {
-      if (JSON.parse((e as MessageEvent).data).type === 'reset') h.onReset?.()
+      if (parseSafe<{ type?: string }>((e as MessageEvent).data).type === 'reset') h.onReset?.()
     } catch {
       /* ignore */
     }

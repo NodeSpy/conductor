@@ -46,11 +46,13 @@ type Deps struct {
 	// Lifecycle fires conductor.* events (dashboard_enrolled, dashboard_reset).
 	// Optional.
 	Lifecycle func(event, operator, detail string)
-	// DescribeStepup says in words what a step-up for (purpose, digest) would
-	// confirm — e.g. the bot proposal whose action has that digest — for
-	// approve-login to show before it signs. "" when it doesn't know. Optional;
-	// credential changes are described here regardless.
-	DescribeStepup func(operator string, purpose Purpose, digest string) string
+	// DescribeStepup says in words what a step-up for (purpose, digest) by
+	// session would confirm — the description the dashboard recorded when it
+	// handed that session the digest (a config review, a proposal's action).
+	// An SSH step-up binds it when it begins, and approve-login shows it before
+	// it signs; a step-up nobody described is refused. "" when it doesn't
+	// know. Credential changes are described here regardless.
+	DescribeStepup func(session string, purpose Purpose, digest string) string
 	// Now and Rand are injectable for deterministic tests.
 	Now  func() time.Time
 	Rand io.Reader

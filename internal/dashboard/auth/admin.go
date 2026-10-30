@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"strings"
 	"context"
 	"fmt"
 	"time"
@@ -31,19 +32,51 @@ func (m *Manager) AuthorizeReset(ctx context.Context, operator string, issued ti
 // ticket, so first enrollment applies again. It is the recovery path for a lost
 // authenticator (there are no recovery codes). It audits and fires
 // conductor.dashboard_reset (design §6.3).
-func (m *Manager) ResetOperator(operator string) (passkeys, sessions int) {
-	passkeys = m.deps.Store.DeleteCredentialsFor(operator)
-	_ = m.deps.Store.UpdateOperatorSecret(operator, func(o *OperatorSecret) { *o = OperatorSecret{Operator: operator} })
+func (m *Manager) ResetOperator(operator string) ResetResult {
+	var out ResetResult
+	out.Passkeys = m.deps.Store.DeleteCredentialsFor(operator)
+	_ = m.deps.Store.UpdateOperatorSecret(operator, func(o *OperatorSecret) {
+		out.Password, out.TOTP = o.PasswordHash != "", o.TOTPSecret != ""
+		*o = OperatorSecret{Operator: operator}
+	})
 	for _, s := range m.deps.Store.SessionsFor(operator) {
 		_ = m.deps.Store.DeleteSession(s.ID)
-		sessions++
+		out.Sessions++
 	}
+	_, out.Ticket = m.deps.Store.Ticket(operator)
 	_ = m.deps.Store.DeleteTicket(operator)
-	m.audit(map[string]any{"event": "dashboard_reset", "operator": operator, "passkeys": passkeys, "sessions": sessions})
+	m.audit(map[string]any{"event": "dashboard_reset", "operator": operator, "passkeys": out.Passkeys, "sessions": out.Sessions,
+		"password": out.Password, "totp": out.TOTP, "ticket": out.Ticket})
 	if m.deps.Lifecycle != nil {
-		m.deps.Lifecycle("conductor.dashboard_reset", operator, fmt.Sprintf("%d passkey(s), %d session(s) removed", passkeys, sessions))
+		m.deps.Lifecycle("conductor.dashboard_reset", operator, out.String())
 	}
-	return passkeys, sessions
+	return out
+}
+
+// ResetResult is what a reset removed.
+type ResetResult struct {
+	Passkeys int  `json:"passkeys"`
+	Sessions int  `json:"sessions"`
+	Password bool `json:"password"`
+	TOTP     bool `json:"totp"`
+	Ticket   bool `json:"ticket"` // a live enrolment link
+}
+
+// String is the reset in words: "2 passkey(s), 1 session(s), the password and
+// the authenticator removed".
+func (r ResetResult) String() string {
+	parts := []string{fmt.Sprintf("%d passkey(s)", r.Passkeys), fmt.Sprintf("%d session(s)", r.Sessions)}
+	if r.Password {
+		parts = append(parts, "the password")
+	}
+	if r.TOTP {
+		parts = append(parts, "the authenticator")
+	}
+	if r.Ticket {
+		parts = append(parts, "the enrolment link")
+	}
+	last := len(parts) - 1
+	return strings.Join(parts[:last], ", ") + " and " + parts[last] + " removed"
 }
 
 // StatusLine is `conductor dashboard status`: the listeners and, per operator,

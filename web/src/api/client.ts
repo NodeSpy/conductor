@@ -27,6 +27,7 @@ import type {
   AttrValuesResponse,
 } from './types'
 import { authState } from './auth'
+import { parseSafe, readJSON } from './safe'
 
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
@@ -54,14 +55,14 @@ async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`
     try {
-      const body = (await res.json()) as ErrorResponse
+      const body = (await readJSON(res)) as ErrorResponse
       if (body?.error?.message) message = body.error.message
     } catch {
       /* non-JSON error body */
     }
     throw new Error(message)
   }
-  return (await res.json()) as T
+  return (await readJSON(res)) as T
 }
 
 export interface RunsQuery {
@@ -126,7 +127,7 @@ export function validateStream(on: (ev: { type: string; message?: string }) => v
   const es = new EventSource('/api/v1/config/validate')
   es.onmessage = (e) => {
     try {
-      on(JSON.parse(e.data))
+      on(parseSafe(e.data))
     } catch {
       /* ignore malformed */
     }

@@ -4,6 +4,7 @@
 // the CSRF token on every write (design §5.1, §6.4).
 import { authState } from './auth'
 import type { Identity } from '../components/Avatar'
+import { parseSafe, readJSON } from './safe'
 
 function csrf(): string {
   return authState.value.csrf || ''
@@ -13,7 +14,7 @@ async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`
     try {
-      const b = (await res.json()) as { error?: string | { message?: string } }
+      const b = (await readJSON(res)) as { error?: string | { message?: string } }
       if (typeof b.error === 'string') message = b.error
       else if (b.error?.message) message = b.error.message
     } catch {
@@ -21,7 +22,7 @@ async function handle<T>(res: Response): Promise<T> {
     }
     throw new Error(message)
   }
-  return (await res.json()) as T
+  return (await readJSON(res)) as T
 }
 
 function get<T>(path: string): Promise<T> {
@@ -236,7 +237,7 @@ export function openChatStream(on: (m: ChatMessage & { conversation?: string }) 
   const es = new EventSource('/api/v1/conversations/stream')
   es.addEventListener('message', (e) => {
     try {
-      on(JSON.parse((e as MessageEvent).data))
+      on(parseSafe((e as MessageEvent).data))
     } catch {
       /* ignore */
     }
@@ -249,7 +250,7 @@ export function openTicketStream(on: (t: Ticket) => void): () => void {
   const es = new EventSource('/api/v1/tickets/stream')
   es.addEventListener('ticket', (e) => {
     try {
-      on(JSON.parse((e as MessageEvent).data))
+      on(parseSafe((e as MessageEvent).data))
     } catch {
       /* ignore */
     }

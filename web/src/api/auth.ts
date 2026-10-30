@@ -4,6 +4,7 @@
 // token is learned from auth/state and refreshed on sign-in.
 import { signal } from '@preact/signals'
 import { getAssertion, createCredential, passkeysUsable } from '../lib/webauthn'
+import { readJSON } from './safe'
 
 export type Method = 'passkey' | 'ssh' | 'password' | 'totp'
 
@@ -37,14 +38,14 @@ async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`
     try {
-      const b = (await res.json()) as APIError
+      const b = (await readJSON(res)) as APIError
       if (b?.error?.message) message = b.error.message
     } catch {
       /* non-JSON */
     }
     throw new Error(message)
   }
-  return (await res.json()) as T
+  return (await readJSON(res)) as T
 }
 
 function get<T>(path: string): Promise<T> {
@@ -150,9 +151,11 @@ export interface StepupRequest {
 
 // StepupDetail is what the sheet shows of the action being confirmed, so the
 // operator reads exactly what they approve without leaving it: a one-line
-// summary, optional effect lines, and the action itself (pretty-printed).
+// summary and the server's own description of the action (the same text
+// approve-login prints), or failing that effect lines or the action itself.
 export interface StepupDetail {
   what: string
+  description?: string
   lines?: string[]
   action?: unknown
 }
@@ -373,6 +376,7 @@ export interface ApprovalView {
   proposal: string
   action_sha256: string
   digests: { approve: string; deny: string }
+  descriptions: { approve: string; deny: string }
   summary: unknown
   operators: string[]
   purpose: string
@@ -388,7 +392,7 @@ export async function decideProposal(bot: string, id: string, decision: 'approve
   const digest = decision === 'approve' ? view.digests.approve : view.digests.deny
   const token = await stepUp('approve', digest, {
     what: `${decision === 'approve' ? 'Approve' : 'Deny'} ${bot}'s proposal ${id}`,
-    action: view.summary,
+    description: decision === 'approve' ? view.descriptions.approve : view.descriptions.deny,
   })
   await sendStepped('POST', `/api/v1/bots/${encodeURIComponent(bot)}/proposals/${encodeURIComponent(id)}/decision`, token, { decision })
 }

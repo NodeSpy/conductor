@@ -327,11 +327,17 @@ test('approve a proposal with an authenticator-code step-up', async ({}, info) =
 
   const dialog = pwPage.getByTestId('stepup-dialog')
   await expect(dialog).toContainText('Approve or deny')
-  // The sheet carries the action it confirms, pretty-printed and readable in
-  // place: it sits over the page that showed it.
-  const action = dialog.getByTestId('stepup-action')
+  // The sheet carries the server's description of what it confirms (the text
+  // approve-login prints): the canonical action pretty-printed, then the
+  // requester's words labelled as theirs, with the bidi override they carry
+  // shown as an escape instead of reversing the text after it.
+  const action = dialog.getByTestId('stepup-description')
   await expect(action).toBeVisible()
-  await expect(action).toContainText('box.run')
+  await expect(action).toContainText('the action, exactly as it will run')
+  await expect(action).toContainText('"uses": "box.run"')
+  await expect(action).toContainText('"command": "true"')
+  await expect(action).toContainText("the requester's own words (not checked): run a command" + '\\' + 'u202egnorw')
+  expect(((await action.textContent()) ?? '').includes(String.fromCharCode(0x202e)), 'no raw bidi override').toBe(false)
   expect(((await action.textContent()) ?? '').split('\n').length, 'pretty-printed over several lines').toBeGreaterThan(2)
   await fitsInside(action, dialog)
   const cancel = (await dialog.getByTestId('stepup-cancel').boundingBox())!

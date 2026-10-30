@@ -232,3 +232,58 @@ func TestWhenAgo(t *testing.T) {
 		}
 	}
 }
+
+// Nothing the server sends reaches the terminal raw: a control sequence in the
+// action, device or operator shows as escapes (it can't erase or rewrite a
+// line), and a long action is printed in full.
+func TestPrintPendingEscapesAndPrintsInFull(t *testing.T) {
+	long := strings.Repeat("cosmetic words ", 100) + "THE END"
+	pend := auth.SSHPendingView{
+		Kind: "stepup", Operator: "ops\x1b[2K", Device: "Chrome\r\x1b[1A\x1b[2K  device:   your laptop\u202e",
+		Addr: "192.0.2.66:2222", Started: "2026-10-30T02:00:00Z", Expires: "2026-10-30T02:05:00Z",
+		Summary: "apply a config change\n" + "guarded (why it needs this confirmation):\n  - changes operator ops\x1b[2K\r  action:   wording\n  - " + long,
+	}
+	p := auth.ParsedChallenge{Kind: "stepup", Fields: map[string]string{"purpose": "config.apply\x1b[1A", "digest": strings.Repeat("ab", 32)}}
+	var b bytes.Buffer
+	printPending(&b, pend, p, "http://box.lan:7795", time.Date(2026, 10, 30, 2, 1, 0, 0, time.UTC))
+	out := b.String()
+	for i, r := range out {
+		if (r < 0x20 && r != '\n') || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x202e {
+			t.Fatalf("raw control %U at %d in:\n%s", r, i, out)
+		}
+	}
+	for _, want := range []string{`ops\x1b[2K`, `changes operator ops\x1b[2K\r  action:   wording`, "THE END", `\u202e`, `config.apply\x1b[1A`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// A step-up the dashboard didn't describe is refused, not shown with advice to
+// check the waiting page (which, in a relay, the attacker serves).
+func TestApproveLoginRefusesUndescribedStepup(t *testing.T) {
+	var origin string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		exp := time.Now().Add(time.Minute)
+		text := auth.SSHChallengeText("stepup", "ops", origin, auth.PurposeConfigApply, strings.Repeat("ab", 32), "bm9uY2U", exp)
+		_ = json.NewEncoder(w).Encode(auth.SSHPendingView{Kind: "stepup", Operator: "ops", Challenge: text, Namespace: auth.StepupNamespace,
+			Purpose: "config.apply", Digest: strings.Repeat("ab", 32), Started: time.Now().UTC().Format(time.RFC3339), Expires: exp.UTC().Format(time.RFC3339)})
+	}))
+	defer srv.Close()
+	origin = srv.URL
+	err := dashboardApproveLogin("ABCD-EFGH", map[string]string{"url": srv.URL, "operator": "ops", "key": "/nonexistent", "yes": "true"})
+	if err == nil || !strings.Contains(err.Error(), "refusing") || !strings.Contains(err.Error(), "didn't say") {
+		t.Fatalf("an undescribed step-up must be refused: %v", err)
+	}
+}
+
+// A dashboard whose certificate this machine doesn't trust gets a hint to
+// trust that certificate, not a bare x509 error.
+func TestApproveLoginSelfSignedHint(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	err := dashboardApproveLogin("ABCD-EFGH", map[string]string{"url": srv.URL, "operator": "ops", "key": "/nonexistent", "yes": "true"})
+	if err == nil || !strings.Contains(err.Error(), "SSL_CERT_FILE") {
+		t.Fatalf("want a hint naming SSL_CERT_FILE: %v", err)
+	}
+}

@@ -155,11 +155,27 @@ challenge.
   codes and bad signatures count toward the per-client lockout. Three wrong
   signatures against one code burn it.
 - **Describing a step-up.** The digest is a hash, so the server cannot turn it
-  back into an action. Instead, whenever it hands out a digest (a proposal's or
-  a purchase's approval view, a config review), it notes what confirming that
-  digest does, in words built from its own data. `pending` returns that note
-  for a step-up over the same purpose and digest. A digest the server never
-  handed out has no description, and the CLI says so.
+  back into an action. Instead, whenever it hands a session a digest (a
+  proposal's or a purchase's approval view, a config review, a wallet change or
+  a browser take-over refused for want of a step-up), it records for that
+  session what confirming the digest does, built from its own data:
+  - a config apply lists every guarded section and every widening change
+    first, in full, then the staged edits, then the diff size. Only the staged
+    edits can be shortened (at most 20, 200 characters each), and the text
+    says when they are;
+  - an approval or a purchase shows the canonical action the digest pins (a
+    proposal's kind, `uses` and `options`, or a purchase's merchant, items,
+    total, card and the rest), pretty-printed, then the requester's own
+    summary on a line labelled as theirs;
+  - every value in it is passed through one escaper: C0 and C1 controls, DEL,
+    bidi embeddings, overrides, isolates and marks, zero-width characters and
+    the line and paragraph separators show as escapes (`\x1b`, `\u202e`).
+  The record is per session (64 each, 30 minutes), so another session can't
+  evict it. An SSH step-up binds the description when it begins and refuses to
+  begin without one; `pending` returns the bound text, and approve-login
+  refuses a step-up that comes back undescribed instead of advising the
+  operator to check the page. The page's dialog shows the same text, and the
+  page parses every API response through the same kind of escaper.
 
 ## 3. Password and TOTP
 
@@ -346,11 +362,14 @@ The CLI sends no `Origin` and the JSON content type, so it is unaffected.
   them in. Passkeys resist it: the browser binds the assertion to the origin it
   is actually on, so a look-alike page gets nothing usable.
 - **Which action a step-up confirms.** A script running in the dashboard's own
-  origin can ask for a step-up over any digest. The dialog shows the action the
-  page says it is confirming, which such a script controls; a TOTP code or a
-  passkey touch carries no independent display. `approve-login` shows the
-  server's description instead, so an SSH confirmation through it is the one
-  place the operator sees the action from outside the page.
+  origin can ask for a step-up over any digest it was handed. The dialog shows
+  the server's description, but the page draws the dialog, so such a script
+  controls what it shows; a TOTP code or a passkey touch carries no
+  independent display. `approve-login` prints the description bound to the
+  challenge, so an SSH confirmation through it is the one place the operator
+  sees the action from outside the page. It is only as good as what the
+  server describes: it names what changes and what runs, and the operator
+  still has to read it.
 - **SSH approve-login.**
   - A short code is guessable in principle. 40 bits, a 5-minute life, a
     per-client lockout and a 3-try burn per code make guessing impractical.

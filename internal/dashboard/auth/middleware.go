@@ -63,6 +63,11 @@ func ConnOf(r *http.Request) ConnInfo {
 	return ConnInfo{Listener: i.Listener, Node: i.Node, User: i.User, Transport: i.Transport}
 }
 
+// WithSession returns r running under sess, as Protect hands it on.
+func WithSession(r *http.Request, sess Session) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), ctxSess, sess))
+}
+
 // SessionFrom returns the session a protected handler is running under.
 func SessionFrom(r *http.Request) (Session, bool) {
 	s, ok := r.Context().Value(ctxSess).(Session)
@@ -86,7 +91,7 @@ func (m *Manager) Protect(next http.Handler) http.Handler {
 			writeErr(w, http.StatusForbidden, "csrf", err.Error(), "reload the page to refresh the token")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxSess, sess)))
+		next.ServeHTTP(w, WithSession(r, sess))
 	})
 }
 

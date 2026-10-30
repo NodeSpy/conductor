@@ -25,7 +25,7 @@ import { PasskeyGlyph } from './GateChrome'
 
 const purposeLabel: Record<string, string> = {
   approve: 'Approve or deny what a bot asked to do',
-  'config.apply': 'Apply a config change that gives more access or loosens safety',
+  'config.apply': 'Apply a config change',
   'secret.write': 'Store or replace a secret value',
   'browser.takeover': 'Take over a browser a bot is using',
   'browser.write': 'A wallet change that widens what a bot can do',
@@ -54,14 +54,18 @@ function What({ detail, digest }: { detail?: StepupDetail; digest: string }): JS
   return (
     <div class="stepup-what" data-testid="stepup-what">
       {detail ? <p class="stepup-what-title">{detail.what}</p> : null}
-      {detail?.lines?.length ? (
+      {detail?.description ? (
+        <pre class="stepup-action stepup-desc" data-testid="stepup-description" tabIndex={0}>
+          {detail.description}
+        </pre>
+      ) : detail?.lines?.length ? (
         <ul class="stepup-lines">
           {detail.lines.map((l) => (
             <li>{l}</li>
           ))}
         </ul>
       ) : null}
-      {detail && detail.action !== undefined && detail.action !== null ? (
+      {detail && !detail.description && detail.action !== undefined && detail.action !== null ? (
         <pre class="stepup-action" data-testid="stepup-action" tabIndex={0}>
           {prettyAction(detail.action)}
         </pre>

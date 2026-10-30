@@ -38,16 +38,21 @@ func newHarness(t *testing.T) *harness {
 	clk := &clock{t: time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)}
 	st.now = clk.now
 	m, err := NewManager(Deps{
-		Store:     st,
-		Operators: func() map[string]string { return map[string]string{"ops": "ssh-ed25519 AAAAfakekey ops@box"} },
-		VerifySSH: func(ctx context.Context, operator, pubKey string, payload []byte, sig string) error { return nil },
-		Now:       clk.now,
+		Store:          st,
+		Operators:      func() map[string]string { return map[string]string{"ops": "ssh-ed25519 AAAAfakekey ops@box"} },
+		VerifySSH:      func(ctx context.Context, operator, pubKey string, payload []byte, sig string) error { return nil },
+		Now:            clk.now,
+		DescribeStepup: describeAny,
 	}, RP{ID: "localhost", Origins: []string{testOrigin}, Listener: ListenerLocalhost})
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
 	return &harness{t: t, m: m, rp: vwa.RelyingParty{ID: "localhost", Name: "conductor", Origin: testOrigin}, clk: clk}
 }
+
+// describeAny describes every step-up, as the dashboard does for the digests
+// it hands out.
+func describeAny(string, Purpose, string) string { return "a test action" }
 
 // opHandle is the per-operator WebAuthn user handle the Manager derives.
 func opHandle(operator string) []byte {

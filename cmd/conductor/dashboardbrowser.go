@@ -169,14 +169,17 @@ func (dashboardBrowser) PurchaseView(id string) (string, string, []string, bool)
 	if cfg != nil {
 		approvers = cfg.PaymentApprovers()
 	}
-	// A words-first summary of what the passkey signs (never agent text).
+	// Under "action" the terms the purchase digest pins, which is what the
+	// operator confirms; the bot's reason under "requester_summary".
 	summary := map[string]any{
-		"title": purchaseTitle(p), "total": p.Total, "currency": p.Currency,
-		"card": p.Card, "merchant": p.Merchant, "items": p.Items,
-		"recurring": p.Recurring, "interval": p.Interval, "why": p.Why, "case": p.CaseRef,
+		"action": map[string]any{
+			"merchant": p.Merchant, "items": p.Items, "total": p.Total, "currency": p.Currency,
+			"card": p.Card, "recurring": p.Recurring, "interval": p.Interval,
+			"identity": p.Identity, "bot": p.Bot, "case": p.CaseRef,
+		},
+		"title": purchaseTitle(p), "requester_summary": p.Why,
 	}
-	sb, _ := json.Marshal(summary)
-	return p.Digest, string(sb), approvers, true
+	return p.Digest, marshalPlain(summary), approvers, true
 }
 
 func (dashboardBrowser) DecidePurchase(ctx context.Context, id, decision, operator, reason string, _ dashboard.StepupEvidence) error {

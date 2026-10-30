@@ -37,7 +37,11 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
   if (err && !view) return <div class="col"><div class="banner err">{err}</div></div>
   if (!view) return <div class="col"><p class="muted">Loading the proposal…</p></div>
 
+  // The view's summary carries the canonical action under `action` (what the
+  // digest pins and what runs) and the requester's own words beside it.
   const summary = (view.summary as Record<string, unknown>) || {}
+  const action = (summary.action as Record<string, unknown>) || {}
+  const requesterWords = String(summary.requester_summary || '')
   const tf = row?.terraform
 
   if (done) {
@@ -58,16 +62,19 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
       {err ? <div class="banner err" role="alert">{err}</div> : null}
 
       <section class="panel approval-payload">
-        <span class="panel-title">The action</span>
-        <p class="approval-action">{row?.action || row?.summary || String(summary.summary || summary.uses || '')}</p>
+        <span class="panel-title">The action, exactly as it will run</span>
         <dl class="detail-list">
-          {String(summary.uses || '') ? <><dt>Verb</dt><dd class="mono">{String(summary.uses)}</dd></> : null}
+          {String(action.uses || '') ? <><dt>Verb</dt><dd class="mono">{String(action.uses)}</dd></> : null}
+          <dt>Kind</dt><dd>{String(action.kind || '')}</dd>
           <dt>Tier</dt><dd>{String(summary.tier || row?.tier || '')}</dd>
           <dt>Requested by</dt><dd>{String(summary.requester_class || row?.requester_class || 'a worker')}</dd>
           {row?.case ? <><dt>Ticket</dt><dd class="mono">{row.case}</dd></> : null}
         </dl>
-        {row?.options ? (
-          <pre class="payload-json">{JSON.stringify(row.options, null, 2)}</pre>
+        <pre class="payload-json" data-testid="approval-canonical">{JSON.stringify(action, null, 2)}</pre>
+        {requesterWords ? (
+          <p class="facts muted" data-testid="approval-requester-words">
+            The requester's own words (not checked): {requesterWords}
+          </p>
         ) : null}
       </section>
 
