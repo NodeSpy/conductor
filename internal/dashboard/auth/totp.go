@@ -118,9 +118,9 @@ func (m *Manager) TOTPStepup(sess Session, purpose Purpose, digest, code string)
 	if !m.policy().StepupAllowed(MethodTOTP) {
 		return "", errors.New("TOTP step-up is not enabled (dashboard.auth.stepup)")
 	}
-	a, until, ok := m.lock.Begin(operatorLockKey(sess.Operator))
+	a, until, refused, ok := m.lock.Begin(operatorLockKey(sess.Operator))
 	if !ok {
-		return "", fmt.Errorf("too many wrong codes — try again after %s", until.UTC().Format(time.RFC3339))
+		return "", lockedError{lockMessage(refused, until)}
 	}
 	if err := m.checkTOTP(sess.Operator, code); err != nil {
 		a.Fail()

@@ -94,6 +94,8 @@ func (m *Manager) VoidTicket(operator string) {
 // ceremony. It returns the ceremony id, the operator and how many passkeys the
 // operator already has (a second+ passkey needs an existing-passkey assertion).
 func (m *Manager) RedeemTicket(secret, pairingCode string) (ceremonyID, operator string, existing int, err error) {
+	m.redeemMu.Lock() // find, check and spend the ticket as one step
+	defer m.redeemMu.Unlock()
 	h := sha256.Sum256([]byte(secret))
 	want := hex.EncodeToString(h[:])
 	// The URL carries only the secret, so find the ticket by its hash.
@@ -126,6 +128,13 @@ func (m *Manager) RedeemTicket(secret, pairingCode string) (ceremonyID, operator
 		}
 		return "", "", 0, errors.New("wrong pairing code")
 	}
+	// The link is single use: spent here, so a second redeem (scrollback, a
+	// screen share) finds nothing. A ceremony that isn't finished needs a new
+	// link.
+	if err := m.deps.Store.DeleteTicket(tk.Operator); err != nil {
+		return "", "", 0, err
+	}
+	m.audit(map[string]any{"event": "dashboard_enroll_redeemed", "operator": tk.Operator})
 	existing = len(m.deps.Store.CredentialsFor(tk.Operator))
 	id, err := m.mintID()
 	if err != nil {

@@ -32,6 +32,7 @@ type Store struct {
 	sess    map[string]*sessionRec     // by session ID
 	tickets map[string]*EnrollTicket   // by operator (one live ticket each)
 	secrets map[string]*OperatorSecret // password + TOTP, by operator
+	locks   map[string]LockRecord      // operator lockout buckets, by key
 }
 
 // OperatorSecret is an operator's password and TOTP authenticator. The password
@@ -62,6 +63,9 @@ type persisted struct {
 	Sess    []*sessionRec     `json:"sessions"`
 	Tickets []*EnrollTicket   `json:"tickets"`
 	Secrets []*OperatorSecret `json:"operator_secrets,omitempty"`
+	// Locks are the operator lockout buckets (password and TOTP failures from
+	// anywhere), so a restart doesn't reset them.
+	Locks map[string]LockRecord `json:"locks,omitempty"`
 }
 
 // OpenStore loads (or creates) the auth store rooted at dir. now defaults to
@@ -108,7 +112,27 @@ func (s *Store) load() error {
 	for _, o := range p.Secrets {
 		s.secrets[o.Operator] = o
 	}
+	s.locks = p.Locks
 	return nil
+}
+
+// Locks returns the persisted operator lockout buckets.
+func (s *Store) Locks() map[string]LockRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]LockRecord, len(s.locks))
+	for k, v := range s.locks {
+		out[k] = v
+	}
+	return out
+}
+
+// SaveLocks replaces the persisted operator lockout buckets.
+func (s *Store) SaveLocks(locks map[string]LockRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.locks = locks
+	return s.save()
 }
 
 // save writes the durable state atomically. Caller holds mu.
@@ -127,6 +151,9 @@ func (s *Store) save() error {
 		if o.PasswordHash != "" || o.TOTPSecret != "" {
 			p.Secrets = append(p.Secrets, o)
 		}
+	}
+	if len(s.locks) > 0 {
+		p.Locks = s.locks
 	}
 	sort.Slice(p.Secrets, func(i, j int) bool { return p.Secrets[i].Operator < p.Secrets[j].Operator })
 	sort.Slice(p.Creds, func(i, j int) bool { return p.Creds[i].Created.Before(p.Creds[j].Created) })

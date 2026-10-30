@@ -76,7 +76,8 @@ func TestSSHFinishDoesNotRevealOperators(t *testing.T) {
 	}
 }
 
-// Distinct IPv6 clients get distinct buckets; one /64 is one client.
+// Every IPv6 address is its own client (a /64 is usually a whole LAN); the /64
+// is the network bucket over them.
 func TestClientKeyIPv6(t *testing.T) {
 	mk := func(addr string) string {
 		r := httptest.NewRequest("POST", "/", nil)
@@ -86,8 +87,16 @@ func TestClientKeyIPv6(t *testing.T) {
 	if a, b := mk("[2001:db8::1]:40000"), mk("[2001:db8:ffff::99]:50000"); a == b {
 		t.Fatalf("two IPv6 networks share the bucket %q", a)
 	}
-	if a, b := mk("[2001:db8:0:1::1]:1"), mk("[2001:db8:0:1:ffff::2]:2"); a != b {
-		t.Fatalf("one /64 should be one client: %q vs %q", a, b)
+	if a, b := mk("[2001:db8:0:1::1]:1"), mk("[2001:db8:0:1:ffff::2]:2"); a == b {
+		t.Fatalf("two hosts on one /64 share the client bucket %q", a)
+	}
+	net := func(addr string) string {
+		r := httptest.NewRequest("POST", "/", nil)
+		r.RemoteAddr = addr
+		return clientNetwork(WithConn(r, onPlainHTTP))
+	}
+	if a, b := net("[2001:db8:0:1::1]:1"), net("[2001:db8:0:1:ffff::2]:2"); a != b || a != "net:2001:db8:0:1::/64" {
+		t.Fatalf("one /64 is one network: %q vs %q", a, b)
 	}
 	if a, b := mk("192.0.2.1:1"), mk("192.0.2.2:1"); a == b {
 		t.Fatalf("two IPv4 addresses share the bucket %q", a)
@@ -366,7 +375,7 @@ func TestLockoutStateIsBounded(t *testing.T) {
 	if big > 200 {
 		t.Fatalf("a lockout key of %d bytes was kept", big)
 	}
-	if before > n {
+	if before > n+1 { // one bucket per address, plus their shared /24
 		t.Fatalf("%d lockout entries after %d attempts (lookups must not create entries)", before, n)
 	}
 	h.clk.advance(24 * time.Hour)
@@ -374,7 +383,7 @@ func TestLockoutStateIsBounded(t *testing.T) {
 	h.m.lock.mu.Lock()
 	after := len(h.m.lock.m)
 	h.m.lock.mu.Unlock()
-	if after > 2 {
+	if after > 3 { // the new attempt's client, network and operator buckets
 		t.Fatalf("%d lockout entries a day later; expired ones must be collected", after)
 	}
 }

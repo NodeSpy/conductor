@@ -35,12 +35,14 @@ const (
 
 	sshChallengeTTL = 5 * time.Minute
 	// Pending sign-in challenges need no session, so they are capped per client
-	// (clientKey), per network (clientNetwork: an IPv4 /24, an IPv6 /48) and
-	// overall. Step-up challenges belong to a signed-in session and are capped
-	// per session instead, so sign-in traffic can never crowd them out.
+	// (clientKey: one address), per network (clientNetwork: an IPv4 /24, an
+	// IPv6 /64) and overall. The network cap is wide (a neighbour needs 86
+	// addresses at 3 each to fill it) and only bounds one network's share of
+	// the table. Step-up challenges belong to a signed-in session and are
+	// capped per session instead, so sign-in traffic can never crowd them out.
 	maxSSHPending        = 4096
-	maxSSHPendingClient  = 5
-	maxSSHPendingNetwork = 32
+	maxSSHPendingClient  = 3
+	maxSSHPendingNetwork = 256
 	maxSSHPendingSession = 5
 	maxSSHCodeTries      = 3 // wrong signatures against a code before it burns
 	sshKindLogin         = "login"

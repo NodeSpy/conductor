@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -303,7 +304,7 @@ func TestOperatorLockoutForGuessableSecrets(t *testing.T) {
 	for i := 0; i < loginMaxFails; i++ {
 		_ = h.m.PasswordLogin("ops", "guess number "+string(rune('a'+i))+"xxxx", "000000")
 	}
-	if err := h.m.PasswordLogin("ops", "a long enough password", codeAt(t, secret, h.clk.now())); err != errLocked {
+	if err := h.m.PasswordLogin("ops", "a long enough password", codeAt(t, secret, h.clk.now())); !errors.As(err, new(lockedError)) || !strings.Contains(err.Error(), "operator ops") {
 		t.Fatalf("after %d failures the operator's password sign-in is locked, got %v", loginMaxFails, err)
 	}
 	_, sess, _ := h.m.CreateSession("ops", ListenerLocalhost, "", "t", "127.0.0.1", "")

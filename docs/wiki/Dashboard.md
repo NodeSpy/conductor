@@ -144,10 +144,14 @@ it.
   sign in with the password alone; an operator who has one still enters a code.
 - 5 wrong passwords or codes within 15 minutes lock that operator's password
   and code sign-in and confirmations for 15 minutes, doubling up to 4
-  hours, whichever client they come from. Passkey and SSH
-  sign-in are not affected by that lock. Every method also counts failures per
-  client (an IPv6 client by its /64). Guesses sent at the same moment count
-  before they are checked, so a burst gets no more tries than a sequence.
+  hours, whichever client they come from. The lock survives a restart. Passkey
+  and SSH sign-in are not affected by that lock. Every method also counts
+  failures per address (IPv4 or IPv6), and password and login-code guesses
+  are throttled per network (an IPv4 /24 or IPv6 /64, 50 in 15 minutes), so a
+  neighbour on the same LAN can't lock you out of SSH or passkeys. On
+  localhost only the operator lock and the throttle apply. Guesses sent at the
+  same moment count before they are checked, so a burst gets no more tries
+  than a sequence. The error says which of these refused you.
 - Lost the authenticator or the password: `conductor dashboard reset
   --operator <name>` (signed with the SSH key) removes the operator's passkeys,
   password, authenticator and sessions.

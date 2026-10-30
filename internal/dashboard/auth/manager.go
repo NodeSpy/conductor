@@ -69,7 +69,10 @@ type Manager struct {
 	rps     map[string]RP                 // by rpKey(listener, RP ID)
 	wa      map[string]*webauthn.WebAuthn // by rpKey(listener, RP ID)
 	lock    *lockout
-	hash    chan struct{} // bounds concurrent argon2id hashes (each takes ~19 MiB)
+	// redeemMu makes redeeming an enrolment link one step, so two concurrent
+	// redeems can't both spend it.
+	redeemMu sync.Mutex
+	hash     chan struct{} // bounds concurrent argon2id hashes (each takes ~19 MiB)
 
 	mu      sync.Mutex
 	logins  map[string]*ceremony // sign-in challenges, by ceremony id
@@ -122,6 +125,10 @@ func NewManager(deps Deps, rps ...RP) (*Manager, error) {
 		totpNew: map[string]*totpPending{},
 		regs:    map[string]*sessionReg{},
 	}
+	// The operator buckets survive a restart: a reload must not hand a
+	// password or TOTP guesser a fresh set of tries.
+	m.lock.restore(deps.Store.Locks())
+	m.lock.persist = func(l map[string]LockRecord) { _ = deps.Store.SaveLocks(l) }
 	for _, rp := range rps {
 		if err := m.addRP(rp); err != nil {
 			return nil, err

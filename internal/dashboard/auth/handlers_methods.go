@@ -2,9 +2,9 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // Routes for the sign-in and step-up methods beyond passkeys (SSH, password +
@@ -92,19 +92,21 @@ func (m *Manager) StepupMethods(r *http.Request, sess Session) []Method {
 // reserve reserves one guess on the given lockout buckets (lockout.Begin),
 // writing a 429 when that is refused.
 func (m *Manager) reserve(w http.ResponseWriter, keys ...string) (*attempt, bool) {
-	a, until, ok := m.lock.Begin(keys...)
+	a, until, refused, ok := m.lock.Begin(keys...)
 	if !ok {
-		writeErr(w, http.StatusTooManyRequests, "locked", "too many failed attempts — try again shortly", "locked until "+until.UTC().Format(time.RFC3339))
+		writeErr(w, http.StatusTooManyRequests, "locked", lockMessage(refused, until), "")
 		return nil, false
 	}
 	return a, true
 }
 
-// lockedOut writes a 429 when the client is locked out.
-func (m *Manager) lockedOut(w http.ResponseWriter, key string) bool {
-	if locked, until := m.lock.Locked(key); locked {
-		writeErr(w, http.StatusTooManyRequests, "locked", "too many failed attempts — try again shortly", "locked until "+until.UTC().Format(time.RFC3339))
-		return true
+// lockedOut writes a 429 when any of keys is locked.
+func (m *Manager) lockedOut(w http.ResponseWriter, keys ...string) bool {
+	for _, k := range keys {
+		if locked, until := m.lock.Locked(k); locked {
+			writeErr(w, http.StatusTooManyRequests, "locked", lockMessage(k, until), "")
+			return true
+		}
 	}
 	return false
 }
@@ -139,11 +141,12 @@ func (m *Manager) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	op := strings.TrimSpace(req.Operator)
-	// The guess is counted (client and operator) inside, before the hash; a
-	// refusal while either is locked counts against neither.
-	if err := m.passwordLoginFrom(clientKey(r), op, req.Password, req.Code); err != nil {
+	// The guess is counted (client, network and operator) inside, before the
+	// hash; a refusal while any is locked counts against none.
+	if err := m.passwordLoginFrom(lockKeys(r, guessSecret, op), op, req.Password, req.Code); err != nil {
 		code := http.StatusUnauthorized
-		if err == errLocked {
+		var locked lockedError
+		if errors.As(err, &locked) {
 			code = http.StatusTooManyRequests
 		}
 		writeErr(w, code, "login_failed", err.Error(), "")
@@ -162,7 +165,7 @@ func (m *Manager) handleSSHBegin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
 		return
 	}
-	if m.lockedOut(w, clientKey(r)) {
+	if m.lockedOut(w, lockKeys(r, guessCredential, "")...) {
 		return
 	}
 	v, err := m.BeginSSHLogin(r, strings.TrimSpace(req.Operator))
@@ -182,7 +185,7 @@ func (m *Manager) handleSSHFinish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
 		return
 	}
-	a, ok := m.reserve(w, clientKey(r))
+	a, ok := m.reserve(w, lockKeys(r, guessCredential, "")...)
 	if !ok {
 		return
 	}
@@ -224,7 +227,7 @@ func (m *Manager) handleSSHPending(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
 		return
 	}
-	a, ok := m.reserve(w, clientKey(r))
+	a, ok := m.reserve(w, lockKeys(r, guessCode, "")...)
 	if !ok {
 		return
 	}
@@ -249,7 +252,7 @@ func (m *Manager) handleSSHApprove(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
 		return
 	}
-	a, ok := m.reserve(w, clientKey(r))
+	a, ok := m.reserve(w, lockKeys(r, guessCode, "")...)
 	if !ok {
 		return
 	}

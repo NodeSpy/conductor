@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
@@ -136,21 +135,25 @@ func (m *Manager) ClearPassword(operator string) error {
 // failure returns the same error, so the response doesn't say which part was
 // wrong or whether the operator exists.
 func (m *Manager) PasswordLogin(operator, pw, code string) error {
-	return m.passwordLoginFrom("", operator, pw, code)
+	var keys []string
+	if safeOperator.MatchString(operator) {
+		keys = []string{operatorLockKey(operator)}
+	}
+	return m.passwordLoginFrom(keys, operator, pw, code)
 }
 
-// passwordLoginFrom is PasswordLogin for a request from client: the guess is
-// reserved on the client's and the operator's lockout buckets before the hash
-// runs, so a concurrent burst can't have more guesses evaluated than the lockout
-// allows. A refused reservation counts against neither bucket.
-func (m *Manager) passwordLoginFrom(client, operator, pw, code string) error {
+// passwordLoginFrom is PasswordLogin with the request's lockout buckets
+// (lockKeys): the guess is reserved on all of them before the hash runs, so a
+// concurrent burst can't have more guesses evaluated than the lockout allows.
+// A refused reservation counts against none.
+func (m *Manager) passwordLoginFrom(keys []string, operator, pw, code string) error {
 	pol := m.policy()
 	if !pol.SignIn(MethodPassword) {
 		return errors.New("password sign-in is not enabled (dashboard.auth.methods)")
 	}
-	a, _, ok := m.lock.Begin(guessKeys(client, operator)...)
+	a, until, refused, ok := m.lock.Begin(keys...)
 	if !ok {
-		return errLocked
+		return lockedError{lockMessage(refused, until)}
 	}
 	rec, _ := m.deps.Store.OperatorSecret(operator)
 	if !safeOperator.MatchString(operator) || !m.operatorExists(operator) {
@@ -162,20 +165,6 @@ func (m *Manager) passwordLoginFrom(client, operator, pw, code string) error {
 	}
 	a.Succeed()
 	return nil
-}
-
-// guessKeys are the lockout buckets a guess at operator's secrets counts
-// against: the client's (when known) and the operator's — only for a
-// well-formed name, so an attacker's arbitrary strings make no buckets.
-func guessKeys(client, operator string) []string {
-	var keys []string
-	if client != "" {
-		keys = append(keys, client)
-	}
-	if safeOperator.MatchString(operator) {
-		keys = append(keys, operatorLockKey(operator))
-	}
-	return keys
 }
 
 // passwordFactors checks the password and, when policy or enrolment asks for
@@ -196,8 +185,10 @@ func (m *Manager) passwordFactors(pol Policy, operator string, rec OperatorSecre
 	return nil
 }
 
-// errLocked is returned while an operator's guessable-secret lockout runs.
-var errLocked = errors.New("too many failed attempts for this operator — try again later")
+// lockedError is a guess refused by the lockout; its text says which bucket.
+type lockedError struct{ msg string }
+
+func (e lockedError) Error() string { return e.msg }
 
 // operatorLockKey is the lockout bucket for guessable-secret failures (password,
 // TOTP) against one operator, whatever client they come from.
@@ -218,9 +209,9 @@ func (m *Manager) PasswordStepup(sess Session, purpose Purpose, digest, pw, code
 	if !m.policy().StepupAllowed(MethodPassword) {
 		return "", errors.New("password step-up is not enabled (dashboard.auth.stepup)")
 	}
-	a, until, ok := m.lock.Begin(operatorLockKey(sess.Operator))
+	a, until, refused, ok := m.lock.Begin(operatorLockKey(sess.Operator))
 	if !ok {
-		return "", fmt.Errorf("too many wrong attempts — try again after %s", until.UTC().Format(time.RFC3339))
+		return "", lockedError{lockMessage(refused, until)}
 	}
 	rec, _ := m.deps.Store.OperatorSecret(sess.Operator)
 	if !m.verifyPassword(rec.PasswordHash, pw) {

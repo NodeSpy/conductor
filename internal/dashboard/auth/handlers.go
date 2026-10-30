@@ -115,25 +115,87 @@ func readJSON(r *http.Request, v any) error {
 	return json.Unmarshal(b, v)
 }
 
-// clientKey is the lockout bucket for a request: the tailnet node when there is
-// one, else the peer address — an IPv4 address, or an IPv6 /64 (the unit one
-// host or one customer is usually given) — so one client's failures don't lock
-// another's.
+// clientKey is the lockout and pending-challenge bucket for one client: its
+// tailnet node, or its full IP address (an IPv6 /128 too: a /64 is usually a
+// whole LAN, and one device on it must not stand for every other).
 func clientKey(r *http.Request) string {
 	if info := reqInfoFrom(r); info.Node != "" {
 		return "node:" + info.Node
 	}
-	return "addr:" + addrPrefix(r.RemoteAddr, 32, 64)
+	return "addr:" + addrPrefix(r.RemoteAddr, 32, 128)
 }
 
 // clientNetwork is the coarser bucket a client's network shares: an IPv4 /24 or
-// an IPv6 /48 (a tailnet node is its own network). It bounds what one network
-// can hold of a shared table, however many addresses it has.
+// an IPv6 /64 (a tailnet node is its own network). It throttles guessing spread
+// over many addresses and bounds what one network can hold of a shared table.
 func clientNetwork(r *http.Request) string {
 	if info := reqInfoFrom(r); info.Node != "" {
 		return "node:" + info.Node
 	}
-	return "net:" + addrPrefix(r.RemoteAddr, 24, 48)
+	return "net:" + addrPrefix(r.RemoteAddr, 24, 64)
+}
+
+// guess is what a request's failure would be a guess at.
+type guess int
+
+const (
+	// guessCredential is an SSH signature or a passkey assertion: not
+	// guessable, so only the client's own bucket counts it.
+	guessCredential guess = iota
+	// guessCode is a cross-device login code (40 bits): the client's bucket
+	// and its network's throttle.
+	guessCode
+	// guessSecret is a password or TOTP code: the client, its network and the
+	// operator, whichever address the guesses come from.
+	guessSecret
+)
+
+// lockKeys are the buckets a request's guess of kind g counts against. On a
+// loopback connection there is no client bucket: every local process shares
+// 127.0.0.1, so one could otherwise lock the operator's own browser out of
+// SSH and passkeys. Guessable paths keep their network throttle and operator
+// lock there, which is what bounds guessing.
+func lockKeys(r *http.Request, g guess, operator string) []string {
+	var keys []string
+	if !loopbackRequest(r) {
+		keys = append(keys, clientKey(r))
+	}
+	if g != guessCredential {
+		keys = append(keys, clientNetwork(r))
+	}
+	if g == guessSecret && safeOperator.MatchString(operator) {
+		keys = append(keys, operatorLockKey(operator))
+	}
+	return keys
+}
+
+// loopbackRequest reports a request from this machine over loopback.
+func loopbackRequest(r *http.Request) bool {
+	if reqInfoFrom(r).Node != "" {
+		return false
+	}
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(strings.Split(host, "%")[0])
+	return ip != nil && ip.IsLoopback()
+}
+
+// lockMessage says which bucket refused a guess and until when, so a locked
+// operator knows whether it is their address, their network or their
+// password and codes that are paused.
+func lockMessage(refused string, until time.Time) string {
+	at := until.UTC().Format(time.RFC3339)
+	switch {
+	case strings.HasPrefix(refused, "op:"):
+		return "too many wrong passwords or authenticator codes for operator " + strings.TrimPrefix(refused, "op:") +
+			" (from any address) — password and code sign-in are paused until " + at + "; SSH keys and passkeys still work"
+	case strings.HasPrefix(refused, "net:"):
+		return "too many failed attempts from this network — try again after " + at
+	default:
+		return "too many failed attempts from this address — try again after " + at
+	}
 }
 
 // addrPrefix is the remote address's IP masked to v4 or v6 bits, as a prefix;
@@ -208,9 +270,7 @@ func (m *Manager) handleState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) handleLoginBegin(w http.ResponseWriter, r *http.Request) {
-	key := clientKey(r)
-	if locked, until := m.lock.Locked(key); locked {
-		writeErr(w, http.StatusTooManyRequests, "locked", "too many sign-in attempts — try again shortly", "locked until "+until.UTC().Format(time.RFC3339))
+	if m.lockedOut(w, lockKeys(r, guessCredential, "")...) {
 		return
 	}
 	info := reqInfoFrom(r)
@@ -239,7 +299,7 @@ func (m *Manager) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
 		return
 	}
-	a, ok := m.reserve(w, clientKey(r))
+	a, ok := m.reserve(w, lockKeys(r, guessCredential, "")...)
 	if !ok {
 		return
 	}
@@ -321,10 +381,6 @@ func (m *Manager) localhostOnly(w http.ResponseWriter, r *http.Request) bool {
 
 func (m *Manager) handleEnrollRedeem(w http.ResponseWriter, r *http.Request) {
 	if !m.localhostOnly(w, r) {
-		return
-	}
-	if !m.lock.RedeemAllowed(clientKey(r)) {
-		writeErr(w, http.StatusTooManyRequests, "locked", "too many enrollment attempts this hour", "")
 		return
 	}
 	var req struct {

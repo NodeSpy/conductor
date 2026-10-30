@@ -1,9 +1,9 @@
 package auth
 
 import (
-	"strings"
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 

@@ -117,8 +117,10 @@ conductor-dashboard-stepup v1 operator=ops origin=... purpose=approve digest=<sh
   step-up, to the session. A request from anywhere else finds no challenge.
   That includes its login code: `pending` and `approve` look a code up only on
   the listener, host and transport it was issued on.
-- Pending sign-in challenges are capped at 5 per client, 32 per network (an
-  IPv4 /24 or an IPv6 /48) and 4096 overall. Step-up challenges have their own
+- Pending sign-in challenges are capped at 3 per client (one address), 256 per
+  network (an IPv4 /24 or an IPv6 /64) and 4096 overall. A neighbour needs 86
+  addresses on the operator's network, each refreshed every 5 minutes, to fill
+  its share; the network cap only stops one network holding the whole table. Step-up challenges have their own
   cap of 5 per session, so a flood of sign-in challenges cannot stop a
   signed-in operator from confirming.
 
@@ -152,7 +154,8 @@ challenge.
   seconds, and the session is issued to it.
 - `pending` and `approve` need no session and no CSRF token: the signature is
   the credential. They are still same-origin JSON endpoints (§4a). Unknown
-  codes and bad signatures count toward the per-client lockout. Three wrong
+  codes and bad signatures count toward the client's lockout and its
+  network's throttle. Three wrong
   signatures against one code burn it.
 - **Describing a step-up.** The digest is a hash, so the server cannot turn it
   back into an action. Instead, whenever it hands a session a digest (a
@@ -213,26 +216,46 @@ challenge.
 
 **Lockout.**
 
-- **Per client.** Every method's failures count against the client key, as
-  passkey failures did before: 5 failures in 15 minutes give a 15-minute lock,
-  doubling up to 4 hours. The client key is the tailnet node on the tailnet,
-  otherwise the address: an IPv4 address, or an IPv6 /64, because one host
-  usually holds a whole /64.
+- **Per client.** Every method's failures count against the client key: 5
+  failures in 15 minutes give a 15-minute lock, doubling up to 4 hours. The
+  client key is the tailnet node on the tailnet, otherwise the full address
+  (IPv4 or IPv6). A /64 is often a whole home or office LAN, so it can't stand
+  for one device.
+- **Per network.** Failures at a guessable thing (a password, a login code)
+  also count against the client's network, an IPv4 /24 or an IPv6 /64. This is
+  a throttle, not a lock: 50 failures in 15 minutes refuse further guesses of
+  that kind from the network until the window moves on. It bounds guessing
+  spread over the 2^64 addresses of a /64. SSH signatures and passkey
+  assertions are not guessable and never count here, so one address can't
+  lock a different address out of SSH or passkeys.
 - **Per operator.** Password and TOTP failures, including TOTP and password
   step-up attempts, also count against the operator, whichever client they come
-  from. This bounds guessing spread over many addresses.
-- **Reserved before evaluated.** A guess reserves its place in the client and
-  operator buckets before the hash or code check runs, and the reservation is
+  from. The operator buckets and their doubling are kept in `auth.json`, so a
+  restart (every config apply reloads the daemon) doesn't reset them.
+- **Loopback.** Every local process reaches the localhost listener from
+  127.0.0.1 or ::1, so a client bucket there would let any local user lock the
+  operator's own browser out. On loopback there is no client bucket: SSH and
+  passkey failures lock nothing, and password and code guessing is still bounded
+  by the operator lock and the network throttle.
+- **Reserved before evaluated.** A guess reserves its place in every bucket it
+  counts against before the hash or code check runs, and the reservation is
   refused when the failures plus the guesses still running reach the limit.
-  Taking the reservation is atomic, so a concurrent burst gets at most 5
-  guesses evaluated per bucket, not one per request in flight. A success or an
-  error that is not a wrong guess releases the place.
+  Taking the reservation is atomic, so a concurrent burst gets no more guesses
+  evaluated per bucket than a sequence. A success or an error that is not a
+  wrong guess releases the place.
+- The 429 says which bucket refused: this address, this network, or the
+  operator's password and codes (and that SSH keys and passkeys still work).
 - Checking whether a client is locked creates no state, and idle entries are
   swept, so the lockout table stays bounded however many addresses an
   attacker uses.
 - The operator lock covers only the guessable secrets. Passkey and SSH sign-in
   are not blocked by it, so an attacker who sends wrong passwords cannot lock
   the operator out of the methods that do not depend on a guessable secret.
+- **Enrolment link.** The link is single use: redeeming it spends it, so a
+  second redeem from scrollback or a shared screen finds nothing. Its secret is
+  256 bits and its pairing code burns after 3 wrong tries, so there is no
+  separate per-address redeem limit (on localhost that would be one bucket for
+  every local process).
 
 ## 4. Step-up for every method
 
@@ -372,7 +395,8 @@ The CLI sends no `Origin` and the JSON content type, so it is unaffected.
   still has to read it.
 - **SSH approve-login.**
   - A short code is guessable in principle. 40 bits, a 5-minute life, a
-    per-client lockout and a 3-try burn per code make guessing impractical.
+    per-client lockout, a per-network throttle and a 3-try burn per code make
+    guessing impractical.
   - What a guessed code gives an attacker is the challenge text and device
     description, not a session. A session also needs the operator's signature.
   - The CLI's origin check refuses a challenge minted for a look-alike's own
@@ -394,8 +418,10 @@ The CLI sends no `Origin` and the JSON content type, so it is unaffected.
   to passkey or SSH, to avoid a remote lock-out of the operator. Those methods
   are not guessable, so an attacker holding the operator lock cannot keep the
   real operator out.
-- **IPv6 client bucket.** A /64, the usual allocation to one host or link; a
-  per-address bucket would let one host rotate through 2^64 addresses.
+- **IPv6 client bucket.** The full address, with the /64 as a network
+  throttle on the guessable paths. A /64 as the client let one device on a
+  SLAAC LAN lock every other device out; the throttle still stops one host
+  rotating through 2^64 addresses to guess codes or passwords.
 - **Credential changes.** Setting the first password from Access also needs a
   step-up. On a fresh remote session that is an SSH or passkey confirmation.
 - **Enrolment link.** A password enrolled through the localhost link does not
