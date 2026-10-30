@@ -16,8 +16,10 @@ package configedit
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -29,7 +31,87 @@ import (
 // logical path to a line/column in that text.
 type Document struct {
 	src  []byte
-	root *yaml.Node // the DocumentNode
+	root *yaml.Node        // the DocumentNode, parsed from the tokenized text
+	refs map[string]string // placeholder -> the ${...} reference it stands for
+}
+
+// refRe matches the references conductor substitutes at load time: ${NAME}
+// and ${settings.NAME}.
+var refRe = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_.]*\}`)
+
+// tokenize replaces each reference with a placeholder of the same length, so
+// the text parses (a bare ${...} isn't valid YAML inside {...} or [...]) and
+// every line and column still matches the real text the edits splice into.
+// Placeholders are letters only, start with Z (never a YAML bool or null) and
+// don't otherwise occur in the text.
+func tokenize(src []byte) ([]byte, map[string]string) {
+	if !refRe.Match(src) {
+		return src, nil
+	}
+	refs := map[string]string{}
+	byRef := map[string]string{}
+	n := 0
+	out := refRe.ReplaceAllFunc(src, func(m []byte) []byte {
+		ref := string(m)
+		if tok, ok := byRef[ref]; ok {
+			return []byte(tok)
+		}
+		for {
+			tok := placeholder(n, len(m))
+			n++
+			if tok == "" {
+				return m // out of placeholders this short; leave the reference
+			}
+			if _, used := refs[tok]; used || bytes.Contains(src, []byte(tok)) {
+				continue
+			}
+			refs[tok], byRef[ref] = ref, tok
+			return []byte(tok)
+		}
+	})
+	return out, refs
+}
+
+// placeholder returns the n-th letters-only token of length l ("Z" + base-26
+// digits + "Q"), or "" when n doesn't fit.
+func placeholder(n, l int) string {
+	width := l - 2
+	b := make([]byte, width)
+	for i := width - 1; i >= 0; i-- {
+		b[i] = byte('a' + n%26)
+		n /= 26
+	}
+	if n > 0 {
+		return ""
+	}
+	return "Z" + string(b) + "Q"
+}
+
+// detokenize puts the references back into a decoded value.
+func (d *Document) detokenize(v any) any {
+	if len(d.refs) == 0 {
+		return v
+	}
+	switch x := v.(type) {
+	case string:
+		for tok, ref := range d.refs {
+			x = strings.ReplaceAll(x, tok, ref)
+		}
+		return x
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[d.detokenize(k).(string)] = d.detokenize(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = d.detokenize(e)
+		}
+		return out
+	}
+	return v
 }
 
 // Parse reads config bytes into a Document. An empty input is a valid empty
@@ -39,10 +121,12 @@ func Parse(src []byte) (*Document, error) {
 	if len(bytes.TrimSpace(src)) == 0 {
 		return d, nil
 	}
+	tok, refs := tokenize(src)
 	var doc yaml.Node
-	if err := yaml.Unmarshal(src, &doc); err != nil {
+	if err := yaml.Unmarshal(tok, &doc); err != nil {
 		return nil, fmt.Errorf("configedit: parse: %w", err)
 	}
+	d.refs = refs
 	if doc.Kind != yaml.DocumentNode {
 		return nil, fmt.Errorf("configedit: parse: not a YAML document")
 	}
@@ -109,13 +193,23 @@ func (d *Document) node(path []string) (val, parent, key *yaml.Node, found bool)
 func (d *Document) Get(path []string) (any, bool) {
 	v, _, _, ok := d.node(path)
 	if !ok {
+		// A key pulled in by a "<<:" merge isn't in the text; decoding the
+		// parent resolves the merge.
+		if len(path) > 1 {
+			if pv, ok := d.Get(path[:len(path)-1]); ok {
+				if m, ok := pv.(map[string]any); ok {
+					e, has := m[path[len(path)-1]]
+					return e, has
+				}
+			}
+		}
 		return nil, false
 	}
 	var out any
 	if err := v.Decode(&out); err != nil {
-		return v.Value, true
+		return d.detokenize(v.Value), true
 	}
-	return out, true
+	return d.detokenize(out), true
 }
 
 // SetScalar sets the scalar value at path. The change is spliced into the text:
@@ -152,14 +246,15 @@ func (d *Document) SetScalar(path []string, value any) error {
 	if err != nil {
 		return err
 	}
-	if loc.found() && scalarEqual(loc.val, value) {
+	if loc.found() && d.equal(loc.val, value) {
 		return nil // no-op: leave the text byte-for-byte
 	}
 
-	oldSrc, oldRoot := d.src, d.root
+	oldSrc, oldRoot, oldRefs := d.src, d.root, d.refs
 	switch {
-	case loc.found() && !structured && loc.val.Kind == yaml.ScalarNode && !isBlockScalar(loc.val):
-		err = d.spliceScalar(loc.val, rendered)
+	case loc.found() && !structured && loc.val.Kind == yaml.ScalarNode && !isBlockScalar(loc.val) &&
+		blockEndLine(loc.val, loc.key, loc.parent, splitLinesKeepEnds(d.src)) == loc.val.Line:
+		err = d.spliceScalar(loc.val, rendered, loc.parent != nil && loc.parent.Style&yaml.FlowStyle != 0)
 	case loc.found():
 		err = d.replaceEntry(loc, path, value)
 	default:
@@ -170,17 +265,18 @@ func (d *Document) SetScalar(path []string, value any) error {
 	}
 	// The edit must land where it was aimed: a mis-indented insert can parse
 	// cleanly yet attach the key to a different section.
-	if got, _, _, ok := d.node(path); !ok || !scalarEqual(got, value) {
-		d.src, d.root = oldSrc, oldRoot
+	if got, _, _, ok := d.node(path); !ok || !d.equal(got, value) {
+		d.src, d.root, d.refs = oldSrc, oldRoot, oldRefs
 		return fmt.Errorf("configedit: setting %s did not produce the requested value; the file is unchanged", strings.Join(path, "."))
 	}
 	return nil
 }
 
-// spliceScalar rewrites the value token of an existing scalar node in place,
-// preserving the line's prefix (indent + "key: ") and any trailing inline
-// comment.
-func (d *Document) spliceScalar(val *yaml.Node, rendered string) error {
+// spliceScalar rewrites the value token of an existing single-line scalar in
+// place, keeping everything before and after it on the line: the indent and
+// "key: ", a trailing inline comment, and inside a flow collection the
+// following ", next: ..." and closing bracket.
+func (d *Document) spliceScalar(val *yaml.Node, rendered string, inFlow bool) error {
 	lines := splitLinesKeepEnds(d.src)
 	ln := val.Line - 1
 	if ln < 0 || ln >= len(lines) {
@@ -191,22 +287,62 @@ func (d *Document) spliceScalar(val *yaml.Node, rendered string) error {
 	if col < 0 || col > len(line) {
 		return fmt.Errorf("configedit: node column %d out of range on line %d", val.Column, val.Line)
 	}
-	prefix := line[:col]
-	remainder := line[col:]
-
-	// Preserve a trailing inline comment (yaml stores it with its leading #).
-	suffix := ""
-	if c := val.LineComment; c != "" {
-		if idx := strings.LastIndex(remainder, c); idx >= 0 {
-			suffix = remainder[idx:] // the comment itself
-			gap := remainder[:idx]   // value text + spaces before #
-			trimmed := strings.TrimRight(gap, " \t")
-			suffix = gap[len(trimmed):] + suffix // keep the exact whitespace gap
-		}
+	end, err := scalarTokenEnd(line, col, val, inFlow)
+	if err != nil {
+		return err
 	}
-	newLine := prefix + rendered + suffix + eol
-	lines[ln] = newLine
+	if inFlow && strings.ContainsAny(rendered, ",[]{}#") && !strings.HasPrefix(rendered, `"`) && !strings.HasPrefix(rendered, "'") {
+		q, err := json.Marshal(rendered)
+		if err != nil {
+			return fmt.Errorf("configedit: render value: %w", err)
+		}
+		rendered = string(q) // a JSON string is a valid YAML double-quoted scalar
+	}
+	lines[ln] = line[:col] + rendered + line[end:] + eol
 	return d.commit([]byte(strings.Join(lines, "")))
+}
+
+// scalarTokenEnd returns the index just past a scalar's text that starts at
+// col: the closing quote of a quoted scalar; for a plain one, the next ",", "]"
+// or "}" inside a flow collection, else the start of an inline comment or the
+// end of the line (trailing spaces before a comment are kept).
+func scalarTokenEnd(line string, col int, val *yaml.Node, inFlow bool) (int, error) {
+	switch {
+	case val.Style&yaml.DoubleQuotedStyle != 0:
+		for i := col + 1; i < len(line); i++ {
+			if line[i] == '\\' {
+				i++
+				continue
+			}
+			if line[i] == '"' {
+				return i + 1, nil
+			}
+		}
+	case val.Style&yaml.SingleQuotedStyle != 0:
+		for i := col + 1; i < len(line); i++ {
+			if line[i] == '\'' {
+				if i+1 < len(line) && line[i+1] == '\'' {
+					i++
+					continue
+				}
+				return i + 1, nil
+			}
+		}
+	default:
+		end := len(line)
+		for i := col; i < len(line); i++ {
+			if inFlow && strings.ContainsRune(",]}", rune(line[i])) {
+				end = i
+				break
+			}
+			if line[i] == '#' && i > col && (line[i-1] == ' ' || line[i-1] == '\t') {
+				end = i
+				break
+			}
+		}
+		return len(strings.TrimRight(line[:end], " \t")), nil
+	}
+	return 0, fmt.Errorf("configedit: unterminated quoted value on line %d", val.Line)
 }
 
 // location is how far a path resolves in the document.
@@ -336,7 +472,7 @@ func (d *Document) replaceEntry(loc location, path []string, value any) error {
 	}
 	lines := splitLinesKeepEnds(d.src)
 	start := loc.key.Line - 1
-	end := blockEndLine(loc.val, loc.key, lines)
+	end := blockEndLine(loc.val, loc.key, loc.parent, lines)
 	if start < 0 || start >= len(lines) || end > len(lines) || end <= start {
 		return fmt.Errorf("configedit: cannot locate %s to replace", strings.Join(path, "."))
 	}
@@ -359,10 +495,10 @@ func (d *Document) replaceEntry(loc location, path []string, value any) error {
 // commit adopts new text only if it parses; otherwise the document is left
 // exactly as it was.
 func (d *Document) commit(src []byte) error {
-	old := d.src
+	old, oldRefs := d.src, d.refs
 	d.src = src
 	if err := d.reparse(); err != nil {
-		d.src = old
+		d.src, d.refs = old, oldRefs
 		return err
 	}
 	return nil
@@ -375,7 +511,21 @@ func (d *Document) Delete(path []string) error {
 	}
 	val, parent, key, found := d.node(path)
 	if !found {
+		// Not in the text, but the loaded config may still have it: a key
+		// pulled in by a "<<:" merge. Reporting success would be a lie.
+		if len(path) > 1 {
+			if pv, ok := d.Get(path[:len(path)-1]); ok {
+				if m, ok := pv.(map[string]any); ok {
+					if _, has := m[path[len(path)-1]]; has {
+						return fmt.Errorf("configedit: %s comes from a \"<<:\" merge; edit the shared section it comes from, or set it here to override", strings.Join(path, "."))
+					}
+				}
+			}
+		}
 		return nil // already absent
+	}
+	if parent.Style&yaml.FlowStyle != 0 {
+		return fmt.Errorf("configedit: %s is inside a flow-style collection ({...} or [...]); edit it by setting the whole collection", strings.Join(path, "."))
 	}
 	lines := splitLinesKeepEnds(d.src)
 	var start, end int // [start,end) line range (0-based) to remove
@@ -390,12 +540,45 @@ func (d *Document) Delete(path []string) error {
 	} else {
 		start = val.Line - 1
 	}
-	end = blockEndLine(val, key, lines)
+	end = blockEndLine(val, key, parent, lines)
+	if parent.Kind == yaml.MappingNode && key != nil && key.Line-1 < len(lines) {
+		line := stripEOL(lines[key.Line-1])
+		if col := key.Column - 1; col <= len(line) && strings.TrimSpace(line[:col]) != "" {
+			return d.deleteFirstKeyOfItem(path, parent, key, end, line[:col], lines)
+		}
+	}
 	if start < 0 || start >= len(lines) || end > len(lines) || end <= start {
 		return fmt.Errorf("configedit: cannot locate %s for delete", strings.Join(path, "."))
 	}
 	out := append([]string{}, lines[:start]...)
 	out = append(out, lines[end:]...)
+	return d.commit([]byte(strings.Join(out, "")))
+}
+
+// deleteFirstKeyOfItem removes the first key of a list item's mapping, whose
+// line also carries the item's "- " marker (prefix). The marker moves onto the
+// next key; if there is none the item becomes an empty map, so the list keeps
+// its length.
+func (d *Document) deleteFirstKeyOfItem(path []string, m, key *yaml.Node, end int, prefix string, lines []string) error {
+	start := key.Line - 1
+	if end <= start || end > len(lines) {
+		return fmt.Errorf("configedit: cannot locate %s for delete", strings.Join(path, "."))
+	}
+	out := append([]string{}, lines[:start]...)
+	if len(m.Content) <= 2 {
+		out = append(out, prefix+"{}\n")
+		out = append(out, lines[end:]...)
+		return d.commit([]byte(strings.Join(out, "")))
+	}
+	next := m.Content[2]
+	ni := next.Line - 1
+	if next.Column != key.Column || ni < end || ni >= len(lines) ||
+		len(lines[ni]) < len(prefix) || strings.TrimSpace(lines[ni][:len(prefix)]) != "" {
+		return fmt.Errorf("configedit: cannot delete %s: the list item isn't laid out as expected; edit it by hand", strings.Join(path, "."))
+	}
+	out = append(out, lines[end:ni]...)
+	out = append(out, prefix+lines[ni][len(prefix):])
+	out = append(out, lines[ni+1:]...)
 	return d.commit([]byte(strings.Join(out, "")))
 }
 
@@ -406,11 +589,12 @@ func (d *Document) reparse() error {
 		d.root = nil
 		return nil
 	}
+	tok, refs := tokenize(d.src)
 	var doc yaml.Node
-	if err := yaml.Unmarshal(d.src, &doc); err != nil {
+	if err := yaml.Unmarshal(tok, &doc); err != nil {
 		return fmt.Errorf("configedit: re-parse after edit: %w", err)
 	}
-	d.root = &doc
+	d.root, d.refs = &doc, refs
 	return nil
 }
 
@@ -448,13 +632,14 @@ func renderScalar(v any) (string, error) {
 	return s, nil
 }
 
-// scalarEqual reports whether the node's decoded value is semantically equal to
-// v, comparing canonical YAML encodings so `yes`==`true` and `8`==`8.0`.
-func scalarEqual(node *yaml.Node, v any) bool {
+// equal reports whether the node's decoded value is semantically equal to v,
+// comparing canonical YAML encodings so `yes`==`true` and `8`==`8.0`.
+func (d *Document) equal(node *yaml.Node, v any) bool {
 	var cur any
 	if err := node.Decode(&cur); err != nil {
 		cur = node.Value
 	}
+	cur = d.detokenize(cur)
 	cb, err1 := yaml.Marshal(cur)
 	vb, err2 := yaml.Marshal(v)
 	if err1 != nil || err2 != nil {
@@ -476,33 +661,78 @@ func childIndentOf(m *yaml.Node) int {
 // mapping's block (where a new child line is inserted).
 func mappingBlockEnd(m *yaml.Node, lines []string) int {
 	last := 0
-	for _, c := range m.Content {
-		if e := nodeMaxLine(c, lines); e > last {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		k, v := m.Content[i], m.Content[i+1]
+		if e := entryEnd(v, k.Line, k.Column-1, lines); e > last {
 			last = e
 		}
 	}
-	// Walk back over trailing blank lines so the new key sits snug under the
-	// last real child, not after a blank separator.
-	idx := last // 0-based line just past `last` (which is 1-based)
-	for idx < len(lines) && strings.TrimSpace(stripEOL(lines[idx])) == "" {
-		// a blank line that belongs to this block's trailing whitespace
-		break
-	}
-	return idx
+	return last
 }
 
-// blockEndLine returns the 0-based line index just past the block owned by a
-// value node (and its key's head comment), for deletion.
-func blockEndLine(val, key *yaml.Node, lines []string) int {
-	floor := 0
+// blockEndLine returns the 0-based line index just past the entry that owns a
+// value node: the key's line (or the list item's), through the value's last
+// line.
+func blockEndLine(val, key, parent *yaml.Node, lines []string) int {
 	if key != nil {
-		floor = key.Line
+		return entryEnd(val, key.Line, key.Column-1, lines)
 	}
-	last := nodeMaxLine(val, lines)
-	if floor > last {
-		last = floor
+	base := val.Column - 1
+	if parent != nil && parent.Kind == yaml.SequenceNode {
+		base = parent.Column - 1 // the "-"
+	}
+	return entryEnd(val, val.Line, base, lines)
+}
+
+// entryEnd returns the 0-based line just past an entry that starts on line
+// start (1-based) at column base (0-based): every following line indented past
+// base belongs to it — nested blocks, | and > content, and the continuation
+// lines of a wrapped plain or quoted string or a flow list. Trailing blank
+// lines belong to it only when its last value is a keep-chomped block (|+).
+// Reading the text this way, not the decoded value, matters: a delete that
+// stops short leaves the tail for YAML to read as part of the previous value.
+func entryEnd(val *yaml.Node, start, base int, lines []string) int {
+	last := start
+	for j := start; j < len(lines); j++ {
+		line := stripEOL(lines[j])
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if indentOf(line) <= base {
+			break
+		}
+		last = j + 1
+	}
+	if e := nodeMaxLine(val, lines); e > last {
+		last = e
+	}
+	if keepChomped(lastDescendant(val), lines) {
+		for last < len(lines) && strings.TrimSpace(stripEOL(lines[last])) == "" {
+			last++
+		}
 	}
 	return last
+}
+
+func lastDescendant(n *yaml.Node) *yaml.Node {
+	for n != nil && len(n.Content) > 0 {
+		n = n.Content[len(n.Content)-1]
+	}
+	return n
+}
+
+// keepChomped reports whether n is a | or > block with keep chomping (+).
+func keepChomped(n *yaml.Node, lines []string) bool {
+	if n == nil || !isBlockScalar(n) || n.Line-1 >= len(lines) {
+		return false
+	}
+	head := stripEOL(lines[n.Line-1])
+	c := n.Column - 1
+	if c < 0 || c >= len(head) {
+		return false
+	}
+	f := strings.Fields(head[c:])
+	return len(f) > 0 && strings.Contains(f[0], "+")
 }
 
 // nodeMaxLine returns the greatest 1-based line touched by a node (so, as a
@@ -539,13 +769,8 @@ func blockScalarEnd(n *yaml.Node, lines []string) int {
 	if i < 0 || i >= len(lines) {
 		return n.Line
 	}
-	head := stripEOL(lines[i])
-	base := indentOf(head)
-	keep := false
-	if c := n.Column - 1; c >= 0 && c < len(head) {
-		indicator := strings.Fields(head[c:])
-		keep = len(indicator) > 0 && strings.Contains(indicator[0], "+")
-	}
+	base := indentOf(stripEOL(lines[i]))
+	keep := keepChomped(n, lines)
 	last := n.Line
 	for j := i + 1; j < len(lines); j++ {
 		line := stripEOL(lines[j])
