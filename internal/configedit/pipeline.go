@@ -44,8 +44,9 @@ type Pipeline struct {
 	// Confirm tokens: one live token per owner, replaced by its next review
 	// (or restore review), and at most maxOwners owners' (the oldest goes),
 	// so reviews never grow memory. Guarded by mu.
-	tokens  map[string]tokenBind // token → what it binds
-	ownerOf map[string]string    // owner → its live token
+	tokens   map[string]tokenBind // token → what it binds
+	tokenSeq uint64               // last mint's seq
+	ownerOf  map[string]string    // owner → its live token
 }
 
 // STAGED SETS ARE PER OWNER. The dashboard stages under the session's id, so
@@ -60,10 +61,10 @@ type stagedSet struct {
 }
 
 // tokenBind is what a confirm token binds to: the owner whose review minted
-// it and the candidate's sha, and when.
+// it, the candidate's sha, and its place in mint order.
 type tokenBind struct {
 	owner, sha string
-	minted     time.Time
+	seq        uint64 // mint order: the cap drops the lowest
 }
 
 const (
@@ -383,14 +384,15 @@ func (p *Pipeline) mintTokenLocked(owner, sha string) string {
 	if len(p.ownerOf) >= maxOwners {
 		oldest := ""
 		for _, t := range p.ownerOf {
-			if oldest == "" || p.tokens[t].minted.Before(p.tokens[oldest].minted) {
+			if oldest == "" || p.tokens[t].seq < p.tokens[oldest].seq {
 				oldest = t
 			}
 		}
 		p.dropTokenLocked(oldest)
 	}
 	tok := randID()
-	p.tokens[tok] = tokenBind{owner: owner, sha: sha, minted: p.now()}
+	p.tokenSeq++
+	p.tokens[tok] = tokenBind{owner: owner, sha: sha, seq: p.tokenSeq}
 	p.ownerOf[owner] = tok
 	return tok
 }

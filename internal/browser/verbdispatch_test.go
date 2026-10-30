@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -168,8 +169,9 @@ func TestVerbStatusNeedsNoBrowser(t *testing.T) {
 	if out["identity"] != c.Identity {
 		t.Fatalf("status identity: got %v", out["identity"])
 	}
-	if out["isolation"] != "namespace" {
-		t.Fatalf("status isolation on linux: got %v", out["isolation"])
+	want := map[string]string{"linux": "namespace", "darwin": "seatbelt"}[runtime.GOOS]
+	if want != "" && out["isolation"] != want {
+		t.Fatalf("status isolation on %s: got %v, want %s", runtime.GOOS, out["isolation"], want)
 	}
 	allow, _ := out["allow"].([]string)
 	if len(allow) != 1 || allow[0] != "example.com" {
