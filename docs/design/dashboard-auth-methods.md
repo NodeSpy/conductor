@@ -405,7 +405,13 @@ mounted route:
   request body. Widening means setting a limit, raising it, changing its
   currency or card, adding merchants or clearing it. It is the same purpose
   the wallet's own widening changes use, decided by the bot service's own
-  classification. Lowering a limit needs none.
+  classification. Lowering a limit needs none. A limit is confirmed for one
+  bot (`spend_for`), so a request that confirms it for a bot it wasn't
+  confirmed for also widens: an assignment to another bot, a reopen (closing
+  clears the binding), or the limit restated for the bot that now holds the
+  ticket. The step-up description names that bot ("the spend limit … moves
+  from bot:a to bot:b"). A bot's own moves bind no one: the limit is held
+  wherever it lands until an operator confirms it.
 - An avatar apply writes the config file on the socket. On the dashboard it
   stages the planned change in the session's config edits instead, so the
   config pipeline reviews, confirms (per `config_stepup`), backs up, audits

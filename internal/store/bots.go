@@ -133,6 +133,11 @@ type Case struct {
 	// purchases, keyed by the bot and this case id). Only an operator sets
 	// or raises it.
 	SpendLimit *SpendLimit `json:"spend_limit,omitempty"`
+	// SpendFor is the bot an operator confirmed the spend limit for. A limit
+	// is spent only by that bot: one that reaches another bot (a handoff, a
+	// team's routing, a bot's reassignment) is held until an operator
+	// confirms it again, and closing the ticket clears it.
+	SpendFor string `json:"spend_for,omitempty"`
 }
 
 // SpendLimit is a ticket's spending cap: an amount (a decimal string, "50.00")

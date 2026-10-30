@@ -1523,6 +1523,9 @@ func (s *Service) closeCase(ctx context.Context, bot, caseID, outcome, status, b
 			addHistory(cc, s.now(), by, cc.Status+" → "+status+": "+oneLine(outcome, 300))
 		}
 		cc.Status, cc.Outcome, cc.Updated = status, outcome, s.now()
+		// A closed case's spend limit allows nothing; reopened, an operator
+		// confirms it again.
+		cc.SpendFor = ""
 		cs = *cc
 		return nil
 	})

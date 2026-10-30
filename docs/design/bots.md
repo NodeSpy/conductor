@@ -681,13 +681,26 @@ tagline, personality) came from one.
 - **Spend limit.** `Case.spend_limit` (`{amount, currency, card,
   merchants}`) lives on the ticket record itself, so the browser's payments
   and tickets read the same field. A purchase names a bot and its case id;
-  payments call `Service.TicketSpend(bot, caseID)` for the limit and what has
-  gone. Spending is read through the `SpendLedger` interface, summed over
-  every copy of the ticket. A daemon without a ledger reports it as unknown,
-  never as zero. Amounts are decimal strings, compared in cents.
-  `spendLimitWidens` defines a widening as setting, clearing, raising, or a
-  new currency, card or merchant. Only an operator may make one; a bot's
-  edit must narrow.
+  payments read that case's limit, and count what has gone under the
+  ticket's stable id, so every copy of the ticket shares one count. A daemon
+  without a ledger reports spending as unknown, never as zero. Amounts are
+  decimal strings, compared in cents. `spendLimitWidens` defines a widening
+  as setting, clearing, raising, or a new currency, card or merchant. Only an
+  operator may make one; a bot's edit must narrow.
+- **A limit is bound to its holder.** `Case.spend_for` is the bot an
+  operator confirmed the limit for. `SpendHeld(bot, case)` is the purchase
+  check: the limit allows nothing on a moved copy, on a closed ticket, or
+  for any bot but `spend_for`. A held budget refuses the purchase with its
+  reason; it is never treated as "no budget", which would leave the purchase
+  to the looser layers. Only an operator's action sets `spend_for`: a create
+  or assignment to a bot (that bot), a limit set or restated (the bot holding
+  the ticket), a reopen (the assignee), or the wallet's case budget (that
+  case's bot). A team or the triage queue binds no bot. Closing a ticket
+  clears it. A bot's own moves (a handoff, a reassignment over the operator
+  socket, a team's routing, a lead's triage) carry `spend_for` unchanged, so
+  the limit is held wherever it lands until an operator confirms it there.
+  Each move is in the history and the `bot_ticket` audit row (`spend_limit`,
+  `spend_limit_moved`, `spend_for`).
 
 ## Folders: removed
 

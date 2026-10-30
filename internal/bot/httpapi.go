@@ -712,32 +712,70 @@ func (s *Service) Operates(op, target string) bool {
 	return false
 }
 
-// TicketSpendWidens reports whether a request's spend_limit widens what may be
-// spent on ticket tid ("" and patch false: POST /v1/tickets, a new ticket;
-// patch true: PATCH /v1/tickets/{tid}), and how. It reads the body as those
-// handlers do, against the ticket's current limit. A spend_limit that doesn't
-// parse is left to the handler to refuse.
+// TicketSpendWidens reports whether a request widens what may be spent on
+// ticket tid ("" and patch false: POST /v1/tickets, a new ticket; patch
+// true: PATCH /v1/tickets/{tid}), and how. It reads the body as those
+// handlers do, against the ticket as it stands. A spend limit is confirmed
+// for one bot, so besides a spend_limit that widens, an operator's request
+// that confirms the ticket's limit for a bot it was not confirmed for
+// widens: an assignment to another bot, a reopen (closing ends a limit's
+// confirmation), or the limit restated for the bot it reached by a move.
+// The reason names that bot. A body that doesn't parse is left to the
+// handler to refuse.
 func (s *Service) TicketSpendWidens(tid string, args map[string]any, patch bool) (bool, string) {
+	var c store.Case
+	var loc ticketLoc
+	edit := args
 	if patch {
-		args = ticketPatchEdit(tid, args)
+		var err error
+		if c, loc, err = s.findTicket(tid); err != nil {
+			return false, ""
+		}
+		edit = ticketPatchEdit(tid, args)
 	}
-	present, l, err := spendArg(args)
-	if err != nil || !present {
-		return false, ""
-	}
-	nl, err := NormalizeSpendLimit(l)
+	present, l, err := spendArg(edit)
 	if err != nil {
 		return false, ""
 	}
-	var old *store.SpendLimit
-	if patch {
-		c, _, err := s.findTicket(tid)
+	limit, forBot, binds := c.SpendLimit, c.SpendFor, false
+	var why []string
+	if present {
+		nl, err := NormalizeSpendLimit(l)
 		if err != nil {
 			return false, ""
 		}
-		old = c.SpendLimit
+		if w, how := spendLimitWidens(c.SpendLimit, nl); w {
+			why = append(why, how)
+		}
+		limit, forBot, binds = nl, loc.Bot, true
 	}
-	return spendLimitWidens(old, nl)
+	// A PATCH edits, then assigns, then moves the status: the last of them
+	// that confirms the limit says for whom.
+	assignee := c.Assignee
+	if _, ok := args["assignee"]; ok || !patch {
+		a, err := s.parseAssignee(str(args, "assignee"))
+		if err != nil {
+			return false, ""
+		}
+		assignee, forBot, binds = a, spendHolder(a), true
+	}
+	reopen := patch && str(args, "status") == "reopen"
+	if reopen {
+		forBot, binds = spendHolder(assignee), true
+	}
+	if limit != nil && binds && forBot != "" {
+		switch {
+		case reopen && store.Closed(c.Status):
+			why = append(why, "the ticket reopened: its spend limit "+spendText(limit)+" confirmed again for bot:"+forBot)
+		case forBot != c.SpendFor && c.SpendFor != "":
+			why = append(why, "the spend limit "+spendText(limit)+" moves from bot:"+c.SpendFor+" to bot:"+forBot)
+		case forBot != c.SpendFor:
+			why = append(why, "the spend limit "+spendText(limit)+" confirmed for bot:"+forBot)
+		case len(why) > 0:
+			why = append(why, "for bot:"+forBot)
+		}
+	}
+	return len(why) > 0, strings.Join(why, "; ")
 }
 
 // TicketOwner is who a ticket's writes answer to: its assignee, or else the

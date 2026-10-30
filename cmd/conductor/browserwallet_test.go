@@ -308,6 +308,18 @@ func TestCaseBudgetOpAndAPI(t *testing.T) {
 			t.Errorf("%s: %d %s", path, rec.Code, rec.Body.String())
 		}
 	}
+	// A budget that reached this bot unconfirmed is held, and confirming it
+	// here widens, whatever the amount.
+	_ = st.UpdateBot("shopper", func(r *store.BotRecord) error { r.Cases["c3"].SpendFor = "other"; return nil })
+	if v := data(call("browser-case-budget", browserWalletReq{Bot: "shopper", Case: "c3", Show: true})); !strings.Contains(fmt.Sprint(v["held"]), "confirmed it for bot:other, not bot:shopper") {
+		t.Fatalf("an unconfirmed budget shows no hold: %+v", v)
+	}
+	if v := data(call("browser-case-budget", browserWalletReq{Bot: "shopper", Case: "c3", Amount: "100", Currency: "USD"})); v["change"] != changeWidening || v["held"] != nil {
+		t.Fatalf("confirming a held budget for its bot: %+v", v)
+	}
+	if c := st.Bot("shopper").Cases["c3"]; c.SpendFor != "shopper" {
+		t.Fatalf("confirmed for %q", c.SpendFor)
+	}
 	// Lowered, then cleared: narrowing.
 	if v := data(call("browser-case-budget", browserWalletReq{Bot: "shopper", Case: "c3", Amount: "90"})); v["change"] != changeNarrowing {
 		t.Fatalf("lowered: %+v", v)

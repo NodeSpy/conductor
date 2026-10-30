@@ -38,6 +38,10 @@ type CaseBudget struct {
 	Currency  string
 	Card      string
 	Merchants []string
+	// Held, when set, says why the case's budget allows nothing now (the
+	// limit was confirmed for another bot, the ticket moved on or closed):
+	// the purchase is refused with it, not left to the other layers.
+	Held string
 }
 
 // CaseBudgets reads a case's spend_limit by the case's reference
@@ -189,6 +193,8 @@ func evaluate(f *purchasesFile, r SpendRules, p Purchase, exclude string, now ti
 		states = append(states, st)
 		if refusal == nil {
 			switch {
+			case b.Held != "":
+				refusal = refuse("%s", b.Held)
 			case b.Currency != cur:
 				refusal = refuse("the purchase is in %s, this ticket's budget is in %s", cur, b.Currency)
 			case b.Card != "" && b.Card != card.Name:

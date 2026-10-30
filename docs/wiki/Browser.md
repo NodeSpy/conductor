@@ -700,7 +700,11 @@ No layer can widen another:
    are ceilings for its bots: `conductor validate` refuses a bot cap above
    its team's.
 4. **The ticket's budget**: a `spend_limit` on the case the purchase is made
-   for.
+   for. It is spent only by the bot an operator confirmed it for, on an open
+   ticket. A limit that reached another bot without an operator confirming
+   it, a closed ticket's, or the copy a moved ticket left behind allows
+   nothing: the purchase is refused with the reason (see
+   [Tickets → Spend limit](Tickets#spend-limit)).
 
 ```yaml
 teams:
@@ -738,6 +742,11 @@ conductor browser budget shopper c3 --clear
 - **Optional restrictions.** `--card` and `--merchant` hold the budget to one
   card and to those exact origins.
 - **No budget.** A case without one falls back to the other layers.
+- **One bot's.** Setting a case's budget confirms it for that case's bot. A
+  budget that reached a bot unconfirmed (see
+  [Tickets → Spend limit](Tickets#spend-limit)), a closed case's, or a moved
+  copy's allows nothing, and `case-budget --show` says why (`held`).
+  Confirming a held budget counts as widening, whatever the amount.
 - **Clamping.** A ticket's budget can never exceed the layers above it. A
   budget above the lowest 30-day cap of the bot, its team or the card is
   clamped there at every check, and setting one warns you.

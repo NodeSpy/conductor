@@ -1037,11 +1037,11 @@ type ledgerBudgets struct{}
 
 func (ledgerBudgets) CaseBudget(caseRef string) (browser.CaseBudget, bool) {
 	st := browserLedger.Load()
-	bot, caseID, ok := parseCaseRef(caseRef)
+	botName, caseID, ok := parseCaseRef(caseRef)
 	if st == nil || !ok {
 		return browser.CaseBudget{}, false
 	}
-	c := st.Bot(bot).Cases[caseID]
+	c := st.Bot(botName).Cases[caseID]
 	if c == nil || c.SpendLimit == nil {
 		return browser.CaseBudget{}, false
 	}
@@ -1050,8 +1050,10 @@ func (ledgerBudgets) CaseBudget(caseRef string) (browser.CaseBudget, bool) {
 		// An unreadable budget allows nothing (never falls back to none).
 		amt = 0
 	}
+	// A limit is spent only by the bot an operator confirmed it for, on an
+	// open ticket's live copy; otherwise it allows nothing, and says why.
 	return browser.CaseBudget{Key: caseBudgetKey(caseRef, c), Amount: amt, Currency: strings.ToUpper(c.SpendLimit.Currency),
-		Card: c.SpendLimit.Card, Merchants: c.SpendLimit.Merchants}, true
+		Card: c.SpendLimit.Card, Merchants: c.SpendLimit.Merchants, Held: bot.SpendHeld(botName, c)}, true
 }
 
 // caseBudgetKey is the accrual key a case's purchases count under. A ticket's
@@ -1090,6 +1092,9 @@ func caseBudgetOp(cfg *config.Config, m *browser.Manager, q *browserWalletReq, d
 	if c == nil {
 		return fail(fmt.Errorf("browser: bot %s has no case %s", q.Bot, q.Case))
 	}
+	if c.MovedTo != "" && !q.Show {
+		return fail(fmt.Errorf("browser: case %s moved to %s: set the budget where the ticket is now", q.Case, c.MovedTo))
+	}
 	ref := browser.CaseRef(q.Bot, q.Case)
 	standing := func() map[string]any {
 		out := map[string]any{"bot": q.Bot, "case": q.Case, "ticket": ref, "spend_limit": c.SpendLimit}
@@ -1107,6 +1112,11 @@ func caseBudgetOp(cfg *config.Config, m *browser.Manager, q *browserWalletReq, d
 		}
 		if w := budgetClampWarning(cfg, q.Bot, c.SpendLimit); w != "" {
 			out["warning"] = w
+		}
+		if c.SpendLimit != nil {
+			if h := bot.SpendHeld(q.Bot, c); h != "" {
+				out["held"] = h
+			}
 		}
 		return out
 	}
@@ -1134,6 +1144,11 @@ func caseBudgetOp(cfg *config.Config, m *browser.Manager, q *browserWalletReq, d
 		next = &store.SpendLimit{Amount: strconv.FormatFloat(amt, 'f', 2, 64), Currency: cur, Card: q.Card, Merchants: q.BMerchant}
 	}
 	change := classifyBudget(c.SpendLimit, next)
+	if next != nil && c.SpendFor != q.Bot {
+		// A budget is confirmed for this bot: one that reached it by a move,
+		// or a closed case's, widens what it may spend however it compares.
+		change = changeWidening
+	}
 	if q.DryRun {
 		return data(map[string]any{"change": change, "dry_run": true, "warning": budgetClampWarning(cfg, q.Bot, next)})
 	}
@@ -1142,13 +1157,16 @@ func caseBudgetOp(cfg *config.Config, m *browser.Manager, q *browserWalletReq, d
 		if cs == nil {
 			return fmt.Errorf("case %s vanished", q.Case)
 		}
-		cs.SpendLimit = next
+		cs.SpendLimit, cs.SpendFor = next, ""
+		if next != nil {
+			cs.SpendFor = q.Bot
+		}
 		return nil
 	}); err != nil {
 		return fail(err)
 	}
-	c.SpendLimit = next
-	audit(map[string]any{"action": "case-budget", "bot": q.Bot, "case": q.Case, "spend_limit": next, "change": change, "outcome": "ok"})
+	c.SpendLimit, c.SpendFor = next, q.Bot
+	audit(map[string]any{"action": "case-budget", "bot": q.Bot, "case": q.Case, "spend_limit": next, "spend_for": q.Bot, "change": change, "outcome": "ok"})
 	out := standing()
 	out["change"] = change
 	return data(out)

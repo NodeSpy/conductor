@@ -245,6 +245,9 @@ func ticketText(t map[string]any) string {
 			}
 		}
 		fmt.Fprintln(&b)
+		if h, _ := t["spend_held"].(string); h != "" {
+			fmt.Fprintf(&b, "  spend held: %s\n", h)
+		}
 	}
 	if ls, ok := t["labels"].([]any); ok && len(ls) > 0 {
 		var l []string

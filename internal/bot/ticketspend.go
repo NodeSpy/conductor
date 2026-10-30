@@ -215,6 +215,52 @@ func (s *Service) TicketSpend(bot, caseID string) (limit store.SpendLimit, spent
 	return *live.SpendLimit, s.ticketSpent(c.Ticket, live.SpendLimit), true
 }
 
+// SpendHeld says why bot may not spend under case c's spend limit, or ""
+// when it may. A limit is confirmed by an operator for one bot (SpendFor);
+// it is spent by that bot, on the live copy of an open ticket. A copy the
+// ticket left behind when it moved, a closed ticket, and a limit that
+// reached another bot without an operator confirming it (a handoff, a
+// team's routing or a lead's triage, a bot's reassignment) allow nothing:
+// the purchase is refused, never left to the looser layers.
+func SpendHeld(bot string, c *store.Case) string {
+	what := "case " + c.ID
+	if c.Ticket != "" {
+		what = "ticket " + c.Ticket
+	}
+	switch {
+	case c.MovedTo != "":
+		return what + " moved to " + c.MovedTo + ": its spend limit went with it"
+	case store.Closed(c.Status):
+		return what + " is " + c.Status + ": a closed ticket's spend limit allows nothing (an operator who reopens it confirms the limit again)"
+	case c.SpendFor != bot:
+		was := "no bot"
+		if c.SpendFor != "" {
+			was = "bot:" + c.SpendFor
+		}
+		return "the spend limit on " + what + " is held: an operator confirmed it for " + was + ", not bot:" + bot +
+			"; it is spent once an operator confirms it for bot:" + bot + " (sets the limit again, or assigns the ticket to it)"
+	}
+	return ""
+}
+
+// spendHolder is the bot an assignee keeps a limit for: "bot:<name>"'s
+// name, and "" for a team or the triage queue (the bot that picks the ticket
+// up there is confirmed afterwards).
+func spendHolder(assignee string) string {
+	if kind, name, _ := strings.Cut(assignee, ":"); kind == "bot" {
+		return name
+	}
+	return ""
+}
+
+// spendForText names the bot a limit is confirmed for, for a history line.
+func spendForText(bot string) string {
+	if bot == "" {
+		return "held until an operator confirms it for the bot that picks the ticket up"
+	}
+	return "confirmed for bot:" + bot
+}
+
 // spendText is a limit in a line: "120.00 USD on card visa at https://shop".
 func spendText(l *store.SpendLimit) string {
 	if l == nil {

@@ -110,6 +110,9 @@ type TicketView struct {
 	Links  map[string]any `json:"links,omitempty"`
 	// Spent is what has gone against its spend limit (set when it has one).
 	Spent *SpendStatus `json:"spent,omitempty"`
+	// SpendHeld says why the bot holding it may not spend under its limit
+	// (SpendHeld), when it may not.
+	SpendHeld string `json:"spend_held,omitempty"`
 }
 
 // reconcileTicketClaims recovers cross-home reassignments interrupted by a
@@ -432,7 +435,10 @@ func (s *Service) TicketCreate(ctx context.Context, a TicketActor, n TicketNew) 
 		Source: "ticket", Requester: who, RequesterClass: class, Created: now, Updated: now, SpendLimit: limit}
 	addHistory(&c, now, a.String(), "created ("+orNone(assignee)+", draft)")
 	if limit != nil {
-		addHistory(&c, now, a.String(), "spend limit "+spendText(limit))
+		// Only an operator sets a limit (checkSpendChange), and it is
+		// confirmed for the bot the ticket is assigned to.
+		c.SpendFor = spendHolder(assignee)
+		addHistory(&c, now, a.String(), "spend limit "+spendText(limit)+", "+spendForText(c.SpendFor))
 	}
 	loc, err := s.placeTicket(c, assignee)
 	if err != nil {
@@ -452,8 +458,12 @@ func (s *Service) TicketCreate(ctx context.Context, a TicketActor, n TicketNew) 
 			return nil
 		})
 	}
-	s.auditCtx(ctx, map[string]any{"event": "bot_ticket", "action": "create", "ticket": tid, "by": a.String(), "assignee": assignee,
-		"requester": who, "requester_class": class})
+	ev := map[string]any{"event": "bot_ticket", "action": "create", "ticket": tid, "by": a.String(), "assignee": assignee,
+		"requester": who, "requester_class": class}
+	if limit != nil {
+		ev["spend_limit"], ev["spend_for"] = spendText(limit), c.SpendFor
+	}
+	s.auditCtx(ctx, ev)
 	if n.Ready {
 		return s.TicketSetStatus(ctx, a, tid, store.TicketReady, "")
 	}
@@ -613,6 +623,7 @@ func (s *Service) TicketSetStatus(ctx context.Context, a TicketActor, tid, to, n
 		return s.TicketShow(tid)
 	}
 	now := s.now()
+	spendFor, rebound := "", false
 	err = s.updateTicket(loc, func(cc *store.Case) error {
 		// Re-validate the transition against the LIVE status, not the pre-lock
 		// snapshot: two concurrent moves both pass the earlier check, but the
@@ -634,12 +645,29 @@ func (s *Service) TicketSetStatus(ctx context.Context, a TicketActor, tid, to, n
 			cc.Outcome = oneLine(note, 500)
 		}
 		addHistory(cc, now, a.String(), what)
+		if cc.SpendLimit != nil {
+			// Closing ends a limit's confirmation; an operator's reopen
+			// confirms it again, for the bot assigned. A bot's reopen leaves
+			// it held.
+			switch {
+			case store.Closed(target):
+				cc.SpendFor = ""
+			case to == "reopen" && !a.isBot():
+				cc.SpendFor = spendHolder(cc.Assignee)
+				spendFor, rebound = cc.SpendFor, true
+				addHistory(cc, now, a.String(), "spend limit "+spendText(cc.SpendLimit)+" "+spendForText(cc.SpendFor))
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return TicketView{}, err
 	}
-	s.auditCtx(ctx, map[string]any{"event": "bot_ticket", "action": "status", "ticket": tid, "by": a.String(), "from": c.Status, "to": target})
+	ev := map[string]any{"event": "bot_ticket", "action": "status", "ticket": tid, "by": a.String(), "from": c.Status, "to": target}
+	if rebound {
+		ev["spend_limit"], ev["spend_for"] = spendText(c.SpendLimit), spendFor
+	}
+	s.auditCtx(ctx, ev)
 	if target == store.TicketReady {
 		if err := s.dispatchTicket(ctx, tid); err != nil {
 			return TicketView{}, err
@@ -733,7 +761,7 @@ func (s *Service) findTicketExcept(tid string, not ticketLoc) (store.Case, ticke
 func carryTicket(dst *store.Case, src *store.Case, bot string, at time.Time) {
 	dst.Ticket, dst.Description, dst.Priority, dst.Due = src.Ticket, src.Description, src.Priority, src.Due
 	dst.Labels, dst.CreatedBy, dst.ReadyBy = src.Labels, src.CreatedBy, src.ReadyBy
-	dst.Comments, dst.History, dst.SpendLimit = src.Comments, src.History, src.SpendLimit
+	dst.Comments, dst.History, dst.SpendLimit, dst.SpendFor = src.Comments, src.History, src.SpendLimit, src.SpendFor
 	// A team's ticket stays the team's, whichever member works it; a bot's
 	// is the bot's that now holds it.
 	dst.Assignee = src.Assignee
@@ -745,6 +773,11 @@ func carryTicket(dst *store.Case, src *store.Case, bot string, at time.Time) {
 		what = "moved to bot:" + bot
 	}
 	addHistory(dst, at, "bot:"+bot, what)
+	if src.SpendLimit != nil && src.SpendFor != bot {
+		// A limit reaches a bot it was not confirmed for (a team's routing,
+		// a handoff): it allows nothing until an operator confirms it.
+		addHistory(dst, at, "conductor", "spend limit held: "+SpendHeld(bot, dst))
+	}
 }
 
 // TicketMessage is a ticket as the bot that picks it up sees it.
@@ -814,14 +847,29 @@ func (s *Service) TicketEdit(ctx context.Context, a TicketActor, tid string, ch 
 		}
 	}
 	now := s.now()
+	spendFor, bound := "", false
 	err = s.updateTicket(loc, func(cc *store.Case) error {
 		var what []string
-		if ch.SpendLimit != nil && !sameSpendLimit(cc.SpendLimit, limit) {
+		// An operator who sets a limit confirms it for the bot holding the
+		// ticket now (none in a queue): restating the same limit is how a
+		// limit held after a move is confirmed. A bot's narrowing keeps it.
+		forBot := cc.SpendFor
+		if ch.SpendLimit != nil && !a.isBot() {
+			forBot = ""
+			if limit != nil {
+				forBot = loc.Bot
+			}
+		}
+		if ch.SpendLimit != nil && (!sameSpendLimit(cc.SpendLimit, limit) || forBot != cc.SpendFor) {
 			w := "spend limit " + spendText(limit)
 			if widening != "" {
 				w += " (a WIDENING: " + widening + ")"
 			}
-			cc.SpendLimit = limit
+			if limit != nil {
+				w += ", " + spendForText(forBot)
+			}
+			cc.SpendLimit, cc.SpendFor = limit, forBot
+			spendFor, bound = forBot, true
 			what = append(what, w)
 		}
 		if ch.Title != nil && title != cc.Title {
@@ -853,7 +901,11 @@ func (s *Service) TicketEdit(ctx context.Context, a TicketActor, tid string, ch 
 	if err != nil {
 		return TicketView{}, err
 	}
-	s.auditCtx(ctx, map[string]any{"event": "bot_ticket", "action": "edit", "ticket": tid, "by": a.String(), "widening": widening})
+	ev := map[string]any{"event": "bot_ticket", "action": "edit", "ticket": tid, "by": a.String(), "widening": widening}
+	if bound {
+		ev["spend_limit"], ev["spend_for"] = spendText(limit), spendFor
+	}
+	s.auditCtx(ctx, ev)
 	s.publishTicket(tid)
 	return s.TicketShow(tid)
 }
@@ -906,6 +958,26 @@ func (s *Service) TicketAssign(ctx context.Context, a TicketActor, tid, to strin
 		pc, pw, _ := homeAttribution(&rec)
 		class, who = lessTrusted(class, who, pc, pw)
 	}
+	// A spend limit moves with the ticket. An operator's assignment confirms
+	// it for the bot assigned (none for a team or the queue: the bot that
+	// picks it up is confirmed afterwards); a bot's leaves it confirmed for
+	// whom it was, so it is held wherever it lands until an operator
+	// confirms it there.
+	spendFor := c.SpendFor
+	if !a.isBot() {
+		spendFor = spendHolder(assignee)
+	}
+	spendNote := func(cc *store.Case) {
+		if cc.SpendLimit == nil {
+			return
+		}
+		note := spendForText(spendFor)
+		if h := spendHolder(assignee); h != "" && h != spendFor {
+			note = "held until an operator confirms it for bot:" + h
+		}
+		cc.SpendFor = spendFor
+		addHistory(cc, now, a.String(), "spend limit "+spendText(cc.SpendLimit)+" moves with it, "+note)
+	}
 	// assignOnto applies the reassignment to the live record under the lock,
 	// mutating only the fields assignment owns — so a comment or edit a
 	// concurrent op committed between the read above and this write is not
@@ -923,6 +995,7 @@ func (s *Service) TicketAssign(ctx context.Context, a TicketActor, tid, to strin
 			cc.Status = toStatus
 		}
 		addHistory(cc, now, a.String(), "assigned "+orNone(prev)+" → "+orNone(assignee))
+		spendNote(cc)
 		return nil
 	}
 	if c.Status == store.TicketDraft {
@@ -933,6 +1006,7 @@ func (s *Service) TicketAssign(ctx context.Context, a TicketActor, tid, to strin
 			moved.Assignee, moved.Requester, moved.RequesterClass = assignee, who, class
 			moved.MovedTo = ""
 			addHistory(&moved, now, a.String(), "assigned "+orNone(c.Assignee)+" → "+orNone(assignee))
+			spendNote(&moved)
 			// Claim the source draft before placing the copy: mark it moving
 			// under its own lock, so a second assign of the same draft racing to
 			// another home finds it already gone (findTicket skips a moved copy)
@@ -997,8 +1071,14 @@ func (s *Service) TicketAssign(ctx context.Context, a TicketActor, tid, to strin
 	if err != nil {
 		return TicketView{}, err
 	}
-	s.auditCtx(ctx, map[string]any{"event": "bot_ticket", "action": "assign", "ticket": tid, "by": a.String(), "from": c.Assignee, "to": assignee,
-		"requester": who, "requester_class": class})
+	ev := map[string]any{"event": "bot_ticket", "action": "assign", "ticket": tid, "by": a.String(), "from": c.Assignee, "to": assignee,
+		"requester": who, "requester_class": class}
+	if c.SpendLimit != nil {
+		// The audit says a limit moved, and whom it is confirmed for now
+		// ("" held: no operator confirmed it for the bot that will hold it).
+		ev["spend_limit"], ev["spend_limit_moved"], ev["spend_for"] = spendText(c.SpendLimit), true, spendFor
+	}
+	s.auditCtx(ctx, ev)
 	s.publishTicket(tid)
 	return s.TicketShow(tid)
 }
@@ -1090,6 +1170,11 @@ func (s *Service) TicketShow(tid string) (TicketView, error) {
 	if c.SpendLimit != nil {
 		st := s.ticketSpent(tid, c.SpendLimit)
 		v.Spent = &st
+		if loc.Bot != "" {
+			v.SpendHeld = SpendHeld(loc.Bot, &c)
+		} else if !store.Closed(c.Status) {
+			v.SpendHeld = "the spend limit is held until an operator confirms it for the bot that picks the ticket up"
+		}
 	}
 	if loc.Bot != "" {
 		rec := s.Ledger.Bot(loc.Bot)

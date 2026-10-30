@@ -366,7 +366,10 @@ export function Access(): JSX.Element {
               ) : (
                 <li data-testid="config-asks">Every config change (a new bot avatar too) and every restore</li>
               )}
-              <li>Loosening a browser wallet limit, or a ticket's spend limit</li>
+              <li>
+                Loosening a browser wallet limit or a ticket's spend limit, or giving a spend limit to another bot
+                (assigning or reopening its ticket)
+              </li>
               <li>Taking over a browser a bot is signed in to</li>
               <li>Adding or removing a way to sign in</li>
             </ul>

@@ -133,10 +133,31 @@ limit on a ticket it holds or wrote: a smaller amount, fewer merchants, a
 card pinned where there was none. Once it lowers the limit, it can't raise
 it back.
 
+**A limit belongs to one bot.** When you set a limit, you confirm it for
+the bot the ticket is assigned to, and only that bot spends under it. When
+the ticket moves, the limit moves with it but stays confirmed for the bot you
+chose:
+
+- You assign the ticket to another bot: the limit is confirmed for that bot.
+- A bot hands the ticket on, or a team's routing or its lead's triage picks
+  the bot: the limit is **held**. Purchases under it are refused until you
+  confirm it for the bot that holds it. Set the limit again (the same amount
+  is fine) or assign the ticket to that bot.
+- The copy a moved ticket leaves behind allows nothing.
+- A done or declined ticket's limit allows nothing. When you reopen the
+  ticket, you confirm the limit again for its assignee. When a bot reopens
+  it, the limit stays held.
+
+`ticket show` says when a limit is held, and why (`spend_held` in the API).
+The history and the audit log record each move of a limit, and the bot it is
+confirmed for (`spend_for`).
+
 From the web dashboard, a widening limit change (on a new ticket or an
-existing one) asks you to confirm first, like a widening wallet change. The
-confirmation is bound to that exact request. Lowering a limit needs no
-confirmation.
+existing one) asks you to confirm first, like a widening wallet change. So
+does confirming a limit for a bot it wasn't confirmed for: assigning the
+ticket to another bot, setting the limit again for the bot that holds it, or
+reopening the ticket. The confirmation is bound to that exact request and
+names the bot. Lowering a limit needs no confirmation.
 
 `ticket show` (and the API) prints the limit with **spent so far** and
 what's left. That figure comes from the purchase ledger and covers every
@@ -159,7 +180,8 @@ On the operator socket ([Bots → The operator API](Bots#the-operator-api)):
 
 `spend_limit` is `{amount, currency, card, merchants}`, or `null` to clear
 it. A ticket with a limit also has `spent`: `{known, spent, remaining,
-currency, why}`.
+currency, why}`, `spend_for` (the bot the limit is confirmed for) and, when
+its holder may not spend under it, `spend_held` (why not).
 
 An illegal transition or a refused authority is a `422`, with the reason.
 

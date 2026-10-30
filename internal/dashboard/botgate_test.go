@@ -65,7 +65,7 @@ func newBotRig(t *testing.T, record bool) *botRig {
 	botCfg := &config.Config{
 		Operators: map[string]config.OperatorConfig{"ops": {SSHKey: opsKey.pub}, "dev": {SSHKey: devKey.pub}},
 		Bots: map[string]config.BotConfig{"sre": {Operators: []string{"ops"}, Description: "sre"},
-			"devbot": {Operators: []string{"dev"}, Description: "devbot"}},
+			"devbot": {Operators: []string{"dev"}, Description: "devbot"}, "devbot2": {Operators: []string{"dev"}, Description: "devbot2"}},
 		Teams: map[string]config.TeamConfig{"platform": {Operators: []string{"ops"}}, "devteam": {Operators: []string{"dev"}}},
 	}
 	svc := &bot.Service{Cfg: func() *config.Config { return botCfg }, Ledger: st, Audit: st.Audit}
@@ -443,6 +443,63 @@ func TestBotAPITicketSpendWideningNeedsAStepup(t *testing.T) {
 	// A step-up for one request doesn't confirm another.
 	if rr := g.dev.doWith("PATCH", "/api/v1/tickets/"+tk.Ticket, map[string]any{"spend_limit": "500"}, tok); rr.Code != http.StatusUnauthorized {
 		t.Fatalf("a spent or foreign step-up: %d %s", rr.Code, rr.Body)
+	}
+}
+
+// A spend limit is confirmed for one bot: moving a ticket that has one to
+// another bot, or reopening it, confirms it again — the browser.write
+// step-up, its description naming the bot that will hold the budget. A
+// change that confirms nothing new needs none.
+func TestBotAPITicketSpendMoveNeedsAStepup(t *testing.T) {
+	g := newBotRig(t, false)
+	stepup := func(rr *httptest.ResponseRecorder) (string, string) {
+		t.Helper()
+		var refused struct {
+			Stepup struct{ Purpose, Digest, Description string } `json:"stepup"`
+		}
+		_ = json.Unmarshal(rr.Body.Bytes(), &refused)
+		if rr.Code != http.StatusUnauthorized || refused.Stepup.Purpose != string(auth.PurposeBrowserWrite) {
+			t.Fatalf("want a browser.write step-up: %d %s", rr.Code, rr.Body)
+		}
+		return refused.Stepup.Digest, refused.Stepup.Description
+	}
+	create := map[string]any{"title": "buy disks", "assignee": "devbot", "spend_limit": map[string]any{"amount": "120", "currency": "USD"}}
+	d, desc := stepup(g.dev.do("POST", "/api/v1/tickets", create))
+	if !strings.Contains(desc, "confirmed for bot:devbot") {
+		t.Fatalf("the create's step-up doesn't name the bot: %s", desc)
+	}
+	rr := g.dev.doWith("POST", "/api/v1/tickets", create, sshStepupAs(t, g.dev, g.devKey, auth.PurposeBrowserWrite, d))
+	var tk struct{ Ticket string }
+	if _ = json.Unmarshal(rr.Body.Bytes(), &tk); rr.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rr.Code, rr.Body)
+	}
+	path := "/api/v1/tickets/" + tk.Ticket
+
+	if rr := g.dev.do("PATCH", path, map[string]any{"title": "buy two disks"}); rr.Code != http.StatusOK {
+		t.Fatalf("a title edit needs no step-up: %d %s", rr.Code, rr.Body)
+	}
+	move := map[string]any{"assignee": "devbot2"}
+	d, desc = stepup(g.dev.do("PATCH", path, move))
+	if !strings.Contains(desc, "moves from bot:devbot to bot:devbot2") {
+		t.Fatalf("the reassignment's step-up doesn't name the new holder: %s", desc)
+	}
+	if rr := g.dev.doWith("PATCH", path, move, sshStepupAs(t, g.dev, g.devKey, auth.PurposeBrowserWrite, d)); rr.Code != http.StatusOK {
+		t.Fatalf("reassign with the step-up: %d %s", rr.Code, rr.Body)
+	}
+	if !strings.Contains(mustRead(t, g.auditLog), `"spend_for":"devbot2"`) {
+		t.Fatal("the audit doesn't record whom the limit moved to")
+	}
+
+	if rr := g.dev.do("PATCH", path, map[string]any{"status": "declined", "note": "not now"}); rr.Code != http.StatusOK {
+		t.Fatalf("declining needs no step-up: %d %s", rr.Code, rr.Body)
+	}
+	reopen := map[string]any{"status": "reopen"}
+	d, desc = stepup(g.dev.do("PATCH", path, reopen))
+	if !strings.Contains(desc, "reopened") || !strings.Contains(desc, "bot:devbot2") {
+		t.Fatalf("the reopen's step-up: %s", desc)
+	}
+	if rr := g.dev.doWith("PATCH", path, reopen, sshStepupAs(t, g.dev, g.devKey, auth.PurposeBrowserWrite, d)); rr.Code != http.StatusOK {
+		t.Fatalf("reopen with the step-up: %d %s", rr.Code, rr.Body)
 	}
 }
 
