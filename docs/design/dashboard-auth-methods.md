@@ -75,6 +75,13 @@ dashboard:
   even the same operator's, never show in or ride into them, and its review
   token is refused. An apply writes and clears the applying session's set
   only; another session's set stays staged against the new file.
+- **Both are bounded without evicting anyone.** At most 256 sessions hold a
+  staged set. A new session past that is refused, never given another
+  session's place; the sets of sessions that have ended are reclaimed
+  first. Each session holds one review token, replaced by its next review
+  or restore review (an older token is refused as stale), and at most 256
+  sessions hold one, the oldest going first. No number of reviews grows the
+  daemon's memory.
 - **History.** Every apply and restore keeps a backup of the config it
   replaced. The newest 50 are kept, and the oldest of each of the last 30
   days (how the config stood when that day's changes began), so a burst of

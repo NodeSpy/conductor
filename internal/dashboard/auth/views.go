@@ -80,6 +80,13 @@ func (m *Manager) liveSessions(operator string) []Session {
 	return out
 }
 
+// SessionLive reports whether a session id still signs in (the config
+// editor reclaims an ended session's staged edits when its table is full).
+func (m *Manager) SessionLive(id string) bool {
+	s, ok := m.deps.Store.Session(id)
+	return ok && m.sessionEnded(s, m.now()) == ""
+}
+
 // ListenerFact is one bound listener on the Access screen.
 type ListenerFact struct {
 	Listener string   `json:"listener"`

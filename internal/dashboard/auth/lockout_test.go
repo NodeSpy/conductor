@@ -436,3 +436,25 @@ func TestOperatorBucketsAreForConfiguredOperators(t *testing.T) {
 		t.Fatalf("an unknown name's lock reads differently:\n%s\n%s", gm, rm)
 	}
 }
+
+// SessionLive is what the config editor asks before it reclaims a session's
+// staged edits: a session that still signs in is live; an unknown, ended or
+// expired one is not.
+func TestSessionLive(t *testing.T) {
+	h := newMethodsHarness(t, nil)
+	ck, _, err := h.m.CreateSessionFor(localReq(), "ops", MethodSSH, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, _ := strings.Cut(ck.Value, ".")
+	if !h.m.SessionLive(id) {
+		t.Fatal("a fresh session isn't live")
+	}
+	if h.m.SessionLive("nope") || h.m.SessionLive("") {
+		t.Fatal("an unknown session is live")
+	}
+	h.clk.advance(13 * time.Hour)
+	if h.m.SessionLive(id) {
+		t.Fatal("an expired session is live")
+	}
+}

@@ -287,7 +287,10 @@ a one-value edit a one-line diff. Each change flows through one pipeline:
 
 1. **stage** — the edit is held server-side (`internal/configedit`), per
    signed-in session: another session's edits never show in your review or
-   ride into your apply. Last write to a path wins.
+   ride into your apply. Last write to a path wins. Up to 256 sessions can
+   have staged edits at once; past that, a new session's first edit is
+   refused until one applies, clears or signs out. Nobody's staged edits
+   are dropped to make room.
 2. **review** — the diff (line by line), the effects (each change in words), and
    the **widening** list surfaced loudly (any least-privilege guardrail the
    change loosens: `isolation: none`, `sandbox.agents: off`, a wildcard egress, a
@@ -297,7 +300,8 @@ a one-value edit a one-line diff. Each change flows through one pipeline:
    live file.
 4. **apply** — a two-step confirm (step-up): apply echoes a token bound to the
    exact reviewed candidate, so a change to the staged set after review is
-   rejected as stale. The live file is backed up, replaced atomically, and the
+   rejected as stale. Only your latest review's token applies: a new review
+   (or a restore review) replaces it. The live file is backed up, replaced atomically, and the
    daemon reloads (SIGHUP).
 5. **history / restore** — every apply keeps a backup of the config it
    replaced: the newest 50, and the oldest of each of the last 30 days. Restore

@@ -157,8 +157,7 @@ func (e Edits) RestoreReview(id string) (Review, []byte, error) {
 	diff := ComputeDiff(before, after)
 	sum := sha256.Sum256(after)
 	sha := hex.EncodeToString(sum[:])
-	tok := randID()
-	p.tokens.Store(tok, tokenBind{owner: e.owner, sha: sha})
+	tok := p.mintTokenLocked(e.owner, sha)
 	widening, guarded, leaves := p.classifyLocked(before, after)
 	rev := Review{
 		Changes: leaves,
@@ -198,7 +197,7 @@ func (e Edits) Restore(id, token string) (Applied, error) {
 		return Applied{}, ErrStale
 	}
 	if !ComputeDiff(before, after).Changed {
-		p.tokens.Delete(token)
+		p.dropTokenLocked(token)
 		return Applied{SHA: sha[:12], Unchanged: true}, nil
 	}
 	if err := p.validateCandidate(after); err != nil {
@@ -211,7 +210,7 @@ func (e Edits) Restore(id, token string) (Applied, error) {
 	if err := writeAtomic(p.path, after); err != nil {
 		return Applied{}, err
 	}
-	p.tokens.Delete(token)
+	p.dropTokenLocked(token)
 	delete(p.staged, e.owner)
 	p.collectLocked()
 	reloadErr := ""

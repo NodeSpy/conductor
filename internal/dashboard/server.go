@@ -146,6 +146,9 @@ func New(deps Deps) *Server {
 			Reload:   deps.Reload,
 			Guarded:  guardedConfig,
 			Collect:  deps.AvatarCollect,
+			// A full table of staged sets reclaims ended sessions' (with
+			// sign-in off there is only the unowned set).
+			Live: func(owner string) bool { return s.auth == nil || s.auth.SessionLive(owner) },
 		})
 	}
 	s.buildAuth() // the auth Manager + RPs (authwire.go); on error the API is refused (authErr)

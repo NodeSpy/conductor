@@ -165,3 +165,78 @@ func TestHistoryKeepsEachDaysStart(t *testing.T) {
 		}
 	}
 }
+
+// REVIEW TOKENS ARE BOUNDED: each owner holds one live token, replaced by
+// its next review or restore review, and at most maxOwners owners hold one
+// (the oldest goes), so no number of reviews grows the daemon's memory.
+func TestReviewTokensAreBounded(t *testing.T) {
+	p, _, _ := newPipe(t, cfgSample, nil)
+	a := p.As("session-a")
+	if _, err := a.Stage(Change{Path: []string{"settings", "greeting"}, Value: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := a.Review()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1000; i++ {
+		if _, err := a.Review(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	last, _ := a.Review()
+	if n := len(p.tokens); n != 1 {
+		t.Fatalf("one owner's reviews hold %d tokens", n)
+	}
+	if _, err := a.ApplyWith(first.Token, nil); !errors.Is(err, ErrStale) {
+		t.Fatalf("a replaced token still applies: %v", err)
+	}
+	for i := 0; i < 3*maxOwners; i++ {
+		if _, err := p.As(fmt.Sprintf("flood-%d", i)).Review(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(p.tokens) > maxOwners || len(p.ownerOf) > maxOwners {
+		t.Fatalf("%d tokens for %d owners held", len(p.tokens), len(p.ownerOf))
+	}
+	if _, err := a.ApplyWith(last.Token, nil); !errors.Is(err, ErrStale) {
+		t.Fatalf("the oldest owner's token outlived the cap: %v", err)
+	}
+	fresh, _ := a.Review()
+	if _, err := a.ApplyWith(fresh.Token, nil); err != nil {
+		t.Fatalf("a fresh review applies: %v", err)
+	}
+	if len(p.tokens) > maxOwners {
+		t.Fatalf("%d tokens", len(p.tokens))
+	}
+}
+
+// A FULL TABLE REFUSES A NEW OWNER rather than evicting anyone's staged
+// edits, but first reclaims the sets of owners whose session has ended.
+func TestStagedSetsAreNeverEvictedByAFlood(t *testing.T) {
+	path := writeCfg(t, cfgSample)
+	ended := map[string]bool{}
+	p := New(Options{Path: path, Live: func(owner string) bool { return !ended[owner] }})
+	victim := p.As("victim")
+	if _, err := victim.Stage(Change{Path: []string{"settings", "greeting"}, Value: "mine"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxOwners-1; i++ {
+		if _, err := p.As(fmt.Sprintf("flood-%d", i)).Stage(Change{Path: []string{"settings", "greeting"}, Value: "x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := p.As("one-more").Stage(Change{Path: []string{"settings", "greeting"}, Value: "x"}); err == nil || !strings.Contains(err.Error(), "sessions have staged config edits") {
+		t.Fatalf("a new owner past the cap: %v", err)
+	}
+	if len(victim.Staged()) != 1 {
+		t.Fatal("a flood evicted another owner's staged set")
+	}
+	ended["flood-7"] = true
+	if _, err := p.As("one-more").Stage(Change{Path: []string{"settings", "greeting"}, Value: "x"}); err != nil {
+		t.Fatalf("an ended session's set is reclaimed: %v", err)
+	}
+	if len(p.As("flood-7").Staged()) != 0 || len(victim.Staged()) != 1 {
+		t.Fatal("the wrong set was reclaimed")
+	}
+}

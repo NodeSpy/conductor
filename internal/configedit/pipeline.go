@@ -38,9 +38,14 @@ type Pipeline struct {
 	reload   func() error // signal the daemon to re-read its config (SIGHUP)
 	now      func() time.Time
 	collect  func(refs [][]byte)
+	live     func(owner string) bool
 
 	staged map[string]*stagedSet // owner → its staged edits
-	tokens sync.Map              // confirm token (string) → tokenBind
+	// Confirm tokens: one live token per owner, replaced by its next review
+	// (or restore review), and at most maxOwners owners' (the oldest goes),
+	// so reviews never grow memory. Guarded by mu.
+	tokens  map[string]tokenBind // token → what it binds
+	ownerOf map[string]string    // owner → its live token
 }
 
 // STAGED SETS ARE PER OWNER. The dashboard stages under the session's id, so
@@ -52,17 +57,20 @@ type Pipeline struct {
 // and tests).
 type stagedSet struct {
 	changes []Change
-	touched time.Time
 }
 
 // tokenBind is what a confirm token binds to: the owner whose review minted
-// it and the candidate's sha.
+// it and the candidate's sha, and when.
 type tokenBind struct {
 	owner, sha string
+	minted     time.Time
 }
 
 const (
-	maxOwners       = 256  // staged sets kept; the least recently touched goes first
+	// maxOwners is how many owners may have a staged set. A new owner past it
+	// is refused rather than evicting anyone's set, but the set of an owner
+	// whose session has ended (Options.Live) is reclaimed first.
+	maxOwners       = 256
 	maxStagedPerSet = 1000 // edits in one set
 )
 
@@ -95,12 +103,16 @@ type Options struct {
 	// other time, so a staged or validated config never points at a file
 	// collected after it. Optional.
 	Collect func(refs [][]byte)
+	// Live reports whether an owner (a session id) can still use its staged
+	// set. A full table reclaims the sets of owners that can't. Optional:
+	// without it no set is reclaimed.
+	Live func(owner string) bool
 }
 
 // New builds a Pipeline. Validate and Reload may be nil (validate then accepts
 // anything and reload is a no-op) — the dashboard always wires both.
 func New(opt Options) *Pipeline {
-	p := &Pipeline{path: opt.Path, validate: opt.Validate, reload: opt.Reload, now: opt.Now, guarded: opt.Guarded, collect: opt.Collect}
+	p := &Pipeline{path: opt.Path, validate: opt.Validate, reload: opt.Reload, now: opt.Now, guarded: opt.Guarded, collect: opt.Collect, live: opt.Live}
 	if p.validate == nil {
 		p.validate = func(string) error { return nil }
 	}
@@ -129,28 +141,27 @@ type Edits struct {
 // As is owner's view of the pipeline.
 func (p *Pipeline) As(owner string) Edits { return Edits{p: p, owner: owner} }
 
-// setLocked is owner's staged set, created (and the least recently touched set
-// evicted past maxOwners) when create is set.
+// setLocked is owner's staged set, created when create is set.
+// Past maxOwners a new set reclaims those of ended sessions; if none has
+// ended it is nil: nobody's staged edits are evicted for it.
 func (p *Pipeline) setLocked(owner string, create bool) *stagedSet {
 	if p.staged == nil {
 		p.staged = map[string]*stagedSet{}
 	}
 	set := p.staged[owner]
 	if set == nil && create {
-		if len(p.staged) >= maxOwners {
-			oldest := ""
-			for o, s := range p.staged {
-				if oldest == "" || s.touched.Before(p.staged[oldest].touched) {
-					oldest = o
+		if len(p.staged) >= maxOwners && p.live != nil {
+			for o := range p.staged {
+				if o != "" && !p.live(o) {
+					delete(p.staged, o)
 				}
 			}
-			delete(p.staged, oldest)
+		}
+		if len(p.staged) >= maxOwners {
+			return nil
 		}
 		set = &stagedSet{}
 		p.staged[owner] = set
-	}
-	if set != nil {
-		set.touched = p.now()
 	}
 	return set
 }
@@ -203,6 +214,9 @@ func (e Edits) stageLocked(c Change) (Change, error) {
 	}
 	c.Section = c.Path[0]
 	set := e.p.setLocked(e.owner, true)
+	if set == nil {
+		return Change{}, fmt.Errorf("configedit: %d sessions have staged config edits; one of them applies or clears its edits, or signs out, first", maxOwners)
+	}
 	// Replace any existing staged edit of the same path.
 	key := pathKey(c.Path)
 	for i, ex := range set.changes {
@@ -350,8 +364,7 @@ func (e Edits) Review() (Review, error) {
 	}
 	sum := sha256.Sum256(after)
 	sha := hex.EncodeToString(sum[:])
-	tok := randID()
-	p.tokens.Store(tok, tokenBind{owner: e.owner, sha: sha})
+	tok := p.mintTokenLocked(e.owner, sha)
 	return Review{Diff: diff, Effects: effects, Widening: widening, Guarded: guarded, Changes: leaves,
 		Stepup: len(widening) > 0 || len(guarded) > 0, SHA: sha[:12], Token: tok}, nil
 }
@@ -359,14 +372,44 @@ func (e Edits) Review() (Review, error) {
 // Review is the unowned set's Review.
 func (p *Pipeline) Review() (Review, error) { return p.As("").Review() }
 
-// tokenFor reports whether token was minted for owner over sha.
-func (p *Pipeline) tokenFor(token, owner, sha string) bool {
-	v, ok := p.tokens.Load(token)
-	if !ok {
-		return false
+// mintTokenLocked mints owner's confirm token over sha, replacing the one
+// its last review minted; past maxOwners owners, the oldest token goes.
+// Caller holds p.mu.
+func (p *Pipeline) mintTokenLocked(owner, sha string) string {
+	if p.tokens == nil {
+		p.tokens, p.ownerOf = map[string]tokenBind{}, map[string]string{}
 	}
-	b := v.(tokenBind)
-	return b.owner == owner && b.sha == sha
+	p.dropTokenLocked(p.ownerOf[owner])
+	if len(p.ownerOf) >= maxOwners {
+		oldest := ""
+		for _, t := range p.ownerOf {
+			if oldest == "" || p.tokens[t].minted.Before(p.tokens[oldest].minted) {
+				oldest = t
+			}
+		}
+		p.dropTokenLocked(oldest)
+	}
+	tok := randID()
+	p.tokens[tok] = tokenBind{owner: owner, sha: sha, minted: p.now()}
+	p.ownerOf[owner] = tok
+	return tok
+}
+
+// dropTokenLocked forgets a confirm token. Caller holds p.mu.
+func (p *Pipeline) dropTokenLocked(token string) {
+	if b, ok := p.tokens[token]; ok {
+		delete(p.tokens, token)
+		if p.ownerOf[b.owner] == token {
+			delete(p.ownerOf, b.owner)
+		}
+	}
+}
+
+// tokenFor reports whether token was minted for owner over sha. Caller
+// holds p.mu.
+func (p *Pipeline) tokenFor(token, owner, sha string) bool {
+	b, ok := p.tokens[token]
+	return ok && b.owner == owner && b.sha == sha
 }
 
 // classifyLocked is classify over the text, plus — with a Guarded loader — a
@@ -472,7 +515,7 @@ func (e Edits) ApplyWith(token string, gate func(needsStepup bool) error) (Appli
 
 	if ComputeDiff(before, after).Changed == false {
 		// Nothing to do; still a clean result.
-		p.tokens.Delete(token)
+		p.dropTokenLocked(token)
 		delete(p.staged, e.owner)
 		return Applied{SHA: sha[:12], Unchanged: true}, nil
 	}
@@ -495,7 +538,7 @@ func (e Edits) ApplyWith(token string, gate func(needsStepup bool) error) (Appli
 		return Applied{}, fmt.Errorf("write config: %w", err)
 	}
 
-	p.tokens.Delete(token)
+	p.dropTokenLocked(token)
 	delete(p.staged, e.owner)
 	p.collectLocked()
 
