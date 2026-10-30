@@ -323,6 +323,14 @@ test('approve a proposal with an authenticator-code step-up', async ({}, info) =
   const review = pwPage.getByTestId('review-proposal').first()
   await expect(review).toBeVisible({ timeout: 10_000 })
   await review.click()
+  // The approval view leads with the canonical action; the requester's words
+  // follow, labelled as theirs, with the bidi override escaped.
+  const canonical = pwPage.getByTestId('approval-canonical')
+  await expect(canonical).toContainText('"uses": "box.run"')
+  await expect(canonical).toContainText('"command": "true"')
+  await expect(pwPage.getByTestId('approval-requester-words')).toContainText(
+    "The requester's own words (not checked): run a command" + '\\' + 'u202egnorw',
+  )
   await pwPage.getByTestId('approve').click()
 
   const dialog = pwPage.getByTestId('stepup-dialog')
