@@ -95,6 +95,26 @@ type Session struct {
 	// (the operator's ssh_key; the password hash and authenticator secret).
 	// When it changes, the session ends (credFingerprint).
 	Cred string `json:"cred,omitempty"`
+
+	// from is the remote address of the request this session was validated
+	// for (never stored), so the audit names where an action came from.
+	from string
+}
+
+// From is the remote address of the request the session was validated for, or
+// the sign-in address for a session not read from a request.
+func (s Session) From() string {
+	if s.from != "" {
+		return s.from
+	}
+	return s.Addr
+}
+
+// Attribution is who did something and from where, for the audit log:
+// operator, session, sign-in method, remote address, listener and transport.
+func (s Session) Attribution() map[string]any {
+	return map[string]any{"operator": s.Operator, "session": s.ID, "method": string(s.EffectiveMethod()),
+		"addr": s.From(), "listener": string(s.Listener), "transport": string(sessTransport(s))}
 }
 
 // EffectiveMethod is the session's sign-in method, defaulting to passkey for a

@@ -284,3 +284,44 @@ func TestAuthStoreFailureFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+// The audit attributes an apply and the step-up that confirmed it: operator,
+// session, sign-in method, address, listener and the digest, so a change can be
+// tied to the session and network that made it.
+func TestApplyAuditNamesWhoAndWhere(t *testing.T) {
+	g := newStepupRig(t, "")
+	rev := g.stage(t, api.StageRequest{Path: []string{"pricing", "default", "input"}, Value: 3})
+	tok := g.sshStepup(t, rev.Token)
+	if rr := g.c.do("POST", "/api/v1/config/apply", api.ApplyRequest{Token: rev.Token, StepupToken: tok}); rr.Code != 200 {
+		t.Fatalf("apply: %d %s", rr.Code, rr.Body)
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(g.cfgPath), "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var e map[string]any
+		if json.Unmarshal([]byte(line), &e) == nil {
+			seen[e["event"].(string)] = e
+		}
+	}
+	for _, ev := range []string{"dashboard.config.apply", "dashboard_stepup"} {
+		e := seen[ev]
+		if e == nil {
+			t.Fatalf("no %s entry in %s", ev, b)
+		}
+		for k, want := range map[string]string{"operator": "ops", "method": "ssh", "addr": "192.0.2.50:1111",
+			"listener": string(bindListener(g.s.deps.Cfg.Dashboard.Bind[0])), "digest": rev.Token} {
+			if e[k] != want {
+				t.Errorf("%s %s = %v, want %q", ev, k, e[k], want)
+			}
+		}
+		if s, _ := e["session"].(string); s == "" {
+			t.Errorf("%s names no session: %v", ev, e)
+		}
+	}
+	if seen["dashboard.config.apply"]["session"] != seen["dashboard_stepup"]["session"] {
+		t.Fatalf("the apply and its step-up must name the same session: %v %v", seen["dashboard.config.apply"], seen["dashboard_stepup"])
+	}
+}

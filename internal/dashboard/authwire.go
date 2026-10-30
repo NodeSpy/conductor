@@ -419,7 +419,30 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "decide_failed", err.Error(), "")
 		return
 	}
+	s.audit(r, "dashboard.approval", digest, "bot", bot, "proposal", id, "decision", req.Decision, "action_sha256", actionSHA)
 	writeJSON(w, http.StatusOK, map[string]any{"bot": bot, "proposal": id, "decision": req.Decision, "by": sess.Operator})
+}
+
+// audit records an operator action with who did it and from where: the
+// session's operator, id and sign-in method, the request's address, listener
+// and transport, and the step-up digest it was confirmed against. Without a
+// session (sign-in off) the address and listener are still recorded.
+func (s *Server) audit(r *http.Request, event, digest string, kv ...string) {
+	e := map[string]any{}
+	if sess, ok := auth.SessionFrom(r); ok {
+		e = sess.Attribution()
+	} else {
+		c := auth.ConnOf(r)
+		e["addr"], e["listener"], e["transport"] = r.RemoteAddr, string(c.Listener), string(c.Transport)
+	}
+	e["event"] = event
+	if digest != "" {
+		e["digest"] = digest
+	}
+	for i := 0; i+1 < len(kv); i += 2 {
+		e[kv[i]] = kv[i+1]
+	}
+	s.deps.Store.Audit(e)
 }
 
 // nonEmptyJSON returns s if it is non-empty JSON, else a JSON null.

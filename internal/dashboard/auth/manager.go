@@ -237,6 +237,14 @@ func (m *Manager) operatorPubKey(operator string) (string, bool) {
 
 func (m *Manager) now() time.Time { return m.deps.Now() }
 
+// withFields adds key/value pairs to an audit entry.
+func withFields(e map[string]any, kv ...string) map[string]any {
+	for i := 0; i+1 < len(kv); i += 2 {
+		e[kv[i]] = kv[i+1]
+	}
+	return e
+}
+
 func (m *Manager) audit(e map[string]any) {
 	if m.deps.Audit != nil {
 		m.deps.Audit(e)

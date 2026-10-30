@@ -274,6 +274,12 @@ challenge.
   before (`webauthn` evidence). Any other method is presented as `dashboard`
   evidence that names the method, and the SSH signature when there is one. The
   approval's audit record carries the method.
+- **Attribution.** `dashboard_signin`, `dashboard_stepup`,
+  `dashboard_ssh_approved`, `dashboard.config.apply`/`restore`,
+  `dashboard.approval` and `dashboard.purchase` carry the operator, session id,
+  sign-in method, the request's remote address, the listener and transport, and
+  the confirmed digest. `dashboard_ssh_approved` names the approving and the
+  requesting address separately.
 - **Credential changes.** Setting or removing a password or authenticator, and
   adding a passkey from Access, use the purpose `credential.change`. Their
   digest names the operator and the action. Together with the config step-up

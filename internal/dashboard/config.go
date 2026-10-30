@@ -258,8 +258,10 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	// the exact candidate it is about to write, so nothing staged between
 	// review and apply slips past.
 	var refused error
+	stepped := "no"
 	applied, err := s.edit.ApplyWith(req.Token, func(need bool) error {
 		if need || s.stepupEveryApply() {
+			stepped = "yes"
 			refused = s.stepupCheck(r, req.Token, req.StepupToken)
 		}
 		return refused
@@ -276,7 +278,7 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "apply", err.Error(), "")
 		return
 	}
-	s.deps.Store.Audit(map[string]any{"event": "dashboard.config.apply", "sha": applied.SHA, "backup": applied.BackupID})
+	s.audit(r, "dashboard.config.apply", req.Token, "sha", applied.SHA, "backup", applied.BackupID, "stepup", stepped)
 	writeJSON(w, http.StatusOK, appliedDTO(applied))
 }
 
@@ -342,7 +344,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "restore", err.Error(), "")
 		return
 	}
-	s.deps.Store.Audit(map[string]any{"event": "dashboard.config.restore", "from": req.ID, "sha": applied.SHA})
+	s.audit(r, "dashboard.config.restore", req.Token, "from", req.ID, "sha", applied.SHA)
 	writeJSON(w, http.StatusOK, appliedDTO(applied))
 }
 

@@ -55,8 +55,7 @@ func (m *Manager) createSession(tmpl Session) (*http.Cookie, Session, error) {
 	if err := m.deps.Store.PutSession(sess, secret); err != nil {
 		return nil, Session{}, err
 	}
-	m.audit(map[string]any{"event": "dashboard_signin", "operator": sess.Operator, "session": sess.ID,
-		"listener": string(sess.Listener), "method": string(sess.EffectiveMethod()), "transport": string(sess.Transport)})
+	m.audit(withFields(sess.Attribution(), "event", "dashboard_signin"))
 	return m.cookie(sess.Listener, sessTransport(sess), sess.ID+"."+secret, sess.Expires), sess, nil
 }
 
@@ -126,6 +125,7 @@ func (m *Manager) ValidateCookie(r *http.Request, l Listener, node string) (Sess
 	}
 	m.deps.Store.TouchSession(id, now)
 	sess.LastSeen = now
+	sess.from = r.RemoteAddr
 	return sess, nil
 }
 

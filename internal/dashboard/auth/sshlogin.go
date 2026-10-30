@@ -555,6 +555,12 @@ func (m *Manager) ApproveSSH(ctx context.Context, r *http.Request, code, sig str
 	}
 	live.approved = sig
 	m.unindexCode(live) // the code is spent; the browser still holds the id
-	m.audit(map[string]any{"event": "dashboard_ssh_approved", "operator": live.operator, "kind": live.kind, "device": live.device})
+	e := map[string]any{"event": "dashboard_ssh_approved", "operator": live.operator, "kind": live.kind, "device": live.device,
+		"approver_addr": r.RemoteAddr, "approver_listener": string(ConnOf(r).Listener),
+		"requester_addr": live.addr, "listener": string(live.listener)}
+	if live.kind == sshKindStepup {
+		e["session"], e["purpose"], e["digest"] = live.session, string(live.purpose), live.digest
+	}
+	m.audit(e)
 	return nil
 }

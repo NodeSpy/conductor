@@ -386,5 +386,6 @@ func (s *Server) handleBrowserPurchaseDecision(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "decide_failed", err.Error(), "")
 		return
 	}
+	s.audit(r, "dashboard.purchase", digest, "purchase", id, "decision", req.Decision, "action_sha256", actionSHA)
 	writeJSON(w, http.StatusOK, map[string]any{"purchase": id, "decision": req.Decision, "by": sess.Operator})
 }

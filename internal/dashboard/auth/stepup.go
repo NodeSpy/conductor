@@ -204,8 +204,8 @@ func (m *Manager) mintStepup(sess Session, purpose Purpose, digest string, ev St
 		digest: digest, evidence: ev, expires: m.now().Add(ceremonyTTL),
 	}
 	m.mu.Unlock()
-	m.audit(map[string]any{"event": "dashboard_stepup", "operator": sess.Operator, "purpose": string(purpose),
-		"method": string(ev.Method), "credential": ev.CredID})
+	m.audit(withFields(sess.Attribution(), "event", "dashboard_stepup", "purpose", string(purpose),
+		"digest", digest, "stepup_method", string(ev.Method), "credential", ev.CredID))
 	return token, nil
 }
 

@@ -177,6 +177,13 @@ the authenticator code too when you have one. The
 confirmation is single use, bound to the action, and the audit log records the
 method.
 
+Sign-ins, confirmations, `approve-login` approvals, config applies and
+restores, and approval and purchase decisions are written to the audit log with
+the operator, the session, how it signed in, the remote address, the listener
+and the digest that was confirmed. An apply also records whether it needed a
+confirmation, and an `approve-login` entry records both the approving and the
+requesting address.
+
 Adding or removing a password, authenticator or passkey from Access is itself
 confirmed this way.
 

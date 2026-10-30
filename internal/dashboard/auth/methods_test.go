@@ -392,8 +392,23 @@ func TestStepupBySSH(t *testing.T) {
 	// Cross-device: approve-login against the code, then the page's poll gets
 	// the token.
 	v, _ = h.m.BeginSSHStepup(localReq(), sess, PurposeApprove, "d2")
-	if err := h.m.ApproveSSH(context.Background(), localReq(), v.Code, h.key.sign(t, StepupNamespace, v.Text)); err != nil {
+	var approved map[string]any
+	h.m.deps.Audit = func(e map[string]any) {
+		if e["event"] == "dashboard_ssh_approved" {
+			approved = e
+		}
+	}
+	approver := req("POST", "/x", "localhost:7788", onLocalhost, nil)
+	approver.RemoteAddr = "127.0.0.1:4242"
+	if err := h.m.ApproveSSH(context.Background(), approver, v.Code, h.key.sign(t, StepupNamespace, v.Text)); err != nil {
 		t.Fatalf("approve: %v", err)
+	}
+	// The audit names who approved from where, and what: the session, the
+	// purpose and the digest.
+	for k, want := range map[string]string{"approver_addr": "127.0.0.1:4242", "session": sess.ID, "purpose": string(PurposeApprove), "digest": "d2", "operator": "ops"} {
+		if approved[k] != want {
+			t.Errorf("dashboard_ssh_approved %s = %v, want %q", k, approved[k], want)
+		}
 	}
 	tok, done, err := h.m.PollSSHStepup(localReq(), sess, v.ID)
 	if err != nil || !done {
