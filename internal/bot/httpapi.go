@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // THE OPERATOR API (docs/wiki/Bots.md#the-operator-api) is HTTP for the
@@ -497,12 +498,7 @@ func (s *Service) apiTicketPatch(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, err)
 		return
 	}
-	edit := map[string]any{"ticket": tid}
-	for _, k := range []string{"title", "description", "priority", "due", "labels", "spend_limit"} {
-		if v, ok := args[k]; ok {
-			edit[k] = v
-		}
-	}
+	edit := ticketPatchEdit(tid, args)
 	var out map[string]any
 	if len(edit) > 1 {
 		if out, err = s.ticketOp(r.Context(), a, "ticket_edit", edit); err != nil {
@@ -527,6 +523,18 @@ func (s *Service) apiTicketPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	apiJSON(w, http.StatusOK, out)
+}
+
+// ticketPatchEdit is the edit a PATCH makes: the ticket, and only these keys
+// of the body.
+func ticketPatchEdit(tid string, args map[string]any) map[string]any {
+	edit := map[string]any{"ticket": tid}
+	for _, k := range []string{"title", "description", "priority", "due", "labels", "spend_limit"} {
+		if v, ok := args[k]; ok {
+			edit[k] = v
+		}
+	}
+	return edit
 }
 
 func (s *Service) apiTicketComment(w http.ResponseWriter, r *http.Request) {
@@ -702,6 +710,34 @@ func (s *Service) Operates(op, target string) bool {
 		}
 	}
 	return false
+}
+
+// TicketSpendWidens reports whether a request's spend_limit widens what may be
+// spent on ticket tid ("" and patch false: POST /v1/tickets, a new ticket;
+// patch true: PATCH /v1/tickets/{tid}), and how. It reads the body as those
+// handlers do, against the ticket's current limit. A spend_limit that doesn't
+// parse is left to the handler to refuse.
+func (s *Service) TicketSpendWidens(tid string, args map[string]any, patch bool) (bool, string) {
+	if patch {
+		args = ticketPatchEdit(tid, args)
+	}
+	present, l, err := spendArg(args)
+	if err != nil || !present {
+		return false, ""
+	}
+	nl, err := NormalizeSpendLimit(l)
+	if err != nil {
+		return false, ""
+	}
+	var old *store.SpendLimit
+	if patch {
+		c, _, err := s.findTicket(tid)
+		if err != nil {
+			return false, ""
+		}
+		old = c.SpendLimit
+	}
+	return spendLimitWidens(old, nl)
 }
 
 // TicketOwner is who a ticket's writes answer to: its assignee, or else the

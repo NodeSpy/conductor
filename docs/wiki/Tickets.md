@@ -133,6 +133,11 @@ limit on a ticket it holds or wrote: a smaller amount, fewer merchants, a
 card pinned where there was none. Once it lowers the limit, it can't raise
 it back.
 
+From the web dashboard, a widening limit change (on a new ticket or an
+existing one) asks you to confirm first, like a widening wallet change. The
+confirmation is bound to that exact request. Lowering a limit needs no
+confirmation.
+
 `ticket show` (and the API) prints the limit with **spent so far** and
 what's left. That figure comes from the purchase ledger and covers every
 copy of the ticket, so spending follows the ticket from bot to bot. On a

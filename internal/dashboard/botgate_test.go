@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -35,6 +36,7 @@ type botRig struct {
 	st       *store.Store
 	auditLog string
 	ops, dev *browserClient
+	devKey   sshTestKey
 	mu       sync.Mutex
 	hits     map[string][]seen
 }
@@ -66,7 +68,7 @@ func newBotRig(t *testing.T, record bool) *botRig {
 		Teams: map[string]config.TeamConfig{"platform": {Operators: []string{"ops"}}, "devteam": {Operators: []string{"dev"}}},
 	}
 	svc := &bot.Service{Cfg: func() *config.Config { return botCfg }, Ledger: st, Audit: st.Audit}
-	g := &botRig{svc: svc, st: st, auditLog: auditLog, hits: map[string][]seen{}}
+	g := &botRig{svc: svc, st: st, auditLog: auditLog, hits: map[string][]seen{}, devKey: devKey}
 
 	var routes []BotRoute
 	patterns := map[string]bool{}
@@ -362,4 +364,95 @@ func TestBotAPIAmbiguousBodies(t *testing.T) {
 	if n := len(g.hits["POST /v1/conversations/{id}/messages"]); n != 0 {
 		t.Fatalf("the handler ran %d times", n)
 	}
+}
+
+// sshStepupAs confirms purpose+digest on c's session with key and returns the
+// step-up token.
+func sshStepupAs(t *testing.T, c *browserClient, key sshTestKey, purpose auth.Purpose, digest string) string {
+	t.Helper()
+	var ch auth.SSHChallengeView
+	rr := c.do("POST", "/api/v1/auth/stepup/ssh/begin", map[string]string{"purpose": string(purpose), "digest": digest})
+	if err := json.Unmarshal(rr.Body.Bytes(), &ch); err != nil || ch.ID == "" {
+		t.Fatalf("ssh step-up begin: %d %s", rr.Code, rr.Body)
+	}
+	sig, err := auth.SignSSH(context.Background(), key.priv, ch.Namespace, []byte(ch.Text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	rr = c.do("POST", "/api/v1/auth/stepup/ssh/finish", map[string]string{"challenge_id": ch.ID, "signature": sig})
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil || out.Token == "" {
+		t.Fatalf("ssh step-up finish: %d %s", rr.Code, rr.Body)
+	}
+	return out.Token
+}
+
+// A ticket spend limit that widens what a bot may spend — set at create,
+// raised, given more merchants, or cleared — needs the browser.write step-up
+// on the dashboard, bound to the request, like the wallet's own widening
+// changes. Lowering it doesn't.
+func TestBotAPITicketSpendWideningNeedsAStepup(t *testing.T) {
+	g := newBotRig(t, false)
+	create := map[string]any{"title": "buy disks", "assignee": "devbot",
+		"spend_limit": map[string]any{"amount": "120", "currency": "USD", "merchants": []string{"https://shop.example.com"}}}
+	rr := g.dev.do("POST", "/api/v1/tickets", create)
+	var refused struct {
+		Stepup struct{ Purpose, Digest, Description string } `json:"stepup"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &refused)
+	if rr.Code != http.StatusUnauthorized || refused.Stepup.Purpose != string(auth.PurposeBrowserWrite) ||
+		!strings.Contains(refused.Stepup.Description, "a spend limit set") || !strings.Contains(refused.Stepup.Description, "https://shop.example.com") {
+		t.Fatalf("a spend limit at create: %d %s", rr.Code, rr.Body)
+	}
+	if n := strings.Count(mustRead(t, g.auditLog), `"action":"create"`); n != 0 {
+		t.Fatal("the refused create reached the bot service")
+	}
+	tok := sshStepupAs(t, g.dev, g.devKey, auth.PurposeBrowserWrite, refused.Stepup.Digest)
+	rr = g.dev.doWith("POST", "/api/v1/tickets", create, tok)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("with the step-up: %d %s", rr.Code, rr.Body)
+	}
+	var tk struct{ Ticket string }
+	_ = json.Unmarshal(rr.Body.Bytes(), &tk)
+
+	for _, widen := range []map[string]any{
+		{"spend_limit": map[string]any{"amount": "99999", "currency": "USD", "merchants": []string{"https://shop.example.com"}}},
+		{"spend_limit": map[string]any{"amount": "120", "currency": "USD", "merchants": []string{"https://shop.example.com", "https://evil.example"}}},
+		{"spend_limit": nil},
+	} {
+		if rr := g.dev.do("PATCH", "/api/v1/tickets/"+tk.Ticket, widen); rr.Code != http.StatusUnauthorized || !strings.Contains(rr.Body.String(), "stepup_required") {
+			t.Fatalf("widening %v: %d %s", widen, rr.Code, rr.Body)
+		}
+	}
+	lower := map[string]any{"spend_limit": map[string]any{"amount": "100", "currency": "USD", "merchants": []string{"https://shop.example.com"}}}
+	if rr := g.dev.do("PATCH", "/api/v1/tickets/"+tk.Ticket, lower); rr.Code != http.StatusOK {
+		t.Fatalf("lowering needs no step-up: %d %s", rr.Code, rr.Body)
+	}
+	// A step-up for one request doesn't confirm another.
+	if rr := g.dev.doWith("PATCH", "/api/v1/tickets/"+tk.Ticket, map[string]any{"spend_limit": "500"}, tok); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("a spent or foreign step-up: %d %s", rr.Code, rr.Body)
+	}
+}
+
+func mustRead(t *testing.T, p string) string {
+	t.Helper()
+	b, _ := os.ReadFile(p)
+	return string(b)
+}
+
+// doWith is do with a step-up token.
+func (c *browserClient) doWith(method, path string, body any, stepup string) *httptest.ResponseRecorder {
+	c.t.Helper()
+	b, _ := json.Marshal(body)
+	r := httptest.NewRequest(method, path, bytes.NewReader(b))
+	r.Host, r.RemoteAddr = c.host, c.addr
+	r.Header.Set("Content-Type", "application/json")
+	r.AddCookie(c.cookie)
+	r.Header.Set(auth.CSRFHeader, c.csrf)
+	r.Header.Set(auth.StepupHeader, stepup)
+	rr := httptest.NewRecorder()
+	c.h.ServeHTTP(rr, r)
+	return rr
 }

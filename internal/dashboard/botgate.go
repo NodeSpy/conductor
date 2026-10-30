@@ -51,6 +51,9 @@ type BotAuthority interface {
 	Operates(op, target string) bool
 	// TicketOwner is who a ticket's writes answer to ("" in the triage queue).
 	TicketOwner(id string) (string, error)
+	// TicketSpendWidens reports whether a create (patch false) or a PATCH of
+	// ticket id carries a spend_limit that widens what may be spent, and how.
+	TicketSpendWidens(id string, body map[string]any, patch bool) (bool, string)
 }
 
 // botTargets names what a write acts on, given the request and its JSON body
@@ -117,6 +120,19 @@ var botWriteRules = map[string]botTargets{
 	"POST /v1/bots/{name}/avatar/apply":    pathTarget("bot", "name"),
 	"POST /v1/teams/{name}/avatar/plan":    pathTarget("team", "name"),
 	"POST /v1/teams/{name}/avatar/apply":   pathTarget("team", "name"),
+}
+
+// botStepups are the writes that can widen what a bot may spend: a ticket's
+// spend limit set, raised, moved to another card or currency, given more
+// merchants, or cleared. On the dashboard they need the same browser.write
+// step-up, bound to the request, as the wallet's own widening changes.
+var botStepups = map[string]func(a BotAuthority, r *http.Request, body map[string]any) (bool, string){
+	"POST /v1/tickets": func(a BotAuthority, _ *http.Request, body map[string]any) (bool, string) {
+		return a.TicketSpendWidens("", body, false)
+	},
+	"PATCH /v1/tickets/{id}": func(a BotAuthority, r *http.Request, body map[string]any) (bool, string) {
+		return a.TicketSpendWidens(r.PathValue("id"), body, true)
+	},
 }
 
 // BotWriteRuled reports whether the chokepoint has a rule for a write route.
@@ -229,6 +245,25 @@ func (s *Server) botGate(rt BotRoute) http.Handler {
 				}
 				botRefuse(w, http.StatusForbidden, op+" is not an operator of "+what)
 				return
+			}
+		}
+		if widens := botStepups[rt.Pattern]; widens != nil && body != nil && s.authEnforced() && s.deps.BotAuthority != nil {
+			var args map[string]any
+			b, _ := json.Marshal(body)
+			_ = json.Unmarshal(b, &args)
+			if ok, why := widens(s.deps.BotAuthority, r2, args); ok {
+				dg, _ := json.Marshal(map[string]any{"v": "1", "ns": "conductor-dashboard-botapi", "route": rt.Pattern, "path": r2.URL.Path, "body": body})
+				digest := auth.DigestOf(dg)
+				if _, err := s.auth.RequireStepup(sess, auth.PurposeBrowserWrite, digest, r.Header.Get(auth.StepupHeader)); err != nil {
+					desc := auth.SafeText("a ticket change that widens what a bot can spend ("+why+"): "+r.Method+" "+r2.URL.Path) + "\n  " +
+						strings.Join(auth.SafeLines(prettyJSON(b)), "\n  ")
+					s.labels.note(r2, auth.PurposeBrowserWrite, digest, desc)
+					writeJSON(w, http.StatusUnauthorized, map[string]any{
+						"error":  map[string]string{"code": "stepup_required", "message": err.Error(), "hint": "confirm it's you, then try again"},
+						"stepup": map[string]string{"purpose": string(auth.PurposeBrowserWrite), "digest": digest, "description": desc},
+					})
+					return
+				}
 			}
 		}
 		if targets == nil {

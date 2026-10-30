@@ -381,6 +381,12 @@ mounted route:
   this is its assignee, or the bot holding it, plus the new assignee on a
   reassignment. A ticket in the triage queue is every operator's. Read marks
   and pins are the operator's own view, so they need nothing more.
+- A ticket create or `PATCH` whose `spend_limit` widens what a bot may spend
+  needs the `browser.write` step-up, bound to the route, the path and the
+  request body. Widening means setting a limit, raising it, changing its
+  currency or card, adding merchants or clearing it. It is the same purpose
+  the wallet's own widening changes use, decided by the bot service's own
+  classification. Lowering a limit needs none.
 - A write route with no rule at the chokepoint is refused. A test walks the
   daemon's real route list and fails on any write route without a rule.
 - Reads follow the bot API's own rules: any operator reads any conversation.
