@@ -53,9 +53,13 @@ dashboard:
   list, including one added to the config later, is guarded.
   - `pricing` is not only display: cost estimates and every `max_cost_usd`
     budget cap count with it. Raising an existing price only tightens the
-    caps, so that is inert. Lowering or removing a price, adding one (a new
-    model pattern or default can undercut the price that applied before), or
-    a value that is not a number is a widening.
+    caps, so that is inert, within reason: the new price is at most ten
+    times the old one and at most 10000 (dollars per million tokens), and
+    both are finite numbers above zero. A larger raise would make every cap
+    stop work at once and every estimate meaningless, so it is a widening.
+    So is lowering or removing a price, adding one (a new model pattern or
+    default can undercut the price that applied before), or a value that is
+    not a number (`.inf` and `.nan` included).
   - Within the inert list, only changes the editor can judge are inert:
     raising an existing price, and setting `usage.mode` (with or without a
     `usage` block). An edit whose loaded config differs elsewhere, or that
@@ -67,9 +71,9 @@ dashboard:
     written before the apply, so the restart each apply causes doesn't reset
     it. A record that can't be read counts as a spent window, and a use that
     can't be written isn't granted.
-  - What this mode gives up: a stolen session can raise prices (tightening the
-    caps, which can stop work early) and change the usage report mode, five
-    times in ten minutes. Setting it is itself a widening change.
+  - What this mode gives up: a stolen session can raise prices up to tenfold
+    (tightening the caps, which can stop work early) and change the usage
+    report mode, five times in ten minutes. Setting it is itself a widening change.
 - **Staged edits are per session.** A review, its confirmation and the apply
   cover the applying session's own staged edits. Another session's edits,
   even the same operator's, never show in or ride into them, and its review

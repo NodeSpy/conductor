@@ -360,7 +360,7 @@ export function Access(): JSX.Element {
                 <li data-testid="config-asks">
                   Every restore, and config changes (a new bot avatar too) except: setting{' '}
                   <span class="mono">usage.mode</span> or raising an existing price under{' '}
-                  <span class="mono">pricing</span>, up to 5 in 10 minutes (
+                  <span class="mono">pricing</span> (at most tenfold), up to 5 in 10 minutes (
                   <span class="mono">config_stepup: guarded</span>)
                 </li>
               ) : (

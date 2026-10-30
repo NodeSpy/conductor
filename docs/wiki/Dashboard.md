@@ -225,9 +225,10 @@ not be enough to change any of that.
 
 `config_stepup: guarded` is the one way to loosen this. It lets two kinds of
 edit apply on your session alone: raising a price that is already in
-`pricing`, and setting `usage.mode`. Lowering, removing or adding a price
-needs a confirmation, because every `max_cost_usd` budget cap is counted in
-those prices. Every other path still needs a confirmation: `operators`,
+`pricing`, to at most ten times what it was (and at most 10000 per million
+tokens), and setting `usage.mode`. Lowering, removing or adding a price, or
+raising one further than that, needs a confirmation, because every
+`max_cost_usd` budget cap is counted in those prices. Every other path still needs a confirmation: `operators`,
 `imports`, the whole `dashboard` and `store` blocks, triggers, workflows,
 checks, connectors, runtimes, hosts, packs, plugins, secrets, and any key the
 editor doesn't know. A widening change such as a lowered price,
@@ -237,8 +238,8 @@ judges the whole new config, including what it loads through imports, packs
 and YAML references, not only the value you edited. Applies that skip the
 confirmation are limited to five in ten minutes; after that they ask for one.
 What you give up with `guarded`: someone holding a stolen session can raise
-prices and change the usage report mode, five times in ten minutes, without
-your key.
+prices (up to tenfold each time) and change the usage report mode, five
+times in ten minutes, without your key.
 
 Every sign-in endpoint accepts only same-origin JSON requests: a request from
 another site, or a body that isn't `application/json`, is refused before it is

@@ -3,6 +3,7 @@ package configedit
 import (
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"strconv"
@@ -259,7 +260,7 @@ func classify(before, after []byte) (widening, guarded []Effect, leaves []LeafCh
 			}
 		}
 		if w == "" && hasPrefix(path, []string{"pricing"}) && !priceRaised(lb.val, la.val, inB, inA) {
-			w = fmt.Sprintf("%s %s (cost estimates and every max_cost_usd budget cap count with pricing; only raising an existing price is inert)",
+			w = fmt.Sprintf("%s %s (cost estimates and every max_cost_usd budget cap count with pricing; only raising an existing price, at most tenfold, is inert)",
 				map[bool]string{true: "changes or adds", false: "removes"}[inA], k)
 		}
 		if w != "" {
@@ -284,17 +285,32 @@ func classify(before, after []byte) (widening, guarded []Effect, leaves []LeafCh
 	return widening, guarded, leaves
 }
 
-// priceRaised reports whether a pricing leaf only went up: it existed, and
-// both values are numbers with the new one larger. Lowering, removing or
-// adding a price (a new model pattern or default can undercut the price that
-// applied before), or anything that isn't a number, is not.
+// A raised price stays inert only within reason: at most maxPriceRaise times
+// the price it replaces, and at most maxSanePrice ($ per 1M tokens). A
+// larger raise turns every max_cost_usd cap into a near-instant stop and
+// every cost estimate into noise, so it needs a confirmation like any other
+// pricing change.
+const (
+	maxPriceRaise = 10
+	maxSanePrice  = 10000
+)
+
+// priceRaised reports whether a pricing leaf only went up, within reason: it
+// existed, both values are finite positive numbers, and the new one is
+// larger, at most maxPriceRaise times the old and at most maxSanePrice.
+// Lowering, removing or adding a price (a new model pattern or default can
+// undercut the price that applied before), anything that isn't a finite
+// number, and a raise past those bounds are not.
 func priceRaised(before, after any, had, has bool) bool {
 	if !had || !has {
 		return false
 	}
 	b, okB := number(before)
 	a, okA := number(after)
-	return okB && okA && a > b
+	if !okB || !okA || math.IsInf(a, 0) || math.IsNaN(a) || math.IsInf(b, 0) || math.IsNaN(b) {
+		return false
+	}
+	return b > 0 && a > b && a <= b*maxPriceRaise && a <= maxSanePrice
 }
 
 func number(v any) (float64, bool) {

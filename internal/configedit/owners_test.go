@@ -75,8 +75,9 @@ func TestReviewTokensAreTheReviewersOwn(t *testing.T) {
 	}
 }
 
-// Raising an existing price is the only inert pricing change; lowering,
-// removing or adding one, or a value that isn't a number, widens.
+// Raising an existing price, at most tenfold and to a sane value, is the only
+// inert pricing change; lowering, removing or adding one, a value that isn't
+// a finite number, or a raise past those bounds, widens.
 func TestPricingOnlyRaisingIsInert(t *testing.T) {
 	base := "pricing:\n  default: {input: 3, output: 15}\n  models:\n    \"*sonnet*\": {input: 3, output: 15}\n"
 	for _, c := range []struct {
@@ -89,6 +90,10 @@ func TestPricingOnlyRaisingIsInert(t *testing.T) {
 		{"remove the block", "{}\n", true},
 		{"add a pattern", base + "    \"*\": {input: 0, output: 0}\n", true},
 		{"not a number", "pricing:\n  default: {input: \"3\", output: 15}\n  models:\n    \"*sonnet*\": {input: 3, output: 15}\n", true},
+		{"tenfold", "pricing:\n  default: {input: 30, output: 150}\n  models:\n    \"*sonnet*\": {input: 3, output: 15}\n", false},
+		{"past tenfold", "pricing:\n  default: {input: 30.01, output: 15}\n  models:\n    \"*sonnet*\": {input: 3, output: 15}\n", true},
+		{"infinite", "pricing:\n  default: {input: .inf, output: 15}\n  models:\n    \"*sonnet*\": {input: 3, output: 15}\n", true},
+		{"not a number (NaN)", "pricing:\n  default: {input: .nan, output: 15}\n  models:\n    \"*sonnet*\": {input: 3, output: 15}\n", true},
 	} {
 		w, g, leaves := classify([]byte(base), []byte(c.after))
 		if len(g) != 0 {
@@ -102,6 +107,10 @@ func TestPricingOnlyRaisingIsInert(t *testing.T) {
 				t.Errorf("%s: %s marked guarded", c.name, l.Path)
 			}
 		}
+	}
+	// Within tenfold, but past the sane ceiling.
+	if w, _, _ := classify([]byte("pricing:\n  default: {input: 9000, output: 15}\n"), []byte("pricing:\n  default: {input: 10001, output: 15}\n")); len(w) == 0 {
+		t.Error("an absurd price was inert")
 	}
 }
 
