@@ -1,6 +1,7 @@
 // End-to-end tests for the Run detail screen (design §4.3), against a REAL
 // throwaway daemon serving the REAL embedded SPA. The step tree, the step card
 // and the retry control are asserted against the daemon's own run record.
+import path from 'node:path'
 import { test, expect } from '../fixtures'
 import type { RunSummary, RunDetailResponse } from '../../src/api/types'
 
@@ -80,4 +81,5 @@ test('a forced retry asks to confirm, showing the steps it runs again', async ({
   await expect(dialog).toContainText('Re-run steps of a run that already ran')
   await expect(page.getByTestId('stepup-description')).toContainText('these steps already succeeded and run again')
   expect(sent).toMatchObject({ force: true })
+  await page.screenshot({ path: path.join(__dirname, '..', 'screenshots', `run-forced-retry-${test.info().project.name}.png`), fullPage: true })
 })

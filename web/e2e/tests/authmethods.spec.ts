@@ -203,6 +203,20 @@ test('set a password and an authenticator from Access, confirming with the SSH k
   await expect(asks).not.toContainText('vault')
   await expect(page.getByTestId('config-asks')).toContainText('avatar')
   await expect(asks).toContainText("ticket's spend limit")
+  await expect(asks).toContainText('giving a spend limit to another bot')
+  await expect(asks).toContainText('steps that already succeeded run again')
+  // With config_stepup: guarded the list says which price raises stay quiet.
+  await page.route('**/api/v1/access', async (route) => {
+    const res = await route.fetch()
+    const body = await res.json()
+    body.auth_policy.config_stepup = 'guarded'
+    await route.fulfill({ response: res, json: body })
+  })
+  await page.reload()
+  await expect(page.getByTestId('config-asks')).toContainText('(at most tenfold)')
+  await page.unroute('**/api/v1/access')
+  await page.reload()
+  await expect(page.getByTestId('config-asks')).not.toContainText('tenfold')
   await page.getByTestId('password-open').click()
   await page.getByTestId('password-new').fill(PASSWORD)
   await page.getByTestId('password-new2').fill(PASSWORD)
