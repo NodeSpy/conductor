@@ -566,3 +566,13 @@ func TestRegistryWiring(t *testing.T) {
 	}
 	ResetStores()
 }
+
+// fakeClock drives s's TTL clock by hand and returns the advance hook the
+// conformance suite takes, so expiry never depends on how long a write's fsync
+// takes on the machine running the tests.
+func fakeClock(s *Store) func(time.Duration) {
+	var nanos atomic.Int64
+	nanos.Store(time.Unix(1_000_000, 0).UnixNano())
+	s.now = func() time.Time { return time.Unix(0, nanos.Load()) }
+	return func(d time.Duration) { nanos.Add(int64(d)) }
+}

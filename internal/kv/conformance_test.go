@@ -316,5 +316,6 @@ func strContains(s, sub string) bool { return indexOf(s, sub) >= 0 }
 
 // TestConformanceBoltdb runs the shared suite against the boltdb backend.
 func TestConformanceBoltdb(t *testing.T) {
-	runConformance(t, openTemp(t))
+	s := openTemp(t)
+	runConformanceAdv(t, s, fakeClock(s))
 }
