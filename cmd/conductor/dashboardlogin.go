@@ -30,6 +30,12 @@ import (
 // --key the key file is enough; without it the operator's configured ssh_key is
 // used through the ssh-agent, which needs the config.
 func dashboardSSHCommand(sub string, args []string) error {
+	for _, a := range args {
+		if a == "--help" || a == "-h" || a == "help" {
+			fmt.Print(dashboardSSHHelp[sub])
+			return nil
+		}
+	}
 	var pos []string
 	fl := map[string]string{}
 	for i := 0; i < len(args); i++ {
@@ -61,6 +67,34 @@ func dashboardSSHCommand(sub string, args []string) error {
 		}
 		return dashboardSign(pos[0], fl)
 	}
+}
+
+var dashboardSSHHelp = map[string]string{
+	"approve-login": `usage: conductor dashboard approve-login <code> --url <dashboard url> --operator <name> [--key <ssh key>] [--config <file>] [--yes]
+
+Approves a dashboard sign-in or confirmation waiting on another device. It
+fetches the pending request for <code>, prints what it is (for a confirmation,
+the action as the dashboard describes it), asks, then signs it with the
+operator's SSH key and posts the signature.
+
+  --url       the dashboard's address, as the waiting browser uses it
+  --operator  the operator the request is for
+  --key       a private key file; without it the operator's ssh_key from the
+              config is used through the ssh-agent
+  --config    the config to read operators.<name>.ssh_key from
+  --yes, -y   don't ask before signing
+
+For a TLS listener with a certificate you made, point SSL_CERT_FILE at it.
+`,
+	"sign": `usage: conductor dashboard sign '<challenge>' [--key <ssh key>] [--config <file>]
+
+Prints the signature for a challenge the dashboard shows, to paste back into
+the page. It signs only dashboard sign-in and confirmation challenges.
+
+  --key     a private key file; without it the operator's ssh_key from the
+            config is used through the ssh-agent
+  --config  the config to read operators.<name>.ssh_key from
+`,
 }
 
 // signingKey resolves the key to sign with: --key, else the operator's

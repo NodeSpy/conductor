@@ -287,3 +287,21 @@ func TestApproveLoginSelfSignedHint(t *testing.T) {
 		t.Fatalf("want a hint naming SSL_CERT_FILE: %v", err)
 	}
 }
+
+// --help prints the usage instead of "--help needs a value", wherever it is.
+func TestApproveLoginHelp(t *testing.T) {
+	for _, c := range []struct {
+		sub  string
+		args []string
+		want string
+	}{
+		{"approve-login", []string{"--help"}, "usage: conductor dashboard approve-login <code>"},
+		{"approve-login", []string{"ABCD-EFGH", "-h"}, "--operator  the operator"},
+		{"sign", []string{"--help"}, "usage: conductor dashboard sign"},
+	} {
+		out, err := captureStdout(t, func() error { return dashboardSSHCommand(c.sub, c.args) })
+		if err != nil || !strings.Contains(out, c.want) {
+			t.Errorf("%s %v: err=%v out=%q", c.sub, c.args, err, out)
+		}
+	}
+}
