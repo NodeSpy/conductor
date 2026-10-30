@@ -100,6 +100,10 @@ type Deps struct {
 	// reviews, confirms, backs up, audits and applies it. Nil: avatar apply is
 	// refused.
 	AvatarStage func(kind, name, token string) (path []string, value any, del bool, err error)
+	// AvatarCollect removes uploaded pictures nothing references: the config
+	// pipeline's Collect, run after each apply or restore under its lock with
+	// every text that is or may become the config. Optional.
+	AvatarCollect func(refs [][]byte)
 
 	// Browser is the browser/wallet surface (design §4.5): live sessions with a
 	// screencast and takeover, personal details, payment cards and purchase
@@ -141,6 +145,7 @@ func New(deps Deps) *Server {
 			Validate: deps.Validate,
 			Reload:   deps.Reload,
 			Guarded:  guardedConfig,
+			Collect:  deps.AvatarCollect,
 		})
 	}
 	s.buildAuth() // the auth Manager + RPs (authwire.go); on error the API is refused (authErr)

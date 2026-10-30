@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,6 +37,7 @@ type Pipeline struct {
 	guarded  func(string) (any, error)
 	reload   func() error // signal the daemon to re-read its config (SIGHUP)
 	now      func() time.Time
+	collect  func(refs [][]byte)
 
 	staged map[string]*stagedSet // owner → its staged edits
 	tokens sync.Map              // confirm token (string) → tokenBind
@@ -85,12 +87,20 @@ type Options struct {
 	// on the text, so a change that reaches a guarded setting through imports
 	// or packs still needs a step-up. Optional.
 	Guarded func(path string) (any, error)
+	// Collect removes files only a config can reference (the dashboard's
+	// uploaded pictures) that nothing references any more. It runs after an
+	// apply or a restore, under the pipeline's lock, and is given every text
+	// that is or may become the config: the live file, every backup, and
+	// every owner's staged values (as JSON). Nothing is collected at any
+	// other time, so a staged or validated config never points at a file
+	// collected after it. Optional.
+	Collect func(refs [][]byte)
 }
 
 // New builds a Pipeline. Validate and Reload may be nil (validate then accepts
 // anything and reload is a no-op) — the dashboard always wires both.
 func New(opt Options) *Pipeline {
-	p := &Pipeline{path: opt.Path, validate: opt.Validate, reload: opt.Reload, now: opt.Now, guarded: opt.Guarded}
+	p := &Pipeline{path: opt.Path, validate: opt.Validate, reload: opt.Reload, now: opt.Now, guarded: opt.Guarded, collect: opt.Collect}
 	if p.validate == nil {
 		p.validate = func(string) error { return nil }
 	}
@@ -168,6 +178,23 @@ func (e Edits) Staged() []Change {
 func (e Edits) Stage(c Change) (Change, error) {
 	e.p.mu.Lock()
 	defer e.p.mu.Unlock()
+	return e.stageLocked(c)
+}
+
+// StageWith stages the change build returns, running build under the
+// pipeline's lock: a file build writes for the change (an uploaded picture)
+// is in the staged set before Collect can next run.
+func (e Edits) StageWith(build func() (Change, error)) (Change, error) {
+	e.p.mu.Lock()
+	defer e.p.mu.Unlock()
+	c, err := build()
+	if err != nil {
+		return Change{}, err
+	}
+	return e.stageLocked(c)
+}
+
+func (e Edits) stageLocked(c Change) (Change, error) {
 	if len(c.Path) == 0 {
 		return Change{}, fmt.Errorf("configedit: a change needs a path")
 	}
@@ -470,6 +497,7 @@ func (e Edits) ApplyWith(token string, gate func(needsStepup bool) error) (Appli
 
 	p.tokens.Delete(token)
 	delete(p.staged, e.owner)
+	p.collectLocked()
 
 	// reload
 	reloadErr := ""
@@ -477,6 +505,46 @@ func (e Edits) ApplyWith(token string, gate func(needsStepup bool) error) (Appli
 		reloadErr = err.Error()
 	}
 	return Applied{SHA: sha[:12], BackupID: backupID, ReloadError: reloadErr}, nil
+}
+
+// collectLocked runs Collect over every text that is or may become the
+// config. Caller holds p.mu.
+func (p *Pipeline) collectLocked() {
+	if p.collect == nil {
+		return
+	}
+	cur, err := p.current()
+	if err != nil {
+		// Without the live file nothing can be judged unreferenced.
+		return
+	}
+	refs := [][]byte{cur}
+	dir := filepath.Join(filepath.Dir(p.path), historyDir)
+	ents, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		return
+	}
+	for _, ent := range ents {
+		if ent.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, ent.Name()))
+		if err != nil {
+			// An unreadable backup may reference anything: collect nothing.
+			return
+		}
+		refs = append(refs, b)
+	}
+	for _, set := range p.staged {
+		for _, c := range set.changes {
+			b, err := json.Marshal(c.Value)
+			if err != nil {
+				return
+			}
+			refs = append(refs, b)
+		}
+	}
+	p.collect(refs)
 }
 
 // Applied is the result of a successful apply.

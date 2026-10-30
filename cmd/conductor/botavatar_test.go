@@ -67,10 +67,10 @@ func TestBotAvatarSetPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !plan.Valid || plan.Widening || plan.Image != "avatars/sre.png" || plan.Replaces {
+	if !plan.Valid || plan.Widening || !strings.HasPrefix(plan.Image, avatarContentDir+"/") || !isContentFile(filepath.Base(plan.Image)) || plan.Replaces {
 		t.Fatalf("plan: %+v", plan)
 	}
-	if !strings.Contains(plan.Diff, "+    avatar: {image: avatars/sre.png, shape: circle, eyes: wide, color: teal}") || !strings.Contains(plan.Diff, "-    avatar: { preset: owl, color: teal }") {
+	if !strings.Contains(plan.Diff, "+    avatar: {image: "+plan.Image+", shape: circle, eyes: wide, color: teal}") || !strings.Contains(plan.Diff, "-    avatar: { preset: owl, color: teal }") {
 		t.Fatalf("diff:\n%s", plan.Diff)
 	}
 	if now, _ := os.ReadFile(p); !bytes.Equal(now, before) {
@@ -85,7 +85,7 @@ func TestBotAvatarSetPlan(t *testing.T) {
 	if err := writeAvatar(p, plan); err != nil {
 		t.Fatal(err)
 	}
-	img, err := os.ReadFile(filepath.Join(filepath.Dir(p), "avatars", "sre.png"))
+	img, err := os.ReadFile(filepath.Join(filepath.Dir(p), plan.Image))
 	if err != nil || avatar.Format(img) != "png" {
 		t.Fatalf("the picture: %v", err)
 	}
@@ -100,12 +100,12 @@ func TestBotAvatarSetPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a := cfg.Bots["sre"].Avatar; a.Image != "avatars/sre.png" || a.Shape != "circle" || a.Eyes != "wide" || a.Color != "teal" || a.ImagePath == "" {
+	if a := cfg.Bots["sre"].Avatar; a.Image != plan.Image || a.Shape != "circle" || a.Eyes != "wide" || a.Color != "teal" || a.ImagePath == "" {
 		t.Fatalf("loaded avatar: %+v", a)
 	}
 	// Again: it replaces the picture. Clearing keeps the face.
 	again, err := planAvatar(p, "sre", photo(t, 64, 64), &avatar.Crop{X: 0, Y: 0, Side: 32})
-	if err != nil || !again.Replaces || !again.Valid {
+	if err != nil || !again.Replaces || !again.Valid || again.Image == plan.Image {
 		t.Fatalf("second set: %+v %v", again, err)
 	}
 	clr, err := planAvatar(p, "sre", nil, nil)
@@ -114,7 +114,7 @@ func TestBotAvatarSetPlan(t *testing.T) {
 	}
 	// A bot with no face: set adds image alone; clear removes avatar: entirely.
 	pl, err := planAvatar(p, "plain", photo(t, 10, 10), nil)
-	if err != nil || !strings.Contains(pl.Diff, "+    avatar: {image: avatars/plain.png}") {
+	if err != nil || !strings.Contains(pl.Diff, "+    avatar: {image: "+pl.Image+"}") {
 		t.Fatalf("plain: %+v %v", pl, err)
 	}
 	// The config changed since the plan: refused.
@@ -235,7 +235,7 @@ func TestBotAvatarAPI(t *testing.T) {
 	}
 	// A file swapped in by hand that is not an image is refused at serve
 	// time, never passed through.
-	_ = os.WriteFile(filepath.Join(filepath.Dir(p), "avatars", "sre.png"), []byte("<svg/>"), 0o644)
+	_ = os.WriteFile(filepath.Join(filepath.Dir(p), cur.Bots["sre"].Avatar.Image), []byte("<svg/>"), 0o644)
 	if w := do("GET", "/v1/bots/sre/avatar", nil, ""); w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("a swapped file: %d", w.Code)
 	}
@@ -245,7 +245,7 @@ func TestBotAvatarAPI(t *testing.T) {
 }
 
 // A TEAM'S PICTURE goes through the same pipeline: re-encoded, planned on a
-// copy, written as avatars/team-<name>.png (never a bot's file) with one
+// copy, written under a name of its own content with one
 // avatar line on the team; its icon is kept as the fallback; the API plans,
 // applies and serves it, and a team's token never applies to a bot.
 func TestTeamAvatarSet(t *testing.T) {
@@ -258,10 +258,10 @@ func TestTeamAvatarSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !plan.Valid || plan.Image != "avatars/team-platform.png" || plan.Team != "platform" || plan.Bot != "" {
+	if !plan.Valid || !strings.HasPrefix(plan.Image, avatarContentDir+"/") || plan.Team != "platform" || plan.Bot != "" {
 		t.Fatalf("plan: %+v", plan)
 	}
-	if !strings.Contains(plan.Diff, "+    avatar: {image: avatars/team-platform.png, icon: radar, color: teal}") {
+	if !strings.Contains(plan.Diff, "+    avatar: {image: "+plan.Image+", icon: radar, color: teal}") {
 		t.Fatalf("diff:\n%s", plan.Diff)
 	}
 	if err := writeAvatar(p, plan); err != nil {
@@ -271,11 +271,8 @@ func TestTeamAvatarSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a := cfg.Teams["platform"].Avatar; a.Image != "avatars/team-platform.png" || a.ImagePath == "" || a.Icon != "radar" {
+	if a := cfg.Teams["platform"].Avatar; a.Image != plan.Image || a.ImagePath == "" || a.Icon != "radar" {
 		t.Fatalf("loaded: %+v", a)
-	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(p), "avatars", "platform.png")); err == nil {
-		t.Fatal("a team's picture landed at a bot's path")
 	}
 	if _, err := planAvatarFor(p, "team", "nope", photo(t, 8, 8), nil); err == nil || !strings.Contains(err.Error(), `no team "nope"`) {
 		t.Fatalf("an unknown team: %v", err)
@@ -340,58 +337,127 @@ func TestTeamAvatarRefusesASession(t *testing.T) {
 
 // The dashboard's avatar apply stages a config edit instead of writing the
 // config: the picture lands under a name of its own content that nothing
-// references yet, the live config is untouched, and the edit — applied by the
-// config pipeline — names it and loads. A second upload for the same bot
-// replaces the first unreferenced picture rather than piling up.
+// references yet, the plan's diff shows that name, the live config is
+// untouched, and the edit — applied by the config pipeline — names it and
+// loads. Staging removes nothing: a picture is kept while any session's
+// staged edit, the live config or a backup names it, and collected only
+// after an apply. Pictures named by hand are never collected.
 func TestDashboardAvatarApplyStagesAConfigEdit(t *testing.T) {
 	p := avatarConfig(t)
+	dir := filepath.Dir(p)
 	before, _ := os.ReadFile(p)
 	m := &botStack{}
 	defer func(old string) { botConfigPath = old }(botConfigPath)
 	botConfigPath = p
-	stageOne := func(img []byte, crop *avatar.Crop) (string, map[string]any) {
+	pipe := configedit.New(configedit.Options{Path: p, Validate: func(c string) error { _, err := config.Load(c); return err },
+		Collect: func(refs [][]byte) { collectAvatars(p, refs) }})
+	exists := func(rel string) bool { _, err := os.Stat(filepath.Join(dir, rel)); return err == nil }
+	// stageAs plans a picture and stages it in owner's set, as the
+	// dashboard's handler does (under the editor's lock).
+	stageAs := func(owner string, img []byte, crop *avatar.Crop) string {
+		t.Helper()
 		plan, err := planAvatarFor(p, "bot", "sre", img, crop)
 		if err != nil || !plan.Valid {
 			t.Fatalf("plan: %v %+v", err, plan)
 		}
+		if !strings.Contains(plan.Diff, plan.Image) || !strings.HasPrefix(plan.Image, avatarContentDir+"/") {
+			t.Fatalf("the plan's diff doesn't show the name it stages (%s):\n%s", plan.Image, plan.Diff)
+		}
 		tok := m.avatarPlans().put(plan)
-		path, value, del, err := m.dashboardAvatarStage("bot", "sre", tok)
-		if err != nil || del || strings.Join(path, ".") != "bots.sre.avatar" {
-			t.Fatalf("stage: %v %v %v", path, del, err)
+		ch, err := pipe.As(owner).StageWith(func() (configedit.Change, error) {
+			path, value, del, err := m.dashboardAvatarStage("bot", "sre", tok)
+			return configedit.Change{Path: path, Value: value, Delete: del}, err
+		})
+		if err != nil || ch.Delete || strings.Join(ch.Path, ".") != "bots.sre.avatar" {
+			t.Fatalf("stage: %+v %v", ch, err)
 		}
 		if _, _, _, err := m.dashboardAvatarStage("bot", "sre", tok); err == nil {
 			t.Fatal("a plan token stages once")
 		}
-		v := value.(map[string]any)
-		return v["image"].(string), v
+		name := ch.Value.(map[string]any)["image"].(string)
+		if name != plan.Image || !isContentFile(filepath.Base(name)) || !exists(name) {
+			t.Fatalf("staged image %q (planned %q)", name, plan.Image)
+		}
+		return name
 	}
-	img1, _ := stageOne(photo(t, 64, 64), nil)
+	apply := func(owner string) error {
+		t.Helper()
+		rev, err := pipe.As(owner).Review()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = pipe.As(owner).ApplyWith(rev.Token, nil)
+		return err
+	}
+	// Pictures named by hand, a team's included: never collected, whatever
+	// their names look like.
+	for _, hand := range []string{"avatars/sre.png", "avatars/team-0123456789ab.png", "avatars/team-platform.png"} {
+		if err := os.MkdirAll(filepath.Join(dir, "avatars"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, hand), photo(t, 8, 8), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The review's race: two sessions stage different pictures for one bot.
+	victim := stageAs("victim", photo(t, 64, 64), nil)
 	if after, _ := os.ReadFile(p); string(after) != string(before) {
 		t.Fatal("staging wrote the config")
 	}
-	if !strings.HasPrefix(img1, "avatars/sre-") || !isContentName(strings.TrimSuffix(strings.TrimPrefix(img1, "avatars/sre-"), ".png")) {
-		t.Fatalf("image name %q", img1)
-	}
-	img2, value := stageOne(photo(t, 64, 64), &avatar.Crop{X: 0, Y: 0, Side: 20})
-	if img1 == img2 {
+	other := stageAs("other", photo(t, 64, 64), &avatar.Crop{X: 0, Y: 0, Side: 20})
+	if victim == other {
 		t.Fatal("two different pictures got one name")
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(p), img1)); !os.IsNotExist(err) {
-		t.Fatal("an earlier unreferenced upload was left behind")
+	if !exists(victim) {
+		t.Fatal("another session's upload removed a staged picture")
 	}
-	pipe := configedit.New(configedit.Options{Path: p, Validate: func(c string) error { _, err := config.Load(c); return err }})
-	if _, err := pipe.Stage(configedit.Change{Path: []string{"bots", "sre", "avatar"}, Value: value}); err != nil {
-		t.Fatal(err)
+	// An upload whose staged edit is dropped is unreferenced.
+	dropped := stageAs("dropper", photo(t, 64, 64), &avatar.Crop{X: 10, Y: 10, Side: 30})
+	pipe.As("dropper").Clear()
+
+	if err := apply("other"); err != nil {
+		t.Fatalf("the other session's apply: %v", err)
 	}
-	rev, err := pipe.Review()
+	if !exists(victim) || !exists(other) {
+		t.Fatal("an apply collected a picture a staged set or the live config names")
+	}
+	if exists(dropped) {
+		t.Fatal("an unreferenced upload survived the apply")
+	}
+	if err := apply("victim"); err != nil {
+		t.Fatalf("the victim's confirmed apply: %v", err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil || cfg.Bots["sre"].Avatar == nil || cfg.Bots["sre"].Avatar.Image != victim {
+		t.Fatalf("after apply: %v %+v", err, cfg.Bots["sre"].Avatar)
+	}
+	// The other picture is in a backup now, so it's kept and a restore of
+	// that backup loads.
+	if !exists(other) {
+		t.Fatal("a picture a backup names was collected")
+	}
+	hist, err := pipe.History()
+	if err != nil || len(hist) == 0 {
+		t.Fatalf("history: %v %v", hist, err)
+	}
+	var withOther string
+	for _, h := range hist {
+		b, _ := os.ReadFile(filepath.Join(dir, ".conductor-config-history", h.ID+".yaml"))
+		if strings.Contains(string(b), other) {
+			withOther = h.ID
+		}
+	}
+	rev, _, err := pipe.RestoreReview(withOther)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pipe.Apply(rev.Token); err != nil {
-		t.Fatalf("the staged avatar edit applies: %v", err)
+	if _, err := pipe.Restore(withOther, rev.Token); err != nil {
+		t.Fatalf("restoring the backup that names the other picture: %v", err)
 	}
-	cfg, err := config.Load(p)
-	if err != nil || cfg.Bots["sre"].Avatar == nil || cfg.Bots["sre"].Avatar.Image != img2 {
-		t.Fatalf("after apply: %v %+v", err, cfg.Bots["sre"].Avatar)
+	for _, hand := range []string{"avatars/sre.png", "avatars/team-0123456789ab.png", "avatars/team-platform.png"} {
+		if !exists(hand) {
+			t.Fatalf("a picture named by hand was collected: %s", hand)
+		}
 	}
 }

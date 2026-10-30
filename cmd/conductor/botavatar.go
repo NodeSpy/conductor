@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -29,8 +30,9 @@ import (
 // Setting one is a config change made like every other: the upload is
 // re-encoded (a square PNG of at most 512px, pixels only), the change is
 // validated on a copy of the config, and shown as a diff. Nothing is written
-// without --write; then the image lands at avatars/<bot>.png beside the
-// config and `avatar: { image: avatars/<bot>.png }` in the bot's entry. Not a
+// without --write; then the image lands beside the config under a name of
+// its own content (avatars/content/<sha>.png), named in the bot's entry as
+// `avatar: { image: avatars/content/<sha>.png }`. Not a
 // widening: a picture changes nothing a bot may do. The dashboard gets the
 // same plan, and an apply, over the operator API.
 
@@ -59,13 +61,6 @@ func (p *avatarPlan) key() string {
 	return "bot:" + p.Bot
 }
 
-// avatarRel is where a bot's uploaded picture lives, relative to the config;
-// a team's is avatars/team-<name>.png, so a bot and a team of one name never
-// share a file.
-func avatarRel(name string) string { return "avatars/" + name + ".png" }
-
-func teamAvatarRel(name string) string { return "avatars/team-" + name + ".png" }
-
 func sha(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
 
 // planAvatar plans setting (img non-nil) or clearing a bot's picture. Its
@@ -87,7 +82,7 @@ func planAvatarFor(cfgPath, kind, name string, img []byte, crop *avatar.Crop) (*
 		return nil, fmt.Errorf("your config does not load as it is: %w", err)
 	}
 	var cur0 *config.BotAvatar
-	rel, set := avatarRel(name), config.SetBotAvatar
+	set := config.SetBotAvatar
 	plan := &avatarPlan{Bot: name, cfgHash: sha(src)}
 	switch kind {
 	case "team":
@@ -95,7 +90,7 @@ func planAvatarFor(cfgPath, kind, name string, img []byte, crop *avatar.Crop) (*
 		if !ok {
 			return nil, fmt.Errorf("no team %q", name)
 		}
-		cur0, rel, set = t.Avatar, teamAvatarRel(name), config.SetTeamAvatar
+		cur0, set = t.Avatar, config.SetTeamAvatar
 		plan.Bot, plan.Team = "", name
 	default:
 		m, ok := cur.Bots[name]
@@ -115,10 +110,10 @@ func planAvatarFor(cfgPath, kind, name string, img []byte, crop *avatar.Crop) (*
 		if plan.png, err = avatar.Normalize(img, crop, avatar.Size); err != nil {
 			return nil, err
 		}
-		plan.Image, plan.Bytes = rel, len(plan.png)
-		if _, err := os.Stat(filepath.Join(dir, plan.Image)); err == nil {
-			plan.Replaces = true
-		}
+		// The config names the picture by its content: the diff shows the
+		// name that is written (or staged), and every upload has its own.
+		plan.Image, plan.Bytes = avatarContentRel(plan.png), len(plan.png)
+		plan.Replaces = cur0 != nil && cur0.Image != ""
 		a := face
 		a.Image = plan.Image
 		next = &a
@@ -175,15 +170,7 @@ func writeAvatar(cfgPath string, p *avatarPlan) error {
 		return errors.New("the config changed since this plan — plan it again")
 	}
 	if p.png != nil {
-		dst := filepath.Join(filepath.Dir(cfgPath), p.Image)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		tmp := dst + ".conductor-new"
-		if err := os.WriteFile(tmp, p.png, 0o644); err != nil {
-			return err
-		}
-		if err := os.Rename(tmp, dst); err != nil {
+		if err := writeAvatarFile(cfgPath, p); err != nil {
 			return err
 		}
 	}
@@ -193,17 +180,16 @@ func writeAvatar(cfgPath string, p *avatarPlan) error {
 // stageAvatar turns a valid plan into a config edit for the dashboard's
 // config pipeline, which reviews, confirms (per config_stepup), backs up,
 // audits and applies it under its own lock like any other edit. The picture
-// is written now, under a name of its own content
-// (avatars/<name>-<sha>.png), which nothing references until that apply; the
-// entity's other unreferenced pictures of that form are removed, so uploads
-// can't pile up.
+// is written now, under the plan's content name, which nothing references
+// until that apply. Nothing is removed here: the pipeline collects
+// unreferenced pictures after an apply (collectAvatars).
 func stageAvatar(cfgPath string, p *avatarPlan) (path []string, value any, del bool, err error) {
 	if !p.Valid {
 		return nil, nil, false, errors.New("the change does not validate — nothing staged")
 	}
-	kind, name, rel := "bots", p.Bot, avatarRel(p.Bot)
+	kind, name := "bots", p.Bot
 	if p.Team != "" {
-		kind, name, rel = "teams", p.Team, teamAvatarRel(p.Team)
+		kind, name = "teams", p.Team
 	}
 	path = []string{kind, name, "avatar"}
 	if p.next == nil {
@@ -211,32 +197,8 @@ func stageAvatar(cfgPath string, p *avatarPlan) (path []string, value any, del b
 	}
 	a := *p.next
 	if p.png != nil {
-		stem := strings.TrimSuffix(rel, ".png")
-		a.Image = stem + "-" + sha(p.png)[:12] + ".png"
-		dir := filepath.Dir(cfgPath)
-		dst := filepath.Join(dir, a.Image)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		if err := writeAvatarFile(cfgPath, p); err != nil {
 			return nil, nil, false, err
-		}
-		tmp := dst + ".conductor-new"
-		if err := os.WriteFile(tmp, p.png, 0o644); err != nil {
-			return nil, nil, false, err
-		}
-		if err := os.Rename(tmp, dst); err != nil {
-			return nil, nil, false, err
-		}
-		live := ""
-		if cur, err := config.Load(cfgPath); err == nil {
-			if la, ok := avatarOf(cur, strings.TrimSuffix(kind, "s"), name); ok && la != nil {
-				live = filepath.Clean(la.Image)
-			}
-		}
-		olds, _ := filepath.Glob(filepath.Join(dir, stem+"-*.png"))
-		for _, o := range olds {
-			r, _ := filepath.Rel(dir, o)
-			if r != filepath.Clean(a.Image) && r != live && isContentName(strings.TrimPrefix(strings.TrimSuffix(filepath.Base(o), ".png"), filepath.Base(stem)+"-")) {
-				_ = os.Remove(o)
-			}
 		}
 	}
 	v := map[string]any{}
@@ -248,17 +210,87 @@ func stageAvatar(cfgPath string, p *avatarPlan) (path []string, value any, del b
 	return path, v, false, nil
 }
 
-// isContentName reports a stageAvatar content suffix: 12 lowercase hex digits.
-func isContentName(s string) bool {
-	if len(s) != 12 {
+// writeAvatarFile writes a plan's picture at its content name.
+func writeAvatarFile(cfgPath string, p *avatarPlan) error {
+	dst := filepath.Join(filepath.Dir(cfgPath), p.Image)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	tmp := dst + ".conductor-new"
+	if err := os.WriteFile(tmp, p.png, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
+}
+
+// avatarContentDir holds uploaded pictures, each named for its content
+// (avatarContentRel). No bot's or team's own name is ever a path there, so
+// collecting them can't reach a picture an operator named by hand.
+const avatarContentDir = "avatars/content"
+
+// avatarContentRel is a picture's content name, relative to the config.
+func avatarContentRel(png []byte) string { return avatarContentDir + "/" + sha(png)[:32] + ".png" }
+
+// isContentFile reports a file name in avatarContentDir: 32 lowercase hex
+// digits and ".png".
+func isContentFile(name string) bool {
+	h, ok := strings.CutSuffix(name, ".png")
+	if !ok || len(h) != 32 {
 		return false
 	}
-	for _, c := range s {
+	for _, c := range h {
 		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
 			return false
 		}
 	}
 	return true
+}
+
+// collectAvatars removes the uploaded pictures (avatarContentDir) that
+// nothing references: not the live config (as loaded, imports included),
+// not any backup, not any session's staged edit (refs, from the config
+// pipeline, which calls this after an apply or a restore under its lock).
+// A picture is kept when its content name appears in any of them. If the
+// live config doesn't load, nothing is collected.
+func collectAvatars(cfgPath string, refs [][]byte) {
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return
+	}
+	var names []string
+	for _, b := range cfg.Bots {
+		if b.Avatar != nil {
+			names = append(names, b.Avatar.Image)
+		}
+	}
+	for _, t := range cfg.Teams {
+		if t.Avatar != nil {
+			names = append(names, t.Avatar.Image)
+		}
+	}
+	refs = append(refs, []byte(strings.Join(names, "\n")))
+	dir := filepath.Join(filepath.Dir(cfgPath), avatarContentDir)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, ent := range ents {
+		name := ent.Name()
+		if ent.IsDir() || !isContentFile(name) {
+			continue
+		}
+		h := []byte(strings.TrimSuffix(name, ".png"))
+		used := false
+		for _, r := range refs {
+			if bytes.Contains(r, h) {
+				used = true
+				break
+			}
+		}
+		if !used {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
 }
 
 func printAvatarPlan(p *avatarPlan) {
@@ -267,11 +299,11 @@ func printAvatarPlan(p *avatarPlan) {
 		who = "Team " + p.Team
 	}
 	if p.Image != "" {
-		verb := "writes"
+		instead := ""
 		if p.Replaces {
-			verb = "replaces"
+			instead = ", in place of its current picture"
 		}
-		fmt.Printf("%s: a %d-byte PNG (re-encoded, at most %dpx square, no metadata) — %s %s beside the config\n", who, p.Bytes, avatar.Size, verb, p.Image)
+		fmt.Printf("%s: a %d-byte PNG (re-encoded, at most %dpx square, no metadata) — writes %s beside the config%s\n", who, p.Bytes, avatar.Size, p.Image, instead)
 	} else {
 		fmt.Printf("%s: its picture is removed from the config (the file itself is left in place)\n", who)
 	}

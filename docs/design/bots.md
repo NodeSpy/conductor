@@ -556,8 +556,19 @@ tagline, personality) came from one.
   `validateAvatar` with `allowFace=false` (no shape, eyes or preset). The mascots are bots' faces,
   and an icon needs its own color because a team has no identity color.
   Its picture goes through the same resolve, re-encode, plan and serve
-  path, at `avatars/team-<team>.png`, so a bot and a team of one name never
-  share a file; a plan token is bound to "bot:" or "team:" plus the name.
+  path; a plan token is bound to "bot:" or "team:" plus the name.
+- **Uploaded pictures are named for their content**:
+  `avatars/content/<32 hex of the sha256>.png`, for a bot or a team, from
+  the CLI or the dashboard. The plan's diff shows that name, which is the
+  one written or staged. No bot's or team's name is a path in that
+  directory, so nothing named by hand is ever matched there. Staging
+  writes the file and adds the edit under the config pipeline's lock, and
+  removes nothing. The pipeline's `Collect` hook runs after each apply or
+  restore, under the same lock, and removes a content file only when no
+  text names it: not the live config (as loaded, imports included), not
+  any backup, not any session's staged edit. A config that validated
+  therefore never points at a file collected after it, and a restore of
+  any kept backup finds its pictures.
 - **The voice section is subordinate, by position and by statement.** It is
   rendered after the charter, every rule and (in a sweep) the notify
   threshold. It says it governs how the bot writes, never what it may do,

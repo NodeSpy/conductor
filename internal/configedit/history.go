@@ -213,6 +213,7 @@ func (e Edits) Restore(id, token string) (Applied, error) {
 	}
 	p.tokens.Delete(token)
 	delete(p.staged, e.owner)
+	p.collectLocked()
 	reloadErr := ""
 	if err := p.reload(); err != nil {
 		reloadErr = err.Error()

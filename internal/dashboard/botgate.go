@@ -152,13 +152,19 @@ func (s *Server) avatarStage(kind string) http.Handler {
 			writeError(w, http.StatusConflict, "read_only", "this dashboard can't edit the config", "")
 			return
 		}
-		name := r.PathValue("name")
-		path, value, del, err := s.deps.AvatarStage(kind, name, r.FormValue("token"))
-		if err != nil {
-			writeError(w, http.StatusNotFound, "avatar_plan", err.Error(), "plan it again")
+		name, token := r.PathValue("name"), r.FormValue("token")
+		// The picture is written and staged under the editor's lock, so no
+		// apply's collection runs between the two.
+		var planErr error
+		ch, err := s.edits(r).StageWith(func() (configedit.Change, error) {
+			path, value, del, err := s.deps.AvatarStage(kind, name, token)
+			planErr = err
+			return configedit.Change{Path: path, Value: value, Delete: del, Summary: kind + " " + name + "'s picture"}, err
+		})
+		if planErr != nil {
+			writeError(w, http.StatusNotFound, "avatar_plan", planErr.Error(), "plan it again")
 			return
 		}
-		ch, err := s.edits(r).Stage(configedit.Change{Path: path, Value: value, Delete: del, Summary: kind + " " + name + "'s picture"})
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "stage", err.Error(), "")
 			return

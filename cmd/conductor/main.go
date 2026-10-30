@@ -1118,6 +1118,9 @@ func cmdRun(args []string) error {
 			// when no bots run here.
 			BotRoutes: botRoutes, BotAuthority: botAuthority,
 			AvatarStage: dashboardAvatarStageFor(bots),
+			// After each apply or restore, under the editor's lock: the
+			// uploaded pictures nothing references any more.
+			AvatarCollect: func(refs [][]byte) { collectAvatars(cfgFile, refs) },
 			// The browser/wallet surface (§4.5): live sessions, personal details,
 			// payment cards and purchase approvals, over the same control layer the
 			// CLI uses. Reads empty when no browser is configured.

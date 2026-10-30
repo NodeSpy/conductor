@@ -184,8 +184,9 @@ bots:
 
   An upload (at most 8 MB) is decoded and **re-encoded**: cropped to a
   square (the centre, or your crop box), scaled to at most 512px, and
-  written as a PNG with no metadata to `avatars/<bot>.png` beside the
-  config, plus one `avatar:` line. Like any config change it's validated on
+  written as a PNG with no metadata beside the config, under a name of its
+  own content (`avatars/content/<hash>.png`), plus one `avatar:` line that
+  names it. Like any config change it's validated on
   a copy and shown as a diff, and nothing is written without `--write`.
   It's not a widening: a picture changes nothing a bot may do. The
   dashboard plans the same way through the operator API (below), and gets
@@ -193,8 +194,11 @@ bots:
   doesn't write the config: it stages the change in your config edits, and
   you review and apply it like any other config change, with a confirmation
   when `config_stepup` asks for one, a backup and an audit entry. The
-  picture is written at once under a name of its own content
-  (`avatars/<bot>-<hash>.png`), which nothing uses until that apply.
+  picture is written at once, and nothing uses it until that apply. An
+  uploaded picture is kept while your config, any config backup or anyone's
+  staged edit names it. After an apply or a restore, the dashboard removes
+  the uploads nothing names any more. It never removes a picture you put
+  in `avatars/` yourself.
 - **Display name** is what the bot calls itself and what a chat connector
   shows. The config id (`platform-sre`) stays the bot's address everywhere:
   in commands, in routing, on approvals and in the ledger.
@@ -1014,14 +1018,13 @@ icon or a picture:
 teams:
   platform:
     avatar: { icon: radar, color: teal }          # an icon needs its own color (a team has none to lend)
-    # avatar: { image: avatars/team-platform.png, icon: radar, color: teal }   # a picture; the icon is its fallback face
+    # avatar: { image: avatars/platform.png, icon: radar, color: teal }   # a picture; the icon is its fallback face
 ```
 
 A picture is checked like a bot's (PNG, JPEG or WebP by content, never SVG,
 no polyglot, inside the config's directory, within 2 MB and 2048px). An
 upload is re-encoded the same way: a square PNG of at most 512px with no
-metadata, at `avatars/team-<team>.png`, so a bot and a team with the same
-name never share a file. A face on a team fails `conductor validate`,
+metadata, under a name of its own content like a bot's. A face on a team fails `conductor validate`,
 naming the team. With no avatar, clients show the team's initials.
 
 ```
