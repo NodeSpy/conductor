@@ -45,13 +45,17 @@ const (
 	maxSSHPendingNetwork = 256
 	maxSSHPendingSession = 5
 	// On loopback every local process shares one address, so a client cap
-	// would let any of them block the operator's sign-in. There, pending
-	// sign-ins are kept per operator name instead: maxSSHPendingClient each,
-	// and a new begin evicts that name's oldest rather than being refused.
-	// Begins for names that aren't configured operators ("ghosts") behave the
-	// same from outside but live in their own share (maxSSHGhosts, oldest
-	// evicted first), so they never hold a configured operator's slot or the
-	// table's.
+	// would let any of them block the operator's sign-in. There, a pending
+	// sign-in is bound to the browser that began it (the BeginCookie): each
+	// beginner has its own share of maxSSHPendingClient, and its own new
+	// begin evicts its own oldest. A begin never evicts another beginner's
+	// challenge; past maxSSHPendingLoop the table refuses new begins (for at
+	// most sshChallengeTTL) and keeps every pending one. Begins for names
+	// that aren't configured operators ("ghosts") behave the same from
+	// outside but live in a share of their own (maxSSHGhosts, oldest evicted
+	// first: a ghost can never verify), so they never hold a configured
+	// operator's slot or the table's.
+	maxSSHPendingLoop = 1024
 	maxSSHGhosts      = 256
 	maxSSHCodeTries   = 3 // wrong signatures against a code before it burns
 	sshKindLogin      = "login"
@@ -93,7 +97,11 @@ type sshChallenge struct {
 	// loop: a sign-in begun on loopback. ghost: one for an operator who isn't
 	// configured (it can never verify).
 	loop, ghost bool
-	seq         uint64 // begin order, for evicting the oldest
+	// beginner: the BeginCookie of the browser that began a loopback
+	// sign-in; only that browser finishes or polls it. "" (no cookie): a
+	// share of its own.
+	beginner string
+	seq      uint64 // begin order, for evicting the oldest
 }
 
 // SSHChallengeView is what the browser gets back from a begin.
@@ -200,6 +208,10 @@ func FormatLoginCode(code string) string {
 
 // beginSSH creates a challenge of kind for the request.
 func (m *Manager) beginSSH(r *http.Request, kind, operator string, sess Session, purpose Purpose, digest string) (SSHChallengeView, error) {
+	return m.beginSSHAs(r, kind, operator, sess, purpose, digest, sshBeginner(r))
+}
+
+func (m *Manager) beginSSHAs(r *http.Request, kind, operator string, sess Session, purpose Purpose, digest, beginner string) (SSHChallengeView, error) {
 	if !safeOperator.MatchString(operator) {
 		return SSHChallengeView{}, errors.New("that is not a valid operator name")
 	}
@@ -241,7 +253,7 @@ func (m *Manager) beginSSH(r *http.Request, kind, operator string, sess Session,
 		started: m.now(), expires: exp,
 	}
 	if kind == sshKindLogin && loopbackRequest(r) {
-		ch.loop = true
+		ch.loop, ch.beginner = true, beginner
 		ch.ghost = m.deps.Operators == nil || m.deps.Operators()[operator] == ""
 	}
 	m.mu.Lock()
@@ -273,15 +285,27 @@ func (m *Manager) sshRoomLocked(ch *sshChallenge) bool {
 		return n < maxSSHPendingSession
 	}
 	if ch.loop {
-		// This name's own pending sign-ins on loopback, and (for a ghost)
-		// every ghost: past the cap, the oldest goes.
-		m.evictOldestLocked(func(c *sshChallenge) bool {
-			return c.kind == sshKindLogin && c.loop && c.ghost == ch.ghost && c.operator == ch.operator
-		}, maxSSHPendingClient)
+		// The beginner's own share: past its cap, its own oldest goes. A
+		// begin without a cookie is a share of one, evicting nothing.
+		if ch.beginner != "" {
+			m.evictOldestLocked(func(c *sshChallenge) bool {
+				return c.kind == sshKindLogin && c.loop && c.ghost == ch.ghost && c.beginner == ch.beginner
+			}, maxSSHPendingClient)
+		}
 		if ch.ghost {
 			m.evictOldestLocked(func(c *sshChallenge) bool { return c.ghost }, maxSSHGhosts)
+			return true
 		}
-		return true
+		// Configured names: nobody else's pending sign-in is evicted. Past
+		// the table's cap a new begin is refused until one finishes or
+		// expires.
+		n := 0
+		for _, c := range m.sshCh {
+			if c.kind == sshKindLogin && c.loop && !c.ghost {
+				n++
+			}
+		}
+		return n < maxSSHPendingLoop
 	}
 	total, client, network := 0, 0, 0
 	for _, c := range m.sshCh {
@@ -326,10 +350,14 @@ func (m *Manager) evictOldestLocked(match func(*sshChallenge) bool, max int) {
 // does not reveal whether the operator exists: an unknown operator's challenge
 // simply never verifies.
 func (m *Manager) BeginSSHLogin(r *http.Request, operator string) (SSHChallengeView, error) {
+	return m.beginSSHLoginAs(r, operator, sshBeginner(r))
+}
+
+func (m *Manager) beginSSHLoginAs(r *http.Request, operator, beginner string) (SSHChallengeView, error) {
 	if !m.policy().SignIn(MethodSSH) {
 		return SSHChallengeView{}, errors.New("SSH sign-in is not enabled (dashboard.auth.methods)")
 	}
-	return m.beginSSH(r, sshKindLogin, operator, Session{}, "", "")
+	return m.beginSSHAs(r, sshKindLogin, operator, Session{}, "", "", beginner)
 }
 
 // BeginSSHStepup issues a step-up challenge over {purpose, digest} for the
@@ -373,7 +401,45 @@ func (m *Manager) lookupSSH(r *http.Request, id, kind string, sess Session) (ssh
 	if kind == sshKindStepup && (snap.session != sess.ID || snap.operator != sess.Operator) {
 		return sshChallenge{}, errors.New("the SSH challenge is for a different session")
 	}
+	if snap.loop && snap.beginner != "" && snap.beginner != sshBeginner(r) {
+		// Another browser's sign-in: as if it didn't exist.
+		return sshChallenge{}, errors.New("unknown or used SSH challenge")
+	}
 	return snap, nil
+}
+
+// BeginCookie binds a loopback SSH sign-in to the browser that began it. It
+// carries no authority: it only says which pending sign-ins are that
+// browser's (to finish, to poll, and to count against its own share).
+const BeginCookie = "conductor_ssh_begin"
+
+// beginnerShape is a minted BeginCookie value: 32 random bytes, base64url.
+var beginnerShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+
+// sshBeginner is the request's BeginCookie, or "" when it has none (or one
+// the dashboard didn't mint).
+func sshBeginner(r *http.Request) string {
+	ck, err := r.Cookie(BeginCookie)
+	if err != nil || !beginnerShape.MatchString(ck.Value) {
+		return ""
+	}
+	return ck.Value
+}
+
+// beginnerCookie returns the request's beginner, minting one (and the cookie
+// that sets it) when it has none.
+func (m *Manager) beginnerCookie(r *http.Request) (string, *http.Cookie, error) {
+	if b := sshBeginner(r); b != "" {
+		return b, nil, nil
+	}
+	v, err := m.randBytes(32)
+	if err != nil {
+		return "", nil, err
+	}
+	b := b64(v)
+	info := reqInfoFrom(r)
+	return b, &http.Cookie{Name: BeginCookie, Value: b, Path: "/api/v1/auth/ssh/", MaxAge: int(2 * sshChallengeTTL / time.Second),
+		Secure: info.Transport.Secure(), HttpOnly: true, SameSite: http.SameSiteStrictMode}, nil
 }
 
 // verifySSHChallenge checks sig over the stored challenge text with the

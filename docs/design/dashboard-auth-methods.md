@@ -147,14 +147,22 @@ conductor-dashboard-stepup v1 operator=ops origin=... purpose=approve digest=<sh
   network (an IPv4 /24 or an IPv6 /64) and 4096 overall. A neighbour needs 86
   addresses on the operator's network, each refreshed every 5 minutes, to fill
   its share; the network cap only stops one network holding the whole table.
-  On loopback every local process shares one address, so the cap there is 3
-  per operator name: a fourth begin for the same name replaces that name's
-  oldest, and nothing one name does fills another's share. A begin for a name
-  that is not a configured operator gets the same answer as any other, holds
-  no place in the counts above, and lives in its own table of at most 256
-  (oldest replaced first). Step-up challenges have their own
-  cap of 5 per session, so a flood of sign-in challenges cannot stop a
-  signed-in operator from confirming.
+  On loopback every local process shares one address, so a sign-in there is
+  bound to the browser that began it instead. The first begin sets an
+  HttpOnly, SameSite=Strict begin cookie (`conductor_ssh_begin`, path
+  `/api/v1/auth/ssh/`, a random value with no authority of its own), and the
+  challenge records it. Only a request carrying that cookie finishes or polls
+  the challenge; to any other it does not exist. The cap is 3 per beginner: a
+  fourth begin from the same browser replaces its own oldest. A begin never
+  evicts another beginner's challenge, and a begin without the cookie is a
+  share of one. The table holds at most 1024 such sign-ins. Past that, a new
+  begin is refused until one finishes or expires (at most 5 minutes), and
+  every pending one is kept. A begin for a name that is not a configured
+  operator gets the same answer as any other, holds no place in the counts
+  above, and lives in its own table of at most 256 (oldest replaced first; it
+  can never verify). Step-up challenges have their own cap of 5 per session,
+  so a flood of sign-in challenges cannot stop a signed-in operator from
+  confirming.
 
 **Paste.** The page shows the `ssh-keygen` command (and the equivalent
 `conductor dashboard sign '<challenge>'`). The operator pastes the armoured

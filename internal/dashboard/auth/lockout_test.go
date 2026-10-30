@@ -240,19 +240,32 @@ func TestNetworkBucketNeverBlocksSSHOrPasskeys(t *testing.T) {
 	}
 }
 
-// On loopback any local process can begin sign-ins, so pending SSH sign-ins
-// are kept per operator name and a new one evicts that name's oldest rather
-// than being refused: no number of begins, for other names or for the
-// operator, blocks the operator's own. Names that aren't configured
-// operators behave the same from outside but never hold a configured
-// operator's slot.
-func TestLoopbackPendingSSHIsPerOperator(t *testing.T) {
+// On loopback any local process can begin sign-ins, so a pending SSH sign-in
+// is bound to the browser that began it (its begin cookie): each beginner
+// has its own share, and a new begin evicts only that beginner's own oldest.
+// No number of begins, by anyone else, for the operator's name or any
+// other, evicts or blocks the operator's pending sign-in, and only the
+// operator's browser finishes it. Names that aren't configured operators
+// behave the same from outside but never hold a configured operator's slot.
+func TestLoopbackPendingSSHIsPerBeginner(t *testing.T) {
 	h := newMethodsHarness(t, nil)
-	begin := func(addr, op string) (*httptest.ResponseRecorder, SSHChallengeView) {
-		rr := call(h.m, "POST", "/api/v1/auth/ssh/begin", "localhost:7788", addr, onLocalhost, map[string]string{"operator": op}, nil)
+	begin := func(addr, op, cookie string) (*httptest.ResponseRecorder, SSHChallengeView) {
+		var hdr map[string]string
+		if cookie != "" {
+			hdr = map[string]string{"Cookie": BeginCookie + "=" + cookie}
+		}
+		rr := call(h.m, "POST", "/api/v1/auth/ssh/begin", "localhost:7788", addr, onLocalhost, map[string]string{"operator": op}, hdr)
 		var v SSHChallengeView
 		_ = json.Unmarshal(rr.Body.Bytes(), &v)
 		return rr, v
+	}
+	beginner := func(rr *httptest.ResponseRecorder) string {
+		for _, c := range rr.Result().Cookies() {
+			if c.Name == BeginCookie {
+				return c.Value
+			}
+		}
+		return ""
 	}
 	live := func(id string) bool {
 		h.m.mu.Lock()
@@ -260,41 +273,66 @@ func TestLoopbackPendingSSHIsPerOperator(t *testing.T) {
 		_, ok := h.m.sshCh[id]
 		return ok
 	}
-	// The reviewer's repro: nobody1..4 from 127.0.0.1 and ::1, then ops.
-	for _, addr := range []string{"127.0.0.1:1", "[::1]:1"} {
-		for i := 1; i <= 4; i++ {
-			if rr, _ := begin(addr, fmt.Sprintf("nobody%d", i)); rr.Code != http.StatusOK {
-				t.Fatalf("an unknown name's begin must look like any other: %d %s", rr.Code, rr.Body)
-			}
+	finish := func(addr string, v SSHChallengeView, cookie string) *httptest.ResponseRecorder {
+		var hdr map[string]string
+		if cookie != "" {
+			hdr = map[string]string{"Cookie": BeginCookie + "=" + cookie}
 		}
+		return call(h.m, "POST", "/api/v1/auth/ssh/finish", "localhost:7788", addr, onLocalhost,
+			map[string]string{"challenge_id": v.ID, "signature": h.key.sign(t, LoginNamespace, v.Text)}, hdr)
 	}
-	// A flood of unknown names stays in its own share.
-	for i := 0; i < 2*maxSSHGhosts; i++ {
-		begin("127.0.0.1:2", fmt.Sprintf("ghost%d", i))
+
+	// The review's repro: the operator's browser begins, then another local
+	// process (no cookie, then a cookie of its own) begins for ops again and
+	// again. The operator's challenge stays, and finishes.
+	rr, mine := begin("127.0.0.1:3", "ops", "")
+	opCookie := beginner(rr)
+	if rr.Code != http.StatusOK || opCookie == "" {
+		t.Fatalf("the operator's begin: %d %s, cookie %q", rr.Code, rr.Body, opCookie)
 	}
-	rr, first := begin("127.0.0.1:3", "ops")
-	if rr.Code != http.StatusOK {
-		t.Fatalf("the operator's own begin on localhost: %d %s", rr.Code, rr.Body)
+	rr, _ = begin("127.0.0.1:9", "ops", "")
+	attacker := beginner(rr)
+	for i := 0; i < 3*maxSSHPendingClient; i++ {
+		begin("127.0.0.1:9", "ops", "")
+		begin("[::1]:9", "ops", attacker)
 	}
-	for i := 0; i < 2*maxSSHGhosts; i++ {
-		begin("127.0.0.1:2", fmt.Sprintf("ghost-b%d", i))
+	if !live(mine.ID) {
+		t.Fatal("another client's begins evicted the operator's pending sign-in")
 	}
-	if !live(first.ID) {
-		t.Fatal("unknown names evicted the operator's challenge")
+	// Only the browser that began it finishes it.
+	if rr := finish("127.0.0.1:9", mine, attacker); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("another browser finished the operator's sign-in: %d %s", rr.Code, rr.Body)
 	}
-	// The same name, known or not: the 4th begin succeeds and the 1st goes.
+	if rr := finish("127.0.0.1:3", mine, opCookie); rr.Code != http.StatusOK || len(rr.Result().Cookies()) == 0 {
+		t.Fatalf("the operator's finish after the flood: %d %s", rr.Code, rr.Body)
+	}
+
+	// A beginner's own share: its 4th begin succeeds and its own 1st goes.
 	for _, op := range []string{"ops", "nobody9"} {
 		var ids []string
+		var ck string
 		for i := 0; i < maxSSHPendingClient+1; i++ {
-			rr, v := begin("127.0.0.1:4", op)
+			rr, v := begin("127.0.0.1:4", op, ck)
 			if rr.Code != http.StatusOK {
 				t.Fatalf("%s begin %d: %d %s", op, i, rr.Code, rr.Body)
+			}
+			if ck == "" {
+				ck = beginner(rr)
 			}
 			ids = append(ids, v.ID)
 		}
 		if live(ids[0]) || !live(ids[len(ids)-1]) {
-			t.Fatalf("%s: the oldest must give way to the newest", op)
+			t.Fatalf("%s: a beginner's oldest must give way to its newest", op)
 		}
+	}
+
+	// Unknown names stay in their own share.
+	_, first := begin("127.0.0.1:3", "ops", opCookie)
+	for i := 0; i < 2*maxSSHGhosts; i++ {
+		begin("127.0.0.1:2", fmt.Sprintf("ghost%d", i), "")
+	}
+	if !live(first.ID) {
+		t.Fatal("unknown names evicted the operator's challenge")
 	}
 	h.m.mu.Lock()
 	ghosts := 0
@@ -306,6 +344,18 @@ func TestLoopbackPendingSSHIsPerOperator(t *testing.T) {
 	h.m.mu.Unlock()
 	if ghosts > maxSSHGhosts {
 		t.Fatalf("%d ghost challenges held", ghosts)
+	}
+
+	// The table is bounded: past its cap a new begin is refused, and every
+	// pending sign-in (the operator's too) is kept.
+	for i := 0; i < maxSSHPendingLoop; i++ {
+		begin("127.0.0.1:5", "ops", "")
+	}
+	if rr, _ := begin("127.0.0.1:5", "ops", ""); rr.Code != http.StatusBadRequest || !strings.Contains(errMessage(rr), "too many SSH challenges") {
+		t.Fatalf("past the loopback cap: %d %s", rr.Code, rr.Body)
+	}
+	if !live(first.ID) {
+		t.Fatal("a full table evicted the operator's challenge")
 	}
 }
 

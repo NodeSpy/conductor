@@ -168,10 +168,20 @@ func (m *Manager) handleSSHBegin(w http.ResponseWriter, r *http.Request) {
 	if m.lockedOut(w, lockKeys(r, guessCredential, "")...) {
 		return
 	}
-	v, err := m.BeginSSHLogin(r, strings.TrimSpace(req.Operator))
+	// The sign-in is bound to this browser: the begin cookie is minted on
+	// its first begin and sent back with the finish or the poll.
+	beginner, ck, err := m.beginnerCookie(r)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "could not begin", "")
+		return
+	}
+	v, err := m.beginSSHLoginAs(r, strings.TrimSpace(req.Operator), beginner)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "ssh_begin", err.Error(), "")
 		return
+	}
+	if ck != nil {
+		http.SetCookie(w, ck)
 	}
 	writeJSON(w, http.StatusOK, v)
 }

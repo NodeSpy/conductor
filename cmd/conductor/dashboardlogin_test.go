@@ -67,9 +67,28 @@ func post(t *testing.T, url string, body any) (*http.Response, map[string]any) {
 	return resp, out
 }
 
+// postWith is post with cookies.
+func postWith(t *testing.T, url string, body any, cookies []*http.Cookie) (*http.Response, map[string]any) {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest("POST", url, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp, out
+}
+
 func TestApproveLoginCLI(t *testing.T) {
 	srv, key := approveFixture(t)
-	_, begun := post(t, srv.URL+"/api/v1/auth/ssh/begin", map[string]string{"operator": "ops"})
+	beganResp, begun := post(t, srv.URL+"/api/v1/auth/ssh/begin", map[string]string{"operator": "ops"})
 	code, _ := begun["login_code"].(string)
 	id, _ := begun["challenge_id"].(string)
 	if code == "" || id == "" {
@@ -102,7 +121,11 @@ func TestApproveLoginCLI(t *testing.T) {
 	if err := dashboardApproveLogin(code, map[string]string{"url": srv.URL, "operator": "ops", "key": key, "yes": "true"}); err != nil {
 		t.Fatalf("approve-login: %v", err)
 	}
-	resp, polled := post(t, srv.URL+"/api/v1/auth/ssh/poll", map[string]string{"challenge_id": id})
+	// Only the browser that began it polls it (its begin cookie).
+	if resp, _ := post(t, srv.URL+"/api/v1/auth/ssh/poll", map[string]string{"challenge_id": id}); resp.StatusCode != http.StatusGone {
+		t.Fatalf("a poll from another browser: %d", resp.StatusCode)
+	}
+	resp, polled := postWith(t, srv.URL+"/api/v1/auth/ssh/poll", map[string]string{"challenge_id": id}, beganResp.Cookies())
 	if resp.StatusCode != 200 || polled["operator"] != "ops" || polled["method"] != "ssh" {
 		t.Fatalf("poll after approve: %d %v", resp.StatusCode, polled)
 	}
