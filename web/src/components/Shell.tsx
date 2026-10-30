@@ -55,7 +55,8 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
   const theme = currentTheme()
   const cycle = () => setTheme(theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto')
   // On a phone the nav folds behind a menu button so each page opens on its
-  // content; it closes again on navigation and on Escape.
+  // content; it closes again on any nav tap (the current page's too), on a
+  // route change and on Escape.
   const [open, setOpen] = useState(false)
   useEffect(() => setOpen(false), [route.value])
   useEffect(() => {
@@ -71,6 +72,7 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
           <div class="brand">
             <Mark />
             <span class="wordmark">conductor</span>
+            <ConnDot where="bar" />
             <button
               class="menu-btn"
               type="button"
@@ -98,7 +100,7 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
               return (
                 <li>
                   {n.to !== undefined ? (
-                    <a class={'nav-item' + (active ? ' on' : '')} aria-current={active ? 'page' : undefined} href={'#/' + n.to}>
+                    <a class={'nav-item' + (active ? ' on' : '')} aria-current={active ? 'page' : undefined} href={'#/' + n.to} onClick={() => setOpen(false)}>
                       {n.label}
                     </a>
                   ) : (
@@ -115,7 +117,7 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
           <button class="theme-btn" type="button" onClick={cycle} title="Switch theme">
             {theme === 'auto' ? 'Theme: auto' : theme === 'light' ? 'Theme: light' : 'Theme: dark'}
           </button>
-          <ConnDot />
+          <ConnDot where="rail" />
         </div>
       </nav>
       <main class="page">{children}</main>
@@ -123,11 +125,13 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
   )
 }
 
-function ConnDot(): JSX.Element {
+// ConnDot is the event stream's state. It sits in the rail's foot on a wide
+// screen and in the top bar on a phone, where the foot is folded away.
+function ConnDot({ where }: { where: 'rail' | 'bar' }): JSX.Element {
   const c = conn.value
   const label = c === 'live' ? 'Live' : c === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'
   return (
-    <span class="conn" data-conn={c} title={`Event stream: ${label}`}>
+    <span class={'conn conn-' + where} data-conn={c} data-testid={'conn-' + where} title={`Event stream: ${label}`}>
       <span class="conn-dot" />
       {label}
     </span>

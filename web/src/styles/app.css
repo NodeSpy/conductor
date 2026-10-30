@@ -562,7 +562,8 @@ tr.quiet td {
   }
 }
 
-.menu-btn {
+.menu-btn,
+.conn-bar {
   display: none;
 }
 
@@ -595,13 +596,21 @@ tr.quiet td {
     padding: 0;
     min-height: 44px;
   }
+  .conn-bar {
+    display: flex;
+    margin-left: auto;
+    padding: 0 var(--space-2);
+  }
+  .rail .rail-foot .conn-rail {
+    display: none;
+  }
   .menu-btn {
     all: unset;
     box-sizing: border-box;
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
-    margin-left: auto;
+    margin-left: 0; /* .conn-bar before it takes the free space */
     min-height: 44px;
     min-width: 44px;
     padding: 0 var(--space-3);
