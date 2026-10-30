@@ -109,6 +109,7 @@ type Server struct {
 	started time.Time
 	edit    *configedit.Pipeline // nil when ConfigPath is empty (read-only)
 	auth    *auth.Manager        // nil until wired in New()
+	authErr error                // why auth could not be wired; the API is refused while set
 	tsAPI   localAPI             // tailscaled LocalAPI; nil = the real socket client
 	labels  *stepupLabels        // what each handed-out step-up digest confirms, for approve-login
 }
@@ -130,7 +131,7 @@ func New(deps Deps) *Server {
 			Guarded:  guardedConfig,
 		})
 	}
-	s.buildAuth() // the auth Manager + RPs (authwire.go); logs and no-ops on error
+	s.buildAuth() // the auth Manager + RPs (authwire.go); on error the API is refused (authErr)
 	s.routes()
 	s.authRoutes()    // the proposal-approval endpoints (behind the session guard)
 	s.browserRoutes() // browsers, the wallet and purchase approvals (§4.5)
@@ -518,20 +519,20 @@ func writeSSE(w http.ResponseWriter, ev api.Event) {
 	fmt.Fprintf(w, "data: %s\n\n", b)
 }
 
-// guardedConfig is the part of the loaded config that decides who can sign in
-// to the dashboard and how. The config pipeline compares it before and after an
-// edit, so a change that reaches it through imports or packs needs a step-up.
+// guardedConfig is the loaded config minus its inert parts (pricing and
+// usage.mode, the same paths configedit treats as inert). The config pipeline
+// compares it before and after an edit, so a change that reaches anything else
+// through imports, packs or YAML references needs a step-up too.
 func guardedConfig(path string) (any, error) {
 	c, err := config.Load(path)
 	if err != nil {
 		return nil, err
 	}
-	return struct {
-		Operators map[string]config.OperatorConfig
-		Auth      config.DashboardAuth
-		Bind      []config.DashboardBind
-		Listen    []string
-		Tailscale config.DashboardTailscale
-		Session   config.DashboardSession
-	}{c.Operators, c.Dashboard.Auth, c.Dashboard.Bind, c.Dashboard.Listen, c.Dashboard.Tailscale, c.Dashboard.Session}, nil
+	c.Pricing = nil
+	if c.Usage != nil {
+		u := *c.Usage
+		u.Mode = ""
+		c.Usage = &u
+	}
+	return c, nil
 }

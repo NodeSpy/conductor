@@ -75,6 +75,28 @@ type DashboardAuth struct {
 	// password (only with password_requires_totp: false). Absent means passkey,
 	// ssh, totp.
 	Stepup []string `yaml:"stepup"`
+	// ConfigStepup decides which config applies need a step-up when sign-in
+	// is on. all (the default): every apply and every restore. guarded: only
+	// an apply that touches something conductor acts on (operators, the
+	// dashboard and store blocks, imports, triggers, workflows, connectors,
+	// runtimes, packs, plugins, secrets, …) or that loosens a guardrail; an
+	// edit confined to the display-only paths (pricing, usage.mode) applies on
+	// the session alone. guarded is an explicit loosen.
+	ConfigStepup string `yaml:"config_stepup"`
+}
+
+// Config step-up modes (dashboard.auth.config_stepup).
+const (
+	ConfigStepupAll     = "all"
+	ConfigStepupGuarded = "guarded"
+)
+
+// EffectiveConfigStepup returns the config step-up mode, defaulted to all.
+func (a DashboardAuth) EffectiveConfigStepup() string {
+	if a.ConfigStepup == "" {
+		return ConfigStepupAll
+	}
+	return a.ConfigStepup
 }
 
 // EffectiveMethods returns the sign-in methods, defaulted.
@@ -379,6 +401,11 @@ func (a DashboardAuth) validate() error {
 	}
 	if err := check("stepup", a.Stepup, DashboardMethodPasskey, DashboardMethodSSH, DashboardMethodTOTP, DashboardMethodPassword); err != nil {
 		return err
+	}
+	switch a.ConfigStepup {
+	case "", ConfigStepupAll, ConfigStepupGuarded:
+	default:
+		return fmt.Errorf("config: dashboard.auth.config_stepup: want all or guarded, got %q", a.ConfigStepup)
 	}
 	hasPassword := false
 	for _, m := range a.EffectiveMethods() {

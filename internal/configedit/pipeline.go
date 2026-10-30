@@ -57,11 +57,10 @@ type Options struct {
 	Validate func(string) error
 	Reload   func() error
 	Now      func() time.Time // injectable clock for tests
-	// Guarded loads the config at path and returns the part that decides who
-	// can sign in to the dashboard and how (operators, dashboard auth,
-	// listeners, session) in comparable form. Edits are compared on it as well
-	// as on the text, so a change that reaches those settings through imports or
-	// packs still needs a step-up. Optional.
+	// Guarded loads the config at path and returns its guarded part (all but
+	// the inert paths) in comparable form. Edits are compared on it as well as
+	// on the text, so a change that reaches a guarded setting through imports
+	// or packs still needs a step-up. Optional.
 	Guarded func(path string) (any, error)
 }
 
@@ -235,7 +234,7 @@ func (p *Pipeline) classifyLocked(before, after []byte) (widening, guarded []Eff
 	now, errNow := p.loadCandidate(after)
 	if errWas != nil || errNow != nil || !reflect.DeepEqual(was, now) {
 		guarded = append(guarded, Effect{Path: "(loaded config)",
-			Text: "changes the operators or the dashboard's sign-in settings the loaded config ends up with"})
+			Text: "changes what the loaded config ends up with (through imports, packs or YAML references)"})
 	}
 	return widening, guarded
 }

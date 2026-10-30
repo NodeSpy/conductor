@@ -78,6 +78,8 @@ func isWidening(path []string, before, after any) bool {
 		return true
 	case contains(path, "dashboard") && last == "allow_plain_http" && truthy(after) && !truthy(before):
 		return true
+	case p == "dashboard.auth.config_stepup" && fmt.Sprintf("%v", after) == "guarded":
+		return true
 	case p == "dashboard.tailscale.tls" && (fmt.Sprintf("%v", after) == "off" || fmt.Sprintf("%v", after) == "false"):
 		return true
 	}
@@ -99,10 +101,21 @@ func contains(path []string, seg string) bool {
 	return false
 }
 
-// guardedSections decide who can sign in to the dashboard and how. Any change
-// to them is a change to the dashboard's credentials or exposure, so applying it
-// needs a step-up whether or not it loosens anything. imports is here because an
-// imported file can define operators or the dashboard block.
+// inertPaths are the only config paths conductor never acts on beyond display
+// and estimates. With dashboard.auth.config_stepup: guarded, an edit confined
+// to them applies on a signed-in session alone. Every other path is guarded,
+// so a key added to the config later needs a step-up until it is listed here.
+var inertPaths = [][]string{
+	{"pricing"},
+	{"usage", "mode"},
+}
+
+// guardedSections word the guarded paths for the review, most specific first:
+// a changed leaf is named by the first entry whose path is a prefix of it, or
+// by its top-level key. The dashboard, store and operators entries change who
+// can sign in and where the sign-in state lives; the rest run something on
+// this machine or change what does. imports is here because an imported file
+// can define any of them.
 var guardedSections = []struct {
 	path []string
 	text string
@@ -113,23 +126,80 @@ var guardedSections = []struct {
 	{[]string{"dashboard", "listen"}, "changes where the dashboard listens (dashboard.listen)"},
 	{[]string{"dashboard", "tailscale"}, "changes the dashboard's tailnet listener (dashboard.tailscale)"},
 	{[]string{"dashboard", "session"}, "changes how long dashboard sessions last (dashboard.session)"},
-	{[]string{"imports"}, "changes which files the config imports (they can define operators and the dashboard)"},
+	{[]string{"dashboard"}, "changes the dashboard block (whether and where the dashboard serves)"},
+	{[]string{"store"}, "changes where conductor keeps its state and audit log, and with it the dashboard's sign-in store (store)"},
+	{[]string{"imports"}, "changes which files the config imports (they can define operators, the dashboard and anything that runs)"},
+	{[]string{"triggers"}, "changes triggers: their steps run commands, agents and plugins on this machine"},
+	{[]string{"workflows"}, "changes workflows: their steps run commands, agents and plugins on this machine"},
+	{[]string{"checks"}, "changes checks: they run steps on this machine"},
+	{[]string{"connectors"}, "changes connectors: they run plugins and schedules on this machine"},
+	{[]string{"runtimes"}, "changes runtimes: the programs agents run as"},
+	{[]string{"hosts"}, "changes hosts: where conductor runs work"},
+	{[]string{"engines"}, "changes engines: the programs conductor runs models with"},
+	{[]string{"models"}, "changes models: what agents run on"},
+	{[]string{"packs"}, "changes packs: they add triggers, workflows and plugins"},
+	{[]string{"pack_trust"}, "changes which packs conductor trusts"},
+	{[]string{"plugin_trust"}, "changes which plugins conductor trusts"},
+	{[]string{"secrets"}, "changes which secrets templates can read (secrets)"},
+	{[]string{"vaults"}, "changes where secrets are read from (vaults)"},
+	{[]string{"stores"}, "changes the stores plugins and steps keep data in"},
+	{[]string{"sandbox"}, "changes the agent sandbox"},
+	{[]string{"browser"}, "changes conductor's browser for agents"},
+	{[]string{"callable"}, "changes what outside callers can run (callable)"},
+	{[]string{"policy"}, "changes the policy that limits what bots may do"},
+	{[]string{"bots"}, "changes the bots: their tokens and what they act on"},
+	{[]string{"teams"}, "changes teams: who bots take requests from"},
+	{[]string{"update"}, "changes self-update: whether conductor installs and runs new releases"},
+	{[]string{"dry_run"}, "changes dry_run: whether steps act for real"},
+}
+
+// inert reports whether path sits under an inert path.
+func inert(path []string) bool {
+	for _, p := range inertPaths {
+		if hasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPrefix(path, prefix []string) bool {
+	if len(path) < len(prefix) {
+		return false
+	}
+	for i := range prefix {
+		if path[i] != prefix[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// guardedEffect names the guarded section a changed path falls in.
+func guardedEffect(path []string) (rank int, e Effect) {
+	if len(path) == 0 {
+		return len(guardedSections), Effect{Path: "(config)", Text: "changes the config as a whole"}
+	}
+	for i, g := range guardedSections {
+		if hasPrefix(path, g.path) {
+			return i, Effect{Path: pathKey(g.path), Text: g.text}
+		}
+	}
+	return len(guardedSections), Effect{Path: path[0], Text: fmt.Sprintf("changes %s, which conductor acts on", path[0])}
 }
 
 // classify compares a config's text before and after an edit, however the edit
 // was made (a staged leaf, a whole parent map or list, a restore): widening
 // lists every leaf whose new value loosens a guardrail, and guarded every
-// guarded section that changed.
+// guarded section with a changed leaf (anything outside inertPaths).
 func classify(before, after []byte) (widening, guarded []Effect) {
 	b, _ := decodeText(before)
 	a, err := decodeText(after)
 	if err != nil {
 		return nil, []Effect{{Path: "(config)", Text: "the new config doesn't parse"}}
 	}
-	for _, g := range guardedSections {
-		if !reflect.DeepEqual(lookup(b, g.path), lookup(a, g.path)) {
-			guarded = append(guarded, Effect{Path: pathKey(g.path), Text: g.text, Widens: false})
-		}
+	if _, isMap := a.(map[string]any); !isMap && a != nil {
+		return nil, []Effect{{Path: "(config)", Text: "replaces the whole config with something that isn't a map"}}
 	}
 	bl, al := map[string]leaf{}, map[string]leaf{}
 	flatten(b, nil, bl)
@@ -144,9 +214,25 @@ func classify(before, after []byte) (widening, guarded []Effect) {
 		}
 	}
 	sort.Strings(keys)
+	type ranked struct {
+		rank int
+		e    Effect
+	}
+	seen := map[string]ranked{}
 	for _, k := range keys {
 		lb, inB := bl[k]
 		la, inA := al[k]
+		path := la.path
+		if !inA {
+			path = lb.path
+		}
+		if inA && inB && reflect.DeepEqual(lb.val, la.val) {
+			continue
+		}
+		if !inert(path) {
+			r, e := guardedEffect(path)
+			seen[e.Path] = ranked{r, e}
+		}
 		switch {
 		case !inA:
 			if wideningDelete(lb.path) {
@@ -156,11 +242,24 @@ func classify(before, after []byte) (widening, guarded []Effect) {
 			if isWidening(la.path, nil, la.val) {
 				widening = append(widening, Effect{Path: k, Text: fmt.Sprintf("sets %s to %v", k, la.val), Widens: true})
 			}
-		case !reflect.DeepEqual(lb.val, la.val):
+		default:
 			if isWidening(la.path, lb.val, la.val) {
 				widening = append(widening, Effect{Path: k, Text: fmt.Sprintf("changes %s from %v to %v", k, lb.val, la.val), Widens: true})
 			}
 		}
+	}
+	rs := make([]ranked, 0, len(seen))
+	for _, r := range seen {
+		rs = append(rs, r)
+	}
+	sort.Slice(rs, func(i, j int) bool {
+		if rs[i].rank != rs[j].rank {
+			return rs[i].rank < rs[j].rank
+		}
+		return rs[i].e.Path < rs[j].e.Path
+	})
+	for _, r := range rs {
+		guarded = append(guarded, r.e)
 	}
 	return widening, guarded
 }
@@ -172,18 +271,19 @@ type leaf struct {
 }
 
 // flatten records every scalar under v by its dotted path (list items by
-// index). An empty map or list is a leaf of its own.
+// index). An empty map or list is a leaf of its own, except the document
+// itself.
 func flatten(v any, path []string, out map[string]leaf) {
 	switch x := v.(type) {
 	case map[string]any:
-		if len(x) == 0 {
+		if len(x) == 0 && len(path) > 0 {
 			out[pathKey(path)] = leaf{path: path, val: x}
 		}
 		for k, c := range x {
 			flatten(c, append(append([]string(nil), path...), k), out)
 		}
 	case []any:
-		if len(x) == 0 {
+		if len(x) == 0 && len(path) > 0 {
 			out[pathKey(path)] = leaf{path: path, val: x}
 		}
 		for i, c := range x {
@@ -194,16 +294,4 @@ func flatten(v any, path []string, out map[string]leaf) {
 			out[pathKey(path)] = leaf{path: path, val: x}
 		}
 	}
-}
-
-// lookup returns the decoded value at path, or nil.
-func lookup(v any, path []string) any {
-	for _, seg := range path {
-		m, ok := v.(map[string]any)
-		if !ok {
-			return nil
-		}
-		v = m[seg]
-	}
-	return v
 }

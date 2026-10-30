@@ -355,7 +355,14 @@ export function Access(): JSX.Element {
             <h2>When it asks you to confirm</h2>
             <ul class="acc-asks">
               <li>Approving or denying what a bot asks to do</li>
-              <li>Config changes that give bots more access or loosen safety</li>
+              {data.auth_policy.config_stepup === 'guarded' ? (
+                <li data-testid="config-asks">
+                  Config changes, except ones that only touch <span class="mono">pricing</span> or{' '}
+                  <span class="mono">usage.mode</span> (<span class="mono">config_stepup: guarded</span>)
+                </li>
+              ) : (
+                <li data-testid="config-asks">Every config change and every restore</li>
+              )}
               <li>Storing or replacing a secret value in a vault</li>
               <li>Taking over a browser a bot is signed in to</li>
               <li>Adding or removing a way to sign in</li>

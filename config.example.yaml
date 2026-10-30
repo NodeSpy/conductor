@@ -1820,9 +1820,15 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #                            # operators.<name>.ssh_key; password needs TOTP.
 #     password_requires_totp: true       # default. false allows a password alone —
 #                            # anyone who learns it signs in; set it only knowingly.
-#     stepup: [passkey, ssh, totp]       # what confirms approvals and widening
-#                            # changes (default). `password` is accepted here only
-#                            # with password_requires_totp: false.
+#     stepup: [passkey, ssh, totp]       # what confirms approvals, config applies and
+#                            # credential changes (default). `password` is accepted
+#                            # here only with password_requires_totp: false.
+#     config_stepup: all     # default: every config apply and restore from the
+#                            # dashboard needs a confirmation. guarded: edits that
+#                            # only touch pricing or usage.mode apply on a session
+#                            # alone; everything else (anything that runs on the
+#                            # box, operators, the dashboard and store blocks)
+#                            # still asks. An explicit loosen.
 #   bind:                    # extra listeners on explicit addresses
 #     - address: 0.0.0.0:7790
 #       hostnames: [conductor.home.arpa]   # REQUIRED Host allowlist (DNS rebinding);

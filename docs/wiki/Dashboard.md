@@ -144,8 +144,8 @@ it.
 
 ### Confirming sensitive actions (step-up)
 
-Approvals, purchases, config changes that widen a guardrail or touch sign-in,
-secrets, browser take-over and credential changes ask you to confirm first.
+Approvals, purchases, config changes and restores, secrets, browser take-over
+and credential changes ask you to confirm first.
 The dialog shows what you are confirming — the proposal's or purchase's action
 in full, or the config change's effects — and the start of its digest. The dialog offers the methods
 `auth.stepup` allows that you have on this connection: passkey, SSH key (paste
@@ -167,14 +167,27 @@ dashboard:
     methods: [passkey, ssh, password]   # default
     password_requires_totp: true        # default
     stepup: [passkey, ssh, totp]        # default
+    config_stepup: all                  # default
 ```
 
-A config without `auth:` uses these defaults. From the dashboard's config
-editor, any change to `operators`, `imports` or the dashboard's `auth`, `bind`,
-`listen`, `tailscale` or `session` needs a confirmation, as does a widening
-change such as `password_requires_totp: false`, `allow_plain_http: true` or
-`tailscale.tls: off`. The editor judges the whole new config, including what
-it loads through imports and packs, not only the value you edited.
+A config without `auth:` uses these defaults. With sign-in on, every apply
+from the dashboard's config editor, and every restore, needs a confirmation
+(`config_stepup: all`). Most of the config runs something on this machine:
+a trigger or workflow step can be a shell command, and the dashboard and store
+blocks decide where the sign-in state lives. A session cookie on its own must
+not be enough to change any of that.
+
+`config_stepup: guarded` is the one way to loosen this. It lets an edit that
+only touches `pricing` or `usage.mode` apply on your session alone. Every other
+path still needs a confirmation: `operators`, `imports`, the whole `dashboard`
+and `store` blocks, triggers, workflows, checks, connectors, runtimes, hosts,
+packs, plugins, secrets, and any key the editor doesn't know. A widening change
+such as `password_requires_totp: false`, `allow_plain_http: true`,
+`tailscale.tls: off` or `config_stepup: guarded` itself is named first in the
+review. What you give up with `guarded`: someone holding a stolen session can
+change cost estimates and the usage report mode without your key. The editor
+judges the whole new config, including what it loads through imports, packs
+and YAML references, not only the value you edited.
 
 Every sign-in endpoint accepts only same-origin JSON requests: a request from
 another site, or a body that isn't `application/json`, is refused before it is

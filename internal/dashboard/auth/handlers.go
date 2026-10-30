@@ -504,6 +504,7 @@ func (m *Manager) handleAccess(w http.ResponseWriter, r *http.Request) {
 		"passkey_here": passkeyHere,
 		"auth_policy": map[string]any{
 			"methods": pol.Methods, "password_requires_totp": pol.PasswordRequiresTOTP, "stepup": pol.Stepup,
+			"config_stepup": pol.ConfigStepup,
 		},
 		"stepup_methods":     m.StepupMethods(r, sess),
 		"credential_digests": digests,

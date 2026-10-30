@@ -24,6 +24,7 @@ dashboard:
     methods: [passkey, ssh, password]   # sign-in methods
     password_requires_totp: true
     stepup: [passkey, ssh, totp]        # methods that confirm sensitive actions
+    config_stepup: all                  # which config applies need one: all | guarded
 ```
 
 - Every field has a default, and a config without `auth:` gets the defaults:
@@ -37,22 +38,39 @@ dashboard:
 - `password_requires_totp: false` is the only way to make a password alone a
   credential. Turning it off, `allow_plain_http: true` and `tailscale.tls: off`
   are classified as widening by the config editor.
-- **Config edits that touch sign-in need a step-up.** Any change to
-  `operators`, `dashboard.auth`, `dashboard.bind`, `dashboard.listen`,
-  `dashboard.tailscale`, `dashboard.session` or `imports` needs one, whether or
-  not it loosens anything: a session cookie must not be enough to swap an
-  operator's `ssh_key` and then sign in with the new key. The config editor
-  decides this from the whole candidate, not from the path that was staged:
-  - it compares those sections, and every leaf's widening rules, between the
-    live file and the candidate, so staging a whole parent map or list is
-    judged by what it ends up containing;
-  - it also loads both and compares the operators and dashboard settings the
-    loaded config ends up with, so a change that reaches them through an import
-    or a pack counts too. A candidate that cannot be loaded counts as changed;
+- **Every config apply needs a step-up** when sign-in is on
+  (`config_stepup: all`, the default), and so does every restore. Most of the
+  config runs something on the box: a cron connector and a trigger step with
+  `use: cli` is a shell, and that shell can rewrite an operator's `ssh_key` or
+  read the sign-in store. A session cookie must not be enough for any of it.
+- `config_stepup: guarded` is the one loosen. In that mode an apply needs a
+  step-up when its candidate changes anything outside a short inert list
+  (`pricing`, `usage.mode`) or loosens a guardrail. Everything else is guarded:
+  `operators`, `imports`, the whole `dashboard` and `store` blocks, triggers,
+  workflows, checks, connectors, runtimes, hosts, engines, models, packs,
+  plugin and pack trust, secrets, vaults, the sandbox, the browser, callable,
+  policy, bots, teams, update and `dry_run`. A key that is not on the inert
+  list, including one added to the config later, is guarded. What this mode
+  gives up: a stolen session can change cost estimates and the usage report
+  mode. Setting it is itself a widening change.
+- The config editor decides this from the whole candidate, not from the path
+  that was staged:
+  - it compares every leaf between the live file and the candidate, so staging
+    a whole parent map or list is judged by what it ends up containing, and
+    names each guarded section that changed;
+  - it also loads both and compares the loaded configs (minus the inert
+    paths), so a change that reaches a guarded setting through an import, a
+    pack or a YAML reference counts too. A candidate that cannot be loaded
+    counts as changed;
   - the apply asks for the step-up under the editor's lock, on the exact
     candidate it is about to write, so nothing staged after the review slips
     past.
-  Other edits that loosen nothing remain an ordinary session action.
+- **If the sign-in store can't be opened**, or the auth layer can't be built,
+  every listener refuses the API with a 503. The localhost listener says why;
+  the others say only that sign-in is unavailable. The dashboard never serves
+  as if no sign-in were needed because sign-in broke. With no operators and no
+  state dir there is nothing to sign in to, and the API stays open on localhost
+  as on a fresh install.
 - The server is the authority on what a connection offers:
   - `GET /api/v1/auth/state` lists the sign-in methods for this listener and
     transport and, when signed in, the step-up methods this operator has here.

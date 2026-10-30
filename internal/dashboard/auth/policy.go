@@ -27,6 +27,10 @@ type Policy struct {
 	Methods              []Method // sign-in methods
 	PasswordRequiresTOTP bool     // the strong default; false is the explicit loosen
 	Stepup               []Method // step-up methods
+	// ConfigStepup is which config applies need a step-up: "all" (the
+	// default) or "guarded" (all but edits confined to the inert paths). The
+	// dashboard enforces it; the auth layer only reports it.
+	ConfigStepup string
 }
 
 // DefaultPolicy is the policy an install without an `auth:` block gets: every
@@ -36,6 +40,7 @@ func DefaultPolicy() Policy {
 		Methods:              []Method{MethodPasskey, MethodSSH, MethodPassword},
 		PasswordRequiresTOTP: true,
 		Stepup:               []Method{MethodPasskey, MethodSSH, MethodTOTP},
+		ConfigStepup:         "all",
 	}
 }
 

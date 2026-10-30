@@ -57,6 +57,12 @@ func reqInfoFrom(r *http.Request) reqInfo {
 	return reqInfo{Listener: ListenerLocalhost, Transport: TransportLocalhost, Host: hostOnly(r.Host)}
 }
 
+// ConnOf returns the listener, peer and transport facts r arrived with.
+func ConnOf(r *http.Request) ConnInfo {
+	i := reqInfoFrom(r)
+	return ConnInfo{Listener: i.Listener, Node: i.Node, User: i.User, Transport: i.Transport}
+}
+
 // SessionFrom returns the session a protected handler is running under.
 func SessionFrom(r *http.Request) (Session, bool) {
 	s, ok := r.Context().Value(ctxSess).(Session)

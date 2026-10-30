@@ -20,16 +20,23 @@ import (
 // stepupCheck enforces a step-up (any allowed method) for a privileged config
 // mutation — but ONLY when auth is active. The session guard injects a Session
 // on every /api route when operators are configured; when none are (a bootstrap
-// box or the e2e daemon), SessionFrom returns !ok and this is a no-op, so the
+// box or the e2e daemon), there is no session and this is a no-op, so the
 // pipeline confirm token alone gates the apply. When auth IS active, the apply
 // must present a step-up token minted for PurposeConfigApply with the confirm
-// token as its ceremony digest.
+// token as its ceremony digest. A request with sign-in on but no session (which
+// Protect never lets through) is refused rather than waved on.
 func (s *Server) stepupCheck(r *http.Request, digest, stepupToken string) error {
+	if s.authErr != nil {
+		return s.authErr
+	}
 	if s.auth == nil {
 		return nil
 	}
 	sess, ok := auth.SessionFrom(r)
 	if !ok {
+		if s.authEnforced() {
+			return errors.New("sign-in is on and this request has no session")
+		}
 		return nil // auth not active on this route → confirm token alone governs
 	}
 	_, err := s.auth.RequireStepup(sess, auth.PurposeConfigApply, digest, stepupToken)
@@ -163,7 +170,7 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.noteReview(rev, "apply a config change")
-	writeJSON(w, http.StatusOK, reviewDTO(rev))
+	writeJSON(w, http.StatusOK, s.reviewDTO(rev))
 }
 
 // noteReview records what a step-up over the review's confirm token applies.
@@ -178,10 +185,12 @@ func (s *Server) noteReview(rev configedit.Review, what string) {
 	s.labels.note(auth.PurposeConfigApply, rev.Token, what+": "+effectsText(texts))
 }
 
-func reviewDTO(rev configedit.Review) api.ReviewResponse {
+// reviewDTO renders a review. Stepup is what apply will ask for: the
+// pipeline's answer, or always with config_stepup: all and sign-in on.
+func (s *Server) reviewDTO(rev configedit.Review) api.ReviewResponse {
 	out := api.ReviewResponse{
 		Changed: rev.Diff.Changed, Added: rev.Diff.Added, Removed: rev.Diff.Removed,
-		Unified: rev.Diff.Unified, SHA: rev.SHA, Token: rev.Token, Stepup: rev.Stepup,
+		Unified: rev.Diff.Unified, SHA: rev.SHA, Token: rev.Token, Stepup: rev.Stepup || s.stepupEveryApply(),
 	}
 	for _, l := range rev.Diff.Lines {
 		out.Lines = append(out.Lines, api.DiffLineDTO{Op: string(l.Op), Text: l.Text, OldLine: l.OldLine, NewLine: l.NewLine})
@@ -252,12 +261,14 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "no_confirm", "apply needs the confirm token from the review (step-up)", "call GET /api/v1/config/review first")
 		return
 	}
-	// A widening or sign-in-affecting apply needs a step-up when auth is active.
-	// The pipeline decides that under its lock, on the exact candidate it is
-	// about to write, so nothing staged between review and apply slips past.
+	// With sign-in on, every apply needs a step-up (config_stepup: all), or
+	// with config_stepup: guarded every apply that touches a guarded path or
+	// loosens a guardrail. The pipeline decides the latter under its lock, on
+	// the exact candidate it is about to write, so nothing staged between
+	// review and apply slips past.
 	var refused error
 	applied, err := s.edit.ApplyWith(req.Token, func(need bool) error {
-		if need {
+		if need || s.stepupEveryApply() {
 			refused = s.stepupCheck(r, req.Token, req.StepupToken)
 		}
 		return refused
@@ -312,7 +323,7 @@ func (s *Server) handleRestoreReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.noteReview(rev, "restore config backup "+req.ID)
-	writeJSON(w, http.StatusOK, reviewDTO(rev))
+	writeJSON(w, http.StatusOK, s.reviewDTO(rev))
 }
 
 func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {

@@ -318,7 +318,7 @@ export interface AccessData {
   password: { set: boolean; set_at: string }
   totp: { set: boolean; set_at: string }
   passkey_here: boolean
-  auth_policy: { methods: Method[]; password_requires_totp: boolean; stepup: Method[] }
+  auth_policy: { methods: Method[]; password_requires_totp: boolean; stepup: Method[]; config_stepup: 'all' | 'guarded' }
   stepup_methods: Method[]
   credential_digests: Record<'password.set' | 'password.remove' | 'totp.set' | 'totp.remove' | 'passkey.add', string>
   transport: 'https' | 'localhost' | 'http'

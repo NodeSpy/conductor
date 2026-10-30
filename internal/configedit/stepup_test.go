@@ -11,6 +11,12 @@ import (
 const guardedSample = `operators:
   ops:
     ssh_key: ssh-ed25519 AAAA victim
+pricing:
+  default: {input: 1, output: 2}
+usage:
+  mode: off
+store:
+  state_file: /var/lib/conductor/state.json
 bots:
   b1:
     description: one
@@ -21,8 +27,8 @@ dashboard:
 
 // Whether an edit needs a step-up is decided on the whole candidate, not on the
 // path that was staged: a loosening inside a parent map or list is caught, and
-// any change to who can sign in (operators) or how (the dashboard's auth,
-// listeners and session) needs one.
+// anything outside the inert paths (pricing, usage.mode) is guarded: who can
+// sign in and how, the store, and everything that runs on the box.
 func TestClassifyWholeCandidate(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -40,8 +46,19 @@ func TestClassifyWholeCandidate(t *testing.T) {
 		{"session", guardedSample + "  session: {idle: 10m}\n", "", true},
 		{"add an import", "imports: [more.yaml]\n" + guardedSample, "", true},
 		{"unparsable", guardedSample + "  : [\n", "", true},
-		{"sandbox off via its parent", "sandbox: {agents: off}\n" + guardedSample, "sandbox.agents", false},
-		{"a bot's description", strings.Replace(guardedSample, "description: one", "description: two", 1), "", false},
+		{"sandbox off via its parent", "sandbox: {agents: off}\n" + guardedSample, "sandbox.agents", true},
+		{"a bot's description", strings.Replace(guardedSample, "description: one", "description: two", 1), "", true},
+		{"store.state_file", strings.Replace(guardedSample, "/var/lib/conductor/state.json", "/tmp/x/state.json", 1), "", true},
+		{"dashboard.enabled", strings.Replace(guardedSample, "enabled: true", "enabled: false", 1), "", true},
+		{"dashboard.port", guardedSample + "  port: 7000\n", "", true},
+		{"config_stepup guarded", guardedSample + "  auth: {config_stepup: guarded}\n", "dashboard.auth.config_stepup", true},
+		{"a cron connector and a cli trigger", reviewerPayload, "", true},
+		{"a key conductor doesn't know yet", "brand_new: {x: 1}\n" + guardedSample, "", true},
+		{"the whole config a list", "- a\n- b\n", "", true},
+		{"usage sources", strings.Replace(guardedSample, "mode: off", "mode: off\n  sources: [{name: s, type: http, url: http://x}]", 1), "", true},
+		{"pricing", strings.Replace(guardedSample, "input: 1", "input: 3", 1), "", false},
+		{"usage.mode", strings.Replace(guardedSample, "mode: off", "mode: api", 1), "", false},
+		{"no change", guardedSample, "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			widening, guarded := classify([]byte(guardedSample), []byte(c.after))
@@ -64,6 +81,38 @@ func TestClassifyWholeCandidate(t *testing.T) {
 	}
 }
 
+// reviewerPayload is a cron connector firing a trigger whose step runs a shell
+// command: no widening leaf, nothing under operators or the dashboard, and
+// still a shell on the box.
+var reviewerPayload = guardedSample + `connectors:
+  tick:
+    use: cron
+    schedules: {x: {every: 15s, run_on_start: true}}
+triggers:
+  - on: tick.x
+    steps: [{id: pwn, use: cli, command: [sh, -c, id > /tmp/pwned]}]
+`
+
+// The guarded effects name what runs, most specific first.
+func TestClassifyNamesWhatRuns(t *testing.T) {
+	_, guarded := classify([]byte(guardedSample), []byte(reviewerPayload))
+	var paths []string
+	for _, g := range guarded {
+		paths = append(paths, g.Path)
+	}
+	if strings.Join(paths, ",") != "triggers,connectors" {
+		t.Fatalf("guarded = %v, want triggers then connectors", paths)
+	}
+	_, guarded = classify([]byte("{}"), []byte("a: 1\n"))
+	if len(guarded) != 1 || guarded[0].Path != "a" {
+		t.Fatalf("from an empty map: %+v", guarded)
+	}
+	_, guarded = classify([]byte("a: 1\n"), []byte("{}"))
+	if len(guarded) != 1 || guarded[0].Path != "a" {
+		t.Fatalf("to an empty map: %+v", guarded)
+	}
+}
+
 // Through the pipeline: the review says so, and Apply asks its gate with the
 // same answer, on the candidate it writes.
 func TestStepupThroughPipeline(t *testing.T) {
@@ -76,14 +125,18 @@ func TestStepupThroughPipeline(t *testing.T) {
 		{"swap an ssh key", Change{Path: []string{"operators", "ops", "ssh_key"}, Value: "ssh-ed25519 AAAA attacker"}, true},
 		{"remove an operator", Change{Path: []string{"operators", "ops"}, Delete: true}, true},
 		{"session idle", Change{Path: []string{"dashboard", "session", "idle"}, Value: "10m"}, true},
-		{"a bot's description", Change{Path: []string{"bots", "b1", "description"}, Value: "two"}, false},
+		{"a bot's description", Change{Path: []string{"bots", "b1", "description"}, Value: "two"}, true},
+		{"pricing", Change{Path: []string{"pricing", "default", "input"}, Value: 3}, false},
+		{"usage.mode", Change{Path: []string{"usage", "mode"}, Value: "api"}, false},
+		{"a cron connector", Change{Path: []string{"connectors", "tick"}, Value: map[string]any{"use": "cron", "schedules": map[string]any{"x": map[string]any{"every": "15s", "run_on_start": true}}}}, true},
+		{"a cli trigger", Change{Path: []string{"triggers"}, Value: []any{map[string]any{"on": "tick.x", "steps": []any{map[string]any{"id": "pwn", "use": "cli", "command": []any{"sh", "-c", "id"}}}}}}, true},
 		// New sections: these used to fail with "re-parse after edit" instead of
 		// reaching review; they must now review cleanly and still need a step-up.
 		{"add an operator", Change{Path: []string{"operators", "mallory"}, Value: map[string]any{"ssh_key": "ssh-ed25519 AAAA m"}}, true},
 		{"replace all operators", Change{Path: []string{"operators"}, Value: map[string]any{"ops": map[string]any{"ssh_key": "ssh-ed25519 AAAA x"}}}, true},
 		{"add dashboard.auth", Change{Path: []string{"dashboard", "auth"}, Value: map[string]any{"password_requires_totp": false}}, true},
 		{"a leaf under a new section", Change{Path: []string{"dashboard", "auth", "methods"}, Value: []any{"ssh"}}, true},
-		{"a new bot section", Change{Path: []string{"bots", "b2"}, Value: map[string]any{"description": "new"}}, false},
+		{"a new bot section", Change{Path: []string{"bots", "b2"}, Value: map[string]any{"description": "new"}}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p, _, _ := newPipe(t, sample, nil)

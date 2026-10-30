@@ -26,9 +26,18 @@ import (
 
 // buildAuth constructs the auth Manager with the localhost RP (the tailnet RP is
 // added in startTailnet once the MagicDNS name is known). It never blocks or
-// dials; a failure logs and leaves s.auth nil (the dashboard then serves open on
-// localhost, as the bootstrap/e2e daemons do).
+// dials. A failure records authErr, and every listener then refuses the API
+// with the reason (dispatch): a dashboard that can't check sign-ins must not
+// serve as if none were needed. With no state dir and no operators there is
+// nothing to sign in to, and the dashboard serves open as before.
 func (s *Server) buildAuth() {
+	if err := s.wireAuth(); err != nil {
+		s.authErr = err
+		s.deps.Log("dashboard: sign-in is unavailable: %v; the API is refused on every listener until this is fixed", err)
+	}
+}
+
+func (s *Server) wireAuth() error {
 	dir := s.deps.StateDir
 	if dir == "" {
 		if sf := s.deps.Cfg.Store.StateFile; sf != "" {
@@ -36,13 +45,15 @@ func (s *Server) buildAuth() {
 		}
 	}
 	if dir == "" {
-		s.deps.Log("dashboard: no state dir for auth; serving without sign-in")
-		return
+		if s.operatorsConfigured() {
+			return fmt.Errorf("operators are configured but there is no state dir for the sign-in store (set store.state_file)")
+		}
+		s.deps.Log("dashboard: no state dir for auth and no operators; serving without sign-in")
+		return nil
 	}
 	st, err := auth.OpenStore(dir, s.deps.Now)
 	if err != nil {
-		s.deps.Log("dashboard: auth store: %v; serving without sign-in", err)
-		return
+		return fmt.Errorf("the sign-in store: %w", err)
 	}
 	port := s.deps.Cfg.Dashboard.EffectivePort()
 	localhostRP := auth.RP{
@@ -70,10 +81,10 @@ func (s *Server) buildAuth() {
 		DescribeStepup: s.labels.describe,
 	}, rps...)
 	if err != nil {
-		s.deps.Log("dashboard: auth manager: %v; serving without sign-in", err)
-		return
+		return fmt.Errorf("the sign-in manager: %w", err)
 	}
 	s.auth = mgr
+	return nil
 }
 
 // AuthManager exposes the auth Manager so the daemon can serve `conductor
@@ -85,13 +96,23 @@ func (s *Server) AuthManager() *auth.Manager { return s.auth }
 // so requiring it would make localhost bootstrap unusable; it binds localhost
 // only by default).
 func (s *Server) authEnforced() bool {
-	if s.auth == nil || s.deps.Operators == nil {
-		return false
-	}
-	return len(s.deps.Operators()) > 0
+	return s.auth != nil && s.operatorsConfigured()
+}
+
+func (s *Server) operatorsConfigured() bool {
+	return s.deps.Operators != nil && len(s.deps.Operators()) > 0
+}
+
+// stepupEveryApply reports whether every config apply needs a step-up: sign-in
+// is on and dashboard.auth.config_stepup is all (the default).
+func (s *Server) stepupEveryApply() bool {
+	return s.authEnforced() && s.deps.Cfg.Dashboard.Auth.EffectiveConfigStepup() == config.ConfigStepupAll
 }
 
 func (s *Server) authState() string {
+	if s.authErr != nil {
+		return "unavailable — " + s.authErr.Error() + "; the API is refused"
+	}
 	if s.authEnforced() {
 		return "required (" + strings.Join(s.deps.Cfg.Dashboard.Auth.EffectiveMethods(), ", ") + ")"
 	}
@@ -111,6 +132,7 @@ func authPolicy(a config.DashboardAuth) auth.Policy {
 		Methods:              conv(a.EffectiveMethods()),
 		PasswordRequiresTOTP: a.PasswordNeedsTOTP(),
 		Stepup:               conv(a.EffectiveStepup()),
+		ConfigStepup:         a.EffectiveConfigStepup(),
 	}
 }
 
@@ -135,6 +157,16 @@ func (s *Server) listenerHandler(l auth.Listener) http.Handler {
 // load without a session).
 func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
+	if s.authErr != nil && strings.HasPrefix(p, "/api/") {
+		// The cause (it names paths) is shown on this machine only.
+		why := "the dashboard can't check sign-ins, so its API is off"
+		if auth.ConnOf(r).Transport == auth.TransportLocalhost {
+			why = "the dashboard can't check sign-ins (" + s.authErr.Error() + "), so its API is off"
+		}
+		writeError(w, http.StatusServiceUnavailable, "auth_unavailable", why,
+			"fix the cause named in the daemon log, then restart conductor")
+		return
+	}
 	if s.auth != nil && isAuthPath(p) {
 		s.auth.Mux().ServeHTTP(w, r)
 		return
