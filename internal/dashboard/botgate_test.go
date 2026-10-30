@@ -504,3 +504,25 @@ func TestBotAPIAvatarApplyOnlyStages(t *testing.T) {
 		t.Fatal("another session sees dev's staged picture")
 	}
 }
+
+// A write route the chokepoint has no rule for is refused before its handler
+// runs, so a route added to the bot API later can't skip the target check.
+func TestBotAPIUnruledWriteRouteIsRefused(t *testing.T) {
+	g := newBotRig(t, false)
+	hit := false
+	deps := g.s.deps
+	deps.BotRoutes = append(append([]BotRoute(nil), deps.BotRoutes...), BotRoute{
+		Pattern: "POST /v1/bots/{bot}/unruled",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }),
+	})
+	s := New(deps)
+	c := *g.ops
+	c.h = s.bindHandler(deps.Cfg.Dashboard.Bind[0])
+	rr := c.raw("POST", "/api/v1/bots/sre/unruled", "application/json", []byte(`{"text":"hi"}`))
+	if rr.Code != http.StatusForbidden || hit {
+		t.Fatalf("an unruled write route: %d %s (handler ran: %v)", rr.Code, rr.Body, hit)
+	}
+	if rr := c.raw("GET", "/api/v1/bots/sre/unruled", "", nil); rr.Code == http.StatusOK {
+		t.Fatalf("the route is POST only: %d", rr.Code)
+	}
+}

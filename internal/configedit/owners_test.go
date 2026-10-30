@@ -52,6 +52,29 @@ func TestStagedSetsArePerOwner(t *testing.T) {
 	}
 }
 
+// A review token belongs to the owner that reviewed: another owner with the
+// very same staged edits (so the same candidate) still can't apply it, nor
+// review a restore with it.
+func TestReviewTokensAreTheReviewersOwn(t *testing.T) {
+	p, _, _ := newPipe(t, cfgSample, nil)
+	a, b := p.As("session-a"), p.As("session-b")
+	for _, e := range []Edits{a, b} {
+		if _, err := e.Stage(Change{Path: []string{"settings", "greeting"}, Value: "hi"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	revA, err := a.Review()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.ApplyWith(revA.Token, nil); !errors.Is(err, ErrStale) {
+		t.Fatalf("b applied a's token over an identical candidate: %v", err)
+	}
+	if _, err := a.ApplyWith(revA.Token, nil); err != nil {
+		t.Fatalf("a's own token: %v", err)
+	}
+}
+
 // Raising an existing price is the only inert pricing change; lowering,
 // removing or adding one, or a value that isn't a number, widens.
 func TestPricingOnlyRaisingIsInert(t *testing.T) {
