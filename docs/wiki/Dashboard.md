@@ -171,9 +171,11 @@ the same text `approve-login` prints, and the start of its digest. For a
 proposal or a purchase that is the canonical action (a proposal's verb and
 options, a purchase's merchant, items, total and card), pretty-printed, with
 the requester's own summary after it on a line marked as theirs. For a config
-change it is every guarded section and every widening change, then every
-staged edit under them, all in full, then the other staged edits (shortened
-past 20 or 200 characters, and marked when they are). Control and
+change or a restore it is every guarded section and every widening change,
+then each value that changes, with its old and new value: every one outside
+`pricing` and `usage.mode`, and every widening one, in full, however it was
+staged. Only the other changes are shortened (past 20 or 200 characters, and
+marked when they are). Control and
 bidi characters show as escapes such as `\x1b` or `\u202e`, in the dialog and
 in the terminal. The dialog offers the methods
 `auth.stepup` allows that you have on this connection: passkey, SSH key (paste
@@ -213,17 +215,22 @@ a trigger or workflow step can be a shell command, and the dashboard and store
 blocks decide where the sign-in state lives. A session cookie on its own must
 not be enough to change any of that.
 
-`config_stepup: guarded` is the one way to loosen this. It lets an edit that
-only touches `pricing` or `usage.mode` apply on your session alone. Every other
-path still needs a confirmation: `operators`, `imports`, the whole `dashboard`
-and `store` blocks, triggers, workflows, checks, connectors, runtimes, hosts,
-packs, plugins, secrets, and any key the editor doesn't know. A widening change
-such as `password_requires_totp: false`, `allow_plain_http: true`,
-`tailscale.tls: off` or `config_stepup: guarded` itself is named first in the
-review. What you give up with `guarded`: someone holding a stolen session can
-change cost estimates and the usage report mode without your key. The editor
+`config_stepup: guarded` is the one way to loosen this. It lets two kinds of
+edit apply on your session alone: raising a price that is already in
+`pricing`, and setting `usage.mode`. Lowering, removing or adding a price
+needs a confirmation, because every `max_cost_usd` budget cap is counted in
+those prices. Every other path still needs a confirmation: `operators`,
+`imports`, the whole `dashboard` and `store` blocks, triggers, workflows,
+checks, connectors, runtimes, hosts, packs, plugins, secrets, and any key the
+editor doesn't know. A widening change such as a lowered price,
+`password_requires_totp: false`, `allow_plain_http: true`, `tailscale.tls: off`
+or `config_stepup: guarded` itself is named first in the review. The editor
 judges the whole new config, including what it loads through imports, packs
-and YAML references, not only the value you edited.
+and YAML references, not only the value you edited. Applies that skip the
+confirmation are limited to five in ten minutes; after that they ask for one.
+What you give up with `guarded`: someone holding a stolen session can raise
+prices and change the usage report mode, five times in ten minutes, without
+your key.
 
 Every sign-in endpoint accepts only same-origin JSON requests: a request from
 another site, or a body that isn't `application/json`, is refused before it is
@@ -269,8 +276,9 @@ the file's text so every comment, blank line, anchor and section it did not touc
 stays byte-for-byte as it was written — a no-op edit produces an empty diff, and
 a one-value edit a one-line diff. Each change flows through one pipeline:
 
-1. **stage** — the edit is held server-side (`internal/configedit`); last write
-   to a path wins.
+1. **stage** — the edit is held server-side (`internal/configedit`), per
+   signed-in session: another session's edits never show in your review or
+   ride into your apply. Last write to a path wins.
 2. **review** — the diff (line by line), the effects (each change in words), and
    the **widening** list surfaced loudly (any least-privilege guardrail the
    change loosens: `isolation: none`, `sandbox.agents: off`, a wildcard egress, a
@@ -282,8 +290,9 @@ a one-value edit a one-line diff. Each change flows through one pipeline:
    exact reviewed candidate, so a change to the staged set after review is
    rejected as stale. The live file is backed up, replaced atomically, and the
    daemon reloads (SIGHUP).
-5. **history / restore** — every apply keeps a backup; restore runs the same
-   validate → apply gate in reverse.
+5. **history / restore** — every apply keeps a backup of the config it
+   replaced: the newest 50, and the oldest of each of the last 30 days. Restore
+   runs the same validate → apply gate in reverse.
 
 Packs (hold/remove) and System settings/updates are edited the same way — they
 stage config edits and apply through the identical gate.
@@ -298,7 +307,7 @@ Same-origin JSON under `/api/v1` (no CORS).
 | `GET /api/v1/runs?since&limit&cursor` | run history, newest first, cursor-paginated |
 | `GET /api/v1/events?topics=run,attention` | SSE stream; `Last-Event-ID` resumes from the hub's ring |
 | `GET /api/v1/config` | the live config: text, sha, generic tree, flattened scalar leaves, staged edits |
-| `POST /api/v1/config/stage` · `/unstage` · `/clear` | manage the staged edit set |
+| `POST /api/v1/config/stage` · `/unstage` · `/clear` | manage your session's staged edit set |
 | `GET /api/v1/config/review` | diff + effects + widening + candidate sha + the step-up confirm token |
 | `GET /api/v1/config/validate` | SSE: validate the candidate on a copy |
 | `POST /api/v1/config/apply` | apply the staged set (requires the confirm token); backs up, writes, reloads |

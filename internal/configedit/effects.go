@@ -103,10 +103,13 @@ func contains(path []string, seg string) bool {
 	return false
 }
 
-// inertPaths are the only config paths conductor never acts on beyond display
-// and estimates. With dashboard.auth.config_stepup: guarded, an edit confined
-// to them applies on a signed-in session alone. Every other path is guarded,
-// so a key added to the config later needs a step-up until it is listed here.
+// inertPaths are the config paths an edit may change on a signed-in session
+// alone with dashboard.auth.config_stepup: guarded. usage.mode only decides
+// what reports show. pricing is not inert in what it does — cost estimates
+// and every max_cost_usd budget cap count with it — so classify treats any
+// pricing change other than raising an existing price as widening: raising a
+// price only tightens the caps. Every other path is guarded, so a key added to
+// the config later needs a step-up until it is listed here.
 var inertPaths = [][]string{
 	{"pricing"},
 	{"usage", "mode"},
@@ -195,16 +198,17 @@ func guardedEffect(path []string) (rank int, e Effect) {
 
 // classify compares a config's text before and after an edit, however the edit
 // was made (a staged leaf, a whole parent map or list, a restore): widening
-// lists every leaf whose new value loosens a guardrail, and guarded every
-// guarded section with a changed leaf (anything outside inertPaths).
-func classify(before, after []byte) (widening, guarded []Effect) {
+// lists every leaf whose new value loosens a guardrail, guarded every guarded
+// section with a changed leaf (anything outside inertPaths), and leaves every
+// changed leaf with its values.
+func classify(before, after []byte) (widening, guarded []Effect, leaves []LeafChange) {
 	b, _ := decodeText(before)
 	a, err := decodeText(after)
 	if err != nil {
-		return nil, []Effect{{Path: "(config)", Text: "the new config doesn't parse"}}
+		return nil, []Effect{{Path: "(config)", Text: "the new config doesn't parse"}}, nil
 	}
 	if _, isMap := a.(map[string]any); !isMap && a != nil {
-		return nil, []Effect{{Path: "(config)", Text: "replaces the whole config with something that isn't a map"}}
+		return nil, []Effect{{Path: "(config)", Text: "replaces the whole config with something that isn't a map"}}, nil
 	}
 	bl, al := map[string]leaf{}, map[string]leaf{}
 	flatten(b, nil, bl)
@@ -234,24 +238,35 @@ func classify(before, after []byte) (widening, guarded []Effect) {
 		if inA && inB && reflect.DeepEqual(lb.val, la.val) {
 			continue
 		}
-		if !inert(path) {
+		lc := LeafChange{Path: k, Before: lb.val, After: la.val, Had: inB, Has: inA, Guarded: !inert(path)}
+		if lc.Guarded {
 			r, e := guardedEffect(path)
 			seen[e.Path] = ranked{r, e}
 		}
+		var w string
 		switch {
 		case !inA:
 			if wideningDelete(lb.path) {
-				widening = append(widening, Effect{Path: k, Text: "removes " + k, Widens: true})
+				w = "removes " + k
 			}
 		case !inB:
 			if isWidening(la.path, nil, la.val) {
-				widening = append(widening, Effect{Path: k, Text: fmt.Sprintf("sets %s to %v", k, la.val), Widens: true})
+				w = fmt.Sprintf("sets %s to %v", k, la.val)
 			}
 		default:
 			if isWidening(la.path, lb.val, la.val) {
-				widening = append(widening, Effect{Path: k, Text: fmt.Sprintf("changes %s from %v to %v", k, lb.val, la.val), Widens: true})
+				w = fmt.Sprintf("changes %s from %v to %v", k, lb.val, la.val)
 			}
 		}
+		if w == "" && hasPrefix(path, []string{"pricing"}) && !priceRaised(lb.val, la.val, inB, inA) {
+			w = fmt.Sprintf("%s %s (cost estimates and every max_cost_usd budget cap count with pricing; only raising an existing price is inert)",
+				map[bool]string{true: "changes or adds", false: "removes"}[inA], k)
+		}
+		if w != "" {
+			lc.Widens = true
+			widening = append(widening, Effect{Path: k, Text: w, Widens: true})
+		}
+		leaves = append(leaves, lc)
 	}
 	rs := make([]ranked, 0, len(seen))
 	for _, r := range seen {
@@ -266,7 +281,34 @@ func classify(before, after []byte) (widening, guarded []Effect) {
 	for _, r := range rs {
 		guarded = append(guarded, r.e)
 	}
-	return widening, guarded
+	return widening, guarded, leaves
+}
+
+// priceRaised reports whether a pricing leaf only went up: it existed, and
+// both values are numbers with the new one larger. Lowering, removing or
+// adding a price (a new model pattern or default can undercut the price that
+// applied before), or anything that isn't a number, is not.
+func priceRaised(before, after any, had, has bool) bool {
+	if !had || !has {
+		return false
+	}
+	b, okB := number(before)
+	a, okA := number(after)
+	return okB && okA && a > b
+}
+
+func number(v any) (float64, bool) {
+	switch x := v.(type) {
+	case int:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case uint64:
+		return float64(x), true
+	case float64:
+		return x, true
+	}
+	return 0, false
 }
 
 // leaf is one scalar of a decoded config, with its path.

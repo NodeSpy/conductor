@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/configedit"
@@ -72,6 +73,70 @@ func (s *Server) editAvailable(w http.ResponseWriter) bool {
 	return true
 }
 
+// edits is r's session's view of the config pipeline. Staged sets are per
+// session (configedit.Edits): a review, confirmation and apply cover the
+// applying session's own edits only. Without a session (sign-in off) every
+// request shares the unowned set.
+func (s *Server) edits(r *http.Request) configedit.Edits {
+	owner := ""
+	if sess, ok := auth.SessionFrom(r); ok {
+		owner = sess.ID
+	}
+	return s.edit.As(owner)
+}
+
+// QUIET APPLIES. With config_stepup: guarded, an apply confined to the inert
+// paths needs no step-up. Each one still takes a backup and reloads the
+// daemon, so they are rate-limited daemon-wide: past quietApplyBurst within
+// quietApplyWindow, an apply needs a step-up like any other. A stolen session
+// can't loop restarts or churn the history; the operator, confirming, can.
+const (
+	quietApplyBurst  = 5
+	quietApplyWindow = 10 * time.Minute
+)
+
+type applyBudget struct {
+	mu  sync.Mutex
+	at  []time.Time
+	now func() time.Time
+}
+
+func newApplyBudget(now func() time.Time) *applyBudget {
+	if now == nil {
+		now = time.Now
+	}
+	return &applyBudget{now: now}
+}
+
+func (b *applyBudget) pruneLocked() {
+	cut := b.now().Add(-quietApplyWindow)
+	i := 0
+	for i < len(b.at) && !b.at[i].After(cut) {
+		i++
+	}
+	b.at = b.at[i:]
+}
+
+// spent reports whether no quiet apply is left in the window.
+func (b *applyBudget) spent() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pruneLocked()
+	return len(b.at) >= quietApplyBurst
+}
+
+// take uses one quiet apply, or reports there is none left.
+func (b *applyBudget) take() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pruneLocked()
+	if len(b.at) >= quietApplyBurst {
+		return false
+	}
+	b.at = append(b.at, b.now())
+	return true
+}
+
 // handleConfig serves the live config file: text, sha, a generic tree, the
 // flattened scalar leaves and the staged edits.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -95,15 +160,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		Text:   string(b),
 		Tree:   tree,
 		Leaves: flattenLeaves(tree),
-		Staged: stagedDTO(s.edit),
+	}
+	if s.edit != nil {
+		resp.Staged = stagedDTO(s.edits(r))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func stagedDTO(p *configedit.Pipeline) []api.ConfigChange {
-	if p == nil {
-		return nil
-	}
+func stagedDTO(p configedit.Edits) []api.ConfigChange {
 	var out []api.ConfigChange
 	for _, c := range p.Staged() {
 		out = append(out, api.ConfigChange{
@@ -127,13 +191,13 @@ func (s *Server) handleStage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "a change needs a path", "")
 		return
 	}
-	if _, err := s.edit.Stage(configedit.Change{
+	if _, err := s.edits(r).Stage(configedit.Change{
 		Path: req.Path, Value: req.Value, Delete: req.Delete, Summary: req.Summary,
 	}); err != nil {
 		writeError(w, http.StatusBadRequest, "stage", err.Error(), "")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"staged": stagedDTO(s.edit)})
+	writeJSON(w, http.StatusOK, map[string]any{"staged": stagedDTO(s.edits(r))})
 }
 
 func (s *Server) handleUnstage(w http.ResponseWriter, r *http.Request) {
@@ -146,15 +210,15 @@ func (s *Server) handleUnstage(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	s.edit.Unstage(req.ID)
-	writeJSON(w, http.StatusOK, map[string]any{"staged": stagedDTO(s.edit)})
+	s.edits(r).Unstage(req.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"staged": stagedDTO(s.edits(r))})
 }
 
 func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {
 	if !s.editAvailable(w) {
 		return
 	}
-	s.edit.Clear()
+	s.edits(r).Clear()
 	writeJSON(w, http.StatusOK, map[string]any{"staged": []api.ConfigChange{}})
 }
 
@@ -164,7 +228,7 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 	if !s.editAvailable(w) {
 		return
 	}
-	rev, err := s.edit.Review()
+	rev, err := s.edits(r).Review()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "review", err.Error(), "the staged edits do not apply cleanly to the current config")
 		return
@@ -180,7 +244,7 @@ func (s *Server) reviewDTO(r *http.Request, rev configedit.Review, what string) 
 	s.labels.note(r, auth.PurposeConfigApply, rev.Token, desc)
 	out := api.ReviewResponse{
 		Changed: rev.Diff.Changed, Added: rev.Diff.Added, Removed: rev.Diff.Removed,
-		Unified: rev.Diff.Unified, SHA: rev.SHA, Token: rev.Token, Stepup: rev.Stepup || s.stepupEveryApply(),
+		Unified: rev.Diff.Unified, SHA: rev.SHA, Token: rev.Token, Stepup: rev.Stepup || s.stepupEveryApply() || s.quiet.spent(),
 		Description: desc,
 	}
 	for _, l := range rev.Diff.Lines {
@@ -224,7 +288,8 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 	emit(map[string]any{"type": "start", "ts": time.Now().UTC().Format(time.RFC3339)})
 
 	done := make(chan error, 1)
-	go func() { done <- s.edit.Validate() }()
+	ed := s.edits(r)
+	go func() { done <- ed.Validate() }()
 
 	select {
 	case <-r.Context().Done():
@@ -259,8 +324,8 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	// review and apply slips past.
 	var refused error
 	stepped := "no"
-	applied, err := s.edit.ApplyWith(req.Token, func(need bool) error {
-		if need || s.stepupEveryApply() {
+	applied, err := s.edits(r).ApplyWith(req.Token, func(need bool) error {
+		if need || s.stepupEveryApply() || !s.quiet.take() {
 			stepped = "yes"
 			refused = s.stepupCheck(r, req.Token, req.StepupToken)
 		}
@@ -310,7 +375,7 @@ func (s *Server) handleRestoreReview(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	rev, _, err := s.edit.RestoreReview(req.ID)
+	rev, _, err := s.edits(r).RestoreReview(req.ID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "restore_review", err.Error(), "")
 		return
@@ -335,7 +400,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 	if !s.requireStepup(w, r, req.Token, req.StepupToken) {
 		return
 	}
-	applied, err := s.edit.Restore(req.ID, req.Token)
+	applied, err := s.edits(r).Restore(req.ID, req.Token)
 	if err != nil {
 		if errors.Is(err, configedit.ErrStale) {
 			writeError(w, http.StatusConflict, "stale", err.Error(), "")

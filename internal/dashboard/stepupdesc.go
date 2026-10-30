@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -92,18 +93,22 @@ func (l *stepupLabels) describe(session string, purpose auth.Purpose, digest str
 	return v.text
 }
 
-// Shortening applies only to staged edits outside every guarded and widening
-// path (cosmetic ones); an edit under one is shown in full, so the operator
-// reads the exact new ssh_key or command, not its first characters.
+// A config confirmation is built from what changes, leaf by leaf, between the
+// live config and the candidate (configedit's classify), never from how the
+// edit was staged: an ssh_key swapped by staging the whole operators map shows
+// as the ssh_key leaf it changes. Every leaf outside the inert paths, and every
+// widening leaf, is shown in full with its old and new value. Only the other
+// (inert) leaves can be shortened, or dropped past descEditMax.
 const (
-	descEditMax  = 20  // staged edits listed
-	descEditRune = 200 // characters per staged edit
+	descEditMax  = 20  // inert leaves listed
+	descEditRune = 200 // characters per inert leaf
 )
 
 // describeConfig is a config apply's or restore's description: what, then
-// every guarded section and every widening change in full, then the staged
-// edits under them in full, then the other staged edits (shortened, and said
-// so), then the diff size. Every value in it is made safe to print.
+// every guarded section and every widening change, then every changed leaf
+// under a guarded or widening path in full, then the other changed leaves
+// (shortened, and said so), then the diff size. Every value in it is made
+// safe to print.
 func describeConfig(what string, rev configedit.Review) string {
 	var b strings.Builder
 	b.WriteString(auth.SafeText(what))
@@ -118,42 +123,63 @@ func describeConfig(what string, rev configedit.Review) string {
 	}
 	list("guarded (why it needs this confirmation):", rev.Guarded)
 	list("loosens a guardrail:", rev.Widening)
-	var guarded, cosmetic []configedit.Effect
-	for _, e := range rev.Effects {
-		if underAny(e.Path, rev.Guarded) || underAny(e.Path, rev.Widening) {
-			guarded = append(guarded, e)
+	var full, other []configedit.LeafChange
+	for _, c := range rev.Changes {
+		if c.Guarded || c.Widens {
+			full = append(full, c)
 		} else {
-			cosmetic = append(cosmetic, e)
+			other = append(other, c)
 		}
 	}
-	list("staged edits to guarded settings (in full):", guarded)
-	if len(cosmetic) > 0 {
-		b.WriteString("\nother staged edits:")
-		for i, e := range cosmetic {
+	if len(full) > 0 {
+		b.WriteString("\nchanges to guarded settings (in full):")
+		for _, c := range full {
+			b.WriteString("\n  - " + auth.SafeText(leafText(c)))
+		}
+	}
+	if len(other) > 0 {
+		b.WriteString("\nother changes:")
+		for i, c := range other {
 			if i == descEditMax {
-				fmt.Fprintf(&b, "\n  … and %d more (not shown here; the page lists them all)", len(cosmetic)-descEditMax)
+				fmt.Fprintf(&b, "\n  … and %d more (not shown here; the page lists them all)", len(other)-descEditMax)
 				break
 			}
-			t := []rune(e.Text)
+			t := []rune(leafText(c))
+			text := string(t)
 			if len(t) > descEditRune {
-				e.Text = fmt.Sprintf("%s… (shortened: %d more characters)", string(t[:descEditRune]), len(t)-descEditRune)
+				text = fmt.Sprintf("%s… (shortened: %d more characters)", string(t[:descEditRune]), len(t)-descEditRune)
 			}
-			b.WriteString("\n  - " + auth.SafeText(e.Text))
+			b.WriteString("\n  - " + auth.SafeText(text))
 		}
 	}
 	fmt.Fprintf(&b, "\ndiff: %d lines added, %d removed", rev.Diff.Added, rev.Diff.Removed)
 	return b.String()
 }
 
-// underAny reports whether the dotted path is one of es's paths or under one;
-// "(config)" (the config as a whole) covers every path.
-func underAny(path string, es []configedit.Effect) bool {
-	for _, e := range es {
-		if e.Path == "(config)" || path == e.Path || strings.HasPrefix(path, e.Path+".") {
-			return true
-		}
+// leafText is one changed leaf: its path, and its value before and after.
+// Strings are quoted, so spaces and empty values show.
+func leafText(c configedit.LeafChange) string {
+	switch {
+	case !c.Had:
+		return fmt.Sprintf("%s: (none) → %s", c.Path, leafValue(c.After))
+	case !c.Has:
+		return fmt.Sprintf("%s: %s → (removed)", c.Path, leafValue(c.Before))
 	}
-	return false
+	return fmt.Sprintf("%s: %s → %s", c.Path, leafValue(c.Before), leafValue(c.After))
+}
+
+func leafValue(v any) string {
+	switch x := v.(type) {
+	case string:
+		return strconv.Quote(x)
+	case map[string]any:
+		return "{}"
+	case []any:
+		return "[]"
+	case nil:
+		return "null"
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // describeAction is an approval's or purchase's description: the decision,

@@ -51,7 +51,13 @@ export function Config(): JSX.Element {
             {staged.value.map((s) => (
               <li>
                 <span class="mono id">{s.path.join('.')}</span>
-                <span class="staged-val">{s.delete ? '(remove)' : String(s.value)}</span>
+                {s.delete ? (
+                  <span class="staged-val">(remove)</span>
+                ) : isStructured(s.value) ? (
+                  <pre class="staged-val staged-tree mono" data-testid="staged-tree">{JSON.stringify(s.value, null, 2)}</pre>
+                ) : (
+                  <span class="staged-val">{fmt(s.value)}</span>
+                )}
                 <button class="btn ghost sm" type="button" onClick={() => void unstage(s.id)}>
                   Discard
                 </button>
@@ -119,6 +125,12 @@ function Field({ leaf, editable, staged: isStaged }: { leaf: ConfigLeaf; editabl
       {isStaged ? <span class="field-badge">staged</span> : null}
     </label>
   )
+}
+
+// A staged map or list (a whole section staged at once) is shown in full as
+// indented JSON, never as "[object Object]".
+function isStructured(v: unknown): boolean {
+  return typeof v === 'object' && v !== null
 }
 
 function fmt(v: unknown): string {

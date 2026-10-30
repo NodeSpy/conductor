@@ -65,3 +65,20 @@ test('edit a setting → review the diff → apply → confirm', async ({ page, 
   expect(after).toContain('box: { use: command }') // untouched section intact
   expect(after).not.toContain('greeting: hello')
 })
+
+test('a staged map shows its value, not [object Object]', async ({ page }) => {
+  await page.goto(`${rt.baseURL}/#/config`)
+  await expect(page.locator('input[data-path="settings.greeting"]')).toBeVisible()
+  // A whole section staged at once (as the Packs and System screens can).
+  const res = await page.request.post(`${rt.baseURL}/api/v1/config/stage`, {
+    data: { path: ['settings'], value: { greeting: 'hi there', concurrency: 2, tags: ['a', 'b'] } },
+  })
+  expect(res.ok()).toBeTruthy()
+  await page.reload()
+  const tree = page.getByTestId('staged-tree')
+  await expect(tree).toBeVisible()
+  await expect(tree).toContainText('"greeting": "hi there"')
+  await expect(tree).toContainText('"tags": [')
+  await expect(page.locator('.staged-list')).not.toContainText('[object Object]')
+  await page.request.post(`${rt.baseURL}/api/v1/config/clear`, { data: {} })
+})

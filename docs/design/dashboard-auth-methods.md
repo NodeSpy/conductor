@@ -50,9 +50,31 @@ dashboard:
   workflows, checks, connectors, runtimes, hosts, engines, models, packs,
   plugin and pack trust, secrets, vaults, the sandbox, the browser, callable,
   policy, bots, teams, update and `dry_run`. A key that is not on the inert
-  list, including one added to the config later, is guarded. What this mode
-  gives up: a stolen session can change cost estimates and the usage report
-  mode. Setting it is itself a widening change.
+  list, including one added to the config later, is guarded.
+  - `pricing` is not only display: cost estimates and every `max_cost_usd`
+    budget cap count with it. Raising an existing price only tightens the
+    caps, so that is inert. Lowering or removing a price, adding one (a new
+    model pattern or default can undercut the price that applied before), or
+    a value that is not a number is a widening.
+  - Within the inert list, only changes the editor can judge are inert:
+    raising an existing price, and setting `usage.mode` (with or without a
+    `usage` block). An edit whose loaded config differs elsewhere, or that
+    can't be loaded, needs a step-up ("(loaded config)").
+  - Applies that need no step-up are rate-limited across the daemon: five in
+    any ten minutes. Past that, an apply needs a step-up like any other, so a
+    stolen session can't loop restarts or churn the restore history.
+  - What this mode gives up: a stolen session can raise prices (tightening the
+    caps, which can stop work early) and change the usage report mode, five
+    times in ten minutes. Setting it is itself a widening change.
+- **Staged edits are per session.** A review, its confirmation and the apply
+  cover the applying session's own staged edits. Another session's edits,
+  even the same operator's, never show in or ride into them, and its review
+  token is refused. An apply writes and clears the applying session's set
+  only; another session's set stays staged against the new file.
+- **History.** Every apply and restore keeps a backup of the config it
+  replaced. The newest 50 are kept, and the oldest of each of the last 30
+  days (how the config stood when that day's changes began), so a burst of
+  applies can't prune the earlier days' restore points.
 - The config editor decides this from the whole candidate, not from the path
   that was staged:
   - it compares every leaf between the live file and the candidate, so staging
@@ -162,11 +184,15 @@ challenge.
   proposal's or a purchase's approval view, a config review, a wallet change or
   a browser take-over refused for want of a step-up), it records for that
   session what confirming the digest does, built from its own data:
-  - a config apply lists every guarded section and every widening change
-    first, then the staged edits under a guarded or widening path, all in
-    full, then the other staged edits, then the diff size. Only those other
-    edits can be shortened (at most 20, 200 characters each), and the text
-    says when they are;
+  - a config apply or restore lists every guarded section and every widening
+    change first. Then it lists what changes, leaf by leaf, between the live
+    config and the candidate, with each leaf's old and new value. This comes
+    from the whole candidate, not from how the edit was staged, so an
+    `ssh_key` swapped by staging the whole `operators` map shows as that
+    leaf. Every leaf outside the inert paths, and every widening leaf, is
+    shown in full. Only the other (inert) leaves can be shortened (at most 20,
+    200 characters each), and the text says when they are. The diff size
+    comes last;
   - an approval or a purchase shows the canonical action the digest pins (a
     proposal's kind, `uses` and `options`, or a purchase's merchant, items,
     total, card and the rest), pretty-printed, then the requester's own

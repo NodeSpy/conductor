@@ -25,7 +25,7 @@ type HistoryEntry struct {
 }
 
 // backup copies the current config content into the history dir and returns its
-// id. Best-effort pruning keeps the most recent maxBackups.
+// id. Best-effort pruning follows (keepBackup).
 func (p *Pipeline) backup(content []byte) (string, error) {
 	dir := filepath.Join(filepath.Dir(p.path), historyDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -43,7 +43,16 @@ func (p *Pipeline) backup(content []byte) (string, error) {
 	return id, nil
 }
 
-const maxBackups = 50
+// RETENTION keeps the newest maxBackups, and the oldest backup of each of the
+// last keepDays UTC days. A backup holds the config as it was before an apply,
+// so a day's oldest is how it stood when that day's changes began: a burst of
+// applies (a stolen session in config_stepup: guarded can make some) prunes
+// only within the newest 50 and that day, never the earlier days' starting
+// points.
+const (
+	maxBackups = 50
+	keepDays   = 30
+)
 
 func (p *Pipeline) pruneBackups(dir string) {
 	ents, err := os.ReadDir(dir)
@@ -60,8 +69,23 @@ func (p *Pipeline) pruneBackups(dir string) {
 		return
 	}
 	sort.Strings(files) // timestamp-prefixed → chronological
-	for _, f := range files[:len(files)-maxBackups] {
-		_ = os.Remove(filepath.Join(dir, f))
+	keep := map[string]bool{}
+	for _, f := range files[len(files)-maxBackups:] {
+		keep[f] = true
+	}
+	oldest := p.now().UTC().AddDate(0, 0, -keepDays).Format("20060102")
+	seenDay := map[string]bool{}
+	for _, f := range files {
+		day := f[:min(8, len(f))]
+		if day >= oldest && !seenDay[day] {
+			seenDay[day] = true
+			keep[f] = true
+		}
+	}
+	for _, f := range files {
+		if !keep[f] {
+			_ = os.Remove(filepath.Join(dir, f))
+		}
 	}
 }
 
@@ -106,10 +130,20 @@ func (p *Pipeline) backupContent(id string) ([]byte, error) {
 	return os.ReadFile(name)
 }
 
-// RestoreReview renders the diff from restoring a backup over the current file,
-// and mints a confirm token bound to that candidate — the same review shape as a
-// staged edit, so restore flows through the identical apply gate.
+// RestoreReview is the unowned RestoreReview.
 func (p *Pipeline) RestoreReview(id string) (Review, []byte, error) {
+	return p.As("").RestoreReview(id)
+}
+
+// Restore is the unowned Restore.
+func (p *Pipeline) Restore(id, token string) (Applied, error) { return p.As("").Restore(id, token) }
+
+// RestoreReview renders the diff from restoring a backup over the current file,
+// and mints a confirm token bound to the owner and that candidate — the same
+// review shape as a staged edit, so restore flows through the identical apply
+// gate.
+func (e Edits) RestoreReview(id string) (Review, []byte, error) {
+	p := e.p
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	before, err := p.current()
@@ -124,12 +158,13 @@ func (p *Pipeline) RestoreReview(id string) (Review, []byte, error) {
 	sum := sha256.Sum256(after)
 	sha := hex.EncodeToString(sum[:])
 	tok := randID()
-	p.tokens.Store(tok, sha)
-	widening, guarded := p.classifyLocked(before, after)
+	p.tokens.Store(tok, tokenBind{owner: e.owner, sha: sha})
+	widening, guarded, leaves := p.classifyLocked(before, after)
 	rev := Review{
-		Diff:  diff,
-		SHA:   sha[:12],
-		Token: tok,
+		Changes: leaves,
+		Diff:    diff,
+		SHA:     sha[:12],
+		Token:   tok,
 		Effects: []Effect{{
 			Path: "(restore)",
 			Text: fmt.Sprintf("restores the config to backup %s", id),
@@ -144,7 +179,8 @@ func (p *Pipeline) RestoreReview(id string) (Review, []byte, error) {
 // Restore validates a backup, backs up the current file, writes the backup over
 // the live config, and reloads — reusing the whole apply contract. token must be
 // the one minted by the matching RestoreReview.
-func (p *Pipeline) Restore(id, token string) (Applied, error) {
+func (e Edits) Restore(id, token string) (Applied, error) {
+	p := e.p
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -158,8 +194,7 @@ func (p *Pipeline) Restore(id, token string) (Applied, error) {
 	}
 	sum := sha256.Sum256(after)
 	sha := hex.EncodeToString(sum[:])
-	v, ok := p.tokens.Load(token)
-	if !ok || v.(string) != sha {
+	if !p.tokenFor(token, e.owner, sha) {
 		return Applied{}, ErrStale
 	}
 	if !ComputeDiff(before, after).Changed {
@@ -177,7 +212,7 @@ func (p *Pipeline) Restore(id, token string) (Applied, error) {
 		return Applied{}, err
 	}
 	p.tokens.Delete(token)
-	p.staged = nil
+	delete(p.staged, e.owner)
 	reloadErr := ""
 	if err := p.reload(); err != nil {
 		reloadErr = err.Error()

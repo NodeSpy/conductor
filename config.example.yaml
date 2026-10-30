@@ -488,7 +488,9 @@ engines:
 #     policy:
 #       budget: { max_cost_usd: 5 }                  # workflow scope (24h default)
 
-# pricing: — override the built-in model→$ table estimation uses.
+# pricing: — override the built-in model→$ table estimation uses. Every
+# max_cost_usd budget cap counts in these prices, so the dashboard treats
+# lowering, removing or adding a price as a widening.
 # pricing:
 #   models:
 #     "claude-opus-*": { input: 15.00, output: 75.00 }   # $ per 1M tokens
@@ -1825,11 +1827,13 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #                            # credential changes (default). `password` is accepted
 #                            # here only with password_requires_totp: false.
 #     config_stepup: all     # default: every config apply and restore from the
-#                            # dashboard needs a confirmation. guarded: edits that
-#                            # only touch pricing or usage.mode apply on a session
-#                            # alone; everything else (anything that runs on the
-#                            # box, operators, the dashboard and store blocks)
-#                            # still asks. An explicit loosen.
+#                            # dashboard needs a confirmation. guarded: raising an
+#                            # existing price and setting usage.mode apply on a
+#                            # session alone (five in ten minutes); lowering,
+#                            # removing or adding a price, and everything else
+#                            # (anything that runs on the box, operators, the
+#                            # dashboard and store blocks) still asks. An
+#                            # explicit loosen.
 #   bind:                    # extra listeners on explicit addresses
 #     - address: 0.0.0.0:7790
 #       hostnames: [conductor.home.arpa]   # REQUIRED Host allowlist (DNS rebinding);

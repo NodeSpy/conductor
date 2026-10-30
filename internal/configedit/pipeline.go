@@ -37,9 +37,32 @@ type Pipeline struct {
 	reload   func() error // signal the daemon to re-read its config (SIGHUP)
 	now      func() time.Time
 
-	staged []Change
-	tokens sync.Map // confirm token (string) → candidate sha (string)
+	staged map[string]*stagedSet // owner → its staged edits
+	tokens sync.Map              // confirm token (string) → tokenBind
 }
+
+// STAGED SETS ARE PER OWNER. The dashboard stages under the session's id, so
+// one session's edits never ride into another's review, confirmation or apply:
+// a review covers its owner's set, its token binds to that owner, and an apply
+// writes and clears that set only. Another owner's set stays staged against
+// the new file, and its earlier review token goes stale with it. The
+// Pipeline's own Stage, Review, Apply… use the unowned set "" (sign-in off,
+// and tests).
+type stagedSet struct {
+	changes []Change
+	touched time.Time
+}
+
+// tokenBind is what a confirm token binds to: the owner whose review minted
+// it and the candidate's sha.
+type tokenBind struct {
+	owner, sha string
+}
+
+const (
+	maxOwners       = 256  // staged sets kept; the least recently touched goes first
+	maxStagedPerSet = 1000 // edits in one set
+)
 
 // Change is one staged edit. Value is nil for a delete.
 type Change struct {
@@ -86,21 +109,65 @@ func (p *Pipeline) Path() string { return p.path }
 // current reads the live config bytes.
 func (p *Pipeline) current() ([]byte, error) { return os.ReadFile(p.path) }
 
-// Staged returns a copy of the staged changes.
-func (p *Pipeline) Staged() []Change {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	out := make([]Change, len(p.staged))
-	copy(out, p.staged)
+// Edits is one owner's view of the pipeline: its staged set, and the review
+// and apply of that set.
+type Edits struct {
+	p     *Pipeline
+	owner string
+}
+
+// As is owner's view of the pipeline.
+func (p *Pipeline) As(owner string) Edits { return Edits{p: p, owner: owner} }
+
+// setLocked is owner's staged set, created (and the least recently touched set
+// evicted past maxOwners) when create is set.
+func (p *Pipeline) setLocked(owner string, create bool) *stagedSet {
+	if p.staged == nil {
+		p.staged = map[string]*stagedSet{}
+	}
+	set := p.staged[owner]
+	if set == nil && create {
+		if len(p.staged) >= maxOwners {
+			oldest := ""
+			for o, s := range p.staged {
+				if oldest == "" || s.touched.Before(p.staged[oldest].touched) {
+					oldest = o
+				}
+			}
+			delete(p.staged, oldest)
+		}
+		set = &stagedSet{}
+		p.staged[owner] = set
+	}
+	if set != nil {
+		set.touched = p.now()
+	}
+	return set
+}
+
+func (p *Pipeline) changesLocked(owner string) []Change {
+	if set := p.staged[owner]; set != nil {
+		return set.changes
+	}
+	return nil
+}
+
+// Staged returns a copy of the owner's staged changes.
+func (e Edits) Staged() []Change {
+	e.p.mu.Lock()
+	defer e.p.mu.Unlock()
+	cs := e.p.changesLocked(e.owner)
+	out := make([]Change, len(cs))
+	copy(out, cs)
 	return out
 }
 
 // Stage adds or replaces a staged change. A second edit to the same path
 // replaces the first (last write wins), so the staged set never holds two edits
 // of one value.
-func (p *Pipeline) Stage(c Change) (Change, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+func (e Edits) Stage(c Change) (Change, error) {
+	e.p.mu.Lock()
+	defer e.p.mu.Unlock()
 	if len(c.Path) == 0 {
 		return Change{}, fmt.Errorf("configedit: a change needs a path")
 	}
@@ -108,40 +175,61 @@ func (p *Pipeline) Stage(c Change) (Change, error) {
 		c.ID = randID()
 	}
 	c.Section = c.Path[0]
+	set := e.p.setLocked(e.owner, true)
 	// Replace any existing staged edit of the same path.
 	key := pathKey(c.Path)
-	for i, ex := range p.staged {
+	for i, ex := range set.changes {
 		if pathKey(ex.Path) == key {
-			p.staged[i] = c
+			set.changes[i] = c
 			return c, nil
 		}
 	}
-	p.staged = append(p.staged, c)
+	if len(set.changes) >= maxStagedPerSet {
+		return Change{}, fmt.Errorf("configedit: %d edits are staged already; apply or clear them first", maxStagedPerSet)
+	}
+	set.changes = append(set.changes, c)
 	return c, nil
 }
 
 // Unstage drops a staged change by id. Unknown ids are ignored.
-func (p *Pipeline) Unstage(id string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	out := p.staged[:0]
-	for _, c := range p.staged {
+func (e Edits) Unstage(id string) {
+	e.p.mu.Lock()
+	defer e.p.mu.Unlock()
+	set := e.p.setLocked(e.owner, false)
+	if set == nil {
+		return
+	}
+	out := set.changes[:0]
+	for _, c := range set.changes {
 		if c.ID != id {
 			out = append(out, c)
 		}
 	}
-	p.staged = out
+	set.changes = out
 }
 
-// Clear drops all staged changes.
-func (p *Pipeline) Clear() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.staged = nil
+// Clear drops all of the owner's staged changes.
+func (e Edits) Clear() {
+	e.p.mu.Lock()
+	defer e.p.mu.Unlock()
+	delete(e.p.staged, e.owner)
 }
 
-// candidateLocked renders the current file with every staged change applied.
-func (p *Pipeline) candidateLocked() (before, after []byte, err error) {
+// Staged is the unowned set's Staged.
+func (p *Pipeline) Staged() []Change { return p.As("").Staged() }
+
+// Stage is the unowned set's Stage.
+func (p *Pipeline) Stage(c Change) (Change, error) { return p.As("").Stage(c) }
+
+// Unstage is the unowned set's Unstage.
+func (p *Pipeline) Unstage(id string) { p.As("").Unstage(id) }
+
+// Clear is the unowned set's Clear.
+func (p *Pipeline) Clear() { p.As("").Clear() }
+
+// candidateLocked renders the current file with every one of owner's staged
+// changes applied.
+func (p *Pipeline) candidateLocked(owner string) (before, after []byte, err error) {
 	before, err = p.current()
 	if err != nil {
 		return nil, nil, err
@@ -150,7 +238,7 @@ func (p *Pipeline) candidateLocked() (before, after []byte, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	for _, c := range p.staged {
+	for _, c := range p.changesLocked(owner) {
 		if c.Delete {
 			if err := doc.Delete(c.Path); err != nil {
 				return nil, nil, fmt.Errorf("stage %s: %w", pathKey(c.Path), err)
@@ -165,11 +253,14 @@ func (p *Pipeline) candidateLocked() (before, after []byte, err error) {
 }
 
 // Candidate returns the current and candidate bytes.
-func (p *Pipeline) Candidate() (before, after []byte, err error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.candidateLocked()
+func (e Edits) Candidate() (before, after []byte, err error) {
+	e.p.mu.Lock()
+	defer e.p.mu.Unlock()
+	return e.p.candidateLocked(e.owner)
 }
+
+// Candidate is the unowned set's Candidate.
+func (p *Pipeline) Candidate() (before, after []byte, err error) { return p.As("").Candidate() }
 
 // Diff is the staged set's diff plus its effects (the least-privilege wideners).
 type Review struct {
@@ -184,6 +275,22 @@ type Review struct {
 	// Stepup is whether applying needs a step-up: something widens, or
 	// something guarded changes.
 	Stepup bool `json:"stepup"`
+	// Changes is every changed leaf, before and after, from the whole
+	// candidate (however it was staged): what a confirmation describes.
+	Changes []LeafChange `json:"changes"`
+}
+
+// LeafChange is one scalar (or empty map or list) that differs between the
+// live config and the candidate.
+type LeafChange struct {
+	Path   string `json:"path"`
+	Before any    `json:"before,omitempty"`
+	After  any    `json:"after,omitempty"`
+	Had    bool   `json:"had"` // the live config has the leaf
+	Has    bool   `json:"has"` // the candidate has it
+	// Guarded: outside the inert paths. Widens: it loosens a guardrail.
+	Guarded bool `json:"guarded"`
+	Widens  bool `json:"widens"`
 }
 
 // Effect describes one change in words, with its YAML path.
@@ -193,18 +300,19 @@ type Effect struct {
 	Widens bool   `json:"widens"`
 }
 
-// Review renders the diff and effects for the staged set and mints a confirm
-// token bound to the candidate's sha.
-func (p *Pipeline) Review() (Review, error) {
+// Review renders the diff and effects for the owner's staged set and mints a
+// confirm token bound to the owner and the candidate's sha.
+func (e Edits) Review() (Review, error) {
+	p := e.p
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	before, after, err := p.candidateLocked()
+	before, after, err := p.candidateLocked(e.owner)
 	if err != nil {
 		return Review{}, err
 	}
 	diff := ComputeDiff(before, after)
-	widening, guarded := p.classifyLocked(before, after)
-	effects := p.effectsLocked(before)
+	widening, guarded, leaves := p.classifyLocked(before, after)
+	effects := p.effectsLocked(e.owner, before)
 	for i := range effects {
 		// A staged change widens when any loosened leaf sits under its path.
 		for _, w := range widening {
@@ -216,19 +324,32 @@ func (p *Pipeline) Review() (Review, error) {
 	sum := sha256.Sum256(after)
 	sha := hex.EncodeToString(sum[:])
 	tok := randID()
-	p.tokens.Store(tok, sha)
-	return Review{Diff: diff, Effects: effects, Widening: widening, Guarded: guarded,
+	p.tokens.Store(tok, tokenBind{owner: e.owner, sha: sha})
+	return Review{Diff: diff, Effects: effects, Widening: widening, Guarded: guarded, Changes: leaves,
 		Stepup: len(widening) > 0 || len(guarded) > 0, SHA: sha[:12], Token: tok}, nil
+}
+
+// Review is the unowned set's Review.
+func (p *Pipeline) Review() (Review, error) { return p.As("").Review() }
+
+// tokenFor reports whether token was minted for owner over sha.
+func (p *Pipeline) tokenFor(token, owner, sha string) bool {
+	v, ok := p.tokens.Load(token)
+	if !ok {
+		return false
+	}
+	b := v.(tokenBind)
+	return b.owner == owner && b.sha == sha
 }
 
 // classifyLocked is classify over the text, plus — with a Guarded loader — a
 // comparison of what the loaded config ends up with. A config that can't be
 // loaded for the comparison counts as changed, so the answer errs towards
 // asking for a step-up.
-func (p *Pipeline) classifyLocked(before, after []byte) (widening, guarded []Effect) {
-	widening, guarded = classify(before, after)
+func (p *Pipeline) classifyLocked(before, after []byte) (widening, guarded []Effect, leaves []LeafChange) {
+	widening, guarded, leaves = classify(before, after)
 	if p.guarded == nil || len(guarded) > 0 {
-		return widening, guarded
+		return widening, guarded, leaves
 	}
 	was, errWas := p.guarded(p.path)
 	now, errNow := p.loadCandidate(after)
@@ -236,7 +357,7 @@ func (p *Pipeline) classifyLocked(before, after []byte) (widening, guarded []Eff
 		guarded = append(guarded, Effect{Path: "(loaded config)",
 			Text: "changes what the loaded config ends up with (through imports, packs or YAML references)"})
 	}
-	return widening, guarded
+	return widening, guarded, leaves
 }
 
 // loadCandidate runs the Guarded loader on b, written beside the config so
@@ -251,11 +372,12 @@ func (p *Pipeline) loadCandidate(b []byte) (any, error) {
 	return out, err
 }
 
-// effectsLocked describes every staged change in words, flagging wideners.
-func (p *Pipeline) effectsLocked(before []byte) []Effect {
+// effectsLocked describes every one of owner's staged changes in words,
+// flagging wideners.
+func (p *Pipeline) effectsLocked(owner string, before []byte) []Effect {
 	doc, _ := Parse(before)
 	var out []Effect
-	for _, c := range p.staged {
+	for _, c := range p.changesLocked(owner) {
 		var cur any
 		if doc != nil {
 			cur, _ = doc.Get(c.Path)
@@ -266,48 +388,56 @@ func (p *Pipeline) effectsLocked(before []byte) []Effect {
 	return out
 }
 
-// Validate renders the candidate and runs the daemon's load+semantic pass over
-// a copy of it, returning the validation error (nil when it validates). It does
-// not change the live file.
-func (p *Pipeline) Validate() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	_, after, err := p.candidateLocked()
+// Validate renders the owner's candidate and runs the daemon's load+semantic
+// pass over a copy of it, returning the validation error (nil when it
+// validates). It does not change the live file.
+func (e Edits) Validate() error {
+	e.p.mu.Lock()
+	defer e.p.mu.Unlock()
+	_, after, err := e.p.candidateLocked(e.owner)
 	if err != nil {
 		return err
 	}
-	return p.validateCandidate(after)
+	return e.p.validateCandidate(after)
 }
+
+// Validate is the unowned set's Validate.
+func (p *Pipeline) Validate() error { return p.As("").Validate() }
 
 // Apply validates the candidate on a copy, backs up the live file, writes the
 // candidate atomically, clears the staged set, records history, and reloads.
 // token must be the one minted by the matching Review and must still bind to the
 // candidate being applied.
 func (p *Pipeline) Apply(token string) (Applied, error) {
-	return p.ApplyWith(token, nil)
+	return p.As("").ApplyWith(token, nil)
+}
+
+// ApplyWith is the unowned set's ApplyWith.
+func (p *Pipeline) ApplyWith(token string, gate func(needsStepup bool) error) (Applied, error) {
+	return p.As("").ApplyWith(token, gate)
 }
 
 // ApplyWith is Apply with a gate: after the token is matched to the candidate,
 // and before anything is written, gate is told whether this exact candidate
 // needs a step-up (Review.Stepup) and may refuse. It runs under the pipeline
 // lock, so the answer can't go stale between the check and the write.
-func (p *Pipeline) ApplyWith(token string, gate func(needsStepup bool) error) (Applied, error) {
+func (e Edits) ApplyWith(token string, gate func(needsStepup bool) error) (Applied, error) {
+	p := e.p
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	before, after, err := p.candidateLocked()
+	before, after, err := p.candidateLocked(e.owner)
 	if err != nil {
 		return Applied{}, err
 	}
 	sum := sha256.Sum256(after)
 	sha := hex.EncodeToString(sum[:])
 
-	v, ok := p.tokens.Load(token)
-	if !ok || v.(string) != sha {
+	if !p.tokenFor(token, e.owner, sha) {
 		return Applied{}, ErrStale
 	}
 	if gate != nil {
-		widening, guarded := p.classifyLocked(before, after)
+		widening, guarded, _ := p.classifyLocked(before, after)
 		if err := gate(len(widening) > 0 || len(guarded) > 0); err != nil {
 			return Applied{}, err
 		}
@@ -316,7 +446,7 @@ func (p *Pipeline) ApplyWith(token string, gate func(needsStepup bool) error) (A
 	if ComputeDiff(before, after).Changed == false {
 		// Nothing to do; still a clean result.
 		p.tokens.Delete(token)
-		p.staged = nil
+		delete(p.staged, e.owner)
 		return Applied{SHA: sha[:12], Unchanged: true}, nil
 	}
 
@@ -339,7 +469,7 @@ func (p *Pipeline) ApplyWith(token string, gate func(needsStepup bool) error) (A
 	}
 
 	p.tokens.Delete(token)
-	p.staged = nil
+	delete(p.staged, e.owner)
 
 	// reload
 	reloadErr := ""

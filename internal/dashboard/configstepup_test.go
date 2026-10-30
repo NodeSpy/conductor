@@ -198,6 +198,12 @@ func TestGuardedConfigStepup(t *testing.T) {
 			g.applyRefused(t, rev)
 		})
 	}
+	t.Run("usage.mode with no usage block", func(t *testing.T) {
+		g := newStepupRig(t, "    config_stepup: guarded\n")
+		if rev := g.stage(t, api.StageRequest{Path: []string{"usage", "mode"}, Value: "api"}); rev.Stepup {
+			t.Fatalf("usage.mode is inert with or without a usage block: %+v", rev)
+		}
+	})
 	t.Run("pricing", func(t *testing.T) {
 		g := newStepupRig(t, "    config_stepup: guarded\n")
 		rev := g.stage(t, api.StageRequest{Path: []string{"pricing", "default", "input"}, Value: 3})
@@ -342,5 +348,81 @@ func TestStagedSSHKeyWithControlsIsRefused(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(g.cfgPath); string(b) != g.cfgText {
 		t.Fatal("a refused apply changed the config file")
+	}
+}
+
+// With config_stepup: guarded, lowering a price is a widening: the hard
+// max_cost_usd budget caps count with pricing.
+func TestGuardedLoweringAPriceNeedsAStepup(t *testing.T) {
+	g := newStepupRig(t, "    config_stepup: guarded\n")
+	rev := g.stage(t, api.StageRequest{Path: []string{"pricing", "default", "input"}, Value: 0})
+	if !rev.Stepup || len(rev.Widening) == 0 || !strings.Contains(rev.Description, "pricing.default.input: 1 → 0") {
+		t.Fatalf("a lowered price must ask for a step-up and say why: %+v", rev)
+	}
+	g.applyRefused(t, rev)
+}
+
+// Applies that skip the step-up are rate-limited: past quietApplyBurst in the
+// window, the review asks for one and the apply refuses without it.
+func TestQuietAppliesAreRateLimited(t *testing.T) {
+	g := newStepupRig(t, "    config_stepup: guarded\n")
+	for i := 0; i < quietApplyBurst; i++ {
+		rev := g.stage(t, api.StageRequest{Path: []string{"pricing", "default", "output"}, Value: 3 + i})
+		if rev.Stepup {
+			t.Fatalf("apply %d: %+v", i, rev)
+		}
+		if rr := g.c.do("POST", "/api/v1/config/apply", api.ApplyRequest{Token: rev.Token}); rr.Code != 200 {
+			t.Fatalf("apply %d: %d %s", i, rr.Code, rr.Body)
+		}
+	}
+	b, _ := os.ReadFile(g.cfgPath)
+	g.cfgText = string(b)
+	rev := g.stage(t, api.StageRequest{Path: []string{"pricing", "default", "output"}, Value: 100})
+	if !rev.Stepup {
+		t.Fatalf("past the burst the review must ask for a step-up: %+v", rev)
+	}
+	g.applyRefused(t, rev)
+	tok := g.sshStepup(t, rev.Token)
+	if rr := g.c.do("POST", "/api/v1/config/apply", api.ApplyRequest{Token: rev.Token, StepupToken: tok}); rr.Code != 200 {
+		t.Fatalf("a confirmed apply still goes through: %d %s", rr.Code, rr.Body)
+	}
+}
+
+// Staged edits are per session: another session's edits don't show in this
+// one's config read or review, and its review token can't apply them.
+func TestStagedEditsArePerSession(t *testing.T) {
+	g := newStepupRig(t, "")
+	r := browserRequest(g.s.deps.Cfg.Dashboard.Bind[0])
+	ck, _, err := g.s.auth.CreateSessionFor(r, "ops", auth.MethodSSH, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := &browserClient{t: t, h: g.c.h, host: g.c.host, addr: "192.0.2.77:1", cookie: ck}
+	var st struct{ CSRF string }
+	_ = json.Unmarshal(other.do("GET", "/api/v1/auth/state", nil).Body.Bytes(), &st)
+	other.csrf = st.CSRF
+
+	if rr := other.do("POST", "/api/v1/config/stage", api.StageRequest{Path: []string{"operators", "ops", "ssh_key"}, Value: "ssh-ed25519 AAAA attacker", Summary: "update sre description"}); rr.Code != 200 {
+		t.Fatal(rr.Body)
+	}
+	var cfg api.ConfigResponse
+	_ = json.Unmarshal(g.c.do("GET", "/api/v1/config", nil).Body.Bytes(), &cfg)
+	if len(cfg.Staged) != 0 {
+		t.Fatalf("this session sees another's staged edits: %+v", cfg.Staged)
+	}
+	rev := g.stage(t, api.StageRequest{Path: []string{"pricing", "default", "input"}, Value: 5})
+	if strings.Contains(rev.Description, "attacker") || strings.Contains(rev.Unified, "attacker") {
+		t.Fatalf("another session's edit rode into this review:\n%s", rev.Description)
+	}
+	var theirs api.ReviewResponse
+	_ = json.Unmarshal(other.do("GET", "/api/v1/config/review", nil).Body.Bytes(), &theirs)
+	if _, refused := g.pendingFor(t, auth.PurposeConfigApply, theirs.Token); refused == "" {
+		t.Fatal("this session could begin an SSH step-up over another session's review")
+	}
+	if rr := g.c.do("POST", "/api/v1/config/apply", api.ApplyRequest{Token: theirs.Token}); rr.Code != http.StatusConflict {
+		t.Fatalf("another session's review token applied here: %d %s", rr.Code, rr.Body)
+	}
+	if b, _ := os.ReadFile(g.cfgPath); strings.Contains(string(b), "attacker") {
+		t.Fatal("the other session's edit was written")
 	}
 }

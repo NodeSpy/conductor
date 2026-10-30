@@ -59,7 +59,7 @@ func TestSetUnderMergedParentKeepsSiblings(t *testing.T) {
 func TestClassifyWithFlowRefs(t *testing.T) {
 	before := []byte("sandbox:\n  agents: on\nx-a:\n  z: [${HOME}]\n")
 	after := []byte("sandbox:\n  agents: off\nx-a:\n  z: [${HOME}]\n")
-	w, g := classify(before, after)
+	w, g, _ := classify(before, after)
 	for _, e := range g {
 		if strings.Contains(e.Text, "parse") {
 			t.Fatalf("classify says the config doesn't parse: %+v", g)

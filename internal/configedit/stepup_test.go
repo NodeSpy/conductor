@@ -61,7 +61,7 @@ func TestClassifyWholeCandidate(t *testing.T) {
 		{"no change", guardedSample, "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			widening, guarded := classify([]byte(guardedSample), []byte(c.after))
+			widening, guarded, _ := classify([]byte(guardedSample), []byte(c.after))
 			if c.widens == "" && len(widening) > 0 {
 				t.Fatalf("unexpected widening: %+v", widening)
 			}
@@ -95,7 +95,7 @@ triggers:
 
 // The guarded effects name what runs, most specific first.
 func TestClassifyNamesWhatRuns(t *testing.T) {
-	_, guarded := classify([]byte(guardedSample), []byte(reviewerPayload))
+	_, guarded, _ := classify([]byte(guardedSample), []byte(reviewerPayload))
 	var paths []string
 	for _, g := range guarded {
 		paths = append(paths, g.Path)
@@ -103,11 +103,11 @@ func TestClassifyNamesWhatRuns(t *testing.T) {
 	if strings.Join(paths, ",") != "triggers,connectors" {
 		t.Fatalf("guarded = %v, want triggers then connectors", paths)
 	}
-	_, guarded = classify([]byte("{}"), []byte("a: 1\n"))
+	_, guarded, _ = classify([]byte("{}"), []byte("a: 1\n"))
 	if len(guarded) != 1 || guarded[0].Path != "a" {
 		t.Fatalf("from an empty map: %+v", guarded)
 	}
-	_, guarded = classify([]byte("a: 1\n"), []byte("{}"))
+	_, guarded, _ = classify([]byte("a: 1\n"), []byte("{}"))
 	if len(guarded) != 1 || guarded[0].Path != "a" {
 		t.Fatalf("to an empty map: %+v", guarded)
 	}

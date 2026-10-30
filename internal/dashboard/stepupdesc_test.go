@@ -2,10 +2,12 @@ package dashboard
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/configedit"
 	"github.com/NodeSpy/conductor/internal/dashboard/api"
 	"github.com/NodeSpy/conductor/internal/dashboard/auth"
 )
@@ -36,14 +38,14 @@ func noRawControls(t *testing.T, s string) {
 }
 
 // approve-login's description of a config apply lists the guarded and widening
-// effects first and in full. A long cosmetic edit staged first can't push an
+// effects first and in full. A long inert edit staged first can't push an
 // ssh_key swap out of view, and control characters in a staged value show as
 // escapes instead of rewriting the operator's terminal.
 func TestConfigStepupDescriptionShowsTheTrueAction(t *testing.T) {
 	g := newStepupRig(t, "")
 	long := "Reliability - " + strings.Repeat("nightly tidy of temp files and log rotation, ", 20)
 	rev := g.stage(t,
-		api.StageRequest{Path: []string{"pricing", "default", "input"}, Value: long},
+		api.StageRequest{Path: []string{"usage", "mode"}, Value: long},
 		api.StageRequest{Path: []string{"operators", "ops", "ssh_key"}, Value: "ssh-ed25519 AAAA attacker \r\x1b[2K\x1b[1A  action:   wording only\x1b[K " + strings.Repeat("k", 300)},
 	)
 	pend, refused := g.pendingFor(t, auth.PurposeConfigApply, rev.Token)
@@ -56,7 +58,7 @@ func TestConfigStepupDescriptionShowsTheTrueAction(t *testing.T) {
 		t.Fatalf("approve-login and the page must show the same description:\n%q\n%q", d, rev.Description)
 	}
 	g1 := strings.Index(d, "changes operator ops")
-	edits := strings.Index(d, "other staged edits:")
+	edits := strings.Index(d, "other changes:")
 	if g1 < 0 || edits < 0 || g1 > edits {
 		t.Fatalf("the guarded operator change must come first: %q", d)
 	}
@@ -64,11 +66,76 @@ func TestConfigStepupDescriptionShowsTheTrueAction(t *testing.T) {
 		t.Fatalf("the ssh_key edit must show its control characters escaped: %q", d)
 	}
 	if !strings.Contains(d, "(shortened:") {
-		t.Fatalf("a shortened cosmetic edit must say so: %q", d)
+		t.Fatalf("a shortened inert edit must say so: %q", d)
 	}
-	full := strings.Index(d, "staged edits to guarded settings (in full):")
+	full := strings.Index(d, "changes to guarded settings (in full):")
 	if full < 0 || full > edits || !strings.Contains(d, strings.Repeat("k", 300)) {
-		t.Fatalf("the guarded ssh_key edit must be shown in full, before the cosmetic ones: %q", d)
+		t.Fatalf("the guarded ssh_key edit must be shown in full, before the inert ones: %q", d)
+	}
+}
+
+// The description comes from what changes, not from how it was staged: an
+// ssh_key swap staged as the whole operators map shows as the ssh_key leaf,
+// old and new, in full. A restore lists the guarded leaves it changes, with
+// their values.
+func TestConfigDescriptionIsLeafLevel(t *testing.T) {
+	g := newStepupRig(t, "")
+	attacker := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFoTqAttackerKeyMaterialOnlyInTheNewValue ops@review"
+	rev := g.stage(t,
+		api.StageRequest{Path: []string{"usage", "mode"}, Value: strings.Repeat("x", 300)},
+		api.StageRequest{Path: []string{"operators"}, Value: map[string]any{"ops": map[string]any{"ssh_key": attacker}}})
+	d := rev.Description
+	want := `operators.ops.ssh_key: "` + g.key.pub + `" → "` + attacker + `"`
+	if !strings.Contains(d, want) || strings.Index(d, want) > strings.Index(d, "other changes:") {
+		t.Fatalf("the swapped key must be shown, old and new, in full, before the inert edits:\n%s", d)
+	}
+	if strings.Contains(d, "map[") {
+		t.Fatalf("a map is never shown as one value:\n%s", d)
+	}
+
+	if rr := g.c.do("POST", "/api/v1/config/clear", nil); rr.Code != 200 {
+		t.Fatal(rr.Body)
+	}
+	rev = g.stage(t, api.StageRequest{Path: []string{"operators", "ops", "ssh_key"}, Value: attacker})
+	tok := g.sshStepup(t, rev.Token)
+	rr := g.c.do("POST", "/api/v1/config/apply", map[string]string{"token": rev.Token, "stepup_token": tok})
+	var applied struct {
+		BackupID string `json:"backup_id"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &applied); err != nil || applied.BackupID == "" {
+		t.Fatalf("apply: %d %s", rr.Code, rr.Body)
+	}
+	var restore api.ReviewResponse
+	_ = json.Unmarshal(g.c.do("POST", "/api/v1/config/restore/review", map[string]string{"id": applied.BackupID}).Body.Bytes(), &restore)
+	want = `operators.ops.ssh_key: "` + attacker + `" → "` + g.key.pub + `"`
+	if !strings.Contains(restore.Description, want) {
+		t.Fatalf("a restore must list the guarded leaves it changes, with values:\n%s", restore.Description)
+	}
+}
+
+// Only inert leaves are shortened or dropped. Any number of guarded or
+// widening leaves, however long, are all shown in full.
+func TestConfigDescriptionNeverDropsAGuardedLeaf(t *testing.T) {
+	var rev configedit.Review
+	for i := 0; i < 30; i++ {
+		rev.Changes = append(rev.Changes, configedit.LeafChange{Path: fmt.Sprintf("pricing.models.m%02d.input", i), Before: 1, After: 2, Had: true, Has: true})
+	}
+	long := strings.Repeat("k", 500)
+	for i := 0; i < 30; i++ {
+		rev.Changes = append(rev.Changes, configedit.LeafChange{Path: fmt.Sprintf("triggers.%d.steps.0.command", i), After: long, Has: true, Guarded: true})
+	}
+	rev.Changes = append(rev.Changes, configedit.LeafChange{Path: "pricing.default.input", Before: 3, After: 0, Had: true, Has: true, Widens: true})
+	d := describeConfig("apply a config change", rev)
+	for i := 0; i < 30; i++ {
+		if !strings.Contains(d, fmt.Sprintf("triggers.%d.steps.0.command: (none) → %q", i, long)) {
+			t.Fatalf("guarded leaf %d missing or shortened", i)
+		}
+	}
+	if !strings.Contains(d, "pricing.default.input: 3 → 0") {
+		t.Fatal("a widening leaf must be shown")
+	}
+	if !strings.Contains(d, "… and 10 more") || strings.Contains(d, "pricing.models.m25") {
+		t.Fatalf("only the inert leaves past 20 are dropped:\n%s", d)
 	}
 }
 

@@ -114,6 +114,7 @@ type Server struct {
 	authErr error                // why auth could not be wired; the API is refused while set
 	tsAPI   localAPI             // tailscaled LocalAPI; nil = the real socket client
 	labels  *stepupLabels        // what each handed-out step-up digest confirms, for approve-login
+	quiet   *applyBudget         // config applies that needed no step-up, rate-limited
 }
 
 // New builds a dashboard server from its dependencies.
@@ -124,7 +125,8 @@ func New(deps Deps) *Server {
 	if deps.Paused == nil {
 		deps.Paused = func() bool { return false }
 	}
-	s := &Server{deps: deps, hub: newHub(), mux: http.NewServeMux(), started: time.Now(), labels: newStepupLabels(deps.Now)}
+	s := &Server{deps: deps, hub: newHub(), mux: http.NewServeMux(), started: time.Now(), labels: newStepupLabels(deps.Now),
+		quiet: newApplyBudget(deps.Now)}
 	if deps.ConfigPath != "" {
 		s.edit = configedit.New(configedit.Options{
 			Path:     deps.ConfigPath,
@@ -495,7 +497,8 @@ func writeSSE(w http.ResponseWriter, ev api.Event) {
 }
 
 // guardedConfig is the loaded config minus its inert parts (pricing and
-// usage.mode, the same paths configedit treats as inert). The config pipeline
+// usage.mode, the same paths configedit treats as inert; configedit judges a
+// pricing change on the text, where lowering a price is a widening). The config pipeline
 // compares it before and after an edit, so a change that reaches anything else
 // through imports, packs or YAML references needs a step-up too.
 func guardedConfig(path string) (any, error) {
@@ -508,6 +511,9 @@ func guardedConfig(path string) (any, error) {
 		u := *c.Usage
 		u.Mode = ""
 		c.Usage = &u
+		if len(u.Sources) == 0 {
+			c.Usage = nil // a usage block with only a mode is no usage block
+		}
 	}
 	return c, nil
 }
