@@ -168,17 +168,19 @@ it.
 
 ### Confirming sensitive actions (step-up)
 
-Approvals, purchases, config changes and restores, secrets, browser take-over
-and credential changes ask you to confirm first.
+Approvals and purchases, config changes and restores (per `config_stepup`,
+below; a new bot avatar is a config change), loosening a browser wallet limit
+or a ticket's spend limit, browser take-over and credential changes ask you to
+confirm first.
 The dialog shows the dashboard's own description of what you are confirming,
 the same text `approve-login` prints, and the start of its digest. For a
 proposal or a purchase that is the canonical action (a proposal's verb and
 options, a purchase's merchant, items, total and card), pretty-printed, with
 the requester's own summary after it on a line marked as theirs. For a config
 change or a restore it is every guarded section and every widening change,
-then each value that changes, with its old and new value: every one outside
-`pricing` and `usage.mode`, and every widening one, in full, however it was
-staged. Only the other changes are shortened (past 20 or 200 characters, and
+then each value that changes, with its old and new value: every guarded or
+widening one in full, however it was staged (everything except a raised price
+and `usage.mode`). Only the other changes are shortened (past 20 or 200 characters, and
 marked when they are). Control and
 bidi characters show as escapes such as `\x1b` or `\u202e`, in the dialog and
 in the terminal. The dialog offers the methods

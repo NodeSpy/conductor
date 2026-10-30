@@ -195,6 +195,12 @@ test('sign in by pasting an SSH signature', async ({}, info) => {
 test('set a password and an authenticator from Access, confirming with the SSH key', async ({}, info) => {
   test.setTimeout(60_000)
   await page.goto('/#/security')
+  // The confirm list names what really asks: no vault line, config changes
+  // and avatars per config_stepup, and spend limits.
+  const asks = page.locator('.acc-asks')
+  await expect(asks).not.toContainText('vault')
+  await expect(page.getByTestId('config-asks')).toContainText('avatar')
+  await expect(asks).toContainText("ticket's spend limit")
   await page.getByTestId('password-open').click()
   await page.getByTestId('password-new').fill(PASSWORD)
   await page.getByTestId('password-new2').fill(PASSWORD)

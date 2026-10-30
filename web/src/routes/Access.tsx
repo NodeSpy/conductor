@@ -355,16 +355,18 @@ export function Access(): JSX.Element {
           <section class="acc-card">
             <h2>When it asks you to confirm</h2>
             <ul class="acc-asks">
-              <li>Approving or denying what a bot asks to do</li>
+              <li>Approving or denying what a bot asks to do, a purchase included</li>
               {data.auth_policy.config_stepup === 'guarded' ? (
                 <li data-testid="config-asks">
-                  Config changes, except ones that only touch <span class="mono">pricing</span> or{' '}
-                  <span class="mono">usage.mode</span> (<span class="mono">config_stepup: guarded</span>)
+                  Every restore, and config changes (a new bot avatar too) except: setting{' '}
+                  <span class="mono">usage.mode</span> or raising an existing price under{' '}
+                  <span class="mono">pricing</span>, up to 5 in 10 minutes (
+                  <span class="mono">config_stepup: guarded</span>)
                 </li>
               ) : (
-                <li data-testid="config-asks">Every config change and every restore</li>
+                <li data-testid="config-asks">Every config change (a new bot avatar too) and every restore</li>
               )}
-              <li>Storing or replacing a secret value in a vault</li>
+              <li>Loosening a browser wallet limit, or a ticket's spend limit</li>
               <li>Taking over a browser a bot is signed in to</li>
               <li>Adding or removing a way to sign in</li>
             </ul>
@@ -386,9 +388,10 @@ export function Access(): JSX.Element {
               ))}
               <dt>Wrong passkey, password or code</dt>
               <dd>
-                5 failed tries in 15 minutes locks that client (an IPv6 client by its /64) for 15 minutes, doubling each
-                time; tries running at once count before they finish. Wrong passwords and authenticator codes also lock
-                that operator's password and code sign-in the same way; passkey and SSH sign-in stay open.
+                5 failed tries in 15 minutes locks that client (its address) for 15 minutes, doubling each time; tries
+                running at once count before they finish. Wrong passwords and authenticator codes also lock that
+                operator's password and code sign-in the same way, and are throttled per network (50 in 15 minutes);
+                passkey and SSH sign-in stay open. On localhost only the operator lock and the throttle apply.
               </dd>
               <dt>Enrolment links</dt>
               <dd>3 an hour, one live at a time.</dd>
