@@ -106,8 +106,7 @@ func (m *Manager) ValidateCookie(r *http.Request, l Listener, node string) (Sess
 	}
 	now := m.now()
 	if why := m.sessionEnded(sess, now); why != "" {
-		_ = m.deps.Store.DeleteSession(id)
-		m.audit(map[string]any{"event": "dashboard_session_ended", "operator": sess.Operator, "session": sess.ID, "why": why})
+		m.endSession(sess, why)
 		return Session{}, errors.New(why)
 	}
 	// A cookie is bound to the listener it was created on: a localhost cookie
@@ -137,6 +136,24 @@ func (m *Manager) expiresAt(s Session) time.Time {
 		return cap
 	}
 	return s.Expires
+}
+
+// endSession deletes a session that is no longer live. It is called wherever
+// that is first seen (presented, listed, or at startup), so a session ended by
+// a changed key stays ended if the key comes back.
+func (m *Manager) endSession(s Session, why string) {
+	_ = m.deps.Store.DeleteSession(s.ID)
+	m.audit(map[string]any{"event": "dashboard_session_ended", "operator": s.Operator, "session": s.ID, "why": why})
+}
+
+// sweepSessions ends every stored session that is no longer live.
+func (m *Manager) sweepSessions() {
+	now := m.now()
+	for _, s := range m.deps.Store.Sessions() {
+		if why := m.sessionEnded(s, now); why != "" {
+			m.endSession(s, why)
+		}
+	}
 }
 
 // sessionEnded says why a session is no longer live, or "".

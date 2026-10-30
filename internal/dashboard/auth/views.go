@@ -65,14 +65,17 @@ func (m *Manager) sessionList(current Session) []SessionView {
 	return out
 }
 
-// liveSessions are operator's sessions that still sign in.
+// liveSessions are operator's sessions that still sign in. The rest are
+// deleted here.
 func (m *Manager) liveSessions(operator string) []Session {
 	var out []Session
 	now := m.now()
 	for _, s := range m.deps.Store.SessionsFor(operator) {
-		if m.sessionEnded(s, now) == "" {
-			out = append(out, s)
+		if why := m.sessionEnded(s, now); why != "" {
+			m.endSession(s, why)
+			continue
 		}
+		out = append(out, s)
 	}
 	return out
 }

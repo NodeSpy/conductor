@@ -86,6 +86,41 @@ func TestSessionsEndWhenTheirCredentialChanges(t *testing.T) {
 	}
 }
 
+// A session that is never presented while the key differs is still ended:
+// at the reload that sees the change, or at the first list. Putting the key
+// back doesn't revive it.
+func TestKeyChangeEndsUnpresentedSessions(t *testing.T) {
+	for _, seen := range []string{"reload", "list", "status"} {
+		t.Run(seen, func(t *testing.T) {
+			g := newSessionRig(t)
+			m := g.manager(12 * time.Hour)
+			r := WithConn(httptest.NewRequest("POST", "/", nil), onLocalhost)
+			old, _, _ := m.CreateSessionFor(r, "ops", MethodSSH, "")
+			g.key["ops"] = "ssh-ed25519 AAAAkeytwo ops@box"
+			switch seen {
+			case "reload":
+				m = g.manager(12 * time.Hour)
+			case "list":
+				_, cur, _ := m.CreateSessionFor(r, "ops", MethodSSH, "")
+				if l := m.sessionList(cur); len(l) != 1 || l[0].ID != cur.ID {
+					t.Fatalf("only the new key's session is listed: %+v", l)
+				}
+			case "status":
+				if n := m.Status().Operators["ops"].Sessions; n != 0 {
+					t.Fatalf("status: %d sessions", n)
+				}
+			}
+			g.key["ops"] = "ssh-ed25519 AAAAkeyone ops@box"
+			if err := validate(m, old); err == nil {
+				t.Fatal("the old key's session came back with the key")
+			}
+			if err := validate(g.manager(12*time.Hour), old); err == nil {
+				t.Fatal("the old key's session came back after a reload")
+			}
+		})
+	}
+}
+
 // A shorter session.max applies to sessions that already exist, and the list
 // shows live sessions only, each with when it ends.
 func TestShorterMaxAndLiveList(t *testing.T) {

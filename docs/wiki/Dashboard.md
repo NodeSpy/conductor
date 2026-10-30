@@ -250,7 +250,8 @@ prints what it confirms. Use plain HTTP only on a network you trust.
 A session rests on the credential it signed in with. Changing an operator's
 `ssh_key` ends the sessions signed in with the old key; setting a new password
 or authenticator ends the password sessions, except the one that made the
-change. Removing an operator ends all of theirs. Lowering `session.max` applies
+change. Removing an operator ends all of theirs. An ended session is deleted,
+so putting the old key back doesn't bring it back. Lowering `session.max` applies
 to sessions that already exist. The session list on **Access** shows live
 sessions only, each with the latest it can last.
 

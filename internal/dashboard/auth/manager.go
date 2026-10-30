@@ -135,6 +135,9 @@ func NewManager(deps Deps, rps ...RP) (*Manager, error) {
 			return nil, err
 		}
 	}
+	// Every config apply reloads the daemon, so this is where a changed key,
+	// a removed operator or a shortened max is first seen.
+	m.sweepSessions()
 	return m, nil
 }
 

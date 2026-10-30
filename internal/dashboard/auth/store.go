@@ -357,6 +357,17 @@ func (s *Store) SessionsFor(operator string) []Session {
 	return out
 }
 
+// Sessions lists every stored session.
+func (s *Store) Sessions() []Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Session, 0, len(s.sess))
+	for _, r := range s.sess {
+		out = append(out, r.Session)
+	}
+	return out
+}
+
 // DeleteSession revokes one session.
 func (s *Store) DeleteSession(id string) error {
 	s.mu.Lock()

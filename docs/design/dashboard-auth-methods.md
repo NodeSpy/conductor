@@ -365,8 +365,11 @@ Every request checks it, so:
 
 A session ends at the earlier of its own expiry and `created + session.max`
 under the current config, so lowering `session.max` applies to sessions that
-already exist. An ended session is deleted when it is next presented, and the
-session list and `dashboard status` count live sessions only.
+already exist. An ended session is deleted where that is first seen: when it is
+presented, when the session list or `dashboard status` reads it, or when the
+daemon starts (every config apply reloads it). A session ended by a key change
+therefore stays ended if the old key is put back. The list and `dashboard
+status` show live sessions only.
 
 ## 4c. The bots' operator API on the dashboard
 
