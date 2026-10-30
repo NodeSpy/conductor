@@ -880,6 +880,15 @@ func (a Actors) HasLogin(login string) bool {
 // declares `imports:`, the listed files are deep-merged first (see loadMerged);
 // otherwise the file is parsed directly, exactly as before.
 func Load(path string) (*Config, error) {
+	return load(path, filepath.Dir(path))
+}
+
+// load is Load with the vendored packs and lockfile read from packRoot
+// instead of the config's own directory — a PackStage validates a staged
+// resolution this way before anything live is touched. Everything else
+// (imports, workflow files, local pack sources) still resolves relative to
+// the config file itself.
+func load(path, packRoot string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -966,7 +975,7 @@ func Load(path string) (*Config, error) {
 	// same treatment as the consumer's own. No-op without a `packs:` block, so
 	// existing configs are unaffected. Offline — the network fetch is
 	// `conductor init`.
-	if err := c.instantiatePacks(filepath.Dir(path)); err != nil {
+	if err := c.instantiatePacks(packRoot); err != nil {
 		return nil, err
 	}
 	// Bots instantiated from a pack's templates take their charter, seed,
