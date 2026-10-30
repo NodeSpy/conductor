@@ -1,11 +1,14 @@
 package auth
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	vwa "github.com/descope/virtualwebauthn"
 )
 
 // The operator buckets (password and TOTP failures from anywhere) and their
@@ -161,5 +164,77 @@ func TestEnrollLinkIsSingleUse(t *testing.T) {
 	}
 	if _, live := h.m.deps.Store.Ticket("ops"); live {
 		t.Fatal("the redeemed link must not stay live")
+	}
+}
+
+// Neighbours on one network who exhaust its bucket with wrong codes and
+// passwords from many addresses throttle guessing from that network, and
+// nothing else: a different address on it still begins and finishes SSH
+// sign-in and passkey sign-in. Signatures and passkey assertions can't be
+// guessed, so they never count against the network.
+func TestNetworkBucketNeverBlocksSSHOrPasskeys(t *testing.T) {
+	type net struct {
+		name     string
+		neighbor func(i int) string
+		operator string
+	}
+	nets := []net{
+		{"IPv6 /64", func(i int) string { return fmt.Sprintf("[2001:db8:1:2::%x]:1", i+1) }, "[2001:db8:1:2:aaaa:bbbb:cccc:1]:2"},
+		{"IPv4 /24", func(i int) string { return fmt.Sprintf("192.0.2.%d:1", i+1) }, "192.0.2.200:2"},
+	}
+	// exhaust sends wrong codes and wrong passwords from 2*netMaxFails
+	// addresses on the network, then checks the network is throttled.
+	exhaust := func(t *testing.T, m *Manager, host string, c ConnInfo, n net) {
+		t.Helper()
+		for i := 0; i < netMaxFails; i++ {
+			call(m, "POST", "/api/v1/auth/ssh/pending", host, n.neighbor(i), c, map[string]string{"code": "ZZZZ-ZZZZ"}, nil)
+			call(m, "POST", "/api/v1/auth/password/login", host, n.neighbor(netMaxFails+i), c,
+				map[string]string{"operator": "ops", "password": "wrong guess xx", "code": "000000"}, nil)
+		}
+		rr := call(m, "POST", "/api/v1/auth/ssh/pending", host, n.operator, c, map[string]string{"code": "ZZZZ-ZZZZ"}, nil)
+		if rr.Code != http.StatusTooManyRequests || !strings.Contains(errMessage(rr), "from this network") {
+			t.Fatalf("%s: the network's guessing must be throttled first: %d %s", n.name, rr.Code, errMessage(rr))
+		}
+	}
+
+	for _, n := range nets {
+		t.Run(n.name+" ssh", func(t *testing.T) {
+			h := newMethodsHarness(t, nil)
+			exhaust(t, h.m, "box.example", onHTTPS, n)
+			rr := call(h.m, "POST", "/api/v1/auth/ssh/begin", "box.example", n.operator, onHTTPS, map[string]string{"operator": "ops"}, nil)
+			var v SSHChallengeView
+			if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &v) != nil {
+				t.Fatalf("ssh/begin: %d %s", rr.Code, rr.Body)
+			}
+			rr = call(h.m, "POST", "/api/v1/auth/ssh/finish", "box.example", n.operator, onHTTPS,
+				map[string]string{"challenge_id": v.ID, "signature": h.key.sign(t, LoginNamespace, v.Text)}, nil)
+			if rr.Code != http.StatusOK || len(rr.Result().Cookies()) == 0 {
+				t.Fatalf("ssh/finish from a fresh address on the throttled network: %d %s", rr.Code, rr.Body)
+			}
+		})
+		t.Run(n.name+" passkey", func(t *testing.T) {
+			h := newHarness(t)
+			auth := h.newAuthenticator(vwa.AuthenticatorOptions{})
+			cred, _ := h.enroll(auth)
+			exhaust(t, h.m, "localhost:7788", onLocalhost, n)
+			rr := call(h.m, "POST", "/api/v1/auth/login/begin", "localhost:7788", n.operator, onLocalhost, nil, nil)
+			var begun struct {
+				ID      string          `json:"ceremony_id"`
+				Options json.RawMessage `json:"options"`
+			}
+			if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &begun) != nil {
+				t.Fatalf("login/begin: %d %s", rr.Code, rr.Body)
+			}
+			parsed, err := vwa.ParseAssertionOptions(string(begun.Options))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp := vwa.CreateAssertionResponse(h.rp, *auth, cred, *parsed)
+			rr = call(h.m, "POST", "/api/v1/auth/login/finish", "localhost:7788", n.operator, onLocalhost,
+				map[string]any{"ceremony_id": begun.ID, "response": json.RawMessage(resp)}, nil)
+			if rr.Code != http.StatusOK || len(rr.Result().Cookies()) == 0 {
+				t.Fatalf("login/finish from a fresh address on the throttled network: %d %s", rr.Code, rr.Body)
+			}
+		})
 	}
 }
