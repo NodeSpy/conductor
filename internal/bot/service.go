@@ -132,6 +132,9 @@ type Service struct {
 	RunUsage func(historyID string) (RunUsage, bool)
 	Notify   func(ctx context.Context, n Notice)
 
+	// loops counts the bot loops Start began, so WaitLoops can see them end.
+	loops sync.WaitGroup
+
 	mu       sync.Mutex
 	tplCfg   map[string]*config.Config // the config each bot's template was last checked against
 	skipped  map[string]string         // last sweep-skip reason, per bot (logged once)
@@ -246,7 +249,9 @@ func (s *Service) bot(name string) (config.BotConfig, error) {
 	return m, nil
 }
 
-// Start initializes every bot and runs its loop until ctx ends.
+// Start initializes every bot and runs its loop until ctx ends. A loop
+// finishes the pass it is in when ctx ends: wait for them (WaitLoops)
+// before closing what they write to.
 func (s *Service) Start(ctx context.Context) {
 	// Recover any cross-home reassignment a prior run was interrupted mid-way,
 	// before dispatch can act on a half-moved ticket.
@@ -271,7 +276,27 @@ func (s *Service) Start(ctx context.Context) {
 		if s.Terraform != nil {
 			s.Terraform.Recover(name)
 		}
-		go s.loop(ctx, name)
+		s.loops.Add(1)
+		go func() {
+			defer s.loops.Done()
+			s.loop(ctx, name)
+		}()
+	}
+}
+
+// WaitLoops blocks until every loop Start began has returned (end Start's
+// context first), or until d has passed. It reports whether they all did.
+func (s *Service) WaitLoops(d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		s.loops.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
 	}
 }
 

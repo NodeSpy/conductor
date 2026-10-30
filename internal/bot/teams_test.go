@@ -907,9 +907,16 @@ func TestProposalsNameTheirApprovers(t *testing.T) {
 	if k, ok := ts["knowledge"].(map[string]any); !ok || k["promotion"] != "proposal" {
 		t.Fatalf("team view knowledge: %v", ts["knowledge"])
 	}
+	// The loops Start begins end, and are waited for, before the temp dir
+	// they write into is removed (cleanups run last-registered first).
 	sctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		if !f.svc.WaitLoops(time.Minute) {
+			t.Error("a bot loop outlived the test")
+		}
+	})
 	f.svc.Start(sctx)
-	cancel()
 	if _, err := os.Stat(filepath.Join(f.cfg.TeamKnowledgeDir("platform"), ".git")); err != nil {
 		t.Fatalf("Start did not create the knowledge repo: %v", err)
 	}

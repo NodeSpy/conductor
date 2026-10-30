@@ -1217,7 +1217,16 @@ func cmdRun(args []string) error {
 		if stack != nil {
 			hub = stack.Runner.Events
 		}
-		bots.start(ctx, hub)
+		// The bot loops end before the stores and runtimes they write to
+		// close (the defers above): a pass under way finishes first.
+		botCtx, stopBots := context.WithCancel(ctx)
+		defer func() {
+			stopBots()
+			if !bots.svc.WaitLoops(30 * time.Second) {
+				logf("bots: a bot loop was still running 30s after shutdown began")
+			}
+		}()
+		bots.start(botCtx, hub)
 		botCtl = bots.svc
 		go serveOperatorAPI(ctx, operatorAPISockPath(cfg), bots.operatorAPI(), logf)
 	}
