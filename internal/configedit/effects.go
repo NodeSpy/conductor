@@ -78,6 +78,8 @@ func isWidening(path []string, before, after any) bool {
 		return true
 	case contains(path, "dashboard") && last == "allow_plain_http" && truthy(after) && !truthy(before):
 		return true
+	case contains(path, "dashboard") && last == "hsts" && !truthy(after) && fmt.Sprintf("%v", after) != "":
+		return true
 	case p == "dashboard.auth.config_stepup" && fmt.Sprintf("%v", after) == "guarded":
 		return true
 	case p == "dashboard.tailscale.tls" && (fmt.Sprintf("%v", after) == "off" || fmt.Sprintf("%v", after) == "false"):

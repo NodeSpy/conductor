@@ -1835,6 +1835,9 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #                            # with TLS each non-IP hostname is a passkey relying party
 #       cert_file: /etc/conductor/tls/dashboard.crt
 #       key_file: /etc/conductor/tls/dashboard.key
+#       # hsts: false          # default on with TLS: Strict-Transport-Security for
+#                            # a year (every port on the hostname). Off only if a
+#                            # plain-HTTP service on this hostname must stay reachable.
 #     - address: 192.168.1.20:7791
 #       hostnames: [192.168.1.20]
 #       allow_plain_http: true             # REQUIRED for plain HTTP off loopback: the

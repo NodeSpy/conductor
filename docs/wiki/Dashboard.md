@@ -56,7 +56,13 @@ dashboard:
 - A `bind` entry is an IP and port (not the dashboard port), and `hostnames` is
   required: requests with any other `Host` are refused.
 - With `cert_file` and `key_file` the entry serves HTTPS, and each non-IP
-  hostname is a passkey relying party.
+  hostname is a passkey relying party. It also sends
+  `Strict-Transport-Security` (one year, without `includeSubDomains`), so a
+  browser that has opened it once won't follow a link to plain HTTP on the same
+  hostname. Browsers apply this to every port on the hostname, not to IP
+  addresses, and not on a first visit. `hsts: false` on the entry turns it off,
+  for a hostname where another plain-HTTP service must stay reachable. That
+  counts as loosening a guardrail when changed from the editor.
 - Without a certificate, an entry on a non-loopback address needs
   `allow_plain_http: true`, and the daemon logs a warning at boot. On plain HTTP
   the session cookie and everything on the page cross the network unencrypted.

@@ -265,14 +265,16 @@ func hostAllowed(host, magicDNS string, ips []string, port int) bool {
 	return false
 }
 
-// bareHost strips the port, brackets and a trailing dot from a Host header.
+// bareHost strips the port, brackets and a trailing dot from a Host header and
+// lower-cases it: host names are case-insensitive, and every listener (and the
+// auth package's origin and relying-party checks) compares them this way.
 func bareHost(host string) string {
 	h := host
 	if hh, _, err := net.SplitHostPort(host); err == nil {
 		h = hh
 	}
 	h = strings.TrimSuffix(h, ".")
-	return strings.Trim(h, "[]") // IPv6 literal
+	return strings.ToLower(strings.Trim(h, "[]")) // IPv6 literal
 }
 
 // isLoopbackName reports whether h names this machine's loopback: the names a

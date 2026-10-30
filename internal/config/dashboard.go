@@ -133,7 +133,16 @@ type DashboardBind struct {
 	// AllowPlainHTTP acknowledges serving plain HTTP on a non-loopback address:
 	// the session cookie and everything else cross the network unencrypted.
 	AllowPlainHTTP bool `yaml:"allow_plain_http,omitempty"`
+	// HSTS sends Strict-Transport-Security on a TLS listener (default on), so a
+	// browser that has been here once won't be led to plain HTTP on the same
+	// hostname. It covers every port on the hostname; turn it off only if a
+	// plain-HTTP service on that hostname must stay reachable.
+	HSTS *bool `yaml:"hsts,omitempty"`
 }
+
+// HSTSOn reports whether the listener sends Strict-Transport-Security: TLS
+// listeners do unless hsts: false.
+func (b DashboardBind) HSTSOn() bool { return b.TLS() && (b.HSTS == nil || *b.HSTS) }
 
 // TLS reports whether the listener serves HTTPS.
 func (b DashboardBind) TLS() bool { return b.CertFile != "" && b.KeyFile != "" }

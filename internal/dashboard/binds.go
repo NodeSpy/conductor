@@ -43,7 +43,7 @@ func bindTransport(b config.DashboardBind) auth.Transport {
 
 func loopbackNames(hosts []string) bool {
 	for _, h := range hosts {
-		if !isLoopbackName(strings.ToLower(bareHost(h))) {
+		if !isLoopbackName(bareHost(h)) {
 			return false
 		}
 	}
@@ -78,11 +78,7 @@ func bindRPs(binds []config.DashboardBind) []auth.RP {
 // bindHostAllowed reports whether a request Host is one of the entry's
 // hostnames (the port is not compared: the listener only receives its own).
 func bindHostAllowed(host string, b config.DashboardBind) bool {
-	h := host
-	if hh, _, err := net.SplitHostPort(host); err == nil {
-		h = hh
-	}
-	h = strings.ToLower(strings.TrimSuffix(strings.Trim(h, "[]"), "."))
+	h := bareHost(host)
 	if h == "" {
 		return false
 	}
@@ -97,7 +93,12 @@ func bindHostAllowed(host string, b config.DashboardBind) bool {
 // bindHandler is the handler chain for one bind entry.
 func (s *Server) bindHandler(b config.DashboardBind) http.Handler {
 	l, t := bindListener(b), bindTransport(b)
+	hsts := b.HSTSOn()
 	return auth.SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hsts {
+			// No includeSubDomains: it would reach other hosts' services.
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		}
 		if !bindHostAllowed(r.Host, b) {
 			http.Error(w, "host not allowed", http.StatusForbidden)
 			return

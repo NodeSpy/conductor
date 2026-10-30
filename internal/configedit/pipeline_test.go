@@ -200,6 +200,8 @@ func TestDashboardAuthLooseningIsWidening(t *testing.T) {
 		{[]string{"dashboard", "bind", "0", "allow_plain_http"}, nil, true, true},
 		{[]string{"dashboard", "tailscale", "tls"}, "on", "off", true},
 		{[]string{"dashboard", "tailscale", "tls"}, "off", "on", false},
+		{[]string{"dashboard", "bind", "0", "hsts"}, nil, false, true},
+		{[]string{"dashboard", "bind", "0", "hsts"}, false, true, false},
 	} {
 		if got := isWidening(c.path, c.before, c.after); got != c.want {
 			t.Errorf("%v %v→%v: widening=%v, want %v", c.path, c.before, c.after, got, c.want)

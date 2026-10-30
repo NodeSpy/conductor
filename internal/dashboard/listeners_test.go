@@ -84,6 +84,31 @@ func TestBindListenerHostAllowlist(t *testing.T) {
 	if !strings.Contains(rr.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
 		t.Fatal("bind listener must carry the security headers")
 	}
+	if rr.Header().Get("Strict-Transport-Security") != "" {
+		t.Fatal("a plain-HTTP listener sends no HSTS")
+	}
+}
+
+// A TLS bind sends HSTS (no includeSubDomains) unless hsts: false.
+func TestBindListenerHSTS(t *testing.T) {
+	off := false
+	for _, c := range []struct {
+		hsts *bool
+		want string
+	}{{nil, "max-age=31536000"}, {&off, ""}} {
+		b := config.DashboardBind{Address: "0.0.0.0:7790", Hostnames: []string{"box.lan"}, CertFile: "c", KeyFile: "k", HSTS: c.hsts}
+		cfg := &config.Config{Dashboard: config.DashboardConfig{Bind: []config.DashboardBind{b}}}
+		h := newAuthServer(t, cfg).bindHandler(b)
+		for _, host := range []string{"box.lan", "evil.example"} {
+			r := httptest.NewRequest("GET", "/", nil)
+			r.Host = host
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, r)
+			if got := rr.Header().Get("Strict-Transport-Security"); got != c.want {
+				t.Errorf("hsts=%v Host %s: Strict-Transport-Security %q, want %q", c.hsts, host, got, c.want)
+			}
+		}
+	}
 }
 
 func TestBindListenerTLSIsPasskeyRP(t *testing.T) {
@@ -118,7 +143,8 @@ func TestLocalhostListenerHostAllowlist(t *testing.T) {
 	if code, _ := getState(t, h, "rebind.evil.example:7788"); code != http.StatusForbidden {
 		t.Fatalf("the localhost listener must refuse a foreign Host, got %d", code)
 	}
-	for _, good := range []string{"localhost:7788", "127.0.0.1:7788", "[::1]:7788"} {
+	// Host names are case-insensitive here as on every listener.
+	for _, good := range []string{"localhost:7788", "127.0.0.1:7788", "[::1]:7788", "LOCALHOST:7788", "LocalHost.:7788"} {
 		if code, _ := getState(t, h, good); code != http.StatusOK {
 			t.Errorf("Host %q must pass on localhost, got %d", good, code)
 		}
