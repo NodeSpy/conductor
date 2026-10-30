@@ -452,7 +452,7 @@ func (s *Service) TicketCreate(ctx context.Context, a TicketActor, n TicketNew) 
 			return nil
 		})
 	}
-	s.audit(map[string]any{"event": "bot_ticket", "action": "create", "ticket": tid, "by": a.String(), "assignee": assignee,
+	s.auditCtx(ctx, map[string]any{"event": "bot_ticket", "action": "create", "ticket": tid, "by": a.String(), "assignee": assignee,
 		"requester": who, "requester_class": class})
 	if n.Ready {
 		return s.TicketSetStatus(ctx, a, tid, store.TicketReady, "")
@@ -604,7 +604,7 @@ func (s *Service) TicketSetStatus(ctx context.Context, a TicketActor, tid, to, n
 				st = DelegationDeclined
 			}
 			s.reportDelegation(loc.Bot, cs, st, strings.TrimSpace(note))
-			s.audit(map[string]any{"event": "bot_ticket", "action": "status", "ticket": tid, "by": a.String(), "from": c.Status, "to": target})
+			s.auditCtx(ctx, map[string]any{"event": "bot_ticket", "action": "status", "ticket": tid, "by": a.String(), "from": c.Status, "to": target})
 			s.publishTicket(tid)
 		}
 		if err != nil && cs.ID == "" {
@@ -639,7 +639,7 @@ func (s *Service) TicketSetStatus(ctx context.Context, a TicketActor, tid, to, n
 	if err != nil {
 		return TicketView{}, err
 	}
-	s.audit(map[string]any{"event": "bot_ticket", "action": "status", "ticket": tid, "by": a.String(), "from": c.Status, "to": target})
+	s.auditCtx(ctx, map[string]any{"event": "bot_ticket", "action": "status", "ticket": tid, "by": a.String(), "from": c.Status, "to": target})
 	if target == store.TicketReady {
 		if err := s.dispatchTicket(ctx, tid); err != nil {
 			return TicketView{}, err
@@ -853,7 +853,7 @@ func (s *Service) TicketEdit(ctx context.Context, a TicketActor, tid string, ch 
 	if err != nil {
 		return TicketView{}, err
 	}
-	s.audit(map[string]any{"event": "bot_ticket", "action": "edit", "ticket": tid, "by": a.String(), "widening": widening})
+	s.auditCtx(ctx, map[string]any{"event": "bot_ticket", "action": "edit", "ticket": tid, "by": a.String(), "widening": widening})
 	s.publishTicket(tid)
 	return s.TicketShow(tid)
 }
@@ -997,7 +997,7 @@ func (s *Service) TicketAssign(ctx context.Context, a TicketActor, tid, to strin
 	if err != nil {
 		return TicketView{}, err
 	}
-	s.audit(map[string]any{"event": "bot_ticket", "action": "assign", "ticket": tid, "by": a.String(), "from": c.Assignee, "to": assignee,
+	s.auditCtx(ctx, map[string]any{"event": "bot_ticket", "action": "assign", "ticket": tid, "by": a.String(), "from": c.Assignee, "to": assignee,
 		"requester": who, "requester_class": class})
 	s.publishTicket(tid)
 	return s.TicketShow(tid)
@@ -1075,7 +1075,7 @@ func (s *Service) TicketComment(ctx context.Context, a TicketActor, tid, text st
 		s.enqueueMsg(loc.Bot, store.InboxMsg{CaseID: loc.ID, Attachments: attIDs,
 			Text: fmt.Sprintf("[conductor: your operator %s commented on ticket %s (case %s)]\n%s\n(Answer with: conductor bot ticket comment %s \"…\")", orDash(a.Operator), c.Ticket, loc.ID, text, c.Ticket)})
 	}
-	s.audit(map[string]any{"event": "bot_ticket", "action": "comment", "ticket": tid, "by": a.String(), "bytes": len(text)})
+	s.auditCtx(ctx, map[string]any{"event": "bot_ticket", "action": "comment", "ticket": tid, "by": a.String(), "bytes": len(text)})
 	s.publishTicket(tid)
 	return s.TicketShow(tid)
 }

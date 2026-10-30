@@ -50,12 +50,19 @@ func serveOperatorAPI(ctx context.Context, path string, h http.Handler, log func
 	}
 }
 
-// operatorAPI is the bot service's operator API handler, with the avatar
-// endpoints (config changes, planned here in cmd).
-func (m *botStack) operatorAPI() http.Handler {
-	mux := http.NewServeMux()
-	mux.Handle("/", bot.OperatorAPI(m.svc))
-	avatarRoutes(mux, m.svc.Cfg, func() string { return botConfigPath })
-	browserAPIRoutes(mux)
-	return mux
+// routeAdder is a ServeMux or a bot.Routes list.
+type routeAdder interface {
+	HandleFunc(pattern string, h func(http.ResponseWriter, *http.Request))
 }
+
+// operatorRoutes is the bot service's operator API routes, with the avatar
+// endpoints (config changes, planned here in cmd) and the wallet reads.
+func (m *botStack) operatorRoutes() bot.Routes {
+	rs := bot.OperatorRoutes(m.svc)
+	avatarRoutes(&rs, m.svc.Cfg, func() string { return botConfigPath })
+	browserAPIRoutes(&rs)
+	return rs
+}
+
+// operatorAPI is operatorRoutes on one handler, for the unix socket.
+func (m *botStack) operatorAPI() http.Handler { return m.operatorRoutes().Mux() }

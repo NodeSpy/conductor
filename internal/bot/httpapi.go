@@ -59,8 +59,37 @@ const multipartSlack = 1 << 20
 var streamPing = 25 * time.Second
 
 // OperatorAPI is the operator API's handler.
-func OperatorAPI(s *Service) http.Handler {
+func OperatorAPI(s *Service) http.Handler { return OperatorRoutes(s).Mux() }
+
+// Route is one operator API route: a ServeMux pattern ("METHOD /v1/...") and
+// its handler.
+type Route struct {
+	Pattern string
+	Handler http.Handler
+}
+
+// Routes is a route list, kept as a list rather than a mux so a front end (the
+// dashboard) can put its gate on each route by pattern, and a test can walk
+// every route.
+type Routes []Route
+
+// HandleFunc adds a route, as on a ServeMux.
+func (rs *Routes) HandleFunc(pattern string, h func(http.ResponseWriter, *http.Request)) {
+	*rs = append(*rs, Route{Pattern: pattern, Handler: http.HandlerFunc(h)})
+}
+
+// Mux is the routes on a ServeMux.
+func (rs Routes) Mux() *http.ServeMux {
 	mux := http.NewServeMux()
+	for _, r := range rs {
+		mux.Handle(r.Pattern, r.Handler)
+	}
+	return mux
+}
+
+// OperatorRoutes is the operator API's routes.
+func OperatorRoutes(s *Service) Routes {
+	mux := &Routes{}
 	mux.HandleFunc("POST /v1/bots/{bot}/messages", s.apiPostMessage)
 	mux.HandleFunc("GET /v1/bots/{bot}/attachments", s.apiListAttachments)
 	mux.HandleFunc("GET /v1/bots/{bot}/attachments/{id}", s.apiAttachment)
@@ -83,7 +112,7 @@ func OperatorAPI(s *Service) http.Handler {
 	mux.HandleFunc("DELETE /v1/conversations/{id}/pin", s.apiConversationUnpin)
 	mux.HandleFunc("PUT /v1/conversations/pins", s.apiConversationPins)
 	s.registerViewRoutes(mux) // bot roster, detail, proposals (design §4.4)
-	return mux
+	return *mux
 }
 
 func apiJSON(w http.ResponseWriter, code int, v any) {
@@ -98,9 +127,10 @@ func apiError(w http.ResponseWriter, code int, err error) {
 }
 
 // apiPostMessage takes a multipart message: `text`, an optional `case`, and
-// any number of `file` parts. The body is capped at the bot's per-message
-// limit as it streams, and each file at the per-file limit, before the
-// service applies every cap again.
+// any number of `file` parts, as ?operator= (none: any operator, as on the
+// socket; the dashboard always sets its session's). The body is capped at the
+// bot's per-message limit as it streams, and each file at the per-file limit,
+// before the service applies every cap again.
 func (s *Service) apiPostMessage(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("bot")
 	m, err := s.bot(name)
@@ -158,7 +188,7 @@ func (s *Service) apiPostMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	atts, err := s.SayWith(name, text, files, caseID)
+	atts, err := s.sayAs(r.Context(), r.URL.Query().Get("operator"), name, text, files, caseID)
 	if err != nil {
 		apiError(w, http.StatusUnprocessableEntity, err)
 		return
@@ -638,4 +668,54 @@ func (s *Service) apiTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	apiJSON(w, http.StatusOK, s.teamStatus(r.Context(), t, true))
+}
+
+// OPERATOR AUTHORITY: what a front end that knows who is signed in (the
+// dashboard) asks before it lets a write through. Writes on a bot or team need
+// an operator of it (bots.<name>.operators, teams.<name>.operators; none
+// listed: every configured operator).
+
+// Operates reports whether operator op operates target: "bot:<name>",
+// "team:<name>", or a bare bot or team name. "" (the triage queue) is every
+// configured operator's. An unknown operator or target is false.
+func (s *Service) Operates(op, target string) bool {
+	cfg := s.Cfg()
+	if _, ok := cfg.Operators[op]; !ok {
+		return false
+	}
+	t, err := s.parseAssignee(target)
+	if err != nil {
+		return false
+	}
+	var ops []string
+	switch kind, name, _ := strings.Cut(t, ":"); kind {
+	case "":
+		return true
+	case "bot":
+		ops = cfg.BotOperators(name)
+	case "team":
+		ops = cfg.TeamOperators(name)
+	}
+	for _, o := range ops {
+		if o == op {
+			return true
+		}
+	}
+	return false
+}
+
+// TicketOwner is who a ticket's writes answer to: its assignee, or else the
+// bot holding it; "" while it waits in the triage queue.
+func (s *Service) TicketOwner(tid string) (string, error) {
+	c, loc, err := s.findTicket(tid)
+	if err != nil {
+		return "", err
+	}
+	if c.Assignee != "" {
+		return c.Assignee, nil
+	}
+	if loc.Bot != "" {
+		return "bot:" + loc.Bot, nil
+	}
+	return "", nil
 }

@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -323,14 +322,19 @@ func dashboardDecision(botName, id, decision, operator, reason string, ev dashbo
 	return d
 }
 
-// dashboardBotAPI builds the bots' operator API handler for the web dashboard —
-// the same mux the unix-socket server uses. Nil when no bots run on this daemon,
-// so the dashboard reports the bot endpoints as unavailable rather than 500ing.
-func dashboardBotAPI(bots *botStack) http.Handler {
+// dashboardBotRoutes is the bots' operator API routes for the web dashboard,
+// which puts its chokepoint in front of each (the same routes the unix socket
+// serves). Nil when no bots run on this daemon, so the dashboard reports the
+// bot endpoints as unavailable rather than 500ing.
+func dashboardBotRoutes(bots *botStack) ([]dashboard.BotRoute, dashboard.BotAuthority) {
 	if bots == nil {
-		return nil
+		return nil, nil
 	}
-	return bots.operatorAPI()
+	var out []dashboard.BotRoute
+	for _, r := range bots.operatorRoutes() {
+		out = append(out, dashboard.BotRoute{Pattern: r.Pattern, Handler: r.Handler})
+	}
+	return out, bots.svc
 }
 
 // handleDashboardControl serves the daemon side of `conductor dashboard` on the

@@ -185,9 +185,10 @@ confirmation is single use, bound to the action, and the audit log records the
 method.
 
 Sign-ins, confirmations, `approve-login` approvals, config applies and
-restores, and approval and purchase decisions are written to the audit log with
-the operator, the session, how it signed in, the remote address, the listener
-and the digest that was confirmed. An apply also records whether it needed a
+restores, approval and purchase decisions, and messages and ticket changes made
+from the dashboard are written to the audit log with the operator, the session,
+how it signed in, the remote address, the listener and the digest that was
+confirmed. An apply also records whether it needed a
 confirmation, and an `approve-login` entry records both the approving and the
 requesting address.
 
@@ -303,6 +304,28 @@ Same-origin JSON under `/api/v1` (no CORS).
 | `POST /api/v1/config/apply` | apply the staged set (requires the confirm token); backs up, writes, reloads |
 | `GET /api/v1/config/history` · `POST /config/restore/review` · `/restore` | backups and restore |
 | `GET /api/v1/{secrets,packs,plugins,connections,system,audit}` | per-screen read models (secret values never returned) |
+
+The bots' operator API (the same routes `operator-api.sock` serves, see
+[Bots](Bots.md#the-operator-api)) is mounted beside it:
+
+| Method & path | Does |
+|---|---|
+| `GET /api/v1/bots` · `/bots/{bot}` · `/bots/{bot}/proposals` · `/proposals` | bot roster, detail and proposals |
+| `GET /api/v1/bots/{bot}/attachments[/{id}[/content\|/thumbnail]]` | a bot's attachments |
+| `POST /api/v1/bots/{bot}/messages` | send a bot a message (multipart, with files) |
+| `GET /api/v1/teams` · `/teams/{team}` | teams |
+| `GET /api/v1/conversations` · `/conversations/{id}/messages` · `/conversations/stream` | conversations, messages, live updates |
+| `POST /api/v1/conversations/{id}/messages` | send to a bot or team conversation |
+| `POST /api/v1/conversations/{id}/read` · `POST`/`DELETE /conversations/{id}/pin` · `PUT /conversations/pins` | your read marks and pins |
+| `GET /api/v1/tickets` · `/tickets/{id}` · `/tickets/stream` | tickets |
+| `POST /api/v1/tickets` · `PATCH /tickets/{id}` · `POST /tickets/{id}/comments` | create, edit, assign, move and comment on tickets |
+| `POST /api/v1/{bots,teams}/{name}/avatar/plan` · `/avatar/apply` | plan and stage an avatar change |
+| `GET /api/v1/bots/{bot}/cases/{case}/budget` | a case's spend limit and what is left |
+
+On the dashboard you are the operator: a request that names another operator
+is refused with 403, and a write on a bot, team or ticket needs you to be one of
+its operators (`bots.<name>.operators`, `teams.<name>.operators`; none listed:
+every operator). Reads are open to every operator, as on the socket.
 
 ## Building the UI
 

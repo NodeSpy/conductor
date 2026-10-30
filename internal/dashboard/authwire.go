@@ -356,7 +356,7 @@ func (s *Server) handleApprovalView(w http.ResponseWriter, r *http.Request) {
 			"deny":    deny,
 		},
 		"descriptions": map[string]string{"approve": approveDesc, "deny": denyDesc},
-		"summary": json.RawMessage(nonEmptyJSON(summary)), "operators": operators,
+		"summary":      json.RawMessage(nonEmptyJSON(summary)), "operators": operators,
 		"purpose": string(auth.PurposeApprove),
 	})
 }

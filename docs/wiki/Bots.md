@@ -305,7 +305,12 @@ rule.
 
 The dashboard reaches files over HTTP on a unix socket beside the control
 socket, `<state dir>/operator-api.sock`. It's same-user only (0600), like the
-control socket, and nothing on it is reachable from a bot session:
+control socket, and nothing on it is reachable from a bot session. On the
+socket a request names its operator (`operator`, or `?operator=` on a message
+to a bot; none: any operator). The web dashboard mounts the same routes under
+`/api/v1/`, where the signed-in session is the operator: naming another one is
+refused, and a write on a bot, team or ticket needs one of its operators (see
+[Dashboard](Dashboard.md#the-api)).
 
 | | |
 |---|---|

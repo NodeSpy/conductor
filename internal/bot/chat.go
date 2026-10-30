@@ -334,7 +334,7 @@ func (s *Service) Chat(ctx context.Context, req ChatSend) (store.ChatMessage, er
 			return nil
 		})
 	}
-	s.audit(map[string]any{"event": "bot_chat", "conversation": req.Conversation, "seq": msg.Seq, "operator": op,
+	s.auditCtx(ctx, map[string]any{"event": "bot_chat", "conversation": req.Conversation, "seq": msg.Seq, "operator": op,
 		"to": targets, "mode": mode, "cases": cases, "bytes": len(req.Text)})
 	s.publishChat(ChatEvent{Conversation: req.Conversation, Message: msg})
 	return msg, nil

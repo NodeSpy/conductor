@@ -280,7 +280,10 @@ challenge.
   `dashboard.approval` and `dashboard.purchase` carry the operator, session id,
   sign-in method, the request's remote address, the listener and transport, and
   the confirmed digest. `dashboard_ssh_approved` names the approving and the
-  requesting address separately.
+  requesting address separately. The bots' operator API adds the same fields
+  to its own rows (`bot_chat`, `bot_ticket`) when a dashboard session made the
+  request, and the dashboard writes a `dashboard.botapi` row for each write on
+  a bot, team or ticket (§4c).
 - **Credential changes.** Setting or removing a password or authenticator, and
   adding a passkey from Access, use the purpose `credential.change`. Their
   digest names the operator and the action. Together with the config step-up
@@ -326,6 +329,37 @@ A session ends at the earlier of its own expiry and `created + session.max`
 under the current config, so lowering `session.max` applies to sessions that
 already exist. An ended session is deleted when it is next presented, and the
 session list and `dashboard status` count live sessions only.
+
+## 4c. The bots' operator API on the dashboard
+
+The bots' operator API (teams, conversations, tickets, messages, attachments,
+avatars) names its operator in the request: a query parameter, a JSON key or a
+form field. On its unix socket the caller is the local user, who may be any
+operator. The dashboard mounts the same routes under `/api/v1/`, and there the
+signed-in session is the operator. One chokepoint sits in front of every
+mounted route:
+
+- A request that names another operator is refused with 403 and never
+  rewritten. That covers the query, a JSON key that encoding/json would read as
+  `operator` (in any letter case), and a urlencoded or multipart field.
+- The JSON handlers decode whatever body arrives, whatever its Content-Type.
+  Ambiguous bodies are therefore refused rather than guessed at:
+  - a multipart body whose preamble is a JSON object;
+  - a form body that is a JSON object;
+  - JSON with anything after the first object;
+  - an `operator` that is not a string.
+- The session's operator is then set in the query and in a JSON or form body,
+  so every handler reads it wherever it looks.
+- A write on a bot, team or ticket needs an operator of it (`bots.<name>.operators`,
+  `teams.<name>.operators`; when none are listed, every operator). For a ticket
+  this is its assignee, or the bot holding it, plus the new assignee on a
+  reassignment. A ticket in the triage queue is every operator's. Read marks
+  and pins are the operator's own view, so they need nothing more.
+- A write route with no rule at the chokepoint is refused. A test walks the
+  daemon's real route list and fails on any write route without a rule.
+- Reads follow the bot API's own rules: any operator reads any conversation.
+- With sign-in off there is no session to speak for, and the API behaves as on
+  the socket.
 
 ## 5. Transports and listeners
 

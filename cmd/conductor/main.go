@@ -1078,6 +1078,7 @@ func cmdRun(args []string) error {
 	// socket. Phase 1 binds localhost only, no auth; a config without the block
 	// leaves the daemon exactly as before.
 	if cfg.Dashboard.On() {
+		botRoutes, botAuthority := dashboardBotRoutes(bots)
 		dash := dashboard.New(dashboard.Deps{
 			Cfg:       cfg,
 			Store:     st,
@@ -1109,10 +1110,11 @@ func cmdRun(args []string) error {
 			Retry:     eng.RetryRunByID,
 			Stop:      func(ctx context.Context, id string) error { return eng.StopRunByID(id) },
 			RunActive: eng.RunActiveByID,
-			// The bots' operator API (design §4.4): the same handler the unix
+			// The bots' operator API (design §4.4): the same routes the unix
 			// socket serves (teams, chat, tickets, avatars, read models), mounted
-			// into the web surface under /api. Nil when no bots run here.
-			BotAPI: dashboardBotAPI(bots),
+			// into the web surface under /api behind the session chokepoint. Nil
+			// when no bots run here.
+			BotRoutes: botRoutes, BotAuthority: botAuthority,
 			// The browser/wallet surface (§4.5): live sessions, personal details,
 			// payment cards and purchase approvals, over the same control layer the
 			// CLI uses. Reads empty when no browser is configured.

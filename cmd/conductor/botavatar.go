@@ -360,7 +360,7 @@ func apiErr(w http.ResponseWriter, code int, err error) {
 //	POST /v1/bots/{name}/avatar/apply    token=…  → writes the planned change
 //
 // and the same under /v1/teams/{name}/avatar for a team's picture.
-func avatarRoutes(mux *http.ServeMux, cfg func() *config.Config, cfgPath func() string) {
+func avatarRoutes(mux routeAdder, cfg func() *config.Config, cfgPath func() string) {
 	ps := &avatarPlans{}
 	for _, kind := range []string{"bot", "team"} {
 		avatarRoutesFor(mux, ps, kind, cfg, cfgPath)
@@ -377,7 +377,7 @@ func avatarOf(cfg *config.Config, kind, name string) (*config.BotAvatar, bool) {
 	return m.Avatar, ok
 }
 
-func avatarRoutesFor(mux *http.ServeMux, ps *avatarPlans, kind string, cfg func() *config.Config, cfgPath func() string) {
+func avatarRoutesFor(mux routeAdder, ps *avatarPlans, kind string, cfg func() *config.Config, cfgPath func() string) {
 	type cached struct {
 		key string
 		png []byte

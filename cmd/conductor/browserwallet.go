@@ -1226,7 +1226,7 @@ func budgetClampWarning(cfg *config.Config, bot string, l *store.SpendLimit) str
 // browserAPIRoutes are the wallet's read-only routes on the operator API
 // (the dashboard's Needs-you purchases, spend, a ticket's budget). A
 // decision stays a signed control-socket op; nothing here returns a value.
-func browserAPIRoutes(mux *http.ServeMux) {
+func browserAPIRoutes(mux routeAdder) {
 	serve := func(w http.ResponseWriter, cmd string, q browserWalletReq) {
 		cfg, m := browserCfg.Load(), browserMgr.Load()
 		w.Header().Set("Content-Type", "application/json")

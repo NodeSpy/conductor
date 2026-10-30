@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/auditctx"
 	"github.com/NodeSpy/conductor/internal/blob"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
@@ -157,6 +158,13 @@ func (s *Service) audit(e map[string]any) {
 	if s.Audit != nil {
 		s.Audit(e)
 	}
+}
+
+// auditCtx is audit for a row written on a request: it adds the who-and-where
+// the front end put on ctx (the dashboard's session, address and listener).
+func (s *Service) auditCtx(ctx context.Context, e map[string]any) {
+	auditctx.Merge(ctx, e)
+	s.audit(e)
 }
 
 // Repo returns a bot's memory repo handle.
@@ -489,7 +497,11 @@ func (s *Service) SayWith(name, text string, files []AttachmentIn, caseID string
 // operator when several are configured): recorded in the bot's
 // conversation, delivered through Chat.
 func (s *Service) SayAs(op, name, text string, files []AttachmentIn, caseID string) ([]*store.Attachment, error) {
-	m, err := s.Chat(context.Background(), ChatSend{Conversation: BotConversation(name), Operator: op, Text: text, Files: files,
+	return s.sayAs(context.Background(), op, name, text, files, caseID)
+}
+
+func (s *Service) sayAs(ctx context.Context, op, name, text string, files []AttachmentIn, caseID string) ([]*store.Attachment, error) {
+	m, err := s.Chat(ctx, ChatSend{Conversation: BotConversation(name), Operator: op, Text: text, Files: files,
 		CaseID: caseID, anyOperator: op == ""})
 	if err != nil {
 		return nil, err

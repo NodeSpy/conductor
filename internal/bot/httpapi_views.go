@@ -15,7 +15,7 @@ import (
 )
 
 // registerViewRoutes adds the bot read models to the operator API mux.
-func (s *Service) registerViewRoutes(mux *http.ServeMux) {
+func (s *Service) registerViewRoutes(mux *Routes) {
 	mux.HandleFunc("GET /v1/bots", s.apiBots)
 	mux.HandleFunc("GET /v1/bots/{bot}", s.apiBot)
 	mux.HandleFunc("GET /v1/bots/{bot}/proposals", s.apiBotProposals)

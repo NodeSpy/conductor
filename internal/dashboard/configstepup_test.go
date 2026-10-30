@@ -215,7 +215,7 @@ func TestGuardedConfigStepup(t *testing.T) {
 // says why, and nothing can be staged or applied.
 func TestAuthStoreFailureFailsClosed(t *testing.T) {
 	for _, c := range []struct {
-		name  string
+		name   string
 		break_ func(dir string)
 	}{
 		{"dashboard is a file", func(dir string) { _ = os.WriteFile(filepath.Join(dir, "dashboard"), []byte("x"), 0o600) }},
