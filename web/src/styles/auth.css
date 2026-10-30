@@ -1,0 +1,565 @@
+/* Auth screens (design §4.10, §6): the bare sign-in / enrolment gate and the
+   Access screen. Tokens only, so light and dark both come for free. */
+
+/* The gate: a centred card on the canvas, for sign-in and enrolment. */
+.gate {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--color-bg-canvas);
+}
+.gate-card {
+  width: min(560px, 100%);
+  background: var(--color-bg-surface);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-raised, 0 1px 3px rgba(0, 0, 0, 0.1));
+  padding: var(--space-5);
+}
+.gate-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.gate-brand .wordmark {
+  font-family: var(--type-serif, Fraunces, Georgia, serif);
+  font-weight: 600;
+  font-size: 1.25rem;
+  color: var(--color-text-primary);
+}
+.gate-card h1 {
+  font-family: var(--type-serif, Fraunces, Georgia, serif);
+  font-size: 1.6rem;
+  margin: 0 0 var(--space-2);
+  color: var(--color-text-primary);
+}
+.gate-sub {
+  color: var(--color-text-secondary);
+  margin: 0 0 var(--space-4);
+  line-height: 1.5;
+}
+.gate-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+}
+.gate-foot a {
+  margin-left: auto;
+  color: var(--color-text-accent);
+}
+.gate-err {
+  color: var(--color-status-danger-solid, crimson);
+  margin: var(--space-2) 0 0;
+  font-size: var(--type-caption-size);
+}
+
+/* Buttons: primary (ember fill), lg (the one big call to action), sm, danger,
+   block — layered on the base .btn. */
+.btn.primary {
+  background: var(--color-accent-default);
+  border-color: var(--color-accent-default);
+  /* the on-accent token clears WCAG AA on the fill and its hover, both themes */
+  color: var(--color-text-on-accent);
+}
+.btn.primary:hover {
+  background: var(--color-accent-hover, var(--color-accent-default));
+  border-color: var(--color-accent-hover, var(--color-accent-default));
+}
+.btn.lg {
+  padding: 11px var(--space-4);
+  font-size: var(--type-body-m-size, 0.95rem);
+}
+.btn.sm {
+  padding: 4px var(--space-2);
+  font-size: var(--type-caption-size);
+}
+.btn.block {
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  justify-content: center;
+}
+.btn.danger {
+  color: var(--color-button-danger-fg, crimson);
+  border-color: var(--color-border-default);
+}
+.btn.ghost {
+  border-color: transparent;
+}
+.btn[disabled],
+.btn[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.passkey-glyph {
+  margin-right: 6px;
+}
+
+/* Enrolment form bits. */
+.gate-code {
+  background: var(--color-bg-sunken);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  font-family: var(--type-mono, monospace);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  margin: 0 0 var(--space-4);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--color-text-secondary);
+}
+.gate-field {
+  display: block;
+  margin-bottom: var(--space-3);
+}
+.gate-field label {
+  display: block;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+.gate-field input {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px var(--space-3);
+  border: var(--border-width) solid var(--color-border-control);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-field);
+  color: var(--color-text-primary);
+  font-size: var(--type-body-s-size, 0.9rem);
+}
+.gate-field input:focus {
+  border-color: var(--color-border-strong);
+}
+.gate-field input::placeholder {
+  color: var(--color-text-tertiary);
+}
+.field-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.seg-choice {
+  display: flex;
+  gap: var(--space-2);
+}
+.seg-choice button {
+  all: unset;
+  cursor: pointer;
+  flex: 1;
+  text-align: center;
+  padding: 8px;
+  border: var(--border-width) solid var(--color-border-control);
+  border-radius: var(--radius-control);
+  color: var(--color-text-secondary);
+  font-size: var(--type-caption-size);
+}
+.seg-choice button.on {
+  border-color: var(--color-accent-default);
+  color: var(--color-text-accent);
+  background: var(--color-accent-subtle);
+}
+.gate-callout {
+  background: var(--color-bg-sunken);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: var(--space-3) 0;
+}
+
+/* Access screen. */
+.acc {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--space-4);
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .acc {
+    grid-template-columns: 1fr;
+  }
+}
+.acc-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.acc-card {
+  background: var(--color-bg-surface);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  padding: var(--space-4);
+}
+.acc-card h2 {
+  font-size: var(--type-body-m-size, 1rem);
+  margin: 0 0 var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* the heading keeps its line; a button that doesn't fit beside it goes below */
+.acc-title {
+  white-space: nowrap;
+}
+.acc-card h2 .btn {
+  margin-left: auto;
+}
+/* a notice above the cards keeps the cards' own spacing */
+.acc-banner {
+  margin-bottom: var(--space-4);
+}
+.acc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.acc-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+.acc-row:first-child {
+  border-top: none;
+}
+.acc-row .acc-main {
+  min-width: 0;
+}
+.acc-row b {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.acc-why {
+  display: block;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+}
+.acc-row .acc-act {
+  margin-left: auto;
+}
+.acc-asks {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--color-text-secondary);
+  line-height: 1.7;
+  font-size: var(--type-body-s-size, 0.9rem);
+}
+.acc-note {
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+  font-size: var(--type-caption-size);
+  margin: var(--space-3) 0 0;
+  line-height: 1.5;
+}
+.acc-tech {
+  margin-top: var(--space-2);
+}
+.acc-tech summary {
+  cursor: pointer;
+  color: var(--color-text-accent);
+  font-size: var(--type-caption-size);
+}
+.acc-tech dl {
+  margin: var(--space-3) 0 0;
+}
+.acc-tech dt {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  margin-top: var(--space-2);
+}
+.acc-tech dd {
+  margin: 2px 0 0;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+.acc-locked {
+  color: var(--color-status-danger-solid, crimson);
+  font-size: var(--type-caption-size);
+}
+.gate-group-label {
+  display: block;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+
+/* --- sign-in methods, step-up dialog, SSH challenge (dashboard-auth-methods) --- */
+
+/* The plain-HTTP notice: on the gate and above every signed-in screen. */
+.plain-http {
+  background: var(--color-status-warning-bg);
+  border: var(--border-width) solid var(--color-status-warning-border);
+  color: var(--color-status-warning-fg);
+  border-radius: var(--radius-card);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--type-caption-size);
+  line-height: 1.5;
+  margin: 0 0 var(--space-4);
+}
+
+/* Method chips: the other ways to sign in / confirm, one tap each. */
+.method-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+}
+.chip {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  padding: 6px 12px;
+  min-height: 32px;
+  border: var(--border-width) solid var(--color-border-control);
+  border-radius: 999px;
+  color: var(--color-text-secondary);
+  font-size: var(--type-caption-size);
+  background: var(--color-bg-surface);
+}
+.chip:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+}
+.chip.on {
+  border-color: var(--color-accent-default);
+  color: var(--color-text-accent);
+  background: var(--color-accent-subtle);
+}
+.chip:focus-visible,
+.seg-choice button:focus-visible {
+  outline: 2px solid var(--color-accent-default);
+  outline-offset: 2px;
+}
+.other-ways {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+/* Text areas and selects inside gate fields match the inputs. */
+.gate-field textarea {
+  all: unset;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  padding: 8px var(--space-3);
+  border: var(--border-width) solid var(--color-border-control);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-field);
+  color: var(--color-text-primary);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: pre;
+  overflow: auto;
+  min-height: 7rem;
+}
+.gate-field textarea:focus {
+  border-color: var(--color-border-strong);
+}
+
+/* SSH challenge panel. Long single-line commands wrap anywhere, never overflow. */
+.ssh-panel .seg-choice {
+  margin-bottom: var(--space-3);
+}
+.ssh-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.ssh-step .acc-note {
+  margin: 0;
+}
+.copy-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+.copy-block .gate-code {
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.copy-text {
+  user-select: all;
+  -webkit-user-select: all;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  white-space: pre-wrap;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+/* A shell command breaks only between words; a token too long for the line
+   scrolls rather than splitting mid-word. */
+.copy-text.words {
+  word-break: normal;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+/* WebKit also breaks after a hyphen ("--" / "url"); each word stays whole. */
+.copy-text.words .w {
+  white-space: nowrap;
+}
+.login-code {
+  font-family: var(--type-mono, monospace);
+  font-size: 1.8rem;
+  letter-spacing: 0.12em;
+  text-align: center;
+  padding: var(--space-3);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-sunken);
+  color: var(--color-text-primary);
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+/* TOTP enrolment: QR beside the key, stacked on narrow screens. The QR keeps a
+   white quiet zone in dark mode so a camera can read it. */
+.totp-setup {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin: 0 0 var(--space-3);
+  width: 100%;
+}
+.totp-qr {
+  background: #fff;
+  padding: 8px;
+  border-radius: var(--radius-control);
+  width: 180px;
+  height: 180px;
+  image-rendering: pixelated;
+  flex: none;
+}
+.totp-side {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.acc-row.acc-form {
+  display: block;
+}
+.acc-row .acc-act {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.row-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* The step-up dialog: a centred card; a bottom sheet on a phone. */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 300);
+  background: rgb(0 0 0 / 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+.dialog {
+  width: min(520px, 100%);
+  max-height: calc(100dvh - 2 * var(--space-4));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.3);
+  padding: var(--space-5);
+}
+.dialog h2 {
+  font-family: var(--type-serif, Fraunces, Georgia, serif);
+  font-size: 1.35rem;
+  margin: 0 0 var(--space-1, 4px);
+}
+.dialog .gate-sub {
+  margin-bottom: var(--space-3);
+}
+.dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-3);
+}
+.dialog-foot .btn {
+  min-height: 44px;
+  min-width: 88px;
+  box-sizing: border-box;
+  justify-content: center;
+  font-size: var(--type-body-s-size, 0.9rem);
+}
+/* What the step-up confirms, readable in full inside the sheet. */
+.stepup-what {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-control);
+  border: var(--border-width) solid var(--color-border-subtle);
+  background: var(--color-bg-sunken);
+}
+.stepup-what-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+.stepup-lines {
+  margin: var(--space-2) 0 0;
+  padding-left: 1.2em;
+  color: var(--color-text-secondary);
+}
+.stepup-action {
+  margin: var(--space-2) 0 0;
+  max-height: 40dvh;
+  overflow: auto;
+  font-family: var(--type-mono, monospace);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+}
+.stepup-what .stepup-digest {
+  margin: var(--space-2) 0 0;
+}
+@media (max-width: 560px) {
+  .dialog-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .dialog {
+    width: 100%;
+    max-height: 92dvh;
+    border-radius: var(--radius-card) var(--radius-card) 0 0;
+    padding: var(--space-4) var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  }
+  .gate-card {
+    padding: var(--space-4);
+  }
+  /* 16px keeps iOS Safari from zooming the page when a field takes focus. */
+  .gate-field input,
+  .gate-field textarea {
+    font-size: 16px;
+  }
+}

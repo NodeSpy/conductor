@@ -74,6 +74,14 @@ reordering keys within an entry, does not move an instance's dedup or attempt
 state. Two byte-identical entries are an error rather than one trigger silently
 written twice.
 
+### Folders (removed)
+
+Folders (display-only filing of bots, teams, workflows and triggers) were
+removed. A `folder:` still in a config loads and is ignored: `conductor
+validate` and the daemon log say `folders were removed; this field is ignored
+and can be deleted`, and it never fails validation. Delete it when convenient. `conductor workflows ls` lists the config's workflows and
+triggers by name.
+
 ## Step forms
 
 A step is one of seven forms (all share `id` and `if`):

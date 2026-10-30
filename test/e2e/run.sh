@@ -37,8 +37,21 @@ cd "$DIR"
 source "$DIR/lib/assert.sh"
 
 MODE="${MODE:-stub}"
-PROJECT="${PROJECT:-pc-e2e}"
+# One stack per checkout: runs from two worktrees must not share a compose
+# project, nor the image each builds (a build would swap another's binary).
+PROJECT="${PROJECT:-pc-e2e-$(basename "$(cd "$DIR/../.." && pwd)" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9_\n' '-')}"
+export E2E_IMAGE_TAG="$PROJECT"
 KEEP="${KEEP:-0}"
+# ONLY="BM" (group names, space-separated) runs only those groups; groups BM
+# and L (bots) alone bring up only their daemon. E2E_GROUPS is the same.
+# (Not GROUPS: bash reserves that name.)
+ONLY="${ONLY:-${E2E_GROUPS:-}}"
+want() { [ -z "$ONLY" ] || [[ " $ONLY " == *" $1 "* ]]; }
+only_bots() {
+  [ -n "$ONLY" ] || return 1
+  local g
+  for g in $ONLY; do [ "$g" = BM ] || [ "$g" = L ] || return 1; done
+}
 COMPOSE=(docker compose -f "$DIR/docker-compose.yml")
 # Live mode layers an override that swaps the stub controllers for real agents and
 # mounts the operator's credentials (see docker-compose.live.yml + README).
@@ -156,6 +169,16 @@ stage_github_plugin() {
 
 setup() {
   banner "build & up ($MODE mode, project $PROJECT)"
+  # Group Z runs the agent sandbox, which needs unprivileged user namespaces.
+  # GitHub's Ubuntu 23.10+ runners restrict them through AppArmor
+  # (kernel.apparmor_restrict_unprivileged_userns=1) — even inside a
+  # privileged container — so on CI ONLY the harness lifts that for the run.
+  # It never touches a developer's host sysctls.
+  if [ -n "${GITHUB_ACTIONS:-}" ] && [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
+    sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 \
+      && echo "CI: allowed unprivileged user namespaces for the agent-sandbox group" \
+      || echo "CI: could not lift the AppArmor user-namespace restriction; group Z will fail"
+  fi
   dc down -v --remove-orphans >/dev/null 2>&1 || true
   stage_github_plugin
   dc build || { echo "build failed"; exit 1; }
@@ -168,7 +191,7 @@ setup() {
   # root) and the config dir is mounted read-only, so a 0600 root-owned pem would be
   # unreadable and the github integration would fail to start.
   if [ ! -f "$DIR/config/github-app.pem" ]; then
-    docker run --rm -v "$DIR/config:/c" conductor-e2e:latest \
+    docker run --rm -v "$DIR/config:/c" "conductor-e2e:$E2E_IMAGE_TAG" \
       sh -c 'openssl genrsa -out /c/github-app.pem 2048' >/dev/null 2>&1
   fi
   # ALWAYS re-assert the mode — a pem left 0600 by an older run is root-owned (a host
@@ -176,18 +199,27 @@ setup() {
   # above, wedging the github integration ("read app key: permission denied") so
   # nothing dispatches. A root container is the only way to fix a root-owned file's
   # mode from here.
-  docker run --rm -v "$DIR/config:/c" conductor-e2e:latest \
+  docker run --rm -v "$DIR/config:/c" "conductor-e2e:$E2E_IMAGE_TAG" \
     chmod 644 /c/github-app.pem >/dev/null 2>&1
 
+  if only_bots; then
+    dc up -d conductor-bots || { echo "up failed"; dc logs; exit 1; }
+    wait_for 60 cexec conductor-bots test -S /data/control.sock || fatal "conductor-bots daemon not ready (control socket)"
+    echo "stack ready (groups Z/L only)"
+    return
+  fi
   dc up -d || { echo "up failed"; dc logs; exit 1; }
 
   banner "wait for readiness"
   wait_for 60 cexec mock-github  curl -sf http://localhost:8080/_health  || fatal "mock-github not ready"
   wait_for 60 cexec sink-catcher curl -sf http://localhost:8080/_health  || fatal "sink-catcher not ready"
   wait_for 60 cexec forge git ls-remote git://localhost/acme/web.git      || fatal "forge not ready"
-  for c in conductor conductor-ctrl conductor-fail conductor-conn; do
+  for c in conductor conductor-ctrl conductor-fail conductor-conn conductor-bots; do
     wait_for 60 cexec "$c" test -S /data/control.sock || fatal "$c daemon not ready (control socket)"
   done
+  if [ "$MODE" != "live" ]; then
+    wait_for 60 cexec conductor-sandbox test -S /home/conductor/data/control.sock || fatal "conductor-sandbox daemon not ready (control socket)"
+  fi
   echo "stack ready"
 }
 
@@ -1180,8 +1212,8 @@ group_M_cost() {
   fi
   out="$(conn report 2>&1)"
   case "$out" in
-    *"spend (agent runs):"*"func/cost"*) ok "M \`conductor report\` shows the metered spend for func/cost" M M-report ;;
-    *) bad "M report shows metered spend" M M-report "func/cost not in report spend section" ;;
+    *"usage (observed by conductor"*"func/cost  ["*"\$"*) ok "M \`conductor report\` shows the metered usage for func/cost, per runtime/model, with dollars (usage.mode api)" M M-report ;;
+    *) bad "M report shows metered usage" M M-report "func/cost not in the report's per-model usage section" ;;
   esac
 }
 
@@ -1765,31 +1797,37 @@ main() {
     [ "$FAIL" -eq 0 ]
     return
   fi
-  group_A_resolution
-  group_B_fixer
-  group_I_identity
-  group_G_notify
-  group_H_webhook
-  group_C_session_model
-  group_D_broker
-  group_E_handoff
-  group_F_capability
-  group_J_failure
-  group_K_connectors
-  group_M_cost
-  group_N_budget
-  group_O_gate
-  group_P_blob
-  group_Q_history
-  group_R_watch
-  group_S_callable
-  group_T_output_schema
-  group_U_filter
-  group_V_engine_plugin
-  group_X_listeners
-  group_Y_listeners_github_smee
-  group_W_stepdone
-  group_Z_headless_mode
+  want A && group_A_resolution
+  want B && group_B_fixer
+  want I && group_I_identity
+  want G && group_G_notify
+  want H && group_H_webhook
+  want C && group_C_session_model
+  want D && group_D_broker
+  want E && group_E_handoff
+  want F && group_F_capability
+  want J && group_J_failure
+  want K && group_K_connectors
+  want M && group_M_cost
+  want N && group_N_budget
+  want O && group_O_gate
+  want P && group_P_blob
+  want Q && group_Q_history
+  want R && group_R_watch
+  want S && group_S_callable
+  want T && group_T_output_schema
+  want U && group_U_filter
+  want V && group_V_engine_plugin
+  want X && group_X_listeners
+  want Y && group_Y_listeners_github_smee
+  want W && group_W_stepdone
+  want Z && group_Z_sandbox
+  want BR && group_BR_browser
+  want PAY && group_PAY_wallet
+  want TB && group_TB_ticket_purchase
+  want BM && group_BM_bots
+  want L && group_L_templates
+  want HM && group_HM_headless_mode
   print_matrix
   [ "$FAIL" -eq 0 ]
 }
@@ -1849,42 +1887,659 @@ group_W_stepdone() {
   fi
 }
 
-# Z — headless permission modes on paseo (internal/dispatch/headless_mode.go).
+# probe_line <file-content> <key> — the value recorded for key in SANDBOX_PROBE.md.
+probe_line() { printf '%s\n' "$1" | sed -n "s/^$2: //p" | head -1; }
+# z_probe_landed <repo> — the sandboxed fixer's probe record is on the forge's pr-1.
+z_probe_landed() { cexec forge git --git-dir="/srv/git/$1.git" cat-file -e pr-1:SANDBOX_PROBE.md 2>/dev/null; }
+# z_audit <pattern...> — one conductor-sandbox audit line carries every pattern.
+z_audit() {
+  local out p line all
+  out="$(cexec conductor-sandbox cat /home/conductor/data/audit.jsonl 2>/dev/null)" || return 1
+  while IFS= read -r line; do
+    all=1
+    for p in "$@"; do case "$line" in *"$p"*) ;; *) all=0; break ;; esac; done
+    [ "$all" = 1 ] && return 0
+  done <<<"$out"
+  return 1
+}
+
+# z_fixer <repo> <label> — a sandboxed fixer on one runtime: the agent
+# commits, tries to push for itself, calls git.push and step.done, and records
+# each verdict in SANDBOX_PROBE.md — which reaches the forge only through
+# conductor's push. Every commit conductor pushed is signed (G); main stays.
+z_fixer() {
+  local repo="$1" L="$2" C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml
+  local G="/srv/git/$repo.git" main_before probe k want got sigs
+  main_before="$(cexec forge git --git-dir="$G" rev-parse main 2>/dev/null | tr -d '\r')"
+  force "$C" merge_conflict "$repo#1" "$CFG" >/dev/null
+  if wait_for 90 z_probe_landed "$repo"; then
+    ok "Z $L: the sandboxed agent's work reached the forge — pushed by conductor" Z "$L/pushed"
+  else
+    bad "Z $L: sandboxed work pushed" Z "$L/pushed" "no SANDBOX_PROBE.md on $repo pr-1"
+    dc logs --tail 40 "$C"
+    return
+  fi
+  probe="$(cexec forge git --git-dir="$G" show pr-1:SANDBOX_PROBE.md | tr -d '\r')"
+  printf '%s\n' "$probe" | sed 's/^/      /'
+  for kv in "secret=denied" "conductor-state=denied" "credentials-env=none" "own-push=refused" \
+            "network=unreachable" "git.push=ok" "step.done=ok"; do
+    k="${kv%%=*}"; want="${kv#*=}"; got="$(probe_line "$probe" "$k")"
+    if [ "$got" = "$want" ]; then
+      ok "Z $L: sandboxed agent: $k → $want" Z "$L/$k"
+    else
+      bad "Z $L: sandboxed agent: $k" Z "$L/$k" "want $want, got '$got'"
+    fi
+  done
+  got="$(probe_line "$probe" git.push-other-ref)"
+  case "$got" in refused:*"takes no options"*) ok "Z $L: git.push refuses to name another ref" Z "$L/other-ref" ;;
+    *) bad "Z $L: git.push other ref" Z "$L/other-ref" "got '$got'" ;; esac
+  got="$(probe_line "$probe" home)"
+  case "$got" in /home/conductor/data/agent-state/*) ok "Z $L: HOME is the identity's own tool state" Z "$L/home" ;;
+    *) bad "Z $L: identity HOME" Z "$L/home" "got '$got'" ;; esac
+  cexec "$C" cat /home/conductor/data/keys/allowed_signers | dc exec -T forge sh -c 'cat > /tmp/allowed_signers'
+  sigs="$(cexec forge git --git-dir="$G" -c gpg.ssh.allowedSignersFile=/tmp/allowed_signers \
+    log --format='%G?' refs/pull/1/head..pr-1 | tr -d '\r' | sort -u | tr '\n' ' ')"
+  if [ "$sigs" = "G " ]; then
+    ok "Z $L: every pushed commit is signed (G) by conductor's key" Z "$L/signed"
+  else
+    bad "Z $L: pushed commits signed" Z "$L/signed" "signature verdicts: '$sigs'"
+  fi
+  if [ "$(cexec forge git --git-dir="$G" rev-parse main | tr -d '\r')" = "$main_before" ]; then
+    ok "Z $L: no other ref moved (main untouched)" Z "$L/refs"
+  else
+    bad "Z $L: main untouched" Z "$L/refs" "main moved"
+  fi
+}
+
+# z_hoff_agent <repo#n> — "<provider>|<title>|sandbox=<label>" of the fake
+# paseo agent launched for that PR on the sandbox daemon (fails if none).
+z_hoff_agent() {
+  cexec conductor-sandbox cat /home/conductor/data/fakepaseo/state.json 2>/dev/null | python3 -c '
+import json, sys
+want = sys.argv[1]
+for a in json.load(sys.stdin).get("agents", {}).values():
+    if want in a.get("title", ""):
+        print("%s|%s|sandbox=%s" % (a.get("provider", ""), a.get("title", ""), (a.get("labels") or {}).get("sandbox", "")))
+        sys.exit(0)
+sys.exit(1)' "$1"
+}
+
+group_Z_sandbox() {
+  banner "Group Z — the agent sandbox: a read-only agent, conductor pushes (signed)"
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml
+
+  # The fixer on each runtime the sandbox covers: a cli worker, opencode's
+  # per-dispatch `opencode serve`, an agent-deck session's tool.
+  z_fixer grpz/sandbox cli
+  z_fixer grpz/opencode opencode
+  z_fixer grpz/deck agent-deck
+  if wait_for 15 z_audit '"event":"git_push"' '"signed":true' '"outcome":"ok"'; then
+    ok "Z the push is audited (git_push, signed)" Z audit
+  else
+    bad "Z push audited" Z audit "no signed git_push audit row"
+  fi
+
+  # Paseo hand-offs: sandboxed by default; the operator's isolation: {mode:
+  # none} on the workflow launches the plain provider. The verdict is in the
+  # hand-off's title, on its labels, and in the daemon's log.
+  force "$C" review_requested grpz/hoff#1 "$CFG" >/dev/null
+  force "$C" review_requested grpz/hoffout#1 "$CFG" >/dev/null
+  if wait_for 60 z_hoff_agent 'grpz/hoff#1' && wait_for 60 z_hoff_agent 'grpz/hoffout#1'; then
+    local hd ho
+    hd="$(z_hoff_agent 'grpz/hoff#1')"; ho="$(z_hoff_agent 'grpz/hoffout#1')"
+    echo "      default: $hd"; echo "      opted out: $ho"
+    case "$hd" in *"-sandboxed|"*"[sandboxed]|sandbox=on") ok "Z a hand-off launches sandboxed by default (the -sandboxed entry, marked in its title)" Z hoff-default ;;
+      *) bad "Z default hand-off sandboxed" Z hoff-default "got '$hd'" ;; esac
+    case "$ho" in *"-sandboxed|"*) bad "Z opted-out hand-off plain" Z hoff-optout "got '$ho'" ;;
+      *"[UNSANDBOXED]|sandbox=off") ok "Z isolation: {mode: none} launches the hand-off through the plain provider (marked UNSANDBOXED)" Z hoff-optout ;;
+      *) bad "Z opted-out hand-off plain" Z hoff-optout "got '$ho'" ;; esac
+  else
+    bad "Z hand-offs launched" Z hoff "no paseo agent for grpz/hoff / grpz/hoffout"
+  fi
+  if dc logs "$C" 2>&1 | grep -q 'paseo hand-off conductor: grpz/hoffout#1 review_requested: UNSANDBOXED'; then
+    ok "Z the opt-out is logged" Z hoff-log
+  else
+    bad "Z opt-out logged" Z hoff-log "no UNSANDBOXED line for grpz/hoffout"
+  fi
+
+  # Detached launches: sandboxed by default; the operator's opt-out plain.
+  force "$C" merge_conflict grpz/detach#1 "$CFG" >/dev/null
+  force "$C" merge_conflict grpz/detachout#1 "$CFG" >/dev/null
+  if wait_for 60 z_hoff_agent 'zdetach-default [' && wait_for 60 z_hoff_agent 'zdetach-optout ['; then
+    local dd do
+    dd="$(z_hoff_agent 'zdetach-default [')"; do="$(z_hoff_agent 'zdetach-optout [')"
+    echo "      detached default: $dd"; echo "      detached opted out: $do"
+    case "$dd" in *"-sandboxed|zdetach-default [sandboxed]|sandbox=on") ok "Z a detached launch is sandboxed by default (the -sandboxed entry, marked in its title)" Z detach-default ;;
+      *) bad "Z default detach sandboxed" Z detach-default "got '$dd'" ;; esac
+    case "$do" in *"-sandboxed|"*) bad "Z opted-out detach plain" Z detach-optout "got '$do'" ;;
+      *"|zdetach-optout [UNSANDBOXED]|sandbox=off") ok "Z isolation: {mode: none} launches a detached agent through the plain provider" Z detach-optout ;;
+      *) bad "Z opted-out detach plain" Z detach-optout "got '$do'" ;; esac
+  else
+    bad "Z detached launches" Z detach "no paseo agent for zdetach-default / zdetach-optout"
+    dc logs --tail 30 "$C"
+  fi
+
+  # The reviewer: sandboxed too, and conductor pushes nothing from a review.
+  local review_tip
+  review_tip="$(cexec forge git --git-dir=/srv/git/grpz/review.git rev-parse pr-1 | tr -d '\r')"
+  force "$C" review_requested grpz/review#1 "$CFG" >/dev/null
+  if wait_for 60 z_audit '"uses":"git.push"' '"outcome":"failed"' 'grpz/review'; then
+    if [ "$(cexec forge git --git-dir=/srv/git/grpz/review.git rev-parse pr-1 | tr -d '\r')" = "$review_tip" ]; then
+      ok "Z a sandboxed review pushes nothing (its git.push is refused)" Z review
+    else
+      bad "Z review pushes nothing" Z review "grpz/review pr-1 moved"
+    fi
+  else
+    bad "Z sandboxed review ran" Z review "no git.push call recorded for grpz/review"
+  fi
+}
+
+# br_probe <kind> — the BROWSER_PROBE.md a browser-probing agent of that kind
+# (event | operator) left in its workspace on the sandbox daemon.
+br_probe() {
+  cexec conductor-sandbox sh -c 'find /home/conductor -name BROWSER_PROBE.md 2>/dev/null | while read -r f; do cat "$f"; echo "@@"; done' |
+    tr -d '\r' | awk -v k="kind: $1" 'BEGIN{RS="@@\n"} index($0, k) {print; exit}'
+}
+br_has() { [ -n "$(br_probe "$1")" ]; }
+br_expect() { # <probe> <label> <key> <pattern>
+  local got; got="$(probe_line "$1" "$3")"
+  case "$got" in $4) ok "BR $2: $3 → $got" BR "$2/$3" ;; *) bad "BR $2: $3" BR "$2/$3" "want $4, got '$got'" ;; esac
+}
+
+group_BR_browser() {
+  banner "Group BR — conductor's browser: sandboxed, allowlisted, logged in only for the operator, credentials never seen"
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml sid probe st leak
+  # A saved session for the event dispatch's identity: it must NOT get it.
+  sid="$(cexec "$C" curl -s 127.0.0.1:8090/_harness/session | tr -d '\r')"
+  for id in "agent:br_event@grpz/browser" "agent:br_event"; do
+    cexec "$C" sh -c "printf '[{\"name\":\"sid\",\"value\":\"$sid\",\"domain\":\"localhost\",\"path\":\"/\"}]' > /tmp/br-c.json && conductor browser cookies import --identity '$id' --site localhost /tmp/br-c.json --config $CFG" >/dev/null 2>&1
+  done
+  force "$C" merge_conflict "grpz/browser#1" "$CFG" >/dev/null
+  if wait_for 150 br_has event; then
+    probe="$(br_probe event)"
+    printf '%s\n' "$probe" | sed 's/^/      /'
+    br_expect "$probe" event open "ok"
+    br_expect "$probe" event fill "ok"
+    br_expect "$probe" event select "ok"
+    br_expect "$probe" event upload "ok"
+    br_expect "$probe" event upload-escape "refused:*"
+    br_expect "$probe" event submit "ok Thanks"
+    br_expect "$probe" event download ".browser/downloads/report.csv"
+    br_expect "$probe" event download-content "ok"
+    br_expect "$probe" event screenshot "ok"
+    br_expect "$probe" event offlist "refused:*not in this browser's allowlist*"
+    br_expect "$probe" event evaluate "refused:*evaluate is off*"
+    # source (#190): the read-only, structurally-redacted page source.
+    br_expect "$probe" event source "ok"
+    br_expect "$probe" event source-structure "yes"
+    br_expect "$probe" event source-value-redacted "yes"
+    br_expect "$probe" event source-no-planted-marker "yes"
+    br_expect "$probe" event source-same-origin-frame "yes"
+    br_expect "$probe" event source-no-cross-frame "yes"
+    br_expect "$probe" event profile "anonymous"
+    br_expect "$probe" event logged-in-note "*not the operator*"
+    br_expect "$probe" event account "anonymous"
+    br_expect "$probe" event login 'refused:*credential "testsite": this session*not the operator*'
+    br_expect "$probe" event after-login "anonymous"
+  else
+    bad "BR the event's browser probe ran" BR event "no BROWSER_PROBE.md (kind event)"
+    dc logs --tail 60 "$C"
+  fi
+  cexec "$C" conductor run br_operator --config "$CFG" >/dev/null 2>&1
+  if wait_for 150 br_has operator; then
+    probe="$(br_probe operator)"
+    printf '%s\n' "$probe" | sed 's/^/      /'
+    br_expect "$probe" operator login "ok*one-time code*"
+    br_expect "$probe" operator after-login "signed-in"
+    br_expect "$probe" operator lookalike "refused:*origin*"
+    br_expect "$probe" operator download-content "ok"
+  else
+    bad "BR the operator's browser probe ran" BR operator "no BROWSER_PROBE.md (kind operator)"
+    dc logs --tail 60 "$C"
+  fi
+  st="$(cexec "$C" curl -s 127.0.0.1:8090/_harness/state | tr -d '\r')"
+  case "$st" in *'"sign_ins":["password+otp"]'*) ok "BR the site saw exactly one sign-in: the operator's, password + TOTP" BR site/signins ;;
+    *) bad "BR one sign-in" BR site/signins "state: $st" ;; esac
+  case "$st" in *'"Name":"E2E Agent","Color":"red","FileName":"upload-me.txt"'*) ok "BR the site got the form with the workspace file" BR site/form ;;
+    *) bad "BR the form" BR site/form "state: $st" ;; esac
+  # No secret anywhere the agent or the logs reach: the password, the TOTP
+  # seed, any code the site accepted.
+  leak="$(cexec "$C" sh -c '
+    codes=$(curl -s 127.0.0.1:8090/_harness/state | sed -n "s/.*\"codes\":\[\([^]]*\)\].*/\1/p" | tr -d "\" " | tr "," " ")
+    for s in test-password-not-secret JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP $codes; do
+      grep -rl --exclude-dir=vault -e "$s" /home/conductor/data /home/conductor/.conductor 2>/dev/null | grep -v "/testsite.log$" | sed "s|^|$s in |"
+    done' | tr -d '\r')"
+  if dc logs "$C" 2>&1 | grep -q -e test-password-not-secret -e JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP; then
+    leak="$leak the daemon log"
+  fi
+  if [ -z "$leak" ]; then
+    ok "BR no password, seed or code in any workspace, transcript, audit or log" BR leak
+  else
+    bad "BR no secret leaked" BR leak "$leak"
+  fi
+  if z_audit '"event":"browser"' '"action":"login"' '"credential":"testsite"' '"requester":"event"' '"outcome":"refused"'; then
+    ok "BR the event's sign-in attempt is audited as refused" BR audit/refused
+  else bad "BR audit refused login" BR audit/refused "no such audit line"; fi
+  if z_audit '"event":"browser"' '"action":"login"' '"credential":"testsite"' '"requester":"operator"' '"outcome":"ok"'; then
+    ok "BR the operator's sign-in is audited (identity, origin, credential — no value)" BR audit/login
+  else bad "BR audit login" BR audit/login "no such audit line"; fi
+  if z_audit '"event":"browser"' '"action":"open"' '"outcome":"refused"' 'example.com'; then
+    ok "BR an off-list site is refused and audited" BR audit/offlist
+  else bad "BR audit off-list" BR audit/offlist "no such audit line"; fi
+  br_login_setup
+}
+
+# br_login_setup: a login added at runtime, as the dashboard drives it —
+# each field from a different source (the username from the file vault, the
+# password typed and stored write-only, the code as a named secret) — checked,
+# tested in a sandboxed browser, classified, listed without a value, revoked.
+br_login_setup() {
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml out
+  out="$(cexec "$C" sh -c "printf 'test-password-not-secret\n' | conductor browser credential add br-typed --origin http://localhost:8090 \
+      --login-url http://localhost:8090/login --bind 'agent:br_op' --username-ref '{{ vault \"e2evault\" \"username\" }}' \
+      --password-stdin --otp-ref '{{secret \"e2evault/otp\"}}' --config $CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"change": "widening"'*'"kind": "stored"'*|*'"kind": "stored"'*'"change": "widening"'*) ok "BR a typed login is added (widening), its password stored write-only" BR setup/add ;;
+    *) bad "BR add a typed login" BR setup/add "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential check br-typed --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"ok": true'*) ok "BR every field resolves (vault, typed, named secret) — no value returned" BR setup/check ;;
+    *) bad "BR resolve check" BR setup/check "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential test br-typed --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"status": "ok"'*) ok "BR the test sign-in passes, in a sandboxed browser" BR setup/test ;;
+    *) bad "BR test sign-in" BR setup/test "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential bind br-typed --bind bot:helper --dry-run --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"change": "widening"'*'"dry_run": true'*|*'"dry_run": true'*'"change": "widening"'*) ok "BR binding a bot is widening (dry run)" BR setup/widening ;;
+    *) bad "BR widening" BR setup/widening "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential ls --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *test-password-not-secret*|*JBSWY3DPEHPK3PXP*) bad "BR the inventory carries a value" BR setup/inventory "$out" ;;
+    *'"status": "ok"'*'"name": "br-typed"'*|*'"name": "br-typed"'*'"status": "ok"'*) ok "BR the inventory lists it with its last test — no value" BR setup/inventory ;;
+    *) bad "BR inventory" BR setup/inventory "$out" ;; esac
+  out="$(cexec "$C" conductor browser vault-items e2evault --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *test-password-not-secret*|*JBSWY3DPEHPK3PXP*) bad "BR a vault listing carries a value" BR setup/listing "$out" ;;
+    *'{{ vault \"e2evault\" \"password\" }}'*) ok "BR a vault lists names and references — no value" BR setup/listing ;;
+    *) bad "BR vault listing" BR setup/listing "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential rm br-typed --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"change": "narrowing"'*) ok "BR revoked (narrowing)" BR setup/revoke ;; *) bad "BR revoke" BR setup/revoke "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential test br-typed --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'no credential'*'"status": "failed"'*|*'"status": "failed"'*'no credential'*) ok "BR a revoked login is refused" BR setup/revoked ;;
+    *) bad "BR a revoked login" BR setup/revoked "$out" ;; esac
+  if z_audit '"event":"browser"' '"action":"test-login"' '"credential":"br-typed"' '"outcome":"ok"'; then
+    ok "BR the test sign-in is audited" BR setup/audit
+  else bad "BR test sign-in audit" BR setup/audit "no such audit line"; fi
+  out="$(cexec "$C" sh -c 'grep -rl -e test-password-not-secret /home/conductor/data /home/conductor/.conductor 2>/dev/null | grep -v -e "/vault/" -e "/testsite.log$"' | tr -d '\r')"
+  if [ -z "$out" ]; then ok "BR the typed password is nowhere in plain text after setup, test and revoke" BR setup/leak
+  else bad "BR typed password leaked" BR setup/leak "$out"; fi
+}
+
+# pay_status <id> — a purchase's status on the sandbox daemon ("" if none).
+pay_status() {
+  cexec conductor-sandbox conductor browser purchase show "$1" --config /etc/conductor/sandbox.yaml 2>/dev/null |
+    python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["purchase"]["status"])
+except Exception: print("")' | tr -d '\r'
+}
+pay_is_pending() { [ "$(pay_status "$1")" = pending ]; }
+# pay_approve <id> — the operator approves, signed with the throwaway key.
+pay_approve() {
+  cexec conductor-sandbox conductor browser purchase approve "$1" --as ops --key /home/conductor/data/keys/ops \
+    --reason "e2e approves" --config /etc/conductor/sandbox.yaml 2>&1 | tr -d '\r'
+}
+pay_probe_done() { cexec conductor-sandbox sh -c 'grep -q "^done: yes" $(find /home/conductor -name WALLET_PROBE.md 2>/dev/null | head -1) 2>/dev/null'; }
+pay_expect() {
+  local got
+  got="$(printf '%s\n' "$1" | sed -n "s/^$2: //p" | head -1)"
+  # shellcheck disable=SC2254
+  case "$got" in $3) ok "PAY $2 → $got" PAY "$2" ;; *) bad "PAY $2" PAY "$2" "want $3, got '$got'" ;; esac
+}
+
+group_PAY_wallet() {
+  banner "Group PAY — personal details and cards: filled by conductor, purchases approved and signed, the total re-read"
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml probe out st leak
+  cexec "$C" conductor run pay_operator --config "$CFG" >/dev/null 2>&1
+  # The first purchase: approved as proposed.
+  if wait_for 150 pay_is_pending pu1; then
+    out="$(pay_approve pu1)"
+    case "$out" in *'"status": "approved"'*) ok "PAY the operator's signed approval of pu1" PAY approve ;; *) bad "PAY approve pu1" PAY approve "$out" ;; esac
+  else
+    bad "PAY a purchase was proposed" PAY propose "no pending pu1"
+  fi
+  # The second: the shop raises its price before the approval.
+  if wait_for 150 pay_is_pending pu2; then
+    cexec "$C" curl -s "127.0.0.1:8091/_harness/bump?amount=3" >/dev/null
+    pay_approve pu2 >/dev/null
+  else
+    bad "PAY a second purchase was proposed" PAY propose2 "no pending pu2"
+  fi
+  if wait_for 150 pay_probe_done; then
+    probe="$(cexec "$C" sh -c 'cat $(find /home/conductor -name WALLET_PROBE.md | head -1)' | tr -d '\r')"
+    printf '%s\n' "$probe" | sed 's/^/      /'
+    pay_expect "$probe" facts '*domain example.test*'
+    pay_expect "$probe" fill-form 'ok *name*email*phone*address.line1*address.country*'
+    pay_expect "$probe" form-shows-mark true
+    pay_expect "$probe" signup ok
+    pay_expect "$probe" welcome-scrubbed true
+    pay_expect "$probe" propose pending
+    pay_expect "$probe" pay-before-approval 'refused:*is pending*'
+    pay_expect "$probe" decision approved
+    pay_expect "$probe" pay 'ok FS-* 12'
+    pay_expect "$probe" confirmation-scrubbed true
+    pay_expect "$probe" second-use 'refused:*completed*'
+    pay_expect "$probe" decision2 approved
+    pay_expect "$probe" price-bump 'refused:*higher than the approved 12.00*'
+    pay_expect "$probe" over-cap "refused:*over card e2ecard's 30.00 * per-purchase limit*"
+    pay_expect "$probe" other-merchant "refused:*not one of card e2ecard's merchants*"
+  else
+    bad "PAY the wallet probe ran" PAY probe "no finished WALLET_PROBE.md"
+    dc logs --tail 60 "$C"
+  fi
+  st="$(cexec "$C" curl -s 127.0.0.1:8091/_harness/state | tr -d '\r')"
+  case "$st" in *'"orders":[{"number":"FS-'*'"total":12,"last4":"4242"'*) ok "PAY the shop took exactly one order, 12.00 on the test card" PAY shop/order ;;
+    *) bad "PAY one order" PAY shop/order "$st" ;; esac
+  case "$st" in *'"email":"e2e.jane.private@example.test"'*'"password":""'*|*'"password":""'*'"email":"e2e.jane.private@example.test"'*) ok "PAY the shop got the sign-up from the profile (and no password)" PAY shop/signup ;;
+    *) bad "PAY the sign-up" PAY shop/signup "$st" ;; esac
+  case "$(pay_status pu3)" in pending) ok "PAY the price bump proposed a new approval (pu3)" PAY rebid ;; *) bad "PAY a new approval after the bump" PAY rebid "pu3: $(pay_status pu3)" ;; esac
+  st="$(cexec "$C" curl -s 127.0.0.1:8092/_harness/state | tr -d '\r')"
+  case "$st" in *'"orders":null'*|*'"orders":[]'*) ok "PAY the other shop got nothing" PAY shop/other ;; *) bad "PAY the other shop" PAY shop/other "$st" ;; esac
+  if z_audit '"action":"card-completed"' '"order_number":"FS-' '"purchase":"pu1"'; then
+    ok "PAY the receipt is in the audit (merchant, total, order number)" PAY audit/receipt
+  else bad "PAY receipt audited" PAY audit/receipt "no card-completed line"; fi
+  if z_audit '"action":"purchase-approve"' '"purchase":"pu1"' '"operator":"ops"'; then
+    ok "PAY the approval is in the audit" PAY audit/approve
+  else bad "PAY approval audited" PAY audit/approve "no purchase-approve line"; fi
+  # No card or profile value anywhere the agent or the logs reach.
+  leak="$(cexec "$C" sh -c '
+    for s in 4242424242424242 "4242 4242 4242 4242" e2e.jane.private@example.test "E2E Jane Tester" "1 Hidden Lane" "+1 555 0100 777"; do
+      grep -rl --exclude-dir=vault -e "$s" /home/conductor/data /home/conductor/.conductor 2>/dev/null | grep -v "/testsite.log$" | sed "s|^|$s in |"
+    done' | tr -d '\r')"
+  if dc logs "$C" 2>&1 | grep -q -e 4242424242424242 -e e2e.jane.private@example.test; then
+    leak="$leak the daemon log"
+  fi
+  if [ -z "$leak" ]; then
+    ok "PAY no card number or profile value in any workspace, transcript, audit, ledger or log" PAY leak
+  else
+    bad "PAY a value leaked" PAY leak "$leak"
+  fi
+}
+
+# Group TB — the combined surface: a bot's ticket spend_limit (tickets) binds
+# its REAL browser purchases (browser/wallet), through the bot gate (bots), all
+# on the sandbox daemon. This is the cross-feature path no e2e covered — the gap
+# that let H2 (the lifetime cap resetting) and M1 (the dead spend view) through.
+group_TB_ticket_purchase() {
+  banner "Group TB — a ticket's spend_limit constrains a real browser purchase (H2/M1)"
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml creds tok ep out
+  # The bot's home session launches on the fake paseo, carrying its conductor creds.
+  if ! wait_for 90 cexec "$C" paseo _creds "bot shopper"; then
+    bad "TB home session launched" TB launch "no fake-paseo agent 'bot shopper'"
+    dc logs --tail 40 "$C"
+    return
+  fi
+  creds="$(cexec "$C" paseo _creds "bot shopper")"
+  tok="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_SKILL_TOKEN=//p' | head -1)"
+  ep="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_ENDPOINT=//p' | head -1)"
+  [ -n "$tok" ] && [ -n "$ep" ] || { bad "TB session creds" TB creds "no token/endpoint in shopper's home session env"; return; }
+  as_bot() { cexec "$C" env CONDUCTOR_ENDPOINT="$ep" CONDUCTOR_SKILL_TOKEN="$tok" conductor bot "$@" 2>&1 | tr -d '\r'; }
+  op() { cexec "$C" conductor browser "$@" --config "$CFG" 2>&1 | tr -d '\r'; }
+
+  # The bot opens a case and the operator sets a $20 lifetime spend_limit on it —
+  # a ticket's budget. The bot's browser purchases are proposed by a WORKER it
+  # spawns on this case (a real sandbox-launched agent, the only session that can
+  # reach the browser); the worker's purchases carry the bot and this case, so
+  # the ticket's spend_limit is the binding layer.
+  local cid
+  as_bot case open --title "shopping run" >/dev/null
+  cid="$(as_bot cases | sed -n 's/.*"id": *"\(c[0-9]*\)".*/\1/p' | head -1)"
+  if [ -z "$cid" ]; then bad "TB the bot has a case" TB case "no case id from: $(as_bot cases)"; return; fi
+  out="$(op budget shopper "$cid" --amount 20 --currency USD)"
+  assert_contains "$out" '"amount": "20.00"' TB budget "TB the operator sets the case's 20.00 USD spend_limit"
+
+  # Spawn a worker on the case; it proposes $25 (over), $15 (within) then $10
+  # (over the lifetime). Each purchase decision is audited; the $10 refusal
+  # ("5.00 USD left" — the cap after the $15) is the worker's last act, so wait
+  # for it to confirm the worker ran all three.
+  as_bot spawn --case "$cid" --brief "[[ticket-wallet-probe]] buy widgets under the cap" >/dev/null
+  if ! wait_for 180 z_audit '"action":"purchase"' '"requester":"bot"' "over this ticket's 20.00 USD limit: 5.00 USD left"; then
+    bad "TB the worker's purchases ran" TB probe "no audited ticket-budget refusal from the worker"
+    dc logs --tail 40 "$C"
+    return
+  fi
+
+  # The first ($25) purchase, with nothing yet spent, is refused by the ticket
+  # layer — at propose, before the bot gate ("20.00 USD left").
+  if z_audit '"action":"purchase"' '"requester":"bot"' "over this ticket's 20.00 USD limit: 20.00 USD left"; then
+    ok "TB a \$25 purchase is refused by the \$20 ticket cap" TB over
+  else bad "TB a \$25 purchase is refused by the ticket cap" TB over "no audited refusal with 20.00 USD left"; fi
+
+  # The within-cap $15 purchase is recorded and bound to the bot's case; its
+  # committed spend reads 15.00 (5.00 left) from the REAL purchase ledger — the
+  # spend view that was permanently blind before the ledger was wired (M1).
+  out="$(op budget shopper "$cid")"
+  assert_contains "$out" '"committed": 15' TB committed "TB the case's committed spend reads 15.00 from the real ledger (M1)"
+  assert_contains "$out" '"remaining": 5' TB remaining "TB 5.00 of the 20.00 ticket cap remains"
+  assert_contains "$out" '"pu' TB bound "TB the within-cap purchase is recorded under the ticket"
+
+  # The cap is a LIFETIME total: the further $10 (15+10 > 20) was refused with
+  # only 5.00 left — it does not reset per purchase (H2).
+  ok "TB a further \$10 is refused — the \$20 cap is a lifetime total (H2)" TB lifetime
+}
+
+group_BM_bots() {
+  banner "Group BM — bot memory: the index in the prompt, ranked recall, reads in parts, caps"
+
+  # The daemon starts the bot's home session on the fake paseo, which keeps
+  # its first prompt and its conductor creds.
+  wait_for 60 cexec conductor-bots paseo _creds "bot memo" || {
+    bad "BM home session launched" BM launch "no fake-paseo agent titled 'bot memo'"
+    return
+  }
+  local creds tok ep prompt out
+  creds="$(cexec conductor-bots paseo _creds "bot memo")"
+  tok="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_SKILL_TOKEN=//p' | head -1)"
+  ep="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_ENDPOINT=//p' | head -1)"
+  [ -n "$tok" ] && [ -n "$ep" ] || { bad "BM session creds" BM creds "no token/endpoint in the home session's env"; return; }
+  as_bot() { cexec conductor-bots env CONDUCTOR_ENDPOINT="$ep" CONDUCTOR_SKILL_TOKEN="$tok" conductor bot "$@" 2>&1; }
+
+  # BM1: the first prompt carries the memory index — within its budget — and
+  # the read rules, never an instruction to read the repo.
+  prompt="$(cexec conductor-bots paseo _prompt "bot memo")"
+  assert_contains "$prompt" "## Your memory index (9 documents)" BM BM1-index "BM1 the first prompt carries the memory index"
+  assert_contains "$prompt" "RECALL before you open a file" BM BM1-rules "BM1 the prompt says: recall before you open a file"
+  assert_contains "$prompt" "more not shown" BM BM1-budget "BM1 past index_budget the index stops and counts the rest"
+  assert_not_contains "$prompt" "Read README.md and knowledge/" BM BM1-noread "BM1 the prompt no longer says to read knowledge/"
+  local idx
+  idx="$(printf '%s' "$prompt" | awk '/^## Your memory index/{p=1} p&&/^## Where you left off/{exit} p')"
+  if [ "${#idx}" -le 1024 ]; then ok "BM1 the index section is within index_budget (${#idx} <= 1024 bytes)" BM BM1-size
+  else bad "BM1 index within budget" BM BM1-size "index section is ${#idx} bytes, budget 1024"; fi
+
+  # BM2: recall ranks a title/scope/summary match first.
+  out="$(as_bot recall replica lag)"
+  if printf '%s' "$out" | head -1 | grep -qF "1. knowledge/replica-lag.md (knowledge)"; then
+    ok "BM2 recall ranks the matching document first" BM BM2-rank
+  else bad "BM2 recall ranking" BM BM2-rank "first line: $(printf '%s' "$out" | head -1)"; fi
+
+  # BM3: a section read returns that section only; a whole read past
+  # read_max says it was cut and where to read on.
+  out="$(as_bot read runbooks/db-failover.md --section Rollback)"
+  assert_contains "$out" "Repoint back only after" BM BM3-section "BM3 read --section returns the section"
+  assert_not_contains "$out" "Check replica lag" BM BM3-only "BM3 ... and nothing outside it"
+  out="$(as_bot read knowledge/network.md)"
+  assert_contains "$out" "TRUNCATED: showing bytes 0–" BM BM3-cut "BM3 a read past read_max says it was truncated"
+  assert_contains "$out" "== sections: Subnets | Peering | Firewall rules ==" BM BM3-sections "BM3 ... and names the sections"
+
+  # BM4: an oversized write is refused with the exact cap; nothing lands.
+  local big
+  big="$(printf -- '---\ntitle: Too big\nevidence: e\nconfidence: low\n---\n'; head -c 9000 /dev/zero | tr '\0' x)"
+  out="$(as_bot remember --kind knowledge --slug too-big --text "$big")"
+  assert_contains "$out" "over its cap of 8192 bytes (memory.max_bytes.knowledge)" BM BM4-cap "BM4 an oversized document is refused with its cap"
+  if cexec conductor-bots conductor bot memory cat memo knowledge/too-big.md --config /data/cfg/conductor.yaml >/dev/null 2>&1; then
+    bad "BM4 refused write left nothing" BM BM4-nothing "knowledge/too-big.md exists"
+  else ok "BM4 the refused document did not land" BM BM4-nothing; fi
+  out="$(as_bot handoff --text "$(head -c 5000 /dev/zero | tr '\0' h)")"
+  assert_contains "$out" "handoff is 5000 bytes, over its cap of 4096 bytes" BM BM4-handoff "BM4 an oversized handoff is refused with the limit"
+
+  # BM5: a fresh document is in the index and recalled at once (the index
+  # follows every commit).
+  as_bot remember --kind knowledge --slug kestrel --text "$(printf -- '---\ntitle: Kestrel queue\nevidence: e\nconfidence: low\nsummary: The kestrel queue drains at night.\n---\nbody\n')" >/dev/null
+  out="$(as_bot recall kestrel)"
+  assert_contains "$out" "1. knowledge/kestrel.md" BM BM5-fresh "BM5 a new document is recalled right after its commit"
+  out="$(cexec conductor-bots conductor bot memory index memo --kind knowledge --config /data/cfg/conductor.yaml 2>&1)"
+  assert_contains "$out" "knowledge/kestrel.md · knowledge · Kestrel queue · The kestrel queue drains at night." BM BM5-operator "BM5 the operator sees the session's index"
+
+  # BM6: a consolidation that ends without step.done (the fake cli agent
+  # never reports) consolidates and archives nothing.
+  as_bot case open --title "e2e case" >/dev/null
+  local cid
+  cid="$(as_bot cases | sed -n 's/.*"id": *"\(c[0-9]*\)".*/\1/p' | head -1)"
+  as_bot episode --case "$cid" --text "an episode for the archive check" >/dev/null
+  as_bot case close "$cid" --outcome "done" >/dev/null
+  cexec conductor-bots conductor bot consolidate memo --config /data/cfg/conductor.yaml >/dev/null 2>&1
+  if wait_for 60 audit_match conductor-bots '"event":"bot_consolidation"' '"outcome":"not done'; then
+    ok "BM6 a consolidation that never reported done consolidated nothing" BM BM6-consolidation
+  else bad "BM6 unreported consolidation" BM BM6-consolidation "no bot_consolidation 'not done' audit"; fi
+  out="$(cexec conductor-bots conductor bot memory ls memo --config /data/cfg/conductor.yaml 2>&1)"
+  assert_contains "$out" "log/" BM BM6-kept "BM6 the case log is still in the working tree"
+  if audit_match conductor-bots '"event":"bot_memory_archive"'; then
+    bad "BM6 nothing archived" BM BM6-noarchive "an archive commit was made"
+  else ok "BM6 nothing was archived" BM BM6-noarchive; fi
+
+  # BM7: tickets. An operator's ticket is a draft that starts nothing; a
+  # worker can't start on it; a bot's own idea can't mark itself ready;
+  # the operator's ready hands it to the bot.
+  local opt tk tid tcase
+  opt() { cexec conductor-bots conductor ticket "$@" --config /data/cfg/conductor.yaml 2>&1; }
+  out="$(opt new "e2e: rotate the cache keys" --assignee bot:memo --label e2e --json)"
+  tid="$(printf '%s' "$out" | sed -n 's/^ *"ticket": "\(T-[0-9]*\)".*/\1/p' | head -1)"
+  tcase="$(printf '%s' "$out" | sed -n 's/^ *"id": "\(c[0-9]*\)".*/\1/p' | head -1)"
+  assert_contains "$out" '"status": "draft"' BM BM7-draft "BM7 an operator's new ticket is a draft"
+  [ -n "$tid" ] && [ -n "$tcase" ] || { bad "BM7 ticket id" BM BM7-id "no ticket/case id in: $out"; return; }
+  out="$(as_bot spawn --case "$tcase" --brief "do it")"
+  assert_contains "$out" "is a draft: nothing starts on it" BM BM7-gate "BM7 no worker starts on a draft"
+  out="$(as_bot ticket new "e2e: a bot's idea" --assignee bot:memo --json)"
+  tk="$(printf '%s' "$out" | sed -n 's/^ *"ticket": "\(T-[0-9]*\)".*/\1/p' | head -1)"
+  assert_contains "$out" '"created_by": "bot:memo"' BM BM7-idea "BM7 a bot writes its idea as a draft"
+  out="$(as_bot ticket ready "$tk")"
+  assert_contains "$out" "tickets.mark_own_ready is off" BM BM7-noready "BM7 a bot can't mark its own idea ready"
+  out="$(opt ready "$tid")"
+  assert_contains "$out" "status:    in_progress" BM BM7-ready "BM7 the operator's ready hands it to the bot"
+  assert_contains "$out" "ready by: operator:ops" BM BM7-readyby "BM7 ... and records who"
+  out="$(opt list --label e2e)"
+  assert_contains "$out" "$tid" BM BM7-list "BM7 ticket list filters by label"
+}
+
+group_L_templates() {
+  banner "Group L — community bots: a pack's template, practice mode, grants, an update as a proposal"
+  local CFG=/data/cfg/conductor.yaml out creds tok ep prompt pid
+  opb() { cexec conductor-bots conductor bot "$@" --config "$CFG" 2>&1; }
+
+  # L1: the catalog — the installed template (and the bot from it), a
+  # registry template not installed (with the packs: block that installs it),
+  # and search.
+  out="$(opb templates --registry /fixtures/packs)"
+  assert_contains "$out" "kit/keeper" L L1-installed "L1 bot templates lists the installed template"
+  assert_contains "$out" "used by keeper" L L1-usedby "L1 ... and the bot made from it"
+  assert_contains "$out" "/fixtures/packs/notes-kit/scribe" L L1-registry "L1 ... and a registry template not installed"
+  assert_contains "$out" "install: packs: { notes-kit: { use: /fixtures/packs/notes-kit } }" L L1-install "L1 ... with the packs: block that installs it"
+  out="$(opb templates --registry /fixtures/packs --search notes)"
+  assert_not_contains "$out" "kit/keeper" L L1-search "L1 search narrows the list"
+
+  # L2: the bot from the template records where it came from, and is in
+  # practice mode with only its read-only verbs.
+  out="$(opb show keeper)"
+  assert_contains "$out" '"ref": "kit/keeper"' L L2-ref "L2 bot show names the template"
+  assert_contains "$out" '"pack": "demo-kit"' L L2-pack "L2 ... the pack"
+  assert_contains "$out" '"version": "1.0.0"' L L2-version "L2 ... and its version"
+  assert_contains "$out" '"practice": true' L L2-practice "L2 it starts in practice mode"
+  wait_for 60 cexec conductor-bots paseo _creds "bot keeper" || { bad "L3 keeper's home session" L L3-launch "no fake-paseo agent titled 'bot keeper'"; return; }
+  creds="$(cexec conductor-bots paseo _creds "bot keeper")"
+  tok="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_SKILL_TOKEN=//p' | head -1)"
+  ep="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_ENDPOINT=//p' | head -1)"
+  out="$(cexec conductor-bots env CONDUCTOR_ENDPOINT="$ep" CONDUCTOR_SKILL_TOKEN="$tok" conductor discover state 2>&1)"
+  assert_contains "$out" "state.get" L L3-read "L3 the session may call the granted read-only verb"
+  assert_not_contains "$out" "state.set" L L3-noset "L3 ... and not a requested verb nobody granted"
+  prompt="$(cexec conductor-bots paseo _prompt "bot keeper")"
+  assert_contains "$prompt" "You keep the shared state tidy." L L3-charter "L3 its prompt carries the template's charter"
+  assert_contains "$prompt" "knowledge/layout.md" L L3-seed "L3 ... and its index the template's seed document"
+
+  # L4: a new bot from the template, planned on a copy and shown as a diff;
+  # a grant past the template's maximum refused; a widening named.
+  out="$(opb new keeper-2 --from kit/keeper)"
+  assert_contains "$out" "read-only:   state.contains, state.get" L L4-readonly "L4 bot new: the read-only verbs it starts with"
+  assert_contains "$out" "widenings:   none" L L4-none "L4 ... no widenings"
+  assert_contains "$out" "validated on a copy of your config: ok" L L4-copy "L4 ... validated on a copy"
+  assert_contains "$out" "+  - name: keeper-2-weekly" L L4-trigger "L4 ... the suggested trigger in the diff"
+  assert_contains "$out" "Not written" L L4-notwritten "L4 ... and nothing written without --write"
+  out="$(opb new keeper-2 --from kit/keeper --grant store.set=observe)"
+  assert_contains "$out" "looser than template kit/keeper allows — at most reversible" L L4-max "L4 a grant past the template's maximum is refused"
+  out="$(opb new keeper-2 --from kit/keeper --grant store.set=reversible --write)"
+  assert_contains "$out" "WIDENING:    state.set at reversible" L L4-widening "L4 a widening is named in the plan"
+  out="$(cexec conductor-bots conductor validate --config "$CFG" 2>&1)"
+  assert_contains "$out" "notice: bot keeper-2: from template kit/keeper (demo-kit 1.0.0): practice mode; read-only: state.contains, state.get; WIDENING: state.set at reversible" L L4-validate "L4 validate names the widening"
+
+  # L5: a newer template version arrives as a proposal, never written over
+  # the bot's memory; approved (signed), it lands.
+  cexec conductor-bots cp -r /fixtures/packs-v2/demo-kit/. /data/cfg/packs/demo-kit/
+  cexec conductor-bots conductor pack update --config "$CFG" >/dev/null 2>&1
+  cexec conductor-bots conductor reload --config "$CFG" >/dev/null 2>&1
+  l_template_proposal() { cexec conductor-bots conductor bot proposals keeper --config "$CFG" 2>/dev/null | grep -q '"kind": "template"'; }
+  if wait_for 90 l_template_proposal; then
+    ok "L5 the new template version became a proposal" L L5-proposal
+  else
+    bad "L5 template update proposal" L L5-proposal "no template proposal for keeper after pack update + reload"
+    return
+  fi
+  pid="$(opb proposals keeper | grep -B3 '"kind": "template"' | sed -n 's/.*"id": *"\(p[0-9]*\)".*/\1/p' | head -1)"
+  [ -n "$pid" ] || pid="$(opb proposals keeper | sed -n 's/.*"id": *"\(p[0-9]*\)".*/\1/p' | head -1)"
+  out="$(opb memory cat keeper knowledge/layout.md)"
+  assert_not_contains "$out" "cache/" L L5-untouched "L5 the bot's memory is untouched until an operator decides"
+  out="$(opb proposal keeper "$pid")"
+  assert_contains "$out" "+Keys live under web/, db/ and cache/." L L5-diff "L5 the proposal shows the change as a diff"
+  assert_contains "$out" "Never delete a key on a guess." L L5-charter "L5 ... the charter change too"
+  out="$(cexec conductor-bots conductor bot approve keeper "$pid" --key /data/ops --as ops --config "$CFG" 2>&1)"
+  assert_contains "$out" "executed" L L5-approve "L5 a signed approval lands it (in practice mode)"
+  out="$(opb memory cat keeper knowledge/layout.md)"
+  assert_contains "$out" "cache/" L L5-landed "L5 the approved document is in memory"
+  out="$(opb memory log keeper)"
+  assert_contains "$out" "template update" L L5-commit "L5 ... as one commit"
+  assert_contains "$out" "operator" L L5-author "L5 ... authored by the operator"
+  out="$(opb show keeper)"
+  assert_contains "$out" '"applied_version": "1.1.0"' L L5-applied "L5 bot show reports the applied version"
+}
+
+# HM — headless permission modes on paseo (internal/dispatch/headless_mode.go).
 # A decide step's agent is headless: conductor launched it, nobody drives it,
 # and it delivers its answer with a Bash call to `conductor call step.done`.
 # The fake agent ([[needs-noprompt]]) lets that call run only in a no-prompt
 # mode, and fails like an unanswered permission prompt otherwise.
 #
-#   Z1–Z2  headlessok: no mode: on the step → conductor launches the claude
-#          agent in bypassPermissions → the call runs, the step completes.
-#   Z3–Z4  headlesstight: the runtime's headless_mode: none → no mode is
-#          injected → the call is refused → the step falls to its default.
-group_Z_headless_mode() {
-  banner "Group Z — headless paseo agents launch in a no-prompt mode (headless_mode: tightens it)"
+#   HM1–HM2  headlessok: no mode: on the step → conductor launches the claude
+#            agent in bypassPermissions → the call runs, the step completes.
+#   HM3–HM4  headlesstight: the runtime's headless_mode: none → no mode is
+#            injected → the call is refused → the step falls to its default.
+group_HM_headless_mode() {
+  banner "Group HM — headless paseo agents launch in a no-prompt mode (headless_mode: tightens it)"
   func_reset_sink
 
   post_webhook_to conductor-conn pull_request func_headlessok_conflict.json >/dev/null
   if wait_for 60 slack_sink_has "HEADLESS-OK flaky=0.9 by=paseo/claude-sonnet-5-e2e"; then
-    ok "Z1 a headless claude decide step's conductor call ran; the step completed" Z Z1
+    ok "HM1 a headless claude decide step's conductor call ran; the step completed" HM HM1
   else
-    bad "Z1 headless decide step completes" Z Z1 "no 'HEADLESS-OK flaky=0.9 by=paseo/claude-sonnet-5-e2e' capture"
+    bad "HM1 headless decide step completes" HM HM1 "no 'HEADLESS-OK flaky=0.9 by=paseo/claude-sonnet-5-e2e' capture"
   fi
   if cexec conductor-conn paseo _modes headlessok | grep -q 'mode="bypassPermissions"'; then
-    ok "Z2 its agent was launched with --mode bypassPermissions" Z Z2
+    ok "HM2 its agent was launched with --mode bypassPermissions" HM HM2
   else
-    bad "Z2 no-prompt mode injected" Z Z2 "modes: $(cexec conductor-conn paseo _modes headlessok | head -3)"
+    bad "HM2 no-prompt mode injected" HM HM2 "modes: $(cexec conductor-conn paseo _modes headlessok | head -3)"
   fi
 
   post_webhook_to conductor-conn pull_request func_headlesstight_conflict.json >/dev/null
   if wait_for 60 slack_sink_has "HEADLESS-TIGHT flaky=0 by=default"; then
-    ok "Z3 headless_mode: none — no mode injected, the call was refused, the step fell to its default" Z Z3
+    ok "HM3 headless_mode: none — no mode injected, the call was refused, the step fell to its default" HM HM3
   else
-    bad "Z3 headless_mode: none" Z Z3 "no 'HEADLESS-TIGHT flaky=0 by=default' capture"
+    bad "HM3 headless_mode: none" HM HM3 "no 'HEADLESS-TIGHT flaky=0 by=default' capture"
   fi
   if cexec conductor-conn paseo _modes headlesstight | grep -q 'mode=""'; then
-    ok "Z4 the tightened runtime's agent was launched with no --mode" Z Z4
+    ok "HM4 the tightened runtime's agent was launched with no --mode" HM HM4
   else
-    bad "Z4 no mode under headless_mode: none" Z Z4 "modes: $(cexec conductor-conn paseo _modes headlesstight | head -3)"
+    bad "HM4 no mode under headless_mode: none" HM HM4 "modes: $(cexec conductor-conn paseo _modes headlesstight | head -3)"
   fi
 }
 

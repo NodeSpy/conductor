@@ -48,6 +48,14 @@
 #   store: { type: pass, prefix: conductor }
 #   files: { type: file, dir: /run/secrets }
 #   hcv:   { type: hashicorp, addr: https://vault.internal, unlock: { token: env:VAULT_TOKEN } }
+#
+# A live vault backs the worked browser/wallet example further down this file
+# (the agent browser's saved logins and the shopping card). The built-in
+# conductor type needs no external service; run `conductor vault init` once to
+# create its key, then add the referenced entries. `conductor validate` passes
+# before that — the vault is simply reported disabled until the key exists.
+vaults:
+  house: { type: conductor }                     # ~/.config/conductor/vault.json
 
 # ---------------------------------------------------------------------------
 # connectors: — external services. Each has two faces: events you can trigger
@@ -148,6 +156,7 @@ connectors:
       nightly-tidy: { cron: "0 4 * * *" }
       weekly-audit: { cron: "0 5 * * 0" }
       rate-check: { every: 6h, run_on_start: true }
+      sre-weekly: { cron: "0 9 * * 1" }   # the sre bot's weekly spend review (bots: below)
 
   # Local-event SOURCES are official plugins (fetched by `conductor init`), not
   # builtins — `use: fswatch` fires on a matching file settling, `use: logwatch`
@@ -479,11 +488,25 @@ engines:
 #     policy:
 #       budget: { max_cost_usd: 5 }                  # workflow scope (24h default)
 
-# pricing: — override the built-in model→$ table estimation uses.
+# pricing: — override the built-in model→$ table estimation uses. Every
+# max_cost_usd budget cap counts in these prices, so the dashboard treats
+# lowering, removing or adding a price as a widening.
 # pricing:
 #   models:
 #     "claude-opus-*": { input: 15.00, output: 75.00 }   # $ per 1M tokens
 #   default: { input: 3.00, output: 15.00 }
+
+# usage: — what reports and notifications SHOW of model usage (display only:
+# every cap above enforces in every mode). off (the default) shows no usage
+# or cost figures; subscription shows what conductor observed of its own runs
+# (runs, turns, tokens) per runtime/model, never summed across providers;
+# api adds dollar figures. Plan windows / utilization come ONLY from a usage
+# source you configure (type http: a JSON report from e.g. a proxy) —
+# `conductor usage` shows both, labelled. (wiki: Cost-Accounting)
+# usage:
+#   mode: subscription
+#   sources:
+#     - { name: proxy, type: http, url: "http://127.0.0.1:8080/usage" }
 
 # ---------------------------------------------------------------------------
 # checks: + gate: — quality gates on agent output (#36 §16). A gate runs
@@ -641,7 +664,11 @@ runtimes:
     #   prefer:  [claude-opus-5, gpt-5.6-sol]   # ranking when a fleet offers a choice
     #   allow:   ["claude-opus-*", "gpt-5.6-*"] # a hard ceiling on what may run
   gpu-paseo: { use: paseo, bin: /usr/local/bin/paseo, host: build-box }
-  # deck:   { use: agent-deck }
+  # A local cli runtime: background agent work (bot workers) runs directly
+  # on the tool, with no paseo workspace. Only what you talk to lives in paseo.
+  claude-cli: { use: cli, tool: claude-code }
+  # deck:   { use: agent-deck }                     # sandboxed through agent-deck's --wrapper
+  # oc:     { use: opencode }                       # one sandboxed `opencode serve` per dispatch
   # gemini: { use: acp, agent: gemini }              # ACP transport
   # jev:                                            # a DECISION runtime plugin: answers
   #   connection: { api_key: env:JEV_API_KEY }      # decide: steps only, never an agent
@@ -715,7 +742,8 @@ models:
 # repo needs a plugin_trust entry.
 # ---------------------------------------------------------------------------
 # connectors:
-#   tickets:
+#   jira:                                   # (a connector INSTANCE name — distinct
+#                                           # from the bots/teams tickets: feature)
 #     use: acme/plugins/jira                # explicit repo, tracks latest 1.x…
 #     # use: acme/plugins/jira@^1.2         # …or constrain it
 #     # use: acme/plugins/jira@v1.2.3       # …or pin it exactly (no auto-update)
@@ -745,7 +773,7 @@ models:
 # OS isolation is still there, as OPT-IN hardening for a locked-down box:
 #
 # connectors:
-#   tickets:
+#   jira:
 #     use: acme/plugins/jira
 #     isolation: { mode: namespace, network: { egress: ["your-org.atlassian.net:443"] } }
 
@@ -1213,6 +1241,24 @@ triggers:
         uses: slack-ops.post
         options: { text: "alarm {{.shape.name}} ({{.shape.sev}})" }
 
+  # Route events into a BOT (bots: below): the `bot:` helper opens a
+  # case, queues the event into the bot's home conversation as DATA, and —
+  # urgent — starts a worker at once instead of waiting on the conversation.
+  - on: timer.sre-weekly
+    steps:
+      - bot:
+          name: platform-sre
+          title: "weekly cloud spend and reservation review"
+          text: "Review last week's spend against reservations and savings plans; propose purchases within the spend cap."
+  # - on: pd.incident_triggered          # a PagerDuty connector (conductor-plugins)
+  #   steps:
+  #     - bot: { name: platform-sre, title: "{{.title}}", text: "{{.summary}}", urgent: true }
+  # - on: slack-ops.mention              # a chat request; requester decides what the gate lets run
+  #   steps:
+  #     - bot: { name: platform-sre, title: "chat request", text: "{{.text}}", requester: "slack:{{.user}}" }
+  # - on: timer.sre-weekly               # action: rotate | consolidate instead of a delivery
+  #   steps: [ { bot: { name: platform-sre, action: consolidate } } ]
+
   # Scheduled work; a command step's stdout becomes its outputs.
   - on: timer.nightly-tidy
     steps:
@@ -1271,7 +1317,136 @@ policy:
   #  `conductor pause` / `resume`; disable one connector or trigger in place
   #  with its own `enabled: false`)
 
-# Conductor's own lifecycle is a built-in source: alerting is an ordinary
+# ---------------------------------------------------------------------------
+# sandbox: — the agent sandbox (on by default; wiki: Isolation, Paseo-Sandbox).
+# Agents are read-only and conductor performs every write. Every local cli,
+# acp, opencode (its per-dispatch `opencode serve`) and agent-deck (the
+# session's agent, through agent-deck's --wrapper) launch — and every paseo
+# session started with a sandboxed provider entry, which the daemon writes into
+# its paseo runtime's config at every start (`conductor paseo setup` by
+# hand) — runs in conductor's built-in sandbox
+# (Linux namespaces + pivot_root, macOS Seatbelt): its workspace read-write,
+# its identity's own tool state as HOME, the conductor socket, no network but
+# its model endpoints (+ egress below), none of your credentials. The agent
+# commits; conductor pushes HEAD to the dispatch's own branch, fast-forward
+# only, re-signed with your SSH signing key (`conductor call git.push`, and at
+# the end of the step). It fails closed: a launch whose sandbox can't be
+# built does not run. opencode's allowlist follows its configured
+# provider/model (wiki: Isolation#opencode-and-agent-deck).
+# ---------------------------------------------------------------------------
+sandbox:
+  # agents: on              # `off` = the explicit opt-out (agents run as before; logged at boot).
+  #                         #   Per runtime/step: isolation: { mode: none }.
+  egress: []                # hosts every sandboxed agent may reach beyond its model endpoints,
+  #                         #   e.g. [registry.npmjs.org, proxy.golang.org, "*.pypi.org"]
+  # state_dir: ~/.local/state/conductor/agent-state   # the per-identity HOMEs
+  push:
+    # signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh).
+    #                                         # GitHub shows "Verified" when this key is registered
+    #                                         # on your account as an SSH *signing* key.
+    # name: Your Name                         # the committer of signed commits (default: git's user.name)
+    # email: you@example.com                  #   (default: git's user.email)
+    # sign: false                             # push unsigned (default: refuse to push without a key)
+    # at_step_end: false                      # only an explicit git.push pushes
+
+# ---------------------------------------------------------------------------
+# WORKED EXAMPLE — the four feature families together (bots + the agent sandbox
+# above + the agent browser/wallet below + tickets). A LIVE browser: block whose
+# logins, credentials and card the platform-sre bot (bots:, below) narrows and
+# spends against through a ticket's spend_limit, so `conductor validate` exercises
+# the whole combined surface, not each piece in isolation. The documented,
+# commented reference for every browser: field follows this block.
+browser:
+  allow: [status.example.com, shop.example.com]   # "*" (the whole web) is refused
+  logins:                                         # opt in per site AND per identity
+    - site: status.example.com
+      identities: ["bot:platform-sre"]            # then: conductor browser seed --identity … --site …
+  credentials:
+    - name: statuspage
+      origin: https://status.example.com          # exact; a lookalike or a frame is refused
+      identities: ["bot:platform-sre"]
+      username: { vault: house, key: "statuspage/username" }
+      password: { vault: house, key: "statuspage/password" }
+  cards:                                           # every purchase is a signed approval; the card never reaches the agent
+    shopping:
+      kind: virtual                               # prefer a virtual / single-use card with its own provider limits
+      number: { vault: house, key: "cards/shopping/number" }
+      expiry: { vault: house, key: "cards/shopping/expiry" }
+      cvc:    { vault: house, key: "cards/shopping/cvc" }
+      merchants: ["https://shop.example.com"]      # none by default: nothing can be bought
+      identities: ["bot:platform-sre"]
+      limits: { per_purchase: 50, per_day: 100, per_month: 300, currency: USD }
+  payments: { approvers: [ops] }                   # operators: entries with an ssh_key
+
+#
+# A browser for agents (docs/wiki/Browser.md): every sandboxed agent can drive
+# a headless Chromium through `conductor browser …`. Conductor runs it,
+# sandboxed, reaching only `allow:`, with an anonymous profile. A logged-in
+# site gives that identity's agent YOUR session's power on it, for your own
+# requests only. Credentials are filled by conductor from your vaults, and the
+# agent never sees a value.
+#
+# browser:
+#   allow: [docs.example.com, app.example.com]   # "*" (the whole web) is refused
+#   # evaluate: ["agent:triage@acme/app"]         # identities opted in to read-only evaluate (default: none)
+#   # container: auto                              # macOS: a container whenever docker/podman is present
+#   logins:                                        # opt in per site AND per identity
+#     - site: app.example.com
+#       identities: ["agent:triage@acme/app"]      # then: conductor browser seed --identity … --site …
+#   credentials:
+#     - name: app
+#       origin: https://app.example.com           # exact; a lookalike or a frame is refused
+#       identities: ["agent:triage@acme/app"]
+#       login_url: https://app.example.com/login
+#       username: { vault: op, key: "Agents/App/username" }
+#       password: { vault: op, key: "Agents/App/password" }
+#       otp: { vault: op, key: "Agents/App/one-time password?attribute=otp" }
+#       # passkey: { vault: house, key: passkeys/app }   # conductor browser passkey register app
+#       # approval: true                               # a push approval: you're notified (needs_input)
+#       # email_code: { mailbox: agent-inbox, from: no-reply@app.example.com, subject: "sign-in code", code: "code is ([0-9]{6})" }
+#   # mailboxes:                                   # emailed codes: IMAP, read-only, an app password from a vault
+#   #   agent-inbox: { imap: "imap.example.com:993", username: { vault: op, key: "Agents/Mail/username" }, password: { vault: op, key: "Agents/Mail/app-password" } }
+#   # profiles:                                    # personal details conductor fills by meaning; the agent never sees them
+#   #   work:
+#   #     identities: ["bot:shopper"]              # nobody by default
+#   #     fields: { name: '{{ vault "op" "Me/Work/name" }}', email: '{{ vault "op" "Me/Work/email" }}', address.city: '${env.WORK_CITY}' }
+#   #     sites: [{ origin: "https://shop.example.com", fields: [name, email, address] }]   # per site, per field
+#   #     visible: { email: fact }                 # hidden | exists | fact (the domain) | value
+#   # cards:                                       # every purchase is a signed approval; the card never reaches the agent
+#   #   shopping:
+#   #     kind: virtual                            # prefer a virtual / single-use card with its own provider limits
+#   #     number: '{{ vault "op" "Cards/Shopping/number" }}'
+#   #     expiry: '{{ vault "op" "Cards/Shopping/expiry" }}'
+#   #     cvc: '{{ vault "op" "Cards/Shopping/cvc" }}'
+#   #     merchants: ["https://shop.example.com"]  # none by default: nothing can be bought
+#   #     identities: ["bot:shopper"]
+#   #     limits: { per_purchase: 50, per_day: 100, per_month: 300, currency: USD }
+#   #     # spend limits stack and the lowest wins: these, identity_limits:, a bot's purchases: and its
+#   #     # team's budget.purchases:, and a ticket's budget (conductor browser budget BOT CASE --amount 120)
+#   # payments: { approvers: [daniel], approval_ttl: 1h }   # operators: entries with an ssh_key
+#
+# Hand-offs (background: true agent steps on paseo) and detached launches
+# (detach: true — e.g. a Slack handover, whose thread can carry anyone's
+# messages) are sandboxed too: they launch through <provider>-sandboxed,
+# titled "[sandboxed]". The EXPLICIT,
+# LOOSENING knob is `isolation: { mode: none }` — on a step, a workflow or a
+# trigger of YOUR config (or a pack's, from your packs: overrides; a pack can
+# never set it on itself) — which launches the agent unsandboxed, as you,
+# through paseo's plain provider ("[UNSANDBOXED]", logged). E.g. one workflow
+# whose hand-off you want to drive with your own credentials:
+#
+#   triggers:
+#     - on: gh.review_requested
+#       isolation: { mode: none }        # this workflow's hand-off runs as you
+#       steps:
+#         - { id: review, type: agent, background: true, prompt: "Review {{.repo}}#{{.pr}} with me" }
+#   packs:
+#     review:
+#       use: conductor-packs/review
+#       triggers:
+#         <trigger>: { enabled: true, repos: [acme/app], isolation: { mode: none } }   # a pack trigger, by name
+
+
 # trigger on conductor.* — dispatch, escalate (gave up after retries),
 # needs_input, complete, failed (a run errored), updated, update_available.
 # Context: {{.message}} (the composed line) + event/ref/repo/number/
@@ -1309,6 +1484,223 @@ policy:
 #           - { at: start, uses: slack-ops.post, options: { text: "updating conductor → {{.version}}" } }
 #           - { at: fail,  uses: slack-ops.post, options: { text: "conductor update FAILED: {{.error}}" } }
 #       - { uses: build-box.run, options: { command: "smoke-test.sh" } }
+
+# ---------------------------------------------------------------------------
+# operators: + bots: — persistent conversational agents (wiki: Bots).
+#
+# A BOT is a named teammate with a charter (here, never writable by it), a
+# git MEMORY REPO (knowledge + episodic log + handoff notes; every write is a
+# reviewable commit), a durable CASE LEDGER (open events, proposals awaiting
+# approval, running workers), a pinned HOME session in paseo you talk to, and
+# WORKERS it delegates to on the cli runtime. Every mutating verb its sessions
+# call passes its AUTONOMY GATE:
+#
+#   observe       runs autonomously
+#   reversible    a proposal until promoted (promote:), and only while sandboxed
+#   propose       always a proposal; runs when an operator approves it
+#   commit_money  a proposal with a typed amount under the hard spend_cap
+#   never         refused
+#
+# An unclassified verb is `propose`. New bots start in SHADOW mode (nothing
+# above observe executes; proposals are a calibration record). Approvals are
+# SSH-signed by an operator — `conductor bot approve <bot> <id>` signs
+# the proposal's digest with your key (an ssh-agent key works) and the daemon
+# verifies it against ssh_key below. A bot session can never approve.
+#
+# Promotion beyond observe/propose takes effect only while bot sessions are
+# sandboxed (conductor's agent sandbox; `conductor bot show` says which).
+#
+# Bots never apply infrastructure themselves: with terraform: below, a
+# session proposes a pushed COMMIT, conductor plans it in its own private dir
+# with the plan connector's role, the operator signs that exact plan hash, and
+# conductor applies the saved plan with the apply connector's role. Plans that
+# destroy or replace stateful resources are refused unless allow_destroy names
+# them; plan files are deleted once the proposal is settled.
+#
+# Coordination: instructions flow down, authority never grows. A worker the
+# home session starts is its CHILD — the brief and `conductor bot tell`
+# follow-ups are instructions; what the child sends back is data. A child runs
+# with the bot's verbs or fewer (spawn --verbs / --read-only) and inherits
+# the provenance of the request behind it, so a third party's (or a peer's, or
+# a proactive sweep's) request can never be laundered through a child into an
+# unapproved write. Bots that an operator LINKS (peers: on both sides, or
+# bot_links:) can message each other — data only, never instructions — and
+# hand each other work (`conductor bot delegate`): the recipient works it under
+# its own authority, at the original request's trust, never more.
+#
+# TEAMS group bots however you cut your work — by system, function,
+# environment (conductor has no notion of an org). A bot names at most one
+# team; the team's settings are CEILINGS it inherits and can only narrow, never
+# widen (a bot past its team's is a load error naming both values).
+# Teammates are peers by default; a team can share a knowledge repo (bots
+# PROPOSE promotions from their own memory; an operator of the team approves);
+# and `bot: { team: … }` routes an event to the team, whose rules, lead or
+# fallback pick the bot — still the original requester's request at the gate.
+# ---------------------------------------------------------------------------
+operators:
+  ops:
+    ssh_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample operator@laptop"
+    # (printable text only: a control, bidi or zero-width character is refused)
+    aliases: ["slack:U0EXAMPLE"] # chat ids that ARE this operator when an event names them
+bots:
+  platform-sre:
+    description: "SRE for the platform services"
+    charter: |
+      You are the platform services' first-line SRE. Triage pages, investigate with read-only
+      tools, propose fixes, and escalate per the policy below. Keep runbooks
+      and the infra map in your memory current.
+    # charter_file: bots/platform-sre.md      # or keep the charter in a file
+    # Identity (wiki: Bots → Identity): presentation and voice only, never permissions.
+    # Faces and colors are names from built-in lists (`conductor bot identity-options`), never URLs.
+    # display_name: Night Owl                    # what it calls itself and chat shows; the id stays its address
+    # tagline: Watches the pager so you can sleep.
+    # avatar: { shape: circle, eyes: wide, color: teal }   # mix and match; or { icon: radar, color: teal }; none: initials
+    #                                            # or your own picture: { image: avatars/platform-sre.png, shape: circle, eyes: wide }
+    #                                            #   (`conductor bot avatar set platform-sre me.jpg`: re-encoded, PNG/JPEG/WebP, no SVG)
+    # color: indigo                              # identity colors exclude status hues (red, green, amber, …)
+    # personality:                               # a voice section in its prompt, fenced, below the charter and rules
+    #   tone: terse                              # terse | friendly | formal | warm | dry | playful
+    #   style: "Lead with the answer, then the evidence."   # at most 600 bytes
+    escalation: "Page the operator if a sev1 is not mitigated in 15 minutes or you are unsure."
+    # memory_repo: ~/bots/platform-sre        # default <state dir>/bots/platform-sre/memory
+    # seed_dir: .conductor/packs/platform-sre    # seed a NEW memory repo with a pack's knowledge/ + runbooks/
+    # operators: [ops]                           # default: the team's operators, else every operator
+    team: platform                               # at most one team (teams: below); bots without one are unaffected
+    # Memory is typed: knowledge/, runbooks/, watch/, digests/ (built-in kinds with frontmatter
+    # schemas — `conductor bot kinds`), log/ and handoff/ (conductor's). Custom kinds:
+    # collections:
+    #   postmortems: { from: .conductor/packs/platform-sre/collections/postmortems.yaml }   # one a pack ships
+    # Files on messages (`conductor bot say --attach`, the dashboard, a chat connector's attachments
+    # semantic) live in conductor's state, never in memory, and go when their case closes
+    # (wiki: Bots → Attachments). Every cap is on by default:
+    # attachments: { max_file: 10MB, max_message: 25MB, max_files: 10, ttl: 168h }   # types: [image/*, text/plain, …]
+    # Sessions read memory through a budgeted index, ranked recall and reads in parts
+    # (wiki: Bots → Reading memory). Every limit is on by default; a bigger value loosens it:
+    # memory:
+    #   index_budget: 6k                         # the memory index in a session's first prompt
+    #   read_max: 12k                            # one `conductor bot read`
+    #   recall_limit: 8                          # documents per recall (at most 25)
+    #   max_bytes: { knowledge: 8k, runbook: 12k, watch: 4k, digest: 8k, handoff: 4k, episode: 4k }
+    #   archive: true                            # consolidated raw logs leave the working copy (recall still finds them)
+    home:
+      rotate: { max_age: 24h, max_turns: 100 }   # a fresh session resumes from the handoff note + ledger;
+                                                 # max_age <= 144h (its conductor token lives 7d from last use)
+      # runtime: paseo                           # the paseo runtime (default: the default paseo)
+      # model: claude-opus-5                     # a fleet / id / list, resolved like a step's
+    worker:
+      runtime: claude-cli                        # default: the one `use: cli` runtime
+      timeout: 2h
+      max_concurrent: 4
+      # max_per_case: 3                          # live workers on one case (a fan-out's width)
+    skill:
+      verbs: [slack-ops.post, gh.comment]        # the bot's verbs; workers carry these or fewer
+    autonomy:
+      shadow: true                               # the default; false allows approved execution
+      tiers:
+        observe: [gh.get_*]
+        reversible: [slack-ops.post]
+        propose: [gh.comment]
+        never: [gh.delete_*]
+      # promote: [slack-ops.post]                # reversible classes that may run unapproved (needs the sandbox)
+      # commit_money: a typed amount option per verb, under a hard cap:
+      #   tiers: { commit_money: [aws.purchase_savings_plan] }
+      #   amounts: { aws.purchase_savings_plan: commitment_usd }
+      #   spend_cap: { per_action: 2000, per_period: 5000, period: 720h, currency: USD }
+      #   unattended:                  # opt-in, a widening: a commit_money verb runs WITHOUT approval under a smaller cap
+      #     browser.purchase: { per_action: 10, per_period: 30, period: 24h, merchants: ["https://shop.example.com"] }
+      approval_ttl: 24h
+    # The four-family worked example (browser: block above, team platform below):
+    # this bot narrows the agent browser to its one login + credential, caps its
+    # browser purchases under the team's budget.purchases, and takes a ticket
+    # policy — a ticket's spend_limit then binds its real purchases (M1 wiring).
+    purchases: { per_purchase: 40, per_day: 100, per_month: 300 }   # ≤ the team's budget.purchases
+    browser: { logins: [status.example.com], credentials: [statuspage] }   # ⊆ team ⊆ browser.logins/credentials
+    tickets: { mark_own_ready: false }             # default_priority is a team setting (below)
+    # proactive:                                 # OFF unless set: read-only sweeps on a schedule (wiki: Bots → Proactive sweeps)
+    #   every: 4h
+    #   quiet_hours: "22:00-07:00"               # no sweep starts in this window (local time; timezone: to pin a zone)
+    #   budget: { max_runs_per_day: 6, max_turns_per_day: 120, max_tokens_per_day: 2m }   # rolling 24h, any or none;
+    #                                                               # + max_cost_per_day (USD) only on API billing
+    #   checklist: { section: "Proactive checks" }                # a charter heading, or { file: checklists/sre.md }
+    #   notify_at: high                          # findings at/above this open a case and notify (conductor.bot_notify)
+    # peers: [billing-sre]                       # bots this one may message — they must list it back (or bot_links:)
+    # terraform:                                 # conductor-executed Terraform (wiki: Bots → Terraform changes)
+    #   plan_connector: tf-plan                  # a `use: terraform` connector: its env is the READ role
+    #   apply_connector: tf-apply                # its env is the WRITE role; no bot verb may reach it
+    #   repos: { infra: git@git.example.com:platform/infra.git }   # the only repos a bot may propose from
+    #   # stateful: [aws_db_instance, aws_s3_bucket]      # default: built-in databases/buckets/disks/keys list
+    #   # allow_destroy: [module.old.aws_s3_bucket.logs] # addresses a plan may still destroy/replace
+    #   # timeout: 30m
+  # A COMMUNITY BOT: one instantiated from a bot template a pack ships (wiki:
+  # Bot-Templates). The pack instance (packs: above) carries its version, hold
+  # and trust; the template supplies the charter, seed memory, collections and
+  # REQUESTS verbs — none active until granted here. It starts in practice mode
+  # with its read-only verbs; each grant above observe is a widening `conductor
+  # validate` names. `conductor bot new <name> --from sre/sre` writes this for you,
+  # on a copy of the config, shown as a diff.
+  # oncall-sre:
+  #   use: sre/sre                               # <pack instance>/<template>; packs: { sre: { use: conductor-packs/sre-bot } }
+  #   connectors: { pagerduty: pd }              # bind its inputs (one connector of the type binds itself)
+  #   grant:                                     # template vocabulary: <input>.<verb> → tier, at most its maximum
+  #     pagerduty.get_incident: observe
+  #     pagerduty.list_incidents: observe
+  #     pagerduty.acknowledge: reversible        # a widening
+  #   # description:, escalation:, operators:, team:, autonomy: … — yours, and yours win
+
+teams:
+  platform:
+    description: "Platform services: the shared runtime, its data stores and deploys"
+    # avatar: { icon: radar, color: teal }       # or { image: avatars/team-platform.png } (`conductor team avatar set`); no faces — those are bots'
+    knowledge: { promotion: proposal }           # a shared repo every bot reads; promotions need an operator of the team
+                                                 # + index_budget (default 2k), read_max, recall_limit, max_bytes: { knowledge, runbook, watch }
+    collections:                                 # a custom document kind in the team's knowledge (wiki: Bots → Content kinds)
+      postmortems:
+        dir: postmortems
+        fields:
+          title:    { type: string, required: true }
+          severity: { type: enum, values: [sev1, sev2, sev3], required: true }
+          action_items: { type: list }
+        template: "## Timeline\n\n## Cause\n\n## Follow-ups\n"
+        writers: [operator, proposal]            # a team's: operator / proposal; a bot's: operator / bots
+        # max_bytes: 8k                          # one document (default 8k)
+    # The team ceilings for the four-family worked example: its budget.purchases
+    # bounds each bot's purchases:, its browser: list bounds each bot's narrowing,
+    # and its tickets: default applies to the team's tickets.
+    budget:
+      purchases: { per_purchase: 100, per_day: 200, per_month: 500 }   # each bot's purchases: fits inside
+    browser: { logins: [status.example.com], credentials: [statuspage] }   # saved logins bots may narrow from
+    tickets: { default_priority: normal, mark_own_ready: false }   # only operators mark tickets ready;
+                                                                   # mark_own_ready: true lets the team's bots ready their OWN ideas (a widening)
+    # operators: [ops]                           # who approves for the team; bots' operators: must be a subset
+    # peers: none                                # default team: teammates may `ask` (data) and `delegate` (work) to each other
+    # delegation: { max_depth: 3 }               # most hops a `conductor bot delegate` chain may take (1–10, default 3)
+    # autonomy:
+    #   ceiling: observe                         # observe | reversible | commit_money: the highest tier any bot may be PROMOTED to (commit_money: unattended buys)
+    #   shadow: true                             # hold every bot in shadow mode (none may set shadow: false)
+    #   tiers: { never: [gh.delete_*] }          # classified into every bot (the strictest tier wins)
+    # budget:
+    #   spend_cap: { per_action: 500, per_period: 2000, period: 720h }   # each bot's commit_money cap fits inside
+    #   purchases: { per_purchase: 100, per_day: 200, per_month: 500 }   # browser purchases: each bot's purchases: fits inside
+    #   proactive: { max_runs_per_day: 12, max_tokens_per_day: 5m }      # a POOL: all bots' sweeps together, rolling 24h; per unit
+    # isolation:
+    #   sandbox: required                        # bots start only while conductor's agent sandbox is on
+    #   handoff_workers: false                   # no `spawn --handoff` paseo workers
+    #   skip_permission_prompts: false           # a home.mode that skips prompts is a load error
+    # credentials: { secrets_via: broker, allow_secrets: [house/pd-token] }   # bots' skill.allow_secrets fit inside
+    # browser: { logins: [status.example.com], credentials: [statuspage] }   # saved logins bots may use (agent browser)
+    # knowledge: { repo: ~/teams/platform, seed_dir: .conductor/packs/sre-bot, promotion: direct }
+    # routing:                                   # `bot: { team: platform, … }` in a trigger
+    #   rules:                                   # first match wins: event fields against globs, no model
+    #     - { name: data, match: { source: "pd.*", service: "db-*" }, to: platform-data }
+    #   lead: platform-sre                       # else the lead triages (a read-only worker) and runs `conductor bot assign`
+    #   fallback: platform-sre                   # else, or unassigned after timeout:, the fallback (required)
+    #   # timeout: 10m
+    # chat: { everyone_per_hour: 6, max_reply: 4000 }   # `conductor team say`: --everyone per hour; one bot reply's bytes
+  # billing: { description: "Billing and invoicing" }   # isolated from platform unless bot_links: pairs bots
+
+# bot_links:                                # operator-side peer links: each pair may message each other.
+#   - [platform-sre, billing-sre]              # Linking two bots is a channel for data to cross between them —
+#                                              # what one writes reaches the other; only link bots whose data may mix.
 
 update: { auto: true } # self-update (auto-applies by default); auto-migration runs on the new binary's first boot.
 #                      # deps follows auto: packs: and `use:` plugins are kept current on the same cycle — a changed
@@ -1404,3 +1796,59 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #   # `*` never crosses a `/`, so `your-org/*` cannot reach `your-org-evil/…`.
 #   # Prefer an exact repo or an org-scoped `org/*` over a partial name like
 #   # `conductor-packs*`, which also admits `conductor-packs2` in that org.
+
+# ---------------------------------------------------------------------------
+# dashboard: — OPTIONAL local web UI (design §6). Off unless enabled, so a
+# config without this block changes nothing. It runs INSIDE the daemon and
+# reads the live config, store and event hub. With operators configured, every
+# API call needs a signed-in operator (see docs/wiki/Dashboard.md).
+#
+# dashboard:
+#   enabled: true            # off by default; a config without the block is unchanged
+#   listen: [localhost, tailscale]  # keywords only: `localhost` (127.0.0.1 + ::1,
+#                            # plain HTTP) and `tailscale` (the node's tailnet
+#                            # addresses). Explicit addresses go under bind:.
+#   port: 7788               # default 7788; must not collide with an inbound listener
+#   tailscale:
+#     tls: on                # on (default): HTTPS with the MagicDNS cert.
+#                            # off: plain HTTP on the tailnet addresses — WireGuard
+#                            # encrypts the hop and WhoIs is still checked, but the
+#                            # browser sees plain HTTP, so passkeys aren't offered.
+#     allow_tagged: false    # refuse tagged nodes (servers, CI)
+#   session: { idle: 30m, max: 12h }  # a shorter max also ends existing sessions
+#   auth:
+#     methods: [passkey, ssh, password]  # sign-in methods (this is the default).
+#                            # passkey is only offered on HTTPS or localhost with a
+#                            # relying-party hostname; ssh signs a challenge with
+#                            # operators.<name>.ssh_key; password needs TOTP.
+#     password_requires_totp: true       # default. false allows a password alone —
+#                            # anyone who learns it signs in; set it only knowingly.
+#     stepup: [passkey, ssh, totp]       # what confirms approvals, config applies and
+#                            # credential changes (default). `password` is accepted
+#                            # here only with password_requires_totp: false.
+#     config_stepup: all     # default: every config apply and restore from the
+#                            # dashboard needs a confirmation. guarded: raising an
+#                            # existing price and setting usage.mode apply on a
+#                            # session alone (five in ten minutes); lowering,
+#                            # removing or adding a price, and everything else
+#                            # (anything that runs on the box, operators, the
+#                            # dashboard and store blocks) still asks. An
+#                            # explicit loosen.
+#   bind:                    # extra listeners on explicit addresses
+#     - address: 0.0.0.0:7790
+#       hostnames: [conductor.home.arpa]   # REQUIRED Host allowlist (DNS rebinding);
+#                            # with TLS each non-IP hostname is a passkey relying party
+#       cert_file: /etc/conductor/tls/dashboard.crt
+#       key_file: /etc/conductor/tls/dashboard.key
+#       # hsts: false          # default on with TLS: Strict-Transport-Security for
+#                            # a year (every port on the hostname). Off only if a
+#                            # plain-HTTP service on this hostname must stay reachable.
+#     - address: 192.168.1.20:7791
+#       hostnames: [192.168.1.20]
+#       allow_plain_http: true             # REQUIRED for plain HTTP off loopback: the
+#                            # session cookie crosses the network unencrypted.
+#                            # A warning is logged at boot.
+#
+# Build the UI into the binary with `make web` (needs Node; the built assets are
+# committed, so a normal `go build`/`go install` does not). Reach it at
+# http://localhost:7788 once enabled.

@@ -1,0 +1,586 @@
+# Dashboard sign-in methods — design
+
+Status: **built** on `feat/dashboard-full`. Operator docs: `docs/wiki/Dashboard.md`
+(Signing in).
+
+The dashboard used to sign in with a passkey only. That excluded three common
+cases:
+
+- a browser on another machine, before any passkey is enrolled (enrolment is a
+  localhost link);
+- a connection that is not a secure context (plain HTTP on a LAN or on the
+  tailnet with TLS off), where browsers refuse WebAuthn;
+- a phone that cannot hold a passkey for the box's relying party.
+
+This design adds two methods beside the passkey: signing a challenge with the
+operator's SSH key, and a password with an authenticator-app code. It
+generalizes step-up to all of them, and adds the listeners that need them.
+
+## 1. Policy
+
+```yaml
+dashboard:
+  auth:
+    methods: [passkey, ssh, password]   # sign-in methods
+    password_requires_totp: true
+    stepup: [passkey, ssh, totp]        # methods that confirm sensitive actions
+    config_stepup: all                  # which config applies need one: all | guarded
+```
+
+- Every field has a default, and a config without `auth:` gets the defaults:
+  passkey, SSH and password sign-in are all on (§7 says why). Validation runs
+  at load. These are config errors:
+  - unknown methods, duplicates, or an empty list;
+  - `password` under `stepup`, unless `password` is a sign-in method and
+    `password_requires_totp` is false;
+  - `password_requires_totp: false` without `password` in `methods`. `totp` is a step-up method
+  only: it is never a sign-in method on its own.
+- `password_requires_totp: false` is the only way to make a password alone a
+  credential. Turning it off, `allow_plain_http: true` and `tailscale.tls: off`
+  are classified as widening by the config editor.
+- **Every config apply needs a step-up** when sign-in is on
+  (`config_stepup: all`, the default), and so does every restore. Most of the
+  config runs something on the box: a cron connector and a trigger step with
+  `use: cli` is a shell, and that shell can rewrite an operator's `ssh_key` or
+  read the sign-in store. A session cookie must not be enough for any of it.
+- `config_stepup: guarded` is the one loosen. In that mode an apply needs a
+  step-up when its candidate changes anything outside a short inert list
+  (`pricing`, `usage.mode`) or loosens a guardrail. Everything else is guarded:
+  `operators`, `imports`, the whole `dashboard` and `store` blocks, triggers,
+  workflows, checks, connectors, runtimes, hosts, engines, models, packs,
+  plugin and pack trust, secrets, vaults, the sandbox, the browser, callable,
+  policy, bots, teams, update and `dry_run`. A key that is not on the inert
+  list, including one added to the config later, is guarded.
+  - `pricing` is not only display: cost estimates and every `max_cost_usd`
+    budget cap count with it. Raising an existing price only tightens the
+    caps, so that is inert, within reason: the new price is at most ten
+    times the old one and at most 10000 (dollars per million tokens), and
+    both are finite numbers above zero. A larger raise would make every cap
+    stop work at once and every estimate meaningless, so it is a widening.
+    So is lowering or removing a price, adding one (a new model pattern or
+    default can undercut the price that applied before), or a value that is
+    not a number (`.inf` and `.nan` included).
+  - Within the inert list, only changes the editor can judge are inert:
+    raising an existing price, and setting `usage.mode` (with or without a
+    `usage` block). An edit whose loaded config differs elsewhere, or that
+    can't be loaded, needs a step-up ("(loaded config)").
+  - Applies that need no step-up are rate-limited across the daemon: five in
+    any ten minutes. Past that, an apply needs a step-up like any other, so a
+    stolen session can't loop restarts or churn the restore history. The
+    window is kept in the dashboard's state dir (`quiet-applies.json`) and
+    written before the apply, so the restart each apply causes doesn't reset
+    it. A record that can't be read counts as a spent window, and a use that
+    can't be written isn't granted.
+  - What this mode gives up: a stolen session can raise prices up to tenfold
+    (tightening the caps, which can stop work early) and change the usage
+    report mode, five times in ten minutes. Setting it is itself a widening change.
+- **Staged edits are per session.** A review, its confirmation and the apply
+  cover the applying session's own staged edits. Another session's edits,
+  even the same operator's, never show in or ride into them, and its review
+  token is refused. An apply writes and clears the applying session's set
+  only; another session's set stays staged against the new file.
+- **Both are bounded without evicting anyone.** At most 256 sessions hold a
+  staged set. A new session past that is refused, never given another
+  session's place; the sets of sessions that have ended are reclaimed
+  first. Each session holds one review token, replaced by its next review
+  or restore review (an older token is refused as stale), and at most 256
+  sessions hold one, the oldest going first. No number of reviews grows the
+  daemon's memory.
+- **History.** Every apply and restore keeps a backup of the config it
+  replaced. The newest 50 are kept, and the oldest of each of the last 30
+  days (how the config stood when that day's changes began), so a burst of
+  applies can't prune the earlier days' restore points.
+- The config editor decides this from the whole candidate, not from the path
+  that was staged:
+  - it compares every leaf between the live file and the candidate, so staging
+    a whole parent map or list is judged by what it ends up containing, and
+    names each guarded section that changed;
+  - it also loads both and compares the loaded configs (minus the inert
+    paths), so a change that reaches a guarded setting through an import, a
+    pack or a YAML reference counts too. A candidate that cannot be loaded
+    counts as changed;
+  - the apply asks for the step-up under the editor's lock, on the exact
+    candidate it is about to write, so nothing staged after the review slips
+    past.
+- **If the sign-in store can't be opened**, or the auth layer can't be built,
+  every listener refuses the API with a 503. The localhost listener says why;
+  the others say only that sign-in is unavailable. The dashboard never serves
+  as if no sign-in were needed because sign-in broke. With no operators and no
+  state dir there is nothing to sign in to, and the API stays open on localhost
+  as on a fresh install.
+- The server is the authority on what a connection offers:
+  - `GET /api/v1/auth/state` lists the sign-in methods for this listener and
+    transport and, when signed in, the step-up methods this operator has here.
+  - Passkeys are listed only when the listener has a relying party for the
+    request's host and the transport is a secure context.
+  - The client additionally hides passkeys when `window.isSecureContext` is
+    false.
+
+## 2. SSH sign-in
+
+The operator's `ssh_key` already authenticates the CLI (enrolment, reset, bot
+approvals). The dashboard reuses it.
+
+**Challenge.** `POST /api/v1/auth/ssh/begin {operator}` returns a one-line text:
+
+```
+conductor-dashboard-login v1 operator=ops origin=https://box.example:7790 nonce=<base64, 16 random bytes> expires=<RFC 3339>
+```
+
+and a step-up challenge adds the purpose and the action digest:
+
+```
+conductor-dashboard-stepup v1 operator=ops origin=... purpose=approve digest=<sha256> nonce=... expires=...
+```
+
+- Signatures are SSHSIG (`ssh-keygen -Y sign`) in the namespaces
+  `conductor-dashboard-login` and `conductor-dashboard-stepup`. These differ
+  from the enrolment and bot-approval namespaces, so a signature made for one
+  purpose cannot be used for another.
+- The server keeps the text it issued and verifies the signature against that
+  stored copy, never against text sent back by a client. Verification is
+  `ssh-keygen -Y verify` against the operator's configured key.
+- The origin is the scheme and `Host` of the request that began it. `Host` has
+  already passed the listener's allowlist, and it is also matched against a
+  conservative pattern so the text is safe inside the single-quoted shell
+  command the page shows.
+- An unknown operator still gets a challenge, so a client cannot tell whether
+  an operator exists. Finishing it runs the same verification against a key
+  whose private half was discarded, so it fails the same way, with the same
+  error, as a wrong signature for a real operator.
+- A challenge expires after 5 minutes and is consumed by its first successful
+  use.
+- It is bound to the listener, host and transport that created it and, for a
+  step-up, to the session. A request from anywhere else finds no challenge.
+  That includes its login code: `pending` and `approve` look a code up only on
+  the listener, host and transport it was issued on.
+- Pending sign-in challenges are capped at 3 per client (one address), 256 per
+  network (an IPv4 /24 or an IPv6 /64) and 4096 overall. A neighbour needs 86
+  addresses on the operator's network, each refreshed every 5 minutes, to fill
+  its share; the network cap only stops one network holding the whole table.
+  On loopback every local process shares one address, so a sign-in there is
+  bound to the browser that began it instead. The first begin sets an
+  HttpOnly, SameSite=Strict begin cookie (`conductor_ssh_begin`, path
+  `/api/v1/auth/ssh/`, a random value with no authority of its own), and the
+  challenge records it. Only a request carrying that cookie finishes or polls
+  the challenge; to any other it does not exist. The cap is 3 per beginner: a
+  fourth begin from the same browser replaces its own oldest. A begin never
+  evicts another beginner's challenge, and a begin without the cookie is a
+  share of one. The table holds at most 1024 such sign-ins. Past that, a new
+  begin is refused until one finishes or expires (at most 5 minutes), and
+  every pending one is kept. A begin for a name that is not a configured
+  operator gets the same answer as any other, holds no place in the counts
+  above, and lives in its own table of at most 256 (oldest replaced first; it
+  can never verify). Step-up challenges have their own cap of 5 per session,
+  so a flood of sign-in challenges cannot stop a signed-in operator from
+  confirming.
+
+**Paste.** The page shows the `ssh-keygen` command (and the equivalent
+`conductor dashboard sign '<challenge>'`). The operator pastes the armoured
+signature into `POST /api/v1/auth/ssh/finish {challenge_id, signature}`.
+`challenge_id` is a 256-bit secret known only to the browser that began the
+challenge.
+
+**Approve from another device.**
+
+- Each challenge also has a login code: 8 characters from a 32-symbol alphabet
+  (40 bits), shown as `ABCD-EFGH`. The code is not the challenge id, so knowing
+  it is not enough to receive the session.
+- `conductor dashboard approve-login <code> --url <origin> --operator <name>`
+  does the following:
+  1. Calls `POST /api/v1/auth/ssh/pending {code}` to get the challenge text, the
+     requesting address and device, when the request started and when it
+     expires, and for a step-up the action's digest and the dashboard's
+     description of it.
+  2. Refuses unless the challenge's origin equals the origin of `--url`, the
+     operator matches and the namespace is the expected one. This stops a
+     look-alike page from getting a challenge for its own origin approved. It
+     does not stop a relay that starts the sign-in on the real dashboard (§6).
+  3. Shows all of that — for a step-up the purpose, the description and the
+     first 12 characters of the digest, which the waiting page also shows — and
+     says that approving a code someone else sent signs them in. Then it asks
+     for confirmation on the terminal (`--yes` skips the question).
+  4. Signs the challenge and posts `POST /api/v1/auth/ssh/approve {code, signature}`.
+- The waiting page polls `POST /api/v1/auth/ssh/poll {challenge_id}` every 2
+  seconds, and the session is issued to it.
+- `pending` and `approve` need no session and no CSRF token: the signature is
+  the credential. They are still same-origin JSON endpoints (§4a). Unknown
+  codes and bad signatures count toward the client's lockout and its
+  network's throttle. Three wrong
+  signatures against one code burn it.
+- **Describing a step-up.** The digest is a hash, so the server cannot turn it
+  back into an action. Instead, whenever it hands a session a digest (a
+  proposal's or a purchase's approval view, a config review, a wallet change or
+  a browser take-over refused for want of a step-up), it records for that
+  session what confirming the digest does, built from its own data:
+  - a config apply or restore lists every guarded section and every widening
+    change first. Then it lists what changes, leaf by leaf, between the live
+    config and the candidate, with each leaf's old and new value. This comes
+    from the whole candidate, not from how the edit was staged, so an
+    `ssh_key` swapped by staging the whole `operators` map shows as that
+    leaf. Every leaf outside the inert paths, and every widening leaf, is
+    shown in full. Only the other (inert) leaves can be shortened (at most 20,
+    200 characters each), and the text says when they are. The diff size
+    comes last;
+  - an approval or a purchase shows the canonical action the digest pins (a
+    proposal's kind, `uses` and `options`, or a purchase's merchant, items,
+    total, card and the rest), pretty-printed, then the requester's own
+    summary on a line labelled as theirs;
+  - every value in it is passed through one escaper: C0 and C1 controls, DEL,
+    bidi embeddings, overrides, isolates and marks, zero-width characters and
+    the line and paragraph separators show as escapes (`\x1b`, `\u202e`).
+  The record is per session (64 each, 30 minutes), so another session can't
+  evict it. An SSH step-up binds the description when it begins and refuses to
+  begin without one; `pending` returns the bound text, and approve-login
+  refuses a step-up that comes back undescribed instead of advising the
+  operator to check the page. The page's dialog shows the same text, and the
+  page parses every API response through the same kind of escaper.
+
+## 3. Password and TOTP
+
+- **Password.** Stored as argon2id (m=19 MiB, t=2, p=1, 32-byte key) in PHC
+  string form; 12 to 256 characters.
+  - Comparison is constant-time.
+  - An unknown operator is checked against a dummy hash, so the timing does not
+    reveal whether the operator exists.
+  - At most two hashes run at once, which bounds the memory and CPU an
+    unauthenticated client can consume.
+- **TOTP.** RFC 6238 (HMAC-SHA-1, 30-second step, 6 digits), 160-bit secret.
+  - The code for the current step or one step either side is accepted.
+  - Each accepted step is spent: the same step is refused the next time, and so
+    is any step older than two before the newest accepted one. The
+    check-and-set is atomic, so two requests racing with one code get one
+    success. Spending the next step's code early does not refuse the current
+    step's code.
+  - Enrolment shows the key as a QR code (an `otpauth://` URI) and as text, in
+    4-character blocks (copying takes it without spaces). The authenticator
+    becomes active only after a correct code from the app.
+  - Replacing it works the same way: Access shows a new key, and the current
+    authenticator keeps working until a code from the new one confirms it
+    (under a `credential.change` step-up).
+- **Sign-in.** `POST /api/v1/auth/password/login {operator, password, code}`.
+  The password and code are checked together, and a failure does not say which
+  one was wrong.
+  - With `password_requires_totp: true`, an operator without an active
+    authenticator cannot sign in by password at all.
+  - With `false`, an operator without an authenticator signs in by password
+    alone. One with an authenticator still needs a code.
+- **Setting them.** A signed-in operator sets them from Access, or a new
+  operator from the one-time localhost enrolment link. Recovery is `conductor
+  dashboard reset`, which is signed with the SSH key. It clears passkeys,
+  password, authenticator and sessions.
+
+**Lockout.**
+
+- **Per client.** Every method's failures count against the client key: 5
+  failures in 15 minutes give a 15-minute lock, doubling up to 4 hours. The
+  client key is the tailnet node on the tailnet, otherwise the full address
+  (IPv4 or IPv6). A /64 is often a whole home or office LAN, so it can't stand
+  for one device.
+- **Per network.** Failures at a guessable thing (a password, a login code)
+  also count against the client's network, an IPv4 /24 or an IPv6 /64. This is
+  a throttle, not a lock: 50 failures in 15 minutes refuse further guesses of
+  that kind from the network until the window moves on. It bounds guessing
+  spread over the 2^64 addresses of a /64. SSH signatures and passkey
+  assertions are not guessable and never count here, so one address can't
+  lock a different address out of SSH or passkeys.
+- **Per operator.** Password and TOTP failures, including TOTP and password
+  step-up attempts, also count against the operator, whichever client they come
+  from. Only configured operators have a bucket. A name that isn't one counts
+  in one of 1024 in-memory buckets chosen by a hash of the name, so its
+  failures are bounded like anyone's, the answer gives no hint whether the
+  operator exists, and an attacker can't grow the persisted table by inventing
+  names. The operator buckets and their doubling are kept in `auth.json`, so a
+  restart (every config apply reloads the daemon) doesn't reset them. The file
+  is written when a bucket locks or unlocks or its doubling changes, not on
+  every failure.
+- **Loopback.** Every local process reaches the localhost listener from
+  127.0.0.1 or ::1, so a client bucket there would let any local user lock the
+  operator's own browser out. On loopback there is no client bucket: SSH and
+  passkey failures lock nothing, and password and code guessing is still bounded
+  by the operator lock and the network throttle.
+- **Reserved before evaluated.** A guess reserves its place in every bucket it
+  counts against before the hash or code check runs, and the reservation is
+  refused when the failures plus the guesses still running reach the limit.
+  Taking the reservation is atomic, so a concurrent burst gets no more guesses
+  evaluated per bucket than a sequence. A success or an error that is not a
+  wrong guess releases the place.
+- The 429 says which bucket refused: this address, this network, or the
+  operator's password and codes (and that SSH keys and passkeys still work).
+- Checking whether a client is locked creates no state, and idle entries are
+  swept, so the lockout table stays bounded however many addresses an
+  attacker uses.
+- The operator lock covers only the guessable secrets. Passkey and SSH sign-in
+  are not blocked by it, so an attacker who sends wrong passwords cannot lock
+  the operator out of the methods that do not depend on a guessable secret.
+- **Enrolment link.** The link is single use: redeeming it spends it, so a
+  second redeem from scrollback or a shared screen finds nothing. Its secret is
+  256 bits and its pairing code burns after 3 wrong tries, so there is no
+  separate per-address redeem limit (on localhost that would be one bucket for
+  every local process).
+
+## 4. Step-up for every method
+
+- Callers still call `RequireStepup(session, purpose, digest, token)`. The
+  token is single-use, expires after 2 minutes, and is bound to the session,
+  the purpose and the digest. Callers do not know which method produced it.
+- **Minting.** Every method mints through one function, which checks
+  `auth.stepup`, records the method in the evidence and writes the audit
+  entry:
+  - **Passkey.** As before.
+  - **SSH.** A step-up challenge (§2), by paste or by `approve-login` from
+    another device.
+  - **TOTP.** A fresh code.
+  - **Password.** Only when the policy allows it.
+- **Bot approvals.** A passkey step-up is presented to the approval gate as
+  before (`webauthn` evidence). Any other method is presented as `dashboard`
+  evidence that names the method, and the SSH signature when there is one. The
+  approval's audit record carries the method.
+- **Attribution.** `dashboard_signin`, `dashboard_stepup`,
+  `dashboard_ssh_approved`, `dashboard.config.apply`/`restore`,
+  `dashboard.approval` and `dashboard.purchase` carry the operator, session id,
+  sign-in method, the request's remote address, the listener and transport, and
+  the confirmed digest. `dashboard_ssh_approved` names the approving and the
+  requesting address separately. The bots' operator API adds the same fields
+  to its own rows (`bot_chat`, `bot_ticket`) when a dashboard session made the
+  request, and the dashboard writes a `dashboard.botapi` row for each write on
+  a bot, team or ticket (§4c).
+- **Credential changes.** Setting or removing a password or authenticator, and
+  adding a passkey from Access, use the purpose `credential.change`. Their
+  digest names the operator and the action. Together with the config step-up
+  (§1), a stolen session cookie cannot add a credential or change an
+  operator's key without a confirmation.
+- **Forced retries.** `POST /api/v1/runs/{id}/retry` with `force: true`
+  re-runs steps the record says already succeeded, so what they did happens
+  again (a posted comment, a push, a command). It needs a step-up with the
+  purpose `run.replay`, its digest bound to the run and the starting step.
+  The description names the run, its trigger, where it starts, and each
+  step that already succeeded and runs again. A plain retry never repeats
+  what a succeeded step did, so it stays on the session alone.
+- **Password step-up** needs the authenticator code as well when the operator
+  has an authenticator, as at sign-in, and counts against the operator lock.
+- **UI.** One dialog serves every caller. It offers the step-up methods the
+  operator has on this connection, strongest first. It shows what is being
+  confirmed inside the dialog: a summary, the action itself pretty-printed (a
+  proposal's or purchase's action, the config change's effects) and the first
+  12 characters of the digest. Cancelling the dialog rejects the caller's
+  promise with a "cancelled" error, which pages do not show as a failure.
+
+## 4a. Requests to the auth endpoints
+
+Every auth endpoint, signed in or not (`/api/v1/auth/*`, `/api/v1/enroll/*`,
+passkeys, sessions, Access):
+
+- refuses a request whose `Origin` is not the request's own origin (scheme and
+  `Host`, default ports ignored), with 403;
+- refuses a `Sec-Fetch-Site` other than `same-origin` or `none`, with 403;
+- refuses a request with a body that is not `Content-Type: application/json`,
+  with 415. That keeps a cross-site form, which cannot send JSON without a
+  preflight, from reaching them at all.
+
+The CLI sends no `Origin` and the JSON content type, so it is unaffected.
+
+## 4b. Session lifetime
+
+A session records a fingerprint of the credential it signed in with: the
+operator's `ssh_key` for SSH, the password hash and TOTP secret for a password.
+Every request checks it, so:
+
+- changing `ssh_key` ends the sessions signed in with the old key (a rotated key
+  stops being a way in at once, not at `session.max`);
+- setting a password or an authenticator, or clearing the authenticator, ends
+  the operator's password sessions; the session that made the change is moved
+  onto the new credential and stays;
+- removing an operator ends their sessions.
+
+A session ends at the earlier of its own expiry and `created + session.max`
+under the current config, so lowering `session.max` applies to sessions that
+already exist. An ended session is deleted where that is first seen: when it is
+presented, when the session list or `dashboard status` reads it, or when the
+daemon starts (every config apply reloads it). A session ended by a key change
+therefore stays ended if the old key is put back. The list and `dashboard
+status` show live sessions only.
+
+## 4c. The bots' operator API on the dashboard
+
+The bots' operator API (teams, conversations, tickets, messages, attachments,
+avatars) names its operator in the request: a query parameter, a JSON key or a
+form field. On its unix socket the caller is the local user, who may be any
+operator. The dashboard mounts the same routes under `/api/v1/`, and there the
+signed-in session is the operator. One chokepoint sits in front of every
+mounted route:
+
+- A request that names another operator is refused with 403 and never
+  rewritten. That covers the query, a JSON key that encoding/json would read as
+  `operator` (in any letter case), and a urlencoded or multipart field.
+- The JSON handlers decode whatever body arrives, whatever its Content-Type.
+  Ambiguous bodies are therefore refused rather than guessed at:
+  - a multipart body whose preamble is a JSON object;
+  - a form body that is a JSON object;
+  - JSON with anything after the first object;
+  - an `operator` that is not a string.
+- The session's operator is then set in the query and in a JSON or form body,
+  so every handler reads it wherever it looks.
+- A write on a bot, team or ticket needs an operator of it (`bots.<name>.operators`,
+  `teams.<name>.operators`; when none are listed, every operator). For a ticket
+  this is its assignee, or the bot holding it, plus the new assignee on a
+  reassignment. A ticket in the triage queue is every operator's. Read marks
+  and pins are the operator's own view, so they need nothing more.
+- A ticket create or `PATCH` whose `spend_limit` widens what a bot may spend
+  needs the `browser.write` step-up, bound to the route, the path and the
+  request body. Widening means setting a limit, raising it, changing its
+  currency or card, adding merchants or clearing it. It is the same purpose
+  the wallet's own widening changes use, decided by the bot service's own
+  classification. Lowering a limit needs none. A limit is confirmed for one
+  bot (`spend_for`), so a request that confirms it for a bot it wasn't
+  confirmed for also widens: an assignment to another bot, a reopen (closing
+  clears the binding), or the limit restated for the bot that now holds the
+  ticket. The step-up description names that bot ("the spend limit … moves
+  from bot:a to bot:b"). A bot's own moves bind no one: the limit is held
+  wherever it lands until an operator confirms it.
+- An avatar apply writes the config file on the socket. On the dashboard it
+  stages the planned change in the session's config edits instead, so the
+  config pipeline reviews, confirms (per `config_stepup`), backs up, audits
+  and applies it under the editor's lock. The picture is written at once
+  under a name of its own content (`avatars/content/<hash>.png`), the name
+  the plan's diff shows; the write and the staging happen under the
+  editor's lock, and staging removes nothing. After each apply or restore,
+  still under the lock, uploads that no text names are removed: the live
+  config, every backup and every session's staged edits are checked.
+- A write route with no rule at the chokepoint is refused. A test walks the
+  daemon's real route list and fails on any write route without a rule.
+- Reads follow the bot API's own rules: any operator reads any conversation.
+- With sign-in off there is no session to speak for, and the API behaves as on
+  the socket.
+
+## 5. Transports and listeners
+
+| Listener | Transport | Passkey RP |
+|---|---|---|
+| `localhost` | localhost (secure context) | `localhost` |
+| `tailscale`, `tls: on` (default) | https | the MagicDNS name |
+| `tailscale`, `tls: off` | http (WireGuard-encrypted hop) | none |
+| `bind` with `cert_file`/`key_file` | https | each non-IP hostname |
+| `bind` on a loopback address, no certificate, only loopback hostnames | localhost | `localhost` |
+| `bind` on a loopback address, no certificate, any other hostname | http | none |
+| `bind` elsewhere, no certificate | http | none |
+
+- **`bind` entries.**
+  - `address` is an IP and port, not the dashboard port, and no address may
+    repeat.
+  - `hostnames` is required. `Host` must match one of them, which blocks DNS
+    rebinding.
+  - The certificate and key must be set together.
+  - Plain HTTP on a non-loopback address needs `allow_plain_http: true`. That is
+    checked at load and again when the listener starts, and a warning is logged
+    at boot.
+  - A loopback address is a secure context only under a loopback name: a
+    browser treats `http://box.lan` as insecure even when it resolves to
+    127.0.0.1. Such an entry is served as plain HTTP without passkeys; it needs
+    no acknowledgment, since the traffic stays on the machine.
+  - A TLS entry with `allow_plain_http` is a config error, so the
+    acknowledgment cannot be left set where it no longer applies.
+- **Every listener** applies the same chain: security headers, Host allowlist,
+  then the session and CSRF checks. The localhost listener checks `Host`
+  against the loopback names (`localhost`, `127.0.0.1`, `[::1]`). The tailnet
+  listener accepts only its MagicDNS name and tailnet addresses, never a
+  loopback name, so a tailnet peer cannot mint challenges carrying the
+  localhost listener's origin.
+- **Cookies.**
+  - On https and localhost the session cookie is `__Host-conductor_session`
+    with `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`.
+  - On http it is `conductor_session` with `HttpOnly`, `SameSite=Strict`,
+    `Path=/` and no `Secure` flag, since a browser drops a `Secure` cookie set
+    over plain HTTP.
+  - A `bind` listener's cookie name adds a suffix derived from its address.
+    Cookies ignore the port, so without it a loopback `bind` named `localhost`
+    and the localhost listener would overwrite each other's cookie.
+- **Sessions record the transport and the method.** A cookie is accepted only
+  on the transport it was issued for, so an http session cannot be presented
+  on an https listener of the same name, nor the reverse.
+- **UI on plain HTTP.**
+  - The sign-in page and the app show an "Unencrypted connection" notice.
+  - The UI does not use the Clipboard API or `crypto.subtle`, which browsers
+    withhold from non-secure contexts. Copy falls back to selection, and digests
+    come from the server.
+
+## 6. Threat-model changes
+
+- **Plain HTTP, passive.** Anyone on the network path can read and replay the
+  session cookie. The configuration only allows this with
+  `allow_plain_http: true` (or `tailscale.tls: off`, where WireGuard protects
+  the hop). Step-up tokens are single-use, bound to an action and short-lived,
+  so replaying an observed confirmation does not authorize a different action.
+  A session stolen over plain HTTP can still be used until it expires or is
+  signed out, but not to change who can sign in (§1, §4).
+- **Plain HTTP, active.** An attacker who can modify traffic rewrites the page
+  itself. Every code, password or signature the operator then enters can
+  confirm an action of the attacker's choosing, and the page can show
+  anything. That includes the shell command the SSH sign-in and confirmation
+  dialogs offer to copy (`printf … | ssh-keygen -Y sign …`): a rewritten page
+  can offer a different command, run in the terminal that holds the operator's
+  key. The only check outside the page is `approve-login`, which prints the
+  server's own description of a step-up and is the way to sign from a plain
+  HTTP page. Plain HTTP means trusting everything on the path; use it only
+  where that is true.
+- **Password.** Phishable and guessable. It requires TOTP by default; guessing
+  is bounded per client and per operator; and only the explicit knob makes a
+  password a step-up method.
+- **TOTP.** Phishable in real time. Replay protection stops reuse of an
+  observed code, but not a relay that uses the code first. Passkeys remain the
+  strongest method and are offered first wherever they work.
+- **Real-time relay of SSH sign-in.** A look-alike page can start a sign-in on
+  the real dashboard from its own server and ask the operator to approve that
+  code, or to sign and paste that challenge. The challenge names the real
+  origin, so the CLI's origin check passes. This cannot be prevented for a
+  method whose proof the operator carries across by hand. The CLI narrows it by
+  showing the requesting address, the device as the browser describes itself
+  (the requester controls that text), when the request started, and for a
+  step-up the action, and by saying that approving a code someone sent signs
+  them in. Passkeys resist it: the browser binds the assertion to the origin it
+  is actually on, so a look-alike page gets nothing usable.
+- **Which action a step-up confirms.** A script running in the dashboard's own
+  origin can ask for a step-up over any digest it was handed. The dialog shows
+  the server's description, but the page draws the dialog, so such a script
+  controls what it shows; a TOTP code or a passkey touch carries no
+  independent display. `approve-login` prints the description bound to the
+  challenge, so an SSH confirmation through it is the one place the operator
+  sees the action from outside the page. It is only as good as what the
+  server describes: it names what changes and what runs, and the operator
+  still has to read it.
+- **SSH approve-login.**
+  - A short code is guessable in principle. 40 bits, a 5-minute life, a
+    per-client lockout, a per-network throttle and a 3-try burn per code make
+    guessing impractical.
+  - What a guessed code gives an attacker is the challenge text and device
+    description, not a session. A session also needs the operator's signature.
+  - The CLI's origin check refuses a challenge minted for a look-alike's own
+    origin; a relay through the real dashboard passes it (above).
+  - The remaining risk is an operator who approves a code they did not request
+    (the relay above).
+- **Host allowlist on localhost.** A reverse proxy that forwards a different
+  `Host` to the localhost listener is now refused. Such setups should use a
+  `bind` entry with the proxy's hostname.
+
+## 7. Choices that differ from the narrowest reading
+
+- **Defaults.** With no `dashboard.auth` block, SSH and password sign-in are on
+  beside passkeys. Defaulting to passkey-only would protect an existing
+  passkey-only install from gaining methods on upgrade, but the dashboard has
+  not shipped, so there is no such install; the operator chose these defaults.
+  Narrow them with `methods:`.
+- **Operator lockout scope.** It applies to password and TOTP only (§3), not
+  to passkey or SSH, to avoid a remote lock-out of the operator. Those methods
+  are not guessable, so an attacker holding the operator lock cannot keep the
+  real operator out.
+- **IPv6 client bucket.** The full address, with the /64 as a network
+  throttle on the guessable paths. A /64 as the client let one device on a
+  SLAAC LAN lock every other device out; the throttle still stops one host
+  rotating through 2^64 addresses to guess codes or passwords.
+- **Credential changes.** Setting the first password from Access also needs a
+  step-up. On a fresh remote session that is an SSH or passkey confirmation.
+- **Enrolment link.** A password enrolled through the localhost link does not
+  require confirming with an existing passkey (a second passkey does). The link
+  itself is SSH-signed and single-use.
+- **Wording.** The existing pages' passkey-specific labels ("Approve with
+  passkey" and similar) now name no method, because the dialog chooses it.

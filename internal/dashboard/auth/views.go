@@ -1,0 +1,110 @@
+package auth
+
+import (
+	"sort"
+	"time"
+)
+
+// PasskeyView is the Access screen's shape for one passkey (never the public key
+// bytes: the screen shows provenance, not material).
+type PasskeyView struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	RPID        string `json:"rp_id"`
+	Listener    string `json:"listener"`
+	DeviceBound bool   `json:"device_bound"`
+	Created     string `json:"created"`
+	LastUsed    string `json:"last_used"`
+	Uses        int    `json:"uses"`
+	Locked      bool   `json:"locked"`
+}
+
+func passkeyView(c *Credential) PasskeyView {
+	return PasskeyView{
+		ID: c.ID, Name: c.Name, RPID: c.RPID, Listener: string(c.Listener),
+		DeviceBound: c.DeviceBound, Created: tsOrEmpty(c.Created), LastUsed: tsOrEmpty(c.LastUsed),
+		Uses: c.Uses, Locked: c.Locked,
+	}
+}
+
+func (m *Manager) passkeyList(operator string) []PasskeyView {
+	out := []PasskeyView{}
+	for _, c := range m.deps.Store.CredentialsFor(operator) {
+		out = append(out, passkeyView(c))
+	}
+	return out
+}
+
+// SessionView is the Access screen's shape for one session.
+type SessionView struct {
+	ID        string `json:"id"`
+	Device    string `json:"device"`
+	Addr      string `json:"addr"`
+	Listener  string `json:"listener"`
+	Method    string `json:"method"`
+	Transport string `json:"transport"`
+	Host      string `json:"host,omitempty"`
+	Created   string `json:"created"`
+	LastSeen  string `json:"last_seen"`
+	Expires   string `json:"expires"` // the latest it can last (session.max applied)
+	Current   bool   `json:"current"`
+}
+
+// sessionList is the operator's live sessions: one that has expired, gone
+// idle or lost its credential is not listed (it no longer signs anything in).
+func (m *Manager) sessionList(current Session) []SessionView {
+	out := []SessionView{}
+	for _, s := range m.liveSessions(current.Operator) {
+		out = append(out, SessionView{
+			ID: s.ID, Device: s.Device, Addr: s.Addr, Listener: string(s.Listener),
+			Method: string(s.EffectiveMethod()), Transport: string(sessTransport(s)), Host: s.Host,
+			Created: tsOrEmpty(s.Created), LastSeen: tsOrEmpty(s.LastSeen), Expires: tsOrEmpty(m.expiresAt(s)),
+			Current: s.ID == current.ID,
+		})
+	}
+	return out
+}
+
+// liveSessions are operator's sessions that still sign in. The rest are
+// deleted here.
+func (m *Manager) liveSessions(operator string) []Session {
+	var out []Session
+	now := m.now()
+	for _, s := range m.deps.Store.SessionsFor(operator) {
+		if why := m.sessionEnded(s, now); why != "" {
+			m.endSession(s, why)
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// SessionLive reports whether a session id still signs in (the config
+// editor reclaims an ended session's staged edits when its table is full).
+func (m *Manager) SessionLive(id string) bool {
+	s, ok := m.deps.Store.Session(id)
+	return ok && m.sessionEnded(s, m.now()) == ""
+}
+
+// ListenerFact is one bound listener on the Access screen.
+type ListenerFact struct {
+	Listener string   `json:"listener"`
+	RPID     string   `json:"rp_id"`
+	Origins  []string `json:"origins"`
+}
+
+func (m *Manager) listenerFacts() []ListenerFact {
+	out := []ListenerFact{}
+	for _, rp := range m.allRPs() {
+		out = append(out, ListenerFact{Listener: string(rp.Listener), RPID: rp.ID, Origins: rp.Origins})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Listener < out[j].Listener })
+	return out
+}
+
+// StepupFresh reports whether a session's last step-up is within d (for the UI's
+// freshness readout).
+func StepupFresh(s Session, d time.Duration, now time.Time) bool {
+	return !s.StepupAt.IsZero() && now.Sub(s.StepupAt) <= d
+}

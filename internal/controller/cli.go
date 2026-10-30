@@ -135,12 +135,16 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 	}
 
 	host := resolveHost(c.host, spec.Request.Step.Host)
-	opt := launchOptsFor(c.iso, spec.Request)
-	// The skill surface (step.done and any granted verbs) over the daemon's
-	// socket, as paseo agents get it. Only where the agent can reach that
-	// socket: a local launch the sandbox does not mask the state dir from.
-	if skillSocketReachable(host, opt) {
-		for k, v := range dispatch.LocalSkillEnv(spec.Request) {
+	req := spec.Request
+	opt := withAgent(launchOptsFor(c.iso, req), c.recipe.tool, &req, true)
+	if sandboxApplies(host, opt) {
+		prompt += sandboxNote(req)
+	} else if host == "" {
+		// Unsandboxed and local: the conductor skill surface (`conductor
+		// call step.done`, the granted verbs) over the daemon's local
+		// socket — the same env the paseo path hands a local agent. A
+		// sandboxed launch mints its own token, bound to its sandbox.
+		for k, v := range dispatch.SkillEnv(req, dispatch.LocalSkillEndpoint()) {
 			env = append(env, k+"="+v)
 		}
 	}
@@ -203,14 +207,16 @@ func (c *cliController) ResumeSession(_ context.Context, id string, agentAuthore
 		return nil, ErrNoFollowup
 	}
 	sctx, scancel := context.WithCancel(context.Background())
-	return &cliSession{id: id, c: c, toolID: id, host: c.host, opt: resumeOpts(c.iso, agentAuthored), cancel: scancel, ctx: sctx}, nil
+	return &cliSession{id: id, c: c, toolID: id, host: c.host, opt: withAgent(resumeOpts(c.iso, agentAuthored), c.recipe.tool, nil, false), cancel: scancel, ctx: sctx}, nil
 }
 
-func (c *cliController) start(ctx context.Context, dir string, env, argv []string, stdin string) (cliProc, error) {
+// start runs argv. fullEnv: env is the launch's complete environment (a
+// sandboxed agent's), not additions to the daemon's own.
+func (c *cliController) start(ctx context.Context, dir string, env, argv []string, stdin string, fullEnv bool) (cliProc, error) {
 	if c.launch != nil {
 		return c.launch(ctx, dir, env, argv, stdin)
 	}
-	return startCLIProc(ctx, dir, env, argv, stdin)
+	return startCLIProc(ctx, dir, env, argv, stdin, fullEnv)
 }
 
 // launchOn runs cmd either locally in dir with env applied (host == "") or,
@@ -231,7 +237,7 @@ func (c *cliController) launchOn(ctx context.Context, host, dir string, env []st
 		revoke()
 		return nil, err
 	}
-	proc, err := c.start(ctx, localDir, localEnv, wrapped, cmd.stdin)
+	proc, err := c.start(ctx, localDir, localEnv, wrapped, cmd.stdin, sandboxApplies(host, opt))
 	if err != nil {
 		revoke()
 		return nil, err
@@ -301,7 +307,7 @@ func (b *boundedBuffer) String() string {
 // stdin fed to it ("" → no stdin, i.e. /dev/null). The process is
 // session-scoped (ctx cancels it), matching the other controllers'
 // background-agent lifetime.
-func startCLIProc(ctx context.Context, dir string, env, argv []string, stdin string) (cliProc, error) {
+func startCLIProc(ctx context.Context, dir string, env, argv []string, stdin string, fullEnv bool) (cliProc, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("empty command")
 	}
@@ -309,7 +315,11 @@ func startCLIProc(ctx context.Context, dir string, env, argv []string, stdin str
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = append(os.Environ(), env...)
+	if fullEnv {
+		cmd.Env = env
+	} else {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
@@ -865,5 +875,6 @@ func (s *cliSession) releaseWorktree(ctx context.Context) error {
 	if !owns || id == "" || s.c == nil || s.c.prov == nil {
 		return nil
 	}
+	forgetWorkspace(s.cwd)
 	return s.c.prov.RemoveWorktree(ctx, id)
 }

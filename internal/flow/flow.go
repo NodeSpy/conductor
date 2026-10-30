@@ -192,11 +192,23 @@ func savedWFFrom(ctx context.Context) string {
 
 // Runner executes fired triggers through the trigger grammar.
 type Runner struct {
-	Cfg     *config.Config
-	Conns   *connector.Registry
-	Agents  AgentServices
-	Code    *code.Executor
-	Secrets *secrets.Resolver
+	// PushWork pushes a sandboxed agent step's committed work to its
+	// dispatch branch when the step ends (docs/design/agent-sandbox.md §6):
+	// the agent holds no push credential, conductor pushes. nil, or an
+	// error wrapping ErrNothingToPush (an unsandboxed agent, a review step):
+	// nothing is pushed.
+	PushWork func(ctx context.Context, dispatchID string) (map[string]any, error)
+	Cfg      *config.Config
+	Conns    *connector.Registry
+	Agents   AgentServices
+	// Bots is the bot autonomy gate (nil when no bot is configured;
+	// a bot-bound skill grant then fails closed).
+	Bots BotGate
+	// BotRouter serves the `bot:` helper step (nil = no bot service:
+	// the step fails, naming why).
+	BotRouter BotRouter
+	Code      *code.Executor
+	Secrets   *secrets.Resolver
 	// SecretVals are the resolved named secrets: values ({{.secrets.<name>}}).
 	SecretVals map[string]string
 	// VaultVals are the preloaded listable-vault entries
@@ -218,6 +230,10 @@ type Runner struct {
 	// the `sleep:` helper step both go through it, so neither can block a
 	// shutdown. Injectable for retry tests.
 	sleep func(ctx context.Context, d time.Duration) error
+	// cancelReg maps a live run's history id to its cancel func, so an
+	// operator can Stop a running run (see cancel.go). A pointer so the Runner
+	// stays copyable by value (New takes one by value) without copying a lock.
+	cancelReg *cancelReg
 }
 
 // New builds a Runner with defaults filled in.
@@ -239,6 +255,9 @@ func New(r Runner) *Runner {
 	}
 	if r.Code == nil {
 		r.Code = &code.Executor{}
+	}
+	if r.cancelReg == nil {
+		r.cancelReg = &cancelReg{}
 	}
 	return &r
 }
@@ -397,9 +416,19 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	ctx = context.WithValue(ctx, policyKey{}, r.resolvePolicy(spec))
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	ctx = withDefaultGate(ctx, spec.Gate)
+	ctx = withDefaultIsolation(ctx, spec.Isolation)
 	ctx = r.withRunBudget(ctx, t, spec)
 	ctx, runCost := withCostAcc(ctx)
 	ctx, hist := r.beginHistory(ctx, run, t, spec, shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow))
+	// Register a cancel for this run so an operator can Stop it (cancel.go).
+	// Only a recorded run (its history id is non-empty) is stoppable — a
+	// shadow/dry run has nothing to stop and nothing to retry.
+	if id := hist.runHistoryID(); id != "" {
+		var cancel context.CancelCauseFunc
+		ctx, cancel = context.WithCancelCause(ctx)
+		r.cancelReg.register(id, cancel)
+		defer r.cancelReg.unregister(id)
+	}
 	// Stamp the run's provenance for memory writes: a `uses: memory.remember`
 	// step or hook records where the memory came from with no step plumbing.
 	ctx = memory.WithSource(ctx, memory.Source{Run: run.ID, Trigger: t.Kind, Repo: t.Target.Repo,
@@ -1411,7 +1440,7 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	// so its sessions bound under keys the sweep looks for under another
 	// name. Same root cause as the trigger-index bug; this is the call
 	// path that fix missed.
-	stepCtx := withIdentityScope(withDefaultGate(ctx, wf.Gate), config.WorkflowScope(name))
+	stepCtx := withIdentityScope(withDefaultIsolation(withDefaultGate(ctx, wf.Gate), wf.Isolation), config.WorkflowScope(name))
 	if saved != nil {
 		stepCtx = context.WithValue(stepCtx, savedWFKey{}, name)
 	}
@@ -1593,6 +1622,9 @@ func (r *Runner) execDetached(ctx context.Context, t core.Trigger, step config.S
 			return nil, "", err
 		}
 	}
+	// The isolation: it carries — the operator's opt-out of the sandbox
+	// (agent-authored detach is refused before this point).
+	step.Isolation = r.effectiveIsolation(ctx, step)
 	req := dispatch.Request{
 		Trigger: t, Action: act, Step: step, Identity: identity,
 		Model: model, Provider: provider, Shadow: shadow, Wait: true, Data: data,
@@ -1918,6 +1950,10 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		spendRes = res
 	}
 	historySetInputs(ctx, id, map[string]any{"agent": identity, "prompt": clipText(act.Prompt, 4000)})
+	// The isolation: the dispatch carries (a step's own, else its
+	// trigger's / workflow's) — before the agent-authored strip below, which
+	// then removes an inherited opt-out as well.
+	step.Isolation = r.effectiveIsolation(ctx, step)
 	authored := agentAuthored(ctx)
 	if authored {
 		// Strip the inheritable grants at the point the dispatch is BUILT.
@@ -2024,6 +2060,21 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		}
 		outputs["gate"] = map[string]any{"passed": true, "rounds": rounds}
 	}
+	// The end-of-step push: a sandboxed agent cannot push, so conductor
+	// pushes its committed HEAD to the dispatch branch now — after the gate
+	// passed, before the diff below reads what is still unpushed (and so
+	// before expect_push judges whether the work landed).
+	if r.PushWork != nil && !shadow && !step.Background && !inGate(ctx) && ref.Workdir != "" {
+		pushed, perr := r.PushWork(ctx, req.DispatchID)
+		switch {
+		case perr == nil:
+			outputs["push"] = pushed
+		case errors.Is(perr, ErrNothingToPush):
+		default:
+			outputs["push"] = map[string]any{"error": perr.Error()}
+			r.Log("%s end-of-step push for %s: %v", flowTag(t), id, perr)
+		}
+	}
 	// Diff preview (#36 §17): the PROPOSED change (uncommitted + unpushed)
 	// read from the agent's worktree lands in the step's outputs — later
 	// steps can present it on an ask verb ({{.<id>.diff}}) for approval
@@ -2070,6 +2121,11 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	}
 	return outputs, ref.Output, nil
 }
+
+// ErrNothingToPush is PushWork's answer for a dispatch conductor does not
+// push for (an unsandboxed agent pushes itself; a review step pushes
+// nothing).
+var ErrNothingToPush = errors.New("nothing to push")
 
 // harvestMemory applies the memory output contract to an agent step's final
 // output: a `remember:` block (fenced or a JSON key) persists with the run's

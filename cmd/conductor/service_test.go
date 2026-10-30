@@ -245,3 +245,35 @@ func TestDefaultConfigAndVaultFollowTheResolvedDir(t *testing.T) {
 		t.Fatalf("--config must still win, got %q", got)
 	}
 }
+
+// A `conductor run` started from a shell that descends from a systemd service
+// inherits INVOCATION_ID; it must not take itself for the service (it would
+// exit on every reload, with nothing to restart it).
+func TestLaunchedByServiceManagerNeedsTheServiceItself(t *testing.T) {
+	if serviceKind() != "systemd" {
+		t.Skip("systemd detection")
+	}
+	defer func(e func(string) string, p func() int, c func() string) { svcEnv, svcPID, svcParentComm = e, p, c }(svcEnv, svcPID, svcParentComm)
+	env := map[string]string{}
+	svcEnv = func(k string) string { return env[k] }
+	svcPID = func() int { return 4242 }
+	parent := "bash"
+	svcParentComm = func() string { return parent }
+	for _, c := range []struct {
+		name    string
+		env     map[string]string
+		parent  string
+		service bool
+	}{
+		{"no systemd", map[string]string{}, "systemd", false},
+		{"the unit's own process", map[string]string{"INVOCATION_ID": "x", "SYSTEMD_EXEC_PID": "4242"}, "systemd", true},
+		{"a descendant of another unit", map[string]string{"INVOCATION_ID": "x", "SYSTEMD_EXEC_PID": "17"}, "bash", false},
+		{"old systemd, started by the manager", map[string]string{"INVOCATION_ID": "x"}, "systemd", true},
+		{"old systemd, started from a shell", map[string]string{"INVOCATION_ID": "x"}, "bash", false},
+	} {
+		env, parent = c.env, c.parent
+		if got := launchedByServiceManager(); got != c.service {
+			t.Errorf("%s: launchedByServiceManager = %v, want %v", c.name, got, c.service)
+		}
+	}
+}

@@ -2,6 +2,9 @@
 conductor.env
 /conductor
 dist/
+# The dashboard's embedded SPA build is COMMITTED so `go build`/`go install`
+# never need Node (design §8). It is the one dist/ that must be tracked.
+!internal/dashboard/dist/
 *.pem
 state.json
 audit.jsonl

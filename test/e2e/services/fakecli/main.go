@@ -58,6 +58,9 @@ func main() {
 		if resume != "" {
 			runtime = "cli:claude-code(resume)"
 		}
+		fixer.BrowserProbe(cwd, prompt)
+		fixer.WalletProbe(cwd, prompt)
+		fixer.TicketWalletProbe(cwd, prompt)
 		_ = fixer.Apply(cwd, runtime, prompt)
 		signalDone(runtime, prompt)
 		// A `[[reply {...}]]` marker is the scripted structured answer for the

@@ -106,12 +106,21 @@ func (c *agentDeckController) NewSession(ctx context.Context, spec Spec, _ Handl
 	host := resolveHost(c.host, spec.Request.Step.Host)
 	opt := launchOptsFor(c.iso, spec.Request)
 
+	if c.deckSandboxed(host, opt) {
+		return c.newSandboxedDeckSession(ctx, spec, env, prompt+sandboxNote(spec.Request), opt)
+	}
+
 	args := append([]string{"launch"}, c.args...)
-	args = append(args, "--title", title, "--group", group, "--prompt", prompt)
+	args = append(args, "--title", title, "--group", group, "--message", prompt)
 	// The RESOLVED model (empty = bare launch: pass nothing and let the tool
 	// use its own default).
 	if m := spec.Request.Model; m != "" {
 		args = append(args, "--model", m)
+	}
+	if spec.Cwd != "" && host == "" {
+		// The worktree, named: with no path agent-deck puts a session in
+		// its group's existing one — another dispatch's worktree.
+		args = append(args, spec.Cwd)
 	}
 
 	out, err := c.exec(ctx, host, spec.Cwd, env, opt, args...)
@@ -240,6 +249,9 @@ type agentDeckSession struct {
 	env  []string
 	host string     // resolved at creation (controller/profile host, or ""; see resolveHost)
 	opt  launchOpts // resolved isolation policy, reused for session subcommands
+	// workspace is a sandboxed session's registered workspace, forgotten
+	// when the session is removed ("" = not sandboxed).
+	workspace string
 
 	mu   sync.Mutex
 	done chan struct{}
@@ -297,7 +309,10 @@ func (s *agentDeckSession) idle(ctx context.Context) bool {
 		return true
 	}
 	switch strings.ToLower(ds.Status) {
-	case "", "idle", "done", "completed", "finished", "ready", "stopped", "exited":
+	case "", "idle", "done", "completed", "finished", "ready", "stopped", "exited",
+		// The session's process died (agent-deck's status for it): nothing
+		// more will happen in it.
+		"error":
 		return true
 	}
 	return false
@@ -309,5 +324,6 @@ func (s *agentDeckSession) Cancel(context.Context) error { return nil }
 // Close removes the session from agent-deck (`remove`).
 func (s *agentDeckSession) Close(ctx context.Context) error {
 	_, err := s.c.exec(ctx, s.host, "", s.env, s.opt, "remove", s.id)
+	forgetWorkspace(s.workspace)
 	return err
 }

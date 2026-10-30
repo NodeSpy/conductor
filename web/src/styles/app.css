@@ -1,0 +1,652 @@
+/* The dashboard's app styles. Tokens only (css/tokens.css) — no raw colours.
+ * Phase 1 covers the app shell and the Overview/Activity screen; the status
+ * vocabulary rules are ported from the prototype's marks.css. */
+
+* { box-sizing: border-box; }
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+body {
+  background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
+  font: var(--type-body-m);
+  -webkit-font-smoothing: antialiased;
+}
+a {
+  color: var(--color-text-accent);
+  text-decoration: none;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.serif {
+  font-family: var(--font-family-serif);
+  font-weight: 600;
+}
+.mono {
+  font-family: var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- app shell: rail + page ---- */
+.app {
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  min-height: 100vh;
+}
+.rail {
+  background: var(--color-bg-rail);
+  border-right: var(--border-width) solid var(--color-border-subtle);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: var(--space-5) var(--space-4);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) var(--space-5);
+}
+.logo-mark {
+  height: 26px;
+  width: auto;
+}
+.wordmark {
+  font-family: var(--font-family-serif);
+  font-weight: 600;
+  font-size: 1.25rem;
+  color: var(--color-text-primary);
+}
+.nav {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nav-item {
+  display: block;
+  padding: 9px var(--space-3);
+  border-radius: var(--radius-control);
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+.nav-item.on {
+  background: var(--color-accent-subtle);
+  color: var(--color-text-accent);
+  font-weight: 600;
+}
+.nav-item.soon {
+  color: var(--color-text-disabled);
+  cursor: default;
+}
+.rail-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.theme-btn {
+  all: unset;
+  cursor: pointer;
+  padding: 8px var(--space-3);
+  border-radius: var(--radius-control);
+  border: var(--border-width) solid var(--color-border-default);
+  color: var(--color-text-secondary);
+  font-size: var(--type-caption-size);
+  text-align: center;
+}
+.theme-btn:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+}
+.conn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  padding: 0 var(--space-3);
+}
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-status-neutral-solid);
+}
+.conn[data-conn='live'] .conn-dot {
+  background: var(--color-status-success-solid);
+}
+.conn[data-conn='reconnecting'] .conn-dot {
+  background: var(--color-status-warning-solid);
+}
+
+.page {
+  padding: var(--pad-page-y) var(--pad-page-x);
+  max-width: 1100px;
+  width: 100%;
+  /* A grid/flex item defaults to min-width: auto, so without this the page
+   * track refuses to shrink below its content's min-content — the Activity
+   * table's intrinsic width — and drags the whole app wider than a phone
+   * viewport. Letting it shrink is what keeps the layout inside 390px. */
+  min-width: 0;
+}
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-stack);
+  min-width: 0;
+}
+
+/* The Activity table can be wider than a phone; it scrolls inside its own
+ * wrapper rather than pushing the page past the viewport. On desktop it fits,
+ * so no scrollbar appears. */
+.tbl-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---- banners ---- */
+.banner {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-card);
+  font-size: var(--type-body-s-size);
+}
+.banner.err {
+  background: var(--color-status-danger-bg);
+  border: var(--border-width) solid var(--color-status-danger-border);
+  color: var(--color-status-danger-fg);
+}
+
+/* ---- tiles (At a glance) ---- */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--gap-stack);
+}
+.tile {
+  background: var(--color-bg-surface);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  padding: var(--pad-card);
+  box-shadow: var(--shadow-1);
+  display: block;
+  color: inherit;
+}
+.tile-label {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tile-value {
+  font-family: var(--font-family-serif);
+  font-weight: 600;
+  font-size: 2rem;
+  line-height: 1.1;
+  margin-top: var(--space-2);
+}
+.tile-value.mono {
+  font-family: var(--font-family-mono);
+  font-size: 1.3rem;
+}
+.tile-value[data-tone='attn'] {
+  color: var(--color-text-accent);
+}
+.tile-sub {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  margin-top: var(--space-1);
+}
+
+/* ---- panels ---- */
+.panel {
+  background: var(--color-bg-surface);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  padding: var(--pad-card);
+  box-shadow: var(--shadow-1);
+}
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.panel-title {
+  font-size: var(--type-h2-size);
+  margin: 0;
+  color: var(--color-text-primary);
+}
+.panel-sub,
+.panel-say {
+  font-size: var(--type-body-s-size);
+  color: var(--color-text-secondary);
+}
+.panel-say {
+  margin: 0 0 var(--space-3);
+}
+.calm {
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+.split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--gap-stack);
+}
+
+/* ---- rows (Home's row, the model for every list) ---- */
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-2);
+  border-top: var(--border-width) solid var(--color-border-subtle);
+  position: relative;
+}
+.row:first-child {
+  border-top: 0;
+}
+.row-main {
+  flex: 1;
+  min-width: 0;
+}
+.row-title {
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.row-meta {
+  font-size: var(--type-code-s-size);
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
+}
+.row-age {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.why-line {
+  display: block;
+  font-size: var(--type-body-s-size);
+  color: var(--color-status-danger-fg);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 44ch;
+}
+.more {
+  display: inline-block;
+  margin-top: var(--space-3);
+  font-size: var(--type-body-s-size);
+}
+.btn {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  padding: 7px var(--space-3);
+  border-radius: var(--radius-control);
+  border: var(--border-width) solid var(--color-border-default);
+  color: var(--color-text-primary);
+  font-size: var(--type-caption-size);
+  white-space: nowrap;
+}
+.btn:hover {
+  border-color: var(--color-border-strong);
+}
+.more-btn {
+  all: unset;
+  cursor: pointer;
+  margin-top: var(--space-3);
+  color: var(--color-text-accent);
+  font-size: var(--type-body-s-size);
+}
+
+/* a row that needs someone: a thin leading edge in its state's colour */
+.row[data-row='fail'] {
+  box-shadow: inset var(--border-indicator) 0 0 var(--color-status-danger-solid);
+}
+
+/* ---- the runs-per-hour chart ---- */
+.chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 120px;
+  padding: var(--space-2) 0;
+}
+.bar {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+.bar-stack {
+  width: 100%;
+  display: flex;
+  flex-direction: column-reverse;
+  height: 100%;
+  justify-content: flex-start;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.seg {
+  width: 100%;
+  display: block;
+}
+.seg.passed {
+  background: var(--color-status-success-chart);
+  border-top: 2px solid var(--run-strip-cap);
+}
+.seg.running {
+  background: var(--run-strip-running);
+}
+.seg.failed {
+  background: var(--run-strip-failed);
+}
+.seg.other {
+  background: var(--run-strip-waiting);
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.swatch.passed {
+  background: var(--color-status-success-chart);
+}
+.swatch.running {
+  background: var(--run-strip-running);
+}
+.swatch.failed {
+  background: var(--run-strip-failed);
+}
+
+/* ---- table (Activity) ---- */
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--type-body-s-size);
+}
+.tbl thead th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  font-size: var(--type-caption-size);
+  padding: var(--space-2) var(--pad-cell-x);
+  border-bottom: var(--border-width) solid var(--color-border-default);
+}
+.tbl tbody td {
+  padding: var(--pad-cell-y) var(--pad-cell-x);
+  border-bottom: var(--border-width) solid var(--color-border-subtle);
+  vertical-align: middle;
+}
+.tbl tbody tr[data-row='fail'] > td:first-child {
+  box-shadow: inset var(--border-indicator) 0 0 var(--color-status-danger-solid);
+}
+.cell-title {
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.cell-sub {
+  font-size: var(--type-code-s-size);
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
+}
+.id {
+  color: var(--color-text-tertiary);
+  font-size: var(--type-code-s-size);
+}
+tr.quiet td {
+  color: var(--color-text-secondary);
+}
+.grp-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--pad-cell-x) var(--space-2);
+}
+.grp-t {
+  font-family: var(--font-family-serif);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.grp-n {
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.grp-head[data-tone='attn'] .grp-n {
+  color: var(--color-text-accent);
+  font-weight: 700;
+}
+.grp-row td {
+  padding: 0;
+  border: 0;
+}
+
+/* ---- facts (Machine) ---- */
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+}
+.facts dt {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.facts dd {
+  margin: 2px 0 0;
+  color: var(--color-text-primary);
+}
+
+/* ---- the status vocabulary (ported from css/marks.css) ---- */
+[data-s='ok'],
+[data-s='success'] {
+  --mk: var(--color-status-success-solid);
+  --s-fg: var(--color-status-success-fg);
+}
+[data-s='run'],
+[data-s='staged'] {
+  --mk: var(--color-status-running-solid);
+  --s-fg: var(--color-status-running-fg);
+}
+[data-s='wait'] {
+  --mk: var(--color-status-warning-solid);
+  --s-fg: var(--color-status-warning-fg);
+}
+[data-s='fail'] {
+  --mk: var(--color-status-danger-solid);
+  --s-fg: var(--color-status-danger-fg);
+}
+[data-s='idle'],
+[data-s='skip'] {
+  --mk: var(--color-status-neutral-solid);
+  --s-fg: var(--color-status-neutral-fg);
+}
+[data-s='ember'] {
+  --mk: var(--color-accent-default);
+  --s-fg: var(--color-text-accent);
+}
+.st {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  vertical-align: middle;
+  line-height: 1.3;
+}
+.st i {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--mk, var(--color-icon-muted));
+}
+.st i svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+.st[data-s='run'],
+.st[data-s='ok'],
+.st[data-s='success'] {
+  color: var(--s-fg);
+}
+.st[data-s='fail'],
+.st[data-s='ember'],
+.st[data-s='wait'] {
+  color: var(--s-fg);
+  font-weight: var(--font-weight-bold);
+}
+.st.lg i,
+.st.lg i svg {
+  width: 16px;
+  height: 16px;
+}
+.st.mk-only {
+  gap: 0;
+}
+.st[data-s='run'] i svg {
+  animation: spin var(--motion-duration-spin) linear infinite;
+  transform-origin: center;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .st[data-s='run'] i svg {
+    animation: none;
+  }
+}
+
+.menu-btn,
+.conn-bar {
+  display: none;
+}
+
+/* ---- responsive: phone ---- */
+/* The rail becomes a slim top bar; the nav folds behind the menu button so a
+   page opens on its own content, not on fourteen links. */
+@media (max-width: 860px) {
+  .app {
+    grid-template-columns: 1fr;
+    align-content: start;
+  }
+  .rail {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    height: auto;
+    max-height: 100dvh;
+    overflow-y: auto;
+    padding: var(--space-2) var(--space-4);
+    border-right: 0;
+    border-bottom: var(--border-width) solid var(--color-border-subtle);
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: var(--space-2);
+  }
+  .rail-top {
+    display: block;
+  }
+  .brand {
+    padding: 0;
+    min-height: 44px;
+  }
+  .conn-bar {
+    display: flex;
+    margin-left: auto;
+    padding: 0 var(--space-2);
+  }
+  .rail .rail-foot .conn-rail {
+    display: none;
+  }
+  .menu-btn {
+    all: unset;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: 0; /* .conn-bar before it takes the free space */
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0 var(--space-3);
+    border-radius: var(--radius-control);
+    border: var(--border-width) solid var(--color-border-default);
+    color: var(--color-text-primary);
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .menu-btn:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+  .rail .nav,
+  .rail .rail-foot {
+    display: none;
+  }
+  .rail.open .nav {
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-2) 0;
+  }
+  .rail.open .rail-foot {
+    display: flex;
+    padding-bottom: var(--space-2);
+  }
+  .nav-item {
+    padding: 12px var(--space-3);
+  }
+  .tiles {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .split {
+    grid-template-columns: 1fr;
+  }
+  .page {
+    padding: var(--pad-page-y) var(--pad-page-x);
+  }
+}

@@ -214,3 +214,38 @@ func TestRuntimeOfCarriesHomeToDiscovery(t *testing.T) {
 		t.Fatalf("Runtime.Home = %q, want /srv/paseo", got.Home)
 	}
 }
+
+// An EMPTY roster is not a stable answer: a runtime still starting up (paseo
+// discovering its providers) enumerates nothing for a while. Cached forever,
+// it left every dispatch on that runtime bare-launching until conductor
+// restarted. It is re-probed after EmptyRosterTTL.
+func TestEmptyRosterIsReprobedSoon(t *testing.T) {
+	var probes atomic.Int32
+	var ready atomic.Bool
+	withCountingCLI(t, &probes, func() (Roster, error) {
+		if ready.Load() {
+			return Roster{{ID: "claude-sonnet-5", Provider: "claude"}}, nil
+		}
+		return Roster{}, nil
+	})
+	cfg := testCfg(t, map[string]config.RuntimeConfig{"box": {}}, nil)
+	now := time.Now()
+	r := NewResolver(cfg, nil)
+	r.now = func() time.Time { return now }
+	ctx := context.Background()
+	if got := r.roster(ctx, "box"); len(got) != 0 {
+		t.Fatalf("starting runtime: %v", got.IDs())
+	}
+	ready.Store(true)
+	r.roster(ctx, "box")
+	if probes.Load() != 1 {
+		t.Fatalf("an empty roster was re-probed inside EmptyRosterTTL (%d probes)", probes.Load())
+	}
+	now = now.Add(EmptyRosterTTL + time.Second)
+	if got := r.roster(ctx, "box"); len(got) != 1 || probes.Load() != 2 {
+		t.Fatalf("empty roster cached past EmptyRosterTTL: %v after %d probes", got.IDs(), probes.Load())
+	}
+	if EmptyRosterTTL >= FailureTTL {
+		t.Fatal("an empty roster should be retried sooner than a failed probe")
+	}
+}

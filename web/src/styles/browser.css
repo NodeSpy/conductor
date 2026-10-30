@@ -1,0 +1,500 @@
+/* Browsers + wallet (design §4.5). Composes the shared components (panel,
+   detail-list, dl-list, banner, btn, tag, facts) and adds only what's new: the
+   session tiles and live view, the value-source field, the masked wallet tables,
+   the spend meters and limit-stack, and the purchase approval. One stack gap,
+   one control height, light and dark via the tokens. */
+
+.browsers {
+  gap: var(--gap-stack);
+}
+.browsers .page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.browsers .subhead {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: 0.95rem;
+  font-weight: var(--font-weight-semibold);
+}
+.browsers .kicker {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+.browsers .kicker.needs {
+  color: var(--color-text-accent);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Session tiles ---------------------------------------------------------- */
+.btiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--gap-stack);
+}
+.btile {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.12s ease;
+}
+.btile:hover {
+  border-color: var(--color-border-strong);
+}
+.btile-thumb {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background: var(--color-bg-sunken);
+  overflow: hidden;
+}
+.btile-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+  display: block;
+}
+.btile-body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.btile-id {
+  font-weight: var(--font-weight-semibold);
+}
+.ctrl-banner {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.8rem;
+  background: var(--color-status-warning-bg);
+  border-top: 1px solid var(--color-status-warning-border);
+  color: var(--color-text-primary);
+}
+
+/* Live view -------------------------------------------------------------- */
+.live-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--gap-stack);
+}
+@media (max-width: 1024px) {
+  .live-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.live-screen-panel {
+  padding: 0;
+  overflow: hidden;
+}
+.live-screen-panel .ctrl-banner {
+  position: static;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.bscreen {
+  background: var(--color-bg-sunken);
+  min-height: 320px;
+  display: flex;
+}
+.bscreen.takeover {
+  outline: 2px solid var(--color-accent-default);
+  outline-offset: -2px;
+  cursor: crosshair;
+}
+.live-frame {
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: contain;
+}
+.live-screen-panel .panel-foot {
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--color-border-subtle);
+  margin: 0;
+}
+.live-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-stack);
+}
+.kbd {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-family-mono);
+  font-size: 0.75rem;
+  background: var(--color-bg-surface);
+}
+.sans-gen {
+  font-family: var(--font-family-sans);
+  font-size: 1.5rem;
+}
+
+/* Choice cards (add a login) -------------------------------------------- */
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+}
+.choice {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  border: 1px solid var(--choice-card-border, var(--color-border-default));
+  border-radius: var(--radius-md);
+  background: var(--choice-card-bg, var(--color-bg-surface));
+  cursor: pointer;
+}
+.choice.on {
+  border-color: var(--color-accent-default);
+  background: var(--color-accent-subtle);
+}
+.choice.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.choice-title {
+  font-weight: var(--font-weight-semibold);
+}
+.choice-desc {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+/* Value-source field ----------------------------------------------------- */
+.vs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-3) 0;
+}
+.vs-label {
+  font-size: 0.9rem;
+  font-weight: var(--font-weight-medium);
+}
+.vs-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+.vs-menu {
+  position: relative;
+}
+.vs-src {
+  list-style: none;
+  cursor: pointer;
+  height: var(--control-h, 36px);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-3);
+  white-space: nowrap;
+  border: 1px solid var(--input-border, var(--color-border-default));
+  border-radius: var(--radius-sm);
+  background: var(--value-source-track, var(--color-bg-sunken));
+  color: var(--value-source-segment-fg, var(--color-text-secondary));
+  font-size: 0.85rem;
+}
+.vs-src::-webkit-details-marker {
+  display: none;
+}
+.vs-src-list {
+  position: absolute;
+  z-index: 20;
+  top: calc(var(--control-h, 36px) + 4px);
+  left: 0;
+  min-width: 220px;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px var(--color-scrim);
+}
+.vs-src-list button {
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--color-text-primary);
+}
+.vs-src-list button:hover {
+  background: var(--color-state-hover);
+}
+.vs-more {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: 0.75rem;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.vs-body {
+  flex: 1;
+}
+.vs-input {
+  width: 100%;
+  height: var(--control-h, 36px);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--input-border, var(--color-border-default));
+  border-radius: var(--radius-sm);
+  background: var(--input-bg, var(--color-bg-field));
+  color: var(--input-fg, var(--color-text-primary));
+}
+.vs-input.mono {
+  font-family: var(--font-family-mono);
+  font-size: 0.85rem;
+}
+.vs-check {
+  font-size: 0.8rem;
+  margin: 0;
+}
+.vs-msg.warn {
+  font-size: 0.8rem;
+  color: var(--color-text-accent);
+  margin: 0;
+}
+
+/* Wallet tables + masked values ----------------------------------------- */
+.wl-fields {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--space-2);
+}
+.wl-fields th {
+  text-align: left;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-tertiary);
+  padding: var(--space-1) var(--space-3) var(--space-1) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.wl-fields td {
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  vertical-align: middle;
+}
+.wl-masked {
+  font-family: var(--font-family-mono);
+  letter-spacing: 0.12em;
+}
+.wl-src {
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
+.wl-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--gap-stack);
+}
+@media (max-width: 1100px) {
+  .wl-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Spend meters + limit stack -------------------------------------------- */
+.wl-limits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.wl-lrow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-1) var(--space-3);
+  align-items: center;
+}
+.wl-ll {
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
+.wl-lv {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+}
+.wl-meter {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-sunken);
+  overflow: hidden;
+}
+.wl-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--color-sage-600, var(--color-accent-default));
+  background: var(--color-status-success-border);
+}
+.wl-meter > span[data-hi='1'] {
+  background: var(--color-status-warning-border);
+}
+.wl-layers {
+  list-style: none;
+  margin: var(--space-2) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.wl-layer {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-1) 0;
+}
+.wl-layer-name {
+  flex: 1;
+}
+.wl-layer-room {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
+.wl-layer.over .wl-layer-room {
+  color: var(--color-text-accent);
+  font-weight: var(--font-weight-semibold);
+}
+.wl-tight {
+  font-size: 0.75rem;
+  color: var(--color-text-accent);
+}
+
+/* Purchase items + rows ------------------------------------------------- */
+.wl-items {
+  width: 100%;
+  border-collapse: collapse;
+}
+.wl-items th,
+.wl-items td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.wl-items tfoot td {
+  border-bottom: 0;
+  font-variant-numeric: tabular-nums;
+}
+.wl-purow.needs {
+  border-left: 3px solid var(--color-status-warning-border);
+}
+.wl-crow.frozen {
+  opacity: 0.7;
+}
+
+/* Misc shared-ish helpers ---------------------------------------------- */
+.empty {
+  text-align: center;
+  padding: var(--space-10) var(--space-4);
+  color: var(--color-text-secondary);
+}
+.empty h3 {
+  margin: 0 0 var(--space-2);
+}
+.count.hot {
+  display: inline-block;
+  min-width: 20px;
+  text-align: center;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-default);
+  color: var(--color-text-on-accent);
+  font-size: 0.75rem;
+}
+.callout {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-sunken);
+  font-size: 0.9rem;
+  margin: var(--space-2) 0;
+}
+.callout.warn {
+  border-color: var(--color-status-warning-border);
+  background: var(--color-status-warning-bg);
+}
+.callout.err {
+  border-color: var(--color-status-danger-border);
+  background: var(--color-status-danger-bg);
+}
+.callout.info {
+  border-color: var(--color-status-info-border);
+  background: var(--color-status-info-bg);
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.seg-btn {
+  border: 0;
+  background: transparent;
+  padding: 0 var(--space-3);
+  height: var(--control-h, 36px);
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+.seg-btn.on {
+  background: var(--color-accent-subtle);
+  color: var(--color-text-primary);
+}
+.wl-grid3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+}
+@media (max-width: 720px) {
+  .wl-grid3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Modal (replace a value) ---------------------------------------------- */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--color-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: var(--space-4);
+}
+.modal {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  max-width: 480px;
+  width: 100%;
+  box-shadow: 0 16px 48px var(--color-scrim);
+}
+.modal h3 {
+  margin: 0 0 var(--space-2);
+}
+
+/* "Buying, and your details" on a bot's What it can do ------------------ */
+.wl-bot .wl-can {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.wl-bot .wl-can:last-child {
+  border-bottom: 0;
+}

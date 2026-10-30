@@ -438,6 +438,14 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	}
 	cfgFile, _ := configPath(nil)
 	controller.DaemonMaskPaths = []string{stateDir, filepath.Dir(cfgFile)}
+	// The agent sandbox covers a one-shot run's agents exactly as the
+	// daemon's (no conductor socket is served here: they get none).
+	stopSandbox, err := wireAgentSandbox(cfg, cfgFile, logf)
+	if err != nil {
+		return err
+	}
+	defer stopSandbox()
+	defer wireWorkPusher(cfg, stack.Runner, st.Audit, logf)()
 
 	// One-shot mode doesn't wire Backend-RPC runtime plugins (no long-lived
 	// dispatcher/reaper here); ACP runtime plugins still resolve as before.

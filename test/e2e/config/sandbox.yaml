@@ -1,0 +1,246 @@
+# The agent-sandbox daemon (group Z, docs/design/agent-sandbox.md): the only
+# stub daemon with the agent sandbox ON (the default) — it runs non-root in a
+# privileged container, so unprivileged user namespaces work inside it. Its
+# cli runtime drives the fake agent (fakecli) inside the sandbox: the agent
+# commits, cannot push or reach anything, and conductor pushes its work —
+# signed with the throwaway key entrypoint-sandbox.sh generates. The
+# opencode runtime's fake `opencode serve` and the agent-deck runtime's fake
+# session tool (deck-agent, run through conductor's --wrapper) are the same
+# probing agent, sandboxed the way each runtime is.
+connectors:
+  default:
+    use: web
+    base_url: http://localhost:8099
+    listen: 0.0.0.0:8099
+  github:
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+    identity:
+      commit_author: self
+      read_token: app
+      write_token: e2e-user-write-token
+    me:
+      logins:
+        - conductor-user
+    policy:
+      reply_to_bots: decline_only
+    webhook:
+      listen: 0.0.0.0:8788
+      secret: e2e-webhook-secret
+      verify_signature: false
+runtimes:
+  cli_claude:
+    use: acp
+    agent: claude-code
+    transport: cli
+    default: true
+  pz:
+    use: paseo
+  oc:
+    use: opencode
+  deck:
+    use: agent-deck
+    command: [agent-deck, -c, deck-agent]
+triggers:
+  # A fixer: sandboxed, its work pushed by conductor (end-of-step + git.push).
+  - "on": github.merge_conflict
+    filter:
+      repo:
+        - grpz/sandbox
+    steps:
+      - type: agent
+        name: fx_sandbox
+        runtime: cli_claude
+        workspace: worktree
+        archive_when_done: true
+        prompt: "Resolve {{.repo}}#{{.pr}} (cli:claude-code, sandboxed) [[sandbox-probe]]"
+  # The same fixer on the opencode runtime: its own `opencode serve`,
+  # sandboxed, reached over the port the sandbox exposes.
+  - "on": github.merge_conflict
+    filter:
+      repo:
+        - grpz/opencode
+    steps:
+      - type: agent
+        name: fx_oc_sandbox
+        runtime: oc
+        workspace: worktree
+        archive_when_done: true
+        prompt: "Resolve {{.repo}}#{{.pr}} (opencode, sandboxed) [[sandbox-probe]]"
+  # And on agent-deck: the session's tool runs through conductor's wrapper.
+  - "on": github.merge_conflict
+    filter:
+      repo:
+        - grpz/deck
+    steps:
+      - type: agent
+        name: fx_deck_sandbox
+        runtime: deck
+        workspace: worktree
+        archive_when_done: true
+        prompt: "Resolve {{.repo}}#{{.pr}} (agent-deck, sandboxed) [[sandbox-probe]]"
+  # Paseo hand-offs: sandboxed by default (the conductor-owned
+  # <provider>-sandboxed entry) — and the operator's explicit opt-out,
+  # `isolation: {mode: none}` on the workflow, launches the plain provider.
+  - "on": github.review_requested
+    filter:
+      repo:
+        - grpz/hoff
+    steps:
+      - type: agent
+        name: hoff_default
+        runtime: pz
+        workspace: worktree
+        background: true
+        prompt: "Review {{.repo}}#{{.pr}} with me"
+  - "on": github.review_requested
+    isolation: { mode: none }
+    filter:
+      repo:
+        - grpz/hoffout
+    steps:
+      - type: agent
+        name: hoff_optout
+        runtime: pz
+        workspace: worktree
+        background: true
+        prompt: "Review {{.repo}}#{{.pr}} with me"
+  # Detached launches (the handover shape: a user-owned workspace, forgotten):
+  # sandboxed by default too; the operator's opt-out launches them plain.
+  - "on": github.merge_conflict
+    filter:
+      repo:
+        - grpz/detach
+    steps:
+      - { type: agent, agent: zdetach-default, runtime: pz, detach: true, prompt: "Take this over" }
+  - "on": github.merge_conflict
+    isolation: { mode: none }
+    filter:
+      repo:
+        - grpz/detachout
+    steps:
+      - { type: agent, agent: zdetach-optout, runtime: pz, detach: true, prompt: "Take this over" }
+  # A review: sandboxed too, and conductor pushes nothing from it.
+  - "on": github.review_requested
+    filter:
+      repo:
+        - grpz/review
+    steps:
+      - type: agent
+        name: rv_sandbox
+        runtime: cli_claude
+        workspace: worktree
+        archive_when_done: true
+        prompt: "Review {{.repo}}#{{.pr}} (sandboxed reviewer) [[sandbox-probe]]"
+  # Group BR: conductor's browser. An event's dispatch drives it anonymously
+  # (its identity has a saved session and a credential it may NOT use: the
+  # request is not the operator's) …
+  - "on": github.merge_conflict
+    filter:
+      repo:
+        - grpz/browser
+    steps:
+      - type: agent
+        name: br_event
+        agent: br_event
+        runtime: cli_claude
+        workspace: worktree
+        archive_when_done: true
+        prompt: "Resolve {{.repo}}#{{.pr}} [[browser-probe]]"
+  # … and the operator's own `conductor run` signs in with the credential.
+  - "on": manual
+    name: br_operator
+    steps:
+      - type: agent
+        name: br_op
+        agent: br_op
+        runtime: cli_claude
+        prompt: "Sign in to the test site [[browser-probe operator]]"
+  # Group PAY: the operator's own run signs up at the fake shop from a
+  # profile and buys a widget — the purchase approved by the harness, signed.
+  - "on": manual
+    name: pay_operator
+    steps:
+      - type: agent
+        name: pay_op
+        agent: pay_op
+        runtime: cli_claude
+        prompt: "Buy a widget [[wallet-probe]]"
+# The operator who approves purchases: a throwaway key the entrypoint mints
+# (it replaces this placeholder in the daemon's copy of the config).
+operators:
+  ops: { ssh_key: "ssh-ed25519 AAAA-E2E-OPS-KEY-PLACEHOLDER" }
+# Group TB: a bot whose ticket's spend_limit constrains its REAL browser
+# purchases (the bots + tickets + browser/wallet surface in one daemon). Its
+# home session runs on the fake paseo (pz, resolved to the fake paseo on PATH);
+# its browser purchases go through its gate as commit_money proposals, and a
+# ticket's spend_limit is the binding layer the purchase is evaluated against.
+bots:
+  shopper:
+    description: "e2e bot: a ticket's spend_limit caps its real browser purchases"
+    operators: [ops]
+    home: { runtime: pz }
+    worker: { runtime: cli_claude, timeout: 2m }
+    autonomy:
+      tiers: { commit_money: [browser.purchase] }
+      amounts: { browser.purchase: total }
+      spend_cap: { per_action: 1000, per_period: 1000, period: 24h, currency: USD }
+vaults:
+  e2evault:
+    type: file
+    dir: /home/conductor/data/vault
+browser:
+  allow: ["localhost:8090", "127.0.0.1:8090", "localhost:8091", "127.0.0.1:8092"]
+  # Group PAY: TEST personal details and the test card 4242 4242 4242 4242 in
+  # the file vault; nothing real.
+  profiles:
+    shopper:
+      identities: ["agent:pay_*"]
+      fields:
+        name: '{{ vault "e2evault" "p_name" }}'
+        email: '{{ vault "e2evault" "p_email" }}'
+        phone: '{{ vault "e2evault" "p_phone" }}'
+        address.line1: '{{ vault "e2evault" "p_street" }}'
+        address.city: '{{ vault "e2evault" "p_city" }}'
+        address.region: '{{ vault "e2evault" "p_region" }}'
+        address.postal_code: '{{ vault "e2evault" "p_zip" }}'
+        address.country: '{{ vault "e2evault" "p_country" }}'
+      sites:
+        - { origin: "http://localhost:8091", fields: [name, email, phone, address] }
+      visible: { email: fact }
+  cards:
+    e2ecard:
+      kind: virtual
+      number: '{{ vault "e2evault" "card_number" }}'
+      expiry: '{{ vault "e2evault" "card_expiry" }}'
+      cvc: '{{ vault "e2evault" "card_cvc" }}'
+      name: '{{ vault "e2evault" "p_name" }}'
+      merchants: ["http://localhost:8091"]
+      identities: ["agent:pay_*", "bot:shopper"]
+      limits: { per_purchase: 30, per_day: 60, per_month: 100 }
+  payments: { approvers: [ops], approval_ttl: 10m }
+  logins:
+    - site: localhost
+      identities: ["agent:br_*"]
+  credentials:
+    - name: testsite
+      origin: http://localhost:8090
+      identities: ["agent:br_*"]
+      login_url: http://localhost:8090/login
+      username: { vault: e2evault, key: username }
+      password: { vault: e2evault, key: password }
+      otp: { vault: e2evault, key: otp }
+policy:
+  concurrency:
+    max_agents: 4
+sandbox:
+  push:
+    signing_key: /home/conductor/data/keys/signing
+    name: Conductor User
+    email: conductor@users.noreply.forge.test
+store:
+  state_file: /home/conductor/data/state.json
+  audit_log: /home/conductor/data/audit.jsonl

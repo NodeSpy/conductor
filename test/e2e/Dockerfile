@@ -26,6 +26,7 @@ RUN go build -o /out/conductor ./cmd/conductor \
  && go build -o /out/fakeagentdeck ./test/e2e/services/fakeagentdeck \
  && go build -o /out/fakeacp       ./test/e2e/services/fakeacp \
  && go build -o /out/fakecli       ./test/e2e/services/fakecli \
+ && go build -o /out/testsite      ./test/e2e/services/testsite \
  && go build -o /out/conductor-acme-engine ./test/plugins/acme-engine \
  && go build -o /out/conductor-acme-listener ./test/plugins/acme-listener
 
@@ -48,8 +49,15 @@ RUN set -e; for p in github slack discord ntfy pushover notifiarr smee; do \
 
 # ---- runtime stage ----
 FROM alpine:3.20
-RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh \
+# chromium + a font: conductor's browser for agents (group BR).
+RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh util-linux chromium font-dejavu \
  && adduser -D -h /home/conductor conductor
+# The agent-sandbox daemon (group Z) runs as this user: a "secret" ssh key in
+# its home the sandboxed agent must not be able to read.
+RUN mkdir -p /home/conductor/.ssh \
+ && echo "NOT-A-REAL-KEY-e2e-secret" > /home/conductor/.ssh/id_fake \
+ && chmod 700 /home/conductor/.ssh && chmod 600 /home/conductor/.ssh/id_fake \
+ && chown -R conductor:conductor /home/conductor
 COPY --from=build /out/ /usr/local/bin/
 COPY --from=github-plugin /out/ /usr/local/bin/
 # The reference ENGINE plugin (test/plugins/acme-engine) is a real out-of-process
@@ -74,12 +82,14 @@ RUN if [ -f /opt/plugin-bin/conductor-github ]; then cp /opt/plugin-bin/conducto
 # paseo_bin: still resolves it on PATH. The fake tool runtimes are installed under
 # the exact names conductor's controllers exec on PATH (stub mode): the cli
 # controller runs `claude`/`codex`, the opencode-native controller runs `opencode
-# serve`, the agent-deck controller runs `agent-deck`. fakeacp is referenced by an
+# serve`, the agent-deck controller runs `agent-deck` (whose sessions run the
+# fake `deck-agent` tool). fakeacp is referenced by an
 # explicit `command:` in the stub controllers config. In live mode the real CLIs are
 # mounted ahead of these on PATH (see docker-compose.live.yml).
 RUN ln -sf /usr/local/bin/fakepaseo     /usr/local/bin/paseo \
  && ln -sf /usr/local/bin/fakecli       /usr/local/bin/claude \
  && ln -sf /usr/local/bin/fakecli       /usr/local/bin/codex \
  && ln -sf /usr/local/bin/fakeopencode  /usr/local/bin/opencode \
- && ln -sf /usr/local/bin/fakeagentdeck /usr/local/bin/agent-deck
+ && ln -sf /usr/local/bin/fakeagentdeck /usr/local/bin/agent-deck \
+ && ln -sf /usr/local/bin/fakeagentdeck /usr/local/bin/deck-agent
 WORKDIR /home/conductor

@@ -22,7 +22,7 @@ vaults:
 |---|---|---|---|---|
 | `conductor` | `path?` (default `~/.config/conductor/vault.json`), `unlock: { key: <ref> }` | yes | yes | entry names |
 | `onepassword` | `account?`, `service_account?` (a bootstrap ref → `OP_SERVICE_ACCOUNT_TOKEN`) | no | no | op item paths: `Private/GitHub/token` |
-| `pass` | `prefix?` (a store subdirectory) | yes | no | entry names (first line is the secret) |
+| `pass` | `prefix?` (a store subdirectory), `dir?` (the store, default `$PASSWORD_STORE_DIR` or `~/.password-store`, for listing) | yes | names (from the store's files) | entry names (first line is the secret) |
 | `file` | `dir` (a mounted secrets directory: systemd `LoadCredential`, docker, k8s) | no | yes | file names (may not escape `dir`) |
 | `hashicorp` | `addr`, `mount?` (default `secret`), `namespace?`, `unlock: { token: <ref> }` | yes | no | KV v2 `path/to/secret` or `path#field` (field default `value`) |
 
@@ -35,6 +35,21 @@ step options, prompts):
 {{ vault "op" "Private/GitHub/token" }}
 {{ .vaults.house.gh_token }}              # field form, for simple key names
 ```
+
+A whole config field may also be any of these, resolved where the field is
+used (connection fields at load, a browser credential at fill time):
+
+```
+${env.GH_PAT}                              # the environment (conductor.env included); env:GH_PAT is the same
+{{secret "house/gh_token"}}                # a named secret: the vault entry <vault>/<key>
+```
+
+`${settings.NAME}` is **not** a secret source. A setting is plain config,
+substituted into the file at load and readable by anything that reads it. A
+field that holds a secret (a browser credential's password or code, a
+mailbox's password) refuses it at load, and refuses the loader's `${NAME}`
+too: that would put the value into the config. Write `${env.NAME}`, read
+when the value is used.
 
 Config-field references resolve at load/reload; step templates resolve at
 render. The field form (`.vaults.<name>.<key>`) is preloaded from listable
@@ -53,6 +68,15 @@ scheme URIs (`op://…`, `pass:…`, `vault:…`, `file:…`) and the named
 `secrets:` block were replaced by this model — auto-migration rewrites them
 at boot (see [[Migration]]), and an unmigrated reference fails loudly rather
 than passing through as a literal.
+
+## Listing for a picker: names, never values
+
+`conductor browser vault-items <vault>` (and the dashboard's login picker)
+lists what a vault holds without a value: 1Password's items (vault, title,
+websites, field labels and types, read from `op item list` / `op item get`
+into types with no value field), conductor, `file` and `pass` entry names, and
+HashiCorp secret paths (KV v2 `LIST`). Each offers its reference in the syntax
+above, never the retired `op://` scheme. See [[Browser]].
 
 ## Read/write verbs
 

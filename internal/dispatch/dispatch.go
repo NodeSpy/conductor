@@ -108,6 +108,10 @@ type Request struct {
 	// event data, never chosen by the agent.
 	DispatchID string
 	Data       map[string]any // extra template vars (e.g. prior step outputs)
+	// LiteralPrompt sends Action.Prompt as-is, never template-rendered: a
+	// bot's home prompt carries text agents wrote (handoff notes), which
+	// must not be evaluated against the dispatch's template data.
+	LiteralPrompt bool
 }
 
 // RunRef is the outcome of a dispatch.
@@ -374,6 +378,21 @@ func (d *Dispatcher) WaitForAgent(ctx context.Context, id string, timeout time.D
 // same primitive internally (see liveAgentForPR).
 func (d *Dispatcher) Send(ctx context.Context, id, prompt string) error {
 	return d.sendToAgent(ctx, id, prompt)
+}
+
+// SendImages is Send with image files attached (`paseo send --image`).
+func (d *Dispatcher) SendImages(ctx context.Context, id, prompt string, images []string) error {
+	if err := checkPromptSize(prompt); err != nil {
+		return err
+	}
+	res, err := d.backend().Send(ctx, SendOptions{ID: id, Prompt: prompt, Images: images})
+	if err != nil {
+		if s := strings.TrimSpace(res.Stderr); s != "" {
+			return fmt.Errorf("%w: %s", err, truncate(s, 300))
+		}
+		return err
+	}
+	return nil
 }
 
 // SendCapture delivers a follow-up prompt and waits for the turn to finish

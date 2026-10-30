@@ -145,6 +145,7 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	"internal/dispatch/toolserver.go": {
 		{"BuildToolServer", "argv provenance for the tool subprocess; the trust bit travels beside it and the socket resolves authorization from the credential, not from these"},
 		{"SkillEnv", "as above"},
+		{"SkillIdentityFor", "as above: the token's identity carries the raw target beside its trust bit (TargetTrusted), which every scope check reads"},
 	},
 	"internal/controller/runner.go": {
 		{"runKey", "delegates to Trigger.Key"},

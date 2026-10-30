@@ -23,6 +23,7 @@ type fakeOpencodeServer struct {
 	lastMessage  map[string]any
 	lastProvider string
 	lastModel    string
+	lastModelObj string
 }
 
 func (f *fakeOpencodeServer) handler() http.Handler {
@@ -44,6 +45,9 @@ func (f *fakeOpencodeServer) handler() http.Handler {
 		f.lastMessage = body
 		f.lastProvider, _ = body["providerID"].(string)
 		f.lastModel, _ = body["modelID"].(string)
+		if m, ok := body["model"].(map[string]any); ok {
+			f.lastModelObj = m["providerID"].(string) + "/" + m["modelID"].(string)
+		}
 		f.mu.Unlock()
 		// Reflect the prompt text back as the assistant's reply.
 		var text string
@@ -110,6 +114,10 @@ func TestOpencodeNewSessionPromptsInWorktree(t *testing.T) {
 	// "provider/model" spelling splits into opencode's two fields.
 	if fs.lastProvider != "anthropic" || fs.lastModel != "claude" {
 		t.Fatalf("model routing = %q/%q, want anthropic/claude", fs.lastProvider, fs.lastModel)
+	}
+	// opencode 1.x reads the model object.
+	if fs.lastModelObj != "anthropic/claude" {
+		t.Fatalf("model object = %q, want anthropic/claude", fs.lastModelObj)
 	}
 }
 

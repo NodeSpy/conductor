@@ -32,6 +32,11 @@ func TestExampleConfigValidates(t *testing.T) {
 	} {
 		t.Setenv(v, "dummy-"+v)
 	}
+	// The worked browser/wallet example references the built-in conductor vault
+	// "house". A real deploy runs `conductor vault init` once; here a throwaway
+	// key stands in for that (as the generated App key above does), so the vault
+	// opens instead of reporting itself disabled for lack of a key.
+	t.Setenv("CONDUCTOR_VAULT_KEY", "dGVzdC12YXVsdC1rZXktbWF0ZXJpYWwtMzItYnl0ZXMh")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
@@ -42,6 +47,14 @@ func TestExampleConfigValidates(t *testing.T) {
 	}
 	if !cfg.HasConnectors() {
 		t.Fatal("example config should be on the connectors schema")
+	}
+	// The shipped example leaves sandbox.agents unset (commented), so bots are
+	// confined by default — config-compat with the seam's default-on wiring.
+	if !cfg.AgentSandboxOn() {
+		t.Fatal("the example config must resolve to sandbox-on (bots confined by default)")
+	}
+	if w := cfg.RemovedFieldWarnings(); len(w) != 0 {
+		t.Errorf("the example config still uses a removed field: %v", w)
 	}
 	stack, err := buildFlowStack(cfg, nil, nil, true)
 	if err != nil {
@@ -225,6 +238,48 @@ func TestStarterConfigFreshSeedLayout(t *testing.T) {
 	}
 }
 
+// The example's commented identity and attachments lines are valid as
+// written: uncommented, they load and every field lands.
+func TestExampleConfigIdentityBlock(t *testing.T) {
+	raw, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(raw)
+	for _, k := range []string{"display_name:", "tagline:", "avatar: { shape", "color:", "personality:", "  tone:", "  style:", "attachments:", "avatar: { icon: radar"} {
+		old := "    # " + k
+		if strings.Count(doc, old) != 1 {
+			t.Fatalf("the example's identity block: %q appears %d times", old, strings.Count(doc, old))
+		}
+		doc = strings.Replace(doc, old, "    "+k, 1)
+	}
+	keyPath := writeTempRSAKey(t)
+	doc = strings.Replace(doc, "~/.config/conductor/github-app.pem", keyPath, 1)
+	for _, v := range []string{"GH_WEBHOOK_SECRET", "GH_SMEE_URL", "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "CW_SECRET", "GH_PAT",
+		"CONDUCTOR_INVOKE_TOKEN", "CONDUCTOR_INVOKE_HMAC"} {
+		t.Setenv(v, "dummy-"+v)
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("the uncommented identity block: %v", err)
+	}
+	id := cfg.Bots["platform-sre"].Identity
+	if id.DisplayName != "Night Owl" || id.Tagline == "" || id.Avatar == nil || id.Avatar.Shape != "circle" || id.Avatar.Eyes != "wide" || id.Color != "indigo" ||
+		id.Personality == nil || id.Personality.Tone != "terse" || id.Personality.Style == "" {
+		t.Fatalf("identity: %+v", id)
+	}
+	if l := cfg.Bots["platform-sre"].Attachments; l.MaxFileOr() != 10<<20 || l.MaxFilesOr() != 10 || l.TTL == 0 {
+		t.Fatalf("attachments: %+v", l)
+	}
+	if a := cfg.Teams["platform"].Avatar; a == nil || a.Icon != "radar" || a.Color != "teal" {
+		t.Fatalf("the team's avatar: %+v", a)
+	}
+}
+
 // The example's commented headless_mode block, uncommented as an operator
 // would, still loads and validates — and reaches the primary dispatcher.
 func TestExampleConfigHeadlessModeUncommented(t *testing.T) {
@@ -260,5 +315,47 @@ func TestExampleConfigHeadlessModeUncommented(t *testing.T) {
 	}
 	if got := cfg.PrimaryHeadlessMode().Providers; got["claude"] != "auto" || got["codex"] != "auto" {
 		t.Fatalf("primary headless_mode = %v", got)
+	}
+}
+
+// TestExampleDashboardBlockLoads uncomments the documented dashboard: block in
+// config.example.yaml, appends it to a minimal config and loads it, so the
+// documented options (auth methods, tailscale tls, bind listeners) stay valid.
+func TestExampleDashboardBlockLoads(t *testing.T) {
+	raw, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	var block []string
+	for i, l := range lines {
+		if l != "# dashboard:" {
+			continue
+		}
+		for _, b := range lines[i:] {
+			if b == "#" || !strings.HasPrefix(b, "# ") {
+				break
+			}
+			block = append(block, strings.TrimPrefix(b, "# "))
+		}
+		break
+	}
+	if len(block) < 10 {
+		t.Fatalf("documented dashboard block not found (%d lines)", len(block))
+	}
+	doc := "connectors:\n  timer:\n    use: cron\n    schedules: { tick: { every: 1h } }\n" +
+		"triggers:\n  - on: timer.tick\n    steps: [{ id: t, type: command, command: [\"true\"] }]\n" +
+		strings.Join(block, "\n") + "\n"
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("the documented dashboard block must load: %v\n%s", err, strings.Join(block, "\n"))
+	}
+	d := cfg.Dashboard
+	if !d.Enabled || len(d.Bind) != 2 || !d.Tailscale.TLSOn() || !d.Auth.PasswordNeedsTOTP() {
+		t.Fatalf("documented block parsed wrong: %+v", d)
 	}
 }

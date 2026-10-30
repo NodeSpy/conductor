@@ -1,0 +1,6 @@
+node_modules/
+.bin/
+.runtime.json
+test-results/
+playwright-report/
+screenshots/

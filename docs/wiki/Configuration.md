@@ -43,7 +43,11 @@ in a config.
 | `memory:` | shared agent memory: `store:` (a KV `stores:` entry) \| `dir:` (Markdown files) \| `type: memory` (ephemeral) — served by `memory.*` | [[Memory]] |
 | `workflows:` | reusable step lists with `inputs:` / `outputs:` (+ a default `gate:` for their agent steps) | [[Workflows]], [[Gates]] |
 | `policy:` | global controls incl. the `budget:` spend cap; also valid on connectors and triggers (most specific wins) | [[Policy]], [[Cost-Accounting]] |
+| `usage:` | what reports show of model usage: `mode: off` (default) \| `subscription` (observed units per runtime/model) \| `api` (+ dollars); optional `sources:` for plan-window data. Display only — caps enforce in every mode | [[Cost-Accounting]] |
 | `vaults:` | named secret stores (`conductor`/`onepassword`/`pass`/`file`/`hashicorp`), read as `{{ vault "<name>" "<key>" }}` with per-vault read/write verbs | [[Secrets]] |
+| `operators:` | the humans who approve bot proposals: `ssh_key` (approvals are SSH-signed), `aliases` (chat ids that are this operator) | [[Bots]] |
+| `bots:` | persistent conversational agents: charter, memory repo, home session (paseo), workers (cli), opt-in `proactive:` sweeps, `peers:`, `team:`, skill grant, `autonomy:` tiers / promotion / shadow / spend cap, `memory:` limits (the prompt's index budget, read and recall sizes, per-kind document caps, archiving), `use:` a pack's bot template with `connectors:` and `grant:` | [[Bots]] · [[Bots#size-limits]] · [[Bot-Templates]] |
+| `teams:` | groups of bots: ceilings bots inherit and can only narrow (operators, autonomy, budgets with a proactive pool, isolation, credentials, browser logins), intra-team peering, a shared `knowledge:` repo (with the same index, read and cap limits), `routing:` (rules, lead, fallback) | [[Bots#teams]] |
 | `checks:` | named quality-gate checks (command / code / verb / critic agent) that `gate: run:` lists reference | [[Gates]] |
 | `pricing:` | model→$ overrides for cost estimation (`models:` glob patterns, `default:`) | [[Cost-Accounting]] |
 | `imports:` | split the config across files (globs, deep-merged) | below |
@@ -745,6 +749,11 @@ way on a connectors-model config.
 
 ## Validation and fleet safety
 
+- **A removed field is ignored, never an error.** Conductor auto-updates, so a
+  key a release removes stays readable: it loads, does nothing, and is named
+  in a warning by `conductor validate` and in the daemon's log. `folder:`
+  (on bots, teams, workflows, triggers and `packs:` entries) is one: folders
+  were removed — delete it when convenient.
 - **Unknown keys are load errors.** The whole document (and every imported
   file) decodes strictly: a typo'd key (`known_hostss:`, `filtres:`, a
   misplaced `approve:`) fails the load naming the key and line, instead of

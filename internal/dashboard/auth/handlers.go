@@ -1,0 +1,582 @@
+package auth
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// maxBody bounds an auth request body (assertions are small).
+const maxBody = 1 << 20
+
+// Mux returns the auth, enrollment and Access routes. They are mounted directly
+// (not behind Protect): each handler does exactly the auth it needs, because
+// sign-in and enrollment happen BEFORE there is a session. server.go wraps the
+// rest of /api with Protect. Every route sits behind sameOriginJSON.
+func (m *Manager) Mux() http.Handler {
+	m.muxOnce.Do(func() { m.mux = sameOriginJSON(m.routes()) })
+	return m.mux
+}
+
+// sameOriginJSON refuses what a cross-site page could send: a request whose
+// Origin is not this page's own, a browser fetch marked cross-site or
+// same-site, and any non-GET request without a JSON body type — a cross-site
+// "simple" request (text/plain, a form) needs no preflight, so the Content-Type
+// is what makes a foreign page's POST impossible without the browser asking
+// first. A request with no Origin and no Sec-Fetch-Site (the CLI) passes the
+// first two checks. Every value of a repeated header is checked, not just the
+// first.
+func sameOriginJSON(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, o := range r.Header.Values("Origin") {
+			if o != "" && !sameOrigin(o, requestOrigin(r)) {
+				writeErr(w, http.StatusForbidden, "cross_origin", "this request came from another site", "")
+				return
+			}
+		}
+		for _, s := range r.Header.Values("Sec-Fetch-Site") {
+			if s != "" && s != "same-origin" && s != "none" {
+				writeErr(w, http.StatusForbidden, "cross_origin", "this request came from another site", "")
+				return
+			}
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			ct := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))
+			if ct != "application/json" {
+				writeErr(w, http.StatusUnsupportedMediaType, "content_type", "send the request body as application/json", "")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// sameOrigin compares two origins, ignoring case and a default port.
+func sameOrigin(a, b string) bool {
+	return canonOrigin(a) == canonOrigin(b)
+}
+
+func canonOrigin(o string) string {
+	o = strings.ToLower(strings.TrimSpace(o))
+	switch {
+	case strings.HasPrefix(o, "https://") && strings.HasSuffix(o, ":443"):
+		o = strings.TrimSuffix(o, ":443")
+	case strings.HasPrefix(o, "http://") && strings.HasSuffix(o, ":80"):
+		o = strings.TrimSuffix(o, ":80")
+	}
+	return o
+}
+
+func (m *Manager) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /api/v1/auth/state", m.handleState)
+	mux.HandleFunc("POST /api/v1/auth/login/begin", m.handleLoginBegin)
+	mux.HandleFunc("POST /api/v1/auth/login/finish", m.handleLoginFinish)
+	mux.HandleFunc("POST /api/v1/auth/logout", m.handleLogout)
+	mux.HandleFunc("POST /api/v1/auth/stepup/begin", m.handleStepupBegin)
+	mux.HandleFunc("POST /api/v1/auth/stepup/finish", m.handleStepupFinish)
+
+	mux.HandleFunc("POST /api/v1/enroll/redeem", m.handleEnrollRedeem)
+	mux.HandleFunc("POST /api/v1/enroll/begin", m.handleEnrollBegin)
+	mux.HandleFunc("POST /api/v1/enroll/finish", m.handleEnrollFinish)
+
+	mux.HandleFunc("GET /api/v1/passkeys", m.handlePasskeys)
+	mux.HandleFunc("DELETE /api/v1/passkeys/{id}", m.handlePasskeyDelete)
+	mux.HandleFunc("GET /api/v1/sessions", m.handleSessions)
+	mux.HandleFunc("DELETE /api/v1/sessions", m.handleSessionsDeleteAll)
+	mux.HandleFunc("DELETE /api/v1/sessions/{id}", m.handleSessionDelete)
+	mux.HandleFunc("GET /api/v1/access", m.handleAccess)
+	m.methodRoutes(mux)
+
+	return mux
+}
+
+// authed resolves the session and enforces CSRF (design §6.4). Protected auth
+// handlers call it; a failure writes the response and returns ok=false.
+func (m *Manager) authed(w http.ResponseWriter, r *http.Request) (Session, bool) {
+	info := reqInfoFrom(r)
+	sess, err := m.ValidateCookie(r, info.Listener, info.Node)
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "unauthenticated", "sign in to continue", "")
+		return Session{}, false
+	}
+	if err := checkCSRF(sess, r); err != nil {
+		writeErr(w, http.StatusForbidden, "csrf", err.Error(), "reload to refresh the token")
+		return Session{}, false
+	}
+	return sess, true
+}
+
+func readJSON(r *http.Request, v any) error {
+	b, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, v)
+}
+
+// clientKey is the lockout and pending-challenge bucket for one client: its
+// tailnet node, or its full IP address (an IPv6 /128 too: a /64 is usually a
+// whole LAN, and one device on it must not stand for every other).
+func clientKey(r *http.Request) string {
+	if info := reqInfoFrom(r); info.Node != "" {
+		return "node:" + info.Node
+	}
+	return "addr:" + addrPrefix(r.RemoteAddr, 32, 128)
+}
+
+// clientNetwork is the coarser bucket a client's network shares: an IPv4 /24 or
+// an IPv6 /64 (a tailnet node is its own network). It throttles guessing spread
+// over many addresses and bounds what one network can hold of a shared table.
+func clientNetwork(r *http.Request) string {
+	if info := reqInfoFrom(r); info.Node != "" {
+		return "node:" + info.Node
+	}
+	return "net:" + addrPrefix(r.RemoteAddr, 24, 64)
+}
+
+// guess is what a request's failure would be a guess at.
+type guess int
+
+const (
+	// guessCredential is an SSH signature or a passkey assertion: not
+	// guessable, so only the client's own bucket counts it.
+	guessCredential guess = iota
+	// guessCode is a cross-device login code (40 bits): the client's bucket
+	// and its network's throttle.
+	guessCode
+	// guessSecret is a password or TOTP code: the client, its network and the
+	// operator, whichever address the guesses come from.
+	guessSecret
+)
+
+// lockKeys are the buckets a request's guess of kind g counts against. On a
+// loopback connection there is no client bucket: every local process shares
+// 127.0.0.1, so one could otherwise lock the operator's own browser out of
+// SSH and passkeys. Guessable paths keep their network throttle and operator
+// lock there, which is what bounds guessing. opBucket is the guessed
+// operator's bucket (Manager.operatorBucket; "" for none).
+func lockKeys(r *http.Request, g guess, opBucket string) []string {
+	var keys []string
+	if !loopbackRequest(r) {
+		keys = append(keys, clientKey(r))
+	}
+	if g != guessCredential {
+		keys = append(keys, clientNetwork(r))
+	}
+	if g == guessSecret && opBucket != "" {
+		keys = append(keys, opBucket)
+	}
+	return keys
+}
+
+// loopbackRequest reports a request from this machine over loopback.
+func loopbackRequest(r *http.Request) bool {
+	if reqInfoFrom(r).Node != "" {
+		return false
+	}
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(strings.Split(host, "%")[0])
+	return ip != nil && ip.IsLoopback()
+}
+
+// lockMessage says which bucket refused a guess and until when, so a locked
+// operator knows whether it is their address, their network or their
+// password and codes that are paused.
+func lockMessage(refused string, until time.Time) string {
+	at := until.UTC().Format(time.RFC3339)
+	switch {
+	case strings.HasPrefix(refused, "op:"):
+		return "too many wrong passwords or authenticator codes for operator " + strings.TrimPrefix(refused, "op:") +
+			" (from any address) — password and code sign-in are paused until " + at + "; SSH keys and passkeys still work"
+	case strings.HasPrefix(refused, "net:"):
+		return "too many failed attempts from this network — try again after " + at
+	default:
+		return "too many failed attempts from this address — try again after " + at
+	}
+}
+
+// addrPrefix is the remote address's IP masked to v4 or v6 bits, as a prefix;
+// an address that doesn't parse is used as given.
+func addrPrefix(remote string, v4, v6 int) string {
+	host := remote
+	if h, _, err := net.SplitHostPort(remote); err == nil {
+		host = h
+	}
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i] // an IPv6 zone
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return host
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return fmt.Sprintf("%s/%d", ip4.Mask(net.CIDRMask(v4, 32)), v4)
+	}
+	return fmt.Sprintf("%s/%d", ip.Mask(net.CIDRMask(v6, 128)), v6)
+}
+
+func deviceLabel(r *http.Request) string {
+	ua := r.Header.Get("User-Agent")
+	switch {
+	case ua == "":
+		return "a browser"
+	case strings.Contains(ua, "iPhone"):
+		return "iPhone · Safari"
+	case strings.Contains(ua, "Firefox"):
+		return "Firefox"
+	case strings.Contains(ua, "Chrome"):
+		return "Chrome"
+	case strings.Contains(ua, "Safari"):
+		return "Safari"
+	default:
+		return "a browser"
+	}
+}
+
+// --- state / sign-in ---
+
+func (m *Manager) handleState(w http.ResponseWriter, r *http.Request) {
+	info := reqInfoFrom(r)
+	// required is true when operators are configured: sign-in is then enforced on
+	// the API, and the SPA shows the sign-in gate. With no operators the dashboard
+	// serves open (a bootstrap box), so the gate stays out of the way.
+	required := m.deps.Operators != nil && len(m.deps.Operators()) > 0
+	pol := m.policy()
+	sess, err := m.ValidateCookie(r, info.Listener, info.Node)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"signed_in": false, "required": required, "listener": string(info.Listener),
+			"transport": string(info.Transport), "methods": m.SignInMethods(r),
+			"password_needs_totp": pol.PasswordRequiresTOTP,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"signed_in":           true,
+		"required":            required,
+		"operator":            sess.Operator,
+		"listener":            string(sess.Listener),
+		"transport":           string(info.Transport),
+		"method":              string(sess.EffectiveMethod()),
+		"expires":             sess.Expires.UTC().Format(time.RFC3339),
+		"csrf":                sess.CSRF,
+		"stepup_at":           tsOrEmpty(sess.StepupAt),
+		"stepup_methods":      m.StepupMethods(r, sess),
+		"password_needs_totp": pol.PasswordRequiresTOTP,
+	})
+}
+
+func (m *Manager) handleLoginBegin(w http.ResponseWriter, r *http.Request) {
+	if m.lockedOut(w, lockKeys(r, guessCredential, "")...) {
+		return
+	}
+	info := reqInfoFrom(r)
+	if !m.policy().SignIn(MethodPasskey) {
+		writeErr(w, http.StatusForbidden, "method_disabled", "passkey sign-in is not enabled", "")
+		return
+	}
+	if _, ok := m.passkeyRP(r); !ok {
+		writeErr(w, http.StatusBadRequest, "no_passkeys_here", "passkeys need HTTPS (or localhost) on a hostname with a relying party", "sign in with SSH or a password")
+		return
+	}
+	id, opts, err := m.BeginLoginFor(info.Listener, info.Host)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "login_begin", err.Error(), "")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ceremony_id": id, "options": json.RawMessage(opts)})
+}
+
+func (m *Manager) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		CeremonyID string          `json:"ceremony_id"`
+		Response   json.RawMessage `json:"response"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
+		return
+	}
+	a, ok := m.reserve(w, lockKeys(r, guessCredential, "")...)
+	if !ok {
+		return
+	}
+	operator, credID, _, err := m.FinishLogin(req.CeremonyID, req.Response)
+	if err != nil {
+		a.Fail()
+		writeErr(w, http.StatusUnauthorized, "login_failed", err.Error(), "")
+		return
+	}
+	a.Succeed()
+	m.signedIn(w, r, operator, MethodPasskey, credID)
+}
+
+func (m *Manager) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Logout is lenient: no CSRF needed to end your own session.
+	ck := m.Logout(r)
+	http.SetCookie(w, ck)
+	writeJSON(w, http.StatusOK, map[string]any{"signed_out": true})
+}
+
+// --- step-up ---
+
+func (m *Manager) handleStepupBegin(w http.ResponseWriter, r *http.Request) {
+	sess, ok := m.authed(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Purpose string `json:"purpose"`
+		Digest  string `json:"digest"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
+		return
+	}
+	info := reqInfoFrom(r)
+	id, opts, err := m.BeginStepupFor(info.Listener, info.Host, sess, Purpose(req.Purpose), req.Digest)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "stepup_begin", err.Error(), "")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ceremony_id": id, "options": json.RawMessage(opts)})
+}
+
+func (m *Manager) handleStepupFinish(w http.ResponseWriter, r *http.Request) {
+	sess, ok := m.authed(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		CeremonyID string          `json:"ceremony_id"`
+		Response   json.RawMessage `json:"response"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
+		return
+	}
+	token, err := m.FinishStepup(req.CeremonyID, sess, req.Response)
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "stepup_failed", err.Error(), "")
+		return
+	}
+	// Rotate the session secret on step-up (fixation resistance, design §6.3).
+	if ck, err := m.RotateSecret(sess); err == nil {
+		http.SetCookie(w, ck)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"token": token})
+}
+
+// --- enrollment (localhost only to redeem/begin/finish) ---
+
+func (m *Manager) localhostOnly(w http.ResponseWriter, r *http.Request) bool {
+	if reqInfoFrom(r).Listener != ListenerLocalhost {
+		writeErr(w, http.StatusForbidden, "localhost_only", "enrollment starts on http://localhost on the box", "run conductor dashboard enroll on the machine")
+		return false
+	}
+	return true
+}
+
+func (m *Manager) handleEnrollRedeem(w http.ResponseWriter, r *http.Request) {
+	if !m.localhostOnly(w, r) {
+		return
+	}
+	var req struct {
+		T           string `json:"t"`
+		PairingCode string `json:"pairing_code"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
+		return
+	}
+	id, operator, existing, err := m.RedeemTicket(req.T, req.PairingCode)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "enroll_redeem", err.Error(), "")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ceremony_id": id, "operator": operator, "existing": existing})
+}
+
+func (m *Manager) handleEnrollBegin(w http.ResponseWriter, r *http.Request) {
+	if !m.localhostOnly(w, r) {
+		return
+	}
+	var req struct {
+		CeremonyID string          `json:"ceremony_id"`
+		RP         string          `json:"rp"`
+		Name       string          `json:"name"`
+		Assertion  json.RawMessage `json:"assertion"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
+		return
+	}
+	info := reqInfoFrom(r)
+	var assertion []byte
+	if len(req.Assertion) > 0 && string(req.Assertion) != "null" {
+		assertion = req.Assertion
+	}
+	need, opts, err := m.BeginEnroll(info.Listener, req.CeremonyID, req.RP, req.Name, assertion)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "enroll_begin", err.Error(), "")
+		return
+	}
+	if need {
+		writeJSON(w, http.StatusOK, map[string]any{"need_assertion": true, "options": json.RawMessage(opts)})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"need_assertion": false, "options": json.RawMessage(opts)})
+}
+
+func (m *Manager) handleEnrollFinish(w http.ResponseWriter, r *http.Request) {
+	if !m.localhostOnly(w, r) {
+		return
+	}
+	var req struct {
+		CeremonyID string          `json:"ceremony_id"`
+		Name       string          `json:"name"`
+		Response   json.RawMessage `json:"response"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "malformed request", "")
+		return
+	}
+	c, err := m.FinishEnroll(req.CeremonyID, req.Name, req.Response)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "enroll_finish", err.Error(), "")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"credential": passkeyView(c)})
+}
+
+// --- Access: passkeys & sessions CRUD ---
+
+func (m *Manager) handlePasskeys(w http.ResponseWriter, r *http.Request) {
+	sess, ok := m.authed(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"passkeys": m.passkeyList(sess.Operator)})
+}
+
+func (m *Manager) handlePasskeyDelete(w http.ResponseWriter, r *http.Request) {
+	sess, ok := m.authed(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	// A passkey can only be removed by its own operator, and never the last one
+	// (you'd lock yourself out — add another first).
+	owned := m.deps.Store.CredentialsFor(sess.Operator)
+	var target *Credential
+	for _, c := range owned {
+		if c.ID == id {
+			target = c
+		}
+	}
+	if target == nil {
+		writeErr(w, http.StatusNotFound, "not_found", "no such passkey", "")
+		return
+	}
+	if len(owned) <= 1 {
+		writeErr(w, http.StatusConflict, "last_passkey", "this is your only passkey — add another first, so you can still sign in", "")
+		return
+	}
+	if _, err := m.deps.Store.DeleteCredential(id); err != nil {
+		writeErr(w, http.StatusInternalServerError, "delete", err.Error(), "")
+		return
+	}
+	m.audit(map[string]any{"event": "dashboard_passkey_revoked", "operator": sess.Operator, "credential": id, "name": target.Name})
+	writeJSON(w, http.StatusOK, map[string]any{"removed": id})
+}
+
+func (m *Manager) handleSessions(w http.ResponseWriter, r *http.Request) {
+	sess, ok := m.authed(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": m.sessionList(sess)})
+}
+
+func (m *Manager) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
+	sess, ok := m.authed(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	target, exists := m.deps.Store.Session(id)
+	if !exists || target.Operator != sess.Operator {
+		writeErr(w, http.StatusNotFound, "not_found", "no such session", "")
+		return
+	}
+	if err := m.deps.Store.DeleteSession(id); err != nil {
+		writeErr(w, http.StatusInternalServerError, "delete", err.Error(), "")
+		return
+	}
+	m.audit(map[string]any{"event": "dashboard_session_end", "operator": sess.Operator, "session": id})
+	writeJSON(w, http.StatusOK, map[string]any{"ended": id})
+}
+
+func (m *Manager) handleSessionsDeleteAll(w http.ResponseWriter, r *http.Request) {
+	sess, ok := m.authed(w, r)
+	if !ok {
+		return
+	}
+	if err := m.deps.Store.DeleteSessionsFor(sess.Operator); err != nil {
+		writeErr(w, http.StatusInternalServerError, "delete", err.Error(), "")
+		return
+	}
+	m.audit(map[string]any{"event": "dashboard_logout_all", "operator": sess.Operator})
+	info := reqInfoFrom(r)
+	http.SetCookie(w, m.clearCookie(info.Listener, info.Transport))
+	writeJSON(w, http.StatusOK, map[string]any{"signed_out": true})
+}
+
+func (m *Manager) handleAccess(w http.ResponseWriter, r *http.Request) {
+	sess, ok := m.authed(w, r)
+	if !ok {
+		return
+	}
+	pol := m.policy()
+	rec, _ := m.deps.Store.OperatorSecret(sess.Operator)
+	_, passkeyHere := m.passkeyRP(r)
+	digests := map[string]string{}
+	for _, a := range []string{"password.set", "password.remove", "totp.set", "totp.remove", "passkey.add"} {
+		digests[a] = CredentialDigest(sess.Operator, a)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"operator":  sess.Operator,
+		"passkeys":  m.passkeyList(sess.Operator),
+		"sessions":  m.sessionList(sess),
+		"listeners": m.listenerFacts(),
+		"session_policy": map[string]any{
+			"idle": m.deps.SessionIdle.String(),
+			"max":  m.deps.SessionMax.String(),
+		},
+		"password":     map[string]any{"set": rec.PasswordHash != "", "set_at": tsOrEmpty(rec.PasswordSet)},
+		"totp":         map[string]any{"set": rec.TOTPSecret != "", "set_at": tsOrEmpty(rec.TOTPSet)},
+		"passkey_here": passkeyHere,
+		"auth_policy": map[string]any{
+			"methods": pol.Methods, "password_requires_totp": pol.PasswordRequiresTOTP, "stepup": pol.Stepup,
+			"config_stepup": pol.ConfigStepup,
+		},
+		"stepup_methods":     m.StepupMethods(r, sess),
+		"credential_digests": digests,
+		"transport":          string(reqInfoFrom(r).Transport),
+	})
+}
+
+func tsOrEmpty(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}

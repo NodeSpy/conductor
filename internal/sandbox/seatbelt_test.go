@@ -79,3 +79,83 @@ func TestWrapLocalNamespaceSeatbeltOnDarwin(t *testing.T) {
 		t.Fatalf("darwin wrap must not use unshare/sandbox-net: %v", wrapped)
 	}
 }
+
+// TestSeatbeltBrowserProfile: the browser variant opens Mach broadly but
+// keeps the Keychain's services denied, issues extensions only for its own
+// paths, and keeps the network to the proxy port.
+func TestSeatbeltBrowserProfile(t *testing.T) {
+	p := seatbeltAgentProfile([]BindMount{{Path: "/b/run"}, {Path: "/Applications/Google Chrome.app", RO: true}}, &AgentProfile{Browser: true}, AgentNet{ProxyPort: 4242})
+	for _, want := range []string{
+		`(deny mach-lookup`, `(global-name "com.apple.SecurityServer")`, `MachPortRendezvousServer`,
+		`(allow file-issue-extension (subpath "/b/run"))`, `(allow file-issue-extension (subpath "/Applications/Google Chrome.app"))`,
+		"(deny network*)", `(allow network-outbound (remote ip "localhost:4242"))`,
+		`(allow network-bind network-inbound (local unix-socket (subpath "/b/run")))`,
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	if strings.Index(p, "(deny mach-lookup") < strings.Index(p, "(allow mach-lookup") {
+		t.Fatal("the Keychain denial must come after the allow (later rules win)")
+	}
+	// No blanket allowance (red-team C): every mach and IOKit rule names
+	// what it allows.
+	for _, blanket := range []string{"(allow mach-lookup)", "(allow mach-register)", "(allow iokit-open)", "(allow mach*)", "(allow iokit*)"} {
+		if strings.Contains(p, blanket) {
+			t.Fatalf("a blanket %s in the browser profile", blanket)
+		}
+	}
+	if !strings.Contains(p, `(allow mach-register (global-name-regex`) || !strings.Contains(p, `(iokit-user-client-class "IOSurfaceRootUserClient")`) {
+		t.Fatal("register and IOKit are narrowed to named targets")
+	}
+	if strings.Index(p, "(local unix-socket") < strings.Index(p, "(deny network*)") || strings.Contains(p, `unix-socket (subpath "/Applications`) {
+		t.Fatal("unix sockets only in the browser's own read-write dirs, after the deny")
+	}
+	if strings.Contains(p, "(allow network*)") || strings.Count(p, "file-issue-extension") != 2 {
+		t.Fatalf("profile:\n%s", p)
+	}
+	if strings.Contains(seatbeltAgentProfile(nil, &AgentProfile{}, AgentNet{}), "file-issue-extension") {
+		t.Fatal("an agent profile issues no extensions")
+	}
+	// The operator's window: the window server's services, by name, and
+	// still no blanket; an agent's (headless) browser has none of them.
+	if strings.Contains(p, "windowserver") || strings.Contains(p, "pasteboard") || strings.Contains(p, "IOHIDParamUserClient") {
+		t.Fatal("a headless browser reaches the window server")
+	}
+	w := seatbeltAgentProfile([]BindMount{{Path: "/b/run"}}, &AgentProfile{Browser: true, Window: true}, AgentNet{ProxyPort: 4242})
+	for _, want := range []string{`(global-name "com.apple.windowserver.active")`, `(global-name "com.apple.CARenderServer")`, `(local-name "com.apple.tsm.portname")`, `pasteboard`} {
+		if !strings.Contains(w, want) {
+			t.Errorf("window: missing %s", want)
+		}
+	}
+	for _, blanket := range []string{"(allow mach-lookup)", "(allow mach-register)", "(allow iokit-open)", "(allow mach*)", "(allow iokit*)", "(with report)"} {
+		if strings.Contains(w, blanket) {
+			t.Fatalf("a blanket %s in the window profile", blanket)
+		}
+	}
+	if strings.LastIndex(w, "(deny mach-lookup") < strings.LastIndex(w, "(allow mach-lookup") {
+		t.Fatal("the Keychain denial comes after the window's allows")
+	}
+}
+
+// TestSeatbeltBrowserMetadata: the browser profile reads metadata only
+// along its own paths — never a global allow, never a sibling or the home.
+func TestSeatbeltBrowserMetadata(t *testing.T) {
+	p := seatbeltAgentProfile([]BindMount{{Path: "/private/tmp/cbr1/run"}, {Path: "/Applications/Google Chrome.app", RO: true}}, &AgentProfile{Browser: true, Home: "/Users/op"}, AgentNet{ProxyPort: 1})
+	if strings.Contains(p, "(allow file-read-metadata)\n") {
+		t.Fatal("the browser profile allows metadata everywhere")
+	}
+	for _, want := range []string{`(literal "/")`, `(literal "/private/tmp/cbr1")`, `(literal "/Applications")`, `(literal "/var")`} {
+		if !strings.Contains(p, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	i := strings.Index(p, "(allow file-read-metadata\n")
+	block := p[i : i+strings.Index(p[i:], ")\n")]
+	if strings.Contains(block, "/Users") || strings.Contains(block, "subpath") {
+		t.Fatalf("metadata beyond the components of the allowed paths:\n%s", block)
+	}
+	if !strings.Contains(seatbeltAgentProfile(nil, &AgentProfile{}, AgentNet{}), "(allow file-read-metadata)\n") {
+		t.Fatal("an agent profile keeps its metadata (path resolution for any tool)")
+	}
+}

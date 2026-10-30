@@ -8,13 +8,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/plugin"
+	"github.com/NodeSpy/conductor/internal/procexec"
 )
 
 // selfUpdatePreflightTimeout bounds the downloaded binary's `validate` dry
@@ -584,7 +584,10 @@ func reExecInPlace() {
 		}
 	}
 	logf("auto-update: re-exec %s", exe)
-	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
+	// procexec keeps the parent-death signal: this runs on a timer goroutine,
+	// whose thread never has it, so a bare exec would let the daemon outlive
+	// a wrapper such as `unshare --kill-child`.
+	if err := procexec.Exec(exe, os.Args, os.Environ()); err != nil {
 		logf("auto-update: re-exec failed (%v); exiting for a supervisor to restart", err)
 		os.Exit(0)
 	}

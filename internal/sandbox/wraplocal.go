@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -45,6 +46,22 @@ type LocalWrapDeps struct {
 	// jail beyond the workdir + spec.FS — e.g. a code step's own code temp dir
 	// (read-only) and ctx-socket dir (read-write). Ignored unless Confine.
 	ExtraBinds []BindMount
+	// Relays pipe in-sandbox loopback ports to host-side unix sockets (an
+	// agent's model endpoint on the host's loopback) when the sandbox has no
+	// network of its own.
+	Relays []Relay
+	// Exposes serve in-sandbox loopback ports (a server the agent runs) on
+	// host-side unix sockets, for the launcher to connect to (Linux; macOS
+	// has no network namespace and reaches the port directly).
+	Exposes []Expose
+	// PassFDs hands the launch's descriptors 3..3+PassFDs-1 through the
+	// in-sandbox forwarder to the payload (a browser's CDP pipe). macOS's
+	// sandbox-exec execs the payload directly and passes them anyway.
+	PassFDs int
+	// Agent carries the macOS agent-jail extras (scratch home, shim dir,
+	// exec denials, narrowed Mach services, the proxy port); ignored on Linux,
+	// where the same intent is expressed as ExtraBinds.
+	Agent *AgentProfile
 	// EgressAddr mints a LOOPBACK egress-proxy endpoint for an allowlist —
 	// the ADVISORY path (HTTP(S)_PROXY env only).
 	EgressAddr func(allow []string) (addr, cred string, revoke func(), err error)
@@ -96,7 +113,7 @@ func WrapLocalCommand(spec *Spec, argv []string, dir string, env []string, deps 
 	jail := deps.Confine && spec.Mode == "namespace" && !spec.Privileged
 	needMasks := !jail && spec.Mode == "namespace" && !spec.Privileged && len(deps.MaskPaths) > 0
 	if jail {
-		nf = &NetForward{Binds: jailBinds(dir, spec.FS, deps.ExtraBinds)}
+		nf = &NetForward{Binds: jailBinds(dir, spec.FS, deps.ExtraBinds), Chdir: dir}
 		// The Linux jail re-enters through `conductor sandbox-net`; macOS
 		// Seatbelt (sandbox-exec) is a system binary and needs no self-exe.
 		if CheckGOOS != "darwin" {
@@ -112,6 +129,35 @@ func WrapLocalCommand(spec *Spec, argv []string, dir string, env []string, deps 
 			return nil, nil, cleanup, fmt.Errorf("sandbox: resolve conductor binary for sandbox masking: %w", serr)
 		}
 		nf = &NetForward{Self: self, Masks: append([]string(nil), deps.MaskPaths...)}
+	}
+	if jail && CheckGOOS == "darwin" && deps.Agent != nil {
+		// The macOS agent jail: Seatbelt restricts outbound to conductor's
+		// LOOPBACK proxy port (there is no network namespace to forward
+		// into), so the enforced path uses the TCP endpoint.
+		nf.Agent = deps.Agent
+		if spec.Deny && spec.HasEgress {
+			if deps.EgressAddr == nil {
+				return nil, nil, cleanup, fmt.Errorf("sandbox: enforced egress needs the proxy's loopback endpoint but none is wired")
+			}
+			addr, cred, revoke, perr := deps.EgressAddr(spec.Egress)
+			if perr != nil {
+				return nil, nil, cleanup, fmt.Errorf("sandbox: egress proxy: %w", perr)
+			}
+			if revoke != nil {
+				cleanup = revoke
+			}
+			_, port := splitHostPort(addr)
+			nf.ProxyPort, _ = strconv.Atoi(port)
+			outEnv = append(outEnv, ProxyEnv(addr, cred)...)
+		}
+		if err := spec.Check(CheckGOOS, CheckGeteuid(), CheckLookPath); err != nil {
+			return nil, nil, cleanup, err
+		}
+		wrapped, werr := spec.WrapLocal(argv, dir, wrapEnvKeys(outEnv), nf)
+		if werr != nil {
+			return nil, nil, cleanup, werr
+		}
+		return wrapped, outEnv, cleanup, nil
 	}
 	if spec.EnforcedEgress() {
 		// The STRUCTURAL allowlist (#36 iso-review C1): the sandbox has no
@@ -141,6 +187,14 @@ func WrapLocalCommand(spec *Spec, argv []string, dir string, env []string, deps 
 			nf.Binds = append(nf.Binds, BindMount{Path: filepath.Dir(sock)})
 		}
 		outEnv = append(outEnv, ProxyEnv(ForwardAddr, cred)...)
+	}
+	if jail && nf != nil {
+		// Host-loopback endpoints piped in over unix sockets: in a jail with
+		// no network of its own (deny, with or without an allowlist), the
+		// only way the agent reaches its local model router.
+		nf.Relays = deps.Relays
+		nf.Exposes = deps.Exposes
+		nf.PassFDs = deps.PassFDs
 	}
 	if err := spec.Check(CheckGOOS, CheckGeteuid(), CheckLookPath); err != nil {
 		return nil, nil, cleanup, err

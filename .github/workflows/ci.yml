@@ -27,6 +27,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - name: allow unprivileged user namespaces (the agent sandbox's real-backend tests)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
       - name: gofmt / vet / test -race (+coverage)
         id: checks
         run: |

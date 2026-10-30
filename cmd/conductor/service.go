@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -32,21 +33,48 @@ func serviceKind() string {
 // true, an auto-update applies by exiting cleanly so the manager relaunches the
 // new binary with the unit's fresh environment — a re-exec would instead inherit
 // our stale env and never pick up a regenerated unit.
+//
+// Getting this wrong is not harmless: a daemon that wrongly believes it is a
+// service exits on every reload and config apply, and nothing restarts it. The
+// environment markers alone are inherited by every descendant of a service (a
+// shell in a terminal or tmux that runs as a user unit, an agent daemon), so
+// each check also requires that this process is the service's own.
 func launchedByServiceManager() bool {
 	switch serviceKind() {
 	case "systemd":
-		// systemd sets INVOCATION_ID in the environment of every unit it starts.
-		return os.Getenv("INVOCATION_ID") != ""
-	case "launchd":
-		// launchd exports the job label as XPC_SERVICE_NAME for managed agents,
-		// and is PID 1 (the parent of its LaunchAgents).
-		if n := os.Getenv("XPC_SERVICE_NAME"); n != "" && n != "0" {
-			return true
+		// systemd sets INVOCATION_ID for a unit's processes, and (since v248)
+		// SYSTEMD_EXEC_PID to the PID it started; a descendant inherits both
+		// with another PID. Without SYSTEMD_EXEC_PID, the parent must be the
+		// manager itself.
+		if svcEnv("INVOCATION_ID") == "" {
+			return false
 		}
-		return os.Getppid() == 1
+		if p := svcEnv("SYSTEMD_EXEC_PID"); p != "" {
+			return p == strconv.Itoa(svcPID())
+		}
+		return svcParentComm() == "systemd"
+	case "launchd":
+		// launchd exports the job label as XPC_SERVICE_NAME and is the parent
+		// of its agents. A terminal's shells carry the terminal's own label
+		// (or "0"), so the label must be one of ours (sh.<name>).
+		return strings.HasPrefix(svcEnv("XPC_SERVICE_NAME"), "sh.") && svcPPID() == 1
 	}
 	return false
 }
+
+// The process facts launchedByServiceManager reads (tests replace them).
+var (
+	svcEnv        = os.Getenv
+	svcPID        = os.Getpid
+	svcPPID       = os.Getppid
+	svcParentComm = func() string {
+		b, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", os.Getppid()))
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(b))
+	}
+)
 
 // selfExe resolves conductor's own executable for the unit's ExecStart. It is
 // a var so a test exercising the writer can inject a stable non-test path (the

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/NodeSpy/conductor/internal/bot"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/plugin"
 )
@@ -99,11 +100,13 @@ func shortSha(s string) string {
 func cmdPack(args []string) error {
 	rest := positional(args)
 	if len(rest) == 0 {
-		return fmt.Errorf("usage: conductor pack <list|plan|lint|show> [args]")
+		return fmt.Errorf("usage: conductor pack <list|search|plan|lint|show|add|remove|update> [args]\n  conductor pack list [--include-templates] [--json]\n  conductor pack search [<words>] [--registry <dir|git url>] [--installed] [--include-templates] [--json]")
 	}
 	switch rest[0] {
 	case "list":
 		return cmdPackList(args)
+	case "search":
+		return cmdPackSearch(args)
 	case "plan":
 		return cmdPackPlan(args)
 	case "lint":
@@ -117,7 +120,7 @@ func cmdPack(args []string) error {
 	case "update":
 		return cmdPackUpdate(args)
 	default:
-		return fmt.Errorf("unknown pack subcommand %q (list|plan|lint|show|add|remove|update)", rest[0])
+		return fmt.Errorf("unknown pack subcommand %q (list|search|plan|lint|show|add|remove|update)", rest[0])
 	}
 }
 
@@ -281,11 +284,12 @@ func sortedAgentNames(m map[string]config.Step) []string {
 
 // cmdPackList lists the configured pack instances and their lock status.
 func cmdPackList(args []string) error {
-	path, _ := configPath(args)
+	path, rest := configPath(args)
 	cfg, _, err := loadConfig(args)
 	if err != nil {
 		return err
 	}
+	_, fl, _, _ := botFlags(rest)
 	if len(cfg.Packs) == 0 {
 		fmt.Println("no packs configured")
 		return nil
@@ -297,21 +301,151 @@ func cmdPackList(args []string) error {
 			locked[e.Instance] = e
 		}
 	}
+	kinds := map[string]config.PackSummary{}
+	for _, p := range cfg.InstalledPacks() {
+		kinds[p.Instance] = p
+	}
+	if fl["json"] == "true" {
+		ps, hidden := config.FilterPacks(cfg.InstalledPacks(), "", fl["include-templates"] == "true")
+		return printJSON(map[string]any{"packs": toJSONList(ps), "hidden_template_packs": hidden})
+	}
 	names := make([]string, 0, len(cfg.Packs))
 	for n := range cfg.Packs {
 		names = append(names, n)
 	}
 	sort.Strings(names)
 	fmt.Println("pack instances:")
+	hidden := 0
 	for _, n := range names {
 		inst := cfg.Packs[n]
+		p, vendored := kinds[n]
+		if vendored && p.TemplateOnly && fl["include-templates"] != "true" {
+			hidden++
+			continue
+		}
 		status := "NOT INITIALIZED — run `conductor init`"
 		if e, ok := locked[n]; ok {
 			status = fmt.Sprintf("%s (%s)", e.Name, e.Resolved)
 		}
-		fmt.Printf("  %-20s %s  [%s]\n", n, inst.Source, status)
+		fmt.Printf("  %-20s %s  [%s]", n, orNone(inst.Source+inst.Use), status)
+		if vendored {
+			fmt.Printf("  ships: %s", packKindsText(p.Contents))
+		}
+		fmt.Println()
+	}
+	if hidden > 0 {
+		fmt.Printf("  (%d template-only pack(s) not shown — they supply bot templates: `conductor bot templates`; --include-templates lists them)\n", hidden)
 	}
 	return nil
+}
+
+// cmdPackSearch is the registry's pack catalog: each pack with the kinds it
+// ships; template-only packs (they belong to `conductor bot new`) only with
+// --include-templates.
+func cmdPackSearch(args []string) error {
+	path, rest := configPath(args)
+	pos, fl, _, _ := botFlags(rest)
+	out, err := packCatalog(path, strings.Join(pos[1:], " "), fl["registry"], fl["installed"] == "true", fl["include-templates"] == "true")
+	if err != nil {
+		return err
+	}
+	if fl["json"] == "true" {
+		return printJSON(out)
+	}
+	ps, _ := out["packs"].([]any)
+	if len(ps) == 0 {
+		fmt.Println("no packs match")
+	}
+	for _, x := range ps {
+		p, _ := x.(map[string]any)
+		mark := " "
+		if p["installed"] == true {
+			mark = "*"
+		}
+		c, _ := p["contents"].(map[string]any)
+		fmt.Printf("%s %-22v %-9v %v\n    ships: %s\n", mark, p["name"], p["version"], p["description"], packKindsAny(c))
+		if inst, _ := p["install"].(string); inst != "" && p["installed"] != true {
+			fmt.Printf("    install: %s\n", inst)
+		}
+	}
+	if n, _ := out["hidden_template_packs"].(int); n > 0 {
+		fmt.Printf("(%d template-only pack(s) not shown — find them with `conductor bot templates`; --include-templates lists them here)\n", n)
+	}
+	for _, k := range []string{"registry_error", "config_error"} {
+		if e, ok := out[k].(string); ok {
+			fmt.Printf("(%s: %s)\n", strings.ReplaceAll(k, "_", " "), e)
+		}
+	}
+	return nil
+}
+
+// packCatalog is the catalog `pack search` and the control socket's packs
+// op serve: the installed packs, then the registry's (installedOnly: just
+// the installed), filtered.
+func packCatalog(cfgPath, search, registry string, installedOnly, includeTemplates bool) (map[string]any, error) {
+	out := map[string]any{}
+	var all []config.PackSummary
+	installed := map[string]bool{}
+	if cfg, err := config.Load(cfgPath); err == nil {
+		all = cfg.InstalledPacks()
+		for _, p := range all {
+			installed[p.Name] = true
+		}
+	} else {
+		out["config_error"] = err.Error()
+	}
+	if !installedOnly {
+		dir, official, err := config.RegistryDir(registry)
+		if err != nil {
+			out["registry_error"] = err.Error()
+		} else {
+			reg, problems := config.RegistryPacks(registry, dir, official)
+			for _, p := range reg {
+				if !installed[p.Name] {
+					all = append(all, p)
+				}
+			}
+			if len(problems) > 0 {
+				out["registry_problems"] = problems
+			}
+		}
+	}
+	kept, hidden := config.FilterPacks(all, search, includeTemplates)
+	out["packs"] = toJSONList(kept)
+	out["hidden_template_packs"] = hidden
+	return out, nil
+}
+
+func toJSONList[T any](xs []T) []any {
+	out := make([]any, 0, len(xs))
+	for _, x := range xs {
+		out = append(out, toJSONMap(x))
+	}
+	return out
+}
+
+func packKindsText(c config.PackContents) string {
+	var parts []string
+	for _, k := range c.Kinds {
+		parts = append(parts, fmt.Sprintf("%d %s", c.Counts[k], strings.ReplaceAll(k, "_", " ")))
+	}
+	if len(parts) == 0 {
+		return "nothing"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func packKindsAny(c map[string]any) string {
+	ks, _ := c["kinds"].([]any)
+	counts, _ := c["counts"].(map[string]any)
+	var parts []string
+	for _, k := range ks {
+		parts = append(parts, fmt.Sprintf("%v %s", counts[fmt.Sprint(k)], strings.ReplaceAll(fmt.Sprint(k), "_", " ")))
+	}
+	if len(parts) == 0 {
+		return "nothing"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // cmdPackPlan previews the effect of the configured packs on the effective
@@ -518,6 +652,23 @@ func cmdPackLint(args []string) error {
 		return err
 	}
 	problems := config.LintPackManifest(man)
+	// Bot templates: their rules, and their seed documents against the kinds
+	// and caps a new bot's memory holds them to.
+	if len(man.Bots) > 0 {
+		lts, err := config.LoadPackTemplates(man, dir)
+		if err != nil {
+			problems = append(problems, err.Error())
+		}
+		for _, n := range sortedTemplateNames(lts) {
+			lt := lts[n]
+			if lt.SeedDir == "" {
+				continue
+			}
+			for _, p := range bot.LintSeed(lt.SeedDir, lt.T.Collections) {
+				problems = append(problems, "bots."+n+": seed: "+p)
+			}
+		}
+	}
 	if len(problems) == 0 {
 		fmt.Printf("ok: pack %q v%s is well-formed\n", man.Pack.Name, man.Pack.Version)
 		return nil
@@ -526,6 +677,15 @@ func cmdPackLint(args []string) error {
 		fmt.Printf("  - %s\n", p)
 	}
 	return fmt.Errorf("%d lint problem(s)", len(problems))
+}
+
+func sortedTemplateNames(m map[string]config.LoadedTemplate) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // cmdPackShow renders a pack's docs: metadata, requires, settings, presets,

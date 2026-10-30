@@ -30,11 +30,15 @@ The model
 - [[Policy]]
 - [[Gates]]
 - [[Teams]]
+- [[Bots]]
+- [[Tickets]]
 - [[Outcomes]]
 - [[Cost-Accounting]]
 - [[Secrets]]
 - [[Hosts]]
 - [[Isolation]]
+- [[Paseo-Sandbox]]
+- [[Browser]]
 - [[Trust-and-Isolation]]
 
 Connectors

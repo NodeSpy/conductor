@@ -241,3 +241,35 @@ func segmentGlob(pattern, seg string) bool {
 	}
 	return strings.HasSuffix(seg, parts[len(parts)-1])
 }
+
+// AutoInstallTrusted reports whether conductor may add a pack source to the
+// config on the operator's behalf — the pack a `conductor bot new --from
+// <registry template>` installs. The operator never typed that source, so a
+// THIRD-PARTY remote source needs its explicit trust step even when no
+// pack_trust block exists: a pack_trust.allow entry, or --allow-unlisted
+// (allowUnlisted). The official pack repo and a local path (the operator's
+// own disk) need none. The resolver's own allowlist check still runs after.
+func (t *PackTrustConfig) AutoInstallTrusted(key, value string, allowUnlisted bool) bool {
+	if key == "use" && strings.HasPrefix(value, PacksNamespaceAlias+"/") {
+		return true // the official repo, by name
+	}
+	s, remote := RemoteSourceRef(value)
+	if !remote {
+		return true
+	}
+	if s == OfficialPacksSource || strings.HasPrefix(s, OfficialPacksSource+"/") {
+		return true
+	}
+	if allowUnlisted {
+		return true
+	}
+	if t == nil {
+		return false
+	}
+	for _, pat := range t.Allow {
+		if trustMatch(pat, s) {
+			return true
+		}
+	}
+	return false
+}

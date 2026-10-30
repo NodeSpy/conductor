@@ -1,0 +1,14 @@
+# e2e (group L): a registry pack not installed — listed by `bot templates --registry`.
+pack:
+  name: notes-kit
+  version: 0.3.0
+  description: a note-taking bot template
+  tags: [notes]
+  requires: { conductor: ">=0.1.0" }
+bots:
+  scribe:
+    description: Takes notes on what the platform does
+    connectors:
+      store: { use: kv }
+    verbs:
+      store.get: observe

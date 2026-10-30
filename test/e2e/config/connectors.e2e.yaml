@@ -751,6 +751,10 @@ checks:
   always-pass: { use: cli, command: [sh, -c, 'printf %s "{\"pass\": true, \"reason\": \"ok\"}"'] }
   always-fail: { use: cli, command: [sh, -c, 'printf %s "{\"pass\": false, \"reason\": \"still broken\"}"'] }
 
+# usage.mode defaults to off (no usage figures in reports); the M group
+# asserts the report's per-runtime/model usage, with dollars — API billing.
+usage: { mode: api }
+
 policy:
   concurrency: { max_agents: 3 }
 
@@ -776,6 +780,13 @@ callable:
 
 # The notify: block is retired — alerting is triggers on the conductor.*
 # lifecycle source (this stack asserts verbs/grouping, not sink delivery).
+
+# The agent sandbox is off for this daemon: it runs as root in its container
+# (where a user namespace is no boundary, so the sandbox refuses), and its
+# fake agents push for themselves. The sandboxed path is the conductor-sandbox
+# daemon's (sandbox.yaml, group Z).
+sandbox:
+  agents: "off"
 
 store:
   state_file: /data/state.json

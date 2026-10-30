@@ -173,9 +173,10 @@ func errFor(msg string) error { return shimErr(msg) }
 // TestConformanceHTTP: the shared contract suite through the full JSON
 // protocol — HTTPStore client → httptest shim → bolt delegate.
 func TestConformanceHTTP(t *testing.T) {
-	srv := httptest.NewServer(kvShim(t, openTemp(t)))
+	s := openTemp(t)
+	srv := httptest.NewServer(kvShim(t, s))
 	defer srv.Close()
-	runConformance(t, NewHTTPStore(srv.URL, srv.Client(), nil))
+	runConformanceAdv(t, NewHTTPStore(srv.URL, srv.Client(), nil), fakeClock(s))
 }
 
 // TestHTTPStoreErrors: non-2xx replies surface the shim's error message;

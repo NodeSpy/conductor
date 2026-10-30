@@ -3,8 +3,6 @@ package engine
 import (
 	"context"
 	"testing"
-
-	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // StepDone is the merged done signal (step.done + handoff.done). These pin its
@@ -122,46 +120,61 @@ func TestStepDoneRoutesLiveHandoffThroughTeardown(t *testing.T) {
 	}
 }
 
-// A controller runtime (cli) runs its dispatch through a runner the paseo
-// ledger never sees. Its agent's step.done — sent as the agent's last action,
-// while the engine is still blocked in dispatchAgent — must resolve as in
-// flight (marked for the step boundary, nothing archived), and a done after
-// the dispatch returned must archive through that runner, not paseo.
-func TestStepDoneControllerRuntimeDispatch(t *testing.T) {
+// A cli/acp dispatch's step.done resolves on the runner that launched it,
+// not the paseo dispatcher: deferred while that runner is still blocked on
+// it, archived through that runner after.
+func TestStepDoneResolvesOnTheLaunchingRunner(t *testing.T) {
 	paseo := &fakeDispatcher{archived: make(chan string, 1)}
+	cli := &fakeDispatcher{
+		archived:       make(chan string, 1),
+		dispatchAgents: map[string]string{"disp-c": "claude-code-1"},
+		inflightIDs:    map[string]bool{"disp-c": true},
+	}
 	e, _ := newEng(t, baseCfg(), paseo, &fakeNotifier{}, nil)
-	cli := &fakeDispatcher{archived: make(chan string, 1)}
-	var doneErr error
-	cli.onDispatch = func(r dispatch.Request) (dispatch.RunRef, error) {
-		doneErr = e.StepDone(context.Background(), r.DispatchID, "", "finished")
-		return dispatch.RunRef{AgentID: "claude-code-1"}, nil
-	}
+	e.rememberDispatch("disp-c", cli)
+	e.rememberDispatcher("claude-code-1", cli)
 
-	if _, err := e.dispatchAgent(context.Background(), cli, dispatch.Request{DispatchID: "disp-cli"}); err != nil {
+	if err := e.StepDone(context.Background(), "disp-c", "", "done mid-turn"); err != nil {
+		t.Fatalf("an in-flight cli dispatch's done is accepted: %v", err)
+	}
+	if len(cli.archived)+len(paseo.archived) != 0 {
+		t.Fatal("in flight: the step boundary archives, not the done call")
+	}
+	// The in-flight done is parked for the step boundary.
+	if !e.TakeEarlyDone("disp-c") {
+		t.Fatal("an in-flight done must leave a mark for the step boundary")
+	}
+	cli.inflightIDs = nil
+	if err := e.StepDone(context.Background(), "disp-c", "", "done"); err != nil {
 		t.Fatal(err)
-	}
-	if doneErr != nil {
-		t.Fatalf("an in-flight cli dispatch's done must be accepted: %v", doneErr)
-	}
-	if !e.TakeEarlyDone("disp-cli") {
-		t.Fatal("the in-flight done must be marked for the step boundary")
-	}
-	if e.dispatchInFlight("disp-cli") {
-		t.Fatal("the dispatch is no longer in flight once dispatchAgent returned")
-	}
-
-	if err := e.StepDone(context.Background(), "disp-cli", "", "late done"); err != nil {
-		t.Fatalf("a done after the dispatch returned must resolve to its agent: %v", err)
 	}
 	select {
 	case got := <-cli.archived:
 		if got != "claude-code-1" {
-			t.Fatalf("archived %q, want the dispatch's agent", got)
+			t.Fatalf("archived %q", got)
 		}
-	case got := <-paseo.archived:
-		t.Fatalf("a cli agent was archived through paseo (%q)", got)
 	default:
-		t.Fatal("a late done must archive the cli agent through its runner")
+		t.Fatal("archived through the cli runner that launched it")
+	}
+	if len(paseo.archived) != 0 {
+		t.Fatal("never through the paseo dispatcher")
+	}
+	// An unknown dispatch still resolves (or not) on paseo, as before.
+	if err := e.StepDone(context.Background(), "nope", "", "x"); err == nil {
+		t.Fatal("unresolvable")
+	}
+}
+
+// paseo binds a dispatch to its agent only when its run returns: a done
+// sent mid-run, before that binding, is deferred — not refused.
+func TestStepDoneInFlightBeforeTheAgentIsBound(t *testing.T) {
+	d := &fakeDispatcher{archived: make(chan string, 1), inflightIDs: map[string]bool{"disp-1": true}}
+	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+	if err := e.StepDone(context.Background(), "disp-1", "", "eager"); err != nil {
+		t.Fatalf("mid-run done before binding: %v", err)
+	}
+	if len(d.archived) != 0 {
+		t.Fatal("nothing archived mid-run")
 	}
 }
 

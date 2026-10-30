@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/acp"
@@ -18,6 +17,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/decider"
 	"github.com/NodeSpy/conductor/internal/plugin"
+	"github.com/NodeSpy/conductor/internal/procexec"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
@@ -731,8 +731,9 @@ rest:
 	}); err != nil {
 		return err
 	}
-	// Replace this process with the verified plugin, inheriting stdio+env.
-	return syscall.Exec(bin, rest, os.Environ())
+	// Replace this process with the verified plugin, inheriting stdio+env and
+	// the parent-death signal the daemon started this shim with.
+	return procexec.Exec(bin, rest, os.Environ())
 }
 
 // cmdPlugin implements `conductor plugin list|show|add|update|remove`.

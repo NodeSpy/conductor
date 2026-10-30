@@ -242,3 +242,34 @@ func ParseRef(s string) (name, key string, ok bool) { return secrets.ParseVaultR
 
 // IsRef reports whether s is exactly one vault reference.
 func IsRef(s string) bool { return secrets.IsVaultRef(s) }
+
+// FreshReader is the optional uncached read: a value read once, for one
+// use, and not kept — a one-time code (1Password's `?attribute=otp`), or a
+// credential conductor fills into a browser for an agent that must never
+// hold it.
+type FreshReader interface {
+	ReadFresh(ctx context.Context, key string) (string, error)
+}
+
+// ReadFresh reads past the backend's cache where it has one (and leaves
+// nothing in it). The value is tainted.
+func ReadFresh(ctx context.Context, name, key string) (string, error) {
+	b, err := Use(name)
+	if err != nil {
+		return "", err
+	}
+	if key == "" {
+		return "", fmt.Errorf("vault %q: key is required", name)
+	}
+	var v string
+	if f, ok := b.(FreshReader); ok {
+		v, err = f.ReadFresh(ctx, key)
+	} else {
+		v, err = b.Read(ctx, key)
+	}
+	if err != nil {
+		return "", fmt.Errorf("vault %q: %w", name, err)
+	}
+	Taint(v)
+	return v, nil
+}

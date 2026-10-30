@@ -243,37 +243,43 @@ func (e *Engine) doneSignal(ctx context.Context, dispatchID, agentID, reason str
 //   - a dispatch conductor is still blocked on (foreground, in flight) → mark
 //     only: the step boundary reclaims it after the output is captured (see
 //     TakeEarlyDone), so a done call can never cut off the output conductor is
-//     waiting on. This resolves even before the dispatch is bound to its agent:
-//     a foreground paseo run reports the agent id only when it returns, so an
-//     agent calling step.done as its last action is always ahead of the binding;
-//   - otherwise → archive the agent + its workspace now, through the runner
-//     that opened it (ledger-gated: it refuses anything conductor didn't
-//     launch).
+//     waiting on. The reason is parked so a step that keeps its agents
+//     (archive_when_done: false) still reclaims one that explicitly signalled;
+//   - otherwise → archive the agent + its workspace now (ledger-gated: the
+//     dispatcher refuses anything conductor didn't launch).
 //
-// "In flight" and "bound" cover every runtime: the paseo dispatcher's ledger,
-// and the engine's own record of a controller-runtime (cli/acp/opencode)
-// dispatch (dispatchAgent).
+// The dispatch resolves on the runner it went to: the paseo dispatcher, or
+// the cli/acp runner that opened it (archived through archiveAgent).
 func (e *Engine) StepDone(ctx context.Context, dispatchID, agentID, reason string) error {
-	if resolved := e.agentForDispatch(dispatchID); resolved != "" {
+	runner := e.dispatcherFor(dispatchID)
+	if resolved := runner.AgentForDispatch(dispatchID); resolved != "" {
 		agentID = resolved
-	}
-	inFlight := e.dispatchInFlight(dispatchID)
-	if agentID == "" && !inFlight {
-		return fmt.Errorf("step.done: no conductor-launched agent for this session")
+	} else if handled, err := e.controllerStepDone(ctx, dispatchID, reason); handled {
+		return err
 	}
 	if agentID != "" {
 		if lh := e.lookupLiveHandoff(agentID); lh != nil {
 			return e.handoffDone(ctx, agentID, reason)
 		}
 	}
-	if inFlight {
+	// A dispatch conductor is still blocked on defers to the step boundary —
+	// before its agent is even bound (paseo binds it when its run returns),
+	// so an eager done mid-run is accepted, not refused. The reason is parked
+	// for the step boundary (TakeEarlyDone), so a step that keeps its agents
+	// still reclaims one that explicitly signalled.
+	if dispatchID != "" && runner.DispatchInFlight(dispatchID) {
 		e.earlyDone.Store(dispatchID, reason)
 		e.log("step.done from dispatch %s (%s) — still in flight; reclaiming at step boundary", dispatchID, reason)
 		return nil
 	}
+	if agentID == "" {
+		return fmt.Errorf("step.done: no conductor-launched agent for this session")
+	}
 	e.log("step.done from agent %s: %s — reclaiming", agentID, reason)
-	// Through the runner that opened it (a cli agent is not paseo's).
-	return e.archiveAgent(context.WithoutCancel(ctx), agentID)
+	if runner != e.disp {
+		return e.archiveAgent(context.WithoutCancel(ctx), agentID)
+	}
+	return e.disp.Archive(context.WithoutCancel(ctx), agentID)
 }
 
 // TakeEarlyDone reports, and clears, whether the dispatch's agent called
@@ -287,4 +293,26 @@ func (e *Engine) TakeEarlyDone(dispatchID string) bool {
 	}
 	_, ok := e.earlyDone.LoadAndDelete(dispatchID)
 	return ok
+}
+
+// controllerStepDone resolves a done call for a dispatch a controller runtime
+// (cli, acp, …) launched: a foreground dispatch still in flight defers to the
+// step boundary; otherwise the runner that opened the session archives it.
+// handled=false when no controller knows the dispatch.
+func (e *Engine) controllerStepDone(ctx context.Context, dispatchID, reason string) (bool, error) {
+	if dispatchID == "" || e.controllers == nil {
+		return false, nil
+	}
+	for _, r := range e.controllers.Runners() {
+		if r.DispatchInFlight(dispatchID) {
+			e.earlyDone.Store(dispatchID, reason)
+			e.log("step.done for dispatch %s (%s) — still in flight; reclaiming at step boundary", dispatchID, reason)
+			return true, nil
+		}
+		if id := r.AgentForDispatch(dispatchID); id != "" {
+			e.log("step.done from session %s: %s — reclaiming", id, reason)
+			return true, r.Archive(context.WithoutCancel(ctx), id)
+		}
+	}
+	return false, nil
 }

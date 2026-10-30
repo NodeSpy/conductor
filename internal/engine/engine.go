@@ -114,14 +114,10 @@ type Engine struct {
 	// rather than always on paseo. See archiveAgent.
 	ownerMu sync.Mutex
 	owner   map[string]Dispatcher
-	// ctrlLive / ctrlBound are the step.done ledger for dispatches a
-	// controller runtime (cli/acp/opencode) runs — the paseo dispatcher keeps
-	// its own and never sees these. ctrlLive counts the dispatch ids the
-	// engine is blocked on in dispatchAgent; ctrlBound maps a returned
-	// dispatch id to the agent it launched (a background hand-off's later
-	// done). Both guarded by ownerMu.
-	ctrlLive    map[string]int
-	ctrlBound   map[string]string
+	// byDispatch maps a dispatch id → the non-paseo runner it went to, from
+	// before the runner starts: an agent's step.done names only its
+	// dispatch, and must resolve on the transport that launched it.
+	byDispatch  map[string]Dispatcher
 	controllers *controller.Registry // resolves which controller runs each agent
 	broker      *controller.Broker   // owns one live session per PR (interactive hand-off); nil = disabled
 	notif       Notifier
@@ -294,9 +290,11 @@ func New(o Options) *Engine {
 	}
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
-		owner:  map[string]Dispatcher{},
-		broker: o.Broker,
-		author: o.Author, log: log,
+		owner: map[string]Dispatcher{},
+
+		byDispatch: map[string]Dispatcher{},
+		broker:     o.Broker,
+		author:     o.Author, log: log,
 		hold:        o.Hold,
 		affinity:    o.Affinity,
 		pausePath:   o.PausePath,
@@ -518,79 +516,7 @@ func (e *Engine) capabilityCard(sk *config.SkillPolicy) string {
 // including for session: profiles on runtimes without session persistence
 // (one-shot/cli), which stay fresh-per-event and lean on shared memory.
 func (e *Engine) dispatchAgent(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
-	// A controller runtime's dispatch is in flight for exactly as long as
-	// this call blocks; record it so a step.done its agent sends meanwhile
-	// resolves (StepDone) the way an in-flight paseo dispatch does.
-	if runner != e.disp && req.DispatchID != "" {
-		e.beginCtrlDispatch(req.DispatchID)
-		ref, err := e.dispatchAgentOn(ctx, runner, req)
-		e.endCtrlDispatch(req.DispatchID, ref.AgentID)
-		return ref, err
-	}
-	return e.dispatchAgentOn(ctx, runner, req)
-}
-
-// beginCtrlDispatch marks a controller-runtime dispatch in flight.
-func (e *Engine) beginCtrlDispatch(id string) {
-	e.ownerMu.Lock()
-	defer e.ownerMu.Unlock()
-	if e.ctrlLive == nil {
-		e.ctrlLive = map[string]int{}
-	}
-	e.ctrlLive[id]++
-}
-
-// endCtrlDispatch clears the in-flight mark and binds the dispatch to the
-// agent it launched (when it launched one), bounded like the owner table.
-func (e *Engine) endCtrlDispatch(id, agentID string) {
-	e.ownerMu.Lock()
-	defer e.ownerMu.Unlock()
-	if e.ctrlLive[id]--; e.ctrlLive[id] <= 0 {
-		delete(e.ctrlLive, id)
-	}
-	if agentID == "" {
-		return
-	}
-	if e.ctrlBound == nil {
-		e.ctrlBound = map[string]string{}
-	}
-	if len(e.ctrlBound) >= maxTrackedOwners {
-		for k := range e.ctrlBound {
-			delete(e.ctrlBound, k)
-			if len(e.ctrlBound) < maxTrackedOwners {
-				break
-			}
-		}
-	}
-	e.ctrlBound[id] = agentID
-}
-
-// agentForDispatch resolves a done call's dispatch id to its agent on any
-// runtime: the paseo ledger first, then the controller-runtime binding.
-func (e *Engine) agentForDispatch(id string) string {
-	if a := e.disp.AgentForDispatch(id); a != "" || id == "" {
-		return a
-	}
-	e.ownerMu.Lock()
-	defer e.ownerMu.Unlock()
-	return e.ctrlBound[id]
-}
-
-// dispatchInFlight reports whether the engine is still blocked on the
-// dispatch, on any runtime.
-func (e *Engine) dispatchInFlight(id string) bool {
-	if id == "" {
-		return false
-	}
-	if e.disp.DispatchInFlight(id) {
-		return true
-	}
-	e.ownerMu.Lock()
-	defer e.ownerMu.Unlock()
-	return e.ctrlLive[id] > 0
-}
-
-func (e *Engine) dispatchAgentOn(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
+	e.rememberDispatch(req.DispatchID, runner)
 	// A detach launch is always a fresh, unbound agent: it never joins a
 	// runtime's session pool (that would deliver its prompt to a live
 	// conductor-held session, or bind the new agent to one).
@@ -651,6 +577,37 @@ func (e *Engine) rememberDispatcher(agentID string, runner Dispatcher) {
 		}
 	}
 	e.owner[agentID] = runner
+}
+
+// rememberDispatch records the non-paseo runner a dispatch went to (bounded
+// like the owner table; an evicted entry falls back to the paseo
+// dispatcher, the old behaviour).
+func (e *Engine) rememberDispatch(dispatchID string, runner Dispatcher) {
+	if dispatchID == "" || runner == nil || runner == e.disp {
+		return
+	}
+	e.ownerMu.Lock()
+	defer e.ownerMu.Unlock()
+	if len(e.byDispatch) >= maxTrackedOwners {
+		for k := range e.byDispatch {
+			delete(e.byDispatch, k)
+			if len(e.byDispatch) < maxTrackedOwners {
+				break
+			}
+		}
+	}
+	e.byDispatch[dispatchID] = runner
+}
+
+// dispatcherFor is the runner a dispatch went to (the paseo dispatcher when
+// it is not a recorded non-paseo one).
+func (e *Engine) dispatcherFor(dispatchID string) Dispatcher {
+	e.ownerMu.Lock()
+	defer e.ownerMu.Unlock()
+	if r := e.byDispatch[dispatchID]; r != nil {
+		return r
+	}
+	return e.disp
 }
 
 // maxTrackedOwners caps the agent→runner table. Far above any plausible count

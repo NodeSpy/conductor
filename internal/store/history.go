@@ -39,8 +39,12 @@ type RunHistory struct {
 	RetryOf string `json:"retry_of,omitempty"`
 	// Spend totals (#36 §14).
 	Tokens     int     `json:"tokens,omitempty"`
+	Turns      int     `json:"turns,omitempty"` // model turns across its agent steps
 	CostUSD    float64 `json:"cost_usd,omitempty"`
 	ApproxCost bool    `json:"approx_cost,omitempty"`
+	// Usage is the same spend per runtime and model — how it is shown:
+	// never summed across providers.
+	Usage []ModelUsage `json:"usage,omitempty"`
 	// Trigger/Action are the pinned raw inputs (tokens stripped, like
 	// WorkflowRun) a retry rehydrates.
 	Trigger json.RawMessage `json:"trigger,omitempty"`
@@ -67,7 +71,21 @@ type StepRecord struct {
 	ContinuedOnError bool `json:"continued_on_error,omitempty"`
 	// Agent-step spend (#36 §14).
 	Tokens  int     `json:"tokens,omitempty"`
+	Turns   int     `json:"turns,omitempty"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	Runtime string  `json:"runtime,omitempty"`
+	Model   string  `json:"model,omitempty"`
+}
+
+// ModelUsage is model usage conductor observed for one runtime and model.
+type ModelUsage struct {
+	Runtime     string  `json:"runtime,omitempty"`
+	Model       string  `json:"model,omitempty"`
+	Runs        int     `json:"runs,omitempty"`
+	Turns       int     `json:"turns,omitempty"`
+	Tokens      int     `json:"tokens,omitempty"`
+	CostUSD     float64 `json:"cost_usd,omitempty"`
+	Approximate bool    `json:"approximate,omitempty"`
 }
 
 // Step returns the record with the given step id.
