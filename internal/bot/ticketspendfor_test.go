@@ -139,6 +139,23 @@ func TestTicketSpendLimitIsBoundToItsHolder(t *testing.T) {
 		t.Fatalf("the reopen audit: %v", e)
 	}
 
+	// A ticket closed in the triage queue ends its confirmation too: a bot
+	// that moves it there carries the limit confirmed for itself, and a
+	// close there must not leave that to revive when it is picked up again.
+	q := f.ticket(t, opActor, TicketNew{Title: "queue buy", Assignee: "bot:a", SpendLimit: &store.SpendLimit{Amount: "5", Currency: "USD"}})
+	if _, err := f.svc.TicketAssign(ctx, TicketActor{Bot: f.homeOf("a")}, q.Ticket, ""); err != nil {
+		t.Fatal(err)
+	}
+	if qc, loc, err := f.svc.findTicket(q.Ticket); err != nil || loc.Bot != "" || qc.SpendFor != "a" {
+		t.Fatalf("the queued ticket: at %+v, spend for %q: %v", loc, qc.SpendFor, err)
+	}
+	if _, err := f.svc.TicketSetStatus(ctx, opActor, q.Ticket, store.TicketDeclined, ""); err != nil {
+		t.Fatal(err)
+	}
+	if qc, _, _ := f.svc.findTicket(q.Ticket); qc.SpendFor != "" {
+		t.Fatalf("closed in the queue, still confirmed for bot:%s", qc.SpendFor)
+	}
+
 	// A team's ticket: whichever bot its routing (here, the lead's triage)
 	// lands it on holds it held.
 	tv := f.ticket(t, opActor, TicketNew{Title: "team buy", Assignee: "team:platform", Ready: true, SpendLimit: &store.SpendLimit{Amount: "5", Currency: "USD"}})

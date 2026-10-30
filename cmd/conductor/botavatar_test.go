@@ -461,3 +461,54 @@ func TestDashboardAvatarApplyStagesAConfigEdit(t *testing.T) {
 		}
 	}
 }
+
+// collectAvatars judges only uploaded pictures, by their content names: a
+// file it didn't name (an operator's own logo.png beside them) is never
+// removed, and a picture named only in an imported file is in use, though
+// the caller's references (the main file's text) don't name it.
+func TestCollectAvatarsKeepsWhatItCannotJudge(t *testing.T) {
+	cfg := avatarConfig(t)
+	dir := filepath.Dir(cfg)
+	content := filepath.Join(dir, avatarContentDir)
+	if err := os.MkdirAll(content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pic := func(n int) string {
+		b := photo(t, 8+n, 8)
+		rel := avatarContentRel(b)
+		if err := os.WriteFile(filepath.Join(dir, rel), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return rel
+	}
+	imported, unused := pic(1), pic(2)
+	hand := filepath.Join(content, "logo.png")
+	if err := os.WriteFile(hand, photo(t, 4, 4), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "more.yaml"), []byte("bots:\n  more:\n    description: imported\n    avatar: { image: "+imported+" }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	main, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main = append([]byte("imports: [more.yaml]\n"), main...)
+	if err := os.WriteFile(cfg, main, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := config.Load(cfg); err != nil || c.Bots["more"].Avatar == nil {
+		t.Fatalf("the imported bot: %v", err)
+	}
+	collectAvatars(cfg, [][]byte{main})
+	gone := func(p string) bool { _, err := os.Stat(p); return os.IsNotExist(err) }
+	if gone(filepath.Join(dir, imported)) {
+		t.Fatal("a picture named in an imported file was collected")
+	}
+	if gone(hand) {
+		t.Fatal("a file not named for its content was collected")
+	}
+	if !gone(filepath.Join(dir, unused)) {
+		t.Fatal("an upload nothing names was kept")
+	}
+}
