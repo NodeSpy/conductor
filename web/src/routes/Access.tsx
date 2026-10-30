@@ -148,12 +148,12 @@ export function Access(): JSX.Element {
         {data.auth_policy.methods.includes('password') && needsTOTP ? ' (with an authenticator code)' : ''}.
       </p>
       {msg ? (
-        <div class="banner ok" role="status" data-testid="access-msg">
+        <div class="banner ok acc-banner" role="status" data-testid="access-msg">
           {msg}
         </div>
       ) : null}
       {err ? (
-        <div class="banner err" role="alert" data-testid="access-error">
+        <div class="banner err acc-banner" role="alert" data-testid="access-error">
           {err}
         </div>
       ) : null}
@@ -161,7 +161,7 @@ export function Access(): JSX.Element {
         <div class="acc-col">
           <section class="acc-card">
             <h2>
-              Your passkeys
+              <span class="acc-title">Your passkeys</span>
               {data.passkey_here && passkeysUsable() ? (
                 <button class="btn sm" type="button" disabled={!!busy} onClick={onAddPasskey} data-testid="passkey-add">
                   Add a passkey here
@@ -317,7 +317,7 @@ export function Access(): JSX.Element {
 
           <section class="acc-card">
             <h2>
-              Signed in now
+              <span class="acc-title">Signed in now</span>
               <button class="btn sm" onClick={onSignOutAll}>
                 Sign out everywhere…
               </button>

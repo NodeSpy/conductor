@@ -251,7 +251,34 @@ test('set a password and an authenticator from Access, confirming with the SSH k
   await expect(page.getByTestId('totp-state')).toContainText(/Set up (just now|\d+ min ago)/)
   await expect(page.getByTestId('totp-state')).not.toContainText('ago ago')
   await expect(page.locator('.acc-note', { hasText: 'A session ends after' })).not.toContainText(/\d+m0s|\dh0m/)
+  // The notice keeps the cards' spacing; a card's heading stays on one line
+  // (on a phone its button goes below it).
+  const notice = (await page.getByTestId('access-msg').boundingBox())!
+  const grid = (await page.locator('.acc').boundingBox())!
+  expect(grid.y - (notice.y + notice.height), 'gap under the notice').toBeGreaterThanOrEqual(12)
+  for (const title of ['Signed in now', 'Your passkeys']) {
+    const h = page.locator('.acc-card h2', { hasText: title })
+    // the rendered lines of the title's own text
+    const lines = await h.evaluate((el, t) => {
+      const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+      for (let n = w.nextNode(); n; n = w.nextNode()) {
+        const i = (n.textContent ?? '').indexOf(t)
+        if (i < 0) continue
+        const r = document.createRange()
+        r.setStart(n, i)
+        r.setEnd(n, i + t.length)
+        return new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size
+      }
+      return -1
+    }, title)
+    expect(lines, `"${title}" on one line`).toBe(1)
+    await fitsInside(h, h.locator('xpath=ancestor::section[1]'))
+  }
   await shot(page, info, 'access')
+  // the sessions card alone (a full-page capture draws the sticky header over it)
+  const sessions = page.locator('.acc-card', { hasText: 'Signed in now' })
+  await sessions.evaluate((el) => el.scrollIntoView({ block: 'center' }))
+  await sessions.screenshot({ path: path.join(SHOT_DIR, `authmethods-access-sessions-${info.project.name}.png`) })
 })
 
 test('replace the authenticator app: the old one works until the new one is confirmed', async ({}, info) => {
