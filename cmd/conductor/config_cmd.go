@@ -81,6 +81,18 @@ func validateConfigFile(path string) error {
 	return err
 }
 
+// reloadSignals subscribes to SIGHUP. cmdRun calls it before anything else:
+// SIGHUP's default action ends the process without a word, and a reload can
+// arrive at any point of a boot (two applies in a row; a SIGHUP to a daemon
+// holding degraded). A SIGHUP that arrives before the reload handler runs
+// waits in the channel and reloads once boot is done, since the config may
+// have changed after it was read.
+func reloadSignals() chan os.Signal {
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	return hup
+}
+
 // degradedRetryInterval paces the degraded-boot hold (a test shortens it).
 var degradedRetryInterval = time.Minute
 
@@ -94,7 +106,10 @@ var degradedRetryInterval = time.Minute
 // warning may be ""; the escalate message is then synthesized from the load
 // error so the returned warning is always non-empty for the caller's escalate
 // notify.
-func holdDegradedUntilLoadable(args []string, warning string, loadErr error) (*config.Config, string, error) {
+//
+// hup carries SIGHUP (reloadSignals). A reload request retries the load at
+// once and logs the outcome; it never ends the hold.
+func holdDegradedUntilLoadable(args []string, warning string, loadErr error, hup <-chan os.Signal) (*config.Config, string, error) {
 	if warning == "" {
 		warning = fmt.Sprintf("config does not load at boot: %v", loadErr)
 	}
@@ -110,6 +125,15 @@ func holdDegradedUntilLoadable(args []string, warning string, loadErr error) (*c
 		select {
 		case <-sig:
 			return nil, warning, fmt.Errorf("shut down while boot-degraded — the config never loaded: %w", loadErr)
+		case <-hup:
+			logf("BOOT DEGRADED: reload requested (SIGHUP) — retrying the load now")
+			cfg, _, err := loadConfig(args)
+			if err == nil {
+				logf("BOOT DEGRADED: config loads now — resuming normal boot")
+				return cfg, warning, nil
+			}
+			loadErr = err
+			logf("BOOT DEGRADED: still not loadable: %v", err)
 		case <-t.C:
 			cfg, _, err := loadConfig(args)
 			if err == nil {

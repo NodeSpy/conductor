@@ -125,6 +125,12 @@ conductor version
 - **reload** — re-read the config without a manual restart. Sends `SIGHUP` to
   the running daemon (pid from the pidfile), which re-execs itself in place so
   the new config loads at boot; in-flight runs checkpoint and resume on the new
-  process. The same restart the `conductor.reload` verb triggers.
+  process. The same restart the `conductor.reload` verb triggers. If the new
+  config doesn't load, the daemon holds degraded (nothing dispatches) and
+  retries every minute; another `reload` retries at once, and the log says
+  whether it now loads. A reload sent while the daemon is still booting waits
+  and runs once boot is done. The re-exec keeps a parent-death signal its
+  wrapper set (`unshare --kill-child`, a supervisor's), so the daemon still
+  ends with the wrapper after any number of reloads.
 
 Related: [[Configuration]] · [[Secrets]] · [[Migration]]

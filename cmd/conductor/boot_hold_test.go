@@ -2,7 +2,10 @@ package main
 
 import (
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -49,7 +52,7 @@ triggers:
 	go func() {
 		// No warning in — the hold must still engage and synthesize a
 		// non-empty escalate message from the load error.
-		cfg, warning, err := holdDegradedUntilLoadable(args, "", os.ErrInvalid)
+		cfg, warning, err := holdDegradedUntilLoadable(args, "", os.ErrInvalid, nil)
 		done <- res{cfg: cfg != nil, warning: warning, err: err}
 	}()
 
@@ -116,7 +119,7 @@ triggers:
 	t.Cleanup(func() { degradedRetryInterval = old })
 
 	done := make(chan error, 1)
-	go func() { _, _, err := resolveBootConfig(args); done <- err }()
+	go func() { _, _, err := resolveBootConfig(args, nil); done <- err }()
 
 	// The seam must NOT return on a still-broken config — returning is exactly
 	// the cmdRun exit → service-manager crash-loop H1 prevents.
@@ -146,5 +149,70 @@ triggers:
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("seam did not pick up the fixed connectors-schema config")
+	}
+}
+
+// A daemon holding degraded used to die on SIGHUP without a log line: the hold
+// didn't handle it, and SIGHUP's default action ends the process. Now cmdRun
+// subscribes before the boot load, and each SIGHUP retries the load at once
+// and says so. This test signals its own process, so a missing subscription
+// kills the test binary.
+func TestDegradedBootSurvivesReloads(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	broken := "bogus_unknown_key: true\nconnectors:\n  timer:\n    use: cron\n    schedules: { tick: { every: 1h } }\n"
+	if err := os.WriteFile(path, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--config", path}
+	old := degradedRetryInterval
+	degradedRetryInterval = time.Hour // only a SIGHUP retries
+	t.Cleanup(func() { degradedRetryInterval = old })
+	logPath := filepath.Join(dir, "log")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = logFile
+	t.Cleanup(func() { os.Stderr = stderr; logFile.Close() })
+
+	hup := reloadSignals()
+	defer signal.Stop(hup)
+	done := make(chan error, 1)
+	go func() { _, _, err := resolveBootConfig(args, hup); done <- err }()
+	logged := func(n int) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			b, _ := os.ReadFile(logPath)
+			if strings.Count(string(b), "reload requested (SIGHUP)") >= n {
+				return
+			}
+		}
+		b, _ := os.ReadFile(logPath)
+		t.Fatalf("want %d logged reloads:\n%s", n, b)
+	}
+	for i := 1; i <= 2; i++ {
+		if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+			t.Fatal(err)
+		}
+		logged(i)
+		select {
+		case err := <-done:
+			t.Fatalf("a SIGHUP on a still-broken config ended the hold: %v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if err := os.WriteFile(path, []byte(broken[len("bogus_unknown_key: true\n"):]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = syscall.Kill(os.Getpid(), syscall.SIGHUP)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("the hold must resume on the fixed config: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a SIGHUP after the fix didn't resume the boot")
 	}
 }

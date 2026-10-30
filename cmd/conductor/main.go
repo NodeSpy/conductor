@@ -302,13 +302,13 @@ func loadConfig(args []string) (*config.Config, []string, error) {
 // returning an error that exits cmdRun into a service-manager crash-loop (H1).
 // Returns the loaded config and any escalate warning to surface. This is the
 // testable boot seam: the gate lives here, not inline in cmdRun.
-func resolveBootConfig(args []string) (*config.Config, string, error) {
+func resolveBootConfig(args []string, hup <-chan os.Signal) (*config.Config, string, error) {
 	// loadConfig loads the sibling conductor.env first, so ${...} refs resolve
 	// (this is also how launchd — which has no EnvironmentFile — gets secrets).
 	cfg, _, err := loadConfig(args)
 	warning := ""
 	if err != nil {
-		cfg, warning, err = holdDegradedUntilLoadable(args, "", err)
+		cfg, warning, err = holdDegradedUntilLoadable(args, "", err, hup)
 	}
 	return cfg, warning, err
 }
@@ -544,7 +544,9 @@ func cmdRun(args []string) error {
 	if hasPositional(args) {
 		return cmdRunTrigger(args)
 	}
-	cfg, bootWarning, err := resolveBootConfig(args)
+	hup := reloadSignals()
+	defer signal.Stop(hup)
+	cfg, bootWarning, err := resolveBootConfig(args, hup)
 	if err != nil {
 		return err
 	}
@@ -1165,8 +1167,6 @@ func cmdRun(args []string) error {
 	// "reread config" signal; `conductor reload` sends it. This is the same
 	// restart the conductor.reload verb triggers — a short grace lets any
 	// in-flight step checkpoint first.
-	hup := make(chan os.Signal, 1)
-	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
 		for {
 			select {
