@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dashboard/api"
@@ -377,6 +378,11 @@ func TestQuietAppliesAreRateLimited(t *testing.T) {
 	}
 	b, _ := os.ReadFile(g.cfgPath)
 	g.cfgText = string(b)
+	// Every apply restarts the daemon: a new server over the same state
+	// still has the window spent.
+	if !New(g.s.deps).quiet.spent() {
+		t.Fatal("a restart reset the quiet-apply window")
+	}
 	rev := g.stage(t, api.StageRequest{Path: []string{"pricing", "default", "output"}, Value: 100})
 	if !rev.Stepup {
 		t.Fatalf("past the burst the review must ask for a step-up: %+v", rev)
@@ -385,6 +391,42 @@ func TestQuietAppliesAreRateLimited(t *testing.T) {
 	tok := g.sshStepup(t, rev.Token)
 	if rr := g.c.do("POST", "/api/v1/config/apply", api.ApplyRequest{Token: rev.Token, StepupToken: tok}); rr.Code != 200 {
 		t.Fatalf("a confirmed apply still goes through: %d %s", rr.Code, rr.Body)
+	}
+}
+
+// The quiet-apply window is kept on disk. A damaged record counts as spent,
+// and a use that can't be kept isn't granted.
+func TestQuietApplyWindowIsKept(t *testing.T) {
+	dir := t.TempDir()
+	clk := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { return clk }
+	path := filepath.Join(dir, "quiet-applies.json")
+	b := newApplyBudget(now, path)
+	for i := 0; i < quietApplyBurst-1; i++ {
+		if !b.take() {
+			t.Fatalf("use %d refused", i)
+		}
+	}
+	b = newApplyBudget(now, path)
+	if !b.take() || b.take() {
+		t.Fatal("the window must carry over a restart: one use left, then none")
+	}
+	clk = clk.Add(quietApplyWindow + time.Second)
+	if newApplyBudget(now, path).spent() {
+		t.Fatal("the window moves on")
+	}
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !newApplyBudget(now, path).spent() {
+		t.Fatal("a damaged record must count as a spent window")
+	}
+	blocked := filepath.Join(dir, "file")
+	if err := os.WriteFile(blocked, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if newApplyBudget(now, filepath.Join(blocked, "quiet-applies.json")).take() {
+		t.Fatal("a use that can't be kept must not be granted")
 	}
 }
 

@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -37,12 +36,7 @@ func (s *Server) buildAuth() {
 }
 
 func (s *Server) wireAuth() error {
-	dir := s.deps.StateDir
-	if dir == "" {
-		if sf := s.deps.Cfg.Store.StateFile; sf != "" {
-			dir = filepath.Join(filepath.Dir(sf), "dashboard")
-		}
-	}
+	dir := dashboardStateDir(s.deps)
 	if dir == "" {
 		if s.operatorsConfigured() {
 			return fmt.Errorf("operators are configured but there is no state dir for the sign-in store (set store.state_file)")

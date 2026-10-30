@@ -62,7 +62,11 @@ dashboard:
     can't be loaded, needs a step-up ("(loaded config)").
   - Applies that need no step-up are rate-limited across the daemon: five in
     any ten minutes. Past that, an apply needs a step-up like any other, so a
-    stolen session can't loop restarts or churn the restore history.
+    stolen session can't loop restarts or churn the restore history. The
+    window is kept in the dashboard's state dir (`quiet-applies.json`) and
+    written before the apply, so the restart each apply causes doesn't reset
+    it. A record that can't be read counts as a spent window, and a use that
+    can't be written isn't granted.
   - What this mode gives up: a stolen session can raise prices (tightening the
     caps, which can stop work early) and change the usage report mode, five
     times in ten minutes. Setting it is itself a widening change.

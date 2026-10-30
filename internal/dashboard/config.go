@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -96,16 +97,50 @@ const (
 )
 
 type applyBudget struct {
-	mu  sync.Mutex
-	at  []time.Time
-	now func() time.Time
+	mu   sync.Mutex
+	at   []time.Time
+	now  func() time.Time
+	path string // where the window is kept: every apply restarts the daemon
 }
 
-func newApplyBudget(now func() time.Time) *applyBudget {
+// newApplyBudget reads the window kept at path ("" keeps it in memory only).
+// A file that can't be read or parsed counts as a spent window, so a damaged
+// record never grants quiet applies.
+func newApplyBudget(now func() time.Time, path string) *applyBudget {
 	if now == nil {
 		now = time.Now
 	}
-	return &applyBudget{now: now}
+	b := &applyBudget{now: now, path: path}
+	if path == "" {
+		return b
+	}
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return b
+	}
+	if err != nil || json.Unmarshal(raw, &b.at) != nil {
+		b.at = nil
+		for i := 0; i < quietApplyBurst; i++ {
+			b.at = append(b.at, now())
+		}
+	}
+	sort.Slice(b.at, func(i, j int) bool { return b.at[i].Before(b.at[j]) })
+	return b
+}
+
+func (b *applyBudget) saveLocked() error {
+	if b.path == "" {
+		return nil
+	}
+	raw, _ := json.Marshal(b.at)
+	if err := os.MkdirAll(filepath.Dir(b.path), 0o700); err != nil {
+		return err
+	}
+	tmp := b.path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, b.path)
 }
 
 func (b *applyBudget) pruneLocked() {
@@ -134,6 +169,12 @@ func (b *applyBudget) take() bool {
 		return false
 	}
 	b.at = append(b.at, b.now())
+	// Kept before the apply writes (and so before the restart it causes); a
+	// use that can't be kept isn't granted.
+	if err := b.saveLocked(); err != nil {
+		b.at = b.at[:len(b.at)-1]
+		return false
+	}
 	return true
 }
 

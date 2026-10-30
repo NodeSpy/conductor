@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -133,7 +134,7 @@ func New(deps Deps) *Server {
 		deps.Paused = func() bool { return false }
 	}
 	s := &Server{deps: deps, hub: newHub(), mux: http.NewServeMux(), started: time.Now(), labels: newStepupLabels(deps.Now),
-		quiet: newApplyBudget(deps.Now)}
+		quiet: newApplyBudget(deps.Now, quietBudgetPath(deps))}
 	if deps.ConfigPath != "" {
 		s.edit = configedit.New(configedit.Options{
 			Path:     deps.ConfigPath,
@@ -501,6 +502,27 @@ func writeSSE(w http.ResponseWriter, ev api.Event) {
 		fmt.Fprintf(w, "event: %s\n", ev.Topic)
 	}
 	fmt.Fprintf(w, "data: %s\n\n", b)
+}
+
+// dashboardStateDir is where the dashboard keeps its state: Deps.StateDir, or
+// a "dashboard" dir beside the state file. "" when there is neither.
+func dashboardStateDir(deps Deps) string {
+	if deps.StateDir != "" {
+		return deps.StateDir
+	}
+	if deps.Cfg != nil && deps.Cfg.Store.StateFile != "" {
+		return filepath.Join(filepath.Dir(deps.Cfg.Store.StateFile), "dashboard")
+	}
+	return ""
+}
+
+// quietBudgetPath is where the quiet-apply window is kept, so the restart
+// each apply causes doesn't reset it.
+func quietBudgetPath(deps Deps) string {
+	if dir := dashboardStateDir(deps); dir != "" {
+		return filepath.Join(dir, "quiet-applies.json")
+	}
+	return ""
 }
 
 // guardedConfig is the loaded config minus its inert parts (pricing and
