@@ -195,10 +195,10 @@
 .staged-tree {
   margin: 0;
   min-width: 0;
-  max-height: 16rem;
-  overflow: auto;
-  /* JSON keeps its lines: a long one scrolls inside the box, never breaks mid-word */
-  white-space: pre;
+  /* every line and character stays visible (a staged key is reviewed
+     here); a line breaks mid-word only when it can't fit whole */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-size: var(--font-size-sm);
 }
 .widening {
@@ -315,5 +315,10 @@
   .staged-list li,
   .effects li {
     flex-wrap: wrap;
+  }
+  /* a structured value takes its own full-width line under its path */
+  .staged-list li .staged-tree {
+    order: 1;
+    flex-basis: 100%;
   }
 }
