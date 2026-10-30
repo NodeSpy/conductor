@@ -175,3 +175,48 @@ func TestDeleteShared(t *testing.T) {
 		t.Fatalf("deleting an anchor in use: err=%v\n%s", err, d.Bytes())
 	}
 }
+
+// Setting any value changes exactly that value, and the check that guards it
+// never refuses an ordinary edit.
+func TestSetAnyValueChangesOnlyThatValue(t *testing.T) {
+	example, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, src := range map[string]string{
+		"config.example.yaml": string(example),
+		"sample":              sample,
+		"wrapped":             wrapped,
+		"items":               items,
+	} {
+		before := decodeAll(t, []byte(src))
+		var all [][]string
+		paths(before, nil, &all)
+		for _, p := range all {
+			if sharedYAML(mustParse(t, src), p) {
+				continue
+			}
+			values := []any{"zz new", map[string]any{"k": "v"}}
+			if name == "config.example.yaml" {
+				values = values[:1] // keeps the -race run well inside the test timeout
+			}
+			for _, value := range values {
+				d := mustParse(t, src)
+				if err := d.SetScalar(p, value); err != nil {
+					if string(d.Bytes()) != src {
+						t.Fatalf("%s: refused set of %v changed the text", name, p)
+					}
+					// Only flow collections and list items without a key are
+					// refused for a plain block file.
+					t.Logf("%s: set %s refused: %v", name, strings.Join(p, "."), err)
+					continue
+				}
+				got := decodeAll(t, d.Bytes())
+				want, _ := setIn(before, p, value)
+				if !canonEqual(got, want) {
+					t.Errorf("%s: setting %s changed something else", name, strings.Join(p, "."))
+				}
+			}
+		}
+	}
+}

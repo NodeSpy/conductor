@@ -249,8 +249,13 @@ func (d *Document) SetScalar(path []string, value any) error {
 	if loc.found() && d.equal(loc.val, value) {
 		return nil // no-op: leave the text byte-for-byte
 	}
+	if loc.viaAlias {
+		return fmt.Errorf("configedit: %s goes through a YAML alias; edit the anchored section instead", strings.Join(path, "."))
+	}
 
 	oldSrc, oldRoot, oldRefs := d.src, d.root, d.refs
+	beforeDoc, haveBefore := d.docValue()
+	shared := d.anchoredPath(path)
 	switch {
 	case loc.found() && !structured && loc.val.Kind == yaml.ScalarNode && !isBlockScalar(loc.val) &&
 		blockEndLine(loc.val, loc.key, loc.parent, splitLinesKeepEnds(d.src)) == loc.val.Line:
@@ -268,6 +273,17 @@ func (d *Document) SetScalar(path []string, value any) error {
 	if got, _, _, ok := d.node(path); !ok || !d.equal(got, value) {
 		d.src, d.root, d.refs = oldSrc, oldRoot, oldRefs
 		return fmt.Errorf("configedit: setting %s did not produce the requested value; the file is unchanged", strings.Join(path, "."))
+	}
+	// And nothing else may change: the whole file must decode to the old file
+	// with only this value set (an anchored section is meant to carry the
+	// change to its aliases, so it is checked at the target only).
+	if haveBefore && !shared {
+		want, ok := setIn(beforeDoc, path, value)
+		after, ok2 := d.docValue()
+		if ok && ok2 && !canonEqual(after, want) {
+			d.src, d.root, d.refs = oldSrc, oldRoot, oldRefs
+			return fmt.Errorf("configedit: setting %s would also change other values; the file is unchanged", strings.Join(path, "."))
+		}
 	}
 	return nil
 }
@@ -426,7 +442,22 @@ func (d *Document) createEntry(loc location, path []string, value any) error {
 		if container.Style&yaml.FlowStyle != 0 {
 			return fmt.Errorf("configedit: %s is written in flow style ({...}); edit it by hand", pathOrRoot(path[:loc.depth]))
 		}
-		return d.insertEntry(container, rest[0], nest(rest[1:], value))
+		entry := nest(rest[1:], value)
+		if len(rest) > 1 {
+			// rest[0] may come from a "<<:" merge: an explicit key replaces the
+			// whole merged section, so write it out with the change applied.
+			var merged map[string]any
+			if container.Decode(&merged) == nil {
+				if base, ok := d.detokenize(merged).(map[string]any)[rest[0]]; ok && base != nil {
+					v, ok := setIn(base, rest[1:], value)
+					if !ok {
+						return fmt.Errorf("configedit: cannot set %s inside the merged section %s", strings.Join(path, "."), strings.Join(path[:loc.depth+1], "."))
+					}
+					entry = v
+				}
+			}
+		}
+		return d.insertEntry(container, rest[0], entry)
 	case container == loc.val && container.Kind == yaml.ScalarNode && container.Tag == "!!null" && loc.key != nil:
 		// "section:" with nothing under it.
 		return d.replaceEntry(loc, path[:loc.depth], nest(rest, value))
@@ -509,6 +540,30 @@ func (d *Document) Delete(path []string) error {
 	if len(path) == 0 {
 		return fmt.Errorf("configedit: empty path")
 	}
+	if loc, err := d.locate(path); err == nil && loc.viaAlias {
+		return fmt.Errorf("configedit: %s goes through a YAML alias; edit the anchored section instead", strings.Join(path, "."))
+	}
+	oldSrc, oldRoot, oldRefs := d.src, d.root, d.refs
+	beforeDoc, haveBefore := d.docValue()
+	// An anchored entry is meant to vanish from its aliases too, and deleting
+	// an override under "<<:" reveals the merged value: neither is a plain
+	// removal, so those are checked by the edit alone.
+	exempt := d.anchoredPath(path) || d.mergedParent(path)
+	if err := d.deleteText(path); err != nil {
+		return err
+	}
+	if haveBefore && !exempt && !bytes.Equal(oldSrc, d.src) {
+		want, ok := deleteIn(beforeDoc, path)
+		after, ok2 := d.docValue()
+		if ok && ok2 && !canonEqual(after, want) {
+			d.src, d.root, d.refs = oldSrc, oldRoot, oldRefs
+			return fmt.Errorf("configedit: deleting %s would also change other values; the file is unchanged", strings.Join(path, "."))
+		}
+	}
+	return nil
+}
+
+func (d *Document) deleteText(path []string) error {
 	val, parent, key, found := d.node(path)
 	if !found {
 		// Not in the text, but the loaded config may still have it: a key
@@ -894,4 +949,160 @@ func renderEntry(prefix, key string, value any, keyCol int) (string, error) {
 		b.WriteString(pad + ln + "\n")
 	}
 	return b.String(), nil
+}
+
+// decodeText decodes config text the way the editor reads it: ${...}
+// references swapped for placeholders while parsing, then put back.
+func decodeText(b []byte) (any, error) {
+	tok, refs := tokenize(b)
+	var v any
+	if err := yaml.Unmarshal(tok, &v); err != nil {
+		return nil, err
+	}
+	return (&Document{refs: refs}).detokenize(v), nil
+}
+
+// docValue decodes the whole document (aliases expanded, merges resolved,
+// references restored).
+func (d *Document) docValue() (any, bool) {
+	if d.root == nil || len(d.root.Content) == 0 {
+		return nil, true
+	}
+	var v any
+	if err := d.root.Content[0].Decode(&v); err != nil {
+		return nil, false
+	}
+	return d.detokenize(v), true
+}
+
+// setIn returns v with path set to value, creating missing maps. ok is false
+// when a scalar or a missing list item is in the way.
+func setIn(v any, path []string, value any) (any, bool) {
+	if len(path) == 0 {
+		return value, true
+	}
+	switch x := v.(type) {
+	case nil:
+		inner, ok := setIn(nil, path[1:], value)
+		return map[string]any{path[0]: inner}, ok
+	case map[string]any:
+		inner, ok := setIn(x[path[0]], path[1:], value)
+		if !ok {
+			return nil, false
+		}
+		out := make(map[string]any, len(x)+1)
+		for k, e := range x {
+			out[k] = e
+		}
+		out[path[0]] = inner
+		return out, true
+	case []any:
+		i, err := strconv.Atoi(path[0])
+		if err != nil || i < 0 || i >= len(x) {
+			return nil, false
+		}
+		inner, ok := setIn(x[i], path[1:], value)
+		if !ok {
+			return nil, false
+		}
+		out := append([]any{}, x...)
+		out[i] = inner
+		return out, true
+	}
+	return nil, false
+}
+
+// deleteIn returns v with the entry at path removed (a list item is removed,
+// not nulled). A mapping key whose section is left empty reads as null, as
+// "key:" with nothing under it does.
+func deleteIn(v any, path []string) (any, bool) {
+	if len(path) == 0 {
+		return nil, false
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = e
+		}
+		if len(path) == 1 {
+			delete(out, path[0])
+			return out, true
+		}
+		inner, ok := deleteIn(x[path[0]], path[1:])
+		if !ok {
+			return nil, false
+		}
+		if isEmptyContainer(inner) {
+			inner = nil
+		}
+		out[path[0]] = inner
+		return out, true
+	case []any:
+		i, err := strconv.Atoi(path[0])
+		if err != nil || i < 0 || i >= len(x) {
+			return nil, false
+		}
+		if len(path) == 1 {
+			return append(append([]any{}, x[:i]...), x[i+1:]...), true
+		}
+		inner, ok := deleteIn(x[i], path[1:])
+		if !ok {
+			return nil, false
+		}
+		out := append([]any{}, x...)
+		out[i] = inner
+		return out, true
+	}
+	return nil, false
+}
+
+func isEmptyContainer(v any) bool {
+	switch x := v.(type) {
+	case map[string]any:
+		return len(x) == 0
+	case []any:
+		return len(x) == 0
+	}
+	return false
+}
+
+// canonEqual compares two decoded values by their canonical YAML encoding.
+func canonEqual(a, b any) bool {
+	ab, err1 := yaml.Marshal(a)
+	bb, err2 := yaml.Marshal(b)
+	if err1 != nil || err2 != nil {
+		return reflect.DeepEqual(a, b)
+	}
+	return bytes.Equal(ab, bb)
+}
+
+// anchoredPath reports whether a node on path carries an anchor: editing it
+// is meant to change every alias of it too.
+func (d *Document) anchoredPath(path []string) bool {
+	for i := 1; i <= len(path); i++ {
+		v, _, _, ok := d.node(path[:i])
+		if !ok {
+			return false
+		}
+		if v.Anchor != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// mergedParent reports whether the mapping holding path's last key has a
+// "<<:" merge (deleting an override there reveals the merged value).
+func (d *Document) mergedParent(path []string) bool {
+	_, parent, _, ok := d.node(path)
+	if !ok || parent == nil || parent.Kind != yaml.MappingNode {
+		return false
+	}
+	for j := 0; j+1 < len(parent.Content); j += 2 {
+		if parent.Content[j].Value == "<<" {
+			return true
+		}
+	}
+	return false
 }

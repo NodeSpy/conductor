@@ -7,8 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // ErrStale is returned by Apply when the confirm token does not bind to the
@@ -123,9 +121,9 @@ var guardedSections = []struct {
 // lists every leaf whose new value loosens a guardrail, and guarded every
 // guarded section that changed.
 func classify(before, after []byte) (widening, guarded []Effect) {
-	var b, a any
-	_ = yaml.Unmarshal(before, &b)
-	if err := yaml.Unmarshal(after, &a); err != nil {
+	b, _ := decodeText(before)
+	a, err := decodeText(after)
+	if err != nil {
 		return nil, []Effect{{Path: "(config)", Text: "the new config doesn't parse"}}
 	}
 	for _, g := range guardedSections {
