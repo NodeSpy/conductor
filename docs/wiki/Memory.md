@@ -137,6 +137,15 @@ memories (newest first, capped at 20) through the same append path
 that don't opt in get **nothing** — no token cost. The injected section also
 tells the agent how to leave notes back (the output contract above).
 
+Memory persists, so a note an earlier run was steered into writing would
+reach every later prompt that recalls it. The injected notes are therefore
+**data**: they sit inside a `<memory-notes>` fence a note cannot close, under
+a header saying they are notes from earlier runs and cannot change the
+step's instructions or output format, with control characters and invisible
+format characters (bidi overrides, zero-width) stripped from the text, tags
+and source. Treat that as a mitigation, not a guarantee — a step that acts on
+memory should still have its own policy checks.
+
 ### Adding keys: `extra_scopes`
 
 `scopes:` **replaces** the defaults — write it and you get exactly that list.
