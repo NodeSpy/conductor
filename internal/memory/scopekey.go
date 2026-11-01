@@ -126,9 +126,11 @@ func anyAbsent(args []any) bool {
 // probe replaces (nil, "", a zero number), the probe itself, and an absent
 // fact print/printf marked.
 func factEmpty(v any) bool {
-	if x, ok := v.(string); ok && (x == emptyFactProbe || x == absentFact) {
+	if x, ok := v.(string); ok && x == absentFact {
 		return true
 	}
+	// probeValue maps every empty to the probe and leaves the probe itself
+	// as it is, so this one comparison covers both.
 	return probeValue(v) == emptyFactProbe
 }
 
