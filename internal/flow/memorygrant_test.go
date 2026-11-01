@@ -113,6 +113,18 @@ func TestEngineHarvestGrantFromStepSkill(t *testing.T) {
 	if r.StepMemoryGrant(&config.SkillPolicy{Verbs: []string{"gh.*"}}, "remember", trustedTrigger("acme/api")) != nil {
 		t.Fatal("a grant that does not scope memory restricts nothing")
 	}
+	// The list is per verb: a recall list does not restrict remember, and a
+	// remember list binds remember only.
+	split := &config.SkillPolicy{Verbs: []string{"memory.recall", "memory.remember"},
+		VerbScopes: map[string]map[string][]string{
+			"memory.recall":   {"scope": {"acme/api"}},
+			"memory.remember": {"scope": {"standard:{{.repo}}"}}}}
+	if g := r.StepMemoryGrant(split, "remember", trustedTrigger("acme/api")); g == nil || g("acme/api") || !g("standard:acme/api") {
+		t.Fatal("remember must be bound by its own list, not recall's")
+	}
+	if g := r.StepMemoryGrant(split, "recall", trustedTrigger("acme/api")); g == nil || !g("acme/api") || g("standard:acme/api") {
+		t.Fatal("recall must be bound by its own list")
+	}
 	var _ memory.GrantMatcher = g
 }
 
