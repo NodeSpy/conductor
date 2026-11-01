@@ -272,6 +272,9 @@ func TestAbsentFactsNeverRender(t *testing.T) {
 		if got, err := RenderScopeKey(key, empty); err == nil {
 			t.Errorf("%s must not render, got %q", key, got)
 		}
+		if _, err := RenderScopeKey("k:{{print .missing}}", empty); err == nil || !strings.Contains(err.Error(), ErrScopeFact.Error()) {
+			t.Errorf("an absent fact must read as no value, not as a malformed key: %v", err)
+		}
 		if got := RenderScopeKeys([]string{key}, empty); len(got) != 0 {
 			t.Errorf("%s must drop from a selector, got %q", key, got)
 		}
@@ -292,8 +295,10 @@ func TestAbsentFactsNeverRender(t *testing.T) {
 		t.Fatalf("grant over an absent fact: %#v", g)
 	}
 	// A fact's own fmt-like text is refused too: fail closed.
-	if _, err := RenderScopeKey("t:{{.title}}", map[string]any{"title": "100%!"}); err == nil {
-		t.Error("a rendered fmt error mark must refuse the key")
+	for _, title := range []string{"100%!", "x <nil>"} {
+		if _, err := RenderScopeKey("t:{{.title}}", map[string]any{"title": title}); err == nil {
+			t.Errorf("a rendered %q must refuse the key", title)
+		}
 	}
 	// A fact takes no arguments, so a method could never be called.
 	for _, key := range []string{`{{.title.Foo "x"}}`, `{{"x" | .title}}`, `{{.a.b 1}}`} {
