@@ -106,7 +106,7 @@ steps:
 hooks:
   - at: done
     uses: memory.remember
-    options: { text: "h", scope: "hook:{{.team}}/${workflow}" }
+    options: { text: "h", scope: "hook:{{.team}}" }
 `)
 	rig := newTestRunner(t, cfg, reg)
 	runTrigger(rig, newTrigger("ping", map[string]any{"team": "payments", "label": "{{.repo}}"}), spec)
@@ -118,7 +118,7 @@ hooks:
 	for _, e := range all {
 		got[e.Scope] = true
 	}
-	if !got["team:payments"] || !got["title:{{.repo}}"] || len(all) != 2 {
+	if !got["team:payments"] || !got["title:{{.repo}}"] || !got["hook:payments"] || len(all) != 3 {
 		t.Fatalf("scopes written: %v", got)
 	}
 
