@@ -232,7 +232,9 @@ conductor memory key --template 'team:{{.inputs.team}}' --facts facts.json   # o
 ```
 
 It prints the key, or exits non-zero with why it does not apply. It reads no
-config and no memory. Test vectors for the grammar are in
+config and no memory. Code steps call the same renderer as
+[`ctx.memory.key`](#code-and-templates) — a pack never re-implements the
+grammar. Test vectors for it are in
 `internal/memory/testdata/scope_key_vectors.json`.
 
 ## Memory a pack ships
@@ -390,6 +392,29 @@ changing this surface.
   module; go-embed: `import "conductor/memory"`). Code writes carry no run
   provenance, so relative scopes need their explicit forms there
   (`repo:<owner/repo>`, `agent:<name>`).
+- **`ctx.memory.key(template, facts?)`** renders a scope key with core's own
+  renderer — the grammar, refusals and fail-closed rules of
+  [scope keys](#scope-keys-are-templates) — so code that builds a key builds
+  the one a selector or grant with the same template would. It answers
+  `{key, ok, reason}` and does not throw for a key that does not apply:
+
+  ```js
+  const k = ctx.memory.key("team:{{.inputs.team}}", { inputs: { team: "payments" } });
+  // { key: "team:payments", ok: true, reason: "" }
+  ctx.memory.key("team:{{.inputs.team}}", { inputs: {} });
+  // { key: "", ok: false, reason: "scope key \"team:{{.inputs.team}}\" reads a fact this step has no value for" }
+  if (k.ok) ctx.memory.remember("prefers small PRs", ["style"], k.key);
+  ```
+
+  The facts are whatever object the step passes — they are the step's
+  choice, not the run's, so a key built here is only as trusted as the facts
+  that went in. JSON numbers are judged as a run's numbers (`0` has no
+  value, `42` renders `42`); `secrets` and `vaults` keys are dropped and
+  tracked secret values redacted, as for a run's own facts. It reads no
+  memory: it needs no `memory:` section and is not limited by the step's
+  memory scope allowlist. Only a malformed call (no template, facts not an
+  object) throws. `cli` steps: `conductor ctx memory key '<template>'
+  '<facts-json>'`; Go engine plugins: `host.Memory().Key(ctx, template, facts)`.
 - **Templates** — `{{ memory "<scope>" <limit> }}` renders the newest N
   memories of a scope as `- text` lines, read-only:
 

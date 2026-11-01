@@ -3,6 +3,8 @@ package memory
 import (
 	"errors"
 	"fmt"
+	"math"
+	"reflect"
 	"sort"
 	"strings"
 	"text/template"
@@ -80,14 +82,13 @@ func scopeFuncs(empty func(any) bool) template.FuncMap {
 	}
 }
 
+// factEmpty is what default/coalesce treat as no value: the same empties the
+// probe replaces (nil, "", a zero number), and the probe itself.
 func factEmpty(v any) bool {
-	switch x := v.(type) {
-	case nil:
+	if x, ok := v.(string); ok && x == emptyFactProbe {
 		return true
-	case string:
-		return x == "" || x == emptyFactProbe
 	}
-	return false
+	return probeValue(v) == emptyFactProbe
 }
 
 // CheckScopeKey validates a key as written — what config load runs, so a
@@ -224,28 +225,47 @@ func RenderScopeKey(key string, facts map[string]any) (string, error) {
 	return out, nil
 }
 
-// probeFacts copies facts with every empty value (nil, "", a zero int)
-// replaced by the probe, recursing into nested maps (inputs, steps, …).
+// probeFacts copies facts with every empty value (nil, "", a zero number)
+// replaced by the probe, recursing into nested maps (inputs, steps, …) and
+// lists (labels, …).
 func probeFacts(facts map[string]any) map[string]any {
 	out := make(map[string]any, len(facts))
 	for k, v := range facts {
-		switch x := v.(type) {
-		case nil:
-			v = emptyFactProbe
-		case string:
-			if x == "" {
-				v = emptyFactProbe
-			}
-		case int:
-			if x == 0 {
-				v = emptyFactProbe
-			}
-		case map[string]any:
-			v = probeFacts(x)
-		}
-		out[k] = v
+		out[k] = probeValue(v)
 	}
 	return out
+}
+
+func probeValue(v any) any {
+	switch x := v.(type) {
+	case nil:
+		return emptyFactProbe
+	case string:
+		if x == "" {
+			return emptyFactProbe
+		}
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		if reflect.ValueOf(x).IsZero() {
+			return emptyFactProbe
+		}
+	case map[string]any:
+		return probeFacts(x)
+	case []any:
+		l := make([]any, len(x))
+		for i, e := range x {
+			l[i] = probeValue(e)
+		}
+		return l
+	case []string:
+		l := make([]string, len(x))
+		for i, e := range x {
+			if l[i] = e; e == "" {
+				l[i] = emptyFactProbe
+			}
+		}
+		return l
+	}
+	return v
 }
 
 // RenderScopeKeys renders a list of keys, dropping every key that does not
@@ -358,4 +378,49 @@ func ScopeFacts(data map[string]any, t core.Trigger, workflow, step string, reda
 		}
 	}
 	return f
+}
+
+// CallerFacts readies facts a CALLER supplied — a code step's
+// ctx.memory.key, JSON over the ctx socket — for RenderScopeKey, so they are
+// judged as a run's facts are: whole JSON numbers become ints (a JSON 0 is a
+// zero number, so it has no value; 42 renders "42"), named secrets and vault
+// values are dropped as ScopeFacts drops them, and redact (the run's
+// tracked-secret redactor) scrubs the rest. facts is not modified.
+func CallerFacts(facts map[string]any, redact func(any) any) map[string]any {
+	f, _ := wholeNumbers(facts).(map[string]any)
+	if f == nil {
+		f = map[string]any{}
+	}
+	delete(f, "secrets")
+	delete(f, "vaults")
+	if redact != nil {
+		if r, ok := redact(f).(map[string]any); ok {
+			f = r
+		}
+	}
+	return f
+}
+
+// wholeNumbers deep-copies v with every whole float64 (how JSON decodes a
+// number) as an int.
+func wholeNumbers(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		m := make(map[string]any, len(x))
+		for k, e := range x {
+			m[k] = wholeNumbers(e)
+		}
+		return m
+	case []any:
+		l := make([]any, len(x))
+		for i, e := range x {
+			l[i] = wholeNumbers(e)
+		}
+		return l
+	case float64:
+		if x == math.Trunc(x) && math.Abs(x) < 1<<53 {
+			return int(x)
+		}
+	}
+	return v
 }

@@ -213,3 +213,44 @@ func TestRenderGrantScopes(t *testing.T) {
 		t.Fatal(ErrScopeFact)
 	}
 }
+
+// Facts a caller hands over (JSON: every number a float64) are judged as a
+// run's: whole numbers become ints, secrets and vaults are not facts, the
+// redactor sees the rest, and the caller's map is left alone.
+func TestCallerFacts(t *testing.T) {
+	in := map[string]any{"n": float64(42), "z": float64(0), "half": 1.5,
+		"inputs": map[string]any{"pr": float64(7)}, "l": []any{float64(3)},
+		"secrets": map[string]any{"gh": "t"}, "vaults": map[string]any{}, "s": "tok"}
+	f := CallerFacts(in, func(v any) any { v.(map[string]any)["s"] = "[r]"; return v })
+	want := map[string]any{"n": 42, "z": 0, "half": 1.5, "inputs": map[string]any{"pr": 7}, "l": []any{3}, "s": "[r]"}
+	if !reflect.DeepEqual(f, want) {
+		t.Fatalf("got %#v\nwant %#v", f, want)
+	}
+	if in["s"] != "tok" || in["n"] != float64(42) {
+		t.Fatalf("the caller's facts were modified: %#v", in)
+	}
+	if f := CallerFacts(nil, nil); f == nil || len(f) != 0 {
+		t.Fatalf("nil facts: %#v", f)
+	}
+	for _, c := range []struct {
+		key   string
+		facts map[string]any
+	}{
+		{"x:{{.v}}", map[string]any{"v": float64(0)}},
+		{"x:{{.v}}", map[string]any{"v": int64(0)}},
+		{"x:{{.v}}", map[string]any{"v": uint(0)}},
+		{"x:{{index .l 0}}", map[string]any{"l": []any{""}}},
+		{"x:{{index .l 0}}", map[string]any{"l": []any{nil}}},
+		{"x:{{index .l 0}}", map[string]any{"l": []string{""}}},
+	} {
+		if got, err := RenderScopeKey(c.key, c.facts); err == nil {
+			t.Errorf("%q over %#v must not render, got %q", c.key, c.facts, got)
+		}
+	}
+	if got, _ := RenderScopeKey("x:{{.v | default \"d\"}}", map[string]any{"v": float64(0)}); got != "x:d" {
+		t.Errorf("default sees a zero number as no value: %q", got)
+	}
+	if got, _ := RenderScopeKey("x:{{index .l 1}}", map[string]any{"l": []any{"", "b"}}); got != "x:b" {
+		t.Errorf("a set list element renders: %q", got)
+	}
+}

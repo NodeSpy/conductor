@@ -90,6 +90,10 @@ type Spec struct {
 	// write barrier: without it, an agent plan's code step could park secret
 	// material that `uses: kv.set` would have refused.
 	DataGuard DataGuard
+	// Redact, when non-nil, is the run's tracked-secret redactor: the facts
+	// a step hands ctx.memory.key pass through it, as a run's own scope
+	// facts do (memory.ScopeFacts).
+	Redact func(any) any
 	// Isolation is the step's OWN `isolation:` block (config.Step.Isolation),
 	// carried through unresolved — nil unless the step explicitly configured
 	// one. A nil Isolation must leave a code step running exactly as it

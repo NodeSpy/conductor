@@ -76,24 +76,24 @@ func TestCtxMemoryOpSurface(t *testing.T) {
 // TestMemInvokeValidation: the shared dispatcher's argument contract.
 func TestMemInvokeValidation(t *testing.T) {
 	tempMem(t)
-	if _, err := memInvoke(nil, "remember", nil); err == nil {
+	if _, err := memInvoke(nil, nil, "remember", nil); err == nil {
 		t.Error("remember without text must error")
 	}
-	if _, err := memInvoke(nil, "remember", []any{"x", 42, ""}); err == nil {
+	if _, err := memInvoke(nil, nil, "remember", []any{"x", 42, ""}); err == nil {
 		t.Error("non-list tags must error")
 	}
-	if _, err := memInvoke(nil, "recall", []any{"not a map"}); err == nil {
+	if _, err := memInvoke(nil, nil, "recall", []any{"not a map"}); err == nil {
 		t.Error("non-map recall options must error")
 	}
 	// A scope key is opaque — there is no relative form to fail on any more
 	// (design §2), so this is simply a recall against the key "repo".
-	if _, err := memInvoke(nil, "recall", []any{map[string]any{"scope": "repo"}}); err != nil {
+	if _, err := memInvoke(nil, nil, "recall", []any{map[string]any{"scope": "repo"}}); err != nil {
 		t.Errorf("an opaque scope key must be accepted: %v", err)
 	}
-	if _, err := memInvoke(nil, "forget", nil); err == nil {
+	if _, err := memInvoke(nil, nil, "forget", nil); err == nil {
 		t.Error("forget without id must error")
 	}
-	if _, err := memInvoke(nil, "bogus", nil); err == nil {
+	if _, err := memInvoke(nil, nil, "bogus", nil); err == nil {
 		t.Error("unknown op must error")
 	}
 }

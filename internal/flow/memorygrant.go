@@ -107,11 +107,17 @@ func StepMemoryGrant(sk *config.SkillPolicy, op string, facts map[string]any) me
 // redactor — the one place flow builds the facts a step's scope keys render
 // over.
 func (r *Runner) MemoryFacts(data map[string]any, t core.Trigger, workflow, step string) map[string]any {
-	var redact func(any) any
+	return memory.ScopeFacts(data, t, workflow, step, r.secretRedactor())
+}
+
+// secretRedactor is the runner's tracked-secret redactor, nil without one —
+// what a step's scope facts, and the facts a code step hands
+// ctx.memory.key, pass through.
+func (r *Runner) secretRedactor() func(any) any {
 	if r != nil && r.Secrets != nil {
-		redact = r.Secrets.RedactValue
+		return r.Secrets.RedactValue
 	}
-	return memory.ScopeFacts(data, t, workflow, step, redact)
+	return nil
 }
 
 // memoryVerbScope renders the `scope:` option of a memory verb step as a

@@ -134,3 +134,46 @@ hooks:
 	}
 	var _ = memory.ScopeOption
 }
+
+// A code step's ctx.memory.key renders over facts the step hands it, through
+// the runner's tracked-secret redactor (code.Spec.Redact) — and with no
+// memory: section configured, since key reads no memory.
+func TestCodeStepMemoryKeyRedacts(t *testing.T) {
+	const secretVal = "key-fact-s3cr3t"
+	memory.Reset()
+	helper := ctxHelper(t)
+	cfg := loadConfig(t, `
+connectors:
+  svc: { use: fake }
+`)
+	reg := buildRegistry(t, cfg)
+	fake := newFakeState(t, "svc")
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - id: k
+    use: cli
+    command: [sh]
+    env: { HELPER: "`+helper+`", CONDUCTOR_FLOW_CTX_TEST_CLIENT: "1" }
+    code: |
+      k=$("$HELPER" ctx memory key 'team:{{.team}}' '{"team":"key-fact-s3cr3t"}') || exit 1
+      t=$("$HELPER" ctx memory key 'team:{{.team}}' '{"team":"payments"}') || exit 1
+      leaked=false; case "$k" in *s3cr3t*) leaked=true;; esac
+      plain=false; case "$t" in *'"team:payments"'*) plain=true;; esac
+      printf '{"leaked": %s, "plain": %s}' "$leaked" "$plain"
+  - id: post
+    uses: svc.post
+    options: { text: "leaked={{.k.leaked}} plain={{.k.plain}}" }
+`)
+	rig := newTestRunner(t, cfg, reg)
+	shared := testSecrets(nil)
+	shared.Track(secretVal)
+	rig.Runner.Secrets = shared
+	runTrigger(rig, newTrigger("ping", nil), spec)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("workflow failed: %s", errStr)
+	}
+	if calls := fake.snapshot(); len(calls) != 1 || calls[0].Opts["text"] != "leaked=false plain=true" {
+		t.Fatalf("code-step memory key: %+v", calls)
+	}
+}

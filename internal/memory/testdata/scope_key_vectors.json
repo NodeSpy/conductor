@@ -12,6 +12,7 @@
     "head_ref": "feature/*",
     "author": "octo-dev",
     "labels": ["backend", "needs-review"],
+    "blank_labels": [""],
     "base": "main",
     "workflow": "review",
     "step": "lens",
@@ -37,6 +38,8 @@
     { "template": "area:{{.inputs.area | default \"general\"}}", "want": "area:general" },
     { "template": "area:{{coalesce .inputs.area .inputs.team}}", "want": "area:payments" },
     { "template": "branch:{{.head_ref}}", "want": "branch:feature/*" },
+    { "template": "issue:{{.issue | default \"none\"}}", "want": "issue:none" },
+    { "template": "n:{{coalesce .issue .number}}", "want": "n:42" },
     { "template": "title:{{.title}}", "want": "title:Fix the {{.repo}} parser" },
     { "template": "  team:{{.inputs.team}}  ", "want": "team:payments" },
     { "template": "team:{{.inputs.missing}}", "drop": true },
@@ -55,6 +58,7 @@
     { "template": "{{secret \"gh\"}}", "drop": true },
     { "template": "{{len .labels}}", "drop": true },
     { "template": "{{print \" \"}}", "drop": true },
+    { "template": "label:{{index .blank_labels 0}}", "drop": true },
     { "template": "{{.inputs.area | default \"\"}}", "drop": true },
     { "template": "{{.owner", "drop": true }
   ]

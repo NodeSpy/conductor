@@ -27,7 +27,7 @@ import (
 //	host.KV()      ctx.store   get/set/setnx/merge/delete/incr/append/remove/
 //	                           contains/list/first/last/index/slice/len/pop
 //	host.SQL()     ctx.sql     query/exec
-//	host.Memory()  ctx.memory  remember/recall/forget/list
+//	host.Memory()  ctx.memory  remember/recall/forget/list/key
 //
 // A store NAME is an argument rather than part of the handle because that is
 // how the wire carries it (HostRequest.Resource) and how every other face
@@ -246,4 +246,21 @@ func (m HostMemory) Forget(ctx context.Context, id string) (any, error) {
 // List returns this execution's own scope's entries.
 func (m HostMemory) List(ctx context.Context) (any, error) {
 	return m.h.Call(ctx, HostKindMemory, "list", "")
+}
+
+// Key renders a memory scope key with conductor's own renderer — the
+// template language and fail-closed rules a selector or grant uses — over
+// facts the engine supplies. ok=false (with reason) when the key does not
+// apply: it reads a fact with no value, or uses a construct a key may not.
+// It reads no memory and needs no memory: section.
+func (m HostMemory) Key(ctx context.Context, template string, facts map[string]any) (key string, ok bool, reason string, err error) {
+	v, err := m.h.Call(ctx, HostKindMemory, "key", "", template, facts)
+	if err != nil {
+		return "", false, "", err
+	}
+	r, _ := v.(map[string]any)
+	key, _ = r["key"].(string)
+	ok, _ = r["ok"].(bool)
+	reason, _ = r["reason"].(string)
+	return key, ok, reason, nil
 }
