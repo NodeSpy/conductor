@@ -190,6 +190,13 @@ func TestABrokenLayerDoesNotBreakRecall(t *testing.T) {
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal("the read-only backend must not create its directory")
 	}
+	file := filepath.Join(t.TempDir(), "entry.md")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewReadOnlyDirBackend(file); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("a file is not an entries dir: %v", err)
+	}
 }
 
 func TestRescope(t *testing.T) {
@@ -359,6 +366,10 @@ func TestPromptSectionExtraScopesAppend(t *testing.T) {
 	s = m.PromptSection(Filter{Scopes: []string{"acme/web"}, Extra: []string{"standard:acme/api"}}, keys)
 	if !strings.Contains(s, "other repo") || !strings.Contains(s, "standard note") || strings.Contains(s, "repo note") || strings.Contains(s, "shared note") {
 		t.Errorf("explicit + extra:\n%s", s)
+	}
+	// An empty extra key is a no-op, never the shared set.
+	if s := m.PromptSection(Filter{Extra: []string{""}}, nil); s != "" {
+		t.Errorf("an empty extra scope must not recall the shared set:\n%s", s)
 	}
 	// No base keys at all: only the extras.
 	s = m.PromptSection(Filter{Extra: []string{"standard:acme/api"}}, nil)
