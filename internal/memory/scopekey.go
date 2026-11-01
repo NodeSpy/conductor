@@ -30,10 +30,13 @@ import (
 //
 // The rules, each fail-closed:
 //
-//   - A key that reads a fact this step has no value for — missing, "" or a
-//     zero number — does not render. Recall drops it; a grant entry admits
-//     nothing; a write is refused. `team:{{.inputs.team}}` with no team is
-//     never `team:`. `{{.x | default "core"}}` supplies a fallback.
+//   - A key that reads a fact this step has no value for — absent, null, ""
+//     or a zero number — does not render. Recall drops it; a grant entry
+//     admits nothing; a write is refused. `team:{{.inputs.team}}` with no
+//     team is never `team:`, and `{{printf "%s" .inputs.team}}` is never
+//     `%!s(<nil>)`. A fact with no value handed straight to default or
+//     coalesce falls back: `{{.x | default "core"}}`,
+//     `{{coalesce (printf "t-%s" .x) "core"}}`.
 //   - Pipelines only: no if/range/with/define/template, no variables, and
 //     only the functions default, coalesce, index, print and printf — no kv,
 //     vault, secret or memory reads. Rendering a key does no work.
@@ -53,6 +56,13 @@ var scopeFuncNames = map[string]bool{"default": true, "coalesce": true, "index":
 // (see RenderScopeKey). It carries a NUL, which no real key may contain.
 const emptyFactProbe = "\x00empty-fact\x00"
 
+// absentFact is what print and printf return when handed a fact that is
+// ABSENT (or null): a value no real key may contain, which default and
+// coalesce treat as no value and which refuses any key it reaches. The probe
+// cannot see an absent fact — there is nothing in the facts to replace — so
+// the functions that would otherwise format it as `<nil>` mark it instead.
+const absentFact = "\x00absent-fact\x00"
+
 // ErrScopeFact is the error a key that reads a fact this step has no value
 // for renders with.
 var ErrScopeFact = errors.New("reads a fact this step has no value for")
@@ -65,11 +75,29 @@ func IsScopeTemplate(key string) bool {
 
 func scopeFuncs(empty func(any) bool) template.FuncMap {
 	return template.FuncMap{
-		"default": func(fallback any, v ...any) any {
-			if len(v) == 0 || empty(v[0]) {
-				return fallback
+		"print": func(args ...any) string {
+			if anyAbsent(args) {
+				return absentFact
 			}
-			return v[0]
+			return fmt.Sprint(args...)
+		},
+		"printf": func(format string, args ...any) string {
+			if anyAbsent(args) {
+				return absentFact
+			}
+			return fmt.Sprintf(format, args...)
+		},
+		// default and coalesce fall back past a fact with no value — and when
+		// what they fall back to has none either, the answer is an absent
+		// fact, never "": `x:{{.a | default ""}}` is not the key `x:`.
+		"default": func(fallback any, v ...any) any {
+			if len(v) > 0 && !empty(v[0]) {
+				return v[0]
+			}
+			if empty(fallback) {
+				return absentFact
+			}
+			return fallback
 		},
 		"coalesce": func(vals ...any) any {
 			for _, v := range vals {
@@ -77,15 +105,28 @@ func scopeFuncs(empty func(any) bool) template.FuncMap {
 					return v
 				}
 			}
-			return ""
+			return absentFact
 		},
 	}
 }
 
+// anyAbsent reports whether print/printf were handed an absent fact: a nil
+// (missingkey=zero's value for a key the facts lack, and a present key whose
+// value is null), or the marker another print/printf already returned.
+func anyAbsent(args []any) bool {
+	for _, a := range args {
+		if a == nil || a == absentFact {
+			return true
+		}
+	}
+	return false
+}
+
 // factEmpty is what default/coalesce treat as no value: the same empties the
-// probe replaces (nil, "", a zero number), and the probe itself.
+// probe replaces (nil, "", a zero number), the probe itself, and an absent
+// fact print/printf marked.
 func factEmpty(v any) bool {
-	if x, ok := v.(string); ok && x == emptyFactProbe {
+	if x, ok := v.(string); ok && (x == emptyFactProbe || x == absentFact) {
 		return true
 	}
 	return probeValue(v) == emptyFactProbe
@@ -154,7 +195,17 @@ func checkScopePipe(p *parse.PipeNode) error {
 	if len(p.Decl) > 0 {
 		return fmt.Errorf("variables are not allowed in a scope key")
 	}
-	for _, cmd := range p.Cmds {
+	for i, cmd := range p.Cmds {
+		// A fact is a value, never a call: `.x "arg"` or `… | .x` would
+		// invoke a method if a fact ever carried one. Facts are JSON-plain
+		// today (maps, lists, strings, numbers, bools), so this only keeps
+		// it that way for whatever fact source comes next.
+		switch cmd.Args[0].(type) {
+		case *parse.FieldNode, *parse.ChainNode, *parse.VariableNode:
+			if len(cmd.Args) > 1 || i > 0 {
+				return fmt.Errorf("a fact takes no arguments in a scope key (%s)", cmd.String())
+			}
+		}
 		for _, a := range cmd.Args {
 			switch x := a.(type) {
 			case *parse.IdentifierNode:
@@ -208,8 +259,15 @@ func RenderScopeKey(key string, facts map[string]any) (string, error) {
 		return "", fmt.Errorf("scope key %q: %w", key, err)
 	}
 	out := b.String()
-	if strings.Contains(out, "<no value>") {
+	if strings.Contains(out, "<no value>") || strings.Contains(out, absentFact) {
 		return "", fmt.Errorf("scope key %q %w", key, ErrScopeFact)
+	}
+	// Backstop: whatever path a nil or a mismatched verb took to the output,
+	// fmt's own error marks (`%!s(<nil>)`, `%!d(string=x)`, `%!(EXTRA …)`) and
+	// a printed nil are never a key. A fact whose own text carries one is
+	// refused too — fail closed.
+	if strings.Contains(out, "%!") || strings.Contains(out, "<nil>") {
+		return "", fmt.Errorf("scope key %q renders a formatting error or a nil (%q) — not a key", key, out)
 	}
 	b.Reset()
 	if err := t.Execute(&b, probeFacts(facts)); err != nil || strings.Contains(b.String(), emptyFactProbe) {

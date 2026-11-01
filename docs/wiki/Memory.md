@@ -191,18 +191,32 @@ builds `repo:` from the request body, the sender chose it, and `repo`,
 `owner`, `name`, `number`, `pr`, `issue`, `head`, `base` and `url` are empty
 for scope keys — a forged repo cannot key another tenant's memory.
 
-**Fail closed.** A key that reads a fact this step has no value for — absent,
-`""`, or a zero number — **does not apply**: recall drops it (never the
-literal text, never a bare `team:`); a grant entry admits nothing; a
-`memory.remember` step refuses rather than write under a partial key. If
-every key of an explicit `scopes:` list drops, the step recalls nothing
-rather than falling back to the defaults. Supply a fallback where one makes
-sense: `team:{{.inputs.team | default "core"}}`.
+**Fail closed.** A key that reads a fact this step has no value for —
+absent, `null`, `""`, or a zero number — **does not apply**: recall drops it
+(never the literal text, never a bare `team:`, never fmt's `%!s(<nil>)`); a
+grant entry admits nothing; a `memory.remember` step refuses rather than
+write under a partial key. That holds through every function: `print` and
+`printf` over a fact with no value give no value, and `default`/`coalesce`
+whose every candidate has none give none (`x:{{.a | default ""}}` is not
+`x:`). If every key of an explicit `scopes:` list drops, the step recalls
+nothing rather than falling back to the defaults. Supply a fallback where
+one makes sense — a fact with no value handed to `default` or `coalesce`
+falls back, formatted or not:
+
+```
+team:{{.inputs.team | default "core"}}
+team:{{coalesce (printf "t-%s" .inputs.team) "core"}}
+```
+
+As a backstop, a rendered key containing fmt's error marks (`%!`) or a
+printed `<nil>` is refused whatever produced it — including a fact whose own
+text contains them.
 
 **What a key may do.** Values and pipelines only — no `if`/`range`/`with`/
 `define`/`template`, no variables — and only `default`, `coalesce`, `index`,
 `print` and `printf`. No `kv`, `vault`, `secret` or `memory`: rendering a key
-reads nothing. A key carrying a control character (written or rendered) is
+reads nothing. A fact is a value, never called: `{{.x "arg"}}` and
+`{{… | .x}}` are refused. A key carrying a control character (written or rendered) is
 refused. A malformed key fails `conductor validate` and config load.
 
 **A rendered value is literal.** It is never rendered again (a PR title of

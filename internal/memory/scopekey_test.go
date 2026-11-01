@@ -254,3 +254,65 @@ func TestCallerFacts(t *testing.T) {
 		t.Errorf("a set list element renders: %q", got)
 	}
 }
+
+// A fact the step lacks — absent, or present as null — never renders through
+// print/printf as fmt's `<nil>` or `%!s(<nil>)`: the key does not apply, in
+// every function an absent fact can reach. Handed to default/coalesce it
+// still falls back. fmt's error marks are refused whatever produced them.
+func TestAbsentFactsNeverRender(t *testing.T) {
+	empty := map[string]any{"inputs": map[string]any{"gone": nil}, "nothing": nil, "l": []any{nil}}
+	for _, key := range []string{
+		`{{print .missing}}`, `{{printf "%v" .missing}}`, `{{printf "%s" .missing}}`,
+		`n:{{printf "%d" .missing}}`, `team:{{printf "%s" .inputs.missing}}`,
+		`team:{{.inputs.missing | printf "%s"}}`, `{{print "a" .nothing}}`,
+		`x:{{printf "%s" .inputs.gone}}`, `x:{{print (index .l 0)}}`, `x:{{print .l}}`,
+		`x:{{printf "%s" (index .inputs "nope")}}`, `x:{{printf "%s"}}`, `x:{{printf "%d" "s"}}`,
+		`x:{{printf "%s" (printf "%s" .missing)}}`, `x:{{print (coalesce .missing .nothing)}}`,
+	} {
+		if got, err := RenderScopeKey(key, empty); err == nil {
+			t.Errorf("%s must not render, got %q", key, got)
+		}
+		if got := RenderScopeKeys([]string{key}, empty); len(got) != 0 {
+			t.Errorf("%s must drop from a selector, got %q", key, got)
+		}
+	}
+	for key, want := range map[string]string{
+		`team:{{coalesce (printf "%s" .missing) "fallback"}}`:   "team:fallback",
+		`team:{{printf "%s" .inputs.missing | default "core"}}`: "team:core",
+		`x:{{.inputs.gone | default "d"}}`:                      "x:d",
+		`x:{{coalesce .nothing (print .missing) "c"}}`:          "x:c",
+	} {
+		if got, err := RenderScopeKey(key, empty); err != nil || got != want {
+			t.Errorf("%s = %q %v, want %q", key, got, err, want)
+		}
+	}
+	// A grant entry reading an absent fact admits nothing.
+	g := RenderGrantScopes(map[string]map[string][]string{"memory.remember": {"scope": {`team:{{printf "%s" .inputs.team}}`}}}, empty)
+	if l, ok := g["memory.remember"]; !ok || len(l) != 0 {
+		t.Fatalf("grant over an absent fact: %#v", g)
+	}
+	// A fact's own fmt-like text is refused too: fail closed.
+	if _, err := RenderScopeKey("t:{{.title}}", map[string]any{"title": "100%!"}); err == nil {
+		t.Error("a rendered fmt error mark must refuse the key")
+	}
+	// A fact takes no arguments, so a method could never be called.
+	for _, key := range []string{`{{.title.Foo "x"}}`, `{{"x" | .title}}`, `{{.a.b 1}}`} {
+		if err := CheckScopeKey(key); err == nil {
+			t.Errorf("%s must be refused", key)
+		}
+	}
+}
+
+// default/coalesce whose every candidate has no value give no value — never
+// "", so never the partial key `x:`.
+func TestFallbackWithNoValueIsNoValue(t *testing.T) {
+	f := map[string]any{"e": "", "z": 0, "n": nil}
+	for _, key := range []string{`x:{{coalesce .missing .n .e .z}}`, `x:{{.e | default ""}}`, `x:{{.missing | default .z}}`, `x:{{coalesce}}`} {
+		if got, err := RenderScopeKey(key, f); err == nil {
+			t.Errorf("%s must not render, got %q", key, got)
+		}
+	}
+	if got, _ := RenderScopeKey(`x:{{coalesce .missing .e "c"}}`, f); got != "x:c" {
+		t.Errorf("coalesce reaches its first value: %q", got)
+	}
+}
