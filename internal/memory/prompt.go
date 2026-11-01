@@ -8,9 +8,11 @@ import (
 // Filter selects what an opted-in step gets injected: which scope keys, an
 // optional tag narrowing, and a cap. An empty Scopes list falls back to the
 // caller's default keys (the engine supplies the shared set plus the run's
-// context keys — see PromptSection).
+// context keys — see PromptSection). Extra is appended to whichever of the
+// two applies, so a step can add keys without restating the defaults.
 type Filter struct {
 	Scopes []string
+	Extra  []string
 	Tags   []string
 	Limit  int
 }
@@ -27,17 +29,21 @@ const DefaultInjectLimit = 20
 // when empty the caller's contextKeys are used, which is how the engine
 // supplies its convention (the shared set, the repo string, the workflow
 // name, the step identity) without the memory core learning those concepts.
-// Returns "" when nothing matches, so a non-matching opt-in costs no tokens.
+// f.Extra is appended to either. Returns "" when nothing matches, so a
+// non-matching opt-in costs no tokens.
 func (m *Manager) PromptSection(f Filter, contextKeys []string) string {
+	explicit := len(f.Scopes) > 0
 	scopes := f.Scopes
-	if len(scopes) == 0 {
+	if !explicit {
 		scopes = contextKeys
 	}
+	base := len(scopes)
+	scopes = append(append([]string(nil), scopes...), f.Extra...)
 	var resolved []string
 	seen := map[string]bool{}
-	for _, s := range scopes {
+	for i, s := range scopes {
 		r := NormalizeScope(s)
-		if s == "" && len(f.Scopes) > 0 {
+		if s == "" && (explicit || i >= base) {
 			continue // an explicitly-empty entry in a filter is a no-op
 		}
 		if seen[r] {
@@ -128,28 +134,49 @@ func ContextKeys(repo, workflow, stepIdentity string) []string {
 }
 
 // ExpandScopeRefs replaces the `${repo}` / `${workflow}` / `${step}` sugar in
-// an author-written scope list with the run's context keys, dropping a
-// placeholder whose referent is empty. Any other entry passes through
-// verbatim — it is an opaque key.
+// an author-written scope list with the run's context keys. A placeholder may
+// be the whole entry (`${repo}`) or part of one (`standard:${repo}`), and an
+// entry may carry several. An entry that names a placeholder whose referent
+// is empty — `standard:${repo}` on a run with no repo — is DROPPED, never
+// kept with the placeholder blanked or left in: `standard:` or the literal
+// `standard:${repo}` would each be a key that matches the wrong entries or
+// none. An entry with no placeholder passes through verbatim — it is an
+// opaque key.
 func ExpandScopeRefs(scopes []string, repo, workflow, stepIdentity string) []string {
 	if len(scopes) == 0 {
 		return nil
 	}
+	refs := []struct{ token, value string }{
+		{scopeRefRepo, strings.TrimSpace(repo)},
+		{scopeRefWorkflow, strings.TrimSpace(workflow)},
+		{scopeRefStep, strings.TrimSpace(stepIdentity)},
+	}
+	// One pass over the entry, so a referent's own text is never re-scanned
+	// for placeholders.
+	expand := strings.NewReplacer(
+		scopeRefRepo, refs[0].value,
+		scopeRefWorkflow, refs[1].value,
+		scopeRefStep, refs[2].value,
+	)
 	out := make([]string, 0, len(scopes))
 	for _, s := range scopes {
-		var v string
-		switch strings.TrimSpace(s) {
-		case scopeRefRepo:
-			v = repo
-		case scopeRefWorkflow:
-			v = workflow
-		case scopeRefStep:
-			v = stepIdentity
-		default:
-			out = append(out, s)
+		named, resolved := false, true
+		for _, r := range refs {
+			if strings.Contains(s, r.token) {
+				named = true
+				if r.value == "" {
+					resolved = false
+				}
+			}
+		}
+		if !named {
+			out = append(out, s) // no placeholder: the opaque key, untouched
 			continue
 		}
-		if strings.TrimSpace(v) != "" {
+		if !resolved {
+			continue
+		}
+		if v := strings.TrimSpace(expand.Replace(s)); v != "" {
 			out = append(out, v)
 		}
 	}

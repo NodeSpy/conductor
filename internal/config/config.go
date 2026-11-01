@@ -279,6 +279,9 @@ type Config struct {
 	// what applying them to bots found worth saying (BotTemplateNotes).
 	templates     map[string]map[string]LoadedTemplate `yaml:"-"`
 	templateNotes []string                             `yaml:"-"`
+	// packMemory are the read-only memory entries each pack instance ships
+	// (by instance), resolved inside its vendored dir (pack_memory.go).
+	packMemory map[string]PackMemoryLayer `yaml:"-"`
 	// removedWarnings name removed keys still in the config or its packs
 	// (removed.go).
 	removedWarnings []string `yaml:"-"`
@@ -1154,6 +1157,10 @@ var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // A reference inside a `#` comment is left alone, which is what the old
 // line-splitting implementation went out of its way to do and what a node
 // walk gets for free: comments are not scalar values.
+// memoryScopeRef names the placeholders expandEnv leaves for the engine (see
+// MemoryScopeRepo and friends).
+var memoryScopeRef = map[string]bool{"repo": true, "workflow": true, "step": true}
+
 func expandEnv(path string, b []byte) ([]byte, error) {
 	// A secret field must name its source, read when the value is used —
 	// never take one substituted into the config here (see
@@ -1165,6 +1172,14 @@ func expandEnv(path string, b []byte) ([]byte, error) {
 	seen := map[string]bool{}
 	out, err := SubstituteRefs(b, envRe, func(ref string) (string, bool) {
 		name := envRe.FindStringSubmatch(ref)[1]
+		if memoryScopeRef[name] {
+			// `${repo}` / `${workflow}` / `${step}` are the memory
+			// selector's run-context placeholders, expanded per run by the
+			// engine — not environment variables. Left in place, they reach
+			// the selector; read as env refs, every config that used the
+			// documented sugar failed to load.
+			return "", false
+		}
 		v, ok := os.LookupEnv(name)
 		if !ok {
 			if !seen[name] {

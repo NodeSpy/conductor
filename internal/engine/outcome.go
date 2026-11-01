@@ -193,12 +193,22 @@ func (e *Engine) recordOutcome(ctx context.Context, repo string, number int, out
 	// memory manager's own guards.
 	if m := memory.Active(); m != nil && (outcome == "merged" || outcome == "reverted" || outcome == "closed") {
 		text := fmt.Sprintf("outcome: %s#%d %s (step %s, workflow %s)", repo, number, outcome, g.Key, orNone(g.Workflow))
-		// The scope key is the repo string itself — an opaque key by
-		// convention, with no `repo:` type prefix (design §2).
-		_, _ = m.Remember(text, []string{"outcome", outcome}, repo,
+		// Filed under `outcome:<repo>`, NOT the bare repo key. The repo key
+		// is in every opted-in step's default recall set, and recall is
+		// newest-first under a limit: one note per merged PR buried every
+		// learned entry for a busy repo (and the shared set with it). Nothing
+		// in core reads these back from memory — report/health use the audit
+		// rows — so they live beside the repo's memory, recalled only by a
+		// step that names the key. `conductor memory rescope --tag outcome
+		// --to 'outcome:{scope}'` moves notes written before this.
+		_, _ = m.Remember(text, []string{"outcome", outcome}, OutcomeScope(repo),
 			memory.Source{Trigger: "outcome", Repo: repo, Step: g.Key, Run: g.Run})
 	}
 }
+
+// OutcomeScope is the memory scope key outcome notes for a repo are filed
+// under.
+func OutcomeScope(repo string) string { return "outcome:" + repo }
 
 func orNone(s string) string {
 	if s == "" {

@@ -101,6 +101,13 @@ type LiveOps struct {
 	// run's identity. nil → those ops fall back to the body Source (the MCP
 	// path, where the daemon baked Source into the tool command's flags).
 	Identify func(token string, peer Peer) (src Source, number int, ok bool)
+	// Grant resolves the token's step grant for one memory op (remember,
+	// recall, list, forget): the matcher for the scopes its skill.verbs entry
+	// lists for `memory.<op>`, or nil when that step names none. It is how a
+	// step's own scope restriction reaches this face, so a step limited to
+	// writing `standard:<repo>` through the verb cannot write anywhere else
+	// through the tool. nil → no step restrictions on this face.
+	Grant func(token, op string, peer Peer) GrantMatcher
 	// Browser runs one browser action (internal/browser) for the token's
 	// session: Uses is the action, Options its arguments. Authorized by
 	// token + peer; nil → no browser on this daemon.
@@ -264,7 +271,11 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 		// whose target the event's SENDER chose — a webhook `repo:` templated
 		// from the POST body — contributes no implicit own-scope here, the
 		// same as on the verb and code faces. This face used the raw repo.
-		if err := m.CheckOp(NewAgentCaller(req.Source.Repo, req.Source.TargetTrusted), op, req.Scope); err != nil {
+		caller := NewAgentCaller(req.Source.Repo, req.Source.TargetTrusted)
+		if g := getLiveOps().Grant; g != nil && req.Token != "" {
+			caller = caller.WithGrant(g(req.Token, op, peer))
+		}
+		if err := m.CheckOp(caller, op, req.Scope); err != nil {
 			aud(map[string]any{"event": "memory_" + op, "via": "tool", "outcome": "blocked",
 				"agent": req.Source.Step, "repo": req.Source.Repo, "error": err.Error()})
 			return IPCResponse{Error: err.Error()}

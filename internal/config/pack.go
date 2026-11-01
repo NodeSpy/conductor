@@ -435,9 +435,11 @@ type PackManifest struct {
 	removedWarnings []string `yaml:"-"`
 
 	// Bind-only sections — FORBIDDEN here. Captured as raw nodes so an offending
-	// pack is rejected by name (see (*PackManifest).checkNoEnvironment). The
-	// `memory:` block selects the daemon-wide memory backend (a `stores:` entry
-	// or a filesystem dir) — infra identity, so it is bind-only too.
+	// pack is rejected by name (see (*PackManifest).checkNoEnvironment). A
+	// `memory:` block that selects the daemon-wide memory backend (a `stores:`
+	// entry or a filesystem dir) is infra identity, so it is bind-only too;
+	// the one key a pack may use there is `entries:`, the read-only memory
+	// files it ships (pack_memory.go).
 	Connectors map[string]yaml.Node `yaml:"connectors,omitempty"`
 	Secrets    map[string]yaml.Node `yaml:"secrets,omitempty"`
 	Vaults     map[string]yaml.Node `yaml:"vaults,omitempty"`
@@ -566,11 +568,16 @@ func (m *PackManifest) checkNoEnvironment() error {
 	if len(m.Hosts) > 0 {
 		shipped = append(shipped, "hosts")
 	}
-	if m.Memory.Kind != 0 {
-		shipped = append(shipped, "memory")
+	// `memory: { entries: <dir> }` is content the pack ships (read-only
+	// entries, pack_memory.go); any other memory key picks a BACKEND and is
+	// bind-only.
+	_, badMemory, _, merr := m.memoryEntries()
+	if merr != nil {
+		return fmt.Errorf("pack %q: %w", m.Pack.Name, merr)
 	}
+	shipped = append(shipped, badMemory...)
 	if len(shipped) > 0 {
-		return fmt.Errorf("pack %q ships bind-only section(s) %v: a pack must not carry connectors, secrets, vaults, stores, runtimes, hosts, or a memory backend (define behavior / bind environment) — declare them in requires: and let the consumer bind them; agents may still opt into memory via their own memory: selector", m.Pack.Name, shipped)
+		return fmt.Errorf("pack %q ships bind-only section(s) %v: a pack must not carry connectors, secrets, vaults, stores, runtimes, hosts, or a memory backend (define behavior / bind environment) — declare them in requires: and let the consumer bind them; agents may still opt into memory via their own memory: selector, and a pack may ship read-only entries with memory: { entries: <dir> }", m.Pack.Name, shipped)
 	}
 	return nil
 }

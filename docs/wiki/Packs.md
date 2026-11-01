@@ -178,11 +178,14 @@ arm's own `policy:` (most specific wins).
 This single rule decides what a pack may *ship* vs must *bind*:
 
 - **Define-in-pack** (shipped, namespaced, overridable): `workflows:`, `models:`
-  (fleets), `policy:`, `checks:`, its disarmed `triggers:`, and bot templates
-  (`bots:`, [below](#bot-templates)). Pure behavior.
+  (fleets), `policy:`, `checks:`, its disarmed `triggers:`, bot templates
+  (`bots:`, [below](#bot-templates)), and read-only memory entries
+  (`memory: { entries: <dir> }`, [[Memory#memory-a-pack-ships]]). Pure
+  behavior and content.
 - **Bind-only** (declared in `requires:`, wired in the block, **never shipped**):
   `connectors:`, `secrets:`, `vaults:`, `stores:`, `runtimes:`, `hosts:`,
-  `handoffs:`. Anything carrying credentials, endpoints, or infra identity.
+  `handoffs:`, and a memory backend (`memory: { store: | dir: | type: }`).
+  Anything carrying credentials, endpoints, or infra identity.
 
 This is the security boundary. A pack fetched from a stranger can define prompts,
 policy, and workflows, but it **cannot smuggle in a credential or point at
@@ -689,8 +692,10 @@ The following are **not yet** implemented and are called out honestly:
   from *your* trigger does not carry the pack's policy.
 - **Pack-scoped memory/state namespace** (§24) is not yet implemented: a pack's
   agents may opt into memory (behavior), but two packs share the same memory
-  namespace. (The manifest-level `memory:` *backend* is bind-only and rejected —
-  it selects a store/dir, which is environment.)
+  namespace. A pack may ship read-only memory **entries** (`memory: {
+  entries: <dir> }`, see [[Memory#memory-a-pack-ships]]); the manifest-level
+  memory *backend* (`store:`/`dir:`/`type:`) is bind-only and rejected — it
+  selects a store/dir, which is environment.
 - **Registry / discovery search** — packs are URL/path-addressable; there is no
   central index yet. Bot templates are the exception: `conductor bot templates
   --search` scans a registry (the official one, or `--registry <dir|git url>`)

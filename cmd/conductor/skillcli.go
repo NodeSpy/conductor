@@ -265,9 +265,15 @@ func describeVerb(t verbTool) error {
 // over the configured [[Memory]], through the same session token.
 func cmdSkillMemory(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: conductor memory recall <query> | remember <text> [--tags a,b] [--scope s]")
+		return fmt.Errorf("usage: conductor memory recall <query> | remember <text> [--tags a,b] [--scope s]\n" +
+			"       conductor memory rescope --tag <tag> --to <template> [--apply]      (operator, on the box)\n" +
+			"       conductor memory export --scope <s> [--scope …] --out <dir> [--name <pack>]  (operator, on the box)")
 	}
 	switch args[0] {
+	case "rescope":
+		return cmdMemoryRescope(args[1:])
+	case "export":
+		return cmdMemoryExport(args[1:])
 	case "recall":
 		resp, err := skillCall(memory.IPCRequest{Op: "recall", Substring: strings.Join(args[1:], " ")})
 		if err != nil {
@@ -299,7 +305,7 @@ func cmdSkillMemory(args []string) error {
 		fmt.Println("remembered")
 		return nil
 	default:
-		return fmt.Errorf("conductor memory: unknown subcommand %q (recall | remember)", args[0])
+		return fmt.Errorf("conductor memory: unknown subcommand %q (recall | remember | rescope | export)", args[0])
 	}
 }
 

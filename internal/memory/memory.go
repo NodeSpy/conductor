@@ -163,7 +163,24 @@ type Manager struct {
 	guard      atomic.Pointer[WriteGuard]
 	redactor   atomic.Pointer[Redactor]
 	scopeGuard atomic.Pointer[ScopeGuard]
+	// layers are READ-ONLY entry sources merged into every recall — the
+	// entries an installed pack ships (`memory: { entries: <dir> }` in its
+	// manifest). Remember/Forget/Rescope never touch them. Set at build time,
+	// before the manager is shared.
+	layers []Layer
 }
+
+// Layer is one read-only source of entries recalled alongside the
+// manager's own backend. Name says where the entries came from (the pack
+// instance), for the error a Forget of one of them earns.
+type Layer struct {
+	Name    string
+	Backend Backend
+}
+
+// ErrReadOnly refuses a write aimed at an entry that lives in a read-only
+// layer.
+var ErrReadOnly = fmt.Errorf("memory: entry is read-only")
 
 // WriteGuard vets one to-be-remembered text; a non-nil error refuses it.
 type WriteGuard func(text string) error
@@ -248,9 +265,75 @@ func (m *Manager) Remember(text string, tags []string, scope string, src Source)
 	return e, nil
 }
 
-// Recall filters, orders (newest first, then ID), and limits.
+// AddLayer merges a read-only entry source into every recall. Call it while
+// building the manager, before it is shared.
+func (m *Manager) AddLayer(name string, b Backend) {
+	if b == nil {
+		return
+	}
+	m.layers = append(m.layers, Layer{Name: name, Backend: b})
+}
+
+// Layers lists the read-only layers, in the order they were added.
+func (m *Manager) Layers() []Layer { return append([]Layer(nil), m.layers...) }
+
+// all lists the manager's own entries followed by every layer's. An ID the
+// manager already holds shadows a layer entry with the same ID (an exported
+// pack carries the IDs of the entries it was exported from, so a box that
+// has both must not recall the note twice), and an earlier layer shadows a
+// later one the same way. A layer that cannot be listed is skipped: a
+// broken pack directory must not take the instance's own memory down.
+func (m *Manager) all() ([]Entry, error) {
+	own, err := m.backend.List()
+	if err != nil {
+		return nil, err
+	}
+	if len(m.layers) == 0 {
+		return own, nil
+	}
+	seen := make(map[string]bool, len(own))
+	for _, e := range own {
+		seen[e.ID] = true
+	}
+	out := own
+	for _, l := range m.layers {
+		entries, err := l.Backend.List()
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if seen[e.ID] {
+				continue
+			}
+			seen[e.ID] = true
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// layerOf names the read-only layer holding id ("" when none does).
+func (m *Manager) layerOf(id string) (string, error) {
+	for _, l := range m.layers {
+		entries, err := l.Backend.List()
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.ID == id {
+				return l.Name, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// Recall filters, orders (newest first, then ID), and limits. The limit is
+// applied after the manager's own entries and every read-only layer are
+// merged, so a layer cannot crowd out the instance or the reverse except by
+// recency.
 func (m *Manager) Recall(q Query) ([]Entry, error) {
-	all, err := m.backend.List()
+	all, err := m.all()
 	if err != nil {
 		return nil, err
 	}
@@ -297,19 +380,139 @@ func (m *Manager) Recall(q Query) ([]Entry, error) {
 	return out, nil
 }
 
-// Forget removes one memory by ID; found reports whether it existed.
+// Forget removes one memory by ID; found reports whether it existed. An ID
+// that only a read-only layer holds is refused with ErrReadOnly rather than
+// reported as not found: the entry exists, and it will keep being recalled
+// until the pack that ships it changes.
 func (m *Manager) Forget(id string) (bool, error) {
 	if strings.TrimSpace(id) == "" {
 		return false, fmt.Errorf("memory: id is required")
 	}
-	return m.backend.Delete(id)
+	found, err := m.backend.Delete(id)
+	if err != nil || found {
+		return found, err
+	}
+	layer, err := m.layerOf(id)
+	if err != nil {
+		return false, err
+	}
+	if layer != "" {
+		return false, fmt.Errorf("%w: %s ships with pack %s — change it in the pack, or remove the pack", ErrReadOnly, id, layer)
+	}
+	return false, nil
+}
+
+// Move is one entry a Rescope moves (or, on a dry run, would move).
+type Move struct {
+	ID   string
+	Text string
+	From string
+	To   string
+}
+
+// RescopePlaceholder is the token a Rescope template replaces with the
+// entry's current scope key.
+const RescopePlaceholder = "{scope}"
+
+// Rescope moves the manager's OWN entries carrying tag to the scope the
+// template names, with {scope} replaced by the entry's current key —
+// `outcome:{scope}` moves an entry filed under `acme/api` to
+// `outcome:acme/api`. ID, text, tags, provenance and created time are kept,
+// so a moved entry is the same memory under a new key. With apply false
+// nothing is written and the moves are only reported.
+//
+// Entries already in the template's shape are left alone, so a second run
+// moves nothing: `outcome:{scope}` will not turn `outcome:acme/api` into
+// `outcome:outcome:acme/api`. Read-only layers are never touched.
+func (m *Manager) Rescope(tag, template string, apply bool) ([]Move, error) {
+	tag = strings.TrimSpace(tag)
+	template = strings.TrimSpace(template)
+	if tag == "" {
+		return nil, fmt.Errorf("memory: rescope needs a tag to select entries")
+	}
+	if template == "" {
+		return nil, fmt.Errorf("memory: rescope needs a target scope template")
+	}
+	if strings.Count(template, RescopePlaceholder) > 1 {
+		return nil, fmt.Errorf("memory: rescope template %q uses %s more than once", template, RescopePlaceholder)
+	}
+	all, err := m.backend.List()
+	if err != nil {
+		return nil, err
+	}
+	pre, post, templated := strings.Cut(template, RescopePlaceholder)
+	var moves []Move
+	for _, e := range all {
+		if !hasAllTags(e.Tags, []string{tag}) {
+			continue
+		}
+		from := NormalizeScope(e.Scope)
+		if templated && len(from) > len(pre)+len(post) && strings.HasPrefix(from, pre) && strings.HasSuffix(from, post) {
+			continue // already in the target shape
+		}
+		to := NormalizeScope(strings.Replace(template, RescopePlaceholder, from, 1))
+		if to == from {
+			continue
+		}
+		moves = append(moves, Move{ID: e.ID, Text: e.Text, From: from, To: to})
+		if !apply {
+			continue
+		}
+		e.Scope = to
+		if err := m.backend.Put(e); err != nil {
+			return moves, fmt.Errorf("memory: rescope %s: %w", e.ID, err)
+		}
+	}
+	sort.Slice(moves, func(i, j int) bool {
+		if moves[i].From != moves[j].From {
+			return moves[i].From < moves[j].From
+		}
+		return moves[i].ID < moves[j].ID
+	})
+	return moves, nil
+}
+
+// Own lists the manager's own entries (no read-only layers), newest first,
+// narrowed to the given scopes when any are named. It is the source an
+// export reads, and it is never redacted: the caller is the operator's CLI
+// copying its own files.
+func (m *Manager) Own(scopes []string) ([]Entry, error) {
+	all, err := m.backend.List()
+	if err != nil {
+		return nil, err
+	}
+	want := map[string]bool{}
+	for _, s := range scopes {
+		if s = strings.TrimSpace(s); s != "" {
+			want[NormalizeScope(s)] = true
+		}
+	}
+	var out []Entry
+	for _, e := range all {
+		if len(want) > 0 && !want[NormalizeScope(e.Scope)] {
+			continue
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Created.Equal(out[j].Created) {
+			return out[i].Created.After(out[j].Created)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
 }
 
 // List returns every memory, newest first.
 func (m *Manager) List() ([]Entry, error) { return m.Recall(Query{}) }
 
-// Close releases the backend.
-func (m *Manager) Close() error { return m.backend.Close() }
+// Close releases the backend and every layer.
+func (m *Manager) Close() error {
+	for _, l := range m.layers {
+		_ = l.Backend.Close()
+	}
+	return m.backend.Close()
+}
 
 func normTags(tags []string) []string {
 	var out []string

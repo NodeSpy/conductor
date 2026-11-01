@@ -47,7 +47,34 @@ type Caller struct {
 	ownRepo string
 	// AgentFacing marks a call the operator did not write.
 	AgentFacing bool
+	// grant is the calling STEP's own scope list for this op, when its
+	// skill grant names one (`skill.verbs: {memory.remember: {scope: […]}}`)
+	// — see WithGrant. nil means the step set no restriction.
+	grant GrantMatcher
 }
+
+// GrantMatcher reports whether a step's own grant admits one scope key. It is
+// built by the flow layer from the grant's list, with any `{{ }}` entry
+// already bound to the dispatch's trusted facts, so this package never
+// renders anything.
+type GrantMatcher func(scope string) bool
+
+// WithGrant returns the caller restricted to the scopes its step's grant
+// lists for the op being authorized. A non-nil matcher is the WHOLE answer
+// for that op: a scope it admits is allowed, anything else — the
+// dispatch's own scope, an unscoped call, an entry the operator's policy
+// would have let through — is refused. Deny is the default once a step says
+// which scopes it may touch. The reserved shared bucket stays refused
+// whatever the grant lists. nil leaves the caller as it was.
+func (c Caller) WithGrant(g GrantMatcher) Caller {
+	if g != nil {
+		c.grant = g
+	}
+	return c
+}
+
+// Restricted reports whether a step grant decides this caller's scopes.
+func (c Caller) Restricted() bool { return c.grant != nil }
 
 // NewAgentCaller builds the caller for an AGENT-FACING memory op from a
 // dispatch's raw target repo and its trust bit, applying core.OwnRepo — the
@@ -110,6 +137,22 @@ func (m *Manager) CheckOp(c Caller, op, scope string) error {
 	if !c.AgentFacing {
 		return nil
 	}
+	// A step that names its own scopes for this op has said exactly what it
+	// may touch: that list replaces the daemon-wide allowlist for the call
+	// rather than widening it, and nothing outside it gets through — not
+	// even under trust: full, which lifts plan latitude, never a constraint
+	// written onto a named grant.
+	if c.grant != nil {
+		scope = strings.TrimSpace(scope)
+		if scope != "" && c.grant(scope) {
+			return nil
+		}
+		named := scope
+		if named == "" {
+			named = "(none named)"
+		}
+		return fmt.Errorf("memory: %s scope %s — not in this step's skill.verbs scope list for memory.%s", op, named, op)
+	}
 	if gp := m.scopeGuard.Load(); gp != nil {
 		return (*gp)(c, op, strings.TrimSpace(scope))
 	}
@@ -128,7 +171,9 @@ func (m *Manager) ScopeOf(id string) (scope string, found bool, err error) {
 	if strings.TrimSpace(id) == "" {
 		return "", false, fmt.Errorf("memory: id is required")
 	}
-	all, err := m.backend.List()
+	// Layers included: a forget aimed at a pack's entry must reach Forget
+	// (which refuses it as read-only) rather than be told the id is unknown.
+	all, err := m.all()
 	if err != nil {
 		return "", false, err
 	}

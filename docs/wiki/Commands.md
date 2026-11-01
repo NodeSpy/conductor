@@ -34,6 +34,8 @@ conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
 conductor unlock                           seed the default vault key for non-interactive restarts
 conductor config migrate                   removed with the legacy config schema — run it on the release before the plugin contract, then upgrade
 conductor mcp memory --socket <path>       stdio MCP server for the live agent tools (memory + run_step; launched by runtimes, not by hand)
+conductor memory rescope --tag T --to 'P:{scope}' [--apply]   move tagged entries to a templated scope; dry run unless --apply ([[Memory#operator-commands]])
+conductor memory export --scope S [--scope …] --out DIR [--name N] [--force]   write those scopes' entries as a pack that ships read-only memory
 conductor workflows [ls]                   config workflows and triggers by name, then saved (agent-promoted) workflows with review state and health
 conductor workflows review <name>          print the workflow's provenance + FULL steps, then clear it for reuse (dry-run it first; runs stay policy-guarded)
 conductor workflows rm <name>              remove a saved workflow
@@ -103,6 +105,16 @@ conductor version
   support live tools (ACP `mcpServers`), with the socket path and the
   dispatch's provenance baked into the flags — there is no reason to run it
   by hand.
+- **memory rescope / export** — operator commands that read the configured
+  `memory:` backend directly (a `dir:` needs nothing else; a boltdb `store:`
+  is locked while the daemon runs, so stop it first). `rescope` moves every
+  entry carrying `--tag` to the `--to` template with `{scope}` replaced by the
+  entry's current scope, keeping its id, text, tags, provenance and created
+  time; it prints what it would move and writes only with `--apply`, and is
+  idempotent. `export` writes `<out>/conductor-pack.yaml` plus
+  `<out>/memory/*.md` — a pack whose entries other configs recall read-only —
+  and never writes the source. Both refuse inside an agent session.
+  ([[Memory#operator-commands]])
 - **connector auth** — the only interactive auth step. `auth <name>` runs the
   grant's flow (`authorization_code`: consent URL + localhost redirect
   capture; `device`: prints a user code and polls) and stores the access +

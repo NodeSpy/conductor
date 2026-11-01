@@ -411,6 +411,10 @@ engines:
 # recall / forget / list (always-on, audited). Agents write back via a
 # ```remember block in their final output (any runtime) or a live MCP tool
 # (ACP runtimes); a profile opts into prompt injection with memory: true.
+# Installed packs may ship read-only entries (manifest memory: { entries: dir })
+# that are recalled alongside these; writes always land here. Operator tools:
+# `conductor memory rescope --tag outcome --to 'outcome:{scope}' [--apply]`
+# and `conductor memory export --scope <s> --out <dir>` (wiki: Memory).
 # ---------------------------------------------------------------------------
 # memory:
 #   store: state                          # or dir: ~/.config/conductor/memory
@@ -875,6 +879,10 @@ x-templates:
     #                       #   context keys (the repo, the workflow, this step). Scope
     #                       #   keys are OPAQUE strings; there are no repo/agent TYPES:
     #                       #   memory: { scopes: ["${repo}", "acme/api"], tags: [ci], limit: 10 }
+    #                       #   scopes: REPLACES the defaults; extra_scopes: ADDS to them,
+    #                       #   and a placeholder may sit inside a key (dropped on a run
+    #                       #   with nothing to expand it to):
+    #                       #   memory: { extra_scopes: ["standard:${repo}", "emphasis:${repo}"] }
     # outcome_feedback: true # append this step's own track record to its prompt
     # outcome_key: reviewers #   …or pool several steps onto one record
     # skill:                 # agent access back into conductor (default: none of it)
@@ -892,6 +900,10 @@ x-templates:
     #                       #       slack.post:      { channel: ["#pr-{{.number}}"] }
     #                       #       gh.submit_review: {}     # repo pinned to the PR
     #                       #       kv.*:            { store: [shared-kv] }
+    #                       #       memory.remember: { scope: ["{{.repo}}", "standard:{{.repo}}"] }
+    #                       #   (memory's scope list RESTRICTS: the step may write the
+    #                       #   listed scopes and nothing else — verb, live tool and
+    #                       #   ```remember output alike; wiki: Memory)
     #                       #   An entry may be parameterized: "${settings.X}"
     #                       #   resolves at load, "#pr-{{.number}}" renders per
     #                       #   dispatch (this PR's channel and no other).

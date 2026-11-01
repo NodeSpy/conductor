@@ -962,6 +962,19 @@ func cmdRun(args []string) error {
 					if bots != nil {
 						ops.Bot = bots.agentOp(sb)
 					}
+					// A step's own memory scope list (skill.verbs
+					// memory.<op>: {scope: […]}) binds the live memory tool
+					// too, not only the verb: same token, same grant.
+					ops.Grant = func(token, op string, peer memory.Peer) memory.GrantMatcher {
+						id, err := sb.Authorize(token, asPeer(peer))
+						if err != nil {
+							return nil
+						}
+						sid := flow.SkillIdentity{Repo: id.Repo, Verbs: id.Policy.Verbs, Scopes: id.Policy.VerbScopes,
+							TargetTrusted: id.TargetTrusted}
+						return runner.MemoryGrant(sid.ScopesFor("memory."+op),
+							core.Trigger{Target: core.Target{Repo: id.Repo, Number: id.Number, PR: id.Number}, TargetTrusted: id.TargetTrusted})
+					}
 					ops.RunVerb = func(vctx context.Context, token, uses string, options map[string]any, peer memory.Peer) (map[string]any, error) {
 						id, err := sb.Authorize(token, asPeer(peer))
 						if err != nil {

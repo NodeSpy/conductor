@@ -184,7 +184,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			if s.Type == "agent" && err == nil && !shadow {
 				// Same resolved identity the dispatch and outcomes use, so a
 				// harvested memory's provenance names the step, not the label.
-				e.harvestMemory(t, identity, run.ID, ref.Output, profile.Memory)
+				e.harvestMemory(t, identity, run.ID, ref.Output, profile)
 			}
 		}
 		stepsOut[id] = map[string]any{"outputs": outputs}

@@ -167,6 +167,16 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	if err := man.checkNoEnvironment(); err != nil {
 		return fmt.Errorf("pack %q: %w", ns, err)
 	}
+	// Read-only memory entries the pack ships, resolved inside its vendored
+	// dir (pack_memory.go). A bad path fails the pack like a broken bot
+	// template file reference does.
+	if entries, _, ok, _ := man.memoryEntries(); ok && entries != "" {
+		dir, err := resolvePackMemoryDir(req.nodeDir, entries)
+		if err != nil {
+			return fmt.Errorf("pack %q: %w", ns, err)
+		}
+		st.cfg.addPackMemory(PackMemoryLayer{Instance: ns, Pack: man.Pack.Name, Dir: dir})
+	}
 	// Daemon-version compatibility (§16).
 	if err := checkConductorConstraint(man.Pack.Requires.Conductor, runtimeVersion); err != nil {
 		return fmt.Errorf("pack %q: %w", ns, err)

@@ -36,6 +36,15 @@ import (
 // nothing) so the failure is visible in logs/audit rather than silently
 // dropped.
 func (m *Manager) HarvestOutput(output string, src Source) ([]Entry, error) {
+	return m.HarvestOutputGranted(output, src, nil)
+}
+
+// HarvestOutputGranted is HarvestOutput for a step whose skill grant names
+// the scopes `memory.remember` may write (see Caller.WithGrant): every note
+// must name one of them. An unscoped note is refused under a grant, because
+// it would land in the shared set the step did not list.
+func (m *Manager) HarvestOutputGranted(output string, src Source, grant GrantMatcher) ([]Entry, error) {
+	caller := NewAgentCaller(src.Repo, src.TargetTrusted).WithGrant(grant)
 	notes, err := parseRememberBlocks(output)
 	if err != nil {
 		return nil, err
@@ -66,11 +75,13 @@ func (m *Manager) HarvestOutput(output string, src Source) ([]Entry, error) {
 		//
 		// An UNSCOPED note is left alone: it lands in the harvest's own
 		// default, names no tenant, and refusing it would break the output
-		// contract for every dispatch rather than close anything.
-		if strings.TrimSpace(n.Scope) == "" {
+		// contract for every dispatch rather than close anything. A step
+		// grant is the exception: it listed what the step may write, and the
+		// shared default is not on that list.
+		if strings.TrimSpace(n.Scope) == "" && !caller.Restricted() {
 			continue
 		}
-		if serr := m.CheckOp(NewAgentCaller(src.Repo, src.TargetTrusted), "remember", n.Scope); serr != nil {
+		if serr := m.CheckOp(caller, "remember", n.Scope); serr != nil {
 			return nil, serr
 		}
 	}

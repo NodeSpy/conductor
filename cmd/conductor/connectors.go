@@ -242,12 +242,16 @@ func blobStorePath(cfg *config.Config) string {
 // with no connectors: block, from the daemon boot directly.
 func configureMemory(cfg *config.Config, sec *secrets.Resolver) error {
 	if cfg.Memory == nil {
+		for _, l := range cfg.PackMemoryLayers() {
+			logf("memory: pack %s ships memory entries, but there is no memory: section — they are not recalled until one is configured", l.Instance)
+		}
 		return nil
 	}
 	mgr, err := memory.Build(memory.Options{Store: cfg.Memory.Store, Dir: cfg.Memory.Dir, Type: cfg.Memory.Type})
 	if err != nil {
 		return err
 	}
+	addPackMemoryLayers(mgr, cfg)
 	if sec != nil {
 		// The agent-facing remember paths (harvest output contract, the IPC
 		// tool) refuse tracked secret material — vault it, don't memorize it.
@@ -269,6 +273,22 @@ func configureMemory(cfg *config.Config, sec *secrets.Resolver) error {
 	mgr.SetScopeGuard(flow.MemoryScopeGuard(cfg))
 	memory.Configure(mgr)
 	return nil
+}
+
+// addPackMemoryLayers merges each installed pack's shipped entries into the
+// manager as a read-only layer (config/pack_memory.go). A layer that cannot
+// be opened is logged and skipped: the path was proven at load, so a failure
+// here is the vendor dir changing underneath, which must not take the
+// instance's own memory down with it.
+func addPackMemoryLayers(mgr *memory.Manager, cfg *config.Config) {
+	for _, l := range cfg.PackMemoryLayers() {
+		b, err := memory.NewReadOnlyDirBackend(l.Dir)
+		if err != nil {
+			logf("memory: pack %s: %v — its entries are not recalled", l.Instance, err)
+			continue
+		}
+		mgr.AddLayer(l.Instance, b)
+	}
 }
 
 // stackEmitter is the notifier surface notifyStackFailures needs (satisfied

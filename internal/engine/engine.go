@@ -667,8 +667,17 @@ func (e *Engine) memoryPrompt(identity string, step config.Step, t core.Trigger,
 	// straight into the model's context).
 	repo := t.OwnRepo()
 	keys := memory.ContextKeys(repo, workflow, identity)
+	scopes := memory.ExpandScopeRefs(sel.Scopes, repo, workflow, identity)
+	if len(sel.Scopes) > 0 && len(scopes) == 0 {
+		// Every explicit key named a placeholder this run cannot fill
+		// (`standard:${repo}` with no repo). The step asked for those keys
+		// and none apply; falling back to the defaults would recall what it
+		// chose not to.
+		keys = nil
+	}
 	f := memory.Filter{
-		Scopes: memory.ExpandScopeRefs(sel.Scopes, repo, workflow, identity),
+		Scopes: scopes,
+		Extra:  memory.ExpandScopeRefs(sel.ExtraScopes, repo, workflow, identity),
 		Tags:   sel.Tags, Limit: sel.Limit,
 	}
 	return m.PromptSection(f, keys)
@@ -676,7 +685,8 @@ func (e *Engine) memoryPrompt(identity string, step config.Step, t core.Trigger,
 
 // harvestMemory applies the memory output contract to a finished agent's
 // output (see memory.HarvestOutput): best-effort, audited, never a failure.
-func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string, sel *config.MemorySelector) {
+func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string, step config.Step) {
+	sel := step.Memory
 	m := memory.Active()
 	if m == nil || strings.TrimSpace(output) == "" {
 		return
@@ -691,7 +701,14 @@ func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string, sel 
 	}
 	src := memory.Source{Step: agent, Run: runID, Trigger: t.Kind, Repo: t.Target.Repo,
 		TargetTrusted: t.TargetTrusted}
-	entries, err := m.HarvestOutput(output, src)
+	// A step whose skill grant lists the scopes memory.remember may write
+	// is held to that list here too: the output contract is the same write
+	// by another route (flow.MemoryGrant).
+	var grant memory.GrantMatcher
+	if e.flow != nil {
+		grant = e.flow.StepMemoryGrant(step.Skill, "remember", t)
+	}
+	entries, err := m.HarvestOutputGranted(output, src, grant)
 	if err != nil {
 		e.log("%s memory output contract: %v", tag(t), err)
 		e.store.Audit(map[string]any{"event": "memory_remember", "via": "output", "outcome": "failed",
@@ -1235,7 +1252,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// Single-action dispatches have no WorkflowRun record; the agent id is the
 	// run identity that provenance (Source.Run) can trace back.
 	if act.Type == "agent" && !shadow && !ref.Queued {
-		e.harvestMemory(t, act.Agent, ref.AgentID, ref.Output, profile.Memory)
+		e.harvestMemory(t, act.Agent, ref.AgentID, ref.Output, profile)
 	}
 
 	if ref.Queued {
