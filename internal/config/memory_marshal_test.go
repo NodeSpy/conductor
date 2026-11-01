@@ -197,10 +197,16 @@ func TestMemoryPlaceholderExemptionIsMemoryOnly(t *testing.T) {
 		{"grant outside skill", "policy:\n  agent_authored:\n    verbs: { memory.remember: { scope: [\"${repo}\"] } }\n", "from-env"},
 		{"grant names workflow", "steps:\n  - skill: { verbs: { memory.remember: { scope: [\"${workflow}\"] } } }\n", "from-env"},
 		{"key named scope elsewhere", "bots:\n  b:\n    scope: \"${repo}\"\n", "from-env"},
+		// Inside a memory scope key, only the three placeholders are exempt.
+		{"other var in a memory scope", "steps:\n  - memory: { extra_scopes: [\"standard:${CONDUCTOR_TEST_MEMVAR}\"] }\n", "from-env"},
+		{"other var in a verb grant", "steps:\n  - skill: { verbs: { memory.remember: { scope: [\"${CONDUCTOR_TEST_MEMVAR}\"] } } }\n", "from-env"},
+		// A reference in a mapping key is still substituted, as it always was.
+		{"ref in a key", "settings:\n  ${CONDUCTOR_TEST_MEMVAR}: 1\n", "from-env"},
 	}
+	envNames := []string{"repo", "workflow", "step", "CONDUCTOR_TEST_MEMVAR"}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			for _, n := range []string{"repo", "workflow", "step"} {
+			for _, n := range envNames {
 				t.Setenv(n, "from-env")
 			}
 			out, err := expandEnv("c.yaml", []byte(c.yaml))
@@ -218,7 +224,7 @@ func TestMemoryPlaceholderExemptionIsMemoryOnly(t *testing.T) {
 				return
 			}
 			// Unset, the same reference is the load error it always was.
-			for _, n := range []string{"repo", "workflow", "step"} {
+			for _, n := range envNames {
 				os.Unsetenv(n)
 			}
 			if _, err := expandEnv("c.yaml", []byte(c.yaml)); err == nil || !strings.Contains(err.Error(), "undefined environment variable") {
