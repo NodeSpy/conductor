@@ -297,6 +297,24 @@ func loadConfig(args []string) (*config.Config, []string, error) {
 	return cfg, rest, err
 }
 
+// memoryGrantOp resolves a live-tool request's token to its step's scope
+// list for one memory op (memory.LiveOps.Grant), so a step restricted to
+// some scopes through skill.verbs is held to them on the memory tool too.
+// An unauthorized token restricts nothing here: the provenance check in
+// front of every memory op has already refused it.
+func memoryGrantOp(sb *skill.Broker, runner *flow.Runner) func(token, op string, peer memory.Peer) memory.GrantMatcher {
+	return func(token, op string, peer memory.Peer) memory.GrantMatcher {
+		id, err := sb.Authorize(token, skill.Peer{PID: peer.PID, StartTime: peer.StartTime, UID: peer.UID, Valid: peer.Valid})
+		if err != nil {
+			return nil
+		}
+		sid := flow.SkillIdentity{Repo: id.Repo, Verbs: id.Policy.Verbs, Scopes: id.Policy.VerbScopes,
+			TargetTrusted: id.TargetTrusted}
+		return runner.MemoryGrant(sid.ScopesFor("memory."+op),
+			core.Trigger{Target: core.Target{Repo: id.Repo, Number: id.Number, PR: id.Number}, TargetTrusted: id.TargetTrusted})
+	}
+}
+
 // resolveBootConfig runs the daemon's boot config pipeline: load, and on ANY
 // load failure hold degraded until the config becomes loadable rather than
 // returning an error that exits cmdRun into a service-manager crash-loop (H1).
@@ -965,16 +983,7 @@ func cmdRun(args []string) error {
 					// A step's own memory scope list (skill.verbs
 					// memory.<op>: {scope: […]}) binds the live memory tool
 					// too, not only the verb: same token, same grant.
-					ops.Grant = func(token, op string, peer memory.Peer) memory.GrantMatcher {
-						id, err := sb.Authorize(token, asPeer(peer))
-						if err != nil {
-							return nil
-						}
-						sid := flow.SkillIdentity{Repo: id.Repo, Verbs: id.Policy.Verbs, Scopes: id.Policy.VerbScopes,
-							TargetTrusted: id.TargetTrusted}
-						return runner.MemoryGrant(sid.ScopesFor("memory."+op),
-							core.Trigger{Target: core.Target{Repo: id.Repo, Number: id.Number, PR: id.Number}, TargetTrusted: id.TargetTrusted})
-					}
+					ops.Grant = memoryGrantOp(sb, runner)
 					ops.RunVerb = func(vctx context.Context, token, uses string, options map[string]any, peer memory.Peer) (map[string]any, error) {
 						id, err := sb.Authorize(token, asPeer(peer))
 						if err != nil {

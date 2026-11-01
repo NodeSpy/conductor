@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/skill"
 )
 
 // memoryCLIConfig writes a config whose memory is a dir under a temp root,
@@ -241,4 +243,38 @@ func snapshotDir(t *testing.T, dir string) string {
 		b.WriteString(de.Name() + fi.ModTime().String() + string(raw))
 	}
 	return b.String()
+}
+
+// The live memory tool resolves the step's scope list from the session
+// token, so a step restricted through skill.verbs is held to it there too.
+func TestMemoryGrantOpReadsTheTokensStepGrant(t *testing.T) {
+	b := skill.NewBroker(func(string) (string, bool) { return "", false }, nil)
+	tok, err := b.MintSession(skill.Identity{
+		Agent: "calibrate", Repo: "acme/api", TargetTrusted: true,
+		Policy: config.SkillPolicy{Verbs: []string{"memory.remember"},
+			VerbScopes: map[string]map[string][]string{"memory.remember": {"scope": {"standard:{{.repo}}"}}}},
+	}, uint32(os.Getuid()), skill.SessionTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, err := b.MintSession(skill.Identity{Agent: "x", Repo: "acme/api", TargetTrusted: true,
+		Policy: config.SkillPolicy{Verbs: []string{"memory.remember"}}}, uint32(os.Getuid()), skill.SessionTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := memoryGrantOp(b, flow.New(flow.Runner{}))
+	peer := memory.Peer{UID: uint32(os.Getuid()), Valid: true}
+	g := grant(tok, "remember", peer)
+	if g == nil || !g("standard:acme/api") || g("acme/api") {
+		t.Fatal("the token's memory.remember scope list must bind the tool")
+	}
+	if grant(tok, "recall", peer) != nil {
+		t.Fatal("a remember list must not restrict recall")
+	}
+	if grant(open, "remember", peer) != nil {
+		t.Fatal("a step without a scope list is not restricted")
+	}
+	if grant("not-a-token", "remember", peer) != nil {
+		t.Fatal("an unknown token resolves no grant")
+	}
 }
