@@ -93,16 +93,9 @@ func (m *Manager) PromptSection(f Filter, contextKeys []string) string {
 // These helpers live here for discoverability, but note what they are NOT:
 // the memory core does not interpret a scope key, and nothing below is
 // privileged. A caller could pass the same strings by hand. They exist so the
-// engine and the flow runner agree on which keys a run contributes, and so
-// the `${repo}` / `${workflow}` / `${step}` sugar has one expansion.
+// engine and the flow runner agree on which keys a run contributes. Scope
+// keys an operator writes are rendered by RenderScopeKey (scopekey.go).
 // ---------------------------------------------------------------------------
-
-// Scope-reference placeholders (mirrors config.MemoryScope*).
-const (
-	scopeRefRepo     = "${repo}"
-	scopeRefWorkflow = "${workflow}"
-	scopeRefStep     = "${step}"
-)
 
 // LegacyStepScope is the key a step's private namespace had before `agents:`
 // was removed: memories written by `agent: fixer` landed under
@@ -131,54 +124,4 @@ func ContextKeys(repo, workflow, stepIdentity string) []string {
 		}
 	}
 	return keys
-}
-
-// ExpandScopeRefs replaces the `${repo}` / `${workflow}` / `${step}` sugar in
-// an author-written scope list with the run's context keys. A placeholder may
-// be the whole entry (`${repo}`) or part of one (`standard:${repo}`), and an
-// entry may carry several. An entry that names a placeholder whose referent
-// is empty — `standard:${repo}` on a run with no repo — is DROPPED, never
-// kept with the placeholder blanked or left in: `standard:` or the literal
-// `standard:${repo}` would each be a key that matches the wrong entries or
-// none. An entry with no placeholder passes through verbatim — it is an
-// opaque key.
-func ExpandScopeRefs(scopes []string, repo, workflow, stepIdentity string) []string {
-	if len(scopes) == 0 {
-		return nil
-	}
-	refs := []struct{ token, value string }{
-		{scopeRefRepo, strings.TrimSpace(repo)},
-		{scopeRefWorkflow, strings.TrimSpace(workflow)},
-		{scopeRefStep, strings.TrimSpace(stepIdentity)},
-	}
-	// One pass over the entry, so a referent's own text is never re-scanned
-	// for placeholders.
-	expand := strings.NewReplacer(
-		scopeRefRepo, refs[0].value,
-		scopeRefWorkflow, refs[1].value,
-		scopeRefStep, refs[2].value,
-	)
-	out := make([]string, 0, len(scopes))
-	for _, s := range scopes {
-		named, resolved := false, true
-		for _, r := range refs {
-			if strings.Contains(s, r.token) {
-				named = true
-				if r.value == "" {
-					resolved = false
-				}
-			}
-		}
-		if !named {
-			out = append(out, s) // no placeholder: the opaque key, untouched
-			continue
-		}
-		if !resolved {
-			continue
-		}
-		if v := strings.TrimSpace(expand.Replace(s)); v != "" {
-			out = append(out, v)
-		}
-	}
-	return out
 }

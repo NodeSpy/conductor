@@ -215,3 +215,76 @@ func TestLintPackDirChecksMemoryEntries(t *testing.T) {
 		t.Fatalf("a well-formed memory pack lints clean, got %v %v", problems, err)
 	}
 }
+
+const scopeKeyPackManifest = `
+pack:
+  name: lens-kit
+  version: 0.1.0
+  requires: { conductor: ">=0.1" }
+settings:
+  scope_key: { type: string, default: "${repo}" }
+exports:
+  workflows: [lens-flow]
+workflows:
+  lens-flow:
+    steps:
+      - id: lens
+        type: agent
+        name: lens
+        prompt: look
+        memory: { extra_scopes: ["${settings.scope_key}", "standard:${settings.scope_key}"] }
+`
+
+// A scope-key template reaches a pack's memory selector through a setting:
+// `{{.fact}}` in the consumer's setting value (expandEnv never touches it),
+// and the `${repo}` alias in the pack's own default (a manifest is not
+// env-expanded). A consumer's setting value is env-expanded like the rest of
+// its config, so the alias spelling there is an environment reference.
+func TestScopeKeyTemplateThroughAPackSetting(t *testing.T) {
+	for _, tc := range []struct {
+		name, settings string
+		want           []string
+		wantErr        string
+	}{
+		{"template value", `settings: { scope_key: "team:{{.inputs.team}}" }`, []string{"team:{{.inputs.team}}", "standard:team:{{.inputs.team}}"}, ""},
+		{"pack default alias", ``, []string{"${repo}", "standard:${repo}"}, ""},
+		{"alias in a consumer value is env", `settings: { scope_key: "${owner}" }`, nil, "owner"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writePackSource(t, dir, "src/lens-kit", scopeKeyPackManifest)
+			path := writeMemConsumer(t, dir, `
+connectors: { box: { use: command } }
+memory: { dir: `+filepath.Join(dir, "own-memory")+` }
+packs:
+  lens:
+    use: ./src/lens-kit
+    `+tc.settings+`
+`)
+			cfg, err := resolveAndLoad(t, path)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want a load error naming %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for name, wf := range cfg.Workflows {
+				if !strings.HasSuffix(name, "lens-flow") {
+					continue
+				}
+				for _, s := range wf.Steps {
+					if s.Memory != nil {
+						got = s.Memory.ExtraScopes
+					}
+				}
+			}
+			if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+				t.Fatalf("extra_scopes = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

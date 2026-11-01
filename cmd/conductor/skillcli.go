@@ -266,10 +266,13 @@ func describeVerb(t verbTool) error {
 func cmdSkillMemory(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: conductor memory recall <query> | remember <text> [--tags a,b] [--scope s]\n" +
-			"       conductor memory rescope --tag <tag> --to <template> [--apply]      (operator, on the box)\n" +
-			"       conductor memory export --scope <s> [--scope …] --out <dir> [--name <pack>]  (operator, on the box)")
+			"       conductor memory rescope (--tag <tag> | --scope <pattern>) --to <template> [--apply]  (operator, on the box)\n" +
+			"       conductor memory export --scope <s> [--scope …] --out <dir> [--name <pack>]  (operator, on the box)\n" +
+			"       conductor memory key --template <key> [--facts <json file|->] [--fact k=v …]   (render a scope key)")
 	}
 	switch args[0] {
+	case "key":
+		return cmdMemoryKey(os.Stdin, os.Stdout, args[1:])
 	case "rescope":
 		return cmdMemoryRescope(args[1:])
 	case "export":
@@ -305,7 +308,7 @@ func cmdSkillMemory(args []string) error {
 		fmt.Println("remembered")
 		return nil
 	default:
-		return fmt.Errorf("conductor memory: unknown subcommand %q (recall | remember | rescope | export)", args[0])
+		return fmt.Errorf("conductor memory: unknown subcommand %q (recall | remember | rescope | export | key)", args[0])
 	}
 }
 

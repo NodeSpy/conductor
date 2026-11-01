@@ -139,7 +139,7 @@ func TestLayersAreNeverWritten(t *testing.T) {
 		t.Errorf("the refusal should name the pack: %v", err)
 	}
 	// Rescope never touches a layer.
-	moves, err := m.Rescope("outcome", "outcome:{scope}", true)
+	moves, err := m.Rescope(RescopeFilter{Tag: "outcome"}, "outcome:{scope}", true)
 	if err != nil || len(moves) != 0 {
 		t.Fatalf("rescope must not see layer entries: moves=%v err=%v", moves, err)
 	}
@@ -210,7 +210,7 @@ func TestRescope(t *testing.T) {
 			done, _ := m.Remember("outcome: acme/api#3 merged", []string{"outcome"}, "outcome:acme/api", src)
 
 			// Dry run: reports, writes nothing.
-			moves, err := m.Rescope("outcome", "outcome:{scope}", false)
+			moves, err := m.Rescope(RescopeFilter{Tag: "outcome"}, "outcome:{scope}", false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -226,7 +226,7 @@ func TestRescope(t *testing.T) {
 			}
 
 			// Apply: moved, with ID/text/tags/provenance/created intact.
-			if _, err := m.Rescope("outcome", "outcome:{scope}", true); err != nil {
+			if _, err := m.Rescope(RescopeFilter{Tag: "outcome"}, "outcome:{scope}", true); err != nil {
 				t.Fatal(err)
 			}
 			api, _ := m.Recall(Query{Scopes: []string{"acme/api"}})
@@ -251,7 +251,7 @@ func TestRescope(t *testing.T) {
 			_ = done
 
 			// Idempotent: a second run moves nothing.
-			if again, err := m.Rescope("outcome", "outcome:{scope}", true); err != nil || len(again) != 0 {
+			if again, err := m.Rescope(RescopeFilter{Tag: "outcome"}, "outcome:{scope}", true); err != nil || len(again) != 0 {
 				t.Fatalf("second run moved %v (%v)", again, err)
 			}
 		})
@@ -261,34 +261,34 @@ func TestRescope(t *testing.T) {
 func TestRescopeTemplates(t *testing.T) {
 	m := testManager(t, NewMemBackend())
 	e, _ := m.Remember("x", []string{"t"}, "", Source{})
-	if _, err := m.Rescope("", "a:{scope}", false); err == nil {
+	if _, err := m.Rescope(RescopeFilter{Tag: ""}, "a:{scope}", false); err == nil {
 		t.Error("a tag is required")
 	}
-	if _, err := m.Rescope("t", " ", false); err == nil {
+	if _, err := m.Rescope(RescopeFilter{Tag: "t"}, " ", false); err == nil {
 		t.Error("a template is required")
 	}
-	if _, err := m.Rescope("t", "{scope}:{scope}", false); err == nil {
+	if _, err := m.Rescope(RescopeFilter{Tag: "t"}, "{scope}:{scope}", false); err == nil {
 		t.Error("{scope} twice is refused")
 	}
 	// A global entry has the global key as its {scope}.
-	moves, err := m.Rescope("t", "archive:{scope}", false)
+	moves, err := m.Rescope(RescopeFilter{Tag: "t"}, "archive:{scope}", false)
 	if err != nil || len(moves) != 1 || moves[0].From != GlobalScope || moves[0].To != "archive:global" {
 		t.Fatalf("global entry: %+v %v", moves, err)
 	}
 	// A fixed target (no placeholder) moves everything to one key, and
 	// leaves what is already there.
-	moves, err = m.Rescope("t", "archive", true)
+	moves, err = m.Rescope(RescopeFilter{Tag: "t"}, "archive", true)
 	if err != nil || len(moves) != 1 || moves[0].ID != e.ID || moves[0].To != "archive" {
 		t.Fatalf("fixed target: %+v %v", moves, err)
 	}
-	if again, _ := m.Rescope("t", "archive", true); len(again) != 0 {
+	if again, _ := m.Rescope(RescopeFilter{Tag: "t"}, "archive", true); len(again) != 0 {
 		t.Fatalf("fixed target is idempotent, moved %+v", again)
 	}
 	// A suffix template's shape check uses both halves.
 	m2 := testManager(t, NewMemBackend())
 	_, _ = m2.Remember("y", []string{"t"}, "acme/api", Source{})
 	_, _ = m2.Remember("z", []string{"t"}, "acme/api#old", Source{})
-	moves, _ = m2.Rescope("t", "{scope}#old", false)
+	moves, _ = m2.Rescope(RescopeFilter{Tag: "t"}, "{scope}#old", false)
 	if len(moves) != 1 || moves[0].From != "acme/api" || moves[0].To != "acme/api#old" {
 		t.Fatalf("suffix template: %+v", moves)
 	}
@@ -309,33 +309,6 @@ func TestOwnListsOnlyTheInstanceEntries(t *testing.T) {
 	}
 	if all, _ := m.Own(nil); len(all) != 3 {
 		t.Fatalf("Own(nil) = %v", ids(all))
-	}
-}
-
-func TestExpandScopeRefsInsideKeys(t *testing.T) {
-	for _, tc := range []struct {
-		name                string
-		in                  []string
-		repo, workflow, stp string
-		want                []string
-	}{
-		{"embedded", []string{"standard:${repo}", "emphasis:${repo}"}, "acme/api", "", "", []string{"standard:acme/api", "emphasis:acme/api"}},
-		{"several in one key", []string{"${workflow}/${step}@${repo}"}, "acme/api", "nightly", "lint", []string{"nightly/lint@acme/api"}},
-		{"a key with an empty referent drops", []string{"standard:${repo}", "global-ish"}, "", "w", "s", []string{"global-ish"}},
-		{"one empty referent among several drops the key", []string{"${workflow}:${repo}"}, "", "w", "s", nil},
-		{"whole-key placeholders still work", []string{"${repo}", "${step}"}, "acme/api", "", "lint", []string{"acme/api", "lint"}},
-		{"no placeholder is verbatim", []string{" spaced ", "${unknown}"}, "r", "w", "s", []string{" spaced ", "${unknown}"}},
-		{"a referent is not re-scanned", []string{"x:${repo}"}, "${step}", "w", "lint", []string{"x:${step}"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := ExpandScopeRefs(tc.in, tc.repo, tc.workflow, tc.stp)
-			if len(got) == 0 && len(tc.want) == 0 {
-				return
-			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("got %q, want %q", got, tc.want)
-			}
-		})
 	}
 }
 
@@ -514,5 +487,74 @@ func TestIPCHonoursTheStepGrant(t *testing.T) {
 	}
 	if len(asked) == 0 || asked[0] != "remember" {
 		t.Fatalf("the grant should be resolved per op, asked %v", asked)
+	}
+}
+
+// --scope selects by scope — a key, * or a glob — alone or with --tag, so an
+// operator can archive one scope's entries. Pack layers are never touched.
+func TestRescopeByScope(t *testing.T) {
+	m := testManager(t, NewMemBackend())
+	for _, n := range []struct {
+		text, scope string
+		tags        []string
+	}{
+		{"a1", "standard:acme/api", nil},
+		{"a2", "standard:acme/api", []string{"old"}},
+		{"w1", "standard:acme/web", []string{"old"}},
+		{"e1", "emphasis:acme/api", nil},
+		{"g1", "", []string{"old"}},
+	} {
+		if _, err := m.Remember(n.text, n.tags, n.scope, Source{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	layer := NewMemBackend()
+	_ = layer.Put(Entry{ID: "pack1", Text: "pack", Scope: "standard:acme/api", Created: time.Now()})
+	m.AddLayer("training", layer)
+
+	moves, err := m.Rescope(RescopeFilter{Scope: "standard:acme/api"}, "archive:{scope}", false)
+	if err != nil || len(moves) != 2 || moves[0].To != "archive:standard:acme/api" {
+		t.Fatalf("literal scope: %+v %v", moves, err)
+	}
+	if moves, _ := m.Rescope(RescopeFilter{Scope: "standard:acme/*"}, "archive:{scope}", false); len(moves) != 3 {
+		t.Fatalf("glob scope: %+v", moves)
+	}
+	if moves, _ := m.Rescope(RescopeFilter{Scope: "standard:*"}, "archive:{scope}", false); len(moves) != 0 {
+		t.Fatalf("a glob * does not cross /: %+v", moves)
+	}
+	if moves, _ := m.Rescope(RescopeFilter{Scope: "*"}, "archive:{scope}", false); len(moves) != 5 {
+		t.Fatalf("* selects every key: %+v", moves)
+	}
+	if moves, _ := m.Rescope(RescopeFilter{Scope: "global"}, "archive:{scope}", false); len(moves) != 1 || moves[0].From != GlobalScope {
+		t.Fatalf("the shared set is global: %+v", moves)
+	}
+	both, _ := m.Rescope(RescopeFilter{Tag: "old", Scope: "standard:acme/*"}, "archive:{scope}", false)
+	if len(both) != 2 {
+		t.Fatalf("tag and scope together select both: %+v", both)
+	}
+	if _, err := m.Rescope(RescopeFilter{Scope: "[bad"}, "archive:{scope}", false); err == nil {
+		t.Fatal("a malformed glob must be refused")
+	}
+	if _, err := m.Rescope(RescopeFilter{}, "archive:{scope}", false); err == nil {
+		t.Fatal("a filter is required")
+	}
+	// Apply: one scope archived, everything else and the pack untouched,
+	// and a second run moves nothing.
+	if moves, err := m.Rescope(RescopeFilter{Scope: "standard:acme/api"}, "archive:{scope}", true); err != nil || len(moves) != 2 {
+		t.Fatalf("apply: %+v %v", moves, err)
+	}
+	got, _ := m.Own(nil)
+	byScope := map[string]int{}
+	for _, e := range got {
+		byScope[e.Scope]++
+	}
+	if byScope["archive:standard:acme/api"] != 2 || byScope["standard:acme/api"] != 0 || byScope["standard:acme/web"] != 1 || byScope["emphasis:acme/api"] != 1 {
+		t.Fatalf("after apply: %v", byScope)
+	}
+	if e, _ := layer.List(); len(e) != 1 || e[0].Scope != "standard:acme/api" {
+		t.Fatalf("a pack layer was touched: %+v", e)
+	}
+	if again, _ := m.Rescope(RescopeFilter{Scope: "*"}, "archive:{scope}", true); len(again) != 3 {
+		t.Fatalf("archived entries are already in shape, the rest move: %+v", again)
 	}
 }

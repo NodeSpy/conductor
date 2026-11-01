@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/memory"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
@@ -20,24 +21,25 @@ const durableSaveSlack = time.Hour
 // written — only its SHA-256, which is enough to recognise it when the agent
 // presents it again and useless to anyone who reads the file.
 type persistedSession struct {
-	TokenHash     string              `json:"token_sha256"`
-	Expires       time.Time           `json:"expires"`
-	BoundUID      uint32              `json:"bound_uid"`
-	VerbCalls     int                 `json:"verb_calls,omitempty"`
-	Agent         string              `json:"agent,omitempty"`
-	Repo          string              `json:"repo,omitempty"`
-	Trigger       string              `json:"trigger,omitempty"`
-	Number        int                 `json:"number,omitempty"`
-	Policy        config.SkillPolicy  `json:"policy"`
-	TargetTrusted bool                `json:"target_trusted,omitempty"`
-	Dispatch      string              `json:"dispatch,omitempty"`
-	Bot           string              `json:"bot,omitempty"`
-	BotRole       string              `json:"bot_role,omitempty"`
-	CaseID        string              `json:"case_id,omitempty"`
-	Context       map[string]any      `json:"context,omitempty"`
-	Sem           *sdk.EventSemantics `json:"sem,omitempty"`
-	Requester     string              `json:"requester,omitempty"`
-	Sandbox       *SandboxBinding     `json:"sandbox,omitempty"`
+	TokenHash     string                           `json:"token_sha256"`
+	Expires       time.Time                        `json:"expires"`
+	BoundUID      uint32                           `json:"bound_uid"`
+	VerbCalls     int                              `json:"verb_calls,omitempty"`
+	Agent         string                           `json:"agent,omitempty"`
+	Repo          string                           `json:"repo,omitempty"`
+	Trigger       string                           `json:"trigger,omitempty"`
+	Number        int                              `json:"number,omitempty"`
+	Policy        config.SkillPolicy               `json:"policy"`
+	TargetTrusted bool                             `json:"target_trusted,omitempty"`
+	Dispatch      string                           `json:"dispatch,omitempty"`
+	Bot           string                           `json:"bot,omitempty"`
+	BotRole       string                           `json:"bot_role,omitempty"`
+	CaseID        string                           `json:"case_id,omitempty"`
+	Context       map[string]any                   `json:"context,omitempty"`
+	Sem           *sdk.EventSemantics              `json:"sem,omitempty"`
+	Requester     string                           `json:"requester,omitempty"`
+	Sandbox       *SandboxBinding                  `json:"sandbox,omitempty"`
+	MemoryScopes  map[string][]memory.ScopePattern `json:"memory_scopes,omitempty"`
 }
 
 func tokenHash(tok string) string {
@@ -75,6 +77,7 @@ func (b *Broker) SetPersistPath(path string) {
 				Policy: p.Policy, TargetTrusted: p.TargetTrusted, Dispatch: p.Dispatch,
 				Bot: p.Bot, BotRole: p.BotRole, CaseID: p.CaseID,
 				Context: p.Context, Sem: p.Sem, Requester: p.Requester, Sandbox: p.Sandbox,
+				MemoryScopes: p.MemoryScopes,
 			},
 			expires:   p.Expires,
 			uidBound:  true,
@@ -143,6 +146,7 @@ func (b *Broker) saveLocked() {
 			Policy: s.id.Policy, TargetTrusted: s.id.TargetTrusted, Dispatch: s.id.Dispatch,
 			Bot: s.id.Bot, BotRole: s.id.BotRole, CaseID: s.id.CaseID,
 			Context: s.id.Context, Sem: s.id.Sem, Requester: s.id.Requester, Sandbox: s.id.Sandbox,
+			MemoryScopes: s.id.MemoryScopes,
 		})
 		if err != nil {
 			if b.log != nil {

@@ -71,6 +71,9 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			profile.Runtime = s.Backend
 		}
 		model, modelProvider := "", ""
+		// The facts this step's memory scope keys render over — one set for
+		// the recall, the session's grant and the output contract.
+		mfacts := e.memoryFacts(data, t, "", identity)
 		if s.Type == "agent" {
 			var rt string
 			model, rt, modelProvider = e.resolveModel(ctx, profile)
@@ -98,7 +101,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			if s.Prompt != "" {
 				s.Prompt += creds.Guidance
 				s.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
-				s.Prompt += e.memoryPrompt(identity, profile, t, "")
+				s.Prompt += e.memoryPrompt(identity, profile, t, "", mfacts)
 				// Only the interactive hand-off (a background step) is told to ask. A
 				// non-background step runs autonomously — especially a schema step like
 				// `assess`, which MUST produce its structured output and must never pause
@@ -116,6 +119,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			Trigger: t, Action: s, Step: profile, Identity: identity, Model: model, Provider: modelProvider,
 			Credentials: creds,
 			Author:      e.author, Shadow: shadow, Wait: !s.Background, Interactive: s.Background, Data: data,
+			ScopeFacts: mfacts,
 		}
 		// Resolve which controller runs this agent step (explicit `controller:` →
 		// default:true → built-in paseo). Command steps use the base dispatcher. An
@@ -184,7 +188,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			if s.Type == "agent" && err == nil && !shadow {
 				// Same resolved identity the dispatch and outcomes use, so a
 				// harvested memory's provenance names the step, not the label.
-				e.harvestMemory(t, identity, run.ID, ref.Output, profile)
+				e.harvestMemory(t, identity, run.ID, ref.Output, profile, mfacts)
 			}
 		}
 		stepsOut[id] = map[string]any{"outputs": outputs}

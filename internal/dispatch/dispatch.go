@@ -108,6 +108,11 @@ type Request struct {
 	// event data, never chosen by the agent.
 	DispatchID string
 	Data       map[string]any // extra template vars (e.g. prior step outputs)
+	// ScopeFacts are the facts the step's memory scope keys render over
+	// (memory.ScopeFacts): its grant's templated `scope:` entries are
+	// rendered from them when the session is minted (SkillIdentityFor).
+	// nil renders none — templated entries then admit nothing.
+	ScopeFacts map[string]any
 	// LiteralPrompt sends Action.Prompt as-is, never template-rendered: a
 	// bot's home prompt carries text agents wrote (handoff notes), which
 	// must not be evaluated against the dispatch's template data.

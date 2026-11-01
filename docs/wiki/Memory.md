@@ -119,15 +119,17 @@ x-templates:
     memory: true                                    # the shared set + this run's context keys
   reviewer: &reviewer
     type: agent
-    memory: { scopes: ["${repo}", "${step}"], tags: [ci], limit: 10 }
+    memory: { scopes: ["team:{{.inputs.team}}", "{{.step}}"], tags: [ci], limit: 10 }
 ```
 
 Scope keys are **opaque strings** the memory core never interprets — there
-are no `repo`/`agent` scope TYPES. The engine supplies the run's context keys
-by convention (the repo string, the workflow name, the step identity), and
-`${repo}` / `${workflow}` / `${step}` are sugar it expands. The opt-in gates
-writing as well as reading: a step that did not ask for memory cannot harvest
-its output into the shared store.
+are no `repo`/`agent` scope TYPES, and which keys a deployment files memory
+under is its own choice: a repo, a team, an owner/org, a label, an input the
+workflow was called with. A key you write is a **template** over the step's
+facts ([below](#scope-keys-are-templates)). By default the engine adds the
+run's context keys (the repo string, the workflow name, the step identity).
+The opt-in gates writing as well as reading: a step that did not ask for
+memory cannot harvest its output into the shared store.
 
 `memory: true` injects the global, target-repo, and the agent's own scoped
 memories (newest first, capped at 20) through the same append path
@@ -143,28 +145,95 @@ tells the agent how to leave notes back (the output contract above).
 set and the run's own keys:
 
 ```yaml
-memory: { extra_scopes: ["standard:${repo}", "emphasis:${repo}"], limit: 40 }
+memory: { extra_scopes: ["team:{{.inputs.team}}", "org:{{.owner}}"], limit: 40 }
 ```
 
 Recall is still one newest-first list under one `limit`, across every key.
 
-### Placeholders inside a key
+## Scope keys are templates
 
-`${repo}`, `${workflow}` and `${step}` may be the whole key or part of one
-(`standard:${repo}`), and a key may carry several. A key whose placeholder has
-nothing to expand to on this run — `standard:${repo}` on a cron run with no
-repo — is **dropped** for that run: it is never recalled as the literal text,
-nor as the bare prefix `standard:`. If every key of an explicit `scopes:` list
-drops, the step recalls nothing from it rather than falling back to the
-defaults. `${repo}` is the dispatch's **own** repo: a target the event's
-sender chose (a webhook `repo:` templated from the body) expands to nothing.
+Everywhere you write a scope key — a step's `memory:` `scope`/`scopes`/
+`extra_scopes`, a memory verb's `scope:` grant ([below](#limiting-where-a-step-writes)),
+and the `scope:` option of a `uses: memory.remember` step or hook — the key is
+a template, rendered per run over **the step's facts**:
 
-In a memory selector's `scope:`, `scopes:` and `extra_scopes:` these three
-are not environment variables: the config loader leaves them for the engine.
-Everywhere else in the config — a prompt, a URL, the top-level `memory:`
-backend section, a selector's `tags:` — `${repo}`, `${workflow}` and
-`${step}` are ordinary environment references like any `${VAR}`: substituted
-when set, a load error when not.
+```yaml
+memory:
+  extra_scopes:
+    - "team:{{.inputs.team}}"          # an input the workflow was called with
+    - "org:{{.owner}}"                 # the repo's owner
+    - "standard:{{.repo}}"             # the repo — one choice among many
+    - "area:{{.steps.triage.outputs.area}}"
+```
+
+A key with no `{{` is used verbatim. `${repo}`, `${workflow}` and `${step}`
+are kept as aliases for `{{.repo}}`, `{{.workflow}}` and `{{.step}}`.
+
+**The facts** are the data the step's prompt renders against, less two
+things — named secrets (`secrets`) and vault values (`vaults`) are never
+facts, and a tracked secret value a step output echoed is redacted:
+
+| fact | what it is | who chooses it |
+|---|---|---|
+| `repo`, `owner`, `name` | the dispatch's own target repo and its halves | the platform |
+| `number`, `pr`, `issue` | the issue/PR number | the platform |
+| `kind` | the trigger kind conductor resolved | your config |
+| `workflow`, `step` | the run's memory context keys | your config |
+| `url` | the target's web URL | the platform |
+| `head`, `base` | head SHA and base branch | the **PR author** |
+| `title`, and the connector's event context (`head_ref`, `author`, `labels`, `comment_body`, …) | copied from the event | the **PR author** (labels: anyone who can label) |
+| `inputs.*` | a called workflow's inputs | whoever called it — may carry event text |
+| `steps.<id>.outputs.*`, `<id>.*` | earlier steps' outputs | for agent steps, the **agent** |
+| `group` | a `group:` batch's events | as above, per event |
+
+The target facts come from the dispatch's **own** target: when a webhook
+builds `repo:` from the request body, the sender chose it, and `repo`,
+`owner`, `name`, `number`, `pr`, `issue`, `head`, `base` and `url` are empty
+for scope keys — a forged repo cannot key another tenant's memory.
+
+**Fail closed.** A key that reads a fact this step has no value for — absent,
+`""`, or a zero number — **does not apply**: recall drops it (never the
+literal text, never a bare `team:`); a grant entry admits nothing; a
+`memory.remember` step refuses rather than write under a partial key. If
+every key of an explicit `scopes:` list drops, the step recalls nothing
+rather than falling back to the defaults. Supply a fallback where one makes
+sense: `team:{{.inputs.team | default "core"}}`.
+
+**What a key may do.** Values and pipelines only — no `if`/`range`/`with`/
+`define`/`template`, no variables — and only `default`, `coalesce`, `index`,
+`print` and `printf`. No `kv`, `vault`, `secret` or `memory`: rendering a key
+reads nothing. A key carrying a control character (written or rendered) is
+refused. A malformed key fails `conductor validate` and config load.
+
+**A rendered value is literal.** It is never rendered again (a PR title of
+`{{.repo}}` stays that text), and in a grant it matches by equality: a fact
+that renders to `*` or `feature/*` matches only that exact key, never as a
+glob. Glob intent lives in the static entries you write (`team/*`).
+
+**Environment variables.** `{{…}}` is never touched by config loading. The
+`${repo}` / `${workflow}` / `${step}` aliases are left for the engine only in
+a memory selector's `scope`/`scopes`/`extra_scopes` and a memory verb's
+`scope:` grant; everywhere else — a prompt, a URL, a pack setting value you
+pass, the top-level `memory:` section, a selector's `tags:` — they are
+ordinary environment references like any `${VAR}`. To hand a key through a
+pack setting, write it with `{{…}}`:
+
+```yaml
+packs:
+  review:
+    use: ./packs/review
+    settings: { scope_key: "team:{{.inputs.team}}" }   # the pack puts ${settings.scope_key} in extra_scopes
+```
+
+**Check a key** with core's renderer — the same code a run uses:
+
+```sh
+conductor memory key --template 'team:{{.inputs.team}}' --facts facts.json   # or --fact name=value …
+```
+
+It prints the key, or exits non-zero with why it does not apply. It reads no
+config and no memory. Test vectors for the grammar are in
+`internal/memory/testdata/scope_key_vectors.json`.
 
 ## Memory a pack ships
 
@@ -210,7 +279,7 @@ in the same map form that scopes any other verb:
 ```yaml
 skill:
   verbs:
-    memory.remember: { scope: ["{{.repo}}", "standard:{{.repo}}", "emphasis:{{.repo}}"] }
+    memory.remember: { scope: ["team:{{.inputs.team}}", "standard:{{.owner}}", "notes/*"] }
     memory.recall: {}
 ```
 
@@ -221,17 +290,25 @@ own scope is not implied, an unscoped write is refused, and the daemon-wide
 `trust: full` lift it. The reserved `global` bucket stays refused to
 `memory.remember` and `memory.forget` whatever is listed — `*` included — so
 a step can neither write nor delete the shared set every opted-in agent is
-fed; reading it stays open. The restriction binds every way the step's agent can write memory:
-the `memory.remember` verb, the live memory tool, and the ```remember output
-contract.
+fed; reading it stays open. The restriction binds every way the step's agent
+can write memory: the `memory.remember` verb, the live memory tool, and the
+```remember output contract.
 
-Entries match like every allowlist entry: a static entry keeps its glob; a
-`{{ }}` entry renders against the dispatch's trusted facts and matches
-literally. `${repo}` is accepted as a spelling of `{{.repo}}` (the only
-placeholder a grant takes; `${workflow}` / `${step}` there are environment
-references, as anywhere outside a memory key). An entry that
-reads a fact this dispatch has no value for — `standard:{{.repo}}` for a
-target the event's sender chose — matches nothing. `scope: []` admits nothing.
+Each entry is a [scope key](#scope-keys-are-templates). A static entry keeps
+its glob (`notes/*`); a templated one is rendered over the step's facts when
+the step is dispatched — the facts exist then, so the session carries the
+rendered list — and matches **literally**. An entry that reads a fact the
+step has no value for matches nothing. `scope: []` admits nothing.
+
+> **Use facts the PR author cannot choose in a write grant.** A grant entry
+> is a security check. `branch:{{.head_ref}}`, `{{.title}}`, `{{.author}}`,
+> a label, an input carrying event text or an agent step's output lets
+> whoever chose that value choose which key the step may write — a branch
+> named `payments` makes `team:{{.head_ref}}` admit `team:payments`. Prefer
+> `repo`, `owner`, `name`, `number`, `kind`, `workflow`, `step` and static
+> entries; reach for an author-chosen fact only when the key it names is
+> meant to be theirs. (Recall keys carry the same caution in the other
+> direction: an author-chosen key decides which notes the agent reads.)
 
 A step without a `scope` list keeps the earlier rules: its own scope plus
 whatever `policy.agent_authored.verbs."memory.<op>".scope` lists.
@@ -245,11 +322,11 @@ it is the sole pattern naming that verb:
 ```yaml
 skill:
   verbs:
-    memory.*:        { scope: [] }                     # does NOT lock remember down…
-    memory.remember: { scope: ["standard:{{.repo}}"] } # …remember admits standard:<repo>
+    memory.*:        { scope: [] }                          # does NOT lock remember down…
+    memory.remember: { scope: ["team:{{.inputs.team}}"] }   # …remember admits team:<team>
 ```
 
-Here `memory.remember` admits `standard:<repo>`, and `memory.recall`,
+Here `memory.remember` admits `team:<team>`, and `memory.recall`,
 `memory.list` and `memory.forget` (matched only by `memory.*`) admit nothing.
 To lock one verb out entirely, grant it with `scope: []` and no other pattern
 that matches it — or leave it out of `verbs:`.
@@ -264,23 +341,30 @@ daemon), and refuse inside an agent session:
 conductor memory rescope --tag outcome --to 'outcome:{scope}'           # dry run: prints the moves
 conductor memory rescope --tag outcome --to 'outcome:{scope}' --apply   # writes them
 
+# Archive one scope's entries (a key, * or a glob; combinable with --tag).
+conductor memory rescope --scope 'standard:acme/api' --to 'archive:{scope}' --apply
+conductor memory rescope --scope 'team:*' --tag stale --to 'archive:{scope}'
+
 # Write a pack carrying these scopes' entries as read-only memory.
 conductor memory export --scope acme/api --scope standard:acme/api --scope emphasis:acme/api \
   --out ../acme-training --name acme-training
 ```
 
-- `rescope` selects by tag, keeps each entry's id, text, tags, provenance and
-  created time, and replaces `{scope}` with the entry's current key
+- `rescope` selects by `--tag`, by `--scope` (a literal key, `*` for every
+  key, or a glob — `*` does not cross a `/`, so `team:*` matches `team:a`
+  but not `team:a/b`; the shared set is `global`), or by both (an entry must
+  match both); at least one is required. It keeps each entry's id, text,
+  tags, provenance and created time, and replaces `{scope}` with the entry's current key
   (`global` for the shared set). An entry already in the template's shape is
   left alone, so a second run moves nothing. It works on either durable
   backend; a boltdb `store:` is locked while the daemon runs — stop it first.
+  Entries a pack ships are never touched.
 - `export` writes `conductor-pack.yaml` (`pack:` metadata and `memory: {
   entries: memory }`) and a copy of each entry under `memory/` carrying only
   its id, tags, scope, created time and text. Provenance — the repo, step,
   run, trigger and dispatch that wrote it — stays on this box: a pack is
   meant to be shared, and the scope keys you export are the only names in
-  it. It reads the
-  source and never writes it. It refuses to replace an existing manifest
+  it. It reads the source and never writes it. It refuses to replace an existing manifest
   without `--force` (which also clears the old `memory/*.md`, so an entry you
   forgot since the last export does not survive), and refuses an entry that
   carries the value of one of the config's `secrets:`. Commit the directory

@@ -1159,13 +1159,14 @@ var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // walk gets for free: comments are not scalar values.
 // memoryScopeRef reports whether `${name}` at this key path is a memory
 // scope placeholder expandEnv must leave for the engine, rather than an
-// environment variable. Only two places qualify:
+// environment variable. Scope keys are templates (memory.RenderScopeKey) —
+// `{{.fact}}`, which expandEnv never touches anywhere — and `${repo}`,
+// `${workflow}` and `${step}` are kept as aliases for three of those facts.
+// The aliases are left alone in only two places:
 //
 //   - a step's memory selector, `…memory: { scope | scopes[] | extra_scopes[] }`
-//     (not the top-level `memory:` backend section): `${repo}`, `${workflow}`
-//     and `${step}`, which memory.ExpandScopeRefs fills per run;
-//   - a memory verb's scope grant, `…skill: { verbs: { memory.<op>: { scope: [] } } }`:
-//     `${repo}` only, the one fact flow.MemoryGrant translates.
+//     (not the top-level `memory:` backend section);
+//   - a memory verb's scope grant, `…skill: { verbs: { memory.<op>: { scope: [] } } }`.
 //
 // Anywhere else — and for any other name there — a reference is an ordinary
 // environment variable: substituted when set, a load error when not, exactly
@@ -1178,12 +1179,15 @@ func memoryScopeRef(name string, path []string) bool {
 	if n >= 3 && path[n-2] == "memory" {
 		switch path[n-1] {
 		case "scope", "scopes", "extra_scopes":
-			return name == "repo" || name == "workflow" || name == "step"
+			return scopeAlias(name)
 		}
 	}
-	return name == "repo" && n >= 4 && path[n-1] == DimScope && strings.HasPrefix(path[n-2], "memory.") &&
+	return scopeAlias(name) && n >= 4 && path[n-1] == DimScope && strings.HasPrefix(path[n-2], "memory.") &&
 		path[n-3] == "verbs" && path[n-4] == "skill"
 }
+
+// scopeAlias reports whether `${name}` is one of the scope-key aliases.
+func scopeAlias(name string) bool { return name == "repo" || name == "workflow" || name == "step" }
 
 func expandEnv(path string, b []byte) ([]byte, error) {
 	// A secret field must name its source, read when the value is used —

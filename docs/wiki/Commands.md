@@ -34,7 +34,8 @@ conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
 conductor unlock                           seed the default vault key for non-interactive restarts
 conductor config migrate                   removed with the legacy config schema — run it on the release before the plugin contract, then upgrade
 conductor mcp memory --socket <path>       stdio MCP server for the live agent tools (memory + run_step; launched by runtimes, not by hand)
-conductor memory rescope --tag T --to 'P:{scope}' [--apply]   move tagged entries to a templated scope; dry run unless --apply ([[Memory#operator-commands]])
+conductor memory rescope (--tag T | --scope PAT | both) --to 'P:{scope}' [--apply]   move the selected entries to a templated scope; dry run unless --apply ([[Memory#operator-commands]])
+conductor memory key --template K [--facts F.json] [--fact n=v …]   render a scope-key template with core's renderer ([[Memory#scope-keys-are-templates]])
 conductor memory export --scope S [--scope …] --out DIR [--name N] [--force]   write those scopes' entries as a pack that ships read-only memory
 conductor workflows [ls]                   config workflows and triggers by name, then saved (agent-promoted) workflows with review state and health
 conductor workflows review <name>          print the workflow's provenance + FULL steps, then clear it for reuse (dry-run it first; runs stay policy-guarded)
@@ -108,7 +109,8 @@ conductor version
 - **memory rescope / export** — operator commands that read the configured
   `memory:` backend directly (a `dir:` needs nothing else; a boltdb `store:`
   is locked while the daemon runs, so stop it first). `rescope` moves every
-  entry carrying `--tag` to the `--to` template with `{scope}` replaced by the
+  entry selected by `--tag`, `--scope` (a key, `*` or a glob) or both to the
+  `--to` template with `{scope}` replaced by the
   entry's current scope, keeping its id, text, tags, provenance and created
   time; it prints what it would move and writes only with `--apply`, and is
   idempotent. `export` writes `<out>/conductor-pack.yaml` plus

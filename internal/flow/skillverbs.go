@@ -65,6 +65,9 @@ type SkillIdentity struct {
 	Bot     string `json:"bot,omitempty"`
 	BotRole string `json:"bot_role,omitempty"`
 	CaseID  string `json:"case_id,omitempty"`
+	// MemoryScopes are the step's memory scope lists rendered at dispatch
+	// (skill.Identity.MemoryScopes); see MemoryGrantFrom.
+	MemoryScopes map[string][]memory.ScopePattern `json:"-"`
 }
 
 // BotGate is the bots' autonomy gate (internal/bot). RunSkillVerb
@@ -691,7 +694,7 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	// (memorygrant.go). Re-stamped whole so the caller's own-repo rule is
 	// unchanged.
 	if in.Decl != nil && in.Decl.Type == "memory" {
-		caller := memory.NewAgentCaller(t.Target.Repo, t.TargetTrusted).WithGrant(r.MemoryGrant(id.ScopesFor(uses), t))
+		caller := memory.NewAgentCaller(t.Target.Repo, t.TargetTrusted).WithGrant(MemoryGrantFrom(id.Scopes, id.MemoryScopes, uses))
 		ctx = memory.WithCaller(ctx, caller)
 	}
 	if options == nil {

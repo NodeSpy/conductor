@@ -413,7 +413,7 @@ engines:
 # (ACP runtimes); a profile opts into prompt injection with memory: true.
 # Installed packs may ship read-only entries (manifest memory: { entries: dir })
 # that are recalled alongside these; writes always land here. Operator tools:
-# `conductor memory rescope --tag outcome --to 'outcome:{scope}' [--apply]`
+# `conductor memory rescope --tag outcome --to 'outcome:{scope}' [--apply]` (or --scope <pattern>)
 # and `conductor memory export --scope <s> --out <dir>` (wiki: Memory).
 # ---------------------------------------------------------------------------
 # memory:
@@ -877,12 +877,13 @@ x-templates:
     # host: build-box       # pin this step's runtime launches to a host
     # memory: true          # inject shared memories — the shared set plus this run's
     #                       #   context keys (the repo, the workflow, this step). Scope
-    #                       #   keys are OPAQUE strings; there are no repo/agent TYPES:
-    #                       #   memory: { scopes: ["${repo}", "acme/api"], tags: [ci], limit: 10 }
-    #                       #   scopes: REPLACES the defaults; extra_scopes: ADDS to them,
-    #                       #   and a placeholder may sit inside a key (dropped on a run
-    #                       #   with nothing to expand it to):
-    #                       #   memory: { extra_scopes: ["standard:${repo}", "emphasis:${repo}"] }
+    #                       #   keys are OPAQUE strings you choose — a repo, a team, an
+    #                       #   org, a label — and TEMPLATES over the step's facts:
+    #                       #   memory: { scopes: ["team:{{.inputs.team}}", "acme/api"], tags: [ci], limit: 10 }
+    #                       #   scopes: REPLACES the defaults; extra_scopes: ADDS to them.
+    #                       #   A key reading a fact the run lacks is dropped for that run;
+    #                       #   ${repo}/${workflow}/${step} alias {{.repo}}/{{.workflow}}/{{.step}}:
+    #                       #   memory: { extra_scopes: ["standard:{{.owner}}", "emphasis:${repo}"] }
     # outcome_feedback: true # append this step's own track record to its prompt
     # outcome_key: reviewers #   …or pool several steps onto one record
     # skill:                 # agent access back into conductor (default: none of it)
@@ -900,10 +901,12 @@ x-templates:
     #                       #       slack.post:      { channel: ["#pr-{{.number}}"] }
     #                       #       gh.submit_review: {}     # repo pinned to the PR
     #                       #       kv.*:            { store: [shared-kv] }
-    #                       #       memory.remember: { scope: ["{{.repo}}", "standard:{{.repo}}"] }
+    #                       #       memory.remember: { scope: ["team:{{.inputs.team}}", "notes/*"] }
     #                       #   (memory's scope list RESTRICTS: the step may write the
     #                       #   listed scopes and nothing else — verb, live tool and
-    #                       #   ```remember output alike; wiki: Memory)
+    #                       #   ```remember output alike. Entries are scope keys over the
+    #                       #   step's facts; prefer facts a PR author cannot choose —
+    #                       #   wiki: Memory)
     #                       #   An entry may be parameterized: "${settings.X}"
     #                       #   resolves at load, "#pr-{{.number}}" renders per
     #                       #   dispatch (this PR's channel and no other).

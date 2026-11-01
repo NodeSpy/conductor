@@ -647,10 +647,21 @@ func (e *Engine) archiveAgent(ctx context.Context, agentID string) error {
 // archive paths must not tear a shared session down after one step.
 func (e *Engine) affinityOwns(agentID string) bool { return e.affinity.Owns(agentID) }
 
+// memoryFacts builds the facts a step's memory scope keys render over
+// (memory.ScopeFacts) from the template data the step's prompt sees — nil on
+// a path with none, which leaves the trigger's own facts.
+func (e *Engine) memoryFacts(data map[string]any, t core.Trigger, workflow, identity string) map[string]any {
+	if e.flow != nil {
+		return e.flow.MemoryFacts(data, t, workflow, identity)
+	}
+	return memory.ScopeFacts(data, t, workflow, identity, nil)
+}
+
 // memoryPrompt renders the opt-in shared-memory section for a dispatched
 // agent — the same append path as agentGuidance. A profile without
-// `memory:` (or with memory unconfigured) gets "" — no token cost.
-func (e *Engine) memoryPrompt(identity string, step config.Step, t core.Trigger, workflow string) string {
+// `memory:` (or with memory unconfigured) gets "" — no token cost. facts are
+// the step's (memoryFacts); nil builds them from the trigger alone.
+func (e *Engine) memoryPrompt(identity string, step config.Step, t core.Trigger, workflow string, facts map[string]any) string {
 	sel := step.Memory
 	if sel == nil || !sel.Enabled {
 		return ""
@@ -667,17 +678,22 @@ func (e *Engine) memoryPrompt(identity string, step config.Step, t core.Trigger,
 	// straight into the model's context).
 	repo := t.OwnRepo()
 	keys := memory.ContextKeys(repo, workflow, identity)
-	scopes := memory.ExpandScopeRefs(sel.Scopes, repo, workflow, identity)
+	if facts == nil {
+		facts = e.memoryFacts(nil, t, workflow, identity)
+	}
+	// Written keys are templates over the step's facts (memory.RenderScopeKey);
+	// one that reads a fact this run has no value for is dropped.
+	scopes := memory.RenderScopeKeys(sel.Scopes, facts)
 	if len(sel.Scopes) > 0 && len(scopes) == 0 {
-		// Every explicit key named a placeholder this run cannot fill
-		// (`standard:${repo}` with no repo). The step asked for those keys
+		// Every explicit key read a fact this run cannot fill
+		// (`standard:{{.repo}}` with no repo). The step asked for those keys
 		// and none apply; falling back to the defaults would recall what it
 		// chose not to.
 		keys = nil
 	}
 	f := memory.Filter{
 		Scopes: scopes,
-		Extra:  memory.ExpandScopeRefs(sel.ExtraScopes, repo, workflow, identity),
+		Extra:  memory.RenderScopeKeys(sel.ExtraScopes, facts),
 		Tags:   sel.Tags, Limit: sel.Limit,
 	}
 	return m.PromptSection(f, keys)
@@ -685,7 +701,7 @@ func (e *Engine) memoryPrompt(identity string, step config.Step, t core.Trigger,
 
 // harvestMemory applies the memory output contract to a finished agent's
 // output (see memory.HarvestOutput): best-effort, audited, never a failure.
-func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string, step config.Step) {
+func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string, step config.Step, facts map[string]any) {
 	sel := step.Memory
 	m := memory.Active()
 	if m == nil || strings.TrimSpace(output) == "" {
@@ -703,11 +719,11 @@ func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string, step
 		TargetTrusted: t.TargetTrusted}
 	// A step whose skill grant lists the scopes memory.remember may write
 	// is held to that list here too: the output contract is the same write
-	// by another route (flow.MemoryGrant).
-	var grant memory.GrantMatcher
-	if e.flow != nil {
-		grant = e.flow.StepMemoryGrant(step.Skill, "remember", t)
+	// by another route (flow.StepMemoryGrant).
+	if facts == nil {
+		facts = e.memoryFacts(nil, t, "", agent)
 	}
+	grant := flow.StepMemoryGrant(step.Skill, "remember", facts)
 	entries, err := m.HarvestOutputGranted(output, src, grant)
 	if err != nil {
 		e.log("%s memory output contract: %v", tag(t), err)
@@ -1067,7 +1083,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		if act.Prompt != "" {
 			act.Prompt += creds.Guidance
 			act.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
-			act.Prompt += e.memoryPrompt(identity, profile, t, "")
+			act.Prompt += e.memoryPrompt(identity, profile, t, "", nil)
 			// NOTE: no HoldGuidance here. A top-level single-action agent is an
 			// autonomous fixer (new_comment/changes_requested/merge_conflict/
 			// failing_checks/issue_matched) — it should make the best decision and
@@ -1115,6 +1131,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		Trigger: t, Action: act, Step: profile, Identity: identity, Model: model, Provider: modelProvider,
 		Credentials: creds,
 		Author:      e.author, Shadow: shadow, CatchUp: t.CatchUp,
+		ScopeFacts: e.memoryFacts(nil, t, "", identity),
 	}
 
 	// Resolve which controller runs this agent before taking a slot. Commands
@@ -1252,7 +1269,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// Single-action dispatches have no WorkflowRun record; the agent id is the
 	// run identity that provenance (Source.Run) can trace back.
 	if act.Type == "agent" && !shadow && !ref.Queued {
-		e.harvestMemory(t, act.Agent, ref.AgentID, ref.Output, profile)
+		e.harvestMemory(t, act.Agent, ref.AgentID, ref.Output, profile, nil)
 	}
 
 	if ref.Queued {

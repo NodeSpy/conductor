@@ -1,0 +1,215 @@
+package memory
+
+import (
+	"encoding/json"
+	"os"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/NodeSpy/conductor/internal/core"
+)
+
+type scopeKeyVectors struct {
+	Facts map[string]any `json:"facts"`
+	Cases []struct {
+		Template string `json:"template"`
+		Want     string `json:"want"`
+		Drop     bool   `json:"drop"`
+	} `json:"cases"`
+}
+
+// loadScopeKeyVectors reads the shared vectors, with whole JSON numbers as
+// ints — the shape a run's facts carry.
+func loadScopeKeyVectors(t *testing.T) scopeKeyVectors {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/scope_key_vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v scopeKeyVectors
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	v.Facts = intsOf(v.Facts).(map[string]any)
+	return v
+}
+
+func intsOf(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			x[k] = intsOf(e)
+		}
+	case []any:
+		for i, e := range x {
+			x[i] = intsOf(e)
+		}
+	case float64:
+		if x == float64(int(x)) {
+			return int(x)
+		}
+	}
+	return v
+}
+
+func TestScopeKeyVectors(t *testing.T) {
+	v := loadScopeKeyVectors(t)
+	if len(v.Cases) < 30 {
+		t.Fatalf("vectors: %d cases", len(v.Cases))
+	}
+	for _, c := range v.Cases {
+		got, err := RenderScopeKey(c.Template, v.Facts)
+		switch {
+		case c.Drop && err == nil:
+			t.Errorf("%q must not render, got %q", c.Template, got)
+		case !c.Drop && err != nil:
+			t.Errorf("%q: %v", c.Template, err)
+		case !c.Drop && got != c.Want:
+			t.Errorf("%q = %q, want %q", c.Template, got, c.Want)
+		}
+	}
+}
+
+// What a key may not do is refused at load (CheckScopeKey), not only at
+// render.
+func TestCheckScopeKey(t *testing.T) {
+	for _, ok := range []string{"acme/api", "", "team:{{.inputs.team}}", "${repo}", "{{.x | default \"y\"}}", "{{index .labels 0}}"} {
+		if err := CheckScopeKey(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"{{if .x}}y{{end}}", "{{range .l}}{{end}}", "{{with .x}}{{end}}", "{{define \"t\"}}x{{end}}",
+		"{{template \"t\"}}", "{{$v := .x}}", "{{kv \"a\" \"b\" \"c\"}}", "{{vault \"a\" \"b\"}}", "{{secret \"x\"}}",
+		"{{memory \"global\" 1}}", "{{call .f}}", "{{len .x}}", "{{.x", "a\nb", "a\x00b", "tab\there"} {
+		if err := CheckScopeKey(bad); err == nil {
+			t.Errorf("%q must be refused", bad)
+		}
+	}
+}
+
+// A rendered value is data: it is never rendered again, and a control
+// character a fact carries refuses the key.
+func TestRenderedFactsStayLiteral(t *testing.T) {
+	facts := map[string]any{"title": "{{.secret}}", "x": "${repo}", "nl": "a\nb", "secret": "s3cr3t", "repo": "acme/api"}
+	if got, err := RenderScopeKey("t:{{.title}}", facts); err != nil || got != "t:{{.secret}}" {
+		t.Fatalf("a fact's template text must stay text: %q %v", got, err)
+	}
+	if got, err := RenderScopeKey("t:{{.x}}", facts); err != nil || got != "t:${repo}" {
+		t.Fatalf("a fact's alias text must stay text: %q %v", got, err)
+	}
+	if _, err := RenderScopeKey("t:{{.nl}}", facts); err == nil {
+		t.Fatal("a control character from a fact must refuse the key")
+	}
+}
+
+// The compat aliases are exactly the three template references.
+func TestScopeKeyAliases(t *testing.T) {
+	f := func(repo, wf, step string) map[string]any {
+		return map[string]any{"repo": repo, "workflow": wf, "step": step}
+	}
+	for _, tc := range []struct {
+		in    []string
+		facts map[string]any
+		want  []string
+	}{
+		{[]string{"standard:${repo}", "emphasis:${repo}"}, f("acme/api", "", ""), []string{"standard:acme/api", "emphasis:acme/api"}},
+		{[]string{"${workflow}/${step}@${repo}"}, f("acme/api", "nightly", "lint"), []string{"nightly/lint@acme/api"}},
+		{[]string{"standard:${repo}", "global-ish"}, f("", "w", "s"), []string{"global-ish"}},
+		{[]string{"${workflow}:${repo}"}, f("", "w", "s"), []string{}},
+		{[]string{"${repo}", "${step}", "literal", ""}, f("acme/api", "", "lint"), []string{"acme/api", "lint", "literal", ""}},
+		{[]string{" spaced ", "${unknown}"}, f("r", "w", "s"), []string{" spaced ", "${unknown}"}},
+		{[]string{"x:${repo}"}, f("${step}", "w", "lint"), []string{"x:${step}"}},
+	} {
+		if got := RenderScopeKeys(tc.in, tc.facts); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%q = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	for _, a := range []string{"${repo}", "${workflow}", "${step}", "x{{.y}}"} {
+		if !IsScopeTemplate(a) {
+			t.Errorf("%q is a template", a)
+		}
+	}
+	for _, a := range []string{"acme/api", "${REPO}", "${unknown}", "{scope}"} {
+		if IsScopeTemplate(a) {
+			t.Errorf("%q is not a template", a)
+		}
+	}
+}
+
+func TestScopeFacts(t *testing.T) {
+	trusted := core.Trigger{Kind: "review_requested", Title: "t", TargetTrusted: true,
+		Target:  core.Target{Repo: "acme/api", Owner: "acme", Name: "api", Number: 7, PR: 7, HeadSHA: "abc", BaseRef: "main", HTMLURL: "u"},
+		Context: map[string]any{"author": "octo", "repo": "context/wins-not", "labels": []string{"x"}}}
+	data := map[string]any{"inputs": map[string]any{"team": "payments"}, "secrets": map[string]any{"gh": "tok"},
+		"vaults": map[string]any{"v": map[string]any{"k": "s"}}, "author": "data-wins", "step": "data-step"}
+	f := ScopeFacts(data, trusted, "review", "lens", nil)
+	for k, want := range map[string]any{"repo": "acme/api", "owner": "acme", "name": "api", "number": 7, "pr": 7,
+		"head": "abc", "base": "main", "url": "u", "kind": "review_requested", "title": "t", "author": "data-wins",
+		"workflow": "review", "step": "lens"} {
+		if !reflect.DeepEqual(f[k], want) {
+			t.Errorf("%s = %#v, want %#v", k, f[k], want)
+		}
+	}
+	if _, ok := f["secrets"]; ok {
+		t.Error("named secrets must not be a scope fact")
+	}
+	if _, ok := f["vaults"]; ok {
+		t.Error("vault values must not be scope facts")
+	}
+	if got, _ := RenderScopeKey("team:{{.inputs.team}}", f); got != "team:payments" {
+		t.Errorf("inputs: %q", got)
+	}
+	// A target the event's sender chose keys nothing.
+	forged := trusted
+	forged.TargetTrusted = false
+	f = ScopeFacts(data, forged, "review", "lens", nil)
+	for _, k := range []string{"repo", "owner", "name", "head", "base", "url"} {
+		if f[k] != "" {
+			t.Errorf("forged target: %s = %q", k, f[k])
+		}
+	}
+	for _, k := range []string{"number", "pr", "issue"} {
+		if f[k] != 0 {
+			t.Errorf("forged target: %s = %v", k, f[k])
+		}
+	}
+	if _, err := RenderScopeKey("standard:{{.repo}}", f); err == nil {
+		t.Error("a forged repo must not render into a key")
+	}
+	// The redactor sees the facts.
+	f = ScopeFacts(map[string]any{"leak": "tok-123"}, trusted, "", "", func(v any) any {
+		m := v.(map[string]any)
+		m["leak"] = "[redacted]"
+		return m
+	})
+	if f["leak"] != "[redacted]" {
+		t.Errorf("redact not applied: %v", f["leak"])
+	}
+}
+
+func TestRenderGrantScopes(t *testing.T) {
+	facts := map[string]any{"repo": "acme/api", "head_ref": "*", "inputs": map[string]any{"team": "payments"}}
+	got := RenderGrantScopes(map[string]map[string][]string{
+		"memory.remember": {"scope": {"team/*", "team:{{.inputs.team}}", "branch:{{.head_ref}}", "x:{{.inputs.none}}", "bad\x01"}},
+		"memory.recall":   {"scope": {"x:{{.inputs.none}}"}},
+		"memory.forget":   {},
+		"gh.comment":      {"repo": {"acme/*"}},
+	}, facts)
+	want := map[string][]ScopePattern{
+		"memory.remember": {{Text: "team/*"}, {Text: "team:payments", Literal: true}, {Text: "branch:*", Literal: true}},
+		"memory.recall":   {},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v\nwant %#v", got, want)
+	}
+	if got["memory.recall"] == nil {
+		t.Fatal("a list that renders to nothing is a restriction (non-nil), not no restriction")
+	}
+	if RenderGrantScopes(nil, facts) != nil {
+		t.Fatal("no grant, nothing rendered")
+	}
+	if !strings.Contains(ErrScopeFact.Error(), "no value") {
+		t.Fatal(ErrScopeFact)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/NodeSpy/conductor/internal/memory"
 	"gopkg.in/yaml.v3"
 )
 
@@ -68,8 +69,8 @@ func (c *Config) validateMemory() error {
 //
 //	memory: true
 //	memory: { scopes: ["", "acme/api"], tags: [ci], limit: 10 }
-//	memory: { scopes: ["${step}", "${workflow}"], tags: [ci] }
-//	memory: { extra_scopes: ["standard:${repo}", "emphasis:${repo}"] }
+//	memory: { scopes: ["{{.step}}", "{{.workflow}}"], tags: [ci] }
+//	memory: { extra_scopes: ["team:{{.inputs.team}}", "standard:{{.owner}}"] }
 //
 // `scopes:` (or `scope:`) REPLACES the defaults; `extra_scopes:` is appended
 // to whichever applies — the defaults, or the explicit list — so a step can
@@ -77,11 +78,11 @@ func (c *Config) validateMemory() error {
 //
 // SCOPE KEYS ARE OPAQUE (docs/design/agents-removal.md §2): the memory core
 // never interprets them, and there are no privileged `repo`/`agent` types.
-// The `${repo}` / `${workflow}` / `${step}` placeholders are a convenience
-// the ENGINE expands to the run's context keys before recall — they are
-// sugar for strings the operator could equally write out. They may sit
-// inside a key (`standard:${repo}`); a key whose placeholder has nothing to
-// expand to on a run is dropped for that run.
+// A key is a TEMPLATE over the step's facts (memory.RenderScopeKey: inputs,
+// the event's facts, workflow, step, …), rendered per run by the engine;
+// `${repo}` / `${workflow}` / `${step}` are aliases of `{{.repo}}` /
+// `{{.workflow}}` / `{{.step}}`. A key that reads a fact the run has no
+// value for is dropped for that run.
 //
 // Absent (nil) or false → no injection, no token cost.
 type MemorySelector struct {
@@ -129,6 +130,13 @@ func (s *MemorySelector) UnmarshalYAML(n *yaml.Node) error {
 	for i, sc := range body.ExtraScopes {
 		if strings.TrimSpace(sc) == "" {
 			return fmt.Errorf("memory: extra_scopes[%d] is blank — name a scope key (the shared set is already in the defaults)", i)
+		}
+	}
+	// Keys are templates over the step's facts (memory.RenderScopeKey): a
+	// malformed one fails here, not by silently recalling nothing.
+	for _, sc := range append(append([]string(nil), scopes...), body.ExtraScopes...) {
+		if err := memory.CheckScopeKey(sc); err != nil {
+			return fmt.Errorf("memory: %w", err)
 		}
 	}
 	enabled := body.Enabled == nil || *body.Enabled

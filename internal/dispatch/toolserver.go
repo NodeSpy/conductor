@@ -266,12 +266,13 @@ func SkillIdentityFor(req Request) (skill.Identity, bool) {
 		return skill.Identity{}, false
 	}
 	mb := botBinding(req)
+	policy := effectiveSkillPolicy(req) // step's grant + auto handoff.done for a hand-off
 	return skill.Identity{
 		Agent:         req.Action.Agent,
 		Repo:          req.Trigger.Target.Repo,
 		Trigger:       req.Trigger.Kind,
 		Number:        req.Trigger.Target.Number,
-		Policy:        effectiveSkillPolicy(req), // step's grant + auto handoff.done for a hand-off
+		Policy:        policy,
 		Context:       req.Trigger.Context,
 		Sem:           req.Trigger.Semantics(),
 		TargetTrusted: req.Trigger.TargetTrusted,
@@ -282,6 +283,9 @@ func SkillIdentityFor(req Request) (skill.Identity, bool) {
 		Bot:     mb.Name,
 		BotRole: mb.Role,
 		CaseID:  mb.CaseID,
+		// The step's memory scope lists, rendered over its facts now —
+		// the only point they exist (flow.MemoryGrantFrom).
+		MemoryScopes: memory.RenderGrantScopes(policy.VerbScopes, req.ScopeFacts),
 	}, true
 }
 

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -74,9 +76,10 @@ type multiFlag []string
 func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
-// cmdMemoryRescope moves entries carrying a tag to a templated scope:
-// `--to 'outcome:{scope}'` files each under `outcome:<its current scope>`.
-// A dry run (the default) prints what would move and writes nothing.
+// cmdMemoryRescope moves the entries a filter selects — a tag, a scope
+// pattern, or both — to a templated scope: `--to 'outcome:{scope}'` files
+// each under `outcome:<its current scope>`. A dry run (the default) prints
+// what would move and writes nothing.
 func cmdMemoryRescope(args []string) error {
 	if err := refuseInSession("rescope"); err != nil {
 		return err
@@ -88,21 +91,22 @@ func cmdMemoryRescope(args []string) error {
 	fs := flag.NewFlagSet("memory rescope", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	tag := fs.String("tag", "", "move entries carrying this tag")
+	scope := fs.String("scope", "", "move entries whose scope matches (a key, * or a glob like 'standard:acme/*')")
 	to := fs.String("to", "", "target scope; {scope} is the entry's current scope")
 	apply := fs.Bool("apply", false, "write the moves (default: dry run)")
-	if err := fs.Parse(rest); err != nil || fs.NArg() > 0 || *tag == "" || *to == "" {
-		return fmt.Errorf("usage: conductor memory rescope --tag <tag> --to <scope template, e.g. 'outcome:{scope}'> [--apply] [--config <path>]")
+	if err := fs.Parse(rest); err != nil || fs.NArg() > 0 || (*tag == "" && *scope == "") || *to == "" {
+		return fmt.Errorf("usage: conductor memory rescope (--tag <tag> | --scope <pattern> | both) --to <scope template, e.g. 'outcome:{scope}'> [--apply] [--config <path>]")
 	}
 	mgr, done, err := operatorMemory(cfg)
 	if err != nil {
 		return err
 	}
 	defer done()
-	return runRescope(os.Stdout, mgr, *tag, *to, *apply)
+	return runRescope(os.Stdout, mgr, memory.RescopeFilter{Tag: *tag, Scope: *scope}, *to, *apply)
 }
 
-func runRescope(w io.Writer, mgr *memory.Manager, tag, to string, apply bool) error {
-	moves, err := mgr.Rescope(tag, to, apply)
+func runRescope(w io.Writer, mgr *memory.Manager, sel memory.RescopeFilter, to string, apply bool) error {
+	moves, err := mgr.Rescope(sel, to, apply)
 	if err != nil {
 		return err
 	}
@@ -125,7 +129,14 @@ func runRescope(w io.Writer, mgr *memory.Manager, tag, to string, apply bool) er
 	for _, k := range keys {
 		fmt.Fprintf(w, "  %5d  %s\n", byScope[k], k)
 	}
-	fmt.Fprintf(w, "%s %d entr%s tagged %q\n", verb, len(moves), plural(len(moves), "y", "ies"), tag)
+	var what []string
+	if sel.Tag != "" {
+		what = append(what, fmt.Sprintf("tagged %q", sel.Tag))
+	}
+	if sel.Scope != "" {
+		what = append(what, fmt.Sprintf("in scope %q", sel.Scope))
+	}
+	fmt.Fprintf(w, "%s %d entr%s %s\n", verb, len(moves), plural(len(moves), "y", "ies"), strings.Join(what, " and "))
 	if !apply && len(moves) > 0 {
 		fmt.Fprintln(w, "dry run — re-run with --apply to write")
 	}
@@ -313,4 +324,81 @@ func trackedSecretCheck(cfg *config.Config) func(string) bool {
 		_, _ = sec.Resolve(context.Background(), ref)
 	}
 	return func(s string) bool { return sec.Redact(s) != s }
+}
+
+// cmdMemoryKey renders one scope key (memory.RenderScopeKey) over facts
+// given as a JSON object (--facts, a file or - for stdin) plus --fact k=v
+// pairs (strings; they win). It is core's own renderer, so a script that
+// needs the key a step's template names for some event — a calibration
+// mapping a past pull request to its key — computes it exactly as the
+// engine does instead of re-implementing the grammar. Pure: it reads no
+// config and no memory, so it runs anywhere, an agent session included.
+// A key that does not render exits non-zero with the reason.
+func cmdMemoryKey(stdin io.Reader, w io.Writer, args []string) error {
+	fs := flag.NewFlagSet("memory key", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	tmpl := fs.String("template", "", "the scope key, e.g. 'team:{{.inputs.team}}'")
+	factsFrom := fs.String("facts", "", "a JSON object of facts: a file path, or - for stdin")
+	var pairs multiFlag
+	fs.Var(&pairs, "fact", "one fact as name=value (repeatable)")
+	if err := fs.Parse(args); err != nil || fs.NArg() > 0 || *tmpl == "" {
+		return fmt.Errorf("usage: conductor memory key --template <key> [--facts <json file|->] [--fact name=value …]")
+	}
+	facts := map[string]any{}
+	if *factsFrom != "" {
+		var raw []byte
+		var err error
+		if *factsFrom == "-" {
+			raw, err = io.ReadAll(stdin)
+		} else {
+			raw, err = os.ReadFile(*factsFrom)
+		}
+		if err != nil {
+			return err
+		}
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		if err := dec.Decode(&facts); err != nil {
+			return fmt.Errorf("--facts: want a JSON object: %w", err)
+		}
+		facts = jsonFacts(facts).(map[string]any)
+	}
+	for _, p := range pairs {
+		k, v, ok := strings.Cut(p, "=")
+		if !ok || strings.TrimSpace(k) == "" {
+			return fmt.Errorf("--fact %q: want name=value", p)
+		}
+		facts[strings.TrimSpace(k)] = v
+	}
+	key, err := memory.RenderScopeKey(*tmpl, facts)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(w, key)
+	return nil
+}
+
+// jsonFacts turns decoded JSON numbers into ints where they are whole, the
+// shape the engine's facts carry (a PR number is an int), so `{{.number}}`
+// renders the same here as in a run.
+func jsonFacts(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			x[k] = jsonFacts(e)
+		}
+		return x
+	case []any:
+		for i, e := range x {
+			x[i] = jsonFacts(e)
+		}
+		return x
+	case json.Number:
+		if n, err := x.Int64(); err == nil {
+			return int(n)
+		}
+		f, _ := x.Float64()
+		return f
+	}
+	return v
 }

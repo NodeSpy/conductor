@@ -44,7 +44,7 @@ engagement consumed, no workflow rot.
   learned entry for that repo, and the shared set with it. Nothing in
   conductor reads these notes back from memory (reports and health use the
   audit rows), so they sit beside the repo's memory and are recalled only by a
-  step that asks — `memory: { extra_scopes: ["outcome:${repo}"] }`.
+  step that asks — `memory: { extra_scopes: ["outcome:{{.repo}}"] }`.
 
   Notes written by earlier versions are still in the repo scope. Move them
   with the operator command, dry run first:

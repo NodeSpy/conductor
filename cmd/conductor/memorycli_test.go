@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,7 +11,8 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
-	"github.com/NodeSpy/conductor/internal/flow"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/skill"
 	"gopkg.in/yaml.v3"
@@ -93,6 +96,19 @@ func TestMemoryRescopeCLI(t *testing.T) {
 	}
 	if err := cmdMemoryRescope([]string{"--config", path, "--tag", "outcome"}); err == nil || !strings.Contains(err.Error(), "usage") {
 		t.Fatalf("--to is required: %v", err)
+	}
+	// --scope alone archives one scope's entries.
+	out, err = captureStdout(t, func() error {
+		return cmdMemoryRescope([]string{"--config", path, "--scope", "acme/api", "--to", "archive:{scope}", "--apply"})
+	})
+	if err != nil || !strings.Contains(out, `moved 1 entry in scope "acme/api"`) {
+		t.Fatalf("--scope apply: %v\n%s", err, out)
+	}
+	if got := scopesIn(t, dir); got["archive:acme/api"] != 1 || got["outcome:acme/api"] != 3 {
+		t.Fatalf("after --scope: %v", got)
+	}
+	if err := cmdMemoryRescope([]string{"--config", path, "--to", "x:{scope}"}); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("a filter is required: %v", err)
 	}
 	t.Setenv("CONDUCTOR_SKILL_TOKEN", "tok")
 	if err := cmdMemoryRescope([]string{"--config", path, "--tag", "outcome", "--to", "x"}); err == nil || !strings.Contains(err.Error(), "agent session") {
@@ -315,11 +331,19 @@ func snapshotDir(t *testing.T, dir string) string {
 // token, so a step restricted through skill.verbs is held to it there too.
 func TestMemoryGrantOpReadsTheTokensStepGrant(t *testing.T) {
 	b := skill.NewBroker(func(string) (string, bool) { return "", false }, nil)
-	tok, err := b.MintSession(skill.Identity{
-		Agent: "calibrate", Repo: "acme/api", TargetTrusted: true,
-		Policy: config.SkillPolicy{Verbs: []string{"memory.remember"},
-			VerbScopes: map[string]map[string][]string{"memory.remember": {"scope": {"standard:{{.repo}}"}}}},
-	}, uint32(os.Getuid()), skill.SessionTTL)
+	// The identity a real dispatch mints: the step's grant rendered over the
+	// facts its dispatch carried — here a team input, not a repo.
+	trig := core.Trigger{Target: core.Target{Repo: "acme/api", Owner: "acme", Name: "api"}, TargetTrusted: true}
+	id, ok := dispatch.SkillIdentityFor(dispatch.Request{
+		Trigger: trig, Action: config.Action{Agent: "calibrate"},
+		Step: config.Step{Skill: &config.SkillPolicy{Verbs: []string{"memory.remember"},
+			VerbScopes: map[string]map[string][]string{"memory.remember": {"scope": {"standard:{{.repo}}", "team:{{.inputs.team}}", "x:{{.inputs.none}}"}}}}},
+		ScopeFacts: memory.ScopeFacts(map[string]any{"inputs": map[string]any{"team": "payments"}}, trig, "review", "lens", nil),
+	})
+	if !ok {
+		t.Fatal("no identity")
+	}
+	tok, err := b.MintSession(id, uint32(os.Getuid()), skill.SessionTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,11 +352,11 @@ func TestMemoryGrantOpReadsTheTokensStepGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	grant := memoryGrantOp(b, flow.New(flow.Runner{}))
+	grant := memoryGrantOp(b)
 	peer := memory.Peer{UID: uint32(os.Getuid()), Valid: true}
 	g := grant(tok, "remember", peer)
-	if g == nil || !g("standard:acme/api") || g("acme/api") {
-		t.Fatal("the token's memory.remember scope list must bind the tool")
+	if g == nil || !g("standard:acme/api") || !g("team:payments") || g("acme/api") || g("x:") || g("team:") {
+		t.Fatal("the token's memory.remember scope list, rendered at dispatch, must bind the tool")
 	}
 	if grant(tok, "recall", peer) != nil {
 		t.Fatal("a remember list must not restrict recall")
@@ -342,5 +366,57 @@ func TestMemoryGrantOpReadsTheTokensStepGrant(t *testing.T) {
 	}
 	if grant("not-a-token", "remember", peer) != nil {
 		t.Fatal("an unknown token resolves no grant")
+	}
+}
+
+// `conductor memory key` is core's renderer: it agrees with every shared
+// vector (internal/memory/testdata), so a script mapping an event to its key
+// cannot drift from the engine.
+func TestMemoryKeyCLIMatchesTheVectors(t *testing.T) {
+	raw, err := os.ReadFile("../../internal/memory/testdata/scope_key_vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Facts json.RawMessage `json:"facts"`
+		Cases []struct {
+			Template string `json:"template"`
+			Want     string `json:"want"`
+			Drop     bool   `json:"drop"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	ran := 0
+	for _, c := range v.Cases {
+		if c.Template == "" {
+			continue // the CLI needs a template to render
+		}
+		var out bytes.Buffer
+		err := cmdMemoryKey(bytes.NewReader(v.Facts), &out, []string{"--template", c.Template, "--facts", "-"})
+		switch {
+		case c.Drop && err == nil:
+			t.Errorf("%q must not render, got %q", c.Template, out.String())
+		case !c.Drop && err != nil:
+			t.Errorf("%q: %v", c.Template, err)
+		case !c.Drop && strings.TrimSuffix(out.String(), "\n") != c.Want:
+			t.Errorf("%q = %q, want %q", c.Template, out.String(), c.Want)
+		}
+		ran++
+	}
+	if ran < 30 {
+		t.Fatalf("only %d vectors ran", ran)
+	}
+	// --fact pairs work alone and win over --facts.
+	var out bytes.Buffer
+	if err := cmdMemoryKey(strings.NewReader(`{"team":"a"}`), &out, []string{"--template", "team:{{.team}}", "--facts", "-", "--fact", "team=b"}); err != nil || out.String() != "team:b\n" {
+		t.Fatalf("--fact: %q %v", out.String(), err)
+	}
+	if err := cmdMemoryKey(nil, &out, []string{"--template", "team:{{.team}}"}); err == nil || !strings.Contains(err.Error(), "no value") {
+		t.Fatalf("no facts: %v", err)
+	}
+	if err := cmdMemoryKey(nil, &out, nil); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("--template is required: %v", err)
 	}
 }

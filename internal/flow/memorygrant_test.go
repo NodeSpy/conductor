@@ -14,44 +14,69 @@ func trustedTrigger(repo string) core.Trigger {
 	return core.Trigger{Target: core.Target{Repo: repo}, TargetTrusted: true}
 }
 
+// trustedFacts are the scope facts of a trusted dispatch on repo, plus extra.
+func trustedFacts(repo string, extra map[string]any) map[string]any {
+	tr := trustedTrigger(repo)
+	tr.Target.Owner, tr.Target.Name, _ = strings.Cut(repo, "/")
+	return memory.ScopeFacts(extra, tr, "review", "lens", nil)
+}
+
+// grantFor renders a one-verb grant over facts and builds its matcher.
+func grantFor(list []string, facts map[string]any) memory.GrantMatcher {
+	vs := map[string]map[string][]string{"memory.remember": {"scope": list}}
+	return MemoryGrantFrom(vs, memory.RenderGrantScopes(vs, facts), "memory.remember")
+}
+
 func TestMemoryGrantMatcher(t *testing.T) {
-	r := &Runner{}
-	if r.MemoryGrant(nil, trustedTrigger("acme/api")) != nil {
+	if MemoryGrantFrom(nil, nil, "memory.remember") != nil {
 		t.Fatal("no grant, no restriction")
 	}
-	if r.MemoryGrant(map[string][]string{"channel": {"#x"}}, trustedTrigger("acme/api")) != nil {
+	if MemoryGrantFrom(map[string]map[string][]string{"memory.remember": {"channel": {"#x"}}}, nil, "memory.remember") != nil {
 		t.Fatal("a grant without a scope key restricts nothing")
 	}
-	g := r.MemoryGrant(map[string][]string{"scope": {"{{.repo}}", "standard:${repo}", "emphasis:{{.repo}}", "team/*"}}, trustedTrigger("acme/api"))
+	facts := trustedFacts("acme/api", map[string]any{"inputs": map[string]any{"team": "payments"}})
+	g := grantFor([]string{"{{.repo}}", "standard:${repo}", "emphasis:{{.repo}}", "team:{{.inputs.team}}", "org:{{.owner}}", "w:${workflow}/${step}", "team/*"}, facts)
 	if g == nil {
 		t.Fatal("a scope key restricts")
 	}
-	for _, ok := range []string{"acme/api", "standard:acme/api", "emphasis:acme/api", "team/notes"} {
+	for _, ok := range []string{"acme/api", "standard:acme/api", "emphasis:acme/api", "team:payments", "org:acme", "w:review/lens", "team/notes"} {
 		if !g(ok) {
 			t.Errorf("%q should be admitted", ok)
 		}
 	}
-	for _, no := range []string{"acme/web", "standard:acme/web", "repo:acme/api", "", "team/a/b", "{{.repo}}", "standard:${repo}"} {
+	for _, no := range []string{"acme/web", "standard:acme/web", "repo:acme/api", "", "team/a/b", "{{.repo}}", "standard:${repo}", "team:", "team:billing"} {
 		if g(no) {
 			t.Errorf("%q must be refused", no)
 		}
 	}
-	// A rendered fact matches literally, never as a glob.
-	star := r.MemoryGrant(map[string][]string{"scope": {"standard:{{.repo}}"}}, trustedTrigger("*"))
-	if star("standard:acme/api") {
-		t.Error("a fact that renders to a glob must not widen the entry")
+	// A rendered fact matches literally, never as a glob — whatever fact it is.
+	glob := trustedFacts("acme/api", map[string]any{"head_ref": "*", "inputs": map[string]any{"team": "pay?ents"}, "labels": []string{"[a-z]*"}})
+	star := grantFor([]string{"branch:{{.head_ref}}", "team:{{.inputs.team}}", "label:{{index .labels 0}}"}, glob)
+	for _, no := range []string{"branch:main", "team:payments", "label:x"} {
+		if star(no) {
+			t.Errorf("a fact carrying glob characters widened the grant to %q", no)
+		}
+	}
+	for _, ok := range []string{"branch:*", "team:pay?ents", "label:[a-z]*"} {
+		if !star(ok) {
+			t.Errorf("the literal %q should match itself", ok)
+		}
 	}
 	// A target the sender chose has no repo fact: the templated entries
-	// render empty and match nothing; static ones still apply.
-	forged := r.MemoryGrant(map[string][]string{"scope": {"standard:{{.repo}}", "{{.repo}}", "fixed"}},
-		core.Trigger{Target: core.Target{Repo: "acme/api"}})
-	if forged("standard:acme/api") || forged("acme/api") || forged("standard:") || !forged("fixed") {
-		t.Error("a forged target must not render its repo into the grant")
+	// match nothing; static ones still apply.
+	forged := memory.ScopeFacts(nil, core.Trigger{Target: core.Target{Repo: "acme/api", Owner: "acme"}}, "", "", nil)
+	fg := grantFor([]string{"standard:{{.repo}}", "{{.repo}}", "org:{{.owner}}", "fixed"}, forged)
+	if fg("standard:acme/api") || fg("acme/api") || fg("standard:") || fg("org:acme") || fg("org:") || !fg("fixed") {
+		t.Error("a forged target must not render into the grant")
 	}
 	// An empty list is a restriction that admits nothing.
-	none := r.MemoryGrant(map[string][]string{"scope": nil}, trustedTrigger("acme/api"))
-	if none == nil || none("acme/api") {
+	if none := grantFor(nil, facts); none == nil || none("acme/api") {
 		t.Error("scope: [] must deny everything")
+	}
+	// A session minted without facts keeps only the static entries.
+	vs := map[string]map[string][]string{"memory.remember": {"scope": {"{{.repo}}", "fixed"}}}
+	if nf := MemoryGrantFrom(vs, nil, "memory.remember"); nf == nil || nf("acme/api") || !nf("fixed") {
+		t.Error("an unrendered templated entry must admit nothing")
 	}
 }
 
@@ -70,9 +95,10 @@ policy:
 `)
 	mgr := installTestMemory(t, cfg)
 	r := newTestRunner(t, cfg, buildRegistry(t, cfg)).Runner
+	scopes := map[string]map[string][]string{"memory.remember": {"scope": {"{{.repo}}", "standard:{{.repo}}", "emphasis:{{.repo}}"}}}
 	id := SkillIdentity{Agent: "calibrate", Repo: "acme/api", TargetTrusted: true,
-		Verbs:  []string{"memory.remember", "memory.recall"},
-		Scopes: map[string]map[string][]string{"memory.remember": {"scope": {"{{.repo}}", "standard:{{.repo}}", "emphasis:{{.repo}}"}}}}
+		Verbs: []string{"memory.remember", "memory.recall"}, Scopes: scopes,
+		MemoryScopes: memory.RenderGrantScopes(scopes, trustedFacts("acme/api", nil))}
 	for _, ok := range []string{"acme/api", "standard:acme/api", "emphasis:acme/api"} {
 		if _, err := r.RunSkillVerb(context.Background(), id, "memory.remember", map[string]any{"text": "n", "scope": ok}); err != nil {
 			t.Errorf("granted scope %q refused: %v", ok, err)
@@ -113,17 +139,16 @@ policy:
 }
 
 func TestEngineHarvestGrantFromStepSkill(t *testing.T) {
-	r := &Runner{}
 	sk := &config.SkillPolicy{Verbs: []string{"memory.*"},
 		VerbScopes: map[string]map[string][]string{"memory.*": {"scope": {"standard:{{.repo}}"}}}}
-	g := r.StepMemoryGrant(sk, "remember", trustedTrigger("acme/api"))
+	g := StepMemoryGrant(sk, "remember", trustedFacts("acme/api", nil))
 	if g == nil || !g("standard:acme/api") || g("acme/api") {
 		t.Fatal("the step's memory.* scope list should bind the output contract")
 	}
-	if r.StepMemoryGrant(nil, "remember", trustedTrigger("acme/api")) != nil {
+	if StepMemoryGrant(nil, "remember", trustedFacts("acme/api", nil)) != nil {
 		t.Fatal("no skill policy, no restriction")
 	}
-	if r.StepMemoryGrant(&config.SkillPolicy{Verbs: []string{"gh.*"}}, "remember", trustedTrigger("acme/api")) != nil {
+	if StepMemoryGrant(&config.SkillPolicy{Verbs: []string{"gh.*"}}, "remember", trustedFacts("acme/api", nil)) != nil {
 		t.Fatal("a grant that does not scope memory restricts nothing")
 	}
 	// The list is per verb: a recall list does not restrict remember, and a
@@ -132,10 +157,10 @@ func TestEngineHarvestGrantFromStepSkill(t *testing.T) {
 		VerbScopes: map[string]map[string][]string{
 			"memory.recall":   {"scope": {"acme/api"}},
 			"memory.remember": {"scope": {"standard:{{.repo}}"}}}}
-	if g := r.StepMemoryGrant(split, "remember", trustedTrigger("acme/api")); g == nil || g("acme/api") || !g("standard:acme/api") {
+	if g := StepMemoryGrant(split, "remember", trustedFacts("acme/api", nil)); g == nil || g("acme/api") || !g("standard:acme/api") {
 		t.Fatal("remember must be bound by its own list, not recall's")
 	}
-	if g := r.StepMemoryGrant(split, "recall", trustedTrigger("acme/api")); g == nil || !g("acme/api") || g("standard:acme/api") {
+	if g := StepMemoryGrant(split, "recall", trustedFacts("acme/api", nil)); g == nil || !g("acme/api") || g("standard:acme/api") {
 		t.Fatal("recall must be bound by its own list")
 	}
 	// Patterns matching one verb merge as a union (Memory.md documents it):
@@ -145,10 +170,10 @@ func TestEngineHarvestGrantFromStepSkill(t *testing.T) {
 		VerbScopes: map[string]map[string][]string{
 			"memory.*":        {"scope": nil},
 			"memory.remember": {"scope": {"standard:{{.repo}}"}}}}
-	if g := r.StepMemoryGrant(union, "remember", trustedTrigger("acme/api")); g == nil || !g("standard:acme/api") {
+	if g := StepMemoryGrant(union, "remember", trustedFacts("acme/api", nil)); g == nil || !g("standard:acme/api") {
 		t.Fatal("a second matching pattern widens: remember admits its own list")
 	}
-	if g := r.StepMemoryGrant(union, "forget", trustedTrigger("acme/api")); g == nil || g("standard:acme/api") || g("acme/api") {
+	if g := StepMemoryGrant(union, "forget", trustedFacts("acme/api", nil)); g == nil || g("standard:acme/api") || g("acme/api") {
 		t.Fatal("a verb matched only by `memory.*: {scope: []}` admits nothing")
 	}
 	var _ memory.GrantMatcher = g

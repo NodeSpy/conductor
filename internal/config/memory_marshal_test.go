@@ -195,7 +195,8 @@ func TestMemoryPlaceholderExemptionIsMemoryOnly(t *testing.T) {
 		{"memory tags", "steps:\n  - memory: { tags: [\"${repo}\"] }\n", "from-env"},
 		{"non-memory verb grant", "steps:\n  - skill: { verbs: { gh.comment: { scope: [\"${repo}\"] } } }\n", "from-env"},
 		{"grant outside skill", "policy:\n  agent_authored:\n    verbs: { memory.remember: { scope: [\"${repo}\"] } }\n", "from-env"},
-		{"grant names workflow", "steps:\n  - skill: { verbs: { memory.remember: { scope: [\"${workflow}\"] } } }\n", "from-env"},
+		{"grant names workflow", "steps:\n  - skill: { verbs: { memory.remember: { scope: [\"${workflow}/${step}\"] } } }\n", kept},
+		{"template syntax untouched", "steps:\n  - memory: { extra_scopes: [\"team:{{.inputs.team}}\"] }\n", kept},
 		{"key named scope elsewhere", "bots:\n  b:\n    scope: \"${repo}\"\n", "from-env"},
 		// Inside a memory scope key, only the three placeholders are exempt.
 		{"other var in a memory scope", "steps:\n  - memory: { extra_scopes: [\"standard:${CONDUCTOR_TEST_MEMVAR}\"] }\n", "from-env"},
@@ -213,7 +214,7 @@ func TestMemoryPlaceholderExemptionIsMemoryOnly(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			hasRef := strings.Contains(string(out), "${")
+			hasRef := strings.Contains(string(out), "${") || strings.Contains(string(out), "{{")
 			if c.want == kept && (!hasRef || strings.Contains(string(out), "from-env")) {
 				t.Fatalf("a memory scope placeholder must stay verbatim:\n%s", out)
 			}
@@ -231,5 +232,34 @@ func TestMemoryPlaceholderExemptionIsMemoryOnly(t *testing.T) {
 				t.Fatalf("an unset env ref outside memory scopes must fail loudly: %v", err)
 			}
 		})
+	}
+}
+
+// A scope key is a template, checked at load: a malformed one — or one
+// reaching for anything but the step's facts — fails the config, in a
+// selector and in a memory verb's grant alike.
+func TestMemoryScopeKeysCheckedAtLoad(t *testing.T) {
+	for _, ok := range []string{
+		`memory: { extra_scopes: ["team:{{.inputs.team}}", "org:{{.owner | default \"x\"}}", "${repo}"] }`,
+		`skill: { verbs: { memory.remember: { scope: ["team:{{.inputs.team}}", "team/*"] } } }`,
+		`skill: { verbs: { gh.comment: { repo: ["{{if .x}}y{{end}}"] } } }`, // not a memory grant: not a scope key
+	} {
+		var s Step
+		if err := yaml.Unmarshal([]byte(ok), &s); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		`memory: { scopes: ["{{.owner"] }`,
+		`memory: { scope: "{{kv \"a\" \"b\" \"c\"}}" }`,
+		`memory: { extra_scopes: ["{{if .x}}y{{end}}"] }`,
+		`memory: { extra_scopes: ["a\u0007b"] }`,
+		`skill: { verbs: { memory.remember: { scope: ["{{secret \"gh\"}}"] } } }`,
+		`skill: { verbs: { memory.*: { scope: ["{{range .labels}}{{.}}{{end}}"] } } }`,
+	} {
+		var s Step
+		if err := yaml.Unmarshal([]byte(bad), &s); err == nil {
+			t.Errorf("%s must be refused at load", bad)
+		}
 	}
 }

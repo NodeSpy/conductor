@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/NodeSpy/conductor/internal/core"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -414,21 +415,54 @@ type Move struct {
 // entry's current scope key.
 const RescopePlaceholder = "{scope}"
 
-// Rescope moves the manager's OWN entries carrying tag to the scope the
-// template names, with {scope} replaced by the entry's current key —
+// RescopeFilter selects the entries a Rescope moves. At least one field is
+// required; both together select entries matching both.
+type RescopeFilter struct {
+	// Tag selects entries carrying this tag.
+	Tag string
+	// Scope selects entries whose current scope matches: a literal key, `*`
+	// for every key, or a glob (path.Match — `*` does not cross a `/`):
+	// `standard:acme/*`. The shared set is `global`.
+	Scope string
+}
+
+// matches reports whether an entry is selected. The scope pattern was
+// checked by Rescope.
+func (f RescopeFilter) matches(e Entry) bool {
+	if f.Tag != "" && !hasAllTags(e.Tags, []string{f.Tag}) {
+		return false
+	}
+	if f.Scope != "" {
+		scope := NormalizeScope(e.Scope)
+		if f.Scope != "*" && f.Scope != scope {
+			if ok, _ := path.Match(f.Scope, scope); !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Rescope moves the manager's OWN entries the filter selects to the scope
+// the template names, with {scope} replaced by the entry's current key —
 // `outcome:{scope}` moves an entry filed under `acme/api` to
-// `outcome:acme/api`. ID, text, tags, provenance and created time are kept,
-// so a moved entry is the same memory under a new key. With apply false
-// nothing is written and the moves are only reported.
+// `outcome:acme/api`; with `--scope standard:acme/api --to 'archive:{scope}'`
+// one scope's entries are archived. ID, text, tags, provenance and created
+// time are kept, so a moved entry is the same memory under a new key. With
+// apply false nothing is written and the moves are only reported.
 //
 // Entries already in the template's shape are left alone, so a second run
 // moves nothing: `outcome:{scope}` will not turn `outcome:acme/api` into
 // `outcome:outcome:acme/api`. Read-only layers are never touched.
-func (m *Manager) Rescope(tag, template string, apply bool) ([]Move, error) {
-	tag = strings.TrimSpace(tag)
+func (m *Manager) Rescope(sel RescopeFilter, template string, apply bool) ([]Move, error) {
+	sel.Tag = strings.TrimSpace(sel.Tag)
+	sel.Scope = strings.TrimSpace(sel.Scope)
 	template = strings.TrimSpace(template)
-	if tag == "" {
-		return nil, fmt.Errorf("memory: rescope needs a tag to select entries")
+	if sel.Tag == "" && sel.Scope == "" {
+		return nil, fmt.Errorf("memory: rescope needs a tag or a scope pattern to select entries")
+	}
+	if _, err := path.Match(sel.Scope, ""); err != nil {
+		return nil, fmt.Errorf("memory: rescope scope pattern %q: %w", sel.Scope, err)
 	}
 	if template == "" {
 		return nil, fmt.Errorf("memory: rescope needs a target scope template")
@@ -443,7 +477,7 @@ func (m *Manager) Rescope(tag, template string, apply bool) ([]Move, error) {
 	pre, post, templated := strings.Cut(template, RescopePlaceholder)
 	var moves []Move
 	for _, e := range all {
-		if !hasAllTags(e.Tags, []string{tag}) {
+		if !sel.matches(e) {
 			continue
 		}
 		from := NormalizeScope(e.Scope)
