@@ -387,10 +387,7 @@ func ScopeFacts(data map[string]any, t core.Trigger, workflow, step string, reda
 // values are dropped as ScopeFacts drops them, and redact (the run's
 // tracked-secret redactor) scrubs the rest. facts is not modified.
 func CallerFacts(facts map[string]any, redact func(any) any) map[string]any {
-	f, _ := wholeNumbers(facts).(map[string]any)
-	if f == nil {
-		f = map[string]any{}
-	}
+	f := wholeNumbers(facts).(map[string]any) // a fresh map, even for nil facts
 	delete(f, "secrets")
 	delete(f, "vaults")
 	if redact != nil {
