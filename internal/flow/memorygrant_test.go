@@ -75,7 +75,7 @@ func TestMemoryGrantMatcher(t *testing.T) {
 	}
 	// A session minted without facts keeps only the static entries.
 	vs := map[string]map[string][]string{"memory.remember": {"scope": {"{{.repo}}", "fixed"}}}
-	if nf := MemoryGrantFrom(vs, nil, "memory.remember"); nf == nil || nf("acme/api") || !nf("fixed") {
+	if nf := MemoryGrantFrom(vs, nil, "memory.remember"); nf == nil || nf("acme/api") || nf("{{.repo}}") || !nf("fixed") {
 		t.Error("an unrendered templated entry must admit nothing")
 	}
 }
@@ -198,5 +198,20 @@ func TestValidateMemoryVerbScopes(t *testing.T) {
 		VerbScopes: map[string]map[string][]string{"svc.post": {"scope": {"x"}}}}
 	if err := validateVerbScopes("step", svc, reg); err == nil {
 		t.Fatal("scope: is memory's dimension, not every connector's")
+	}
+}
+
+// A tracked secret value a step output or the event context echoed is
+// redacted before any key renders from it: a scope key is stored and shown
+// in prompts.
+func TestMemoryFactsRedactTrackedSecrets(t *testing.T) {
+	sec := testSecrets(nil)
+	const tok = "tok-a1b2c3d4e5f6g7h8"
+	sec.Track(tok)
+	r := &Runner{Secrets: sec}
+	f := r.MemoryFacts(map[string]any{"inputs": map[string]any{"team": tok}}, trustedTrigger("acme/api"), "", "")
+	got, err := memory.RenderScopeKey("team:{{.inputs.team}}", f)
+	if err == nil && strings.Contains(got, tok) {
+		t.Fatalf("a tracked secret rendered into a scope key: %q", got)
 	}
 }

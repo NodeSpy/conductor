@@ -243,6 +243,7 @@ func TestMemoryScopeKeysCheckedAtLoad(t *testing.T) {
 		`memory: { extra_scopes: ["team:{{.inputs.team}}", "org:{{.owner | default \"x\"}}", "${repo}"] }`,
 		`skill: { verbs: { memory.remember: { scope: ["team:{{.inputs.team}}", "team/*"] } } }`,
 		`skill: { verbs: { gh.comment: { repo: ["{{if .x}}y{{end}}"] } } }`, // not a memory grant: not a scope key
+		`skill: { verbs: { kv.get: { scope: ["{{if .x}}y{{end}}"] } } }`,    // a `scope:` on another connector is not one either
 	} {
 		var s Step
 		if err := yaml.Unmarshal([]byte(ok), &s); err != nil {

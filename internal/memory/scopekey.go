@@ -336,28 +336,16 @@ func ScopeFacts(data map[string]any, t core.Trigger, workflow, step string, reda
 	}
 	delete(f, "secrets")
 	delete(f, "vaults")
-	own := t.OwnRepo() != ""
-	pick := func(s string) string {
-		if own {
-			return s
-		}
-		return ""
+	// Target facts only for the dispatch's OWN target (core.OwnRepo): when
+	// the event's sender chose the target, every field of it is theirs, and
+	// none may key memory. Blank, so a key reading one does not render.
+	f["repo"], f["owner"], f["name"], f["head"], f["base"], f["url"] = "", "", "", "", "", ""
+	f["number"], f["pr"], f["issue"] = 0, 0, 0
+	if repo := t.OwnRepo(); repo != "" {
+		f["repo"], f["owner"], f["name"] = repo, t.Target.Owner, t.Target.Name
+		f["number"], f["pr"], f["issue"] = t.Target.Number, t.Target.PR, t.Target.Issue
+		f["head"], f["base"], f["url"] = t.Target.HeadSHA, t.Target.BaseRef, t.Target.HTMLURL
 	}
-	pickN := func(n int) int {
-		if own {
-			return n
-		}
-		return 0
-	}
-	f["repo"] = t.OwnRepo()
-	f["owner"] = pick(t.Target.Owner)
-	f["name"] = pick(t.Target.Name)
-	f["number"] = pickN(t.Target.Number)
-	f["pr"] = pickN(t.Target.PR)
-	f["issue"] = pickN(t.Target.Issue)
-	f["head"] = pick(t.Target.HeadSHA)
-	f["base"] = pick(t.Target.BaseRef)
-	f["url"] = pick(t.Target.HTMLURL)
 	f["kind"] = t.Kind
 	if _, ok := f["title"]; !ok {
 		f["title"] = t.Title

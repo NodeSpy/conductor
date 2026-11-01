@@ -54,6 +54,8 @@
     { "template": "{{kv \"s\" \"n\" \"k\"}}", "drop": true },
     { "template": "{{secret \"gh\"}}", "drop": true },
     { "template": "{{len .labels}}", "drop": true },
+    { "template": "{{print \" \"}}", "drop": true },
+    { "template": "{{.inputs.area | default \"\"}}", "drop": true },
     { "template": "{{.owner", "drop": true }
   ]
 }
