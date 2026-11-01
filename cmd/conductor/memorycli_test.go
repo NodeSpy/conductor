@@ -12,6 +12,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/skill"
+	"gopkg.in/yaml.v3"
 )
 
 // memoryCLIConfig writes a config whose memory is a dir under a temp root,
@@ -218,6 +219,71 @@ func TestMemoryExportGuards(t *testing.T) {
 	}
 	if got := exportConductorConstraint("dev"); got != ">= 0.0.0" {
 		t.Fatalf("dev constraint: %q", got)
+	}
+}
+
+// A pack is meant to be shared: what wrote an entry on this box — repo, step,
+// run, trigger, dispatch — must not ride along. Only id/tags/scope/created
+// and the text leave.
+func TestMemoryExportStripsProvenance(t *testing.T) {
+	t.Setenv("CONDUCTOR_SKILL_TOKEN", "")
+	src := memory.Source{Repo: "internal-org/secret-infra", Step: "deploy-prod-step", Run: "run-abc123",
+		Trigger: "pull_request", Dispatch: "dispatch-xyz789", TargetTrusted: true}
+	path, _ := memoryCLIConfig(t, func(m *memory.Manager) {
+		_, _ = m.Remember("api: prefer table tests", []string{"standard"}, "standard:acme/api", src)
+	})
+	out := filepath.Join(t.TempDir(), "p")
+	if _, err := captureStdout(t, func() error {
+		return cmdMemoryExport([]string{"--config", path, "--scope", "standard:acme/api", "--out", out, "--name", "p"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := filepath.Glob(filepath.Join(out, exportEntriesDir, "*.md"))
+	if len(files) != 1 {
+		t.Fatalf("exported files: %v", files)
+	}
+	var all strings.Builder
+	for _, name := range append(files, filepath.Join(out, config.PackManifestFile)) {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all.Write(raw)
+	}
+	for _, leak := range []string{"source", "internal-org", "secret-infra", "deploy-prod-step", "run-abc123",
+		"pull_request", "dispatch-xyz789", "target_trusted", "agent:", "repo:"} {
+		if strings.Contains(all.String(), leak) {
+			t.Errorf("export leaked %q:\n%s", leak, all.String())
+		}
+	}
+	raw, _ := os.ReadFile(files[0])
+	parts := strings.SplitN(string(raw), "---\n", 3)
+	if len(parts) != 3 {
+		t.Fatalf("no frontmatter:\n%s", raw)
+	}
+	var fm map[string]any
+	if err := yaml.Unmarshal([]byte(parts[1]), &fm); err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{"id": true, "tags": true, "scope": true, "created": true}
+	for k := range fm {
+		if !allowed[k] {
+			t.Errorf("frontmatter key %q is not allowed in an export", k)
+		}
+	}
+	for k := range allowed {
+		if _, ok := fm[k]; !ok {
+			t.Errorf("frontmatter lost %q", k)
+		}
+	}
+	if !strings.Contains(parts[2], "api: prefer table tests") {
+		t.Errorf("the text must survive:\n%s", raw)
+	}
+	// The exported entry still reads back with nothing to say about where it came from.
+	b, _ := memory.NewReadOnlyDirBackend(filepath.Join(out, exportEntriesDir))
+	got, _ := b.List()
+	if len(got) != 1 || got[0].Source != (memory.Source{}) || got[0].Scope != "standard:acme/api" {
+		t.Fatalf("read back: %+v", got)
 	}
 }
 

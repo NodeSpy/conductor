@@ -153,7 +153,7 @@ triggers:
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("repo", "") // even a defined env var of that name is not read
+	t.Setenv("repo", "from-env") // even a defined env var of that name is not read here
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("a config using the memory placeholders must load: %v", err)
@@ -167,5 +167,63 @@ triggers:
 	}
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "CONDUCTOR_TEST_UNDEFINED_VAR") {
 		t.Fatalf("other undefined env refs must still fail: %v", err)
+	}
+}
+
+// The placeholder exemption holds only in memory scope keys. Everywhere else
+// `${repo}` / `${workflow}` / `${step}` are environment variables exactly as
+// before: substituted when set, a load error when not.
+func TestMemoryPlaceholderExemptionIsMemoryOnly(t *testing.T) {
+	const kept = "KEPT"
+	cases := []struct {
+		name, yaml string
+		want       string // KEPT: the reference stays verbatim
+	}{
+		// Memory scope keys: left for the engine.
+		{"step scope", "steps:\n  - memory: { scope: \"x:${repo}\" }\n", kept},
+		{"step scopes", "steps:\n  - memory: { scopes: [\"${workflow}\"] }\n", kept},
+		{"step extra_scopes", "steps:\n  - memory: { extra_scopes: [\"emphasis:${step}\"] }\n", kept},
+		{"block extra_scopes", "steps:\n  - memory:\n      extra_scopes:\n        - standard:${repo}\n", kept},
+		{"verb grant", "steps:\n  - skill: { verbs: { memory.remember: { scope: [\"standard:${repo}\"] } } }\n", kept},
+		{"verb grant glob", "steps:\n  - skill: { verbs: { memory.*: { scope: [\"${repo}\"] } } }\n", kept},
+		{"bot grant", "bots:\n  b:\n    skill: { verbs: { memory.remember: { scope: \"${repo}\" } } }\n", kept},
+		// Everywhere else: the environment.
+		{"webhook url", "webhook:\n  url: https://example.com/${repo}\n", "from-env"},
+		{"prompt", "steps:\n  - prompt: \"${step}\"\n", "from-env"},
+		{"top-level memory dir", "memory: { dir: /var/m/${repo} }\n", "from-env"},
+		{"top-level memory scope-ish key", "memory: { scope: \"${repo}\" }\n", "from-env"},
+		{"memory tags", "steps:\n  - memory: { tags: [\"${repo}\"] }\n", "from-env"},
+		{"non-memory verb grant", "steps:\n  - skill: { verbs: { gh.comment: { scope: [\"${repo}\"] } } }\n", "from-env"},
+		{"grant outside skill", "policy:\n  agent_authored:\n    verbs: { memory.remember: { scope: [\"${repo}\"] } }\n", "from-env"},
+		{"grant names workflow", "steps:\n  - skill: { verbs: { memory.remember: { scope: [\"${workflow}\"] } } }\n", "from-env"},
+		{"key named scope elsewhere", "bots:\n  b:\n    scope: \"${repo}\"\n", "from-env"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			for _, n := range []string{"repo", "workflow", "step"} {
+				t.Setenv(n, "from-env")
+			}
+			out, err := expandEnv("c.yaml", []byte(c.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			hasRef := strings.Contains(string(out), "${")
+			if c.want == kept && (!hasRef || strings.Contains(string(out), "from-env")) {
+				t.Fatalf("a memory scope placeholder must stay verbatim:\n%s", out)
+			}
+			if c.want != kept && (hasRef || !strings.Contains(string(out), c.want)) {
+				t.Fatalf("outside memory scopes the env var must be substituted:\n%s", out)
+			}
+			if c.want == kept {
+				return
+			}
+			// Unset, the same reference is the load error it always was.
+			for _, n := range []string{"repo", "workflow", "step"} {
+				os.Unsetenv(n)
+			}
+			if _, err := expandEnv("c.yaml", []byte(c.yaml)); err == nil || !strings.Contains(err.Error(), "undefined environment variable") {
+				t.Fatalf("an unset env ref outside memory scopes must fail loudly: %v", err)
+			}
+		})
 	}
 }

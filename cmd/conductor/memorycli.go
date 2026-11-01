@@ -255,7 +255,7 @@ func exportMemoryPack(mgr *memory.Manager, o exportOpts) (int, error) {
 		return 0, err
 	}
 	for _, e := range entries {
-		if err := dst.Put(e); err != nil {
+		if err := dst.Put(exportedEntry(e)); err != nil {
 			return 0, fmt.Errorf("write %s: %w", e.ID, err)
 		}
 	}
@@ -275,6 +275,16 @@ func exportMemoryPack(mgr *memory.Manager, o exportOpts) (int, error) {
 		return 0, err
 	}
 	return len(entries), nil
+}
+
+// exportedEntry is what of an entry may leave the box in a pack: its id,
+// tags, scope, created time and text. Source — the repo, step, run, trigger
+// and dispatch that wrote it — is this daemon's provenance, not the note's,
+// and a pack is meant to be shared, so it is left behind. Built field by
+// field so a field added to Entry later stays home until someone decides
+// it may travel.
+func exportedEntry(e memory.Entry) memory.Entry {
+	return memory.Entry{ID: e.ID, Tags: e.Tags, Scope: e.Scope, Created: e.Created, Text: e.Text}
 }
 
 // exportConductorConstraint is the requires.conductor an exported pack

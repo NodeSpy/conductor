@@ -98,6 +98,16 @@ func substituteRefsInScalar(v string, settings map[string]string) string {
 // leaves the reference in place for a later pass, or for the unknown-reference
 // error to name.
 func SubstituteRefs(body []byte, re *regexp.Regexp, resolve func(ref string) (string, bool)) ([]byte, error) {
+	return SubstituteRefsAt(body, re, func(ref string, _ []string) (string, bool) { return resolve(ref) })
+}
+
+// RefIndex is the path element SubstituteRefsAt reports for a sequence item.
+const RefIndex = "[]"
+
+// SubstituteRefsAt is SubstituteRefs with the key path of the scalar each
+// reference sits in handed to resolve: mapping keys as written, RefIndex for
+// a sequence item. A reference in a mapping KEY reports its mapping's path.
+func SubstituteRefsAt(body []byte, re *regexp.Regexp, resolve func(ref string, path []string) (string, bool)) ([]byte, error) {
 	if !re.Match(body) {
 		return body, nil
 	}
@@ -117,8 +127,8 @@ func SubstituteRefs(body []byte, re *regexp.Regexp, resolve func(ref string) (st
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	// 2. Scalars only.
-	var walk func(n *yaml.Node)
-	walk = func(n *yaml.Node) {
+	var walk func(n *yaml.Node, path []string)
+	walk = func(n *yaml.Node, path []string) {
 		if n == nil || n.Kind == yaml.AliasNode {
 			return
 		}
@@ -128,7 +138,7 @@ func SubstituteRefs(body []byte, re *regexp.Regexp, resolve func(ref string) (st
 				if !strings.Contains(n.Value, tok) {
 					continue
 				}
-				val, ok := resolve(ref)
+				val, ok := resolve(ref, path)
 				if !ok {
 					val = ref // unknown: put the reference back, verbatim
 				}
@@ -146,11 +156,23 @@ func SubstituteRefs(body []byte, re *regexp.Regexp, resolve func(ref string) (st
 			}
 			return
 		}
-		for _, c := range n.Content {
-			walk(c)
+		switch n.Kind {
+		case yaml.MappingNode:
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				walk(n.Content[i], path)
+				walk(n.Content[i+1], append(path[:len(path):len(path)], n.Content[i].Value))
+			}
+		case yaml.SequenceNode:
+			for _, c := range n.Content {
+				walk(c, append(path[:len(path):len(path)], RefIndex))
+			}
+		default:
+			for _, c := range n.Content {
+				walk(c, path)
+			}
 		}
 	}
-	walk(&doc)
+	walk(&doc, nil)
 	if doc.Kind == 0 {
 		return body, nil
 	}

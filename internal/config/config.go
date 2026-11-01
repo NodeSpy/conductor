@@ -1157,9 +1157,33 @@ var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // A reference inside a `#` comment is left alone, which is what the old
 // line-splitting implementation went out of its way to do and what a node
 // walk gets for free: comments are not scalar values.
-// memoryScopeRef names the placeholders expandEnv leaves for the engine (see
-// MemoryScopeRepo and friends).
-var memoryScopeRef = map[string]bool{"repo": true, "workflow": true, "step": true}
+// memoryScopeRef reports whether `${name}` at this key path is a memory
+// scope placeholder expandEnv must leave for the engine, rather than an
+// environment variable. Only two places qualify:
+//
+//   - a step's memory selector, `…memory: { scope | scopes[] | extra_scopes[] }`
+//     (not the top-level `memory:` backend section): `${repo}`, `${workflow}`
+//     and `${step}`, which memory.ExpandScopeRefs fills per run;
+//   - a memory verb's scope grant, `…skill: { verbs: { memory.<op>: { scope: [] } } }`:
+//     `${repo}` only, the one fact flow.MemoryGrant translates.
+//
+// Anywhere else — and for any other name there — a reference is an ordinary
+// environment variable: substituted when set, a load error when not, exactly
+// as before memory used these names.
+func memoryScopeRef(name string, path []string) bool {
+	n := len(path)
+	if n > 0 && path[n-1] == RefIndex {
+		path, n = path[:n-1], n-1
+	}
+	if n >= 3 && path[n-2] == "memory" {
+		switch path[n-1] {
+		case "scope", "scopes", "extra_scopes":
+			return name == "repo" || name == "workflow" || name == "step"
+		}
+	}
+	return name == "repo" && n >= 4 && path[n-1] == DimScope && strings.HasPrefix(path[n-2], "memory.") &&
+		path[n-3] == "verbs" && path[n-4] == "skill"
+}
 
 func expandEnv(path string, b []byte) ([]byte, error) {
 	// A secret field must name its source, read when the value is used —
@@ -1170,14 +1194,15 @@ func expandEnv(path string, b []byte) ([]byte, error) {
 	}
 	var missing []string
 	seen := map[string]bool{}
-	out, err := SubstituteRefs(b, envRe, func(ref string) (string, bool) {
+	out, err := SubstituteRefsAt(b, envRe, func(ref string, at []string) (string, bool) {
 		name := envRe.FindStringSubmatch(ref)[1]
-		if memoryScopeRef[name] {
-			// `${repo}` / `${workflow}` / `${step}` are the memory
-			// selector's run-context placeholders, expanded per run by the
-			// engine — not environment variables. Left in place, they reach
-			// the selector; read as env refs, every config that used the
-			// documented sugar failed to load.
+		if memoryScopeRef(name, at) {
+			// In a memory scope key, `${repo}` / `${workflow}` / `${step}`
+			// are run-context placeholders the engine expands per run — not
+			// environment variables. Left in place, they reach the
+			// selector or grant; read as env refs, every config that used
+			// the documented sugar failed to load. Only there: elsewhere a
+			// variable that happens to be called `repo` still resolves.
 			return "", false
 		}
 		v, ok := os.LookupEnv(name)

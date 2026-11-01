@@ -159,9 +159,12 @@ drops, the step recalls nothing from it rather than falling back to the
 defaults. `${repo}` is the dispatch's **own** repo: a target the event's
 sender chose (a webhook `repo:` templated from the body) expands to nothing.
 
-These three are not environment variables: the config loader leaves
-`${repo}`, `${workflow}` and `${step}` alone, and every other `${VAR}` still
-has to be defined.
+In a memory selector's `scope:`, `scopes:` and `extra_scopes:` these three
+are not environment variables: the config loader leaves them for the engine.
+Everywhere else in the config — a prompt, a URL, the top-level `memory:`
+backend section, a selector's `tags:` — `${repo}`, `${workflow}` and
+`${step}` are ordinary environment references like any `${VAR}`: substituted
+when set, a load error when not.
 
 ## Memory a pack ships
 
@@ -215,19 +218,41 @@ For memory the list is a **restriction**, not a widening: once a step lists
 scopes for a memory verb, it may use those and nothing else. The dispatch's
 own scope is not implied, an unscoped write is refused, and the daemon-wide
 `policy.agent_authored.verbs."memory.*"` list does not add to it — nor does
-`trust: full` lift it. The reserved `global` bucket stays refused whatever is
-listed. The restriction binds every way the step's agent can write memory:
+`trust: full` lift it. The reserved `global` bucket stays refused to
+`memory.remember` and `memory.forget` whatever is listed — `*` included — so
+a step can neither write nor delete the shared set every opted-in agent is
+fed; reading it stays open. The restriction binds every way the step's agent can write memory:
 the `memory.remember` verb, the live memory tool, and the ```remember output
 contract.
 
 Entries match like every allowlist entry: a static entry keeps its glob; a
 `{{ }}` entry renders against the dispatch's trusted facts and matches
-literally. `${repo}` is accepted as a spelling of `{{.repo}}`. An entry that
+literally. `${repo}` is accepted as a spelling of `{{.repo}}` (the only
+placeholder a grant takes; `${workflow}` / `${step}` there are environment
+references, as anywhere outside a memory key). An entry that
 reads a fact this dispatch has no value for — `standard:{{.repo}}` for a
 target the event's sender chose — matches nothing. `scope: []` admits nothing.
 
 A step without a `scope` list keeps the earlier rules: its own scope plus
 whatever `policy.agent_authored.verbs."memory.<op>".scope` lists.
+
+**Patterns that match the same verb merge — the union, never the
+narrowest.** A verb's list is every `scope` entry from every pattern in the
+step's `verbs:` that matches it, the same rule as every other verb's scope
+list (listing only ever widens). So `scope: []` is a hard "nothing" only when
+it is the sole pattern naming that verb:
+
+```yaml
+skill:
+  verbs:
+    memory.*:        { scope: [] }                     # does NOT lock remember down…
+    memory.remember: { scope: ["standard:{{.repo}}"] } # …remember admits standard:<repo>
+```
+
+Here `memory.remember` admits `standard:<repo>`, and `memory.recall`,
+`memory.list` and `memory.forget` (matched only by `memory.*`) admit nothing.
+To lock one verb out entirely, grant it with `scope: []` and no other pattern
+that matches it — or leave it out of `verbs:`.
 
 ## Operator commands
 
@@ -250,7 +275,11 @@ conductor memory export --scope acme/api --scope standard:acme/api --scope empha
   left alone, so a second run moves nothing. It works on either durable
   backend; a boltdb `store:` is locked while the daemon runs — stop it first.
 - `export` writes `conductor-pack.yaml` (`pack:` metadata and `memory: {
-  entries: memory }`) and a copy of each entry under `memory/`. It reads the
+  entries: memory }`) and a copy of each entry under `memory/` carrying only
+  its id, tags, scope, created time and text. Provenance — the repo, step,
+  run, trigger and dispatch that wrote it — stays on this box: a pack is
+  meant to be shared, and the scope keys you export are the only names in
+  it. It reads the
   source and never writes it. It refuses to replace an existing manifest
   without `--force` (which also clears the old `memory/*.md`, so an entry you
   forgot since the last export does not survive), and refuses an entry that

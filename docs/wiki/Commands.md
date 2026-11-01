@@ -112,7 +112,8 @@ conductor version
   entry's current scope, keeping its id, text, tags, provenance and created
   time; it prints what it would move and writes only with `--apply`, and is
   idempotent. `export` writes `<out>/conductor-pack.yaml` plus
-  `<out>/memory/*.md` — a pack whose entries other configs recall read-only —
+  `<out>/memory/*.md` — a pack whose entries other configs recall read-only,
+  each carrying id, tags, scope, created time and text but no provenance —
   and never writes the source. Both refuse inside an agent session.
   ([[Memory#operator-commands]])
 - **connector auth** — the only interactive auth step. `auth <name>` runs the

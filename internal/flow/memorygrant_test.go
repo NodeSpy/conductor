@@ -92,6 +92,19 @@ policy:
 	if _, err := r.RunSkillVerb(context.Background(), id, "memory.recall", map[string]any{"scope": "acme/web"}); err != nil {
 		t.Errorf("recall is not restricted by a remember grant: %v", err)
 	}
+	// forget under a grant: `*` does not reach the reserved bucket.
+	shared, err := mgr.Remember("shared standard", nil, "", memory.Source{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wide := SkillIdentity{Agent: "calibrate", Repo: "acme/api", TargetTrusted: true,
+		Verbs: []string{"memory.forget"}, Scopes: map[string]map[string][]string{"memory.forget": {"scope": {"*", "global"}}}}
+	if _, err := r.RunSkillVerb(context.Background(), wide, "memory.forget", map[string]any{"id": shared.ID}); err == nil {
+		t.Error("a forget grant must never delete from the reserved bucket")
+	}
+	if _, found, _ := mgr.ScopeOf(shared.ID); !found {
+		t.Error("the shared entry was deleted")
+	}
 	// A step without a scope list keeps the old behaviour.
 	open := SkillIdentity{Agent: "x", Repo: "acme/api", TargetTrusted: true, Verbs: []string{"memory.remember"}}
 	if _, err := r.RunSkillVerb(context.Background(), open, "memory.remember", map[string]any{"text": "n", "scope": "acme/web"}); err != nil {
@@ -124,6 +137,19 @@ func TestEngineHarvestGrantFromStepSkill(t *testing.T) {
 	}
 	if g := r.StepMemoryGrant(split, "recall", trustedTrigger("acme/api")); g == nil || !g("acme/api") || g("standard:acme/api") {
 		t.Fatal("recall must be bound by its own list")
+	}
+	// Patterns matching one verb merge as a union (Memory.md documents it):
+	// `memory.*: {scope: []}` does not override a specific verb's list, and
+	// verbs matched only by it admit nothing.
+	union := &config.SkillPolicy{Verbs: []string{"memory.*", "memory.remember"},
+		VerbScopes: map[string]map[string][]string{
+			"memory.*":        {"scope": nil},
+			"memory.remember": {"scope": {"standard:{{.repo}}"}}}}
+	if g := r.StepMemoryGrant(union, "remember", trustedTrigger("acme/api")); g == nil || !g("standard:acme/api") {
+		t.Fatal("a second matching pattern widens: remember admits its own list")
+	}
+	if g := r.StepMemoryGrant(union, "forget", trustedTrigger("acme/api")); g == nil || g("standard:acme/api") || g("acme/api") {
+		t.Fatal("a verb matched only by `memory.*: {scope: []}` admits nothing")
 	}
 	var _ memory.GrantMatcher = g
 }

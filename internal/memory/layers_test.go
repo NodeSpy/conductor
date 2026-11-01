@@ -421,6 +421,47 @@ func TestCheckOpStepGrant(t *testing.T) {
 	}
 }
 
+// The reserved bucket holds under a grant for forget as it does for
+// remember: no list — `*`, or one naming `global` outright — lets a step
+// delete the entries every opted-in agent's prompt is fed. Reading it stays
+// open.
+func TestCheckOpGrantNeverForgetsTheReservedBucket(t *testing.T) {
+	m := testManager(t, NewMemBackend())
+	m.SetScopeGuard(func(Caller, string, string) error { return nil }) // trust: full
+	shared, err := m.Remember("a standard every agent sees", nil, "", Source{})
+	if err != nil || shared.Scope != GlobalScope {
+		t.Fatalf("seed: %+v %v", shared, err)
+	}
+	for name, g := range map[string]GrantMatcher{
+		"star":   func(string) bool { return true },
+		"global": func(s string) bool { return s == GlobalScope },
+		"fold":   func(s string) bool { return strings.EqualFold(s, GlobalScope) },
+	} {
+		c := NewAgentCaller("acme/api", true).WithGrant(g)
+		for _, scope := range []string{shared.Scope, "GLOBAL", " global "} {
+			if err := m.CheckOp(c, "forget", scope); !errors.Is(err, ErrReservedScope) {
+				t.Errorf("%s grant: forget of %q must be refused as reserved: %v", name, scope, err)
+			}
+			if err := m.CheckOp(c, "remember", scope); !errors.Is(err, ErrReservedScope) {
+				t.Errorf("%s grant: remember to %q must be refused as reserved: %v", name, scope, err)
+			}
+		}
+		if err := m.CheckOp(c, "recall", GlobalScope); err != nil {
+			t.Errorf("%s grant: reading the shared set stays open to a grant that lists it: %v", name, err)
+		}
+	}
+	// A granted, non-reserved scope is still forgettable.
+	c := NewAgentCaller("acme/api", true).WithGrant(func(s string) bool { return s == "standard:acme/api" })
+	if err := m.CheckOp(c, "forget", "standard:acme/api"); err != nil {
+		t.Errorf("forget of a granted scope: %v", err)
+	}
+	// Without a grant forget keeps its old rule: the guard decides, so an
+	// agent can still delete its own unscoped note where policy allows.
+	if err := m.CheckOp(NewAgentCaller("acme/api", true), "forget", GlobalScope); err != nil {
+		t.Errorf("an ungranted forget is the guard's call, unchanged: %v", err)
+	}
+}
+
 func TestHarvestHonoursTheStepGrant(t *testing.T) {
 	m := testManager(t, NewMemBackend())
 	src := Source{Step: "calibrate", Repo: "acme/api", TargetTrusted: true}

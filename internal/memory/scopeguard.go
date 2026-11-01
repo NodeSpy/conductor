@@ -64,8 +64,9 @@ type GrantMatcher func(scope string) bool
 // for that op: a scope it admits is allowed, anything else — the
 // dispatch's own scope, an unscoped call, an entry the operator's policy
 // would have let through — is refused. Deny is the default once a step says
-// which scopes it may touch. The reserved shared bucket stays refused
-// whatever the grant lists. nil leaves the caller as it was.
+// which scopes it may touch. The reserved shared bucket stays refused to
+// remember and forget whatever the grant lists (reading it stays open, as it
+// is for every caller). nil leaves the caller as it was.
 func (c Caller) WithGrant(g GrantMatcher) Caller {
 	if g != nil {
 		c.grant = g
@@ -144,6 +145,16 @@ func (m *Manager) CheckOp(c Caller, op, scope string) error {
 	// written onto a named grant.
 	if c.grant != nil {
 		scope = strings.TrimSpace(scope)
+		// The reserved bucket holds under a grant for both writes. remember
+		// was refused above; forget is not (see namesItsOwnScope), but a
+		// granted step cannot have written there — an unscoped note is
+		// refused to it — so a global entry is never its own, and no list,
+		// `*` included, may delete what every agent's prompt is fed.
+		if op == "forget" {
+			if err := CheckAgentScope(scope); err != nil {
+				return err
+			}
+		}
 		if scope != "" && c.grant(scope) {
 			return nil
 		}
