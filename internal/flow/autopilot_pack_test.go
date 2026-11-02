@@ -44,6 +44,9 @@ type ghAPI struct {
 	on map[string]map[string]bool
 	// rows is each (sha, context)'s latest state — what the PR shows.
 	rows map[string]string
+	// writes are the review writes: "resolve_threads <comments>",
+	// "rerequest_review <reviewers>".
+	writes []string
 }
 
 func newGHAPI(t *testing.T, head string) *ghAPI {
@@ -86,6 +89,12 @@ func newGHAPI(t *testing.T, head string) *ghAPI {
 				api.on[key][content] = true
 			}
 			return sdk.InvokeResult{Outputs: map[string]any{"ok": true}}, nil
+		case "resolve_threads":
+			api.writes = append(api.writes, fmt.Sprintf("resolve_threads %v", o["comments"]))
+			return sdk.InvokeResult{Outputs: map[string]any{}}, nil
+		case "rerequest_review":
+			api.writes = append(api.writes, fmt.Sprintf("rerequest_review %v", o["reviewers"]))
+			return sdk.InvokeResult{Outputs: map[string]any{}}, nil
 		}
 		t.Errorf("unexpected verb %s %v", req.Verb, o)
 		return sdk.InvokeResult{}, sdk.Fail(sdk.CodeInvalid, "unexpected verb "+req.Verb, nil)
@@ -304,5 +313,62 @@ func TestAutopilotPackClosedMidRunLeavesNothing(t *testing.T) {
 	}
 	if n := len(api.on["issue_comment 5"]); n != 0 {
 		t.Fatalf("%d reaction(s) left on the comment: %v", n, api.on["issue_comment 5"])
+	}
+}
+
+// The live bug: on_changes_requested's `address` agent committed a fix,
+// nothing pushed it, and `resolve` resolved the reviewer's threads on the
+// agent's word. resolve now runs only when conductor reports it pushed the
+// step's work; a commit left unpushed fails the run (no_progress) instead.
+func TestAutopilotPackResolveOnlyWhenPushed(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		commits   int // left in the agent's workspace, unpushed
+		push      func() (map[string]any, error)
+		wantFail  bool
+		wantWrite []string
+	}{
+		{name: "pushed", push: func() (map[string]any, error) {
+			return map[string]any{"pushed": true, "commits": 1, "up_to_date": false}, nil
+		}, wantWrite: []string{"resolve_threads [11 12]", "rerequest_review [alice]"}},
+		{name: "claims a fix, pushed nothing", push: func() (map[string]any, error) {
+			return map[string]any{"pushed": false, "commits": 0, "up_to_date": true}, nil
+		}, wantWrite: []string{"rerequest_review [alice]"}},
+		{name: "committed, not pushed", commits: 1, push: func() (map[string]any, error) {
+			return nil, fmt.Errorf("%w: conductor has no branch to push this workspace to", ErrNothingToPush)
+		}, wantFail: true},
+		{name: "unsandboxed", push: func() (map[string]any, error) { return nil, ErrUnsandboxed },
+			wantWrite: []string{"rerequest_review [alice]"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newGHAPI(t, "aaaaaaa1111")
+			rig, cfg := autopilotRig(t)
+			ws := cloneWithCommits(t, tc.commits)
+			var req dispatch.Request
+			rig.Agents.dispatchFunc = func(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
+				req = r
+				return dispatch.RunRef{Workdir: ws, Output: `{"addressed_comments":[11,12],"summary":"fixed"}`, AgentID: "a1"}, nil
+			}
+			rig.Runner.PushWork = func(context.Context, string) (map[string]any, error) { return tc.push() }
+			runAutopilot(rig, autopilotSpec(t, cfg, "on_changes_requested"), autopilotTrigger("changes_requested", map[string]any{
+				"author": "alice", "review_id": int64(9), "feedback_cursor": "c1"}))
+			if !req.Step.ExpectPush || len(req.Step.OutputSchema) == 0 || dispatch.ReviewRole(req) {
+				t.Fatalf("address must be an output_schema fixer (expect_push), got expect_push=%v review=%v", req.Step.ExpectPush, dispatch.ReviewRole(req))
+			}
+			failed, e := rig.workflowFailed()
+			if failed != tc.wantFail {
+				t.Fatalf("failed=%v (%s), want %v", failed, e, tc.wantFail)
+			}
+			api.mu.Lock()
+			writes := api.writes
+			api.mu.Unlock()
+			wantList(t, "review writes", writes, tc.wantWrite...)
+			if tc.wantFail {
+				st, _ := api.take()
+				if !strings.Contains(strings.Join(st, "\n"), "failure octo-me / review | gave up: the change was never pushed") {
+					t.Fatalf("the PR must show the failure: %v", st)
+				}
+			}
+		})
 	}
 }
