@@ -1281,6 +1281,9 @@ func (c *Config) applyDefaults() {
 	}
 	c.Store.StateFile = expandHome(c.Store.StateFile)
 	c.Store.AuditLog = expandHome(c.Store.AuditLog)
+	if c.Memory != nil {
+		c.Memory.Dir = expandHome(c.Memory.Dir)
+	}
 	if c.Store.StateTTL == 0 {
 		c.Store.StateTTL = Duration(30 * 24 * time.Hour)
 	}

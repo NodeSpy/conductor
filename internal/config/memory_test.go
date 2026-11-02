@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -108,6 +109,28 @@ func TestReservedNamespacesAreOneList(t *testing.T) {
 		v := Config{Vaults: map[string]VaultRef{name: {Type: "x"}}}
 		if err := v.validateVaults(); err == nil || !strings.Contains(err.Error(), "reserved") {
 			t.Fatalf("vault %q: want reserved-name error, got %v", name, err)
+		}
+	}
+}
+
+// memory.dir expands a leading ~ the way store.state_file does: before this,
+// `dir: ~/memory` created a literal "~" directory under the daemon's cwd.
+func TestMemoryDirExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for in, want := range map[string]string{
+		"~/.config/conductor/memory": filepath.Join(home, ".config/conductor/memory"),
+		"~":                          home,
+		"/srv/memory":                "/srv/memory",
+		"relative/memory":            "relative/memory",
+		"~other/memory":              "~other/memory", // only the caller's own home
+	} {
+		c, err := loadYAML(t, "memory: { dir: \""+in+"\" }\n")
+		if err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		if c.Memory.Dir != want {
+			t.Errorf("memory.dir %q = %q, want %q", in, c.Memory.Dir, want)
 		}
 	}
 }

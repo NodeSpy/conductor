@@ -230,10 +230,12 @@ func TestMemoryExportGuards(t *testing.T) {
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
 		t.Fatal("a refused export must write nothing")
 	}
-	if got := exportConductorConstraint("v1.2.3"); got != ">= 1.2.3" {
+	// The canonical, unspaced form: ">= 1.2.3" was refused by daemons whose
+	// constraint parser split on the space.
+	if got := exportConductorConstraint("v1.2.3"); got != ">=1.2.3" {
 		t.Fatalf("constraint: %q", got)
 	}
-	if got := exportConductorConstraint("dev"); got != ">= 0.0.0" {
+	if got := exportConductorConstraint("dev"); got != ">=0.0.0" {
 		t.Fatalf("dev constraint: %q", got)
 	}
 }

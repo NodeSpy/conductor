@@ -300,14 +300,14 @@ func exportedEntry(e memory.Entry) memory.Entry {
 
 // exportConductorConstraint is the requires.conductor an exported pack
 // carries: at least the version that wrote it, which is the first that can
-// read pack memory. A dev build cannot name its own version, so it names
-// none in particular.
+// read pack memory, in the canonical unspaced form (">=0.69.0"). A dev build
+// cannot name its own version, so it names none in particular.
 func exportConductorConstraint(v string) string {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
 	if regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(v) {
-		return ">= " + v
+		return ">=" + v
 	}
-	return ">= 0.0.0"
+	return ">=0.0.0"
 }
 
 // trackedSecretCheck resolves the config's named secrets so an export can
