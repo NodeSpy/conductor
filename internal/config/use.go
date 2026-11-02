@@ -238,7 +238,7 @@ type Use struct {
 	// Version is the constraint from an `@…` suffix. Empty = track latest
 	// compatible (stay-current).
 	Version string
-	// Path is the local executable path for OriginLocal, as written.
+	// Path is the local executable path for OriginLocal (~ expanded).
 	Path string
 }
 
@@ -349,7 +349,8 @@ func ParseUse(kind UseKind, ref string) (Use, error) {
 		if version != "" {
 			return Use{}, fmt.Errorf("use: %q: a local path cannot carry an @version — a local binary is whatever is on disk", raw)
 		}
-		u.Origin, u.Path = OriginLocal, body
+		// Path is the binary on disk (~ expanded); Raw keeps the spelling.
+		u.Origin, u.Path = OriginLocal, expandHome(body)
 		u.Name = localUseName(body)
 		return u, nil
 	}

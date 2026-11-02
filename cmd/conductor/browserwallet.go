@@ -644,7 +644,7 @@ func browserWalletCmd(cmd string, rest []string) error {
 	sock := map[string]any{}
 	for _, k := range []string{"config", "socket"} {
 		if v := one(multi, k); v != "" {
-			sock[k] = v
+			sock[k] = cliPath(v)
 		}
 	}
 	call := func(op string, q browserWalletReq) (json.RawMessage, error) {
@@ -876,7 +876,7 @@ func purchaseDecide(sock map[string]any, decision, id string, multi map[string][
 	if v.Would != "" && decision == "approve" {
 		fmt.Printf("  as things stand, the approval is refused: %s\n", v.Would)
 	}
-	key := one(multi, "key")
+	key := cliPath(one(multi, "key"))
 	if key == "" {
 		f, err := os.CreateTemp("", "conductor-operator-*.pub")
 		if err != nil {

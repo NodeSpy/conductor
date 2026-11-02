@@ -95,7 +95,7 @@ func dashboardEnroll(cfg *config.Config, fl map[string]string) error {
 		return fmt.Errorf("operator %q is not configured with an ssh_key", op)
 	}
 	issued := time.Now()
-	sig, err := signDashboard(fl["key"], opCfg.SSHKey, auth.EnrollPayload(op, issued))
+	sig, err := signDashboard(cliPath(fl["key"]), opCfg.SSHKey, auth.EnrollPayload(op, issued))
 	if err != nil {
 		return fmt.Errorf("%w\n(no ssh-agent holding operators.%s.ssh_key? pass --key <private key file>)", err, op)
 	}
@@ -121,7 +121,7 @@ func dashboardReset(cfg *config.Config, fl map[string]string) error {
 		return fmt.Errorf("operator %q is not configured with an ssh_key", op)
 	}
 	issued := time.Now()
-	sig, err := signDashboard(fl["key"], opCfg.SSHKey, auth.ResetPayload(op, issued))
+	sig, err := signDashboard(cliPath(fl["key"]), opCfg.SSHKey, auth.ResetPayload(op, issued))
 	if err != nil {
 		return err
 	}

@@ -71,11 +71,24 @@ type Spec struct {
 
 // FromConfig flattens an IsolationConfig. nil in, nil out — and `mode:
 // none`, the explicit opt-out, is no wrapper too.
+// expandFS expands ~ in a step's fs: paths (config-level ones already are;
+// validation refuses ~ for a remote box).
+func expandFS(fs []string) []string {
+	if len(fs) == 0 {
+		return fs
+	}
+	out := make([]string, len(fs))
+	for i, p := range fs {
+		out[i] = config.ExpandHome(p)
+	}
+	return out
+}
+
 func FromConfig(c *config.IsolationConfig) *Spec {
 	if c == nil || c.Mode == "none" {
 		return nil
 	}
-	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot, FS: c.FS}
+	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot, FS: expandFS(c.FS)}
 	if c.Container != nil {
 		s.Image = c.Container.Image
 		s.Engine = c.Container.Engine

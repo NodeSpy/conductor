@@ -23,6 +23,19 @@ lives separately, under `$XDG_STATE_HOME/conductor` or
 including every template reference against the scope at its position — before
 the daemon runs. The full annotated example ships as `config.example.yaml`.
 
+**`~` in paths.** Every field that names a file or directory on this box
+expands a leading `~` or `~/` to your home — `store.*`, `memory.dir`,
+`sandbox.state_dir` / `push.signing_key`, dashboard TLS `cert_file` /
+`key_file`, `browser.chrome` / mailbox `ca_file`, runtime `bin` / `home`,
+host `key` / `known_hosts`, `isolation.fs`, bot and team repo, seed, charter
+and checklist paths, a collection's `from:`, a local `use:` or pack `source:`,
+and a connector's, store's or vault's connection keys named `path`, `dir`,
+`file` or ending `_path` / `_dir` / `_file` (e.g. `private_key_path`). So
+does every CLI path flag (`--config`, `--state-dir`, `--out`, `--key`,
+`--attach`, …), including `--flag=~/x`, which the shell leaves alone. Paths
+on another box are left for that box: a host's `cwd:`, and the paths of a
+runtime or step that runs over `host:`. `~user/` is not expanded.
+
 The LEGACY schema (`integrations:`/`notify:`/`handoff:`/`handoffs:`/
 `controllers:`/`control:`/`paseo_bin`) was removed in this release — see
 [[Migration]]. `conductor validate` names any of those blocks still present

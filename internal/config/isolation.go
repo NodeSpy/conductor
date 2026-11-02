@@ -100,7 +100,9 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 		if p == "" {
 			return fmt.Errorf("config: %s: isolation fs: empty path", where)
 		}
-		if !filepath.IsAbs(p) {
+		// A step's fs: (which expandPaths does not enter) expands ~ where the
+		// sandbox is built; on another box it is not this box's home.
+		if !filepath.IsAbs(p) && (remote || !filepath.IsAbs(expandHome(p))) {
 			return fmt.Errorf("config: %s: isolation fs: %q must be an absolute path", where, p)
 		}
 	}

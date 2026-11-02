@@ -55,7 +55,7 @@ type BrowserCard struct {
 	Kind string `yaml:"kind,omitempty"`
 	// BillingProfile fills the billing address from that profile's
 	// billing.* fields.
-	BillingProfile string `yaml:"billing_profile,omitempty"`
+	BillingProfile string `yaml:"billing_profile,omitempty" path:"-"`
 	// Merchants are the exact origins it may be filled on. None by
 	// default: nothing can be bought until the operator adds one.
 	Merchants []string `yaml:"merchants"`

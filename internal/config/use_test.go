@@ -160,8 +160,8 @@ func TestParseUseLocalPath(t *testing.T) {
 		if u.Origin != OriginLocal {
 			t.Fatalf("%s: origin = %s", tc.ref, u.Origin)
 		}
-		if u.Path != tc.ref {
-			t.Fatalf("%s: path = %q", tc.ref, u.Path)
+		if u.Path != ExpandHome(tc.ref) || u.Raw != tc.ref {
+			t.Fatalf("%s: path = %q (~ expanded), raw = %q (as written)", tc.ref, u.Path, u.Raw)
 		}
 		if u.Name != tc.name {
 			t.Fatalf("%s: name = %q, want %q", tc.ref, u.Name, tc.name)

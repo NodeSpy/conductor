@@ -456,3 +456,31 @@ func TestCanonResolvesThroughAMissingTail(t *testing.T) {
 		t.Fatalf("canon = %s", got)
 	}
 }
+
+// The operator's plugins and marketplaces are not seeded into an identity
+// home: it has no marketplace checkout, so each launch would try to clone
+// one from GitHub through the egress proxy. Everything else is kept.
+func TestPrepareHomeSeedsClaudeSettingsWithoutPlugins(t *testing.T) {
+	real := realHome(t)
+	os.WriteFile(filepath.Join(real, ".claude", "settings.json"), []byte(`{"model":"opus","env":{"A":"1"},
+		"enabledPlugins":{"frontend-design@claude-plugins-official":true},
+		"extraKnownMarketplaces":{"acme":{"source":{"source":"github","repo":"acme/plugins"}}},
+		"pluginConfigs":{"x":{}},"appendPlugins":["m"],"prependPlugins":["n"]}`), 0o600)
+	home, _, err := PrepareHome(HomeSpec{Root: t.TempDir(), Key: "agent:a", Tool: "claude-code", RealHome: real, GOOS: "linux"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if string(b) != `{"env":{"A":"1"},"model":"opus"}` {
+		t.Fatalf("seeded settings: %s", b)
+	}
+
+	os.WriteFile(filepath.Join(real, ".claude", "settings.json"), []byte(`{"enabledPlugins": {`), 0o600)
+	home, _, err = PrepareHome(HomeSpec{Root: t.TempDir(), Key: "agent:b", Tool: "claude-code", RealHome: real, GOOS: "linux"})
+	if err != nil {
+		t.Fatalf("a settings file that is not JSON must not fail the launch: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); err == nil {
+		t.Fatal("a settings file that is not JSON is not seeded (it could carry plugins)")
+	}
+}

@@ -86,7 +86,7 @@ func parseSource(src, baseDir string) (sourceSpec, error) {
 	}
 	if !isGit {
 		// Local path source.
-		p := strings.TrimPrefix(s, "file://")
+		p := expandHome(strings.TrimPrefix(s, "file://"))
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(baseDir, p)
 		}

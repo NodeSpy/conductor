@@ -672,10 +672,10 @@ func browserAgent(action string, rest []string) error {
 func browserCtl(flags map[string]any, req controlRequest) (controlResponse, error) {
 	o := sandboxExecOpts{}
 	if v, ok := flags["config"].(string); ok {
-		o.config = v
+		o.config = cliPath(v)
 	}
 	if v, ok := flags["socket"].(string); ok {
-		o.socket = v
+		o.socket = cliPath(v)
 	}
 	sock := sandboxControlSocket(o)
 	conn, err := net.DialTimeout("unix", sock, 10*time.Second)
@@ -751,7 +751,7 @@ func browserOperator(cmd string, rest []string) error {
 		var v struct{ PNG, URL string }
 		_ = json.Unmarshal(resp.Data, &v)
 		png, _ := base64.StdEncoding.DecodeString(v.PNG)
-		out := flagStr(flags, "out")
+		out := cliPath(flagStr(flags, "out"))
 		if out == "" {
 			out = "peek-" + pos[0] + ".png"
 		}

@@ -367,6 +367,15 @@ func TestCheckConductorConstraint(t *testing.T) {
 		{"", "1.0.0", true},         // no constraint
 		{">=0.8", "dev", true},      // dev build skips
 		{"garbage", "1.0.0", false}, // unrecognized -> error, don't assume compatible
+		// An operator spaced from its version: what `conductor memory export`
+		// wrote before it switched to the canonical form, in packs already out.
+		{">= 0.69.0", "0.70.0", true},
+		{">= 0.69.0", "0.68.0", false},
+		{">= 0.8 < 2.0", "1.4.0", true},
+		{">= 0.8 < 2.0", "2.1.0", false},
+		{">=0.8, <2.0", "2.1.0", false},
+		{"~> 1.2", "1.9.0", true},
+		{">=", "1.0.0", false}, // a bare operator is still unrecognized
 	}
 	for _, c := range cases {
 		err := checkConductorConstraint(c.constraint, c.version)

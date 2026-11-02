@@ -47,7 +47,7 @@ func cmdMCPMemory(args []string) error {
 		}
 		switch rest[i] {
 		case "--socket":
-			socket = next()
+			socket = cliPath(next())
 		case "--agent":
 			mc.Source.Step = next()
 		case "--repo":

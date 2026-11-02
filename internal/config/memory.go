@@ -20,7 +20,7 @@ type MemoryConfig struct {
 	Store string `yaml:"store"`
 	// Dir is a directory holding one Markdown-with-frontmatter file per
 	// memory (implies type: file).
-	Dir string `yaml:"dir"`
+	Dir string `yaml:"dir" path:"local"`
 	// Type selects a backend that needs no location: "memory" (ephemeral
 	// in-process). "file" is accepted alongside dir: for explicitness.
 	Type string `yaml:"type"`

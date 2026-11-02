@@ -12,7 +12,9 @@ import (
 //
 //	">=0.8"  ">0.8.1"  "<=1.2"  "<2.0"  "=1.0.0"  "^1.2"  "~1.2.3"  "1.0"
 //
-// Space-separated constraints are AND-ed (">=0.8 <2.0"). An unrecognized
+// Space- or comma-separated constraints are AND-ed (">=0.8 <2.0"), and an
+// operator may be spaced from its version (">= 0.8" — what `conductor memory
+// export` wrote before it learned the canonical ">=0.8"). An unrecognized
 // constraint is a named error rather than a silent pass — a pack that declares
 // something we can't evaluate should not be assumed compatible.
 func checkConductorConstraint(constraint, version string) error {
@@ -33,7 +35,7 @@ func checkConductorConstraint(constraint, version string) error {
 		// know that the constraint they wrote is not being enforced.
 		return errUngatableVersion{version: version, constraint: constraint}
 	}
-	for _, part := range strings.Fields(constraint) {
+	for _, part := range constraintParts(constraint) {
 		if err := checkOneConstraint(part, have, version, constraint); err != nil {
 			return err
 		}

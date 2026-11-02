@@ -373,3 +373,14 @@ func TestWrapLocalEnforcedEgress(t *testing.T) {
 		t.Fatal("user-mode egress is advisory, never enforced")
 	}
 }
+
+// A step's fs: (which the config pass leaves as written) expands ~ here,
+// without writing through to the config.
+func TestFromConfigExpandsFS(t *testing.T) {
+	t.Setenv("HOME", "/home/op")
+	c := &config.IsolationConfig{Mode: "namespace", FS: []string{"~/media", "/srv/x", "~"}}
+	s := FromConfig(c)
+	if strings.Join(s.FS, ",") != "/home/op/media,/srv/x,/home/op" || c.FS[0] != "~/media" {
+		t.Fatalf("fs = %v (config %v)", s.FS, c.FS)
+	}
+}

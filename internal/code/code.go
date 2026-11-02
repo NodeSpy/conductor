@@ -189,6 +189,11 @@ func (e *Executor) Exec(ctx context.Context, spec Spec, data map[string]any) (ma
 	// subprocess of THIS daemon holding a JSON-RPC transport back to it, so
 	// there is nothing to ship over ssh — its ctx callbacks would have to come
 	// back across the hop.
+	// A local step's workdir: is a path on this box (~ expands, as in every
+	// config path); a remote one is the far side's to resolve.
+	if spec.Host == nil {
+		spec.WorkDir = expandHome(spec.WorkDir)
+	}
 	if spec.Plugin {
 		if spec.Host != nil {
 			return nil, errRemotePluginEngine(spec.Run)

@@ -31,7 +31,7 @@ import (
 //	  # or a definition a pack ships:
 //	  postmortems: { from: .conductor/packs/platform-sre/collections/postmortems.yaml }
 type Collection struct {
-	Dir       string                     `yaml:"dir,omitempty"`
+	Dir       string                     `yaml:"dir,omitempty" path:"-"`
 	Fields    map[string]CollectionField `yaml:"fields,omitempty"`
 	Template  string                     `yaml:"template,omitempty"`
 	FreePaths bool                       `yaml:"free_paths,omitempty"`
@@ -40,7 +40,7 @@ type Collection struct {
 	MaxBytes ByteSize `yaml:"max_bytes,omitempty"`
 	// From loads the whole definition from a YAML file (config-relative),
 	// e.g. one a pack ships. Exclusive with the inline keys.
-	From string `yaml:"from,omitempty"`
+	From string `yaml:"from,omitempty" path:"local"`
 }
 
 // CollectionField is one frontmatter field.
@@ -77,6 +77,7 @@ func (c *Config) resolveCollections() error {
 			if col.Dir != "" || len(col.Fields) > 0 || col.Template != "" || col.FreePaths || len(col.Writers) > 0 || col.MaxBytes != 0 {
 				return fmt.Errorf("config: %s.collections.%s: from: is the whole definition — drop the inline keys", where, name)
 			}
+			// Definitions load before expandPaths runs, so from: expands here.
 			p := expandHome(col.From)
 			if !filepath.IsAbs(p) && c.baseDir != "" {
 				p = filepath.Join(c.baseDir, p)

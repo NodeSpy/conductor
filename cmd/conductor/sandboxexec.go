@@ -109,10 +109,13 @@ func parseSandboxExec(args []string) (sandboxExecOpts, []string, error) {
 			}
 		case "--config":
 			o.config, err = val()
+			o.config = cliPath(o.config)
 		case "--socket":
 			o.socket, err = val()
+			o.socket = cliPath(o.socket)
 		case "--state-dir":
 			o.stateDir, err = val()
+			o.stateDir = cliPath(o.stateDir)
 		default:
 			return o, nil, fmt.Errorf("unknown flag %q (the command goes after --)", a)
 		}

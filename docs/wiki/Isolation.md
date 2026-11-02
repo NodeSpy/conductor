@@ -30,7 +30,7 @@ What the agent sees:
 | | |
 |---|---|
 | its workspace | read-write (the dispatch's own clone, `.git` included) |
-| `HOME` | its **identity's** tool state, read-write: `<state>/agent-state/<identity>/` — `~/.claude`, `~/.codex`, … — created before the launch and seeded once from your settings for the tool (never your history: `~/.claude.json`'s per-project history is dropped). The tool's login file is shared from your real home, so it is signed in as you. |
+| `HOME` | its **identity's** tool state, read-write: `<state>/agent-state/<identity>/` — `~/.claude`, `~/.codex`, … — created before the launch and seeded once from your settings for the tool (never your history: `~/.claude.json`'s per-project history is dropped; nor your claude-code plugins: `settings.json`'s `enabledPlugins`, `extraKnownMarketplaces`, `pluginConfigs`, `appendPlugins` and `prependPlugins` are dropped, since the identity home has no marketplace checkout and a launch would try to clone one through the egress proxy). The tool's login file is shared from your real home, so it is signed in as you. |
 | the conductor socket | the socket file only (never the state dir it lives in), with a token minted for this launch — so `conductor call step.done` / `git.push` work |
 | the base system | `/usr`, `/etc`, `/opt` (Linux) / the system paths (macOS), read-only; the agent CLI's own install, wherever it is |
 | the network | **none of its own.** The only way out is conductor's allowlist proxy: the tool's model endpoints, plus `sandbox.egress`. A model endpoint on your host's loopback (a local router at `127.0.0.1:3456`, a local Ollama) is relayed in at the same address. |

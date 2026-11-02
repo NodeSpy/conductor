@@ -694,7 +694,7 @@ func browserCredentialCmd(rest []string) error {
 	sock := map[string]any{}
 	for _, k := range []string{"config", "socket"} {
 		if v := one(multi, k); v != "" {
-			sock[k] = v
+			sock[k] = cliPath(v)
 		}
 	}
 	call := func(cmd string, q browserLoginReq) (json.RawMessage, error) {
@@ -826,7 +826,7 @@ func browserVaultCmd(cmd string, rest []string) error {
 	sock := map[string]any{}
 	for _, k := range []string{"config", "socket"} {
 		if v := one(multi, k); v != "" {
-			sock[k] = v
+			sock[k] = cliPath(v)
 		}
 	}
 	q := browserLoginReq{Query: one(multi, "query"), Via: "cli"}

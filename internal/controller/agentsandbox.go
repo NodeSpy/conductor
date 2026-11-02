@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/skill"
@@ -139,7 +140,7 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 			entry.Egress = append(append([]string(nil), entry.Egress...), iso.Network.Egress...)
 		}
 		for _, p := range iso.FS {
-			entry.ReadWrite = append(append([]string(nil), entry.ReadWrite...), p)
+			entry.ReadWrite = append(append([]string(nil), entry.ReadWrite...), config.ExpandHome(p))
 		}
 	}
 	// The token is minted below with the dispatch's own rules (an
