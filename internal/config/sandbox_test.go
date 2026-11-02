@@ -84,3 +84,25 @@ func TestSandboxPushUnlanded(t *testing.T) {
 		t.Fatalf("invalid unlanded accepted or wrong error: %v", err)
 	}
 }
+
+// sandbox.prefetch: off by default, go when named, any other ecosystem
+// refused at load.
+func TestSandboxPrefetch(t *testing.T) {
+	const base = "connectors:\n  gh: { use: github, token: x, repos: [\"acme/*\"] }\n"
+	for body, want := range map[string]bool{
+		base:                                  false,
+		base + "sandbox:\n  egress: []\n":     false,
+		base + "sandbox:\n  prefetch: [go]\n": true,
+	} {
+		cfg, err := loadCfg(t, body)
+		if err != nil {
+			t.Fatalf("Load %q: %v", body, err)
+		}
+		if got := cfg.Sandbox.PrefetchGo(); got != want {
+			t.Fatalf("%q: PrefetchGo() = %v, want %v", body, got, want)
+		}
+	}
+	if _, err := loadCfg(t, base+"sandbox:\n  prefetch: [npm]\n"); err == nil || !strings.Contains(err.Error(), `sandbox.prefetch: unknown ecosystem "npm"`) {
+		t.Fatalf("unknown ecosystem accepted or wrong error: %v", err)
+	}
+}

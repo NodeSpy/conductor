@@ -135,3 +135,31 @@ func TestReviewBy(t *testing.T) {
 		}
 	}
 }
+
+// A dispatch's first registration prefetches its checkout — a trusted
+// target only; a resume, a profile-less launch, or a target the sender
+// chose does not.
+func TestRegisterSandboxWorkspacePrefetches(t *testing.T) {
+	var got []string
+	SandboxPrefetch = func(dir string) { got = append(got, dir) }
+	defer func() { SandboxPrefetch = nil }()
+	trusted := &Request{DispatchID: "p1", Trigger: core.Trigger{TargetTrusted: true}}
+	ws := t.TempDir()
+	defer agentsandbox.Default.Forget(ws)
+	RegisterSandboxWorkspace(ws, "agent:fixer@a/b", "claude-code", trusted)
+	RegisterSandboxWorkspace(ws, "agent:fixer@a/b", "claude-code", trusted)
+	RegisterSandboxWorkspace(ws, "agent:fixer@a/b", "claude-code", nil)
+	if len(got) != 1 || got[0] != ws {
+		t.Fatalf("prefetched %v, want once for %s", got, ws)
+	}
+	got = nil
+	ws2 := t.TempDir()
+	defer agentsandbox.Default.Forget(ws2)
+	RegisterSandboxWorkspace(ws2, "agent:fixer@dispatch-p2", "claude-code", &Request{DispatchID: "p2"})
+	ws3 := t.TempDir()
+	defer agentsandbox.Default.Forget(ws3)
+	RegisterSandboxWorkspace(ws3, "member:alice", "claude-code", nil)
+	if len(got) != 0 {
+		t.Fatalf("an untrusted target or a member's workspace is prefetched: %v", got)
+	}
+}
