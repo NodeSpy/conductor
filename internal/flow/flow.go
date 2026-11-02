@@ -2084,6 +2084,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// pushes its committed HEAD to the dispatch branch now — after the gate
 	// passed, before the diff below reads what is still unpushed (and so
 	// before expect_push judges whether the work landed).
+	var unlanded error
 	if r.PushWork != nil && !shadow && !step.Background && !inGate(ctx) && ref.Workdir != "" {
 		pushed, perr := r.PushWork(ctx, req.DispatchID)
 		switch {
@@ -2093,6 +2094,9 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		default:
 			outputs["push"] = map[string]any{"error": perr.Error()}
 			r.Log("%s end-of-step push for %s: %v", flowTag(t), id, perr)
+		}
+		if perr != nil {
+			unlanded = r.checkUnlanded(ctx, t, req, id, ref.Workdir, perr, outputs)
 		}
 	}
 	// Diff preview (#36 §17): the PROPOSED change (uncommitted + unpushed)
@@ -2133,6 +2137,14 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// PR did not move, so the fix did NOT take. Record it as a failure rather than a
 	// silent success, carrying the agent's own reasoning + the diff, so it flows
 	// through failure handling (`at: fail`, retry, gave-up) instead of looping unseen.
+	//
+	// Committed work conductor did not push (checkUnlanded) is the same
+	// failure, for any step.
+	if unlanded != nil {
+		diff, _ := outputs["diff"].(string)
+		summary, _ := outputs["text"].(string)
+		return outputs, ref.Output, &noProgressError{step: id, summary: summary, diff: diff, unlanded: unlanded}
+	}
 	if step.ExpectPush && !shadow && !step.Background && !inGate(ctx) {
 		if diff, _ := outputs["diff"].(string); diff != "" {
 			summary, _ := outputs["text"].(string)
@@ -2146,6 +2158,75 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 // push for (an unsandboxed agent pushes itself; a review step pushes
 // nothing).
 var ErrNothingToPush = errors.New("nothing to push")
+
+// PushError is PushWork's error for a sandboxed workspace that conductor
+// pushed nothing from: Since is the commit the workspace started at ("" when
+// unknown) — the agent's own commits are the ones past it.
+type PushError struct {
+	Err   error
+	Since string
+}
+
+func (e *PushError) Error() string { return e.Err.Error() }
+func (e *PushError) Unwrap() error { return e.Err }
+
+// ErrUnsandboxed is the ErrNothingToPush for a dispatch with no sandboxed
+// workspace: its agent holds its own credentials and pushes for itself.
+var ErrUnsandboxed = fmt.Errorf("%w: this dispatch has no sandboxed workspace (an unsandboxed agent pushes itself)", ErrNothingToPush)
+
+// checkUnlanded runs when conductor's end-of-step push pushed nothing
+// (perr): commits the agent left in workdir that no remote has are work
+// about to be lost with the workspace, and are never dropped silently. They
+// land in the step's push output (pushed: false, unpushed_commits, reason),
+// the log, and a git_push audit row (outcome unlanded). The returned error
+// fails the step — unless sandbox.push.unlanded is warn, the agent is
+// unsandboxed (it pushes for itself), or the step is an explicit review
+// (dispatch.ReviewBy: its commits stay in its workspace by design). A step
+// that is a review only by its output schema fails: it may well be a fixer
+// missing `expect_push:`.
+func (r *Runner) checkUnlanded(ctx context.Context, t core.Trigger, req dispatch.Request, id, workdir string, perr error, outputs map[string]any) error {
+	since := ""
+	var pe *PushError
+	if errors.As(perr, &pe) {
+		since = pe.Since
+	}
+	n, base, err := gitdiff.Unpushed(ctx, workdir, since)
+	if err != nil && since != "" {
+		n, base, err = gitdiff.Unpushed(ctx, workdir, "") // the start commit is gone: measure against the remotes
+	}
+	if err != nil || n == 0 {
+		return nil
+	}
+	reason := r.redactErr(perr)
+	review := dispatch.ReviewBy(req)
+	var sb *config.SandboxConfig
+	if r.Cfg != nil {
+		sb = r.Cfg.Sandbox
+	}
+	fails := sb.UnlandedFails() && !errors.Is(perr, ErrUnsandboxed) &&
+		(review == "" || review == dispatch.ReviewByOutputSchema)
+	push, _ := outputs["push"].(map[string]any)
+	if push == nil {
+		push = map[string]any{}
+	}
+	push["pushed"], push["unpushed_commits"], push["base"], push["reason"] = false, n, base, reason
+	outputs["push"] = push
+	row := map[string]any{"event": "git_push", "dispatch": req.DispatchID, "repo": t.Target.Repo, "number": t.Target.Number,
+		"kind": t.Kind, "step": id, "outcome": "unlanded", "commits": n, "reason": reason, "fails_step": fails}
+	if review != "" {
+		row["review"] = review
+	}
+	r.audit(row)
+	hint := ""
+	if review == dispatch.ReviewByOutputSchema {
+		hint = " — a step with an output_schema is a review unless it sets expect_push: true"
+	}
+	r.Log("%s step %s: %d commit(s) the agent made were NOT pushed (%s)%s", flowTag(t), id, n, reason, hint)
+	if !fails {
+		return nil
+	}
+	return fmt.Errorf("%d commit(s) left unpushed: %s%s", n, reason, hint)
+}
 
 // harvestMemory applies the memory output contract to an agent step's final
 // output: a `remember:` block (fenced or a JSON key) persists with the run's
@@ -2330,9 +2411,14 @@ func hookData(base map[string]any, phase, status, runID, stepID string, failure 
 // agent's own reasoning + the diff so a handler can decide (close/comment/escalate).
 type noProgressError struct {
 	step, summary, diff string
+	// unlanded: the agent committed work conductor did not push (checkUnlanded).
+	unlanded error
 }
 
 func (e *noProgressError) Error() string {
+	if e.unlanded != nil {
+		return fmt.Sprintf("step %q committed work that was never pushed: %v", e.step, e.unlanded)
+	}
 	return fmt.Sprintf("step %q ran but landed no pushable change (fixer made no progress)", e.step)
 }
 

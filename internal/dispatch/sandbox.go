@@ -124,11 +124,13 @@ func SandboxIdentity(req Request, tool string) string {
 func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsandbox.Entry, error) {
 	reg := agentsandbox.Default
 	if e, ok := reg.Lookup(dir); ok && e.Workspace == canonPath(dir) {
-		// This launch's own earlier registration (a resume), or the
-		// workspace's owner's — a member registers its workspace under its
-		// own identity before launching workers into it: that identity
-		// stands, a dispatch never re-keys it.
-		if e.Identity == identity || e.Dispatch == "" {
+		// This launch's own earlier registration (a resume: no request, or
+		// the same dispatch), or the workspace's owner's — a member
+		// registers its workspace under its own identity before launching
+		// workers into it: that identity stands, a dispatch never re-keys
+		// it. Another dispatch of the same identity re-registers: its push
+		// and its step-end check find the workspace by its own dispatch id.
+		if e.Dispatch == "" || (e.Identity == identity && (req == nil || req.DispatchID == e.Dispatch)) {
 			return e, nil
 		}
 	}
@@ -149,6 +151,9 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 		if !ReviewRole(*req) && layout.GitDir != "" {
 			e.Push = pushTarget(dir, layout, req.Trigger.Target.CheckoutRepo())
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		e.StartHead, _ = gitpush.HeadCommit(ctx, dir, layout.GitDir, layout.HeadDir)
+		cancel()
 	}
 	reg.Register(e)
 	got, _ := reg.Lookup(dir)

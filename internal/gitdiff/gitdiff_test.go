@@ -149,3 +149,97 @@ func TestProposedNoUpstreamPushedBranch(t *testing.T) {
 		t.Fatalf("want only the unpushed commit vs origin/feat, got:\n%s", diff)
 	}
 }
+
+// Unpushed counts exactly the local commits no remote has: none on a fresh
+// clone, two after two local commits (an uncommitted edit is not one), none
+// once they are pushed; a non-repo is an error.
+func TestUnpushedCounts(t *testing.T) {
+	ctx := context.Background()
+	origin := initRepo(t)
+	if _, err := git(ctx, origin, "config", "receive.denyCurrentBranch", "ignore"); err != nil {
+		t.Fatal(err)
+	}
+	clone := t.TempDir()
+	if out, err := exec.Command("git", "clone", "-q", origin, clone).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v\n%s", err, out)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", clone, "-c", "user.email=t@t", "-c", "user.name=t"}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if n, _, err := Unpushed(ctx, clone, ""); err != nil || n != 0 {
+		t.Fatalf("fresh clone: n=%d err=%v", n, err)
+	}
+	for _, f := range []string{"b.txt", "c.txt"} {
+		if err := os.WriteFile(filepath.Join(clone, f), []byte(f+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		run("add", ".")
+		run("commit", "-q", "-m", f)
+	}
+	if err := os.WriteFile(filepath.Join(clone, "a.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n, base, err := Unpushed(ctx, clone, ""); err != nil || n != 2 || base == "" {
+		t.Fatalf("two local commits: n=%d base=%q err=%v", n, base, err)
+	}
+	run("push", "-q", "origin", "HEAD")
+	if n, _, err := Unpushed(ctx, clone, ""); err != nil || n != 0 {
+		t.Fatalf("after push: n=%d err=%v", n, err)
+	}
+	if _, _, err := Unpushed(ctx, t.TempDir(), ""); err == nil {
+		t.Fatal("non-repo must error")
+	}
+}
+
+// A fork's PR checked out: its commits are on no remote of the clone, so
+// only since — where the workspace started — tells the agent's commits from
+// the PR's own.
+func TestUnpushedSinceStart(t *testing.T) {
+	ctx := context.Background()
+	origin := initRepo(t)
+	clone := t.TempDir()
+	if out, err := exec.Command("git", "clone", "-q", origin, clone).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v\n%s", err, out)
+	}
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", clone, "-c", "user.email=t@t", "-c", "user.name=t"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("switch", "-q", "--detach") // the fork's PR head, taken detached
+	for _, m := range []string{"fork one", "fork two"} {
+		run("commit", "-q", "--allow-empty", "-m", m)
+	}
+	start := run("rev-parse", "HEAD")
+	if n, base, err := Unpushed(ctx, clone, start); err != nil || n != 0 || base != start {
+		t.Fatalf("nothing past the start: n=%d base=%q err=%v", n, base, err)
+	}
+	if n, _, _ := Unpushed(ctx, clone, ""); n != 2 {
+		t.Fatalf("without a start the fork's commits read as unpushed (why since exists): n=%d", n)
+	}
+	run("commit", "-q", "--allow-empty", "-m", "agent fix")
+	if n, _, err := Unpushed(ctx, clone, start); err != nil || n != 1 {
+		t.Fatalf("the agent's one commit: n=%d err=%v", n, err)
+	}
+	// Part of the agent's work already reached a remote (a git.push mid-step):
+	// only what came after counts.
+	originDir := run("remote", "get-url", "origin")
+	if out, err := exec.Command("git", "-C", originDir, "config", "receive.denyCurrentBranch", "ignore").CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	run("push", "-q", "origin", "HEAD:refs/heads/pr")
+	run("fetch", "-q", "origin")
+	run("commit", "-q", "--allow-empty", "-m", "agent fix two")
+	if n, _, err := Unpushed(ctx, clone, start); err != nil || n != 1 {
+		t.Fatalf("only the commit after the mid-step push: n=%d err=%v", n, err)
+	}
+	if _, _, err := Unpushed(ctx, clone, strings.Repeat("ab", 20)); err == nil {
+		t.Fatal("a start commit the clone lacks is an error (flow falls back to the remotes)")
+	}
+}

@@ -46,6 +46,10 @@ type Entry struct {
 	Env []string
 	// Push is where conductor pushes this workspace's work (nil: nowhere).
 	Push *PushTarget
+	// StartHead is the commit the workspace was on when the dispatch
+	// registered it ("" unknown): commits past it are the agent's own, the
+	// work an unpushed step end would lose.
+	StartHead string
 }
 
 // PushTarget is where conductor — never the agent — pushes a workspace.

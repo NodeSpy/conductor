@@ -133,6 +133,29 @@ review (a decide step, an output-schema step, a checkout-less step, a review
 trigger — unless `expect_push:`) is never pushed. Every push is audited
 (`git_push`).
 
+**A fixer that reports a structured result sets `expect_push: true`.** An
+`output_schema` is what a reviewer returns, so on its own it makes the step a
+review; a fixer that also reports one (the review threads it addressed, say)
+says `expect_push: true` so conductor pushes its work.
+
+**Committed work is never dropped silently.** When the end-of-step push pushes
+nothing — the step is a review, the checkout has no branch, the push was
+refused — and the agent left commits no remote has, conductor records it: the
+step's `push` output says `pushed: false` with `unpushed_commits` and the
+`reason`, the daemon logs it, and a `git_push` audit row has outcome
+`unlanded`. The step then **fails** as `no_progress` (the work would be lost
+with its workspace; `hook.failure.diff` carries it), unless it is an explicit
+review — a review trigger, a decide step, `checkout: none` — or its agent is
+unsandboxed and pushes for itself, or `sandbox.push.unlanded: warn` says to
+only record it. A review that is one only by its `output_schema` fails: it is
+most likely a fixer missing `expect_push:`.
+
+The step's `push` output is what a later step can trust, never the agent's
+own report: `{{.<step>.push.pushed}}` is true only when conductor pushed this
+step's work to its branch — at the step's end, or by a `git.push` during it.
+Gate anything that assumes the change landed on it (an `if:` like
+`fix.push.pushed`); it is absent, so false, when conductor did not push.
+
 conductor never runs git in the agent's checkout with the agent's config: it
 reads `HEAD` and the clone's own objects by path with `O_NOFOLLOW`, and pushes
 from the base clone's trusted git dir with hooks, fsmonitor and the ext
@@ -159,6 +182,7 @@ sandbox:
     # name / email: default git's user.name / user.email
     # sign: false        # push unsigned (default: refuse to push without a key)
     # at_step_end: false # only git.push pushes
+    # unlanded: warn     # commits left unpushed are recorded, not a step failure (default: fail)
 ```
 
 Per runtime, workflow, trigger or step, an `isolation:` block keeps working

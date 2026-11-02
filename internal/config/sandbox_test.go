@@ -60,3 +60,27 @@ func TestAgentSandboxConfigCompat(t *testing.T) {
 		t.Fatalf("invalid sandbox.agents accepted or wrong error: %v", err)
 	}
 }
+
+// sandbox.push.unlanded: fail by default (no stanza, no push block, empty),
+// warn when said, and anything else refused at load.
+func TestSandboxPushUnlanded(t *testing.T) {
+	const base = "connectors:\n  gh: { use: github, token: x, repos: [\"acme/*\"] }\n"
+	for body, want := range map[string]bool{
+		base:                              true,
+		base + "sandbox:\n  egress: []\n": true,
+		base + "sandbox:\n  push: { sign: false }\n":    true,
+		base + "sandbox:\n  push: { unlanded: fail }\n": true,
+		base + "sandbox:\n  push: { unlanded: warn }\n": false,
+	} {
+		cfg, err := loadCfg(t, body)
+		if err != nil {
+			t.Fatalf("Load %q: %v", body, err)
+		}
+		if got := cfg.Sandbox.UnlandedFails(); got != want {
+			t.Fatalf("%q: UnlandedFails() = %v, want %v", body, got, want)
+		}
+	}
+	if _, err := loadCfg(t, base+"sandbox:\n  push: { unlanded: ignore }\n"); err == nil || !strings.Contains(err.Error(), "sandbox.push.unlanded must be fail|warn") {
+		t.Fatalf("invalid unlanded accepted or wrong error: %v", err)
+	}
+}

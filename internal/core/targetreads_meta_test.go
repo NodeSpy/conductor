@@ -93,6 +93,7 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	"internal/flow/flow.go": {
 		{"flowTag", "a log prefix"},
 		{"auditRunCost", "an audit row"},
+		{"checkUnlanded", "the unlanded git_push audit row records which target the stranded commits were for — it records, it authorizes nothing"},
 		{"harvestMemory", "the memory Source's provenance; the harvest's scope check goes through NewAgentCaller"},
 		{"execVerb", "audit + rendered options; the resource checks in this function go through OwnRepo"},
 		{"runSteps", "step audit rows"},

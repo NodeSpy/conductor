@@ -8,8 +8,35 @@ var reviewKinds = map[string]bool{"review_requested": true, "self_review": true}
 // review trigger — unless the step says `expect_push:`. conductor pushes a
 // sandboxed agent's work (git.push, the end-of-step push) only for a
 // dispatch that is not a review: a reviewer's commits stay in its workspace.
-func ReviewRole(req Request) bool {
+func ReviewRole(req Request) bool { return ReviewBy(req) != "" }
+
+// The reasons ReviewBy gives.
+const (
+	ReviewByDecide       = "decide"
+	ReviewByCheckoutNone = "checkout_none"
+	ReviewByTrigger      = "review_trigger"
+	ReviewByOutputSchema = "output_schema"
+)
+
+// ReviewBy names why a dispatch is a review ("" = it is not). An output
+// schema is named only when it is the sole reason: a structured result is
+// what a reviewer returns, but a fixer may report one too (the threads it
+// addressed), so it is the one reason that can be a fixer missing its
+// `expect_push:` — flow fails such a step that leaves commits behind
+// instead of dropping them (docs/wiki/Isolation.md).
+func ReviewBy(req Request) string {
 	s := req.Step
-	review := s.DecisionLaunch != nil || len(s.OutputSchema) > 0 || s.Checkout == "none" || reviewKinds[req.Trigger.Kind]
-	return review && !s.ExpectPush
+	switch {
+	case s.ExpectPush:
+		return ""
+	case s.DecisionLaunch != nil:
+		return ReviewByDecide
+	case s.Checkout == "none":
+		return ReviewByCheckoutNone
+	case reviewKinds[req.Trigger.Kind]:
+		return ReviewByTrigger
+	case len(s.OutputSchema) > 0:
+		return ReviewByOutputSchema
+	}
+	return ""
 }

@@ -1964,6 +1964,64 @@ for a in json.load(sys.stdin).get("agents", {}).values():
 sys.exit(1)' "$1"
 }
 
+# z_captured <pattern> — mock-github captured a write whose body carries pattern.
+z_captured() { cexec conductor-sandbox curl -s http://mock-github:8080/_captured 2>/dev/null | grep -q "$1"; }
+
+# z_unlanded — the live shape: an output_schema agent step on a PR checkout
+# whose agent commits (its own push refused) and never calls git.push. With
+# expect_push, conductor pushes it at the step's end (git_push for the
+# <run>:address dispatch) and the step gated on address.push.pushed runs.
+# Without, the step is a review by its output_schema: nothing is pushed, the
+# commit is reported (git_push outcome unlanded), the step fails, and the
+# gated step — what resolved the reviewer's threads — never runs.
+z_unlanded() {
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml tip
+  local G=/srv/git/grpz/addr.git GR=/srv/git/grpz/addrreview.git
+  tip="$(cexec forge git --git-dir="$G" rev-parse pr-1 | tr -d '\r')"
+  force "$C" changes_requested grpz/addr#1 "$CFG" >/dev/null
+  if wait_for 90 z_audit '"event":"git_push"' '"dispatch":"' ':address"' '"repo":"grpz/addr"' '"outcome":"ok"'; then
+    ok "Z output_schema fixer (expect_push): conductor pushed its commit at the step's end" Z addr/pushed
+  else
+    bad "Z output_schema fixer pushed" Z addr/pushed "no git_push ok row for grpz/addr's :address dispatch"
+    dc logs --tail 40 "$C"
+  fi
+  if [ "$(cexec forge git --git-dir="$G" rev-parse pr-1 | tr -d '\r')" != "$tip" ] &&
+     cexec forge git --git-dir="$G" log --format=%s "$tip..pr-1" | grep -q '^conductor: Address the review'; then
+    ok "Z the agent's commit is on the forge's pr-1" Z addr/forge
+  else
+    bad "Z agent's commit on the forge" Z addr/forge "pr-1 did not move to the agent's commit"
+  fi
+  if wait_for 30 z_captured 'zaddr resolved'; then
+    ok "Z the step gated on address.push.pushed ran after the push" Z addr/gate
+  else
+    bad "Z gated step after a push" Z addr/gate "no 'zaddr resolved' comment captured"
+  fi
+
+  tip="$(cexec forge git --git-dir="$GR" rev-parse pr-1 | tr -d '\r')"
+  force "$C" changes_requested grpz/addrreview#1 "$CFG" >/dev/null
+  if wait_for 90 z_audit '"event":"git_push"' '"outcome":"unlanded"' '"repo":"grpz/addrreview"' '"fails_step":true' '"review":"output_schema"' '"step":"address"'; then
+    ok "Z output_schema-only step: its unpushed commit is audited (git_push unlanded) and fails the step" Z addrreview/audit
+  else
+    bad "Z unlanded commit audited" Z addrreview/audit "no git_push unlanded row for grpz/addrreview"
+    dc logs --tail 40 "$C"
+  fi
+  if wait_for 30 z_audit '"event":"workflow_failed"' 'grpz/addrreview' 'never pushed'; then
+    ok "Z the run failed: committed work that was never pushed" Z addrreview/failed
+  else
+    bad "Z unlanded run failed" Z addrreview/failed "no workflow_failed row naming the unpushed work"
+  fi
+  if dc logs "$C" 2>&1 | grep -q 'step address: 1 commit(s) the agent made were NOT pushed'; then
+    ok "Z the unlanded commit is logged" Z addrreview/log
+  else
+    bad "Z unlanded commit logged" Z addrreview/log "no 'NOT pushed' line"
+  fi
+  if [ "$(cexec forge git --git-dir="$GR" rev-parse pr-1 | tr -d '\r')" = "$tip" ] && ! z_captured 'zaddrreview resolved'; then
+    ok "Z nothing pushed and the gated step never ran" Z addrreview/gate
+  else
+    bad "Z no push, no gated step" Z addrreview/gate "pr-1 moved or the gated comment was posted"
+  fi
+}
+
 group_Z_sandbox() {
   banner "Group Z — the agent sandbox: a read-only agent, conductor pushes (signed)"
   local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml
@@ -2018,6 +2076,8 @@ group_Z_sandbox() {
     bad "Z detached launches" Z detach "no paseo agent for zdetach-default / zdetach-optout"
     dc logs --tail 30 "$C"
   fi
+
+  z_unlanded
 
   # The reviewer: sandboxed too, and conductor pushes nothing from a review.
   local review_tip
