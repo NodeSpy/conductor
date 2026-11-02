@@ -123,6 +123,54 @@ triggers:
         - grpz/detachout
     steps:
       - { type: agent, agent: zdetach-optout, runtime: pz, detach: true, prompt: "Take this over" }
+  # The live shape: a fixer that also reports a structured result (an
+  # output_schema step on a PR checkout) says expect_push — conductor pushes
+  # its commit at the step's end, and the step gated on that push runs.
+  - "on": github.changes_requested
+    filter:
+      repo:
+        - grpz/addr
+    steps:
+      - id: address
+        type: agent
+        name: addr_fixer
+        runtime: cli_claude
+        workspace: worktree
+        archive_when_done: true
+        expect_push: true
+        prompt: 'Address the review on {{.repo}}#{{.pr}} [[reply {"addressed_comments":[11]}]]'
+        output_schema:
+          type: object
+          properties:
+            addressed_comments: { type: array, items: { type: integer } }
+      - id: resolve
+        if: "address.push.pushed"
+        uses: github.comment
+        options: { repo: "{{.repo}}", pr: "{{.pr}}", body: "zaddr resolved" }
+  # The same step without expect_push: its output_schema alone makes it a
+  # review, so conductor pushes nothing — and the commit the agent made is
+  # not dropped silently: the step fails (no_progress), the git_push audit
+  # row says unlanded, and the step gated on the push never runs.
+  - "on": github.changes_requested
+    filter:
+      repo:
+        - grpz/addrreview
+    steps:
+      - id: address
+        type: agent
+        name: addr_review
+        runtime: cli_claude
+        workspace: worktree
+        archive_when_done: true
+        prompt: 'Address the review on {{.repo}}#{{.pr}} [[reply {"addressed_comments":[11]}]]'
+        output_schema:
+          type: object
+          properties:
+            addressed_comments: { type: array, items: { type: integer } }
+      - id: resolve
+        if: "address.push.pushed"
+        uses: github.comment
+        options: { repo: "{{.repo}}", pr: "{{.pr}}", body: "zaddrreview resolved" }
   # A review: sandboxed too, and conductor pushes nothing from it.
   - "on": github.review_requested
     filter:
