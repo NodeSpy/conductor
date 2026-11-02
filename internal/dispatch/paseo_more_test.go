@@ -542,3 +542,20 @@ func TestCreateWorktreeRefusesAMissingPRNumber(t *testing.T) {
 		t.Fatalf("want a refusal, got %v", err)
 	}
 }
+
+// A manual run's checkout_pr (flow.applyCheckoutPR) reaches paseo as the PR to
+// check out, and with no forge hint no empty --forge is sent.
+func TestCreateWorktreeChecksOutACheckoutPR(t *testing.T) {
+	bin, dir := fakePaseoDir(t)
+	d := &Dispatcher{PaseoBin: bin}
+	req := Request{Trigger: core.Trigger{Source: "manual", Kind: "manual", Target: core.Target{Repo: "manual:eval", Project: "acme/app"},
+		CheckoutPR: &core.PRRef{Repo: "acme/app", Number: 12}},
+		Action: config.Action{Checkout: "checkout-pr"}}
+	if _, _, err := d.createWorktree(context.Background(), req, "/base"); err != nil {
+		t.Fatal(err)
+	}
+	log := callsLog(t, dir)
+	if !strings.Contains(log, "--mode checkout-pr --json --pr-number 12") || strings.Contains(log, "--forge") {
+		t.Fatalf("argv: %s", log)
+	}
+}

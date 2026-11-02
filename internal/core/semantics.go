@@ -271,6 +271,11 @@ func DeclaredArgs(args map[string]string, facts map[string]any) map[string]any {
 // behavior older plugins were built against.
 func (t Trigger) HasSemantics() bool { return t.Semantics() != noSemantics }
 
+// DeclaresCheckout reports whether Checkout() describes this dispatch's
+// checkout — the event declared one, or the dispatch carries a CheckoutPR —
+// rather than the legacy target-shaped rule an event with no semantics keeps.
+func (t Trigger) DeclaresCheckout() bool { return t.CheckoutPR != nil || t.HasSemantics() }
+
 // CheckoutSpec is a target's declared checkout, rendered over its facts.
 type CheckoutSpec struct {
 	Remote     string            // the repository's git URL
@@ -281,7 +286,24 @@ type CheckoutSpec struct {
 
 // Checkout is the trigger's declared checkout; ok=false when its event
 // declares none (no workspace checkout: a synthetic target).
+//
+// A dispatch with CheckoutPR checks that pull request out instead: its head
+// ref, and its number as the pr_number hint (the event's forge hint, if any,
+// is kept — the PR is on the same forge). No remote and no push branch: the
+// event's declaration describes the event's own target, not this one.
 func (t Trigger) Checkout() (CheckoutSpec, bool) {
+	if pr := t.CheckoutPR; pr != nil {
+		n := strconv.Itoa(pr.Number)
+		spec := CheckoutSpec{FetchRef: "refs/pull/" + n + "/head", Hints: map[string]string{"pr_number": n}}
+		if c := t.Semantics().Checkout; c != nil {
+			if f, ok := c.RuntimeHints["forge"]; ok {
+				if forge := renderFacts(f, t.Facts()); forge != "" {
+					spec.Hints["forge"] = forge
+				}
+			}
+		}
+		return spec, true
+	}
 	c := t.Semantics().Checkout
 	if c == nil {
 		return CheckoutSpec{}, false

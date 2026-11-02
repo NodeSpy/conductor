@@ -47,6 +47,12 @@ func (t Target) CheckoutRepo() string {
 	return t.Repo
 }
 
+// PRRef names one pull request: "owner/name" and its number.
+type PRRef struct {
+	Repo   string
+	Number int
+}
+
 // Trigger is the normalized unit of work. Integrations translate raw provider
 // events into Triggers and hand them to the engine via an EmitFunc.
 type Trigger struct {
@@ -106,6 +112,13 @@ type Trigger struct {
 	// semantics.go and never keys behavior on the kind's name. nil is a
 	// plain trigger.
 	Sem *sdk.EventSemantics
+	// CheckoutPR, when set, is the pull request this dispatch checks out in
+	// place of the target's own: an agent step's `checkout_pr:` (flow applies
+	// it, and only for a value the configuration wrote or a run the operator
+	// or a cron schedule started — never one an event's sender chose). It
+	// changes the CHECKOUT only — Checkout() answers from it and
+	// Target.Project names its repo; forge authority stays on Target.Repo.
+	CheckoutPR *PRRef
 	// HistoryID, when non-empty, pins the id of this run's §20 history record
 	// instead of the engine minting a fresh one. It exists so a caller that
 	// dispatched the trigger (the §13 callable-invoke surface) can hand back a

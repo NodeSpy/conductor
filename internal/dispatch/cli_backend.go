@@ -190,7 +190,10 @@ func (b *cliBackend) CreateWorktree(ctx context.Context, opts CreateWorktreeOpti
 		"--path", opts.Path, "--mode", opts.Strategy, "--json"}
 	switch opts.Strategy {
 	case "checkout-pr":
-		args = append(args, "--pr-number", itoa(opts.PRNumber), "--forge", opts.Forge)
+		args = append(args, "--pr-number", itoa(opts.PRNumber))
+		if opts.Forge != "" { // as checkoutArgs: no hint, no flag — never an empty value
+			args = append(args, "--forge", opts.Forge)
+		}
 	case "branch-off":
 		args = append(args, "--new-branch", opts.NewBranch)
 		if opts.BaseRef != "" {

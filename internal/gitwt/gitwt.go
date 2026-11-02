@@ -693,7 +693,7 @@ func pathSlug(s string) string {
 // targets the PR branch), else "".
 func prBranch(req dispatch.Request) string {
 	ref := ""
-	if req.Trigger.HasSemantics() {
+	if req.Trigger.DeclaresCheckout() {
 		co, _ := req.Trigger.Checkout()
 		ref = co.PushBranch
 	} else {
@@ -706,9 +706,10 @@ func prBranch(req dispatch.Request) string {
 }
 
 // fetchRef is the ref holding the target's code: the declared checkout's
-// fetch_ref; an event declaring no semantics keeps the legacy pull ref.
+// fetch_ref (or a step's checkout_pr); an event declaring no semantics keeps
+// the legacy pull ref.
 func fetchRef(req dispatch.Request) string {
-	if req.Trigger.HasSemantics() {
+	if req.Trigger.DeclaresCheckout() {
 		co, _ := req.Trigger.Checkout()
 		if co.FetchRef == "" || strings.HasPrefix(co.FetchRef, "-") || strings.ContainsAny(co.FetchRef, " :~^") {
 			return ""
