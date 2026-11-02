@@ -176,6 +176,7 @@ emails. conductor does not touch your account settings.
 sandbox:
   agents: on                       # default; `off` is the explicit opt-out (logged at boot)
   egress: [registry.npmjs.org, proxy.golang.org]   # beyond the model endpoints
+  prefetch: [go]                   # Go modules fetched on the host, not by the agent (below)
   # state_dir: ~/.local/state/conductor/agent-state   # the identity homes
   push:
     signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh)
@@ -184,6 +185,32 @@ sandbox:
     # at_step_end: false # only git.push pushes
     # unlanded: warn     # commits left unpushed are recorded, not a step failure (default: fail)
 ```
+
+**Go without an allowlist (`prefetch: [go]`).** Allowlisting
+`proxy.golang.org` is not enough: the proxy answers many module downloads
+with a redirect to `storage.googleapis.com`, and allowlisting that host opens
+every Cloud Storage bucket to the agent. With `prefetch: [go]`, conductor
+downloads instead, on the host:
+
+- when it registers a dispatch's checkout — before the agent runs — it reads
+  the module files (`go.work`, `go.work.sum`, and the `go.mod`/`go.sum` of
+  every module the workspace uses or a local `replace` points at; regular
+  files inside the checkout only) into a temp dir of its own and runs
+  `go mod download` there, into `<state_dir>/.go-modcache`;
+- that download uses your own module cache first, then `proxy.golang.org` —
+  never `direct`, so no VCS runs against a module path a `go.mod` names —
+  with `GOTOOLCHAIN=local`, checksum-database verification on, and none of the
+  daemon's environment beyond `PATH` and HTTP-proxy/CA settings;
+- every sandboxed agent sees that cache **read-only** (an agent cannot plant
+  a symlink for the host's `go` to write through) with `GOMODCACHE` pointing
+  at it and `GOPROXY=off`, `GOSUMDB=off`, `GOTOOLCHAIN=local`. Its Go builds
+  and tests offline; no Go host goes in `egress`.
+
+A set of module files already downloaded is skipped (a few milliseconds); a
+failed download is logged and the launch runs anyway. A module the agent adds
+itself is not fetched — its `go get` fails offline, by design — and a target
+the event's sender chose is never prefetched for (its agent runs with what the
+cache already holds).
 
 Per runtime, workflow, trigger or step, an `isolation:` block keeps working
 (most specific wins: step → workflow/trigger → runtime): `mode: none` runs that

@@ -36,6 +36,9 @@ type Resolver struct {
 	Env []string
 	// GOOS is the platform the launch runs on.
 	GOOS string
+	// GoPrefetch is sandbox.prefetch: [go] (nil: off): every launch sees its
+	// module cache read-only and runs Go offline.
+	GoPrefetch *GoPrefetch
 	// Session resolves a cwd that is NOT in the registry to a live bot
 	// session's entry (its identity, its granted skill verbs, its read-only
 	// paths), consulted before a default workspace is built. This is how a
@@ -197,6 +200,10 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 		Identity: e.Identity, Tool: tool, Workspace: e.Workspace, Home: home, Logins: logins,
 		Egress: egress, Loopback: loopback,
 		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env,
+	}
+	if g := r.GoPrefetch; g != nil {
+		p.ReadOnly = append(append([]string(nil), p.ReadOnly...), g.Cache)
+		p.Env = append(append([]string(nil), p.Env...), g.AgentEnv()...)
 	}
 	if r.Socket != "" && e.Skill != nil && r.Mint != nil {
 		id := *e.Skill

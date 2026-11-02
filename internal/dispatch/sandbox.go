@@ -116,6 +116,12 @@ func SandboxIdentity(req Request, tool string) string {
 	return "agent:" + who
 }
 
+// SandboxPrefetch, when set (sandbox.prefetch), downloads what a dispatch's
+// checkout needs on the host before its agent launches. It logs its own
+// failures: the launch runs either way. A target the event's sender chose is
+// never prefetched for.
+var SandboxPrefetch func(dir string)
+
 // RegisterSandboxWorkspace records dir in the sandbox registry on the first
 // launch into it — while it is still conductor's own checkout — and returns
 // the entry: the git layout read now is what every later launch (a resume)
@@ -154,6 +160,10 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		e.StartHead, _ = gitpush.HeadCommit(ctx, dir, layout.GitDir, layout.HeadDir)
 		cancel()
+	}
+	if req != nil && req.Trigger.TargetTrusted && SandboxPrefetch != nil {
+		// Still conductor's own checkout: its module files, not an agent's.
+		SandboxPrefetch(dir)
 	}
 	reg.Register(e)
 	got, _ := reg.Lookup(dir)

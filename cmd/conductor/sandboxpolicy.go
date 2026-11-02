@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -102,6 +103,25 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	if err := os.MkdirAll(r.StateRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("agent sandbox state dir %s: %w", r.StateRoot, err)
 	}
+	dispatch.SandboxPrefetch = nil
+	if cfg.Sandbox.PrefetchGo() {
+		// A dot name no identity home can have (IdentityKey trims it).
+		gp, err := agentsandbox.NewGoPrefetch(filepath.Join(r.StateRoot, ".go-modcache"), os.Environ())
+		if err != nil {
+			return nil, err
+		}
+		r.GoPrefetch = gp
+		dispatch.SandboxPrefetch = func(dir string) {
+			start := time.Now()
+			if err := gp.Workspace(context.Background(), dir); err != nil {
+				logf("sandbox: go prefetch for %s: %v (the agent's Go runs offline without what is missing)", dir, err)
+				return
+			}
+			if d := time.Since(start); d > 5*time.Second {
+				logf("sandbox: go prefetch for %s took %s", dir, d.Round(time.Second))
+			}
+		}
+	}
 	rel, err := agentsandbox.NewRelayer()
 	if err != nil {
 		return nil, err
@@ -135,6 +155,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		gitdiff.Confine = nil
 		dispatch.PaseoSandboxed = false
 		dispatch.PaseoSandboxLog = nil
+		dispatch.SandboxPrefetch = nil
 		rel.Close()
 	}, nil
 }
