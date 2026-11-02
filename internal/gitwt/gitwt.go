@@ -324,12 +324,12 @@ func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.R
 		return fmt.Errorf("resolve fetched PR head: %w", err)
 	}
 	sha = strings.TrimSpace(sha)
-	branch := prBranch(req)
+	branch, at := prBranch(req), 1
 	if branch == "" {
-		branch = p.remoteBranchAt(ctx, base, sha)
+		branch, at = p.remoteBranchAt(ctx, base, sha)
 	}
 	if branch == "" {
-		p.logf("gitwt: %s: the target's branch is unknown — checking out detached", req.Trigger.Key())
+		p.logf("gitwt: %s: %s, so its head commit %s is checked out detached", checkoutTarget(req, ref), detachedReason(at), shortSHA(sha))
 	}
 	// Each dispatch owns its clone, so a second dispatch on the same PR
 	// gets its own copy of the branch — nothing to take detached.
@@ -723,33 +723,67 @@ func fetchRef(req dispatch.Request) string {
 }
 
 // remoteBranchAt names the one origin branch whose tip is rev — how a PR head
-// is found when the trigger didn't carry its branch name. "" when no branch or
-// more than one points there (the PR can't be told apart from the others).
-func (p *Provisioner) remoteBranchAt(ctx context.Context, base, rev string) string {
+// is found when the trigger didn't carry its branch name — and how many
+// origin branches are there (-1: they could not be listed). "" when no branch
+// or more than one points there (the PR can't be told apart from the others).
+func (p *Provisioner) remoteBranchAt(ctx context.Context, base, rev string) (string, int) {
 	sha, err := p.git(ctx, base, "rev-parse", rev)
 	if err != nil {
-		return ""
+		return "", -1
 	}
 	sha = strings.TrimSpace(sha)
 	heads, err := p.git(ctx, base, "ls-remote", "--heads", "origin")
 	if err != nil {
-		return ""
+		return "", -1
 	}
 	var match string
+	n := 0
 	for _, line := range strings.Split(heads, "\n") {
 		h, ref, ok := strings.Cut(strings.TrimSpace(line), "\t")
 		if !ok || h != sha {
 			continue
 		}
-		if match != "" {
-			return ""
-		}
+		n++
 		match = strings.TrimPrefix(ref, "refs/heads/")
 	}
-	if !safeBranch(match) {
-		return ""
+	if n != 1 || !safeBranch(match) {
+		return "", n
 	}
-	return match
+	return match, n
+}
+
+// checkoutTarget names what a checkout fetches, for a log line: the pull
+// request (a step's checkout_pr, else the trigger's own), else the ref — never
+// a manual or cron run's synthetic trigger key.
+func checkoutTarget(req dispatch.Request, ref string) string {
+	if pr := req.Trigger.CheckoutPR; pr != nil {
+		return fmt.Sprintf("%s#%d", pr.Repo, pr.Number)
+	}
+	if t := req.Trigger.Target; t.PR > 0 {
+		return fmt.Sprintf("%s#%d", t.CheckoutRepo(), t.PR)
+	}
+	return ref
+}
+
+// detachedReason says why a PR's head has no branch to check out, given how
+// many origin branches point at it (remoteBranchAt).
+func detachedReason(at int) string {
+	switch {
+	case at == 0:
+		return "the PR's head branch no longer exists on the remote (a merged or closed PR whose branch was deleted)"
+	case at > 1:
+		return fmt.Sprintf("%d remote branches point at the PR's head (none can be told apart as its branch)", at)
+	case at < 0:
+		return "the remote's branches could not be listed to find the PR's head branch"
+	}
+	return "the PR's head branch name is not usable as a local branch"
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
 }
 
 // safeBranch reports whether ref is usable verbatim as a local branch name —

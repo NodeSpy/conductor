@@ -2,6 +2,7 @@ package gitwt
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,5 +110,40 @@ func TestACheckoutPRBranchIgnoresTheRunsContext(t *testing.T) {
 	}
 	if got := strings.TrimSpace(out(t, cwd, "git", "rev-parse", "--abbrev-ref", "HEAD")); got != "feature" {
 		t.Fatalf("worktree branch = %q, want the PR's own head branch %q", got, "feature")
+	}
+}
+
+// A manual run's checkout_pr of a PR whose head branch is gone (merged or
+// closed, branch deleted) checks the head commit out detached, and the log
+// says which PR and why — not the run's synthetic trigger key.
+func TestDetachedCheckoutLogNamesThePRAndWhy(t *testing.T) {
+	for _, tc := range []struct {
+		name, prep, want string
+	}{
+		{"branch deleted", "delete", "acme/web#7: the PR's head branch no longer exists on the remote (a merged or closed PR whose branch was deleted), so its head commit "},
+		{"two branches", "copy", "acme/web#7: 2 remote branches point at the PR's head (none can be told apart as its branch), so its head commit "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			origin := originRepo(t)
+			if tc.prep == "delete" {
+				run(t, origin, "git", "branch", "-D", "feature")
+			} else {
+				run(t, origin, "git", "branch", "feature-copy", "feature")
+			}
+			p, _ := recordingProv(t, origin)
+			var logs []string
+			p.Log = func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+			_, cwd, err := p.ProvisionWorktree(context.Background(), manualReplayReq())
+			if err != nil {
+				t.Fatalf("ProvisionWorktree: %v", err)
+			}
+			if b := strings.TrimSpace(out(t, cwd, "git", "rev-parse", "--abbrev-ref", "HEAD")); b != "HEAD" {
+				t.Fatalf("HEAD is on %q, want detached", b)
+			}
+			all := strings.Join(logs, "\n")
+			if !strings.Contains(all, tc.want) || !strings.Contains(all, "checked out detached") || strings.Contains(all, "manual:") {
+				t.Fatalf("log:\n%s\nwant %q", all, tc.want)
+			}
+		})
 	}
 }
