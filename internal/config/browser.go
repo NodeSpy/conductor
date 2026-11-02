@@ -26,7 +26,7 @@ type BrowserConfig struct {
 	Allow []string `yaml:"allow"`
 	// Chrome is the browser binary (default: the first Chrome or Chromium
 	// installed in the usual places).
-	Chrome string `yaml:"chrome,omitempty"`
+	Chrome string `yaml:"chrome,omitempty" path:"local"`
 	// Evaluate opts identities in to read-only JavaScript (`conductor
 	// browser evaluate`): an expression runs only if V8 can rule out every
 	// side effect — no DOM write, no network, no storage. Exact identities,
@@ -81,7 +81,7 @@ type BrowserMailbox struct {
 	// mail bridge).
 	PlaintextLoopback bool `yaml:"plaintext_loopback,omitempty"`
 	// CAFile trusts this PEM bundle instead of the system's.
-	CAFile   string            `yaml:"ca_file,omitempty"`
+	CAFile   string            `yaml:"ca_file,omitempty" path:"local"`
 	Username *BrowserSecretRef `yaml:"username"`
 	Password *BrowserSecretRef `yaml:"password"`
 	// Folder is the folder searched (default INBOX).
@@ -329,7 +329,7 @@ func (c *Config) validateBrowser() error {
 	if b.MaxBrowsers < 0 || b.MaxDownloadMB < 0 || b.MaxUploadMB < 0 {
 		return fmt.Errorf("config: browser: limits cannot be negative")
 	}
-	if b.Chrome != "" && strings.Contains(b.Chrome, "/") && !filepath.IsAbs(expandHome(b.Chrome)) {
+	if b.Chrome != "" && strings.Contains(b.Chrome, "/") && !filepath.IsAbs(b.Chrome) {
 		return fmt.Errorf("config: browser.chrome %q must be an absolute path or a command name", b.Chrome)
 	}
 	seen := map[string]bool{}
@@ -460,7 +460,7 @@ func (c *Config) validateBrowser() error {
 				return fmt.Errorf("%s: plaintext_loopback and starttls contradict", where)
 			}
 		}
-		if mb.CAFile != "" && !filepath.IsAbs(expandHome(mb.CAFile)) {
+		if mb.CAFile != "" && !filepath.IsAbs(mb.CAFile) {
 			return fmt.Errorf("%s: ca_file must be an absolute path", where)
 		}
 		if mb.Username == nil || mb.Password == nil {

@@ -277,3 +277,25 @@ func TestLaunchedByServiceManagerNeedsTheServiceItself(t *testing.T) {
 		}
 	}
 }
+
+// A path flag's value expands ~ like a config path — the shell leaves
+// --flag=~/x and a quoted "~/x" alone.
+func TestPathFlagsExpandHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if got, _ := configPath([]string{"--config", "~/conductor/config.yaml"}); got != filepath.Join(home, "conductor/config.yaml") {
+		t.Fatalf("--config ~/…: %q", got)
+	}
+	for in, want := range map[string]string{"~/x": filepath.Join(home, "x"), "~": home, "/abs": "/abs", "rel": "rel", "~op/x": "~op/x", "": ""} {
+		if got := cliPath(in); got != want {
+			t.Errorf("cliPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(home, "note.txt"), []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := map[string]any{}
+	if err := attachFiles(a, "~/note.txt"); err != nil {
+		t.Fatalf("--attach ~/…: %v", err)
+	}
+}

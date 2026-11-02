@@ -255,3 +255,24 @@ func TestCLICtxSocketTornDown(t *testing.T) {
 		})
 	}
 }
+
+// A local step's workdir: is a path on this box: ~ expands like every config
+// path.
+func TestLocalWorkdirExpandsHome(t *testing.T) {
+	needSh(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.Mkdir(filepath.Join(home, "wd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := (&Executor{}).Exec(context.Background(), Spec{
+		Run: "cli", Command: []string{"sh", "-c", `printf '{"pwd":"%s"}' "$(pwd -P)"`}, WorkDir: "~/wd",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(filepath.Join(home, "wd"))
+	if out["pwd"] != want {
+		t.Fatalf("pwd = %v, want %s", out["pwd"], want)
+	}
+}

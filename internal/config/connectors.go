@@ -164,7 +164,7 @@ type RuntimeConfig struct {
 	// paseo_bin. On a cli runtime it is the executable a built-in tool recipe
 	// (claude-code, codex, a bare tool) runs in place of its default name —
 	// exclusive with `command:`, which carries its own.
-	Bin string `yaml:"bin,omitempty"`
+	Bin string `yaml:"bin,omitempty" path:"local"`
 	// Home is the paseo daemon home this runtime targets — the `--home` paseo
 	// 0.9+ selects a local daemon with (paseo 0.9 gained multi-home support and
 	// defaults to ~/.paseo; conductor passes this so a daemon at a non-default
@@ -172,7 +172,7 @@ type RuntimeConfig struct {
 	// only emitted on paseo >= 0.9 (older paseo has no `--home` flag — conductor
 	// detects the version and omits it). Empty → PASEO_HOME env, else paseo's own
 	// default. See cmd/conductor's resolvePaseoHome and internal/dispatch.
-	Home string `yaml:"home,omitempty"`
+	Home string `yaml:"home,omitempty" path:"local"`
 	// Server is an explicit paseo daemon ENDPOINT ("127.0.0.1:6767", a socket
 	// path, an SSH or pairing URL) — paseo's `--host`. It is the direct form of
 	// `home:`: a home is only a pointer to the `listen` address in that home's
@@ -406,11 +406,11 @@ type HostConfig struct {
 	User string `yaml:"user,omitempty"`
 	Port int    `yaml:"port,omitempty"`
 	// Key is the private-key path (empty = ssh defaults / agent).
-	Key string `yaml:"key,omitempty"`
+	Key string `yaml:"key,omitempty" path:"local"`
 	// KnownHosts is a known_hosts file override (empty = ssh defaults).
-	KnownHosts string `yaml:"known_hosts,omitempty"`
+	KnownHosts string `yaml:"known_hosts,omitempty" path:"local"`
 	// Cwd is the default remote working directory.
-	Cwd string `yaml:"cwd,omitempty"`
+	Cwd string `yaml:"cwd,omitempty" path:"remote"`
 	// Env is exported into remote commands.
 	Env map[string]string `yaml:"env,omitempty"`
 	// Isolation wraps every script this host runs (code steps, remote
@@ -418,7 +418,7 @@ type HostConfig struct {
 	// namespace only (the remote box needs the matching sudoers rule /
 	// util-linux). This is how the agent_authored sandbox `host:` gets a
 	// second wall: even on the sandbox box, agent code runs de-privileged.
-	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	Isolation *IsolationConfig `yaml:"isolation,omitempty" path:"remote"`
 }
 
 // IsolationConfig is the per-dispatch isolation block (#36 §15), settable on
@@ -470,7 +470,7 @@ type IsolationConfig struct {
 	// each entry becomes a `-v path:path` bind. Empty ⇒ just the workdir (and,
 	// for a code step, its own code/ctx temp dirs). A code step reading an
 	// external directory (e.g. a media library) declares it here.
-	FS []string `yaml:"fs,omitempty"`
+	FS []string `yaml:"fs,omitempty" path:"local"`
 }
 
 // ContainerIsolation configures isolation mode: container.
@@ -1025,7 +1025,7 @@ type Step struct {
 	// command form (also carries workdir/env for agent/code forms), and the
 	// argv the `cli` engine runs. A list of words, or one string (see Argv).
 	Command Argv              `yaml:"command,omitempty"`
-	WorkDir string            `yaml:"workdir,omitempty"`
+	WorkDir string            `yaml:"workdir,omitempty" path:"step"`
 	Env     map[string]string `yaml:"env,omitempty"`
 
 	// code form. Use names the ENGINE that executes this step — the builtin

@@ -44,7 +44,7 @@ func ticketRequest(sub string, pos []string, fl map[string]string) (string, map[
 		return strings.Split(fl["label"], "\x00")
 	}
 	desc := func() (string, bool, error) {
-		if f := fl["description-file"]; f != "" {
+		if f := cliPath(fl["description-file"]); f != "" {
 			b, err := os.ReadFile(f)
 			return string(b), true, err
 		}

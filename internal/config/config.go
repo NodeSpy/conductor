@@ -465,8 +465,8 @@ func (r Retry) BackoffDur() time.Duration {
 
 // Store configures the dedup state + audit log.
 type Store struct {
-	StateFile     string   `yaml:"state_file"`
-	AuditLog      string   `yaml:"audit_log"`
+	StateFile     string   `yaml:"state_file" path:"local"`
+	AuditLog      string   `yaml:"audit_log" path:"local"`
 	StateTTL      Duration `yaml:"state_ttl"`
 	MaxTrackedPRs int      `yaml:"max_tracked_prs"`
 	AuditMaxSize  ByteSize `yaml:"audit_max_size"`
@@ -647,7 +647,7 @@ type Action struct {
 	Backend  string            `yaml:"backend"` // override default backend for the type
 	Shadow   *bool             `yaml:"shadow"`  // per-action shadow override
 	Checkout string            `yaml:"checkout"`
-	WorkDir  string            `yaml:"workdir"` // working directory (command: cwd; agent: paseo --cwd)
+	WorkDir  string            `yaml:"workdir" path:"step"` // working directory (command: cwd; agent: paseo --cwd)
 	Env      map[string]string `yaml:"env"`
 
 	// agent-type fields
@@ -1011,6 +1011,8 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	c.applyDefaults()
+	// ~ in every path field expands here, once (see paths.go).
+	c.expandPaths()
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -1278,11 +1280,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Store.AuditLog == "" {
 		c.Store.AuditLog = filepath.Join(StateDir(), "audit.jsonl")
-	}
-	c.Store.StateFile = expandHome(c.Store.StateFile)
-	c.Store.AuditLog = expandHome(c.Store.AuditLog)
-	if c.Memory != nil {
-		c.Memory.Dir = expandHome(c.Memory.Dir)
 	}
 	if c.Store.StateTTL == 0 {
 		c.Store.StateTTL = Duration(30 * 24 * time.Hour)

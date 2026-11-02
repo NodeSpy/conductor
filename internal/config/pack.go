@@ -65,7 +65,7 @@ type PackInstance struct {
 	// `github.com/org/repo//subdir@ref`, an SSH form
 	// `git::ssh://git@github.com/…`, or a local path (`./packs/review-kit`,
 	// relative to the config file) for vendored/example packs.
-	Source string `yaml:"source"`
+	Source string `yaml:"source" path:"ref"`
 	// Version is a semver constraint (Terraform/gems-style: ">= 1.2, < 2.0",
 	// "~> 1.1", "^1.0", "1.0"). An unpinned git source resolves to the highest
 	// tag satisfying it (a monorepo tags components "<subdir>/vX.Y.Z"). A hard
@@ -523,7 +523,7 @@ type SecretReq struct {
 // PackDepReq declares a pack dependency (§10), satisfied by a nested `packs:`
 // instance block.
 type PackDepReq struct {
-	Source  string `yaml:"source"`
+	Source  string `yaml:"source" path:"ref"`
 	Version string `yaml:"version,omitempty"`
 }
 

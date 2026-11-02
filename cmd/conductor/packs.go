@@ -345,7 +345,7 @@ func cmdPackList(args []string) error {
 func cmdPackSearch(args []string) error {
 	path, rest := configPath(args)
 	pos, fl, _, _ := botFlags(rest)
-	out, err := packCatalog(path, strings.Join(pos[1:], " "), fl["registry"], fl["installed"] == "true", fl["include-templates"] == "true")
+	out, err := packCatalog(path, strings.Join(pos[1:], " "), cliPath(fl["registry"]), fl["installed"] == "true", fl["include-templates"] == "true")
 	if err != nil {
 		return err
 	}

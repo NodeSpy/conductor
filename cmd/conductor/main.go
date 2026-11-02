@@ -263,17 +263,22 @@ func usedConfigFlag(args []string) bool {
 	return false
 }
 
+// cliPath is every path flag's value: ~ and ~/ expand to the user's home, as
+// in every config path (config.ExpandHome). The shell leaves --flag=~/x and a
+// quoted "~/x" alone.
+func cliPath(v string) string { return config.ExpandHome(v) }
+
 func configPath(args []string) (string, []string) {
 	def := confdir.File()
 	rest := []string{}
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--config" && i+1 < len(args) {
-			def = args[i+1]
+			def = cliPath(args[i+1])
 			i++
 			continue
 		}
 		if args[i] == "--state-dir" && i+1 < len(args) {
-			config.SetStateDir(args[i+1])
+			config.SetStateDir(cliPath(args[i+1]))
 			i++
 			continue
 		}

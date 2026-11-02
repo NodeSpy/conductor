@@ -128,8 +128,8 @@ type DashboardBind struct {
 	// refused. With TLS, each non-IP hostname is a passkey relying party.
 	Hostnames []string `yaml:"hostnames"`
 	// CertFile and KeyFile are a PEM pair; both set = HTTPS, both empty = HTTP.
-	CertFile string `yaml:"cert_file,omitempty"`
-	KeyFile  string `yaml:"key_file,omitempty"`
+	CertFile string `yaml:"cert_file,omitempty" path:"local"`
+	KeyFile  string `yaml:"key_file,omitempty" path:"local"`
 	// AllowPlainHTTP acknowledges serving plain HTTP on a non-loopback address:
 	// the session cookie and everything else cross the network unencrypted.
 	AllowPlainHTTP bool `yaml:"allow_plain_http,omitempty"`
@@ -204,8 +204,8 @@ func (d DashboardTailscale) TLSOn() bool { return !d.TLS.Off }
 // (an absent block) is auto.
 type DashboardCert struct {
 	// CertFile and KeyFile are an explicit PEM pair; both empty means auto.
-	CertFile string
-	KeyFile  string
+	CertFile string `path:"local"`
+	KeyFile  string `path:"local"`
 }
 
 // Auto reports whether the cert comes from tailscaled's LocalAPI (the default:

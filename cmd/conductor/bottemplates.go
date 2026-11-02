@@ -458,7 +458,7 @@ func botTemplatesCmd(sub string, args []string) error {
 	}
 	switch sub {
 	case "templates":
-		out, err := templateList(cfgPath, strings.Join(append(pos, fl["search"]), " "), fl["registry"], fl["installed"] != "", false)
+		out, err := templateList(cfgPath, strings.Join(append(pos, fl["search"]), " "), cliPath(fl["registry"]), fl["installed"] != "", false)
 		if err != nil {
 			return err
 		}
@@ -471,7 +471,7 @@ func botTemplatesCmd(sub string, args []string) error {
 		if len(pos) != 1 {
 			return fmt.Errorf("usage: conductor bot template <ref> [--registry <dir|git url>]")
 		}
-		out, err := templateList(cfgPath, "", fl["registry"], false, true)
+		out, err := templateList(cfgPath, "", cliPath(fl["registry"]), false, true)
 		if err != nil {
 			return err
 		}
@@ -492,7 +492,7 @@ func botTemplatesCmd(sub string, args []string) error {
 			return fmt.Errorf("usage: conductor bot new <name> --from <pack instance>/<template> | <registry template> [--registry <dir|git url>] [--allow-unlisted] [--connector input=connector]… [--grant verb=tier]… [--proactive] [--write]\n  (a registry template's pack is installed in the same change)")
 		}
 		d := config.TemplateBotDraft{Name: pos[0], Connectors: multi("connector"), Grants: multi("grant"), Proactive: fl["proactive"] != ""}
-		plan, err := planNewBotOpts(cfgPath, d, fl["from"], newBotOpts{Registry: fl["registry"], AllowUnlisted: fl["allow-unlisted"] == "true"})
+		plan, err := planNewBotOpts(cfgPath, d, fl["from"], newBotOpts{Registry: cliPath(fl["registry"]), AllowUnlisted: fl["allow-unlisted"] == "true"})
 		if err != nil {
 			return err
 		}

@@ -27,7 +27,7 @@ type SandboxConfig struct {
 	Egress []string `yaml:"egress,omitempty"`
 	// StateDir holds the per-identity tool state (each identity's HOME).
 	// Default: <state dir>/agent-state.
-	StateDir string `yaml:"state_dir,omitempty"`
+	StateDir string `yaml:"state_dir,omitempty" path:"local"`
 	// Push configures conductor's pushes of agents' work (git.push and the
 	// end-of-step push).
 	Push *SandboxPush `yaml:"push,omitempty"`
@@ -44,7 +44,7 @@ type SandboxPush struct {
 	// SigningKey is the SSH key commits are signed with: a private key file,
 	// or a .pub whose private half is in the ssh-agent. Default: git's own
 	// user.signingkey when gpg.format is ssh.
-	SigningKey string `yaml:"signing_key,omitempty"`
+	SigningKey string `yaml:"signing_key,omitempty" path:"local"`
 	// Name / Email are the identity signed commits are committed as.
 	// Default: git's user.name / user.email.
 	Name  string `yaml:"name,omitempty"`
@@ -81,10 +81,10 @@ func (c *Config) validateSandbox() error {
 			return fmt.Errorf("config: sandbox.egress: empty pattern")
 		}
 	}
-	if s.StateDir != "" && !filepath.IsAbs(expandHome(s.StateDir)) {
+	if s.StateDir != "" && !filepath.IsAbs(s.StateDir) {
 		return fmt.Errorf("config: sandbox.state_dir %q must be an absolute path", s.StateDir)
 	}
-	if p := s.Push; p != nil && p.SigningKey != "" && !filepath.IsAbs(expandHome(p.SigningKey)) {
+	if p := s.Push; p != nil && p.SigningKey != "" && !filepath.IsAbs(p.SigningKey) {
 		return fmt.Errorf("config: sandbox.push.signing_key %q must be an absolute path", p.SigningKey)
 	}
 	return nil
@@ -93,7 +93,7 @@ func (c *Config) validateSandbox() error {
 // SandboxStateDir is the per-identity tool-state root.
 func (c *Config) SandboxStateDir() string {
 	if c.Sandbox != nil && c.Sandbox.StateDir != "" {
-		return expandHome(c.Sandbox.StateDir)
+		return c.Sandbox.StateDir
 	}
 	return filepath.Join(filepath.Dir(c.Store.StateFile), "agent-state")
 }

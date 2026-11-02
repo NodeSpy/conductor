@@ -70,7 +70,7 @@ type BotConfig struct {
 	// (relative to the config's directory). Exactly one, or neither (a
 	// generic charter is used).
 	Charter     string `yaml:"charter,omitempty"`
-	CharterFile string `yaml:"charter_file,omitempty"`
+	CharterFile string `yaml:"charter_file,omitempty" path:"local"`
 	// Scope and Escalation are short structured charter sections rendered
 	// with the charter; free text.
 	Scope      string `yaml:"scope,omitempty"`
@@ -80,12 +80,12 @@ type BotConfig struct {
 	Operators []string `yaml:"operators,omitempty"`
 	// MemoryRepo is the bot's memory git repo. Default:
 	// <state dir>/bots/<name>/memory. Created on first start.
-	MemoryRepo string `yaml:"memory_repo,omitempty"`
+	MemoryRepo string `yaml:"memory_repo,omitempty" path:"local"`
 	// SeedDir seeds a NEW memory repo: its knowledge/ and runbooks/ Markdown
 	// (a pack's, say) are copied into the first commit. Read once, at
 	// creation; an existing repo is never touched. Relative to the config's
 	// directory.
-	SeedDir string `yaml:"seed_dir,omitempty"`
+	SeedDir string `yaml:"seed_dir,omitempty" path:"local"`
 	// Home is the conversational session (paseo).
 	Home BotHome `yaml:"home,omitempty"`
 	// Worker is the background worker profile (cli runtime by default).
@@ -281,7 +281,7 @@ func (b ProactiveBudget) inherit(pool ProactiveBudget) ProactiveBudget {
 // ProactiveChecklist names the sweep checklist's source.
 type ProactiveChecklist struct {
 	Section string `yaml:"section,omitempty"`
-	File    string `yaml:"file,omitempty"`
+	File    string `yaml:"file,omitempty" path:"local"`
 }
 
 // Finding severities, least first.
@@ -704,7 +704,7 @@ const (
 func (c *Config) BotRepoDir(name string) string {
 	m := c.Bots[name]
 	if m.MemoryRepo != "" {
-		return expandHome(m.MemoryRepo)
+		return m.MemoryRepo
 	}
 	return filepath.Join(StateDir(), "bots", name, "memory")
 }
@@ -722,7 +722,7 @@ func (c *Config) BotSeedDir(name string) string {
 	if m.SeedDir == "" {
 		return ""
 	}
-	p := expandHome(m.SeedDir)
+	p := m.SeedDir
 	if !filepath.IsAbs(p) && c.baseDir != "" {
 		p = filepath.Join(c.baseDir, p)
 	}
@@ -738,7 +738,7 @@ func (c *Config) BotCharter(name string) (string, error) {
 	if m.CharterFile == "" {
 		return m.Charter, nil
 	}
-	p := expandHome(m.CharterFile)
+	p := m.CharterFile
 	if !filepath.IsAbs(p) && c.baseDir != "" {
 		p = filepath.Join(c.baseDir, p)
 	}
@@ -927,7 +927,7 @@ func (c *Config) BotChecklist(name string) (string, error) {
 	}
 	cl := m.Proactive.Checklist
 	if cl.File != "" {
-		p := expandHome(cl.File)
+		p := cl.File
 		if !filepath.IsAbs(p) && c.baseDir != "" {
 			p = filepath.Join(c.baseDir, p)
 		}

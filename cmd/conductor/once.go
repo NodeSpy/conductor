@@ -200,12 +200,14 @@ func parseOnceFlags(args []string) (onceOptions, []string, error) {
 		switch args[i] {
 		case "--event":
 			o.eventPath, err = need(i, "--event")
+			o.eventPath = cliPath(o.eventPath)
 			i++
 		case "--event-name":
 			o.eventName, err = need(i, "--event-name")
 			i++
 		case "--fixture":
 			o.fixturePath, err = need(i, "--fixture")
+			o.fixturePath = cliPath(o.fixturePath)
 			i++
 		case "--fail-on":
 			var v string

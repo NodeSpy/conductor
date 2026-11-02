@@ -181,7 +181,7 @@ func cmdMemoryExport(args []string) error {
 	}
 	defer done()
 	n, err := exportMemoryPack(mgr, exportOpts{
-		Scopes: scopes, Out: *out, Name: *name, Force: *force,
+		Scopes: scopes, Out: cliPath(*out), Name: *name, Force: *force,
 		Conductor: exportConductorConstraint(version), Secret: trackedSecretCheck(cfg),
 	})
 	if err != nil {
@@ -351,7 +351,7 @@ func cmdMemoryKey(stdin io.Reader, w io.Writer, args []string) error {
 		if *factsFrom == "-" {
 			raw, err = io.ReadAll(stdin)
 		} else {
-			raw, err = os.ReadFile(*factsFrom)
+			raw, err = os.ReadFile(cliPath(*factsFrom))
 		}
 		if err != nil {
 			return err

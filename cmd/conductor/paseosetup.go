@@ -89,14 +89,19 @@ func parsePaseoSetup(args []string) (paseoSetupOpts, error) {
 		switch a {
 		case "--home":
 			o.home, err = val()
+			o.home = cliPath(o.home)
 		case "--file":
 			o.file, err = val()
+			o.file = cliPath(o.file)
 		case "--conductor":
 			o.conductor, err = val()
+			o.conductor = cliPath(o.conductor)
 		case "--config":
 			o.config, err = val()
+			o.config = cliPath(o.config)
 		case "--socket":
 			o.socket, err = val()
+			o.socket = cliPath(o.socket)
 		case "--providers":
 			var v string
 			if v, err = val(); err == nil {

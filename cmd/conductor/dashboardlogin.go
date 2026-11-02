@@ -101,11 +101,11 @@ the page. It signs only dashboard sign-in and confirmation challenges.
 // configured public key (its private half in the ssh-agent). The returned
 // cleanup removes a temp public-key file.
 func signingKey(fl map[string]string, operator string) (string, func(), error) {
-	if k := fl["key"]; k != "" {
+	if k := cliPath(fl["key"]); k != "" {
 		return k, func() {}, nil
 	}
 	var cargs []string
-	if c := fl["config"]; c != "" {
+	if c := cliPath(fl["config"]); c != "" {
 		cargs = []string{"--config", c}
 	}
 	cfg, _, err := loadConfig(cargs)

@@ -596,7 +596,7 @@ func botOperator(sub string, args []string) error {
 			return err
 		}
 		a["id"] = pos[1]
-		if out := fl["out"]; out != "" {
+		if out := cliPath(fl["out"]); out != "" {
 			a["data"] = true
 			res, _, err := botControl(cfg, sub, a)
 			if err != nil {
@@ -762,7 +762,7 @@ func botRepoEdit(cfg *config.Config, repoKind string, pos []string, fl map[strin
 		case fl["from-file"] != "" && fl["text"] != "":
 			return fmt.Errorf("--from-file or --text, not both")
 		case fl["from-file"] != "":
-			b, err := os.ReadFile(fl["from-file"])
+			b, err := os.ReadFile(cliPath(fl["from-file"]))
 			if err != nil {
 				return err
 			}
@@ -919,6 +919,7 @@ func attachFiles(a map[string]any, list string) error {
 	}
 	var files []any
 	for _, p := range strings.Split(list, "\x00") {
+		p = cliPath(p)
 		st, err := os.Stat(p)
 		if err != nil {
 			return fmt.Errorf("--attach %s: %w", p, err)
@@ -967,7 +968,7 @@ func botDecide(cfg *config.Config, decision, name, id string, fl map[string]stri
 	// Approve with changes: --edit-file holds the final content (a
 	// knowledge promotion). The signature covers its hash.
 	edit := ""
-	if f := fl["edit-file"]; f != "" {
+	if f := cliPath(fl["edit-file"]); f != "" {
 		if decision != "approve" {
 			return fmt.Errorf("--edit-file goes with approve")
 		}
@@ -989,7 +990,7 @@ func botDecide(cfg *config.Config, decision, name, id string, fl map[string]stri
 	}
 	fmt.Printf("%s proposal %s (bot %s, case %v, tier %v):\n  %v\n  requested by %v (%v); status %v\n",
 		map[string]string{"approve": "Approving", "deny": "Denying"}[decision], id, name, dash(p["case_id"]), p["tier"], p["action"], dash(p["requester"]), p["requester_class"], p["status"])
-	key := fl["key"]
+	key := cliPath(fl["key"])
 	if key == "" {
 		// Sign through the ssh-agent with the configured public key.
 		f, err := os.CreateTemp("", "conductor-operator-*.pub")

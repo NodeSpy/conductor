@@ -207,9 +207,9 @@ type BotBrowser struct {
 // TeamKnowledge is a team's shared knowledge repo.
 type TeamKnowledge struct {
 	// Repo is the git repo (default <state dir>/teams/<name>/knowledge).
-	Repo string `yaml:"repo,omitempty"`
+	Repo string `yaml:"repo,omitempty" path:"local"`
 	// SeedDir seeds a NEW repo's first commit (knowledge/ and runbooks/).
-	SeedDir string `yaml:"seed_dir,omitempty"`
+	SeedDir string `yaml:"seed_dir,omitempty" path:"local"`
 	// Promotion is what a bot's `conductor bot team promote` does:
 	// "proposal" (the default — an operator of the team approves it) or
 	// "direct" (it lands as a commit at once, when the bot's request
@@ -340,7 +340,7 @@ func (c *Config) TeamKnowledgeDir(team string) string {
 		return ""
 	}
 	if k.Repo != "" {
-		return expandHome(k.Repo)
+		return k.Repo
 	}
 	return filepath.Join(StateDir(), "teams", team, "knowledge")
 }
@@ -351,7 +351,7 @@ func (c *Config) TeamSeedDir(team string) string {
 	if k == nil || k.SeedDir == "" {
 		return ""
 	}
-	p := expandHome(k.SeedDir)
+	p := k.SeedDir
 	if !filepath.IsAbs(p) && c.baseDir != "" {
 		p = filepath.Join(c.baseDir, p)
 	}
