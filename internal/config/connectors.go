@@ -14,7 +14,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -960,6 +962,25 @@ type Step struct {
 	// checkout-less mode does not apply. Validated after templating, at
 	// dispatch. Unset keeps today's behavior: the trigger's own target.
 	Repo string `yaml:"repo,omitempty"`
+	// CheckoutPR checks out a pull request OTHER than the trigger's own target
+	// — `checkout: checkout-pr` only. The case it exists for: a workflow
+	// called from a manual or scheduled run (whose own target is synthetic,
+	// "manual:<name>") that works on a PR named by its inputs:
+	//
+	//	checkout: checkout-pr
+	//	checkout_pr: { repo: "{{.inputs.repo}}", pr: "{{.inputs.pr}}" }
+	//
+	// Both fields are templated, rendered once at dispatch. Who may redirect a
+	// checkout this way is fixed (flow.applyCheckoutPR): a value the config
+	// wrote (no template) always; a templated one only on a run the operator
+	// started locally (`conductor run`) or a cron schedule started — never on
+	// an event, whose data its sender chose, nor on a remote invocation. An
+	// override naming the trigger's own PR changes nothing and is always
+	// fine, so one step serves both its event-driven and its manual callers.
+	// It selects the working copy only: forge authority stays on the
+	// trigger's own target. Under `checkout: none` (an operator's override of
+	// a pack step) it is inert. An agent-authored step may not set it.
+	CheckoutPR *CheckoutPR `yaml:"checkout_pr,omitempty"`
 	// Images is a templated list of local file paths attached to this agent
 	// launch, one `paseo run --image <path>` per item. An item that is a sole
 	// reference to a list ("{{.dl.images}}") expands to every element. Only
@@ -2066,6 +2087,9 @@ func validateStep(w string, s Step, c *Config) error {
 	if err := validateDetach(w, s); err != nil {
 		return err
 	}
+	if err := validateCheckoutPR(w, s); err != nil {
+		return err
+	}
 	if s.Decide != nil {
 		if err := validateDecideStep(w, s, c); err != nil {
 			return err
@@ -2119,6 +2143,64 @@ func validateStep(w string, s Step, c *Config) error {
 		return err
 	}
 	return validateHooks(w, s.Hooks)
+}
+
+// CheckoutPR is a step's `checkout_pr:` — see Step.CheckoutPR.
+type CheckoutPR struct {
+	Repo string `yaml:"repo"` // "owner/name"
+	PR   string `yaml:"pr"`   // the PR number (templated, so a string)
+}
+
+// checkoutPRRepoRe is the repo form checkout_pr takes: "owner/name" — the
+// checkout's clone URL is derived from it, so no URL forms.
+var checkoutPRRepoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+// ParseCheckoutPR validates a RENDERED checkout_pr: an "owner/name" repo
+// (no ".." and no leading dash or dot) and a positive PR number.
+func ParseCheckoutPR(repo, pr string) (string, int, error) {
+	repo, pr = strings.TrimSpace(repo), strings.TrimSpace(pr)
+	if !checkoutPRRepoRe.MatchString(repo) || strings.Contains(repo, "..") || strings.HasPrefix(repo, ".") || strings.HasPrefix(repo, "-") {
+		return "", 0, fmt.Errorf("checkout_pr.repo %q is not owner/name", repo)
+	}
+	n, err := strconv.Atoi(pr)
+	if err != nil || n <= 0 {
+		return "", 0, fmt.Errorf("checkout_pr.pr %q is not a PR number", pr)
+	}
+	return repo, n, nil
+}
+
+// validateCheckoutPR checks a step's checkout_pr at load: an agent step with
+// `checkout: checkout-pr`, both fields set, and any untemplated field valid.
+func validateCheckoutPR(w string, s Step) error {
+	c := s.CheckoutPR
+	if c == nil {
+		return nil
+	}
+	if s.Form() != "agent" {
+		return fmt.Errorf("config: %s: `checkout_pr:` applies to agent steps only", w)
+	}
+	// checkout: none checks nothing out, so a checkout_pr under it is inert —
+	// what an operator's `checkout: none` override of a pack's step means
+	if s.Checkout != "checkout-pr" && s.Checkout != "none" {
+		return fmt.Errorf("config: %s: `checkout_pr:` needs `checkout: checkout-pr` (got %q)", w, s.Checkout)
+	}
+	if s.Repo != "" {
+		return fmt.Errorf("config: %s: `checkout_pr:` and `repo:` both name the checkout — use checkout_pr.repo", w)
+	}
+	if strings.TrimSpace(c.Repo) == "" || strings.TrimSpace(c.PR) == "" {
+		return fmt.Errorf("config: %s: `checkout_pr:` needs both repo and pr", w)
+	}
+	repo, pr := c.Repo, c.PR
+	if strings.Contains(repo, "{{") {
+		repo = "o/r"
+	}
+	if strings.Contains(pr, "{{") {
+		pr = "1"
+	}
+	if _, _, err := ParseCheckoutPR(repo, pr); err != nil {
+		return fmt.Errorf("config: %s: %w", w, err)
+	}
+	return nil
 }
 
 // validateDetach enforces detach:'s isolation from every other hand-off/

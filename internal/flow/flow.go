@@ -1842,6 +1842,10 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if err := renderLaunchFields(ctx, &step, data); err != nil {
 		return nil, "", err
 	}
+	t, err := applyCheckoutPR(ctx, t, step, data)
+	if err != nil {
+		return nil, "", err
+	}
 	// A step's own `checkout:` always wins; absent one, fall back to the
 	// TRIGGER's action checkout. This is what makes a source's
 	// ForceNoCheckout (every synthetic-target integration forces its

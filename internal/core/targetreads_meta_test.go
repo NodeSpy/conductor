@@ -71,6 +71,11 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	},
 
 	// ---- Display, logs, audit rows, notifications.
+	"internal/flow/checkout_pr.go": {
+		{"applyCheckoutPR", "whether a step's checkout_pr names the dispatch's own PR: when it does, the checkout is left exactly as it was " +
+			"(a sender-chosen target is checked out as it always was); when it doesn't, who started the run (Operator, the cron source), " +
+			"never the target, decides whether the redirect is allowed"},
+	},
 	"internal/flow/decide.go": {
 		{"execDecide", "the decide_escalated audit row records which target the escalation ran for — forged target included, which is what an operator reading the audit needs"},
 		{"auditDecide", "an audit row per decision attempt; it records, it authorizes nothing"},

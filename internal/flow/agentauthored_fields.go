@@ -51,6 +51,10 @@ func forbiddenAgentAuthoredField(s *config.Step) (field, why string) {
 		// would be handing itself a workspace conductor can never reclaim or
 		// even see again.
 		return "detach:", "a detached, unowned workspace is the operator's to grant, never the agent's to take"
+	case s.CheckoutPR != nil:
+		// checkout_pr: points the checkout at another PR — an agent that could
+		// set it would choose what conductor clones and lands it in.
+		return "checkout_pr:", "which code is checked out is the operator's to configure"
 	case s.Skill != nil:
 		// The one that motivated this file. `skill:` is a CAPABILITY GRANT:
 		// it mints a broker claim/session token naming the verbs the agent
@@ -99,4 +103,5 @@ func sanitizeAgentAuthoredStep(s *config.Step) {
 	s.Skill = nil
 	s.Isolation = nil
 	s.Detach = false
+	s.CheckoutPR = nil
 }
