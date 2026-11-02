@@ -205,7 +205,26 @@ var seedFilter = map[string]func([]byte) ([]byte, error){
 		delete(m, "projects")
 		return json.Marshal(m)
 	},
+	// ~/.claude/settings.json is seeded without the operator's plugins: the
+	// identity home has no marketplace checkout, so an enabled plugin or a
+	// declared marketplace makes every launch try to clone it from GitHub,
+	// which the egress proxy denies. A headless agent uses none of them.
+	// A file that is not JSON is not seeded (claude-code skips it too).
+	".claude/settings.json": func(b []byte) ([]byte, error) {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(b, &m); err != nil {
+			return nil, nil
+		}
+		for _, k := range claudePluginSettings {
+			delete(m, k)
+		}
+		return json.Marshal(m)
+	},
 }
+
+// claudePluginSettings are the settings.json keys that enable, configure or
+// fetch claude-code plugins and their marketplaces.
+var claudePluginSettings = []string{"enabledPlugins", "extraKnownMarketplaces", "pluginConfigs", "appendPlugins", "prependPlugins"}
 
 // seedFile copies src to dst (absent src: nothing), through filter.
 func seedFile(src, dst string, filter func([]byte) ([]byte, error)) error {
@@ -226,8 +245,8 @@ func seedFile(src, dst string, filter func([]byte) ([]byte, error)) error {
 		return err
 	}
 	if filter != nil {
-		if b, err = filter(b); err != nil {
-			return err
+		if b, err = filter(b); err != nil || b == nil {
+			return err // nil: nothing to seed
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
