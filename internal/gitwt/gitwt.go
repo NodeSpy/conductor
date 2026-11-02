@@ -331,9 +331,64 @@ func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.R
 	if branch == "" {
 		p.logf("gitwt: %s: %s, so its head commit %s is checked out detached", checkoutTarget(req, ref), detachedReason(at), shortSHA(sha))
 	}
+	p.fillMergeBlobs(ctx, base, sha, req.Trigger.Target.BaseRef)
 	// Each dispatch owns its clone, so a second dispatch on the same PR
 	// gets its own copy of the branch — nothing to take detached.
 	return p.newClone(ctx, base, wt, branch, sha, true)
+}
+
+// maxMergeFillCommits bounds how many of a PR's own commits fillMergeBlobs
+// provisions trees for (a rebase replays each one).
+const maxMergeFillCommits = 200
+
+// fillMergeBlobs makes a partial base clone hold every blob merging or
+// rebasing the PR head with its base branch needs: the trees of the base
+// branch's tip, of each merge base, and of the PR's own commits. The agent
+// runs sandboxed with no route to the origin, so its git cannot lazily fetch
+// a missing blob — a merge-conflict fixer would otherwise be blocked on the
+// base branch's files. Conductor fetches them here, once, into the shared
+// store every dispatch clone borrows from. A failure is logged, not fatal:
+// most steps never merge.
+func (p *Provisioner) fillMergeBlobs(ctx context.Context, base, head, baseRef string) {
+	if baseRef == "" || !safeBranch(baseRef) {
+		return
+	}
+	if pr, _ := p.git(ctx, base, "config", "--get", "remote.origin.promisor"); strings.TrimSpace(pr) != "true" {
+		return // a full clone already has every blob
+	}
+	tip, err := p.git(ctx, base, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+baseRef+"^{commit}")
+	if err != nil {
+		return // no such base branch on the origin: nothing to merge with
+	}
+	tip = strings.TrimSpace(tip)
+	commits := []string{tip}
+	mbs, _ := p.git(ctx, base, "merge-base", "--all", head, tip)
+	commits = append(commits, strings.Fields(mbs)...)
+	own, _ := p.git(ctx, base, "rev-list", fmt.Sprintf("--max-count=%d", maxMergeFillCommits), head, "^"+tip)
+	commits = append(commits, strings.Fields(own)...)
+	// --missing=print never fetches: it names what this clone lacks.
+	objs, err := p.git(ctx, base, append([]string{"rev-list", "--objects", "--no-walk", "--missing=print"}, commits...)...)
+	if err != nil {
+		p.logf("gitwt: list the blobs merging with %s needs: %v", baseRef, err)
+		return
+	}
+	var want strings.Builder
+	n := 0
+	for _, line := range strings.Split(objs, "\n") {
+		if oid, ok := strings.CutPrefix(strings.TrimSpace(line), "?"); ok && oid != "" {
+			want.WriteString(oid + "\n")
+			n++
+		}
+	}
+	if n == 0 {
+		return
+	}
+	// Exactly how git's own lazy fetch asks a promisor for named objects.
+	if _, err := p.gitIn(ctx, base, want.String(), "-c", "fetch.negotiationAlgorithm=noop",
+		"fetch", "-q", "origin", "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no",
+		"--filter=blob:none", "--stdin"); err != nil {
+		p.logf("gitwt: fetch the %d blob(s) merging with %s needs: %v — a merge in the sandbox will be missing them", n, baseRef, err)
+	}
 }
 
 // prFetchRefPrefix namespaces addPR's per-dispatch fetch refs, out of the way
