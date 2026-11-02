@@ -176,6 +176,9 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	"internal/flow/scoperender.go": {
 		{"scopeRenderData", "derives owner/name/number only when OwnRepo() is non-empty"},
 	},
+	"internal/memory/scopekey.go": {
+		{"ScopeFacts", "reads the target's fields only inside the OwnRepo() != \"\" branch; a sender-chosen target leaves every one blank, so no key renders from it"},
+	},
 	"internal/flow/handles.go": {
 		{"agentAuthoredNamespace", "reads Target.Number only inside the OwnRepo() != \"\" branch"},
 	},

@@ -65,6 +65,9 @@ type SkillIdentity struct {
 	Bot     string `json:"bot,omitempty"`
 	BotRole string `json:"bot_role,omitempty"`
 	CaseID  string `json:"case_id,omitempty"`
+	// MemoryScopes are the step's memory scope lists rendered at dispatch
+	// (skill.Identity.MemoryScopes); see MemoryGrantFrom.
+	MemoryScopes map[string][]memory.ScopePattern `json:"-"`
 }
 
 // BotGate is the bots' autonomy gate (internal/bot). RunSkillVerb
@@ -390,6 +393,13 @@ func validateVerbScopes(where string, sk *config.SkillPolicy, reg *connector.Reg
 			if !ok || in.Decl == nil {
 				continue
 			}
+			// Memory's scope is its own dimension, enforced by memory.CheckOp
+			// rather than by a Field.Scope tag (memorygrant.go), so a memory
+			// verb offers it here without declaring it.
+			if in.Decl.Type == "memory" {
+				scopedSomewhere[memoryScopeOption] = true
+				offered = append(offered, memoryScopeOption)
+			}
 			vd, ok := in.Decl.FlowVerb(verb)
 			if !ok {
 				continue
@@ -678,6 +688,14 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	in, ok := r.Conns.Get(connName)
 	if !ok {
 		return deny(fmt.Sprintf("unknown connector %q", connName))
+	}
+	// A memory verb carries the step's own scope list, when its grant names
+	// one, into memory.CheckOp — where every memory scope rule is decided
+	// (memorygrant.go). Re-stamped whole so the caller's own-repo rule is
+	// unchanged.
+	if in.Decl != nil && in.Decl.Type == "memory" {
+		caller := memory.NewAgentCaller(t.Target.Repo, t.TargetTrusted).WithGrant(MemoryGrantFrom(id.Scopes, id.MemoryScopes, uses))
+		ctx = memory.WithCaller(ctx, caller)
 	}
 	if options == nil {
 		options = map[string]any{}

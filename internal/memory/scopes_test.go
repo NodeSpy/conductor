@@ -114,22 +114,6 @@ func TestLegacyStepScopeAliasIsRecalled(t *testing.T) {
 	}
 }
 
-func TestExpandScopeRefs(t *testing.T) {
-	got := ExpandScopeRefs([]string{"${repo}", "literal", "${workflow}", "${step}"}, "acme/api", "nightly", "review")
-	want := []string{"acme/api", "literal", "nightly", "review"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("expanded = %v, want %v", got, want)
-	}
-	// A placeholder whose referent is empty drops rather than becoming "".
-	got = ExpandScopeRefs([]string{"${repo}", "literal"}, "", "", "")
-	if !reflect.DeepEqual(got, []string{"literal"}) {
-		t.Fatalf("unresolvable placeholder should drop, got %v", got)
-	}
-	if ExpandScopeRefs(nil, "r", "w", "s") != nil {
-		t.Fatal("no scopes means no expansion")
-	}
-}
-
 // A filter's explicit scopes are used verbatim — the context keys are only
 // the DEFAULT.
 func TestFilterScopesOverrideContextKeys(t *testing.T) {

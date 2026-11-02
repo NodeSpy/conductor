@@ -246,7 +246,7 @@ steps:
 `)
 	rig2 := newTestRunner(t, cfg, reg)
 	var gotName string
-	rig2.Runner.Agents.Memory = func(name string, p config.Step, tr core.Trigger, wf string) string {
+	rig2.Runner.Agents.Memory = func(name string, p config.Step, tr core.Trigger, wf string, _ map[string]any) string {
 		gotName = name
 		return "\n\n---\nShared memory: remembered fact"
 	}

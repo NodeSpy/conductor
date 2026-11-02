@@ -72,8 +72,9 @@ type AgentServices struct {
 	// Memory renders the shared-memory prompt section for an opted-in step
 	// ("" otherwise) — appended through the same path Guidance uses. The
 	// engine supplies the run's opaque context keys; see
-	// docs/design/agents-removal.md §2.
-	Memory func(identity string, s config.Step, t core.Trigger, workflow string) string
+	// docs/design/agents-removal.md §2. facts are what the step's scope keys
+	// render over (Runner.MemoryFacts).
+	Memory func(identity string, s config.Step, t core.Trigger, workflow string, facts map[string]any) string
 	// ResolveModel picks the model this step runs (the design §2.3 ladder)
 	// AND the runtime that offers it. A fleet can span runtimes, so the two
 	// are one decision: the second result is the runtime to dispatch on,
@@ -1160,9 +1161,19 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	// launch later in the run (renderLaunchFields).
 	recordRunStaging(ctx, in)
 	merged := connector.MergeOptions(in.DefaultOptions, step.Options)
+	scopeKey, keyed, err := r.memoryVerbScope(ctx, in, id, merged, t, data)
+	if err != nil {
+		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
+	}
+	if keyed {
+		merged = withoutOption(merged, memoryScopeOption)
+	}
 	rendered, err := renderOptions(merged, data)
 	if err != nil {
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
+	}
+	if keyed {
+		rendered[memoryScopeOption] = scopeKey
 	}
 	if login, skip := r.skipBotReply(ctx, in, verb, t, rendered); skip {
 		r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
@@ -1530,7 +1541,7 @@ func (r *Runner) execCode(ctx context.Context, t core.Trigger, step config.Step,
 	// rather than re-deriving it (see code.Spec.Plugin).
 	spec := code.Spec{Run: engine, Plugin: class == config.EnginePlugin,
 		Command: command, Code: step.Code, Args: args, Env: env, WorkDir: workdir,
-		DataGuard: r.planDataGuard(ctx, t), Isolation: step.Isolation,
+		DataGuard: r.planDataGuard(ctx, t), Redact: r.secretRedactor(), Isolation: step.Isolation,
 		IsolationDefaulted: step.IsolationDefaulted}
 	if target, terr := r.hostTarget(step); terr != nil {
 		return nil, "", terr
@@ -1902,6 +1913,11 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		}
 		creds = c
 	}
+	// The facts this step's memory scope keys render over — its prompt
+	// data, minus secrets, target facts from its own target (memory.ScopeFacts).
+	// One set for the recall, the session's grant and the output contract.
+	_, wfScope := budgetFrom(ctx)
+	mfacts := r.MemoryFacts(data, t, wfScope, identity)
 	if act.Prompt != "" && step.DecisionLaunch == nil {
 		act.Prompt += creds.Guidance
 		if r.Agents.Guidance != nil {
@@ -1910,8 +1926,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		// Opt-in shared memory rides the same append path as guidance; a step
 		// without memory: gets nothing (no token cost).
 		if r.Agents.Memory != nil {
-			_, wfScope := budgetFrom(ctx)
-			act.Prompt += r.Agents.Memory(identity, step, t, wfScope)
+			act.Prompt += r.Agents.Memory(identity, step, t, wfScope, mfacts)
 		}
 		// A bot author can't read pleasantries: under decline_only (the
 		// default) the agent fixes silently and replies only to decline.
@@ -1974,6 +1989,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		// this dispatch's tool calls), else a fresh random one, so the
 		// anchor exists even for an unrecorded run.
 		DispatchID: r.dispatchID(ctx, id),
+		ScopeFacts: mfacts,
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
 	// Consumed on every outcome so a mark never outlives its dispatch.
@@ -2046,7 +2062,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		return outputs, ref.Output, nil
 	}
 	if !shadow {
-		r.harvestMemory(ctx, t, identity, step, ref.Output)
+		r.harvestMemory(ctx, t, identity, step, ref.Output, mfacts)
 	}
 	outputs := extractOutputs(ref.Output)
 	outputs["agent_id"] = ref.AgentID
@@ -2131,7 +2147,7 @@ var ErrNothingToPush = errors.New("nothing to push")
 // output: a `remember:` block (fenced or a JSON key) persists with the run's
 // provenance plus the agent's name. Best-effort — a malformed block is
 // logged and audited, never a step failure.
-func (r *Runner) harvestMemory(ctx context.Context, t core.Trigger, identity string, step config.Step, output string) {
+func (r *Runner) harvestMemory(ctx context.Context, t core.Trigger, identity string, step config.Step, output string, facts map[string]any) {
 	m := memory.Active()
 	if m == nil || strings.TrimSpace(output) == "" {
 		return
@@ -2147,7 +2163,10 @@ func (r *Runner) harvestMemory(ctx context.Context, t core.Trigger, identity str
 	agent := identity
 	src := memory.SourceFrom(ctx)
 	src.Step = identity
-	entries, err := m.HarvestOutput(output, src)
+	// A step whose skill grant lists the scopes memory.remember may write is
+	// held to that list here too: the output contract is the same write by
+	// another route (memorygrant.go).
+	entries, err := m.HarvestOutputGranted(output, src, StepMemoryGrant(step.Skill, "remember", facts))
 	if err != nil {
 		r.Log("%s memory output contract: %v", flowTag(t), err)
 		r.audit(map[string]any{"event": "memory_remember", "via": "output", "outcome": "failed",
@@ -2381,11 +2400,22 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 			continue
 		}
 		merged := connector.MergeOptions(in.DefaultOptions, h.Options)
-		rendered, err := renderOptions(merged, data)
+		// A memory hook's scope: is a scope key, like a memory verb step's.
+		scopeKey, keyed, err := r.memoryVerbScope(ctx, in, "", merged, t, data)
+		if keyed {
+			merged = withoutOption(merged, memoryScopeOption)
+		}
+		var rendered map[string]any
+		if err == nil {
+			rendered, err = renderOptions(merged, data)
+		}
 		if err != nil {
 			r.Log("%s %s hook[%d] render: %v", flowTag(t), where, i, err)
 			r.auditVerb(t, connName, verb, nil, "hook_render_failed", err)
 			continue
+		}
+		if keyed {
+			rendered[memoryScopeOption] = scopeKey
 		}
 		if login, skip := r.skipBotReply(ctx, in, verb, t, rendered); skip {
 			r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)

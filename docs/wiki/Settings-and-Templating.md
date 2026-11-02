@@ -112,6 +112,14 @@ Entries with no `{{` are not rendered at all. A rendered value is matched
 **literally**: your glob intent belongs in the pattern you wrote (`acme/*`),
 not in a value the event supplied.
 
+> **Memory scope keys are the exception.** A memory verb's `scope:` grant and
+> a step's memory keys render over the step's full facts — inputs, event
+> context, earlier outputs — because which key a deployment files memory
+> under is its own choice (a team, an org, a label). They keep the rest of
+> this section's rules (no secrets, no reads, fail-closed, literal match) and
+> the warning is yours to heed: an author-chosen fact in a write grant lets
+> the author choose the key. See [[Memory#scope-keys-are-templates]].
+
 ### A webhook target is not a trust anchor
 
 If a webhook source builds its `repo:` from the request body

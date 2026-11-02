@@ -122,7 +122,7 @@ func TestPromptRecallUsesTheTrustedRepo(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			trig := core.Trigger{Source: "webhook", Instance: "hooks", Kind: "delivery",
 				TargetTrusted: tc.trusted, Target: core.Target{Repo: "victim/repo", Number: 1}}
-			got := e.memoryPrompt("step", step, trig, "wf")
+			got := e.memoryPrompt("step", step, trig, "wf", nil)
 			if strings.Contains(got, "the victim's note") != tc.wantIn {
 				t.Fatalf("%s: recall=%q", tc.name, got)
 			}

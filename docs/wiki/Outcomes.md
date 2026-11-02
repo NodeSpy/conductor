@@ -33,10 +33,28 @@ engagement consumed, no workflow rot.
 
 ## Where it feeds back
 
-- **Memory (§9)** — each terminal outcome writes a repo-scoped note
-  (`outcome: o/r#12 merged (agent fixer, workflow gh.pr/nightly)`, tags
-  `outcome`, `<outcome>`), so recall and memory-injected prompts see what
-  worked. Only when a `memory:` section is configured.
+- **Memory (§9)** — each terminal outcome writes a note
+  (`outcome: o/r#12 merged (step fixer, workflow gh.pr/nightly)`, tags
+  `outcome`, `<outcome>`) under the scope **`outcome:<owner/repo>`**. Only
+  when a `memory:` section is configured.
+
+  The scope is deliberately *not* the bare repo key. The repo key is in
+  every opted-in step's default recall set, recall is newest-first under a
+  limit, and a busy repo merges a PR a day: its outcome notes buried every
+  learned entry for that repo, and the shared set with it. Nothing in
+  conductor reads these notes back from memory (reports and health use the
+  audit rows), so they sit beside the repo's memory and are recalled only by a
+  step that asks — `memory: { extra_scopes: ["outcome:{{.repo}}"] }`.
+
+  Notes written by earlier versions are still in the repo scope. Move them
+  with the operator command, dry run first:
+
+  ```sh
+  conductor memory rescope --tag outcome --to 'outcome:{scope}'          # prints what would move
+  conductor memory rescope --tag outcome --to 'outcome:{scope}' --apply  # moves them
+  ```
+
+  See [[Memory#operator-commands]].
 - **Workflow-promotion health (§11)** — an engagement inside a **saved**
   workflow feeds its delivery counters: merged bumps `deliveries`, a revert
   bumps `reverts`, and a workflow with ≥3 deliveries and more than half

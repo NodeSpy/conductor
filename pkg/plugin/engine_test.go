@@ -412,3 +412,49 @@ func TestStdinCapIsPerMessageNotCumulative(t *testing.T) {
 		lr.reset()
 	}
 }
+
+// HostMemory.Key is one host.memory "key" round trip — (template, facts) —
+// and reads the {key, ok, reason} answer back typed.
+func TestHostMemoryKey(t *testing.T) {
+	var seen HostRequest
+	h := EngineFunc(
+		func() Decl { return Decl{Kind: KindStep, ABI: EngineABI, Type: "acme-engine"} },
+		func(ctx context.Context, req RunRequest, host *Host) (RunResult, error) {
+			key, ok, reason, err := host.Memory().Key(ctx, "team:{{.team}}", map[string]any{"team": "payments"})
+			if err != nil {
+				return RunResult{}, err
+			}
+			_, dropOK, dropReason, err := host.Memory().Key(ctx, "team:{{.none}}", nil)
+			if err != nil {
+				return RunResult{}, err
+			}
+			return RunResult{Outputs: map[string]any{"key": key, "ok": ok, "reason": reason, "drop_ok": dropOK, "drop_reason": dropReason}}, nil
+		})
+	d := newFakeDaemon(t, h, func(method string, req HostRequest) HostResult {
+		if method != MethodHostMemory || req.Op != "key" {
+			return HostResult{Error: "wrong call " + method + " " + req.Op}
+		}
+		if facts, _ := req.Args[1].(map[string]any); facts["team"] == "payments" {
+			seen = req
+			return HostResult{OK: true, Value: map[string]any{"key": "team:payments", "ok": true, "reason": ""}}
+		}
+		return HostResult{OK: true, Value: map[string]any{"key": "", "ok": false, "reason": "no value"}}
+	})
+	resp := d.call("1", MethodRun, RunRequest{RunID: "tok"})
+	if resp.Error != nil {
+		t.Fatalf("plugin.run errored: %+v", resp.Error)
+	}
+	var res RunResult
+	if err := json.Unmarshal(resp.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"key": "team:payments", "ok": true, "reason": "", "drop_ok": false, "drop_reason": "no value"}
+	for k, v := range want {
+		if res.Outputs[k] != v {
+			t.Errorf("%s = %#v, want %#v", k, res.Outputs[k], v)
+		}
+	}
+	if seen.Kind != HostKindMemory || seen.Resource != "" || seen.Args[0] != "team:{{.team}}" {
+		t.Errorf("host call = %+v", seen)
+	}
+}

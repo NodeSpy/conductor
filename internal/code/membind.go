@@ -16,7 +16,14 @@ import (
 // plainly. Code-path writes carry no run provenance, so relative scopes
 // ("repo"/"agent") need their explicit forms here (repo:<owner/repo>,
 // agent:<name>).
-func memInvoke(guard DataGuard, op string, args []any) (any, error) {
+//
+// `key` is the exception to all of that: it renders a scope key and touches
+// no memory, so it needs no memory: section and passes no gate (memKey).
+// redact is the run's tracked-secret redactor, for the facts key renders.
+func memInvoke(guard DataGuard, redact func(any) any, op string, args []any) (any, error) {
+	if op == "key" {
+		return memKey(redact, args)
+	}
 	m := memory.Active()
 	if m == nil {
 		return nil, fmt.Errorf("memory: not configured — add a top-level memory: section")
@@ -150,7 +157,43 @@ func asAnyList(v any) []any {
 
 // memOps is the ctx.memory method set the data plane exposes — the ops
 // CtxHandler will dispatch, named in the reference client's usage errors.
-var memOps = []string{"remember", "recall", "forget", "list"}
+var memOps = []string{"remember", "recall", "forget", "list", "key"}
+
+// memKey is ctx.memory.key(template, facts?): core's scope-key renderer
+// (memory.RenderScopeKey) over facts the step supplies, so a pack that
+// builds a key in code builds exactly the key a selector or grant with the
+// same template would — same grammar, same refusals, same fail-closed probe.
+//
+// The answer is {key, ok, reason}. A key that does not apply — it reads a
+// fact with no value, uses a construct a key may not, or carries a control
+// character — is ok:false with the reason and key "", not an error: that is
+// an answer about the template, and the step decides what to do with it.
+// Only a malformed CALL (no template, facts not an object) errors.
+//
+// It reads and writes no memory, so it works without a memory: section and
+// is not put to the DataGuard (there is no scope it touches). The facts go
+// through memory.CallerFacts: JSON numbers judged as a run's ints, secrets
+// and vaults dropped, tracked secret values redacted.
+func memKey(redact func(any) any, args []any) (any, error) {
+	if len(args) < 1 || len(args) > 2 {
+		return nil, fmt.Errorf("memory.key: want (template, facts?)")
+	}
+	tmpl, ok := args[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("memory.key: template must be a string, got %T", args[0])
+	}
+	var facts map[string]any
+	if len(args) == 2 && args[1] != nil {
+		if facts, ok = args[1].(map[string]any); !ok {
+			return nil, fmt.Errorf("memory.key: facts must be an object, got %T", args[1])
+		}
+	}
+	key, err := memory.RenderScopeKey(tmpl, memory.CallerFacts(facts, redact))
+	if err != nil {
+		return map[string]any{"key": "", "ok": false, "reason": err.Error()}, nil
+	}
+	return map[string]any{"key": key, "ok": true, "reason": ""}, nil
+}
 
 // memScopeOf resolves which scope an op touches, so one gate can authorize
 // them all. `forget` names an id rather than a scope, so its scope is the

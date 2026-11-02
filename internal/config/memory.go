@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/NodeSpy/conductor/internal/memory"
 	"gopkg.in/yaml.v3"
 )
 
@@ -68,23 +69,32 @@ func (c *Config) validateMemory() error {
 //
 //	memory: true
 //	memory: { scopes: ["", "acme/api"], tags: [ci], limit: 10 }
-//	memory: { scopes: ["${step}", "${workflow}"], tags: [ci] }
+//	memory: { scopes: ["{{.step}}", "{{.workflow}}"], tags: [ci] }
+//	memory: { extra_scopes: ["team:{{.inputs.team}}", "standard:{{.owner}}"] }
+//
+// `scopes:` (or `scope:`) REPLACES the defaults; `extra_scopes:` is appended
+// to whichever applies — the defaults, or the explicit list — so a step can
+// add keys without restating the shared set and the run's context keys.
 //
 // SCOPE KEYS ARE OPAQUE (docs/design/agents-removal.md §2): the memory core
 // never interprets them, and there are no privileged `repo`/`agent` types.
-// The `${repo}` / `${workflow}` / `${step}` placeholders are a convenience
-// the ENGINE expands to the run's context keys before recall — they are
-// sugar for strings the operator could equally write out.
+// A key is a TEMPLATE over the step's facts (memory.RenderScopeKey: inputs,
+// the event's facts, workflow, step, …), rendered per run by the engine;
+// `${repo}` / `${workflow}` / `${step}` are aliases of `{{.repo}}` /
+// `{{.workflow}}` / `{{.step}}`. A key that reads a fact the run has no
+// value for is dropped for that run.
 //
 // Absent (nil) or false → no injection, no token cost.
 type MemorySelector struct {
-	Enabled bool
-	Scopes  []string
-	Tags    []string
-	Limit   int
+	Enabled     bool
+	Scopes      []string
+	ExtraScopes []string
+	Tags        []string
+	Limit       int
 }
 
-// UnmarshalYAML accepts a bool or the filter map.
+// UnmarshalYAML accepts a bool or the filter map. The map is on unless it
+// says `enabled: false`.
 func (s *MemorySelector) UnmarshalYAML(n *yaml.Node) error {
 	var b bool
 	if err := n.Decode(&b); err == nil {
@@ -92,13 +102,18 @@ func (s *MemorySelector) UnmarshalYAML(n *yaml.Node) error {
 		return nil
 	}
 	var body struct {
-		Scope  string   `yaml:"scope"`
-		Scopes []string `yaml:"scopes"`
-		Tags   []string `yaml:"tags"`
-		Limit  int      `yaml:"limit"`
+		// Enabled is the round-trip key (see MarshalYAML): absent means on,
+		// as a map always has; `enabled: false` keeps a disabled selector
+		// disabled through a marshal → decode.
+		Enabled     *bool    `yaml:"enabled"`
+		Scope       string   `yaml:"scope"`
+		Scopes      []string `yaml:"scopes"`
+		ExtraScopes []string `yaml:"extra_scopes"`
+		Tags        []string `yaml:"tags"`
+		Limit       int      `yaml:"limit"`
 	}
 	if err := n.Decode(&body); err != nil {
-		return fmt.Errorf("memory: want true/false or { scopes, tags, limit }: %w", err)
+		return fmt.Errorf("memory: want true/false or { scopes, extra_scopes, tags, limit }: %w", err)
 	}
 	scopes := body.Scopes
 	if body.Scope != "" {
@@ -112,8 +127,54 @@ func (s *MemorySelector) UnmarshalYAML(n *yaml.Node) error {
 			return fmt.Errorf("memory: scopes[%d] is blank — omit it for the shared set, or name a scope key", i)
 		}
 	}
-	*s = MemorySelector{Enabled: true, Scopes: scopes, Tags: body.Tags, Limit: body.Limit}
+	for i, sc := range body.ExtraScopes {
+		if strings.TrimSpace(sc) == "" {
+			return fmt.Errorf("memory: extra_scopes[%d] is blank — name a scope key (the shared set is already in the defaults)", i)
+		}
+	}
+	// Keys are templates over the step's facts (memory.RenderScopeKey): a
+	// malformed one fails here, not by silently recalling nothing.
+	for _, sc := range append(append([]string(nil), scopes...), body.ExtraScopes...) {
+		if err := memory.CheckScopeKey(sc); err != nil {
+			return fmt.Errorf("memory: %w", err)
+		}
+	}
+	enabled := body.Enabled == nil || *body.Enabled
+	*s = MemorySelector{Enabled: enabled, Scopes: scopes, ExtraScopes: body.ExtraScopes, Tags: body.Tags, Limit: body.Limit}
 	return nil
+}
+
+// MarshalYAML writes the selector back in a shape UnmarshalYAML reads the
+// same way, so a step survives a marshal → decode round trip — which every
+// pack step override takes (applyStepOverride). Before it existed the struct
+// marshaled as a map of its Go fields, and decoding ANY map turned the
+// selector on: a pack step shipped with `memory: false` came back enabled
+// after an unrelated override.
+//
+// Disabled is the bool `false`. That is also what lets an override that
+// turns memory ON work: the consumer's `memory: { extra_scopes: […] }`
+// replaces a scalar outright, where a map carrying `enabled: false` would
+// have been deep-merged into and stayed off.
+//
+// Enabled keeps the field map it always marshaled as (`enabled`, `scopes`,
+// `tags`, `limit`, byte for byte), now decoded with `enabled:` honoured.
+// Step.Fingerprint hashes a step's marshaled YAML, and an unnamed step's
+// identity — its session binding and its `${step}` memory key — is that
+// hash; a new shape would move every such identity on upgrade.
+// `extra_scopes` is written only when set, so a selector without it marshals
+// exactly as before.
+func (s MemorySelector) MarshalYAML() (any, error) {
+	if !s.Enabled {
+		return false, nil
+	}
+	type wire struct {
+		Enabled     bool     `yaml:"enabled"`
+		Scopes      []string `yaml:"scopes"`
+		Tags        []string `yaml:"tags"`
+		Limit       int      `yaml:"limit"`
+		ExtraScopes []string `yaml:"extra_scopes,omitempty"`
+	}
+	return wire{Enabled: s.Enabled, Scopes: s.Scopes, Tags: s.Tags, Limit: s.Limit, ExtraScopes: s.ExtraScopes}, nil
 }
 
 // Memory scope placeholders the ENGINE expands to a run's context keys. They

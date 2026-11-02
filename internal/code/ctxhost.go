@@ -92,6 +92,8 @@ type CtxResponse struct {
 // step, in which case only the store-level gates apply.
 type CtxHandler struct {
 	Guard DataGuard
+	// Redact is the step's Spec.Redact, for ctx.memory.key's facts.
+	Redact func(any) any
 }
 
 // Invoke authorizes and runs one request. It never panics on a malformed
@@ -131,7 +133,7 @@ func (h CtxHandler) Invoke(req CtxRequest) CtxResponse {
 	case CtxKindSQL:
 		v, err = sqlInvoke(guard, req.Resource, req.Op, req.Args)
 	case CtxKindMemory:
-		v, err = memInvoke(guard, req.Op, req.Args)
+		v, err = memInvoke(guard, h.Redact, req.Op, req.Args)
 	default:
 		return ctxErr(fmt.Errorf("ctx: no kind %q — want %s, %s or %s",
 			req.Kind, CtxKindKV, CtxKindSQL, CtxKindMemory))

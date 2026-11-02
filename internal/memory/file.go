@@ -174,3 +174,36 @@ func splitFrontmatter(s string) (head, body string, ok bool) {
 }
 
 func (b dirBackend) Close() error { return nil }
+
+// readOnlyDir serves a directory of memory files that this daemon must never
+// write: the entries a pack ships. It reads exactly like the file backend —
+// the same format, the same tolerance for hand edits — and refuses every
+// write, so a layer can never be modified through the manager even by a
+// caller that reached its Backend directly.
+type readOnlyDir struct{ dirBackend }
+
+// NewReadOnlyDirBackend serves dir's memory files read-only. Unlike the file
+// backend it does not create the directory: a pack's entries dir is part of
+// the vendored pack, and a missing one is the pack's error, reported here.
+func NewReadOnlyDirBackend(dir string) (Backend, error) {
+	dir = expandTilde(dir)
+	if dir == "" {
+		return nil, fmt.Errorf("memory: a read-only entries dir needs a path")
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("memory: entries dir %s: %w", dir, err)
+	}
+	if !fi.IsDir() {
+		return nil, fmt.Errorf("memory: entries dir %s is not a directory", dir)
+	}
+	return readOnlyDir{dirBackend{dir: dir}}, nil
+}
+
+func (readOnlyDir) Put(Entry) error {
+	return fmt.Errorf("%w: pack memory is never written", ErrReadOnly)
+}
+
+func (readOnlyDir) Delete(string) (bool, error) {
+	return false, fmt.Errorf("%w: pack memory is never written", ErrReadOnly)
+}

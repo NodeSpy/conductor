@@ -1,8 +1,10 @@
 package skill
 
 import (
+	"github.com/NodeSpy/conductor/internal/memory"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +28,10 @@ func handoffID() Identity {
 		Policy:   config.SkillPolicy{Verbs: []string{"gh.submit_review"}, MaxCalls: 5},
 		Dispatch: "d-1", TargetTrusted: true,
 		Context: map[string]any{"repo": "o/r"},
+		MemoryScopes: map[string][]memory.ScopePattern{
+			"memory.remember": {{Text: "team/*"}, {Text: "team:payments", Literal: true}},
+			"memory.recall":   {},
+		},
 	}
 }
 
@@ -69,6 +75,12 @@ func TestHandoffSessionSurvivesRestart(t *testing.T) {
 	if id.Agent != want.Agent || id.Repo != want.Repo || id.Number != want.Number || id.Dispatch != want.Dispatch ||
 		!id.TargetTrusted || len(id.Policy.Verbs) != 1 || id.Policy.Verbs[0] != "gh.submit_review" || id.Context["repo"] != "o/r" {
 		t.Fatalf("restored identity differs: %+v", id)
+	}
+	// The memory scope lists were rendered at dispatch from facts that are
+	// gone now; a restart must restore them as rendered — the literal bit
+	// and an empty (deny-all) list included.
+	if !reflect.DeepEqual(id.MemoryScopes, want.MemoryScopes) || id.MemoryScopes["memory.recall"] == nil {
+		t.Fatalf("memory scopes not restored: %#v", id.MemoryScopes)
 	}
 	// The verb-call cap carries over, so a restart doesn't reset it.
 	for i := 0; i < 4; i++ {

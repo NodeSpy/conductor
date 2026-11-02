@@ -651,7 +651,12 @@ func cmdPackLint(args []string) error {
 	if err != nil {
 		return err
 	}
-	problems := config.LintPackManifest(man)
+	// LintPackDir adds the checks that need the pack's files (a shipped
+	// memory entries dir that is missing or escapes the pack).
+	problems, err := config.LintPackDir(dir)
+	if err != nil {
+		return err
+	}
 	// Bot templates: their rules, and their seed documents against the kinds
 	// and caps a new bot's memory holds them to.
 	if len(man.Bots) > 0 {

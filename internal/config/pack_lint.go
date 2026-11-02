@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,12 +16,20 @@ func LoadPackManifestForLint(dir string) (*PackManifest, error) {
 }
 
 // LintPackDir is a convenience for tests/tools: load + lint a pack directory.
+// Beyond the manifest checks it can see the pack's files, so a shipped
+// memory entries dir that is missing or escapes the pack is reported here.
 func LintPackDir(dir string) ([]string, error) {
 	man, err := LoadPackManifestForLint(dir)
 	if err != nil {
 		return nil, err
 	}
-	return LintPackManifest(man), nil
+	problems := LintPackManifest(man)
+	if entries, _, ok, _ := man.memoryEntries(); ok && entries != "" && !strings.Contains(entries, "${") {
+		if _, err := resolvePackMemoryDir(dir, entries); err != nil {
+			problems = append(problems, err.Error())
+		}
+	}
+	return problems, nil
 }
 
 // LintPackManifest checks a pack is well-formed (§18) and returns a list of

@@ -81,7 +81,7 @@ func (e *Executor) execPluginEngine(ctx context.Context, spec Spec, data map[str
 	// The data plane, for the life of this call and no longer: the handler is
 	// built per step around THIS step's guard, and internal/plugin ties the
 	// token it mints to this invocation. Both halves end when Run returns.
-	h := CtxHandler{Guard: spec.DataGuard}
+	h := CtxHandler{Guard: spec.DataGuard, Redact: spec.Redact}
 	out, err := eng.Run(ctx, sdk.RunRequest{
 		Instance: spec.Run,
 		Code:     spec.Code,

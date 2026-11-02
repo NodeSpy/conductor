@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/NodeSpy/conductor/internal/memory"
 	"gopkg.in/yaml.v3"
 )
 
@@ -58,6 +59,9 @@ func (p *SkillPolicy) UnmarshalYAML(n *yaml.Node) error {
 	*p = SkillPolicy(q)
 	pats, scopes, err := decodeVerbGrant("skill.verbs", verbs)
 	if err != nil {
+		return err
+	}
+	if err := checkMemoryGrantKeys(scopes); err != nil {
 		return err
 	}
 	p.Verbs, p.VerbScopes = pats, scopes
@@ -211,4 +215,21 @@ func (p *SkillPolicy) ScopesFor(uses string, match func(pattern, uses string) bo
 		return nil
 	}
 	return scopesFor(p.VerbScopes, uses, match)
+}
+
+// checkMemoryGrantKeys validates a memory verb's `scope:` grant entries as
+// scope keys (memory.CheckScopeKey) at load, so a malformed template fails
+// here instead of silently admitting nothing on every run.
+func checkMemoryGrantKeys(scopes map[string]map[string][]string) error {
+	for pat, cons := range scopes {
+		if !strings.HasPrefix(pat, "memory.") {
+			continue
+		}
+		for _, e := range cons[DimScope] {
+			if err := memory.CheckScopeKey(e); err != nil {
+				return fmt.Errorf("skill.verbs.%s.scope: %w", pat, err)
+			}
+		}
+	}
+	return nil
 }

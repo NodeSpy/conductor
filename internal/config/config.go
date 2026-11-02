@@ -279,6 +279,9 @@ type Config struct {
 	// what applying them to bots found worth saying (BotTemplateNotes).
 	templates     map[string]map[string]LoadedTemplate `yaml:"-"`
 	templateNotes []string                             `yaml:"-"`
+	// packMemory are the read-only memory entries each pack instance ships
+	// (by instance), resolved inside its vendored dir (pack_memory.go).
+	packMemory map[string]PackMemoryLayer `yaml:"-"`
 	// removedWarnings name removed keys still in the config or its packs
 	// (removed.go).
 	removedWarnings []string `yaml:"-"`
@@ -1154,6 +1157,38 @@ var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // A reference inside a `#` comment is left alone, which is what the old
 // line-splitting implementation went out of its way to do and what a node
 // walk gets for free: comments are not scalar values.
+// memoryScopeRef reports whether `${name}` at this key path is a memory
+// scope placeholder expandEnv must leave for the engine, rather than an
+// environment variable. Scope keys are templates (memory.RenderScopeKey) —
+// `{{.fact}}`, which expandEnv never touches anywhere — and `${repo}`,
+// `${workflow}` and `${step}` are kept as aliases for three of those facts.
+// The aliases are left alone in only two places:
+//
+//   - a step's memory selector, `…memory: { scope | scopes[] | extra_scopes[] }`
+//     (not the top-level `memory:` backend section);
+//   - a memory verb's scope grant, `…skill: { verbs: { memory.<op>: { scope: [] } } }`.
+//
+// Anywhere else — and for any other name there — a reference is an ordinary
+// environment variable: substituted when set, a load error when not, exactly
+// as before memory used these names.
+func memoryScopeRef(name string, path []string) bool {
+	n := len(path)
+	if n > 0 && path[n-1] == RefIndex {
+		path, n = path[:n-1], n-1
+	}
+	if n >= 3 && path[n-2] == "memory" {
+		switch path[n-1] {
+		case "scope", "scopes", "extra_scopes":
+			return scopeAlias(name)
+		}
+	}
+	return scopeAlias(name) && n >= 4 && path[n-1] == DimScope && strings.HasPrefix(path[n-2], "memory.") &&
+		path[n-3] == "verbs" && path[n-4] == "skill"
+}
+
+// scopeAlias reports whether `${name}` is one of the scope-key aliases.
+func scopeAlias(name string) bool { return name == "repo" || name == "workflow" || name == "step" }
+
 func expandEnv(path string, b []byte) ([]byte, error) {
 	// A secret field must name its source, read when the value is used —
 	// never take one substituted into the config here (see
@@ -1163,8 +1198,17 @@ func expandEnv(path string, b []byte) ([]byte, error) {
 	}
 	var missing []string
 	seen := map[string]bool{}
-	out, err := SubstituteRefs(b, envRe, func(ref string) (string, bool) {
+	out, err := SubstituteRefsAt(b, envRe, func(ref string, at []string) (string, bool) {
 		name := envRe.FindStringSubmatch(ref)[1]
+		if memoryScopeRef(name, at) {
+			// In a memory scope key, `${repo}` / `${workflow}` / `${step}`
+			// are run-context placeholders the engine expands per run — not
+			// environment variables. Left in place, they reach the
+			// selector or grant; read as env refs, every config that used
+			// the documented sugar failed to load. Only there: elsewhere a
+			// variable that happens to be called `repo` still resolves.
+			return "", false
+		}
 		v, ok := os.LookupEnv(name)
 		if !ok {
 			if !seen[name] {

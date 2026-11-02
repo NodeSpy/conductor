@@ -38,7 +38,7 @@ const CtxClientUsage = `usage: conductor ctx <kind> [store] <op> [arg...]
 
   conductor ctx kv <store> <op> [arg...]       ns/key-positional, e.g. kv cache get run attempts
   conductor ctx sql <store> <op> <sql> [args]  args is a JSON list of bind values
-  conductor ctx memory <op> [arg...]           remember|recall|forget|list
+  conductor ctx memory <op> [arg...]           remember|recall|forget|list|key
 
 Each arg is parsed as JSON when it parses, and taken as a plain string when
 it does not: 3 is a number, '{"a":1}' an object, hello the string "hello".

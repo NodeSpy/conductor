@@ -197,7 +197,7 @@ Named `secrets`/vault values are **NOT** in `ctx` — pass one explicitly via a 
 |---|---|---|
 | `ctx.store("<name>")` | a KV handle: `get, set, setnx, merge, delete, incr, append, remove, contains, list, first, last, index, slice, len, pop` — **namespace first**, e.g. `.get(ns, key)`, `.set(ns, key, value)` | semantics mirror the `kv.*` verbs ([[Stores]]); absent reads return null/nil |
 | `ctx.sql("<name>")` | a SQL handle: `query(sql, args?)` → row list, `exec(sql, args?)` → `{rows_affected, last_insert_id?}` | **query-only by default**; a store needs `code_access: write` to `exec` from code (see below) |
-| `ctx.memory` | `remember(text, {tags, scope}?)`, `recall(query?, filter?)`, `forget(id)`, `list(filter?)` | over the configured [[Memory]]; relative scopes need explicit `repo:<owner/repo>` / `agent:<name>` forms in code |
+| `ctx.memory` | `remember(text, {tags, scope}?)`, `recall(query?, filter?)`, `forget(id)`, `list(filter?)`, `key(template, facts?)` → `{key, ok, reason}` | over the configured [[Memory]]; relative scopes need explicit `repo:<owner/repo>` / `agent:<name>` forms in code. `key` is core's scope-key renderer ([[Memory#scope-keys-are-templates]]): it reads no memory, works without a `memory:` section, and answers `ok: false` with a reason (never throws) for a key that does not apply |
 
 The spelling differs by engine but the surface is identical:
 
@@ -256,13 +256,14 @@ conductor's own binary is the reference client, exported to the command as
     n=$("$CONDUCTOR_CTX_HELPER" ctx kv state incr pd attempts 1)
     "$CONDUCTOR_CTX_HELPER" ctx sql analytics query 'SELECT count(*) AS c FROM incidents WHERE day = ?' '[3]'
     "$CONDUCTOR_CTX_HELPER" ctx memory remember "retried twice" '["ci"]' 'repo:acme/api'
+    "$CONDUCTOR_CTX_HELPER" ctx memory key 'team:{{.team}}' '{"team":"payments"}'   # {"key":"team:payments","ok":true,"reason":""}
     printf '{"seen": %s, "attempts": %s}' "$seen" "$n"
 ```
 
 ```
 conductor ctx kv     <store> <op> [arg...]     # ns/key positional, as ctx.store(…)
 conductor ctx sql    <store> <op> <sql> [args] # args is a JSON list of bind values
-conductor ctx memory <op> [arg...]             # remember | recall | forget | list
+conductor ctx memory <op> [arg...]             # remember | recall | forget | list | key
 ```
 
 Each argument is read as **JSON when it parses** and as a plain string when it

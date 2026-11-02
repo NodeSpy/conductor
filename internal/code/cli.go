@@ -120,7 +120,7 @@ func (e *Executor) execCLILocal(ctx context.Context, spec Spec, data map[string]
 	// deferred Close is what makes teardown unconditional: it runs on a clean
 	// exit, a non-zero exit, a context timeout, a cancellation, and on every
 	// error return below it.
-	ctxSrv, err := startCtxServer(CtxHandler{Guard: spec.DataGuard})
+	ctxSrv, err := startCtxServer(CtxHandler{Guard: spec.DataGuard, Redact: spec.Redact})
 	if err != nil {
 		return nil, err
 	}

@@ -297,6 +297,23 @@ func loadConfig(args []string) (*config.Config, []string, error) {
 	return cfg, rest, err
 }
 
+// memoryGrantOp resolves a live-tool request's token to its step's scope
+// list for one memory op (memory.LiveOps.Grant), so a step restricted to
+// some scopes through skill.verbs is held to them on the memory tool too —
+// the list rendered over the step's facts when its session was minted
+// (skill.Identity.MemoryScopes). An unauthorized token restricts nothing
+// here: the provenance check in front of every memory op has already
+// refused it.
+func memoryGrantOp(sb *skill.Broker) func(token, op string, peer memory.Peer) memory.GrantMatcher {
+	return func(token, op string, peer memory.Peer) memory.GrantMatcher {
+		id, err := sb.Authorize(token, skill.Peer{PID: peer.PID, StartTime: peer.StartTime, UID: peer.UID, Valid: peer.Valid})
+		if err != nil {
+			return nil
+		}
+		return flow.MemoryGrantFrom(id.Policy.VerbScopes, id.MemoryScopes, "memory."+op)
+	}
+}
+
 // resolveBootConfig runs the daemon's boot config pipeline: load, and on ANY
 // load failure hold degraded until the config becomes loadable rather than
 // returning an error that exits cmdRun into a service-manager crash-loop (H1).
@@ -962,6 +979,10 @@ func cmdRun(args []string) error {
 					if bots != nil {
 						ops.Bot = bots.agentOp(sb)
 					}
+					// A step's own memory scope list (skill.verbs
+					// memory.<op>: {scope: […]}) binds the live memory tool
+					// too, not only the verb: same token, same grant.
+					ops.Grant = memoryGrantOp(sb)
 					ops.RunVerb = func(vctx context.Context, token, uses string, options map[string]any, peer memory.Peer) (map[string]any, error) {
 						id, err := sb.Authorize(token, asPeer(peer))
 						if err != nil {
@@ -978,6 +999,7 @@ func cmdRun(args []string) error {
 							Scopes: id.Policy.VerbScopes, Context: id.Context, Sem: id.Sem,
 							TargetTrusted: id.TargetTrusted, Dispatch: id.Dispatch,
 							Bot: id.Bot, BotRole: id.BotRole, CaseID: id.CaseID,
+							MemoryScopes: id.MemoryScopes,
 						}, uses, options)
 					}
 				}

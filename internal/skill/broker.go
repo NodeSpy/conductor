@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/memory"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
@@ -128,6 +129,11 @@ type Identity struct {
 	// launch's identity and workspace (agentsandbox): what per-identity
 	// surfaces — the browser — key on. nil: resolved from the dispatch.
 	Sandbox *SandboxBinding
+	// MemoryScopes are the step's memory `scope:` grant lists rendered over
+	// its facts at dispatch (memory.RenderGrantScopes): verb pattern → the
+	// entries it admits. The facts exist only at dispatch, so the session
+	// carries the rendered list rather than re-rendering later.
+	MemoryScopes map[string][]memory.ScopePattern
 }
 
 // Requester classes (Identity.Requester).
