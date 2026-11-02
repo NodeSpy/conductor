@@ -1500,6 +1500,78 @@
       }
     },
     {
+      "name": "check_failures",
+      "desc": "what failed on a PR's head (or a ref, or one workflow run): each failing check run's output and annotations, and for a GitHub Actions job its failed step and the log excerpt showing the failure — bounded, cleaned, and other people's text (fence it as data before an agent reads it)",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "ignore": {
+          "type": "list",
+          "desc": "check names to leave out (case-insensitive), e.g. the failing_checks event's ignore_checks"
+        },
+        "log_bytes": {
+          "type": "integer",
+          "desc": "bytes of one failed job's log excerpt (default 8192, max 65536)"
+        },
+        "max_bytes": {
+          "type": "integer",
+          "desc": "bytes of all the text returned — outputs, annotations, logs (default 32768, max 262144)"
+        },
+        "pr": {
+          "type": "integer",
+          "desc": "the PR whose CURRENT head to read (read fresh: after a push, the new commit)"
+        },
+        "ref": {
+          "type": "string",
+          "desc": "a sha, branch, or tag instead of a PR"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "run_id": {
+          "type": "integer",
+          "desc": "one workflow run instead: its jobs' check runs"
+        }
+      },
+      "outputs": {
+        "failures": {
+          "type": "list",
+          "desc": "failing check runs by name: {name, conclusion, url, app, title, summary, text, annotations [{path, start_line, end_line, level, title, message}], annotations_omitted} and for Actions {job_id, run_id, failed_step, log, log_truncated}; a read that failed is noted (annotations_error, log_error), not fatal"
+        },
+        "ignored": {
+          "type": "integer",
+          "desc": "checks left out by ignore"
+        },
+        "omitted": {
+          "type": "integer",
+          "desc": "failing checks past the first 20, not described"
+        },
+        "passing": {
+          "type": "integer",
+          "desc": "checks that completed without failing"
+        },
+        "pending": {
+          "type": "list",
+          "desc": "names of checks still queued or running"
+        },
+        "sha": {
+          "type": "string",
+          "desc": "the commit read"
+        },
+        "truncated": {
+          "type": "boolean",
+          "desc": "a size cap cut something"
+        }
+      }
+    },
+    {
       "name": "checks",
       "desc": "check-run status for a ref: [{name, status, conclusion, url}]",
       "options": {
@@ -2605,6 +2677,10 @@
         "head": {
           "type": "string"
         },
+        "ignore_checks": {
+          "type": "list",
+          "desc": "the trigger's ignore_checks (absent when none) — for a step that reads the failures itself: github.check_failures' ignore"
+        },
         "issue": {
           "type": "integer"
         },
@@ -2719,7 +2795,8 @@
         "labels": "labels",
         "private": [
           "installation_id",
-          "reaction_subjects"
+          "reaction_subjects",
+          "ignore_checks"
         ],
         "secret": [
           "app_token",
@@ -3718,7 +3795,9 @@
     "egress": [
       "api.github.com:443",
       "*.ghe.com:443",
-      "smee.io:443"
+      "smee.io:443",
+      "productionresultssa*.blob.core.windows.net:443",
+      "*.actions.githubusercontent.com:443"
     ],
     "commands": [
       "gh"
