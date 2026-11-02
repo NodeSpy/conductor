@@ -1,6 +1,7 @@
 package gitpush
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,4 +119,33 @@ func splitRel(rel string) []string {
 		}
 	}
 	return out
+}
+
+// HeadCommit is the commit ws's HEAD names, read the way Push reads it and
+// never by running git in ws: by path under ws (its .git a directory) or
+// under headDir (a linked worktree's own git dir), a linked worktree's
+// branch resolved by conductor's git in the trusted gitDir.
+func HeadCommit(ctx context.Context, ws, gitDir, headDir string) (string, error) {
+	if fi, err := os.Lstat(filepath.Join(ws, ".git")); err == nil && fi.IsDir() {
+		sha, _, err := readHead(ws, true)
+		if err == nil && sha == "" {
+			err = fmt.Errorf("HEAD names no commit")
+		}
+		return sha, err
+	}
+	if headDir == "" || gitDir == "" {
+		return "", fmt.Errorf("no git dir recorded for %s", ws)
+	}
+	sha, branch, err := readHead(headDir, false)
+	if err != nil || sha != "" {
+		return sha, err
+	}
+	out, err := runGit(ctx, gitDir, nil, nil, "rev-parse", "--verify", "--end-of-options", "refs/heads/"+branch+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	if sha = strings.TrimSpace(out); !isSHA(sha) {
+		return "", fmt.Errorf("refs/heads/%s does not name a commit", branch)
+	}
+	return sha, nil
 }

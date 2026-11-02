@@ -232,7 +232,9 @@ below), `internal` (a panic), or **`no_progress`**. `error` is the redacted
 error text — for anything you post publicly, use `{{.run.reason}}` instead. A `no_progress` failure is a fixer step marked
 **`expect_push: true`** that ran cleanly but left its work *unlanded* — a
 non-empty proposed diff that never reached the remote, so the PR didn't move and
-the fix didn't take. It also carries `hook.failure.agent_summary` (the agent's
+the fix didn't take — or, under the agent sandbox, any step whose agent
+committed work conductor did not push at its end (see [[Isolation]], "Committed
+work is never dropped silently"). It also carries `hook.failure.agent_summary` (the agent's
 own reasoning) and `hook.failure.diff`, so a handler can decide (close the dead
 PR, comment the reason, escalate). The legacy flat `{{.error}}` /
 `{{.failed_step}}` stay populated for back-compat. A handler branches on it, e.g.:
@@ -274,7 +276,8 @@ Every way a run fails fires its workflow-level `at: fail` hooks:
   workspace that failed to provision, an agent that crashed before starting),
   which also escalates
 - a failed step, a step `timeout:`, a gate that discards, and an
-  `expect_push` fixer that left its change unpushed (`no_progress`)
+  `expect_push` fixer that left its change unpushed, or a sandboxed agent's
+  commits conductor did not push (`no_progress`)
 - a panic inside the run (`kind: internal`); the hooks fire, then the panic
   carries on to the engine's recovery
 - an **engine park**. A (target, kind, head) that kept failing past

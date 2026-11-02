@@ -26,6 +26,38 @@ type workPusher struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// landed: dispatches whose work a push moved their branch, and when —
+	// read (and cleared) by the end-of-step push, so its `pushed` says
+	// whether the step's work reached the branch, a git.push mid-step
+	// included.
+	landed map[string]time.Time
+}
+
+// landedTTL bounds how long a mid-step push is remembered for a step end
+// that never comes (a failed step): far longer than any step.
+const landedTTL = 24 * time.Hour
+
+func (p *workPusher) noteLanded(dispatchID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	if p.landed == nil {
+		p.landed = map[string]time.Time{}
+	}
+	for id, at := range p.landed {
+		if now.Sub(at) > landedTTL {
+			delete(p.landed, id)
+		}
+	}
+	p.landed[dispatchID] = now
+}
+
+func (p *workPusher) takeLanded(dispatchID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.landed[dispatchID]
+	delete(p.landed, dispatchID)
+	return ok
 }
 
 func (p *workPusher) lock(ws string) func() {
@@ -48,7 +80,7 @@ func (p *workPusher) lock(ws string) func() {
 func (p *workPusher) push(ctx context.Context, dispatchID string) (map[string]any, error) {
 	e, ok := agentsandbox.Default.ForDispatch(dispatchID)
 	if !ok {
-		return nil, fmt.Errorf("%w: this dispatch has no sandboxed workspace (an unsandboxed agent pushes itself)", errNothingToPush)
+		return nil, flow.ErrUnsandboxed
 	}
 	if e.Push == nil {
 		return nil, fmt.Errorf("%w: conductor has no branch to push this workspace to (a review step, a detached checkout, or no remote)", errNothingToPush)
@@ -78,13 +110,36 @@ func (p *workPusher) push(ctx context.Context, dispatchID string) (map[string]an
 	}
 	p.audit(row)
 	if !res.UpToDate {
+		p.noteLanded(dispatchID)
 		p.logf("git push %s %s: %d commit(s) %s..%s (signed=%v)", e.Push.Repo, e.Push.Branch, res.Commits, shortSHA(res.Old), shortSHA(res.New), res.Signed)
 	}
 	return map[string]any{"branch": res.Branch, "pushed": !res.UpToDate, "commits": res.Commits, "head": res.New, "up_to_date": res.UpToDate}, nil
 }
 
-// errNothingToPush is flow's: the end-of-step push skips it silently.
+// errNothingToPush is flow's: the end-of-step push pushes nothing, and flow
+// checks the workspace for commits left behind.
 var errNothingToPush = flow.ErrNothingToPush
+
+// pushAtStepEnd is the end-of-step push: push, and report `pushed` when the
+// step's work reached its branch — by this push or a git.push during the
+// step.
+func (p *workPusher) pushAtStepEnd(ctx context.Context, dispatchID string) (map[string]any, error) {
+	out, err := p.push(ctx, dispatchID)
+	landed := p.takeLanded(dispatchID)
+	if err != nil {
+		// Where the workspace started: flow counts only the agent's own
+		// commits as work left behind, never a fork PR's commits no remote
+		// of this clone has.
+		if e, ok := agentsandbox.Default.ForDispatch(dispatchID); ok {
+			err = &flow.PushError{Err: err, Since: e.StartHead}
+		}
+		return out, err
+	}
+	if landed {
+		out["pushed"] = true
+	}
+	return out, err
+}
 
 func shortSHA(s string) string {
 	if len(s) > 12 {
@@ -144,7 +199,7 @@ func wireWorkPusher(cfg *config.Config, runner *flow.Runner, audit func(map[stri
 	p := &workPusher{cfg: cfg, audit: audit, logf: logf}
 	connector.SetGitOps(func() *connector.GitOps { return &connector.GitOps{Push: p.push} })
 	if runner != nil && cfg.Sandbox.PushAtStepEnd() {
-		runner.PushWork = p.push
+		runner.PushWork = p.pushAtStepEnd
 	}
 	return func() {
 		connector.SetGitOps(nil)

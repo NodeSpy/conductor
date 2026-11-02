@@ -200,6 +200,17 @@ signing, all proven).
 - **Sign the pushed commits as Daniel** (SSH signing) on the way out — sign the
   whole new range `remote..HEAD`, not just HEAD as the prototype does.
 - Agents hold no push/write credentials; GitHub writes stay conductor verbs.
+- **Unlanded work is never silent.** When the end-of-step push pushes nothing
+  (a review, no branch, a refused push) and the workspace holds commits no
+  remote has, they go into the step's `push` output (`pushed: false`,
+  `unpushed_commits`, `reason`), the log and a `git_push` audit row (outcome
+  `unlanded`), and fail the step as `no_progress` — unless it is an explicit
+  review (review trigger, decide, `checkout: none`), the agent is unsandboxed,
+  or `sandbox.push.unlanded: warn`. An `output_schema` alone still makes a
+  review (a fixer with a structured result says `expect_push: true`), but such
+  a step that commits fails rather than losing the work. `push.pushed` is true
+  only when conductor pushed this step's work (at its end, or by `git.push`
+  during it): the signal a later step gates on, never the agent's own report.
 - **Verified badge**: the signature verifies `G` (Good) locally; GitHub shows
   "Verified" only when conductor's signing key is registered as an **SSH signing
   key** on the account. Document this; **do not touch account settings**.

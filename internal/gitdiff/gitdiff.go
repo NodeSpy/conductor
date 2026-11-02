@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -111,4 +112,36 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}
 	return out.String(), nil
+}
+
+// Unpushed counts the commits in dir that are on no remote yet. since, when
+// set, is the commit dir started at: only commits past it count (a checkout
+// of a fork's PR holds commits no remote of the clone has — they are not
+// the agent's), measured as `since..HEAD` minus everything on a remote, and
+// base is since. Otherwise it is HEAD's commits past the base Proposed's
+// "committed, not pushed" section reads (upstreamBase), and that base. 0
+// when nothing is unpushed or there is no remote to measure against.
+func Unpushed(ctx context.Context, dir, since string) (commits int, base string, err error) {
+	if _, err := git(ctx, dir, "rev-parse", "--git-dir"); err != nil {
+		return 0, "", fmt.Errorf("gitdiff: %s is not a git worktree: %w", dir, err)
+	}
+	args := []string{"rev-list", "--count", "HEAD", "--not", "--remotes"}
+	if since != "" {
+		base = since
+		args = append(args, since)
+	} else {
+		if base = upstreamBase(ctx, dir); base == "" {
+			return 0, "", nil
+		}
+		args = []string{"rev-list", "--count", base + "..HEAD"}
+	}
+	out, err := git(ctx, dir, append(args, "--")...)
+	if err != nil {
+		return 0, base, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, base, fmt.Errorf("gitdiff: rev-list --count: %q", strings.TrimSpace(out))
+	}
+	return n, base, nil
 }

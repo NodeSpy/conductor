@@ -49,6 +49,14 @@ type SandboxPush struct {
 	// Default: git's user.name / user.email.
 	Name  string `yaml:"name,omitempty"`
 	Email string `yaml:"email,omitempty"`
+	// Unlanded is what happens to a sandboxed step whose agent committed
+	// work conductor did not push at the step's end (no branch to push to,
+	// a refused push): `fail` (default) fails the step — the work would be
+	// lost with its workspace — unless the step is an explicit review (a
+	// review trigger, a decide step, `checkout: none`); `warn` only records
+	// it (the step's push output, the log, a git_push audit row), which
+	// happens either way.
+	Unlanded string `yaml:"unlanded,omitempty"`
 }
 
 // AgentSandboxOn reports whether agent launches are sandboxed (the default).
@@ -59,6 +67,12 @@ func (c *Config) AgentSandboxOn() bool {
 // PushAtStepEnd reports the end-of-step push (default on).
 func (s *SandboxConfig) PushAtStepEnd() bool {
 	return s == nil || s.Push == nil || s.Push.AtStepEnd == nil || *s.Push.AtStepEnd
+}
+
+// UnlandedFails reports whether committed work conductor did not push
+// fails its step (sandbox.push.unlanded, default fail).
+func (s *SandboxConfig) UnlandedFails() bool {
+	return s == nil || s.Push == nil || s.Push.Unlanded != "warn"
 }
 
 // PushSign reports commit signing on push (default on).
@@ -86,6 +100,13 @@ func (c *Config) validateSandbox() error {
 	}
 	if p := s.Push; p != nil && p.SigningKey != "" && !filepath.IsAbs(expandHome(p.SigningKey)) {
 		return fmt.Errorf("config: sandbox.push.signing_key %q must be an absolute path", p.SigningKey)
+	}
+	if p := s.Push; p != nil {
+		switch p.Unlanded {
+		case "", "fail", "warn":
+		default:
+			return fmt.Errorf("config: sandbox.push.unlanded must be fail|warn, got %q", p.Unlanded)
+		}
 	}
 	return nil
 }
