@@ -248,16 +248,19 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 	for _, p := range resolvePaths(a.ReadWrite) {
 		b.WriteString("(allow file-read* file-write* (subpath " + sbplString(p) + "))\n")
 	}
-	// Later rules win in SBPL: the read-only carve-outs inside read-write
-	// paths (a git common dir's config/hooks/objects/info) and the denials.
-	for _, p := range resolvePaths(a.WriteDeny) {
-		b.WriteString("(deny file-write* (subpath " + sbplString(p) + "))\n")
-	}
+	// Later rules win in SBPL: the denials, a read-write path inside a
+	// hidden one allowed back, and last the read-only carve-outs inside
+	// read-write paths (a git common dir's config/hooks/info, a linked
+	// worktree's commondir and gitdir files inside its allowed-back git
+	// dir) — after the allow-backs, which would otherwise reopen them.
 	for _, p := range resolvePaths(a.Hide) {
 		b.WriteString("(deny file-read* file-write* (subpath " + sbplString(p) + "))\n")
 	}
 	for _, p := range resolvePaths(a.Unhide) {
 		b.WriteString("(allow file-read* file-write* (subpath " + sbplString(p) + "))\n")
+	}
+	for _, p := range resolvePaths(a.WriteDeny) {
+		b.WriteString("(deny file-write* (subpath " + sbplString(p) + "))\n")
 	}
 	for _, p := range resolvePaths(a.ExecDeny) {
 		b.WriteString("(deny process-exec (literal " + sbplString(p) + "))\n")
