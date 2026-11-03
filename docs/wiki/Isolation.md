@@ -197,6 +197,7 @@ sandbox:
   #   tripwires: true
   #   interval: 3s
   #   allow: []                   # programs exempt in EVERY launch (prefer a scoped allowance)
+  #   connections: alert          # a tunnel shaped like a remote shell or a bulk upload: close | off
   # allow: { tunnels: [], non_tls: [], reverse_shell: false, pty: false }   # base allowance of every launch;
   #                                 # scope one in an isolation: block (§ Scoped allowances)
   # limits:                       # Linux: a systemd user scope per launch
@@ -442,6 +443,34 @@ trusts what is in a repository's `.git`; conductor's does not:
   read-only, and so are the worktree's own `.git` file, commondir and
   gitdir. `git.shared: direct` makes the whole shared dir writable except
   those protected paths.
+- **A private view of the shared git dir.** Git rewrites config and
+  packed-refs through a lock file and a rename beside them. Each launch
+  therefore gets its own view of the shared git dir: a fresh copy of its
+  config, packed-refs and HEAD, with the real objects, refs, logs and lfs
+  inside. `git config --local`, `gc`, `pack-refs`, stash, rebase and
+  deleting a packed branch all work, and your config and packed-refs are
+  never written.
+  - On Linux the jail mounts the view at the shared dir's own path.
+  - On macOS `GIT_COMMON_DIR` points at it. git's ref store still uses the
+    real dir there, so packed-refs and its lock and temp file are writable
+    on macOS, like the refs beside them.
+  - Linux, at launch end: a ref the launch packed into its private
+    packed-refs is written back as a loose ref, so it is not lost. That
+    applies to valid branch, tag, remote and notes names only, and never
+    through a symlink or over an existing ref. A packed ref the launch
+    deleted stays in your packed-refs (`git_refs_restored` lists what was
+    written back).
+- **A recorded layout is re-checked.** The registry conductor keeps of each
+  workspace's git paths is re-validated when it is read back after a
+  restart, and again when a later dispatch reuses it:
+  - every path must pass the same limits as a fresh layout (not `/`, the
+    home or above it, or conductor's own state);
+  - a worktree's pair must still be git's own registration for the
+    workspace;
+  - the push dir must be a git dir;
+  - every read-write path must lie in the workspace or a git dir.
+
+  An entry that fails is dropped and the workspace is resolved anew.
 - **Conductor's own git.** Conductor's git reads run hardened (no hooks,
   filters, fsmonitor or config includes from the workspace). It decides a
   workspace's layout, adoption and push target from what it recorded when
@@ -469,12 +498,27 @@ trusts what is in a repository's `.git`; conductor's does not:
 **Detection (`sandbox.detect`).** A host-side watcher follows every process
 of each launch: its root process, which the launcher names by pid and start
 time when it starts it, the processes carrying a random per-launch marker in
-their environment, and the descendants of both. It scans every `interval` (3s) for:
+their environment, and the descendants of both. It scans every `interval` (3s).
+
+It judges a program by **what its binary is**, not its name. At its first
+scan it indexes this machine's shells, interpreters and tunnel tools by file
+identity, and by size and SHA-256 for copies. A launch process's executable
+(`/proc/<pid>/exe` on Linux, lsof's path on macOS) is matched against that
+index:
+- a copy of bash renamed `./esbuild` is reported as bash;
+- a copy of socat renamed `./dep-sync` as socat;
+- an allowance for `ssh` does not cover a copy of socat named `ssh`.
+
+A binary this machine does not have (one the agent compiled or downloaded)
+has no identity. The egress proxy's connection signal below is what covers
+it. macOS refuses to run a copy of a platform binary at all.
+
+The watcher looks for:
 
 | kind | what |
 |---|---|
-| `tunnel_tool` | ssh, socat, nc, chisel, websocat, cloudflared, ngrok, `openssl s_client`, tor, … |
-| `reverse_shell` | a shell or interpreter whose stdin or stdout is a TCP/UDP socket |
+| `tunnel_tool` | ssh, socat, nc, chisel, websocat, cloudflared, ngrok, `openssl s_client`, tor, …, by name or by binary |
+| `reverse_shell` | a shell (sh, bash, dash, zsh, busybox, …) holding a TCP/UDP socket on **any** descriptor, or an interpreter (python, perl, node, …) whose stdin or stdout is one. An interpreter's own sockets are its work: pip and npm hold them. |
 | `pty_relay` | Linux: a process other than the agent itself holding a pty master and an inet socket (the Linux sandbox has no pty devices, so this guards a jail that has one) |
 | `tripwire` | a read of a decoy credential in the home: `.ssh/id_ed25519`, `.ssh/id_rsa`, `.git-credentials`, `.vault-token`, `.pypirc` |
 | `git` | the git guard undid a change |
@@ -494,6 +538,35 @@ The response is `detect.action`:
   ([[Notifications]]).
 - **`alert`**: audited and notified only.
 - **`off`**: no watcher, tripwires or git guard.
+
+**Connections (`sandbox.detect.connections`).** The watcher scans every
+few seconds. A one-shot upload, or a tunnel in a program the watcher does
+not know, can be over before a scan. The egress proxy sees every
+connection as it happens. Every `egress` row logs each tunnel's features:
+- duration;
+- bytes each way;
+- the longest silence (`max_idle_ms`);
+- the turns where the far end spoke first after 5s or more of silence
+  (`server_first`).
+
+The proxy flags two shapes while the tunnel is open, whatever program holds
+it:
+
+| shape | when |
+|---|---|
+| `interactive` | open 2 minutes or more, under 4 MiB in all, and the far end spoke first after a silence at least 5 times: a remote operator's commands |
+| `bulk_upload` | 16 MiB or more sent and at least 8× what was received: one upload, however quick |
+
+A flagged tunnel is a `sandbox_detection` (`kind: tunnel_shape`, with the
+shape and features) and is notified like any detection. The default,
+`connections: alert`, leaves the tunnel open. The reason: timing cannot
+tell a remote operator from a server that answers every request slowly
+(long polling, a websocket), and closing a build's connection on that guess
+would break real work. `connections: close` also closes the tunnel. `off`
+reports nothing, though the features are still logged. A tunnel an
+allowance covers (a `tool@host` or `non_tls` target, or every tunnel when a
+tool is allowed by name alone) is audited as `allowed`. Model traffic goes
+through the gateway, not the proxy, and is not judged here.
 
 `detect.allow: [ssh]` exempts a program in every launch, and
 `tripwires: false` removes the decoys. To let one workflow or step use a
@@ -662,18 +735,32 @@ These are known gaps, stated so you can weigh them:
   site. The upload cap bounds the volume, the audit records it, and the
   allowlist is the control.
 - **Linked worktrees.** Refs stay writable in the shared git dir, so an
-  agent can move or forge a ref (a branch tip, a packed ref) the base
-  checkout sees. Conductor's own pushes are unaffected (they read the
-  remote), but your own git in the base checkout sees the change. A
-  submodule git dir an agent creates, and the filters of a repository read
-  with the sandbox off, are not guarded.
-- **Detection is by shape.** A tunnel built into a program the watcher does
-  not know (an interpreter speaking TLS to an allowed host, a websocket
-  inside a build tool) is not a `tunnel_tool`. The TLS check and the caps
-  are the controls for it, and the audit is the record. A process that
-  leaves the launch's tree (double-forked, reparented) and its process
-  groups is followed only while its environment still carries the marker,
-  and on macOS a platform or signed binary's environment cannot be read. On macOS there is no `pty_relay` rule.
+  agent can move or forge a ref (a branch tip, a loose ref) the base
+  checkout sees. On macOS packed-refs is writable too. Conductor's own
+  pushes are unaffected (they read the remote), but your own git in the base
+  checkout sees the change. A submodule git dir an agent creates, and the
+  filters of a repository read with the sandbox off, are not guarded.
+- **What detection catches, and what it does not.**
+  - **Caught:** a known tunnel tool, by name or by binary (renamed copies
+    included); a shell holding a network socket on any descriptor (renamed
+    copies included); an interpreter on a socket's stdio; a decoy read;
+    and, at the proxy, a one-shot bulk upload or a long-lived interactive
+    tunnel from any program.
+  - **Not caught:** a tunnel or shell in a binary this machine does not
+    have, or a modified copy of one (a single changed byte gives a new
+    digest), unless its traffic takes one of the two flagged shapes.
+  - **Below the thresholds:** a slow trickle under 16 MiB, or an
+    interactive channel that keeps its turns fewer, shorter or larger,
+    passes as ordinary allowed egress. The audit row (target, bytes,
+    features) is the record, the allowlist and the upload cap the
+    controls.
+  - **Shape alerts can be wrong.** A server that answers slowly every time
+    looks interactive, which is why the default is to alert.
+  - **Process tree.** A process that leaves the launch's tree
+    (double-forked, reparented) and its process groups is followed only
+    while its environment still carries the marker. On macOS a platform or
+    signed binary's environment cannot be read, and there is no `pty_relay`
+    rule.
 - **The decoys are pipes.** An agent that `stat`s a decoy before reading it
   can tell it is not a file. They exist only while a launch runs (removed at
   its end, so nothing blocks on one later), and a read of a running launch's
@@ -1107,8 +1194,8 @@ An agent launch's containment adds:
 
 | event | when |
 |---|---|
-| `egress` | each request through its egress session: `run`, `target`, `sni`, `up`/`down` bytes, `duration_ms`, `outcome` (`allowed`, `refused`, `closed`), a `reason` for a refusal or closure, and `allowed_by` for a tunnel a `non_tls` allowance let skip the TLS check |
-| `sandbox_detection` | the watcher, a tripwire or the git guard: `kind`, `reason`, `action` (also a `conductor.escalate` notification); `action: allowed` with `allowed_by: <scope>` when the launch's [allowance](#scoped-allowances) covers it (audited and logged, not notified) |
+| `egress` | each request through its egress session: `run`, `target`, `sni`, `up`/`down` bytes, `duration_ms`, `max_idle_ms`, `server_first`, `outcome` (`allowed`, `refused`, `closed`), a `reason` for a refusal or closure, `shape` for a flagged tunnel, and `allowed_by` for a tunnel a `non_tls` allowance let skip the TLS check |
+| `sandbox_detection` | the watcher, a tripwire, the git guard or the proxy's connection shapes (`kind: tunnel_shape`, with `shape`, `target` and the features): `kind`, `reason`, `action` (also a `conductor.escalate` notification); `action: allowed` with `allowed_by: <scope>` when the launch's [allowance](#scoped-allowances) covers it (audited and logged, not notified) |
 | `model_request` | each request through the model gateway: `run`, `upstream`, `method`, `path`, `status`, `up`/`down` bytes, `duration_ms` (logged only when it failed) |
 | `sandbox_limit` | the disk guard stopped a launch, or a launch passed a model cap (`kind: model_upload` / `model_download`, `action: refuse`); also notified |
 | `sandbox_leftover_killed` | processes a launch left running were killed at its end |

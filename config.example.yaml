@@ -1425,6 +1425,8 @@ sandbox:
   #   tripwires: true           # decoy credentials in the agent's home
   #   interval: 3s
   #   allow: []                 # programs exempt from every rule, every launch (prefer allow: below)
+  #   connections: alert        # an egress tunnel shaped like a remote shell or a bulk upload:
+  #                             #   alert (audit + notify); close: also close it; off
   # allow:                      # the base allowance of EVERY launch; scope one instead in an
   #   tunnels: []               #   isolation: block (workflow/trigger/step/runtime), e.g.
   #   non_tls: []               #   isolation: { allow: { tunnels: [ssh@bastion.example.com:22],
