@@ -79,6 +79,13 @@ func exitCodeOf(err error) int {
 
 // TestOnceRealExecution: the matched trigger's `use: cli` step really runs —
 // the marker file it writes exists afterwards — and the job exits 0.
+//
+// trust: full here is incidental to what this test is about (real execution
+// of a one-shot run, not isolation): a cli step is confined by default now
+// (code.isolation_default, internal/config), and the marker lives outside
+// the step's workdir — exactly the kind of path a real confined step would
+// need an explicit isolation: fs: for. trust: full keeps this test about
+// what it says it's about.
 func TestOnceRealExecution(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "ran.txt")
 	cfg, fixture := writeOnceCase(t, `
@@ -88,6 +95,7 @@ triggers:
     steps:
       - id: mark
         use: cli
+        trust: full
         command: ["sh", "-c", "printf ok > `+marker+`"]
 `)
 	out, err := onceRun(t, cfg, onceOptions{trigger: "review", fixturePath: fixture})
@@ -632,6 +640,10 @@ func TestOnceStartsNoDaemonSurfaces(t *testing.T) {
 // and the job takes at least the duration it was told to wait. There is no
 // daemon-only machinery behind a helper step (no dispatch, no runtime), which
 // is precisely what this asserts.
+//
+// trust: full on the cli steps is incidental (see TestOnceRealExecution):
+// their markers live outside the step's workdir, which a confined-by-default
+// cli step (code.isolation_default) would otherwise hide by absence.
 func TestOnceSleepHelperStep(t *testing.T) {
 	dir := t.TempDir()
 	before := filepath.Join(dir, "before.txt")
@@ -641,9 +653,9 @@ triggers:
   - on: gh.review_requested
     name: review
     steps:
-      - { id: before, use: cli, command: ["sh", "-c", "printf ok > `+before+`"] }
+      - { id: before, use: cli, trust: full, command: ["sh", "-c", "printf ok > `+before+`"] }
       - { id: nap, sleep: 150ms }
-      - { id: after, use: cli, command: ["sh", "-c", "printf ok > `+after+`"] }
+      - { id: after, use: cli, trust: full, command: ["sh", "-c", "printf ok > `+after+`"] }
 `)
 	start := time.Now()
 	out, err := onceRun(t, cfg, onceOptions{trigger: "review", fixturePath: fixture})
