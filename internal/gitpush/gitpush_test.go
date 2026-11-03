@@ -310,3 +310,46 @@ func TestPushRefusesAHeadOnAnIllegalBranch(t *testing.T) {
 		}
 	}
 }
+
+// A merge of the base branch into the dispatch branch pushes one new commit,
+// the merge: the base's commits are on the remote already, so they are
+// neither counted against the cap nor re-signed into copies of themselves.
+func TestPushAMergeOfTheBaseBranchSignsOnlyTheMerge(t *testing.T) {
+	for _, fetched := range []bool{true, false} {
+		f := newFixture(t)
+		other := filepath.Join(t.TempDir(), "other")
+		run(t, f.base, "git", "clone", "-q", f.remote, other)
+		for i := 0; i < 5; i++ {
+			os.WriteFile(filepath.Join(other, "m.txt"), []byte(strings.Repeat("m", i+1)), 0o644)
+			run(t, other, "git", "add", ".")
+			run(t, other, "git", "commit", "-q", "-m", "main work")
+		}
+		run(t, other, "git", "push", "-q", "origin", "main")
+		run(t, f.base, "git", "fetch", "-q", "origin")
+		mainTip := run(t, f.base, "git", "rev-parse", "origin/main")
+		f.commit(t, "b.txt", "b\n")
+		run(t, f.ws, "git", "merge", "-q", "--no-edit", mainTip)
+		if !fetched {
+			// main moves on again after the base clone's last fetch: its
+			// new tip is not in conductor's objects.
+			os.WriteFile(filepath.Join(other, "n.txt"), []byte("n\n"), 0o644)
+			run(t, other, "git", "add", ".")
+			run(t, other, "git", "commit", "-q", "-m", "later main work")
+			run(t, other, "git", "push", "-q", "origin", "main")
+		}
+		req := f.req()
+		req.MaxCommits = 3
+		res, err := Push(context.Background(), req)
+		if err != nil {
+			t.Fatalf("fetched=%v: %v", fetched, err)
+		}
+		if res.Commits != 2 {
+			t.Fatalf("fetched=%v: pushed %d commits, want 2 (the agent's and the merge)", fetched, res.Commits)
+		}
+		run(t, f.remote, "git", "merge-base", "--is-ancestor", mainTip, res.New)
+		// main's commits reach the branch as themselves, not as signed copies.
+		if run(t, f.remote, "git", "rev-list", "--count", res.New, "^"+mainTip, "^"+res.Old) != "2" {
+			t.Fatalf("fetched=%v: the branch carries copies of main's commits", fetched)
+		}
+	}
+}
