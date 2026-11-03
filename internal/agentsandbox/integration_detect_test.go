@@ -55,6 +55,14 @@ func TestSandboxDetectChild(t *testing.T) {
 		resp.Body.Close()
 		say(resp.StatusCode == 401, "the gateway refuses another key")
 	}
+	// The router itself, on the host's loopback: only through the gateway.
+	direct := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	if resp, err := direct.Get(os.Getenv("DETECT_UPSTREAM")); err == nil {
+		resp.Body.Close()
+		say(false, "the router is unreachable directly")
+	} else {
+		say(true, "the router is unreachable directly")
+	}
 	os.Stdout.Sync()
 	// (this package's TestMain resets HOME in every test binary)
 	home := os.Getenv("DETECT_HOME")
@@ -130,7 +138,7 @@ func TestSandboxDetectsAndGateways(t *testing.T) {
 	}
 	defer l.Cleanup()
 	cmd := exec.Command(l.Argv[0], l.Argv[1:]...)
-	cmd.Dir, cmd.Env = l.Dir, append(l.Env, "AGENTSANDBOX_DETECT=1", "DETECT_HOME="+home)
+	cmd.Dir, cmd.Env = l.Dir, append(l.Env, "AGENTSANDBOX_DETECT=1", "DETECT_HOME="+home, "DETECT_UPSTREAM="+up.URL)
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	start := time.Now()
@@ -144,7 +152,7 @@ func TestSandboxDetectsAndGateways(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	t.Logf("events: %v", events)
-	if strings.Contains(string(out), "FAIL") || strings.Count(string(out), "ok ") != 3 {
+	if strings.Contains(string(out), "FAIL") || strings.Count(string(out), "ok ") != 4 {
 		t.Fatalf("child:\n%s", out)
 	}
 	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); err == nil || !ok || !(ws.Signaled() || ws.ExitStatus() == 137) {
