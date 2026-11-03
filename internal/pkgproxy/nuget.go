@@ -32,20 +32,21 @@ func NewNuGet(cfg RegistryConfig) (*NuGet, error) {
 // Name is the URL segment.
 func (n *NuGet) Name() string { return "nuget" }
 
-// AgentEnv quiets the dotnet CLI's own calls home.
-func (n *NuGet) AgentEnv(string) []string {
-	return []string{"DOTNET_CLI_TELEMETRY_OPTOUT=1", "DOTNET_NOLOGO=1", "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1",
+// AgentEnv carries this launch's URL to NuGet.Config (which expands it)
+// and quiets the dotnet CLI's own calls home.
+func (n *NuGet) AgentEnv(base string) []string {
+	return []string{"CONDUCTOR_NUGET_URL=" + base, "DOTNET_CLI_TELEMETRY_OPTOUT=1", "DOTNET_NOLOGO=1", "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1",
 		"DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=1", "DOTNET_GENERATE_ASPNET_CERTIFICATE=false"}
 }
 
 // HomeFiles makes the proxy the only package source.
-func (n *NuGet) HomeFiles(base string) map[string]string {
+func (n *NuGet) HomeFiles(string) map[string]string {
 	return map[string]string{".nuget/NuGet/NuGet.Config": `<?xml version="1.0" encoding="utf-8"?>
 <!-- Written by conductor: packages come through its package proxy only. -->
 <configuration>
   <packageSources>
     <clear />
-    <add key="conductor" value="` + base + `/v3/index.json" allowInsecureConnections="true" />
+    <add key="conductor" value="%CONDUCTOR_NUGET_URL%/v3/index.json" allowInsecureConnections="true" />
   </packageSources>
 </configuration>
 `}

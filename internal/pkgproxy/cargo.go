@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -33,9 +34,18 @@ func NewCargo(cfg RegistryConfig) (*Cargo, error) {
 // Name is the URL segment.
 func (c *Cargo) Name() string { return "cargo" }
 
-// AgentEnv: cargo's source replacement lives in its config file (HomeFiles).
-func (c *Cargo) AgentEnv(string) []string {
-	return []string{"CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse", "CARGO_NET_GIT_FETCH_WITH_CLI=false"}
+// AgentEnv: cargo's source replacement lives in its config file
+// (HomeFiles), whose URL names the identity alone — cargo reads no source
+// table from the environment. Its User-Agent carries this launch's token,
+// so its fetches are attributed to the launch's dispatch.
+func (c *Cargo) AgentEnv(base string) []string {
+	env := []string{"CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse", "CARGO_NET_GIT_FETCH_WITH_CLI=false"}
+	if u, err := url.Parse(base); err == nil {
+		if tok, _, _ := strings.Cut(strings.TrimPrefix(u.Path, "/"), "/"); tok != "" {
+			env = append(env, "CARGO_HTTP_USER_AGENT=cargo (conductor/"+tok+")")
+		}
+	}
+	return env
 }
 
 // HomeFiles replaces crates.io with the proxy in ~/.cargo/config.toml.

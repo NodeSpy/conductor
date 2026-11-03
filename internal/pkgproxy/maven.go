@@ -31,8 +31,8 @@ func NewMaven(cfg RegistryConfig) (*Maven, error) {
 // Name is the URL segment.
 func (m *Maven) Name() string { return "maven" }
 
-// AgentEnv: Maven and Gradle read their mirrors from HOME (HomeFiles).
-func (m *Maven) AgentEnv(string) []string { return nil }
+// AgentEnv carries this launch's URL to the HOME files, which read it.
+func (m *Maven) AgentEnv(base string) []string { return []string{"CONDUCTOR_MAVEN_URL=" + base} }
 
 // HomeFiles mirrors every Maven repository to the proxy (settings.xml),
 // and rewrites every Maven repository a Gradle build or its settings
@@ -46,13 +46,13 @@ func (m *Maven) HomeFiles(base string) map[string]string {
     <mirror>
       <id>conductor</id>
       <mirrorOf>*</mirrorOf>
-      <url>` + base + `</url>
+      <url>${env.CONDUCTOR_MAVEN_URL}</url>
     </mirror>
   </mirrors>
 </settings>
 `,
 		".gradle/init.d/conductor.gradle": `// Written by conductor: every Maven repository comes through its package proxy.
-def conductorRepo = '` + base + `'
+def conductorRepo = System.getenv('CONDUCTOR_MAVEN_URL') ?: '` + base + `'
 def conductorMirror = { repos ->
   repos.withType(MavenArtifactRepository).configureEach {
     url = conductorRepo

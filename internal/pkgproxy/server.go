@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -203,6 +204,9 @@ func (s *Server) caller(tok string) (Requester, bool) {
 	return Requester{Identity: id, Dispatch: disp}, true
 }
 
+// uaToken is a launch's token in a User-Agent ("… conductor/<token>").
+var uaToken = regexp.MustCompile(`\bconductor/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)`)
+
 // AgentEnv is the environment pointing every ecosystem's tool at this
 // server on behalf of c; nil before Listen.
 func (s *Server) AgentEnv(c Requester) []string {
@@ -264,6 +268,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		http.Error(w, "conductor package proxy: no valid token in the URL (a sandboxed agent's environment carries one)", http.StatusForbidden)
 		return
+	}
+	if c.Dispatch == "" {
+		// A URL from a HOME file names the identity alone; a client that
+		// can only carry its launch's token in its User-Agent (cargo) is
+		// attributed to that launch's dispatch — only for the same identity.
+		if m := uaToken.FindStringSubmatch(r.UserAgent()); m != nil {
+			if full, ok := s.caller(m[1]); ok && full.Identity == c.Identity {
+				c, tok = full, m[1]
+			}
+		}
 	}
 	name, rest, _ := strings.Cut(p, "/")
 	e, ok := s.ecos[name]

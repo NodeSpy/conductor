@@ -34,14 +34,14 @@ func (c *CRAN) Name() string { return "cran" }
 // AgentEnv overrides renv's repositories (it ignores ~/.Rprofile when a
 // project has one).
 func (c *CRAN) AgentEnv(base string) []string {
-	return []string{"RENV_CONFIG_REPOS_OVERRIDE=" + base, "RENV_CONFIG_PAK_ENABLED=FALSE"}
+	return []string{"CONDUCTOR_CRAN_URL=" + base, "RENV_CONFIG_REPOS_OVERRIDE=" + base, "RENV_CONFIG_PAK_ENABLED=FALSE"}
 }
 
 // HomeFiles sets the CRAN repository for R sessions without a project
 // .Rprofile.
 func (c *CRAN) HomeFiles(base string) map[string]string {
 	return map[string]string{".Rprofile": "# Written by conductor: packages come through its package proxy.\n" +
-		"local(options(repos = c(CRAN = \"" + base + "\")))\n"}
+		"local(options(repos = c(CRAN = Sys.getenv(\"CONDUCTOR_CRAN_URL\", \"" + base + "\"))))\n"}
 }
 
 var (

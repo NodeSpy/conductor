@@ -495,3 +495,35 @@ func TestCRAN(t *testing.T) {
 		t.Fatalf("Rprofile: %v", files)
 	}
 }
+
+// A HOME-file URL names the identity alone; the launch's own token in the
+// User-Agent attributes the fetch to its dispatch — never another
+// identity's token, never a forged one.
+func TestUserAgentDispatchAttribution(t *testing.T) {
+	up := newFakeUp(t)
+	r := newRegRig(t, func(c RegistryConfig) (Ecosystem, error) { return NewCargo(c) }, up.URL)
+	idBase := "http://" + r.srv.Addr() + "/" + r.srv.Token(Requester{Identity: "profile:x"}) + "/cargo"
+	for ua, want := range map[string]string{
+		"cargo (conductor/" + r.srv.Token(Requester{Identity: "profile:x", Dispatch: "d-1"}) + ")":     "d-1",
+		"cargo (conductor/" + r.srv.Token(Requester{Identity: "profile:other", Dispatch: "d-2"}) + ")": "",
+		"cargo (conductor/cHJvZmlsZTp4AGQtMw.forged)":                                                  "",
+		"cargo 1.80": "",
+	} {
+		req, _ := http.NewRequest("GET", idBase+"/index/config.json", nil)
+		req.Header.Set("User-Agent", ua)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		wantTok := r.srv.Token(Requester{Identity: "profile:x", Dispatch: want})
+		if !strings.Contains(string(b), "/"+wantTok+"/cargo/api/v1/crates") {
+			t.Errorf("UA %q: config.json %s, want the token for dispatch %q", ua, b, want)
+		}
+	}
+	env := strings.Join(r.srv.AgentEnv(Requester{Identity: "profile:x", Dispatch: "d-1"}), "\n")
+	if !strings.Contains(env, "CARGO_HTTP_USER_AGENT=cargo (conductor/"+r.srv.Token(Requester{Identity: "profile:x", Dispatch: "d-1"})+")") {
+		t.Fatalf("env: %s", env)
+	}
+}

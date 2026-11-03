@@ -28,9 +28,10 @@ func NewRubyGems(cfg RegistryConfig) (*RubyGems, error) {
 // Name is the URL segment.
 func (g *RubyGems) Name() string { return "rubygems" }
 
-// AgentEnv: gem and bundler read their sources from HOME (HomeFiles).
-func (g *RubyGems) AgentEnv(string) []string {
-	return []string{"BUNDLE_DISABLE_VERSION_CHECK=true"}
+// AgentEnv mirrors rubygems.org to base for bundler (its config key as an
+// environment variable); gem reads its sources from HOME (HomeFiles).
+func (g *RubyGems) AgentEnv(base string) []string {
+	return []string{"BUNDLE_DISABLE_VERSION_CHECK=true", "BUNDLE_MIRROR__HTTPS://RUBYGEMS__ORG/=" + base + "/"}
 }
 
 // HomeFiles mirrors rubygems.org to the proxy for bundler, and makes it
