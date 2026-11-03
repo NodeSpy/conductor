@@ -57,6 +57,8 @@ type Resolver struct {
 	// egress session settings every policy carries (Policy).
 	EgressAnyBytes                           bool
 	EgressIdle, EgressUpload, EgressDownload int64
+	// ModelUpload / ModelDownload are the model gateway's caps (Policy).
+	ModelUpload, ModelDownload int64
 	// Allow is sandbox.allow: the base allowance of every launch, joined by
 	// each entry's own scope.
 	Allow *Allowance
@@ -243,6 +245,7 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		PosixIPC: r.PosixIPC,
 		Run:      e.Dispatch, EgressAnyBytes: r.EgressAnyBytes, EgressIdle: r.EgressIdle,
 		EgressUpload: r.EgressUpload, EgressDownload: r.EgressDownload,
+		ModelUpload: r.ModelUpload, ModelDownload: r.ModelDownload,
 	}
 	applyScope(&p, r.Allow, e.Scope)
 	if cache, err := r.persistCache(e, home); err != nil {

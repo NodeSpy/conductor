@@ -262,6 +262,8 @@ func SandboxScope(req Request) *agentsandbox.Scope {
 			s.EgressIdle = int64(idle)
 			s.EgressUpload, _ = config.ParseByteSize(l.Upload)
 			s.EgressDownload, _ = config.ParseByteSize(l.Download)
+			s.ModelUpload, _ = config.ParseByteSize(l.ModelUpload)
+			s.ModelDownload, _ = config.ParseByteSize(l.ModelDownload)
 		}
 	}
 	s.Allow = AllowanceOf(config.UnionAllow(own, req.Step.GrantedAllow))

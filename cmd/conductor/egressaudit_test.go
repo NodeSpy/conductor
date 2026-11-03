@@ -89,3 +89,24 @@ func TestSandboxAlertsCarryNoMarkup(t *testing.T) {
 		t.Fatalf("alert %q", m)
 	}
 }
+
+// Each model request is its own audit row; only a failed one is logged, and
+// a model cap reached is escalated like any limit.
+func TestModelRequestsAreAuditedQuietly(t *testing.T) {
+	var rows []map[string]any
+	var notes, logs []string
+	ev := sandboxEventAudit(func(f string, a ...any) { logs = append(logs, f) }, func(r map[string]any) { rows = append(rows, r) }, func(m string) { notes = append(notes, m) })
+	ev("model_request", map[string]any{"run": "d1", "status": 200, "up": int64(10), "down": int64(20)})
+	ev("model_request", map[string]any{"run": "d1", "status": float64(200)}) // as sandbox exec forwards it
+	if len(rows) != 2 || rows[0]["event"] != "model_request" || len(logs) != 0 || len(notes) != 0 {
+		t.Fatalf("rows %v logs %v notes %v", rows, logs, notes)
+	}
+	ev("model_request", map[string]any{"run": "d1", "status": 529})
+	if len(logs) != 1 {
+		t.Fatalf("a failed model request is logged: %v", logs)
+	}
+	ev("limit", map[string]any{"run": "d1", "kind": "model_upload", "action": "refuse", "reason": "cap"})
+	if len(notes) != 1 || rows[len(rows)-1]["event"] != "sandbox_limit" {
+		t.Fatalf("notes %v rows %v", notes, rows)
+	}
+}

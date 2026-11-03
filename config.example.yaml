@@ -1413,7 +1413,12 @@ sandbox:
   #                             #   env, your login file bound read-only (refresh token readable).
   # egress_require_tls: true    # a tunnel must open with TLS naming its host (checked before the
   #                             #   dial); false lets any protocol through an allowed host
-  # egress_limits: { idle: 10m, upload: 512MiB, download: 20GiB }   # per launch; each takes "off"
+  # egress_limits:              # per launch; each takes "off"
+  #   idle: 10m
+  #   upload: 512MiB
+  #   download: 20GiB
+  #   model_upload: 16GiB       # the model gateway's own caps: a model client resends its whole
+  #   model_download: 16GiB     #   context with every request
   # detect:
   #   action: kill              # a tunnel tool, reverse shell or decoy read kills the launch;
   #                             #   alert: audit + notify only; off: no watcher/tripwires/git guard

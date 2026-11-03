@@ -146,6 +146,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	}
 	idle, up, down := cfg.Sandbox.AgentEgressLimits()
 	r.EgressIdle, r.EgressUpload, r.EgressDownload = int64(idle), up, down
+	r.ModelUpload, r.ModelDownload = cfg.Sandbox.AgentModelLimits()
 	if cfg.Sandbox != nil {
 		r.Allow = dispatch.AllowanceOf(cfg.Sandbox.Allow)
 	}

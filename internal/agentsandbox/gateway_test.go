@@ -80,7 +80,7 @@ func TestGatewaySwapsTheTokenForTheKey(t *testing.T) {
 		*seen = nil
 		g := gatewayPlan{upstream: u, header: hdr, key: "sk-REAL", token: "cgw-launch"}
 		var refused []string
-		gw := httptest.NewServer(gatewayHandler(g, func(s string) { refused = append(refused, s) }))
+		gw := httptest.NewServer(gatewayHandler(g, func(s string) { refused = append(refused, s) }, nil))
 		// Without the launch's token (or with the real key, or another
 		// launch's token): refused, the upstream never reached.
 		for _, h := range []map[string]string{{}, {"X-Api-Key": "sk-REAL"}, {"Authorization": "Bearer cgw-other"}, {"Authorization": "cgw-launch"}} {
@@ -143,7 +143,7 @@ func TestGatewayReachesOnlyItsUpstream(t *testing.T) {
 	up, seen, _ := upstream(t)
 	other, otherSeen, _ := upstream(t)
 	u, _ := url.Parse(up.URL)
-	gw := httptest.NewServer(gatewayHandler(gatewayPlan{upstream: u, header: "bearer", key: "k", token: "t"}, nil))
+	gw := httptest.NewServer(gatewayHandler(gatewayPlan{upstream: u, header: "bearer", key: "k", token: "t"}, nil, nil))
 	defer gw.Close()
 	ou, _ := url.Parse(other.URL)
 	c, err := net.Dial("tcp", strings.TrimPrefix(gw.URL, "http://"))
@@ -369,5 +369,74 @@ func TestWrapGatewayDropsProviderHostFromEgress(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("an unrelated egress host was dropped too: %v", gotAllow)
+	}
+}
+
+// Every model request is audited with its run, status and bytes, and a
+// launch past its model cap has further requests refused (one limit event).
+func TestGatewayMetersAndCapsTheLaunch(t *testing.T) {
+	up, seen, mu := upstream(t)
+	u, _ := url.Parse(up.URL)
+	var evMu sync.Mutex
+	var events []map[string]any
+	var kinds []string
+	m := newModelMeter("run-1", 100, 0, func(kind string, f map[string]any) {
+		evMu.Lock()
+		defer evMu.Unlock()
+		kinds = append(kinds, kind)
+		events = append(events, f)
+	})
+	if m.capDown != DefaultModelDownload {
+		t.Fatalf("download cap defaults to %d, got %d", DefaultModelDownload, m.capDown)
+	}
+	gw := httptest.NewServer(gatewayHandler(gatewayPlan{upstream: u, header: "bearer", key: "k", token: "t"}, nil, m))
+	defer gw.Close()
+	post := func(body string) int {
+		req, _ := http.NewRequest("POST", gw.URL+"/v1/messages?key=t", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer t")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	big := strings.Repeat("x", 80)
+	if st := post(big); st != 200 {
+		t.Fatalf("first: %d", st)
+	}
+	if st := post(big); st != 200 { // 160 > 100 once it is through
+		t.Fatalf("second: %d", st)
+	}
+	for i := 0; i < 2; i++ {
+		if st := post("{}"); st != http.StatusTooManyRequests {
+			t.Fatalf("past the cap: %d", st)
+		}
+	}
+	mu.Lock()
+	n := len(*seen)
+	mu.Unlock()
+	if n != 2 {
+		t.Fatalf("upstream saw %d requests, want 2", n)
+	}
+	evMu.Lock()
+	defer evMu.Unlock()
+	if strings.Join(kinds, ",") != "model_request,model_request,limit" {
+		t.Fatalf("events: %v", kinds)
+	}
+	r := events[0]
+	if r["run"] != "run-1" || r["status"] != 200 || r["up"] != int64(80) || r["down"] != int64(len("data: ok\n\n")) ||
+		r["path"] != "/v1/messages" || r["method"] != "POST" || r["upstream"] != u.Host {
+		t.Fatalf("model_request row: %v", r)
+	}
+	if l := events[2]; l["kind"] != "model_upload" || l["action"] != "refuse" || l["run"] != "run-1" {
+		t.Fatalf("limit event: %v", l)
+	}
+	// Off (-1): never capped.
+	off := newModelMeter("r", -1, -1, nil)
+	off.up.Store(1 << 40)
+	if off.over() != "" {
+		t.Fatal("an off cap caps")
 	}
 }

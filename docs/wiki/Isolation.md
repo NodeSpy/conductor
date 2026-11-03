@@ -191,7 +191,7 @@ sandbox:
   # The containment knobs below are all optional; the values shown are the defaults.
   # model_credential: gateway     # login-copy | login-share
   # egress_require_tls: true      # false: any bytes through an allowed tunnel
-  # egress_limits: { idle: 10m, upload: 512MiB, download: 20GiB }   # each takes "off"
+  # egress_limits: { idle: 10m, upload: 512MiB, download: 20GiB, model_upload: 16GiB, model_download: 16GiB }   # each takes "off"
   # detect:
   #   action: kill                # alert | off
   #   tripwires: true
@@ -391,6 +391,17 @@ in the home. A launch the gateway cannot carry falls back to `login-copy`:
 opencode, or a subscription (OAuth) login with no API key. A refused request
 is audited as `sandbox_model_gateway_refused`.
 
+Every request through the gateway is audited as `{event: model_request}`,
+with the run, upstream host, method, path (never the query), status, bytes
+each way and duration. All of a launch's gateways share one meter, with its
+own caps: `sandbox.egress_limits.model_upload` and `model_download`, 16GiB
+each by default, and each takes `off`. They are far above the egress caps
+because a model client resends its whole context with every request. A
+launch past a cap has further model requests refused (HTTP 429). That raises
+one `sandbox_limit` event (`kind: model_upload` or `model_download`, action
+`refuse`), which is also notified. The request that crosses a cap finishes,
+so a launch can go over by at most one request and its response.
+
 | `model_credential` | the agent gets | you give up |
 |---|---|---|
 | `gateway` (default) | a per-launch token; a login copy for what the gateway cannot carry | — |
@@ -417,7 +428,8 @@ Each agent launch gets its own egress proxy session, attributed to its run:
 - **Caps.** A tunnel with no bytes either way for `idle` (10m) is closed. A
   session over its `upload` (512MiB) or `download` (20GiB) cap has its tunnels
   closed and further CONNECTs refused. Each limit takes `off`. Model traffic
-  through the gateway is not counted.
+  through the gateway is not counted here: it has its own `model_upload` and
+  `model_download` caps (above).
 
 Plugin and code-step egress keeps its plain sessions: no TLS check, no caps.
 
@@ -1097,7 +1109,8 @@ An agent launch's containment adds:
 |---|---|
 | `egress` | each request through its egress session: `run`, `target`, `sni`, `up`/`down` bytes, `duration_ms`, `outcome` (`allowed`, `refused`, `closed`), a `reason` for a refusal or closure, and `allowed_by` for a tunnel a `non_tls` allowance let skip the TLS check |
 | `sandbox_detection` | the watcher, a tripwire or the git guard: `kind`, `reason`, `action` (also a `conductor.escalate` notification); `action: allowed` with `allowed_by: <scope>` when the launch's [allowance](#scoped-allowances) covers it (audited and logged, not notified) |
-| `sandbox_limit` | the disk guard stopped a launch (also notified) |
+| `model_request` | each request through the model gateway: `run`, `upstream`, `method`, `path`, `status`, `up`/`down` bytes, `duration_ms` (logged only when it failed) |
+| `sandbox_limit` | the disk guard stopped a launch, or a launch passed a model cap (`kind: model_upload` / `model_download`, `action: refuse`); also notified |
 | `sandbox_leftover_killed` | processes a launch left running were killed at its end |
 | `sandbox_model_gateway_refused` | a request to the model gateway without the launch's token |
 | `sandbox_limits_unavailable` | once: no systemd user manager, launches run without memory and task caps |

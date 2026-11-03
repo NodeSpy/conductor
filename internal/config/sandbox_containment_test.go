@@ -27,7 +27,7 @@ func TestSandboxContainmentKnobs(t *testing.T) {
   push: { allow_ci_changes: true }
   model_credential: login-copy
   egress_require_tls: false
-  egress_limits: { idle: 30m, upload: 1GiB, download: "off" }
+  egress_limits: { idle: 30m, upload: 1GiB, download: "off", model_upload: 32GiB, model_download: "off" }
   detect: { action: alert, tripwires: false, interval: 5s }
   limits: { memory: 8G, pids: 4096, aggregate_memory: "80%", disk_free_min: 10GiB, required: true }
   persist: cache
@@ -48,6 +48,9 @@ func TestSandboxContainmentKnobs(t *testing.T) {
 	if n, _ := ParseByteSize(s.EgressLimits.Download); n != -1 {
 		t.Fatalf("download off %d", n)
 	}
+	if mu, md := s.AgentModelLimits(); mu != 32<<30 || md != -1 {
+		t.Fatalf("model caps %d %d", mu, md)
+	}
 	if d, _ := ParseLimitDuration(s.EgressLimits.Idle); d != 30*time.Minute {
 		t.Fatalf("idle %v", d)
 	}
@@ -56,7 +59,7 @@ func TestSandboxContainmentKnobs(t *testing.T) {
 	}
 	for _, bad := range []string{
 		"git: { shared: rw }", "model_credential: none", "persist: forever", "detect: { action: shrug }",
-		"egress_limits: { upload: lots }", "egress_limits: { idle: -1s }", "limits: { memory: lots }", "limits: { pids: -1 }",
+		"egress_limits: { upload: lots }", "egress_limits: { model_upload: lots }", "egress_limits: { model_download: -5 }", "egress_limits: { idle: -1s }", "limits: { memory: lots }", "limits: { pids: -1 }",
 	} {
 		if _, err := loadCfg(t, base+"sandbox:\n  "+bad+"\n"); err == nil {
 			t.Errorf("accepted: %s", bad)

@@ -97,6 +97,17 @@ type SandboxEgressLimits struct {
 	// and further CONNECTs refused.
 	Upload   string `yaml:"upload,omitempty"`
 	Download string `yaml:"download,omitempty"`
+	// ModelUpload / ModelDownload cap the bytes a launch sends / receives
+	// through its model gateway (defaults 16GiB each: a model client sends
+	// its whole context with every request). A launch over its cap has
+	// further model requests refused.
+	ModelUpload   string `yaml:"model_upload,omitempty"`
+	ModelDownload string `yaml:"model_download,omitempty"`
+}
+
+// sizes are the byte-size knobs by name.
+func (l *SandboxEgressLimits) sizes() map[string]string {
+	return map[string]string{"upload": l.Upload, "download": l.Download, "model_upload": l.ModelUpload, "model_download": l.ModelDownload}
 }
 
 // SandboxDetect configures detection.
@@ -330,7 +341,7 @@ func (c *Config) validateSandbox() error {
 		if _, err := ParseLimitDuration(l.Idle); err != nil {
 			return fmt.Errorf("config: sandbox.egress_limits.idle: %w", err)
 		}
-		for name, v := range map[string]string{"upload": l.Upload, "download": l.Download} {
+		for name, v := range l.sizes() {
 			if _, err := ParseByteSize(v); err != nil {
 				return fmt.Errorf("config: sandbox.egress_limits.%s: %w", name, err)
 			}
@@ -433,6 +444,17 @@ func (s *SandboxConfig) AgentEgressLimits() (idle time.Duration, upload, downloa
 	upload, _ = ParseByteSize(s.EgressLimits.Upload)
 	download, _ = ParseByteSize(s.EgressLimits.Download)
 	return idle, upload, download
+}
+
+// AgentModelLimits are sandbox.egress_limits' model caps parsed: 0 for the
+// default, -1 for off.
+func (s *SandboxConfig) AgentModelLimits() (upload, download int64) {
+	if s == nil || s.EgressLimits == nil {
+		return 0, 0
+	}
+	upload, _ = ParseByteSize(s.EgressLimits.ModelUpload)
+	download, _ = ParseByteSize(s.EgressLimits.ModelDownload)
+	return upload, download
 }
 
 // ParseLimitDuration parses a duration knob: "" is 0 (unset), "off" is -1.

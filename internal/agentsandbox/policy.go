@@ -81,6 +81,11 @@ type Policy struct {
 	EgressIdle     int64 `json:"egress_idle,omitempty"`
 	EgressUpload   int64 `json:"egress_upload,omitempty"`
 	EgressDownload int64 `json:"egress_download,omitempty"`
+	// ModelUpload and ModelDownload (bytes) bound what the launch moves
+	// through its model gateway (sandbox.egress_limits.model_*): 0 is the
+	// default, -1 off.
+	ModelUpload   int64 `json:"model_upload,omitempty"`
+	ModelDownload int64 `json:"model_download,omitempty"`
 	// ModelCredential is sandbox.model_credential ("" = gateway): how the
 	// agent authenticates its model traffic (CredGateway, CredLoginCopy,
 	// CredLoginShare).
@@ -389,6 +394,7 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	}
 	exposed := map[string]string{}
 	gwURLs := make([]string, 0, len(mc.plans))
+	meter := newModelMeter(p.EgressSession().Run, p.ModelUpload, p.ModelDownload, d.Event)
 	for i, g := range mc.plans {
 		g := g
 		onRefuse := func(what string) {
@@ -404,7 +410,7 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 				cleanupAll()
 				return nil, fmt.Errorf("agentsandbox: model gateway: %w", err)
 			}
-			s := serveGateway(ln, g, onRefuse)
+			s := serveGateway(ln, g, onRefuse, meter)
 			closers = append(closers, s.Close)
 			port := ln.Addr().(*net.TCPAddr).Port
 			prof.LoopbackPorts = append(prof.LoopbackPorts, port)
@@ -416,7 +422,7 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 			cleanupAll()
 			return nil, fmt.Errorf("agentsandbox: model gateway: %w", err)
 		}
-		s := serveGateway(ln, g, onRefuse)
+		s := serveGateway(ln, g, onRefuse, meter)
 		closers = append(closers, func() { s.Close(); rm() })
 		addr := gatewayListenAddr(i, append(append([]string(nil), p.Loopback...), p.Expose...))
 		binds = append(binds, sandbox.BindMount{Path: sock})

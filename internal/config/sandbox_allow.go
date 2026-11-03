@@ -182,7 +182,7 @@ func validateScopeSandbox(where string, iso *IsolationConfig) error {
 		if _, err := ParseLimitDuration(l.Idle); err != nil {
 			return fmt.Errorf("config: %s: isolation.egress_limits.idle: %w", where, err)
 		}
-		for name, v := range map[string]string{"upload": l.Upload, "download": l.Download} {
+		for name, v := range l.sizes() {
 			if _, err := ParseByteSize(v); err != nil {
 				return fmt.Errorf("config: %s: isolation.egress_limits.%s: %w", where, name, err)
 			}
@@ -259,7 +259,7 @@ func (c *Config) AllowanceNotes() []string {
 		}
 		if l := iso.EgressLimits; l != nil {
 			var off []string
-			for _, kv := range [][2]string{{"idle", l.Idle}, {"upload", l.Upload}, {"download", l.Download}} {
+			for _, kv := range [][2]string{{"idle", l.Idle}, {"upload", l.Upload}, {"download", l.Download}, {"model_upload", l.ModelUpload}, {"model_download", l.ModelDownload}} {
 				if strings.EqualFold(strings.TrimSpace(kv[1]), "off") {
 					off = append(off, kv[0])
 				}

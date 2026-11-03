@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -165,9 +166,108 @@ func gatewayToken() (string, error) {
 	return "cgw-" + hex.EncodeToString(b), nil
 }
 
+// Default model gateway caps: per launch, both ways. Generous — a model
+// client resends its whole context with every request — but finite.
+const (
+	DefaultModelUpload   = 16 << 30
+	DefaultModelDownload = 16 << 30
+)
+
+// modelMeter counts one launch's model traffic, all of its gateways
+// together, against its caps (<= 0 after defaults: none). event (nil:
+// none) receives a model_request row per request and one limit event when
+// a cap is first passed.
+type modelMeter struct {
+	run            string
+	capUp, capDown int64
+	up, down       atomic.Int64
+	capped         sync.Once
+	event          func(string, map[string]any)
+}
+
+func newModelMeter(run string, up, down int64, event func(string, map[string]any)) *modelMeter {
+	if up == 0 {
+		up = DefaultModelUpload
+	}
+	if down == 0 {
+		down = DefaultModelDownload
+	}
+	return &modelMeter{run: run, capUp: up, capDown: down, event: event}
+}
+
+// over names the cap the launch has passed ("" = none).
+func (m *modelMeter) over() string {
+	switch {
+	case m.capUp > 0 && m.up.Load() > m.capUp:
+		return "model_upload"
+	case m.capDown > 0 && m.down.Load() > m.capDown:
+		return "model_download"
+	}
+	return ""
+}
+
+// countingBody counts what is read of a request body.
+type countingBody struct {
+	io.ReadCloser
+	n *atomic.Int64
+	c *atomic.Int64
+}
+
+func (b countingBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.n.Add(int64(n))
+	b.c.Add(int64(n))
+	return n, err
+}
+
+// countingWriter counts a response's bytes and status; it flushes through.
+type countingWriter struct {
+	http.ResponseWriter
+	n      int64
+	total  *atomic.Int64
+	status int
+}
+
+func (w *countingWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.n += int64(n)
+	w.total.Add(int64(n))
+	return n, err
+}
+
+// Unwrap lets http.ResponseController reach the connection's writer.
+func (w *countingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *countingWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// requestPath is a request's path for the audit: no query (a key may ride
+// there), bounded.
+func requestPath(r *http.Request) string {
+	p := r.URL.EscapedPath()
+	if len(p) > 200 {
+		p = p[:200] + "…"
+	}
+	return p
+}
+
 // gatewayHandler serves one plan: the launch's token in, the operator's
-// credential out, to exactly the configured upstream.
-func gatewayHandler(g gatewayPlan, onRefuse func(string)) http.Handler {
+// credential out, to exactly the configured upstream. meter (nil: none)
+// audits and caps the launch's model traffic.
+func gatewayHandler(g gatewayPlan, onRefuse func(string), meter *modelMeter) http.Handler {
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(g.upstream)
@@ -210,7 +310,31 @@ func gatewayHandler(g gatewayPlan, onRefuse func(string)) http.Handler {
 			http.Error(w, "conductor model gateway: this launch's token is required", http.StatusUnauthorized)
 			return
 		}
-		rp.ServeHTTP(w, r)
+		if meter == nil {
+			rp.ServeHTTP(w, r)
+			return
+		}
+		if which := meter.over(); which != "" {
+			meter.capped.Do(func() {
+				if meter.event != nil {
+					meter.event("limit", map[string]any{"run": meter.run, "kind": which, "action": "refuse",
+						"reason": fmt.Sprintf("model gateway: the launch passed sandbox.egress_limits.%s (sent %d, received %d bytes)", which, meter.up.Load(), meter.down.Load())})
+				}
+			})
+			http.Error(w, "conductor model gateway: this launch's model traffic cap is reached (sandbox.egress_limits."+which+")", http.StatusTooManyRequests)
+			return
+		}
+		start := time.Now()
+		var up atomic.Int64
+		if r.Body != nil && r.Body != http.NoBody {
+			r.Body = countingBody{ReadCloser: r.Body, n: &up, c: &meter.up}
+		}
+		cw := &countingWriter{ResponseWriter: w, total: &meter.down}
+		rp.ServeHTTP(cw, r)
+		if meter.event != nil {
+			meter.event("model_request", map[string]any{"run": meter.run, "upstream": g.upstream.Host, "method": r.Method,
+				"path": requestPath(r), "status": cw.status, "up": up.Load(), "down": cw.n, "duration_ms": time.Since(start).Milliseconds()})
+		}
 	})
 }
 
@@ -241,8 +365,8 @@ type gatewayServer struct {
 	sock string
 }
 
-func serveGateway(ln net.Listener, g gatewayPlan, onRefuse func(string)) *gatewayServer {
-	s := &gatewayServer{srv: &http.Server{Handler: gatewayHandler(g, onRefuse), ReadHeaderTimeout: 30 * time.Second}}
+func serveGateway(ln net.Listener, g gatewayPlan, onRefuse func(string), meter *modelMeter) *gatewayServer {
+	s := &gatewayServer{srv: &http.Server{Handler: gatewayHandler(g, onRefuse, meter), ReadHeaderTimeout: 30 * time.Second}}
 	go func() { _ = s.srv.Serve(ln) }()
 	return s
 }

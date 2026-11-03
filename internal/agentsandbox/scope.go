@@ -33,6 +33,9 @@ type Scope struct {
 	// EgressIdle (ns), EgressUpload, EgressDownload override the global
 	// limits: 0 keeps it, -1 is off.
 	EgressIdle, EgressUpload, EgressDownload int64 `json:",omitempty"`
+	// ModelUpload, ModelDownload override the model gateway's caps the
+	// same way.
+	ModelUpload, ModelDownload int64 `json:",omitempty"`
 }
 
 // JoinAllowances is every allowance of list in one (nil: none).
@@ -88,7 +91,8 @@ func applyScope(p *Policy, base *Allowance, s *Scope) {
 		for _, o := range []struct {
 			v   int64
 			dst *int64
-		}{{s.EgressIdle, &p.EgressIdle}, {s.EgressUpload, &p.EgressUpload}, {s.EgressDownload, &p.EgressDownload}} {
+		}{{s.EgressIdle, &p.EgressIdle}, {s.EgressUpload, &p.EgressUpload}, {s.EgressDownload, &p.EgressDownload},
+			{s.ModelUpload, &p.ModelUpload}, {s.ModelDownload, &p.ModelDownload}} {
 			if o.v != 0 {
 				*o.dst = o.v
 			}

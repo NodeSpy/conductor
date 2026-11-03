@@ -185,7 +185,11 @@ func sandboxExecCwd() (cwd string, agent bool, err error) {
 func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string, sock string) (*agentsandbox.Launch, func(), error) {
 	rep := newEventReporter(sock)
 	event := func(kind string, f map[string]any) {
-		fmt.Fprintf(os.Stderr, "conductor sandbox: %s %v\n", kind, f)
+		// A model request is on stderr only when it failed: the agent's
+		// own output is there too.
+		if st, _ := f["status"].(int); kind != "model_request" || st >= 400 {
+			fmt.Fprintf(os.Stderr, "conductor sandbox: %s %v\n", kind, f)
+		}
 		rep.send(kind, f)
 	}
 	pm := sandbox.NewProxyManager(func(_, hostport string) {
@@ -206,6 +210,12 @@ func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string, sock string) 
 			if v != "" {
 				f[k] = v
 			}
+		}
+		if r.MaxIdle > 0 {
+			f["max_idle_ms"] = r.MaxIdle.Milliseconds()
+		}
+		if r.ServerFirst > 0 {
+			f["server_first"] = r.ServerFirst
 		}
 		rep.send("egress", f)
 	}

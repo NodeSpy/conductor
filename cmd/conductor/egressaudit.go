@@ -17,14 +17,23 @@ func sandboxEventAudit(logf func(string, ...any), audit func(map[string]any), no
 		// A sandbox exec launch's egress records are the same rows as the
 		// daemon's own launches' (egress, egress_denied).
 		ev := "sandbox_" + kind
-		if kind == "egress" || kind == "egress_denied" {
+		if kind == "egress" || kind == "egress_denied" || kind == "model_request" {
 			ev = kind
 		}
 		row := map[string]any{"event": ev}
 		for k, v := range fields {
 			row[k] = v
 		}
-		if ev != "egress" || fields["reason"] != nil {
+		// A model request is logged only when it failed.
+		quiet := ev == "egress" && fields["reason"] == nil
+		if ev == "model_request" {
+			st, _ := fields["status"].(int)
+			if f, ok := fields["status"].(float64); ok { // forwarded by sandbox exec as JSON
+				st = int(f)
+			}
+			quiet = st != 0 && st < 400
+		}
+		if !quiet {
 			logf("sandbox: %s %v", kind, fields)
 		}
 		audit(row)
