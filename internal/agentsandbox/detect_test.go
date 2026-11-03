@@ -399,6 +399,34 @@ func TestTunnelAllowanceNeverCoversAShell(t *testing.T) {
 			t.Errorf("%s: signalled %v", c.name, signalled)
 		}
 	}
+	// Every verdict must be covered, not only the first; a covered process
+	// is audited by its most telling verdict.
+	for _, c := range []struct {
+		name    string
+		spec    DetectSpec
+		p       procInfo
+		allowed bool
+		kind    string
+	}{
+		{"pty allowed, the tunnel not", DetectSpec{AllowPty: true, AllowedBy: "step x"},
+			procInfo{args: []string{"socat"}, id: identity{"socat", classTunnel}, ptyMaster: true, inetSocket: true, inetFDs: []int{5}}, false, "tunnel_tool"},
+		{"shells and the tool allowed", DetectSpec{AllowReverseShell: true, AllowTunnels: []string{"ssh"}, AllowedBy: "step x"},
+			procInfo{args: []string{"ssh"}, stdio: sock, inetFDs: []int{0, 1}}, true, "reverse_shell"},
+	} {
+		c.p.pid, c.p.ppid, c.p.start = 900072, 900071, 1
+		procs := []procInfo{{pid: 900070, ppid: 1, marked: true, start: 1, args: []string{"unshare"}}, {pid: 900071, ppid: 900070, start: 1, args: []string{"claude"}}, c.p}
+		var events []map[string]any
+		var signalled []int
+		d := &detector{spec: c.spec, run: "r1", allow: map[string]bool{},
+			list:     func() ([]procInfo, error) { return procs, nil },
+			signal:   func(pid int, _ uint64) error { signalled = append(signalled, pid); return nil },
+			event:    func(_ string, f map[string]any) { events = append(events, f) },
+			reported: map[string]bool{}}
+		d.scan()
+		if len(events) != 1 || events[0]["kind"] != c.kind || (events[0]["action"] == "allowed") != c.allowed || c.allowed != (len(signalled) == 0) {
+			t.Errorf("%s: events %v signalled %v", c.name, events, signalled)
+		}
+	}
 	// sandbox.detect.allow by name exempts an unknown binary from the
 	// tunnel rule only.
 	if v := classify(procInfo{args: []string{"ssh"}, stdio: sock}, map[string]bool{"ssh": true}, false, false); v == nil || v.kind != "reverse_shell" {

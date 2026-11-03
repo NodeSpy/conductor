@@ -225,10 +225,12 @@ func TestPackGrantIsPinnedToTheReviewedAllowance(t *testing.T) {
 		t.Fatalf("the grant is not a scope source: %+v", src.Grants)
 	}
 	for name, edit := range map[string][2]string{
-		"widened":       {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], reverse_shell: true, pty: true }"},
-		"retargeted":    {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [\"x@*\"] }"},
-		"another step":  {"steps: [review/look]", "steps: [review/look, review/post]"},
-		"non_tls added": {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], non_tls: [bastion.example:22] }"},
+		"widened":        {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], reverse_shell: true, pty: true }"},
+		"retargeted":     {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [\"x@*\"] }"},
+		"another step":   {"steps: [review/look]", "steps: [review/look, review/post]"},
+		"reverse shells": {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], reverse_shell: true }"},
+		"pty relays":     {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], pty: true }"},
+		"non_tls added":  {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], non_tls: [bastion.example:22] }"},
 	} {
 		body := strings.Replace(allowPack, edit[0], edit[1], 1)
 		if body == allowPack {
