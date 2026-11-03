@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -40,6 +41,63 @@ type SessionOpts struct {
 	// NonTLSBy as the tunnel's AllowedBy.
 	NonTLS   []string
 	NonTLSBy string
+	// Shape is what a tunnel of a suspicious shape gets (see ShapeEvent):
+	// ShapeAlert ("" too), ShapeClose (the tunnel is closed) or ShapeOff.
+	// The features are on every ConnRecord either way.
+	Shape string
+	// ShapeAllowed are host:port patterns (as egress) whose tunnels'
+	// shapes are reported as allowed (by ShapeAllowedBy): a scoped
+	// allowance's tunnel hosts. ShapeAllowAll: every tunnel's (an
+	// allowance for a tunnel tool to any host).
+	ShapeAllowed   []string
+	ShapeAllowAll  bool
+	ShapeAllowedBy string
+	// OnShape receives each flagged tunnel, once, while it is open (not
+	// called with Shape off).
+	OnShape func(ShapeEvent)
+}
+
+// Tunnel shapes and what a flagged one gets.
+const (
+	ShapeAlert = "alert"
+	ShapeClose = "close"
+	ShapeOff   = "off"
+
+	// ShapeInteractive: a long-lived, low-volume tunnel in which the far
+	// end repeatedly speaks first after a silence — a remote operator's
+	// commands, not a client's requests.
+	ShapeInteractive = "interactive"
+	// ShapeBulkUpload: a tunnel that sends much and receives little.
+	ShapeBulkUpload = "bulk_upload"
+)
+
+// Shape thresholds (vars for tests). Timing cannot tell a remote
+// operator's commands from a server that answers every request slowly
+// (long polling, a websocket): both are the client speaking, a silence,
+// the server speaking. The thresholds keep that to answers of 5s or more,
+// five times over, on a small tunnel open two minutes or more — rare in
+// build traffic (model traffic goes through the gateway, not here) — and
+// a flagged tunnel is alerted on by default, not closed.
+var (
+	// ServerFirstGap is the silence after which the server's bytes count
+	// as it speaking first (the client spoke last).
+	ServerFirstGap            = 5 * time.Second
+	interactiveMinAge         = 2 * time.Minute
+	interactiveMinTurns int32 = 5
+	interactiveMaxBytes int64 = 4 << 20
+	bulkUploadMin       int64 = 16 << 20
+	bulkUploadRatio     int64 = 8
+)
+
+// ShapeEvent is a tunnel flagged by its shape.
+type ShapeEvent struct {
+	Run, Target, Kind, Reason string
+	// Action is ShapeAlert, ShapeClose or "allowed" (an allowance covers
+	// the tunnel); AllowedBy names that allowance.
+	Action, AllowedBy string
+	Up, Down          int64
+	Age, MaxIdle      time.Duration
+	ServerFirst       int
 }
 
 // Default egress limits.
@@ -82,6 +140,9 @@ type ConnRecord struct {
 	// AllowedBy names the allowance that let the tunnel skip a check (its
 	// scope); "" for an ordinary tunnel.
 	AllowedBy string `json:"allowed_by,omitempty"`
+	// Shape is the tunnel's flagged shape (ShapeInteractive,
+	// ShapeBulkUpload; "" = none).
+	Shape string `json:"shape,omitempty"`
 }
 
 // Session is one launch's use of a proxy.
@@ -91,6 +152,7 @@ type Session struct {
 	requireTLS bool
 	nonTLS     []string
 	nonTLSBy   string
+	shape      SessionOpts
 
 	up, down atomic.Int64
 
@@ -100,7 +162,7 @@ type Session struct {
 }
 
 func newSession(o SessionOpts) *Session {
-	return &Session{Run: o.Run, lim: o.Limits.resolved(), requireTLS: o.RequireTLS, nonTLS: o.NonTLS, nonTLSBy: o.NonTLSBy, conns: map[*tunnel]struct{}{}}
+	return &Session{Run: o.Run, lim: o.Limits.resolved(), requireTLS: o.RequireTLS, nonTLS: o.NonTLS, nonTLSBy: o.NonTLSBy, shape: o, conns: map[*tunnel]struct{}{}}
 }
 
 // Bytes reports the session's totals.
@@ -161,7 +223,10 @@ func (s *Session) count(n int64, upstream bool) {
 // tunnel is one open CONNECT tunnel.
 type tunnel struct {
 	sess           *Session
+	target         string
 	client, server net.Conn
+	flagged        sync.Once
+	shape          atomic.Value // string
 	start          time.Time
 	last           atomic.Int64 // unix nanos of the last byte either way
 	lastDir        atomic.Int32 // 1 client→server, 2 server→client
@@ -188,10 +253,42 @@ func (t *tunnel) touch(dir int32) {
 	if gap > time.Duration(t.maxIdle.Load()) {
 		t.maxIdle.Store(int64(gap))
 	}
-	if dir == 2 && gap >= 30*time.Second && t.lastDir.Load() != 2 {
-		t.serverFirst.Add(1)
+	if dir == 2 && gap >= ServerFirstGap && t.lastDir.Load() != 2 {
+		if n := t.serverFirst.Add(1); n >= interactiveMinTurns {
+			age := time.Since(t.start)
+			if total := t.up.Load() + t.down.Load(); age >= interactiveMinAge && total < interactiveMaxBytes {
+				t.flag(ShapeInteractive, fmt.Sprintf("open %s, the far end spoke first %d times after a silence, %d bytes in all", age.Round(time.Second), n, total))
+			}
+		}
 	}
 	t.lastDir.Store(dir)
+}
+
+// flag reports the tunnel's shape, once, and closes it when the session
+// says so.
+func (t *tunnel) flag(kind, reason string) {
+	o := t.sess.shape
+	if o.Shape == ShapeOff {
+		return
+	}
+	t.flagged.Do(func() {
+		t.shape.Store(kind)
+		action := ShapeAlert
+		by := ""
+		if o.ShapeAllowAll || (t.target != "" && EgressAllowed(o.ShapeAllowed, t.target)) {
+			action, by = "allowed", o.ShapeAllowedBy
+		} else if o.Shape == ShapeClose {
+			action = ShapeClose
+		}
+		ev := ShapeEvent{Run: t.sess.Run, Target: t.target, Kind: kind, Reason: reason, Action: action, AllowedBy: by,
+			Up: t.up.Load(), Down: t.down.Load(), Age: time.Since(t.start), MaxIdle: time.Duration(t.maxIdle.Load()), ServerFirst: int(t.serverFirst.Load())}
+		if o.OnShape != nil {
+			go o.OnShape(ev)
+		}
+		if action == ShapeClose {
+			go t.close(kind + "-shaped tunnel closed (sandbox.detect.connections: close)")
+		}
+	})
 }
 
 // pipe copies one direction, counting into the session.
@@ -206,7 +303,9 @@ func (t *tunnel) pipe(dst io.Writer, src io.Reader, upstream bool) {
 		if n > 0 {
 			t.touch(dir)
 			if upstream {
-				t.up.Add(int64(n))
+				if v := t.up.Add(int64(n)); v >= bulkUploadMin && v >= bulkUploadRatio*t.down.Load() {
+					t.flag(ShapeBulkUpload, fmt.Sprintf("sent %d bytes, received %d", v, t.down.Load()))
+				}
 			} else {
 				t.down.Add(int64(n))
 			}
@@ -260,6 +359,9 @@ func (t *tunnel) run(clientR *bufio.Reader) ConnRecord {
 	close(stop)
 	rec := ConnRecord{Run: t.sess.Run, Outcome: "closed", Up: t.up.Load(), Down: t.down.Load(),
 		Duration: time.Since(t.start), MaxIdle: time.Duration(t.maxIdle.Load()), ServerFirst: int(t.serverFirst.Load())}
+	if sh, _ := t.shape.Load().(string); sh != "" {
+		rec.Shape = sh
+	}
 	if w, _ := t.why.Load().(string); w != "" {
 		rec.Reason = w
 	}

@@ -372,6 +372,21 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		EgressAddr: d.EgressAddr,
 	}
 	if so := p.EgressSession(); d.EgressUnixSession != nil {
+		so.Shape, so.ShapeAllowed, so.ShapeAllowAll, so.ShapeAllowedBy = p.Detect.Connections, p.Detect.ShapeAllowed, p.Detect.ShapeAllowAll, p.Detect.AllowedBy
+		if p.Detect.Action == DetectOff {
+			so.Shape = sandbox.ShapeOff
+		}
+		if d.Event != nil {
+			so.OnShape = func(e sandbox.ShapeEvent) {
+				f := map[string]any{"run": e.Run, "kind": "tunnel_shape", "shape": e.Kind, "target": e.Target,
+					"reason": e.Target + ": " + e.Kind + " (" + e.Reason + ")", "action": e.Action,
+					"up": e.Up, "down": e.Down, "age_ms": e.Age.Milliseconds(), "max_idle_ms": e.MaxIdle.Milliseconds(), "server_first": e.ServerFirst}
+				if e.AllowedBy != "" {
+					f["allowed_by"] = e.AllowedBy
+				}
+				d.Event("detection", f)
+			}
+		}
 		deps.EgressUnix = func(allow []string) (string, string, func(), error) { return d.EgressUnixSession(allow, so) }
 		if d.EgressAddrSession != nil {
 			deps.EgressAddr = func(allow []string) (string, string, func(), error) { return d.EgressAddrSession(allow, so) }

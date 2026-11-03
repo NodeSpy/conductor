@@ -81,6 +81,9 @@ func egressAudit(logf func(string, ...any), audit func(map[string]any)) func(san
 		if r.ServerFirst > 0 {
 			row["server_first"] = r.ServerFirst
 		}
+		if r.Shape != "" {
+			row["shape"] = r.Shape
+		}
 		audit(row)
 	}
 }

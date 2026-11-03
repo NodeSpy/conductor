@@ -124,6 +124,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		Detect: agentsandbox.DetectSpec{
 			Action: cfg.Sandbox.DetectAction(), Interval: cfg.Sandbox.DetectInterval(),
 			NoTripwires: !cfg.Sandbox.TripwiresOn(), Allow: cfg.Sandbox.DetectAllow(),
+			Connections: cfg.Sandbox.DetectConnections(),
 		},
 		// A bot's home (or a hand-off worker) runs in a pinned paseo workspace
 		// conductor never registers as a worktree, so `conductor sandbox exec`

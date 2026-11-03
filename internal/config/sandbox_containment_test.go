@@ -28,7 +28,7 @@ func TestSandboxContainmentKnobs(t *testing.T) {
   model_credential: login-copy
   egress_require_tls: false
   egress_limits: { idle: 30m, upload: 1GiB, download: "off", model_upload: 32GiB, model_download: "off" }
-  detect: { action: alert, tripwires: false, interval: 5s }
+  detect: { action: alert, tripwires: false, interval: 5s, connections: close }
   limits: { memory: 8G, pids: 4096, aggregate_memory: "80%", disk_free_min: 10GiB, required: true }
   persist: cache
   macos_posix_ipc: true
@@ -48,6 +48,10 @@ func TestSandboxContainmentKnobs(t *testing.T) {
 	if n, _ := ParseByteSize(s.EgressLimits.Download); n != -1 {
 		t.Fatalf("download off %d", n)
 	}
+	if s.DetectConnections() != "close" || (&SandboxConfig{}).DetectConnections() != "alert" ||
+		(&SandboxConfig{Detect: &SandboxDetect{Action: "off", Connections: "close"}}).DetectConnections() != "off" {
+		t.Fatalf("connections %q", s.DetectConnections())
+	}
 	if mu, md := s.AgentModelLimits(); mu != 32<<30 || md != -1 {
 		t.Fatalf("model caps %d %d", mu, md)
 	}
@@ -58,7 +62,7 @@ func TestSandboxContainmentKnobs(t *testing.T) {
 		t.Fatal("detection off turns tripwires off")
 	}
 	for _, bad := range []string{
-		"git: { shared: rw }", "model_credential: none", "persist: forever", "detect: { action: shrug }",
+		"git: { shared: rw }", "model_credential: none", "persist: forever", "detect: { action: shrug }", "detect: { connections: kill }",
 		"egress_limits: { upload: lots }", "egress_limits: { model_upload: lots }", "egress_limits: { model_download: -5 }", "egress_limits: { idle: -1s }", "limits: { memory: lots }", "limits: { pids: -1 }",
 	} {
 		if _, err := loadCfg(t, base+"sandbox:\n  "+bad+"\n"); err == nil {

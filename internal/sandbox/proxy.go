@@ -505,7 +505,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 		}
 		sess.count(int64(len(hello)), true)
 	}
-	t := &tunnel{sess: sess, client: client, server: upstream}
+	t := &tunnel{sess: sess, target: target, client: client, server: upstream}
 	if !sess.add(t) {
 		upstream.Close()
 		fail("refused", sess.refused())

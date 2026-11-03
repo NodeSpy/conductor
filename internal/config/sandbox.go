@@ -127,6 +127,10 @@ type SandboxDetect struct {
 	// Allow names programs the watcher lets run though they are tunnel
 	// tools (ssh, socat, nc, …): an agent whose work needs one.
 	Allow []string `yaml:"allow,omitempty"`
+	// Connections is what an egress tunnel of a suspicious shape gets
+	// (an interactive channel, a bulk upload): `alert` (default) — audited
+	// and notified; `close` — the tunnel is also closed; `off`.
+	Connections string `yaml:"connections,omitempty"`
 }
 
 // SandboxLimits are default resource limits for agent launches.
@@ -261,6 +265,18 @@ func (s *SandboxConfig) DetectInterval() time.Duration {
 }
 
 // DetectAllow is sandbox.detect.allow.
+// DetectConnections is sandbox.detect.connections ("alert" by default;
+// "off" when detection is off).
+func (s *SandboxConfig) DetectConnections() string {
+	if s.DetectAction() == "off" {
+		return "off"
+	}
+	if s == nil || s.Detect == nil || s.Detect.Connections == "" {
+		return "alert"
+	}
+	return s.Detect.Connections
+}
+
 func (s *SandboxConfig) DetectAllow() []string {
 	if s == nil || s.Detect == nil {
 		return nil
@@ -352,6 +368,11 @@ func (c *Config) validateSandbox() error {
 		case "", "kill", "alert", "off":
 		default:
 			return fmt.Errorf("config: sandbox.detect.action must be kill|alert|off, got %q", d.Action)
+		}
+		switch d.Connections {
+		case "", "alert", "close", "off":
+		default:
+			return fmt.Errorf("config: sandbox.detect.connections must be alert|close|off, got %q", d.Connections)
 		}
 		if _, err := ParseLimitDuration(d.Interval); err != nil {
 			return fmt.Errorf("config: sandbox.detect.interval: %w", err)

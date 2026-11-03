@@ -1,6 +1,10 @@
 package agentsandbox
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/NodeSpy/conductor/internal/sandbox"
+)
 
 // Allowance loosens a launch's detection and TLS check: what the operator
 // allowed it in sandbox.allow or the isolation: blocks of its scopes (see
@@ -11,6 +15,9 @@ type Allowance struct {
 	Tunnels []string `json:"tunnels,omitempty"`
 	// TunnelHosts join the launch's egress allowlist.
 	TunnelHosts []string `json:"tunnel_hosts,omitempty"`
+	// TunnelAnyHost: a tunnel tool is allowed by name alone, to any host
+	// the launch reaches.
+	TunnelAnyHost bool `json:"tunnel_any_host,omitempty"`
 	// NonTLS are targets exempt from the TLS first-bytes check.
 	NonTLS       []string `json:"non_tls,omitempty"`
 	ReverseShell bool     `json:"reverse_shell,omitempty"`
@@ -57,6 +64,7 @@ func JoinAllowances(list ...*Allowance) *Allowance {
 		for _, h := range a.NonTLS {
 			u.NonTLS = appendUnique(u.NonTLS, h)
 		}
+		u.TunnelAnyHost = u.TunnelAnyHost || a.TunnelAnyHost
 		u.ReverseShell = u.ReverseShell || a.ReverseShell
 		u.Pty = u.Pty || a.Pty
 		for _, b := range strings.Split(a.By, " + ") {
@@ -87,6 +95,7 @@ func applyScope(p *Policy, base *Allowance, s *Scope) {
 		}
 		if p.Detect.Action == DetectOff {
 			p.Detect.NoTripwires = true
+			p.Detect.Connections = sandbox.ShapeOff
 		}
 		for _, o := range []struct {
 			v   int64
@@ -109,4 +118,7 @@ func applyScope(p *Policy, base *Allowance, s *Scope) {
 		p.Egress = appendUnique(p.Egress, h)
 	}
 	p.NonTLS, p.NonTLSBy = a.NonTLS, a.By
+	// A tunnel the allowance covers may be shaped like one.
+	p.Detect.ShapeAllowed = append(append([]string(nil), a.TunnelHosts...), a.NonTLS...)
+	p.Detect.ShapeAllowAll = a.TunnelAnyHost
 }

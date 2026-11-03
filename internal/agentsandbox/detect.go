@@ -162,6 +162,13 @@ type DetectSpec struct {
 	AllowReverseShell bool     `json:"allow_reverse_shell,omitempty"`
 	AllowPty          bool     `json:"allow_pty,omitempty"`
 	AllowedBy         string   `json:"allowed_by,omitempty"`
+	// Connections is what an egress tunnel of a suspicious shape gets
+	// (sandbox.ShapeAlert, ShapeClose, ShapeOff; "" = alert).
+	Connections string `json:"connections,omitempty"`
+	// ShapeAllowed / ShapeAllowAll: tunnels the allowance covers, whose
+	// shape is audited as allowed (see sandbox.SessionOpts).
+	ShapeAllowed  []string `json:"shape_allowed,omitempty"`
+	ShapeAllowAll bool     `json:"shape_allow_all,omitempty"`
 }
 
 // allows reports whether the launch's allowance covers a verdict of kind

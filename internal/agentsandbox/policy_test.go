@@ -545,13 +545,41 @@ func TestWrapMintsTheAgentsEgressSession(t *testing.T) {
 			}
 			f.pol.Run = "run-7:fix"
 			f.pol.EgressUpload = 1 << 20
+			f.pol.Detect.Connections = sandbox.ShapeClose
+			f.pol.Detect.ShapeAllowed, f.pol.Detect.AllowedBy = []string{"bastion.example:22"}, "workflow ops"
+			var shapes []map[string]any
+			f.deps.Event = func(kind string, fl map[string]any) {
+				if kind == "detection" {
+					shapes = append(shapes, fl)
+				}
+			}
 			if _, err := Wrap(f.pol, []string{"claude"}, f.deps); err != nil {
 				t.Fatal(err)
 			}
-			want := sandbox.SessionOpts{Run: "run-7:fix", RequireTLS: true, Limits: sandbox.EgressLimits{Upload: 1 << 20}}
-			if len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+			want := sandbox.SessionOpts{Run: "run-7:fix", RequireTLS: true, Limits: sandbox.EgressLimits{Upload: 1 << 20},
+				Shape: sandbox.ShapeClose, ShapeAllowed: []string{"bastion.example:22"}, ShapeAllowedBy: "workflow ops"}
+			if len(got) != 1 || got[0].OnShape == nil {
+				t.Fatalf("sessions minted %+v, want one with a shape reporter", got)
+			}
+			// A flagged tunnel is the launch's detection event.
+			got[0].OnShape(sandbox.ShapeEvent{Run: "run-7:fix", Target: "x.example:443", Kind: sandbox.ShapeInteractive, Action: sandbox.ShapeClose})
+			if len(shapes) != 1 || shapes[0]["kind"] != "tunnel_shape" || shapes[0]["shape"] != sandbox.ShapeInteractive || shapes[0]["action"] != sandbox.ShapeClose || shapes[0]["run"] != "run-7:fix" {
+				t.Fatalf("shape event %v", shapes)
+			}
+			got[0].OnShape = nil
+			if !reflect.DeepEqual(got[0], want) {
 				t.Fatalf("sessions minted %+v, want one %+v", got, want)
 			}
+			// Detection off: no shapes.
+			got = nil
+			f.pol.Detect.Action = DetectOff
+			if _, err := Wrap(f.pol, []string{"claude"}, f.deps); err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].Shape != sandbox.ShapeOff {
+				t.Fatalf("detection off: %+v", got)
+			}
+			f.pol.Detect = DetectSpec{}
 			got = nil
 			f.pol.EgressAnyBytes, f.pol.Run = true, ""
 			if _, err := Wrap(f.pol, []string{"claude"}, f.deps); err != nil {

@@ -65,6 +65,20 @@ func (a *SandboxAllow) TunnelTools() []string {
 	return out
 }
 
+// TunnelAnyHost reports a tunnel allowed by program name alone (no @host):
+// it may reach any host the launch can.
+func (a *SandboxAllow) TunnelAnyHost() bool {
+	if a == nil {
+		return false
+	}
+	for _, t := range a.Tunnels {
+		if !strings.Contains(t, "@") {
+			return true
+		}
+	}
+	return false
+}
+
 // TunnelHosts are the destinations a's tunnels name (egress patterns).
 func (a *SandboxAllow) TunnelHosts() []string {
 	if a == nil {
