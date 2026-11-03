@@ -106,33 +106,59 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	}
 	dispatch.SandboxPrefetch = nil
 	stopPackages := func() {}
-	if cfg.GoPackageProxyOn() {
+	var prefetch []func(context.Context, string) error
+	if cfg.PackageProxyOn() {
 		srv, stop, err := startPackageProxy(cfg, r.StateRoot, logf, audit)
 		if err != nil {
 			return nil, err
 		}
 		stopPackages = stop
-		r.Packages = func(identity, disp string) (string, []string) {
-			return srv.Addr(), srv.AgentEnv(pkgproxy.Requester{Identity: identity, Dispatch: disp})
+		r.Packages = func(identity, disp string) agentsandbox.PackageAccess {
+			env, files := srv.AgentConfig(pkgproxy.Requester{Identity: identity, Dispatch: disp})
+			return agentsandbox.PackageAccess{Addr: srv.Addr(), Env: env, HomeFiles: files}
 		}
-		if cfg.Sandbox.PrefetchGo() {
-			logf("sandbox: prefetch [go] is superseded by the package proxy (sandbox.packages.go): agents fetch Go modules through conductor — set sandbox.packages.go.enabled: false to keep the offline prefetch instead")
+		// Prefetch warms the proxy's cache: through the proxy (Go) or its
+		// own fetcher (lockfiles), never by running a project's tooling.
+		if cfg.GoPackageProxyOn() && cfg.Sandbox.PrefetchGo() {
+			var goEnv []string
+			for _, kv := range srv.AgentEnv(prefetchRequester) {
+				if strings.HasPrefix(kv, "GO") {
+					goEnv = append(goEnv, kv)
+				}
+			}
+			gw, err := agentsandbox.NewGoWarm(filepath.Join(r.StateRoot, ".pkgproxy", "go-prefetched"), os.Environ(), goEnv)
+			if err != nil {
+				stopPackages()
+				return nil, err
+			}
+			r.GoPrefetch = gw
+			prefetch = append(prefetch, gw.Workspace)
 		}
-	} else if cfg.Sandbox.PrefetchGo() {
-		// A dot name no identity home can have (IdentityKey trims it).
+		if lw := lockfileWarm(cfg, srv); lw != nil {
+			prefetch = append(prefetch, lw)
+		}
+	}
+	if !cfg.GoPackageProxyOn() && cfg.Sandbox.PrefetchGo() {
+		// The Go proxy off: #205's offline module cache. A dot name no
+		// identity home can have (IdentityKey trims it).
 		gp, err := agentsandbox.NewGoPrefetch(filepath.Join(r.StateRoot, ".go-modcache"), os.Environ())
 		if err != nil {
+			stopPackages()
 			return nil, err
 		}
 		r.GoPrefetch = gp
+		prefetch = append(prefetch, gp.Workspace)
+	}
+	if len(prefetch) > 0 {
 		dispatch.SandboxPrefetch = func(dir string) {
 			start := time.Now()
-			if err := gp.Workspace(context.Background(), dir); err != nil {
-				logf("sandbox: go prefetch for %s: %v (the agent's Go runs offline without what is missing)", dir, err)
-				return
+			for _, fill := range prefetch {
+				if err := fill(context.Background(), dir); err != nil {
+					logf("sandbox: prefetch for %s: %v (the agent fetches what is missing through the package proxy, or runs without it)", dir, err)
+				}
 			}
 			if d := time.Since(start); d > 5*time.Second {
-				logf("sandbox: go prefetch for %s took %s", dir, d.Round(time.Second))
+				logf("sandbox: prefetch for %s took %s", dir, d.Round(time.Second))
 			}
 		}
 	}

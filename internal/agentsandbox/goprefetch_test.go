@@ -199,9 +199,10 @@ func TestPolicyGoPrefetch(t *testing.T) {
 func TestPolicyPackageProxy(t *testing.T) {
 	var gotID, gotDisp string
 	r := &Resolver{StateRoot: t.TempDir(), RealHome: t.TempDir(), GOOS: "linux",
-		Packages: func(id, disp string) (string, []string) {
+		Packages: func(id, disp string) PackageAccess {
 			gotID, gotDisp = id, disp
-			return "127.0.0.1:41234", []string{"GOPROXY=http://127.0.0.1:41234/tok/go", "GOSUMDB=sum.golang.org"}
+			return PackageAccess{Addr: "127.0.0.1:41234", Env: []string{"GOPROXY=http://127.0.0.1:41234/tok/go", "GOSUMDB=sum.golang.org"},
+				HomeFiles: map[string]string{".cargo/config.toml": "[source.crates-io]\n", ".npmrc": "registry=x\n"}}
 		}}
 	p, err := r.PolicyForEntry(Entry{Workspace: t.TempDir(), Identity: "profile:fixer", Dispatch: "d-1"}, "claude", nil)
 	if err != nil {
@@ -213,6 +214,9 @@ func TestPolicyPackageProxy(t *testing.T) {
 	if !contains(p.Loopback, "127.0.0.1:41234") || !contains(p.Env, "GOPROXY=http://127.0.0.1:41234/tok/go") {
 		t.Fatalf("policy: loopback %v env %v", p.Loopback, p.Env)
 	}
+	if b, err := os.ReadFile(filepath.Join(p.Home, ".cargo", "config.toml")); err != nil || string(b) != "[source.crates-io]\n" {
+		t.Fatalf("home file: %q %v", b, err)
+	}
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -220,5 +224,153 @@ func TestPolicyPackageProxy(t *testing.T) {
 		if strings.Contains(h, "golang.org") || strings.Contains(h, "googleapis") {
 			t.Errorf("no Go host joins the allowlist: %v", p.Egress)
 		}
+	}
+}
+
+// Home files land inside the identity home only: a symlink the agent
+// planted there cannot redirect a write out of it, an agent's edit is
+// overwritten, and a path out of the home is refused.
+func TestWriteHomeFiles(t *testing.T) {
+	home, outside := t.TempDir(), t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(home, ".cargo")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteHomeFiles(home, map[string]string{".cargo/config.toml": "x"}); err == nil {
+		t.Fatal("wrote through a symlink out of the home")
+	}
+	if ents, _ := os.ReadDir(outside); len(ents) != 0 {
+		t.Fatalf("wrote outside the home: %v", ents)
+	}
+	os.Remove(filepath.Join(home, ".cargo"))
+	if err := os.WriteFile(filepath.Join(outside, "target"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "target"), filepath.Join(home, ".npmrc")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteHomeFiles(home, map[string]string{".npmrc": "registry=proxy\n", ".m2/settings.xml": "<s/>"}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(outside, "target")); string(b) != "keep" {
+		t.Fatalf("a symlink's target was written: %q", b)
+	}
+	if fi, err := os.Lstat(filepath.Join(home, ".npmrc")); err != nil || !fi.Mode().IsRegular() {
+		t.Fatalf(".npmrc is not a regular file now: %v %v", fi, err)
+	}
+	os.WriteFile(filepath.Join(home, ".m2", "settings.xml"), []byte("agent edit"), 0o600)
+	if err := WriteHomeFiles(home, map[string]string{".m2/settings.xml": "<s/>"}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, ".m2", "settings.xml")); string(b) != "<s/>" {
+		t.Fatalf("agent edit kept: %q", b)
+	}
+	for _, bad := range []string{"../x", "/etc/x", "a/../../x", "./a"} {
+		if err := WriteHomeFiles(home, map[string]string{bad: "x"}); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	if ents, _ := os.ReadDir(home); len(ents) != 2 {
+		t.Fatalf("stray files in the home: %v", ents)
+	}
+}
+
+// With the package proxy on, prefetch warms the proxy: the download runs
+// with the proxy's GOPROXY/GOSUMDB (never a default upstream) into a
+// throwaway module cache, records its marker apart from any module cache,
+// and leaves the agent's policy to the proxy.
+func TestGoPrefetchWarm(t *testing.T) {
+	bin, record := fakeGo(t)
+	markers := filepath.Join(t.TempDir(), "markers")
+	t.Setenv("PATH", filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	g, err := NewGoWarm(markers, []string{"PATH=" + os.Getenv("PATH"), "GITHUB_TOKEN=secret", "GOPROXY=https://evil.test"},
+		[]string{"GOPROXY=http://127.0.0.1:9/tok/go", "GOSUMDB=sum.golang.org", "GONOSUMDB="})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &GoModules{Files: map[string][]byte{"go.mod": []byte("module x\n")}}
+	if err := g.Fill(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(record)
+	rec := string(b)
+	for _, want := range []string{"GOPROXY=http://127.0.0.1:9/tok/go\n", "GOSUMDB=sum.golang.org\n", "GOFLAGS=-modcacherw\n", "GOVCS=*:off\n"} {
+		if !strings.Contains(rec, want) {
+			t.Errorf("the warm lacks %q:\n%s", want, rec)
+		}
+	}
+	if strings.Contains(rec, "GOPROXY=off") || strings.Contains(rec, "evil.test") || strings.Contains(rec, "GITHUB_TOKEN") {
+		t.Errorf("the warm's GOPROXY is the proxy's alone:\n%s", rec)
+	}
+	mc := ""
+	for _, l := range strings.Split(rec, "\n") {
+		if v, ok := strings.CutPrefix(l, "GOMODCACHE="); ok {
+			mc = v
+		}
+	}
+	if mc == "" || within(mc, markers) {
+		t.Fatalf("the warm's module cache is its own: %q", mc)
+	}
+	if _, err := os.Stat(mc); err == nil {
+		t.Fatalf("the throwaway module cache is removed: %s", mc)
+	}
+	if _, err := os.Stat(filepath.Join(markers, ".conductor-prefetched", m.Digest())); err != nil {
+		t.Fatal("the warm is not recorded")
+	}
+
+	// No proxy env at all: GOPROXY stays off, never a default upstream.
+	g2, err := NewGoWarm(filepath.Join(t.TempDir(), "m"), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(record)
+	g2.Go = bin
+	_ = g2.Fill(context.Background(), m)
+	if b, _ := os.ReadFile(record); !strings.Contains(string(b), "GOPROXY=off\n") {
+		t.Fatalf("a warm without the proxy's env must not fetch:\n%s", b)
+	}
+
+	// The agent's policy: no read-only cache, Go not offline.
+	r := &Resolver{StateRoot: t.TempDir(), RealHome: t.TempDir(), GOOS: "linux", GoPrefetch: g}
+	p, err := r.PolicyForEntry(Entry{Workspace: t.TempDir(), Identity: "agent:x"}, "claude", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(p.ReadOnly, markers) || contains(p.Env, "GOPROXY=off") || contains(p.Env, "GOMODCACHE="+markers) {
+		t.Fatalf("a warming prefetch shaped the policy: %+v", p)
+	}
+}
+
+// Lockfiles are read from the checkout itself (bounded depth), never
+// through a symlink, never from dependency trees or dot directories.
+func TestSnapshotLockfiles(t *testing.T) {
+	ws, outside := t.TempDir(), t.TempDir()
+	write := func(rel, s string) {
+		p := filepath.Join(ws, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(p), 0o700)
+		if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("package-lock.json", "root")
+	write("web/app/yarn.lock", "deep")
+	write("a/b/c/d/Cargo.lock", "too deep")
+	write("node_modules/x/package-lock.json", "installed")
+	write(".git/Cargo.lock", "dot")
+	write("requirements-dev.txt", "reqs")
+	write("README.md", "no")
+	os.WriteFile(filepath.Join(outside, "Cargo.lock"), []byte("secret"), 0o600)
+	os.Symlink(filepath.Join(outside, "Cargo.lock"), filepath.Join(ws, "Cargo.lock"))
+	os.Symlink(outside, filepath.Join(ws, "linked"))
+	got, err := SnapshotLockfiles(ws, []string{"package-lock.json", "yarn.lock", "Cargo.lock", "requirements*.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for k := range got {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if strings.Join(keys, ",") != "package-lock.json,requirements-dev.txt,web/app/yarn.lock" || string(got["web/app/yarn.lock"]) != "deep" {
+		t.Fatalf("snapshot: %v", keys)
 	}
 }

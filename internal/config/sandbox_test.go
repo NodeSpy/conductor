@@ -102,7 +102,11 @@ func TestSandboxPrefetch(t *testing.T) {
 			t.Fatalf("%q: PrefetchGo() = %v, want %v", body, got, want)
 		}
 	}
-	if _, err := loadCfg(t, base+"sandbox:\n  prefetch: [npm]\n"); err == nil || !strings.Contains(err.Error(), `sandbox.prefetch: unknown ecosystem "npm"`) {
+	cfg, err := loadCfg(t, base+"sandbox:\n  prefetch: [npm, cargo]\n")
+	if err != nil || !cfg.Sandbox.PrefetchNames("npm") || !cfg.Sandbox.PrefetchNames("cargo") || cfg.Sandbox.PrefetchGo() {
+		t.Fatalf("registry prefetch: %v", err)
+	}
+	if _, err := loadCfg(t, base+"sandbox:\n  prefetch: [swift]\n"); err == nil || !strings.Contains(err.Error(), `sandbox.prefetch: unknown ecosystem "swift"`) {
 		t.Fatalf("unknown ecosystem accepted or wrong error: %v", err)
 	}
 }
@@ -157,6 +161,57 @@ func TestGoPackageProxyValidation(t *testing.T) {
 		"    cache_max: -5\n":                                            "cache_max",
 	} {
 		if _, err := loadCfg(t, base+body); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err %v, want %q", body, err, want)
+		}
+	}
+}
+
+// Every registry is on by default with the sandbox; enabled: false drops
+// one; an upstream and private patterns carry through.
+func TestRegistryDefaults(t *testing.T) {
+	const base = "connectors:\n  gh: { use: github, token: x, repos: [\"acme/*\"] }\n"
+	names := func(rs []Registry) string {
+		var out []string
+		for _, r := range rs {
+			out = append(out, r.Name)
+		}
+		return strings.Join(out, ",")
+	}
+	cfg, err := loadCfg(t, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(RegistryNames, ",")
+	if got := names(cfg.Registries()); got != all || !cfg.PackageProxyOn() {
+		t.Fatalf("defaults: %s", got)
+	}
+	for _, r := range cfg.Registries() {
+		if r.Upstream != RegistryDefaults[r.Name] || !strings.HasPrefix(r.Upstream, "https://") {
+			t.Fatalf("%s upstream %q", r.Name, r.Upstream)
+		}
+	}
+	cfg, err = loadCfg(t, base+"sandbox:\n  packages:\n    npm: { enabled: false }\n    pypi: { upstream: \"https://pypi.internal.test\", private: [\"corp-*\"] }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := cfg.Registries()
+	if strings.Contains(names(rs), "npm") || rs[0].Name != "pypi" || rs[0].Upstream != "https://pypi.internal.test" || rs[0].Private[0] != "corp-*" {
+		t.Fatalf("overrides: %+v", rs)
+	}
+	cfg, err = loadCfg(t, base+"sandbox:\n  agents: off\n")
+	if err != nil || len(cfg.Registries()) != 0 || cfg.PackageProxyOn() {
+		t.Fatalf("sandbox off: %v %v", err, cfg.Registries())
+	}
+	const pk = base + "sandbox:\n  packages:\n"
+	for body, want := range map[string]string{
+		"    npm: { private: [\"@corp/*\"] }\n":                                     "never sent to",
+		"    npm: { upstream: \"https://registry.npmjs.org/\", private: [\"x\"] }\n": "never sent to",
+		"    cargo: { upstream: \"https://u:p@a.test\" }\n":                         "one http(s) URL",
+		"    maven: { upstream: \"file:///m2\" }\n":                                 "one http(s) URL",
+		"    hex: { upstream: \"https://a.test?x=1\" }\n":                           "one http(s) URL",
+		"    pub: { upstream: \"https://a.test\", private: [\"a b\"] }\n":           "one package-name pattern",
+	} {
+		if _, err := loadCfg(t, pk+body); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err %v, want %q", body, err, want)
 		}
 	}

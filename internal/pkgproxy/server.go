@@ -86,14 +86,17 @@ type HomeConfigurer interface {
 }
 
 // Warmer is an ecosystem that can fill the cache ahead of an agent's launch
-// from a workspace's lockfiles — parsed by conductor, fetched through its
-// own fetcher and verified like any request; nothing of the project's runs.
+// from a workspace's lockfiles — parsed by conductor, never run. A lockfile
+// only names packages: WarmPaths turns it into requests to the ecosystem
+// itself, served exactly like an agent's (validated, resolved against the
+// upstream's own metadata, verified), so no URL a lockfile holds is ever
+// fetched.
 type Warmer interface {
-	// Lockfiles are the workspace-relative file names it reads.
+	// Lockfiles are the lockfile base names it reads.
 	Lockfiles() []string
-	// Warm fetches what files (name → content, as read) pin; it returns how
-	// many artifacts it made sure of.
-	Warm(ctx context.Context, files map[string][]byte, emit func(Event)) (int, error)
+	// WarmPaths are the requests (paths under the ecosystem) that fetch
+	// what files (workspace path → content) pin.
+	WarmPaths(ctx context.Context, files map[string][]byte) []string
 }
 
 // Server is the package proxy's HTTP listener: loopback only, every request
@@ -234,53 +237,19 @@ func (s *Server) AgentConfig(c Requester) (env []string, files map[string]string
 	return env, files
 }
 
-// Lockfiles are the workspace-relative lockfile names every warming
-// ecosystem reads.
-func (s *Server) Lockfiles() []string {
+// Lockfiles are the lockfile name patterns the warming ecosystems named in
+// only (nil: every one) read.
+func (s *Server) Lockfiles(only []string) []string {
 	var out []string
 	for _, n := range s.ord {
+		if only != nil && !contains(only, n) {
+			continue
+		}
 		if w, ok := s.ecos[n].(Warmer); ok {
 			out = append(out, w.Lockfiles()...)
 		}
 	}
 	return out
-}
-
-// Warm fills the cache from a workspace's lockfiles (name → content) on
-// behalf of c, ecosystem by ecosystem; it returns how many artifacts are
-// now cached, and the ecosystems' errors joined.
-func (s *Server) Warm(ctx context.Context, files map[string][]byte, c Requester) (int, error) {
-	var total int
-	var errs []error
-	for _, n := range s.ord {
-		w, ok := s.ecos[n].(Warmer)
-		if !ok {
-			continue
-		}
-		mine := map[string][]byte{}
-		for _, lf := range w.Lockfiles() {
-			for name, b := range files {
-				if name == lf || strings.HasSuffix(name, "/"+lf) {
-					mine[name] = b
-				}
-			}
-		}
-		if len(mine) == 0 {
-			continue
-		}
-		name := n
-		k, err := w.Warm(ctx, mine, func(ev Event) {
-			ev.Requester, ev.Ecosystem = c, name
-			if s.OnEvent != nil {
-				s.OnEvent(ev)
-			}
-		})
-		total += k
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", n, err))
-		}
-	}
-	return total, errors.Join(errs...)
 }
 
 // ServeHTTP routes /<token>/<ecosystem>/<rest>.

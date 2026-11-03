@@ -28,15 +28,21 @@ type SandboxConfig struct {
 	// "host:port"). A bare host means :443.
 	Egress []string `yaml:"egress,omitempty"`
 	// Prefetch are the package ecosystems conductor downloads for an agent
-	// on the host, before its launch, so the agent builds offline with none
-	// of their hosts on its allowlist. "go": a dispatch's Go modules (its
-	// checkout's go.work / go.mod) into one conductor-owned module cache,
-	// read-only in every sandbox, with the agent's GOPROXY off.
+	// on the host, before its launch, so the agent's first build needs no
+	// fetch. "go": a dispatch's Go modules (its checkout's go.work /
+	// go.mod). With the package proxy's Go ecosystem off they go into one
+	// conductor-owned module cache, read-only in every sandbox, with the
+	// agent's GOPROXY off; with it on they warm the proxy's verified cache
+	// instead (one cache), and anything else still comes through the proxy.
+	// A registry name (npm, pypi, cargo, rubygems, maven, nuget, composer,
+	// pub, hex, cran) warms the proxy's cache from the checkout's lockfiles
+	// — read by conductor, fetched by its own fetcher; no project tool runs
+	// on the host.
 	Prefetch []string `yaml:"prefetch,omitempty"`
 	// Packages is conductor's package proxy: a dependency mirror conductor
 	// serves to every sandboxed agent, fetching upstream with its own
-	// network, so no package host is ever on an agent's allowlist. Go is on
-	// by default whenever the sandbox is.
+	// network, so no package host is ever on an agent's allowlist. Every
+	// ecosystem is on by default whenever the sandbox is.
 	Packages *SandboxPackages `yaml:"packages,omitempty"`
 	// StateDir holds the per-identity tool state (each identity's HOME).
 	// Default: <state dir>/agent-state.
@@ -79,7 +85,98 @@ type SandboxPackages struct {
 	CacheMax ByteSize `yaml:"cache_max,omitempty"`
 	// Go is the Go module proxy (GOPROXY + checksum database).
 	Go *GoPackages `yaml:"go,omitempty"`
+	// The package registries, each on by default with the sandbox: npm
+	// (npm, yarn, pnpm, bun), pypi (pip, uv, pdm, pipenv), cargo, rubygems
+	// (gem, bundler), maven (Maven, Gradle), nuget (dotnet), composer, pub
+	// (dart, flutter), hex (mix, rebar3) and cran (R).
+	NPM      *RegistryPackages `yaml:"npm,omitempty"`
+	PyPI     *RegistryPackages `yaml:"pypi,omitempty"`
+	Cargo    *RegistryPackages `yaml:"cargo,omitempty"`
+	RubyGems *RegistryPackages `yaml:"rubygems,omitempty"`
+	Maven    *RegistryPackages `yaml:"maven,omitempty"`
+	NuGet    *RegistryPackages `yaml:"nuget,omitempty"`
+	Composer *RegistryPackages `yaml:"composer,omitempty"`
+	Pub      *RegistryPackages `yaml:"pub,omitempty"`
+	Hex      *RegistryPackages `yaml:"hex,omitempty"`
+	CRAN     *RegistryPackages `yaml:"cran,omitempty"`
 }
+
+// RegistryPackages configures one package registry of the proxy.
+type RegistryPackages struct {
+	// Enabled turns it off (false); default on with the agent sandbox.
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// Upstream is the one registry conductor fetches from (default: the
+	// public one). An agent never names a host: it asks for a package, and
+	// conductor resolves it against this registry's own metadata.
+	Upstream string `yaml:"upstream,omitempty"`
+	// Private are package-name patterns (path.Match, plus "prefix/*")
+	// served from Upstream but never cached — only with an Upstream of your
+	// own, so a private name is never sent to the public registry.
+	Private []string `yaml:"private,omitempty"`
+}
+
+// Registry is one package registry's effective settings.
+type Registry struct {
+	Name     string // its sandbox.packages key
+	Upstream string // defaulted
+	Private  []string
+}
+
+// RegistryDefaults are the public registries the proxy fetches from when
+// sandbox.packages.<name>.upstream is unset.
+var RegistryDefaults = map[string]string{
+	"npm":      "https://registry.npmjs.org",
+	"pypi":     "https://pypi.org",
+	"cargo":    "https://index.crates.io",
+	"rubygems": "https://rubygems.org",
+	"maven":    "https://repo.maven.apache.org/maven2",
+	"nuget":    "https://api.nuget.org/v3/index.json",
+	"composer": "https://repo.packagist.org",
+	"pub":      "https://pub.dev",
+	"hex":      "https://repo.hex.pm",
+	"cran":     "https://cloud.r-project.org",
+}
+
+// RegistryNames are the registries, in a stable order.
+var RegistryNames = []string{"npm", "pypi", "cargo", "rubygems", "maven", "nuget", "composer", "pub", "hex", "cran"}
+
+func (p *SandboxPackages) registry(name string) *RegistryPackages {
+	if p == nil {
+		return nil
+	}
+	return map[string]*RegistryPackages{
+		"npm": p.NPM, "pypi": p.PyPI, "cargo": p.Cargo, "rubygems": p.RubyGems, "maven": p.Maven,
+		"nuget": p.NuGet, "composer": p.Composer, "pub": p.Pub, "hex": p.Hex, "cran": p.CRAN,
+	}[name]
+}
+
+// Registries are the package registries the proxy serves, defaults filled
+// in: none with the agent sandbox off, else every one not disabled.
+func (c *Config) Registries() []Registry {
+	if !c.AgentSandboxOn() {
+		return nil
+	}
+	var out []Registry
+	for _, n := range RegistryNames {
+		r := Registry{Name: n, Upstream: RegistryDefaults[n]}
+		if c != nil && c.Sandbox != nil {
+			if rp := c.Sandbox.Packages.registry(n); rp != nil {
+				if rp.Enabled != nil && !*rp.Enabled {
+					continue
+				}
+				if rp.Upstream != "" {
+					r.Upstream = rp.Upstream
+				}
+				r.Private = rp.Private
+			}
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// PackageProxyOn reports any ecosystem of the package proxy on.
+func (c *Config) PackageProxyOn() bool { return c.GoPackageProxyOn() || len(c.Registries()) > 0 }
 
 // GoPackages configures the Go module proxy.
 type GoPackages struct {
@@ -152,6 +249,11 @@ func validatePackages(p *SandboxPackages) error {
 	if p.CacheMax < 0 {
 		return fmt.Errorf("config: sandbox.packages.cache_max must be positive")
 	}
+	for _, n := range RegistryNames {
+		if err := validateRegistry(n, p.registry(n)); err != nil {
+			return err
+		}
+	}
 	g := p.Go
 	if g == nil {
 		return nil
@@ -176,6 +278,27 @@ func validatePackages(p *SandboxPackages) error {
 	return nil
 }
 
+func validateRegistry(name string, r *RegistryPackages) error {
+	if r == nil {
+		return nil
+	}
+	if r.Upstream != "" {
+		u, err := url.Parse(r.Upstream)
+		if err != nil || strings.ContainsAny(r.Upstream, ", \t") || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("config: sandbox.packages.%s.upstream %q must be one http(s) URL (no credentials, query or fragment in it)", name, r.Upstream)
+		}
+	}
+	if len(r.Private) > 0 && (r.Upstream == "" || strings.TrimRight(r.Upstream, "/") == RegistryDefaults[name]) {
+		return fmt.Errorf("config: sandbox.packages.%s.private needs an upstream of your own — private package names are never sent to %s", name, RegistryDefaults[name])
+	}
+	for _, pat := range r.Private {
+		if strings.TrimSpace(pat) == "" || strings.ContainsAny(pat, ", ") {
+			return fmt.Errorf("config: sandbox.packages.%s.private: %q is not one package-name pattern", name, pat)
+		}
+	}
+	return nil
+}
+
 // AgentSandboxOn reports whether agent launches are sandboxed (the default).
 func (c *Config) AgentSandboxOn() bool {
 	return c == nil || c.Sandbox == nil || c.Sandbox.Agents == "" || c.Sandbox.Agents == "on"
@@ -193,12 +316,15 @@ func (s *SandboxConfig) UnlandedFails() bool {
 }
 
 // PrefetchGo reports sandbox.prefetch naming go.
-func (s *SandboxConfig) PrefetchGo() bool {
+func (s *SandboxConfig) PrefetchGo() bool { return s.PrefetchNames("go") }
+
+// PrefetchNames reports sandbox.prefetch naming eco.
+func (s *SandboxConfig) PrefetchNames(eco string) bool {
 	if s == nil {
 		return false
 	}
 	for _, p := range s.Prefetch {
-		if p == "go" {
+		if p == eco {
 			return true
 		}
 	}
@@ -226,8 +352,8 @@ func (c *Config) validateSandbox() error {
 		}
 	}
 	for _, p := range s.Prefetch {
-		if p != "go" {
-			return fmt.Errorf("config: sandbox.prefetch: unknown ecosystem %q (supported: go)", p)
+		if _, ok := RegistryDefaults[p]; !ok && p != "go" {
+			return fmt.Errorf("config: sandbox.prefetch: unknown ecosystem %q (supported: go, %s)", p, strings.Join(RegistryNames, ", "))
 		}
 	}
 	if err := validatePackages(s.Packages); err != nil {

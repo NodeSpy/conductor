@@ -4,6 +4,7 @@ package agentsandbox
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -98,9 +99,24 @@ func TestSandboxedGoBuildFetchesThroughConductor(t *testing.T) {
 	}
 	defer srv.Close()
 
-	r := &Resolver{StateRoot: filepath.Join(state, "agent-state"), RealHome: real, GOOS: runtime.GOOS,
-		Packages: func(id, disp string) (string, []string) {
-			return srv.Addr(), srv.AgentEnv(pkgproxy.Requester{Identity: id, Dispatch: disp})
+	// sandbox.prefetch: [go] with the proxy on warms the proxy's cache on
+	// the host, through the proxy, before the launch.
+	warmEnv := srv.AgentEnv(pkgproxy.Requester{Identity: "conductor:prefetch"})
+	gw, err := NewGoWarm(filepath.Join(state, ".pkgproxy", "go-prefetched"), os.Environ(), warmEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Workspace(context.Background(), ws); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+	if n := world.Hits("/example.com/hello/@v/v1.0.0.zip"); n != 1 {
+		t.Fatalf("the warm fetched the zip %d times", n)
+	}
+
+	r := &Resolver{StateRoot: filepath.Join(state, "agent-state"), RealHome: real, GOOS: runtime.GOOS, GoPrefetch: gw,
+		Packages: func(id, disp string) PackageAccess {
+			env, files := srv.AgentConfig(pkgproxy.Requester{Identity: id, Dispatch: disp})
+			return PackageAccess{Addr: srv.Addr(), Env: env, HomeFiles: files}
 		}}
 	pol, err := r.PolicyForEntry(Entry{Workspace: ws, Identity: "profile:go-fixer", Dispatch: "d-e2e"}, "claude-code", nil)
 	if err != nil {
@@ -164,13 +180,23 @@ func TestSandboxedGoBuildFetchesThroughConductor(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	var zip bool
+	var warmed, served bool
 	for _, e := range events {
-		if e.Artifact == "zip" && e.Module == "example.com/hello" && e.Upstream && e.Requester.Dispatch == "d-e2e" && e.Requester.Identity == "profile:go-fixer" {
-			zip = true
+		if e.Artifact != "zip" || e.Module != "example.com/hello" {
+			continue
 		}
+		warmed = warmed || (e.Upstream && e.Requester.Identity == "conductor:prefetch")
+		served = served || (!e.Upstream && e.Requester.Dispatch == "d-e2e" && e.Requester.Identity == "profile:go-fixer")
 	}
-	if !zip {
-		t.Fatalf("no audited upstream fetch of the zip for the dispatch: %+v", events)
+	if !warmed || !served {
+		t.Fatalf("want an audited upstream fetch by the prefetch and a cached serve for the dispatch: %+v", events)
+	}
+	if n := world.Hits("/example.com/hello/@v/v1.0.0.zip"); n != 1 {
+		t.Fatalf("the agent's build fetched upstream again (%d zip fetches): one cache when the proxy is on", n)
+	}
+	for _, kv := range pol.Env {
+		if kv == "GOPROXY=off" {
+			t.Fatal("a warming prefetch left the agent's Go offline")
+		}
 	}
 }
