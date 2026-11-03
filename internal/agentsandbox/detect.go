@@ -335,7 +335,7 @@ func (d *detector) scan() {
 		return
 	}
 	procs := launchProcs(all)
-	d.noteGroups(procs)
+	d.noteGroups(procs, all)
 	root := agentRoot(procs, d.self)
 	for _, p := range procs {
 		if v := classify(p, d.allow, p.pid == root, d.self != "" && p.exe == d.self); v != nil {
@@ -393,7 +393,7 @@ func (d *detector) killAll() int {
 		return 0
 	}
 	launch := launchProcs(all)
-	d.noteGroups(launch)
+	d.noteGroups(launch, all)
 	d.mu.Lock()
 	in := map[int]bool{}
 	for _, p := range launch {
@@ -409,6 +409,15 @@ func (d *detector) killAll() int {
 	for _, p := range launch {
 		if !safeToSignal(p.pid) {
 			continue
+		}
+		if p.start == 0 {
+			// Every kill is bound to the process this listing saw: its
+			// start time now, or no signal at all.
+			st, ok := procStart(p.pid)
+			if !ok {
+				continue
+			}
+			p.start = st
 		}
 		if d.signal(p.pid, p.start) == nil {
 			n++
@@ -505,7 +514,7 @@ func LaunchStarted(env []string, pid int) {
 }
 
 // noteGroups remembers each process group a launch process leads.
-func (d *detector) noteGroups(procs []procInfo) {
+func (d *detector) noteGroups(procs, all []procInfo) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.groups == nil {
@@ -514,6 +523,18 @@ func (d *detector) noteGroups(procs []procInfo) {
 	for _, p := range procs {
 		if p.pgid == p.pid && p.pid > 1 {
 			d.groups[p.pgid] = true
+		}
+	}
+	// A group with no member left is forgotten: while it has one its id
+	// cannot be reused, once empty it may be — and must not make another
+	// run's process a leftover of this launch.
+	live := map[int]bool{}
+	for _, p := range all {
+		live[p.pgid] = true
+	}
+	for g := range d.groups {
+		if !live[g] {
+			delete(d.groups, g)
 		}
 	}
 }

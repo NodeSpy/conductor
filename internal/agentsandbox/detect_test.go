@@ -78,8 +78,8 @@ func TestLaunchProcsFollowsTheTree(t *testing.T) {
 }
 
 func TestDetectorRespondsByAction(t *testing.T) {
-	procs := []procInfo{{pid: 50, ppid: 1, marked: true, args: []string{"unshare"}}, {pid: 51, ppid: 50, args: []string{"claude"}},
-		{pid: 52, ppid: 51, args: []string{"/usr/bin/ssh", "x"}}}
+	procs := []procInfo{{pid: 50, ppid: 1, marked: true, start: 1, args: []string{"unshare"}}, {pid: 51, ppid: 50, start: 1, args: []string{"claude"}},
+		{pid: 52, ppid: 51, start: 1, args: []string{"/usr/bin/ssh", "x"}}}
 	for _, action := range []string{DetectKill, DetectAlert} {
 		var mu sync.Mutex
 		var events []map[string]any
@@ -268,5 +268,34 @@ func TestApplyScope(t *testing.T) {
 	applyScope(&p, nil, &Scope{DetectAction: DetectOff, Tripwires: &on})
 	if !p.Detect.NoTripwires {
 		t.Fatal("tripwires planted with detection off")
+	}
+}
+
+// A recorded process group is forgotten once a scan finds it empty: a later
+// process with that group id (the id reused) is not a leftover of this
+// launch. A group that kept a member stays the launch's.
+func TestEmptyGroupsAreForgotten(t *testing.T) {
+	leader := procInfo{pid: 900001, ppid: 1, pgid: 900001, marked: true, start: 5}
+	member := procInfo{pid: 900002, ppid: 900001, pgid: 900001, start: 6}
+	stranger := procInfo{pid: 900003, ppid: 1, pgid: 900001, start: 99}
+	run := func(scans ...[]procInfo) []int {
+		var signalled []int
+		i := 0
+		d := &detector{allow: map[string]bool{}, reported: map[string]bool{},
+			list:   func() ([]procInfo, error) { s := scans[i]; i++; return s, nil },
+			signal: func(pid int, _ uint64) error { signalled = append(signalled, pid); return nil }}
+		for range scans[:len(scans)-1] {
+			d.scan()
+		}
+		d.killAll()
+		return signalled
+	}
+	if got := run([]procInfo{leader, member}, nil, []procInfo{stranger}); len(got) != 0 {
+		t.Fatalf("a process in a reused group id was killed: %v", got)
+	}
+	orphan := member
+	orphan.ppid = 1
+	if got := run([]procInfo{leader, member}, []procInfo{orphan}, []procInfo{orphan}); !slices.Contains(got, orphan.pid) {
+		t.Fatalf("a daemon left in the launch's group survived: %v", got)
 	}
 }

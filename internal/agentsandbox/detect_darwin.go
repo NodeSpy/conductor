@@ -115,7 +115,7 @@ func signalProc(pid int, start uint64) error {
 	if !safeToSignal(pid) {
 		return errors.New("refusing to signal")
 	}
-	if st, ok := procStart(pid); !ok || (start != 0 && st != start) {
+	if st, ok := procStart(pid); !ok || start == 0 || st != start {
 		return errors.New("not the process seen")
 	}
 	return syscall.Kill(pid, syscall.SIGKILL)
