@@ -492,6 +492,11 @@ func (d *detector) shutdown() {
 	if n := d.killAll(); n > 0 && d.event != nil {
 		d.event("leftover_killed", map[string]any{"run": d.run, "processes": n})
 	}
+	// No watcher answers the decoys now: a reader (a recursive grep over
+	// the state dir, a backup) would block on one forever.
+	for _, w := range d.wires {
+		w.remove()
+	}
 }
 
 // checkDisk stops the launch when its disk is nearly full — whatever the

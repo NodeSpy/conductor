@@ -103,10 +103,17 @@ func (w *tripwire) plant() error {
 // nobody answers would hang its reader.
 func removeTripwires(home string) {
 	for _, d := range decoys {
-		p := filepath.Join(home, d.rel)
-		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeNamedPipe != 0 {
-			_ = os.Remove(p)
-		}
+		removePipe(filepath.Join(home, d.rel))
+	}
+}
+
+// remove takes this decoy out (its launch ended). Another launch of the
+// same home that still watches plants it again.
+func (w *tripwire) remove() { removePipe(w.path) }
+
+func removePipe(p string) {
+	if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeNamedPipe != 0 {
+		_ = os.Remove(p)
 	}
 }
 

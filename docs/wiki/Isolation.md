@@ -559,7 +559,10 @@ These are known gaps, stated so you can weigh them:
   groups is followed only while its environment still carries the marker,
   and on macOS a platform or signed binary's environment cannot be read. On macOS there is no `pty_relay` rule.
 - **The decoys are pipes.** An agent that `stat`s a decoy before reading it
-  can tell it is not a file.
+  can tell it is not a file. They exist only while a launch runs (removed at
+  its end, so nothing blocks on one later), and a read of a running launch's
+  home from outside it (your own `grep -r` over conductor's state dir) is
+  answered and counts as a read.
 - **opencode** is not carried by the gateway: its key stays in its
   environment, and on macOS its loopback routes are reached directly.
 - **macOS exposed servers.** A server a launch exposes (opencode's

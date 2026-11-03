@@ -190,3 +190,23 @@ func fakeTool(t *testing.T, name string) string {
 	}
 	return p
 }
+
+// A launch's decoys are gone once it ends: with no watcher to answer, a
+// reader of one (a recursive grep over the state dir) would block forever.
+func TestTripwiresLeaveWithTheirLaunch(t *testing.T) {
+	home := t.TempDir()
+	_, closer, err := startDetection(Policy{Workspace: t.TempDir(), Home: home, Limits: LimitSpec{Off: true}}, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoy := filepath.Join(home, ".ssh", "id_ed25519")
+	if fi, err := os.Lstat(decoy); err != nil || fi.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatalf("no decoy while the launch runs: %v", err)
+	}
+	closer()
+	for _, d := range decoys {
+		if _, err := os.Lstat(filepath.Join(home, d.rel)); !os.IsNotExist(err) {
+			t.Fatalf("%s left behind after the launch: %v", d.rel, err)
+		}
+	}
+}
