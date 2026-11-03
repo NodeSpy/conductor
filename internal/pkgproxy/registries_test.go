@@ -276,3 +276,84 @@ func TestCargo(t *testing.T) {
 		t.Fatal("a HOME file carries a dispatch's token; it must name only the identity")
 	}
 }
+
+func TestRubyGems(t *testing.T) {
+	up := newFakeUp(t)
+	r := newRegRig(t, func(c RegistryConfig) (Ecosystem, error) { return NewRubyGems(c) }, up.URL)
+	gem := "fake gem"
+	up.set("/info/rack-test", "---\n2.0.0 rack:>= 1.3|checksum:"+sha256hex("old")+",ruby:>= 2.2\n2.1.0 |checksum:"+sha256hex(gem)+"\n")
+	up.set("/versions", "created_at: x\n---\nrack-test 2.1.0 abc\n")
+	if code, body := r.get(t, "/versions"); code != 200 || !strings.Contains(body, "rack-test 2.1.0") {
+		t.Fatalf("versions: %d %s", code, body)
+	}
+	if code, body := r.get(t, "/info/rack-test"); code != 200 || !strings.Contains(body, "2.1.0") {
+		t.Fatalf("info: %d %s", code, body)
+	}
+	// The name has a dash; the version starts at the dash before a digit.
+	assertArtifact(t, r, up, "/gems/rack-test-2.1.0.gem", "/gems/rack-test-2.1.0.gem", gem)
+	if code, _ := r.get(t, "/gems/rack-test-9.9.9.gem"); code != 404 {
+		t.Fatalf("unlisted gem: %d", code)
+	}
+	assertRefusedBeforeUpstream(t, r, up, []string{
+		"/info/../versions", "/info/a%2fb", "/gems/../x.gem", "/gems/x.sh", "/quick/Marshal.4.8/../x.gemspec.rz",
+		"/api/v1/gems", "/info/.x",
+	})
+	_, files := r.srv.AgentConfig(Requester{Identity: "i"})
+	if !strings.Contains(files[".bundle/config"], "BUNDLE_MIRROR__HTTPS://RUBYGEMS__ORG/") || !strings.Contains(files[".gemrc"], ":sources:") {
+		t.Fatalf("home files: %v", files)
+	}
+}
+
+func TestMaven(t *testing.T) {
+	up := newFakeUp(t)
+	r := newRegRig(t, func(c RegistryConfig) (Ecosystem, error) { return NewMaven(c) }, up.URL)
+	jar := "fake jar"
+	p := "/org/example/lib/1.0/lib-1.0.jar"
+	up.set(p+".sha256", sha256hex(jar)+"  lib-1.0.jar\n")
+	assertArtifact(t, r, up, p, p, jar)
+	// Only a sha1 published.
+	pom := "<project/>"
+	up.set("/org/example/lib/1.0/lib-1.0.pom.sha1", sha1hex(pom))
+	assertArtifact(t, r, up, "/org/example/lib/1.0/lib-1.0.pom", "/org/example/lib/1.0/lib-1.0.pom", pom)
+	up.set("/org/example/lib/maven-metadata.xml", "<metadata/>")
+	if code, body := r.get(t, "/org/example/lib/maven-metadata.xml"); code != 200 || body != "<metadata/>" {
+		t.Fatalf("metadata: %d %s", code, body)
+	}
+	if code, _ := r.get(t, "/org/example/lib/1.0-SNAPSHOT/lib-1.0-SNAPSHOT.jar"); code != 404 {
+		t.Fatalf("snapshot served: %d", code)
+	}
+	assertRefusedBeforeUpstream(t, r, up, []string{
+		"/org/../etc/passwd", "/org/example/lib/1.0/..%2fx.jar", "/org//lib/1.0/x.jar", "/.m2/x/y/z",
+		"/org/example/lib/1.0/a b.jar", "/x.jar",
+	})
+	_, files := r.srv.AgentConfig(Requester{Identity: "i"})
+	if !strings.Contains(files[".m2/settings.xml"], "<mirrorOf>*</mirrorOf>") || !strings.Contains(files[".gradle/init.d/conductor.gradle"], "MavenArtifactRepository") {
+		t.Fatalf("home files: %v", files)
+	}
+}
+
+func TestNuGet(t *testing.T) {
+	up := newFakeUp(t)
+	r := newRegRig(t, func(c RegistryConfig) (Ecosystem, error) { return NewNuGet(c) }, up.URL+"/v3/index.json")
+	pkg := "fake nupkg"
+	h := sha512.Sum512([]byte(pkg))
+	up.set("/v3/index.json", `{"version":"3.0.0","resources":[{"@id":"`+up.URL+`/flat/","@type":"PackageBaseAddress/3.0.0"},{"@id":"`+up.URL+`/reg/","@type":"RegistrationsBaseUrl/3.6.0"}]}`)
+	up.set("/reg/newtonsoft.json/13.0.1.json", `{"catalogEntry":"`+up.URL+`/catalog/n.json"}`)
+	up.set("/catalog/n.json", `{"packageHash":"`+base64.StdEncoding.EncodeToString(h[:])+`","packageHashAlgorithm":"SHA512"}`)
+	up.set("/flat/newtonsoft.json/index.json", `{"versions":["13.0.1"]}`)
+	if code, body := r.get(t, "/v3/index.json"); code != 200 || !strings.Contains(body, r.base+"/v3-flatcontainer/") || strings.Contains(body, up.URL) {
+		t.Fatalf("service index: %d %s", code, body)
+	}
+	if code, body := r.get(t, "/v3-flatcontainer/Newtonsoft.Json/index.json"); code != 200 || !strings.Contains(body, "13.0.1") {
+		t.Fatalf("versions: %d %s", code, body)
+	}
+	assertArtifact(t, r, up, "/v3-flatcontainer/newtonsoft.json/13.0.1/newtonsoft.json.13.0.1.nupkg", "/flat/newtonsoft.json/13.0.1/newtonsoft.json.13.0.1.nupkg", pkg)
+	assertRefusedBeforeUpstream(t, r, up, []string{
+		"/v3-flatcontainer/../x/index.json", "/v3-flatcontainer/a/1.0/b.1.0.nupkg", "/v3-flatcontainer/a/../a.nupkg",
+		"/v3/registration/x", "/v3-flatcontainer/a/1.0/a.1.0.sh",
+	})
+	_, files := r.srv.AgentConfig(Requester{Identity: "i"})
+	if c := files[".nuget/NuGet/NuGet.Config"]; !strings.Contains(c, "<clear />") || !strings.Contains(c, "/v3/index.json") {
+		t.Fatalf("NuGet.Config: %q", c)
+	}
+}
