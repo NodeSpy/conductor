@@ -131,6 +131,14 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		if err != nil {
 			return nil, err
 		}
+		// The download itself runs CONFINED (rt2 #11): the same self-exe and
+		// egress-proxy wiring every other local launch gets (codeSandboxDeps),
+		// so a malicious go.mod/go.sum this box ever snapshots cannot read the
+		// daemon's real HOME/credentials or reach a network host beyond
+		// gp.Proxy's own. Fill fails closed (skips + logs) if this box cannot
+		// realize the jail — it never falls back to an unconfined download.
+		gp.Sandbox = codeSandboxDeps()
+		gp.Warn = logf
 		r.GoPrefetch = gp
 		dispatch.SandboxPrefetch = func(dir string) {
 			start := time.Now()
