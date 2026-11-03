@@ -39,6 +39,11 @@ type Resolver struct {
 	// GoPrefetch is sandbox.prefetch: [go] (nil: off): every launch sees its
 	// module cache read-only and runs Go offline.
 	GoPrefetch *GoPrefetch
+	// Packages is conductor's package proxy (nil: off): for an identity and
+	// dispatch, the proxy's host-loopback address — relayed into the sandbox
+	// like a local model endpoint — and the environment pointing the agent's
+	// package managers at it with a token naming who asks.
+	Packages func(identity, dispatch string) (addr string, env []string)
 	// Session resolves a cwd that is NOT in the registry to a live bot
 	// session's entry (its identity, its granted skill verbs, its read-only
 	// paths), consulted before a default workspace is built. This is how a
@@ -204,6 +209,12 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 	if g := r.GoPrefetch; g != nil {
 		p.ReadOnly = append(append([]string(nil), p.ReadOnly...), g.Cache)
 		p.Env = append(append([]string(nil), p.Env...), g.AgentEnv()...)
+	}
+	if r.Packages != nil {
+		if addr, env := r.Packages(e.Identity, e.Dispatch); addr != "" {
+			p.Loopback = appendUnique(append([]string(nil), p.Loopback...), addr)
+			p.Env = append(append([]string(nil), p.Env...), env...)
+		}
 	}
 	if r.Socket != "" && e.Skill != nil && r.Mint != nil {
 		id := *e.Skill

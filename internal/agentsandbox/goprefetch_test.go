@@ -193,3 +193,32 @@ func TestPolicyGoPrefetch(t *testing.T) {
 		t.Fatalf("prefetch off: %+v", p)
 	}
 }
+
+// The package proxy reaches every policy: its address relayed into the
+// sandbox, the agent's env pointing at it with the identity and dispatch.
+func TestPolicyPackageProxy(t *testing.T) {
+	var gotID, gotDisp string
+	r := &Resolver{StateRoot: t.TempDir(), RealHome: t.TempDir(), GOOS: "linux",
+		Packages: func(id, disp string) (string, []string) {
+			gotID, gotDisp = id, disp
+			return "127.0.0.1:41234", []string{"GOPROXY=http://127.0.0.1:41234/tok/go", "GOSUMDB=sum.golang.org"}
+		}}
+	p, err := r.PolicyForEntry(Entry{Workspace: t.TempDir(), Identity: "profile:fixer", Dispatch: "d-1"}, "claude", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotID != "profile:fixer" || gotDisp != "d-1" {
+		t.Fatalf("caller %q %q", gotID, gotDisp)
+	}
+	if !contains(p.Loopback, "127.0.0.1:41234") || !contains(p.Env, "GOPROXY=http://127.0.0.1:41234/tok/go") {
+		t.Fatalf("policy: loopback %v env %v", p.Loopback, p.Env)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range p.Egress {
+		if strings.Contains(h, "golang.org") || strings.Contains(h, "googleapis") {
+			t.Errorf("no Go host joins the allowlist: %v", p.Egress)
+		}
+	}
+}

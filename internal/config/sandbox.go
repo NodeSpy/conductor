@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
+	"strings"
 )
 
 // SandboxConfig is the top-level `sandbox:` block: conductor's agent sandbox
@@ -31,6 +33,11 @@ type SandboxConfig struct {
 	// checkout's go.work / go.mod) into one conductor-owned module cache,
 	// read-only in every sandbox, with the agent's GOPROXY off.
 	Prefetch []string `yaml:"prefetch,omitempty"`
+	// Packages is conductor's package proxy: a dependency mirror conductor
+	// serves to every sandboxed agent, fetching upstream with its own
+	// network, so no package host is ever on an agent's allowlist. Go is on
+	// by default whenever the sandbox is.
+	Packages *SandboxPackages `yaml:"packages,omitempty"`
 	// StateDir holds the per-identity tool state (each identity's HOME).
 	// Default: <state dir>/agent-state.
 	StateDir string `yaml:"state_dir,omitempty" path:"local"`
@@ -63,6 +70,110 @@ type SandboxPush struct {
 	// it (the step's push output, the log, a git_push audit row), which
 	// happens either way.
 	Unlanded string `yaml:"unlanded,omitempty"`
+}
+
+// SandboxPackages configures the package proxy (sandbox.packages).
+type SandboxPackages struct {
+	// CacheMax bounds the proxy's shared on-disk cache (default 10GB); the
+	// least recently used artifacts are evicted past it.
+	CacheMax ByteSize `yaml:"cache_max,omitempty"`
+	// Go is the Go module proxy (GOPROXY + checksum database).
+	Go *GoPackages `yaml:"go,omitempty"`
+}
+
+// GoPackages configures the Go module proxy.
+type GoPackages struct {
+	// Enabled turns it off (false); default on with the agent sandbox.
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// Upstream is the one GOPROXY conductor fetches from (default
+	// https://proxy.golang.org). An agent never names a host: it asks for a
+	// module path and version, and conductor asks exactly this server.
+	Upstream string `yaml:"upstream,omitempty"`
+	// SumDB is the checksum database every module is verified against, in
+	// GOSUMDB form: "name", "name+key" or "name+key url" (default
+	// sum.golang.org). It cannot be turned off.
+	SumDB string `yaml:"sumdb,omitempty"`
+	// Private are module path patterns (GOPRIVATE syntax) served from
+	// Upstream without the checksum database — only with an Upstream of
+	// your own; never cached. Any other module the checksum database does
+	// not know is refused.
+	Private []string `yaml:"private,omitempty"`
+}
+
+// DefaultGoUpstream / DefaultGoSumDB are the Go module proxy's defaults.
+const (
+	DefaultGoUpstream = "https://proxy.golang.org"
+	DefaultGoSumDB    = "sum.golang.org"
+)
+
+// DefaultPackageCacheMax bounds the package proxy's cache when cache_max is unset.
+const DefaultPackageCacheMax = ByteSize(10 << 30)
+
+// GoPackageProxyOn reports the Go module proxy on: the agent sandbox is on
+// and sandbox.packages.go.enabled is not false.
+func (c *Config) GoPackageProxyOn() bool {
+	if !c.AgentSandboxOn() {
+		return false
+	}
+	if c == nil || c.Sandbox == nil || c.Sandbox.Packages == nil || c.Sandbox.Packages.Go == nil {
+		return true
+	}
+	e := c.Sandbox.Packages.Go.Enabled
+	return e == nil || *e
+}
+
+// GoPackages returns the Go module proxy's settings with defaults filled in.
+func (s *SandboxConfig) GoPackages() GoPackages {
+	var g GoPackages
+	if s != nil && s.Packages != nil && s.Packages.Go != nil {
+		g = *s.Packages.Go
+	}
+	if g.Upstream == "" {
+		g.Upstream = DefaultGoUpstream
+	}
+	if g.SumDB == "" {
+		g.SumDB = DefaultGoSumDB
+	}
+	return g
+}
+
+// PackageCacheMax is sandbox.packages.cache_max, defaulted.
+func (s *SandboxConfig) PackageCacheMax() int64 {
+	if s != nil && s.Packages != nil && s.Packages.CacheMax > 0 {
+		return s.Packages.CacheMax.Bytes()
+	}
+	return DefaultPackageCacheMax.Bytes()
+}
+
+func validatePackages(p *SandboxPackages) error {
+	if p == nil {
+		return nil
+	}
+	if p.CacheMax < 0 {
+		return fmt.Errorf("config: sandbox.packages.cache_max must be positive")
+	}
+	g := p.Go
+	if g == nil {
+		return nil
+	}
+	if g.Upstream != "" {
+		u, err := url.Parse(g.Upstream)
+		if err != nil || strings.ContainsAny(g.Upstream, ",| \t") || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("config: sandbox.packages.go.upstream %q must be one http(s) GOPROXY URL (no list, no credentials in it, never direct/off)", g.Upstream)
+		}
+	}
+	if f := strings.Fields(g.SumDB); g.SumDB != "" && (len(f) > 2 || f[0] == "off" || strings.HasPrefix(f[0], "off+")) {
+		return fmt.Errorf("config: sandbox.packages.go.sumdb %q: checksum verification cannot be turned off — give a name, name+key or \"name+key url\"", g.SumDB)
+	}
+	if len(g.Private) > 0 && (g.Upstream == "" || strings.TrimRight(g.Upstream, "/") == DefaultGoUpstream) {
+		return fmt.Errorf("config: sandbox.packages.go.private needs an upstream of your own — private module paths are never sent to %s", DefaultGoUpstream)
+	}
+	for _, pat := range g.Private {
+		if strings.TrimSpace(pat) == "" || strings.Contains(pat, ",") {
+			return fmt.Errorf("config: sandbox.packages.go.private: %q is not one module path pattern", pat)
+		}
+	}
+	return nil
 }
 
 // AgentSandboxOn reports whether agent launches are sandboxed (the default).
@@ -118,6 +229,9 @@ func (c *Config) validateSandbox() error {
 		if p != "go" {
 			return fmt.Errorf("config: sandbox.prefetch: unknown ecosystem %q (supported: go)", p)
 		}
+	}
+	if err := validatePackages(s.Packages); err != nil {
+		return err
 	}
 	if s.StateDir != "" && !filepath.IsAbs(s.StateDir) {
 		return fmt.Errorf("config: sandbox.state_dir %q must be an absolute path", s.StateDir)

@@ -1026,7 +1026,7 @@ func cmdRun(args []string) error {
 
 	// The agent sandbox (docs/design/agent-sandbox.md): after the tool
 	// socket, which it binds into every sandboxed agent.
-	stopSandbox, err := wireAgentSandbox(cfg, cfgFile, logf)
+	stopSandbox, err := wireAgentSandbox(cfg, cfgFile, logf, st.Audit)
 	if err != nil {
 		return err
 	}

@@ -442,7 +442,7 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	controller.DaemonMaskPaths = []string{stateDir, filepath.Dir(cfgFile)}
 	// The agent sandbox covers a one-shot run's agents exactly as the
 	// daemon's (no conductor socket is served here: they get none).
-	stopSandbox, err := wireAgentSandbox(cfg, cfgFile, logf)
+	stopSandbox, err := wireAgentSandbox(cfg, cfgFile, logf, st.Audit)
 	if err != nil {
 		return err
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/gitdiff"
+	"github.com/NodeSpy/conductor/internal/pkgproxy"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
 
@@ -53,7 +54,7 @@ const sandboxTokenTTL = 12 * time.Hour
 // builder `conductor sandbox exec` asks (sandbox-policy), and the
 // controller's wrap of every local cli/acp agent launch. cfgFile is the
 // config path (its directory is never a workspace).
-func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...any)) (func(), error) {
+func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...any), audit func(map[string]any)) (func(), error) {
 	if !cfg.AgentSandboxOn() {
 		sandboxResolver.Store(nil)
 		controller.AgentSandbox = nil
@@ -104,7 +105,20 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		return nil, fmt.Errorf("agent sandbox state dir %s: %w", r.StateRoot, err)
 	}
 	dispatch.SandboxPrefetch = nil
-	if cfg.Sandbox.PrefetchGo() {
+	stopPackages := func() {}
+	if cfg.GoPackageProxyOn() {
+		srv, stop, err := startPackageProxy(cfg, r.StateRoot, logf, audit)
+		if err != nil {
+			return nil, err
+		}
+		stopPackages = stop
+		r.Packages = func(identity, disp string) (string, []string) {
+			return srv.Addr(), srv.AgentEnv(pkgproxy.Caller{Identity: identity, Dispatch: disp})
+		}
+		if cfg.Sandbox.PrefetchGo() {
+			logf("sandbox: prefetch [go] is superseded by the package proxy (sandbox.packages.go): agents fetch Go modules through conductor — set sandbox.packages.go.enabled: false to keep the offline prefetch instead")
+		}
+	} else if cfg.Sandbox.PrefetchGo() {
 		// A dot name no identity home can have (IdentityKey trims it).
 		gp, err := agentsandbox.NewGoPrefetch(filepath.Join(r.StateRoot, ".go-modcache"), os.Environ())
 		if err != nil {
@@ -124,11 +138,13 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	}
 	rel, err := agentsandbox.NewRelayer()
 	if err != nil {
+		stopPackages()
 		return nil, err
 	}
 	self, err := os.Executable()
 	if err != nil {
 		rel.Close()
+		stopPackages()
 		return nil, fmt.Errorf("agent sandbox: resolve conductor's own binary: %w", err)
 	}
 	sandboxResolver.Store(r)
@@ -157,6 +173,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		dispatch.PaseoSandboxLog = nil
 		dispatch.SandboxPrefetch = nil
 		rel.Close()
+		stopPackages()
 	}, nil
 }
 
