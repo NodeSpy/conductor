@@ -1737,6 +1737,11 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 	case "sandbox-event":
 		// A detection or refusal in a `conductor sandbox exec` launch (the
 		// paseo path): audited and logged like the daemon's own launches'.
+		// Only this daemon's uid may write the audit, as for sandbox-policy.
+		if uid, _, ok := agentsandbox.PeerCred(conn); ok && int(uid) != os.Getuid() {
+			writeControlResp(conn, controlResponse{Error: fmt.Sprintf("sandbox-event: refused for uid %d", uid)})
+			return
+		}
 		if controller.SandboxEvent != nil && req.Kind != "" {
 			f := map[string]any{}
 			for k, v := range req.Args {

@@ -534,8 +534,9 @@ func TestRegistryPersists(t *testing.T) {
 	if err := a.PersistTo(path); err != nil {
 		t.Fatal(err)
 	}
+	git(t, dir, "init", "-q", filepath.Join(dir, "base"))
 	a.Register(Entry{Workspace: ws, Identity: "agent:x@r", Dispatch: "d1", ReadOnly: []string{"/ro"},
-		Push: &PushTarget{Branch: "b", GitDir: "/g", Remote: "r"}, Skill: &skill.Identity{Agent: "x"}})
+		Push: &PushTarget{Branch: "b", GitDir: filepath.Join(dir, "base", ".git"), Remote: "r"}, Skill: &skill.Identity{Agent: "x"}})
 	a.Register(Entry{Workspace: gone, Identity: "agent:y"})
 	os.RemoveAll(gone)
 	b := &Registry{}

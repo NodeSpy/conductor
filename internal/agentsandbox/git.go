@@ -322,3 +322,80 @@ func readAlternates(p, objDir string) ([]string, error) {
 	}
 	return out, sc.Err()
 }
+
+// ValidateRecorded re-checks a recorded entry's git paths — read back from
+// the persisted registry, or reused for a follow-up dispatch — against the
+// same limits a freshly resolved layout meets: every path absolute and safe
+// (safeGitPath), a protected worktree's pair still git's own registration
+// for this workspace (trustedPointer), the push dir a git dir, and every
+// read-write path inside the workspace or one of the recorded git dirs.
+func ValidateRecorded(e Entry) error {
+	ws := evalOr(e.Workspace)
+	var dirs []string
+	check := func(what, p string) error {
+		if p == "" {
+			return nil
+		}
+		if !filepath.IsAbs(p) {
+			return fmt.Errorf("%w: %s: recorded %s %q is not absolute", errUntrustedGit, e.Workspace, what, p)
+		}
+		if err := safeGitPath(evalOr(p)); err != nil {
+			return fmt.Errorf("%w: %s: recorded %s %s: %v", errUntrustedGit, e.Workspace, what, p, err)
+		}
+		dirs = append(dirs, evalOr(p))
+		return nil
+	}
+	if err := check("common dir", e.GitCommon); err != nil {
+		return err
+	}
+	if err := check("worktree git dir", e.GitWorktree); err != nil {
+		return err
+	}
+	if e.GitWorktree != "" && e.GitCommon == "" {
+		return fmt.Errorf("%w: %s: recorded worktree git dir without its common dir", errUntrustedGit, e.Workspace)
+	}
+	if e.GitCommon != "" && e.GitWorktree != "" {
+		if err := trustedPointer(e.Workspace, e.GitWorktree, e.GitCommon); err != nil {
+			return err
+		}
+	}
+	if p := e.Push; p != nil {
+		if err := check("push git dir", p.GitDir); err != nil {
+			return err
+		}
+		if p.GitDir != "" && !looksLikeGitDir(p.GitDir) {
+			return fmt.Errorf("%w: %s: recorded push git dir %s is not a git directory", errUntrustedGit, e.Workspace, p.GitDir)
+		}
+		if err := check("push worktree git dir", p.HeadDir); err != nil {
+			return err
+		}
+	}
+	trusted := dirs
+	for _, rw := range e.ReadWrite {
+		if err := check("read-write path", rw); err != nil {
+			return err
+		}
+		c := evalOr(rw)
+		ok := within(c, ws) || gitShaped(c)
+		for _, d := range trusted {
+			ok = ok || within(c, d)
+		}
+		if !ok {
+			return fmt.Errorf("%w: %s: recorded read-write path %s is not in the workspace or a git dir", errUntrustedGit, e.Workspace, rw)
+		}
+	}
+	return nil
+}
+
+// gitShaped reports a git dir, a direct subdirectory of one (a common dir's
+// objects or refs), or a worktree's own git dir under <git dir>/worktrees.
+func gitShaped(p string) bool {
+	if looksLikeGitDir(p) {
+		return true
+	}
+	parent := filepath.Dir(p)
+	if looksLikeGitDir(parent) {
+		return true
+	}
+	return filepath.Base(parent) == "worktrees" && looksLikeGitDir(filepath.Dir(parent))
+}

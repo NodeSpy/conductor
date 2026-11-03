@@ -141,8 +141,15 @@ func (r *Registry) PersistTo(path string) error {
 		if _, live := r.byWS[ws]; live {
 			continue
 		}
-		r.byWS[ws] = Entry{Workspace: ws, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
+		ent := Entry{Workspace: ws, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
 			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree}
+		// The file is conductor's, but what it names is bound read-write
+		// into the next launch: re-checked as a fresh layout would be, and
+		// dropped (the workspace resolves anew) when it no longer passes.
+		if err := ValidateRecorded(ent); err != nil {
+			continue
+		}
+		r.byWS[ws] = ent
 	}
 	r.saveLocked()
 	return nil
