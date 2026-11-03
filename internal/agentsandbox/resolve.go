@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/NodeSpy/conductor/internal/skill"
 )
@@ -41,6 +42,8 @@ type Resolver struct {
 	GoPrefetch *GoPrefetch
 	// PosixIPC is sandbox.macos_posix_ipc.
 	PosixIPC bool
+	// ModelCredential is sandbox.model_credential (Policy.ModelCredential).
+	ModelCredential string
 	// EgressAnyBytes / EgressIdle / EgressUpload / EgressDownload are the
 	// egress session settings every policy carries (Policy).
 	EgressAnyBytes                           bool
@@ -184,6 +187,7 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 	home, logins, err := PrepareHome(HomeSpec{
 		Root: r.StateRoot, Key: e.Identity, Tool: tool, RealHome: r.RealHome,
 		GitName: r.GitName, GitEmail: r.GitEmail, GOOS: r.GOOS,
+		ShareLogins: r.ModelCredential == CredLoginShare,
 	})
 	if err != nil {
 		return Policy{}, err
@@ -202,7 +206,14 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 			return Policy{}, fmt.Errorf("agentsandbox: trust the workspace in %s: %w", home, err)
 		}
 	}
+	var modelHosts []string
+	for _, h := range hosts {
+		if !slices.Contains(r.Egress, h) && !slices.Contains(e.Egress, h) {
+			modelHosts = append(modelHosts, h)
+		}
+	}
 	p := Policy{
+		ModelCredential: r.ModelCredential, ModelHosts: modelHosts,
 		Identity: e.Identity, Tool: tool, Workspace: e.Workspace, Home: home, Logins: logins,
 		Egress: egress, Loopback: loopback,
 		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env,

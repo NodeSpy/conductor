@@ -63,7 +63,11 @@ func (r *Relayer) Relay(target string) (string, func(), error) {
 	if err != nil {
 		return "", nil, err
 	}
-	_ = os.Chmod(sock, 0o600)
+	if err := os.Chmod(sock, 0o600); err != nil {
+		ln.Close()
+		_ = os.Remove(sock)
+		return "", nil, fmt.Errorf("relay: %w", err)
+	}
 	r.mu.Lock()
 	r.lns = append(r.lns, ln)
 	r.mu.Unlock()

@@ -46,7 +46,7 @@ func realHome(t *testing.T) string {
 func TestPrepareHomeSeedsOnceWithoutHistory(t *testing.T) {
 	real := realHome(t)
 	root := t.TempDir()
-	spec := HomeSpec{Root: root, Key: "agent:fixer@acme/app", Tool: "claude-code", RealHome: real, GitName: `Op "Q" Erator`, GitEmail: "op@example.test", GOOS: "linux"}
+	spec := HomeSpec{Root: root, Key: "agent:fixer@acme/app", Tool: "claude-code", RealHome: real, GitName: `Op "Q" Erator`, GitEmail: "op@example.test", GOOS: "linux", ShareLogins: true}
 	home, logins, err := PrepareHome(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +95,15 @@ func TestPrepareHomeSeedsOnceWithoutHistory(t *testing.T) {
 	}
 	if dst, err := os.Readlink(filepath.Join(h2, ".claude", ".credentials.json")); err != nil || dst != l2[0].Src {
 		t.Fatalf("darwin login link: %q %v", dst, err)
+	}
+	// Not shared (the gateway, a login copy): no placeholder and no link —
+	// the one a shared launch left is removed; the launch writes the copy.
+	spec.ShareLogins = false
+	if _, l3, err := PrepareHome(spec); err != nil || len(l3) != 1 {
+		t.Fatalf("logins %+v %v", l3, err)
+	}
+	if _, err := os.Lstat(filepath.Join(h2, ".claude", ".credentials.json")); !os.IsNotExist(err) {
+		t.Fatal("the link to the operator's login is gone when it is not shared")
 	}
 	if _, _, err := PrepareHome(HomeSpec{Key: "x"}); err == nil {
 		t.Fatal("no root, no home")

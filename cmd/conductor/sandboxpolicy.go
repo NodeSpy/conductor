@@ -91,10 +91,11 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 			return b.MintSession(id, uint32(os.Getuid()), sandboxTokenTTL)
 		},
 		GitName: name, GitEmail: email,
-		Env:            os.Environ(),
-		GOOS:           runtime.GOOS,
-		PosixIPC:       cfg.Sandbox.PosixIPCAllowed(),
-		EgressAnyBytes: !cfg.Sandbox.EgressTLSRequired(),
+		Env:             os.Environ(),
+		GOOS:            runtime.GOOS,
+		PosixIPC:        cfg.Sandbox.PosixIPCAllowed(),
+		EgressAnyBytes:  !cfg.Sandbox.EgressTLSRequired(),
+		ModelCredential: cfg.Sandbox.ModelCredentialMode(),
 		// A bot's home (or a hand-off worker) runs in a pinned paseo workspace
 		// conductor never registers as a worktree, so `conductor sandbox exec`
 		// would resolve it to a verb-less dir: identity. This lookup (published

@@ -27,6 +27,10 @@ var EgressProxyFor func(allow []string) (addr, cred string, revoke func(), err e
 // nil + an enforced-egress launch fails closed.
 var EgressProxyUnix func(allow []string) (sock, cred string, revoke func(), err error)
 
+// SandboxEvent records an agent sandbox's containment event (the model
+// gateway refusing a request, a detection) in the audit log. Wired at boot.
+var SandboxEvent func(kind string, fields map[string]any)
+
 // EgressProxyUnixSession / EgressProxyForSession mint an agent launch's
 // session (sandbox.ProxyManager.UnixEndpointSession / EndpointSession):
 // attributed to its run, TLS-only tunnels, limited, closed when revoked.

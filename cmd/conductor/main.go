@@ -677,6 +677,7 @@ func cmdRun(args []string) error {
 	controller.EgressProxyUnix = egress.UnixEndpoint
 	controller.EgressProxyUnixSession = egress.UnixEndpointSession
 	controller.EgressProxyForSession = egress.EndpointSession
+	controller.SandboxEvent = sandboxEventAudit(logf, st.Audit)
 	// Namespace-mode sandboxes share the daemon's uid — by default the
 	// daemon's own state and config disappear from their mount view
 	// (#36 iso-review H7); isolation `privileged: true` is the opt-out.

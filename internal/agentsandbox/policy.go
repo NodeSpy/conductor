@@ -72,6 +72,13 @@ type Policy struct {
 	EgressIdle     int64 `json:"egress_idle,omitempty"`
 	EgressUpload   int64 `json:"egress_upload,omitempty"`
 	EgressDownload int64 `json:"egress_download,omitempty"`
+	// ModelCredential is sandbox.model_credential ("" = gateway): how the
+	// agent authenticates its model traffic (CredGateway, CredLoginCopy,
+	// CredLoginShare).
+	ModelCredential string `json:"model_credential,omitempty"`
+	// ModelHosts are the egress entries added for the tool's model traffic
+	// (not the operator's): dropped when the gateway carries it all.
+	ModelHosts []string `json:"model_hosts,omitempty"`
 	// Note is something the launcher should tell its operator about this
 	// policy (a scratch workspace in place of a refused directory).
 	Note string `json:"note,omitempty"`
@@ -164,6 +171,10 @@ type Deps struct {
 	LookPath func(string) (string, error)
 	// RealHome is the operator's home.
 	RealHome string
+	// Event reports a containment event (a request to the model gateway
+	// without the launch's token): kind and fields for the audit log. nil:
+	// not reported.
+	Event func(kind string, fields map[string]any)
 	// Inherited is the environment the agent's is built from — the
 	// launcher's own; AgentEnv keeps only what an agent needs.
 	Inherited []string
@@ -220,11 +231,15 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		binds = append(binds, sandbox.BindMount{Path: p.Workspace})
 	}
 	prof := &sandbox.AgentProfile{Home: d.RealHome, PosixIPC: p.PosixIPC}
-	for _, l := range p.Logins {
-		// Linux binds the operator's file over the placeholder; on macOS the
-		// identity home links to it, and seatbeltBinds allows its source.
-		binds = append(binds, sandbox.BindMount{Path: l.Path, Src: l.Src})
+	mc, err := planModelCredentials(&p, d)
+	if err != nil {
+		return nil, err
 	}
+	lb, err := mc.placeLogins(p)
+	if err != nil {
+		return nil, err
+	}
+	binds = append(binds, lb...)
 	binds = append(binds, launchBinds(argv[0], d.LookPath, d.RealHome)...)
 	for _, b := range d.Bins {
 		bin, err := d.LookPath(b)
@@ -313,6 +328,42 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		}
 	}
 	exposed := map[string]string{}
+	gwURLs := make([]string, 0, len(mc.plans))
+	for i, g := range mc.plans {
+		g := g
+		onRefuse := func(what string) {
+			if d.Event != nil {
+				d.Event("model_gateway_refused", map[string]any{"run": p.EgressSession().Run, "request": what})
+			}
+		}
+		if goos == "darwin" {
+			// A conductor-owned loopback port, the only one the profile
+			// allows: the agent never reaches a router directly.
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				cleanupAll()
+				return nil, fmt.Errorf("agentsandbox: model gateway: %w", err)
+			}
+			s := serveGateway(ln, g, onRefuse)
+			closers = append(closers, s.Close)
+			port := ln.Addr().(*net.TCPAddr).Port
+			prof.LoopbackPorts = append(prof.LoopbackPorts, port)
+			gwURLs = append(gwURLs, fmt.Sprintf("http://127.0.0.1:%d", port))
+			continue
+		}
+		ln, sock, rm, err := listenGatewayUnix()
+		if err != nil {
+			cleanupAll()
+			return nil, fmt.Errorf("agentsandbox: model gateway: %w", err)
+		}
+		s := serveGateway(ln, g, onRefuse)
+		closers = append(closers, func() { s.Close(); rm() })
+		addr := gatewayListenAddr(i, append(append([]string(nil), p.Loopback...), p.Expose...))
+		binds = append(binds, sandbox.BindMount{Path: sock})
+		deps.Relays = append(deps.Relays, sandbox.Relay{Listen: addr, Unix: sock})
+		gwURLs = append(gwURLs, "http://"+addr)
+	}
+	env = agentModelEnv(env, mc.plans, gwURLs)
 	if goos == "darwin" {
 		// No network namespace: the model's loopback port is reached
 		// directly, the profile allowing exactly it — and a server the agent

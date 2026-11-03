@@ -64,6 +64,10 @@ func newPolicyFixture(t *testing.T) *fixture {
 		ReadOnly: []string{ro}, ReadWrite: []string{rw}, Hide: []string{filepath.Join(rw, "worktrees")},
 		Logins: []Login{{Path: filepath.Join(home, ".claude", ".credentials.json"), Src: filepath.Join(root, "real", ".credentials.json")}},
 		Env:    []string{"GIT_AUTHOR_NAME=Op"},
+		// The pre-gateway arrangement: the operator's login shared (read-
+		// only), the key and router reached as configured. The gateway's
+		// own tests (gateway_test.go) take the default.
+		ModelCredential: CredLoginShare,
 	}
 	f.deps = Deps{
 		SelfExe: func() (string, error) { return "/opt/conductor/conductor", nil },
@@ -148,7 +152,7 @@ func TestWrapLinuxPolicy(t *testing.T) {
 		{Path: f.pol.Socket},
 		{Path: f.pol.ReadOnly[0], RO: true}, {Path: f.pol.ReadWrite[0]},
 		{Path: f.pol.Hide[0], Tmpfs: true},
-		{Path: f.pol.Logins[0].Path, Src: f.pol.Logins[0].Src},
+		{Path: f.pol.Logins[0].Path, Src: f.pol.Logins[0].Src, RO: true},
 		{Path: "/opt/conductor/conductor", Src: "/opt/conductor/conductor", RO: true},
 		{Path: "/tmp/csr1/r1.sock"}, {Path: "/tmp/egress-x"},
 	} {
@@ -263,7 +267,7 @@ func TestWrapDarwinProfile(t *testing.T) {
 		`(allow file-read* (subpath "` + r(f.pol.ReadOnly[0]) + `"))`,
 		`(deny file-write* (subpath "` + r(f.pol.ReadOnly[1]) + `"))`,
 		`(deny file-read* file-write* (subpath "` + r(f.pol.Hide[0]) + `"))`,
-		`(allow file-read* file-write* (subpath "` + r(f.pol.Logins[0].Src) + `"))`,
+		`(allow file-read* (subpath "` + r(f.pol.Logins[0].Src) + `"))`,
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("profile lacks %s\n%s", want, p)

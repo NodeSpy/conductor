@@ -203,11 +203,14 @@ func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string) (*agentsandbo
 		EgressAddr:        pm.Endpoint,
 		EgressUnixSession: pm.UnixEndpointSession,
 		EgressAddrSession: pm.EndpointSession,
-		Relay:             rel.Relay,
-		LookPath:          exec.LookPath,
-		RealHome:          home,
-		Inherited:         os.Environ(),
-		Bins:              bins,
+		Event: func(kind string, f map[string]any) {
+			fmt.Fprintf(os.Stderr, "conductor sandbox: %s %v\n", kind, f)
+		},
+		Relay:     rel.Relay,
+		LookPath:  exec.LookPath,
+		RealHome:  home,
+		Inherited: os.Environ(),
+		Bins:      bins,
 	})
 	if err != nil {
 		rel.Close()

@@ -437,6 +437,7 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	controller.EgressProxyUnix = egress.UnixEndpoint
 	controller.EgressProxyUnixSession = egress.UnixEndpointSession
 	controller.EgressProxyForSession = egress.EndpointSession
+	controller.SandboxEvent = sandboxEventAudit(logf, st.Audit)
 	stateDir := filepath.Dir(cfg.Store.StateFile)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("state dir %s: %w", stateDir, err)

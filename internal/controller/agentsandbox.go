@@ -173,6 +173,7 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 		EgressAddr:        EgressProxyFor,
 		EgressUnixSession: EgressProxyUnixSession,
 		EgressAddrSession: EgressProxyForSession,
+		Event:             SandboxEvent,
 		Relay:             w.Relay,
 		LookPath:          exec.LookPath,
 		RealHome:          w.Resolver.RealHome,

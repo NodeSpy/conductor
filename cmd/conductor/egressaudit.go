@@ -4,6 +4,19 @@ import (
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
+// sandboxEventAudit records an agent sandbox's containment event in the
+// audit log and the daemon's log.
+func sandboxEventAudit(logf func(string, ...any), audit func(map[string]any)) func(string, map[string]any) {
+	return func(kind string, fields map[string]any) {
+		row := map[string]any{"event": "sandbox_" + kind}
+		for k, v := range fields {
+			row[k] = v
+		}
+		logf("sandbox: %s %v", kind, fields)
+		audit(row)
+	}
+}
+
 // egressAudit records every egress proxy request in the audit log, by run:
 // what an agent reached, how much it moved, and every refusal or closure
 // with its reason (an allowlist denial is OnDeny's). A refusal or a
