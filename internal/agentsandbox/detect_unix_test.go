@@ -210,3 +210,126 @@ func TestTripwiresLeaveWithTheirLaunch(t *testing.T) {
 		}
 	}
 }
+
+// isRoot forgets a root pid once its kernel start time no longer matches
+// what started() recorded: a reused pid is not followed as the old root.
+func TestIsRootForgetsAPidWhoseStartTimeChanged(t *testing.T) {
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep")
+	}
+	c := exec.Command(sleep, "5")
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Process.Kill(); waitOnce(c) })
+	pid := c.Process.Pid
+	d := &detector{}
+	d.started(pid)
+	if !d.isRoot(pid) {
+		t.Fatal("a freshly started root not recognized")
+	}
+	// Simulate the pid being reused by a different process (a stale start
+	// time): isRoot must forget it, not keep treating it as this root.
+	d.mu.Lock()
+	d.roots[pid] = d.roots[pid] + 1
+	d.mu.Unlock()
+	if d.isRoot(pid) {
+		t.Fatal("a pid whose start time changed was still treated as the root")
+	}
+	d.mu.Lock()
+	_, stillThere := d.roots[pid]
+	d.mu.Unlock()
+	if stillThere {
+		t.Fatal("the stale root was not forgotten")
+	}
+}
+
+// killAll never widens its reach to a daemon process sharing the
+// launcher's own process group: ownPgid() is excluded even when that
+// group is one a launch process leads.
+func TestKillAllExcludesItsOwnProcessGroup(t *testing.T) {
+	own := ownPgid()
+	marked := procInfo{pid: own, ppid: 1, pgid: own, marked: true, start: 1}
+	bystander := procInfo{pid: own + 123456, ppid: 1, pgid: own, start: 1}
+	var signalled []int
+	d := &detector{
+		allow: map[string]bool{},
+		list:  func() ([]procInfo, error) { return []procInfo{marked, bystander}, nil },
+		signal: func(pid int, start uint64) error {
+			signalled = append(signalled, pid)
+			return nil
+		},
+	}
+	d.killAll()
+	for _, pid := range signalled {
+		if pid == bystander.pid {
+			t.Fatalf("killAll signalled a process sharing its own process group: %v", signalled)
+		}
+	}
+}
+
+// The watcher never answers through a symlink: an agent that replaces a
+// decoy with a symlink to a FIFO it controls elsewhere gets no credential
+// written into it, and the decoy is re-planted as a genuine pipe at its
+// own path.
+func TestTripwireRefusesASymlinkedDecoy(t *testing.T) {
+	home := t.TempDir()
+	ws, err := plantTripwires(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := ws[0]
+	w.poll = 10 * time.Millisecond
+
+	elsewhere := filepath.Join(t.TempDir(), "evil")
+	if err := syscall.Mkfifo(elsewhere, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(w.path)
+	if err := os.Symlink(elsewhere, w.path); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := make(chan struct{})
+	defer close(stop)
+	hits := make(chan string, 4)
+	go w.watch(stop, func(string) { hits <- w.rel })
+
+	leaked := make(chan []byte, 1)
+	go func() {
+		f, err := os.OpenFile(elsewhere, os.O_RDONLY, 0)
+		if err != nil {
+			leaked <- nil
+			return
+		}
+		b := make([]byte, 4096)
+		n, _ := f.Read(b)
+		leaked <- b[:n]
+	}()
+
+	select {
+	case b := <-leaked:
+		if len(b) > 0 {
+			t.Fatalf("the watcher wrote the decoy credential through a symlink: %q", b)
+		}
+	case <-time.After(1 * time.Second):
+		os.Remove(elsewhere) // unblock the reader goroutine, if still waiting
+	}
+	select {
+	case h := <-hits:
+		t.Fatalf("a symlinked decoy counted as a read: %s", h)
+	default:
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		fi, err := os.Lstat(w.path)
+		if err == nil && fi.Mode()&os.ModeNamedPipe != 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the symlinked decoy was not re-planted as a pipe: %v %v", fi, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

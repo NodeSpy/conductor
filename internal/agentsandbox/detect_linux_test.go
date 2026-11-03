@@ -65,3 +65,49 @@ func isZombie(pid int) bool {
 	i := strings.LastIndexByte(string(b), ')')
 	return i > 0 && strings.HasPrefix(strings.TrimSpace(string(b[i+1:])), "Z")
 }
+
+// safeToSignal refuses the pids killAll must never touch: nothing, init,
+// this process, and its parent.
+func TestSafeToSignalRefusesPid1SelfAndParent(t *testing.T) {
+	if safeToSignal(0) {
+		t.Error("pid 0 safe to signal")
+	}
+	if safeToSignal(1) {
+		t.Error("pid 1 (init) safe to signal")
+	}
+	if safeToSignal(os.Getpid()) {
+		t.Error("this process safe to signal")
+	}
+	if safeToSignal(os.Getppid()) {
+		t.Error("the parent process safe to signal")
+	}
+	if !safeToSignal(os.Getpid() + 1) {
+		t.Error("an ordinary other pid refused")
+	}
+}
+
+// signalProc refuses to kill a pid whose kernel start time no longer
+// matches what the scan saw — the process now at that pid is not the one
+// being hunted (a reused pid after the original already exited).
+func TestSignalProcRefusesAPidWhoseStartTimeChanged(t *testing.T) {
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep")
+	}
+	c := exec.Command(sleep, "5")
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Process.Kill(); waitOnce(c) })
+	pid := c.Process.Pid
+	start, ok := procStart(pid)
+	if !ok {
+		t.Fatal("no start time")
+	}
+	if err := signalProc(pid, start+1); err == nil {
+		t.Fatal("signalled a pid whose claimed start time did not match")
+	}
+	if p, ok := procStat(pid); !ok || p.comm != "sleep" {
+		t.Fatal("the process was killed despite the start-time mismatch")
+	}
+}

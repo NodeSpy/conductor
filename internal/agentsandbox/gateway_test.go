@@ -336,3 +336,38 @@ func TestWrapCopiesAnOAuthLoginWithoutItsRefreshToken(t *testing.T) {
 		t.Fatalf("wrote into the symlink's target: %v", ents)
 	}
 }
+
+// Once every model route is gatewayed, the provider's own host leaves the
+// egress allowlist handed to the proxy: direct provider access, not only
+// the environment's key, is cut off.
+func TestWrapGatewayDropsProviderHostFromEgress(t *testing.T) {
+	withPlatform(t, "linux")
+	f := newPolicyFixture(t)
+	f.pol.ModelCredential = ""
+	f.pol.Egress = []string{"api.anthropic.com", "proxy.golang.org"}
+	f.pol.ModelHosts = []string{"api.anthropic.com"}
+	var gotAllow []string
+	f.deps.EgressUnix = func(allow []string) (string, string, func(), error) {
+		gotAllow = append([]string(nil), allow...)
+		return "/tmp/egress-x/egress-0.sock", "cred-unix", func() {}, nil
+	}
+	l, err := Wrap(f.pol, []string{"claude"}, f.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Cleanup()
+	for _, h := range gotAllow {
+		if h == "api.anthropic.com" {
+			t.Fatalf("the provider host stayed in the egress allowlist handed to the proxy: %v", gotAllow)
+		}
+	}
+	found := false
+	for _, h := range gotAllow {
+		if h == "proxy.golang.org" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("an unrelated egress host was dropped too: %v", gotAllow)
+	}
+}

@@ -337,3 +337,28 @@ func withECH(rec []byte) []byte {
 }
 
 var _ = httptest.NewServer
+
+// The download cap closes a tunnel too, symmetric with the upload cap.
+func TestSessionDownloadCapClosesTunnel(t *testing.T) {
+	up := newUpstream(t)
+	target := up.ln.Addr().String()
+	p := &Proxy{Allow: []string{target}}
+	addr, rec := startProxy(t, p)
+
+	cred, _ := p.MintSession(SessionOpts{Run: "dl-cap-run", Limits: EgressLimits{Download: 1000}})
+	c, br, code := connectVia(t, addr, cred, target)
+	if code != 200 {
+		t.Fatalf("CONNECT %d", code)
+	}
+	c.Write(make([]byte, 2000)) // echoed back: 2000 bytes downstream, over the cap
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, err := br.ReadByte()
+	var ne net.Error
+	if err == nil || (errors.As(err, &ne) && ne.Timeout()) {
+		t.Fatal("a tunnel over the download cap stayed open")
+	}
+	if _, _, code := connectVia(t, addr, cred, target); code != http.StatusForbidden {
+		t.Fatalf("a capped session's next CONNECT: %d", code)
+	}
+	rec.wait(t, func(c ConnRecord) bool { return c.Run == "dl-cap-run" && c.Reason == "download cap reached" })
+}

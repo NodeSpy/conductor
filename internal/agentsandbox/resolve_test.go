@@ -626,3 +626,25 @@ func TestResolveGitLayoutRefusesUntrustedPointers(t *testing.T) {
 		t.Fatalf("a bot memory repo's worktree: %+v %v", l, err)
 	}
 }
+
+// safeGitPath refuses a git path that is the operator's home, or a
+// directory above it, even outside the pointer/alternates flows that
+// normally shadow this check with their own earlier structural refusals.
+func TestSafeGitPathRefusesTheHomeOrAbove(t *testing.T) {
+	old := GitTrust
+	t.Cleanup(func() { GitTrust = old })
+	GitTrust.ObjectRoots = nil
+	GitTrust.Forbidden = nil
+	home := filepath.Join(t.TempDir(), "home")
+	os.MkdirAll(home, 0o700)
+	GitTrust.Home = home
+	if err := safeGitPath(home); err == nil {
+		t.Fatal("the home directory itself accepted as a git path")
+	}
+	if err := safeGitPath(filepath.Dir(home)); err == nil {
+		t.Fatal("a directory above the home accepted as a git path")
+	}
+	if err := safeGitPath(filepath.Join(home, "repo", ".git")); err != nil {
+		t.Fatalf("a path inside the home refused: %v", err)
+	}
+}

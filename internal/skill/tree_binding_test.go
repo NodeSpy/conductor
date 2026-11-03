@@ -166,6 +166,10 @@ func TestBrokerTreeBoundAuthorize(t *testing.T) {
 	if _, err := b.Authorize(tok, Peer{Valid: false}); err == nil {
 		t.Fatal("a tree-bound token with no peer credentials must be refused")
 	}
+	// A PID present but unverified is refused on the Valid flag alone.
+	if _, err := b.Authorize(tok, Peer{PID: rootPID, Valid: false}); err == nil {
+		t.Fatal("a tree-bound token with an unverified peer PID must be refused")
+	}
 }
 
 // TestBrokerTreeBoundPIDReuseRefused mints directly against a crafted
