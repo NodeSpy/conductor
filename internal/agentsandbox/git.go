@@ -16,10 +16,14 @@ import (
 //   - a per-dispatch clone (.git is a directory) borrows the base clone's
 //     objects through objects/info/alternates: those object stores,
 //     read-only. Its own refs, config and objects are inside the workspace.
-//   - a linked worktree (.git is a file) needs its own gitdir read-write and
-//     the common dir's objects and refs read-write — but never the common
-//     dir's config, hooks or alternates, which conductor's own git in the
-//     base clone obeys — and its sibling worktrees' gitdirs are hidden.
+//   - a linked worktree (.git is a file) — usually of the operator's own
+//     repository — needs its own gitdir read-write and the common dir's
+//     objects, refs and logs read-write. The rest of the common dir is
+//     read-only, and so is everything the operator's own git obeys there:
+//     config, hooks, info, every submodule git dir (modules), alternates,
+//     replace refs and a shallow graft — and the worktree's .git file,
+//     commondir and gitdir, which would otherwise repoint the operator's
+//     git at a directory the agent wrote. Sibling worktrees are hidden.
 //
 // A workspace that is not a git checkout needs nothing.
 type GitLayout struct {
@@ -78,15 +82,41 @@ func ResolveGitLayout(ws string) (GitLayout, error) {
 			return GitLayout{}, fmt.Errorf("agentsandbox: %s: git common dir %s is not a directory", ws, common)
 		}
 		l := GitLayout{GitDir: common}
-		if !within(common, ws) {
+		// The .git file itself: repointed, the operator's next git in this
+		// worktree would run whatever config the new target holds.
+		l.ReadOnly = append(l.ReadOnly, dotgit)
+		switch {
+		case within(common, ws):
+		case SharedGitDirect:
+			// sandbox.git.shared: direct — the operator's choice: the common
+			// dir read-write (refs, packed-refs, new files at its top), the
+			// read-only paths below still protected.
 			l.ReadWrite = append(l.ReadWrite, common)
+		default:
+			// The shared common dir is the operator's repository: read-only,
+			// so nothing new appears at its top (a `shallow` file, a config
+			// include) — only the object store and the refs an agent's
+			// commits, fetches and stash write are read-write.
+			l.ReadOnly = append(l.ReadOnly, common)
+			for _, sub := range linkedWritable {
+				if fi, err := os.Stat(filepath.Join(common, sub)); err == nil && fi.IsDir() {
+					l.ReadWrite = append(l.ReadWrite, filepath.Join(common, sub))
+				}
+			}
 		}
-		for _, sub := range []string{"config", "hooks", filepath.Join("objects", "info")} {
+		// What the operator's own git obeys or trusts, read-only even inside
+		// a read-write path: config, hooks and attributes (info), every
+		// submodule's git dir, alternates, replace refs (git show would serve
+		// the agent's objects), and a shallow graft. refs/replace and the
+		// dirs are created empty when missing (git ignores an empty one), so
+		// there is a path to protect; a missing file cannot be created under
+		// the read-only common dir.
+		for _, sub := range linkedReadOnly {
 			p := filepath.Join(common, sub)
-			if sub != "config" {
+			if linkedPrecreate[sub] {
 				_ = os.MkdirAll(p, 0o755)
 			}
-			if _, err := os.Stat(p); err == nil {
+			if _, err := os.Lstat(p); err == nil {
 				l.ReadOnly = append(l.ReadOnly, p)
 			}
 		}
@@ -94,11 +124,32 @@ func ResolveGitLayout(ws string) (GitLayout, error) {
 			l.Hide = append(l.Hide, filepath.Join(common, "worktrees"))
 			l.ReadWrite = append(l.ReadWrite, gitdir)
 			l.HeadDir = gitdir
+			// The worktree's own pointers back into the repository.
+			for _, f := range []string{"commondir", "gitdir", "config.worktree"} {
+				if _, err := os.Lstat(filepath.Join(gitdir, f)); err == nil {
+					l.ReadOnly = append(l.ReadOnly, filepath.Join(gitdir, f))
+				}
+			}
 		}
 		return l, nil
 	}
 	return GitLayout{}, nil
 }
+
+// SharedGitDirect is sandbox.git.shared: direct (set at daemon wiring).
+var SharedGitDirect bool
+
+// linkedWritable are the common-dir subtrees a linked worktree's git
+// writes: new objects, refs (its branch, remote-tracking refs, stash),
+// their reflogs, and git-lfs objects.
+var linkedWritable = []string{"objects", "refs", "logs", "lfs"}
+
+// linkedReadOnly are the common-dir paths that stay read-only for the agent
+// (see ResolveGitLayout); linkedPrecreate those made when missing.
+var (
+	linkedReadOnly  = []string{"config", "hooks", "info", "modules", filepath.Join("objects", "info"), filepath.Join("refs", "replace"), "shallow", "commondir"}
+	linkedPrecreate = map[string]bool{"hooks": true, "modules": true, "info": true, filepath.Join("objects", "info"): true, filepath.Join("refs", "replace"): true}
+)
 
 // readAlternates reads an alternates file: absolute object directories, and
 // relative ones resolved against objDir. Each must exist.

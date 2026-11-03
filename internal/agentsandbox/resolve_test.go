@@ -274,10 +274,34 @@ func TestResolveGitLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	common := filepath.Join(base, ".git")
-	if l.GitDir != common || !contains(l.ReadWrite, common) || !contains(l.ReadWrite, filepath.Join(common, "worktrees", "wt")) ||
-		!contains(l.ReadOnly, filepath.Join(common, "config")) || !contains(l.ReadOnly, filepath.Join(common, "hooks")) ||
-		!contains(l.ReadOnly, filepath.Join(common, "objects", "info")) || !contains(l.Hide, filepath.Join(common, "worktrees")) {
+	if l.GitDir != common || contains(l.ReadWrite, common) || !contains(l.ReadOnly, common) ||
+		!contains(l.ReadWrite, filepath.Join(common, "worktrees", "wt")) || !contains(l.Hide, filepath.Join(common, "worktrees")) {
 		t.Fatalf("linked worktree: %+v", l)
+	}
+	for _, sub := range []string{"objects", "refs", "logs"} {
+		if !contains(l.ReadWrite, filepath.Join(common, sub)) {
+			t.Errorf("linked worktree: %s is not read-write: %+v", sub, l.ReadWrite)
+		}
+	}
+	// Everything the operator's own git obeys stays read-only — the
+	// submodule git dirs and the worktree's own pointers included.
+	for _, p := range []string{
+		filepath.Join(common, "config"), filepath.Join(common, "hooks"), filepath.Join(common, "info"),
+		filepath.Join(common, "modules"), filepath.Join(common, "objects", "info"), filepath.Join(common, "refs", "replace"),
+		filepath.Join(wt, ".git"), filepath.Join(common, "worktrees", "wt", "commondir"), filepath.Join(common, "worktrees", "wt", "gitdir"),
+	} {
+		if !contains(l.ReadOnly, p) {
+			t.Errorf("linked worktree: %s is not read-only: %+v", p, l.ReadOnly)
+		}
+	}
+	// sandbox.git.shared: direct — the common dir read-write, its
+	// protected paths still read-only.
+	SharedGitDirect = true
+	ld, err := ResolveGitLayout(wt)
+	SharedGitDirect = false
+	if err != nil || !contains(ld.ReadWrite, common) || contains(ld.ReadOnly, common) ||
+		!contains(ld.ReadOnly, filepath.Join(common, "modules")) || !contains(ld.ReadOnly, filepath.Join(common, "config")) {
+		t.Fatalf("direct: %+v %v", ld, err)
 	}
 	// Not a checkout: nothing.
 	if l, err := ResolveGitLayout(t.TempDir()); err != nil || len(l.ReadOnly)+len(l.ReadWrite) != 0 {
