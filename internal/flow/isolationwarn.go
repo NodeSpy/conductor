@@ -54,6 +54,7 @@ func IsolationWarnings(cfg *config.Config) []string {
 			check(config.StepLabel(scope, slot, *s), s.Isolation)
 		}
 	})
+	warns = append(warns, codeIsolationOptOutWarnings(cfg)...)
 	rts := make([]string, 0, len(cfg.Runtimes))
 	for n := range cfg.Runtimes {
 		rts = append(rts, n)
@@ -81,5 +82,36 @@ func IsolationWarnings(cfg *config.Config) []string {
 			warn(fmt.Sprintf("sandbox user %q is SHARED by %d isolation scopes (%v) — their dispatches are not isolated from each other (same EUID). Give each scope its own account, or use mode namespace/container.", u, len(scopes), scopes))
 		}
 	}
+	return warns
+}
+
+// codeIsolationOptOutWarnings lists every LOCAL cli/host/go code step that
+// opted OUT of the confined-by-default posture (code_isolation.go,
+// internal/config) — an explicit `isolation: { mode: none }` or `trust:
+// full` — so an operator sees at boot exactly which steps run bare, rather
+// than discovering it from an incident. Quiet when the whole default is off
+// (`code: { isolation_default: none }`): every step runs bare there by the
+// operator's own global choice, and naming each one would be noise, not
+// signal.
+func codeIsolationOptOutWarnings(cfg *config.Config) []string {
+	if !cfg.CodeIsolationDefaultOn() {
+		return nil
+	}
+	var warns []string
+	cfg.WalkSteps(func(scope config.IdentityScope, slot int, s *config.Step) {
+		if _, class := s.StepEngine(); class != config.EngineCLI && class != config.EngineHost {
+			return
+		}
+		if s.Host != "" || s.SSH != nil {
+			return
+		}
+		where := config.StepLabel(scope, slot, *s)
+		switch {
+		case s.Trust == "full":
+			warns = append(warns, fmt.Sprintf("%s: trust: full opts this code step out of the default namespace sandbox — it runs UNCONFINED, with this daemon's view of the machine and (unless env:/args: are scrubbed) its credentials.", where))
+		case s.Isolation.OptsOut():
+			warns = append(warns, fmt.Sprintf("%s: isolation: { mode: none } opts this code step out of the default namespace sandbox — it runs UNCONFINED, with this daemon's view of the machine and (unless env:/args: are scrubbed) its credentials.", where))
+		}
+	})
 	return warns
 }
