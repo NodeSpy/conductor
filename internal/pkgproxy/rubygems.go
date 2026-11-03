@@ -34,13 +34,10 @@ func (g *RubyGems) AgentEnv(base string) []string {
 	return []string{"BUNDLE_DISABLE_VERSION_CHECK=true", "BUNDLE_MIRROR__HTTPS://RUBYGEMS__ORG/=" + base + "/"}
 }
 
-// HomeFiles mirrors rubygems.org to the proxy for bundler, and makes it
-// gem's only source.
+// HomeFiles makes the proxy gem's only source. (Bundler's mirror is in the
+// environment alone: some bundlers prefer a config file's value to it.)
 func (g *RubyGems) HomeFiles(base string) map[string]string {
-	return map[string]string{
-		".bundle/config": "---\nBUNDLE_MIRROR__HTTPS://RUBYGEMS__ORG/: \"" + base + "/\"\n",
-		".gemrc":         "---\n:sources:\n- " + base + "/\n:update_sources: false\n",
-	}
+	return map[string]string{".gemrc": "---\n:sources:\n- " + base + "/\n:update_sources: false\n"}
 }
 
 var (

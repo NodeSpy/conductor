@@ -167,8 +167,10 @@ func assertRefusedBeforeUpstream(t *testing.T, r *regRig, up *fakeUp, paths []st
 	t.Helper()
 	before := len(up.requests())
 	for _, p := range paths {
-		if code, _ := r.get(t, p); code == 200 {
-			t.Errorf("%s: served", p)
+		// A validation refusal (400), not a miss further in: metadata may be
+		// cached, so a missing upstream request alone proves nothing.
+		if code, msg := r.get(t, p); code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s, want a 400 refusal", p, code, msg)
 		}
 	}
 	if got := up.requests()[before:]; len(got) != 0 {
@@ -302,8 +304,9 @@ func TestRubyGems(t *testing.T) {
 		"/api/v1/gems", "/info/.x",
 	})
 	_, files := r.srv.AgentConfig(Requester{Identity: "i"})
-	if !strings.Contains(files[".bundle/config"], "BUNDLE_MIRROR__HTTPS://RUBYGEMS__ORG/") || !strings.Contains(files[".gemrc"], ":sources:") {
-		t.Fatalf("home files: %v", files)
+	env := strings.Join(r.srv.AgentEnv(Requester{Identity: "i", Dispatch: "d"}), "\n")
+	if !strings.Contains(env, "BUNDLE_MIRROR__HTTPS://RUBYGEMS__ORG/=http://") || !strings.Contains(files[".gemrc"], ":sources:") {
+		t.Fatalf("bundler env / gem home files: %s %v", env, files)
 	}
 }
 
@@ -322,8 +325,9 @@ func TestMaven(t *testing.T) {
 	if code, body := r.get(t, "/org/example/lib/maven-metadata.xml"); code != 200 || body != "<metadata/>" {
 		t.Fatalf("metadata: %d %s", code, body)
 	}
-	if code, _ := r.get(t, "/org/example/lib/1.0-SNAPSHOT/lib-1.0-SNAPSHOT.jar"); code != 404 {
-		t.Fatalf("snapshot served: %d", code)
+	n := len(up.requests())
+	if code, msg := r.get(t, "/org/example/lib/1.0-SNAPSHOT/lib-1.0-SNAPSHOT.jar"); code != 404 || !strings.Contains(msg, "SNAPSHOT") || len(up.requests()) != n {
+		t.Fatalf("snapshot served or fetched: %d %s", code, msg)
 	}
 	assertRefusedBeforeUpstream(t, r, up, []string{
 		"/org/../etc/passwd", "/org/example/lib/1.0/..%2fx.jar", "/org//lib/1.0/x.jar", "/.m2/x/y/z",
@@ -353,7 +357,8 @@ func TestNuGet(t *testing.T) {
 	assertArtifact(t, r, up, "/v3-flatcontainer/newtonsoft.json/13.0.1/newtonsoft.json.13.0.1.nupkg", "/flat/newtonsoft.json/13.0.1/newtonsoft.json.13.0.1.nupkg", pkg)
 	assertRefusedBeforeUpstream(t, r, up, []string{
 		"/v3-flatcontainer/../x/index.json", "/v3-flatcontainer/a/1.0/b.1.0.nupkg", "/v3-flatcontainer/a/../a.nupkg",
-		"/v3/registration/x", "/v3-flatcontainer/a/1.0/a.1.0.sh",
+		"/v3/registration/x", "/v3-flatcontainer/a/1.0/a.1.0.sh", "/v3-flatcontainer/-x/index.json",
+		"/v3-flatcontainer/a%2fb/index.json", "/v3-flatcontainer/newtonsoft.json/..1/newtonsoft.json...1.nupkg",
 	})
 	_, files := r.srv.AgentConfig(Requester{Identity: "i"})
 	if c := files[".nuget/NuGet/NuGet.Config"]; !strings.Contains(c, "<clear />") || !strings.Contains(c, "/v3/index.json") {
@@ -412,7 +417,7 @@ func TestPub(t *testing.T) {
 	assertArtifact(t, r, up, "/packages/http/versions/1.0.0.tar.gz", "/a/http-1.0.0.tar.gz", tgz)
 	assertRefusedBeforeUpstream(t, r, up, []string{
 		"/api/packages/../x", "/api/packages/a-b", "/packages/http/versions/../1.0.0.tar.gz", "/packages/http/versions/1.0.tar.gz",
-		"/api/packages/http/versions/1.0.0",
+		"/api/packages/http/versions/1.0.0", "/packages/http/versions/1.0.0-%2e%2e.tar.gz",
 	})
 	if env := strings.Join(r.srv.AgentEnv(Requester{Identity: "i"}), "\n"); !strings.Contains(env, "PUB_HOSTED_URL=http://") {
 		t.Fatalf("env: %s", env)
@@ -525,5 +530,62 @@ func TestUserAgentDispatchAttribution(t *testing.T) {
 	env := strings.Join(r.srv.AgentEnv(Requester{Identity: "profile:x", Dispatch: "d-1"}), "\n")
 	if !strings.Contains(env, "CARGO_HTTP_USER_AGENT=cargo (conductor/"+r.srv.Token(Requester{Identity: "profile:x", Dispatch: "d-1"})+")") {
 		t.Fatalf("env: %s", env)
+	}
+}
+
+// The cache key: a strong digest addresses content within its ecosystem; a
+// weak one (sha1, md5) or none never does — two artifacts that merely share
+// a weak digest are two cache entries.
+func TestArtifactKey(t *testing.T) {
+	s256, _ := HexDigest("sha256", sha256hex("x"))
+	s1, _ := HexDigest("sha1", sha1hex("x"))
+	a := artifact{URL: "https://a.test/x", Digest: s256}
+	b := artifact{URL: "https://b.test/y", Digest: s256}
+	if a.key("npm") != b.key("npm") || !strings.HasPrefix(a.key("npm"), "npm/sha256/") {
+		t.Fatalf("strong digest is not the address: %s %s", a.key("npm"), b.key("npm"))
+	}
+	if a.key("npm") == a.key("pypi") {
+		t.Fatal("one ecosystem's key is another's")
+	}
+	w1 := artifact{URL: "https://a.test/x", Digest: s1}
+	w2 := artifact{URL: "https://b.test/y", Digest: s1}
+	if w1.key("npm") == w2.key("npm") || !strings.HasPrefix(w1.key("npm"), "npm/url/") {
+		t.Fatalf("a weak digest addresses the cache: %s %s", w1.key("npm"), w2.key("npm"))
+	}
+}
+
+// Private packages: matched by pattern (path.Match or "prefix/*"), fetched
+// from the upstream every time, never cached.
+func TestPrivateNeverCached(t *testing.T) {
+	up := newFakeUp(t)
+	r := newRegRig(t, func(c RegistryConfig) (Ecosystem, error) { return NewPyPI(c) }, up.URL, "corp-*")
+	whl := "private wheel"
+	up.set("/simple/corp-lib/", `{"files":[{"filename":"corp_lib-1.0-py3-none-any.whl","url":"`+up.URL+`/p/corp_lib-1.0-py3-none-any.whl","hashes":{"sha256":"`+sha256hex(whl)+`"}}]}`)
+	up.set("/p/corp_lib-1.0-py3-none-any.whl", whl)
+	for i := 0; i < 2; i++ {
+		if code, got := r.get(t, "/files/corp-lib/corp_lib-1.0-py3-none-any.whl"); code != 200 || got != whl {
+			t.Fatalf("private: %d %q", code, got)
+		}
+	}
+	if n := up.count("/p/corp_lib-1.0-py3-none-any.whl"); n != 2 {
+		t.Fatalf("a private file was fetched %d times; it must never be cached", n)
+	}
+	if sz := r.cache.Size(); sz != 0 {
+		t.Fatalf("the cache holds %d bytes of a private package", sz)
+	}
+	up.set("/p/corp_lib-1.0-py3-none-any.whl", "tampered")
+	if code, msg := r.get(t, "/files/corp-lib/corp_lib-1.0-py3-none-any.whl"); code != http.StatusBadGateway || !strings.Contains(msg, "SECURITY") {
+		t.Fatalf("a private file is verified too: %d %s", code, msg)
+	}
+}
+
+// A file URL in upstream metadata carrying credentials is refused (it
+// would send them, and it is not the registry's own form).
+func TestDerivedURLWithUserinfo(t *testing.T) {
+	up := newFakeUp(t)
+	r := newRegRig(t, func(c RegistryConfig) (Ecosystem, error) { return NewNPM(c) }, up.URL)
+	up.set("/cred", `{"versions":{"1.0.0":{"dist":{"tarball":"https://u:p@files.example.test/cred-1.0.0.tgz","integrity":"`+sri512("x")+`"}}}}`)
+	if code, msg := r.get(t, "/cred/-/cred-1.0.0.tgz"); code != http.StatusBadGateway || !strings.Contains(msg, "malformed") {
+		t.Fatalf("userinfo URL: %d %s", code, msg)
 	}
 }

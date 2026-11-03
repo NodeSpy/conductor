@@ -16,7 +16,9 @@ type PackageAccess struct {
 	// like a local model endpoint ("": no proxy).
 	Addr string
 	// Env points the agent's package managers at it, with a token naming
-	// the identity and dispatch that ask.
+	// the identity and dispatch that ask. "${HOME}" in a value is the
+	// identity home (a JVM takes its user.home from the password database,
+	// not $HOME, so Java tools are told it).
 	Env []string
 	// HomeFiles are package-manager config files (slash paths relative to
 	// the identity home) for the tools that read their registry only from

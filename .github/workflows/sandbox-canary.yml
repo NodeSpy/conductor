@@ -63,6 +63,7 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"

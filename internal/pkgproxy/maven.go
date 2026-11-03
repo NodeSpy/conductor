@@ -31,8 +31,12 @@ func NewMaven(cfg RegistryConfig) (*Maven, error) {
 // Name is the URL segment.
 func (m *Maven) Name() string { return "maven" }
 
-// AgentEnv carries this launch's URL to the HOME files, which read it.
-func (m *Maven) AgentEnv(base string) []string { return []string{"CONDUCTOR_MAVEN_URL=" + base} }
+// AgentEnv carries this launch's URL to the HOME files, which read it, and
+// points Maven and Gradle at the identity HOME holding them: a JVM's
+// user.home comes from the password database, not $HOME.
+func (m *Maven) AgentEnv(base string) []string {
+	return []string{"CONDUCTOR_MAVEN_URL=" + base, "GRADLE_USER_HOME=${HOME}/.gradle", "MAVEN_OPTS=-Duser.home=${HOME}"}
+}
 
 // HomeFiles mirrors every Maven repository to the proxy (settings.xml),
 // and rewrites every Maven repository a Gradle build or its settings

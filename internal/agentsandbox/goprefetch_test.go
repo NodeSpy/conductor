@@ -201,7 +201,7 @@ func TestPolicyPackageProxy(t *testing.T) {
 	r := &Resolver{StateRoot: t.TempDir(), RealHome: t.TempDir(), GOOS: "linux",
 		Packages: func(id, disp string) PackageAccess {
 			gotID, gotDisp = id, disp
-			return PackageAccess{Addr: "127.0.0.1:41234", Env: []string{"GOPROXY=http://127.0.0.1:41234/tok/go", "GOSUMDB=sum.golang.org"},
+			return PackageAccess{Addr: "127.0.0.1:41234", Env: []string{"GOPROXY=http://127.0.0.1:41234/tok/go", "GOSUMDB=sum.golang.org", "GRADLE_USER_HOME=${HOME}/.gradle"},
 				HomeFiles: map[string]string{".cargo/config.toml": "[source.crates-io]\n", ".npmrc": "registry=x\n"}}
 		}}
 	p, err := r.PolicyForEntry(Entry{Workspace: t.TempDir(), Identity: "profile:fixer", Dispatch: "d-1"}, "claude", nil)
@@ -213,6 +213,9 @@ func TestPolicyPackageProxy(t *testing.T) {
 	}
 	if !contains(p.Loopback, "127.0.0.1:41234") || !contains(p.Env, "GOPROXY=http://127.0.0.1:41234/tok/go") {
 		t.Fatalf("policy: loopback %v env %v", p.Loopback, p.Env)
+	}
+	if !contains(p.Env, "GRADLE_USER_HOME="+p.Home+"/.gradle") {
+		t.Fatalf("${HOME} not expanded: %v", p.Env)
 	}
 	if b, err := os.ReadFile(filepath.Join(p.Home, ".cargo", "config.toml")); err != nil || string(b) != "[source.crates-io]\n" {
 		t.Fatalf("home file: %q %v", b, err)
@@ -257,6 +260,17 @@ func TestWriteHomeFiles(t *testing.T) {
 	if fi, err := os.Lstat(filepath.Join(home, ".npmrc")); err != nil || !fi.Mode().IsRegular() {
 		t.Fatalf(".npmrc is not a regular file now: %v %v", fi, err)
 	}
+	// A symlink to a file that happens to hold the same content is still
+	// replaced by a regular file of conductor's.
+	os.Remove(filepath.Join(home, ".npmrc"))
+	os.WriteFile(filepath.Join(home, "same"), []byte("registry=proxy\n"), 0o600)
+	os.Symlink("same", filepath.Join(home, ".npmrc"))
+	if err := WriteHomeFiles(home, map[string]string{".npmrc": "registry=proxy\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(filepath.Join(home, ".npmrc")); err != nil || !fi.Mode().IsRegular() {
+		t.Fatalf("an identical symlink was left in place: %v %v", fi, err)
+	}
 	os.WriteFile(filepath.Join(home, ".m2", "settings.xml"), []byte("agent edit"), 0o600)
 	if err := WriteHomeFiles(home, map[string]string{".m2/settings.xml": "<s/>"}); err != nil {
 		t.Fatal(err)
@@ -269,6 +283,7 @@ func TestWriteHomeFiles(t *testing.T) {
 			t.Errorf("%q accepted", bad)
 		}
 	}
+	os.Remove(filepath.Join(home, "same"))
 	if ents, _ := os.ReadDir(home); len(ents) != 2 {
 		t.Fatalf("stray files in the home: %v", ents)
 	}

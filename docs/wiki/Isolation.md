@@ -293,10 +293,13 @@ Per client:
 - **cargo**: `~/.cargo/config.toml` replaces `crates-io` with the proxy's
   sparse index (the proxy serves its own `config.json`, so downloads come
   back to it).
-- **bundler, gem**: `BUNDLE_MIRROR__HTTPS://RUBYGEMS__ORG/`, and `~/.gemrc` for gem.
+- **bundler, gem**: `BUNDLE_MIRROR__HTTPS://RUBYGEMS__ORG/` (environment only —
+  some bundlers prefer a config file's mirror), and `~/.gemrc` for gem.
 - **Maven, Gradle**: `~/.m2/settings.xml` mirrors every repository
   (`mirrorOf *`); `~/.gradle/init.d/conductor.gradle` rewrites every Maven
-  repository a build or its settings declare.
+  repository a build or its settings declare. A JVM takes its home from the
+  password database, not `$HOME`, so `GRADLE_USER_HOME` and Maven's
+  `user.home` name the identity home.
 - **dotnet**: `~/.nuget/NuGet/NuGet.Config` clears every source and adds the
   proxy (a service index of conductor's own, offering the flat container).
 - **composer**: `~/.composer/config.json` disables Packagist and adds the proxy;

@@ -129,7 +129,10 @@ const seatbeltAgentBase = `(version 1)
   (subpath "/opt/local")
   (subpath "/usr/local")
   (subpath "/etc")
-  (subpath "/private/etc"))
+  (subpath "/private/etc")
+  ; /etc/resolv.conf links here: DNS server addresses, which a resolver
+  ; library reads at load (Ruby's net/http) even with DNS closed.
+  (literal "/private/var/run/resolv.conf"))
 (allow file-read* file-write-data file-ioctl
   (literal "/dev/null")
   (literal "/dev/zero")

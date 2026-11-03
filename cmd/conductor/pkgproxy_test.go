@@ -29,7 +29,7 @@ func TestStartPackageProxyAllEcosystems(t *testing.T) {
 	if strings.Contains(all, "npm_config_registry") {
 		t.Error("a disabled ecosystem is still configured")
 	}
-	for _, f := range []string{".cargo/config.toml", ".m2/settings.xml", ".gradle/init.d/conductor.gradle", ".nuget/NuGet/NuGet.Config", ".composer/config.json", ".gemrc", ".bundle/config", ".Rprofile"} {
+	for _, f := range []string{".cargo/config.toml", ".m2/settings.xml", ".gradle/init.d/conductor.gradle", ".nuget/NuGet/NuGet.Config", ".composer/config.json", ".gemrc", ".Rprofile"} {
 		if files[f] == "" {
 			t.Errorf("no HOME file %s", f)
 		}

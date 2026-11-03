@@ -188,11 +188,13 @@ func runClientCase(t *testing.T, c clientCase, self func() (string, error)) {
 	var path []string
 	for _, b := range c.bins {
 		p, _ := exec.LookPath(b)
-		if rp, err := filepath.EvalSymlinks(p); err == nil {
-			p = rp
-		}
+		// PATH names the tool where the operator's does (a launcher script
+		// finds its install from there); its install is shown read-only.
 		if d := filepath.Dir(p); !contains(path, d) {
 			path = append(path, d)
+		}
+		if rp, err := filepath.EvalSymlinks(p); err == nil {
+			p = rp
 		}
 		if inst := filepath.Dir(filepath.Dir(p)); !visibleInBase(inst) && !contains(pol.ReadOnly, inst) {
 			pol.ReadOnly = append(pol.ReadOnly, inst)
@@ -352,9 +354,12 @@ func clientCases() []clientCase {
 				})
 				// A rustup install: its toolchain, read-only, run directly
 				// (rustup's proxies look for it under the real HOME).
-				out, err := exec.Command("rustc", "--print", "sysroot").CombinedOutput()
+				var stderr bytes.Buffer
+				cmd := exec.Command("rustc", "--print", "sysroot")
+				cmd.Stderr = &stderr
+				out, err := cmd.Output()
 				if err != nil {
-					t.Fatalf("rustc --print sysroot: %v\n%s", err, out)
+					t.Fatalf("rustc --print sysroot: %v\n%s", err, stderr.Bytes())
 				}
 				sys := strings.TrimSpace(string(out))
 				if visibleInBase(sys) {
@@ -436,7 +441,14 @@ func clientCases() []clientCase {
 				f.set("/flat/fake.pkg/1.0.0/fake.pkg.1.0.0.nupkg", nupkg)
 				f.set("/reg/fake.pkg/1.0.0.json", []byte(`{"catalogEntry":"`+f.URL+`/catalog/fake.pkg.1.0.0.json"}`))
 				f.set("/catalog/fake.pkg.1.0.0.json", []byte(`{"packageHash":"`+base64.StdEncoding.EncodeToString(h[:])+`","packageHashAlgorithm":"SHA512"}`))
-				writeWS(t, ws, map[string]string{"app.csproj": `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>netstandard2.0</TargetFramework><NuGetAudit>false</NuGetAudit></PropertyGroup><ItemGroup><PackageReference Include="Fake.Pkg" Version="1.0.0" /></ItemGroup></Project>`})
+				// The SDK's own framework: its reference pack ships with it,
+				// so the one package restored is the fixture's.
+				v, err := exec.Command("dotnet", "--version").Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				major, _, _ := strings.Cut(strings.TrimSpace(string(v)), ".")
+				writeWS(t, ws, map[string]string{"app.csproj": `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net` + major + `.0</TargetFramework><NuGetAudit>false</NuGetAudit></PropertyGroup><ItemGroup><PackageReference Include="Fake.Pkg" Version="1.0.0" /></ItemGroup></Project>`})
 				var ro, env []string
 				if dr := os.Getenv("DOTNET_ROOT"); dr != "" {
 					env = append(env, "DOTNET_ROOT="+dr)

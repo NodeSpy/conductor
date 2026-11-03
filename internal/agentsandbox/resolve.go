@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/NodeSpy/conductor/internal/skill"
 )
@@ -216,7 +217,9 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 				return Policy{}, fmt.Errorf("agentsandbox: package manager config in %s: %w", home, err)
 			}
 			p.Loopback = appendUnique(append([]string(nil), p.Loopback...), a.Addr)
-			p.Env = append(append([]string(nil), p.Env...), a.Env...)
+			for _, kv := range a.Env {
+				p.Env = append(p.Env, strings.ReplaceAll(kv, "${HOME}", home))
+			}
 		}
 	}
 	if r.Socket != "" && e.Skill != nil && r.Mint != nil {
