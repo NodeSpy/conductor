@@ -135,52 +135,77 @@ func (p procInfo) progName() string {
 	return n
 }
 
-// classify judges one process. root: the agent's own top process (its CLI
-// holds sockets and may hold ptys for the commands it runs); self: a
-// conductor process (the forwarder, `conductor call`).
+// classify judges one process: its first verdict, or nil.
 func classify(p procInfo, allow map[string]bool, root, self bool) *verdict {
+	if vs := verdicts(p, allow, root, self); len(vs) > 0 {
+		return &vs[0]
+	}
+	return nil
+}
+
+// verdicts judges one process, most telling first: what it does with a
+// socket (a shell's wiring, a pty relay) before what it is named (a tunnel
+// tool), so an allowance for a tunnel tool's name never covers a shell
+// wired to a socket. root: the agent's own top process (its CLI holds
+// sockets and may hold ptys for the commands it runs); self: a conductor
+// process (the forwarder, `conductor call`). allow exempts programs by
+// name (sandbox.detect.allow): one whose binary was identified is exempt
+// from every rule; one known by name alone only from the tunnel-tool rule.
+func verdicts(p procInfo, allow map[string]bool, root, self bool) []verdict {
 	if self {
 		return nil
 	}
 	name := p.toolName()
-	if allow[name] {
+	exempt := allow[name]
+	if exempt && p.id.name != "" {
 		return nil
 	}
+	var out []verdict
 	class := p.class()
-	if class == classTunnel {
-		return &verdict{"tunnel_tool", fmt.Sprintf("%s runs (%s%s)", name, argString(p.args), p.renamed())}
-	}
-	if name == "openssl" {
-		for _, a := range p.args[1:] {
-			if a == "s_client" || a == "s_server" {
-				return &verdict{"tunnel_tool", "openssl " + a + " (" + argString(p.args) + ")"}
-			}
+	stdioFD := -1
+	for fd := 0; fd < 2; fd++ {
+		if p.stdio[fd] == "inet" {
+			stdioFD = fd
+			break
 		}
 	}
 	switch class {
 	case classShell:
 		// A shell holds no network socket in a build, on any descriptor.
 		if len(p.inetFDs) > 0 {
-			return &verdict{"reverse_shell", fmt.Sprintf("%s with an inet socket on fd %d (%s%s)", name, p.inetFDs[0], argString(p.args), p.renamed())}
-		}
-		for fd := 0; fd < 2; fd++ {
-			if p.stdio[fd] == "inet" {
-				return &verdict{"reverse_shell", fmt.Sprintf("%s with an inet socket on fd %d (%s%s)", name, fd, argString(p.args), p.renamed())}
-			}
+			out = append(out, verdict{"reverse_shell", fmt.Sprintf("%s with an inet socket on fd %d (%s%s)", name, p.inetFDs[0], argString(p.args), p.renamed())})
+		} else if stdioFD >= 0 {
+			out = append(out, verdict{"reverse_shell", fmt.Sprintf("%s with an inet socket on fd %d (%s%s)", name, stdioFD, argString(p.args), p.renamed())})
 		}
 	case classInterp:
 		// An interpreter's own sockets are its work (pip, npm); its stdin
 		// or stdout being one is a shell's.
-		for fd := 0; fd < 2; fd++ {
-			if p.stdio[fd] == "inet" {
-				return &verdict{"reverse_shell", fmt.Sprintf("%s with an inet socket on fd %d (%s%s)", name, fd, argString(p.args), p.renamed())}
-			}
+		if stdioFD >= 0 {
+			out = append(out, verdict{"reverse_shell", fmt.Sprintf("%s with an inet socket on fd %d (%s%s)", name, stdioFD, argString(p.args), p.renamed())})
+		}
+	case classTunnel:
+		// A tunnel tool dials its socket; a socket for its stdin or stdout
+		// is a shell's wiring, whatever the program is called.
+		if stdioFD >= 0 {
+			out = append(out, verdict{"reverse_shell", fmt.Sprintf("%s with an inet socket on fd %d, a shell's wiring (%s%s)", name, stdioFD, argString(p.args), p.renamed())})
 		}
 	}
 	if !root && p.ptyMaster && p.inetSocket {
-		return &verdict{"pty_relay", fmt.Sprintf("%s holds a terminal and a network socket (%s)", name, argString(p.args))}
+		out = append(out, verdict{"pty_relay", fmt.Sprintf("%s holds a terminal and a network socket (%s)", name, argString(p.args))})
 	}
-	return nil
+	if !exempt {
+		if class == classTunnel {
+			out = append(out, verdict{"tunnel_tool", fmt.Sprintf("%s runs (%s%s)", name, argString(p.args), p.renamed())})
+		} else if name == "openssl" {
+			for _, a := range p.args[1:] {
+				if a == "s_client" || a == "s_server" {
+					out = append(out, verdict{"tunnel_tool", "openssl " + a + " (" + argString(p.args) + ")"})
+					break
+				}
+			}
+		}
+	}
+	return out
 }
 
 func argString(args []string) string {
@@ -392,14 +417,27 @@ func (d *detector) scan() {
 	d.noteGroups(procs, all)
 	root := agentRoot(procs, d.self)
 	for _, p := range procs {
-		if v := classify(p, d.allow, p.pid == root, d.self != "" && p.exe == d.self); v != nil {
-			reason := fmt.Sprintf("pid %d: %s", p.pid, v.reason)
-			if d.spec.allows(v.kind, p.toolName()) {
-				d.allowed(v.kind, reason)
-				continue
-			}
-			d.detected(v.kind, reason, false)
+		vs := verdicts(p, d.allow, p.pid == root, d.self != "" && p.exe == d.self)
+		if len(vs) == 0 {
+			continue
 		}
+		// Allowed only when the launch's allowance covers every verdict:
+		// a tunnel tool's allowance never covers a shell wired to a socket,
+		// and such a process is never audited as an allowed tunnel.
+		v := vs[0]
+		covered := true
+		for _, w := range vs {
+			if !d.spec.allows(w.kind, p.toolName()) {
+				v, covered = w, false
+				break
+			}
+		}
+		reason := fmt.Sprintf("pid %d: %s", p.pid, v.reason)
+		if covered {
+			d.allowed(v.kind, reason)
+			continue
+		}
+		d.detected(v.kind, reason, false)
 	}
 }
 

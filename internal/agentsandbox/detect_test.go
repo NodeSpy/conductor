@@ -352,3 +352,59 @@ func TestDangerousGitKeysCoverExecAndRedirects(t *testing.T) {
 		t.Fatalf("a harmless key recorded:\n%s", got)
 	}
 }
+
+// An allowance for a tunnel tool covers that tool, never a shell wired to
+// a socket under its name (the red team's expF): neither a renamed host
+// shell nor a binary the host does not know is audited as an allowed
+// tunnel, and the launch is killed.
+func TestTunnelAllowanceNeverCoversAShell(t *testing.T) {
+	spec := DetectSpec{AllowTunnels: []string{"ssh", "cloudflared"}, AllowedBy: "workflow ops"}
+	sock := [3]string{"inet", "inet"}
+	cases := []struct {
+		name    string
+		p       procInfo
+		allowed bool
+		kind    string
+	}{
+		{"real ssh, its own socket", procInfo{args: []string{"ssh", "bastion"}, id: identity{"ssh", classTunnel}, inetFDs: []int{3}}, true, "tunnel_tool"},
+		{"real cloudflared by name", procInfo{args: []string{"cloudflared", "tunnel"}, inetFDs: []int{7}}, true, "tunnel_tool"},
+		{"plain reverse shell", procInfo{args: []string{"bash"}, id: identity{"bash", classShell}, stdio: sock, inetFDs: []int{0, 1}}, false, "reverse_shell"},
+		{"host bash renamed ssh", procInfo{args: []string{"ssh"}, id: identity{"bash", classShell}, stdio: sock, inetFDs: []int{0, 1}}, false, "reverse_shell"},
+		{"unknown binary named ssh, socket on stdio", procInfo{args: []string{"ssh"}, stdio: sock, inetFDs: []int{0, 1}}, false, "reverse_shell"},
+		{"unknown binary named cloudflared, socket on stdin", procInfo{args: []string{"./cloudflared"}, stdio: [3]string{"inet"}, inetFDs: []int{0}}, false, "reverse_shell"},
+		{"unknown binary named ssh relaying a pty", procInfo{args: []string{"ssh"}, ptyMaster: true, inetSocket: true, inetFDs: []int{4}}, false, "pty_relay"},
+	}
+	for _, c := range cases {
+		c.p.pid, c.p.ppid, c.p.start = 900072, 900071, 1
+		procs := []procInfo{{pid: 900070, ppid: 1, marked: true, start: 1, args: []string{"unshare"}}, {pid: 900071, ppid: 900070, start: 1, args: []string{"claude"}}, c.p}
+		var events []map[string]any
+		var signalled []int
+		d := &detector{spec: spec, run: "r1", allow: map[string]bool{},
+			list:     func() ([]procInfo, error) { return procs, nil },
+			signal:   func(pid int, _ uint64) error { signalled = append(signalled, pid); return nil },
+			event:    func(_ string, f map[string]any) { events = append(events, f) },
+			reported: map[string]bool{}}
+		d.scan()
+		if len(events) != 1 {
+			t.Fatalf("%s: events %v", c.name, events)
+		}
+		e := events[0]
+		if e["kind"] != c.kind {
+			t.Errorf("%s: kind %v, want %s (%v)", c.name, e["kind"], c.kind, e["reason"])
+		}
+		if got := e["action"] == "allowed"; got != c.allowed {
+			t.Errorf("%s: audited %v, want allowed=%v", c.name, e["action"], c.allowed)
+		}
+		if c.allowed != (len(signalled) == 0) {
+			t.Errorf("%s: signalled %v", c.name, signalled)
+		}
+	}
+	// sandbox.detect.allow by name exempts an unknown binary from the
+	// tunnel rule only.
+	if v := classify(procInfo{args: []string{"ssh"}, stdio: sock}, map[string]bool{"ssh": true}, false, false); v == nil || v.kind != "reverse_shell" {
+		t.Fatalf("detect.allow covered a shell's wiring: %+v", v)
+	}
+	if v := classify(procInfo{args: []string{"ssh"}, inetFDs: []int{3}}, map[string]bool{"ssh": true}, false, false); v != nil {
+		t.Fatalf("detect.allow did not exempt the tool: %+v", v)
+	}
+}
