@@ -363,6 +363,19 @@ func ParseByteSize(v string) (int64, error) {
 	return n * mult, nil
 }
 
+// AgentEgressLimits are sandbox.egress_limits parsed: idle, upload and
+// download, each 0 for the default and -1 for off. Validate has checked
+// them; a value that does not parse is the default.
+func (s *SandboxConfig) AgentEgressLimits() (idle time.Duration, upload, download int64) {
+	if s == nil || s.EgressLimits == nil {
+		return 0, 0, 0
+	}
+	idle, _ = ParseLimitDuration(s.EgressLimits.Idle)
+	upload, _ = ParseByteSize(s.EgressLimits.Upload)
+	download, _ = ParseByteSize(s.EgressLimits.Download)
+	return idle, upload, download
+}
+
 // ParseLimitDuration parses a duration knob: "" is 0 (unset), "off" is -1.
 func ParseLimitDuration(v string) (time.Duration, error) {
 	switch strings.ToLower(strings.TrimSpace(v)) {

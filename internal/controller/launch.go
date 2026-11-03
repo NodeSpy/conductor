@@ -27,6 +27,14 @@ var EgressProxyFor func(allow []string) (addr, cred string, revoke func(), err e
 // nil + an enforced-egress launch fails closed.
 var EgressProxyUnix func(allow []string) (sock, cred string, revoke func(), err error)
 
+// EgressProxyUnixSession / EgressProxyForSession mint an agent launch's
+// session (sandbox.ProxyManager.UnixEndpointSession / EndpointSession):
+// attributed to its run, TLS-only tunnels, limited, closed when revoked.
+var (
+	EgressProxyUnixSession func(allow []string, o sandbox.SessionOpts) (sock, cred string, revoke func(), err error)
+	EgressProxyForSession  func(allow []string, o sandbox.SessionOpts) (addr, cred string, revoke func(), err error)
+)
+
 // launchSelfExe resolves conductor's own binary (re-executed inside the
 // sandbox as the forwarder); a var for tests.
 var launchSelfExe = os.Executable

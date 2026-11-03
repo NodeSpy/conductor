@@ -153,6 +153,9 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 		return nil, "", nil, nil, err
 	}
 	pol.Socket = w.Resolver.Socket
+	if a.req != nil && a.req.DispatchID != "" {
+		pol.Run = a.req.DispatchID
+	}
 	if a.skillEnv && a.req != nil && pol.Socket != "" {
 		sb := &skill.SandboxBinding{Identity: pol.Identity, Workspace: pol.Workspace, Egress: entry.Egress,
 			Deny: append(append([]string(nil), entry.ReadOnly...), entry.Hide...)}
@@ -165,12 +168,14 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	pol.ReadOnly = append(pol.ReadOnly, a.files...)
 	pol.Expose = append(pol.Expose, a.expose...)
 	launch, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
-		SelfExe:    launchSelfExe,
-		EgressUnix: EgressProxyUnix,
-		EgressAddr: EgressProxyFor,
-		Relay:      w.Relay,
-		LookPath:   exec.LookPath,
-		RealHome:   w.Resolver.RealHome,
+		SelfExe:           launchSelfExe,
+		EgressUnix:        EgressProxyUnix,
+		EgressAddr:        EgressProxyFor,
+		EgressUnixSession: EgressProxyUnixSession,
+		EgressAddrSession: EgressProxyForSession,
+		Relay:             w.Relay,
+		LookPath:          exec.LookPath,
+		RealHome:          w.Resolver.RealHome,
 		// The model credentials and endpoints come from the daemon's own
 		// environment or the dispatch's; everything else is dropped.
 		Inherited: append(os.Environ(), env...),

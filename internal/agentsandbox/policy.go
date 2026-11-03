@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
@@ -58,9 +59,36 @@ type Policy struct {
 	// PosixIPC (macOS) allows POSIX shared memory and semaphores
 	// (sandbox.macos_posix_ipc).
 	PosixIPC bool `json:"posix_ipc,omitempty"`
+	// EgressAnyBytes lets an allowed CONNECT tunnel carry any protocol
+	// (sandbox.egress_require_tls: false); by default its first bytes must
+	// be a TLS ClientHello naming the CONNECT host.
+	EgressAnyBytes bool `json:"egress_any_bytes,omitempty"`
+	// Run attributes the launch's egress and detections (the dispatch id;
+	// "" = the identity).
+	Run string `json:"run,omitempty"`
+	// EgressIdle (ns), EgressUpload and EgressDownload (bytes) bound the
+	// launch's egress session (sandbox.egress_limits): 0 is the default,
+	// -1 off.
+	EgressIdle     int64 `json:"egress_idle,omitempty"`
+	EgressUpload   int64 `json:"egress_upload,omitempty"`
+	EgressDownload int64 `json:"egress_download,omitempty"`
 	// Note is something the launcher should tell its operator about this
 	// policy (a scratch workspace in place of a refused directory).
 	Note string `json:"note,omitempty"`
+}
+
+// EgressSession is the egress proxy session the policy's launch gets.
+func (p Policy) EgressSession() sandbox.SessionOpts {
+	run := p.Run
+	if run == "" {
+		run = p.Identity
+	}
+	return sandbox.SessionOpts{
+		Run:        run,
+		RequireTLS: !p.EgressAnyBytes,
+		Limits: sandbox.EgressLimits{Idle: time.Duration(p.EgressIdle),
+			Upload: p.EgressUpload, Download: p.EgressDownload},
+	}
 }
 
 // Validate refuses a policy that cannot be realized as a boundary.
@@ -124,6 +152,11 @@ type Deps struct {
 	// macOS profile allows.
 	EgressUnix func(allow []string) (sock, cred string, revoke func(), err error)
 	EgressAddr func(allow []string) (addr, cred string, revoke func(), err error)
+	// EgressUnixSession / EgressAddrSession, when set, are used instead:
+	// the launch's session gets the policy's egress settings (TLS-only
+	// tunnels, limits) and is attributed to its run.
+	EgressUnixSession func(allow []string, o sandbox.SessionOpts) (sock, cred string, revoke func(), err error)
+	EgressAddrSession func(allow []string, o sandbox.SessionOpts) (addr, cred string, revoke func(), err error)
 	// Relay opens a host-side unix socket piped to a host-loopback target
 	// (Linux; macOS reaches the port directly).
 	Relay func(target string) (sock string, closeFn func(), err error)
@@ -266,6 +299,12 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		Confine:    true,
 		EgressUnix: d.EgressUnix,
 		EgressAddr: d.EgressAddr,
+	}
+	if so := p.EgressSession(); d.EgressUnixSession != nil {
+		deps.EgressUnix = func(allow []string) (string, string, func(), error) { return d.EgressUnixSession(allow, so) }
+		if d.EgressAddrSession != nil {
+			deps.EgressAddr = func(allow []string) (string, string, func(), error) { return d.EgressAddrSession(allow, so) }
+		}
 	}
 	var closers []func()
 	cleanupAll := func() {

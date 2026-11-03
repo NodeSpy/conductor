@@ -521,3 +521,40 @@ func TestModelRouteIgnoresAnOverrideWithNoHost(t *testing.T) {
 		}
 	}
 }
+
+// An agent launch's egress session carries the policy's settings: TLS-only
+// tunnels unless the operator opted out, its limits, and its run.
+func TestWrapMintsTheAgentsEgressSession(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			withPlatform(t, goos)
+			f := newPolicyFixture(t)
+			var got []sandbox.SessionOpts
+			f.deps.EgressUnixSession = func(_ []string, o sandbox.SessionOpts) (string, string, func(), error) {
+				got = append(got, o)
+				return "/tmp/egress-x/egress-0.sock", "cred-unix", func() {}, nil
+			}
+			f.deps.EgressAddrSession = func(_ []string, o sandbox.SessionOpts) (string, string, func(), error) {
+				got = append(got, o)
+				return "127.0.0.1:40123", "cred-tcp", func() {}, nil
+			}
+			f.pol.Run = "run-7:fix"
+			f.pol.EgressUpload = 1 << 20
+			if _, err := Wrap(f.pol, []string{"claude"}, f.deps); err != nil {
+				t.Fatal(err)
+			}
+			want := sandbox.SessionOpts{Run: "run-7:fix", RequireTLS: true, Limits: sandbox.EgressLimits{Upload: 1 << 20}}
+			if len(got) != 1 || got[0] != want {
+				t.Fatalf("sessions minted %+v, want one %+v", got, want)
+			}
+			got = nil
+			f.pol.EgressAnyBytes, f.pol.Run = true, ""
+			if _, err := Wrap(f.pol, []string{"claude"}, f.deps); err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].RequireTLS || got[0].Run != f.pol.Identity {
+				t.Fatalf("opted-out session %+v", got)
+			}
+		})
+	}
+}

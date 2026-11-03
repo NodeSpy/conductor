@@ -38,6 +38,9 @@ type Proxy struct {
 	Allow []string // EgressAllowed patterns; empty = deny everything
 	// OnDeny is called (if non-nil) with the denied host:port — the audit hook.
 	OnDeny func(hostport string)
+	// OnConn is called with every request's record, allowed or not, when
+	// it is decided (a refusal) or ends (a tunnel): the per-run audit.
+	OnConn func(ConnRecord)
 
 	ln   net.Listener
 	srv  *http.Server
@@ -50,7 +53,7 @@ type Proxy struct {
 	resolveIP func(ctx context.Context, host string) ([]net.IPAddr, error)
 
 	credMu sync.Mutex
-	creds  map[string]bool // valid per-dispatch credentials (the basic-auth password)
+	creds  map[string]*Session // valid per-launch credentials (the basic-auth password)
 }
 
 // errEgressBlockedIP is returned by dialAllowed when every resolved address is
@@ -120,9 +123,21 @@ func (p *Proxy) lookup(ctx context.Context, host string) ([]net.IPAddr, error) {
 // exactly this target (specialAllowed); if every candidate is blocked, it returns
 // errEgressBlockedIP so the caller can 403 + audit.
 func (p *Proxy) dialAllowed(ctx context.Context, hostport string, timeout time.Duration) (net.Conn, error) {
+	ips, port, err := p.resolveAllowed(ctx, hostport)
+	if err != nil {
+		return nil, err
+	}
+	return dialIPs(ctx, ips, port, timeout, hostport)
+}
+
+// resolveAllowed resolves hostport and keeps the addresses it may reach:
+// a special-range address only when the operator bound it for exactly this
+// target (specialAllowed). errEgressBlockedIP when every address is
+// blocked.
+func (p *Proxy) resolveAllowed(ctx context.Context, hostport string) ([]net.IP, string, error) {
 	host, port := splitHostPort(hostport)
 	if port == "" {
-		return nil, fmt.Errorf("dial %s: missing port", hostport)
+		return nil, "", fmt.Errorf("dial %s: missing port", hostport)
 	}
 	var ips []net.IPAddr
 	if strings.EqualFold(host, "localhost") {
@@ -132,40 +147,57 @@ func (p *Proxy) dialAllowed(ctx context.Context, hostport string, timeout time.D
 	} else {
 		var err error
 		if ips, err = p.lookup(ctx, host); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
-	var blocked bool
-	var d net.Dialer
-	var lastErr error
+	var ok []net.IP
+	blocked := false
 	for _, ipa := range ips {
 		if specialIP(ipa.IP) && !specialAllowed(p.Allow, host, port, ipa.IP) {
 			blocked = true
 			continue
 		}
+		ok = append(ok, ipa.IP)
+	}
+	if len(ok) == 0 {
+		if blocked {
+			return nil, "", errEgressBlockedIP
+		}
+		return nil, "", fmt.Errorf("dial %s: no addresses resolved", hostport)
+	}
+	return ok, port, nil
+}
+
+// dialIPs connects to the first of the checked addresses that answers.
+func dialIPs(ctx context.Context, ips []net.IP, port string, timeout time.Duration, hostport string) (net.Conn, error) {
+	var d net.Dialer
+	var lastErr error
+	for _, ip := range ips {
 		dctx, cancel := context.WithTimeout(ctx, timeout)
-		conn, err := d.DialContext(dctx, "tcp", net.JoinHostPort(ipa.IP.String(), port))
+		conn, err := d.DialContext(dctx, "tcp", net.JoinHostPort(ip.String(), port))
 		cancel()
 		if err == nil {
 			return conn, nil
 		}
 		lastErr = err
 	}
-	if blocked {
-		return nil, errEgressBlockedIP
+	if lastErr == nil {
+		lastErr = fmt.Errorf("dial %s: no addresses", hostport)
 	}
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, fmt.Errorf("dial %s: no addresses resolved", hostport)
+	return nil, lastErr
 }
 
 // proxyUser is the fixed basic-auth username; the per-dispatch credential is
 // the password half.
 const proxyUser = "conductor"
 
-// MintCred registers and returns a fresh per-dispatch client credential.
-func (p *Proxy) MintCred() (string, error) {
+// MintCred registers and returns a fresh per-dispatch client credential: a
+// session with no limits and no first-bytes check (a plugin's or code
+// step's egress, whose protocols are the operator's to allow).
+func (p *Proxy) MintCred() (string, error) { return p.MintSession(SessionOpts{Limits: NoEgressLimits}) }
+
+// MintSession registers a fresh credential for one launch's session.
+func (p *Proxy) MintSession(o SessionOpts) (string, error) {
 	buf := make([]byte, 24)
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("sandbox: mint proxy credential: %w", err)
@@ -173,9 +205,9 @@ func (p *Proxy) MintCred() (string, error) {
 	cred := hex.EncodeToString(buf)
 	p.credMu.Lock()
 	if p.creds == nil {
-		p.creds = map[string]bool{}
+		p.creds = map[string]*Session{}
 	}
-	p.creds[cred] = true
+	p.creds[cred] = newSession(o)
 	p.credMu.Unlock()
 	return cred, nil
 }
@@ -189,45 +221,51 @@ func (p *Proxy) Revoke(cred string) {
 		return
 	}
 	p.credMu.Lock()
+	sess := p.creds[cred]
 	delete(p.creds, cred)
 	p.credMu.Unlock()
+	if sess != nil {
+		// Its open tunnels end with it: a revoked launch keeps no channel.
+		sess.shut("revoked")
+	}
 }
 
 // authorized checks the request's Proxy-Authorization against the registered
 // per-dispatch credentials. No registered credentials ⇒ nothing authorizes
 // (fail closed).
-func (p *Proxy) authorized(r *http.Request) bool {
+func (p *Proxy) authorized(r *http.Request) *Session {
 	h := r.Header.Get("Proxy-Authorization")
 	scheme, b64, ok := strings.Cut(h, " ")
 	if !ok || !strings.EqualFold(scheme, "Basic") {
-		return false
+		return nil
 	}
 	dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
 	if err != nil {
-		return false
+		return nil
 	}
 	user, pass, ok := strings.Cut(string(dec), ":")
 	if !ok || user != proxyUser {
-		return false
+		return nil
 	}
 	p.credMu.Lock()
 	defer p.credMu.Unlock()
-	for c := range p.creds {
+	var found *Session
+	for c, s := range p.creds {
 		if subtle.ConstantTimeCompare([]byte(c), []byte(pass)) == 1 {
-			return true
+			found = s
 		}
 	}
-	return false
+	return found
 }
 
 // requireAuth answers 407 when the request carries no valid credential.
-func (p *Proxy) requireAuth(w http.ResponseWriter, r *http.Request) bool {
-	if p.authorized(r) {
-		return true
+func (p *Proxy) requireAuth(w http.ResponseWriter, r *http.Request) *Session {
+	if s := p.authorized(r); s != nil {
+		return s
 	}
 	w.Header().Set("Proxy-Authenticate", `Basic realm="conductor egress"`)
 	http.Error(w, "sandbox egress proxy: proxy authentication required", http.StatusProxyAuthRequired)
-	return false
+	return nil
 }
 
 // Start listens on a fresh loopback port and serves until Close. It returns
@@ -297,16 +335,30 @@ func (p *Proxy) Close() {
 // ServeHTTP filters one proxied request: CONNECT opens a raw tunnel to an
 // allowed target; an absolute-URI request (plain-HTTP proxying) is forwarded.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !p.requireAuth(w, r) {
+	sess := p.requireAuth(w, r)
+	if sess == nil {
 		return
 	}
-	p.forward(w, r)
+	p.forward(w, r, sess)
+}
+
+// record reports one request's outcome.
+func (p *Proxy) record(rec ConnRecord) {
+	if p.OnConn != nil {
+		p.OnConn(rec)
+	}
 }
 
 // forward serves one authorized request: the allowlist decides the rest.
-func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
+// sess is the launch's session (a trusted listener's own: unbounded).
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, sess *Session) {
+	if why := sess.refused(); why != "" {
+		p.record(ConnRecord{Run: sess.Run, Target: r.Host, Outcome: "refused", Reason: why})
+		http.Error(w, "sandbox egress proxy: this launch's egress is closed: "+why, http.StatusForbidden)
+		return
+	}
 	if r.Method == http.MethodConnect {
-		p.connect(w, r)
+		p.connect(w, r, sess)
 		return
 	}
 	// A plain-HTTP proxy request carries an absolute URI; anything else is a
@@ -320,18 +372,25 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 		target += ":80"
 	}
 	if !EgressAllowed(p.Allow, target) {
-		p.deny(w, target)
+		p.deny(w, target, sess)
 		return
 	}
+	start := time.Now()
 	out := r.Clone(r.Context())
 	out.RequestURI = ""
 	out.Header.Del("Proxy-Authorization") // the credential never leaves the box
+	var up int64
+	if out.Body != nil {
+		out.Body = &countingBody{r: out.Body, n: &up}
+	}
 	resp, err := p.tr.RoundTrip(out)
+	sess.count(up, true)
 	if err != nil {
 		if errors.Is(err, errEgressBlockedIP) {
-			p.deny(w, target) // resolved into a special range → 403 + audit
+			p.deny(w, target, sess) // resolved into a special range → 403 + audit
 			return
 		}
+		p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "refused", Reason: err.Error(), Up: up})
 		http.Error(w, "sandbox egress proxy: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -342,57 +401,129 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	var down int64
+	_, _ = io.Copy(w, &countingBody{r: resp.Body, n: &down})
+	sess.count(down, false)
+	p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "closed", Up: up, Down: down, Duration: time.Since(start)})
 }
 
-// connect handles a CONNECT tunnel (the HTTPS path).
-func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
+// countingBody counts what is read through it.
+type countingBody struct {
+	r io.ReadCloser
+	n *int64
+}
+
+func (c *countingBody) Read(b []byte) (int, error) {
+	n, err := c.r.Read(b)
+	*c.n += int64(n)
+	return n, err
+}
+
+func (c *countingBody) Close() error { return c.r.Close() }
+
+// connect handles a CONNECT tunnel (the HTTPS path). With RequireTLS the
+// client's first bytes are read before the upstream is dialed: they must be
+// a TLS ClientHello naming the CONNECT host — anything else is refused and
+// the remote host never sees a connection.
+func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 	target := r.Host
 	if !strings.Contains(target, ":") {
 		target += ":443"
 	}
 	if !EgressAllowed(p.Allow, target) {
-		p.deny(w, target)
+		p.deny(w, target, sess)
 		return
 	}
-	upstream, err := p.dialAllowed(r.Context(), target, 30*time.Second)
+	// Resolved and checked now (an SSRF target is a 403, as for an
+	// allowlist miss); dialed — those exact addresses — after the client's
+	// first bytes pass.
+	ips, port, err := p.resolveAllowed(r.Context(), target)
 	if err != nil {
 		if errors.Is(err, errEgressBlockedIP) {
-			p.deny(w, target) // resolved into a special range → 403 + audit
+			p.deny(w, target, sess)
 			return
 		}
+		p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "refused", Reason: err.Error()})
 		http.Error(w, "sandbox egress proxy: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		upstream.Close()
 		http.Error(w, "sandbox egress proxy: cannot hijack", http.StatusInternalServerError)
 		return
 	}
 	client, buf, err := hj.Hijack()
 	if err != nil {
-		upstream.Close()
 		return
 	}
 	_, _ = buf.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
 	_ = buf.Flush()
+	fail := func(outcome, reason string) {
+		client.Close()
+		p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: outcome, Reason: reason})
+	}
+	var hello []byte
+	var sni string
+	if sess.requireTLS {
+		_ = client.SetReadDeadline(time.Now().Add(15 * time.Second))
+		raw, info, err := readClientHello(buf.Reader)
+		_ = client.SetReadDeadline(time.Time{})
+		if err != nil {
+			fail("refused", err.Error())
+			return
+		}
+		host, _ := splitHostPort(target)
+		switch {
+		case info.ECH:
+			fail("refused", "encrypted ClientHello: the server name cannot be checked")
+			return
+		case !sniMatches(host, info.SNI, net.ParseIP(host) != nil):
+			reason := fmt.Sprintf("TLS server name %q is not the CONNECT host %q", info.SNI, host)
+			if info.SNI == "" {
+				reason = "no TLS server name (SNI)"
+			}
+			fail("refused", reason)
+			return
+		}
+		hello, sni = raw, info.SNI
+	}
+	upstream, err := dialIPs(context.Background(), ips, port, 30*time.Second, target)
+	if err != nil {
+		fail("refused", err.Error())
+		return
+	}
+	if len(hello) > 0 {
+		if _, err := upstream.Write(hello); err != nil {
+			upstream.Close()
+			fail("refused", err.Error())
+			return
+		}
+		sess.count(int64(len(hello)), true)
+	}
+	t := &tunnel{sess: sess, client: client, server: upstream}
+	if !sess.add(t) {
+		upstream.Close()
+		fail("refused", sess.refused())
+		return
+	}
 	go func() {
-		defer client.Close()
-		defer upstream.Close()
-		_, _ = io.Copy(upstream, client)
-	}()
-	go func() {
-		defer client.Close()
-		defer upstream.Close()
-		_, _ = io.Copy(client, upstream)
+		rec := t.run(buf.Reader)
+		sess.remove(t)
+		rec.Target, rec.SNI = target, sni
+		rec.Up += int64(len(hello))
+		p.record(rec)
 	}()
 }
 
-func (p *Proxy) deny(w http.ResponseWriter, target string) {
+func (p *Proxy) deny(w http.ResponseWriter, target string, sess *Session) {
 	if p.OnDeny != nil {
 		p.OnDeny(target)
 	}
+	run := ""
+	if sess != nil {
+		run = sess.Run
+	}
+	p.record(ConnRecord{Run: run, Target: target, Outcome: "denied", Reason: "not in the allowlist"})
 	http.Error(w, fmt.Sprintf("sandbox egress proxy: %s is not in this profile's egress allowlist", target), http.StatusForbidden)
 }
 
@@ -421,6 +552,9 @@ type ProxyManager struct {
 	// OnDeny is the audit hook, called with the allowlist key and the denied
 	// host:port.
 	OnDeny func(key, hostport string)
+	// OnConn receives every request's record (Proxy.OnConn), set before
+	// the first proxy starts.
+	OnConn func(ConnRecord)
 
 	mu      sync.Mutex
 	byKey   map[string]*Proxy
@@ -452,12 +586,35 @@ func (m *ProxyManager) Endpoint(allow []string) (addr, cred string, revoke func(
 	return addr, cred, func() { p.Revoke(cred) }, nil
 }
 
+// EndpointSession is Endpoint for a session with options o (an agent
+// launch's: attributed, TLS-only, limited).
+func (m *ProxyManager) EndpointSession(allow []string, o SessionOpts) (addr, cred string, revoke func(), err error) {
+	p, addr, err := m.proxyFor(allow)
+	if err != nil {
+		return "", "", nil, err
+	}
+	cred, err = p.MintSession(o)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return addr, cred, func() { p.Revoke(cred) }, nil
+}
+
 // UnixEndpoint returns the unix-socket path of the proxy enforcing exactly
 // this allowlist (creating the socket on first use) plus a fresh
 // per-dispatch credential — the daemon-side end the in-sandbox forwarder
 // pipes into (#36 iso-review C1). The returned revoke func retires the
 // credential at dispatch/session end (#36 iso-review round 2, item 4).
 func (m *ProxyManager) UnixEndpoint(allow []string) (sock, cred string, revoke func(), err error) {
+	return m.unixEndpoint(allow, SessionOpts{Limits: NoEgressLimits})
+}
+
+// UnixEndpointSession is UnixEndpoint for a session with options o.
+func (m *ProxyManager) UnixEndpointSession(allow []string, o SessionOpts) (sock, cred string, revoke func(), err error) {
+	return m.unixEndpoint(allow, o)
+}
+
+func (m *ProxyManager) unixEndpoint(allow []string, o SessionOpts) (sock, cred string, revoke func(), err error) {
 	p, _, err := m.proxyFor(allow)
 	if err != nil {
 		return "", "", nil, err
@@ -484,7 +641,7 @@ func (m *ProxyManager) UnixEndpoint(allow []string) (sock, cred string, revoke f
 		m.socks[key] = sock
 	}
 	m.mu.Unlock()
-	cred, err = p.MintCred()
+	cred, err = p.MintSession(o)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -499,7 +656,7 @@ func (m *ProxyManager) proxyFor(allow []string) (*Proxy, string, error) {
 	if p, ok := m.byKey[key]; ok {
 		return p, m.addrs[key], nil
 	}
-	p := &Proxy{Allow: allow}
+	p := &Proxy{Allow: allow, OnConn: m.OnConn}
 	if m.OnDeny != nil {
 		p.OnDeny = func(hostport string) { m.OnDeny(key, hostport) }
 	}
@@ -544,17 +701,21 @@ func allowKey(allow []string) string {
 
 // trustedHandler serves a proxy listener whose reachability is its
 // credential: the allowlist still decides every request.
-type trustedHandler struct{ p *Proxy }
+type trustedHandler struct {
+	p    *Proxy
+	sess *Session
+}
 
 func (h trustedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Header.Del("Proxy-Authorization")
-	h.p.forward(w, r)
+	h.p.forward(w, r, h.sess)
 }
 
 // serveTrusted serves ln with no proxy credential, until the returned func
 // closes it.
 func (p *Proxy) serveTrusted(ln net.Listener) func() {
-	srv := &http.Server{Handler: trustedHandler{p}, ReadHeaderTimeout: 30 * time.Second}
+	sess := newSession(SessionOpts{Run: "trusted", Limits: NoEgressLimits})
+	srv := &http.Server{Handler: trustedHandler{p, sess}, ReadHeaderTimeout: 30 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	var once sync.Once
 	return func() {
@@ -563,6 +724,7 @@ func (p *Proxy) serveTrusted(ln net.Listener) func() {
 			defer cancel()
 			_ = srv.Shutdown(ctx)
 			_ = srv.Close()
+			sess.shut("closed")
 		})
 	}
 }

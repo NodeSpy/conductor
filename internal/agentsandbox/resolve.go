@@ -41,6 +41,10 @@ type Resolver struct {
 	GoPrefetch *GoPrefetch
 	// PosixIPC is sandbox.macos_posix_ipc.
 	PosixIPC bool
+	// EgressAnyBytes / EgressIdle / EgressUpload / EgressDownload are the
+	// egress session settings every policy carries (Policy).
+	EgressAnyBytes                           bool
+	EgressIdle, EgressUpload, EgressDownload int64
 	// Session resolves a cwd that is NOT in the registry to a live bot
 	// session's entry (its identity, its granted skill verbs, its read-only
 	// paths), consulted before a default workspace is built. This is how a
@@ -203,6 +207,8 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 		Egress: egress, Loopback: loopback,
 		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env,
 		PosixIPC: r.PosixIPC,
+		Run:      e.Dispatch, EgressAnyBytes: r.EgressAnyBytes, EgressIdle: r.EgressIdle,
+		EgressUpload: r.EgressUpload, EgressDownload: r.EgressDownload,
 	}
 	if g := r.GoPrefetch; g != nil {
 		p.ReadOnly = append(append([]string(nil), p.ReadOnly...), g.Cache)

@@ -186,6 +186,11 @@ func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string) (*agentsandbo
 	pm := sandbox.NewProxyManager(func(_, hostport string) {
 		fmt.Fprintf(os.Stderr, "conductor sandbox: egress to %s denied (not in this agent's allowlist)\n", hostport)
 	})
+	pm.OnConn = func(r sandbox.ConnRecord) {
+		if r.Outcome != "denied" && r.Reason != "" { // denials: OnDeny
+			fmt.Fprintf(os.Stderr, "conductor sandbox: egress %s %s: %s\n", r.Outcome, r.Target, r.Reason)
+		}
+	}
 	rel, err := agentsandbox.NewRelayer()
 	if err != nil {
 		pm.Close()
@@ -193,14 +198,16 @@ func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string) (*agentsandbo
 	}
 	home, _ := os.UserHomeDir()
 	launch, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
-		SelfExe:    os.Executable,
-		EgressUnix: pm.UnixEndpoint,
-		EgressAddr: pm.Endpoint,
-		Relay:      rel.Relay,
-		LookPath:   exec.LookPath,
-		RealHome:   home,
-		Inherited:  os.Environ(),
-		Bins:       bins,
+		SelfExe:           os.Executable,
+		EgressUnix:        pm.UnixEndpoint,
+		EgressAddr:        pm.Endpoint,
+		EgressUnixSession: pm.UnixEndpointSession,
+		EgressAddrSession: pm.EndpointSession,
+		Relay:             rel.Relay,
+		LookPath:          exec.LookPath,
+		RealHome:          home,
+		Inherited:         os.Environ(),
+		Bins:              bins,
 	})
 	if err != nil {
 		rel.Close()
