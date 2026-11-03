@@ -130,6 +130,10 @@ type Config struct {
 	// isolation here (or opts out with `trust: full`). Absent → the engine gets
 	// the default OS sandbox. See EngineConfig and internal/config/plugins.go.
 	Engines map[string]EngineConfig `yaml:"engines,omitempty"`
+	// Code is the OPTIONAL top-level `code:` block tuning the default
+	// isolation a local cli/host/go code step gets when it declares none of
+	// its own. See CodeConfig.
+	Code CodeConfig `yaml:"code,omitempty"`
 	// Models is the OPTIONAL top-level `models:` block — named FLEETS. A fleet
 	// is a ranked list of acceptable models plus a fallback posture
 	// (`{ any: [...], required: bool }`), so a step (or a pack) can name what
@@ -1013,6 +1017,13 @@ func Load(path string) (*Config, error) {
 	c.applyDefaults()
 	// ~ in every path field expands here, once (see paths.go).
 	c.expandPaths()
+	// Confine-by-default (§15) for every local cli/host/go code step that
+	// still carries no isolation: after instantiatePacks's own pass — i.e.
+	// every operator-authored one (a pack-shipped step was already covered
+	// there). Runs on the FINAL step set (after extends/normalize), right
+	// before validation sees it. No-op when `code: { isolation_default: none
+	// }` opts out.
+	c.applyCodeIsolationDefaults()
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -1375,6 +1386,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateSandbox(); err != nil {
+		return err
+	}
+	if err := validateCodeConfig(c.Code); err != nil {
 		return err
 	}
 	if err := c.validateBrowser(); err != nil {

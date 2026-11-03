@@ -356,7 +356,7 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		if s.Isolation != nil || s.Trust == "full" {
 			return // explicit isolation, or a deliberate opt-out
 		}
-		s.Isolation = defaultPackCodeIsolation()
+		s.Isolation = defaultCodeIsolation()
 		s.IsolationDefaulted = true
 	})
 
