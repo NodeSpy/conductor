@@ -76,6 +76,9 @@ type Policy struct {
 	// agent authenticates its model traffic (CredGateway, CredLoginCopy,
 	// CredLoginShare).
 	ModelCredential string `json:"model_credential,omitempty"`
+	// Detect is the launch's detection (sandbox.detect; the zero value is
+	// the strict default).
+	Detect DetectSpec `json:"detect,omitempty"`
 	// ModelHosts are the egress entries added for the tool's model traffic
 	// (not the operator's): dropped when the gateway carries it all.
 	ModelHosts []string `json:"model_hosts,omitempty"`
@@ -418,6 +421,17 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		return nil, err
 	}
 	closers = append([]func(){wclean}, closers...)
+	// Detection last: its closer runs first at cleanup — a final git check
+	// and the launch's leftover processes killed — before egress is cut.
+	marker, stopDetect, err := startDetection(p, self, d.Event)
+	if err != nil {
+		cleanupAll()
+		return nil, err
+	}
+	if stopDetect != nil {
+		closers = append(closers, stopDetect)
+		outEnv = append(outEnv, markerEnv+"="+marker)
+	}
 	return &Launch{Argv: wrapped, Env: outEnv, Dir: dir, Cleanup: cleanupAll, Exposed: exposed}, nil
 }
 

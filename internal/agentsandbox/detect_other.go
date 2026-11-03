@@ -1,0 +1,13 @@
+//go:build !linux && !darwin
+
+package agentsandbox
+
+import "errors"
+
+func listProcs(string) func() ([]procInfo, error) {
+	return func() ([]procInfo, error) { return nil, errors.New("no process watcher on this platform") }
+}
+
+func signalProc(int, uint64) error { return errors.New("unsupported") }
+
+func safeToSignal(int) bool { return false }

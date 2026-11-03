@@ -107,6 +107,9 @@ type SandboxDetect struct {
 	Tripwires *bool `yaml:"tripwires,omitempty"`
 	// Interval is how often the process watcher scans a launch (default 3s).
 	Interval string `yaml:"interval,omitempty"`
+	// Allow names programs the watcher lets run though they are tunnel
+	// tools (ssh, socat, nc, …): an agent whose work needs one.
+	Allow []string `yaml:"allow,omitempty"`
 }
 
 // SandboxLimits are default resource limits for agent launches.
@@ -225,6 +228,26 @@ func (s *SandboxConfig) TripwiresOn() bool {
 		return false
 	}
 	return s == nil || s.Detect == nil || s.Detect.Tripwires == nil || *s.Detect.Tripwires
+}
+
+// DetectInterval is sandbox.detect.interval (0: the default).
+func (s *SandboxConfig) DetectInterval() time.Duration {
+	if s == nil || s.Detect == nil {
+		return 0
+	}
+	d, _ := ParseLimitDuration(s.Detect.Interval)
+	if d < 0 {
+		return 0
+	}
+	return d
+}
+
+// DetectAllow is sandbox.detect.allow.
+func (s *SandboxConfig) DetectAllow() []string {
+	if s == nil || s.Detect == nil {
+		return nil
+	}
+	return s.Detect.Allow
 }
 
 // PosixIPCAllowed reports sandbox.macos_posix_ipc (default off).

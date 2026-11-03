@@ -44,6 +44,8 @@ type Resolver struct {
 	PosixIPC bool
 	// ModelCredential is sandbox.model_credential (Policy.ModelCredential).
 	ModelCredential string
+	// Detect is sandbox.detect (Policy.Detect).
+	Detect DetectSpec
 	// EgressAnyBytes / EgressIdle / EgressUpload / EgressDownload are the
 	// egress session settings every policy carries (Policy).
 	EgressAnyBytes                           bool
@@ -213,7 +215,7 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 		}
 	}
 	p := Policy{
-		ModelCredential: r.ModelCredential, ModelHosts: modelHosts,
+		ModelCredential: r.ModelCredential, ModelHosts: modelHosts, Detect: r.Detect,
 		Identity: e.Identity, Tool: tool, Workspace: e.Workspace, Home: home, Logins: logins,
 		Egress: egress, Loopback: loopback,
 		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env,

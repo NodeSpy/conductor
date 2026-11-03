@@ -96,6 +96,10 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		PosixIPC:        cfg.Sandbox.PosixIPCAllowed(),
 		EgressAnyBytes:  !cfg.Sandbox.EgressTLSRequired(),
 		ModelCredential: cfg.Sandbox.ModelCredentialMode(),
+		Detect: agentsandbox.DetectSpec{
+			Action: cfg.Sandbox.DetectAction(), Interval: cfg.Sandbox.DetectInterval(),
+			NoTripwires: !cfg.Sandbox.TripwiresOn(), Allow: cfg.Sandbox.DetectAllow(),
+		},
 		// A bot's home (or a hand-off worker) runs in a pinned paseo workspace
 		// conductor never registers as a worktree, so `conductor sandbox exec`
 		// would resolve it to a verb-less dir: identity. This lookup (published
