@@ -106,6 +106,20 @@ func TestSandboxedGoBuildFetchesThroughConductor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The go command reads its GOROOT (the standard library); a toolchain
+	// installed outside the base system (setup-go's on macOS) is shown
+	// read-only, like any tool directory an operator adds.
+	gr, err := exec.Command("go", "env", "GOROOT").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	goroot := strings.TrimSpace(string(gr))
+	if r, err := filepath.EvalSymlinks(goroot); err == nil {
+		goroot = r
+	}
+	if !visibleInBase(goroot) {
+		pol.ReadOnly = append(pol.ReadOnly, goroot)
+	}
 	for _, h := range pol.Egress {
 		if strings.Contains(h, "127.0.0.1") || strings.Contains(h, "golang") {
 			t.Fatalf("the module host is on the allowlist: %v", pol.Egress)
