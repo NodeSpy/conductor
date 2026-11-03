@@ -35,6 +35,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/gitsafe"
 )
 
 const (
@@ -309,7 +310,7 @@ func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.R
 		return fmt.Errorf("checkout of the target's code with no ref to fetch")
 	}
 	tmp := prFetchRefPrefix + filepath.Base(wt)
-	if _, err := p.git(ctx, base, "fetch", "--no-tags", "--force", "origin",
+	if _, err := p.git(ctx, base, "fetch", "--no-tags", "--no-recurse-submodules", "--force", "origin",
 		"+"+ref+":"+tmp); err != nil {
 		return err
 	}
@@ -519,7 +520,7 @@ func (p *Provisioner) baseClone(ctx context.Context, repo string) (string, error
 func (p *Provisioner) baseCloneLocked(ctx context.Context, repo, declared string) (string, error) {
 	dir := filepath.Join(p.CheckoutsDir(), repoSlug(repo))
 	if isGitDir(dir) {
-		if _, err := p.git(ctx, dir, "fetch", "--prune", "origin"); err != nil {
+		if _, err := p.git(ctx, dir, "fetch", "--prune", "--no-recurse-submodules", "origin"); err != nil {
 			return "", fmt.Errorf("fetch: %w", err)
 		}
 		return dir, nil
@@ -529,11 +530,11 @@ func (p *Provisioner) baseCloneLocked(ctx context.Context, repo, declared string
 	}
 	_ = os.RemoveAll(dir) // a previous clone that died half-written
 	url := p.remoteURL(repo, declared)
-	if _, err := p.git(ctx, "", "clone", "--filter=blob:none", url, dir); err != nil {
+	if _, err := p.git(ctx, "", "clone", "--no-recurse-submodules", "--filter=blob:none", url, dir); err != nil {
 		// A server with uploadpack.allowFilter off rejects a partial clone
 		// outright; a full clone is slower but always works.
 		_ = os.RemoveAll(dir)
-		if _, ferr := p.git(ctx, "", "clone", url, dir); ferr != nil {
+		if _, ferr := p.git(ctx, "", "clone", "--no-recurse-submodules", url, dir); ferr != nil {
 			return "", errors.Join(fmt.Errorf("clone %s: %w", url, err), ferr)
 		}
 	}
@@ -822,13 +823,16 @@ func (p *Provisioner) git(ctx context.Context, dir string, args ...string) (stri
 	return p.run(ctx, dir, "", nil, args...)
 }
 
+// Every git here is hardened (gitsafe): hooks, fsmonitor, submodule
+// recursion and replace refs off, no inherited GIT_* steering — a base
+// clone is conductor's, but defense in depth costs nothing.
 func (p *Provisioner) run(ctx context.Context, dir, stdin string, env []string, args ...string) (string, error) {
-	full := args
+	full := gitsafe.Args(args...)
 	if dir != "" {
-		full = append([]string{"-C", dir}, args...)
+		full = append([]string{"-C", dir}, full...)
 	}
 	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0"), env...)
+	cmd.Env = append(gitsafe.Env(os.Environ()), env...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}

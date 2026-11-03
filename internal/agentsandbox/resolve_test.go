@@ -508,3 +508,38 @@ func TestPrepareHomeSeedsClaudeSettingsWithoutPlugins(t *testing.T) {
 		t.Fatal("a settings file that is not JSON is not seeded (it could carry plugins)")
 	}
 }
+
+// The registry survives a restart — identity, sandbox shape and push
+// target, never a skill identity — and drops workspaces that are gone.
+func TestRegistryPersists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".workspaces.json")
+	ws, gone := filepath.Join(dir, "ws"), filepath.Join(dir, "gone")
+	os.MkdirAll(ws, 0o700)
+	os.MkdirAll(gone, 0o700)
+	a := &Registry{}
+	if err := a.PersistTo(path); err != nil {
+		t.Fatal(err)
+	}
+	a.Register(Entry{Workspace: ws, Identity: "agent:x@r", Dispatch: "d1", ReadOnly: []string{"/ro"},
+		Push: &PushTarget{Branch: "b", GitDir: "/g", Remote: "r"}, Skill: &skill.Identity{Agent: "x"}})
+	a.Register(Entry{Workspace: gone, Identity: "agent:y"})
+	os.RemoveAll(gone)
+	b := &Registry{}
+	if err := b.PersistTo(path); err != nil {
+		t.Fatal(err)
+	}
+	e, ok := b.Lookup(ws)
+	if !ok || e.Identity != "agent:x@r" || e.Dispatch != "d1" || e.Push == nil || e.Push.Branch != "b" || !contains(e.ReadOnly, "/ro") {
+		t.Fatalf("reloaded: %+v %v", e, ok)
+	}
+	if e.Skill != nil {
+		t.Fatal("a skill identity never survives a restart")
+	}
+	if _, ok := b.Lookup(gone); ok {
+		t.Fatal("a workspace that is gone is dropped")
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("registry file mode %v", fi.Mode())
+	}
+}

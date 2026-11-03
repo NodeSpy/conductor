@@ -135,6 +135,20 @@ func TestConfinedGitRunsAPlantedFilterInsideTheSandbox(t *testing.T) {
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatal("control: the plant should fire unconfined (the test is not exercising anything)")
 	}
+	// A workspace the registry no longer knows (a daemon restart lost it):
+	// still read confined, never by a plain git on the host.
+	os.Remove(marker)
+	unreg()
+	if _, ok := agentsandbox.Default.Lookup(ws); ok {
+		t.Fatal("still registered")
+	}
+	gitdiff.Confine = ConfinedGit
+	if diff, err := gitdiff.Proposed(context.Background(), ws, 0); err != nil || !strings.Contains(diff, "+two") {
+		t.Fatalf("unregistered: %q %v", diff, err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("an unregistered workspace's planted filter ran on the host")
+	}
 }
 
 func buildConductor(t *testing.T) string {
