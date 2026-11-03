@@ -166,6 +166,10 @@ transport off. Its diff read of a sandboxed workspace (the diff preview) runs
 inside the sandbox too — the checkout's `.git/config` and `.gitattributes` are
 the agent's. Each dispatch gets **its own clone** (objects borrowed from the
 base clone through `alternates`), so one agent cannot move another's branch.
+The base clone is blob-filtered and the agent cannot fetch, so for a PR
+checkout conductor fetches up front every blob merging or rebasing onto its
+base branch needs (the trees of the base branch's tip, the merge base and the
+PR's own commits) — a merge-conflict fixer never stops on a missing blob.
 
 **The Verified badge.** Signatures verify `G` with your key locally. GitHub
 shows "Verified" on a pushed commit only when the signing key is registered on
@@ -178,8 +182,12 @@ emails. conductor does not touch your account settings.
 ```yaml
 sandbox:
   agents: on                       # default; `off` is the explicit opt-out (logged at boot)
-  egress: [registry.npmjs.org, proxy.golang.org]   # beyond the model endpoints
-  prefetch: [go]                   # Go modules fetched on the host, not by the agent (below)
+  egress: [registry.npmjs.org]     # beyond the model endpoints
+  packages:                        # conductor's package proxy (below) — every ecosystem on by default
+    # cache_max: 10GB              # one cache for all of them
+    # go: { enabled: false }       # off; or upstream / sumdb / private (below)
+    # npm: { upstream: https://npm.internal.example, private: ["@corp/*"] }
+  # prefetch: [go, npm, cargo]     # warm the proxy's cache before a dispatch's agent starts
   # state_dir: ~/.local/state/conductor/agent-state   # the identity homes
   push:
     signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh)
@@ -189,7 +197,190 @@ sandbox:
     # unlanded: warn     # commits left unpushed are recorded, not a step failure (default: fail)
 ```
 
-**Go without an allowlist (`prefetch: [go]`).** Allowlisting
+**Go modules through conductor (`packages.go`, the default).** Agents never
+reach a package host — conductor fetches dependencies for them, the way it
+already acts for them on GitHub. With the sandbox on, conductor serves a Go
+module proxy on a host-loopback port, relayed into every sandbox exactly like
+a local model endpoint, and points the agent's `go` at it:
+
+- `GOPROXY=http://127.0.0.1:<port>/<token>/go` — conductor alone, no
+  `,direct` fallback; `GOSUMDB` is the checksum database, fetched *through*
+  the proxy, so the agent's own verification stays on; `GOPRIVATE`,
+  `GONOPROXY`, `GONOSUMDB` and `GOINSECURE` are cleared. A toolchain download
+  (`GOTOOLCHAIN`) is a module too, and arrives the same way.
+- conductor fetches from **one configured upstream** (`proxy.golang.org` by
+  default) with its own network, and follows the upstream's redirects to
+  Cloud Storage itself (https only, never to a private, loopback or
+  link-local address). The agent names only a module path and version —
+  each checked against Go's module grammar and re-encoded — never a host, so
+  the proxy is not a way to reach arbitrary URLs.
+- every `.mod` and `.zip` is **verified against the checksum database before
+  it is cached or served**. What one agent is served, and what the cache
+  holds, is exactly what every Go user gets for that version; content that
+  does not match is refused with a `SECURITY` error and never cached.
+- the cache (`<state_dir>/.pkgproxy`) is shared by every agent, never visible
+  to one, and bounded by `cache_max` (least recently used evicted). Agents
+  asking for the same module at once cause one fetch.
+- each upstream fetch, each `.zip` served and each refusal is audited
+  (`package_fetch` / `package_refused`: module, version, identity, dispatch).
+
+If the proxy is unreachable the agent's `go` fails with that error — it never
+falls back to a direct fetch (its sandbox has no route anyway). A module the
+checksum database does not know — a **private** module — is refused with a
+message saying so. To serve private modules, point conductor at a GOPROXY of
+your own and list their paths:
+
+```yaml
+sandbox:
+  packages:
+    go:
+      upstream: https://goproxy.internal.example   # one URL — no list, no credentials, never direct
+      # sumdb: sum.golang.org                      # GOSUMDB form: name, name+key, "name+key url"; never off
+      private: ["git.internal.example/*"]          # served from upstream, unverified, never cached
+```
+
+`private:` is refused with the default upstream: private module paths are never
+sent to `proxy.golang.org`. Once the proxy is on, take `proxy.golang.org` and
+`sum.golang.org` out of `sandbox.egress` — the agent no longer needs them, and
+leaving them in gives it a second, unaudited path. One thing the proxy does
+not change: an agent can ask the public upstream for any module path it likes
+(as it could with `proxy.golang.org` allowlisted), and the upstream may fetch
+that path from its origin; the audit trail records every one.
+
+**Every other package manager, the same way.** The proxy serves each
+ecosystem below under its own path, on by default with the sandbox. For each,
+conductor injects the client configuration (environment, and for tools that
+read it only from a file, a config file in the identity's HOME, rewritten at
+every launch) so the tool uses the proxy and nothing else, rewrites every URL
+in the metadata it relays to point back at itself, and resolves every
+artifact an agent asks for against the upstream's **own** metadata — the
+agent names a package and a version or file, never a URL. A file host the
+metadata names (PyPI's file host, crates.io's CDN, …) is reached over https
+only, never at a private, loopback or link-local address.
+
+| `packages.<name>` | clients | upstream (default) | verified against, before caching |
+|---|---|---|---|
+| `go` | go | `proxy.golang.org` | the checksum database (`sum.golang.org`) |
+| `npm` | npm, yarn (classic and berry), pnpm, bun | `registry.npmjs.org` | the packument's `dist.integrity` (sha512), else `shasum` |
+| `pypi` | pip, uv, pdm, pipenv (simple + JSON API) | `pypi.org` | the index's sha256 per file |
+| `cargo` | cargo (sparse index) | `index.crates.io` | the index line's `cksum` (sha256) |
+| `rubygems` | bundler, gem | `rubygems.org` | the compact index's `checksum` (sha256) |
+| `maven` | Maven, Gradle | Maven Central | the repository's `.sha256` (else `.sha1`) |
+| `nuget` | dotnet, nuget | `api.nuget.org` | the catalog's `packageHash` (sha512) |
+| `composer` | composer | `repo.packagist.org` | the dist `shasum` when published (rarely) |
+| `pub` | dart, flutter | `pub.dev` | `archive_sha256` |
+| `hex` | mix, rebar3 | `repo.hex.pm` | the outer checksum in the signed registry entry |
+| `cran` | R, renv | `cloud.r-project.org` | the index's MD5 (a corruption check only) |
+
+A mismatch is refused with a `SECURITY` error and never cached. A verified
+artifact is cached under its digest (`<eco>/sha256/<hex>`, …), so one
+ecosystem's request can never be answered with another's bytes. **Where the
+registry publishes no strong hash** — most Composer dists, every CRAN archive,
+Maven artifacts with only a `.sha1`, and a NuGet feed without a catalog —
+the artifact is cached by its upstream URL, and the only guarantee is TLS to
+the fixed upstream (for Maven, a sidecar from that same upstream catches
+corruption, not a dishonest upstream). Maven `-SNAPSHOT` versions are not
+served (they change in place).
+
+Per client:
+
+- **npm, yarn, pnpm, bun**: `npm_config_registry` / `YARN_NPM_REGISTRY_SERVER`
+  / `BUN_CONFIG_REGISTRY`, with yarn berry allowed plain http to `127.0.0.1`
+  only; audit, fund and update checks off.
+- **pip, uv, pdm, pipenv**: `PIP_INDEX_URL`, `UV_DEFAULT_INDEX`, `PDM_PYPI_URL`,
+  `PIPENV_PYPI_MIRROR` (no extra index); uv's interpreter downloads off.
+  Poetry takes no index from the environment — a project's own
+  `[[tool.poetry.source]]` wins — so poetry gets no proxy configuration and
+  fails at the sandbox's missing route to `pypi.org`; use uv or pip there
+  (its `poetry.lock` still warms the cache for them).
+- **cargo**: `~/.cargo/config.toml` replaces `crates-io` with the proxy's
+  sparse index (the proxy serves its own `config.json`, so downloads come
+  back to it).
+- **bundler, gem**: `BUNDLE_MIRROR__HTTPS://RUBYGEMS__ORG/` (environment only —
+  some bundlers prefer a config file's mirror), and `~/.gemrc` for gem.
+- **Maven, Gradle**: `~/.m2/settings.xml` mirrors every repository
+  (`mirrorOf *`); `~/.gradle/init.d/conductor.gradle` rewrites every Maven
+  repository a build or its settings declare. A JVM takes its home from the
+  password database, not `$HOME`, so `GRADLE_USER_HOME` and Maven's
+  `user.home` name the identity home.
+- **dotnet**: `~/.nuget/NuGet/NuGet.Config` clears every source and adds the
+  proxy (a service index of conductor's own, offering the flat container).
+- **composer**: `~/.composer/config.json` disables Packagist and adds the proxy;
+  dist URLs are rewritten, `source` (VCS) entries dropped. Packagist's dists
+  are forge-generated archives conductor fetches anonymously, so a forge's
+  anonymous rate limit applies to the daemon.
+- **dart, flutter**: `PUB_HOSTED_URL`. **mix, rebar3**: `HEX_MIRROR`, `HEX_CDN`
+  (Hex's registry is signed and still verified by the client; installing Hex
+  itself, `mix local.hex`, is not proxied). **R**: `~/.Rprofile` sets `repos`
+  (a project `.Rprofile` replaces it, so renv is pointed with
+  `RENV_CONFIG_REPOS_OVERRIDE` too).
+
+Every fetch is audited with the identity and the dispatch that asked. The
+URLs in HOME files name the identity alone (the home outlives one launch);
+the dispatch comes from the launch's environment — tools read their URL from
+it (Maven's `${env.…}`, Gradle's `System.getenv`, NuGet's `%…%`, bundler's
+mirror variable), and cargo carries the launch's token in its User-Agent,
+accepted only for the same identity. Composer and the plain `gem` command are
+attributed to the identity alone.
+
+**Private packages** work as for Go: list name patterns under the ecosystem
+with an upstream of your own (refused with the public default — a private
+name is never sent to the public registry); they are fetched from that
+upstream, verified when it publishes a digest, and never cached:
+
+```yaml
+sandbox:
+  packages:
+    npm:
+      upstream: https://npm.internal.example
+      private: ["@corp/*"]         # path.Match patterns; "prefix/*" matches below it
+    pypi: { enabled: false }       # an ecosystem off
+```
+
+**Not supported, and why:**
+
+- **Git-sourced dependencies** in any manager (SwiftPM, a Go module fetched
+  `direct`, `git =` in Cargo, `github:` in npm, a VCS repository in Composer,
+  `git:` in a Gemfile, …): the proxy moves registry artifacts and never runs a
+  VCS. They fail at the sandbox's missing route, and the proxy drops VCS
+  `source` entries from the metadata it relays.
+- **Hackage (cabal, stack)**: its index is one large append-only tarball
+  read by byte range and verified by hackage-security's own signed metadata —
+  a different protocol from every registry here.
+- **conda-forge**: its per-platform `repodata.json` runs to hundreds of
+  megabytes per channel and changes constantly; rewriting it per request is
+  not a proxy's job. Use pip/uv where you can.
+- **Tool installers** that are not packages (`rustup` toolchains, `nvm`, a
+  Gradle wrapper's distribution, `mix local.hex`): bake them into the host
+  toolchain the sandbox shows read-only.
+
+Take each public registry's hosts out of `sandbox.egress` once the proxy
+serves it, as for Go.
+
+**Prefetch (`prefetch: [go, npm, …]`) warms the proxy.** With an ecosystem's
+proxy on, prefetch fills the proxy's cache when conductor registers a
+dispatch's checkout, before the agent starts, so its first install is served
+from local disk; anything else still comes through the proxy. There is one
+cache. For Go, conductor reads the module files as described below and runs
+`go mod download` on the host *through the proxy* (its `GOPROXY` and
+`GOSUMDB`) into a throwaway module cache. For a registry, conductor reads the
+checkout's lockfiles — `package-lock.json`, `npm-shrinkwrap.json`,
+`yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `requirements*.txt` (pinned with
+`--hash`), `uv.lock`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`,
+`Cargo.lock`, `Gemfile.lock`, `gradle.lockfile`, `packages.lock.json`,
+`composer.lock`, `pubspec.lock`, `mix.lock`, `rebar.lock`, `renv.lock`;
+regular files in the checkout and up to three directories down, never through
+a symlink, never inside `node_modules`, `vendor`, `target` or a dot directory —
+and asks the proxy for each pinned artifact, resolved and verified exactly as
+an agent's request would be. No project tool runs on the host (no lifecycle
+scripts, no build hooks), and a URL in a lockfile is never fetched. Wheels for
+platforms other than the host's are skipped. Prefetch fetches are audited as
+`conductor:prefetch`; a failure is logged and the launch runs anyway.
+
+**Go offline instead (`prefetch: [go]` with `packages.go.enabled: false`).**
+With the Go proxy off, `prefetch: [go]` works as it always has: it downloads
+a dispatch's modules ahead of time and runs the agent's Go offline.
+Allowlisting
 `proxy.golang.org` is not enough: the proxy answers many module downloads
 with a redirect to `storage.googleapis.com`, and allowlisting that host opens
 every Cloud Storage bucket to the agent. With `prefetch: [go]`, conductor

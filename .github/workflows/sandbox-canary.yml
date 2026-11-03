@@ -47,6 +47,40 @@ jobs:
       - name: canary — conductor sandbox exec around a fake agent
         run: bash test/sandbox-canary/run.sh
 
+  # conductor's package proxy with real package managers: each client
+  # installs one package inside the real sandbox, through the proxy, from a
+  # local fake registry (no external network), and must not reach the fake
+  # or the real registry directly. Every listed client is required.
+  packages:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - name: allow unprivileged user namespaces (Ubuntu's AppArmor restricts them)
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+      - name: which clients
+        run: |
+          for c in npm node python3 uv cargo rustc bundle ruby gem gradle java dotnet curl; do printf '%-8s %s\n' "$c" "$(command -v $c || echo MISSING)"; done
+          echo "JAVA_HOME=$JAVA_HOME DOTNET_ROOT=${DOTNET_ROOT:-} RUSTUP_HOME=${RUSTUP_HOME:-}"
+      - name: package clients through the proxy, in the sandbox
+        env:
+          CONDUCTOR_PKG_CLIENTS: npm,pip,uv,cargo,bundler,gradle,dotnet
+        run: go test -count=1 -timeout 20m -v -run 'TestSandboxedPackageClients|TestSandboxedGoBuildFetchesThroughConductor' ./internal/agentsandbox/
+
   # conductor's browser for agents (docs/wiki/Browser.md): a real Chrome in
   # the real sandbox against a local test site (no external network) — the
   # multi-step task, the proxy-enforced allowlist, logged-in sessions gated

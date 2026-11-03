@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/NodeSpy/conductor/internal/skill"
 )
@@ -37,8 +38,13 @@ type Resolver struct {
 	// GOOS is the platform the launch runs on.
 	GOOS string
 	// GoPrefetch is sandbox.prefetch: [go] (nil: off): every launch sees its
-	// module cache read-only and runs Go offline.
+	// module cache read-only and runs Go offline — unless it warms the
+	// package proxy (GoPrefetch.Warm), when the agent's Go fetches through
+	// the proxy like any other launch.
 	GoPrefetch *GoPrefetch
+	// Packages is conductor's package proxy (nil: off): what an identity's
+	// launch for a dispatch needs to reach it.
+	Packages func(identity, dispatch string) PackageAccess
 	// Session resolves a cwd that is NOT in the registry to a live bot
 	// session's entry (its identity, its granted skill verbs, its read-only
 	// paths), consulted before a default workspace is built. This is how a
@@ -201,9 +207,20 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 		Egress: egress, Loopback: loopback,
 		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env,
 	}
-	if g := r.GoPrefetch; g != nil {
+	if g := r.GoPrefetch; g != nil && !g.Warm {
 		p.ReadOnly = append(append([]string(nil), p.ReadOnly...), g.Cache)
 		p.Env = append(append([]string(nil), p.Env...), g.AgentEnv()...)
+	}
+	if r.Packages != nil {
+		if a := r.Packages(e.Identity, e.Dispatch); a.Addr != "" {
+			if err := WriteHomeFiles(home, a.HomeFiles); err != nil {
+				return Policy{}, fmt.Errorf("agentsandbox: package manager config in %s: %w", home, err)
+			}
+			p.Loopback = appendUnique(append([]string(nil), p.Loopback...), a.Addr)
+			for _, kv := range a.Env {
+				p.Env = append(p.Env, strings.ReplaceAll(kv, "${HOME}", home))
+			}
+		}
 	}
 	if r.Socket != "" && e.Skill != nil && r.Mint != nil {
 		id := *e.Skill

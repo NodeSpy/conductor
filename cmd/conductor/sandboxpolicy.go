@@ -17,6 +17,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/gitdiff"
+	"github.com/NodeSpy/conductor/internal/pkgproxy"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
 
@@ -53,7 +54,7 @@ const sandboxTokenTTL = 12 * time.Hour
 // builder `conductor sandbox exec` asks (sandbox-policy), and the
 // controller's wrap of every local cli/acp agent launch. cfgFile is the
 // config path (its directory is never a workspace).
-func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...any)) (func(), error) {
+func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...any), audit func(map[string]any)) (func(), error) {
 	if !cfg.AgentSandboxOn() {
 		sandboxResolver.Store(nil)
 		controller.AgentSandbox = nil
@@ -104,31 +105,72 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		return nil, fmt.Errorf("agent sandbox state dir %s: %w", r.StateRoot, err)
 	}
 	dispatch.SandboxPrefetch = nil
-	if cfg.Sandbox.PrefetchGo() {
-		// A dot name no identity home can have (IdentityKey trims it).
-		gp, err := agentsandbox.NewGoPrefetch(filepath.Join(r.StateRoot, ".go-modcache"), os.Environ())
+	stopPackages := func() {}
+	var prefetch []func(context.Context, string) error
+	if cfg.PackageProxyOn() {
+		srv, stop, err := startPackageProxy(cfg, r.StateRoot, logf, audit)
 		if err != nil {
 			return nil, err
 		}
+		stopPackages = stop
+		r.Packages = func(identity, disp string) agentsandbox.PackageAccess {
+			env, files := srv.AgentConfig(pkgproxy.Requester{Identity: identity, Dispatch: disp})
+			return agentsandbox.PackageAccess{Addr: srv.Addr(), Env: env, HomeFiles: files}
+		}
+		// Prefetch warms the proxy's cache: through the proxy (Go) or its
+		// own fetcher (lockfiles), never by running a project's tooling.
+		if cfg.GoPackageProxyOn() && cfg.Sandbox.PrefetchGo() {
+			var goEnv []string
+			for _, kv := range srv.AgentEnv(prefetchRequester) {
+				if strings.HasPrefix(kv, "GO") {
+					goEnv = append(goEnv, kv)
+				}
+			}
+			gw, err := agentsandbox.NewGoWarm(filepath.Join(r.StateRoot, ".pkgproxy", "go-prefetched"), os.Environ(), goEnv)
+			if err != nil {
+				stopPackages()
+				return nil, err
+			}
+			r.GoPrefetch = gw
+			prefetch = append(prefetch, gw.Workspace)
+		}
+		if lw := lockfileWarm(cfg, srv); lw != nil {
+			prefetch = append(prefetch, lw)
+		}
+	}
+	if !cfg.GoPackageProxyOn() && cfg.Sandbox.PrefetchGo() {
+		// The Go proxy off: #205's offline module cache. A dot name no
+		// identity home can have (IdentityKey trims it).
+		gp, err := agentsandbox.NewGoPrefetch(filepath.Join(r.StateRoot, ".go-modcache"), os.Environ())
+		if err != nil {
+			stopPackages()
+			return nil, err
+		}
 		r.GoPrefetch = gp
+		prefetch = append(prefetch, gp.Workspace)
+	}
+	if len(prefetch) > 0 {
 		dispatch.SandboxPrefetch = func(dir string) {
 			start := time.Now()
-			if err := gp.Workspace(context.Background(), dir); err != nil {
-				logf("sandbox: go prefetch for %s: %v (the agent's Go runs offline without what is missing)", dir, err)
-				return
+			for _, fill := range prefetch {
+				if err := fill(context.Background(), dir); err != nil {
+					logf("sandbox: prefetch for %s: %v (the agent fetches what is missing through the package proxy, or runs without it)", dir, err)
+				}
 			}
 			if d := time.Since(start); d > 5*time.Second {
-				logf("sandbox: go prefetch for %s took %s", dir, d.Round(time.Second))
+				logf("sandbox: prefetch for %s took %s", dir, d.Round(time.Second))
 			}
 		}
 	}
 	rel, err := agentsandbox.NewRelayer()
 	if err != nil {
+		stopPackages()
 		return nil, err
 	}
 	self, err := os.Executable()
 	if err != nil {
 		rel.Close()
+		stopPackages()
 		return nil, fmt.Errorf("agent sandbox: resolve conductor's own binary: %w", err)
 	}
 	sandboxResolver.Store(r)
@@ -157,6 +199,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		dispatch.PaseoSandboxLog = nil
 		dispatch.SandboxPrefetch = nil
 		rel.Close()
+		stopPackages()
 	}, nil
 }
 

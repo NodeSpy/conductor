@@ -49,7 +49,7 @@ func TestBotHomeSessionKeepsIdentityUnderSandbox(t *testing.T) {
 	skill.SetActive(b)
 	t.Cleanup(func() { skill.SetActive(oldB) })
 
-	stop, err := wireAgentSandbox(cfg, cfg.Store.StateFile, t.Logf)
+	stop, err := wireAgentSandbox(cfg, cfg.Store.StateFile, t.Logf, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -41,6 +41,38 @@ type GoPrefetch struct {
 	Env []string
 	// Timeout bounds one download (default 10m).
 	Timeout time.Duration
+	// Warm is prefetch with conductor's package proxy on for Go: the
+	// download goes through the proxy (WarmEnv: its GOPROXY and GOSUMDB),
+	// warming its verified cache — the one every agent's Go fetches from —
+	// into a module cache of the download's own that is removed after it.
+	// Cache then holds only the markers, and a launch's policy is left to
+	// the proxy: no read-only cache, Go not offline.
+	Warm    bool
+	WarmEnv []string
+}
+
+// NewGoWarm is prefetch warming the package proxy: proxyEnv is the proxy's
+// Go environment for the prefetch's own requester; markers is where Fill
+// records what it has warmed.
+func NewGoWarm(markers string, inherited, proxyEnv []string) (*GoPrefetch, error) {
+	if !filepath.IsAbs(markers) {
+		return nil, fmt.Errorf("agentsandbox: go prefetch markers %q is not an absolute path", markers)
+	}
+	bin, err := exec.LookPath("go")
+	if err != nil {
+		return nil, fmt.Errorf("agentsandbox: sandbox.prefetch go: %w", err)
+	}
+	if err := os.MkdirAll(markers, 0o700); err != nil {
+		return nil, fmt.Errorf("agentsandbox: go prefetch markers: %w", err)
+	}
+	// GOPROXY off unless proxyEnv names the proxy: never a default upstream.
+	g := &GoPrefetch{Cache: markers, Go: bin, Proxy: "off", Warm: true, WarmEnv: append([]string(nil), proxyEnv...)}
+	for _, kv := range inherited {
+		if k, _, ok := strings.Cut(kv, "="); ok && goPrefetchEnvKeep[k] {
+			g.Env = append(g.Env, kv)
+		}
+	}
+	return g, nil
 }
 
 // goPrefetchEnvKeep are the operator variables a download keeps.
@@ -133,11 +165,21 @@ func (g *GoPrefetch) Fill(ctx context.Context, m *GoModules) error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, g.Go, "mod", "download")
 	cmd.Dir = src
+	modcache, flags := g.Cache, ""
+	if g.Warm {
+		// A throwaway cache, writable so it can be removed with tmp.
+		modcache, flags = filepath.Join(tmp, "modcache"), "-modcacherw"
+	}
 	cmd.Env = append(append([]string(nil), g.Env...),
-		"HOME="+tmp, "GOENV=off", "GOFLAGS=", "GOPATH="+filepath.Join(tmp, "gopath"),
-		"GOMODCACHE="+g.Cache, "GOCACHE="+filepath.Join(tmp, "gocache"),
+		"HOME="+tmp, "GOENV=off", "GOFLAGS="+flags, "GOPATH="+filepath.Join(tmp, "gopath"),
+		"GOMODCACHE="+modcache, "GOCACHE="+filepath.Join(tmp, "gocache"),
 		"GOPROXY="+g.Proxy, "GOPRIVATE=", "GONOPROXY=", "GONOSUMDB=", "GOINSECURE=",
 		"GOTOOLCHAIN=local", "GOVCS=*:off", "GIT_TERMINAL_PROMPT=0")
+	if g.Warm {
+		// The proxy's GOPROXY, GOSUMDB and GONOSUMDB win (the last of a
+		// duplicated key is the one used).
+		cmd.Env = append(cmd.Env, g.WarmEnv...)
+	}
 	if _, ok := m.Files["go.work"]; !ok {
 		// Never a go.work above the temp dir.
 		cmd.Env = append(cmd.Env, "GOWORK=off")
