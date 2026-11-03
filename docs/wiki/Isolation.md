@@ -670,15 +670,36 @@ How it works:
   (a bare host means 443; globs work as in `egress:`). `non_tls` entries
   need an explicit port and must also be in the scope's egress. `*` is
   accepted when you write it.
-- **The proxy cannot tell processes apart.** A destination joins the egress
-  of the scope's launches, so any process of those launches can reach it,
-  not only the named tool.
+- **A tunnel's destination is open to every process of the scope.** The
+  egress proxy sees connections, not which process made them. So
+  `cloudflared@*.trycloudflare.com` lets `curl`, a script or any other
+  program in that scope's launches reach `*.trycloudflare.com`, not only
+  `cloudflared`. `name@*` opens egress to everything for all of them.
+  Write the narrowest host you can, and give the allowance to the
+  narrowest scope (a step rather than its workflow).
+- **An allowance covers the tool, not a shell under its name.** The watcher
+  knows the host's shells and tunnel tools by their binaries, so a copy of
+  bash named `ssh` is still bash. A process is allowed only when the
+  allowance covers every verdict on it: whatever it is called, a program
+  with a network socket on its stdin or stdout is judged a reverse shell,
+  and one relaying a pty to a socket is a pty relay. Neither is ever
+  audited as an allowed tunnel.
 - **A block with only `allow:`, `detect:` or `egress_limits:` needs no
   `mode:`.** It layers onto the scope outside it and keeps that scope's
   mode, network and paths. It works on paseo steps and runtimes too. A
   block with a `mode:` replaces the outer one whole, as always. The most
   specific setting of each knob wins (step over trigger or workflow over
   runtime), so a step's `allow:` replaces its workflow's.
+- **An `allow:` does not cross a `workflow:` call.** A trigger's or
+  workflow's allowance reaches its own agent steps, never the steps of a
+  workflow it calls, a pack's workflow included. A called workflow that
+  needs one declares its own. The rest of the caller's isolation (mode,
+  network, `detect:`, `egress_limits:`) is still inherited, as before.
+- **Recorded workspaces follow your config.** A workspace records the
+  scopes its allowance came from, not the allowance. Every launch there
+  (a resume, `sandbox exec`) recomputes it from the config the daemon runs
+  with, and the daemon rewrites its registry the same way when it starts.
+  Removing an `allow:` or a grant tightens every recorded workspace at once.
 - **Allowed is still audited.** An allowed detection is a
   `sandbox_detection` row with `action: allowed` and `allowed_by: <scope>`,
   for example `workflow deploy-preview` or `sandbox + workflow
@@ -694,7 +715,10 @@ How it works:
 - **Packs request allowances; you grant them.** A pack cannot write
   `allow:` (or weaken `detect:` or `egress_limits:`) itself. It declares a
   request in its manifest, and the request applies, to the steps it names
-  only, once you grant it by name:
+  only, once you grant it. A grant is pinned to the content you reviewed:
+  `conductor validate` prints each request with the exact grant to write,
+  `name@digest`. The digest covers the steps the request names and what it
+  allows (not its reason's wording):
 
   ```yaml
   # the pack's manifest
@@ -708,19 +732,27 @@ How it works:
   packs:
     previews:
       use: …
-      grant: [tunnel]
+      grant: [tunnel@c9d6e4e230888de7]   # as validate prints it
   ```
+
+  A grant without a digest is refused, and the message gives the digest to
+  write. If a later version of the pack changes a granted allowance (more
+  tools, other hosts, other steps), the config **fails to load** with what
+  changed, until you review it and write the new digest. This is separate
+  from the pack lock's drift warning, which only warns.
 
   You can also write an allowance on a pack's step yourself:
   `packs: <instance>: steps: <ref>: { isolation: { allow: … } }`.
 - **`conductor validate` lists every loosening.** That includes:
   - `sandbox.allow`;
   - each scope's allowance, weakened `detect:` and lifted egress limit;
-  - each pack grant;
+  - each pack grant, with the digest it is pinned to;
   - each pack request you have not granted.
 
 `sandbox.detect.allow` (older, global) exempts a program from every rule
-in every launch. Prefer a scoped `tunnels:` allowance.
+in every launch, matched by what its binary is. A binary the host does not
+know, named after an exempt program, is exempt only from the tunnel-tool
+rule. Prefer a scoped `tunnels:` allowance.
 
 #### What is left {#what-is-left}
 

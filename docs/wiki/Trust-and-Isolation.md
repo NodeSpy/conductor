@@ -73,8 +73,10 @@ warning); an explicit `isolation:` fails closed.
 The same holds for the agent sandbox's **allowances**: letting an agent run a
 tunnel tool or send raw TCP to a host. A pack can only request one, in its
 manifest's `allowances:`. The request applies, to the steps it names, once
-you grant it (`packs: { <inst>: { grant: [<name>] } }`), and `conductor
-validate` lists every grant and every request still pending. See
+you grant it (`packs: { <inst>: { grant: [<name>@<digest>] } }`, pinned to
+what you reviewed: a pack update that changes it fails to load until you
+re-grant), and `conductor validate` lists every grant and every request
+still pending. An allowance does not cross a `workflow:` call. See
 [[Isolation#scoped-allowances]].
 
 A fleet not yet ready for the stricter default sets `code: { isolation_default:

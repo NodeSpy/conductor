@@ -307,10 +307,13 @@ allowances:
 packs:
   previews:
     use: …
-    grant: [tunnel]
+    grant: [tunnel@c9d6e4e230888de7]   # name@digest, as validate prints it
 ```
 
-`conductor validate` shows each request, granted or not. See
+`conductor validate` shows each request, granted or not, with the exact
+grant to write. A grant is pinned to the steps and allowance you reviewed: a
+bare name is refused, and a pack version that changes a granted allowance
+fails to load until you re-grant it. See
 [[Isolation#scoped-allowances]].
 
 ### `requires.connectors` is the capability boundary

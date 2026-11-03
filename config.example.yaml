@@ -1424,14 +1424,18 @@ sandbox:
   #                             #   alert: audit + notify only; off: no watcher/tripwires/git guard
   #   tripwires: true           # decoy credentials in the agent's home
   #   interval: 3s
-  #   allow: []                 # programs exempt from every rule, every launch (prefer allow: below)
+  #   allow: []                 # programs exempt from every rule, every launch, by what their
+  #                             #   binary is (prefer allow: below)
   #   connections: alert        # an egress tunnel shaped like a remote shell or a bulk upload:
   #                             #   alert (audit + notify); close: also close it; off
   # allow:                      # the base allowance of EVERY launch; scope one instead in an
   #   tunnels: []               #   isolation: block (workflow/trigger/step/runtime), e.g.
   #   non_tls: []               #   isolation: { allow: { tunnels: [ssh@bastion.example.com:22],
   #   reverse_shell: false      #                         non_tls: [bastion.example.com:22] } }
-  #   pty: false                #   (see Isolation.md § Scoped allowances)
+  #   pty: false                #   (see Isolation.md § Scoped allowances). A tunnel's @host is
+  #                             #   reachable by EVERY process of the scope, not only the tool;
+  #                             #   an allow: does not cross a workflow: call; a pack's request
+  #                             #   is granted pinned: packs: <inst>: { grant: [name@digest] }
   # limits:                     # Linux: a systemd user scope per launch
   #   memory: 50%               # per launch
   #   pids: 8192
