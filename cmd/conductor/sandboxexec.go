@@ -153,7 +153,7 @@ func cmdSandboxExec(args []string) int {
 	if pol.Note != "" {
 		fmt.Fprintf(os.Stderr, "conductor sandbox exec: %s\n", pol.Note)
 	}
-	launch, cleanup, err := wrapSandboxExec(pol, argv, o.bins)
+	launch, cleanup, err := wrapSandboxExec(pol, argv, o.bins, sock)
 	if err != nil {
 		return refuse("%v", err)
 	}
@@ -182,13 +182,17 @@ func sandboxExecCwd() (cwd string, agent bool, err error) {
 
 // wrapSandboxExec realizes pol around argv with this process as the host
 // side: its own allowlist proxy and model relays live as long as the agent.
-func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string) (*agentsandbox.Launch, func(), error) {
+func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string, sock string) (*agentsandbox.Launch, func(), error) {
+	event := func(kind string, f map[string]any) {
+		fmt.Fprintf(os.Stderr, "conductor sandbox: %s %v\n", kind, f)
+		reportSandboxEvent(sock, kind, f)
+	}
 	pm := sandbox.NewProxyManager(func(_, hostport string) {
 		fmt.Fprintf(os.Stderr, "conductor sandbox: egress to %s denied (not in this agent's allowlist)\n", hostport)
 	})
 	pm.OnConn = func(r sandbox.ConnRecord) {
 		if r.Outcome != "denied" && r.Reason != "" { // denials: OnDeny
-			fmt.Fprintf(os.Stderr, "conductor sandbox: egress %s %s: %s\n", r.Outcome, r.Target, r.Reason)
+			event("egress_"+r.Outcome, map[string]any{"run": r.Run, "target": r.Target, "reason": r.Reason})
 		}
 	}
 	rel, err := agentsandbox.NewRelayer()
@@ -203,14 +207,12 @@ func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string) (*agentsandbo
 		EgressAddr:        pm.Endpoint,
 		EgressUnixSession: pm.UnixEndpointSession,
 		EgressAddrSession: pm.EndpointSession,
-		Event: func(kind string, f map[string]any) {
-			fmt.Fprintf(os.Stderr, "conductor sandbox: %s %v\n", kind, f)
-		},
-		Relay:     rel.Relay,
-		LookPath:  exec.LookPath,
-		RealHome:  home,
-		Inherited: os.Environ(),
-		Bins:      bins,
+		Event:             event,
+		Relay:             rel.Relay,
+		LookPath:          exec.LookPath,
+		RealHome:          home,
+		Inherited:         os.Environ(),
+		Bins:              bins,
 	})
 	if err != nil {
 		rel.Close()
@@ -305,6 +307,24 @@ func sandboxControlSocket(o sandboxExecOpts) string {
 
 // fetchSandboxPolicy asks the daemon for this launch's policy and a fresh
 // token. Any failure is a refusal.
+// reportSandboxEvent hands a launch's containment event to the daemon for
+// its audit log (best effort: the event is on stderr either way).
+func reportSandboxEvent(sock, kind string, f map[string]any) {
+	if sock == "" {
+		return
+	}
+	conn, err := net.DialTimeout("unix", sock, 3*time.Second)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if json.NewEncoder(conn).Encode(controlRequest{Cmd: "sandbox-event", Kind: kind, Args: f}) == nil {
+		var resp controlResponse
+		_ = json.NewDecoder(conn).Decode(&resp)
+	}
+}
+
 func fetchSandboxPolicy(sock string, req controlRequest) (agentsandbox.Policy, error) {
 	conn, err := net.DialTimeout("unix", sock, 10*time.Second)
 	if err != nil {

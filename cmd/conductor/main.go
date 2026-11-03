@@ -1732,6 +1732,18 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		streamRunEvents(ctx, conn, events, req.RunID, log)
 	case "sandbox-policy":
 		writeControlResp(conn, sandboxPolicyResponse(conn, req, log))
+	case "sandbox-event":
+		// A detection or refusal in a `conductor sandbox exec` launch (the
+		// paseo path): audited and logged like the daemon's own launches'.
+		if controller.SandboxEvent != nil && req.Kind != "" {
+			f := map[string]any{}
+			for k, v := range req.Args {
+				f[k] = v
+			}
+			f["via"] = "sandbox-exec"
+			controller.SandboxEvent(req.Kind, f)
+		}
+		writeControlResp(conn, controlResponse{OK: true})
 	case "browser-logins", "browser-cookies-save", "browser-logout", "browser-sessions", "browser-peek", "browser-takeover", "browser-passkey-save",
 		"browser-login-add", "browser-login-set", "browser-login-unset", "browser-login-bind", "browser-login-remove", "browser-login-list",
 		"browser-login-usage", "browser-login-check", "browser-login-test", "browser-vault-items", "browser-vault-item",

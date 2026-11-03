@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
+	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
@@ -208,7 +211,7 @@ func TestWrapSandboxExecShowsBins(t *testing.T) {
 	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
 	pol := agentsandbox.Policy{Identity: "x", Workspace: ws, Home: home}
 	for _, bins := range [][]string{nil, {"deck-tool"}} {
-		l, cleanup, err := wrapSandboxExec(pol, []string{"/bin/sh", "-c", "deck-tool"}, bins)
+		l, cleanup, err := wrapSandboxExec(pol, []string{"/bin/sh", "-c", "deck-tool"}, bins, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -217,5 +220,39 @@ func TestWrapSandboxExecShowsBins(t *testing.T) {
 		if shown != (bins != nil) {
 			t.Fatalf("bins %v: the tool's dir shown = %v", bins, shown)
 		}
+	}
+}
+
+// A sandbox-exec launch's containment events reach the daemon's audit log
+// through the control socket, marked as coming from sandbox exec.
+func TestSandboxExecReportsEventsToTheDaemon(t *testing.T) {
+	sock, reqs := fakeControl(t, func(controlRequest) controlResponse { return controlResponse{OK: true} })
+	reportSandboxEvent(sock, "detected", map[string]any{"kind": "tunnel_tool"})
+	if len(*reqs) != 1 || (*reqs)[0].Cmd != "sandbox-event" || (*reqs)[0].Kind != "detected" || (*reqs)[0].Args["kind"] != "tunnel_tool" {
+		t.Fatalf("sent: %+v", *reqs)
+	}
+	reportSandboxEvent("", "detected", nil) // no daemon: dropped quietly
+
+	var got []string
+	old := controller.SandboxEvent
+	controller.SandboxEvent = func(kind string, f map[string]any) {
+		got = append(got, fmt.Sprint(kind, " ", f["via"], " ", f["kind"]))
+	}
+	t.Cleanup(func() { controller.SandboxEvent = old })
+	client, server := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		handleControlConn(context.Background(), server, nil, nil, nil, nil, nil, nil, func(string, ...any) {})
+		close(done)
+	}()
+	_ = json.NewEncoder(client).Encode(controlRequest{Cmd: "sandbox-event", Kind: "detected", Args: map[string]any{"kind": "tunnel_tool", "via": "forged"}})
+	var resp controlResponse
+	if err := json.NewDecoder(client).Decode(&resp); err != nil || !resp.OK {
+		t.Fatalf("response %+v %v", resp, err)
+	}
+	client.Close()
+	<-done
+	if len(got) != 1 || got[0] != "detected sandbox-exec tunnel_tool" {
+		t.Fatalf("daemon recorded %v", got)
 	}
 }
