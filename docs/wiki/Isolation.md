@@ -499,10 +499,21 @@ and prints its refusals and detections on its stderr.
 **Resource limits (`sandbox.limits`).** On Linux each agent launch runs in a
 systemd user scope capped at `memory` (50%) and `pids` (8192) tasks, inside
 one `conductor-agents.slice` that caps every agent launch together at
-`aggregate_memory` (75%). Without a systemd user manager a launch runs
-uncapped after a one-time warning (`sandbox_limits_unavailable`).
-`required: true` refuses it instead, and `off: true` turns the defaults off
-(a step's own `isolation.limits` still apply). macOS has no equivalent.
+`aggregate_memory` (75%). Only `systemd-run` sees the launcher's
+`XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which it needs to reach the
+user manager. They are removed again before the agent starts, so the agent
+never sees the bus. Each scope is bound (`BindsTo=`, `After=`) to the unit
+its launcher runs in: conductor's service for a daemon launch, the paseo
+unit for `sandbox exec`. Stopping that unit (a restart or an upgrade) stops
+the scope and everything in it, `setsid` children included, as when agents
+lived in the launcher's own cgroup.
+
+Each conductor process checks once whether the scope works, by running the
+launch's own prefix around `true`. When it does not (no user manager, no bus
+reachable), launches run uncapped in the launcher's cgroup, after a one-time
+warning (`sandbox_limits_unavailable`). `required: true` refuses them
+instead. `off: true` turns the defaults off (a step's own `isolation.limits`
+still apply). macOS has no equivalent.
 
 **The disk guard.** It refuses a launch when its workspace or home
 filesystem has less free space than `disk_free_min` (5%, or a size like

@@ -242,7 +242,7 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 			// (no netns forwarder), so s.Deny here always means a full net cut.
 			return wrapSeatbelt(argv, binds, s.Deny), nil
 		}
-		prefix := s.systemdPrefix()
+		prefix := s.localScopePrefix()
 		// A pivot_root fs-jail (Binds) needs CAP_SYS_ADMIN over the mount ns to
 		// mount/pivot; that requires mapping the daemon uid to root-IN-USERNS
 		// (--map-root-user). --map-current-user maps to a non-root uid, whose

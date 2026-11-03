@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
@@ -272,21 +271,10 @@ func (g *GoPrefetch) applyLimits(spec *sandbox.Spec) {
 	spec.Pids = 256
 }
 
-// systemdUserBusAvailableFunc is systemdUserBusAvailable's cached probe,
-// a package var so a test can reset/override it.
-var systemdUserBusAvailableFunc = sync.OnceValue(func() bool {
-	if _, err := exec.LookPath("systemd-run"); err != nil {
-		return false
-	}
-	// A real, cheap dry-run: a transient scope that execs `true` and exits
-	// immediately. If there is no session bus to connect to, systemd-run
-	// fails fast (no transient unit, nothing left behind); XDG_RUNTIME_DIR
-	// alone is not trustworthy evidence either way (a test harness or a
-	// system service can set it with no bus actually listening).
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	return exec.CommandContext(ctx, "systemd-run", "--user", "--scope", "--quiet", "--collect", "true").Run() == nil
-})
+// systemdUserBusAvailableFunc is the scope probe (sandbox.ScopeAvailable:
+// the launch's own prefix, run with a launch's bare environment), a package
+// var so a test can override it.
+var systemdUserBusAvailableFunc = sandbox.ScopeAvailable
 
 func systemdUserBusAvailable() bool { return systemdUserBusAvailableFunc() }
 
