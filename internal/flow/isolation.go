@@ -19,6 +19,20 @@ func withDefaultIsolation(ctx context.Context, iso *config.IsolationConfig) cont
 	return context.WithValue(ctx, isolationKey{}, config.LayerIsolation(outer, iso))
 }
 
+// withCalledWorkflowIsolation is withDefaultIsolation across a workflow:
+// call. The called workflow inherits its caller's isolation, but not its
+// allow:: an allowance is the operator's for the scope that declares it,
+// never for whatever that scope calls (another pack's workflow among
+// them), so a called workflow that needs one declares its own.
+func withCalledWorkflowIsolation(ctx context.Context, iso *config.IsolationConfig) context.Context {
+	if outer, _ := ctx.Value(isolationKey{}).(*config.IsolationConfig); outer != nil && outer.Allow != nil {
+		o := *outer
+		o.Allow = nil
+		ctx = context.WithValue(ctx, isolationKey{}, &o)
+	}
+	return withDefaultIsolation(ctx, iso)
+}
+
 // effectiveIsolation resolves the isolation: one agent dispatch carries on
 // its step: the step's own, else its trigger's / workflow's, else — for a
 // paseo runtime, whose launch the paseo dispatcher alone decides — that

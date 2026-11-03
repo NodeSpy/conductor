@@ -1477,7 +1477,7 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	// so its sessions bound under keys the sweep looks for under another
 	// name. Same root cause as the trigger-index bug; this is the call
 	// path that fix missed.
-	stepCtx := withIdentityScope(withDefaultIsolation(withDefaultGate(ctx, wf.Gate), wf.Isolation), config.WorkflowScope(name))
+	stepCtx := withIdentityScope(withCalledWorkflowIsolation(withDefaultGate(ctx, wf.Gate), wf.Isolation), config.WorkflowScope(name))
 	if saved != nil {
 		stepCtx = context.WithValue(stepCtx, savedWFKey{}, name)
 	}
