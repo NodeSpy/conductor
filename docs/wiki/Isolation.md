@@ -199,11 +199,20 @@ downloads instead, on the host:
   the module files (`go.work`, `go.work.sum`, and the `go.mod`/`go.sum` of
   every module the workspace uses or a local `replace` points at; regular
   files inside the checkout only) into a temp dir of its own and runs
-  `go mod download` there, into `<state_dir>/.go-modcache`;
-- that download uses your own module cache first, then `proxy.golang.org` —
-  never `direct`, so no VCS runs against a module path a `go.mod` names —
-  with `GOTOOLCHAIN=local`, checksum-database verification on, and none of the
-  daemon's environment beyond `PATH` and HTTP-proxy/CA settings;
+  `go mod download` there, into `<state_dir>/.go-modcache` — one cache,
+  **shared by every identity**;
+- that download itself runs **confined**: the same namespace jail a code step
+  gets, with the module cache the one writable path outside its own scratch
+  dir and the network cut to exactly `proxy.golang.org` (never `direct`, so
+  no VCS runs against a module path a `go.mod` names, and never the
+  operator's own module cache as a `file://` layer — this ONE cache is
+  shared by every identity, and a `file://` layer onto the operator's own
+  `$GOMODCACHE` would pull whatever private modules it holds into it,
+  available to every identity from then on). `GOTOOLCHAIN=local`, checksum-
+  database verification on, none of the daemon's environment beyond `PATH`
+  and HTTP-proxy/CA settings, and none of the operator's real `$HOME`. If
+  this box can't build the jail (no `unshare`, for instance), the prefetch is
+  skipped with a log line — it never falls back to an unconfined download;
 - every sandboxed agent sees that cache **read-only** (an agent cannot plant
   a symlink for the host's `go` to write through) with `GOMODCACHE` pointing
   at it and `GOPROXY=off`, `GOSUMDB=off`, `GOTOOLCHAIN=local`. Its Go builds
