@@ -1836,7 +1836,11 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 # dashboard: — OPTIONAL local web UI (design §6). Off unless enabled, so a
 # config without this block changes nothing. It runs INSIDE the daemon and
 # reads the live config, store and event hub. With operators configured, every
-# API call needs a signed-in operator (see docs/wiki/Dashboard.md).
+# API call needs a signed-in operator (see docs/wiki/Dashboard.md). With NONE
+# configured there is nothing to sign in as, and the API refuses every
+# request by default (the static page still loads) — see auth.allow_open
+# below to opt into serving it anyway, and docs/wiki/Dashboard.md for how to
+# enroll the first operator.
 #
 # dashboard:
 #   enabled: true            # off by default; a config without the block is unchanged
@@ -1869,6 +1873,12 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #                            # (anything that runs on the box, operators, the
 #                            # dashboard and store blocks) still asks. An
 #                            # explicit loosen.
+#     allow_open: false      # default. true: serve the API with no sign-in when
+#                            # no operators: are configured (there is nothing to
+#                            # protect it with otherwise) — an explicit choice for
+#                            # a single-user box, never the default. Has no effect
+#                            # once an operator is configured: sign-in is then
+#                            # required regardless.
 #   bind:                    # extra listeners on explicit addresses
 #     - address: 0.0.0.0:7790
 #       hostnames: [conductor.home.arpa]   # REQUIRED Host allowlist (DNS rebinding);

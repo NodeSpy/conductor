@@ -71,6 +71,28 @@ dashboard:
   any other name (`box.lan` pointing at 127.0.0.1) browsers treat it as plain
   HTTP, so passkeys are not offered there.
 
+## Before any operator is enrolled
+
+With no `operators:` entries configured, there is nothing to sign in as — and
+the API (config edit, run control, secrets view, bot approvals) refuses every
+request by default rather than serving it openly. The static page still
+loads, so you can see why. To get your first operator enrolled:
+
+1. Add yourself under `operators:` in the config (name + `ssh_key:`), reload.
+2. Run `conductor dashboard enroll <name>` (on the box, over the control
+   socket — not the HTTP listener) to mint a one-time enrollment link.
+3. Open the link it prints and register a passkey (or set a password, see
+   below).
+
+Once that first operator exists, sign-in is required for the API exactly as
+described below — this has nothing to do with whether anyone has *finished*
+enrolling yet, only with whether an operator is *configured* at all.
+
+If you genuinely want the dashboard to serve its API with no sign-in (a
+single-user box where the listener itself is the only boundary you want), set
+`dashboard.auth.allow_open: true`. This has no effect once an operator is
+configured — at that point sign-in is required regardless.
+
 ## Signing in
 
 | Connection | Passkey | SSH key | Password + code |
@@ -216,6 +238,7 @@ dashboard:
     password_requires_totp: true        # default
     stepup: [passkey, ssh, totp]        # default
     config_stepup: all                  # default
+    allow_open: false                   # default — see "Before any operator is enrolled"
 ```
 
 A config without `auth:` uses these defaults. With sign-in on, every apply
