@@ -102,10 +102,33 @@ func (f *Fetcher) dial(ctx context.Context, network, addr string) (net.Conn, err
 
 // Get fetches u. The caller closes the body.
 func (f *Fetcher) Get(ctx context.Context, u string) (*http.Response, error) {
+	return f.GetAccept(ctx, u, "")
+}
+
+// GetAccept fetches u asking for accept ("" = any).
+func (f *Fetcher) GetAccept(ctx context.Context, u, accept string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "conductor-package-proxy")
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
 	return f.client.Do(req)
+}
+
+// GetDerived fetches a URL an upstream's own metadata named (a tarball on
+// the registry's download host): treated like a redirect target — https
+// unless it is a configured upstream host, and dialled only at a public
+// address (dial).
+func (f *Fetcher) GetDerived(ctx context.Context, u string) (*http.Response, error) {
+	pu, err := url.Parse(u)
+	if err != nil || pu.Host == "" || pu.User != nil {
+		return nil, fmt.Errorf("upstream metadata names a malformed URL %q", u)
+	}
+	if pu.Scheme != "https" && !(pu.Scheme == "http" && f.trusted[strings.ToLower(pu.Hostname())]) {
+		return nil, fmt.Errorf("upstream metadata names a non-https URL %s", pu.Redacted())
+	}
+	return f.Get(ctx, u)
 }

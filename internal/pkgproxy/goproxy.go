@@ -206,7 +206,8 @@ func (q *goReq) cacheKey() string {
 }
 
 // Serve answers one Go request.
-func (g *Go) Serve(w http.ResponseWriter, r *http.Request, rest string, c Requester, emit func(Event)) {
+func (g *Go) Serve(w http.ResponseWriter, r *http.Request, c *Call) {
+	rest, emit := c.Rest, c.Emit
 	if s, ok := strings.CutPrefix(rest, "sumdb/"); ok {
 		g.serveSumDB(w, r, s, emit)
 		return

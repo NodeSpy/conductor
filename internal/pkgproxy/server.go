@@ -56,12 +56,44 @@ type Event struct {
 type Ecosystem interface {
 	// Name is the URL segment ("go").
 	Name() string
-	// Serve answers one request; rest is the path below the ecosystem's
-	// segment, still escaped as the client sent it.
-	Serve(w http.ResponseWriter, r *http.Request, rest string, c Requester, emit func(Event))
-	// AgentEnv points the ecosystem's tool at base (the ecosystem's URL,
+	// Serve answers one request (see Call).
+	Serve(w http.ResponseWriter, r *http.Request, c *Call)
+	// AgentEnv points the ecosystem's tools at base (the ecosystem's URL,
 	// carrying the caller's token).
 	AgentEnv(base string) []string
+}
+
+// Call is one request to an ecosystem.
+type Call struct {
+	// Rest is the path below the ecosystem's segment, still escaped as the
+	// client sent it.
+	Rest string
+	// Base is the ecosystem's URL as the agent reaches it — the proxy's own
+	// listening address and the caller's token, never the request's Host
+	// header — for metadata whose artifact URLs are rewritten to point back
+	// here.
+	Base      string
+	Requester Requester
+	Emit      func(Event)
+}
+
+// HomeConfigurer is an ecosystem whose tools are pointed at the proxy by a
+// file in the agent's HOME (cargo's config.toml, Maven's settings.xml, …)
+// rather than, or as well as, the environment.
+type HomeConfigurer interface {
+	// HomeFiles maps a path relative to HOME to its content.
+	HomeFiles(base string) map[string]string
+}
+
+// Warmer is an ecosystem that can fill the cache ahead of an agent's launch
+// from a workspace's lockfiles — parsed by conductor, fetched through its
+// own fetcher and verified like any request; nothing of the project's runs.
+type Warmer interface {
+	// Lockfiles are the workspace-relative file names it reads.
+	Lockfiles() []string
+	// Warm fetches what files (name → content, as read) pin; it returns how
+	// many artifacts it made sure of.
+	Warm(ctx context.Context, files map[string][]byte, emit func(Event)) (int, error)
 }
 
 // Server is the package proxy's HTTP listener: loopback only, every request
@@ -171,16 +203,84 @@ func (s *Server) caller(tok string) (Requester, bool) {
 // AgentEnv is the environment pointing every ecosystem's tool at this
 // server on behalf of c; nil before Listen.
 func (s *Server) AgentEnv(c Requester) []string {
+	env, _ := s.AgentConfig(c)
+	return env
+}
+
+// AgentConfig is the environment and the HOME files pointing every
+// ecosystem's tools at this server on behalf of c (nil before Listen). The
+// files name only c's identity, not its dispatch: they live in a HOME the
+// identity's launches share, and one launch's file must not attribute its
+// fetches to another's dispatch.
+func (s *Server) AgentConfig(c Requester) (env []string, files map[string]string) {
 	addr := s.Addr()
 	if addr == "" {
-		return nil
+		return nil, nil
 	}
 	tok := s.Token(c)
-	var env []string
+	idTok := s.Token(Requester{Identity: c.Identity})
 	for _, n := range s.ord {
-		env = append(env, s.ecos[n].AgentEnv("http://"+addr+"/"+tok+"/"+n)...)
+		e := s.ecos[n]
+		env = append(env, e.AgentEnv("http://"+addr+"/"+tok+"/"+n)...)
+		if hc, ok := e.(HomeConfigurer); ok {
+			for p, body := range hc.HomeFiles("http://" + addr + "/" + idTok + "/" + n) {
+				if files == nil {
+					files = map[string]string{}
+				}
+				files[p] = body
+			}
+		}
 	}
-	return env
+	return env, files
+}
+
+// Lockfiles are the workspace-relative lockfile names every warming
+// ecosystem reads.
+func (s *Server) Lockfiles() []string {
+	var out []string
+	for _, n := range s.ord {
+		if w, ok := s.ecos[n].(Warmer); ok {
+			out = append(out, w.Lockfiles()...)
+		}
+	}
+	return out
+}
+
+// Warm fills the cache from a workspace's lockfiles (name → content) on
+// behalf of c, ecosystem by ecosystem; it returns how many artifacts are
+// now cached, and the ecosystems' errors joined.
+func (s *Server) Warm(ctx context.Context, files map[string][]byte, c Requester) (int, error) {
+	var total int
+	var errs []error
+	for _, n := range s.ord {
+		w, ok := s.ecos[n].(Warmer)
+		if !ok {
+			continue
+		}
+		mine := map[string][]byte{}
+		for _, lf := range w.Lockfiles() {
+			for name, b := range files {
+				if name == lf || strings.HasSuffix(name, "/"+lf) {
+					mine[name] = b
+				}
+			}
+		}
+		if len(mine) == 0 {
+			continue
+		}
+		name := n
+		k, err := w.Warm(ctx, mine, func(ev Event) {
+			ev.Requester, ev.Ecosystem = c, name
+			if s.OnEvent != nil {
+				s.OnEvent(ev)
+			}
+		})
+		total += k
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", n, err))
+		}
+	}
+	return total, errors.Join(errs...)
 }
 
 // ServeHTTP routes /<token>/<ecosystem>/<rest>.
@@ -208,7 +308,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.OnEvent(ev)
 		}
 	}
-	e.Serve(w, r, rest, c, emit)
+	e.Serve(w, r, &Call{Rest: rest, Base: "http://" + s.Addr() + "/" + tok + "/" + name, Requester: c, Emit: emit})
 }
 
 // LoadKey reads the token key at path, creating it (0600) on first use: a
