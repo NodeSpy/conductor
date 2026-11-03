@@ -20,7 +20,7 @@ func TestSandboxScope(t *testing.T) {
 		Isolation: &config.IsolationConfig{
 			Allow:        &config.SandboxAllow{Tunnels: []string{"Cloudflared@*.trycloudflare.com"}, NonTLS: []string{"bastion.example.com:22"}, Origin: "workflow deploy"},
 			Detect:       &config.IsolationDetect{Action: "alert", Tripwires: &off},
-			EgressLimits: &config.SandboxEgressLimits{Idle: "1h", Download: "off"},
+			EgressLimits: &config.SandboxEgressLimits{Idle: "1h", Download: "off", ModelUpload: "32GiB"},
 		},
 		GrantedAllow: &config.SandboxAllow{Tunnels: []string{"ssh"}, Pty: true, Origin: "pack rv grant tunnel"},
 	}
@@ -28,10 +28,12 @@ func TestSandboxScope(t *testing.T) {
 	want := &agentsandbox.Scope{
 		Allow: &agentsandbox.Allowance{
 			Tunnels: []string{"cloudflared", "ssh"}, TunnelHosts: []string{"*.trycloudflare.com"},
-			NonTLS: []string{"bastion.example.com:22"}, Pty: true, By: "workflow deploy + pack rv grant tunnel",
+			// ssh is allowed by name alone: to any host.
+			TunnelAnyHost: true,
+			NonTLS:        []string{"bastion.example.com:22"}, Pty: true, By: "workflow deploy + pack rv grant tunnel",
 		},
 		DetectAction: "alert", Tripwires: &off,
-		EgressIdle: int64(3600e9), EgressDownload: -1,
+		EgressIdle: int64(3600e9), EgressDownload: -1, ModelUpload: 32 << 30,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("scope\n got %+v %+v\nwant %+v %+v", got, got.Allow, want, want.Allow)

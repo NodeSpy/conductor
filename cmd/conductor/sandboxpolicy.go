@@ -32,8 +32,11 @@ var sandboxResolver atomic.Pointer[agentsandbox.Resolver]
 // policy for the caller's cwd and a token minted for this launch alone. The
 // socket is 0600 already; the caller's uid is checked too — a policy carries
 // a live token.
+// peerCred is the control connection's peer (a var for tests).
+var peerCred = agentsandbox.PeerCred
+
 func sandboxPolicyResponse(conn net.Conn, req controlRequest, log func(string, ...any)) controlResponse {
-	uid, pid, credOK := agentsandbox.PeerCred(conn)
+	uid, pid, credOK := peerCred(conn)
 	if credOK && int(uid) != os.Getuid() {
 		return controlResponse{Error: fmt.Sprintf("sandbox-policy: refused for uid %d", uid)}
 	}

@@ -199,3 +199,57 @@ func TestBulkUploadIsFlaggedAtOnce(t *testing.T) {
 		t.Fatalf("bulk upload: %+v %+v", evs, r)
 	}
 }
+
+// Not interactive: a young tunnel however many turns it has had; a server
+// that streams with no turns from the client (events, a stalled download);
+// a large upload that is answered in kind is not a bulk upload.
+func TestShapesNeedAgeTurnsAndImbalance(t *testing.T) {
+	shrinkShapes(t)
+	check := func(name string, target string, drive func(net.Conn, io.Reader)) {
+		t.Helper()
+		var log shapeLog
+		p := &Proxy{Allow: []string{target}}
+		addr, rec := startProxy(t, p)
+		cred, _ := p.MintSession(SessionOpts{Run: "r", OnShape: log.add})
+		conn, br, code := connectVia(t, addr, cred, target)
+		if code != 200 {
+			t.Fatalf("%s: CONNECT %d", name, code)
+		}
+		drive(conn, br)
+		conn.Close()
+		r := rec.wait(t, func(r ConnRecord) bool { return r.Target == target })
+		time.Sleep(50 * time.Millisecond)
+		if evs := log.get(); len(evs) != 0 || r.Shape != "" {
+			t.Errorf("%s flagged: %+v %+v", name, evs, r)
+		}
+	}
+	age := interactiveMinAge
+	interactiveMinAge = time.Hour
+	check("a young commander", serve(t, commander), func(c net.Conn, br io.Reader) { runShell(c, br, 2*time.Second) })
+	interactiveMinAge = age
+
+	streamer := serve(t, func(c net.Conn) {
+		for i := 0; i < 8; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if _, err := io.WriteString(c, "data: tick\n"); err != nil {
+				return
+			}
+		}
+	})
+	check("a server stream", streamer, func(c net.Conn, br io.Reader) {
+		c.SetReadDeadline(time.Now().Add(3 * time.Second))
+		io.Copy(io.Discard, br)
+	})
+
+	// At the real threshold: what is in flight (socket buffers) is small
+	// beside it, so an answered upload keeps its ratio near one.
+	bulkUploadMin = 16 << 20
+	echo := serve(t, func(c net.Conn) { io.Copy(c, c) })
+	check("an echoed upload", echo, func(c net.Conn, br io.Reader) {
+		go c.Write(make([]byte, 32<<20))
+		c.SetReadDeadline(time.Now().Add(20 * time.Second))
+		if n, err := io.ReadFull(br, make([]byte, 32<<20)); err != nil {
+			t.Errorf("echoed %d: %v", n, err)
+		}
+	})
+}

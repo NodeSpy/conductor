@@ -386,6 +386,9 @@ func TestGatewayMetersAndCapsTheLaunch(t *testing.T) {
 		kinds = append(kinds, kind)
 		events = append(events, f)
 	})
+	if d := newModelMeter("", 0, 0, nil); d.capUp != DefaultModelUpload || d.capDown != DefaultModelDownload {
+		t.Fatalf("default caps %d %d", d.capUp, d.capDown)
+	}
 	if m.capDown != DefaultModelDownload {
 		t.Fatalf("download cap defaults to %d, got %d", DefaultModelDownload, m.capDown)
 	}

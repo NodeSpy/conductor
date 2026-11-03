@@ -279,3 +279,34 @@ func TestSandboxExecReporterDeliversInOrder(t *testing.T) {
 	dead.send("egress", nil)
 	dead.close()
 }
+
+// Only this daemon's uid may write the sandbox audit or ask for a policy:
+// a peer of another uid is refused, and nothing is recorded.
+func TestSandboxControlRefusesAnotherUID(t *testing.T) {
+	old, oldEv := peerCred, controller.SandboxEvent
+	t.Cleanup(func() { peerCred, controller.SandboxEvent = old, oldEv })
+	peerCred = func(net.Conn) (uint32, int, bool) { return uint32(os.Getuid() + 1), 1, true }
+	var got []string
+	controller.SandboxEvent = func(kind string, _ map[string]any) { got = append(got, kind) }
+	for _, req := range []controlRequest{
+		{Cmd: "sandbox-event", Kind: "detected", Args: map[string]any{"kind": "tunnel_tool"}},
+		{Cmd: "sandbox-policy", Cwd: t.TempDir(), Tool: "claude-code"},
+	} {
+		client, server := net.Pipe()
+		done := make(chan struct{})
+		go func() {
+			handleControlConn(context.Background(), server, nil, nil, nil, nil, nil, nil, func(string, ...any) {})
+			close(done)
+		}()
+		_ = json.NewEncoder(client).Encode(req)
+		var resp controlResponse
+		if err := json.NewDecoder(client).Decode(&resp); err != nil || resp.OK || !strings.Contains(resp.Error, "refused for uid") {
+			t.Fatalf("%s from another uid: %+v %v", req.Cmd, resp, err)
+		}
+		client.Close()
+		<-done
+	}
+	if len(got) != 0 {
+		t.Fatalf("another uid's event was recorded: %v", got)
+	}
+}
