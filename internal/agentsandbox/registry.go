@@ -57,6 +57,10 @@ type Entry struct {
 	// Scope is what the dispatch's own scopes (its isolation: blocks, a
 	// pack grant) change of the sandbox; nil: nothing.
 	Scope *Scope
+	// GitCommon / GitWorktree are a protected linked worktree's shared
+	// common dir and its own git dir: each launch gets a private view of the
+	// common dir (see GitLayout.Common).
+	GitCommon, GitWorktree string
 }
 
 // PushTarget is where conductor — never the agent — pushes a workspace.
@@ -92,19 +96,21 @@ type Registry struct {
 // sandbox shape and its push target, but no token is minted for it, so it
 // has no conductor verbs until its dispatch registers it again.
 type persisted struct {
-	Workspace string      `json:"workspace"`
-	Identity  string      `json:"identity"`
-	Tool      string      `json:"tool,omitempty"`
-	Model     string      `json:"model,omitempty"`
-	Dispatch  string      `json:"dispatch,omitempty"`
-	Egress    []string    `json:"egress,omitempty"`
-	ReadOnly  []string    `json:"read_only,omitempty"`
-	ReadWrite []string    `json:"read_write,omitempty"`
-	Hide      []string    `json:"hide,omitempty"`
-	Env       []string    `json:"env,omitempty"`
-	Push      *PushTarget `json:"push,omitempty"`
-	StartHead string      `json:"start_head,omitempty"`
-	Scope     *Scope      `json:"scope,omitempty"`
+	Workspace   string      `json:"workspace"`
+	Identity    string      `json:"identity"`
+	Tool        string      `json:"tool,omitempty"`
+	Model       string      `json:"model,omitempty"`
+	Dispatch    string      `json:"dispatch,omitempty"`
+	Egress      []string    `json:"egress,omitempty"`
+	ReadOnly    []string    `json:"read_only,omitempty"`
+	ReadWrite   []string    `json:"read_write,omitempty"`
+	Hide        []string    `json:"hide,omitempty"`
+	Env         []string    `json:"env,omitempty"`
+	Push        *PushTarget `json:"push,omitempty"`
+	StartHead   string      `json:"start_head,omitempty"`
+	Scope       *Scope      `json:"scope,omitempty"`
+	GitCommon   string      `json:"git_common,omitempty"`
+	GitWorktree string      `json:"git_worktree,omitempty"`
 }
 
 // PersistTo loads the registry saved at path (entries whose workspace is
@@ -136,7 +142,7 @@ func (r *Registry) PersistTo(path string) error {
 			continue
 		}
 		r.byWS[ws] = Entry{Workspace: ws, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
-			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope}
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree}
 	}
 	r.saveLocked()
 	return nil
@@ -150,7 +156,7 @@ func (r *Registry) saveLocked() {
 	list := make([]persisted, 0, len(r.byWS))
 	for _, e := range r.byWS {
 		list = append(list, persisted{Workspace: e.Workspace, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
-			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope})
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Workspace < list[j].Workspace })
 	b, err := json.MarshalIndent(list, "", " ")

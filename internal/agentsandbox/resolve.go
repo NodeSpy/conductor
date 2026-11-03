@@ -239,6 +239,7 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		Identity: e.Identity, Tool: tool, Workspace: e.Workspace, Home: home, Logins: logins,
 		Egress: egress, Loopback: loopback,
 		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env,
+		GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
 		PosixIPC: r.PosixIPC,
 		Run:      e.Dispatch, EgressAnyBytes: r.EgressAnyBytes, EgressIdle: r.EgressIdle,
 		EgressUpload: r.EgressUpload, EgressDownload: r.EgressDownload,

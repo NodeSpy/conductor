@@ -149,7 +149,7 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 		// in: its git layout and push target are what conductor recorded
 		// when the workspace was still its own — never re-read from the .git
 		// pointer, alternates or HEAD the earlier agent could rewrite.
-		layout = agentsandbox.GitLayout{ReadOnly: prev.ReadOnly, ReadWrite: prev.ReadWrite, Hide: prev.Hide}
+		layout = agentsandbox.GitLayout{ReadOnly: prev.ReadOnly, ReadWrite: prev.ReadWrite, Hide: prev.Hide, Common: prev.GitCommon, HeadDir: prev.GitWorktree}
 		if prev.Push != nil {
 			layout.GitDir, layout.HeadDir = prev.Push.GitDir, prev.Push.HeadDir
 		}
@@ -162,6 +162,9 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 	e := agentsandbox.Entry{
 		Workspace: dir, Identity: identity, Tool: tool,
 		ReadOnly: layout.ReadOnly, ReadWrite: layout.ReadWrite, Hide: layout.Hide,
+	}
+	if layout.Common != "" {
+		e.GitCommon, e.GitWorktree = layout.Common, layout.HeadDir
 	}
 	if req != nil {
 		e.Dispatch = req.DispatchID

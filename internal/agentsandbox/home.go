@@ -184,7 +184,7 @@ func writeGitconfig(home, name, email string) error {
 	if email != "" {
 		fmt.Fprintf(&b, "\temail = %s\n", gitQuote(email))
 	}
-	b.WriteString("[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n")
+	b.WriteString("[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[gc]\n\tauto = 0\n\tpruneExpire = never\n\tworktreePruneExpire = never\n[maintenance]\n\tauto = false\n")
 	p := filepath.Join(home, ".gitconfig")
 	_ = os.Remove(p) // never write through a symlink the agent left here
 	return os.WriteFile(p, []byte(b.String()), 0o600)

@@ -54,6 +54,11 @@ type Policy struct {
 	// Hide are directories inside a read-write path shown empty (a linked
 	// worktree's siblings); a ReadWrite path deeper inside stays visible.
 	Hide []string `json:"hide,omitempty"`
+	// GitCommon / GitWorktree: a protected linked worktree's common dir
+	// and own git dir; the launch gets a private view of the common dir
+	// (privateCommon).
+	GitCommon   string `json:"git_common,omitempty"`
+	GitWorktree string `json:"git_worktree,omitempty"`
 	// Env are extra KEY=VALUE variables for the agent (its git identity).
 	Env []string `json:"env,omitempty"`
 	// PosixIPC (macOS) allows POSIX shared memory and semaphores
@@ -237,6 +242,15 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		return nil, fmt.Errorf("agentsandbox: resolve conductor binary: %w", err)
 	}
 
+	// A protected linked worktree's common dir: the launch's private view
+	// of it (privatecommon.go).
+	var privCommon string
+	if p.GitCommon != "" {
+		privCommon = privateCommonDir(p.Home)
+		if err := preparePrivateCommon(privCommon, p.GitCommon, p.GitWorktree, goos == "darwin"); err != nil {
+			return nil, fmt.Errorf("agentsandbox: private view of %s: %w", p.GitCommon, err)
+		}
+	}
 	dir := p.Workspace
 	binds := []sandbox.BindMount{{Path: p.Home}}
 	if p.Cwd != "" && p.Cwd != p.Workspace {
@@ -278,10 +292,28 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		prof.UnixSockets = append(prof.UnixSockets, p.Socket)
 	}
 	for _, q := range p.ReadOnly {
+		if privCommon != "" && goos != "darwin" && (q == p.GitCommon || q == filepath.Join(p.GitCommon, "config")) {
+			continue // the private view's own, bound below
+		}
 		binds = append(binds, sandbox.BindMount{Path: q, RO: true})
 	}
 	for _, q := range p.ReadWrite {
 		binds = append(binds, sandbox.BindMount{Path: q})
+	}
+	if privCommon != "" {
+		if goos == "darwin" {
+			// git's ref store uses the real common dir: its packed-refs and
+			// lock, as the refs beside them.
+			real := p.GitCommon
+			if r, err := filepath.EvalSymlinks(real); err == nil {
+				real = r
+			}
+			for _, f := range []string{"packed-refs", "packed-refs.lock"} {
+				binds = append(binds, sandbox.BindMount{Path: filepath.Join(real, f)})
+			}
+		} else {
+			binds = append(binds, sandbox.BindMount{Path: p.GitCommon, Src: privCommon})
+		}
 	}
 	for _, q := range p.Hide {
 		binds = append(binds, sandbox.BindMount{Path: q, Tmpfs: true})
@@ -310,6 +342,9 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	}
 
 	env := AgentEnv(d.Inherited, p)
+	if privCommon != "" && goos == "darwin" {
+		env = append(env, "GIT_COMMON_DIR="+privCommon)
+	}
 	if goos == "darwin" {
 		// Seatbelt shows no shared temp dir: the identity's own.
 		tmp := filepath.Join(p.Home, ".tmp")
@@ -338,6 +373,15 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		}
 	}
 	var closers []func()
+	if privCommon != "" && goos != "darwin" {
+		// Last at cleanup, once the launch is gone: refs its git packed
+		// into the private packed-refs are not lost with it.
+		closers = append(closers, func() {
+			if refs := reconcilePrivateRefs(privCommon, p.GitCommon); len(refs) > 0 && d.Event != nil {
+				d.Event("git_refs_restored", map[string]any{"run": p.EgressSession().Run, "refs": refs})
+			}
+		})
+	}
 	cleanupAll := func() {
 		for i := len(closers) - 1; i >= 0; i-- {
 			closers[i]()

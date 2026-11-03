@@ -41,6 +41,11 @@ type GitLayout struct {
 	// HeadDir is a linked worktree's own git dir (where its HEAD is); ""
 	// for a clone.
 	HeadDir string
+	// Common is a protected linked worktree's shared common dir: each
+	// launch gets a private view of it (privateCommon), with its own config
+	// and packed-refs, so normal git works while the operator's stay
+	// read-only. "" otherwise.
+	Common string
 }
 
 // ResolveGitLayout reads ws's git layout (see GitLayout).
@@ -109,6 +114,7 @@ func ResolveGitLayout(ws string) (GitLayout, error) {
 			// include) — only the object store and the refs an agent's
 			// commits, fetches and stash write are read-write.
 			l.ReadOnly = append(l.ReadOnly, common)
+			l.Common = common
 			for _, sub := range linkedWritable {
 				if fi, err := os.Stat(filepath.Join(common, sub)); err == nil && fi.IsDir() {
 					l.ReadWrite = append(l.ReadWrite, filepath.Join(common, sub))
