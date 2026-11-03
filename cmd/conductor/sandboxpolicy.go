@@ -20,6 +20,10 @@ import (
 	"github.com/NodeSpy/conductor/internal/skill"
 )
 
+// capAgentSlice caps every agent launch together (a var: tests never touch
+// the user's systemd manager).
+var capAgentSlice = agentsandbox.CapAgentSlice
+
 // sandboxResolver is the daemon's policy builder for `conductor sandbox
 // exec` (set at boot when the agent sandbox is on; nil = refused).
 var sandboxResolver atomic.Pointer[agentsandbox.Resolver]
@@ -128,14 +132,15 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		// identity and granted verbs. nil when no bots are configured.
 		Session: botSessionLookup,
 	}
-	if l := cfg.Sandbox.Limits; l != nil {
+	if cfg.Sandbox != nil && cfg.Sandbox.Limits != nil {
+		l := cfg.Sandbox.Limits
 		r.Limits = agentsandbox.LimitSpec{Off: l.Off, Memory: l.Memory, Pids: l.Pids, Required: l.Required}
 	}
 	r.Limits.DiskFreeFrac, r.Limits.DiskFreeBytes, r.Limits.DiskOff = cfg.Sandbox.DiskFreeMin()
 	r.Persist = cfg.Sandbox.PersistMode()
 	if !r.Limits.Off {
 		// All agents together: the slice their launch scopes run in.
-		if err := agentsandbox.CapAgentSlice(runtime.GOOS, cfg.Sandbox.AggregateMemory()); err != nil {
+		if err := capAgentSlice(runtime.GOOS, cfg.Sandbox.AggregateMemory()); err != nil {
 			logf("agent sandbox: limits: %v (each launch keeps its own cap)", err)
 		}
 	}

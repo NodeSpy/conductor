@@ -26,6 +26,7 @@ import (
 // $PASEO_HOME, then ~/.paseo — a developer's live paseo config. A mutant
 // that lost a runtime's home: once wrote conductor's entries there.
 func TestMain(m *testing.M) {
+	capAgentSlice = func(string, string) error { return nil } // never the real user manager
 	root, err := testhome.Isolate()
 	if err != nil {
 		panic(err)
