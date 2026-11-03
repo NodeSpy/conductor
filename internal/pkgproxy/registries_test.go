@@ -2,10 +2,13 @@ package pkgproxy
 
 import (
 	"bytes"
+	"compress/gzip"
+	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"io"
 	"net/http"
@@ -355,5 +358,140 @@ func TestNuGet(t *testing.T) {
 	_, files := r.srv.AgentConfig(Requester{Identity: "i"})
 	if c := files[".nuget/NuGet/NuGet.Config"]; !strings.Contains(c, "<clear />") || !strings.Contains(c, "/v3/index.json") {
 		t.Fatalf("NuGet.Config: %q", c)
+	}
+}
+
+func TestComposer(t *testing.T) {
+	up := newFakeUp(t)
+	r := newRegRig(t, func(c RegistryConfig) (Ecosystem, error) { return NewComposer(c) }, up.URL)
+	zip1, zip2 := "fake dist 1", "fake dist 2"
+	// Minified: the second entry inherits name and replaces dist; "__unset" drops a key.
+	up.set("/p2/acme/widget.json", `{"minified":"composer/2.0","packages":{"acme/widget":[`+
+		`{"name":"acme/widget","version":"1.0.0","homepage":"h","dist":{"type":"zip","url":"`+up.URL+`/zip/aaa","reference":"aaa","shasum":"`+sha1hex(zip1)+`"},"source":{"type":"git","url":"https://git.example/x"}},`+
+		`{"version":"0.9.0","homepage":"__unset","dist":{"type":"zip","url":"`+up.URL+`/zip/bbb","reference":"bbb","shasum":""}}]}}`)
+	if code, body := r.get(t, "/packages.json"); code != 200 || !strings.Contains(body, r.base+"/p2/%package%.json") {
+		t.Fatalf("packages.json: %d %s", code, body)
+	}
+	code, body := r.get(t, "/p2/acme/widget.json")
+	if code != 200 || strings.Contains(body, up.URL) || strings.Contains(body, "git.example") || !strings.Contains(body, r.base+"/dists/acme/widget/bbb.zip") ||
+		strings.Count(body, `"name":"acme/widget"`) != 2 || strings.Count(body, `"homepage"`) != 1 {
+		t.Fatalf("p2 not expanded and rewritten: %d %s", code, body)
+	}
+	assertArtifact(t, r, up, "/dists/acme/widget/aaa.zip", "/zip/aaa", zip1)
+	// No shasum published: cached by URL.
+	up.set("/zip/bbb", zip2)
+	for i := 0; i < 2; i++ {
+		if code, got := r.get(t, "/dists/acme/widget/bbb.zip"); code != 200 || got != zip2 {
+			t.Fatalf("unhashed dist: %d %s", code, got)
+		}
+	}
+	if n := up.count("/zip/bbb"); n != 1 {
+		t.Fatalf("unhashed dist fetched %d times", n)
+	}
+	if code, _ := r.get(t, "/dists/acme/widget/ccc.zip"); code != 404 {
+		t.Fatalf("unlisted dist: %d", code)
+	}
+	assertRefusedBeforeUpstream(t, r, up, []string{
+		"/p2/../x.json", "/p2/acme/../x.json", "/p2/Acme/Widget.json", "/dists/acme/widget/../aaa.zip",
+		"/dists/acme/widget/aaa.sh", "/dists/aaa.zip", "/p2/acme.json",
+	})
+	_, files := r.srv.AgentConfig(Requester{Identity: "i"})
+	if c := files[".composer/config.json"]; !strings.Contains(c, `"packagist.org": false`) || !strings.Contains(c, `"type": "composer"`) {
+		t.Fatalf("composer config: %q", c)
+	}
+}
+
+func TestPub(t *testing.T) {
+	up := newFakeUp(t)
+	r := newRegRig(t, func(c RegistryConfig) (Ecosystem, error) { return NewPub(c) }, up.URL)
+	tgz := "fake pub archive"
+	up.set("/api/packages/http", `{"name":"http","latest":{"version":"1.0.0","archive_url":"`+up.URL+`/a/http-1.0.0.tar.gz"},"versions":[{"version":"1.0.0","archive_url":"`+up.URL+`/a/http-1.0.0.tar.gz","archive_sha256":"`+sha256hex(tgz)+`"}]}`)
+	if code, body := r.get(t, "/api/packages/http"); code != 200 || strings.Contains(body, up.URL) || !strings.Contains(body, r.base+"/packages/http/versions/1.0.0.tar.gz") {
+		t.Fatalf("listing: %d %s", code, body)
+	}
+	assertArtifact(t, r, up, "/packages/http/versions/1.0.0.tar.gz", "/a/http-1.0.0.tar.gz", tgz)
+	assertRefusedBeforeUpstream(t, r, up, []string{
+		"/api/packages/../x", "/api/packages/a-b", "/packages/http/versions/../1.0.0.tar.gz", "/packages/http/versions/1.0.tar.gz",
+		"/api/packages/http/versions/1.0.0",
+	})
+	if env := strings.Join(r.srv.AgentEnv(Requester{Identity: "i"}), "\n"); !strings.Contains(env, "PUB_HOSTED_URL=http://") {
+		t.Fatalf("env: %s", env)
+	}
+}
+
+// hexEntry is a gzipped signed registry entry for one package.
+func hexEntry(name string, rels map[string][]byte) string {
+	ld := func(num int, b []byte) []byte {
+		out := binary.AppendUvarint(nil, uint64(num<<3|2))
+		out = binary.AppendUvarint(out, uint64(len(b)))
+		return append(out, b...)
+	}
+	var pkg []byte
+	for v, sum := range rels {
+		rel := append(ld(1, []byte(v)), ld(2, []byte("inner"))...)
+		rel = append(rel, ld(5, sum)...)
+		pkg = append(pkg, ld(1, rel)...)
+	}
+	pkg = append(pkg, ld(2, []byte(name))...)
+	signed := append(ld(1, pkg), ld(2, []byte("sig"))...)
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	zw.Write(signed)
+	zw.Close()
+	return buf.String()
+}
+
+func TestHex(t *testing.T) {
+	up := newFakeUp(t)
+	r := newRegRig(t, func(c RegistryConfig) (Ecosystem, error) { return NewHex(c) }, up.URL)
+	tar := "fake hex tarball"
+	h := sha256.Sum256([]byte(tar))
+	o := sha256.Sum256([]byte("other"))
+	entry := hexEntry("jason", map[string][]byte{"1.4.0": h[:], "1.3.0": o[:]})
+	up.set("/packages/jason", entry)
+	if code, body := r.get(t, "/packages/jason"); code != 200 || body != entry {
+		t.Fatalf("registry entry not relayed unchanged: %d", code)
+	}
+	assertArtifact(t, r, up, "/tarballs/jason-1.4.0.tar", "/tarballs/jason-1.4.0.tar", tar)
+	if code, _ := r.get(t, "/tarballs/jason-9.0.0.tar"); code != 404 {
+		t.Fatalf("unlisted tarball: %d", code)
+	}
+	assertRefusedBeforeUpstream(t, r, up, []string{
+		"/packages/../names", "/packages/Jason", "/tarballs/jason.tar", "/tarballs/../x-1.0.0.tar", "/installs/hex-1.ez",
+	})
+	if env := strings.Join(r.srv.AgentEnv(Requester{Identity: "i"}), "\n"); !strings.Contains(env, "HEX_MIRROR=http://") {
+		t.Fatalf("env: %s", env)
+	}
+}
+
+func TestCRAN(t *testing.T) {
+	up := newFakeUp(t)
+	r := newRegRig(t, func(c RegistryConfig) (Ecosystem, error) { return NewCRAN(c) }, up.URL)
+	src := "fake R source"
+	m := md5.Sum([]byte(src))
+	idx := "Package: other\nVersion: 1.0\nMD5sum: 00\n\nPackage: jsonlite\nVersion: 1.8.8\nMD5sum: " + hex.EncodeToString(m[:]) + "\n\n"
+	up.set("/src/contrib/PACKAGES", idx)
+	if code, body := r.get(t, "/src/contrib/PACKAGES"); code != 200 || body != idx {
+		t.Fatalf("PACKAGES: %d %s", code, body)
+	}
+	up.set("/src/contrib/jsonlite_1.8.8.tar.gz", "tampered")
+	if code, msg := r.get(t, "/src/contrib/jsonlite_1.8.8.tar.gz"); code != http.StatusBadGateway || !strings.Contains(msg, "SECURITY") {
+		t.Fatalf("md5 mismatch served: %d %s", code, msg)
+	}
+	up.set("/src/contrib/jsonlite_1.8.8.tar.gz", src)
+	for i := 0; i < 2; i++ {
+		if code, got := r.get(t, "/src/contrib/jsonlite_1.8.8.tar.gz"); code != 200 || got != src {
+			t.Fatalf("archive: %d %s", code, got)
+		}
+	}
+	if n := up.count("/src/contrib/jsonlite_1.8.8.tar.gz"); n != 2 {
+		t.Fatalf("archive fetched %d times", n)
+	}
+	assertRefusedBeforeUpstream(t, r, up, []string{
+		"/src/contrib/../x", "/etc/passwd/x/y", "/src/contrib/x.sh", "/src/contrib/Archive/../../x_1.0.tar.gz", "/bin/x",
+	})
+	_, files := r.srv.AgentConfig(Requester{Identity: "i"})
+	if !strings.Contains(files[".Rprofile"], "options(repos") {
+		t.Fatalf("Rprofile: %v", files)
 	}
 }
