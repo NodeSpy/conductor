@@ -1,12 +1,16 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // sandboxEventAudit records an agent sandbox's containment event in the
-// audit log and the daemon's log.
-func sandboxEventAudit(logf func(string, ...any), audit func(map[string]any)) func(string, map[string]any) {
+// audit log and the daemon's log. A detection or a resource-limit kill is
+// also an attention event (notify, when set): the operator hears of it
+// through their conductor.escalate triggers.
+func sandboxEventAudit(logf func(string, ...any), audit func(map[string]any), notify func(msg string)) func(string, map[string]any) {
 	return func(kind string, fields map[string]any) {
 		row := map[string]any{"event": "sandbox_" + kind}
 		for k, v := range fields {
@@ -14,6 +18,13 @@ func sandboxEventAudit(logf func(string, ...any), audit func(map[string]any)) fu
 		}
 		logf("sandbox: %s %v", kind, fields)
 		audit(row)
+		if notify != nil && (kind == "detection" || kind == "limit") {
+			msg := fmt.Sprintf("agent sandbox %s: %v (%v) — action %v", kind, fields["kind"], fields["reason"], fields["action"])
+			if run, _ := fields["run"].(string); run != "" {
+				msg += ", run " + run
+			}
+			notify(msg)
+		}
 	}
 }
 

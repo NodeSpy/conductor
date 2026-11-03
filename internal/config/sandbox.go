@@ -98,9 +98,12 @@ type SandboxEgressLimits struct {
 
 // SandboxDetect configures detection.
 type SandboxDetect struct {
-	// Action on a detection: `kill` (default) — the step is killed, its
-	// workspace kept, the event audited and the operator notified, no
-	// retry; `alert` — audited and notified only; `off`.
+	// Action on a detection: `kill` (default) — every process of the
+	// launch is killed (the step ends as its agent does), its workspace
+	// kept, the event audited and raised as a conductor.escalate
+	// notification; `alert` — audited and notified only; `off` — no
+	// watcher, tripwires or git guard (what a launch leaves running is
+	// still killed at its end).
 	Action string `yaml:"action,omitempty"`
 	// Tripwires plants decoy credentials in each launch's home and treats a
 	// read as a detection (default true).
