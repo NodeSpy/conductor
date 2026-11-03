@@ -129,6 +129,9 @@ Either way conductor pushes **the workspace's `HEAD` to the dispatch's own
 branch only** — the agent names no ref (`git.push` refuses any option) —
 **fast-forward only, never forced** (a diverged remote is a refusal), and
 **re-signs every new commit** with your SSH signing key on the way out. A
+commit is new when no branch on the remote already has it: merging the base
+branch in pushes the merge, not re-signed copies of the base's commits, and
+the 500-commit cap counts only new commits. A
 review (a decide step, an output-schema step, a checkout-less step, a review
 trigger — unless `expect_push:`) is never pushed. Every push is audited
 (`git_push`).

@@ -106,14 +106,24 @@ func Push(ctx context.Context, r Request) (Result, error) {
 	}
 
 	ref := "refs/heads/" + r.Branch
-	out, err := git(nil, "ls-remote", "--end-of-options", r.Remote, ref)
+	out, err := git(nil, "ls-remote", "--heads", "--end-of-options", r.Remote)
 	if err != nil {
 		return res, fmt.Errorf("gitpush: read %s at the remote: %w", r.Branch, err)
 	}
 	old := ""
+	// Every other branch tip the remote already has: commits reachable from
+	// one are not new, however they got into the workspace's history (a
+	// merge of the base branch brings in all of its commits since the fork).
+	var tips []string
 	for _, line := range strings.Split(out, "\n") {
-		if f := strings.Fields(line); len(f) == 2 && f[1] == ref && isSHA(f[0]) {
+		f := strings.Fields(line)
+		if len(f) != 2 || !isSHA(f[0]) {
+			continue
+		}
+		if f[1] == ref {
 			old = f[0]
+		} else {
+			tips = append(tips, f[0])
 		}
 	}
 	res.Old = old
@@ -131,13 +141,28 @@ func Push(ctx context.Context, r Request) (Result, error) {
 			return res, ErrDiverged
 		}
 	}
-	revArgs := []string{"rev-list", "--reverse", "--topo-order", head}
+	revs := head + "\n"
 	if old != "" {
-		revArgs = append(revArgs, "^"+old)
-	} else {
+		revs += "^" + old + "\n"
+	}
+	known, err := presentCommits(git, tips)
+	if err != nil {
+		return res, err
+	}
+	for _, t := range known {
+		revs += "^" + t + "\n"
+	}
+	revArgs := []string{"rev-list", "--reverse", "--topo-order", "--stdin"}
+	if old == "" || clone {
+		// A per-dispatch clone's trusted dir is conductor's base clone: its
+		// remote-tracking refs are what the remote had at the last fetch,
+		// which still covers a base branch that has moved on since (its new
+		// tip is not in the objects, its old one is). A linked worktree's
+		// common dir is the agent's to write, so its refs are trusted only
+		// when nothing else bounds the range.
 		revArgs = append(revArgs, "--not", "--remotes")
 	}
-	out, err = git(nil, revArgs...)
+	out, err = git([]byte(revs), revArgs...)
 	if err != nil {
 		return res, fmt.Errorf("gitpush: list the commits to push: %w", err)
 	}
@@ -281,4 +306,24 @@ func mkdirsUnder(root, rel string) error {
 		parent = filepath.Join(parent, c)
 	}
 	return nil
+}
+
+// presentCommits returns the tips that are commits conductor can read: a
+// remote branch whose history was never fetched cannot be excluded, and
+// naming it to rev-list would fail the push.
+func presentCommits(git func([]byte, ...string) (string, error), tips []string) ([]string, error) {
+	if len(tips) == 0 {
+		return nil, nil
+	}
+	out, err := git([]byte(strings.Join(tips, "\n")+"\n"), "cat-file", "--batch-check")
+	if err != nil {
+		return nil, fmt.Errorf("gitpush: check the remote's branch tips: %w", err)
+	}
+	var have []string
+	for _, line := range strings.Split(out, "\n") {
+		if f := strings.Fields(line); len(f) >= 2 && f[1] == "commit" && isSHA(f[0]) {
+			have = append(have, f[0])
+		}
+	}
+	return have, nil
 }
