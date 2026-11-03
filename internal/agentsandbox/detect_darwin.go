@@ -50,6 +50,7 @@ func listProcs(marker string, isRoot func(pid int) bool) func() ([]procInfo, err
 		args := psColumn(pids, "command=")
 		comm := psColumn(pids, "comm=")
 		inet := lsofInet(pids)
+		exes := lsofExe(pids)
 		for i := range all {
 			p := &all[i]
 			a, ok := args[p.pid]
@@ -59,8 +60,10 @@ func listProcs(marker string, isRoot func(pid int) bool) func() ([]procInfo, err
 			p.args = strings.Fields(a)
 			p.exe, p.comm = comm[p.pid], comm[p.pid]
 			p.start, _ = procStart(p.pid)
-			if filepath.IsAbs(p.exe) {
-				p.id, _ = hostBinaries().identify(p.exe)
+			// ps truncates comm: the binary's own path is lsof's.
+			if e := exes[p.pid]; filepath.IsAbs(e) {
+				p.exe = e
+				p.id, _ = hostBinaries().identify(e)
 			}
 			for _, fd := range inet[p.pid] {
 				p.inetSocket = true
@@ -89,6 +92,24 @@ func psColumn(pids []string, col string) map[int]string {
 		}
 		if pid, err := strconv.Atoi(line[:i]); err == nil {
 			out[pid] = strings.TrimSpace(line[i:])
+		}
+	}
+	return out
+}
+
+// lsofExe is each of pids' executable: its first txt file, in one lsof.
+func lsofExe(pids []string) map[int]string {
+	out := map[int]string{}
+	b, _ := exec.Command("lsof", "-n", "-P", "-a", "-p", strings.Join(pids, ","), "-d", "txt", "-F", "pn").Output()
+	pid := -1
+	for _, line := range strings.Split(string(b), "\n") {
+		switch {
+		case strings.HasPrefix(line, "p"):
+			pid, _ = strconv.Atoi(line[1:])
+		case strings.HasPrefix(line, "n") && pid > 0:
+			if _, ok := out[pid]; !ok {
+				out[pid] = line[1:]
+			}
 		}
 	}
 	return out

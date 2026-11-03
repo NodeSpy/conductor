@@ -429,7 +429,21 @@ func TestDetectorSeesThroughRenamesAndDescriptors(t *testing.T) {
 	// other process of the test runs.
 	bin, work := t.TempDir(), t.TempDir()
 	cp(tail, filepath.Join(bin, "socat"))
-	ix := indexBinaries([]string{bin, filepath.Dir(sh)})
+	shellSrc, tunnelSrc, tunnelName, tunnelArgs := sh, tail, "socat", []string{"-f", "/dev/null"}
+	if runtime.GOOS == "darwin" {
+		// macOS kills a copy of a platform binary as it starts; Homebrew's
+		// are not platform binaries, so their copies run.
+		if b, err := filepath.EvalSymlinks("/opt/homebrew/bin/bash"); err == nil {
+			shellSrc = b
+		}
+		if b, err := filepath.EvalSymlinks("/opt/homebrew/bin/nc"); err == nil {
+			l, _ := net.Listen("tcp", "127.0.0.1:0")
+			port := l.Addr().(*net.TCPAddr).Port
+			l.Close()
+			tunnelSrc, tunnelName, tunnelArgs = b, filepath.Base(b), []string{"-l", "127.0.0.1", fmt.Sprint(port)}
+		}
+	}
+	ix := indexBinaries([]string{bin, filepath.Dir(sh), filepath.Dir(shellSrc), filepath.Dir(tunnelSrc)})
 	shID, ok := ix.identify(sh)
 	if !ok || shID.class != classShell {
 		t.Skipf("%s is not indexed as a shell (%+v)", sh, shID)
@@ -482,9 +496,9 @@ func TestDetectorSeesThroughRenamesAndDescriptors(t *testing.T) {
 		return c
 	}
 	procs := map[string]*exec.Cmd{
-		"renamed shell": start(sock(), cp(sh, filepath.Join(work, "esbuild")), "-c", "sleep 60; true"),
+		"renamed shell": start(sock(), cp(shellSrc, filepath.Join(work, "esbuild")), "-c", "sleep 60; true"),
 		"shell, fd 3":   start(sock(), sh, "-c", "sleep 60; true"),
-		"renamed socat": start(nil, cp(tail, filepath.Join(work, "dep-sync")), "-f", "/dev/null"),
+		"renamed socat": start(nil, cp(tunnelSrc, filepath.Join(work, "dep-sync")), tunnelArgs...),
 	}
 	var mu sync.Mutex
 	var reasons []string
@@ -502,24 +516,60 @@ func TestDetectorSeesThroughRenamesAndDescriptors(t *testing.T) {
 			d.started(c.Process.Pid)
 		}
 	}
+	// macOS kills a copy of a platform binary when it starts: there, that
+	// evasion cannot run at all.
+	// (A killed child is a zombie until reaped: alive is "not waited out".)
+	alive := func(c *exec.Cmd) bool {
+		done := make(chan struct{})
+		go func() { waitOnce(c); close(done) }()
+		select {
+		case <-done:
+			return false
+		case <-time.After(200 * time.Millisecond):
+			return true
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		for _, n := range []string{"renamed shell", "renamed socat"} {
+			if !alive(procs[n]) {
+				t.Logf("%s: the copy did not survive its start (a platform binary's copy)", n)
+				delete(procs, n)
+			}
+		}
+	}
 	d.scan()
 	mu.Lock()
 	got := strings.Join(reasons, "\n")
 	mu.Unlock()
-	shell := "reverse_shell: pid %d: " + shID.name + " with an inet socket on fd 3"
-	for name, want := range map[string]string{
-		"renamed shell": fmt.Sprintf(shell, procs["renamed shell"].Process.Pid),
-		"shell, fd 3":   fmt.Sprintf(shell, procs["shell, fd 3"].Process.Pid),
-		"renamed socat": fmt.Sprintf("tunnel_tool: pid %d: socat runs", procs["renamed socat"].Process.Pid),
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("%s: no %q in\n%s", name, want, got)
+	// line is the event about pid.
+	line := func(pid int) string {
+		for _, l := range strings.Split(got, "\n") {
+			if strings.Contains(l, fmt.Sprintf(": pid %d: ", pid)) {
+				return l
+			}
+		}
+		return ""
+	}
+	// What a shell is reported as is what its binary is (macOS's /bin/sh
+	// runs bash).
+	want := map[string][]string{"shell, fd 3": {"reverse_shell", "with an inet socket on fd 3"}}
+	shells := 1
+	if _, ok := procs["renamed shell"]; ok {
+		want["renamed shell"] = []string{"reverse_shell", "with an inet socket on fd 3", "run as esbuild"}
+		shells++
+	}
+	if _, ok := procs["renamed socat"]; ok {
+		want["renamed socat"] = []string{"tunnel_tool", tunnelName + " runs", "which is " + tunnelName + " run as dep-sync"}
+	}
+	for name, frags := range want {
+		l := line(procs[name].Process.Pid)
+		for _, f := range frags {
+			if !strings.Contains(l, f) {
+				t.Errorf("%s: no %q in %q (all:\n%s)", name, f, l, got)
+			}
 		}
 	}
-	if !strings.Contains(got, "which is "+shID.name+" run as esbuild") || !strings.Contains(got, "which is socat run as dep-sync") {
-		t.Errorf("the reasons do not name the copies:\n%s", got)
-	}
-	if n := strings.Count(got, "reverse_shell:"); n != 2 {
+	if n := strings.Count(got, "reverse_shell:"); n != shells {
 		t.Errorf("both shells holding a socket on fd 3 are reported (%d):\n%s", n, got)
 	}
 }

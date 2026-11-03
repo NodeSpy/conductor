@@ -307,13 +307,14 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	}
 	if privCommon != "" {
 		if goos == "darwin" {
-			// git's ref store uses the real common dir: its packed-refs and
-			// lock, as the refs beside them.
+			// git's ref store uses the real common dir: its packed-refs, the
+			// lock and the temporary file git writes the new one to, as the
+			// refs beside them.
 			real := p.GitCommon
 			if r, err := filepath.EvalSymlinks(real); err == nil {
 				real = r
 			}
-			for _, f := range []string{"packed-refs", "packed-refs.lock"} {
+			for _, f := range []string{"packed-refs", "packed-refs.lock", "packed-refs.new"} {
 				binds = append(binds, sandbox.BindMount{Path: filepath.Join(real, f)})
 			}
 		} else {
