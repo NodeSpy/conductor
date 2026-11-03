@@ -635,7 +635,8 @@ func TestSafeGitPathRefusesTheHomeOrAbove(t *testing.T) {
 	t.Cleanup(func() { GitTrust = old })
 	GitTrust.ObjectRoots = nil
 	GitTrust.Forbidden = nil
-	home := filepath.Join(t.TempDir(), "home")
+	// Callers pass resolved paths (macOS temp dirs sit behind /var).
+	home := filepath.Join(evalOr(t.TempDir()), "home")
 	os.MkdirAll(home, 0o700)
 	GitTrust.Home = home
 	if err := safeGitPath(home); err == nil {
