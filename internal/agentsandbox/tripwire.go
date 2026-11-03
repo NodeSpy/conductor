@@ -136,6 +136,13 @@ func (w *tripwire) watch(stop <-chan struct{}, hit func(reader string)) {
 		_, _ = f.WriteString(w.body())
 		f.Close()
 		hit(reader)
+		// A slow reader still has the pipe open at the next poll: one read
+		// is one hit. (The response to it has already been taken.)
+		select {
+		case <-stop:
+			return
+		case <-time.After(time.Second):
+		}
 	}
 }
 

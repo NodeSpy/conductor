@@ -87,7 +87,7 @@ func TestOutputSchemaStepPushTarget(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ws := linkedWorktree(t)
 			defer agentsandbox.Default.Forget(ws)
-			e, err := RegisterSandboxWorkspace(ws, "agent:fixer@a/b", "claude-code", &Request{DispatchID: "run1:address", Step: tc.step})
+			e, err := RegisterSandboxWorkspace(ws, "agent:fixer@a/b", "claude-code", &Request{DispatchID: "run1:address", Step: tc.step, Trigger: core.Trigger{TargetTrusted: true}})
 			if err != nil {
 				t.Fatal(err)
 			}

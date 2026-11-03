@@ -11,6 +11,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/flow"
 )
@@ -70,7 +71,7 @@ func prWorkspace(t *testing.T, dispatchID string, step config.Step) (ws, remote 
 	git(base, "push", "-q", "origin", "HEAD:main", "HEAD:refs/heads/pr-1")
 	git(base, "fetch", "-q", "origin")
 	git(base, "worktree", "add", "-q", "-B", "pr-1", ws, "origin/pr-1")
-	if _, err := dispatch.RegisterSandboxWorkspace(ws, "agent:fixer@a/b", "claude-code", &dispatch.Request{DispatchID: dispatchID, Step: step}); err != nil {
+	if _, err := dispatch.RegisterSandboxWorkspace(ws, "agent:fixer@a/b", "claude-code", &dispatch.Request{DispatchID: dispatchID, Step: step, Trigger: core.Trigger{TargetTrusted: true}}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { agentsandbox.Default.Forget(ws) })

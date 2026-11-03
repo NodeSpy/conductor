@@ -18,7 +18,7 @@ func TestProvisionWorktreeCreatesForPR(t *testing.T) {
 		return "wks_pr7", "/worktrees/o-r/pr7", nil
 	}
 	req := Request{
-		Trigger: core.Trigger{Kind: "review_requested",
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "review_requested",
 			Target: core.Target{Repo: "o/r", PR: 7, Number: 7}},
 		Action: config.Action{Type: "agent", Prompt: "review"},
 		Step:   config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
@@ -38,7 +38,7 @@ func TestProvisionWorktreeCreatesForPR(t *testing.T) {
 func TestProvisionWorktreeExplicitWorkDirWins(t *testing.T) {
 	d := newDispatcher()
 	req := Request{
-		Trigger: core.Trigger{Kind: "cron", Target: core.Target{Repo: "o/r", PR: 7, Number: 7}},
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "cron", Target: core.Target{Repo: "o/r", PR: 7, Number: 7}},
 		Action:  config.Action{Type: "agent", WorkDir: "~/somewhere", Prompt: "x"},
 	}
 	id, cwd, err := d.ProvisionWorktree(context.Background(), req)
@@ -70,7 +70,7 @@ func TestProvisionWorktreeNoRepoContext(t *testing.T) {
 
 func TestAgentEnvActsAsUser(t *testing.T) {
 	req := Request{
-		Trigger:     core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "o/r"}},
+		Trigger:     core.Trigger{TargetTrusted: true, Kind: "merge_conflict", Target: core.Target{Repo: "o/r"}},
 		Action:      config.Action{Type: "agent", Env: map[string]string{"EXTRA": "v-{{.repo}}"}},
 		Credentials: ghCreds("utok", "atok"),
 		Author:      Author{Name: "Me", Email: "me@example.com"},
@@ -103,7 +103,7 @@ func TestAgentEnvActsAsUser(t *testing.T) {
 
 func TestRenderPrompt(t *testing.T) {
 	req := Request{
-		Trigger: core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "o/r", PR: 7, Number: 7}},
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "merge_conflict", Target: core.Target{Repo: "o/r", PR: 7, Number: 7}},
 		Action:  config.Action{Type: "agent", Prompt: "fix {{.repo}}#{{.pr}}"},
 	}
 	got, err := RenderPrompt(req)

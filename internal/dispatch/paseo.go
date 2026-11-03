@@ -147,7 +147,10 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		if d.CheckoutDir != nil || (!d.DryRun && !req.Shadow) {
 			// Checkout resolution uses the (possibly remapped) paseo project, so an
 			// existing workspace is reused; forge ops still use the real Repo.
-			proj := req.Trigger.Target.CheckoutRepo()
+			proj, err := CheckoutRepo(req)
+			if err != nil {
+				return RunRef{}, err
+			}
 			dir, err := d.resolveCheckoutDir(ctx, proj)
 			if err != nil {
 				// The workspace never came up — an operator issue (a genuinely

@@ -130,7 +130,10 @@ func (p *Provisioner) ProvisionWorktree(ctx context.Context, req dispatch.Reques
 		return "", "", nil
 	}
 
-	repo := req.Trigger.Target.CheckoutRepo()
+	repo, err := dispatch.CheckoutRepo(req)
+	if err != nil {
+		return "", "", err
+	}
 	if repo == "" {
 		return "", "", dispatch.Unrecoverable(fmt.Errorf("gitwt: no repo in trigger; cannot create a %s worktree", strategy))
 	}

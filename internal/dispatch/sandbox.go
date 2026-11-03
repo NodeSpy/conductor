@@ -174,7 +174,11 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 			pt := *prev.Push
 			e.Push = &pt
 		case prev == nil && layout.GitDir != "":
-			e.Push = pushTarget(dir, layout, req.Trigger.Target.CheckoutRepo())
+			// Only a repo conductor may work in gets a push target: never
+			// one the event's sender named.
+			if repo, err := CheckoutRepo(*req); err == nil {
+				e.Push = pushTarget(dir, layout, repo)
+			}
 		}
 		if layout.GitDir != "" || prev == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
