@@ -3,6 +3,7 @@
 package agentsandbox
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -130,8 +131,15 @@ func TestSandboxDetectsAndGateways(t *testing.T) {
 	defer l.Cleanup()
 	cmd := exec.Command(l.Argv[0], l.Argv[1:]...)
 	cmd.Dir, cmd.Env = l.Dir, append(l.Env, "AGENTSANDBOX_DETECT=1", "DETECT_HOME="+home)
+	var buf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
 	start := time.Now()
-	out, err := cmd.CombinedOutput()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	LaunchStarted(cmd.Env, cmd.Process.Pid) // as every launcher does
+	err = cmd.Wait()
+	out := buf.Bytes()
 	t.Logf("child (%s, %v):\n%s", runtime.GOOS, time.Since(start), out)
 	mu.Lock()
 	defer mu.Unlock()
@@ -145,7 +153,7 @@ func TestSandboxDetectsAndGateways(t *testing.T) {
 	if time.Since(start) > 20*time.Second {
 		t.Fatal("killed too late")
 	}
-	if e := strings.Join(events, "\n"); !strings.Contains(e, "detection tripwire decoy credential .ssh/id_ed25519 read by pid") ||
+	if e := strings.Join(events, "\n"); !strings.Contains(e, "detection tripwire decoy credential .ssh/id_ed25519 read") ||
 		!strings.Contains(e, "model_gateway_refused") {
 		t.Fatalf("events %v", events)
 	}

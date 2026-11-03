@@ -9,13 +9,15 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // listProcs asks ps: every process's parent and marker (its environment,
 // -E), then the launch's own processes' argv and binary; lsof tells a
 // shell's stdio. macOS has no per-process view of a pty master, so the
 // pty-relay rule is Linux's only.
-func listProcs(marker string) func() ([]procInfo, error) {
+func listProcs(marker string, isRoot func(pid int) bool) func() ([]procInfo, error) {
 	needle := markerEnv + "=" + marker
 	return func() ([]procInfo, error) {
 		out, err := exec.Command("ps", "-Axww", "-E", "-o", "pid=,ppid=,pgid=,command=").Output()
@@ -34,7 +36,7 @@ func listProcs(marker string) func() ([]procInfo, error) {
 			if err1 != nil || err2 != nil || err3 != nil {
 				continue
 			}
-			all = append(all, procInfo{pid: pid, ppid: ppid, pgid: pgid, marked: strings.Contains(line, needle)})
+			all = append(all, procInfo{pid: pid, ppid: ppid, pgid: pgid, marked: strings.Contains(line, needle) || isRoot(pid)})
 		}
 		launch := launchProcs(all)
 		if len(launch) == 0 {
@@ -54,6 +56,7 @@ func listProcs(marker string) func() ([]procInfo, error) {
 			}
 			p.args = strings.Fields(a)
 			p.exe, p.comm = comm[p.pid], comm[p.pid]
+			p.start, _ = procStart(p.pid)
 			if shells[p.progName()] {
 				p.stdio = lsofStdio(p.pid)
 			}
@@ -105,13 +108,27 @@ func lsofStdio(pid int) [3]string {
 	return st
 }
 
-// signalProc SIGKILLs pid. macOS has no pidfd: the watcher listed it as
-// the launch's just before; the window for a reused pid is that scan.
-func signalProc(pid int, _ uint64) error {
+// signalProc SIGKILLs pid after checking it is still the process the
+// watcher saw (its start time). macOS has no pidfd: the window for a
+// reused pid is between that check and the kill.
+func signalProc(pid int, start uint64) error {
 	if !safeToSignal(pid) {
 		return errors.New("refusing to signal")
 	}
+	if st, ok := procStart(pid); !ok || (start != 0 && st != start) {
+		return errors.New("not the process seen")
+	}
 	return syscall.Kill(pid, syscall.SIGKILL)
+}
+
+// procStart is pid's start time (microseconds since the epoch).
+func procStart(pid int) (uint64, bool) {
+	k, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil || k.Proc.P_pid != int32(pid) {
+		return 0, false
+	}
+	t := k.Proc.P_starttime
+	return uint64(t.Sec)*1e6 + uint64(t.Usec), true
 }
 
 // ownPgid is this process's group: never one of a launch's.

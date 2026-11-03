@@ -187,6 +187,11 @@ type detector struct {
 	// or setpgid): a member that later leaves the tree — double-forked,
 	// its environment dropped — is still the launch's.
 	groups map[int]bool
+	// roots are the launch's root processes its launcher named
+	// (LaunchStarted), by pid and kernel start time: the tree's top even
+	// where the marker cannot be read (macOS hides the environment of
+	// platform and hardened-runtime binaries — sandbox-exec, ssh, sh).
+	roots map[int]uint64
 
 	closeOnce sync.Once
 	mu        sync.Mutex
@@ -394,7 +399,7 @@ func startDetection(p Policy, self string, event func(string, map[string]any)) (
 	for _, a := range p.Detect.Allow {
 		d.allow[strings.ToLower(a)] = true
 	}
-	d.list = listProcs(d.marker)
+	d.list = listProcs(d.marker, d.isRoot)
 	if p.Detect.NoTripwires {
 		removeTripwires(p.Home)
 	} else if !off {
@@ -404,8 +409,56 @@ func startDetection(p Policy, self string, event func(string, map[string]any)) (
 		}
 		d.wires = ws
 	}
+	launches.Store(d.marker, d)
 	d.start()
 	return d.marker, d.close, nil
+}
+
+// isRoot reports pid as a root the launcher named, still running as
+// itself (a root that is not is forgotten).
+func (d *detector) isRoot(pid int) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	start, ok := d.roots[pid]
+	if !ok {
+		return false
+	}
+	if st, ok := procStart(pid); !ok || st != start {
+		delete(d.roots, pid)
+		return false
+	}
+	return true
+}
+
+// started records pid as a root of the launch.
+func (d *detector) started(pid int) {
+	start, ok := procStart(pid)
+	if !ok || pid <= 1 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.roots == nil {
+		d.roots = map[int]uint64{}
+	}
+	d.roots[pid] = start
+}
+
+// launches are the running detectors, by marker.
+var launches sync.Map
+
+// LaunchStarted names pid as the root process of the launch whose
+// environment env is (its marker): the launcher calls it right after
+// starting the wrapped command. A no-op for a launch with no detection.
+func LaunchStarted(env []string, pid int) {
+	for _, kv := range env {
+		if m, ok := strings.CutPrefix(kv, markerEnv+"="); ok {
+			if d, ok := launches.Load(m); ok {
+				d.(*detector).started(pid)
+			}
+			return
+		}
+	}
 }
 
 // noteGroups remembers each process group a launch process leads.
@@ -430,6 +483,7 @@ func (d *detector) close() {
 }
 
 func (d *detector) shutdown() {
+	defer launches.Delete(d.marker)
 	if d.stop != nil {
 		close(d.stop)
 		d.done.Wait()

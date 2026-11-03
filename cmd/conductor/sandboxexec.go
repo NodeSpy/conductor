@@ -237,6 +237,7 @@ func runSandboxed(l *agentsandbox.Launch) int {
 		fmt.Fprintf(os.Stderr, "conductor sandbox exec: refusing to launch: start sandbox: %v\n", err)
 		return sandboxRefused
 	}
+	agentsandbox.LaunchStarted(l.Env, cmd.Process.Pid)
 	go func() {
 		for s := range sigs {
 			_ = cmd.Process.Signal(s)

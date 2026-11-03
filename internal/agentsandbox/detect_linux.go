@@ -14,9 +14,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// listProcs reads /proc: every process's parent, start time and marker,
-// and — for the launch's own processes — its argv, binary and descriptors.
-func listProcs(marker string) func() ([]procInfo, error) {
+// listProcs reads /proc: every process's parent, start time and marker
+// (or its being a root the launcher named), and — for the launch's own
+// processes — its argv, binary and descriptors.
+func listProcs(marker string, isRoot func(pid int) bool) func() ([]procInfo, error) {
 	needle := []byte("\x00" + markerEnv + "=" + marker + "\x00")
 	return func() ([]procInfo, error) {
 		ents, err := os.ReadDir("/proc")
@@ -43,6 +44,7 @@ func listProcs(marker string) func() ([]procInfo, error) {
 					}
 				}
 			}
+			p.marked = p.marked || isRoot(pid)
 			all = append(all, p)
 		}
 		launch := map[int]bool{}
@@ -152,6 +154,12 @@ func signalProc(pid int, start uint64) error {
 		return errors.New("not the process seen")
 	}
 	return unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0)
+}
+
+// procStart is pid's kernel start time.
+func procStart(pid int) (uint64, bool) {
+	p, ok := procStat(pid)
+	return p.start, ok
 }
 
 // ownPgid is this process's group: never one of a launch's.

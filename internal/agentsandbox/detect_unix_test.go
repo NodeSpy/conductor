@@ -1,0 +1,192 @@
+//go:build linux || darwin
+
+package agentsandbox
+
+import (
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+)
+
+// Real processes: a tunnel tool and a shell wired to a TCP socket, both of
+// the launch (its marker), are found and killed; a process outside the
+// launch is left alone. (Run in a PID namespace: the harness's wrapper.)
+func TestDetectorKillsRealProcesses(t *testing.T) {
+	fakeSSH := fakeTool(t, "ssh")
+	marker := newMarker()
+	env := append(os.Environ(), markerEnv+"="+marker)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go io.Copy(io.Discard, c)
+		}
+	}()
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sockFile, err := conn.(*net.TCPConn).File()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+
+	start := func(env []string, stdin *os.File, name string, args ...string) *exec.Cmd {
+		c := exec.Command(name, args...)
+		c.Env = env
+		if stdin != nil {
+			c.Stdin, c.Stdout = stdin, stdin
+		}
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Process.Kill(); waitOnce(c) })
+		return c
+	}
+	tunnel := start(env, nil, fakeSSH, "60")
+	shell := start(env, sockFile, "sh", "-c", "sleep 60; true")
+	bystander := start(os.Environ(), nil, fakeSSH, "60") // not the launch's
+	sockFile.Close()
+
+	var mu sync.Mutex
+	var kinds []string
+	d := &detector{spec: DetectSpec{Action: DetectKill}, run: "r", allow: map[string]bool{}, marker: marker,
+		signal: signalProc, reported: map[string]bool{},
+		event: func(_ string, f map[string]any) { mu.Lock(); kinds = append(kinds, f["kind"].(string)); mu.Unlock() }}
+	d.list = listProcs(marker, d.isRoot)
+	time.Sleep(200 * time.Millisecond) // let sh fork its sleep
+	if runtime.GOOS == "darwin" {
+		// macOS hides a platform binary's environment (sh, a copy of
+		// sleep): the launcher names its roots instead.
+		d.started(tunnel.Process.Pid)
+		d.started(shell.Process.Pid)
+	}
+	d.scan()
+
+	exited := func(c *exec.Cmd) bool {
+		ch := make(chan struct{})
+		go func() { waitOnce(c); close(ch) }()
+		select {
+		case <-ch:
+			return true
+		case <-time.After(5 * time.Second):
+			return false
+		}
+	}
+	if !exited(tunnel) || !exited(shell) {
+		t.Fatalf("the launch's processes were not killed (events %v)", kinds)
+	}
+	mu.Lock()
+	got := strings.Join(kinds, ",")
+	mu.Unlock()
+	if !strings.Contains(got, "tunnel_tool") {
+		t.Fatalf("events %s", got)
+	}
+	if err := bystander.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatal("a process outside the launch was killed")
+	}
+
+	// Alert: the reverse shell is reported, nothing killed.
+	conn2, _ := net.Dial("tcp", ln.Addr().String())
+	f2, _ := conn2.(*net.TCPConn).File()
+	conn2.Close()
+	sh2 := start(env, f2, "sh", "-c", "sleep 60; true")
+	f2.Close()
+	kinds = nil
+	d2 := &detector{spec: DetectSpec{Action: DetectAlert}, run: "r", allow: map[string]bool{}, marker: marker,
+		signal: signalProc, reported: map[string]bool{},
+		event: func(_ string, f map[string]any) { mu.Lock(); kinds = append(kinds, f["kind"].(string)); mu.Unlock() }}
+	d2.list = listProcs(marker, d2.isRoot)
+	time.Sleep(200 * time.Millisecond)
+	if runtime.GOOS == "darwin" {
+		d2.started(sh2.Process.Pid)
+	}
+	d2.scan()
+	mu.Lock()
+	got = strings.Join(kinds, ",")
+	mu.Unlock()
+	if !strings.Contains(got, "reverse_shell") {
+		t.Fatalf("reverse shell not reported: %s", got)
+	}
+	if err := sh2.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatal("alert killed")
+	}
+}
+
+var waits sync.Map
+
+// waitOnce reaps c once, however many callers wait.
+func waitOnce(c *exec.Cmd) {
+	o, _ := waits.LoadOrStore(c, &sync.Once{})
+	o.(*sync.Once).Do(func() { _ = c.Wait() })
+}
+
+// A root the launcher names is followed without its marker: its
+// descendants are the launch's, and a pid that is no longer that process
+// is forgotten.
+func TestDetectorFollowsTheRootItsLauncherNames(t *testing.T) {
+	fakeSSH := fakeTool(t, "ssh")
+	marker, closer, err := startDetection(Policy{Workspace: t.TempDir(), Home: t.TempDir(),
+		Detect: DetectSpec{Interval: 50 * time.Millisecond, NoTripwires: true}, Limits: LimitSpec{Off: true}}, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer()
+	root := exec.Command("sh", "-c", fakeSSH+" 60; true") // no marker in its environment
+	if err := root.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Process.Kill(); waitOnce(root) })
+	LaunchStarted([]string{"PATH=/bin", markerEnv + "=someone-else"}, root.Process.Pid) // another launch's: ignored
+	ch := make(chan struct{})
+	go func() { waitOnce(root); close(ch) }()
+	select {
+	case <-ch:
+		t.Fatal("killed through another launch's marker")
+	case <-time.After(500 * time.Millisecond):
+	}
+	LaunchStarted([]string{markerEnv + "=" + marker}, root.Process.Pid)
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the named root's tunnel tool was not killed")
+	}
+}
+
+// fakeTool is a copy of sleep named name (macOS kills a copied platform
+// binary unless it is re-signed).
+func fakeTool(t *testing.T, name string) string {
+	t.Helper()
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep")
+	}
+	p := filepath.Join(t.TempDir(), name)
+	b, _ := os.ReadFile(sleep)
+	if err := os.WriteFile(p, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "darwin" {
+		if out, err := exec.Command("codesign", "-s", "-", "-f", p).CombinedOutput(); err != nil {
+			t.Skipf("codesign: %v %s", err, out)
+		}
+	}
+	return p
+}

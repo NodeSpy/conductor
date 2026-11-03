@@ -205,7 +205,11 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 // fresh token, or a daemon with the skill broker unwired. Scanning env for
 // the token (rather than requiring the caller to thread it through
 // separately) keeps every Start() call site's change to one line.
+//
+// It also names pid to the launch's containment watcher as the root of its
+// process tree (agentsandbox.LaunchStarted).
 func bindSandboxRoot(env []string, pid int) {
+	agentsandbox.LaunchStarted(env, pid)
 	b := skill.Active()
 	if b == nil {
 		return
