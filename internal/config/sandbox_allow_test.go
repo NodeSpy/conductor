@@ -44,6 +44,12 @@ func TestScopedAllowanceLoadsAndIsListed(t *testing.T) {
 	if cfg.Workflows["review"].Isolation != nil {
 		t.Fatal("the other workflow got an isolation")
 	}
+	if d := cfg.Workflows["deploy"].Isolation.Detect; d.Origin != "workflow deploy" {
+		t.Fatalf("deploy's detection override is not labelled: %+v", d)
+	}
+	if site := cfg.SandboxScopeSources().Sites["workflow deploy"]; site == nil || site.Allow != a {
+		t.Fatalf("deploy is not a scope source: %+v", site)
+	}
 	if cfg.Sandbox.Allow.Origin != "sandbox" {
 		t.Fatalf("global origin %q", cfg.Sandbox.Allow.Origin)
 	}
@@ -148,7 +154,11 @@ func TestPackAllowanceTakesEffectOnlyWhenGranted(t *testing.T) {
 		t.Fatalf("validate does not show the request:\n%s", notes)
 	}
 
-	cfg, err = load(allowPack, "    grant: [tunnel]\n")
+	pin := PackAllowance{Steps: []string{"review/look"}, Allow: SandboxAllow{Tunnels: []string{"cloudflared@*.trycloudflare.com"}}}.Digest()
+	if !strings.Contains(notes, "grant: [tunnel@"+pin+"]") {
+		t.Fatalf("validate does not print the pinned grant to write:\n%s", notes)
+	}
+	cfg, err = load(allowPack, "    grant: [tunnel@"+pin+"]\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +171,7 @@ func TestPackAllowanceTakesEffectOnlyWhenGranted(t *testing.T) {
 		t.Fatal("a grant reached a step its request does not name")
 	}
 	notes = strings.Join(cfg.AllowanceNotes(), "\n")
-	if !strings.Contains(notes, "pack rv grant tunnel: tunnel tools cloudflared@*.trycloudflare.com") || strings.Contains(notes, "NOT granted") {
+	if !strings.Contains(notes, "pack rv grant tunnel (pinned @"+pin+"): tunnel tools cloudflared@*.trycloudflare.com") || strings.Contains(notes, "NOT granted") {
 		t.Fatalf("validate after the grant:\n%s", notes)
 	}
 
@@ -178,7 +188,7 @@ func TestPackAllowanceTakesEffectOnlyWhenGranted(t *testing.T) {
 		if body == allowPack {
 			t.Fatalf("%s: fixture edit did not apply", name)
 		}
-		if _, err := load(body, "    grant: [tunnel]\n"); err == nil || !strings.Contains(err.Error(), "never loosen") {
+		if _, err := load(body, "    grant: [tunnel@"+pin+"]\n"); err == nil || !strings.Contains(err.Error(), "never loosen") {
 			t.Errorf("%s: a pack loosened its own sandbox: %v", name, err)
 		}
 	}
@@ -189,5 +199,48 @@ func TestPackAllowanceTakesEffectOnlyWhenGranted(t *testing.T) {
 	}
 	if a := cfg.Workflows["rv/review"].Steps[1].Isolation.Allow; a == nil || a.Origin == "" {
 		t.Fatalf("the operator's overlay allowance: %+v", a)
+	}
+}
+
+// A grant binds to the allowance the operator reviewed: an unpinned grant
+// is refused with the pin to write, and a pack version that changes a
+// granted allowance (what it allows or which steps) fails to load until it
+// is re-granted; rewording its reason does not.
+func TestPackGrantIsPinnedToTheReviewedAllowance(t *testing.T) {
+	load := func(pack, inst string) (*Config, error) {
+		t.Helper()
+		dir := t.TempDir()
+		writePackSource(t, dir, "src/rv", pack)
+		return resolveAndLoad(t, writeDoc(t, dir, "connectors:\n  svc: { use: web }\npacks:\n  rv:\n    source: ./src/rv\n    connectors: { svc: svc }\n"+inst))
+	}
+	pin := PackAllowance{Steps: []string{"review/look"}, Allow: SandboxAllow{Tunnels: []string{"cloudflared@*.trycloudflare.com"}}}.Digest()
+	if _, err := load(allowPack, "    grant: [tunnel]\n"); err == nil || !strings.Contains(err.Error(), "not pinned") || !strings.Contains(err.Error(), "grant: [tunnel@"+pin+"]") {
+		t.Fatalf("an unpinned grant: %v", err)
+	}
+	cfg, err := load(allowPack, "    grant: [tunnel@"+pin+"]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src := cfg.SandboxScopeSources(); src.Grants["pack rv grant tunnel"] == nil {
+		t.Fatalf("the grant is not a scope source: %+v", src.Grants)
+	}
+	for name, edit := range map[string][2]string{
+		"widened":       {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], reverse_shell: true, pty: true }"},
+		"retargeted":    {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [\"x@*\"] }"},
+		"another step":  {"steps: [review/look]", "steps: [review/look, review/post]"},
+		"non_tls added": {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], non_tls: [bastion.example:22] }"},
+	} {
+		body := strings.Replace(allowPack, edit[0], edit[1], 1)
+		if body == allowPack {
+			t.Fatalf("%s: fixture edit did not apply", name)
+		}
+		_, err := load(body, "    grant: [tunnel@"+pin+"]\n")
+		if err == nil || !strings.Contains(err.Error(), "changed since you granted it") {
+			t.Errorf("%s: a changed allowance was applied under the old grant: %v", name, err)
+		}
+	}
+	reworded := strings.Replace(allowPack, "publishes a preview through a tunnel", "shares a preview", 1)
+	if _, err := load(reworded, "    grant: [tunnel@"+pin+"]\n"); err != nil {
+		t.Fatalf("a reworded reason broke the grant: %v", err)
 	}
 }

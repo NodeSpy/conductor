@@ -352,7 +352,7 @@ func isolationLoosens(iso *IsolationConfig, agent bool) string {
 	case iso.Mode == "none":
 		return "{mode: none} (no sandbox at all)"
 	case iso.Allow != nil:
-		return "allow: (a sandbox allowance) — a pack requests one under allowances: in its manifest and the operator grants it (`packs: { <instance>: { grant: [<name>] } }`), or the operator writes it"
+		return "allow: (a sandbox allowance) — a pack requests one under allowances: in its manifest and the operator grants it (`packs: { <instance>: { grant: [<name>@<digest>] } }`, as validate prints it), or the operator writes it"
 	case iso.Detect != nil && (iso.Detect.Action == "alert" || iso.Detect.Action == "off" || (iso.Detect.Tripwires != nil && !*iso.Detect.Tripwires)):
 		return "detect: (weaker detection)"
 	case iso.EgressLimits != nil:

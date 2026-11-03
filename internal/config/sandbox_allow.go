@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"sort"
@@ -37,6 +39,22 @@ type SandboxAllow struct {
 	// Origin names the scope that wrote it (set at load: the audit and
 	// validate show it).
 	Origin string `yaml:"-"`
+	// Pin is a granted pack allowance's digest (PackAllowance.Digest).
+	Pin string `yaml:"-"`
+}
+
+// Digest pins a pack's requested allowance: the steps it names and what it
+// allows (not its reason's wording). A grant names it (`grant:
+// [name@digest]`), so a pack update that changes either is not granted.
+func (a PackAllowance) Digest() string {
+	sorted := func(l []string) string {
+		c := append([]string(nil), l...)
+		sort.Strings(c)
+		return strings.Join(c, "\x00")
+	}
+	h := sha256.Sum256([]byte(fmt.Sprintf("v1\nsteps=%s\ntunnels=%s\nnon_tls=%s\nreverse_shell=%t\npty=%t\n",
+		sorted(a.Steps), sorted(a.Allow.Tunnels), sorted(a.Allow.NonTLS), a.Allow.ReverseShell, a.Allow.Pty)))
+	return hex.EncodeToString(h[:8])
 }
 
 // IsolationDetect overrides sandbox.detect for one scope.
@@ -45,6 +63,8 @@ type IsolationDetect struct {
 	Action string `yaml:"action,omitempty"`
 	// Tripwires plants decoy credentials (default: sandbox.detect's).
 	Tripwires *bool `yaml:"tripwires,omitempty"`
+	// Origin names the scope that wrote it (set at load).
+	Origin string `yaml:"-"`
 }
 
 // Empty reports an allowance that allows nothing.
@@ -248,7 +268,37 @@ func (c *Config) labelAllowances() {
 		if iso.Allow != nil && iso.Allow.Origin == "" {
 			iso.Allow.Origin = where
 		}
+		if iso.Detect != nil && iso.Detect.Origin == "" {
+			iso.Detect.Origin = where
+		}
+		if iso.EgressLimits != nil && iso.EgressLimits.Origin == "" {
+			iso.EgressLimits.Origin = where
+		}
 	})
+}
+
+// ScopeSources are the live config's sandbox scopes by the names their
+// knobs carry (Origin): each isolation: block an agent launch can resolve
+// to, and each allowance the operator granted a pack. A scope recorded
+// with a workspace is recomputed from these (dispatch.Rescope), so a
+// revoked grant or a removed allow: stops applying at once.
+type ScopeSources struct {
+	Sites  map[string]*IsolationConfig
+	Grants map[string]*SandboxAllow
+}
+
+// SandboxScopeSources are c's ScopeSources.
+func (c *Config) SandboxScopeSources() ScopeSources {
+	src := ScopeSources{Sites: map[string]*IsolationConfig{}, Grants: map[string]*SandboxAllow{}}
+	c.scopeSandboxSites(func(where string, iso *IsolationConfig) {
+		if _, dup := src.Sites[where]; !dup {
+			src.Sites[where] = iso
+		}
+	})
+	for k, a := range c.grantedAllowances {
+		src.Grants[k] = a
+	}
+	return src
 }
 
 // AllowanceNotes are the loosenings of the agent sandbox in effect, one
@@ -285,7 +335,15 @@ func (c *Config) AllowanceNotes() []string {
 	})
 	c.WalkSteps(func(scope IdentityScope, slot int, s *Step) {
 		if !s.GrantedAllow.Empty() {
-			notes = append(notes, fmt.Sprintf("%s: %s: %s", StepLabel(scope, slot, *s), s.GrantedAllow.Origin, s.GrantedAllow.Describe()))
+			// Each grant with the digest it is pinned to.
+			var by []string
+			for _, o := range strings.Split(s.GrantedAllow.Origin, " + ") {
+				if g := c.grantedAllowances[o]; g != nil && g.Pin != "" {
+					o += " (pinned @" + g.Pin + ")"
+				}
+				by = append(by, o)
+			}
+			notes = append(notes, fmt.Sprintf("%s: %s: %s", StepLabel(scope, slot, *s), strings.Join(by, " + "), s.GrantedAllow.Describe()))
 		}
 	})
 	notes = append(notes, c.allowanceRequests...)
@@ -313,10 +371,19 @@ func firstNonEmptyString(a, b string) string {
 // to the pack steps each names, and records the ones still only requested.
 func (st *packInstantiation) applyAllowanceGrants(ns string, inst PackInstance, man *PackManifest) error {
 	granted := map[string]bool{}
-	for _, name := range inst.Grant {
+	for _, g := range inst.Grant {
+		name, pin, _ := strings.Cut(g, "@")
 		req, ok := man.Allowances[name]
 		if !ok {
 			return fmt.Errorf("pack %q: grant: %q names no allowance this pack requests (requested: %s)", ns, name, sortedKeys(man.Allowances))
+		}
+		// A grant is for the allowance the operator reviewed, not for
+		// whatever a later version of the pack puts under its name.
+		if d := req.Digest(); pin != d {
+			if pin == "" {
+				return fmt.Errorf("pack %q: grant: %q is not pinned to what you reviewed: it allows %s for %s; to grant exactly that, write `grant: [%s@%s]`", ns, name, req.Allow.Describe(), strings.Join(req.Steps, ", "), name, d)
+			}
+			return fmt.Errorf("pack %q: allowance %q changed since you granted it (granted %s, now %s): it now allows %s for %s; it is not applied until you review it and re-grant `%s@%s`", ns, name, pin, d, req.Allow.Describe(), strings.Join(req.Steps, ", "), name, d)
 		}
 		if err := validateSandboxAllow(fmt.Sprintf("pack %q allowances.%s.allow", ns, name), &req.Allow); err != nil {
 			return err
@@ -331,7 +398,12 @@ func (st *packInstantiation) applyAllowanceGrants(ns string, inst PackInstance, 
 			}
 			a := req.Allow
 			a.Origin = fmt.Sprintf("pack %s grant %s", ns, name)
+			a.Pin = req.Digest()
 			s.GrantedAllow = UnionAllow(s.GrantedAllow, &a)
+			if st.cfg.grantedAllowances == nil {
+				st.cfg.grantedAllowances = map[string]*SandboxAllow{}
+			}
+			st.cfg.grantedAllowances[a.Origin] = &a
 		}
 		granted[name] = true
 	}
@@ -341,8 +413,8 @@ func (st *packInstantiation) applyAllowanceGrants(ns string, inst PackInstance, 
 		}
 		req := man.Allowances[name]
 		st.cfg.allowanceRequests = append(st.cfg.allowanceRequests, fmt.Sprintf(
-			"pack %s requests sandbox allowance %q for %s (%s): %s — NOT granted; it applies only if you add `grant: [%s]` to packs: %s",
-			ns, name, strings.Join(req.Steps, ", "), firstNonEmptyString(req.Reason, "no reason given"), req.Allow.Describe(), name, ns))
+			"pack %s requests sandbox allowance %q for %s (%s): %s — NOT granted; it applies only if you add `grant: [%s@%s]` to packs: %s",
+			ns, name, strings.Join(req.Steps, ", "), firstNonEmptyString(req.Reason, "no reason given"), req.Allow.Describe(), name, req.Digest(), ns))
 	}
 	return nil
 }

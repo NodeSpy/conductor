@@ -295,6 +295,9 @@ type Config struct {
 	// allowanceRequests are the sandbox allowances packs requested that the
 	// operator has not granted (validate shows them).
 	allowanceRequests []string `yaml:"-"`
+	// grantedAllowances are the pack allowances the operator granted, by
+	// their Origin ("pack <ns> grant <name>").
+	grantedAllowances map[string]*SandboxAllow `yaml:"-"`
 }
 
 // Update configures periodic self-update checks.

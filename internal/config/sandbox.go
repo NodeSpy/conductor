@@ -103,6 +103,9 @@ type SandboxEgressLimits struct {
 	// further model requests refused.
 	ModelUpload   string `yaml:"model_upload,omitempty"`
 	ModelDownload string `yaml:"model_download,omitempty"`
+	// Origin names the isolation: scope that wrote it (set at load; empty
+	// for sandbox.egress_limits).
+	Origin string `yaml:"-"`
 }
 
 // sizes are the byte-size knobs by name.
@@ -264,7 +267,6 @@ func (s *SandboxConfig) DetectInterval() time.Duration {
 	return d
 }
 
-// DetectAllow is sandbox.detect.allow.
 // DetectConnections is sandbox.detect.connections ("alert" by default;
 // "off" when detection is off).
 func (s *SandboxConfig) DetectConnections() string {
@@ -277,6 +279,7 @@ func (s *SandboxConfig) DetectConnections() string {
 	return s.Detect.Connections
 }
 
+// DetectAllow is sandbox.detect.allow.
 func (s *SandboxConfig) DetectAllow() []string {
 	if s == nil || s.Detect == nil {
 		return nil
