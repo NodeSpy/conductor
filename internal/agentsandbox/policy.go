@@ -76,6 +76,9 @@ type Policy struct {
 	// agent authenticates its model traffic (CredGateway, CredLoginCopy,
 	// CredLoginShare).
 	ModelCredential string `json:"model_credential,omitempty"`
+	// Limits are the launch's resource limits and disk guard
+	// (sandbox.limits; the zero value is the default).
+	Limits LimitSpec `json:"limits,omitempty"`
 	// Detect is the launch's detection (sandbox.detect; the zero value is
 	// the strict default).
 	Detect DetectSpec `json:"detect,omitempty"`
@@ -211,6 +214,9 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	if d.SelfExe == nil || d.LookPath == nil {
 		return nil, fmt.Errorf("agentsandbox: launcher not wired")
 	}
+	if why := p.Limits.diskLow(p.Workspace, p.Home); why != "" {
+		return nil, fmt.Errorf("agentsandbox: not launching: %s", why)
+	}
 	goos := sandbox.CheckGOOS
 	argv = append([]string(nil), argv...)
 	if !filepath.IsAbs(argv[0]) {
@@ -312,6 +318,9 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	}
 
 	spec := &sandbox.Spec{Mode: "namespace", Deny: true, HasEgress: len(p.Egress) > 0, Egress: append([]string(nil), p.Egress...)}
+	if err := applyLimits(spec, p.Limits, goos, d.Event); err != nil {
+		return nil, err
+	}
 	deps := sandbox.LocalWrapDeps{
 		SelfExe:    func() (string, error) { return self, nil },
 		Confine:    true,

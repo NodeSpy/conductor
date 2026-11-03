@@ -249,3 +249,14 @@ func canon(p string) string {
 		dir = parent
 	}
 }
+
+// entries is a snapshot of every registered workspace.
+func (r *Registry) entries() []Entry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Entry, 0, len(r.byWS))
+	for _, e := range r.byWS {
+		out = append(out, e)
+	}
+	return out
+}

@@ -128,6 +128,17 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		// identity and granted verbs. nil when no bots are configured.
 		Session: botSessionLookup,
 	}
+	if l := cfg.Sandbox.Limits; l != nil {
+		r.Limits = agentsandbox.LimitSpec{Off: l.Off, Memory: l.Memory, Pids: l.Pids, Required: l.Required}
+	}
+	r.Limits.DiskFreeFrac, r.Limits.DiskFreeBytes, r.Limits.DiskOff = cfg.Sandbox.DiskFreeMin()
+	r.Persist = cfg.Sandbox.PersistMode()
+	if !r.Limits.Off {
+		// All agents together: the slice their launch scopes run in.
+		if err := agentsandbox.CapAgentSlice(runtime.GOOS, cfg.Sandbox.AggregateMemory()); err != nil {
+			logf("agent sandbox: limits: %v (each launch keeps its own cap)", err)
+		}
+	}
 	idle, up, down := cfg.Sandbox.AgentEgressLimits()
 	r.EgressIdle, r.EgressUpload, r.EgressDownload = int64(idle), up, down
 	if err := os.MkdirAll(r.StateRoot, 0o700); err != nil {

@@ -177,6 +177,11 @@ type detector struct {
 
 	git   *gitGuard
 	wires []*tripwire
+	// off: detection is off — only the disk guard runs.
+	off bool
+	// diskLow names a filesystem of the launch below the disk guard's
+	// minimum ("" = fine; nil = no guard).
+	diskLow func() string
 
 	// groups are process groups a launch process leads (it called setsid
 	// or setpgid): a member that later leaves the tree — double-forked,
@@ -215,8 +220,11 @@ func (d *detector) start() {
 			case <-d.stop:
 				return
 			case <-t.C:
-				d.scan()
-				d.checkGit()
+				if !d.off {
+					d.scan()
+					d.checkGit()
+				}
+				d.checkDisk()
 			}
 		}
 	}()
@@ -364,14 +372,24 @@ func (d *detector) killAll() int {
 // startDetection arms p's detection around a launch and returns the
 // marker its root process must carry and the closer (nil, nil: off).
 func startDetection(p Policy, self string, event func(string, map[string]any)) (string, func(), error) {
-	if p.Detect.action() == DetectOff {
+	off := p.Detect.action() == DetectOff
+	diskOn := !p.Limits.Off && !p.Limits.DiskOff
+	if off {
 		removeTripwires(p.Home)
-		return "", nil, nil
+		if !diskOn {
+			return "", nil, nil
+		}
 	}
 	d := &detector{
 		spec: p.Detect, run: p.EgressSession().Run, marker: newMarker(), self: self,
-		allow: map[string]bool{}, event: event, signal: signalProc,
-		git: newGitGuard(p.Workspace),
+		allow: map[string]bool{}, event: event, signal: signalProc, off: off,
+	}
+	if !off {
+		d.git = newGitGuard(p.Workspace)
+	}
+	if diskOn {
+		lim, ws, home := p.Limits, p.Workspace, p.Home
+		d.diskLow = func() string { return lim.diskLow(ws, home) }
 	}
 	for _, a := range p.Detect.Allow {
 		d.allow[strings.ToLower(a)] = true
@@ -379,7 +397,7 @@ func startDetection(p Policy, self string, event func(string, map[string]any)) (
 	d.list = listProcs(d.marker)
 	if p.Detect.NoTripwires {
 		removeTripwires(p.Home)
-	} else {
+	} else if !off {
 		ws, err := plantTripwires(p.Home)
 		if err != nil {
 			return "", nil, err
@@ -420,6 +438,29 @@ func (d *detector) shutdown() {
 	if n := d.killAll(); n > 0 && d.event != nil {
 		d.event("leftover_killed", map[string]any{"run": d.run, "processes": n})
 	}
+}
+
+// checkDisk stops the launch when its disk is nearly full — whatever the
+// detection action: it is a limit, not a detection.
+func (d *detector) checkDisk() {
+	if d.diskLow == nil {
+		return
+	}
+	why := d.diskLow()
+	if why == "" {
+		return
+	}
+	d.mu.Lock()
+	first := !d.reported["disk"]
+	d.reported["disk"] = true
+	d.mu.Unlock()
+	if !first {
+		return
+	}
+	if d.event != nil {
+		d.event("limit", map[string]any{"run": d.run, "kind": "disk_low", "reason": why, "action": "kill"})
+	}
+	d.killAll()
 }
 
 func (d *detector) checkGit() {

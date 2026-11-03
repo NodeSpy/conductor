@@ -49,6 +49,10 @@ type Resolver struct {
 	ModelCredential string
 	// Detect is sandbox.detect (Policy.Detect).
 	Detect DetectSpec
+	// Limits is sandbox.limits (Policy.Limits).
+	Limits LimitSpec
+	// Persist is sandbox.persist ("" = PersistNone).
+	Persist string
 	// EgressAnyBytes / EgressIdle / EgressUpload / EgressDownload are the
 	// egress session settings every policy carries (Policy).
 	EgressAnyBytes                           bool
@@ -197,8 +201,10 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 	if e.Identity == "" {
 		return Policy{}, fmt.Errorf("agentsandbox: workspace %s has no identity", e.Workspace)
 	}
+	r.maybeSweep()
+	homeRoot, homeKey := r.homeFor(e)
 	home, logins, err := PrepareHome(HomeSpec{
-		Root: r.StateRoot, Key: e.Identity, Tool: tool, RealHome: r.RealHome,
+		Root: homeRoot, Key: homeKey, Tool: tool, RealHome: r.RealHome,
 		GitName: r.GitName, GitEmail: r.GitEmail, GOOS: r.GOOS,
 		ShareLogins: r.ModelCredential == CredLoginShare,
 	})
@@ -226,13 +232,18 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		}
 	}
 	p := Policy{
-		ModelCredential: r.ModelCredential, ModelHosts: modelHosts, Detect: r.Detect,
+		ModelCredential: r.ModelCredential, ModelHosts: modelHosts, Detect: r.Detect, Limits: r.Limits,
 		Identity: e.Identity, Tool: tool, Workspace: e.Workspace, Home: home, Logins: logins,
 		Egress: egress, Loopback: loopback,
 		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env,
 		PosixIPC: r.PosixIPC,
 		Run:      e.Dispatch, EgressAnyBytes: r.EgressAnyBytes, EgressIdle: r.EgressIdle,
 		EgressUpload: r.EgressUpload, EgressDownload: r.EgressDownload,
+	}
+	if cache, err := r.persistCache(e, home); err != nil {
+		return Policy{}, fmt.Errorf("agentsandbox: identity cache: %w", err)
+	} else if cache != "" {
+		p.ReadWrite = append(append([]string(nil), p.ReadWrite...), cache)
 	}
 	if g := r.GoPrefetch; g != nil {
 		p.ReadOnly = append(append([]string(nil), p.ReadOnly...), g.Cache)

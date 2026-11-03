@@ -345,7 +345,7 @@ func (c *Config) validateSandbox() error {
 				return fmt.Errorf("config: sandbox.limits.%s %q: want a percentage (50%%) or a size (4G)", name, v)
 			}
 		}
-		if v := l.DiskFreeMin; v != "" && !strings.HasSuffix(v, "%") {
+		if v := l.DiskFreeMin; v != "" && !strings.HasSuffix(v, "%") && !strings.EqualFold(v, "off") {
 			if _, err := ParseByteSize(v); err != nil {
 				return fmt.Errorf("config: sandbox.limits.disk_free_min: %w", err)
 			}
@@ -384,6 +384,32 @@ func ParseByteSize(v string) (int64, error) {
 		return 0, fmt.Errorf("%q: unknown unit", v)
 	}
 	return n * mult, nil
+}
+
+// DiskFreeMin is sandbox.limits.disk_free_min parsed: a fraction ("5%"),
+// a size, or off. All zero: the default.
+func (s *SandboxConfig) DiskFreeMin() (frac float64, bytes int64, off bool) {
+	if s == nil || s.Limits == nil {
+		return 0, 0, false
+	}
+	v := strings.TrimSpace(s.Limits.DiskFreeMin)
+	if strings.EqualFold(v, "off") {
+		return 0, 0, true
+	}
+	if p, ok := strings.CutSuffix(v, "%"); ok {
+		f, _ := strconv.ParseFloat(p, 64)
+		return f / 100, 0, false
+	}
+	b, _ := ParseByteSize(v)
+	return 0, b, false
+}
+
+// AggregateMemory is sandbox.limits.aggregate_memory (default 75%).
+func (s *SandboxConfig) AggregateMemory() string {
+	if s == nil || s.Limits == nil || s.Limits.AggregateMemory == "" {
+		return "75%"
+	}
+	return s.Limits.AggregateMemory
 }
 
 // AgentEgressLimits are sandbox.egress_limits parsed: idle, upload and

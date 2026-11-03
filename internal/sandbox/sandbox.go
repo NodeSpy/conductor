@@ -51,6 +51,7 @@ type Spec struct {
 	Memory    string // cgroup/engine memory cap ("2g"); empty = none
 	CPU       string // cgroup CPUQuota ("200%") / engine --cpus ("2"); empty = none
 	Pids      int    // max tasks/pids; 0 = none
+	Slice     string // systemd slice the limits scope runs in (an aggregate cap); "" = the default
 	Deny      bool   // structural no-network (namespace --net / --network=none)
 	Egress    []string
 	HasEgress bool // a network: block was present (even empty ⇒ deny-all proxy)
@@ -359,6 +360,9 @@ func (s *Spec) systemdPrefix() []string {
 		return nil
 	}
 	out := []string{"systemd-run", "--user", "--scope", "--quiet", "--collect"}
+	if s.Slice != "" {
+		out = append(out, "--slice="+s.Slice)
+	}
 	if s.Memory != "" {
 		out = append(out, "-p", "MemoryMax="+s.Memory)
 	}
