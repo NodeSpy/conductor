@@ -27,7 +27,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
-	"github.com/NodeSpy/conductor/pkg/expr"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
@@ -1608,10 +1607,14 @@ func agentWaitTimeout(p config.Step) time.Duration {
 
 // remediate runs one step of a declared remediation. handled=true means the
 // trigger is done for now: the run is still in flight (its completion
-// re-triggers), or the remedy was requested (a fresh failure re-triggers).
-// false falls through to dispatching the fixer.
+// re-triggers), the declared triage says its failure is not one to act on,
+// or the remedy was requested (a fresh failure re-triggers). false falls
+// through to dispatching the fixer.
 func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.RemediateSemantics, act config.Action, key, head string, run any) bool {
-	waitKey := fmt.Sprintf("%s|%v", key, run)
+	// A run id arrives as a JSON number (float64): print it as the integer
+	// it is, not 4.166e+10.
+	runID := toInt64(run)
+	waitKey := fmt.Sprintf("%s|%d", key, runID)
 	// This call runs synchronously in process(), fed by Run's single
 	// dispatch loop: unlike most invoke call sites it deliberately does NOT
 	// go through connector.RetryContract (which sleeps). On rate_limited/
@@ -1642,19 +1645,45 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 	// error): a later, unrelated rate_limited/not_ready answer for this
 	// status verb gets its own full re-emit budget.
 	e.clearDeferredFor(t, "remediation status "+rem.Status.Verb)
+	// A failed status read leaves nothing to triage: the run is remedied as
+	// an ordinary failure, as before.
+	verdict := sdk.RemediationRemedy
 	if err == nil {
-		done, eerr := expr.Eval(rem.Status.DoneWhen, out)
-		if eerr == nil && !done {
-			// Every sibling event of a still-running run lands here; say it
-			// once per run and state, not once per event.
-			state := fmt.Sprint(out["status"])
-			if prev, _ := e.runWait.Swap(waitKey, state); prev != state {
-				e.log("%s run %v still %s — waiting for it to finish", tag(t), run, state)
-			}
-			return true
+		var terr error
+		verdict, terr = t.Semantics().RemediateVerdict(out)
+		if terr != nil {
+			e.log("%s remediation triage for run %d: %v", tag(t), runID, terr)
 		}
 	}
+	if verdict == sdk.RemediationWait {
+		// Every sibling event of a still-running run lands here; say it
+		// once per run and state, not once per event.
+		state := fmt.Sprint(out["status"])
+		if prev, _ := e.runWait.Swap(waitKey, state); prev != state {
+			e.log("%s run %d still %s — waiting for it to finish", tag(t), runID, state)
+		}
+		return true
+	}
 	e.runWait.Delete(waitKey)
+	switch verdict {
+	case sdk.RemediationSkip:
+		// Superseded or stopped on purpose: nothing to remedy and nothing
+		// for a fixer to fix. No budget is spent.
+		e.store.Audit(map[string]any{"event": "remediation", "outcome": "skipped", "repo": t.Target.Repo,
+			"number": t.Target.Number, "run": runID})
+		e.log("%s run %d: not a failure to act on (remediate_triage.skip_when) — no remedy, no fixer", tag(t), runID)
+		return true
+	case sdk.RemediationInfra:
+		budget := t.Semantics().RemediateTriage.Infra.Budget
+		if budget <= 0 {
+			budget = 1
+		}
+		ikey := t.Kind + "_infra_rerun"
+		if e.store.Attempts(key, ikey, head) < budget {
+			return e.requestRemedy(ctx, t, rem, key, head, runID, ikey, "infra")
+		}
+		e.log("%s run %d: infrastructure failure past its retry budget (%d) — treating it as an ordinary failure", tag(t), runID, budget)
+	}
 	budget := act.FlakyRerun.Max
 	if budget <= 0 {
 		budget = rem.Budget
@@ -1666,10 +1695,18 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 	if e.store.Attempts(key, rkey, head) >= budget {
 		return false
 	}
+	return e.requestRemedy(ctx, t, rem, key, head, runID, rkey, "")
+}
+
+// requestRemedy invokes the declared remedy for runID and, once it is
+// requested, counts it against budget key rkey at this revision. reason
+// ("" or "infra") rides the audit record and the log line.
+func (e *Engine) requestRemedy(ctx context.Context, t core.Trigger, rem *sdk.RemediateSemantics, key, head string, runID int64, rkey, reason string) bool {
 	if _, err := e.invokeVerb(ctx, t.Instance, rem.Action.Verb, core.DeclaredArgs(rem.Action.Args, t.Facts())); err != nil {
 		if ce, ok := connector.AsContractError(err); ok && ce.IsTargetGone() {
 			// Honored as a stop ONLY when it names THIS run's own target
-			// (finding 11) — see the matching comment on the status verb above.
+			// (finding 11) — see the matching comment on the status verb in
+			// remediate.
 			if ce.TargetGoneMatchesKey(t.DeclaredKey()) {
 				e.log("%s remediation %s: target gone — dropping (no fixer dispatch)", tag(t), rem.Action.Verb)
 				return true
@@ -1681,14 +1718,22 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 		}
 		e.clearDeferredFor(t, "remediation action "+rem.Action.Verb)
 		// Not requested, so the attempt is not counted; dispatch the fixer.
-		e.log("%s remediation %s for run %v: %v — dispatching the fixer instead", tag(t), rem.Action.Verb, run, err)
+		e.log("%s remediation %s for run %d: %v — dispatching the fixer instead", tag(t), rem.Action.Verb, runID, err)
 		return false
 	}
 	e.clearDeferredFor(t, "remediation action "+rem.Action.Verb)
 	_ = e.store.Record(key, rkey, head, head)
-	e.store.Audit(map[string]any{"event": "remediation", "verb": rem.Action.Verb, "repo": t.Target.Repo,
-		"number": t.Target.Number, "run": run})
-	e.log("%s remediation %s requested (run %v)", tag(t), rem.Action.Verb, run)
+	rec := map[string]any{"event": "remediation", "verb": rem.Action.Verb, "repo": t.Target.Repo,
+		"number": t.Target.Number, "run": runID}
+	if reason != "" {
+		rec["reason"] = reason
+	}
+	e.store.Audit(rec)
+	if reason != "" {
+		e.log("%s remediation %s requested (run %d, %s)", tag(t), rem.Action.Verb, runID, reason)
+	} else {
+		e.log("%s remediation %s requested (run %d)", tag(t), rem.Action.Verb, runID)
+	}
 	return true
 }
 

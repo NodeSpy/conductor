@@ -27,6 +27,8 @@ func TestCheckSemanticsIsMustUnderstand(t *testing.T) {
 		{"optional unknown key", `{"events":[{"name":"e","semantics":{"teleport":true,"optional":["teleport"]}}]}`, nil},
 		{"optional does not excuse a bad known key", `{"events":[{"name":"e","semantics":{"cursor":{"x":1},"optional":["cursor"]}}]}`, []string{`unknown field "x"`}},
 		{"bad completion", `{"events":[{"name":"e","semantics":{"completion":"sometimes"}}]}`, []string{"completion must be edge or level"}},
+		{"remediate_triage is known", `{"events":[{"name":"e","semantics":{"remediate_triage":{"skip_when":"stale","infra":{"when":"lost","budget":2}}}}]}`, nil},
+		{"remediate_triage decodes strictly", `{"events":[{"name":"e","semantics":{"remediate_triage":{"skip_when":"stale","retry_when":"x"}}}]}`, []string{`unknown field "retry_when"`}},
 		{"identity is known", `{"verbs":[{"name":"post","semantics":{"identity":{"username":"name"}}}]}`, nil},
 		{"attachments is known", `{"events":[{"name":"e","semantics":{"attachments":{"list":"files","fetch":"get","content":"c"}}}]}`, nil},
 		{"attachments decodes strictly", `{"events":[{"name":"e","semantics":{"attachments":{"list":"files","fetch":"get","content":"c","url":"u"}}}]}`, []string{`unknown field "url"`}},

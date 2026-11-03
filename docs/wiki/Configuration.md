@@ -436,6 +436,43 @@ ships this whole flow, fence included. A `failing_checks` event carries its
 trigger's `ignore_checks` as a private fact, so the read leaves out exactly
 the checks the trigger ignores. The github connector docs cover the verb.
 
+## Re-running flaky CI (github, `flaky_rerun`)
+
+Turn on `flaky_rerun` on a `failing_checks` trigger and conductor tries a
+re-run before it dispatches a fixer:
+
+```yaml
+triggers:
+  - on: gh.failing_checks
+    options: { flaky_rerun: { enabled: true, max: 1 } }
+```
+
+Conductor waits for the failing workflow run to finish. Then it sorts the run
+by what `gh.get_run` reports about it:
+
+- **Superseded or cancelled: left alone.** A run for a commit that is no
+  longer the PR's head is stale, and the head's own run will report. A run
+  that ended `cancelled` was superseded (a workflow `concurrency` group with
+  `cancel-in-progress` cancels the older run when a newer one starts) or
+  someone stopped it on purpose. Either way conductor does not re-run it, does
+  not dispatch a fixer, and spends nothing from `max`. The github connector
+  also doesn't raise `failing_checks` for a check that concluded `cancelled`.
+  Why this matters: re-running a stale run puts it back in its concurrency
+  group, where it cancels the run for the PR's real head.
+- **The runner went away: re-run, outside `max`.** The job lost its runner,
+  for example a self-hosted runner reporting "The runner has received a
+  shutdown signal", or a runner that lost communication with GitHub. That's
+  no fault of the change and no flake either, so conductor re-runs it without
+  touching `max`, up to 2 times per head. That cap stops a runner that never
+  comes back from looping. Past it, the run counts as an ordinary failure.
+- **Anything else: an ordinary failure.** Conductor re-runs the failed jobs
+  up to `max` times per head (default 1), then dispatches the fixer.
+
+The connector declares these rules (its `failing_checks` event's
+`remediate_triage`, see the plugin contract). They aren't something conductor
+knows about GitHub. A conductor older than the declaration ignores it and
+re-runs every finished run up to `max`, as before.
+
 ## Bot-authored comments (github)
 
 The github comment/review events (`new_comment`, `changes_requested`)

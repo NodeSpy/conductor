@@ -118,6 +118,7 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	},
 	"internal/engine/engine.go": {
 		{"remediate", "the remediation audit row names the target the remedy ran for; remediation itself runs only behind the OwnRepo gate (an assigned target)"},
+		{"requestRemedy", "the remediation audit row names the target the remedy ran for; reached only from remediate, behind the same OwnRepo gate (an assigned target)"},
 		{"logf", "a log prefix"},
 		{"tag", "a log prefix"},
 		{"auditDispatch", "an audit row"},

@@ -1283,6 +1283,14 @@
             "bot"
           ]
         },
+        "diagnose": {
+          "type": "boolean",
+          "desc": "adds runner_lost: a failed job lost its runner (shut down, or lost contact with GitHub)"
+        },
+        "pr": {
+          "type": "integer",
+          "desc": "the PR the run is for: adds pr_head_sha, and stale when the run is not for the PR's head"
+        },
         "repo": {
           "type": "string",
           "required": true,
@@ -1306,8 +1314,17 @@
         "name": {
           "type": "string"
         },
+        "pr_head_sha": {
+          "type": "string"
+        },
         "run_id": {
           "type": "integer"
+        },
+        "runner_lost": {
+          "type": "boolean"
+        },
+        "stale": {
+          "type": "boolean"
         },
         "status": {
           "type": "string"
@@ -2773,6 +2790,8 @@
           "status": {
             "verb": "get_run",
             "args": {
+              "diagnose": "true",
+              "pr": "{{.number}}",
               "repo": "{{.repo}}",
               "run_id": "{{.run_id}}"
             },
@@ -2788,6 +2807,13 @@
           },
           "budget": 1
         },
+        "remediate_triage": {
+          "skip_when": "stale || conclusion == 'cancelled'",
+          "infra": {
+            "when": "runner_lost",
+            "budget": 2
+          }
+        },
         "author": {
           "login": "author",
           "automated": "author_is_bot"
@@ -2801,6 +2827,9 @@
         "secret": [
           "app_token",
           "gh_token"
+        ],
+        "optional": [
+          "remediate_triage"
         ]
       }
     },

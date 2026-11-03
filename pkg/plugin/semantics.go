@@ -3,10 +3,13 @@ package plugin
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/NodeSpy/conductor/pkg/expr"
 )
 
 // Semantics are how a plugin tells the engine what to DO with its events and
@@ -34,11 +37,14 @@ type EventSemantics struct {
 	Feedback           bool                   `json:"feedback,omitempty"`
 	VerificationFailed bool                   `json:"verification_failed,omitempty"`
 	Remediate          *RemediateSemantics    `json:"remediate,omitempty"`
-	Author             *AuthorSemantics       `json:"author,omitempty"`
-	Labels             string                 `json:"labels,omitempty"`
-	Private            []string               `json:"private,omitempty"`
-	Secret             []string               `json:"secret,omitempty"`
-	ConversationReply  *ConversationReply     `json:"conversation_reply,omitempty"`
+	// RemediateTriage sorts a finished run before Remediate spends its
+	// budget on it. See RemediateTriage.
+	RemediateTriage   *RemediateTriage   `json:"remediate_triage,omitempty"`
+	Author            *AuthorSemantics   `json:"author,omitempty"`
+	Labels            string             `json:"labels,omitempty"`
+	Private           []string           `json:"private,omitempty"`
+	Secret            []string           `json:"secret,omitempty"`
+	ConversationReply *ConversationReply `json:"conversation_reply,omitempty"`
 	// OptionHooks turns a trigger's own `options.<Option>` into a flow hook,
 	// fired exactly as if the operator had written it under `hooks:`: the
 	// generic successor to a connector's own dispatch-time/completion
@@ -240,6 +246,85 @@ type RemediateVerb struct {
 	Args map[string]string `json:"args,omitempty"`
 }
 
+// RemediateTriage sorts a run the declared remediate has seen finish, by
+// what its status read returned. Each expr is evaluated over the status
+// verb's output once status.done_when holds:
+//   - SkipWhen: the run's failure is not one to act on. Typically the run was
+//     superseded (it tested a revision the target has moved past) or someone
+//     stopped it on purpose. The event is handled: no remedy, no fixer
+//     dispatch, and no budget spent. A run that is still current reports
+//     for itself.
+//   - Infra: the run failed because the machine it ran on went away, not
+//     because of the change. The remedy runs WITHOUT spending
+//     remediate.budget, up to Infra.Budget times per (target, revision). The
+//     separate cap stops a machine that never comes back from looping. Past
+//     it, the run counts as an ordinary failure.
+//
+// Anything else is an ordinary failure: the remedy runs within
+// remediate.budget, and once that is spent the fixer is dispatched.
+//
+// It is its own key, not fields of remediate, so a plugin can list it in
+// `optional` and still load on a host that predates it. That host remedies
+// every finished run as before.
+type RemediateTriage struct {
+	SkipWhen string          `json:"skip_when,omitempty"`
+	Infra    *RemediateInfra `json:"infra,omitempty"`
+}
+
+// RemediateInfra is RemediateTriage's infrastructure retry: When is an expr
+// over the status output, Budget the remedies allowed per (target,
+// revision), default 1.
+type RemediateInfra struct {
+	When   string `json:"when"`
+	Budget int    `json:"budget,omitempty"`
+}
+
+// Remediation verdicts (RemediateVerdict).
+const (
+	RemediationWait   = "wait"   // the run has not finished
+	RemediationSkip   = "skip"   // handled: no remedy, no fixer, no budget
+	RemediationInfra  = "infra"  // remedy on the infrastructure budget
+	RemediationRemedy = "remedy" // remedy on remediate.budget, then the fixer
+)
+
+// RemediateVerdict classifies a remediation status read: out is the status
+// verb's output. A done_when that fails to evaluate counts as done (a
+// broken declaration must not wait forever). A triage expr that fails to
+// evaluate counts as not matching, and its error is returned with the
+// verdict for the caller to log. It is defined here, not in the host, so a
+// plugin's tests can check its declaration against its own verb's output
+// with the host's exact rules.
+func (s *EventSemantics) RemediateVerdict(out map[string]any) (string, error) {
+	if s == nil || s.Remediate == nil {
+		return RemediationRemedy, nil
+	}
+	if done, err := expr.Eval(s.Remediate.Status.DoneWhen, out); err == nil && !done {
+		return RemediationWait, nil
+	}
+	tr := s.RemediateTriage
+	if tr == nil {
+		return RemediationRemedy, nil
+	}
+	var errs []error
+	if tr.SkipWhen != "" {
+		skip, err := expr.Eval(tr.SkipWhen, out)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("remediate_triage.skip_when: %w", err))
+		} else if skip {
+			return RemediationSkip, nil
+		}
+	}
+	if tr.Infra != nil && tr.Infra.When != "" {
+		infra, err := expr.Eval(tr.Infra.When, out)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("remediate_triage.infra.when: %w", err))
+		} else if infra {
+			return RemediationInfra, errors.Join(errs...)
+		}
+	}
+	return RemediationRemedy, errors.Join(errs...)
+}
+
 // AuthorSemantics: who caused the event, and whether they are automated.
 type AuthorSemantics struct {
 	Login     string `json:"login"`
@@ -428,7 +513,7 @@ type PreflightSemantics struct {
 // implements, per level. HostInfo.Semantics advertises them.
 var semanticKeys = map[string][]string{
 	"event": {"target", "revision", "checkout", "closes_target", "bound_to_target", "completion", "cursor",
-		"attempts", "priority", "feedback", "verification_failed", "remediate", "author", "labels",
+		"attempts", "priority", "feedback", "verification_failed", "remediate", "remediate_triage", "author", "labels",
 		"private", "secret", "conversation_reply", "option_hooks", "attachments"},
 	"verb": {"reads_revision", "mints_credential", "opens_conversation", "conversation_post", "host_only",
 		"target_args", "exposes", "identity"},
@@ -669,6 +754,17 @@ func ValidateSemantics(d Decl) []string {
 			}
 			need(path+".remediate.status.verb", r.Status.Verb)
 			need(path+".remediate.action.verb", r.Action.Verb)
+		}
+		if tr := s.RemediateTriage; tr != nil {
+			if s.Remediate == nil {
+				p = append(p, path+".remediate_triage: needs a remediate to triage for")
+			}
+			if tr.SkipWhen == "" && tr.Infra == nil {
+				p = append(p, path+".remediate_triage: declares neither skip_when nor infra")
+			}
+			if tr.Infra != nil && (tr.Infra.When == "" || tr.Infra.Budget < 0) {
+				p = append(p, path+".remediate_triage.infra: when is required and budget must not be negative")
+			}
 		}
 		seenOption := map[string]bool{}
 		for i, oh := range s.OptionHooks {

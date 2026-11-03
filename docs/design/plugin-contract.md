@@ -757,6 +757,7 @@ fire, done).
 | `feedback` | `true` | Feedback on work in flight: may adopt the operator's open workspace on the target's `revision.branch` (`adopt_open_workspaces`). | `isFeedbackKind` (`dispatch/paseo.go:1232`), `AdoptOpenWorkspaces` doc |
 | `verification_failed` | `true` | Records `verification_failed` once per `(target, revision)` (outcome learning, report). | `case "failing_checks"` in `outcome.go:59-77`, `MarkCIFailure` |
 | `remediate` | `{option: name, run: fact, status: {verb, done_when: expr}, action: {verb}, budget: n}` | A pre-dispatch remedy the operator enables per trigger with `options.<option>: {enabled: true}`. Before dispatching: invoke `status.verb` with `{run}` until `done_when` holds (bounded wait), then invoke `action.verb` up to `budget` times per `(target, revision)`. Dispatch only once the budget is spent. Both verbs are the plugin's own and use the plugin's credentials. | `flaky_rerun` (`engine.go:847-877`), `gh run rerun`/`gh api …/runs` shell-outs (`engine.go:1590-1622`), `lowerEngineOptions` |
+| `remediate_triage` | `{skip_when?: expr, infra?: {when: expr, budget: n}}` | Sorts a run `remediate` has seen finish, by `status.verb`'s output (each expr is evaluated over it). `skip_when` true: the failure is not one to act on (superseded, or stopped on purpose). The event is handled: no remedy, no fixer dispatch, no budget spent. `infra.when` true: the machine went away, not the change. `action.verb` runs WITHOUT spending `remediate.budget`, up to `infra.budget` (default 1) times per `(target, revision)`. Past that cap it is an ordinary failure. Anything else is an ordinary failure. Its own key so a plugin can list it in `optional` for a host that predates it; that host remedies every finished run. Needs `remediate`. | the github plugin's stale/cancelled/runner-lost handling of `failing_checks` |
 | `author` | `{login: fact, automated?: fact}` | The event's author. Used by `policy.ignore.users`, by bot-reply guidance in the prompt, and by `reply_to_bots` (with verb `conversation_post`, §2.3). | `Context["author"]`/`["author_is_bot"]` reads (`flow/flow.go:372-377`, `engine/flow.go:54-62`) |
 | `labels` | `fact` | The target's labels: `policy.pause_label` and per-target opt-out. | `Context["labels"]` (`engine.go:741-765,797`) |
 | `private` | `[fact…]` | Never rendered into an agent prompt (still in templates). | `eventprompt.go:15-24` list (`app_token, gh_token, installation_id, reaction_subjects`) |
@@ -1065,6 +1066,10 @@ events:
         status: { verb: get_run, done_when: "status == 'completed'" }
         action: { verb: rerun_run }
         budget: 1
+      remediate_triage:
+        skip_when: "stale || conclusion == 'cancelled'"
+        infra: { when: runner_lost, budget: 2 }
+      optional: [remediate_triage]
   - name: merge_ready        # semantics: *pr
   - name: self_review        # semantics: *pr
   - name: _closed
