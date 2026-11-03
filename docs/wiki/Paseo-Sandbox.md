@@ -84,8 +84,8 @@ the session's arguments appended. `conductor sandbox exec`:
 3. runs the agent under the sandbox with a clean environment, its own egress
    session and model gateway, and the containment watcher, for as long as
    the agent runs ([[Isolation#containment-and-detection]]). Its detections,
-   egress refusals and kills print on the session's stderr and go to the
-   daemon's audit log (`via: sandbox-exec`).
+   egress refusals and kills print on the session's stderr; they and every
+   egress request go to the daemon's audit log.
 
 **Resume** is paseo running the command again: the same directory resolves to
 the same identity, so the session finds its tool state (its transcript) — a

@@ -453,14 +453,15 @@ trusts what is in a repository's `.git`; conductor's does not:
   includes, credential helpers, …), so an agent's `user.name` stands.
 
 **Detection (`sandbox.detect`).** A host-side watcher follows every process
-of each launch: the processes carrying a random per-launch marker in their
-environment, and their descendants. It scans every `interval` (3s) for:
+of each launch: its root process, which the launcher names by pid and start
+time when it starts it, the processes carrying a random per-launch marker in
+their environment, and the descendants of both. It scans every `interval` (3s) for:
 
 | kind | what |
 |---|---|
 | `tunnel_tool` | ssh, socat, nc, chisel, websocat, cloudflared, ngrok, `openssl s_client`, tor, … |
 | `reverse_shell` | a shell or interpreter whose stdin or stdout is a TCP/UDP socket |
-| `pty_relay` | Linux: a process other than the agent itself holding a pty master and an inet socket |
+| `pty_relay` | Linux: a process other than the agent itself holding a pty master and an inet socket (the Linux sandbox has no pty devices, so this guards a jail that has one) |
 | `tripwire` | a read of a decoy credential in the home: `.ssh/id_ed25519`, `.ssh/id_rsa`, `.git-credentials`, `.vault-token`, `.pypirc` |
 | `git` | the git guard undid a change |
 
@@ -487,8 +488,9 @@ Whatever the action, when a launch ends the watcher kills whatever of it is
 left (audited as `sandbox_leftover_killed`). That includes a daemonized child
 and anything in a process group a launch process led, so a tunnel started in
 the background does not outlive its step. A `conductor sandbox exec` launch
-(a paseo session) sends its events to the daemon's audit log over the
-control socket, tagged `via: sandbox-exec`, and prints them on its stderr.
+(a paseo session) sends its events and every egress request to the daemon's
+audit log over the control socket (its events tagged `via: sandbox-exec`),
+and prints its refusals and detections on its stderr.
 
 **Resource limits (`sandbox.limits`).** On Linux each agent launch runs in a
 systemd user scope capped at `memory` (50%) and `pids` (8192) tasks, inside
@@ -526,7 +528,10 @@ named host-wide. `sandbox.macos_posix_ipc: true` grants them (Python
 the gateway's own loopback port and the profile allows no other loopback port
 but those of a model the gateway does not carry. A server the agent exposes
 listens on the host loopback at exactly its port. The watcher reads `ps` and
-`lsof`, and kills by pid.
+`lsof`, and kills by pid after checking the process's start time. macOS
+hides the environment of platform and hardened-runtime binaries
+(`sandbox-exec`, `ssh`, `sh`, most signed agent CLIs), so there the launch
+is followed from the root its launcher named.
 
 #### What is left {#what-is-left}
 
@@ -550,8 +555,9 @@ These are known gaps, stated so you can weigh them:
   not know (an interpreter speaking TLS to an allowed host, a websocket
   inside a build tool) is not a `tunnel_tool`. The TLS check and the caps
   are the controls for it, and the audit is the record. A process that
-  drops the marker and leaves both the launch's tree and its process groups
-  is not followed. On macOS there is no `pty_relay` rule.
+  leaves the launch's tree (double-forked, reparented) and its process
+  groups is followed only while its environment still carries the marker,
+  and on macOS a platform or signed binary's environment cannot be read. On macOS there is no `pty_relay` rule.
 - **The decoys are pipes.** An agent that `stat`s a decoy before reading it
   can tell it is not a file.
 - **opencode** is not carried by the gateway: its key stays in its
