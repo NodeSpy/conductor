@@ -13,12 +13,17 @@ func withLimits(t *testing.T, ok bool) {
 	old := limitsAvailable
 	limitsAvailable = func(string) bool { return ok }
 	limitsWarned = sync.Once{}
-	t.Cleanup(func() { limitsAvailable = old; limitsWarned = sync.Once{} })
+	unit := sandbox.LauncherUnit
+	sandbox.LauncherUnit = func() string { return "" }
+	t.Cleanup(func() { limitsAvailable = old; limitsWarned = sync.Once{}; sandbox.LauncherUnit = unit })
 }
 
 func TestWrapRunsAgentsUnderDefaultLimits(t *testing.T) {
 	withPlatform(t, "linux")
 	withLimits(t, true)
+	// The bus variables' own wrapping is sandbox's TestScopePrefixCarriesTheBusOnlyToSystemdRun.
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "")
 	f := newPolicyFixture(t)
 	l, err := Wrap(f.pol, []string{"claude"}, f.deps)
 	if err != nil {
