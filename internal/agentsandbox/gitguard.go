@@ -254,6 +254,8 @@ var dangerousExact = map[string]bool{
 	"core.alternaterefscommand": true, "sequence.editor": true, "diff.external": true,
 	"credential.helper": true, "gpg.program": true, "include.path": true, "protocol.allow": true,
 	"uploadpack.packobjectshook": true, "receive.procreceiverefs": true, "extensions.worktreeconfig": true,
+	"init.templatedir": true, "core.attributesfile": true, "ssh.variant": true, "web.browser": true,
+	"sendemail.smtpserver": true, "sendemail.tocmd": true, "sendemail.cccmd": true, "sendemail.headercmd": true,
 }
 
 func dangerousGitKey(key string) bool {
@@ -280,7 +282,16 @@ func dangerousGitKey(key string) bool {
 	case "submodule":
 		return last == "update"
 	case "remote":
-		return last == "uploadpack" || last == "receivepack" || last == "proxy" || last == "vcs"
+		return last == "uploadpack" || last == "receivepack" || last == "proxy" || last == "vcs" || last == "url" || last == "pushurl"
+	case "url":
+		// Rewrites where a fetch or push goes.
+		return last == "insteadof" || last == "pushinsteadof"
+	case "http", "https":
+		return last == "proxy" || last == "sslverify" || last == "sslcainfo" || last == "sslcapath" || last == "extraheader"
+	case "hook":
+		return last == "command" // config-defined hooks (git 2.36+)
+	case "trailer", "browser", "man":
+		return last == "command" || last == "cmd" || last == "path"
 	}
 	return false
 }

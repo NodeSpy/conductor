@@ -299,3 +299,55 @@ func TestEmptyGroupsAreForgotten(t *testing.T) {
 		t.Fatalf("a daemon left in the launch's group survived: %v", got)
 	}
 }
+
+// The config keys that run a command, redirect a fetch or push, or weaken
+// its transport are all recorded by the git guard.
+func TestDangerousGitKeysCoverExecAndRedirects(t *testing.T) {
+	cfg := []byte(`[init]
+	templateDir = /tmp/t
+[core]
+	attributesFile = /tmp/a
+	sshCommand = x
+	editor = x
+[url "https://evil.example/"]
+	insteadOf = https://github.com/
+	pushInsteadOf = git@github.com:
+[http]
+	proxy = http://evil.example
+	sslVerify = false
+[http "https://github.com/"]
+	extraHeader = x
+[remote "origin"]
+	url = https://evil.example/r
+	pushurl = https://evil.example/r
+[hook "pre-commit"]
+	command = x
+[trailer "sign"]
+	command = x
+[credential "https://github.com"]
+	helper = x
+[diff "x"]
+	textconv = x
+[merge "x"]
+	driver = x
+[gpg "ssh"]
+	program = x
+[ssh]
+	variant = ssh
+[user]
+	name = fine
+[core]
+	autocrlf = false
+`)
+	got := dangerousGitKeys(cfg)
+	for _, k := range []string{"init.templatedir", "core.attributesfile", "core.sshcommand", "core.editor", "url.https://evil.example/.insteadof", "url.https://evil.example/.pushinsteadof",
+		"http.proxy", "http.sslverify", "http.https://github.com/.extraheader", "remote.origin.url", "remote.origin.pushurl", "hook.pre-commit.command",
+		"trailer.sign.command", "credential.https://github.com.helper", "diff.x.textconv", "merge.x.driver", "gpg.ssh.program", "ssh.variant"} {
+		if !strings.Contains(got, k+"=") {
+			t.Errorf("%s not recorded", k)
+		}
+	}
+	if strings.Contains(got, "user.name") || strings.Contains(got, "autocrlf") {
+		t.Fatalf("a harmless key recorded:\n%s", got)
+	}
+}
