@@ -144,11 +144,21 @@ connectors:
   # A command connector: `uses: build-box.run` executes a command — on the
   # named hosts: entry over SSH, or locally when host:/ssh: is absent.
   # Outputs: stdout, stderr, exit_code (a non-zero exit is data, not an error).
+  # A LOCAL run's process gets a minimal operational environment (PATH, HOME,
+  # etc.) plus whatever env: adds here or on the call — never this daemon's
+  # full environment (which may carry webhook secrets, model keys, tokens).
+  # Set inherit_env: true to opt a local run back into the daemon's full
+  # os.Environ() (has no effect on host: runs, which never get one anyway).
+  # `command:` as a STRING runs through `sh -c`; every `{{…}}` substitution in
+  # it is shell-quoted before splicing in, so event/chat data in a templated
+  # command can't inject shell syntax — write `command: [argv, ...]` instead
+  # of a string if a step needs to build the argv itself from a list.
   # build-box:
   #   type: command
   #   host: build-box            # a hosts: entry; or inline ssh: {host: …}
   #   cwd: /srv/build
   #   env: { CI: "1" }
+  #   inherit_env: false         # true: a local run gets this daemon's full env
 
   timer:
     use: cron

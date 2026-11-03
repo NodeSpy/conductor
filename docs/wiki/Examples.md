@@ -132,7 +132,11 @@ A `type: command` step with `host:` runs on the named SSH target and outputs
 (A `run: sh, host: build-box` code step is the same idea for inline scripts;
 its outputs are the script's stdout — a non-zero exit is a step error, not an
 `exit_code` output. For exit-code-as-data, use a `type: command` **connector**
-whose `run` verb returns it: `uses: build-box.run`.)
+whose `run` verb returns it: `uses: build-box.run`. A connector's `run.command`
+as a STRING runs through `sh -c`; every `{{…}}` value templated into it is
+shell-quoted before splicing in, so event data can't inject shell syntax —
+and a LOCAL run's process never gets this daemon's own environment by
+default, only `env:`/an operational minimum ([[Connectors]], `inherit_env:`).)
 
 ## Fan one check across services (for_each)
 

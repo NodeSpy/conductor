@@ -248,6 +248,12 @@ func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// ShellQuote single-quotes one value for POSIX sh (see shQuote) — exported
+// for callers outside this package that splice a single untrusted value into
+// a larger, otherwise-literal shell command line (the flow runner's
+// shell-safe template rendering), as opposed to ShellJoin's whole-argv case.
+func ShellQuote(s string) string { return shQuote(s) }
+
 // ShellJoin single-quotes every element of argv (via shQuote) and joins them
 // with spaces, producing one POSIX-sh-safe command line. It is the building
 // block for the controller package's "remote controller" wiring: a subprocess
