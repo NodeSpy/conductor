@@ -129,7 +129,15 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 			return nil, "", nil, nil, fmt.Errorf("agent sandbox: scratch workspace: %w", err)
 		}
 	}
-	entry, err := registerWorkspace(dir, identity, tool, a.req)
+	req := a.req
+	if req != nil && opt.iso != req.Step.Isolation {
+		// The runtime's isolation: (under the step's) is this launch's
+		// scope: its allowance.
+		r := *req
+		r.Step.Isolation = opt.iso
+		req = &r
+	}
+	entry, err := registerWorkspace(dir, identity, tool, req)
 	if err != nil {
 		return nil, "", nil, nil, err
 	}

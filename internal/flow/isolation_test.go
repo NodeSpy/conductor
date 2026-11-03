@@ -187,3 +187,31 @@ func TestIsolationReachesADetachedLaunch(t *testing.T) {
 		t.Fatalf("isolation: %+v / %+v / %+v", got[0].Step.Isolation, got[1].Step.Isolation, got[2].Step.Isolation)
 	}
 }
+
+// A block of only the sandbox's knobs layers onto the scope outside it —
+// a paseo runtime's opt-out, a trigger's or workflow's allowance — and the
+// most specific setting of each knob wins.
+func TestSandboxKnobsLayerOntoTheOuterScope(t *testing.T) {
+	cfg := loadConfig(t, isolationCfg)
+	r := &Runner{Cfg: cfg}
+	tunnels := &config.SandboxAllow{Tunnels: []string{"cloudflared"}}
+	ctx := withDefaultIsolation(context.Background(), &config.IsolationConfig{Allow: tunnels})
+	ctx = withDefaultIsolation(ctx, &config.IsolationConfig{Detect: &config.IsolationDetect{Action: "alert"}})
+	iso := r.effectiveIsolation(ctx, config.Step{})
+	if iso.Allow != tunnels || iso.Detect == nil || iso.Detect.Action != "alert" {
+		t.Fatalf("trigger then workflow knobs: %+v", iso)
+	}
+	pty := &config.SandboxAllow{Pty: true}
+	iso = r.effectiveIsolation(ctx, config.Step{Isolation: &config.IsolationConfig{Allow: pty}})
+	if iso.Allow != pty || iso.Detect.Action != "alert" {
+		t.Fatalf("the step's allowance over the scope's: %+v", iso)
+	}
+	if iso := r.effectiveIsolation(context.Background(), config.Step{Runtime: "pzout", Isolation: &config.IsolationConfig{Allow: pty}}); !iso.OptsOut() || iso.Allow != pty {
+		t.Fatalf("knobs over a paseo runtime's opt-out: %+v", iso)
+	}
+	// A block with a mode still replaces the scope's whole.
+	ctx = withDefaultIsolation(ctx, &config.IsolationConfig{Mode: "none"})
+	if iso := r.effectiveIsolation(ctx, config.Step{}); iso.Allow != nil || !iso.OptsOut() {
+		t.Fatalf("a mode block layered: %+v", iso)
+	}
+}

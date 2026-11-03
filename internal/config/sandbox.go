@@ -60,6 +60,9 @@ type SandboxConfig struct {
 	EgressLimits *SandboxEgressLimits `yaml:"egress_limits,omitempty"`
 	// Detect configures the host-side watcher, tripwires and response.
 	Detect *SandboxDetect `yaml:"detect,omitempty"`
+	// Allow is the base allowance of every agent launch (see SandboxAllow);
+	// an isolation: block's allow: adds to it for its own scope.
+	Allow *SandboxAllow `yaml:"allow,omitempty"`
 	// Limits are the default resource limits of every agent launch.
 	Limits *SandboxLimits `yaml:"limits,omitempty"`
 	// Persist is what of an identity home outlives its dispatch: `none`
@@ -314,6 +317,9 @@ func (c *Config) validateSandbox() error {
 	case "", "gateway", "login-copy", "login-share":
 	default:
 		return fmt.Errorf("config: sandbox.model_credential must be gateway|login-copy|login-share, got %q", s.ModelCredential)
+	}
+	if err := validateSandboxAllow("sandbox.allow", s.Allow); err != nil {
+		return err
 	}
 	switch s.Persist {
 	case "", "none", "cache", "home":

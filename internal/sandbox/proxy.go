@@ -463,8 +463,13 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 		p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: outcome, Reason: reason})
 	}
 	var hello []byte
-	var sni string
-	if sess.requireTLS {
+	var sni, allowedBy string
+	switch {
+	case sess.requireTLS && len(sess.nonTLS) > 0 && EgressAllowed(sess.nonTLS, target):
+		// The launch's allowance for raw traffic to this target: no
+		// first-bytes check, the tunnel audited as allowed by it.
+		allowedBy = sess.nonTLSBy
+	case sess.requireTLS:
 		_ = client.SetReadDeadline(time.Now().Add(15 * time.Second))
 		raw, info, err := readClientHello(buf.Reader)
 		_ = client.SetReadDeadline(time.Time{})
@@ -509,7 +514,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 	go func() {
 		rec := t.run(buf.Reader)
 		sess.remove(t)
-		rec.Target, rec.SNI = target, sni
+		rec.Target, rec.SNI, rec.AllowedBy = target, sni, allowedBy
 		rec.Up += int64(len(hello))
 		p.record(rec)
 	}()

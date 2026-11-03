@@ -55,6 +55,9 @@ func IsolationWarnings(cfg *config.Config) []string {
 		}
 	})
 	warns = append(warns, codeIsolationOptOutWarnings(cfg)...)
+	// Every agent-sandbox allowance and loosened scope, by scope: the
+	// operator sees exactly where the sandbox is weaker than its default.
+	warns = append(warns, cfg.AllowanceNotes()...)
 	rts := make([]string, 0, len(cfg.Runtimes))
 	for n := range cfg.Runtimes {
 		rts = append(rts, n)

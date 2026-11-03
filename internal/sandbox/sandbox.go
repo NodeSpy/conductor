@@ -86,7 +86,9 @@ func expandFS(fs []string) []string {
 }
 
 func FromConfig(c *config.IsolationConfig) *Spec {
-	if c == nil || c.Mode == "none" {
+	if c == nil || c.Mode == "none" || c.SandboxKnobsOnly() {
+		// none: no wrapper; knobs only: the agent sandbox's, no wrapper of
+		// its own.
 		return nil
 	}
 	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot, FS: expandFS(c.FS)}

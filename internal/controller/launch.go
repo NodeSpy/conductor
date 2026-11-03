@@ -97,12 +97,10 @@ func withEgressRevoke(opt launchOpts) (launchOpts, func()) {
 }
 
 // launchOptsFor resolves the isolation for one dispatch: the profile's own
-// isolation: wins over the runtime's (most-specific wins, like `host:`).
+// isolation: wins over the runtime's (most-specific wins, like `host:`); a
+// block of only the agent sandbox's knobs layers onto the runtime's.
 func launchOptsFor(runtimeIso *config.IsolationConfig, req dispatch.Request) launchOpts {
-	iso := runtimeIso
-	if req.Step.Isolation != nil {
-		iso = req.Step.Isolation
-	}
+	iso := config.LayerIsolation(runtimeIso, req.Step.Isolation)
 	return launchOpts{iso: iso, agentAuthored: req.AgentAuthored}
 }
 

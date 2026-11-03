@@ -86,6 +86,12 @@ the session's arguments appended. `conductor sandbox exec`:
    the agent runs ([[Isolation#containment-and-detection]]). Its detections,
    egress refusals and kills print on the session's stderr; they and every
    egress request go to the daemon's audit log.
+   A dispatch whose workflow, trigger or step has a
+   [[Isolation#scoped-allowances|scoped allowance]] gets it here too. Conductor
+   records it with the workspace when the dispatch registers it, so a resume
+   keeps it. A paseo step or runtime takes an `isolation:` block with only
+   `allow:`, `detect:` or `egress_limits:`; the only `mode:` it takes is
+   `none`.
 
 **Resume** is paseo running the command again: the same directory resolves to
 the same identity, so the session finds its tool state (its transcript) — a

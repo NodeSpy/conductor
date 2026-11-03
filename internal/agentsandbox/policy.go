@@ -63,6 +63,10 @@ type Policy struct {
 	// (sandbox.egress_require_tls: false); by default its first bytes must
 	// be a TLS ClientHello naming the CONNECT host.
 	EgressAnyBytes bool `json:"egress_any_bytes,omitempty"`
+	// NonTLS are targets exempt from the TLS check (the launch's
+	// allowance), audited as allowed by NonTLSBy.
+	NonTLS   []string `json:"non_tls,omitempty"`
+	NonTLSBy string   `json:"non_tls_by,omitempty"`
 	// Run attributes the launch's egress and detections (the dispatch id;
 	// "" = the identity).
 	Run string `json:"run,omitempty"`
@@ -98,7 +102,7 @@ func (p Policy) EgressSession() sandbox.SessionOpts {
 	}
 	return sandbox.SessionOpts{
 		Run:        run,
-		RequireTLS: !p.EgressAnyBytes,
+		RequireTLS: !p.EgressAnyBytes, NonTLS: p.NonTLS, NonTLSBy: p.NonTLSBy,
 		Limits: sandbox.EgressLimits{Idle: time.Duration(p.EgressIdle),
 			Upload: p.EgressUpload, Download: p.EgressDownload},
 	}

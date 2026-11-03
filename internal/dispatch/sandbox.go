@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/gitpush"
 )
 
@@ -165,6 +166,7 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 	if req != nil {
 		e.Dispatch = req.DispatchID
 		e.Model = sandboxModel(*req)
+		e.Scope = SandboxScope(*req)
 		if id, ok := SkillIdentityFor(*req); ok {
 			e.Skill = &id
 		}
@@ -229,4 +231,47 @@ func sandboxModel(req Request) string {
 		return req.Model
 	}
 	return req.Provider + "/" + req.Model
+}
+
+// SandboxScope is what a dispatch's own scopes change of its agent
+// sandbox: the allowance and detection / egress-limit overrides of the
+// isolation: it resolved to (its step's, else its trigger's or workflow's,
+// else its runtime's), and any allowance the operator granted its pack
+// step. An agent-authored dispatch gets none: only the operator's own
+// config loosens a sandbox. nil: nothing changes.
+func SandboxScope(req Request) *agentsandbox.Scope {
+	if req.AgentAuthored {
+		return nil
+	}
+	iso := req.Step.Isolation
+	var s agentsandbox.Scope
+	var own *config.SandboxAllow
+	if iso != nil {
+		own = iso.Allow
+		if d := iso.Detect; d != nil {
+			s.DetectAction, s.Tripwires = d.Action, d.Tripwires
+		}
+		if l := iso.EgressLimits; l != nil {
+			idle, _ := config.ParseLimitDuration(l.Idle)
+			s.EgressIdle = int64(idle)
+			s.EgressUpload, _ = config.ParseByteSize(l.Upload)
+			s.EgressDownload, _ = config.ParseByteSize(l.Download)
+		}
+	}
+	s.Allow = AllowanceOf(config.UnionAllow(own, req.Step.GrantedAllow))
+	if s == (agentsandbox.Scope{}) {
+		return nil
+	}
+	return &s
+}
+
+// AllowanceOf is a config allowance as the sandbox takes it (nil: none).
+func AllowanceOf(a *config.SandboxAllow) *agentsandbox.Allowance {
+	if a.Empty() {
+		return nil
+	}
+	return &agentsandbox.Allowance{
+		Tunnels: a.TunnelTools(), TunnelHosts: a.TunnelHosts(), NonTLS: append([]string(nil), a.NonTLS...),
+		ReverseShell: a.ReverseShell, Pty: a.Pty, By: a.Origin,
+	}
 }

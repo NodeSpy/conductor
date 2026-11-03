@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -231,4 +232,41 @@ func TestGitGuardUndoesTampering(t *testing.T) {
 		t.Fatal("pointer not restored over the link")
 	}
 	_ = io.Discard
+}
+
+// A scope's allowance and overrides land on the launch's policy and its
+// egress session; with none, the strict defaults stand.
+func TestApplyScope(t *testing.T) {
+	var p Policy
+	applyScope(&p, nil, nil)
+	if p.Detect.AllowedBy != "" || p.NonTLS != nil || p.Detect.Action != "" || p.Detect.NoTripwires {
+		t.Fatalf("no scope changed the policy: %+v", p)
+	}
+	off := false
+	p = Policy{Egress: []string{"api.example:443"}, EgressUpload: 7}
+	applyScope(&p, &Allowance{Tunnels: []string{"Cloudflared"}, By: "sandbox"}, &Scope{
+		Allow:        &Allowance{Tunnels: []string{"ssh"}, TunnelHosts: []string{"bastion.example:22"}, NonTLS: []string{"bastion.example:22"}, By: "workflow deploy"},
+		DetectAction: DetectAlert, Tripwires: &off, EgressDownload: -1,
+	})
+	d := p.Detect
+	if !d.allows("tunnel_tool", "cloudflared") || !d.allows("tunnel_tool", "ssh") || d.allows("tunnel_tool", "socat") || d.allows("reverse_shell", "sh") {
+		t.Fatalf("tunnels %v", d.AllowTunnels)
+	}
+	if d.AllowedBy != "sandbox + workflow deploy" || d.Action != DetectAlert || !d.NoTripwires {
+		t.Fatalf("detect %+v", d)
+	}
+	if !slices.Contains(p.Egress, "bastion.example:22") || p.EgressDownload != -1 || p.EgressUpload != 7 {
+		t.Fatalf("egress %v, limits %d/%d", p.Egress, p.EgressUpload, p.EgressDownload)
+	}
+	so := p.EgressSession()
+	if !so.RequireTLS || !slices.Equal(so.NonTLS, []string{"bastion.example:22"}) || so.NonTLSBy != "sandbox + workflow deploy" {
+		t.Fatalf("session %+v", so)
+	}
+	// Detection off takes the tripwires with it, whatever the scope says.
+	on := true
+	p = Policy{}
+	applyScope(&p, nil, &Scope{DetectAction: DetectOff, Tripwires: &on})
+	if !p.Detect.NoTripwires {
+		t.Fatal("tripwires planted with detection off")
+	}
 }

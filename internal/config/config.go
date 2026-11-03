@@ -292,6 +292,9 @@ type Config struct {
 	// avatarWarnings name deprecated avatar presets in the config
 	// (validateBots).
 	avatarWarnings []string `yaml:"-"`
+	// allowanceRequests are the sandbox allowances packs requested that the
+	// operator has not granted (validate shows them).
+	allowanceRequests []string `yaml:"-"`
 }
 
 // Update configures periodic self-update checks.
@@ -1024,6 +1027,7 @@ func Load(path string) (*Config, error) {
 	// before validation sees it. No-op when `code: { isolation_default: none
 	// }` opts out.
 	c.applyCodeIsolationDefaults()
+	c.labelAllowances()
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}

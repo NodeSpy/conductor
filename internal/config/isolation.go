@@ -23,7 +23,7 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 	case "none":
 		// The explicit opt-out of the agent sandbox for one runtime/step:
 		// the launch runs unwrapped. Nothing else in the block applies.
-		if iso.User != "" || iso.Container != nil || iso.Limits != nil || iso.Network != nil || len(iso.FS) > 0 || iso.Privileged || iso.AllowRoot {
+		if iso.User != "" || iso.Container != nil || iso.Limits != nil || iso.Network != nil || len(iso.FS) > 0 || iso.Privileged || iso.AllowRoot || iso.Allow != nil || iso.Detect != nil || iso.EgressLimits != nil {
 			return fmt.Errorf("config: %s: isolation mode none runs the launch unwrapped — it takes no other isolation settings", where)
 		}
 		return nil
@@ -51,7 +51,12 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 			return fmt.Errorf("config: %s: isolation container.engine must be docker|podman, got %q", where, iso.Container.Engine)
 		}
 	case "":
-		return fmt.Errorf("config: %s: isolation needs `mode: user|namespace|container|none`", where)
+		if iso.SandboxKnobsOnly() {
+			// Only the agent sandbox's knobs: layered onto the outer
+			// scope's isolation, no wrapper of its own.
+			return validateScopeSandbox(where, iso)
+		}
+		return fmt.Errorf("config: %s: isolation needs `mode: user|namespace|container|none` (a block with only allow:/detect:/egress_limits: needs none)", where)
 	default:
 		return fmt.Errorf("config: %s: unknown isolation mode %q (want user|namespace|container|none)", where, iso.Mode)
 	}
@@ -106,7 +111,7 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 			return fmt.Errorf("config: %s: isolation fs: %q must be an absolute path", where, p)
 		}
 	}
-	return nil
+	return validateScopeSandbox(where, iso)
 }
 
 // validateStepIsolation checks a step's isolation against what actually runs
@@ -174,6 +179,9 @@ func validateCodeStepIsolation(where string, p Step, class EngineClass) error {
 	if p.Host != "" || p.SSH != nil {
 		return fmt.Errorf("config: %s: isolation: is not enforced for a remote code step (host:/ssh:) — conductor only wraps LOCAL `use: cli`/`command:`/`run: <interpreter>` code steps today; drop isolation: here, or run this step locally", where)
 	}
+	if iso := p.Isolation; iso != nil && (iso.Allow != nil || iso.Detect != nil || iso.EgressLimits != nil) {
+		return fmt.Errorf("config: %s: isolation allow:/detect:/egress_limits: shape agent sandbox launches — a code step has no watcher or egress session to loosen", where)
+	}
 	return validateIsolation(where, p.Isolation, false)
 }
 
@@ -224,16 +232,49 @@ func validateIsolationControlChannel(where string, iso *IsolationConfig, cc Cont
 	return nil
 }
 
+// SandboxKnobsOnly reports a block that sets only the agent sandbox's own
+// knobs (allow:, detect:, egress_limits:) and no mode: it layers onto the
+// outer scope's isolation (LayerIsolation) rather than replacing it.
+func (iso *IsolationConfig) SandboxKnobsOnly() bool {
+	return iso != nil && iso.Mode == "" && iso.User == "" && iso.Container == nil && iso.Limits == nil &&
+		!iso.Privileged && !iso.AllowRoot && iso.Network == nil && len(iso.FS) == 0 &&
+		(iso.Allow != nil || iso.Detect != nil || iso.EgressLimits != nil)
+}
+
+// LayerIsolation is inner over outer, most specific wins: a block with a
+// mode replaces outer whole (as ever); a knobs-only block keeps outer and
+// replaces only the knobs it sets.
+func LayerIsolation(outer, inner *IsolationConfig) *IsolationConfig {
+	if inner == nil {
+		return outer
+	}
+	if outer == nil || !inner.SandboxKnobsOnly() {
+		return inner
+	}
+	out := *outer
+	if inner.Allow != nil {
+		out.Allow = inner.Allow
+	}
+	if inner.Detect != nil {
+		out.Detect = inner.Detect
+	}
+	if inner.EgressLimits != nil {
+		out.EgressLimits = inner.EgressLimits
+	}
+	return &out
+}
+
 // OptsOut reports the explicit opt-out of the agent sandbox: `mode: none`.
 func (iso *IsolationConfig) OptsOut() bool { return iso != nil && iso.Mode == "none" }
 
 // validatePaseoIsolation checks isolation: on a paseo step or runtime. A
 // paseo agent is the paseo daemon's child: conductor does not wrap it, it
-// names the provider entry paseo launches it with. The only isolation that
-// says something there is `{mode: none}` — the plain provider, not the
-// conductor-owned sandboxed one; anything else would be a silent no-op.
+// names the provider entry paseo launches it with. What says something there
+// is `{mode: none}` — the plain provider, not the conductor-owned sandboxed
+// one — and a block of the agent sandbox's own knobs (allow:, detect:,
+// egress_limits:); anything else would be a silent no-op.
 func validatePaseoIsolation(where string, iso *IsolationConfig) error {
-	if iso.OptsOut() {
+	if iso.OptsOut() || iso.SandboxKnobsOnly() {
 		return validateIsolation(where, iso, false)
 	}
 	return fmt.Errorf("config: %s: on a paseo runtime only `isolation: {mode: none}` applies (it launches the agent through paseo's plain provider instead of conductor's sandboxed entry) — conductor does not wrap a paseo agent itself; for another sandbox use an acp/cli/opencode/agent-deck runtime", where)
@@ -310,6 +351,12 @@ func isolationLoosens(iso *IsolationConfig, agent bool) string {
 		return ""
 	case iso.Mode == "none":
 		return "{mode: none} (no sandbox at all)"
+	case iso.Allow != nil:
+		return "allow: (a sandbox allowance) — a pack requests one under allowances: in its manifest and the operator grants it (`packs: { <instance>: { grant: [<name>] } }`), or the operator writes it"
+	case iso.Detect != nil && (iso.Detect.Action == "alert" || iso.Detect.Action == "off" || (iso.Detect.Tripwires != nil && !*iso.Detect.Tripwires)):
+		return "detect: (weaker detection)"
+	case iso.EgressLimits != nil:
+		return "egress_limits: (the operator's egress caps)"
 	case !agent:
 		return "" // a code step's own wrapper choice: its synthesized jail is the default, not a floor
 	case iso.Mode == "user" || iso.Mode == "container":

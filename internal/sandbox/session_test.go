@@ -362,3 +362,48 @@ func TestSessionDownloadCapClosesTunnel(t *testing.T) {
 	}
 	rec.wait(t, func(c ConnRecord) bool { return c.Run == "dl-cap-run" && c.Reason == "download cap reached" })
 }
+
+// A launch's non_tls allowance lets raw bytes through to the target it
+// names, audited as allowed by its scope; another allowed target of the
+// same session still gets the TLS check.
+func TestNonTLSAllowanceExemptsOnlyItsTarget(t *testing.T) {
+	bastion, other := newUpstream(t), newUpstream(t)
+	bt, ot := bastion.ln.Addr().String(), other.ln.Addr().String()
+	p := &Proxy{Allow: []string{bt, ot}}
+	addr, rec := startProxy(t, p)
+	cred, _ := p.MintSession(SessionOpts{Run: "run-9", RequireTLS: true, NonTLS: []string{bt}, NonTLSBy: "workflow deploy"})
+
+	c, br, code := connectVia(t, addr, cred, bt)
+	if code != 200 {
+		t.Fatalf("CONNECT: %d", code)
+	}
+	banner := "SSH-2.0-OpenSSH_9.6\r\n"
+	_, _ = io.WriteString(c, banner)
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	got := make([]byte, len(banner))
+	if _, err := io.ReadFull(br, got); err != nil || string(got) != banner {
+		t.Fatalf("raw bytes to the allowed host: %q, %v", got, err)
+	}
+	c.Close()
+	r := rec.wait(t, func(c ConnRecord) bool { return c.Target == bt && c.Outcome != "refused" })
+	if r.AllowedBy != "workflow deploy" || r.Run != "run-9" {
+		t.Fatalf("the allowed tunnel's record: %+v", r)
+	}
+
+	c2, br2, code := connectVia(t, addr, cred, ot)
+	defer c2.Close()
+	if code != 200 {
+		t.Fatalf("CONNECT: %d", code)
+	}
+	_, _ = io.WriteString(c2, banner)
+	c2.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := br2.ReadByte(); err == nil {
+		t.Fatal("raw bytes passed to a host the allowance does not name")
+	}
+	if r := rec.wait(t, func(c ConnRecord) bool { return c.Target == ot }); r.Outcome != "refused" || r.AllowedBy != "" {
+		t.Fatalf("the other host's record: %+v", r)
+	}
+	if n := other.accepted.Load(); n != 0 {
+		t.Fatalf("the other host was dialed %d time(s)", n)
+	}
+}

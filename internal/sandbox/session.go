@@ -35,6 +35,11 @@ type SessionOpts struct {
 	// naming the CONNECT host (SNI; no encrypted ClientHello), read before
 	// the upstream is dialed.
 	RequireTLS bool
+	// NonTLS are host:port patterns (as egress) exempt from RequireTLS: the
+	// launch's allowance for raw traffic (an SSH bastion), audited with
+	// NonTLSBy as the tunnel's AllowedBy.
+	NonTLS   []string
+	NonTLSBy string
 }
 
 // Default egress limits.
@@ -74,6 +79,9 @@ type ConnRecord struct {
 	// (an interactive channel's shape).
 	MaxIdle     time.Duration `json:"max_idle,omitempty"`
 	ServerFirst int           `json:"server_first,omitempty"`
+	// AllowedBy names the allowance that let the tunnel skip a check (its
+	// scope); "" for an ordinary tunnel.
+	AllowedBy string `json:"allowed_by,omitempty"`
 }
 
 // Session is one launch's use of a proxy.
@@ -81,6 +89,8 @@ type Session struct {
 	Run        string
 	lim        EgressLimits
 	requireTLS bool
+	nonTLS     []string
+	nonTLSBy   string
 
 	up, down atomic.Int64
 
@@ -90,7 +100,7 @@ type Session struct {
 }
 
 func newSession(o SessionOpts) *Session {
-	return &Session{Run: o.Run, lim: o.Limits.resolved(), requireTLS: o.RequireTLS, conns: map[*tunnel]struct{}{}}
+	return &Session{Run: o.Run, lim: o.Limits.resolved(), requireTLS: o.RequireTLS, nonTLS: o.NonTLS, nonTLSBy: o.NonTLSBy, conns: map[*tunnel]struct{}{}}
 }
 
 // Bytes reports the session's totals.

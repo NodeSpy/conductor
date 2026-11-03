@@ -76,3 +76,45 @@ func TestDispatchHomesAreEphemeral(t *testing.T) {
 		t.Fatal("a recent home was swept")
 	}
 }
+
+// The scope conductor recorded for a workspace (its dispatch's allowance)
+// shapes every launch there, a resume after a restart included; another
+// workspace keeps the strict defaults.
+func TestPolicyForEntryAppliesTheScope(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	reg := &Registry{}
+	if err := reg.PersistTo(path); err != nil {
+		t.Fatal(err)
+	}
+	allowed, strict := t.TempDir(), t.TempDir()
+	reg.Register(Entry{Workspace: allowed, Identity: "agent:deploy", Dispatch: "d1", Scope: &Scope{
+		Allow: &Allowance{Tunnels: []string{"ssh"}, TunnelHosts: []string{"bastion.example:22"}, NonTLS: []string{"bastion.example:22"}, By: "workflow deploy"},
+	}})
+	reg.Register(Entry{Workspace: strict, Identity: "agent:review", Dispatch: "d2"})
+	reloaded := &Registry{}
+	if err := reloaded.PersistTo(path); err != nil {
+		t.Fatal(err)
+	}
+	r := &Resolver{Registry: reloaded, StateRoot: t.TempDir(), GOOS: "linux", Allow: &Allowance{Pty: true, By: "sandbox"}}
+	pol := func(ws string) Policy {
+		t.Helper()
+		e, ok := reloaded.Lookup(ws)
+		if !ok {
+			t.Fatalf("%s not registered", ws)
+		}
+		p, err := r.PolicyForEntry(e, "claude", nil, skill.ProcessAnchor{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	a := pol(allowed)
+	if !a.Detect.allows("tunnel_tool", "ssh") || !a.Detect.AllowPty || a.Detect.AllowedBy != "sandbox + workflow deploy" ||
+		!contains(a.Egress, "bastion.example:22") || !contains(a.NonTLS, "bastion.example:22") {
+		t.Fatalf("the allowed workspace's policy: detect %+v egress %v non-TLS %v", a.Detect, a.Egress, a.NonTLS)
+	}
+	s := pol(strict)
+	if s.Detect.allows("tunnel_tool", "ssh") || contains(s.Egress, "bastion.example:22") || s.NonTLS != nil || s.Detect.AllowedBy != "sandbox" {
+		t.Fatalf("the strict workspace's policy: detect %+v egress %v non-TLS %v", s.Detect, s.Egress, s.NonTLS)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -548,7 +549,7 @@ func TestWrapMintsTheAgentsEgressSession(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := sandbox.SessionOpts{Run: "run-7:fix", RequireTLS: true, Limits: sandbox.EgressLimits{Upload: 1 << 20}}
-			if len(got) != 1 || got[0] != want {
+			if len(got) != 1 || !reflect.DeepEqual(got[0], want) {
 				t.Fatalf("sessions minted %+v, want one %+v", got, want)
 			}
 			got = nil

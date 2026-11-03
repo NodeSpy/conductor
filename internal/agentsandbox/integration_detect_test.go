@@ -174,3 +174,86 @@ func TestSandboxDetectsAndGateways(t *testing.T) {
 		t.Fatalf("upstream requests %v (the refused one never forwarded)", keys)
 	}
 }
+
+// In the real sandbox, a launch whose scope allows a tunnel tool runs it to
+// the end (the watcher audits it as allowed, by the scope); the same tool
+// in a launch without the allowance is killed.
+func TestSandboxAllowsOnlyItsScopesTunnel(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short")
+	}
+	if why := Probe(); why != "" {
+		if os.Getenv("CONDUCTOR_REQUIRE_SANDBOX") == "1" {
+			t.Fatalf("the agent sandbox cannot be built here: %s", why)
+		}
+		t.Skipf("no sandbox here: %s", why)
+	}
+	root, err := SocketDir("csa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	tool := fakeTool(t, "cloudflared")
+	launch := func(name string, scope *Scope) (out string, events []map[string]any, err error) {
+		ws, state := filepath.Join(root, name, "ws"), filepath.Join(root, name, "st")
+		os.MkdirAll(ws, 0o700)
+		home, logins, err := PrepareHome(HomeSpec{Root: state, Key: "agent:" + name, Tool: "claude-code", GOOS: runtime.GOOS})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pol := Policy{
+			Identity: "agent:" + name, Tool: "claude-code", Workspace: ws, Home: home, Logins: logins,
+			ReadOnly: []string{filepath.Dir(tool)},
+			Detect:   DetectSpec{Interval: 200 * time.Millisecond}, Limits: LimitSpec{Off: true},
+		}
+		applyScope(&pol, nil, scope)
+		pm := sandbox.NewProxyManager(nil)
+		defer pm.Close()
+		var mu sync.Mutex
+		l, err := Wrap(pol, []string{"/bin/sh", "-c", tool + " 3 && echo survived"}, Deps{
+			SelfExe: selfConductor(t), EgressUnix: pm.UnixEndpoint, EgressAddr: pm.Endpoint,
+			LookPath: exec.LookPath, RealHome: filepath.Join(root, "real"), Inherited: os.Environ(),
+			Event: func(kind string, f map[string]any) {
+				if kind == "detection" {
+					mu.Lock()
+					events = append(events, f)
+					mu.Unlock()
+				}
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer l.Cleanup()
+		cmd := exec.Command(l.Argv[0], l.Argv[1:]...)
+		cmd.Dir, cmd.Env = l.Dir, l.Env
+		var buf bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &buf, &buf
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		LaunchStarted(cmd.Env, cmd.Process.Pid)
+		err = cmd.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+		t.Logf("%s (%s): err %v, events %v\n%s", name, runtime.GOOS, err, events, buf.Bytes())
+		return buf.String(), events, err
+	}
+	out, events, err := launch("deploy", &Scope{Allow: &Allowance{Tunnels: []string{"cloudflared"}, By: "workflow deploy"}})
+	if err != nil || !strings.Contains(out, "survived") {
+		t.Fatalf("the allowed launch's tunnel did not run to its end: %v", err)
+	}
+	if len(events) == 0 || events[0]["action"] != "allowed" || events[0]["allowed_by"] != "workflow deploy" || events[0]["kind"] != "tunnel_tool" {
+		t.Fatalf("the allowed tunnel's audit: %v", events)
+	}
+	out, events, err = launch("review", nil)
+	if err == nil || strings.Contains(out, "survived") {
+		t.Fatal("the same tool ran to its end in a launch without the allowance")
+	}
+	if len(events) == 0 || events[0]["action"] != DetectKill {
+		t.Fatalf("the strict launch's audit: %v", events)
+	}
+}

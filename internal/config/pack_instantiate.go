@@ -307,6 +307,9 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	if err := st.applyFleetOverlay(ns, req.inst, man.Models); err != nil {
 		return err
 	}
+	if err := st.applyAllowanceGrants(ns, req.inst, man); err != nil {
+		return err
+	}
 
 	// ---- Secret-broker containment on every step the pack ships (checked
 	// post-overlay so a consumer's own allow_secrets bindings are seen too).

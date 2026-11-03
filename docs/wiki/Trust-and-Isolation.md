@@ -70,6 +70,13 @@ not one you discover in an incident. Enforcement is best-effort for the
 synthesized default (a box that can't build the jail runs the step with a
 warning); an explicit `isolation:` fails closed.
 
+The same holds for the agent sandbox's **allowances**: letting an agent run a
+tunnel tool or send raw TCP to a host. A pack can only request one, in its
+manifest's `allowances:`. The request applies, to the steps it names, once
+you grant it (`packs: { <inst>: { grant: [<name>] } }`), and `conductor
+validate` lists every grant and every request still pending. See
+[[Isolation#scoped-allowances]].
+
 A fleet not yet ready for the stricter default sets `code: { isolation_default:
 none }` to restore the previous bare-by-default behavior for every local code
 step at once, while it migrates configs that need a loosened `isolation:` of

@@ -54,6 +54,9 @@ type Entry struct {
 	// registered it ("" unknown): commits past it are the agent's own, the
 	// work an unpushed step end would lose.
 	StartHead string
+	// Scope is what the dispatch's own scopes (its isolation: blocks, a
+	// pack grant) change of the sandbox; nil: nothing.
+	Scope *Scope
 }
 
 // PushTarget is where conductor — never the agent — pushes a workspace.
@@ -101,6 +104,7 @@ type persisted struct {
 	Env       []string    `json:"env,omitempty"`
 	Push      *PushTarget `json:"push,omitempty"`
 	StartHead string      `json:"start_head,omitempty"`
+	Scope     *Scope      `json:"scope,omitempty"`
 }
 
 // PersistTo loads the registry saved at path (entries whose workspace is
@@ -132,7 +136,7 @@ func (r *Registry) PersistTo(path string) error {
 			continue
 		}
 		r.byWS[ws] = Entry{Workspace: ws, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
-			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead}
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope}
 	}
 	r.saveLocked()
 	return nil
@@ -146,7 +150,7 @@ func (r *Registry) saveLocked() {
 	list := make([]persisted, 0, len(r.byWS))
 	for _, e := range r.byWS {
 		list = append(list, persisted{Workspace: e.Workspace, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
-			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead})
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Workspace < list[j].Workspace })
 	b, err := json.MarshalIndent(list, "", " ")

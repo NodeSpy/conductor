@@ -146,6 +146,9 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	}
 	idle, up, down := cfg.Sandbox.AgentEgressLimits()
 	r.EgressIdle, r.EgressUpload, r.EgressDownload = int64(idle), up, down
+	if cfg.Sandbox != nil {
+		r.Allow = dispatch.AllowanceOf(cfg.Sandbox.Allow)
+	}
 	if err := os.MkdirAll(r.StateRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("agent sandbox state dir %s: %w", r.StateRoot, err)
 	}

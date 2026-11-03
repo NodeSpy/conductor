@@ -1419,7 +1419,12 @@ sandbox:
   #                             #   alert: audit + notify only; off: no watcher/tripwires/git guard
   #   tripwires: true           # decoy credentials in the agent's home
   #   interval: 3s
-  #   allow: []                 # tunnel tools the work needs, e.g. [ssh]
+  #   allow: []                 # programs exempt from every rule, every launch (prefer allow: below)
+  # allow:                      # the base allowance of EVERY launch; scope one instead in an
+  #   tunnels: []               #   isolation: block (workflow/trigger/step/runtime), e.g.
+  #   non_tls: []               #   isolation: { allow: { tunnels: [ssh@bastion.example.com:22],
+  #   reverse_shell: false      #                         non_tls: [bastion.example.com:22] } }
+  #   pty: false                #   (see Isolation.md § Scoped allowances)
   # limits:                     # Linux: a systemd user scope per launch
   #   memory: 50%               # per launch
   #   pids: 8192

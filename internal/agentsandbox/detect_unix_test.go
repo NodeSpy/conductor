@@ -336,3 +336,65 @@ func TestTripwireRefusesASymlinkedDecoy(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// A scoped allowance lets the tool it names run in its own launch only:
+// audited as allowed (by its scope), not killed; the same tool in a launch
+// without it is killed, and another tool in the allowed launch is too.
+func TestScopedAllowanceLetsOnlyItsLaunchRunATunnel(t *testing.T) {
+	cf, ssh := fakeTool(t, "cloudflared"), fakeTool(t, "ssh")
+	type launch struct {
+		d      *detector
+		cmd    *exec.Cmd
+		events []map[string]any
+		mu     sync.Mutex
+	}
+	run := func(spec DetectSpec, tool string) *launch {
+		l := &launch{}
+		marker := newMarker()
+		l.cmd = exec.Command(tool, "60")
+		l.cmd.Env = append(os.Environ(), markerEnv+"="+marker)
+		if err := l.cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = l.cmd.Process.Kill(); waitOnce(l.cmd) })
+		l.d = &detector{spec: spec, run: "r", allow: map[string]bool{}, marker: marker, signal: signalProc, reported: map[string]bool{},
+			event: func(_ string, f map[string]any) { l.mu.Lock(); l.events = append(l.events, f); l.mu.Unlock() }}
+		l.d.list = listProcs(marker, l.d.isRoot)
+		l.d.started(l.cmd.Process.Pid)
+		return l
+	}
+	allowance := DetectSpec{AllowTunnels: []string{"cloudflared"}, AllowedBy: "workflow deploy"}
+	allowed := run(allowance, cf)
+	strict := run(DetectSpec{}, cf)
+	otherTool := run(allowance, ssh)
+	time.Sleep(100 * time.Millisecond)
+	for _, l := range []*launch{allowed, strict, otherTool} {
+		l.d.scan()
+	}
+	exited := func(c *exec.Cmd) bool {
+		ch := make(chan struct{})
+		go func() { waitOnce(c); close(ch) }()
+		select {
+		case <-ch:
+			return true
+		case <-time.After(5 * time.Second):
+			return false
+		}
+	}
+	if !exited(strict.cmd) || !exited(otherTool.cmd) {
+		t.Fatal("a tunnel tool outside its allowance was not killed")
+	}
+	if err := allowed.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatal("the allowed launch's tunnel was killed")
+	}
+	allowed.mu.Lock()
+	defer allowed.mu.Unlock()
+	if len(allowed.events) != 1 || allowed.events[0]["action"] != "allowed" || allowed.events[0]["allowed_by"] != "workflow deploy" || allowed.events[0]["kind"] != "tunnel_tool" {
+		t.Fatalf("the allowed tunnel's audit: %v", allowed.events)
+	}
+	strict.mu.Lock()
+	defer strict.mu.Unlock()
+	if len(strict.events) == 0 || strict.events[0]["action"] != DetectKill {
+		t.Fatalf("the strict launch's audit: %v", strict.events)
+	}
+}

@@ -155,6 +155,31 @@ type DetectSpec struct {
 	NoTripwires bool `json:"no_tripwires,omitempty"`
 	// Allow are programs exempt from the tunnel-tool rule.
 	Allow []string `json:"allow,omitempty"`
+	// AllowTunnels, AllowReverseShell and AllowPty are the launch's scoped
+	// allowances (see Allowance): what they cover is audited as allowed
+	// (by AllowedBy) and left running.
+	AllowTunnels      []string `json:"allow_tunnels,omitempty"`
+	AllowReverseShell bool     `json:"allow_reverse_shell,omitempty"`
+	AllowPty          bool     `json:"allow_pty,omitempty"`
+	AllowedBy         string   `json:"allowed_by,omitempty"`
+}
+
+// allows reports whether the launch's allowance covers a verdict of kind
+// on program name.
+func (s DetectSpec) allows(kind, name string) bool {
+	switch kind {
+	case "tunnel_tool":
+		for _, t := range s.AllowTunnels {
+			if strings.EqualFold(t, name) {
+				return true
+			}
+		}
+	case "reverse_shell":
+		return s.AllowReverseShell
+	case "pty_relay":
+		return s.AllowPty
+	}
+	return false
 }
 
 func (s DetectSpec) action() string {
@@ -314,7 +339,12 @@ func (d *detector) scan() {
 	root := agentRoot(procs, d.self)
 	for _, p := range procs {
 		if v := classify(p, d.allow, p.pid == root, d.self != "" && p.exe == d.self); v != nil {
-			d.detected(v.kind, fmt.Sprintf("pid %d: %s", p.pid, v.reason), false)
+			reason := fmt.Sprintf("pid %d: %s", p.pid, v.reason)
+			if d.spec.allows(v.kind, p.progName()) {
+				d.allowed(v.kind, reason)
+				continue
+			}
+			d.detected(v.kind, reason, false)
 		}
 	}
 }
@@ -338,6 +368,19 @@ func (d *detector) detected(kind, reason string, always bool) {
 	}
 	if kill {
 		d.killAll()
+	}
+}
+
+// allowed audits a detection the launch's allowance covers, once per kind
+// and reason; nothing is killed.
+func (d *detector) allowed(kind, reason string) {
+	d.mu.Lock()
+	key := "allowed\x00" + kind + "\x00" + reason
+	first := !d.reported[key]
+	d.reported[key] = true
+	d.mu.Unlock()
+	if first && d.event != nil {
+		d.event("detection", map[string]any{"run": d.run, "kind": kind, "reason": reason, "action": "allowed", "allowed_by": d.spec.AllowedBy})
 	}
 }
 

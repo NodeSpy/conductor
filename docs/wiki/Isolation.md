@@ -196,7 +196,9 @@ sandbox:
   #   action: kill                # alert | off
   #   tripwires: true
   #   interval: 3s
-  #   allow: []                   # tunnel tools a project's work needs, e.g. [ssh]
+  #   allow: []                   # programs exempt in EVERY launch (prefer a scoped allowance)
+  # allow: { tunnels: [], non_tls: [], reverse_shell: false, pty: false }   # base allowance of every launch;
+  #                                 # scope one in an isolation: block (§ Scoped allowances)
   # limits:                       # Linux: a systemd user scope per launch
   #   memory: 50%                 # per launch (systemd syntax: 4G, 50%)
   #   pids: 8192
@@ -481,8 +483,10 @@ The response is `detect.action`:
 - **`alert`**: audited and notified only.
 - **`off`**: no watcher, tripwires or git guard.
 
-`detect.allow: [ssh]` exempts a tunnel tool a project's work needs, and
-`tripwires: false` removes the decoys.
+`detect.allow: [ssh]` exempts a program in every launch, and
+`tripwires: false` removes the decoys. To let one workflow or step use a
+tunnel tool, raw TCP to a host, or weaker detection while the rest keep the
+defaults, use a [scoped allowance](#scoped-allowances).
 
 Whatever the action, when a launch ends the watcher kills whatever of it is
 left (audited as `sandbox_leftover_killed`). That includes a daemonized child
@@ -532,6 +536,95 @@ listens on the host loopback at exactly its port. The watcher reads `ps` and
 hides the environment of platform and hardened-runtime binaries
 (`sandbox-exec`, `ssh`, `sh`, most signed agent CLIs), so there the launch
 is followed from the root its launcher named.
+
+#### Scoped allowances {#scoped-allowances}
+
+Some work needs what the defaults stop, such as a deploy that opens a
+`cloudflared` tunnel or raw `ssh` to a bastion. An **allowance** lets one
+scope do that while every other agent keeps the strict defaults.
+
+Write an allowance in an `isolation:` block of a runtime, workflow, trigger
+or step. It applies to that scope's agent launches. `sandbox.allow` is the
+base for every launch, and a scope's allowance adds to it.
+
+```yaml
+workflows:
+  deploy-preview:
+    isolation:
+      allow:
+        tunnels:                          # tunnel tools the watcher lets run
+          - cloudflared@*.trycloudflare.com # name@host[:port]: also joins this scope's egress
+          - ssh@bastion.example.com:22
+        non_tls: [bastion.example.com:22] # raw TCP: no TLS first-bytes check for these targets
+        reverse_shell: false              # a shell on a network socket (default false)
+        pty: false                        # a pty relayed to a network socket (default false)
+      detect: { action: kill, tripwires: true }   # per-scope override of sandbox.detect
+      egress_limits: { idle: 30m }                # per-scope override of sandbox.egress_limits
+    steps:
+      - { id: publish, type: agent, prompt: "Publish a preview and report its URL." }
+  review:                                 # no allowance: cloudflared or ssh here is killed
+    steps:
+      - { id: look, type: agent, prompt: "Review the change." }
+```
+
+How it works:
+
+- **Narrow by default, broad if you write it.** A tunnel names a program.
+  With `@host[:port]`, that destination joins the scope's egress allowlist
+  (a bare host means 443; globs work as in `egress:`). `non_tls` entries
+  need an explicit port and must also be in the scope's egress. `*` is
+  accepted when you write it.
+- **The proxy cannot tell processes apart.** A destination joins the egress
+  of the scope's launches, so any process of those launches can reach it,
+  not only the named tool.
+- **A block with only `allow:`, `detect:` or `egress_limits:` needs no
+  `mode:`.** It layers onto the scope outside it and keeps that scope's
+  mode, network and paths. It works on paseo steps and runtimes too. A
+  block with a `mode:` replaces the outer one whole, as always. The most
+  specific setting of each knob wins (step over trigger or workflow over
+  runtime), so a step's `allow:` replaces its workflow's.
+- **Allowed is still audited.** An allowed detection is a
+  `sandbox_detection` row with `action: allowed` and `allowed_by: <scope>`,
+  for example `workflow deploy-preview` or `sandbox + workflow
+  deploy-preview`. It is logged but not escalated. A tunnel that skipped
+  the TLS check is an `egress` row with `allowed_by`.
+- **Everything else still applies to an allowed launch.** That covers: no
+  credentials, the model gateway, the step-lifetime kill and leftover kill,
+  close-on-revoke, the caps, the git protections, the tripwires (unless the
+  scope's `detect:` turns them off) and the git guard.
+- **Only your config grants allowances.** An agent-authored workflow's
+  `allow:`, `detect:` and `egress_limits:` are ignored. Nothing an event
+  carries reaches them.
+- **Packs request allowances; you grant them.** A pack cannot write
+  `allow:` (or weaken `detect:` or `egress_limits:`) itself. It declares a
+  request in its manifest, and the request applies, to the steps it names
+  only, once you grant it by name:
+
+  ```yaml
+  # the pack's manifest
+  allowances:
+    tunnel:
+      reason: publishes a preview through a tunnel
+      steps: [deploy/publish]
+      allow: { tunnels: [cloudflared@*.trycloudflare.com] }
+
+  # your config
+  packs:
+    previews:
+      use: …
+      grant: [tunnel]
+  ```
+
+  You can also write an allowance on a pack's step yourself:
+  `packs: <instance>: steps: <ref>: { isolation: { allow: … } }`.
+- **`conductor validate` lists every loosening.** That includes:
+  - `sandbox.allow`;
+  - each scope's allowance, weakened `detect:` and lifted egress limit;
+  - each pack grant;
+  - each pack request you have not granted.
+
+`sandbox.detect.allow` (older, global) exempts a program from every rule
+in every launch. Prefer a scoped `tunnels:` allowance.
 
 #### What is left {#what-is-left}
 
@@ -991,8 +1084,8 @@ An agent launch's containment adds:
 
 | event | when |
 |---|---|
-| `egress` | each request through its egress session: `run`, `target`, `sni`, `up`/`down` bytes, `duration_ms`, `outcome` (`allowed`, `refused`, `closed`) and a `reason` for a refusal or closure |
-| `sandbox_detection` | the watcher, a tripwire or the git guard: `kind`, `reason`, `action` (also a `conductor.escalate` notification) |
+| `egress` | each request through its egress session: `run`, `target`, `sni`, `up`/`down` bytes, `duration_ms`, `outcome` (`allowed`, `refused`, `closed`), a `reason` for a refusal or closure, and `allowed_by` for a tunnel a `non_tls` allowance let skip the TLS check |
+| `sandbox_detection` | the watcher, a tripwire or the git guard: `kind`, `reason`, `action` (also a `conductor.escalate` notification); `action: allowed` with `allowed_by: <scope>` when the launch's [allowance](#scoped-allowances) covers it (audited and logged, not notified) |
 | `sandbox_limit` | the disk guard stopped a launch (also notified) |
 | `sandbox_leftover_killed` | processes a launch left running were killed at its end |
 | `sandbox_model_gateway_refused` | a request to the model gateway without the launch's token |

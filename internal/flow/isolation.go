@@ -15,27 +15,24 @@ func withDefaultIsolation(ctx context.Context, iso *config.IsolationConfig) cont
 	if iso == nil {
 		return ctx
 	}
-	return context.WithValue(ctx, isolationKey{}, iso)
+	outer, _ := ctx.Value(isolationKey{}).(*config.IsolationConfig)
+	return context.WithValue(ctx, isolationKey{}, config.LayerIsolation(outer, iso))
 }
 
 // effectiveIsolation resolves the isolation: one agent dispatch carries on
 // its step: the step's own, else its trigger's / workflow's, else — for a
 // paseo runtime, whose launch the paseo dispatcher alone decides — that
-// runtime's. (A runtime conductor launches itself applies its own
-// isolation: under the step's, in the controller.)
+// runtime's. A block of only the agent sandbox's knobs (allow:, detect:,
+// egress_limits:) layers onto the scope outside it instead of replacing it
+// (config.LayerIsolation). (A runtime conductor launches itself applies its
+// own isolation: under the step's, in the controller.)
 func (r *Runner) effectiveIsolation(ctx context.Context, step config.Step) *config.IsolationConfig {
-	if step.Isolation != nil {
-		return step.Isolation
+	var rt *config.IsolationConfig
+	if r.Cfg != nil {
+		if rc, ok := r.Cfg.Runtimes[r.runtimeOf(step)]; ok && rc.BuiltinType() == "paseo" {
+			rt = rc.Isolation
+		}
 	}
-	if iso, _ := ctx.Value(isolationKey{}).(*config.IsolationConfig); iso != nil {
-		return iso
-	}
-	if r.Cfg == nil {
-		return nil
-	}
-	rn := r.runtimeOf(step)
-	if rt, ok := r.Cfg.Runtimes[rn]; ok && rt.BuiltinType() == "paseo" {
-		return rt.Isolation
-	}
-	return nil
+	scope, _ := ctx.Value(isolationKey{}).(*config.IsolationConfig)
+	return config.LayerIsolation(config.LayerIsolation(rt, scope), step.Isolation)
 }

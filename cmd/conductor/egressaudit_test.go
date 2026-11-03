@@ -47,3 +47,24 @@ func TestEgressAuditRecordsSessions(t *testing.T) {
 		t.Fatalf("only a refusal or a closure with a reason is logged: %d", logged)
 	}
 }
+
+// What a launch's allowance let through is audited (allowed, by its scope)
+// and logged, and never escalated.
+func TestAllowedEventsAreAuditedNotEscalated(t *testing.T) {
+	var rows []map[string]any
+	var notes, logs []string
+	logf := func(f string, a ...any) { logs = append(logs, f) }
+	ev := sandboxEventAudit(logf, func(r map[string]any) { rows = append(rows, r) }, func(m string) { notes = append(notes, m) })
+	ev("detection", map[string]any{"run": "d1", "kind": "tunnel_tool", "reason": "pid 9: cloudflared", "action": "allowed", "allowed_by": "workflow deploy"})
+	if len(rows) != 1 || rows[0]["action"] != "allowed" || rows[0]["allowed_by"] != "workflow deploy" || len(logs) != 1 {
+		t.Fatalf("rows %v, logs %v", rows, logs)
+	}
+	if len(notes) != 0 {
+		t.Fatalf("an allowed detection was escalated: %q", notes)
+	}
+	rows, logs = nil, nil
+	egressAudit(logf, func(r map[string]any) { rows = append(rows, r) })(sandbox.ConnRecord{Run: "d1", Target: "bastion.example:22", Outcome: "closed", AllowedBy: "workflow deploy"})
+	if len(rows) != 1 || rows[0]["allowed_by"] != "workflow deploy" || len(logs) != 1 {
+		t.Fatalf("rows %v, logs %v", rows, logs)
+	}
+}
