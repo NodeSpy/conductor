@@ -1,6 +1,7 @@
 package agentsandbox
 
 import (
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -96,8 +97,14 @@ func TestDiskGuard(t *testing.T) {
 	var killed []int
 	var events []map[string]any
 	low := ""
+	// Never this process or its parent (safeToSignal), whatever pid the
+	// test runs as.
+	pid := 70
+	for pid == os.Getpid() || pid == os.Getppid() {
+		pid++
+	}
 	d := &detector{off: true, run: "r", reported: map[string]bool{},
-		list:    func() ([]procInfo, error) { return []procInfo{{pid: 70, ppid: 1, marked: true, start: 1}}, nil },
+		list:    func() ([]procInfo, error) { return []procInfo{{pid: pid, ppid: 1, marked: true, start: 1}}, nil },
 		signal:  func(pid int, _ uint64) error { killed = append(killed, pid); return nil },
 		event:   func(_ string, f map[string]any) { events = append(events, f) },
 		diskLow: func() string { return low }}

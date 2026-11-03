@@ -3,6 +3,7 @@
 package agentsandbox
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -396,5 +397,129 @@ func TestScopedAllowanceLetsOnlyItsLaunchRunATunnel(t *testing.T) {
 	defer strict.mu.Unlock()
 	if len(strict.events) == 0 || strict.events[0]["action"] != DetectKill {
 		t.Fatalf("the strict launch's audit: %v", strict.events)
+	}
+}
+
+// The red team's evasions, as real processes: a renamed copy of the shell
+// with its socket on fd 3, the real shell with its socket on fd 3, and a
+// renamed copy of a tunnel tool — each found by what its binary is and
+// every descriptor it holds.
+func TestDetectorSeesThroughRenamesAndDescriptors(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	sh, _ = filepath.EvalSymlinks(sh)
+	tail, err := exec.LookPath("tail")
+	if err != nil {
+		t.Skip("no tail")
+	}
+	tail, _ = filepath.EvalSymlinks(tail)
+	cp := func(src, dst string) string {
+		b, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return dst
+	}
+	// The host's "socat" is a copy of tail here: a long-running binary no
+	// other process of the test runs.
+	bin, work := t.TempDir(), t.TempDir()
+	cp(tail, filepath.Join(bin, "socat"))
+	ix := indexBinaries([]string{bin, filepath.Dir(sh)})
+	shID, ok := ix.identify(sh)
+	if !ok || shID.class != classShell {
+		t.Skipf("%s is not indexed as a shell (%+v)", sh, shID)
+	}
+	old := hostBinaries
+	hostBinaries = func() *binaryIndex { return ix }
+	t.Cleanup(func() { hostBinaries = old })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go io.Copy(io.Discard, c)
+		}
+	}()
+	sock := func() *os.File {
+		c, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := c.(*net.TCPConn).File()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Close()
+		return f
+	}
+	marker := newMarker()
+	env := append(os.Environ(), markerEnv+"="+marker)
+	start := func(fd3 *os.File, name string, args ...string) *exec.Cmd {
+		c := exec.Command(name, args...)
+		c.Env = env
+		if fd3 != nil {
+			c.ExtraFiles = []*os.File{fd3}
+		}
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		if fd3 != nil {
+			fd3.Close()
+		}
+		t.Cleanup(func() { _ = c.Process.Kill(); waitOnce(c) })
+		return c
+	}
+	procs := map[string]*exec.Cmd{
+		"renamed shell": start(sock(), cp(sh, filepath.Join(work, "esbuild")), "-c", "sleep 60; true"),
+		"shell, fd 3":   start(sock(), sh, "-c", "sleep 60; true"),
+		"renamed socat": start(nil, cp(tail, filepath.Join(work, "dep-sync")), "-f", "/dev/null"),
+	}
+	var mu sync.Mutex
+	var reasons []string
+	d := &detector{spec: DetectSpec{Action: DetectAlert}, run: "r", allow: map[string]bool{}, marker: marker,
+		signal: signalProc, reported: map[string]bool{},
+		event: func(_ string, f map[string]any) {
+			mu.Lock()
+			reasons = append(reasons, f["kind"].(string)+": "+f["reason"].(string))
+			mu.Unlock()
+		}}
+	d.list = listProcs(marker, d.isRoot)
+	time.Sleep(300 * time.Millisecond)
+	if runtime.GOOS == "darwin" {
+		for _, c := range procs {
+			d.started(c.Process.Pid)
+		}
+	}
+	d.scan()
+	mu.Lock()
+	got := strings.Join(reasons, "\n")
+	mu.Unlock()
+	shell := "reverse_shell: pid %d: " + shID.name + " with an inet socket on fd 3"
+	for name, want := range map[string]string{
+		"renamed shell": fmt.Sprintf(shell, procs["renamed shell"].Process.Pid),
+		"shell, fd 3":   fmt.Sprintf(shell, procs["shell, fd 3"].Process.Pid),
+		"renamed socat": fmt.Sprintf("tunnel_tool: pid %d: socat runs", procs["renamed socat"].Process.Pid),
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%s: no %q in\n%s", name, want, got)
+		}
+	}
+	if !strings.Contains(got, "which is "+shID.name+" run as esbuild") || !strings.Contains(got, "which is socat run as dep-sync") {
+		t.Errorf("the reasons do not name the copies:\n%s", got)
+	}
+	if n := strings.Count(got, "reverse_shell:"); n != 2 {
+		t.Errorf("both shells holding a socket on fd 3 are reported (%d):\n%s", n, got)
 	}
 }

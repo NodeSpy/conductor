@@ -51,11 +51,44 @@ type procInfo struct {
 	args      []string
 	exe       string
 	marked    bool
-	// Linux: what fds 0-2 are, and whether the process holds a pty master
-	// and an inet socket.
+	// What fds 0-2 are, every fd holding an inet socket, and (Linux)
+	// whether the process holds a pty master.
 	stdio      [3]string
+	inetFDs    []int
 	ptyMaster  bool
 	inetSocket bool
+	// id is what the process's binary is, when it is one of the host's
+	// known shells, interpreters or tunnel tools (see identity.go).
+	id identity
+}
+
+// toolName is the program a process runs: its binary's identity when known
+// (a renamed copy is what it is a copy of), else its name.
+func (p procInfo) toolName() string {
+	if p.id.name != "" {
+		return p.id.name
+	}
+	return p.progName()
+}
+
+// class is the process's program class: its binary's, else its name's.
+func (p procInfo) class() string {
+	if p.id.class != "" {
+		return p.id.class
+	}
+	name := p.progName()
+	if c := classOf(name); c != "" {
+		return c
+	}
+	return classOf(strings.TrimRight(name, "0123456789."))
+}
+
+// renamed is a note for a process whose name is not its binary's.
+func (p procInfo) renamed() string {
+	if p.id.name != "" && p.id.name != p.progName() {
+		return ", which is " + p.id.name + " run as " + p.progName()
+	}
+	return ""
 }
 
 // tunnelTools are programs whose job is a channel out: none is part of
@@ -109,12 +142,13 @@ func classify(p procInfo, allow map[string]bool, root, self bool) *verdict {
 	if self {
 		return nil
 	}
-	name := p.progName()
+	name := p.toolName()
 	if allow[name] {
 		return nil
 	}
-	if tunnelTools[name] {
-		return &verdict{"tunnel_tool", fmt.Sprintf("%s runs (%s)", name, argString(p.args))}
+	class := p.class()
+	if class == classTunnel {
+		return &verdict{"tunnel_tool", fmt.Sprintf("%s runs (%s%s)", name, argString(p.args), p.renamed())}
 	}
 	if name == "openssl" {
 		for _, a := range p.args[1:] {
@@ -123,10 +157,23 @@ func classify(p procInfo, allow map[string]bool, root, self bool) *verdict {
 			}
 		}
 	}
-	if shells[strings.TrimRight(name, "0123456789.")] || shells[name] {
+	switch class {
+	case classShell:
+		// A shell holds no network socket in a build, on any descriptor.
+		if len(p.inetFDs) > 0 {
+			return &verdict{"reverse_shell", fmt.Sprintf("%s with an inet socket on fd %d (%s%s)", name, p.inetFDs[0], argString(p.args), p.renamed())}
+		}
 		for fd := 0; fd < 2; fd++ {
 			if p.stdio[fd] == "inet" {
-				return &verdict{"reverse_shell", fmt.Sprintf("%s with an inet socket on fd %d (%s)", name, fd, argString(p.args))}
+				return &verdict{"reverse_shell", fmt.Sprintf("%s with an inet socket on fd %d (%s%s)", name, fd, argString(p.args), p.renamed())}
+			}
+		}
+	case classInterp:
+		// An interpreter's own sockets are its work (pip, npm); its stdin
+		// or stdout being one is a shell's.
+		for fd := 0; fd < 2; fd++ {
+			if p.stdio[fd] == "inet" {
+				return &verdict{"reverse_shell", fmt.Sprintf("%s with an inet socket on fd %d (%s%s)", name, fd, argString(p.args), p.renamed())}
 			}
 		}
 	}
@@ -347,7 +394,7 @@ func (d *detector) scan() {
 	for _, p := range procs {
 		if v := classify(p, d.allow, p.pid == root, d.self != "" && p.exe == d.self); v != nil {
 			reason := fmt.Sprintf("pid %d: %s", p.pid, v.reason)
-			if d.spec.allows(v.kind, p.progName()) {
+			if d.spec.allows(v.kind, p.toolName()) {
 				d.allowed(v.kind, reason)
 				continue
 			}

@@ -78,8 +78,9 @@ func TestLaunchProcsFollowsTheTree(t *testing.T) {
 }
 
 func TestDetectorRespondsByAction(t *testing.T) {
-	procs := []procInfo{{pid: 50, ppid: 1, marked: true, start: 1, args: []string{"unshare"}}, {pid: 51, ppid: 50, start: 1, args: []string{"claude"}},
-		{pid: 52, ppid: 51, start: 1, args: []string{"/usr/bin/ssh", "x"}}}
+	// Pids no test process has (safeToSignal refuses its own and its parent's).
+	procs := []procInfo{{pid: 900050, ppid: 1, marked: true, start: 1, args: []string{"unshare"}}, {pid: 900051, ppid: 900050, start: 1, args: []string{"claude"}},
+		{pid: 900052, ppid: 900051, start: 1, args: []string{"/usr/bin/ssh", "x"}}}
 	for _, action := range []string{DetectKill, DetectAlert} {
 		var mu sync.Mutex
 		var events []map[string]any

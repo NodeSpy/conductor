@@ -88,6 +88,8 @@ func enrich(p *procInfo) {
 		p.args = strings.Split(strings.TrimRight(string(b), "\x00"), "\x00")
 	}
 	p.exe, _ = os.Readlink(dir + "/exe")
+	// The magic link reaches the binary whatever mount namespace it is in.
+	p.id, _ = hostBinaries().identify(dir + "/exe")
 	inet := inetInodes(dir)
 	fds, err := os.ReadDir(dir + "/fd")
 	if err != nil {
@@ -109,6 +111,7 @@ func enrich(p *procInfo) {
 			if inet[strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]")] {
 				kind = "inet"
 				p.inetSocket = true
+				p.inetFDs = append(p.inetFDs, n)
 			}
 		case link == "/dev/ptmx" || link == "/dev/pts/ptmx":
 			p.ptyMaster = true

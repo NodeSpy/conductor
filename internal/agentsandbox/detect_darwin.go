@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -48,6 +49,7 @@ func listProcs(marker string, isRoot func(pid int) bool) func() ([]procInfo, err
 		}
 		args := psColumn(pids, "command=")
 		comm := psColumn(pids, "comm=")
+		inet := lsofInet(pids)
 		for i := range all {
 			p := &all[i]
 			a, ok := args[p.pid]
@@ -57,8 +59,15 @@ func listProcs(marker string, isRoot func(pid int) bool) func() ([]procInfo, err
 			p.args = strings.Fields(a)
 			p.exe, p.comm = comm[p.pid], comm[p.pid]
 			p.start, _ = procStart(p.pid)
-			if shells[p.progName()] {
-				p.stdio = lsofStdio(p.pid)
+			if filepath.IsAbs(p.exe) {
+				p.id, _ = hostBinaries().identify(p.exe)
+			}
+			for _, fd := range inet[p.pid] {
+				p.inetSocket = true
+				p.inetFDs = append(p.inetFDs, fd)
+				if fd < 3 {
+					p.stdio[fd] = "inet"
+				}
 			}
 		}
 		return all, nil
@@ -85,27 +94,22 @@ func psColumn(pids []string, col string) map[int]string {
 	return out
 }
 
-// lsofStdio says what a process's fds 0-2 are ("inet" for an IP socket).
-func lsofStdio(pid int) [3]string {
-	var st [3]string
-	b, err := exec.Command("lsof", "-n", "-P", "-a", "-p", strconv.Itoa(pid), "-d", "0,1,2", "-F", "ft").Output()
-	if err != nil {
-		return st
-	}
-	fd := -1
+// lsofInet lists the fds holding an IP socket of each of pids, in one lsof.
+func lsofInet(pids []string) map[int][]int {
+	out := map[int][]int{}
+	b, _ := exec.Command("lsof", "-n", "-P", "-a", "-p", strings.Join(pids, ","), "-i", "-F", "pf").Output()
+	pid := -1
 	for _, line := range strings.Split(string(b), "\n") {
 		switch {
-		case strings.HasPrefix(line, "f"):
-			fd, _ = strconv.Atoi(line[1:])
-		case strings.HasPrefix(line, "t") && fd >= 0 && fd < 3:
-			if line == "tIPv4" || line == "tIPv6" {
-				st[fd] = "inet"
-			} else {
-				st[fd] = "other"
+		case strings.HasPrefix(line, "p"):
+			pid, _ = strconv.Atoi(line[1:])
+		case strings.HasPrefix(line, "f") && pid > 0:
+			if fd, err := strconv.Atoi(line[1:]); err == nil {
+				out[pid] = append(out[pid], fd)
 			}
 		}
 	}
-	return st
+	return out
 }
 
 // signalProc SIGKILLs pid after checking it is still the process the
