@@ -1,8 +1,8 @@
 package agentsandbox
 
 import (
-	"errors"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -566,10 +566,10 @@ func TestResolveGitLayoutRefusesUntrustedPointers(t *testing.T) {
 		t.Fatalf("a genuine worktree: %v", err)
 	}
 	for name, ptr := range map[string]string{
-		"the home":                   home,
-		"/":                          "/",
-		"another worktree's gitdir":  filepath.Join(base, ".git", "worktrees", "wt2"),
-		"the common dir itself":      filepath.Join(base, ".git"),
+		"the home":                  home,
+		"/":                         "/",
+		"another worktree's gitdir": filepath.Join(base, ".git", "worktrees", "wt2"),
+		"the common dir itself":     filepath.Join(base, ".git"),
 	} {
 		os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+ptr+"\n"), 0o644)
 		if l, err := ResolveGitLayout(wt); !errors.Is(err, errUntrustedGit) {
