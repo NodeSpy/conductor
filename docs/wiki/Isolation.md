@@ -384,6 +384,57 @@ dirs), so the default leans on the network + pid namespaces — enough to confin
 pure-compute engine (no egress, no view of other processes); use an explicit
 `isolation:` (or `mode: container`) if you need filesystem masking too.
 
+## Code steps — `cli`, host interpreters, `run: go` {#code-steps}
+
+The section above covers code-step **engine plugins** (`run: js`, `run: lua`,
+a third-party `use: <plugin>`). The OTHER code-step shapes — `use: cli` /
+`command:`, a host interpreter (`run: bash`, `run: python3`, …), and
+`run: go` — are **confined by default too**, the same `namespace`-mode jail
+with the network denied, for the same reason: the step's `command:`/`args:`/
+`env:` are rendered from templates, and a template can read event/trigger
+data its author does not fully control. "You wrote this step" is not "you
+control its argv at run time."
+
+```yaml
+code:
+  isolation_default: namespace   # the default — every local cli/host/go step
+                                  # with no isolation: of its own gets the jail
+# isolation_default: none        # the escape hatch — restores the pre-existing
+                                  # bare-by-default behavior for every such step
+```
+
+Per-step opt-outs work exactly like a pack's (see [[Trust-and-Isolation]]):
+
+- `trust: full` on the step — "I've reviewed this one, run it unconfined."
+- an explicit `isolation: { mode: none }` — the same thing, spelled as an
+  isolation block.
+- an explicit `isolation:` of any other shape — used verbatim, and (unlike
+  the synthesized default) **fails closed**: if this box can't build what you
+  asked for, the step errors instead of running unconfined.
+
+`conductor validate` lists every code step that opted out one of these two
+ways, so an unconfined step is a decision you see at validate/boot time, not
+one you discover from an incident.
+
+**`run: go` and the toolchain's own caches.** A jailed `run: go` step cannot
+see the operator's real `GOCACHE`/`GOMODCACHE` any more than it can see
+anything else outside its allow-list — they are hidden by absence like
+everywhere else in the jail. It gets a private build/module cache of its own
+instead (under the daemon's cache dir, read-write, shared across confined
+`run: go` steps for the cache's benefit), and the network stays denied like
+every other confined code step: a `run: go` step whose code imports a
+third-party module needs its own `isolation: { network: { egress: [...] } }`
+naming the module proxy/VCS host it needs — the same way any other code step
+declares egress it needs beyond the default deny.
+
+**A deployment not ready for the stricter default** sets
+`code: { isolation_default: none }` while it migrates: every local code step
+goes back to running exactly as it did before this default existed, and the
+operator adds `isolation:` (or `trust: full`) to individual steps as they are
+reviewed, same as before confined-by-default landed. This is a top-level,
+OPTIONAL key — a config that never sets it keeps working, defaulted to the
+secure posture.
+
 ## Modes
 
 ```yaml

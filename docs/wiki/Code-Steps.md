@@ -432,8 +432,15 @@ runaway or a crash costs the step rather than the daemon. Each engine keeps
 its own internal sandbox on top of that (js is memory-isolated WASM; go-embed,
 Risor and Lua run behind import/global allowlists) — appropriate for
 operator-authored config, not untrusted input.
-`cli` and host interpreters have full host power (that is their point) — but they
-inherit an allowlisted base environment (PATH/HOME/locale/GO*) plus the
+`cli` and host interpreters (including `run: go`) have full host power (that is
+their point) — but by default they run inside the same least-privilege
+namespace jail a pack's shipped code gets: no network, and no filesystem but
+the step's workdir and interpreter essentials. See
+[[Trust-and-Isolation#a-hard-boundary-packs]] and
+[[Isolation#code-steps]] for the default, the per-step opt-outs
+(`trust: full`, `isolation: { mode: none }`), and the top-level
+`code: { isolation_default: none }` knob that turns it off for every step at
+once. They also inherit an allowlisted base environment (PATH/HOME/locale/GO*) plus the
 step's own `env:`, never the daemon's full environment; pass an ambient
 variable explicitly if a step needs it. A cli step's [ctx data
 plane](#the-ctx-data-plane-cli) does not widen that: it hands over no store

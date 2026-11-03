@@ -318,6 +318,20 @@ engines:
   # lua: { trust: full }                          # opt OUT: run unconfined (an engine you've audited)
   # wasm: { isolation: { mode: user, user: sandbox } }   # explicit sandbox (fail-closed)
 
+# code: — the default isolation a LOCAL cli/host code step (use: cli,
+# run: <interpreter>, run: go — not a remote host: step, not an engine
+# plugin) gets when it declares no isolation: of its own. Nothing to write
+# here: the default is the least-privilege namespace jail, network denied,
+# for a pack's shipped code AND your own config's steps alike (a step's
+# command:/args:/env: can be templated from event data its author doesn't
+# fully control). `conductor validate` lists every step that opted out
+# (trust: full, or an explicit isolation: { mode: none }). See the
+# Trust-and-Isolation and Isolation wiki pages.
+# code:
+#   isolation_default: none   # the escape hatch: every local cli/host/go step
+#                              # runs exactly as it did before this default
+#                              # existed, while a fleet migrates its configs
+
 # ---------------------------------------------------------------------------
 # isolation: — per-dispatch sandboxing (#36 §15) for the runtimes conductor
 # launches ITSELF (acp / cli / opencode / agent-deck — not paseo: its agents
