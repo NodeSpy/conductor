@@ -58,7 +58,7 @@ func startPackageProxy(cfg *config.Config, root string, logf func(string, ...any
 	}
 	srv.OnEvent = func(e pkgproxy.Event) {
 		if e.Err != "" {
-			logf("package proxy: %s %s@%s (%s) for %s refused: %s", e.Ecosystem, e.Module, e.Version, e.Artifact, e.Caller.Identity, e.Err)
+			logf("package proxy: %s %s@%s (%s) for %s refused: %s", e.Ecosystem, e.Module, e.Version, e.Artifact, e.Requester.Identity, e.Err)
 		}
 		if audit == nil {
 			return
@@ -66,7 +66,7 @@ func startPackageProxy(cfg *config.Config, root string, logf func(string, ...any
 		row := map[string]any{
 			"event": "package_fetch", "ecosystem": e.Ecosystem, "module": e.Module, "version": e.Version,
 			"artifact": e.Artifact, "upstream": e.Upstream, "status": e.Status,
-			"identity": e.Caller.Identity, "dispatch": e.Caller.Dispatch,
+			"identity": e.Requester.Identity, "dispatch": e.Requester.Dispatch,
 		}
 		if e.Err != "" {
 			row["event"], row["error"] = "package_refused", e.Err

@@ -33,16 +33,16 @@ import (
 	"time"
 )
 
-// Caller is who asked: the sandboxed agent's identity and, for a
+// Requester is who asked: the sandboxed agent's identity and, for a
 // dispatch's agent, the dispatch.
-type Caller struct {
+type Requester struct {
 	Identity string
 	Dispatch string
 }
 
 // Event is one audited proxy action: an upstream fetch, or a refusal.
 type Event struct {
-	Caller    Caller
+	Requester Requester
 	Ecosystem string
 	Module    string
 	Version   string
@@ -58,7 +58,7 @@ type Ecosystem interface {
 	Name() string
 	// Serve answers one request; rest is the path below the ecosystem's
 	// segment, still escaped as the client sent it.
-	Serve(w http.ResponseWriter, r *http.Request, rest string, c Caller, emit func(Event))
+	Serve(w http.ResponseWriter, r *http.Request, rest string, c Requester, emit func(Event))
 	// AgentEnv points the ecosystem's tool at base (the ecosystem's URL,
 	// carrying the caller's token).
 	AgentEnv(base string) []string
@@ -143,7 +143,7 @@ func (s *Server) Close() {
 // Token is c's credential: the caller, signed. It authenticates nothing but
 // "this request may use the proxy, on behalf of c" — the proxy serves only
 // public, verified content — and lets every fetch be attributed.
-func (s *Server) Token(c Caller) string {
+func (s *Server) Token(c Requester) string {
 	payload := base64.RawURLEncoding.EncodeToString([]byte(c.Identity + "\x00" + c.Dispatch))
 	return payload + "." + s.sign(payload)
 }
@@ -155,22 +155,22 @@ func (s *Server) sign(payload string) string {
 }
 
 // caller verifies a token.
-func (s *Server) caller(tok string) (Caller, bool) {
+func (s *Server) caller(tok string) (Requester, bool) {
 	payload, sig, ok := strings.Cut(tok, ".")
 	if !ok || !hmac.Equal([]byte(sig), []byte(s.sign(payload))) {
-		return Caller{}, false
+		return Requester{}, false
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
-		return Caller{}, false
+		return Requester{}, false
 	}
 	id, disp, _ := strings.Cut(string(raw), "\x00")
-	return Caller{Identity: id, Dispatch: disp}, true
+	return Requester{Identity: id, Dispatch: disp}, true
 }
 
 // AgentEnv is the environment pointing every ecosystem's tool at this
 // server on behalf of c; nil before Listen.
-func (s *Server) AgentEnv(c Caller) []string {
+func (s *Server) AgentEnv(c Requester) []string {
 	addr := s.Addr()
 	if addr == "" {
 		return nil
@@ -203,7 +203,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	emit := func(ev Event) {
-		ev.Caller, ev.Ecosystem = c, name
+		ev.Requester, ev.Ecosystem = c, name
 		if s.OnEvent != nil {
 			s.OnEvent(ev)
 		}

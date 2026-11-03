@@ -100,7 +100,7 @@ func TestSandboxedGoBuildFetchesThroughConductor(t *testing.T) {
 
 	r := &Resolver{StateRoot: filepath.Join(state, "agent-state"), RealHome: real, GOOS: runtime.GOOS,
 		Packages: func(id, disp string) (string, []string) {
-			return srv.Addr(), srv.AgentEnv(pkgproxy.Caller{Identity: id, Dispatch: disp})
+			return srv.Addr(), srv.AgentEnv(pkgproxy.Requester{Identity: id, Dispatch: disp})
 		}}
 	pol, err := r.PolicyForEntry(Entry{Workspace: ws, Identity: "profile:go-fixer", Dispatch: "d-e2e"}, "claude-code", nil)
 	if err != nil {
@@ -166,7 +166,7 @@ func TestSandboxedGoBuildFetchesThroughConductor(t *testing.T) {
 	defer mu.Unlock()
 	var zip bool
 	for _, e := range events {
-		if e.Artifact == "zip" && e.Module == "example.com/hello" && e.Upstream && e.Caller.Dispatch == "d-e2e" && e.Caller.Identity == "profile:go-fixer" {
+		if e.Artifact == "zip" && e.Module == "example.com/hello" && e.Upstream && e.Requester.Dispatch == "d-e2e" && e.Requester.Identity == "profile:go-fixer" {
 			zip = true
 		}
 	}

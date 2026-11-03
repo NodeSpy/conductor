@@ -71,7 +71,7 @@ func newRig(t *testing.T, max int64, private ...string) *rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(r.srv.Close)
-	r.base = "http://" + addr + "/" + r.srv.Token(Caller{Identity: "profile:fixer", Dispatch: "d-42"}) + "/go"
+	r.base = "http://" + addr + "/" + r.srv.Token(Requester{Identity: "profile:fixer", Dispatch: "d-42"}) + "/go"
 	return r
 }
 
@@ -117,7 +117,7 @@ func TestGoModuleIsVerifiedCachedAndAudited(t *testing.T) {
 	}
 	var fetchedZip, servedZip int
 	for _, e := range r.evs() {
-		if e.Caller != (Caller{Identity: "profile:fixer", Dispatch: "d-42"}) || e.Ecosystem != "go" {
+		if e.Requester != (Requester{Identity: "profile:fixer", Dispatch: "d-42"}) || e.Ecosystem != "go" {
 			t.Fatalf("event without its caller: %+v", e)
 		}
 		if e.Artifact == "zip" {
@@ -198,7 +198,7 @@ func TestGoPrivatePatternSkipsSumDBAndCache(t *testing.T) {
 			t.Fatal("a private module was looked up in the checksum database")
 		}
 	}
-	env := strings.Join(r.srv.AgentEnv(Caller{Identity: "x"}), "\n")
+	env := strings.Join(r.srv.AgentEnv(Requester{Identity: "x"}), "\n")
 	if !strings.Contains(env, "GONOSUMDB=git.internal.test/*") {
 		t.Fatalf("agent env lacks the private pattern:\n%s", env)
 	}
@@ -265,7 +265,7 @@ func TestTokenIsRequired(t *testing.T) {
 	for _, p := range []string{
 		"/go/example.com/hello/@v/list",
 		"/x.y/go/example.com/hello/@v/list",
-		"/" + strings.Replace(r.srv.Token(Caller{Identity: "a"}), "a", "b", 1) + "/go/example.com/hello/@v/list",
+		"/" + strings.Replace(r.srv.Token(Requester{Identity: "a"}), "a", "b", 1) + "/go/example.com/hello/@v/list",
 	} {
 		resp, err := http.Get("http://" + addr + p)
 		if err != nil {
@@ -285,10 +285,10 @@ func TestTokenIsRequired(t *testing.T) {
 		t.Fatalf("POST: %d", resp.StatusCode)
 	}
 	other, _ := New(bytes.Repeat([]byte("z"), 32))
-	if _, ok := r.srv.caller(other.Token(Caller{Identity: "a"})); ok {
+	if _, ok := r.srv.caller(other.Token(Requester{Identity: "a"})); ok {
 		t.Fatal("a token signed with another key verified")
 	}
-	if c, ok := r.srv.caller(r.srv.Token(Caller{Identity: "dir:/w/x", Dispatch: "d"})); !ok || c.Identity != "dir:/w/x" || c.Dispatch != "d" {
+	if c, ok := r.srv.caller(r.srv.Token(Requester{Identity: "dir:/w/x", Dispatch: "d"})); !ok || c.Identity != "dir:/w/x" || c.Dispatch != "d" {
 		t.Fatalf("token round trip: %+v %v", c, ok)
 	}
 }
@@ -423,7 +423,7 @@ func TestCacheEvictsLeastRecentlyUsed(t *testing.T) {
 func TestGoAgentEnv(t *testing.T) {
 	r := newRig(t, 1<<30)
 	env := map[string]string{}
-	for _, kv := range r.srv.AgentEnv(Caller{Identity: "i"}) {
+	for _, kv := range r.srv.AgentEnv(Requester{Identity: "i"}) {
 		k, v, _ := strings.Cut(kv, "=")
 		env[k] = v
 	}

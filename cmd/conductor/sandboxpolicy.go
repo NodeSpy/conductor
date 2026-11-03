@@ -113,7 +113,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		}
 		stopPackages = stop
 		r.Packages = func(identity, disp string) (string, []string) {
-			return srv.Addr(), srv.AgentEnv(pkgproxy.Caller{Identity: identity, Dispatch: disp})
+			return srv.Addr(), srv.AgentEnv(pkgproxy.Requester{Identity: identity, Dispatch: disp})
 		}
 		if cfg.Sandbox.PrefetchGo() {
 			logf("sandbox: prefetch [go] is superseded by the package proxy (sandbox.packages.go): agents fetch Go modules through conductor — set sandbox.packages.go.enabled: false to keep the offline prefetch instead")
