@@ -12,11 +12,19 @@ import (
 // through their conductor.escalate triggers.
 func sandboxEventAudit(logf func(string, ...any), audit func(map[string]any), notify func(msg string)) func(string, map[string]any) {
 	return func(kind string, fields map[string]any) {
-		row := map[string]any{"event": "sandbox_" + kind}
+		// A sandbox exec launch's egress records are the same rows as the
+		// daemon's own launches' (egress, egress_denied).
+		ev := "sandbox_" + kind
+		if kind == "egress" || kind == "egress_denied" {
+			ev = kind
+		}
+		row := map[string]any{"event": ev}
 		for k, v := range fields {
 			row[k] = v
 		}
-		logf("sandbox: %s %v", kind, fields)
+		if ev != "egress" || fields["reason"] != nil {
+			logf("sandbox: %s %v", kind, fields)
+		}
 		audit(row)
 		if notify != nil && (kind == "detection" || kind == "limit") {
 			msg := fmt.Sprintf("agent sandbox %s: %v (%v) — action %v", kind, fields["kind"], fields["reason"], fields["action"])

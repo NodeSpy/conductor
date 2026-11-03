@@ -25,6 +25,12 @@ func TestSandboxEventsAreAuditedAndDetectionsNotified(t *testing.T) {
 		t.Fatalf("notifications %q", notes)
 	}
 	sandboxEventAudit(func(string, ...any) {}, func(map[string]any) {}, nil)("detection", map[string]any{}) // no notifier: audit only
+	// A sandbox exec launch's egress: the same rows as the daemon's own.
+	ev("egress", map[string]any{"target": "x.test:443", "outcome": "closed"})
+	ev("egress_denied", map[string]any{"target": "y.test:443"})
+	if rows[3]["event"] != "egress" || rows[4]["event"] != "egress_denied" || len(notes) != 2 {
+		t.Fatalf("egress rows %v", rows[3:])
+	}
 }
 
 func TestEgressAuditRecordsSessions(t *testing.T) {

@@ -183,21 +183,36 @@ func sandboxExecCwd() (cwd string, agent bool, err error) {
 // wrapSandboxExec realizes pol around argv with this process as the host
 // side: its own allowlist proxy and model relays live as long as the agent.
 func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string, sock string) (*agentsandbox.Launch, func(), error) {
+	rep := newEventReporter(sock)
 	event := func(kind string, f map[string]any) {
 		fmt.Fprintf(os.Stderr, "conductor sandbox: %s %v\n", kind, f)
-		reportSandboxEvent(sock, kind, f)
+		rep.send(kind, f)
 	}
 	pm := sandbox.NewProxyManager(func(_, hostport string) {
 		fmt.Fprintf(os.Stderr, "conductor sandbox: egress to %s denied (not in this agent's allowlist)\n", hostport)
+		rep.send("egress_denied", map[string]any{"target": hostport})
 	})
 	pm.OnConn = func(r sandbox.ConnRecord) {
-		if r.Outcome != "denied" && r.Reason != "" { // denials: OnDeny
-			event("egress_"+r.Outcome, map[string]any{"run": r.Run, "target": r.Target, "reason": r.Reason})
+		if r.Outcome == "denied" { // OnDeny's
+			return
 		}
+		if r.Reason != "" {
+			fmt.Fprintf(os.Stderr, "conductor sandbox: egress %s %s: %s\n", r.Outcome, r.Target, r.Reason)
+		}
+		// Every request, as the daemon audits its own launches'.
+		f := map[string]any{"run": r.Run, "target": r.Target, "outcome": r.Outcome,
+			"up": r.Up, "down": r.Down, "duration_ms": r.Duration.Milliseconds()}
+		for k, v := range map[string]string{"sni": r.SNI, "reason": r.Reason} {
+			if v != "" {
+				f[k] = v
+			}
+		}
+		rep.send("egress", f)
 	}
 	rel, err := agentsandbox.NewRelayer()
 	if err != nil {
 		pm.Close()
+		rep.close()
 		return nil, nil, err
 	}
 	home, _ := os.UserHomeDir()
@@ -217,9 +232,47 @@ func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string, sock string) 
 	if err != nil {
 		rel.Close()
 		pm.Close()
+		rep.close()
 		return nil, nil, err
 	}
-	return launch, func() { launch.Cleanup(); rel.Close(); pm.Close() }, nil
+	return launch, func() { launch.Cleanup(); rel.Close(); pm.Close(); rep.close() }, nil
+}
+
+// eventReporter hands a launch's events to the daemon in the background,
+// in order: the proxy and the watcher never wait on the control socket,
+// and a burst beyond its queue is dropped (it is on stderr either way).
+type eventReporter struct {
+	ch   chan controlRequest
+	done chan struct{}
+}
+
+func newEventReporter(sock string) *eventReporter {
+	r := &eventReporter{ch: make(chan controlRequest, 512), done: make(chan struct{})}
+	go func() {
+		defer close(r.done)
+		for req := range r.ch {
+			reportSandboxEvent(sock, req.Kind, req.Args)
+		}
+	}()
+	return r
+}
+
+func (r *eventReporter) send(kind string, f map[string]any) {
+	defer func() { _ = recover() }() // sent after close: dropped
+	select {
+	case r.ch <- controlRequest{Kind: kind, Args: f}:
+	default:
+	}
+}
+
+// close sends what is queued, for a few seconds at most.
+func (r *eventReporter) close() {
+	defer func() { _ = recover() }()
+	close(r.ch)
+	select {
+	case <-r.done:
+	case <-time.After(5 * time.Second):
+	}
 }
 
 // runSandboxed runs the wrapped launch in the foreground — its stdio is

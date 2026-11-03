@@ -256,3 +256,26 @@ func TestSandboxExecReportsEventsToTheDaemon(t *testing.T) {
 		t.Fatalf("daemon recorded %v", got)
 	}
 }
+
+// The reporter delivers a launch's events in order, without blocking the
+// caller, and what is queued at its close still reaches the daemon.
+func TestSandboxExecReporterDeliversInOrder(t *testing.T) {
+	sock, reqs := fakeControl(t, func(controlRequest) controlResponse { return controlResponse{OK: true} })
+	r := newEventReporter(sock)
+	for i := 0; i < 20; i++ {
+		r.send("egress", map[string]any{"n": float64(i)})
+	}
+	r.close()
+	r.send("egress", nil) // after close: dropped, no panic
+	if len(*reqs) != 20 {
+		t.Fatalf("delivered %d", len(*reqs))
+	}
+	for i, q := range *reqs {
+		if q.Cmd != "sandbox-event" || q.Args["n"] != float64(i) {
+			t.Fatalf("event %d: %+v", i, q)
+		}
+	}
+	dead := newEventReporter(filepath.Join(t.TempDir(), "none.sock")) // no daemon: nothing blocks
+	dead.send("egress", nil)
+	dead.close()
+}
