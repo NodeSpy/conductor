@@ -62,6 +62,9 @@ type Resolver struct {
 	// Allow is sandbox.allow: the base allowance of every launch, joined by
 	// each entry's own scope.
 	Allow *Allowance
+	// Rescope recomputes a workspace's recorded scope from the live config
+	// (nil: the recorded scope as is).
+	Rescope func(*Scope) *Scope
 	// Session resolves a cwd that is NOT in the registry to a live bot
 	// session's entry (its identity, its granted skill verbs, its read-only
 	// paths), consulted before a default workspace is built. This is how a
@@ -247,7 +250,13 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		EgressUpload: r.EgressUpload, EgressDownload: r.EgressDownload,
 		ModelUpload: r.ModelUpload, ModelDownload: r.ModelDownload,
 	}
-	applyScope(&p, r.Allow, e.Scope)
+	scope := e.Scope
+	if r.Rescope != nil {
+		// What the scope's config says now, not what it said when the
+		// workspace was recorded.
+		scope = r.Rescope(scope)
+	}
+	applyScope(&p, r.Allow, scope)
 	if cache, err := r.persistCache(e, home); err != nil {
 		return Policy{}, fmt.Errorf("agentsandbox: identity cache: %w", err)
 	} else if cache != "" {

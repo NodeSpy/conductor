@@ -154,6 +154,10 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	if cfg.Sandbox != nil {
 		r.Allow = dispatch.AllowanceOf(cfg.Sandbox.Allow)
 	}
+	// A workspace's recorded scope is recomputed from this config at each
+	// launch: a revoked grant or a removed allow: no longer applies.
+	sources := cfg.SandboxScopeSources()
+	r.Rescope = func(s *agentsandbox.Scope) *agentsandbox.Scope { return dispatch.Rescope(s, sources) }
 	if err := os.MkdirAll(r.StateRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("agent sandbox state dir %s: %w", r.StateRoot, err)
 	}
@@ -171,6 +175,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	if err := agentsandbox.Default.PersistTo(filepath.Join(r.StateRoot, ".workspaces.json")); err != nil {
 		logf("agent sandbox: workspace registry: %v (starting empty)", err)
 	}
+	agentsandbox.Default.Rescope(r.Rescope)
 	dispatch.SandboxPrefetch = nil
 	if cfg.Sandbox.PrefetchGo() {
 		// A dot name no identity home can have (IdentityKey trims it).

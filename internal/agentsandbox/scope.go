@@ -43,6 +43,11 @@ type Scope struct {
 	// ModelUpload, ModelDownload override the model gateway's caps the
 	// same way.
 	ModelUpload, ModelDownload int64 `json:",omitempty"`
+	// DetectBy and LimitsBy name the scopes the detection and egress-limit
+	// overrides came from (Allow.By names the allowance's): what a recorded
+	// scope is recomputed from when the config changes.
+	DetectBy string `json:"detect_by,omitempty"`
+	LimitsBy string `json:"limits_by,omitempty"`
 }
 
 // JoinAllowances is every allowance of list in one (nil: none).

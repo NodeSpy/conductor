@@ -155,6 +155,21 @@ func (r *Registry) PersistTo(path string) error {
 	return nil
 }
 
+// Rescope replaces every recorded scope with fn's recomputation of it
+// (nil drops it) and saves: a daemon reads its registry against the config
+// it runs with now.
+func (r *Registry) Rescope(fn func(*Scope) *Scope) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for ws, e := range r.byWS {
+		if e.Scope != nil {
+			e.Scope = fn(e.Scope)
+			r.byWS[ws] = e
+		}
+	}
+	r.saveLocked()
+}
+
 // saveLocked writes the registry to its path (none: nothing), atomically.
 func (r *Registry) saveLocked() {
 	if r.path == "" {

@@ -118,3 +118,48 @@ func TestPolicyForEntryAppliesTheScope(t *testing.T) {
 		t.Fatalf("the strict workspace's policy: detect %+v egress %v non-TLS %v", s.Detect, s.Egress, s.NonTLS)
 	}
 }
+
+// A recorded scope is a key into the live config, not a grant of its own:
+// the resolver applies its recomputation at every launch, and a daemon
+// rewrites its registry with it when it starts, so a revoked allowance
+// stops applying to a recorded workspace at once, restart or not.
+func TestRecordedScopeIsRecomputedFromTheLiveConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	reg := &Registry{}
+	if err := reg.PersistTo(path); err != nil {
+		t.Fatal(err)
+	}
+	ws := t.TempDir()
+	reg.Register(Entry{Workspace: ws, Identity: "agent:deploy", Dispatch: "d1", Scope: &Scope{
+		Allow: &Allowance{Tunnels: []string{"ssh"}, TunnelHosts: []string{"bastion.example:22"}, ReverseShell: true, By: "pack rv grant shell"},
+	}})
+	revoked := func(*Scope) *Scope { return nil }
+
+	// At launch, before any reload.
+	r := &Resolver{Registry: reg, StateRoot: t.TempDir(), GOOS: "linux", Rescope: revoked}
+	e, _ := reg.Lookup(ws)
+	p, err := r.PolicyForEntry(e, "claude", nil, skill.ProcessAnchor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Detect.AllowReverseShell || p.Detect.allows("tunnel_tool", "ssh") || contains(p.Egress, "bastion.example:22") {
+		t.Fatalf("a revoked allowance still shapes the launch: detect %+v egress %v", p.Detect, p.Egress)
+	}
+
+	// On the daemon's start: the registry it loads is rewritten.
+	reloaded := &Registry{}
+	if err := reloaded.PersistTo(path); err != nil {
+		t.Fatal(err)
+	}
+	reloaded.Rescope(revoked)
+	if e, _ := reloaded.Lookup(ws); e.Scope != nil {
+		t.Fatalf("the registry kept a revoked scope: %+v", e.Scope)
+	}
+	again := &Registry{}
+	if err := again.PersistTo(path); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := again.Lookup(ws); e.Scope != nil || e.Identity != "agent:deploy" {
+		t.Fatalf("the saved registry: %+v", e)
+	}
+}

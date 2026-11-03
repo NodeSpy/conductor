@@ -250,23 +250,59 @@ func SandboxScope(req Request) *agentsandbox.Scope {
 		return nil
 	}
 	iso := req.Step.Isolation
-	var s agentsandbox.Scope
-	var own *config.SandboxAllow
-	if iso != nil {
-		own = iso.Allow
-		if d := iso.Detect; d != nil {
-			s.DetectAction, s.Tripwires = d.Action, d.Tripwires
-		}
-		if l := iso.EgressLimits; l != nil {
-			idle, _ := config.ParseLimitDuration(l.Idle)
-			s.EgressIdle = int64(idle)
-			s.EgressUpload, _ = config.ParseByteSize(l.Upload)
-			s.EgressDownload, _ = config.ParseByteSize(l.Download)
-			s.ModelUpload, _ = config.ParseByteSize(l.ModelUpload)
-			s.ModelDownload, _ = config.ParseByteSize(l.ModelDownload)
+	if iso == nil {
+		return scopeOf(req.Step.GrantedAllow, nil, nil)
+	}
+	return scopeOf(config.UnionAllow(iso.Allow, req.Step.GrantedAllow), iso.Detect, iso.EgressLimits)
+}
+
+// Rescope is a recorded scope as the live config has it now: its
+// allowance rebuilt from the scopes and grants it names (one no longer in
+// the config gives nothing, so revoking a grant or removing an allow:
+// tightens every recorded workspace at once), and its detection and limit
+// overrides re-read from theirs. nil: nothing changes.
+func Rescope(s *agentsandbox.Scope, src config.ScopeSources) *agentsandbox.Scope {
+	if s == nil {
+		return nil
+	}
+	var allow *config.SandboxAllow
+	if s.Allow != nil {
+		for _, by := range strings.Split(s.Allow.By, " + ") {
+			if iso := src.Sites[by]; iso != nil && iso.Allow != nil && iso.Allow.Origin == by {
+				allow = config.UnionAllow(allow, iso.Allow)
+			} else if g := src.Grants[by]; g != nil {
+				allow = config.UnionAllow(allow, g)
+			}
 		}
 	}
-	s.Allow = AllowanceOf(config.UnionAllow(own, req.Step.GrantedAllow))
+	var d *config.IsolationDetect
+	if iso := src.Sites[s.DetectBy]; s.DetectBy != "" && iso != nil && iso.Detect != nil && iso.Detect.Origin == s.DetectBy {
+		d = iso.Detect
+	}
+	var l *config.SandboxEgressLimits
+	if iso := src.Sites[s.LimitsBy]; s.LimitsBy != "" && iso != nil && iso.EgressLimits != nil && iso.EgressLimits.Origin == s.LimitsBy {
+		l = iso.EgressLimits
+	}
+	return scopeOf(allow, d, l)
+}
+
+// scopeOf is the sandbox scope of an allowance and detection / egress-limit
+// overrides (nil: nothing changes).
+func scopeOf(allow *config.SandboxAllow, d *config.IsolationDetect, l *config.SandboxEgressLimits) *agentsandbox.Scope {
+	var s agentsandbox.Scope
+	if d != nil {
+		s.DetectAction, s.Tripwires, s.DetectBy = d.Action, d.Tripwires, d.Origin
+	}
+	if l != nil {
+		idle, _ := config.ParseLimitDuration(l.Idle)
+		s.EgressIdle = int64(idle)
+		s.EgressUpload, _ = config.ParseByteSize(l.Upload)
+		s.EgressDownload, _ = config.ParseByteSize(l.Download)
+		s.ModelUpload, _ = config.ParseByteSize(l.ModelUpload)
+		s.ModelDownload, _ = config.ParseByteSize(l.ModelDownload)
+		s.LimitsBy = l.Origin
+	}
+	s.Allow = AllowanceOf(allow)
 	if s == (agentsandbox.Scope{}) {
 		return nil
 	}
