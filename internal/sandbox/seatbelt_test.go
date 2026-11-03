@@ -159,3 +159,18 @@ func TestSeatbeltBrowserMetadata(t *testing.T) {
 		t.Fatal("an agent profile keeps its metadata (path resolution for any tool)")
 	}
 }
+
+// POSIX shared memory and semaphores are named host-wide: an agent profile
+// grants them only for the browser or an operator's explicit opt-in.
+func TestAgentProfilePosixIPCIsOptIn(t *testing.T) {
+	has := func(a *AgentProfile) bool {
+		p := seatbeltAgentProfile(nil, a, AgentNet{})
+		return strings.Contains(p, "ipc-posix-shm-write-create") || strings.Contains(p, "(allow ipc-posix-sem)")
+	}
+	if has(&AgentProfile{}) {
+		t.Fatal("an agent profile allows POSIX shm/semaphores by default")
+	}
+	if !has(&AgentProfile{PosixIPC: true}) || !has(&AgentProfile{Browser: true}) {
+		t.Fatal("the opt-in and the browser get POSIX shm/semaphores")
+	}
+}

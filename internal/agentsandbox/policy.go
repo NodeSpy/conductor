@@ -55,6 +55,9 @@ type Policy struct {
 	Hide []string `json:"hide,omitempty"`
 	// Env are extra KEY=VALUE variables for the agent (its git identity).
 	Env []string `json:"env,omitempty"`
+	// PosixIPC (macOS) allows POSIX shared memory and semaphores
+	// (sandbox.macos_posix_ipc).
+	PosixIPC bool `json:"posix_ipc,omitempty"`
 	// Note is something the launcher should tell its operator about this
 	// policy (a scratch workspace in place of a refused directory).
 	Note string `json:"note,omitempty"`
@@ -183,7 +186,7 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		dir = p.Cwd
 		binds = append(binds, sandbox.BindMount{Path: p.Workspace})
 	}
-	prof := &sandbox.AgentProfile{Home: d.RealHome}
+	prof := &sandbox.AgentProfile{Home: d.RealHome, PosixIPC: p.PosixIPC}
 	for _, l := range p.Logins {
 		// Linux binds the operator's file over the placeholder; on macOS the
 		// identity home links to it, and seatbeltBinds allows its source.

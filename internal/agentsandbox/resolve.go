@@ -39,6 +39,8 @@ type Resolver struct {
 	// GoPrefetch is sandbox.prefetch: [go] (nil: off): every launch sees its
 	// module cache read-only and runs Go offline.
 	GoPrefetch *GoPrefetch
+	// PosixIPC is sandbox.macos_posix_ipc.
+	PosixIPC bool
 	// Session resolves a cwd that is NOT in the registry to a live bot
 	// session's entry (its identity, its granted skill verbs, its read-only
 	// paths), consulted before a default workspace is built. This is how a
@@ -200,6 +202,7 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 		Identity: e.Identity, Tool: tool, Workspace: e.Workspace, Home: home, Logins: logins,
 		Egress: egress, Loopback: loopback,
 		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env,
+		PosixIPC: r.PosixIPC,
 	}
 	if g := r.GoPrefetch; g != nil {
 		p.ReadOnly = append(append([]string(nil), p.ReadOnly...), g.Cache)

@@ -252,8 +252,12 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 		if jailed {
 			userMap = "--map-root-user"
 		}
+		// --ipc: a System V IPC namespace of its own — host processes'
+		// shared memory, semaphores and message queues (same uid, so
+		// otherwise read-write) are out of reach, and what the sandbox
+		// creates dies with it instead of filling the host's global tables.
 		prefix = append(prefix, "unshare", "--user", userMap,
-			"--pid", "--fork", "--mount-proc", "--kill-child")
+			"--pid", "--fork", "--mount-proc", "--kill-child", "--ipc")
 		if s.Deny {
 			prefix = append(prefix, "--net")
 		}
@@ -393,7 +397,7 @@ func (s *Spec) WrapRemote(cmd string) (string, error) {
 			quoted = append(quoted, shQuote(tok))
 		}
 		prefix := strings.Join(quoted, " ")
-		flags := "--user --map-current-user --pid --fork --mount-proc --kill-child"
+		flags := "--user --map-current-user --pid --fork --mount-proc --kill-child --ipc"
 		if s.Deny {
 			flags += " --net"
 		}

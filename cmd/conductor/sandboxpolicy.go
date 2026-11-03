@@ -91,8 +91,9 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 			return b.MintSession(id, uint32(os.Getuid()), sandboxTokenTTL)
 		},
 		GitName: name, GitEmail: email,
-		Env:  os.Environ(),
-		GOOS: runtime.GOOS,
+		Env:      os.Environ(),
+		GOOS:     runtime.GOOS,
+		PosixIPC: cfg.Sandbox.PosixIPCAllowed(),
 		// A bot's home (or a hand-off worker) runs in a pinned paseo workspace
 		// conductor never registers as a worktree, so `conductor sandbox exec`
 		// would resolve it to a verb-less dir: identity. This lookup (published
@@ -102,6 +103,18 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	}
 	if err := os.MkdirAll(r.StateRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("agent sandbox state dir %s: %w", r.StateRoot, err)
+	}
+	// What a workspace's git files may name: conductor's own checkouts (the
+	// gitwt base clones in the state dir, paseo's clone cache), never the
+	// home or conductor's state and config.
+	agentsandbox.SharedGitDirect = cfg.Sandbox.GitSharedDirect()
+	agentsandbox.GitTrust.Home = home
+	agentsandbox.GitTrust.Forbidden = r.Protected
+	agentsandbox.GitTrust.ObjectRoots = []string{filepath.Join(filepath.Dir(cfg.Store.StateFile), "checkouts"), filepath.Join(home, ".conductor", "checkouts")}
+	// The workspace registry survives a restart: a workspace's layout is
+	// the one recorded while it was conductor's, never re-read from it.
+	if err := agentsandbox.Default.PersistTo(filepath.Join(r.StateRoot, ".workspaces.json")); err != nil {
+		logf("agent sandbox: workspace registry: %v (starting empty)", err)
 	}
 	dispatch.SandboxPrefetch = nil
 	if cfg.Sandbox.PrefetchGo() {

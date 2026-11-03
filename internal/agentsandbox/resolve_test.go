@@ -1,6 +1,7 @@
 package agentsandbox
 
 import (
+	"errors"
 	"encoding/json"
 	"io"
 	"net"
@@ -541,5 +542,58 @@ func TestRegistryPersists(t *testing.T) {
 	}
 	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
 		t.Fatalf("registry file mode %v", fi.Mode())
+	}
+}
+
+// What a workspace's git files name is bound into a sandbox only inside the
+// trust limits: never the home, never a directory git did not register as
+// this worktree's, never an object store outside conductor's checkouts.
+func TestResolveGitLayoutRefusesUntrustedPointers(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	home := filepath.Join(root, "home")
+	os.MkdirAll(home, 0o700)
+	old := GitTrust
+	t.Cleanup(func() { GitTrust = old })
+	GitTrust.Home = home
+	base := filepath.Join(home, "repo")
+	git(t, root, "init", "-q", "-b", "main", base)
+	git(t, base, "commit", "-q", "--allow-empty", "-m", "x")
+	wt := filepath.Join(home, "wt")
+	git(t, base, "worktree", "add", "-q", "-b", "fix", wt)
+	other := filepath.Join(home, "wt2")
+	git(t, base, "worktree", "add", "-q", "-b", "fix2", other)
+	if _, err := ResolveGitLayout(wt); err != nil {
+		t.Fatalf("a genuine worktree: %v", err)
+	}
+	for name, ptr := range map[string]string{
+		"the home":                   home,
+		"/":                          "/",
+		"another worktree's gitdir":  filepath.Join(base, ".git", "worktrees", "wt2"),
+		"the common dir itself":      filepath.Join(base, ".git"),
+	} {
+		os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+ptr+"\n"), 0o644)
+		if l, err := ResolveGitLayout(wt); !errors.Is(err, errUntrustedGit) {
+			t.Errorf("%s: pointer %s accepted: %+v %v", name, ptr, l, err)
+		}
+	}
+	// A clone whose alternates name a store outside conductor's checkouts.
+	GitTrust.ObjectRoots = []string{filepath.Join(root, "checkouts")}
+	clone := filepath.Join(root, "clone")
+	git(t, root, "init", "-q", clone)
+	alt := filepath.Join(clone, ".git", "objects", "info", "alternates")
+	for name, a := range map[string]string{
+		"another repo of the operator": filepath.Join(base, ".git", "objects"),
+		"the home":                     home,
+	} {
+		os.WriteFile(alt, []byte(a+"\n"), 0o644)
+		if l, err := ResolveGitLayout(clone); !errors.Is(err, errUntrustedGit) {
+			t.Errorf("alternates at %s accepted: %+v %v", name, l, err)
+		}
+	}
+	co := filepath.Join(root, "checkouts", "o__r")
+	git(t, root, "init", "-q", co)
+	os.WriteFile(alt, []byte(filepath.Join(co, ".git", "objects")+"\n"), 0o644)
+	if _, err := ResolveGitLayout(clone); err != nil {
+		t.Fatalf("a checkout's object store: %v", err)
 	}
 }

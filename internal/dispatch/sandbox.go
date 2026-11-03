@@ -129,6 +129,7 @@ var SandboxPrefetch func(dir string)
 // checkout. req nil: a profile-less relaunch, registered under identity.
 func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsandbox.Entry, error) {
 	reg := agentsandbox.Default
+	var prev *agentsandbox.Entry
 	if e, ok := reg.Lookup(dir); ok && e.Workspace == canonPath(dir) {
 		// This launch's own earlier registration (a resume: no request, or
 		// the same dispatch), or the workspace's owner's — a member
@@ -139,10 +140,23 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 		if e.Dispatch == "" || (e.Identity == identity && (req == nil || req.DispatchID == e.Dispatch)) {
 			return e, nil
 		}
+		prev = &e
 	}
-	layout, err := agentsandbox.ResolveGitLayout(dir)
-	if err != nil {
-		return agentsandbox.Entry{}, err
+	var layout agentsandbox.GitLayout
+	if prev != nil {
+		// A follow-up dispatch into a workspace an agent has already worked
+		// in: its git layout and push target are what conductor recorded
+		// when the workspace was still its own — never re-read from the .git
+		// pointer, alternates or HEAD the earlier agent could rewrite.
+		layout = agentsandbox.GitLayout{ReadOnly: prev.ReadOnly, ReadWrite: prev.ReadWrite, Hide: prev.Hide}
+		if prev.Push != nil {
+			layout.GitDir, layout.HeadDir = prev.Push.GitDir, prev.Push.HeadDir
+		}
+	} else {
+		var err error
+		if layout, err = agentsandbox.ResolveGitLayout(dir); err != nil {
+			return agentsandbox.Entry{}, err
+		}
 	}
 	e := agentsandbox.Entry{
 		Workspace: dir, Identity: identity, Tool: tool,
@@ -154,14 +168,21 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 		if id, ok := SkillIdentityFor(*req); ok {
 			e.Skill = &id
 		}
-		if !ReviewRole(*req) && layout.GitDir != "" {
+		switch {
+		case ReviewRole(*req):
+		case prev != nil && prev.Push != nil:
+			pt := *prev.Push
+			e.Push = &pt
+		case prev == nil && layout.GitDir != "":
 			e.Push = pushTarget(dir, layout, req.Trigger.Target.CheckoutRepo())
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		e.StartHead, _ = gitpush.HeadCommit(ctx, dir, layout.GitDir, layout.HeadDir)
-		cancel()
+		if layout.GitDir != "" || prev == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			e.StartHead, _ = gitpush.HeadCommit(ctx, dir, layout.GitDir, layout.HeadDir)
+			cancel()
+		}
 	}
-	if req != nil && req.Trigger.TargetTrusted && SandboxPrefetch != nil {
+	if prev == nil && req != nil && req.Trigger.TargetTrusted && SandboxPrefetch != nil {
 		// Still conductor's own checkout: its module files, not an agent's.
 		SandboxPrefetch(dir)
 	}

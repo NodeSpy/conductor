@@ -112,8 +112,6 @@ const seatbeltAgentBase = `(version 1)
 (allow signal (target same-sandbox))
 (allow sysctl-read)
 (allow file-read-metadata)
-(allow ipc-posix-shm-read-data ipc-posix-shm-write-data ipc-posix-shm-write-create ipc-posix-shm-read-metadata)
-(allow ipc-posix-sem)
 (allow file-read* (literal "/"))
 (allow file-read*
   (subpath "/usr")
@@ -169,6 +167,13 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 		b.WriteString(browserMetadata(binds))
 	} else {
 		b.WriteString(seatbeltAgentBase)
+	}
+	if a.Browser || a.PosixIPC {
+		// POSIX shared memory and semaphores are named host-wide: an
+		// agent could open a host process's by name. Only the browser
+		// (Chromium's own) and an operator's sandbox.macos_posix_ipc get
+		// them.
+		b.WriteString("(allow ipc-posix-shm-read-data ipc-posix-shm-write-data ipc-posix-shm-write-create ipc-posix-shm-read-metadata)\n(allow ipc-posix-sem)\n")
 	}
 	mach := append([]string(nil), agentMachBase...)
 	if n.Open {
