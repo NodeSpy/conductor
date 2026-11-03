@@ -162,6 +162,10 @@ var GitTrust struct {
 	// Forbidden are directories no git path may be inside: conductor's
 	// state and config.
 	Forbidden []string
+	// OwnRepos are where repositories conductor creates inside its state
+	// live (the bots' memory repos): a linked worktree of one, registered
+	// by git itself, may name its common dir there.
+	OwnRepos []string
 	// Home is the operator's home: no git path may be it or contain it.
 	Home string
 }
@@ -232,10 +236,10 @@ func trustedAlternate(ws, objs string) error {
 }
 
 // safeGitPath refuses a git path that is /, the home or above it, or inside
-// conductor's own state or config — conductor's own checkouts (inside its
-// state dir) excepted.
+// conductor's own state or config — conductor's own checkouts and
+// repositories (inside its state dir) excepted.
 func safeGitPath(p string) error {
-	for _, r := range GitTrust.ObjectRoots {
+	for _, r := range append(append([]string(nil), GitTrust.ObjectRoots...), GitTrust.OwnRepos...) {
 		if r != "" && within(p, evalOr(r)) {
 			return nil
 		}

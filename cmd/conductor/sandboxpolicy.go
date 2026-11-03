@@ -156,6 +156,8 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	agentsandbox.GitTrust.Home = home
 	agentsandbox.GitTrust.Forbidden = r.Protected
 	agentsandbox.GitTrust.ObjectRoots = []string{filepath.Join(filepath.Dir(cfg.Store.StateFile), "checkouts"), filepath.Join(home, ".conductor", "checkouts")}
+	// A bot worker works in a linked worktree of its bot's memory repo.
+	agentsandbox.GitTrust.OwnRepos = []string{filepath.Join(config.StateDir(), "bots")}
 	// The workspace registry survives a restart: a workspace's layout is
 	// the one recorded while it was conductor's, never re-read from it.
 	if err := agentsandbox.Default.PersistTo(filepath.Join(r.StateRoot, ".workspaces.json")); err != nil {

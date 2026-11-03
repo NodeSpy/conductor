@@ -608,4 +608,21 @@ func TestResolveGitLayoutRefusesUntrustedPointers(t *testing.T) {
 	if _, err := ResolveGitLayout(clone); err != nil {
 		t.Fatalf("a checkout's object store: %v", err)
 	}
+
+	// A bot worker's linked worktree of its memory repo, inside conductor's
+	// state: refused as state, accepted as a repo conductor owns.
+	state := filepath.Join(root, "state")
+	mem := filepath.Join(state, "bots", "b", "memory")
+	git(t, root, "init", "-q", "-b", "main", mem)
+	git(t, mem, "commit", "-q", "--allow-empty", "-m", "m")
+	run := filepath.Join(root, "runs", "w1")
+	git(t, mem, "worktree", "add", "-q", "-b", "w1", run)
+	GitTrust.Forbidden = []string{state}
+	if _, err := ResolveGitLayout(run); !errors.Is(err, errUntrustedGit) {
+		t.Fatalf("a common dir in conductor's state accepted: %v", err)
+	}
+	GitTrust.OwnRepos = []string{filepath.Join(state, "bots")}
+	if l, err := ResolveGitLayout(run); err != nil || l.GitDir != filepath.Join(mem, ".git") {
+		t.Fatalf("a bot memory repo's worktree: %+v %v", l, err)
+	}
 }
