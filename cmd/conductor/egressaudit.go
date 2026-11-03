@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"strings"
+	"unicode"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
@@ -29,9 +31,11 @@ func sandboxEventAudit(logf func(string, ...any), audit func(map[string]any), no
 		// An allowed detection (the launch's allowance covers it) is
 		// audited and logged, not escalated.
 		if notify != nil && (kind == "detection" || kind == "limit") && fields["action"] != "allowed" {
-			msg := fmt.Sprintf("agent sandbox %s: %v (%v) — action %v", kind, fields["kind"], fields["reason"], fields["action"])
+			// Every field may carry what the agent chose (a process's argv, a
+			// host): no chat markup survives into the operator's alert.
+			msg := fmt.Sprintf("agent sandbox %s: %s (%s) — action %s", alertField(kind), alertField(fields["kind"]), alertField(fields["reason"]), alertField(fields["action"]))
 			if run, _ := fields["run"].(string); run != "" {
-				msg += ", run " + run
+				msg += ", run " + alertField(run)
 			}
 			notify(msg)
 		}
@@ -70,4 +74,30 @@ func egressAudit(logf func(string, ...any), audit func(map[string]any)) func(san
 		}
 		audit(row)
 	}
+}
+
+// alertMax bounds one field of a sandbox alert.
+const alertMax = 160
+
+// alertMarkup neutralises chat markup: Slack's <!channel>, <@U…>, <#C…> and
+// <url|text>, Discord's @everyone / @here, <@id> and [text](url), and the
+// auto-linking of scheme://.
+var alertMarkup = strings.NewReplacer(
+	"<", "‹", ">", "›", "@", "@\u200b", "[", "⟦", "]", "⟧", "`", "'", "|", "¦", "://", "[:]//",
+)
+
+// alertField is v as one line of plain text for a notification: control
+// characters (newlines included) collapsed, chat markup neutralised,
+// truncated to alertMax runes.
+func alertField(v any) string {
+	s := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return ' '
+		}
+		return r
+	}, fmt.Sprint(v))
+	if r := []rune(s); len(r) > alertMax {
+		s = string(r[:alertMax]) + "…"
+	}
+	return alertMarkup.Replace(s)
 }

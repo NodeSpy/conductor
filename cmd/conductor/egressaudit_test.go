@@ -68,3 +68,24 @@ func TestAllowedEventsAreAuditedNotEscalated(t *testing.T) {
 		t.Fatalf("rows %v, logs %v", rows, logs)
 	}
 }
+
+// What an agent chose (a process's argv) reaches the operator's alert as
+// plain text: no mention, link or channel markup, one line, bounded.
+func TestSandboxAlertsCarryNoMarkup(t *testing.T) {
+	var notes []string
+	ev := sandboxEventAudit(func(string, ...any) {}, func(map[string]any) {}, func(m string) { notes = append(notes, m) })
+	evil := "pid 7: ssh runs (ssh <!channel> <@U123> @everyone @here incident\napprove at <http://evil.example|the console> [docs](https://evil.example) `x`) " + strings.Repeat("A", 400)
+	ev("detection", map[string]any{"run": "d1 <!here>", "kind": "tunnel_tool", "reason": evil, "action": "kill"})
+	if len(notes) != 1 {
+		t.Fatalf("notes %q", notes)
+	}
+	m := notes[0]
+	for _, bad := range []string{"<!", "<@", "@everyone", "@here", "<http", "](", "://", "\n", "`"} {
+		if strings.Contains(m, bad) {
+			t.Errorf("the alert carries %q: %s", bad, m)
+		}
+	}
+	if !strings.Contains(m, "tunnel_tool") || !strings.Contains(m, "run d1") || len([]rune(m)) > 3*alertMax+100 {
+		t.Fatalf("alert %q", m)
+	}
+}
