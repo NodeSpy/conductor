@@ -1353,8 +1353,22 @@ sandbox:
   # agents: on              # `off` = the explicit opt-out (agents run as before; logged at boot).
   #                         #   Per runtime/step: isolation: { mode: none }.
   egress: []                # hosts every sandboxed agent may reach beyond its model endpoints,
-  #                         #   e.g. [registry.npmjs.org, proxy.golang.org, "*.pypi.org"]
-  # prefetch: [go]          # conductor downloads a dispatch's Go modules (its checkout's go.work /
+  #                         #   e.g. [registry.npmjs.org, "*.pypi.org"]. Go needs none: see packages.
+  # packages:               # conductor's package proxy: agents fetch dependencies THROUGH conductor
+  #                         #   (relayed into the sandbox), never from the internet. Go is on by
+  #                         #   default with the sandbox: GOPROXY points at conductor (no direct
+  #                         #   fallback), GOSUMDB stays on, every .mod/.zip is verified against
+  #                         #   the checksum database before it is cached, each fetch is audited.
+  #   cache_max: 10GB       # the shared cache's bound (least recently used evicted)
+  #   go:
+  #     enabled: false      # turn the Go proxy off (prefetch: [go] then applies, if set)
+  #     upstream: https://proxy.golang.org   # the ONE upstream conductor fetches from (no list,
+  #                                          #   no credentials in it, never direct)
+  #     sumdb: sum.golang.org                # GOSUMDB form; cannot be off
+  #     private: ["git.internal.example/*"]  # served from YOUR upstream unverified, never cached;
+  #                                          #   refused with the default upstream. Any other module
+  #                                          #   the checksum database doesn't know fails clearly.
+  # prefetch: [go]          # (superseded by packages.go while it is on) conductor downloads a dispatch's Go modules (its checkout's go.work /
   #                         #   go.mod, read before the agent runs) on the HOST into one module cache
   #                         #   of its own, mounted read-only in every sandbox; the agent's Go runs
   #                         #   offline (GOPROXY=off), so no Go host goes in egress. A module the agent

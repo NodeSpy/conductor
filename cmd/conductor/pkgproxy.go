@@ -9,6 +9,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/pkgproxy"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // startPackageProxy starts conductor's package proxy for sandboxed agents
@@ -81,25 +82,41 @@ func startPackageProxy(cfg *config.Config, root string, logf func(string, ...any
 	return srv, func() { srv.Close(); cache.Close() }, nil
 }
 
+// sandboxOwnPorts are loopback ports a Linux sandbox's own network uses
+// already (the egress forwarder, a sandboxed `opencode serve`): the proxy's
+// relay listens inside the sandbox at its host port, so it must not be one.
+var sandboxOwnPorts = map[string]bool{"4096": true}
+
+func init() {
+	if _, p, err := net.SplitHostPort(sandbox.ForwardAddr); err == nil {
+		sandboxOwnPorts[p] = true
+	}
+}
+
 // listenRemembered binds the port the previous daemon used (an agent that
-// outlived it still has that address in its environment), else any port,
-// and records it.
+// outlived it still has that address in its environment), else any port
+// the sandbox does not use itself, and records it.
 func listenRemembered(srv *pkgproxy.Server, portFile string) (string, error) {
 	if b, err := os.ReadFile(portFile); err == nil {
-		if port := strings.TrimSpace(string(b)); port != "" {
+		if port := strings.TrimSpace(string(b)); port != "" && !sandboxOwnPorts[port] {
 			if addr, err := srv.Listen(net.JoinHostPort("127.0.0.1", port)); err == nil {
 				return addr, nil
 			}
 		}
 	}
-	addr, err := srv.Listen("127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	if _, port, err := net.SplitHostPort(addr); err == nil {
+	for try := 0; ; try++ {
+		addr, err := srv.Listen("127.0.0.1:0")
+		if err != nil {
+			return "", err
+		}
+		_, port, _ := net.SplitHostPort(addr)
+		if sandboxOwnPorts[port] && try < 5 {
+			srv.Close()
+			continue
+		}
 		_ = os.WriteFile(portFile, []byte(port+"\n"), 0o600)
+		return addr, nil
 	}
-	return addr, nil
 }
 
 func humanBytes(n int64) string {

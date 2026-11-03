@@ -163,6 +163,10 @@ transport off. Its diff read of a sandboxed workspace (the diff preview) runs
 inside the sandbox too — the checkout's `.git/config` and `.gitattributes` are
 the agent's. Each dispatch gets **its own clone** (objects borrowed from the
 base clone through `alternates`), so one agent cannot move another's branch.
+The base clone is blob-filtered and the agent cannot fetch, so for a PR
+checkout conductor fetches up front every blob merging or rebasing onto its
+base branch needs (the trees of the base branch's tip, the merge base and the
+PR's own commits) — a merge-conflict fixer never stops on a missing blob.
 
 **The Verified badge.** Signatures verify `G` with your key locally. GitHub
 shows "Verified" on a pushed commit only when the signing key is registered on
@@ -175,8 +179,10 @@ emails. conductor does not touch your account settings.
 ```yaml
 sandbox:
   agents: on                       # default; `off` is the explicit opt-out (logged at boot)
-  egress: [registry.npmjs.org, proxy.golang.org]   # beyond the model endpoints
-  prefetch: [go]                   # Go modules fetched on the host, not by the agent (below)
+  egress: [registry.npmjs.org]     # beyond the model endpoints
+  packages:                        # conductor's package proxy (below) — Go is on by default
+    # cache_max: 10GB
+    # go: { enabled: false }       # off; or upstream / sumdb / private (below)
   # state_dir: ~/.local/state/conductor/agent-state   # the identity homes
   push:
     signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh)
@@ -186,7 +192,64 @@ sandbox:
     # unlanded: warn     # commits left unpushed are recorded, not a step failure (default: fail)
 ```
 
-**Go without an allowlist (`prefetch: [go]`).** Allowlisting
+**Go modules through conductor (`packages.go`, the default).** Agents never
+reach a package host — conductor fetches dependencies for them, the way it
+already acts for them on GitHub. With the sandbox on, conductor serves a Go
+module proxy on a host-loopback port, relayed into every sandbox exactly like
+a local model endpoint, and points the agent's `go` at it:
+
+- `GOPROXY=http://127.0.0.1:<port>/<token>/go` — conductor alone, no
+  `,direct` fallback; `GOSUMDB` is the checksum database, fetched *through*
+  the proxy, so the agent's own verification stays on; `GOPRIVATE`,
+  `GONOPROXY`, `GONOSUMDB` and `GOINSECURE` are cleared. A toolchain download
+  (`GOTOOLCHAIN`) is a module too, and arrives the same way.
+- conductor fetches from **one configured upstream** (`proxy.golang.org` by
+  default) with its own network, and follows the upstream's redirects to
+  Cloud Storage itself (https only, never to a private, loopback or
+  link-local address). The agent names only a module path and version —
+  each checked against Go's module grammar and re-encoded — never a host, so
+  the proxy is not a way to reach arbitrary URLs.
+- every `.mod` and `.zip` is **verified against the checksum database before
+  it is cached or served**. What one agent is served, and what the cache
+  holds, is exactly what every Go user gets for that version; content that
+  does not match is refused with a `SECURITY` error and never cached.
+- the cache (`<state_dir>/.pkgproxy`) is shared by every agent, never visible
+  to one, and bounded by `cache_max` (least recently used evicted). Agents
+  asking for the same module at once cause one fetch.
+- each upstream fetch, each `.zip` served and each refusal is audited
+  (`package_fetch` / `package_refused`: module, version, identity, dispatch).
+
+If the proxy is unreachable the agent's `go` fails with that error — it never
+falls back to a direct fetch (its sandbox has no route anyway). A module the
+checksum database does not know — a **private** module — is refused with a
+message saying so. To serve private modules, point conductor at a GOPROXY of
+your own and list their paths:
+
+```yaml
+sandbox:
+  packages:
+    go:
+      upstream: https://goproxy.internal.example   # one URL — no list, no credentials, never direct
+      # sumdb: sum.golang.org                      # GOSUMDB form: name, name+key, "name+key url"; never off
+      private: ["git.internal.example/*"]          # served from upstream, unverified, never cached
+```
+
+`private:` is refused with the default upstream: private module paths are never
+sent to `proxy.golang.org`. Once the proxy is on, take `proxy.golang.org` and
+`sum.golang.org` out of `sandbox.egress` — the agent no longer needs them, and
+leaving them in gives it a second, unaudited path. One thing the proxy does
+not change: an agent can ask the public upstream for any module path it likes
+(as it could with `proxy.golang.org` allowlisted), and the upstream may fetch
+that path from its origin; the audit trail records every one.
+
+`packages` is designed for more ecosystems behind the same shape (npm, PyPI,
+cargo: a URL namespace under the proxy, the environment pointing the tool at
+it, content verified before it is cached). Only Go is implemented.
+
+**Go offline instead (`prefetch: [go]`).** With `packages.go.enabled: false`,
+`prefetch: [go]` downloads a dispatch's modules ahead of time instead and runs
+the agent's Go offline. (With the proxy on, `prefetch: [go]` is superseded and
+logged as such.) Allowlisting
 `proxy.golang.org` is not enough: the proxy answers many module downloads
 with a redirect to `storage.googleapis.com`, and allowlisting that host opens
 every Cloud Storage bucket to the agent. With `prefetch: [go]`, conductor

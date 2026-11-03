@@ -21,7 +21,7 @@ func conflictOrigin(t *testing.T) (url, bare string) {
 	run(t, "", "git", "clone", "-q", bare, work)
 	gitIdentity(t, work)
 	writeFile(t, filepath.Join(work, "README.md"), "main's readme\n")
-	writeFile(t, filepath.Join(work, "extapi", "api.go"), "package extapi\n")
+	writeFile(t, filepath.Join(work, "apis", "client.go"), "package apis\n")
 	run(t, work, "git", "add", "-A")
 	run(t, work, "git", "commit", "-qm", "main moves on")
 	run(t, work, "git", "push", "-q", "origin", "main")
@@ -60,7 +60,7 @@ func TestPRCheckoutCanMergeItsBaseWithoutNetwork(t *testing.T) {
 	if !strings.Contains(string(got), "CONFLICT (content): Merge conflict in README.md") {
 		t.Fatalf("merge of the base did not reach the conflict:\n%s", got)
 	}
-	for _, f := range []string{"extapi/api.go", "README.md"} {
+	for _, f := range []string{"apis/client.go", "README.md"} {
 		if _, err := os.Stat(filepath.Join(wt, f)); err != nil {
 			t.Fatalf("%s not written by the merge: %v", f, err)
 		}
