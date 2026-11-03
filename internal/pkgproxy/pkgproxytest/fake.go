@@ -263,6 +263,19 @@ func (w *World) Hits(path string) int {
 	return w.hits[path]
 }
 
+// SumDBRequests is how many requests the checksum database got.
+func (w *World) SumDBRequests() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := 0
+	for k, c := range w.hits {
+		if strings.HasPrefix(k, "sumdb:") {
+			n += c
+		}
+	}
+	return n
+}
+
 // Requests are every path the upstream was asked for, in order.
 func (w *World) Requests() []string {
 	w.mu.Lock()

@@ -22,6 +22,10 @@ type Cache struct {
 	root *os.Root
 	max  int64
 
+	// fills bounds concurrent upstream fills: each stages up to a whole
+	// module zip in the temp area, which cache_max does not count.
+	fills chan struct{}
+
 	mu       sync.Mutex
 	size     int64
 	flight   map[string]*fill
@@ -34,6 +38,9 @@ type fill struct {
 }
 
 const tmpDir = ".tmp"
+
+// maxConcurrentFills bounds the temp space fills can use at once.
+const maxConcurrentFills = 8
 
 // OpenCache opens (creating) the cache at dir, bounded to max bytes.
 func OpenCache(dir string, max int64) (*Cache, error) {
@@ -48,7 +55,7 @@ func OpenCache(dir string, max int64) (*Cache, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Cache{dir: dir, root: root, max: max, flight: map[string]*fill{}}
+	c := &Cache{dir: dir, root: root, max: max, flight: map[string]*fill{}, fills: make(chan struct{}, maxConcurrentFills)}
 	for _, f := range c.files() {
 		c.size += f.size
 	}
@@ -129,6 +136,8 @@ func (c *Cache) Fill(key string, write func(tmp *os.File) error) (fetched bool, 
 }
 
 func (c *Cache) fillOnce(key string, write func(tmp *os.File) error) error {
+	c.fills <- struct{}{}
+	defer func() { <-c.fills }()
 	tmp, err := os.CreateTemp(filepath.Join(c.dir, tmpDir), "fill-")
 	if err != nil {
 		return err

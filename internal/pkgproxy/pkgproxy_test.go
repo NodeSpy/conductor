@@ -227,6 +227,15 @@ func TestGoRequestPathsAreValidatedBeforeAnyFetch(t *testing.T) {
 		"/sumdb/sum.test/tile/../../x",
 		"/sumdb/sum.test/lookup/example.com/hello@v1.0.0/../../x",
 		"/sumdb/evil.test/latest",
+		"/sumdb/sum.test/tile/8/0/../../../x",
+		"/sumdb/sum.test/lookup/example.com/hello@v1.0",
+		"/sumdb/sum.test/lookup/x",
+		"/sumdb/sum.test/whatever",
+		"/example.com/hello/v2/@v/v1.0.0.zip",  // major version not matching the path
+		"/example.com/hello/@v/v2.0.0.zip",     // v2 needs /v2 or +incompatible
+		"/example.com/hello/@v/feature/x.info", // a query is one name, no separators
+		"/example.com/hello/@v/" + strings.Repeat("a", 200) + ".info",
+		"/example.com/hello/@v/-x.info",
 	}
 	before := len(r.w.Requests())
 	for _, p := range bad {
@@ -236,6 +245,9 @@ func TestGoRequestPathsAreValidatedBeforeAnyFetch(t *testing.T) {
 	}
 	if got := r.w.Requests()[before:]; len(got) != 0 {
 		t.Fatalf("invalid requests reached upstream: %q", got)
+	}
+	if n := r.w.SumDBRequests(); n != 0 {
+		t.Fatalf("invalid requests reached the checksum database %d times", n)
 	}
 	ents, _ := os.ReadDir(r.cache.Dir())
 	for _, e := range ents {
@@ -263,6 +275,14 @@ func TestTokenIsRequired(t *testing.T) {
 		if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("%s: %d", p, resp.StatusCode)
 		}
+	}
+	resp, err := http.Post(r.base+"/example.com/hello/@v/list", "text/plain", strings.NewReader("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST: %d", resp.StatusCode)
 	}
 	other, _ := New(bytes.Repeat([]byte("z"), 32))
 	if _, ok := r.srv.caller(other.Token(Caller{Identity: "a"})); ok {
@@ -341,6 +361,10 @@ func TestFetcherRedirectGuards(t *testing.T) {
 	r.w.Redirect(zp, "http://198.51.100.7/blob.zip")
 	if code, body := r.get(t, zp); code != http.StatusBadGateway || !strings.Contains(body, "non-https") {
 		t.Fatalf("http redirect: %d %q", code, body)
+	}
+	r.w.Redirect("/example.com/hello/@v/v1.0.0.mod", r.w.Upstream.URL+"/example.com/hello/@v/v1.0.0.mod")
+	if code, body := r.get(t, "/example.com/hello/@v/v1.0.0.mod"); code != http.StatusBadGateway || !strings.Contains(body, "redirected more than") {
+		t.Fatalf("redirect loop: %d %q", code, body)
 	}
 	f, err := NewFetcher("https://proxy.example")
 	if err != nil {
@@ -421,6 +445,18 @@ func TestGoAgentEnv(t *testing.T) {
 	for _, s := range []string{"off", "off+x", "", "a b c", "unknown.example"} {
 		if _, err := ParseSumDB(s); err == nil {
 			t.Errorf("sumdb %q accepted", s)
+		}
+	}
+}
+
+// The proxy listens on loopback only — it is reached through the sandbox's
+// relay, never from the network.
+func TestListenIsLoopbackOnly(t *testing.T) {
+	s, _ := New(bytes.Repeat([]byte("k"), 32))
+	for _, a := range []string{"0.0.0.0:0", "[::]:0", "localhost:0", ":0"} {
+		if _, err := s.Listen(a); err == nil {
+			s.Close()
+			t.Fatalf("listened on %s", a)
 		}
 	}
 }
