@@ -204,12 +204,12 @@ func TestRegistryDefaults(t *testing.T) {
 	}
 	const pk = base + "sandbox:\n  packages:\n"
 	for body, want := range map[string]string{
-		"    npm: { private: [\"@corp/*\"] }\n":                                     "never sent to",
+		"    npm: { private: [\"@corp/*\"] }\n":                                      "never sent to",
 		"    npm: { upstream: \"https://registry.npmjs.org/\", private: [\"x\"] }\n": "never sent to",
-		"    cargo: { upstream: \"https://u:p@a.test\" }\n":                         "one http(s) URL",
-		"    maven: { upstream: \"file:///m2\" }\n":                                 "one http(s) URL",
-		"    hex: { upstream: \"https://a.test?x=1\" }\n":                           "one http(s) URL",
-		"    pub: { upstream: \"https://a.test\", private: [\"a b\"] }\n":           "one package-name pattern",
+		"    cargo: { upstream: \"https://u:p@a.test\" }\n":                          "one http(s) URL",
+		"    maven: { upstream: \"file:///m2\" }\n":                                  "one http(s) URL",
+		"    hex: { upstream: \"https://a.test?x=1\" }\n":                            "one http(s) URL",
+		"    pub: { upstream: \"https://a.test\", private: [\"a b\"] }\n":            "one package-name pattern",
 	} {
 		if _, err := loadCfg(t, pk+body); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err %v, want %q", body, err, want)

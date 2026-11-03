@@ -60,8 +60,8 @@ func (s *Server) Warm(ctx context.Context, files map[string][]byte, c Requester,
 		ok      int
 		missing int
 		errs    []error
-		wg   sync.WaitGroup
-		next = make(chan job)
+		wg      sync.WaitGroup
+		next    = make(chan job)
 	)
 	for i := 0; i < warmWorkers; i++ {
 		wg.Add(1)

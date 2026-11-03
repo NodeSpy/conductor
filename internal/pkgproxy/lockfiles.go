@@ -397,7 +397,9 @@ func (g *RubyGems) WarmPaths(_ context.Context, files map[string][]byte) []strin
 // Maven
 
 // Lockfiles: Gradle dependency locks.
-func (m *Maven) Lockfiles() []string { return []string{"gradle.lockfile", "buildscript-gradle.lockfile"} }
+func (m *Maven) Lockfiles() []string {
+	return []string{"gradle.lockfile", "buildscript-gradle.lockfile"}
+}
 
 // WarmPaths are each locked module's .pom and .jar.
 func (m *Maven) WarmPaths(_ context.Context, files map[string][]byte) []string {

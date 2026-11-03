@@ -52,11 +52,11 @@ func TestLockfileReaders(t *testing.T) {
 		"package-lock.json": `{"packages":{"":{"name":"app"},"node_modules/left-pad":{"version":"1.3.0","resolved":"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"},` +
 			`"node_modules/a/node_modules/@acme/w":{"version":"2.0.0","resolved":"https://registry.npmjs.org/@acme/w/-/w-2.0.0.tgz"},` +
 			`"node_modules/gitdep":{"version":"1.0.0","resolved":"git+ssh://git@example.test/x.git#abc"},"node_modules/local":{"link":true,"resolved":"../local"}}}`,
-		"web/yarn.lock": "# yarn lockfile v1\n\n\"@babel/core@^7.0.0\", \"@babel/core@^7.1.0\":\n  version \"7.2.0\"\n  resolved \"https://registry.yarnpkg.com/@babel/core/-/core-7.2.0.tgz#abc\"\n  integrity sha512-x\n\nlodash@^4:\n  version \"4.17.21\"\n  resolved \"https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz\"\n",
-		"b/yarn.lock":   "__metadata:\n  version: 6\n\n\"react@npm:^18.0.0\":\n  version: 18.2.0\n  resolution: \"react@npm:18.2.0\"\n  checksum: abc\n\n\"x@workspace:.\":\n  version: 0.0.0\n  resolution: \"x@workspace:.\"\n",
-		"pnpm-lock.yaml": "lockfileVersion: '9.0'\npackages:\n  'is-odd@3.0.1':\n    resolution: {integrity: sha512-x}\n  '@types/node@20.1.0':\n    resolution: {integrity: sha512-y}\n  'tar@https://x.test/t.tgz':\n    resolution: {tarball: https://x.test/t.tgz}\n",
+		"web/yarn.lock":      "# yarn lockfile v1\n\n\"@babel/core@^7.0.0\", \"@babel/core@^7.1.0\":\n  version \"7.2.0\"\n  resolved \"https://registry.yarnpkg.com/@babel/core/-/core-7.2.0.tgz#abc\"\n  integrity sha512-x\n\nlodash@^4:\n  version \"4.17.21\"\n  resolved \"https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz\"\n",
+		"b/yarn.lock":        "__metadata:\n  version: 6\n\n\"react@npm:^18.0.0\":\n  version: 18.2.0\n  resolution: \"react@npm:18.2.0\"\n  checksum: abc\n\n\"x@workspace:.\":\n  version: 0.0.0\n  resolution: \"x@workspace:.\"\n",
+		"pnpm-lock.yaml":     "lockfileVersion: '9.0'\npackages:\n  'is-odd@3.0.1':\n    resolution: {integrity: sha512-x}\n  '@types/node@20.1.0':\n    resolution: {integrity: sha512-y}\n  'tar@https://x.test/t.tgz':\n    resolution: {tarball: https://x.test/t.tgz}\n",
 		"old/pnpm-lock.yaml": "lockfileVersion: 5.4\npackages:\n  /ms/2.1.3:\n    resolution: {integrity: sha512-z}\n  /debug@4.3.4(supports-color@8.0.0):\n    resolution: {integrity: sha512-q}\n",
-		"bun.lock": "{\n  \"lockfileVersion\": 1,\n  \"packages\": {\n    \"chalk\": [\"chalk@5.3.0\", \"\", {}, \"sha512-c\"],\n    \"g\": [\"g@github:o/r#abc\", {}],\n  },\n}\n",
+		"bun.lock":           "{\n  \"lockfileVersion\": 1,\n  \"packages\": {\n    \"chalk\": [\"chalk@5.3.0\", \"\", {}, \"sha512-c\"],\n    \"g\": [\"g@github:o/r#abc\", {}],\n  },\n}\n",
 	}),
 		"left-pad/-/left-pad-1.3.0.tgz", "@acme/w/-/w-2.0.0.tgz", "@babel/core/-/core-7.2.0.tgz", "lodash/-/lodash-4.17.21.tgz",
 		"react/-/react-18.2.0.tgz", "is-odd/-/is-odd-3.0.1.tgz", "@types/node/-/node-20.1.0.tgz", "ms/-/ms-2.1.3.tgz",
