@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -12,7 +14,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // GoPrefetch is sandbox.prefetch: [go]. conductor downloads a dispatch's Go
@@ -20,27 +25,62 @@ import (
 // launches; every sandboxed agent sees that cache read-only and runs Go
 // offline (GOPROXY=off), so no Go host is ever on its allowlist.
 //
-// The download runs as the operator, so it never touches anything an agent
-// can write: the module files are read from the workspace while it is still
-// conductor's checkout (Workspace, at registration), copied into a temp dir
-// of the download's own, and the cache is mounted read-only in every
-// sandbox — an agent cannot plant a symlink there for the host's go to
-// write through.
+// The download itself runs CONFINED (rt2 #11): a namespace jail with no
+// filesystem but its own scratch dir and the module cache, and no network
+// but the configured GOPROXY hosts. It never touches anything an agent can
+// write (the module files are read from the workspace while it is still
+// conductor's checkout — Workspace, at registration — then copied into a
+// temp dir of the download's own) and the cache is mounted read-only in
+// every sandbox, so an agent cannot plant a symlink there for the host's go
+// to write through. The jail adds a second wall below that: even a
+// MALICIOUS go.mod/go.sum this snapshot carries (an event- or
+// agent-influenced workspace, before conductor's own checks run) runs its
+// `go mod download` with the operator's real HOME/credentials invisible by
+// absence and its network cut to exactly the hosts GOPROXY names — not the
+// daemon's full view of the machine.
 type GoPrefetch struct {
 	// Cache is the module cache (GOMODCACHE), shared by every identity: what
 	// it holds is public and checksum-verified.
 	Cache string
 	// Go is the go binary the download runs.
 	Go string
-	// Proxy is the download's GOPROXY: the operator's own module cache, then
-	// proxy.golang.org. Never `direct` — no VCS runs against a module path a
-	// go.mod names.
+	// Proxy is the download's GOPROXY — proxy.golang.org by default. Never
+	// `direct` and never a `file://` layer onto the OPERATOR's own
+	// GOMODCACHE (rt2 #11): a file:// proxy there would let a private
+	// module the operator has cached from one identity's dispatch (or their
+	// own box) be served into this ONE SHARED cache every identity reads —
+	// the isolation goprefetch exists to give every OTHER identity, quietly
+	// defeated. A deployment that wants a private upstream proxy sets one
+	// here explicitly (an http(s) mirror it trusts, never a local path).
 	Proxy string
 	// Env are the operator variables the download keeps (PATH, the HTTP
 	// proxy and CA settings); nothing else of the daemon's reaches it.
 	Env []string
 	// Timeout bounds one download (default 10m).
 	Timeout time.Duration
+	// Sandbox is the daemon-side sandbox wiring the confined `go mod
+	// download` wraps through (sandbox.WrapLocalCommand's deps) — the same
+	// self-exe resolver and egress-proxy minters the controller wires for
+	// every other local launch (cmd/conductor's wireAgentSandbox). The zero
+	// value means this box's goprefetch has no way to confine the download:
+	// Fill then logs and skips the prefetch entirely rather than ever
+	// falling back to an unconfined host download (fail closed).
+	Sandbox sandbox.LocalWrapDeps
+	// Warn logs a non-fatal notice: the download could not be confined (so
+	// it was skipped), or the box has no systemd user bus for the optional
+	// resource-limit scope (so the download runs confined but unlimited).
+	// nil falls back to the standard logger.
+	Warn func(format string, args ...any)
+}
+
+// warnf emits a non-fatal notice through the wired hook, or the standard
+// logger when none is set.
+func (g *GoPrefetch) warnf(format string, args ...any) {
+	if g.Warn != nil {
+		g.Warn(format, args...)
+		return
+	}
+	log.Printf(format, args...)
 }
 
 // goPrefetchEnvKeep are the operator variables a download keeps.
@@ -63,18 +103,16 @@ func NewGoPrefetch(cache string, inherited []string) (*GoPrefetch, error) {
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		return nil, fmt.Errorf("agentsandbox: go module cache: %w", err)
 	}
+	// Proxy stays the public default (never derived from the operator's own
+	// $GOMODCACHE, rt2 #11 — see the Proxy field doc): this ONE cache is
+	// shared by every identity, and a file:// layer onto the operator's own
+	// module cache would pull whatever private modules it holds (from this
+	// box's OWN work, or a past dispatch under a different identity) into
+	// it, available to every identity from then on.
 	g := &GoPrefetch{Cache: cache, Go: bin, Proxy: "https://proxy.golang.org"}
 	for _, kv := range inherited {
 		if k, _, ok := strings.Cut(kv, "="); ok && goPrefetchEnvKeep[k] {
 			g.Env = append(g.Env, kv)
-		}
-	}
-	cmd := exec.Command(bin, "env", "GOMODCACHE")
-	cmd.Env = inherited
-	if out, err := cmd.Output(); err == nil {
-		dl := filepath.Join(strings.TrimSpace(string(out)), "cache", "download")
-		if fi, err := os.Stat(dl); err == nil && fi.IsDir() && filepath.Clean(dl) != filepath.Join(cache, "cache", "download") {
-			g.Proxy = "file://" + filepath.ToSlash(dl) + "," + g.Proxy
 		}
 	}
 	return g, nil
@@ -97,8 +135,67 @@ func (g *GoPrefetch) Workspace(ctx context.Context, ws string) error {
 	return g.Fill(ctx, m)
 }
 
+// downloadPlan is the local `go mod download` Fill is about to run, resolved
+// but not yet confined: argv/dir/env as the UNWRAPPED launch would see them.
+// Split out from Fill so the plan's shape — the snapshot staged on disk, the
+// env vars, the workspace-vs-single-module GOWORK switch — is covered by a
+// fast unit test with no namespace/privilege involved at all; a Linux
+// integration test is what proves the CONFINEMENT Fill wraps it in actually
+// holds (goprefetch_jail_linux_test.go).
+type downloadPlan struct {
+	argv []string
+	dir  string // the scratch root (tmp): also what gets bound/chdir'd into the jail
+	env  []string
+	tmp  string // == dir; named separately so callers don't have to know dir IS the cleanup root
+}
+
+// plan stages m's module files into a fresh temp dir and builds the argv/env
+// `go mod download` runs with. The caller owns removing p.tmp.
+func (g *GoPrefetch) plan(m *GoModules) (*downloadPlan, error) {
+	tmp, err := os.MkdirTemp("", "conductor-gomod-")
+	if err != nil {
+		return nil, err
+	}
+	src := filepath.Join(tmp, "src")
+	for rel, b := range m.Files {
+		if !filepath.IsLocal(filepath.FromSlash(rel)) {
+			os.RemoveAll(tmp)
+			return nil, fmt.Errorf("agentsandbox: go module file %q is not inside the workspace", rel)
+		}
+		p := filepath.Join(src, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			os.RemoveAll(tmp)
+			return nil, err
+		}
+		if err := os.WriteFile(p, b, 0o600); err != nil {
+			os.RemoveAll(tmp)
+			return nil, err
+		}
+	}
+	env := append(append([]string(nil), g.Env...),
+		"HOME="+tmp, "GOENV=off", "GOFLAGS=", "GOPATH="+filepath.Join(tmp, "gopath"),
+		"GOMODCACHE="+g.Cache, "GOCACHE="+filepath.Join(tmp, "gocache"),
+		"GOPROXY="+g.Proxy, "GOPRIVATE=", "GONOPROXY=", "GONOSUMDB=", "GOINSECURE=",
+		"GOTOOLCHAIN=local", "GOVCS=*:off", "GIT_TERMINAL_PROMPT=0")
+	if _, ok := m.Files["go.work"]; !ok {
+		// Never a go.work above the temp dir.
+		env = append(env, "GOWORK=off")
+	}
+	// `-C src` rather than cmd.Dir = src: dir/chdir below is tmp (the single
+	// root the jail binds and re-enters into), and -C point the toolchain at
+	// the module files inside it without needing a second, nested bind.
+	return &downloadPlan{argv: []string{g.Go, "-C", src, "mod", "download"}, dir: tmp, env: env, tmp: tmp}, nil
+}
+
 // Fill downloads what m names into the cache, once per distinct set of
-// module files (a marker in the cache records it).
+// module files (a marker in the cache records it). The download runs
+// CONFINED — a namespace jail with no filesystem but its scratch dir and the
+// module cache, no network but the configured GOPROXY hosts (rt2 #11). If
+// g.Sandbox has no way to realize that on this box (unwired, or the
+// preflight Check refuses — e.g. no `unshare` here), Fill logs and skips the
+// prefetch entirely: it NEVER falls back to an unconfined download, so the
+// agent simply runs Go offline without these modules, same as if prefetch
+// had never been configured.
 func (g *GoPrefetch) Fill(ctx context.Context, m *GoModules) error {
 	if m == nil || len(m.Files) == 0 {
 		return nil
@@ -107,41 +204,40 @@ func (g *GoPrefetch) Fill(ctx context.Context, m *GoModules) error {
 	if _, err := os.Stat(done); err == nil {
 		return nil
 	}
-	tmp, err := os.MkdirTemp("", "conductor-gomod-")
+	p, err := g.plan(m)
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmp)
-	src := filepath.Join(tmp, "src")
-	for rel, b := range m.Files {
-		if !filepath.IsLocal(filepath.FromSlash(rel)) {
-			return fmt.Errorf("agentsandbox: go module file %q is not inside the workspace", rel)
-		}
-		p := filepath.Join(src, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-			return err
-		}
-		if err := os.WriteFile(p, b, 0o600); err != nil {
-			return err
-		}
-	}
+	defer os.RemoveAll(p.tmp)
+
 	timeout := g.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, g.Go, "mod", "download")
-	cmd.Dir = src
-	cmd.Env = append(append([]string(nil), g.Env...),
-		"HOME="+tmp, "GOENV=off", "GOFLAGS=", "GOPATH="+filepath.Join(tmp, "gopath"),
-		"GOMODCACHE="+g.Cache, "GOCACHE="+filepath.Join(tmp, "gocache"),
-		"GOPROXY="+g.Proxy, "GOPRIVATE=", "GONOPROXY=", "GONOSUMDB=", "GOINSECURE=",
-		"GOTOOLCHAIN=local", "GOVCS=*:off", "GIT_TERMINAL_PROMPT=0")
-	if _, ok := m.Files["go.work"]; !ok {
-		// Never a go.work above the temp dir.
-		cmd.Env = append(cmd.Env, "GOWORK=off")
+
+	if err := os.MkdirAll(g.Cache, 0o755); err != nil {
+		return fmt.Errorf("agentsandbox: go module cache: %w", err)
 	}
+	spec := &sandbox.Spec{Mode: "namespace", Deny: true, HasEgress: true, Egress: goProxyHosts(g.Proxy)}
+	deps := g.Sandbox
+	deps.Confine = true
+	// The module cache (GOMODCACHE) is the one path outside the scratch root
+	// the download needs, read-write — everything else of the operator's
+	// (their real HOME, credentials, the rest of the filesystem) is hidden by
+	// the jail's absence, same as every other confined code step.
+	deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: g.Cache})
+	g.applyLimits(spec)
+	wrappedArgv, wrappedEnv, cleanup, werr := sandbox.WrapLocalCommand(spec, p.argv, p.dir, p.env, deps)
+	if werr != nil {
+		g.warnf("agent sandbox: go prefetch: cannot confine the download (%v) — skipping (the agent runs Go offline without these modules)", werr)
+		return nil
+	}
+	defer cleanup()
+
+	cmd := exec.CommandContext(ctx, wrappedArgv[0], wrappedArgv[1:]...)
+	cmd.Env = wrappedEnv
 	if out, err := cmd.CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(out))
 		if len(msg) > 600 {
@@ -153,6 +249,79 @@ func (g *GoPrefetch) Fill(ctx context.Context, m *GoModules) error {
 		return err
 	}
 	return os.WriteFile(done, nil, 0o644)
+}
+
+// applyLimits adds the optional cgroup resource ceiling (a conservative
+// tasks/pids cap — the download is `go mod download`, not a build, so it
+// never legitimately needs many processes) when this box can actually run
+// it: `systemd-run --user --scope` needs a running user/session D-Bus, which
+// is not guaranteed wherever conductor runs (a system service with no login
+// session, a container — and, unlike a login session, NOT reliably signaled
+// by XDG_RUNTIME_DIR alone: plenty of non-interactive environments export it
+// with no bus actually listening behind it). Rather than let that surface as
+// a confusing download failure for an orthogonal reason, probe for it once
+// (cheap: a transient scope that only has to CONNECT, not do anything) and
+// just run without the limit (logged once) when it is not there — the jail
+// itself (namespace + egress allowlist) is the actual security boundary; the
+// limit is a resource-exhaustion backstop on top of it.
+func (g *GoPrefetch) applyLimits(spec *sandbox.Spec) {
+	if !systemdUserBusAvailable() {
+		g.warnf("agent sandbox: go prefetch: no systemd user bus here — the confined download runs without a cgroup pids limit")
+		return
+	}
+	spec.Pids = 256
+}
+
+// systemdUserBusAvailableFunc is systemdUserBusAvailable's cached probe,
+// a package var so a test can reset/override it.
+var systemdUserBusAvailableFunc = sync.OnceValue(func() bool {
+	if _, err := exec.LookPath("systemd-run"); err != nil {
+		return false
+	}
+	// A real, cheap dry-run: a transient scope that execs `true` and exits
+	// immediately. If there is no session bus to connect to, systemd-run
+	// fails fast (no transient unit, nothing left behind); XDG_RUNTIME_DIR
+	// alone is not trustworthy evidence either way (a test harness or a
+	// system service can set it with no bus actually listening).
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "systemd-run", "--user", "--scope", "--quiet", "--collect", "true").Run() == nil
+})
+
+func systemdUserBusAvailable() bool { return systemdUserBusAvailableFunc() }
+
+// goProxyHosts extracts the egress allow-list from a GOPROXY value: a
+// comma-separated (fallback-on-any-error) or pipe-separated
+// (fallback-on-404-only) list of proxy URLs, "direct", and "off" — we only
+// care about which HOSTS the download may need to reach, not the fallback
+// semantics between them, so both separators are treated the same and
+// "direct"/"off" (not a reachable proxy host) are skipped.
+func goProxyHosts(proxy string) []string {
+	var hosts []string
+	seen := map[string]bool{}
+	for _, part := range strings.FieldsFunc(proxy, func(r rune) bool { return r == ',' || r == '|' }) {
+		part = strings.TrimSpace(part)
+		if part == "" || part == "direct" || part == "off" {
+			continue
+		}
+		u, err := url.Parse(part)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		host := u.Host
+		if u.Port() == "" {
+			port := "443"
+			if u.Scheme == "http" {
+				port = "80"
+			}
+			host += ":" + port
+		}
+		if !seen[host] {
+			seen[host] = true
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts
 }
 
 // GoModules are a workspace's Go module files — go.work, go.work.sum, each
