@@ -47,6 +47,9 @@ const maxPayload = 16 << 10
 type TeamEvent struct {
 	Team, Source, Requester, Title, Text string
 	Urgent                               bool
+	// Conversational marks a live chat/DM message (core.Trigger.Conversational),
+	// stamped by the runner from the firing trigger. See RequesterClassFor.
+	Conversational bool
 	// Fields are the event's own fields, for routing rules.
 	Fields map[string]any
 	// files fetches the event's files (flow.BotRoute.Files).
@@ -110,9 +113,18 @@ func classifyAgainst(cfg *config.Config, ops []string, requester string) (string
 // A truly provenance-less intake — no requester AND no source — drops to the
 // least trusted class, so a forged or defaulted empty intake can never borrow
 // an event's promotion past observe/propose.
-func sourcedClass(cfg *config.Config, ops []string, requester, source string) (string, string) {
+//
+// A CONVERSATIONAL intake (a live chat/DM message) is never promoted this
+// way even though it always carries a source (every chat event is some
+// "<instance>.message" kind): unlike an alert or a webhook, a chat message's
+// source says only "this came from a conversation", not "no human is
+// involved" — the human is the one who typed it. A step that routes such an
+// event without setting `requester:` is missing the one fact that tells the
+// gate who actually asked, so the intake drops to the least trusted class
+// rather than inheriting event-tier autonomy by omission.
+func sourcedClass(cfg *config.Config, ops []string, requester, source string, conversational bool) (string, string) {
 	who, class := classifyAgainst(cfg, ops, requester)
-	if class == ReqEvent && strings.TrimSpace(requester) == "" && strings.TrimSpace(source) == "" {
+	if class == ReqEvent && strings.TrimSpace(requester) == "" && (strings.TrimSpace(source) == "" || conversational) {
 		return "", ReqUser
 	}
 	return who, class
@@ -142,7 +154,7 @@ func (s *Service) RouteTeam(ctx context.Context, ev TeamEvent) (map[string]any, 
 	if r == nil {
 		return nil, fmt.Errorf("team %s has no routing:", ev.Team)
 	}
-	who, class := sourcedClass(cfg, cfg.TeamOperators(ev.Team), ev.Requester, ev.Source)
+	who, class := sourcedClass(cfg, cfg.TeamOperators(ev.Team), ev.Requester, ev.Source, ev.Conversational)
 	rt := store.Routing{Team: ev.Team, At: s.now()}
 	for i, rule := range r.Rules {
 		if ruleMatches(rule, ev) {

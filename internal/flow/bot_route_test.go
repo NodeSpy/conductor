@@ -80,6 +80,37 @@ func TestBotStepProvenanceLessTriggerHasEmptySource(t *testing.T) {
 	}
 }
 
+// rt2 #7: a trigger whose event declares ConversationReply (a live chat/DM
+// message) is stamped Conversational on its BotRoute, regardless of whether
+// the step set `requester:` — the bot service's classifier (internal/bot)
+// uses this to refuse promoting a requester-less chat message to event-tier
+// trust just because the trigger carries a source, which every event does.
+func TestBotStepStampsConversational(t *testing.T) {
+	r := capRunner(t)
+	sr := &stubRouter{}
+	r.BotRouter = sr
+	step := config.Step{Bot: &config.BotStep{Name: "sre", Title: "x"}} // no requester:
+
+	// A plain event (an alert, no ConversationReply semantic): not stamped.
+	if _, _, err := r.execBot(context.Background(), core.Trigger{Instance: "pd", Kind: "incident"}, step, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if sr.got[0].Conversational {
+		t.Fatalf("a non-conversational event was stamped Conversational")
+	}
+
+	// A chat message (ConversationReply declared): stamped, even with a source.
+	sem := &sdk.EventSemantics{ConversationReply: &sdk.ConversationReply{ID: "{{.chat.room}}", Author: "chat.user", Text: "chat.text"}}
+	tr := core.Trigger{Instance: "slack", Kind: "message", Sem: sem}
+	if _, _, err := r.execBot(context.Background(), tr, step, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	got := sr.got[1]
+	if !got.Conversational || got.Source != "slack.message" || got.Requester != "" {
+		t.Fatalf("chat message route: %+v", got)
+	}
+}
+
 // AN EVENT'S FILES: a connector that declares `attachments` has its files
 // fetched — through its fetch verb, lazily, within the receiving bot's caps
 // (a declared size over the cap is refused before any fetch) — and only for

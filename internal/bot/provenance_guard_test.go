@@ -40,15 +40,25 @@ func TestSourcedClassProvenanceGuard(t *testing.T) {
 	cfg := newTeamFixture(t, nil).cfg
 	ops := cfg.TeamOperators("platform")
 	cases := []struct {
-		name, requester, source, wantClass string
+		name, requester, source string
+		conversational          bool
+		wantClass               string
 	}{
-		{"empty, no source", "", "", ReqUser},
-		{"empty, with source", "", "pd.incident", ReqEvent},
-		{"operator, no source", "op", "", ReqOperator},
-		{"third party, no source", "chat:U9", "", ReqUser},
+		{"empty, no source", "", "", false, ReqUser},
+		{"empty, with source", "", "pd.incident", false, ReqEvent},
+		{"operator, no source", "op", "", false, ReqOperator},
+		{"third party, no source", "chat:U9", "", false, ReqUser},
+		// rt2 #7: a chat message carries a source too (every connector event
+		// is "<instance>.<kind>"), but that source does not vouch for an
+		// absent human requester the way an alert's does — a requester-less
+		// conversational intake must stay least-trust, never event.
+		{"empty requester, conversational, with source", "", "slack.message", true, ReqUser},
+		// A named operator requester is unaffected by Conversational — the
+		// guard only ever narrows the requester-LESS case, never a named one.
+		{"operator requester, conversational, with source", "op", "slack.message", true, ReqOperator},
 	}
 	for _, tc := range cases {
-		_, class := sourcedClass(cfg, ops, tc.requester, tc.source)
+		_, class := sourcedClass(cfg, ops, tc.requester, tc.source, tc.conversational)
 		if class != tc.wantClass {
 			t.Errorf("%s: class = %q, want %q", tc.name, class, tc.wantClass)
 		}

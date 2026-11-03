@@ -80,6 +80,9 @@ type Event struct {
 	Title     string
 	Text      string // the payload (data)
 	Urgent    bool
+	// Conversational marks a live chat/DM message (core.Trigger.Conversational),
+	// stamped by the runner from the firing trigger. See RequesterClassFor.
+	Conversational bool
 	// Attachments are files the event carried (an operator's): checked
 	// against the bot's caps before the case opens, and refused with it.
 	Attachments []AttachmentIn
@@ -755,10 +758,15 @@ func RequesterClass(cfg *config.Config, bot, requester string) (string, string) 
 }
 
 // RequesterClassFor classifies an intake that carries event provenance (a
-// source): an empty requester is `event` only when the source vouches for it;
-// a requester-less and source-less intake drops to the least trusted class.
-func RequesterClassFor(cfg *config.Config, bot, requester, source string) (string, string) {
-	return sourcedClass(cfg, cfg.BotOperators(bot), requester, source)
+// source): an empty requester is `event` only when the source vouches for it
+// AND the intake is not itself a live chat/DM message (conversational); a
+// requester-less and source-less intake drops to the least trusted class, and
+// so does a requester-less conversational one — a real-time human message
+// needs its own `requester:` to be trusted as more than a third party, a
+// source alone (which every chat event carries, being an instance.kind) does
+// not vouch for it the way it does for an alert or a webhook.
+func RequesterClassFor(cfg *config.Config, bot, requester, source string, conversational bool) (string, string) {
+	return sourcedClass(cfg, cfg.BotOperators(bot), requester, source, conversational)
 }
 
 // Deliver routes an event into a bot: a case, an inbox message, and —
@@ -768,7 +776,7 @@ func (s *Service) Deliver(ctx context.Context, ev Event) (string, error) {
 	if _, err := s.bot(ev.Bot); err != nil {
 		return "", err
 	}
-	who, class := RequesterClassFor(s.Cfg(), ev.Bot, ev.Requester, ev.Source)
+	who, class := RequesterClassFor(s.Cfg(), ev.Bot, ev.Requester, ev.Source, ev.Conversational)
 	return s.deliverCase(ctx, ev, who, class, nil, "")
 }
 
