@@ -30,11 +30,11 @@ What the agent sees:
 | | |
 |---|---|
 | its workspace | read-write (the dispatch's own clone, `.git` included) |
-| `HOME` | its **identity's** tool state, read-write: `<state>/agent-state/<identity>/` — `~/.claude`, `~/.codex`, … — created before the launch and seeded once from your settings for the tool (never your history: `~/.claude.json`'s per-project history is dropped; nor your claude-code plugins: `settings.json`'s `enabledPlugins`, `extraKnownMarketplaces`, `pluginConfigs`, `appendPlugins` and `prependPlugins` are dropped, since the identity home has no marketplace checkout and a launch would try to clone one through the egress proxy). The tool's login file is shared from your real home, so it is signed in as you. |
+| `HOME` | its **identity's** tool state, read-write: `<state>/agent-state/<identity>/` — `~/.claude`, `~/.codex`, … — created before the launch and seeded once from your settings for the tool (never your history: `~/.claude.json`'s per-project history is dropped; nor your claude-code plugins: `settings.json`'s `enabledPlugins`, `extraKnownMarketplaces`, `pluginConfigs`, `appendPlugins` and `prependPlugins` are dropped, since the identity home has no marketplace checkout and a launch would try to clone one through the egress proxy). Your model key never enters it (the model gateway, below); a subscription login is a copy without its refresh token. By default the home is fresh for each dispatch (`sandbox.persist`). |
 | the conductor socket | the socket file only (never the state dir it lives in), with a token minted for this launch — so `conductor call step.done` / `git.push` work |
 | the base system | `/usr`, `/etc`, `/opt` (Linux) / the system paths (macOS), read-only; the agent CLI's own install, wherever it is |
-| the network | **none of its own.** The only way out is conductor's allowlist proxy: the tool's model endpoints, plus `sandbox.egress`. A model endpoint on your host's loopback (a local router at `127.0.0.1:3456`, a local Ollama) is relayed in at the same address. |
-| the environment | a minimal one: `PATH`, locale, terminal, the tool's model key and endpoint, your git name/email. No `GH_TOKEN`, `SSH_AUTH_SOCK`, cloud keys, or a launcher's own tokens. |
+| the network | **none of its own.** Its model is conductor's model gateway, relayed in on loopback; everything else goes through conductor's allowlist proxy: `sandbox.egress` (and the provider hosts of a model the gateway does not carry), TLS only, per-launch caps. A model endpoint on your host's loopback (a local router, a local Ollama) is reached through the gateway, or relayed in at the same address when the gateway does not carry it. |
+| the environment | a minimal one: `PATH`, locale, terminal, the gateway's URL and a per-launch token in place of the model key, your git name/email. No `GH_TOKEN`, `SSH_AUTH_SOCK`, cloud keys, or a launcher's own tokens. |
 | everything else | **absent** — your `~/.ssh`, `~/.aws`, `~/.config/gh`, other projects, conductor's state and config. Nothing is denied by a list: what is not shown is not there. |
 
 An **identity** is who the agent is: for a dispatch, its profile per (trusted)
@@ -187,7 +187,30 @@ sandbox:
     # sign: false        # push unsigned (default: refuse to push without a key)
     # at_step_end: false # only git.push pushes
     # unlanded: warn     # commits left unpushed are recorded, not a step failure (default: fail)
+    # allow_ci_changes: true   # let a push carry CI definition changes (default: refused)
+  # The containment knobs below are all optional; the values shown are the defaults.
+  # model_credential: gateway     # login-copy | login-share
+  # egress_require_tls: true      # false: any bytes through an allowed tunnel
+  # egress_limits: { idle: 10m, upload: 512MiB, download: 20GiB }   # each takes "off"
+  # detect:
+  #   action: kill                # alert | off
+  #   tripwires: true
+  #   interval: 3s
+  #   allow: []                   # tunnel tools a project's work needs, e.g. [ssh]
+  # limits:                       # Linux: a systemd user scope per launch
+  #   memory: 50%                 # per launch (systemd syntax: 4G, 50%)
+  #   pids: 8192
+  #   aggregate_memory: 75%       # every agent launch together
+  #   disk_free_min: 5%           # or a size (5GiB), or off
+  #   required: false             # true: refuse a launch whose limits can't be applied
+  #   off: false
+  # persist: none                 # cache | home
+  # git: { shared: protected }    # direct
+  # macos_posix_ipc: false
 ```
+
+What each of these protects, and what loosening it gives up, is in
+[Containment and detection](#containment-and-detection) below.
 
 **Go without an allowlist (`prefetch: [go]`).** Allowlisting
 `proxy.golang.org` is not enough: the proxy answers many module downloads
@@ -331,9 +354,220 @@ review rounds to harden is gone rather than hardened.
   that, so a blob the base never fetched (an old file version for `git blame`)
   is unavailable inside it.
 - **Linked worktrees** (paseo's own worktrees for paseo dispatches) share their
-  base checkout's refs: the sandbox shows the common dir's objects and refs
-  writable (its config, hooks and alternates read-only, sibling worktrees
-  hidden). conductor's per-dispatch clones (`cli`) do not have this.
+  base checkout's refs: the sandbox shows the common dir's objects, refs, logs
+  and lfs writable and everything else read-only (`sandbox.git.shared`,
+  below; sibling worktrees hidden). conductor's per-dispatch clones (`cli`)
+  do not have this.
+- What containment does not stop is listed under
+  [What is left](#what-is-left).
+
+### Containment and detection {#containment-and-detection}
+
+The sandbox decides what an agent can reach. The protections below assume
+that an agent will still try: they keep what it can take, keep, or leave
+behind small, and make the attempt visible. Each has a strict default and
+one knob that loosens it.
+
+**The model key stays on the host (`sandbox.model_credential`).** The agent's
+model endpoint is conductor's **model gateway**: on Linux a unix socket
+relayed into the sandbox at a loopback address; on macOS a conductor-owned
+loopback port, the only loopback port the agent's profile allows. The agent
+gets the gateway's URL and a random token minted for this launch, never the
+key. The gateway:
+
+- refuses any request without that token (`x-api-key`, `Authorization:
+  Bearer`, `x-goog-api-key`, `api-key` or a `key=` query);
+- swaps the token for your real key, read from the daemon's environment,
+  claude-code's `settings.json` or codex's `auth.json`;
+- forwards only to the configured upstream: a request cannot name another
+  host.
+
+It carries claude-code, codex, gemini, pi and qwen with an API key. A local
+model router is always reached through it. When it carries every route of a
+launch, the provider's hosts leave the allowlist and no login file is placed
+in the home. A launch the gateway cannot carry falls back to `login-copy`:
+opencode, or a subscription (OAuth) login with no API key. A refused request
+is audited as `sandbox_model_gateway_refused`.
+
+| `model_credential` | the agent gets | you give up |
+|---|---|---|
+| `gateway` (default) | a per-launch token; a login copy for what the gateway cannot carry | — |
+| `login-copy` | the API key in its environment; the login file as an access-token-only copy (refresh tokens and stored API keys removed) | the key is readable inside the sandbox for the launch |
+| `login-share` | the key in its environment; your login file bound **read-only** | your refresh token is readable inside the sandbox |
+
+Your login file is never bound read-write. An access-token-only copy expires
+with its access token: a long session signs out until your own CLI refreshes
+the login. `login-share` avoids that, at the price in the table.
+
+**Egress sessions (`sandbox.egress_require_tls`, `sandbox.egress_limits`).**
+Each agent launch gets its own egress proxy session, attributed to its run:
+
+- **TLS check.** Every CONNECT tunnel must open with a TLS ClientHello whose
+  server name (SNI) is the CONNECT host. The proxy reads it **before it
+  dials** the upstream, so plain SSH, a ClientHello with no server name, or
+  an encrypted ClientHello (ECH) to an allowed host is refused without a
+  connection being made. `egress_require_tls: false` lets any bytes through
+  an allowed tunnel.
+- **Audit.** Every request is audited as `{event: egress}`: target, SNI,
+  bytes each way, duration, outcome and, for a refusal or closure, the reason.
+- **Close on revoke.** When the step ends, its session is revoked and its open
+  tunnels are closed, not only new requests refused.
+- **Caps.** A tunnel with no bytes either way for `idle` (10m) is closed. A
+  session over its `upload` (512MiB) or `download` (20GiB) cap has its tunnels
+  closed and further CONNECTs refused. Each limit takes `off`. Model traffic
+  through the gateway is not counted.
+
+Plugin and code-step egress keeps its plain sessions: no TLS check, no caps.
+
+**Git (`sandbox.git.shared`, `sandbox.push.allow_ci_changes`).** Your own git
+trusts what is in a repository's `.git`; conductor's does not:
+
+- **Shared git dirs.** In a linked worktree, only the shared git dir's
+  objects, refs, logs and lfs are writable. Its config, hooks, info,
+  submodule git dirs, alternates, replace refs and shallow file are
+  read-only, and so are the worktree's own `.git` file, commondir and
+  gitdir. `git.shared: direct` makes the whole shared dir writable except
+  those protected paths.
+- **Conductor's own git.** Conductor's git reads run hardened (no hooks,
+  filters, fsmonitor or config includes from the workspace). It decides a
+  workspace's layout, adoption and push target from what it recorded when
+  it registered the workspace, never from an agent-writable file, and that
+  registry outlives a restart. A later dispatch into the workspace reuses
+  the recorded layout. A new one is bound only if git's own worktree
+  registration points back at the workspace.
+- **Pushes.** Conductor learns what a push carries from the remote
+  (`ls-remote`), not from remote-tracking refs an agent could rewrite. It
+  refuses a shallow git dir, and refuses a commit that changes a CI
+  definition (`.github/workflows`, `.gitlab-ci.yml`, `.circleci`, …): a
+  push-triggered pipeline would run the agent's code with the repository's
+  secrets. `push.allow_ci_changes: true` lets such commits through.
+- **Untrusted targets.** Conductor never checks out, prefetches for or pushes
+  to a repository the event's *sender* chose. A dispatch's repository comes
+  from the platform's own assignment or the step's `repo:`, never from a
+  webhook body.
+- **The git guard.** It records the workspace's `.git` pointer, commondir,
+  alternates, config and hooks at launch. When they change, it restores
+  them, or moves what was added to `*.conductor-quarantined-*` (not
+  executable), and reports it. A config is held only to its executable
+  settings (fsmonitor, hooksPath, sshCommand, filters, textconv, aliases,
+  includes, credential helpers, …), so an agent's `user.name` stands.
+
+**Detection (`sandbox.detect`).** A host-side watcher follows every process
+of each launch: the processes carrying a random per-launch marker in their
+environment, and their descendants. It scans every `interval` (3s) for:
+
+| kind | what |
+|---|---|
+| `tunnel_tool` | ssh, socat, nc, chisel, websocat, cloudflared, ngrok, `openssl s_client`, tor, … |
+| `reverse_shell` | a shell or interpreter whose stdin or stdout is a TCP/UDP socket |
+| `pty_relay` | Linux: a process other than the agent itself holding a pty master and an inet socket |
+| `tripwire` | a read of a decoy credential in the home: `.ssh/id_ed25519`, `.ssh/id_rsa`, `.git-credentials`, `.vault-token`, `.pypirc` |
+| `git` | the git guard undid a change |
+
+The tripwires are named pipes. A reader blocks until the watcher answers it
+with a believable fake, so every read is seen, however quick. The decoys are
+files no build, test or agent CLI reads. Cloud, docker, kube and netrc
+credentials are deliberately not decoys, because a project's own tests read
+them.
+
+The response is `detect.action`:
+
+- **`kill`** (default): every process of the launch is killed (on Linux
+  through a pidfd, after checking the process is still the one seen), so the
+  step ends with its agent. The workspace is kept. The event is audited
+  (`sandbox_detection`) and raised as a `conductor.escalate` notification
+  ([[Notifications]]).
+- **`alert`**: audited and notified only.
+- **`off`**: no watcher, tripwires or git guard.
+
+`detect.allow: [ssh]` exempts a tunnel tool a project's work needs, and
+`tripwires: false` removes the decoys.
+
+Whatever the action, when a launch ends the watcher kills whatever of it is
+left (audited as `sandbox_leftover_killed`). That includes a daemonized child
+and anything in a process group a launch process led, so a tunnel started in
+the background does not outlive its step. A `conductor sandbox exec` launch
+(a paseo session) sends its events to the daemon's audit log over the
+control socket, tagged `via: sandbox-exec`, and prints them on its stderr.
+
+**Resource limits (`sandbox.limits`).** On Linux each agent launch runs in a
+systemd user scope capped at `memory` (50%) and `pids` (8192) tasks, inside
+one `conductor-agents.slice` that caps every agent launch together at
+`aggregate_memory` (75%). Without a systemd user manager a launch runs
+uncapped after a one-time warning (`sandbox_limits_unavailable`).
+`required: true` refuses it instead, and `off: true` turns the defaults off
+(a step's own `isolation.limits` still apply). macOS has no equivalent.
+
+**The disk guard.** It refuses a launch when its workspace or home
+filesystem has less free space than `disk_free_min` (5%, or a size like
+`5GiB`). While a launch runs, it stops the launch when that filesystem falls
+below the minimum, whatever the detection action. This applies on Linux and
+macOS. `disk_free_min: off` turns it off.
+
+**Ephemeral homes (`sandbox.persist`).** By default each dispatch's agent gets
+a fresh home of its own, seeded like an identity home. The home is kept for
+the dispatch's own resumes and swept a day after its session ends, so
+nothing one run plants (a settings hook, a shell rc file, a poisoned build
+cache) reaches the next.
+
+- `persist: cache` keeps a per-identity cache dir (`~/.cache`, and
+  `~/Library/Caches` on macOS) across dispatches. A run can then plant
+  cache entries later runs execute.
+- `persist: home` keeps the whole identity home, as before.
+- A launch with no dispatch (a bot's home session, your own paseo session)
+  keeps its identity's home.
+
+**IPC.** A Linux sandbox has its own System V IPC namespace. On macOS the
+agent's profile grants no POSIX shared memory or semaphores, because they are
+named host-wide. `sandbox.macos_posix_ipc: true` grants them (Python
+`multiprocessing` needs them).
+
+**macOS.** Seatbelt has no network namespace, so the model is reached through
+the gateway's own loopback port and the profile allows no other loopback port
+but those of a model the gateway does not carry. A server the agent exposes
+listens on the host loopback at exactly its port. The watcher reads `ps` and
+`lsof`, and kills by pid.
+
+#### What is left {#what-is-left}
+
+These are known gaps, stated so you can weigh them:
+
+- **Domain fronting.** The TLS check proves the tunnel's server name is an
+  allowed host, not who answers inside it. A CDN that serves many sites
+  behind one allowed name can carry traffic to another of its customers.
+  Allow narrow hosts, not a CDN's shared ones.
+- **Inside the allowlist.** An agent can send what it reads to any allowed
+  host: a package registry it can publish to, an issue tracker, a paste
+  site. The upload cap bounds the volume, the audit records it, and the
+  allowlist is the control.
+- **Linked worktrees.** Refs stay writable in the shared git dir, so an
+  agent can move or forge a ref (a branch tip, a packed ref) the base
+  checkout sees. Conductor's own pushes are unaffected (they read the
+  remote), but your own git in the base checkout sees the change. A
+  submodule git dir an agent creates, and the filters of a repository read
+  with the sandbox off, are not guarded.
+- **Detection is by shape.** A tunnel built into a program the watcher does
+  not know (an interpreter speaking TLS to an allowed host, a websocket
+  inside a build tool) is not a `tunnel_tool`. The TLS check and the caps
+  are the controls for it, and the audit is the record. A process that
+  drops the marker and leaves both the launch's tree and its process groups
+  is not followed. On macOS there is no `pty_relay` rule.
+- **The decoys are pipes.** An agent that `stat`s a decoy before reading it
+  can tell it is not a file.
+- **opencode** is not carried by the gateway: its key stays in its
+  environment, and on macOS its loopback routes are reached directly.
+- **macOS exposed servers.** A server a launch exposes (opencode's
+  per-dispatch server) listens on the host loopback, so every local process
+  on your machine can reach it. Only the random password conductor gives it
+  guards it.
+- **Best effort.** The aggregate slice cap is applied with `systemctl --user
+  set-property --runtime` and logged when it fails. The disk guard stops
+  every launch on the low filesystem, not only the one that filled it. A
+  `sandbox exec` launch's events reach the audit log only while the daemon
+  is reachable; they are on its stderr either way.
+- **A detection kill is not a verdict on the dispatch.** The step fails as
+  its agent died. A retry the step's own policy allows launches a fresh
+  agent under the same watcher.
 
 ### A browser for agents
 
@@ -730,6 +964,11 @@ that lifts the allow/approve/host gates lifts this requirement.
 | `conductor sandbox exec` with the daemon unreachable | refused (exit 125); the agent never runs |
 | `conductor sandbox exec` in your home, `/`, or conductor's state | refused (a paseo utility launch with no agent directory gets a scratch workspace instead) |
 | a push with signing on and no signing key | refused with the reason |
+| a push whose commits change a CI definition | refused unless `sandbox.push.allow_ci_changes` |
+| a launch's filesystem below `sandbox.limits.disk_free_min` | refused (a running launch is stopped) |
+| no systemd user manager for the launch limits | runs uncapped after one warning; refused with `sandbox.limits.required` |
+| a model the gateway cannot carry (opencode, an OAuth-only login) | `login-copy`: an access-token-only login copy, the key in the environment |
+| a CONNECT tunnel that does not open with TLS naming its host | refused before the upstream is dialed (`egress_require_tls: false` to allow) |
 | `skill:` + `mode: user` isolation | rejected by `validate` (claim theft under a shared uid) |
 | `agent_authored.host` without `isolation:` | rejected by `validate` (`trust: full` opts out) |
 
@@ -738,3 +977,16 @@ that lifts the allow/approve/host gates lifts this requirement.
 Every denied egress attempt is logged and audited as
 `{event: egress_denied, target: host:port}`, so a sandboxed agent probing
 the network is visible in `conductor report`'s audit trail.
+
+An agent launch's containment adds:
+
+| event | when |
+|---|---|
+| `egress` | each request through its egress session: `run`, `target`, `sni`, `up`/`down` bytes, `duration_ms`, `outcome` (`allowed`, `refused`, `closed`) and a `reason` for a refusal or closure |
+| `sandbox_detection` | the watcher, a tripwire or the git guard: `kind`, `reason`, `action` (also a `conductor.escalate` notification) |
+| `sandbox_limit` | the disk guard stopped a launch (also notified) |
+| `sandbox_leftover_killed` | processes a launch left running were killed at its end |
+| `sandbox_model_gateway_refused` | a request to the model gateway without the launch's token |
+| `sandbox_limits_unavailable` | once: no systemd user manager, launches run without memory and task caps |
+
+A `conductor sandbox exec` launch's rows carry `via: sandbox-exec`.

@@ -82,7 +82,10 @@ the session's arguments appended. `conductor sandbox exec`:
 2. asks the running conductor daemon, over its control socket, for that
    directory's **identity and policy** and a **fresh token** for this launch;
 3. runs the agent under the sandbox with a clean environment, its own egress
-   proxy and model relay, for as long as the agent runs.
+   session and model gateway, and the containment watcher, for as long as
+   the agent runs ([[Isolation#containment-and-detection]]). Its detections,
+   egress refusals and kills print on the session's stderr and go to the
+   daemon's audit log (`via: sandbox-exec`).
 
 **Resume** is paseo running the command again: the same directory resolves to
 the same identity, so the session finds its tool state (its transcript) — a
@@ -128,4 +131,7 @@ this path against the latest published paseo (`test/sandbox-canary/paseo.sh`).
 | a paseo dispatch fails with an unknown `claude-sandboxed` provider | the daemon could not write the entries — its log says why (`paseo setup (start): …`); run `conductor paseo setup` |
 | `refusing … it contains your home directory` | the session was started in your home; start it in a project directory |
 | `egress to X denied` in the session's stderr | X is not a model endpoint or in `sandbox.egress` |
+| an `egress_refused` line naming a host, with a TLS reason (not a ClientHello, no server name (SNI), an encrypted ClientHello) | the session tried a non-TLS protocol (plain SSH, a raw socket) through an allowed host; `sandbox.egress_require_tls: false` allows it |
+| the session is killed and the log shows `sandbox: detection` | the watcher saw a tunnel tool, a reverse shell or a decoy read; `sandbox.detect.allow` names a tool the work needs, `detect.action: alert` only reports |
+| claude asks you to sign in again after a long session | its login is an access-token-only copy; sign in with your own CLI outside the sandbox, or set `sandbox.model_credential: login-share` |
 | `git push` fails inside the session | by design: commit, and conductor pushes (a dispatch), or push from outside the sandbox (your own session) |

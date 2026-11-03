@@ -1401,6 +1401,38 @@ sandbox:
     #                                         # outcome unlanded) and fail the step as no_progress
     #                                         # unless it is an explicit review (default: fail);
     #                                         # warn only records them.
+    # allow_ci_changes: true                  # let a push carry commits that change CI definitions
+    #                                         # (.github/workflows, .gitlab-ci.yml, …); default:
+    #                                         # refused — a push-triggered pipeline would run the
+    #                                         # agent's code with the repository's secrets.
+  # Containment (wiki: Isolation#containment-and-detection). Every knob is optional; the
+  # values shown are the strict defaults, and each comment says what loosening gives up.
+  # model_credential: gateway   # the model key stays on the host: the agent gets a per-launch token
+  #                             #   for conductor's model gateway. login-copy: the key in the agent's
+  #                             #   env, logins copied without refresh tokens. login-share: the key in
+  #                             #   env, your login file bound read-only (refresh token readable).
+  # egress_require_tls: true    # a tunnel must open with TLS naming its host (checked before the
+  #                             #   dial); false lets any protocol through an allowed host
+  # egress_limits: { idle: 10m, upload: 512MiB, download: 20GiB }   # per launch; each takes "off"
+  # detect:
+  #   action: kill              # a tunnel tool, reverse shell or decoy read kills the launch;
+  #                             #   alert: audit + notify only; off: no watcher/tripwires/git guard
+  #   tripwires: true           # decoy credentials in the agent's home
+  #   interval: 3s
+  #   allow: []                 # tunnel tools the work needs, e.g. [ssh]
+  # limits:                     # Linux: a systemd user scope per launch
+  #   memory: 50%               # per launch
+  #   pids: 8192
+  #   aggregate_memory: 75%     # all agent launches together
+  #   disk_free_min: 5%         # refuse/stop launches below this free space (a size, or off)
+  #   required: false           # true: refuse a launch when the limits can't be applied
+  #   off: false
+  # persist: none               # a fresh home per dispatch; cache: keep a per-identity cache dir;
+  #                             #   home: keep the identity home (a run can plant hooks for the next)
+  # git:
+  #   shared: protected         # a linked worktree's shared git dir: only objects/refs/logs/lfs
+  #                             #   writable; direct: all of it but config/hooks/info/alternates
+  # macos_posix_ipc: false      # macOS: allow host-wide POSIX shm/semaphores (Python multiprocessing)
 
 # ---------------------------------------------------------------------------
 # WORKED EXAMPLE — the four feature families together (bots + the agent sandbox

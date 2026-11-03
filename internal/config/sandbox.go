@@ -125,8 +125,9 @@ type SandboxLimits struct {
 	Pids int `yaml:"pids,omitempty"`
 	// AggregateMemory caps all launches together (default 75%).
 	AggregateMemory string `yaml:"aggregate_memory,omitempty"`
-	// DiskFreeMin is the free space below which the disk guard stops the
-	// launch that grew most (default 5%; or a size: 5GiB).
+	// DiskFreeMin is the free space below which the disk guard refuses a
+	// launch and stops a running one on that filesystem (default 5%; or a
+	// size: 5GiB; or "off").
 	DiskFreeMin string `yaml:"disk_free_min,omitempty"`
 	// Required refuses a launch whose limits cannot be applied (no user
 	// systemd on Linux) instead of warning once and running without them.
