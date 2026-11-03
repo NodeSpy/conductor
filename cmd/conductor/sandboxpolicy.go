@@ -131,7 +131,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		if err != nil {
 			return nil, err
 		}
-		// The download itself runs CONFINED (rt2 #11): the same self-exe and
+		// The download itself runs CONFINED: the same self-exe and
 		// egress-proxy wiring every other local launch gets (codeSandboxDeps),
 		// so a malicious go.mod/go.sum this box ever snapshots cannot read the
 		// daemon's real HOME/credentials or reach a network host beyond
