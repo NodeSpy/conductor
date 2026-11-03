@@ -45,6 +45,7 @@ const DefaultDetectInterval = 3 * time.Second
 // procInfo is one process the watcher sees.
 type procInfo struct {
 	pid, ppid int
+	pgid      int
 	start     uint64 // a start time, to never mistake a reused pid
 	comm      string
 	args      []string
@@ -177,6 +178,11 @@ type detector struct {
 	git   *gitGuard
 	wires []*tripwire
 
+	// groups are process groups a launch process leads (it called setsid
+	// or setpgid): a member that later leaves the tree — double-forked,
+	// its environment dropped — is still the launch's.
+	groups map[int]bool
+
 	closeOnce sync.Once
 	mu        sync.Mutex
 	reported  map[string]bool
@@ -291,6 +297,7 @@ func (d *detector) scan() {
 		return
 	}
 	procs := launchProcs(all)
+	d.noteGroups(procs)
 	root := agentRoot(procs, d.self)
 	for _, p := range procs {
 		if v := classify(p, d.allow, p.pid == root, d.self != "" && p.exe == d.self); v != nil {
@@ -329,8 +336,21 @@ func (d *detector) killAll() int {
 	if err != nil {
 		return 0
 	}
+	launch := launchProcs(all)
+	d.noteGroups(launch)
+	d.mu.Lock()
+	in := map[int]bool{}
+	for _, p := range launch {
+		in[p.pid] = true
+	}
+	for _, p := range all {
+		if !in[p.pid] && p.pgid > 1 && d.groups[p.pgid] && p.pgid != ownPgid() {
+			launch = append(launch, p)
+		}
+	}
+	d.mu.Unlock()
 	n := 0
-	for _, p := range launchProcs(all) {
+	for _, p := range launch {
 		if !safeToSignal(p.pid) {
 			continue
 		}
@@ -368,6 +388,20 @@ func startDetection(p Policy, self string, event func(string, map[string]any)) (
 	}
 	d.start()
 	return d.marker, d.close, nil
+}
+
+// noteGroups remembers each process group a launch process leads.
+func (d *detector) noteGroups(procs []procInfo) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.groups == nil {
+		d.groups = map[int]bool{}
+	}
+	for _, p := range procs {
+		if p.pgid == p.pid && p.pid > 1 {
+			d.groups[p.pgid] = true
+		}
+	}
 }
 
 // close stops the watcher, runs the git guard one last time and kills

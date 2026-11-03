@@ -150,7 +150,14 @@ func RunEnter(opt EnterOpts) int {
 			fmt.Fprintf(os.Stderr, "sandbox-net: expose %s: %v\n", e.Dial, err)
 			return 1
 		}
-		_ = os.Chmod(e.Unix, 0o600)
+		// Same-user only. Fail closed if the mode can't be tightened rather
+		// than serve a world-reachable socket (cmd/conductor/main.go's
+		// control socket, internal/memory/ipc.go's tool socket).
+		if err := os.Chmod(e.Unix, 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-net: expose %s perms: %v\n", e.Dial, err)
+			ln.Close()
+			return 1
+		}
 		exposed = append(exposed, ln)
 	}
 	jailed := len(opt.Binds) > 0

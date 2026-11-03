@@ -11,3 +11,5 @@ func listProcs(string) func() ([]procInfo, error) {
 func signalProc(int, uint64) error { return errors.New("unsupported") }
 
 func safeToSignal(int) bool { return false }
+
+func ownPgid() int { return -1 }

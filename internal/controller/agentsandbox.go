@@ -148,7 +148,11 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	// interactive hand-off's durable session), not the resolver's.
 	mintless := entry
 	mintless.Skill = nil
-	pol, err := w.Resolver.PolicyForEntry(mintless, tool, env)
+	// mintless.Skill == nil, so Mint is never reached here (see its comment
+	// above) — the zero ProcessAnchor is never used to mint anything; this
+	// path's own token comes from SkillEnvFor below, pending-bound and
+	// anchored by bindSandboxRoot once this launch's process exists.
+	pol, err := w.Resolver.PolicyForEntry(mintless, tool, env, skill.ProcessAnchor{})
 	if err != nil {
 		return nil, "", nil, nil, err
 	}
@@ -186,6 +190,32 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	}
 	a.exposed = launch.Exposed
 	return launch.Argv, launch.Dir, launch.Env, launch.Cleanup, nil
+}
+
+// bindSandboxRoot anchors a pending skill session token to the process the
+// daemon just started for it — pid, the root of that launch's process tree
+// (rt2 #12). prepareAgentSandbox mints the token (SkillEnvFor) BEFORE the
+// process exists (exec.Cmd's env must be complete before Start()), so the
+// broker holds it pending — authorizing no one — until this call names the
+// real root, which every controller that can carry a sandboxed launch's
+// token (cli.go's startCLIProc, opencode.go's spawnOpencode) makes right
+// after its own cmd.Start() succeeds.
+//
+// A no-op for every other launch: unsandboxed, a resumed session with no
+// fresh token, or a daemon with the skill broker unwired. Scanning env for
+// the token (rather than requiring the caller to thread it through
+// separately) keeps every Start() call site's change to one line.
+func bindSandboxRoot(env []string, pid int) {
+	b := skill.Active()
+	if b == nil {
+		return
+	}
+	for _, kv := range env {
+		if tok, ok := strings.CutPrefix(kv, "CONDUCTOR_SKILL_TOKEN="); ok {
+			_ = b.BindRoot(tok, pid)
+			return
+		}
+	}
 }
 
 // registerWorkspace is dispatch.RegisterSandboxWorkspace.

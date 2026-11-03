@@ -137,10 +137,13 @@ func TestResolverDefaultPolicy(t *testing.T) {
 	r := &Resolver{
 		Registry: &Registry{}, StateRoot: filepath.Join(state, "agent-state"), RealHome: real,
 		Protected: []string{state}, Egress: []string{"registry.npmjs.org"}, Socket: "/s/memory.sock",
-		Mint: func(id skill.Identity) (string, error) { minted = append(minted, id); return "fresh", nil },
+		Mint: func(id skill.Identity, _ skill.ProcessAnchor) (string, error) {
+			minted = append(minted, id)
+			return "fresh", nil
+		},
 		GOOS: "linux",
 	}
-	p, err := r.PolicyFor(ws, "claude", []string{"ANTHROPIC_BASE_URL=http://127.0.0.1:3456"}, false)
+	p, err := r.PolicyFor(ws, "claude", []string{"ANTHROPIC_BASE_URL=http://127.0.0.1:3456"}, false, skill.ProcessAnchor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +162,7 @@ func TestResolverDefaultPolicy(t *testing.T) {
 	if minted[0].Requester != skill.RequesterOperator {
 		t.Fatalf("a directory of the operator's own is the operator's request: %q", minted[0].Requester)
 	}
-	if _, err := r.PolicyFor(ws, "claude", nil, false); err != nil || len(minted) != 2 {
+	if _, err := r.PolicyFor(ws, "claude", nil, false, skill.ProcessAnchor{}); err != nil || len(minted) != 2 {
 		t.Fatal("every launch mints its own token")
 	}
 	if !within(p.Home, r.StateRoot) {
@@ -167,7 +170,7 @@ func TestResolverDefaultPolicy(t *testing.T) {
 	}
 	for _, bad := range []string{"/", real, filepath.Dir(real), state, filepath.Join(state, "worktrees", "x"), "relative"} {
 		os.MkdirAll(filepath.Join(state, "worktrees", "x"), 0o700)
-		if _, err := r.PolicyFor(bad, "claude", nil, false); err == nil {
+		if _, err := r.PolicyFor(bad, "claude", nil, false, skill.ProcessAnchor{}); err == nil {
 			t.Errorf("default workspace %q must be refused", bad)
 		}
 	}
@@ -175,7 +178,7 @@ func TestResolverDefaultPolicy(t *testing.T) {
 	// provider's models from its own cwd): the tool's empty scratch
 	// workspace — never the refused directory itself.
 	for _, bad := range []string{"/", real} {
-		p, err := r.PolicyFor(bad, "codex", nil, true)
+		p, err := r.PolicyFor(bad, "codex", nil, true, skill.ProcessAnchor{})
 		if err != nil || p.Identity != "scratch:codex" || !within(p.Workspace, canon(r.StateRoot)) || p.Workspace == canon(bad) {
 			t.Fatalf("scratch for %s: %+v %v", bad, p, err)
 		}
@@ -183,12 +186,12 @@ func TestResolverDefaultPolicy(t *testing.T) {
 			t.Fatalf("a launcher's utility process has no requester: %q", last.Requester)
 		}
 	}
-	if p, _ := r.PolicyFor(ws, "codex", nil, true); p.Identity != "dir:"+canon(ws) {
+	if p, _ := r.PolicyFor(ws, "codex", nil, true, skill.ProcessAnchor{}); p.Identity != "dir:"+canon(ws) {
 		t.Fatalf("an acceptable directory is still its own workspace: %+v", p)
 	}
 	// No socket or no mint: no token, still a policy.
 	r.Socket = ""
-	if p, err := r.PolicyFor(ws, "codex", nil, false); err != nil || p.Token != "" || p.Socket != "" {
+	if p, err := r.PolicyFor(ws, "codex", nil, false, skill.ProcessAnchor{}); err != nil || p.Token != "" || p.Socket != "" {
 		t.Fatalf("%+v %v", p, err)
 	}
 }
@@ -201,13 +204,13 @@ func TestResolverRegisteredWorkspace(t *testing.T) {
 	id := skill.Identity{Agent: "fixer", Dispatch: "d-1"}
 	unreg := reg.Register(Entry{Workspace: ws, Identity: "agent:fixer@acme/app", Tool: "codex", Dispatch: "d-1", Skill: &id,
 		Egress: []string{"proxy.golang.org"}, ReadOnly: []string{"/base/objects"}, Env: []string{"GIT_AUTHOR_NAME=Op"}})
-	r := &Resolver{Registry: reg, StateRoot: t.TempDir(), Socket: "/s", Mint: func(i skill.Identity) (string, error) {
+	r := &Resolver{Registry: reg, StateRoot: t.TempDir(), Socket: "/s", Mint: func(i skill.Identity, _ skill.ProcessAnchor) (string, error) {
 		if i.Dispatch != "d-1" {
 			t.Fatalf("the token stands for the workspace's own dispatch: %+v", i)
 		}
 		return "tok", nil
 	}}
-	p, err := r.PolicyFor(sub, "claude", nil, false)
+	p, err := r.PolicyFor(sub, "claude", nil, false, skill.ProcessAnchor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +225,7 @@ func TestResolverRegisteredWorkspace(t *testing.T) {
 	if _, ok := reg.Lookup(sub); ok {
 		t.Fatal("unregistered")
 	}
-	if _, err := r.PolicyForEntry(Entry{Workspace: ws}, "claude", nil); err == nil {
+	if _, err := r.PolicyForEntry(Entry{Workspace: ws}, "claude", nil, skill.ProcessAnchor{}); err == nil {
 		t.Fatal("an entry with no identity is refused")
 	}
 }
@@ -416,7 +419,7 @@ func TestLauncherFilesAreTempFilesOnly(t *testing.T) {
 // / is never a workspace — with or without a home configured.
 func TestResolverRefusesRootWithoutAHome(t *testing.T) {
 	r := &Resolver{Registry: &Registry{}, StateRoot: t.TempDir()}
-	if _, err := r.PolicyFor("/", "claude", nil, false); err == nil || !strings.Contains(err.Error(), "with / as its workspace") {
+	if _, err := r.PolicyFor("/", "claude", nil, false, skill.ProcessAnchor{}); err == nil || !strings.Contains(err.Error(), "with / as its workspace") {
 		t.Fatalf("/ must be refused: %v", err)
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -62,7 +63,11 @@ func TestBotHomeSessionKeepsIdentityUnderSandbox(t *testing.T) {
 	// its path need not be live for this test.
 	r.Socket = filepath.Join(t.TempDir(), "memory.sock")
 
-	pol, err := r.PolicyFor(homeCwd, "claude", nil, false)
+	// rt2 #12: a `conductor sandbox exec`-minted token is bound to the pid on
+	// the other end of the control connection — this test process stands in
+	// for that peer, as its own root (it is trivially its own descendant).
+	root := skill.AnchorForPID(os.Getpid())
+	pol, err := r.PolicyFor(homeCwd, "claude", nil, false, root)
 	if err != nil {
 		t.Fatalf("policy for the bot's home cwd: %v", err)
 	}
@@ -75,7 +80,7 @@ func TestBotHomeSessionKeepsIdentityUnderSandbox(t *testing.T) {
 	if pol.Token == "" {
 		t.Fatal("no session token minted for the bot's home session")
 	}
-	id, err := b.Authorize(pol.Token, skill.Peer{})
+	id, err := b.Authorize(pol.Token, skill.Peer{PID: os.Getpid(), Valid: true})
 	if err != nil {
 		t.Fatalf("authorize the home session token: %v", err)
 	}

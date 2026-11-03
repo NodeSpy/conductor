@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
+	"github.com/NodeSpy/conductor/internal/skill"
 )
 
 func writeFiles(t *testing.T, root string, files map[string]string) {
@@ -270,7 +271,7 @@ func TestPolicyGoPrefetch(t *testing.T) {
 	r := &Resolver{StateRoot: t.TempDir(), RealHome: t.TempDir(), GOOS: "linux",
 		GoPrefetch: &GoPrefetch{Cache: cache}}
 	ws := t.TempDir()
-	p, err := r.PolicyForEntry(Entry{Workspace: ws, Identity: "agent:fixer@acme/app", ReadOnly: []string{"/base/objects"}, Env: []string{"GIT_AUTHOR_NAME=x"}}, "claude", nil)
+	p, err := r.PolicyForEntry(Entry{Workspace: ws, Identity: "agent:fixer@acme/app", ReadOnly: []string{"/base/objects"}, Env: []string{"GIT_AUTHOR_NAME=x"}}, "claude", nil, skill.ProcessAnchor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +289,7 @@ func TestPolicyGoPrefetch(t *testing.T) {
 		}
 	}
 	r.GoPrefetch = nil
-	if p, _ := r.PolicyForEntry(Entry{Workspace: ws, Identity: "agent:fixer@acme/app"}, "claude", nil); contains(p.ReadOnly, cache) || contains(p.Env, "GOPROXY=off") {
+	if p, _ := r.PolicyForEntry(Entry{Workspace: ws, Identity: "agent:fixer@acme/app"}, "claude", nil, skill.ProcessAnchor{}); contains(p.ReadOnly, cache) || contains(p.Env, "GOPROXY=off") {
 		t.Fatalf("prefetch off: %+v", p)
 	}
 }

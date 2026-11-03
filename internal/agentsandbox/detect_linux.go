@@ -74,8 +74,9 @@ func procStat(pid int) (procInfo, bool) {
 		return procInfo{}, false
 	}
 	ppid, _ := strconv.Atoi(f[1])
+	pgid, _ := strconv.Atoi(f[2])
 	start, _ := strconv.ParseUint(f[19], 10, 64)
-	return procInfo{pid: pid, ppid: ppid, start: start, comm: string(b[open+1 : close])}, true
+	return procInfo{pid: pid, ppid: ppid, pgid: pgid, start: start, comm: string(b[open+1 : close])}, true
 }
 
 // enrich reads a launch process's argv, binary and descriptors.
@@ -152,6 +153,9 @@ func signalProc(pid int, start uint64) error {
 	}
 	return unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0)
 }
+
+// ownPgid is this process's group: never one of a launch's.
+func ownPgid() int { return unix.Getpgrp() }
 
 // safeToSignal: never pid 0 or 1 (a process group, everything, init),
 // never this process or its parent.

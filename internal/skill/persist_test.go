@@ -46,7 +46,7 @@ func TestHandoffSessionSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain, err := b1.MintSession(handoffID(), 1000, SessionTTL)
+	plain, err := b1.MintSessionUID(handoffID(), 1000, SessionTTL)
 	if err != nil {
 		t.Fatal(err)
 	}

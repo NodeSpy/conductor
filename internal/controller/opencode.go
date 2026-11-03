@@ -344,6 +344,7 @@ func spawnOpencode(_ context.Context, host, cwd string, env []string, opt launch
 		revoke()
 		return "", nil, nil, fmt.Errorf("opencode: start serve: %w", err)
 	}
+	bindSandboxRoot(cmd.Env, cmd.Process.Pid)
 	// Background server owned by cleanup, not ctx — retire the egress
 	// credential at session end (#36 iso-review round 2, item 4).
 	cleanup := func() error {

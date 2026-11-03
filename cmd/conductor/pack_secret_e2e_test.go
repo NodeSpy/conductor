@@ -139,9 +139,9 @@ packs:
 		return v, err == nil && v != ""
 	}
 	b := skill.NewBroker(lookup, nil)
-	tok, err := b.MintSession(skill.Identity{Agent: "review/handoff", Policy: *prof.Skill}, 0, skill.SessionTTL)
+	tok, err := b.MintSessionUID(skill.Identity{Agent: "review/handoff", Policy: *prof.Skill}, 0, skill.SessionTTL)
 	if err != nil {
-		t.Fatalf("MintSession: %v", err)
+		t.Fatalf("MintSessionUID: %v", err)
 	}
 
 	// Positive: the agent draws the secret under the CONSUMER's bound ref and

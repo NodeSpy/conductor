@@ -423,13 +423,13 @@ func TestMintSessionCustomTTL(t *testing.T) {
 	b := NewBroker(func(string) (string, bool) { return "", false }, nil)
 	b.now = func() time.Time { return clk }
 
-	short, err := b.MintSession(Identity{Agent: "reviewer"}, 1000, SessionTTL)
+	short, err := b.MintSessionUID(Identity{Agent: "reviewer"}, 1000, SessionTTL)
 	if err != nil {
-		t.Fatalf("MintSession short: %v", err)
+		t.Fatalf("MintSessionUID short: %v", err)
 	}
-	long, err := b.MintSession(Identity{Agent: "handoff"}, 1000, HandoffSessionTTL)
+	long, err := b.MintSessionUID(Identity{Agent: "handoff"}, 1000, HandoffSessionTTL)
 	if err != nil {
-		t.Fatalf("MintSession long: %v", err)
+		t.Fatalf("MintSessionUID long: %v", err)
 	}
 
 	// Advance past the 2h default but well inside the hand-off week.
@@ -450,9 +450,9 @@ func TestMintSessionCustomTTL(t *testing.T) {
 
 	// A zero/negative ttl falls back to the default.
 	clk = base
-	def, err := b.MintSession(Identity{Agent: "x"}, 1000, 0)
+	def, err := b.MintSessionUID(Identity{Agent: "x"}, 1000, 0)
 	if err != nil {
-		t.Fatalf("MintSession zero-ttl: %v", err)
+		t.Fatalf("MintSessionUID zero-ttl: %v", err)
 	}
 	clk = base.Add(SessionTTL - time.Minute)
 	if _, err := b.Authorize(def, peer); err != nil {
@@ -466,9 +466,9 @@ func TestMintSessionCustomTTL(t *testing.T) {
 
 func TestMintSessionUIDBound(t *testing.T) {
 	b := NewBroker(func(string) (string, bool) { return "", false }, nil)
-	tok, err := b.MintSession(Identity{Agent: "fixer"}, 1000, SessionTTL)
+	tok, err := b.MintSessionUID(Identity{Agent: "fixer"}, 1000, SessionTTL)
 	if err != nil {
-		t.Fatalf("MintSession: %v", err)
+		t.Fatalf("MintSessionUID: %v", err)
 	}
 	// Same uid, two DIFFERENT live processes both authorize (token is reusable).
 	if _, err := b.Authorize(tok, Peer{PID: 111, StartTime: 5, UID: 1000, Valid: true}); err != nil {

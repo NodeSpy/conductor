@@ -27,9 +27,12 @@ type Resolver struct {
 	Egress []string
 	// Socket is the conductor skill socket ("" = none served).
 	Socket string
-	// Mint registers a fresh session token for an identity ("" + nil error
-	// when tokens are not available here).
-	Mint func(id skill.Identity) (string, error)
+	// Mint registers a fresh session token for an identity, bound to root's
+	// process tree (rt2 #12) — root is the pid on the other end of the
+	// `conductor sandbox exec` control connection that asked for this
+	// policy, whose descendants are the sandboxed agent and everything it
+	// spawns. ("" + nil error when tokens are not available here.)
+	Mint func(id skill.Identity, root skill.ProcessAnchor) (string, error)
 	// GitName / GitEmail are the operator's git identity for the agent's
 	// commits.
 	GitName, GitEmail string
@@ -79,12 +82,17 @@ func (r *Resolver) registry() *Registry {
 // provider's models from its daemon's cwd). A cwd that may not be a
 // workspace (the home, /, conductor's state) then gets the tool's scratch
 // workspace instead of a refusal.
-func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK bool) (Policy, error) {
+//
+// root anchors any token this policy mints to the process tree that asked
+// for it (rt2 #12) — the pid on the other end of the control connection
+// (zero value: the caller has no such peer to anchor to, e.g. tests; Mint
+// then refuses per MintSession's own contract).
+func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK bool, root skill.ProcessAnchor) (Policy, error) {
 	if !filepath.IsAbs(cwd) {
 		return Policy{}, fmt.Errorf("agentsandbox: cwd %q is not absolute", cwd)
 	}
 	if e, ok := r.registry().Lookup(cwd); ok {
-		return r.policyForCwd(e, cwd, tool, launcherEnv)
+		return r.policyForCwd(e, cwd, tool, launcherEnv, root)
 	}
 	// A bot session's cwd is not registered as a worktree (it is a pinned
 	// paseo workspace): resolve it to the bot's entry before falling to a
@@ -94,7 +102,7 @@ func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK b
 			if e.Workspace == "" {
 				e.Workspace = canon(cwd)
 			}
-			return r.policyForCwd(e, cwd, tool, launcherEnv)
+			return r.policyForCwd(e, cwd, tool, launcherEnv, root)
 		}
 	}
 	ws := canon(cwd)
@@ -106,18 +114,18 @@ func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK b
 		if serr != nil {
 			return Policy{}, serr
 		}
-		p, perr := r.PolicyForEntry(e, tool, launcherEnv)
+		p, perr := r.PolicyForEntry(e, tool, launcherEnv, root)
 		p.Note = fmt.Sprintf("%v — running in the %s scratch workspace %s instead", err, e.Identity, e.Workspace)
 		return p, perr
 	}
-	return r.PolicyForEntry(DefaultEntry(ws), tool, launcherEnv)
+	return r.PolicyForEntry(DefaultEntry(ws), tool, launcherEnv, root)
 }
 
 // policyForCwd builds the policy for an entry whose workspace is the launch's
 // own cwd — a registered workspace, or a live bot session. The agent starts
 // where it was started, inside its workspace.
-func (r *Resolver) policyForCwd(e Entry, cwd, tool string, launcherEnv []string) (Policy, error) {
-	p, err := r.PolicyForEntry(e, tool, launcherEnv)
+func (r *Resolver) policyForCwd(e Entry, cwd, tool string, launcherEnv []string, root skill.ProcessAnchor) (Policy, error) {
+	p, err := r.PolicyForEntry(e, tool, launcherEnv, root)
 	p.Cwd = canon(cwd)
 	if err == nil && p.Tool == "claude-code" && e.Dispatch != "" && p.Cwd != p.Workspace {
 		err = trustClaudeWorkspace(p.Home, p.Cwd)
@@ -177,8 +185,11 @@ func (r *Resolver) defaultAllowed(ws string) error {
 
 // PolicyForEntry builds the policy for a launch in e's workspace: the
 // identity home prepared (created, seeded once), the egress allowlist and
-// relays, and a freshly minted token.
-func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (Policy, error) {
+// relays, and a freshly minted token bound to root's process tree (root may
+// be the zero value when the caller mints its token some other way —
+// internal/controller/agentsandbox.go's prepareAgentSandbox passes
+// e.Skill == nil instead, so Mint is never reached on that path at all).
+func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, root skill.ProcessAnchor) (Policy, error) {
 	if e.Tool != "" {
 		tool = e.Tool
 	}
@@ -236,7 +247,7 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 				Deny: append(append([]string(nil), e.ReadOnly...), e.Hide...),
 			}
 		}
-		tok, err := r.Mint(id)
+		tok, err := r.Mint(id, root)
 		if err != nil {
 			return Policy{}, fmt.Errorf("agentsandbox: mint token: %w", err)
 		}

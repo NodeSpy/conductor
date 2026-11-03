@@ -18,22 +18,23 @@ import (
 func listProcs(marker string) func() ([]procInfo, error) {
 	needle := markerEnv + "=" + marker
 	return func() ([]procInfo, error) {
-		out, err := exec.Command("ps", "-Axww", "-E", "-o", "pid=,ppid=,command=").Output()
+		out, err := exec.Command("ps", "-Axww", "-E", "-o", "pid=,ppid=,pgid=,command=").Output()
 		if err != nil {
 			return nil, err
 		}
 		var all []procInfo
 		for _, line := range strings.Split(string(out), "\n") {
 			f := strings.Fields(line)
-			if len(f) < 2 {
+			if len(f) < 3 {
 				continue
 			}
 			pid, err1 := strconv.Atoi(f[0])
 			ppid, err2 := strconv.Atoi(f[1])
-			if err1 != nil || err2 != nil {
+			pgid, err3 := strconv.Atoi(f[2])
+			if err1 != nil || err2 != nil || err3 != nil {
 				continue
 			}
-			all = append(all, procInfo{pid: pid, ppid: ppid, marked: strings.Contains(line, needle)})
+			all = append(all, procInfo{pid: pid, ppid: ppid, pgid: pgid, marked: strings.Contains(line, needle)})
 		}
 		launch := launchProcs(all)
 		if len(launch) == 0 {
@@ -112,6 +113,9 @@ func signalProc(pid int, _ uint64) error {
 	}
 	return syscall.Kill(pid, syscall.SIGKILL)
 }
+
+// ownPgid is this process's group: never one of a launch's.
+func ownPgid() int { return syscall.Getpgrp() }
 
 // safeToSignal: never pid 0 or 1, never this process or its parent.
 func safeToSignal(pid int) bool {

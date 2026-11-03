@@ -155,8 +155,14 @@ func ListenSocket(path string) (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("memory: tool socket %s: %w", path, err)
 	}
-	// Same-user only: the socket accepts memory writes with provenance.
-	_ = os.Chmod(path, 0o600)
+	// Same-user only: the socket accepts memory writes with provenance. Fail
+	// closed if the mode can't be tightened rather than serve a
+	// world-reachable socket — same rule as the control socket
+	// (cmd/conductor/main.go's serveControl).
+	if err := os.Chmod(path, 0o600); err != nil {
+		l.Close()
+		return nil, fmt.Errorf("memory: tool socket %s perms: %w", path, err)
+	}
 	return l, nil
 }
 

@@ -29,14 +29,27 @@ var sandboxResolver atomic.Pointer[agentsandbox.Resolver]
 // socket is 0600 already; the caller's uid is checked too — a policy carries
 // a live token.
 func sandboxPolicyResponse(conn net.Conn, req controlRequest, log func(string, ...any)) controlResponse {
-	if uid, ok := agentsandbox.PeerUID(conn); ok && int(uid) != os.Getuid() {
+	uid, pid, credOK := agentsandbox.PeerCred(conn)
+	if credOK && int(uid) != os.Getuid() {
 		return controlResponse{Error: fmt.Sprintf("sandbox-policy: refused for uid %d", uid)}
 	}
 	r := sandboxResolver.Load()
 	if r == nil {
 		return controlResponse{Error: "the agent sandbox is off in this conductor (sandbox.agents: off)"}
 	}
-	pol, err := r.PolicyFor(req.Cwd, req.Tool, req.Env, req.Scratch)
+	// The minted token is bound to THIS connection's peer process tree (rt2
+	// #12): that process — `conductor sandbox exec` — is what execs or forks
+	// the sandboxed agent, so every descendant of it (the agent, the
+	// `conductor call` subprocesses it spawns, an in-sandbox MCP tool
+	// server) is authorized, and nothing outside that tree is, even at the
+	// same uid. No peer pid (credOK false: a platform with no SO_PEERCRED) ⇒
+	// a zero anchor ⇒ Mint refuses the token outright rather than minting
+	// one nothing can ever present.
+	var root skill.ProcessAnchor
+	if credOK {
+		root = skill.AnchorForPID(pid)
+	}
+	pol, err := r.PolicyFor(req.Cwd, req.Tool, req.Env, req.Scratch, root)
 	if err != nil {
 		log("sandbox-policy for %s refused: %v", req.Cwd, err)
 		return controlResponse{Error: err.Error()}
@@ -83,12 +96,20 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		Protected: []string{filepath.Dir(cfg.Store.StateFile), filepath.Dir(cfgFile), config.StateDir()},
 		Egress:    egress,
 		Socket:    strings.TrimPrefix(dispatch.LocalSkillEndpoint(), "unix://"),
-		Mint: func(id skill.Identity) (string, error) {
+		Mint: func(id skill.Identity, root skill.ProcessAnchor) (string, error) {
 			b := skill.Active()
 			if b == nil {
 				return "", nil
 			}
-			return b.MintSession(id, uint32(os.Getuid()), sandboxTokenTTL)
+			if root.Empty() {
+				// No peer pid to anchor to (a platform with no SO_PEERCRED,
+				// or a caller with no real connection — tests). Refusing to
+				// mint here, rather than silently falling back to uid
+				// binding, is rt2 #12's fix: a token this daemon cannot bind
+				// to a process tree must not exist at all.
+				return "", fmt.Errorf("sandbox token: no process to anchor it to")
+			}
+			return b.MintSession(id, root, sandboxTokenTTL)
 		},
 		GitName: name, GitEmail: email,
 		Env:             os.Environ(),

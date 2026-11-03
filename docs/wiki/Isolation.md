@@ -501,6 +501,19 @@ the tool server's environment, and same-EUID siblings can read it from
 hijack the claim flow exists to close. Use `namespace`/`container` (separate
 `/proc` views) with `skill:`, or drop one of the two.
 
+Note that `/proc` isolation (this refusal, and `namespace`'s own pid
+namespace below) only closes **one** way a token could reach a process it
+wasn't minted for — a sibling reading it straight out of `/proc/<pid>/environ`.
+It says nothing about the socket authorization itself: the broker's CLI-face
+session token used to authorize **any process at the daemon's own uid**, so
+however a token got out (a log line, a crash report, a different bug
+entirely) it was good from any sandbox or host process sharing that uid —
+`namespace` isolating one sandbox's `/proc` from another's doesn't touch the
+daemon's own socket, which every sandbox reaches regardless. The broker now
+binds that token to the launching process's own tree instead (root pid +
+start time, descendants only) — see [[Agent-Skill#how-identity-is-bound]] —
+so the two protections are independent and both matter.
+
 ### `mode: namespace` — the OS-native least-privilege jail
 
 `mode: namespace` is **portable**: it means "the OS's native least-privilege
