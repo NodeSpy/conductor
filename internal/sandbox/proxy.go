@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/netguard"
@@ -379,13 +380,17 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, sess *Session) {
 	out := r.Clone(r.Context())
 	out.RequestURI = ""
 	out.Header.Del("Proxy-Authorization") // the credential never leaves the box
-	var up int64
+	// The transport reads the request body on its own goroutine, which can
+	// still be sending it after RoundTrip returns: the count is atomic and
+	// is taken when the exchange is over.
+	var upN atomic.Int64
 	if out.Body != nil {
-		out.Body = &countingBody{r: out.Body, n: &up}
+		out.Body = &countingBody{r: out.Body, n: &upN}
 	}
 	resp, err := p.tr.RoundTrip(out)
-	sess.count(up, true)
 	if err != nil {
+		up := upN.Load()
+		sess.count(up, true)
 		if errors.Is(err, errEgressBlockedIP) {
 			p.deny(w, target, sess) // resolved into a special range → 403 + audit
 			return
@@ -401,21 +406,25 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, sess *Session) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	var down int64
-	_, _ = io.Copy(w, &countingBody{r: resp.Body, n: &down})
+	var downN atomic.Int64
+	_, _ = io.Copy(w, &countingBody{r: resp.Body, n: &downN})
+	_ = resp.Body.Close()
+	up, down := upN.Load(), downN.Load()
+	sess.count(up, true)
 	sess.count(down, false)
 	p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "closed", Up: up, Down: down, Duration: time.Since(start)})
 }
 
-// countingBody counts what is read through it.
+// countingBody counts what is read through it (atomically: a transport
+// reads a request body on its own goroutine).
 type countingBody struct {
 	r io.ReadCloser
-	n *int64
+	n *atomic.Int64
 }
 
 func (c *countingBody) Read(b []byte) (int, error) {
 	n, err := c.r.Read(b)
-	*c.n += int64(n)
+	c.n.Add(int64(n))
 	return n, err
 }
 

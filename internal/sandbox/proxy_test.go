@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -485,4 +486,59 @@ func TestEnforcedEgressChainOverUnixSocket(t *testing.T) {
 	if r3.StatusCode != http.StatusProxyAuthRequired {
 		t.Fatalf("forwarder must not bypass auth: %d", r3.StatusCode)
 	}
+}
+
+// A plain-HTTP request with a body: the transport sends the body on its own
+// goroutine, which can still be reading it after the response arrives (an
+// upstream that answers before reading). The proxy's byte counts must not
+// race with it (run under -race), and a body the upstream reads in full is
+// counted whole.
+func TestPlainHTTPBodyIsCountedWithoutARace(t *testing.T) {
+	var early atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if early.Load() {
+			// Answer first; the request body is still on its way.
+			w.Header().Set("Connection", "close")
+			fmt.Fprint(w, "early")
+			return
+		}
+		n, _ := io.Copy(io.Discard, r.Body)
+		fmt.Fprintf(w, "read %d", n)
+	}))
+	defer upstream.Close()
+	target := strings.TrimPrefix(upstream.URL, "http://")
+	p := &Proxy{Allow: []string{target}}
+	addr, rec := startProxy(t, p)
+	cred, _ := p.MintSession(SessionOpts{Run: "run-body"})
+	client := viaProxyCred(addr, cred)
+	const size = 4 << 20
+	post := func() string {
+		resp, err := client.Post(upstream.URL, "application/octet-stream", io.LimitReader(zeroReader{}, size))
+		if err != nil {
+			return "error: " + err.Error()
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	if got := post(); got != fmt.Sprintf("read %d", size) {
+		t.Fatalf("full body: %q", got)
+	}
+	r := rec.wait(t, func(c ConnRecord) bool { return c.Outcome == "closed" })
+	if r.Up != size || r.Run != "run-body" {
+		t.Fatalf("record: up %d, want %d (%+v)", r.Up, size, r)
+	}
+	early.Store(true)
+	for i := 0; i < 8; i++ {
+		post()
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(b []byte) (int, error) {
+	for i := range b {
+		b[i] = 0
+	}
+	return len(b), nil
 }
