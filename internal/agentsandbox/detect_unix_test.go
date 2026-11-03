@@ -250,6 +250,9 @@ func TestIsRootForgetsAPidWhoseStartTimeChanged(t *testing.T) {
 // group is one a launch process leads.
 func TestKillAllExcludesItsOwnProcessGroup(t *testing.T) {
 	own := ownPgid()
+	if own <= 1 {
+		t.Skipf("this process's group (%d) is never a launch group; run under setsid", own)
+	}
 	marked := procInfo{pid: own, ppid: 1, pgid: own, marked: true, start: 1}
 	bystander := procInfo{pid: own + 123456, ppid: 1, pgid: own, start: 1}
 	var signalled []int
