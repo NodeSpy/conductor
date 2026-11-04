@@ -149,15 +149,14 @@ func classify(p procInfo, allow map[string]bool, root, self bool) *verdict {
 // wired to a socket. root: the agent's own top process (its CLI holds
 // sockets and may hold ptys for the commands it runs); self: a conductor
 // process (the forwarder, `conductor call`). allow exempts programs by
-// name (sandbox.detect.allow): one whose binary was identified is exempt
-// from every rule; one known by name alone only from the tunnel-tool rule.
+// name (sandbox.detect.allow), and only a binary identified as that
+// program: one known by name alone is judged like any other.
 func verdicts(p procInfo, allow map[string]bool, root, self bool) []verdict {
 	if self {
 		return nil
 	}
 	name := p.toolName()
-	exempt := allow[name]
-	if exempt && p.id.name != "" {
+	if allow[name] && p.id.name != "" {
 		return nil
 	}
 	var out []verdict
@@ -193,15 +192,13 @@ func verdicts(p procInfo, allow map[string]bool, root, self bool) []verdict {
 	if !root && p.ptyMaster && p.inetSocket {
 		out = append(out, verdict{"pty_relay", fmt.Sprintf("%s holds a terminal and a network socket (%s)", name, argString(p.args))})
 	}
-	if !exempt {
-		if class == classTunnel {
-			out = append(out, verdict{"tunnel_tool", fmt.Sprintf("%s runs (%s%s)", name, argString(p.args), p.renamed())})
-		} else if name == "openssl" {
-			for _, a := range p.args[1:] {
-				if a == "s_client" || a == "s_server" {
-					out = append(out, verdict{"tunnel_tool", "openssl " + a + " (" + argString(p.args) + ")"})
-					break
-				}
+	if class == classTunnel {
+		out = append(out, verdict{"tunnel_tool", fmt.Sprintf("%s runs (%s%s)", name, argString(p.args), p.renamed())})
+	} else if name == "openssl" {
+		for _, a := range p.args[1:] {
+			if a == "s_client" || a == "s_server" {
+				out = append(out, verdict{"tunnel_tool", "openssl " + a + " (" + argString(p.args) + ")"})
+				break
 			}
 		}
 	}
@@ -225,7 +222,8 @@ type DetectSpec struct {
 	// NoTripwires: plant no decoy credentials (sandbox.detect.tripwires:
 	// false).
 	NoTripwires bool `json:"no_tripwires,omitempty"`
-	// Allow are programs exempt from the tunnel-tool rule.
+	// Allow are programs exempt from every rule (sandbox.detect.allow): a
+	// binary identified as one of them, never a name alone.
 	Allow []string `json:"allow,omitempty"`
 	// AllowTunnels, AllowReverseShell and AllowPty are the launch's scoped
 	// allowances (see Allowance): what they cover is audited as allowed
@@ -259,6 +257,17 @@ func (s DetectSpec) allows(kind, name string) bool {
 		return s.AllowPty
 	}
 	return false
+}
+
+// covers reports the launch's allowance covering one verdict on p. A
+// tunnel allowance names a program, and covers only a binary identified as
+// that program (the host's, or a copy of it): a binary the host does not
+// know is not covered by taking the name.
+func (d *detector) covers(kind string, p procInfo) bool {
+	if kind == "tunnel_tool" && p.id.name == "" {
+		return false
+	}
+	return d.spec.allows(kind, p.toolName())
 }
 
 func (s DetectSpec) action() string {
@@ -427,7 +436,7 @@ func (d *detector) scan() {
 		v := vs[0]
 		covered := true
 		for _, w := range vs {
-			if !d.spec.allows(w.kind, p.toolName()) {
+			if !d.covers(w.kind, p) {
 				v, covered = w, false
 				break
 			}

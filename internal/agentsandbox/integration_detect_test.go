@@ -197,6 +197,7 @@ func TestSandboxAllowsOnlyItsScopesTunnel(t *testing.T) {
 		root = r
 	}
 	tool := fakeTool(t, "cloudflared")
+	asHostTools(t, tool)
 	launch := func(name string, scope *Scope) (out string, events []map[string]any, err error) {
 		ws, state := filepath.Join(root, name, "ws"), filepath.Join(root, name, "st")
 		os.MkdirAll(ws, 0o700)

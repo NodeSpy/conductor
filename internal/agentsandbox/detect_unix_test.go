@@ -173,6 +173,41 @@ func TestDetectorFollowsTheRootItsLauncherNames(t *testing.T) {
 
 // fakeTool is a copy of sleep named name (macOS kills a copied platform
 // binary unless it is re-signed).
+// asHostTools makes the host's binary index the given tools': an allowance
+// covers only a binary identified as the tool it names.
+func asHostTools(t *testing.T, tools ...string) {
+	t.Helper()
+	var dirs []string
+	for _, p := range tools {
+		dirs = append(dirs, filepath.Dir(p))
+	}
+	ix := indexBinaries(dirs)
+	old := hostBinaries
+	hostBinaries = func() *binaryIndex { return ix }
+	t.Cleanup(func() { hostBinaries = old })
+}
+
+// strangerTool is a runnable binary named name that is no host binary nor
+// a copy of one (sleep with a byte appended).
+func strangerTool(t *testing.T, name string) string {
+	t.Helper()
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep")
+	}
+	p := filepath.Join(t.TempDir(), name)
+	b, _ := os.ReadFile(sleep)
+	if err := os.WriteFile(p, append(b, 0), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "darwin" {
+		if out, err := exec.Command("codesign", "-s", "-", "-f", p).CombinedOutput(); err != nil {
+			t.Skipf("codesign: %v %s", err, out)
+		}
+	}
+	return p
+}
+
 func fakeTool(t *testing.T, name string) string {
 	t.Helper()
 	sleep, err := exec.LookPath("sleep")
@@ -343,6 +378,7 @@ func TestTripwireRefusesASymlinkedDecoy(t *testing.T) {
 // without it is killed, and another tool in the allowed launch is too.
 func TestScopedAllowanceLetsOnlyItsLaunchRunATunnel(t *testing.T) {
 	cf, ssh := fakeTool(t, "cloudflared"), fakeTool(t, "ssh")
+	asHostTools(t, cf, ssh)
 	type launch struct {
 		d      *detector
 		cmd    *exec.Cmd
@@ -368,8 +404,11 @@ func TestScopedAllowanceLetsOnlyItsLaunchRunATunnel(t *testing.T) {
 	allowed := run(allowance, cf)
 	strict := run(DetectSpec{}, cf)
 	otherTool := run(allowance, ssh)
+	// A binary the host does not have, named after the allowed tool (a
+	// modified copy: not the same bytes as any host tool).
+	stranger := run(allowance, strangerTool(t, "cloudflared"))
 	time.Sleep(100 * time.Millisecond)
-	for _, l := range []*launch{allowed, strict, otherTool} {
+	for _, l := range []*launch{allowed, strict, otherTool, stranger} {
 		l.d.scan()
 	}
 	exited := func(c *exec.Cmd) bool {
@@ -384,6 +423,9 @@ func TestScopedAllowanceLetsOnlyItsLaunchRunATunnel(t *testing.T) {
 	}
 	if !exited(strict.cmd) || !exited(otherTool.cmd) {
 		t.Fatal("a tunnel tool outside its allowance was not killed")
+	}
+	if !exited(stranger.cmd) {
+		t.Fatal("a binary taking an allowed tool's name was covered by its allowance")
 	}
 	if err := allowed.cmd.Process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatal("the allowed launch's tunnel was killed")

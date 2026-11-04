@@ -42,8 +42,13 @@ func TestClassify(t *testing.T) {
 			t.Errorf("%v: got %q want %q", c.p.args, got, c.want)
 		}
 	}
-	if v := classify(p("ssh"), map[string]bool{"ssh": true}, false, false); v != nil {
+	host := p("ssh")
+	host.id = identity{"ssh", classTunnel}
+	if v := classify(host, map[string]bool{"ssh": true}, false, false); v != nil {
 		t.Error("sandbox.detect.allow exempts a tool")
+	}
+	if v := classify(p("ssh"), map[string]bool{"ssh": true}, false, false); v == nil || v.kind != "tunnel_tool" {
+		t.Errorf("sandbox.detect.allow exempted a binary by its name alone: %+v", v)
 	}
 }
 
@@ -367,7 +372,9 @@ func TestTunnelAllowanceNeverCoversAShell(t *testing.T) {
 		kind    string
 	}{
 		{"real ssh, its own socket", procInfo{args: []string{"ssh", "bastion"}, id: identity{"ssh", classTunnel}, inetFDs: []int{3}}, true, "tunnel_tool"},
-		{"real cloudflared by name", procInfo{args: []string{"cloudflared", "tunnel"}, inetFDs: []int{7}}, true, "tunnel_tool"},
+		{"the host's cloudflared", procInfo{args: []string{"cloudflared", "tunnel"}, id: identity{"cloudflared", classTunnel}, inetFDs: []int{7}}, true, "tunnel_tool"},
+		{"a binary the host does not know, named cloudflared", procInfo{args: []string{"./cloudflared", "tunnel"}, inetFDs: []int{7}}, false, "tunnel_tool"},
+		{"a binary the host does not know, named ssh", procInfo{args: []string{"ssh", "bastion"}, inetFDs: []int{3}}, false, "tunnel_tool"},
 		{"plain reverse shell", procInfo{args: []string{"bash"}, id: identity{"bash", classShell}, stdio: sock, inetFDs: []int{0, 1}}, false, "reverse_shell"},
 		{"host bash renamed ssh", procInfo{args: []string{"ssh"}, id: identity{"bash", classShell}, stdio: sock, inetFDs: []int{0, 1}}, false, "reverse_shell"},
 		{"unknown binary named ssh, socket on stdio", procInfo{args: []string{"ssh"}, stdio: sock, inetFDs: []int{0, 1}}, false, "reverse_shell"},
@@ -411,7 +418,7 @@ func TestTunnelAllowanceNeverCoversAShell(t *testing.T) {
 		{"pty allowed, the tunnel not", DetectSpec{AllowPty: true, AllowedBy: "step x"},
 			procInfo{args: []string{"socat"}, id: identity{"socat", classTunnel}, ptyMaster: true, inetSocket: true, inetFDs: []int{5}}, false, "tunnel_tool"},
 		{"shells and the tool allowed", DetectSpec{AllowReverseShell: true, AllowTunnels: []string{"ssh"}, AllowedBy: "step x"},
-			procInfo{args: []string{"ssh"}, stdio: sock, inetFDs: []int{0, 1}}, true, "reverse_shell"},
+			procInfo{args: []string{"ssh"}, id: identity{"ssh", classTunnel}, stdio: sock, inetFDs: []int{0, 1}}, true, "reverse_shell"},
 	} {
 		c.p.pid, c.p.ppid, c.p.start = 900072, 900071, 1
 		procs := []procInfo{{pid: 900070, ppid: 1, marked: true, start: 1, args: []string{"unshare"}}, {pid: 900071, ppid: 900070, start: 1, args: []string{"claude"}}, c.p}
@@ -427,12 +434,15 @@ func TestTunnelAllowanceNeverCoversAShell(t *testing.T) {
 			t.Errorf("%s: events %v signalled %v", c.name, events, signalled)
 		}
 	}
-	// sandbox.detect.allow by name exempts an unknown binary from the
-	// tunnel rule only.
+	// sandbox.detect.allow exempts the program it names, never a binary
+	// taking its name.
 	if v := classify(procInfo{args: []string{"ssh"}, stdio: sock}, map[string]bool{"ssh": true}, false, false); v == nil || v.kind != "reverse_shell" {
 		t.Fatalf("detect.allow covered a shell's wiring: %+v", v)
 	}
-	if v := classify(procInfo{args: []string{"ssh"}, inetFDs: []int{3}}, map[string]bool{"ssh": true}, false, false); v != nil {
+	if v := classify(procInfo{args: []string{"ssh"}, inetFDs: []int{3}}, map[string]bool{"ssh": true}, false, false); v == nil || v.kind != "tunnel_tool" {
+		t.Fatalf("detect.allow exempted a name: %+v", v)
+	}
+	if v := classify(procInfo{args: []string{"ssh"}, id: identity{"ssh", classTunnel}, inetFDs: []int{3}}, map[string]bool{"ssh": true}, false, false); v != nil {
 		t.Fatalf("detect.allow did not exempt the tool: %+v", v)
 	}
 }

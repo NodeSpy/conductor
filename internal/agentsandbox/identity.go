@@ -76,6 +76,9 @@ func indexBinaries(dirs []string) *binaryIndex {
 			names = append(names, n)
 		}
 	}
+	// openssl is no class of its own (s_client is judged by its arguments),
+	// but an allowance for it covers only the host's.
+	names = append(names, "openssl")
 	sort.Strings(names)
 	done := map[string]bool{}
 	for _, d := range dirs {
