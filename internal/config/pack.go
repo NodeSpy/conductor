@@ -138,9 +138,10 @@ type PackInstance struct {
 	Packs map[string]PackInstance `yaml:"packs,omitempty"`
 	// Grant names the allowances (the pack's allowances:) the operator
 	// grants, each pinned to the content reviewed (`name@digest`; validate
-	// prints it): each applies to the steps it names, and only to them, and
-	// a pack version that changes a granted allowance fails to load until
-	// it is re-granted.
+	// prints it): the allowance and its steps' definitions. Each applies to
+	// the steps it names, and only to them, and a pack version that changes
+	// a granted allowance or rewrites a granted step fails to load until it
+	// is re-granted.
 	Grant []string `yaml:"grant,omitempty"`
 }
 

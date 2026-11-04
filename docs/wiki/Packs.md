@@ -307,12 +307,13 @@ allowances:
 packs:
   previews:
     use: …
-    grant: [tunnel@c9d6e4e230888de7]   # name@digest, as validate prints it
+    grant: [tunnel@<digest>]   # name@digest, exactly as validate prints it
 ```
 
 `conductor validate` shows each request, granted or not, with the exact
-grant to write. A grant is pinned to the steps and allowance you reviewed: a
-bare name is refused, and a pack version that changes a granted allowance
+grant to write. A grant is pinned to the allowance you reviewed and to its steps as the pack
+ships them (prompt, command, code, run, options): a bare name is refused, and
+a pack version that changes a granted allowance or rewrites a granted step
 fails to load until you re-grant it. See
 [[Isolation#scoped-allowances]].
 

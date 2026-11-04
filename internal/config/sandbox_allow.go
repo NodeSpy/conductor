@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"regexp"
 	"sort"
 	"strings"
@@ -39,22 +40,54 @@ type SandboxAllow struct {
 	// Origin names the scope that wrote it (set at load: the audit and
 	// validate show it).
 	Origin string `yaml:"-"`
-	// Pin is a granted pack allowance's digest (PackAllowance.Digest).
+	// Pin is a granted pack allowance's digest (allowanceDigest).
 	Pin string `yaml:"-"`
 }
 
-// Digest pins a pack's requested allowance: the steps it names and what it
-// allows (not its reason's wording). A grant names it (`grant:
-// [name@digest]`), so a pack update that changes either is not granted.
-func (a PackAllowance) Digest() string {
-	sorted := func(l []string) string {
+// allowanceDigest pins a pack's requested allowance to what the operator
+// reviews: what it allows, the steps it names, and each of those steps as
+// the pack ships it (its prompt, command, code, run, options — the whole
+// step definition, before the operator's overlay), not the reason's
+// wording. A grant names it (`grant: [name@digest]`), so a pack update that
+// changes what a granted step does, or what it is allowed, is not granted.
+// man must be the pristine manifest. An error when a named step is not in
+// it.
+func allowanceDigest(man *PackManifest, a PackAllowance) (string, error) {
+	sorted := func(l []string) []string {
 		c := append([]string(nil), l...)
 		sort.Strings(c)
-		return strings.Join(c, "\x00")
+		return c
 	}
-	h := sha256.Sum256([]byte(fmt.Sprintf("v1\nsteps=%s\ntunnels=%s\nnon_tls=%s\nreverse_shell=%t\npty=%t\n",
-		sorted(a.Steps), sorted(a.Allow.Tunnels), sorted(a.Allow.NonTLS), a.Allow.ReverseShell, a.Allow.Pty)))
-	return hex.EncodeToString(h[:8])
+	var b strings.Builder
+	fmt.Fprintf(&b, "v2\ntunnels=%s\nnon_tls=%s\nreverse_shell=%t\npty=%t\n",
+		strings.Join(sorted(a.Allow.Tunnels), "\x00"), strings.Join(sorted(a.Allow.NonTLS), "\x00"), a.Allow.ReverseShell, a.Allow.Pty)
+	for _, ref := range sorted(a.Steps) {
+		s, err := man.FindPackStep(ref)
+		if err != nil {
+			return "", err
+		}
+		body, err := yaml.Marshal(s)
+		if err != nil {
+			return "", fmt.Errorf("step %s: %w", ref, err)
+		}
+		fmt.Fprintf(&b, "step %q %d\n%s\n", ref, len(body), body)
+	}
+	h := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(h[:8]), nil
+}
+
+// allowancePins are the digests of every allowance man requests, from the
+// pristine manifest (before the operator's overlay touches its steps). A
+// request whose steps cannot be found has none; applying its grant
+// reports why.
+func allowancePins(man *PackManifest) map[string]string {
+	pins := map[string]string{}
+	for name, a := range man.Allowances {
+		if d, err := allowanceDigest(man, a); err == nil {
+			pins[name] = d
+		}
+	}
+	return pins
 }
 
 // IsolationDetect overrides sandbox.detect for one scope.
@@ -369,7 +402,7 @@ func firstNonEmptyString(a, b string) string {
 
 // applyAllowanceGrants applies the allowances the operator granted (grant:)
 // to the pack steps each names, and records the ones still only requested.
-func (st *packInstantiation) applyAllowanceGrants(ns string, inst PackInstance, man *PackManifest) error {
+func (st *packInstantiation) applyAllowanceGrants(ns string, inst PackInstance, man *PackManifest, pins map[string]string) error {
 	granted := map[string]bool{}
 	for _, g := range inst.Grant {
 		name, pin, _ := strings.Cut(g, "@")
@@ -377,28 +410,37 @@ func (st *packInstantiation) applyAllowanceGrants(ns string, inst PackInstance, 
 		if !ok {
 			return fmt.Errorf("pack %q: grant: %q names no allowance this pack requests (requested: %s)", ns, name, sortedKeys(man.Allowances))
 		}
-		// A grant is for the allowance the operator reviewed, not for
-		// whatever a later version of the pack puts under its name.
-		if d := req.Digest(); pin != d {
-			if pin == "" {
-				return fmt.Errorf("pack %q: grant: %q is not pinned to what you reviewed: it allows %s for %s; to grant exactly that, write `grant: [%s@%s]`", ns, name, req.Allow.Describe(), strings.Join(req.Steps, ", "), name, d)
-			}
-			return fmt.Errorf("pack %q: allowance %q changed since you granted it (granted %s, now %s): it now allows %s for %s; it is not applied until you review it and re-grant `%s@%s`", ns, name, pin, d, req.Allow.Describe(), strings.Join(req.Steps, ", "), name, d)
-		}
 		if err := validateSandboxAllow(fmt.Sprintf("pack %q allowances.%s.allow", ns, name), &req.Allow); err != nil {
 			return err
 		}
 		if len(req.Steps) == 0 {
 			return fmt.Errorf("pack %q: allowances.%s names no steps", ns, name)
 		}
+		steps := make([]*Step, 0, len(req.Steps))
 		for _, ref := range req.Steps {
 			s, err := man.FindPackStep(ref)
 			if err != nil {
 				return fmt.Errorf("pack %q: allowances.%s: %w", ns, name, err)
 			}
+			steps = append(steps, s)
+		}
+		// A grant is for the allowance the operator reviewed — what it
+		// allows and the steps it allows it to, as they were — not for
+		// whatever a later version of the pack puts under its name.
+		d := pins[name]
+		if d == "" {
+			return fmt.Errorf("pack %q: allowances.%s: its steps cannot be pinned", ns, name)
+		}
+		if pin != d {
+			if pin == "" {
+				return fmt.Errorf("pack %q: grant: %q is not pinned to what you reviewed: it allows %s for %s (as this version of the pack defines them); to grant exactly that, write `grant: [%s@%s]`", ns, name, req.Allow.Describe(), strings.Join(req.Steps, ", "), name, d)
+			}
+			return fmt.Errorf("pack %q: allowance %q changed since you granted it (granted %s, now %s): what it allows, its steps or what they do is not what you reviewed; it now allows %s for %s. It is not applied until you review it and re-grant `%s@%s`", ns, name, pin, d, req.Allow.Describe(), strings.Join(req.Steps, ", "), name, d)
+		}
+		for _, s := range steps {
 			a := req.Allow
 			a.Origin = fmt.Sprintf("pack %s grant %s", ns, name)
-			a.Pin = req.Digest()
+			a.Pin = d
 			s.GrantedAllow = UnionAllow(s.GrantedAllow, &a)
 			if st.cfg.grantedAllowances == nil {
 				st.cfg.grantedAllowances = map[string]*SandboxAllow{}
@@ -414,7 +456,7 @@ func (st *packInstantiation) applyAllowanceGrants(ns string, inst PackInstance, 
 		req := man.Allowances[name]
 		st.cfg.allowanceRequests = append(st.cfg.allowanceRequests, fmt.Sprintf(
 			"pack %s requests sandbox allowance %q for %s (%s): %s — NOT granted; it applies only if you add `grant: [%s@%s]` to packs: %s",
-			ns, name, strings.Join(req.Steps, ", "), firstNonEmptyString(req.Reason, "no reason given"), req.Allow.Describe(), name, req.Digest(), ns))
+			ns, name, strings.Join(req.Steps, ", "), firstNonEmptyString(req.Reason, "no reason given"), req.Allow.Describe(), name, firstNonEmptyString(pins[name], "<its steps are missing>"), ns))
 	}
 	return nil
 }

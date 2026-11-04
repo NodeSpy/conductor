@@ -717,8 +717,10 @@ How it works:
   request in its manifest, and the request applies, to the steps it names
   only, once you grant it. A grant is pinned to the content you reviewed:
   `conductor validate` prints each request with the exact grant to write,
-  `name@digest`. The digest covers the steps the request names and what it
-  allows (not its reason's wording):
+  `name@digest`. The digest covers what the request allows, the steps it
+  names, and each of those steps as the pack ships it: its prompt, command,
+  code, run and options, the whole step definition (not the reason's
+  wording, and not your own `steps:` overlay):
 
   ```yaml
   # the pack's manifest
@@ -732,14 +734,17 @@ How it works:
   packs:
     previews:
       use: …
-      grant: [tunnel@c9d6e4e230888de7]   # as validate prints it
+      grant: [tunnel@<digest>]   # exactly as validate prints it
   ```
 
   A grant without a digest is refused, and the message gives the digest to
   write. If a later version of the pack changes a granted allowance (more
-  tools, other hosts, other steps), the config **fails to load** with what
-  changed, until you review it and write the new digest. This is separate
-  from the pack lock's drift warning, which only warns.
+  tools, other hosts, other steps) or rewrites a granted step (its prompt,
+  its command or code), the config **fails to load** with what changed, until you review it and write the new digest. This is separate
+  from the pack lock's drift warning, which only warns. A file the step
+  reads at run time from elsewhere in the pack (a script it runs, say) is
+  not in the step's definition: the lock's drift warning is what reports
+  that change.
 
   You can also write an allowance on a pack's step yourself:
   `packs: <instance>: steps: <ref>: { isolation: { allow: … } }`.

@@ -301,13 +301,16 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// ---- Mirrored-section overlay (§5.3): the consumer's steps:/models:
 	// blocks deep-merge onto the pack's members BY NAME before anything is
 	// namespaced, so the overrides address the pack's own vocabulary. ----
+	// What each requested allowance's grant is pinned to: the steps as the
+	// pack ships them, before the overlay below changes any.
+	pins := allowancePins(man)
 	if err := st.applyStepOverlay(ns, req.inst, man); err != nil {
 		return err
 	}
 	if err := st.applyFleetOverlay(ns, req.inst, man.Models); err != nil {
 		return err
 	}
-	if err := st.applyAllowanceGrants(ns, req.inst, man); err != nil {
+	if err := st.applyAllowanceGrants(ns, req.inst, man, pins); err != nil {
 		return err
 	}
 

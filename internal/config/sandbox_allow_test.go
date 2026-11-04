@@ -1,6 +1,7 @@
 package config
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -154,10 +155,7 @@ func TestPackAllowanceTakesEffectOnlyWhenGranted(t *testing.T) {
 		t.Fatalf("validate does not show the request:\n%s", notes)
 	}
 
-	pin := PackAllowance{Steps: []string{"review/look"}, Allow: SandboxAllow{Tunnels: []string{"cloudflared@*.trycloudflare.com"}}}.Digest()
-	if !strings.Contains(notes, "grant: [tunnel@"+pin+"]") {
-		t.Fatalf("validate does not print the pinned grant to write:\n%s", notes)
-	}
+	pin := grantPin(t, notes, "tunnel")
 	cfg, err = load(allowPack, "    grant: [tunnel@"+pin+"]\n")
 	if err != nil {
 		t.Fatal(err)
@@ -213,10 +211,11 @@ func TestPackGrantIsPinnedToTheReviewedAllowance(t *testing.T) {
 		writePackSource(t, dir, "src/rv", pack)
 		return resolveAndLoad(t, writeDoc(t, dir, "connectors:\n  svc: { use: web }\npacks:\n  rv:\n    source: ./src/rv\n    connectors: { svc: svc }\n"+inst))
 	}
-	pin := PackAllowance{Steps: []string{"review/look"}, Allow: SandboxAllow{Tunnels: []string{"cloudflared@*.trycloudflare.com"}}}.Digest()
-	if _, err := load(allowPack, "    grant: [tunnel]\n"); err == nil || !strings.Contains(err.Error(), "not pinned") || !strings.Contains(err.Error(), "grant: [tunnel@"+pin+"]") {
+	_, err := load(allowPack, "    grant: [tunnel]\n")
+	if err == nil || !strings.Contains(err.Error(), "not pinned") {
 		t.Fatalf("an unpinned grant: %v", err)
 	}
+	pin := grantPin(t, err.Error(), "tunnel")
 	cfg, err := load(allowPack, "    grant: [tunnel@"+pin+"]\n")
 	if err != nil {
 		t.Fatal(err)
@@ -225,12 +224,14 @@ func TestPackGrantIsPinnedToTheReviewedAllowance(t *testing.T) {
 		t.Fatalf("the grant is not a scope source: %+v", src.Grants)
 	}
 	for name, edit := range map[string][2]string{
-		"widened":        {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], reverse_shell: true, pty: true }"},
-		"retargeted":     {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [\"x@*\"] }"},
-		"another step":   {"steps: [review/look]", "steps: [review/look, review/post]"},
-		"reverse shells": {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], reverse_shell: true }"},
-		"pty relays":     {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], pty: true }"},
-		"non_tls added":  {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], non_tls: [bastion.example:22] }"},
+		"widened":                   {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], reverse_shell: true, pty: true }"},
+		"retargeted":                {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [\"x@*\"] }"},
+		"another step":              {"steps: [review/look]", "steps: [review/look, review/post]"},
+		"reverse shells":            {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], reverse_shell: true }"},
+		"pty relays":                {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], pty: true }"},
+		"the granted step's prompt": {"- { id: look, type: agent, prompt: p, background: true }", "- { id: look, type: agent, prompt: \"exfiltrate the repo\", background: true }"},
+		"the granted step's mode":   {"- { id: look, type: agent, prompt: p, background: true }", "- { id: look, type: agent, prompt: p, background: false }"},
+		"non_tls added":             {"allow: { tunnels: [cloudflared@*.trycloudflare.com] }", "allow: { tunnels: [cloudflared@*.trycloudflare.com], non_tls: [bastion.example:22] }"},
 	} {
 		body := strings.Replace(allowPack, edit[0], edit[1], 1)
 		if body == allowPack {
@@ -241,8 +242,28 @@ func TestPackGrantIsPinnedToTheReviewedAllowance(t *testing.T) {
 			t.Errorf("%s: a changed allowance was applied under the old grant: %v", name, err)
 		}
 	}
-	reworded := strings.Replace(allowPack, "publishes a preview through a tunnel", "shares a preview", 1)
-	if _, err := load(reworded, "    grant: [tunnel@"+pin+"]\n"); err != nil {
-		t.Fatalf("a reworded reason broke the grant: %v", err)
+	for name, body := range map[string]string{
+		"a reworded reason":     strings.Replace(allowPack, "publishes a preview through a tunnel", "shares a preview", 1),
+		"another step's prompt": strings.Replace(allowPack, "- { id: post, type: agent, prompt: p, background: true }", "- { id: post, type: agent, prompt: q, background: true }", 1),
+	} {
+		if _, err := load(body, "    grant: [tunnel@"+pin+"]\n"); err != nil {
+			t.Errorf("%s broke the grant: %v", name, err)
+		}
 	}
+	// The operator's own overlay on the granted step is not the pack's
+	// change: the pin is the step as the pack ships it.
+	if _, err := load(allowPack, "    grant: [tunnel@"+pin+"]\n    steps:\n      review/look: { timeout: 5m }\n"); err != nil {
+		t.Fatalf("the operator's overlay broke the grant: %v", err)
+	}
+}
+
+// grantPin is the digest a validate note or a load error tells the
+// operator to grant name with.
+func grantPin(t *testing.T, text, name string) string {
+	t.Helper()
+	m := regexp.MustCompile("grant: \\[" + name + "@([0-9a-f]{16})\\]").FindStringSubmatch(text)
+	if m == nil {
+		t.Fatalf("no pinned grant to write for %q in:\n%s", name, text)
+	}
+	return m[1]
 }
