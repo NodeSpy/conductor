@@ -110,6 +110,9 @@ type Options struct {
 	AllowUnlisted bool
 	// Describe records the permission manifest at install (see DescribeFunc).
 	Describe DescribeFunc
+	// ProtectedDirs are directories a declared fs: may not reach beyond
+	// conductor's own state and config dirs (CheckDeclaredFS).
+	ProtectedDirs []string
 	// Log receives one line per install/update so every change is visible.
 	Log func(string, ...any)
 }
@@ -331,6 +334,10 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 			return res, false
 		}
 		rec.Manifest = manifestFromDecl(decl)
+		if err := CheckDeclaredFS(ref.Name, rec.Manifest.FS, refFS(ref), ProtectedDirs(opts.ProtectedDirs...)); err != nil {
+			res.Action, res.Err = ActionFailed, err
+			return res, false
+		}
 	}
 	res.Manifest = rec.Manifest
 	state.Put(rec)
@@ -656,6 +663,9 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 				case checkDeclKind(ref, decl) != nil:
 					res.Action, res.Err = ActionFailed, checkDeclKind(ref, decl)
 					cb.err = res.Err
+				case CheckDeclaredFS(ref.Name, manifestFromDecl(decl).FS, refFS(ref), ProtectedDirs(opts.ProtectedDirs...)) != nil:
+					res.Action, res.Err = ActionFailed, CheckDeclaredFS(ref.Name, manifestFromDecl(decl).FS, refFS(ref), ProtectedDirs(opts.ProtectedDirs...))
+					cb.err = res.Err
 				default:
 					rec.Manifest = manifestFromDecl(decl)
 					state.Put(rec)
@@ -792,18 +802,17 @@ func manifestFromDecl(decl *Decl) Manifest {
 		// decided once, at construction, and cannot change under a running
 		// daemon.
 		SingleProcess: c.SingleProcess,
-		Exposes:       declExposes(*decl),
 	}
 }
 
-// declExposes reports whether any verb of d declares exposes semantics.
-func declExposes(d Decl) bool {
-	for _, v := range d.Verbs {
-		if v.Semantics != nil && v.Semantics.Exposes != nil {
-			return true
-		}
+// refFS is every fs: the operator set for a plugin: the shared process's
+// union and each isolated instance's own.
+func refFS(ref config.PluginRef) []string {
+	out := append([]string(nil), ref.FS...)
+	for _, g := range ref.Instances {
+		out = append(out, g.FS...)
 	}
-	return false
+	return out
 }
 
 func binaryPresent(path string) bool {

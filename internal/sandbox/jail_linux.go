@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -32,7 +34,13 @@ func buildJail(binds []BindMount, noExecBase bool) error {
 	// pivot_root requires the new root to be a mount point; a fresh tmpfs is
 	// the simplest one that also gives us a clean, writable skeleton to build
 	// the mount targets in.
-	if err := unix.Mount("tmpfs", root, "tmpfs", 0, "mode=0755"); err != nil {
+	// In a NoExecBase jail every writable mount is noexec, the root
+	// included (the parents of the mount points are created on it).
+	var wflags uintptr
+	if noExecBase {
+		wflags = unix.MS_NOEXEC | unix.MS_NOSUID | unix.MS_NODEV
+	}
+	if err := unix.Mount("tmpfs", root, "tmpfs", wflags, "mode=0755"); err != nil {
 		return fmt.Errorf("tmpfs root: %w", err)
 	}
 
@@ -41,7 +49,7 @@ func buildJail(binds []BindMount, noExecBase bool) error {
 	// installs a /usr/bin wrapper execs (claude-code's /usr/bin/claude →
 	// /opt/claude-code/bin/claude).
 	for _, d := range []string{"/usr", "/etc", "/opt"} {
-		if err := bindInto(root, BindMount{Path: d, RO: true}, true); err != nil {
+		if err := bindInto(root, BindMount{Path: d, RO: true}, true, false); err != nil {
 			return err
 		}
 	}
@@ -71,12 +79,12 @@ func buildJail(binds []BindMount, noExecBase bool) error {
 	if err := mountProc(root); err != nil {
 		return err
 	}
-	if err := mountDev(root); err != nil {
+	if err := mountDev(root, wflags); err != nil {
 		return err
 	}
 	// A private /tmp: hides other processes' scratch (and other steps'
 	// conductor-* temp dirs) while giving the payload a writable /tmp.
-	if err := mountTmpfs(root+"/tmp", "mode=1777"); err != nil {
+	if err := mountTmpfs(root+"/tmp", wflags, "mode=1777"); err != nil {
 		return fmt.Errorf("jail /tmp: %w", err)
 	}
 
@@ -89,7 +97,7 @@ func buildJail(binds []BindMount, noExecBase bool) error {
 		var err error
 		switch {
 		case b.Tmpfs:
-			err = mountTmpfs(root+b.Path, "mode=0700")
+			err = mountTmpfs(root+b.Path, wflags, "mode=0700")
 		case b.Link != "":
 			if err = os.MkdirAll(filepath.Dir(root+b.Path), 0o755); err == nil {
 				if err = os.Symlink(b.Link, root+b.Path); os.IsExist(err) {
@@ -97,7 +105,7 @@ func buildJail(binds []BindMount, noExecBase bool) error {
 				}
 			}
 		default:
-			err = bindInto(root, b, b.Optional)
+			err = bindInto(root, b, b.Optional, noExecBase && !b.Exec)
 		}
 		if err != nil {
 			return fmt.Errorf("jail %s: %w", b.Path, err)
@@ -131,7 +139,9 @@ func remountNoExec(root, d string) error {
 // bindInto binds b.Path into root at the same path. skipMissing tolerates a
 // non-existent source (base-system entries that a given distro lacks); for the
 // caller's declared allow-list it is false, so a missing path fails the launch.
-func bindInto(root string, b BindMount, skipMissing bool) error {
+// noexec mounts it noexec, nosuid and nodev. Read-only and noexec apply to
+// the bind and every mount under it (a recursive bind brings submounts).
+func bindInto(root string, b BindMount, skipMissing, noexec bool) error {
 	src := b.source()
 	fi, err := os.Stat(src) // Stat: follow symlinks to learn dir-vs-file.
 	if err != nil {
@@ -161,12 +171,67 @@ func bindInto(root string, b BindMount, skipMissing bool) error {
 	if err := unix.Mount(src, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
 		return fmt.Errorf("jail bind %s: %w", src, err)
 	}
+	var flags uintptr
 	if b.RO {
-		if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_REC|lockedFlags(src), ""); err != nil {
-			return fmt.Errorf("jail bind-ro %s: %w", b.Path, err)
+		flags |= unix.MS_RDONLY
+	}
+	if noexec {
+		flags |= unix.MS_NOEXEC | unix.MS_NOSUID | unix.MS_NODEV
+	}
+	if flags == 0 {
+		return nil
+	}
+	// A remount applies to one mount, MS_REC or not: each submount the
+	// recursive bind brought along is remounted too.
+	for _, m := range mountsUnder(target) {
+		if err := unix.Mount("", m, "", unix.MS_BIND|unix.MS_REMOUNT|flags|lockedFlags(m), ""); err != nil {
+			return fmt.Errorf("jail remount %s (%s): %w", b.Path, m, err)
 		}
 	}
 	return nil
+}
+
+// mountsUnder lists target and every mount point below it, parents first,
+// from /proc/self/mountinfo. target itself is always first, even if
+// mountinfo cannot be read.
+func mountsUnder(target string) []string {
+	out := []string{target}
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return out
+	}
+	seen := map[string]bool{target: true}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 5 {
+			continue
+		}
+		mp := unescapeMountinfo(f[4])
+		if !seen[mp] && strings.HasPrefix(mp, target+"/") {
+			seen[mp] = true
+			out = append(out, mp)
+		}
+	}
+	return out
+}
+
+// unescapeMountinfo decodes mountinfo's octal escapes (\040 for a space).
+func unescapeMountinfo(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+3 < len(s) {
+			if n, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				b.WriteByte(byte(n))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // lockedFlags are the source mount's nosuid/nodev/noexec/relatime flags. In
@@ -213,7 +278,7 @@ func baseLink(root, p string) error {
 		}
 		return nil
 	}
-	return bindInto(root, BindMount{Path: p, RO: true}, true)
+	return bindInto(root, BindMount{Path: p, RO: true}, true, false)
 }
 
 // mountProc mounts a fresh procfs for this pid namespace inside the jail (the
@@ -232,9 +297,9 @@ func mountProc(root string) error {
 // mountDev builds a minimal /dev: a tmpfs with the standard character devices
 // bound in, the /dev/{fd,std*} → /proc/self/fd symlinks shells expect, and a
 // /dev/shm tmpfs.
-func mountDev(root string) error {
+func mountDev(root string, flags uintptr) error {
 	dev := root + "/dev"
-	if err := mountTmpfs(dev, "mode=0755"); err != nil {
+	if err := mountTmpfs(dev, flags, "mode=0755"); err != nil {
 		return fmt.Errorf("jail /dev: %w", err)
 	}
 	for _, n := range []string{"null", "zero", "full", "random", "urandom", "tty"} {
@@ -258,18 +323,18 @@ func mountDev(root string) error {
 	} {
 		_ = os.Symlink(l.tgt, dev+"/"+l.name) // best-effort; absent /dev/fd is non-fatal.
 	}
-	if err := mountTmpfs(dev+"/shm", "mode=1777"); err != nil {
+	if err := mountTmpfs(dev+"/shm", flags, "mode=1777"); err != nil {
 		return fmt.Errorf("jail /dev/shm: %w", err)
 	}
 	return nil
 }
 
-// mountTmpfs mkdirs path and mounts a tmpfs there.
-func mountTmpfs(path, data string) error {
+// mountTmpfs mkdirs path and mounts a tmpfs there with flags.
+func mountTmpfs(path string, flags uintptr, data string) error {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return err
 	}
-	return unix.Mount("tmpfs", path, "tmpfs", 0, data)
+	return unix.Mount("tmpfs", path, "tmpfs", flags, data)
 }
 
 // pivotInto pivot_roots into root and lazily detaches the old root, leaving the

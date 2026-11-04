@@ -682,28 +682,65 @@ deny-default Seatbelt profile with the same allow-list):
 | | Allowed | Everything else |
 |---|---|---|
 | **Filesystem** | The base system read-only (`/usr`, `/etc`, `/opt`; on Linux a private `/proc`, `/dev` and `/tmp`). Its own binary's directory, read-only. Its own state directory (`<state>/plugin-staging/<name>`), read-write, with `HOME` set to a directory inside it. Paths it declares in `fs`, and paths you add with `fs:` on its entry, read-only unless the entry ends `:rw`. Files its connection config points at (values under a `path`, `dir`, `file`, `*_path`, `*_dir` or `*_file` key, such as `app: { private_key_path: … }`), read-only. Its declared commands. | Not present (Linux) or denied (macOS). That includes the rest of `$HOME`, conductor's config, state and secrets. |
-| **Processes** | Its own binary and its declared commands. | On Linux the program directories (`/usr/bin`, `/usr/sbin`, `/usr/local/bin`, `/usr/local/sbin`, `/bin`, `/sbin`, `/opt`) are mounted `noexec`, with each declared command bound back executable. On macOS `exec` is denied except for those paths. |
-| **Network** | A plugin with an effective egress set (what it declares, or `network:` on its entry) gets its own network namespace; the only way out is conductor's egress proxy with exactly that allowlist. On macOS, outbound connections are denied except to the proxy. The describe probe and engines get only what they declare, usually nothing. | Refused by the proxy (403), or unreachable. |
+| **Processes** | Its own binary and its declared commands. On Linux, also programs under the system library directories (`/usr/lib*`, `/usr/libexec`), which must stay executable for shared libraries. | On Linux the program directories (`/usr/bin`, `/usr/sbin`, `/usr/local/bin`, `/usr/local/sbin`, `/bin`, `/sbin`, `/opt`) are mounted `noexec`, with each declared command bound back executable. Everything the plugin can write (its `HOME`, `/tmp`, `$TMPDIR`, `/dev/shm`, `fs:` paths, the jail's root) is mounted `noexec`, `nosuid`, `nodev`, so a program it writes cannot be run. It runs with `no_new_privs` and, on amd64 and arm64, a seccomp filter that refuses `memfd_create` without `MFD_NOEXEC_SEAL`, `execveat` of an open file descriptor, and system calls of another ABI (i386, x32, arm32). On macOS `exec` is denied except for its own binary and its declared commands. |
+| **Network** | Its own network namespace (Linux); on macOS, outbound connections are denied except to the egress proxy and allowed loopback ports. The only way out is conductor's egress proxy, with an allowlist of: `network:` when the entry sets it; otherwise what the plugin declares plus the hosts its connection config points at (see below). A host-loopback target with a fixed port (`http://127.0.0.1:8123`, `localhost:6379`) is reached directly: on Linux the daemon relays that one address into the jail; on macOS the profile allows that port. The describe probe and engines get only what they declare, usually nothing. | Refused by the proxy (403), or unreachable. |
 | **Listening** | An address its connection config sets under `listen` or a `*_listen` key: on Linux the daemon binds it on the host and forwards each connection into the jail; on macOS the profile allows binding that port. | — |
 | **Environment** | The scrubbed environment every plugin gets (unchanged), plus the proxy variables. | — |
 
-Two cases keep the host network, and the launch log line says so:
+**Hosts from the connection config.** A connector or runtime is allowed the
+hosts its connection config names, so a LAN plugin reaches the hosts it is
+configured for and nothing else:
 
-- **A connector or runtime that declares no egress and has no `network:`.**
-  Many home-lab and LAN connectors declare no egress, because the host they
-  talk to is whatever you configure. With no allowlist there is nothing for
-  the proxy to enforce, and cutting them off would break them. Their
-  filesystem and process jail still applies. Set `network:` on the entry to
-  give one its own namespace with that allowlist.
-- **A plugin with an `exposes` verb** (a tunnel or relay that dials a local
-  address it is handed per call). The install record says so; for a plugin
-  installed before that was recorded, conductor learns it from the plugin's
-  `describe` and restarts it once.
+- a URL under a key named `url`, `endpoint`, `api_base` or `base`, or ending
+  in `_url`, `_endpoint` or `_base`. The port is the URL's, or the scheme's
+  default (`http` 80, `https` 443, `ws` 80, `wss` 443, `mqtt` 1883, `mqtts`
+  8883, `redis` 6379, `postgres` 5432, `mysql` 3306, `amqp` 5672, `nats`
+  4222, `ldap` 389, `imap` 143, `imaps` 993, `smtp` 25, `smtps` 465), or
+  any port for another scheme;
+- a URL with one of those schemes under any other key (`homeserver:
+  https://matrix.example.com`, `webhook: { smee: https://smee.io/… }`);
+- a host under a key named `host`, `hostname`, `server`, `broker`, `address`
+  or `addr`, or ending in `_host` or `_server`. The port is the value's own,
+  or a sibling `port` (or `<prefix>port`, as in `db_host` / `db_port`) key,
+  or any port.
+
+`env:` and `secret:` values are not hosts. `network:` on the entry replaces
+the whole list (declared egress and config hosts alike) with exactly what it
+names.
+
+**What reaches the proxy.** The proxy is an HTTP proxy, delivered as
+`HTTP_PROXY` / `HTTPS_PROXY`. A plugin whose client honours those (Go's
+default HTTP transport does) works. A plugin that speaks another protocol to
+a non-loopback host (MQTT, SSH, a database wire protocol, raw TCP, UDP,
+ICMP), or whose HTTP client ignores the proxy variables, cannot reach that
+host from the jail. Give such a plugin the host network explicitly:
+
+```yaml
+connectors:
+  sensors:
+    use: acme/plugins/mqtt
+    broker: mqtt.lan
+    network: [host]
+```
+
+`network: [host]` must be the only entry. It keeps the filesystem and
+process jail; only the network is the host's. `trust: full` removes the
+jail altogether. Both are written to the launch log line (`network: host
+network, not confined — its entry sets network: [host]`, or `no OS jail
+(trust: full)`), and shown by `conductor plugin list --caps`. Runtimes have
+no `network:` key; for them the opt-out is `trust: full`.
 
 What the jail does not cover:
 
-- On Linux, helpers under `/usr/lib*` and `/usr/libexec` stay executable;
-  only the program directories above are `noexec`.
+- On Linux, programs under `/usr/lib*` and `/usr/libexec` stay executable
+  (shared libraries are mapped executable from there). A plugin can run a
+  helper installed there by its full path.
+- On other Linux architectures than amd64 and arm64 there is no seccomp
+  filter; the mount flags and `no_new_privs` still apply, and an
+  executable memfd is not refused. The launch log line says which applies.
+- A plugin can still run any code it carries in its own binary. The exec
+  rules stop it from running other programs, not from doing in-process
+  what such a program would do.
 - The jail's root on Linux is a private, empty tmpfs. A write outside the
   bound paths lands there and is discarded with the jail; it never reaches
   the host.
@@ -712,6 +749,27 @@ What the jail does not cover:
   reads `~/.config/gh`: give the token another way (`identity:` tokens, an
   App key, or `GH_TOKEN` via `allow_env:`), grant the directory
   (`fs: [~/.config/gh]`), or set `trust: full`.
+
+### What a plugin may declare under `fs`
+
+A plugin's declared `fs` paths are shown to it in the jail, so the
+declaration is capped. Install and every launch refuse a plugin that
+declares:
+
+- `/`;
+- your home directory, or a directory containing it;
+- a path inside conductor's config or state directory, or containing one.
+
+Paths are checked as written and with symlinks resolved. To give a plugin
+such a path anyway, name the same path in the entry's own `fs:`. A path
+inside your home directory (`~/.config/gh`) is not refused. The install
+prompt and `conductor plugin list --caps` list the declared files and
+commands on lines of their own.
+
+A launch whose jail cannot be built for that launch (its state directory is
+not usable, a proxy endpoint fails) is refused under `sandbox.plugins: on`
+as under `required`. `on` falls back to manifest-only confinement only when
+this box cannot build a jail at all.
 
 ### The manifest's own limits
 

@@ -36,6 +36,7 @@ func describe() plugin.Decl {
 				"dial":      str("host:port addresses to dial directly, one per line"),
 				"exec":      str("commands to run, one per line (a name or an absolute path)"),
 				"listen":    str("an address to serve one line on"),
+				"drop":      str("directories to copy a program into and run it from, one per line ($HOME and $TMPDIR are expanded)"),
 			},
 			Outputs: plugin.Schema{"report": {Type: "object", Required: true}},
 		}},
@@ -93,12 +94,34 @@ func invoke(req plugin.InvokeRequest) (plugin.InvokeResult, error) {
 		}
 		report["exec "+c] = result(err)
 	}
+	for _, d := range lines(req.Options["drop"]) {
+		report["drop "+d] = dropAndExec(os.ExpandEnv(d))
+	}
 	if a, _ := req.Options["listen"].(string); a != "" {
 		report["listen "+a] = result(serve(a))
 	}
 	report["home"] = os.Getenv("HOME")
 	report["home writable"] = result(os.WriteFile(filepath.Join(os.Getenv("HOME"), "probe"), []byte("x"), 0o600))
 	return plugin.InvokeResult{Outputs: map[string]any{"report": report}}, nil
+}
+
+// dropAndExec copies a system program (true) into dir and runs the copy.
+func dropAndExec(dir string) string {
+	var src []byte
+	for _, p := range []string{"/usr/bin/true", "/bin/true"} {
+		if b, err := os.ReadFile(p); err == nil {
+			src = b
+			break
+		}
+	}
+	if src == nil {
+		return "err: no program to copy"
+	}
+	p := filepath.Join(dir, "dropped")
+	if err := os.WriteFile(p, src, 0o755); err != nil {
+		return "err: write: " + err.Error()
+	}
+	return result(exec.Command(p).Run())
 }
 
 // proxyGet fetches u through HTTP_PROXY regardless of NO_PROXY: the point is

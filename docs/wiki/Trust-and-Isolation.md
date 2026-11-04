@@ -142,11 +142,11 @@ a visible one — you see the manifest when you install it.
 
 By default each process also runs in an OS jail built from that manifest
 (`sandbox.plugins`, see [[Plugins]] § Security): it does not see the rest of
-your `$HOME` or conductor's state, it runs only its declared commands, and
-a plugin with declared egress reaches only those hosts, through the egress
-proxy. It still runs as your user, and a plugin with no declared egress and
-no `network:` keeps the host network. `trust: full` on its entry removes the
-jail. Read the manifest before installing, the same way you would read a
+your `$HOME` or conductor's state, it runs only its declared commands (not
+a program it writes itself), and it reaches only the hosts it declares and
+the hosts its connection config names, through the egress proxy. It still
+runs as your user. `network: [host]` on its entry gives it the host
+network; `trust: full` removes the jail. Read the manifest before installing, the same way you would read a
 pack's.
 
 ## Practical guidance

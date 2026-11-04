@@ -1,11 +1,13 @@
 package plugin
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
-	sdk "github.com/NodeSpy/conductor/pkg/plugin"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // buildCommand's choice of confinement, for each policy and opt-out, with
@@ -66,10 +68,11 @@ func TestJailDecision(t *testing.T) {
 	}
 }
 
-// The jail's network: its own namespace with the proxy as the only way out
-// when it declares egress (or network: sets one); the host network when it
-// declares none or has an exposes verb; nothing for the describe probe and
-// engines beyond what they declare.
+// The jail's network: always its own namespace, the egress proxy the only
+// way out. The allowlist is network: when the entry sets one, else the
+// declared egress plus the connection config's targets; the describe probe
+// and engines get only what they declare. network: [host] is the only way
+// to the host network (trust: full is decided before the jail).
 func TestJailNetwork(t *testing.T) {
 	base := Spec{Name: "p", Kind: KindConnector}
 	withEgress := base
@@ -78,54 +81,66 @@ func TestJailNetwork(t *testing.T) {
 	narrowed.Network = []string{"api.example.com:443"}
 	setByOperator := base
 	setByOperator.Network = []string{"nas.lan:5000"}
-	exposes := withEgress
-	exposes.Manifest.Exposes = true
-	learned := withEgress
-	learned.hostNetwork = true
+	targets := base
+	targets.Targets = []string{"ha.lan:8123", "127.0.0.1:9000", "localhost:*"}
+	both := withEgress
+	both.Targets = []string{"ghe.example.com:443"}
+	narrowedTargets := narrowed
+	narrowedTargets.Targets = []string{"ghe.example.com:443"}
+	host := withEgress
+	host.Network = []string{config.HostNetwork}
 	probe := withEgress
 	probe.Probe = true
+	probe.Targets = []string{"ha.lan:8123"}
 	engine := Spec{Name: "e", Kind: KindStep}
 
 	for _, tc := range []struct {
-		name  string
-		s     Spec
-		deny  bool
-		allow string
+		name     string
+		s        Spec
+		deny     bool
+		allow    string
+		loopback string
 	}{
-		{"no egress", base, false, ""},
-		{"declared egress", withEgress, true, "api.example.com:443"},
-		{"network: narrows", narrowed, true, "api.example.com:443"},
-		{"network: on a plugin that declares none", setByOperator, true, "nas.lan:5000"},
-		{"exposes (recorded)", exposes, false, ""},
-		{"exposes (learned at describe)", learned, false, ""},
-		{"describe probe", probe, true, ""},
-		{"engine", engine, true, ""},
+		{"no egress, no targets", base, true, "", ""},
+		{"declared egress", withEgress, true, "api.example.com:443", ""},
+		{"network: narrows", narrowed, true, "api.example.com:443", ""},
+		{"network: on a plugin that declares none", setByOperator, true, "nas.lan:5000", ""},
+		{"config targets", targets, true, "ha.lan:8123,127.0.0.1:9000,localhost:*", "127.0.0.1:9000"},
+		{"declared egress plus targets", both, true, "api.example.com:443,ghe.example.com:443", ""},
+		{"network: is exact, targets not added", narrowedTargets, true, "api.example.com:443", ""},
+		{"network: [host]", host, false, "", ""},
+		{"describe probe", probe, true, "", ""},
+		{"engine", engine, true, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := jailNetwork(tc.s)
-			if n.deny != tc.deny || strings.Join(n.allow, ",") != tc.allow {
-				t.Fatalf("deny=%v allow=%v, want deny=%v allow=%q", n.deny, n.allow, tc.deny, tc.allow)
+			if n.deny != tc.deny || strings.Join(n.allow, ",") != tc.allow || strings.Join(n.loopback, ",") != tc.loopback {
+				t.Fatalf("deny=%v allow=%v loopback=%v, want deny=%v allow=%q loopback=%q", n.deny, n.allow, n.loopback, tc.deny, tc.allow, tc.loopback)
 			}
 			d := n.describe()
 			switch {
-			case !tc.deny && !strings.HasPrefix(d, "host network"):
+			case !tc.deny && d != "host network, not confined — its entry sets network: [host]":
 				t.Fatalf("describe = %q", d)
-			case tc.deny && tc.allow == "" && d != "none":
+			case tc.deny && tc.allow == "" && d != "no network":
 				t.Fatalf("describe = %q", d)
 			}
 		})
 	}
 }
 
-// An exposes verb in the declaration is recorded in the manifest at
-// install, so the first launch already has the host network.
-func TestManifestRecordsExposes(t *testing.T) {
-	d := &Decl{Verbs: []Verb{{Name: "share", Semantics: &sdk.VerbSemantics{Exposes: &sdk.Exposes{}}}}}
-	if !ManifestFromDecl(d).Exposes {
-		t.Fatal("an exposes verb is not recorded")
+// Red-team regression (phase 4, H1): a connector got the host network by
+// declaring no egress, or by declaring an exposes verb. Neither does now.
+func TestNoEgressAndExposesGetNoHostNetwork(t *testing.T) {
+	bare := Spec{Name: "evil", Kind: KindConnector}
+	rt := Spec{Name: "evil", Kind: KindRuntime}
+	exposing := Spec{Name: "evil", Kind: KindConnector, Manifest: Manifest{Egress: []string{"api.example.com:443"}}}
+	for _, s := range []Spec{bare, rt, exposing} {
+		if n := jailNetwork(s); !n.deny {
+			t.Fatalf("%s %s: host network (%s)", s.Kind, s.Name, n.why)
+		}
 	}
-	if ManifestFromDecl(&Decl{Verbs: []Verb{{Name: "x"}}}).Exposes {
-		t.Fatal("a plain verb recorded as exposes")
+	if !strings.Contains(PlannedConfinement(bare, SandboxDeps{Jail: JailOn}).String(), "network: no network") {
+		t.Fatalf("--caps does not say it has no network: %s", PlannedConfinement(bare, SandboxDeps{Jail: JailOn}))
 	}
 }
 
@@ -146,5 +161,100 @@ func TestInstanceSpecTrustIsPerInstance(t *testing.T) {
 	}
 	if m := PlannedConfinement(InstanceSpec(shared, "unknown"), sd).Mode; m != "jail" {
 		t.Fatalf("an instance with no grant: %q", m)
+	}
+}
+
+// Red-team regression (phase 4, finding 4): under sandbox.plugins: on, a
+// launch whose jail fails to build is refused, not run unconfined. Only the
+// box-level probe may degrade. Here the box "can" jail but this launch
+// cannot (no conductor binary wired for the Linux forwarder; on macOS the
+// staging dir is a file).
+func TestJailBuildErrorRefusesUnderOn(t *testing.T) {
+	staging := t.TempDir()
+	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	s := Spec{Name: "evil", Kind: KindConnector, BinPath: bin}
+	if err := os.WriteFile(filepath.Join(staging, "evil"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sd := SandboxDeps{Jail: JailOn, StagingRoot: staging, JailProbe: func() string { return "" }}
+	cmd, cleanup, conf, err := buildCommand(s, sd)
+	if err == nil {
+		cleanup()
+		t.Fatalf("a launch whose jail cannot be built ran anyway: mode=%q argv=%v", conf.Mode, cmd.Args)
+	}
+	if !strings.Contains(err.Error(), "building its OS jail failed") {
+		t.Fatalf("the refusal does not say why: %v", err)
+	}
+}
+
+// A plugin that plants a file or a symlink where its HOME dir goes gets it
+// removed (the symlink not followed) and a fresh HOME dir on the next
+// launch, so it cannot use that to break its own jail.
+func TestJailHomeResetsPlantedEntries(t *testing.T) {
+	for _, kind := range []string{"file", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			staging := t.TempDir()
+			stage := filepath.Join(staging, "evil")
+			home := filepath.Join(stage, ".home")
+			if err := os.MkdirAll(stage, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			victim := filepath.Join(t.TempDir(), "victim")
+			if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "file" {
+				err := os.WriteFile(home, []byte("x"), 0o600)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Symlink(victim, home); err != nil {
+				t.Fatal(err)
+			}
+			_, h, _, err := jailFiles(Spec{Name: "evil", Kind: KindConnector}, SandboxDeps{StagingRoot: staging})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fi, err := os.Lstat(h); err != nil || !fi.IsDir() {
+				t.Fatalf("HOME %s is not a fresh directory: %v %v", h, fi, err)
+			}
+			if b, err := os.ReadFile(victim); err != nil || string(b) != "keep" {
+				t.Fatalf("the symlink's target was touched: %q %v", b, err)
+			}
+		})
+	}
+}
+
+// A path the plugin must execute (its binary dir, a declared command) is
+// never also writable, even when an fs: entry names it :rw.
+func TestDedupeBindsExecStaysReadOnly(t *testing.T) {
+	out := dedupeBinds([]sandbox.BindMount{
+		{Path: "/opt/plugin", RO: true, Exec: true},
+		{Path: "/opt/plugin", RO: false, Optional: true},
+		{Path: "/srv/data", RO: false},
+	})
+	if len(out) != 2 || !out[0].Exec || !out[0].RO {
+		t.Fatalf("binds = %+v, want /opt/plugin executable and read-only", out)
+	}
+	if out[1].Exec || out[1].RO {
+		t.Fatalf("binds = %+v, want /srv/data writable and not executable", out)
+	}
+}
+
+// The connection config's targets reach the shared process's spec (the
+// union) and an isolated instance's own spec (its own only).
+func TestSpecTargetsFromRef(t *testing.T) {
+	ref := refFor(t, config.UseKindConnector, "acme/plugins/lan")
+	ref.Targets = []string{"a.lan:80"}
+	ref.Instances = map[string]config.ConnectorGrant{
+		"a": {Targets: []string{"a.lan:80"}},
+		"b": {Targets: []string{"b.lan:80"}, Isolate: true},
+	}
+	s := SpecFromRef(ref, "", Installed{}, false)
+	if strings.Join(s.Targets, ",") != "a.lan:80" {
+		t.Fatalf("shared spec targets = %v", s.Targets)
+	}
+	if got := InstanceSpec(s, "b").Targets; strings.Join(got, ",") != "b.lan:80" {
+		t.Fatalf("isolated instance targets = %v", got)
 	}
 }

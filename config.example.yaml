@@ -798,10 +798,13 @@ models:
 # SHOWS it to you (`conductor plugin add`, `plugin list --caps`, `plugin show`),
 # and runs the plugin in an OS jail built from it: the base system read-only,
 # its own binary and state dirs, declared paths and commands, files its config
-# points at (read-only), and none of the rest of $HOME. A plugin that declares
-# egress (or has network: set) reaches the network only through conductor's
-# egress proxy, limited to that list. `plugin list --caps` shows what each
-# process gets. See docs/wiki/Plugins.md § Security.
+# points at (read-only), and none of the rest of $HOME. It cannot run a program
+# it writes. It reaches the network only through conductor's egress proxy,
+# limited to its declared egress plus the hosts its connection config names
+# (url / *_url / host / *_host keys), or to network: when the entry sets one.
+# A declared fs: of /, your home dir or conductor's own dirs is refused unless
+# the entry's own fs: names it. `plugin list --caps` shows what each process
+# gets. See docs/wiki/Plugins.md § Security.
 #
 # sandbox:
 #   plugins: on          # default. `required`: refuse to start a plugin whose
@@ -815,6 +818,11 @@ models:
 #   backups:
 #     use: acme/plugins/restic
 #     fs: ["/srv/backups:rw"]                    # more of the filesystem (read-only unless :rw)
+#   sensors:
+#     use: acme/plugins/mqtt
+#     broker: mqtt.lan
+#     network: [host]                            # host network (MQTT does not go through
+#                                                # the HTTP egress proxy); the rest of the jail stays
 #   legacy:
 #     use: acme/plugins/legacy
 #     trust: full                                # no OS jail for this one

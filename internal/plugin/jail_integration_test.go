@@ -93,10 +93,11 @@ func freeLoopbackAddr(t *testing.T) string {
 // (sandbox.plugins: required, so a jail that cannot be built fails the test
 // rather than falling back) and has it try what the jail must refuse — HOME
 // outside its allowances, the daemon's state, an undeclared host through the
-// egress proxy, a direct dial, an undeclared command — next to what it must
-// allow: its declared host through the proxy, its declared command, its own
-// HOME, an operator fs: path, a file its config points at (read-only), and
-// serving the address its config sets.
+// egress proxy, a direct dial, an undeclared command, running a program it
+// wrote into HOME, TMPDIR or /tmp — next to what it must allow: its declared
+// host (a host-loopback one: through the proxy and relayed in), its
+// declared command, its own HOME, an operator fs: path, a file its config
+// points at (read-only), and serving the address its config sets.
 func TestPluginJailHolds(t *testing.T) {
 	requireJail(t)
 	self := jailSelf(t)
@@ -154,6 +155,7 @@ func TestPluginJailHolds(t *testing.T) {
 		"dial":      strings.Join([]string{other, up, "1.1.1.1:443"}, "\n"),
 		"exec":      strings.Join([]string{"true", sh, "/usr/bin/env"}, "\n"),
 		"listen":    listen,
+		"drop":      strings.Join([]string{"$HOME", "$TMPDIR", "/tmp"}, "\n"),
 	}})
 	t.Logf("spawn log (%s):\n  %s", runtime.GOOS, strings.Join(logs, "\n  "))
 	if err != nil {
@@ -173,7 +175,10 @@ func TestPluginJailHolds(t *testing.T) {
 		"proxy_get http://" + up + "/":            true,
 		"proxy_get http://" + other + "/":         false,
 		"dial " + other:                           false,
-		"dial " + up:                              false,
+		"dial " + up:                              true, // a host-loopback target: relayed in
+		"drop $HOME":                              false,
+		"drop $TMPDIR":                            false,
+		"drop /tmp":                               false,
 		"dial 1.1.1.1:443":                        false,
 		"exec true":                               true,
 		"exec " + sh:                              false,
@@ -223,5 +228,111 @@ func TestPluginJailHolds(t *testing.T) {
 	}
 	if !jailLine {
 		t.Errorf("no spawn log line names the OS jail: %v", logs)
+	}
+}
+
+// Red-team regression (phase 4, H3): a connector that declares no egress
+// used to get the host network, and could run a program it had dropped in
+// its own HOME. Now it has its own namespace with only the targets its
+// config names: a host-loopback service its config points at is relayed in,
+// another one is not reachable, directly or through the proxy, and the
+// dropped program does not run.
+func TestPluginJailNoEgressConnector(t *testing.T) {
+	requireJail(t)
+	self := jailSelf(t)
+	bin := buildGo(t, "github.com/NodeSpy/conductor/test/plugins/acme-jailprobe", realDir(t, "", "jp-bin-"), "acme-jailprobe")
+	stage := realDir(t, "", "jp-stage-")
+	_, configured := serveText(t, "CONFIGURED")
+	_, c2 := serveText(t, "C2")
+
+	// A program already in its HOME (from an earlier run).
+	home := filepath.Join(stage, "lanconn", ".home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	payload := filepath.Join(home, "payload")
+	src, err := os.ReadFile("/usr/bin/true")
+	if err != nil {
+		t.Skip("no /usr/bin/true to copy")
+	}
+	if err := os.WriteFile(payload, src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	pm := sandbox.NewProxyManager(nil)
+	defer pm.Close()
+	var logs []string
+	spec := Spec{
+		Name: "lanconn", Kind: KindConnector, Provides: "acme-jailprobe", BinPath: bin, Local: true,
+		Targets: []string{configured}, // what its connection config points at
+	}
+	c := NewClient(spec, Deps{
+		Log: func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) },
+		Sandbox: SandboxDeps{
+			Self: self, StagingRoot: stage,
+			EgressUnix: pm.UnixEndpoint, EgressAddr: pm.Endpoint,
+			Jail: JailRequired, JailProbe: agentsandbox.Probe,
+		},
+	})
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	out, err := c.Invoke(ctx, InvokeRequest{Instance: "lanconn", Verb: "probe", Options: map[string]any{
+		"dial":      strings.Join([]string{configured, c2, "1.1.1.1:443"}, "\n"),
+		"proxy_get": "http://" + c2 + "/",
+		"exec":      payload,
+	}})
+	t.Logf("spawn log (%s):\n  %s", runtime.GOOS, strings.Join(logs, "\n  "))
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	report, _ := out["report"].(map[string]any)
+	for k, v := range report {
+		t.Logf("  %-60s %v", k, v)
+	}
+	for k, ok := range map[string]bool{
+		"dial " + configured:           true,
+		"dial " + c2:                   false,
+		"dial 1.1.1.1:443":             false,
+		"proxy_get http://" + c2 + "/": false,
+		"exec " + payload:              false,
+	} {
+		got, _ := report[k].(string)
+		if strings.HasPrefix(got, "ok") != ok {
+			t.Errorf("%s: %q (want allowed=%v)", k, got, ok)
+		}
+	}
+	var line string
+	for _, l := range logs {
+		if strings.Contains(l, "OS jail") {
+			line = l
+		}
+	}
+	if strings.Contains(line, "host network") || !strings.Contains(line, "network: no direct network") {
+		t.Errorf("the spawn log does not say it has its own network: %q", line)
+	}
+
+	// The same plugin with nothing declared and nothing configured: no way
+	// out at all.
+	bare := NewClient(Spec{Name: "bareconn", Kind: KindConnector, Provides: "acme-jailprobe", BinPath: bin, Local: true}, Deps{
+		Log: func(string, ...any) {},
+		Sandbox: SandboxDeps{
+			Self: self, StagingRoot: stage,
+			EgressUnix: pm.UnixEndpoint, EgressAddr: pm.Endpoint,
+			Jail: JailRequired, JailProbe: agentsandbox.Probe,
+		},
+	})
+	defer bare.Close()
+	out, err = bare.Invoke(ctx, InvokeRequest{Instance: "bareconn", Verb: "probe", Options: map[string]any{
+		"dial": strings.Join([]string{configured, c2}, "\n"),
+	}})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	report, _ = out["report"].(map[string]any)
+	for _, a := range []string{configured, c2} {
+		if got, _ := report["dial "+a].(string); strings.HasPrefix(got, "ok") {
+			t.Errorf("a plugin with no egress and no targets reached %s: %s", a, got)
+		}
 	}
 }

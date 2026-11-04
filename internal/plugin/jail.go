@@ -64,7 +64,8 @@ type Confinement struct {
 	// isolation: block), "trusted" (trust: full or isolation mode none),
 	// "off" (sandbox.plugins: off), "unavailable" (sandbox.plugins: on,
 	// and this box cannot build the jail) or, only as a plan, "refused"
-	// (sandbox.plugins: required, and this box cannot build it).
+	// (sandbox.plugins: required and this box cannot build it, or a
+	// declared fs: beyond the cap).
 	Mode string
 	// Network describes the network the process got.
 	Network string
@@ -80,19 +81,31 @@ type Confinement struct {
 func (c Confinement) String() string {
 	switch c.Mode {
 	case "jail":
-		return "OS jail: filesystem limited to its own dirs, declared paths and commands; network: " + c.Network
+		return "OS jail: filesystem limited to its own dirs, declared paths and commands; programs: " + jailExecPolicy() + "; network: " + c.Network
 	case "isolation":
 		return "the isolation: block's sandbox"
 	case "trusted":
-		return "no OS jail (trust: full); its declared manifest applies"
+		return "no OS jail (trust: full): host filesystem and host network; its declared manifest applies"
 	case "off":
 		return "no OS jail (sandbox.plugins: off); its declared manifest applies"
 	case "refused":
-		return "not started — its OS jail cannot be built on this box (" + c.Why + ") and sandbox.plugins is required"
+		return "not started — " + c.Why
 	case "unavailable":
 		return "no OS jail — it cannot be built on this box (" + c.Why + "); its declared manifest applies"
 	}
 	return c.Mode
+}
+
+// jailExecPolicy describes what a jailed plugin can execute on this OS.
+func jailExecPolicy() string {
+	if spawnGOOS == "darwin" {
+		return "only its own binary and its declared commands"
+	}
+	p := "only its own binary, its declared commands and programs in the system library dirs; everything it can write is noexec; no_new_privs"
+	if sandbox.ExecFilterSupported() {
+		p += "; memfd and fd exec refused (seccomp)"
+	}
+	return p
 }
 
 // PlannedConfinement is the confinement s would be launched under with sd,
@@ -108,10 +121,13 @@ func PlannedConfinement(s Spec, sd SandboxDeps) Confinement {
 	case sd.Jail == JailOff && s.Kind != KindStep:
 		return Confinement{Mode: "off"}
 	}
+	if err := CheckDeclaredFS(s.Name, s.EffectiveManifest().FS, s.FS, ProtectedDirs(sd.MaskPaths...)); err != nil {
+		return Confinement{Mode: "refused", Why: err.Error()}
+	}
 	if sd.JailProbe != nil {
 		if why := sd.JailProbe(); why != "" {
 			if sd.Jail == JailRequired {
-				return Confinement{Mode: "refused", Why: why}
+				return Confinement{Mode: "refused", Why: "its OS jail cannot be built on this box (" + why + ") and sandbox.plugins is required"}
 			}
 			return Confinement{Mode: "unavailable", Why: why}
 		}
@@ -122,44 +138,71 @@ func PlannedConfinement(s Spec, sd SandboxDeps) Confinement {
 // jailNet is the network decision for one jailed plugin.
 type jailNet struct {
 	deny  bool     // its own network namespace (Linux) / outbound cut (macOS)
-	allow []string // with deny: the egress proxy's allowlist ("" = no way out)
-	why   string   // without deny: why the host network is left open
+	allow []string // with deny: the egress proxy's allowlist (none = no way out)
+	// loopback are the allowlisted host-loopback targets (a service on the
+	// daemon's own host) with a fixed port: the proxy is not used for
+	// loopback (NO_PROXY), so each is relayed into the jail at the same
+	// address (Linux) or allowed by port (macOS).
+	loopback []string
+	why      string // without deny: why it has the host network
 }
 
-// jailNetwork decides a jailed plugin's network from its effective manifest
-// (declared egress, narrowed — or, when it declares none, set — by the
-// operator's network:).
+// jailNetwork decides a jailed plugin's network. Every jailed plugin gets
+// its own network namespace (Linux) or has its outbound cut (macOS); the
+// only way out is conductor's egress proxy with an allowlist of:
 //
-//   - The describe probe and step engines: their own namespace, with the
-//     manifest's egress (usually none) as the only way out.
-//   - A plugin with egress: its own namespace; the only way out is
-//     conductor's egress proxy with exactly that allowlist.
-//   - A plugin with an `exposes` verb (a tunnel or relay that dials a local
-//     address it is handed per call): the host network.
-//   - A connector or runtime that declares no egress and has no network:
-//     the host network. Such plugins (home-lab services, LAN APIs) dial the
-//     host the operator configures; there is no allowlist to enforce, and
-//     cutting them off would break them. network: confines one.
+//   - the probe and step engines: what the manifest declares (usually
+//     nothing);
+//   - a connector whose entry sets network:: exactly that (a narrowing of
+//     its declared egress);
+//   - otherwise: its declared egress plus the host:port targets its
+//     connection config points it at (a URL under a url-named key, a host
+//     under a host-named key) — a LAN plugin reaches the hosts its config
+//     names and nothing else.
+//
+// The host network is left only when the operator says so: network: [host]
+// on the entry here, or trust: full (no jail at all, decided in
+// buildCommand).
 func jailNetwork(s Spec) jailNet {
 	m := s.EffectiveManifest()
+	var allow []string
 	switch {
 	case s.Probe, s.Kind == KindStep:
-		return jailNet{deny: true, allow: m.Egress}
-	case s.hostNetwork || m.Exposes:
-		return jailNet{why: "it has an exposes verb (it dials local addresses it is handed)"}
-	case len(m.Egress) > 0:
-		return jailNet{deny: true, allow: m.Egress}
+		allow = m.Egress
+	case config.IsHostNetwork(s.Network):
+		return jailNet{why: "its entry sets network: [" + config.HostNetwork + "]"}
+	case len(s.Network) > 0:
+		allow = m.Egress
+	default:
+		allow = config.AppendUnique(append([]string(nil), m.Egress...), s.Targets...)
 	}
-	return jailNet{why: "it declares no egress and its entry sets no network:"}
+	n := jailNet{deny: true, allow: allow}
+	for _, a := range allow {
+		if h, p, err := net.SplitHostPort(a); err == nil && loopbackHost(h) {
+			if port, err := strconv.Atoi(p); err == nil && port > 0 {
+				n.loopback = append(n.loopback, a)
+			}
+		}
+	}
+	return n
+}
+
+// loopbackHost reports whether h names the host's own loopback.
+func loopbackHost(h string) bool {
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 // describe renders n for Confinement.Network.
 func (n jailNet) describe() string {
 	switch {
 	case n.deny && len(n.allow) > 0:
-		return "only through conductor's egress proxy to " + strings.Join(n.allow, ", ")
+		return "no direct network; out only through conductor's egress proxy to " + strings.Join(n.allow, ", ")
 	case n.deny:
-		return "none"
+		return "no network"
 	}
 	return "host network, not confined — " + n.why
 }
@@ -219,6 +262,25 @@ func buildJail(s Spec, sd SandboxDeps, argv, env []string) (wrapped, outEnv []st
 		profile.PublicListenPorts = ports
 	}
 	deps.Agent = profile
+	if nw.deny && len(nw.loopback) > 0 {
+		if spawnGOOS == "darwin" {
+			// No network namespace: the profile allows exactly these
+			// loopback ports.
+			for _, a := range nw.loopback {
+				_, p, _ := net.SplitHostPort(a)
+				n, _ := strconv.Atoi(p)
+				profile.LoopbackPorts = append(profile.LoopbackPorts, n)
+			}
+		} else {
+			relays, rbinds, stop, err := relayLoopback(nw.loopback)
+			if err != nil {
+				return fail(fmt.Errorf("plugin %s: jail: %w", s.Name, err))
+			}
+			cleanups = append(cleanups, stop)
+			deps.Relays = relays
+			deps.ExtraBinds = append(deps.ExtraBinds, rbinds...)
+		}
+	}
 	if nw.deny && spawnGOOS != "darwin" && len(s.Listen) > 0 {
 		// Linux: the plugin listens inside its own namespace. The daemon
 		// binds each configured address on the host and forwards every
@@ -243,7 +305,7 @@ func jailFiles(s Spec, sd SandboxDeps) (binds []sandbox.BindMount, home, tmp str
 	if s.BinPath != "" {
 		// Its own binary's directory, read-only; it also holds the .path
 		// directory of declared-command links.
-		binds = append(binds, sandbox.BindMount{Path: filepath.Dir(s.BinPath), RO: true})
+		binds = append(binds, sandbox.BindMount{Path: filepath.Dir(s.BinPath), RO: true, Exec: true})
 	}
 	tmp = "/tmp" // the Linux jail's private tmpfs
 	if sd.StagingRoot != "" {
@@ -252,6 +314,9 @@ func jailFiles(s Spec, sd SandboxDeps) (binds []sandbox.BindMount, home, tmp str
 		// keeps (a CLI's cache, its config) persists and stays its own.
 		stage := filepath.Join(sd.StagingRoot, s.Name)
 		home = filepath.Join(stage, ".home")
+		if err := resetHome(stage, home); err != nil {
+			return nil, "", "", fmt.Errorf("plugin %s: jail home: %w", s.Name, err)
+		}
 		if err := os.MkdirAll(home, 0o700); err != nil {
 			return nil, "", "", fmt.Errorf("plugin %s: jail home: %w", s.Name, err)
 		}
@@ -290,9 +355,24 @@ func jailFiles(s Spec, sd SandboxDeps) (binds []sandbox.BindMount, home, tmp str
 	// Declared commands, at their resolved paths (read-only; executable,
 	// which the jail's noexec program directories otherwise are not).
 	for _, p := range commandPaths(s) {
-		binds = append(binds, sandbox.BindMount{Path: p, RO: true, Optional: true})
+		binds = append(binds, sandbox.BindMount{Path: p, RO: true, Optional: true, Exec: true})
 	}
 	return dedupeBinds(binds), home, tmp, nil
+}
+
+// resetHome removes what a previous run left at home when it is not a
+// directory (a file, or a symlink — removed, never followed), so the plugin
+// cannot break its next launch's jail by planting one there. The staging
+// dir itself must be a real directory.
+func resetHome(stage, home string) error {
+	if fi, err := os.Lstat(stage); err == nil && !fi.IsDir() {
+		return fmt.Errorf("%s is not a directory", stage)
+	}
+	fi, err := os.Lstat(home)
+	if err != nil || fi.IsDir() {
+		return nil
+	}
+	return os.Remove(home)
 }
 
 // commandPaths are the host paths of the plugin's declared commands: each
@@ -338,7 +418,8 @@ func jailExecs(s Spec) []string {
 }
 
 // dedupeBinds drops repeated paths, keeping the most permissive entry (a
-// read-write bind wins over a read-only one of the same path).
+// read-write bind wins over a read-only one of the same path), except that
+// a path that must be executable stays read-only.
 func dedupeBinds(in []sandbox.BindMount) []sandbox.BindMount {
 	idx := map[string]int{}
 	var out []sandbox.BindMount
@@ -348,6 +429,12 @@ func dedupeBinds(in []sandbox.BindMount) []sandbox.BindMount {
 				out[i].RO = false
 			}
 			out[i].Optional = out[i].Optional && b.Optional
+			out[i].Exec = out[i].Exec || b.Exec
+			if out[i].Exec {
+				// Never writable and executable at once: what it may
+				// execute stays read-only.
+				out[i].RO = true
+			}
 			continue
 		}
 		idx[b.Path] = len(out)
@@ -409,6 +496,83 @@ func forwardListens(name string, addrs []string) (exposes []sandbox.Expose, stop
 		})
 	}
 	return exposes, stop, notes
+}
+
+// relayLoopback serves each host-loopback target on a host-side unix socket
+// that dials it; the in-jail forwarder listens on the same address in the
+// jail's own namespace and pipes to the socket (sandbox.Relay). Each
+// socket is bound into the jail at its own path.
+func relayLoopback(targets []string) (relays []sandbox.Relay, binds []sandbox.BindMount, stop func(), err error) {
+	dir, err := socketDir("cpr-")
+	if err != nil {
+		return nil, nil, func() {}, fmt.Errorf("relay dir: %w", err)
+	}
+	var lns []net.Listener
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			for _, ln := range lns {
+				_ = ln.Close()
+			}
+			_ = os.RemoveAll(dir)
+		})
+	}
+	for i, t := range targets {
+		sock := filepath.Join(dir, fmt.Sprintf("r%d.sock", i))
+		ln, err := net.Listen("unix", sock)
+		if err != nil {
+			stop()
+			return nil, nil, func() {}, fmt.Errorf("relay %s: %w", t, err)
+		}
+		lns = append(lns, ln)
+		if err := os.Chmod(sock, 0o600); err != nil {
+			stop()
+			return nil, nil, func() {}, fmt.Errorf("relay %s: %w", t, err)
+		}
+		h, p, _ := net.SplitHostPort(t)
+		dial := t
+		listen := t
+		if strings.EqualFold(h, "localhost") {
+			// The jail resolves localhost through the host's /etc/hosts; the
+			// relay listens on the IPv4 loopback it resolves to first.
+			dial, listen = net.JoinHostPort("127.0.0.1", p), net.JoinHostPort("127.0.0.1", p)
+		}
+		go relayAccept(ln, dial)
+		relays = append(relays, sandbox.Relay{Listen: listen, Unix: sock})
+		binds = append(binds, sandbox.BindMount{Path: sock})
+	}
+	return relays, binds, stop, nil
+}
+
+// socketDir makes a private directory for unix sockets with a short path
+// (a socket path is capped near 104 bytes).
+func socketDir(prefix string) (string, error) {
+	base := os.TempDir()
+	if len(base) > 32 {
+		base = "/tmp"
+	}
+	return os.MkdirTemp(base, prefix)
+}
+
+func relayAccept(ln net.Listener, target string) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer c.Close()
+			u, err := net.DialTimeout("tcp", target, 10*time.Second)
+			if err != nil {
+				return
+			}
+			defer u.Close()
+			done := make(chan struct{}, 2)
+			go func() { _, _ = io.Copy(u, c); done <- struct{}{} }()
+			go func() { _, _ = io.Copy(c, u); done <- struct{}{} }()
+			<-done
+		}()
+	}
 }
 
 // forwardDialWait bounds how long a forwarded connection waits for the

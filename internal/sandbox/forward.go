@@ -47,6 +47,10 @@ type BindMount struct {
 	// Optional skips an entry whose source does not exist (a tool's state
 	// dir the operator has not created yet) instead of failing the launch.
 	Optional bool `json:"optional,omitempty"`
+	// Exec keeps the bind executable in a NoExecBase jail, where every other
+	// bind and tmpfs is mounted noexec (a plugin's own binary dir, its
+	// declared commands).
+	Exec bool `json:"exec,omitempty"`
 }
 
 // source is the host path a bind mounts.
@@ -59,7 +63,7 @@ func (b BindMount) source() string {
 
 // simple reports an entry the legacy --bind/--bind-ro flags can carry.
 func (b BindMount) simple() bool {
-	return b.Src == "" && !b.Tmpfs && b.Link == "" && !b.Optional
+	return b.Src == "" && !b.Tmpfs && b.Link == "" && !b.Optional && !b.Exec
 }
 
 // NetForward carries the in-sandbox wiring into WrapLocal: the path of this
@@ -84,8 +88,8 @@ type NetForward struct {
 	// loopback egress proxy port its restricted network may reach.
 	Agent     *AgentProfile
 	ProxyPort int
-	// NoExecBase (Linux jail): the base system's program directories are
-	// mounted noexec; see EnterOpts.NoExecBase.
+	// NoExecBase (Linux jail): only Exec binds and the system library
+	// dirs stay executable; see EnterOpts.NoExecBase.
 	NoExecBase bool
 }
 
@@ -117,8 +121,13 @@ type EnterOpts struct {
 	Relays  []Relay     // extra loopback ports to pipe to unix sockets
 	Exposes []Expose    // in-sandbox loopback ports to serve on host unix sockets
 	PassFDs int         // inherited fds 3.. handed on to the payload
-	// NoExecBase makes the jail's base program directories non-executable
-	// (a plugin jail: only its own binary and declared commands run).
+	// NoExecBase is the plugin jail's exec policy: the base program dirs,
+	// the jail's root, /tmp, /dev, /dev/shm and every bind not marked Exec
+	// are mounted noexec (nosuid, nodev); the payload runs with
+	// no_new_privs and, on amd64 and arm64, a seccomp filter that refuses
+	// execveat of an fd (AT_EMPTY_PATH) and memfd_create without
+	// MFD_NOEXEC_SEAL. Only its own binary, its declared commands and the
+	// system library dirs can be executed.
 	NoExecBase bool
 	Argv       []string // the real launch to exec once the plumbing is up
 }
@@ -242,6 +251,12 @@ func RunEnter(opt EnterOpts) int {
 	// Fail closed — if the hop can't be set up the payload does not run
 	// unprotected. (Proven end-to-end: a dropped child can read allow-listed
 	// paths but cannot remount /usr rw or bind / — see the sandbox spikes.)
+	if jailed && opt.NoExecBase {
+		if err := restrictExec(); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-net: exec filter: %v\n", err)
+			return 1
+		}
+	}
 	cmd := execChild(opt.Argv, jailed || len(opt.Masks) > 0)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = os.Environ()

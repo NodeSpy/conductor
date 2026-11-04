@@ -293,8 +293,9 @@ func TestOfficialSlackJailed(t *testing.T) {
 }
 
 // GitHub against the GitHub fake: App auth from a key file the config
-// points at, a dry-run sweep that finds the review, a verb call, and a
-// webhook delivery to its listen address.
+// points at, an API host allowed because its config's api_base names it, a
+// dry-run sweep that finds the review, a verb call, and a webhook delivery
+// to its listen address.
 func TestOfficialGithubJailed(t *testing.T) {
 	r := newOfficialRig(t)
 	p := os.Getenv("CONDUCTOR_GHFAKE")
@@ -316,7 +317,9 @@ func TestOfficialGithubJailed(t *testing.T) {
 	apiHost := strings.TrimPrefix(sc.URL, "http://")
 	addr := r.listenAddr(t)
 	c, logs := r.client(t, "github", func(s *Spec) {
-		s.Network = []string{apiHost}
+		// What config.PluginRefs derives from the connection's api_base: no
+		// network: needed for a GitHub Enterprise-style API host.
+		s.Targets = []string{apiHost}
 		s.Paths = []string{sc.Key}
 		s.Listen = []string{addr}
 	})

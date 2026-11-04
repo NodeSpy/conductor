@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // Permission-manifest confinement (docs/design/use-unification.md §D).
@@ -62,7 +64,7 @@ func (s Spec) EffectiveManifest() Manifest {
 		}
 	}
 	m := s.Manifest
-	if len(s.Network) == 0 {
+	if len(s.Network) == 0 || config.IsHostNetwork(s.Network) {
 		return m
 	}
 	m.Egress = append([]string(nil), s.Network...)
@@ -79,7 +81,7 @@ func (s Spec) EffectiveManifest() Manifest {
 // terse plugin would break working setups to enforce a declaration the plugin
 // never made. The manifest still shows exactly what the config granted.
 func CheckNetworkWithinManifest(name string, declared []string, network []string) error {
-	if len(network) == 0 || len(declared) == 0 {
+	if len(network) == 0 || len(declared) == 0 || config.IsHostNetwork(network) {
 		return nil
 	}
 	for _, want := range network {

@@ -148,9 +148,10 @@ type Spec struct {
 	// Listen are inbound addresses the instances' connection config asks the
 	// plugin to serve; forwarded into a jail's own network namespace.
 	Listen []string
-	// hostNetwork is set by the Client once the plugin's declaration shows
-	// an exposes verb: the jail leaves it the host network (jailNetwork).
-	hostNetwork bool
+	// Targets are the host:port destinations the instances' connection
+	// config points the plugin at: added to a jailed plugin's egress
+	// allowlist when its entry sets no network:.
+	Targets []string
 	// AllowSecrets optionally tightens which secret refs may cross the boundary.
 	AllowSecrets []string
 	// AllowEnv are the daemon environment variables the operator granted

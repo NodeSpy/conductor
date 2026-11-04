@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1932,6 +1933,9 @@ func (c *Config) validateConnectors() error {
 			if strings.ContainsAny(s, "*?") {
 				return fmt.Errorf("config: connector %q: allow_secrets entries are exact names, no globs (%q)", name, s)
 			}
+		}
+		if slices.Contains(ref.Network, HostNetwork) && len(ref.Network) > 1 {
+			return fmt.Errorf("config: connector %q: network: [%s] gives the plugin the host network and must be the only entry", name, HostNetwork)
 		}
 		for _, n := range ref.Network {
 			if err := validateEgressTarget("connector "+name+" network", n); err != nil {

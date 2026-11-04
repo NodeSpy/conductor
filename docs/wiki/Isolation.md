@@ -1178,15 +1178,18 @@ agent sandbox's machinery — Linux user, mount, pid and network namespaces
 with a `pivot_root` allow-list, or a macOS Seatbelt profile — with an
 allow-list built from the plugin's manifest and its config: the base system
 read-only, its own binary and state directories, declared and `fs:` paths,
-files its config points at (read-only), its declared commands, and a
-network namespace whose only way out is the egress proxy when it has an
-egress set. [[Plugins]] § Security has the full table and what it does not
+files its config points at (read-only), its declared commands (everything
+it can write is `noexec`), and a network namespace whose only way out is
+the egress proxy, allowed its declared egress and the hosts its connection
+config names. `network: [host]` on a connector's entry gives it the host
+network. [[Plugins]] § Security has the full table and what it does not
 cover.
 
 Per entry, an `isolation:` block replaces the jail with that sandbox and
 fails closed; `trust: full` (or `isolation: { mode: none }`) runs the
-plugin without one. Where the jail cannot be built, `on` starts the plugin
-confined to its manifest with a warning, and `required` does not start it.
+plugin without one. Where this box cannot build the jail, `on` starts the
+plugin confined to its manifest with a warning, and `required` does not
+start it. A jail that fails to build for one launch is refused under both.
 
 ### Code-step engines
 

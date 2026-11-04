@@ -71,17 +71,11 @@ type Manifest struct {
 	// that first discovers it (which instead disables just the isolated
 	// instance, since the conflict was not knowable any earlier that time).
 	SingleProcess bool `yaml:"single_process,omitempty"`
-	// Exposes records that a verb declares exposes semantics: the plugin
-	// dials local addresses it is handed per call (a tunnel or relay), so
-	// its jail keeps the host network. Recorded at install so the first
-	// launch already gets it; for an older record it is learned at
-	// describe.
-	Exposes bool `yaml:"exposes,omitempty"`
 }
 
 // IsZero reports whether the plugin declared no capabilities at all.
 func (m Manifest) IsZero() bool {
-	return len(m.Egress) == 0 && len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && len(m.Env) == 0 && !m.SingleProcess && !m.Exposes
+	return len(m.Egress) == 0 && len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && len(m.Env) == 0 && !m.SingleProcess
 }
 
 // Summary renders the manifest as one line for logs and install review.
@@ -107,10 +101,38 @@ func (m Manifest) Summary() string {
 	if m.SingleProcess {
 		parts = append(parts, "single_process (every instance shares one process)")
 	}
-	if m.Exposes {
-		parts = append(parts, "exposes (dials local addresses it is handed)")
-	}
 	return strings.Join(parts, "; ")
+}
+
+// AccessLines are the declared files and commands, one line each, for the
+// install prompt and plugin list --caps to show apart from the summary:
+// what a plugin may read or run beyond its own directories is what an
+// operator should read before adding it.
+func (m Manifest) AccessLines() []string {
+	var out []string
+	if len(m.FS) > 0 {
+		var fs []string
+		for _, e := range m.FS {
+			p, rw := config.ParsePluginFS(strings.TrimSpace(e))
+			if rw {
+				fs = append(fs, p+" (read-write)")
+			} else {
+				fs = append(fs, p+" (read-only)")
+			}
+		}
+		out = append(out, "files it can see beyond its own dirs: "+strings.Join(fs, ", "))
+	} else {
+		out = append(out, "files it can see beyond its own dirs: none declared")
+	}
+	switch {
+	case len(m.Commands) > 0:
+		out = append(out, "commands it can run: "+strings.Join(m.Commands, ", "))
+	case m.Spawns:
+		out = append(out, "commands it can run: unnamed (it spawns processes but did not list them; none are available in the jail)")
+	default:
+		out = append(out, "commands it can run: none declared")
+	}
+	return out
 }
 
 // Installed is one installed plugin's local record.

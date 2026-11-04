@@ -134,9 +134,11 @@ type SandboxDeps struct {
 //     commands) applies, as it did before the jail existed.
 //   - an isolation: block: exactly that sandbox, fail-closed.
 //   - sandbox.plugins: off: as trust: full.
-//   - otherwise the default jail (jail.go). Where this box cannot build it,
-//     sandbox.plugins: on runs the plugin as trust: full would, with a
-//     warning, and sandbox.plugins: required refuses to start it.
+//   - otherwise the default jail (jail.go). Where this box cannot build a
+//     jail at all (JailProbe), sandbox.plugins: on runs the plugin as
+//     trust: full would, with a warning, and sandbox.plugins: required
+//     refuses to start it. A jail that fails to build for this one launch
+//     is refused under either.
 //
 // Env scrubbing, per-call credential delivery, verify-before-execute,
 // size-bounded responses and supervision apply in every case.
@@ -167,6 +169,13 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), conf C
 		return manifestOnly(Confinement{Mode: "off"})
 	}
 
+	// A declared fs: beyond the cap is refused at every launch, not only at
+	// install (an install record from before the cap, a local build), and
+	// never falls back to running without the jail.
+	if err := CheckDeclaredFS(s.Name, s.EffectiveManifest().FS, s.FS, ProtectedDirs(sd.MaskPaths...)); err != nil {
+		return nil, nil, Confinement{}, err
+	}
+
 	why := ""
 	if sd.JailProbe != nil {
 		why = sd.JailProbe()
@@ -188,7 +197,12 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), conf C
 			cmd.Env = jenv
 			return cmd, cleanup, c, nil
 		}
-		why = err.Error()
+		// This box can build a jail; this launch's could not be built (its
+		// staging dir is not usable, a proxy endpoint failed). That is
+		// refused under on as well: the fallback is for a box without the
+		// mechanism, not for a launch a plugin may have broken itself (a
+		// file planted where its HOME dir goes).
+		return nil, nil, Confinement{}, fmt.Errorf("plugin %s: building its OS jail failed, not starting it: %w", s.Name, err)
 	}
 	if sd.Jail == JailRequired {
 		return nil, nil, Confinement{}, fmt.Errorf("plugin %s: its OS jail cannot be built on this box (%s), and sandbox.plugins is required — not starting it", s.Name, why)

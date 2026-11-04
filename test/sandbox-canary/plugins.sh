@@ -33,4 +33,4 @@ for _ in $(seq 100); do [ -s "$W/run/sc.json" ] && break; sleep 0.1; done
 
 cd "$ROOT"
 CONDUCTOR_REQUIRE_SANDBOX=1 CONDUCTOR_OFFICIAL_PLUGINS="$W/bin" CONDUCTOR_OFFICIAL_HOST_IP="$IP" CONDUCTOR_GHFAKE="$W/run/sc.json" \
-  go test -count=1 -v -run 'TestOfficial|TestPluginJailHolds' ./internal/plugin/
+  go test -count=1 -v -run 'TestOfficial|TestPluginJail' ./internal/plugin/

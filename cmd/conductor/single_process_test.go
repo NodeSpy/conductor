@@ -473,7 +473,10 @@ func TestPermissionLinesShowConfinement(t *testing.T) {
 	jd := plugin.SandboxDeps{Jail: plugin.JailOn, JailProbe: func() string { return "" }}
 	joined := strings.Join(permissionLines(ref, spec, jd), "\n")
 	for _, want := range []string{
-		"confinement: OS jail: filesystem limited to its own dirs, declared paths and commands; network: only through conductor's egress proxy to your-org.atlassian.net:443",
+		"confinement: OS jail: filesystem limited to its own dirs, declared paths and commands; programs: only its own binary",
+		"network: no direct network; out only through conductor's egress proxy to your-org.atlassian.net:443",
+		"files it can see beyond its own dirs: none declared",
+		"commands it can run: none declared",
 		"instance b (isolate: true, own process)",
 		"confinement: no OS jail (trust: full)",
 	} {

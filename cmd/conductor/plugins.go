@@ -894,6 +894,9 @@ func cmdPluginList(args []string) error {
 // into the shared line.
 func permissionLines(ref config.PluginRef, spec plugin.Spec, jd plugin.SandboxDeps) []string {
 	lines := []string{"declared capabilities: " + spec.Manifest.Summary()}
+	for _, l := range spec.Manifest.AccessLines() {
+		lines = append(lines, "  "+l)
+	}
 	if ref.Kind() == config.PluginKindConnector && spec.Manifest.SingleProcess {
 		lines = append(lines, "single_process: the plugin declares every instance must share one process — isolate: true is refused for it")
 	}
@@ -903,12 +906,12 @@ func permissionLines(ref config.PluginRef, spec plugin.Spec, jd plugin.SandboxDe
 		if ref.Kind() == config.PluginKindConnector {
 			label = fmt.Sprintf("shared process (instances: %s)", strings.Join(shared, ", "))
 		}
-		lines = append(lines, label+": "+grantSummary(ref.Network, ref.AllowSecrets, ref.AllowEnv))
+		lines = append(lines, label+": "+grantSummary(ref.Network, ref.Targets, ref.AllowSecrets, ref.AllowEnv))
 		lines = append(lines, "  confinement: "+plugin.PlannedConfinement(spec, jd).String())
 	}
 	for _, n := range ref.IsolatedInstanceNames() {
 		g := ref.Instances[n]
-		lines = append(lines, fmt.Sprintf("instance %s (isolate: true, own process): %s", n, grantSummary(g.Network, g.AllowSecrets, g.AllowEnv)))
+		lines = append(lines, fmt.Sprintf("instance %s (isolate: true, own process): %s", n, grantSummary(g.Network, g.Targets, g.AllowSecrets, g.AllowEnv)))
 		lines = append(lines, "  confinement: "+plugin.PlannedConfinement(plugin.InstanceSpec(spec, n), jd).String())
 	}
 	return lines
@@ -921,12 +924,19 @@ func pluginJailDeps(cfg *config.Config) plugin.SandboxDeps {
 }
 
 // grantSummary renders one process's actual confinement grant: the egress
-// it's narrowed to (or, with no `network:` set, the full declared egress —
-// spelled out explicitly rather than left looking like "no network at all"),
-// plus any allow_secrets/allow_env tightening.
-func grantSummary(network, allowSecrets, allowEnv []string) string {
+// it's narrowed to (or, with no `network:` set, the full declared egress plus
+// the hosts its connection config names — spelled out explicitly rather than
+// left looking like "no network at all"), plus any allow_secrets/allow_env
+// tightening.
+func grantSummary(network, targets, allowSecrets, allowEnv []string) string {
 	net := "network: full declared egress (no network: narrowing set)"
-	if len(network) > 0 {
+	if len(targets) > 0 {
+		net += " plus the hosts its config names: " + strings.Join(targets, ", ")
+	}
+	switch {
+	case config.IsHostNetwork(network):
+		net = "network: host (network: [host])"
+	case len(network) > 0:
 		net = "network: " + strings.Join(network, ", ")
 	}
 	parts := []string{net}
@@ -1070,7 +1080,7 @@ func cmdPluginAdd(args []string) error {
 	results, err := plugin.Reconcile(
 		map[string]config.PluginRef{u.InstallKey(): pr}, state, cfg.PluginTrust,
 		plugin.GitDist{},
-		plugin.Options{AllowUnlisted: allowUnlisted, Describe: describeForInstall(cfg), Log: logf},
+		plugin.Options{AllowUnlisted: allowUnlisted, Describe: describeForInstall(cfg), ProtectedDirs: controller.DaemonMaskPaths, Log: logf},
 	)
 	if err != nil {
 		return err
@@ -1088,6 +1098,9 @@ func cmdPluginAdd(args []string) error {
 	}
 	manifest := results[0].Manifest
 	fmt.Printf("\n%s declares these permissions:\n  %s\n", u.Name, manifest.Summary())
+	for _, l := range manifest.AccessLines() {
+		fmt.Printf("  %s\n", l)
+	}
 	fmt.Println("\nAdd it to your config:")
 	fmt.Print("\n" + useSnippet(kind, instance, ref))
 	if kind == config.UseKindConnector && len(manifest.Egress) > 0 {

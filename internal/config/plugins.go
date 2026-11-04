@@ -2,9 +2,12 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -50,6 +53,11 @@ type PluginRef struct {
 	// the plugin to serve (values under listen|*_listen keys), unioned. A
 	// jail with its own network namespace forwards them in from the host.
 	Listen []string
+	// Targets are the host:port destinations the instances' connection
+	// config points the plugin at (a URL under url|endpoint|api_base|*_url
+	// keys, a host under host|server|broker|*_host keys), unioned. A jailed
+	// plugin's egress allowlist includes them.
+	Targets []string
 	// Network is the referencing connector's declared egress. Empty for a
 	// runtime (a runtime executes your agents; its egress is not narrowed).
 	Network []string
@@ -98,11 +106,12 @@ type ConnectorGrant struct {
 	Isolation *IsolationConfig
 	// TrustFull mirrors ConnectorRef.Trust (for display).
 	TrustFull bool
-	// FS, Paths and Listen are this instance's own jail inputs (see
-	// PluginRef).
-	FS     []string
-	Paths  []string
-	Listen []string
+	// FS, Paths, Listen and Targets are this instance's own jail inputs
+	// (see PluginRef).
+	FS      []string
+	Paths   []string
+	Listen  []string
+	Targets []string
 	// Isolate mirrors ConnectorRef.Isolate: true means this one configured
 	// instance gets its own dedicated process instead of sharing the
 	// plugin's one default process.
@@ -359,7 +368,7 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		if ref.TrustFull() && iso == nil {
 			iso = trustFullIsolation()
 		}
-		paths, listen := connectionJailFacts(&ref.raw, connectorHeaderKeys)
+		facts := connectionJailFacts(&ref.raw, connectorHeaderKeys)
 		if !ref.Isolate {
 			p.Isolation = mergeIsolationBestEffort(p.Isolation, iso)
 			p.TrustFull = p.TrustFull || ref.TrustFull()
@@ -367,8 +376,9 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 			p.AllowSecrets = appendUnique(p.AllowSecrets, ref.AllowSecrets...)
 			p.AllowEnv = appendUnique(p.AllowEnv, ref.AllowEnv...)
 			p.FS = appendUnique(p.FS, ref.FS...)
-			p.Paths = appendUnique(p.Paths, paths...)
-			p.Listen = appendUnique(p.Listen, listen...)
+			p.Paths = appendUnique(p.Paths, facts.Paths...)
+			p.Listen = appendUnique(p.Listen, facts.Listen...)
+			p.Targets = appendUnique(p.Targets, facts.Targets...)
 		}
 		p.Instances[name] = ConnectorGrant{
 			Network:      append([]string(nil), ref.Network...),
@@ -377,8 +387,9 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 			Isolation:    iso,
 			TrustFull:    ref.TrustFull(),
 			FS:           append([]string(nil), ref.FS...),
-			Paths:        paths,
-			Listen:       listen,
+			Paths:        facts.Paths,
+			Listen:       facts.Listen,
+			Targets:      facts.Targets,
 			Isolate:      ref.Isolate,
 			Use:          u,
 		}
@@ -401,7 +412,8 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		// is selected as `runtime: modal`).
 		u.Name = name
 		p := PluginRef{Name: name, Instance: name, Use: u, Isolation: rt.Isolation, TrustFull: trustFull(rt.Trust), FS: rt.FS}
-		p.Paths, p.Listen = mapJailFacts(rt.Connection)
+		f := mapJailFacts(rt.Connection)
+		p.Paths, p.Listen, p.Targets = f.Paths, f.Listen, f.Targets
 		out[u.InstallKey()] = p
 	}
 
@@ -445,43 +457,48 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 // out the same way (combineIsolation).
 func trustFullIsolation() *IsolationConfig { return &IsolationConfig{Mode: "none"} }
 
-// connectionJailFacts walks a connector's raw connection node for the two
-// things a plugin's jail must know: host paths it is pointed at (a value
-// under a path-named key, pathKey — the same keys Load expands ~ in) and
-// inbound addresses it is asked to serve (a value under listen or *_listen).
-// Header keys are skipped. Relative paths and non-scalars are ignored.
-func connectionJailFacts(n *yaml.Node, skip map[string]bool) (paths, listen []string) {
-	var walk func(n *yaml.Node, top bool)
-	walk = func(n *yaml.Node, top bool) {
-		if n == nil {
-			return
-		}
-		switch n.Kind {
-		case yaml.DocumentNode, yaml.SequenceNode:
-			for _, c := range n.Content {
-				walk(c, top && n.Kind == yaml.DocumentNode)
-			}
-		case yaml.MappingNode:
-			for i := 0; i+1 < len(n.Content); i += 2 {
-				k, v := n.Content[i].Value, n.Content[i+1]
-				if top && skip[k] {
-					continue
-				}
-				if v.Kind == yaml.ScalarNode {
-					paths, listen = jailFact(k, v.Value, paths, listen)
-					continue
-				}
-				walk(v, false)
-			}
-		}
+// HostNetwork, as a connector's only network: entry, leaves its jailed
+// plugin on the host network instead of its own namespace behind the egress
+// proxy.
+const HostNetwork = "host"
+
+// IsHostNetwork reports whether network is the host-network opt-out.
+func IsHostNetwork(network []string) bool {
+	return len(network) == 1 && strings.TrimSpace(network[0]) == HostNetwork
+}
+
+// JailFacts is what a plugin's jail learns from its connection config.
+type JailFacts struct {
+	// Paths are host paths it is pointed at: a value under a path-named key
+	// (pathKey — the same keys Load expands ~ in), absolute after ~.
+	Paths []string
+	// Listen are inbound addresses it is asked to serve: a value under
+	// listen or *_listen.
+	Listen []string
+	// Targets are the host:port destinations it is pointed at: a URL under a
+	// url-named key or with a known scheme (http, https, ws, mqtt, …) under
+	// any key, or a host under a host-named key (with a sibling port key when
+	// there is one; "host:*" — any port of that host — when not).
+	Targets []string
+}
+
+// connectionJailFacts walks a connector's raw connection node for its jail
+// facts. Header keys are skipped.
+func connectionJailFacts(n *yaml.Node, skip map[string]bool) JailFacts {
+	var m map[string]any
+	if n == nil || n.Decode(&m) != nil {
+		return JailFacts{}
 	}
-	walk(n, true)
-	return paths, listen
+	for k := range skip {
+		delete(m, k)
+	}
+	return mapJailFacts(m)
 }
 
 // mapJailFacts is connectionJailFacts over an already-decoded map (a runtime
 // plugin's connection:).
-func mapJailFacts(m map[string]any) (paths, listen []string) {
+func mapJailFacts(m map[string]any) JailFacts {
+	var f JailFacts
 	var walk func(v any)
 	walk = func(v any) {
 		switch t := v.(type) {
@@ -493,7 +510,7 @@ func mapJailFacts(m map[string]any) (paths, listen []string) {
 			sort.Strings(keys)
 			for _, k := range keys {
 				if s, ok := t[k].(string); ok {
-					paths, listen = jailFact(k, s, paths, listen)
+					f.add(k, s, t)
 					continue
 				}
 				walk(t[k])
@@ -505,23 +522,121 @@ func mapJailFacts(m map[string]any) (paths, listen []string) {
 		}
 	}
 	walk(m)
-	return paths, listen
+	return f
 }
 
-func jailFact(k, v string, paths, listen []string) ([]string, []string) {
+func (f *JailFacts) add(k, v string, siblings map[string]any) {
 	v = strings.TrimSpace(v)
 	if v == "" {
-		return paths, listen
+		return
 	}
+	k = strings.ToLower(k)
 	switch {
+	case k == "listen" || strings.HasSuffix(k, "_listen"):
+		f.Listen = appendUnique(f.Listen, v)
 	case pathKey(k):
 		if p := expandHome(v); filepath.IsAbs(p) {
-			paths = appendUnique(paths, filepath.Clean(p))
+			f.Paths = appendUnique(f.Paths, filepath.Clean(p))
 		}
-	case k == "listen" || strings.HasSuffix(k, "_listen"):
-		listen = appendUnique(listen, v)
+	case urlKey(k):
+		if t, ok := urlTarget(v); ok {
+			f.Targets = appendUnique(f.Targets, t)
+		}
+	case hostKey(k):
+		if t, ok := hostTarget(k, v, siblings); ok {
+			f.Targets = appendUnique(f.Targets, t)
+		}
+	default:
+		// A URL with a known scheme under any other key (a relay channel
+		// under webhook.smee, a Matrix homeserver) is a destination too.
+		if scheme, _, ok := strings.Cut(v, "://"); ok && schemePorts[strings.ToLower(scheme)] != "" {
+			if t, ok := urlTarget(v); ok {
+				f.Targets = appendUnique(f.Targets, t)
+			}
+		}
 	}
-	return paths, listen
+}
+
+// urlKey: url, endpoint, api_base, and *_url, *_endpoint, *_base.
+func urlKey(k string) bool {
+	switch k {
+	case "url", "endpoint", "api_base", "base":
+		return true
+	}
+	return strings.HasSuffix(k, "_url") || strings.HasSuffix(k, "_endpoint") || strings.HasSuffix(k, "_base")
+}
+
+// hostKey: host, hostname, server, broker, address, and *_host, *_server.
+func hostKey(k string) bool {
+	switch k {
+	case "host", "hostname", "server", "broker", "address", "addr":
+		return true
+	}
+	return strings.HasSuffix(k, "_host") || strings.HasSuffix(k, "_server")
+}
+
+// schemePorts are the default ports of the schemes a connection URL commonly
+// names; a URL with another scheme and no port allows any port of its host.
+var schemePorts = map[string]string{
+	"http": "80", "ws": "80", "https": "443", "wss": "443",
+	"mqtt": "1883", "tcp": "1883", "mqtts": "8883", "ssl": "8883",
+	"redis": "6379", "rediss": "6379", "postgres": "5432", "postgresql": "5432",
+	"mysql": "3306", "amqp": "5672", "amqps": "5671", "nats": "4222",
+	"ldap": "389", "ldaps": "636", "imap": "143", "imaps": "993", "smtp": "25", "smtps": "465",
+}
+
+func urlTarget(v string) (string, bool) {
+	if !strings.Contains(v, "://") || notLiteral(v) {
+		return "", false
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.Hostname() == "" || strings.Contains(u.Hostname(), "*") {
+		return "", false
+	}
+	port := u.Port()
+	if port == "" {
+		port = schemePorts[strings.ToLower(u.Scheme)]
+	}
+	if port == "" {
+		port = "*"
+	}
+	return net.JoinHostPort(u.Hostname(), port), true
+}
+
+func hostTarget(k, v string, siblings map[string]any) (string, bool) {
+	if strings.Contains(v, "://") {
+		return urlTarget(v)
+	}
+	if notLiteral(v) || strings.ContainsAny(v, "/ *") {
+		return "", false
+	}
+	if h, p, err := net.SplitHostPort(v); err == nil && h != "" {
+		if _, perr := strconv.Atoi(p); perr == nil {
+			return net.JoinHostPort(h, p), true
+		}
+		return "", false
+	}
+	port := "*"
+	prefix := strings.TrimSuffix(strings.TrimSuffix(k, "host"), "server")
+	for _, pk := range []string{prefix + "port", "port"} {
+		switch p := siblings[pk].(type) {
+		case int:
+			port = strconv.Itoa(p)
+		case string:
+			if _, err := strconv.Atoi(p); err == nil {
+				port = p
+			}
+		}
+		if port != "*" {
+			break
+		}
+	}
+	return net.JoinHostPort(strings.Trim(v, "[]"), port), true
+}
+
+// notLiteral: a secret reference or an unexpanded variable, not an address.
+func notLiteral(v string) bool {
+	return strings.HasPrefix(v, "env:") || strings.HasPrefix(v, "secret:") || strings.HasPrefix(v, "vault:") || strings.Contains(v, "${")
 }
 
 // ParsePluginFS splits one fs: entry ("/path" or "/path:rw", "/path:ro") into

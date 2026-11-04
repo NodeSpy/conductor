@@ -72,6 +72,55 @@ func TestPluginRefConnectionJailFacts(t *testing.T) {
 	}
 }
 
+// The jail learns the host:port destinations the connection config points
+// the plugin at: URLs under url-named keys (port from the scheme when it has
+// none) and hosts under host-named keys (port from a sibling port key, else
+// any port). Secret refs, variables and wildcards are not destinations.
+func TestPluginRefConnectionTargets(t *testing.T) {
+	c, err := loadYAML(t, `
+  lan:
+    use: homey
+    url: http://ha.lan:8123/api
+    api_base: https://ghe.example.com/api/v3
+    mqtt:
+      broker_url: mqtts://broker.lan
+      host: 10.0.0.9
+      port: 1884
+    db_host: db.lan
+    db_port: "5433"
+    smtp_server: mail.lan
+    webhook_url: env:HOOK_URL
+    any_url: https://*.example.com
+    ws_endpoint: wss://stream.example.com
+    custom_url: gopher://g.lan
+    address: 192.168.1.5:9000
+    listen: ":8088"
+    homeserver: https://matrix.lan:8448
+    webhook: { smee: "https://smee.io/abc", secret: "s" }
+    note: "see http in the docs"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := c.PluginRefs()["connectors/homey"]
+	want := []string{
+		"ha.lan:8123", "ghe.example.com:443", "broker.lan:8883", "10.0.0.9:1884",
+		"db.lan:5433", "mail.lan:*", "stream.example.com:443", "g.lan:*", "192.168.1.5:9000",
+		"matrix.lan:8448", "smee.io:443",
+	}
+	for _, w := range want {
+		if !contains(ref.Targets, w) {
+			t.Errorf("targets %v lack %s", ref.Targets, w)
+		}
+	}
+	if len(ref.Targets) != len(want) {
+		t.Errorf("targets = %v, want exactly %v", ref.Targets, want)
+	}
+	if g := ref.Instances["lan"]; !reflect.DeepEqual(g.Targets, ref.Targets) {
+		t.Errorf("instance targets = %v, want %v", g.Targets, ref.Targets)
+	}
+}
+
 // A shared process gets the union of its instances' fs:, paths and listen
 // addresses; an isolated instance's own are not folded in.
 func TestPluginRefJailFactsUnion(t *testing.T) {
@@ -157,5 +206,23 @@ func TestParsePluginFS(t *testing.T) {
 		if p != want.p || rw != want.rw {
 			t.Errorf("%s: got %s %v", in, p, rw)
 		}
+	}
+}
+
+// network: [host] is the explicit host-network opt-out and must stand
+// alone; it is not an egress host.
+func TestNetworkHostSentinel(t *testing.T) {
+	c, err := loadYAML(t, "  mq: { use: mqtt, broker: mqtt.lan, network: [host] }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsHostNetwork(c.PluginRefs()["connectors/mqtt"].Network) {
+		t.Fatalf("network: [host] is not the host network: %v", c.PluginRefs()["connectors/mqtt"].Network)
+	}
+	if _, err := loadYAML(t, "  mq: { use: mqtt, network: [host, mqtt.lan] }\n"); err == nil || !strings.Contains(err.Error(), "only entry") {
+		t.Fatalf("network: [host, …] must be refused, got %v", err)
+	}
+	if IsHostNetwork([]string{"host.lan"}) || IsHostNetwork(nil) {
+		t.Fatal("only [host] is the host network")
 	}
 }
