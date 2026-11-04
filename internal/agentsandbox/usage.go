@@ -28,8 +28,9 @@ import (
 // usageWarnFrac is the share of a cap from which a launch is flagged.
 const usageWarnFrac = 0.8
 
-// usageSampleInterval is how often a scope's cgroup is read.
-const usageSampleInterval = time.Second
+// usageSampleInterval is how often a scope's cgroup is read: often enough
+// to see a launch that the memory cap kills within a second of its start.
+const usageSampleInterval = 250 * time.Millisecond
 
 // cgroupRoot is where the unified cgroup hierarchy is mounted (a var for
 // tests).
@@ -46,8 +47,11 @@ func scopeUnitName() string {
 type launchUsage struct {
 	mu sync.Mutex
 	// unit is the launch's scope unit ("": none); cgroup its directory,
-	// once found.
+	// once found. capMemory / capPids are the caps the scope was given, for
+	// a launch whose cgroup was never read.
 	unit, cgroup string
+	capMemory    string
+	capPids      int
 	// source: "cgroup" once the scope's files were read, else "processes"
 	// once a scan summed the launch's processes ("": nothing seen).
 	source                             string
@@ -131,10 +135,15 @@ func (u *launchUsage) sampleProcs(procs []procInfo) {
 func (u *launchUsage) report(run, identity string) (fields map[string]any, warning string, limits []map[string]any) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if u.source == "" {
+	if u.source == "" && u.result != "oom-kill" {
 		return nil, "", nil
 	}
-	f := map[string]any{"run": run, "memory_peak": u.memPeak, "pids_peak": u.pidsPeak, "source": u.source}
+	src := u.source
+	if src == "" {
+		// Killed before its cgroup was first read: what systemd says.
+		src = "systemd"
+	}
+	f := map[string]any{"run": run, "memory_peak": u.memPeak, "pids_peak": u.pidsPeak, "source": src}
 	if identity != "" {
 		f["agent"] = identity
 	}
@@ -158,8 +167,16 @@ func (u *launchUsage) report(run, identity string) (fields map[string]any, warni
 	}
 	if u.oomKills > 0 || u.result == "oom-kill" {
 		f["killed_by"] = "memory"
+		limit := u.capMemory
+		if u.memMax > 0 {
+			limit = humanBytes(u.memMax)
+		}
+		why := fmt.Sprintf("the memory cap (%s) killed the launch", limit)
+		if u.memPeak > 0 {
+			why += ": peak " + humanBytes(u.memPeak)
+		}
 		limits = append(limits, map[string]any{"run": run, "kind": "memory_cap", "action": "killed",
-			"reason": fmt.Sprintf("the memory cap (%s) killed the launch: peak %s (sandbox.limits.memory)", humanBytes(u.memMax), humanBytes(u.memPeak))})
+			"reason": why + " (sandbox.limits.memory, or the scope's isolation.limits)"})
 	}
 	if u.pidsRefused > 0 {
 		f["pids_refused"] = u.pidsRefused

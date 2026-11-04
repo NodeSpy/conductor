@@ -502,7 +502,7 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	closers = append([]func(){wclean}, closers...)
 	// Detection last: its closer runs first at cleanup — a final git check
 	// and the launch's leftover processes killed — before egress is cut.
-	marker, stopDetect, err := startDetection(p, self, spec.Unit, d.Event)
+	marker, stopDetect, err := startDetection(p, self, spec, d.Event)
 	if err != nil {
 		cleanupAll()
 		return nil, err

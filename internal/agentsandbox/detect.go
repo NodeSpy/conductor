@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // Detection. Containment decides what an agent can reach; detection notices
@@ -556,9 +558,13 @@ func (d *detector) killAll() int {
 
 // startDetection arms p's detection around a launch and returns the
 // marker its root process must carry and the closer (nil, nil: off). unit
-// is the launch's scope unit ("" when it has no caps): its usage is
-// measured.
-func startDetection(p Policy, self, unit string, event func(string, map[string]any)) (string, func(), error) {
+// is the launch's scope unit ("" when it has no caps), capped at memory
+// and pids: its usage is measured.
+func startDetection(p Policy, self string, caps *sandbox.Spec, event func(string, map[string]any)) (string, func(), error) {
+	unit, capMem, capPids := "", "", 0
+	if caps != nil {
+		unit, capMem, capPids = caps.Unit, caps.Memory, caps.Pids
+	}
 	off := p.Detect.action() == DetectOff
 	diskOn := !p.Limits.Off && !p.Limits.DiskOff
 	if off {
@@ -570,7 +576,7 @@ func startDetection(p Policy, self, unit string, event func(string, map[string]a
 	d := &detector{
 		spec: p.Detect, run: p.EgressSession().Run, marker: newMarker(), self: self,
 		allow: map[string]bool{}, event: event, signal: signalProc, off: off,
-		usage: &launchUsage{unit: unit}, identity: p.Identity,
+		usage: &launchUsage{unit: unit, capMemory: capMem, capPids: capPids}, identity: p.Identity,
 	}
 	if !off {
 		d.git = newGitGuard(p.Workspace)

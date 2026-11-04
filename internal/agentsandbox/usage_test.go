@@ -118,4 +118,11 @@ func TestUsageReadsPeaksAgainstCaps(t *testing.T) {
 	if f, _, _ := (&launchUsage{}).report("r4", ""); f != nil {
 		t.Fatalf("unseen launch: %v", f)
 	}
+	// Killed by the memory cap before its cgroup was first read: systemd's
+	// result says so, with the cap the scope was given.
+	u = &launchUsage{unit: "u.scope", capMemory: "300M", result: "oom-kill"}
+	f, _, limits = u.report("r5", "")
+	if f == nil || f["source"] != "systemd" || f["killed_by"] != "memory" || len(limits) != 1 || !strings.Contains(limits[0]["reason"].(string), "the memory cap (300M) killed the launch") {
+		t.Fatalf("an early kill: %v %v", f, limits)
+	}
 }

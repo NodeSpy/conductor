@@ -145,7 +145,7 @@ func waitOnce(c *exec.Cmd) {
 func TestDetectorFollowsTheRootItsLauncherNames(t *testing.T) {
 	fakeSSH := fakeTool(t, "ssh")
 	marker, closer, err := startDetection(Policy{Workspace: t.TempDir(), Home: t.TempDir(),
-		Detect: DetectSpec{Interval: 50 * time.Millisecond, NoTripwires: true}, Limits: LimitSpec{Off: true}}, "", "", nil)
+		Detect: DetectSpec{Interval: 50 * time.Millisecond, NoTripwires: true}, Limits: LimitSpec{Off: true}}, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func fakeTool(t *testing.T, name string) string {
 // reader of one (a recursive grep over the state dir) would block forever.
 func TestTripwiresLeaveWithTheirLaunch(t *testing.T) {
 	home := t.TempDir()
-	_, closer, err := startDetection(Policy{Workspace: t.TempDir(), Home: home, Limits: LimitSpec{Off: true}}, "", "", nil)
+	_, closer, err := startDetection(Policy{Workspace: t.TempDir(), Home: home, Limits: LimitSpec{Off: true}}, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -623,7 +623,7 @@ func TestUsageMeasuresARealLaunch(t *testing.T) {
 	var mu sync.Mutex
 	var usage []map[string]any
 	marker, closer, err := startDetection(Policy{Identity: "wf/step", Run: "run-1", Workspace: t.TempDir(), Home: t.TempDir(),
-		Detect: DetectSpec{Interval: 50 * time.Millisecond, NoTripwires: true}, Limits: LimitSpec{Off: true}}, "", "",
+		Detect: DetectSpec{Interval: 50 * time.Millisecond, NoTripwires: true}, Limits: LimitSpec{Off: true}}, "", nil,
 		func(k string, f map[string]any) {
 			if k == "usage" {
 				mu.Lock()
