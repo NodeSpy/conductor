@@ -119,3 +119,28 @@ func TestSandboxPrefetchRemoved(t *testing.T) {
 		t.Fatalf("warnings without prefetch: %q", w)
 	}
 }
+
+// Agents reach any public host by default; egress_open: false leaves only
+// the listed patterns.
+func TestSandboxAgentEgress(t *testing.T) {
+	const base = "connectors:\n  gh: { use: github, token: x, repos: [\"acme/*\"] }\n"
+	for body, want := range map[string]string{
+		base: "*",
+		base + "sandbox:\n  egress: [registry.npmjs.org]\n":                       "registry.npmjs.org,*",
+		base + "sandbox:\n  egress_open: false\n":                                 "",
+		base + "sandbox:\n  egress_open: false\n  egress: [registry.npmjs.org]\n": "registry.npmjs.org",
+		base + "sandbox:\n  egress_open: true\n":                                  "*",
+	} {
+		cfg, err := loadCfg(t, body)
+		if err != nil {
+			t.Fatalf("Load %q: %v", body, err)
+		}
+		if got := strings.Join(cfg.Sandbox.AgentEgress(), ","); got != want {
+			t.Fatalf("%q: AgentEgress() = %q, want %q", body, got, want)
+		}
+	}
+	var none *SandboxConfig
+	if got := strings.Join(none.AgentEgress(), ","); got != "*" {
+		t.Fatalf("no sandbox block: %q", got)
+	}
+}

@@ -29,6 +29,11 @@ type SandboxConfig struct {
 	// its model endpoints ("registry.npmjs.org", "*.golang.org",
 	// "host:port"). A bare host means :443.
 	Egress []string `yaml:"egress,omitempty"`
+	// EgressOpen (default true) adds "*" to every agent launch's allowlist:
+	// any public host on :443 (a wildcard never reaches private, loopback or
+	// metadata addresses). false: only the model endpoints and the listed
+	// patterns.
+	EgressOpen *bool `yaml:"egress_open,omitempty"`
 	// Prefetch was removed (removed.go): accepted, ignored, warned about.
 	Prefetch RemovedField `yaml:"prefetch,omitempty"`
 	// StateDir holds the per-identity tool state (each identity's HOME).
@@ -232,6 +237,19 @@ func (s *SandboxConfig) ModelCredentialMode() string {
 		return "gateway"
 	}
 	return s.ModelCredential
+}
+
+// AgentEgress is the allowlist every agent launch starts from: Egress, plus
+// "*" unless egress_open is false.
+func (s *SandboxConfig) AgentEgress() []string {
+	if s == nil {
+		return []string{"*"}
+	}
+	out := append([]string(nil), s.Egress...)
+	if s.EgressOpen == nil || *s.EgressOpen {
+		out = append(out, "*")
+	}
+	return out
 }
 
 // EgressTLSRequired reports sandbox.egress_protocol_check (or its earlier

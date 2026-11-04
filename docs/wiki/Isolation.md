@@ -33,7 +33,7 @@ What the agent sees:
 | `HOME` | its **identity's** tool state, read-write: `<state>/agent-state/<identity>/` — `~/.claude`, `~/.codex`, … — created before the launch and seeded once from your settings for the tool (never your history: `~/.claude.json`'s per-project history is dropped; nor your claude-code plugins: `settings.json`'s `enabledPlugins`, `extraKnownMarketplaces`, `pluginConfigs`, `appendPlugins` and `prependPlugins` are dropped, since the identity home has no marketplace checkout and a launch would try to clone one through the egress proxy). Your model key never enters it (the model gateway, below); a subscription login is a copy without its refresh token. By default the home is fresh for each dispatch (`sandbox.persist`). |
 | the conductor socket | the socket file only (never the state dir it lives in), with a token minted for this launch — so `conductor call step.done` / `git.push` work |
 | the base system | `/usr`, `/etc`, `/opt` (Linux) / the system paths (macOS), read-only; the agent CLI's own install, wherever it is |
-| the network | **none of its own.** Its model is conductor's model gateway, relayed in on loopback; everything else goes through conductor's allowlist proxy: `sandbox.egress` (and the provider hosts of a model the gateway does not carry), TLS only, per-launch caps. A model endpoint on your host's loopback (a local router, a local Ollama) is reached through the gateway, or relayed in at the same address when the gateway does not carry it. |
+| the network | **none of its own.** Its model is conductor's model gateway, relayed in on loopback; everything else goes through conductor's allowlist proxy: any public host on :443 by default (`sandbox.egress_open`), `sandbox.egress` (and the provider hosts of a model the gateway does not carry), TLS only, per-launch caps. A model endpoint on your host's loopback (a local router, a local Ollama) is reached through the gateway, or relayed in at the same address when the gateway does not carry it. |
 | the environment | a minimal one: `PATH`, locale, terminal, the gateway's URL and a per-launch token in place of the model key, your git name/email. No `GH_TOKEN`, `SSH_AUTH_SOCK`, cloud keys, or a launcher's own tokens. |
 | everything else | **absent** — your `~/.ssh`, `~/.aws`, `~/.config/gh`, other projects, conductor's state and config. Nothing is denied by a list: what is not shown is not there. |
 
@@ -178,7 +178,8 @@ emails. conductor does not touch your account settings.
 ```yaml
 sandbox:
   agents: on                       # default; `off` is the explicit opt-out (logged at boot)
-  egress: [registry.npmjs.org, proxy.golang.org]   # beyond the model endpoints
+  # egress_open: true              # default: any public host on :443; false = model endpoints + egress only
+  egress: ["git.corp.lan:8443"]   # added to that (private hosts need an exact entry)
   # state_dir: ~/.local/state/conductor/agent-state   # the identity homes
   push:
     signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh)
@@ -219,10 +220,10 @@ What each of these protects, and what loosening it gives up, is in
 
 **Package registries.** Conductor does not know about package managers. An
 agent that builds or tests downloads what it needs itself, through the egress
-proxy, from whatever `sandbox.egress` allows. `egress: ["*"]` lets every
-agent reach any public host on :443 (a wildcard never reaches private,
-loopback or metadata addresses); narrower patterns limit it to the hosts you
-list.
+proxy. By default (`egress_open: true`) every agent may reach any public
+host on :443; private, loopback and metadata addresses need an exact
+`egress` entry. `egress_open: false` limits agents to the model endpoints and
+the `egress` patterns; `egress_only:` narrows one workflow, trigger or step.
 
 `sandbox.prefetch` was removed: conductor no longer downloads packages for an
 agent. A config that still sets it loads, with a warning, and the field is
@@ -855,7 +856,7 @@ agent-authored workflow's knobs are ignored, and a pack may only tighten
 
 | knob | default | global key (`sandbox.`) | per-scope key (`isolation.`) | tighten | loosen | a pack may |
 |---|---|---|---|---|---|---|
-| egress allowlist | model hosts only | `egress` | `egress_only` replaces it; `network.egress` (with `mode: namespace`) adds | yes | yes | narrow only: an `egress_only` on a pack's trigger, workflow or step (an operator overlay on that step included) is intersected with what it inherits |
+| egress allowlist | model hosts + any public host on :443 | `egress`, `egress_open` | `egress_only` replaces it; `network.egress` (with `mode: namespace`) adds | yes | yes | narrow only: an `egress_only` on a pack's trigger, workflow or step (an operator overlay on that step included) is intersected with what it inherits |
 | protocol check | on | `egress_protocol_check` | `egress_protocol_check` | yes | yes | no `false` |
 | TLS inspection (enforce `https://` paths) | none | `inspect` | `inspect` (adds to the global list) | — | yes | no |
 | raw (unchecked) targets | none | `allow.raw` | `allow.raw` (adds to the base) | keep the base empty | yes | by a granted request |
@@ -889,7 +890,7 @@ A locked-down workflow: one registry, small caps, kill on any detection.
 workflows:
   dependency-bump:
     isolation:
-      egress_only: [registry.npmjs.org]    # replaces sandbox.egress; the model is still reached
+      egress_only: [registry.npmjs.org]    # replaces the open default and sandbox.egress; the model is still reached
       limits: { memory: 4G, pids: 1024, cpu: 200%, cpu_weight: 50 }
       detect: { action: kill, tripwires: true, interval: 1s, connections: close }
       egress_limits: { upload: 64MiB, download: 2GiB }

@@ -82,10 +82,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		return func() {}, nil
 	}
 	home, _ := os.UserHomeDir()
-	var egress []string
-	if cfg.Sandbox != nil {
-		egress = cfg.Sandbox.Egress
-	}
+	egress := cfg.Sandbox.AgentEgress()
 	name, email := gitGlobalIdentity()
 	if p := cfg.Sandbox; p != nil && p.Push != nil {
 		// No global git identity on this box: the identity conductor signs
