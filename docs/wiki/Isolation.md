@@ -679,7 +679,10 @@ How it works:
   narrowest scope (a step rather than its workflow).
 - **An allowance covers the tool, not a shell under its name.** The watcher
   knows the host's shells and tunnel tools by their binaries, so a copy of
-  bash named `ssh` is still bash. A process is allowed only when the
+  bash named `ssh` is still bash. A tunnel allowance covers only a binary
+  that is the tool: the host's installed one, or a copy of it. A binary
+  the host does not have, named `cloudflared`, is not covered, so install
+  the tool on the host rather than letting the agent download it. A process is allowed only when the
   allowance covers every verdict on it: whatever it is called, a program
   with a network socket on its stdin or stdout is judged a reverse shell,
   and one relaying a pty to a socket is a pty relay. Neither is ever
@@ -756,8 +759,7 @@ How it works:
 
 `sandbox.detect.allow` (older, global) exempts a program from every rule
 in every launch, matched by what its binary is. A binary the host does not
-know, named after an exempt program, is exempt only from the tunnel-tool
-rule. Prefer a scoped `tunnels:` allowance.
+know, named after an exempt program, is not exempt. Prefer a scoped `tunnels:` allowance.
 
 #### What is left {#what-is-left}
 
