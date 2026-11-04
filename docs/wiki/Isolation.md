@@ -1051,7 +1051,13 @@ These are known gaps, stated so you can weigh them:
 - **Domain fronting.** The TLS check proves the tunnel's server name is an
   allowed host, not who answers inside it. A CDN that serves many sites
   behind one allowed name can carry traffic to another of its customers.
-  Allow narrow hosts, not a CDN's shared ones.
+  Allow narrow hosts, not a CDN's shared ones. An
+  [inspected](#tls-inspection) host is the exception: each request's
+  `Host` must be the inspected name.
+- **Inspected traffic.** For a host in `inspect:`, conductor's process sees
+  the requests in clear text (never logged), and the launch's CA could sign
+  for the inspected names' subdomains too, as X.509 name constraints
+  work. Its key never leaves conductor's memory.
 - **Inside the allowlist.** An agent can send what it reads to any allowed
   host: a package registry it can publish to, an issue tracker, a paste
   site. The upload cap bounds the volume, the audit records it, and the
