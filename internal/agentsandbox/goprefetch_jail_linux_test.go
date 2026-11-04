@@ -5,12 +5,14 @@ package agentsandbox
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
@@ -237,5 +239,53 @@ func TestGoPrefetchToolchainBuildsOffline(t *testing.T) {
 	t.Logf("in the sandbox:\n%s", got)
 	if err != nil || !strings.Contains(string(got), "go version go1.99.0") || !strings.Contains(string(got), "built offline") {
 		t.Fatalf("a module needing go1.99.0 did not build in the sandbox: %v", err)
+	}
+}
+
+// A download that failed is not retried for the same module files until
+// retryFailedAfter has passed, so the many launches of one review don't each
+// wait out and log the same failure; a success clears the mark.
+func TestGoPrefetchDoesNotRetryAFreshFailure(t *testing.T) {
+	root := requireSandbox(t)
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("no go on PATH")
+	}
+	if r, err := filepath.EvalSymlinks(realGo); err == nil {
+		realGo = r
+	}
+	out, err := exec.Command(realGo, "env", "GOROOT").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	realRoot := strings.TrimSpace(string(out))
+	defer func(f func() bool) { systemdUserBusAvailableFunc = f }(systemdUserBusAvailableFunc)
+	systemdUserBusAvailableFunc = func() bool { return false }
+
+	empty := filepath.Join(root, "emptyproxy")
+	os.MkdirAll(empty, 0o755)
+	self := selfConductor(t)
+	pm := sandbox.NewProxyManager(nil)
+	defer pm.Close()
+	clock := time.Now()
+	g := &GoPrefetch{
+		Cache: filepath.Join(root, "modcache"), Go: realGo, Proxy: "file://" + empty,
+		Env: []string{"PATH=" + os.Getenv("PATH"), "GOSUMDB=off"},
+		Now: func() time.Time { return clock },
+		Sandbox: sandbox.LocalWrapDeps{
+			SelfExe: self, EgressUnix: pm.UnixEndpoint, EgressAddr: pm.Endpoint,
+			ExtraBinds: []sandbox.BindMount{{Path: empty, RO: true}, {Path: realRoot, RO: true}},
+		},
+	}
+	m := &GoModules{Files: map[string][]byte{"go.mod": []byte("module x\n\ngo 1.22\n\nrequire example.test/missing v1.0.0\n")}}
+	if _, err := g.fill(context.Background(), m); err == nil || errors.Is(err, ErrPrefetchRecentlyFailed) {
+		t.Fatalf("first download: want the real failure, got %v", err)
+	}
+	if _, err := g.fill(context.Background(), m); !errors.Is(err, ErrPrefetchRecentlyFailed) {
+		t.Fatalf("second download within the window: want ErrPrefetchRecentlyFailed, got %v", err)
+	}
+	clock = clock.Add(retryFailedAfter + time.Second)
+	if _, err := g.fill(context.Background(), m); err == nil || errors.Is(err, ErrPrefetchRecentlyFailed) {
+		t.Fatalf("after the window the download runs again: got %v", err)
 	}
 }

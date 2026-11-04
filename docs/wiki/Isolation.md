@@ -246,7 +246,10 @@ downloads instead, on the host:
   database verification on, none of the daemon's environment beyond `PATH`
   and HTTP-proxy/CA settings, and none of the operator's real `$HOME`. If
   this box can't build the jail (no `unshare`, for instance), the prefetch is
-  skipped with a log line — it never falls back to an unconfined download;
+  skipped with a log line — it never falls back to an unconfined download.
+  A download that fails is logged once and not retried for the same module
+  files for 10 minutes, so the many launches of one review don't each wait
+  out the same failure;
 - when the module files ask for a newer Go than the host's (a `go` or
   `toolchain` line in `go.work` or `go.mod`), the download fetches that
   toolchain too: Go downloads it as the module

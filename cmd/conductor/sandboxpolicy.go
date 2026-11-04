@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -200,7 +201,9 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		r.GoPrefetch = gp
 		dispatch.SandboxPrefetch = func(dir string) {
 			start := time.Now()
-			if err := gp.Workspace(context.Background(), dir); err != nil {
+			if err := gp.Workspace(context.Background(), dir); errors.Is(err, agentsandbox.ErrPrefetchRecentlyFailed) {
+				return // logged when it failed
+			} else if err != nil {
 				logf("sandbox: go prefetch for %s: %v (the agent's Go runs offline without what is missing)", dir, err)
 				return
 			}

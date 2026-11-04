@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -53,6 +54,8 @@ type GoPrefetch struct {
 	// defeated. A deployment that wants a private upstream proxy sets one
 	// here explicitly (an http(s) mirror it trusts, never a local path).
 	Proxy string
+	// Now is the clock (time.Now when nil); a test sets it.
+	Now func() time.Time
 	// Env are the operator variables the download keeps (PATH, the HTTP
 	// proxy and CA settings); nothing else of the daemon's reaches it.
 	Env []string
@@ -299,6 +302,41 @@ func (g *GoPrefetch) fill(ctx context.Context, m *GoModules) (string, error) {
 	if b, err := os.ReadFile(done); err == nil {
 		return string(b), nil
 	}
+	// A download that just failed for these module files fails the same way
+	// for every other launch on them (a review starts many at once), so it
+	// is not retried until retryFailedAfter has passed.
+	failed := filepath.Join(g.Cache, ".conductor-prefetch-failed", m.Digest())
+	if fi, err := os.Stat(failed); err == nil && g.now().Sub(fi.ModTime()) < retryFailedAfter {
+		return "", ErrPrefetchRecentlyFailed
+	}
+	goroot, err := g.download(ctx, m, done)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		if os.MkdirAll(filepath.Dir(failed), 0o755) == nil {
+			_ = os.WriteFile(failed, nil, 0o644)
+		}
+		return "", err
+	}
+	_ = os.Remove(failed)
+	return goroot, err
+}
+
+// retryFailedAfter is how long a failed download is not retried for the same
+// module files.
+const retryFailedAfter = 10 * time.Minute
+
+// ErrPrefetchRecentlyFailed is fill's answer for module files whose download
+// failed less than retryFailedAfter ago; the failure itself was logged then.
+var ErrPrefetchRecentlyFailed = errors.New("go prefetch: the same module files failed to download recently; not retried yet")
+
+func (g *GoPrefetch) now() time.Time {
+	if g.Now != nil {
+		return g.Now()
+	}
+	return time.Now()
+}
+
+// download runs the confined download for m and records done.
+func (g *GoPrefetch) download(ctx context.Context, m *GoModules, done string) (string, error) {
 	p, err := g.plan(m)
 	if err != nil {
 		return "", err
