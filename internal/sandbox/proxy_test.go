@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // viaProxy builds an http.Client whose traffic routes through the proxy at
@@ -541,4 +543,95 @@ func (zeroReader) Read(b []byte) (int, error) {
 		b[i] = 0
 	}
 	return len(b), nil
+}
+
+// A plain-HTTP response with no length (server-sent events, a long poll)
+// reaches the client as it arrives, not when the upstream closes: a stream
+// through the proxy delivers its first event while the upstream is still
+// holding the connection open.
+func TestPlainHTTPStreamsAnUnsizedResponse(t *testing.T) {
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: first\n\n")
+		w.(http.Flusher).Flush()
+		<-release
+	}))
+	defer upstream.Close()
+	defer close(release)
+	p := &Proxy{Allow: []string{strings.TrimPrefix(upstream.URL, "http://")}}
+	addr, _ := startProxy(t, p)
+	client := viaProxy(p, addr)
+	client.Timeout = 5 * time.Second
+	resp, err := client.Get(upstream.URL + "/stream")
+	if err != nil {
+		t.Fatalf("the stream's headers did not arrive while it was open: %v", err)
+	}
+	defer resp.Body.Close()
+	got := make(chan string, 1)
+	go func() {
+		b := make([]byte, 64)
+		n, _ := io.ReadAtLeast(resp.Body, b, len("data: first\n\n"))
+		got <- string(b[:n])
+	}()
+	select {
+	case s := <-got:
+		if s != "data: first\n\n" {
+			t.Fatalf("first event = %q", s)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first event did not arrive while the stream was open")
+	}
+}
+
+// A plain-HTTP request that switches protocols (a ws:// websocket) is
+// relayed both ways after the upstream's 101, and the proxy credential is
+// not passed on.
+func TestPlainHTTPUpgradeIsRelayedBothWays(t *testing.T) {
+	sawAuth := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAuth <- r.Header.Get("Proxy-Authorization")
+		c, brw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: echo\r\nConnection: Upgrade\r\n\r\n")
+		brw.Flush()
+		line, _ := brw.ReadString('\n')
+		brw.WriteString("echo " + line)
+		brw.Flush()
+	}))
+	defer upstream.Close()
+	target := strings.TrimPrefix(upstream.URL, "http://")
+	p := &Proxy{Allow: []string{target}}
+	addr, rec := startProxy(t, p)
+	cred, _ := p.MintSession(SessionOpts{Run: "run-ws"})
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	auth := base64.StdEncoding.EncodeToString([]byte(proxyUser + ":" + cred))
+	fmt.Fprintf(c, "GET %s/ws HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n", upstream.URL, target, auth)
+	br := bufio.NewReader(c)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status %d, want 101", resp.StatusCode)
+	}
+	fmt.Fprint(c, "ping\n")
+	if line, err := br.ReadString('\n'); err != nil || line != "echo ping\n" {
+		t.Fatalf("after the upgrade: %q %v", line, err)
+	}
+	if a := <-sawAuth; a != "" {
+		t.Fatalf("the proxy credential reached the upstream: %q", a)
+	}
+	c.Close()
+	if r := rec.wait(t, func(c ConnRecord) bool { return c.Outcome == "closed" }); r.Run != "run-ws" || r.Up == 0 || r.Down == 0 {
+		t.Fatalf("record: %+v", r)
+	}
 }

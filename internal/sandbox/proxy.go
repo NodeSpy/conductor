@@ -416,6 +416,10 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, sess *Session) {
 			return
 		}
 	}
+	if isUpgrade(r) {
+		p.upgrade(w, r, sess, target, reqPath)
+		return
+	}
 	start := time.Now()
 	out := r.Clone(r.Context())
 	out.RequestURI = ""
@@ -447,12 +451,113 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, sess *Session) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	var downN atomic.Int64
-	_, _ = io.Copy(w, &countingBody{r: resp.Body, n: &downN})
+	body := &countingBody{r: resp.Body, n: &downN}
+	if resp.ContentLength == -1 || strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		copyFlushing(w, body)
+	} else {
+		_, _ = io.Copy(w, body)
+	}
 	_ = resp.Body.Close()
 	up, down := upN.Load(), downN.Load()
 	sess.count(up, true)
 	sess.count(down, false)
 	p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "closed", Up: up, Down: down, Duration: time.Since(start), Method: r.Method, Path: reqPath})
+}
+
+// copyFlushing copies a response whose length is not known ahead (a stream:
+// server-sent events, a long poll) to w, flushing after every read so each
+// piece reaches the client when it arrives, as httputil.ReverseProxy does.
+func copyFlushing(w http.ResponseWriter, r io.Reader) {
+	rc := http.NewResponseController(w)
+	_ = rc.Flush()
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+			_ = rc.Flush()
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// isUpgrade reports whether r asks to switch protocols (Connection: upgrade
+// with an Upgrade header — a ws:// websocket).
+func isUpgrade(r *http.Request) bool {
+	if r.Header.Get("Upgrade") == "" {
+		return false
+	}
+	for _, v := range r.Header.Values("Connection") {
+		for _, tok := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(tok), "upgrade") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// upgrade relays an allowed plain-HTTP request that asks to switch protocols
+// (a ws:// websocket) as a tunnel: the request, without the proxy
+// credential, goes to the checked upstream address, and from then on bytes
+// pass both ways under the session's accounting, caps and close-on-revoke,
+// as a CONNECT tunnel's do.
+func (p *Proxy) upgrade(w http.ResponseWriter, r *http.Request, sess *Session, target, reqPath string) {
+	refuse := func(why string) {
+		p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "refused", Reason: why, Method: r.Method, Path: reqPath})
+		http.Error(w, "sandbox egress proxy: "+why, http.StatusBadGateway)
+	}
+	ips, _, err := p.resolveAllowed(r.Context(), target)
+	if err != nil {
+		if errors.Is(err, errEgressBlockedIP) {
+			p.deny(w, target, sess)
+			return
+		}
+		refuse(err.Error())
+		return
+	}
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		refuse("cannot hijack")
+		return
+	}
+	_, port := splitHostPort(target)
+	upstream, err := dialIPs(r.Context(), ips, port, 30*time.Second, target)
+	if err != nil {
+		refuse(err.Error())
+		return
+	}
+	out := r.Clone(r.Context())
+	out.RequestURI = ""
+	out.Header.Del("Proxy-Authorization") // the credential never leaves the box
+	out.Header.Del("Proxy-Connection")
+	if err := out.Write(upstream); err != nil {
+		upstream.Close()
+		refuse(err.Error())
+		return
+	}
+	client, buf, err := hj.Hijack()
+	if err != nil {
+		upstream.Close()
+		return
+	}
+	t := &tunnel{sess: sess, target: target, client: client, server: upstream}
+	if !sess.add(t) {
+		upstream.Close()
+		client.Close()
+		p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "refused", Reason: sess.refused(), Method: r.Method, Path: reqPath})
+		return
+	}
+	go func() {
+		rec := t.run(buf.Reader)
+		sess.remove(t)
+		rec.Target, rec.Method, rec.Path = target, r.Method, reqPath
+		p.record(rec)
+	}()
 }
 
 // countingBody counts what is read through it (atomically: a transport
