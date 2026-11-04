@@ -78,7 +78,10 @@ connectors:
     # Credentials resolve app → token → the gh CLI (`gh auth token`). With an
     # App you get webhook installs + a separate read-rate pool; without one, a
     # plain webhook (+ secret) or the sweep delivers events and a PAT (or your
-    # gh login) covers reads. Repo globs in sweeps need an App.
+    # gh login) covers reads. Repo globs in sweeps need an App. In its jail
+    # the plugin reads your gh login from ~/.config/gh, read-only (it declares
+    # that path); a login kept in the system keyring is out of its reach, so
+    # use allow_env: [GH_TOKEN] or `gh auth login --insecure-storage`.
     app:
       app_id: 123456
       private_key_path: ~/.config/conductor/github-app.pem

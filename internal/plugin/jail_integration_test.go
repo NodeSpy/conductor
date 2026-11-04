@@ -336,3 +336,91 @@ func TestPluginJailNoEgressConnector(t *testing.T) {
 		}
 	}
 }
+
+// A plugin whose declared command reads the operator's CLI login from its
+// usual place under HOME (gh's ~/.config/gh) finds it in the jail: the
+// declared fs: path is bound read-only and linked at the same place under the
+// jail's HOME. Nothing else under the operator's home is there, and the
+// login cannot be written.
+func TestPluginJailReadsCLILoginFromHome(t *testing.T) {
+	requireJail(t)
+	self := jailSelf(t)
+	real, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := buildGo(t, "github.com/NodeSpy/conductor/test/plugins/acme-jailprobe", realDir(t, "", "jp-bin-"), "acme-jailprobe")
+	stage := realDir(t, "", "jp-stage-")
+	// The operator's home for this test, under the real one (on macOS the
+	// Seatbelt profile is an allow-list over real paths).
+	op := realDir(t, real, ".jailprobe-home-")
+	t.Setenv("HOME", op)
+	files := map[string]string{
+		".config/acme/login":    "LOGIN-OK",
+		".config/other/secret":  "DECOY",
+		".config/gh/hosts.yml":  "github.com:\n    oauth_token: gho_JAILPROBE\n    user: jailprobe\n    git_protocol: https\n",
+		".config/gh/config.yml": "version: 1\n",
+	}
+	for rel, b := range files {
+		p := filepath.Join(op, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(b), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commands := []string{"cat"}
+	_, ghErr := exec.LookPath("gh")
+	if ghErr == nil {
+		commands = append(commands, "gh")
+	}
+	var logs []string
+	c := NewClient(Spec{
+		Name: "loginprobe", Kind: KindConnector, Provides: "acme-jailprobe", BinPath: bin, Local: true,
+		Manifest: Manifest{Commands: commands, FS: []string{"~/.config/acme", "~/.config/gh"}},
+	}, Deps{
+		Log: func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) },
+		Sandbox: SandboxDeps{
+			Self: self, StagingRoot: stage, Jail: JailRequired, JailProbe: agentsandbox.Probe,
+		},
+	})
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	runs := []string{"cat $HOME/.config/acme/login", "cat $HOME/.config/other/secret", "cat " + filepath.Join(op, ".config/other/secret")}
+	if ghErr == nil {
+		runs = append(runs, "gh auth token")
+	}
+	out, err := c.Invoke(ctx, InvokeRequest{Instance: "loginprobe", Verb: "probe", Options: map[string]any{
+		"run":   strings.Join(runs, "\n"),
+		"write": strings.Join([]string{filepath.Join(op, ".config/acme/planted"), filepath.Join(op, ".config/gh/hosts.yml")}, "\n"),
+	}})
+	t.Logf("spawn log (%s):\n  %s", runtime.GOOS, strings.Join(logs, "\n  "))
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	report, _ := out["report"].(map[string]any)
+	for k, v := range report {
+		t.Logf("  %-60s %v", k, v)
+	}
+	want := map[string]string{"run cat $HOME/.config/acme/login": "ok LOGIN-OK"}
+	if ghErr == nil {
+		want["run gh auth token"] = "ok gho_JAILPROBE"
+	} else {
+		t.Log("gh is not on PATH: the gh case is skipped")
+	}
+	for k, w := range want {
+		if got, _ := report[k].(string); got != w {
+			t.Errorf("%s = %q, want %q", k, got, w)
+		}
+	}
+	for k, v := range report {
+		if got, _ := v.(string); (strings.HasPrefix(k, "write ") || strings.Contains(k, "other/secret")) && strings.HasPrefix(got, "ok") {
+			t.Errorf("%s = %q, want it refused", k, got)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(op, ".config/gh/hosts.yml")); string(b) != files[".config/gh/hosts.yml"] {
+		t.Errorf("the operator's gh login changed: %q", b)
+	}
+}

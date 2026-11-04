@@ -1,12 +1,15 @@
 package plugin
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -333,12 +336,14 @@ func jailFiles(s Spec, sd SandboxDeps) (binds []sandbox.BindMount, home, tmp str
 	if home == "" {
 		home = tmp
 	}
+	var declared []string
 	add := func(entry string, defaultRW bool) {
 		p, rw := config.ParsePluginFS(strings.TrimSpace(entry))
 		p = config.ExpandHome(p)
 		if !filepath.IsAbs(p) {
 			return
 		}
+		declared = append(declared, filepath.Clean(p))
 		binds = append(binds, sandbox.BindMount{Path: filepath.Clean(p), RO: !(rw || defaultRW), Optional: true})
 	}
 	// What the plugin declares it needs, then what the operator adds.
@@ -347,6 +352,14 @@ func jailFiles(s Spec, sd SandboxDeps) (binds []sandbox.BindMount, home, tmp str
 	}
 	for _, p := range s.FS {
 		add(p, false)
+	}
+	if sd.StagingRoot != "" {
+		// A CLI it runs finds its login where it looks for it: under HOME.
+		if op, herr := os.UserHomeDir(); herr == nil {
+			if err := linkHomePaths(home, op, declared); err != nil {
+				return nil, "", "", fmt.Errorf("plugin %s: jail home: %w", s.Name, err)
+			}
+		}
 	}
 	// Files the connection config points it at: read-only.
 	for _, p := range s.Paths {
@@ -358,6 +371,87 @@ func jailFiles(s Spec, sd SandboxDeps) (binds []sandbox.BindMount, home, tmp str
 		binds = append(binds, sandbox.BindMount{Path: p, RO: true, Optional: true, Exec: true})
 	}
 	return dedupeBinds(binds), home, tmp, nil
+}
+
+// linkHomePaths gives each declared fs: path under the operator's home dir
+// (~/.config/gh, ~/.aws, ~/.kube) a link at the same place under the jail's
+// HOME, to the real path the jail binds: a CLI the plugin runs reads its
+// login from $HOME, and HOME in the jail is the plugin's own dir. A path
+// that is not there on the host is left to the plugin; a path inside
+// another linked path is reached through that link. Links are made through
+// an os.Root on home, so nothing the plugin left in its HOME (a symlink in
+// place of .config) can send them, or the removal of what is in their way,
+// outside it.
+func linkHomePaths(home, opHome string, paths []string) error {
+	var rels []string
+	targets := map[string]string{}
+	for _, p := range paths {
+		rel, err := filepath.Rel(opHome, p)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		if _, dup := targets[rel]; !dup {
+			rels = append(rels, rel)
+		}
+		targets[rel] = p
+	}
+	if len(rels) == 0 {
+		return nil
+	}
+	sort.Strings(rels)
+	r, err := os.OpenRoot(home)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	var linked []string
+	for _, rel := range rels {
+		if slices.ContainsFunc(linked, func(l string) bool { return strings.HasPrefix(rel, l+string(filepath.Separator)) }) {
+			continue
+		}
+		if err := linkInRoot(r, rel, targets[rel]); err != nil {
+			return fmt.Errorf("linking %s: %w", targets[rel], err)
+		}
+		linked = append(linked, rel)
+	}
+	return nil
+}
+
+// linkInRoot makes rel (inside r) a symlink to target: each parent a real
+// directory, replacing whatever is not one, and what is at rel replaced
+// unless it already is that link.
+func linkInRoot(r *os.Root, rel, target string) error {
+	dir := ""
+	for _, c := range strings.Split(filepath.Dir(rel), string(filepath.Separator)) {
+		if c == "." {
+			break
+		}
+		dir = filepath.Join(dir, c)
+		fi, err := r.Lstat(dir)
+		switch {
+		case err == nil && fi.IsDir():
+			continue
+		case err == nil:
+			if err := r.Remove(dir); err != nil {
+				return err
+			}
+		case !errors.Is(err, fs.ErrNotExist):
+			return err
+		}
+		if err := r.Mkdir(dir, 0o700); err != nil {
+			return err
+		}
+	}
+	if l, err := r.Readlink(rel); err == nil && l == target {
+		return nil
+	}
+	if err := r.RemoveAll(rel); err != nil {
+		return err
+	}
+	return r.Symlink(target, rel)
 }
 
 // resetHome removes what a previous run left at home when it is not a

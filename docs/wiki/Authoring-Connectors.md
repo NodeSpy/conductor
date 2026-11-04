@@ -227,7 +227,7 @@ SQL stores are the precedent).
   (every tool you run, by name), `fs` (paths outside your own dirs, e.g. a
   CLI's config directory; not `/`, the home directory or conductor's own
   dirs). Name connection fields that hold host paths with a `path`, `dir`,
-  `file`, `*_path`, `*_dir` or `*_file` key, addresses you serve with
+  `file`, `kubeconfig`, `known_hosts`, `*_path`, `*_dir` or `*_file` key, addresses you serve with
   `listen` or `*_listen`, and the hosts you connect to with `url`,
   `*_url`, `endpoint`, `api_base`, `host`, `*_host` or `server` keys (a
   full `https://…` URL under any key also counts): the

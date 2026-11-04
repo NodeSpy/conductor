@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	plugin "github.com/NodeSpy/conductor/pkg/plugin"
@@ -37,6 +38,7 @@ func describe() plugin.Decl {
 				"exec":      str("commands to run, one per line (a name or an absolute path)"),
 				"listen":    str("an address to serve one line on"),
 				"drop":      str("directories to copy a program into and run it from, one per line ($HOME and $TMPDIR are expanded)"),
+				"run":       str("command lines to run, one per line, split on spaces ($HOME is expanded); the report has their output"),
 			},
 			Outputs: plugin.Schema{"report": {Type: "object", Required: true}},
 		}},
@@ -97,6 +99,9 @@ func invoke(req plugin.InvokeRequest) (plugin.InvokeResult, error) {
 	for _, d := range lines(req.Options["drop"]) {
 		report["drop "+d] = dropAndExec(os.ExpandEnv(d))
 	}
+	for _, l := range lines(req.Options["run"]) {
+		report["run "+l] = run(os.ExpandEnv(l))
+	}
 	if a, _ := req.Options["listen"].(string); a != "" {
 		report["listen "+a] = result(serve(a))
 	}
@@ -122,6 +127,19 @@ func dropAndExec(dir string) string {
 		return "err: write: " + err.Error()
 	}
 	return result(exec.Command(p).Run())
+}
+
+// run runs a command line and reports its output.
+func run(l string) string {
+	f := strings.Fields(l)
+	if len(f) == 0 {
+		return "err: empty"
+	}
+	out, err := exec.Command(f[0], f[1:]...).CombinedOutput()
+	if err != nil {
+		return fmt.Sprintf("err: %v: %s", err, out)
+	}
+	return "ok " + strings.TrimSpace(string(out))
 }
 
 // proxyGet fetches u through HTTP_PROXY regardless of NO_PROXY: the point is

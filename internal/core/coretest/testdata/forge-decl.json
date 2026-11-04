@@ -3831,6 +3831,9 @@
     "commands": [
       "gh"
     ],
+    "fs": [
+      "~/.config/gh"
+    ],
     "env": [
       "GH_TOKEN",
       "GITHUB_TOKEN",

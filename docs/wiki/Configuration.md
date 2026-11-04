@@ -30,7 +30,7 @@ expands a leading `~` or `~/` to your home — `store.*`, `memory.dir`,
 host `key` / `known_hosts`, `isolation.fs`, bot and team repo, seed, charter
 and checklist paths, a collection's `from:`, a local `use:` or pack `source:`,
 and a connector's, store's or vault's connection keys named `path`, `dir`,
-`file` or ending `_path` / `_dir` / `_file` (e.g. `private_key_path`). So
+`file`, `kubeconfig` or `known_hosts`, or ending `_path` / `_dir` / `_file` (e.g. `private_key_path`). So
 does every CLI path flag (`--config`, `--state-dir`, `--out`, `--key`,
 `--attach`, …), including `--flag=~/x`, which the shell leaves alone. Paths
 on another box are left for that box: a host's `cwd:`, and the paths of a

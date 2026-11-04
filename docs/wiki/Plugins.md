@@ -681,7 +681,7 @@ deny-default Seatbelt profile with the same allow-list):
 
 | | Allowed | Everything else |
 |---|---|---|
-| **Filesystem** | The base system read-only (`/usr`, `/etc`, `/opt`; on Linux a private `/proc`, `/dev` and `/tmp`). Its own binary's directory, read-only. Its own state directory (`<state>/plugin-staging/<name>`), read-write, with `HOME` set to a directory inside it. Paths it declares in `fs`, and paths you add with `fs:` on its entry, read-only unless the entry ends `:rw`. Files its connection config points at (values under a `path`, `dir`, `file`, `*_path`, `*_dir` or `*_file` key, such as `app: { private_key_path: … }`), read-only. Its declared commands. | Not present (Linux) or denied (macOS). That includes the rest of `$HOME`, conductor's config, state and secrets. |
+| **Filesystem** | The base system read-only (`/usr`, `/etc`, `/opt`; on Linux a private `/proc`, `/dev` and `/tmp`). Its own binary's directory, read-only. Its own state directory (`<state>/plugin-staging/<name>`), read-write, with `HOME` set to a directory inside it. Paths it declares in `fs`, and paths you add with `fs:` on its entry, read-only unless the entry ends `:rw`; one under your home directory is also linked at the same place under its `HOME`, so a CLI it runs finds its login there (see below). Files its connection config points at (values under a `path`, `dir`, `file`, `kubeconfig`, `known_hosts`, `*_path`, `*_dir` or `*_file` key, such as `app: { private_key_path: … }`), read-only. Its declared commands. | Not present (Linux) or denied (macOS). That includes the rest of `$HOME`, conductor's config, state and secrets. |
 | **Processes** | Its own binary and its declared commands. On Linux, also programs under the system library directories (`/usr/lib*`, `/usr/libexec`), which must stay executable for shared libraries. | On Linux the program directories (`/usr/bin`, `/usr/sbin`, `/usr/local/bin`, `/usr/local/sbin`, `/bin`, `/sbin`, `/opt`) are mounted `noexec`, with each declared command bound back executable. Everything the plugin can write (its `HOME`, `/tmp`, `$TMPDIR`, `/dev/shm`, `fs:` paths, the jail's root) is mounted `noexec`, `nosuid`, `nodev`, so a program it writes cannot be run. It runs with `no_new_privs` and, on amd64 and arm64, a seccomp filter that refuses `memfd_create` without `MFD_NOEXEC_SEAL`, `execveat` of an open file descriptor, and system calls of another ABI (i386, x32, arm32). On macOS `exec` is denied except for its own binary and its declared commands. |
 | **Network** | Its own network namespace (Linux); on macOS, outbound connections are denied except to the egress proxy and allowed loopback ports. The only way out is conductor's egress proxy, with an allowlist of: `network:` when the entry sets it; otherwise what the plugin declares plus the hosts its connection config points at (see below). A host-loopback target with a fixed port (`http://127.0.0.1:8123`, `localhost:6379`) is reached directly: on Linux the daemon relays that one address into the jail; on macOS the profile allows that port. The describe probe and engines get only what they declare, usually nothing. | Refused by the proxy (403), or unreachable. |
 | **Listening** | An address its connection config sets under `listen` or a `*_listen` key: on Linux the daemon binds it on the host and forwards each connection into the jail; on macOS the profile allows binding that port. | — |
@@ -765,6 +765,31 @@ such a path anyway, name the same path in the entry's own `fs:`. A path
 inside your home directory (`~/.config/gh`) is not refused. The install
 prompt and `conductor plugin list --caps` list the declared files and
 commands on lines of their own.
+
+### CLI logins
+
+A plugin that runs a CLI as you (`gh`, `aws`, `kubectl`, `helm`, `docker`)
+needs that CLI's login, which the CLI reads from under `HOME`. In the jail
+`HOME` is the plugin's own directory, so the plugin declares the login's
+path in `fs` (the github plugin declares `~/.config/gh`). Each declared
+`fs` path under your home directory is bound read-only at its real path and
+linked at the same place under the plugin's `HOME`: `gh` in the jail reads
+`$HOME/.config/gh`, which is your `~/.config/gh`. The link is remade at
+every launch, replacing whatever the plugin left at that place. A path that
+does not exist on this box gets no link.
+
+The login stays read-only. `gh auth token`, `gh auth status` and `gh api`
+(gh 2.92) read the login and write nothing to it. Commands that change a
+login (`gh auth login`, `gh auth refresh`, `aws sso login`) fail in the
+jail; run them yourself outside it. Where a CLI keeps its token in the
+system keyring rather than in a file (`gh auth login` does when a keyring is
+available), the jail cannot reach the keyring: set the token in the daemon's
+environment and grant it with `allow_env:` on the entry (`GH_TOKEN` for the
+github plugin, which declares it), or log the CLI in with its token in a
+file (`gh auth login --insecure-storage`).
+
+To give a plugin a login it does not declare, add the path to its entry's
+`fs:`; the same link is made.
 
 A launch whose jail cannot be built for that launch (its state directory is
 not usable, a proxy endpoint fails) is refused under `sandbox.plugins: on`

@@ -51,12 +51,14 @@ func TestPluginRefConnectionJailFacts(t *testing.T) {
     key_file: ~/hook.key
     tls: { cert_file: /etc/hook/cert.pem }
     dir: relative/dir
+    kubeconfig: ~/.kube/prod
+    ssh: { known_hosts: /etc/hook/known_hosts }
 `)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ref := c.PluginRefs()["connectors/webhooky"]
-	wantPaths := []string{filepath.Join(home, "hook.key"), "/etc/hook/cert.pem"}
+	wantPaths := []string{filepath.Join(home, "hook.key"), "/etc/hook/cert.pem", filepath.Join(home, ".kube/prod"), "/etc/hook/known_hosts"}
 	for _, p := range wantPaths {
 		if !contains(ref.Paths, p) {
 			t.Errorf("paths %v lack %s", ref.Paths, p)

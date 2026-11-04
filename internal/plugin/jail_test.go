@@ -258,3 +258,68 @@ func TestSpecTargetsFromRef(t *testing.T) {
 		t.Fatalf("isolated instance targets = %v", got)
 	}
 }
+
+// Declared fs: paths under the operator's home get a link at the same place
+// under the jail's HOME, made without following anything the plugin left
+// there: a .config symlink it planted to a dir outside is replaced, not
+// written through; its own dir where a link goes is replaced; a path inside
+// another declared path rides that link; a path not on the host, or outside
+// the home dir, gets no link.
+func TestJailHomeLinksDeclaredPaths(t *testing.T) {
+	op := t.TempDir()
+	t.Setenv("HOME", op)
+	for _, d := range []string{".config/gh", ".kube", ".aws"} {
+		if err := os.MkdirAll(filepath.Join(op, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(op, ".kube/config"), []byte("k"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staging := t.TempDir()
+	home := filepath.Join(staging, "p", ".home")
+	victim := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(victim, "gh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(victim, "gh", "keep"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// What a previous run left: .config a symlink out, its own .aws dir.
+	if err := os.MkdirAll(filepath.Join(home, ".aws"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".aws", "mine"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(home, ".config")); err != nil {
+		t.Fatal(err)
+	}
+	s := Spec{Name: "p", Kind: KindConnector,
+		Manifest: Manifest{FS: []string{"~/.config/gh", "~/.kube", "~/.kube/config", "~/.missing", "/etc"}},
+		FS:       []string{"~/.aws"}}
+	for run := 0; run < 2; run++ {
+		if _, h, _, err := jailFiles(s, SandboxDeps{StagingRoot: staging}); err != nil || h != home {
+			t.Fatalf("run %d: home=%q err=%v", run, h, err)
+		}
+		for rel, want := range map[string]string{".config/gh": filepath.Join(op, ".config/gh"), ".kube": filepath.Join(op, ".kube"), ".aws": filepath.Join(op, ".aws")} {
+			if got, err := os.Readlink(filepath.Join(home, rel)); err != nil || got != want {
+				t.Errorf("run %d: %s -> %q (%v), want %q", run, rel, got, err, want)
+			}
+		}
+		if fi, err := os.Lstat(filepath.Join(home, ".config")); err != nil || !fi.IsDir() {
+			t.Errorf("run %d: .config is not a real dir in the jail home: %v", run, err)
+		}
+		for _, rel := range []string{".missing", "etc"} {
+			if _, err := os.Lstat(filepath.Join(home, rel)); err == nil {
+				t.Errorf("run %d: %s was linked", run, rel)
+			}
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(victim, "gh", "keep")); err != nil || string(b) != "keep" {
+		t.Errorf("the dir the planted symlink pointed at was changed: %q %v", b, err)
+	}
+	if ents, _ := os.ReadDir(victim); len(ents) != 1 {
+		t.Errorf("the dir the planted symlink pointed at gained entries: %v", ents)
+	}
+}

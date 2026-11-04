@@ -195,7 +195,7 @@ var connectorHeaderKeys = map[string]bool{"use": true, "type": true, "network": 
 // pathKey reports whether a raw connection key names a path.
 func pathKey(k string) bool {
 	switch k {
-	case "path", "dir", "file":
+	case "path", "dir", "file", "kubeconfig", "known_hosts":
 		return true
 	}
 	return strings.HasSuffix(k, "_path") || strings.HasSuffix(k, "_dir") || strings.HasSuffix(k, "_file")
