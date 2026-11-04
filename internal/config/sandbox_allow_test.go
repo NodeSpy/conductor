@@ -318,3 +318,35 @@ func TestRawAllowanceAndProtocolCheckKnob(t *testing.T) {
 		}
 	}
 }
+
+// An egress entry is a host pattern, a CIDR range or an http:// URL with a
+// path prefix; an https:// URL with a path is an error naming the host.
+func TestEgressEntryForms(t *testing.T) {
+	for _, e := range []string{"proxy.golang.org", "athens.lan:3000", "10.0.0.0/8:*", "100.64.0.0/10:4873", "*.example.com",
+		"http://athens.lan:3000/github.com/myorg/", "http://verdaccio:4873/@myorg/", "http://devpi.lan:3141"} {
+		if err := validateEgressEntry("sandbox.egress", e); err != nil {
+			t.Errorf("%s: %v", e, err)
+		}
+	}
+	for e, want := range map[string]string{
+		"https://registry.example/@myorg/": "a path cannot be enforced on encrypted traffic without TLS interception, which conductor does not do; list the host alone (registry.example:443)",
+		"https://athens.lan:8443/x":         "(athens.lan:8443)",
+		"ftp://mirror.lan/pub":              "only http:// URLs",
+		"athens.lan/github.com":             "a / is only for a CIDR range",
+		"http://*.lan/x/":                   "no wildcard",
+		"http://athens.lan/a/../b":          "no dot segments",
+		"http://athens.lan/x?y=1":           "no user, query or fragment",
+	} {
+		if err := validateEgressEntry("sandbox.egress", e); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", e, err, want)
+		}
+	}
+	doc := strings.Replace(allowDoc, "sandbox:\n", "sandbox:\n  egress: [\"https://registry.example/@myorg/\"]\n", 1)
+	if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), "list the host alone") {
+		t.Fatalf("an https path entry loaded: %v", err)
+	}
+	doc = strings.Replace(allowDoc, "      detect: { action: alert }", "      detect: { action: alert }\n      mode: namespace\n      network: { egress: [\"https://registry.example/x\"] }", 1)
+	if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), "list the host alone") {
+		t.Fatalf("an https path entry in a scope loaded: %v", err)
+	}
+}

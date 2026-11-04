@@ -96,7 +96,7 @@ func specialIP(ip net.IP) bool { return netguard.Blocked(ip) }
 func specialAllowed(allow []string, host, port string, ip net.IP) bool {
 	tip := net.ParseIP(host)
 	for _, pat := range allow {
-		ph, pp := splitHostPort(strings.TrimSpace(pat))
+		ph, pp := splitHostPort(strings.TrimSpace(entryHostPort(pat)))
 		if pp == "" {
 			pp = "443" // a bare host is :443 (EgressAllowed's rule)
 		}
@@ -396,9 +396,25 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, sess *Session) {
 	if !strings.Contains(target, ":") {
 		target += ":80"
 	}
+	reqPath := r.URL.Path // audited without the query
 	if !EgressAllowed(p.Allow, target) {
-		p.deny(w, target, sess)
-		return
+		prefixes := pathPrefixes(p.Allow, target)
+		if len(prefixes) == 0 {
+			p.deny(w, target, sess)
+			return
+		}
+		np, why := requestPath(r.URL)
+		if why == "" && !pathAllowed(np, prefixes) {
+			why = "not under an allowed path (" + strings.Join(prefixes, ", ") + ")"
+		}
+		if why != "" {
+			p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "denied", Reason: "path " + why, Method: r.Method, Path: reqPath})
+			if p.OnDeny != nil {
+				p.OnDeny(target + reqPath)
+			}
+			http.Error(w, fmt.Sprintf("sandbox egress proxy: %s %s%s refused: path %s", r.Method, target, reqPath, why), http.StatusForbidden)
+			return
+		}
 	}
 	start := time.Now()
 	out := r.Clone(r.Context())
@@ -436,7 +452,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, sess *Session) {
 	up, down := upN.Load(), downN.Load()
 	sess.count(up, true)
 	sess.count(down, false)
-	p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "closed", Up: up, Down: down, Duration: time.Since(start)})
+	p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "closed", Up: up, Down: down, Duration: time.Since(start), Method: r.Method, Path: reqPath})
 }
 
 // countingBody counts what is read through it (atomically: a transport
@@ -468,6 +484,13 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 		target += ":443"
 	}
 	if !EgressAllowed(p.Allow, target) {
+		if prefixes := pathPrefixes(p.Allow, target); len(prefixes) > 0 {
+			// Its requests would pass unread inside the tunnel.
+			why := "path-restricted (" + strings.Join(prefixes, ", ") + "): reach it with plain-HTTP proxying (an http:// URL), not a tunnel"
+			p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "denied", Reason: why})
+			http.Error(w, "sandbox egress proxy: "+target+" is "+why, http.StatusForbidden)
+			return
+		}
 		p.deny(w, target, sess)
 		return
 	}

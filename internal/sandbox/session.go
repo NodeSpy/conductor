@@ -129,7 +129,11 @@ type ConnRecord struct {
 	SNI    string `json:"sni,omitempty"`
 	// Proto is the tunnel's protocol as the check recognized it (ProtoTLS,
 	// ProtoHTTP, ProtoHTTP2; ProtoSSH on a refusal; "" unchecked).
-	Proto    string        `json:"proto,omitempty"`
+	Proto string `json:"proto,omitempty"`
+	// Method and Path are a plain-HTTP request\'s (the path without its
+	// query).
+	Method   string        `json:"method,omitempty"`
+	Path     string        `json:"path,omitempty"`
 	Outcome  string        `json:"outcome"` // allowed | denied | refused | closed
 	Reason   string        `json:"reason,omitempty"`
 	Up       int64         `json:"up"`

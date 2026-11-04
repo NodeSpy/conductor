@@ -331,6 +331,9 @@ func (c *Config) validateSandbox() error {
 		if e == "" {
 			return fmt.Errorf("config: sandbox.egress: empty pattern")
 		}
+		if err := validateEgressEntry("sandbox.egress", e); err != nil {
+			return err
+		}
 	}
 	for _, p := range s.Prefetch {
 		if p != "go" {

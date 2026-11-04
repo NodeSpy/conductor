@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -90,6 +92,9 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 		for _, pat := range n.Egress {
 			if pat == "" {
 				return fmt.Errorf("config: %s: isolation network.egress: empty pattern", where)
+			}
+			if err := validateEgressEntry(where+": isolation network.egress", pat); err != nil {
+				return err
 			}
 		}
 	}
@@ -403,4 +408,45 @@ func capsRaise(l *IsolationLimits) bool {
 		return err != nil || f > 50
 	}
 	return false
+}
+
+// validateEgressEntry checks one agent egress entry's form: a host[:port]
+// pattern, a CIDR range, or an http:// URL whose path is a prefix the
+// proxy enforces on every plain-HTTP request. A path cannot be enforced on
+// encrypted traffic: an https:// URL is an error naming the host to list.
+func validateEgressEntry(where, e string) error {
+	e = strings.TrimSpace(e)
+	scheme, rest, isURL := strings.Cut(e, "://")
+	if !isURL {
+		if strings.Contains(e, "/") {
+			host, _, _ := strings.Cut(e, ":")
+			if _, _, err := net.ParseCIDR(host); err != nil {
+				return fmt.Errorf("config: %s: %q: a / is only for a CIDR range (10.0.0.0/8) or an http:// URL with a path", where, e)
+			}
+		}
+		return nil
+	}
+	switch strings.ToLower(scheme) {
+	case "http":
+		u, err := url.Parse(e)
+		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("config: %s: %q: want http://host[:port]/path/prefix (no user, query or fragment)", where, e)
+		}
+		if strings.ContainsAny(u.Hostname(), "*?[") {
+			return fmt.Errorf("config: %s: %q: a path entry names its host exactly (no wildcard)", where, e)
+		}
+		for _, seg := range strings.Split(u.Path, "/") {
+			if seg == "." || seg == ".." || strings.Contains(seg, "%") {
+				return fmt.Errorf("config: %s: %q: the path prefix must be plain (no dot segments or percent escapes)", where, e)
+			}
+		}
+		return nil
+	case "https":
+		host, _, _ := strings.Cut(rest, "/")
+		if !strings.Contains(host, ":") {
+			host += ":443"
+		}
+		return fmt.Errorf("config: %s: %q: egress over HTTPS is host:port only — a path cannot be enforced on encrypted traffic without TLS interception, which conductor does not do; list the host alone (%s)", where, e, host)
+	}
+	return fmt.Errorf("config: %s: %q: only http:// URLs (with a path prefix) are egress entries; list other targets as host:port", where, e)
 }
