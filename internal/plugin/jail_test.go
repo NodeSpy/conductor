@@ -167,8 +167,7 @@ func TestInstanceSpecTrustIsPerInstance(t *testing.T) {
 // Red-team regression (phase 4, finding 4): under sandbox.plugins: on, a
 // launch whose jail fails to build is refused, not run unconfined. Only the
 // box-level probe may degrade. Here the box "can" jail but this launch
-// cannot (no conductor binary wired for the Linux forwarder; on macOS the
-// staging dir is a file).
+// cannot (its staging dir is a file).
 func TestJailBuildErrorRefusesUnderOn(t *testing.T) {
 	staging := t.TempDir()
 	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
@@ -176,7 +175,7 @@ func TestJailBuildErrorRefusesUnderOn(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(staging, "evil"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sd := SandboxDeps{Jail: JailOn, StagingRoot: staging, JailProbe: func() string { return "" }}
+	sd := SandboxDeps{Jail: JailOn, StagingRoot: staging, Self: "/usr/bin/conductor", JailProbe: func() string { return "" }}
 	cmd, cleanup, conf, err := buildCommand(s, sd)
 	if err == nil {
 		cleanup()
@@ -184,6 +183,27 @@ func TestJailBuildErrorRefusesUnderOn(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "building its OS jail failed") {
 		t.Fatalf("the refusal does not say why: %v", err)
+	}
+}
+
+// A daemon with no conductor binary wired cannot build the Linux jail for
+// any plugin: that is the box's state, like the probe's, so it degrades
+// under on and refuses under required — it is not a per-launch failure.
+func TestJailWithoutSelfIsUnavailable(t *testing.T) {
+	old := spawnGOOS
+	spawnGOOS = "linux"
+	t.Cleanup(func() { spawnGOOS = old })
+	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	s := Spec{Name: "p", Kind: KindConnector, BinPath: bin}
+	ok := func() string { return "" }
+
+	_, cleanup, conf, err := buildCommand(s, SandboxDeps{Jail: JailOn, StagingRoot: t.TempDir(), JailProbe: ok})
+	if err != nil || conf.Mode != "unavailable" {
+		t.Fatalf("on, no self: mode=%q err=%v, want unavailable", conf.Mode, err)
+	}
+	cleanup()
+	if _, _, _, err := buildCommand(s, SandboxDeps{Jail: JailRequired, StagingRoot: t.TempDir(), JailProbe: ok}); err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("required, no self: err=%v, want a refusal", err)
 	}
 }
 

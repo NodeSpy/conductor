@@ -176,10 +176,7 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), conf C
 		return nil, nil, Confinement{}, err
 	}
 
-	why := ""
-	if sd.JailProbe != nil {
-		why = sd.JailProbe()
-	}
+	why := sd.jailUnavailable()
 	if why == "" {
 		var jenv []string
 		var wrapped []string
@@ -208,6 +205,23 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), conf C
 		return nil, nil, Confinement{}, fmt.Errorf("plugin %s: its OS jail cannot be built on this box (%s), and sandbox.plugins is required — not starting it", s.Name, why)
 	}
 	return manifestOnly(Confinement{Mode: "unavailable", Why: why})
+}
+
+// jailUnavailable says why this daemon cannot build the default jail at
+// all ("" when it can): the box's probe, or — on Linux, where the jail
+// re-enters through conductor's own binary — no binary wired to re-enter.
+// Both are fixed for the daemon's life, the same for every plugin; a launch
+// that fails for any other reason is refused, never degraded.
+func (sd SandboxDeps) jailUnavailable() string {
+	if sd.JailProbe != nil {
+		if why := sd.JailProbe(); why != "" {
+			return why
+		}
+	}
+	if sd.Self == "" && spawnGOOS != "darwin" {
+		return "conductor's own binary is not wired to build it"
+	}
+	return ""
 }
 
 // isolationCommand is the launch under the operator's own isolation: block:
