@@ -431,7 +431,7 @@ func TestPluginJailReadsCLILoginFromHome(t *testing.T) {
 // as an installed plugin is with its recorded manifest — not with none. The
 // probe declares one command, true: run from the Manager's shared client it
 // is found and runs.
-func TestLocalBuildJailedWithItsDeclaredManifest(t *testing.T) {
+func TestPluginJailLocalBuildDeclaredManifest(t *testing.T) {
 	requireJail(t)
 	self := jailSelf(t)
 	bin := buildGo(t, "github.com/NodeSpy/conductor/test/plugins/acme-jailprobe", realDir(t, "", "jp-bin-"), "acme-jailprobe")
