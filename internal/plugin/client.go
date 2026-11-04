@@ -33,6 +33,14 @@ const MaxCallTimeout = 10 * time.Minute
 // restarted. A var so tests can shrink it.
 var livenessTimeout = 10 * time.Second
 
+// maxMissedDeadlines is how many calls in a row may outlive their deadline
+// on one process before it is restarted, even though it answers the
+// liveness check: a plugin that answers plugin.ping but never finishes a
+// call (it ignores plugin.cancel) would otherwise never be restarted, so it
+// would never reach the crash-loop guards that park it. A call that is
+// answered resets the count. A var so tests can shrink it.
+var maxMissedDeadlines = 3
+
 // restart backoff: after restartBurst failed (re)starts inside restartWindow,
 // the plugin is parked "down" for the rest of the window instead of being
 // respawned. On top of that trailing-window burst limit, restartLifetimeCap
@@ -185,6 +193,9 @@ type Client struct {
 	// probing is set while a liveness check is in flight, so a burst of
 	// timed-out calls sends one ping, not one each.
 	probing bool
+	// missed counts the calls in a row on the current process that outlived
+	// their deadline (maxMissedDeadlines).
+	missed int
 }
 
 // RunHost authorizes and executes ONE data-plane op on behalf of a run. It is
@@ -781,6 +792,7 @@ func (c *Client) teardownLocked() {
 		_ = c.conn.Close()
 	}
 	c.conn, c.kill = nil, nil
+	c.missed = 0
 }
 
 // Describe fetches and validates the plugin's self-description.
@@ -988,6 +1000,11 @@ func (c *Client) callFor(ctx context.Context, timeout time.Duration, method stri
 		// the transport is healthy, and tearing the process down for it would
 		// also end every source stream it serves — a verb that failed on the
 		// platform's side (a 422, a missing repo) would silence the source.
+		c.mu.Lock()
+		if c.conn == conn {
+			c.missed = 0
+		}
+		c.mu.Unlock()
 		return err
 	}
 	dead := false
@@ -1005,6 +1022,9 @@ func (c *Client) callFor(ctx context.Context, timeout time.Duration, method stri
 		// verb that was downloading a few large logs. Whether the process
 		// is wedged is a separate question, answered by a ping.
 		if errors.Is(cctx.Err(), context.DeadlineExceeded) {
+			if ctx.Err() == nil && c.missedDeadline(conn) {
+				return fmt.Errorf("plugin %s: %s did not answer within %s; %d calls in a row missed their deadline, so the plugin was restarted: %w", c.spec.Name, method, timeout, maxMissedDeadlines, err)
+			}
 			c.checkLiveness(conn)
 			if ctx.Err() == nil {
 				return fmt.Errorf("plugin %s: %s did not answer within %s (the call was cancelled; the plugin keeps running): %w", c.spec.Name, method, timeout, err)
@@ -1033,6 +1053,25 @@ func (c *Client) callFor(ctx context.Context, timeout time.Duration, method stri
 		return fmt.Errorf("plugin %s process exited or closed its connection: %w", c.spec.Name, err)
 	}
 	return err
+}
+
+// missedDeadline records that a call on conn outlived its own deadline and,
+// at maxMissedDeadlines in a row, tears the process down so the next call
+// restarts it under the crash-loop guards (restartBurst, restartLifetimeCap),
+// whether or not it answers pings. It reports whether it did.
+func (c *Client) missedDeadline(conn transport) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != conn {
+		return false
+	}
+	c.missed++
+	if c.missed < maxMissedDeadlines {
+		return false
+	}
+	c.deps.Log("plugin %s: %d calls in a row did not answer within their deadline (it answers pings but does not finish calls) — restarting it", c.spec.Name, c.missed)
+	c.teardownLocked()
+	return true
 }
 
 // checkLiveness pings the process behind conn after one of its calls outlived

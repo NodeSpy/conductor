@@ -142,7 +142,9 @@ func TestLateAnswerIsDropped(t *testing.T) {
 	defer c.Close()
 	// ignore_cancel makes the verb finish its 250ms sleep and answer after
 	// the 200ms deadline, so a response arrives for an id nobody waits on.
-	for i := 0; i < 3; i++ {
+	// Two calls: a third missed deadline in a row restarts the plugin
+	// (TestMissedDeadlinesRestartAndPark).
+	for i := 0; i < maxMissedDeadlines-1; i++ {
 		_, err := c.Invoke(context.Background(), InvokeRequest{Instance: "s1", Verb: "sleep", Options: map[string]any{"ms": 250, "ignore_cancel": true}})
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("want deadline, got %v", err)
@@ -247,5 +249,88 @@ func TestWedgedPluginIsRestarted(t *testing.T) {
 	out, err := c.Invoke(context.Background(), InvokeRequest{Instance: "s1", Verb: "echo", Options: map[string]any{"message": "back"}})
 	if err != nil || out["message"] != "back" {
 		t.Fatalf("calls must work on the restarted process: out=%v err=%v", out, err)
+	}
+}
+
+// TestMissedDeadlinesRestartAndPark: a plugin that answers the liveness ping
+// but never finishes a call (it ignores plugin.cancel) is restarted after
+// maxMissedDeadlines calls in a row miss their deadline, and those restarts
+// count toward the crash-loop guards: it ends up parked like a plugin that
+// crashes. An answered call in between resets the count.
+func TestMissedDeadlinesRestartAndPark(t *testing.T) {
+	spec := buildSlowPlugin(t)
+	var mu sync.Mutex
+	var logs []string
+	c := NewClient(spec, Deps{CallTimeout: 200 * time.Millisecond, Log: func(f string, a ...any) {
+		mu.Lock()
+		logs = append(logs, fmt.Sprintf(f, a...))
+		mu.Unlock()
+	}})
+	defer c.Close()
+	ctx := context.Background()
+	stuck := func() error {
+		_, err := c.Invoke(ctx, InvokeRequest{Instance: "s1", Verb: "sleep", Options: map[string]any{"ms": 800, "ignore_cancel": true}})
+		return err
+	}
+	echo := func() error {
+		_, err := c.Invoke(ctx, InvokeRequest{Instance: "s1", Verb: "echo", Options: map[string]any{"message": "hi"}})
+		return err
+	}
+	if err := echo(); err != nil {
+		t.Fatal(err)
+	}
+	pid := c.PID()
+
+	// An answered call between misses resets the count: no restart.
+	for i := 0; i < maxMissedDeadlines-1; i++ {
+		if err := stuck(); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("want the deadline, got %v", err)
+		}
+	}
+	if err := echo(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxMissedDeadlines-1; i++ {
+		_ = stuck()
+	}
+	if c.PID() != pid {
+		t.Fatalf("restarted before %d misses in a row: pid %d -> %d", maxMissedDeadlines, pid, c.PID())
+	}
+
+	// The next miss is the third in a row: the process is torn down.
+	if err := stuck(); err == nil || !strings.Contains(err.Error(), "the plugin was restarted") {
+		t.Fatalf("the third miss in a row does not say it restarted the plugin: %v", err)
+	}
+	// The next call starts a new process, whose count starts clean: one miss
+	// on it does not restart it.
+	_ = stuck()
+	fresh := c.PID()
+	if fresh == 0 || fresh == pid {
+		t.Fatalf("after the restart and one miss: pid %d (was %d)", fresh, pid)
+	}
+	if err := echo(); err != nil {
+		t.Fatalf("the restarted plugin does not answer: %v", err)
+	}
+	if c.PID() != fresh {
+		t.Fatalf("pid changed again: %d -> %d", fresh, c.PID())
+	}
+
+	// Keep doing it: the restarts hit the crash-loop guard and it is parked.
+	var parked error
+	for i := 0; i < 4*maxMissedDeadlines*restartBurst && parked == nil; i++ {
+		if err := stuck(); err != nil && strings.Contains(err.Error(), "is down") {
+			parked = err
+		}
+	}
+	if parked == nil {
+		t.Fatal("a plugin that never finishes a call was never parked")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	joined := strings.Join(logs, "\n")
+	for _, want := range []string{"calls in a row did not answer within their deadline", "parking down"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("no log line saying %q:\n%s", want, joined)
+		}
 	}
 }
