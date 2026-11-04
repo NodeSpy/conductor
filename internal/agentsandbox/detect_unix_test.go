@@ -187,17 +187,18 @@ func asHostTools(t *testing.T, tools ...string) {
 	t.Cleanup(func() { hostBinaries = old })
 }
 
-// strangerTool is a runnable binary named name that is no host binary nor
-// a copy of one (sleep with a byte appended).
+// strangerTool is a long-running binary named name that is neither the
+// tool it is named after nor a copy of it (a copy of yes: macOS signs a
+// copy, not a modified one).
 func strangerTool(t *testing.T, name string) string {
 	t.Helper()
-	sleep, err := exec.LookPath("sleep")
+	yes, err := exec.LookPath("yes")
 	if err != nil {
-		t.Skip("no sleep")
+		t.Skip("no yes")
 	}
 	p := filepath.Join(t.TempDir(), name)
-	b, _ := os.ReadFile(sleep)
-	if err := os.WriteFile(p, append(b, 0), 0o755); err != nil {
+	b, _ := os.ReadFile(yes)
+	if err := os.WriteFile(p, b, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if runtime.GOOS == "darwin" {
