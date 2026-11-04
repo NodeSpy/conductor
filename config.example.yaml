@@ -1381,7 +1381,8 @@ sandbox:
   # prefetch: [go]          # conductor downloads a dispatch's Go modules (its checkout's go.work /
   #                         #   go.mod, read before the agent runs) on the HOST into one module cache
   #                         #   of its own — shared by every identity, and the download itself runs
-  #                         #   CONFINED (namespace jail, network cut to proxy.golang.org only, never a
+  #                         #   CONFINED (namespace jail, network cut to proxy.golang.org plus its download
+  #                         #   bucket storage.googleapis.com and the checksum DB sum.golang.org, never a
   #                         #   file:// layer onto your own $GOMODCACHE); mounted read-only in every
   #                         #   sandbox; the agent's Go runs offline (GOPROXY=off), so no Go host goes in
   #                         #   egress. A module the agent itself adds is not fetched. Never for a target

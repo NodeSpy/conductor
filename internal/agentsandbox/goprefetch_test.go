@@ -261,7 +261,7 @@ func TestGoProxyHosts(t *testing.T) {
 		proxy string
 		want  []string
 	}{
-		{"https://proxy.golang.org", []string{"proxy.golang.org:443"}},
+		{"https://proxy.golang.org", []string{"proxy.golang.org:443", "storage.googleapis.com:443", "sum.golang.org:443"}},
 		{"off", nil},
 		{"direct", nil},
 		{"https://a.example.com|https://b.example.com,direct", []string{"a.example.com:443", "b.example.com:443"}},
@@ -272,6 +272,15 @@ func TestGoProxyHosts(t *testing.T) {
 		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("goProxyHosts(%q) = %v, want %v", c.proxy, got, c.want)
 		}
+	}
+}
+
+// A signed redirect URL in go's error output is logged without its query.
+func TestPrefetchErrorDropsURLQuery(t *testing.T) {
+	in := `go: reading https://storage.googleapis.com/proxy-golang-org-prod/abc-golang.org:toolchain-v0.0.1-go1.27.3.linux-amd64.zip?Expires=1&Signature=SECRET%3D%3D": Forbidden`
+	got := urlQuery.ReplaceAllString(in, "$1?…")
+	if strings.Contains(got, "SECRET") || strings.Contains(got, "Expires") || !strings.Contains(got, "toolchain-v0.0.1-go1.27.3.linux-amd64.zip?…") {
+		t.Fatalf("got %q", got)
 	}
 }
 

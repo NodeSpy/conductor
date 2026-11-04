@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -337,7 +338,7 @@ func (g *GoPrefetch) fill(ctx context.Context, m *GoModules) (string, error) {
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
 		if err != nil {
-			msg := strings.TrimSpace(stderr.String() + "\n" + string(out))
+			msg := urlQuery.ReplaceAllString(strings.TrimSpace(stderr.String()+"\n"+string(out)), "$1?…")
 			if len(msg) > 600 {
 				msg = "…" + msg[len(msg)-600:]
 			}
@@ -418,13 +419,30 @@ func goProxyHosts(proxy string) []string {
 			}
 			host += ":" + port
 		}
-		if !seen[host] {
-			seen[host] = true
-			hosts = append(hosts, host)
+		for _, h := range append([]string{host}, goProxyRedirects[host]...) {
+			if !seen[h] {
+				seen[h] = true
+				hosts = append(hosts, h)
+			}
 		}
 	}
 	return hosts
 }
+
+// goProxyRedirects are the other hosts a download through a known proxy
+// reaches. proxy.golang.org answers a large zip (a Go toolchain) with a
+// redirect to a signed URL in its storage bucket, and Go verifies a module
+// missing from go.sum (a toolchain always is) against the checksum database
+// at sum.golang.org directly. The bucket serves only what the proxy signed,
+// and every zip is verified whichever host served it, so admitting these
+// hosts adds no trust in what is downloaded.
+var goProxyRedirects = map[string][]string{
+	"proxy.golang.org:443": {"storage.googleapis.com:443", "sum.golang.org:443"},
+}
+
+// urlQuery is a URL's query string in an error message: a redirect's signed
+// URL carries its signature there, which has no place in a log line.
+var urlQuery = regexp.MustCompile(`(https?://[^\s"?]+)\?[^\s"]*`)
 
 // GoModules are a workspace's Go module files — go.work, go.work.sum, each
 // module's go.mod and go.sum — keyed by slash path relative to it.

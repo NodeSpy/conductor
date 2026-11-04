@@ -232,7 +232,12 @@ downloads instead, on the host:
   **shared by every identity**;
 - that download itself runs **confined**: the same namespace jail a code step
   gets, with the module cache the one writable path outside its own scratch
-  dir and the network cut to exactly `proxy.golang.org` (never `direct`, so
+  dir and the network cut to `proxy.golang.org` plus the two hosts a download
+  through it needs: `storage.googleapis.com`, where the proxy redirects large
+  zips such as a toolchain, and `sum.golang.org`, which Go asks directly to
+  verify a module that is not in `go.sum`. Only `go mod download` runs there
+  (no agent code, and no VCS), and every zip is checked against `go.sum` or
+  the checksum database whichever host served it (never `direct`, so
   no VCS runs against a module path a `go.mod` names, and never the
   operator's own module cache as a `file://` layer — this ONE cache is
   shared by every identity, and a `file://` layer onto the operator's own
@@ -246,7 +251,7 @@ downloads instead, on the host:
   `toolchain` line in `go.work` or `go.mod`), the download fetches that
   toolchain too: Go downloads it as the module
   `golang.org/toolchain@v0.0.1-go<version>.<os>-<arch>` into the same cache,
-  verified against the checksum database through `proxy.golang.org`. Then,
+  verified against the checksum database (`sum.golang.org`). Then,
   in the same jail, conductor asks which `GOROOT` the module files select
   (`go env GOROOT`) and records it for that workspace. A toolchain is about
   300 MB in the cache, once per Go version;
