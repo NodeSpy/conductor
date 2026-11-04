@@ -495,6 +495,10 @@ type IsolationConfig struct {
 	// Persist overrides sandbox.persist (none | cache | home) for this
 	// scope's agent launches.
 	Persist string `yaml:"persist,omitempty"`
+	// Inspect adds hosts whose TLS this scope's agent launches have
+	// terminated by conductor (on top of sandbox.inspect), making their
+	// https:// path entries enforceable.
+	Inspect []InspectEntry `yaml:"inspect,omitempty"`
 	// EgressOnlyNarrow marks a pack's egress_only (set at pack load).
 	EgressOnlyNarrow bool `yaml:"-"`
 }

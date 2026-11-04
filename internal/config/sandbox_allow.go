@@ -402,7 +402,21 @@ func (c *Config) AllowanceNotes() []string {
 	if c.Sandbox != nil && !c.Sandbox.Allow.Empty() {
 		notes = append(notes, fmt.Sprintf("sandbox.allow loosens EVERY agent launch: %s", c.Sandbox.Allow.Describe()))
 	}
+	inspectNote := func(where string, list []InspectEntry) {
+		if len(list) == 0 {
+			return
+		}
+		hosts := make([]string, len(list))
+		for i, e := range list {
+			hosts[i] = e.Host
+		}
+		notes = append(notes, fmt.Sprintf("%s: conductor terminates TLS to %s for its agent launches (a per-launch CA they trust; requests readable by conductor)", where, strings.Join(hosts, ", ")))
+	}
+	if c.Sandbox != nil {
+		inspectNote("sandbox.inspect", c.Sandbox.Inspect)
+	}
 	c.scopeSandboxSites(func(where string, iso *IsolationConfig) {
+		inspectNote(where, iso.Inspect)
 		if !iso.Allow.Empty() {
 			notes = append(notes, fmt.Sprintf("%s: sandbox allowance for its agent launches: %s", where, iso.Allow.Describe()))
 		}

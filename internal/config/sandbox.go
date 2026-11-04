@@ -60,6 +60,11 @@ type SandboxConfig struct {
 	// tunnel. EgressRequireTLS is its earlier name, still read.
 	EgressProtocolCheck *bool `yaml:"egress_protocol_check,omitempty"`
 	EgressRequireTLS    *bool `yaml:"egress_require_tls,omitempty"`
+	// Inspect are hosts whose TLS the egress proxy terminates for every
+	// agent launch, with a per-launch CA the sandbox trusts: their
+	// https:// path entries are enforced request by request. Exact
+	// hostnames only.
+	Inspect []InspectEntry `yaml:"inspect,omitempty"`
 	// EgressLimits bound each launch's egress session.
 	EgressLimits *SandboxEgressLimits `yaml:"egress_limits,omitempty"`
 	// Detect configures the host-side watcher, tripwires and response.

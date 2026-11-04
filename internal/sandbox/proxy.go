@@ -398,7 +398,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, sess *Session) {
 	}
 	reqPath := r.URL.Path // audited without the query
 	if !EgressAllowed(p.Allow, target) {
-		prefixes := pathPrefixes(p.Allow, target)
+		prefixes := pathPrefixes(p.Allow, "http", target)
 		if len(prefixes) == 0 {
 			p.deny(w, target, sess)
 			return
@@ -483,21 +483,33 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 	if !strings.Contains(target, ":") {
 		target += ":443"
 	}
+	host, port := splitHostPort(target)
+	inspected := sess.inspect.Covers(host)
+	var prefixes []string // https:// path prefixes of an inspected host; nil: any path
 	if !EgressAllowed(p.Allow, target) {
-		if prefixes := pathPrefixes(p.Allow, target); len(prefixes) > 0 {
+		if pre := pathPrefixes(p.Allow, "http", target); len(pre) > 0 {
 			// Its requests would pass unread inside the tunnel.
-			why := "path-restricted (" + strings.Join(prefixes, ", ") + "): reach it with plain-HTTP proxying (an http:// URL), not a tunnel"
-			p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "denied", Reason: why})
+			why := "path-restricted (" + strings.Join(pre, ", ") + "): reach it with plain-HTTP proxying (an http:// URL), not a tunnel"
+			p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "refused", Reason: why})
 			http.Error(w, "sandbox egress proxy: "+target+" is "+why, http.StatusForbidden)
 			return
 		}
-		p.deny(w, target, sess)
-		return
+		prefixes = pathPrefixes(p.Allow, "https", target)
+		if len(prefixes) == 0 {
+			p.deny(w, target, sess)
+			return
+		}
+		if !inspected {
+			why := "path-restricted (" + strings.Join(prefixes, ", ") + ") but this launch does not inspect " + host + " (inspect:)"
+			p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: "refused", Reason: why})
+			http.Error(w, "sandbox egress proxy: "+target+" is "+why, http.StatusForbidden)
+			return
+		}
 	}
 	// Resolved and checked now (an SSRF target is a 403, as for an
 	// allowlist miss); dialed — those exact addresses — after the client's
 	// first bytes pass.
-	ips, port, err := p.resolveAllowed(r.Context(), target)
+	ips, _, err := p.resolveAllowed(r.Context(), target)
 	if err != nil {
 		if errors.Is(err, errEgressBlockedIP) {
 			p.deny(w, target, sess)
@@ -525,6 +537,20 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 		p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: outcome, Reason: reason, Proto: proto})
 	}
 	switch {
+	case inspected:
+		// conductor reads this host's TLS: it must be TLS naming it,
+		// whatever the protocol check or a raw allowance says.
+		_ = client.SetReadDeadline(time.Now().Add(firstBytesWait))
+		open, why := classifyTunnel(buf.Reader, target)
+		_ = client.SetReadDeadline(time.Time{})
+		if why == "" && open.proto != ProtoTLS {
+			why = "an inspected host takes TLS only, not " + open.proto
+		}
+		if why != "" {
+			fail("refused", why)
+			return
+		}
+		hello, sni, proto = open.raw, open.sni, open.proto
 	case sess.requireTLS && len(sess.nonTLS) > 0 && EgressAllowed(sess.nonTLS, target):
 		// The launch's raw allowance for this target: no first-bytes check,
 		// the tunnel audited as allowed by it.
@@ -541,6 +567,27 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 			return
 		}
 		hello, sni, proto = open.raw, open.sni, open.proto
+	}
+	if inspected {
+		// The tunnel's far end is conductor's own TLS server: the tunnel
+		// keeps its accounting, caps, shapes and close-on-revoke.
+		inner, outer := net.Pipe()
+		t := &tunnel{sess: sess, target: target, client: client, server: outer}
+		if !sess.add(t) {
+			inner.Close()
+			fail("refused", sess.refused())
+			return
+		}
+		sess.count(int64(len(hello)), true)
+		go p.serveInspected(&prefixConn{Conn: inner, pre: hello}, sess, target, host, ips, port, prefixes)
+		go func() {
+			rec := t.run(buf.Reader)
+			sess.remove(t)
+			rec.Target, rec.SNI, rec.Proto, rec.Inspected = target, sni, proto, true
+			rec.Up += int64(len(hello))
+			p.record(rec)
+		}()
+		return
 	}
 	upstream, err := dialIPs(context.Background(), ips, port, 30*time.Second, target)
 	if err != nil {

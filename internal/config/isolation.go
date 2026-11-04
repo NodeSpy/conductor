@@ -255,9 +255,9 @@ func (iso *IsolationConfig) SandboxKnobsOnly() bool {
 }
 
 // agentOnlyKnobs reports a knob only an agent sandbox launch has:
-// egress_only, egress_protocol_check, persist.
+// egress_only, egress_protocol_check, persist, inspect.
 func (iso *IsolationConfig) agentOnlyKnobs() bool {
-	return iso != nil && (iso.EgressOnly != nil || iso.EgressProtocolCheck != nil || iso.Persist != "")
+	return iso != nil && (iso.EgressOnly != nil || iso.EgressProtocolCheck != nil || iso.Persist != "" || len(iso.Inspect) > 0)
 }
 
 // LayerIsolation is inner over outer, most specific wins: a block with a
@@ -291,6 +291,9 @@ func LayerIsolation(outer, inner *IsolationConfig) *IsolationConfig {
 	}
 	if inner.Persist != "" {
 		out.Persist = inner.Persist
+	}
+	if len(inner.Inspect) > 0 {
+		out.Inspect = inner.Inspect
 	}
 	return &out
 }
@@ -401,6 +404,8 @@ func isolationLoosens(iso *IsolationConfig, agent bool) string {
 		return "egress_protocol_check: false (any bytes through an allowed tunnel)"
 	case iso.Persist != "" && iso.Persist != "none":
 		return fmt.Sprintf("persist: %s (state kept across dispatches)", iso.Persist)
+	case len(iso.Inspect) > 0:
+		return "inspect: (a CA of conductor's own trusted inside the sandbox) — the operator writes it"
 	case agent && capsRaise(iso.Limits):
 		return "limits: above the agent launch defaults (pids over 8192, memory over 50% or unlimited, a CPU weight over 100, or a lower disk_free_min)"
 	case !agent:
@@ -448,11 +453,11 @@ func capsRaise(l *IsolationLimits) bool {
 
 // validateEgressEntry checks one agent egress entry's form: a host[:port]
 // pattern, a CIDR range, or an http:// URL whose path is a prefix the
-// proxy enforces on every plain-HTTP request. A path cannot be enforced on
-// encrypted traffic: an https:// URL is an error naming the host to list.
+// proxy enforces on every plain-HTTP request. An https:// URL is checked
+// here for form; validateInspectedEgress requires its host be inspected.
 func validateEgressEntry(where, e string) error {
 	e = strings.TrimSpace(e)
-	scheme, rest, isURL := strings.Cut(e, "://")
+	scheme, _, isURL := strings.Cut(e, "://")
 	if !isURL {
 		if strings.Contains(e, "/") {
 			host, _, _ := strings.Cut(e, ":")
@@ -463,10 +468,10 @@ func validateEgressEntry(where, e string) error {
 		return nil
 	}
 	switch strings.ToLower(scheme) {
-	case "http":
+	case "http", "https":
 		u, err := url.Parse(e)
 		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return fmt.Errorf("config: %s: %q: want http://host[:port]/path/prefix (no user, query or fragment)", where, e)
+			return fmt.Errorf("config: %s: %q: want %s://host[:port]/path/prefix (no user, query or fragment)", where, e, strings.ToLower(scheme))
 		}
 		if strings.ContainsAny(u.Hostname(), "*?[") {
 			return fmt.Errorf("config: %s: %q: a path entry names its host exactly (no wildcard)", where, e)
@@ -477,14 +482,8 @@ func validateEgressEntry(where, e string) error {
 			}
 		}
 		return nil
-	case "https":
-		host, _, _ := strings.Cut(rest, "/")
-		if !strings.Contains(host, ":") {
-			host += ":443"
-		}
-		return fmt.Errorf("config: %s: %q: egress over HTTPS is host:port only — a path cannot be enforced on encrypted traffic without TLS interception, which conductor does not do; list the host alone (%s)", where, e, host)
 	}
-	return fmt.Errorf("config: %s: %q: only http:// URLs (with a path prefix) are egress entries; list other targets as host:port", where, e)
+	return fmt.Errorf("config: %s: %q: only http:// and https:// URLs (with a path prefix) are egress entries; list other targets as host:port", where, e)
 }
 
 // detectIntervalLonger reports a detect.interval slower than the default.

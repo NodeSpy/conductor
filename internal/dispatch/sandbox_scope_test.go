@@ -57,8 +57,9 @@ func TestSandboxScope(t *testing.T) {
 	no := false
 	iso := &config.IsolationConfig{
 		EgressOnly: &[]string{"registry.lan:443"}, EgressOnlyNarrow: true, EgressProtocolCheck: &no, Persist: "cache",
-		Limits: &config.IsolationLimits{CPU: "150%", CPUWeight: 50, DiskFreeMin: "10GiB"},
-		Detect: &config.IsolationDetect{Interval: "1s", Connections: "close", Origin: "workflow w"},
+		Inspect: []config.InspectEntry{{Host: "npm.lan", CA: "/etc/lan-ca.pem"}},
+		Limits:  &config.IsolationLimits{CPU: "150%", CPUWeight: 50, DiskFreeMin: "10GiB"},
+		Detect:  &config.IsolationDetect{Interval: "1s", Connections: "close", Origin: "workflow w"},
 	}
 	k := SandboxScope(Request{Step: config.Step{Isolation: iso}})
 	if k == nil || !k.EgressOnlySet || !k.EgressOnlyNarrow || k.EgressOnly[0] != "registry.lan:443" || *k.ProtocolCheck || k.Persist != "cache" ||
@@ -66,7 +67,10 @@ func TestSandboxScope(t *testing.T) {
 		t.Fatalf("knobs: %+v", k)
 	}
 	r := Rescope(k, config.ScopeSources{Sites: map[string]*config.IsolationConfig{"workflow w": iso}})
-	if r == nil || r.Persist != "cache" || !r.EgressOnlySet || r.Connections != "close" || r.CPU != "150%" {
+	if len(k.Inspect) != 1 || k.Inspect[0].Host != "npm.lan" || k.Inspect[0].CA != "/etc/lan-ca.pem" {
+		t.Fatalf("inspect: %+v", k.Inspect)
+	}
+	if r == nil || r.Persist != "cache" || !r.EgressOnlySet || r.Connections != "close" || r.CPU != "150%" || len(r.Inspect) != 1 {
 		t.Fatalf("rescoped knobs: %+v", r)
 	}
 	// With a mode, cpu is the wrapper's own.

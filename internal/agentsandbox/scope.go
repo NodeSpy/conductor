@@ -78,6 +78,9 @@ type Scope struct {
 	ProtocolCheck *bool `json:"protocol_check,omitempty"`
 	// Persist overrides sandbox.persist ("": the global).
 	Persist string `json:"persist,omitempty"`
+	// Inspect adds hosts whose TLS the launch's proxy terminates (on top
+	// of sandbox.inspect).
+	Inspect []sandbox.InspectHost `json:"inspect,omitempty"`
 }
 
 // JoinAllowances is every allowance of list in one (nil: none).
@@ -156,6 +159,9 @@ func applyScope(p *Policy, base *Allowance, s *Scope) {
 		if s.ProtocolCheck != nil {
 			p.EgressAnyBytes = !*s.ProtocolCheck
 		}
+		for _, h := range s.Inspect {
+			p.Inspect = appendInspect(p.Inspect, h)
+		}
 		if s.EgressOnlySet {
 			only := s.EgressOnly
 			if s.EgressOnlyNarrow {
@@ -210,4 +216,20 @@ func coveredEntries(inherited, only []string) []string {
 		}
 	}
 	return out
+}
+
+// appendInspect adds h to list unless its host is there (a later ca:
+// replaces an earlier one for the same host).
+func appendInspect(list []sandbox.InspectHost, h sandbox.InspectHost) []sandbox.InspectHost {
+	h.Host = strings.ToLower(strings.TrimSpace(h.Host))
+	out := append([]sandbox.InspectHost(nil), list...)
+	for i := range out {
+		if out[i].Host == h.Host {
+			if h.CA != "" {
+				out[i].CA = h.CA
+			}
+			return out
+		}
+	}
+	return append(out, h)
 }

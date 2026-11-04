@@ -1395,6 +1395,9 @@ func (c *Config) Validate() error {
 	if err := c.validateSandbox(); err != nil {
 		return err
 	}
+	if err := c.validateInspectedEgress(); err != nil {
+		return err
+	}
 	if err := validateCodeConfig(c.Code); err != nil {
 		return err
 	}

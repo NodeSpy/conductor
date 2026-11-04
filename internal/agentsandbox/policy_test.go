@@ -1,11 +1,14 @@
 package agentsandbox
 
 import (
+	"bytes"
 	"encoding/json"
+	"encoding/pem"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -587,6 +590,95 @@ func TestWrapMintsTheAgentsEgressSession(t *testing.T) {
 			}
 			if len(got) != 1 || got[0].RequireTLS || got[0].Run != f.pol.Identity {
 				t.Fatalf("opted-out session %+v", got)
+			}
+		})
+	}
+}
+
+// A launch that inspects gets a session with the launch's inspector, and
+// its TLS clients pointed at a bundle — the system roots plus the CA's
+// certificate — shown to it read-only. The CA's key is in neither the
+// environment nor any file the launch is shown; a launch that inspects
+// nothing gets no bundle and no CA variables.
+func TestWrapInspectionShowsTheCANotItsKey(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			withPlatform(t, goos)
+			f := newPolicyFixture(t)
+			var got []sandbox.SessionOpts
+			f.deps.EgressUnixSession = func(_ []string, o sandbox.SessionOpts) (string, string, func(), error) {
+				got = append(got, o)
+				return "/tmp/egress-x/egress-0.sock", "cred", func() {}, nil
+			}
+			f.deps.EgressAddrSession = func(_ []string, o sandbox.SessionOpts) (string, string, func(), error) {
+				got = append(got, o)
+				return "127.0.0.1:40123", "cred", func() {}, nil
+			}
+			f.deps.Inherited = append(f.deps.Inherited, "SSL_CERT_FILE=/operator/own.pem")
+			l, err := Wrap(f.pol, []string{"claude"}, f.deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, kv := range l.Env {
+				k, _, _ := strings.Cut(kv, "=")
+				if slices.Contains(sandbox.InspectCAEnv, k) && kv != "SSL_CERT_FILE=/operator/own.pem" {
+					t.Fatalf("a launch that inspects nothing got %s", kv)
+				}
+			}
+			l.Cleanup()
+
+			got = nil
+			f.pol.Inspect = []sandbox.InspectHost{{Host: "npm.mirror.test"}}
+			l, err = Wrap(f.pol, []string{"claude"}, f.deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || !got[0].Inspect.Covers("npm.mirror.test") || got[0].Inspect.Covers("registry.npmjs.org") {
+				t.Fatalf("session: %+v", got)
+			}
+			var bundle string
+			for _, k := range sandbox.InspectCAEnv {
+				var vals []string
+				for _, kv := range l.Env {
+					if v, ok := strings.CutPrefix(kv, k+"="); ok {
+						vals = append(vals, v)
+					}
+				}
+				if len(vals) != 1 || (bundle != "" && vals[0] != bundle) {
+					t.Fatalf("%s: %v", k, vals)
+				}
+				bundle = vals[0]
+			}
+			if !strings.Contains(strings.Join(l.Argv, " "), filepath.Dir(bundle)) {
+				t.Fatalf("the bundle's dir is not shown to the launch: %v", l.Argv)
+			}
+			ca := got[0].Inspect.CAPEM()
+			entries, _ := os.ReadDir(filepath.Dir(bundle))
+			if len(entries) != 1 {
+				t.Fatalf("the bundle dir holds %v", entries)
+			}
+			b, err := os.ReadFile(bundle)
+			if err != nil || !bytes.HasSuffix(b, ca) {
+				t.Fatalf("bundle %v: does not end with the CA", err)
+			}
+			for rest := b; ; {
+				var blk *pem.Block
+				if blk, rest = pem.Decode(rest); blk == nil {
+					break
+				}
+				if blk.Type != "CERTIFICATE" {
+					t.Fatalf("the bundle holds a %s block", blk.Type)
+				}
+			}
+			for _, kv := range l.Env {
+				if strings.Contains(kv, "PRIVATE KEY") || strings.Contains(kv, "-----BEGIN") {
+					t.Fatalf("env carries PEM: %.60s", kv)
+				}
+			}
+			dir := filepath.Dir(bundle)
+			l.Cleanup()
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Fatalf("the bundle outlived the launch: %v", err)
 			}
 		})
 	}

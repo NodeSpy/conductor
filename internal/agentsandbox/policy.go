@@ -5,7 +5,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
@@ -92,6 +94,11 @@ type Policy struct {
 	ModelCredential string `json:"model_credential,omitempty"`
 	// ModelRoute are the model endpoints' hosts (what egress_only keeps).
 	ModelRoute []string `json:"-"`
+	// Inspect are the hosts whose TLS the launch's egress proxy terminates
+	// with a per-launch CA (sandbox.inspect, isolation.inspect): the
+	// sandbox trusts the CA, and https:// path entries for them are
+	// enforced per request.
+	Inspect []sandbox.InspectHost `json:"inspect,omitempty"`
 	// Limits are the launch's resource limits and disk guard
 	// (sandbox.limits; the zero value is the default).
 	Limits LimitSpec `json:"limits,omitempty"`
@@ -374,7 +381,22 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		EgressUnix: d.EgressUnix,
 		EgressAddr: d.EgressAddr,
 	}
+	// TLS inspection: a CA of this launch's own, its key in this process
+	// only; the sandbox is shown the system roots plus its certificate.
+	var insp *sandbox.Inspector
+	var caDir string
+	if len(p.Inspect) > 0 {
+		if d.EgressUnixSession == nil {
+			return nil, fmt.Errorf("agentsandbox: inspect: this launcher has no egress session to inspect through")
+		}
+		if insp, caDir, err = inspectionBundle(p.Inspect); err != nil {
+			return nil, err
+		}
+		binds = append(binds, sandbox.BindMount{Path: caDir, RO: true})
+		env = withCAEnv(env, filepath.Join(caDir, caBundleName))
+	}
 	if so := p.EgressSession(); d.EgressUnixSession != nil {
+		so.Inspect = insp
 		so.Shape, so.ShapeAllowed, so.ShapeAllowAll, so.ShapeAllowedBy = p.Detect.Connections, p.Detect.ShapeAllowed, p.Detect.ShapeAllowAll, p.Detect.AllowedBy
 		if p.Detect.Action == DetectOff {
 			so.Shape = sandbox.ShapeOff
@@ -396,6 +418,9 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		}
 	}
 	var closers []func()
+	if caDir != "" {
+		closers = append(closers, func() { _ = os.RemoveAll(caDir) })
+	}
 	if privCommon != "" && goos != "darwin" {
 		// Last at cleanup, once the launch is gone: refs its git packed
 		// into the private packed-refs are not lost with it.
@@ -531,6 +556,48 @@ func seatbeltBinds(binds []sandbox.BindMount) []sandbox.BindMount {
 		default:
 			out = append(out, sandbox.BindMount{Path: b.Path, RO: b.RO})
 		}
+	}
+	return out
+}
+
+// caBundleName is the inspecting launch's trust bundle, in its own dir.
+const caBundleName = "ca-bundle.pem"
+
+// inspectionBundle mints the launch's inspection CA and writes the bundle
+// the sandbox trusts (system roots plus the CA's certificate, never its
+// key) into a fresh directory.
+func inspectionBundle(hosts []sandbox.InspectHost) (*sandbox.Inspector, string, error) {
+	insp, err := sandbox.NewInspector(hosts)
+	if err != nil {
+		return nil, "", fmt.Errorf("agentsandbox: %w", err)
+	}
+	bundle, err := insp.Bundle()
+	if err != nil {
+		return nil, "", fmt.Errorf("agentsandbox: %w", err)
+	}
+	dir, err := SocketDir("cca")
+	if err != nil {
+		return nil, "", fmt.Errorf("agentsandbox: inspect: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, caBundleName), bundle, 0o444); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, "", fmt.Errorf("agentsandbox: inspect: %w", err)
+	}
+	return insp, dir, nil
+}
+
+// withCAEnv points every common TLS stack at bundle, replacing what the
+// environment had.
+func withCAEnv(env []string, bundle string) []string {
+	out := make([]string, 0, len(env)+len(sandbox.InspectCAEnv))
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains(sandbox.InspectCAEnv, k) {
+			out = append(out, kv)
+		}
+	}
+	for _, k := range sandbox.InspectCAEnv {
+		out = append(out, k+"="+bundle)
 	}
 	return out
 }

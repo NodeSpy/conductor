@@ -869,6 +869,7 @@ agent-authored workflow's knobs are ignored, and a pack may only tighten
 |---|---|---|---|---|---|---|
 | egress allowlist | model hosts only | `egress` | `egress_only` replaces it; `network.egress` (with `mode: namespace`) adds | yes | yes | narrow only: its `egress_only` is intersected with what it inherits |
 | protocol check | on | `egress_protocol_check` | `egress_protocol_check` | yes | yes | no `false` |
+| TLS inspection (enforce `https://` paths) | none | `inspect` | `inspect` (adds to the global list) | — | yes | no |
 | raw (unchecked) targets | none | `allow.raw` | `allow.raw` (adds to the base) | keep the base empty | yes | by a granted request |
 | tunnel tools, reverse shell, pty | none | `allow`, `detect.allow` | `allow` (adds to the base) | keep the base empty | yes | by a granted request |
 | egress idle / upload / download | 10m / 512MiB / 20GiB | `egress_limits` | `egress_limits` | yes | yes (`off`) | lower only |
@@ -888,10 +889,11 @@ agent-authored workflow's knobs are ignored, and a pack may only tighten
 
 **Egress is host:port.** The allowlist decides by host and port. An HTTPS
 request's path is encrypted, so conductor cannot filter it without
-intercepting TLS: an `https://host/path` entry is a `validate` error that
-says to list the host alone. Allowing `registry.example.com` over HTTPS
-allows every path on it. Plain HTTP is different: an `http://host:port/prefix/`
-entry restricts that host to the paths under the prefix (below).
+intercepting TLS: allowing `registry.example.com` over HTTPS allows every
+path on it, and an `https://host/path` entry is a `validate` error that
+says to list the host alone, or to add the host to `inspect:` (below).
+Plain HTTP is different: an `http://host:port/prefix/` entry restricts
+that host to the paths under the prefix (below).
 
 A locked-down workflow: one registry, small caps, kill on any detection.
 
@@ -958,6 +960,89 @@ sandbox:
 - Point the tools at the mirror the usual way (`GOPROXY=http://mirror.lan:3000/goproxy`,
   an `.npmrc` registry, `PIP_INDEX_URL`); they reach it through
   `HTTP_PROXY` as every other request does.
+
+#### TLS inspection for a host (opt-in) {#tls-inspection}
+
+To restrict an HTTPS host to some paths, conductor has to read its
+requests, which means terminating the agent's TLS. `inspect:` opts one
+host into that. Nothing is inspected unless you list it.
+
+```yaml
+sandbox:
+  egress: [registry.npmjs.org]
+workflows:
+  dependency-bump:
+    isolation:
+      inspect:
+        - { host: npm.corp.lan, ca: /etc/ssl/corp-root.pem }   # the mirror's own CA, for the upstream check
+      egress_only: ["https://npm.corp.lan/@myorg/"]            # this mirror, /@myorg/ only
+      limits: { memory: 4G, pids: 1024 }
+      detect: { action: kill }
+```
+
+What happens for a launch whose scope inspects a host:
+
+- **A CA for this launch only.** At launch conductor mints an ECDSA P-256
+  CA, valid for 24 hours and name-constrained to the inspected hosts (no
+  IP addresses). Its key stays in conductor's memory. The sandbox gets a
+  read-only bundle of the system roots plus that CA's certificate, named by
+  `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`,
+  `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO`. A launch that inspects nothing
+  gets none of this.
+- **Per request.** For an inspected host the proxy presents a leaf for
+  that host, minted on first use, and reads each request, whether it comes
+  over HTTP/1.1 keep-alive or as an HTTP/2 stream. Every request's path is
+  checked against the host's `https://` entries, with the same rules as
+  plain HTTP: the path is decoded, and dot segments, `//`, a leftover `%`,
+  a backslash or a NUL are refused. A request whose `Host` names another
+  host is refused. A websocket upgrade is allowed only on an allowed path.
+  A host listed by `inspect:` and also allowed whole (a bare `host` entry)
+  is inspected and audited, with any path allowed.
+- **Upstream.** Each request goes on over a new TLS connection to the
+  host, which is verified against the system roots plus the host's `ca:`
+  file. Verification cannot be turned off, and an upstream whose
+  certificate fails it is refused (502, audited `upstream certificate
+  refused`). Requests are forwarded as sent. Only hop-by-hop headers
+  (`Connection`, `Keep-Alive`, `TE`, `Upgrade` outside an upgrade) are
+  handled by the proxy, as any HTTP proxy does. No `X-Forwarded-For` is
+  added. The upstream leg is HTTP/1.1.
+- **Audit.** Each request is an `egress` row with `inspected: true`,
+  method, host and path. The query string, headers and bodies are never
+  logged. The connection itself is a row too, and keeps the session's
+  caps, idle limit, connection shapes and close-on-revoke.
+- **Clients that refuse the CA.** A client with a pinned certificate, or
+  one that uses only the platform's trust store, fails the handshake. The
+  failure is audited as `client rejected inspection CA`. On macOS that
+  includes Go programs and anything using the system keychain, which ignore
+  these variables. On Linux, Go reads `SSL_CERT_FILE`. Such a client can
+  still reach the host only if you allow it uninspected, which means
+  dropping it from `inspect:`.
+- **Every other host stays a blind tunnel**: the client sees the server's
+  own certificate, and conductor sees host, port, timing and byte counts,
+  nothing more.
+
+The tradeoffs, plainly:
+
+- **conductor reads that traffic.** Tokens, cookies and bodies to an
+  inspected host pass through conductor's process in clear text. None of
+  them are logged or stored, but a bug in conductor could expose them. The
+  host's own end-to-end TLS guarantee is replaced by two TLS legs with
+  conductor in between.
+- **The agent trusts a new CA, but only a narrow one.** The CA can sign
+  only for the inspected names (and, as X.509 name constraints work, their
+  subdomains). It expires with the launch's day, and its key never enters
+  the sandbox. A forged certificate for any other host fails verification.
+- **Some clients break.** See pinned and platform-store clients, above.
+- **Only HTTP is understood.** Another protocol inside TLS to an inspected
+  host fails as a malformed request.
+- **Cost.** Every request is parsed and re-sent, and the upstream leg is
+  HTTP/1.1. That is fine for a package mirror; it would not suit bulk
+  transfers.
+
+Only the operator sets `inspect:`, in `sandbox:` or an `isolation:` block.
+Wildcards, addresses and ports are `validate` errors, a pack may not set
+it, and an agent-authored workflow's is ignored. `conductor validate`
+lists every inspected host with its scope.
 
 #### What is left {#what-is-left}
 
@@ -1425,7 +1510,11 @@ that lifts the allow/approve/host gates lifts this requirement.
 | a model the gateway cannot carry (opencode, an OAuth-only login) | `login-copy`: an access-token-only login copy, the key in the environment |
 | a CONNECT tunnel that does not open with TLS, HTTP/1 or HTTP/2 naming its host (SSH, unknown bytes, silence) | refused before the upstream is dialed, the protocol named (`allow.raw` for one target, `egress_protocol_check: false` for a scope) |
 | a plain-HTTP request outside a host's `http://` path entries, or a CONNECT to such a host | refused (403), audited with method and path |
-| an `https://` egress entry with a path | rejected by `validate` (list the host alone) |
+| an `https://` egress entry with a path, its host not in any `inspect:` | rejected by `validate` (inspect the host, or list it alone) |
+| a CONNECT to a host only `https://` path entries allow, in a launch that does not inspect it | refused, audited |
+| an inspected host's upstream certificate does not verify (system roots + its `ca:`) | the request is refused (502), audited `upstream certificate refused` |
+| a client rejects the inspection CA (pinned, or a platform trust store) | the connection fails, audited `client rejected inspection CA` |
+| `inspect:` with a wildcard, an address or a port | rejected by `validate` |
 | `skill:` + `mode: user` isolation | rejected by `validate` (claim theft under a shared uid) |
 | `agent_authored.host` without `isolation:` | rejected by `validate` (`trust: full` opts out) |
 
@@ -1439,7 +1528,7 @@ An agent launch's containment adds:
 
 | event | when |
 |---|---|
-| `egress` | each request through its egress session: `run`, `target`, `sni`, `protocol` as recognized (`tls`, `http`, `h2c`, `ssh`), `method` and `path` for plain HTTP (never the query), `up`/`down` bytes, `duration_ms`, `max_idle_ms`, `server_first`, `outcome` (`allowed`, `refused`, `closed`), a `reason` for a refusal or closure, `shape` for a flagged tunnel, and `allowed_by` for a tunnel a `raw` allowance let skip the protocol check |
+| `egress` | each request through its egress session: `run`, `target`, `sni`, `protocol` as recognized (`tls`, `http`, `h2c`, `ssh`), `method` and `path` for plain HTTP and inspected HTTPS (never the query), `inspected: true` for a host whose TLS conductor terminated, `up`/`down` bytes, `duration_ms`, `max_idle_ms`, `server_first`, `outcome` (`allowed`, `refused`, `closed`), a `reason` for a refusal or closure, `shape` for a flagged tunnel, and `allowed_by` for a tunnel a `raw` allowance let skip the protocol check |
 | `sandbox_detection` | the watcher, a tripwire, the git guard or the proxy's connection shapes (`kind: tunnel_shape`, with `shape`, `target` and the features): `kind`, `reason`, `action` (also a `conductor.escalate` notification); `action: allowed` with `allowed_by: <scope>` when the launch's [allowance](#scoped-allowances) covers it (audited and logged, not notified) |
 | `model_request` | each request through the model gateway: `run`, `upstream`, `method`, `path`, `status`, `up`/`down` bytes, `duration_ms` (logged only when it failed) |
 | `sandbox_limit` | the disk guard stopped a launch, a launch passed a model cap (`kind: model_upload` / `model_download`, `action: refuse`), the memory cap killed it (`kind: memory_cap`, `action: killed`) or the task cap refused its forks (`kind: pids_cap`, `action: refused`); also notified |

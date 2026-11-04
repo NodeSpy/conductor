@@ -458,9 +458,9 @@ func EgressAllowed(allow []string, hostport string) bool {
 		if pat == "*" {
 			return true
 		}
-		if hp, prefix, ok := pathEntry(pat); ok {
-			// An http:// entry allows its host at any path only when its
-			// prefix is "/"; a path entry is the proxy's per-request check
+		if _, hp, prefix, ok := pathEntry(pat); ok {
+			// A URL entry allows its host at any path only when its prefix
+			// is "/"; a path entry is the proxy's per-request check
 			// (pathPrefixes).
 			if prefix != "/" {
 				continue

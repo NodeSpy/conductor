@@ -217,6 +217,9 @@ func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string, sock string) 
 		if r.ServerFirst > 0 {
 			f["server_first"] = r.ServerFirst
 		}
+		if r.Inspected {
+			f["inspected"] = true
+		}
 		rep.send("egress", f)
 	}
 	rel, err := agentsandbox.NewRelayer()

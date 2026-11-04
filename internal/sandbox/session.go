@@ -55,6 +55,9 @@ type SessionOpts struct {
 	// OnShape receives each flagged tunnel, once, while it is open (not
 	// called with Shape off).
 	OnShape func(ShapeEvent)
+	// Inspect is the launch's TLS inspection (nil: none): a CONNECT to a
+	// host it covers is terminated and read request by request.
+	Inspect *Inspector
 }
 
 // Tunnel shapes and what a flagged one gets.
@@ -147,6 +150,9 @@ type ConnRecord struct {
 	// AllowedBy names the allowance that let the tunnel skip a check (its
 	// scope); "" for an ordinary tunnel.
 	AllowedBy string `json:"allowed_by,omitempty"`
+	// Inspected marks a tunnel conductor terminated (an inspected host),
+	// and each request read inside it.
+	Inspected bool `json:"inspected,omitempty"`
 	// Shape is the tunnel's flagged shape (ShapeInteractive,
 	// ShapeBulkUpload; "" = none).
 	Shape string `json:"shape,omitempty"`
@@ -160,6 +166,7 @@ type Session struct {
 	nonTLS     []string
 	nonTLSBy   string
 	shape      SessionOpts
+	inspect    *Inspector
 
 	up, down atomic.Int64
 
@@ -169,7 +176,7 @@ type Session struct {
 }
 
 func newSession(o SessionOpts) *Session {
-	return &Session{Run: o.Run, lim: o.Limits.resolved(), requireTLS: o.RequireTLS, nonTLS: o.NonTLS, nonTLSBy: o.NonTLSBy, shape: o, conns: map[*tunnel]struct{}{}}
+	return &Session{Run: o.Run, lim: o.Limits.resolved(), requireTLS: o.RequireTLS, nonTLS: o.NonTLS, nonTLSBy: o.NonTLSBy, shape: o, inspect: o.Inspect, conns: map[*tunnel]struct{}{}}
 }
 
 // Bytes reports the session's totals.

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
 
@@ -53,6 +54,8 @@ type Resolver struct {
 	Limits LimitSpec
 	// Persist is sandbox.persist ("" = PersistNone).
 	Persist string
+	// Inspect is sandbox.inspect (Policy.Inspect).
+	Inspect []sandbox.InspectHost
 	// EgressAnyBytes / EgressIdle / EgressUpload / EgressDownload are the
 	// egress session settings every policy carries (Policy).
 	EgressAnyBytes                           bool
@@ -261,6 +264,9 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		ModelUpload: r.ModelUpload, ModelDownload: r.ModelDownload,
 	}
 	p.ModelRoute = hosts
+	for _, h := range r.Inspect {
+		p.Inspect = appendInspect(p.Inspect, h)
+	}
 	applyScope(&p, r.Allow, scope)
 	if cache, err := r.persistCache(e, home, persist); err != nil {
 		return Policy{}, fmt.Errorf("agentsandbox: identity cache: %w", err)

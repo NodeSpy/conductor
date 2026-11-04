@@ -1,9 +1,19 @@
 package config
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 const allowDoc = optoutBase + `
@@ -319,36 +329,105 @@ func TestRawAllowanceAndProtocolCheckKnob(t *testing.T) {
 	}
 }
 
-// An egress entry is a host pattern, a CIDR range or an http:// URL with a
-// path prefix; an https:// URL with a path is an error naming the host.
+// An egress entry is a host pattern, a CIDR range or an http(s):// URL
+// with a path prefix; an https:// path entry needs its host inspected,
+// else it is an error naming inspect: and the host to list.
 func TestEgressEntryForms(t *testing.T) {
 	for _, e := range []string{"proxy.golang.org", "athens.lan:3000", "10.0.0.0/8:*", "100.64.0.0/10:4873", "*.example.com",
-		"http://athens.lan:3000/github.com/myorg/", "http://verdaccio:4873/@myorg/", "http://devpi.lan:3141"} {
+		"http://athens.lan:3000/github.com/myorg/", "http://verdaccio:4873/@myorg/", "http://devpi.lan:3141", "https://npm.lan/@myorg/"} {
 		if err := validateEgressEntry("sandbox.egress", e); err != nil {
 			t.Errorf("%s: %v", e, err)
 		}
 	}
 	for e, want := range map[string]string{
-		"https://registry.example/@myorg/": "a path cannot be enforced on encrypted traffic without TLS interception, which conductor does not do; list the host alone (registry.example:443)",
-		"https://athens.lan:8443/x":        "(athens.lan:8443)",
-		"ftp://mirror.lan/pub":             "only http:// URLs",
-		"athens.lan/github.com":            "a / is only for a CIDR range",
-		"http://*.lan/x/":                  "no wildcard",
-		"http://athens.lan/a/../b":         "no dot segments",
-		"http://athens.lan/x?y=1":          "no user, query or fragment",
+		"ftp://mirror.lan/pub":     "only http:// and https:// URLs",
+		"athens.lan/github.com":    "a / is only for a CIDR range",
+		"http://*.lan/x/":          "no wildcard",
+		"https://*.lan/x/":         "no wildcard",
+		"http://athens.lan/a/../b": "no dot segments",
+		"http://athens.lan/x?y=1":  "no user, query or fragment",
 	} {
 		if err := validateEgressEntry("sandbox.egress", e); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want %q", e, err, want)
 		}
 	}
 	doc := strings.Replace(allowDoc, "sandbox:\n", "sandbox:\n  egress: [\"https://registry.example/@myorg/\"]\n", 1)
-	if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), "list the host alone") {
-		t.Fatalf("an https path entry loaded: %v", err)
+	if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), "add registry.example to inspect:") || !strings.Contains(err.Error(), "(registry.example:443)") {
+		t.Fatalf("an https path entry loaded without inspect: %v", err)
 	}
-	doc = strings.Replace(allowDoc, "      detect: { action: alert }", "      detect: { action: alert }\n      mode: namespace\n      network: { egress: [\"https://registry.example/x\"] }", 1)
-	if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), "list the host alone") {
+	doc = strings.Replace(allowDoc, "      detect: { action: alert }", "      detect: { action: alert }\n      mode: namespace\n      network: { egress: [\"https://registry.example:8443/x\"] }", 1)
+	if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), "(registry.example:8443)") {
 		t.Fatalf("an https path entry in a scope loaded: %v", err)
 	}
+	// Inspected — globally, or by the scope — it loads.
+	doc = strings.Replace(allowDoc, "sandbox:\n", "sandbox:\n  inspect: [registry.example]\n  egress: [\"https://registry.example/@myorg/\"]\n", 1)
+	if _, err := loadDoc(t, doc); err != nil {
+		t.Fatalf("an inspected https path entry: %v", err)
+	}
+	doc = strings.Replace(allowDoc, "      detect: { action: alert }", "      detect: { action: alert }\n      inspect: [registry.example]\n      egress_only: [\"https://registry.example/@myorg/\"]", 1)
+	if _, err := loadDoc(t, doc); err != nil {
+		t.Fatalf("a scope-inspected https path entry: %v", err)
+	}
+}
+
+// inspect: takes exact hostnames, optionally with an upstream ca: file;
+// wildcards, addresses and ports are refused, and a pack may not set it.
+func TestInspectForms(t *testing.T) {
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, testCAPEM(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	good := strings.Replace(allowDoc, "sandbox:\n", "sandbox:\n  inspect: [npm.lan, {host: pypi.lan, ca: "+ca+"}]\n", 1)
+	cfg, err := loadDoc(t, good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in := cfg.Sandbox.Inspect; len(in) != 2 || in[0].Host != "npm.lan" || in[1].Host != "pypi.lan" || in[1].CA != ca {
+		t.Fatalf("inspect: %+v", in)
+	}
+	if notes := strings.Join(cfg.AllowanceNotes(), "\n"); !strings.Contains(notes, "sandbox.inspect: conductor terminates TLS to npm.lan, pypi.lan") {
+		t.Fatalf("validate does not list the inspection: %s", notes)
+	}
+	for list, want := range map[string]string{
+		"[\"*.npm.lan\"]":                     "exact hostnames only",
+		"[\"npm.*\"]":                         "exact hostnames only",
+		"[10.0.0.5]":                          "not addresses",
+		"[npm.lan:443]":                       "no port",
+		"[\"https://npm.lan\"]":               "no port, scheme or path",
+		"[{host: npm.lan, ca: /nonexistent}]": "ca:",
+	} {
+		doc := strings.Replace(allowDoc, "sandbox:\n", "sandbox:\n  inspect: "+list+"\n", 1)
+		if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("inspect %s: %v, want %q", list, err, want)
+		}
+	}
+	scoped := strings.Replace(allowDoc, "      detect: { action: alert }", "      detect: { action: alert }\n      inspect: [\"*.lan\"]", 1)
+	if _, err := loadDoc(t, scoped); err == nil || !strings.Contains(err.Error(), "isolation.inspect") {
+		t.Fatalf("a wildcard scope inspect: %v", err)
+	}
+	if why := isolationLoosens(&IsolationConfig{Inspect: []InspectEntry{{Host: "npm.lan"}}}, true); !strings.Contains(why, "inspect:") {
+		t.Fatalf("a pack's inspect is not refused: %q", why)
+	}
+	iso := LayerIsolation(&IsolationConfig{Mode: "namespace"}, &IsolationConfig{Inspect: []InspectEntry{{Host: "npm.lan"}}})
+	if iso.Mode != "namespace" || len(iso.Inspect) != 1 {
+		t.Fatalf("layered: %+v", iso)
+	}
+}
+
+// testCAPEM is a self-signed certificate (a mirror's private CA).
+func testCAPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "mirror ca"}, IsCA: true, BasicConstraintsValid: true,
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
 // Every agent sandbox knob is the operator's per scope, without a mode and

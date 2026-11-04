@@ -79,6 +79,9 @@ func egressAudit(logf func(string, ...any), audit func(map[string]any)) func(san
 		if r.Method != "" {
 			row["method"], row["path"] = r.Method, r.Path
 		}
+		if r.Inspected {
+			row["inspected"] = true
+		}
 		if r.Reason != "" {
 			row["reason"] = r.Reason
 			logf("sandbox: egress %s %s (run %s): %s", r.Outcome, r.Target, r.Run, r.Reason)

@@ -10,6 +10,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/gitpush"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // PaseoSandboxed turns the agent sandbox on for paseo dispatches: conductor
@@ -277,13 +278,16 @@ func knobsOf(iso *config.IsolationConfig) *agentsandbox.Scope {
 		k.EgressOnlySet, k.EgressOnly, k.EgressOnlyNarrow = true, append([]string{}, *iso.EgressOnly...), iso.EgressOnlyNarrow
 	}
 	k.ProtocolCheck, k.Persist = iso.EgressProtocolCheck, iso.Persist
+	for _, h := range iso.Inspect {
+		k.Inspect = append(k.Inspect, sandbox.InspectHost{Host: h.Host, CA: h.CA})
+	}
 	return &k
 }
 
 // withKnobs adds k's origin-less knobs to s (nil when neither sets any).
 func withKnobs(s, k *agentsandbox.Scope) *agentsandbox.Scope {
 	if k == nil || (k.Memory == "" && k.Pids == 0 && k.CPU == "" && k.CPUWeight == 0 && !k.DiskSet &&
-		!k.EgressOnlySet && k.ProtocolCheck == nil && k.Persist == "") {
+		!k.EgressOnlySet && k.ProtocolCheck == nil && k.Persist == "" && len(k.Inspect) == 0) {
 		return s
 	}
 	if s == nil {
@@ -292,7 +296,7 @@ func withKnobs(s, k *agentsandbox.Scope) *agentsandbox.Scope {
 	s.Memory, s.Pids, s.CPU, s.CPUWeight = k.Memory, k.Pids, k.CPU, k.CPUWeight
 	s.DiskSet, s.DiskFreeFrac, s.DiskFreeBytes, s.DiskOff = k.DiskSet, k.DiskFreeFrac, k.DiskFreeBytes, k.DiskOff
 	s.EgressOnlySet, s.EgressOnly, s.EgressOnlyNarrow = k.EgressOnlySet, k.EgressOnly, k.EgressOnlyNarrow
-	s.ProtocolCheck, s.Persist = k.ProtocolCheck, k.Persist
+	s.ProtocolCheck, s.Persist, s.Inspect = k.ProtocolCheck, k.Persist, k.Inspect
 	return s
 }
 

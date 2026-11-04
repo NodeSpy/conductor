@@ -55,7 +55,7 @@ func TestRequestPathAndPrefixes(t *testing.T) {
 		"http://verdaccio/@myorg/":                 "verdaccio:80 /@myorg/",
 		"http://devpi.lan:3141":                    "devpi.lan:3141 /",
 	} {
-		hp, prefix, ok := pathEntry(e)
+		_, hp, prefix, ok := pathEntry(e)
 		if !ok || hp+" "+prefix != want {
 			t.Errorf("%s: %s %s %v", e, hp, prefix, ok)
 		}

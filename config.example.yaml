@@ -1418,7 +1418,13 @@ sandbox:
   #                             #   egress_require_tls. One target: allow.raw below.
   # (egress: entries also take exact names and CIDRs that reach private space, and
   #  http://host:port/prefix/ for a plain-HTTP mirror restricted to a path; an https:// path
-  #  is a validate error. Isolation.md § A local package mirror.)
+  #  is a validate error unless the host is inspected. Isolation.md § A local package mirror.)
+  # inspect: []                 # opt in per host: conductor terminates the agent's TLS to these
+  #                             #   exact hostnames with a per-launch CA the sandbox trusts, so
+  #                             #   https://host/path/ entries are enforced request by request.
+  #                             #   { host: npm.corp.lan, ca: /etc/ssl/corp-root.pem } adds the
+  #                             #   mirror's CA for the upstream check (never turned off).
+  #                             #   conductor then reads that traffic: Isolation.md § TLS inspection.
   # egress_limits:              # per launch; each takes "off"
   #   idle: 10m
   #   upload: 512MiB
@@ -1460,7 +1466,7 @@ sandbox:
   #   shared: protected         # a linked worktree's shared git dir: only objects/refs/logs/lfs
   #                             #   writable; direct: all of it but config/hooks/info/alternates
   # macos_posix_ipc: false      # macOS: allow host-wide POSIX shm/semaphores (Python multiprocessing)
-  # Every knob above but model_credential and the aggregate caps is also set per runtime,
+  # Every knob above but model_credential and the aggregate caps (and inspect, which a scope adds to) is also set per runtime,
   # workflow, trigger or step, tighter or looser, in an isolation: block with no mode:
   #   isolation: { egress_only: [registry.npmjs.org], egress_protocol_check: true, persist: none,
   #                limits: { memory: 4G, pids: 1024, cpu: 200%, cpu_weight: 50, disk_free_min: 10% },

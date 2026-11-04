@@ -6,31 +6,42 @@ import (
 	"strings"
 )
 
-// Path rules for plain-HTTP egress. An egress entry may be an http:// URL
-// with a path prefix — `http://athens.lan:3000/github.com/myorg/` — where
-// a host-only entry allows any path. Conductor reads plain HTTP, so the
-// prefix is enforced on every request: each absolute-URI request through
-// the proxy is checked on its own (keep-alive and pipelining included,
-// since the proxy parses and re-frames each one), and a CONNECT tunnel to a
-// host that only path entries allow is refused (its requests would pass
-// unread). HTTPS is host:port only: a path inside TLS cannot be seen
-// without interception, which conductor does not do.
+// Path rules. An egress entry may be a URL with a path prefix —
+// `http://athens.lan:3000/github.com/myorg/` — where a host-only entry
+// allows any path.
+//
+// Plain HTTP (http://) is read by the proxy, so the prefix is enforced on
+// every request: each absolute-URI request through the proxy is checked on
+// its own (keep-alive and pipelining included, since the proxy parses and
+// re-frames each one), and a CONNECT tunnel to a host that only http://
+// entries allow is refused (its requests would pass unread).
+//
+// HTTPS (https://) paths are enforced only for a host the launch inspects
+// (Inspector: conductor terminates its TLS with a per-launch CA); for any
+// other host a CONNECT is a blind tunnel, host:port only, and a host that
+// only https:// path entries allow is refused.
 
-// pathEntry parses an http:// egress entry: its host:port (port 80 by
-// default) and path prefix ("/" for any path). ok is false for anything
-// that is not an http:// URL.
-func pathEntry(e string) (hostport, prefix string, ok bool) {
+// pathEntry parses an http:// or https:// egress entry: its scheme,
+// host:port (port 80 or 443 by default) and path prefix ("/" for any
+// path). ok is false for anything that is not such a URL.
+func pathEntry(e string) (scheme, hostport, prefix string, ok bool) {
 	e = strings.TrimSpace(e)
-	if !strings.HasPrefix(strings.ToLower(e), "http://") {
-		return "", "", false
+	low := strings.ToLower(e)
+	switch {
+	case strings.HasPrefix(low, "http://"):
+		scheme = "http"
+	case strings.HasPrefix(low, "https://"):
+		scheme = "https"
+	default:
+		return "", "", "", false
 	}
 	u, err := url.Parse(e)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", "", false
+		return "", "", "", false
 	}
 	host, port := strings.ToLower(u.Hostname()), u.Port()
 	if port == "" {
-		port = "80"
+		port = map[string]string{"http": "80", "https": "443"}[scheme]
 	}
 	prefix = u.Path
 	if prefix == "" {
@@ -39,25 +50,25 @@ func pathEntry(e string) (hostport, prefix string, ok bool) {
 	if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
-	return host + ":" + port, prefix, true
+	return scheme, host + ":" + port, prefix, true
 }
 
-// entryHostPort is an egress entry's host:port pattern: itself, or an
-// http:// entry's host and port.
+// entryHostPort is an entry's host:port pattern: a URL entry's host:port,
+// any other entry as written.
 func entryHostPort(e string) string {
-	if hp, _, ok := pathEntry(e); ok {
+	if _, hp, _, ok := pathEntry(e); ok {
 		return hp
 	}
 	return e
 }
 
-// pathPrefixes are the path prefixes allow gives target (host:port);
-// nil when no http:// entry names it.
-func pathPrefixes(allow []string, target string) []string {
+// pathPrefixes are the path prefixes allow gives target (host:port) for
+// scheme ("http" or "https"); nil when no entry of that scheme names it.
+func pathPrefixes(allow []string, scheme, target string) []string {
 	var out []string
 	for _, e := range allow {
-		hp, prefix, ok := pathEntry(e)
-		if ok && EgressAllowed([]string{hp}, target) {
+		sc, hp, prefix, ok := pathEntry(e)
+		if ok && sc == scheme && EgressAllowed([]string{hp}, target) {
 			out = append(out, prefix)
 		}
 	}

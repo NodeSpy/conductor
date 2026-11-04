@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 func TestClassify(t *testing.T) {
@@ -295,6 +297,13 @@ func TestApplyScope(t *testing.T) {
 	applyScope(&p, nil, &Scope{ProtocolCheck: &yes})
 	if p.EgressAnyBytes {
 		t.Fatal("a scope's protocol check did not tighten the global off")
+	}
+	// A scope's inspect adds to the global list; the same host once, its
+	// later ca: winning.
+	p = Policy{Inspect: []sandbox.InspectHost{{Host: "npm.lan"}}}
+	applyScope(&p, nil, &Scope{Inspect: []sandbox.InspectHost{{Host: "NPM.lan", CA: "/ca.pem"}, {Host: "pypi.lan"}}})
+	if len(p.Inspect) != 2 || p.Inspect[0] != (sandbox.InspectHost{Host: "npm.lan", CA: "/ca.pem"}) || p.Inspect[1].Host != "pypi.lan" {
+		t.Fatalf("inspect: %+v", p.Inspect)
 	}
 }
 

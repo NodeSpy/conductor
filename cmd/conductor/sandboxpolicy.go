@@ -17,6 +17,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/gitdiff"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
 
@@ -142,6 +143,11 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	}
 	r.Limits.DiskFreeFrac, r.Limits.DiskFreeBytes, r.Limits.DiskOff = cfg.Sandbox.DiskFreeMin()
 	r.Persist = cfg.Sandbox.PersistMode()
+	if cfg.Sandbox != nil {
+		for _, h := range cfg.Sandbox.Inspect {
+			r.Inspect = append(r.Inspect, sandbox.InspectHost{Host: h.Host, CA: h.CA})
+		}
+	}
 	if !r.Limits.Off {
 		// All agents together: the slice their launch scopes run in.
 		if err := capAgentSlice(runtime.GOOS, cfg.Sandbox.AggregateMemory(), cfg.Sandbox.AggregateCPU()); err != nil {
