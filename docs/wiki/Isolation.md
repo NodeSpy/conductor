@@ -389,8 +389,11 @@ It carries claude-code, codex, gemini, pi and qwen with an API key. A local
 model router is always reached through it. When it carries every route of a
 launch, the provider's hosts leave the allowlist and no login file is placed
 in the home. A launch the gateway cannot carry falls back to `login-copy`:
-opencode, or a subscription (OAuth) login with no API key. A refused request
-is audited as `sandbox_model_gateway_refused`.
+opencode, or a subscription (OAuth) login with no API key. A request with a
+wrong credential, or a token-less write, is refused and audited as
+`sandbox_model_gateway_refused`. A token-less HEAD or GET carries nothing to
+refuse: claude's connectivity probe (`HEAD /api/hello`) is answered by the
+gateway itself, any other gets a quiet 401, and neither is forwarded.
 
 Every request through the gateway is audited as `{event: model_request}`,
 with the run, upstream host, method, path (never the query), status, bytes
@@ -1244,7 +1247,7 @@ An agent launch's containment adds:
 | `model_request` | each request through the model gateway: `run`, `upstream`, `method`, `path`, `status`, `up`/`down` bytes, `duration_ms` (logged only when it failed) |
 | `sandbox_limit` | the disk guard stopped a launch, or a launch passed a model cap (`kind: model_upload` / `model_download`, `action: refuse`); also notified |
 | `sandbox_leftover_killed` | processes a launch left running were killed at its end |
-| `sandbox_model_gateway_refused` | a request to the model gateway without the launch's token |
+| `sandbox_model_gateway_refused` | a request to the model gateway with a wrong credential, or a token-less write (token-less HEAD/GET probes are not audited) |
 | `sandbox_limits_unavailable` | once: no systemd user manager, launches run without memory and task caps |
 
 A `conductor sandbox exec` launch's rows carry `via: sandbox-exec`.

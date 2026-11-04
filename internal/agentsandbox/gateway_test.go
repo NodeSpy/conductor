@@ -137,6 +137,62 @@ func TestGatewaySwapsTheTokenForTheKey(t *testing.T) {
 	}
 }
 
+// claude probes its API base with a token-less HEAD /api/hello at every
+// start: answered locally, never forwarded, never audited as a refusal.
+// A wrong credential, or a token-less write, is still refused and audited.
+func TestGatewayAnswersTokenlessProbesQuietly(t *testing.T) {
+	up, seen, mu := upstream(t)
+	u, _ := url.Parse(up.URL)
+	var refused []string
+	gw := httptest.NewServer(gatewayHandler(gatewayPlan{upstream: u, header: "x-api-key", key: "sk-REAL", token: "cgw-launch"}, func(s string) { refused = append(refused, s) }, nil))
+	defer gw.Close()
+	do := func(method, path string, hdr map[string]string) int {
+		req, _ := http.NewRequest(method, gw.URL+path, nil)
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if c := do("HEAD", "/api/hello", nil); c != 200 {
+		t.Fatalf("HEAD /api/hello: %d", c)
+	}
+	if c := do("GET", "/api/hello", nil); c != 200 {
+		t.Fatalf("GET /api/hello: %d", c)
+	}
+	if c := do("GET", "/v1/models", nil); c != http.StatusUnauthorized {
+		t.Fatalf("token-less GET: %d", c)
+	}
+	if len(refused) != 0 {
+		t.Fatalf("token-less probes audited as refusals: %v", refused)
+	}
+	for _, c := range []struct {
+		method, path string
+		hdr          map[string]string
+	}{
+		{"HEAD", "/api/hello", map[string]string{"X-Api-Key": "cgw-other"}},
+		{"GET", "/api/hello", map[string]string{"Authorization": "Basic eDp5"}},
+		{"GET", "/api/hello?key=wrong", nil},
+		{"POST", "/v1/messages", nil},
+	} {
+		if code := do(c.method, c.path, c.hdr); code != http.StatusUnauthorized {
+			t.Fatalf("%s %s %v: %d", c.method, c.path, c.hdr, code)
+		}
+	}
+	if len(refused) != 4 {
+		t.Fatalf("real refusals audited: %v", refused)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(*seen) != 0 {
+		t.Fatalf("a probe or refusal reached the upstream: %d", len(*seen))
+	}
+}
+
 // A request names a path, never a host: the gateway reaches only its
 // upstream.
 func TestGatewayReachesOnlyItsUpstream(t *testing.T) {

@@ -303,7 +303,20 @@ func gatewayHandler(g gatewayPlan, onRefuse func(string), meter *modelMeter) htt
 	}
 	want := []byte(g.token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if subtle.ConstantTimeCompare([]byte(presentedToken(r)), want) != 1 {
+		tok := presentedToken(r)
+		if subtle.ConstantTimeCompare([]byte(tok), want) != 1 {
+			// A model client's connectivity probe (claude's HEAD /api/hello
+			// at every start) carries no credential: answered here, never
+			// forwarded, and not a refusal worth an audit row. A request
+			// presenting a wrong credential, or a token-less write, is.
+			if tok == "" && !hasCredentialHeader(r) && (r.Method == http.MethodHead || r.Method == http.MethodGet) {
+				if r.URL.Path == "/api/hello" {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				http.Error(w, "conductor model gateway: this launch's token is required", http.StatusUnauthorized)
+				return
+			}
 			if onRefuse != nil {
 				onRefuse(r.Method + " " + r.URL.Path)
 			}
@@ -356,6 +369,18 @@ func presentedToken(r *http.Request) string {
 		}
 	}
 	return r.URL.Query().Get("key")
+}
+
+// hasCredentialHeader reports whether r carries any credential header,
+// even one presentedToken does not read as a token (a non-Bearer
+// Authorization): such a request is an attempt, not a probe.
+func hasCredentialHeader(r *http.Request) bool {
+	for _, h := range []string{"Authorization", "X-Api-Key", "X-Goog-Api-Key", "Api-Key", "Proxy-Authorization"} {
+		if r.Header.Get(h) != "" {
+			return true
+		}
+	}
+	return r.URL.Query().Has("key")
 }
 
 // gatewayServer serves a plan on a listener until closed.
