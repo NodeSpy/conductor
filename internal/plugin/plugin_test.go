@@ -284,6 +284,9 @@ func TestClientRejectsBadProtocol(t *testing.T) {
 }
 
 func TestClientCallTimeout(t *testing.T) {
+	old := livenessTimeout
+	livenessTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { livenessTimeout = old })
 	fc := newFakeConn()
 	fc.hang = true
 	sp := connectorSpec()
@@ -293,12 +296,27 @@ func TestClientCallTimeout(t *testing.T) {
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want timeout, got %v", err)
 	}
-	// after a transport failure the conn is torn down
+	// A timeout alone is not a dead plugin: the connection stays up...
 	c.mu.Lock()
-	down := c.conn == nil
+	up := c.conn != nil
 	c.mu.Unlock()
-	if !down {
-		t.Fatal("expected teardown after timeout")
+	if !up {
+		t.Fatal("a call's own timeout must not tear the plugin down")
+	}
+	// ...until the liveness check (which this fake never answers either)
+	// gives up on it.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		c.mu.Lock()
+		down := c.conn == nil
+		c.mu.Unlock()
+		if down {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expected teardown once the liveness check went unanswered")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

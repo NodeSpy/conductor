@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/conductor/pkg/expr"
 )
@@ -354,7 +355,29 @@ type VerbSemantics struct {
 	// can't set these options itself. The engine overwrites them, so a bot
 	// never posts as anyone else.
 	Identity map[string]string `json:"identity,omitempty"`
-	Optional []string          `json:"optional,omitempty"`
+	// CallTimeout is how long the host waits for one call of this verb, as a
+	// Go duration ("3m", "90s"), when the verb is legitimately slower than the
+	// host's default per-call bound (downloading logs, waiting on a remote
+	// job). The host caps it at its own maximum. A call that outlives it gets
+	// a deadline error and a plugin.cancel; the process keeps running.
+	// Declare it with optional: [call_timeout] so an older host, which does
+	// not know it, still loads the plugin with its default bound.
+	CallTimeout string   `json:"call_timeout,omitempty"`
+	Optional    []string `json:"optional,omitempty"`
+}
+
+// DeclaredCallTimeout is the verb's call_timeout semantic, parsed. ok is false
+// when the verb declares none or it does not parse to a positive duration
+// (ValidateSemantics refuses the latter).
+func (v Verb) DeclaredCallTimeout() (d time.Duration, ok bool) {
+	if v.Semantics == nil || v.Semantics.CallTimeout == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(v.Semantics.CallTimeout)
+	if err != nil || d <= 0 {
+		return 0, false
+	}
+	return d, true
 }
 
 // IdentityAttributes are the bot identity attributes a verb's `identity`
@@ -516,7 +539,7 @@ var semanticKeys = map[string][]string{
 		"attempts", "priority", "feedback", "verification_failed", "remediate", "remediate_triage", "author", "labels",
 		"private", "secret", "conversation_reply", "option_hooks", "attachments"},
 	"verb": {"reads_revision", "mints_credential", "opens_conversation", "conversation_post", "host_only",
-		"target_args", "exposes", "identity"},
+		"target_args", "exposes", "identity", "call_timeout"},
 	"connection": {"credentials", "scope", "poll", "translate", "listeners", "preflight"},
 }
 
@@ -797,6 +820,11 @@ func ValidateSemantics(d Decl) []string {
 			continue
 		}
 		path := "verbs[" + v.Name + "].semantics"
+		if s.CallTimeout != "" {
+			if d, err := time.ParseDuration(s.CallTimeout); err != nil || d <= 0 {
+				p = append(p, fmt.Sprintf("%s.call_timeout: %q is not a positive duration (e.g. 90s, 3m)", path, s.CallTimeout))
+			}
+		}
 		if s.ReadsRevision != nil && s.ReadsRevision.Revision == "" {
 			p = append(p, path+".reads_revision.revision: required")
 		}

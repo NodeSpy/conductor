@@ -171,13 +171,28 @@ spawn (verify-before-execute, manifest confinement — unchanged)
   │     plugin.run       {instance, run_id, code, args, env, inputs}     → {outputs}
   │     host.state / host.kv / host.sql / host.memory  (plugin → host requests)
   │
+  ├─ plugin.ping {}          → {}      (after a call outlives its deadline: is the process answering?)
+  ├─ plugin.cancel {id}      (notification: the host stopped waiting for request id)
+  │
   ├─ plugin.stop {instance}  → {}      (optional: instance removed or reloaded)
   │
   └─ stdin closed → plugin exits (shutdown); the host waits for in-flight calls
 ```
 
-**Restart.** A transport failure or a timeout tears the process down; the next
-call respawns it (crash-loop guard as today: 3 starts / 30 s parks it; 32 over
+**Deadlines.** Every call except `start_source` and `plugin.run` is bounded:
+30 s by default, or the verb's declared `call_timeout` (§2.3), capped at
+10 minutes. A call that outlives its bound returns a deadline error to its
+caller and nothing else happens to the process: the host sends
+`plugin.cancel {id}` so the plugin can stop the work, drops the late answer
+if one comes, and keeps every other call and source stream on that process
+running. It then sends `plugin.ping`. Any answer, including -32601 from a
+plugin that predates the method, means the process is alive. No answer
+within 10 s means it is wedged, and it is torn down like a crashed one.
+`plugin.run` is bounded by its step's timeout, and a cancelled run still
+ends the engine process, so step code never outlives its step.
+
+**Restart.** A transport failure (the connection closes, the process exits)
+or a failed liveness check tears the process down; the next call respawns it (crash-loop guard as today: 3 starts / 30 s parks it; 32 over
 the client's life parks it until reload). On respawn the host re-sends
 `start_source` for every live instance with the same triggers
 (`Client.StreamSource`, already built). A plugin must make `start_source`
@@ -547,8 +562,9 @@ subset.
 | **-32013 `rate_limited`** | `data: {retry_after}` | retried after `retry_after`, regardless of `retry:`, bounded by a total wait budget and an attempt cap (below) |
 | **-32014 `not_ready`** | state not computed yet (e.g. mergeability "unknown") | retried with short backoff, bounded |
 
-A JSON-RPC error answer never tears the process down. Transport errors and
-timeouts do. This is the #164 fix, kept.
+A JSON-RPC error answer never tears the process down. Neither does a call
+that outlives its deadline (§1.3): only a closed connection, an exited
+process or an unanswered liveness ping does.
 
 **Where each code is handled.** An answered JSON-RPC error becomes a typed
 `connector.ContractError{Code, Message, Data}` at the connector boundary
@@ -686,7 +702,9 @@ Vendor-neutral only, enforced by a boundary test (§1.13):
 
 - `pkg/plugin`:
   - wire types and `Serve` / `ServeConn`;
-  - handler interfaces, one per optional method;
+  - handler interfaces, one per optional method, plus `ContextInvoker`
+    (`InvokeContext(ctx, req)`): a verb handler whose ctx is cancelled when
+    the host sends `plugin.cancel` for the call, so a slow verb can stop;
   - the semantics types (§2);
   - the `host.*` client.
 - `pkg/sourcekit`:
@@ -789,6 +807,7 @@ live (holding it instead when it carries a `cursor`, as above), as today (`dispa
 | `exposes` | `{local: option, url: output, lease: output, release: verb, path?: option}` | This verb makes a local address reachable from outside (a tunnel or a relay). When a consumer that names this connector in `expose:` needs public reachability for local address A, the engine invokes the verb with `{local: A}`, uses `url`, and invokes `release` with `{lease}` when done. Long-lived exposures are re-opened after a plugin restart, and the consumer is given the new URL. Everything is released on shutdown, and the plugin kills its children when its stdin closes. A plugin may always reach the address it was handed in `local`, even under egress confinement (loopback is never proxied). An `expose:` naming a connector without an `exposes` verb is a load error. `path`, when declared, is the OPTION this verb accepts a listener's resolved HTTP path in (§2.4 `listeners`): the engine passes the resolved path there and uses `url`'s answer AS IS — for a relay whose own public address already carries the destination (it replays deliveries to local+path itself). A verb with no `path` gets no such option; instead the engine appends the resolved path to `url`'s answer itself (careful joining: no double slashes, any query on the returned URL survives past the appended path) — the right default for a byte-level tunnel that forwards the whole origin, path included, and has no use for the path at all. Checked at describe: `path`, if present, must name an option this SAME verb's `options` actually declares. | the hard-coded provider `switch` (`internal/handoff/tunnel.go:44-102`), the smee client (`internal/inbound/smee.go`, `pkg/sourcekit`) |
 | `target_args` | `{opt: tmpl}` | Defaults this verb's options from the target when a step omits them. Only for an `assigned` target. | `readVerb` defaulting `repo`/`pr` (`engine/steps.go:555-581`) |
 | `identity` | `{opt: attribute}` | When a **bot** calls this verb, the engine fills each named option from the bot's identity, overwriting whatever the bot passed, so a bot can't post as another. An attribute the bot doesn't set removes the option. Attributes (`IdentityAttributes`): `name` (display name, else the config id), `id`, `initials`, `tagline`, `avatar_shape`, `avatar_eyes`, `avatar_icon`, `avatar_color`, `color`, and the deprecated `avatar_preset` (set only while a bot's config writes its face as a preset). Avatar and color values are names from conductor's built-in lists, never URLs; the plugin maps them to its own icons (e.g. a shape to an emoji). An operator's own picture is never an attribute: conductor serves it only on its operator socket and has no public endpoint, so a connector gets the fallback face (`avatar_shape`/`avatar_eyes`, or `avatar_icon`, with `avatar_color`, the color defaulting to the bot's) or nothing. Checked at describe: each attribute must be known, and each option declared (unless the verb is `open`). Calls not made by a bot are untouched. A plugin that works without it lists `identity` in `optional`. | — (new) |
+| `call_timeout` | `"3m"` (a Go duration) | How long the host waits for one call of this verb, instead of the default 30 s, for a verb that is slow by nature (downloading logs, waiting on a remote job). Capped at 10 minutes. A call past it gets a deadline error and a `plugin.cancel`; the process keeps running (§1.3). Checked at describe: must be a positive duration. A plugin lists `call_timeout` in `optional` so an older host loads it with the default bound. | the fixed 30 s per-call bound |
 
 ### 2.4 Connection-level semantics (`Decl.semantics`)
 

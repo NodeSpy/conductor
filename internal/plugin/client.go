@@ -24,6 +24,15 @@ import (
 // daemon (§8.5); the per-call ctx deadline guarantees the call returns.
 const DefaultCallTimeout = 30 * time.Second
 
+// MaxCallTimeout caps a verb's declared call_timeout semantic: a plugin can
+// ask for more time for a slow verb, not for an unbounded call.
+const MaxCallTimeout = 10 * time.Minute
+
+// livenessTimeout bounds the plugin.ping sent after a call outlives its
+// deadline. A process that cannot answer a ping in this long is wedged and is
+// restarted. A var so tests can shrink it.
+var livenessTimeout = 10 * time.Second
+
 // restart backoff: after restartBurst failed (re)starts inside restartWindow,
 // the plugin is parked "down" for the rest of the window instead of being
 // respawned. On top of that trailing-window burst limit, restartLifetimeCap
@@ -168,6 +177,14 @@ type Client struct {
 	// instance's state or managed-auth token just because it shares the
 	// process. Validate alone must never be enough to unlock either.
 	active map[string]bool
+	// callTimeouts are the per-verb call bounds the plugin declared (the
+	// call_timeout verb semantic), already capped at MaxCallTimeout, keyed by
+	// instance and then verb. The "" instance holds the type-level
+	// declaration; a per-instance describe adds its own.
+	callTimeouts map[string]map[string]time.Duration
+	// probing is set while a liveness check is in flight, so a burst of
+	// timed-out calls sends one ping, not one each.
+	probing bool
 }
 
 // RunHost authorizes and executes ONE data-plane op on behalf of a run. It is
@@ -268,7 +285,7 @@ func (c *Client) startSource(ctx context.Context, req StartSourceRequest, emit f
 var streamRestartDelay = 2 * time.Second
 
 // StreamSource is StartSource SUPERVISED: it opens the stream and, whenever
-// the plugin process behind it goes away — a crash, a hung call torn down, an
+// the plugin process behind it goes away — a crash, a wedged process torn down, an
 // in-place restart — opens it again on the restarted process, until ctx ends.
 // A source plugin's events must not stop for the rest of the daemon's life
 // because one verb call timed out. Blocks until ctx is cancelled.
@@ -797,7 +814,45 @@ func (c *Client) Describe(ctx context.Context) (*Decl, error) {
 	if p := append(sdk.CheckSemantics(raw), sdk.ValidateSemantics(decl)...); len(p) > 0 {
 		return nil, fmt.Errorf("plugin %s: declarations refused:\n  %s", c.spec.Name, strings.Join(p, "\n  "))
 	}
+	c.recordCallTimeouts("", decl)
 	return &decl, nil
+}
+
+// recordCallTimeouts keeps the verbs' declared call_timeout bounds for
+// instance ("" for the type-level declaration), capped at MaxCallTimeout.
+func (c *Client) recordCallTimeouts(instance string, d Decl) {
+	m := map[string]time.Duration{}
+	for _, v := range d.Verbs {
+		if t, ok := v.DeclaredCallTimeout(); ok {
+			if t > MaxCallTimeout {
+				c.deps.Log("plugin %s: verb %s declares call_timeout %s — capped at %s", c.spec.Name, v.Name, t, MaxCallTimeout)
+				t = MaxCallTimeout
+			}
+			m[v.Name] = t
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.callTimeouts == nil {
+		c.callTimeouts = map[string]map[string]time.Duration{}
+	}
+	c.callTimeouts[instance] = m
+}
+
+// verbTimeout is the bound for one call of verb on instance: the instance's
+// own declaration, else the type-level one, else the default.
+func (c *Client) verbTimeout(instance, verb string) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if m, ok := c.callTimeouts[instance]; ok && instance != "" {
+		if t, ok := m[verb]; ok {
+			return t
+		}
+	}
+	if t, ok := c.callTimeouts[""][verb]; ok {
+		return t
+	}
+	return c.deps.CallTimeout
 }
 
 // DescribeInstance asks the plugin for ONE configured instance's declaration
@@ -841,17 +896,19 @@ func (c *Client) DescribeInstance(ctx context.Context, instance string, config m
 	if p := append(sdk.CheckSemantics(raw), sdk.ValidateSemantics(d)...); len(p) > 0 {
 		return nil, false, fmt.Errorf("plugin %s: instance %s: declarations refused:\n  %s", c.spec.Name, instance, strings.Join(p, "\n  "))
 	}
+	c.recordCallTimeouts(instance, d)
 	return &d, true, nil
 }
 
 // Invoke runs a verb. The connection map carries only the calling instance's
 // resolved credentials (least privilege). A transport error tears the
-// subprocess down so the next call restarts it (subject to backoff).
+// subprocess down so the next call restarts it (subject to backoff). The call
+// is bounded by the verb's declared call_timeout, else DefaultCallTimeout.
 func (c *Client) Invoke(ctx context.Context, req InvokeRequest) (map[string]any, error) {
 	c.serve(req.Instance)
 	c.markActive(req.Instance)
 	var res InvokeResult
-	if err := c.call(ctx, MethodInvoke, req, &res); err != nil {
+	if err := c.callFor(ctx, c.verbTimeout(req.Instance, req.Verb), MethodInvoke, req, &res); err != nil {
 		return nil, err
 	}
 	return res.Outputs, nil
@@ -926,34 +983,104 @@ func (c *Client) callFor(ctx context.Context, timeout time.Duration, method stri
 	}
 	err := conn.Call(cctx, method, params, result)
 	var answered *acp.RPCError
-	if err != nil && !errors.As(err, &answered) {
-		// transport/timeout failure: drop the connection so the plugin is
-		// restarted on the next call (never takes the daemon down). A
-		// JSON-RPC ERROR RESPONSE is not one: the plugin answered, the
-		// transport is healthy, and tearing the process down for it would
+	if err == nil || errors.As(err, &answered) {
+		// The plugin answered. A JSON-RPC ERROR RESPONSE is an answer too:
+		// the transport is healthy, and tearing the process down for it would
 		// also end every source stream it serves — a verb that failed on the
 		// platform's side (a 422, a missing repo) would silence the source.
-		c.mu.Lock()
-		if c.conn == conn {
-			c.teardownLocked()
+		return err
+	}
+	dead := false
+	select {
+	case <-conn.Done():
+		dead = true
+	default:
+	}
+	if cctx.Err() != nil && !dead && timeout > 0 {
+		// The call's own deadline passed, or its caller gave up, while the
+		// process is still connected. That is a slow call, not a dead
+		// plugin: conn.Call already sent plugin.cancel and will drop a late
+		// answer. Tearing the process down here used to end every source
+		// stream it serves and every other call in flight on it, for one
+		// verb that was downloading a few large logs. Whether the process
+		// is wedged is a separate question, answered by a ping.
+		if errors.Is(cctx.Err(), context.DeadlineExceeded) {
+			c.checkLiveness(conn)
+			if ctx.Err() == nil {
+				return fmt.Errorf("plugin %s: %s did not answer within %s (the call was cancelled; the plugin keeps running): %w", c.spec.Name, method, timeout, err)
+			}
 		}
-		c.mu.Unlock()
-		// Finding 9 (LOW): conn.Call's own transport-layer errors come
-		// straight from the acp package this client reuses as its wire
-		// protocol — an operator sees "acp: connection closed" with no clue
-		// what "acp" even is, or which plugin. Only wrap a genuine
-		// transport failure (the connection actually died), never a plain
-		// call-scoped cancellation/deadline (cctx.Err() != nil — the call's
-		// OWN timeout or the caller giving up), which already reads fine on
-		// its own and did not necessarily mean the process is gone. The
-		// cause stays reachable via %w for anything (tests, errors.Is/As)
-		// that needs the original acp-level error, without ever changing
-		// what the acp package itself reports for its own runtime messages.
-		if cctx.Err() == nil {
-			return fmt.Errorf("plugin %s process exited or closed its connection: %w", c.spec.Name, err)
-		}
+		return err
+	}
+	// The connection died (the process exited or closed stdout), a write
+	// failed, or a call with no deadline of its own (plugin.run) was
+	// cancelled: drop the process so the next call restarts it, subject to
+	// the crash-loop guards. A run's step code must not outlive its step, so
+	// a cancelled run still ends the engine process.
+	c.mu.Lock()
+	if c.conn == conn {
+		c.teardownLocked()
+	}
+	c.mu.Unlock()
+	// Finding 9 (LOW): conn.Call's own transport-layer errors come straight
+	// from the acp package this client reuses as its wire protocol — an
+	// operator sees "acp: connection closed" with no clue what "acp" even
+	// is, or which plugin. Only wrap a genuine transport failure (the
+	// connection actually died), never a plain call-scoped cancellation or
+	// deadline, which already reads fine on its own. The cause stays
+	// reachable via %w.
+	if cctx.Err() == nil {
+		return fmt.Errorf("plugin %s process exited or closed its connection: %w", c.spec.Name, err)
 	}
 	return err
+}
+
+// checkLiveness pings the process behind conn after one of its calls outlived
+// its deadline. An answer of any kind proves the process is reading and
+// writing, so it stays; a plugin built before plugin.ping existed answers
+// method-not-found, which counts. No answer within livenessTimeout means it
+// is wedged: it is torn down and the next call restarts it, subject to the
+// same crash-loop guards as a crash. One check runs at a time per client.
+func (c *Client) checkLiveness(conn transport) {
+	c.mu.Lock()
+	if c.probing || c.conn != conn {
+		c.mu.Unlock()
+		return
+	}
+	c.probing = true
+	c.mu.Unlock()
+	bound := livenessTimeout
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			c.probing = false
+			c.mu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), bound)
+		defer cancel()
+		// The ping runs on its own goroutine: a process that stopped reading
+		// stdin can block the request write itself, which ctx does not bound.
+		answered := make(chan error, 1)
+		go func() { answered <- conn.Call(ctx, sdk.MethodPing, struct{}{}, nil) }()
+		var err error
+		select {
+		case err = <-answered:
+		case <-ctx.Done():
+			err = ctx.Err()
+		case <-conn.Done():
+			return // already gone; the next call restarts it
+		}
+		var rpcErr *acp.RPCError
+		if err == nil || errors.As(err, &rpcErr) {
+			return
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.conn == conn {
+			c.deps.Log("plugin %s: a call timed out and the process did not answer a liveness check within %s — restarting it", c.spec.Name, bound)
+			c.teardownLocked()
+		}
+	}()
 }
 
 // Close stops the subprocess for good.
@@ -1154,6 +1281,7 @@ func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 
 	bounded := newBoundedReader(stdout, d.MaxMessageBytes)
 	conn := pidConn{Conn: acp.NewConn(bounded, stdin, pluginHandler{onNotify: d.onNotify, onRequest: d.onRequest}), pid: cmd.Process.Pid}
+	conn.SetAbandonNotify(sdk.MethodCancel)
 
 	var once sync.Once
 	kill := func() {
@@ -1224,6 +1352,7 @@ func inProcessDial(h sdk.Handler, d Deps) (transport, func()) {
 		_ = fromPlugin.Close()
 	}()
 	conn := acp.NewConn(toDaemon, fromDaemon, pluginHandler{onNotify: d.onNotify, onRequest: d.onRequest})
+	conn.SetAbandonNotify(sdk.MethodCancel)
 	kill := func() {
 		_ = fromDaemon.Close()
 		_ = toDaemon.Close()
