@@ -301,10 +301,16 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// ---- Mirrored-section overlay (§5.3): the consumer's steps:/models:
 	// blocks deep-merge onto the pack's members BY NAME before anything is
 	// namespaced, so the overrides address the pack's own vocabulary. ----
+	// What each requested allowance's grant is pinned to: the steps as the
+	// pack ships them, before the overlay below changes any.
+	pins := allowancePins(man)
 	if err := st.applyStepOverlay(ns, req.inst, man); err != nil {
 		return err
 	}
 	if err := st.applyFleetOverlay(ns, req.inst, man.Models); err != nil {
+		return err
+	}
+	if err := st.applyAllowanceGrants(ns, req.inst, man, pins); err != nil {
 		return err
 	}
 
@@ -356,9 +362,12 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		if s.Isolation != nil || s.Trust == "full" {
 			return // explicit isolation, or a deliberate opt-out
 		}
-		s.Isolation = defaultPackCodeIsolation()
+		s.Isolation = defaultCodeIsolation()
 		s.IsolationDefaulted = true
 	})
+	// Provenance, after the overlay: every step this pack ships is the
+	// pack's, whatever the overlay changed in it.
+	man.WalkPackSteps(func(_ string, s *Step) { s.PackInstance = ns })
 
 	// ---- Fleets: the pack's named models, namespaced, with the consumer's
 	// per-fleet override applied (the top rung of the ladder, §2.3/§5.3). ----

@@ -41,7 +41,12 @@ func (s *Server) wireAuth() error {
 		if s.operatorsConfigured() {
 			return fmt.Errorf("operators are configured but there is no state dir for the sign-in store (set store.state_file)")
 		}
-		s.deps.Log("dashboard: no state dir for auth and no operators; serving without sign-in")
+		if s.allowOpen() {
+			s.deps.Log("dashboard: no state dir for auth and no operators; serving without sign-in (dashboard.auth.allow_open: true)")
+		} else {
+			s.deps.Log("dashboard: no operators configured and no state dir for the sign-in store — the dashboard API is refused " +
+				"(set dashboard.auth.allow_open: true to serve it anyway, or configure operators: and store.state_file to enroll one)")
+		}
 		return nil
 	}
 	st, err := auth.OpenStore(dir, s.deps.Now)
@@ -96,6 +101,13 @@ func (s *Server) operatorsConfigured() bool {
 	return s.deps.Operators != nil && len(s.deps.Operators()) > 0
 }
 
+// allowOpen reports whether dashboard.auth.allow_open explicitly opts into
+// serving the API with no sign-in when there are no operators to sign in as
+// (rt2 #10). Default false: see dispatch and config.DashboardAuth.AllowOpen.
+func (s *Server) allowOpen() bool {
+	return s.deps.Cfg.Dashboard.Auth.AllowOpen
+}
+
 // stepupEveryApply reports whether every config apply needs a step-up: sign-in
 // is on and dashboard.auth.config_stepup is all (the default).
 func (s *Server) stepupEveryApply() bool {
@@ -109,7 +121,10 @@ func (s *Server) authState() string {
 	if s.authEnforced() {
 		return "required (" + strings.Join(s.deps.Cfg.Dashboard.Auth.EffectiveMethods(), ", ") + ")"
 	}
-	return "open — no operators configured"
+	if s.allowOpen() {
+		return "open — no operators configured (dashboard.auth.allow_open: true)"
+	}
+	return "refused — no operators configured; set dashboard.auth.allow_open: true to serve open, or configure operators: to enroll one"
 }
 
 // authPolicy resolves the dashboard.auth block into the auth layer's policy.
@@ -169,7 +184,19 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 			s.auth.Protect(s.mux).ServeHTTP(w, r)
 			return
 		}
-		s.mux.ServeHTTP(w, r)
+		// No operators configured: nothing to sign in as. Serving the full
+		// API here (config edit, run control, secrets view, bot approvals)
+		// to anything that reaches this listener is only ever intentional
+		// with an explicit allow_open: true (rt2 #10) — the default refuses
+		// it instead, same posture as the authErr case above. The static SPA
+		// shell (below) still loads either way, so an operator can see why.
+		if s.allowOpen() {
+			s.mux.ServeHTTP(w, r)
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, "no_operators",
+			"no dashboard operators are configured, so there is nothing to sign in as — the API is refused",
+			"add yourself under operators: and run `conductor dashboard enroll`, or set dashboard.auth.allow_open: true to serve without sign-in")
 		return
 	}
 	s.mux.ServeHTTP(w, r) // SPA + static (public)

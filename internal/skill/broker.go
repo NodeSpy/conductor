@@ -83,6 +83,76 @@ func (p Peer) matches(q Peer) bool {
 	return true
 }
 
+// ProcessAnchor identifies the ROOT of a bound session's process tree: the
+// one process that execs or forks the sandboxed agent (a sandboxed launch's
+// own child process, or the `conductor sandbox exec` client) — not the
+// agent's exact pid, which cannot work when the token is also read by
+// short-lived `conductor call` subprocesses and an in-sandbox MCP tool
+// server, each its own process (rt2 #12). Start is the root's own start
+// time (platform units; comparable only to itself), re-read fresh at every
+// Authorize call so a pid the kernel later reuses for an unrelated process
+// never matches — the same PID-reuse guard Peer.matches gives an exact-peer
+// binding, extended to a whole tree. Start == 0 means "could not be read at
+// bind time" and is treated like Peer.matches treats it: skip the
+// freshness check rather than refuse outright, matching this codebase's
+// existing convention for platforms/moments where it is unavailable.
+type ProcessAnchor struct {
+	PID   int
+	Start uint64
+}
+
+// Empty reports a has no process to anchor to (the zero value): binding is
+// refused rather than treated as a wildcard root.
+func (a ProcessAnchor) Empty() bool { return a.PID <= 0 }
+
+// AnchorForPID builds a ProcessAnchor for a pid the caller already knows is
+// the right root (a control connection's SO_PEERCRED pid) by reading its
+// current start time. Used where the root is known at mint time (`conductor
+// sandbox exec`'s sandbox-policy request); the in-daemon launch path instead
+// mints pending and calls BindRoot once its child exists (prepareLaunch runs
+// before exec.Cmd.Start, so the root does not exist yet at mint time).
+func AnchorForPID(pid int) ProcessAnchor {
+	_, start, _ := procAncestor(pid)
+	return ProcessAnchor{PID: pid, Start: start}
+}
+
+// maxAncestryDepth bounds processInTree's walk up a peer's ppid chain —
+// generous for any real sandbox (daemon child → sandbox wrapper → agent →
+// `conductor call`, at most a handful of hops) while guaranteeing
+// termination against a pathological /proc.
+const maxAncestryDepth = 64
+
+// processInTree reports whether pid is root itself or a live descendant of
+// it, walking the kernel's own parent-pid chain (never anything the peer
+// asserts). Finding root's pid in the chain is not enough on its own — pids
+// are reused — so root's start time is re-read at the moment of the match
+// and compared against what was recorded when the session was bound; a
+// mismatch means the real root is gone and something else now holds that
+// pid, and the match is refused.
+func processInTree(pid int, root ProcessAnchor) bool {
+	if root.Empty() || pid <= 0 {
+		return false
+	}
+	cur := pid
+	for depth := 0; depth < maxAncestryDepth; depth++ {
+		ppid, start, ok := procAncestor(cur)
+		if !ok {
+			return false
+		}
+		if cur == root.PID {
+			if root.Start == 0 || start == 0 {
+				return true // unverifiable on this platform/moment — PID match is the best signal available
+			}
+			return start == root.Start
+		}
+		if ppid <= 1 || ppid == cur {
+			return false // reached init (or a self-parented root entry) without finding root
+		}
+		cur = ppid
+	}
+	return false
+}
+
 // Identity is the REAL dispatch a session token stands for, captured by the
 // daemon at dispatch time (never asserted by the client).
 type Identity struct {
@@ -158,13 +228,29 @@ type session struct {
 	// every token-authorized call must come from the same live process — a
 	// copied token is useless from anywhere else.
 	peer Peer
-	// uidBound marks a session minted for the CLI/remote path (MintSession):
-	// the token is delivered in the agent's env and reused across many
-	// short-lived `conductor call` processes, so it authorizes by same-uid
-	// (boundUID) rather than exact process. On a transport with no peer creds
-	// (remote HTTP), the endpoint authorizes by the bearer token alone.
+	// uidBound marks a session with NO process anchor at all (today: only
+	// MintHandoffSession's durable bots/hand-offs, which must keep working
+	// across a daemon restart and may wait on a human for days — minting
+	// against a single process tree that may not even exist yet buys
+	// nothing there). It authorizes by same-uid (boundUID). On a transport
+	// with no peer creds (remote HTTP), the endpoint authorizes by the
+	// bearer token alone.
 	uidBound bool
 	boundUID uint32
+	// treeBound marks a session bound to a process TREE (MintSession /
+	// MintPendingSession, rt2 #12): root is the one process that execs or
+	// forks the sandboxed agent, and Authorize accepts only root itself or a
+	// live descendant of it (processInTree), never "any process at this
+	// uid" — the fix for a token leaked from one sandbox being accepted from
+	// any other same-uid sandbox or host process. pendingRoot marks a
+	// session minted before root's pid is known (the in-daemon launch path
+	// mints into the child's env before exec.Cmd.Start creates it): such a
+	// session authorizes NO ONE, not even root once it exists, until
+	// BindRoot names it — a token read out of its env before that point
+	// would still find every call refused.
+	treeBound   bool
+	pendingRoot bool
+	root        ProcessAnchor
 	// verbCalls counts executed verbs against the session's cap.
 	verbCalls int
 	// durable marks an interactive hand-off session (MintHandoffSession): it
@@ -260,17 +346,93 @@ func (b *Broker) MintClaim(id Identity) (string, error) {
 	return code, nil
 }
 
-// MintSession registers one dispatch's identity and returns a REUSABLE session
-// token, bound to the uid the agent will run as. Unlike MintClaim (the MCP
-// path: one-shot code → exact-process-bound token held by a long-lived
-// subprocess), this token is delivered in the agent's env (CONDUCTOR_SKILL_TOKEN)
-// and presented by many short-lived `conductor call` processes across the run —
-// so it authorizes by same-uid rather than exact process. Meaningful when the
-// agent runs under its own uid (per-dispatch isolation); on the remote HTTP
-// endpoint (no peer creds) the bearer token authorizes alone. Called by the
-// daemon at dispatch time only. Short TTL + verb-allowlist scope + audit bound
-// the exposure of a token scraped from env.
-func (b *Broker) MintSession(id Identity, uid uint32, ttl time.Duration) (string, error) {
+// MintSession registers one dispatch's identity and returns a REUSABLE
+// session token bound to root's PROCESS TREE (rt2 #12), for a launch whose
+// root process is already known (`conductor sandbox exec`'s sandbox-policy
+// request: root is the pid on the other end of that control connection, via
+// AnchorForPID). Unlike MintClaim (the MCP path: one-shot code →
+// exact-process-bound token held by a long-lived subprocess), this token is
+// delivered in the agent's env (CONDUCTOR_SKILL_TOKEN) and presented by many
+// short-lived `conductor call` processes, and by an in-sandbox MCP tool
+// server, across the run — all descendants of root — so Authorize walks the
+// presenting peer's ancestry back to root rather than accepting "any process
+// at this uid", which is what let a token leaked from one sandbox be
+// replayed from any other same-uid sandbox or host process. root.Empty()
+// refuses outright: a caller with no process to anchor to must use
+// MintPendingSession (root not known yet), MintSessionUID (no anchor exists
+// at all — an explicit, logged exception), or MintHandoffSession (a durable
+// hand-off/bot session). Called by the daemon at dispatch time only. Short
+// TTL + verb-allowlist scope + audit bound the exposure of a token scraped
+// from env.
+func (b *Broker) MintSession(id Identity, root ProcessAnchor, ttl time.Duration) (string, error) {
+	if root.Empty() {
+		return "", fmt.Errorf("skill: mint session: no process to anchor to (use MintPendingSession or MintHandoffSession)")
+	}
+	if ttl <= 0 {
+		ttl = SessionTTL
+	}
+	tok, err := b.randomID(32)
+	if err != nil {
+		return "", fmt.Errorf("skill: mint session token: %w", err)
+	}
+	b.mu.Lock()
+	b.sessions[tok] = session{id: id, expires: b.now().Add(ttl), treeBound: true, root: root}
+	b.mu.Unlock()
+	return tok, nil
+}
+
+// MintPendingSession is MintSession for a launch whose root process does not
+// exist yet: the in-daemon controller path (prepareAgentSandbox, and the
+// unsandboxed local CLI launch) mints the token into the child's env BEFORE
+// starting it, because exec.Cmd's environment must be complete before
+// Start() — the root's pid is only assigned once Start() returns. The
+// session authorizes NO ONE until BindRoot names the real root; call it
+// immediately after Start() succeeds.
+func (b *Broker) MintPendingSession(id Identity, ttl time.Duration) (string, error) {
+	if ttl <= 0 {
+		ttl = SessionTTL
+	}
+	tok, err := b.randomID(32)
+	if err != nil {
+		return "", fmt.Errorf("skill: mint session token: %w", err)
+	}
+	b.mu.Lock()
+	b.sessions[tok] = session{id: id, expires: b.now().Add(ttl), treeBound: true, pendingRoot: true}
+	b.mu.Unlock()
+	return tok, nil
+}
+
+// BindRoot anchors a pending session (MintPendingSession) to its now-known
+// root process — the pid the daemon just started (exec.Cmd.Process.Pid) that
+// will exec or fork the sandboxed agent. Binding reads root's own start time
+// itself (never trusts a caller-supplied one) so the anchor is exactly what
+// a future Authorize call will re-verify against. Binding is one-shot: an
+// unknown/expired token, or a token that is not a pending tree binding (already
+// bound, or never tree-bound at all), is refused and the session's
+// authorization state is unchanged.
+func (b *Broker) BindRoot(token string, rootPID int) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s, ok := b.sessions[token]
+	if !ok {
+		return fmt.Errorf("skill: bind root: unknown or expired session token")
+	}
+	if !s.treeBound || !s.pendingRoot {
+		return fmt.Errorf("skill: bind root: session is not a pending process-tree binding")
+	}
+	s.root = AnchorForPID(rootPID)
+	s.pendingRoot = false
+	b.sessions[token] = s
+	return nil
+}
+
+// MintSessionUID is the OLD MintSession behavior, kept for the token paths
+// that genuinely have no process to anchor to (rt2 #12's fix narrows these
+// deliberately rather than leaving every caller on it by default — see
+// SkillEnvFor and its callers for which paths these are and why):
+// authorizes any process running as the daemon's own uid, not a process
+// tree. Non-durable (SessionTTL-scoped), unlike MintHandoffSession.
+func (b *Broker) MintSessionUID(id Identity, uid uint32, ttl time.Duration) (string, error) {
 	if ttl <= 0 {
 		ttl = SessionTTL
 	}
@@ -292,6 +454,15 @@ func (b *Broker) MintSession(id Identity, uid uint32, ttl time.Duration) (string
 // HandoffSessionTTL from now. An abandoned hand-off's token still dies
 // HandoffSessionTTL after its last use; releasing the hand-off revokes it
 // at once (RevokeDispatch).
+//
+// This is the one deliberate EXCEPTION to process-tree binding (rt2 #12):
+// uid-bound, not root-bound. A hand-off's process tree is not a stable
+// anchor across the daemon restarts this session is specifically built to
+// survive, and a bot's "home" session in particular has no single launch
+// process at all — it is reattached by whichever worker picks up the case.
+// The session still authorizes only within the daemon's own uid, same as
+// every skill credential did before this fix; it is the one path where that
+// is the best anchor available, not a shortcut taken for convenience.
 func (b *Broker) MintHandoffSession(id Identity, uid uint32) (string, error) {
 	tok, err := b.randomID(32)
 	if err != nil {
@@ -380,9 +551,37 @@ func (b *Broker) authorizeLocked(token string, peer Peer) (session, error) {
 			b.saveLocked()
 		}
 	}
+	if s.treeBound {
+		// Process-tree path (rt2 #12): authorize root itself or a live
+		// descendant of it — never merely "any process at this uid", which
+		// let a token leaked from one sandbox be replayed from any other
+		// same-uid sandbox or host process. Fails closed in every direction:
+		// pending (root not bound yet), no peer credentials on this
+		// transport/platform, and "found root's pid but its start time has
+		// moved on" (the real root exited and something else now holds that
+		// pid) are all refusals, never a fall-through to trust.
+		if s.pendingRoot {
+			b.auditLocked("deny", s.id.Agent, s.id.Repo, "", "",
+				"session token not yet bound to its launch process")
+			return session{}, fmt.Errorf("skill: session token not yet bound to its launch process")
+		}
+		if !peer.Valid {
+			b.auditLocked("deny", s.id.Agent, s.id.Repo, "", "",
+				"no peer credentials available to verify the session's process-tree binding")
+			return session{}, fmt.Errorf("skill: session token requires peer credentials this transport does not provide")
+		}
+		if !processInTree(peer.PID, s.root) {
+			b.auditLocked("deny", s.id.Agent, s.id.Repo, "", "",
+				"session token presented by a process outside its launch's process tree")
+			return session{}, fmt.Errorf("skill: session token presented by a process outside its launch's process tree")
+		}
+		return s, nil
+	}
 	if s.uidBound {
-		// CLI/remote path: authorize any process running as the bound uid
-		// (reused across short-lived `conductor call` invocations). A local
+		// CLI/remote path with NO process anchor at all (MintHandoffSession:
+		// a durable bot/hand-off session that must keep working across a
+		// daemon restart and may wait on a human for days — see its doc
+		// comment). Authorizes any process running as the bound uid. A local
 		// socket carries peer creds; a peer with a different uid is refused. A
 		// transport with no peer creds (remote HTTP over TLS) authorizes by the
 		// bearer token alone — that endpoint has no kernel identity to check.

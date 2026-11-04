@@ -6,12 +6,12 @@
 package gitdiff
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/NodeSpy/conductor/internal/gitsafe"
 )
 
 // MaxBytes is the default clip for a captured diff: big enough for review,
@@ -90,28 +90,29 @@ func upstreamBase(ctx context.Context, dir string) string {
 	return ""
 }
 
-// Confine, when set, runs a git command for dir where dir's own content
-// cannot steer it beyond dir: conductor's agent sandbox, for a workspace a
-// sandboxed agent writes — its .git/config, .gitattributes and hooks are
-// the agent's, and a filter, textconv or fsmonitor command in them would
-// otherwise run as conductor, on the host. ok=false: dir is not such a
-// workspace; git runs here as before.
+// Confine, when set (the agent sandbox is on), runs every git command for
+// dir where dir's own content cannot steer it beyond dir: conductor's agent
+// sandbox — a workspace's .git/config, .gitattributes and hooks may be an
+// agent's, and a filter, textconv or fsmonitor command in them would
+// otherwise run as conductor, on the host. It confines any directory, not
+// only a registered one; ok=false (it could not) is a refusal, never a
+// fall-back to an unconfined git.
 var Confine func(ctx context.Context, dir string, args []string) (out string, ok bool, err error)
 
-// git runs one git command in dir and returns its stdout.
+// git runs one git command in dir and returns its stdout: confined when the
+// sandbox is on, else hardened (gitsafe) — never a plain git.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
+	if args[0] == "diff" {
+		args = append([]string{"diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"}, args[1:]...)
+	}
 	if Confine != nil {
-		if out, ok, err := Confine(ctx, dir, args); ok {
-			return out, err
+		out, ok, err := Confine(ctx, dir, args)
+		if !ok {
+			return "", fmt.Errorf("gitdiff: refusing an unconfined git read of %s", dir)
 		}
+		return out, err
 	}
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
-	}
-	return out.String(), nil
+	return gitsafe.Output(ctx, dir, args...)
 }
 
 // Unpushed counts the commits in dir that are on no remote yet. since, when

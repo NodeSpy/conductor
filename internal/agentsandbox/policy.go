@@ -5,7 +5,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
@@ -53,11 +56,75 @@ type Policy struct {
 	// Hide are directories inside a read-write path shown empty (a linked
 	// worktree's siblings); a ReadWrite path deeper inside stays visible.
 	Hide []string `json:"hide,omitempty"`
+	// GitCommon / GitWorktree: a protected linked worktree's common dir
+	// and own git dir; the launch gets a private view of the common dir
+	// (privateCommon).
+	GitCommon   string `json:"git_common,omitempty"`
+	GitWorktree string `json:"git_worktree,omitempty"`
 	// Env are extra KEY=VALUE variables for the agent (its git identity).
 	Env []string `json:"env,omitempty"`
+	// PosixIPC (macOS) allows POSIX shared memory and semaphores
+	// (sandbox.macos_posix_ipc).
+	PosixIPC bool `json:"posix_ipc,omitempty"`
+	// EgressAnyBytes lets an allowed CONNECT tunnel carry any protocol
+	// (sandbox.egress_require_tls: false); by default its first bytes must
+	// be a TLS ClientHello naming the CONNECT host.
+	EgressAnyBytes bool `json:"egress_any_bytes,omitempty"`
+	// NonTLS are targets exempt from the TLS check (the launch's
+	// allowance), audited as allowed by NonTLSBy.
+	NonTLS   []string `json:"non_tls,omitempty"`
+	NonTLSBy string   `json:"non_tls_by,omitempty"`
+	// Run attributes the launch's egress and detections (the dispatch id;
+	// "" = the identity).
+	Run string `json:"run,omitempty"`
+	// EgressIdle (ns), EgressUpload and EgressDownload (bytes) bound the
+	// launch's egress session (sandbox.egress_limits): 0 is the default,
+	// -1 off.
+	EgressIdle     int64 `json:"egress_idle,omitempty"`
+	EgressUpload   int64 `json:"egress_upload,omitempty"`
+	EgressDownload int64 `json:"egress_download,omitempty"`
+	// ModelUpload and ModelDownload (bytes) bound what the launch moves
+	// through its model gateway (sandbox.egress_limits.model_*): 0 is the
+	// default, -1 off.
+	ModelUpload   int64 `json:"model_upload,omitempty"`
+	ModelDownload int64 `json:"model_download,omitempty"`
+	// ModelCredential is sandbox.model_credential ("" = gateway): how the
+	// agent authenticates its model traffic (CredGateway, CredLoginCopy,
+	// CredLoginShare).
+	ModelCredential string `json:"model_credential,omitempty"`
+	// ModelRoute are the model endpoints' hosts (what egress_only keeps).
+	ModelRoute []string `json:"-"`
+	// Inspect are the hosts whose TLS the launch's egress proxy terminates
+	// with a per-launch CA (sandbox.inspect, isolation.inspect): the
+	// sandbox trusts the CA, and https:// path entries for them are
+	// enforced per request.
+	Inspect []sandbox.InspectHost `json:"inspect,omitempty"`
+	// Limits are the launch's resource limits and disk guard
+	// (sandbox.limits; the zero value is the default).
+	Limits LimitSpec `json:"limits,omitempty"`
+	// Detect is the launch's detection (sandbox.detect; the zero value is
+	// the strict default).
+	Detect DetectSpec `json:"detect,omitempty"`
+	// ModelHosts are the egress entries added for the tool's model traffic
+	// (not the operator's): dropped when the gateway carries it all.
+	ModelHosts []string `json:"model_hosts,omitempty"`
 	// Note is something the launcher should tell its operator about this
 	// policy (a scratch workspace in place of a refused directory).
 	Note string `json:"note,omitempty"`
+}
+
+// EgressSession is the egress proxy session the policy's launch gets.
+func (p Policy) EgressSession() sandbox.SessionOpts {
+	run := p.Run
+	if run == "" {
+		run = p.Identity
+	}
+	return sandbox.SessionOpts{
+		Run:        run,
+		RequireTLS: !p.EgressAnyBytes, NonTLS: p.NonTLS, NonTLSBy: p.NonTLSBy,
+		Limits: sandbox.EgressLimits{Idle: time.Duration(p.EgressIdle),
+			Upload: p.EgressUpload, Download: p.EgressDownload},
+	}
 }
 
 // Validate refuses a policy that cannot be realized as a boundary.
@@ -121,6 +188,11 @@ type Deps struct {
 	// macOS profile allows.
 	EgressUnix func(allow []string) (sock, cred string, revoke func(), err error)
 	EgressAddr func(allow []string) (addr, cred string, revoke func(), err error)
+	// EgressUnixSession / EgressAddrSession, when set, are used instead:
+	// the launch's session gets the policy's egress settings (TLS-only
+	// tunnels, limits) and is attributed to its run.
+	EgressUnixSession func(allow []string, o sandbox.SessionOpts) (sock, cred string, revoke func(), err error)
+	EgressAddrSession func(allow []string, o sandbox.SessionOpts) (addr, cred string, revoke func(), err error)
 	// Relay opens a host-side unix socket piped to a host-loopback target
 	// (Linux; macOS reaches the port directly).
 	Relay func(target string) (sock string, closeFn func(), err error)
@@ -128,6 +200,10 @@ type Deps struct {
 	LookPath func(string) (string, error)
 	// RealHome is the operator's home.
 	RealHome string
+	// Event reports a containment event (a request to the model gateway
+	// without the launch's token): kind and fields for the audit log. nil:
+	// not reported.
+	Event func(kind string, fields map[string]any)
 	// Inherited is the environment the agent's is built from — the
 	// launcher's own; AgentEnv keeps only what an agent needs.
 	Inherited []string
@@ -161,6 +237,9 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	if d.SelfExe == nil || d.LookPath == nil {
 		return nil, fmt.Errorf("agentsandbox: launcher not wired")
 	}
+	if why := p.Limits.diskLow(p.Workspace, p.Home); why != "" {
+		return nil, fmt.Errorf("agentsandbox: not launching: %s", why)
+	}
 	goos := sandbox.CheckGOOS
 	argv = append([]string(nil), argv...)
 	if !filepath.IsAbs(argv[0]) {
@@ -177,18 +256,31 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		return nil, fmt.Errorf("agentsandbox: resolve conductor binary: %w", err)
 	}
 
+	// A protected linked worktree's common dir: the launch's private view
+	// of it (privatecommon.go).
+	var privCommon string
+	if p.GitCommon != "" {
+		privCommon = privateCommonDir(p.Home)
+		if err := preparePrivateCommon(privCommon, p.GitCommon, p.GitWorktree, goos == "darwin"); err != nil {
+			return nil, fmt.Errorf("agentsandbox: private view of %s: %w", p.GitCommon, err)
+		}
+	}
 	dir := p.Workspace
 	binds := []sandbox.BindMount{{Path: p.Home}}
 	if p.Cwd != "" && p.Cwd != p.Workspace {
 		dir = p.Cwd
 		binds = append(binds, sandbox.BindMount{Path: p.Workspace})
 	}
-	prof := &sandbox.AgentProfile{Home: d.RealHome}
-	for _, l := range p.Logins {
-		// Linux binds the operator's file over the placeholder; on macOS the
-		// identity home links to it, and seatbeltBinds allows its source.
-		binds = append(binds, sandbox.BindMount{Path: l.Path, Src: l.Src})
+	prof := &sandbox.AgentProfile{Home: d.RealHome, PosixIPC: p.PosixIPC}
+	mc, err := planModelCredentials(&p, d)
+	if err != nil {
+		return nil, err
 	}
+	lb, err := mc.placeLogins(p)
+	if err != nil {
+		return nil, err
+	}
+	binds = append(binds, lb...)
 	binds = append(binds, launchBinds(argv[0], d.LookPath, d.RealHome)...)
 	for _, b := range d.Bins {
 		bin, err := d.LookPath(b)
@@ -214,10 +306,29 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		prof.UnixSockets = append(prof.UnixSockets, p.Socket)
 	}
 	for _, q := range p.ReadOnly {
+		if privCommon != "" && goos != "darwin" && (q == p.GitCommon || q == filepath.Join(p.GitCommon, "config")) {
+			continue // the private view's own, bound below
+		}
 		binds = append(binds, sandbox.BindMount{Path: q, RO: true})
 	}
 	for _, q := range p.ReadWrite {
 		binds = append(binds, sandbox.BindMount{Path: q})
+	}
+	if privCommon != "" {
+		if goos == "darwin" {
+			// git's ref store uses the real common dir: its packed-refs, the
+			// lock and the temporary file git writes the new one to, as the
+			// refs beside them.
+			real := p.GitCommon
+			if r, err := filepath.EvalSymlinks(real); err == nil {
+				real = r
+			}
+			for _, f := range []string{"packed-refs", "packed-refs.lock", "packed-refs.new"} {
+				binds = append(binds, sandbox.BindMount{Path: filepath.Join(real, f)})
+			}
+		} else {
+			binds = append(binds, sandbox.BindMount{Path: p.GitCommon, Src: privCommon})
+		}
 	}
 	for _, q := range p.Hide {
 		binds = append(binds, sandbox.BindMount{Path: q, Tmpfs: true})
@@ -246,6 +357,9 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	}
 
 	env := AgentEnv(d.Inherited, p)
+	if privCommon != "" && goos == "darwin" {
+		env = append(env, "GIT_COMMON_DIR="+privCommon)
+	}
 	if goos == "darwin" {
 		// Seatbelt shows no shared temp dir: the identity's own.
 		tmp := filepath.Join(p.Home, ".tmp")
@@ -258,19 +372,107 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	}
 
 	spec := &sandbox.Spec{Mode: "namespace", Deny: true, HasEgress: len(p.Egress) > 0, Egress: append([]string(nil), p.Egress...)}
+	if err := applyLimits(spec, p.Limits, goos, d.Event); err != nil {
+		return nil, err
+	}
 	deps := sandbox.LocalWrapDeps{
 		SelfExe:    func() (string, error) { return self, nil },
 		Confine:    true,
 		EgressUnix: d.EgressUnix,
 		EgressAddr: d.EgressAddr,
 	}
+	// TLS inspection: a CA of this launch's own, its key in this process
+	// only; the sandbox is shown the system roots plus its certificate.
+	var insp *sandbox.Inspector
+	var caDir string
+	if len(p.Inspect) > 0 {
+		if d.EgressUnixSession == nil {
+			return nil, fmt.Errorf("agentsandbox: inspect: this launcher has no egress session to inspect through")
+		}
+		if insp, caDir, err = inspectionBundle(p.Inspect); err != nil {
+			return nil, err
+		}
+		binds = append(binds, sandbox.BindMount{Path: caDir, RO: true})
+		env = withCAEnv(env, filepath.Join(caDir, caBundleName))
+	}
+	if so := p.EgressSession(); d.EgressUnixSession != nil {
+		so.Inspect = insp
+		so.Shape, so.ShapeAllowed, so.ShapeAllowAll, so.ShapeAllowedBy = p.Detect.Connections, p.Detect.ShapeAllowed, p.Detect.ShapeAllowAll, p.Detect.AllowedBy
+		if p.Detect.Action == DetectOff {
+			so.Shape = sandbox.ShapeOff
+		}
+		if d.Event != nil {
+			so.OnShape = func(e sandbox.ShapeEvent) {
+				f := map[string]any{"run": e.Run, "kind": "tunnel_shape", "shape": e.Kind, "target": e.Target,
+					"reason": e.Target + ": " + e.Kind + " (" + e.Reason + ")", "action": e.Action,
+					"up": e.Up, "down": e.Down, "age_ms": e.Age.Milliseconds(), "max_idle_ms": e.MaxIdle.Milliseconds(), "server_first": e.ServerFirst}
+				if e.AllowedBy != "" {
+					f["allowed_by"] = e.AllowedBy
+				}
+				d.Event("detection", f)
+			}
+		}
+		deps.EgressUnix = func(allow []string) (string, string, func(), error) { return d.EgressUnixSession(allow, so) }
+		if d.EgressAddrSession != nil {
+			deps.EgressAddr = func(allow []string) (string, string, func(), error) { return d.EgressAddrSession(allow, so) }
+		}
+	}
 	var closers []func()
+	if caDir != "" {
+		closers = append(closers, func() { _ = os.RemoveAll(caDir) })
+	}
+	if privCommon != "" && goos != "darwin" {
+		// Last at cleanup, once the launch is gone: refs its git packed
+		// into the private packed-refs are not lost with it.
+		closers = append(closers, func() {
+			if refs := reconcilePrivateRefs(privCommon, p.GitCommon); len(refs) > 0 && d.Event != nil {
+				d.Event("git_refs_restored", map[string]any{"run": p.EgressSession().Run, "refs": refs})
+			}
+		})
+	}
 	cleanupAll := func() {
 		for i := len(closers) - 1; i >= 0; i-- {
 			closers[i]()
 		}
 	}
 	exposed := map[string]string{}
+	gwURLs := make([]string, 0, len(mc.plans))
+	meter := newModelMeter(p.EgressSession().Run, p.ModelUpload, p.ModelDownload, d.Event)
+	for i, g := range mc.plans {
+		g := g
+		onRefuse := func(what string) {
+			if d.Event != nil {
+				d.Event("model_gateway_refused", map[string]any{"run": p.EgressSession().Run, "request": what})
+			}
+		}
+		if goos == "darwin" {
+			// A conductor-owned loopback port, the only one the profile
+			// allows: the agent never reaches a router directly.
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				cleanupAll()
+				return nil, fmt.Errorf("agentsandbox: model gateway: %w", err)
+			}
+			s := serveGateway(ln, g, onRefuse, meter)
+			closers = append(closers, s.Close)
+			port := ln.Addr().(*net.TCPAddr).Port
+			prof.LoopbackPorts = append(prof.LoopbackPorts, port)
+			gwURLs = append(gwURLs, fmt.Sprintf("http://127.0.0.1:%d", port))
+			continue
+		}
+		ln, sock, rm, err := listenGatewayUnix()
+		if err != nil {
+			cleanupAll()
+			return nil, fmt.Errorf("agentsandbox: model gateway: %w", err)
+		}
+		s := serveGateway(ln, g, onRefuse, meter)
+		closers = append(closers, func() { s.Close(); rm() })
+		addr := gatewayListenAddr(i, append(append([]string(nil), p.Loopback...), p.Expose...))
+		binds = append(binds, sandbox.BindMount{Path: sock})
+		deps.Relays = append(deps.Relays, sandbox.Relay{Listen: addr, Unix: sock})
+		gwURLs = append(gwURLs, "http://"+addr)
+	}
+	env = agentModelEnv(env, mc.plans, gwURLs)
 	if goos == "darwin" {
 		// No network namespace: the model's loopback port is reached
 		// directly, the profile allowing exactly it — and a server the agent
@@ -325,6 +527,17 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		return nil, err
 	}
 	closers = append([]func(){wclean}, closers...)
+	// Detection last: its closer runs first at cleanup — a final git check
+	// and the launch's leftover processes killed — before egress is cut.
+	marker, stopDetect, err := startDetection(p, self, spec, d.Event)
+	if err != nil {
+		cleanupAll()
+		return nil, err
+	}
+	if stopDetect != nil {
+		closers = append(closers, stopDetect)
+		outEnv = append(outEnv, markerEnv+"="+marker)
+	}
 	return &Launch{Argv: wrapped, Env: outEnv, Dir: dir, Cleanup: cleanupAll, Exposed: exposed}, nil
 }
 
@@ -343,6 +556,48 @@ func seatbeltBinds(binds []sandbox.BindMount) []sandbox.BindMount {
 		default:
 			out = append(out, sandbox.BindMount{Path: b.Path, RO: b.RO})
 		}
+	}
+	return out
+}
+
+// caBundleName is the inspecting launch's trust bundle, in its own dir.
+const caBundleName = "ca-bundle.pem"
+
+// inspectionBundle mints the launch's inspection CA and writes the bundle
+// the sandbox trusts (system roots plus the CA's certificate, never its
+// key) into a fresh directory.
+func inspectionBundle(hosts []sandbox.InspectHost) (*sandbox.Inspector, string, error) {
+	insp, err := sandbox.NewInspector(hosts)
+	if err != nil {
+		return nil, "", fmt.Errorf("agentsandbox: %w", err)
+	}
+	bundle, err := insp.Bundle()
+	if err != nil {
+		return nil, "", fmt.Errorf("agentsandbox: %w", err)
+	}
+	dir, err := SocketDir("cca")
+	if err != nil {
+		return nil, "", fmt.Errorf("agentsandbox: inspect: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, caBundleName), bundle, 0o444); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, "", fmt.Errorf("agentsandbox: inspect: %w", err)
+	}
+	return insp, dir, nil
+}
+
+// withCAEnv points every common TLS stack at bundle, replacing what the
+// environment had.
+func withCAEnv(env []string, bundle string) []string {
+	out := make([]string, 0, len(env)+len(sandbox.InspectCAEnv))
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains(sandbox.InspectCAEnv, k) {
+			out = append(out, kv)
+		}
+	}
+	for _, k := range sandbox.InspectCAEnv {
+		out = append(out, k+"="+bundle)
 	}
 	return out
 }

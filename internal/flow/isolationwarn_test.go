@@ -46,3 +46,41 @@ func TestIsolationWarningsHonestAboutUserMode(t *testing.T) {
 		t.Fatalf("enforced posture must not warn: %v", ws)
 	}
 }
+
+// A code step that opted out of the confined-by-default namespace sandbox
+// (trust: full, or an explicit isolation: { mode: none }) gets a boot-time
+// warning naming it — the operator sees exactly which steps run bare instead
+// of discovering it from an incident.
+func TestIsolationWarningsNameCodeStepOptOuts(t *testing.T) {
+	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+		{ID: "trusted", Use: "cli", Command: []string{"bash"}, Trust: "full"},
+		{ID: "opted-out", Use: "cli", Command: []string{"bash"}, Isolation: &config.IsolationConfig{Mode: "none"}},
+		{ID: "confined", Use: "cli", Command: []string{"bash"},
+			Isolation: &config.IsolationConfig{Mode: "namespace", Network: &config.IsolationNetwork{Deny: true}}},
+	}}}}
+	warns := strings.Join(IsolationWarnings(cfg), "\n")
+	if !strings.Contains(warns, "trusted") || !strings.Contains(warns, "UNCONFINED") {
+		t.Fatalf("trust: full opt-out must be named: %s", warns)
+	}
+	if !strings.Contains(warns, "opted-out") {
+		t.Fatalf("isolation: {mode: none} opt-out must be named: %s", warns)
+	}
+	if strings.Contains(warns, "\"w confined\"") || strings.Count(warns, "UNCONFINED") != 2 {
+		t.Fatalf("a confined step must not be named as an opt-out: %s", warns)
+	}
+}
+
+// `code: { isolation_default: none }` turns the whole default off, so
+// per-step opt-out warnings are noise (every step runs bare by the
+// operator's own global choice) and stay quiet.
+func TestIsolationWarningsQuietWhenDefaultOff(t *testing.T) {
+	cfg := &config.Config{
+		Code: config.CodeConfig{IsolationDefault: "none"},
+		Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+			{ID: "a", Use: "cli", Command: []string{"bash"}, Trust: "full"},
+		}}},
+	}
+	if ws := IsolationWarnings(cfg); len(ws) != 0 {
+		t.Fatalf("code.isolation_default: none must silence opt-out warnings: %v", ws)
+	}
+}

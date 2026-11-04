@@ -143,6 +143,7 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 	if err := flow.Validate(cfg, reg); err != nil {
 		return nil, err
 	}
+	flow.WarnInteractiveBotSteps(cfg, reg, func(msg string) { logf("%s", msg) })
 
 	// Lower each connector's triggers into its source integration. Manual
 	// triggers have no source — `conductor run` emits them directly.

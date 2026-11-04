@@ -417,7 +417,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	ctx = context.WithValue(ctx, policyKey{}, r.resolvePolicy(spec))
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	ctx = withDefaultGate(ctx, spec.Gate)
-	ctx = withDefaultIsolation(ctx, spec.Isolation)
+	ctx = withDefaultIsolation(ctx, packNarrowed(spec.Isolation, spec.PackInstance))
 	ctx = r.withRunBudget(ctx, t, spec)
 	ctx, runCost := withCostAcc(ctx)
 	ctx, hist := r.beginHistory(ctx, run, t, spec, shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow))
@@ -1168,12 +1168,38 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	if keyed {
 		merged = withoutOption(merged, memoryScopeOption)
 	}
+	// Shell-marked options (connector.Field.Shell — the command connector's
+	// string-form `command:`) are pulled out and rendered separately: every
+	// templated substitution is shell-quoted before splicing into the
+	// operator-authored literal text, so event/chat data can never inject
+	// shell syntax (rt2 #3). Everything else renders the ordinary way.
+	shellRaw := map[string]string{}
+	if in.Decl != nil {
+		if vd, ok := in.Decl.Verb(verb); ok {
+			for name, f := range vd.Options {
+				if !f.Shell {
+					continue
+				}
+				if s, ok := merged[name].(string); ok {
+					shellRaw[name] = s
+					merged = withoutOption(merged, name)
+				}
+			}
+		}
+	}
 	rendered, err := renderOptions(merged, data)
 	if err != nil {
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}
 	if keyed {
 		rendered[memoryScopeOption] = scopeKey
+	}
+	for name, raw := range shellRaw {
+		q, err := renderShellQuoted(raw, data)
+		if err != nil {
+			return nil, fmt.Errorf("uses %s: options.%s: %w", step.Uses, name, err)
+		}
+		rendered[name] = q
 	}
 	if login, skip := r.skipBotReply(ctx, in, verb, t, rendered); skip {
 		r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
@@ -1451,7 +1477,7 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	// so its sessions bound under keys the sweep looks for under another
 	// name. Same root cause as the trigger-index bug; this is the call
 	// path that fix missed.
-	stepCtx := withIdentityScope(withDefaultIsolation(withDefaultGate(ctx, wf.Gate), wf.Isolation), config.WorkflowScope(name))
+	stepCtx := withIdentityScope(withCalledWorkflowIsolation(withDefaultGate(ctx, wf.Gate), packNarrowed(wf.Isolation, wf.PackInstance)), config.WorkflowScope(name))
 	if saved != nil {
 		stepCtx = context.WithValue(stepCtx, savedWFKey{}, name)
 	}

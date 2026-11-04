@@ -44,21 +44,45 @@ authors — step `uses:`, hook `uses:`, trigger sources, `session.end_on`,
 instantiate. A pack cannot reach a connector, or a store, that its manifest
 does not name. `conductor.*` (daemon control) is refused outright.
 
-**Pack-shipped code is confined by default.** A pack can also ship *executable*
-code — a `use: cli`/`command:` or `run: <interpreter>` step that runs a program
-(often a script it vendors, referenced via `${pack.dir}`). Unless that step
-declares its own `isolation:`, conductor synthesizes the least-privilege
-namespace [[Isolation|filesystem jail]] for it: pid-isolated, network denied,
-and able to see only its workdir + interpreter essentials — the daemon's
-state/config/secrets are hidden by absence. A pack that legitimately needs the
-network or an external directory declares it (`isolation: { network: {…},
-fs: [...] }`); a pack **cannot** declare its own code trusted, so it can't
-switch its own jail off. Turning the seatbelt off is the *consumer's* call —
+**Every local code step is confined by default, pack-shipped or not.** A code
+step — `use: cli`/`command:` or `run: <interpreter>` (including `run: go`) —
+runs a program, often one that only exists because a pack vendored it or an
+event's data shaped its `command:`/`args:`/`env:` through templating. Unless
+the step declares its own `isolation:`, conductor synthesizes the
+least-privilege namespace [[Isolation|filesystem jail]] for it: pid-isolated,
+network denied, and able to see only its workdir + interpreter essentials —
+the daemon's state/config/secrets are hidden by absence. This applies to your
+own config's steps exactly as it does to a pack's, because "you wrote this
+step" doesn't mean "you control everything its argv becomes at run time" —
+an event-templated `command:`/`args:`/`env:` is no more yours to vouch for
+than a pack's vendored script is.
+
+A step that legitimately needs the network or an external directory declares
+it (`isolation: { network: {…}, fs: [...] }`). Turning the seatbelt off on
+your own step is `trust: full` or an explicit `isolation: { mode: none }`; a
+**pack cannot** declare its own shipped code trusted, so it can't switch its
+own jail off — that opt-out is the *consumer's* call,
 `packs: { <inst>: { steps: { <role>: { trust: full } } } }`. `conductor pack
 plan` lists every code step a pack ships and how confined it is, so arming one
-is an informed decision. Enforcement is best-effort for the synthesized default
-(a box that can't build the jail runs the step with a warning); an explicit
-`isolation:` fails closed.
+is an informed decision; `conductor validate` lists every step (pack or your
+own) that opted out of the default, so an unconfined step is a choice you see,
+not one you discover in an incident. Enforcement is best-effort for the
+synthesized default (a box that can't build the jail runs the step with a
+warning); an explicit `isolation:` fails closed.
+
+The same holds for the agent sandbox's **allowances**: letting an agent run a
+tunnel tool or send raw TCP to a host. A pack can only request one, in its
+manifest's `allowances:`. The request applies, to the steps it names, once
+you grant it (`packs: { <inst>: { grant: [<name>@<digest>] } }`, pinned to
+what you reviewed: a pack update that changes it fails to load until you
+re-grant), and `conductor validate` lists every grant and every request
+still pending. An allowance does not cross a `workflow:` call. See
+[[Isolation#scoped-allowances]].
+
+A fleet not yet ready for the stricter default sets `code: { isolation_default:
+none }` to restore the previous bare-by-default behavior for every local code
+step at once, while it migrates configs that need a loosened `isolation:` of
+their own. See [[Isolation#code-steps]].
 
 ## NOT a boundary: an agent sharing the daemon's user
 

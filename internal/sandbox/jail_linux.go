@@ -258,7 +258,13 @@ func pivotInto(root string) error {
 
 // touchFile creates an empty file (a bind target for a device node / file).
 func touchFile(p string) error {
-	f, err := os.OpenFile(p, os.O_CREATE, 0o644)
+	// Already there (an outer bind showed it): any non-directory inode is a
+	// mount point as it is. Opening it is not needed, and would fail on a
+	// socket (ENXIO) or block on a FIFO.
+	if fi, err := os.Lstat(p); err == nil && !fi.IsDir() {
+		return nil
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0o644)
 	if err != nil {
 		return err
 	}

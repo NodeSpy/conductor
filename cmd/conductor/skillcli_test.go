@@ -19,11 +19,13 @@ import (
 
 // TestSkillCLIEndToEnd drives the agent-facing CLI (discover + call) through the
 // real IPC socket and a real broker: a uid-bound session token minted by
-// MintSession, authorized server-side by the calling process's uid. No paseo,
-// no daemon boot — just the CLI ↔ socket ↔ broker path the dispatched agent uses.
+// MintSessionUID (the explicit no-process-anchor path, e.g. a remote/SSH
+// launch — see SkillEnvFor), authorized server-side by the calling process's
+// uid. No paseo, no daemon boot — just the CLI ↔ socket ↔ broker path the
+// dispatched agent uses.
 func TestSkillCLIEndToEnd(t *testing.T) {
 	b := skill.NewBroker(func(string) (string, bool) { return "s3kr1t-value", true }, nil)
-	tok, err := b.MintSession(skill.Identity{
+	tok, err := b.MintSessionUID(skill.Identity{
 		Agent:  "fixer",
 		Policy: config.SkillPolicy{Verbs: []string{"gh.*"}, SecretsVia: "broker", AllowSecrets: []string{"deploy_key"}},
 	}, uint32(os.Getuid()), skill.SessionTTL)
@@ -130,7 +132,7 @@ workflows:
 	// A real dispatch: the identity carries the PR it was minted for, which
 	// is what makes `--repo o/r` its own target rather than someone else's
 	// (resource scoping, docs/design/skill-verb-scope.md).
-	tok, err := b.MintSession(skill.Identity{
+	tok, err := b.MintSessionUID(skill.Identity{
 		Agent: "fixer",
 		Repo:  "o/r",
 		// A github dispatch: the platform assigned this target.

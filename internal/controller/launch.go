@@ -27,6 +27,18 @@ var EgressProxyFor func(allow []string) (addr, cred string, revoke func(), err e
 // nil + an enforced-egress launch fails closed.
 var EgressProxyUnix func(allow []string) (sock, cred string, revoke func(), err error)
 
+// SandboxEvent records an agent sandbox's containment event (the model
+// gateway refusing a request, a detection) in the audit log. Wired at boot.
+var SandboxEvent func(kind string, fields map[string]any)
+
+// EgressProxyUnixSession / EgressProxyForSession mint an agent launch's
+// session (sandbox.ProxyManager.UnixEndpointSession / EndpointSession):
+// attributed to its run, TLS-only tunnels, limited, closed when revoked.
+var (
+	EgressProxyUnixSession func(allow []string, o sandbox.SessionOpts) (sock, cred string, revoke func(), err error)
+	EgressProxyForSession  func(allow []string, o sandbox.SessionOpts) (addr, cred string, revoke func(), err error)
+)
+
 // launchSelfExe resolves conductor's own binary (re-executed inside the
 // sandbox as the forwarder); a var for tests.
 var launchSelfExe = os.Executable
@@ -85,12 +97,10 @@ func withEgressRevoke(opt launchOpts) (launchOpts, func()) {
 }
 
 // launchOptsFor resolves the isolation for one dispatch: the profile's own
-// isolation: wins over the runtime's (most-specific wins, like `host:`).
+// isolation: wins over the runtime's (most-specific wins, like `host:`); a
+// block of only the agent sandbox's knobs layers onto the runtime's.
 func launchOptsFor(runtimeIso *config.IsolationConfig, req dispatch.Request) launchOpts {
-	iso := runtimeIso
-	if req.Step.Isolation != nil {
-		iso = req.Step.Isolation
-	}
+	iso := config.LayerIsolation(runtimeIso, req.Step.Isolation)
 	return launchOpts{iso: iso, agentAuthored: req.AgentAuthored}
 }
 

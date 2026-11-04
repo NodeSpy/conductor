@@ -144,11 +144,21 @@ connectors:
   # A command connector: `uses: build-box.run` executes a command — on the
   # named hosts: entry over SSH, or locally when host:/ssh: is absent.
   # Outputs: stdout, stderr, exit_code (a non-zero exit is data, not an error).
+  # A LOCAL run's process gets a minimal operational environment (PATH, HOME,
+  # etc.) plus whatever env: adds here or on the call — never this daemon's
+  # full environment (which may carry webhook secrets, model keys, tokens).
+  # Set inherit_env: true to opt a local run back into the daemon's full
+  # os.Environ() (has no effect on host: runs, which never get one anyway).
+  # `command:` as a STRING runs through `sh -c`; every `{{…}}` substitution in
+  # it is shell-quoted before splicing in, so event/chat data in a templated
+  # command can't inject shell syntax — write `command: [argv, ...]` instead
+  # of a string if a step needs to build the argv itself from a list.
   # build-box:
   #   type: command
   #   host: build-box            # a hosts: entry; or inline ssh: {host: …}
   #   cwd: /srv/build
   #   env: { CI: "1" }
+  #   inherit_env: false         # true: a local run gets this daemon's full env
 
   timer:
     use: cron
@@ -307,6 +317,20 @@ engines:
   # js: {}                                        # default — sandboxed, nothing to write
   # lua: { trust: full }                          # opt OUT: run unconfined (an engine you've audited)
   # wasm: { isolation: { mode: user, user: sandbox } }   # explicit sandbox (fail-closed)
+
+# code: — the default isolation a LOCAL cli/host code step (use: cli,
+# run: <interpreter>, run: go — not a remote host: step, not an engine
+# plugin) gets when it declares no isolation: of its own. Nothing to write
+# here: the default is the least-privilege namespace jail, network denied,
+# for a pack's shipped code AND your own config's steps alike (a step's
+# command:/args:/env: can be templated from event data its author doesn't
+# fully control). `conductor validate` lists every step that opted out
+# (trust: full, or an explicit isolation: { mode: none }). See the
+# Trust-and-Isolation and Isolation wiki pages.
+# code:
+#   isolation_default: none   # the escape hatch: every local cli/host/go step
+#                              # runs exactly as it did before this default
+#                              # existed, while a fleet migrates its configs
 
 # ---------------------------------------------------------------------------
 # isolation: — per-dispatch sandboxing (#36 §15) for the runtimes conductor
@@ -1356,9 +1380,13 @@ sandbox:
   #                         #   e.g. [registry.npmjs.org, proxy.golang.org, "*.pypi.org"]
   # prefetch: [go]          # conductor downloads a dispatch's Go modules (its checkout's go.work /
   #                         #   go.mod, read before the agent runs) on the HOST into one module cache
-  #                         #   of its own, mounted read-only in every sandbox; the agent's Go runs
-  #                         #   offline (GOPROXY=off), so no Go host goes in egress. A module the agent
-  #                         #   itself adds is not fetched. Never for a target the event's sender chose.
+  #                         #   of its own — shared by every identity, and the download itself runs
+  #                         #   CONFINED (namespace jail, network cut to proxy.golang.org only, never a
+  #                         #   file:// layer onto your own $GOMODCACHE); mounted read-only in every
+  #                         #   sandbox; the agent's Go runs offline (GOPROXY=off), so no Go host goes in
+  #                         #   egress. A module the agent itself adds is not fetched. Never for a target
+  #                         #   the event's sender chose. If this box can't build the jail, the prefetch
+  #                         #   is skipped (logged) rather than ever downloading unconfined.
   # state_dir: ~/.local/state/conductor/agent-state   # the per-identity HOMEs
   push:
     # signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh).
@@ -1373,6 +1401,78 @@ sandbox:
     #                                         # outcome unlanded) and fail the step as no_progress
     #                                         # unless it is an explicit review (default: fail);
     #                                         # warn only records them.
+    # deny_ci_changes: true                   # optional extra, off by default: refuse a push whose
+    #                                         # commits change CI definitions (.github/workflows,
+    #                                         # .gitlab-ci.yml, …). Not a sandbox protection: an agent
+    #                                         # can still change what CI runs through any script,
+    #                                         # Makefile or test a pipeline calls.
+  # Containment (wiki: Isolation#containment-and-detection). Every knob is optional; the
+  # values shown are the strict defaults, and each comment says what loosening gives up.
+  # model_credential: gateway   # the model key stays on the host: the agent gets a per-launch token
+  #                             #   for conductor's model gateway. login-copy: the key in the agent's
+  #                             #   env, logins copied without refresh tokens. login-share: the key in
+  #                             #   env, your login file bound read-only (refresh token readable).
+  # egress_protocol_check: true # a tunnel must open with TLS, HTTP/1 or HTTP/2 naming its host
+  #                             #   (checked before the dial; SSH and unknown bytes refused);
+  #                             #   false lets any protocol through an allowed host. Alias:
+  #                             #   egress_require_tls. One target: allow.raw below.
+  # (egress: entries also take exact names and CIDRs that reach private space, and
+  #  http://host:port/prefix/ for a plain-HTTP mirror restricted to a path; an https:// path
+  #  is a validate error unless the host is inspected. Isolation.md § A local package mirror.)
+  # inspect: []                 # opt in per host: conductor terminates the agent's TLS to these
+  #                             #   exact hostnames with a per-launch CA the sandbox trusts, so
+  #                             #   https://host/path/ entries are enforced request by request.
+  #                             #   { host: npm.corp.lan, ca: /etc/ssl/corp-root.pem } adds the
+  #                             #   mirror's CA for the upstream check (never turned off).
+  #                             #   conductor then reads that traffic: Isolation.md § TLS inspection.
+  # egress_limits:              # per launch; each takes "off"
+  #   idle: 10m
+  #   upload: 512MiB
+  #   download: 20GiB
+  #   model_upload: 16GiB       # the model gateway's own caps: a model client resends its whole
+  #   model_download: 16GiB     #   context with every request
+  # detect:
+  #   action: kill              # a tunnel tool, reverse shell or decoy read kills the launch;
+  #                             #   alert: audit + notify only; off: no watcher/tripwires/git guard
+  #   tripwires: true           # decoy credentials in the agent's home
+  #   interval: 3s
+  #   allow: []                 # programs exempt from every rule, every launch, by what their
+  #                             #   binary is (prefer allow: below)
+  #   connections: alert        # an egress tunnel shaped like a remote shell or a bulk upload:
+  #                             #   alert (audit + notify); close: also close it; off
+  # allow:                      # the base allowance of EVERY launch; scope one instead in an
+  #   tunnels: []               #   isolation: block (workflow/trigger/step/runtime), e.g.
+  #   raw: []                   #   isolation: { allow: { tunnels: [ssh@bastion.example.com:22],
+  #   reverse_shell: false      #                         raw: [bastion.example.com:22] } }
+  #   pty: false                #   (see Isolation.md § Scoped allowances). A tunnel's @host is
+  #                             #   reachable by EVERY process of the scope, not only the tool;
+  #                             #   an allow: does not cross a workflow: call; a pack's request
+  #                             #   is granted pinned: packs: <inst>: { grant: [name@digest] }
+  # limits:                     # Linux: a systemd user scope per launch
+  #   memory: 50%               # per launch
+  #   pids: 8192                # per scope: isolation: { limits: { memory: 24G, pids: 16384 } };
+  #                             #   each launch's peak vs cap is audited (sandbox_usage), warned at
+  #                             #   80%, and listed by `conductor report`
+  #   cpu: 400%                 # per launch CPUQuota (default: none)
+  #   cpu_weight: 50            # share among agent launches, 1-10000 (default: none = 100)
+  #   aggregate_memory: 75%     # all agent launches together
+  #   aggregate_cpu: 1200%      # all agent launches together (default: none)
+  #   disk_free_min: 5%         # refuse/stop launches below this free space (a size, or off)
+  #   required: false           # true: refuse a launch when the limits can't be applied
+  #   off: false
+  # persist: none               # a fresh home per dispatch; cache: keep a per-identity cache dir;
+  #                             #   home: keep the identity home (a run can plant hooks for the next)
+  # git:
+  #   shared: protected         # a linked worktree's shared git dir: only objects/refs/logs/lfs
+  #                             #   writable; direct: all of it but config/hooks/info/alternates
+  # macos_posix_ipc: false      # macOS: allow host-wide POSIX shm/semaphores (Python multiprocessing)
+  # Every knob above but model_credential and the aggregate caps (and inspect, which a scope adds to) is also set per runtime,
+  # workflow, trigger or step, tighter or looser, in an isolation: block with no mode:
+  #   isolation: { egress_only: [registry.npmjs.org], egress_protocol_check: true, persist: none,
+  #                limits: { memory: 4G, pids: 1024, cpu: 200%, cpu_weight: 50, disk_free_min: 10% },
+  #                detect: { action: kill, interval: 1s, connections: close },
+  #                egress_limits: { upload: 64MiB } }
+  # A pack may only tighten them (Isolation.md § Every knob, globally and per scope).
 
 # ---------------------------------------------------------------------------
 # WORKED EXAMPLE — the four feature families together (bots + the agent sandbox
@@ -1826,7 +1926,11 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 # dashboard: — OPTIONAL local web UI (design §6). Off unless enabled, so a
 # config without this block changes nothing. It runs INSIDE the daemon and
 # reads the live config, store and event hub. With operators configured, every
-# API call needs a signed-in operator (see docs/wiki/Dashboard.md).
+# API call needs a signed-in operator (see docs/wiki/Dashboard.md). With NONE
+# configured there is nothing to sign in as, and the API refuses every
+# request by default (the static page still loads) — see auth.allow_open
+# below to opt into serving it anyway, and docs/wiki/Dashboard.md for how to
+# enroll the first operator.
 #
 # dashboard:
 #   enabled: true            # off by default; a config without the block is unchanged
@@ -1859,6 +1963,12 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #                            # (anything that runs on the box, operators, the
 #                            # dashboard and store blocks) still asks. An
 #                            # explicit loosen.
+#     allow_open: false      # default. true: serve the API with no sign-in when
+#                            # no operators: are configured (there is nothing to
+#                            # protect it with otherwise) — an explicit choice for
+#                            # a single-user box, never the default. Has no effect
+#                            # once an operator is configured: sign-in is then
+#                            # required regardless.
 #   bind:                    # extra listeners on explicit addresses
 #     - address: 0.0.0.0:7790
 #       hostnames: [conductor.home.arpa]   # REQUIRED Host allowlist (DNS rebinding);

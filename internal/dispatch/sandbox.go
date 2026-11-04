@@ -3,11 +3,14 @@ package dispatch
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/gitpush"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // PaseoSandboxed turns the agent sandbox on for paseo dispatches: conductor
@@ -129,6 +132,7 @@ var SandboxPrefetch func(dir string)
 // checkout. req nil: a profile-less relaunch, registered under identity.
 func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsandbox.Entry, error) {
 	reg := agentsandbox.Default
+	var prev *agentsandbox.Entry
 	if e, ok := reg.Lookup(dir); ok && e.Workspace == canonPath(dir) {
 		// This launch's own earlier registration (a resume: no request, or
 		// the same dispatch), or the workspace's owner's — a member
@@ -139,29 +143,60 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 		if e.Dispatch == "" || (e.Identity == identity && (req == nil || req.DispatchID == e.Dispatch)) {
 			return e, nil
 		}
+		prev = &e
 	}
-	layout, err := agentsandbox.ResolveGitLayout(dir)
-	if err != nil {
-		return agentsandbox.Entry{}, err
+	var layout agentsandbox.GitLayout
+	if prev != nil {
+		// A follow-up dispatch into a workspace an agent has already worked
+		// in: its git layout and push target are what conductor recorded
+		// when the workspace was still its own — never re-read from the .git
+		// pointer, alternates or HEAD the earlier agent could rewrite.
+		if err := agentsandbox.ValidateRecorded(*prev); err != nil {
+			return agentsandbox.Entry{}, err
+		}
+		layout = agentsandbox.GitLayout{ReadOnly: prev.ReadOnly, ReadWrite: prev.ReadWrite, Hide: prev.Hide, Common: prev.GitCommon, HeadDir: prev.GitWorktree}
+		if prev.Push != nil {
+			layout.GitDir, layout.HeadDir = prev.Push.GitDir, prev.Push.HeadDir
+		}
+	} else {
+		var err error
+		if layout, err = agentsandbox.ResolveGitLayout(dir); err != nil {
+			return agentsandbox.Entry{}, err
+		}
 	}
 	e := agentsandbox.Entry{
 		Workspace: dir, Identity: identity, Tool: tool,
 		ReadOnly: layout.ReadOnly, ReadWrite: layout.ReadWrite, Hide: layout.Hide,
 	}
+	if layout.Common != "" {
+		e.GitCommon, e.GitWorktree = layout.Common, layout.HeadDir
+	}
 	if req != nil {
 		e.Dispatch = req.DispatchID
 		e.Model = sandboxModel(*req)
+		e.Scope = SandboxScope(*req)
 		if id, ok := SkillIdentityFor(*req); ok {
 			e.Skill = &id
 		}
-		if !ReviewRole(*req) && layout.GitDir != "" {
-			e.Push = pushTarget(dir, layout, req.Trigger.Target.CheckoutRepo())
+		switch {
+		case ReviewRole(*req):
+		case prev != nil && prev.Push != nil:
+			pt := *prev.Push
+			e.Push = &pt
+		case prev == nil && layout.GitDir != "":
+			// Only a repo conductor may work in gets a push target: never
+			// one the event's sender named.
+			if repo, err := CheckoutRepo(*req); err == nil {
+				e.Push = pushTarget(dir, layout, repo)
+			}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		e.StartHead, _ = gitpush.HeadCommit(ctx, dir, layout.GitDir, layout.HeadDir)
-		cancel()
+		if layout.GitDir != "" || prev == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			e.StartHead, _ = gitpush.HeadCommit(ctx, dir, layout.GitDir, layout.HeadDir)
+			cancel()
+		}
 	}
-	if req != nil && req.Trigger.TargetTrusted && SandboxPrefetch != nil {
+	if prev == nil && req != nil && req.Trigger.TargetTrusted && SandboxPrefetch != nil {
 		// Still conductor's own checkout: its module files, not an agent's.
 		SandboxPrefetch(dir)
 	}
@@ -204,4 +239,140 @@ func sandboxModel(req Request) string {
 		return req.Model
 	}
 	return req.Provider + "/" + req.Model
+}
+
+// SandboxScope is what a dispatch's own scopes change of its agent
+// sandbox: the allowance and detection / egress-limit overrides of the
+// isolation: it resolved to (its step's, else its trigger's or workflow's,
+// else its runtime's), and any allowance the operator granted its pack
+// step. An agent-authored dispatch gets none: only the operator's own
+// config loosens a sandbox. nil: nothing changes.
+func SandboxScope(req Request) *agentsandbox.Scope {
+	if req.AgentAuthored {
+		return nil
+	}
+	iso := req.Step.Isolation
+	if iso == nil {
+		return scopeOf(req.Step.GrantedAllow, nil, nil)
+	}
+	s := scopeOf(config.UnionAllow(iso.Allow, req.Step.GrantedAllow), iso.Detect, iso.EgressLimits)
+	k := knobsOf(iso)
+	if req.Step.PackInstance != "" {
+		// A pack's step: its egress_only, from whichever layer, only
+		// narrows. Decided from provenance here, not carried as a flag.
+		k.EgressOnlyNarrow = k.EgressOnlySet
+	}
+	return withKnobs(s, k)
+}
+
+// knobsOf is the part of a scope that names no origin — its caps, egress
+// narrowing, protocol check and persistence — as a Scope.
+func knobsOf(iso *config.IsolationConfig) *agentsandbox.Scope {
+	var k agentsandbox.Scope
+	if l := iso.Limits; l != nil {
+		k.Memory, k.Pids, k.CPUWeight = l.Memory, max(l.Pids, 0), max(l.CPUWeight, 0)
+		if iso.Mode == "" {
+			// With a mode, cpu is the wrapper's own (--cpus for a container).
+			k.CPU = l.CPU
+		}
+		if l.DiskFreeMin != "" {
+			k.DiskSet = true
+			k.DiskFreeFrac, k.DiskFreeBytes, k.DiskOff, _ = config.ParseDiskFreeMin(l.DiskFreeMin)
+		}
+	}
+	if iso.EgressOnly != nil {
+		k.EgressOnlySet, k.EgressOnly, k.EgressOnlyNarrow = true, append([]string{}, *iso.EgressOnly...), iso.EgressOnlyNarrow
+	}
+	k.ProtocolCheck, k.Persist = iso.EgressProtocolCheck, iso.Persist
+	for _, h := range iso.Inspect {
+		k.Inspect = append(k.Inspect, sandbox.InspectHost{Host: h.Host, CA: h.CA})
+	}
+	return &k
+}
+
+// withKnobs adds k's origin-less knobs to s (nil when neither sets any).
+func withKnobs(s, k *agentsandbox.Scope) *agentsandbox.Scope {
+	if k == nil || (k.Memory == "" && k.Pids == 0 && k.CPU == "" && k.CPUWeight == 0 && !k.DiskSet &&
+		!k.EgressOnlySet && k.ProtocolCheck == nil && k.Persist == "" && len(k.Inspect) == 0) {
+		return s
+	}
+	if s == nil {
+		s = &agentsandbox.Scope{}
+	}
+	s.Memory, s.Pids, s.CPU, s.CPUWeight = k.Memory, k.Pids, k.CPU, k.CPUWeight
+	s.DiskSet, s.DiskFreeFrac, s.DiskFreeBytes, s.DiskOff = k.DiskSet, k.DiskFreeFrac, k.DiskFreeBytes, k.DiskOff
+	s.EgressOnlySet, s.EgressOnly, s.EgressOnlyNarrow = k.EgressOnlySet, k.EgressOnly, k.EgressOnlyNarrow
+	s.ProtocolCheck, s.Persist, s.Inspect = k.ProtocolCheck, k.Persist, k.Inspect
+	return s
+}
+
+// Rescope is a recorded scope as the live config has it now: its
+// allowance rebuilt from the scopes and grants it names (one no longer in
+// the config gives nothing, so revoking a grant or removing an allow:
+// tightens every recorded workspace at once), and its detection and limit
+// overrides re-read from theirs. nil: nothing changes.
+func Rescope(s *agentsandbox.Scope, src config.ScopeSources) *agentsandbox.Scope {
+	if s == nil {
+		return nil
+	}
+	var allow *config.SandboxAllow
+	if s.Allow != nil {
+		for _, by := range strings.Split(s.Allow.By, " + ") {
+			if iso := src.Sites[by]; iso != nil && iso.Allow != nil && iso.Allow.Origin == by {
+				allow = config.UnionAllow(allow, iso.Allow)
+			} else if g := src.Grants[by]; g != nil {
+				allow = config.UnionAllow(allow, g)
+			}
+		}
+	}
+	var d *config.IsolationDetect
+	if iso := src.Sites[s.DetectBy]; s.DetectBy != "" && iso != nil && iso.Detect != nil && iso.Detect.Origin == s.DetectBy {
+		d = iso.Detect
+	}
+	var l *config.SandboxEgressLimits
+	if iso := src.Sites[s.LimitsBy]; s.LimitsBy != "" && iso != nil && iso.EgressLimits != nil && iso.EgressLimits.Origin == s.LimitsBy {
+		l = iso.EgressLimits
+	}
+	// The origin-less knobs (caps, egress_only, protocol check, persist)
+	// were the dispatch's own scope's when it was recorded: kept as
+	// recorded (a new dispatch records the live ones).
+	return withKnobs(scopeOf(allow, d, l), s)
+}
+
+// scopeOf is the sandbox scope of an allowance and detection / egress-limit
+// overrides (nil: nothing changes).
+func scopeOf(allow *config.SandboxAllow, d *config.IsolationDetect, l *config.SandboxEgressLimits) *agentsandbox.Scope {
+	var s agentsandbox.Scope
+	if d != nil {
+		s.DetectAction, s.Tripwires, s.DetectBy = d.Action, d.Tripwires, d.Origin
+		if v, err := time.ParseDuration(d.Interval); err == nil && d.Interval != "" {
+			s.DetectInterval = int64(v)
+		}
+		s.Connections = d.Connections
+	}
+	if l != nil {
+		idle, _ := config.ParseLimitDuration(l.Idle)
+		s.EgressIdle = int64(idle)
+		s.EgressUpload, _ = config.ParseByteSize(l.Upload)
+		s.EgressDownload, _ = config.ParseByteSize(l.Download)
+		s.ModelUpload, _ = config.ParseByteSize(l.ModelUpload)
+		s.ModelDownload, _ = config.ParseByteSize(l.ModelDownload)
+		s.LimitsBy = l.Origin
+	}
+	s.Allow = AllowanceOf(allow)
+	if reflect.DeepEqual(s, agentsandbox.Scope{}) {
+		return nil
+	}
+	return &s
+}
+
+// AllowanceOf is a config allowance as the sandbox takes it (nil: none).
+func AllowanceOf(a *config.SandboxAllow) *agentsandbox.Allowance {
+	if a.Empty() {
+		return nil
+	}
+	return &agentsandbox.Allowance{
+		Tunnels: a.TunnelTools(), TunnelHosts: a.TunnelHosts(), TunnelAnyHost: a.TunnelAnyHost(), NonTLS: a.RawTargets(),
+		ReverseShell: a.ReverseShell, Pty: a.Pty, By: a.Origin,
+	}
 }

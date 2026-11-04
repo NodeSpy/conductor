@@ -31,6 +31,9 @@ type AgentProfile struct {
 	// connections at when the network is restricted (a server it runs for
 	// conductor: opencode's `opencode serve`).
 	ListenPorts []int
+	// PosixIPC allows POSIX shared memory and semaphores
+	// (sandbox.macos_posix_ipc): named host-wide, so off for agents.
+	PosixIPC bool
 	// Keychain allows the Security framework services a Keychain-held login
 	// needs (see seatbelt_agent.go). Off by default: see docs/wiki/Isolation.md.
 	Keychain bool

@@ -240,13 +240,44 @@ func SkillEnvFor(req Request, endpoint string, sb *skill.SandboxBinding) map[str
 	mb := botBinding(req)
 	var tok string
 	var err error
-	// A bot session (home or worker) is durable like a hand-off: a home
-	// lives for days and a worker may wait hours on an approval, across
-	// daemon restarts, and neither env can be rewritten.
-	if req.Interactive || mb.Name != "" {
+	switch {
+	case req.Interactive || mb.Name != "":
+		// A bot session (home or worker) is durable like a hand-off: a home
+		// lives for days and a worker may wait hours on an approval, across
+		// daemon restarts, and neither env can be rewritten. No single
+		// process is a stable anchor across that — see MintHandoffSession's
+		// doc comment for why this stays uid-bound (rt2 #12's one
+		// deliberate exception, explicit and audited the same as any other
+		// session).
 		tok, err = b.MintHandoffSession(id, uint32(os.Getuid()))
-	} else {
-		tok, err = b.MintSession(id, uint32(os.Getuid()), skill.SessionTTL)
+	case sb != nil:
+		// A sandboxed launch (internal/controller/agentsandbox.go's
+		// prepareAgentSandbox): the token is read both by short-lived
+		// `conductor call` subprocesses and by an in-sandbox MCP tool
+		// server, so it must authorize the sandbox's whole process tree,
+		// not one exact pid (rt2 #12) — but root does not exist yet (the
+		// env this token goes into must be complete before exec.Cmd.Start
+		// creates the process it belongs to). Mint pending; the caller
+		// (bindSandboxRoot, called right after Start succeeds) names the
+		// real root the moment it is known. Until then the token
+		// authorizes no one at all.
+		tok, err = b.MintPendingSession(id, skill.SessionTTL)
+	default:
+		// sb == nil: no sandbox binding to anchor a pending token to. Two
+		// callers land here. internal/controller/cli.go's unsandboxed local
+		// launch IS conductor's own child process, and could in principle
+		// be tree-bound the same way as the sandboxed case — but with no
+		// sandbox there is no isolation boundary a leaked token would cross
+		// in the first place, so it is left on its pre-existing behavior
+		// rather than taking on pending/BindRoot plumbing for no security
+		// gain. internal/dispatch/paseo.go hands this token to the
+		// already-running paseo CLI/daemon, which decides — possibly on a
+		// remote host, possibly reusing a session conductor never sees the
+		// pid of — how and where the real agent runs; there genuinely is no
+		// process here to anchor to. Both stay uid-bound, explicitly
+		// (MintSessionUID, not a silent fallback) — the known remaining
+		// no-anchor paths, called out in this fix's report.
+		tok, err = b.MintSessionUID(id, uint32(os.Getuid()), skill.SessionTTL)
 	}
 	if err != nil {
 		return nil

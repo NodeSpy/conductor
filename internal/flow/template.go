@@ -16,6 +16,7 @@ import (
 	"text/template/parse"
 
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/hosts"
 	"github.com/NodeSpy/conductor/internal/kv"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/secrets"
@@ -164,6 +165,90 @@ func render(s string, data map[string]any) (string, error) {
 	// text/template renders a missing map key's zero value as "<no value>";
 	// normalize to empty so conditions and posts don't leak the marker.
 	return strings.ReplaceAll(out, "<no value>", ""), nil
+}
+
+// renderShellQuoted renders a template string like render, except every
+// `{{…}}` ACTION's substituted value is shell-quoted (hosts.ShellQuote)
+// before it is spliced into the surrounding literal text — the operator's
+// own template text (pipes, `$(...)`, quoting they wrote by hand) passes
+// through completely unchanged; only what came FROM DATA is quoted. This is
+// what a connector.Field.Shell option (the command connector's string-form
+// `command:`) renders with instead of render/renderValue, so an
+// event-controlled value (a PR title, a chat message) that lands in a
+// template action can never inject shell metacharacters into a command that
+// runs through `sh -c` (rt2 #3).
+//
+// Only a flat sequence of literal text and single actions is supported.
+// `{{if}}`/`{{range}}`/`{{with}}`/`{{template}}` inside a shell-marked field
+// would need to decide which surrounding text belongs to which branch before
+// quoting could make sense, which this does not attempt — such a template is
+// refused here (a load-time-shaped error at render time, since templates are
+// data-dependent and can't all be caught at load) with a pointer to the
+// connector's argv-list form instead, which has no such restriction (each
+// list element already renders and quotes independently).
+func renderShellQuoted(s string, data map[string]any) (string, error) {
+	if !strings.Contains(s, "{{") {
+		return s, nil
+	}
+	t, err := template.New("t").Option("missingkey=zero").Funcs(templateFuncs).Parse(s)
+	if err != nil {
+		return "", fmt.Errorf("template %q: %w", snippet(s), err)
+	}
+	if t.Tree == nil || t.Tree.Root == nil {
+		return s, nil
+	}
+	var b strings.Builder
+	for _, n := range t.Tree.Root.Nodes {
+		switch x := n.(type) {
+		case *parse.TextNode:
+			b.Write(x.Text)
+		case *parse.CommentNode:
+			// A comment action produces no output in ordinary execution either.
+		case *parse.ActionNode:
+			val, err := renderTemplateSource(x.String(), data)
+			if err != nil {
+				return "", fmt.Errorf("template %q: %w", snippet(s), err)
+			}
+			b.WriteString(hosts.ShellQuote(val))
+		default:
+			return "", fmt.Errorf("template %q: a shell-safe field cannot use %s — "+
+				"only plain {{ }} substitutions are supported here; use the argv-list form of command: for conditional or looped commands",
+				snippet(s), describeTemplateNode(n))
+		}
+	}
+	return b.String(), nil
+}
+
+// renderTemplateSource parses and executes ONE reconstructed action's source
+// ("{{…}}", from parse.ActionNode.String()) in isolation, the same way
+// render would if that action were the whole template string.
+func renderTemplateSource(src string, data map[string]any) (string, error) {
+	t, err := template.New("t").Option("missingkey=zero").Funcs(templateFuncs).Parse(src)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	if err := t.Execute(&b, data); err != nil {
+		return "", err
+	}
+	return strings.ReplaceAll(b.String(), "<no value>", ""), nil
+}
+
+// describeTemplateNode names an unsupported parse-tree node kind for the
+// renderShellQuoted error message.
+func describeTemplateNode(n parse.Node) string {
+	switch n.(type) {
+	case *parse.IfNode:
+		return "an {{if}}"
+	case *parse.RangeNode:
+		return "a {{range}}"
+	case *parse.WithNode:
+		return "a {{with}}"
+	case *parse.TemplateNode:
+		return "a {{template}}"
+	default:
+		return fmt.Sprintf("a %T", n)
+	}
 }
 
 // renderValue renders template strings anywhere inside a YAML-shaped value —

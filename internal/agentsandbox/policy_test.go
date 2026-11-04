@@ -1,10 +1,14 @@
 package agentsandbox
 
 import (
+	"bytes"
 	"encoding/json"
+	"encoding/pem"
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -64,6 +68,10 @@ func newPolicyFixture(t *testing.T) *fixture {
 		ReadOnly: []string{ro}, ReadWrite: []string{rw}, Hide: []string{filepath.Join(rw, "worktrees")},
 		Logins: []Login{{Path: filepath.Join(home, ".claude", ".credentials.json"), Src: filepath.Join(root, "real", ".credentials.json")}},
 		Env:    []string{"GIT_AUTHOR_NAME=Op"},
+		// The pre-gateway arrangement: the operator's login shared (read-
+		// only), the key and router reached as configured. The gateway's
+		// own tests (gateway_test.go) take the default.
+		ModelCredential: CredLoginShare,
 	}
 	f.deps = Deps{
 		SelfExe: func() (string, error) { return "/opt/conductor/conductor", nil },
@@ -148,7 +156,7 @@ func TestWrapLinuxPolicy(t *testing.T) {
 		{Path: f.pol.Socket},
 		{Path: f.pol.ReadOnly[0], RO: true}, {Path: f.pol.ReadWrite[0]},
 		{Path: f.pol.Hide[0], Tmpfs: true},
-		{Path: f.pol.Logins[0].Path, Src: f.pol.Logins[0].Src},
+		{Path: f.pol.Logins[0].Path, Src: f.pol.Logins[0].Src, RO: true},
 		{Path: "/opt/conductor/conductor", Src: "/opt/conductor/conductor", RO: true},
 		{Path: "/tmp/csr1/r1.sock"}, {Path: "/tmp/egress-x"},
 	} {
@@ -263,7 +271,7 @@ func TestWrapDarwinProfile(t *testing.T) {
 		`(allow file-read* (subpath "` + r(f.pol.ReadOnly[0]) + `"))`,
 		`(deny file-write* (subpath "` + r(f.pol.ReadOnly[1]) + `"))`,
 		`(deny file-read* file-write* (subpath "` + r(f.pol.Hide[0]) + `"))`,
-		`(allow file-read* file-write* (subpath "` + r(f.pol.Logins[0].Src) + `"))`,
+		`(allow file-read* (subpath "` + r(f.pol.Logins[0].Src) + `"))`,
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("profile lacks %s\n%s", want, p)
@@ -519,5 +527,159 @@ func TestModelRouteIgnoresAnOverrideWithNoHost(t *testing.T) {
 		if len(lb) != 0 || len(hosts) != len(anthropicHosts) {
 			t.Errorf("%q added a route: %v %v", o, hosts, lb)
 		}
+	}
+}
+
+// An agent launch's egress session carries the policy's settings: TLS-only
+// tunnels unless the operator opted out, its limits, and its run.
+func TestWrapMintsTheAgentsEgressSession(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			withPlatform(t, goos)
+			f := newPolicyFixture(t)
+			var got []sandbox.SessionOpts
+			f.deps.EgressUnixSession = func(_ []string, o sandbox.SessionOpts) (string, string, func(), error) {
+				got = append(got, o)
+				return "/tmp/egress-x/egress-0.sock", "cred-unix", func() {}, nil
+			}
+			f.deps.EgressAddrSession = func(_ []string, o sandbox.SessionOpts) (string, string, func(), error) {
+				got = append(got, o)
+				return "127.0.0.1:40123", "cred-tcp", func() {}, nil
+			}
+			f.pol.Run = "run-7:fix"
+			f.pol.EgressUpload = 1 << 20
+			f.pol.Detect.Connections = sandbox.ShapeClose
+			f.pol.Detect.ShapeAllowed, f.pol.Detect.AllowedBy = []string{"bastion.example:22"}, "workflow ops"
+			var shapes []map[string]any
+			f.deps.Event = func(kind string, fl map[string]any) {
+				if kind == "detection" {
+					shapes = append(shapes, fl)
+				}
+			}
+			if _, err := Wrap(f.pol, []string{"claude"}, f.deps); err != nil {
+				t.Fatal(err)
+			}
+			want := sandbox.SessionOpts{Run: "run-7:fix", RequireTLS: true, Limits: sandbox.EgressLimits{Upload: 1 << 20},
+				Shape: sandbox.ShapeClose, ShapeAllowed: []string{"bastion.example:22"}, ShapeAllowedBy: "workflow ops"}
+			if len(got) != 1 || got[0].OnShape == nil {
+				t.Fatalf("sessions minted %+v, want one with a shape reporter", got)
+			}
+			// A flagged tunnel is the launch's detection event.
+			got[0].OnShape(sandbox.ShapeEvent{Run: "run-7:fix", Target: "x.example:443", Kind: sandbox.ShapeInteractive, Action: sandbox.ShapeClose})
+			if len(shapes) != 1 || shapes[0]["kind"] != "tunnel_shape" || shapes[0]["shape"] != sandbox.ShapeInteractive || shapes[0]["action"] != sandbox.ShapeClose || shapes[0]["run"] != "run-7:fix" {
+				t.Fatalf("shape event %v", shapes)
+			}
+			got[0].OnShape = nil
+			if !reflect.DeepEqual(got[0], want) {
+				t.Fatalf("sessions minted %+v, want one %+v", got, want)
+			}
+			// Detection off: no shapes.
+			got = nil
+			f.pol.Detect.Action = DetectOff
+			if _, err := Wrap(f.pol, []string{"claude"}, f.deps); err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].Shape != sandbox.ShapeOff {
+				t.Fatalf("detection off: %+v", got)
+			}
+			f.pol.Detect = DetectSpec{}
+			got = nil
+			f.pol.EgressAnyBytes, f.pol.Run = true, ""
+			if _, err := Wrap(f.pol, []string{"claude"}, f.deps); err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].RequireTLS || got[0].Run != f.pol.Identity {
+				t.Fatalf("opted-out session %+v", got)
+			}
+		})
+	}
+}
+
+// A launch that inspects gets a session with the launch's inspector, and
+// its TLS clients pointed at a bundle — the system roots plus the CA's
+// certificate — shown to it read-only. The CA's key is in neither the
+// environment nor any file the launch is shown; a launch that inspects
+// nothing gets no bundle and no CA variables.
+func TestWrapInspectionShowsTheCANotItsKey(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			withPlatform(t, goos)
+			f := newPolicyFixture(t)
+			var got []sandbox.SessionOpts
+			f.deps.EgressUnixSession = func(_ []string, o sandbox.SessionOpts) (string, string, func(), error) {
+				got = append(got, o)
+				return "/tmp/egress-x/egress-0.sock", "cred", func() {}, nil
+			}
+			f.deps.EgressAddrSession = func(_ []string, o sandbox.SessionOpts) (string, string, func(), error) {
+				got = append(got, o)
+				return "127.0.0.1:40123", "cred", func() {}, nil
+			}
+			f.deps.Inherited = append(f.deps.Inherited, "SSL_CERT_FILE=/operator/own.pem")
+			l, err := Wrap(f.pol, []string{"claude"}, f.deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, kv := range l.Env {
+				k, _, _ := strings.Cut(kv, "=")
+				if slices.Contains(sandbox.InspectCAEnv, k) && kv != "SSL_CERT_FILE=/operator/own.pem" {
+					t.Fatalf("a launch that inspects nothing got %s", kv)
+				}
+			}
+			l.Cleanup()
+
+			got = nil
+			f.pol.Inspect = []sandbox.InspectHost{{Host: "npm.mirror.test"}}
+			l, err = Wrap(f.pol, []string{"claude"}, f.deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || !got[0].Inspect.Covers("npm.mirror.test") || got[0].Inspect.Covers("registry.npmjs.org") {
+				t.Fatalf("session: %+v", got)
+			}
+			var bundle string
+			for _, k := range sandbox.InspectCAEnv {
+				var vals []string
+				for _, kv := range l.Env {
+					if v, ok := strings.CutPrefix(kv, k+"="); ok {
+						vals = append(vals, v)
+					}
+				}
+				if len(vals) != 1 || (bundle != "" && vals[0] != bundle) {
+					t.Fatalf("%s: %v", k, vals)
+				}
+				bundle = vals[0]
+			}
+			if !strings.Contains(strings.Join(l.Argv, " "), filepath.Dir(bundle)) {
+				t.Fatalf("the bundle's dir is not shown to the launch: %v", l.Argv)
+			}
+			ca := got[0].Inspect.CAPEM()
+			entries, _ := os.ReadDir(filepath.Dir(bundle))
+			if len(entries) != 1 {
+				t.Fatalf("the bundle dir holds %v", entries)
+			}
+			b, err := os.ReadFile(bundle)
+			if err != nil || !bytes.HasSuffix(b, ca) {
+				t.Fatalf("bundle %v: does not end with the CA", err)
+			}
+			for rest := b; ; {
+				var blk *pem.Block
+				if blk, rest = pem.Decode(rest); blk == nil {
+					break
+				}
+				if blk.Type != "CERTIFICATE" {
+					t.Fatalf("the bundle holds a %s block", blk.Type)
+				}
+			}
+			for _, kv := range l.Env {
+				if strings.Contains(kv, "PRIVATE KEY") || strings.Contains(kv, "-----BEGIN") {
+					t.Fatalf("env carries PEM: %.60s", kv)
+				}
+			}
+			dir := filepath.Dir(bundle)
+			l.Cleanup()
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Fatalf("the bundle outlived the launch: %v", err)
+			}
+		})
 	}
 }

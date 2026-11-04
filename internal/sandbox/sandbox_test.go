@@ -63,7 +63,7 @@ func TestWrapLocalNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "unshare --user --map-current-user --pid --fork --mount-proc --kill-child -- tool"
+	want := "unshare --user --map-current-user --pid --fork --mount-proc --kill-child --ipc -- tool"
 	if got := strings.Join(argv, " "); got != want {
 		t.Fatalf("namespace wrap:\n got %q\nwant %q", got, want)
 	}
@@ -143,7 +143,7 @@ func TestWrapRemote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(cmd, "unshare --user --map-current-user --pid --fork --mount-proc --kill-child --net -- sh -c ") {
+	if !strings.HasPrefix(cmd, "unshare --user --map-current-user --pid --fork --mount-proc --kill-child --ipc --net -- sh -c ") {
 		t.Fatalf("remote namespace wrap: %q", cmd)
 	}
 
@@ -382,5 +382,38 @@ func TestFromConfigExpandsFS(t *testing.T) {
 	s := FromConfig(c)
 	if strings.Join(s.FS, ",") != "/home/op/media,/srv/x,/home/op" || c.FS[0] != "~/media" {
 		t.Fatalf("fs = %v (config %v)", s.FS, c.FS)
+	}
+}
+
+// Namespace mode gives the sandbox its own System V IPC namespace, local
+// and remote.
+func TestNamespaceModeUnsharesIPC(t *testing.T) {
+	old := CheckGOOS
+	CheckGOOS = "linux"
+	t.Cleanup(func() { CheckGOOS = old })
+	argv, err := (&Spec{Mode: "namespace"}).WrapLocal([]string{"true"}, "", nil, nil)
+	if err != nil || !strings.Contains(strings.Join(argv, " "), "--ipc") {
+		t.Fatalf("local: %v %v", argv, err)
+	}
+	cmd, err := (&Spec{Mode: "namespace"}).WrapRemote("true")
+	if err != nil || !strings.Contains(cmd, "--ipc") {
+		t.Fatalf("remote: %q %v", cmd, err)
+	}
+}
+
+// A privileged namespace launch with caps — a layered block can bring the
+// two together past validate — is refused: with no jail the caps are the
+// agent's to remove.
+func TestPrivilegedSpecWithLimitsRefused(t *testing.T) {
+	look := func(string) (string, error) { return "/usr/bin/x", nil }
+	for _, goos := range []string{"linux", "darwin"} {
+		s := &Spec{Mode: "namespace", Privileged: true, Pids: 100}
+		if err := s.Check(goos, 1000, look); err == nil || !strings.Contains(err.Error(), "privileged") {
+			t.Fatalf("%s: %v", goos, err)
+		}
+		s = &Spec{Mode: "namespace", Privileged: true}
+		if err := s.Check(goos, 1000, look); err != nil {
+			t.Fatalf("%s privileged alone: %v", goos, err)
+		}
 	}
 }

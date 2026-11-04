@@ -431,9 +431,13 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 		logf("sandbox: egress denied: %s (not in allowlist)", hostport)
 		st.Audit(map[string]any{"event": "egress_denied", "target": hostport})
 	})
+	egress.OnConn = egressAudit(logf, st.Audit)
 	defer egress.Close()
 	controller.EgressProxyFor = egress.Endpoint
 	controller.EgressProxyUnix = egress.UnixEndpoint
+	controller.EgressProxyUnixSession = egress.UnixEndpointSession
+	controller.EgressProxyForSession = egress.EndpointSession
+	controller.SandboxEvent = sandboxEventAudit(logf, st.Audit, nil)
 	stateDir := filepath.Dir(cfg.Store.StateFile)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("state dir %s: %w", stateDir, err)

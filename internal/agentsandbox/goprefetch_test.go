@@ -2,12 +2,16 @@ package agentsandbox
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/sandbox"
+	"github.com/NodeSpy/conductor/internal/skill"
 )
 
 func writeFiles(t *testing.T, root string, files map[string]string) {
@@ -107,61 +111,157 @@ func fakeGo(t *testing.T) (bin, record string) {
 	return bin, record
 }
 
-func TestGoPrefetchFill(t *testing.T) {
-	bin, record := fakeGo(t)
+// TestGoPrefetchPlan covers the PURE logic Fill wraps in confinement: the
+// snapshot staged on disk, the argv/env `go mod download` runs with, and the
+// workspace-vs-single-module GOWORK switch — none of it needs a real
+// namespace/privilege, so this stays a fast unit test. Confinement itself
+// (that the download really CANNOT reach outside its allow-list) is proven
+// by the Linux integration test in goprefetch_jail_linux_test.go.
+func TestGoPrefetchPlan(t *testing.T) {
 	cache := t.TempDir()
-	g := &GoPrefetch{Cache: cache, Go: bin, Proxy: "file:///op/cache/download,https://proxy.golang.org", Env: []string{"PATH=" + os.Getenv("PATH")}}
+	g := &GoPrefetch{Cache: cache, Go: "/usr/bin/go", Proxy: "https://proxy.golang.org", Env: []string{"PATH=" + os.Getenv("PATH"), "GITHUB_TOKEN=leak-me-not"}}
 	m := &GoModules{Files: map[string][]byte{"go.mod": []byte("module x\n"), "sub/go.sum": []byte("s\n")}}
-	if err := g.Fill(context.Background(), m); err != nil {
+
+	p, err := g.plan(m)
+	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := os.ReadFile(record)
-	rec := string(b)
+	defer os.RemoveAll(p.tmp)
+
+	src := filepath.Join(p.tmp, "src")
+	if got := strings.Join(p.argv, " "); got != g.Go+" -C "+src+" mod download" {
+		t.Fatalf("argv = %q", got)
+	}
+	if p.dir != p.tmp {
+		t.Fatalf("dir = %q, want the scratch root %q (the jail binds/chdirs into it; -C points at src inside it)", p.dir, p.tmp)
+	}
 	for _, want := range []string{
-		"args=mod download\n", "GOMODCACHE=" + cache + "\n", "GOPROXY=file:///op/cache/download,https://proxy.golang.org\n",
-		"GOTOOLCHAIN=local\n", "GOVCS=*:off\n", "GOENV=off\n", "GOWORK=off\n", "GOFLAGS=\n", "GOPRIVATE=\n",
-		"./go.mod\n", "./sub/go.sum\n",
+		"GOMODCACHE=" + cache, "GOPROXY=https://proxy.golang.org",
+		"GOTOOLCHAIN=local", "GOVCS=*:off", "GOENV=off", "GOWORK=off", "GOFLAGS=", "GOPRIVATE=",
+		"HOME=" + p.tmp,
 	} {
-		if !strings.Contains(rec, want) {
-			t.Errorf("the download lacks %q:\n%s", want, rec)
+		if !contains(p.env, want) {
+			t.Errorf("env lacks %q: %v", want, p.env)
 		}
 	}
-	if strings.Contains(rec, "HOME="+cache) || strings.Contains(rec, "GITHUB_TOKEN") {
-		t.Errorf("the download runs in its own temp HOME with none of the daemon's environment:\n%s", rec)
+	if contains(p.env, "GITHUB_TOKEN=leak-me-not") == false {
+		t.Error("g.Env must still reach the plan (an operator variable the download explicitly keeps)")
 	}
-	cwd := strings.TrimPrefix(strings.SplitN(rec, "\n", 2)[0], "cwd=")
-	if within(cwd, cache) {
-		t.Errorf("the download runs in its own temp dir, not the cache: %s", cwd)
-	}
-	if _, err := os.Stat(cwd); err == nil {
-		t.Errorf("the temp dir is removed: %s", cwd)
+	for _, rel := range []string{"go.mod", "sub/go.sum"} {
+		if _, err := os.Stat(filepath.Join(src, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("staged file missing: %s: %v", rel, err)
+		}
 	}
 
-	// The same module files again: nothing to do.
-	if err := g.Fill(context.Background(), m); err != nil {
+	// A go.work workspace plans in workspace mode (no GOWORK=off).
+	w := &GoModules{Files: map[string][]byte{"go.work": []byte("use ./a\n"), "a/go.mod": []byte("module a\n")}}
+	pw, err := g.plan(w)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if b2, _ := os.ReadFile(record); len(b2) != len(b) {
-		t.Fatal("an already-prefetched set of module files is downloaded again")
+	defer os.RemoveAll(pw.tmp)
+	if contains(pw.env, "GOWORK=off") {
+		t.Error("a go.work workspace must not plan with GOWORK=off")
 	}
 
-	// A go.work workspace runs in workspace mode; a failure is reported and
-	// not recorded as done.
-	os.WriteFile(filepath.Join(filepath.Dir(bin), "fail"), nil, 0o644)
-	w := &GoModules{Files: map[string][]byte{"go.work": []byte("use ./a\n"), "a/go.mod": []byte("module a\n")}}
-	os.Remove(record)
-	if err := g.Fill(context.Background(), w); err == nil || !strings.Contains(err.Error(), "boom: no such module") {
-		t.Fatalf("a failed download: %v", err)
-	}
-	if b, _ := os.ReadFile(record); strings.Contains(string(b), "GOWORK=off") {
-		t.Fatal("a go.work workspace is downloaded in workspace mode")
-	}
-	if _, err := os.Stat(filepath.Join(cache, ".conductor-prefetched", w.Digest())); err == nil {
-		t.Fatal("a failed download is marked done")
-	}
-
-	if err := g.Fill(context.Background(), &GoModules{Files: map[string][]byte{"../x/go.mod": nil}}); err == nil {
+	if _, err := g.plan(&GoModules{Files: map[string][]byte{"../x/go.mod": nil}}); err == nil {
 		t.Fatal("a module file out of the temp dir is refused")
+	}
+}
+
+// Fill never falls back to an unconfined download: with no Sandbox deps
+// wired (the zero value — this box's goprefetch has no self-exe/egress
+// wiring), it logs and returns nil (the agent runs Go offline without these
+// modules) instead of ever running `go mod download` bare. fakeGo would
+// record a run if Fill executed it at all.
+func TestGoPrefetchFillSkipsWhenUnconfinable(t *testing.T) {
+	bin, record := fakeGo(t)
+	cache := t.TempDir()
+	var warned string
+	g := &GoPrefetch{Cache: cache, Go: bin, Proxy: "https://proxy.golang.org",
+		Env:  []string{"PATH=" + os.Getenv("PATH")},
+		Warn: func(format string, args ...any) { warned = fmt.Sprintf(format, args...) }}
+	m := &GoModules{Files: map[string][]byte{"go.mod": []byte("module x\n")}}
+
+	if err := g.Fill(context.Background(), m); err != nil {
+		t.Fatalf("an unconfinable download must be skipped, not errored: %v", err)
+	}
+	if _, err := os.Stat(record); err == nil {
+		t.Fatal("the download ran UNCONFINED — it must never fall back to a bare host download")
+	}
+	if warned == "" || !strings.Contains(warned, "cannot confine") {
+		t.Fatalf("expected a log line naming the skip, got %q", warned)
+	}
+	if _, err := os.Stat(filepath.Join(cache, ".conductor-prefetched", m.Digest())); err == nil {
+		t.Fatal("a skipped download must not be marked done — a later box that CAN confine must still try")
+	}
+}
+
+// Fill routes through sandbox.WrapLocalCommand (Confine, namespace mode,
+// enforced egress to the GOPROXY hosts) rather than reading g.Sandbox and
+// silently doing nothing: with a self-exe wired but no egress-proxy minter
+// (the other half WrapLocalCommand needs for the enforced allowlist),
+// WrapLocalCommand's own fail-closed check names exactly that missing wiring
+// — proof the call was actually reached, without needing a real privileged
+// jail to exercise it.
+func TestGoPrefetchFillRoutesThroughConfinement(t *testing.T) {
+	cache := t.TempDir()
+	var warned string
+	g := &GoPrefetch{Cache: cache, Go: "/usr/bin/go", Proxy: "https://proxy.golang.org",
+		Sandbox: sandbox.LocalWrapDeps{SelfExe: func() (string, error) { return "/conductor", nil }},
+		Warn:    func(format string, args ...any) { warned = fmt.Sprintf(format, args...) }}
+	m := &GoModules{Files: map[string][]byte{"go.mod": []byte("module x\n")}}
+
+	if err := g.Fill(context.Background(), m); err != nil {
+		t.Fatalf("an unconfinable download must be skipped, not errored: %v", err)
+	}
+	if !strings.Contains(warned, "cannot confine") || !strings.Contains(warned, "proxy's unix endpoint") {
+		t.Fatalf("expected WrapLocalCommand's own enforced-egress refusal to surface through the skip warning: %q", warned)
+	}
+}
+
+// NewGoPrefetch never layers the operator's own $GOMODCACHE onto GOPROXY as
+// a file:// source (rt2 #11): this ONE cache is shared by every identity, so
+// pulling whatever the operator's own module cache holds into it would leak
+// private modules across identities. Regression for the removed lines.
+func TestNewGoPrefetchNoFileProxyLayer(t *testing.T) {
+	opHome := t.TempDir()
+	download := filepath.Join(opHome, "pkg", "mod", "cache", "download")
+	if err := os.MkdirAll(download, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(t.TempDir(), "shared-cache")
+	g, err := NewGoPrefetch(cache, []string{"PATH=" + os.Getenv("PATH"), "GOPATH=" + filepath.Join(opHome, "pkg")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(g.Proxy, "file://") {
+		t.Fatalf("GOPROXY must never carry a file:// layer onto the operator's own module cache, got %q", g.Proxy)
+	}
+	if g.Proxy != "https://proxy.golang.org" {
+		t.Fatalf("GOPROXY = %q, want the plain public default", g.Proxy)
+	}
+}
+
+// goProxyHosts names only the reachable proxy hosts — never "direct"/"off",
+// and comma/pipe separators are read the same way (we only need which hosts
+// might be dialed, not the fallback semantics between them).
+func TestGoProxyHosts(t *testing.T) {
+	cases := []struct {
+		proxy string
+		want  []string
+	}{
+		{"https://proxy.golang.org", []string{"proxy.golang.org:443"}},
+		{"off", nil},
+		{"direct", nil},
+		{"https://a.example.com|https://b.example.com,direct", []string{"a.example.com:443", "b.example.com:443"}},
+		{"http://mirror.internal:8080", []string{"mirror.internal:8080"}},
+	}
+	for _, c := range cases {
+		got := goProxyHosts(c.proxy)
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("goProxyHosts(%q) = %v, want %v", c.proxy, got, c.want)
+		}
 	}
 }
 
@@ -171,7 +271,7 @@ func TestPolicyGoPrefetch(t *testing.T) {
 	r := &Resolver{StateRoot: t.TempDir(), RealHome: t.TempDir(), GOOS: "linux",
 		GoPrefetch: &GoPrefetch{Cache: cache}}
 	ws := t.TempDir()
-	p, err := r.PolicyForEntry(Entry{Workspace: ws, Identity: "agent:fixer@acme/app", ReadOnly: []string{"/base/objects"}, Env: []string{"GIT_AUTHOR_NAME=x"}}, "claude", nil)
+	p, err := r.PolicyForEntry(Entry{Workspace: ws, Identity: "agent:fixer@acme/app", ReadOnly: []string{"/base/objects"}, Env: []string{"GIT_AUTHOR_NAME=x"}}, "claude", nil, skill.ProcessAnchor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +289,7 @@ func TestPolicyGoPrefetch(t *testing.T) {
 		}
 	}
 	r.GoPrefetch = nil
-	if p, _ := r.PolicyForEntry(Entry{Workspace: ws, Identity: "agent:fixer@acme/app"}, "claude", nil); contains(p.ReadOnly, cache) || contains(p.Env, "GOPROXY=off") {
+	if p, _ := r.PolicyForEntry(Entry{Workspace: ws, Identity: "agent:fixer@acme/app"}, "claude", nil, skill.ProcessAnchor{}); contains(p.ReadOnly, cache) || contains(p.Env, "GOPROXY=off") {
 		t.Fatalf("prefetch off: %+v", p)
 	}
 }

@@ -26,7 +26,7 @@ func TestPaseoPreCreatesWorktreeAndPins(t *testing.T) {
 		return "wks_pr5", "/home/x/.paseo/worktrees/g/pr5", nil
 	}
 	req := Request{
-		Trigger: core.Trigger{Kind: "review_requested",
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "review_requested",
 			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
 		Action: config.Action{Type: "agent", Agent: "a", Prompt: "review"},
 		Step:   config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
@@ -91,7 +91,7 @@ func TestInteractiveHandoffLaunchesFreshNotQueued(t *testing.T) {
 
 	ih := Request{
 		Interactive: true, // background workflow hand-off (Wait defaults false)
-		Trigger:     core.Trigger{Kind: "review_requested", Target: pr},
+		Trigger:     core.Trigger{TargetTrusted: true, Kind: "review_requested", Target: pr},
 		Action:      config.Action{Type: "agent", Agent: "a", Checkout: "checkout-pr", Prompt: "review"},
 		Step:        config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
 	}
@@ -106,7 +106,7 @@ func TestInteractiveHandoffLaunchesFreshNotQueued(t *testing.T) {
 	// Control: a non-interactive feedback dispatch with the same live agent still
 	// queues onto it (one-worker-per-PR preserved).
 	fb := Request{
-		Trigger: core.Trigger{Kind: "new_comment", Target: pr},
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "new_comment", Target: pr},
 		Action:  config.Action{Type: "agent", Agent: "a", Checkout: "none", Prompt: "handle comment"},
 	}
 	ref2, err := mk().Dispatch(context.Background(), fb)
@@ -134,7 +134,7 @@ func TestFeedbackQueuesWithoutCreatingWorktree(t *testing.T) {
 	}
 	pr := core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}
 	fb := Request{
-		Trigger: core.Trigger{Kind: "new_comment", Target: pr},
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "new_comment", Target: pr},
 		Action:  config.Action{Type: "agent", Agent: "a", Checkout: "checkout-pr", Prompt: "handle comment"},
 	}
 	ref, err := d.Dispatch(context.Background(), fb)
@@ -158,7 +158,7 @@ func TestPaseoWorktreeCreateFailureIsLoud(t *testing.T) {
 		return "", "", fmt.Errorf("branch already checked out")
 	}
 	req := Request{
-		Trigger: core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "merge_conflict", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
 		Action:  config.Action{Type: "agent", Agent: "a", Prompt: "fix"},
 		Step:    config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
 	}
@@ -177,18 +177,18 @@ func TestEffectiveStrategyInteractive(t *testing.T) {
 		req  Request
 		want string
 	}{
-		{"interactive+PR+none → checkout-pr", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: pr}}, "checkout-pr"},
-		{"interactive+repo+none → branch-off", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: repoOnly}}, "branch-off"},
-		{"interactive+PR+unset → checkout-pr", Request{Interactive: true, Trigger: core.Trigger{Target: pr}}, "checkout-pr"},
-		{"interactive+no-repo+none → none", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: bare}}, "none"},
-		{"non-interactive+none stays none", Request{Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: pr}}, "none"},
-		{"interactive+explicit checkout-pr unchanged", Request{Interactive: true, Action: config.Action{Checkout: "checkout-pr"}, Trigger: core.Trigger{Target: pr}}, "checkout-pr"},
+		{"interactive+PR+none → checkout-pr", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{TargetTrusted: true, Target: pr}}, "checkout-pr"},
+		{"interactive+repo+none → branch-off", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{TargetTrusted: true, Target: repoOnly}}, "branch-off"},
+		{"interactive+PR+unset → checkout-pr", Request{Interactive: true, Trigger: core.Trigger{TargetTrusted: true, Target: pr}}, "checkout-pr"},
+		{"interactive+no-repo+none → none", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{TargetTrusted: true, Target: bare}}, "none"},
+		{"non-interactive+none stays none", Request{Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{TargetTrusted: true, Target: pr}}, "none"},
+		{"interactive+explicit checkout-pr unchanged", Request{Interactive: true, Action: config.Action{Checkout: "checkout-pr"}, Trigger: core.Trigger{TargetTrusted: true, Target: pr}}, "checkout-pr"},
 		// A manual/RSS/webhook trigger's synthetic target ("manual:<name>") is not a
 		// repo: its action is forced to checkout none, and an interactive step
 		// must not branch off it (paseo clone "manual:…" → CLONE_FAILED).
-		{"interactive+synthetic target → none", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: synth, Action: config.Action{Checkout: "none"}}}, "none"},
-		{"interactive+synthetic target+unset → none", Request{Interactive: true, Trigger: core.Trigger{Target: synth, Action: config.Action{Checkout: "none"}}}, "none"},
-		{"interactive+synthetic target+step repo: → branch-off", Request{Interactive: true, Step: config.Step{Repo: "a/w"}, Trigger: core.Trigger{Target: core.Target{Repo: "manual:x", Project: "a/w"}, Action: config.Action{Checkout: "none"}}}, "branch-off"},
+		{"interactive+synthetic target → none", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{TargetTrusted: true, Target: synth, Action: config.Action{Checkout: "none"}}}, "none"},
+		{"interactive+synthetic target+unset → none", Request{Interactive: true, Trigger: core.Trigger{TargetTrusted: true, Target: synth, Action: config.Action{Checkout: "none"}}}, "none"},
+		{"interactive+synthetic target+step repo: → branch-off", Request{Interactive: true, Step: config.Step{Repo: "a/w"}, Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "manual:x", Project: "a/w"}, Action: config.Action{Checkout: "none"}}}, "branch-off"},
 	}
 	for _, c := range cases {
 		if got := effectiveStrategy(c.req); got != c.want {
@@ -211,7 +211,7 @@ func TestCheckoutNoneWorkspacePerRun(t *testing.T) {
 		return d
 	}
 	nreq := Request{Action: config.Action{Type: "agent", Agent: "a", Checkout: "none", Prompt: "x"},
-		Trigger: core.Trigger{Kind: "cron", Target: core.Target{}}}
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "cron", Target: core.Target{}}}
 	nref, _ := mk().Dispatch(context.Background(), nreq)
 	if !strings.Contains(strings.Join(nref.Argv, " "), "--workspace run-1") {
 		t.Fatalf("non-interactive checkout:none should get its own workspace; got: %s", strings.Join(nref.Argv, " "))
@@ -219,7 +219,7 @@ func TestCheckoutNoneWorkspacePerRun(t *testing.T) {
 	// An interactive hand-off with no repo context takes the same path, and must
 	// get a DIFFERENT workspace from the auto run above.
 	ireq := Request{Interactive: true, Action: config.Action{Type: "agent", Agent: "a", Checkout: "none", Prompt: "x"},
-		Trigger: core.Trigger{Kind: "handoff", Target: core.Target{}}}
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "handoff", Target: core.Target{}}}
 	iref, _ := mk().Dispatch(context.Background(), ireq)
 	is := strings.Join(iref.Argv, " ")
 	if !strings.Contains(is, "--workspace run-2") || strings.Contains(is, "--workspace run-1") {
@@ -228,7 +228,7 @@ func TestCheckoutNoneWorkspacePerRun(t *testing.T) {
 	// Interactive + PR + checkout:none → upgraded to a PR worktree (PR-centric),
 	// so no ephemeral workspace is involved at all.
 	preq := Request{Interactive: true, Action: config.Action{Type: "agent", Agent: "a", Checkout: "none", Prompt: "x"},
-		Trigger: core.Trigger{Kind: "handoff", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "handoff", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
 		Step:    config.Step{Workspace: config.Workspace{Isolation: "worktree"}}}
 	pref, _ := mk().Dispatch(context.Background(), preq)
 	ps := strings.Join(pref.Argv, " ")
@@ -238,15 +238,15 @@ func TestCheckoutNoneWorkspacePerRun(t *testing.T) {
 }
 
 func TestRequestedWorktree(t *testing.T) {
-	pr := Request{Trigger: core.Trigger{Target: core.Target{Repo: "a/b", PR: 7, Number: 7}}}
+	pr := Request{Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "a/b", PR: 7, Number: 7}}}
 	if !requestedWorktree(pr) {
 		t.Fatal("a PR trigger should request a worktree (checkout-pr)")
 	}
-	branch := Request{Trigger: core.Trigger{Target: core.Target{Repo: "a/b"}}} // repo, no PR → branch-off
+	branch := Request{Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "a/b"}}} // repo, no PR → branch-off
 	if !requestedWorktree(branch) {
 		t.Fatal("a repo trigger should request a worktree (branch-off)")
 	}
-	none := Request{Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: core.Target{Repo: "a/b", PR: 7}}}
+	none := Request{Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "a/b", PR: 7}}}
 	if requestedWorktree(none) {
 		t.Fatal("checkout:none must not request a worktree")
 	}
@@ -275,7 +275,7 @@ func TestVerifyWorktreeDetectsHomeFallback(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	bin, archiveLog := fakeInspect(t, home) // checkout fell back to $HOME → no worktree
 	d := &Dispatcher{PaseoBin: bin}
-	req := Request{Trigger: core.Trigger{Target: core.Target{Repo: "acme/w", PR: 5239, Number: 5239}}}
+	req := Request{Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "acme/w", PR: 5239, Number: 5239}}}
 	ref := RunRef{AgentID: "broken"}
 
 	err := d.verifyWorktree(context.Background(), req, &ref)
@@ -294,7 +294,7 @@ func TestVerifyWorktreeAcceptsWorktreeCwd(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	bin, archiveLog := fakeInspect(t, filepath.Join(home, ".paseo/worktrees/abc/tall-dolphin"))
 	d := &Dispatcher{PaseoBin: bin}
-	req := Request{Trigger: core.Trigger{Target: core.Target{Repo: "acme/w", PR: 5239, Number: 5239}}}
+	req := Request{Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "acme/w", PR: 5239, Number: 5239}}}
 	ref := RunRef{AgentID: "good"}
 
 	if err := d.verifyWorktree(context.Background(), req, &ref); err != nil {
@@ -314,13 +314,13 @@ func TestVerifyWorktreeSkipsForegroundAndNonWorktree(t *testing.T) {
 	d := &Dispatcher{PaseoBin: bin}
 
 	// Foreground (Wait) is never checked — even sitting in $HOME.
-	fg := Request{Wait: true, Trigger: core.Trigger{Target: core.Target{Repo: "acme/w", PR: 1, Number: 1}}}
+	fg := Request{Wait: true, Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "acme/w", PR: 1, Number: 1}}}
 	ref := RunRef{AgentID: "x"}
 	if err := d.verifyWorktree(context.Background(), fg, &ref); err != nil {
 		t.Fatalf("foreground dispatch must be skipped: %v", err)
 	}
 	// checkout:none is never checked.
-	none := Request{Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: core.Target{Repo: "acme/w", PR: 1, Number: 1}}}
+	none := Request{Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "acme/w", PR: 1, Number: 1}}}
 	ref2 := RunRef{AgentID: "y"}
 	if err := d.verifyWorktree(context.Background(), none, &ref2); err != nil {
 		t.Fatalf("checkout:none dispatch must be skipped: %v", err)
@@ -370,7 +370,7 @@ func TestPaseoWorkdirCaptured(t *testing.T) {
 		return "wks_pr5", "/wt/pr5", nil
 	}
 	req := Request{
-		Trigger: core.Trigger{Kind: "review_requested",
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "review_requested",
 			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
 		Action: config.Action{Type: "agent", Agent: "a", Prompt: "review"},
 		Step:   config.Step{Workspace: config.Workspace{Isolation: "worktree"}},

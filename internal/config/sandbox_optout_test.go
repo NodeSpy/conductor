@@ -92,6 +92,14 @@ func TestIsolationLoosens(t *testing.T) {
 		{&IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{Deny: true}}, true, false},
 		{&IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{}}, true, false},
 		{&IsolationConfig{Mode: "namespace", Limits: &IsolationLimits{Pids: 10}}, true, false},
+		// Agent caps: narrower, or an absolute size the slice still bounds,
+		// is a pack's to write; more than the defaults is the operator's.
+		{&IsolationConfig{Limits: &IsolationLimits{Memory: "2G", Pids: 100}}, true, false},
+		{&IsolationConfig{Limits: &IsolationLimits{Memory: "40%"}}, true, false},
+		{&IsolationConfig{Limits: &IsolationLimits{Pids: 100000}}, true, true},
+		{&IsolationConfig{Limits: &IsolationLimits{Memory: "90%"}}, true, true},
+		{&IsolationConfig{Limits: &IsolationLimits{Memory: "infinity"}}, true, true},
+		{&IsolationConfig{Limits: &IsolationLimits{Pids: 100000}}, false, false},
 	} {
 		if got := isolationLoosens(c.iso, c.agent) != ""; got != c.loose {
 			t.Errorf("%+v agent=%v: loosens=%v, want %v", c.iso, c.agent, got, c.loose)

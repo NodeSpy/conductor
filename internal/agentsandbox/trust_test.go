@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/skill"
 )
 
 func readClaudeJSON(t *testing.T, home string) map[string]any {
@@ -112,7 +114,7 @@ func TestPolicyTrustsOnlyADispatchWorkspace(t *testing.T) {
 	reg := &Registry{}
 	r := &Resolver{Registry: reg, StateRoot: filepath.Join(root, "st"), GOOS: "linux"}
 	reg.Register(Entry{Workspace: ws, Identity: "agent:a", Dispatch: "d1"})
-	p, err := r.PolicyFor(filepath.Join(ws, "sub"), "claude", nil, false)
+	p, err := r.PolicyFor(filepath.Join(ws, "sub"), "claude", nil, false, skill.ProcessAnchor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +125,7 @@ func TestPolicyTrustsOnlyADispatchWorkspace(t *testing.T) {
 	cx := filepath.Join(root, "cx")
 	os.MkdirAll(cx, 0o700)
 	reg.Register(Entry{Workspace: cx, Identity: "agent:b", Dispatch: "d2"})
-	p, err = r.PolicyFor(cx, "codex", nil, false)
+	p, err = r.PolicyFor(cx, "codex", nil, false, skill.ProcessAnchor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +135,7 @@ func TestPolicyTrustsOnlyADispatchWorkspace(t *testing.T) {
 	own := filepath.Join(root, "mine")
 	os.MkdirAll(own, 0o700)
 	reg.Register(Entry{Workspace: own, Identity: "member:m"})
-	p, err = r.PolicyFor(own, "claude", nil, false)
+	p, err = r.PolicyFor(own, "claude", nil, false, skill.ProcessAnchor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +144,7 @@ func TestPolicyTrustsOnlyADispatchWorkspace(t *testing.T) {
 	}
 	dir := filepath.Join(root, "adhoc")
 	os.MkdirAll(dir, 0o700)
-	p, err = r.PolicyFor(dir, "claude", nil, false)
+	p, err = r.PolicyFor(dir, "claude", nil, false, skill.ProcessAnchor{})
 	if err != nil {
 		t.Fatal(err)
 	}

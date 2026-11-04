@@ -344,6 +344,7 @@ func spawnACP(_ context.Context, command []string, cwd string, env []string, del
 		revoke()
 		return nil, nil, fmt.Errorf("acp: start %s: %w", argv[0], err)
 	}
+	bindSandboxRoot(cmd.Env, cmd.Process.Pid)
 	client := acp.NewClient(stdout, stdin, del)
 	// This ACP agent is a background session owned by cleanup, not ctx (see the
 	// doc above) — so the egress credential is retired in cleanup, at session

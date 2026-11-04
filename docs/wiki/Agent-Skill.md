@@ -211,40 +211,73 @@ interactive hand-off's, below.
 
 Two binding shapes, matching the two delivery paths:
 
-- **CLI face (session token, uid-bound).** The token is reusable across the
-  many short-lived `conductor` processes one dispatch runs. On the local
-  socket the daemon reads the caller's kernel uid (`SO_PEERCRED`) and refuses
-  a token presented from a **different uid** — a token scraped from one
-  agent's env is useless to a process running as someone else. The token
-  lasts a dispatch window (2h) for an ordinary step. An **interactive
-  hand-off** is held for a human who may not engage it for hours or days, and
-  the token in its env can't be rewritten, so its session is **durable**:
-  - it survives daemon restarts (every auto-update is one): it is persisted to
-    `handoff-sessions.json` in the state directory (mode 0600, keyed by the
-    token's SHA-256 — the token itself is never written) and reloaded at boot
-    with its identity, policy, uid binding, and verb-call count;
-  - its expiry **slides**: each authorized call pushes it to 7 days from
-    now, so a hand-off in use never ages out, and an idle one expires 7 days
-    after its last call;
-  - releasing the hand-off (`step.done`, `idle_timeout`, a watch bail or
-    supersede, or a re-engage on a new revision) revokes it at once.
+- **CLI face (session token, bound to a PROCESS TREE under the agent
+  sandbox).** The token is reusable across the many short-lived `conductor`
+  processes one dispatch runs, and by an in-sandbox MCP tool server where one
+  runs alongside them — so it cannot be pinned to one exact pid. Every
+  sandboxed launch presents the **same uid**, though (conductor's own), so
+  binding on uid alone would let a token that leaked from one sandbox be
+  replayed from any OTHER same-uid sandbox, or any other process the daemon's
+  own user runs. Instead the daemon anchors the token to the **root process
+  of that launch** — the one process that execs or forks the sandboxed agent
+  (`conductor sandbox exec`'s own client process, or the child conductor
+  starts directly for a local cli/opencode launch) — captured as (pid, kernel
+  start time) the moment it exists. A call is authorized only when the
+  presenting process is that root itself or a **live descendant of it**,
+  walked via the kernel's own parent-pid chain (`/proc/<pid>/stat` on Linux,
+  `sysctl(KERN_PROC_PID)` on macOS) — never anything the caller asserts — with
+  root's start time re-read and compared on every call, so a pid the kernel
+  later reuses for an unrelated process never matches.
 
-  A rejected session token (unknown or expired) is logged and audited
+  For the in-daemon launch path (prepareAgentSandbox) the token is minted
+  into the child's environment *before* the child process exists — the
+  environment must be complete before the process starts — so it begins life
+  **pending**: it authorizes no one, not root, not anyone, until the daemon
+  binds it to the real root pid the instant `Start()` returns. A token read
+  out of its own env before that point still finds every call refused; there
+  is no window where an unbound token is live. For `conductor sandbox exec`,
+  root is known immediately (the pid on the other end of that `sandbox-policy`
+  control connection), so the token is minted already bound.
+
+  The token lasts a dispatch window (2h) for an ordinary step, or
+  `sandboxTokenTTL` (12h) for a `conductor sandbox exec` launch. **Two paths
+  keep the OLD uid-wide binding, deliberately and explicitly** — a leaked
+  token there is still only as exposed as it always was, not newly so:
+  - An **interactive hand-off**, or any bot session (home or worker): held
+    for a human who may not engage it for hours or days, across daemon
+    restarts (every auto-update is one) that a single process anchor cannot
+    survive, and a bot's "home" in particular has no one launch process at
+    all — it's reattached by whichever worker picks up the case. Its session
+    is **durable** instead: persisted to `handoff-sessions.json` (mode 0600,
+    keyed by the token's SHA-256 — the token itself is never written) and
+    reloaded at boot; its expiry **slides** (each authorized call pushes it
+    to 7 days out); releasing the hand-off revokes it at once.
+  - A **paseo-backend dispatch**, and an **unsandboxed local CLI launch**:
+    conductor hands the token to a process it does not control the pid of
+    (paseo's own daemon decides how and where the real agent runs — possibly
+    remotely), or one with no sandbox boundary to begin with (no isolation
+    for a leaked token to cross). Both stay uid-bound (`MintSessionUID`), not
+    a silent fallback — there is simply no process to anchor to.
+
+  A rejected session token (unbound, outside the tree, a stale/reused root,
+  or wrong uid on the exceptions above) is logged and audited
   (`secret_broker` / `deny`).
 - **MCP face (one-shot claim, process-bound).** The injected MCP server
   receives a single-use **claim code** (env, ~2-minute TTL) and exchanges it
   over the socket for the session token; the exchange binds the session to
   that exact process (`SO_PEERCRED` + start time), so a copied token is dead
   anywhere else. This tighter binding fits the single long-lived MCP
-  subprocess; the CLI's uid binding fits its fan-out of short calls.
+  subprocess; the CLI face's tree binding fits its fan-out of short calls
+  across a whole sandboxed process tree instead.
 
 A **remote** agent reaches the socket through an SSH reverse tunnel (see
 below), so the connection the daemon sees comes from conductor's own ssh
-relay, not the agent — the uid check passes trivially and provenance rests on
-the session token alone. That's why the memory / `run_step` ops always derive
-their `Source` from the token, never from the caller's peer identity. The
-one-shot claim exchange stays local-only; a remote agent gets its session
-token directly in its env.
+relay, not the agent — no process of the agent's own to bind to, so
+provenance rests on the session token alone (uid-bound, like the paseo-backend
+case above). That's why the memory / `run_step` ops always derive their
+`Source` from the token, never from the caller's peer identity. The one-shot
+claim exchange stays local-only; a remote agent gets its session token
+directly in its env.
 
 ## Using it from the agent (the CLI face)
 

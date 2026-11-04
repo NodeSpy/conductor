@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/NodeSpy/conductor/internal/core"
 )
@@ -33,7 +34,10 @@ func (d *Dispatcher) ProvisionWorktree(ctx context.Context, req Request) (id, cw
 	}
 	switch effectiveStrategy(req) {
 	case "checkout-pr", "branch-off":
-		proj := req.Trigger.Target.CheckoutRepo()
+		proj, err := CheckoutRepo(req)
+		if err != nil {
+			return "", "", err
+		}
 		dir, err := d.resolveCheckoutDir(ctx, proj)
 		if err != nil {
 			return "", "", fmt.Errorf("resolve checkout dir for %s: %w", proj, err)
@@ -166,6 +170,20 @@ func RenderSessionKey(s string, req Request) (string, error) {
 		data["repo"], data["owner"], data["name"] = "", "", ""
 	}
 	return render(s, data)
+}
+
+// CheckoutRepo is the repo a dispatch checks out — and conductor pushes
+// its work to: the trigger's target only when the platform assigned it, or
+// the step's own repo: (the operator's config). A target the event's sender
+// chose (a webhook body's "repo") is refused, as its credentials are
+// (engine.declaredCredentials): conductor would otherwise clone and push
+// to whatever repo the sender named, as the operator.
+func CheckoutRepo(req Request) (string, error) {
+	repo := req.Trigger.Target.CheckoutRepo()
+	if req.Trigger.TargetTrusted || strings.TrimSpace(req.Step.Repo) != "" {
+		return repo, nil
+	}
+	return "", Unrecoverable(fmt.Errorf("refusing to check out %q: the event's sender chose this target, the platform did not assign it — give the step its own repo: to work in a repository", repo))
 }
 
 // SessionKeyNamespace is the prefix an untrusted dispatch's session key

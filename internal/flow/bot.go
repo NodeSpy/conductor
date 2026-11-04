@@ -22,6 +22,14 @@ type BotRoute struct {
 	// Source is the event the run is for ("<instance>.<kind>"), stamped by
 	// the runner from the trigger — never from the step's options.
 	Source string
+	// Conversational mirrors the trigger's own Conversational() — a live
+	// chat/DM message, per its declared ConversationReply semantic — stamped
+	// by the runner, never from the step's options. It lets the bot
+	// service's requester classification refuse to treat a requester-less
+	// chat message as autonomous `event` trust just because the step forgot
+	// `requester:` (a real event's Source alone no longer vouches for it
+	// when the event IS a human conversation).
+	Conversational bool
 	// Files fetches the files the event carries (its connector's declared
 	// `attachments`), within the receiving bot's caps; the bot service calls
 	// it once it knows which bot that is. nil: the event carries none.
@@ -65,7 +73,7 @@ func (r *Runner) execBot(ctx context.Context, t core.Trigger, step config.Step, 
 		}
 		return out, nil
 	}
-	rt := BotRoute{Action: ms.Action, Urgent: ms.Urgent, Source: eventSource(t.Instance, t.Kind)}
+	rt := BotRoute{Action: ms.Action, Urgent: ms.Urgent, Source: eventSource(t.Instance, t.Kind), Conversational: t.Conversational()}
 	if rt.Action == "" {
 		rt.Action = "deliver"
 	}

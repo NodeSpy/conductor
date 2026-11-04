@@ -152,6 +152,14 @@ type Executor struct {
 	// default confinement that cannot be realized on this box runs bare +
 	// warns). nil falls back to the standard logger.
 	Warn func(format string, args ...any)
+	// GoCacheDir is the conductor-owned root for a CONFINED `run: go` step's
+	// GOCACHE/GOMODCACHE (see gorun.go): a jail hides the operator's real
+	// module cache by absence (the same reasoning as every other jailed code
+	// step), so the go toolchain gets a private build/module cache of its
+	// own under this root instead, read-write, shared across confined `run:
+	// go` steps for the cache's benefit. Empty resolves to
+	// os.UserCacheDir()/conductor/code-go at first use.
+	GoCacheDir string
 }
 
 // warnf emits a non-fatal warning through the wired hook, or the standard

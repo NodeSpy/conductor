@@ -426,9 +426,11 @@ type HostConfig struct {
 // profile → runtime). It only applies to launches conductor performs itself
 // (acp / cli / opencode / agent-deck runtimes, host scripts) — a paseo
 // runtime's agents are children of the paseo daemon, which conductor cannot
-// wrap (validate rejects the combination). The one exception is `{mode:
-// none}`: on a paseo step or runtime it launches through paseo's plain
-// provider instead of the conductor-owned sandboxed entry.
+// wrap (validate rejects the combination). The exceptions are `{mode:
+// none}` — on a paseo step or runtime it launches through paseo's plain
+// provider instead of the conductor-owned sandboxed entry — and a block of
+// only the agent sandbox's knobs (allow:, detect:, egress_limits:, no
+// mode:), which layers onto the outer scope's isolation anywhere.
 type IsolationConfig struct {
 	// Mode selects the wrapper: user | namespace | container.
 	Mode string `yaml:"mode"`
@@ -471,6 +473,37 @@ type IsolationConfig struct {
 	// for a code step, its own code/ctx temp dirs). A code step reading an
 	// external directory (e.g. a media library) declares it here.
 	FS []string `yaml:"fs,omitempty" path:"local"`
+	// Allow loosens the agent sandbox's detection and TLS check for this
+	// scope's agent launches (tunnel tools, raw TCP to named hosts): added
+	// to sandbox.allow. See SandboxAllow.
+	Allow *SandboxAllow `yaml:"allow,omitempty"`
+	// Detect overrides sandbox.detect's action and tripwires for this
+	// scope's agent launches.
+	Detect *IsolationDetect `yaml:"detect,omitempty"`
+	// EgressLimits override sandbox.egress_limits, field by field, for this
+	// scope's agent launches.
+	EgressLimits *SandboxEgressLimits `yaml:"egress_limits,omitempty"`
+	// EgressOnly is this scope's agent egress, exactly: these entries and
+	// the model endpoints, nothing inherited (sandbox.egress, an outer
+	// scope's network.egress, sandbox.allow's tunnel hosts). [] is the
+	// model alone. A pack's narrows only: an entry the inherited allowlist
+	// does not cover is dropped.
+	EgressOnly *[]string `yaml:"egress_only,omitempty"`
+	// EgressProtocolCheck overrides sandbox.egress_protocol_check for this
+	// scope's agent launches.
+	EgressProtocolCheck *bool `yaml:"egress_protocol_check,omitempty"`
+	// Persist overrides sandbox.persist (none | cache | home) for this
+	// scope's agent launches.
+	Persist string `yaml:"persist,omitempty"`
+	// Inspect adds hosts whose TLS this scope's agent launches have
+	// terminated by conductor (on top of sandbox.inspect), making their
+	// https:// path entries enforceable.
+	Inspect []InspectEntry `yaml:"inspect,omitempty"`
+	// EgressOnlyNarrow marks an egress_only that only narrows: a pack's.
+	// Never read from YAML or set at load; the flow and the dispatch set it
+	// from provenance (a pack's trigger, workflow or step) when the launch's
+	// isolation is resolved.
+	EgressOnlyNarrow bool `yaml:"-"`
 }
 
 // ContainerIsolation configures isolation mode: container.
@@ -486,7 +519,12 @@ type ContainerIsolation struct {
 type IsolationLimits struct {
 	Memory string `yaml:"memory,omitempty"` // e.g. "2g" (systemd MemoryMax / engine --memory)
 	CPU    string `yaml:"cpu,omitempty"`    // e.g. "200%" (CPUQuota) or "2" (--cpus)
-	Pids   int    `yaml:"pids,omitempty"`   // TasksMax / --pids-limit
+	// CPUWeight is an agent launch scope's CPUWeight (1–10000; systemd's
+	// default 100): its share against the other agent launches.
+	CPUWeight int `yaml:"cpu_weight,omitempty"`
+	// DiskFreeMin overrides sandbox.limits.disk_free_min for agent launches.
+	DiskFreeMin string `yaml:"disk_free_min,omitempty"`
+	Pids        int    `yaml:"pids,omitempty"` // TasksMax / --pids-limit
 }
 
 // IsolationNetwork is the egress policy for one isolation scope.
@@ -1218,6 +1256,15 @@ type Step struct {
 	// jail runs the step bare with a warning, whereas an explicit isolation:
 	// fails closed. Not serialized — it is a load-time derivation.
 	IsolationDefaulted bool `yaml:"-"`
+	// GrantedAllow is the sandbox allowance the operator granted this
+	// pack-shipped step from its packs: block (grant:), on top of its
+	// isolation:'s own. Never read from YAML: only a grant sets it.
+	GrantedAllow *SandboxAllow `yaml:"-"`
+	// PackInstance is the pack instance that shipped this step ("": the
+	// operator's own). Stamped once every transform of the pack's steps
+	// (the operator's overlay included) is done, and read where the
+	// sandbox's egress is resolved: a pack's egress_only only narrows.
+	PackInstance string `yaml:"-"`
 	// OutcomeFeedback opts this step into guidance tuning (#36 §18): a
 	// one-line track-record summary for this step's identity is appended to
 	// its guidance.
@@ -1841,6 +1888,9 @@ func (c *Config) validateConnectors() error {
 			return err
 		}
 		if ref.Isolation != nil {
+			if err := noAgentSandboxKnobs("connector "+name, ref.Isolation); err != nil {
+				return err
+			}
 			if err := validateIsolation("connector "+name, ref.Isolation, false); err != nil {
 				return err
 			}
@@ -1925,6 +1975,9 @@ func (c *Config) validateConnectors() error {
 		if h.Host == "" {
 			return fmt.Errorf("config: host %q: missing host address", name)
 		}
+		if err := noAgentSandboxKnobs("host "+name, h.Isolation); err != nil {
+			return err
+		}
 		if err := validateIsolation("host "+name, h.Isolation, true); err != nil {
 			return err
 		}
@@ -1938,6 +1991,9 @@ func (c *Config) validateConnectors() error {
 		}
 		if ec.TrustFull() && ec.Isolation != nil {
 			return fmt.Errorf("config: engine %q: set either `trust: full` (no sandbox) or an `isolation:` block, not both", name)
+		}
+		if err := noAgentSandboxKnobs("engine "+name, ec.Isolation); err != nil {
+			return err
 		}
 		if err := validateIsolation("engine "+name, ec.Isolation, false); err != nil {
 			return err

@@ -17,8 +17,13 @@ import (
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/gitdiff"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
+
+// capAgentSlice caps every agent launch together (a var: tests never touch
+// the user's systemd manager).
+var capAgentSlice = agentsandbox.CapAgentSlice
 
 // sandboxResolver is the daemon's policy builder for `conductor sandbox
 // exec` (set at boot when the agent sandbox is on; nil = refused).
@@ -28,15 +33,31 @@ var sandboxResolver atomic.Pointer[agentsandbox.Resolver]
 // policy for the caller's cwd and a token minted for this launch alone. The
 // socket is 0600 already; the caller's uid is checked too — a policy carries
 // a live token.
+// peerCred is the control connection's peer (a var for tests).
+var peerCred = agentsandbox.PeerCred
+
 func sandboxPolicyResponse(conn net.Conn, req controlRequest, log func(string, ...any)) controlResponse {
-	if uid, ok := agentsandbox.PeerUID(conn); ok && int(uid) != os.Getuid() {
+	uid, pid, credOK := peerCred(conn)
+	if credOK && int(uid) != os.Getuid() {
 		return controlResponse{Error: fmt.Sprintf("sandbox-policy: refused for uid %d", uid)}
 	}
 	r := sandboxResolver.Load()
 	if r == nil {
 		return controlResponse{Error: "the agent sandbox is off in this conductor (sandbox.agents: off)"}
 	}
-	pol, err := r.PolicyFor(req.Cwd, req.Tool, req.Env, req.Scratch)
+	// The minted token is bound to THIS connection's peer process tree (rt2
+	// #12): that process — `conductor sandbox exec` — is what execs or forks
+	// the sandboxed agent, so every descendant of it (the agent, the
+	// `conductor call` subprocesses it spawns, an in-sandbox MCP tool
+	// server) is authorized, and nothing outside that tree is, even at the
+	// same uid. No peer pid (credOK false: a platform with no SO_PEERCRED) ⇒
+	// a zero anchor ⇒ Mint refuses the token outright rather than minting
+	// one nothing can ever present.
+	var root skill.ProcessAnchor
+	if credOK {
+		root = skill.AnchorForPID(pid)
+	}
+	pol, err := r.PolicyFor(req.Cwd, req.Tool, req.Env, req.Scratch, root)
 	if err != nil {
 		log("sandbox-policy for %s refused: %v", req.Cwd, err)
 		return controlResponse{Error: err.Error()}
@@ -83,16 +104,32 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		Protected: []string{filepath.Dir(cfg.Store.StateFile), filepath.Dir(cfgFile), config.StateDir()},
 		Egress:    egress,
 		Socket:    strings.TrimPrefix(dispatch.LocalSkillEndpoint(), "unix://"),
-		Mint: func(id skill.Identity) (string, error) {
+		Mint: func(id skill.Identity, root skill.ProcessAnchor) (string, error) {
 			b := skill.Active()
 			if b == nil {
 				return "", nil
 			}
-			return b.MintSession(id, uint32(os.Getuid()), sandboxTokenTTL)
+			if root.Empty() {
+				// No peer pid to anchor to (a platform with no SO_PEERCRED,
+				// or a caller with no real connection — tests). Refusing to
+				// mint here, rather than silently falling back to uid
+				// binding, is rt2 #12's fix: a token this daemon cannot bind
+				// to a process tree must not exist at all.
+				return "", fmt.Errorf("sandbox token: no process to anchor it to")
+			}
+			return b.MintSession(id, root, sandboxTokenTTL)
 		},
 		GitName: name, GitEmail: email,
-		Env:  os.Environ(),
-		GOOS: runtime.GOOS,
+		Env:             os.Environ(),
+		GOOS:            runtime.GOOS,
+		PosixIPC:        cfg.Sandbox.PosixIPCAllowed(),
+		EgressAnyBytes:  !cfg.Sandbox.EgressTLSRequired(),
+		ModelCredential: cfg.Sandbox.ModelCredentialMode(),
+		Detect: agentsandbox.DetectSpec{
+			Action: cfg.Sandbox.DetectAction(), Interval: cfg.Sandbox.DetectInterval(),
+			NoTripwires: !cfg.Sandbox.TripwiresOn(), Allow: cfg.Sandbox.DetectAllow(),
+			Connections: cfg.Sandbox.DetectConnections(),
+		},
 		// A bot's home (or a hand-off worker) runs in a pinned paseo workspace
 		// conductor never registers as a worktree, so `conductor sandbox exec`
 		// would resolve it to a verb-less dir: identity. This lookup (published
@@ -100,9 +137,51 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		// identity and granted verbs. nil when no bots are configured.
 		Session: botSessionLookup,
 	}
+	if cfg.Sandbox != nil && cfg.Sandbox.Limits != nil {
+		l := cfg.Sandbox.Limits
+		r.Limits = agentsandbox.LimitSpec{Off: l.Off, Memory: l.Memory, Pids: l.Pids, CPU: l.CPU, CPUWeight: l.CPUWeight, Required: l.Required}
+	}
+	r.Limits.DiskFreeFrac, r.Limits.DiskFreeBytes, r.Limits.DiskOff = cfg.Sandbox.DiskFreeMin()
+	r.Persist = cfg.Sandbox.PersistMode()
+	if cfg.Sandbox != nil {
+		for _, h := range cfg.Sandbox.Inspect {
+			r.Inspect = append(r.Inspect, sandbox.InspectHost{Host: h.Host, CA: h.CA})
+		}
+	}
+	if !r.Limits.Off {
+		// All agents together: the slice their launch scopes run in.
+		if err := capAgentSlice(runtime.GOOS, cfg.Sandbox.AggregateMemory(), cfg.Sandbox.AggregateCPU()); err != nil {
+			logf("agent sandbox: limits: %v (each launch keeps its own cap)", err)
+		}
+	}
+	idle, up, down := cfg.Sandbox.AgentEgressLimits()
+	r.EgressIdle, r.EgressUpload, r.EgressDownload = int64(idle), up, down
+	r.ModelUpload, r.ModelDownload = cfg.Sandbox.AgentModelLimits()
+	if cfg.Sandbox != nil {
+		r.Allow = dispatch.AllowanceOf(cfg.Sandbox.Allow)
+	}
+	// A workspace's recorded scope is recomputed from this config at each
+	// launch: a revoked grant or a removed allow: no longer applies.
+	sources := cfg.SandboxScopeSources()
+	r.Rescope = func(s *agentsandbox.Scope) *agentsandbox.Scope { return dispatch.Rescope(s, sources) }
 	if err := os.MkdirAll(r.StateRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("agent sandbox state dir %s: %w", r.StateRoot, err)
 	}
+	// What a workspace's git files may name: conductor's own checkouts (the
+	// gitwt base clones in the state dir, paseo's clone cache), never the
+	// home or conductor's state and config.
+	agentsandbox.SharedGitDirect = cfg.Sandbox.GitSharedDirect()
+	agentsandbox.GitTrust.Home = home
+	agentsandbox.GitTrust.Forbidden = r.Protected
+	agentsandbox.GitTrust.ObjectRoots = []string{filepath.Join(filepath.Dir(cfg.Store.StateFile), "checkouts"), filepath.Join(home, ".conductor", "checkouts")}
+	// A bot worker works in a linked worktree of its bot's memory repo.
+	agentsandbox.GitTrust.OwnRepos = []string{filepath.Join(config.StateDir(), "bots")}
+	// The workspace registry survives a restart: a workspace's layout is
+	// the one recorded while it was conductor's, never re-read from it.
+	if err := agentsandbox.Default.PersistTo(filepath.Join(r.StateRoot, ".workspaces.json")); err != nil {
+		logf("agent sandbox: workspace registry: %v (starting empty)", err)
+	}
+	agentsandbox.Default.Rescope(r.Rescope)
 	dispatch.SandboxPrefetch = nil
 	if cfg.Sandbox.PrefetchGo() {
 		// A dot name no identity home can have (IdentityKey trims it).
@@ -110,6 +189,14 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		if err != nil {
 			return nil, err
 		}
+		// The download itself runs CONFINED: the same self-exe and
+		// egress-proxy wiring every other local launch gets (codeSandboxDeps),
+		// so a malicious go.mod/go.sum this box ever snapshots cannot read the
+		// daemon's real HOME/credentials or reach a network host beyond
+		// gp.Proxy's own. Fill fails closed (skips + logs) if this box cannot
+		// realize the jail — it never falls back to an unconfined download.
+		gp.Sandbox = codeSandboxDeps()
+		gp.Warn = logf
 		r.GoPrefetch = gp
 		dispatch.SandboxPrefetch = func(dir string) {
 			start := time.Now()

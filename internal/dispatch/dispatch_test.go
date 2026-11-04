@@ -85,7 +85,7 @@ func TestLocalCommandWorkDir(t *testing.T) {
 	dir := t.TempDir()
 	d := &Dispatcher{} // real exec (not dry-run); command routes to local by default
 	req := Request{
-		Trigger: core.Trigger{Kind: "cron", Target: core.Target{}},
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "cron", Target: core.Target{}},
 		Action:  config.Action{Type: "command", Backend: "local", WorkDir: dir, Command: []string{"pwd"}},
 	}
 	ref, err := d.Dispatch(context.Background(), req)
@@ -100,7 +100,7 @@ func TestLocalCommandWorkDir(t *testing.T) {
 func TestPaseoWorkDirFlag(t *testing.T) {
 	d := newDispatcher() // dry-run
 	req := Request{
-		Trigger: core.Trigger{Kind: "issue_assigned", Target: core.Target{Repo: "a/w", Issue: 1, Number: 1}},
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "issue_assigned", Target: core.Target{Repo: "a/w", Issue: 1, Number: 1}},
 		Action:  config.Action{Type: "agent", Agent: "fixer", Checkout: "none", WorkDir: "/tmp/ws", Prompt: "go"},
 	}
 	ref, _ := d.Dispatch(context.Background(), req)
@@ -118,7 +118,7 @@ func TestPaseoCheckoutPRUsesResolvedCwd(t *testing.T) {
 		return "/checkouts/acme-w", nil
 	}
 	req := Request{
-		Trigger: core.Trigger{Kind: "merge_conflict",
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "merge_conflict",
 			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
 		Action:    config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
 		Step:      config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
@@ -150,7 +150,7 @@ func TestCheckoutUsesTargetProject(t *testing.T) {
 		return "/checkouts/widget", nil
 	}
 	req := Request{
-		Trigger: core.Trigger{Kind: "merge_conflict",
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "merge_conflict",
 			Target: core.Target{Repo: "AcmeCorp/Widget", Project: "acme/widget", PR: 5, Number: 5}},
 		Action: config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
 		Step:   config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
@@ -178,7 +178,7 @@ func TestPaseoNoneGetsItsOwnRunWorkspace(t *testing.T) {
 		return fmt.Sprintf("wks_run_%d", len(seen)), nil
 	}
 	req := Request{
-		Trigger: core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "acme/w", PR: 6, Number: 6}},
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "review_requested", Target: core.Target{Repo: "acme/w", PR: 6, Number: 6}},
 		Action:  config.Action{Type: "agent", Agent: "assess", Checkout: "none", Prompt: "assess"},
 	}
 	ref, _ := d.Dispatch(context.Background(), req)
@@ -218,7 +218,7 @@ func TestPaseoNonePinSkipsRunWorkspace(t *testing.T) {
 				return "", nil
 			}
 			req := tc.req
-			req.Trigger = core.Trigger{Kind: "review_requested",
+			req.Trigger = core.Trigger{TargetTrusted: true, Kind: "review_requested",
 				Target: core.Target{Repo: "acme/w", PR: 6, Number: 6}}
 			req.Action = config.Action{Type: "agent", Agent: "assess", Checkout: "none", Prompt: "assess"}
 			ref, _ := d.Dispatch(context.Background(), req)
@@ -234,7 +234,7 @@ func TestPaseoNoneRequestPinBeatsStepPin(t *testing.T) {
 	// step's config does, so Request.Workspace wins.
 	d := newDispatcher()
 	req := Request{
-		Trigger:   core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "acme/w", PR: 6, Number: 6}},
+		Trigger:   core.Trigger{TargetTrusted: true, Kind: "review_requested", Target: core.Target{Repo: "acme/w", PR: 6, Number: 6}},
 		Action:    config.Action{Type: "agent", Agent: "assess", Checkout: "none", Prompt: "assess"},
 		Step:      config.Step{Workspace: config.Workspace{Pin: "wks_step"}},
 		Workspace: "wks_request",
@@ -253,7 +253,7 @@ func TestPaseoNoneUsesExistingWorkspace(t *testing.T) {
 		return "", nil
 	}
 	req := Request{
-		Trigger:   core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
+		Trigger:   core.Trigger{TargetTrusted: true, Kind: "review_requested", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
 		Action:    config.Action{Type: "agent", Agent: "assess", Checkout: "none", Prompt: "assess"},
 		Workspace: "wks_base",
 	}
@@ -381,7 +381,7 @@ func decodeWorkspaces(t *testing.T, data []byte) []WorkspaceInfo {
 func TestLocalCommandArgv(t *testing.T) {
 	d := newDispatcher()
 	req := Request{
-		Trigger: core.Trigger{Kind: "merge_ready", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
+		Trigger: core.Trigger{TargetTrusted: true, Kind: "merge_ready", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
 		Action: config.Action{
 			Type:    "command",
 			Backend: "local",

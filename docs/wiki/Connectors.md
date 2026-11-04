@@ -151,7 +151,7 @@ subprocesses — every vendor connector is one: `github`, `slack`, `discord`,
 | `cron` | one per declared schedule | — | `schedules:` on the connection |
 | `webhook` | one per declared source | `post` (generic outbound HTTP) | `sources:` with signing/match/title/dedup |
 | `rss` | one per declared feed | — | per-trigger `match:` regex filter |
-| `command` | — | `run` | commands local or over SSH via `host:`/`ssh:`; outputs `stdout`/`stderr`/`exit_code` |
+| `command` | — | `run` | commands local or over SSH via `host:`/`ssh:`; outputs `stdout`/`stderr`/`exit_code`. `command:` as a string runs through `sh -c` with every templated `{{…}}` value shell-quoted before splicing in (an argv list is quoted per element either way); a LOCAL run's process gets a minimal env plus `env:`, never this daemon's own, unless `inherit_env: true` |
 | `rest` | user-declared polled `events:` | user-declared `verbs:` | any HTTP API from config: `base_url` + shared `auth:` (incl. oauth2 w/ refresh rotation) — see [[Configuration]] |
 | `graphql` | — | user-declared `verbs:` | one endpoint; verbs are queries/mutations with typed `variables:`; `errors` fails even on 200 — see [[Configuration]] |
 | `kv` | — | `get`, `set`, `setnx`, `merge`, `delete`, `incr`, `append`, `remove`, `contains`, `first`, `last`, `index`, `slice`, `len`, `pop`, `list` | the data verbs over the `stores:` section's KV types (boltdb/redis/http); every call requires `store:` naming a defined store — see [[Configuration]] |

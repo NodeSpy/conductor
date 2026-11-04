@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/gitsafe"
 	"github.com/NodeSpy/conductor/internal/hosts"
 	"strconv"
 )
@@ -147,7 +147,10 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		if d.CheckoutDir != nil || (!d.DryRun && !req.Shadow) {
 			// Checkout resolution uses the (possibly remapped) paseo project, so an
 			// existing workspace is reused; forge ops still use the real Repo.
-			proj := req.Trigger.Target.CheckoutRepo()
+			proj, err := CheckoutRepo(req)
+			if err != nil {
+				return RunRef{}, err
+			}
 			dir, err := d.resolveCheckoutDir(ctx, proj)
 			if err != nil {
 				// The workspace never came up — an operator issue (a genuinely
@@ -405,17 +408,23 @@ func clearStaleGitLock(ctx context.Context, paseoBin, cwd string) {
 	if cwd == "" {
 		return
 	}
-	c := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--git-common-dir")
-	outb, err := c.Output()
-	if err != nil {
-		return
+	var common string
+	if e, ok := agentsandbox.Default.Lookup(cwd); ok {
+		// An agent's workspace: its git dir is what conductor recorded when
+		// it registered it, never what the workspace's .git says now.
+		if e.Push == nil {
+			return
+		}
+		common = e.Push.GitDir
+	} else {
+		out, err := gitsafe.Output(ctx, cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil {
+			return
+		}
+		common = strings.TrimSpace(out)
 	}
-	common := strings.TrimSpace(string(outb))
-	if common == "" {
+	if !looksLikeGitDir(common) {
 		return
-	}
-	if !strings.HasPrefix(common, "/") {
-		common = cwd + "/" + common
 	}
 	lock := common + "/config.lock"
 	fi, err := os.Stat(lock)
@@ -834,8 +843,8 @@ func (d *Dispatcher) projectMatchesRepo(ctx context.Context, p ProjectInfo, repo
 	if d.remote() {
 		return false // the checkout is on the other box; its name and id are all we have
 	}
-	out, err := exec.CommandContext(ctx, "git", "-C", p.Path, "config", "--get", "remote.origin.url").Output()
-	return err == nil && strings.EqualFold(repoSlug(string(out)), repo)
+	out, err := gitsafe.Output(ctx, p.Path, "config", "--get", "remote.origin.url")
+	return err == nil && strings.EqualFold(repoSlug(out), repo)
 }
 
 // repoSlug extracts "owner/name" from a git remote URL (scp-like
@@ -872,6 +881,14 @@ func (d *Dispatcher) findWorkspaceDir(ctx context.Context, repo string) string {
 		if !strings.EqualFold(w.Project, repo) || w.Cwd == "" {
 			continue
 		}
+		if isConductorOwnedWorkspace(w) {
+			// An agent's workspace: its .git is the agent's to rewrite, so it
+			// never picks the checkout later dispatches are made from.
+			continue
+		}
+		if _, ok := agentsandbox.Default.Lookup(expandTilde(w.Cwd)); ok && !d.remote() {
+			continue
+		}
 		// isGitRepo/mainWorkTree are local checks; for a remote paseo the ls
 		// output IS the remote truth — use its cwd as reported.
 		base := w.Cwd
@@ -902,7 +919,8 @@ func isGitRepo(ctx context.Context, dir string) bool {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return false
 	}
-	return exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--git-dir").Run() == nil
+	_, err := gitsafe.Output(ctx, dir, "rev-parse", "--git-dir")
+	return err == nil
 }
 
 // targetIsGitRepo reports whether dir is a git working tree on the box this
@@ -942,12 +960,11 @@ func (d *Dispatcher) remoteIsGitRepo(ctx context.Context, dir string) bool {
 // Linked worktrees are ephemeral (the reaper archives them); the main checkout
 // is stable. Falls back to dir if it can't be derived or isn't a working tree.
 func mainWorkTree(ctx context.Context, dir string) string {
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse",
-		"--path-format=absolute", "--git-common-dir").Output()
+	out, err := gitsafe.Output(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return dir
 	}
-	common := strings.TrimSpace(string(out))
+	common := strings.TrimSpace(out)
 	if strings.HasSuffix(common, "/.git") {
 		if main := strings.TrimSuffix(common, "/.git"); isGitRepo(ctx, main) {
 			return main
@@ -1554,13 +1571,20 @@ func (d *Dispatcher) listAgents(ctx context.Context) []AgentInfo {
 	return agents
 }
 
-// gitBranch returns the current branch of a checkout (empty on detached/err).
+// gitBranch returns the current branch of a checkout (empty on detached/err):
+// for an agent's workspace conductor registered, the branch it recorded.
 func (d *Dispatcher) gitBranch(ctx context.Context, dir string) string {
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if e, ok := agentsandbox.Default.Lookup(dir); ok {
+		if e.Push == nil {
+			return ""
+		}
+		return e.Push.Branch
+	}
+	out, err := gitsafe.Output(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(out)
 }
 
 // gitRepoMatches reports whether dir's origin remote points at repo (owner/name),
@@ -1569,11 +1593,34 @@ func gitRepoMatches(ctx context.Context, dir, repo string) bool {
 	if repo == "" {
 		return false
 	}
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", "remote.origin.url").Output()
-	if err != nil {
+	var out string
+	if e, ok := agentsandbox.Default.Lookup(dir); ok {
+		// An agent's workspace: the remote conductor recorded from trusted
+		// config at registration, never the workspace's own config.
+		if e.Push == nil {
+			return false
+		}
+		out = e.Push.Remote
+	} else {
+		var err error
+		if out, err = gitsafe.Output(ctx, dir, "config", "--get", "remote.origin.url"); err != nil {
+			return false
+		}
+	}
+	return strings.EqualFold(repoSlug(out), repo)
+}
+
+// looksLikeGitDir reports a directory with a git dir's shape (HEAD and an
+// object store): the only kind conductor removes a stale lock from.
+func looksLikeGitDir(p string) bool {
+	if !filepath.IsAbs(p) {
 		return false
 	}
-	return strings.Contains(strings.ToLower(string(out)), strings.ToLower(repo))
+	if fi, err := os.Stat(filepath.Join(p, "objects")); err != nil || !fi.IsDir() {
+		return false
+	}
+	fi, err := os.Stat(filepath.Join(p, "HEAD"))
+	return err == nil && fi.Mode().IsRegular()
 }
 
 // agentLastActive returns an agent's last-active timestamp (LastUsage, else

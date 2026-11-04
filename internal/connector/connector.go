@@ -63,6 +63,17 @@ type Field struct {
 	// Secret, on a connection field, marks its value a credential even when
 	// written literally: it is tracked for redaction.
 	Secret bool
+	// Shell, on a verb option, marks a STRING value that is interpreted as
+	// shell syntax downstream (a command run through `sh -c`), never as
+	// inert data. The flow runner renders such an option differently from
+	// an ordinary templated string: every `{{…}}` substitution is shell-
+	// quoted before it is spliced into the surrounding literal text, so an
+	// event-controlled value (a PR title, a chat message) can never inject
+	// shell metacharacters into an operator-authored command — see
+	// internal/flow/template.go's renderShellQuoted. A non-string value
+	// (the command connector's argv-list form) is unaffected: it is quoted
+	// element-by-element downstream regardless (hosts.ShellJoin).
+	Shell bool
 }
 
 // Schema is a set of named fields (option/filter/context/output schemas).

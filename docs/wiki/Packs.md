@@ -286,6 +286,37 @@ requires:
 
 `conductor init` checks each socket is satisfied.
 
+### `allowances:` — sandbox allowances a pack requests
+
+A pack cannot loosen the agent sandbox of its own steps. That rules out
+`isolation: { mode: none }`, extra egress, `allow:`, weaker `detect:` and
+lifted `egress_limits:`. When a step needs a tunnel tool or raw TCP to a
+host, the pack **requests** an allowance, which stays inert until the
+operator grants it by name:
+
+```yaml
+allowances:
+  tunnel:
+    reason: publishes a preview through a tunnel
+    steps: [deploy/publish]                 # the steps it would apply to, as in packs: steps:
+    allow: { tunnels: [cloudflared@*.trycloudflare.com] }
+```
+
+```yaml
+# the operator's config
+packs:
+  previews:
+    use: …
+    grant: [tunnel@<digest>]   # name@digest, exactly as validate prints it
+```
+
+`conductor validate` shows each request, granted or not, with the exact
+grant to write. A grant is pinned to the allowance you reviewed and to its steps as the pack
+ships them (prompt, command, code, run, options): a bare name is refused, and
+a pack version that changes a granted allowance or rewrites a granted step
+fails to load until you re-grant it. See
+[[Isolation#scoped-allowances]].
+
 ### `requires.connectors` is the capability boundary
 
 It is not only a list of things to bind. A pack's `skill.verbs` may name **no

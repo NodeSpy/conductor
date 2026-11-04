@@ -34,6 +34,7 @@ package sandbox
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"path"
 	"strconv"
 	"strings"
@@ -51,7 +52,13 @@ type Spec struct {
 	Memory    string // cgroup/engine memory cap ("2g"); empty = none
 	CPU       string // cgroup CPUQuota ("200%") / engine --cpus ("2"); empty = none
 	Pids      int    // max tasks/pids; 0 = none
-	Deny      bool   // structural no-network (namespace --net / --network=none)
+	CPUWeight int    // systemd CPUWeight of the limits scope; 0 = systemd\'s default
+	Slice     string // systemd slice the limits scope runs in (an aggregate cap); "" = the default
+	// Unit names the limits scope ("" = systemd's own name, collected at
+	// its end). A named scope is not collected: its result (an oom-kill)
+	// stays readable until its launcher resets it.
+	Unit      string
+	Deny      bool // structural no-network (namespace --net / --network=none)
 	Egress    []string
 	HasEgress bool // a network: block was present (even empty ⇒ deny-all proxy)
 	// Privileged (namespace mode) opts out of the default daemon-file
@@ -85,7 +92,9 @@ func expandFS(fs []string) []string {
 }
 
 func FromConfig(c *config.IsolationConfig) *Spec {
-	if c == nil || c.Mode == "none" {
+	if c == nil || c.Mode == "none" || c.SandboxKnobsOnly() {
+		// none: no wrapper; knobs only: the agent sandbox's, no wrapper of
+		// its own.
 		return nil
 	}
 	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot, FS: expandFS(c.FS)}
@@ -157,6 +166,10 @@ func (s *Spec) Check(goos string, euid int, lookPath func(string) (string, error
 	case "user":
 		return need("sudo", "to switch to the sandbox user")
 	case "namespace":
+		if s.Privileged && (s.Memory != "" || s.CPU != "" || s.Pids > 0) {
+			// A layered block can still bring the two together.
+			return fmt.Errorf("sandbox: isolation `privileged: true` with `limits:` — a privileged launch has no jail, so it can see and rewrite its own cgroup files and remove the caps, and it gets no watcher or usage record; drop limits: (or privileged:) from the scope")
+		}
 		// macOS: `namespace` is realized by Seatbelt (sandbox-exec), which
 		// ships on every Mac. No root guard needed — Seatbelt is a kernel
 		// sandbox, not a uid-mapping trick.
@@ -239,7 +252,7 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 			// (no netns forwarder), so s.Deny here always means a full net cut.
 			return wrapSeatbelt(argv, binds, s.Deny), nil
 		}
-		prefix := s.systemdPrefix()
+		prefix := s.localScopePrefix()
 		// A pivot_root fs-jail (Binds) needs CAP_SYS_ADMIN over the mount ns to
 		// mount/pivot; that requires mapping the daemon uid to root-IN-USERNS
 		// (--map-root-user). --map-current-user maps to a non-root uid, whose
@@ -252,8 +265,12 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 		if jailed {
 			userMap = "--map-root-user"
 		}
+		// --ipc: a System V IPC namespace of its own — host processes'
+		// shared memory, semaphores and message queues (same uid, so
+		// otherwise read-write) are out of reach, and what the sandbox
+		// creates dies with it instead of filling the host's global tables.
 		prefix = append(prefix, "unshare", "--user", userMap,
-			"--pid", "--fork", "--mount-proc", "--kill-child")
+			"--pid", "--fork", "--mount-proc", "--kill-child", "--ipc")
 		if s.Deny {
 			prefix = append(prefix, "--net")
 		}
@@ -351,10 +368,18 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 // systemdPrefix renders the cgroup-limit scope prefix for namespace mode
 // (empty when no limits are set).
 func (s *Spec) systemdPrefix() []string {
-	if s.Memory == "" && s.CPU == "" && s.Pids == 0 {
+	if s.Memory == "" && s.CPU == "" && s.Pids == 0 && s.CPUWeight == 0 {
 		return nil
 	}
-	out := []string{"systemd-run", "--user", "--scope", "--quiet", "--collect"}
+	out := []string{"systemd-run", "--user", "--scope", "--quiet"}
+	if s.Unit != "" {
+		out = append(out, "--unit="+s.Unit)
+	} else {
+		out = append(out, "--collect")
+	}
+	if s.Slice != "" {
+		out = append(out, "--slice="+s.Slice)
+	}
 	if s.Memory != "" {
 		out = append(out, "-p", "MemoryMax="+s.Memory)
 	}
@@ -363,6 +388,9 @@ func (s *Spec) systemdPrefix() []string {
 	}
 	if s.Pids > 0 {
 		out = append(out, "-p", "TasksMax="+strconv.Itoa(s.Pids))
+	}
+	if s.CPUWeight > 0 {
+		out = append(out, "-p", "CPUWeight="+strconv.Itoa(s.CPUWeight))
 	}
 	return out
 }
@@ -393,7 +421,7 @@ func (s *Spec) WrapRemote(cmd string) (string, error) {
 			quoted = append(quoted, shQuote(tok))
 		}
 		prefix := strings.Join(quoted, " ")
-		flags := "--user --map-current-user --pid --fork --mount-proc --kill-child"
+		flags := "--user --map-current-user --pid --fork --mount-proc --kill-child --ipc"
 		if s.Deny {
 			flags += " --net"
 		}
@@ -434,11 +462,29 @@ func EgressAllowed(allow []string, hostport string) bool {
 		if pat == "*" {
 			return true
 		}
+		if _, hp, prefix, ok := pathEntry(pat); ok {
+			// A URL entry allows its host at any path only when its prefix
+			// is "/"; a path entry is the proxy's per-request check
+			// (pathPrefixes).
+			if prefix != "/" {
+				continue
+			}
+			pat = hp
+		} else if strings.Contains(pat, "://") {
+			continue
+		}
 		ph, pp := splitHostPort(pat)
 		if pp == "" {
 			pp = "443" // bare host ⇒ https only, never "any port"
 		}
 		if pp != "*" && pp != port {
+			continue
+		}
+		if _, cidr, err := net.ParseCIDR(ph); err == nil {
+			// A range holds only the literal addresses in it.
+			if ip := net.ParseIP(host); ip != nil && cidr.Contains(ip) {
+				return true
+			}
 			continue
 		}
 		if ok, err := path.Match(strings.ToLower(ph), strings.ToLower(host)); err == nil && ok {

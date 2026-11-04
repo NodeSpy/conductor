@@ -329,6 +329,7 @@ func startCLIProc(ctx context.Context, dir string, env, argv []string, stdin str
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	bindSandboxRoot(cmd.Env, cmd.Process.Pid)
 	return &execProc{cmd: cmd, buf: buf}, nil
 }
 

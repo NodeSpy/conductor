@@ -136,6 +136,24 @@ type PackInstance struct {
 	// Packs instantiates the pack's own pack dependencies (requires.packs),
 	// recursively — the identical default/override/bind surface, one level down.
 	Packs map[string]PackInstance `yaml:"packs,omitempty"`
+	// Grant names the allowances (the pack's allowances:) the operator
+	// grants, each pinned to the content reviewed (`name@digest`; validate
+	// prints it): the allowance and its steps' definitions. Each applies to
+	// the steps it names, and only to them, and a pack version that changes
+	// a granted allowance or rewrites a granted step fails to load until it
+	// is re-granted.
+	Grant []string `yaml:"grant,omitempty"`
+}
+
+// PackAllowance is one sandbox allowance a pack requests.
+type PackAllowance struct {
+	// Why the pack needs it (validate shows it to the operator).
+	Reason string `yaml:"reason,omitempty"`
+	// Steps are the pack steps it would apply to (refs as in packs:
+	// steps:, e.g. deploy/push).
+	Steps []string `yaml:"steps"`
+	// Allow is what it would allow.
+	Allow SandboxAllow `yaml:"allow"`
 }
 
 // applyPackSourceDefaults lowers the `use:` reference onto Source, so
@@ -430,6 +448,10 @@ type PackManifest struct {
 	// Bots are bot TEMPLATES (bottemplate.go): behavior an operator
 	// instantiates into real bots, never a bot by itself.
 	Bots map[string]BotTemplate `yaml:"bots,omitempty"`
+	// Allowances are sandbox allowances the pack REQUESTS for its steps
+	// (a deploy step that needs a tunnel): inert until the operator grants
+	// one by name from packs: (grant:). A pack cannot write allow: itself.
+	Allowances map[string]PackAllowance `yaml:"allowances,omitempty"`
 
 	// removedWarnings are removed keys found in the manifest (removed.go).
 	removedWarnings []string `yaml:"-"`

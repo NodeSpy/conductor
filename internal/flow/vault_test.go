@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -207,5 +208,32 @@ triggers:
       - { uses: svc.post, options: { text: '{{ vault "house" "gh" }} {{ .vaults.house.gh }} {{.rt.value}}' } }
 `); err != nil {
 		t.Fatalf("valid vault refs rejected: %v", err)
+	}
+}
+
+// TestVaultReadRedactedOnSkillSurface is rt2 #6 (verified not reproducible):
+// the red-team's claim was that an agent calling <vault>.read as a skill tool
+// (the MCP/`conductor call` surface, RunSkillVerb) gets the plaintext secret
+// in its tool result. It doesn't — vaults.Read taints the value the instant
+// it's read (vaults.SetTaint, wired to the SAME *secrets.Resolver RunSkillVerb
+// redacts outputs with: cmd/conductor/connectors.go wires one `sec` into both
+// connector.Deps.Secrets and flow.Runner.Secrets), and RunSkillVerb redacts
+// every verb's output before it crosses to the agent
+// (internal/flow/skillverbs.go, "Outputs cross back into the agent's
+// context: redact like every other agent-visible surface"). Because the
+// output's `value` field IS the tracked secret verbatim, Redact replaces the
+// whole thing with the placeholder — equivalent to refusing it on this
+// surface. This test locks that behavior in since nothing exercised the
+// vault+skill-surface combination before.
+func TestVaultReadRedactedOnSkillSurface(t *testing.T) {
+	rig, _, _ := vaultRig(t, "")
+	id := SkillIdentity{Agent: "attacker", Repo: "o/r", Verbs: []string{"house.read"},
+		Scopes: map[string]map[string][]string{"house.read": {"key": {"gh"}}}}
+	out, err := rig.Runner.RunSkillVerb(context.Background(), id, "house.read", map[string]any{"key": "gh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := out["value"].(string); v != secrets.Placeholder {
+		t.Fatalf("agent-facing house.read returned %q, want the redaction placeholder %q (plaintext secret leaked to the agent)", v, secrets.Placeholder)
 	}
 }

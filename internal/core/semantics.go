@@ -65,6 +65,14 @@ func (t Trigger) NoAttemptCap() bool {
 // Interactive: the event takes the high-priority dispatch lane.
 func (t Trigger) Interactive() bool { return t.Semantics().Priority == "interactive" }
 
+// Conversational: the event is a message in a live human conversation (a
+// chat/DM reply target), per its declared ConversationReply semantic. A
+// `bot:` step fed a conversational event is being handed a real-time human
+// message, regardless of whether the step's config also set `requester:` —
+// see RequesterClassFor's use of this to keep a requester-less chat message
+// from being classified as autonomous `event` trust.
+func (t Trigger) Conversational() bool { return t.Semantics().ConversationReply != nil }
+
 // Feedback: feedback on work in flight (may adopt an open workspace).
 func (t Trigger) Feedback() bool { return t.Semantics().Feedback }
 

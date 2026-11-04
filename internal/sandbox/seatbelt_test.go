@@ -159,3 +159,36 @@ func TestSeatbeltBrowserMetadata(t *testing.T) {
 		t.Fatal("an agent profile keeps its metadata (path resolution for any tool)")
 	}
 }
+
+// POSIX shared memory and semaphores are named host-wide: an agent profile
+// grants them only for the browser or an operator's explicit opt-in.
+func TestAgentProfilePosixIPCIsOptIn(t *testing.T) {
+	has := func(a *AgentProfile) bool {
+		p := seatbeltAgentProfile(nil, a, AgentNet{})
+		return strings.Contains(p, "ipc-posix-shm-write-create") || strings.Contains(p, "(allow ipc-posix-sem)")
+	}
+	if has(&AgentProfile{}) {
+		t.Fatal("an agent profile allows POSIX shm/semaphores by default")
+	}
+	if !has(&AgentProfile{PosixIPC: true}) || !has(&AgentProfile{Browser: true}) {
+		t.Fatal("the opt-in and the browser get POSIX shm/semaphores")
+	}
+}
+
+// A read-only file inside a read-write path that is itself allowed back
+// inside a hidden one (a linked worktree's commondir, inside its git dir,
+// inside the hidden worktrees dir) stays read-only: its write denial comes
+// after the allow-back, and SBPL's last matching rule wins.
+func TestSeatbeltAgentWriteDenyOutranksAllowBack(t *testing.T) {
+	a := &AgentProfile{
+		Hide:      []string{"/r/.git/worktrees"},
+		Unhide:    []string{"/r/.git/worktrees/wt"},
+		WriteDeny: []string{"/r/.git/worktrees/wt/commondir"},
+	}
+	prof := seatbeltAgentProfile(nil, a, AgentNet{})
+	back := strings.Index(prof, `(allow file-read* file-write* (subpath "/r/.git/worktrees/wt"))`)
+	deny := strings.Index(prof, `(deny file-write* (subpath "/r/.git/worktrees/wt/commondir"))`)
+	if back < 0 || deny < 0 || deny < back {
+		t.Fatalf("the write denial must follow the allow-back:\n%s", prof)
+	}
+}

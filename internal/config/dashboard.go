@@ -83,6 +83,15 @@ type DashboardAuth struct {
 	// edit confined to the display-only paths (pricing, usage.mode) applies on
 	// the session alone. guarded is an explicit loosen.
 	ConfigStepup string `yaml:"config_stepup"`
+	// AllowOpen explicitly opts into serving the dashboard API with no
+	// sign-in when there are no operators: configured to sign in as (there is
+	// nothing to protect it with otherwise). Default false: with no
+	// operators configured the API (config edit, run control, secrets view,
+	// bot approvals) refuses every request instead — only the static SPA
+	// shell loads, so an operator can still see why and how to fix it. This
+	// does not affect a box that HAS operators configured: once the first one
+	// is in `operators:`, sign-in is required regardless of this flag.
+	AllowOpen bool `yaml:"allow_open"`
 }
 
 // Config step-up modes (dashboard.auth.config_stepup).

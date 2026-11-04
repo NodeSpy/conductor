@@ -34,6 +34,10 @@ type HomeSpec struct {
 	// conductor signs on the way out (internal/gitpush).
 	GitName  string
 	GitEmail string
+	// ShareLogins: login files are shared (sandbox.model_credential:
+	// login-share) — a placeholder to bind over, or a symlink. Otherwise
+	// the launch writes an access-token-only copy, or none.
+	ShareLogins bool
 	// GOOS picks how login files are shared: a bind over a placeholder
 	// (linux), or a symlink the Seatbelt profile allows (darwin).
 	GOOS string
@@ -121,6 +125,15 @@ func PrepareHome(s HomeSpec) (string, []Login, error) {
 				continue
 			}
 			dst := filepath.Join(home, rel)
+			if !s.ShareLogins {
+				// Wrap writes the copy. A link to the operator's file a
+				// shared launch left is removed now.
+				if fi, err := os.Lstat(dst); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+					_ = os.Remove(dst)
+				}
+				logins = append(logins, Login{Path: dst, Src: src})
+				continue
+			}
 			if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 				return "", nil, err
 			}
@@ -171,7 +184,7 @@ func writeGitconfig(home, name, email string) error {
 	if email != "" {
 		fmt.Fprintf(&b, "\temail = %s\n", gitQuote(email))
 	}
-	b.WriteString("[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n")
+	b.WriteString("[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[gc]\n\tauto = 0\n\tpruneExpire = never\n\tworktreePruneExpire = never\n[maintenance]\n\tauto = false\n")
 	p := filepath.Join(home, ".gitconfig")
 	_ = os.Remove(p) // never write through a symlink the agent left here
 	return os.WriteFile(p, []byte(b.String()), 0o600)

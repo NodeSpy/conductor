@@ -27,6 +27,9 @@ type Request struct {
 	Signer *Signer
 	// MaxCommits bounds the range (default 500).
 	MaxCommits int
+	// DenyCIChanges refuses a push whose commits change a CI definition
+	// (sandbox.push.deny_ci_changes, opt-in).
+	DenyCIChanges bool
 }
 
 // Result reports a push.
@@ -62,6 +65,11 @@ func Push(ctx context.Context, r Request) (Result, error) {
 	max := r.MaxCommits
 	if max <= 0 {
 		max = 500
+	}
+	if _, err := os.Lstat(filepath.Join(r.GitDir, "shallow")); err == nil {
+		// A shallow graft hides history from the walk that decides what is
+		// signed: refuse rather than push commits conductor never saw.
+		return res, fmt.Errorf("gitpush: the trusted git dir %s is shallow — conductor does not push from a shallow repository (unshallow it with git fetch --unshallow)", r.GitDir)
 	}
 	tmp, err := os.MkdirTemp("", "conductor-push-")
 	if err != nil {
@@ -106,15 +114,16 @@ func Push(ctx context.Context, r Request) (Result, error) {
 	}
 
 	ref := "refs/heads/" + r.Branch
-	out, err := git(nil, "ls-remote", "--heads", "--end-of-options", r.Remote)
+	// Every branch and tag tip the remote has: what is provably pushed
+	// already. Never the local refs/remotes, which a linked worktree's agent
+	// can write — a forged remote-tracking ref would make its commits look
+	// pushed, and they would leave unsigned.
+	out, err := git(nil, "ls-remote", "--heads", "--tags", "--end-of-options", r.Remote)
 	if err != nil {
 		return res, fmt.Errorf("gitpush: read %s at the remote: %w", r.Branch, err)
 	}
 	old := ""
-	// Every other branch tip the remote already has: commits reachable from
-	// one are not new, however they got into the workspace's history (a
-	// merge of the base branch brings in all of its commits since the fork).
-	var tips []string
+	tips := map[string]string{} // sha → a ref naming it
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
 		if len(f) != 2 || !isSHA(f[0]) {
@@ -122,9 +131,8 @@ func Push(ctx context.Context, r Request) (Result, error) {
 		}
 		if f[1] == ref {
 			old = f[0]
-		} else {
-			tips = append(tips, f[0])
 		}
+		tips[f[0]] = strings.TrimSuffix(f[1], "^{}")
 	}
 	res.Old = old
 	if old == head {
@@ -133,7 +141,7 @@ func Push(ctx context.Context, r Request) (Result, error) {
 	}
 	if old != "" {
 		if _, err := git(nil, "cat-file", "-e", old+"^{commit}"); err != nil {
-			if _, err := git(nil, "fetch", "--no-write-fetch-head", "--no-tags", "--end-of-options", r.Remote, ref); err != nil {
+			if _, err := git(nil, "fetch", "--no-write-fetch-head", "--no-tags", "--no-recurse-submodules", "--end-of-options", r.Remote, ref); err != nil {
 				return res, fmt.Errorf("gitpush: fetch %s: %w", r.Branch, err)
 			}
 		}
@@ -141,28 +149,7 @@ func Push(ctx context.Context, r Request) (Result, error) {
 			return res, ErrDiverged
 		}
 	}
-	revs := head + "\n"
-	if old != "" {
-		revs += "^" + old + "\n"
-	}
-	known, err := presentCommits(git, tips)
-	if err != nil {
-		return res, err
-	}
-	for _, t := range known {
-		revs += "^" + t + "\n"
-	}
-	revArgs := []string{"rev-list", "--reverse", "--topo-order", "--stdin"}
-	if old == "" || clone {
-		// A per-dispatch clone's trusted dir is conductor's base clone: its
-		// remote-tracking refs are what the remote had at the last fetch,
-		// which still covers a base branch that has moved on since (its new
-		// tip is not in the objects, its old one is). A linked worktree's
-		// common dir is the agent's to write, so its refs are trusted only
-		// when nothing else bounds the range.
-		revArgs = append(revArgs, "--not", "--remotes")
-	}
-	out, err = git([]byte(revs), revArgs...)
+	out, err = notOnRemote(git, head, tips, r.Remote)
 	if err != nil {
 		return res, fmt.Errorf("gitpush: list the commits to push: %w", err)
 	}
@@ -171,6 +158,11 @@ func Push(ctx context.Context, r Request) (Result, error) {
 		return res, fmt.Errorf("gitpush: %d new commits — more than the %d conductor pushes at once", len(commits), max)
 	}
 	res.Commits = len(commits)
+	if r.DenyCIChanges && len(commits) > 0 {
+		if err := checkCIChanges(git, commits); err != nil {
+			return res, err
+		}
+	}
 
 	newHead := head
 	if r.Signer != nil && len(commits) > 0 {
@@ -306,24 +298,4 @@ func mkdirsUnder(root, rel string) error {
 		parent = filepath.Join(parent, c)
 	}
 	return nil
-}
-
-// presentCommits returns the tips that are commits conductor can read: a
-// remote branch whose history was never fetched cannot be excluded, and
-// naming it to rev-list would fail the push.
-func presentCommits(git func([]byte, ...string) (string, error), tips []string) ([]string, error) {
-	if len(tips) == 0 {
-		return nil, nil
-	}
-	out, err := git([]byte(strings.Join(tips, "\n")+"\n"), "cat-file", "--batch-check")
-	if err != nil {
-		return nil, fmt.Errorf("gitpush: check the remote's branch tips: %w", err)
-	}
-	var have []string
-	for _, line := range strings.Split(out, "\n") {
-		if f := strings.Fields(line); len(f) >= 2 && f[1] == "commit" && isSHA(f[0]) {
-			have = append(have, f[0])
-		}
-	}
-	return have, nil
 }

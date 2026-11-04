@@ -58,6 +58,34 @@ func TestCommandRunLocal(t *testing.T) {
 	}
 }
 
+// rt2 #3: a local run's process must not inherit the daemon's full
+// environment by default — only the minimal operational allowlist
+// (sandbox.MinimalEnv) plus whatever env: the connection/call explicitly set.
+// inherit_env: true opts back into the historical os.Environ() passthrough.
+func TestCommandRunLocalDoesNotInheritDaemonEnv(t *testing.T) {
+	t.Setenv("RT2_SECRET_AMBIENT", "do-not-leak")
+
+	reg := buildSinkRegistry(t, "connectors:\n  box: { use: command }\n")
+	in, _ := reg.Get("box")
+	out, err := in.Invoke(context.Background(), "run", map[string]any{"command": `printf '[%s]' "$RT2_SECRET_AMBIENT"`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["stdout"] != "[]" {
+		t.Fatalf("default run inherited the daemon's ambient env: %v", out)
+	}
+
+	regInherit := buildSinkRegistry(t, "connectors:\n  box: { use: command, inherit_env: true }\n")
+	inInherit, _ := regInherit.Get("box")
+	out, err = inInherit.Invoke(context.Background(), "run", map[string]any{"command": `printf '[%s]' "$RT2_SECRET_AMBIENT"`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["stdout"] != "[do-not-leak]" {
+		t.Fatalf("inherit_env: true did not restore the ambient env: %v", out)
+	}
+}
+
 // TestCommandRunRemote proves the #36 example shape — a command connector
 // with host: whose run verb executes over SSH — by injecting a hosts.Client
 // Run that executes the built remote command through a local sh (the same

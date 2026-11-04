@@ -1,7 +1,11 @@
 package agentsandbox
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"github.com/NodeSpy/conductor/internal/skill"
@@ -50,6 +54,13 @@ type Entry struct {
 	// registered it ("" unknown): commits past it are the agent's own, the
 	// work an unpushed step end would lose.
 	StartHead string
+	// Scope is what the dispatch's own scopes (its isolation: blocks, a
+	// pack grant) change of the sandbox; nil: nothing.
+	Scope *Scope
+	// GitCommon / GitWorktree are a protected linked worktree's shared
+	// common dir and its own git dir: each launch gets a private view of the
+	// common dir (see GitLayout.Common).
+	GitCommon, GitWorktree string
 }
 
 // PushTarget is where conductor — never the agent — pushes a workspace.
@@ -75,6 +86,109 @@ type PushTarget struct {
 type Registry struct {
 	mu   sync.Mutex
 	byWS map[string]Entry
+	// path, when set (PersistTo), is where the registry survives a daemon
+	// restart.
+	path string
+}
+
+// persisted is what of an Entry survives a restart: everything but the
+// skill identity — a reloaded workspace keeps its identity (its home), its
+// sandbox shape and its push target, but no token is minted for it, so it
+// has no conductor verbs until its dispatch registers it again.
+type persisted struct {
+	Workspace   string      `json:"workspace"`
+	Identity    string      `json:"identity"`
+	Tool        string      `json:"tool,omitempty"`
+	Model       string      `json:"model,omitempty"`
+	Dispatch    string      `json:"dispatch,omitempty"`
+	Egress      []string    `json:"egress,omitempty"`
+	ReadOnly    []string    `json:"read_only,omitempty"`
+	ReadWrite   []string    `json:"read_write,omitempty"`
+	Hide        []string    `json:"hide,omitempty"`
+	Env         []string    `json:"env,omitempty"`
+	Push        *PushTarget `json:"push,omitempty"`
+	StartHead   string      `json:"start_head,omitempty"`
+	Scope       *Scope      `json:"scope,omitempty"`
+	GitCommon   string      `json:"git_common,omitempty"`
+	GitWorktree string      `json:"git_worktree,omitempty"`
+}
+
+// PersistTo loads the registry saved at path (entries whose workspace is
+// gone are dropped) and saves every later change there.
+func (r *Registry) PersistTo(path string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.path = path
+	if r.byWS == nil {
+		r.byWS = map[string]Entry{}
+	}
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var list []persisted
+	if err := json.Unmarshal(b, &list); err != nil {
+		return fmt.Errorf("agentsandbox: registry %s: %w", path, err)
+	}
+	for _, e := range list {
+		if fi, err := os.Stat(e.Workspace); err != nil || !fi.IsDir() || e.Identity == "" {
+			continue
+		}
+		ws := canon(e.Workspace)
+		if _, live := r.byWS[ws]; live {
+			continue
+		}
+		ent := Entry{Workspace: ws, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree}
+		// The file is conductor's, but what it names is bound read-write
+		// into the next launch: re-checked as a fresh layout would be, and
+		// dropped (the workspace resolves anew) when it no longer passes.
+		if err := ValidateRecorded(ent); err != nil {
+			continue
+		}
+		r.byWS[ws] = ent
+	}
+	r.saveLocked()
+	return nil
+}
+
+// Rescope replaces every recorded scope with fn's recomputation of it
+// (nil drops it) and saves: a daemon reads its registry against the config
+// it runs with now.
+func (r *Registry) Rescope(fn func(*Scope) *Scope) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for ws, e := range r.byWS {
+		if e.Scope != nil {
+			e.Scope = fn(e.Scope)
+			r.byWS[ws] = e
+		}
+	}
+	r.saveLocked()
+}
+
+// saveLocked writes the registry to its path (none: nothing), atomically.
+func (r *Registry) saveLocked() {
+	if r.path == "" {
+		return
+	}
+	list := make([]persisted, 0, len(r.byWS))
+	for _, e := range r.byWS {
+		list = append(list, persisted{Workspace: e.Workspace, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree})
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Workspace < list[j].Workspace })
+	b, err := json.MarshalIndent(list, "", " ")
+	if err != nil {
+		return
+	}
+	tmp := r.path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err == nil {
+		_ = os.Rename(tmp, r.path)
+	}
 }
 
 // Default is the daemon's registry.
@@ -89,6 +203,7 @@ func (r *Registry) Register(e Entry) func() {
 		r.byWS = map[string]Entry{}
 	}
 	r.byWS[ws] = e
+	r.saveLocked()
 	r.mu.Unlock()
 	var once sync.Once
 	return func() {
@@ -96,6 +211,7 @@ func (r *Registry) Register(e Entry) func() {
 			r.mu.Lock()
 			if cur, ok := r.byWS[ws]; ok && cur.Identity == e.Identity && cur.Dispatch == e.Dispatch {
 				delete(r.byWS, ws)
+				r.saveLocked()
 			}
 			r.mu.Unlock()
 		})
@@ -108,6 +224,7 @@ func (r *Registry) Forget(ws string) {
 	r.mu.Lock()
 	delete(r.byWS, c)
 	delete(r.byWS, filepath.Clean(ws))
+	r.saveLocked()
 	r.mu.Unlock()
 }
 
@@ -163,4 +280,15 @@ func canon(p string) string {
 		rest = filepath.Join(filepath.Base(dir), rest)
 		dir = parent
 	}
+}
+
+// entries is a snapshot of every registered workspace.
+func (r *Registry) entries() []Entry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Entry, 0, len(r.byWS))
+	for _, e := range r.byWS {
+		out = append(out, e)
+	}
+	return out
 }

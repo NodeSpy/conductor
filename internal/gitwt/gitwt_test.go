@@ -62,7 +62,7 @@ func newProv(t *testing.T, origin string) *Provisioner {
 func prReq() dispatch.Request {
 	return dispatch.Request{
 		DispatchID: "disp-1",
-		Trigger: core.Trigger{
+		Trigger: core.Trigger{TargetTrusted: true,
 			Kind:    "merge_conflict",
 			Target:  core.Target{Repo: "acme/web", PR: 7, Number: 7, BaseRef: "main"},
 			Context: map[string]any{"head_ref": "feature"},

@@ -2,6 +2,8 @@ package code
 
 import (
 	"context"
+	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -73,6 +75,89 @@ func TestHostInterpIsolationRoutesThroughWrap(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "code: sh: isolation:") || !strings.Contains(err.Error(), "Linux user namespaces or macOS Seatbelt") {
 		t.Fatalf("error must show the isolation wrap was engaged: %v", err)
+	}
+}
+
+// `run: go` (execGoToolchain) must route through sandbox.WrapLocalCommand
+// exactly like cli/host-interpreter steps when it sets isolation: — this is
+// rt2 #4: execGoToolchain used to ignore spec.Isolation entirely and always
+// run the go toolchain bare, even for a pack's confined-by-default `run: go`
+// step. Reverting the gorun.go wrap makes this fail (no error at all — the
+// bare `go run` would just execute the stub program) rather than fail closed
+// here.
+func TestGoIsolationRoutesThroughWrap(t *testing.T) {
+	stubNonLinux(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go on PATH")
+	}
+
+	e := &Executor{Sandbox: sandbox.LocalWrapDeps{SelfExe: func() (string, error) { return "/conductor", nil }}}
+	spec := Spec{
+		Run:       "go",
+		Code:      "package main\nfunc main() {}\n",
+		Isolation: &config.IsolationConfig{Mode: "namespace"},
+	}
+	_, err := e.Exec(context.Background(), spec, nil)
+	if err == nil {
+		t.Fatal("a run: go step with isolation: must fail closed when the sandbox can't be realized, not fall back to running bare")
+	}
+	if !strings.Contains(err.Error(), "code: go: isolation:") || !strings.Contains(err.Error(), "Linux user namespaces or macOS Seatbelt") {
+		t.Fatalf("error must show the isolation wrap was engaged: %v", err)
+	}
+}
+
+// A pack's confined-by-default `run: go` step (IsolationDefaulted) degrades
+// to a bare run + warning when the sandbox can't be realized — best-effort,
+// like the cli/host-interpreter paths — rather than failing the step.
+func TestGoIsolationDefaultedDegradesToWarning(t *testing.T) {
+	stubNonLinux(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go on PATH")
+	}
+
+	var warned string
+	e := &Executor{
+		Sandbox: sandbox.LocalWrapDeps{SelfExe: func() (string, error) { return "/conductor", nil }},
+		Warn:    func(format string, args ...any) { warned = fmt.Sprintf(format, args...) },
+	}
+	spec := Spec{
+		Run:                "go",
+		Code:               "package main\nfunc main() {}\n",
+		Isolation:          &config.IsolationConfig{Mode: "namespace"},
+		IsolationDefaulted: true,
+	}
+	if _, err := e.Exec(context.Background(), spec, nil); err != nil {
+		t.Fatalf("a defaulted isolation must degrade to a bare run, not fail: %v", err)
+	}
+	if warned == "" || !strings.Contains(warned, "default sandbox unavailable") {
+		t.Fatalf("expected a best-effort warning, got %q", warned)
+	}
+}
+
+// No Isolation set (the zero value) must never touch sandbox.WrapLocalCommand
+// at all — pinning CheckGOOS to a value that would refuse EVERY isolation
+// mode proves a bare step doesn't even ask the question.
+func TestGoNoIsolationNeverConsultsSandbox(t *testing.T) {
+	stubNonLinux(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go on PATH")
+	}
+
+	e := &Executor{}
+	out, err := e.Exec(context.Background(), Spec{
+		Run: "go",
+		Code: `package main
+
+import "fmt"
+
+func main() { fmt.Print(` + "`" + `{"ok": true}` + "`" + `) }
+`,
+	}, nil)
+	if err != nil {
+		t.Fatalf("a step with no isolation: must run bare regardless of sandbox.CheckGOOS: %v", err)
+	}
+	if out["ok"] != true {
+		t.Fatalf("outputs = %#v", out)
 	}
 }
 

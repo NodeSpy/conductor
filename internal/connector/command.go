@@ -11,6 +11,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // The command connector: remote (or local) command execution as a VERB, per
@@ -33,11 +34,14 @@ var commandDecl = &TypeDecl{
 		"ssh":  {Type: TMap, Desc: "an inline SSH target instead of a named hosts: entry"},
 		"cwd":  {Type: TString, Desc: "default working directory"},
 		"env":  {Type: TMap, Desc: "default environment for every run"},
+		"inherit_env": {Type: TBool, Desc: "a LOCAL run's process gets the daemon's full environment " +
+			"(including any credentials in it) instead of the minimal operational allowlist plus env:/host:env: " +
+			"default false; has no effect on host: (SSH) runs, which never inherit any ambient environment"},
 	},
 	Verbs: []VerbDecl{{
 		Name: "run", Desc: "run one command",
 		Options: Schema{
-			"command": {Type: TAny, Required: true, Desc: "argv list, or a string executed through sh -c"},
+			"command": {Type: TAny, Required: true, Shell: true, Desc: "argv list, or a string executed through sh -c"},
 			"cwd":     {Type: TString, Desc: "working directory (default: the connection's)"},
 			"env":     {Type: TMap, Desc: "extra environment (merges over the connection's)"},
 			"timeout": {Type: TDuration, Desc: "bound the command (default 10m)"},
@@ -57,6 +61,15 @@ type commandConn struct {
 	SSH  *config.HostConfig `yaml:"ssh"`
 	Cwd  string             `yaml:"cwd"`
 	Env  map[string]string  `yaml:"env"`
+	// InheritEnv opts a LOCAL run back into the daemon's full os.Environ()
+	// (the historical behavior). Default false: a local run gets the
+	// minimal operational allowlist (sandbox.MinimalEnv) plus whatever this
+	// connection's and the call's own env: maps add — the daemon's
+	// environment routinely carries credentials (webhook secrets, model
+	// keys, tokens passed to conductor itself) that a run of an
+	// event-templated command must not inherit by default. Never applies to
+	// a host: (SSH) run, which has no ambient environment to begin with.
+	InheritEnv bool `yaml:"inherit_env"`
 }
 
 type commandImpl struct {
@@ -150,7 +163,7 @@ func (c *commandImpl) Invoke(ctx context.Context, verb string, opts map[string]a
 		}
 		return map[string]any{"stdout": res.Stdout, "stderr": res.Stderr, "exit_code": res.ExitCode}, nil
 	}
-	return runLocalScript(ctx, script, cwd, env)
+	return runLocalScript(ctx, script, cwd, env, c.conn.InheritEnv)
 }
 
 // commandScript renders the command option as one sh script: an argv list is
@@ -183,12 +196,27 @@ func commandScript(v any) (string, error) {
 // runLocalScript executes the script through the local sh — the same
 // semantics the remote path has, so a connector is portable between local
 // and host: by changing one key.
-func runLocalScript(ctx context.Context, script, cwd string, env map[string]string) (map[string]any, error) {
+//
+// The child's base environment is the minimal operational allowlist
+// (sandbox.MinimalEnv), not the daemon's full os.Environ(): the daemon's
+// environment routinely carries credentials (webhook secrets, model keys,
+// tokens passed to conductor itself), and this script's TEXT may be
+// event-templated, so forwarding everything would hand an attacker who can
+// influence the command (or just an ordinary bug in it) every secret the
+// daemon process holds in its env. inheritEnv (connection: inherit_env:
+// true) opts back into the historical os.Environ() passthrough for an
+// operator who genuinely needs it; env (connection- and call-level) is the
+// ordinary way to pass specific variables through either way.
+func runLocalScript(ctx context.Context, script, cwd string, env map[string]string, inheritEnv bool) (map[string]any, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
-	cmd.Env = os.Environ()
+	if inheritEnv {
+		cmd.Env = os.Environ()
+	} else {
+		cmd.Env = sandbox.MinimalEnv()
+	}
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}

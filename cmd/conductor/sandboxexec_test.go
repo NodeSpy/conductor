@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
+	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
@@ -208,7 +211,7 @@ func TestWrapSandboxExecShowsBins(t *testing.T) {
 	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
 	pol := agentsandbox.Policy{Identity: "x", Workspace: ws, Home: home}
 	for _, bins := range [][]string{nil, {"deck-tool"}} {
-		l, cleanup, err := wrapSandboxExec(pol, []string{"/bin/sh", "-c", "deck-tool"}, bins)
+		l, cleanup, err := wrapSandboxExec(pol, []string{"/bin/sh", "-c", "deck-tool"}, bins, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -217,5 +220,93 @@ func TestWrapSandboxExecShowsBins(t *testing.T) {
 		if shown != (bins != nil) {
 			t.Fatalf("bins %v: the tool's dir shown = %v", bins, shown)
 		}
+	}
+}
+
+// A sandbox-exec launch's containment events reach the daemon's audit log
+// through the control socket, marked as coming from sandbox exec.
+func TestSandboxExecReportsEventsToTheDaemon(t *testing.T) {
+	sock, reqs := fakeControl(t, func(controlRequest) controlResponse { return controlResponse{OK: true} })
+	reportSandboxEvent(sock, "detected", map[string]any{"kind": "tunnel_tool"})
+	if len(*reqs) != 1 || (*reqs)[0].Cmd != "sandbox-event" || (*reqs)[0].Kind != "detected" || (*reqs)[0].Args["kind"] != "tunnel_tool" {
+		t.Fatalf("sent: %+v", *reqs)
+	}
+	reportSandboxEvent("", "detected", nil) // no daemon: dropped quietly
+
+	var got []string
+	old := controller.SandboxEvent
+	controller.SandboxEvent = func(kind string, f map[string]any) {
+		got = append(got, fmt.Sprint(kind, " ", f["via"], " ", f["kind"]))
+	}
+	t.Cleanup(func() { controller.SandboxEvent = old })
+	client, server := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		handleControlConn(context.Background(), server, nil, nil, nil, nil, nil, nil, func(string, ...any) {})
+		close(done)
+	}()
+	_ = json.NewEncoder(client).Encode(controlRequest{Cmd: "sandbox-event", Kind: "detected", Args: map[string]any{"kind": "tunnel_tool", "via": "forged"}})
+	var resp controlResponse
+	if err := json.NewDecoder(client).Decode(&resp); err != nil || !resp.OK {
+		t.Fatalf("response %+v %v", resp, err)
+	}
+	client.Close()
+	<-done
+	if len(got) != 1 || got[0] != "detected sandbox-exec tunnel_tool" {
+		t.Fatalf("daemon recorded %v", got)
+	}
+}
+
+// The reporter delivers a launch's events in order, without blocking the
+// caller, and what is queued at its close still reaches the daemon.
+func TestSandboxExecReporterDeliversInOrder(t *testing.T) {
+	sock, reqs := fakeControl(t, func(controlRequest) controlResponse { return controlResponse{OK: true} })
+	r := newEventReporter(sock)
+	for i := 0; i < 20; i++ {
+		r.send("egress", map[string]any{"n": float64(i)})
+	}
+	r.close()
+	r.send("egress", nil) // after close: dropped, no panic
+	if len(*reqs) != 20 {
+		t.Fatalf("delivered %d", len(*reqs))
+	}
+	for i, q := range *reqs {
+		if q.Cmd != "sandbox-event" || q.Args["n"] != float64(i) {
+			t.Fatalf("event %d: %+v", i, q)
+		}
+	}
+	dead := newEventReporter(filepath.Join(t.TempDir(), "none.sock")) // no daemon: nothing blocks
+	dead.send("egress", nil)
+	dead.close()
+}
+
+// Only this daemon's uid may write the sandbox audit or ask for a policy:
+// a peer of another uid is refused, and nothing is recorded.
+func TestSandboxControlRefusesAnotherUID(t *testing.T) {
+	old, oldEv := peerCred, controller.SandboxEvent
+	t.Cleanup(func() { peerCred, controller.SandboxEvent = old, oldEv })
+	peerCred = func(net.Conn) (uint32, int, bool) { return uint32(os.Getuid() + 1), 1, true }
+	var got []string
+	controller.SandboxEvent = func(kind string, _ map[string]any) { got = append(got, kind) }
+	for _, req := range []controlRequest{
+		{Cmd: "sandbox-event", Kind: "detected", Args: map[string]any{"kind": "tunnel_tool"}},
+		{Cmd: "sandbox-policy", Cwd: t.TempDir(), Tool: "claude-code"},
+	} {
+		client, server := net.Pipe()
+		done := make(chan struct{})
+		go func() {
+			handleControlConn(context.Background(), server, nil, nil, nil, nil, nil, nil, func(string, ...any) {})
+			close(done)
+		}()
+		_ = json.NewEncoder(client).Encode(req)
+		var resp controlResponse
+		if err := json.NewDecoder(client).Decode(&resp); err != nil || resp.OK || !strings.Contains(resp.Error, "refused for uid") {
+			t.Fatalf("%s from another uid: %+v %v", req.Cmd, resp, err)
+		}
+		client.Close()
+		<-done
+	}
+	if len(got) != 0 {
+		t.Fatalf("another uid's event was recorded: %v", got)
 	}
 }

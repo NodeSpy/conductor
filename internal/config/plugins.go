@@ -412,15 +412,34 @@ func defaultEngineIsolation() *IsolationConfig {
 	}
 }
 
-// defaultPackCodeIsolation is the sandbox a pack-authored cli/host code step
-// gets when it declares none (confined-by-default, §15): the same
-// least-privilege namespace jail an untrusted engine gets — pid-isolated,
-// network denied, and (via the pivot_root allow-list) only the workdir and the
-// step's own code/ctx temp dirs visible, the daemon's state/config hidden by
-// absence. A pack that legitimately needs the network or an external path
-// declares its own isolation: with `network`/`fs`; one the operator fully
-// trusts opts out with `trust: full`. Best-effort (Step.IsolationDefaulted).
-func defaultPackCodeIsolation() *IsolationConfig {
+// defaultCodeIsolation is the sandbox a LOCAL cli/host code step (including
+// `run: go`) gets when it declares none of its own (confined-by-default,
+// §15): the same least-privilege namespace jail an untrusted engine gets —
+// pid-isolated, network denied, and (via the pivot_root allow-list) only the
+// workdir and the step's own code/ctx/build temp dirs visible, the daemon's
+// state/config hidden by absence.
+//
+// Two call sites synthesize it onto a step, both post-overlay so an explicit
+// isolation:/trust: always wins:
+//
+//   - a PACK's own cli/host/go steps (pack_instantiate.go) — a pack cannot
+//     decide to run hostile-or-buggy shipped code unconfined, only the
+//     operator (via trust: full in their packs: overlay) or the pack author
+//     (via an explicit isolation: the pack ships) can.
+//   - every OTHER local cli/host/go step too (applyCodeIsolationDefaults,
+//     code_isolation.go) — an operator's own step's `command:`/`args:`/`env:`
+//     can be templated from event data the step's author never fully
+//     controls, so "operator-authored" does not mean "operator-controlled
+//     argv"; the top-level `code: { isolation_default: none }` knob is the
+//     escape hatch for a deployment that needs the pre-existing bare
+//     behavior while it migrates.
+//
+// A step that legitimately needs the network or an external path declares
+// its own isolation: with `network`/`fs`; one the operator fully trusts
+// opts out with `trust: full` or an explicit `isolation: { mode: none }`.
+// Best-effort (Step.IsolationDefaulted): a box that cannot build the jail
+// runs the step bare + warns, rather than breaking it.
+func defaultCodeIsolation() *IsolationConfig {
 	return &IsolationConfig{
 		Mode:    "namespace",
 		Network: &IsolationNetwork{Deny: true},

@@ -11,6 +11,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/gitsafe"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
@@ -128,7 +129,15 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 			return nil, "", nil, nil, fmt.Errorf("agent sandbox: scratch workspace: %w", err)
 		}
 	}
-	entry, err := registerWorkspace(dir, identity, tool, a.req)
+	req := a.req
+	if req != nil && opt.iso != req.Step.Isolation {
+		// The runtime's isolation: (under the step's) is this launch's
+		// scope: its allowance.
+		r := *req
+		r.Step.Isolation = opt.iso
+		req = &r
+	}
+	entry, err := registerWorkspace(dir, identity, tool, req)
 	if err != nil {
 		return nil, "", nil, nil, err
 	}
@@ -147,11 +156,18 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	// interactive hand-off's durable session), not the resolver's.
 	mintless := entry
 	mintless.Skill = nil
-	pol, err := w.Resolver.PolicyForEntry(mintless, tool, env)
+	// mintless.Skill == nil, so Mint is never reached here (see its comment
+	// above) — the zero ProcessAnchor is never used to mint anything; this
+	// path's own token comes from SkillEnvFor below, pending-bound and
+	// anchored by bindSandboxRoot once this launch's process exists.
+	pol, err := w.Resolver.PolicyForEntry(mintless, tool, env, skill.ProcessAnchor{})
 	if err != nil {
 		return nil, "", nil, nil, err
 	}
 	pol.Socket = w.Resolver.Socket
+	if a.req != nil && a.req.DispatchID != "" {
+		pol.Run = a.req.DispatchID
+	}
 	if a.skillEnv && a.req != nil && pol.Socket != "" {
 		sb := &skill.SandboxBinding{Identity: pol.Identity, Workspace: pol.Workspace, Egress: entry.Egress,
 			Deny: append(append([]string(nil), entry.ReadOnly...), entry.Hide...)}
@@ -164,12 +180,15 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	pol.ReadOnly = append(pol.ReadOnly, a.files...)
 	pol.Expose = append(pol.Expose, a.expose...)
 	launch, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
-		SelfExe:    launchSelfExe,
-		EgressUnix: EgressProxyUnix,
-		EgressAddr: EgressProxyFor,
-		Relay:      w.Relay,
-		LookPath:   exec.LookPath,
-		RealHome:   w.Resolver.RealHome,
+		SelfExe:           launchSelfExe,
+		EgressUnix:        EgressProxyUnix,
+		EgressAddr:        EgressProxyFor,
+		EgressUnixSession: EgressProxyUnixSession,
+		EgressAddrSession: EgressProxyForSession,
+		Event:             SandboxEvent,
+		Relay:             w.Relay,
+		LookPath:          exec.LookPath,
+		RealHome:          w.Resolver.RealHome,
 		// The model credentials and endpoints come from the daemon's own
 		// environment or the dispatch's; everything else is dropped.
 		Inherited: append(os.Environ(), env...),
@@ -179,6 +198,36 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	}
 	a.exposed = launch.Exposed
 	return launch.Argv, launch.Dir, launch.Env, launch.Cleanup, nil
+}
+
+// bindSandboxRoot anchors a pending skill session token to the process the
+// daemon just started for it — pid, the root of that launch's process tree
+// (rt2 #12). prepareAgentSandbox mints the token (SkillEnvFor) BEFORE the
+// process exists (exec.Cmd's env must be complete before Start()), so the
+// broker holds it pending — authorizing no one — until this call names the
+// real root, which every controller that can carry a sandboxed launch's
+// token (cli.go's startCLIProc, opencode.go's spawnOpencode) makes right
+// after its own cmd.Start() succeeds.
+//
+// A no-op for every other launch: unsandboxed, a resumed session with no
+// fresh token, or a daemon with the skill broker unwired. Scanning env for
+// the token (rather than requiring the caller to thread it through
+// separately) keeps every Start() call site's change to one line.
+//
+// It also names pid to the launch's containment watcher as the root of its
+// process tree (agentsandbox.LaunchStarted).
+func bindSandboxRoot(env []string, pid int) {
+	agentsandbox.LaunchStarted(env, pid)
+	b := skill.Active()
+	if b == nil {
+		return
+	}
+	for _, kv := range env {
+		if tok, ok := strings.CutPrefix(kv, "CONDUCTOR_SKILL_TOKEN="); ok {
+			_ = b.BindRoot(tok, pid)
+			return
+		}
+	}
 }
 
 // registerWorkspace is dispatch.RegisterSandboxWorkspace.
@@ -261,12 +310,14 @@ func sandboxNote(req dispatch.Request) string {
 	return b + " Commit your work; conductor pushes your committed HEAD to this dispatch's branch (signed, fast-forward only) when your step ends. To push earlier, run `conductor call git.push`.\n"
 }
 
-// ConfinedGit runs conductor's own read of a sandboxed workspace — the diff
-// preview's `git diff` — inside the agent sandbox: the workspace is the
-// agent's, and so are its .git/config, .gitattributes and hooks, whose
-// filter, textconv or fsmonitor commands git would otherwise run as
-// conductor. No network, a scratch home, the workspace and its git paths
-// only. ok=false for a directory that is not a registered sandbox workspace.
+// ConfinedGit runs conductor's own read of a workspace — the diff preview's
+// `git diff` — inside the agent sandbox: the workspace may be an agent's,
+// and so are its .git/config, .gitattributes and hooks, whose filter,
+// textconv or fsmonitor commands git would otherwise run as conductor. No
+// network, a scratch home, the workspace and its git paths only. A
+// directory the registry does not know (a daemon restart, a workspace
+// conductor did not create) gets its git layout read on the spot; ok is
+// false only when the sandbox is not wired at all.
 func ConfinedGit(ctx context.Context, dir string, args []string) (string, bool, error) {
 	w := AgentSandbox
 	if w == nil || w.Resolver == nil {
@@ -274,7 +325,10 @@ func ConfinedGit(ctx context.Context, dir string, args []string) (string, bool, 
 	}
 	e, ok := agentsandbox.Default.Lookup(dir)
 	if !ok {
-		return "", false, nil
+		var err error
+		if e, err = confinedEntry(dir); err != nil {
+			return "", true, fmt.Errorf("confined git: %w", err)
+		}
 	}
 	home, err := os.MkdirTemp(w.Resolver.StateRoot, "git-read-")
 	if err != nil {
@@ -285,7 +339,7 @@ func ConfinedGit(ctx context.Context, dir string, args []string) (string, bool, 
 		Identity: "conductor:git-read", Workspace: e.Workspace, Cwd: canonDir(dir), Home: home,
 		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide,
 	}
-	argv := append([]string{"git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}, args...)
+	argv := append([]string{"git"}, gitsafe.Args(args...)...)
 	l, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
 		SelfExe: launchSelfExe, LookPath: exec.LookPath, RealHome: w.Resolver.RealHome,
 		Inherited: os.Environ(),
@@ -295,11 +349,42 @@ func ConfinedGit(ctx context.Context, dir string, args []string) (string, bool, 
 	}
 	defer l.Cleanup()
 	cmd := exec.CommandContext(ctx, l.Argv[0], l.Argv[1:]...)
-	cmd.Dir, cmd.Env = l.Dir, append(l.Env, "GIT_TERMINAL_PROMPT=0", "GIT_NO_REPLACE_OBJECTS=1")
+	cmd.Dir, cmd.Env = l.Dir, gitsafe.Env(l.Env)
 	var out, errb strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
 		return "", true, fmt.Errorf("git %s (confined): %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}
 	return out.String(), true, nil
+}
+
+// confinedEntry is the sandbox shape of a directory no registration
+// describes: its enclosing checkout (the nearest dir with a .git) as the
+// workspace, with that checkout's git layout.
+func confinedEntry(dir string) (agentsandbox.Entry, error) {
+	d := canonDir(dir)
+	ws := d
+	for p := d; ; p = filepath.Dir(p) {
+		if _, err := os.Lstat(filepath.Join(p, ".git")); err == nil {
+			ws = p
+			break
+		}
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+	if home, _ := os.UserHomeDir(); ws == string(filepath.Separator) || (home != "" && isWithin(canonDir(home), ws)) {
+		return agentsandbox.Entry{}, fmt.Errorf("refusing %s as a confined read's workspace: it contains your home directory", ws)
+	}
+	layout, err := agentsandbox.ResolveGitLayout(ws)
+	if err != nil {
+		return agentsandbox.Entry{}, err
+	}
+	return agentsandbox.Entry{Workspace: ws, Identity: "conductor:git-read", ReadOnly: layout.ReadOnly, ReadWrite: layout.ReadWrite, Hide: layout.Hide}, nil
+}
+
+// isWithin reports p == dir or p inside dir.
+func isWithin(p, dir string) bool {
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }

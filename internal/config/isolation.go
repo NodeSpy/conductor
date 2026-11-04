@@ -2,8 +2,13 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // isolationGOOS is runtime.GOOS, a var so tests can validate the Linux-only
@@ -23,7 +28,7 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 	case "none":
 		// The explicit opt-out of the agent sandbox for one runtime/step:
 		// the launch runs unwrapped. Nothing else in the block applies.
-		if iso.User != "" || iso.Container != nil || iso.Limits != nil || iso.Network != nil || len(iso.FS) > 0 || iso.Privileged || iso.AllowRoot {
+		if iso.User != "" || iso.Container != nil || iso.Limits != nil || iso.Network != nil || len(iso.FS) > 0 || iso.Privileged || iso.AllowRoot || iso.Allow != nil || iso.Detect != nil || iso.EgressLimits != nil || iso.agentOnlyKnobs() {
 			return fmt.Errorf("config: %s: isolation mode none runs the launch unwrapped — it takes no other isolation settings", where)
 		}
 		return nil
@@ -51,12 +56,20 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 			return fmt.Errorf("config: %s: isolation container.engine must be docker|podman, got %q", where, iso.Container.Engine)
 		}
 	case "":
-		return fmt.Errorf("config: %s: isolation needs `mode: user|namespace|container|none`", where)
+		if iso.SandboxKnobsOnly() {
+			// Only the agent sandbox's knobs: layered onto the outer
+			// scope's isolation, no wrapper of its own.
+			return validateScopeSandbox(where, iso)
+		}
+		return fmt.Errorf("config: %s: isolation needs `mode: user|namespace|container|none` (a block of only the agent sandbox's knobs — allow:, detect:, egress_limits:, egress_only:, egress_protocol_check:, persist:, limits: — needs none)", where)
 	default:
 		return fmt.Errorf("config: %s: unknown isolation mode %q (want user|namespace|container|none)", where, iso.Mode)
 	}
 	if iso.Privileged && iso.Mode != "namespace" {
 		return fmt.Errorf("config: %s: isolation `privileged: true` only applies to mode namespace (it opts out of the default filesystem masking there) — on %s it would be a silent no-op", where, iso.Mode)
+	}
+	if iso.Privileged && iso.Limits != nil {
+		return fmt.Errorf("config: %s: isolation `privileged: true` with `limits:` — a privileged launch has no jail, so it can see and rewrite its own cgroup files and remove the caps, and it gets no watcher or usage record; drop limits: (or privileged:) here", where)
 	}
 	if iso.AllowRoot && iso.Mode != "namespace" {
 		return fmt.Errorf("config: %s: isolation `allow_root: true` only applies to mode namespace (it opts into running the user-namespace sandbox as root) — on %s it would be a silent no-op", where, iso.Mode)
@@ -84,6 +97,9 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 			if pat == "" {
 				return fmt.Errorf("config: %s: isolation network.egress: empty pattern", where)
 			}
+			if err := validateEgressEntry(where+": isolation network.egress", pat); err != nil {
+				return err
+			}
 		}
 	}
 	if l := iso.Limits; l != nil && l.Pids < 0 {
@@ -106,7 +122,7 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 			return fmt.Errorf("config: %s: isolation fs: %q must be an absolute path", where, p)
 		}
 	}
-	return nil
+	return validateScopeSandbox(where, iso)
 }
 
 // validateStepIsolation checks a step's isolation against what actually runs
@@ -174,6 +190,12 @@ func validateCodeStepIsolation(where string, p Step, class EngineClass) error {
 	if p.Host != "" || p.SSH != nil {
 		return fmt.Errorf("config: %s: isolation: is not enforced for a remote code step (host:/ssh:) — conductor only wraps LOCAL `use: cli`/`command:`/`run: <interpreter>` code steps today; drop isolation: here, or run this step locally", where)
 	}
+	if iso := p.Isolation; iso != nil && (iso.Allow != nil || iso.Detect != nil || iso.EgressLimits != nil || iso.agentOnlyKnobs()) {
+		return fmt.Errorf("config: %s: isolation allow:/detect:/egress_limits:/egress_only:/egress_protocol_check:/persist: shape agent sandbox launches — a code step has no watcher or egress session", where)
+	}
+	if iso := p.Isolation; iso != nil && iso.Mode == "" && iso.Limits != nil {
+		return fmt.Errorf("config: %s: isolation limits: on a code step needs `mode: user|namespace|container` (without a mode, limits: caps agent sandbox launches)", where)
+	}
 	return validateIsolation(where, p.Isolation, false)
 }
 
@@ -224,16 +246,72 @@ func validateIsolationControlChannel(where string, iso *IsolationConfig, cc Cont
 	return nil
 }
 
+// SandboxKnobsOnly reports a block that sets only the agent sandbox's own
+// knobs (allow:, detect:, egress_limits:, limits:) and no mode: it layers
+// onto the outer scope's isolation (LayerIsolation) rather than replacing
+// it. Without a mode, limits: is the scope's agent launch caps (memory,
+// pids over sandbox.limits).
+func (iso *IsolationConfig) SandboxKnobsOnly() bool {
+	return iso != nil && iso.Mode == "" && iso.User == "" && iso.Container == nil &&
+		!iso.Privileged && !iso.AllowRoot && iso.Network == nil && len(iso.FS) == 0 &&
+		(iso.Allow != nil || iso.Detect != nil || iso.EgressLimits != nil || iso.Limits != nil || iso.agentOnlyKnobs())
+}
+
+// agentOnlyKnobs reports a knob only an agent sandbox launch has:
+// egress_only, egress_protocol_check, persist, inspect.
+func (iso *IsolationConfig) agentOnlyKnobs() bool {
+	return iso != nil && (iso.EgressOnly != nil || iso.EgressProtocolCheck != nil || iso.Persist != "" || len(iso.Inspect) > 0)
+}
+
+// LayerIsolation is inner over outer, most specific wins: a block with a
+// mode replaces outer whole (as ever); a knobs-only block keeps outer and
+// replaces only the knobs it sets.
+func LayerIsolation(outer, inner *IsolationConfig) *IsolationConfig {
+	if inner == nil {
+		return outer
+	}
+	if outer == nil || !inner.SandboxKnobsOnly() {
+		return inner
+	}
+	out := *outer
+	if inner.Allow != nil {
+		out.Allow = inner.Allow
+	}
+	if inner.Detect != nil {
+		out.Detect = inner.Detect
+	}
+	if inner.EgressLimits != nil {
+		out.EgressLimits = inner.EgressLimits
+	}
+	if inner.Limits != nil {
+		out.Limits = inner.Limits
+	}
+	if inner.EgressOnly != nil {
+		out.EgressOnly, out.EgressOnlyNarrow = inner.EgressOnly, inner.EgressOnlyNarrow
+	}
+	if inner.EgressProtocolCheck != nil {
+		out.EgressProtocolCheck = inner.EgressProtocolCheck
+	}
+	if inner.Persist != "" {
+		out.Persist = inner.Persist
+	}
+	if len(inner.Inspect) > 0 {
+		out.Inspect = inner.Inspect
+	}
+	return &out
+}
+
 // OptsOut reports the explicit opt-out of the agent sandbox: `mode: none`.
 func (iso *IsolationConfig) OptsOut() bool { return iso != nil && iso.Mode == "none" }
 
 // validatePaseoIsolation checks isolation: on a paseo step or runtime. A
 // paseo agent is the paseo daemon's child: conductor does not wrap it, it
-// names the provider entry paseo launches it with. The only isolation that
-// says something there is `{mode: none}` — the plain provider, not the
-// conductor-owned sandboxed one; anything else would be a silent no-op.
+// names the provider entry paseo launches it with. What says something there
+// is `{mode: none}` — the plain provider, not the conductor-owned sandboxed
+// one — and a block of the agent sandbox's own knobs (allow:, detect:,
+// egress_limits:); anything else would be a silent no-op.
 func validatePaseoIsolation(where string, iso *IsolationConfig) error {
-	if iso.OptsOut() {
+	if iso.OptsOut() || iso.SandboxKnobsOnly() {
 		return validateIsolation(where, iso, false)
 	}
 	return fmt.Errorf("config: %s: on a paseo runtime only `isolation: {mode: none}` applies (it launches the agent through paseo's plain provider instead of conductor's sandboxed entry) — conductor does not wrap a paseo agent itself; for another sandbox use an acp/cli/opencode/agent-deck runtime", where)
@@ -310,6 +388,24 @@ func isolationLoosens(iso *IsolationConfig, agent bool) string {
 		return ""
 	case iso.Mode == "none":
 		return "{mode: none} (no sandbox at all)"
+	case iso.Allow != nil:
+		return "allow: (a sandbox allowance) — a pack requests one under allowances: in its manifest and the operator grants it (`packs: { <instance>: { grant: [<name>@<digest>] } }`, as validate prints it), or the operator writes it"
+	case iso.Detect != nil && (iso.Detect.Action == "alert" || iso.Detect.Action == "off" || (iso.Detect.Tripwires != nil && !*iso.Detect.Tripwires)):
+		return "detect: (weaker detection)"
+	case iso.EgressLimits != nil:
+		return "egress_limits: (the operator's egress caps)"
+	case iso.Detect != nil && iso.Detect.Connections == "off":
+		return "detect.connections: off (no connection-shape signal)"
+	case iso.Detect != nil && iso.Detect.Interval != "" && detectIntervalLonger(iso.Detect.Interval):
+		return "detect.interval: longer than the 3s default (a slower watcher)"
+	case iso.EgressProtocolCheck != nil && !*iso.EgressProtocolCheck:
+		return "egress_protocol_check: false (any bytes through an allowed tunnel)"
+	case iso.Persist != "" && iso.Persist != "none":
+		return fmt.Sprintf("persist: %s (state kept across dispatches)", iso.Persist)
+	case len(iso.Inspect) > 0:
+		return "inspect: (a CA of conductor's own trusted inside the sandbox) — the operator writes it"
+	case agent && capsRaise(iso.Limits):
+		return "limits: above the agent launch defaults (pids over 8192, memory over 50% or unlimited, a CPU weight over 100, or a disk_free_min that is not a percentage of 5% or more)"
 	case !agent:
 		return "" // a code step's own wrapper choice: its synthesized jail is the default, not a floor
 	case iso.Mode == "user" || iso.Mode == "container":
@@ -322,4 +418,79 @@ func isolationLoosens(iso *IsolationConfig, agent bool) string {
 		return fmt.Sprintf("fs: %v (host paths shown read-write)", iso.FS)
 	}
 	return ""
+}
+
+// capsRaise reports agent launch caps above sandbox.limits' defaults (50%
+// memory, 8192 tasks) where that is decidable without the box: more tasks,
+// a larger share, or no memory cap. An absolute memory size is not: it is
+// bounded by the agent slice's aggregate cap whatever it says.
+func capsRaise(l *IsolationLimits) bool {
+	if l == nil {
+		return false
+	}
+	if l.Pids > 8192 || l.CPUWeight > 100 {
+		return true
+	}
+	if d := strings.TrimSpace(strings.ToLower(l.DiskFreeMin)); d != "" {
+		// A pack may only raise the floor, as a percentage: a size (or
+		// off) cannot be compared with the 5% default on a disk of
+		// unknown size.
+		pct, ok := strings.CutSuffix(d, "%")
+		if !ok {
+			return true
+		}
+		if f, err := strconv.ParseFloat(pct, 64); err != nil || f < 5 {
+			return true
+		}
+	}
+	m := strings.TrimSpace(strings.ToLower(l.Memory))
+	if m == "infinity" || m == "max" {
+		return true
+	}
+	if pct, ok := strings.CutSuffix(m, "%"); ok {
+		f, err := strconv.ParseFloat(pct, 64)
+		return err != nil || f > 50
+	}
+	return false
+}
+
+// validateEgressEntry checks one agent egress entry's form: a host[:port]
+// pattern, a CIDR range, or an http:// URL whose path is a prefix the
+// proxy enforces on every plain-HTTP request. An https:// URL is checked
+// here for form; validateInspectedEgress requires its host be inspected.
+func validateEgressEntry(where, e string) error {
+	e = strings.TrimSpace(e)
+	scheme, _, isURL := strings.Cut(e, "://")
+	if !isURL {
+		if strings.Contains(e, "/") {
+			host, _, _ := strings.Cut(e, ":")
+			if _, _, err := net.ParseCIDR(host); err != nil {
+				return fmt.Errorf("config: %s: %q: a / is only for a CIDR range (10.0.0.0/8) or an http:// URL with a path", where, e)
+			}
+		}
+		return nil
+	}
+	switch strings.ToLower(scheme) {
+	case "http", "https":
+		u, err := url.Parse(e)
+		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("config: %s: %q: want %s://host[:port]/path/prefix (no user, query or fragment)", where, e, strings.ToLower(scheme))
+		}
+		if strings.ContainsAny(u.Hostname(), "*?[") {
+			return fmt.Errorf("config: %s: %q: a path entry names its host exactly (no wildcard)", where, e)
+		}
+		for _, seg := range strings.Split(u.Path, "/") {
+			if seg == "." || seg == ".." || strings.Contains(seg, "%") {
+				return fmt.Errorf("config: %s: %q: the path prefix must be plain (no dot segments or percent escapes)", where, e)
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("config: %s: %q: only http:// and https:// URLs (with a path prefix) are egress entries; list other targets as host:port", where, e)
+}
+
+// detectIntervalLonger reports a detect.interval slower than the default.
+func detectIntervalLonger(v string) bool {
+	d, err := time.ParseDuration(v)
+	return err != nil || d > 3*time.Second
 }

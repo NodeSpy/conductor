@@ -95,6 +95,7 @@ func (p *workPusher) push(ctx context.Context, dispatchID string) (map[string]an
 	res, err := gitpush.Push(ctx, gitpush.Request{
 		Workspace: e.Workspace, GitDir: e.Push.GitDir, HeadDir: e.Push.HeadDir,
 		Branch: e.Push.Branch, Remote: e.Push.Remote, Signer: signer,
+		DenyCIChanges: p.cfg.Sandbox.PushDeniesCIChanges(),
 	})
 	row := map[string]any{"event": "git_push", "dispatch": dispatchID, "repo": e.Push.Repo, "branch": e.Push.Branch,
 		"old": res.Old, "new": res.New, "commits": res.Commits, "signed": res.Signed}

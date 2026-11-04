@@ -2,6 +2,7 @@ package agentsandbox
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -45,7 +46,7 @@ func realHome(t *testing.T) string {
 func TestPrepareHomeSeedsOnceWithoutHistory(t *testing.T) {
 	real := realHome(t)
 	root := t.TempDir()
-	spec := HomeSpec{Root: root, Key: "agent:fixer@acme/app", Tool: "claude-code", RealHome: real, GitName: `Op "Q" Erator`, GitEmail: "op@example.test", GOOS: "linux"}
+	spec := HomeSpec{Root: root, Key: "agent:fixer@acme/app", Tool: "claude-code", RealHome: real, GitName: `Op "Q" Erator`, GitEmail: "op@example.test", GOOS: "linux", ShareLogins: true}
 	home, logins, err := PrepareHome(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +96,15 @@ func TestPrepareHomeSeedsOnceWithoutHistory(t *testing.T) {
 	if dst, err := os.Readlink(filepath.Join(h2, ".claude", ".credentials.json")); err != nil || dst != l2[0].Src {
 		t.Fatalf("darwin login link: %q %v", dst, err)
 	}
+	// Not shared (the gateway, a login copy): no placeholder and no link —
+	// the one a shared launch left is removed; the launch writes the copy.
+	spec.ShareLogins = false
+	if _, l3, err := PrepareHome(spec); err != nil || len(l3) != 1 {
+		t.Fatalf("logins %+v %v", l3, err)
+	}
+	if _, err := os.Lstat(filepath.Join(h2, ".claude", ".credentials.json")); !os.IsNotExist(err) {
+		t.Fatal("the link to the operator's login is gone when it is not shared")
+	}
 	if _, _, err := PrepareHome(HomeSpec{Key: "x"}); err == nil {
 		t.Fatal("no root, no home")
 	}
@@ -127,10 +137,13 @@ func TestResolverDefaultPolicy(t *testing.T) {
 	r := &Resolver{
 		Registry: &Registry{}, StateRoot: filepath.Join(state, "agent-state"), RealHome: real,
 		Protected: []string{state}, Egress: []string{"registry.npmjs.org"}, Socket: "/s/memory.sock",
-		Mint: func(id skill.Identity) (string, error) { minted = append(minted, id); return "fresh", nil },
+		Mint: func(id skill.Identity, _ skill.ProcessAnchor) (string, error) {
+			minted = append(minted, id)
+			return "fresh", nil
+		},
 		GOOS: "linux",
 	}
-	p, err := r.PolicyFor(ws, "claude", []string{"ANTHROPIC_BASE_URL=http://127.0.0.1:3456"}, false)
+	p, err := r.PolicyFor(ws, "claude", []string{"ANTHROPIC_BASE_URL=http://127.0.0.1:3456"}, false, skill.ProcessAnchor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +162,7 @@ func TestResolverDefaultPolicy(t *testing.T) {
 	if minted[0].Requester != skill.RequesterOperator {
 		t.Fatalf("a directory of the operator's own is the operator's request: %q", minted[0].Requester)
 	}
-	if _, err := r.PolicyFor(ws, "claude", nil, false); err != nil || len(minted) != 2 {
+	if _, err := r.PolicyFor(ws, "claude", nil, false, skill.ProcessAnchor{}); err != nil || len(minted) != 2 {
 		t.Fatal("every launch mints its own token")
 	}
 	if !within(p.Home, r.StateRoot) {
@@ -157,7 +170,7 @@ func TestResolverDefaultPolicy(t *testing.T) {
 	}
 	for _, bad := range []string{"/", real, filepath.Dir(real), state, filepath.Join(state, "worktrees", "x"), "relative"} {
 		os.MkdirAll(filepath.Join(state, "worktrees", "x"), 0o700)
-		if _, err := r.PolicyFor(bad, "claude", nil, false); err == nil {
+		if _, err := r.PolicyFor(bad, "claude", nil, false, skill.ProcessAnchor{}); err == nil {
 			t.Errorf("default workspace %q must be refused", bad)
 		}
 	}
@@ -165,7 +178,7 @@ func TestResolverDefaultPolicy(t *testing.T) {
 	// provider's models from its own cwd): the tool's empty scratch
 	// workspace — never the refused directory itself.
 	for _, bad := range []string{"/", real} {
-		p, err := r.PolicyFor(bad, "codex", nil, true)
+		p, err := r.PolicyFor(bad, "codex", nil, true, skill.ProcessAnchor{})
 		if err != nil || p.Identity != "scratch:codex" || !within(p.Workspace, canon(r.StateRoot)) || p.Workspace == canon(bad) {
 			t.Fatalf("scratch for %s: %+v %v", bad, p, err)
 		}
@@ -173,12 +186,12 @@ func TestResolverDefaultPolicy(t *testing.T) {
 			t.Fatalf("a launcher's utility process has no requester: %q", last.Requester)
 		}
 	}
-	if p, _ := r.PolicyFor(ws, "codex", nil, true); p.Identity != "dir:"+canon(ws) {
+	if p, _ := r.PolicyFor(ws, "codex", nil, true, skill.ProcessAnchor{}); p.Identity != "dir:"+canon(ws) {
 		t.Fatalf("an acceptable directory is still its own workspace: %+v", p)
 	}
 	// No socket or no mint: no token, still a policy.
 	r.Socket = ""
-	if p, err := r.PolicyFor(ws, "codex", nil, false); err != nil || p.Token != "" || p.Socket != "" {
+	if p, err := r.PolicyFor(ws, "codex", nil, false, skill.ProcessAnchor{}); err != nil || p.Token != "" || p.Socket != "" {
 		t.Fatalf("%+v %v", p, err)
 	}
 }
@@ -191,13 +204,13 @@ func TestResolverRegisteredWorkspace(t *testing.T) {
 	id := skill.Identity{Agent: "fixer", Dispatch: "d-1"}
 	unreg := reg.Register(Entry{Workspace: ws, Identity: "agent:fixer@acme/app", Tool: "codex", Dispatch: "d-1", Skill: &id,
 		Egress: []string{"proxy.golang.org"}, ReadOnly: []string{"/base/objects"}, Env: []string{"GIT_AUTHOR_NAME=Op"}})
-	r := &Resolver{Registry: reg, StateRoot: t.TempDir(), Socket: "/s", Mint: func(i skill.Identity) (string, error) {
+	r := &Resolver{Registry: reg, StateRoot: t.TempDir(), Socket: "/s", Mint: func(i skill.Identity, _ skill.ProcessAnchor) (string, error) {
 		if i.Dispatch != "d-1" {
 			t.Fatalf("the token stands for the workspace's own dispatch: %+v", i)
 		}
 		return "tok", nil
 	}}
-	p, err := r.PolicyFor(sub, "claude", nil, false)
+	p, err := r.PolicyFor(sub, "claude", nil, false, skill.ProcessAnchor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +225,7 @@ func TestResolverRegisteredWorkspace(t *testing.T) {
 	if _, ok := reg.Lookup(sub); ok {
 		t.Fatal("unregistered")
 	}
-	if _, err := r.PolicyForEntry(Entry{Workspace: ws}, "claude", nil); err == nil {
+	if _, err := r.PolicyForEntry(Entry{Workspace: ws}, "claude", nil, skill.ProcessAnchor{}); err == nil {
 		t.Fatal("an entry with no identity is refused")
 	}
 }
@@ -274,10 +287,34 @@ func TestResolveGitLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	common := filepath.Join(base, ".git")
-	if l.GitDir != common || !contains(l.ReadWrite, common) || !contains(l.ReadWrite, filepath.Join(common, "worktrees", "wt")) ||
-		!contains(l.ReadOnly, filepath.Join(common, "config")) || !contains(l.ReadOnly, filepath.Join(common, "hooks")) ||
-		!contains(l.ReadOnly, filepath.Join(common, "objects", "info")) || !contains(l.Hide, filepath.Join(common, "worktrees")) {
+	if l.GitDir != common || contains(l.ReadWrite, common) || !contains(l.ReadOnly, common) ||
+		!contains(l.ReadWrite, filepath.Join(common, "worktrees", "wt")) || !contains(l.Hide, filepath.Join(common, "worktrees")) {
 		t.Fatalf("linked worktree: %+v", l)
+	}
+	for _, sub := range []string{"objects", "refs", "logs"} {
+		if !contains(l.ReadWrite, filepath.Join(common, sub)) {
+			t.Errorf("linked worktree: %s is not read-write: %+v", sub, l.ReadWrite)
+		}
+	}
+	// Everything the operator's own git obeys stays read-only — the
+	// submodule git dirs and the worktree's own pointers included.
+	for _, p := range []string{
+		filepath.Join(common, "config"), filepath.Join(common, "hooks"), filepath.Join(common, "info"),
+		filepath.Join(common, "modules"), filepath.Join(common, "objects", "info"), filepath.Join(common, "refs", "replace"),
+		filepath.Join(wt, ".git"), filepath.Join(common, "worktrees", "wt", "commondir"), filepath.Join(common, "worktrees", "wt", "gitdir"),
+	} {
+		if !contains(l.ReadOnly, p) {
+			t.Errorf("linked worktree: %s is not read-only: %+v", p, l.ReadOnly)
+		}
+	}
+	// sandbox.git.shared: direct — the common dir read-write, its
+	// protected paths still read-only.
+	SharedGitDirect = true
+	ld, err := ResolveGitLayout(wt)
+	SharedGitDirect = false
+	if err != nil || !contains(ld.ReadWrite, common) || contains(ld.ReadOnly, common) ||
+		!contains(ld.ReadOnly, filepath.Join(common, "modules")) || !contains(ld.ReadOnly, filepath.Join(common, "config")) {
+		t.Fatalf("direct: %+v %v", ld, err)
 	}
 	// Not a checkout: nothing.
 	if l, err := ResolveGitLayout(t.TempDir()); err != nil || len(l.ReadOnly)+len(l.ReadWrite) != 0 {
@@ -382,7 +419,7 @@ func TestLauncherFilesAreTempFilesOnly(t *testing.T) {
 // / is never a workspace — with or without a home configured.
 func TestResolverRefusesRootWithoutAHome(t *testing.T) {
 	r := &Resolver{Registry: &Registry{}, StateRoot: t.TempDir()}
-	if _, err := r.PolicyFor("/", "claude", nil, false); err == nil || !strings.Contains(err.Error(), "with / as its workspace") {
+	if _, err := r.PolicyFor("/", "claude", nil, false, skill.ProcessAnchor{}); err == nil || !strings.Contains(err.Error(), "with / as its workspace") {
 		t.Fatalf("/ must be refused: %v", err)
 	}
 }
@@ -482,5 +519,134 @@ func TestPrepareHomeSeedsClaudeSettingsWithoutPlugins(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); err == nil {
 		t.Fatal("a settings file that is not JSON is not seeded (it could carry plugins)")
+	}
+}
+
+// The registry survives a restart — identity, sandbox shape and push
+// target, never a skill identity — and drops workspaces that are gone.
+func TestRegistryPersists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".workspaces.json")
+	ws, gone := filepath.Join(dir, "ws"), filepath.Join(dir, "gone")
+	os.MkdirAll(ws, 0o700)
+	os.MkdirAll(gone, 0o700)
+	a := &Registry{}
+	if err := a.PersistTo(path); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "init", "-q", filepath.Join(dir, "base"))
+	a.Register(Entry{Workspace: ws, Identity: "agent:x@r", Dispatch: "d1", ReadOnly: []string{"/ro"},
+		Push: &PushTarget{Branch: "b", GitDir: filepath.Join(dir, "base", ".git"), Remote: "r"}, Skill: &skill.Identity{Agent: "x"}})
+	a.Register(Entry{Workspace: gone, Identity: "agent:y"})
+	os.RemoveAll(gone)
+	b := &Registry{}
+	if err := b.PersistTo(path); err != nil {
+		t.Fatal(err)
+	}
+	e, ok := b.Lookup(ws)
+	if !ok || e.Identity != "agent:x@r" || e.Dispatch != "d1" || e.Push == nil || e.Push.Branch != "b" || !contains(e.ReadOnly, "/ro") {
+		t.Fatalf("reloaded: %+v %v", e, ok)
+	}
+	if e.Skill != nil {
+		t.Fatal("a skill identity never survives a restart")
+	}
+	if _, ok := b.Lookup(gone); ok {
+		t.Fatal("a workspace that is gone is dropped")
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("registry file mode %v", fi.Mode())
+	}
+}
+
+// What a workspace's git files name is bound into a sandbox only inside the
+// trust limits: never the home, never a directory git did not register as
+// this worktree's, never an object store outside conductor's checkouts.
+func TestResolveGitLayoutRefusesUntrustedPointers(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	home := filepath.Join(root, "home")
+	os.MkdirAll(home, 0o700)
+	old := GitTrust
+	t.Cleanup(func() { GitTrust = old })
+	GitTrust.Home = home
+	base := filepath.Join(home, "repo")
+	git(t, root, "init", "-q", "-b", "main", base)
+	git(t, base, "commit", "-q", "--allow-empty", "-m", "x")
+	wt := filepath.Join(home, "wt")
+	git(t, base, "worktree", "add", "-q", "-b", "fix", wt)
+	other := filepath.Join(home, "wt2")
+	git(t, base, "worktree", "add", "-q", "-b", "fix2", other)
+	if _, err := ResolveGitLayout(wt); err != nil {
+		t.Fatalf("a genuine worktree: %v", err)
+	}
+	for name, ptr := range map[string]string{
+		"the home":                  home,
+		"/":                         "/",
+		"another worktree's gitdir": filepath.Join(base, ".git", "worktrees", "wt2"),
+		"the common dir itself":     filepath.Join(base, ".git"),
+	} {
+		os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+ptr+"\n"), 0o644)
+		if l, err := ResolveGitLayout(wt); !errors.Is(err, errUntrustedGit) {
+			t.Errorf("%s: pointer %s accepted: %+v %v", name, ptr, l, err)
+		}
+	}
+	// A clone whose alternates name a store outside conductor's checkouts.
+	GitTrust.ObjectRoots = []string{filepath.Join(root, "checkouts")}
+	clone := filepath.Join(root, "clone")
+	git(t, root, "init", "-q", clone)
+	alt := filepath.Join(clone, ".git", "objects", "info", "alternates")
+	for name, a := range map[string]string{
+		"another repo of the operator": filepath.Join(base, ".git", "objects"),
+		"the home":                     home,
+	} {
+		os.WriteFile(alt, []byte(a+"\n"), 0o644)
+		if l, err := ResolveGitLayout(clone); !errors.Is(err, errUntrustedGit) {
+			t.Errorf("alternates at %s accepted: %+v %v", name, l, err)
+		}
+	}
+	co := filepath.Join(root, "checkouts", "o__r")
+	git(t, root, "init", "-q", co)
+	os.WriteFile(alt, []byte(filepath.Join(co, ".git", "objects")+"\n"), 0o644)
+	if _, err := ResolveGitLayout(clone); err != nil {
+		t.Fatalf("a checkout's object store: %v", err)
+	}
+
+	// A bot worker's linked worktree of its memory repo, inside conductor's
+	// state: refused as state, accepted as a repo conductor owns.
+	state := filepath.Join(root, "state")
+	mem := filepath.Join(state, "bots", "b", "memory")
+	git(t, root, "init", "-q", "-b", "main", mem)
+	git(t, mem, "commit", "-q", "--allow-empty", "-m", "m")
+	run := filepath.Join(root, "runs", "w1")
+	git(t, mem, "worktree", "add", "-q", "-b", "w1", run)
+	GitTrust.Forbidden = []string{state}
+	if _, err := ResolveGitLayout(run); !errors.Is(err, errUntrustedGit) {
+		t.Fatalf("a common dir in conductor's state accepted: %v", err)
+	}
+	GitTrust.OwnRepos = []string{filepath.Join(state, "bots")}
+	if l, err := ResolveGitLayout(run); err != nil || l.GitDir != filepath.Join(mem, ".git") {
+		t.Fatalf("a bot memory repo's worktree: %+v %v", l, err)
+	}
+}
+
+// safeGitPath refuses a git path that is the operator's home, or a
+// directory above it, even outside the pointer/alternates flows that
+// normally shadow this check with their own earlier structural refusals.
+func TestSafeGitPathRefusesTheHomeOrAbove(t *testing.T) {
+	old := GitTrust
+	t.Cleanup(func() { GitTrust = old })
+	GitTrust.ObjectRoots = nil
+	GitTrust.Forbidden = nil
+	// Callers pass resolved paths (macOS temp dirs sit behind /var).
+	home := filepath.Join(evalOr(t.TempDir()), "home")
+	os.MkdirAll(home, 0o700)
+	GitTrust.Home = home
+	if err := safeGitPath(home); err == nil {
+		t.Fatal("the home directory itself accepted as a git path")
+	}
+	if err := safeGitPath(filepath.Dir(home)); err == nil {
+		t.Fatal("a directory above the home accepted as a git path")
+	}
+	if err := safeGitPath(filepath.Join(home, "repo", ".git")); err != nil {
+		t.Fatalf("a path inside the home refused: %v", err)
 	}
 }

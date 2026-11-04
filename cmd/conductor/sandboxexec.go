@@ -153,7 +153,7 @@ func cmdSandboxExec(args []string) int {
 	if pol.Note != "" {
 		fmt.Fprintf(os.Stderr, "conductor sandbox exec: %s\n", pol.Note)
 	}
-	launch, cleanup, err := wrapSandboxExec(pol, argv, o.bins)
+	launch, cleanup, err := wrapSandboxExec(pol, argv, o.bins, sock)
 	if err != nil {
 		return refuse("%v", err)
 	}
@@ -182,32 +182,110 @@ func sandboxExecCwd() (cwd string, agent bool, err error) {
 
 // wrapSandboxExec realizes pol around argv with this process as the host
 // side: its own allowlist proxy and model relays live as long as the agent.
-func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string) (*agentsandbox.Launch, func(), error) {
+func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string, sock string) (*agentsandbox.Launch, func(), error) {
+	rep := newEventReporter(sock)
+	event := func(kind string, f map[string]any) {
+		// A model request is on stderr only when it failed: the agent's
+		// own output is there too.
+		if st, _ := f["status"].(int); kind != "model_request" || st >= 400 {
+			fmt.Fprintf(os.Stderr, "conductor sandbox: %s %v\n", kind, f)
+		}
+		rep.send(kind, f)
+	}
 	pm := sandbox.NewProxyManager(func(_, hostport string) {
 		fmt.Fprintf(os.Stderr, "conductor sandbox: egress to %s denied (not in this agent's allowlist)\n", hostport)
+		rep.send("egress_denied", map[string]any{"target": hostport})
 	})
+	pm.OnConn = func(r sandbox.ConnRecord) {
+		if r.Outcome == "denied" { // OnDeny's
+			return
+		}
+		if r.Reason != "" {
+			fmt.Fprintf(os.Stderr, "conductor sandbox: egress %s %s: %s\n", r.Outcome, r.Target, r.Reason)
+		}
+		// Every request, as the daemon audits its own launches'.
+		f := map[string]any{"run": r.Run, "target": r.Target, "outcome": r.Outcome,
+			"up": r.Up, "down": r.Down, "duration_ms": r.Duration.Milliseconds()}
+		for k, v := range map[string]string{"sni": r.SNI, "reason": r.Reason, "allowed_by": r.AllowedBy, "shape": r.Shape, "protocol": r.Proto, "method": r.Method, "path": r.Path} {
+			if v != "" {
+				f[k] = v
+			}
+		}
+		if r.MaxIdle > 0 {
+			f["max_idle_ms"] = r.MaxIdle.Milliseconds()
+		}
+		if r.ServerFirst > 0 {
+			f["server_first"] = r.ServerFirst
+		}
+		if r.Inspected {
+			f["inspected"] = true
+		}
+		rep.send("egress", f)
+	}
 	rel, err := agentsandbox.NewRelayer()
 	if err != nil {
 		pm.Close()
+		rep.close()
 		return nil, nil, err
 	}
 	home, _ := os.UserHomeDir()
 	launch, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
-		SelfExe:    os.Executable,
-		EgressUnix: pm.UnixEndpoint,
-		EgressAddr: pm.Endpoint,
-		Relay:      rel.Relay,
-		LookPath:   exec.LookPath,
-		RealHome:   home,
-		Inherited:  os.Environ(),
-		Bins:       bins,
+		SelfExe:           os.Executable,
+		EgressUnix:        pm.UnixEndpoint,
+		EgressAddr:        pm.Endpoint,
+		EgressUnixSession: pm.UnixEndpointSession,
+		EgressAddrSession: pm.EndpointSession,
+		Event:             event,
+		Relay:             rel.Relay,
+		LookPath:          exec.LookPath,
+		RealHome:          home,
+		Inherited:         os.Environ(),
+		Bins:              bins,
 	})
 	if err != nil {
 		rel.Close()
 		pm.Close()
+		rep.close()
 		return nil, nil, err
 	}
-	return launch, func() { launch.Cleanup(); rel.Close(); pm.Close() }, nil
+	return launch, func() { launch.Cleanup(); rel.Close(); pm.Close(); rep.close() }, nil
+}
+
+// eventReporter hands a launch's events to the daemon in the background,
+// in order: the proxy and the watcher never wait on the control socket,
+// and a burst beyond its queue is dropped (it is on stderr either way).
+type eventReporter struct {
+	ch   chan controlRequest
+	done chan struct{}
+}
+
+func newEventReporter(sock string) *eventReporter {
+	r := &eventReporter{ch: make(chan controlRequest, 512), done: make(chan struct{})}
+	go func() {
+		defer close(r.done)
+		for req := range r.ch {
+			reportSandboxEvent(sock, req.Kind, req.Args)
+		}
+	}()
+	return r
+}
+
+func (r *eventReporter) send(kind string, f map[string]any) {
+	defer func() { _ = recover() }() // sent after close: dropped
+	select {
+	case r.ch <- controlRequest{Kind: kind, Args: f}:
+	default:
+	}
+}
+
+// close sends what is queued, for a few seconds at most.
+func (r *eventReporter) close() {
+	defer func() { _ = recover() }()
+	close(r.ch)
+	select {
+	case <-r.done:
+	case <-time.After(5 * time.Second):
+	}
 }
 
 // runSandboxed runs the wrapped launch in the foreground — its stdio is
@@ -225,6 +303,7 @@ func runSandboxed(l *agentsandbox.Launch) int {
 		fmt.Fprintf(os.Stderr, "conductor sandbox exec: refusing to launch: start sandbox: %v\n", err)
 		return sandboxRefused
 	}
+	agentsandbox.LaunchStarted(l.Env, cmd.Process.Pid)
 	go func() {
 		for s := range sigs {
 			_ = cmd.Process.Signal(s)
@@ -295,6 +374,24 @@ func sandboxControlSocket(o sandboxExecOpts) string {
 
 // fetchSandboxPolicy asks the daemon for this launch's policy and a fresh
 // token. Any failure is a refusal.
+// reportSandboxEvent hands a launch's containment event to the daemon for
+// its audit log (best effort: the event is on stderr either way).
+func reportSandboxEvent(sock, kind string, f map[string]any) {
+	if sock == "" {
+		return
+	}
+	conn, err := net.DialTimeout("unix", sock, 3*time.Second)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if json.NewEncoder(conn).Encode(controlRequest{Cmd: "sandbox-event", Kind: kind, Args: f}) == nil {
+		var resp controlResponse
+		_ = json.NewDecoder(conn).Decode(&resp)
+	}
+}
+
 func fetchSandboxPolicy(sock string, req controlRequest) (agentsandbox.Policy, error) {
 	conn, err := net.DialTimeout("unix", sock, 10*time.Second)
 	if err != nil {

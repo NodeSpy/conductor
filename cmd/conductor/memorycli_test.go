@@ -345,11 +345,11 @@ func TestMemoryGrantOpReadsTheTokensStepGrant(t *testing.T) {
 	if !ok {
 		t.Fatal("no identity")
 	}
-	tok, err := b.MintSession(id, uint32(os.Getuid()), skill.SessionTTL)
+	tok, err := b.MintSessionUID(id, uint32(os.Getuid()), skill.SessionTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	open, err := b.MintSession(skill.Identity{Agent: "x", Repo: "acme/api", TargetTrusted: true,
+	open, err := b.MintSessionUID(skill.Identity{Agent: "x", Repo: "acme/api", TargetTrusted: true,
 		Policy: config.SkillPolicy{Verbs: []string{"memory.remember"}}}, uint32(os.Getuid()), skill.SessionTTL)
 	if err != nil {
 		t.Fatal(err)

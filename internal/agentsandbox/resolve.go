@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
+	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
 
@@ -26,9 +28,12 @@ type Resolver struct {
 	Egress []string
 	// Socket is the conductor skill socket ("" = none served).
 	Socket string
-	// Mint registers a fresh session token for an identity ("" + nil error
-	// when tokens are not available here).
-	Mint func(id skill.Identity) (string, error)
+	// Mint registers a fresh session token for an identity, bound to root's
+	// process tree (rt2 #12) — root is the pid on the other end of the
+	// `conductor sandbox exec` control connection that asked for this
+	// policy, whose descendants are the sandboxed agent and everything it
+	// spawns. ("" + nil error when tokens are not available here.)
+	Mint func(id skill.Identity, root skill.ProcessAnchor) (string, error)
 	// GitName / GitEmail are the operator's git identity for the agent's
 	// commits.
 	GitName, GitEmail string
@@ -39,6 +44,30 @@ type Resolver struct {
 	// GoPrefetch is sandbox.prefetch: [go] (nil: off): every launch sees its
 	// module cache read-only and runs Go offline.
 	GoPrefetch *GoPrefetch
+	// PosixIPC is sandbox.macos_posix_ipc.
+	PosixIPC bool
+	// ModelCredential is sandbox.model_credential (Policy.ModelCredential).
+	ModelCredential string
+	// Detect is sandbox.detect (Policy.Detect).
+	Detect DetectSpec
+	// Limits is sandbox.limits (Policy.Limits).
+	Limits LimitSpec
+	// Persist is sandbox.persist ("" = PersistNone).
+	Persist string
+	// Inspect is sandbox.inspect (Policy.Inspect).
+	Inspect []sandbox.InspectHost
+	// EgressAnyBytes / EgressIdle / EgressUpload / EgressDownload are the
+	// egress session settings every policy carries (Policy).
+	EgressAnyBytes                           bool
+	EgressIdle, EgressUpload, EgressDownload int64
+	// ModelUpload / ModelDownload are the model gateway's caps (Policy).
+	ModelUpload, ModelDownload int64
+	// Allow is sandbox.allow: the base allowance of every launch, joined by
+	// each entry's own scope.
+	Allow *Allowance
+	// Rescope recomputes a workspace's recorded scope from the live config
+	// (nil: the recorded scope as is).
+	Rescope func(*Scope) *Scope
 	// Session resolves a cwd that is NOT in the registry to a live bot
 	// session's entry (its identity, its granted skill verbs, its read-only
 	// paths), consulted before a default workspace is built. This is how a
@@ -68,12 +97,17 @@ func (r *Resolver) registry() *Registry {
 // provider's models from its daemon's cwd). A cwd that may not be a
 // workspace (the home, /, conductor's state) then gets the tool's scratch
 // workspace instead of a refusal.
-func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK bool) (Policy, error) {
+//
+// root anchors any token this policy mints to the process tree that asked
+// for it (rt2 #12) — the pid on the other end of the control connection
+// (zero value: the caller has no such peer to anchor to, e.g. tests; Mint
+// then refuses per MintSession's own contract).
+func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK bool, root skill.ProcessAnchor) (Policy, error) {
 	if !filepath.IsAbs(cwd) {
 		return Policy{}, fmt.Errorf("agentsandbox: cwd %q is not absolute", cwd)
 	}
 	if e, ok := r.registry().Lookup(cwd); ok {
-		return r.policyForCwd(e, cwd, tool, launcherEnv)
+		return r.policyForCwd(e, cwd, tool, launcherEnv, root)
 	}
 	// A bot session's cwd is not registered as a worktree (it is a pinned
 	// paseo workspace): resolve it to the bot's entry before falling to a
@@ -83,7 +117,7 @@ func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK b
 			if e.Workspace == "" {
 				e.Workspace = canon(cwd)
 			}
-			return r.policyForCwd(e, cwd, tool, launcherEnv)
+			return r.policyForCwd(e, cwd, tool, launcherEnv, root)
 		}
 	}
 	ws := canon(cwd)
@@ -95,18 +129,18 @@ func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK b
 		if serr != nil {
 			return Policy{}, serr
 		}
-		p, perr := r.PolicyForEntry(e, tool, launcherEnv)
+		p, perr := r.PolicyForEntry(e, tool, launcherEnv, root)
 		p.Note = fmt.Sprintf("%v — running in the %s scratch workspace %s instead", err, e.Identity, e.Workspace)
 		return p, perr
 	}
-	return r.PolicyForEntry(DefaultEntry(ws), tool, launcherEnv)
+	return r.PolicyForEntry(DefaultEntry(ws), tool, launcherEnv, root)
 }
 
 // policyForCwd builds the policy for an entry whose workspace is the launch's
 // own cwd — a registered workspace, or a live bot session. The agent starts
 // where it was started, inside its workspace.
-func (r *Resolver) policyForCwd(e Entry, cwd, tool string, launcherEnv []string) (Policy, error) {
-	p, err := r.PolicyForEntry(e, tool, launcherEnv)
+func (r *Resolver) policyForCwd(e Entry, cwd, tool string, launcherEnv []string, root skill.ProcessAnchor) (Policy, error) {
+	p, err := r.PolicyForEntry(e, tool, launcherEnv, root)
 	p.Cwd = canon(cwd)
 	if err == nil && p.Tool == "claude-code" && e.Dispatch != "" && p.Cwd != p.Workspace {
 		err = trustClaudeWorkspace(p.Home, p.Cwd)
@@ -166,8 +200,11 @@ func (r *Resolver) defaultAllowed(ws string) error {
 
 // PolicyForEntry builds the policy for a launch in e's workspace: the
 // identity home prepared (created, seeded once), the egress allowlist and
-// relays, and a freshly minted token.
-func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (Policy, error) {
+// relays, and a freshly minted token bound to root's process tree (root may
+// be the zero value when the caller mints its token some other way —
+// internal/controller/agentsandbox.go's prepareAgentSandbox passes
+// e.Skill == nil instead, so Mint is never reached on that path at all).
+func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, root skill.ProcessAnchor) (Policy, error) {
 	if e.Tool != "" {
 		tool = e.Tool
 	}
@@ -175,9 +212,22 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 	if e.Identity == "" {
 		return Policy{}, fmt.Errorf("agentsandbox: workspace %s has no identity", e.Workspace)
 	}
+	r.maybeSweep()
+	scope := e.Scope
+	if r.Rescope != nil {
+		// What the scope's config says now, not what it said when the
+		// workspace was recorded.
+		scope = r.Rescope(scope)
+	}
+	persist := r.Persist
+	if scope != nil && scope.Persist != "" {
+		persist = scope.Persist
+	}
+	homeRoot, homeKey := r.homeFor(e, persist)
 	home, logins, err := PrepareHome(HomeSpec{
-		Root: r.StateRoot, Key: e.Identity, Tool: tool, RealHome: r.RealHome,
+		Root: homeRoot, Key: homeKey, Tool: tool, RealHome: r.RealHome,
 		GitName: r.GitName, GitEmail: r.GitEmail, GOOS: r.GOOS,
+		ShareLogins: r.ModelCredential == CredLoginShare,
 	})
 	if err != nil {
 		return Policy{}, err
@@ -196,10 +246,32 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 			return Policy{}, fmt.Errorf("agentsandbox: trust the workspace in %s: %w", home, err)
 		}
 	}
+	var modelHosts []string
+	for _, h := range hosts {
+		if !slices.Contains(r.Egress, h) && !slices.Contains(e.Egress, h) {
+			modelHosts = append(modelHosts, h)
+		}
+	}
 	p := Policy{
+		ModelCredential: r.ModelCredential, ModelHosts: modelHosts, Detect: r.Detect, Limits: r.Limits,
 		Identity: e.Identity, Tool: tool, Workspace: e.Workspace, Home: home, Logins: logins,
 		Egress: egress, Loopback: loopback,
 		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env,
+		GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
+		PosixIPC: r.PosixIPC,
+		Run:      e.Dispatch, EgressAnyBytes: r.EgressAnyBytes, EgressIdle: r.EgressIdle,
+		EgressUpload: r.EgressUpload, EgressDownload: r.EgressDownload,
+		ModelUpload: r.ModelUpload, ModelDownload: r.ModelDownload,
+	}
+	p.ModelRoute = hosts
+	for _, h := range r.Inspect {
+		p.Inspect = appendInspect(p.Inspect, h)
+	}
+	applyScope(&p, r.Allow, scope)
+	if cache, err := r.persistCache(e, home, persist); err != nil {
+		return Policy{}, fmt.Errorf("agentsandbox: identity cache: %w", err)
+	} else if cache != "" {
+		p.ReadWrite = append(append([]string(nil), p.ReadWrite...), cache)
 	}
 	if g := r.GoPrefetch; g != nil {
 		p.ReadOnly = append(append([]string(nil), p.ReadOnly...), g.Cache)
@@ -214,7 +286,7 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 				Deny: append(append([]string(nil), e.ReadOnly...), e.Hide...),
 			}
 		}
-		tok, err := r.Mint(id)
+		tok, err := r.Mint(id, root)
 		if err != nil {
 			return Policy{}, fmt.Errorf("agentsandbox: mint token: %w", err)
 		}

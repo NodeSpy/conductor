@@ -119,6 +119,7 @@ var pathCases = []struct {
 	{"DashboardBind.KeyFile", "dashboard: { bind: [ { key_file: ~/tls/k.pem } ] }", func(c *Config) string { return c.Dashboard.Bind[0].KeyFile }},
 	{"DashboardCert.CertFile", "dashboard: { tailscale: { cert: { cert_file: ~/ts/c.pem, key_file: ~/ts/k.pem } } }", func(c *Config) string { return c.Dashboard.Tailscale.Cert.CertFile }},
 	{"DashboardCert.KeyFile", "dashboard: { tailscale: { cert: { cert_file: ~/ts/c.pem, key_file: ~/ts/k.pem } } }", func(c *Config) string { return c.Dashboard.Tailscale.Cert.KeyFile }},
+	{"InspectEntry.CA", "sandbox: { inspect: [{ host: npm.lan, ca: ~/lan-ca.pem }] }", func(c *Config) string { return c.Sandbox.Inspect[0].CA }},
 	{"BrowserConfig.Chrome", "browser: { chrome: ~/bin/chromium }", func(c *Config) string { return c.Browser.Chrome }},
 	{"BrowserMailbox.CAFile", "browser: { mailboxes: { m: { ca_file: ~/ca.pem } } }", func(c *Config) string { return c.Browser.Mailboxes["m"].CAFile }},
 	{"RuntimeConfig.Bin", "runtimes: { r: { use: paseo, bin: ~/bin/paseo } }", func(c *Config) string { return c.Runtimes["r"].Bin }},
