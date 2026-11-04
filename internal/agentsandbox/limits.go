@@ -52,7 +52,7 @@ type LimitSpec struct {
 
 // limitsAvailable reports whether this box can run a launch in a systemd
 // user scope (a var for tests).
-var limitsAvailable = func(goos string) bool { return goos == "linux" && systemdUserBusAvailable() }
+var limitsAvailable = func(goos string) bool { return goos == "linux" && sandbox.ScopeAvailable() }
 
 var limitsWarned sync.Once
 

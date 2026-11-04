@@ -33,7 +33,7 @@ What the agent sees:
 | `HOME` | its **identity's** tool state, read-write: `<state>/agent-state/<identity>/` — `~/.claude`, `~/.codex`, … — created before the launch and seeded once from your settings for the tool (never your history: `~/.claude.json`'s per-project history is dropped; nor your claude-code plugins: `settings.json`'s `enabledPlugins`, `extraKnownMarketplaces`, `pluginConfigs`, `appendPlugins` and `prependPlugins` are dropped, since the identity home has no marketplace checkout and a launch would try to clone one through the egress proxy). Your model key never enters it (the model gateway, below); a subscription login is a copy without its refresh token. By default the home is fresh for each dispatch (`sandbox.persist`). |
 | the conductor socket | the socket file only (never the state dir it lives in), with a token minted for this launch — so `conductor call step.done` / `git.push` work |
 | the base system | `/usr`, `/etc`, `/opt` (Linux) / the system paths (macOS), read-only; the agent CLI's own install, wherever it is |
-| the network | **none of its own.** Its model is conductor's model gateway, relayed in on loopback; everything else goes through conductor's allowlist proxy: `sandbox.egress` (and the provider hosts of a model the gateway does not carry), TLS only, per-launch caps. A model endpoint on your host's loopback (a local router, a local Ollama) is reached through the gateway, or relayed in at the same address when the gateway does not carry it. |
+| the network | **none of its own.** Its model is conductor's model gateway, relayed in on loopback; everything else goes through conductor's allowlist proxy: any public host on :443 by default (`sandbox.egress_open`), `sandbox.egress` (and the provider hosts of a model the gateway does not carry), TLS only, per-launch caps. A model endpoint on your host's loopback (a local router, a local Ollama) is reached through the gateway, or relayed in at the same address when the gateway does not carry it. |
 | the environment | a minimal one: `PATH`, locale, terminal, the gateway's URL and a per-launch token in place of the model key, your git name/email. No `GH_TOKEN`, `SSH_AUTH_SOCK`, cloud keys, or a launcher's own tokens. |
 | everything else | **absent** — your `~/.ssh`, `~/.aws`, `~/.config/gh`, other projects, conductor's state and config. Nothing is denied by a list: what is not shown is not there. |
 
@@ -178,8 +178,8 @@ emails. conductor does not touch your account settings.
 ```yaml
 sandbox:
   agents: on                       # default; `off` is the explicit opt-out (logged at boot)
-  egress: [registry.npmjs.org, proxy.golang.org]   # beyond the model endpoints
-  prefetch: [go]                   # Go modules fetched on the host, not by the agent (below)
+  # egress_open: true              # default: any public host on :443; false = model endpoints + egress only
+  egress: ["git.corp.lan:8443"]   # added to that (private hosts need an exact entry)
   # state_dir: ~/.local/state/conductor/agent-state   # the identity homes
   push:
     signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh)
@@ -218,54 +218,19 @@ sandbox:
 What each of these protects, and what loosening it gives up, is in
 [Containment and detection](#containment-and-detection) below.
 
-**Go without an allowlist (`prefetch: [go]`).** Allowlisting
-`proxy.golang.org` is not enough: the proxy answers many module downloads
-with a redirect to `storage.googleapis.com`, and allowlisting that host opens
-every Cloud Storage bucket to the agent. With `prefetch: [go]`, conductor
-downloads instead, on the host:
+**Package registries.** Conductor does not know about package managers. An
+agent that builds or tests downloads what it needs itself, through the egress
+proxy. By default (`egress_open: true`) every agent may reach any public
+host on :443; private, loopback and metadata addresses need an exact
+`egress` entry. `egress_open: false` limits agents to the model endpoints and
+the `egress` patterns; `egress_only:` narrows one workflow, trigger or step.
 
-- when it registers a dispatch's checkout — before the agent runs — it reads
-  the module files (`go.work`, `go.work.sum`, and the `go.mod`/`go.sum` of
-  every module the workspace uses or a local `replace` points at; regular
-  files inside the checkout only) into a temp dir of its own and runs
-  `go mod download` there, into `<state_dir>/.go-modcache` — one cache,
-  **shared by every identity**;
-- that download itself runs **confined**: the same namespace jail a code step
-  gets, with the module cache the one writable path outside its own scratch
-  dir and the network cut to exactly `proxy.golang.org` (never `direct`, so
-  no VCS runs against a module path a `go.mod` names, and never the
-  operator's own module cache as a `file://` layer — this ONE cache is
-  shared by every identity, and a `file://` layer onto the operator's own
-  `$GOMODCACHE` would pull whatever private modules it holds into it,
-  available to every identity from then on). `GOTOOLCHAIN=auto`, checksum-
-  database verification on, none of the daemon's environment beyond `PATH`
-  and HTTP-proxy/CA settings, and none of the operator's real `$HOME`. If
-  this box can't build the jail (no `unshare`, for instance), the prefetch is
-  skipped with a log line — it never falls back to an unconfined download;
-- when the module files ask for a newer Go than the host's (a `go` or
-  `toolchain` line in `go.work` or `go.mod`), the download fetches that
-  toolchain too: Go downloads it as the module
-  `golang.org/toolchain@v0.0.1-go<version>.<os>-<arch>` into the same cache,
-  verified against the checksum database through `proxy.golang.org`. Then,
-  in the same jail, conductor asks which `GOROOT` the module files select
-  (`go env GOROOT`) and records it for that workspace. A toolchain is about
-  300 MB in the cache, once per Go version;
-- every sandboxed agent sees that cache **read-only** (an agent cannot plant
-  a symlink for the host's `go` to write through) with `GOMODCACHE` pointing
-  at it and `GOPROXY=off`, `GOSUMDB=off`, `GOTOOLCHAIN=local`. Its Go builds
-  and tests offline; no Go host goes in `egress`. When the prefetch recorded
-  a toolchain for the workspace, that toolchain's `bin` comes first on the
-  launch's `PATH`. Its `go` is the version the module files ask for and
-  needs no switching. This is decided per launch and per workspace, so two
-  repos can use two different toolchains.
-
-A set of module files already downloaded is skipped (a few milliseconds); a
-failed download is logged and the launch runs anyway. That includes a
-toolchain that can't be fetched: the log line carries Go's own message
-(`go.work requires go >= …`), and the agent runs with the host's `go`. A module the agent adds
-itself is not fetched — its `go get` fails offline, by design — and a target
-the event's sender chose is never prefetched for (its agent runs with what the
-cache already holds).
+`sandbox.prefetch` was removed: conductor no longer downloads packages for an
+agent. A config that still sets it loads, with a warning, and the field is
+ignored. A module cache an earlier version left at
+`<state_dir>/.go-modcache` is no longer used; Go makes its files read-only,
+so delete it with `go clean -modcache` (`GOMODCACHE` set to that dir) or
+`chmod -R u+w` first.
 
 Per runtime, workflow, trigger or step, an `isolation:` block keeps working
 (most specific wins: step → workflow/trigger → runtime): `mode: none` runs that
@@ -530,7 +495,7 @@ trusts what is in a repository's `.git`; conductor's does not:
   fixer work on CI itself. Turn it on only as an extra tripwire; the controls
   that matter are your CI's own (secrets not exposed to branch pipelines,
   required review before workflows run).
-- **Untrusted targets.** Conductor never checks out, prefetches for or pushes
+- **Untrusted targets.** Conductor never checks out or pushes
   to a repository the event's *sender* chose. A dispatch's repository comes
   from the platform's own assignment or the step's `repo:`, never from a
   webhook body.
@@ -891,7 +856,7 @@ agent-authored workflow's knobs are ignored, and a pack may only tighten
 
 | knob | default | global key (`sandbox.`) | per-scope key (`isolation.`) | tighten | loosen | a pack may |
 |---|---|---|---|---|---|---|
-| egress allowlist | model hosts only | `egress` | `egress_only` replaces it; `network.egress` (with `mode: namespace`) adds | yes | yes | narrow only: an `egress_only` on a pack's trigger, workflow or step (an operator overlay on that step included) is intersected with what it inherits |
+| egress allowlist | model hosts + any public host on :443 | `egress`, `egress_open` | `egress_only` replaces it; `network.egress` (with `mode: namespace`) adds | yes | yes | narrow only: an `egress_only` on a pack's trigger, workflow or step (an operator overlay on that step included) is intersected with what it inherits |
 | protocol check | on | `egress_protocol_check` | `egress_protocol_check` | yes | yes | no `false` |
 | TLS inspection (enforce `https://` paths) | none | `inspect` | `inspect` (adds to the global list) | — | yes | no |
 | raw (unchecked) targets | none | `allow.raw` | `allow.raw` (adds to the base) | keep the base empty | yes | by a granted request |
@@ -925,7 +890,7 @@ A locked-down workflow: one registry, small caps, kill on any detection.
 workflows:
   dependency-bump:
     isolation:
-      egress_only: [registry.npmjs.org]    # replaces sandbox.egress; the model is still reached
+      egress_only: [registry.npmjs.org]    # replaces the open default and sandbox.egress; the model is still reached
       limits: { memory: 4G, pids: 1024, cpu: 200%, cpu_weight: 50 }
       detect: { action: kill, tripwires: true, interval: 1s, connections: close }
       egress_limits: { upload: 64MiB, download: 2GiB }

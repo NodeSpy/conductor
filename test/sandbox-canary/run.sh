@@ -44,6 +44,7 @@ store:
   state_file: $W/st/state.json
   audit_log: $W/st/audit.jsonl
 sandbox:
+  egress_open: false     # the allowlist itself is what this canary checks
   egress: ["example.org"]
 EOF
 echo "DECOY-state" > "$W/st/secret.json"

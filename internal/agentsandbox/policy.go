@@ -63,9 +63,6 @@ type Policy struct {
 	GitWorktree string `json:"git_worktree,omitempty"`
 	// Env are extra KEY=VALUE variables for the agent (its git identity).
 	Env []string `json:"env,omitempty"`
-	// PathFirst are directories put before the inherited PATH (the Go
-	// toolchain the workspace's module files select, GoPrefetch.Apply).
-	PathFirst []string `json:"path_first,omitempty"`
 	// PosixIPC (macOS) allows POSIX shared memory and semaphores
 	// (sandbox.macos_posix_ipc).
 	PosixIPC bool `json:"posix_ipc,omitempty"`

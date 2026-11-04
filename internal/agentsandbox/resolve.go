@@ -41,9 +41,6 @@ type Resolver struct {
 	Env []string
 	// GOOS is the platform the launch runs on.
 	GOOS string
-	// GoPrefetch is sandbox.prefetch: [go] (nil: off): every launch sees its
-	// module cache read-only and runs Go offline.
-	GoPrefetch *GoPrefetch
 	// PosixIPC is sandbox.macos_posix_ipc.
 	PosixIPC bool
 	// ModelCredential is sandbox.model_credential (Policy.ModelCredential).
@@ -272,9 +269,6 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		return Policy{}, fmt.Errorf("agentsandbox: identity cache: %w", err)
 	} else if cache != "" {
 		p.ReadWrite = append(append([]string(nil), p.ReadWrite...), cache)
-	}
-	if g := r.GoPrefetch; g != nil {
-		g.Apply(&p, e.Workspace)
 	}
 	if r.Socket != "" && e.Skill != nil && r.Mint != nil {
 		id := *e.Skill
