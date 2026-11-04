@@ -274,8 +274,7 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		p.ReadWrite = append(append([]string(nil), p.ReadWrite...), cache)
 	}
 	if g := r.GoPrefetch; g != nil {
-		p.ReadOnly = append(append([]string(nil), p.ReadOnly...), g.Cache)
-		p.Env = append(append([]string(nil), p.Env...), g.AgentEnv()...)
+		g.Apply(&p, e.Workspace)
 	}
 	if r.Socket != "" && e.Skill != nil && r.Mint != nil {
 		id := *e.Skill

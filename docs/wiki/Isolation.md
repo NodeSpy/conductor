@@ -237,18 +237,32 @@ downloads instead, on the host:
   operator's own module cache as a `file://` layer — this ONE cache is
   shared by every identity, and a `file://` layer onto the operator's own
   `$GOMODCACHE` would pull whatever private modules it holds into it,
-  available to every identity from then on). `GOTOOLCHAIN=local`, checksum-
+  available to every identity from then on). `GOTOOLCHAIN=auto`, checksum-
   database verification on, none of the daemon's environment beyond `PATH`
   and HTTP-proxy/CA settings, and none of the operator's real `$HOME`. If
   this box can't build the jail (no `unshare`, for instance), the prefetch is
   skipped with a log line — it never falls back to an unconfined download;
+- when the module files ask for a newer Go than the host's (a `go` or
+  `toolchain` line in `go.work` or `go.mod`), the download fetches that
+  toolchain too: Go downloads it as the module
+  `golang.org/toolchain@v0.0.1-go<version>.<os>-<arch>` into the same cache,
+  verified against the checksum database through `proxy.golang.org`. Then,
+  in the same jail, conductor asks which `GOROOT` the module files select
+  (`go env GOROOT`) and records it for that workspace. A toolchain is about
+  300 MB in the cache, once per Go version;
 - every sandboxed agent sees that cache **read-only** (an agent cannot plant
   a symlink for the host's `go` to write through) with `GOMODCACHE` pointing
   at it and `GOPROXY=off`, `GOSUMDB=off`, `GOTOOLCHAIN=local`. Its Go builds
-  and tests offline; no Go host goes in `egress`.
+  and tests offline; no Go host goes in `egress`. When the prefetch recorded
+  a toolchain for the workspace, that toolchain's `bin` comes first on the
+  launch's `PATH`. Its `go` is the version the module files ask for and
+  needs no switching. This is decided per launch and per workspace, so two
+  repos can use two different toolchains.
 
 A set of module files already downloaded is skipped (a few milliseconds); a
-failed download is logged and the launch runs anyway. A module the agent adds
+failed download is logged and the launch runs anyway. That includes a
+toolchain that can't be fetched: the log line carries Go's own message
+(`go.work requires go >= …`), and the agent runs with the host's `go`. A module the agent adds
 itself is not fetched — its `go get` fails offline, by design — and a target
 the event's sender chose is never prefetched for (its agent runs with what the
 cache already holds).
