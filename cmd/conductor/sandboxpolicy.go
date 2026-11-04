@@ -138,13 +138,13 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	}
 	if cfg.Sandbox != nil && cfg.Sandbox.Limits != nil {
 		l := cfg.Sandbox.Limits
-		r.Limits = agentsandbox.LimitSpec{Off: l.Off, Memory: l.Memory, Pids: l.Pids, Required: l.Required}
+		r.Limits = agentsandbox.LimitSpec{Off: l.Off, Memory: l.Memory, Pids: l.Pids, CPU: l.CPU, CPUWeight: l.CPUWeight, Required: l.Required}
 	}
 	r.Limits.DiskFreeFrac, r.Limits.DiskFreeBytes, r.Limits.DiskOff = cfg.Sandbox.DiskFreeMin()
 	r.Persist = cfg.Sandbox.PersistMode()
 	if !r.Limits.Off {
 		// All agents together: the slice their launch scopes run in.
-		if err := capAgentSlice(runtime.GOOS, cfg.Sandbox.AggregateMemory()); err != nil {
+		if err := capAgentSlice(runtime.GOOS, cfg.Sandbox.AggregateMemory(), cfg.Sandbox.AggregateCPU()); err != nil {
 			logf("agent sandbox: limits: %v (each launch keeps its own cap)", err)
 		}
 	}

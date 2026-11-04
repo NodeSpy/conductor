@@ -483,6 +483,20 @@ type IsolationConfig struct {
 	// EgressLimits override sandbox.egress_limits, field by field, for this
 	// scope's agent launches.
 	EgressLimits *SandboxEgressLimits `yaml:"egress_limits,omitempty"`
+	// EgressOnly is this scope's agent egress, exactly: these entries and
+	// the model endpoints, nothing inherited (sandbox.egress, an outer
+	// scope's network.egress, sandbox.allow's tunnel hosts). [] is the
+	// model alone. A pack's narrows only: an entry the inherited allowlist
+	// does not cover is dropped.
+	EgressOnly *[]string `yaml:"egress_only,omitempty"`
+	// EgressProtocolCheck overrides sandbox.egress_protocol_check for this
+	// scope's agent launches.
+	EgressProtocolCheck *bool `yaml:"egress_protocol_check,omitempty"`
+	// Persist overrides sandbox.persist (none | cache | home) for this
+	// scope's agent launches.
+	Persist string `yaml:"persist,omitempty"`
+	// EgressOnlyNarrow marks a pack's egress_only (set at pack load).
+	EgressOnlyNarrow bool `yaml:"-"`
 }
 
 // ContainerIsolation configures isolation mode: container.
@@ -498,7 +512,12 @@ type ContainerIsolation struct {
 type IsolationLimits struct {
 	Memory string `yaml:"memory,omitempty"` // e.g. "2g" (systemd MemoryMax / engine --memory)
 	CPU    string `yaml:"cpu,omitempty"`    // e.g. "200%" (CPUQuota) or "2" (--cpus)
-	Pids   int    `yaml:"pids,omitempty"`   // TasksMax / --pids-limit
+	// CPUWeight is an agent launch scope's CPUWeight (1–10000; systemd's
+	// default 100): its share against the other agent launches.
+	CPUWeight int `yaml:"cpu_weight,omitempty"`
+	// DiskFreeMin overrides sandbox.limits.disk_free_min for agent launches.
+	DiskFreeMin string `yaml:"disk_free_min,omitempty"`
+	Pids        int    `yaml:"pids,omitempty"` // TasksMax / --pids-limit
 }
 
 // IsolationNetwork is the egress policy for one isolation scope.

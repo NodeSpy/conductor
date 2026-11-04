@@ -55,6 +55,24 @@ func TestDispatchHomesAreEphemeral(t *testing.T) {
 		t.Fatalf("cache links %q %q (%v %v), rw %v", l1, l2, err1, err2, c1.ReadWrite)
 	}
 
+	// A scope's persist wins over sandbox.persist, either way.
+	r.Persist = PersistNone
+	scoped := func(dispatch, persist string) Policy {
+		t.Helper()
+		p, err := r.PolicyForEntry(Entry{Workspace: ws, Identity: "agent:fixer@acme/app", Dispatch: dispatch, Scope: &Scope{Persist: persist}}, "claude", nil, skill.ProcessAnchor{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if h := scoped("run6:fix", PersistHome).Home; h != bot.Home {
+		t.Fatalf("a scope's persist: home over none: %s", h)
+	}
+	r.Persist = PersistHome
+	if h := scoped("run7:fix", PersistNone).Home; h == bot.Home {
+		t.Fatal("a scope's persist: none over home kept the identity's home")
+	}
+
 	// The sweep removes an ended session's home once it is old, never a
 	// live one.
 	r.Persist = PersistNone

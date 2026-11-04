@@ -53,6 +53,26 @@ func TestSandboxScope(t *testing.T) {
 	if r := Rescope(capsOnly, config.ScopeSources{}); r == nil || r.Pids != 100 {
 		t.Fatalf("rescoped caps: %+v", r)
 	}
+	// Every knob reaches the scope, and a recorded one keeps it.
+	no := false
+	iso := &config.IsolationConfig{
+		EgressOnly: &[]string{"registry.lan:443"}, EgressOnlyNarrow: true, EgressProtocolCheck: &no, Persist: "cache",
+		Limits: &config.IsolationLimits{CPU: "150%", CPUWeight: 50, DiskFreeMin: "10GiB"},
+		Detect: &config.IsolationDetect{Interval: "1s", Connections: "close", Origin: "workflow w"},
+	}
+	k := SandboxScope(Request{Step: config.Step{Isolation: iso}})
+	if k == nil || !k.EgressOnlySet || !k.EgressOnlyNarrow || k.EgressOnly[0] != "registry.lan:443" || *k.ProtocolCheck || k.Persist != "cache" ||
+		k.CPU != "150%" || k.CPUWeight != 50 || !k.DiskSet || k.DiskFreeBytes != 10<<30 || k.DetectInterval != 1e9 || k.Connections != "close" {
+		t.Fatalf("knobs: %+v", k)
+	}
+	r := Rescope(k, config.ScopeSources{Sites: map[string]*config.IsolationConfig{"workflow w": iso}})
+	if r == nil || r.Persist != "cache" || !r.EgressOnlySet || r.Connections != "close" || r.CPU != "150%" {
+		t.Fatalf("rescoped knobs: %+v", r)
+	}
+	// With a mode, cpu is the wrapper's own.
+	if m := SandboxScope(Request{Step: config.Step{Isolation: &config.IsolationConfig{Mode: "namespace", Limits: &config.IsolationLimits{CPU: "2"}}}}); m != nil && m.CPU != "" {
+		t.Fatalf("a mode's cpu reached the agent scope: %+v", m)
+	}
 }
 
 // A recorded scope is what its config says now: recomputed from the scopes

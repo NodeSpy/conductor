@@ -37,6 +37,10 @@ type LimitSpec struct {
 	Memory string `json:"memory,omitempty"`
 	// Pids caps tasks; 0 = DefaultLimitPids.
 	Pids int `json:"pids,omitempty"`
+	// CPU is a CPUQuota ("200%"; "" = none); CPUWeight the scope's
+	// CPUWeight (0 = systemd's default).
+	CPU       string `json:"cpu,omitempty"`
+	CPUWeight int    `json:"cpu_weight,omitempty"`
 	// Required: refuse the launch when the limits cannot be applied.
 	Required bool `json:"required,omitempty"`
 	// DiskFreeBytes / DiskFreeFrac: the free space the disk guard keeps
@@ -70,6 +74,7 @@ func applyLimits(spec *sandbox.Spec, l LimitSpec, goos string, event func(string
 		return nil
 	}
 	spec.Memory, spec.Pids, spec.Slice, spec.Unit = l.Memory, l.Pids, AgentSlice, scopeUnitName()
+	spec.CPU, spec.CPUWeight = l.CPU, l.CPUWeight
 	if spec.Memory == "" {
 		spec.Memory = DefaultLimitMemory
 	}
@@ -123,16 +128,24 @@ func humanBytes(b uint64) string {
 	return fmt.Sprintf("%.1f%ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
-// CapAgentSlice sets the cap on all agent launches together: the memory
-// of the slice their scopes run in (sandbox.limits.aggregate_memory). A
-// no-op where the limits do not apply.
-func CapAgentSlice(goos, memory string) error {
-	if goos != "linux" || memory == "" || !limitsAvailable(goos) {
+// CapAgentSlice sets the caps on all agent launches together: the memory
+// and CPU quota of the slice their scopes run in
+// (sandbox.limits.aggregate_memory, aggregate_cpu; "" leaves one as it
+// is). A no-op where the limits do not apply.
+func CapAgentSlice(goos, memory, cpu string) error {
+	if goos != "linux" || (memory == "" && cpu == "") || !limitsAvailable(goos) {
 		return nil
+	}
+	props := []string{"--user", "set-property", "--runtime", AgentSlice}
+	if memory != "" {
+		props = append(props, "MemoryMax="+memory)
+	}
+	if cpu != "" {
+		props = append(props, "CPUQuota="+cpu)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "systemctl", "--user", "set-property", "--runtime", AgentSlice, "MemoryMax="+memory).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "systemctl", props...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("cap %s: %v: %s", AgentSlice, err, strings.TrimSpace(string(out)))
 	}

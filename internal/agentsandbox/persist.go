@@ -35,10 +35,10 @@ const cacheRoots = ".caches"
 // DispatchHomeTTL is how long a per-dispatch home outlives its session.
 var DispatchHomeTTL = 24 * time.Hour
 
-// homeFor is where e's home lives: the identity's own, or one of the
-// dispatch's.
-func (r *Resolver) homeFor(e Entry) (root, key string) {
-	if r.Persist == PersistHome || e.Dispatch == "" {
+// homeFor is where e's home lives under persist (sandbox.persist, or its
+// scope's): the identity's own, or one of the dispatch's.
+func (r *Resolver) homeFor(e Entry, persist string) (root, key string) {
+	if persist == PersistHome || e.Dispatch == "" {
 		return r.StateRoot, e.Identity
 	}
 	return filepath.Join(r.StateRoot, dispatchHomes), e.Identity + "@" + e.Dispatch
@@ -47,8 +47,8 @@ func (r *Resolver) homeFor(e Entry) (root, key string) {
 // persistCache links the identity's persisted cache into a per-dispatch
 // home (persist: cache) and returns the directory the launch must see
 // read-write ("" = none).
-func (r *Resolver) persistCache(e Entry, home string) (string, error) {
-	if r.Persist != PersistCache || e.Dispatch == "" {
+func (r *Resolver) persistCache(e Entry, home, persist string) (string, error) {
+	if persist != PersistCache || e.Dispatch == "" {
 		return "", nil
 	}
 	dir := filepath.Join(r.StateRoot, cacheRoots, IdentityKey(e.Identity))

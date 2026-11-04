@@ -2,6 +2,7 @@ package agentsandbox
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -50,6 +51,11 @@ func TestWrapRunsAgentsUnderDefaultLimits(t *testing.T) {
 	l, _ = Wrap(f.pol, []string{"claude"}, f.deps)
 	if j := strings.Join(l.Argv, " "); !strings.Contains(j, "MemoryMax=4G -p TasksMax=100") {
 		t.Fatalf("operator's limits: %s", j)
+	}
+	f.pol.Limits = LimitSpec{CPU: "150%", CPUWeight: 50}
+	l, _ = Wrap(f.pol, []string{"claude"}, f.deps)
+	if j := strings.Join(l.Argv, " "); !strings.Contains(j, "-p CPUQuota=150%") || !strings.Contains(j, "-p CPUWeight=50") {
+		t.Fatalf("cpu caps: %s", j)
 	}
 	f.pol.Limits = LimitSpec{Off: true}
 	l, _ = Wrap(f.pol, []string{"claude"}, f.deps)
@@ -129,4 +135,32 @@ func TestDiskGuard(t *testing.T) {
 		t.Fatalf("killed %v events %v", killed, events)
 	}
 	_ = sandbox.Spec{}
+}
+
+// The aggregate caps reach the agent slice as one set-property call, through
+// a stand-in systemctl.
+func TestCapAgentSliceSetsMemoryAndCPU(t *testing.T) {
+	old := limitsAvailable
+	limitsAvailable = func(string) bool { return true }
+	t.Cleanup(func() { limitsAvailable = old })
+	dir := t.TempDir()
+	log := filepath.Join(dir, "argv")
+	stub := "#!/bin/sh\necho \"$@\" > " + log + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	if err := CapAgentSlice("linux", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Fatal("no caps, yet systemctl ran")
+	}
+	if err := CapAgentSlice("linux", "8G", "1200%"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(log)
+	if want := "--user set-property --runtime " + AgentSlice + " MemoryMax=8G CPUQuota=1200%\n"; string(got) != want {
+		t.Fatalf("argv %q, want %q", got, want)
+	}
 }

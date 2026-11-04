@@ -90,6 +90,8 @@ type Policy struct {
 	// agent authenticates its model traffic (CredGateway, CredLoginCopy,
 	// CredLoginShare).
 	ModelCredential string `json:"model_credential,omitempty"`
+	// ModelRoute are the model endpoints' hosts (what egress_only keeps).
+	ModelRoute []string `json:"-"`
 	// Limits are the launch's resource limits and disk guard
 	// (sandbox.limits; the zero value is the default).
 	Limits LimitSpec `json:"limits,omitempty"`

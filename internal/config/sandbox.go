@@ -150,6 +150,14 @@ type SandboxLimits struct {
 	Pids int `yaml:"pids,omitempty"`
 	// AggregateMemory caps all launches together (default 75%).
 	AggregateMemory string `yaml:"aggregate_memory,omitempty"`
+	// CPU caps one launch's CPU time (systemd CPUQuota: "200%" is two
+	// cores; default none); AggregateCPU caps all launches together (the
+	// agent slice's CPUQuota; default none).
+	CPU          string `yaml:"cpu,omitempty"`
+	AggregateCPU string `yaml:"aggregate_cpu,omitempty"`
+	// CPUWeight is each launch scope's CPUWeight (1–10000; default none:
+	// systemd's 100): a launch's share against the other launches.
+	CPUWeight int `yaml:"cpu_weight,omitempty"`
 	// DiskFreeMin is the free space below which the disk guard refuses a
 	// launch and stops a running one on that filesystem (default 5%; or a
 	// size: 5GiB; or "off").
@@ -412,9 +420,20 @@ func (c *Config) validateSandbox() error {
 				return fmt.Errorf("config: sandbox.limits.disk_free_min: %w", err)
 			}
 		}
+		for name, v := range map[string]string{"cpu": l.CPU, "aggregate_cpu": l.AggregateCPU} {
+			if v != "" && !cpuQuota.MatchString(v) {
+				return fmt.Errorf("config: sandbox.limits.%s %q: want a CPU quota as a percentage of one core (200%% is two cores)", name, v)
+			}
+		}
+		if l.CPUWeight < 0 || l.CPUWeight > 10000 {
+			return fmt.Errorf("config: sandbox.limits.cpu_weight must be 1-10000, got %d", l.CPUWeight)
+		}
 	}
 	return nil
 }
+
+// cpuQuota is a systemd CPUQuota: a percentage of one core.
+var cpuQuota = regexp.MustCompile(`^[0-9]{1,5}%$`)
 
 // limitValue is a systemd memory value: a percentage or a size.
 var limitValue = regexp.MustCompile(`^([0-9]{1,3}%|[0-9]+[KMGT]?)$`)
@@ -454,16 +473,40 @@ func (s *SandboxConfig) DiskFreeMin() (frac float64, bytes int64, off bool) {
 	if s == nil || s.Limits == nil {
 		return 0, 0, false
 	}
-	v := strings.TrimSpace(s.Limits.DiskFreeMin)
-	if strings.EqualFold(v, "off") {
-		return 0, 0, true
+	frac, bytes, off, _ = ParseDiskFreeMin(s.Limits.DiskFreeMin)
+	return frac, bytes, off
+}
+
+// ParseDiskFreeMin reads a disk_free_min: a share ("5%"), a size ("5GiB")
+// or "off"; "" is the default (all zero).
+func ParseDiskFreeMin(v string) (frac float64, bytes int64, off bool, err error) {
+	v = strings.TrimSpace(v)
+	switch {
+	case v == "":
+		return 0, 0, false, nil
+	case strings.EqualFold(v, "off"):
+		return 0, 0, true, nil
 	}
 	if p, ok := strings.CutSuffix(v, "%"); ok {
-		f, _ := strconv.ParseFloat(p, 64)
-		return f / 100, 0, false
+		f, err := strconv.ParseFloat(p, 64)
+		if err != nil || f < 0 || f >= 100 {
+			return 0, 0, false, fmt.Errorf("want a share below 100%%, a size or off, got %q", v)
+		}
+		return f / 100, 0, false, nil
 	}
-	b, _ := ParseByteSize(v)
-	return 0, b, false
+	b, err := ParseByteSize(v)
+	if err != nil || b < 0 {
+		return 0, 0, false, fmt.Errorf("want a share (5%%), a size (5GiB) or off, got %q", v)
+	}
+	return 0, b, false, nil
+}
+
+// AggregateCPU is sandbox.limits.aggregate_cpu ("" = none).
+func (s *SandboxConfig) AggregateCPU() string {
+	if s == nil || s.Limits == nil {
+		return ""
+	}
+	return s.Limits.AggregateCPU
 }
 
 // AggregateMemory is sandbox.limits.aggregate_memory (default 75%).

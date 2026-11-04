@@ -79,7 +79,7 @@ func TestSandboxAllowValidation(t *testing.T) {
 		"allow with mode none":   strings.Replace(allowDoc, "    isolation:\n      allow:", "    isolation:\n      mode: none\n      allow:", 1),
 		"allow on a code step":   strings.Replace(allowDoc, "steps: [ { id: look, type: agent, prompt: p } ]", "steps: [ { id: look, run: sh, code: 'true', isolation: { mode: namespace, allow: { pty: true } } } ]", 1),
 		"allow on a host":        allowDoc + "hosts:\n  box: { host: box.example, isolation: { mode: namespace, allow: { pty: true } } }\n",
-		"cpu as an agent cap":    strings.Replace(allowDoc, "detect: { action: alert }", "limits: { cpu: 200% }", 1),
+		"a cpu cap not a quota":  strings.Replace(allowDoc, "detect: { action: alert }", "limits: { cpu: \"2\" }", 1),
 		"mode-less code limits":  strings.Replace(allowDoc, "steps: [ { id: look, type: agent, prompt: p } ]", "steps: [ { id: look, run: sh, code: 'true', isolation: { limits: { memory: 1G } } } ]", 1),
 	}
 	for name, doc := range bad {
@@ -330,12 +330,12 @@ func TestEgressEntryForms(t *testing.T) {
 	}
 	for e, want := range map[string]string{
 		"https://registry.example/@myorg/": "a path cannot be enforced on encrypted traffic without TLS interception, which conductor does not do; list the host alone (registry.example:443)",
-		"https://athens.lan:8443/x":         "(athens.lan:8443)",
-		"ftp://mirror.lan/pub":              "only http:// URLs",
-		"athens.lan/github.com":             "a / is only for a CIDR range",
-		"http://*.lan/x/":                   "no wildcard",
-		"http://athens.lan/a/../b":          "no dot segments",
-		"http://athens.lan/x?y=1":           "no user, query or fragment",
+		"https://athens.lan:8443/x":        "(athens.lan:8443)",
+		"ftp://mirror.lan/pub":             "only http:// URLs",
+		"athens.lan/github.com":            "a / is only for a CIDR range",
+		"http://*.lan/x/":                  "no wildcard",
+		"http://athens.lan/a/../b":         "no dot segments",
+		"http://athens.lan/x?y=1":          "no user, query or fragment",
 	} {
 		if err := validateEgressEntry("sandbox.egress", e); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want %q", e, err, want)
@@ -348,5 +348,102 @@ func TestEgressEntryForms(t *testing.T) {
 	doc = strings.Replace(allowDoc, "      detect: { action: alert }", "      detect: { action: alert }\n      mode: namespace\n      network: { egress: [\"https://registry.example/x\"] }", 1)
 	if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), "list the host alone") {
 		t.Fatalf("an https path entry in a scope loaded: %v", err)
+	}
+}
+
+// Every agent sandbox knob is the operator's per scope, without a mode and
+// on a paseo step too: caps (cpu, cpu_weight, disk_free_min), egress_only,
+// the protocol check, persist, and detection's interval and connections.
+func TestScopeKnobsLoadAndLayer(t *testing.T) {
+	knobs := `    isolation:
+      egress_only: [registry.lan:443, "http://athens.lan:3000/github.com/myorg/"]
+      egress_protocol_check: false
+      persist: cache
+      detect: { action: kill, interval: 1s, connections: close }
+      limits: { memory: 2G, pids: 512, cpu: 150%, cpu_weight: 50, disk_free_min: 10% }
+`
+	doc := strings.Replace(allowDoc, "  review:\n    steps:", "  review:\n"+knobs+"    steps:", 1)
+	cfg, err := loadDoc(t, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iso := cfg.Workflows["review"].Isolation
+	if !iso.SandboxKnobsOnly() || len(*iso.EgressOnly) != 2 || *iso.EgressProtocolCheck || iso.Persist != "cache" ||
+		iso.Detect.Interval != "1s" || iso.Detect.Connections != "close" || iso.Limits.CPU != "150%" || iso.Limits.CPUWeight != 50 || iso.Limits.DiskFreeMin != "10%" {
+		t.Fatalf("knobs: %+v %+v %+v", iso, iso.Detect, iso.Limits)
+	}
+	if iso.EgressOnlyNarrow {
+		t.Fatal("the operator's egress_only marked as a pack's")
+	}
+	outer := &IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{Egress: []string{"a.example"}}}
+	got := LayerIsolation(outer, iso)
+	if got.Mode != "namespace" || got.EgressOnly != iso.EgressOnly || got.Persist != "cache" || got.EgressProtocolCheck != iso.EgressProtocolCheck {
+		t.Fatalf("layered %+v", got)
+	}
+	empty := strings.Replace(allowDoc, "  review:\n    steps:", "  review:\n    isolation: { egress_only: [] }\n    steps:", 1)
+	if cfg, err := loadDoc(t, empty); err != nil || cfg.Workflows["review"].Isolation.EgressOnly == nil || len(*cfg.Workflows["review"].Isolation.EgressOnly) != 0 {
+		t.Fatalf("egress_only: [] (the model alone): %v", err)
+	}
+	for name, block := range map[string]string{
+		"a bad persist":        "{ persist: forever }",
+		"a bad interval":       "{ detect: { interval: 1ms } }",
+		"a bad connections":    "{ detect: { connections: maybe } }",
+		"a bad weight":         "{ limits: { cpu_weight: 20000 } }",
+		"a bad disk minimum":   "{ limits: { disk_free_min: lots } }",
+		"an https egress_only": `{ egress_only: ["https://registry.lan/x"] }`,
+		"an empty egress_only": `{ egress_only: [""] }`,
+	} {
+		bad := strings.Replace(allowDoc, "  review:\n    steps:", "  review:\n    isolation: "+block+"\n    steps:", 1)
+		if _, err := loadDoc(t, bad); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	code := strings.Replace(allowDoc, "steps: [ { id: look, type: agent, prompt: p } ]", "steps: [ { id: look, run: sh, code: 'true', isolation: { mode: namespace, persist: home } } ]", 1)
+	if _, err := loadDoc(t, code); err == nil {
+		t.Error("an agent-only knob on a code step: accepted")
+	}
+	global := strings.Replace(allowDoc, "sandbox:\n", "sandbox:\n  limits: { cpu: 400%, aggregate_cpu: 1200%, cpu_weight: 80 }\n", 1)
+	if cfg, err := loadDoc(t, global); err != nil || cfg.Sandbox.Limits.CPU != "400%" || cfg.Sandbox.AggregateCPU() != "1200%" {
+		t.Fatalf("global cpu knobs: %v", err)
+	}
+	if _, err := loadDoc(t, strings.Replace(global, "cpu: 400%", "cpu: lots", 1)); err == nil {
+		t.Error("a bad global cpu: accepted")
+	}
+}
+
+// A pack may narrow with every knob, never loosen: its egress_only is
+// marked to narrow only; a looser persist, protocol check, detection or cap
+// is the operator's.
+func TestPackScopeKnobs(t *testing.T) {
+	no := false
+	for _, c := range []struct {
+		iso   *IsolationConfig
+		loose bool
+	}{
+		{&IsolationConfig{EgressOnly: &[]string{"registry.lan:443"}}, false},
+		{&IsolationConfig{EgressProtocolCheck: &no}, true},
+		{&IsolationConfig{Persist: "cache"}, true},
+		{&IsolationConfig{Persist: "none"}, false},
+		{&IsolationConfig{Detect: &IsolationDetect{Connections: "off"}}, true},
+		{&IsolationConfig{Detect: &IsolationDetect{Connections: "close", Interval: "1s"}}, false},
+		{&IsolationConfig{Detect: &IsolationDetect{Interval: "30s"}}, true},
+		{&IsolationConfig{Limits: &IsolationLimits{CPU: "50%", CPUWeight: 20, DiskFreeMin: "10%"}}, false},
+		{&IsolationConfig{Limits: &IsolationLimits{CPUWeight: 1000}}, true},
+		{&IsolationConfig{Limits: &IsolationLimits{DiskFreeMin: "off"}}, true},
+		{&IsolationConfig{Limits: &IsolationLimits{DiskFreeMin: "1%"}}, true},
+	} {
+		if got := isolationLoosens(c.iso, true) != ""; got != c.loose {
+			t.Errorf("%+v: loosens %v, want %v", c.iso, got, c.loose)
+		}
+	}
+	man := &PackManifest{Pack: PackMeta{Name: "rv"}, Workflows: map[string]WorkflowDef{"w": {
+		Isolation: &IsolationConfig{EgressOnly: &[]string{"registry.lan:443"}},
+		Steps:     []Step{{ID: "s", Type: "agent", Prompt: "p", Isolation: &IsolationConfig{EgressOnly: &[]string{}}}},
+	}}}
+	if p := checkPackSandboxLoosening(man); len(p) != 0 {
+		t.Fatalf("a pack's egress_only refused: %v", p)
+	}
+	if !man.Workflows["w"].Isolation.EgressOnlyNarrow || !man.Workflows["w"].Steps[0].Isolation.EgressOnlyNarrow {
+		t.Fatal("a pack's egress_only is not marked to narrow only")
 	}
 }

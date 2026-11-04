@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // SandboxAllow loosens the agent sandbox for the launches of one scope:
@@ -111,6 +112,9 @@ type IsolationDetect struct {
 	Action string `yaml:"action,omitempty"`
 	// Tripwires plants decoy credentials (default: sandbox.detect's).
 	Tripwires *bool `yaml:"tripwires,omitempty"`
+	// Interval and Connections override sandbox.detect's.
+	Interval    string `yaml:"interval,omitempty"`
+	Connections string `yaml:"connections,omitempty"`
 	// Origin names the scope that wrote it (set at load).
 	Origin string `yaml:"-"`
 }
@@ -260,8 +264,45 @@ func validateScopeSandbox(where string, iso *IsolationConfig) error {
 			return fmt.Errorf("config: %s: isolation.detect.action must be kill|alert|off, got %q", where, d.Action)
 		}
 	}
-	if l := iso.Limits; l != nil && iso.Mode == "" && l.CPU != "" {
-		return fmt.Errorf("config: %s: isolation.limits.cpu is not applied to agent sandbox launches (memory and pids are)", where)
+	if d := iso.Detect; d != nil {
+		if d.Interval != "" {
+			if v, err := time.ParseDuration(d.Interval); err != nil || v < 100*time.Millisecond {
+				return fmt.Errorf("config: %s: isolation.detect.interval: want a duration of 100ms or more, got %q", where, d.Interval)
+			}
+		}
+		switch d.Connections {
+		case "", "alert", "close", "off":
+		default:
+			return fmt.Errorf("config: %s: isolation.detect.connections must be alert|close|off, got %q", where, d.Connections)
+		}
+	}
+	if l := iso.Limits; l != nil {
+		if l.CPUWeight < 0 || l.CPUWeight > 10000 {
+			return fmt.Errorf("config: %s: isolation.limits.cpu_weight must be 1-10000, got %d", where, l.CPUWeight)
+		}
+		if l.CPU != "" && iso.Mode == "" && !cpuQuota.MatchString(l.CPU) {
+			return fmt.Errorf("config: %s: isolation.limits.cpu %q: want a CPU quota as a percentage of one core (200%% is two cores)", where, l.CPU)
+		}
+		if l.DiskFreeMin != "" {
+			if _, _, _, err := ParseDiskFreeMin(l.DiskFreeMin); err != nil {
+				return fmt.Errorf("config: %s: isolation.limits.disk_free_min: %w", where, err)
+			}
+		}
+	}
+	switch iso.Persist {
+	case "", "none", "cache", "home":
+	default:
+		return fmt.Errorf("config: %s: isolation.persist must be none|cache|home, got %q", where, iso.Persist)
+	}
+	if iso.EgressOnly != nil {
+		for _, e := range *iso.EgressOnly {
+			if strings.TrimSpace(e) == "" {
+				return fmt.Errorf("config: %s: isolation.egress_only: empty entry", where)
+			}
+			if err := validateEgressEntry(where+": isolation.egress_only", e); err != nil {
+				return err
+			}
+		}
 	}
 	if l := iso.EgressLimits; l != nil {
 		if _, err := ParseLimitDuration(l.Idle); err != nil {

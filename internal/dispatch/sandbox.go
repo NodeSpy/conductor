@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -254,18 +255,44 @@ func SandboxScope(req Request) *agentsandbox.Scope {
 		return scopeOf(req.Step.GrantedAllow, nil, nil)
 	}
 	s := scopeOf(config.UnionAllow(iso.Allow, req.Step.GrantedAllow), iso.Detect, iso.EgressLimits)
-	return withCaps(s, iso.Limits)
+	return withKnobs(s, knobsOf(iso))
 }
 
-// withCaps adds a scope's launch caps (isolation.limits memory, pids).
-func withCaps(s *agentsandbox.Scope, l *config.IsolationLimits) *agentsandbox.Scope {
-	if l == nil || (l.Memory == "" && l.Pids <= 0) {
+// knobsOf is the part of a scope that names no origin — its caps, egress
+// narrowing, protocol check and persistence — as a Scope.
+func knobsOf(iso *config.IsolationConfig) *agentsandbox.Scope {
+	var k agentsandbox.Scope
+	if l := iso.Limits; l != nil {
+		k.Memory, k.Pids, k.CPUWeight = l.Memory, max(l.Pids, 0), max(l.CPUWeight, 0)
+		if iso.Mode == "" {
+			// With a mode, cpu is the wrapper's own (--cpus for a container).
+			k.CPU = l.CPU
+		}
+		if l.DiskFreeMin != "" {
+			k.DiskSet = true
+			k.DiskFreeFrac, k.DiskFreeBytes, k.DiskOff, _ = config.ParseDiskFreeMin(l.DiskFreeMin)
+		}
+	}
+	if iso.EgressOnly != nil {
+		k.EgressOnlySet, k.EgressOnly, k.EgressOnlyNarrow = true, append([]string{}, *iso.EgressOnly...), iso.EgressOnlyNarrow
+	}
+	k.ProtocolCheck, k.Persist = iso.EgressProtocolCheck, iso.Persist
+	return &k
+}
+
+// withKnobs adds k's origin-less knobs to s (nil when neither sets any).
+func withKnobs(s, k *agentsandbox.Scope) *agentsandbox.Scope {
+	if k == nil || (k.Memory == "" && k.Pids == 0 && k.CPU == "" && k.CPUWeight == 0 && !k.DiskSet &&
+		!k.EgressOnlySet && k.ProtocolCheck == nil && k.Persist == "") {
 		return s
 	}
 	if s == nil {
 		s = &agentsandbox.Scope{}
 	}
-	s.Memory, s.Pids = l.Memory, max(l.Pids, 0)
+	s.Memory, s.Pids, s.CPU, s.CPUWeight = k.Memory, k.Pids, k.CPU, k.CPUWeight
+	s.DiskSet, s.DiskFreeFrac, s.DiskFreeBytes, s.DiskOff = k.DiskSet, k.DiskFreeFrac, k.DiskFreeBytes, k.DiskOff
+	s.EgressOnlySet, s.EgressOnly, s.EgressOnlyNarrow = k.EgressOnlySet, k.EgressOnly, k.EgressOnlyNarrow
+	s.ProtocolCheck, s.Persist = k.ProtocolCheck, k.Persist
 	return s
 }
 
@@ -296,9 +323,10 @@ func Rescope(s *agentsandbox.Scope, src config.ScopeSources) *agentsandbox.Scope
 	if iso := src.Sites[s.LimitsBy]; s.LimitsBy != "" && iso != nil && iso.EgressLimits != nil && iso.EgressLimits.Origin == s.LimitsBy {
 		l = iso.EgressLimits
 	}
-	// The caps were the dispatch's own scope's when it was recorded: kept
-	// as recorded (a new dispatch records the live ones).
-	return withCaps(scopeOf(allow, d, l), &config.IsolationLimits{Memory: s.Memory, Pids: s.Pids})
+	// The origin-less knobs (caps, egress_only, protocol check, persist)
+	// were the dispatch's own scope's when it was recorded: kept as
+	// recorded (a new dispatch records the live ones).
+	return withKnobs(scopeOf(allow, d, l), s)
 }
 
 // scopeOf is the sandbox scope of an allowance and detection / egress-limit
@@ -307,6 +335,10 @@ func scopeOf(allow *config.SandboxAllow, d *config.IsolationDetect, l *config.Sa
 	var s agentsandbox.Scope
 	if d != nil {
 		s.DetectAction, s.Tripwires, s.DetectBy = d.Action, d.Tripwires, d.Origin
+		if v, err := time.ParseDuration(d.Interval); err == nil && d.Interval != "" {
+			s.DetectInterval = int64(v)
+		}
+		s.Connections = d.Connections
 	}
 	if l != nil {
 		idle, _ := config.ParseLimitDuration(l.Idle)
@@ -318,7 +350,7 @@ func scopeOf(allow *config.SandboxAllow, d *config.IsolationDetect, l *config.Sa
 		s.LimitsBy = l.Origin
 	}
 	s.Allow = AllowanceOf(allow)
-	if s == (agentsandbox.Scope{}) {
+	if reflect.DeepEqual(s, agentsandbox.Scope{}) {
 		return nil
 	}
 	return &s

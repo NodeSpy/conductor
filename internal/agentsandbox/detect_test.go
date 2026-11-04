@@ -282,6 +282,46 @@ func TestApplyScope(t *testing.T) {
 	if p.Limits.Off || p.Limits.Memory != "16G" || p.Limits.Pids != 50 || p.Limits.DiskFreeFrac != 0.1 {
 		t.Fatalf("scope caps: %+v", p.Limits)
 	}
+	// Every knob, both ways: CPU, disk, detection, the protocol check.
+	no := false
+	p = Policy{Limits: LimitSpec{DiskFreeFrac: 0.05}, Detect: DetectSpec{Interval: 3 * time.Second}}
+	applyScope(&p, nil, &Scope{CPU: "150%", CPUWeight: 50, DiskSet: true, DiskOff: true, DetectInterval: int64(time.Second), Connections: "close", ProtocolCheck: &no})
+	if p.Limits.CPU != "150%" || p.Limits.CPUWeight != 50 || !p.Limits.DiskOff || p.Limits.DiskFreeFrac != 0 ||
+		p.Detect.Interval != time.Second || p.Detect.Connections != "close" || !p.EgressAnyBytes {
+		t.Fatalf("knobs: %+v %+v any=%v", p.Limits, p.Detect, p.EgressAnyBytes)
+	}
+	yes := true
+	p = Policy{EgressAnyBytes: true}
+	applyScope(&p, nil, &Scope{ProtocolCheck: &yes})
+	if p.EgressAnyBytes {
+		t.Fatal("a scope's protocol check did not tighten the global off")
+	}
+}
+
+// egress_only: the scope's entries and the model's endpoints, nothing
+// inherited — sandbox.egress, an outer network.egress, sandbox.allow's
+// tunnel hosts; the scope's own allowance still adds its own. A pack's
+// narrows only: an entry the inherited list does not cover is dropped.
+func TestEgressOnly(t *testing.T) {
+	base := &Allowance{Tunnels: []string{"cloudflared"}, TunnelHosts: []string{"*.trycloudflare.com"}, By: "sandbox"}
+	inherited := func() Policy {
+		return Policy{ModelRoute: []string{"api.anthropic.com"}, Egress: []string{"api.anthropic.com", "proxy.golang.org", "*.npmjs.org", "registry.lan:443"}}
+	}
+	p := inherited()
+	applyScope(&p, base, &Scope{EgressOnlySet: true, EgressOnly: []string{"registry.lan:443", "http://athens.lan:3000/github.com/myorg/", "new.example"}})
+	if got := strings.Join(p.Egress, ","); got != "api.anthropic.com,registry.lan:443,http://athens.lan:3000/github.com/myorg/,new.example" {
+		t.Fatalf("operator's egress_only: %s", got)
+	}
+	p = inherited()
+	applyScope(&p, base, &Scope{EgressOnlySet: true, EgressOnly: []string{}, Allow: &Allowance{Tunnels: []string{"ssh"}, TunnelHosts: []string{"bastion.lan:22"}, By: "step x"}})
+	if got := strings.Join(p.Egress, ","); got != "api.anthropic.com,bastion.lan:22" {
+		t.Fatalf("egress_only: [] with the scope's own tunnel: %s", got)
+	}
+	p = inherited()
+	applyScope(&p, nil, &Scope{EgressOnlySet: true, EgressOnlyNarrow: true, EgressOnly: []string{"registry.npmjs.org", "proxy.golang.org", "evil.example", "*.npmjs.org", "*.evil.example"}})
+	if got := strings.Join(p.Egress, ","); got != "api.anthropic.com,registry.npmjs.org,proxy.golang.org,*.npmjs.org" {
+		t.Fatalf("a pack's egress_only: %s", got)
+	}
 }
 
 // A recorded process group is forgotten once a scan finds it empty: a later

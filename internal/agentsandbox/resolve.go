@@ -210,7 +210,17 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		return Policy{}, fmt.Errorf("agentsandbox: workspace %s has no identity", e.Workspace)
 	}
 	r.maybeSweep()
-	homeRoot, homeKey := r.homeFor(e)
+	scope := e.Scope
+	if r.Rescope != nil {
+		// What the scope's config says now, not what it said when the
+		// workspace was recorded.
+		scope = r.Rescope(scope)
+	}
+	persist := r.Persist
+	if scope != nil && scope.Persist != "" {
+		persist = scope.Persist
+	}
+	homeRoot, homeKey := r.homeFor(e, persist)
 	home, logins, err := PrepareHome(HomeSpec{
 		Root: homeRoot, Key: homeKey, Tool: tool, RealHome: r.RealHome,
 		GitName: r.GitName, GitEmail: r.GitEmail, GOOS: r.GOOS,
@@ -250,14 +260,9 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		EgressUpload: r.EgressUpload, EgressDownload: r.EgressDownload,
 		ModelUpload: r.ModelUpload, ModelDownload: r.ModelDownload,
 	}
-	scope := e.Scope
-	if r.Rescope != nil {
-		// What the scope's config says now, not what it said when the
-		// workspace was recorded.
-		scope = r.Rescope(scope)
-	}
+	p.ModelRoute = hosts
 	applyScope(&p, r.Allow, scope)
-	if cache, err := r.persistCache(e, home); err != nil {
+	if cache, err := r.persistCache(e, home, persist); err != nil {
 		return Policy{}, fmt.Errorf("agentsandbox: identity cache: %w", err)
 	} else if cache != "" {
 		p.ReadWrite = append(append([]string(nil), p.ReadWrite...), cache)

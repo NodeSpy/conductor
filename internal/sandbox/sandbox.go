@@ -45,14 +45,15 @@ import (
 // Spec is a resolved isolation policy — config.IsolationConfig with the
 // pointers flattened, ready to wrap a launch.
 type Spec struct {
-	Mode   string // user | namespace | container
-	User   string // mode: user — the low-privilege account
-	Image  string // mode: container — the image to run
-	Engine string // mode: container — docker (default) | podman
-	Memory string // cgroup/engine memory cap ("2g"); empty = none
-	CPU    string // cgroup CPUQuota ("200%") / engine --cpus ("2"); empty = none
-	Pids   int    // max tasks/pids; 0 = none
-	Slice  string // systemd slice the limits scope runs in (an aggregate cap); "" = the default
+	Mode      string // user | namespace | container
+	User      string // mode: user — the low-privilege account
+	Image     string // mode: container — the image to run
+	Engine    string // mode: container — docker (default) | podman
+	Memory    string // cgroup/engine memory cap ("2g"); empty = none
+	CPU       string // cgroup CPUQuota ("200%") / engine --cpus ("2"); empty = none
+	Pids      int    // max tasks/pids; 0 = none
+	CPUWeight int    // systemd CPUWeight of the limits scope; 0 = systemd\'s default
+	Slice     string // systemd slice the limits scope runs in (an aggregate cap); "" = the default
 	// Unit names the limits scope ("" = systemd's own name, collected at
 	// its end). A named scope is not collected: its result (an oom-kill)
 	// stays readable until its launcher resets it.
@@ -363,7 +364,7 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 // systemdPrefix renders the cgroup-limit scope prefix for namespace mode
 // (empty when no limits are set).
 func (s *Spec) systemdPrefix() []string {
-	if s.Memory == "" && s.CPU == "" && s.Pids == 0 {
+	if s.Memory == "" && s.CPU == "" && s.Pids == 0 && s.CPUWeight == 0 {
 		return nil
 	}
 	out := []string{"systemd-run", "--user", "--scope", "--quiet"}
@@ -383,6 +384,9 @@ func (s *Spec) systemdPrefix() []string {
 	}
 	if s.Pids > 0 {
 		out = append(out, "-p", "TasksMax="+strconv.Itoa(s.Pids))
+	}
+	if s.CPUWeight > 0 {
+		out = append(out, "-p", "CPUWeight="+strconv.Itoa(s.CPUWeight))
 	}
 	return out
 }

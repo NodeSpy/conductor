@@ -1,7 +1,10 @@
 package agentsandbox
 
 import (
+	"net"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
@@ -48,11 +51,33 @@ type Scope struct {
 	// scope is recomputed from when the config changes.
 	DetectBy string `json:"detect_by,omitempty"`
 	LimitsBy string `json:"limits_by,omitempty"`
-	// Memory and Pids are the scope's launch caps over sandbox.limits
-	// ("" / 0: the global); a scope that sets one is capped even where
-	// sandbox.limits is off.
-	Memory string `json:"memory,omitempty"`
-	Pids   int    `json:"pids,omitempty"`
+	// Memory, Pids, CPU and CPUWeight are the scope's launch caps over
+	// sandbox.limits ("" / 0: the global); a scope that sets one is capped
+	// even where sandbox.limits is off.
+	Memory    string `json:"memory,omitempty"`
+	Pids      int    `json:"pids,omitempty"`
+	CPU       string `json:"cpu,omitempty"`
+	CPUWeight int    `json:"cpu_weight,omitempty"`
+	// DiskSet: the scope's disk_free_min (DiskFreeFrac / DiskFreeBytes /
+	// DiskOff) replaces the global one.
+	DiskSet       bool    `json:"disk_set,omitempty"`
+	DiskFreeFrac  float64 `json:"disk_free_frac,omitempty"`
+	DiskFreeBytes int64   `json:"disk_free_bytes,omitempty"`
+	DiskOff       bool    `json:"disk_off,omitempty"`
+	// DetectInterval (ns) and Connections override sandbox.detect's.
+	DetectInterval int64  `json:"detect_interval,omitempty"`
+	Connections    string `json:"connections,omitempty"`
+	// EgressOnlySet: the launch's egress is EgressOnly and the model
+	// endpoints, nothing inherited; EgressOnlyNarrow (a pack's) keeps only
+	// the entries the inherited allowlist covers.
+	EgressOnlySet    bool     `json:"egress_only_set,omitempty"`
+	EgressOnly       []string `json:"egress_only,omitempty"`
+	EgressOnlyNarrow bool     `json:"egress_only_narrow,omitempty"`
+	// ProtocolCheck overrides sandbox.egress_protocol_check (nil: the
+	// global).
+	ProtocolCheck *bool `json:"protocol_check,omitempty"`
+	// Persist overrides sandbox.persist ("": the global).
+	Persist string `json:"persist,omitempty"`
 }
 
 // JoinAllowances is every allowance of list in one (nil: none).
@@ -113,6 +138,37 @@ func applyScope(p *Policy, base *Allowance, s *Scope) {
 		if s.Pids > 0 {
 			p.Limits.Pids, p.Limits.Off = s.Pids, false
 		}
+		if s.CPU != "" {
+			p.Limits.CPU, p.Limits.Off = s.CPU, false
+		}
+		if s.CPUWeight > 0 {
+			p.Limits.CPUWeight, p.Limits.Off = s.CPUWeight, false
+		}
+		if s.DiskSet {
+			p.Limits.DiskFreeFrac, p.Limits.DiskFreeBytes, p.Limits.DiskOff = s.DiskFreeFrac, s.DiskFreeBytes, s.DiskOff
+		}
+		if s.DetectInterval > 0 {
+			p.Detect.Interval = time.Duration(s.DetectInterval)
+		}
+		if s.Connections != "" {
+			p.Detect.Connections = s.Connections
+		}
+		if s.ProtocolCheck != nil {
+			p.EgressAnyBytes = !*s.ProtocolCheck
+		}
+		if s.EgressOnlySet {
+			only := s.EgressOnly
+			if s.EgressOnlyNarrow {
+				only = coveredEntries(p.Egress, only)
+			}
+			egress := append([]string(nil), p.ModelRoute...)
+			for _, h := range only {
+				egress = appendUnique(egress, h)
+			}
+			p.Egress = egress
+			// Nothing inherited: sandbox.allow's tunnel hosts neither.
+			base = nil
+		}
 		for _, o := range []struct {
 			v   int64
 			dst *int64
@@ -137,4 +193,21 @@ func applyScope(p *Policy, base *Allowance, s *Scope) {
 	// A tunnel the allowance covers may be shaped like one.
 	p.Detect.ShapeAllowed = append(append([]string(nil), a.TunnelHosts...), a.NonTLS...)
 	p.Detect.ShapeAllowAll = a.TunnelAnyHost
+}
+
+// coveredEntries are the entries of only that the inherited allowlist
+// covers: a host:port entry it allows, or any entry it lists verbatim. A
+// pack's egress_only narrows with them, never adding a destination.
+func coveredEntries(inherited, only []string) []string {
+	var out []string
+	for _, e := range only {
+		hp := e
+		if _, port, err := net.SplitHostPort(e); err != nil || port == "" {
+			hp = e + ":443" // a bare host is :443, as everywhere in egress
+		}
+		if slices.Contains(inherited, e) || (!strings.ContainsAny(e, "*?[/") && sandbox.EgressAllowed(inherited, hp)) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
