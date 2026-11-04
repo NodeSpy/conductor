@@ -54,7 +54,7 @@ func newOfficialRig(t *testing.T) *officialRig {
 
 // client describes the plugin once (unjailed, as install does) for its
 // manifest, then returns a client that runs it jailed with spec's grant.
-func (r *officialRig) client(t *testing.T, name string, grant func(*Spec)) (*Client, *[]string) {
+func (r *officialRig) client(t *testing.T, name string, grant func(*Spec)) (*Client, func() []string) {
 	t.Helper()
 	bin := filepath.Join(r.dir, name)
 	probe := NewClient(Spec{Name: name, Kind: KindConnector, Provides: name, BinPath: bin, Local: true}, Deps{})
@@ -68,11 +68,17 @@ func (r *officialRig) client(t *testing.T, name string, grant func(*Spec)) (*Cli
 	s := Spec{Name: name, Kind: KindConnector, Provides: name, BinPath: bin, Local: true, Manifest: ManifestFromDecl(decl)}
 	grant(&s)
 	var mu sync.Mutex
-	logs := &[]string{}
+	var logs []string
+	snapshot := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), logs...)
+	}
 	c := NewClient(s, Deps{
+		// The spawn lines and the plugin's own stderr ("plugin[name]: …").
 		Log: func(f string, a ...any) {
 			mu.Lock()
-			*logs = append(*logs, fmt.Sprintf(f, a...))
+			logs = append(logs, fmt.Sprintf(f, a...))
 			mu.Unlock()
 		},
 		Sandbox: SandboxDeps{
@@ -83,9 +89,29 @@ func (r *officialRig) client(t *testing.T, name string, grant func(*Spec)) (*Cli
 	})
 	t.Cleanup(func() {
 		c.Close()
-		t.Logf("%s spawn log:\n  %s", name, strings.Join(*logs, "\n  "))
+		t.Logf("%s log (spawn and the plugin's stderr):\n  %s", name, strings.Join(snapshot(), "\n  "))
 	})
-	return c, logs
+	return c, snapshot
+}
+
+// waitListening waits until addr accepts a connection: a source plugin acks
+// start_source at once and starts in the background, so its listener is
+// the sign that it is up. On a timeout the failure carries the plugin's own
+// log, where a source that stopped says why.
+func waitListening(t *testing.T, addr string, logs func() []string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		c, err := net.DialTimeout("tcp", addr, time.Second)
+		if err == nil {
+			c.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the source never listened on %s (%v); plugin log:\n  %s", addr, err, strings.Join(logs(), "\n  "))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (r *officialRig) listenAddr(t *testing.T) string {
@@ -218,7 +244,7 @@ func TestOfficialWebhookSourcesJailed(t *testing.T) {
 			if ev := sk.wait(t); ev["event"] != tc.event {
 				t.Fatalf("event = %v", ev)
 			}
-			assertJailed(t, *logs)
+			assertJailed(t, logs())
 		})
 	}
 }
@@ -263,7 +289,7 @@ func TestOfficialSlackJailed(t *testing.T) {
 	} else {
 		t.Logf("post to an undeclared host: %v", err)
 	}
-	assertJailed(t, *logs)
+	assertJailed(t, logs())
 }
 
 // GitHub against the GitHub fake: App auth from a key file the config
@@ -312,9 +338,10 @@ func TestOfficialGithubJailed(t *testing.T) {
 		t.Fatalf("StartSource: %v", err)
 	}
 
+	waitListening(t, addr, logs)
 	evs, err := c.Poll(ctx, sdk.PollRequest{Instance: "gh1", Mode: sdk.PollDryRun})
 	if err != nil {
-		t.Fatalf("dry-run sweep: %v", err)
+		t.Fatalf("dry-run sweep: %v; plugin log:\n  %s", err, strings.Join(logs(), "\n  "))
 	}
 	var found bool
 	for _, e := range evs {
@@ -353,5 +380,5 @@ func TestOfficialGithubJailed(t *testing.T) {
 	if ev := sk.wait(t); ev["event"] != "new_comment" {
 		t.Fatalf("webhook event = %v", ev)
 	}
-	assertJailed(t, *logs)
+	assertJailed(t, logs())
 }

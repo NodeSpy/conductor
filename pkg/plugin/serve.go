@@ -515,7 +515,13 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 			}
 		}
 		// Ack immediately; stream events in the background until ctx cancels.
-		go func() { _ = sh.StartSource(ctx, req, emit) }()
+		// A source that stops on its own says why on stderr, which the host
+		// logs as the plugin's: the ack has already gone out.
+		go func() {
+			if err := sh.StartSource(ctx, req, emit); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "source %s stopped: %v\n", req.Instance, err)
+			}
+		}()
 		return struct{}{}, nil
 	case MethodAppToken:
 		h, ok := h.(AppTokenHandler)
