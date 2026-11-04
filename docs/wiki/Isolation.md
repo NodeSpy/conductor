@@ -136,6 +136,15 @@ review (a decide step, an output-schema step, a checkout-less step, a review
 trigger — unless `expect_push:`) is never pushed. Every push is audited
 (`git_push`).
 
+**Conductor's git opens its own ssh connections.** Its fetches, `ls-remote`
+and pushes run your ssh (`GIT_SSH_COMMAND`, else your global
+`core.sshCommand`, never a repository's) with `-o ControlMaster=no -o
+ControlPath=none`. A `ControlMaster` in your ssh config would otherwise
+carry every one of them over a single connection, and a forge caps the
+sessions one connection carries: a review's parallel fetches held a push for
+minutes. A `GIT_SSH` program, or an ssh command that isn't `ssh`, is run as
+you configured it.
+
 **A fixer that reports a structured result sets `expect_push: true`.** An
 `output_schema` is what a reviewer returns, so on its own it makes the step a
 review; a fixer that also reports one (the review threads it addressed, say)

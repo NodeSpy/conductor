@@ -8,24 +8,16 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/NodeSpy/conductor/internal/gitsafe"
 )
 
 // gitBin is the git binary (a var for tests).
 var gitBin = "git"
 
 // trustedSSH is core.sshCommand from the operator's OWN config (global, then
-// system) — never a repository's.
-var trustedSSH = sync.OnceValue(func() string {
-	for _, scope := range []string{"--global", "--system"} {
-		out, err := exec.Command(gitBin, "config", scope, "--get", "core.sshCommand").Output()
-		if err == nil {
-			if s := strings.TrimSpace(string(out)); s != "" {
-				return s
-			}
-		}
-	}
-	return "ssh"
-})
+// system) — never a repository's — with ssh connection sharing off.
+var trustedSSH = sync.OnceValue(func() string { return gitsafe.SSHCommand(gitsafe.OperatorSSH()) })
 
 // runGit runs conductor's own git in a trusted git dir, hardened: hooks,
 // fsmonitor, external diff and the ext transport off, the ssh command from
