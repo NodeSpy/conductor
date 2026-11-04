@@ -149,6 +149,14 @@ func buildEnginePlugin(t *testing.T) (string, string) {
 	return bin, hex.EncodeToString(sum[:])
 }
 
+// engineDeps launches the reference engine without its OS jail: these tests
+// wire no conductor binary for the jail to re-enter, so they say so as the
+// box's probe would, rather than as a per-launch failure (which is refused).
+var engineDeps = iplugin.Deps{
+	Log:     func(string, ...any) {},
+	Sandbox: iplugin.SandboxDeps{JailProbe: func() string { return "not built in this test" }},
+}
+
 // THE WHOLE PATH, end to end, with nothing faked: the reference engine plugin
 // runs as a real verified subprocess, speaks plugin.run over the real
 // transport, calls host.kv BACK during the run, and every one of those calls
@@ -168,7 +176,7 @@ func TestReferenceEnginePluginEndToEnd(t *testing.T) {
 	cl := iplugin.NewClient(iplugin.Spec{
 		Name: "acme-engine", Kind: iplugin.KindStep, Provides: "acme-engine",
 		BinPath: bin, Sha256: sum,
-	}, iplugin.Deps{Log: func(string, ...any) {}})
+	}, engineDeps)
 	defer cl.Close()
 
 	decl, err := cl.Describe(context.Background())
@@ -228,7 +236,7 @@ func TestReferenceEnginePluginWithoutADataPlane(t *testing.T) {
 	cl := iplugin.NewClient(iplugin.Spec{
 		Name: "acme-engine", Kind: iplugin.KindStep, Provides: "acme-engine",
 		BinPath: bin, Sha256: sum,
-	}, iplugin.Deps{Log: func(string, ...any) {}})
+	}, engineDeps)
 	defer cl.Close()
 
 	out, err := cl.Run(context.Background(), sdk.RunRequest{
