@@ -29,12 +29,8 @@ type SandboxConfig struct {
 	// its model endpoints ("registry.npmjs.org", "*.golang.org",
 	// "host:port"). A bare host means :443.
 	Egress []string `yaml:"egress,omitempty"`
-	// Prefetch are the package ecosystems conductor downloads for an agent
-	// on the host, before its launch, so the agent builds offline with none
-	// of their hosts on its allowlist. "go": a dispatch's Go modules (its
-	// checkout's go.work / go.mod) into one conductor-owned module cache,
-	// read-only in every sandbox, with the agent's GOPROXY off.
-	Prefetch []string `yaml:"prefetch,omitempty"`
+	// Prefetch was removed (removed.go): accepted, ignored, warned about.
+	Prefetch RemovedField `yaml:"prefetch,omitempty"`
 	// StateDir holds the per-identity tool state (each identity's HOME).
 	// Default: <state dir>/agent-state.
 	StateDir string `yaml:"state_dir,omitempty" path:"local"`
@@ -220,19 +216,6 @@ func (s *SandboxConfig) UnlandedFails() bool {
 	return s == nil || s.Push == nil || s.Push.Unlanded != "warn"
 }
 
-// PrefetchGo reports sandbox.prefetch naming go.
-func (s *SandboxConfig) PrefetchGo() bool {
-	if s == nil {
-		return false
-	}
-	for _, p := range s.Prefetch {
-		if p == "go" {
-			return true
-		}
-	}
-	return false
-}
-
 // PushDeniesCIChanges reports sandbox.push.deny_ci_changes (default off).
 func (s *SandboxConfig) PushDeniesCIChanges() bool {
 	return s != nil && s.Push != nil && s.Push.DenyCIChanges
@@ -346,11 +329,6 @@ func (c *Config) validateSandbox() error {
 		}
 		if err := validateEgressEntry("sandbox.egress", e); err != nil {
 			return err
-		}
-	}
-	for _, p := range s.Prefetch {
-		if p != "go" {
-			return fmt.Errorf("config: sandbox.prefetch: unknown ecosystem %q (supported: go)", p)
 		}
 	}
 	if s.StateDir != "" && !filepath.IsAbs(s.StateDir) {

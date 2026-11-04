@@ -21,6 +21,13 @@ import (
 // FolderRemoved is the warning for a `folder:` still in a config.
 const FolderRemoved = "folders were removed; this field is ignored and can be deleted"
 
+// `sandbox.prefetch:` is another: conductor no longer downloads packages for
+// agents. An agent reaches a registry through sandbox.egress (and inspect:
+// for a path-scoped host) like any other host.
+
+// PrefetchRemoved is the warning for a `sandbox.prefetch:` still in a config.
+const PrefetchRemoved = "prefetch was removed; this field is ignored and can be deleted — allow the package hosts in sandbox.egress instead (see the Isolation docs)"
+
 // RemovedField is a removed config key: it decodes from any value and is
 // never marshaled (IsZero is always true, and every use is omitempty).
 type RemovedField struct{}
@@ -47,6 +54,9 @@ func removedFolderWarnings(doc []byte) []string {
 	}
 	var out []string
 	walkConfigFolders(n.Content[0], &out)
+	if mapValue(mapValue(n.Content[0], "sandbox"), "prefetch") != nil {
+		out = append(out, "sandbox.prefetch: "+PrefetchRemoved)
+	}
 	sort.Strings(out)
 	return out
 }

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // loadCfg writes body to a temp config and loads it through the real loader.
@@ -85,24 +87,35 @@ func TestSandboxPushUnlanded(t *testing.T) {
 	}
 }
 
-// sandbox.prefetch: off by default, go when named, any other ecosystem
-// refused at load.
-func TestSandboxPrefetch(t *testing.T) {
+// sandbox.prefetch was removed: any value still loads, is named in one
+// warning and is never written back.
+func TestSandboxPrefetchRemoved(t *testing.T) {
 	const base = "connectors:\n  gh: { use: github, token: x, repos: [\"acme/*\"] }\n"
-	for body, want := range map[string]bool{
-		base:                                  false,
-		base + "sandbox:\n  egress: []\n":     false,
-		base + "sandbox:\n  prefetch: [go]\n": true,
+	for _, body := range []string{
+		base + "sandbox:\n  prefetch: [go]\n",
+		base + "sandbox:\n  prefetch: [npm, pip]\n  egress: [proxy.golang.org]\n",
+		base + "sandbox: {prefetch: go}\n",
 	} {
 		cfg, err := loadCfg(t, body)
 		if err != nil {
 			t.Fatalf("Load %q: %v", body, err)
 		}
-		if got := cfg.Sandbox.PrefetchGo(); got != want {
-			t.Fatalf("%q: PrefetchGo() = %v, want %v", body, got, want)
+		if got := cfg.RemovedFieldWarnings(); len(got) != 1 || got[0] != "sandbox.prefetch: "+PrefetchRemoved {
+			t.Fatalf("%q: warnings %q", body, got)
+		}
+		out, err := yaml.Marshal(cfg.Sandbox)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(out), "prefetch") {
+			t.Fatalf("prefetch written back:\n%s", out)
 		}
 	}
-	if _, err := loadCfg(t, base+"sandbox:\n  prefetch: [npm]\n"); err == nil || !strings.Contains(err.Error(), `sandbox.prefetch: unknown ecosystem "npm"`) {
-		t.Fatalf("unknown ecosystem accepted or wrong error: %v", err)
+	cfg, err := loadCfg(t, base+"sandbox:\n  egress: []\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := cfg.RemovedFieldWarnings(); len(w) != 0 {
+		t.Fatalf("warnings without prefetch: %q", w)
 	}
 }

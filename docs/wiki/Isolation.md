@@ -179,7 +179,6 @@ emails. conductor does not touch your account settings.
 sandbox:
   agents: on                       # default; `off` is the explicit opt-out (logged at boot)
   egress: [registry.npmjs.org, proxy.golang.org]   # beyond the model endpoints
-  prefetch: [go]                   # Go modules fetched on the host, not by the agent (below)
   # state_dir: ~/.local/state/conductor/agent-state   # the identity homes
   push:
     signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh)
@@ -218,54 +217,35 @@ sandbox:
 What each of these protects, and what loosening it gives up, is in
 [Containment and detection](#containment-and-detection) below.
 
-**Go without an allowlist (`prefetch: [go]`).** Allowlisting
-`proxy.golang.org` is not enough: the proxy answers many module downloads
-with a redirect to `storage.googleapis.com`, and allowlisting that host opens
-every Cloud Storage bucket to the agent. With `prefetch: [go]`, conductor
-downloads instead, on the host:
+**Go modules.** Allowlisting `proxy.golang.org` is not enough: the proxy
+answers module and toolchain downloads with a redirect to
+`storage.googleapis.com`, and allowlisting that host whole opens every Cloud
+Storage bucket to the agent. [Inspect](#tls-inspection) that host and allow
+only the proxy's bucket:
 
-- when it registers a dispatch's checkout — before the agent runs — it reads
-  the module files (`go.work`, `go.work.sum`, and the `go.mod`/`go.sum` of
-  every module the workspace uses or a local `replace` points at; regular
-  files inside the checkout only) into a temp dir of its own and runs
-  `go mod download` there, into `<state_dir>/.go-modcache` — one cache,
-  **shared by every identity**;
-- that download itself runs **confined**: the same namespace jail a code step
-  gets, with the module cache the one writable path outside its own scratch
-  dir and the network cut to exactly `proxy.golang.org` (never `direct`, so
-  no VCS runs against a module path a `go.mod` names, and never the
-  operator's own module cache as a `file://` layer — this ONE cache is
-  shared by every identity, and a `file://` layer onto the operator's own
-  `$GOMODCACHE` would pull whatever private modules it holds into it,
-  available to every identity from then on). `GOTOOLCHAIN=auto`, checksum-
-  database verification on, none of the daemon's environment beyond `PATH`
-  and HTTP-proxy/CA settings, and none of the operator's real `$HOME`. If
-  this box can't build the jail (no `unshare`, for instance), the prefetch is
-  skipped with a log line — it never falls back to an unconfined download;
-- when the module files ask for a newer Go than the host's (a `go` or
-  `toolchain` line in `go.work` or `go.mod`), the download fetches that
-  toolchain too: Go downloads it as the module
-  `golang.org/toolchain@v0.0.1-go<version>.<os>-<arch>` into the same cache,
-  verified against the checksum database through `proxy.golang.org`. Then,
-  in the same jail, conductor asks which `GOROOT` the module files select
-  (`go env GOROOT`) and records it for that workspace. A toolchain is about
-  300 MB in the cache, once per Go version;
-- every sandboxed agent sees that cache **read-only** (an agent cannot plant
-  a symlink for the host's `go` to write through) with `GOMODCACHE` pointing
-  at it and `GOPROXY=off`, `GOSUMDB=off`, `GOTOOLCHAIN=local`. Its Go builds
-  and tests offline; no Go host goes in `egress`. When the prefetch recorded
-  a toolchain for the workspace, that toolchain's `bin` comes first on the
-  launch's `PATH`. Its `go` is the version the module files ask for and
-  needs no switching. This is decided per launch and per workspace, so two
-  repos can use two different toolchains.
+```yaml
+sandbox:
+  egress:
+    - proxy.golang.org
+    - sum.golang.org                                   # go verifies toolchains here directly
+    - "https://storage.googleapis.com/proxy-golang-org-prod/"
+  inspect: [{ host: storage.googleapis.com }]
+```
 
-A set of module files already downloaded is skipped (a few milliseconds); a
-failed download is logged and the launch runs anyway. That includes a
-toolchain that can't be fetched: the log line carries Go's own message
-(`go.work requires go >= …`), and the agent runs with the host's `go`. A module the agent adds
-itself is not fetched — its `go get` fails offline, by design — and a target
-the event's sender chose is never prefetched for (its agent runs with what the
-cache already holds).
+The agent's `go` then downloads modules, and a newer toolchain a `go` or
+`toolchain` line asks for, through the egress proxy. A request for any other
+bucket is refused (403, audited `egress_denied`). Go reads the sandbox's CA
+bundle from `SSL_CERT_FILE` on Linux; on macOS Go uses the system verifier and
+ignores it, so an inspected host fails TLS there. The module cache is in the
+agent's home (`~/go/pkg/mod`), so with the default `persist: none` each
+dispatch downloads what it needs again.
+
+`sandbox.prefetch` was removed: conductor no longer downloads packages for an
+agent. A config that still sets it loads, with a warning, and the field is
+ignored. A module cache an earlier version left at
+`<state_dir>/.go-modcache` is no longer used; Go makes its files read-only,
+so delete it with `go clean -modcache` (`GOMODCACHE` set to that dir) or
+`chmod -R u+w` first.
 
 Per runtime, workflow, trigger or step, an `isolation:` block keeps working
 (most specific wins: step → workflow/trigger → runtime): `mode: none` runs that
@@ -530,7 +510,7 @@ trusts what is in a repository's `.git`; conductor's does not:
   fixer work on CI itself. Turn it on only as an extra tripwire; the controls
   that matter are your CI's own (secrets not exposed to branch pipelines,
   required review before workflows run).
-- **Untrusted targets.** Conductor never checks out, prefetches for or pushes
+- **Untrusted targets.** Conductor never checks out or pushes
   to a repository the event's *sender* chose. A dispatch's repository comes
   from the platform's own assignment or the step's `repo:`, never from a
   webhook body.

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"os"
@@ -182,33 +181,6 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		logf("agent sandbox: workspace registry: %v (starting empty)", err)
 	}
 	agentsandbox.Default.Rescope(r.Rescope)
-	dispatch.SandboxPrefetch = nil
-	if cfg.Sandbox.PrefetchGo() {
-		// A dot name no identity home can have (IdentityKey trims it).
-		gp, err := agentsandbox.NewGoPrefetch(filepath.Join(r.StateRoot, ".go-modcache"), os.Environ())
-		if err != nil {
-			return nil, err
-		}
-		// The download itself runs CONFINED: the same self-exe and
-		// egress-proxy wiring every other local launch gets (codeSandboxDeps),
-		// so a malicious go.mod/go.sum this box ever snapshots cannot read the
-		// daemon's real HOME/credentials or reach a network host beyond
-		// gp.Proxy's own. Fill fails closed (skips + logs) if this box cannot
-		// realize the jail — it never falls back to an unconfined download.
-		gp.Sandbox = codeSandboxDeps()
-		gp.Warn = logf
-		r.GoPrefetch = gp
-		dispatch.SandboxPrefetch = func(dir string) {
-			start := time.Now()
-			if err := gp.Workspace(context.Background(), dir); err != nil {
-				logf("sandbox: go prefetch for %s: %v (the agent's Go runs offline without what is missing)", dir, err)
-				return
-			}
-			if d := time.Since(start); d > 5*time.Second {
-				logf("sandbox: go prefetch for %s took %s", dir, d.Round(time.Second))
-			}
-		}
-	}
 	rel, err := agentsandbox.NewRelayer()
 	if err != nil {
 		return nil, err
@@ -242,7 +214,6 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		gitdiff.Confine = nil
 		dispatch.PaseoSandboxed = false
 		dispatch.PaseoSandboxLog = nil
-		dispatch.SandboxPrefetch = nil
 		rel.Close()
 	}, nil
 }
