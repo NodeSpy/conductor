@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -270,6 +271,15 @@ func (p *Provisioner) Reap(ctx context.Context) {
 		return
 	}
 	cutoff := p.now().Add(-p.minAge())
+	// One line for the pass, not one per worktree: a restart after a leak
+	// reaps hundreds.
+	var reaped int
+	var freed int64
+	defer func() {
+		if reaped > 0 {
+			p.logf("gitwt: reaped %d orphan worktree(s) (%s)", reaped, byteSize(freed))
+		}
+	}()
 	for _, e := range ents {
 		if !e.IsDir() {
 			continue
@@ -285,12 +295,48 @@ func (p *Provisioner) Reap(ctx context.Context) {
 		if err != nil || fi.ModTime().After(cutoff) {
 			continue // too fresh to be sure it is an orphan
 		}
+		size := dirSize(path)
 		if err := p.RemoveWorktree(ctx, path); err != nil {
 			p.logf("gitwt: reap %s: %v", path, err)
 			continue
 		}
-		p.logf("gitwt: reaped orphan worktree %s", path)
+		reaped++
+		freed += size
 	}
+}
+
+// dirSize is the bytes of the regular files under dir (symlinks not
+// followed); unreadable parts count as nothing.
+func dirSize(dir string) int64 {
+	var n int64
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.Type().IsRegular() {
+			if fi, err := d.Info(); err == nil {
+				n += fi.Size()
+			}
+		}
+		return nil
+	})
+	return n
+}
+
+// byteSize renders n bytes for a log line: "41 GiB", "244 MiB".
+func byteSize(n int64) string {
+	const k = 1024
+	switch {
+	case n >= 10*k*k*k:
+		return fmt.Sprintf("%d GiB", (n+k*k*k/2)/(k*k*k))
+	case n >= k*k*k:
+		return fmt.Sprintf("%.1f GiB", float64(n)/(k*k*k))
+	case n >= k*k:
+		return fmt.Sprintf("%d MiB", (n+k*k/2)/(k*k))
+	case n >= k:
+		return fmt.Sprintf("%d KiB", (n+k/2)/k)
+	}
+	return fmt.Sprintf("%d B", n)
 }
 
 // ---- checkout strategies -------------------------------------------------

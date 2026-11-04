@@ -1195,7 +1195,7 @@ func labelArgs(req Request) []string {
 	if req.Trigger.Variant != "" {
 		labels = append(labels, "variant="+req.Trigger.Variant)
 	}
-	if req.Step.ArchiveWhenDone {
+	if req.Step.ArchivesWhenDone() {
 		labels = append(labels, "archive=1")
 	}
 	for k, v := range req.Step.Labels {

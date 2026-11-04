@@ -45,6 +45,7 @@ x-templates:
     # workspace: { isolation: local, pin: triage }   # …or reuse a NAMED workspace
     wait_timeout: 30m
     archive_when_done: true           # archived inline the moment the step finishes
+                                      #   (unset: released when it finishes cleanly — below)
     labels: { team: autopilot }
     # runtime: paseo                  # pin the backend (default: the default: true runtime)
     # host: build-box                 # a [[Hosts]] SSH target its runtime launches on
@@ -314,7 +315,7 @@ to execute belongs here.
 | `workspace` | `local` or `worktree` — the existing checkout, or a fresh git worktree. |
 | `expect_push` | Mark a fixer step that must LAND a change on the target. A clean run that leaves work unlanded (a non-empty proposed diff never pushed) becomes a `no_progress` failure instead of a silent success — see [[Workflows]] hooks. Leave off for a review/judge step. Under the agent sandbox it is also what makes a step with an `output_schema` a fixer: conductor pushes its work (an output schema alone reads as a review, and a review's commits are never pushed — see [[Isolation]]). |
 | `wait_timeout` | How long a foreground dispatch waits before giving up. |
-| `archive_when_done` | Whether the agent (and its conductor-created workspace) is archived the moment its step finishes. Forced off for a `background:` hand-off step. |
+| `archive_when_done` | Whether the agent (and its conductor-created workspace) is archived the moment its step finishes. `true`: always. `false`: never; the agent stays live until you close it or the daemon restarts. **Unset (the default):** a foreground workflow agent step that finished cleanly releases its agent and worktree at the step boundary, unless a later step or hook of the run reads its `workdir` or `agent_id` (`git -C {{.fix.workdir}} push` after an approval), in which case it stays live as before. Not released by default: a failed step, a step with `session:`, `watch:` or `idle_timeout:`, and the agents a `team:`, `decide:` or gate runs internally. Forced off for a `background:` hand-off step. |
 | `watch` | Reactive live step: run `steps:` every `every:` (a mini-workflow — fact reads + if-guarded actions). Actions: `step.bail` (reason gone → tear down), `step.rerun` (re-run this step on the new state), or a `workflow:` step (re-run a workflow — re-review). Works on ANY live step, not just hand-offs — e.g. a long-processing step can bail when its input disappears or rerun when new work arrives. (`handoff.bail`/`handoff.rerun` are accepted as deprecated aliases.) Operator-owned. See [[Hand-offs]]. |
 | `idle_timeout` | Release an interactive hand-off still open after this long (drop the hold, archive the agent + workspace). The backstop for one nobody closed; the agent calling `step.done` is the precise signal. Off unless set. See [[Hand-offs]]. |
 | `labels` | Extra `key=value` labels on the dispatched agent. |

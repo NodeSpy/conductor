@@ -268,7 +268,7 @@ func (r *Runner) answerOne(ctx context.Context, t core.Trigger, step config.Step
 		},
 		Timeout: step.Timeout,
 		// One turn, then gone: a decision holds no session worth keeping.
-		ArchiveWhenDone: true,
+		ArchiveWhenDone: config.Bool(true),
 	}
 	out, _, err := r.execAgent(ctx, t, agent, id, slot, data, false)
 	if err != nil {
