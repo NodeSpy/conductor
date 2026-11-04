@@ -423,15 +423,32 @@ Freeze one plugin while leaving the rest current by pinning it exactly
 
 ## Security
 
-The default model is a **visible permission manifest with
-can't-exceed-declaration** — *not* an OS jail.
+A plugin is code the daemon runs. By default conductor runs each connector,
+runtime and engine plugin in an **OS jail**: a filesystem, process and
+network sandbox built from what the plugin declared (its manifest) and what
+your config points it at. Outside that, the plugin sees the base system
+read-only and nothing of your `$HOME`.
 
-That is a deliberate change of posture. conductor is a privileged app you chose
-to run, and a plugin you added is one too. Pretending otherwise costs real
-usability (an `isolation:` block you must author before anything works) and buys
-a boundary that a determined adversary walks around anyway. What conductor owes
-you instead is: *here is exactly what this can do, you saw it before you
-accepted it, and it cannot exceed it.*
+Earlier releases ran plugins outside any OS sandbox and relied on the
+manifest alone, with `isolation:` as an opt-in. That left a plugin able to
+read anything your user can read and dial any host directly, whatever it
+declared. The jail closes those gaps. The manifest is still recorded,
+shown and enforced; the jail is what makes it hold against a plugin that
+does not cooperate.
+
+`sandbox.plugins` sets the policy for the whole daemon:
+
+| Value | Effect |
+|---|---|
+| `on` (default) | Every plugin is jailed. Where this box cannot build the jail (no unprivileged user namespaces on Linux, no `sandbox-exec` on macOS), the plugin starts confined to its manifest only, and the daemon logs a `WARNING` naming the reason. |
+| `required` | As `on`, but a plugin whose jail cannot be built is not started. |
+| `off` | No jail for connectors and runtimes: the pre-jail posture (manifest only). Code-step engines stay jailed, as they were before. |
+
+Per plugin, `trust: full` on its entry opts it out, and an explicit
+`isolation:` block replaces the jail with that sandbox (see
+[Opt-in hardening and opting out](#opt-in-hardening-and-opting-out)). `conductor plugin list --caps` and
+`conductor plugin show` print the confinement each process gets, and the
+daemon logs one line per launch saying which it got.
 
 ### The manifest
 
@@ -652,37 +669,68 @@ cannot check is worse than none:
   a different claim from "this plugin is contained."
 - **It narrows grants, it does not add a wall.** An isolated instance's
   process is confined to exactly its own `network:`/`allow_secrets:`/
-  `allow_env:` — smaller than the shared process's union — but that
-  confinement is the same permission-manifest enforcement every plugin gets
-  (egress proxy, command PATH confinement), not an OS jail. Add
-  `isolation:` on top for that.
+  `allow_env:`/`fs:` — smaller than the shared process's union — inside the
+  same kind of jail every plugin gets. The jail is the wall; `isolate:`
+  decides how many processes share one.
 
-### What that enforces, exactly
+### The jail
 
-Stated plainly, because a security claim you cannot check is worse than none:
+What a jailed plugin gets, on Linux (user, mount, pid and network
+namespaces with a `pivot_root` filesystem allow-list) and on macOS (a
+deny-default Seatbelt profile with the same allow-list):
 
-- **Egress confinement is real.** It runs through the same egress proxy the
-  `isolation:` path uses. A host outside the effective set is refused.
-- **Command confinement is default-path confinement, not a jail.** The child's
-  `PATH` becomes a directory holding links to exactly the declared commands, so
-  a plugin reaching for an undeclared tool *by name* fails. A plugin that
-  invokes an absolute path bypasses it. This has teeth against accident and
-  drift, not against a determined adversary.
+| | Allowed | Everything else |
+|---|---|---|
+| **Filesystem** | The base system read-only (`/usr`, `/etc`, `/opt`; on Linux a private `/proc`, `/dev` and `/tmp`). Its own binary's directory, read-only. Its own state directory (`<state>/plugin-staging/<name>`), read-write, with `HOME` set to a directory inside it. Paths it declares in `fs`, and paths you add with `fs:` on its entry, read-only unless the entry ends `:rw`. Files its connection config points at (values under a `path`, `dir`, `file`, `*_path`, `*_dir` or `*_file` key, such as `app: { private_key_path: … }`), read-only. Its declared commands. | Not present (Linux) or denied (macOS). That includes the rest of `$HOME`, conductor's config, state and secrets. |
+| **Processes** | Its own binary and its declared commands. | On Linux the program directories (`/usr/bin`, `/usr/sbin`, `/usr/local/bin`, `/usr/local/sbin`, `/bin`, `/sbin`, `/opt`) are mounted `noexec`, with each declared command bound back executable. On macOS `exec` is denied except for those paths. |
+| **Network** | A plugin with an effective egress set (what it declares, or `network:` on its entry) gets its own network namespace; the only way out is conductor's egress proxy with exactly that allowlist. On macOS, outbound connections are denied except to the proxy. The describe probe and engines get only what they declare, usually nothing. | Refused by the proxy (403), or unreachable. |
+| **Listening** | An address its connection config sets under `listen` or a `*_listen` key: on Linux the daemon binds it on the host and forwards each connection into the jail; on macOS the profile allows binding that port. | — |
+| **Environment** | The scrubbed environment every plugin gets (unchanged), plus the proxy variables. | — |
+
+Two cases keep the host network, and the launch log line says so:
+
+- **A connector or runtime that declares no egress and has no `network:`.**
+  Many home-lab and LAN connectors declare no egress, because the host they
+  talk to is whatever you configure. With no allowlist there is nothing for
+  the proxy to enforce, and cutting them off would break them. Their
+  filesystem and process jail still applies. Set `network:` on the entry to
+  give one its own namespace with that allowlist.
+- **A plugin with an `exposes` verb** (a tunnel or relay that dials a local
+  address it is handed per call). The install record says so; for a plugin
+  installed before that was recorded, conductor learns it from the plugin's
+  `describe` and restarts it once.
+
+What the jail does not cover:
+
+- On Linux, helpers under `/usr/lib*` and `/usr/libexec` stay executable;
+  only the program directories above are `noexec`.
+- The jail's root on Linux is a private, empty tmpfs. A write outside the
+  bound paths lands there and is discarded with the jail; it never reaches
+  the host.
+- A plugin that reads a credential from your home directory needs that
+  path granted. The github plugin's default token source, `gh auth token`,
+  reads `~/.config/gh`: give the token another way (`identity:` tokens, an
+  App key, or `GH_TOKEN` via `allow_env:`), grant the directory
+  (`fs: [~/.config/gh]`), or set `trust: full`.
+
+### The manifest's own limits
+
+The manifest is enforced with or without the jail, and is all there is when
+the jail is off or unavailable:
+
+- **Egress confinement** runs through the egress proxy. Without the jail it
+  confines a plugin that honours the proxy variables; a plugin that dials
+  directly is stopped only by the jail.
+- **Command confinement**: the child's `PATH` becomes a directory holding
+  links to exactly the declared commands, so an undeclared tool fails *by
+  name*. Without the jail an absolute path bypasses it.
 - **A plugin declaring "I spawn things I am not naming"** gets no `PATH`
-  rewrite at all, and is shown as `commands (unnamed)`. conductor does not claim
-  a confinement it is not performing.
-- **The install-time `describe` runs before any manifest exists**, confined to
-  nothing. That is safe because `describe` is a pure self-description — it needs
-  neither network nor child processes.
-- **A plugin that declares nothing** is confined to nothing beyond the scrubbed
-  environment. It declared no needs; inventing an allowlist for it would break
-  plugins that predate the manifest.
-- **An ENGINE that declares nothing is confined to NO egress** — the opposite
-  default, deliberately. An engine's job is to execute your code against
-  conductor's data plane; "and reach the internet too" is a thing it should have
-  to say out loud. There are no engine plugins predating the manifest, so there
-  is no field to break. (Same mechanism, same limits: it confines a cooperating
-  client, not a determined one. An `isolation:` block is what makes it a wall.)
+  rewrite, and is shown as `commands (unnamed)`.
+- **The install-time `describe`** runs before any manifest exists. It is
+  jailed with no network.
+- **An ENGINE that declares nothing is confined to NO egress.** An engine's
+  job is to execute your code against conductor's data plane; reaching the
+  internet is something it has to declare.
 
 ### What is kept, unchanged
 
@@ -700,10 +748,10 @@ Stated plainly, because a security claim you cannot check is worse than none:
 fail-closed — a bad sha is a security event, not a degraded-boot condition. A
 plugin that crashes *after* boot degrades to "down".
 
-### Opt-in hardening
+### Opt-in hardening and opting out
 
-The OS isolation layer is still there. It is now **optional**, for a locked-down
-box:
+An `isolation:` block on an entry replaces the jail with that sandbox, and
+fails closed: if it cannot be built, the plugin does not start.
 
 ```yaml
 connectors:
@@ -714,17 +762,38 @@ connectors:
       network: { egress: ["your-org.atlassian.net:443"] }
 ```
 
-With a block present you get process/mount/pid isolation, the daemon's
-config/state/secrets masked away inside the mount namespace, and structurally
-enforced egress. `namespace` is Linux-only; `container` is cross-platform
-(docker/podman); `user` is weakest. See [[Isolation]].
+`namespace` is Linux user namespaces (Seatbelt on macOS); `container`
+runs the plugin under docker or podman; `user` is weakest. With a block
+present the daemon's config, state and secret directories are masked in
+the mount namespace. See [[Isolation]].
 
-**Runtimes are not wrapped in a heavy sandbox by default.** A runtime plugin
-executes your agents, which is exactly the privilege you already granted
-conductor. It *is* env-scrubbed (`sandbox.MinimalEnv`, so it does not inherit
-`env:`-resolved secrets) and re-verified on every spawn, but it relies on ACP's
-own supervision rather than `internal/plugin`'s crash-loop cap and size cap.
-**Only run runtime plugins you fully trust.**
+To grant a jailed plugin more of the filesystem, list paths with `fs:`:
+
+```yaml
+connectors:
+  backups:
+    use: acme/plugins/restic
+    fs: ["/srv/backups:rw", "~/.config/restic"]
+```
+
+To run a plugin with no OS sandbox at all, set `trust: full`:
+
+```yaml
+connectors:
+  legacy:
+    use: acme/plugins/legacy
+    trust: full
+```
+
+`trust: full` and `isolation:` on one entry is a load error. Instances that
+share one process must agree: a `trust: full` instance shares a process only
+with other `trust: full` instances (set `isolate: true` on one to separate
+them). The same keys exist under `runtimes.<name>` and `engines.<name>`.
+
+**Runtimes.** RPC and decision runtime plugins run in the jail like
+connectors. ACP runtimes (the ones that run your agents) are launched
+through the agent sandbox instead (`sandbox.agents`), and are
+env-scrubbed and re-verified on every spawn.
 
 ## The protocol
 

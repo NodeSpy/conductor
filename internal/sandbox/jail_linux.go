@@ -24,7 +24,7 @@ import (
 // every mount EPERM, which is what defeated the old overmount mask). The
 // caller (RunEnter) drops that privilege via a nested user namespace before
 // exec'ing the untrusted payload, so the payload cannot pivot back out.
-func buildJail(binds []BindMount) error {
+func buildJail(binds []BindMount, noExecBase bool) error {
 	root, err := os.MkdirTemp("", "conductor-jail-")
 	if err != nil {
 		return fmt.Errorf("jail root tmpdir: %w", err)
@@ -51,6 +51,20 @@ func buildJail(binds []BindMount) error {
 	for _, l := range []string{"/bin", "/sbin", "/lib", "/lib64", "/libexec"} {
 		if err := baseLink(root, l); err != nil {
 			return err
+		}
+	}
+
+	if noExecBase {
+		// The program directories of the base system turn non-executable:
+		// a payload confined to a declared command list cannot run an
+		// undeclared tool by its absolute path either. Library directories
+		// stay executable (shared objects are mapped executable). The
+		// caller's binds land on top afterwards, so a declared command bound
+		// at its own path inside one of these is executable again.
+		for _, d := range noExecDirs {
+			if err := remountNoExec(root, d); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -91,6 +105,27 @@ func buildJail(binds []BindMount) error {
 	}
 
 	return pivotInto(root)
+}
+
+// noExecDirs are the base system's program directories (NoExecBase). Under
+// merged /usr, /bin and /sbin are links into /usr and are covered by it.
+var noExecDirs = []string{"/usr/bin", "/usr/sbin", "/usr/local/bin", "/usr/local/sbin", "/usr/games", "/bin", "/sbin", "/opt"}
+
+// remountNoExec makes root+d a noexec mount of itself. A missing directory,
+// or one that is a symlink in the jail (merged /usr), is skipped.
+func remountNoExec(root, d string) error {
+	target := root + d
+	fi, err := os.Lstat(target)
+	if err != nil || !fi.IsDir() {
+		return nil
+	}
+	if err := unix.Mount(target, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return fmt.Errorf("jail noexec bind %s: %w", d, err)
+	}
+	if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOEXEC|lockedFlags(target), ""); err != nil {
+		return fmt.Errorf("jail noexec %s: %w", d, err)
+	}
+	return nil
 }
 
 // bindInto binds b.Path into root at the same path. skipMissing tolerates a

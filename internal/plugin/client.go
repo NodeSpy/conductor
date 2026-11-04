@@ -168,6 +168,12 @@ type Client struct {
 	// instance's state or managed-auth token just because it shares the
 	// process. Validate alone must never be enough to unlock either.
 	active map[string]bool
+	// hostNetwork: the plugin's declaration has an exposes verb, so its jail
+	// keeps the host network (jailNetwork). Learned from its describe; the
+	// process running when it is learned was jailed without it and is
+	// restarted once (dialedHostNetwork records what it was dialed with).
+	hostNetwork       bool
+	dialedHostNetwork bool
 }
 
 // RunHost authorizes and executes ONE data-plane op on behalf of a run. It is
@@ -741,11 +747,14 @@ func (c *Client) ensureLocked(ctx context.Context) error {
 	// happened to start it: a describe made under a boot timeout must not
 	// take the plugin (and every source stream it serves) down when that
 	// timeout's context is cancelled. Close and teardown end it.
-	conn, kill, err := c.deps.dial(context.WithoutCancel(ctx), c.spec, c.deps)
+	spec := c.spec
+	spec.hostNetwork = c.hostNetwork
+	conn, kill, err := c.deps.dial(context.WithoutCancel(ctx), spec, c.deps)
 	if err != nil {
 		return fmt.Errorf("plugin %s: launch: %w", c.spec.Name, err)
 	}
 	c.conn, c.kill, c.digest = conn, kill, digest
+	c.dialedHostNetwork = c.hostNetwork
 	if pt, ok := conn.(interface{ Pid() int }); ok {
 		// One subprocess per configured connector instance is the point of
 		// multi-instance isolation — log the pid so an operator (or the e2e
@@ -797,7 +806,31 @@ func (c *Client) Describe(ctx context.Context) (*Decl, error) {
 	if p := append(sdk.CheckSemantics(raw), sdk.ValidateSemantics(decl)...); len(p) > 0 {
 		return nil, fmt.Errorf("plugin %s: declarations refused:\n  %s", c.spec.Name, strings.Join(p, "\n  "))
 	}
+	c.learnJailFacts(decl)
 	return &decl, nil
+}
+
+// learnJailFacts records what a declaration tells the jail that the install
+// record does not: an exposes verb (a tunnel or relay that dials local
+// addresses it is handed per call) needs the host network. When that changes
+// the network the running process was jailed with, the process is stopped,
+// and the next call starts it with the right one.
+func (c *Client) learnJailFacts(d Decl) {
+	if !declExposes(d) {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.hostNetwork {
+		return
+	}
+	c.hostNetwork = true
+	before, after := c.spec, c.spec
+	after.hostNetwork = true
+	if c.conn != nil && !c.dialedHostNetwork && c.deps.Sandbox.Jail != JailOff && jailNetwork(before).deny != jailNetwork(after).deny {
+		c.deps.Log("plugin %s: it declares an exposes verb, so its jail keeps the host network — restarting it once with that", c.spec.Name)
+		c.teardownLocked()
+	}
 }
 
 // DescribeInstance asks the plugin for ONE configured instance's declaration
@@ -841,6 +874,7 @@ func (c *Client) DescribeInstance(ctx context.Context, instance string, config m
 	if p := append(sdk.CheckSemantics(raw), sdk.ValidateSemantics(d)...); len(p) > 0 {
 		return nil, false, fmt.Errorf("plugin %s: instance %s: declarations refused:\n  %s", c.spec.Name, instance, strings.Join(p, "\n  "))
 	}
+	c.learnJailFacts(d)
 	return &d, true, nil
 }
 
@@ -1111,23 +1145,20 @@ func (p pidConn) Pid() int { return p.pid }
 // realDial spawns the verified, sandbox-wrapped subprocess and wires the
 // JSON-RPC transport over its stdio, with stderr pumped through the redactor.
 func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
-	cmd, cleanup, sandboxed, err := buildCommand(s, d.Sandbox)
+	cmd, cleanup, conf, err := buildCommand(s, d.Sandbox)
 	if err != nil {
 		return nil, nil, err
 	}
-	switch {
-	case sandboxed:
-		// A confirmed OS jail — say so positively (this is the good path for an
-		// untrusted-by-default code engine).
-		d.Log("plugin %s: OS-sandboxed", s.Name)
-	case s.TrustFull:
-		// The operator opted this engine out of sandboxing deliberately — quiet.
-	case s.IsolationDefaulted:
-		// A synthesized default that degraded: buildCommand already logged the
-		// actionable warning at the point it knew why. Nothing to add.
+	switch conf.Mode {
+	case "trusted":
+		// The operator opted this plugin out deliberately — quiet.
+	case "unavailable":
+		d.Log("plugin %s: WARNING: %s — set sandbox.plugins: required to refuse instead", s.Name, conf)
 	default:
-		// The app-extension default for a connector/runtime with no isolation:.
-		d.Log("plugin %s: running WITHOUT OS sandbox (no isolation: block) — add one for filesystem/process confinement", s.Name)
+		d.Log("plugin %s: %s", s.Name, conf)
+	}
+	for _, n := range conf.Notes {
+		d.Log("plugin %s: %s", s.Name, n)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

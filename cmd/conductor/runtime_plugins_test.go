@@ -125,7 +125,7 @@ func TestLoadRuntimePlugins_DecisionRuntime(t *testing.T) {
 	cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
 		"rt": {Use: buildTestPlugin(t, "acme-decider"), Connection: map[string]any{
 			"api_key": "env:ACME_DECIDER_KEY", "calls_log": logPath,
-		}},
+		}, FS: []string{filepath.Dir(logPath) + ":rw"}}, // the fixture writes its log there
 	}}
 	mgr := pluginManagerFor(cfg, secrets.New(), func(map[string]any) {})
 	t.Cleanup(func() { _ = mgr.Close() })

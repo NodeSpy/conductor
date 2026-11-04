@@ -699,6 +699,7 @@ func cmdRun(args []string) error {
 		return fmt.Errorf("state dir %s perms: %w", stateDir, err)
 	}
 	controller.DaemonMaskPaths = []string{stateDir, filepath.Dir(cfgFile)}
+	pluginJailPolicy = plugin.JailPolicyFor(cfg.Sandbox.PluginJail())
 	// HostDial is the ssh -W stdio forward remote opencode servers are reached
 	// through (they bind the remote 127.0.0.1; no port opens anywhere).
 	controller.HostDial = func(ctx context.Context, name, addr string) (net.Conn, error) {

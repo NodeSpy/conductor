@@ -265,6 +265,12 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 	for _, p := range resolvePaths(a.ExecDeny) {
 		b.WriteString("(deny process-exec (literal " + sbplString(p) + "))\n")
 	}
+	if len(a.ExecOnly) > 0 {
+		b.WriteString("(deny process-exec*)\n")
+		for _, p := range socketPaths(a.ExecOnly) { // as named and symlink-resolved
+			b.WriteString("(allow process-exec* (literal " + sbplString(p) + "))\n")
+		}
+	}
 	if a.Keychain {
 		b.WriteString("(allow file-read* file-write* (subpath " + sbplString(a.Home+"/Library/Keychains") + "))\n")
 	}
@@ -288,6 +294,9 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 		}
 		for _, p := range a.ListenPorts {
 			b.WriteString(fmt.Sprintf("(allow network-bind network-inbound (local ip \"localhost:%d\"))\n", p))
+		}
+		for _, p := range a.PublicListenPorts {
+			b.WriteString(fmt.Sprintf("(allow network-bind network-inbound (local ip \"*:%d\"))\n", p))
 		}
 		if a.Browser {
 			// Chromium's own unix sockets (its process singleton), in its

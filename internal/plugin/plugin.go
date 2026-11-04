@@ -132,16 +132,25 @@ type Spec struct {
 	Manifest Manifest
 	// Network is the referencing connector's declared egress.
 	Network []string
-	// Isolation is OPTIONAL OS hardening. nil is the normal case.
+	// Isolation is the operator's isolation: block. nil means the default
+	// plugin jail (jail.go); mode none (also how a connector instance's
+	// trust: full travels) means no OS sandbox; anything else is that
+	// sandbox, fail-closed.
 	Isolation *config.IsolationConfig
-	// IsolationDefaulted marks an Isolation conductor synthesized (an
-	// untrusted-by-default code engine) rather than one the operator wrote: its
-	// enforcement is best-effort (degrade to a warning if the sandbox can't be
-	// applied), where an operator-written block fails closed.
-	IsolationDefaulted bool
-	// TrustFull marks an engine the operator opted out of sandboxing — nil
-	// Isolation, and the "no OS sandbox" warning is suppressed.
+	// TrustFull marks a runtime or engine the operator opted out of the
+	// default jail (trust: full): no OS sandbox, its manifest still applies.
 	TrustFull bool
+	// FS are the operator's extra jail paths ("/path" or "/path:rw").
+	FS []string
+	// Paths are host paths the instances' connection config names (an App
+	// private key, a CA bundle): shown read-only in the jail.
+	Paths []string
+	// Listen are inbound addresses the instances' connection config asks the
+	// plugin to serve; forwarded into a jail's own network namespace.
+	Listen []string
+	// hostNetwork is set by the Client once the plugin's declaration shows
+	// an exposes verb: the jail leaves it the host network (jailNetwork).
+	hostNetwork bool
 	// AllowSecrets optionally tightens which secret refs may cross the boundary.
 	AllowSecrets []string
 	// AllowEnv are the daemon environment variables the operator granted

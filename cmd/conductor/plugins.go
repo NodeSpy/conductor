@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/acp"
+	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/code"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
@@ -34,10 +35,9 @@ import (
 var explodeRefs = plugin.ExplodeRefs
 
 // pluginDeps assembles the shared plugin.Deps: the redactor, the audit sink,
-// and the sandbox wiring. The sandbox wiring is only consumed when a connector
-// carries an OPTIONAL isolation: block — the default path is the permission
-// manifest, not OS confinement — but the egress proxy is also what enforces a
-// plugin's declared network, so it is wired either way.
+// and the sandbox wiring — the default plugin jail (sandbox.plugins), an
+// entry's isolation: block, and the egress proxy that enforces a plugin's
+// declared network on every path.
 //
 // auth is the host.auth provider a spawned plugin's Deps.Auth is wired to. A
 // connector stack (buildFlowStack) passes THIS STACK's own
@@ -79,9 +79,21 @@ func pluginDeps(sec *secrets.Resolver, audit func(map[string]any), auth plugin.A
 			StagingRoot: config.PluginStagingDir(),
 			EgressUnix:  egressUnix,
 			EgressAddr:  egressAddr,
+			Jail:        pluginJailPolicy,
+			JailProbe:   pluginJailProbe,
 		},
 	}
 }
+
+// pluginJailPolicy is sandbox.plugins for every plugin this process spawns.
+// The daemon and a one-shot run set it from the loaded config; a CLI command
+// (plugin show, an install-time describe) keeps the default.
+var pluginJailPolicy = plugin.JailOn
+
+// pluginJailProbe reports, once per process, why this box cannot build the
+// default plugin jail ("" when it can) — the same probe the agent sandbox
+// uses: it needs unprivileged user namespaces on Linux, sandbox-exec on macOS.
+var pluginJailProbe = sync.OnceValue(agentsandbox.Probe)
 
 // pluginStateStore is the daemon's one host.state store, shared by every
 // plugin client (opened lazily, on the first host.state call).
@@ -853,7 +865,7 @@ func cmdPluginList(args []string) error {
 		if caps {
 			fmt.Printf("%-18s   use: %s\n", "", ref.Use.String())
 			fmt.Printf("%-18s   permissions:\n", "")
-			for _, line := range permissionLines(ref, spec) {
+			for _, line := range permissionLines(ref, spec, pluginJailDeps(cfg)) {
 				fmt.Printf("%-18s     %s\n", "", line)
 			}
 			if localDescribeErr != nil {
@@ -880,7 +892,7 @@ func cmdPluginList(args []string) error {
 // isolated instance's OWN grant lives in ref.Instances instead (exactly what
 // plugin.InstanceSpec would apply to its own process) and is never folded
 // into the shared line.
-func permissionLines(ref config.PluginRef, spec plugin.Spec) []string {
+func permissionLines(ref config.PluginRef, spec plugin.Spec, jd plugin.SandboxDeps) []string {
 	lines := []string{"declared capabilities: " + spec.Manifest.Summary()}
 	if ref.Kind() == config.PluginKindConnector && spec.Manifest.SingleProcess {
 		lines = append(lines, "single_process: the plugin declares every instance must share one process — isolate: true is refused for it")
@@ -892,12 +904,20 @@ func permissionLines(ref config.PluginRef, spec plugin.Spec) []string {
 			label = fmt.Sprintf("shared process (instances: %s)", strings.Join(shared, ", "))
 		}
 		lines = append(lines, label+": "+grantSummary(ref.Network, ref.AllowSecrets, ref.AllowEnv))
+		lines = append(lines, "  confinement: "+plugin.PlannedConfinement(spec, jd).String())
 	}
 	for _, n := range ref.IsolatedInstanceNames() {
 		g := ref.Instances[n]
 		lines = append(lines, fmt.Sprintf("instance %s (isolate: true, own process): %s", n, grantSummary(g.Network, g.AllowSecrets, g.AllowEnv)))
+		lines = append(lines, "  confinement: "+plugin.PlannedConfinement(plugin.InstanceSpec(spec, n), jd).String())
 	}
 	return lines
+}
+
+// pluginJailDeps is the part of the plugin sandbox deps that decides the
+// confinement, for showing it without launching anything.
+func pluginJailDeps(cfg *config.Config) plugin.SandboxDeps {
+	return plugin.SandboxDeps{Jail: plugin.JailPolicyFor(cfg.Sandbox.PluginJail()), JailProbe: pluginJailProbe}
 }
 
 // grantSummary renders one process's actual confinement grant: the egress
@@ -1228,14 +1248,11 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 		fmt.Printf("  binary: NOT INSTALLED — run `conductor init`\n")
 	}
 	fmt.Println("\n  PERMISSIONS (declared by the plugin, enforced by conductor):")
-	for _, line := range permissionLines(ref, spec) {
+	for _, line := range permissionLines(ref, spec, pluginJailDeps(cfg)) {
 		fmt.Printf("    %s\n", line)
 	}
 	if spec.Local && localDescribeErr != nil {
 		fmt.Printf("    (could not describe the local build to confirm its real declared capabilities: %v)\n", localDescribeErr)
-	}
-	if ref.Isolation != nil {
-		fmt.Printf("    plus OPT-IN OS isolation: mode %s\n", ref.Isolation.Mode)
 	}
 	fmt.Println("\n  DISCLOSURE: this plugin is code the daemon executes out-of-process.")
 	switch ref.Kind() {

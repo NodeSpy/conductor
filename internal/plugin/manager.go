@@ -175,7 +175,7 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 		s.Probe = true
 	} else {
 		s.Isolation = ref.Isolation
-		s.IsolationDefaulted = ref.IsolationDefaulted
+		s.FS, s.Paths, s.Listen = ref.FS, ref.Paths, ref.Listen
 		s.Network = ref.Network
 		s.AllowSecrets = ref.AllowSecrets
 		s.AllowEnv = ref.AllowEnv
@@ -231,11 +231,15 @@ func InstanceSpec(spec Spec, instance string) Spec {
 		instSpec.AllowSecrets = g.AllowSecrets
 		instSpec.AllowEnv = g.AllowEnv
 		instSpec.Isolation = g.Isolation
+		instSpec.TrustFull = g.TrustFull
+		instSpec.FS, instSpec.Paths, instSpec.Listen = g.FS, g.Paths, g.Listen
 	} else {
 		instSpec.Network = nil
 		instSpec.AllowSecrets = nil
 		instSpec.AllowEnv = nil
 		instSpec.Isolation = nil
+		instSpec.TrustFull = false
+		instSpec.FS, instSpec.Paths, instSpec.Listen = nil, nil, nil
 	}
 	instSpec.Instances = nil
 	instSpec.Probe = false

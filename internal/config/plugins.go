@@ -2,9 +2,12 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // PluginRef is one external plugin the daemon must run out-of-process. It is
@@ -29,15 +32,24 @@ type PluginRef struct {
 	// is the normal case: the default model is the permission manifest, not OS
 	// confinement.
 	Isolation *IsolationConfig
-	// IsolationDefaulted marks an Isolation that conductor SYNTHESIZED (an
-	// untrusted-by-default code engine), not one the operator wrote. Its
-	// enforcement is BEST-EFFORT: if the OS sandbox can't be applied the launch
-	// degrades to a warning, whereas an operator-written block fails closed.
-	IsolationDefaulted bool
-	// TrustFull marks an engine the operator opted out of sandboxing
-	// (`engines.<name>.trust: full`). Isolation is nil and the "no OS sandbox"
-	// warning is suppressed — they chose it deliberately.
+	// TrustFull marks a plugin the operator opted out of the default jail
+	// (`trust: full` on its engines:/runtimes: entry, or on EVERY shared
+	// connector instance — a connector instance's trust: full is carried as
+	// isolation mode none, so it combines across instances by the same
+	// rules as isolation:). Unconfined beyond its manifest, and quiet about it.
 	TrustFull bool
+	// FS are the operator's extra jail paths (the entries' fs:), unioned
+	// across the instances sharing the process: "/path" or "/path:rw".
+	FS []string
+	// Paths are the host files and directories the instances' connection
+	// config points the plugin at (values under path|dir|file|*_path|*_dir|
+	// *_file keys: an App private key, a CA bundle), unioned like FS. The
+	// jail shows them read-only.
+	Paths []string
+	// Listen are the inbound addresses the instances' connection config asks
+	// the plugin to serve (values under listen|*_listen keys), unioned. A
+	// jail with its own network namespace forwards them in from the host.
+	Listen []string
 	// Network is the referencing connector's declared egress. Empty for a
 	// runtime (a runtime executes your agents; its egress is not narrowed).
 	Network []string
@@ -80,7 +92,17 @@ type ConnectorGrant struct {
 	Network      []string
 	AllowSecrets []string
 	AllowEnv     []string
-	Isolation    *IsolationConfig
+	// Isolation is the instance's isolation: block — or, for an instance
+	// with trust: full, a synthesized {mode: none}, so the opt-out combines
+	// across instances sharing a process by the isolation: rules.
+	Isolation *IsolationConfig
+	// TrustFull mirrors ConnectorRef.Trust (for display).
+	TrustFull bool
+	// FS, Paths and Listen are this instance's own jail inputs (see
+	// PluginRef).
+	FS     []string
+	Paths  []string
+	Listen []string
 	// Isolate mirrors ConnectorRef.Isolate: true means this one configured
 	// instance gets its own dedicated process instead of sharing the
 	// plugin's one default process.
@@ -231,6 +253,12 @@ func combineIsolation(a, b *IsolationConfig) (*IsolationConfig, bool) {
 		if other != nil && other.Network != nil && other.Network.Deny {
 			return nil, false // one denies, the other wrote no block: no deny
 		}
+		if other.OptsOut() {
+			// One opts out of every sandbox (mode none, or trust: full);
+			// the other wrote nothing and so gets the default plugin jail.
+			// Sharing a process would silently unjail it.
+			return nil, false
+		}
 		return other, true
 	}
 	ac, bc := *a, *b
@@ -327,17 +355,30 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		// instances is a load error (validatePluginRefs); this best-effort
 		// merge takes the first and lets that later, authoritative check
 		// report it precisely.
+		iso := ref.Isolation
+		if ref.TrustFull() && iso == nil {
+			iso = trustFullIsolation()
+		}
+		paths, listen := connectionJailFacts(&ref.raw, connectorHeaderKeys)
 		if !ref.Isolate {
-			p.Isolation = mergeIsolationBestEffort(p.Isolation, ref.Isolation)
+			p.Isolation = mergeIsolationBestEffort(p.Isolation, iso)
+			p.TrustFull = p.TrustFull || ref.TrustFull()
 			p.Network = appendUnique(p.Network, ref.Network...)
 			p.AllowSecrets = appendUnique(p.AllowSecrets, ref.AllowSecrets...)
 			p.AllowEnv = appendUnique(p.AllowEnv, ref.AllowEnv...)
+			p.FS = appendUnique(p.FS, ref.FS...)
+			p.Paths = appendUnique(p.Paths, paths...)
+			p.Listen = appendUnique(p.Listen, listen...)
 		}
 		p.Instances[name] = ConnectorGrant{
 			Network:      append([]string(nil), ref.Network...),
 			AllowSecrets: append([]string(nil), ref.AllowSecrets...),
 			AllowEnv:     append([]string(nil), ref.AllowEnv...),
-			Isolation:    ref.Isolation,
+			Isolation:    iso,
+			TrustFull:    ref.TrustFull(),
+			FS:           append([]string(nil), ref.FS...),
+			Paths:        paths,
+			Listen:       listen,
 			Isolate:      ref.Isolate,
 			Use:          u,
 		}
@@ -359,7 +400,8 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		// the reference leaf (`runtimes: { modal: { use: acme/p/conductor-modal } }`
 		// is selected as `runtime: modal`).
 		u.Name = name
-		p := PluginRef{Name: name, Instance: name, Use: u, Isolation: rt.Isolation}
+		p := PluginRef{Name: name, Instance: name, Use: u, Isolation: rt.Isolation, TrustFull: trustFull(rt.Trust), FS: rt.FS}
+		p.Paths, p.Listen = mapJailFacts(rt.Connection)
 		out[u.InstallKey()] = p
 	}
 
@@ -385,31 +427,137 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		ec := c.Engines[u.Name]
 		p.Network = ec.Network
 		p.AllowSecrets = ec.AllowSecrets
-		switch {
-		case ec.TrustFull():
-			p.TrustFull = true // unconfined, deliberately — stay quiet
-		case ec.Isolation != nil:
-			p.Isolation = ec.Isolation // explicit → fail-closed
-		default:
-			p.Isolation = defaultEngineIsolation() // untrusted default → best-effort
-			p.IsolationDefaulted = true
-		}
+		p.FS = ec.FS
+		// trust: full → unconfined, deliberately. An explicit isolation:
+		// block → that sandbox, fail-closed. Neither → the default plugin
+		// jail every plugin gets (internal/plugin), which for an engine
+		// means no network unless engines.<name>.network grants some.
+		p.TrustFull = ec.TrustFull()
+		p.Isolation = ec.Isolation
 		out[u.InstallKey()] = p
 	})
 	return out
 }
 
-// defaultEngineIsolation is the sandbox an untrusted-by-default code engine gets
-// when the operator sets nothing: a user+pid+mount namespace with the network
-// denied. A code engine is pure computation over inputs delivered on its RPC
-// transport, so denying egress and masking the daemon's own state/config costs
-// it nothing while turning its "no declared capabilities" into a kernel-enforced
-// wall. Enforcement is best-effort (see PluginRef.IsolationDefaulted).
-func defaultEngineIsolation() *IsolationConfig {
-	return &IsolationConfig{
-		Mode:    "namespace",
-		Network: &IsolationNetwork{Deny: true},
+// trustFullIsolation is how a connector instance's trust: full travels on its
+// grant: an isolation: block of mode none, which runs the plugin with no OS
+// sandbox and combines with a sibling instance only when that sibling opts
+// out the same way (combineIsolation).
+func trustFullIsolation() *IsolationConfig { return &IsolationConfig{Mode: "none"} }
+
+// connectionJailFacts walks a connector's raw connection node for the two
+// things a plugin's jail must know: host paths it is pointed at (a value
+// under a path-named key, pathKey — the same keys Load expands ~ in) and
+// inbound addresses it is asked to serve (a value under listen or *_listen).
+// Header keys are skipped. Relative paths and non-scalars are ignored.
+func connectionJailFacts(n *yaml.Node, skip map[string]bool) (paths, listen []string) {
+	var walk func(n *yaml.Node, top bool)
+	walk = func(n *yaml.Node, top bool) {
+		if n == nil {
+			return
+		}
+		switch n.Kind {
+		case yaml.DocumentNode, yaml.SequenceNode:
+			for _, c := range n.Content {
+				walk(c, top && n.Kind == yaml.DocumentNode)
+			}
+		case yaml.MappingNode:
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				k, v := n.Content[i].Value, n.Content[i+1]
+				if top && skip[k] {
+					continue
+				}
+				if v.Kind == yaml.ScalarNode {
+					paths, listen = jailFact(k, v.Value, paths, listen)
+					continue
+				}
+				walk(v, false)
+			}
+		}
 	}
+	walk(n, true)
+	return paths, listen
+}
+
+// mapJailFacts is connectionJailFacts over an already-decoded map (a runtime
+// plugin's connection:).
+func mapJailFacts(m map[string]any) (paths, listen []string) {
+	var walk func(v any)
+	walk = func(v any) {
+		switch t := v.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				if s, ok := t[k].(string); ok {
+					paths, listen = jailFact(k, s, paths, listen)
+					continue
+				}
+				walk(t[k])
+			}
+		case []any:
+			for _, e := range t {
+				walk(e)
+			}
+		}
+	}
+	walk(m)
+	return paths, listen
+}
+
+func jailFact(k, v string, paths, listen []string) ([]string, []string) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return paths, listen
+	}
+	switch {
+	case pathKey(k):
+		if p := expandHome(v); filepath.IsAbs(p) {
+			paths = appendUnique(paths, filepath.Clean(p))
+		}
+	case k == "listen" || strings.HasSuffix(k, "_listen"):
+		listen = appendUnique(listen, v)
+	}
+	return paths, listen
+}
+
+// ParsePluginFS splits one fs: entry ("/path" or "/path:rw", "/path:ro") into
+// its path and whether the jail shows it read-write.
+func ParsePluginFS(e string) (path string, rw bool) {
+	switch {
+	case strings.HasSuffix(e, ":rw"):
+		return strings.TrimSuffix(e, ":rw"), true
+	case strings.HasSuffix(e, ":ro"):
+		return strings.TrimSuffix(e, ":ro"), false
+	}
+	return e, false
+}
+
+// validatePluginFS checks an entry's fs: list: absolute paths (after ~), with
+// an optional :rw/:ro suffix.
+func validatePluginFS(where string, fs []string) error {
+	for _, e := range fs {
+		p, _ := ParsePluginFS(strings.TrimSpace(e))
+		if p == "" || !filepath.IsAbs(expandHome(p)) {
+			return fmt.Errorf("config: %s: fs: %q must be an absolute path (or ~/…), optionally ending :rw or :ro", where, e)
+		}
+	}
+	return nil
+}
+
+// validatePluginTrust checks a trust: value and that it is not combined with
+// an isolation: block.
+func validatePluginTrust(where, trust string, iso *IsolationConfig) error {
+	if t := strings.TrimSpace(trust); t != "" && !trustFull(t) {
+		return fmt.Errorf("config: %s: trust must be \"full\" (run the plugin without its OS jail) or empty, got %q", where, trust)
+	}
+	if trustFull(trust) && iso != nil {
+		return fmt.Errorf("config: %s: set either `trust: full` (no sandbox) or an `isolation:` block, not both", where)
+	}
+	return nil
 }
 
 // defaultCodeIsolation is the sandbox a LOCAL cli/host code step (including
@@ -571,7 +719,11 @@ func (c *Config) checkIsolationMerge() error {
 			continue
 		}
 		groupKey := u.InstallKey() + "\x00" + u.String()
-		byKey[groupKey] = append(byKey[groupKey], entry{name, ref.Isolation})
+		iso := ref.Isolation
+		if ref.TrustFull() && iso == nil {
+			iso = trustFullIsolation()
+		}
+		byKey[groupKey] = append(byKey[groupKey], entry{name, iso})
 	}
 	for groupKey, entries := range byKey {
 		if len(entries) < 2 {
@@ -584,7 +736,7 @@ func (c *Config) checkIsolationMerge() error {
 			merged, ok := combineIsolation(combined, e.isolation)
 			if !ok {
 				name := strings.TrimPrefix(key, UseKindConnector.Dir()+"/")
-				return fmt.Errorf("config: connectors: %s and %s share the %s plugin %s's one process by default, but declare different isolation: blocks that cannot combine — make them match, or set isolate: true on one to give it its own process",
+				return fmt.Errorf("config: connectors: %s and %s share the %s plugin %s's one process by default, but declare different isolation: blocks (or trust: full on only one) that cannot combine — make them match, or set isolate: true on one to give it its own process",
 					combinedFrom, e.instance, key, name)
 			}
 			combined = merged

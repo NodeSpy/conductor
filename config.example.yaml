@@ -793,17 +793,35 @@ models:
 # plugin is equal, and what the engine does with its events comes from the
 # semantics it declares — there is nothing per plugin to grant.
 #
-# SECURITY. A plugin declares the hosts it calls and the commands it spawns.
-# Conductor records that manifest when it installs the plugin, SHOWS it to you
-# (`conductor plugin add`, `plugin list --caps`, `plugin show`), and confines
-# the subprocess to it. That is a visible permission manifest, not an OS jail —
-# conductor is a privileged app you chose to run, and so is a plugin you added.
-# OS isolation is still there, as OPT-IN hardening for a locked-down box:
+# SECURITY. A plugin declares the hosts it calls, the commands it spawns and the
+# paths it needs. Conductor records that manifest when it installs the plugin,
+# SHOWS it to you (`conductor plugin add`, `plugin list --caps`, `plugin show`),
+# and runs the plugin in an OS jail built from it: the base system read-only,
+# its own binary and state dirs, declared paths and commands, files its config
+# points at (read-only), and none of the rest of $HOME. A plugin that declares
+# egress (or has network: set) reaches the network only through conductor's
+# egress proxy, limited to that list. `plugin list --caps` shows what each
+# process gets. See docs/wiki/Plugins.md § Security.
+#
+# sandbox:
+#   plugins: on          # default. `required`: refuse to start a plugin whose
+#                        # jail this box cannot build; `off`: no jail for
+#                        # connectors and runtimes (engines stay jailed)
 #
 # connectors:
 #   jira:
 #     use: acme/plugins/jira
+#     network: ["your-org.atlassian.net:443"]   # narrows the declared egress
+#   backups:
+#     use: acme/plugins/restic
+#     fs: ["/srv/backups:rw"]                    # more of the filesystem (read-only unless :rw)
+#   legacy:
+#     use: acme/plugins/legacy
+#     trust: full                                # no OS jail for this one
+#   locked:
+#     use: acme/plugins/jira
 #     isolation: { mode: namespace, network: { egress: ["your-org.atlassian.net:443"] } }
+#                                                # this sandbox instead of the jail; fails closed
 
 # ---------------------------------------------------------------------------
 # STEPS — where an agent's behavior lives now. This replaced `agents:`.

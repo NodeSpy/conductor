@@ -62,25 +62,27 @@ const (
 // block tunes or opts out of that. A step's `run:`/`use:` has no place for
 // isolation, which is why the surface lives here.
 type EngineConfig struct {
-	// Isolation replaces the synthesized default with an EXPLICIT sandbox. An
+	// Isolation replaces the default plugin jail with an EXPLICIT sandbox. An
 	// explicit block fails closed (a preflight failure refuses the launch),
-	// unlike the default, which is best-effort (degrades to a warning).
+	// unlike the default jail under sandbox.plugins: on, which degrades to a
+	// warning.
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
-	// Trust opts OUT of sandboxing: `trust: full` runs the engine unconfined (the
-	// app-extension posture) — for an engine the operator has audited. Empty is
-	// the default: sandbox it.
+	// Trust opts OUT of sandboxing: `trust: full` runs the engine without the
+	// jail — for an engine the operator has audited. Empty is the default:
+	// jail it.
 	Trust string `yaml:"trust,omitempty"`
 	// Network is the engine's declared egress allowlist. Empty leaves the
 	// deny-by-default a pure-compute engine wants.
 	Network []string `yaml:"network,omitempty"`
 	// AllowSecrets optionally tightens which secret refs may cross to the engine.
 	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
+	// FS are extra host paths the engine's jail shows it: "/path" read-only,
+	// "/path:rw" read-write.
+	FS []string `yaml:"fs,omitempty" path:"local"`
 }
 
 // TrustFull reports whether the operator opted this engine out of sandboxing.
-func (e EngineConfig) TrustFull() bool {
-	return strings.EqualFold(strings.TrimSpace(e.Trust), "full")
-}
+func (e EngineConfig) TrustFull() bool { return trustFull(e.Trust) }
 
 // hostInterpreters are the interpreter names `use:` accepts as "a program on
 // the box" rather than as a plugin reference.

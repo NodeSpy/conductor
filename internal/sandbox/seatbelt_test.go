@@ -192,3 +192,21 @@ func TestSeatbeltAgentWriteDenyOutranksAllowBack(t *testing.T) {
 		t.Fatalf("the write denial must follow the allow-back:\n%s", prof)
 	}
 }
+
+// A plugin's exec allow-list: every exec is denied but the listed paths,
+// and the deny comes first (SBPL's last matching rule wins). A listen port
+// is bindable on any local address.
+func TestSeatbeltAgentExecOnlyAndPublicListen(t *testing.T) {
+	p := seatbeltAgentProfile(nil, &AgentProfile{ExecOnly: []string{"/opt/plugin/bin"}, PublicListenPorts: []int{8088}}, AgentNet{ProxyPort: 9})
+	deny := strings.Index(p, "(deny process-exec*)\n")
+	allow := strings.Index(p, `(allow process-exec* (literal "/opt/plugin/bin"))`)
+	if deny < 0 || allow < 0 || allow < deny {
+		t.Fatalf("exec allow-list missing or out of order:\n%s", p)
+	}
+	if !strings.Contains(p, `(allow network-bind network-inbound (local ip "*:8088"))`) {
+		t.Fatalf("listen port not bindable:\n%s", p)
+	}
+	if q := seatbeltAgentProfile(nil, &AgentProfile{}, AgentNet{}); strings.Contains(q, "(deny process-exec*)") || strings.Contains(q, `ip "*:`) {
+		t.Fatalf("an agent profile without them gets an exec allow-list or a public port:\n%s", q)
+	}
+}

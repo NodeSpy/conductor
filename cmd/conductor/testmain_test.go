@@ -25,7 +25,14 @@ import (
 // daemon's start-up paseo merge and `conductor paseo setup` fall back to
 // $PASEO_HOME, then ~/.paseo — a developer's live paseo config. A mutant
 // that lost a runtime's home: once wrote conductor's entries there.
+//
+// A plugin launched in its jail re-executes os.Executable() — this test
+// binary — as `sandbox-net`, the in-jail forwarder; it answers that the way
+// conductor does.
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "sandbox-net" {
+		os.Exit(runSandboxNet(os.Args[2:]))
+	}
 	capAgentSlice = func(string, string, string) error { return nil } // never the real user manager
 	root, err := testhome.Isolate()
 	if err != nil {

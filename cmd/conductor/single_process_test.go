@@ -323,7 +323,7 @@ func TestPermissionLinesShowsSingleProcessReason(t *testing.T) {
 		Shared:   true,
 		Manifest: plugin.Manifest{SingleProcess: true},
 	}
-	lines := permissionLines(ref, spec)
+	lines := permissionLines(ref, spec, plugin.SandboxDeps{})
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "shared process") {
 		t.Fatalf("expected the shared-process grant line, got:\n%s", joined)
@@ -348,7 +348,7 @@ func TestPermissionLinesShowsSingleProcessReason(t *testing.T) {
 		},
 	}
 	plainSpec := plugin.Spec{Name: "tailscale", Kind: plugin.KindConnector, Provides: "tailscale", Shared: true}
-	plainLines := strings.Join(permissionLines(plainRef, plainSpec), "\n")
+	plainLines := strings.Join(permissionLines(plainRef, plainSpec, plugin.SandboxDeps{}), "\n")
 	if strings.Contains(plainLines, "single_process") {
 		t.Fatalf("a plugin that does not declare single_process must show no such line:\n%s", plainLines)
 	}
@@ -455,4 +455,34 @@ func keysOfTypeDecls(m map[string]*connector.TypeDecl) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// `plugin list --caps` shows each process's confinement: the shared process
+// and an isolated instance each get their own line, from their own grant.
+func TestPermissionLinesShowConfinement(t *testing.T) {
+	ref := config.PluginRef{
+		Name: "jira", Use: config.Use{Kind: config.UseKindConnector, Name: "jira"},
+		Instances: map[string]config.ConnectorGrant{
+			"a": {},
+			"b": {Isolate: true, TrustFull: true, Isolation: &config.IsolationConfig{Mode: "none"}},
+		},
+	}
+	spec := plugin.Spec{Name: "jira", Kind: plugin.KindConnector, Provides: "jira", Shared: true,
+		Manifest: plugin.Manifest{Egress: []string{"your-org.atlassian.net:443"}}}
+	spec.Instances = ref.Instances
+	jd := plugin.SandboxDeps{Jail: plugin.JailOn, JailProbe: func() string { return "" }}
+	joined := strings.Join(permissionLines(ref, spec, jd), "\n")
+	for _, want := range []string{
+		"confinement: OS jail: filesystem limited to its own dirs, declared paths and commands; network: only through conductor's egress proxy to your-org.atlassian.net:443",
+		"instance b (isolate: true, own process)",
+		"confinement: no OS jail (trust: full)",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in:\n%s", want, joined)
+		}
+	}
+	jd.JailProbe = func() string { return "no user namespaces" }
+	if joined := strings.Join(permissionLines(ref, spec, jd), "\n"); !strings.Contains(joined, "no OS jail — it cannot be built on this box (no user namespaces)") {
+		t.Fatalf("an unavailable jail is not shown:\n%s", joined)
+	}
 }

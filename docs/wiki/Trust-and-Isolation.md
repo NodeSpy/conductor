@@ -140,8 +140,14 @@ paths they named, and each instance's own credentials only (never a sibling
 instance's, even when they share a process). That is a real restriction and
 a visible one — you see the manifest when you install it.
 
-It is not an OS jail. A plugin that spawns a process spawns it as your user.
-Read the manifest before installing, the same way you would read a pack's.
+By default each process also runs in an OS jail built from that manifest
+(`sandbox.plugins`, see [[Plugins]] § Security): it does not see the rest of
+your `$HOME` or conductor's state, it runs only its declared commands, and
+a plugin with declared egress reaches only those hosts, through the egress
+proxy. It still runs as your user, and a plugin with no declared egress and
+no `network:` keeps the host network. `trust: full` on its entry removes the
+jail. Read the manifest before installing, the same way you would read a
+pack's.
 
 ## Practical guidance
 

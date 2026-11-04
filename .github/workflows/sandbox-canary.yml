@@ -46,6 +46,8 @@ jobs:
           go test -race -count=1 -run 'TestConfinedGit|TestSandboxApplies|TestDispatchIdentity|TestNonCredentialEnv|TestControllerRunnerBinds|TestOpencodeSandboxed|TestAgentDeckSandboxed|TestDeckWrapper' ./internal/controller/
       - name: canary — conductor sandbox exec around a fake agent
         run: bash test/sandbox-canary/run.sh
+      - name: plugin jail — a probe plugin and the official plugins, jailed, against local fakes
+        run: bash test/sandbox-canary/plugins.sh
 
   # conductor's browser for agents (docs/wiki/Browser.md): a real Chrome in
   # the real sandbox against a local test site (no external network) — the

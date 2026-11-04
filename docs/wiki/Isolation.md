@@ -1170,32 +1170,39 @@ than silently not isolating — except `{mode: none}`, which launches through
 paseo's plain provider instead of the sandboxed entry ([above](#hand-offs-and-opting-a-workflow-out)).
 For another sandbox, move the step to a runtime conductor launches.
 
-## Code-step engines (sandboxed by default)
+## Plugins: jailed by default {#plugins}
 
-Connectors and runtimes follow the app-extension model: a plugin you added is
-trusted, so with no `isolation:` block it runs under its permission manifest +
-scrubbed env, not an OS jail. **Code-step ENGINES are the exception.** A `run: js`
-step executes arbitrary code and the engine declares no capabilities, so
-conductor sandboxes engine plugins **by default** — a `namespace`-mode sandbox
-with the network denied. Tune or opt out per engine with the top-level
-`engines:` block, keyed by engine name:
+Connector, runtime and engine plugins run in an OS jail by default, set by
+`sandbox.plugins` (`on`, the default; `required`; `off`). The jail is the
+agent sandbox's machinery — Linux user, mount, pid and network namespaces
+with a `pivot_root` allow-list, or a macOS Seatbelt profile — with an
+allow-list built from the plugin's manifest and its config: the base system
+read-only, its own binary and state directories, declared and `fs:` paths,
+files its config points at (read-only), its declared commands, and a
+network namespace whose only way out is the egress proxy when it has an
+egress set. [[Plugins]] § Security has the full table and what it does not
+cover.
+
+Per entry, an `isolation:` block replaces the jail with that sandbox and
+fails closed; `trust: full` (or `isolation: { mode: none }`) runs the
+plugin without one. Where the jail cannot be built, `on` starts the plugin
+confined to its manifest with a warning, and `required` does not start it.
+
+### Code-step engines
+
+A `run: js` step executes arbitrary code, so an engine plugin's jail has no
+network unless the engine declares some, and `sandbox.plugins: off` does
+not apply to engines: they stay jailed, as they were before the plugin
+jail. Tune or opt out per engine with the top-level `engines:` block, keyed
+by engine name:
 
 ```yaml
 engines:
-  js:   {}                                             # default: sandboxed (namespace, network denied)
+  js:   {}                                             # default: jailed, no network
   lua:  { trust: full }                                # opt OUT — run unconfined (an engine you've audited)
   wasm: { isolation: { mode: user, user: sandbox } }   # explicit override (fail-closed)
+  py:   { fs: ["/srv/models"] }                        # more of the filesystem, read-only
 ```
-
-The synthesized default is **best-effort**: where the OS sandbox can't be applied
-(non-Linux, running as root, or `unshare` / unprivileged user namespaces
-unavailable) the engine runs with a loud warning rather than failing — a code
-engine that worked yesterday keeps working. An explicit `isolation:` block is
-**fail-closed**, like everywhere else. Daemon-path masking is not part of the
-default (an unprivileged `unshare` cannot reliably overmount the state/config
-dirs), so the default leans on the network + pid namespaces — enough to confine a
-pure-compute engine (no egress, no view of other processes); use an explicit
-`isolation:` (or `mode: container`) if you need filesystem masking too.
 
 ## Code steps — `cli`, host interpreters, `run: go` {#code-steps}
 

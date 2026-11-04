@@ -71,11 +71,17 @@ type Manifest struct {
 	// that first discovers it (which instead disables just the isolated
 	// instance, since the conflict was not knowable any earlier that time).
 	SingleProcess bool `yaml:"single_process,omitempty"`
+	// Exposes records that a verb declares exposes semantics: the plugin
+	// dials local addresses it is handed per call (a tunnel or relay), so
+	// its jail keeps the host network. Recorded at install so the first
+	// launch already gets it; for an older record it is learned at
+	// describe.
+	Exposes bool `yaml:"exposes,omitempty"`
 }
 
 // IsZero reports whether the plugin declared no capabilities at all.
 func (m Manifest) IsZero() bool {
-	return len(m.Egress) == 0 && len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && len(m.Env) == 0 && !m.SingleProcess
+	return len(m.Egress) == 0 && len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && len(m.Env) == 0 && !m.SingleProcess && !m.Exposes
 }
 
 // Summary renders the manifest as one line for logs and install review.
@@ -100,6 +106,9 @@ func (m Manifest) Summary() string {
 	}
 	if m.SingleProcess {
 		parts = append(parts, "single_process (every instance shares one process)")
+	}
+	if m.Exposes {
+		parts = append(parts, "exposes (dials local addresses it is handed)")
 	}
 	return strings.Join(parts, "; ")
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/hosts"
 	agentmodels "github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/plugin"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
@@ -444,6 +445,7 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	}
 	cfgFile, _ := configPath(nil)
 	controller.DaemonMaskPaths = []string{stateDir, filepath.Dir(cfgFile)}
+	pluginJailPolicy = plugin.JailPolicyFor(cfg.Sandbox.PluginJail())
 	// The agent sandbox covers a one-shot run's agents exactly as the
 	// daemon's (no conductor socket is served here: they get none).
 	stopSandbox, err := wireAgentSandbox(cfg, cfgFile, logf)

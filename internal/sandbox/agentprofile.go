@@ -31,6 +31,13 @@ type AgentProfile struct {
 	// connections at when the network is restricted (a server it runs for
 	// conductor: opencode's `opencode serve`).
 	ListenPorts []int
+	// PublicListenPorts are ports the launch may listen on, and accept
+	// connections at, on every address (a plugin's webhook listener), when
+	// the network is restricted.
+	PublicListenPorts []int
+	// ExecOnly, when non-empty, are the only programs the launch may
+	// execute (a plugin: its own binary and its declared commands).
+	ExecOnly []string
 	// PosixIPC allows POSIX shared memory and semaphores
 	// (sandbox.macos_posix_ipc): named host-wide, so off for agents.
 	PosixIPC bool

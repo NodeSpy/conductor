@@ -792,7 +792,18 @@ func manifestFromDecl(decl *Decl) Manifest {
 		// decided once, at construction, and cannot change under a running
 		// daemon.
 		SingleProcess: c.SingleProcess,
+		Exposes:       declExposes(*decl),
 	}
+}
+
+// declExposes reports whether any verb of d declares exposes semantics.
+func declExposes(d Decl) bool {
+	for _, v := range d.Verbs {
+		if v.Semantics != nil && v.Semantics.Exposes != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func binaryPresent(path string) bool {

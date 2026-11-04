@@ -25,15 +25,14 @@ func TestBuildCommandDarwinSeatbeltJailsPlugin(t *testing.T) {
 	bin := writeBin(t, dir, "plugin", []byte("x"), 0o755)
 	s := Spec{
 		Name: "p", Kind: KindConnector, BinPath: bin, Local: true,
-		Isolation:          &config.IsolationConfig{Mode: "namespace", Network: &config.IsolationNetwork{Deny: true}},
-		IsolationDefaulted: true,
+		Isolation: &config.IsolationConfig{Mode: "namespace", Network: &config.IsolationNetwork{Deny: true}},
 	}
-	cmd, cleanup, sandboxed, err := buildCommand(s, SandboxDeps{})
+	cmd, cleanup, conf, err := buildCommand(s, SandboxDeps{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	if !sandboxed {
+	if conf.Mode != "isolation" {
 		t.Fatal("a namespace plugin on darwin must be Seatbelt-confined, not degraded to manifest-only")
 	}
 	if len(cmd.Args) < 4 || cmd.Args[0] != "sandbox-exec" || cmd.Args[1] != "-p" {

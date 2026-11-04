@@ -36,9 +36,9 @@ type runtimePluginBackend struct {
 // loudly" so unrelated connectors/steps keep working (Q12). A runtime plugin
 // does not get the same treatment:
 //
-//   - It is the highest-trust plugin kind (§1.8): it EXECUTES agents, and an
-//     ACP-dialect one runs with no OS sandbox by default (see
-//     pluginRuntimeControllers). A start/describe failure here is exactly the
+//   - It is the highest-trust plugin kind (§1.8): it EXECUTES agents (an
+//     ACP-dialect one under the agent sandbox, see pluginRuntimeControllers;
+//     an RPC or decision one under the plugin jail). A start/describe failure here is exactly the
 //     corruption/tamper scenario the per-spawn re-verify wrapper exists to
 //     catch, and it deserves the operator's immediate attention, not a quiet
 //     "disabled" log line.

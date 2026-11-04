@@ -221,6 +221,14 @@ SQL stores are the precedent).
   happen in the shared `Instance` wrapper — don't reimplement them.
 - Reserved names (`kv`, `sql`, `memory`, `workflow`, `conductor`, `blob`)
   are enforced by config validation; pick another type name.
+- Plugins run in an OS jail by default ([[Plugins]] § Security). Declare
+  what you need in `capabilities`: `egress` (every host you call), `commands`
+  (every tool you run, by name), `fs` (paths outside your own dirs, e.g. a
+  CLI's config directory). Name connection fields that hold host paths with
+  a `path`, `dir`, `file`, `*_path`, `*_dir` or `*_file` key, and addresses
+  you serve with `listen` or `*_listen`: the jail grants those read-only and
+  forwards those, respectively. `HOME` is a private directory under your
+  state dir, not the operator's home.
 - Ship docs with the connector: a `docs/connectors/<name>.md` page in the
   plugin repo (Setup → Connection → Verbs), and, when config surface is added, a
   `config.example.yaml` block — same commit.

@@ -301,6 +301,9 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 			if jailed && nf.Chdir != "" {
 				prefix = append(prefix, "--chdir", nf.Chdir)
 			}
+			if jailed && nf.NoExecBase {
+				prefix = append(prefix, "--noexec-base")
+			}
 			for _, m := range nf.Masks {
 				prefix = append(prefix, "--mask", m)
 			}

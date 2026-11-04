@@ -67,6 +67,8 @@ func runSandboxNet(args []string) int {
 			}
 			opt.PassFDs = n
 			i++
+		case args[i] == "--noexec-base":
+			opt.NoExecBase = true
 		case args[i] == "--chdir" && i+1 < len(args):
 			opt.Chdir = args[i+1]
 			i++

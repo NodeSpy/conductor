@@ -2,7 +2,6 @@ package plugin
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,104 +104,132 @@ type EgressAddrFunc func(allow []string) (addr, cred string, revoke func(), err 
 // SandboxDeps carries the daemon-side sandbox wiring a plugin launch reuses
 // (the #36 §15 layer). All fields are optional: with none set, a plugin with an
 // isolation: block still gets process/mount/pid isolation and structural
-// no-network (network.deny), just not the allowlist egress proxy.
+// no-network (network.deny), just not the allowlist egress proxy, and no
+// plugin gets the default jail (Jail is JailOff).
 type SandboxDeps struct {
 	Self      string   // conductor's own executable (os.Executable()) — the in-sandbox forwarder
-	MaskPaths []string // daemon paths hidden inside the plugin's mount namespace
+	MaskPaths []string // daemon paths hidden inside an isolation: block's mount namespace
 	// StagingRoot holds each plugin's staging directories (StagingDir); the
 	// plugin's own subtree is writable inside its sandbox. "" gives none.
 	StagingRoot string
 	EgressUnix  EgressUnixFunc // enforced-egress endpoint minter (namespaced launch)
 	EgressAddr  EgressAddrFunc // enforced-egress endpoint minter (default launch)
+	// Jail is the default jail policy (sandbox.plugins) for a plugin with no
+	// isolation: block and no trust: full. See jail.go.
+	Jail JailPolicy
+	// JailProbe reports why this box cannot build the default jail ("" when
+	// it can). nil: assume it can.
+	JailProbe func() string
 }
 
 // buildCommand prepares the (possibly sandbox-wrapped) *exec.Cmd for a plugin,
 // plus a cleanup closure to run when the process exits (revokes any egress
-// credential). It does NOT start the process. Returns sandboxed=false when the
-// launch runs without OS confinement (no isolation: block) so the caller can
-// warn — env scrubbing and all transport guards still apply.
-func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandboxed bool, err error) {
+// credential, closes listen forwarders). It does NOT start the process. conf
+// says how the process is confined, for the spawn log.
+//
+// Which confinement a plugin gets, in order:
+//
+//   - trust: full, or an isolation: block with mode none: no OS sandbox; the
+//     declared manifest (egress via the proxy variables, a PATH of declared
+//     commands) applies, as it did before the jail existed.
+//   - an isolation: block: exactly that sandbox, fail-closed.
+//   - sandbox.plugins: off: as trust: full.
+//   - otherwise the default jail (jail.go). Where this box cannot build it,
+//     sandbox.plugins: on runs the plugin as trust: full would, with a
+//     warning, and sandbox.plugins: required refuses to start it.
+//
+// Env scrubbing, per-call credential delivery, verify-before-execute,
+// size-bounded responses and supervision apply in every case.
+func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), conf Confinement, err error) {
 	argv := append([]string{s.BinPath}, s.Args...)
 	env := withDeclaredEnv(spawnBaseEnv(), grantedEnv(s))
 	cleanup = func() {}
 
-	spec := sandbox.FromConfig(s.Isolation)
-	if spec == nil {
-		// NO isolation block is the NORMAL case under the app-extension model:
-		// conductor is a privileged app the operator chose to run, and a plugin
-		// they added is one too. The default confinement is the permission
-		// manifest — the plugin's declared commands and egress, surfaced when it
-		// is added and enforced here — not an OS jail. `isolation:` on the
-		// referencing entry is opt-in hardening for a locked-down box.
-		//
-		// Env scrubbing, per-call credential delivery, verify-before-execute,
-		// size-bounded responses, and supervision all still apply.
-		env, cleanup, err = confineToManifest(s, env, sd)
+	manifestOnly := func(c Confinement) (*exec.Cmd, func(), Confinement, error) {
+		env, cleanup, err := confineToManifest(s, env, sd)
 		if err != nil {
-			return nil, nil, false, err
+			return nil, nil, c, err
 		}
-		c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // path is verified (verify.go); confinement is the declared manifest
-		c.Env = env
-		return c, cleanup, false, nil
+		cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // path is verified (verify.go); confinement is the declared manifest
+		cmd.Env = env
+		return cmd, cleanup, c, nil
 	}
 
-	// Preflight: wrapper binaries present, namespace only on Linux non-root, etc.
-	// An OPERATOR-WRITTEN isolation block fails closed — a misconfigured sandbox
-	// refuses to launch, never silently downgrades. A conductor-SYNTHESIZED
-	// default (an untrusted-by-default code engine) is best-effort instead: where
-	// the OS sandbox can't be applied it degrades to the manifest-only path with a
-	// loud warning, so an engine that would run today keeps running rather than
-	// the daemon refusing to start it.
+	spec := sandbox.FromConfig(s.Isolation)
+	switch {
+	case s.TrustFull || s.Isolation.OptsOut():
+		return manifestOnly(Confinement{Mode: "trusted"})
+	case spec != nil:
+		return isolationCommand(s, sd, spec, argv, env)
+	case sd.Jail == JailOff && s.Kind != KindStep:
+		// sandbox.plugins: off is the pre-jail posture, in which a code-step
+		// engine was already jailed by default; it stays jailed.
+		return manifestOnly(Confinement{Mode: "off"})
+	}
+
+	why := ""
+	if sd.JailProbe != nil {
+		why = sd.JailProbe()
+	}
+	if why == "" {
+		var jenv []string
+		var wrapped []string
+		var c Confinement
+		// The confined PATH (declared commands only) is part of the jail too.
+		penv := env
+		if dir, perr := commandPathDir(s); perr != nil {
+			return nil, nil, Confinement{}, fmt.Errorf("plugin %s: confining declared commands: %w", s.Name, perr)
+		} else if dir != "" {
+			penv = replaceEnv(penv, "PATH", dir)
+		}
+		wrapped, jenv, cleanup, c, err = buildJail(s, sd, argv, penv)
+		if err == nil {
+			cmd := exec.Command(wrapped[0], wrapped[1:]...) //nolint:gosec // verified binary, jailed
+			cmd.Env = jenv
+			return cmd, cleanup, c, nil
+		}
+		why = err.Error()
+	}
+	if sd.Jail == JailRequired {
+		return nil, nil, Confinement{}, fmt.Errorf("plugin %s: its OS jail cannot be built on this box (%s), and sandbox.plugins is required — not starting it", s.Name, why)
+	}
+	return manifestOnly(Confinement{Mode: "unavailable", Why: why})
+}
+
+// isolationCommand is the launch under the operator's own isolation: block:
+// that sandbox exactly, and any failure to build it refuses the launch.
+func isolationCommand(s Spec, sd SandboxDeps, spec *sandbox.Spec, argv, env []string) (*exec.Cmd, func(), Confinement, error) {
+	conf := Confinement{Mode: "isolation"}
+	cleanup := func() {}
 	stage := ""
 	if sd.StagingRoot != "" {
 		// The plugin's staging subtree must exist to be bound, and is the one
 		// path under the daemon's state it may write.
 		stage = filepath.Join(sd.StagingRoot, s.Name)
 		if err := os.MkdirAll(stage, 0o700); err != nil {
-			return nil, nil, false, fmt.Errorf("plugin %s: staging dir: %w", s.Name, err)
+			return nil, nil, conf, fmt.Errorf("plugin %s: staging dir: %w", s.Name, err)
 		}
 		spec.FS = append(spec.FS, stage)
 	}
 	if err := spec.Check(spawnGOOS, os.Geteuid(), spawnLookPath); err != nil {
-		if s.IsolationDefaulted {
-			log.Printf("plugin %s: default sandbox unavailable (%v) — running WITHOUT OS confinement; install util-linux (unshare) + enable unprivileged user namespaces to sandbox it", s.Name, err)
-			env, cleanup, cerr := confineToManifest(s, withDeclaredEnv(spawnBaseEnv(), grantedEnv(s)), sd)
-			if cerr != nil {
-				return nil, nil, false, cerr
-			}
-			c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // path is verified (verify.go); confinement is the declared manifest
-			c.Env = env
-			return c, cleanup, false, nil
-		}
-		return nil, nil, false, fmt.Errorf("plugin %s: sandbox preflight: %w", s.Name, err)
+		return nil, nil, conf, fmt.Errorf("plugin %s: sandbox preflight: %w", s.Name, err)
 	}
 
-	// Daemon-path masking (a tmpfs overmount of the state/config dirs) is
-	// unreliable inside an unprivileged `unshare --user` namespace: the kernel
-	// refuses to overmount a locked inherited mount (EPERM), which is why tools
-	// like bwrap pivot_root instead. So the SYNTHESIZED default sandbox skips
-	// masking entirely and relies on what a userns reliably gives — user + pid +
-	// network(deny) namespaces — which already blocks the big risks (egress and
-	// process tampering) for a pure-compute engine. An OPERATOR-WRITTEN isolation
-	// block still requests masking (and fails closed if it can't be applied — the
-	// operator chose it and should see it). A plugin's own binary dir is never
-	// maskable regardless (its running text lives there).
+	// An operator-written isolation block requests masking of the daemon's
+	// state/config dirs (and fails closed if it can't be applied). A
+	// plugin's own binary dir is never maskable (its running text lives
+	// there).
 	masks := masksExcludingBinaryDir(sd.MaskPaths, s.BinPath)
-	if s.IsolationDefaulted {
-		masks = nil
-	}
 
 	var nf *sandbox.NetForward
 	switch {
 	case spawnGOOS == "darwin" && spec.Mode == "namespace":
 		// macOS Seatbelt is an ALLOW-LIST (deny-default), the inverse of the
 		// Linux Masks deny-list — which has no Seatbelt analog. So instead of
-		// hiding the daemon's dirs, we allow-list only what a pure-compute engine
-		// needs: its own binary (read-only; interpreter/system libs come from the
-		// base profile) plus the network verdict from spec.Deny. Everything else,
-		// the daemon's state/config/secrets included, is denied by absence — a
-		// stronger jail than the Linux mask. The plugin transport is stdio
-		// (inherited fds), so no socket needs binding.
+		// hiding the daemon's dirs, we allow-list only what the plugin needs:
+		// its own binary (read-only; interpreter/system libs come from the
+		// base profile) plus the network verdict from spec.Deny. The plugin
+		// transport is stdio (inherited fds), so no socket needs binding.
 		if s.BinPath != "" {
 			nf = &sandbox.NetForward{Binds: []sandbox.BindMount{{Path: filepath.Dir(s.BinPath), RO: true}}}
 		}
@@ -217,11 +244,11 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 	}
 	if spec.EnforcedEgress() {
 		if sd.EgressUnix == nil {
-			return nil, nil, false, fmt.Errorf("plugin %s: isolation requests an egress allowlist but no egress proxy is wired", s.Name)
+			return nil, nil, conf, fmt.Errorf("plugin %s: isolation requests an egress allowlist but no egress proxy is wired", s.Name)
 		}
 		sock, cred, revoke, err := sd.EgressUnix(spec.Egress)
 		if err != nil {
-			return nil, nil, false, fmt.Errorf("plugin %s: egress proxy: %w", s.Name, err)
+			return nil, nil, conf, fmt.Errorf("plugin %s: egress proxy: %w", s.Name, err)
 		}
 		nf.UnixSocket = sock
 		env = append(env, sandbox.ProxyEnv(sandbox.ForwardAddr, cred)...)
@@ -231,11 +258,11 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 	wrapped, err := spec.WrapLocal(argv, "", envKeys(env), nf)
 	if err != nil {
 		cleanup()
-		return nil, nil, false, fmt.Errorf("plugin %s: sandbox wrap: %w", s.Name, err)
+		return nil, nil, conf, fmt.Errorf("plugin %s: sandbox wrap: %w", s.Name, err)
 	}
 	c := exec.Command(wrapped[0], wrapped[1:]...) //nolint:gosec // verified binary, sandbox-wrapped
 	c.Env = env
-	return c, cleanup, true, nil
+	return c, cleanup, conf, nil
 }
 
 // confineToManifest applies the DEFAULT (non-isolation) confinement: the
@@ -281,8 +308,8 @@ func confineToManifest(s Spec, env []string, sd SandboxDeps) ([]string, func(), 
 	// sd.EgressAddr is nil (no proxy manager wired — this default,
 	// non-isolation: path has no OTHER enforcement mechanism) the probe runs
 	// with no confinement at all, same as every other plugin on this path
-	// without a wired proxy; realDial's "running WITHOUT OS sandbox" log
-	// already says so.
+	// without a wired proxy; realDial's confinement log line says what it
+	// runs under.
 	allow := m.Egress
 	confine := len(allow) > 0 || s.Kind == KindStep || s.Probe
 	if confine && sd.EgressAddr != nil {

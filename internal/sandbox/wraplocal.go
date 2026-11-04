@@ -62,6 +62,11 @@ type LocalWrapDeps struct {
 	// exec denials, narrowed Mach services, the proxy port); ignored on Linux,
 	// where the same intent is expressed as ExtraBinds.
 	Agent *AgentProfile
+	// NoExecBase (with Confine, Linux): the jail's base program directories
+	// are mounted noexec, so only the payload's own binary and what the
+	// caller binds (a plugin's declared commands) can be executed. On macOS
+	// the same intent is Agent.ExecOnly.
+	NoExecBase bool
 	// EgressAddr mints a LOOPBACK egress-proxy endpoint for an allowlist —
 	// the ADVISORY path (HTTP(S)_PROXY env only).
 	EgressAddr func(allow []string) (addr, cred string, revoke func(), err error)
@@ -113,7 +118,7 @@ func WrapLocalCommand(spec *Spec, argv []string, dir string, env []string, deps 
 	jail := deps.Confine && spec.Mode == "namespace" && !spec.Privileged
 	needMasks := !jail && spec.Mode == "namespace" && !spec.Privileged && len(deps.MaskPaths) > 0
 	if jail {
-		nf = &NetForward{Binds: jailBinds(dir, spec.FS, deps.ExtraBinds), Chdir: dir}
+		nf = &NetForward{Binds: jailBinds(dir, spec.FS, deps.ExtraBinds), Chdir: dir, NoExecBase: deps.NoExecBase}
 		// The Linux jail re-enters through `conductor sandbox-net`; macOS
 		// Seatbelt (sandbox-exec) is a system binary and needs no self-exe.
 		if CheckGOOS != "darwin" {

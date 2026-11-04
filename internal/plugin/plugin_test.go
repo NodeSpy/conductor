@@ -325,20 +325,20 @@ func TestClientRestartBackoff(t *testing.T) {
 	}
 }
 
-// TestNoIsolationIsTheDefaultPath proves the app-extension posture: a plugin
-// with NO isolation: block launches. OS confinement is opt-in hardening, not a
-// precondition — the default confinement is the declared permission manifest.
-func TestNoIsolationIsTheDefaultPath(t *testing.T) {
+// TestJailOffRunsUnjailed: with sandbox.plugins: off a plugin with no
+// isolation: block launches confined to its manifest only, as before the
+// default jail. The env is still scrubbed.
+func TestJailOffRunsUnjailed(t *testing.T) {
 	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
 	base := Spec{Name: "p", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Local: true}
 
-	cmd, cleanup, sandboxed, err := buildCommand(base, SandboxDeps{})
+	cmd, cleanup, conf, err := buildCommand(base, SandboxDeps{Jail: JailOff})
 	if err != nil || cmd == nil {
 		t.Fatalf("a plugin with no isolation must launch: cmd=%v err=%v", cmd, err)
 	}
 	defer cleanup()
-	if sandboxed {
-		t.Fatal("no isolation block should report sandboxed=false")
+	if conf.Mode != "off" || cmd.Args[0] != bin {
+		t.Fatalf("sandbox.plugins: off must exec the plugin directly: mode=%q argv=%v", conf.Mode, cmd.Args)
 	}
 	// The env is still scrubbed — the daemon's credential-bearing environment
 	// is never forwarded, isolation or not.

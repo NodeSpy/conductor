@@ -85,7 +85,16 @@ type ConnectorRef struct {
 	// Ignored for a builtin connector (always in-process and shared; nothing
 	// to isolate).
 	Isolate bool `yaml:"isolate,omitempty"`
-	raw     yaml.Node
+	// Trust opts this instance's plugin process OUT of the default OS jail:
+	// `trust: full` runs it unconfined (its declared manifest still applies,
+	// as before the jail existed). Empty is the default: jail it. Set either
+	// this or an `isolation:` block, not both.
+	Trust string `yaml:"trust,omitempty"`
+	// FS are extra host paths the plugin's jail shows it, beyond what the
+	// plugin declares and the connection paths conductor finds itself:
+	// "/path" read-only, "/path:rw" read-write. A missing path is skipped.
+	FS  []string `yaml:"fs,omitempty" path:"local"`
+	raw yaml.Node
 	// legacyType holds a pre-`use:` `type:` value. It is NOT part of the schema
 	// — it exists only so validateConnectors can emit a migration-specific error
 	// instead of the silent "missing use:" a dropped field would produce.
@@ -106,6 +115,8 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 		AllowSecrets []string         `yaml:"allow_secrets,omitempty"`
 		AllowEnv     []string         `yaml:"allow_env,omitempty"`
 		Isolate      bool             `yaml:"isolate,omitempty"`
+		Trust        string           `yaml:"trust,omitempty"`
+		FS           []string         `yaml:"fs,omitempty"`
 	}
 	var h hdr
 	if err := n.Decode(&h); err != nil {
@@ -115,8 +126,17 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 	r.Isolation, r.AllowSecrets, r.legacyType, r.raw = h.Isolation, h.AllowSecrets, h.Type, *n
 	r.AllowEnv = h.AllowEnv
 	r.Isolate = h.Isolate
+	r.Trust, r.FS = h.Trust, h.FS
 	return nil
 }
+
+// TrustFull reports whether the operator opted this instance's plugin out of
+// the default jail.
+func (r ConnectorRef) TrustFull() bool { return trustFull(r.Trust) }
+
+// trustFull is the one spelling of the trust: opt-out, shared by connectors,
+// runtimes and engines.
+func trustFull(t string) bool { return strings.EqualFold(strings.TrimSpace(t), "full") }
 
 // Decode unmarshals the raw connector node into a type-specific struct.
 func (r ConnectorRef) Decode(v any) error { return r.raw.Decode(v) }
@@ -197,6 +217,13 @@ type RuntimeConfig struct {
 	// Isolation wraps every launch this runtime performs (#36 §15). A
 	// profile's own isolation: wins over the runtime's.
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// Trust opts a runtime PLUGIN's own process (an RPC or decision runtime
+	// served by plugin.Client) out of the default plugin jail: `trust: full`.
+	// It does not change how the agents the runtime launches are sandboxed.
+	Trust string `yaml:"trust,omitempty"`
+	// FS are extra host paths a runtime plugin's jail shows it: "/path"
+	// read-only, "/path:rw" read-write.
+	FS []string `yaml:"fs,omitempty" path:"local"`
 	// Models is the OPTIONAL model policy for this runtime: which model it
 	// passes by default, how it ranks a choice, and what it may ever run.
 	// Absent = fully automatic (roster discovered, bare launch, no
@@ -1887,6 +1914,12 @@ func (c *Config) validateConnectors() error {
 		if err := validateUseRef("connector "+name, ref.Use, ref.legacyType, UseKindConnector); err != nil {
 			return err
 		}
+		if err := validatePluginTrust("connector "+name, ref.Trust, ref.Isolation); err != nil {
+			return err
+		}
+		if err := validatePluginFS("connector "+name, ref.FS); err != nil {
+			return err
+		}
 		if ref.Isolation != nil {
 			if err := noAgentSandboxKnobs("connector "+name, ref.Isolation); err != nil {
 				return err
@@ -1944,6 +1977,12 @@ func (c *Config) validateConnectors() error {
 		if err := c.checkRemoteHostSupport("runtime", name, rt.Host, rt.BuiltinType(), rt.Agent, rt.Controller().EffectiveTransport()); err != nil {
 			return err
 		}
+		if err := validatePluginTrust("runtime "+name, rt.Trust, nil); err != nil {
+			return err
+		}
+		if err := validatePluginFS("runtime "+name, rt.FS); err != nil {
+			return err
+		}
 		if rt.Isolation != nil {
 			if rt.BuiltinType() == "paseo" {
 				if err := validatePaseoIsolation(fmt.Sprintf("runtime %q", name), rt.Isolation); err != nil {
@@ -1986,11 +2025,11 @@ func (c *Config) validateConnectors() error {
 		if name == "" {
 			return fmt.Errorf("config: engines: empty engine name")
 		}
-		if t := strings.TrimSpace(ec.Trust); t != "" && !strings.EqualFold(t, "full") {
-			return fmt.Errorf("config: engine %q: trust must be \"full\" (opt out of sandboxing) or empty, got %q", name, ec.Trust)
+		if err := validatePluginTrust("engine "+name, ec.Trust, ec.Isolation); err != nil {
+			return err
 		}
-		if ec.TrustFull() && ec.Isolation != nil {
-			return fmt.Errorf("config: engine %q: set either `trust: full` (no sandbox) or an `isolation:` block, not both", name)
+		if err := validatePluginFS("engine "+name, ec.FS); err != nil {
+			return err
 		}
 		if err := noAgentSandboxKnobs("engine "+name, ec.Isolation); err != nil {
 			return err

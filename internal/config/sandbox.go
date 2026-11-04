@@ -25,6 +25,14 @@ type SandboxConfig struct {
 	// mode user/container, or namespace with `privileged: true`, keep their
 	// own wrappers.
 	Agents string `yaml:"agents,omitempty"`
+	// Plugins is the default OS jail of every plugin process (connectors,
+	// runtime plugins, step engines) that has no isolation: block or
+	// trust: full of its own: `on` (the default) jails it, and where this
+	// box cannot build the jail (no unprivileged user namespaces, no
+	// sandbox-exec) runs it confined to its declared manifest only, with a
+	// warning; `required` refuses to start such a plugin instead; `off` runs
+	// every plugin without a jail, as before the jail existed.
+	Plugins string `yaml:"plugins,omitempty"`
 	// Egress are allowlist patterns every sandboxed agent may reach beyond
 	// its model endpoints ("registry.npmjs.org", "*.golang.org",
 	// "host:port"). A bare host means :443.
@@ -330,6 +338,14 @@ func (s *SandboxConfig) PushSign() bool {
 	return s == nil || s.Push == nil || s.Push.Sign == nil || *s.Push.Sign
 }
 
+// PluginJail is sandbox.plugins with its default: "on", "off" or "required".
+func (s *SandboxConfig) PluginJail() string {
+	if s == nil || s.Plugins == "" {
+		return "on"
+	}
+	return s.Plugins
+}
+
 func (c *Config) validateSandbox() error {
 	s := c.Sandbox
 	if s == nil {
@@ -339,6 +355,11 @@ func (c *Config) validateSandbox() error {
 	case "", "on", "off":
 	default:
 		return fmt.Errorf("config: sandbox.agents must be on|off, got %q", s.Agents)
+	}
+	switch s.Plugins {
+	case "", "on", "off", "required":
+	default:
+		return fmt.Errorf("config: sandbox.plugins must be on|off|required, got %q", s.Plugins)
 	}
 	for _, e := range s.Egress {
 		if e == "" {

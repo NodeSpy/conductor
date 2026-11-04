@@ -84,6 +84,9 @@ type NetForward struct {
 	// loopback egress proxy port its restricted network may reach.
 	Agent     *AgentProfile
 	ProxyPort int
+	// NoExecBase (Linux jail): the base system's program directories are
+	// mounted noexec; see EnterOpts.NoExecBase.
+	NoExecBase bool
 }
 
 // Relay is one in-sandbox loopback port piped to a unix socket — how an
@@ -114,7 +117,10 @@ type EnterOpts struct {
 	Relays  []Relay     // extra loopback ports to pipe to unix sockets
 	Exposes []Expose    // in-sandbox loopback ports to serve on host unix sockets
 	PassFDs int         // inherited fds 3.. handed on to the payload
-	Argv    []string    // the real launch to exec once the plumbing is up
+	// NoExecBase makes the jail's base program directories non-executable
+	// (a plugin jail: only its own binary and declared commands run).
+	NoExecBase bool
+	Argv       []string // the real launch to exec once the plumbing is up
 }
 
 // RunEnter is the `conductor sandbox-net` entry point: bring the sandbox
@@ -162,7 +168,7 @@ func RunEnter(opt EnterOpts) int {
 	}
 	jailed := len(opt.Binds) > 0
 	if jailed {
-		if err := buildJail(opt.Binds); err != nil {
+		if err := buildJail(opt.Binds, opt.NoExecBase); err != nil {
 			fmt.Fprintf(os.Stderr, "sandbox-net: jail: %v\n", err)
 			return 1
 		}

@@ -2,9 +2,9 @@ package config
 
 import "testing"
 
-// A code-step engine plugin with no `engines:` config is UNTRUSTED by default:
-// PluginRefs synthesizes a best-effort namespace sandbox with the network denied.
-func TestEngineDefaultSandboxSynthesized(t *testing.T) {
+// A code-step engine plugin with no `engines:` config carries no isolation
+// block and is not trusted: the plugin layer jails it by default at spawn.
+func TestEngineDefaultIsNotTrusted(t *testing.T) {
 	c, err := loadYAML(t, engineWF+`      - { id: x, use: wasmtime, code: "x" }
 `)
 	if err != nil {
@@ -14,17 +14,11 @@ func TestEngineDefaultSandboxSynthesized(t *testing.T) {
 	if !ok {
 		t.Fatalf("no engine ref; got %v", keysOf(c.PluginRefs()))
 	}
-	if !ref.IsolationDefaulted {
-		t.Fatal("an engine with no config must be sandboxed-by-default (IsolationDefaulted)")
-	}
 	if ref.TrustFull {
 		t.Fatal("default engine must not be TrustFull")
 	}
-	if ref.Isolation == nil || ref.Isolation.Mode != "namespace" {
-		t.Fatalf("default sandbox should be mode namespace, got %+v", ref.Isolation)
-	}
-	if ref.Isolation.Network == nil || !ref.Isolation.Network.Deny {
-		t.Fatalf("default sandbox should deny network, got %+v", ref.Isolation.Network)
+	if ref.Isolation != nil {
+		t.Fatalf("no isolation block is written for a default engine, got %+v", ref.Isolation)
 	}
 }
 
@@ -47,13 +41,9 @@ func TestEngineTrustFullOptsOut(t *testing.T) {
 	if ref.Isolation != nil {
 		t.Fatalf("trust: full must not synthesize a sandbox, got %+v", ref.Isolation)
 	}
-	if ref.IsolationDefaulted {
-		t.Fatal("trust: full is not a defaulted sandbox")
-	}
 }
 
-// An explicit `isolation:` block is used verbatim and is NOT best-effort: it
-// keeps the fail-closed posture (IsolationDefaulted stays false).
+// An explicit `isolation:` block is used verbatim (and fails closed at spawn).
 func TestEngineExplicitIsolationIsFailClosed(t *testing.T) {
 	c, err := loadYAML(t, `engines:
   wasmtime:
@@ -66,9 +56,6 @@ func TestEngineExplicitIsolationIsFailClosed(t *testing.T) {
 	ref := c.PluginRefs()["engines/wasmtime"]
 	if ref.Isolation == nil || ref.Isolation.Mode != "namespace" {
 		t.Fatalf("explicit isolation should be used, got %+v", ref.Isolation)
-	}
-	if ref.IsolationDefaulted {
-		t.Fatal("an operator-written isolation block must NOT be marked defaulted (it fails closed)")
 	}
 }
 
