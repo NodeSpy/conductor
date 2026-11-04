@@ -13,11 +13,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
@@ -422,5 +424,43 @@ func TestPluginJailReadsCLILoginFromHome(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(op, ".config/gh/hosts.yml")); string(b) != files[".config/gh/hosts.yml"] {
 		t.Errorf("the operator's gh login changed: %q", b)
+	}
+}
+
+// A local build (`use: ./path`) is jailed with the capabilities it declares,
+// as an installed plugin is with its recorded manifest — not with none. The
+// probe declares one command, true: run from the Manager's shared client it
+// is found and runs.
+func TestLocalBuildJailedWithItsDeclaredManifest(t *testing.T) {
+	requireJail(t)
+	self := jailSelf(t)
+	bin := buildGo(t, "github.com/NodeSpy/conductor/test/plugins/acme-jailprobe", realDir(t, "", "jp-bin-"), "acme-jailprobe")
+	t.Setenv("XDG_STATE_HOME", realDir(t, "", "jp-state-")) // the local-build snapshot
+	ref := config.PluginRef{Name: "acme-jailprobe", Use: config.Use{Origin: config.OriginLocal, Path: bin, Name: "acme-jailprobe", Kind: config.UseKindConnector}}
+	var logs []string
+	mgr := NewManager(map[string]config.PluginRef{ref.Key(): ref}, "", nil, Deps{
+		Log: func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) },
+		Sandbox: SandboxDeps{
+			Self: self, StagingRoot: realDir(t, "", "jp-stage-"), Jail: JailRequired, JailProbe: agentsandbox.Probe,
+		},
+	})
+	defer mgr.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if _, err := mgr.StartAndDescribe(ctx, ref.Key()); err != nil {
+		t.Fatalf("describe: %v\n  %s", err, strings.Join(logs, "\n  "))
+	}
+	if s, _ := mgr.Spec(ref.Key()); !slices.Equal(s.Manifest.Commands, []string{"true"}) {
+		t.Errorf("the local build's manifest = %+v, want its declared commands", s.Manifest)
+	}
+	c, _ := mgr.Client(ref.Key())
+	out, err := c.Invoke(ctx, InvokeRequest{Instance: "local", Verb: "probe", Options: map[string]any{"exec": "true"}})
+	t.Logf("spawn log (%s):\n  %s", runtime.GOOS, strings.Join(logs, "\n  "))
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	report, _ := out["report"].(map[string]any)
+	if got, _ := report["exec true"].(string); got != "ok" {
+		t.Errorf("exec true = %q: the local build ran without its declared command", got)
 	}
 }

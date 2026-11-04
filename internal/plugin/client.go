@@ -1022,6 +1022,15 @@ var ErrReloadUnsupported = errors.New("plugin: in-place reload unsupported (live
 // rather than tearing a process down under a live call.
 var ErrReloadBusy = errors.New("plugin: in-place reload busy (calls did not drain)")
 
+// setManifest sets the declared capabilities the client's process is
+// launched under (a local build's, learned at its first describe); it takes
+// effect at the next start.
+func (c *Client) setManifest(man Manifest) {
+	c.mu.Lock()
+	c.spec.Manifest = man
+	c.mu.Unlock()
+}
+
 // Reload swaps this client's subprocess to newSpec's binary IN PLACE — same
 // *Client pointer, so every consumer (engine lookup, connector impl, rpcBackend)
 // transparently drives the new build with no re-registration. It drains bounded

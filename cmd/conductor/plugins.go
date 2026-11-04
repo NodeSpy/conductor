@@ -427,6 +427,7 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			describe = mgr.ProbeDescribe
 		}
 		decl, err := describe(ctx, spec.GroupKey)
+		spec = learnedSpec(mgr, spec.GroupKey, spec)
 		if err != nil {
 			// An INSTALLED plugin whose verify/spawn/describe fails — a corrupt
 			// binary, a noexec mount, a sandbox preflight that can't run, a sha
@@ -529,6 +530,16 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 	return mgr, nil
 }
 
+// learnedSpec is spec with the manifest mgr holds for key after its describe:
+// a local build's declared capabilities are learned then, after spec was
+// copied out of the manager.
+func learnedSpec(mgr *plugin.Manager, key string, spec plugin.Spec) plugin.Spec {
+	if s, ok := mgr.Spec(key); ok {
+		spec.Manifest = s.Manifest
+	}
+	return spec
+}
+
 // loadEnginePlugins starts and describes every STEP-ENGINE plugin the config
 // references (a code step's `use:` that resolved to neither a builtin nor a
 // program on the box) and returns the lookup internal/code drives them
@@ -551,6 +562,7 @@ func loadEnginePlugins(mgr *plugin.Manager) (code.EngineLookup, error) {
 	engines := map[string]*plugin.Client{}
 	for _, spec := range mgr.EngineSpecs() {
 		decl, err := mgr.StartAndDescribe(ctx, spec.Key())
+		spec = learnedSpec(mgr, spec.Key(), spec)
 		if err != nil {
 			logf("plugin %s: FAILED TO START (%v) — code steps using it will fail at run time until it is fixed", spec.Name, err)
 			continue

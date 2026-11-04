@@ -78,6 +78,7 @@ func loadRuntimePluginsFor(mgr *plugin.Manager, cfg *config.Config, retry config
 		if err != nil {
 			return nil, nil, fmt.Errorf("runtime plugin %s: %w", spec.Name, err)
 		}
+		spec = learnedSpec(mgr, spec.Key(), spec)
 		// KIND ENFORCEMENT at the point of use, as for connectors/engines: the
 		// running binary must still describe itself as a runtime. A connector or
 		// engine accepted here would be driven with agent-launch verbs it never

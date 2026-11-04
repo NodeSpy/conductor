@@ -319,6 +319,16 @@ reference is resolved (a reload or a restart), never mid-life. A snapshot
 nothing currently resolved still needs is garbage-collected on the daemon's
 next boot.
 
+**A local build runs with the capabilities it declares.** An installed
+plugin's manifest is recorded at install; a local build has no install, so
+the daemon describes it once when it starts, in a throwaway process with no
+grant, and uses the capabilities that describe declares —
+egress, commands, `fs`, env — as its manifest. The process that then serves
+it is jailed with that manifest, under the same `fs` cap as an installed
+plugin, and the boot log's `permissions:` line shows it. A rebuild whose
+declared capabilities differ takes a restart, as an installed plugin's
+would. There is no install prompt for a local build: you chose the binary.
+
 **The binary's file name must equal its declared type.** `use:
 ./bin/conductor-widget` registers as `widget` (the `conductor-` prefix is
 stripped) — not whatever the binary's own `describe` claims to be. If the

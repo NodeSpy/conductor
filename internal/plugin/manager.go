@@ -66,6 +66,9 @@ type Manager struct {
 	// client is unsafe because the binary at its (stable) path may already be
 	// the new build.
 	decls map[string]*Decl
+	// described marks a local build whose declared capabilities have been
+	// learned into its spec (learnLocalManifest), under mu.
+	described map[string]bool
 
 	// instMu guards instClients + forbidden + closed + reloading — see the
 	// per-instance shape above. Separate from mu: InstanceClient must not
@@ -270,6 +273,7 @@ func NewManager(plugins map[string]config.PluginRef, configDir string, state *In
 		clients:     make(map[string]*Client, len(plugins)),
 		specs:       make(map[string]Spec, len(plugins)),
 		decls:       make(map[string]*Decl, len(plugins)),
+		described:   make(map[string]bool),
 		instClients: make(map[string]map[string]*Client, len(plugins)),
 		reloading:   make(map[string]bool),
 		deps:        deps,
@@ -651,6 +655,9 @@ func (m *Manager) Close() error {
 // caller disables that plugin's type, mirroring the connector convention of
 // disable-not-crash).
 func (m *Manager) StartAndDescribe(ctx context.Context, name string) (*Decl, error) {
+	if err := m.learnLocalManifest(ctx, name); err != nil {
+		return nil, err
+	}
 	c, ok := m.Client(name)
 	if !ok {
 		return nil, fmt.Errorf("plugin %q not found", name)
@@ -688,6 +695,9 @@ func (m *Manager) StartAndDescribe(ctx context.Context, name string) (*Decl, err
 // isolated, since there is no shared client) configured instances is then
 // refused via ForbidIsolated rather than silently started anyway.
 func (m *Manager) ProbeDescribe(ctx context.Context, key string) (*Decl, error) {
+	if err := m.learnLocalManifest(ctx, key); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	spec, ok := m.specs[key]
 	m.mu.RUnlock()
@@ -702,6 +712,46 @@ func (m *Manager) ProbeDescribe(ctx context.Context, key string) (*Decl, error) 
 	}
 	m.recordDecl(key, decl)
 	return decl, nil
+}
+
+// learnLocalManifest gives a local build (`use: ./path`) the manifest an
+// installed plugin gets from its install record: its declared capabilities,
+// from a describe in a throwaway process under the type-level probe's
+// minimum grant (the install-time describe's posture). It runs before the
+// process that serves the plugin starts, so that one is jailed with what the
+// binary declares — its egress, commands and fs — rather than with nothing.
+// The fs cap still applies at that launch. Once per key; a reload keeps it
+// (a rebuilt binary whose capabilities changed needs a restart).
+func (m *Manager) learnLocalManifest(ctx context.Context, key string) error {
+	m.mu.RLock()
+	spec, ok := m.specs[key]
+	done := m.described[key]
+	m.mu.RUnlock()
+	if !ok || !spec.Local || spec.SnapshotErr != nil || done {
+		return nil
+	}
+	probe := spec
+	probe.Probe, probe.Manifest, probe.Isolation = true, Manifest{}, nil
+	probe.FS, probe.Paths, probe.Listen, probe.Targets = nil, nil, nil, nil
+	probe.Network, probe.AllowSecrets, probe.AllowEnv = nil, nil, nil
+	c := NewClient(probe, m.deps)
+	decl, err := startAndDescribe(ctx, c)
+	c.Close()
+	if err != nil {
+		return err
+	}
+	man := manifestFromDecl(decl)
+	m.mu.Lock()
+	if s, ok := m.specs[key]; ok {
+		s.Manifest = man
+		m.specs[key] = s
+	}
+	m.described[key] = true
+	m.mu.Unlock()
+	if c, ok := m.Client(key); ok {
+		c.setManifest(man)
+	}
+	return nil
 }
 
 func startAndDescribe(ctx context.Context, c *Client) (*Decl, error) {
