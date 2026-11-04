@@ -1412,8 +1412,13 @@ sandbox:
   #                             #   for conductor's model gateway. login-copy: the key in the agent's
   #                             #   env, logins copied without refresh tokens. login-share: the key in
   #                             #   env, your login file bound read-only (refresh token readable).
-  # egress_require_tls: true    # a tunnel must open with TLS naming its host (checked before the
-  #                             #   dial); false lets any protocol through an allowed host
+  # egress_protocol_check: true # a tunnel must open with TLS, HTTP/1 or HTTP/2 naming its host
+  #                             #   (checked before the dial; SSH and unknown bytes refused);
+  #                             #   false lets any protocol through an allowed host. Alias:
+  #                             #   egress_require_tls. One target: allow.raw below.
+  # (egress: entries also take exact names and CIDRs that reach private space, and
+  #  http://host:port/prefix/ for a plain-HTTP mirror restricted to a path; an https:// path
+  #  is a validate error. Isolation.md § A local package mirror.)
   # egress_limits:              # per launch; each takes "off"
   #   idle: 10m
   #   upload: 512MiB
@@ -1431,8 +1436,8 @@ sandbox:
   #                             #   alert (audit + notify); close: also close it; off
   # allow:                      # the base allowance of EVERY launch; scope one instead in an
   #   tunnels: []               #   isolation: block (workflow/trigger/step/runtime), e.g.
-  #   non_tls: []               #   isolation: { allow: { tunnels: [ssh@bastion.example.com:22],
-  #   reverse_shell: false      #                         non_tls: [bastion.example.com:22] } }
+  #   raw: []                   #   isolation: { allow: { tunnels: [ssh@bastion.example.com:22],
+  #   reverse_shell: false      #                         raw: [bastion.example.com:22] } }
   #   pty: false                #   (see Isolation.md § Scoped allowances). A tunnel's @host is
   #                             #   reachable by EVERY process of the scope, not only the tool;
   #                             #   an allow: does not cross a workflow: call; a pack's request
@@ -1442,7 +1447,10 @@ sandbox:
   #   pids: 8192                # per scope: isolation: { limits: { memory: 24G, pids: 16384 } };
   #                             #   each launch's peak vs cap is audited (sandbox_usage), warned at
   #                             #   80%, and listed by `conductor report`
+  #   cpu: 400%                 # per launch CPUQuota (default: none)
+  #   cpu_weight: 50            # share among agent launches, 1-10000 (default: none = 100)
   #   aggregate_memory: 75%     # all agent launches together
+  #   aggregate_cpu: 1200%      # all agent launches together (default: none)
   #   disk_free_min: 5%         # refuse/stop launches below this free space (a size, or off)
   #   required: false           # true: refuse a launch when the limits can't be applied
   #   off: false
@@ -1452,6 +1460,13 @@ sandbox:
   #   shared: protected         # a linked worktree's shared git dir: only objects/refs/logs/lfs
   #                             #   writable; direct: all of it but config/hooks/info/alternates
   # macos_posix_ipc: false      # macOS: allow host-wide POSIX shm/semaphores (Python multiprocessing)
+  # Every knob above but model_credential and the aggregate caps is also set per runtime,
+  # workflow, trigger or step, tighter or looser, in an isolation: block with no mode:
+  #   isolation: { egress_only: [registry.npmjs.org], egress_protocol_check: true, persist: none,
+  #                limits: { memory: 4G, pids: 1024, cpu: 200%, cpu_weight: 50, disk_free_min: 10% },
+  #                detect: { action: kill, interval: 1s, connections: close },
+  #                egress_limits: { upload: 64MiB } }
+  # A pack may only tighten them (Isolation.md § Every knob, globally and per scope).
 
 # ---------------------------------------------------------------------------
 # WORKED EXAMPLE — the four feature families together (bots + the agent sandbox

@@ -190,7 +190,7 @@ sandbox:
     # deny_ci_changes: true    # optional extra: refuse a push that changes a CI definition (default: off)
   # The containment knobs below are all optional; the values shown are the defaults.
   # model_credential: gateway     # login-copy | login-share
-  # egress_require_tls: true      # false: any bytes through an allowed tunnel
+  # egress_protocol_check: true   # TLS, HTTP/1 and HTTP/2 naming their host pass; false: any bytes (alias egress_require_tls)
   # egress_limits: { idle: 10m, upload: 512MiB, download: 20GiB, model_upload: 16GiB, model_download: 16GiB }   # each takes "off"
   # detect:
   #   action: kill                # alert | off
@@ -198,12 +198,15 @@ sandbox:
   #   interval: 3s
   #   allow: []                   # programs exempt in EVERY launch (prefer a scoped allowance)
   #   connections: alert          # a tunnel shaped like a remote shell or a bulk upload: close | off
-  # allow: { tunnels: [], non_tls: [], reverse_shell: false, pty: false }   # base allowance of every launch;
+  # allow: { tunnels: [], raw: [], reverse_shell: false, pty: false }   # base allowance of every launch;
   #                                 # scope one in an isolation: block (§ Scoped allowances)
   # limits:                       # Linux: a systemd user scope per launch
   #   memory: 50%                 # per launch (systemd syntax: 4G, 50%)
-  #   pids: 8192                  # per scope: isolation: { limits: { memory, pids } }; peaks in `conductor report`
+  #   pids: 8192                  # per scope: isolation: { limits: { memory, pids, cpu, cpu_weight } }; peaks in `conductor report`
+  #   cpu: ""                     # per launch, systemd CPUQuota (400% = four cores); none by default
+  #   cpu_weight: 0               # per launch, systemd CPUWeight 1-10000 among agents (100 is systemd's default)
   #   aggregate_memory: 75%       # every agent launch together
+  #   aggregate_cpu: ""           # every agent launch together (CPUQuota on the slice)
   #   disk_free_min: 5%           # or a size (5GiB), or off
   #   required: false             # true: refuse a launch whose limits can't be applied
   #   off: false
@@ -416,17 +419,27 @@ Your login file is never bound read-write. An access-token-only copy expires
 with its access token: a long session signs out until your own CLI refreshes
 the login. `login-share` avoids that, at the price in the table.
 
-**Egress sessions (`sandbox.egress_require_tls`, `sandbox.egress_limits`).**
+**Egress sessions (`sandbox.egress_protocol_check`, `sandbox.egress_limits`).**
 Each agent launch gets its own egress proxy session, attributed to its run:
 
-- **TLS check.** Every CONNECT tunnel must open with a TLS ClientHello whose
-  server name (SNI) is the CONNECT host. The proxy reads it **before it
-  dials** the upstream, so plain SSH, a ClientHello with no server name, or
-  an encrypted ClientHello (ECH) to an allowed host is refused without a
-  connection being made. `egress_require_tls: false` lets any bytes through
-  an allowed tunnel.
+- **Protocol check.** The proxy reads a CONNECT tunnel's first bytes
+  **before it dials** the upstream and lets through only a protocol that
+  names its host:
+  - TLS whose ClientHello server name (SNI) is the CONNECT host;
+  - HTTP/1.x with exactly one `Host` header naming it;
+  - HTTP/2 (prior knowledge) whose first request's `:authority` names it.
+
+  Anything else is refused without a connection being made, with the reason
+  named: SSH (`SSH-` banner), a ClientHello with no or another server name,
+  an encrypted ClientHello (ECH), unrecognized bytes, or a client that sends
+  nothing for 15 seconds (`unrecognized protocol`). A target in
+  `allow.raw` (host:port, alias `non_tls`) skips the check, for SSH to one
+  bastion or a database port. `egress_protocol_check: false` (alias
+  `egress_require_tls`) turns the check off for the scope.
 - **Audit.** Every request is audited as `{event: egress}`: target, SNI,
-  bytes each way, duration, outcome and, for a refusal or closure, the reason.
+  protocol, bytes each way, duration, outcome and, for a refusal or closure,
+  the reason. A plain-HTTP request also carries its method and path, never
+  the query string.
 - **Close on revoke.** When the step ends, its session is revoked and its open
   tunnels are closed, not only new requests refused.
 - **Caps.** A tunnel with no bytes either way for `idle` (10m) is closed. A
@@ -573,7 +586,7 @@ tell a remote operator from a server that answers every request slowly
 (long polling, a websocket), and closing a build's connection on that guess
 would break real work. `connections: close` also closes the tunnel. `off`
 reports nothing, though the features are still logged. A tunnel an
-allowance covers (a `tool@host` or `non_tls` target, or every tunnel when a
+allowance covers (a `tool@host` or `raw` target, or every tunnel when a
 tool is allowed by name alone) is audited as `allowed`. Model traffic goes
 through the gateway, not the proxy, and is not judged here.
 
@@ -611,7 +624,7 @@ still apply). macOS has no equivalent.
 
 **How close launches come to the caps.** Each capped launch's scope is a
 named unit (`conductor-agent-<id>.scope`). While it runs, conductor reads its
-cgroup every second: `memory.peak` and `pids.peak` against `memory.max` and
+cgroup every 250ms: `memory.peak` and `pids.peak` against `memory.max` and
 `pids.max`, plus `memory.events` (`oom_kill`) and `pids.events` (`max`).
 When the launch ends, one `sandbox_usage` audit row records them:
 
@@ -634,7 +647,7 @@ When the launch ends, one `sandbox_usage` audit row records them:
   not kill anything: the launch's `fork` calls fail.
 - **Sampling.** The peaks are the kernel's own high-water marks. A kernel
   without `memory.peak` (before 5.19) or `pids.peak` gives the current value,
-  sampled each second.
+  sampled every 250ms.
 - **No cgroup.** On macOS, or on Linux with no user manager, there are no
   caps. The row's `source: processes` is the watcher's sampled maximum: the
   launch's resident memory and tasks summed at each scan. It has no `*_max`
@@ -652,7 +665,8 @@ sandbox caps (highest peak per agent vs its cap; near = launches at >=80% of a c
 
 **Tuning the caps per scope.** Set `limits:` with no `mode:` on the
 runtime, workflow, trigger or step whose launches need different caps. It
-takes `memory` (systemd syntax: `16G`, `40%`) and `pids`, and overrides
+takes `memory` (systemd syntax: `16G`, `40%`), `pids`, `cpu` (a CPUQuota
+such as `150%`), `cpu_weight` and `disk_free_min`, and overrides
 `sandbox.limits` for that scope's agent launches. It works on paseo steps too,
 and still applies where `sandbox.limits.off` is set:
 
@@ -669,8 +683,16 @@ Raise a scope whose `near` count keeps growing, or that shows `mem×N`. Lower
 one whose peak sits far below its cap, so a runaway in it stops sooner. The
 slice's `aggregate_memory` still caps all agents together. A pack may set
 `limits:` on its own steps only within the defaults: at most 8192 tasks, and
-memory as a size or at most 50%. Higher is the operator's to write, from the
-`packs:` block. `cpu` does not apply to agent sandbox launches.
+memory as a size or at most 50%, `cpu_weight` at most 100. Higher is the
+operator's to write, from the `packs:` block.
+
+**CPU.** There is no CPU cap by default. `cpu: 400%` caps one launch at four
+cores (systemd `CPUQuota`), and `aggregate_cpu` caps all agents together on
+the slice. `cpu_weight` (1–10000) sets a launch's share **among the other
+agent launches** in `conductor-agents.slice` when the CPU is contended. It
+cannot make agents yield to your own work outside the slice, which is why
+there is no default; use `aggregate_cpu` for that. With a `mode:` (a code
+step's own wrapper), `limits.cpu` keeps its older meaning for that wrapper.
 
 **The disk guard.** It refuses a launch when its workspace or home
 filesystem has less free space than `disk_free_min` (5%, or a size like
@@ -723,7 +745,7 @@ workflows:
         tunnels:                          # tunnel tools the watcher lets run
           - cloudflared@*.trycloudflare.com # name@host[:port]: also joins this scope's egress
           - ssh@bastion.example.com:22
-        non_tls: [bastion.example.com:22] # raw TCP: no TLS first-bytes check for these targets
+        raw: [bastion.example.com:22]     # no protocol check for these targets (alias non_tls)
         reverse_shell: false              # a shell on a network socket (default false)
         pty: false                        # a pty relayed to a network socket (default false)
       detect: { action: kill, tripwires: true }   # per-scope override of sandbox.detect
@@ -739,7 +761,7 @@ How it works:
 
 - **Narrow by default, broad if you write it.** A tunnel names a program.
   With `@host[:port]`, that destination joins the scope's egress allowlist
-  (a bare host means 443; globs work as in `egress:`). `non_tls` entries
+  (a bare host means 443; globs work as in `egress:`). `raw` entries
   need an explicit port and must also be in the scope's egress. `*` is
   accepted when you write it.
 - **A tunnel's destination is open to every process of the scope.** The
@@ -759,8 +781,9 @@ How it works:
   with a network socket on its stdin or stdout is judged a reverse shell,
   and one relaying a pty to a socket is a pty relay. Neither is ever
   audited as an allowed tunnel.
-- **A block with only `allow:`, `detect:` or `egress_limits:` needs no
-  `mode:`.** It layers onto the scope outside it and keeps that scope's
+- **A block with only sandbox knobs needs no `mode:`.** That is `allow:`,
+  `detect:`, `egress_limits:`, `egress_only:`, `egress_protocol_check:`,
+  `persist:` and `limits:` ([every knob](#knobs-global-and-per-scope)). It layers onto the scope outside it and keeps that scope's
   mode, network and paths. It works on paseo steps and runtimes too. A
   block with a `mode:` replaces the outer one whole, as always. The most
   specific setting of each knob wins (step over trigger or workflow over
@@ -832,6 +855,109 @@ How it works:
 `sandbox.detect.allow` (older, global) exempts a program from every rule
 in every launch, matched by what its binary is. A binary the host does not
 know, named after an exempt program, is not exempt. Prefer a scoped `tunnels:` allowance.
+
+#### Every knob, globally and per scope {#knobs-global-and-per-scope}
+
+Each knob below has a global default under `sandbox:` and can be set
+tighter **or** looser for one runtime, workflow, trigger or step in an
+`isolation:` block with no `mode:`. The most specific setting wins (step
+over trigger or workflow over runtime). Only your config sets them: an
+agent-authored workflow's knobs are ignored, and a pack may only tighten
+(the last column; anything looser is yours to write in the `packs:` block).
+
+| knob | default | global key (`sandbox.`) | per-scope key (`isolation.`) | tighten | loosen | a pack may |
+|---|---|---|---|---|---|---|
+| egress allowlist | model hosts only | `egress` | `egress_only` replaces it; `network.egress` (with `mode: namespace`) adds | yes | yes | narrow only: its `egress_only` is intersected with what it inherits |
+| protocol check | on | `egress_protocol_check` | `egress_protocol_check` | yes | yes | no `false` |
+| raw (unchecked) targets | none | `allow.raw` | `allow.raw` (adds to the base) | keep the base empty | yes | by a granted request |
+| tunnel tools, reverse shell, pty | none | `allow`, `detect.allow` | `allow` (adds to the base) | keep the base empty | yes | by a granted request |
+| egress idle / upload / download | 10m / 512MiB / 20GiB | `egress_limits` | `egress_limits` | yes | yes (`off`) | lower only |
+| model upload / download | 16GiB / 16GiB | `egress_limits.model_*` | `egress_limits.model_*` | yes | yes (`off`) | lower only |
+| memory per launch | 50% | `limits.memory` | `limits.memory` | yes | yes | a size, or at most 50% |
+| tasks per launch | 8192 | `limits.pids` | `limits.pids` | yes | yes | at most 8192 |
+| CPU per launch | none | `limits.cpu` | `limits.cpu` | yes | yes | yes |
+| CPU weight among agents | none (systemd's 100) | `limits.cpu_weight` | `limits.cpu_weight` | yes | yes | at most 100 |
+| free disk floor | 5% | `limits.disk_free_min` | `limits.disk_free_min` | yes | yes (`off`) | 5% or more, never `off` |
+| all agents together | memory 75%, CPU none | `limits.aggregate_memory`, `aggregate_cpu` | — (one slice for every agent) | global | global | — |
+| detection action | kill | `detect.action` | `detect.action` | yes | yes (`alert`, `off`) | no weaker action |
+| tripwires | on | `detect.tripwires` | `detect.tripwires` | yes | yes | no `false` |
+| watcher interval | 3s | `detect.interval` | `detect.interval` | yes (down to 100ms) | yes | 3s or faster |
+| connection shapes | alert | `detect.connections` | `detect.connections` | yes (`close`) | yes (`off`) | not `off` |
+| persisted home | none | `persist` | `persist` | yes | yes (`cache`, `home`) | `none` only |
+| model credential | gateway | `model_credential` | — | global | global | — |
+
+**Egress is host:port.** The allowlist decides by host and port. An HTTPS
+request's path is encrypted, so conductor cannot filter it without
+intercepting TLS: an `https://host/path` entry is a `validate` error that
+says to list the host alone. Allowing `registry.example.com` over HTTPS
+allows every path on it. Plain HTTP is different: an `http://host:port/prefix/`
+entry restricts that host to the paths under the prefix (below).
+
+A locked-down workflow: one registry, small caps, kill on any detection.
+
+```yaml
+workflows:
+  dependency-bump:
+    isolation:
+      egress_only: [registry.npmjs.org]    # replaces sandbox.egress; the model is still reached
+      limits: { memory: 4G, pids: 1024, cpu: 200%, cpu_weight: 50 }
+      detect: { action: kill, tripwires: true, interval: 1s, connections: close }
+      egress_limits: { upload: 64MiB, download: 2GiB }
+      persist: none
+```
+
+An opened-up step: broad egress, raw SSH to one host, bigger caps, a kept
+cache.
+
+```yaml
+      - id: release
+        type: agent
+        isolation:
+          egress_only: ["*.github.com", "*.githubusercontent.com", "*.npmjs.org", "*.pypi.org"]
+          allow:
+            tunnels: [ssh@deploy.example.com:22]   # ssh may run; its host joins egress
+            raw: [deploy.example.com:22]           # SSH is not TLS: skip the protocol check here
+          limits: { memory: 70%, pids: 16384, cpu: 800% }
+          egress_limits: { upload: 4GiB, download: off }
+          persist: cache
+        prompt: "Cut the release and deploy it."
+```
+
+#### A local package mirror {#local-package-mirror}
+
+A mirror on your network (a Go module proxy, a PyPI or npm cache) lives in
+private address space, which the proxy refuses by default. An **exact**
+entry reaches it:
+
+```yaml
+sandbox:
+  egress:
+    - "http://mirror.lan:3000/goproxy/"   # plain HTTP, only paths under /goproxy/
+    - "http://mirror.lan:3000/npm/"       # ...and /npm/ on the same host
+    - pypi.mirror.lan:443                 # HTTPS: the whole host (host:port only)
+    - "10.20.0.0/24:8081"                 # a literal address in this range, port 8081
+  # allow: { raw: ["db.lan:5432"] }       # a non-HTTP protocol to one host:port
+```
+
+- **Exact names and literal addresses reach private space; wildcards never
+  do.** A name listed exactly (no `*`, `?` or `[`) may resolve to a loopback
+  or private address, because you named that host. `*.lan` never reaches
+  private space. A CIDR entry or a literal IP entry matches only a literal
+  address as the target. Link-local addresses, cloud metadata
+  (`169.254.169.254`) among them, are reached only by listing that literal
+  IP and using it as the target.
+- **Plain-HTTP path entries** (`http://host[:port]/prefix/`, port 80 by
+  default) are checked on every request of a keep-alive connection. The
+  path is decoded before matching (`%2F` counts as `/`, so npm's scoped
+  packages work), and a request with `.` or `..` segments, an empty
+  segment (`//`), a leftover `%`, a backslash or a NUL is refused. The
+  request is forwarded unchanged. A CONNECT tunnel to a path-restricted
+  host is refused, since the proxy could not see its paths. The prefix
+  `/` allows the whole host. Each request is audited with its method and
+  path; the query string is never logged.
+- Point the tools at the mirror the usual way (`GOPROXY=http://mirror.lan:3000/goproxy`,
+  an `.npmrc` registry, `PIP_INDEX_URL`); they reach it through
+  `HTTP_PROXY` as every other request does.
 
 #### What is left {#what-is-left}
 
@@ -1190,17 +1316,23 @@ loopback forward proxy **inside conductor's own process**:
   host means **:443 only** (the safe default); any other port needs an
   explicit `host:port`, and `host:*` is the deliberate any-port opt-in.
   Non-matching targets get a 403 and an `egress_denied` audit record.
-- **Hosts are taken exactly as bound.** The proxy resolves names itself, and
-  refuses an address in a private, loopback, link-local or metadata range
-  unless the target names it exactly:
-  - an IP-literal target matches the same literal listed (not a glob) for its
-    port;
-  - the target `localhost` reaches loopback when `localhost` itself is listed.
+- **Private space only by an exact entry.** The proxy resolves names
+  itself, and refuses an address in a private, loopback, link-local or
+  metadata range unless an entry names it exactly:
+  - an IP-literal target matches the same literal listed, or a listed CIDR
+    range (`10.20.0.0/24:8081`), for its port;
+  - the target `localhost` reaches loopback when `localhost` itself is listed;
+  - a hostname listed exactly (no glob) may resolve to a private or
+    loopback address, never to a link-local (metadata) or multicast one.
 
-  So `localhost:3000`, `127.0.0.1:3000` and `[::1]:3000` are three entries,
-  none implying another, and an allowlisted name that resolves (or rebinds)
-  to an internal address is refused, even when that address is listed too.
-  To reach an internal host, list its address and use it as the target.
+  A name matched only by a glob (`*.lan`) that resolves (or rebinds) to an
+  internal address is refused. Cloud metadata is reached only by listing
+  its literal IP and using it as the target. See
+  [A local package mirror](#local-package-mirror).
+- **Entry forms.** `host`, `host:port`, `host:*`, globs on the host, a CIDR
+  range, and `http://host[:port]/prefix/` (plain HTTP restricted to a path
+  prefix). An `https://` entry with a path is a `validate` error: the path
+  of an HTTPS request cannot be enforced without intercepting TLS.
 - `network: {}` (present but empty) — deny-all: every egress attempt is
   refused and audited.
 - The launch env gets `HTTP_PROXY`/`HTTPS_PROXY` (and lowercase) pointing at
@@ -1291,7 +1423,9 @@ that lifts the allow/approve/host gates lifts this requirement.
 | a launch's filesystem below `sandbox.limits.disk_free_min` | refused (a running launch is stopped) |
 | no systemd user manager for the launch limits | runs uncapped after one warning; refused with `sandbox.limits.required` |
 | a model the gateway cannot carry (opencode, an OAuth-only login) | `login-copy`: an access-token-only login copy, the key in the environment |
-| a CONNECT tunnel that does not open with TLS naming its host | refused before the upstream is dialed (`egress_require_tls: false` to allow) |
+| a CONNECT tunnel that does not open with TLS, HTTP/1 or HTTP/2 naming its host (SSH, unknown bytes, silence) | refused before the upstream is dialed, the protocol named (`allow.raw` for one target, `egress_protocol_check: false` for a scope) |
+| a plain-HTTP request outside a host's `http://` path entries, or a CONNECT to such a host | refused (403), audited with method and path |
+| an `https://` egress entry with a path | rejected by `validate` (list the host alone) |
 | `skill:` + `mode: user` isolation | rejected by `validate` (claim theft under a shared uid) |
 | `agent_authored.host` without `isolation:` | rejected by `validate` (`trust: full` opts out) |
 
@@ -1305,10 +1439,11 @@ An agent launch's containment adds:
 
 | event | when |
 |---|---|
-| `egress` | each request through its egress session: `run`, `target`, `sni`, `up`/`down` bytes, `duration_ms`, `max_idle_ms`, `server_first`, `outcome` (`allowed`, `refused`, `closed`), a `reason` for a refusal or closure, `shape` for a flagged tunnel, and `allowed_by` for a tunnel a `non_tls` allowance let skip the TLS check |
+| `egress` | each request through its egress session: `run`, `target`, `sni`, `protocol` as recognized (`tls`, `http`, `h2c`, `ssh`), `method` and `path` for plain HTTP (never the query), `up`/`down` bytes, `duration_ms`, `max_idle_ms`, `server_first`, `outcome` (`allowed`, `refused`, `closed`), a `reason` for a refusal or closure, `shape` for a flagged tunnel, and `allowed_by` for a tunnel a `raw` allowance let skip the protocol check |
 | `sandbox_detection` | the watcher, a tripwire, the git guard or the proxy's connection shapes (`kind: tunnel_shape`, with `shape`, `target` and the features): `kind`, `reason`, `action` (also a `conductor.escalate` notification); `action: allowed` with `allowed_by: <scope>` when the launch's [allowance](#scoped-allowances) covers it (audited and logged, not notified) |
 | `model_request` | each request through the model gateway: `run`, `upstream`, `method`, `path`, `status`, `up`/`down` bytes, `duration_ms` (logged only when it failed) |
-| `sandbox_limit` | the disk guard stopped a launch, or a launch passed a model cap (`kind: model_upload` / `model_download`, `action: refuse`); also notified |
+| `sandbox_limit` | the disk guard stopped a launch, a launch passed a model cap (`kind: model_upload` / `model_download`, `action: refuse`), the memory cap killed it (`kind: memory_cap`, `action: killed`) or the task cap refused its forks (`kind: pids_cap`, `action: refused`); also notified |
+| `sandbox_usage` | each launch's end: `memory_peak`/`memory_max`, `pids_peak`/`pids_max`, `source`, and `near_cap`, `killed_by`, `pids_refused` when they apply |
 | `sandbox_leftover_killed` | processes a launch left running were killed at its end |
 | `sandbox_model_gateway_refused` | a request to the model gateway with a wrong credential, or a token-less write (token-less HEAD/GET probes are not audited) |
 | `sandbox_limits_unavailable` | once: no systemd user manager, launches run without memory and task caps |
