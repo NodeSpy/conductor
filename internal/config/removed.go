@@ -22,11 +22,10 @@ import (
 const FolderRemoved = "folders were removed; this field is ignored and can be deleted"
 
 // `sandbox.prefetch:` is another: conductor no longer downloads packages for
-// agents. An agent reaches a registry through sandbox.egress (and inspect:
-// for a path-scoped host) like any other host.
+// agents. An agent fetches them itself through the egress proxy.
 
 // PrefetchRemoved is the warning for a `sandbox.prefetch:` still in a config.
-const PrefetchRemoved = "prefetch was removed; this field is ignored and can be deleted — allow the package hosts in sandbox.egress instead (see the Isolation docs)"
+const PrefetchRemoved = "prefetch was removed; this field is ignored and can be deleted (agents download packages themselves; public hosts are reachable by default)"
 
 // RemovedField is a removed config key: it decodes from any value and is
 // never marshaled (IsZero is always true, and every use is omitempty).
