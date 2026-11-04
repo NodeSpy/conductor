@@ -460,6 +460,14 @@ Per plugin, `trust: full` on its entry opts it out, and an explicit
 `conductor plugin show` print the confinement each process gets, and the
 daemon logs one line per launch saying which it got.
 
+Manifest-only confinement has no OS jail: the plugin gets a scrubbed
+environment, a `PATH` of its declared commands, and, when it declares
+egress, `HTTP(S)_PROXY` set to conductor's egress proxy with the same
+allowlist the jail would use (its declared egress plus the hosts its
+connection config points at, or exactly `network:` when the entry sets it).
+A client that ignores the proxy variables is not stopped. A plugin that
+declares no egress gets no proxy.
+
 ### The manifest
 
 A plugin declares, in its own `describe`:

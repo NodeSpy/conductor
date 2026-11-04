@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -519,4 +520,48 @@ func TestPluginProcessOutlivesTheStartingCall(t *testing.T) {
 		t.Fatalf("the plugin process is bound to the starting call's context (err=%v)", lifetime.Err())
 	}
 	_ = c.Close()
+}
+
+// Manifest-only confinement (a box that cannot build the jail, sandbox.plugins:
+// off, trust: full) allows a connector that declares egress the hosts its
+// connection config points at too, as the jail does: an api_base on a test
+// server or GHES is not refused. A network: entry stays exact, and a
+// connector that declares nothing stays unconfined.
+func TestManifestOnlyAllowsConfigTargets(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	for _, tc := range []struct {
+		name string
+		s    Spec
+		want []string // nil: no proxy
+	}{
+		{"declared egress and targets", Spec{Manifest: Manifest{Egress: []string{"api.github.com:443"}}, Targets: []string{"mock-github:8080"}},
+			[]string{"api.github.com:443", "mock-github:8080"}},
+		{"network: is exact", Spec{Manifest: Manifest{Egress: []string{"api.github.com:443", "ghe.example:443"}}, Targets: []string{"mock-github:8080"}, Network: []string{"ghe.example:443"}},
+			[]string{"ghe.example:443"}},
+		{"declares nothing", Spec{Targets: []string{"mock-github:8080"}}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			called := false
+			s := tc.s
+			s.Name, s.Kind, s.BinPath, s.Local = "p", KindConnector, bin, true
+			_, cleanup, _, err := buildCommand(s, SandboxDeps{Jail: JailOff, EgressAddr: func(allow []string) (string, string, func(), error) {
+				called, got = true, allow
+				return "127.0.0.1:9", "tok", func() {}, nil
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cleanup()
+			if tc.want == nil {
+				if called {
+					t.Fatalf("confined to %v, want no proxy", got)
+				}
+				return
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("allow = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
@@ -325,6 +326,11 @@ func confineToManifest(s Spec, env []string, sd SandboxDeps) ([]string, func(), 
 	// without a wired proxy; realDial's confinement log line says what it
 	// runs under.
 	allow := m.Egress
+	if len(allow) > 0 && len(s.Network) == 0 && !s.Probe && s.Kind != KindStep {
+		// The hosts its connection config points at (an api_base, a
+		// webhook_url), as the jail allows them.
+		allow = config.AppendUnique(append([]string(nil), allow...), s.Targets...)
+	}
 	confine := len(allow) > 0 || s.Kind == KindStep || s.Probe
 	if confine && sd.EgressAddr != nil {
 		addr, cred, revoke, err := sd.EgressAddr(allow)
