@@ -52,10 +52,14 @@ type SandboxConfig struct {
 	// today's behavior before this knob — the operator's login file shared
 	// read-write and API keys in the environment.
 	ModelCredential string `yaml:"model_credential,omitempty"`
-	// EgressRequireTLS (default true): every CONNECT tunnel must open with a
-	// TLS ClientHello whose SNI names the CONNECT host, checked before the
-	// upstream is dialed; false lets any bytes through an allowed tunnel.
-	EgressRequireTLS *bool `yaml:"egress_require_tls,omitempty"`
+	// EgressProtocolCheck (default true): every CONNECT tunnel's first
+	// client bytes must be a recognized protocol naming the CONNECT host
+	// (TLS, HTTP/1.x, HTTP/2), checked before the upstream is dialed; ssh,
+	// unknown bytes and a silent client are refused unless the scope's
+	// allow.raw names the target. false lets any bytes through an allowed
+	// tunnel. EgressRequireTLS is its earlier name, still read.
+	EgressProtocolCheck *bool `yaml:"egress_protocol_check,omitempty"`
+	EgressRequireTLS    *bool `yaml:"egress_require_tls,omitempty"`
 	// EgressLimits bound each launch's egress session.
 	EgressLimits *SandboxEgressLimits `yaml:"egress_limits,omitempty"`
 	// Detect configures the host-side watcher, tripwires and response.
@@ -234,9 +238,18 @@ func (s *SandboxConfig) ModelCredentialMode() string {
 	return s.ModelCredential
 }
 
-// EgressTLSRequired reports sandbox.egress_require_tls (default true).
+// EgressTLSRequired reports sandbox.egress_protocol_check (or its earlier
+// name egress_require_tls; default true).
 func (s *SandboxConfig) EgressTLSRequired() bool {
-	return s == nil || s.EgressRequireTLS == nil || *s.EgressRequireTLS
+	switch {
+	case s == nil:
+		return true
+	case s.EgressProtocolCheck != nil:
+		return *s.EgressProtocolCheck
+	case s.EgressRequireTLS != nil:
+		return *s.EgressRequireTLS
+	}
+	return true
 }
 
 // DetectAction is sandbox.detect.action (default kill).

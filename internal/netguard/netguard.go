@@ -54,3 +54,21 @@ func Blocked(ip net.IP) bool {
 	}
 	return false
 }
+
+// NameReachable reports whether ip is an address a hostname the operator
+// listed exactly (no wildcard) may resolve to and still be dialed: public
+// space, and the private ranges a local mirror lives in — loopback, RFC1918
+// and ULA, CGNAT (a tailnet). Never link-local (cloud metadata), multicast
+// or unspecified, NAT64-embedded or not: those take the literal address.
+func NameReachable(ip net.IP) bool {
+	if ip == nil || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	if ip.To4() == nil {
+		if ip16 := ip.To16(); ip16 != nil && nat64WellKnown.Contains(ip16) {
+			return NameReachable(net.IPv4(ip16[12], ip16[13], ip16[14], ip16[15]))
+		}
+	}
+	return true
+}

@@ -34,6 +34,7 @@ package sandbox
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"path"
 	"strconv"
 	"strings"
@@ -458,6 +459,13 @@ func EgressAllowed(allow []string, hostport string) bool {
 			pp = "443" // bare host ⇒ https only, never "any port"
 		}
 		if pp != "*" && pp != port {
+			continue
+		}
+		if _, cidr, err := net.ParseCIDR(ph); err == nil {
+			// A range holds only the literal addresses in it.
+			if ip := net.ParseIP(host); ip != nil && cidr.Contains(ip) {
+				return true
+			}
 			continue
 		}
 		if ok, err := path.Match(strings.ToLower(ph), strings.ToLower(host)); err == nil && ok {

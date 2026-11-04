@@ -124,9 +124,12 @@ func (l EgressLimits) resolved() EgressLimits {
 // row. The shape fields (MaxIdle, ServerFirst) are logged so later
 // detection thresholds can come from data; nothing enforces on them.
 type ConnRecord struct {
-	Run      string        `json:"run,omitempty"`
-	Target   string        `json:"target"`
-	SNI      string        `json:"sni,omitempty"`
+	Run    string `json:"run,omitempty"`
+	Target string `json:"target"`
+	SNI    string `json:"sni,omitempty"`
+	// Proto is the tunnel's protocol as the check recognized it (ProtoTLS,
+	// ProtoHTTP, ProtoHTTP2; ProtoSSH on a refusal; "" unchecked).
+	Proto    string        `json:"proto,omitempty"`
 	Outcome  string        `json:"outcome"` // allowed | denied | refused | closed
 	Reason   string        `json:"reason,omitempty"`
 	Up       int64         `json:"up"`

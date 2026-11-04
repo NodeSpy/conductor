@@ -57,7 +57,7 @@ func TestScopedAllowanceLoadsAndIsListed(t *testing.T) {
 	notes := strings.Join(cfg.AllowanceNotes(), "\n")
 	for _, want := range []string{
 		"sandbox.allow loosens EVERY agent launch: tunnel tools tailscale",
-		"workflow deploy: sandbox allowance for its agent launches: tunnel tools cloudflared@*.trycloudflare.com, ssh@bastion.example.com:22; non-TLS traffic to bastion.example.com:22",
+		"workflow deploy: sandbox allowance for its agent launches: tunnel tools cloudflared@*.trycloudflare.com, ssh@bastion.example.com:22; raw (unchecked protocol) traffic to bastion.example.com:22",
 		"workflow deploy: sandbox detection loosened for its agent launches: detection action alert",
 	} {
 		if !strings.Contains(notes, want) {
@@ -282,4 +282,39 @@ func grantPin(t *testing.T, text, name string) string {
 		t.Fatalf("no pinned grant to write for %q in:\n%s", name, text)
 	}
 	return m[1]
+}
+
+// raw: is the protocol-check exemption's name; non_tls: still reads as it.
+// The protocol check's knob is egress_protocol_check, egress_require_tls
+// its earlier name.
+func TestRawAllowanceAndProtocolCheckKnob(t *testing.T) {
+	cfg, err := loadDoc(t, strings.Replace(allowDoc, "non_tls: [bastion.example.com:22]", "raw: [bastion.example.com:22, git.lan:22]", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := cfg.Workflows["deploy"].Isolation.Allow
+	if got := strings.Join(a.RawTargets(), ","); got != "bastion.example.com:22,git.lan:22" {
+		t.Fatalf("raw targets %q", got)
+	}
+	both := &SandboxAllow{Raw: []string{"a.lan:22"}, NonTLS: []string{"b.lan:22", "a.lan:22"}}
+	if got := strings.Join(both.RawTargets(), ","); got != "a.lan:22,b.lan:22" {
+		t.Fatalf("joined %q", got)
+	}
+	if _, err := loadDoc(t, strings.Replace(allowDoc, "non_tls: [bastion.example.com:22]", "raw: [bastion.example.com]", 1)); err == nil || !strings.Contains(err.Error(), ".raw:") {
+		t.Fatalf("a raw target without a port: %v", err)
+	}
+	f, tr := false, true
+	for _, c := range []struct {
+		s    *SandboxConfig
+		want bool
+	}{
+		{nil, true}, {&SandboxConfig{}, true},
+		{&SandboxConfig{EgressProtocolCheck: &f}, false},
+		{&SandboxConfig{EgressRequireTLS: &f}, false},
+		{&SandboxConfig{EgressProtocolCheck: &tr, EgressRequireTLS: &f}, true},
+	} {
+		if got := c.s.EgressTLSRequired(); got != c.want {
+			t.Errorf("%+v: %v", c.s, got)
+		}
+	}
 }

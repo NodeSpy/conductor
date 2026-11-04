@@ -206,7 +206,7 @@ func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string, sock string) 
 		// Every request, as the daemon audits its own launches'.
 		f := map[string]any{"run": r.Run, "target": r.Target, "outcome": r.Outcome,
 			"up": r.Up, "down": r.Down, "duration_ms": r.Duration.Milliseconds()}
-		for k, v := range map[string]string{"sni": r.SNI, "reason": r.Reason, "allowed_by": r.AllowedBy, "shape": r.Shape} {
+		for k, v := range map[string]string{"sni": r.SNI, "reason": r.Reason, "allowed_by": r.AllowedBy, "shape": r.Shape, "protocol": r.Proto} {
 			if v != "" {
 				f[k] = v
 			}

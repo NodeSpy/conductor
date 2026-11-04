@@ -144,7 +144,7 @@ func TestRequireTLSRefusesNonTLSBeforeDialing(t *testing.T) {
 		t.Fatal("a non-TLS tunnel stayed open")
 	}
 	r := rec.wait(t, func(c ConnRecord) bool { return c.Outcome == "refused" })
-	if r.Run != "run-1" || !strings.Contains(r.Reason, "SSH-2.0") {
+	if r.Run != "run-1" || r.Reason != "ssh to "+target+" refused — allow it with allow.raw for that host" || r.Proto != ProtoSSH {
 		t.Fatalf("record: %+v", r)
 	}
 	if n := up.accepted.Load(); n != 0 {

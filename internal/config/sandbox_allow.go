@@ -27,10 +27,12 @@ type SandboxAllow struct {
 	// connection, so the destination is reachable by any process of the
 	// scope's launches.
 	Tunnels []string `yaml:"tunnels,omitempty"`
-	// NonTLS are host:port targets (globs as in egress) exempt from the TLS
-	// first-bytes check: raw SSH to a bastion. They must still be allowed
-	// by the scope's egress (a tunnel's @host, network.egress or
-	// sandbox.egress).
+	// Raw are host:port targets (globs as in egress) exempt from the
+	// egress protocol check: any bytes, ssh or a server-speaks-first
+	// protocol, to exactly these. They must still be allowed by the
+	// scope's egress (a tunnel's @host, network.egress or sandbox.egress).
+	Raw []string `yaml:"raw,omitempty"`
+	// NonTLS is raw's earlier name, still read (RawTargets joins them).
 	NonTLS []string `yaml:"non_tls,omitempty"`
 	// ReverseShell lets a shell whose stdin or stdout is a network socket
 	// run.
@@ -42,6 +44,19 @@ type SandboxAllow struct {
 	Origin string `yaml:"-"`
 	// Pin is a granted pack allowance's digest (allowanceDigest).
 	Pin string `yaml:"-"`
+}
+
+// RawTargets are the targets exempt from the egress protocol check: raw
+// and its earlier name non_tls together.
+func (a *SandboxAllow) RawTargets() []string {
+	if a == nil {
+		return nil
+	}
+	out := append([]string(nil), a.Raw...)
+	for _, h := range a.NonTLS {
+		out = appendUniqueStr(out, h)
+	}
+	return out
 }
 
 // allowanceDigest pins a pack's requested allowance to what the operator
@@ -60,7 +75,7 @@ func allowanceDigest(man *PackManifest, a PackAllowance) (string, error) {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "v2\ntunnels=%s\nnon_tls=%s\nreverse_shell=%t\npty=%t\n",
-		strings.Join(sorted(a.Allow.Tunnels), "\x00"), strings.Join(sorted(a.Allow.NonTLS), "\x00"), a.Allow.ReverseShell, a.Allow.Pty)
+		strings.Join(sorted(a.Allow.Tunnels), "\x00"), strings.Join(sorted(a.Allow.RawTargets()), "\x00"), a.Allow.ReverseShell, a.Allow.Pty)
 	for _, ref := range sorted(a.Steps) {
 		s, err := man.FindPackStep(ref)
 		if err != nil {
@@ -102,7 +117,7 @@ type IsolationDetect struct {
 
 // Empty reports an allowance that allows nothing.
 func (a *SandboxAllow) Empty() bool {
-	return a == nil || (len(a.Tunnels) == 0 && len(a.NonTLS) == 0 && !a.ReverseShell && !a.Pty)
+	return a == nil || (len(a.Tunnels) == 0 && len(a.RawTargets()) == 0 && !a.ReverseShell && !a.Pty)
 }
 
 // TunnelTools are the program names a's tunnels name, lower-cased.
@@ -155,8 +170,8 @@ func (a *SandboxAllow) Describe() string {
 	if len(a.Tunnels) > 0 {
 		parts = append(parts, "tunnel tools "+strings.Join(a.Tunnels, ", "))
 	}
-	if len(a.NonTLS) > 0 {
-		parts = append(parts, "non-TLS traffic to "+strings.Join(a.NonTLS, ", "))
+	if raw := a.RawTargets(); len(raw) > 0 {
+		parts = append(parts, "raw (unchecked protocol) traffic to "+strings.Join(raw, ", "))
 	}
 	if a.ReverseShell {
 		parts = append(parts, "reverse shells")
@@ -179,8 +194,8 @@ func UnionAllow(list ...*SandboxAllow) *SandboxAllow {
 		for _, t := range a.Tunnels {
 			u.Tunnels = appendUniqueStr(u.Tunnels, t)
 		}
-		for _, h := range a.NonTLS {
-			u.NonTLS = appendUniqueStr(u.NonTLS, h)
+		for _, h := range a.RawTargets() {
+			u.Raw = appendUniqueStr(u.Raw, h)
 		}
 		u.ReverseShell = u.ReverseShell || a.ReverseShell
 		u.Pty = u.Pty || a.Pty
@@ -210,10 +225,10 @@ func validateSandboxAllow(where string, a *SandboxAllow) error {
 			return fmt.Errorf("config: %s.tunnels: %q: the destination after @ must be host[:port]", where, t)
 		}
 	}
-	for _, h := range a.NonTLS {
+	for _, h := range a.RawTargets() {
 		host, port, ok := strings.Cut(strings.TrimSpace(h), ":")
 		if !ok || host == "" || port == "" || strings.Contains(port, ":") {
-			return fmt.Errorf("config: %s.non_tls: %q: want host:port (the port is not implied: raw traffic is rarely 443)", where, h)
+			return fmt.Errorf("config: %s.raw: %q: want host:port (the port is not implied: raw traffic is rarely 443)", where, h)
 		}
 	}
 	return nil

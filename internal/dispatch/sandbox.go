@@ -330,7 +330,7 @@ func AllowanceOf(a *config.SandboxAllow) *agentsandbox.Allowance {
 		return nil
 	}
 	return &agentsandbox.Allowance{
-		Tunnels: a.TunnelTools(), TunnelHosts: a.TunnelHosts(), TunnelAnyHost: a.TunnelAnyHost(), NonTLS: append([]string(nil), a.NonTLS...),
+		Tunnels: a.TunnelTools(), TunnelHosts: a.TunnelHosts(), TunnelAnyHost: a.TunnelAnyHost(), NonTLS: a.RawTargets(),
 		ReverseShell: a.ReverseShell, Pty: a.Pty, By: a.Origin,
 	}
 }

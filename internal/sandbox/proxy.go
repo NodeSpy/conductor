@@ -74,19 +74,25 @@ var errEgressBlockedIP = errors.New("resolved address is in a blocked range")
 // the exact same set of ranges.
 func specialIP(ip net.IP) bool { return netguard.Blocked(ip) }
 
-// specialAllowed reports whether the operator bound this exact special-range
-// address for this exact target — the only way past the SSRF guard. Hosts
-// are taken exactly as bound:
+// specialAllowed reports whether the operator listed this target
+// explicitly enough to reach a special-range address — the only way past
+// the SSRF guard. An entry is explicit when it names the target exactly,
+// for its port:
 //
-//   - a target that IS an IP literal reaches that address when an allowlist
-//     entry lists the same literal (not a glob) for its port;
+//   - a target that IS an IP literal reaches that address when an entry
+//     lists the same literal, or a CIDR range (10.0.0.0/8, 100.64.0.0/10)
+//     holding it;
 //   - the target `localhost` reaches loopback when an entry names
-//     `localhost` itself for its port.
+//     `localhost` itself;
+//   - any other name reaches what it resolves to when an entry names that
+//     exact host — a local mirror on loopback, RFC1918, ULA or a tailnet's
+//     CGNAT space — but never link-local (cloud metadata), multicast or
+//     unspecified space, which take the literal address.
 //
-// Nothing else crosses: a name never inherits a listed literal (an
-// allowlisted name that resolves — or rebinds — to 127.0.0.1 is refused even
-// with 127.0.0.1 listed), and `localhost:3000`, `127.0.0.1:3000` and
-// `[::1]:3000` are three bindings, none implying another.
+// A wildcard entry (`*`, `*.example.com`, `mirror.*`) never reaches
+// special space. A name never inherits a listed literal, and
+// `localhost:3000`, `127.0.0.1:3000` and `[::1]:3000` are three bindings,
+// none implying another.
 func specialAllowed(allow []string, host, port string, ip net.IP) bool {
 	tip := net.ParseIP(host)
 	for _, pat := range allow {
@@ -103,11 +109,29 @@ func specialAllowed(allow []string, host, port string, ip net.IP) bool {
 			}
 			continue
 		}
-		if strings.EqualFold(ph, "localhost") && strings.EqualFold(host, "localhost") && ip.IsLoopback() {
+		if _, cidr, err := net.ParseCIDR(ph); err == nil {
+			if tip != nil && tip.Equal(ip) && cidr.Contains(ip) {
+				return true
+			}
+			continue
+		}
+		if strings.EqualFold(ph, "localhost") {
+			if strings.EqualFold(host, "localhost") && ip.IsLoopback() {
+				return true
+			}
+			continue
+		}
+		if tip == nil && !strings.ContainsAny(ph, "*?[") && sameHost(ph, host) && netguard.NameReachable(ip) {
 			return true
 		}
 	}
 	return false
+}
+
+// sameHost compares two host names: case-insensitive, a trailing dot
+// ignored.
+func sameHost(a, b string) bool {
+	return strings.EqualFold(strings.TrimSuffix(a, "."), strings.TrimSuffix(b, "."))
 }
 
 // lookup resolves host through the injected resolver (tests) or the system one.
@@ -430,10 +454,14 @@ func (c *countingBody) Read(b []byte) (int, error) {
 
 func (c *countingBody) Close() error { return c.r.Close() }
 
-// connect handles a CONNECT tunnel (the HTTPS path). With RequireTLS the
-// client's first bytes are read before the upstream is dialed: they must be
-// a TLS ClientHello naming the CONNECT host — anything else is refused and
-// the remote host never sees a connection.
+// firstBytesWait is how long a tunnel's client has to send its opening.
+var firstBytesWait = 15 * time.Second
+
+// connect handles a CONNECT tunnel (the HTTPS path). With the protocol
+// check on (RequireTLS) the client's first bytes are read before the
+// upstream is dialed and must be a recognized protocol naming the CONNECT
+// host (classifyTunnel) — anything else is refused and the remote host
+// never sees a connection.
 func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 	target := r.Host
 	if !strings.Contains(target, ":") {
@@ -467,39 +495,29 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 	}
 	_, _ = buf.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
 	_ = buf.Flush()
+	var hello []byte
+	var sni, allowedBy, proto string
 	fail := func(outcome, reason string) {
 		client.Close()
-		p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: outcome, Reason: reason})
+		p.record(ConnRecord{Run: sess.Run, Target: target, Outcome: outcome, Reason: reason, Proto: proto})
 	}
-	var hello []byte
-	var sni, allowedBy string
 	switch {
 	case sess.requireTLS && len(sess.nonTLS) > 0 && EgressAllowed(sess.nonTLS, target):
-		// The launch's allowance for raw traffic to this target: no
-		// first-bytes check, the tunnel audited as allowed by it.
+		// The launch's raw allowance for this target: no first-bytes check,
+		// the tunnel audited as allowed by it.
 		allowedBy = sess.nonTLSBy
 	case sess.requireTLS:
-		_ = client.SetReadDeadline(time.Now().Add(15 * time.Second))
-		raw, info, err := readClientHello(buf.Reader)
+		_ = client.SetReadDeadline(time.Now().Add(firstBytesWait))
+		open, why := classifyTunnel(buf.Reader, target)
 		_ = client.SetReadDeadline(time.Time{})
-		if err != nil {
-			fail("refused", err.Error())
-			return
-		}
-		host, _ := splitHostPort(target)
-		switch {
-		case info.ECH:
-			fail("refused", "encrypted ClientHello: the server name cannot be checked")
-			return
-		case !sniMatches(host, info.SNI, net.ParseIP(host) != nil):
-			reason := fmt.Sprintf("TLS server name %q is not the CONNECT host %q", info.SNI, host)
-			if info.SNI == "" {
-				reason = "no TLS server name (SNI)"
+		if why != "" {
+			if strings.HasPrefix(why, "ssh to ") {
+				proto = ProtoSSH
 			}
-			fail("refused", reason)
+			fail("refused", why)
 			return
 		}
-		hello, sni = raw, info.SNI
+		hello, sni, proto = open.raw, open.sni, open.proto
 	}
 	upstream, err := dialIPs(context.Background(), ips, port, 30*time.Second, target)
 	if err != nil {
@@ -523,7 +541,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 	go func() {
 		rec := t.run(buf.Reader)
 		sess.remove(t)
-		rec.Target, rec.SNI, rec.AllowedBy = target, sni, allowedBy
+		rec.Target, rec.SNI, rec.AllowedBy, rec.Proto = target, sni, allowedBy, proto
 		rec.Up += int64(len(hello))
 		p.record(rec)
 	}()
