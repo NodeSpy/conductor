@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -678,5 +679,70 @@ func TestDeclaredRemote(t *testing.T) {
 	t.Setenv("CONDUCTOR_GIT_REMOTE_BASE", "git://forge/")
 	if got := p.remoteURL("o/r", "ssh://git.example.org/o/r.git"); got != "git://forge/o/r.git" {
 		t.Fatalf("the harness override must win: %q", got)
+	}
+}
+
+// A pass logs one summary line — how many and how much — not a line per
+// worktree.
+func TestReapLogsOneLinePerPass(t *testing.T) {
+	origin := originRepo(t)
+	p := newProv(t, origin)
+	var mu sync.Mutex
+	var lines []string
+	p.Log = func(format string, args ...any) {
+		mu.Lock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+		mu.Unlock()
+	}
+	ctx := context.Background()
+	old := time.Now().Add(-2 * time.Hour)
+	for _, d := range []string{"disp-1", "disp-2", "disp-3"} {
+		req := prReq()
+		req.DispatchID = d
+		id, cwd, err := p.ProvisionWorktree(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.mu.Lock()
+		delete(p.live, id)
+		p.mu.Unlock()
+		touch(t, cwd, old)
+	}
+	p.MinAge = time.Hour
+	mu.Lock()
+	lines = nil
+	mu.Unlock()
+
+	p.Reap(ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	var reaps []string
+	for _, l := range lines {
+		if strings.Contains(l, "reaped") || strings.Contains(l, p.WorktreesDir()) {
+			reaps = append(reaps, l)
+		}
+	}
+	if len(reaps) != 1 || !strings.HasPrefix(reaps[0], "gitwt: reaped 3 orphan worktree(s) (") {
+		t.Fatalf("want one summary line for the pass, got %q", reaps)
+	}
+	if ents, _ := os.ReadDir(p.WorktreesDir()); len(ents) != 0 {
+		t.Fatalf("left %d worktrees", len(ents))
+	}
+	p.Reap(ctx)
+	for _, l := range lines[1:] {
+		if strings.Contains(l, "reaped") {
+			t.Fatalf("an empty pass logged %q", l)
+		}
+	}
+}
+
+func TestByteSize(t *testing.T) {
+	for n, want := range map[int64]string{
+		12: "12 B", 4096: "4 KiB", 244 << 20: "244 MiB", 3 << 29: "1.5 GiB", 41 << 30: "41 GiB",
+	} {
+		if got := byteSize(n); got != want {
+			t.Errorf("byteSize(%d) = %q, want %q", n, got, want)
+		}
 	}
 }

@@ -1216,10 +1216,14 @@ type Step struct {
 	Workspace Workspace `yaml:"workspace,omitempty"`
 	// WaitTimeout bounds a foreground dispatch.
 	WaitTimeout Duration `yaml:"wait_timeout,omitempty"`
-	// ArchiveWhenDone soft-deletes the agent once the step finishes. Forced
-	// off for a background (hand-off) step, which sits idle precisely because
-	// it is waiting for you.
-	ArchiveWhenDone bool `yaml:"archive_when_done,omitempty"`
+	// ArchiveWhenDone soft-deletes the agent, and the workspace conductor
+	// made for it, once the step finishes. Unset (nil): a workflow's
+	// foreground agent step releases them when it finished cleanly, unless
+	// something later in the run reads its workdir or agent_id (the flow
+	// runner decides). true: always at step end; false: never — the agent
+	// stays live. Forced off for a background (hand-off) step, which sits
+	// idle precisely because it is waiting for you.
+	ArchiveWhenDone *bool `yaml:"archive_when_done,omitempty"`
 	// Labels are runtime labels stamped on the launch.
 	Labels map[string]string `yaml:"labels,omitempty"`
 	// Guidance layers house tone/format rules onto THIS step's prompt. It is
@@ -2295,7 +2299,7 @@ func validateDetach(w string, s Step) error {
 		{"output_schema:", len(s.OutputSchema) > 0},
 		{"watch:", s.Watch != nil},
 		{"idle_timeout:", s.IdleTimeout > 0},
-		{"archive_when_done:", s.ArchiveWhenDone},
+		{"archive_when_done:", s.ArchivesWhenDone()},
 		{"session:", s.Session != nil},
 		{"skill:", s.Skill != nil},
 		{"team:", s.Team != nil},
@@ -2403,3 +2407,12 @@ func sortedKeys[M ~map[string]V, V any](m M) string {
 	sort.Strings(names)
 	return strings.Join(names, ", ")
 }
+
+// ArchivesWhenDone reports an explicit archive_when_done: true.
+func (s Step) ArchivesWhenDone() bool { return s.ArchiveWhenDone != nil && *s.ArchiveWhenDone }
+
+// KeepsAgentWhenDone reports an explicit archive_when_done: false.
+func (s Step) KeepsAgentWhenDone() bool { return s.ArchiveWhenDone != nil && !*s.ArchiveWhenDone }
+
+// Bool returns a pointer to b: an explicit setting of a tri-state field.
+func Bool(b bool) *bool { return &b }

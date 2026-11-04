@@ -894,7 +894,9 @@ x-templates:
                             #   cannot be combined with checkout: checkout-pr or
                             #   branch-off (each of those wants its own worktree).
     wait_timeout: 25m
-    archive_when_done: true
+    archive_when_done: true # true: archived (and its worktree freed) when the step ends.
+    #                       #   Unset: the same once it finishes cleanly, unless a later
+    #                       #   step reads its workdir/agent_id. false: kept live.
     # guidance: "Reply in a sentence or two."  # STACKS on policy.guidance (layer 0);
     #                       #   a list or { replace: … } is also accepted (wiki: Reuse)
     # runtime: paseo        # explicit runtime (default: the default: true one)

@@ -49,7 +49,7 @@ func (f *stepFake) Dispatch(_ context.Context, req dispatch.Request) (dispatch.R
 	f.ran = append(f.ran, id)
 	f.provider[id] = req.Model
 	f.waited[id] = req.Wait
-	f.archive[id] = req.Step.ArchiveWhenDone
+	f.archive[id] = req.Step.ArchivesWhenDone()
 	f.prompts[id] = req.Action.Prompt
 	if s, ok := req.Data["steps"].(map[string]any); ok {
 		keys := []string{}
@@ -182,7 +182,7 @@ func TestWorkflowBackgroundStepNotReapable(t *testing.T) {
 	d := newStepFake()
 	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
 		// Profile mistakenly (or staleley) opts into archiving.
-		{ID: "interactive", ArchiveWhenDone: true},
+		{ID: "interactive", ArchiveWhenDone: config.Bool(true)},
 	}}}}
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: &fakeNotifier{},
 		Author: dispatch.Author{}})

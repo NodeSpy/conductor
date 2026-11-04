@@ -173,7 +173,7 @@ triggers:
 	var ids []string
 	for i, tr := range c.Triggers {
 		s := tr.Steps[0]
-		if s.Workspace.Isolation != "worktree" || !s.ArchiveWhenDone || s.Model.Ref != "claude-opus-5" {
+		if s.Workspace.Isolation != "worktree" || !s.ArchivesWhenDone() || s.Model.Ref != "claude-opus-5" {
 			t.Fatalf("trigger %d: anchored behavior not merged: %+v", i, s)
 		}
 		ids = append(ids, s.Identity(ScopeForTrigger(tr, i), 0))

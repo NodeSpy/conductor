@@ -844,7 +844,7 @@ func (a *Affinity) archiveWanted(ref AffinityRef) bool {
 	}
 	want := false
 	a.cfg.WalkSteps(func(scope config.IdentityScope, slot int, s *config.Step) {
-		if s.Identity(scope, slot) == ident && s.ArchiveWhenDone {
+		if s.Identity(scope, slot) == ident && s.ArchivesWhenDone() {
 			want = true
 		}
 	})

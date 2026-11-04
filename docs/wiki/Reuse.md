@@ -154,10 +154,11 @@ runtimes:
 | `guidance` | **stacks** (parent parts, then child parts) — see below |
 
 Chains are allowed (`c → b → a`, resolved root→leaf). A **cycle** or an **unknown `extends:`
-target** is a load error. One documented limitation: a plain `bool` field (e.g. a step's
-`archive_when_done`, a runtime's `default`) is inherited only when the child leaves it `false` — a
-child can't force a parent's `true` back to `false`. The optional fields that matter are pointers or
-strings, so this rarely bites.
+target** is a load error. One documented limitation: a plain `bool` field (e.g. a runtime's
+`default`) is inherited only when the child leaves it `false` — a child can't force a parent's
+`true` back to `false`. The optional fields that matter are pointers or strings (a step's
+`archive_when_done` is one: a child's explicit `false` wins over a parent's `true`), so this rarely
+bites.
 
 > **Not yet on `connectors:`, `stores:`, `vaults:`.** These decode through a retained raw YAML node
 > (their type-specific sub-blocks aren't plain struct fields), which needs a different merge, and they
