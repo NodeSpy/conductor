@@ -90,7 +90,7 @@ func (p *workPusher) push(ctx context.Context, dispatchID string) (map[string]an
 		return nil, err
 	}
 	defer p.lock(e.Workspace)()
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, gitpush.Timeout)
 	defer cancel()
 	res, err := gitpush.Push(ctx, gitpush.Request{
 		Workspace: e.Workspace, GitDir: e.Push.GitDir, HeadDir: e.Push.HeadDir,

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/gitpush"
 )
 
 // startIPC serves the tool socket for one test and returns the socket path
@@ -554,5 +556,34 @@ func TestMCPClaimFailureDisablesSkillTools(t *testing.T) {
 		if n == "secret_issue" || n == "secret_redeem" {
 			t.Fatalf("broker tool %q advertised after a failed claim", n)
 		}
+	}
+}
+
+// A verb runs under the bound its caller waits for. git.push gets the push's
+// own: an agent told "i/o timeout" at 30s while a slow push went on took it
+// for failed, amended its commit, and the stale commit landed after.
+func TestIPCVerbDeadline(t *testing.T) {
+	got := map[string]time.Duration{}
+	SetLiveOps(LiveOps{
+		RunVerb: func(ctx context.Context, _, uses string, _ map[string]any, _ Peer) (map[string]any, error) {
+			dl, ok := ctx.Deadline()
+			if !ok {
+				t.Errorf("%s: no deadline", uses)
+			}
+			got[uses] = time.Until(dl)
+			return map[string]any{}, nil
+		},
+	})
+	t.Cleanup(func() { SetLiveOps(LiveOps{}) })
+	for _, uses := range []string{"git.push", "github.reply"} {
+		if resp := handleIPC(nil, IPCRequest{Op: "verb", Token: "tok-1", Uses: uses}, Peer{}, nil, nil); !resp.OK {
+			t.Fatalf("%s: %+v", uses, resp)
+		}
+	}
+	if d := got["git.push"]; d <= gitpush.Timeout-time.Second || d > gitpush.Timeout {
+		t.Fatalf("git.push deadline in %v, want the push's own %v", d, gitpush.Timeout)
+	}
+	if d := got["github.reply"]; d <= 29*time.Second || d > 30*time.Second {
+		t.Fatalf("github.reply deadline in %v, want 30s", d)
 	}
 }

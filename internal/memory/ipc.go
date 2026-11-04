@@ -9,6 +9,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/gitpush"
 )
 
 // The live-tool transport. The `conductor mcp memory` subprocess an agent
@@ -193,9 +195,9 @@ func serveConn(conn net.Conn, m *Manager, audit func(map[string]any), log func(s
 		writeResp(conn, IPCResponse{Error: "memory: bad tool request: " + err.Error()})
 		return
 	}
-	if req.Op == "browser" {
-		// A browser action (a page load, a wait) may take longer.
-		_ = conn.SetDeadline(time.Now().Add(BrowserOpTimeout + 15*time.Second))
+	// A browser action (a page load, a wait) or a push may take longer.
+	if d := opTimeout(req); d > 0 {
+		_ = conn.SetDeadline(time.Now().Add(d + 15*time.Second))
 	}
 	// The peer credentials come from the KERNEL, not the request — the skill
 	// ops bind and verify sessions against them.
@@ -420,7 +422,12 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 		if ops.RunVerb == nil {
 			return IPCResponse{Error: "verb: the skill verb surface is not available on this daemon"}
 		}
-		out, err := ops.RunVerb(context.Background(), req.Token, req.Uses, req.Options, peer)
+		// Bounded by what the caller waits for: a verb still running when
+		// the caller gives up would act (a push land) after it reported a
+		// failure.
+		ctx, cancel := context.WithTimeout(context.Background(), VerbTimeout(req.Uses))
+		defer cancel()
+		out, err := ops.RunVerb(ctx, req.Token, req.Uses, req.Options, peer)
 		if err != nil {
 			return IPCResponse{Error: err.Error()}
 		}
@@ -442,6 +449,32 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 // BrowserOpTimeout bounds one browser action on the daemon.
 const BrowserOpTimeout = 120 * time.Second
 
+// VerbTimeout bounds one skill verb call on the daemon; the connection and
+// the caller wait a little longer, so the caller always gets the verb's own
+// result. git.push (dispatch.GitPushVerb) gets the push's own bound: a push
+// behind a slow remote takes minutes, and an agent told "i/o timeout" at 30s
+// while it went on took the push for failed, amended its commit, and the
+// stale commit landed.
+func VerbTimeout(uses string) time.Duration {
+	if uses == "git.push" {
+		return gitpush.Timeout
+	}
+	return 30 * time.Second
+}
+
+// opTimeout is how long the daemon may work on an op that can outlast the
+// default 30s connection deadline; 0 for the rest. Both ends wait a little
+// past it, the caller longest, so the op's own result always reaches it.
+func opTimeout(req IPCRequest) time.Duration {
+	if req.Op == "browser" {
+		return BrowserOpTimeout
+	}
+	if req.Op == "verb" {
+		return VerbTimeout(req.Uses)
+	}
+	return 0
+}
+
 // IPCCall dials the daemon socket for one tool call (the subprocess side).
 func IPCCall(socket string, req IPCRequest) (IPCResponse, error) {
 	conn, err := net.DialTimeout("unix", socket, 5*time.Second)
@@ -450,8 +483,8 @@ func IPCCall(socket string, req IPCRequest) (IPCResponse, error) {
 	}
 	defer conn.Close()
 	d := 30 * time.Second
-	if req.Op == "browser" {
-		d = BrowserOpTimeout + 20*time.Second
+	if t := opTimeout(req); t > 0 {
+		d = t + 20*time.Second
 	}
 	_ = conn.SetDeadline(time.Now().Add(d))
 	b, err := json.Marshal(req)
