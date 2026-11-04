@@ -79,6 +79,8 @@ func TestSandboxAllowValidation(t *testing.T) {
 		"allow with mode none":   strings.Replace(allowDoc, "    isolation:\n      allow:", "    isolation:\n      mode: none\n      allow:", 1),
 		"allow on a code step":   strings.Replace(allowDoc, "steps: [ { id: look, type: agent, prompt: p } ]", "steps: [ { id: look, run: sh, code: 'true', isolation: { mode: namespace, allow: { pty: true } } } ]", 1),
 		"allow on a host":        allowDoc + "hosts:\n  box: { host: box.example, isolation: { mode: namespace, allow: { pty: true } } }\n",
+		"cpu as an agent cap":    strings.Replace(allowDoc, "detect: { action: alert }", "limits: { cpu: 200% }", 1),
+		"mode-less code limits":  strings.Replace(allowDoc, "steps: [ { id: look, type: agent, prompt: p } ]", "steps: [ { id: look, run: sh, code: 'true', isolation: { limits: { memory: 1G } } } ]", 1),
 	}
 	for name, doc := range bad {
 		if doc == allowDoc {
@@ -98,6 +100,15 @@ func TestSandboxAllowValidation(t *testing.T) {
 	if _, err := loadDoc(t, ok); err != nil {
 		t.Fatal(err)
 	}
+	// A scope's agent launch caps: limits: with no mode, on a paseo step too.
+	caps := strings.Replace(allowDoc, "{ id: look, type: agent, prompt: p }", "{ id: look, type: agent, prompt: p, isolation: { limits: { memory: 16G, pids: 16384 } } }", 1)
+	cfg, err := loadDoc(t, caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := cfg.Workflows["review"].Steps[0].Isolation.Limits; l == nil || l.Memory != "16G" || l.Pids != 16384 {
+		t.Fatalf("a step's caps: %+v", l)
+	}
 }
 
 // A knobs-only block layers onto the scope outside it; a block with a mode
@@ -108,6 +119,10 @@ func TestLayerIsolation(t *testing.T) {
 	got := LayerIsolation(outer, knobs)
 	if got.Mode != "namespace" || got.Network != outer.Network || got.Allow != knobs.Allow || outer.Allow.Tunnels != nil {
 		t.Fatalf("layered %+v (outer %+v)", got, outer)
+	}
+	caps := &IsolationConfig{Limits: &IsolationLimits{Memory: "16G"}}
+	if got := LayerIsolation(outer, caps); got.Mode != "namespace" || got.Allow != outer.Allow || got.Limits != caps.Limits {
+		t.Fatalf("caps layered %+v", got)
 	}
 	full := &IsolationConfig{Mode: "namespace"}
 	if LayerIsolation(outer, full) != full || LayerIsolation(nil, knobs) != knobs || LayerIsolation(outer, nil) != outer {
@@ -181,6 +196,7 @@ func TestPackAllowanceTakesEffectOnlyWhenGranted(t *testing.T) {
 		"workflow allow": {"  review:\n    steps:", "  review:\n    isolation: { allow: { tunnels: [ssh] } }\n    steps:"},
 		"trigger detect": {"    on: svc.x\n", "    on: svc.x\n    isolation: { detect: { action: off } }\n"},
 		"egress limits":  {"- { id: post, type: agent, prompt: p, background: true }", "- { id: post, type: agent, prompt: p, background: true, isolation: { egress_limits: { upload: off } } }"},
+		"agent caps":     {"- { id: post, type: agent, prompt: p, background: true }", "- { id: post, type: agent, prompt: p, background: true, isolation: { limits: { pids: 65536 } } }"},
 	} {
 		body := strings.Replace(allowPack, edit[0], edit[1], 1)
 		if body == allowPack {

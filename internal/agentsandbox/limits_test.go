@@ -2,6 +2,7 @@ package agentsandbox
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -16,7 +17,14 @@ func withLimits(t *testing.T, ok bool) {
 	limitsWarned = sync.Once{}
 	unit := sandbox.LauncherUnit
 	sandbox.LauncherUnit = func() string { return "" }
-	t.Cleanup(func() { limitsAvailable = old; limitsWarned = sync.Once{}; sandbox.LauncherUnit = unit })
+	result := scopeResult
+	scopeResult = func(string) string { return "" }
+	t.Cleanup(func() {
+		limitsAvailable = old
+		limitsWarned = sync.Once{}
+		sandbox.LauncherUnit = unit
+		scopeResult = result
+	})
 }
 
 func TestWrapRunsAgentsUnderDefaultLimits(t *testing.T) {
@@ -32,9 +40,11 @@ func TestWrapRunsAgentsUnderDefaultLimits(t *testing.T) {
 	}
 	defer l.Cleanup()
 	j := strings.Join(l.Argv, " ")
-	want := "systemd-run --user --scope --quiet --collect --slice=" + AgentSlice + " -p MemoryMax=50% -p TasksMax=8192 unshare "
-	if !strings.HasPrefix(j, want) {
-		t.Fatalf("argv:\n%s\nwant prefix %s", j, want)
+	// A named scope, not collected: its result (an oom-kill) is read at
+	// the launch's end.
+	want := regexp.MustCompile(`^systemd-run --user --scope --quiet --unit=conductor-agent-[0-9a-f]{16}\.scope --slice=` + regexp.QuoteMeta(AgentSlice) + ` -p MemoryMax=50% -p TasksMax=8192 unshare `)
+	if !want.MatchString(j) || strings.Contains(j, "--collect") {
+		t.Fatalf("argv:\n%s\nwant %s", j, want)
 	}
 	f.pol.Limits = LimitSpec{Memory: "4G", Pids: 100}
 	l, _ = Wrap(f.pol, []string{"claude"}, f.deps)

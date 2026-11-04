@@ -202,7 +202,7 @@ sandbox:
   #                                 # scope one in an isolation: block (§ Scoped allowances)
   # limits:                       # Linux: a systemd user scope per launch
   #   memory: 50%                 # per launch (systemd syntax: 4G, 50%)
-  #   pids: 8192
+  #   pids: 8192                  # per scope: isolation: { limits: { memory, pids } }; peaks in `conductor report`
   #   aggregate_memory: 75%       # every agent launch together
   #   disk_free_min: 5%           # or a size (5GiB), or off
   #   required: false             # true: refuse a launch whose limits can't be applied
@@ -606,8 +606,71 @@ Each conductor process checks once whether the scope works, by running the
 launch's own prefix around `true`. When it does not (no user manager, no bus
 reachable), launches run uncapped in the launcher's cgroup, after a one-time
 warning (`sandbox_limits_unavailable`). `required: true` refuses them
-instead. `off: true` turns the defaults off (a step's own `isolation.limits`
+instead. `off: true` turns the defaults off (a scope's own `limits:` below
 still apply). macOS has no equivalent.
+
+**How close launches come to the caps.** Each capped launch's scope is a
+named unit (`conductor-agent-<id>.scope`). While it runs, conductor reads its
+cgroup every second: `memory.peak` and `pids.peak` against `memory.max` and
+`pids.max`, plus `memory.events` (`oom_kill`) and `pids.events` (`max`).
+When the launch ends, one `sandbox_usage` audit row records them:
+
+```json
+{"event":"sandbox_usage","run":"<dispatch>","agent":"workflow:review/review-team/review[0]",
+ "memory_peak":1932735283,"memory_max":16777216000,"pids_peak":212,"pids_max":8192,"source":"cgroup"}
+```
+
+- A launch that reached **80% of either cap** gets `near_cap: true` and a
+  `warning`. The daemon logs one line: `sandbox: warning: launch used memory
+  14.1GiB of 15.6GiB (90%): raise sandbox.limits for this scope before the
+  cap bites (run …, agent …)`.
+- A launch the **memory cap killed** gets `killed_by: memory`. A
+  `sandbox_limit` event (`kind: memory_cap`, `action: killed`) is raised and
+  sent to the operator. It comes from the cgroup's `oom_kill` count, or from
+  the scope's own systemd result (`oom-kill`), which conductor reads once the
+  launch ends and then resets.
+- Forks the **task cap refused** give `pids_refused: N` and a
+  `sandbox_limit` (`kind: pids_cap`, `action: refused`). The task cap does
+  not kill anything: the launch's `fork` calls fail.
+- **Sampling.** The peaks are the kernel's own high-water marks. A kernel
+  without `memory.peak` (before 5.19) or `pids.peak` gives the current value,
+  sampled each second.
+- **No cgroup.** On macOS, or on Linux with no user manager, there are no
+  caps. The row's `source: processes` is the watcher's sampled maximum: the
+  launch's resident memory and tasks summed at each scan. It has no `*_max`
+  fields, and a burst between scans is not seen.
+
+`conductor report` lists every agent with its highest peak against its cap
+over the window:
+
+```
+sandbox caps (highest peak per agent vs its cap; near = launches at >=80% of a cap):
+  agent                                    launches     memory peak / cap tasks peak / cap  near  capped
+  autopilot/on_failing_checks/0                  21      14.1G/15.6G  90%   310/8192   4%     3   mem×1
+  workflow:review/review-team/review[0]           6       1.8G/15.6G  12%    212/8192   3%     0
+```
+
+**Tuning the caps per scope.** Set `limits:` with no `mode:` on the
+runtime, workflow, trigger or step whose launches need different caps. It
+takes `memory` (systemd syntax: `16G`, `40%`) and `pids`, and overrides
+`sandbox.limits` for that scope's agent launches. It works on paseo steps too,
+and still applies where `sandbox.limits.off` is set:
+
+```yaml
+workflows:
+  build-heavy:
+    isolation:
+      limits: { memory: 24G, pids: 16384 }   # these launches peak near the 50% default
+    steps:
+      - { id: fix, type: agent, prompt: "Fix the failing build." }
+```
+
+Raise a scope whose `near` count keeps growing, or that shows `mem×N`. Lower
+one whose peak sits far below its cap, so a runaway in it stops sooner. The
+slice's `aggregate_memory` still caps all agents together. A pack may set
+`limits:` on its own steps only within the defaults: at most 8192 tasks, and
+memory as a size or at most 50%. Higher is the operator's to write, from the
+`packs:` block. `cpu` does not apply to agent sandbox launches.
 
 **The disk guard.** It refuses a launch when its workspace or home
 filesystem has less free space than `disk_free_min` (5%, or a size like

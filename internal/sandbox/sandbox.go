@@ -44,15 +44,19 @@ import (
 // Spec is a resolved isolation policy — config.IsolationConfig with the
 // pointers flattened, ready to wrap a launch.
 type Spec struct {
-	Mode      string // user | namespace | container
-	User      string // mode: user — the low-privilege account
-	Image     string // mode: container — the image to run
-	Engine    string // mode: container — docker (default) | podman
-	Memory    string // cgroup/engine memory cap ("2g"); empty = none
-	CPU       string // cgroup CPUQuota ("200%") / engine --cpus ("2"); empty = none
-	Pids      int    // max tasks/pids; 0 = none
-	Slice     string // systemd slice the limits scope runs in (an aggregate cap); "" = the default
-	Deny      bool   // structural no-network (namespace --net / --network=none)
+	Mode   string // user | namespace | container
+	User   string // mode: user — the low-privilege account
+	Image  string // mode: container — the image to run
+	Engine string // mode: container — docker (default) | podman
+	Memory string // cgroup/engine memory cap ("2g"); empty = none
+	CPU    string // cgroup CPUQuota ("200%") / engine --cpus ("2"); empty = none
+	Pids   int    // max tasks/pids; 0 = none
+	Slice  string // systemd slice the limits scope runs in (an aggregate cap); "" = the default
+	// Unit names the limits scope ("" = systemd's own name, collected at
+	// its end). A named scope is not collected: its result (an oom-kill)
+	// stays readable until its launcher resets it.
+	Unit      string
+	Deny      bool // structural no-network (namespace --net / --network=none)
 	Egress    []string
 	HasEgress bool // a network: block was present (even empty ⇒ deny-all proxy)
 	// Privileged (namespace mode) opts out of the default daemon-file
@@ -361,7 +365,12 @@ func (s *Spec) systemdPrefix() []string {
 	if s.Memory == "" && s.CPU == "" && s.Pids == 0 {
 		return nil
 	}
-	out := []string{"systemd-run", "--user", "--scope", "--quiet", "--collect"}
+	out := []string{"systemd-run", "--user", "--scope", "--quiet"}
+	if s.Unit != "" {
+		out = append(out, "--unit="+s.Unit)
+	} else {
+		out = append(out, "--collect")
+	}
 	if s.Slice != "" {
 		out = append(out, "--slice="+s.Slice)
 	}

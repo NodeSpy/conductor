@@ -48,6 +48,11 @@ type Scope struct {
 	// scope is recomputed from when the config changes.
 	DetectBy string `json:"detect_by,omitempty"`
 	LimitsBy string `json:"limits_by,omitempty"`
+	// Memory and Pids are the scope's launch caps over sandbox.limits
+	// ("" / 0: the global); a scope that sets one is capped even where
+	// sandbox.limits is off.
+	Memory string `json:"memory,omitempty"`
+	Pids   int    `json:"pids,omitempty"`
 }
 
 // JoinAllowances is every allowance of list in one (nil: none).
@@ -101,6 +106,12 @@ func applyScope(p *Policy, base *Allowance, s *Scope) {
 		if p.Detect.Action == DetectOff {
 			p.Detect.NoTripwires = true
 			p.Detect.Connections = sandbox.ShapeOff
+		}
+		if s.Memory != "" {
+			p.Limits.Memory, p.Limits.Off = s.Memory, false
+		}
+		if s.Pids > 0 {
+			p.Limits.Pids, p.Limits.Off = s.Pids, false
 		}
 		for _, o := range []struct {
 			v   int64

@@ -245,6 +245,9 @@ func validateScopeSandbox(where string, iso *IsolationConfig) error {
 			return fmt.Errorf("config: %s: isolation.detect.action must be kill|alert|off, got %q", where, d.Action)
 		}
 	}
+	if l := iso.Limits; l != nil && iso.Mode == "" && l.CPU != "" {
+		return fmt.Errorf("config: %s: isolation.limits.cpu is not applied to agent sandbox launches (memory and pids are)", where)
+	}
 	if l := iso.EgressLimits; l != nil {
 		if _, err := ParseLimitDuration(l.Idle); err != nil {
 			return fmt.Errorf("config: %s: isolation.egress_limits.idle: %w", where, err)

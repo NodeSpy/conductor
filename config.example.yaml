@@ -1439,7 +1439,9 @@ sandbox:
   #                             #   is granted pinned: packs: <inst>: { grant: [name@digest] }
   # limits:                     # Linux: a systemd user scope per launch
   #   memory: 50%               # per launch
-  #   pids: 8192
+  #   pids: 8192                # per scope: isolation: { limits: { memory: 24G, pids: 16384 } };
+  #                             #   each launch's peak vs cap is audited (sandbox_usage), warned at
+  #                             #   80%, and listed by `conductor report`
   #   aggregate_memory: 75%     # all agent launches together
   #   disk_free_min: 5%         # refuse/stop launches below this free space (a size, or off)
   #   required: false           # true: refuse a launch when the limits can't be applied

@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -95,7 +96,132 @@ func cmdReport(args []string) error {
 			printQuality(q)
 		}
 	}
+	// Sandbox caps: each launch's peaks against its caps.
+	if _, err := f.Seek(0, io.SeekStart); err == nil {
+		if c, cerr := tallyCaps(f, cutoff); cerr == nil {
+			printCaps(c)
+		}
+	}
 	return nil
+}
+
+// capCell is one agent's launches against their sandbox caps: the highest
+// peaks, the caps they ran under, and how often they came near or hit one.
+type capCell struct {
+	Launches                    int
+	MemPeak, MemMax             float64
+	PidsPeak, PidsMax           float64
+	MemFrac, PidsFrac           float64 // the highest share of a cap one launch used
+	Near, MemKilled, PidsCapped int
+}
+
+// tallyCaps reads the sandbox_usage rows, per agent (its workflow/step).
+func tallyCaps(r io.Reader, cutoff time.Time) (map[string]*capCell, error) {
+	out := map[string]*capCell{}
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64<<10), 8<<20)
+	for sc.Scan() {
+		var d map[string]any
+		if json.Unmarshal(sc.Bytes(), &d) != nil || d["event"] != "sandbox_usage" {
+			continue
+		}
+		if ts, ok := d["ts"].(string); ok {
+			if t, e := time.Parse(time.RFC3339, ts); e == nil && t.Before(cutoff) {
+				continue
+			}
+		}
+		agent, _ := d["agent"].(string)
+		agent = orUnknown(agent)
+		c := out[agent]
+		if c == nil {
+			c = &capCell{}
+			out[agent] = c
+		}
+		num := func(k string) float64 { v, _ := d[k].(float64); return v }
+		c.Launches++
+		mp, mm, pp, pm := num("memory_peak"), num("memory_max"), num("pids_peak"), num("pids_max")
+		c.MemPeak, c.MemMax = max(c.MemPeak, mp), max(c.MemMax, mm)
+		c.PidsPeak, c.PidsMax = max(c.PidsPeak, pp), max(c.PidsMax, pm)
+		if mm > 0 {
+			c.MemFrac = max(c.MemFrac, mp/mm)
+		}
+		if pm > 0 {
+			c.PidsFrac = max(c.PidsFrac, pp/pm)
+		}
+		if d["near_cap"] == true {
+			c.Near++
+		}
+		if d["killed_by"] == "memory" {
+			c.MemKilled++
+		}
+		if num("pids_refused") > 0 {
+			c.PidsCapped++
+		}
+	}
+	return out, sc.Err()
+}
+
+// printCaps renders peak vs cap per agent: the evidence for tuning
+// sandbox.limits per scope.
+func printCaps(m map[string]*capCell) {
+	if len(m) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := m[keys[i]], m[keys[j]]
+		if fa, fb := max(a.MemFrac, a.PidsFrac), max(b.MemFrac, b.PidsFrac); fa != fb {
+			return fa > fb
+		}
+		return keys[i] < keys[j]
+	})
+	fmt.Println("\nsandbox caps (highest peak per agent vs its cap; near = launches at >=80% of a cap):")
+	fmt.Printf("  %-40s %8s %21s %15s %5s %7s\n", "agent", "launches", "memory peak / cap", "tasks peak / cap", "near", "capped")
+	pct := func(f float64) string {
+		if f == 0 {
+			return "  -"
+		}
+		return fmt.Sprintf("%3.0f%%", 100*f)
+	}
+	capStr := func(v float64, bytes bool) string {
+		if v == 0 {
+			return "none"
+		}
+		if bytes {
+			return fmtBytes(v)
+		}
+		return strconv.Itoa(int(v))
+	}
+	for _, k := range keys {
+		c := m[k]
+		mem := fmt.Sprintf("%s/%s %s", fmtBytes(c.MemPeak), capStr(c.MemMax, true), pct(c.MemFrac))
+		tasks := fmt.Sprintf("%d/%s %s", int(c.PidsPeak), capStr(c.PidsMax, false), pct(c.PidsFrac))
+		capped := ""
+		if c.MemKilled > 0 {
+			capped += fmt.Sprintf("mem×%d ", c.MemKilled)
+		}
+		if c.PidsCapped > 0 {
+			capped += fmt.Sprintf("tasks×%d", c.PidsCapped)
+		}
+		fmt.Printf("  %-40s %8d %21s %15s %5d %7s\n", k, c.Launches, mem, tasks, c.Near, strings.TrimSpace(capped))
+	}
+}
+
+// fmtBytes renders a byte count compactly (512M / 3.2G).
+func fmtBytes(b float64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1fG", b/(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.0fM", b/(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.0fK", b/(1<<10))
+	default:
+		return fmt.Sprintf("%.0fB", b)
+	}
 }
 
 // qualityCell aggregates one agent's (or workflow's) outcomes.

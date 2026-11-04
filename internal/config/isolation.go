@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 )
 
 // isolationGOOS is runtime.GOOS, a var so tests can validate the Linux-only
@@ -56,7 +58,7 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 			// scope's isolation, no wrapper of its own.
 			return validateScopeSandbox(where, iso)
 		}
-		return fmt.Errorf("config: %s: isolation needs `mode: user|namespace|container|none` (a block with only allow:/detect:/egress_limits: needs none)", where)
+		return fmt.Errorf("config: %s: isolation needs `mode: user|namespace|container|none` (a block with only allow:/detect:/egress_limits:/limits: needs none)", where)
 	default:
 		return fmt.Errorf("config: %s: unknown isolation mode %q (want user|namespace|container|none)", where, iso.Mode)
 	}
@@ -182,6 +184,9 @@ func validateCodeStepIsolation(where string, p Step, class EngineClass) error {
 	if iso := p.Isolation; iso != nil && (iso.Allow != nil || iso.Detect != nil || iso.EgressLimits != nil) {
 		return fmt.Errorf("config: %s: isolation allow:/detect:/egress_limits: shape agent sandbox launches — a code step has no watcher or egress session to loosen", where)
 	}
+	if iso := p.Isolation; iso != nil && iso.Mode == "" && iso.Limits != nil {
+		return fmt.Errorf("config: %s: isolation limits: on a code step needs `mode: user|namespace|container` (without a mode, limits: caps agent sandbox launches)", where)
+	}
 	return validateIsolation(where, p.Isolation, false)
 }
 
@@ -233,12 +238,14 @@ func validateIsolationControlChannel(where string, iso *IsolationConfig, cc Cont
 }
 
 // SandboxKnobsOnly reports a block that sets only the agent sandbox's own
-// knobs (allow:, detect:, egress_limits:) and no mode: it layers onto the
-// outer scope's isolation (LayerIsolation) rather than replacing it.
+// knobs (allow:, detect:, egress_limits:, limits:) and no mode: it layers
+// onto the outer scope's isolation (LayerIsolation) rather than replacing
+// it. Without a mode, limits: is the scope's agent launch caps (memory,
+// pids over sandbox.limits).
 func (iso *IsolationConfig) SandboxKnobsOnly() bool {
-	return iso != nil && iso.Mode == "" && iso.User == "" && iso.Container == nil && iso.Limits == nil &&
+	return iso != nil && iso.Mode == "" && iso.User == "" && iso.Container == nil &&
 		!iso.Privileged && !iso.AllowRoot && iso.Network == nil && len(iso.FS) == 0 &&
-		(iso.Allow != nil || iso.Detect != nil || iso.EgressLimits != nil)
+		(iso.Allow != nil || iso.Detect != nil || iso.EgressLimits != nil || iso.Limits != nil)
 }
 
 // LayerIsolation is inner over outer, most specific wins: a block with a
@@ -260,6 +267,9 @@ func LayerIsolation(outer, inner *IsolationConfig) *IsolationConfig {
 	}
 	if inner.EgressLimits != nil {
 		out.EgressLimits = inner.EgressLimits
+	}
+	if inner.Limits != nil {
+		out.Limits = inner.Limits
 	}
 	return &out
 }
@@ -357,6 +367,8 @@ func isolationLoosens(iso *IsolationConfig, agent bool) string {
 		return "detect: (weaker detection)"
 	case iso.EgressLimits != nil:
 		return "egress_limits: (the operator's egress caps)"
+	case agent && capsRaise(iso.Limits):
+		return "limits: above the agent launch defaults (pids over 8192, memory over 50% or unlimited)"
 	case !agent:
 		return "" // a code step's own wrapper choice: its synthesized jail is the default, not a floor
 	case iso.Mode == "user" || iso.Mode == "container":
@@ -369,4 +381,26 @@ func isolationLoosens(iso *IsolationConfig, agent bool) string {
 		return fmt.Sprintf("fs: %v (host paths shown read-write)", iso.FS)
 	}
 	return ""
+}
+
+// capsRaise reports agent launch caps above sandbox.limits' defaults (50%
+// memory, 8192 tasks) where that is decidable without the box: more tasks,
+// a larger share, or no memory cap. An absolute memory size is not: it is
+// bounded by the agent slice's aggregate cap whatever it says.
+func capsRaise(l *IsolationLimits) bool {
+	if l == nil {
+		return false
+	}
+	if l.Pids > 8192 {
+		return true
+	}
+	m := strings.TrimSpace(strings.ToLower(l.Memory))
+	if m == "infinity" || m == "max" {
+		return true
+	}
+	if pct, ok := strings.CutSuffix(m, "%"); ok {
+		f, err := strconv.ParseFloat(pct, 64)
+		return err != nil || f > 50
+	}
+	return false
 }

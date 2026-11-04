@@ -69,7 +69,7 @@ func applyLimits(spec *sandbox.Spec, l LimitSpec, goos string, event func(string
 		})
 		return nil
 	}
-	spec.Memory, spec.Pids, spec.Slice = l.Memory, l.Pids, AgentSlice
+	spec.Memory, spec.Pids, spec.Slice, spec.Unit = l.Memory, l.Pids, AgentSlice, scopeUnitName()
 	if spec.Memory == "" {
 		spec.Memory = DefaultLimitMemory
 	}

@@ -145,7 +145,7 @@ func waitOnce(c *exec.Cmd) {
 func TestDetectorFollowsTheRootItsLauncherNames(t *testing.T) {
 	fakeSSH := fakeTool(t, "ssh")
 	marker, closer, err := startDetection(Policy{Workspace: t.TempDir(), Home: t.TempDir(),
-		Detect: DetectSpec{Interval: 50 * time.Millisecond, NoTripwires: true}, Limits: LimitSpec{Off: true}}, "", nil)
+		Detect: DetectSpec{Interval: 50 * time.Millisecond, NoTripwires: true}, Limits: LimitSpec{Off: true}}, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func fakeTool(t *testing.T, name string) string {
 // reader of one (a recursive grep over the state dir) would block forever.
 func TestTripwiresLeaveWithTheirLaunch(t *testing.T) {
 	home := t.TempDir()
-	_, closer, err := startDetection(Policy{Workspace: t.TempDir(), Home: home, Limits: LimitSpec{Off: true}}, "", nil)
+	_, closer, err := startDetection(Policy{Workspace: t.TempDir(), Home: home, Limits: LimitSpec{Off: true}}, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -614,5 +614,49 @@ func TestDetectorSeesThroughRenamesAndDescriptors(t *testing.T) {
 	}
 	if n := strings.Count(got, "reverse_shell:"); n != shells {
 		t.Errorf("both shells holding a socket on fd 3 are reported (%d):\n%s", n, got)
+	}
+}
+
+// A launch of known size — 64 MiB touched, 12 children — is measured by
+// the watcher where no cgroup is read, and reported once at its end.
+func TestUsageMeasuresARealLaunch(t *testing.T) {
+	var mu sync.Mutex
+	var usage []map[string]any
+	marker, closer, err := startDetection(Policy{Identity: "wf/step", Run: "run-1", Workspace: t.TempDir(), Home: t.TempDir(),
+		Detect: DetectSpec{Interval: 50 * time.Millisecond, NoTripwires: true}, Limits: LimitSpec{Off: true}}, "", "",
+		func(k string, f map[string]any) {
+			if k == "usage" {
+				mu.Lock()
+				usage = append(usage, f)
+				mu.Unlock()
+			}
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), usageHelperEnv+"=64 12", markerEnv+"="+marker)
+	out, _ := cmd.StdoutPipe()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	LaunchStarted(cmd.Env, cmd.Process.Pid)
+	t.Cleanup(func() { _ = cmd.Process.Kill(); waitOnce(cmd) })
+	b := make([]byte, 6)
+	if _, err := io.ReadFull(out, b); err != nil || string(b) != "ready\n" {
+		t.Fatalf("helper: %q %v", b, err)
+	}
+	time.Sleep(500 * time.Millisecond) // a few scans
+	closer()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(usage) != 1 {
+		t.Fatalf("usage events: %v", usage)
+	}
+	f := usage[0]
+	mem, _ := f["memory_peak"].(uint64)
+	pids, _ := f["pids_peak"].(uint64)
+	if f["source"] != "processes" || f["run"] != "run-1" || f["agent"] != "wf/step" || mem < 64<<20 || mem > 1<<30 || pids < 13 || f["memory_max"] != nil {
+		t.Fatalf("usage: %v", f)
 	}
 }

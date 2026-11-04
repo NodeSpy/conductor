@@ -275,6 +275,13 @@ func TestApplyScope(t *testing.T) {
 	if !p.Detect.NoTripwires {
 		t.Fatal("tripwires planted with detection off")
 	}
+	// A scope's caps replace sandbox.limits' own, and cap a launch even
+	// where sandbox.limits is off; one it leaves unset keeps the global.
+	p = Policy{Limits: LimitSpec{Off: true, Pids: 50, DiskFreeFrac: 0.1}}
+	applyScope(&p, nil, &Scope{Memory: "16G"})
+	if p.Limits.Off || p.Limits.Memory != "16G" || p.Limits.Pids != 50 || p.Limits.DiskFreeFrac != 0.1 {
+		t.Fatalf("scope caps: %+v", p.Limits)
+	}
 }
 
 // A recorded process group is forgotten once a scan finds it empty: a later

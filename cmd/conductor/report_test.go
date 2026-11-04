@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/NodeSpy/conductor/internal/cost"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -178,3 +179,38 @@ func TestTallyAuditReadsFlowDispatchRows(t *testing.T) {
 			"repo's work should be visible, not absent", got)
 	}
 }
+
+// The caps section: each agent's highest peak against its cap, the
+// launches that came near one, and the caps that bit.
+func TestTallyCaps(t *testing.T) {
+	now := time.Now().UTC()
+	recent := now.Add(-time.Hour).Format(time.RFC3339)
+	old := now.Add(-72 * time.Hour).Format(time.RFC3339)
+	g := float64(1 << 30)
+	lines := strings.Join([]string{
+		`{"event":"sandbox_usage","agent":"workflow:review/review-team/review[0]","memory_peak":` + ftoa(0.5*g) + `,"memory_max":` + ftoa(8*g) + `,"pids_peak":40,"pids_max":8192,"ts":"` + recent + `"}`,
+		`{"event":"sandbox_usage","agent":"workflow:review/review-team/review[0]","memory_peak":` + ftoa(g) + `,"memory_max":` + ftoa(8*g) + `,"pids_peak":20,"pids_max":8192,"ts":"` + recent + `"}`,
+		`{"event":"sandbox_usage","agent":"autopilot/on_failing_checks/0","memory_peak":` + ftoa(7*g) + `,"memory_max":` + ftoa(8*g) + `,"pids_peak":100,"pids_max":8192,"near_cap":true,"killed_by":"memory","ts":"` + recent + `"}`,
+		`{"event":"sandbox_usage","agent":"mac-agent","memory_peak":1048576,"pids_peak":5,"ts":"` + recent + `"}`,
+		`{"event":"sandbox_usage","agent":"aged","memory_peak":1,"ts":"` + old + `"}`,
+		`{"event":"egress","agent":"x"}`,
+	}, "\n")
+	c, err := tallyCaps(strings.NewReader(lines), now.Add(-48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := c["workflow:review/review-team/review[0]"]
+	if len(c) != 3 || r.Launches != 2 || r.MemPeak != g || r.PidsPeak != 40 || r.MemFrac != 0.125 || r.Near != 0 {
+		t.Fatalf("tally: %+v %+v", c, r)
+	}
+	o, _ := captureStdout(t, func() error { printCaps(c); return nil })
+	lines2 := strings.Split(strings.TrimSpace(o), "\n")
+	if len(lines2) != 5 || !strings.Contains(lines2[2], "autopilot/on_failing_checks/0") || !strings.Contains(lines2[2], "7.0G/8.0G  88%") || !strings.Contains(lines2[2], "mem×1") {
+		t.Fatalf("caps section:\n%s", o)
+	}
+	if !strings.Contains(o, "1.0G/8.0G  12%") || !strings.Contains(o, "1M/none   -") {
+		t.Fatalf("caps section:\n%s", o)
+	}
+}
+
+func ftoa(f float64) string { return strconv.FormatFloat(f, 'f', 0, 64) }

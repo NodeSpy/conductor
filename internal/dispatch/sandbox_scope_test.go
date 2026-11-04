@@ -22,6 +22,7 @@ func TestSandboxScope(t *testing.T) {
 			Allow:        &config.SandboxAllow{Tunnels: []string{"Cloudflared@*.trycloudflare.com"}, NonTLS: []string{"bastion.example.com:22"}, Origin: "workflow deploy"},
 			Detect:       &config.IsolationDetect{Action: "alert", Tripwires: &off, Origin: "workflow deploy"},
 			EgressLimits: &config.SandboxEgressLimits{Idle: "1h", Download: "off", ModelUpload: "32GiB", Origin: "workflow deploy"},
+			Limits:       &config.IsolationLimits{Memory: "16G", Pids: 16384},
 		},
 		GrantedAllow: &config.SandboxAllow{Tunnels: []string{"ssh"}, Pty: true, Origin: "pack rv grant tunnel"},
 	}
@@ -36,12 +37,21 @@ func TestSandboxScope(t *testing.T) {
 		DetectAction: "alert", Tripwires: &off,
 		EgressIdle: int64(3600e9), EgressDownload: -1, ModelUpload: 32 << 30,
 		DetectBy: "workflow deploy", LimitsBy: "workflow deploy",
+		Memory: "16G", Pids: 16384,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("scope\n got %+v %+v\nwant %+v %+v", got, got.Allow, want, want.Allow)
 	}
 	if s := SandboxScope(Request{Step: step, AgentAuthored: true}); s != nil {
 		t.Fatalf("an agent-authored dispatch got a scope: %+v", s)
+	}
+	// Caps alone are a scope; a recorded one keeps them.
+	capsOnly := SandboxScope(Request{Step: config.Step{Isolation: &config.IsolationConfig{Limits: &config.IsolationLimits{Pids: 100}}}})
+	if capsOnly == nil || capsOnly.Pids != 100 || capsOnly.Memory != "" {
+		t.Fatalf("caps-only scope: %+v", capsOnly)
+	}
+	if r := Rescope(capsOnly, config.ScopeSources{}); r == nil || r.Pids != 100 {
+		t.Fatalf("rescoped caps: %+v", r)
 	}
 }
 

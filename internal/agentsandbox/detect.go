@@ -51,6 +51,10 @@ type procInfo struct {
 	args      []string
 	exe       string
 	marked    bool
+	// rss (bytes) and threads: what the process holds, for the launch's
+	// usage where no cgroup is read.
+	rss     uint64
+	threads int
 	// What fds 0-2 are, every fd holding an inet socket, and (Linux)
 	// whether the process holds a pty master.
 	stdio      [3]string
@@ -290,6 +294,10 @@ type detector struct {
 
 	git   *gitGuard
 	wires []*tripwire
+	// usage: the launch's peaks against its caps (nil: not measured);
+	// identity names the agent on its usage event.
+	usage    *launchUsage
+	identity string
 	// off: detection is off — only the disk guard runs.
 	off bool
 	// diskLow names a filesystem of the launch below the disk guard's
@@ -346,6 +354,22 @@ func (d *detector) start() {
 			}
 		}
 	}()
+	if d.usage != nil && d.usage.unit != "" {
+		d.done.Add(1)
+		go func() {
+			defer d.done.Done()
+			t := time.NewTicker(usageSampleInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-d.stop:
+					return
+				case <-t.C:
+					d.usage.sampleCgroup(d.rootPids())
+				}
+			}
+		}()
+	}
 	for _, w := range d.wires {
 		w := w
 		d.done.Add(1)
@@ -424,6 +448,9 @@ func (d *detector) scan() {
 	}
 	procs := launchProcs(all)
 	d.noteGroups(procs, all)
+	if d.usage != nil {
+		d.usage.sampleProcs(procs)
+	}
 	root := agentRoot(procs, d.self)
 	for _, p := range procs {
 		vs := verdicts(p, d.allow, p.pid == root, d.self != "" && p.exe == d.self)
@@ -528,19 +555,22 @@ func (d *detector) killAll() int {
 }
 
 // startDetection arms p's detection around a launch and returns the
-// marker its root process must carry and the closer (nil, nil: off).
-func startDetection(p Policy, self string, event func(string, map[string]any)) (string, func(), error) {
+// marker its root process must carry and the closer (nil, nil: off). unit
+// is the launch's scope unit ("" when it has no caps): its usage is
+// measured.
+func startDetection(p Policy, self, unit string, event func(string, map[string]any)) (string, func(), error) {
 	off := p.Detect.action() == DetectOff
 	diskOn := !p.Limits.Off && !p.Limits.DiskOff
 	if off {
 		removeTripwires(p.Home)
-		if !diskOn {
+		if !diskOn && unit == "" {
 			return "", nil, nil
 		}
 	}
 	d := &detector{
 		spec: p.Detect, run: p.EgressSession().Run, marker: newMarker(), self: self,
 		allow: map[string]bool{}, event: event, signal: signalProc, off: off,
+		usage: &launchUsage{unit: unit}, identity: p.Identity,
 	}
 	if !off {
 		d.git = newGitGuard(p.Workspace)
@@ -581,6 +611,17 @@ func (d *detector) isRoot(pid int) bool {
 		return false
 	}
 	return true
+}
+
+// rootPids are the launch's live roots.
+func (d *detector) rootPids() []int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]int, 0, len(d.roots))
+	for pid := range d.roots {
+		out = append(out, pid)
+	}
+	return out
 }
 
 // started records pid as a root of the launch.
@@ -657,6 +698,7 @@ func (d *detector) shutdown() {
 	if n := d.killAll(); n > 0 && d.event != nil {
 		d.event("leftover_killed", map[string]any{"run": d.run, "processes": n})
 	}
+	d.reportUsage()
 	// No watcher answers the decoys now: a reader (a recursive grep over
 	// the state dir, a backup) would block on one forever.
 	for _, w := range d.wires {
@@ -693,5 +735,28 @@ func (d *detector) checkGit() {
 	}
 	for _, r := range d.git.check() {
 		d.detected("git_tamper", r, true)
+	}
+}
+
+// reportUsage records the launch's peaks against its caps at its end: one
+// usage event, and a limit event for a cap that killed or refused it.
+func (d *detector) reportUsage() {
+	if d.usage == nil {
+		return
+	}
+	if d.usage.unit != "" {
+		d.usage.sampleCgroup(d.rootPids())
+		res := scopeResult(d.usage.unit)
+		d.usage.mu.Lock()
+		d.usage.result = res
+		d.usage.mu.Unlock()
+	}
+	f, _, limits := d.usage.report(d.run, d.identity)
+	if f == nil || d.event == nil {
+		return
+	}
+	d.event("usage", f)
+	for _, l := range limits {
+		d.event("limit", l)
 	}
 }

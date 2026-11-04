@@ -78,7 +78,14 @@ func procStat(pid int) (procInfo, bool) {
 	ppid, _ := strconv.Atoi(f[1])
 	pgid, _ := strconv.Atoi(f[2])
 	start, _ := strconv.ParseUint(f[19], 10, 64)
-	return procInfo{pid: pid, ppid: ppid, pgid: pgid, start: start, comm: string(b[open+1 : close])}, true
+	p := procInfo{pid: pid, ppid: ppid, pgid: pgid, start: start, comm: string(b[open+1 : close])}
+	// num_threads is field 20, rss (pages) field 24.
+	p.threads, _ = strconv.Atoi(f[17])
+	if len(f) > 21 {
+		pages, _ := strconv.ParseUint(f[21], 10, 64)
+		p.rss = pages * uint64(os.Getpagesize())
+	}
+	return p, true
 }
 
 // enrich reads a launch process's argv, binary and descriptors.

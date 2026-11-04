@@ -33,6 +33,14 @@ func sandboxEventAudit(logf func(string, ...any), audit func(map[string]any), no
 			}
 			quiet = st != 0 && st < 400
 		}
+		// A launch's usage is logged only when it came near a cap: one
+		// line, so caps can be tuned before they bite.
+		if kind == "usage" {
+			quiet = true
+			if w, _ := fields["warning"].(string); w != "" {
+				logf("sandbox: warning: %s (run %v, agent %v)", w, fields["run"], fields["agent"])
+			}
+		}
 		if !quiet {
 			logf("sandbox: %s %v", kind, fields)
 		}

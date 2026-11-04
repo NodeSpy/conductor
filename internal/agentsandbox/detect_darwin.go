@@ -49,6 +49,7 @@ func listProcs(marker string, isRoot func(pid int) bool) func() ([]procInfo, err
 		}
 		args := psColumn(pids, "command=")
 		comm := psColumn(pids, "comm=")
+		rss := psColumn(pids, "rss=")
 		inet := lsofInet(pids)
 		exes := lsofExe(pids)
 		for i := range all {
@@ -60,6 +61,9 @@ func listProcs(marker string, isRoot func(pid int) bool) func() ([]procInfo, err
 			p.args = strings.Fields(a)
 			p.exe, p.comm = comm[p.pid], comm[p.pid]
 			p.start, _ = procStart(p.pid)
+			if kb, err := strconv.ParseUint(strings.TrimSpace(rss[p.pid]), 10, 64); err == nil {
+				p.rss = kb << 10
+			}
 			// ps truncates comm: the binary's own path is lsof's.
 			if e := exes[p.pid]; filepath.IsAbs(e) {
 				p.exe = e

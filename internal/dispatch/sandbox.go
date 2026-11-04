@@ -253,7 +253,20 @@ func SandboxScope(req Request) *agentsandbox.Scope {
 	if iso == nil {
 		return scopeOf(req.Step.GrantedAllow, nil, nil)
 	}
-	return scopeOf(config.UnionAllow(iso.Allow, req.Step.GrantedAllow), iso.Detect, iso.EgressLimits)
+	s := scopeOf(config.UnionAllow(iso.Allow, req.Step.GrantedAllow), iso.Detect, iso.EgressLimits)
+	return withCaps(s, iso.Limits)
+}
+
+// withCaps adds a scope's launch caps (isolation.limits memory, pids).
+func withCaps(s *agentsandbox.Scope, l *config.IsolationLimits) *agentsandbox.Scope {
+	if l == nil || (l.Memory == "" && l.Pids <= 0) {
+		return s
+	}
+	if s == nil {
+		s = &agentsandbox.Scope{}
+	}
+	s.Memory, s.Pids = l.Memory, max(l.Pids, 0)
+	return s
 }
 
 // Rescope is a recorded scope as the live config has it now: its
@@ -283,7 +296,9 @@ func Rescope(s *agentsandbox.Scope, src config.ScopeSources) *agentsandbox.Scope
 	if iso := src.Sites[s.LimitsBy]; s.LimitsBy != "" && iso != nil && iso.EgressLimits != nil && iso.EgressLimits.Origin == s.LimitsBy {
 		l = iso.EgressLimits
 	}
-	return scopeOf(allow, d, l)
+	// The caps were the dispatch's own scope's when it was recorded: kept
+	// as recorded (a new dispatch records the live ones).
+	return withCaps(scopeOf(allow, d, l), &config.IsolationLimits{Memory: s.Memory, Pids: s.Pids})
 }
 
 // scopeOf is the sandbox scope of an allowance and detection / egress-limit

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -108,5 +109,25 @@ func TestModelRequestsAreAuditedQuietly(t *testing.T) {
 	ev("limit", map[string]any{"run": "d1", "kind": "model_upload", "action": "refuse", "reason": "cap"})
 	if len(notes) != 1 || rows[len(rows)-1]["event"] != "sandbox_limit" {
 		t.Fatalf("notes %v rows %v", notes, rows)
+	}
+}
+
+// A launch's usage is audited always, logged only near a cap, and never
+// escalated; the cap that killed it is a notified limit.
+func TestLaunchUsageIsAuditedAndWarnedNearACap(t *testing.T) {
+	var rows []map[string]any
+	var notes, logs []string
+	ev := sandboxEventAudit(func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }, func(r map[string]any) { rows = append(rows, r) }, func(m string) { notes = append(notes, m) })
+	ev("usage", map[string]any{"run": "d1", "agent": "wf/a", "memory_peak": 100, "memory_max": 1000})
+	if len(rows) != 1 || rows[0]["event"] != "sandbox_usage" || rows[0]["memory_peak"] != 100 || len(logs) != 0 || len(notes) != 0 {
+		t.Fatalf("quiet usage: rows %v logs %v notes %v", rows, logs, notes)
+	}
+	ev("usage", map[string]any{"run": "d2", "agent": "wf/b", "memory_peak": 900, "memory_max": 1000, "warning": "launch used memory 900B of 1000B (90%): raise sandbox.limits for this scope before the cap bites"})
+	if len(logs) != 1 || !strings.Contains(logs[0], "warning: launch used memory 900B of 1000B (90%)") || !strings.Contains(logs[0], "run d2, agent wf/b") || len(notes) != 0 {
+		t.Fatalf("near a cap: logs %q notes %v", logs, notes)
+	}
+	ev("limit", map[string]any{"run": "d3", "kind": "memory_cap", "action": "killed", "reason": "the memory cap (1.0GiB) killed the launch"})
+	if len(notes) != 1 || !strings.Contains(notes[0], "memory_cap") || !strings.Contains(notes[0], "killed") {
+		t.Fatalf("cap kill: %v", notes)
 	}
 }
