@@ -132,16 +132,26 @@ func TestGoPrefetchPlan(t *testing.T) {
 	if got := strings.Join(p.argv, " "); got != g.Go+" -C "+src+" mod download" {
 		t.Fatalf("argv = %q", got)
 	}
+	if got := strings.Join(p.goroot, " "); got != g.Go+" -C "+src+" env GOROOT" {
+		t.Fatalf("goroot argv = %q", got)
+	}
 	if p.dir != p.tmp {
 		t.Fatalf("dir = %q, want the scratch root %q (the jail binds/chdirs into it; -C points at src inside it)", p.dir, p.tmp)
 	}
 	for _, want := range []string{
 		"GOMODCACHE=" + cache, "GOPROXY=https://proxy.golang.org",
-		"GOTOOLCHAIN=local", "GOVCS=*:off", "GOENV=off", "GOWORK=off", "GOFLAGS=", "GOPRIVATE=",
+		"GOTOOLCHAIN=auto", "GOVCS=*:off", "GOENV=off", "GOWORK=off", "GOFLAGS=", "GOPRIVATE=",
 		"HOME=" + p.tmp,
 	} {
 		if !contains(p.env, want) {
 			t.Errorf("env lacks %q: %v", want, p.env)
+		}
+	}
+	for _, kv := range p.env {
+		// A toolchain is only fetched verified: the checksum database stays
+		// at its default.
+		if strings.HasPrefix(kv, "GOSUMDB=") || kv == "GOTOOLCHAIN=local" {
+			t.Errorf("the download must not set %s", kv)
 		}
 	}
 	if contains(p.env, "GITHUB_TOKEN=leak-me-not") == false {
@@ -192,7 +202,7 @@ func TestGoPrefetchFillSkipsWhenUnconfinable(t *testing.T) {
 	if warned == "" || !strings.Contains(warned, "cannot confine") {
 		t.Fatalf("expected a log line naming the skip, got %q", warned)
 	}
-	if _, err := os.Stat(filepath.Join(cache, ".conductor-prefetched", m.Digest())); err == nil {
+	if _, err := os.Stat(filepath.Join(cache, ".conductor-prefetched-v2", m.Digest())); err == nil {
 		t.Fatal("a skipped download must not be marked done — a later box that CAN confine must still try")
 	}
 }
@@ -291,5 +301,102 @@ func TestPolicyGoPrefetch(t *testing.T) {
 	r.GoPrefetch = nil
 	if p, _ := r.PolicyForEntry(Entry{Workspace: ws, Identity: "agent:fixer@acme/app"}, "claude", nil, skill.ProcessAnchor{}); contains(p.ReadOnly, cache) || contains(p.Env, "GOPROXY=off") {
 		t.Fatalf("prefetch off: %+v", p)
+	}
+}
+
+// toolchainCache lays out a toolchain the way Go unpacks one into a module
+// cache, and returns its GOROOT.
+func toolchainCache(t *testing.T, cache, version string) string {
+	t.Helper()
+	goroot := filepath.Join(cache, "golang.org", "toolchain@v0.0.1-"+version+".linux-amd64")
+	if err := os.MkdirAll(filepath.Join(goroot, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(goroot, "bin", "go"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return goroot
+}
+
+// A launch's PATH starts with the toolchain its workspace's module files
+// selected — only one the prefetch put in the cache — and the agent's Go
+// otherwise stays as it was: offline, GOSUMDB off, GOTOOLCHAIN=local.
+func TestPolicyGoPrefetchToolchainFirstOnPath(t *testing.T) {
+	cache := t.TempDir()
+	g := &GoPrefetch{Cache: cache}
+	r := &Resolver{StateRoot: t.TempDir(), RealHome: t.TempDir(), GOOS: "linux", GoPrefetch: g}
+	ws, other := t.TempDir(), t.TempDir()
+	goroot := toolchainCache(t, cache, "go1.99.0")
+	if err := g.recordToolchain(ws, goroot); err != nil {
+		t.Fatal(err)
+	}
+	policy := func(ws string) Policy {
+		t.Helper()
+		p, err := r.PolicyForEntry(Entry{Workspace: ws, Identity: "agent:fixer@acme/app"}, "claude", nil, skill.ProcessAnchor{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	p := policy(ws)
+	bin := filepath.Join(goroot, "bin")
+	if !reflect.DeepEqual(p.PathFirst, []string{bin}) {
+		t.Fatalf("path first: %v", p.PathFirst)
+	}
+	env := AgentEnv([]string{"PATH=/usr/bin:/bin"}, p)
+	if !contains(env, "PATH="+bin+string(os.PathListSeparator)+"/usr/bin:/bin") {
+		t.Fatalf("the toolchain is not first on PATH: %v", env)
+	}
+	for _, kv := range []string{"GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local"} {
+		if !contains(env, kv) {
+			t.Errorf("env lacks %s: %v", kv, env)
+		}
+	}
+	// Per workspace: another one gets the host's go.
+	if p := policy(other); len(p.PathFirst) != 0 {
+		t.Fatalf("another workspace got a toolchain: %v", p.PathFirst)
+	}
+
+	// Only a toolchain in the cache: the host's own GOROOT (the host's go is
+	// new enough) or anything else records nothing.
+	for _, gr := range []string{"/usr/lib/go", filepath.Join(cache, "example.com", "m@v1.0.0"), filepath.Join(cache, "..", "golang.org", "toolchain@v0.0.1-go1.99.0.linux-amd64"), ""} {
+		if err := g.recordToolchain(ws, gr); err != nil {
+			t.Fatal(err)
+		}
+		if p := policy(ws); len(p.PathFirst) != 0 {
+			t.Errorf("GOROOT %q put %v on PATH", gr, p.PathFirst)
+		}
+	}
+	// A record naming a path out of the cache is ignored.
+	g.recordToolchain(ws, goroot)
+	os.WriteFile(g.toolchainRecord(ws), []byte("../golang.org/toolchain@v0.0.1-go1.99.0.linux-amd64"), 0o644)
+	if bin := g.ToolchainBin(ws); bin != "" {
+		t.Errorf("a record out of the cache gave %q", bin)
+	}
+	// A toolchain whose go is not an executable file is not used.
+	g.recordToolchain(ws, goroot)
+	os.Remove(filepath.Join(bin, "go"))
+	os.Symlink("/bin/sh", filepath.Join(bin, "go"))
+	if got := g.ToolchainBin(ws); got != "" {
+		t.Errorf("a symlinked go gave %q", got)
+	}
+}
+
+// No PathFirst, no change to PATH; no inherited PATH, PathFirst alone.
+func TestAgentEnvPathFirst(t *testing.T) {
+	p := Policy{Home: "/h"}
+	if env := AgentEnv([]string{"PATH=/usr/bin"}, p); !contains(env, "PATH=/usr/bin") {
+		t.Fatalf("PATH changed: %v", env)
+	}
+	p.PathFirst = []string{"/tc/bin"}
+	env := AgentEnv(nil, p)
+	n := 0
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			n++
+		}
+	}
+	if !contains(env, "PATH=/tc/bin") || n != 1 {
+		t.Fatalf("PATH: %v", env)
 	}
 }

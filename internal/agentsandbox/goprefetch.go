@@ -124,14 +124,93 @@ func (g *GoPrefetch) AgentEnv() []string {
 	return []string{"GOMODCACHE=" + g.Cache, "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local"}
 }
 
-// Workspace downloads the modules ws's Go module files need into the cache.
-// A workspace with no go.mod is nothing to do.
+// Workspace downloads the modules ws's Go module files need into the cache,
+// with the Go toolchain they select when the host's go is older, and
+// records that toolchain for ws's launches (ToolchainBin). A workspace with
+// no go.mod is nothing to do.
 func (g *GoPrefetch) Workspace(ctx context.Context, ws string) error {
 	m, err := SnapshotGoModules(ws)
-	if err != nil {
+	if err == nil {
+		var goroot string
+		goroot, err = g.fill(ctx, m)
+		if rerr := g.recordToolchain(ws, goroot); err == nil {
+			err = rerr
+		}
+	}
+	return err
+}
+
+// Apply gives a launch in ws its Go: the cache read-only, the offline
+// environment, and — when ws's module files select a toolchain the
+// prefetch put in the cache — that toolchain's bin first on PATH. Its go
+// runs with GOTOOLCHAIN=local, so GOSUMDB stays off for every other module.
+func (g *GoPrefetch) Apply(p *Policy, ws string) {
+	p.ReadOnly = append(append([]string(nil), p.ReadOnly...), g.Cache)
+	p.Env = append(append([]string(nil), p.Env...), g.AgentEnv()...)
+	if bin := g.ToolchainBin(ws); bin != "" {
+		p.PathFirst = append(append([]string(nil), p.PathFirst...), bin)
+	}
+}
+
+// goToolchainPrefix is where Go keeps a downloaded toolchain in a module
+// cache: golang.org/toolchain@v0.0.1-goX.Y.Z.GOOS-GOARCH.
+const goToolchainPrefix = "golang.org/toolchain@"
+
+// toolchainRel is goroot relative to the cache when it is a toolchain Go
+// downloaded into it, "" otherwise (the host's own GOROOT, or anything
+// else).
+func (g *GoPrefetch) toolchainRel(goroot string) string {
+	if goroot == "" || !filepath.IsAbs(goroot) {
+		return ""
+	}
+	rel, err := filepath.Rel(filepath.Clean(g.Cache), filepath.Clean(goroot))
+	if err != nil || !filepath.IsLocal(rel) || !strings.HasPrefix(filepath.ToSlash(rel), goToolchainPrefix) ||
+		strings.Count(filepath.ToSlash(rel), "/") != 1 {
+		return ""
+	}
+	return rel
+}
+
+// toolchainRecord is where ws's selected toolchain is recorded.
+func (g *GoPrefetch) toolchainRecord(ws string) string {
+	sum := sha256.Sum256([]byte(canon(ws)))
+	return filepath.Join(g.Cache, ".conductor-toolchains", hex.EncodeToString(sum[:]))
+}
+
+// recordToolchain records goroot (a toolchain in the cache) as ws's, or
+// forgets ws's when there is none.
+func (g *GoPrefetch) recordToolchain(ws, goroot string) error {
+	rec := g.toolchainRecord(ws)
+	rel := g.toolchainRel(goroot)
+	if rel == "" {
+		if err := os.Remove(rec); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(rec), 0o755); err != nil {
 		return err
 	}
-	return g.Fill(ctx, m)
+	return os.WriteFile(rec, []byte(rel), 0o644)
+}
+
+// ToolchainBin is the bin directory of the toolchain recorded for ws, ""
+// when there is none (the host's go is new enough, or nothing was
+// prefetched).
+func (g *GoPrefetch) ToolchainBin(ws string) string {
+	b, err := os.ReadFile(g.toolchainRecord(ws))
+	if err != nil {
+		return ""
+	}
+	rel := g.toolchainRel(filepath.Join(g.Cache, strings.TrimSpace(string(b))))
+	if rel == "" {
+		return ""
+	}
+	bin := filepath.Join(g.Cache, rel, "bin")
+	if fi, err := os.Lstat(filepath.Join(bin, "go")); err != nil || !fi.Mode().IsRegular() || fi.Mode()&0o111 == 0 {
+		return ""
+	}
+	return bin
 }
 
 // downloadPlan is the local `go mod download` Fill is about to run, resolved
@@ -143,9 +222,12 @@ func (g *GoPrefetch) Workspace(ctx context.Context, ws string) error {
 // holds (goprefetch_jail_linux_test.go).
 type downloadPlan struct {
 	argv []string
-	dir  string // the scratch root (tmp): also what gets bound/chdir'd into the jail
-	env  []string
-	tmp  string // == dir; named separately so callers don't have to know dir IS the cleanup root
+	// goroot asks the same go which GOROOT the module files select, after
+	// the download: the toolchain it fetched, or the host's own.
+	goroot []string
+	dir    string // the scratch root (tmp): also what gets bound/chdir'd into the jail
+	env    []string
+	tmp    string // == dir; named separately so callers don't have to know dir IS the cleanup root
 }
 
 // plan stages m's module files into a fresh temp dir and builds the argv/env
@@ -175,7 +257,10 @@ func (g *GoPrefetch) plan(m *GoModules) (*downloadPlan, error) {
 		"HOME="+tmp, "GOENV=off", "GOFLAGS=", "GOPATH="+filepath.Join(tmp, "gopath"),
 		"GOMODCACHE="+g.Cache, "GOCACHE="+filepath.Join(tmp, "gocache"),
 		"GOPROXY="+g.Proxy, "GOPRIVATE=", "GONOPROXY=", "GONOSUMDB=", "GOINSECURE=",
-		"GOTOOLCHAIN=local", "GOVCS=*:off", "GIT_TERMINAL_PROMPT=0")
+		// auto: a go/toolchain line newer than the host's go fetches that
+		// toolchain (golang.org/toolchain, verified against the checksum
+		// database through the proxy) into the cache and runs it.
+		"GOTOOLCHAIN=auto", "GOVCS=*:off", "GIT_TERMINAL_PROMPT=0")
 	if _, ok := m.Files["go.work"]; !ok {
 		// Never a go.work above the temp dir.
 		env = append(env, "GOWORK=off")
@@ -183,7 +268,8 @@ func (g *GoPrefetch) plan(m *GoModules) (*downloadPlan, error) {
 	// `-C src` rather than cmd.Dir = src: dir/chdir below is tmp (the single
 	// root the jail binds and re-enters into), and -C point the toolchain at
 	// the module files inside it without needing a second, nested bind.
-	return &downloadPlan{argv: []string{g.Go, "-C", src, "mod", "download"}, dir: tmp, env: env, tmp: tmp}, nil
+	return &downloadPlan{argv: []string{g.Go, "-C", src, "mod", "download"}, goroot: []string{g.Go, "-C", src, "env", "GOROOT"},
+		dir: tmp, env: env, tmp: tmp}, nil
 }
 
 // Fill downloads what m names into the cache, once per distinct set of
@@ -196,16 +282,25 @@ func (g *GoPrefetch) plan(m *GoModules) (*downloadPlan, error) {
 // agent simply runs Go offline without these modules, same as if prefetch
 // had never been configured.
 func (g *GoPrefetch) Fill(ctx context.Context, m *GoModules) error {
+	_, err := g.fill(ctx, m)
+	return err
+}
+
+// fill is Fill, returning the GOROOT the module files select ("" when it
+// is not known).
+func (g *GoPrefetch) fill(ctx context.Context, m *GoModules) (string, error) {
 	if m == nil || len(m.Files) == 0 {
-		return nil
+		return "", nil
 	}
-	done := filepath.Join(g.Cache, ".conductor-prefetched", m.Digest())
-	if _, err := os.Stat(done); err == nil {
-		return nil
+	// v2: the marker holds the GOROOT the module files select (a v1 marker
+	// was written by a download that never fetched a toolchain).
+	done := filepath.Join(g.Cache, ".conductor-prefetched-v2", m.Digest())
+	if b, err := os.ReadFile(done); err == nil {
+		return string(b), nil
 	}
 	p, err := g.plan(m)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer os.RemoveAll(p.tmp)
 
@@ -217,7 +312,7 @@ func (g *GoPrefetch) Fill(ctx context.Context, m *GoModules) error {
 	defer cancel()
 
 	if err := os.MkdirAll(g.Cache, 0o755); err != nil {
-		return fmt.Errorf("agentsandbox: go module cache: %w", err)
+		return "", fmt.Errorf("agentsandbox: go module cache: %w", err)
 	}
 	spec := &sandbox.Spec{Mode: "namespace", Deny: true, HasEgress: true, Egress: goProxyHosts(g.Proxy)}
 	deps := g.Sandbox
@@ -228,26 +323,45 @@ func (g *GoPrefetch) Fill(ctx context.Context, m *GoModules) error {
 	// the jail's absence, same as every other confined code step.
 	deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: g.Cache})
 	g.applyLimits(spec)
-	wrappedArgv, wrappedEnv, cleanup, werr := sandbox.WrapLocalCommand(spec, p.argv, p.dir, p.env, deps)
-	if werr != nil {
-		g.warnf("agent sandbox: go prefetch: cannot confine the download (%v) — skipping (the agent runs Go offline without these modules)", werr)
-		return nil
-	}
-	defer cleanup()
-
-	cmd := exec.CommandContext(ctx, wrappedArgv[0], wrappedArgv[1:]...)
-	cmd.Env = wrappedEnv
-	if out, err := cmd.CombinedOutput(); err != nil {
-		msg := strings.TrimSpace(string(out))
-		if len(msg) > 600 {
-			msg = "…" + msg[len(msg)-600:]
+	// run runs argv confined; ok=false: it could not be confined (logged).
+	run := func(argv []string) (stdout []byte, ok bool, err error) {
+		wrappedArgv, wrappedEnv, cleanup, werr := sandbox.WrapLocalCommand(spec, argv, p.dir, p.env, deps)
+		if werr != nil {
+			g.warnf("agent sandbox: go prefetch: cannot confine the download (%v) — skipping (the agent runs Go offline without these modules)", werr)
+			return nil, false, nil
 		}
-		return fmt.Errorf("go mod download: %w: %s", err, msg)
+		defer cleanup()
+		var stderr strings.Builder
+		cmd := exec.CommandContext(ctx, wrappedArgv[0], wrappedArgv[1:]...)
+		cmd.Env = wrappedEnv
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			msg := strings.TrimSpace(stderr.String() + "\n" + string(out))
+			if len(msg) > 600 {
+				msg = "…" + msg[len(msg)-600:]
+			}
+			return nil, true, fmt.Errorf("go %s: %w: %s", strings.Join(argv[3:], " "), err, msg)
+		}
+		return out, true, nil
 	}
+	if _, ok, err := run(p.argv); !ok || err != nil {
+		return "", err
+	}
+	// The download fetched the toolchain the module files select, if the
+	// host's go is too old for them; ask which GOROOT that is, jailed the
+	// same way, through the same proxy (a toolchain is always checked against
+	// the checksum database, which the proxy serves).
+	out, ok, err := run(p.goroot)
+	if !ok || err != nil {
+		return "", err
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	goroot := strings.TrimSpace(lines[len(lines)-1])
 	if err := os.MkdirAll(filepath.Dir(done), 0o755); err != nil {
-		return err
+		return "", err
 	}
-	return os.WriteFile(done, nil, 0o644)
+	return goroot, os.WriteFile(done, []byte(goroot), 0o644)
 }
 
 // applyLimits adds the optional cgroup resource ceiling (a conservative
