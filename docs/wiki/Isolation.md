@@ -232,7 +232,8 @@ downloads instead, on the host:
   **shared by every identity**;
 - that download itself runs **confined**: the same namespace jail a code step
   gets, with the module cache the one writable path outside its own scratch
-  dir and the network cut to exactly `proxy.golang.org` (never `direct`, so
+  dir and the network cut to exactly `proxy.golang.org` and the host it
+  redirects downloads to, `storage.googleapis.com` (never `direct`, so
   no VCS runs against a module path a `go.mod` names, and never the
   operator's own module cache as a `file://` layer — this ONE cache is
   shared by every identity, and a `file://` layer onto the operator's own
@@ -241,7 +242,14 @@ downloads instead, on the host:
   database verification on, none of the daemon's environment beyond `PATH`
   and HTTP-proxy/CA settings, and none of the operator's real `$HOME`. If
   this box can't build the jail (no `unshare`, for instance), the prefetch is
-  skipped with a log line — it never falls back to an unconfined download;
+  skipped with a log line — it never falls back to an unconfined download.
+  The proxy answers a large zip (a toolchain, a big module) with a signed
+  URL on `storage.googleapis.com`. That host is allowed whole, host:port
+  rather than a path, because the download's TLS is not inspected. That is
+  safe because every zip is checked against `go.sum` or the checksum
+  database, whichever host served it. Only the download's jail gets it; an
+  agent's egress never does. A failed download's log line drops every URL's
+  query string, so a signed URL never reaches the log;
 - when the module files ask for a newer Go than the host's (a `go` or
   `toolchain` line in `go.work` or `go.mod`), the download fetches that
   toolchain too: Go downloads it as the module

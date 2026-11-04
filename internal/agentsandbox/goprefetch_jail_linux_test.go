@@ -5,12 +5,27 @@ package agentsandbox
 import (
 	"archive/zip"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
@@ -238,4 +253,182 @@ func TestGoPrefetchToolchainBuildsOffline(t *testing.T) {
 	if err != nil || !strings.Contains(string(got), "go version go1.99.0") || !strings.Contains(string(got), "built offline") {
 		t.Fatalf("a module needing go1.99.0 did not build in the sandbox: %v", err)
 	}
+}
+
+// moduleZip is a module zip for example.test/m@v1.0.0.
+func moduleZip(t *testing.T) []byte {
+	t.Helper()
+	var b strings.Builder
+	zw := zip.NewWriter(&b)
+	for name, body := range map[string]string{
+		"go.mod": "module example.test/m\n\ngo 1.21\n",
+		"m.go":   "package m\n\nconst V = 1\n",
+	} {
+		w, err := zw.Create("example.test/m@v1.0.0/" + name)
+		if err == nil {
+			_, err = w.Write([]byte(body))
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return []byte(b.String())
+}
+
+// TestGoPrefetchFollowsTheProxyRedirect: a Go module proxy that answers a
+// zip with a redirect to a second host (proxy.golang.org sends large zips
+// to a signed Cloud Storage URL). The confined prefetch fetches it when that
+// host is one of the proxy's redirect hosts, and fails cleanly — the signed
+// query never in its error — when it is not.
+func TestGoPrefetchFollowsTheProxyRedirect(t *testing.T) {
+	root := requireSandbox(t)
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("no go on PATH")
+	}
+	if r, err := filepath.EvalSymlinks(realGo); err == nil {
+		realGo = r
+	}
+	out, err := exec.Command(realGo, "env", "GOROOT").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	realRoot := strings.TrimSpace(string(out))
+	defer func(f func() bool) { systemdUserBusAvailableFunc = f }(systemdUserBusAvailableFunc)
+	systemdUserBusAvailableFunc = func() bool { return false }
+
+	zipBytes := moduleZip(t)
+	// Both hosts speak TLS, as proxy.golang.org and Cloud Storage do: a
+	// refused redirect is then a refused CONNECT, and Go's error carries the
+	// redirect's full URL — what put a signed URL in the box's log.
+	caPEM, leaf := namesCA(t, "goproxy.test", "blobs.test")
+	caDir := t.TempDir()
+	caFile := filepath.Join(caDir, "ca.pem")
+	if err := os.WriteFile(caFile, caPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tlsServer := func(h http.HandlerFunc) *httptest.Server {
+		s := httptest.NewUnstartedServer(h)
+		s.TLS = &tls.Config{Certificates: []tls.Certificate{leaf}}
+		s.StartTLS()
+		return s
+	}
+	var mu sync.Mutex
+	blobHits := 0
+	blobs := tlsServer(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		blobHits++
+		mu.Unlock()
+		w.Write(zipBytes)
+	})
+	defer blobs.Close()
+	_, blobPort, _ := net.SplitHostPort(blobs.Listener.Addr().String())
+	blobHost := "blobs.test:" + blobPort
+	proxy := tlsServer(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/example.test/m/@v/list":
+			io.WriteString(w, "v1.0.0\n")
+		case "/example.test/m/@v/v1.0.0.info":
+			io.WriteString(w, `{"Version":"v1.0.0","Time":"2020-01-01T00:00:00Z"}`)
+		case "/example.test/m/@v/v1.0.0.mod":
+			io.WriteString(w, "module example.test/m\n\ngo 1.21\n")
+		case "/example.test/m/@v/v1.0.0.zip":
+			http.Redirect(w, r, "https://"+blobHost+"/proxy-prod/m.zip?Expires=1&Signature=SIGNEDSECRET", http.StatusFound)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	defer proxy.Close()
+	_, proxyPort, _ := net.SplitHostPort(proxy.Listener.Addr().String())
+	proxyHost := "goproxy.test:" + proxyPort
+
+	self := selfConductor(t)
+	pm := sandbox.NewProxyManager(nil)
+	// The made-up names are the two local servers. (A loopback address
+	// itself would not do: Go never sends one through HTTP_PROXY.)
+	pm.LookupIP = func(_ context.Context, host string) ([]net.IPAddr, error) {
+		if host == "goproxy.test" || host == "blobs.test" {
+			return []net.IPAddr{{IP: net.IPv4(127, 0, 0, 1)}}, nil
+		}
+		return nil, fmt.Errorf("no such host %s", host)
+	}
+	defer pm.Close()
+	defer func(m map[string][]string) { goProxyRedirects = m }(goProxyRedirects)
+
+	m := &GoModules{Files: map[string][]byte{"go.mod": []byte("module x\n\ngo 1.21\n\nrequire example.test/m v1.0.0\n")}}
+	fill := func(name string) (string, error) {
+		cache := filepath.Join(root, name)
+		g := &GoPrefetch{
+			Cache: cache, Go: realGo, Proxy: "https://" + proxyHost,
+			// The made-up module is in no checksum database.
+			Env: []string{"PATH=" + os.Getenv("PATH"), "GOSUMDB=off", "SSL_CERT_FILE=" + caFile},
+			Sandbox: sandbox.LocalWrapDeps{
+				SelfExe: self, EgressUnix: pm.UnixEndpoint, EgressAddr: pm.Endpoint,
+				ExtraBinds: []sandbox.BindMount{{Path: realRoot, RO: true}, {Path: caDir, RO: true}},
+			},
+		}
+		return cache, g.Fill(context.Background(), m)
+	}
+
+	t.Run("redirect host allowed", func(t *testing.T) {
+		goProxyRedirects = map[string][]string{proxyHost: {blobHost}}
+		cache, err := fill("allowed")
+		if err != nil {
+			t.Fatalf("prefetch: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(cache, "example.test", "m@v1.0.0", "m.go")); err != nil {
+			t.Fatalf("the module is not in the cache: %v", err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if blobHits != 1 {
+			t.Fatalf("the redirect host served %d zips, want 1", blobHits)
+		}
+	})
+	t.Run("redirect host not allowed", func(t *testing.T) {
+		goProxyRedirects = map[string][]string{}
+		cache, err := fill("refused")
+		if err == nil {
+			t.Fatal("the prefetch reached a host it was not given")
+		}
+		t.Logf("refused: %v", err)
+		if strings.Contains(err.Error(), "SIGNEDSECRET") || strings.Contains(err.Error(), "Expires") {
+			t.Fatalf("the signed query is in the error: %v", err)
+		}
+		if !strings.Contains(err.Error(), "https://"+blobHost+"/proxy-prod/m.zip?…") {
+			t.Fatalf("the error does not name the refused host: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(cache, ".conductor-prefetched-v2", m.Digest())); err == nil {
+			t.Fatal("a failed prefetch was marked done")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if blobHits != 1 {
+			t.Fatalf("the refused redirect reached the host: %d hits", blobHits)
+		}
+	})
+}
+
+// namesCA is a private CA and one leaf it signed for names.
+func namesCA(t *testing.T, names ...string) (caPEM []byte, leaf tls.Certificate) {
+	t.Helper()
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caT := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test ca"}, IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	caDER, err := x509.CreateCertificate(rand.Reader, caT, caT, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, _ := x509.ParseCertificate(caDER)
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	lt := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: names[0]}, DNSNames: names,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, lt, ca, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }

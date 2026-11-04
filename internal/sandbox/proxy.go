@@ -657,6 +657,9 @@ type ProxyManager struct {
 	// OnConn receives every request's record (Proxy.OnConn), set before
 	// the first proxy starts.
 	OnConn func(ConnRecord)
+	// LookupIP resolves a host name for every proxy it starts; nil is the
+	// system resolver. Tests point made-up names at local servers.
+	LookupIP func(ctx context.Context, host string) ([]net.IPAddr, error)
 
 	mu      sync.Mutex
 	byKey   map[string]*Proxy
@@ -758,7 +761,7 @@ func (m *ProxyManager) proxyFor(allow []string) (*Proxy, string, error) {
 	if p, ok := m.byKey[key]; ok {
 		return p, m.addrs[key], nil
 	}
-	p := &Proxy{Allow: allow, OnConn: m.OnConn}
+	p := &Proxy{Allow: allow, OnConn: m.OnConn, resolveIP: m.LookupIP}
 	if m.OnDeny != nil {
 		p.OnDeny = func(hostport string) { m.OnDeny(key, hostport) }
 	}

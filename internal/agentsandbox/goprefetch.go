@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -314,7 +315,7 @@ func (g *GoPrefetch) fill(ctx context.Context, m *GoModules) (string, error) {
 	if err := os.MkdirAll(g.Cache, 0o755); err != nil {
 		return "", fmt.Errorf("agentsandbox: go module cache: %w", err)
 	}
-	spec := &sandbox.Spec{Mode: "namespace", Deny: true, HasEgress: true, Egress: goProxyHosts(g.Proxy)}
+	spec := &sandbox.Spec{Mode: "namespace", Deny: true, HasEgress: true, Egress: goPrefetchEgress(g.Proxy)}
 	deps := g.Sandbox
 	deps.Confine = true
 	// The module cache (GOMODCACHE) is the one path outside the scratch root
@@ -337,7 +338,7 @@ func (g *GoPrefetch) fill(ctx context.Context, m *GoModules) (string, error) {
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
 		if err != nil {
-			msg := strings.TrimSpace(stderr.String() + "\n" + string(out))
+			msg := trimURLQueries(strings.TrimSpace(stderr.String() + "\n" + string(out)))
 			if len(msg) > 600 {
 				msg = "…" + msg[len(msg)-600:]
 			}
@@ -391,6 +392,55 @@ func (g *GoPrefetch) applyLimits(spec *sandbox.Spec) {
 var systemdUserBusAvailableFunc = sandbox.ScopeAvailable
 
 func systemdUserBusAvailable() bool { return systemdUserBusAvailableFunc() }
+
+// goProxyRedirects are the hosts a known Go module proxy redirects its
+// downloads to, by the proxy's host:port. proxy.golang.org answers a large
+// zip (a toolchain, a big module) with a signed URL on Cloud Storage.
+//
+// Host:port, not a path prefix: narrowing to /proxy-golang-org-prod/ would
+// need the egress proxy to terminate the download's TLS, which the confined
+// prefetch is not wired for. It needs no more: whatever host serves a zip,
+// Go checks it against go.sum or the checksum database before using it.
+// Only the prefetch's jail gets these; an agent's egress never does.
+var goProxyRedirects = map[string][]string{
+	"proxy.golang.org:443": {"storage.googleapis.com:443"},
+}
+
+// goPrefetchEgress is what the confined download may reach for proxy: the
+// proxy's hosts and the hosts they redirect downloads to.
+func goPrefetchEgress(proxy string) []string {
+	hosts := goProxyHosts(proxy)
+	seen := map[string]bool{}
+	for _, h := range hosts {
+		seen[h] = true
+	}
+	for _, h := range append([]string(nil), hosts...) {
+		for _, r := range goProxyRedirects[h] {
+			if !seen[r] {
+				seen[r] = true
+				hosts = append(hosts, r)
+			}
+		}
+	}
+	return hosts
+}
+
+// urlQuery is a URL's query string: a signed download URL carries its
+// signature there.
+var urlQuery = regexp.MustCompile(`https?://[^\s?"'<>]+\?[^\s"'<>]*`)
+
+// trimURLQueries drops the query string of every URL in s, so a signed URL
+// in Go's error never reaches a log line.
+func trimURLQueries(s string) string {
+	return urlQuery.ReplaceAllStringFunc(s, func(u string) string {
+		base, _, _ := strings.Cut(u, "?")
+		if strings.HasSuffix(u, ":") {
+			// Go's "reading <url>: <why>": the colon is the message's.
+			return base + "?…:"
+		}
+		return base + "?…"
+	})
+}
 
 // goProxyHosts extracts the egress allow-list from a GOPROXY value: a
 // comma-separated (fallback-on-any-error) or pipe-separated

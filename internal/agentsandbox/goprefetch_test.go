@@ -400,3 +400,42 @@ func TestAgentEnvPathFirst(t *testing.T) {
 		t.Fatalf("PATH: %v", env)
 	}
 }
+
+// The confined download reaches the proxy and the hosts that proxy
+// redirects its downloads to — proxy.golang.org's zips come from Cloud
+// Storage — and nothing else.
+func TestGoPrefetchEgress(t *testing.T) {
+	cases := []struct {
+		proxy string
+		want  []string
+	}{
+		{"https://proxy.golang.org", []string{"proxy.golang.org:443", "storage.googleapis.com:443"}},
+		{"https://proxy.golang.org,direct", []string{"proxy.golang.org:443", "storage.googleapis.com:443"}},
+		{"https://mirror.internal", []string{"mirror.internal:443"}},
+		{"off", nil},
+	}
+	for _, c := range cases {
+		if got := goPrefetchEgress(c.proxy); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("goPrefetchEgress(%q) = %v, want %v", c.proxy, got, c.want)
+		}
+	}
+	// An agent's own Go never reaches either: it runs offline.
+	if env := (&GoPrefetch{Cache: "/c"}).AgentEnv(); !contains(env, "GOPROXY=off") {
+		t.Fatalf("agent env: %v", env)
+	}
+}
+
+// A signed download URL in Go's error never reaches the log.
+func TestTrimURLQueries(t *testing.T) {
+	in := `go: example.test/m@v1.0.0: reading https://storage.googleapis.com/proxy-golang-org-prod/abc-m.zip?Expires=1&GoogleAccessId=x&Signature=SECRET: 403 Forbidden`
+	got := trimURLQueries(in)
+	if strings.Contains(got, "SECRET") || strings.Contains(got, "Expires") {
+		t.Fatalf("query kept: %s", got)
+	}
+	if !strings.Contains(got, "https://storage.googleapis.com/proxy-golang-org-prod/abc-m.zip?…: 403 Forbidden") {
+		t.Fatalf("trimmed too much: %s", got)
+	}
+	if s := "no url here: exit status 1"; trimURLQueries(s) != s {
+		t.Fatal("changed text with no URL")
+	}
+}
