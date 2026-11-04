@@ -27,11 +27,9 @@ type Request struct {
 	Signer *Signer
 	// MaxCommits bounds the range (default 500).
 	MaxCommits int
-	// AllowCIChanges lets a push carry changes to CI definitions
-	// (sandbox.push.allow_ci_changes): off, a commit touching one is refused
-	// — a push-triggered pipeline would run the agent's code with the
-	// repository's secrets.
-	AllowCIChanges bool
+	// DenyCIChanges refuses a push whose commits change a CI definition
+	// (sandbox.push.deny_ci_changes, opt-in).
+	DenyCIChanges bool
 }
 
 // Result reports a push.
@@ -160,7 +158,7 @@ func Push(ctx context.Context, r Request) (Result, error) {
 		return res, fmt.Errorf("gitpush: %d new commits — more than the %d conductor pushes at once", len(commits), max)
 	}
 	res.Commits = len(commits)
-	if !r.AllowCIChanges && len(commits) > 0 {
+	if r.DenyCIChanges && len(commits) > 0 {
 		if err := checkCIChanges(git, commits); err != nil {
 			return res, err
 		}

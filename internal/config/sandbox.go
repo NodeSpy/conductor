@@ -171,11 +171,12 @@ type SandboxPush struct {
 	// Default: git's user.name / user.email.
 	Name  string `yaml:"name,omitempty"`
 	Email string `yaml:"email,omitempty"`
-	// AllowCIChanges lets a push carry commits that change CI definitions
-	// (.github/workflows, .gitlab-ci.yml, …). Default false: such a push is
-	// refused — a push-triggered pipeline would run the agent's code with
-	// the repository's secrets.
-	AllowCIChanges bool `yaml:"allow_ci_changes,omitempty"`
+	// DenyCIChanges refuses a push whose commits change a CI definition
+	// (.github/workflows, .gitlab-ci.yml, …). Off by default: it is an
+	// optional extra, not a sandbox protection — it guards what conductor
+	// pushes, and an agent can still change what CI runs through any
+	// script, Makefile or test a pipeline calls.
+	DenyCIChanges bool `yaml:"deny_ci_changes,omitempty"`
 	// Unlanded is what happens to a sandboxed step whose agent committed
 	// work conductor did not push at the step's end (no branch to push to,
 	// a refused push): `fail` (default) fails the step — the work would be
@@ -215,9 +216,9 @@ func (s *SandboxConfig) PrefetchGo() bool {
 	return false
 }
 
-// PushAllowsCIChanges reports sandbox.push.allow_ci_changes (default off).
-func (s *SandboxConfig) PushAllowsCIChanges() bool {
-	return s != nil && s.Push != nil && s.Push.AllowCIChanges
+// PushDeniesCIChanges reports sandbox.push.deny_ci_changes (default off).
+func (s *SandboxConfig) PushDeniesCIChanges() bool {
+	return s != nil && s.Push != nil && s.Push.DenyCIChanges
 }
 
 // GitSharedDirect reports sandbox.git.shared: direct.

@@ -1401,10 +1401,11 @@ sandbox:
     #                                         # outcome unlanded) and fail the step as no_progress
     #                                         # unless it is an explicit review (default: fail);
     #                                         # warn only records them.
-    # allow_ci_changes: true                  # let a push carry commits that change CI definitions
-    #                                         # (.github/workflows, .gitlab-ci.yml, …); default:
-    #                                         # refused — a push-triggered pipeline would run the
-    #                                         # agent's code with the repository's secrets.
+    # deny_ci_changes: true                   # optional extra, off by default: refuse a push whose
+    #                                         # commits change CI definitions (.github/workflows,
+    #                                         # .gitlab-ci.yml, …). Not a sandbox protection: an agent
+    #                                         # can still change what CI runs through any script,
+    #                                         # Makefile or test a pipeline calls.
   # Containment (wiki: Isolation#containment-and-detection). Every knob is optional; the
   # values shown are the strict defaults, and each comment says what loosening gives up.
   # model_credential: gateway   # the model key stays on the host: the agent gets a per-launch token

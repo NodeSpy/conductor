@@ -187,7 +187,7 @@ sandbox:
     # sign: false        # push unsigned (default: refuse to push without a key)
     # at_step_end: false # only git.push pushes
     # unlanded: warn     # commits left unpushed are recorded, not a step failure (default: fail)
-    # allow_ci_changes: true   # let a push carry CI definition changes (default: refused)
+    # deny_ci_changes: true    # optional extra: refuse a push that changes a CI definition (default: off)
   # The containment knobs below are all optional; the values shown are the defaults.
   # model_credential: gateway     # login-copy | login-share
   # egress_require_tls: true      # false: any bytes through an allowed tunnel
@@ -434,7 +434,7 @@ Each agent launch gets its own egress proxy session, attributed to its run:
 
 Plugin and code-step egress keeps its plain sessions: no TLS check, no caps.
 
-**Git (`sandbox.git.shared`, `sandbox.push.allow_ci_changes`).** Your own git
+**Git (`sandbox.git.shared`, `sandbox.push.deny_ci_changes`).** Your own git
 trusts what is in a repository's `.git`; conductor's does not:
 
 - **Shared git dirs.** In a linked worktree, only the shared git dir's
@@ -480,10 +480,16 @@ trusts what is in a repository's `.git`; conductor's does not:
   registration points back at the workspace.
 - **Pushes.** Conductor learns what a push carries from the remote
   (`ls-remote`), not from remote-tracking refs an agent could rewrite. It
-  refuses a shallow git dir, and refuses a commit that changes a CI
-  definition (`.github/workflows`, `.gitlab-ci.yml`, `.circleci`, …): a
-  push-triggered pipeline would run the agent's code with the repository's
-  secrets. `push.allow_ci_changes: true` lets such commits through.
+  refuses a shallow git dir.
+- **CI definitions (optional, off by default).** `push.deny_ci_changes: true`
+  refuses a push whose commits change a CI definition (`.github/workflows`,
+  `.gitlab-ci.yml`, `.circleci`, …; a merge counts only what it changes
+  against every parent). This is not a sandbox protection: it guards what
+  conductor pushes, and an agent can still change what CI runs through any
+  script, Makefile, test or config file a pipeline calls. It also blocks real
+  fixer work on CI itself. Turn it on only as an extra tripwire; the controls
+  that matter are your CI's own (secrets not exposed to branch pipelines,
+  required review before workflows run).
 - **Untrusted targets.** Conductor never checks out, prefetches for or pushes
   to a repository the event's *sender* chose. A dispatch's repository comes
   from the platform's own assignment or the step's `repo:`, never from a
@@ -1215,7 +1221,7 @@ that lifts the allow/approve/host gates lifts this requirement.
 | `conductor sandbox exec` with the daemon unreachable | refused (exit 125); the agent never runs |
 | `conductor sandbox exec` in your home, `/`, or conductor's state | refused (a paseo utility launch with no agent directory gets a scratch workspace instead) |
 | a push with signing on and no signing key | refused with the reason |
-| a push whose commits change a CI definition | refused unless `sandbox.push.allow_ci_changes` |
+| a push whose commits change a CI definition | allowed; refused only with the optional `sandbox.push.deny_ci_changes` (an agent can still change what CI runs via scripts and tests) |
 | a launch's filesystem below `sandbox.limits.disk_free_min` | refused (a running launch is stopped) |
 | no systemd user manager for the launch limits | runs uncapped after one warning; refused with `sandbox.limits.required` |
 | a model the gateway cannot carry (opencode, an OAuth-only login) | `login-copy`: an access-token-only login copy, the key in the environment |

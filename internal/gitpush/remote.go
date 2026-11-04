@@ -89,7 +89,7 @@ func IsCIPath(p string) bool {
 }
 
 // ErrCIChange is a push refused for touching a CI definition.
-var ErrCIChange = fmt.Errorf("gitpush: push touches CI config; allow with sandbox.push.allow_ci_changes")
+var ErrCIChange = fmt.Errorf("gitpush: push touches CI config; refused by sandbox.push.deny_ci_changes")
 
 // checkCIChanges refuses commits whose own change (against their parent;
 // for a merge, what differs from every parent — never what a merged branch

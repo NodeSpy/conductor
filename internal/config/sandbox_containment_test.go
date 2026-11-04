@@ -17,14 +17,14 @@ func TestSandboxContainmentKnobs(t *testing.T) {
 			t.Fatalf("an existing config no longer loads: %v\n%s", err, body)
 		}
 		s := cfg.Sandbox
-		if s.GitSharedDirect() || s.PushAllowsCIChanges() || s.ModelCredentialMode() != "gateway" || !s.EgressTLSRequired() ||
+		if s.GitSharedDirect() || s.PushDeniesCIChanges() || s.ModelCredentialMode() != "gateway" || !s.EgressTLSRequired() ||
 			s.DetectAction() != "kill" || !s.TripwiresOn() || s.PersistMode() != "none" || s.PosixIPCAllowed() {
 			t.Fatalf("defaults are not the strict ones: %+v", s)
 		}
 	}
 	all := base + `sandbox:
   git: { shared: direct }
-  push: { allow_ci_changes: true }
+  push: { deny_ci_changes: true }
   model_credential: login-copy
   egress_require_tls: false
   egress_limits: { idle: 30m, upload: 1GiB, download: "off", model_upload: 32GiB, model_download: "off" }
@@ -38,7 +38,7 @@ func TestSandboxContainmentKnobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := cfg.Sandbox
-	if !s.GitSharedDirect() || !s.PushAllowsCIChanges() || s.ModelCredentialMode() != "login-copy" || s.EgressTLSRequired() ||
+	if !s.GitSharedDirect() || !s.PushDeniesCIChanges() || s.ModelCredentialMode() != "login-copy" || s.EgressTLSRequired() ||
 		s.DetectAction() != "alert" || s.TripwiresOn() || s.PersistMode() != "cache" || !s.PosixIPCAllowed() || s.Limits.Pids != 4096 {
 		t.Fatalf("knobs not read: %+v", s)
 	}
