@@ -47,6 +47,8 @@ jobs:
       - name: canary — conductor sandbox exec around a fake agent
         run: bash test/sandbox-canary/run.sh
       - name: plugin jail — a probe plugin and the official plugins, jailed, against local fakes
+        # Independent of the agent canary above: it runs even when that fails.
+        if: ${{ !cancelled() }}
         run: bash test/sandbox-canary/plugins.sh
 
   # conductor's browser for agents (docs/wiki/Browser.md): a real Chrome in
