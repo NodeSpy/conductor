@@ -769,7 +769,8 @@ commands on lines of their own.
 A launch whose jail cannot be built for that launch (its state directory is
 not usable, a proxy endpoint fails) is refused under `sandbox.plugins: on`
 as under `required`. `on` falls back to manifest-only confinement only when
-this box cannot build a jail at all.
+this box cannot build a jail at all: the probe fails, or (Linux) the daemon
+cannot resolve its own binary, which the jail re-enters through.
 
 ### The manifest's own limits
 
