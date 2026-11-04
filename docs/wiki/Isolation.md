@@ -394,9 +394,10 @@ launch, the provider's hosts leave the allowlist and no login file is placed
 in the home. A launch the gateway cannot carry falls back to `login-copy`:
 opencode, or a subscription (OAuth) login with no API key. A request with a
 wrong credential, or a token-less write, is refused and audited as
-`sandbox_model_gateway_refused`. A token-less HEAD or GET carries nothing to
-refuse: claude's connectivity probe (`HEAD /api/hello`) is answered by the
-gateway itself, any other gets a quiet 401, and neither is forwarded.
+`sandbox_model_gateway_refused`. claude's connectivity probe (a
+token-less `HEAD` or `GET` of exactly `/api/hello`, no query) is answered by
+the gateway itself and not audited. Every other token-less request is a 401
+and is audited. Nothing without the token is forwarded.
 
 Every request through the gateway is audited as `{event: model_request}`,
 with the run, upstream host, method, path (never the query), status, bytes
@@ -436,6 +437,15 @@ Each agent launch gets its own egress proxy session, attributed to its run:
   `allow.raw` (host:port, alias `non_tls`) skips the check, for SSH to one
   bastion or a database port. `egress_protocol_check: false` (alias
   `egress_require_tls`) turns the check off for the scope.
+
+  **What it does not do.** The check reads only how a tunnel opens. It
+  stops a naive raw protocol (plain SSH, a hand-rolled shell) sent straight
+  through the proxy. After a valid opening the tunnel is blind: a program
+  that sends a real TLS ClientHello naming an allowed host can then carry
+  any protocol to whoever answers at that host. So if an agent can reach a
+  host it, or an attacker, controls, the check does not stop a tunnel
+  there. Which hosts are allowed is the control. To constrain what is sent
+  to an allowed host, [inspect](#tls-inspection) it.
 - **Audit.** Every request is audited as `{event: egress}`: target, SNI,
   protocol, bytes each way, duration, outcome and, for a refusal or closure,
   the reason. A plain-HTTP request also carries its method and path, never
@@ -867,7 +877,7 @@ agent-authored workflow's knobs are ignored, and a pack may only tighten
 
 | knob | default | global key (`sandbox.`) | per-scope key (`isolation.`) | tighten | loosen | a pack may |
 |---|---|---|---|---|---|---|
-| egress allowlist | model hosts only | `egress` | `egress_only` replaces it; `network.egress` (with `mode: namespace`) adds | yes | yes | narrow only: its `egress_only` is intersected with what it inherits |
+| egress allowlist | model hosts only | `egress` | `egress_only` replaces it; `network.egress` (with `mode: namespace`) adds | yes | yes | narrow only: an `egress_only` on a pack's trigger, workflow or step (an operator overlay on that step included) is intersected with what it inherits |
 | protocol check | on | `egress_protocol_check` | `egress_protocol_check` | yes | yes | no `false` |
 | TLS inspection (enforce `https://` paths) | none | `inspect` | `inspect` (adds to the global list) | — | yes | no |
 | raw (unchecked) targets | none | `allow.raw` | `allow.raw` (adds to the base) | keep the base empty | yes | by a granted request |
@@ -878,7 +888,7 @@ agent-authored workflow's knobs are ignored, and a pack may only tighten
 | tasks per launch | 8192 | `limits.pids` | `limits.pids` | yes | yes | at most 8192 |
 | CPU per launch | none | `limits.cpu` | `limits.cpu` | yes | yes | yes |
 | CPU weight among agents | none (systemd's 100) | `limits.cpu_weight` | `limits.cpu_weight` | yes | yes | at most 100 |
-| free disk floor | 5% | `limits.disk_free_min` | `limits.disk_free_min` | yes | yes (`off`) | 5% or more, never `off` |
+| free disk floor | 5% | `limits.disk_free_min` | `limits.disk_free_min` | yes | yes (`off`) | a percentage of 5% or more (no size, never `off`) |
 | all agents together | memory 75%, CPU none | `limits.aggregate_memory`, `aggregate_cpu` | — (one slice for every agent) | global | global | — |
 | detection action | kill | `detect.action` | `detect.action` | yes | yes (`alert`, `off`) | no weaker action |
 | tripwires | on | `detect.tripwires` | `detect.tripwires` | yes | yes | no `false` |
@@ -1040,14 +1050,20 @@ The tradeoffs, plainly:
   transfers.
 
 Only the operator sets `inspect:`, in `sandbox:` or an `isolation:` block.
-Wildcards, addresses and ports are `validate` errors, a pack may not set
-it, and an agent-authored workflow's is ignored. `conductor validate`
-lists every inspected host with its scope.
+An `https://` path entry must name a host inspected in the same block or in
+`sandbox.inspect`. Wildcards, addresses and ports are `validate` errors, a
+pack may not set it, and an agent-authored workflow's is ignored.
+`conductor validate` lists every inspected host with its scope.
 
 #### What is left {#what-is-left}
 
 These are known gaps, stated so you can weigh them:
 
+- **A blind tunnel after a valid opening.** The protocol check reads only a
+  tunnel's opening. An agent that opens with a real TLS ClientHello naming
+  an allowed host can carry any protocol to that host. If the agent or an
+  attacker controls an allowed host, that is a channel. Allow only hosts
+  you trust, and inspect a host whose content must be constrained.
 - **Domain fronting.** The TLS check proves the tunnel's server name is an
   allowed host, not who answers inside it. A CDN that serves many sites
   behind one allowed name can carry traffic to another of its customers.
@@ -1238,7 +1254,9 @@ x-templates:
                             # see (namespace = a real pivot_root jail; container
                             # = -v binds). Empty ⇒ just the workdir.
       # privileged: true   # namespace mode: opt back into the daemon's full
-      #                    # filesystem view (state/config masked by default)
+      #                    # filesystem view (state/config masked by default);
+      #                    # refused with limits: (no jail: the launch could
+      #                    # rewrite its own cgroup and remove the caps)
       # allow_root: true   # namespace mode: run the sandbox even when the
       #                    # daemon is root (NOT a boundary then — see below)
 ```
@@ -1540,7 +1558,7 @@ An agent launch's containment adds:
 | `sandbox_limit` | the disk guard stopped a launch, a launch passed a model cap (`kind: model_upload` / `model_download`, `action: refuse`), the memory cap killed it (`kind: memory_cap`, `action: killed`) or the task cap refused its forks (`kind: pids_cap`, `action: refused`); also notified |
 | `sandbox_usage` | each launch's end: `memory_peak`/`memory_max`, `pids_peak`/`pids_max`, `source`, and `near_cap`, `killed_by`, `pids_refused` when they apply |
 | `sandbox_leftover_killed` | processes a launch left running were killed at its end |
-| `sandbox_model_gateway_refused` | a request to the model gateway with a wrong credential, or a token-less write (token-less HEAD/GET probes are not audited) |
+| `sandbox_model_gateway_refused` | a request to the model gateway with a wrong credential, or any token-less request but claude's exact `HEAD`/`GET /api/hello` probe |
 | `sandbox_limits_unavailable` | once: no systemd user manager, launches run without memory and task caps |
 
 A `conductor sandbox exec` launch's rows carry `via: sandbox-exec`.

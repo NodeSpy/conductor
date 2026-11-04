@@ -417,7 +417,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	ctx = context.WithValue(ctx, policyKey{}, r.resolvePolicy(spec))
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	ctx = withDefaultGate(ctx, spec.Gate)
-	ctx = withDefaultIsolation(ctx, spec.Isolation)
+	ctx = withDefaultIsolation(ctx, packNarrowed(spec.Isolation, spec.PackInstance))
 	ctx = r.withRunBudget(ctx, t, spec)
 	ctx, runCost := withCostAcc(ctx)
 	ctx, hist := r.beginHistory(ctx, run, t, spec, shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow))
@@ -1477,7 +1477,7 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	// so its sessions bound under keys the sweep looks for under another
 	// name. Same root cause as the trigger-index bug; this is the call
 	// path that fix missed.
-	stepCtx := withIdentityScope(withCalledWorkflowIsolation(withDefaultGate(ctx, wf.Gate), wf.Isolation), config.WorkflowScope(name))
+	stepCtx := withIdentityScope(withCalledWorkflowIsolation(withDefaultGate(ctx, wf.Gate), packNarrowed(wf.Isolation, wf.PackInstance)), config.WorkflowScope(name))
 	if saved != nil {
 		stepCtx = context.WithValue(stepCtx, savedWFKey{}, name)
 	}

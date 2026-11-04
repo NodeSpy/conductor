@@ -365,6 +365,9 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		s.Isolation = defaultCodeIsolation()
 		s.IsolationDefaulted = true
 	})
+	// Provenance, after the overlay: every step this pack ships is the
+	// pack's, whatever the overlay changed in it.
+	man.WalkPackSteps(func(_ string, s *Step) { s.PackInstance = ns })
 
 	// ---- Fleets: the pack's named models, namespaced, with the consumer's
 	// per-fleet override applied (the top rung of the ladder, §2.3/§5.3). ----

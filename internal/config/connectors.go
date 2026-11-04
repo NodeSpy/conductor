@@ -499,7 +499,10 @@ type IsolationConfig struct {
 	// terminated by conductor (on top of sandbox.inspect), making their
 	// https:// path entries enforceable.
 	Inspect []InspectEntry `yaml:"inspect,omitempty"`
-	// EgressOnlyNarrow marks a pack's egress_only (set at pack load).
+	// EgressOnlyNarrow marks an egress_only that only narrows: a pack's.
+	// Never read from YAML or set at load; the flow and the dispatch set it
+	// from provenance (a pack's trigger, workflow or step) when the launch's
+	// isolation is resolved.
 	EgressOnlyNarrow bool `yaml:"-"`
 }
 
@@ -1257,6 +1260,11 @@ type Step struct {
 	// pack-shipped step from its packs: block (grant:), on top of its
 	// isolation:'s own. Never read from YAML: only a grant sets it.
 	GrantedAllow *SandboxAllow `yaml:"-"`
+	// PackInstance is the pack instance that shipped this step ("": the
+	// operator's own). Stamped once every transform of the pack's steps
+	// (the operator's overlay included) is done, and read where the
+	// sandbox's egress is resolved: a pack's egress_only only narrows.
+	PackInstance string `yaml:"-"`
 	// OutcomeFeedback opts this step into guidance tuning (#36 §18): a
 	// one-line track-record summary for this step's identity is appended to
 	// its guidance.

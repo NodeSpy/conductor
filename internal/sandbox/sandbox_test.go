@@ -400,3 +400,20 @@ func TestNamespaceModeUnsharesIPC(t *testing.T) {
 		t.Fatalf("remote: %q %v", cmd, err)
 	}
 }
+
+// A privileged namespace launch with caps — a layered block can bring the
+// two together past validate — is refused: with no jail the caps are the
+// agent's to remove.
+func TestPrivilegedSpecWithLimitsRefused(t *testing.T) {
+	look := func(string) (string, error) { return "/usr/bin/x", nil }
+	for _, goos := range []string{"linux", "darwin"} {
+		s := &Spec{Mode: "namespace", Privileged: true, Pids: 100}
+		if err := s.Check(goos, 1000, look); err == nil || !strings.Contains(err.Error(), "privileged") {
+			t.Fatalf("%s: %v", goos, err)
+		}
+		s = &Spec{Mode: "namespace", Privileged: true}
+		if err := s.Check(goos, 1000, look); err != nil {
+			t.Fatalf("%s privileged alone: %v", goos, err)
+		}
+	}
+}

@@ -352,7 +352,7 @@ func TestEgressEntryForms(t *testing.T) {
 		}
 	}
 	doc := strings.Replace(allowDoc, "sandbox:\n", "sandbox:\n  egress: [\"https://registry.example/@myorg/\"]\n", 1)
-	if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), "add registry.example to inspect:") || !strings.Contains(err.Error(), "(registry.example:443)") {
+	if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), "add registry.example to inspect: in this block") || !strings.Contains(err.Error(), "(registry.example:443)") {
 		t.Fatalf("an https path entry loaded without inspect: %v", err)
 	}
 	doc = strings.Replace(allowDoc, "      detect: { action: alert }", "      detect: { action: alert }\n      mode: namespace\n      network: { egress: [\"https://registry.example:8443/x\"] }", 1)
@@ -367,6 +367,12 @@ func TestEgressEntryForms(t *testing.T) {
 	doc = strings.Replace(allowDoc, "      detect: { action: alert }", "      detect: { action: alert }\n      inspect: [registry.example]\n      egress_only: [\"https://registry.example/@myorg/\"]", 1)
 	if _, err := loadDoc(t, doc); err != nil {
 		t.Fatalf("a scope-inspected https path entry: %v", err)
+	}
+	// Inspected by another scope only: refused (per scope, red team phase 3).
+	doc = strings.Replace(allowDoc, "      detect: { action: alert }", "      detect: { action: alert }\n      egress_only: [\"https://registry.example/@myorg/\"]", 1)
+	doc = strings.Replace(doc, "  review:\n", "  review:\n    isolation: { inspect: [registry.example] }\n", 1)
+	if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), "in this block") {
+		t.Fatalf("an https path entry inspected only by another scope loaded: %v", err)
 	}
 }
 
@@ -510,6 +516,10 @@ func TestPackScopeKnobs(t *testing.T) {
 		{&IsolationConfig{Limits: &IsolationLimits{CPUWeight: 1000}}, true},
 		{&IsolationConfig{Limits: &IsolationLimits{DiskFreeMin: "off"}}, true},
 		{&IsolationConfig{Limits: &IsolationLimits{DiskFreeMin: "1%"}}, true},
+		// A size cannot be compared with the 5% default: refused in a pack.
+		{&IsolationConfig{Limits: &IsolationLimits{DiskFreeMin: "1"}}, true},
+		{&IsolationConfig{Limits: &IsolationLimits{DiskFreeMin: "100GiB"}}, true},
+		{&IsolationConfig{Limits: &IsolationLimits{DiskFreeMin: "5%"}}, false},
 	} {
 		if got := isolationLoosens(c.iso, true) != ""; got != c.loose {
 			t.Errorf("%+v: loosens %v, want %v", c.iso, got, c.loose)
@@ -522,7 +532,62 @@ func TestPackScopeKnobs(t *testing.T) {
 	if p := checkPackSandboxLoosening(man); len(p) != 0 {
 		t.Fatalf("a pack's egress_only refused: %v", p)
 	}
-	if !man.Workflows["w"].Isolation.EgressOnlyNarrow || !man.Workflows["w"].Steps[0].Isolation.EgressOnlyNarrow {
-		t.Fatal("a pack's egress_only is not marked to narrow only")
+}
+
+// expG9 (red team phase 3): the operator's step overlay round-trips a pack
+// step through YAML, which once dropped a load-time narrow-only flag, so a
+// pack's egress_only replaced the launch's allowlist. Narrowing is now
+// decided from provenance where egress is resolved; what the load must
+// guarantee is that every step the pack ships still names its pack after
+// the overlay, with its egress_only intact (dispatch's
+// TestPackEgressOnlyNarrowsFromProvenance takes it from there).
+func TestExpG9PackStepKeepsItsProvenanceThroughTheOverlay(t *testing.T) {
+	pack := strings.Replace(allowPack, "      - { id: look, type: agent, prompt: p, background: true }",
+		"      - { id: look, type: agent, prompt: p, background: true, isolation: { egress_only: [attacker-c2.example] } }", 1)
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/rv", pack)
+	cfg, err := resolveAndLoad(t, writeDoc(t, dir, "connectors:\n  svc: { use: web }\npacks:\n  rv:\n    source: ./src/rv\n    connectors: { svc: svc }\n    steps: { review/look: { prompt: \"do the deploy\" } }\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen int
+	for name, wf := range cfg.Workflows {
+		for _, s := range wf.Steps {
+			if s.PackInstance != "rv" {
+				t.Errorf("%s/%s: provenance %q", name, s.ID, s.PackInstance)
+			}
+			if s.ID == "look" {
+				seen++
+				if s.Prompt != "do the deploy" || s.Isolation == nil || s.Isolation.EgressOnly == nil || (*s.Isolation.EgressOnly)[0] != "attacker-c2.example" {
+					t.Fatalf("overlaid step: %+v", s)
+				}
+				if s.Isolation.EgressOnlyNarrow {
+					t.Fatal("a narrow flag came from the load; it must come from provenance at resolution")
+				}
+			}
+		}
+	}
+	for _, tr := range cfg.Triggers {
+		for _, s := range tr.Steps {
+			if tr.PackInstance == "rv" && s.PackInstance != "rv" {
+				t.Errorf("trigger step %s: provenance %q", s.ID, s.PackInstance)
+			}
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("the overlaid step was not found (%d)", seen)
+	}
+}
+
+// privileged: true means no jail, so the launch could rewrite its own
+// cgroup files: limits: with it is a validate error, not a cap that looks
+// enforced (red team phase 3).
+func TestPrivilegedWithLimitsIsRefused(t *testing.T) {
+	err := validateIsolation("runtime r", &IsolationConfig{Mode: "namespace", Privileged: true, Limits: &IsolationLimits{Memory: "2G"}}, false)
+	if err == nil || !strings.Contains(err.Error(), "privileged: true` with `limits:`") {
+		t.Fatalf("privileged + limits: %v", err)
+	}
+	if err := validateIsolation("runtime r", &IsolationConfig{Mode: "namespace", Privileged: true}, false); err != nil {
+		t.Fatalf("privileged alone: %v", err)
 	}
 }

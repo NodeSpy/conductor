@@ -68,6 +68,9 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 	if iso.Privileged && iso.Mode != "namespace" {
 		return fmt.Errorf("config: %s: isolation `privileged: true` only applies to mode namespace (it opts out of the default filesystem masking there) — on %s it would be a silent no-op", where, iso.Mode)
 	}
+	if iso.Privileged && iso.Limits != nil {
+		return fmt.Errorf("config: %s: isolation `privileged: true` with `limits:` — a privileged launch has no jail, so it can see and rewrite its own cgroup files and remove the caps, and it gets no watcher or usage record; drop limits: (or privileged:) here", where)
+	}
 	if iso.AllowRoot && iso.Mode != "namespace" {
 		return fmt.Errorf("config: %s: isolation `allow_root: true` only applies to mode namespace (it opts into running the user-namespace sandbox as root) — on %s it would be a silent no-op", where, iso.Mode)
 	}
@@ -353,11 +356,6 @@ func checkPackSandboxLoosening(man *PackManifest) []string {
 	var problems []string
 	ns := man.Pack.Name
 	check := func(where string, iso *IsolationConfig, agent bool, override string) {
-		if iso != nil && iso.EgressOnly != nil {
-			// A pack's egress_only narrows only: entries the inherited
-			// allowlist does not cover are dropped at launch.
-			iso.EgressOnlyNarrow = true
-		}
 		why := isolationLoosens(iso, agent)
 		if why == "" {
 			return
@@ -407,7 +405,7 @@ func isolationLoosens(iso *IsolationConfig, agent bool) string {
 	case len(iso.Inspect) > 0:
 		return "inspect: (a CA of conductor's own trusted inside the sandbox) — the operator writes it"
 	case agent && capsRaise(iso.Limits):
-		return "limits: above the agent launch defaults (pids over 8192, memory over 50% or unlimited, a CPU weight over 100, or a lower disk_free_min)"
+		return "limits: above the agent launch defaults (pids over 8192, memory over 50% or unlimited, a CPU weight over 100, or a disk_free_min that is not a percentage of 5% or more)"
 	case !agent:
 		return "" // a code step's own wrapper choice: its synthesized jail is the default, not a floor
 	case iso.Mode == "user" || iso.Mode == "container":
@@ -433,9 +431,14 @@ func capsRaise(l *IsolationLimits) bool {
 	if l.Pids > 8192 || l.CPUWeight > 100 {
 		return true
 	}
-	if d := strings.TrimSpace(strings.ToLower(l.DiskFreeMin)); d == "off" {
-		return true
-	} else if pct, ok := strings.CutSuffix(d, "%"); ok {
+	if d := strings.TrimSpace(strings.ToLower(l.DiskFreeMin)); d != "" {
+		// A pack may only raise the floor, as a percentage: a size (or
+		// off) cannot be compared with the 5% default on a disk of
+		// unknown size.
+		pct, ok := strings.CutSuffix(d, "%")
+		if !ok {
+			return true
+		}
 		if f, err := strconv.ParseFloat(pct, 64); err != nil || f < 5 {
 			return true
 		}

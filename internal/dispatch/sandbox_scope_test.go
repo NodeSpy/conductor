@@ -133,3 +133,23 @@ func TestRescopeFollowsTheLiveConfig(t *testing.T) {
 		t.Fatalf("knobs inherited from another scope: %+v", got)
 	}
 }
+
+// A pack's step narrows its egress_only, whatever layer set it and whether
+// or not a flag survived the load: decided from the step's provenance. The
+// operator's own step replaces its allowlist as written.
+func TestPackEgressOnlyNarrowsFromProvenance(t *testing.T) {
+	iso := &config.IsolationConfig{EgressOnly: &[]string{"attacker-c2.example"}}
+	if s := SandboxScope(Request{Step: config.Step{PackInstance: "rv", Isolation: iso}}); s == nil || !s.EgressOnlySet || !s.EgressOnlyNarrow {
+		t.Fatalf("a pack step's egress_only does not narrow: %+v", s)
+	}
+	if s := SandboxScope(Request{Step: config.Step{Isolation: iso}}); s == nil || !s.EgressOnlySet || s.EgressOnlyNarrow {
+		t.Fatalf("the operator's egress_only was narrowed: %+v", s)
+	}
+	// And recorded: a rescoped workspace keeps it.
+	s := SandboxScope(Request{Step: config.Step{PackInstance: "rv", Isolation: iso}})
+	if r := Rescope(s, config.ScopeSources{}); r == nil || !r.EgressOnlyNarrow {
+		t.Fatalf("rescoped: %+v", r)
+	}
+	// (agentsandbox's TestEgressOnly: a narrowing egress_only keeps only
+	// what the inherited allowlist covers.)
+}

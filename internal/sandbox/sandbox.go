@@ -166,6 +166,10 @@ func (s *Spec) Check(goos string, euid int, lookPath func(string) (string, error
 	case "user":
 		return need("sudo", "to switch to the sandbox user")
 	case "namespace":
+		if s.Privileged && (s.Memory != "" || s.CPU != "" || s.Pids > 0) {
+			// A layered block can still bring the two together.
+			return fmt.Errorf("sandbox: isolation `privileged: true` with `limits:` — a privileged launch has no jail, so it can see and rewrite its own cgroup files and remove the caps, and it gets no watcher or usage record; drop limits: (or privileged:) from the scope")
+		}
 		// macOS: `namespace` is realized by Seatbelt (sandbox-exec), which
 		// ships on every Mac. No root guard needed — Seatbelt is a kernel
 		// sandbox, not a uid-mapping trick.

@@ -256,7 +256,13 @@ func SandboxScope(req Request) *agentsandbox.Scope {
 		return scopeOf(req.Step.GrantedAllow, nil, nil)
 	}
 	s := scopeOf(config.UnionAllow(iso.Allow, req.Step.GrantedAllow), iso.Detect, iso.EgressLimits)
-	return withKnobs(s, knobsOf(iso))
+	k := knobsOf(iso)
+	if req.Step.PackInstance != "" {
+		// A pack's step: its egress_only, from whichever layer, only
+		// narrows. Decided from provenance here, not carried as a flag.
+		k.EgressOnlyNarrow = k.EgressOnlySet
+	}
+	return withKnobs(s, k)
 }
 
 // knobsOf is the part of a scope that names no origin — its caps, egress

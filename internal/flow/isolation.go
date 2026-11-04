@@ -50,3 +50,15 @@ func (r *Runner) effectiveIsolation(ctx context.Context, step config.Step) *conf
 	scope, _ := ctx.Value(isolationKey{}).(*config.IsolationConfig)
 	return config.LayerIsolation(config.LayerIsolation(rt, scope), step.Isolation)
 }
+
+// packNarrowed is iso as a pack's trigger or workflow (pack != "") sets
+// it: its egress_only only narrows what the launch inherits. The mark is
+// made here, from where the block came from, never carried from load.
+func packNarrowed(iso *config.IsolationConfig, pack string) *config.IsolationConfig {
+	if iso == nil || pack == "" || iso.EgressOnly == nil {
+		return iso
+	}
+	c := *iso
+	c.EgressOnlyNarrow = true
+	return &c
+}

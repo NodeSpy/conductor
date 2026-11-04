@@ -307,14 +307,11 @@ func gatewayHandler(g gatewayPlan, onRefuse func(string), meter *modelMeter) htt
 		if subtle.ConstantTimeCompare([]byte(tok), want) != 1 {
 			// A model client's connectivity probe (claude's HEAD /api/hello
 			// at every start) carries no credential: answered here, never
-			// forwarded, and not a refusal worth an audit row. A request
-			// presenting a wrong credential, or a token-less write, is.
-			if tok == "" && !hasCredentialHeader(r) && (r.Method == http.MethodHead || r.Method == http.MethodGet) {
-				if r.URL.Path == "/api/hello" {
-					w.WriteHeader(http.StatusOK)
-					return
-				}
-				http.Error(w, "conductor model gateway: this launch's token is required", http.StatusUnauthorized)
+			// forwarded, and not a refusal worth an audit row. Only that
+			// exact request is exempt: any other token-less request, a wrong
+			// credential, or a write is audited.
+			if tok == "" && !hasCredentialHeader(r) && (r.Method == http.MethodHead || r.Method == http.MethodGet) && r.URL.Path == "/api/hello" && r.URL.RawQuery == "" {
+				w.WriteHeader(http.StatusOK)
 				return
 			}
 			if onRefuse != nil {

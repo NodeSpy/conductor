@@ -61,36 +61,43 @@ func validateInspect(where string, list []InspectEntry) error {
 }
 
 // validateInspectedEgress checks every https:// path entry names a host
-// some inspect: list covers (sandbox.inspect or a scope's): without it
-// the path could not be enforced. A launch whose scope does not inspect
-// the host refuses a tunnel to it (fail closed).
+// inspected where the entry is written: in sandbox.inspect (every launch),
+// or in the same isolation: block's inspect. Without it the path could not
+// be enforced. (A launch that does not inspect the host still refuses a
+// tunnel to it: fail closed.)
 func (c *Config) validateInspectedEgress() error {
-	inspected := map[string]bool{}
+	global := map[string]bool{}
 	var errs []error
-	add := func(where string, list []InspectEntry) {
-		if err := validateInspect(where, list); err != nil {
-			errs = append(errs, err)
-		}
-		for _, e := range list {
-			inspected[strings.ToLower(strings.TrimSpace(e.Host))] = true
-		}
-	}
 	type entries struct {
-		where string
-		list  []string
+		where     string
+		list      []string
+		inspected map[string]bool
+	}
+	hostsOf := func(list []InspectEntry) map[string]bool {
+		m := map[string]bool{}
+		for _, e := range list {
+			m[strings.ToLower(strings.TrimSpace(e.Host))] = true
+		}
+		return m
 	}
 	var all []entries
 	if c.Sandbox != nil {
-		add("sandbox.inspect", c.Sandbox.Inspect)
-		all = append(all, entries{"sandbox.egress", c.Sandbox.Egress})
+		if err := validateInspect("sandbox.inspect", c.Sandbox.Inspect); err != nil {
+			errs = append(errs, err)
+		}
+		global = hostsOf(c.Sandbox.Inspect)
+		all = append(all, entries{"sandbox.egress", c.Sandbox.Egress, nil})
 	}
 	c.scopeSandboxSites(func(where string, iso *IsolationConfig) {
-		add(where+": isolation.inspect", iso.Inspect)
+		if err := validateInspect(where+": isolation.inspect", iso.Inspect); err != nil {
+			errs = append(errs, err)
+		}
+		own := hostsOf(iso.Inspect)
 		if iso.EgressOnly != nil {
-			all = append(all, entries{where + ": isolation.egress_only", *iso.EgressOnly})
+			all = append(all, entries{where + ": isolation.egress_only", *iso.EgressOnly, own})
 		}
 		if iso.Network != nil {
-			all = append(all, entries{where + ": isolation network.egress", iso.Network.Egress})
+			all = append(all, entries{where + ": isolation network.egress", iso.Network.Egress, own})
 		}
 	})
 	if len(errs) > 0 {
@@ -106,12 +113,12 @@ func (c *Config) validateInspectedEgress() error {
 			if err != nil {
 				continue // validateEgressEntry reported it
 			}
-			if h := strings.ToLower(u.Hostname()); !inspected[h] {
+			if h := strings.ToLower(u.Hostname()); !global[h] && !es.inspected[h] {
 				port := u.Port()
 				if port == "" {
 					port = "443"
 				}
-				return fmt.Errorf("config: %s: %q: a path cannot be enforced on HTTPS unless conductor inspects that host's TLS — add %s to inspect: (sandbox.inspect, or the scope's isolation.inspect), or list the host alone (%s:%s)", es.where, e, h, h, port)
+				return fmt.Errorf("config: %s: %q: a path cannot be enforced on HTTPS unless conductor inspects that host's TLS — add %s to inspect: in this block (or sandbox.inspect), or list the host alone (%s:%s)", es.where, e, h, h, port)
 			}
 		}
 	}
