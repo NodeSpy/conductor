@@ -1378,9 +1378,7 @@ sandbox:
   #                         #   Per runtime/step: isolation: { mode: none }.
   egress: []                # hosts every sandboxed agent may reach beyond its model endpoints,
   #                         #   e.g. [registry.npmjs.org, proxy.golang.org, "*.pypi.org"]
-  #                         #   Go modules: [proxy.golang.org, sum.golang.org,
-  #                         #   "https://storage.googleapis.com/proxy-golang-org-prod/"] with
-  #                         #   inspect: [{ host: storage.googleapis.com }] (wiki: Isolation, "Go modules").
+  #                         #   ["*"]: any public host on :443 (never private/loopback/metadata).
   # state_dir: ~/.local/state/conductor/agent-state   # the per-identity HOMEs
   push:
     # signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh).

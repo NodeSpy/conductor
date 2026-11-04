@@ -217,28 +217,12 @@ sandbox:
 What each of these protects, and what loosening it gives up, is in
 [Containment and detection](#containment-and-detection) below.
 
-**Go modules.** Allowlisting `proxy.golang.org` is not enough: the proxy
-answers module and toolchain downloads with a redirect to
-`storage.googleapis.com`, and allowlisting that host whole opens every Cloud
-Storage bucket to the agent. [Inspect](#tls-inspection) that host and allow
-only the proxy's bucket:
-
-```yaml
-sandbox:
-  egress:
-    - proxy.golang.org
-    - sum.golang.org                                   # go verifies toolchains here directly
-    - "https://storage.googleapis.com/proxy-golang-org-prod/"
-  inspect: [{ host: storage.googleapis.com }]
-```
-
-The agent's `go` then downloads modules, and a newer toolchain a `go` or
-`toolchain` line asks for, through the egress proxy. A request for any other
-bucket is refused (403, audited `egress_denied`). Go reads the sandbox's CA
-bundle from `SSL_CERT_FILE` on Linux; on macOS Go uses the system verifier and
-ignores it, so an inspected host fails TLS there. The module cache is in the
-agent's home (`~/go/pkg/mod`), so with the default `persist: none` each
-dispatch downloads what it needs again.
+**Package registries.** Conductor does not know about package managers. An
+agent that builds or tests downloads what it needs itself, through the egress
+proxy, from whatever `sandbox.egress` allows. `egress: ["*"]` lets every
+agent reach any public host on :443 (a wildcard never reaches private,
+loopback or metadata addresses); narrower patterns limit it to the hosts you
+list.
 
 `sandbox.prefetch` was removed: conductor no longer downloads packages for an
 agent. A config that still sets it loads, with a warning, and the field is
