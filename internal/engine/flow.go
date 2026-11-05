@@ -154,28 +154,54 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 	}
 	qk := queuedFlowKey(t)
 	queuedAt := time.Now()
+	act, _ := t.Action.(config.Action)
+	caps := e.runCapsFor(act.FlowRef, spec)
 	e.queuedMu.Lock()
 	if e.queued == nil {
 		e.queued = map[string]core.Trigger{}
 	}
 	e.queued[qk] = t
-	e.queuedMu.Unlock()
-	if e.sem != nil && e.sem.full() {
-		e.log("%s waiting for an agent slot (all %d busy)", tag(t), e.cfg.AgentCap())
+	if len(caps) > 0 {
+		// A run under a max_runs cap may queue for long: its record is kept
+		// until it starts, so a restart re-queues it (ResumeWorkflows)
+		// instead of losing it.
+		if e.queuedRec == nil {
+			e.queuedRec = map[string]bool{}
+		}
+		e.queuedRec[qk] = true
+		e.putQueuedRun(t)
 	}
+	e.queuedMu.Unlock()
 	go func() {
-		ok := e.acquireFor(ctx, t.Interactive())
+		ok := e.acquireRunCaps(ctx, t, caps)
+		if ok {
+			if e.sem != nil && e.sem.full() {
+				e.log("%s waiting for an agent slot (all %d busy)", tag(t), e.cfg.AgentCap())
+			}
+			if ok = e.acquireFor(ctx, t.Interactive()); !ok {
+				releaseRunCaps(caps)
+			}
+		}
 		// The newest trigger that coalesced into this wait is the one that runs.
 		e.queuedMu.Lock()
 		if nt, found := e.queued[qk]; found {
 			t = nt
 			delete(e.queued, qk)
 		}
+		persisted := e.queuedRec[qk]
+		delete(e.queuedRec, qk)
 		e.queuedMu.Unlock()
 		if !ok {
-			return // shutdown while waiting — the sweep re-derives on restart
+			// Shutdown while waiting: a run under a cap keeps its queued
+			// record and is re-queued on restart; any other, the sweep
+			// re-derives.
+			return
 		}
 		defer e.release()
+		defer releaseRunCaps(caps)
+		if persisted {
+			_ = e.store.DeleteRun(queuedRunID(t))
+		}
 		if t.BoundToTarget() && e.closedSince(t.Key(), queuedAt) {
 			// The target closed while this run waited for a slot: the work
 			// it was bound to is gone.
@@ -271,7 +297,51 @@ func (e *Engine) coalesceQueued(t core.Trigger) bool {
 		return false
 	}
 	e.queued[qk] = t
+	if e.queuedRec[qk] {
+		e.putQueuedRun(t)
+	}
 	return true
+}
+
+// queuedRunPrefix marks a persisted run that has not started: it waits for a
+// max_runs slot. ResumeWorkflows re-queues it rather than resuming it.
+const queuedRunPrefix = "queued:"
+
+// queuedRunID is the record a queued run is kept under: one per flow and
+// target, as queued runs coalesce (queuedFlowKey).
+func queuedRunID(t core.Trigger) string {
+	act, _ := t.Action.(config.Action)
+	return queuedRunPrefix + act.FlowRef + ":" + t.Key()
+}
+
+// putQueuedRun persists (or, after a coalesce, updates) t's queued record.
+func (e *Engine) putQueuedRun(t core.Trigger) {
+	if e.store == nil {
+		return
+	}
+	run := flowRunRecord(t)
+	run.ID = queuedRunID(t)
+	_ = e.store.PutRun(run)
+}
+
+// requeueFlowRun puts a run that was queued when the daemon stopped back in
+// the queue.
+func (e *Engine) requeueFlowRun(ctx context.Context, r store.WorkflowRun, t core.Trigger, act config.Action) {
+	spec, tidx, ok := e.flow.SpecFor(act.FlowRef)
+	if !ok {
+		e.log("engine: re-queue %s: trigger no longer in config — dropping", r.ID)
+		_ = e.store.DeleteRun(r.ID)
+		return
+	}
+	t.Action = act
+	if extra := connector.OptionHooks(t, spec.Options); len(extra) > 0 {
+		spec.Hooks = append(append([]config.Hook{}, spec.Hooks...), extra...)
+	}
+	if r.ID != queuedRunID(t) {
+		_ = e.store.DeleteRun(r.ID) // the trigger moved in the config: re-keyed below
+	}
+	e.log("%s re-queued after a restart", tag(t))
+	e.startFlowRun(ctx, t, spec, tidx, nil, false)
 }
 
 // runBatch fires a grouped batch: the last event is the representative
@@ -326,6 +396,11 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 
 	// Synchronous: the grouper's one-run-per-key guarantee depends on this
 	// call not returning until the run finishes.
+	caps := e.runCapsFor(ref, spec)
+	if !e.acquireRunCaps(ctx, t, caps) {
+		return
+	}
+	defer releaseRunCaps(caps)
 	if !e.acquire(ctx) {
 		return
 	}
@@ -408,6 +483,17 @@ func (e *Engine) flowBaseData(t core.Trigger) map[string]any {
 // newFlowRun persists a resumable run for a flow trigger (tokens stripped,
 // exactly like legacy workflow runs).
 func (e *Engine) newFlowRun(t core.Trigger, spec config.TriggerSpec, shadow bool) store.WorkflowRun {
+	run := flowRunRecord(t)
+	if shadow || e.store == nil {
+		run.ID = ""
+		return run
+	}
+	_ = e.store.PutRun(run)
+	return run
+}
+
+// flowRunRecord is the persisted record of a flow run of t, not yet started.
+func flowRunRecord(t core.Trigger) store.WorkflowRun {
 	run := store.WorkflowRun{
 		ID:       "flow:" + t.Kind + ":" + t.Key(),
 		Source:   t.Source,
@@ -423,11 +509,6 @@ func (e *Engine) newFlowRun(t core.Trigger, spec config.TriggerSpec, shadow bool
 	tp.Context = sanitizeContext(t)
 	run.Trigger, _ = json.Marshal(tp)
 	run.Action, _ = json.Marshal(act)
-	if shadow || e.store == nil {
-		run.ID = ""
-		return run
-	}
-	_ = e.store.PutRun(run)
 	return run
 }
 
@@ -451,6 +532,11 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 	go func() {
 		// Wait for the slot here, not on the caller: resume runs at startup,
 		// and more persisted runs than slots must not stall it.
+		caps := e.runCapsFor(act.FlowRef, spec)
+		if !e.acquireRunCaps(ctx, t, caps) {
+			return
+		}
+		defer releaseRunCaps(caps)
 		if !e.acquireFor(ctx, t.Interactive()) {
 			return
 		}

@@ -140,6 +140,8 @@ type Engine struct {
 	earlyDone   sync.Map                // dispatch id → step.done reason, for a done that arrived while its dispatch was in flight (consumed at the step boundary)
 	queuedMu    sync.Mutex              // guards queued
 	queued      map[string]core.Trigger // flow runs waiting for a slot, by queuedFlowKey → newest trigger
+	queuedRec   map[string]bool         // queued runs whose record is persisted (guarded by queuedMu); see putQueuedRun
+	runCaps     runCaps                 // policy.concurrency.max_runs pools, per scope
 	closedAt    map[string]time.Time    // PR key → when its _closed arrived (guarded by queuedMu); see closedSince
 	baseCtx     context.Context         // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
 
@@ -1430,6 +1432,10 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 		if act.FlowRef != "" {
 			if e.flow == nil {
 				e.log("engine: resume %s: flow run but no flow runner — leaving for next start", r.ID)
+				continue
+			}
+			if strings.HasPrefix(r.ID, queuedRunPrefix) {
+				e.requeueFlowRun(ctx, r, t, act)
 				continue
 			}
 			e.resumeFlowRun(ctx, r, t, act)

@@ -196,7 +196,7 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	// these (scopeRenderData).
 	"internal/engine/flow.go": {
 		{"flowBaseData", "template data"},
-		{"newFlowRun", "run record display fields"},
+		{"flowRunRecord", "run record display fields"},
 		{"resumeFlowRun", "as above"},
 		{"flowAgentServices", "passes the trigger through to the flow runner, which does its own checks"},
 		{"stopFixers", "the fixers_stopped audit row; which sessions stop is decided by Trigger.Key()"},
