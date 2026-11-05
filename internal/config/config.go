@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // strictUnmarshal decodes data into v rejecting unknown keys, so a typo'd
@@ -130,6 +132,10 @@ type Config struct {
 	// isolation here (or opts out with `trust: full`). Absent → the engine gets
 	// the default OS sandbox. See EngineConfig and internal/config/plugins.go.
 	Engines map[string]EngineConfig `yaml:"engines,omitempty"`
+	// Scratch is the OPTIONAL top-level `scratch:` block: where conductor puts
+	// temporary data that can be large (plugin call staging, clones, sandbox
+	// jails, the TMPDIR of what it launches). See ScratchDir.
+	Scratch ScratchConfig `yaml:"scratch,omitempty"`
 	// Code is the OPTIONAL top-level `code:` block tuning the default
 	// isolation a local cli/host/go code step gets when it declares none of
 	// its own. See CodeConfig.
@@ -1609,7 +1615,40 @@ func (c *Config) BaseDir() string { return c.baseDir }
 // PluginStagingDir is the root under which each plugin instance gets the
 // staging directory its file-returning verbs write to (plugin-contract.md Q7).
 // A templated path a step hands to a launch (`images:`) must resolve under it.
-func PluginStagingDir() string { return filepath.Join(StateDir(), "plugins", "staging") }
+//
+// It lives in the scratch directory: what a verb stages can be large.
+func PluginStagingDir() string { return filepath.Join(scratchRoot(), "staging") }
+
+// ScratchConfig is the `scratch:` block.
+type ScratchConfig struct {
+	// Dir is the scratch directory: a path on disk (a separate drive is fine),
+	// never a RAM-backed tmpfs such as /tmp. Default <state dir>/scratch. A
+	// change takes effect on restart.
+	Dir string `yaml:"dir,omitempty" path:"local"`
+}
+
+// DefaultScratchDir is the scratch directory when scratch.dir is unset.
+func DefaultScratchDir() string { return filepath.Join(StateDir(), "scratch") }
+
+// ScratchDir is where conductor puts temporary data that can be large or of
+// unpredictable size (plugin call staging, clones, git object snapshots,
+// downloads, sandbox jails and the TMPDIR of what it launches): scratch.dir,
+// else DefaultScratchDir. Never os.TempDir(), often a RAM-backed tmpfs.
+func (c *Config) ScratchDir() string {
+	if c != nil && c.Scratch.Dir != "" {
+		return filepath.Clean(c.Scratch.Dir)
+	}
+	return DefaultScratchDir()
+}
+
+// scratchRoot is the scratch directory this process runs with
+// (scratch.Root(), set at startup from the config), else the default.
+func scratchRoot() string {
+	if r := scratch.Root(); r != "" {
+		return r
+	}
+	return DefaultScratchDir()
+}
 
 // PluginLocalSnapshotDir is the root under which a LOCAL plugin build
 // (`use: ./path`) is snapshotted by content hash before it is ever run — see

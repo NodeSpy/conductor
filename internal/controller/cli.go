@@ -16,6 +16,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // cliController is the bare-runner fallback for tools with no ACP or HTTP server: it
@@ -154,7 +155,7 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 	// A decide step's session runs LEAN when the recipe knows how and it runs
 	// on this box (the scratch dir it needs is local).
 	if d := spec.Request.Step.DecisionLaunch; d != nil && c.recipe.decide != nil && host == "" {
-		dir, derr := os.MkdirTemp("", "conductor-decide-")
+		dir, derr := scratch.MkdirTemp("conductor-decide-") // an agent session's dir: on disk
 		if derr != nil {
 			return nil, fmt.Errorf("cli: decision dir: %w", derr)
 		}

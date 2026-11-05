@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // Timeout bounds one push, from reading the remote to the workspace update.
@@ -78,7 +80,7 @@ func Push(ctx context.Context, r Request) (Result, error) {
 		// signed: refuse rather than push commits conductor never saw.
 		return res, fmt.Errorf("gitpush: the trusted git dir %s is shallow — conductor does not push from a shallow repository (unshallow it with git fetch --unshallow)", r.GitDir)
 	}
-	tmp, err := os.MkdirTemp("", "conductor-push-")
+	tmp, err := scratch.MkdirTemp("conductor-push-") // an object snapshot: on disk, not a tmpfs
 	if err != nil {
 		return res, err
 	}

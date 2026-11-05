@@ -883,6 +883,7 @@ func (r *Runner) restoreOutputs(ctx context.Context, t core.Trigger, steps []con
 
 func (r *Runner) finishRun(ctx context.Context, run store.WorkflowRun) {
 	r.releaseAtRunEnd(ctx)
+	removeRunCallStaging(ctx)
 	if run.ID != "" {
 		_ = r.Store.DeleteRun(run.ID)
 	}
@@ -1343,16 +1344,30 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	// independently of the step's own retry: policy; target_gone/invalid/
 	// upstream come back untouched for the checks below and execWithRetry's
 	// loop to act on.
-	out, err := connector.RetryContract(ctx, func() (map[string]any, error) {
-		return in.InvokeFinal(ctx, verb, final)
+	// The call writes its files to a staging directory of its own, inside
+	// its instance's: removed now when the call fails (a timeout, a crashed
+	// plugin), else when the run ends — a later step may still read a file
+	// it staged (an agent's images:).
+	staging := instanceStaging(in)
+	callCtx, callDir := ctx, ""
+	if staging != "" {
+		if d, derr := connector.NewCallStaging(staging); derr == nil {
+			callCtx, callDir = connector.WithCallStaging(ctx, d), d
+		}
+	}
+	out, err := connector.RetryContract(callCtx, func() (map[string]any, error) {
+		return in.InvokeFinal(callCtx, verb, final)
 	})
 	took := time.Since(start).Round(time.Millisecond)
 	if err != nil {
+		removeCallStaging(callDir)
 		err = stopAsTargetGone(err, t.DeclaredKey())
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}
-	if out, err = r.storeBlobOutputs(ctx, decl, out, instanceStaging(in)); err != nil {
+	out, err = r.storeBlobOutputs(ctx, decl, out, staging)
+	keepCallStaging(ctx, callDir)
+	if err != nil {
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}
@@ -1844,10 +1859,11 @@ func stagedFile(ctx context.Context, path string) error {
 type runInstancesKey struct{}
 
 // runInstances is the set of staging directories of the connector instances
-// a run invoked.
+// a run invoked, and the call staging directories its calls left.
 type runInstances struct {
-	mu   sync.Mutex
-	dirs map[string]bool
+	mu    sync.Mutex
+	dirs  map[string]bool
+	calls []string
 }
 
 func withRunInstances(ctx context.Context) context.Context {

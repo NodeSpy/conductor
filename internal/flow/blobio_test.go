@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/blob"
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/store"
 )
@@ -270,5 +271,38 @@ steps:
 	}
 	if b, err := os.ReadFile(elsewhere); err != nil || string(b) != "not yours" {
 		t.Errorf("the refused file was touched: %q %v", b, err)
+	}
+}
+
+// Each plugin call gets a staging directory of its own inside its instance's,
+// removed whatever the call's outcome: at once when it fails (a timeout, a
+// crashed plugin: what it left is gone), when the run ends when it succeeds.
+func TestCallStagingIsRemovedWhateverTheOutcome(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		stagedFiles(t, "svc")
+		rig, fake, _ := blobRig(t)
+		if fail {
+			fake.failTimes["download"] = 1
+		}
+		spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: dl, uses: svc.download, options: { url: "x" } }
+`)
+		runTriggerWithRun(rig, store.WorkflowRun{ID: "run-call-staging", Outputs: map[string]map[string]any{}}, newTrigger("ping", nil), spec)
+		if failed, _ := rig.workflowFailed(); failed != fail {
+			t.Fatalf("fail=%v: workflow failed=%v", fail, failed)
+		}
+		calls := fake.snapshot()
+		if len(calls) != 1 || calls[0].Staging == "" {
+			t.Fatalf("fail=%v: calls %+v", fail, calls)
+		}
+		inst := filepath.Join(config.PluginStagingDir(), "chat", "svc")
+		if filepath.Dir(calls[0].Staging) != inst {
+			t.Fatalf("call staging %s is not inside the instance's %s", calls[0].Staging, inst)
+		}
+		if _, err := os.Stat(calls[0].Staging); !os.IsNotExist(err) {
+			t.Errorf("fail=%v: the call's staging directory is still there: %v", fail, err)
+		}
 	}
 }

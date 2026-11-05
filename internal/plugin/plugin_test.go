@@ -538,3 +538,31 @@ func TestPluginProcessOutlivesTheStartingCall(t *testing.T) {
 	}
 	_ = c.Close()
 }
+
+// TestPluginTmpdirIsItsOwnStagingDir: a plugin's TMPDIR is a directory of its
+// own in its staging subtree (on disk, not /tmp), removed with the process.
+func TestPluginTmpdirIsItsOwnStagingDir(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	root := t.TempDir()
+	s := Spec{Name: "p", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Local: true}
+	cmd, cleanup, _, err := buildCommand(s, SandboxDeps{StagingRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := ""
+	for _, kv := range cmd.Env {
+		if v, ok := strings.CutPrefix(kv, "TMPDIR="); ok {
+			tmp = v
+		}
+	}
+	if filepath.Dir(tmp) != filepath.Join(root, "p") {
+		t.Fatalf("TMPDIR = %q, want a directory in %s", tmp, filepath.Join(root, "p"))
+	}
+	if fi, err := os.Stat(tmp); err != nil || !fi.IsDir() {
+		t.Fatalf("TMPDIR %s: %v", tmp, err)
+	}
+	cleanup()
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Fatalf("TMPDIR survived the process: %v", err)
+	}
+}

@@ -36,10 +36,12 @@ import (
 	"fmt"
 	"net"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // Spec is a resolved isolation policy — config.IsolationConfig with the
@@ -277,6 +279,12 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 		prefix = append(prefix, "--")
 		if nf != nil && (nf.UnixSocket != "" || len(nf.Masks) > 0 || jailed) {
 			prefix = append(prefix, nf.Self, "sandbox-net")
+			if jailed && scratch.Root() != "" {
+				// The jail's root is mounted on a directory in the scratch
+				// dir, not in os.TempDir(), and its /tmp is on disk there.
+				prefix = append(prefix, "--jail-root", filepath.Join(scratch.Root(), "jail"),
+					"--jail-tmp", filepath.Join(scratch.Root(), JailTmpDir))
+			}
 			simple := true
 			for _, b := range nf.Binds {
 				simple = simple && b.simple()

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // buildJail builds a bwrap-style pivot_root ALLOW-LIST filesystem jail inside
@@ -24,10 +26,80 @@ import (
 // every mount EPERM, which is what defeated the old overmount mask). The
 // caller (RunEnter) drops that privilege via a nested user namespace before
 // exec'ing the untrusted payload, so the payload cannot pivot back out.
-func buildJail(binds []BindMount) error {
-	root, err := os.MkdirTemp("", "conductor-jail-")
+//
+// The root is a tmpfs mounted on jailRoot, the same directory for every jail
+// (the mount lives only in this private namespace, so jails never see each
+// other's): the host is left no per-launch directory to clean up.
+// jailRootDir is the directory the jail's root is mounted on: dir, else (or
+// when dir can't be made, e.g. from inside another jail) one fixed directory
+// under os.TempDir().
+func jailRootDir(dir string) (string, error) {
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err == nil {
+			return dir, nil
+		}
+	}
+	dir = filepath.Join(os.TempDir(), "conductor-jail")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// jailTmp is the jail's /tmp: a directory of its own on disk, in tmpParent,
+// held (scratch.Held) while the jail runs and removed after (release). The
+// parent stays open across the pivot so release can reach the directory once
+// the jail's view of it is detached.
+type jailTmp struct {
+	held   *scratch.Held
+	parent *os.Root
+}
+
+func newJailTmp(tmpParent string) *jailTmp {
+	if tmpParent == "" {
+		return nil
+	}
+	h, err := scratch.NewHeld(tmpParent, "tmp-")
 	if err != nil {
-		return fmt.Errorf("jail root tmpdir: %w", err)
+		return nil
+	}
+	r, err := os.OpenRoot(tmpParent)
+	if err != nil {
+		h.Remove()
+		return nil
+	}
+	return &jailTmp{held: h, parent: r}
+}
+
+// release removes the jail's /tmp. /tmp is detached first, with every bind
+// the caller stacked under it, so the removal never reaches into a bound
+// host directory.
+func (t *jailTmp) release() {
+	if t == nil {
+		return
+	}
+	_ = unix.Unmount("/tmp", unix.MNT_DETACH)
+	_ = t.parent.RemoveAll(filepath.Base(t.held.Path))
+	t.parent.Close()
+	t.held.Remove() // drops the lock; the directory is already gone
+}
+
+// buildJail builds the jail (see above) and returns what to call once the
+// payload has exited: it removes the jail's on-disk /tmp. tmpParent is where
+// that /tmp is made ("" or unusable: a private tmpfs, as before).
+func buildJail(binds []BindMount, jailRoot, tmpParent string) (func(), error) {
+	t := newJailTmp(tmpParent)
+	if err := buildJailIn(binds, jailRoot, t); err != nil {
+		t.release()
+		return nil, err
+	}
+	return t.release, nil
+}
+
+func buildJailIn(binds []BindMount, jailRoot string, t *jailTmp) error {
+	root, err := jailRootDir(jailRoot)
+	if err != nil {
+		return fmt.Errorf("jail root: %w", err)
 	}
 	// pivot_root requires the new root to be a mount point; a fresh tmpfs is
 	// the simplest one that also gives us a clean, writable skeleton to build
@@ -61,8 +133,15 @@ func buildJail(binds []BindMount) error {
 		return err
 	}
 	// A private /tmp: hides other processes' scratch (and other steps'
-	// conductor-* temp dirs) while giving the payload a writable /tmp.
-	if err := mountTmpfs(root+"/tmp", "mode=1777"); err != nil {
+	// conductor-* temp dirs) while giving the payload a writable /tmp. On
+	// disk in the scratch dir when there is one: a tmpfs is memory, and
+	// what a payload writes to /tmp (a clone, a build) can be large.
+	if t != nil {
+		err = bindInto(root, BindMount{Path: "/tmp", Src: t.held.Path}, false)
+	} else {
+		err = mountTmpfs(root+"/tmp", "mode=1777")
+	}
+	if err != nil {
 		return fmt.Errorf("jail /tmp: %w", err)
 	}
 

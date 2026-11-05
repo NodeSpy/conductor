@@ -104,6 +104,9 @@ type Expose struct {
 	Dial string `json:"dial"` // in-sandbox TCP address (127.0.0.1:PORT)
 }
 
+// JailTmpDir is the scratch subdirectory jails make their /tmp in.
+const JailTmpDir = "jail-tmp"
+
 // EnterOpts is the `conductor sandbox-net` helper's configuration.
 type EnterOpts struct {
 	Listen  string      // TCP address to serve inside the sandbox ("" = none)
@@ -114,7 +117,14 @@ type EnterOpts struct {
 	Relays  []Relay     // extra loopback ports to pipe to unix sockets
 	Exposes []Expose    // in-sandbox loopback ports to serve on host unix sockets
 	PassFDs int         // inherited fds 3.. handed on to the payload
-	Argv    []string    // the real launch to exec once the plumbing is up
+	// JailRoot is the directory the jail's root tmpfs is mounted on ("" =
+	// <os.TempDir()>/conductor-jail). Every jail mounts on the same one: the
+	// mount is private to its namespace, so the host keeps no per-launch dir.
+	JailRoot string
+	// JailTmp is the directory the jail's /tmp is made in, one directory per
+	// launch removed when the payload exits ("" = a private tmpfs).
+	JailTmp string
+	Argv    []string // the real launch to exec once the plumbing is up
 }
 
 // RunEnter is the `conductor sandbox-net` entry point: bring the sandbox
@@ -162,10 +172,12 @@ func RunEnter(opt EnterOpts) int {
 	}
 	jailed := len(opt.Binds) > 0
 	if jailed {
-		if err := buildJail(opt.Binds); err != nil {
+		release, err := buildJail(opt.Binds, opt.JailRoot, opt.JailTmp)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "sandbox-net: jail: %v\n", err)
 			return 1
 		}
+		defer release()
 	} else {
 		for _, m := range opt.Masks {
 			if err := maskPath(m); err != nil {

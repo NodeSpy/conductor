@@ -23,6 +23,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/sandbox"
+	"github.com/NodeSpy/conductor/internal/scratch"
 	"github.com/NodeSpy/conductor/internal/skill"
 	"github.com/NodeSpy/conductor/internal/vaults"
 )
@@ -795,7 +796,7 @@ func browserTakeover(flags map[string]any, req controlRequest, passkey bool) err
 			return err
 		}
 	}
-	dir, err := browser.RunDir(os.TempDir(), "takeover")
+	dir, err := browser.RunDir(scratch.Dir(), "takeover") // a browser profile: on disk
 	if err != nil {
 		return err
 	}
