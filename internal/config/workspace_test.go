@@ -179,3 +179,55 @@ func TestWorkspaceMergePolicy(t *testing.T) {
 		t.Fatalf("a step's own workspace must win whole, got %+v", own.Workspace)
 	}
 }
+
+// workspace.from starts an agent in an artifact instead of a checkout: it
+// parses in the object form, must be a blob reference, round-trips, and is
+// refused beside anything else that says where the agent works.
+func TestWorkspaceFrom(t *testing.T) {
+	got, err := decodeWorkspace(t, `{ from: "{{.snap.blob}}", isolation: worktree }`)
+	if err != nil || got != (Workspace{From: "{{.snap.blob}}", Isolation: "worktree"}) {
+		t.Fatalf("decode: %+v %v", got, err)
+	}
+	if err := got.Validate("s"); err != nil {
+		t.Fatalf("a templated from validates: %v", err)
+	}
+	if _, err := decodeWorkspace(t, `{ from: "  " }`); err == nil || !strings.Contains(err.Error(), "blank") {
+		t.Fatalf("a blank from: %v", err)
+	}
+	if err := (Workspace{From: "/srv/tree"}).Validate("s"); err == nil || !strings.Contains(err.Error(), "blob handle") {
+		t.Fatalf("a path is not a blob reference: %v", err)
+	}
+	if err := (Workspace{From: "sha256:" + strings.Repeat("a", 64)}).Validate("s"); err != nil {
+		t.Fatalf("a digest validates: %v", err)
+	}
+	b, err := yaml.Marshal(struct {
+		W Workspace `yaml:"w"`
+	}{got})
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := decodeWorkspace(t, strings.TrimPrefix(strings.TrimSpace(string(b)), "w:"))
+	if err != nil || back != got {
+		t.Fatalf("round trip: %q -> %+v %v", b, back, err)
+	}
+
+	from := Workspace{From: "{{.snap.blob}}"}
+	if err := validateWorkspaceFrom("s", Step{Workspace: from, Checkout: "none"}); err != nil {
+		t.Fatalf("from with checkout: none: %v", err)
+	}
+	for name, s := range map[string]Step{
+		"checkout-pr": {Checkout: "checkout-pr"},
+		"branch-off":  {Checkout: "branch-off"},
+		"pin":         {Workspace: Workspace{From: from.From, Pin: "p"}},
+		"checkout_pr": {CheckoutPR: &CheckoutPR{Repo: "o/r", PR: "1"}},
+		"repo":        {Repo: "o/r"},
+		"workdir":     {WorkDir: "/srv"},
+	} {
+		if s.Workspace.From == "" {
+			s.Workspace = from
+		}
+		if err := validateWorkspaceFrom("s", s); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+			t.Errorf("from with %s: %v", name, err)
+		}
+	}
+}

@@ -168,9 +168,11 @@ type VerbDecl struct {
 	// the implementation streams bytes off disk instead of finding base64 in
 	// its options.
 	BinaryIn []string
-	// BinaryOut names outputs the implementation returns as raw []byte: the
-	// flow runner stores each as a run-scoped blob and replaces the bytes
-	// with the opaque handle before the value enters the JSON scope.
+	// BinaryOut names outputs the implementation returns as raw []byte — or,
+	// from a plugin, as the path of a file it wrote in its staging directory
+	// (plugin.Verb.BinaryOut): the flow runner stores each as a run-scoped
+	// blob and replaces the value with the opaque handle before it enters
+	// the JSON scope.
 	BinaryOut []string
 	// Semantics are what the ENGINE may use this verb for (reading a
 	// target's revision, minting a credential, exposing a local address) —

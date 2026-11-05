@@ -198,6 +198,14 @@ type Verb struct {
 	// reading a target's revision, minting a credential, opening a
 	// conversation, exposing a local address. Absent: a plain verb.
 	Semantics *VerbSemantics `json:"semantics,omitempty"`
+	// BinaryOut names outputs that carry a file instead of a value: the verb
+	// writes the file under the call's Staging directory and returns its
+	// path there. Conductor stores the file as a run-scoped blob, removes
+	// it, and puts the blob's handle in the step's scope in place of the
+	// path. The bytes never cross the wire, so their size is not bound by
+	// the message cap. An optional sibling "<name>_media_type" string output
+	// sets the blob's media type.
+	BinaryOut []string `json:"binary_out,omitempty"`
 }
 
 // Event is one source event the plugin exposes. Declaring events is supported;

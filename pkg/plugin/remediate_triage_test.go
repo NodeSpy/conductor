@@ -87,3 +87,15 @@ func TestRemediateTriageIsStrippedForAnOlderHost(t *testing.T) {
 		t.Fatalf("semantics after strip = %+v, want remediate kept and remediate_triage dropped", s)
 	}
 }
+
+// A binary output must name an output the verb declares.
+func TestValidateSemanticsBinaryOut(t *testing.T) {
+	d := Decl{Verbs: []Verb{{Name: "snap", Outputs: Schema{"archive": {Type: "string"}}, BinaryOut: []string{"archive"}}}}
+	if p := ValidateSemantics(d); len(p) != 0 {
+		t.Fatalf("a declared binary output: %v", p)
+	}
+	d.Verbs[0].BinaryOut = []string{"tarball"}
+	if p := strings.Join(ValidateSemantics(d), "\n"); !strings.Contains(p, `verbs[snap].binary_out: names output "tarball"`) {
+		t.Fatalf("an undeclared binary output: %q", p)
+	}
+}

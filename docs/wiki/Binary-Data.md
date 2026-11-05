@@ -28,7 +28,7 @@ Pass a handle between steps with a sole-reference template
 
 | Verb | Does |
 |---|---|
-| `blob.put { path \| text, name?, media_type? }` | store a local file (or inline text) → `{blob, digest, size}` |
+| `blob.put { path \| text, name?, media_type? }` | store a local file or inline text → `{blob, digest, size}` |
 | `blob.get { blob, path }` | write a blob's bytes to a local path (e.g. into an agent's worktree) |
 | `blob.read { blob, max_bytes? }` | read a text blob into the scope (default cap 1 MiB) |
 | `blob.stat { blob }` | metadata: digest / name / media_type / size |
@@ -50,6 +50,38 @@ Agents consume artifacts through `blob.get` into their worktree (and produce
 them via a step that `blob.put`s a file they wrote) — the handle, never the
 bytes, moves through prompts and outputs.
 
+## Starting an agent from a directory archive
+
+An agent step with `workspace: { from: "{{.snap.archive}}" }` starts in its
+own fresh copy of a directory archive (a tar blob) instead of a checkout (see
+[[Steps]]). This is how a panel of parallel agents shares one fetch. One verb
+returns the tree as an artifact, and every reviewer starts from it:
+
+```yaml
+steps:
+  # The PR's head and base as one archive, made by the github plugin with
+  # its own credentials; conductor stores it as a run-scoped blob.
+  - { id: snap, uses: github.pr_snapshot, options: { repo: "{{.repo}}", pr: "{{.number}}" } }
+  - id: lens
+    type: agent
+    for_each: "{{.lenses}}"
+    parallel: true
+    workspace: { from: "{{.snap.archive}}" }
+    prompt: "…"
+```
+
+Conductor doesn't make the tree: a connector verb does, and returns it as a
+[binary output](#verbs-with-declared-binary-io). Any verb whose output is a
+tar archive of a directory works the same way.
+
+The archive is unpacked as untrusted, whoever made it. Every entry lands
+inside the destination (through an `os.Root`, so not even a link planted
+earlier in the archive can redirect a write), every symlink must resolve
+inside it, and a hard link or device fails the unpack. Each copy is the
+agent's own: it runs under the normal sandbox, is removed with the agent,
+and is never pushed. Only a blob the run itself holds can be named, and the
+step needs a local conductor-launched runtime (cli, acp, …).
+
 ## Verbs with declared binary IO
 
 A connector verb can declare binary inputs/outputs in its schema
@@ -63,6 +95,13 @@ A connector verb can declare binary inputs/outputs in its schema
 - **BinaryOut** output: the implementation returns raw `[]byte`; the runner
   stores it as a run-scoped blob and the scope receives the handle. An
   optional sibling `<name>_media_type` string output sets the MIME type.
+- **A plugin's BinaryOut** (`plugin.Verb.BinaryOut` on the wire): the verb
+  writes the file under the call's staging directory (`invoke.staging`) and
+  returns its path. The runner stores that file as a run-scoped blob, named
+  after the file, removes it, and the scope receives the handle. The bytes
+  never cross the plugin wire, so the message size cap doesn't bound them.
+  A path outside the instance's staging directory, or anything but a
+  regular file, fails the step and is left alone.
 
 ## Lifecycle & GC
 

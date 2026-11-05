@@ -3,7 +3,10 @@ package flow
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/NodeSpy/conductor/internal/blob"
@@ -74,9 +77,11 @@ func (r *Runner) stageBlobInputs(ctx context.Context, decl connector.VerbDecl, o
 	return out, nil
 }
 
-// storeBlobOutputs stores declared binary-out outputs ([]byte) as run-scoped
-// blobs, replacing the bytes with the handle's scope value.
-func (r *Runner) storeBlobOutputs(ctx context.Context, decl connector.VerbDecl, outputs map[string]any) (map[string]any, error) {
+// storeBlobOutputs stores declared binary-out outputs as run-scoped blobs,
+// replacing each with the handle's scope value: raw []byte from a builtin,
+// or a path from a plugin — a file it wrote under staging, its instance's
+// staging directory, which is removed once stored.
+func (r *Runner) storeBlobOutputs(ctx context.Context, decl connector.VerbDecl, outputs map[string]any, staging string) (map[string]any, error) {
 	if len(decl.BinaryOut) == 0 || outputs == nil {
 		return outputs, nil
 	}
@@ -85,21 +90,72 @@ func (r *Runner) storeBlobOutputs(ctx context.Context, decl connector.VerbDecl, 
 	}
 	runID := blob.OwnerFrom(ctx)
 	for _, name := range decl.BinaryOut {
-		raw, ok := outputs[name].([]byte)
-		if !ok {
-			continue // the verb returned nothing binary there this time
-		}
 		meta := blob.Meta{Name: name}
 		if mt, ok := outputs[name+"_media_type"].(string); ok {
 			meta.MediaType = mt
 		}
-		h, err := r.Blobs.PutBytes(runID, raw, meta)
+		var h blob.Handle
+		var err error
+		switch v := outputs[name].(type) {
+		case []byte:
+			h, err = r.Blobs.PutBytes(runID, v, meta)
+		case string:
+			if v == "" {
+				continue
+			}
+			h, err = r.storeStagedFile(runID, staging, v, meta)
+		default:
+			continue // the verb returned nothing binary there this time
+		}
 		if err != nil {
 			return nil, fmt.Errorf("output %q: %w", name, err)
 		}
 		outputs[name] = h.ScopeValue()
 	}
 	return outputs, nil
+}
+
+// storeStagedFile stores the file a plugin returned for a binary output and
+// removes it. Only a regular file inside the calling instance's own staging
+// directory (plugin-contract.md Q7), symlinks resolved, is accepted: a path
+// anywhere else is refused and left alone.
+func (r *Runner) storeStagedFile(runID, staging, path string, meta blob.Meta) (blob.Handle, error) {
+	if staging == "" {
+		return blob.Handle{}, fmt.Errorf("a binary output path from a connector with no staging directory")
+	}
+	dir, err := filepath.EvalSymlinks(staging)
+	if err != nil {
+		return blob.Handle{}, fmt.Errorf("staging directory: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil || !strings.HasPrefix(real, dir+string(filepath.Separator)) {
+		return blob.Handle{}, fmt.Errorf("%q is not a file in the connector's staging directory", path)
+	}
+	defer os.Remove(real)
+	f, err := os.Open(real)
+	if err != nil {
+		return blob.Handle{}, err
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return blob.Handle{}, fmt.Errorf("%q is not a regular file", path)
+	}
+	meta.Name = filepath.Base(real) // the plugin's name for it, e.g. pr-7.tar
+	return r.Blobs.Put(runID, f, meta)
+}
+
+// instanceStaging is the staging directory a connector instance's plugin
+// writes its files to, or "" when it has none.
+func instanceStaging(in *connector.Instance) string {
+	sd, ok := in.Impl.(stagingDirer)
+	if !ok {
+		return ""
+	}
+	dir, err := sd.StagingDir()
+	if err != nil {
+		return ""
+	}
+	return dir
 }
 
 // releaseRunBlobs GC's the run's artifacts with the run (#36 §21).

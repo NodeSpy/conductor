@@ -356,6 +356,13 @@ and returns their paths. A path the engine takes from an output or the event
 (a step's templated `images:`) is accepted only under a staging directory,
 symlinks resolved. Output schemas stay strict.
 
+A verb whose output is an artifact names it in its `binary_out` list
+(`plugin.Verb.BinaryOut`). For those outputs the path is not handed on: the
+engine stores the file, which must be a regular file under the calling
+instance's staging directory, as a run-scoped blob, removes it, and puts the
+blob's handle in the step's scope. The bytes never cross the wire, so the
+message cap does not bound them.
+
 Every engine-initiated call goes through `invoke` to a verb the plugin
 **declared** for that purpose:
 - the revision re-read (`run.start_sha` and friends);

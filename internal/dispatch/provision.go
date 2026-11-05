@@ -27,6 +27,9 @@ import (
 // test can provision without touching a live paseo daemon. *Dispatcher satisfies
 // the controller package's Provisioner via this method.
 func (d *Dispatcher) ProvisionWorktree(ctx context.Context, req Request) (id, cwd string, err error) {
+	if req.WorkspaceArchive != "" {
+		return "", "", errWorkspaceFromRemote
+	}
 	if wd, err := WorkDir(req); err != nil {
 		return "", "", err
 	} else if wd != "" {
@@ -53,6 +56,12 @@ func (d *Dispatcher) ProvisionWorktree(ctx context.Context, req Request) (id, cw
 		return "", "", nil
 	}
 }
+
+// errWorkspaceFromRemote refuses a `workspace: { from: … }` dispatch on a path
+// that cannot honour it: the artifact is unpacked on THIS box, so only a
+// local conductor-launched runtime (cli, acp, …) can start in it — not paseo,
+// and not a launch on another host.
+var errWorkspaceFromRemote = Unrecoverable(fmt.Errorf("workspace.from: an artifact workspace is unpacked on this machine, so it needs a local conductor-launched runtime (cli, acp, …) — not paseo, and not a step on another host"))
 
 // RemoveWorktree releases a worktree returned by ProvisionWorktree. For the
 // paseo path it is deliberately a NO-OP: a paseo workspace's lifetime is owned

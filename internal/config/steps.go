@@ -127,6 +127,10 @@ func (c *Config) validateSteps() error {
 			fail(err)
 			return
 		}
+		if err := validateWorkspaceFrom(where, *s); err != nil {
+			fail(err)
+			return
+		}
 		if err := validateWorkspacePin(where, *s); err != nil {
 			fail(err)
 			return
@@ -192,6 +196,36 @@ func validateWorkspacePin(where string, s Step) error {
 		return fmt.Errorf("config: %s: workspace.pin (%q) cannot be combined with checkout: %s — "+
 			"a pin reuses one workspace across runs, a repo checkout gives each run its own worktree; "+
 			"drop the pin, or set checkout: none", where, s.Workspace.Pin, s.Checkout)
+	}
+	return nil
+}
+
+// validateWorkspaceFrom rejects a `workspace: { from: … }` alongside anything
+// else that says where the agent works: an artifact workspace replaces the
+// checkout, so a repo checkout, a pin, a workdir or a checkout repo would be
+// silently ignored.
+func validateWorkspaceFrom(where string, s Step) error {
+	if s.Workspace.From == "" {
+		return nil
+	}
+	var other string
+	switch {
+	case s.Workspace.Pin != "":
+		other = "workspace.pin"
+	case s.Checkout == "checkout-pr" || s.Checkout == "branch-off":
+		other = "checkout: " + s.Checkout
+	case s.CheckoutPR != nil:
+		other = "checkout_pr"
+	case s.Repo != "":
+		other = "repo"
+	case s.WorkDir != "":
+		other = "workdir"
+	case s.Detach:
+		other = "detach"
+	}
+	if other != "" {
+		return fmt.Errorf("config: %s: workspace.from cannot be combined with %s — "+
+			"the agent starts in its own copy of the artifact instead of a checkout; drop one of them", where, other)
 	}
 	return nil
 }
