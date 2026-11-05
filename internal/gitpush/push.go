@@ -7,7 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// Timeout bounds one push, from reading the remote to the workspace update.
+// The agent's git.push call waits this long for the result (the skill IPC
+// deadline is derived from it), so a push never lands after the agent was
+// told it failed.
+const Timeout = 5 * time.Minute
 
 // Request is one push of an agent's workspace.
 type Request struct {

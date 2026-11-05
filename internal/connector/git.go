@@ -21,7 +21,7 @@ var gitDecl = &TypeDecl{
 	Desc: "Your sandboxed workspace's way out: git.push asks conductor to push your committed HEAD to this dispatch's own branch (fast-forward only, signed by conductor). Auto-granted to every sandboxed dispatch that is not a review; conductor also pushes at the end of the step.",
 	Verbs: []VerbDecl{
 		{
-			Name: "push", Desc: "push your committed work: conductor pushes the workspace HEAD to this dispatch's own branch, fast-forward only, signing each new commit. Commit first; uncommitted changes are not pushed. Takes no branch or ref — the branch is the dispatch's.",
+			Name: "push", Desc: "push your committed work: conductor pushes the workspace HEAD to this dispatch's own branch, fast-forward only, signing each new commit. Commit first; uncommitted changes are not pushed. Takes no branch or ref — the branch is the dispatch's. Behind a slow remote it can take minutes: wait for its result, and don't amend or rebase the commits meanwhile — it pushes the HEAD it read when called.",
 			Options: Schema{},
 			Outputs: Schema{
 				"branch":     {Type: TString, Desc: "the dispatch branch pushed to"},
