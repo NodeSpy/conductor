@@ -6,7 +6,8 @@ import (
 	"strings"
 )
 
-// gitFn runs conductor's hardened git in the push's trusted dir.
+// gitFn runs conductor's hardened git in the push's trusted dir (or, for
+// the network, its scratch dir).
 type gitFn func(stdin []byte, args ...string) (string, error)
 
 // notOnRemote lists head's commits that no remote tip reaches, oldest
@@ -16,7 +17,7 @@ type gitFn func(stdin []byte, args ...string) (string, error)
 // the remote's own tips prove, the missing tips are fetched (into the push's
 // scratch object store) and the walk is redone. The local claim itself is
 // never trusted.
-func notOnRemote(git gitFn, head string, tips map[string]string, remote string) (string, error) {
+func notOnRemote(git, net gitFn, head string, tips map[string]string, remote string) (string, error) {
 	walk := func() (string, error) {
 		var in strings.Builder
 		in.WriteString(head + "\n")
@@ -57,7 +58,7 @@ func notOnRemote(git gitFn, head string, tips map[string]string, remote string) 
 	for i := 0; i < len(missing); i += 64 {
 		end := min(i+64, len(missing))
 		args := append([]string{"fetch", "--no-write-fetch-head", "--no-tags", "--no-recurse-submodules", "--end-of-options", remote}, missing[i:end]...)
-		if _, err := git(nil, args...); err != nil {
+		if _, err := net(nil, args...); err != nil {
 			return "", fmt.Errorf("fetch the remote's tips to learn what is already pushed: %w", err)
 		}
 	}

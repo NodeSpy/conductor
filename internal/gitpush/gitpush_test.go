@@ -361,3 +361,36 @@ func TestPushSSHHasConnectionSharingOff(t *testing.T) {
 		t.Fatalf("core.sshCommand for a push = %q, want connection sharing off", got)
 	}
 }
+
+// A push never writes the base's remote-tracking refs. git updates
+// refs/remotes/origin/* in the repository a push or fetch runs in whenever the
+// URL is origin's, and the objects behind them (the signed commits, a fetched
+// remote tip) live only in the push's scratch store and the agent's clone: a
+// ref to them breaks every later fetch of the base with "bad object".
+func TestPushLeavesTheBaseFetchable(t *testing.T) {
+	for _, moved := range []bool{false, true} {
+		f := newFixture(t)
+		if moved {
+			// Someone else moved fix/1 and the agent built on it: the base
+			// never fetched that tip, so the push fetches it to check the
+			// fast-forward.
+			other := filepath.Join(filepath.Dir(f.ws), "human")
+			run(t, filepath.Dir(other), "git", "clone", "-q", "-b", "fix/1", f.remote, other)
+			os.WriteFile(filepath.Join(other, "h.txt"), []byte("h\n"), 0o644)
+			run(t, other, "git", "add", ".")
+			run(t, other, "git", "commit", "-q", "-m", "human")
+			run(t, other, "git", "push", "-q", "origin", "fix/1")
+			run(t, f.ws, "git", "fetch", "-q", f.remote, "fix/1")
+			run(t, f.ws, "git", "merge", "-q", "--ff-only", "FETCH_HEAD")
+		}
+		f.commit(t, "b.txt", "b\n")
+		before := run(t, f.base, "git", "for-each-ref", "refs/remotes")
+		if _, err := Push(context.Background(), f.req()); err != nil {
+			t.Fatalf("moved=%v: %v", moved, err)
+		}
+		if after := run(t, f.base, "git", "for-each-ref", "refs/remotes"); after != before {
+			t.Fatalf("moved=%v: the push wrote the base's remote-tracking refs:\nbefore %s\nafter  %s", moved, before, after)
+		}
+		run(t, f.base, "git", "fetch", "-q", "origin")
+	}
+}
