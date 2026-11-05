@@ -1359,6 +1359,14 @@ triggers:
 policy:
   quiet_hours: { tz: America/Denver, from: "22:00", to: "07:00", hold: true }
   concurrency: { max_agents: 3, max_agents_per_hour: 40 }
+  #   max_runs: 10            # at most N runs in flight at once. Valid at every
+  #                           #   scope: here (all triggers), on a connector (all
+  #                           #   its triggers, one pool), on a trigger (incl. a
+  #                           #   pack trigger's arm). Extras queue FIFO, none is
+  #                           #   dropped, a queued run survives a restart. Each
+  #                           #   scope's cap applies; then max_agents. max_agents
+  #                           #   and max_agents_per_hour are global only: below
+  #                           #   it they are ignored, with a warning. (wiki: Policy)
   # guidance: "Write like a busy engineer: a sentence or two, plain and direct."
   #                           # the scoped house-tone baseline (layer 0). Because
   #                           #   policy cascades global -> connector -> trigger,

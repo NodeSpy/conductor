@@ -181,3 +181,50 @@ func eachItem(n *yaml.Node, fn func(string, *yaml.Node)) {
 		})
 	}
 }
+
+// MaxRuns is a scope's policy.concurrency.max_runs, 0 when unset.
+func (p *Policy) MaxRuns() int {
+	if p == nil || p.Concurrency == nil || p.Concurrency.MaxRuns == nil {
+		return 0
+	}
+	return *p.Concurrency.MaxRuns
+}
+
+// scopedAgentCapWarnings names each connector or trigger that sets
+// policy.concurrency.max_agents or max_agents_per_hour: those are read at
+// global scope only. A warning, not a refusal, so a live config that already
+// sets them keeps loading.
+func (c *Config) scopedAgentCapWarnings() []string {
+	ignored := func(p *Policy) []string {
+		if p == nil || p.Concurrency == nil {
+			return nil
+		}
+		var keys []string
+		if p.Concurrency.MaxAgents != nil {
+			keys = append(keys, "max_agents")
+		}
+		if p.Concurrency.MaxAgentsPerHour != nil {
+			keys = append(keys, "max_agents_per_hour")
+		}
+		return keys
+	}
+	var out []string
+	for name, ref := range c.ConnectorsMap {
+		for _, k := range ignored(ref.Policy) {
+			out = append(out, fmt.Sprintf("connectors.%s.policy.concurrency.%s: %s", name, k, scopedAgentCapIgnored))
+		}
+	}
+	for i, t := range c.Triggers {
+		label := t.Name
+		if label == "" {
+			label = fmt.Sprintf("[%d] (%s)", i, t.On)
+		}
+		for _, k := range ignored(t.Policy) {
+			out = append(out, fmt.Sprintf("triggers.%s.policy.concurrency.%s: %s", label, k, scopedAgentCapIgnored))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+const scopedAgentCapIgnored = "ignored — read only in the global policy; use concurrency.max_runs to cap the runs of a connector or trigger"

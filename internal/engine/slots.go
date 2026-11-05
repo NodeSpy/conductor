@@ -109,3 +109,10 @@ func (s *slots) full() bool {
 	defer s.mu.Unlock()
 	return s.used >= s.cap
 }
+
+// usage is the slots in use and the cap.
+func (s *slots) usage() (used, cap int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.used, s.cap
+}

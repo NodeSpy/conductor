@@ -1714,6 +1714,9 @@ func validatePolicyBlock(where string, p *Policy) error {
 	if err := validateBudget(where, p.Budget); err != nil {
 		return err
 	}
+	if p.MaxRuns() < 0 {
+		return fmt.Errorf("config: %s: concurrency.max_runs must be 0 (no cap) or more, got %d", where, p.MaxRuns())
+	}
 	if p.ReplyToBots == nil {
 		return nil
 	}
@@ -1734,10 +1737,19 @@ type QuietHours struct {
 	Hold *bool `yaml:"hold,omitempty"`
 }
 
-// Concurrency bounds total agent load.
+// Concurrency bounds total agent load. MaxAgents and MaxAgentsPerHour are
+// read at global scope only (AgentCap, AgentsPerHour); set at a connector or
+// trigger they are ignored, with a warning at load (ScopedAgentCapWarnings).
+// MaxRuns is valid at every scope.
 type Concurrency struct {
 	MaxAgents        *int `yaml:"max_agents,omitempty"`
 	MaxAgentsPerHour *int `yaml:"max_agents_per_hour,omitempty"`
+	// MaxRuns caps the runs in flight at once in this scope: one trigger's,
+	// all of one connector's triggers', or (global) every trigger's. Extra
+	// runs queue in arrival order; none is dropped, and a queued run is kept
+	// across a restart. A run waits for every scope's cap that is set, then
+	// for an agent slot (max_agents). Unset or 0: no cap.
+	MaxRuns *int `yaml:"max_runs,omitempty"`
 }
 
 // Ignore lists authors whose activity never triggers work.
@@ -1796,6 +1808,9 @@ func MergePolicy(scopes ...*Policy) Policy {
 			}
 			if p.Concurrency.MaxAgentsPerHour != nil {
 				out.Concurrency.MaxAgentsPerHour = p.Concurrency.MaxAgentsPerHour
+			}
+			if p.Concurrency.MaxRuns != nil {
+				out.Concurrency.MaxRuns = p.Concurrency.MaxRuns
 			}
 		}
 		if p.Ignore != nil {

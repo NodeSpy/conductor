@@ -1046,6 +1046,7 @@ func load(path, packRoot string) (*Config, error) {
 	// }` opts out.
 	c.applyCodeIsolationDefaults()
 	c.labelAllowances()
+	c.removedWarnings = append(c.removedWarnings, c.scopedAgentCapWarnings()...)
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
