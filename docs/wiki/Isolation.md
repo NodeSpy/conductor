@@ -202,7 +202,7 @@ sandbox:
   # egress_protocol_check: true   # TLS, HTTP/1 and HTTP/2 naming their host pass; false: any bytes (alias egress_require_tls)
   # egress_limits: { idle: 10m, upload: 512MiB, download: 20GiB, model_upload: 16GiB, model_download: 16GiB }   # each takes "off"
   # detect:
-  #   action: kill                # alert | off
+  #   action: kill                # terminate | alert | off
   #   tripwires: true
   #   interval: 3s
   #   allow: []                   # programs exempt in EVERY launch (prefer a scoped allowance)
@@ -556,6 +556,13 @@ The response is `detect.action`:
   step ends with its agent. The workspace is kept. The event is audited
   (`sandbox_detection`) and raised as a `conductor.escalate` notification
   ([[Notifications]]).
+- **`terminate`**: only the flagged process and what it started are killed;
+  the agent runs on, and the event is audited and notified as for `kill`. A
+  tripwire read or a git tamper names no process to stop, so it still kills
+  the launch. It loosens the sandbox, so a pack can't set it; the operator
+  sets it per step from the `packs:` block, e.g. for agents that may try a
+  tool the sandbox blocks (`git fetch` over ssh) and should get a failed
+  command rather than a killed run.
 - **`alert`**: audited and notified only.
 - **`off`**: no watcher, tripwires or git guard.
 

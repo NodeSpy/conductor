@@ -108,7 +108,7 @@ func allowancePins(man *PackManifest) map[string]string {
 
 // IsolationDetect overrides sandbox.detect for one scope.
 type IsolationDetect struct {
-	// Action is kill|alert|off (see SandboxDetect.Action).
+	// Action is kill|terminate|alert|off (see SandboxDetect.Action).
 	Action string `yaml:"action,omitempty"`
 	// Tripwires plants decoy credentials (default: sandbox.detect's).
 	Tripwires *bool `yaml:"tripwires,omitempty"`
@@ -259,9 +259,9 @@ func validateScopeSandbox(where string, iso *IsolationConfig) error {
 	}
 	if d := iso.Detect; d != nil {
 		switch d.Action {
-		case "", "kill", "alert", "off":
+		case "", "kill", "terminate", "alert", "off":
 		default:
-			return fmt.Errorf("config: %s: isolation.detect.action must be kill|alert|off, got %q", where, d.Action)
+			return fmt.Errorf("config: %s: isolation.detect.action must be kill|terminate|alert|off, got %q", where, d.Action)
 		}
 	}
 	if d := iso.Detect; d != nil {

@@ -127,12 +127,13 @@ triggers:
 // naming the operator's override.
 func TestPackCannotLoosenItsSandbox(t *testing.T) {
 	cases := map[string]struct{ from, to, want string }{
-		"step mode none":      {"background: true }", "background: true, isolation: { mode: none } }", "steps: { review/look: { isolation: { mode: none } } }"},
-		"step container":      {"background: true }", "background: true, isolation: { mode: container, container: { image: x } } }", "review/look"},
-		"step egress":         {"background: true }", "background: true, isolation: { mode: namespace, network: { egress: [evil.example] } } }", "network.egress"},
-		"workflow mode none":  {"  review:\n    steps:", "  review:\n    isolation: { mode: none }\n    steps:", "triggers: { <trigger>: { isolation: { mode: none } } }"},
-		"trigger mode none":   {"    on: svc.x\n", "    on: svc.x\n    isolation: { mode: none }\n", "triggers: { watch: { isolation: { mode: none } } }"},
-		"code step mode none": {"    steps: [ { id: s, workflow: review } ]", "    steps: [ { id: s, workflow: review }, { id: c, run: sh, code: 'true', isolation: { mode: none } } ]", "watch/c"},
+		"step mode none":        {"background: true }", "background: true, isolation: { mode: none } }", "steps: { review/look: { isolation: { mode: none } } }"},
+		"step container":        {"background: true }", "background: true, isolation: { mode: container, container: { image: x } } }", "review/look"},
+		"step egress":           {"background: true }", "background: true, isolation: { mode: namespace, network: { egress: [evil.example] } } }", "network.egress"},
+		"step detect terminate": {"background: true }", "background: true, isolation: { detect: { action: terminate } } }", "weaker detection"},
+		"workflow mode none":    {"  review:\n    steps:", "  review:\n    isolation: { mode: none }\n    steps:", "triggers: { <trigger>: { isolation: { mode: none } } }"},
+		"trigger mode none":     {"    on: svc.x\n", "    on: svc.x\n    isolation: { mode: none }\n", "triggers: { watch: { isolation: { mode: none } } }"},
+		"code step mode none":   {"    steps: [ { id: s, workflow: review } ]", "    steps: [ { id: s, workflow: review }, { id: c, run: sh, code: 'true', isolation: { mode: none } } ]", "watch/c"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

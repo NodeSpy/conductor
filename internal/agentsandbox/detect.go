@@ -19,6 +19,9 @@ import (
 //
 //   - kill (the default): the launch's processes are killed, the event
 //     audited and reported;
+//   - terminate: only the flagged process and its descendants are killed,
+//     the event audited and reported, and the launch runs on (a tripwire
+//     read or git tamper names no process to stop, so it still kills);
 //   - alert: audited and reported only;
 //   - off: no watcher, no tripwires, no git guard.
 //
@@ -32,9 +35,10 @@ import (
 
 // Detection actions (sandbox.detect.action).
 const (
-	DetectKill  = "kill"
-	DetectAlert = "alert"
-	DetectOff   = "off"
+	DetectKill      = "kill"
+	DetectTerminate = "terminate"
+	DetectAlert     = "alert"
+	DetectOff       = "off"
 )
 
 // markerEnv carries a launch's random marker: the watcher's handle on the
@@ -222,7 +226,7 @@ func argString(args []string) string {
 // DetectSpec configures one launch's detection.
 // The zero value is the strict default: kill, tripwires on.
 type DetectSpec struct {
-	// Action is DetectKill ("" too), DetectAlert or DetectOff.
+	// Action is DetectKill ("" too), DetectTerminate, DetectAlert or DetectOff.
 	Action   string        `json:"action,omitempty"`
 	Interval time.Duration `json:"interval,omitempty"`
 	// NoTripwires: plant no decoy credentials (sandbox.detect.tripwires:
@@ -475,29 +479,72 @@ func (d *detector) scan() {
 			d.allowed(v.kind, reason)
 			continue
 		}
+		if d.spec.action() == DetectTerminate && p.pid != root {
+			d.report(v.kind, reason, false)
+			d.terminate(p, procs)
+			continue
+		}
 		d.detected(v.kind, reason, false)
 	}
 }
 
 // detected responds to one detection: reported once per kind and reason,
-// the launch killed when the action is kill.
+// the launch killed when the action is kill or terminate (which reaches here
+// only for a detection with no process of its own to stop).
 func (d *detector) detected(kind, reason string, always bool) {
 	d.mu.Lock()
-	key := kind + "\x00" + reason
-	first := !d.reported[key]
-	d.reported[key] = true
-	kill := d.spec.action() == DetectKill && !d.killed
+	a := d.spec.action()
+	kill := (a == DetectKill || a == DetectTerminate) && !d.killed
 	if kill {
 		d.killed = true
 	}
 	d.mu.Unlock()
-	if first || always {
-		if d.event != nil {
-			d.event("detection", map[string]any{"run": d.run, "kind": kind, "reason": reason, "action": d.spec.action()})
-		}
-	}
+	d.report(kind, reason, always)
 	if kill {
 		d.killAll()
+	}
+}
+
+// report audits a detection once per kind and reason (every time when
+// always).
+func (d *detector) report(kind, reason string, always bool) {
+	d.mu.Lock()
+	key := kind + "\x00" + reason
+	first := !d.reported[key]
+	d.reported[key] = true
+	d.mu.Unlock()
+	if (first || always) && d.event != nil {
+		d.event("detection", map[string]any{"run": d.run, "kind": kind, "reason": reason, "action": d.spec.action()})
+	}
+}
+
+// terminate kills p and its descendants among procs (the launch's), bound
+// to the start times this listing saw, never this process, its parent or
+// pid 1. The rest of the launch runs on.
+func (d *detector) terminate(p procInfo, procs []procInfo) {
+	byParent := map[int][]procInfo{}
+	for _, c := range procs {
+		byParent[c.ppid] = append(byParent[c.ppid], c)
+	}
+	seen := map[int]bool{}
+	for queue := []procInfo{p}; len(queue) > 0; queue = queue[1:] {
+		c := queue[0]
+		if seen[c.pid] {
+			continue
+		}
+		seen[c.pid] = true
+		queue = append(queue, byParent[c.pid]...)
+		if !safeToSignal(c.pid) {
+			continue
+		}
+		if c.start == 0 {
+			st, ok := procStart(c.pid)
+			if !ok {
+				continue
+			}
+			c.start = st
+		}
+		_ = d.signal(c.pid, c.start)
 	}
 }
 
