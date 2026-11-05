@@ -9,7 +9,7 @@ conductor validate [--config PATH] [--strict]  load & validate config, then exit
 conductor replay <event.json>              run a saved webhook through the pipeline, verbs stubbed
 conductor sweep [--now]                    one catch-up sweep (dry-run print / signal the daemon)
 conductor force <kind> <owner/repo>#<n>    force an action for a target now (via the daemon)
-conductor status                           live agents, in-flight workflows, stuck/attention
+conductor status                           live agents (paseo and the cli/acp runtimes), in-flight workflows, stuck/attention
 conductor report [--days N]                dispatches by kind/outcome + attention counts + usage per runtime/model (per usage.mode)
 conductor usage [--since 24h]              model usage per runtime/model: observed by conductor, and what usage.sources report
 conductor runs [--limit N]                 recorded executions, newest first (id, status, cost)

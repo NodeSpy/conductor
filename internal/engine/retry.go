@@ -48,6 +48,16 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 	if rec.Status == "running" {
 		return "", fmt.Errorf("run %s is still running", rec.ID)
 	}
+	// A run on the same target and event is in flight (a stale record's own
+	// resume included): retrying now would put a second agent on it, and
+	// overwrite its checkpoint. Retry once it has ended.
+	if rec.RunID != "" {
+		for _, p := range e.store.PendingRuns() {
+			if p.ID == rec.RunID {
+				return "", fmt.Errorf("run %s: a run for %s#%d (%s) is in flight — it resumed after a restart or was started since; retry once it ends (see `conductor runs`)", rec.ID, rec.Repo, rec.Number, rec.Kind)
+			}
+		}
+	}
 	var t core.Trigger
 	var act config.Action
 	if len(rec.Trigger) == 0 || json.Unmarshal(rec.Trigger, &t) != nil ||
@@ -70,9 +80,20 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 	if fromStep == "" {
 		fromStep = rec.FailedStep
 	}
+	if fromStep == "" && rec.Status == "interrupted" {
+		// The daemon died mid-run: continue where the record stops — the
+		// first step it does not show done — rather than replaying the top.
+		fromStep = firstUndone(rec, spec.Steps)
+	}
 	startIdx := 0
 	if fromStep != "" {
 		s, ok := rec.Step(fromStep)
+		if !ok && rec.Status == "interrupted" {
+			// A step the interrupted run never reached: nothing to replay.
+			if i := specStepIndex(spec.Steps, fromStep); i >= 0 {
+				s, ok = store.StepRecord{ID: fromStep, Index: i}, true
+			}
+		}
 		if !ok {
 			ids := make([]string, 0, len(rec.Steps))
 			for _, sr := range rec.Steps {
@@ -147,6 +168,35 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 	}()
 	from := orTop(fromStep)
 	return fmt.Sprintf("retrying run %s from %s (recorded inputs pinned)", rec.ID, from), nil
+}
+
+// specStepID is a top-level step's id as the flow runner records it.
+func specStepID(s config.Step, i int) string {
+	if s.ID != "" {
+		return s.ID
+	}
+	return fmt.Sprintf("step%d", i+1)
+}
+
+func specStepIndex(steps []config.Step, id string) int {
+	for i, s := range steps {
+		if specStepID(s, i) == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// firstUndone is the first step an interrupted record does not show done
+// ("" when every step is: the run ended, its record did not).
+func firstUndone(rec store.RunHistory, steps []config.Step) string {
+	for i, s := range steps {
+		id := specStepID(s, i)
+		if r, ok := rec.Step(id); !ok || (r.Status != "ok" && r.Status != "skipped") {
+			return id
+		}
+	}
+	return ""
 }
 
 func orTop(step string) string {

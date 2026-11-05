@@ -141,6 +141,42 @@ func (s *Store) ListHistory(limit int) []RunHistory {
 	return ListHistoryDir(s.historyDir(), limit)
 }
 
+// InterruptStaleHistory marks every record still "running" that started
+// before `before` (this process's start) as "interrupted": its process died
+// mid-run (a crash, a kill, a restart that could not record it), so nothing
+// will ever finish it. Left "running" it would read as in flight forever
+// and refuse `conductor runs retry`. Only a record whose signature verifies
+// is rewritten (re-signed); a tampered one is left as it is. The work itself
+// is not lost here: an in-flight run resumes from its own checkpoint under a
+// fresh record. Returns the ids marked.
+func (s *Store) InterruptStaleHistory(before time.Time) []string {
+	dir := s.historyDir()
+	if dir == "" {
+		return nil
+	}
+	var marked []string
+	for _, rec := range ListHistoryDir(dir, 0) {
+		if rec.Status != "running" || !rec.Started.Before(before) {
+			continue
+		}
+		v, err := ReadHistoryVerified(dir, rec.ID)
+		if err != nil {
+			continue
+		}
+		v.Status = "interrupted"
+		if v.Error == "" {
+			v.Error = "the daemon stopped while this run was in flight"
+		}
+		if v.Finished.IsZero() {
+			v.Finished = s.now()
+		}
+		if WriteHistory(dir, v) == nil {
+			marked = append(marked, v.ID)
+		}
+	}
+	return marked
+}
+
 // maybePruneHistory prunes at most every 10 minutes.
 func (s *Store) maybePruneHistory() {
 	historyMu.Lock()

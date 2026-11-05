@@ -59,7 +59,8 @@ conductor run <id>                # same detail (a configured trigger name alway
 List/detail read the history directory straight off disk — no daemon needed.
 Each record carries:
 
-- run status (`running` / `ok` / `failed`), start/finish, total spend (§14);
+- run status (`running` / `ok` / `failed` / `interrupted` / `stopped`),
+  start/finish, total spend (§14);
 - per top-level step: status (`ok` / `failed` / `skipped`), start + duration,
   the **rendered** verb options (or the agent's prompt source), the step's
   outputs in checkpoint form, error text, and agent-step token/$ usage;
@@ -99,6 +100,15 @@ execution resumes at the chosen step through the ordinary flow runner:
 checkpoints, budgets, policy, audit, and a fresh history record (backlinked
 via `retry_of`) all apply. Retrying a failed step in place is the default
 (`--from` omitted → the recorded failed step).
+
+**Interrupted runs.** A run whose daemon stopped under it (a restart, a
+reload, a crash) is recorded `interrupted` — at shutdown when the daemon
+could, else by the next daemon when it starts — so it never reads `running`
+forever. The work itself resumes on its own: the in-flight run continues
+from its checkpoint under a fresh record. `conductor runs retry` on an
+interrupted record continues at the first step it does not show done, and
+is refused while a run on the same target and event is still in flight (its
+own resume included) — retrying then would put a second agent on it.
 
 Notes:
 

@@ -1041,8 +1041,22 @@ func (r *Runner) execWithRetry(ctx context.Context, t core.Trigger, step config.
 	var out map[string]any
 	var raw string
 	var err error
+	conflictRetried := false
 	for attempt := 0; ; attempt++ {
 		out, raw, err = r.execStep(ctx, t, step, id, slot, data, shadow)
+		// A push that conflicted with the branch's moved head is dispatched
+		// once more on the new head, whatever retry: says — the work is not
+		// failed, it needs resolving (pushconflict.go).
+		var pce *pushConflictError
+		if err != nil && !conflictRetried && ctx.Err() == nil && errors.As(err, &pce) {
+			conflictRetried = true
+			r.Log("%s step %s: its push conflicts with the branch's new head — dispatching it again on that head (%s)", flowTag(t), id, pce.pc.kept)
+			r.audit(map[string]any{"event": "push_conflict", "repo": t.Target.Repo, "number": t.Target.Number, "kind": t.Kind,
+				"step": id, "resolve": "redispatch", "files": pce.pc.files, "kept_ref": pce.pc.kept})
+			ctx = withConflictNote(ctx, pce.pc.redispatchNote())
+			attempt--
+			continue
+		}
 		if err == nil || attempt >= max || ctx.Err() != nil || errors.Is(err, dispatch.ErrTargetClosed) || noStepRetry(err) {
 			break
 		}
@@ -1917,6 +1931,11 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		group, _ := data["group"].(map[string]any)
 		act.Prompt = dispatch.EventPrompt(t, group)
 	}
+	// A re-dispatch after a conflicting push: tell the agent where the
+	// first attempt's work is kept (pushconflict.go).
+	if note := conflictNote(ctx); note != "" {
+		act.Prompt += note
+	}
 	if step.Background {
 		// A background step hands off a live agent for you to drive and close
 		// yourself; it sits idle *because* it is waiting for you, so the
@@ -2027,6 +2046,10 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		DispatchID: r.dispatchID(ctx, id),
 		ScopeFacts: mfacts,
 	}
+	if conflictNote(ctx) != "" {
+		// Its own dispatch, apart from the attempt whose push conflicted.
+		req.DispatchID += ":rebase"
+	}
 	ref, err := r.Agents.Dispatch(ctx, req)
 	// Consumed on every outcome so a mark never outlives its dispatch.
 	doneSignalled := r.Agents.TakeDone != nil && r.Agents.TakeDone(req.DispatchID)
@@ -2117,8 +2140,21 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// passed, before the diff below reads what is still unpushed (and so
 	// before expect_push judges whether the work landed).
 	var unlanded error
+	var conflict *pushConflict
 	if r.PushWork != nil && !shadow && !step.Background && !inGate(ctx) && ref.Workdir != "" {
 		pushed, perr := r.PushWork(ctx, req.DispatchID)
+		if pc, ok := asPushConflict(perr); ok {
+			// The branch moved under the agent and its commits conflict
+			// with it (pushconflict.go): the live agent resolves when its
+			// runtime takes a follow-up turn; failing that, the step is
+			// dispatched again on the new head (execWithRetry).
+			if p2, e2, tried := r.resolveConflictInPlace(ctx, t, step, id, slot, ref, req, pc); tried {
+				pushed, perr = p2, e2
+			}
+			if still, ok := asPushConflict(perr); ok {
+				conflict = &still
+			}
+		}
 		switch {
 		case perr == nil:
 			outputs["push"] = pushed
@@ -2139,7 +2175,13 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// worktree never fails a step that already succeeded.
 	if !shadow && !step.Background && ref.Workdir != "" && !inGate(ctx) {
 		outputs["workdir"] = ref.Workdir
-		if diff, derr := gitdiff.Proposed(ctx, ref.Workdir, 0); derr == nil && diff != "" {
+		readDiff := gitdiff.Proposed
+		if push, _ := outputs["push"].(map[string]any); push["rebased"] == true {
+			// Pushed rebased onto the moved branch: the agent's own commits
+			// landed, under other ids no remote ref names.
+			readDiff = gitdiff.Uncommitted
+		}
+		if diff, derr := readDiff(ctx, ref.Workdir, 0); derr == nil && diff != "" {
 			if r.Secrets != nil {
 				diff = r.Secrets.Redact(diff)
 			}
@@ -2175,7 +2217,16 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if unlanded != nil {
 		diff, _ := outputs["diff"].(string)
 		summary, _ := outputs["text"].(string)
-		return outputs, ref.Output, &noProgressError{step: id, summary: summary, diff: diff, unlanded: unlanded}
+		np := &noProgressError{step: id, summary: summary, diff: diff, unlanded: unlanded}
+		if conflict != nil {
+			// Its commits are kept under a ref; the next attempt starts on
+			// the new head, so this agent and its workspace are done.
+			if !archive && ref.AgentID != "" && r.Agents.Archive != nil {
+				r.Agents.Archive(ref.AgentID)
+			}
+			return outputs, ref.Output, &pushConflictError{err: np, pc: *conflict}
+		}
+		return outputs, ref.Output, np
 	}
 	if step.ExpectPush && !shadow && !step.Background && !inGate(ctx) {
 		if diff, _ := outputs["diff"].(string); diff != "" {

@@ -406,3 +406,71 @@ func TestControllerRunnerBindsDispatchToSession(t *testing.T) {
 		t.Fatal("forgetting the session drops its dispatch binding")
 	}
 }
+
+// The daemon shutting down (or reloading) under a foreground turn ends the
+// wait without the turn finishing: Dispatch reports the interruption instead
+// of an empty reply — a step recorded done with no output was work lost —
+// and kills the turn so nothing keeps working on the target unsupervised.
+func TestControllerRunnerShutdownMidTurnIsNotAReply(t *testing.T) {
+	sess := newCancelSession("fix-1")
+	r := newControllerRunner(&cancelCtl{sess: sess}, &fakeProv{}, nil)
+	req := makeReq("new_comment", "address it")
+	req.Wait = true
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(ctx, req)
+		errc <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for !r.HasLiveAgent(context.Background(), req.Trigger.Key(), req.Trigger.Kind) {
+		if time.Now().After(deadline) {
+			t.Fatal("fixer never went live")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-errc:
+		if err == nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("Dispatch err = %v, want the interruption", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dispatch still waiting after shutdown")
+	}
+	select {
+	case <-sess.cancelled:
+	default:
+		t.Fatal("the interrupted turn was left running")
+	}
+}
+
+// A runtime's open sessions are listable (conductor status): runtime,
+// transport, target and kind, until the session is forgotten.
+func TestControllerRunnerListsLiveAgents(t *testing.T) {
+	sess := newCancelSession("fix-1")
+	r := newControllerRunner(&cancelCtl{sess: sess}, &fakeProv{}, nil)
+	req := makeReq("new_comment", "address it")
+	req.Wait = true
+	req.DispatchID = "rhist:step1"
+	done := make(chan struct{})
+	go func() { _, _ = r.Dispatch(context.Background(), req); close(done) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(r.LiveAgents()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("never live")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	a := r.LiveAgents()[0]
+	if a.ID != "fix-1" || a.Runtime != "cancel" || a.Transport != string(TransportCLI) || a.Target != req.Trigger.Key() ||
+		a.Kind != "new_comment" || a.Dispatch != "rhist:step1" || a.Since.IsZero() {
+		t.Fatalf("live agent: %+v", a)
+	}
+	_ = sess.Cancel(context.Background())
+	<-done
+	r.forget("fix-1")
+	if n := len(r.LiveAgents()); n != 0 {
+		t.Fatalf("%d live after forget", n)
+	}
+}

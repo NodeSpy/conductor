@@ -123,9 +123,11 @@ func TestEndOfStepPushReportsMidStepPush(t *testing.T) {
 		t.Fatal("the step end must consume its landed mark")
 	}
 
-	// A mid-step push landed, then the remote moved under the workspace: the
-	// step end is refused (never forced) and claims nothing pushed — flow
-	// then reports the commit left behind.
+	// A mid-step push landed, then the remote moved under the workspace:
+	// with sandbox.push.rebase off the step end is refused (never forced)
+	// and claims nothing pushed — flow then reports the commit left behind.
+	noRebase := false
+	p.cfg.Sandbox.Push.Rebase = &noRebase
 	git(ws, "commit", "-q", "--allow-empty", "-m", "fix three")
 	if _, err := p.push(ctx, "run1:address"); err != nil {
 		t.Fatal(err)
@@ -142,6 +144,46 @@ func TestEndOfStepPushReportsMidStepPush(t *testing.T) {
 	}
 	if p.takeLanded("run1:address") {
 		t.Fatal("a refused step end still consumes the mark")
+	}
+}
+
+// The default (sandbox.push.rebase on): the PR branch moved under the
+// agent and its commit replays cleanly — the step end lands it on top of
+// the new head, fast-forward, and the audit row says what it rebased onto.
+func TestEndOfStepPushRebasesOntoAMovedBranch(t *testing.T) {
+	var rows []map[string]any
+	p := testPusher(&rows)
+	ctx := context.Background()
+	ws, remote, git := prWorkspace(t, "run1:address", config.Step{})
+
+	other := filepath.Join(t.TempDir(), "other")
+	git(filepath.Dir(other), "clone", "-q", "-b", "pr-1", remote, other)
+	if err := os.WriteFile(filepath.Join(other, "theirs.txt"), []byte("theirs\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(other, "add", "theirs.txt")
+	git(other, "commit", "-q", "-m", "a human's push")
+	git(other, "push", "-q", "origin", "pr-1")
+	moved := git(other, "rev-parse", "HEAD")
+
+	if err := os.WriteFile(filepath.Join(ws, "fix.txt"), []byte("fix\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(ws, "add", "fix.txt")
+	git(ws, "commit", "-q", "-m", "the agent's fix")
+	out, err := p.pushAtStepEnd(ctx, "run1:address")
+	if err != nil || out["pushed"] != true || out["rebased"] != true || out["onto"] != moved {
+		t.Fatalf("a clean replay pushes rebased: %v %v", out, err)
+	}
+	tip := git(remote, "rev-parse", "pr-1")
+	if git(remote, "rev-parse", "pr-1^") != moved {
+		t.Fatal("the agent's commit must sit on the human's, never replace it")
+	}
+	if files := git(remote, "show", "--name-only", "--format=", tip); files != "fix.txt" {
+		t.Fatalf("the rebased commit carries the agent's change only: %q", files)
+	}
+	if last := rows[len(rows)-1]; last["outcome"] != "ok" || last["rebased_onto"] != moved {
+		t.Fatalf("audit row: %v", last)
 	}
 }
 

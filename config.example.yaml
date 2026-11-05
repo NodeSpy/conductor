@@ -1392,6 +1392,12 @@ sandbox:
     # email: you@example.com                  #   (default: git's user.email)
     # sign: false                             # push unsigned (default: refuse to push without a key)
     # at_step_end: false                      # only an explicit git.push pushes
+    # rebase: false                           # the PR branch moved while the agent worked (someone
+    #                                         # pushed to it): by default conductor replays the agent's
+    #                                         # commits onto the new head and pushes that, fast-forward
+    #                                         # (never forced, nothing on the remote rewritten); a replay
+    #                                         # that conflicts goes back to the agent to resolve. false:
+    #                                         # a moved branch is a refused push.
     # unlanded: warn                          # an agent's commits conductor did not push at the
     #                                         # step's end are always logged + audited (git_push,
     #                                         # outcome unlanded) and fail the step as no_progress
