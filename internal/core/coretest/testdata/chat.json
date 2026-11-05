@@ -1,0 +1,733 @@
+{
+ "connection": {
+  "api_base": {
+   "type": "string"
+  },
+  "app_token": {
+   "secret": true,
+   "type": "string"
+  },
+  "bot_token": {
+   "secret": true,
+   "type": "string"
+  },
+  "webhook_url": {
+   "secret": true,
+   "type": "string"
+  }
+ },
+ "desc": "synthetic test connector",
+ "events": [
+  {
+   "context": {
+    "slack.callback_id": {
+     "type": "string"
+    },
+    "slack.channel": {
+     "type": "string"
+    },
+    "slack.command": {
+     "type": "string"
+    },
+    "slack.files": {
+     "type": "list"
+    },
+    "slack.form": {
+     "type": "map"
+    },
+    "slack.is_bot": {
+     "type": "boolean"
+    },
+    "slack.reaction": {
+     "type": "string"
+    },
+    "slack.text": {
+     "type": "string"
+    },
+    "slack.thread_ts": {
+     "type": "string"
+    },
+    "slack.trigger_id": {
+     "type": "string"
+    },
+    "slack.ts": {
+     "type": "string"
+    },
+    "slack.user": {
+     "type": "string"
+    },
+    "slack.via": {
+     "type": "string"
+    },
+    "slack_bot_token": {
+     "type": "string"
+    }
+   },
+   "filters": {
+    "channel": {
+     "type": "string"
+    },
+    "users": {
+     "type": "list"
+    }
+   },
+   "name": "app_mention",
+   "options": {
+    "ack": {
+     "type": "map"
+    },
+    "any_user": {
+     "type": "boolean"
+    },
+    "form": {
+     "type": "map"
+    },
+    "on_done": {
+     "type": "map"
+    },
+    "on_fail": {
+     "type": "map"
+    }
+   },
+   "semantics": {
+    "author": {
+     "automated": "slack.is_bot",
+     "login": "slack.user"
+    },
+    "option_hooks": [
+     {
+      "args": {
+       "channel": "{{.slack.channel}}",
+       "thread_ts": "{{.slack.thread_ts}}",
+       "ts": "{{.slack.ts}}",
+       "user": "{{.slack.user}}"
+      },
+      "at": "start",
+      "option": "ack",
+      "verb": "feedback"
+     },
+     {
+      "args": {
+       "channel": "{{.slack.channel}}",
+       "thread_ts": "{{.slack.thread_ts}}",
+       "ts": "{{.slack.ts}}",
+       "user": "{{.slack.user}}"
+      },
+      "at": "done",
+      "option": "on_done",
+      "verb": "feedback"
+     },
+     {
+      "args": {
+       "channel": "{{.slack.channel}}",
+       "thread_ts": "{{.slack.thread_ts}}",
+       "ts": "{{.slack.ts}}",
+       "user": "{{.slack.user}}"
+      },
+      "at": "fail",
+      "option": "on_fail",
+      "verb": "feedback"
+     }
+    ],
+    "secret": [
+     "slack_bot_token"
+    ],
+    "target": {
+     "assigned": true,
+     "key": "slack:{{.slack.channel}}:{{.slack.ts}}",
+     "label": "message",
+     "scope": [
+      {
+       "dimension": "channel",
+       "fact": "slack.channel"
+      },
+      {
+       "dimension": "user",
+       "fact": "slack.user"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "context": {
+    "slack.callback_id": {
+     "type": "string"
+    },
+    "slack.channel": {
+     "type": "string"
+    },
+    "slack.command": {
+     "type": "string"
+    },
+    "slack.files": {
+     "type": "list"
+    },
+    "slack.form": {
+     "type": "map"
+    },
+    "slack.is_bot": {
+     "type": "boolean"
+    },
+    "slack.reaction": {
+     "type": "string"
+    },
+    "slack.text": {
+     "type": "string"
+    },
+    "slack.thread_ts": {
+     "type": "string"
+    },
+    "slack.trigger_id": {
+     "type": "string"
+    },
+    "slack.ts": {
+     "type": "string"
+    },
+    "slack.user": {
+     "type": "string"
+    },
+    "slack.via": {
+     "type": "string"
+    },
+    "slack_bot_token": {
+     "type": "string"
+    }
+   },
+   "filters": {
+    "callback_id": {
+     "type": "string"
+    },
+    "channel": {
+     "type": "string"
+    },
+    "users": {
+     "type": "list"
+    }
+   },
+   "name": "message_shortcut",
+   "options": {
+    "ack": {
+     "type": "map"
+    },
+    "any_user": {
+     "type": "boolean"
+    },
+    "form": {
+     "type": "map"
+    },
+    "on_done": {
+     "type": "map"
+    },
+    "on_fail": {
+     "type": "map"
+    }
+   },
+   "semantics": {
+    "author": {
+     "automated": "slack.is_bot",
+     "login": "slack.user"
+    },
+    "option_hooks": [
+     {
+      "args": {
+       "channel": "{{.slack.channel}}",
+       "thread_ts": "{{.slack.thread_ts}}",
+       "ts": "{{.slack.ts}}",
+       "user": "{{.slack.user}}"
+      },
+      "at": "start",
+      "option": "ack",
+      "verb": "feedback"
+     },
+     {
+      "args": {
+       "channel": "{{.slack.channel}}",
+       "thread_ts": "{{.slack.thread_ts}}",
+       "ts": "{{.slack.ts}}",
+       "user": "{{.slack.user}}"
+      },
+      "at": "done",
+      "option": "on_done",
+      "verb": "feedback"
+     },
+     {
+      "args": {
+       "channel": "{{.slack.channel}}",
+       "thread_ts": "{{.slack.thread_ts}}",
+       "ts": "{{.slack.ts}}",
+       "user": "{{.slack.user}}"
+      },
+      "at": "fail",
+      "option": "on_fail",
+      "verb": "feedback"
+     }
+    ],
+    "secret": [
+     "slack_bot_token"
+    ],
+    "target": {
+     "assigned": true,
+     "key": "slack:{{.slack.channel}}:{{.slack.ts}}",
+     "label": "message",
+     "scope": [
+      {
+       "dimension": "channel",
+       "fact": "slack.channel"
+      },
+      {
+       "dimension": "user",
+       "fact": "slack.user"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "context": {
+    "slack.callback_id": {
+     "type": "string"
+    },
+    "slack.channel": {
+     "type": "string"
+    },
+    "slack.command": {
+     "type": "string"
+    },
+    "slack.files": {
+     "type": "list"
+    },
+    "slack.form": {
+     "type": "map"
+    },
+    "slack.is_bot": {
+     "type": "boolean"
+    },
+    "slack.reaction": {
+     "type": "string"
+    },
+    "slack.text": {
+     "type": "string"
+    },
+    "slack.thread_ts": {
+     "type": "string"
+    },
+    "slack.trigger_id": {
+     "type": "string"
+    },
+    "slack.ts": {
+     "type": "string"
+    },
+    "slack.user": {
+     "type": "string"
+    },
+    "slack.via": {
+     "type": "string"
+    },
+    "slack_bot_token": {
+     "type": "string"
+    }
+   },
+   "filters": {
+    "channel": {
+     "type": "string"
+    },
+    "reaction": {
+     "type": "string"
+    },
+    "users": {
+     "type": "list"
+    }
+   },
+   "name": "reaction_added",
+   "options": {
+    "ack": {
+     "type": "map"
+    },
+    "on_done": {
+     "type": "map"
+    },
+    "on_fail": {
+     "type": "map"
+    }
+   },
+   "semantics": {
+    "author": {
+     "automated": "slack.is_bot",
+     "login": "slack.user"
+    },
+    "option_hooks": [
+     {
+      "args": {
+       "channel": "{{.slack.channel}}",
+       "thread_ts": "{{.slack.thread_ts}}",
+       "ts": "{{.slack.ts}}",
+       "user": "{{.slack.user}}"
+      },
+      "at": "start",
+      "option": "ack",
+      "verb": "feedback"
+     },
+     {
+      "args": {
+       "channel": "{{.slack.channel}}",
+       "thread_ts": "{{.slack.thread_ts}}",
+       "ts": "{{.slack.ts}}",
+       "user": "{{.slack.user}}"
+      },
+      "at": "done",
+      "option": "on_done",
+      "verb": "feedback"
+     },
+     {
+      "args": {
+       "channel": "{{.slack.channel}}",
+       "thread_ts": "{{.slack.thread_ts}}",
+       "ts": "{{.slack.ts}}",
+       "user": "{{.slack.user}}"
+      },
+      "at": "fail",
+      "option": "on_fail",
+      "verb": "feedback"
+     }
+    ],
+    "secret": [
+     "slack_bot_token"
+    ],
+    "target": {
+     "assigned": true,
+     "key": "slack:{{.slack.channel}}:{{.slack.ts}}",
+     "label": "message",
+     "scope": [
+      {
+       "dimension": "channel",
+       "fact": "slack.channel"
+      },
+      {
+       "dimension": "user",
+       "fact": "slack.user"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "context": {
+    "slack.callback_id": {
+     "type": "string"
+    },
+    "slack.channel": {
+     "type": "string"
+    },
+    "slack.command": {
+     "type": "string"
+    },
+    "slack.files": {
+     "type": "list"
+    },
+    "slack.form": {
+     "type": "map"
+    },
+    "slack.is_bot": {
+     "type": "boolean"
+    },
+    "slack.reaction": {
+     "type": "string"
+    },
+    "slack.text": {
+     "type": "string"
+    },
+    "slack.thread_ts": {
+     "type": "string"
+    },
+    "slack.trigger_id": {
+     "type": "string"
+    },
+    "slack.ts": {
+     "type": "string"
+    },
+    "slack.user": {
+     "type": "string"
+    },
+    "slack.via": {
+     "type": "string"
+    },
+    "slack_bot_token": {
+     "type": "string"
+    }
+   },
+   "name": "reply",
+   "semantics": {
+    "author": {
+     "automated": "slack.is_bot",
+     "login": "slack.user"
+    },
+    "conversation_reply": {
+     "author": "slack.user",
+     "id": "{{.slack.channel}}:{{.slack.thread_ts}}",
+     "text": "slack.text"
+    },
+    "secret": [
+     "slack_bot_token"
+    ],
+    "target": {
+     "assigned": true,
+     "key": "slack:{{.slack.channel}}:{{.slack.ts}}",
+     "label": "message",
+     "scope": [
+      {
+       "dimension": "channel",
+       "fact": "slack.channel"
+      },
+      {
+       "dimension": "user",
+       "fact": "slack.user"
+      }
+     ]
+    }
+   }
+  }
+ ],
+ "kind": "connector",
+ "protocol_version": 0,
+ "type": "slack",
+ "verbs": [
+  {
+   "name": "post",
+   "options": {
+    "channel": {
+     "scope": "channel",
+     "type": "string"
+    },
+    "ephemeral": {
+     "type": "boolean"
+    },
+    "text": {
+     "required": true,
+     "type": "string"
+    },
+    "thread_ts": {
+     "type": "string"
+    },
+    "user": {
+     "scope": "user",
+     "type": "string"
+    }
+   },
+   "outputs": {
+    "channel": {
+     "type": "string"
+    },
+    "ts": {
+     "type": "string"
+    }
+   },
+   "semantics": {
+    "conversation_post": true
+   }
+  },
+  {
+   "name": "react",
+   "options": {
+    "channel": {
+     "required": true,
+     "scope": "channel",
+     "type": "string"
+    },
+    "emoji": {
+     "required": true,
+     "type": "string"
+    },
+    "ts": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "outputs": {
+    "ok": {
+     "type": "boolean"
+    }
+   }
+  },
+  {
+   "name": "feedback",
+   "options": {
+    "channel": {
+     "scope": "channel",
+     "type": "string"
+    },
+    "ephemeral": {
+     "type": "boolean"
+    },
+    "in_thread": {
+     "type": "boolean"
+    },
+    "react": {
+     "type": "string"
+    },
+    "say": {
+     "type": "string"
+    },
+    "thread_ts": {
+     "type": "string"
+    },
+    "ts": {
+     "type": "string"
+    },
+    "user": {
+     "scope": "user",
+     "type": "string"
+    }
+   },
+   "outputs": {
+    "ok": {
+     "type": "boolean"
+    }
+   },
+   "semantics": {
+    "host_only": true
+   }
+  },
+  {
+   "ask": true,
+   "name": "ask",
+   "options": {
+    "approvers": {
+     "type": "list"
+    },
+    "channel": {
+     "scope": "channel",
+     "type": "string"
+    },
+    "draft": {
+     "type": "string"
+    },
+    "prompt": {
+     "required": true,
+     "type": "string"
+    },
+    "timeout": {
+     "type": "string"
+    },
+    "title": {
+     "type": "string"
+    },
+    "to": {
+     "enum": [
+      "dm",
+      "thread"
+     ],
+     "required": true,
+     "type": "string"
+    },
+    "user": {
+     "scope": "user",
+     "type": "string"
+    }
+   },
+   "outputs": {
+    "channel": {
+     "type": "string"
+    },
+    "conversation_id": {
+     "type": "string"
+    },
+    "ref": {
+     "type": "string"
+    },
+    "ts": {
+     "type": "string"
+    }
+   },
+   "semantics": {
+    "opens_conversation": {
+     "approvers": "approvers",
+     "id": "conversation_id"
+    }
+   }
+  },
+  {
+   "name": "thread",
+   "options": {
+    "channel": {
+     "required": true,
+     "scope": "channel",
+     "type": "string"
+    },
+    "limit": {
+     "type": "integer"
+    },
+    "ts": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "outputs": {
+    "count": {
+     "type": "integer"
+    },
+    "messages": {
+     "type": "list"
+    },
+    "permalink": {
+     "type": "string"
+    },
+    "text": {
+     "type": "string"
+    },
+    "thread_ts": {
+     "type": "string"
+    },
+    "truncated": {
+     "type": "boolean"
+    }
+   }
+  },
+  {
+   "name": "download",
+   "options": {
+    "channel": {
+     "required": true,
+     "scope": "channel",
+     "type": "string"
+    },
+    "max_file_bytes": {
+     "type": "integer"
+    },
+    "max_files": {
+     "type": "integer"
+    },
+    "max_total_bytes": {
+     "type": "integer"
+    },
+    "thread": {
+     "type": "boolean"
+    },
+    "ts": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "outputs": {
+    "count": {
+     "type": "integer"
+    },
+    "dir": {
+     "type": "string"
+    },
+    "files": {
+     "type": "list"
+    },
+    "images": {
+     "type": "list"
+    },
+    "paths": {
+     "type": "list"
+    },
+    "skipped": {
+     "type": "list"
+    }
+   }
+  }
+ ]
+}

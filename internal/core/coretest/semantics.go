@@ -1,6 +1,6 @@
 // Package coretest is test support for packages that build triggers by kind
-// name or configs naming a forge connector: it supplies the declarations a
-// real forge plugin sends. Only tests import it.
+// name or configs naming a forge or chat connector: it supplies two small
+// synthetic connector declarations. Only tests import it.
 package coretest
 
 import (
@@ -13,17 +13,18 @@ import (
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
-// forgeDecl and chatDecl are snapshots of two connector plugins' describe:
-// a forge (the official github plugin's, type "github") and a chat service
-// (the official slack plugin's, type "slack"). Conductor's tests drive the
-// engine, flow and config layers with the declarations production plugins
-// really send; nothing here is consulted at runtime, where every trigger
-// carries its own connector's declaration.
+// forgeDecl and chatDecl are synthetic declarations of a forge and a chat
+// connector, owned by these tests: only the events, verbs, fields and
+// semantics conductor's own tests exercise. They are not copies of any real
+// plugin's and never track one — a plugin adding or changing a verb needs no
+// change here. (Their type names, "github" and "slack", are the ones the
+// tests' configs use.) Nothing here is consulted at runtime, where every
+// trigger carries its own connector's declaration.
 //
-//go:embed testdata/forge-decl.json
+//go:embed testdata/forge.json
 var forgeDecl []byte
 
-//go:embed testdata/chat-decl.json
+//go:embed testdata/chat.json
 var chatDecl []byte
 
 var (

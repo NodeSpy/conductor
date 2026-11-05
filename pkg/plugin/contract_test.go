@@ -230,8 +230,8 @@ func TestValidateSemanticsListenerFieldsMustNameDeclaredConnectionFields(t *test
 		t.Fatalf("a listener naming only declared connection fields reported %q", p)
 	}
 
-	// The dotted/nested case (coretest's forge-decl.json, the github
-	// plugin's real shape): only the FIRST segment is checkable — a nested
+	// The dotted/nested case (a connection block with nested fields, as
+	// coretest's forge declaration has): only the FIRST segment is checkable — a nested
 	// object field (Type "map") is opaque beyond its own name.
 	nested := Decl{
 		Connection: Schema{"webhook": {Type: "map"}},
