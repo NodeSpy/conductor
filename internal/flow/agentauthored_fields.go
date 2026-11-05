@@ -59,6 +59,10 @@ func forbiddenAgentAuthoredField(s *config.Step) (field, why string) {
 		// workspace.from: picks the artifact the agent starts in — like
 		// checkout_pr, which code an agent lands in is the operator's call.
 		return "workspace.from:", "which code an agent starts in is the operator's to configure"
+	case len(s.Workspace.Inputs) > 0:
+		// workspace.inputs: copies run artifacts onto this machine for the
+		// step — which artifacts a step gets is the operator's call too.
+		return "workspace.inputs:", "which artifacts a step is given is the operator's to configure"
 	case s.Skill != nil:
 		// The one that motivated this file. `skill:` is a CAPABILITY GRANT:
 		// it mints a broker claim/session token naming the verbs the agent
@@ -109,4 +113,5 @@ func sanitizeAgentAuthoredStep(s *config.Step) {
 	s.Detach = false
 	s.CheckoutPR = nil
 	s.Workspace.From = ""
+	s.Workspace.Inputs = nil
 }

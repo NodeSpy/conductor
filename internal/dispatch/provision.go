@@ -30,6 +30,9 @@ func (d *Dispatcher) ProvisionWorktree(ctx context.Context, req Request) (id, cw
 	if req.WorkspaceArchive != "" {
 		return "", "", errWorkspaceFromRemote
 	}
+	if len(req.Inputs) > 0 {
+		return "", "", errWorkspaceInputsRemote
+	}
 	if wd, err := WorkDir(req); err != nil {
 		return "", "", err
 	} else if wd != "" {
@@ -62,6 +65,10 @@ func (d *Dispatcher) ProvisionWorktree(ctx context.Context, req Request) (id, cw
 // local conductor-launched runtime (cli, acp, …) can start in it — not paseo,
 // and not a launch on another host.
 var errWorkspaceFromRemote = Unrecoverable(fmt.Errorf("workspace.from: an artifact workspace is unpacked on this machine, so it needs a local conductor-launched runtime (cli, acp, …) — not paseo, and not a step on another host"))
+
+// errWorkspaceInputsRemote refuses `workspace.inputs` on the same paths, for
+// the same reason: the copies are made on this machine.
+var errWorkspaceInputsRemote = Unrecoverable(fmt.Errorf("workspace.inputs: inputs are copied on this machine, so the step needs a local conductor-launched runtime (cli, acp, …) — not paseo, and not a step on another host"))
 
 // RemoveWorktree releases a worktree returned by ProvisionWorktree. For the
 // paseo path it is deliberately a NO-OP: a paseo workspace's lifetime is owned

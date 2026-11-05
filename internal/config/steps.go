@@ -131,6 +131,10 @@ func (c *Config) validateSteps() error {
 			fail(err)
 			return
 		}
+		if err := validateWorkspaceInputs(where, *s); err != nil {
+			fail(err)
+			return
+		}
 		if err := validateWorkspacePin(where, *s); err != nil {
 			fail(err)
 			return
@@ -226,6 +230,29 @@ func validateWorkspaceFrom(where string, s Step) error {
 	if other != "" {
 		return fmt.Errorf("config: %s: workspace.from cannot be combined with %s — "+
 			"the agent starts in its own copy of the artifact instead of a checkout; drop one of them", where, other)
+	}
+	return nil
+}
+
+// validateWorkspaceInputs keeps `workspace.inputs` to the steps conductor
+// can hand a local copy for the length of the step: an agent or code step
+// that runs on this machine and finishes with the step.
+func validateWorkspaceInputs(where string, s Step) error {
+	if len(s.Workspace.Inputs) == 0 {
+		return nil
+	}
+	if f := s.Form(); f != "agent" && f != "code" {
+		return fmt.Errorf("config: %s: workspace.inputs is for agent and code steps, not a %s step", where, f)
+	}
+	var why string
+	switch {
+	case s.Background:
+		why = "background: the step ends while the agent is still working, and its inputs go with the step"
+	case s.Host != "" || s.SSH != nil:
+		why = "a remote host: inputs are copied on this machine"
+	}
+	if why != "" {
+		return fmt.Errorf("config: %s: workspace.inputs cannot be combined with %s", where, why)
 	}
 	return nil
 }

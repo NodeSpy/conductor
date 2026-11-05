@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
@@ -58,5 +59,25 @@ func TestPaseoRefusesAnArtifactWorkspace(t *testing.T) {
 	}
 	if _, _, err := d.ProvisionWorktree(context.Background(), req); err == nil || !IsUnrecoverable(err) {
 		t.Fatalf("paseo ProvisionWorktree = %v, want an Unrecoverable refusal", err)
+	}
+}
+
+// workspace.inputs are copied on this machine too: the paseo path refuses a
+// dispatch that carries them rather than launching without them.
+func TestPaseoRefusesWorkspaceInputs(t *testing.T) {
+	d := &Dispatcher{CheckoutDir: func(context.Context, string) (string, error) {
+		t.Fatal("resolved a checkout for a dispatch with inputs")
+		return "", nil
+	}}
+	req := Request{Trigger: core.Trigger{Target: core.Target{Repo: "o/r", PR: 1}, TargetTrusted: true},
+		Action: config.Action{Type: "agent", Checkout: "checkout-pr"},
+		Inputs: []Input{{Name: "build", Path: "/state/step-inputs/step-1/build", Kind: "dir"}}, InputsDir: "/state/step-inputs/step-1"}
+	for name, call := range map[string]func() error{
+		"Dispatch":          func() error { _, err := d.Dispatch(context.Background(), req); return err },
+		"ProvisionWorktree": func() error { _, _, err := d.ProvisionWorktree(context.Background(), req); return err },
+	} {
+		if err := call(); err == nil || !IsUnrecoverable(err) || !strings.Contains(err.Error(), "workspace.inputs") {
+			t.Errorf("paseo %s = %v, want an Unrecoverable workspace.inputs refusal", name, err)
+		}
 	}
 }

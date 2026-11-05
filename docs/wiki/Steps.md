@@ -312,7 +312,7 @@ to execute belongs here.
 | `images` | A templated list of local files attached to the launch (`paseo run --image`, one per item). An item that is a sole reference to a list — `"{{.dl.images}}"` from `slack.download` — expands to every element. A runtime that can't take images fails the step rather than dropping them. Paseo runtimes only. |
 | `detach` | `true` launches the agent as **your** workspace and forgets it: a fresh branch-off worktree of `repo:` (or the trigger's target; never an existing workspace on that branch), `paseo run -d`, not recorded in conductor's ownership ledger, so conductor never archives, reaps, or messages it. No skill creds, no `CONDUCTOR_*`/token/git-identity env, no appended guidance (the prompt runs exactly as templated), no hold or watch. Outputs `agent_id`, `workspace_id`, `branch`, `path`. Refused together with `background`, `handoff`, `output_schema`, `watch`, `idle_timeout`, `archive_when_done`, `session`, `skill`, `team`, `gate`, `isolation` (other than the sandbox opt-out `{mode: none}`), `env`, `workdir`, `checkout`, `workspace`, `memory`, `guidance`; refused on agent-authored steps; paseo runtimes only. See [[Slack-Handover]]. With the agent sandbox on it launches sandboxed (its title ends `[sandboxed]`): the seeding content can carry other people's messages. Your config's `isolation: { mode: none }` launches it unsandboxed, as you ([[Isolation#hand-offs-and-opting-a-workflow-out]]). |
 | `branch` | A `detach:` step's new branch (templated, then checked as a plain branch name). Unset: `handover/<slug of the agent label or trigger title>-<random>`. |
-| `workspace` | `local` or `worktree`: the existing checkout, or a fresh git worktree. The object form also takes `pin:` (reuse one named workspace) or `from:` (start from an artifact instead of a checkout); see below. |
+| `workspace` | `local` or `worktree`: the existing checkout, or a fresh git worktree. The object form also takes `pin:` (reuse one named workspace), `from:` (start from an artifact instead of a checkout) and `inputs:` (extra artifacts beside the workspace); see below. |
 | `expect_push` | Mark a fixer step that must LAND a change on the target. A clean run that leaves work unlanded (a non-empty proposed diff never pushed) becomes a `no_progress` failure instead of a silent success — see [[Workflows]] hooks. Leave off for a review/judge step. Under the agent sandbox it is also what makes a step with an `output_schema` a fixer: conductor pushes its work (an output schema alone reads as a review, and a review's commits are never pushed — see [[Isolation]]). |
 | `wait_timeout` | How long a foreground dispatch waits before giving up. |
 | `archive_when_done` | Whether the agent (and its conductor-created workspace) is archived the moment its step finishes. `true`: always. `false`: never; the agent stays live until you close it or the daemon restarts. **Unset (the default):** a foreground workflow agent step that finished cleanly releases its agent and worktree at the step boundary, unless a later step or hook of the run reads its `workdir` or `agent_id` (`git -C {{.fix.workdir}} push` after an approval), in which case it stays live as before. Not released by default: a failed step, a step with `session:`, `watch:` or `idle_timeout:`, and the agents a `team:`, `decide:` or gate runs internally. Forced off for a `background:` hand-off step. |
@@ -368,6 +368,31 @@ it lives on the **runtime** ([[Cost-Accounting]]).
   `workdir`, `pin` or `detach`. It is refused on agent-authored steps, and
   the step needs a local conductor-launched runtime (cli, acp, …): not
   paseo, and not a `host:`.
+- `workspace: { inputs: { build: "{{.build.archive}}", report: "{{.scan.report}}" } }`
+  gives the step **extra artifacts** beside its workspace, like a build's
+  secondary sources. Each is a blob the run holds, under a name of the
+  step's choosing (a lower-case identifier: `a-z`, `0-9`, `_`, starting with
+  a letter, not `workspace`). `inputs:` works with `from:` (that one is the
+  working directory) or without it (a normal workspace plus inputs).
+
+  For each step (each parallel agent too) conductor makes a fresh directory
+  under `<state>/step-inputs/` and, in it, a copy of every input under its
+  name: a tar archive is unpacked to `<dir>/<name>/` with the same safety
+  rules as `from:`, any other blob is copied as its file to
+  `<dir>/<name>/<file name>`. The copies are outside the workspace (never
+  in the repo tree), are the step's own to read or change, are never
+  attached to anything or pushed, and are removed when the step ends; a
+  boot sweep clears what a crash left. An agent is told each input's name
+  and path in its prompt, and its sandbox shows that directory read-write.
+  A code step gets `CONDUCTOR_INPUT_<NAME>` (the path) in its environment
+  and is bound the directory when isolated. Both can template
+  `{{.workspace_inputs.<name>.path}}` (also `.kind` — `dir` or `file` —
+  `.name` and `.media_type`); in a code step's ctx that is
+  `ctx.workspace_inputs`. (Not `.inputs`: that is the workflow's own
+  inputs.) Inputs are for agent and code steps that run here and end with
+  the step: `conductor validate` refuses them on other step kinds, with
+  `background:` and with a `host:`; they are refused on agent-authored steps
+  and on the paseo runtime.
 - `archive_when_done: true` steps are still protected from premature cleanup:
   reclaim skips one paused on a permission prompt, and an agent can hold
   itself alive with a `.paseo-hold` marker in its worktree.

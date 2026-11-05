@@ -109,6 +109,9 @@ type Spec struct {
 	// a warning (best-effort); when false (an explicit isolation:), the same
 	// failure fails the step closed.
 	IsolationDefaulted bool
+	// InputsDir holds the step's `workspace.inputs` copies (their paths are
+	// in Env and ctx): bound read-write into an isolated step's jail.
+	InputsDir string
 }
 
 // DataGuard vets one binding write: kind is kv|sql|memory, op the operation,
@@ -192,6 +195,15 @@ func (e *Executor) sshClient() *hosts.Client {
 // (Host != nil) goes over SSH through the cli or host-interpreter path; a
 // local spec dispatches on Run to `cli` or the Go toolchain, falling through
 // to the local host-interpreter path for anything else.
+// inputBinds bind the step's inputs directory, if any, read-write into an
+// isolated step's jail.
+func (s Spec) inputBinds() []sandbox.BindMount {
+	if s.InputsDir == "" {
+		return nil
+	}
+	return []sandbox.BindMount{{Path: s.InputsDir}}
+}
+
 func (e *Executor) Exec(ctx context.Context, spec Spec, data map[string]any) (map[string]any, error) {
 	// A plugin engine is checked BEFORE the host/remote split: it runs in a
 	// subprocess of THIS daemon holding a JSON-RPC transport back to it, so

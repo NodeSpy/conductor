@@ -69,6 +69,7 @@ func (e *Executor) execGoToolchain(ctx context.Context, spec Spec, data map[stri
 		// a private, conductor-owned cache instead (shared across confined
 		// go steps for the cache's benefit; never the operator's own).
 		deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: tmpDir, RO: true})
+		deps.ExtraBinds = append(deps.ExtraBinds, spec.inputBinds()...)
 		buildCache, modCache, cacheErr := e.goCacheDirs()
 		var werr error
 		var wrapped, wrappedEnv []string
