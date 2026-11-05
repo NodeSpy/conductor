@@ -153,6 +153,7 @@ func (e *Executor) execCLILocal(ctx context.Context, spec Spec, data map[string]
 			deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: filepath.Dir(codePath), RO: true})
 		}
 		deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: ctxSrv.dir})
+		deps.ExtraBinds = append(deps.ExtraBinds, spec.inputBinds()...)
 		wrapped, wrappedEnv, c, werr := sandbox.WrapLocalCommand(sandbox.FromConfig(spec.Isolation), fullArgv, spec.WorkDir, env, deps)
 		switch {
 		case werr == nil:

@@ -72,6 +72,7 @@ func (e *Executor) execHostLocal(ctx context.Context, spec Spec, data map[string
 		deps := e.Sandbox
 		deps.Confine = true
 		deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: filepath.Dir(codePath), RO: true})
+		deps.ExtraBinds = append(deps.ExtraBinds, spec.inputBinds()...)
 		wrapped, wrappedEnv, c, werr := sandbox.WrapLocalCommand(sandbox.FromConfig(spec.Isolation), argv, spec.WorkDir, env, deps)
 		switch {
 		case werr == nil:

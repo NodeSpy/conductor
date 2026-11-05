@@ -91,6 +91,12 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 	if n, err := blobs.SweepOrphans(24 * time.Hour); err == nil && n > 0 {
 		logf("blob: swept %d orphaned artifact(s)", n)
 	}
+	// Steps' workspace.inputs copies live beside it, one directory per step,
+	// each removed when its step ends; the sweep clears a crash's leftovers.
+	inputsDir := filepath.Join(filepath.Dir(blobStorePath(cfg)), "step-inputs")
+	if n := flow.SweepInputs(inputsDir, 24*time.Hour); n > 0 {
+		logf("workspace.inputs: swept %d leftover step input dir(s)", n)
+	}
 
 	// External connector plugins (#54): verify, spawn, describe, and register
 	// their types into the SAME registry BEFORE Build resolves connector types.
@@ -197,7 +203,7 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		Cfg: cfg, Conns: reg, Secrets: sec, SecretVals: vals,
 		VaultVals: vaults.PreloadListable(context.Background()),
 		Store:     flowStore, Notif: flowNotif, Log: logf, DryRun: dryRun,
-		Blobs: blobs, Events: events,
+		Blobs: blobs, InputsDir: inputsDir, Events: events,
 		Code: &code.Executor{Engines: engines, Sandbox: codeSandboxDeps()},
 	})
 	// Promote this stack's auth registry to the live one (finding 4) only

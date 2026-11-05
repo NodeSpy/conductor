@@ -82,6 +82,34 @@ agent's own: it runs under the normal sandbox, is removed with the agent,
 and is never pushed. Only a blob the run itself holds can be named, and the
 step needs a local conductor-launched runtime (cli, acp, …).
 
+## Giving a step extra artifacts
+
+`workspace: { inputs: { … } }` hands a step more artifacts beside its
+workspace, each by name (see [[Steps]]):
+
+```yaml
+steps:
+  - { id: snap,  uses: github.pr_snapshot, options: { repo: "{{.repo}}", pr: "{{.number}}" } }
+  - { id: build, uses: ci.artifact,        options: { run: "{{.run_id}}" } }   # a tar archive
+  - { id: scan,  uses: scanner.report,     options: { ref: "{{.sha}}" } }      # a single file
+  - id: triage
+    type: agent
+    prompt: "The build is in your `build` input, the scan report in `report`. …"
+    workspace:
+      from: "{{.snap.archive}}"        # the working directory
+      inputs:                          # named extra artifacts
+        build: "{{.build.archive}}"
+        report: "{{.scan.report}}"
+```
+
+Each step gets fresh copies of its own in a directory outside its
+workspace: an archive (a tar media type, a `.tar` name, or tar content when
+the blob carries no media type) is unpacked with the same safety rules as
+`from:`, anything else is copied as its file. The copies are never pushed
+and are removed when the step ends. An agent is told where each one is; a
+code step reads `CONDUCTOR_INPUT_<NAME>` or `ctx.workspace_inputs.<name>.path`.
+Only blobs the run holds can be named.
+
 ## Verbs with declared binary IO
 
 A connector verb can declare binary inputs/outputs in its schema

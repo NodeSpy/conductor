@@ -893,6 +893,15 @@ x-templates:
                             #   workspace that is archived when it finishes. A pin
                             #   cannot be combined with checkout: checkout-pr or
                             #   branch-off (each of those wants its own worktree).
+                            #   The object form also starts a step from an artifact
+                            #   and/or hands it extra ones (blobs the run holds):
+                            #     workspace:
+                            #       from: "{{.snapshot.archive}}"   # the working dir
+                            #       inputs: { build: "{{.build.archive}}" }
+                            #   Each input is the step's own fresh copy in a dir
+                            #   beside the workspace, removed when the step ends;
+                            #   the agent is told its path (code steps get
+                            #   CONDUCTOR_INPUT_<NAME>). See docs/wiki/Steps.md.
     wait_timeout: 25m
     archive_when_done: true # true: archived (and its worktree freed) when the step ends.
     #                       #   Unset: the same once it finishes cleanly, unless a later

@@ -222,6 +222,9 @@ type Runner struct {
 	// binary IO stages through it and a run's blobs are GC'd with the run.
 	// nil = no binary handling (binary-declaring verbs then error plainly).
 	Blobs *blob.Store
+	// InputsDir is where steps' `workspace.inputs` copies are made, one
+	// directory per step, removed when the step ends. "" refuses inputs.
+	InputsDir string
 	// Events is the live-observability hub (#36 §17): recorded runs publish
 	// run/step/gate events `conductor watch` streams. nil = no events.
 	Events *EventHub
@@ -1576,9 +1579,27 @@ func (r *Runner) execCode(ctx context.Context, t core.Trigger, step config.Step,
 		r.Log("%s [dry-run] would run code step (%s)", flowTag(t), engine)
 		return map[string]any{"stubbed": true}, "", nil
 	}
+	// The step's extra artifacts: ctx.workspace_inputs and
+	// CONDUCTOR_INPUT_<NAME>, removed when the step ends.
+	inputs, err := r.workspaceInputs(ctx, step, data)
+	if err != nil {
+		return nil, "", err
+	}
+	defer inputs.remove()
+	if inputs != nil {
+		data = inputs.withScope(data)
+	}
 	env, err := renderStringMap(step.Env, data)
 	if err != nil {
 		return nil, "", err
+	}
+	if inputs != nil {
+		if env == nil {
+			env = map[string]string{}
+		}
+		for k, v := range inputs.env() {
+			env[k] = v
+		}
 	}
 	args, err := renderStrings(step.Args, data)
 	if err != nil {
@@ -1614,6 +1635,9 @@ func (r *Runner) execCode(ctx context.Context, t core.Trigger, step config.Step,
 		Command: command, Code: step.Code, Args: args, Env: env, WorkDir: workdir,
 		DataGuard: r.planDataGuard(ctx, t), Redact: r.secretRedactor(), Isolation: step.Isolation,
 		IsolationDefaulted: step.IsolationDefaulted}
+	if inputs != nil {
+		spec.InputsDir = inputs.dir
+	}
 	if target, terr := r.hostTarget(step); terr != nil {
 		return nil, "", terr
 	} else if target != nil {
@@ -1925,6 +1949,18 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if err != nil {
 		return nil, "", err
 	}
+	// The step's extra artifacts, copied fresh for it beside its workspace
+	// and gone when it ends (a dry run copies nothing).
+	var inputs *stepInputs
+	if !shadow {
+		if inputs, err = r.workspaceInputs(ctx, step, data); err != nil {
+			return nil, "", err
+		}
+		defer inputs.remove()
+	}
+	if inputs != nil {
+		data = inputs.withScope(data)
+	}
 	// A step's own `checkout:` always wins; absent one, fall back to the
 	// TRIGGER's action checkout. This is what makes a source's
 	// ForceNoCheckout (every synthetic-target integration forces its
@@ -1966,6 +2002,9 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if act.Prompt == "" {
 		group, _ := data["group"].(map[string]any)
 		act.Prompt = dispatch.EventPrompt(t, group)
+	}
+	if inputs != nil {
+		act.Prompt += inputs.promptNote()
 	}
 	if step.Background {
 		// A background step hands off a live agent for you to drive and close
@@ -2077,6 +2116,9 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		DispatchID:       r.dispatchID(ctx, id),
 		ScopeFacts:       mfacts,
 		WorkspaceArchive: fromArchive,
+	}
+	if inputs != nil {
+		req.Inputs, req.InputsDir = inputs.list, inputs.dir
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
 	// Consumed on every outcome so a mark never outlives its dispatch.

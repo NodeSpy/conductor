@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -26,7 +27,7 @@ func TestWorkspaceStringFormUnchanged(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", mode, err)
 		}
-		if got != (Workspace{Isolation: mode}) {
+		if !reflect.DeepEqual(got, Workspace{Isolation: mode}) {
 			t.Fatalf("%s decoded to %+v", mode, got)
 		}
 		if err := got.Validate("step"); err != nil {
@@ -67,7 +68,7 @@ func TestWorkspaceObjectForm(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.src, err)
 		}
-		if got != c.want {
+		if !reflect.DeepEqual(got, c.want) {
 			t.Fatalf("%s decoded to %+v, want %+v", c.src, got, c.want)
 		}
 	}
@@ -122,7 +123,7 @@ func TestWorkspaceMarshalRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: re-decode %q: %v", src, b, err)
 		}
-		if back != w {
+		if !reflect.DeepEqual(back, w) {
 			t.Fatalf("%s: round-trip %+v -> %q -> %+v", src, w, b, back)
 		}
 	}
@@ -169,13 +170,13 @@ func TestWorkspaceMergePolicy(t *testing.T) {
 
 	unset := Step{}
 	MergeStepInto(&unset, base)
-	if unset.Workspace != (Workspace{Isolation: "worktree"}) {
+	if !reflect.DeepEqual(unset.Workspace, Workspace{Isolation: "worktree"}) {
 		t.Fatalf("an unset workspace should inherit, got %+v", unset.Workspace)
 	}
 
 	own := Step{Workspace: Workspace{Isolation: "local", Pin: "triage"}}
 	MergeStepInto(&own, base)
-	if own.Workspace != (Workspace{Isolation: "local", Pin: "triage"}) {
+	if !reflect.DeepEqual(own.Workspace, Workspace{Isolation: "local", Pin: "triage"}) {
 		t.Fatalf("a step's own workspace must win whole, got %+v", own.Workspace)
 	}
 }
@@ -185,7 +186,7 @@ func TestWorkspaceMergePolicy(t *testing.T) {
 // refused beside anything else that says where the agent works.
 func TestWorkspaceFrom(t *testing.T) {
 	got, err := decodeWorkspace(t, `{ from: "{{.snap.blob}}", isolation: worktree }`)
-	if err != nil || got != (Workspace{From: "{{.snap.blob}}", Isolation: "worktree"}) {
+	if err != nil || !reflect.DeepEqual(got, Workspace{From: "{{.snap.blob}}", Isolation: "worktree"}) {
 		t.Fatalf("decode: %+v %v", got, err)
 	}
 	if err := got.Validate("s"); err != nil {
@@ -207,7 +208,7 @@ func TestWorkspaceFrom(t *testing.T) {
 		t.Fatal(err)
 	}
 	back, err := decodeWorkspace(t, strings.TrimPrefix(strings.TrimSpace(string(b)), "w:"))
-	if err != nil || back != got {
+	if err != nil || !reflect.DeepEqual(back, got) {
 		t.Fatalf("round trip: %q -> %+v %v", b, back, err)
 	}
 
@@ -228,6 +229,80 @@ func TestWorkspaceFrom(t *testing.T) {
 		}
 		if err := validateWorkspaceFrom("s", s); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
 			t.Errorf("from with %s: %v", name, err)
+		}
+	}
+}
+
+// workspace.inputs names extra artifacts: an ordered map of identifier to
+// blob reference that round-trips, with bad names, duplicates, the
+// workspace's own name and non-blob references refused, and only on an
+// agent or code step that runs here and ends with the step.
+func TestWorkspaceInputs(t *testing.T) {
+	got, err := decodeWorkspace(t, `{ from: "{{.snap.archive}}", inputs: { build: "{{.build.archive}}", report: "{{.scan.report}}" } }`)
+	want := Workspace{From: "{{.snap.archive}}", Inputs: []WorkspaceInput{{"build", "{{.build.archive}}"}, {"report", "{{.scan.report}}"}}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("decode: %+v %v", got, err)
+	}
+	if err := got.Validate("s"); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	b, err := yaml.Marshal(struct {
+		W Workspace `yaml:"w"`
+	}{got})
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := decodeWorkspace(t, strings.TrimPrefix(strings.TrimSpace(string(b)), "w:"))
+	if err != nil || !reflect.DeepEqual(back, got) {
+		t.Fatalf("round trip: %q -> %+v %v", b, back, err)
+	}
+	if only, err := decodeWorkspace(t, `{ inputs: { notes: "sha256:`+strings.Repeat("b", 64)+`" } }`); err != nil || only.From != "" || len(only.Inputs) != 1 || only.Validate("s") != nil {
+		t.Fatalf("inputs without from: %+v %v", only, err)
+	}
+
+	for src, wantIn := range map[string]string{
+		`{ inputs: [a, b] }`:          "map of name",
+		`{ inputs: {} }`:              "map of name",
+		`{ inputs: { a: "  " } }`:     "blank",
+		`{ inputs: { a: [x] } }`:      "artifact reference",
+		`{ inputs: { a: { b: c } } }`: "artifact reference",
+	} {
+		if _, err := decodeWorkspace(t, src); err == nil || !strings.Contains(err.Error(), wantIn) {
+			t.Errorf("%s: %v, want %q", src, err, wantIn)
+		}
+	}
+	ref := "{{.x.blob}}"
+	for name, w := range map[string]Workspace{
+		"upper case":    {Inputs: []WorkspaceInput{{"Build", ref}}},
+		"leading digit": {Inputs: []WorkspaceInput{{"1st", ref}}},
+		"a path":        {Inputs: []WorkspaceInput{{"../up", ref}}},
+		"a dash":        {Inputs: []WorkspaceInput{{"my-build", ref}}},
+		"empty":         {Inputs: []WorkspaceInput{{"", ref}}},
+		"workspace":     {Inputs: []WorkspaceInput{{"workspace", ref}}},
+		"twice":         {Inputs: []WorkspaceInput{{"a", ref}, {"a", ref}}},
+		"not a blob":    {Inputs: []WorkspaceInput{{"a", "/srv/build.tar"}}},
+	} {
+		if err := w.Validate("s"); err == nil || !strings.Contains(err.Error(), "workspace.inputs") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	in := Workspace{Inputs: []WorkspaceInput{{"build", ref}}}
+	for name, s := range map[string]Step{
+		"agent": {Type: "agent", Prompt: "p", Workspace: in},
+		"code":  {Run: "sh", Code: "true", Workspace: in},
+	} {
+		if err := validateWorkspaceInputs("s", s); err != nil {
+			t.Errorf("%s step: %v", name, err)
+		}
+	}
+	for name, s := range map[string]Step{
+		"verb":       {Uses: "svc.x", Workspace: in},
+		"background": {Type: "agent", Prompt: "p", Background: true, Workspace: in},
+		"host":       {Run: "sh", Code: "true", Host: "box", Workspace: in},
+	} {
+		if err := validateWorkspaceInputs("s", s); err == nil || !strings.Contains(err.Error(), "workspace.inputs") {
+			t.Errorf("inputs on a %s step: %v", name, err)
 		}
 	}
 }

@@ -141,6 +141,7 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	if err != nil {
 		return nil, "", nil, nil, err
 	}
+	entry = withInputs(entry, a.req)
 	if iso := opt.iso; iso != nil {
 		// An explicit namespace block shapes the sandbox further: its
 		// network allowlist joins the model endpoints, its fs: paths are
@@ -228,6 +229,16 @@ func bindSandboxRoot(env []string, pid int) {
 			return
 		}
 	}
+}
+
+// withInputs shows the dispatch's workspace.inputs directory read-write to
+// this launch: copies of the step's own, for this launch only — never
+// recorded in the workspace's registry entry, whose slices it leaves alone.
+func withInputs(e agentsandbox.Entry, req *dispatch.Request) agentsandbox.Entry {
+	if req != nil && req.InputsDir != "" {
+		e.ReadWrite = append(append([]string(nil), e.ReadWrite...), req.InputsDir)
+	}
+	return e
 }
 
 // registerWorkspace is dispatch.RegisterSandboxWorkspace.

@@ -119,10 +119,25 @@ type Request struct {
 	// copy for this dispatch instead of making a checkout, and conductor
 	// never pushes from it. "" means a checkout as usual.
 	WorkspaceArchive string
+	// Inputs are the step's `workspace.inputs`, already copied (by the
+	// flow layer) into InputsDir, a directory of this step's own outside
+	// the workspace. The launch's sandbox gets InputsDir read-write; like an
+	// artifact workspace they need a local conductor-launched runtime.
+	Inputs    []Input
+	InputsDir string
 	// LiteralPrompt sends Action.Prompt as-is, never template-rendered: a
 	// bot's home prompt carries text agents wrote (handoff notes), which
 	// must not be evaluated against the dispatch's template data.
 	LiteralPrompt bool
+}
+
+// Input is one materialized `workspace.inputs` entry.
+type Input struct {
+	Name string // the step's name for it
+	Path string // the unpacked directory, or the copied file
+	Kind string // "dir" (an unpacked archive) or "file"
+	// BlobName and MediaType are the blob's own metadata, when it has any.
+	BlobName, MediaType string
 }
 
 // RunRef is the outcome of a dispatch.
@@ -438,6 +453,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req Request) (RunRef, error) 
 	case "paseo":
 		if req.WorkspaceArchive != "" {
 			return RunRef{}, errWorkspaceFromRemote
+		}
+		if len(req.Inputs) > 0 {
+			return RunRef{}, errWorkspaceInputsRemote
 		}
 		return d.paseo(ctx, req)
 	case "local":

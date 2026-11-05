@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -161,4 +162,24 @@ func buildConductor(t *testing.T) string {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	return bin
+}
+
+// A dispatch's workspace.inputs dir is read-write in its launch's sandbox,
+// added to a copy: the registered entry other launches read is unchanged.
+func TestWithInputsGrantsTheInputsDir(t *testing.T) {
+	rw := make([]string, 1, 4)
+	rw[0] = "/ws/.git"
+	e := agentsandbox.Entry{Workspace: "/ws", ReadWrite: rw}
+	got := withInputs(e, &dispatch.Request{InputsDir: "/state/step-inputs/step-1"})
+	if want := []string{"/ws/.git", "/state/step-inputs/step-1"}; !reflect.DeepEqual(got.ReadWrite, want) {
+		t.Fatalf("ReadWrite = %v, want %v", got.ReadWrite, want)
+	}
+	if len(e.ReadWrite) != 1 || rw[:2][1] != "" {
+		t.Errorf("the registered entry's ReadWrite was changed: %v", rw[:2])
+	}
+	for _, req := range []*dispatch.Request{nil, {}} {
+		if got := withInputs(e, req); !reflect.DeepEqual(got.ReadWrite, e.ReadWrite) {
+			t.Errorf("no inputs: ReadWrite = %v", got.ReadWrite)
+		}
+	}
 }
