@@ -184,6 +184,10 @@
             "bot"
           ]
         },
+        "head": {
+          "type": "string",
+          "desc": "the PR head the caller knows of, e.g. the commit it just pushed: GitHub's PR head lags a push by seconds, so a review on a different commit than this has something new to look at; empty uses GitHub's head alone"
+        },
         "only_outstanding": {
           "type": "boolean",
           "desc": "default true: ping only reviewers whose latest review is CHANGES_REQUESTED on an older commit and who aren't already requested, on an open PR; false re-requests unconditionally"
