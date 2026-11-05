@@ -106,6 +106,15 @@ func Push(ctx context.Context, r Request) (Result, error) {
 	}
 	env := []string{"GIT_OBJECT_DIRECTORY=" + objDir, "GIT_ALTERNATE_OBJECT_DIRECTORIES=" + strings.Join(alts, string(os.PathListSeparator))}
 	git := func(stdin []byte, args ...string) (string, error) { return runGit(ctx, r.GitDir, env, stdin, args...) }
+	// The fetches and the push run in a scratch git dir with no remotes. Run in
+	// the trusted git dir, git would move its refs/remotes/origin/* (the URL is
+	// origin's) onto objects that live only in objDir and the agent's clone,
+	// and every later fetch there would fail on the missing objects.
+	netDir := filepath.Join(tmp, "net.git")
+	if _, err := runGit(ctx, netDir, nil, nil, "init", "-q", "--bare"); err != nil {
+		return res, err
+	}
+	net := func(stdin []byte, args ...string) (string, error) { return runGit(ctx, netDir, env, stdin, args...) }
 	if head == "" {
 		out, err := git(nil, "rev-parse", "--verify", "--end-of-options", "refs/heads/"+onBranch+"^{commit}")
 		if err != nil {
@@ -148,7 +157,7 @@ func Push(ctx context.Context, r Request) (Result, error) {
 	}
 	if old != "" {
 		if _, err := git(nil, "cat-file", "-e", old+"^{commit}"); err != nil {
-			if _, err := git(nil, "fetch", "--no-write-fetch-head", "--no-tags", "--no-recurse-submodules", "--end-of-options", r.Remote, ref); err != nil {
+			if _, err := net(nil, "fetch", "--no-write-fetch-head", "--no-tags", "--no-recurse-submodules", "--end-of-options", r.Remote, ref); err != nil {
 				return res, fmt.Errorf("gitpush: fetch %s: %w", r.Branch, err)
 			}
 		}
@@ -156,7 +165,7 @@ func Push(ctx context.Context, r Request) (Result, error) {
 			return res, ErrDiverged
 		}
 	}
-	out, err = notOnRemote(git, head, tips, r.Remote)
+	out, err = notOnRemote(git, net, head, tips, r.Remote)
 	if err != nil {
 		return res, fmt.Errorf("gitpush: list the commits to push: %w", err)
 	}
@@ -194,7 +203,7 @@ func Push(ctx context.Context, r Request) (Result, error) {
 	}
 	// The ONLY push: the workspace's HEAD (signed) to the dispatch branch.
 	// No '+', no --force: a remote that moved since is a rejection.
-	if _, err := git(nil, "push", "--porcelain", "--no-verify", "--end-of-options", r.Remote, newHead+":"+ref); err != nil {
+	if _, err := net(nil, "push", "--porcelain", "--no-verify", "--end-of-options", r.Remote, newHead+":"+ref); err != nil {
 		return res, fmt.Errorf("gitpush: push %s: %w", r.Branch, err)
 	}
 	res.New = newHead
