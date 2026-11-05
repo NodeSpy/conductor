@@ -1,6 +1,7 @@
 package agentsandbox
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -112,6 +113,43 @@ func TestDetectorRespondsByAction(t *testing.T) {
 		if action == DetectAlert && len(signalled) != 0 {
 			t.Fatalf("alert: signalled %v", signalled)
 		}
+	}
+}
+
+// terminate kills only the process a rule flagged, and what it started: the
+// agent keeps running, and a later offender is terminated too. A tripwire
+// read names no process to stop, so it still ends the launch.
+func TestDetectorTerminateStopsOnlyTheOffender(t *testing.T) {
+	agent := []procInfo{{pid: 900060, ppid: 1, marked: true, start: 1, args: []string{"unshare"}}, {pid: 900061, ppid: 900060, start: 1, args: []string{"claude"}},
+		{pid: 900062, ppid: 900061, start: 1, args: []string{"git", "fetch", "origin", "main"}}}
+	ssh := []procInfo{{pid: 900063, ppid: 900062, start: 1, args: []string{"/usr/bin/ssh", "git@github.com"}}, {pid: 900064, ppid: 900063, start: 1, args: []string{"sh", "-c", "proxy"}}}
+	procs := append(append([]procInfo{}, agent...), ssh...)
+	var events []map[string]any
+	var signalled []int
+	d := &detector{spec: DetectSpec{Action: DetectTerminate}, run: "r1", allow: map[string]bool{},
+		list:     func() ([]procInfo, error) { return procs, nil },
+		signal:   func(pid int, _ uint64) error { signalled = append(signalled, pid); return nil },
+		event:    func(k string, f map[string]any) { events = append(events, f) },
+		reported: map[string]bool{}}
+	d.scan()
+	slices.Sort(signalled)
+	if fmt.Sprint(signalled) != "[900063 900064]" {
+		t.Fatalf("terminate stops the tunnel tool and its child, not the agent or git: %v", signalled)
+	}
+	if len(events) != 1 || events[0]["kind"] != "tunnel_tool" || events[0]["action"] != DetectTerminate {
+		t.Fatalf("events %v", events)
+	}
+	// A second offender later in the run is stopped as well.
+	signalled = nil
+	procs = append(append([]procInfo{}, agent...), procInfo{pid: 900065, ppid: 900062, start: 1, args: []string{"/usr/bin/ssh", "git@github.com"}})
+	d.scan()
+	if fmt.Sprint(signalled) != "[900065]" {
+		t.Fatalf("a later offender is terminated too: %v", signalled)
+	}
+	signalled = nil
+	d.detected("tripwire", "decoy credential .ssh/id_ed25519 read", true)
+	if len(signalled) != 4 {
+		t.Fatalf("a tripwire read still kills the launch: %v", signalled)
 	}
 }
 

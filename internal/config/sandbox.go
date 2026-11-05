@@ -128,7 +128,9 @@ type SandboxDetect struct {
 	// Action on a detection: `kill` (default) — every process of the
 	// launch is killed (the step ends as its agent does), its workspace
 	// kept, the event audited and raised as a conductor.escalate
-	// notification; `alert` — audited and notified only; `off` — no
+	// notification; `terminate` — only the flagged process and what it
+	// started are killed and the launch runs on (a tripwire read or git
+	// tamper still kills it); `alert` — audited and notified only; `off` — no
 	// watcher, tripwires or git guard (what a launch leaves running is
 	// still killed at its end).
 	Action string `yaml:"action,omitempty"`
@@ -398,9 +400,9 @@ func (c *Config) validateSandbox() error {
 	}
 	if d := s.Detect; d != nil {
 		switch d.Action {
-		case "", "kill", "alert", "off":
+		case "", "kill", "terminate", "alert", "off":
 		default:
-			return fmt.Errorf("config: sandbox.detect.action must be kill|alert|off, got %q", d.Action)
+			return fmt.Errorf("config: sandbox.detect.action must be kill|terminate|alert|off, got %q", d.Action)
 		}
 		switch d.Connections {
 		case "", "alert", "close", "off":
