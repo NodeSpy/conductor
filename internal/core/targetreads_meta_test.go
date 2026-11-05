@@ -84,6 +84,10 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"observeDecisions", "the audit row for a lost observe record; it records, it authorizes nothing"},
 		{"writeDecisions", "an observe-mode telemetry row for calibration; the repo/number are recorded, never keyed on or trusted"},
 	},
+	"internal/flow/pushconflict.go": {
+		{"resolveConflictInPlace", "the push_conflict audit row (resolve: follow_up) records which target the resolve turn ran for — it records, it authorizes nothing; " +
+			"the follow-up goes to the step's own agent (ref.AgentID) and the push to the branch registered for its dispatch, neither read from the trigger"},
+	},
 	"internal/flow/dispatchaudit.go": {
 		{"auditDispatch", "an audit row records what was DISPATCHED, forged target included — " +
 			"that is the point of an audit, and `conductor report` reads these rows"},
@@ -94,6 +98,8 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"flowTag", "a log prefix"},
 		{"auditRunCost", "an audit row"},
 		{"checkUnlanded", "the unlanded git_push audit row records which target the stranded commits were for — it records, it authorizes nothing"},
+		{"execWithRetry", "the push_conflict audit row (resolve: redispatch) records which target the re-dispatch ran for — it records, it authorizes nothing; " +
+			"the re-dispatch is decided by the push's own DivergedError and goes back through execStep, so every gate the first dispatch passed runs again"},
 		{"harvestMemory", "the memory Source's provenance; the harvest's scope check goes through NewAgentCaller"},
 		{"execVerb", "audit + rendered options; the resource checks in this function go through OwnRepo"},
 		{"runSteps", "step audit rows"},
