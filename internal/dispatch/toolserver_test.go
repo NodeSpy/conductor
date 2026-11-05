@@ -8,6 +8,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/gitpush"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
@@ -238,5 +239,14 @@ func TestEffectiveSkillPolicyAutoGrantsHandoffDone(t *testing.T) {
 	}
 	if wantsSkillCreds(Request{AgentAuthored: true}) {
 		t.Fatal("an agent-authored step must never get skill creds")
+	}
+}
+
+// The skill IPC can't import this package, so memory.VerbTimeout names the
+// push verb by its literal. Pin it: a rename here would drop git.push back to
+// the 30s every other verb gets, shorter than a push behind a slow remote.
+func TestGitPushVerbWaitsForThePush(t *testing.T) {
+	if got := memory.VerbTimeout(GitPushVerb); got != gitpush.Timeout {
+		t.Fatalf("memory.VerbTimeout(%q) = %v, want gitpush.Timeout (%v)", GitPushVerb, got, gitpush.Timeout)
 	}
 }
