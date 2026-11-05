@@ -376,6 +376,52 @@
       }
     },
     {
+      "name": "pr_clone",
+      "desc": "clone a PR into a fresh temp directory: the PR head (checked out, detached) and its base branch (origin/\u003cbase\u003e), shallow but deep enough for git diff origin/\u003cbase\u003e...HEAD. Over HTTPS with the read credential, which never reaches argv or disk; a fetch that fails on the network is retried. Remove it with pr_clone_discard",
+      "options": {
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "base": {
+          "type": "string",
+          "desc": "the base branch, fetched as origin/\u003cbase\u003e"
+        },
+        "dir": {
+          "type": "string",
+          "desc": "the clone"
+        },
+        "head_sha": {
+          "type": "string"
+        },
+        "merge_base": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "pr_clone_discard",
+      "desc": "remove a pr_clone directory (only one; a directory already gone is fine)",
+      "options": {
+        "dir": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
       "name": "read_token",
       "desc": "the read credential agents receive (identity.read_token: the App's installation token by default)",
       "options": {
@@ -3830,10 +3876,12 @@
       "*.ghe.com:443",
       "smee.io:443",
       "productionresultssa*.blob.core.windows.net:443",
-      "*.actions.githubusercontent.com:443"
+      "*.actions.githubusercontent.com:443",
+      "github.com:443"
     ],
     "commands": [
-      "gh"
+      "gh",
+      "git"
     ],
     "env": [
       "GH_TOKEN",
