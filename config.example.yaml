@@ -894,7 +894,9 @@ x-templates:
                             #   cannot be combined with checkout: checkout-pr or
                             #   branch-off (each of those wants its own worktree).
     wait_timeout: 25m
-    archive_when_done: true
+    archive_when_done: true # true: archived (and its worktree freed) when the step ends.
+    #                       #   Unset: the same once it finishes cleanly, unless a later
+    #                       #   step reads its workdir/agent_id. false: kept live.
     # guidance: "Reply in a sentence or two."  # STACKS on policy.guidance (layer 0);
     #                       #   a list or { replace: … } is also accepted (wiki: Reuse)
     # runtime: paseo        # explicit runtime (default: the default: true one)
@@ -1376,20 +1378,11 @@ policy:
 sandbox:
   # agents: on              # `off` = the explicit opt-out (agents run as before; logged at boot).
   #                         #   Per runtime/step: isolation: { mode: none }.
+  # egress_open: true       # default: agents reach any public host on :443 (never private/loopback/
+  #                         #   metadata). false: only the model endpoints and egress below.
   egress: []                # hosts every sandboxed agent may reach beyond its model endpoints,
   #                         #   e.g. [registry.npmjs.org, proxy.golang.org, "*.pypi.org"]
-  # prefetch: [go]          # conductor downloads a dispatch's Go modules (its checkout's go.work /
-  #                         #   go.mod, read before the agent runs) on the HOST into one module cache
-  #                         #   of its own — shared by every identity, and the download itself runs
-  #                         #   CONFINED (namespace jail, network cut to proxy.golang.org only, never a
-  #                         #   file:// layer onto your own $GOMODCACHE); mounted read-only in every
-  #                         #   sandbox; the agent's Go runs offline (GOPROXY=off), so no Go host goes in
-  #                         #   egress. A module the agent itself adds is not fetched. Never for a target
-  #                         #   the event's sender chose. If this box can't build the jail, the prefetch
-  #                         #   is skipped (logged) rather than ever downloading unconfined. A go.work/go.mod
-  #                         #   needing a newer Go than the host's also fetches that toolchain into the
-  #                         #   cache (checksum-verified, ~300MB per Go version), and that workspace's
-  #                         #   launches get its go first on PATH.
+  #                         #   a private host needs an exact entry ("git.corp.lan:8443").
   # state_dir: ~/.local/state/conductor/agent-state   # the per-identity HOMEs
   push:
     # signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh).

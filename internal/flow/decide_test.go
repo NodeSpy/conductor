@@ -169,7 +169,7 @@ func TestDecideFallsBackToAgentOnFailure(t *testing.T) {
 	if !strings.Contains(req.Action.Prompt, "<document>") || !strings.Contains(req.Action.Prompt, "The diff contradicts the finding.") {
 		t.Errorf("the prompt is the adapter's rendering:\n%s", req.Action.Prompt)
 	}
-	if !req.Step.ArchiveWhenDone {
+	if !req.Step.ArchivesWhenDone() {
 		t.Error("a decision session is one turn — it must not linger")
 	}
 	if n := len(rig.Store.auditsWithEvent("decide")); n != 2 {

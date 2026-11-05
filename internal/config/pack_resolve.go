@@ -282,6 +282,16 @@ func ResolvePacksAllowingUnlisted(configPath string) (*Lockfile, error) {
 }
 
 func resolvePacks(configPath string, allowUnlisted bool) (*Lockfile, error) {
+	return resolvePacksInto(configPath, filepath.Dir(configPath), allowUnlisted)
+}
+
+// resolvePacksInto resolves the config's packs into root's vendor dir and
+// writes the lockfile into root. root is the config's own directory for
+// `conductor init`/`pack update`, or a PackStage's root when auto-update
+// resolves somewhere it can validate before anything live changes. The
+// previous lock (for `hold:`) and local sources are still read relative to
+// the config.
+func resolvePacksInto(configPath, root string, allowUnlisted bool) (*Lockfile, error) {
 	dir := filepath.Dir(configPath)
 	packs, trust, err := loadPacksBlock(configPath)
 	if err != nil {
@@ -295,7 +305,7 @@ func resolvePacks(configPath string, allowUnlisted bool) (*Lockfile, error) {
 	if err := applyPackSourceDefaults(packs); err != nil {
 		return nil, err
 	}
-	vendor := packVendorDir(dir)
+	vendor := packVendorDir(root)
 	if err := os.MkdirAll(vendor, 0o755); err != nil {
 		return nil, err
 	}
@@ -318,9 +328,7 @@ func resolvePacks(configPath string, allowUnlisted bool) (*Lockfile, error) {
 		}
 	}
 	sort.Slice(r.lock.Packs, func(i, j int) bool { return r.lock.Packs[i].Instance < r.lock.Packs[j].Instance })
-	if prevLock != nil {
-	}
-	if err := writeLockfile(dir, r.lock); err != nil {
+	if err := writeLockfile(root, r.lock); err != nil {
 		return nil, err
 	}
 	return r.lock, nil

@@ -80,6 +80,24 @@ func TestWrapLocalNamespaceSeatbeltOnDarwin(t *testing.T) {
 	}
 }
 
+// TestSeatbeltAgentTrustEvaluation: an agent can reach the system trust
+// store (Apple's curl falls back to it via TrustEvaluationAgent when
+// /etc/ssl/cert.pem cannot build a chain) without being handed the
+// Keychain's services.
+func TestSeatbeltAgentTrustEvaluation(t *testing.T) {
+	p := seatbeltAgentProfile([]BindMount{{Path: "/w"}}, &AgentProfile{}, AgentNet{ProxyPort: 4242})
+	for _, s := range []string{"com.apple.trustd", "com.apple.trustd.agent", "com.apple.TrustEvaluationAgent"} {
+		if !strings.Contains(p, `(global-name "`+s+`")`) {
+			t.Errorf("trust evaluation needs %s", s)
+		}
+	}
+	for _, s := range agentMachKeychain {
+		if strings.Contains(p, `(global-name "`+s+`")`) {
+			t.Errorf("%s (a Keychain service) allowed without a Keychain login", s)
+		}
+	}
+}
+
 // TestSeatbeltBrowserProfile: the browser variant opens Mach broadly but
 // keeps the Keychain's services denied, issues extensions only for its own
 // paths, and keeps the network to the proxy port.

@@ -612,7 +612,7 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 	// "ask me" behavior is reserved for review hand-offs (background workflow steps).
 	// It still gets the write-token wrapper.
 	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
-		{ID: "archived", ArchiveWhenDone: true},
+		{ID: "archived", ArchiveWhenDone: config.Bool(true)},
 		{ID: "kept"},
 	}}}}
 
@@ -667,7 +667,7 @@ func TestNonBackgroundStepArchivedImmediately(t *testing.T) {
 		return dispatch.RunRef{AgentID: "agent-assess", Output: `{"decision":"auto"}`}, nil
 	}}
 	cfg := baseCfg()
-	cfg.Workflows["w"] = config.WorkflowDef{Steps: []config.Step{{ID: "fixer", ArchiveWhenDone: true}}}
+	cfg.Workflows["w"] = config.WorkflowDef{Steps: []config.Step{{ID: "fixer", ArchiveWhenDone: config.Bool(true)}}}
 	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 	wf := config.Action{Steps: []config.Action{
 		{ID: "assess", Type: "agent", Agent: "w/fixer", Prompt: "decide"},

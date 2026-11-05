@@ -32,6 +32,10 @@ mkdir -p "$W/bin" "$W/home/.ssh" "$W/home/.aws" "$W/st" "$W/ws" "$W/cfg"
 echo "DECOY-ssh" > "$W/home/.ssh/id_ed25519"
 echo "DECOY-aws" > "$W/home/.aws/credentials"
 echo "ws" > "$W/ws/README.md"
+# A CA bundle that verifies nothing real: with it, Apple's curl can only
+# succeed through its fallback to the system trust store (checked on macOS).
+openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=canary-unrelated-ca -days 2 \
+  -keyout /dev/null -out "$W/ws/unrelated-ca.pem" >/dev/null 2>&1 || { echo "openssl failed"; exit 1; }
 ( cd "$ROOT" && go build -o "$W/bin/conductor" ./cmd/conductor ) || { echo "build failed"; exit 1; }
 
 cat > "$W/cfg/config.yaml" <<EOF
@@ -44,6 +48,7 @@ store:
   state_file: $W/st/state.json
   audit_log: $W/st/audit.jsonl
 sandbox:
+  egress_open: false     # the allowlist itself is what this canary checks
   egress: ["example.org"]
 EOF
 echo "DECOY-state" > "$W/st/secret.json"
@@ -63,7 +68,8 @@ fi
 
 cat > "$W/ws/probe.sh" <<'PROBE'
 #!/bin/sh
-r() { if eval "$2" >/dev/null 2>&1; then echo "$1=yes"; else echo "$1=no"; fi; }
+# A failure carries the last line of its stderr: the reason, in CI's log.
+r() { if e=$(eval "$2" 2>&1 >/dev/null); then echo "$1=yes"; else echo "$1=no ($(printf '%s' "$e" | tail -1))"; fi; }
 r secret_ssh "cat $CANARY_W/home/.ssh/id_ed25519"
 r secret_aws "cat $CANARY_W/home/.aws/credentials"
 r state "cat $CANARY_W/st/secret.json"
@@ -71,6 +77,7 @@ r ws_write "echo w > ./out.txt"
 r home_write "echo h > \$HOME/kept.txt"
 r allowed_egress "curl -sS -m 15 -o /dev/null https://example.org"
 r other_egress "curl -sS -m 8 -o /dev/null https://cloudflare.com"
+r trust_fallback "curl -sS -m 15 --cacert ./unrelated-ca.pem -o /dev/null https://example.org"
 r direct_net "curl -sS -m 8 --noproxy '*' -o /dev/null https://example.org"
 out=$(conductor call step.done 2>&1); case "$out" in *"skill.verbs"*|*released*) echo socket=yes ;; *) echo "socket=no ($out)" ;; esac
 if env | grep -qE '^(GH_TOKEN|GITHUB_TOKEN|SSH_AUTH_SOCK|AWS_SECRET_ACCESS_KEY|CLAUDE_CODE_MESSAGING_TOKEN)='; then echo env_clean=no; else echo env_clean=yes; fi
@@ -102,6 +109,12 @@ check "identity home writable" yes "$(v home_write)"
 check "allowlisted egress reaches" yes "$(v allowed_egress)"
 check "other egress refused" no "$(v other_egress)"
 check "no network around the proxy" no "$(v direct_net)"
+if [ "$(uname -s)" = Darwin ]; then
+  # /usr/bin/curl tries /etc/ssl/cert.pem, then the system trust store
+  # (com.apple.TrustEvaluationAgent): an agent must reach the latter, or a
+  # site whose root the bundle lacks fails inside and works outside.
+  check "system trust store reachable (curl's fallback)" yes "$(v trust_fallback)"
+fi
 check "conductor socket reachable" yes "$(v socket)"
 check "no credential in env" yes "$(v env_clean)"
 home="$(v home)"

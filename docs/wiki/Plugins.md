@@ -402,6 +402,12 @@ update:
 you into unattended dependency updates too. Set `deps: false` to move plugins and
 packs only on an explicit `conductor init` / `plugin update` / `pack update`.
 
+**An unattended update that doesn't load is never left on disk.** The cycle resolves
+packs into a staging dir under `.conductor/`, loads your config against it, and swaps
+it in only when that load succeeds. A refused update (a pack release that needs a
+newer connector, say) leaves `.conductor/packs/` and `conductor.lock.yaml` exactly as
+they were, so a later restart boots the last config that loaded.
+
 **A moved plugin is applied by a hot-reload — no daemon restart — when it can be.**
 The daemon swaps the plugin's subprocess in place (draining in-flight calls first)
 whenever the new build's interface is unchanged (same verbs, ABI, kind, and

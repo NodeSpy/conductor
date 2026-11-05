@@ -314,26 +314,31 @@ func autoUpdateLoop(ctx context.Context, u config.Update, cfgFile string, notifi
 // refreshDeps re-resolves packs + remote plugins against their `version:`
 // constraints, logging every change and every held dependency. It returns true
 // only when something actually changed AND the resulting config still loads —
-// the caller then restarts to apply it. A refresh that fails to validate is
-// logged and reported as no-change: the running daemon stands, and the
-// degraded-boot fail-safe covers the (now newer) on-disk lockfile on the next
-// manual restart. Network errors are logged and swallowed (transient).
+// the caller then restarts to apply it. Packs resolve into a STAGE, never the
+// live vendor tree or lockfile: the config is loaded against the stage, and
+// only an update that loads (and creates no single_process conflict) is
+// swapped in. A refresh that fails is logged and reported as no-change with
+// nothing left on disk, so the next restart — however unrelated — boots the
+// last state that loaded instead of coming up degraded on an update that was
+// never applied. Network errors are logged and swallowed (transient).
 func refreshDeps(cfgFile string) (packMoved bool, pluginRes []plugin.Resolution, act bool) {
 	dir := filepath.Dir(cfgFile)
 	before, _ := config.ReadLockfile(dir)
 
-	if _, err := config.ResolvePacks(cfgFile); err != nil {
+	stage, err := config.StagePacks(cfgFile)
+	if err != nil {
 		logf("auto-update: pack refresh failed (keeping current): %v", err)
 		return false, nil, false
 	}
+	defer stage.Discard()
 	// Plugins stay current on the same cycle. Their install state is LOCAL, so
 	// (unlike packs) nothing about this lands in the repo: the reconcile logs
 	// each install/update with the sha it moved from, and a plugin whose fetch
 	// fails keeps running the build already installed rather than failing the
 	// refresh.
-	cfg, err := config.Load(cfgFile)
+	cfg, err := stage.Load()
 	if err != nil {
-		logf("auto-update: config load failed (keeping current): %v", err)
+		logf("auto-update: config load failed (keeping current; packs and lockfile left as they were): %v", err)
 		return false, nil, false
 	}
 	pluginsMoved, results, err := refreshPlugins(cfg)
@@ -342,13 +347,12 @@ func refreshDeps(cfgFile string) (packMoved bool, pluginRes []plugin.Resolution,
 		return false, nil, false
 	}
 
-	after, _ := config.ReadLockfile(dir)
-	packMoved = logDepChanges(before, after)
+	packMoved = logDepChanges(before, stage.Lock)
 	if !packMoved && !pluginsMoved {
 		return false, nil, false // nothing moved
 	}
 	// A dependency moved — only apply if the new graph still loads.
-	newCfg, err := config.Load(cfgFile)
+	newCfg, err := stage.Load()
 	if err != nil {
 		logf("auto-update: dependency update does NOT validate — NOT applying: %v", err)
 		return false, nil, false
@@ -365,6 +369,14 @@ func refreshDeps(cfgFile string) (packMoved bool, pluginRes []plugin.Resolution,
 			logf("auto-update: dependency update would create a single_process conflict — NOT applying: %s", c.reason)
 		}
 		return false, nil, false
+	}
+	// Only a pack revision that is about to be applied goes live; a plugin-only
+	// move leaves the vendored packs as they are.
+	if packMoved {
+		if err := stage.Commit(); err != nil {
+			logf("auto-update: %v — NOT applying", err)
+			return false, nil, false
+		}
 	}
 	return packMoved, results, true
 }

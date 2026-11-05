@@ -89,7 +89,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				// referenced step — a stale-on-disk or mistaken
 				// archive_when_done: true must not reap an interactive hand-off
 				// out from under you.
-				profile.ArchiveWhenDone = false
+				profile.ArchiveWhenDone = config.Bool(false)
 			}
 			// No prompt of its own → act on the event itself (connector-neutral
 			// event object), synthesized before the guidance stack. This legacy
@@ -294,7 +294,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		// its agent the instant it finishes rather than leaving it to clutter paseo
 		// until the reaper's next poll. Fire-and-forget; the reaper is the backstop.
 		// A keyed session (affinity) is shared across events — never archived here.
-		if s.Type == "agent" && profile.ArchiveWhenDone && ref.AgentID != "" && !e.affinityOwns(ref.AgentID) {
+		if s.Type == "agent" && profile.ArchivesWhenDone() && ref.AgentID != "" && !e.affinityOwns(ref.AgentID) {
 			go func(id string) { _ = e.archiveAgent(context.Background(), id) }(ref.AgentID)
 		}
 	}

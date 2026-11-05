@@ -418,6 +418,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	ctx = withDefaultGate(ctx, spec.Gate)
 	ctx = withDefaultIsolation(ctx, packNarrowed(spec.Isolation, spec.PackInstance))
+	ctx = withLaterReads(ctx, spec)
 	ctx = r.withRunBudget(ctx, t, spec)
 	ctx, runCost := withCostAcc(ctx)
 	ctx, hist := r.beginHistory(ctx, run, t, spec, shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow))
@@ -654,6 +655,8 @@ func asStepError(err error, target **stepError) bool {
 // progress into the run (top-level steps only — nested scopes re-run whole
 // steps on resume, at-least-once).
 func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Trigger, steps []config.Step, data map[string]any, shadow, checkpoint bool) error {
+	// A called workflow's or a plan's own steps read each other too.
+	ctx = withLaterReads(ctx, steps)
 	start := 0
 	if checkpoint {
 		start = run.StepIndex
@@ -1105,7 +1108,7 @@ func (r *Runner) execStep(ctx context.Context, t core.Trigger, step config.Step,
 	case "code":
 		return r.execCode(ctx, t, step, id, data, shadow)
 	case "agent":
-		return r.execAgent(ctx, t, step, id, slot, data, shadow)
+		return r.execAgent(context.WithValue(ctx, stepReleaseKey{}, true), t, step, id, slot, data, shadow)
 	case "command":
 		return r.execCommand(ctx, t, step, id, data, shadow)
 	case "team":
@@ -1823,6 +1826,9 @@ func runStagingDirs(ctx context.Context) []string {
 // execAgent dispatches a type: agent step through the engine-provided
 // services (runtime resolution, tokens, guidance, background hand-off).
 func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, string, error) {
+	// Decided for this step only: a gate's or a plan's agents get their own.
+	release := releasesByDefault(ctx, step, id)
+	ctx = context.WithValue(ctx, stepReleaseKey{}, false)
 	// `agent:` is retained as a free-form ATTRIBUTION label on the dispatch
 	// (it used to name a profile; profiles are gone — design §6). It may be
 	// templated, so render it before use; step is a value copy.
@@ -1915,7 +1921,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		// A background step hands off a live agent for you to drive and close
 		// yourself; it sits idle *because* it is waiting for you, so the
 		// reaper must never archive it — regardless of what the step says.
-		step.ArchiveWhenDone = false
+		step.ArchiveWhenDone = config.Bool(false)
 	}
 	// detach: true is a complete, self-contained launch (config.validateDetach
 	// already rejected it alongside background/handoff/output_schema/watch/
@@ -2024,7 +2030,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	ref, err := r.Agents.Dispatch(ctx, req)
 	// Consumed on every outcome so a mark never outlives its dispatch.
 	doneSignalled := r.Agents.TakeDone != nil && r.Agents.TakeDone(req.DispatchID)
-	archive := step.ArchiveWhenDone || doneSignalled
+	archive := step.ArchivesWhenDone() || doneSignalled
 	// The dispatch row `conductor report` and the e2e read. Emitted for EVERY
 	// outcome including failure, before the error return below — a dispatch
 	// that failed is exactly the one an operator is looking for.
@@ -2176,6 +2182,11 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			summary, _ := outputs["text"].(string)
 			return outputs, ref.Output, &noProgressError{step: id, summary: summary, diff: diff}
 		}
+	}
+	// The step finished cleanly and nothing later reads its agent: release
+	// it and its worktree now (release.go), not when the daemon restarts.
+	if release && !archive && !shadow && ref.AgentID != "" && r.Agents.Archive != nil {
+		r.Agents.Archive(ref.AgentID)
 	}
 	return outputs, ref.Output, nil
 }

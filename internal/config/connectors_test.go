@@ -517,7 +517,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 				return &Config{
 					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{
-						{ID: "s1", Type: "agent", Agent: "a", Detach: true, ArchiveWhenDone: true},
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, ArchiveWhenDone: boolPtr(true)},
 					}, nil)},
 				}
 			},

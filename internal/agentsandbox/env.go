@@ -1,7 +1,6 @@
 package agentsandbox
 
 import (
-	"os"
 	"strings"
 )
 
@@ -63,19 +62,6 @@ func AgentEnv(inherited []string, p Policy) []string {
 		out = append(out, "CONDUCTOR_ENDPOINT=unix://"+p.Socket, "CONDUCTOR_SKILL_TOKEN="+p.Token)
 	}
 	out = dedupEnv(out)
-	if len(p.PathFirst) > 0 {
-		path := strings.Join(p.PathFirst, string(os.PathListSeparator))
-		for i, kv := range out {
-			if v, ok := strings.CutPrefix(kv, "PATH="); ok {
-				if v != "" {
-					path += string(os.PathListSeparator) + v
-				}
-				out = append(out[:i], out[i+1:]...)
-				break
-			}
-		}
-		out = append(out, "PATH="+path)
-	}
 	return out
 }
 

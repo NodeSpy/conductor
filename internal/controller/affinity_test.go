@@ -146,7 +146,7 @@ func newAffRig(t *testing.T, st *memAffStore, spec *config.SessionSpec) *affRig 
 	}
 	rig := &affRig{runner: &affRunner{}, sender: &affSender{}, store: st, holds: map[string]bool{}}
 	rig.cfg = &config.Config{Workflows: map[string]config.WorkflowDef{
-		"w": {Steps: []config.Step{{ID: "reviewer", Name: "reviewer", Session: spec, ArchiveWhenDone: true}}},
+		"w": {Steps: []config.Step{{ID: "reviewer", Name: "reviewer", Session: spec, ArchiveWhenDone: config.Bool(true)}}},
 	}}
 	reg := NewRegistry(nil, "", rig.runner, rig.sender)
 	hold := func(id string) { rig.mu.Lock(); rig.holds[id] = true; rig.mu.Unlock() }
