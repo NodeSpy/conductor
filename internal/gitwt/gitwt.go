@@ -50,6 +50,11 @@ const (
 	// removeTimeout bounds the git calls a teardown makes, so a session Close
 	// can never block on a wedged git.
 	removeTimeout = 30 * time.Second
+	// netAttempts bounds how many times a fetch that failed on the network
+	// (transientNetErr) is tried before the checkout fails.
+	netAttempts = 3
+	// defaultNetBackoff is the wait before the first retry; it doubles after.
+	defaultNetBackoff = 2 * time.Second
 )
 
 // Provisioner creates and removes git worktrees for dispatches. The zero value
@@ -73,7 +78,8 @@ type Provisioner struct {
 	TranscriptsDir      string
 	TranscriptRetention time.Duration
 	// Now is the reaper's clock, injectable for tests. nil → time.Now.
-	Now func() time.Time
+	Now        func() time.Time
+	netBackoff time.Duration // first network retry's wait; 0 → defaultNetBackoff
 
 	mu     sync.Mutex
 	repoMu map[string]*sync.Mutex // per-repo lock over the base clone's shared state
@@ -359,7 +365,7 @@ func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.R
 		return fmt.Errorf("checkout of the target's code with no ref to fetch")
 	}
 	tmp := prFetchRefPrefix + filepath.Base(wt)
-	if _, err := p.git(ctx, base, "fetch", "--no-tags", "--no-recurse-submodules", "--force", "origin",
+	if _, err := p.netGit(ctx, base, "fetch", "--no-tags", "--no-recurse-submodules", "--force", "origin",
 		"+"+ref+":"+tmp); err != nil {
 		return err
 	}
@@ -434,9 +440,11 @@ func (p *Provisioner) fillMergeBlobs(ctx context.Context, base, head, baseRef st
 		return
 	}
 	// Exactly how git's own lazy fetch asks a promisor for named objects.
-	if _, err := p.gitIn(ctx, base, want.String(), "-c", "fetch.negotiationAlgorithm=noop",
-		"fetch", "-q", "origin", "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no",
-		"--filter=blob:none", "--stdin"); err != nil {
+	if _, err := p.retryNet(ctx, func() (string, error) {
+		return p.gitIn(ctx, base, want.String(), "-c", "fetch.negotiationAlgorithm=noop",
+			"fetch", "-q", "origin", "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no",
+			"--filter=blob:none", "--stdin")
+	}); err != nil {
 		p.logf("gitwt: fetch the %d blob(s) merging with %s needs: %v — a merge in the sandbox will be missing them", n, baseRef, err)
 	}
 }
@@ -624,7 +632,7 @@ func (p *Provisioner) baseClone(ctx context.Context, repo string) (string, error
 func (p *Provisioner) baseCloneLocked(ctx context.Context, repo, declared string) (string, error) {
 	dir := filepath.Join(p.CheckoutsDir(), repoSlug(repo))
 	if isGitDir(dir) {
-		if _, err := p.git(ctx, dir, "fetch", "--prune", "--no-recurse-submodules", "origin"); err != nil {
+		if _, err := p.netGit(ctx, dir, "fetch", "--prune", "--no-recurse-submodules", "origin"); err != nil {
 			return "", fmt.Errorf("fetch: %w", err)
 		}
 		return dir, nil
@@ -632,17 +640,79 @@ func (p *Provisioner) baseCloneLocked(ctx context.Context, repo, declared string
 	if err := os.MkdirAll(p.CheckoutsDir(), 0o700); err != nil {
 		return "", err
 	}
-	_ = os.RemoveAll(dir) // a previous clone that died half-written
 	url := p.remoteURL(repo, declared)
-	if _, err := p.git(ctx, "", "clone", "--no-recurse-submodules", "--filter=blob:none", url, dir); err != nil {
+	clone := func(args ...string) (string, error) {
+		_ = os.RemoveAll(dir) // a previous clone that died half-written
+		return p.git(ctx, "", append(append([]string{"clone", "--no-recurse-submodules"}, args...), url, dir)...)
+	}
+	if _, err := p.retryNet(ctx, func() (string, error) { return clone("--filter=blob:none") }); err != nil {
 		// A server with uploadpack.allowFilter off rejects a partial clone
 		// outright; a full clone is slower but always works.
-		_ = os.RemoveAll(dir)
-		if _, ferr := p.git(ctx, "", "clone", "--no-recurse-submodules", url, dir); ferr != nil {
+		if _, ferr := p.retryNet(ctx, func() (string, error) { return clone() }); ferr != nil {
+			_ = os.RemoveAll(dir)
 			return "", errors.Join(fmt.Errorf("clone %s: %w", url, err), ferr)
 		}
 	}
 	return dir, nil
+}
+
+// ---- network retries -----------------------------------------------------
+
+// netGit is git for a command that talks to the origin: one that failed on
+// the network (transientNetErr) is retried (retryNet).
+func (p *Provisioner) netGit(ctx context.Context, dir string, args ...string) (string, error) {
+	return p.retryNet(ctx, func() (string, error) { return p.git(ctx, dir, args...) })
+}
+
+// retryNet runs op up to netAttempts times while it fails with a transient
+// network error, backing off between tries — a burst of ssh connections to a
+// forge gets some refused or timed out, and the next try a moment later
+// goes through. Any other failure (auth, a missing ref) returns at once.
+func (p *Provisioner) retryNet(ctx context.Context, op func() (string, error)) (string, error) {
+	wait := p.netBackoff
+	if wait <= 0 {
+		wait = defaultNetBackoff
+	}
+	for attempt := 1; ; attempt++ {
+		out, err := op()
+		if err == nil || attempt >= netAttempts || ctx.Err() != nil || !transientNetErr(err) {
+			return out, err
+		}
+		p.logf("gitwt: network error, retrying (%d/%d) in %s: %v", attempt, netAttempts-1, wait, err)
+		select {
+		case <-ctx.Done():
+			return out, err
+		case <-time.After(wait):
+		}
+		wait *= 2
+	}
+}
+
+// transientNetErr reports a git failure that a retry may well get past: the
+// connection to the remote timed out, was refused or reset, or dropped — but
+// not one the remote refused on purpose (a key it doesn't accept, a repo it
+// doesn't have), whose "Could not read from remote repository" looks the same.
+func transientNetErr(err error) bool {
+	s := strings.ToLower(err.Error())
+	for _, perm := range []string{
+		"permission denied", "publickey", "authentication failed", "host key verification failed",
+		"repository not found", "does not appear to be a git repository", "couldn't find remote ref",
+		"access denied", "not authorized",
+	} {
+		if strings.Contains(s, perm) {
+			return false
+		}
+	}
+	for _, net := range []string{
+		"connection timed out", "operation timed out", "connection reset", "connection refused",
+		"connection closed by", "kex_exchange_identification", "temporary failure in name resolution",
+		"the remote end hung up unexpectedly", "early eof", "could not read from remote repository",
+	} {
+		if strings.Contains(s, net) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Provisioner) repoLock(repo string) *sync.Mutex {
@@ -837,7 +907,7 @@ func (p *Provisioner) remoteBranchAt(ctx context.Context, base, rev string) (str
 		return "", -1
 	}
 	sha = strings.TrimSpace(sha)
-	heads, err := p.git(ctx, base, "ls-remote", "--heads", "origin")
+	heads, err := p.netGit(ctx, base, "ls-remote", "--heads", "origin")
 	if err != nil {
 		return "", -1
 	}
