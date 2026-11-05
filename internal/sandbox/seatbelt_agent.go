@@ -36,6 +36,13 @@ var agentMachBase = []string{
 	"com.apple.diagnosticd",
 	"com.apple.trustd",
 	"com.apple.trustd.agent",
+	// /usr/bin/curl (and git's https, which is libcurl) verifies against
+	// /etc/ssl/cert.pem first and, when that bundle cannot build the
+	// chain, falls back to the system trust store through this agent.
+	// Without it a site whose root is only in the system store fails
+	// with curl (60) inside and works outside. Trust evaluation only:
+	// Keychain items stay behind agentMachKeychain's services.
+	"com.apple.TrustEvaluationAgent",
 	"com.apple.bsd.dirhelper",
 	"com.apple.coreservices.launchservicesd",
 	"com.apple.CoreServices.coreservicesd",
