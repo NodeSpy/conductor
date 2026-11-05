@@ -228,6 +228,7 @@ func mapDecl(d *plugin.Decl) *TypeDecl {
 		td.Verbs = append(td.Verbs, VerbDecl{
 			Name: v.Name, Desc: v.Desc, Usage: v.Usage, Ask: v.Ask, Open: v.Open,
 			Options: mapSchema(v.Options), Outputs: mapSchema(v.Outputs), Semantics: v.Semantics,
+			BinaryOut: v.BinaryOut,
 		})
 	}
 	for _, e := range d.Events {

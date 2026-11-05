@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -214,5 +215,60 @@ policy:
 	failed, errStr := rig.workflowFailed()
 	if !failed || !strings.Contains(errStr, "no_secret_egress") {
 		t.Fatalf("plan write barrier must gate blob.put: %v %q", failed, errStr)
+	}
+}
+
+// A plugin's binary output is a file it wrote in its staging directory
+// (plugin.Verb.BinaryOut): the runner stores the file as a blob under the
+// plugin's name for it, removes the file, and the scope gets the handle.
+func TestStagedBinaryOutBecomesABlob(t *testing.T) {
+	staged := stagedFiles(t, "svc", "pr-7.tar")["pr-7.tar"]
+	rig, fake, _ := blobRig(t)
+	fake.outputs["download"] = map[string]any{"body": staged, "body_media_type": "application/x-tar"}
+	var handle map[string]any
+	fake.failIf["post"] = func(opts map[string]any) bool {
+		handle, _ = opts["meta"].(map[string]any)
+		return false
+	}
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: dl, uses: svc.download, options: { url: "x" } }
+  - { id: send, uses: svc.post, options: { text: "t", meta: "{{.dl.body}}" } }
+`)
+	runTriggerWithRun(rig, store.WorkflowRun{ID: "run-staged-1", Outputs: map[string]map[string]any{}}, newTrigger("ping", nil), spec)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("workflow failed: %s", errStr)
+	}
+	if d, _ := handle["$blob"].(string); !strings.HasPrefix(d, "sha256:") ||
+		handle["name"] != "pr-7.tar" || handle["media_type"] != "application/x-tar" || handle["size"] != int64(3) {
+		t.Fatalf("relayed handle: %+v", handle)
+	}
+	if _, err := os.Stat(staged); !os.IsNotExist(err) {
+		t.Errorf("the staged file is still there after it was stored: %v", err)
+	}
+}
+
+// A binary output path outside the connector's staging directory is
+// refused, and the file is left alone.
+func TestBinaryOutPathOutsideStagingIsRefused(t *testing.T) {
+	stagedFiles(t, "svc")
+	elsewhere := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(elsewhere, []byte("not yours"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig, fake, _ := blobRig(t)
+	fake.outputs["download"] = map[string]any{"body": elsewhere}
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: dl, uses: svc.download, options: { url: "x" } }
+`)
+	runTriggerWithRun(rig, store.WorkflowRun{ID: "run-staged-2", Outputs: map[string]map[string]any{}}, newTrigger("ping", nil), spec)
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "staging directory") {
+		t.Fatalf("a path outside staging: failed=%v %q", failed, errStr)
+	}
+	if b, err := os.ReadFile(elsewhere); err != nil || string(b) != "not yours" {
+		t.Errorf("the refused file was touched: %q %v", b, err)
 	}
 }

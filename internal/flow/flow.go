@@ -1321,7 +1321,7 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}
-	if out, err = r.storeBlobOutputs(ctx, decl, out); err != nil {
+	if out, err = r.storeBlobOutputs(ctx, decl, out, instanceStaging(in)); err != nil {
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}
@@ -1892,6 +1892,10 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if err != nil {
 		return nil, "", err
 	}
+	fromArchive, err := r.workspaceArchive(ctx, step, data)
+	if err != nil {
+		return nil, "", err
+	}
 	// A step's own `checkout:` always wins; absent one, fall back to the
 	// TRIGGER's action checkout. This is what makes a source's
 	// ForceNoCheckout (every synthetic-target integration forces its
@@ -1907,7 +1911,10 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// forced "none" (which only says the TRIGGER's target is not clonable)
 	// does not apply to it; dispatch defaults such a step to branch-off.
 	checkout := step.Checkout
-	if checkout == "" && step.Repo == "" {
+	if fromArchive != "" {
+		// The agent starts in its copy of the artifact: nothing to check out.
+		checkout = "none"
+	} else if checkout == "" && step.Repo == "" {
 		if ta, ok := t.Action.(config.Action); ok {
 			checkout = ta.Checkout
 		}
@@ -2043,8 +2050,9 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		// trusted. The history id when the run is recorded (stable across
 		// this dispatch's tool calls), else a fresh random one, so the
 		// anchor exists even for an unrecorded run.
-		DispatchID: r.dispatchID(ctx, id),
-		ScopeFacts: mfacts,
+		DispatchID:       r.dispatchID(ctx, id),
+		ScopeFacts:       mfacts,
+		WorkspaceArchive: fromArchive,
 	}
 	if conflictNote(ctx) != "" {
 		// Its own dispatch, apart from the attempt whose push conflicted.

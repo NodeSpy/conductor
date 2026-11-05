@@ -697,6 +697,13 @@ func ValidateSemantics(d Decl) []string {
 		}
 	}
 	var p []string
+	for _, v := range d.Verbs {
+		for _, name := range v.BinaryOut {
+			if _, ok := v.Outputs[name]; !ok {
+				p = append(p, fmt.Sprintf("verbs[%s].binary_out: names output %q, which the verb does not declare", v.Name, name))
+			}
+		}
+	}
 	need := func(path, verb string) *VerbSemantics {
 		s, ok := verbs[verb]
 		if !ok {

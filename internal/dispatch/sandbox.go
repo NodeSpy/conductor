@@ -174,6 +174,10 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 		}
 		switch {
 		case ReviewRole(*req):
+		case req.WorkspaceArchive != "":
+			// An artifact workspace: its .git (if any) is data the artifact
+			// carried, not a checkout conductor made, so the remote it names
+			// is never a push destination.
 		case prev != nil && prev.Push != nil:
 			pt := *prev.Push
 			e.Push = &pt

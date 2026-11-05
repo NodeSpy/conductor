@@ -34,6 +34,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/blob"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/gitsafe"
@@ -107,11 +108,26 @@ func (p *Provisioner) WorktreesDir() string { return filepath.Join(p.root, "work
 //	branch-off    add a worktree on a fresh conductor/<kind>-<n> branch
 //	none          no worktree at all ("", "", nil) — the read-only judges
 //
-// An explicit action work_dir wins over all of it (and is never ours to remove).
+// A `workspace: { from: … }` dispatch (req.WorkspaceArchive) skips all of it:
+// its directory archive is unpacked into a fresh worktree dir of its own,
+// owned, removed and reaped exactly like a checkout.
+//
+// An explicit action work_dir wins over the checkout (and is never ours to
+// remove).
 // Returns (worktree, worktree, nil): the id a session hands back to
 // RemoveWorktree IS the path. Every git failure is wrapped Unrecoverable so the
 // engine escalates and retries exactly like the paseo path.
 func (p *Provisioner) ProvisionWorktree(ctx context.Context, req dispatch.Request) (string, string, error) {
+	if req.WorkspaceArchive != "" {
+		wt, err := p.unpackArchive(req)
+		if err != nil {
+			return "", "", dispatch.Unrecoverable(err)
+		}
+		p.mu.Lock()
+		p.live[wt] = "" // no base clone behind it
+		p.mu.Unlock()
+		return wt, wt, nil
+	}
 	wd, err := dispatch.WorkDir(req)
 	if err != nil {
 		return "", "", dispatch.Unrecoverable(fmt.Errorf("gitwt: render work_dir: %w", err))
@@ -147,6 +163,25 @@ func (p *Provisioner) ProvisionWorktree(ctx context.Context, req dispatch.Reques
 	p.live[wt] = base
 	p.mu.Unlock()
 	return wt, wt, nil
+}
+
+// unpackArchive makes the dispatch's own copy of its workspace archive: a
+// fresh <state>/worktrees child per dispatch, so no two agents ever share
+// one, and nothing an agent does there reaches the artifact or a sibling.
+func (p *Provisioner) unpackArchive(req dispatch.Request) (string, error) {
+	wt, err := p.newWorktreePath(req)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.Open(req.WorkspaceArchive)
+	if err != nil {
+		return "", fmt.Errorf("gitwt: workspace archive: %w", err)
+	}
+	defer f.Close()
+	if err := blob.Untar(f, wt); err != nil {
+		return "", fmt.Errorf("gitwt: workspace archive: %w", err)
+	}
+	return wt, nil
 }
 
 // provision refreshes the repo's base clone and adds the dispatch's worktree
@@ -201,10 +236,10 @@ func (p *Provisioner) RemoveWorktree(ctx context.Context, id string) error {
 		return nil
 	}
 	p.mu.Lock()
-	base := p.live[wt]
+	base, known := p.live[wt]
 	delete(p.live, wt)
 	p.mu.Unlock()
-	if base == "" {
+	if !known {
 		// A worktree from a previous daemon life: recover its base clone from
 		// the worktree's own .git pointer file.
 		base = p.baseOf(wt)

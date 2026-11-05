@@ -113,6 +113,12 @@ type Request struct {
 	// rendered from them when the session is minted (SkillIdentityFor).
 	// nil renders none — templated entries then admit nothing.
 	ScopeFacts map[string]any
+	// WorkspaceArchive is the on-disk path of the directory archive blob a
+	// `workspace: { from: … }` step starts in (resolved and authorized
+	// against the run by the flow layer): the provisioner unpacks a fresh
+	// copy for this dispatch instead of making a checkout, and conductor
+	// never pushes from it. "" means a checkout as usual.
+	WorkspaceArchive string
 	// LiteralPrompt sends Action.Prompt as-is, never template-rendered: a
 	// bot's home prompt carries text agents wrote (handoff notes), which
 	// must not be evaluated against the dispatch's template data.
@@ -430,6 +436,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req Request) (RunRef, error) 
 	}
 	switch backend {
 	case "paseo":
+		if req.WorkspaceArchive != "" {
+			return RunRef{}, errWorkspaceFromRemote
+		}
 		return d.paseo(ctx, req)
 	case "local":
 		return d.local(ctx, req)

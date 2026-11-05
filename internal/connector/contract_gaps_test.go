@@ -75,3 +75,14 @@ func (c *countingHead) Invoke(context.Context, plugin.InvokeRequest) (map[string
 	c.calls++
 	return map[string]any{"sha": "abc", "state": "open"}, nil
 }
+
+// A plugin verb's binary outputs cross the wire into its connector
+// declaration, where the flow runner reads them.
+func TestMapDeclCarriesBinaryOut(t *testing.T) {
+	decl := mapDecl(&sdk.Decl{Type: "forge", Verbs: []sdk.Verb{{Name: "snap",
+		Outputs: sdk.Schema{"archive": {Type: "string"}}, BinaryOut: []string{"archive"}}}})
+	v, ok := decl.Verb("snap")
+	if !ok || len(v.BinaryOut) != 1 || v.BinaryOut[0] != "archive" {
+		t.Fatalf("snap: %+v", v)
+	}
+}

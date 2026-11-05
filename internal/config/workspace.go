@@ -25,6 +25,13 @@ import (
 // The two fields are independent — `isolation` says how a workspace is made,
 // `pin` says which one to reuse — so the object form may set either or both.
 //
+//	workspace: { from: "{{.snap.blob}}" }        # start from an artifact
+//
+// `from:` starts the agent in a copy of a directory an earlier step stored
+// with blob.put (a tar archive blob): conductor unpacks it into a fresh
+// directory of its own for this dispatch alone, instead of making a checkout.
+// It replaces the checkout, so it excludes `pin:` and a repo checkout.
+//
 // DO NOT CONFUSE THIS WITH dispatch.Request.Workspace, a workspace ID/path to
 // worktree from, which shares the name. See the flow map in
 // docs/design/workspace-pin.md.
@@ -36,6 +43,10 @@ type Workspace struct {
 	// first use, reused thereafter. "" means no pin (the default: the
 	// dispatch gets its own workspace, reclaimed when it finishes).
 	Pin string
+	// From is the blob handle (a sole template reference to a step's .blob
+	// output, or a sha256:… digest) of a directory archive the agent starts
+	// in. "" means a checkout as usual.
+	From string
 }
 
 // IsZero reports whether the value carries nothing, so `omitempty` drops it and
@@ -61,7 +72,7 @@ func (w *Workspace) UnmarshalYAML(n *yaml.Node) error {
 		// and means the same thing.
 		var s string
 		if err := n.Decode(&s); err != nil {
-			return fmt.Errorf("workspace: want %s or { isolation, pin }: %w", orList(workspaceModes), err)
+			return fmt.Errorf("workspace: want %s or { isolation, pin, from }: %w", orList(workspaceModes), err)
 		}
 		*w = Workspace{Isolation: s}
 		return nil
@@ -76,6 +87,7 @@ func (w *Workspace) UnmarshalYAML(n *yaml.Node) error {
 		var body struct {
 			Isolation string `yaml:"isolation,omitempty"`
 			Pin       string `yaml:"pin,omitempty"`
+			From      string `yaml:"from,omitempty"`
 		}
 		if err := strictNodeDecode(n, &body); err != nil {
 			return fmt.Errorf("workspace: %w", err)
@@ -86,29 +98,44 @@ func (w *Workspace) UnmarshalYAML(n *yaml.Node) error {
 		if valueAt(n, "pin") != nil && strings.TrimSpace(body.Pin) == "" {
 			return fmt.Errorf("workspace: pin is blank — name the workspace to reuse, or drop `pin:`")
 		}
-		*w = Workspace{Isolation: body.Isolation, Pin: strings.TrimSpace(body.Pin)}
+		if valueAt(n, "from") != nil && strings.TrimSpace(body.From) == "" {
+			return fmt.Errorf("workspace: from is blank — name the artifact to start from, or drop `from:`")
+		}
+		*w = Workspace{Isolation: body.Isolation, Pin: strings.TrimSpace(body.Pin), From: strings.TrimSpace(body.From)}
 		return nil
 	}
-	return fmt.Errorf("workspace: want %s or { isolation, pin }, got a %s",
+	return fmt.Errorf("workspace: want %s or { isolation, pin, from }, got a %s",
 		orList(workspaceModes), nodeKindName(n))
 }
 
 // MarshalYAML re-emits the shape that was written: a pinless workspace is the
 // bare isolation string it has always been (so a round-trip through the config
-// writer leaves existing files byte-identical), and only a pin forces the map.
+// writer leaves existing files byte-identical), and only a pin or from forces
+// the map.
 func (w Workspace) MarshalYAML() (any, error) {
-	if w.Pin == "" {
+	if w.Pin == "" && w.From == "" {
 		return w.Isolation, nil
 	}
-	body := map[string]string{"pin": w.Pin}
+	body := map[string]string{}
+	if w.Pin != "" {
+		body["pin"] = w.Pin
+	}
+	if w.From != "" {
+		body["from"] = w.From
+	}
 	if w.Isolation != "" {
 		body["isolation"] = w.Isolation
 	}
 	return body, nil
 }
 
-// Validate checks the isolation mode. where labels the step for the error.
+// Validate checks the isolation mode and the from reference. where labels
+// the step for the error.
 func (w Workspace) Validate(where string) error {
+	if f := w.From; f != "" && !strings.Contains(f, "{{") &&
+		!(strings.HasPrefix(f, "sha256:") && len(f) == len("sha256:")+64) {
+		return fmt.Errorf("config: %s: workspace.from must be a blob handle — a template such as \"{{.snap.blob}}\" or a sha256:… digest — got %q", where, f)
+	}
 	switch w.Isolation {
 	case "", "local", "worktree":
 		return nil
