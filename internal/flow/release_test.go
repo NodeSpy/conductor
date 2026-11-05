@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -136,35 +137,67 @@ steps:
 	}
 }
 
-// A later step that reads a step's worktree or agent keeps that agent; the
-// other steps are still released.
+// A later step that reads a step's worktree or agent keeps that agent for
+// the run; the other steps are released at their step's end. (When the run
+// ends it goes too: TestLaterReadAgentReleasedAtRunEnd.)
 func TestLaterReadKeepsTheAgent(t *testing.T) {
-	_, l := runRelease(t, `
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
+	rig := newTestRunner(t, cfg, buildRegistry(t, cfg))
+	l := newLiveAgents(t, rig)
+	dispatchLive := rig.Agents.dispatchFunc
+	var live []string
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		if strings.HasPrefix(req.Action.Prompt, "look") {
+			live, _ = l.state(t)
+		}
+		return dispatchLive(ctx, req)
+	}
+	runTrigger(rig, newTrigger("ping", nil), mustSpec(t, `
 on: svc.ping
 steps:
   - { id: fix, type: agent, prompt: "fix it" }
   - { id: other, type: agent, prompt: "something else" }
-  - { id: push, uses: svc.post, options: { text: "git -C {{.fix.workdir}} push" } }
-`)
-	if sessions, wts := l.state(t); len(sessions) != 1 || sessions[0] != "ag-1" || wts != 1 {
-		t.Fatalf("want only fix's agent (ag-1) kept: live %v, worktrees %d", sessions, wts)
+  - { id: check, type: agent, prompt: "look", if: "{{.fix.workdir}}" }
+`))
+	if failed, e := rig.workflowFailed(); failed {
+		t.Fatal(e)
+	}
+	if len(live) != 1 || live[0] != "ag-1" {
+		t.Fatalf("want only fix's agent (ag-1) live when check runs: %v", live)
 	}
 }
 
 // A read that can't be tied to one step (a range over a for_each's items)
-// keeps every agent of the run.
+// keeps every agent of the run, for the run.
 func TestUnattributedReadKeepsEveryAgent(t *testing.T) {
-	_, l := runRelease(t, `
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
+	rig := newTestRunner(t, cfg, buildRegistry(t, cfg))
+	l := newLiveAgents(t, rig)
+	dispatchLive := rig.Agents.dispatchFunc
+	var live []string
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		if strings.HasPrefix(req.Action.Prompt, "list") {
+			live, _ = l.state(t)
+		}
+		return dispatchLive(ctx, req)
+	}
+	runTrigger(rig, newTrigger("ping", map[string]any{"lenses": []any{"a", "b", "c", "d"}}), mustSpec(t, `
 on: svc.ping
 steps:
   - id: review
     for_each: "{{.lenses}}"
     type: agent
     prompt: "review as {{.item}}"
-  - { id: list, uses: svc.post, options: { text: "{{range .review.items}}{{.workdir}} {{end}}" } }
-`)
-	if sessions, _ := l.state(t); len(sessions) != 4 {
-		t.Fatalf("want every lens kept: live %v", sessions)
+  - { id: list, type: agent, prompt: "list {{range .review.items}}{{.workdir}} {{end}}" }
+`))
+	if failed, e := rig.workflowFailed(); failed {
+		t.Fatal(e)
+	}
+	if len(live) != 4 {
+		t.Fatalf("want every lens live when list runs: %v", live)
+	}
+	if sessions, _ := l.state(t); len(sessions) != 0 {
+		t.Fatalf("after the run: live %v — want none", sessions)
 	}
 }
 

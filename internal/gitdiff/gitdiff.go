@@ -24,18 +24,6 @@ const MaxBytes = 64 << 10
 // section (`git diff <base>...HEAD`, base per upstreamBase). "" (nil error) means no proposed change.
 // A dir that isn't a git worktree is an error.
 func Proposed(ctx context.Context, dir string, maxBytes int) (string, error) {
-	return proposed(ctx, dir, maxBytes, true)
-}
-
-// Uncommitted is Proposed without the "unpushed commits" section: for a
-// workspace whose commits conductor pushed in another form (rebased onto a
-// branch that moved), so they are on the remote though no remote ref names
-// them.
-func Uncommitted(ctx context.Context, dir string, maxBytes int) (string, error) {
-	return proposed(ctx, dir, maxBytes, false)
-}
-
-func proposed(ctx context.Context, dir string, maxBytes int, unpushed bool) (string, error) {
 	if maxBytes <= 0 {
 		maxBytes = MaxBytes
 	}
@@ -51,7 +39,7 @@ func proposed(ctx context.Context, dir string, maxBytes int, unpushed bool) (str
 	// Committed-but-unpushed: measured against the upstream, or — for a
 	// branch without one — the last commit already on a remote (see
 	// upstreamBase). Nothing unpushed, nothing reported.
-	if base := upstreamBase(ctx, dir); unpushed && base != "" {
+	if base := upstreamBase(ctx, dir); base != "" {
 		if ahead, err := git(ctx, dir, "diff", base+"...HEAD"); err == nil && strings.TrimSpace(ahead) != "" {
 			if b.Len() > 0 {
 				b.WriteString("\n")

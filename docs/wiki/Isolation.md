@@ -127,8 +127,7 @@ The agent commits; conductor pushes:
 
 Either way conductor pushes **the workspace's `HEAD` to the dispatch's own
 branch only** — the agent names no ref (`git.push` refuses any option) —
-**fast-forward only, never forced** (a branch that moved meanwhile is
-rebased onto, see below — never overwritten), and
+**fast-forward only, never forced** (a diverged remote is a refusal), and
 **re-signs every new commit** with your SSH signing key on the way out. A
 commit is new when no branch on the remote already has it: merging the base
 branch in pushes the merge, not re-signed copies of the base's commits, and
@@ -136,31 +135,6 @@ the 500-commit cap counts only new commits. A
 review (a decide step, an output-schema step, a checkout-less step, a review
 trigger — unless `expect_push:`) is never pushed. Every push is audited
 (`git_push`).
-
-**The branch moved while the agent worked.** The PR's author (or another
-fixer) pushed to the branch after the agent's checkout was made. Conductor
-replays the agent's own commits — the ones no remote branch has — onto the
-branch's new head, re-signs them, and pushes that: still a fast-forward,
-never forced, and nothing already on the remote is rewritten. A commit whose
-change the new head already carries is dropped. The step's `push` output
-says `rebased: true` with the head it went `onto`; the agent's workspace
-keeps its own commits, and its `origin/<branch>` is what landed. When the
-replay **conflicts**, nothing is pushed and the work goes back to an agent:
-a runtime that takes a follow-up turn (paseo, a session-bound step) asks the
-same agent to `git rebase origin/<branch>` and resolve, then pushes again;
-otherwise (the cli runtimes) the step is dispatched once more, on the new
-head, its prompt naming where the first attempt's commits are. If that
-still does not land, the step fails as below. `sandbox.push.rebase: false`
-turns the replay off: a moved branch is a refused push. The audit row is
-`push_conflict` (`resolve: follow_up` or `redispatch`).
-
-**A push that fails keeps the agent's commits.** Whatever refused it (a
-moved branch, a conflict, `deny_ci_changes`, the remote), conductor keeps
-the agent's commits under `refs/conductor/unpushed/<branch>/<sha>` in its
-own checkout of the repository, names that ref in the error, the log and the
-`git_push` audit row (`kept_ref`), so removing the workspace never loses
-them: `git log refs/conductor/unpushed/<branch>/<sha>` in that checkout, and
-cherry-pick from there.
 
 **Conductor's git opens its own ssh connections.** Its fetches, `ls-remote`
 and pushes run your ssh (`GIT_SSH_COMMAND`, else your global
@@ -221,7 +195,6 @@ sandbox:
     # name / email: default git's user.name / user.email
     # sign: false        # push unsigned (default: refuse to push without a key)
     # at_step_end: false # only git.push pushes
-    # rebase: false      # a branch that moved under the agent is refused instead of rebased onto (default: rebase)
     # unlanded: warn     # commits left unpushed are recorded, not a step failure (default: fail)
     # deny_ci_changes: true    # optional extra: refuse a push that changes a CI definition (default: off)
   # The containment knobs below are all optional; the values shown are the defaults.

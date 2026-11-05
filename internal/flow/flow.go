@@ -422,6 +422,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	ctx = withDefaultGate(ctx, spec.Gate)
 	ctx = withDefaultIsolation(ctx, packNarrowed(spec.Isolation, spec.PackInstance))
 	ctx = withLaterReads(ctx, spec)
+	ctx = withRunEndRelease(ctx)
 	ctx = r.withRunBudget(ctx, t, spec)
 	ctx, runCost := withCostAcc(ctx)
 	ctx, hist := r.beginHistory(ctx, run, t, spec, shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow))
@@ -715,9 +716,14 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			}
 			r.audit(map[string]any{"event": "step_error", "repo": t.Target.Repo,
 				"number": t.Target.Number, "kind": t.Kind, "step": id, "error": errStr})
-			if step.ContinueOnError {
+			if r.continuesPast(t, step, id, outputs, err, errStr, data) {
 				r.Log("%s step %s failed (continue_on_error): %v", flowTag(t), id, err)
-				outputs = map[string]any{"error": errStr, "failed": true}
+				outputs = continuedOutputs(outputs, errStr)
+				if aid, _ := outputs["agent_id"].(string); aid != "" && releasesAtRunEnd(context.WithValue(ctx, stepReleaseKey{}, true), step, id) {
+					// A failed step keeps its agent — but one the run went on
+					// past, for later steps to read, only until the run ends.
+					deferRelease(ctx, aid)
+				}
 				r.recordOutputs(data, id, outputs)
 				hist.stepDone(id, i, step, "failed", outputs, errStr, true)
 				r.checkpoint(ctx, run, i, id, step, outputs, checkpoint)
@@ -739,6 +745,39 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 		r.checkpoint(ctx, run, i, id, step, outputs, checkpoint)
 	}
 	return nil
+}
+
+// continuesPast reports whether the run keeps going past step's error:
+// continue_on_error: true, or its condition holding over the step's scope
+// with the failed step's own outputs under its id and the failure (the
+// hook.failure shape) as `failure`. A condition that does not evaluate
+// stops the run, as no continue_on_error would.
+func (r *Runner) continuesPast(t core.Trigger, step config.Step, id string, outputs map[string]any, err error, errStr string, data map[string]any) bool {
+	c := step.ContinueOnError
+	if c.Always || c.When == "" {
+		return c.Always
+	}
+	env := cloneData(data)
+	env[id] = anyMap(outputs)
+	env["failure"] = failureCtx(err, errStr, id)
+	ok, eerr := expr.Eval(c.When, env)
+	if eerr != nil {
+		r.Log("%s step %s: continue_on_error: %v", flowTag(t), id, eerr)
+		return false
+	}
+	return ok
+}
+
+// continuedOutputs is what a step the run continued past records: what it
+// produced before it failed (an agent step's workdir and push report, say),
+// with error and failed: true.
+func continuedOutputs(outputs map[string]any, errStr string) map[string]any {
+	out := make(map[string]any, len(outputs)+2)
+	for k, v := range outputs {
+		out[k] = v
+	}
+	out["error"], out["failed"] = errStr, true
+	return out
 }
 
 // recordOutputs makes a step's outputs addressable both ways: the connectors
@@ -843,6 +882,7 @@ func (r *Runner) restoreOutputs(ctx context.Context, t core.Trigger, steps []con
 }
 
 func (r *Runner) finishRun(ctx context.Context, run store.WorkflowRun) {
+	r.releaseAtRunEnd(ctx)
 	if run.ID != "" {
 		_ = r.Store.DeleteRun(run.ID)
 	}
@@ -1044,22 +1084,8 @@ func (r *Runner) execWithRetry(ctx context.Context, t core.Trigger, step config.
 	var out map[string]any
 	var raw string
 	var err error
-	conflictRetried := false
 	for attempt := 0; ; attempt++ {
 		out, raw, err = r.execStep(ctx, t, step, id, slot, data, shadow)
-		// A push that conflicted with the branch's moved head is dispatched
-		// once more on the new head, whatever retry: says — the work is not
-		// failed, it needs resolving (pushconflict.go).
-		var pce *pushConflictError
-		if err != nil && !conflictRetried && ctx.Err() == nil && errors.As(err, &pce) {
-			conflictRetried = true
-			r.Log("%s step %s: its push conflicts with the branch's new head — dispatching it again on that head (%s)", flowTag(t), id, pce.pc.kept)
-			r.audit(map[string]any{"event": "push_conflict", "repo": t.Target.Repo, "number": t.Target.Number, "kind": t.Kind,
-				"step": id, "resolve": "redispatch", "files": pce.pc.files, "kept_ref": pce.pc.kept})
-			ctx = withConflictNote(ctx, pce.pc.redispatchNote())
-			attempt--
-			continue
-		}
 		if err == nil || attempt >= max || ctx.Err() != nil || errors.Is(err, dispatch.ErrTargetClosed) || noStepRetry(err) {
 			break
 		}
@@ -1069,7 +1095,9 @@ func (r *Runner) execWithRetry(ctx context.Context, t core.Trigger, step config.
 		}
 	}
 	if err != nil {
-		return nil, err
+		// What the failed attempt produced (an agent step's workdir, its
+		// push report) — read only by a continue_on_error past it.
+		return out, err
 	}
 	// Defer-retry: the step exited cleanly but reports it isn't done yet.
 	if step.Retry != nil && step.Retry.WhileOutputMatches != "" && !shadow {
@@ -1866,6 +1894,7 @@ func runStagingDirs(ctx context.Context) []string {
 func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, string, error) {
 	// Decided for this step only: a gate's or a plan's agents get their own.
 	release := releasesByDefault(ctx, step, id)
+	releaseAtRunEnd := !release && releasesAtRunEnd(ctx, step, id)
 	ctx = context.WithValue(ctx, stepReleaseKey{}, false)
 	// `agent:` is retained as a free-form ATTRIBUTION label on the dispatch
 	// (it used to name a profile; profiles are gone — design §6). It may be
@@ -1973,11 +2002,6 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if act.Prompt == "" {
 		group, _ := data["group"].(map[string]any)
 		act.Prompt = dispatch.EventPrompt(t, group)
-	}
-	// A re-dispatch after a conflicting push: tell the agent where the
-	// first attempt's work is kept (pushconflict.go).
-	if note := conflictNote(ctx); note != "" {
-		act.Prompt += note
 	}
 	if inputs != nil {
 		act.Prompt += inputs.promptNote()
@@ -2096,10 +2120,6 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if inputs != nil {
 		req.Inputs, req.InputsDir = inputs.list, inputs.dir
 	}
-	if conflictNote(ctx) != "" {
-		// Its own dispatch, apart from the attempt whose push conflicted.
-		req.DispatchID += ":rebase"
-	}
 	ref, err := r.Agents.Dispatch(ctx, req)
 	// Consumed on every outcome so a mark never outlives its dispatch.
 	doneSignalled := r.Agents.TakeDone != nil && r.Agents.TakeDone(req.DispatchID)
@@ -2190,21 +2210,8 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// passed, before the diff below reads what is still unpushed (and so
 	// before expect_push judges whether the work landed).
 	var unlanded error
-	var conflict *pushConflict
 	if r.PushWork != nil && !shadow && !step.Background && !inGate(ctx) && ref.Workdir != "" {
 		pushed, perr := r.PushWork(ctx, req.DispatchID)
-		if pc, ok := asPushConflict(perr); ok {
-			// The branch moved under the agent and its commits conflict
-			// with it (pushconflict.go): the live agent resolves when its
-			// runtime takes a follow-up turn; failing that, the step is
-			// dispatched again on the new head (execWithRetry).
-			if p2, e2, tried := r.resolveConflictInPlace(ctx, t, step, id, slot, ref, req, pc); tried {
-				pushed, perr = p2, e2
-			}
-			if still, ok := asPushConflict(perr); ok {
-				conflict = &still
-			}
-		}
 		switch {
 		case perr == nil:
 			outputs["push"] = pushed
@@ -2225,13 +2232,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// worktree never fails a step that already succeeded.
 	if !shadow && !step.Background && ref.Workdir != "" && !inGate(ctx) {
 		outputs["workdir"] = ref.Workdir
-		readDiff := gitdiff.Proposed
-		if push, _ := outputs["push"].(map[string]any); push["rebased"] == true {
-			// Pushed rebased onto the moved branch: the agent's own commits
-			// landed, under other ids no remote ref names.
-			readDiff = gitdiff.Uncommitted
-		}
-		if diff, derr := readDiff(ctx, ref.Workdir, 0); derr == nil && diff != "" {
+		if diff, derr := gitdiff.Proposed(ctx, ref.Workdir, 0); derr == nil && diff != "" {
 			if r.Secrets != nil {
 				diff = r.Secrets.Redact(diff)
 			}
@@ -2267,16 +2268,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if unlanded != nil {
 		diff, _ := outputs["diff"].(string)
 		summary, _ := outputs["text"].(string)
-		np := &noProgressError{step: id, summary: summary, diff: diff, unlanded: unlanded}
-		if conflict != nil {
-			// Its commits are kept under a ref; the next attempt starts on
-			// the new head, so this agent and its workspace are done.
-			if !archive && ref.AgentID != "" && r.Agents.Archive != nil {
-				r.Agents.Archive(ref.AgentID)
-			}
-			return outputs, ref.Output, &pushConflictError{err: np, pc: *conflict}
-		}
-		return outputs, ref.Output, np
+		return outputs, ref.Output, &noProgressError{step: id, summary: summary, diff: diff, unlanded: unlanded}
 	}
 	if step.ExpectPush && !shadow && !step.Background && !inGate(ctx) {
 		if diff, _ := outputs["diff"].(string); diff != "" {
@@ -2288,6 +2280,10 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// it and its worktree now (release.go), not when the daemon restarts.
 	if release && !archive && !shadow && ref.AgentID != "" && r.Agents.Archive != nil {
 		r.Agents.Archive(ref.AgentID)
+	} else if releaseAtRunEnd && !archive && !shadow && ref.AgentID != "" {
+		// A later step reads its workdir or agent_id: live until the run
+		// ends, then released (release.go).
+		deferRelease(ctx, ref.AgentID)
 	}
 	return outputs, ref.Output, nil
 }

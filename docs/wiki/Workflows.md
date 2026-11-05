@@ -341,7 +341,15 @@ Two endings are not failures:
   says "not ready" (the legacy defer-retry).
 - `timeout:` — bound the step.
 - `continue_on_error: true` — record `{error, failed: true}` as the step's
-  outputs and keep going.
+  outputs, on top of whatever it produced before it failed (an agent step's
+  `workdir`, `diff`, `push` report), and keep going. A **condition** instead
+  of `true` keeps going only when it holds — the `if:` grammar, over the
+  step's scope plus its own outputs under its id and the failure (the
+  `hook.failure` shape) as `failure`:
+  `continue_on_error: "fix.push.unpushed_commits > 0"` goes on past a fixer
+  whose push was refused and stops on any other error. An agent step the run
+  continued past keeps its agent for the steps after it to read, then
+  releases it when the run ends.
 
 ## Failure and resume
 
