@@ -353,3 +353,11 @@ func TestPushAMergeOfTheBaseBranchSignsOnlyTheMerge(t *testing.T) {
 		}
 	}
 }
+
+// conductor's pushes get their own ssh connection: on the operator's shared
+// ControlMaster, a review's parallel fetches held a push for minutes.
+func TestPushSSHHasConnectionSharingOff(t *testing.T) {
+	if got := trustedSSH(); !strings.HasSuffix(got, " -o ControlMaster=no -o ControlPath=none") {
+		t.Fatalf("core.sshCommand for a push = %q, want connection sharing off", got)
+	}
+}
