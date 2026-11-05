@@ -49,7 +49,7 @@ func feedbackTrigger(kind, dedup, flowRef string) core.Trigger {
 		},
 		Action: config.Action{FlowRef: flowRef},
 		// The fixture's app_mention event declares target.assigned: true
-		// (testdata/chat-decl.json) — Slack told us the channel/user
+		// (coretest testdata/chat.json) — the source told us the channel/user
 		// directly, exactly what TargetTrusted means (core/event.go). The
 		// real pluginsource.go lowering sets this from that declaration;
 		// this hand-built trigger must say so itself, or

@@ -32,7 +32,7 @@ var moduleImport = regexp.MustCompile(`github\.com/NodeSpy/conductor[A-Za-z0-9_.
 // engineSideAllowed are the paths that may name a vendor, each with why. The
 // list only shrinks.
 var engineSideAllowed = map[string]string{
-	"internal/core/coretest/": "test support only: the fixture IS a snapshot of the github plugin's declaration",
+	"internal/core/coretest/": "test support only: synthetic connector declarations whose type names the tests' configs use",
 }
 
 func TestEngineSideNamesNoVendor(t *testing.T) {
