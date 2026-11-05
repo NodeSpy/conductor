@@ -120,6 +120,39 @@ func TestSandboxPrefetchRemoved(t *testing.T) {
 	}
 }
 
+// sandbox.push.rebase shipped in v0.80.0 and was removed: a config that
+// still sets it (any value) loads, is warned about once and never has it
+// written back. Its siblings still apply.
+func TestSandboxPushRebaseRemoved(t *testing.T) {
+	const base = "connectors:\n  gh: { use: github, token: x, repos: [\"acme/*\"] }\n"
+	for _, body := range []string{
+		base + "sandbox:\n  push:\n    rebase: false\n",
+		base + "sandbox:\n  push: { rebase: true, unlanded: warn }\n",
+		base + "sandbox:\n  push:\n    rebase: {odd: 1}\n    deny_ci_changes: true\n",
+	} {
+		cfg, err := loadCfg(t, body)
+		if err != nil {
+			t.Fatalf("Load %q: %v", body, err)
+		}
+		if got := cfg.RemovedFieldWarnings(); len(got) != 1 || got[0] != "sandbox.push.rebase: "+PushRebaseRemoved {
+			t.Fatalf("%q: warnings %q", body, got)
+		}
+		out, err := yaml.Marshal(cfg.Sandbox)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(out), "rebase") {
+			t.Fatalf("rebase written back:\n%s", out)
+		}
+		if strings.Contains(body, "unlanded: warn") && cfg.Sandbox.UnlandedFails() {
+			t.Fatalf("%q: a sibling of the removed key was dropped", body)
+		}
+		if strings.Contains(body, "deny_ci_changes") && !cfg.Sandbox.PushDeniesCIChanges() {
+			t.Fatalf("%q: a sibling of the removed key was dropped", body)
+		}
+	}
+}
+
 // Agents reach any public host by default; egress_open: false leaves only
 // the listed patterns.
 func TestSandboxAgentEgress(t *testing.T) {

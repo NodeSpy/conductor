@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -97,19 +96,11 @@ func (p *workPusher) push(ctx context.Context, dispatchID string) (map[string]an
 		Workspace: e.Workspace, GitDir: e.Push.GitDir, HeadDir: e.Push.HeadDir,
 		Branch: e.Push.Branch, Remote: e.Push.Remote, Signer: signer,
 		DenyCIChanges: p.cfg.Sandbox.PushDeniesCIChanges(),
-		Rebase:        p.cfg.Sandbox.PushRebases(),
 	})
 	row := map[string]any{"event": "git_push", "dispatch": dispatchID, "repo": e.Push.Repo, "branch": e.Push.Branch,
 		"old": res.Old, "new": res.New, "commits": res.Commits, "signed": res.Signed}
-	if res.Rebased {
-		row["rebased_onto"] = res.Onto
-	}
 	if err != nil {
 		row["outcome"], row["error"] = "refused", err.Error()
-		var kept *gitpush.KeptError
-		if errors.As(err, &kept) {
-			row["kept_ref"], row["kept_head"] = kept.Ref, kept.Head
-		}
 		p.audit(row)
 		p.logf("git push %s %s: %v", e.Push.Repo, e.Push.Branch, err)
 		return nil, err
@@ -123,14 +114,7 @@ func (p *workPusher) push(ctx context.Context, dispatchID string) (map[string]an
 		p.noteLanded(dispatchID)
 		p.logf("git push %s %s: %d commit(s) %s..%s (signed=%v)", e.Push.Repo, e.Push.Branch, res.Commits, shortSHA(res.Old), shortSHA(res.New), res.Signed)
 	}
-	out := map[string]any{"branch": res.Branch, "pushed": !res.UpToDate, "commits": res.Commits, "head": res.New, "up_to_date": res.UpToDate}
-	if res.Rebased {
-		// The branch had moved: the agent's commits went out rebased onto
-		// it. Its workspace keeps the originals; origin/<branch> is what
-		// landed (`git rebase origin/<branch>` to build on it).
-		out["rebased"], out["onto"] = true, res.Onto
-	}
-	return out, nil
+	return map[string]any{"branch": res.Branch, "pushed": !res.UpToDate, "commits": res.Commits, "head": res.New, "up_to_date": res.UpToDate}, nil
 }
 
 // errNothingToPush is flow's: the end-of-step push pushes nothing, and flow

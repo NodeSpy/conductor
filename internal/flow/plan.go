@@ -848,8 +848,8 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 			r.runHooks(ctx, t, step.Hooks, "fail", fdata, "plan step "+id)
 			r.audit(map[string]any{"event": "plan_step", "repo": t.Target.Repo, "number": t.Target.Number,
 				"agent": st.agent, "step": id, "outcome": "failed", "error": errStr})
-			if step.ContinueOnError {
-				r.recordOutputs(st.scope, id, map[string]any{"error": errStr, "failed": true})
+			if r.continuesPast(t, step, id, outputs, err, errStr, st.scope) {
+				r.recordOutputs(st.scope, id, continuedOutputs(outputs, errStr))
 				st.next = i + 1
 				continue
 			}

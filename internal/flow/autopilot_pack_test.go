@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/core/coretest"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/gitpush"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
@@ -95,6 +97,12 @@ func newGHAPI(t *testing.T, head string) *ghAPI {
 		case "rerequest_review":
 			api.writes = append(api.writes, fmt.Sprintf("rerequest_review %v", o["reviewers"]))
 			return sdk.InvokeResult{Outputs: map[string]any{}}, nil
+		case "pr_get":
+			// The PR's branch, for the moved-head steps.
+			return sdk.InvokeResult{Outputs: map[string]any{"head": "pr-7", "head_sha": api.head, "state": "open"}}, nil
+		case "check_failures":
+			// The CI fixer's read of what failed (none, here).
+			return sdk.InvokeResult{Outputs: map[string]any{"sha": api.head, "failures": []any{}}}, nil
 		}
 		t.Errorf("unexpected verb %s %v", req.Verb, o)
 		return sdk.InvokeResult{}, sdk.Fail(sdk.CodeInvalid, "unexpected verb "+req.Verb, nil)
@@ -121,7 +129,19 @@ func (a *ghAPI) take() (statuses, reacts []string) {
 // builds a runner over it.
 func autopilotRig(t *testing.T) (*testRig, *config.Config) {
 	t.Helper()
+	rig, cfg, _ := autopilotRigRemote(t)
+	return rig, cfg
+}
+
+// autopilotRigRemote is autopilotRig with the moved-head steps' world: the
+// pack's git connector bound to the git fixture (its own repository under
+// the test's temp dir), and push_remote a bare repository the test fills
+// in — returned.
+func autopilotRigRemote(t *testing.T) (*testRig, *config.Config, string) {
+	t.Helper()
 	dir := t.TempDir()
+	remote := filepath.Join(dir, "remote.git")
+	gitFixture(t, filepath.Dir(remote), "init", "-q", "--bare", remote)
 	src, err := os.ReadFile("testdata/packs/pr-autopilot/conductor-pack.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -139,10 +159,14 @@ connectors:
     use: github
     identity: { write_token: literal-tok }
     webhook: { listen: "127.0.0.1:0", secret: s }
+  landing:
+    use: git-land
+    dir: `+filepath.Join(dir, "landing.git")+`
 packs:
   autopilot:
     source: ./pr-autopilot
-    connectors: { github: gh }
+    connectors: { github: gh, git-land: landing }
+    settings: { push_remote: "`+remote+`" }
     triggers:
       "*": { enabled: true, repos: [org/repo] }
 `), 0o644); err != nil {
@@ -164,7 +188,9 @@ packs:
 	if err := Validate(cfg, reg); err != nil {
 		t.Fatalf("the pack's config doesn't validate: %v", err)
 	}
-	return newTestRunner(t, cfg, reg), cfg
+	rig := newTestRunner(t, cfg, reg)
+	rig.Runner.sleep = fastSleep
+	return rig, cfg, remote
 }
 
 func autopilotSpec(t *testing.T, cfg *config.Config, name string) config.TriggerSpec {
@@ -319,7 +345,8 @@ func TestAutopilotPackClosedMidRunLeavesNothing(t *testing.T) {
 // The live bug: on_changes_requested's `address` agent committed a fix,
 // nothing pushed it, and `resolve` resolved the reviewer's threads on the
 // agent's word. resolve now runs only when conductor reports it pushed the
-// step's work; a commit left unpushed fails the run (no_progress) instead.
+// step's work; a commit left unpushed on a branch that did not move fails
+// the run (the pack's unpushed step), the commit kept.
 func TestAutopilotPackResolveOnlyWhenPushed(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -341,9 +368,15 @@ func TestAutopilotPackResolveOnlyWhenPushed(t *testing.T) {
 			wantWrite: []string{"rerequest_review [alice]"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			api := newGHAPI(t, "aaaaaaa1111")
-			rig, cfg := autopilotRig(t)
+			head := "aaaaaaa1111"
+			rig, cfg, remote := autopilotRigRemote(t)
 			ws := cloneWithCommits(t, tc.commits)
+			if tc.commits > 0 {
+				// The PR branch, where the workspace started: it did not move.
+				gitFixture(t, ws, "push", "-q", remote, "origin/HEAD:refs/heads/pr-7")
+				head = gitFixture(t, ws, "rev-parse", "origin/HEAD")
+			}
+			api := newGHAPI(t, head)
 			var req dispatch.Request
 			rig.Agents.dispatchFunc = func(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
 				req = r
@@ -365,46 +398,293 @@ func TestAutopilotPackResolveOnlyWhenPushed(t *testing.T) {
 			wantList(t, "review writes", writes, tc.wantWrite...)
 			if tc.wantFail {
 				st, _ := api.take()
-				if !strings.Contains(strings.Join(st, "\n"), "failure octo-me / review | gave up: the change was never pushed") {
-					t.Fatalf("the PR must show the failure: %v", st)
+				if !strings.Contains(strings.Join(st, "\n"), `failure octo-me / review | gave up: step "unpushed" failed`) {
+					t.Fatalf("the PR must show the failure: %v (%s)", st, e)
+				}
+				kept := gitFixture(t, filepath.Join(filepath.Dir(remote), "landing.git"), "rev-parse", "refs/kept/org/repo/pr-7/a1")
+				if head := gitFixture(t, ws, "rev-parse", "HEAD"); kept != head {
+					t.Fatalf("the unpushed commit is kept: %s, want %s", kept, head)
 				}
 			}
 		})
 	}
 }
 
-// The PR head moved while the fixer worked and its commits conflict with it:
-// the job is not lost — the step goes out once more on the new head, told
-// where the first attempt's commits are kept, and the threads resolve once
-// that push lands.
-func TestAutopilotPackPushConflictRedispatches(t *testing.T) {
-	api := newGHAPI(t, "aaaaaaa1111")
-	rig, cfg := autopilotRig(t)
-	// The first attempt's commit never lands; the re-dispatch's does.
-	wss := []string{cloneWithCommits(t, 1), cloneWithCommits(t, 0)}
+// movedHead is a PR whose branch moves while the pack's fixer works, real
+// git end to end: a bare remote (the pack's push_remote), conductor's base
+// clone, a linked worktree per dispatch checked out at the branch's head as
+// of that dispatch (removed when its agent is archived), conductor's own
+// end-of-step push (gitpush: fast-forward only, a moved branch refused),
+// and the git fixture landing what the pack hands it.
+type movedHead struct {
+	t            *testing.T
+	remote, base string
+	mu           sync.Mutex
+	ws, start    map[string]string // dispatch id -> workspace, the head it started at
+	byAgent      map[string]string // agent id -> workspace
+	archived     []string
+	refuse       error // the remote refuses every push with this
+}
+
+func newMovedHead(t *testing.T, remote string) *movedHead {
+	t.Helper()
+	m := &movedHead{t: t, remote: remote, base: filepath.Join(t.TempDir(), "base"),
+		ws: map[string]string{}, start: map[string]string{}, byAgent: map[string]string{}}
+	gitFixture(t, filepath.Dir(m.base), "clone", "-q", remote, m.base)
+	m.write(m.base, "app.txt", "one\n")
+	gitFixture(t, m.base, "add", "app.txt")
+	gitFixture(t, m.base, "commit", "-q", "-m", "init")
+	gitFixture(t, m.base, "push", "-q", "origin", "HEAD:refs/heads/pr-7")
+	return m
+}
+
+func (m *movedHead) write(dir, name, body string) {
+	m.t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		m.t.Fatal(err)
+	}
+}
+
+// checkout is a dispatch's workspace at pr-7's head now.
+func (m *movedHead) checkout(dispatchID, agentID string) string {
+	gitFixture(m.t, m.base, "fetch", "-q", "origin", "+refs/heads/pr-7:refs/remotes/origin/pr-7")
+	ws := filepath.Join(m.t.TempDir(), "ws")
+	gitFixture(m.t, m.base, "worktree", "add", "-q", "--detach", ws, "origin/pr-7")
+	gitFixture(m.t, ws, "checkout", "-q", "-B", "pr-7-"+agentID)
+	m.mu.Lock()
+	m.ws[dispatchID], m.start[dispatchID], m.byAgent[agentID] = ws, gitFixture(m.t, ws, "rev-parse", "HEAD"), ws
+	m.mu.Unlock()
+	return ws
+}
+
+// archive is the agent's release: its worktree goes with it.
+func (m *movedHead) archive(agentID string) {
+	m.mu.Lock()
+	ws := m.byAgent[agentID]
+	m.archived = append(m.archived, agentID)
+	m.mu.Unlock()
+	if ws != "" {
+		_ = exec.Command("git", "-C", m.base, "worktree", "remove", "--force", ws).Run()
+	}
+}
+
+// authorPushes moves pr-7 on the remote from another clone.
+func (m *movedHead) authorPushes(name, body string) string {
+	other := filepath.Join(m.t.TempDir(), "author")
+	gitFixture(m.t, filepath.Dir(other), "clone", "-q", "-b", "pr-7", m.remote, other)
+	m.write(other, name, body)
+	gitFixture(m.t, other, "add", name)
+	gitFixture(m.t, other, "commit", "-q", "-m", "author: "+name)
+	gitFixture(m.t, other, "push", "-q", "origin", "pr-7")
+	return gitFixture(m.t, other, "rev-parse", "HEAD")
+}
+
+// push is conductor's end-of-step push for a dispatch, as the daemon wires
+// it (a refusal is a PushError naming where the workspace started).
+func (m *movedHead) push(ctx context.Context, dispatchID string) (map[string]any, error) {
+	m.mu.Lock()
+	ws, start, refuse := m.ws[dispatchID], m.start[dispatchID], m.refuse
+	m.mu.Unlock()
+	headDir := gitFixture(m.t, ws, "rev-parse", "--absolute-git-dir")
+	if refuse != nil {
+		return nil, &PushError{Err: refuse, Since: start}
+	}
+	res, err := gitpush.Push(ctx, gitpush.Request{Workspace: ws, GitDir: filepath.Join(m.base, ".git"),
+		HeadDir: headDir, Branch: "pr-7", Remote: m.remote})
+	if err != nil {
+		return nil, &PushError{Err: err, Since: start}
+	}
+	return map[string]any{"pushed": !res.UpToDate, "commits": res.Commits, "head": res.New, "up_to_date": res.UpToDate}, nil
+}
+
+// commit writes name=body in ws and commits it, as the fixer would.
+func (m *movedHead) commit(ws, name, body string) string {
+	m.write(ws, name, body)
+	gitFixture(m.t, ws, "add", name)
+	gitFixture(m.t, ws, "commit", "-q", "-m", "fixer: "+name)
+	return gitFixture(m.t, ws, "rev-parse", "HEAD")
+}
+
+func (m *movedHead) tip() string { return gitFixture(m.t, m.remote, "rev-parse", "pr-7") }
+
+// movedHeadRun runs on_changes_requested over a movedHead; attempts[i] is
+// what the i-th dispatched agent does in its workspace.
+func movedHeadRun(t *testing.T, attempts ...func(m *movedHead, ws, prompt string)) (*movedHead, *testRig, *ghAPI, []dispatch.Request) {
+	t.Helper()
+	rig, cfg, remote := autopilotRigRemote(t)
+	m := newMovedHead(t, remote)
+	api := newGHAPI(t, m.tip()) // the run starts on pr-7's head: where the fixer does
 	var reqs []dispatch.Request
 	rig.Agents.dispatchFunc = func(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
 		reqs = append(reqs, r)
-		return dispatch.RunRef{Workdir: wss[min(len(reqs), 2)-1], Output: `{"addressed_comments":[11,12],"summary":"fixed"}`, AgentID: "a1"}, nil
-	}
-	pushes := 0
-	rig.Runner.PushWork = func(context.Context, string) (map[string]any, error) {
-		pushes++
-		if pushes == 1 {
-			return nil, conflictPushErr()
+		agent := fmt.Sprintf("a%d", len(reqs))
+		ws := m.checkout(r.DispatchID, agent)
+		if n := len(reqs); n <= len(attempts) {
+			// The task as the agent reads it: rendered over the run's data
+			// at dispatch, the step's own guidance included.
+			prompt, err := dispatch.RenderPrompt(r)
+			if err != nil {
+				t.Fatalf("render the task: %v", err)
+			}
+			attempts[n-1](m, ws, prompt)
 		}
-		return map[string]any{"pushed": true, "commits": 1, "up_to_date": false}, nil
+		return dispatch.RunRef{Workdir: ws, Output: fmt.Sprintf(`{"addressed_comments":[%d],"summary":"fixed"}`, 10+len(reqs)), AgentID: agent}, nil
 	}
+	rig.Runner.Agents.Guidance = func(_ string, s config.Step, _ config.Policy) string {
+		if s.Guidance == nil {
+			return ""
+		}
+		return "\n\n" + strings.Join(s.Guidance.Parts, "\n\n")
+	}
+	rig.Runner.Agents.Archive = m.archive
+	rig.Runner.PushWork = m.push
 	runAutopilot(rig, autopilotSpec(t, cfg, "on_changes_requested"), autopilotTrigger("changes_requested", map[string]any{
 		"author": "alice", "review_id": int64(9), "feedback_cursor": "c1"}))
+	return m, rig, api, reqs
+}
+
+// landing is the git connector's own repository (autopilotRigRemote).
+func (m *movedHead) landing() string { return filepath.Join(filepath.Dir(m.remote), "landing.git") }
+
+// The PR branch moved while the fixer worked and its commit replays cleanly:
+// conductor's push is refused (never forced), the pack keeps the commit,
+// replays it onto the new head and pushes that — a fast-forward of the
+// author's commit — with one dispatch. The threads it addressed resolve and
+// the fixer's agent (with its workspace) is released when the run ends.
+func TestAutopilotPackLandsOnAMovedHead(t *testing.T) {
+	var theirs, agentHead string
+	m, rig, api, reqs := movedHeadRun(t, func(m *movedHead, ws, _ string) {
+		theirs = m.authorPushes("theirs.txt", "theirs\n")
+		agentHead = m.commit(ws, "fix.txt", "fix\n")
+	})
 	if failed, e := rig.workflowFailed(); failed {
-		t.Fatalf("the re-dispatched fixer lands its work: %s", e)
+		t.Fatalf("the moved head lands: %s", e)
 	}
-	if len(reqs) != 2 || !strings.Contains(reqs[1].Action.Prompt, "NOTE FROM CONDUCTOR") {
-		t.Fatalf("one re-dispatch carrying the conflict note: %d dispatches", len(reqs))
+	if len(reqs) != 1 {
+		t.Fatalf("a clean replay needs no second agent: %d dispatches", len(reqs))
+	}
+	tip := m.tip()
+	gitFixture(t, m.remote, "merge-base", "--is-ancestor", theirs, tip) // the author's push stands
+	if got := gitFixture(t, m.remote, "rev-parse", tip+"^"); got != theirs {
+		t.Fatalf("the replayed commit sits on the author's: %s", got)
+	}
+	if files := gitFixture(t, m.remote, "show", "--name-only", "--format=", tip); files != "fix.txt" {
+		t.Fatalf("the replayed commit carries the fixer's change only: %q", files)
+	}
+	if got := gitFixture(t, m.landing(), "rev-parse", "refs/kept/org/repo/pr-7/a1"); got != agentHead {
+		t.Fatalf("kept ref = %s, want the fixer's commit %s", got, agentHead)
 	}
 	api.mu.Lock()
 	writes := api.writes
 	api.mu.Unlock()
-	wantList(t, "review writes", writes, "resolve_threads [11 12]", "rerequest_review [alice]")
+	wantList(t, "review writes", writes, "resolve_threads [11]", "rerequest_review [alice]")
+	if strings.Join(m.archived, ",") != "a1" {
+		t.Fatalf("the fixer's agent is released when the run ends: archived %v", m.archived)
+	}
+}
+
+// conflictAttempt is a first fixer whose commit conflicts with what the
+// author pushes meanwhile (both change app.txt).
+func conflictAttempt(theirs, first *string) func(m *movedHead, ws, _ string) {
+	return func(m *movedHead, ws, _ string) {
+		*theirs = m.authorPushes("app.txt", "author's one\n")
+		*first = m.commit(ws, "app.txt", "fixer's one\n")
+	}
+}
+
+// The moved head conflicts with the fixer's commit: nothing is forced, the
+// commit stays kept, and the fixer runs once more on the new head, its task
+// naming the conflict, carrying the first attempt's diff and the kept
+// commit. That second attempt resolves it and conductor's push lands; the
+// threads it addressed resolve.
+func TestAutopilotPackRerunsOnAConflictingMovedHead(t *testing.T) {
+	var theirs, first string
+	m, rig, api, reqs := movedHeadRun(t, conflictAttempt(&theirs, &first),
+		func(m *movedHead, ws, prompt string) {
+			for _, want := range []string{"NOTE: this is a second attempt", "it is now at " + theirs, "they conflict in [app.txt]",
+				"+fixer's one", "git cat-file -e " + first} {
+				if !strings.Contains(prompt, want) {
+					t.Fatalf("the re-run's task lacks %q:\n%s", want, prompt)
+				}
+			}
+			if got := gitFixture(t, ws, "rev-parse", "HEAD"); got != theirs {
+				t.Fatalf("the re-run starts on the new head %s, not %s", theirs, got)
+			}
+			m.commit(ws, "app.txt", "author's one\nfixer's one\n")
+		})
+	if failed, e := rig.workflowFailed(); failed {
+		t.Fatalf("the re-run lands the work: %s", e)
+	}
+	if len(reqs) != 2 || reqs[0].DispatchID == reqs[1].DispatchID {
+		t.Fatalf("one re-run, its own dispatch: %d dispatches", len(reqs))
+	}
+	if strings.Contains(reqs[0].Action.Prompt, "second attempt") {
+		t.Fatal("a first attempt carries no re-run note")
+	}
+	tip := m.tip()
+	gitFixture(t, m.remote, "merge-base", "--is-ancestor", theirs, tip)
+	if body := gitFixture(t, m.remote, "show", tip+":app.txt"); body != "author's one\nfixer's one" {
+		t.Fatalf("app.txt on the branch = %q", body)
+	}
+	if got := gitFixture(t, m.landing(), "rev-parse", "refs/kept/org/repo/pr-7/a1"); got != first {
+		t.Fatalf("the first attempt's commit stays kept: %s", got)
+	}
+	api.mu.Lock()
+	writes := api.writes
+	api.mu.Unlock()
+	wantList(t, "review writes", writes, "resolve_threads [12]", "rerequest_review [alice]")
+}
+
+// The re-run is bounded to once: its own push is refused too (the branch
+// moved again under it). The run fails as unpushed — no third dispatch,
+// nothing forced, no thread resolved — and the first attempt's commit is
+// still at its kept ref.
+func TestAutopilotPackMovedHeadRerunIsBounded(t *testing.T) {
+	var theirs, first, last string
+	m, rig, api, reqs := movedHeadRun(t, conflictAttempt(&theirs, &first),
+		func(m *movedHead, ws, _ string) {
+			m.commit(ws, "app.txt", "author's one\nfixer's one\n")
+			last = m.authorPushes("again.txt", "again\n")
+		})
+	failed, e := rig.workflowFailed()
+	if !failed || !strings.Contains(e, "never pushed") {
+		t.Fatalf("a re-run that still doesn't land fails the run: failed=%v %s", failed, e)
+	}
+	if len(reqs) != 2 {
+		t.Fatalf("bounded to one re-run: %d dispatches", len(reqs))
+	}
+	if got := m.tip(); got != last {
+		t.Fatalf("the remote is the author's last push %s, not %s: nothing forced", last, got)
+	}
+	if got := gitFixture(t, m.landing(), "rev-parse", "refs/kept/org/repo/pr-7/a1"); got != first {
+		t.Fatalf("kept ref = %s, want %s", got, first)
+	}
+	api.mu.Lock()
+	writes := api.writes
+	api.mu.Unlock()
+	if strings.Contains(strings.Join(writes, "\n"), "resolve_threads") {
+		t.Fatalf("nothing landed, so no thread resolves: %v", writes)
+	}
+	st, _ := api.take()
+	if !strings.Contains(strings.Join(st, "\n"), "failure octo-me / review | gave up: the change was never pushed") {
+		t.Fatalf("the PR shows the failure: %v", st)
+	}
+}
+
+// A push refused while the branch did NOT move (here the remote refuses
+// the push outright) is no moved head: no re-run, the run fails, the commit
+// kept.
+func TestAutopilotPackRefusalWithoutAMoveFails(t *testing.T) {
+	var head string
+	m, rig, _, reqs := movedHeadRun(t, func(m *movedHead, ws, _ string) {
+		head = m.commit(ws, "fix.txt", "fix\n")
+		m.refuse = errors.New("the remote refused the push")
+	})
+	failed, e := rig.workflowFailed()
+	if !failed || len(reqs) != 1 || !strings.Contains(e, "never pushed") {
+		t.Fatalf("failed=%v %q after %d dispatches, want a failure after 1", failed, e, len(reqs))
+	}
+	if got := gitFixture(t, m.landing(), "rev-parse", "refs/kept/org/repo/pr-7/a1"); got != head {
+		t.Fatalf("kept ref = %s, want %s", got, head)
+	}
 }

@@ -305,7 +305,7 @@ func validateStepList(cfg *config.Config, reg *connector.Registry, where string,
 	for i, step := range steps {
 		id := stepID(step, i)
 		w := fmt.Sprintf("%s step %s", where, id)
-		if err := validateOneStep(cfg, reg, w, step, sc); err != nil {
+		if err := validateOneStep(cfg, reg, w, id, step, sc); err != nil {
 			return err
 		}
 		sc.addStep(id, stepOutputSchema(reg, step))
@@ -313,7 +313,7 @@ func validateStepList(cfg *config.Config, reg *connector.Registry, where string,
 	return nil
 }
 
-func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step config.Step, sc *scope) error {
+func validateOneStep(cfg *config.Config, reg *connector.Registry, w, id string, step config.Step, sc *scope) error {
 	// Position-scoped references in the step's own templated fields. A
 	// for_each step's fields additionally see item/index.
 	stepScope := sc
@@ -327,6 +327,15 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 	}
 	if step.If != "" {
 		if err := checkCondRefs(w+" if", step.If, stepScope); err != nil {
+			return err
+		}
+	}
+	if c := step.ContinueOnError.When; c != "" {
+		// Read after the step failed: its own outputs and the failure.
+		cs := stepScope.clone()
+		cs.add(id)
+		cs.add("failure")
+		if err := checkCondRefs(w+" continue_on_error", c, cs); err != nil {
 			return err
 		}
 	}
@@ -452,7 +461,7 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 					return fmt.Errorf("%s: step id %q collides across parallel branches", bw, bid)
 				}
 				seen[bid] = true
-				if err := validateOneStep(cfg, reg, bw+" step "+bid, bs, branchScope); err != nil {
+				if err := validateOneStep(cfg, reg, bw+" step "+bid, bid, bs, branchScope); err != nil {
 					return err
 				}
 				branchScope.addStep(bid, stepOutputSchema(reg, bs))
@@ -462,8 +471,7 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 
 	// Step-level hooks: at:start and at:stop see the prior scope; at:done
 	// adds this step's own output; at:fail adds failure metadata.
-	id := step.ID
-	if id == "" {
+	if step.ID == "" {
 		id = "this step"
 	}
 	hookScope := stepScope.clone()
