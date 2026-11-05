@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 
@@ -102,4 +103,60 @@ func releasesByDefault(ctx context.Context, step config.Step, id string) bool {
 	}
 	base, _, _ := strings.Cut(id, "[")
 	return !reads.ids[base] && !reads.ids[step.ID]
+}
+
+// A step whose agent a later step reads (its workdir, its agent_id) keeps
+// that agent live past the step — and, when the step leaves
+// archive_when_done unset, no longer than the run: it is released when the
+// run ends, however it ends. A failed step keeps its agent as before, unless
+// the run continued past it (continue_on_error) for later steps to read its
+// workspace: then it too goes when the run ends.
+
+// runEndReleaseKey carries the run's agents to release when it ends.
+type runEndReleaseKey struct{}
+
+type runEndRelease struct {
+	mu  sync.Mutex
+	ids []string
+}
+
+func withRunEndRelease(ctx context.Context) context.Context {
+	return context.WithValue(ctx, runEndReleaseKey{}, &runEndRelease{})
+}
+
+// releasesAtRunEnd reports whether a step's agent, kept live past the step
+// only because a later step reads it, is released when the run ends.
+func releasesAtRunEnd(ctx context.Context, step config.Step, id string) bool {
+	if step.ArchiveWhenDone != nil || step.Background || step.Handoff != "" ||
+		step.Session != nil || step.Watch != nil || step.IdleTimeout > 0 {
+		return false
+	}
+	if on, _ := ctx.Value(stepReleaseKey{}).(bool); !on {
+		return false
+	}
+	return !releasesByDefault(ctx, step, id)
+}
+
+// deferRelease releases agentID when the run ends.
+func deferRelease(ctx context.Context, agentID string) {
+	if rr, ok := ctx.Value(runEndReleaseKey{}).(*runEndRelease); ok {
+		rr.mu.Lock()
+		rr.ids = append(rr.ids, agentID)
+		rr.mu.Unlock()
+	}
+}
+
+// releaseAtRunEnd archives the agents deferRelease kept for the run.
+func (r *Runner) releaseAtRunEnd(ctx context.Context) {
+	rr, ok := ctx.Value(runEndReleaseKey{}).(*runEndRelease)
+	if !ok || r.Agents.Archive == nil {
+		return
+	}
+	rr.mu.Lock()
+	ids := rr.ids
+	rr.ids = nil
+	rr.mu.Unlock()
+	for _, id := range ids {
+		r.Agents.Archive(id)
+	}
 }

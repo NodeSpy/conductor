@@ -195,13 +195,10 @@ type SandboxPush struct {
 	// pushes, and an agent can still change what CI runs through any
 	// script, Makefile or test a pipeline calls.
 	DenyCIChanges bool `yaml:"deny_ci_changes,omitempty"`
-	// Rebase: when the dispatch branch moved on the remote while the agent
-	// worked (someone pushed to the PR), conductor replays the agent's own
-	// commits onto the new remote head and pushes that, fast-forward
-	// (default true). Commits already on the remote are never rewritten and
-	// nothing is ever forced. A replay that conflicts is handed back to the
-	// agent to resolve. false: a moved remote is refused, as before.
-	Rebase *bool `yaml:"rebase,omitempty"`
+	// Rebase was removed (removed.go): accepted, ignored, warned about. A
+	// branch that moved under the agent is a refused push; a workflow
+	// decides what happens next.
+	Rebase RemovedField `yaml:"rebase,omitempty"`
 	// Unlanded is what happens to a sandboxed step whose agent committed
 	// work conductor did not push at the step's end (no branch to push to,
 	// a refused push): `fail` (default) fails the step — the work would be
@@ -226,11 +223,6 @@ func (s *SandboxConfig) PushAtStepEnd() bool {
 // fails its step (sandbox.push.unlanded, default fail).
 func (s *SandboxConfig) UnlandedFails() bool {
 	return s == nil || s.Push == nil || s.Push.Unlanded != "warn"
-}
-
-// PushRebases reports sandbox.push.rebase (default on).
-func (s *SandboxConfig) PushRebases() bool {
-	return s == nil || s.Push == nil || s.Push.Rebase == nil || *s.Push.Rebase
 }
 
 // PushDeniesCIChanges reports sandbox.push.deny_ci_changes (default off).

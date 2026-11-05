@@ -1152,11 +1152,11 @@ type Step struct {
 	IdleTimeout Duration `yaml:"idle_timeout,omitempty"`
 
 	// control flow
-	ForEach         string        `yaml:"for_each,omitempty"` // template resolving to a list; {{.item}} in scope
-	Parallel        *ParallelSpec `yaml:"parallel,omitempty"`
-	Retry           *RetrySpec    `yaml:"retry,omitempty"`
-	Timeout         Duration      `yaml:"timeout,omitempty"`
-	ContinueOnError bool          `yaml:"continue_on_error,omitempty"`
+	ForEach         string          `yaml:"for_each,omitempty"` // template resolving to a list; {{.item}} in scope
+	Parallel        *ParallelSpec   `yaml:"parallel,omitempty"`
+	Retry           *RetrySpec      `yaml:"retry,omitempty"`
+	Timeout         Duration        `yaml:"timeout,omitempty"`
+	ContinueOnError ContinueOnError `yaml:"continue_on_error,omitempty"`
 	// ExpectPush marks an agent step whose job is to LAND a change on the target
 	// (a fixer: resolve the conflict, fix the checks, push the fix). When it runs
 	// cleanly but leaves work unlanded — a non-empty proposed diff that never

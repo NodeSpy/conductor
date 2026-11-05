@@ -27,6 +27,15 @@ const FolderRemoved = "folders were removed; this field is ignored and can be de
 // PrefetchRemoved is the warning for a `sandbox.prefetch:` still in a config.
 const PrefetchRemoved = "prefetch was removed; this field is ignored and can be deleted (agents download packages themselves; public hosts are reachable by default)"
 
+// `sandbox.push.rebase:` is another: conductor's push no longer replays an
+// agent's commits onto a branch that moved under it. The push is refused,
+// the commits kept, and the step's push output says why — a workflow (a
+// pack) decides whether to run the job again on the new head.
+
+// PushRebaseRemoved is the warning for a `sandbox.push.rebase:` still in a
+// config.
+const PushRebaseRemoved = "rebase was removed; this field is ignored and can be deleted (conductor pushes fast-forward only: a push to a branch that moved is refused, the step's push output reports the commits left unpushed, and the workflow decides what happens next)"
+
 // RemovedField is a removed config key: it decodes from any value and is
 // never marshaled (IsZero is always true, and every use is omitempty).
 type RemovedField struct{}
@@ -55,6 +64,9 @@ func removedFolderWarnings(doc []byte) []string {
 	walkConfigFolders(n.Content[0], &out)
 	if mapValue(mapValue(n.Content[0], "sandbox"), "prefetch") != nil {
 		out = append(out, "sandbox.prefetch: "+PrefetchRemoved)
+	}
+	if mapValue(mapValue(mapValue(n.Content[0], "sandbox"), "push"), "rebase") != nil {
+		out = append(out, "sandbox.push.rebase: "+PushRebaseRemoved)
 	}
 	sort.Strings(out)
 	return out
