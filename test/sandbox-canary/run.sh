@@ -75,15 +75,25 @@ r direct_net "curl -sS -m 8 --noproxy '*' -o /dev/null https://example.org"
 out=$(conductor call step.done 2>&1); case "$out" in *"skill.verbs"*|*released*) echo socket=yes ;; *) echo "socket=no ($out)" ;; esac
 if env | grep -qE '^(GH_TOKEN|GITHUB_TOKEN|SSH_AUTH_SOCK|AWS_SECRET_ACCESS_KEY|CLAUDE_CODE_MESSAGING_TOKEN)='; then echo env_clean=no; else echo env_clean=yes; fi
 echo "home=$HOME"
+echo "decoy_dir=$CANARY_W"
 PROBE
 cd "$W/ws"
-out="$(run_env CANARY_W="$W" GH_TOKEN=ghp_leak SSH_AUTH_SOCK=/tmp/x AWS_SECRET_ACCESS_KEY=leak CLAUDE_CODE_MESSAGING_TOKEN=leak \
-  conductor sandbox exec --config "$W/cfg/config.yaml" -- /bin/sh ./probe.sh 2>&1)"
+# CANARY_W (the decoys' directory) is set inside, by env: the sandbox builds
+# the agent's environment from an allowlist (AgentEnv), so a variable handed
+# to `sandbox exec` never reaches the probe — and an empty one points the
+# secret checks at /home/.ssh/..., which pass whatever the sandbox does.
+out="$(run_env GH_TOKEN=ghp_leak SSH_AUTH_SOCK=/tmp/x AWS_SECRET_ACCESS_KEY=leak CLAUDE_CODE_MESSAGING_TOKEN=leak \
+  conductor sandbox exec --config "$W/cfg/config.yaml" -- /usr/bin/env CANARY_W="$W" /bin/sh ./probe.sh 2>&1)"
 rc=$?
 echo "== $(uname -s): conductor sandbox exec probe (exit $rc) =="
 echo "$out"
 v() { printf '%s\n' "$out" | sed -n "s/^$1=//p" | head -1 | cut -d' ' -f1; }
 check "sandbox exec ran the agent" 0 "$rc"
+# The secret checks below mean something only if they aim at the decoys,
+# and only if those are readable here, outside.
+check "the probe aims at the decoys" "$W" "$(v decoy_dir)"
+check "the decoys are readable outside the sandbox" "DECOY-ssh DECOY-aws DECOY-state" \
+  "$(cat "$W/home/.ssh/id_ed25519" "$W/home/.aws/credentials" "$W/st/secret.json" | tr '\n' ' ' | sed 's/ $//')"
 check "operator ssh key absent" no "$(v secret_ssh)"
 check "operator cloud credentials absent" no "$(v secret_aws)"
 check "conductor state absent" no "$(v state)"
