@@ -82,6 +82,11 @@ type Conn struct {
 	nextID  int64
 	pending map[int64]chan wireMessage
 
+	// abandon, when set, is the notification sent when a Call stops waiting
+	// because its ctx ended, naming the request id so the peer can stop the
+	// work. Off by default: ACP agents do not define one.
+	abandon string
+
 	ctx     context.Context
 	cancel  context.CancelFunc
 	closed  chan struct{}
@@ -192,7 +197,14 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 	case <-ctx.Done():
 		c.mu.Lock()
 		delete(c.pending, id)
+		abandon := c.abandon
 		c.mu.Unlock()
+		if abandon != "" {
+			// Off the caller's path: a peer that has stopped reading would
+			// block the write, and the caller must get its error now. A late
+			// response for id finds no pending entry and is dropped (deliver).
+			go func() { _ = c.Notify(context.Background(), abandon, map[string]any{"id": idRaw}) }()
+		}
 		return ctx.Err()
 	case <-c.closed:
 		return c.err()
@@ -205,6 +217,15 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 		}
 		return nil
 	}
+}
+
+// SetAbandonNotify makes Call send the notification method, with params
+// {"id": <request id>}, whenever it gives up on a request because its ctx
+// ended. Set it before the first Call.
+func (c *Conn) SetAbandonNotify(method string) {
+	c.mu.Lock()
+	c.abandon = method
+	c.mu.Unlock()
 }
 
 // Notify sends a one-way notification; it does not wait for a response.

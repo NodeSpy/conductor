@@ -31,6 +31,8 @@
 //	}
 package plugin
 
+import "encoding/json"
+
 // ProtocolVersion is the plugin wire-protocol version this SDK speaks. The
 // daemon refuses a plugin whose major version it does not understand, so Serve
 // stamps this into every Decl that leaves it with a zero ProtocolVersion.
@@ -65,7 +67,25 @@ const (
 	// plugin: RunRequest in, RunResult out. It is the out-of-process form of
 	// what `use: js` does in-binary and `use: cli` does in a subprocess.
 	MethodRun = "plugin.run"
+	// MethodPing (daemon→plugin request) asks whether the process is still
+	// answering. Any answer proves it is, including CodeMethodNotFound from a
+	// plugin built before the method existed. The daemon sends it after a
+	// call outlives its deadline, to tell a slow verb from a wedged process.
+	MethodPing = "plugin.ping"
+	// MethodCancel (daemon→plugin notification) says the daemon stopped
+	// waiting for one of its requests: params are CancelParams naming the
+	// request id. Serve cancels that request's ctx, so a handler that honours
+	// ctx (InvokeContext, Poll, Run, ...) can stop the work. Its eventual
+	// answer, if any, is dropped by the daemon. A plugin that ignores the
+	// notification is still correct; it just finishes work nobody reads.
+	MethodCancel = "plugin.cancel"
 )
+
+// CancelParams names the request a MethodCancel notification abandons. ID is
+// the request's JSON-RPC id, verbatim.
+type CancelParams struct {
+	ID json.RawMessage `json:"id"`
+}
 
 // Host-callback methods — the NEW direction: a request the PLUGIN issues and
 // the DAEMON answers, valid only while one of that plugin's plugin.run calls

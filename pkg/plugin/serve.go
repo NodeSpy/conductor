@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -40,6 +41,15 @@ func Errorf(code int, msg string) *Error { return &Error{Code: code, Message: ms
 type Handler interface {
 	Describe() Decl
 	Invoke(InvokeRequest) (InvokeResult, error)
+}
+
+// ContextInvoker is implemented by a plugin whose verbs can stop early. When
+// a Handler implements it, Serve calls InvokeContext instead of Invoke, with a
+// ctx that is cancelled when the daemon stops waiting for the call (its
+// deadline passed, see Verb semantics call_timeout) or the daemon goes away.
+// A verb that downloads, polls or waits should pass ctx to that work.
+type ContextInvoker interface {
+	InvokeContext(ctx context.Context, req InvokeRequest) (InvokeResult, error)
 }
 
 // SourceHandler is implemented by a plugin that ALSO emits events (a source).
@@ -165,6 +175,7 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 	// that from becoming a deadlock the first time one does.
 	defer inflight.Wait()
 	defer cancel()
+	reqs := &requestTable{cancels: map[string]context.CancelFunc{}}
 	// emit writes a plugin.event notification (no id) — the source stream path.
 	emit := func(payload any) error {
 		raw, err := json.Marshal(payload)
@@ -187,7 +198,7 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 		// discriminates them exactly as JSON-RPC intends:
 		//
 		//	method + id   a daemon REQUEST     → serve it (below)
-		//	method only   a notification       → ignored (the daemon sends none)
+		//	method only   a notification       → plugin.cancel, else ignored
 		//	id only       a RESPONSE to a host.* call WE issued → deliver it
 		//
 		// The third case is the new direction. It was previously part of the
@@ -202,7 +213,13 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 			continue
 		}
 		if m.ID == nil {
-			continue // notification
+			if m.Method == MethodCancel {
+				var p CancelParams
+				if json.Unmarshal(m.Params, &p) == nil {
+					reqs.cancel(p.ID)
+				}
+			}
+			continue // other notifications: none are defined
 		}
 		// Service each request on its own goroutine. Running dispatch
 		// inline meant ONE slow verb — a paseo `wait` on a long agent, an
@@ -215,11 +232,21 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 		// write() is mutex-guarded, and each response carries its own
 		// echoed id, so out-of-order completion is the protocol working
 		// as designed rather than a hazard.
+		//
+		// Each request gets its own ctx, cancelled when it is answered or when
+		// the daemon abandons it (MethodCancel). StartSource is the exception:
+		// its stream outlives the request that started it, so it keeps the
+		// serve-wide ctx.
+		rctx, done := ctx, func() {}
+		if m.Method != MethodStartSource {
+			rctx, done = reqs.start(ctx, *m.ID)
+		}
 		inflight.Add(1)
 		go func(m wireMessage) {
 			defer inflight.Done()
+			defer done()
 			resp := wireMessage{ID: m.ID}
-			result, rpcErr := dispatch(ctx, h, m.Method, m.Params, emit, calls)
+			result, rpcErr := dispatch(rctx, h, m.Method, m.Params, emit, calls)
 			if rpcErr != nil {
 				resp.Error = rpcErr
 			} else if raw, err := json.Marshal(result); err != nil {
@@ -231,6 +258,48 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 			// see stdin close and return. Nothing to escalate here.
 			_ = write(resp)
 		}(m)
+	}
+}
+
+// requestTable holds the cancel func of every daemon request being served,
+// keyed by its id, so a MethodCancel notification can reach the handler.
+type requestTable struct {
+	mu      sync.Mutex
+	cancels map[string]context.CancelFunc
+}
+
+// idKey normalizes a raw JSON-RPC id so `7` and ` 7 ` name the same request.
+func idKey(id json.RawMessage) string {
+	var buf bytes.Buffer
+	if json.Compact(&buf, id) != nil {
+		return string(id)
+	}
+	return buf.String()
+}
+
+// start derives the ctx for request id. done releases it once answered.
+func (t *requestTable) start(parent context.Context, id json.RawMessage) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	k := idKey(id)
+	t.mu.Lock()
+	t.cancels[k] = cancel
+	t.mu.Unlock()
+	return ctx, func() {
+		t.mu.Lock()
+		delete(t.cancels, k)
+		t.mu.Unlock()
+		cancel()
+	}
+}
+
+// cancel cancels request id's ctx. An id that is not in flight (already
+// answered, never seen) is ignored.
+func (t *requestTable) cancel(id json.RawMessage) {
+	t.mu.Lock()
+	c := t.cancels[idKey(id)]
+	t.mu.Unlock()
+	if c != nil {
+		c()
 	}
 }
 
@@ -464,6 +533,8 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 			return wrapResult(struct{}{}, err)
 		}
 		return struct{}{}, nil
+	case MethodPing:
+		return struct{}{}, nil
 	case MethodInvoke:
 		var req InvokeRequest
 		if len(params) > 0 {
@@ -471,7 +542,13 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 				return nil, Errorf(CodeInvalidParams, err.Error())
 			}
 		}
-		res, err := h.Invoke(req)
+		var res InvokeResult
+		var err error
+		if ci, ok := h.(ContextInvoker); ok {
+			res, err = ci.InvokeContext(ctx, req)
+		} else {
+			res, err = h.Invoke(req)
+		}
 		if err != nil {
 			var re *Error
 			if errors.As(err, &re) {

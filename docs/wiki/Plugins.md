@@ -700,7 +700,7 @@ Stated plainly, because a security claim you cannot check is worse than none:
 | **Audit attribution** | Every credential hand-off is audited as `plugin_credential` with `plugin@version` and the secret **ref name — never the value**. |
 | **Transport redaction** | Plugin stdout/stderr is scrubbed through the secret redactor. **Best-effort**: it matches known secret *values*; a plugin that transforms a credential before printing can evade it. |
 | **Untrusted output** | Every response is size-bounded (a plugin cannot OOM the daemon). Responses for verbs declaring an `Outputs` schema are validated against it. A connector plugin cannot forge its identity. |
-| **Supervision** | Every call has a timeout. A crashed or hung plugin degrades to "that connector is down" and never takes the daemon with it, with a restart backoff that cannot crash-loop. |
+| **Supervision** | Every call has a timeout: 30 s, or the verb's declared `call_timeout` (at most 10 minutes). A call that passes it fails alone; the plugin is told to cancel it and keeps running. A plugin whose process exits, closes its connection, or does not answer a liveness ping after a timed-out call is restarted, and so is one where 3 calls in a row time out, even if it answers the ping; an answered call resets the count. These restarts count toward the restart backoff, so a plugin that never finishes its calls ends up parked. A crashed or hung plugin degrades to "that connector is down" and never takes the daemon with it, with a restart backoff that cannot crash-loop. |
 
 **Boot vs runtime failure.** A plugin that fails to verify or start at boot is
 fail-closed — a bad sha is a security event, not a degraded-boot condition. A

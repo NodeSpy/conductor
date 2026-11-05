@@ -217,6 +217,12 @@ SQL stores are the precedent).
   option validation, filter evaluation, the disabled-on-bad-creds path.
 - Redact anything derived from credentials in error text.
 - Respect `ctx` in Invoke (timeouts/cancellation) — the runner bounds steps.
+  A plugin gets that ctx by implementing `plugin.ContextInvoker`
+  (`InvokeContext`); the host cancels it when the call's deadline passes.
+  Each call is bounded at 30 s by default. A verb that is slow by nature
+  declares `semantics: {call_timeout: "3m", optional: [call_timeout]}`
+  (capped at 10 minutes). A call past its bound fails on its own; the plugin
+  process and its source streams keep running.
 - Rate limiting, option-default merging, enable/disable, and policy all
   happen in the shared `Instance` wrapper — don't reimplement them.
 - Reserved names (`kv`, `sql`, `memory`, `workflow`, `conductor`, `blob`)
