@@ -47,6 +47,16 @@ as a precedent. Don't grow it. Move it out when touching it is practical.
 - Use the plugin that's already there. If GitHub work is needed, it goes in the github plugin,
   with its existing auth. Don't add a second plugin or new credentials for it.
 
+## Large temporary data never goes in /tmp
+
+`/tmp` and `os.TempDir()` are often a RAM-backed tmpfs, where every byte written is memory.
+Anything large or of unpredictable size goes in the scratch dir (`scratch.dir`, default
+`<state dir>/scratch`). That covers clones, checkouts, archives, staging, uploads, builds,
+browser profiles and unpacked artifacts. In core, use `scratch.Dir()` / `scratch.MkdirTemp()`.
+A plugin writes inside the call's staging dir, never `os.TempDir()`. The guard test in
+`internal/scratch` fails on new system-temp uses. Only tiny, bounded files may be allowlisted
+there, and each one needs a reason.
+
 ## Examples
 
 | Wrong (in core) | Right |

@@ -64,6 +64,7 @@ in a config.
 | `checks:` | named quality-gate checks (command / code / verb / critic agent) that `gate: run:` lists reference | [[Gates]] |
 | `pricing:` | model→$ overrides for cost estimation (`models:` glob patterns, `default:`) | [[Cost-Accounting]] |
 | `imports:` | split the config across files (globs, deep-merged) | below |
+| `scratch:` | `dir:` — where conductor puts temporary data that can be large: plugin call staging, clones, archives, uploads, builds, sandbox jails and their `/tmp`, and the `TMPDIR` of the daemon and of every plugin and agent it launches. Default `<state dir>/scratch`; never a RAM-backed `/tmp`. Point it at a separate drive if you like. Checked at startup (created, writable); a change takes effect on restart. Leftovers from a daemon that died are removed at the next boot | |
 | `store:` | `state_file`, `audit_log`, `state_ttl`, `max_tracked_prs`, `audit_max_size`, `history_retention`, `history_max_runs` | [[Runs]] |
 | `update:` | `auto`, `interval`, `apply` — self-update; migration runs on the new binary's first boot | |
 | `dry_run:` | stub every dispatch and verb | |

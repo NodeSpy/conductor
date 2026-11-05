@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/netguard"
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // Proxy is one egress-filtering forward proxy bound to 127.0.0.1.
@@ -729,7 +730,7 @@ func (m *ProxyManager) unixEndpoint(allow []string, o SessionOpts) (sock, cred s
 	sock, ok := m.socks[key]
 	if !ok {
 		if m.sockDir == "" {
-			m.sockDir, err = os.MkdirTemp("", "conductor-egress")
+			m.sockDir, err = os.MkdirTemp(scratch.SystemTempDir(), "conductor-egress") // a socket: short path
 			if err != nil {
 				m.mu.Unlock()
 				return "", "", nil, fmt.Errorf("sandbox: egress socket dir: %w", err)
@@ -841,7 +842,7 @@ func (m *ProxyManager) TrustedUnixEndpoint(allow []string) (sock string, closeFn
 	if err != nil {
 		return "", nil, err
 	}
-	base := os.TempDir()
+	base := scratch.SystemTempDir()
 	if len(base) > 32 {
 		base = "/tmp" // macOS: sun_path is ~104 bytes
 	}

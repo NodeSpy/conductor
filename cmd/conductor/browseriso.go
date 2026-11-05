@@ -14,6 +14,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/browser"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/sandbox"
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // The browser's isolation, decided once at boot (docs/wiki/Browser.md):
@@ -120,7 +121,7 @@ func fallbackIso(mode, goos, why string, logf func(string, ...any)) {
 // containerSelfTest starts a container browser and reads Chromium's own
 // sandbox report.
 func containerSelfTest(ctx context.Context, e *browser.ContainerEngine, img string) error {
-	dir, err := os.MkdirTemp("", "cbselftest")
+	dir, err := scratch.MkdirTemp("cbselftest") // a browser profile: on disk
 	if err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // execGoToolchain runs `run: go` by writing Code out as a real main.go and
@@ -34,7 +35,7 @@ func (e *Executor) execGoToolchain(ctx context.Context, spec Spec, data map[stri
 		return nil, fmt.Errorf("code: go not found on PATH — run: go needs the Go toolchain installed on this box")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "conductor-code-go-*")
+	tmpDir, err := scratch.MkdirTemp("conductor-code-go-*")
 	if err != nil {
 		return nil, fmt.Errorf("code: go: temp dir: %w", err)
 	}
@@ -119,7 +120,7 @@ func (e *Executor) goCacheDirs() (buildCache, modCache string, err error) {
 	if root == "" {
 		base, uerr := os.UserCacheDir()
 		if uerr != nil || base == "" {
-			base = os.TempDir()
+			base = scratch.Dir() // a module/build cache: on disk, never a tmpfs
 		}
 		root = filepath.Join(base, "conductor", "code-go")
 	}

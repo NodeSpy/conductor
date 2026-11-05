@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // Remote plugin fetch (#59): a plugin is a binary, published per platform on
@@ -141,7 +142,7 @@ func FetchRemoteVerified(rs RemoteSource, constraint, pinnedSha string, cacheDir
 		return "", "", "", false, err
 	}
 	cacheDir := cacheDirFor(tag)
-	tmp, err := os.MkdirTemp("", "conductor-plugin-dl-*")
+	tmp, err := scratch.MkdirTemp("conductor-plugin-dl-*")
 	if err != nil {
 		return "", "", "", false, err
 	}

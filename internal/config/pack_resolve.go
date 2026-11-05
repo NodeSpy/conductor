@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // gitCommandTimeout bounds every git subprocess conductor spawns to fetch a
@@ -526,7 +528,7 @@ func parseLsRemoteTags(out string) []string {
 // returns the resolved commit sha. Shells to the git CLI (the project's git
 // transport everywhere); no new dependency.
 func fetchGit(spec sourceSpec, destDir string) (string, error) {
-	tmp, err := os.MkdirTemp("", "conductor-pack-*")
+	tmp, err := scratch.MkdirTemp("conductor-pack-*")
 	if err != nil {
 		return "", err
 	}
@@ -744,7 +746,7 @@ func FetchPackForReview(source, baseDir string) (*PackManifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	tmp, err := os.MkdirTemp("", "conductor-pack-review-*")
+	tmp, err := scratch.MkdirTemp("conductor-pack-review-*")
 	if err != nil {
 		return nil, err
 	}

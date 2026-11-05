@@ -167,3 +167,41 @@ func (r *Runner) releaseRunBlobs(runID string) {
 		r.Log("blob: release run %s: %v", runID, err)
 	}
 }
+
+// keepCallStaging keeps a call's staging directory until its run ends, or
+// removes it now outside a run.
+func keepCallStaging(ctx context.Context, dir string) {
+	if dir == "" {
+		return
+	}
+	ri, ok := ctx.Value(runInstancesKey{}).(*runInstances)
+	if !ok {
+		removeCallStaging(dir)
+		return
+	}
+	ri.mu.Lock()
+	ri.calls = append(ri.calls, dir)
+	ri.mu.Unlock()
+}
+
+func removeCallStaging(dir string) {
+	if dir != "" {
+		_ = os.RemoveAll(dir)
+	}
+}
+
+// removeRunCallStaging removes the call staging directories the run's calls
+// left.
+func removeRunCallStaging(ctx context.Context) {
+	ri, ok := ctx.Value(runInstancesKey{}).(*runInstances)
+	if !ok {
+		return
+	}
+	ri.mu.Lock()
+	calls := ri.calls
+	ri.calls = nil
+	ri.mu.Unlock()
+	for _, d := range calls {
+		removeCallStaging(d)
+	}
+}

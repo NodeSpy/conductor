@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -745,13 +746,22 @@ func (e *externalImpl) invokePlugin(ctx context.Context, verb string, opts map[s
 			}
 		})
 	}
-	staging := ""
-	if st, ok := e.client.(interface{ StagingDir(string) (string, error) }); ok {
+	// The call's own staging directory (plugin-contract.md Q7): the one the
+	// caller made for it (the flow runner, which stores the call's files and
+	// removes the directory), else one made here and removed when the call
+	// returns, however it ends.
+	staging := CallStaging(ctx)
+	if st, ok := e.client.(interface{ StagingDir(string) (string, error) }); ok && staging == "" {
 		dir, err := st.StagingDir(e.instance)
 		if err != nil {
 			return nil, fmt.Errorf("connector %q: staging dir: %w", e.instance, err)
 		}
-		staging = dir
+		if dir != "" {
+			if staging, err = NewCallStaging(dir); err != nil {
+				return nil, fmt.Errorf("connector %q: staging dir: %w", e.instance, err)
+			}
+			defer os.RemoveAll(staging)
+		}
 	}
 	call := func(forceFresh bool) (map[string]any, error) {
 		conn := e.conn

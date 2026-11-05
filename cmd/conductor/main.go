@@ -17,6 +17,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/browser"
 	"github.com/NodeSpy/conductor/internal/confdir"
+	"github.com/NodeSpy/conductor/internal/scratch"
 	"net"
 	"os"
 	"os/exec"
@@ -294,6 +295,9 @@ func loadConfig(args []string) (*config.Config, []string, error) {
 	// loads them at runtime, without needing to export anything by hand.
 	loadEnvFile(filepath.Join(filepath.Dir(path), "conductor.env"))
 	cfg, err := config.Load(path)
+	// Large temporary data goes in the scratch dir on disk, never in
+	// os.TempDir() (often a RAM-backed tmpfs).
+	scratch.SetRoot(cfg.ScratchDir())
 	if err == nil {
 		// usage.mode: what every report and notification of this process may
 		// show of model usage (display only; caps enforce in every mode).
@@ -594,6 +598,17 @@ func cmdRun(args []string) error {
 	for _, w := range cfg.RemovedFieldWarnings() {
 		logf("config: %s", w)
 	}
+	if err := scratch.Check(scratch.Root()); err != nil {
+		return err
+	}
+	sweepBootLeftovers()
+	// Everything this daemon and what it launches write to TMPDIR lands in
+	// the scratch dir on disk.
+	releaseTmp, err := scratch.UseForProcessTmp()
+	if err != nil {
+		return fmt.Errorf("scratch: %w", err)
+	}
+	defer releaseTmp()
 	// Every lifecycle event feeds the conductor.* source (ordinary triggers
 	// alert on them); the source's loop guard keeps a notification
 	// workflow's own events from re-feeding.
@@ -2227,4 +2242,45 @@ func loadEnvFile(path string) {
 			os.Setenv(k, v)
 		}
 	}
+}
+
+// sweepBootLeftovers removes the temporary data a daemon that died (killed,
+// out of memory) left behind: plugin call staging directories, scratch
+// directories, and the per-launch jail roots older releases made in
+// os.TempDir(). Only what is older than any live call could be is touched, so
+// another conductor process on the same state dir keeps its own.
+func sweepBootLeftovers() {
+	n := connector.SweepCallStaging(config.PluginStagingDir(), 15*time.Minute)
+	n += scratch.Sweep(scratch.Root(), "conductor-", 15*time.Minute)
+	n += scratch.SweepUnheld(filepath.Join(scratch.Root(), scratch.ProcessTmpDir), "run-", time.Minute)
+	n += scratch.SweepUnheld(filepath.Join(scratch.Root(), sandbox.JailTmpDir), "tmp-", time.Minute)
+	n += sweepLegacyJailRoots(os.TempDir(), 24*time.Hour)
+	if n > 0 {
+		logf("boot: removed %d temporary director(ies) a previous daemon left", n)
+	}
+}
+
+// sweepLegacyJailRoots removes the empty conductor-jail-* directories older
+// releases left in os.TempDir(), one per sandboxed launch. Only empty ones
+// (os.Remove), and only old ones: a jail still running from before the
+// upgrade has its root mounted there.
+func sweepLegacyJailRoots(dir string, olderThan time.Duration) int {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	cutoff := time.Now().Add(-olderThan)
+	n := 0
+	for _, e := range ents {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "conductor-jail-") {
+			continue
+		}
+		if fi, err := e.Info(); err != nil || fi.ModTime().After(cutoff) {
+			continue
+		}
+		if os.Remove(filepath.Join(dir, e.Name())) == nil {
+			n++
+		}
+	}
+	return n
 }

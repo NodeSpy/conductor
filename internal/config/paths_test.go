@@ -113,6 +113,7 @@ var pathCases = []struct {
 	{"Store.StateFile", "store: { state_file: ~/st/state.json }", func(c *Config) string { return c.Store.StateFile }},
 	{"Store.AuditLog", "store: { audit_log: ~/st/audit.jsonl }", func(c *Config) string { return c.Store.AuditLog }},
 	{"MemoryConfig.Dir", "memory: { dir: ~/mem }", func(c *Config) string { return c.Memory.Dir }},
+	{"ScratchConfig.Dir", "scratch: { dir: ~/scratch }", func(c *Config) string { return c.Scratch.Dir }},
 	{"SandboxConfig.StateDir", "sandbox: { state_dir: ~/agent-state }", func(c *Config) string { return c.Sandbox.StateDir }},
 	{"SandboxPush.SigningKey", "sandbox: { push: { signing_key: ~/.ssh/id_ed25519 } }", func(c *Config) string { return c.Sandbox.Push.SigningKey }},
 	{"DashboardBind.CertFile", "dashboard: { bind: [ { cert_file: ~/tls/c.pem } ] }", func(c *Config) string { return c.Dashboard.Bind[0].CertFile }},

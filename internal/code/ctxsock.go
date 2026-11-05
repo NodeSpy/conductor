@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // The per-run ctx SOCKET: the transport that puts CtxHandler in front of a
@@ -98,7 +100,7 @@ type ctxServer struct {
 func startCtxServer(h CtxHandler) (*ctxServer, error) {
 	// 0700 by construction (os.MkdirTemp's mode), with a random name: the
 	// directory is the first of the two walls.
-	dir, err := os.MkdirTemp("", "conductor-ctx-*")
+	dir, err := os.MkdirTemp(scratch.SystemTempDir(), "conductor-ctx-*") // a socket: short path
 	if err != nil {
 		return nil, fmt.Errorf("code: ctx socket: temp dir: %w", err)
 	}

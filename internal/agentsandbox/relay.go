@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // Relays: an agent whose model endpoint is a HOST loopback service (a local
@@ -20,7 +22,7 @@ import (
 // socket path is capped at 104 bytes on macOS (108 on Linux), and a temp dir
 // under a deep worktree or macOS's /var/folders/… can exceed it.
 func SocketDir(prefix string) (string, error) {
-	base := os.TempDir()
+	base := scratch.SystemTempDir()
 	if len(base) > 32 {
 		base = "/tmp"
 	}

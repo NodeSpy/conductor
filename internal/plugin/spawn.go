@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // spawnGOOS / spawnLookPath are the platform probes buildCommand uses to pick
@@ -122,6 +123,31 @@ type SandboxDeps struct {
 // launch runs without OS confinement (no isolation: block) so the caller can
 // warn — env scrubbing and all transport guards still apply.
 func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandboxed bool, err error) {
+	// The plugin's TMPDIR is a directory of its own in its staging subtree
+	// (on disk in the scratch dir, writable in its sandbox), removed when the
+	// process exits: what a plugin's tools (git, a compiler) put in TMPDIR
+	// never lands in a RAM-backed /tmp.
+	var tmp *scratch.Held
+	if sd.StagingRoot != "" {
+		if tmp, err = scratch.NewHeld(filepath.Join(sd.StagingRoot, s.Name), scratch.PluginTmpPrefix); err != nil {
+			return nil, nil, false, fmt.Errorf("plugin %s: temp dir: %w", s.Name, err)
+		}
+	}
+	cmd, cleanup, sandboxed, err = buildCommandIn(s, sd)
+	if tmp == nil {
+		return cmd, cleanup, sandboxed, err
+	}
+	if err != nil {
+		tmp.Remove()
+		return nil, nil, false, err
+	}
+	cmd.Env = replaceEnv(cmd.Env, "TMPDIR", tmp.Path)
+	inner := cleanup
+	cleanup = func() { inner(); tmp.Remove() }
+	return cmd, cleanup, sandboxed, nil
+}
+
+func buildCommandIn(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandboxed bool, err error) {
 	argv := append([]string{s.BinPath}, s.Args...)
 	env := withDeclaredEnv(spawnBaseEnv(), grantedEnv(s))
 	cleanup = func() {}

@@ -309,6 +309,15 @@ hosts:
   #   user: ci
   #   isolation: { mode: user, user: agents }   # sudo -n -u agents on the box
 
+# scratch: — where conductor puts temporary data that can be large or of
+# unpredictable size: plugin call staging, clones, archives, uploads, builds,
+# sandbox jails and their /tmp, and the TMPDIR of the daemon and of every
+# plugin and agent it launches. Never /tmp (often RAM-backed). Default
+# <state dir>/scratch; point it at a separate drive if you like. Checked at
+# startup (created, writable); a change takes effect on restart.
+# scratch:
+#   dir: /mnt/scratch/conductor
+
 # engines: — per-engine hardening for code-step engine PLUGINS (js, lua, …).
 # Unlike connectors, code engines run arbitrary code and are UNTRUSTED by
 # default: with no entry here a `run: js` step is sandboxed (namespace, network

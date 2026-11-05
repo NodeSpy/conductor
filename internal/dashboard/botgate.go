@@ -17,6 +17,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/auditctx"
 	"github.com/NodeSpy/conductor/internal/configedit"
 	"github.com/NodeSpy/conductor/internal/dashboard/auth"
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // THE BOT API CHOKEPOINT (design §4.4). The bots' operator API names its
@@ -364,7 +365,7 @@ func (s *Server) botBody(r *http.Request, op string) (*newBody, func(), map[stri
 	none := func() {}
 	ct, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if ct == "multipart/form-data" {
-		f, err := os.CreateTemp("", "conductor-botgate-*")
+		f, err := os.CreateTemp(scratch.Dir(), "conductor-botgate-*") // an upload: on disk
 		if err != nil {
 			return nil, none, nil, http.StatusInternalServerError, "can't spool the upload"
 		}

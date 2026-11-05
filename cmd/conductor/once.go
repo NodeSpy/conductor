@@ -23,6 +23,7 @@ import (
 	agentmodels "github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/sandbox"
+	"github.com/NodeSpy/conductor/internal/scratch"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
 )
@@ -329,8 +330,16 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	// — unless the operator pointed state somewhere durable on purpose. ctx
 	// stores (`stores:`) are untouched either way: one pointed at a remote
 	// backend is exactly how a stateful CI workflow is meant to work.
+	if err := scratch.Check(scratch.Root()); err != nil {
+		return err
+	}
+	releaseTmp, err := scratch.UseForProcessTmp()
+	if err != nil {
+		return fmt.Errorf("scratch: %w", err)
+	}
+	defer releaseTmp()
 	if !o.durableState {
-		dir, err := os.MkdirTemp("", "conductor-once-*")
+		dir, err := scratch.MkdirTemp("conductor-once-*")
 		if err != nil {
 			return fmt.Errorf("once: state dir: %w", err)
 		}

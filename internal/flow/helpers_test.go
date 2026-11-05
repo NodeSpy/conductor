@@ -172,6 +172,9 @@ func fakeFilter(event string, filters, trigCtx map[string]any) (bool, error) {
 type fakeCall struct {
 	Verb string
 	Opts map[string]any
+	// Staging is the call's staging directory (connector.CallStaging), where
+	// the fake leaves a file, as a plugin's half-made clone would be.
+	Staging string
 }
 
 // fakeState is the per-connector-instance-name mutable test control block: it
@@ -294,8 +297,12 @@ func (f *fakeImpl) Source(triggers []connector.CompiledTrigger) (core.Integratio
 
 func (f *fakeImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
 	st := getOrCreateFakeState(f.name)
+	staging := connector.CallStaging(ctx)
+	if staging != "" {
+		_ = os.WriteFile(filepath.Join(staging, "leftover"), []byte("x"), 0o600)
+	}
 	st.mu.Lock()
-	st.calls = append(st.calls, fakeCall{Verb: verb, Opts: opts})
+	st.calls = append(st.calls, fakeCall{Verb: verb, Opts: opts, Staging: staging})
 	// 0-based index of THIS call among calls to the same verb (for outputsFn).
 	callIdx := -1
 	for _, c := range st.calls {

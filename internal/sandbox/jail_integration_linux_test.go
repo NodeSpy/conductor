@@ -70,7 +70,17 @@ func TestJailConfinesInSandbox(t *testing.T) {
 		"--mount-proc", "--kill-child", "--",
 		os.Args[0], "-test.run=^TestJailConfinesInSandbox$", "-test.v"}
 	cmd := exec.Command(argv[0], argv[1:]...)
+	// The jail's root goes on JAIL_ROOT; TMPDIR is a fresh directory, so a
+	// per-launch root left there would show.
+	tmp, jailRoot := filepath.Join(dir, "tmp"), filepath.Join(dir, "state", "jail")
+	jailTmp := filepath.Join(dir, "state", JailTmpDir)
+	if err := os.MkdirAll(tmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	cmd.Env = append(os.Environ(),
+		"TMPDIR="+tmp,
+		"JAIL_ROOT="+jailRoot,
+		"JAIL_TMP="+jailTmp,
 		"JAIL_ROLE=outer",
 		"JAIL_WORK="+work,
 		"JAIL_MARKER="+filepath.Join(work, "marker"),
@@ -85,7 +95,18 @@ func TestJailConfinesInSandbox(t *testing.T) {
 	}
 	switch code {
 	case jailProbeConfined:
-		// success
+		// The host keeps no per-launch directory: nothing in TMPDIR, and the
+		// jail root (its tmpfs was private to the namespace) is empty.
+		if left, _ := filepath.Glob(filepath.Join(tmp, "conductor-jail*")); len(left) != 0 {
+			t.Errorf("the jail left %v in TMPDIR", left)
+		}
+		if ents, err := os.ReadDir(jailRoot); err != nil || len(ents) != 0 {
+			t.Errorf("the jail root %s: %v, %d entries on the host", jailRoot, err, len(ents))
+		}
+		// Its /tmp was a directory in JAIL_TMP, removed when the payload exited.
+		if ents, err := os.ReadDir(jailTmp); err != nil || len(ents) != 0 {
+			t.Errorf("the jail /tmp parent %s: %v, %d entries left", jailTmp, err, len(ents))
+		}
 	case jailEnvCannot:
 		t.Skip("environment cannot build the pivot_root jail — skipping")
 	case jailProbeLeaked:
@@ -111,7 +132,9 @@ func runJailOuter() int {
 			{Path: work},
 			{Path: selfDir, RO: true},
 		},
-		Argv: []string{os.Args[0], "-test.run=^TestJailConfinesInSandbox$", "-test.v"},
+		Argv:     []string{os.Args[0], "-test.run=^TestJailConfinesInSandbox$", "-test.v"},
+		JailRoot: os.Getenv("JAIL_ROOT"),
+		JailTmp:  os.Getenv("JAIL_TMP"),
 	})
 }
 
@@ -120,6 +143,10 @@ func runJailOuter() int {
 func runJailProbe() int {
 	// (a) the bound workdir must be visible.
 	if b, err := os.ReadFile(os.Getenv("JAIL_MARKER")); err != nil || !strings.Contains(string(b), "in-workdir") {
+		return jailProbeNoWork
+	}
+	// The jail's /tmp is writable.
+	if err := os.WriteFile("/tmp/payload", []byte("x"), 0o600); err != nil {
 		return jailProbeNoWork
 	}
 	// (b) the unbound secret must be gone (hidden by absence).
