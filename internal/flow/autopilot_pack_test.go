@@ -372,3 +372,39 @@ func TestAutopilotPackResolveOnlyWhenPushed(t *testing.T) {
 		})
 	}
 }
+
+// The PR head moved while the fixer worked and its commits conflict with it:
+// the job is not lost — the step goes out once more on the new head, told
+// where the first attempt's commits are kept, and the threads resolve once
+// that push lands.
+func TestAutopilotPackPushConflictRedispatches(t *testing.T) {
+	api := newGHAPI(t, "aaaaaaa1111")
+	rig, cfg := autopilotRig(t)
+	// The first attempt's commit never lands; the re-dispatch's does.
+	wss := []string{cloneWithCommits(t, 1), cloneWithCommits(t, 0)}
+	var reqs []dispatch.Request
+	rig.Agents.dispatchFunc = func(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
+		reqs = append(reqs, r)
+		return dispatch.RunRef{Workdir: wss[min(len(reqs), 2)-1], Output: `{"addressed_comments":[11,12],"summary":"fixed"}`, AgentID: "a1"}, nil
+	}
+	pushes := 0
+	rig.Runner.PushWork = func(context.Context, string) (map[string]any, error) {
+		pushes++
+		if pushes == 1 {
+			return nil, conflictPushErr()
+		}
+		return map[string]any{"pushed": true, "commits": 1, "up_to_date": false}, nil
+	}
+	runAutopilot(rig, autopilotSpec(t, cfg, "on_changes_requested"), autopilotTrigger("changes_requested", map[string]any{
+		"author": "alice", "review_id": int64(9), "feedback_cursor": "c1"}))
+	if failed, e := rig.workflowFailed(); failed {
+		t.Fatalf("the re-dispatched fixer lands its work: %s", e)
+	}
+	if len(reqs) != 2 || !strings.Contains(reqs[1].Action.Prompt, "NOTE FROM CONDUCTOR") {
+		t.Fatalf("one re-dispatch carrying the conflict note: %d dispatches", len(reqs))
+	}
+	api.mu.Lock()
+	writes := api.writes
+	api.mu.Unlock()
+	wantList(t, "review writes", writes, "resolve_threads [11 12]", "rerequest_review [alice]")
+}

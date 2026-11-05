@@ -1105,6 +1105,7 @@ func cmdRun(args []string) error {
 		callable: func(name string) bool { return callableNames[name] },
 		audit:    st.Audit,
 	}
+	controlLiveAgents = eng.LiveAgents
 	go serveControl(ctx, controlSockPath(cfg), igs, eng.Emit, manualTriggersByName(cfg), eng.RetryRunByID, events, ctlGate, logf)
 
 	// Dashboard (design §6): the local web surface. Off unless a `dashboard:`
@@ -1639,6 +1640,10 @@ func (g *callableGate) authorize(caller, name string) error {
 	return nil
 }
 
+// controlLiveAgents answers the control socket's `agents` command (set by
+// the daemon before the socket serves; nil answers none).
+var controlLiveAgents func() []controller.LiveAgent
+
 // serveControl runs the daemon's unix control socket until ctx is cancelled.
 func serveControl(ctx context.Context, path string, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, retry retryFunc, events *flow.EventHub, gate *callableGate, log func(string, ...any)) {
 	_ = os.Remove(path) // clear a stale socket from a prior run
@@ -1685,6 +1690,14 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		return
 	}
 	switch req.Cmd {
+	case "agents":
+		// `conductor status`: the agents the non-paseo runtimes have open.
+		var live []controller.LiveAgent
+		if controlLiveAgents != nil {
+			live = controlLiveAgents()
+		}
+		b, _ := json.Marshal(live)
+		writeControlResp(conn, controlResponse{OK: true, Data: b})
 	case "bot":
 		handleBotControl(ctx, conn, req, log)
 	case "dashboard":

@@ -105,9 +105,12 @@ type Store interface {
 
 // Engine is the central work loop.
 type Engine struct {
-	cfg   *config.Config
-	store Store
-	disp  Dispatcher
+	// started is when this engine was built: history records "running" from
+	// before it belong to a process that is gone.
+	started time.Time
+	cfg     *config.Config
+	store   Store
+	disp    Dispatcher
 	// owner maps a live agent id → the runner that dispatched it, so
 	// archive_when_done closes the session on the transport that opened it
 	// rather than always on paseo. See archiveAgent.
@@ -288,7 +291,8 @@ func New(o Options) *Engine {
 		reg = controller.NewRegistry(o.Config.MergedControllers(), o.Config.DefaultRuntimeName(), o.Dispatch, sender)
 	}
 	e := &Engine{
-		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
+		started: time.Now(),
+		cfg:     o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
 		owner: map[string]Dispatcher{},
 
 		byDispatch: map[string]Dispatcher{},
@@ -1380,11 +1384,39 @@ func sanitizeContext(t core.Trigger) map[string]any {
 	return out
 }
 
+// LiveAgents lists the agent sessions the non-paseo runtimes have open (cli,
+// acp, opencode, agent-deck) — `conductor status` asks for them over the
+// control socket; paseo's own agents it reads from paseo.
+func (e *Engine) LiveAgents() []controller.LiveAgent {
+	if e.controllers == nil {
+		return nil
+	}
+	return e.controllers.LiveAgents()
+}
+
+// interruptStaleHistory marks the history records a dead process left
+// "running" as interrupted (store.InterruptStaleHistory): only records
+// started before this engine was built, so a run this process already began
+// is never touched.
+func (e *Engine) interruptStaleHistory() {
+	s, ok := e.store.(interface {
+		InterruptStaleHistory(before time.Time) []string
+	})
+	if !ok {
+		return
+	}
+	for _, id := range s.InterruptStaleHistory(e.started) {
+		e.log("engine: history run %s was left running by a stopped daemon — recorded interrupted", id)
+		e.store.Audit(map[string]any{"event": "history_interrupted", "run": id})
+	}
+}
+
 // ResumeWorkflows re-runs any workflow that was in-flight when the conductor last
 // stopped. Prior steps' outputs are restored; the interrupted step re-runs
 // (at-least-once). Declared credentials are minted afresh (they were never
 // persisted).
 func (e *Engine) ResumeWorkflows(ctx context.Context) {
+	e.interruptStaleHistory()
 	for _, r := range e.store.PendingRuns() {
 		var t core.Trigger
 		var act config.Action

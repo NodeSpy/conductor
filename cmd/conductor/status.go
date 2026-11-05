@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/controller"
 )
 
 // cmdStatus prints a snapshot of what conductor is doing — read entirely from the
@@ -34,13 +36,10 @@ func cmdStatus(args []string) error {
 		return err
 	}
 	agents := conductorAgents(paseoBin)
-	fmt.Printf("\nlive agents (%d):\n", len(agents))
-	if len(agents) == 0 {
-		fmt.Println("  (none)")
-	}
-	for _, a := range agents {
-		fmt.Printf("  %-9s %-8s %s\n", a.ShortID, a.Status, a.Name)
-	}
+	// The cli/acp/opencode/agent-deck runtimes' agents are the daemon's own
+	// child sessions, not paseo's: ask the running daemon for them.
+	runtimeAgents := daemonLiveAgents(cfg)
+	printLiveAgents(os.Stdout, agents, runtimeAgents, time.Now())
 
 	// In-flight multi-step workflows (mid-run, e.g. a review awaiting you).
 	runs := readRuns(filepath.Join(filepath.Dir(cfg.Store.StateFile), "runs.json"))
@@ -133,6 +132,43 @@ func serviceStateStr() string {
 }
 
 // --- live agents ---
+
+// daemonLiveAgents asks the running daemon (control socket) for the agents
+// its non-paseo runtimes have open. None when it is not running.
+func daemonLiveAgents(cfg *config.Config) []controller.LiveAgent {
+	resp, err := sendControl(cfg, controlRequest{Cmd: "agents"})
+	if err != nil || !resp.OK {
+		return nil
+	}
+	var out []controller.LiveAgent
+	_ = json.Unmarshal(resp.Data, &out)
+	return out
+}
+
+// printLiveAgents renders status's "live agents" section: paseo's agents,
+// then the daemon's own runtimes'.
+func printLiveAgents(w io.Writer, agents []agentLine, runtimeAgents []controller.LiveAgent, now time.Time) {
+	fmt.Fprintf(w, "\nlive agents (%d):\n", len(agents)+len(runtimeAgents))
+	if len(agents)+len(runtimeAgents) == 0 {
+		fmt.Fprintln(w, "  (none)")
+	}
+	for _, a := range agents {
+		fmt.Fprintf(w, "  %-9s %-8s %s\n", a.ShortID, a.Status, a.Name)
+	}
+	for _, a := range runtimeAgents {
+		fmt.Fprintln(w, "  "+runtimeAgentLine(a, now))
+	}
+}
+
+// runtimeAgentLine renders one runtime agent for status: its id, runtime,
+// how long it has run, and what it works on.
+func runtimeAgentLine(a controller.LiveAgent, now time.Time) string {
+	age := "?"
+	if !a.Since.IsZero() {
+		age = now.Sub(a.Since).Round(time.Second).String()
+	}
+	return fmt.Sprintf("%-18s %-8s %s  %s %s (running %s)", a.ID, a.Transport, a.Runtime, a.Target, a.Kind, age)
+}
 
 type agentLine struct {
 	ShortID string `json:"shortId"`

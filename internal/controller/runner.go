@@ -74,6 +74,8 @@ type controllerRunner struct {
 	// bound marks sessions whose work dies with their target (the trigger's
 	// declared bound_to_target): the only ones StopTarget stops.
 	bound map[string]bool
+	// since: when each live session opened (LiveAgents).
+	since map[string]time.Time
 	// byDispatch binds a dispatch id to the session it opened, and inflight
 	// marks a dispatch whose Dispatch call is still running: a step.done
 	// (token-bound to the dispatch id) resolves through them.
@@ -160,6 +162,10 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	bucket := prKey(req)
 	r.mu.Lock()
 	r.live[id] = sess
+	if r.since == nil {
+		r.since = map[string]time.Time{}
+	}
+	r.since[id] = time.Now()
 	if req.DispatchID != "" {
 		r.byDispatch[req.DispatchID] = id
 	}
@@ -191,6 +197,15 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	if req.Wait && !req.Interactive {
 		if w, ok := sess.(waiter); ok {
 			w.Wait(ctx, timeout)
+		}
+		// The wait ended because ctx did (the daemon is shutting down or
+		// reloading), not because the turn finished: whatever output there
+		// is, it is not the agent's reply. Kill the turn — nothing may keep
+		// working on the target unsupervised — and report the interruption,
+		// so the step is not recorded done and resume re-runs it.
+		if err := ctx.Err(); err != nil {
+			_ = sess.Cancel(context.WithoutCancel(ctx))
+			return ref, fmt.Errorf("agent %s: interrupted before its turn finished: %w", id, err)
 		}
 		// Capture the foreground turn's reply into RunRef.Output so the flow's
 		// output extraction and output_schema contract see it — the same
@@ -292,6 +307,35 @@ func (r *controllerRunner) WaitForAgent(ctx context.Context, id string, timeout 
 	r.forget(id)
 }
 
+// LiveAgent is one agent session a controller runtime (cli, acp, opencode,
+// agent-deck) has open — what `conductor status` lists beside paseo's own.
+type LiveAgent struct {
+	ID        string    `json:"id"`
+	Runtime   string    `json:"runtime"`
+	Transport string    `json:"transport"`
+	Target    string    `json:"target"`
+	Kind      string    `json:"kind"`
+	Dispatch  string    `json:"dispatch,omitempty"`
+	Since     time.Time `json:"since"`
+}
+
+// LiveAgents lists this runner's open sessions.
+func (r *controllerRunner) LiveAgents() []LiveAgent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	disp := map[string]string{}
+	for d, sid := range r.byDispatch {
+		disp[sid] = d
+	}
+	out := make([]LiveAgent, 0, len(r.live))
+	for id := range r.live {
+		target, kind, _ := strings.Cut(r.bucket[id], "\x00")
+		out = append(out, LiveAgent{ID: id, Runtime: r.c.Name(), Transport: string(r.c.Transport()),
+			Target: target, Kind: kind, Dispatch: disp[id], Since: r.since[id]})
+	}
+	return out
+}
+
 // HasLiveAgent reports whether a session for this PR+kind is still open — the
 // engine's re-dispatch dedup gate for live-gated kinds (reviews).
 func (r *controllerRunner) HasLiveAgent(_ context.Context, prKeyStr, kind string) bool {
@@ -383,6 +427,7 @@ func (r *controllerRunner) forget(id string) {
 		return
 	}
 	delete(r.live, id)
+	delete(r.since, id)
 	delete(r.stopped, id)
 	delete(r.bound, id)
 	for d, sid := range r.byDispatch {

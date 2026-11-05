@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/NodeSpy/conductor/internal/config"
 )
@@ -163,6 +164,19 @@ func (r *Registry) ByName(name string) (Controller, error) {
 		return r.builtin, nil
 	}
 	return nil, fmt.Errorf("unknown controller %q", name)
+}
+
+// LiveAgents lists every agent session the non-paseo runtimes have open,
+// oldest first (paseo's own agents are listed by paseo).
+func (r *Registry) LiveAgents() []LiveAgent {
+	var out []LiveAgent
+	for _, run := range r.Runners() {
+		if l, ok := run.(interface{ LiveAgents() []LiveAgent }); ok {
+			out = append(out, l.LiveAgents()...)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Since.Before(out[j].Since) })
+	return out
 }
 
 // Runners returns the dispatch runner of every runnable controller (each once),

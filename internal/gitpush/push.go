@@ -37,6 +37,11 @@ type Request struct {
 	// DenyCIChanges refuses a push whose commits change a CI definition
 	// (sandbox.push.deny_ci_changes, opt-in).
 	DenyCIChanges bool
+	// Rebase: when the remote branch moved since the workspace was checked
+	// out, replay the agent's own commits onto its new head and push that
+	// (sandbox.push.rebase, default on). Still never a force push: commits
+	// already on the remote are never rewritten.
+	Rebase bool
 }
 
 // Result reports a push.
@@ -48,8 +53,13 @@ type Result struct {
 	Signed   bool   // they were re-signed
 	UpToDate bool   // nothing to push
 	// WorkspaceUpdated: the workspace's branch now points at the signed
-	// commits (its own unsigned ones are the same trees).
+	// commits (its own unsigned ones are the same trees). After a rebase only
+	// its remote-tracking ref moves: the rebased commits are other trees.
 	WorkspaceUpdated bool
+	// Rebased: the remote branch had moved (to Onto) and the agent's
+	// commits were replayed onto it before the push.
+	Rebased bool
+	Onto    string
 }
 
 // ErrDiverged is a push refused because the remote branch has commits the
@@ -57,9 +67,13 @@ type Result struct {
 var ErrDiverged = errors.New("gitpush: the remote branch has diverged from the workspace — conductor pushes fast-forward only, never forced")
 
 // Push pushes r.Workspace's HEAD to refs/heads/<r.Branch> at r.Remote,
-// fast-forward only, re-signing the new commits.
-func Push(ctx context.Context, r Request) (Result, error) {
-	res := Result{Branch: r.Branch}
+// fast-forward only, re-signing the new commits. When the remote branch has
+// moved and r.Rebase is set, the agent's commits are first replayed onto it.
+// A push that fails once the agent's commits are known keeps them under
+// UnpushedRef in the trusted git dir and names that ref in the error: work
+// is never dropped with the workspace.
+func Push(ctx context.Context, r Request) (res Result, err error) {
+	res = Result{Branch: r.Branch}
 	if err := CheckBranch(r.Branch); err != nil {
 		return res, err
 	}
@@ -146,6 +160,7 @@ func Push(ctx context.Context, r Request) (Result, error) {
 		res.UpToDate, res.New = true, head
 		return res, nil
 	}
+	diverged := false
 	if old != "" {
 		if _, err := git(nil, "cat-file", "-e", old+"^{commit}"); err != nil {
 			if _, err := git(nil, "fetch", "--no-write-fetch-head", "--no-tags", "--no-recurse-submodules", "--end-of-options", r.Remote, ref); err != nil {
@@ -153,7 +168,7 @@ func Push(ctx context.Context, r Request) (Result, error) {
 			}
 		}
 		if _, err := git(nil, "merge-base", "--is-ancestor", old, head); err != nil {
-			return res, ErrDiverged
+			diverged = true
 		}
 	}
 	out, err = notOnRemote(git, head, tips, r.Remote)
@@ -161,8 +176,43 @@ func Push(ctx context.Context, r Request) (Result, error) {
 		return res, fmt.Errorf("gitpush: list the commits to push: %w", err)
 	}
 	commits := strings.Fields(out)
+	// From here the agent's commits are known: a push that fails keeps them.
+	agentHead, agentCommits := head, len(commits)
+	defer func() {
+		if err != nil && agentCommits > 0 {
+			err = keepUnpushed(ctx, r, clone, env, agentHead, tips, agentCommits, err)
+		}
+	}()
 	if len(commits) > max {
 		return res, fmt.Errorf("gitpush: %d new commits — more than the %d conductor pushes at once", len(commits), max)
+	}
+	if diverged {
+		derr := &DivergedError{Branch: r.Branch, Remote: old, Head: head}
+		if !r.Rebase {
+			return res, derr
+		}
+		rebased, cerr := rebaseOnto(git, commits, old)
+		if cerr != nil {
+			var c *conflictError
+			if errors.As(cerr, &c) {
+				derr.Commit, derr.Files = c.commit, c.files
+			} else {
+				derr.Cause = cerr
+			}
+			derr.Attempted = true
+			// What the agent (or a re-dispatch) resolves against: the
+			// remote's new head, as origin/<branch>.
+			_ = setRemoteTracking(ctx, r, clone, objDir, old)
+			return res, derr
+		}
+		res.Rebased, res.Onto = true, old
+		commits = rebased
+		if len(commits) == 0 {
+			// Every change of the agent's is on the remote already.
+			res.UpToDate, res.New = true, old
+			return res, nil
+		}
+		head = commits[len(commits)-1]
 	}
 	res.Commits = len(commits)
 	if r.DenyCIChanges && len(commits) > 0 {
@@ -198,6 +248,13 @@ func Push(ctx context.Context, r Request) (Result, error) {
 		return res, fmt.Errorf("gitpush: push %s: %w", r.Branch, err)
 	}
 	res.New = newHead
+	if res.Rebased {
+		// The rebased commits carry the remote's new changes too: the
+		// workspace's branch keeps the agent's own commits, and only its
+		// remote-tracking ref says what landed.
+		res.WorkspaceUpdated = setRemoteTracking(ctx, r, clone, objDir, newHead) == nil
+		return res, nil
+	}
 	res.WorkspaceUpdated = updateWorkspace(ctx, r, clone, objDir, head, newHead, onBranch) == nil
 	return res, nil
 }
@@ -229,11 +286,7 @@ func updateWorkspace(ctx context.Context, r Request, clone bool, objDir, head, n
 				return err
 			}
 		}
-		rt := filepath.Join(".git", "refs", "remotes", "origin", r.Branch)
-		if err := mkdirsUnder(r.Workspace, filepath.Dir(rt)); err != nil {
-			return err
-		}
-		return writeUnder(r.Workspace, rt, []byte(newHead+"\n"), 0o644)
+		return writeRemoteRef(r, newHead)
 	}
 	// A linked worktree: its objects and refs are the trusted git dir's.
 	if newHead != head {
@@ -252,6 +305,32 @@ func updateWorkspace(ctx context.Context, r Request, clone bool, objDir, head, n
 	return err
 }
 
+// setRemoteTracking points the workspace's origin/<branch> at sha — the
+// objects conductor wrote or fetched for it (objDir) copied in first — and
+// leaves the workspace's own branch alone.
+func setRemoteTracking(ctx context.Context, r Request, clone bool, objDir, sha string) error {
+	if clone {
+		if err := copyLooseObjects(objDir, r.Workspace, true); err != nil {
+			return err
+		}
+		return writeRemoteRef(r, sha)
+	}
+	if err := copyLooseObjects(objDir, filepath.Join(r.GitDir, "objects"), false); err != nil {
+		return err
+	}
+	_, err := runGit(ctx, r.GitDir, nil, nil, "update-ref", "refs/remotes/origin/"+r.Branch, sha)
+	return err
+}
+
+// writeRemoteRef writes a per-dispatch clone's origin/<branch>.
+func writeRemoteRef(r Request, sha string) error {
+	rt := filepath.Join(".git", "refs", "remotes", "origin", r.Branch)
+	if err := mkdirsUnder(r.Workspace, filepath.Dir(rt)); err != nil {
+		return err
+	}
+	return writeUnder(r.Workspace, rt, []byte(sha+"\n"), 0o644)
+}
+
 // copyLooseObjects copies the loose objects conductor wrote (the signed
 // commits) into a repository: an agent's workspace (dst is the workspace,
 // written under .git/objects with no symlink followed), or a trusted object
@@ -262,6 +341,14 @@ func copyLooseObjects(objDir, dst string, workspace bool) error {
 		return err
 	}
 	for _, e := range ents {
+		if e.IsDir() && e.Name() == "pack" {
+			// A fetch into the scratch store (the remote's moved head) lands
+			// as a pack.
+			if err := copyPacks(filepath.Join(objDir, "pack"), dst, workspace); err != nil {
+				return err
+			}
+			continue
+		}
 		if !e.IsDir() || len(e.Name()) != 2 || !isHex(e.Name()) {
 			continue
 		}
@@ -290,6 +377,41 @@ func copyLooseObjects(objDir, dst string, workspace bool) error {
 			if err := os.WriteFile(filepath.Join(d, f.Name()), b, 0o444); err != nil && !os.IsExist(err) {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// copyPacks copies the packs a scratch fetch wrote (pack-*.pack/.idx and
+// friends) into a repository, as copyLooseObjects does loose objects.
+func copyPacks(packDir, dst string, workspace bool) error {
+	files, err := os.ReadDir(packDir)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if f.IsDir() || !strings.HasPrefix(f.Name(), "pack-") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(packDir, f.Name()))
+		if err != nil {
+			return err
+		}
+		if workspace {
+			if err := mkdirUnder(dst, ".git/objects", "pack"); err != nil {
+				return err
+			}
+			if err := writeUnder(dst, filepath.Join(".git", "objects", "pack", f.Name()), b, 0o444); err != nil && !os.IsExist(err) {
+				return err
+			}
+			continue
+		}
+		d := filepath.Join(dst, "pack")
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(d, f.Name()), b, 0o444); err != nil && !os.IsExist(err) {
+			return err
 		}
 	}
 	return nil
