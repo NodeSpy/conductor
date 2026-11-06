@@ -67,6 +67,17 @@ func (s *slots) acquire(ctx context.Context, prio int) bool {
 	}
 }
 
+// tryAcquire takes a slot only if one is free and nobody is waiting.
+func (s *slots) tryAcquire() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.used < s.cap && s.queued() == 0 {
+		s.used++
+		return true
+	}
+	return false
+}
+
 // release frees a slot, handing it straight to the next waiter if any (used
 // stays constant across a hand-off).
 func (s *slots) release() {

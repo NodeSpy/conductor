@@ -409,6 +409,16 @@ func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.R
 		return fmt.Errorf("resolve fetched PR head: %w", err)
 	}
 	sha = strings.TrimSpace(sha)
+	// The run read the target's current head as its agent step dispatched
+	// (a run that waited, or resumed, can be long past its event's). The ref
+	// may lag a push that just landed: check out that head when the origin
+	// has it.
+	if want := strings.ToLower(strings.TrimSpace(req.Trigger.Target.HeadSHA)); hexSHA(want) && want != sha {
+		if got := p.fetchHead(ctx, base, tmp, want, prBranch(req)); got != "" {
+			p.logf("gitwt: %s: checking out the target's current head %s (%s had %s)", checkoutTarget(req, ref), shortSHA(got), ref, shortSHA(sha))
+			sha = got
+		}
+	}
 	branch, at := prBranch(req), 1
 	if branch == "" {
 		branch, at = p.remoteBranchAt(ctx, base, sha)
@@ -843,6 +853,49 @@ func prBranch(req dispatch.Request) string {
 		return ref
 	}
 	return ""
+}
+
+// fetchHead fetches commit want into tmp: by its sha, else as the tip of the
+// target's branch. The sha, or "" when the origin doesn't have it (tmp is
+// then left as it was).
+func (p *Provisioner) fetchHead(ctx context.Context, base, tmp, want, branch string) string {
+	at := func() string {
+		got, err := p.git(ctx, base, "rev-parse", "--verify", "--quiet", tmp+"^{commit}")
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(got)
+	}
+	prev := at()
+	try := []string{want}
+	if branch != "" {
+		try = append(try, "refs/heads/"+branch)
+	}
+	for _, src := range try {
+		if _, err := p.git(ctx, base, "fetch", "--no-tags", "--no-recurse-submodules", "--force", "origin", "+"+src+":"+tmp); err != nil {
+			continue
+		}
+		if at() == want {
+			return want
+		}
+	}
+	if prev != "" && at() != prev {
+		_, _ = p.git(ctx, base, "update-ref", tmp, prev)
+	}
+	return ""
+}
+
+// hexSHA reports whether s is a full hex commit id (SHA-1 or SHA-256).
+func hexSHA(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // fetchRef is the ref holding the target's code: the declared checkout's

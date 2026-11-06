@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
@@ -23,9 +25,19 @@ type runRecStore struct {
 	recs map[string]store.WorkflowRun
 }
 
+// PutRun keeps a copy, as the real store's file does: a run record read back
+// (a restart) shares no maps with the run that wrote it.
 func (s *runRecStore) PutRun(r store.WorkflowRun) error {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	var c store.WorkflowRun
+	if err := json.Unmarshal(b, &c); err != nil {
+		return err
+	}
 	s.mu.Lock()
-	s.recs[r.ID] = r
+	s.recs[r.ID] = c
 	s.mu.Unlock()
 	return s.flowGateStore.PutRun(r)
 }
@@ -42,7 +54,10 @@ func (s *runRecStore) PendingRuns() []store.WorkflowRun {
 	defer s.mu.Unlock()
 	var out []store.WorkflowRun
 	for _, r := range s.recs {
-		out = append(out, r)
+		b, _ := json.Marshal(r)
+		var c store.WorkflowRun
+		_ = json.Unmarshal(b, &c)
+		out = append(out, c)
 	}
 	return out
 }
@@ -208,4 +223,98 @@ triggers:
 	if _, n := c1[0].slots.usage(); n != 1 {
 		t.Errorf("trigger cap = %d", n)
 	}
+}
+
+// Two triggers sharing a serialization key: one's run holds it, the other's
+// waits (logged, kept in the store), then runs once the first ends.
+const serializeCfg = `
+connectors:
+  eg: { use: enginegate }
+triggers:
+  - on: eg.ping
+    name: one
+    serialize: { key: "pr {{.repo}}#{{.number}}" }
+    steps: [{ id: p, uses: eg.post, options: { text: block } }]
+  - on: eg.ping
+    name: two
+    serialize: { key: "pr {{.repo}}#{{.number}}" }
+    steps: [{ id: p, uses: eg.post, options: { text: "two {{.msg}}" } }]
+`
+
+func serialTrigger(ref string) core.Trigger {
+	t := flowTrigger("")
+	t.Action = config.Action{FlowRef: ref}
+	return t
+}
+
+func TestSerializeKeyHoldsAcrossTriggers(t *testing.T) {
+	block := setGateBlock(t)
+	st := &runRecStore{flowGateStore: newFlowGateStore(), recs: map[string]store.WorkflowRun{}}
+	log := &logBuf{}
+	eng := capEngine(t, serializeCfg, st, log)
+	held := gateCallsWith("block")
+	two := gateCallsWith("two hello")
+
+	eng.process(context.Background(), serialTrigger("0:eg.ping"))
+	waitCond(t, "one running", func() bool { return gateCallsWith("block") > held })
+	eng.process(context.Background(), serialTrigger("1:eg.ping"))
+	waitCond(t, "two waiting", func() bool { return log.has("waiting on pr acme/x#1 (held by one)") })
+	time.Sleep(30 * time.Millisecond)
+	if gateCallsWith("two hello") != two {
+		t.Fatal("two ran while one held the key")
+	}
+	if q := st.queued(); len(q) != 1 {
+		t.Fatalf("queued records = %v, want two's", q)
+	}
+	close(block)
+	waitCond(t, "two runs after one", func() bool { return gateCallsWith("two hello") > two })
+	waitCond(t, "its queued record removed", func() bool { return len(st.queued()) == 0 })
+	waitCond(t, "the key's pool dropped", func() bool {
+		eng.runCaps.mu.Lock()
+		defer eng.runCaps.mu.Unlock()
+		return len(eng.runCaps.serial) == 0
+	})
+}
+
+// A different target renders a different key: no wait.
+func TestSerializeKeyIsPerRenderedKey(t *testing.T) {
+	block := setGateBlock(t)
+	defer close(block)
+	st := &runRecStore{flowGateStore: newFlowGateStore(), recs: map[string]store.WorkflowRun{}}
+	eng := capEngine(t, serializeCfg, st, &logBuf{})
+	held := gateCallsWith("block")
+	two := gateCallsWith("two hello")
+	eng.process(context.Background(), serialTrigger("0:eg.ping"))
+	waitCond(t, "one running", func() bool { return gateCallsWith("block") > held })
+	other := serialTrigger("1:eg.ping")
+	other.Target.Number = 2
+	eng.process(context.Background(), other)
+	waitCond(t, "two runs on another target", func() bool { return gateCallsWith("two hello") > two })
+}
+
+// Across a restart: the run that held the key resumes holding it, and the
+// run that was waiting on it waits again, then runs.
+func TestSerializeKeySurvivesARestart(t *testing.T) {
+	block := setGateBlock(t)
+	st := &runRecStore{flowGateStore: newFlowGateStore(), recs: map[string]store.WorkflowRun{}}
+	eng := capEngine(t, serializeCfg, st, &logBuf{})
+	held := gateCallsWith("block")
+	two := gateCallsWith("two hello")
+	ctx, stop := context.WithCancel(context.Background())
+	eng.process(ctx, serialTrigger("0:eg.ping"))
+	waitCond(t, "one running", func() bool { return gateCallsWith("block") > held })
+	eng.process(ctx, serialTrigger("1:eg.ping"))
+	waitCond(t, "two queued", func() bool { return len(st.queued()) == 1 })
+	stop() // the daemon goes down: one in flight, two waiting
+
+	log := &logBuf{}
+	eng2 := capEngine(t, serializeCfg, st, log)
+	eng2.ResumeWorkflows(context.Background())
+	waitCond(t, "two waits on the resumed one", func() bool { return log.has("waiting on pr acme/x#1 (held by one)") })
+	time.Sleep(30 * time.Millisecond)
+	if gateCallsWith("two hello") != two {
+		t.Fatal("two ran ahead of the resumed run holding the key")
+	}
+	close(block)
+	waitCond(t, "two runs", func() bool { return gateCallsWith("two hello") == two+1 })
 }

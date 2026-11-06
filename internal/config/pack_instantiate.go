@@ -981,6 +981,9 @@ func applyTriggerArm(tr *TriggerSpec, arm TriggerArm) error {
 	if arm.Gate != nil {
 		tr.Gate = arm.Gate
 	}
+	if arm.Serialize != nil {
+		tr.Serialize = arm.Serialize
+	}
 	if arm.Isolation != nil {
 		tr.Isolation = arm.Isolation
 	}

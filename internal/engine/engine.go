@@ -1419,6 +1419,19 @@ func (e *Engine) interruptStaleHistory() {
 // persisted).
 func (e *Engine) ResumeWorkflows(ctx context.Context) {
 	e.interruptStaleHistory()
+	// Runs that were waiting re-queue after every run that was in flight has
+	// resumed, so a run holding a serialization key gets it back first.
+	type requeue struct {
+		r   store.WorkflowRun
+		t   core.Trigger
+		act config.Action
+	}
+	var waiting []requeue
+	defer func() {
+		for _, q := range waiting {
+			e.requeueFlowRun(ctx, q.r, q.t, q.act)
+		}
+	}()
 	for _, r := range e.store.PendingRuns() {
 		var t core.Trigger
 		var act config.Action
@@ -1435,7 +1448,7 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 				continue
 			}
 			if strings.HasPrefix(r.ID, queuedRunPrefix) {
-				e.requeueFlowRun(ctx, r, t, act)
+				waiting = append(waiting, requeue{r, t, act})
 				continue
 			}
 			e.resumeFlowRun(ctx, r, t, act)

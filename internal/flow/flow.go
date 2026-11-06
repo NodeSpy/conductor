@@ -2120,6 +2120,19 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		// way the grant can arrive.
 		sanitizeAgentAuthoredStep(&step)
 	}
+	if !shadow {
+		// The agent works on the target as it is now, not as the event saw
+		// it: a run that waited (a serialize key, max_runs, an agent slot) or
+		// resumed may start long after its event, past another run's push.
+		// The head comes from the connector's own reads_revision verb; a
+		// target with none keeps the event's.
+		if sha, _, _ := r.readHead(ctx, t); sha != "" && sha != t.Target.HeadSHA {
+			if t.Target.HeadSHA != "" {
+				r.Log("%s step %s: the target moved since its event (%s → %s): working on its current head", flowTag(t), id, shortSHA(t.Target.HeadSHA), shortSHA(sha))
+			}
+			t.Target.HeadSHA = sha
+		}
+	}
 	req := dispatch.Request{
 		Trigger: t, Action: act, Step: step, Identity: identity, Model: model, Provider: provider, Credentials: creds,
 		Shadow: shadow, Wait: !step.Background, Interactive: step.Background, Data: data,

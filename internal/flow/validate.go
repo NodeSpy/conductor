@@ -149,6 +149,11 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 			return err
 		}
 	}
+	if spec.Serialize != nil && spec.Serialize.Key != "" {
+		if err := checkRefs(where+" serialize.key", spec.Serialize.Key, sc); err != nil {
+			return err
+		}
+	}
 	// Workflow-level at:start hooks see the trigger context only.
 	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "start", runHookScope(sc)); err != nil {
 		return err
@@ -247,6 +252,11 @@ func validateManualTrigger(cfg *config.Config, reg *connector.Registry, where st
 			if err := checkRefs(where+" group.key", spec.Group.Key, sc); err != nil {
 				return err
 			}
+		}
+	}
+	if spec.Serialize != nil && spec.Serialize.Key != "" {
+		if err := checkRefs(where+" serialize.key", spec.Serialize.Key, sc); err != nil {
+			return err
 		}
 	}
 	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "start", runHookScope(sc)); err != nil {

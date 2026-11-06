@@ -35,7 +35,7 @@ triggers:
 | key | meaning | scopes |
 |---|---|---|
 | `quiet_hours` | a defer (`hold: true`, default — re-queued when the window ends) or drop (`hold: false`) window; `from`/`to` are local clock times in `tz`, windows may span midnight; overrides merge field-wise so a trigger can set just `hold: false` | any |
-| `concurrency.max_agents` | the global cap on concurrently running agents (per-target serialization is [[Grouping]], not this). A run waiting for a slot waits on its own — it never stalls other events — and a `review_requested` run takes the next free slot ahead of queued fixers; a repeat event for a run already waiting folds into it | global |
+| `concurrency.max_agents` | the global cap on concurrently running agents (per-target serialization, within a trigger or across triggers, is [[Grouping]], not this). A run waiting for a slot waits on its own — it never stalls other events — and a `review_requested` run takes the next free slot ahead of queued fixers; a repeat event for a run already waiting folds into it | global |
 | `concurrency.max_agents_per_hour` | rolling-hour dispatch cap (runaway guard) | global |
 | `concurrency.max_runs` | at most N runs in flight at once: one trigger's (trigger scope, including a pack trigger's arm, `packs: <inst>: triggers: <name>: policy:`), all of one connector's triggers' (connector scope), or every trigger's (global). Each scope that sets one applies, and the tightest binds. Extra runs queue in arrival order; none is dropped, and a run still queued when the daemon stops is re-queued at the next start. The wait is logged: `waiting for a run slot (N/N running, <scope>)`. A run then waits for an agent slot (`max_agents`). Unset or `0`: no cap | any |
 
