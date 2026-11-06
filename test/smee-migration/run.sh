@@ -209,9 +209,9 @@ jailed() {
 OWN_PORT="its listener 127.0.0.1:[0-9]* is conductor's own port"
 NO_CAP="does not declare expose_local"
 
-# row <name> <conductor> <github> <smee> <migrates: yes|no> <gh: yes|refused> <hooks: yes|refused>
+# row <name> <conductor> <github> <smee> <migrates: yes|no> <gh: yes|refused> <hooks: yes|refused> [subscribes: yes|no]
 row() {
-  local name=$1 cond=$2 gh=$3 smee=$4 migrates=$5 ghx=$6 hooksx=$7
+  local name=$1 cond=$2 gh=$3 smee=$4 migrates=$5 ghx=$6 hooksx=$7 subs=${8:-yes}
   local d="$WORK/$name"
   say "$name"
   mkdir -p "$d/state"
@@ -220,8 +220,12 @@ row() {
   "$BIN/seed" -state "$d/state" "github=$gh" "smee=$smee" >"$d/seed.log" 2>&1 || { fail "$name: seed ($(tail -1 "$d/seed.log"))"; return; }
   boot "$d" "$cond"
 
-  if wait_for 60 subscribed "$name-gh"; then pass "$name: the github channel has a subscriber"; else fail "$name: nobody subscribed to the github channel"; fi
-  if wait_for 30 subscribed "$name-hooks"; then pass "$name: the webhook channel has a subscriber"; else fail "$name: nobody subscribed to the webhook channel"; fi
+  if [ "$subs" = yes ]; then
+    if wait_for 60 subscribed "$name-gh"; then pass "$name: the github channel has a subscriber"; else fail "$name: nobody subscribed to the github channel"; fi
+    if wait_for 30 subscribed "$name-hooks"; then pass "$name: the webhook channel has a subscriber"; else fail "$name: nobody subscribed to the webhook channel"; fi
+  else
+    sleep 10
+  fi
   sleep 1 # the listener the relay posts to is up by the time the relay subscribed; give it a beat anyway
   if [ "$cond" = "$CONDUCTOR_NEW" ]; then jailed "$name" github; jailed "$name" smee; fi
 
@@ -272,18 +276,22 @@ row old-cond.new-gh   "$CONDUCTOR_OLD" "$GITHUB_NEW" "$SMEE_OLD" no  yes yes
 row new-cond.old-gh   "$CONDUCTOR_NEW" "$GITHUB_OLD" "$SMEE_NEW" yes yes refused
 row new-cond.new-gh   "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_NEW" yes yes refused
 # An smee build from before expose_local, jailed: it cannot reach the
-# listener, and the log says what to do.
-row new-cond.old-smee "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_OLD" yes refused refused
+# listener, and the log says what to do. (Its egress names smee.io only, so
+# the fake channel's host is outside its jail too and it never subscribes
+# here; on a real smee.io channel it subscribes, and the relay is refused
+# the same way.)
+row new-cond.old-smee "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_OLD" yes refused refused no
 
 # The operator's opt-out for the bundled webhook connector: trust: full on
-# its smee connector (the old relay ran inside conductor, unjailed, too).
+# its smee connector, isolated from gh-smee's jailed process (the old relay
+# ran inside conductor, unjailed, too).
 say "new-cond.webhook-trust-full"
 d="$WORK/new-cond.webhook-trust-full"
 mkdir -p "$d/state"
 cp -r "$WORK/new-cond.new-gh/cfg" "$d/cfg"
 rm -f "$d/cfg/conductor.yaml.pre-smee"
 sed -i "s#/new-cond.new-gh-gh#/trustfull-gh#; s#/new-cond.new-gh/#/trustfull/#g; s#new-cond.new-gh-hooks#trustfull-hooks#" "$d/cfg/conductor.yaml" "$d/cfg/conductor.env"
-sed -i 's#^  hooks-smee:$#  hooks-smee:\n    trust: full#' "$d/cfg/conductor.yaml"
+sed -i 's#^  hooks-smee:$#  hooks-smee:\n    trust: full\n    isolate: true#' "$d/cfg/conductor.yaml"
 "$BIN/seed" -state "$d/state" "github=$GITHUB_NEW" "smee=$SMEE_NEW" >"$d/seed.log" 2>&1
 boot "$d" "$CONDUCTOR_NEW"
 if wait_for 60 subscribed trustfull-hooks && wait_for 30 subscribed trustfull-gh; then pass "webhook-trust-full: both channels have a subscriber"; else fail "webhook-trust-full: no subscriber"; fi

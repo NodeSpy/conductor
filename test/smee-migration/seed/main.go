@@ -41,7 +41,9 @@ func main() {
 		}
 		bin, _ = filepath.Abs(bin)
 		sum := shaOf(bin)
-		spec := plugin.Spec{Name: name, Kind: plugin.KindConnector, Provides: name, BinPath: bin, Sha256: sum}
+		// Only its declaration is read here (what an install records); the
+		// daemon is what runs it jailed.
+		spec := plugin.Spec{Name: name, Kind: plugin.KindConnector, Provides: name, BinPath: bin, Sha256: sum, TrustFull: true}
 		cl := plugin.NewClient(spec, plugin.Deps{Log: func(string, ...any) {}})
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if err := cl.Start(ctx); err != nil {

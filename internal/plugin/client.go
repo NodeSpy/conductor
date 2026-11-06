@@ -1275,7 +1275,8 @@ func (c *Client) Reload(newSpec Spec) error {
 
 // setExposeTo sets the listener addresses this client's process may be
 // granted to expose (Manager.SetExposeTargets). A process already up with a
-// different set is torn down: the next call re-dials, jailed to the new set.
+// different set is torn down: the next call re-dials, jailed to the new set
+// (and, for a build not declaring expose_local, logging that it is not).
 func (c *Client) setExposeTo(addrs []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1283,7 +1284,7 @@ func (c *Client) setExposeTo(addrs []string) {
 		return
 	}
 	c.spec.ExposeTo = addrs
-	if c.conn != nil && !c.spec.TrustFull && c.spec.Manifest.ExposeLocal {
+	if c.conn != nil && !c.spec.TrustFull {
 		c.teardownLocked()
 		c.starts = nil
 	}

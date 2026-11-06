@@ -164,7 +164,7 @@ func ExposeTargets(cfg *config.Config, logf func(string, ...any)) map[string][]s
 			addr := dialableAddr(listen)
 			if !IsExternalType(ref.TypeName()) {
 				if t, ok := cfg.ConnectorsMap[expose]; ok && IsExternalType(t.TypeName()) && !t.TrustFull() {
-					logf("connector %q: its listener %s is conductor's own port, which %s (a jailed plugin) is never granted — what it relays will not arrive; set trust: full on %s to run it unjailed, or expose a plugin's listener", name, addr, expose, expose)
+					logf("connector %q: its listener %s is conductor's own port, which %s (a jailed plugin) is never granted — what it relays will not arrive; set trust: full on %s to run it unjailed (with isolate: true when it shares its plugin's process with another connector), or expose a plugin's listener", name, addr, expose, expose)
 				}
 				continue
 			}
