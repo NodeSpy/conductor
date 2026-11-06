@@ -88,6 +88,13 @@ when the daemon stops is re-queued at the next start, after the run that held
 the key has resumed. The key is taken before `policy.concurrency.max_runs` and
 the agent slot (`max_agents`).
 
+A run that waited starts long after its event. So each agent step works on
+the target's head as it is when the step dispatches, read through the
+connector's `reads_revision` verb, not on the head its event saw. This is
+true of every run, including resumed and re-queued ones. A run on the same
+target as an earlier run's push starts from that push, so its own push is a
+fast-forward. A connector that declares no such read keeps the event's head.
+
 A pack trigger's key ships with the pack. The operator replaces it in the
 trigger's arm (`packs: <inst>: triggers: <name>: serialize: { key: … }`), or
 turns it off with `serialize: { key: "" }`. A key that renders empty is logged

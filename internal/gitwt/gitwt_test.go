@@ -746,3 +746,37 @@ func TestByteSize(t *testing.T) {
 		}
 	}
 }
+
+// The run's read of the target's current head wins over a pull ref that lags
+// a push: the PR branch moved past refs/pull/7/head, and the checkout lands
+// on the branch's new tip, so the agent's push is a fast-forward.
+func TestCheckoutPRTakesTheTargetsCurrentHead(t *testing.T) {
+	origin := originRepo(t)
+	pushExtraCommit(t, origin, "feature", "PUSHED.md")
+	head := strings.TrimSpace(out(t, origin, "git", "rev-parse", "feature"))
+	p := newProv(t, origin)
+	req := prReq()
+	req.Trigger.Target.HeadSHA = head
+	_, cwd, err := p.ProvisionWorktree(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ProvisionWorktree: %v", err)
+	}
+	if got := strings.TrimSpace(out(t, cwd, "git", "rev-parse", "HEAD")); got != head {
+		t.Fatalf("worktree HEAD = %s, want the current head %s", got, head)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, "PUSHED.md")); err != nil {
+		t.Fatal("the pushed commit is not in the checkout")
+	}
+
+	// A head the origin doesn't have keeps the pull ref's.
+	req.Trigger.Target.HeadSHA = strings.Repeat("ab", 20)
+	req.DispatchID = "disp-2"
+	_, cwd, err = p.ProvisionWorktree(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ProvisionWorktree: %v", err)
+	}
+	want := strings.TrimSpace(out(t, origin, "git", "rev-parse", "refs/pull/7/head"))
+	if got := strings.TrimSpace(out(t, cwd, "git", "rev-parse", "HEAD")); got != want {
+		t.Fatalf("worktree HEAD = %s, want the pull ref's %s", got, want)
+	}
+}

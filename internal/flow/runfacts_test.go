@@ -176,7 +176,7 @@ func TestStartHooksFireBeforeProvisioning(t *testing.T) {
 	rig, l := headRig(t, "hs", "aaaaaaa1111")
 	runTrigger(rig, headTrigger("hs"), mustSpec(t, fmt.Sprintf(factsSpec, "hs")))
 	got := strings.Join(l.entries(), " | ")
-	want := "head | post:start start=aaaaaaa1111 head=aaaaaaa1111 pushed=false | dispatch | head | post:done start=aaaaaaa1111 head=aaaaaaa1111 short=aaaaaaa pushed=false reason="
+	want := "head | post:start start=aaaaaaa1111 head=aaaaaaa1111 pushed=false | head | dispatch | head | post:done start=aaaaaaa1111 head=aaaaaaa1111 short=aaaaaaa pushed=false reason="
 	if got != want {
 		t.Fatalf("order:\n got  %s\n want %s", got, want)
 	}
@@ -200,15 +200,31 @@ func TestRunFactsPushed(t *testing.T) {
 	}
 }
 
-// A trigger with no hooks reads no head at all: run facts cost nothing where
-// nothing uses them.
+// A trigger with no hooks and no agent step reads no head at all: run facts
+// cost nothing where nothing uses them.
 func TestRunFactsCostNothingWithoutHooks(t *testing.T) {
 	rig, l := headRig(t, "hn", "aaaaaaa1111")
-	runTrigger(rig, headTrigger("hn"), mustSpec(t, "on: hn.ping\nsteps:\n  - { id: fix, type: agent, prompt: p }\n"))
+	runTrigger(rig, headTrigger("hn"), mustSpec(t, "on: hn.ping\nsteps:\n  - { id: p, uses: hn.post, options: { text: x } }\n"))
 	for _, e := range l.entries() {
 		if e == "head" {
 			t.Fatalf("a hookless run read the head: %v", l.entries())
 		}
+	}
+}
+
+// An agent step works on the target's head as it is when the step
+// dispatches, not the head its event saw: a run that waited or resumed may
+// start long after another run's push.
+func TestAgentDispatchCarriesTheCurrentHead(t *testing.T) {
+	rig, _ := headRig(t, "hd", "ccccccc3333")
+	var got string
+	rig.Agents.dispatchFunc = func(_ context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		got = req.Trigger.Target.HeadSHA
+		return dispatch.RunRef{Output: "{}", AgentID: "a1"}, nil
+	}
+	runTrigger(rig, headTrigger("hd"), mustSpec(t, "on: hd.ping\nsteps:\n  - { id: fix, type: agent, prompt: p }\n"))
+	if got != "ccccccc3333" {
+		t.Fatalf("the dispatch carried head %q, want the current ccccccc3333 (not the event's)", got)
 	}
 }
 
@@ -321,7 +337,7 @@ steps:
 	if failed, why := rig.workflowFailed(); failed {
 		t.Fatalf("a failing hook failed the run: %s", why)
 	}
-	if got := strings.Join(l.entries(), " "); got != "head fail dispatch head fail post:after" {
+	if got := strings.Join(l.entries(), " "); got != "head fail head dispatch head fail post:after" {
 		t.Fatalf("lifecycle = %q (the run and the later hook must carry on past a failed hook)", got)
 	}
 }
