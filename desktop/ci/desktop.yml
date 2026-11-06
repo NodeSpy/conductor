@@ -1,0 +1,123 @@
+# Template GitHub Actions workflow for the conductor desktop client.
+#
+# This file lives at desktop/ci/desktop.yml on purpose: it is not wired into
+# GitHub yet. Move or symlink it to .github/workflows/desktop.yml to enable it.
+#
+# Builds:
+#   - Linux: AppImage + .deb (webkit2gtk-4.1 installed via apt, matching
+#     desktop/build/linux.Dockerfile)
+#   - macOS: universal .dmg (x86_64 + aarch64), unsigned by default. Signing
+#     and notarization are wired but commented out — fill in the secrets
+#     named below and uncomment to enable them.
+
+name: desktop
+
+on:
+  push:
+    paths:
+      - "desktop/**"
+  pull_request:
+    paths:
+      - "desktop/**"
+  workflow_dispatch: {}
+
+defaults:
+  run:
+    working-directory: desktop/src-tauri
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            build-essential
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install cargo-tauri
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: cargo test
+        run: cargo test --locked
+
+      - name: Build AppImage + deb
+        run: cargo tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conductor-desktop-linux
+          path: |
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install cargo-tauri
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: cargo test
+        run: cargo test --locked
+
+      # --- Unsigned build (default) ---
+      - name: Build universal dmg (unsigned)
+        run: cargo tauri build --target universal-apple-darwin
+        # env:
+        #   APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+
+      # --- Signing + notarization (disabled; fill in secrets and uncomment) ---
+      # Needed repo secrets:
+      #   APPLE_CERTIFICATE             - base64-encoded .p12 developer ID certificate
+      #   APPLE_CERTIFICATE_PASSWORD    - password for the .p12
+      #   APPLE_SIGNING_IDENTITY        - e.g. "Developer ID Application: Your Org (TEAMID)"
+      #   APPLE_ID                     - Apple ID email used for notarization
+      #   APPLE_PASSWORD                - app-specific password for that Apple ID
+      #   APPLE_TEAM_ID                 - Apple developer team ID
+      #
+      # - name: Import signing certificate
+      #   run: |
+      #     echo "${{ secrets.APPLE_CERTIFICATE }}" | base64 --decode > certificate.p12
+      #     security create-keychain -p actions build.keychain
+      #     security import certificate.p12 -k build.keychain -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
+      #     security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
+      #     security list-keychains -d user -s build.keychain
+      #
+      # - name: Build + sign + notarize universal dmg
+      #   run: cargo tauri build --target universal-apple-darwin
+      #   env:
+      #     APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      #     APPLE_ID: ${{ secrets.APPLE_ID }}
+      #     APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      #     APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conductor-desktop-macos
+          path: desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg

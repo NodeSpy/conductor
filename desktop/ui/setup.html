@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Conductor — Setup</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<main>
+  <h1>Conductor</h1>
+  <p class="lede">Connect to a conductor daemon. This app signs in with your SSH key and
+    watches for things that need you, even while the window is closed.</p>
+
+  <form id="setup-form">
+    <label for="daemon-url">Daemon URL</label>
+    <input id="daemon-url" name="daemon_url" type="text"
+           placeholder="http://localhost:7788 or https://box.tailnet-name.ts.net:7788" required />
+    <p class="hint">The host must be exactly <code>localhost</code> (a daemon on this machine)
+      or the daemon's Tailscale MagicDNS name (a remote one) — the daemon checks the
+      <code>Host</code> header and will refuse anything else.</p>
+
+    <label for="operator">Operator name</label>
+    <input id="operator" name="operator" type="text" placeholder="your operator name" required />
+
+    <label for="ssh-key">SSH public key</label>
+    <input id="ssh-key" name="ssh_public_key_path" type="text"
+           placeholder="/home/you/.ssh/id_ed25519.pub" required />
+    <p class="hint">Defaults to the first of <code>id_ed25519.pub</code>,
+      <code>id_ecdsa.pub</code>, <code>id_rsa.pub</code> found in <code>~/.ssh</code>.
+      The matching private key must be usable (directly or via <code>ssh-agent</code>) for both
+      sign-in and the in-page "sign with SSH agent" step-up prompts.</p>
+
+    <div class="actions">
+      <button type="submit" id="save-btn">Save and connect</button>
+    </div>
+    <p id="status" role="status"></p>
+  </form>
+</main>
+<script src="setup.js"></script>
+</body>
+</html>

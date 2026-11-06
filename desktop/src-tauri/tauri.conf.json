@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Conductor",
+  "version": "0.1.0",
+  "identifier": "org.conductor.desktop",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Conductor",
+        "url": "setup.html",
+        "width": 1180,
+        "height": 820,
+        "minWidth": 480,
+        "minHeight": 360,
+        "visible": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null,
+      "capabilities": ["default"]
+    },
+    "trayIcon": {
+      "iconPath": "icons/32x32.png",
+      "iconAsTemplate": true,
+      "tooltip": "Conductor"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "deb", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "Conductor desktop client",
+    "longDescription": "Native tray app that signs in to a conductor daemon with your SSH key, watches for things that need your attention, and shows the dashboard in a window.",
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  }
+}

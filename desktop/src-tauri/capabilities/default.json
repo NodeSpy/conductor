@@ -1,0 +1,28 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities for the main window while it shows the local setup page or has no daemon configured yet.",
+  "windows": ["main", "settings"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-close",
+    "core:webview:allow-create-webview-window",
+    "core:event:default",
+    "notification:default",
+    "notification:allow-notify",
+    "dialog:default",
+    "dialog:allow-confirm",
+    "dialog:allow-message",
+    "autostart:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled",
+    "opener:default",
+    "allow-get-settings",
+    "allow-save-settings",
+    "allow-default-ssh-key",
+    "allow-complete-setup"
+  ]
+}
