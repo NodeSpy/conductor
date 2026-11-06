@@ -76,8 +76,9 @@ plugin. It may connect to the listeners its `expose:` wiring names, and to
 nothing else on the machine. The bundled `webhook` connector's listener is
 conductor's own port, which a jailed plugin is never granted: for a
 rewritten `webhook` connector, set `trust: full` on its `<name>-smee`
-connector (the old built-in relay ran inside conductor, unjailed, too), or
-the log names the delivery it refused. A box that already had an older smee
+connector, with `isolate: true` when another smee connector shares the
+plugin's process (the old built-in relay ran inside conductor, unjailed,
+too); otherwise the log names the delivery it refused. A box that already had an older smee
 installed holds the update to v1.2.0 until `conductor plugin approve`,
 because it asks for `expose_local`.
 

@@ -517,7 +517,8 @@ says why, for:
 - a listener not on `127.0.0.1` (or `localhost`, `0.0.0.0`, `:port`);
 - a port conductor itself listens on — a builtin's listener, such as the
   bundled `webhook` connector's, is one. Set `trust: full` on the exposure
-  connector to relay to it, or expose a plugin's listener;
+  connector to relay to it (with `isolate: true` when another connector
+  shares its plugin's process), or expose a plugin's listener;
 - a build whose install record does not declare `expose_local` (an older
   release): update it, and approve the update.
 
