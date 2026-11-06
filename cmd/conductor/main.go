@@ -769,6 +769,10 @@ func cmdRun(args []string) error {
 	// to a `host:` falls back to paseo, since these paths are local-box only.
 	gitProv := gitwt.New(stateDir)
 	gitProv.Log = logf
+	// A step interrupted by a restart resumes its agent in its own worktree:
+	// the reaper leaves a worktree alone while a stored run still has an
+	// agent recorded in it, and sweeps it as usual once that run is gone.
+	gitProv.Keep = st.KeepsWorkspace
 	reg := controller.NewRegistry(mergedControllers, cfg.DefaultRuntimeName(), disp, paseoSender,
 		controller.WithCLIProvisioner(gitProv))
 	// Paseo runtimes with their own bin: — or a host:, whose paseo CLI runs

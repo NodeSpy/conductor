@@ -129,7 +129,7 @@ func parseClaude(args []string) (prompt, resume string) {
 				resume = args[i+1]
 				i++
 			}
-		case "--output-format", "--model", "--tools", "--system-prompt", "--json-schema":
+		case "--output-format", "--model", "--tools", "--system-prompt", "--json-schema", "--session-id":
 			i++ // skip its value
 		default:
 			if prompt == "" && !strings.HasPrefix(args[i], "-") {

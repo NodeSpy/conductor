@@ -942,7 +942,7 @@ func (r *Runner) execBranches(ctx context.Context, t core.Trigger, step config.S
 			// WalkSteps applies, so a branch step's session binds under the
 			// key the sweep will look for. config.BranchScope is the one
 			// place that rule lives.
-			bctx := withIdentityScope(ctx, config.BranchScope(identityScopeFrom(ctx), slot, bi))
+			bctx := withIdentityScope(withStepPath(ctx, fmt.Sprintf("%s#%d", id, bi)), config.BranchScope(identityScopeFrom(ctx), slot, bi))
 			err := r.runSteps(bctx, &localRun, t, branch, local, shadow, false)
 			mu.Lock()
 			defer mu.Unlock()
@@ -1454,6 +1454,7 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 		return nil, fmt.Errorf("workflow %q: call depth %d exceeds the limit %d (dynamic workflow names are depth-guarded)", name, depth, MaxWorkflowDepth)
 	}
 	ctx = context.WithValue(ctx, workflowDepthKey{}, depth+1)
+	ctx = withStepPath(ctx, id)
 	wf, ok := r.lookupWorkflow(name)
 	if !ok {
 		return nil, fmt.Errorf("unknown workflow %q (defined: %s)", name, r.workflowNames())
@@ -2149,7 +2150,9 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if inputs != nil {
 		req.Inputs, req.InputsDir = inputs.list, inputs.dir
 	}
+	settled := r.agentResume(ctx, t, id, &req)
 	ref, err := r.Agents.Dispatch(ctx, req)
+	settled()
 	// Consumed on every outcome so a mark never outlives its dispatch.
 	doneSignalled := r.Agents.TakeDone != nil && r.Agents.TakeDone(req.DispatchID)
 	archive := step.ArchivesWhenDone() || doneSignalled

@@ -131,6 +131,26 @@ func (c *opencodeController) Runner() (Runner, error) {
 // NewSession starts (or connects to) an opencode server rooted at the worktree,
 // creates a session, and runs its first prompt turn asynchronously.
 func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handler) (Session, error) {
+	return c.launch(ctx, spec, "")
+}
+
+// CanResumeStep: opencode keeps a session by id on disk, so an interrupted
+// step's session is continued after a restart (StepResumer).
+func (c *opencodeController) CanResumeStep() bool { return true }
+
+// ResumeStep starts a server rooted at the step's kept workspace and runs
+// spec's prompt as the next turn of session id. A server that no longer has
+// the session fails here, and conductor starts a fresh one instead.
+func (c *opencodeController) ResumeStep(ctx context.Context, spec Spec, id string, _ Handler) (Session, error) {
+	if id == "" {
+		return nil, ErrNoFollowup
+	}
+	return c.launch(ctx, spec, id)
+}
+
+// launch starts the server for spec and opens its session — a new one, or
+// (resume != "") that existing one — then starts spec's prompt turn.
+func (c *opencodeController) launch(ctx context.Context, spec Spec, resume string) (Session, error) {
 	env, err := dispatch.AgentEnv(spec.Request)
 	if err != nil {
 		return nil, fmt.Errorf("opencode: build env: %w", err)
@@ -184,9 +204,14 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 	}
 	cl := &opencodeClient{baseURL: strings.TrimRight(baseURL, "/"), hc: hc}
 
-	title := opencodeTitle(spec.Request)
-	id, err := cl.createSession(sctx, spec.Cwd, title)
-	if err != nil {
+	id := resume
+	if resume != "" {
+		if err := cl.do(sctx, http.MethodGet, "/session/"+resume, nil, nil); err != nil {
+			cleanup()
+			scancel()
+			return nil, fmt.Errorf("opencode: session %s: %w", resume, err)
+		}
+	} else if id, err = cl.createSession(sctx, spec.Cwd, opencodeTitle(spec.Request)); err != nil {
 		cleanup()
 		scancel()
 		return nil, fmt.Errorf("opencode: create session: %w", err)
@@ -577,6 +602,9 @@ type opencodeSession struct {
 }
 
 func (s *opencodeSession) ID() string { return s.id }
+
+// ResumeID is the opencode session id (ResumableSession).
+func (s *opencodeSession) ResumeID() string { return s.id }
 
 // Prompt runs a follow-up turn on the resumable session.
 func (s *opencodeSession) Prompt(_ context.Context, msg Message) (<-chan Update, error) {

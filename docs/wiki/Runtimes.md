@@ -198,7 +198,9 @@ set the same `headless_mode`; give one its own `bin:` to differ.
 `use: cli` runs a tool as a plain subprocess, one process per turn. `tool:`
 picks a built-in recipe — `claude-code` (alias `claude`) or `codex` — that knows
 the tool's flags: headless mode, prompt on stdin, `--resume` for a follow-up
-(claude-code), and a lean session for a [decide step](Decide-Steps). Any other
+(claude-code) or for an agent step interrupted by a restart (the session is
+named up front with `--session-id`), and a lean session for a
+[decide step](Decide-Steps). Any other
 `tool:` name is run as `<tool> <prompt>`.
 
 Each recipe runs its tool by its default name, found on the daemon's `PATH`.
@@ -242,6 +244,23 @@ the agent id) and **acp** (follow-ups via `session/prompt`; resume via
 `session/load` where the agent negotiates it). One-shot runtimes (`cli`)
 don't participate — a `session:` on them silently stays fresh-per-event and
 leans on [[Memory]] for continuity.
+
+### Resuming an agent step after a restart
+
+An agent step interrupted by a conductor restart or reload gets its agent back
+in the same workspace (see [[Workflows]]). How each runtime continues it:
+
+| Runtime | What a restart resumes |
+|---|---|
+| `paseo` | The agent keeps running in the paseo daemon. Conductor labels it at launch (`conductor-session=<id>`), finds it again with `paseo ls`, waits for its interrupted turn, then sends it the restart note (`paseo send`). The run workspace or worktree it works in is kept. |
+| `cli` | `claude-code`: the session is named up front (`--session-id`) and resumed with `--resume`. Other recipes start a fresh agent. |
+| `acp` | When the agent advertises `loadSession`: `session/load` of the same session in the kept workspace, then the restart note as the next turn. Without it, a fresh agent. |
+| `opencode` | The same session by id, on a server rooted at the kept workspace. |
+| `agent-deck` | The session keeps running in agent-deck, and the restart note is sent to it (`session send`). |
+
+When the agent or session is gone, or the resume fails, the step starts a fresh
+agent in the kept workspace and tells it that an earlier agent's work is there.
+If the workspace is gone too, the agent starts fresh in a new one.
 
 A runtime conductor launches itself (acp / cli / opencode / agent-deck) may
 carry an `isolation:` block — per-dispatch sandboxing and the network egress

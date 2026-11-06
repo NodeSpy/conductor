@@ -129,6 +129,13 @@ type Request struct {
 	// bot's home prompt carries text agents wrote (handoff notes), which
 	// must not be evaluated against the dispatch's template data.
 	LiteralPrompt bool
+	// Resume is the agent this step had running when conductor last stopped
+	// (nil = start fresh). A runtime that supports it puts the agent back in
+	// the same workspace and session; see resume.go.
+	Resume *AgentSession
+	// OnAgentStart, when set, is called by a runtime that reports its
+	// sessions, once the step's agent has started (again after a fallback).
+	OnAgentStart func(AgentStart)
 }
 
 // Input is one materialized `workspace.inputs` entry.

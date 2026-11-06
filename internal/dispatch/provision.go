@@ -79,6 +79,23 @@ var errWorkspaceInputsRemote = Unrecoverable(fmt.Errorf("workspace.inputs: input
 // git-native provisioner (internal/gitwt) is the one that really removes.
 func (d *Dispatcher) RemoveWorktree(context.Context, string) error { return nil }
 
+// AdoptWorktree takes back a workspace ProvisionWorktree created before a
+// restart, for a step whose agent resumes in it (controller.WorkspaceAdopter):
+// its directory while paseo still has it. Like a fresh one, its lifetime stays
+// paseo's (see RemoveWorktree).
+func (d *Dispatcher) AdoptWorktree(ctx context.Context, _ Request, id string) (string, error) {
+	list, err := d.backend().ListWorkspaces(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list paseo workspaces: %w", err)
+	}
+	for _, w := range list {
+		if w.WorkspaceID == id && id != "" {
+			return w.Cwd, nil
+		}
+	}
+	return "", fmt.Errorf("paseo workspace %s is gone", id)
+}
+
 // WorkDir renders a dispatch's explicit action work_dir, tilde-expanded, or ""
 // when the action names none. Shared with the git-native provisioner so an
 // operator-supplied workdir means the same thing on either checkout path.

@@ -41,7 +41,10 @@ func (c *paseoController) Initialize(context.Context) (Capabilities, error) {
 		CheckoutPR:         true,
 		InteractiveHandoff: true,
 		SendFollowup:       c.sender != nil,
-		Remote:             false,
+		// An interrupted step's agent lives on in paseo across a restart;
+		// the dispatcher finds it again by the label it launched it with.
+		ResumeStep: true,
+		Remote:     false,
 	}, nil
 }
 
