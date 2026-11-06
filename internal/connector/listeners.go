@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"time"
 
@@ -121,6 +122,56 @@ func (r *Registry) checkListenerExposures(cfg *config.Config, log func(string, .
 			log("connector %q disabled: %v", name, in.DisabledReason)
 		}
 	}
+}
+
+// ExposeTargets maps each exposure connector instance to the listener
+// addresses the engine will hand it to expose (openListeners): every enabled
+// connector's declared listener whose expose field names it, at the address
+// dialableAddr makes of its listen field. The engine wires exposures to
+// listeners, so this is what an exposure plugin declaring expose_local may
+// connect to from its jail (plugin.Manager.SetExposeTargets), and nothing
+// more. A listener a builtin serves is conductor's own port, which a jailed
+// plugin is never granted: it is left out, and said so when the exposure is
+// a jailed plugin.
+func ExposeTargets(cfg *config.Config, logf func(string, ...any)) map[string][]string {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	out := map[string][]string{}
+	names := make([]string, 0, len(cfg.ConnectorsMap))
+	for n := range cfg.ConnectorsMap {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ref := cfg.ConnectorsMap[name]
+		if !ref.IsEnabled() {
+			continue
+		}
+		d, _, ok := declFor(ref.TypeName(), name)
+		if !ok || d == nil || d.Semantics == nil || len(d.Semantics.Listeners) == 0 {
+			continue
+		}
+		var raw map[string]any
+		if ref.Decode(&raw) != nil {
+			continue
+		}
+		for _, l := range d.Semantics.Listeners {
+			expose, listen := stringAtPath(raw, l.Expose), stringAtPath(raw, l.Listen)
+			if expose == "" || listen == "" {
+				continue
+			}
+			addr := dialableAddr(listen)
+			if !IsExternalType(ref.TypeName()) {
+				if t, ok := cfg.ConnectorsMap[expose]; ok && IsExternalType(t.TypeName()) && !t.TrustFull() {
+					logf("connector %q: its listener %s is conductor's own port, which %s (a jailed plugin) is never granted — what it relays will not arrive; set trust: full on %s to run it unjailed, or expose a plugin's listener", name, addr, expose, expose)
+				}
+				continue
+			}
+			out[expose] = append(out[expose], addr)
+		}
+	}
+	return out
 }
 
 // exposureRetryInitial and exposureRetryMax bound openExposure's backoff —

@@ -89,6 +89,9 @@ type Manifest struct {
 	Spawns bool `yaml:"spawns,omitempty"`
 	// Env are the daemon environment variables passed through to it.
 	Env []string `yaml:"env,omitempty"`
+	// ExposeLocal: an exposure that connects to the local listeners conductor
+	// wires to it (Capabilities.ExposeLocal).
+	ExposeLocal bool `yaml:"expose_local,omitempty"`
 	// Auth records the plugin's declared OAuth2 endpoints (Decl.Auth) so
 	// `conductor connector auth <name>` can run the one-time interactive login
 	// from the CLI without respawning the plugin to re-Describe it. nil for a
@@ -111,7 +114,7 @@ type Manifest struct {
 // IsZero reports whether the plugin declared no capabilities at all.
 func (m Manifest) IsZero() bool {
 	return len(m.Egress) == 0 && len(m.Listen) == 0 && len(m.Read) == 0 && len(m.Write) == 0 && len(m.Exec) == 0 &&
-		len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && !m.Keychain && len(m.Env) == 0 && !m.SingleProcess && m.Auth == nil
+		len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && !m.Keychain && len(m.Env) == 0 && !m.SingleProcess && m.Auth == nil && !m.ExposeLocal
 }
 
 // Caps is the manifest as the plugin declared it.
@@ -119,8 +122,12 @@ func (m Manifest) Caps() sdk.Capabilities {
 	return sdk.Capabilities{
 		Egress: m.Egress, Listen: m.Listen, Read: m.Read, Write: m.Write, FS: m.FS,
 		Commands: m.Commands, Exec: m.Exec, Keychain: m.Keychain, Env: m.Env,
+		ExposeLocal: m.ExposeLocal,
 	}
 }
+
+// exposeLocalLabel is Capabilities.ExposeLocal in plain words.
+const exposeLocalLabel = "connects to the local listeners conductor exposes through it (only those a connector's expose: names; never conductor's own ports)"
 
 // Lines renders what the plugin may do, one permission per line, in plain
 // words: what `plugin add`, `plugin show` and the boot log show the user.
@@ -160,6 +167,9 @@ func (m Manifest) Lines() []string {
 	}
 	if m.Keychain {
 		out = append(out, "reads a login from the macOS Keychain")
+	}
+	if m.ExposeLocal {
+		out = append(out, exposeLocalLabel)
 	}
 	if hosts := authEndpoints(m.Auth); len(hosts) > 0 {
 		var ws []string
@@ -276,6 +286,9 @@ func (m Manifest) Widens(next Manifest) []string {
 	diff("reads env", m.Env, next.Env, exact)
 	if next.Keychain && !m.Keychain {
 		out = append(out, "reads a login from the macOS Keychain")
+	}
+	if next.ExposeLocal && !m.ExposeLocal {
+		out = append(out, exposeLocalLabel)
 	}
 	// One process serving every instance is jailed to all of their grants.
 	if next.SingleProcess && !m.SingleProcess {

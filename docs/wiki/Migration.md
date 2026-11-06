@@ -57,9 +57,12 @@ plugin can be fetched.
 **Release order.** Conductor and plugins update independently, so every
 combination keeps working:
 
-1. `smee` plugin v1.2.0 (TCP keep-alive on the channel stream, backoff
-   that resets once connected, egress for a pinned non-smee.io channel).
-   Older smee releases also work.
+1. `smee` plugin v1.2.0: it declares `expose_local`, which a jailed
+   plugin needs to deliver to the listener it relays to (see [[Plugins]],
+   "What a plugin declares"); plus TCP keep-alive on the channel stream,
+   backoff that resets once connected, and egress for a pinned non-smee.io
+   channel. An older smee runs only with `trust: full`: jailed, it cannot
+   reach the listener, and the log says so.
 2. `github` plugin v2.12.0 — `webhook.smee_url` still works, with a
    deprecation warning in the log. Every github 2.x release already serves
    `listen` + `expose`, so a migrated config runs on any of them.
@@ -67,6 +70,16 @@ combination keeps working:
    client.
 4. A later `github` major removes `webhook.smee_url`, once this release is
    the oldest conductor in use.
+
+**Under the plugin jail.** The smee connector runs jailed like every
+plugin. It may connect to the listeners its `expose:` wiring names, and to
+nothing else on the machine. The bundled `webhook` connector's listener is
+conductor's own port, which a jailed plugin is never granted: for a
+rewritten `webhook` connector, set `trust: full` on its `<name>-smee`
+connector (the old built-in relay ran inside conductor, unjailed, too), or
+the log names the delivery it refused. A box that already had an older smee
+installed holds the update to v1.2.0 until `conductor plugin approve`,
+because it asks for `expose_local`.
 
 **Rolling back** to an older conductor after the rewrite: github deliveries
 keep flowing (the older conductor already runs the smee connector and the

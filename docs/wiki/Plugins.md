@@ -456,6 +456,7 @@ A plugin's `plugin.describe` carries a `capabilities` block:
 | `exec` | files and directories whose programs it (or a command) runs beyond `commands`: a tool's helper programs | same forms as `read`, e.g. `command:git/../../lib/git-core` |
 | `env` | environment variables it reads | `GH_TOKEN` |
 | `keychain` | (macOS) a login stored in the user's Keychain | `true` |
+| `expose_local` | (an exposure) connecting to the listeners conductor wires to it | `true` |
 
 A `config:<field>` entry points at a field of the plugin's **own** connection
 config, and only because the plugin wrote that entry; it may not name a
@@ -502,6 +503,26 @@ that does not exist is skipped either way.
 
 A declared loopback destination may not be a port conductor itself listens
 on.
+
+An exposure plugin (one with an `exposes` verb: a tunnel, a relay such as
+`smee`) connects to the local address it is handed to expose. Declaring
+`expose_local: true` asks for exactly that, and conductor, which does the
+wiring, decides the address: each listener a configured connector exposes
+through one of the plugin's instances (`expose: <instance>`), at its
+`listen` address (a `0.0.0.0` or `:port` listen is reached on
+`127.0.0.1`), and nothing else. Consent shows it as `connects to the local
+listeners conductor exposes through it`. It is not granted, and the log
+says why, for:
+
+- a listener not on `127.0.0.1` (or `localhost`, `0.0.0.0`, `:port`);
+- a port conductor itself listens on — a builtin's listener, such as the
+  bundled `webhook` connector's, is one. Set `trust: full` on the exposure
+  connector to relay to it, or expose a plugin's listener;
+- a build whose install record does not declare `expose_local` (an older
+  release): update it, and approve the update.
+
+The addresses are fixed when the daemon starts, from the config; a shared
+plugin process gets those of the instances it serves.
 
 `env:VAR` is only allowed when `VAR` is also in `env`. `command:<name>/rel`
 is relative to the declared command's resolved file (after symlinks):

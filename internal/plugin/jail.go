@@ -652,6 +652,67 @@ func refuseOwnPorts(s Spec, loopPorts []int) error {
 	return nil
 }
 
+// grantExposeTargets is what of s.ExposeTo, the listeners the engine wired
+// to this exposure, its jail may connect to: nothing unless its recorded
+// declaration says it connects to what it is handed to expose
+// (Capabilities.ExposeLocal), and of those only 127.0.0.1 addresses that are
+// not conductor's own ports. Each one not granted is logged with the fix.
+func grantExposeTargets(s Spec, logf func(string, ...any)) []string {
+	if len(s.ExposeTo) == 0 || s.Probe || s.TrustFull {
+		return nil
+	}
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	if !s.Manifest.ExposeLocal {
+		logf("plugin %s: NOT granted %s, the listener(s) it is wired to expose: its install record does not declare expose_local, so from its jail it cannot deliver there — update it (`conductor plugin update %s`, then approve), or set trust: full on its connector", s.Name, strings.Join(s.ExposeTo, ", "), s.Name)
+		return nil
+	}
+	var out []string
+	for _, a := range s.ExposeTo {
+		port, ok := exposePort(a)
+		if !ok {
+			logf("plugin %s: NOT granted %s: an exposure in a jail reaches a listener on 127.0.0.1 only — listen on 127.0.0.1 (or 0.0.0.0)", s.Name, a)
+			continue
+		}
+		if own, err := ownServicePort(port); err != nil || own {
+			logf("plugin %s: NOT granted %s: conductor itself listens there, and a jailed plugin never reaches conductor's own ports", s.Name, a)
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// exposePort is the port of a listener address an exposure may be granted:
+// 127.0.0.1 or localhost.
+func exposePort(addr string) (int, bool) {
+	h, p, err := net.SplitHostPort(addr)
+	if err != nil || (h != "127.0.0.1" && h != "localhost") {
+		return 0, false
+	}
+	n, err := strconv.Atoi(p)
+	return n, err == nil && n > 0 && n < 65536
+}
+
+// exposePorts are the ports of s's granted expose targets (realDial has
+// already narrowed s.ExposeTo with grantExposeTargets); conductor's own are
+// dropped again here, as at every connection.
+func exposePorts(s Spec) []int {
+	if s.Probe || !s.Manifest.ExposeLocal {
+		return nil
+	}
+	var out []int
+	for _, a := range s.ExposeTo {
+		if p, ok := exposePort(a); ok {
+			if own, err := ownServicePort(p); err == nil && !own {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
 // buildJailed builds the jailed launch of argv for s: the wrapped command,
 // its environment, and what to run when it exits.
 func buildJailed(s Spec, sd SandboxDeps, argv, env []string) (*exec.Cmd, func(), error) {
@@ -669,6 +730,14 @@ func buildJailed(s Spec, sd SandboxDeps, argv, env []string) (*exec.Cmd, func(),
 	remote, loopPorts := splitLoopback(g.Egress)
 	if err := refuseOwnPorts(s, loopPorts); err != nil {
 		return nil, nil, err
+	}
+	// The listeners the engine wired to this exposure are reached the way a
+	// declared loopback destination is: a relay (Linux) or a loopback port
+	// (macOS), each connection re-checked against conductor's own ports.
+	for _, p := range exposePorts(s) {
+		if !slices.Contains(loopPorts, p) {
+			loopPorts = append(loopPorts, p)
+		}
 	}
 	var stage string
 	if sd.StagingRoot != "" {

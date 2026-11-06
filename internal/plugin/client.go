@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1272,6 +1273,22 @@ func (c *Client) Reload(newSpec Spec) error {
 	return nil
 }
 
+// setExposeTo sets the listener addresses this client's process may be
+// granted to expose (Manager.SetExposeTargets). A process already up with a
+// different set is torn down: the next call re-dials, jailed to the new set.
+func (c *Client) setExposeTo(addrs []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if slices.Equal(c.spec.ExposeTo, addrs) {
+		return
+	}
+	c.spec.ExposeTo = addrs
+	if c.conn != nil && !c.spec.TrustFull && c.spec.Manifest.ExposeLocal {
+		c.teardownLocked()
+		c.starts = nil
+	}
+}
+
 // pidConn is *acp.Conn (satisfying transport by promotion) plus the pid of
 // the subprocess it talks to, so Client.PID can report it without the
 // transport interface itself needing to grow a method every fake in the test
@@ -1298,6 +1315,7 @@ func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 		}
 		s.Manifest = m
 	}
+	s.ExposeTo = grantExposeTargets(s, d.Log)
 	cmd, cleanup, sandboxed, err := buildCommand(s, d.Sandbox)
 	if err != nil {
 		return nil, nil, err
