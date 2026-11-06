@@ -124,8 +124,12 @@ func HereLines(s Spec) []string {
 			out = append(out, "on this machine it "+label+": "+strings.Join(ps, ", "))
 		}
 	}
+	found, err := findCommands(s, newGrantChecks(SandboxDeps{}, g), g.Commands)
+	if err != nil {
+		return []string{"on this machine: " + err.Error()}
+	}
 	var cmds []string
-	for _, c := range findCommands(s, g.Commands) {
+	for _, c := range found {
 		if c.path != c.real {
 			cmds = append(cmds, c.path+" ("+c.real+")")
 		} else {
@@ -135,7 +139,16 @@ func HereLines(s Spec) []string {
 	add("runs", cmds)
 	add("runs programs in", g.Exec)
 	add("reads", g.Read)
-	add("reads and writes", g.Write)
+	var files, sockets []string
+	for _, p := range g.Write {
+		if isSocket(p) {
+			sockets = append(sockets, p)
+		} else {
+			files = append(files, p)
+		}
+	}
+	add("reads and writes", files)
+	add("talks to the program serving the socket", sockets)
 	return out
 }
 
@@ -184,10 +197,12 @@ type jailCommand struct {
 	real string // the file it resolves to
 }
 
-// findCommands locates the declared commands on the daemon's PATH. One that
-// is not installed is left out (the plugin's own call fails, naming it) and
-// logged.
-func findCommands(s Spec, names []string) []jailCommand {
+// findCommands locates the declared commands on the daemon's PATH, with the
+// #! interpreter of one that is a script. One that is not installed is left
+// out (the plugin's own call fails, naming it) and logged. One found is
+// checked like a declared path (grantChecks.program): a command or an
+// interpreter that is refused fails the launch, naming it and the fix.
+func findCommands(s Spec, gc *grantChecks, names []string) ([]jailCommand, error) {
 	var out []jailCommand
 	for _, n := range names {
 		p, err := spawnLookPath(n)
@@ -196,33 +211,39 @@ func findCommands(s Spec, names []string) []jailCommand {
 			continue
 		}
 		p, _ = filepath.Abs(p)
-		dir, err := filepath.EvalSymlinks(filepath.Dir(p))
+		c, err := gc.program(n, p)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("plugin %s: command %s (%s) refused: %w", s.Name, n, p, err)
 		}
-		real, err := filepath.EvalSymlinks(p)
-		if err != nil {
-			continue
-		}
-		out = append(out, jailCommand{name: n, path: filepath.Join(dir, filepath.Base(p)), real: real})
+		out = append(out, c)
 		// A command that is a script runs with its #! interpreter: that is
 		// part of running it, and is bound with it.
-		out = append(out, interpreters(n, real)...)
+		for _, ip := range interpreters(c.real) {
+			ic, err := gc.program(n, ip)
+			if err != nil {
+				return nil, fmt.Errorf("plugin %s: command %s (%s) refused: its #! interpreter %s: %w", s.Name, n, c.real, ip, err)
+			}
+			out = append(out, ic)
+		}
 		if spawnGOOS == "darwin" {
 			// A macOS /usr/bin developer tool is a stub that runs the real
 			// one from the active developer directory: the stub is what the
 			// plugin declared, the tool it runs is part of it.
-			if dev, err := xcrunFind(n); err == nil && dev != "" && dev != real {
-				out = append(out, jailCommand{name: n, path: dev, real: dev})
+			if dev, err := xcrunFind(n); err == nil && dev != "" && dev != c.real {
+				dc, err := gc.program(n, dev)
+				if err != nil {
+					return nil, fmt.Errorf("plugin %s: command %s (%s) refused: the developer tool it runs, %s: %w", s.Name, n, p, dev, err)
+				}
+				out = append(out, dc)
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
-// interpreters are the programs a script command needs to start: its #!
+// interpreters are the programs a script needs to start: its #!
 // interpreter, and for "#!/usr/bin/env prog" the prog env finds on PATH.
-func interpreters(name, script string) []jailCommand {
+func interpreters(script string) []string {
 	f, err := os.Open(script)
 	if err != nil {
 		return nil
@@ -246,24 +267,14 @@ func interpreters(name, script string) []jailCommand {
 				continue
 			}
 			if p, err := spawnLookPath(a); err == nil {
-				progs = append(progs, p)
+				if p, err = filepath.Abs(p); err == nil {
+					progs = append(progs, p)
+				}
 			}
 			break
 		}
 	}
-	var out []jailCommand
-	for _, p := range progs {
-		dir, err := filepath.EvalSymlinks(filepath.Dir(p))
-		if err != nil {
-			continue
-		}
-		real, err := filepath.EvalSymlinks(p)
-		if err != nil {
-			continue
-		}
-		out = append(out, jailCommand{name: name, path: filepath.Join(dir, filepath.Base(p)), real: real})
-	}
-	return out
+	return progs
 }
 
 // xcrunFind is `xcrun --find <tool>` on macOS (a test var).
@@ -294,8 +305,184 @@ func jailPATH(cmds []jailCommand) string {
 }
 
 // grantedPath is a declared path the jail gives the plugin: path is where the
-// plugin sees it, real the host file it is.
-type grantedPath struct{ path, real string }
+// plugin sees it, real the host file it is. socket: it is one socket file
+// (granted only under write:, inside a runtime dir).
+type grantedPath struct {
+	path, real string
+	socket     bool
+}
+
+// grantChecks are what a launch's declared paths, commands and their
+// interpreters are checked against (grantedPaths, findCommands).
+type grantChecks struct {
+	g                                              sdk.Grant
+	homes, protected, sockets, execBroad, writable []string
+}
+
+func newGrantChecks(sd SandboxDeps, g sdk.Grant) *grantChecks {
+	c := &grantChecks{g: g, sockets: runtimeDirs()}
+	home, _ := jailHome()
+	if home != "" && home != "/" {
+		c.homes = append(c.homes, filepath.Clean(home))
+		if h, err := filepath.EvalSymlinks(home); err == nil {
+			c.homes = append(c.homes, h)
+		}
+	}
+	for _, p := range sd.MaskPaths {
+		if p == "" {
+			continue
+		}
+		c.protected = append(c.protected, filepath.Clean(p))
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			c.protected = append(c.protected, r)
+		}
+	}
+	c.execBroad = execRefused(c.homes)
+	ws := append([]string(nil), g.Write...)
+	if sd.StagingRoot != "" {
+		ws = append(ws, sd.StagingRoot)
+	}
+	for _, w := range ws {
+		c.writable = append(c.writable, filepath.Clean(w))
+		if r, err := filepath.EvalSymlinks(w); err == nil {
+			c.writable = append(c.writable, r)
+		}
+	}
+	return c
+}
+
+// refusal is why the jail does not grant p (resolving to real) as kind
+// ("read", "write", "exec", or "command": a declared command or the #!
+// interpreter of one), or nil.
+func (c *grantChecks) refusal(kind, p, real string) error {
+	for _, q := range []string{p, real} {
+		if q == "/" || slices.Contains(c.homes, q) {
+			return fmt.Errorf("it is the whole of %s", q)
+		}
+		for _, prot := range c.protected {
+			if within(q, prot) {
+				return fmt.Errorf("it contains conductor's own %s", prot)
+			}
+			if !within(prot, q) {
+				continue
+			}
+			if kind != "read" || !c.g.FromConfig(kind, p) {
+				return fmt.Errorf("it lies inside conductor's own %s — only a file the plugin's config names may be read there", prot)
+			}
+			if fi, err := os.Stat(real); err != nil || fi.IsDir() {
+				return fmt.Errorf("it lies inside conductor's own %s, and is not a file", prot)
+			}
+		}
+		for _, d := range c.sockets {
+			if within(q, d) {
+				return fmt.Errorf("it contains %s, where other programs' sockets are (a directory grant includes connecting to them) — grant the one socket file it needs instead, under write:", d)
+			}
+			if !within(d, q) || grantExempt(q) {
+				continue
+			}
+			if kind == "write" && isSocket(real) {
+				continue
+			}
+			return fmt.Errorf("it lies inside %s, where other programs serve sockets (a grant of anything there may include connecting to them) — only one socket file, declared under write:, is granted there", d)
+		}
+		if kind != "exec" {
+			continue
+		}
+		for _, d := range c.execBroad {
+			if within(q, d) {
+				return fmt.Errorf("it contains %s: what a plugin runs is named (commands:) or a tool's own directory, never a system or user directory of programs", d)
+			}
+		}
+	}
+	return nil
+}
+
+// insideWritable is why p, lying inside a path the plugin may write (its
+// declared write paths, its staging dir), is refused, or nil: the plugin
+// could replace what is there with a symlink to anything, or a program it
+// runs with one of its own.
+func (c *grantChecks) insideWritable(p string) error {
+	for _, w := range c.writable {
+		if w != p && within(w, p) {
+			return fmt.Errorf("it lies inside %s, which it may write — it could replace what is there", w)
+		}
+	}
+	return nil
+}
+
+// program checks a program the jail runs and binds (a declared command found
+// at p, the #! interpreter of one): it resolves through root-owned symlinks
+// only, is a regular executable file, and is refused like a declared path
+// (refusal) and when it lies inside a path the plugin may write.
+func (c *grantChecks) program(name, p string) (jailCommand, error) {
+	dir, err := resolveOwned(filepath.Dir(p))
+	if err == nil {
+		var real string
+		if real, err = resolveOwned(p); err == nil {
+			cmd := jailCommand{name: name, path: filepath.Join(dir, filepath.Base(p)), real: real}
+			return cmd, c.checkProgram(cmd)
+		}
+	}
+	var link *symlinkError
+	if errors.As(err, &link) {
+		fix := "replace the symlink with what it points to"
+		if real, rerr := filepath.EvalSymlinks(p); rerr == nil {
+			fix += ", or, for a command found on PATH, put " + filepath.Dir(real) + " ahead of it on conductor's PATH"
+		}
+		return jailCommand{}, fmt.Errorf("it goes through %s, a symlink to %s that root does not own; the jail never follows a symlink a plugin could have made — %s, or set trust: full on the plugin's entry", link.link, link.target, fix)
+	}
+	return jailCommand{}, err
+}
+
+func (c *grantChecks) checkProgram(cmd jailCommand) error {
+	fi, err := os.Stat(cmd.real)
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("%s is not an executable file", cmd.real)
+	}
+	if err := c.refusal("command", cmd.path, cmd.real); err != nil {
+		return err
+	}
+	for _, q := range []string{cmd.path, cmd.real} {
+		if err := c.insideWritable(q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isSocket(p string) bool {
+	fi, err := os.Lstat(p)
+	return err == nil && fi.Mode()&os.ModeSocket != 0
+}
+
+// grantExemptRoots are directories inside a runtime dir whose paths are
+// granted like any other's: a test's temp dir (GrantInsideTempForTests;
+// none in conductor).
+var grantExemptRoots []string
+
+// GrantInsideTempForTests grants paths inside this process's temp dir like
+// any other's, for a test package whose fixtures (fake homes, a plugin's
+// configured files) live there: the temp dir is a runtime dir the jail
+// grants nothing inside otherwise. Only a TestMain calls it.
+func GrantInsideTempForTests() {
+	tmp := filepath.Clean(scratch.SystemTempDir())
+	grantExemptRoots = []string{tmp}
+	if r, err := filepath.EvalSymlinks(tmp); err == nil && r != tmp {
+		grantExemptRoots = append(grantExemptRoots, r)
+	}
+}
+
+func grantExempt(p string) bool {
+	for _, r := range grantExemptRoots {
+		if within(r, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // grantedPaths checks the declared read, write and exec paths and keeps
 // those that exist (a declared path that does not is skipped, as the
@@ -306,8 +493,11 @@ type grantedPath struct{ path, real string }
 //   - lies inside conductor's own state or config dir, except a file read
 //     whose path is a config: value (an App key the user configured):
 //     writing there would let a plugin rewrite what it was granted;
-//   - is, or contains, a directory of sockets other programs serve on
-//     (runtimeDirs): a read-only bind does not stop connect();
+//   - is, contains or lies inside a directory where programs serve sockets
+//     for others (runtimeDirs): a read-only bind does not stop connect(),
+//     and a directory there may be another program's. Only one socket
+//     file there is granted, declared under write:, which consent names as
+//     a socket;
 //   - to run programs in, is or contains a directory of the system's
 //     programs or the user's (execRefused): what runs is named, not swept;
 //   - lies inside a path the plugin may write (its own declared write paths,
@@ -317,66 +507,8 @@ type grantedPath struct{ path, real string }
 //
 // A refused path fails the launch, naming the declared entry and the fix,
 // unless the entry is optional ("?…"): then it is skipped and logged.
-func grantedPaths(s Spec, sd SandboxDeps, g sdk.Grant) (read, write, exec []grantedPath, err error) {
-	home, _ := jailHome()
-	var homes []string
-	if home != "" && home != "/" {
-		homes = append(homes, filepath.Clean(home))
-		if h, err := filepath.EvalSymlinks(home); err == nil {
-			homes = append(homes, h)
-		}
-	}
-	var protected []string
-	for _, p := range sd.MaskPaths {
-		if p == "" {
-			continue
-		}
-		protected = append(protected, filepath.Clean(p))
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			protected = append(protected, r)
-		}
-	}
-	sockets := runtimeDirs()
-	execBroad := execRefused(homes)
-	writable := append([]string(nil), g.Write...)
-	if sd.StagingRoot != "" {
-		writable = append(writable, filepath.Clean(sd.StagingRoot))
-	}
-	refusal := func(kind, p, real string) error {
-		for _, q := range []string{p, real} {
-			if q == "/" || slices.Contains(homes, q) {
-				return fmt.Errorf("it is the whole of %s", q)
-			}
-			for _, prot := range protected {
-				if within(q, prot) {
-					return fmt.Errorf("it contains conductor's own %s", prot)
-				}
-				if !within(prot, q) {
-					continue
-				}
-				if kind != "read" || !g.FromConfig(kind, p) {
-					return fmt.Errorf("it lies inside conductor's own %s — only a file the plugin's config names may be read there", prot)
-				}
-				if fi, err := os.Stat(real); err != nil || fi.IsDir() {
-					return fmt.Errorf("it lies inside conductor's own %s, and is not a file", prot)
-				}
-			}
-			for _, d := range sockets {
-				if within(q, d) || q == "/run/user" || filepath.Dir(q) == "/run/user" {
-					return fmt.Errorf("it contains %s, where other programs' sockets are (a directory grant includes connecting to them) — grant the one socket file it needs instead", d)
-				}
-			}
-			if kind != "exec" {
-				continue
-			}
-			for _, d := range execBroad {
-				if within(q, d) {
-					return fmt.Errorf("it contains %s: what a plugin runs is named (commands:) or a tool's own directory, never a system or user directory of programs", d)
-				}
-			}
-		}
-		return nil
-	}
+func grantedPaths(s Spec, gc *grantChecks) (read, write, exec []grantedPath, err error) {
+	g := gc.g
 	check := func(kind string, ps []string) ([]grantedPath, error) {
 		var out []grantedPath
 		for _, p := range ps {
@@ -384,12 +516,7 @@ func grantedPaths(s Spec, sd SandboxDeps, g sdk.Grant) (read, write, exec []gran
 			if declared == "" {
 				declared = p
 			}
-			var why error
-			for _, w := range writable {
-				if w != p && within(w, p) {
-					why = fmt.Errorf("it lies inside %s, which it may write — it could replace what is there", w)
-				}
-			}
+			why := gc.insideWritable(p)
 			real, err := resolveOwned(p)
 			if why == nil && os.IsNotExist(err) {
 				continue
@@ -402,10 +529,10 @@ func grantedPaths(s Spec, sd SandboxDeps, g sdk.Grant) (read, write, exec []gran
 			case err != nil:
 				why = err
 			default:
-				why = refusal(kind, p, real)
+				why = gc.refusal(kind, p, real)
 			}
 			if why == nil {
-				out = append(out, grantedPath{path: p, real: real})
+				out = append(out, grantedPath{path: p, real: real, socket: kind == "write" && isSocket(real)})
 				continue
 			}
 			if g.Optional(kind, p) {
@@ -436,10 +563,10 @@ func (e *symlinkError) Error() string {
 	return fmt.Sprintf("%s is a symlink root does not own (to %s)", e.link, e.target)
 }
 
-// runtimeDirs are where programs serve sockets for others: a grant of one
-// of them, or of a directory above one, lets the plugin connect to every
-// socket there (a session bus, an X or tmux server, a docker daemon).
-// Every /run/user/<uid> is one too (refusal).
+// runtimeDirs are where programs serve sockets for others (a session bus,
+// systemd --user, an X or tmux server, a docker daemon): a grant of one of
+// them, of a directory above one, or of a directory inside one lets the
+// plugin connect to the sockets there (refusal).
 func runtimeDirs() []string {
 	ds := []string{"/run", "/var/run", "/tmp", "/var/tmp", "/dev/shm", "/private/tmp", "/private/var/tmp", "/private/var/run"}
 	if x := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(x) {
@@ -470,9 +597,13 @@ func execRefused(homes []string) []string {
 	return ds
 }
 
-// within: p is dir or inside it.
+// within: p is dir or inside it. On macOS, whose file systems ignore case
+// by default, it ignores case too (/Private/Tmp is /private/tmp).
 func within(dir, p string) bool {
 	dir, p = filepath.Clean(dir), filepath.Clean(p)
+	if spawnGOOS == "darwin" {
+		dir, p = strings.ToLower(dir), strings.ToLower(p)
+	}
 	if dir == "/" {
 		return true
 	}
@@ -529,7 +660,11 @@ func buildJailed(s Spec, sd SandboxDeps, argv, env []string) (*exec.Cmd, func(),
 		return nil, nil, err
 	}
 	env = withDeclaredEnv(env, g.Env)
-	cmds := findCommands(s, g.Commands)
+	gc := newGrantChecks(sd, g)
+	cmds, err := findCommands(s, gc, g.Commands)
+	if err != nil {
+		return nil, nil, err
+	}
 	env = replaceEnv(env, "PATH", jailPATH(cmds))
 	remote, loopPorts := splitLoopback(g.Egress)
 	if err := refuseOwnPorts(s, loopPorts); err != nil {
@@ -542,7 +677,7 @@ func buildJailed(s Spec, sd SandboxDeps, argv, env []string) (*exec.Cmd, func(),
 			return nil, nil, fmt.Errorf("plugin %s: staging dir: %w", s.Name, err)
 		}
 	}
-	paths, err := pathsFor(s, sd, g)
+	paths, err := pathsFor(s, gc)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -558,8 +693,8 @@ func buildJailed(s Spec, sd SandboxDeps, argv, env []string) (*exec.Cmd, func(),
 // jailPaths are a launch's checked declared paths (grantedPaths).
 type jailPaths struct{ read, write, exec []grantedPath }
 
-func pathsFor(s Spec, sd SandboxDeps, g sdk.Grant) (jailPaths, error) {
-	r, w, x, err := grantedPaths(s, sd, g)
+func pathsFor(s Spec, gc *grantChecks) (jailPaths, error) {
+	r, w, x, err := grantedPaths(s, gc)
 	return jailPaths{r, w, x}, err
 }
 
@@ -590,13 +725,16 @@ func buildNamespaced(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv,
 		binds = append(binds, sandbox.BindMount{Path: p.path, Src: p.real, RO: true, NoExec: true, Optional: true, NoSymlink: true})
 	}
 	for _, p := range paths.write {
-		binds = append(binds, sandbox.BindMount{Path: p.path, Src: p.real, NoExec: true, Optional: true, NoSymlink: true})
+		binds = append(binds, sandbox.BindMount{Path: p.path, Src: p.real, NoExec: true, Optional: true, NoSymlink: true, NotDir: p.socket})
 	}
 	for _, p := range paths.exec {
 		binds = append(binds, sandbox.BindMount{Path: p.path, Src: p.real, RO: true, Optional: true, NoSymlink: true})
 	}
 	for _, c := range cmds {
-		binds = append(binds, sandbox.BindMount{Path: c.path, Src: c.real, RO: true})
+		// Checked when it was found (grantChecks.program): bound by the
+		// file it was then, never through a symlink or a directory made
+		// since.
+		binds = append(binds, sandbox.BindMount{Path: c.path, Src: c.real, RO: true, NoSymlink: true, NotDir: true})
 	}
 	nf := &sandbox.NetForward{Self: sd.Self, Base: sandbox.BaseMinimal}
 	var closers []func()

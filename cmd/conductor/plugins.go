@@ -748,7 +748,7 @@ rest:
 // cmdPlugin implements `conductor plugin list|show|add|update|remove`.
 func cmdPlugin(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: conductor plugin list|show <name>|add <ref>|update [name]|approve <name>|remove <name>")
+		return fmt.Errorf("usage: conductor plugin list|show <name>|add <ref>|update [name] [--force]|approve [<name>@<sha or tag>]|remove <name>")
 	}
 	switch args[0] {
 	case "approve":
@@ -996,7 +996,7 @@ func cmdPluginUpdate(args []string) error {
 		}
 	}
 	if len(only) > 1 {
-		return fmt.Errorf("usage: conductor plugin update [name]")
+		return fmt.Errorf("usage: conductor plugin update [name] [--force] — --force re-resolves an exact pin and takes a re-published release; one that asks for more is held, and the plugin does not run until `conductor plugin approve` accepts it (its new bytes replaced the installed ones)")
 	}
 	if len(only) == 1 {
 		opts.Only = only[0]
@@ -1322,9 +1322,10 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 // cmdPluginRemove drops a plugin from local install state and deletes its
 // installed binary. It does NOT touch the config: the reference is the
 // declaration, so removing it there is the operator's edit to make.
-// cmdPluginApprove implements `conductor plugin approve <name>`: the user's
-// yes to a held update that asks for more than the installed build (or, with
-// no name, the list of what is waiting).
+// cmdPluginApprove implements `conductor plugin approve <name>@<build>`: the
+// user's yes to the held update they were shown (its sha or tag), which asks
+// for more than the installed build (or, with no argument, the list of what
+// is waiting).
 func cmdPluginApprove(args []string) error {
 	_, rest, err := loadConfigRest(args)
 	if err != nil {
@@ -1354,12 +1355,12 @@ func cmdPluginApprove(args []string) error {
 			for _, l := range plugin.HereLines(plugin.Spec{Name: p.Name, Manifest: p.Manifest}) {
 				fmt.Printf("    %s\n", l)
 			}
-			fmt.Printf("  approve with: conductor plugin approve %s\n", p.Name)
+			fmt.Printf("  approve with: conductor plugin approve %s\n", plugin.ApproveArg(p.Name, p.Installed))
 		}
 		return nil
 	}
 	if len(rest) != 1 {
-		return fmt.Errorf("usage: conductor plugin approve [<name>]")
+		return fmt.Errorf("usage: conductor plugin approve [<name>@<sha or tag>]")
 	}
 	done, err := state.Approve(rest[0])
 	if err != nil {

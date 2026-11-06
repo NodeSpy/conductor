@@ -18,7 +18,8 @@ import (
 // plugin cannot run what it writes there. And a bind marked NoSymlink is
 // opened and bound by fd, refusing a symlink anywhere in its path (not only
 // the last component), so a directory swapped for a symlink after the grant
-// was checked is never followed.
+// was checked is never followed; one marked NotDir (a program, a socket
+// file) is refused when it is a directory by then.
 func TestBindAttributesAreRecursiveAndSymlinkSafe(t *testing.T) {
 	if os.Getenv("BIND_ROLE") == "child" {
 		os.Exit(bindAttrsChild())
@@ -62,6 +63,11 @@ func bindAttrsChild() int {
 	_, err := buildJail([]BindMount{{Path: dir + "/via/a/b", NoSymlink: true}}, dir+"/root1", "", "")
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		return fail("bind through a symlinked parent: %v", err)
+	}
+	// A program or a socket file (NotDir) that is a directory now.
+	_, err = buildJail([]BindMount{{Path: dir + "/real/b", NoSymlink: true, NotDir: true}}, dir+"/root3", "", "")
+	if err == nil || !strings.Contains(err.Error(), "a directory now") {
+		return fail("NotDir bind of a directory: %v", err)
 	}
 	if _, err := buildJail([]BindMount{
 		{Path: r, RO: true, NoExec: true, NoSymlink: true},

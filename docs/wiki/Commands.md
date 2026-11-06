@@ -25,7 +25,8 @@ conductor schema <connector>               full event/filter/context/verb/option
 conductor plugin list [--caps]             every connector + runtime, with ORIGIN and kind (--caps: permissions)
 conductor plugin show <name>               one implementation's surface (Decl + permission manifest + disclosure)
 conductor plugin add <ref> [--runtime]     install it, show the permissions it declares, print the config stub
-conductor plugin update [name]             bump everything unpinned, or just one
+conductor plugin update [name] [--force]   bump everything unpinned, or just one (--force: re-resolve an exact pin and take a re-published release; one that asks for more is held, and the plugin does not run until it is approved)
+conductor plugin approve [name@build]      list held updates, or accept the one listed (its sha or tag)
 conductor plugin remove <name>             drop it from local install state and delete its binary
 conductor connector auth ls                each oauth2 connector's login state + token expiry
 conductor connector auth <name> [--revoke] one-time OAuth2 login (or clear stored tokens)

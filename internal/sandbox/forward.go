@@ -53,6 +53,9 @@ type BindMount struct {
 	// NoSymlink refuses the entry when its source is a symlink when it is
 	// mounted (a plugin's declared path, checked when it was granted).
 	NoSymlink bool `json:"nosymlink,omitempty"`
+	// NotDir refuses the entry when its source is a directory when it is
+	// mounted (a program, a socket file: checked when it was granted).
+	NotDir bool `json:"notdir,omitempty"`
 }
 
 // BaseMinimal is the jail base a plugin runs on (EnterOpts.Base): the base
@@ -91,7 +94,7 @@ func (b BindMount) source() string {
 
 // simple reports an entry the legacy --bind/--bind-ro flags can carry.
 func (b BindMount) simple() bool {
-	return b.Src == "" && !b.Tmpfs && b.Link == "" && !b.Optional && !b.NoExec
+	return b.Src == "" && !b.Tmpfs && b.Link == "" && !b.Optional && !b.NoExec && !b.NoSymlink && !b.NotDir
 }
 
 // NetForward carries the in-sandbox wiring into WrapLocal: the path of this

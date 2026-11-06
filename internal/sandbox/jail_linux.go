@@ -293,6 +293,9 @@ func bindInto(root string, b BindMount, skipMissing bool) error {
 		}
 		return fmt.Errorf("jail bind %s: %w", src, err)
 	}
+	if b.NotDir && isDir {
+		return fmt.Errorf("jail bind %s: it is a directory now", src)
+	}
 	target := root + b.Path
 	if lfi, lerr := os.Lstat(target); lerr == nil && lfi.Mode()&os.ModeSymlink != 0 {
 		// Never mount through a symlink already in the jail tree (a merged-usr

@@ -826,7 +826,7 @@ func (c *Client) Describe(ctx context.Context) (*Decl, error) {
 	if p := append(sdk.CheckSemantics(raw), sdk.ValidateSemantics(decl)...); len(p) > 0 {
 		return nil, fmt.Errorf("plugin %s: declarations refused:\n  %s", c.spec.Name, strings.Join(p, "\n  "))
 	}
-	if err := decl.Capabilities.Validate(decl.Connection); err != nil {
+	if err := validateCaps(decl.Capabilities, decl.Connection); err != nil {
 		return nil, fmt.Errorf("plugin %s: declaration refused: %w", c.spec.Name, err)
 	}
 	if !c.spec.TrustFull && !c.spec.Manifest.IsZero() {
@@ -1444,7 +1444,7 @@ func localManifest(ctx context.Context, s Spec, d Deps) (Manifest, error) {
 	if err := t.Call(ctx, MethodDescribe, req, &decl); err != nil {
 		return Manifest{}, fmt.Errorf("plugin %s: describe (local build): %w", s.Name, err)
 	}
-	if err := decl.Capabilities.Validate(decl.Connection); err != nil {
+	if err := validateCaps(decl.Capabilities, decl.Connection); err != nil {
 		return Manifest{}, fmt.Errorf("plugin %s: declaration refused: %w", s.Name, err)
 	}
 	return manifestFromDecl(&decl), nil

@@ -170,7 +170,7 @@ func TestNamedUpdateHoldsACurrentBuildThatDeclaresMore(t *testing.T) {
 			if len(p) != 1 || p[0].Resolved != before.Resolved || p[0].Replaces != before.Resolved || p[0].Sha256 != before.Sha256 {
 				t.Fatalf("pending must be the same build with the wider declaration: %+v", p)
 			}
-			if _, err := st.Approve("jira"); err != nil {
+			if _, err := st.Approve(ApproveArg("jira", st.PendingUpdates()[0].Installed)); err != nil {
 				t.Fatal(err)
 			}
 			if now, _ := st.Get("connectors/jira"); strings.Join(now.Manifest.Read, ",") != "~/.config/jira" || now.Sha256 != before.Sha256 {
@@ -196,7 +196,7 @@ func TestPendingUpdateSurvivesReload(t *testing.T) {
 	if p := reloaded.PendingUpdates(); len(p) != 1 || p[0].Resolved != "jira/v2.0.0" {
 		t.Fatalf("pending after reload: %+v", p)
 	}
-	if _, err := reloaded.Approve("jira"); err != nil {
+	if _, err := reloaded.Approve("jira@v2.0.0"); err != nil {
 		t.Fatalf("approve from a fresh load: %v", err)
 	}
 }
@@ -517,4 +517,110 @@ func TestRollbackAndUpgradeKeepsConsent(t *testing.T) {
 			t.Fatalf("logs %v, want the widening over jira/v1.0.0 reported", logs)
 		}
 	})
+}
+
+// A real rollback: the older conductor does not read a version 2 state file,
+// sees no installs, and installs the newest release — the update this
+// conductor held. Forward again, that build is compared against what the
+// user last agreed to (the consent copy), not against the record the older
+// conductor wrote for it: it is held again, runs jailed to the agreement,
+// and the log says so.
+func TestRollbackReinstalledHeldBuildIsHeldAgain(t *testing.T) {
+	for _, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			ref := shape.ref(refFor(t, config.UseKindConnector, "acme/plugins/jira"))
+			refs := map[string]config.PluginRef{ref.Key(): ref}
+			api2 := stubFor("jira", "jira/v1.0.0", "jira/v2.0.0")
+			api2.bin = []byte("#!/bin/sh\necho v2\n")
+			wider := Capabilities{Egress: append([]string{"evil.example.com:443"}, jiraWithLogin.Egress...), Read: []string{"~/.config/jira", "~/.ssh"}}
+			st := stateAt(t)
+			if _, err := Reconcile(refs, st, acmeTrust, stubFor("jira", "jira/v1.0.0"), Options{Describe: jiraDecl(jiraWithLogin)}); err != nil {
+				t.Fatal(err)
+			}
+			if res, _ := Reconcile(refs, st, acmeTrust, api2, Options{Describe: jiraDecl(wider)}); res[0].Action != ActionHeld {
+				t.Fatalf("v2: %+v, want held", res[0])
+			}
+			agreed, err := os.ReadFile(filepath.Join(st.Dir(), consentFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The older conductor: no state it can read; it installs the
+			// newest release and records what it recorded (its egress).
+			old := &InstallState{dir: st.Dir()}
+			if res, _ := Reconcile(refs, old, acmeTrust, api2, Options{Describe: jiraDecl(wider)}); res[0].Tag != "jira/v2.0.0" {
+				t.Fatalf("rollback: %+v, want jira/v2.0.0 installed", res[0])
+			}
+			if err := os.WriteFile(filepath.Join(st.Dir(), consentFile), agreed, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			saveAsOlderConductor(t, old)
+
+			st = LoadInstallState(st.Dir())
+			var logs []string
+			Reconcile(refs, st, acmeTrust, api2, Options{GapsOnly: true, Describe: jiraDecl(wider), Log: func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }})
+			cur, _ := st.Get("connectors/jira")
+			if s := cur.Manifest.Summary(); strings.Contains(s, "~/.ssh") || strings.Contains(s, "evil.example.com") {
+				t.Fatalf("runs %s with %s, want what the user agreed to for jira/v1.0.0", cur.Resolved, s)
+			}
+			p := st.PendingUpdates()
+			if len(p) != 1 || p[0].Resolved != "jira/v2.0.0" || p[0].Replaces != "jira/v1.0.0" {
+				t.Fatalf("pending %+v, want jira/v2.0.0 held against jira/v1.0.0", p)
+			}
+			for _, want := range []string{"~/.ssh", "evil.example.com:443"} {
+				if !strings.Contains(strings.Join(p[0].Widens, ";"), want) {
+					t.Errorf("widens %v lacks %s", p[0].Widens, want)
+				}
+			}
+			all := strings.Join(logs, "\n")
+			for _, want := range []string{"WARNING: jira/v2.0.0 was installed by a conductor without the plugin jail", "HELD: it runs jailed to what you agreed to for jira/v1.0.0", "plugin approve " + ApproveArg("jira", p[0].Installed)} {
+				if !strings.Contains(all, want) {
+					t.Errorf("logs lack %q:\n%s", want, all)
+				}
+			}
+		})
+	}
+}
+
+// `plugin approve` accepts the build the user was shown, named by its sha
+// or tag: an update held after the listing (the periodic pass replaced the
+// held one with a newer, wider build) is not approved by an approval of
+// the one listed, and a bare name approves nothing.
+func TestApproveAcceptsOnlyTheListedBuild(t *testing.T) {
+	ref := refFor(t, config.UseKindConnector, "acme/plugins/jira")
+	refs := map[string]config.PluginRef{ref.Key(): ref}
+	st := stateAt(t)
+	if _, err := Reconcile(refs, st, acmeTrust, stubFor("jira", "jira/v1.0.0"), Options{Describe: jiraDecl(Capabilities{Egress: jiraWithLogin.Egress})}); err != nil {
+		t.Fatal(err)
+	}
+	api2 := stubFor("jira", "jira/v1.0.0", "jira/v2.0.0")
+	api2.bin = []byte("#!/bin/sh\necho v2\n")
+	Reconcile(refs, st, acmeTrust, api2, Options{Describe: jiraDecl(jiraWithLogin)})
+	listed := st.PendingUpdates()
+	if len(listed) != 1 || listed[0].Resolved != "jira/v2.0.0" {
+		t.Fatalf("pending %+v", listed)
+	}
+	if _, err := st.Approve("jira"); err == nil || !strings.Contains(err.Error(), ApproveArg("jira", listed[0].Installed)) {
+		t.Fatalf("bare name: %v, want refused naming the build to approve", err)
+	}
+
+	// The periodic pass holds a newer build that asks for even more.
+	api3 := stubFor("jira", "jira/v1.0.0", "jira/v2.0.0", "jira/v3.0.0")
+	api3.bin = []byte("#!/bin/sh\necho v3\n")
+	Reconcile(refs, st, acmeTrust, api3, Options{Describe: jiraDecl(Capabilities{Egress: jiraWithLogin.Egress, Read: []string{"~/.config/jira", "~/.ssh"}})})
+	if p := st.PendingUpdates(); len(p) != 1 || p[0].Resolved != "jira/v3.0.0" {
+		t.Fatalf("pending %+v, want jira/v3.0.0 held in its place", p)
+	}
+	for _, arg := range []string{ApproveArg("jira", listed[0].Installed), "jira@jira/v2.0.0", "jira@v2.0.0"} {
+		if _, err := st.Approve(arg); err == nil || !strings.Contains(err.Error(), "is not the update waiting") {
+			t.Errorf("approve %s: %v, want refused", arg, err)
+		}
+	}
+	if cur, _ := st.Get("connectors/jira"); cur.Resolved != "jira/v1.0.0" {
+		t.Fatalf("installed %s, want jira/v1.0.0 kept", cur.Resolved)
+	}
+	shown := st.PendingUpdates()[0]
+	done, err := st.Approve(ApproveArg("jira", shown.Installed))
+	if err != nil || len(done) != 1 || done[0].Sha256 != shown.Sha256 {
+		t.Fatalf("approve the shown build: %+v %v", done, err)
+	}
 }

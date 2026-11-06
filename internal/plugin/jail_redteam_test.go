@@ -43,7 +43,7 @@ func grantFor(t *testing.T, s Spec, sd SandboxDeps) (jailPaths, error) {
 	if err != nil {
 		return jailPaths{}, err
 	}
-	return pathsFor(s, sd, g)
+	return pathsFor(s, newGrantChecks(sd, g))
 }
 
 // A config: path value (or a declaration) naming the root, the home dir or

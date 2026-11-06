@@ -223,7 +223,7 @@ func TestApproveLetsHeldWideningUpdateThrough(t *testing.T) {
 		t.Fatalf("expected one held update before approval: %+v", st.PendingUpdates())
 	}
 
-	done, err := st.Approve("jira")
+	done, err := st.Approve("jira@jira/v2.0.0")
 	if err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestApproveLetsHeldWideningUpdateThrough(t *testing.T) {
 
 	// Approving again (nothing left waiting) is a named error, not a panic
 	// or a silent no-op.
-	if _, err := st.Approve("jira"); err == nil {
+	if _, err := st.Approve("jira@jira/v2.0.0"); err == nil {
 		t.Fatal("approving with nothing pending must error")
 	}
 }

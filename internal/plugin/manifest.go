@@ -3,7 +3,14 @@ package plugin
 import (
 	"fmt"
 	"net"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // The permission manifest: what a plugin declared (Capabilities), recorded
@@ -127,4 +134,59 @@ func hostGlobMatch(pattern, host string) bool {
 		host = host[i+len(seg):]
 	}
 	return strings.HasSuffix(host, parts[len(parts)-1])
+}
+
+// validateCaps is c.Validate plus what core checks before any entry is
+// shown or granted: an entry is printed at consent (Manifest.Lines,
+// Widens, the HELD log line), so one holding a control character, a
+// terminal escape or a space other than ' ' could rewrite what the user
+// reads there; and a static path is granted as written, so it names no
+// ".." component (a command: or env: reference may, relative to what it
+// resolves to).
+func validateCaps(c sdk.Capabilities, conn sdk.Schema) error {
+	if err := c.Validate(conn); err != nil {
+		return err
+	}
+	for where, es := range map[string][]string{
+		"egress": c.Egress, "listen": c.Listen, "read": c.Read, "write": c.Write, "fs": c.FS,
+		"exec": c.Exec, "commands": c.Commands, "env": c.Env,
+	} {
+		for _, e := range es {
+			if !plainText(e) {
+				return fmt.Errorf("capabilities.%s: %s holds a control or non-printing character", where, strconv.Quote(e))
+			}
+			switch where {
+			case "read", "write", "fs", "exec":
+				p := strings.TrimPrefix(e, sdk.OptionalPrefix)
+				if p == "~" || strings.HasPrefix(p, "~/") || filepath.IsAbs(p) {
+					if slices.Contains(strings.Split(p, "/"), "..") {
+						return fmt.Errorf("capabilities.%s: %q has a .. component — name the path itself", where, e)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// plainText: s is valid UTF-8 of printable runes, its only space ' '.
+func plainText(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsGraphic(r) || (unicode.IsSpace(r) && r != ' ') {
+			return false
+		}
+	}
+	return true
+}
+
+// shown is s as consent prints it: quoted when it is not plain text (a
+// record an older conductor wrote before validateCaps checked it).
+func shown(s string) string {
+	if plainText(s) {
+		return s
+	}
+	return strconv.Quote(s)
 }

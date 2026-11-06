@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -37,7 +38,7 @@ func resolveOwned(p string) (string, error) {
 			cur = next
 			continue
 		}
-		if st, ok := fi.Sys().(*syscall.Stat_t); !ok || st.Uid != 0 {
+		if st, ok := fi.Sys().(*syscall.Stat_t); !ok || !systemOwned(st.Uid) {
 			tgt, _ := os.Readlink(next)
 			return "", &symlinkError{link: next, target: tgt}
 		}
@@ -55,4 +56,24 @@ func resolveOwned(p string) (string, error) {
 		cur = "/"
 	}
 	return cur, nil
+}
+
+// overflowUID is the owner a user namespace shows for a file whose owner it
+// does not map (Linux; root's files, when conductor runs in one).
+var overflowUID = func() uint32 {
+	b, err := os.ReadFile("/proc/sys/kernel/overflowuid")
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 32)
+	if err != nil {
+		return 0
+	}
+	return uint32(n)
+}()
+
+// systemOwned: uid is root, or an owner this user namespace does not map —
+// neither is conductor's own user, which is the one a plugin runs as.
+func systemOwned(uid uint32) bool {
+	return uid == 0 || (overflowUID != 0 && uid == overflowUID && uid != uint32(os.Geteuid()))
 }

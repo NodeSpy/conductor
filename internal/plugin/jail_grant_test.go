@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // Regression tests for the second adversarial review of the plugin jail:
@@ -187,8 +189,12 @@ func TestScriptCommandBindsItsInterpreter(t *testing.T) {
 		t.Fatal(err)
 	}
 	real, _ := filepath.EvalSymlinks(sh)
+	found, err := findCommands(Spec{Name: "p"}, newGrantChecks(SandboxDeps{}, sdk.Grant{}), []string{"tool"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	var got []string
-	for _, c := range findCommands(Spec{Name: "p"}, []string{"tool"}) {
+	for _, c := range found {
 		got = append(got, c.real)
 	}
 	if len(got) != 2 || got[1] != real {

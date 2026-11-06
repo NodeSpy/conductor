@@ -353,6 +353,8 @@ conductor plugin list --caps       # …and what each one declares
 conductor plugin show <name>       # one implementation's full surface
 conductor plugin add <ref>         # install, show the permissions, print the stub
 conductor plugin update [name]     # bump everything unpinned, or just one
+conductor plugin update <name> --force  # take a re-published release (see below)
+conductor plugin approve [name@build]   # list held updates, or accept the one listed
 conductor plugin remove <name>     # drop it from install state and delete the binary
 conductor connectors ls            # each instance's resolved use:/origin
 ```
@@ -472,11 +474,15 @@ declared entry it came from, when:
   written or run; a file there may be read only when its path is a
   `config:` value (a GitHub App key you configured), never because the
   plugin names it;
-- it is, or contains, a directory where other programs serve sockets:
-  `/run`, `/var/run`, `/run/user/<uid>`, `$XDG_RUNTIME_DIR`, `/tmp`,
-  `/var/tmp`, `/dev/shm`. A directory grant includes connecting to every
-  socket in it (a read-only bind does not stop that), and consent says so.
-  Grant the one socket file a plugin needs (`/run/docker.sock`) instead;
+- it is, contains, or lies inside a directory where other programs serve
+  sockets: `/run`, `/var/run`, `/run/user/<uid>`, `$XDG_RUNTIME_DIR`,
+  `/tmp`, `/var/tmp`, `/dev/shm`, conductor's own temp dir. A grant of a
+  directory includes connecting to every socket in it (a read-only bind
+  does not stop that), and a directory in one may be another program's
+  (`$XDG_RUNTIME_DIR/systemd`, holding systemd's). The one thing granted
+  there is the socket file a plugin needs, declared under `write`
+  (`/run/docker.sock`), which consent shows as `talks to the program
+  serving the socket: …`;
 - it is an `exec` path that is, or contains, a directory of programs or a
   top-level system directory: the `PATH` directories, `/usr`, `/usr/lib`,
   `/usr/local`, `/etc`, `/run`, `/proc`, `/var`, `/tmp`, `/opt`, your home's
@@ -510,13 +516,24 @@ directory where there is one, nothing where there is not.
 
 A declared command that is a script runs with its `#!` interpreter (and,
 for `#!/usr/bin/env prog`, the `prog` it finds): both are bound with it.
+A command and its interpreter are checked like a declared path: each must
+be an executable file reached through symlinks root owns only, and is
+refused, failing the launch with the reason, when it lies inside conductor's
+own dirs, a runtime dir, or a path the plugin may write (its `write` paths,
+its staging dir), where it could rewrite the `#!` line to name any path.
+A command installed as a symlink you own (`~/.local/bin/tool`, as npm,
+pipx and uv make them) fails the launch, naming the fix: put the directory
+it points into on conductor's `PATH` ahead of it, or set `trust: full`.
 
 The older fields still load: `fs` means `write`, and `spawns` grants nothing
 (name the commands instead).
 
 A declaration conductor cannot check is rejected when the plugin is
 described: an unknown `config:` field, a relative path, a command given as a
-path, a bad port.
+path, a bad port, a path with a `..` component (a `command:` or `env:`
+reference may have one), or any entry holding a control character, a
+terminal escape, or a space other than ` ` (it would be printed at consent
+as written).
 
 ### What the user sees
 
@@ -555,15 +572,20 @@ host for its OAuth endpoints) is **held**: the current version keeps
 running, and the daemon logs
 
 ```
-plugin github: update v1.4.0 -> v1.5.0 HELD: it asks for more than v1.4.0 — connects to uploads.example.com:443. The installed build keeps running; `conductor plugin approve github` accepts it
+plugin github: update v1.4.0 -> v1.5.0 HELD: it asks for more than v1.4.0 — connects to uploads.example.com:443. The installed build keeps running; `conductor plugin approve github@3c1f0a9e2b7d` accepts it
 ```
 
 and sends a `plugin_update_held` notification once per held build.
 
 ```bash
-conductor plugin approve           # list held updates and what each adds
-conductor plugin approve github    # accept it; the daemon picks it up at the next reload
+conductor plugin approve                       # list held updates and what each adds
+conductor plugin approve github@3c1f0a9e2b7d   # accept that build; the daemon picks it up at the next reload
 ```
+
+`approve` takes the plugin's name and the build it lists: a prefix of its
+sha, its tag (`github@github/v1.5.0`) or its version (`github@v1.5.0`). If
+an update pass held a different build since (a newer release that asks for
+more), that build is not approved: `approve` says what is waiting instead.
 
 An update that narrows or keeps the declaration applies as usual.
 Destinations compare as the jail grants them: a bare `api.example.com` is
@@ -581,8 +603,9 @@ plugin jira: release jira/v2.0.0 now publishes a different build (sha …) than 
 ```
 
 `conductor plugin update <name> --force` takes it, compared with the build
-it replaces: held when it declares more, and then that release does not run
-until you approve it (its new bytes replaced the old ones on disk).
+it replaces: held when it declares more, and then **the plugin does not run
+at all** until you approve it: the new bytes replaced the installed ones on
+disk, so the installed record no longer verifies.
 
 `conductor plugin update <name>` (and `--force`) also re-describes a build
 that is already current. If it now declares more than its record, that is
@@ -665,10 +688,16 @@ From a conductor that did not jail plugins:
   adopts the version 1 records against that copy: a build you agreed to gets
   exactly that record back (held if it now declares more), held updates the
   older conductor dropped are restored when their binary is still there,
-  and a build it installed meanwhile that declares more than you last agreed
-  to is logged as a `WARNING` naming what it adds.
+  and a build it installed meanwhile (the newest release, which may be an
+  update the jail held) is compared with what you last agreed to: when it
+  declares more it is held again, runs jailed to that agreement, and is
+  logged as a `WARNING` naming what it adds.
 - **`allow_env: []` and `network: []` now mean none.** Before, an empty
   list passed everything the plugin declares; to keep that, remove the key.
+  A config that has one loads, with a warning naming it.
+- **A declared command found through a symlink you own fails the launch**
+  (`~/.local/bin/paseo` from npm, a pipx or uv tool). Put the directory it
+  points into on conductor's `PATH` ahead of it, or set `trust: full`.
 - **Variables the plugin declares now pass through by default.** Check
   conductor's environment for ones you do not want a plugin to have
   (`GH_TOKEN`, …), or narrow with `allow_env:`.

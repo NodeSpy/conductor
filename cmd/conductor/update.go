@@ -517,10 +517,10 @@ var (
 )
 
 func announceHeld(r plugin.Resolution) {
-	pending := ""
+	pending, arg := "", r.Name
 	for _, p := range plugin.LoadInstallState(plugin.InstallDir()).PendingUpdates() {
 		if p.Key == r.Key && p.Source == r.Source {
-			pending = p.Resolved + "@" + p.Sha256
+			pending, arg = p.Resolved+"@"+p.Sha256, plugin.ApproveArg(p.Name, p.Installed)
 		}
 	}
 	heldMu.Lock()
@@ -531,8 +531,8 @@ func announceHeld(r plugin.Resolution) {
 	if seen || notify == nil {
 		return
 	}
-	notify(fmt.Sprintf("plugin %s: an update is held at %s because it asks for more: %s. Run `conductor plugin approve %s` to accept it.",
-		r.Name, r.Tag, strings.Join(r.Widens, "; "), r.Name))
+	notify(fmt.Sprintf("plugin %s: an update is held at %s because it asks for more: %s. Run `conductor plugin approve` to review it, and `conductor plugin approve %s` to accept it.",
+		r.Name, r.Tag, strings.Join(r.Widens, "; "), arg))
 }
 
 // refreshPluginsStep refreshes the plugins and republishes the installed

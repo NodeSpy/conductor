@@ -138,7 +138,16 @@ func (m Manifest) Lines() []string {
 	add("connects to", m.Egress)
 	add("listens on", m.Listen)
 	add("reads", m.Read)
-	add("reads and writes", append(append([]string(nil), m.Write...), m.FS...))
+	var files, sockets []string
+	for _, e := range append(append([]string(nil), m.Write...), m.FS...) {
+		if socketEntry(e) {
+			sockets = append(sockets, e)
+		} else {
+			files = append(files, e)
+		}
+	}
+	add("reads and writes", files)
+	add(socketLabel, sockets)
 	add("runs", m.Commands)
 	add("runs programs in", m.Exec)
 	if len(m.Read)+len(m.Write)+len(m.FS)+len(m.Exec) > 0 {
@@ -174,12 +183,35 @@ func plainEntry(e string) string {
 		return plainEntry(ref) + " (if it can be granted)"
 	}
 	if ref, ok := strings.CutPrefix(e, "config:"); ok {
-		return "<" + ref + " from its config>"
+		return "<" + shown(ref) + " from its config>"
 	}
 	if ref, ok := strings.CutPrefix(e, "env:"); ok {
-		return "$" + ref
+		return "$" + shown(ref)
 	}
-	return e
+	return shown(e)
+}
+
+// socketLabel is how consent names a write grant inside a runtime dir: the
+// one thing granted there is a socket file (grantChecks.refusal).
+const socketLabel = "talks to the program serving the socket"
+
+// socketEntry: e names a path inside a runtime dir (runtimeDirs), or under
+// $XDG_RUNTIME_DIR.
+func socketEntry(e string) bool {
+	p := strings.TrimPrefix(e, sdk.OptionalPrefix)
+	if ref, ok := strings.CutPrefix(p, "env:"); ok {
+		v, _, _ := strings.Cut(ref, "/")
+		return v == "XDG_RUNTIME_DIR"
+	}
+	if !filepath.IsAbs(p) || grantExempt(p) {
+		return false
+	}
+	for _, d := range runtimeDirs() {
+		if within(d, p) && filepath.Clean(p) != d {
+			return true
+		}
+	}
+	return false
 }
 
 // Summary renders the manifest as one line for logs and install review.
@@ -215,7 +247,16 @@ func (m Manifest) Widens(next Manifest) []string {
 		return exact(have, e) || exact(have, strings.TrimPrefix(e, sdk.OptionalPrefix))
 	}
 	diff("reads", append(append(append([]string(nil), m.Read...), m.Write...), m.FS...), next.Read, path)
-	diff("writes", append(append([]string(nil), m.Write...), m.FS...), append(append([]string(nil), next.Write...), next.FS...), path)
+	var nextFiles, nextSockets []string
+	for _, e := range append(append([]string(nil), next.Write...), next.FS...) {
+		if socketEntry(e) {
+			nextSockets = append(nextSockets, e)
+		} else {
+			nextFiles = append(nextFiles, e)
+		}
+	}
+	diff("writes", append(append([]string(nil), m.Write...), m.FS...), nextFiles, path)
+	diff(socketLabel, append(append([]string(nil), m.Write...), m.FS...), nextSockets, path)
 	diff("runs", m.Commands, next.Commands, exact)
 	diff("runs programs in", m.Exec, next.Exec, path)
 	diff("reads env", m.Env, next.Env, exact)
@@ -260,7 +301,7 @@ func authEndpoints(a *AuthSpec) []authEndpoint {
 		if u, err := url.Parse(where); err == nil && u.Host != "" {
 			where = strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
 		}
-		out = append(out, authEndpoint{e.field, where})
+		out = append(out, authEndpoint{e.field, shown(where)})
 	}
 	return out
 }
@@ -273,7 +314,7 @@ func secretLooking(names []string) []string {
 		u := strings.ToUpper(n)
 		for _, w := range []string{"TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "APIKEY", "PRIVATE_KEY", "ACCESS_KEY", "CREDENTIAL", "AUTH_SOCK"} {
 			if strings.Contains(u, w) {
-				out = append(out, n)
+				out = append(out, shown(n))
 				break
 			}
 		}

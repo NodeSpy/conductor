@@ -372,7 +372,7 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 		if derr == nil {
 			derr = checkDeclKind(ref, decl)
 			if derr == nil {
-				if err := decl.Capabilities.Validate(decl.Connection); err != nil {
+				if err := validateCaps(decl.Capabilities, decl.Connection); err != nil {
 					derr = fmt.Errorf("%s declares capabilities that do not validate: %w", tag, err)
 				}
 			}
@@ -398,7 +398,7 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 			res.Action, res.Widens = ActionHeld, w
 			res.Tag, res.Sha, res.Path, res.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
 			opts.logf("plugin %s: update %s -> %s HELD: it asks for more than %s — %s. The installed build keeps running; `conductor plugin approve %s` accepts it",
-				ref.Name, prev.Resolved, tag, prev.Resolved, strings.Join(w, "; "), ref.Name)
+				ref.Name, prev.Resolved, tag, prev.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, rec))
 			return res, true
 		}
 	}
@@ -433,7 +433,7 @@ func describeBuild(ref config.PluginRef, rec Installed, opts Options) (Manifest,
 	if err := checkDeclKind(ref, decl); err != nil {
 		return Manifest{}, err
 	}
-	if err := decl.Capabilities.Validate(decl.Connection); err != nil {
+	if err := validateCaps(decl.Capabilities, decl.Connection); err != nil {
 		return Manifest{}, fmt.Errorf("plugin %s: %s declares capabilities that do not validate: %w", ref.Name, rec.Resolved, err)
 	}
 	return manifestFromDecl(decl), nil
@@ -447,10 +447,11 @@ func describeBuild(ref config.PluginRef, rec Installed, opts Options) (Manifest,
 // the build declares now, without a hold, since it ran with them unconfined.
 // The rest is compared like any update: what the build now declares beyond
 // the record is held for approval, and it runs jailed to the record
-// meanwhile. When the user agreed to this exact build before a rollback
-// (consentFile), that agreement is the record instead, and a build the older
-// conductor installed meanwhile that declares more than the user last agreed
-// to is reported loudly. Once per record; a build that cannot be described
+// meanwhile. When the user agreed to a build before a rollback
+// (consentFile), the last agreement is the record instead: for this build,
+// or, when the older conductor installed this one meanwhile, for the one
+// before it, so a build it re-installed that declares more (an update this
+// conductor held) is held again, and reported loudly. Once per record; a build that cannot be described
 // keeps its old record (and is jailed to it), and the next pass tries again.
 func adoptLegacyRecord(ref config.PluginRef, rec Installed, state *InstallState, opts Options) (Installed, bool) {
 	if !rec.Legacy || opts.Describe == nil || rec.Sha256 == "" || !binaryPresent(rec.Path) {
@@ -463,28 +464,37 @@ func adoptLegacyRecord(ref config.PluginRef, rec Installed, state *InstallState,
 	}
 	base := rec.Manifest
 	base.Listen, base.Read, base.Write, base.Exec, base.Keychain = m.Listen, m.Read, m.Write, m.Exec, m.Keychain
+	replaces := rec.Resolved
+	// The user's last agreement (consentFile) is the record: for this
+	// build, or for the one before it when the older conductor installed
+	// this one meanwhile (a rollback re-installs the newest release, which
+	// may be an update this conductor held). What that conductor recorded
+	// for a build it installed is no agreement.
 	consented, hadConsent := state.consentedFor(rec.Key, rec.Source, rec.Sha256)
-	if hadConsent && consented.Sha256 == rec.Sha256 {
+	rolled := hadConsent && consented.Sha256 != rec.Sha256
+	if hadConsent {
 		base = consented.Manifest
+		replaces = consented.Resolved
 	}
 	next := rec
 	next.Legacy, next.ManifestSchema, next.Manifest = false, manifestSchema, m
 	cur := next
-	if w := base.Widens(m); len(w) > 0 && !state.approved(next) {
-		cur.Manifest = base
-		state.Put(cur)
-		state.putPending(Pending{Installed: next, Replaces: rec.Resolved, Widens: w})
-		opts.logf("plugin %s: %s declares more than its install record — %s. HELD: it runs jailed to the record; `conductor plugin approve %s` accepts it",
-			ref.Name, rec.Resolved, strings.Join(w, "; "), ref.Name)
-	} else {
+	switch w := base.Widens(m); {
+	case len(w) == 0 || state.approved(next):
 		state.Put(next)
 		opts.logf("plugin %s: recorded what %s declares (its install record predates declared permissions, and it ran unconfined until now): %s", ref.Name, rec.Resolved, m.Summary())
-	}
-	if hadConsent && consented.Sha256 != rec.Sha256 {
-		if w := consented.Manifest.Widens(cur.Manifest); len(w) > 0 {
-			opts.logf("plugin %s: WARNING: %s was installed by a conductor without the plugin jail (a rollback) and ran unconfined; it declares more than you agreed to for %s — %s. It is jailed to that now; review it with `conductor plugin show %s`, or pin %s",
-				ref.Name, rec.Resolved, consented.Resolved, strings.Join(w, "; "), ref.Name, consented.Resolved)
-		}
+	case rolled:
+		cur.Manifest = base
+		state.Put(cur)
+		state.putPending(Pending{Installed: next, Replaces: replaces, Widens: w})
+		opts.logf("plugin %s: WARNING: %s was installed by a conductor without the plugin jail (a rollback) and ran unconfined. It declares more than you agreed to for %s — %s. HELD: it runs jailed to what you agreed to for %s; review it with `conductor plugin approve`, accept it with `conductor plugin approve %s`, or pin %s",
+			ref.Name, rec.Resolved, consented.Resolved, strings.Join(w, "; "), consented.Resolved, ApproveArg(ref.Name, next), consented.Resolved)
+	default:
+		cur.Manifest = base
+		state.Put(cur)
+		state.putPending(Pending{Installed: next, Replaces: replaces, Widens: w})
+		opts.logf("plugin %s: %s declares more than its install record — %s. HELD: it runs jailed to the record; `conductor plugin approve %s` accepts it",
+			ref.Name, rec.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, next))
 	}
 	return cur, true
 }
@@ -508,7 +518,7 @@ func recheckInstalled(ref config.PluginRef, prev Installed, state *InstallState,
 	if w := prev.Manifest.Widens(m); len(w) > 0 && !state.approved(next) {
 		state.putPending(Pending{Installed: next, Replaces: prev.Resolved, Widens: w})
 		opts.logf("plugin %s: %s declares more than its install record — %s. HELD: it keeps running jailed to the record; `conductor plugin approve %s` accepts it",
-			ref.Name, prev.Resolved, strings.Join(w, "; "), ref.Name)
+			ref.Name, prev.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, next))
 		return prev, w, true
 	}
 	state.dropPending(next.Key, next.Source)
@@ -846,8 +856,8 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 				case checkDeclKind(ref, decl) != nil:
 					res.Action, res.Err = ActionFailed, checkDeclKind(ref, decl)
 					cb.err = res.Err
-				case decl.Capabilities.Validate(decl.Connection) != nil:
-					res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %s declares capabilities that do not validate: %w", ref.Name, res.Tag, decl.Capabilities.Validate(decl.Connection))
+				case validateCaps(decl.Capabilities, decl.Connection) != nil:
+					res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %s declares capabilities that do not validate: %w", ref.Name, res.Tag, validateCaps(decl.Capabilities, decl.Connection))
 					cb.err = res.Err
 				default:
 					rec.Manifest, rec.ManifestSchema = manifestFromDecl(decl), manifestSchema
@@ -887,7 +897,7 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 						state.putPending(Pending{Installed: rec, Replaces: prev.Resolved, Widens: w})
 						res.Action, res.Widens = ActionHeld, w
 						opts.logf("plugin %s: update %s -> %s HELD: it asks for more than %s — %s. The installed build keeps running; `conductor plugin approve %s` accepts it",
-							ref.Name, prev.Resolved, rec.Resolved, prev.Resolved, strings.Join(w, "; "), ref.Name)
+							ref.Name, prev.Resolved, rec.Resolved, prev.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, rec))
 					} else {
 						state.dropPending(key, res.Source)
 					}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/NodeSpy/conductor/internal/plugin"
 	"github.com/NodeSpy/conductor/internal/testhome"
 )
 
@@ -32,6 +33,9 @@ func TestMain(m *testing.M) {
 		os.Exit(runSandboxNet(os.Args[2:]))
 	}
 	capAgentSlice = func(string, string, string) error { return nil } // never the real user manager
+	// The jailed plugins' fixtures (a configured log file) live in the
+	// temp dir, which the jail otherwise grants nothing inside.
+	plugin.GrantInsideTempForTests()
 	root, err := testhome.Isolate()
 	if err != nil {
 		panic(err)
