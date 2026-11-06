@@ -518,7 +518,9 @@ says why, for:
 - a port conductor itself listens on — a builtin's listener, such as the
   bundled `webhook` connector's, is one. Set `trust: full` on the exposure
   connector to relay to it (with `isolate: true` when another connector
-  shares its plugin's process), or expose a plugin's listener;
+  shares its plugin's process), or expose a plugin's listener. The smee
+  rewrite (see [[Migration]]) does this for the connector it makes for a
+  `webhook` connector;
 - a build whose install record does not declare `expose_local` (an older
   release): update it, and approve the update.
 

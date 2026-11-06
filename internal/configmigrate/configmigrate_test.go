@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/configedit"
 )
 
 // allFree is a PortFree that finds every port bindable.
@@ -186,9 +188,42 @@ func TestBundledWebhookSmee(t *testing.T) {
   hooks-smee:
     use: smee
     channel: https://relay.example/ch1
+    ` + trustComment + `
+    trust: full
+    isolate: true
 `
 	if got := read(t, main); got != want {
 		t.Fatalf("rewrite:\n%s\nwant:\n%s", got, want)
+	}
+	// A github listener is a plugin's: its smee connector stays jailed.
+	gh := write(t, dir, "gh.yaml", "connectors:\n  gh:\n    use: github\n    webhook:\n      smee_url: https://relay.example/ch2\n")
+	if _, err := Apply(gh, Options{PortFree: allFree}); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, gh); strings.Contains(got, "trust") || strings.Contains(got, "isolate") {
+		t.Fatalf("the github shape's smee connector was unjailed:\n%s", got)
+	}
+}
+
+// A flow-style webhook connector is rewritten whole; its smee connector is
+// unjailed all the same, with the reason above it.
+func TestBundledWebhookSmeeFlowStyle(t *testing.T) {
+	dir := t.TempDir()
+	main := write(t, dir, "conductor.yaml", "connectors:\n  hooks: { use: webhook, smee_url: https://relay.example/ch1, sources: { a: { path: /a } } }\n")
+	if _, err := Apply(main, Options{PortFree: allFree}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(read(t, main), trustComment) {
+		t.Errorf("no reason given:\n%s", read(t, main))
+	}
+	doc, err := configedit.Parse([]byte(read(t, main)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]any{"use": "smee", "channel": "https://relay.example/ch1", "trust": "full", "isolate": true} {
+		if got, _ := doc.Get([]string{"connectors", "hooks-smee", k}); got != want {
+			t.Errorf("hooks-smee.%s = %v, want %v", k, got, want)
+		}
 	}
 }
 

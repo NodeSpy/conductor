@@ -38,6 +38,15 @@ import (
 // default ("/"), where a delivery is offered to every source as the smee
 // channel did.
 //
+// A smee connector made for the bundled webhook connector also gets
+// `trust: full` and `isolate: true`, with a comment saying why: the relay it
+// replaces ran inside conductor, with conductor's trust, and the listener it
+// delivers to is one of conductor's own ports, which a jailed plugin is never
+// granted (docs/wiki/Plugins.md "What a plugin declares"). Isolated, its
+// unjailed process is its own, so no other smee connector shares that trust.
+// A github listener is a plugin's: its smee connector stays jailed, reaching
+// the listener through expose_local.
+//
 // This is the only place left in core that knows the retired keys. It goes
 // once no supported release can still be carrying them.
 
@@ -126,7 +135,7 @@ func (t *tree) migrateSmee(s connectorSite, all map[string]map[string]any, base 
 		return fmt.Errorf("%s: %w — this connector needs a hand edit (see the smee connector docs)", where, err)
 	}
 	if !reuse {
-		if err := t.addConnector(s.siblings, s.siblingPath, smeeName, url); err != nil {
+		if err := t.addConnector(s.siblings, s.siblingPath, smeeName, url, !github); err != nil {
 			return fmt.Errorf("%s: adding the smee connector %s: %w", where, smeeName, err)
 		}
 		all[smeeName] = map[string]any{"use": smeeUse, "channel": url}
@@ -140,6 +149,8 @@ func (t *tree) migrateSmee(s connectorSite, all map[string]map[string]any, base 
 	}
 	if reuse {
 		t.note("%s: smee_url → expose: %s (the existing smee connector on the same channel), listening on %s", where, smeeName, l)
+	} else if !github {
+		t.note("%s: smee_url → a new smee connector %s on the same channel (use: %s, trust: full, isolate: true — the relay ran inside conductor, and this listener is conductor's own port), exposing the listener on %s", where, smeeName, smeeUse, l)
 	} else {
 		t.note("%s: smee_url → a new smee connector %s on the same channel (use: %s), exposing the listener on %s", where, smeeName, smeeUse, l)
 	}
@@ -223,19 +234,65 @@ func (t *tree) reset(f *File, src []byte) error {
 }
 
 // addConnector adds `name: {use: smee, channel: url}` to the connectors map
-// at path in f (nil = the file's root, for a section file of bare entries).
-func (t *tree) addConnector(f *File, path []string, name, url string) error {
+// at path in f (nil = the file's root, for a section file of bare entries);
+// unjailed adds `trust: full` and `isolate: true` under trustComment.
+func (t *tree) addConnector(f *File, path []string, name, url string, unjailed bool) error {
 	snapshot := f.doc.Bytes()
 	at := append(clone(path), name)
-	if err := f.doc.SetScalar(append(clone(at), "use"), smeeUse); err == nil {
-		if err := f.doc.SetScalar(append(clone(at), "channel"), url); err == nil {
-			return nil
+	keys := [][2]any{{"use", smeeUse}, {"channel", url}}
+	if unjailed {
+		keys = append(keys, [2]any{"trust", "full"}, [2]any{"isolate", true})
+	}
+	ok := true
+	for _, kv := range keys {
+		if err := f.doc.SetScalar(append(clone(at), kv[0].(string)), kv[1]); err != nil {
+			ok = false
+			break
 		}
 	}
-	if err := t.reset(f, snapshot); err != nil {
-		return err
+	if !ok {
+		if err := t.reset(f, snapshot); err != nil {
+			return err
+		}
+		whole := map[string]any{"use": smeeUse, "channel": url}
+		if unjailed {
+			whole["trust"], whole["isolate"] = "full", true
+		}
+		if err := f.doc.SetScalar(at, whole); err != nil {
+			return err
+		}
 	}
-	return f.doc.SetScalar(at, map[string]any{"use": smeeUse, "channel": url})
+	if unjailed {
+		return t.commentAbove(f, name, "trust", trustComment)
+	}
+	return nil
+}
+
+// trustComment says why a smee connector made for the bundled webhook
+// connector runs unjailed.
+const trustComment = "# trust/isolate: the smee_url relay this replaces ran inside conductor with its trust, and the webhook listener it delivers to is one of conductor's own ports, which a jailed plugin never reaches"
+
+// commentAbove puts comment on its own line above the `key:` line of the
+// connector entry name (the first such line after `name:`), at its indent.
+// Best effort: a shape it does not find is left without the comment.
+func (t *tree) commentAbove(f *File, name, key, comment string) error {
+	lines := strings.SplitAfter(string(f.doc.Bytes()), "\n")
+	entry := -1
+	for i, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if entry < 0 {
+			if trimmed == name+":" {
+				entry = i
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, key+":") {
+			indent := l[:len(l)-len(strings.TrimLeft(l, " "))]
+			out := strings.Join(lines[:i], "") + indent + comment + "\n" + strings.Join(lines[i:], "")
+			return t.reset(f, []byte(out))
+		}
+	}
+	return nil
 }
 
 // freePort picks a loopback port for a new listener: from 8787 up, one no
