@@ -254,31 +254,77 @@ type Event struct {
 	Semantics *EventSemantics `json:"semantics,omitempty"`
 }
 
-// Capabilities is the plugin's DECLARED PERMISSION MANIFEST: what it says it
-// needs. Conductor records it at install, SURFACES it (so the operator sees what
-// they accept when they add the plugin), and confines the plugin to it — a
-// visible manifest with can't-exceed-declaration, not an OS jail. See
-// docs/design/use-unification.md §D for exactly what that does and does not
-// enforce.
+// Capabilities is the plugin's DECLARED PERMISSION MANIFEST: everything it
+// needs from the machine it runs on. Conductor records it at install, shows
+// it to the user (who agrees to it by installing), and jails the plugin to
+// exactly it — anything undeclared is denied: network, files outside the base
+// system, commands, environment (docs/wiki/Plugins.md "What a plugin
+// declares"). Conductor never infers a need from anything else, a connection
+// field's name included; a plugin that needs more fixes its declaration.
+//
+// An entry may refer to the plugin's OWN connection fields, but only through
+// a reference it writes out: "config:<field>" (dotted into a map field,
+// "webhook.smee_url"), resolved against each configured instance's value.
+// A path may also refer to a variable in Env: "env:<VAR>". See Resolve.
 type Capabilities struct {
-	// Egress are the "host[:port]" targets the plugin calls. A connector
-	// instance's `network:` may narrow this, never widen it.
+	// Egress are the TCP destinations the plugin connects to, reached through
+	// conductor's egress proxy (HTTP(S)_PROXY; ProxyDialer for other
+	// protocols). Each entry is one of:
+	//   "host:port"            exact; host may glob ("*.example.com:443"); a
+	//                          bare "host" is host:443
+	//   "config:<field>"       the host:port in that connection field: a URL
+	//                          (http/ws default 80, https/wss 443) or host:port
+	//   "config:<field>:<port>" the same, with the port a bare host gets
+	// A connector instance's `network:` may narrow this, never widen it.
 	Egress []string `json:"egress,omitempty"`
-	// Commands are the commands the plugin spawns, by name. Declaring them lets
-	// conductor confine the subprocess's PATH to exactly these; leaving this
-	// empty while setting Spawns declares "I spawn things I am not naming",
-	// which is surfaced as such.
+	// Listen are the TCP addresses the plugin serves on (a webhook receiver):
+	// "[host]:port" or "config:<field>" (a "[host]:port" value). Conductor
+	// listens on each on the host and passes connections in.
+	Listen []string `json:"listen,omitempty"`
+	// Read and Write are the files and directories the plugin reads, and
+	// reads and writes, beyond the base system (shared libraries, CA
+	// certificates, time zones), its own install dir and its per-call
+	// staging dir (TMPDIR), which it always has. Each entry is a path:
+	//   "/abs/path"            as written
+	//   "~/rel"                in the user's home directory
+	//   "env:<VAR>[/rel]"      under the directory in that variable (one in
+	//                          Env); nothing when it is unset
+	//   "config:<field>[/rel]" under the path in that connection field
+	//   "command:<name>[/rel]" relative to the file a declared command
+	//                          resolves to ("command:tool/../.." is the
+	//                          install tree of a tool that is a script)
+	// A path that does not exist is skipped. Written paths are never
+	// executable: a plugin cannot run what it writes. A "command:" path
+	// stays in the command's install tree (its directory, or the prefix
+	// above a bin/sbin directory). An entry starting with "?" is optional:
+	// a path conductor refuses to grant (too broad, through a symlink it
+	// does not follow) is skipped rather than failing the launch.
+	Read  []string `json:"read,omitempty"`
+	Write []string `json:"write,omitempty"`
+	// Commands are the programs the plugin runs, by name, found on the
+	// daemon's PATH at launch. Only these are on the jail's PATH.
 	Commands []string `json:"commands,omitempty"`
-	// FS are the filesystem paths it needs.
+	// Exec are the files and directories whose programs the plugin (or a
+	// declared command) runs beyond Commands: a command's helper programs,
+	// such as a tool that runs its own sub-programs from its install tree.
+	// Entries take the same forms as Read; "command:" is relative to the
+	// file a declared command resolves to ("command:tool/.." is the directory
+	// it is in, "command:tool/../../lib/tool" a lib dir beside it). They are
+	// read-only. Nothing else outside the plugin's own install dir and its
+	// commands is executable: the base system's libraries are, but its
+	// programs are not.
+	Exec []string `json:"exec,omitempty"`
+	// Keychain declares that a command reads a login from the user's macOS
+	// Keychain (a CLI that stores its token there). Ignored elsewhere.
+	Keychain bool `json:"keychain,omitempty"`
+	// FS is the older name for Write: read-write paths.
 	FS []string `json:"fs,omitempty"`
-	// Spawns reports that the plugin spawns child processes. Implied by a
-	// non-empty Commands.
+	// Spawns is the older "I run programs I do not name". It grants nothing:
+	// only Commands are on the jail's PATH.
 	Spawns bool `json:"spawns,omitempty"`
-	// Env are environment variables the plugin reads from the daemon's
-	// environment — a credential its platform CLI looks for there (a
-	// declared command's own token variable). A plugin's environment is
-	// otherwise scrubbed; these names, and only these, are passed through.
-	// Shown at install with the rest of the permissions.
+	// Env are the environment variables the plugin reads from the daemon's
+	// environment (a CLI's token variable). Its environment is otherwise
+	// scrubbed; these names, and only these, are passed through.
 	Env []string `json:"env,omitempty"`
 	// SingleProcess declares that every configured instance of this
 	// connector MUST share ONE process: the plugin keeps state a box-global
