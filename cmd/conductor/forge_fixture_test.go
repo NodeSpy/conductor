@@ -1,14 +1,19 @@
 package main
 
 import (
+	"os"
+
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core/coretest"
 )
 
 // The fixture connectors stand in for the forge and chat plugins under
-// `use: github` and `use: slack`.
+// `use: github` and `use: slack`. TestBoxHarness boots the real plugin
+// instead, so it leaves the forge type free.
 func init() {
-	connector.RegisterInProcessConnector(coretest.Forge)
+	if os.Getenv("BOX_CONFIG") == "" {
+		connector.RegisterInProcessConnector(coretest.Forge)
+	}
 	connector.RegisterInProcessConnector(coretest.Chat)
 }
 

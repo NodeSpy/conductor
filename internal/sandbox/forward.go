@@ -47,7 +47,42 @@ type BindMount struct {
 	// Optional skips an entry whose source does not exist (a tool's state
 	// dir the operator has not created yet) instead of failing the launch.
 	Optional bool `json:"optional,omitempty"`
+	// NoExec mounts the entry noexec: nothing in it can be executed (a
+	// plugin's writable paths — it cannot run what it writes).
+	NoExec bool `json:"noexec,omitempty"`
+	// NoSymlink refuses the entry when its source is a symlink when it is
+	// mounted (a plugin's declared path, checked when it was granted).
+	NoSymlink bool `json:"nosymlink,omitempty"`
+	// NotDir refuses the entry when its source is a directory when it is
+	// mounted (a program, a socket file: checked when it was granted).
+	NotDir bool `json:"notdir,omitempty"`
 }
+
+// BaseMinimal is the jail base a plugin runs on (EnterOpts.Base): the base
+// system's libraries and data read-only, but none of its programs: the
+// standard PATH directories are empty except for what the caller binds in,
+// and the rest of /usr (and a split-usr /lib, /lib64, /libexec) is noexec
+// except the top level of the dynamic linker's library directories, so a
+// shared library can be mapped but a program in a subdirectory (a tool's
+// helpers, a daemon's binaries) or a program among the libraries cannot run.
+// A curated /etc (MinimalEtc), no /opt, and nothing writable that is also
+// executable.
+const BaseMinimal = "minimal"
+
+// MinimalEtc are the /etc entries the minimal base shows: name service,
+// CA certificates, time zone, the dynamic linker's cache, and git's and
+// the shell's system defaults. Nothing else in /etc is visible.
+var MinimalEtc = []string{
+	"/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/hosts", "/etc/host.conf",
+	"/etc/localtime", "/etc/timezone", "/etc/zoneinfo",
+	"/etc/ssl", "/etc/ca-certificates", "/etc/ca-certificates.conf", "/etc/pki", "/etc/crypto-policies",
+	"/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d",
+	"/etc/mime.types", "/etc/gitconfig", "/etc/alternatives",
+}
+
+// minimalBinDirs are the standard PATH directories the minimal base empties
+// (only the caller's bound commands appear in them).
+var minimalBinDirs = []string{"/usr/bin", "/usr/sbin", "/usr/local/bin", "/usr/local/sbin", "/usr/games", "/usr/local/games"}
 
 // source is the host path a bind mounts.
 func (b BindMount) source() string {
@@ -59,7 +94,7 @@ func (b BindMount) source() string {
 
 // simple reports an entry the legacy --bind/--bind-ro flags can carry.
 func (b BindMount) simple() bool {
-	return b.Src == "" && !b.Tmpfs && b.Link == "" && !b.Optional
+	return b.Src == "" && !b.Tmpfs && b.Link == "" && !b.Optional && !b.NoExec && !b.NoSymlink && !b.NotDir
 }
 
 // NetForward carries the in-sandbox wiring into WrapLocal: the path of this
@@ -84,6 +119,11 @@ type NetForward struct {
 	// loopback egress proxy port its restricted network may reach.
 	Agent     *AgentProfile
 	ProxyPort int
+	// Base selects the jail's base system ("" the agent base, BaseMinimal
+	// a plugin's).
+	Base string
+	// Plugin (macOS) is a plugin jail's Seatbelt profile inputs.
+	Plugin *PluginProfile
 }
 
 // Relay is one in-sandbox loopback port piped to a unix socket — how an
@@ -124,7 +164,9 @@ type EnterOpts struct {
 	// JailTmp is the directory the jail's /tmp is made in, one directory per
 	// launch removed when the payload exits ("" = a private tmpfs).
 	JailTmp string
-	Argv    []string // the real launch to exec once the plumbing is up
+	// Base is the jail's base system ("" or BaseMinimal; NetForward.Base).
+	Base string
+	Argv []string // the real launch to exec once the plumbing is up
 }
 
 // RunEnter is the `conductor sandbox-net` entry point: bring the sandbox
@@ -172,7 +214,7 @@ func RunEnter(opt EnterOpts) int {
 	}
 	jailed := len(opt.Binds) > 0
 	if jailed {
-		release, err := buildJail(opt.Binds, opt.JailRoot, opt.JailTmp)
+		release, err := buildJail(opt.Binds, opt.JailRoot, opt.JailTmp, opt.Base)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "sandbox-net: jail: %v\n", err)
 			return 1

@@ -223,6 +223,11 @@ usage:
   conductor connectors ls               list configured connectors: state, events, verbs
   conductor plugin list                 list plugins: bundled connectors/runtimes + external
   conductor plugin show <name>          a plugin's surface (Decl + capability/credential disclosure)
+  conductor plugin update [name] [--force]  re-resolve plugins; --force also takes an exact pin's
+                                        re-published release: if it asks for more it is held, and the
+                                        plugin does not run until plugin approve accepts it (its bytes replaced
+                                        the installed ones)
+  conductor plugin approve [name@build] list held updates, or accept the one listed (its sha or tag)
   conductor plugin remove <name>        how to remove an external plugin from your plugins: block
   conductor schema <connector>          print a connector's event/filter/verb/option schemas
   conductor secrets check               resolve every secret reference and report

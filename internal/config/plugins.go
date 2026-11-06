@@ -38,6 +38,10 @@ type PluginRef struct {
 	// (`engines.<name>.trust: full`). Isolation is nil and the "no OS sandbox"
 	// warning is suppressed — they chose it deliberately.
 	TrustFull bool
+	// Conns are the connection configs of the configured instances the one
+	// shared process serves (non-isolated ones): what the plugin's
+	// "config:" capability references resolve against.
+	Conns []map[string]any
 	// Network is the referencing connector's declared egress. Empty for a
 	// runtime (a runtime executes your agents; its egress is not narrowed).
 	Network []string
@@ -81,6 +85,10 @@ type ConnectorGrant struct {
 	AllowSecrets []string
 	AllowEnv     []string
 	Isolation    *IsolationConfig
+	// Conn is this instance's connection config (ConnectorRef.Conn).
+	Conn map[string]any
+	// TrustFull mirrors ConnectorRef.TrustFull.
+	TrustFull bool
 	// Isolate mirrors ConnectorRef.Isolate: true means this one configured
 	// instance gets its own dedicated process instead of sharing the
 	// plugin's one default process.
@@ -184,11 +192,12 @@ func (p PluginRef) HasSharedInstance() bool {
 }
 
 // mergeIsolationBestEffort combines two non-isolated instances' isolation:
-// blocks for PluginRefs' running union. It is best-effort: a genuine conflict
-// (two different, incompatible blocks) is reported precisely by
-// validatePluginRefs/checkIsolationMerge, which runs after PluginRefs and
-// gates whether the config loads at all — this just must never panic or
-// silently invent a block neither instance wrote.
+// blocks for PluginRefs' running union. In practice an isolation: block on a
+// plugin connector/runtime/engine is refused outright at load by
+// checkPluginJail (the declared-capability jail replaced it), so this never
+// sees two real, non-nil blocks to reconcile for a config that loaded at
+// all — it just must never panic or silently invent a block neither instance
+// wrote, for a caller that calls PluginRefs before validation has run.
 func mergeIsolationBestEffort(a, b *IsolationConfig) *IsolationConfig {
 	merged, ok := combineIsolation(a, b)
 	if ok {
@@ -315,7 +324,7 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		}
 		p, seen := out[u.InstallKey()]
 		if !seen {
-			p = PluginRef{Name: u.Name, Instance: name, Use: u, Instances: map[string]ConnectorGrant{}}
+			p = PluginRef{Name: u.Name, Instance: name, Use: u, Instances: map[string]ConnectorGrant{}, TrustFull: true}
 		}
 		// Hardening and declared egress union across NON-ISOLATED instances
 		// only: the DEFAULT shared process runs once for every instance that
@@ -329,14 +338,23 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		// report it precisely.
 		if !ref.Isolate {
 			p.Isolation = mergeIsolationBestEffort(p.Isolation, ref.Isolation)
-			p.Network = appendUnique(p.Network, ref.Network...)
+			// network:/allow_env narrow one shared process: every instance
+			// it serves must say the same (checkPluginJail), so this is that
+			// one list. Set-but-empty stays set: it narrows to nothing.
+			p.Network = unionNarrowing(p.Network, ref.Network)
 			p.AllowSecrets = appendUnique(p.AllowSecrets, ref.AllowSecrets...)
-			p.AllowEnv = appendUnique(p.AllowEnv, ref.AllowEnv...)
+			p.AllowEnv = unionNarrowing(p.AllowEnv, ref.AllowEnv)
+			p.Conns = append(p.Conns, ref.Conn())
+			// The shared process is unjailed only when every instance it
+			// serves says so (validateTrust refuses a mix).
+			p.TrustFull = p.TrustFull && ref.TrustFull()
 		}
 		p.Instances[name] = ConnectorGrant{
-			Network:      append([]string(nil), ref.Network...),
+			Conn:         ref.Conn(),
+			TrustFull:    ref.TrustFull(),
+			Network:      CloneNarrowing(ref.Network),
 			AllowSecrets: append([]string(nil), ref.AllowSecrets...),
-			AllowEnv:     append([]string(nil), ref.AllowEnv...),
+			AllowEnv:     CloneNarrowing(ref.AllowEnv),
 			Isolation:    ref.Isolation,
 			Isolate:      ref.Isolate,
 			Use:          u,
@@ -359,7 +377,10 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		// the reference leaf (`runtimes: { modal: { use: acme/p/conductor-modal } }`
 		// is selected as `runtime: modal`).
 		u.Name = name
-		p := PluginRef{Name: name, Instance: name, Use: u, Isolation: rt.Isolation}
+		p := PluginRef{Name: name, Instance: name, Use: u, TrustFull: strings.EqualFold(strings.TrimSpace(rt.Trust), "full")}
+		if rt.Connection != nil {
+			p.Conns = []map[string]any{rt.Connection}
+		}
 		out[u.InstallKey()] = p
 	}
 
@@ -385,31 +406,12 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		ec := c.Engines[u.Name]
 		p.Network = ec.Network
 		p.AllowSecrets = ec.AllowSecrets
-		switch {
-		case ec.TrustFull():
-			p.TrustFull = true // unconfined, deliberately — stay quiet
-		case ec.Isolation != nil:
-			p.Isolation = ec.Isolation // explicit → fail-closed
-		default:
-			p.Isolation = defaultEngineIsolation() // untrusted default → best-effort
-			p.IsolationDefaulted = true
-		}
+		// Jailed to what the engine declares (usually nothing) unless the
+		// operator opted it out.
+		p.TrustFull = ec.TrustFull()
 		out[u.InstallKey()] = p
 	})
 	return out
-}
-
-// defaultEngineIsolation is the sandbox an untrusted-by-default code engine gets
-// when the operator sets nothing: a user+pid+mount namespace with the network
-// denied. A code engine is pure computation over inputs delivered on its RPC
-// transport, so denying egress and masking the daemon's own state/config costs
-// it nothing while turning its "no declared capabilities" into a kernel-enforced
-// wall. Enforcement is best-effort (see PluginRef.IsolationDefaulted).
-func defaultEngineIsolation() *IsolationConfig {
-	return &IsolationConfig{
-		Mode:    "namespace",
-		Network: &IsolationNetwork{Deny: true},
-	}
 }
 
 // defaultCodeIsolation is the sandbox a LOCAL cli/host code step (including
@@ -525,72 +527,127 @@ func (c *Config) validatePluginRefs() error {
 	if engErr != nil {
 		return engErr
 	}
-	return c.checkIsolationMerge()
+	return c.checkPluginJail()
 }
 
-// checkIsolationMerge is the OFFLINE half of the isolation-merge check
-// PluginRefs' own merge (mergeIsolationBestEffort) defers to: every
-// NON-ISOLATED instance that shares one process must have isolation: blocks
-// that actually combine into a single block that process can run under
-// (combineIsolation) — a plugin with two non-isolated instances declaring
-// mode: namespace and mode: container, say, cannot be satisfied by any one
-// process. The fix the error names is either make the blocks match or set
-// isolate: true on one of them (giving it, and the conflict, its own process).
-//
-// Side-by-side versions (docs/wiki/Plugins.md): config validation runs
-// before install state is ever consulted, so it cannot know which CONCRETE
-// version two differently-WRITTEN `use:` constraints resolve to — only
-// whether they are the identical reference text, which is always the same
-// version. Grouping here is therefore by (key, raw `use:` text), not by key
-// alone: two instances with the exact same pin (or the exact same unpinned
-// reference) are PROVABLY one process and are checked here, offline, for a
-// fast load-time error; two instances whose constraints merely MIGHT
-// resolve to the same version (two different ranges that happen to pick the
-// same release) are deferred to the authoritative check internal/plugin
-// runs once install state is joined and the real grouping is known
-// (cmd/conductor's checkIsolateAgainstKnownSingleProcess's sibling for
-// isolation, loadConnectorPlugins).
-func (c *Config) checkIsolationMerge() error {
-	type entry struct {
-		instance  string
-		isolation *IsolationConfig
+// checkPluginJail refuses what the declared-capability jail replaced: an
+// `isolation:` block on a plugin (the plugin's declaration is its jail; a
+// config may narrow it with network:/allow_env, or opt out with trust: full,
+// never widen it), a trust value other than full, and a shared process whose
+// instances disagree on trust.
+func (c *Config) checkPluginJail() error {
+	trustOK := func(where, v string) error {
+		if t := strings.TrimSpace(v); t != "" && !strings.EqualFold(t, "full") {
+			return fmt.Errorf("config: %s: trust must be \"full\" (run the plugin outside its jail) or empty, got %q", where, v)
+		}
+		return nil
 	}
-	byKey := map[string][]entry{}
+	isoErr := func(where string) error {
+		return fmt.Errorf("config: %s: isolation: was removed for plugins — every plugin now runs jailed to exactly what it declares (`conductor plugin show <name>` lists it). Delete the isolation: block; to narrow the plugin use network:/allow_env, to run it unconfined as before set trust: full (docs/wiki/Plugins.md \"Upgrading\")", where)
+	}
 	names := make([]string, 0, len(c.ConnectorsMap))
 	for n := range c.ConnectorsMap {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	shared := map[string]string{} // group → first instance's trust
+	sharedFrom := map[string]string{}
+	narrowing := map[string]string{} // group → first instance's network:/allow_env
 	for _, name := range names {
 		ref := c.ConnectorsMap[name]
-		if ref.Isolate {
-			continue
-		}
 		u, err := ref.Resolved()
 		if err != nil || u.IsBuiltin() {
 			continue
 		}
-		groupKey := u.InstallKey() + "\x00" + u.String()
-		byKey[groupKey] = append(byKey[groupKey], entry{name, ref.Isolation})
-	}
-	for groupKey, entries := range byKey {
-		if len(entries) < 2 {
+		where := "connectors." + name
+		if err := trustOK(where, ref.Trust); err != nil {
+			return err
+		}
+		if ref.Isolation != nil {
+			return isoErr(where)
+		}
+		if ref.Isolate {
 			continue
 		}
-		key, _, _ := strings.Cut(groupKey, "\x00")
-		combined := entries[0].isolation
-		combinedFrom := entries[0].instance
-		for _, e := range entries[1:] {
-			merged, ok := combineIsolation(combined, e.isolation)
-			if !ok {
-				name := strings.TrimPrefix(key, UseKindConnector.Dir()+"/")
-				return fmt.Errorf("config: connectors: %s and %s share the %s plugin %s's one process by default, but declare different isolation: blocks that cannot combine — make them match, or set isolate: true on one to give it its own process",
-					combinedFrom, e.instance, key, name)
-			}
-			combined = merged
+		g := u.InstallKey() + "\x00" + u.String()
+		t := fmt.Sprint(ref.TrustFull())
+		if prev, ok := shared[g]; ok && prev != t {
+			return fmt.Errorf("config: connectors: %s and %s share one plugin process but only one sets trust: full — set it on both, or isolate: true one of them", sharedFrom[g], name)
+		}
+		// network: and allow_env narrow the one process instances share, so
+		// they must agree: one instance's narrowing would otherwise narrow
+		// its siblings too, and neither would get what it set.
+		n := "network: " + narrowingKey(ref.Network) + ", allow_env: " + narrowingKey(ref.AllowEnv)
+		if prev, ok := narrowing[g]; ok && prev != n {
+			return fmt.Errorf("config: connectors: %s and %s share one plugin process but narrow it differently (%s vs %s) — set the same network:/allow_env on both, or isolate: true one of them", sharedFrom[g], name, prev, n)
+		}
+		shared[g], sharedFrom[g], narrowing[g] = t, name, n
+	}
+	rnames := make([]string, 0, len(c.Runtimes))
+	for n := range c.Runtimes {
+		rnames = append(rnames, n)
+	}
+	sort.Strings(rnames)
+	for _, n := range rnames {
+		rt := c.Runtimes[n]
+		u, err := rt.Resolved()
+		if err != nil || u.IsBuiltin() {
+			continue
+		}
+		if err := trustOK("runtimes."+n, rt.Trust); err != nil {
+			return err
+		}
+		if rt.Isolation != nil {
+			return isoErr("runtimes." + n)
+		}
+	}
+	enames := make([]string, 0, len(c.Engines))
+	for n := range c.Engines {
+		enames = append(enames, n)
+	}
+	sort.Strings(enames)
+	for _, n := range enames {
+		if c.Engines[n].Isolation != nil {
+			return isoErr("engines." + n)
 		}
 	}
 	return nil
+}
+
+// CloneNarrowing copies a network:/allow_env list keeping the difference
+// between unset (nil: everything the plugin declares) and set but empty
+// (nothing).
+func CloneNarrowing(l []string) []string {
+	if l == nil {
+		return nil
+	}
+	return append([]string{}, l...)
+}
+
+// unionNarrowing joins two instances' network:/allow_env for the one process
+// they share: unset only when both are.
+func unionNarrowing(a, b []string) []string {
+	if a == nil && b == nil {
+		return nil
+	}
+	return appendUnique(CloneNarrowing(append([]string{}, a...)), b...)
+}
+
+// UnionNarrowing is unionNarrowing, for internal/plugin's process groups.
+func UnionNarrowing(a, b []string) []string { return unionNarrowing(a, b) }
+
+// narrowingKey identifies a network:/allow_env setting for comparison:
+// unset, or the set of names.
+func narrowingKey(l []string) string {
+	if l == nil {
+		return "unset"
+	}
+	s := append([]string(nil), l...)
+	for i := range s {
+		s[i] = strings.TrimSpace(s[i])
+	}
+	sort.Strings(s)
+	return "[" + strings.Join(s, ",") + "]"
 }
 
 func errConflict(kind UseKind, name, aInst, aSrc, bInst, bSrc string) error {

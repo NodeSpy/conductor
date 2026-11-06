@@ -2,11 +2,13 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
 )
@@ -34,6 +36,9 @@ const (
 	ActionLocal = "local"
 	// ActionSkipped — a gaps-only pass left an already-installed plugin alone.
 	ActionSkipped = "skipped"
+	// ActionHeld — a newer build declares more than the installed one; it
+	// waits for `conductor plugin approve` and the installed one keeps running.
+	ActionHeld = "held"
 	// ActionFailed — resolution failed; see Err.
 	ActionFailed = "failed"
 )
@@ -70,7 +75,10 @@ type Resolution struct {
 	PrevSha  string // the sha this replaced, when it changed
 	Path     string // installed binary path
 	Manifest Manifest
-	Err      error
+	// Widens, on a held update, is what the newer build asks for beyond the
+	// installed one.
+	Widens []string
+	Err    error
 }
 
 // Changed reports whether this resolution moved anything on disk.
@@ -241,32 +249,50 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 		return res, false
 	}
 
+	adopted := false
+	for _, v := range state.AllVersions(key) {
+		if _, ok := adoptLegacyRecord(ref, v, state, opts); ok {
+			adopted = true
+		}
+	}
+	if adopted {
+		prev, installed = state.GetForConstraint(key, ref.Use)
+	}
+
 	// Stay-current is the default; an exact @version pin is the opt-out. A
 	// gaps-only pass (boot) leaves anything installed exactly where it is.
 	if installed {
 		if opts.GapsOnly {
 			res.Action, res.Tag, res.Sha, res.Path = ActionSkipped, prev.Resolved, prev.Sha256, prev.Path
 			res.Manifest = prev.Manifest
-			return res, false
+			return res, adopted
 		}
 		if ref.Use.IsPinned() && !opts.Force && prev.Use == ref.Use.String() && binaryPresent(prev.Path) {
 			res.Action, res.Tag, res.Sha, res.Path = ActionPinned, prev.Resolved, prev.Sha256, prev.Path
 			res.Manifest = prev.Manifest
-			return res, false
+			changed := adopted
+			if opts.recheck() {
+				rec, w, ch := recheckInstalled(ref, prev, state, opts)
+				res.Manifest, changed = rec.Manifest, changed || ch
+				if len(w) > 0 {
+					res.Action, res.Widens = ActionHeld, w
+				}
+			}
+			return res, changed
 		}
 	}
 
 	rs := RemoteSource{URL: ref.Use.GitURL(), Component: ref.Use.Component}
 	cacheDirFor := func(tag string) string { return BinDirForVersion(state.Dir(), key, tag, ref.Source()) }
-	binPath, tag, sha, verified, err := FetchRemoteVerified(rs, ref.Use.Version, "", cacheDirFor, api)
+	binPath, tag, sha, verified, err := fetchRemoteChecked(rs, ref.Use.Version, "", cacheDirFor, api, refuseRepublished(state, key, ref.Source(), ref.Name, opts.Force))
 	if err != nil {
 		res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %w", ref.Name, err)
 		if installed {
 			// Degrade, do not fail: keep running the build we already have.
 			res.Tag, res.Sha, res.Path, res.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
-			opts.logf("plugin %s: could not reach %s (%v) — keeping the installed build %s (%s)", ref.Name, ref.Source(), err, prev.Resolved, shortSha(prev.Sha256))
+			logKeeping(opts, ref.Name, ref.Source(), err, prev)
 		}
-		return res, false
+		return res, adopted
 	}
 
 	res.Tag, res.Sha, res.Path = tag, sha, binPath
@@ -298,17 +324,38 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 		// Nothing moved, but the reference text may have changed (a widened
 		// constraint), or this fetch verified a build an older record did not
 		// mark verified; keep the record honest.
+		changed := adopted
 		if prev.Use != ref.Use.String() || prev.ReleaseVerified != verified {
 			prev.Use = ref.Use.String()
 			prev.ReleaseVerified = verified
 			state.Put(prev)
-			return res, true
+			changed = true
 		}
-		return res, false
+		if opts.recheck() {
+			rec, w, ch := recheckInstalled(ref, prev, state, opts)
+			res.Manifest, changed = rec.Manifest, changed || ch
+			if len(w) > 0 {
+				res.Action, res.Widens = ActionHeld, w
+			}
+		}
+		return res, changed
 	case installed:
 		res.Action, res.PrevSha = ActionUpdated, prev.Sha256
+		if same, ok := state.GetVersion(key, tag, ref.Source()); ok && same.Sha256 != sha {
+			// --force took a re-published build of an installed release:
+			// it is compared against the build it replaces.
+			prev = same
+			res.PrevSha = prev.Sha256
+		}
 	default:
 		res.Action = ActionInstalled
+		// A changed constraint or pin that lands on a version not installed
+		// yet still replaces what the user agreed to: compare against the
+		// newest build of this plugin from this source that is installed.
+		if other := versionsForSource(state.AllVersions(key), ref.Source()); len(other) > 0 {
+			prev, installed = other[len(other)-1], true
+			res.Action, res.PrevSha = ActionUpdated, prev.Sha256
+		}
 	}
 
 	// Record the permission manifest (and the declared kind) by describing the
@@ -322,16 +369,40 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 	if opts.Describe != nil {
 		spec := SpecFromRef(ref, "", rec, true)
 		decl, derr := opts.Describe(context.Background(), spec)
+		if derr == nil {
+			derr = checkDeclKind(ref, decl)
+			if derr == nil {
+				if err := validateCaps(decl.Capabilities, decl.Connection); err != nil {
+					derr = fmt.Errorf("%s declares capabilities that do not validate: %w", tag, err)
+				}
+			}
+		} else {
+			derr = fmt.Errorf("installed %s but it could not describe itself: %w", tag, derr)
+		}
 		if derr != nil {
-			res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: installed %s but it could not describe itself: %w", ref.Name, tag, derr)
-			return res, false
+			res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %w", ref.Name, derr)
+			if installed {
+				// Nothing is recorded for the new build: the installed
+				// one keeps running, and is kept.
+				res.Tag, res.Sha, res.Path, res.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
+			}
+			return res, adopted
 		}
-		if err := checkDeclKind(ref, decl); err != nil {
-			res.Action, res.Err = ActionFailed, err
-			return res, false
-		}
-		rec.Manifest = manifestFromDecl(decl)
+		rec.Manifest, rec.ManifestSchema = manifestFromDecl(decl), manifestSchema
 	}
+	if res.Action == ActionUpdated {
+		// An update that asks for more than the user agreed to waits for
+		// them; the installed build keeps running meanwhile.
+		if w := prev.Manifest.Widens(rec.Manifest); len(w) > 0 && !state.approved(rec) {
+			state.putPending(Pending{Installed: rec, Replaces: prev.Resolved, Widens: w})
+			res.Action, res.Widens = ActionHeld, w
+			res.Tag, res.Sha, res.Path, res.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
+			opts.logf("plugin %s: update %s -> %s HELD: it asks for more than %s — %s. The installed build keeps running; `conductor plugin approve %s` accepts it",
+				ref.Name, prev.Resolved, tag, prev.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, rec))
+			return res, true
+		}
+	}
+	state.dropPending(rec.Key, rec.Source)
 	res.Manifest = rec.Manifest
 	state.Put(rec)
 
@@ -343,6 +414,117 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 			ref.Name, tag, ref.Source(), shortSha(sha), rec.Manifest.Summary())
 	}
 	return res, true
+}
+
+// recheck: this pass re-describes builds that are already current — a
+// named `plugin update <name>`, or --force — so a build whose declaration
+// grew past its record is held for approval rather than silently denied.
+func (o Options) recheck() bool { return !o.GapsOnly && o.Describe != nil && (o.Only != "" || o.Force) }
+
+// describeBuild describes the build rec records (its binary is verified
+// against rec.Sha256 before it runs, and it runs jailed to nothing) and
+// returns what it declares.
+func describeBuild(ref config.PluginRef, rec Installed, opts Options) (Manifest, error) {
+	rec.Manifest = Manifest{}
+	decl, err := opts.Describe(context.Background(), SpecFromRef(ref, "", rec, true))
+	if err != nil {
+		return Manifest{}, fmt.Errorf("plugin %s: %s could not describe itself: %w", ref.Name, rec.Resolved, err)
+	}
+	if err := checkDeclKind(ref, decl); err != nil {
+		return Manifest{}, err
+	}
+	if err := validateCaps(decl.Capabilities, decl.Connection); err != nil {
+		return Manifest{}, fmt.Errorf("plugin %s: %s declares capabilities that do not validate: %w", ref.Name, rec.Resolved, err)
+	}
+	return manifestFromDecl(decl), nil
+}
+
+// adoptLegacyRecord records the full declaration of an installed build whose
+// record a conductor without the jail wrote (Installed.Legacy: loaded from a
+// version 1 state file). That conductor recorded the build's egress,
+// commands, env, OAuth endpoints and single_process, but not what it reads,
+// writes, listens on or runs beyond its commands: those are taken from what
+// the build declares now, without a hold, since it ran with them unconfined.
+// The rest is compared like any update: what the build now declares beyond
+// the record is held for approval, and it runs jailed to the record
+// meanwhile. When the user agreed to a build before a rollback
+// (consentFile), the last agreement is the record instead: for this build,
+// or, when the older conductor installed this one meanwhile, for the one
+// before it, so a build it re-installed that declares more (an update this
+// conductor held) is held again, and reported loudly. Once per record; a build that cannot be described
+// keeps its old record (and is jailed to it), and the next pass tries again.
+func adoptLegacyRecord(ref config.PluginRef, rec Installed, state *InstallState, opts Options) (Installed, bool) {
+	if !rec.Legacy || opts.Describe == nil || rec.Sha256 == "" || !binaryPresent(rec.Path) {
+		return rec, false
+	}
+	m, err := describeBuild(ref, rec, opts)
+	if err != nil {
+		opts.logf("plugin %s: its install record predates declared permissions, and recording them failed: %v — it runs jailed to the old record until this succeeds", ref.Name, err)
+		return rec, false
+	}
+	base := rec.Manifest
+	base.Listen, base.Read, base.Write, base.Exec, base.Keychain = m.Listen, m.Read, m.Write, m.Exec, m.Keychain
+	replaces := rec.Resolved
+	// The user's last agreement (consentFile) is the record: for this
+	// build, or for the one before it when the older conductor installed
+	// this one meanwhile (a rollback re-installs the newest release, which
+	// may be an update this conductor held). What that conductor recorded
+	// for a build it installed is no agreement.
+	consented, hadConsent := state.consentedFor(rec.Key, rec.Source, rec.Sha256)
+	rolled := hadConsent && consented.Sha256 != rec.Sha256
+	if hadConsent {
+		base = consented.Manifest
+		replaces = consented.Resolved
+	}
+	next := rec
+	next.Legacy, next.ManifestSchema, next.Manifest = false, manifestSchema, m
+	cur := next
+	switch w := base.Widens(m); {
+	case len(w) == 0 || state.approved(next):
+		state.Put(next)
+		opts.logf("plugin %s: recorded what %s declares (its install record predates declared permissions, and it ran unconfined until now): %s", ref.Name, rec.Resolved, m.Summary())
+	case rolled:
+		cur.Manifest = base
+		state.Put(cur)
+		state.putPending(Pending{Installed: next, Replaces: replaces, Widens: w})
+		opts.logf("plugin %s: WARNING: %s was installed by a conductor without the plugin jail (a rollback) and ran unconfined. It declares more than you agreed to for %s — %s. HELD: it runs jailed to what you agreed to for %s; review it with `conductor plugin approve`, accept it with `conductor plugin approve %s`, or pin %s",
+			ref.Name, rec.Resolved, consented.Resolved, strings.Join(w, "; "), consented.Resolved, ApproveArg(ref.Name, next), consented.Resolved)
+	default:
+		cur.Manifest = base
+		state.Put(cur)
+		state.putPending(Pending{Installed: next, Replaces: replaces, Widens: w})
+		opts.logf("plugin %s: %s declares more than its install record — %s. HELD: it runs jailed to the record; `conductor plugin approve %s` accepts it",
+			ref.Name, rec.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, next))
+	}
+	return cur, true
+}
+
+// recheckInstalled re-describes an installed build (recheck). One that
+// declares more than its record is held for approval like a widening update,
+// and keeps running jailed to the record; one that declares the same or less
+// is recorded. It returns the record in force, what the build asks for
+// beyond it (held), and whether install state changed.
+func recheckInstalled(ref config.PluginRef, prev Installed, state *InstallState, opts Options) (Installed, []string, bool) {
+	m, err := describeBuild(ref, prev, opts)
+	if err != nil {
+		opts.logf("%v — its record is unchanged", err)
+		return prev, nil, false
+	}
+	next := prev
+	next.Manifest, next.ManifestSchema = m, manifestSchema
+	if prev.ManifestSchema == manifestSchema && reflect.DeepEqual(m, prev.Manifest) {
+		return prev, nil, false
+	}
+	if w := prev.Manifest.Widens(m); len(w) > 0 && !state.approved(next) {
+		state.putPending(Pending{Installed: next, Replaces: prev.Resolved, Widens: w})
+		opts.logf("plugin %s: %s declares more than its install record — %s. HELD: it keeps running jailed to the record; `conductor plugin approve %s` accepts it",
+			ref.Name, prev.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, next))
+		return prev, w, true
+	}
+	state.dropPending(next.Key, next.Source)
+	state.Put(next)
+	opts.logf("plugin %s: recorded what %s declares: %s", ref.Name, next.Resolved, m.Summary())
+	return next, nil, true
 }
 
 // pinnedTagCache memoizes ReleaseAPI.ListTags by RemoteSource for the span of
@@ -431,6 +613,11 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 	// "this instance's own previous build" just because the tag string
 	// matches (it would misclassify Current/Updated against the wrong sha,
 	// and misreport a cross-source sha in a log line).
+	for _, v := range state.AllVersions(key) {
+		if _, ok := adoptLegacyRecord(ref, v, state, opts); ok {
+			dirty = true
+		}
+	}
 	prevVersions := state.AllVersions(key)
 	hadAnyPrevBySource := make(map[string]bool, len(prevVersions))
 	prevRepShaBySource := make(map[string]string, len(prevVersions))
@@ -454,6 +641,10 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 	// second instance's install-state record would claim ITS source fetched
 	// a binary it never actually downloaded or verified).
 	buckets := map[string]*bucketResult{}
+	// replaced keeps, by (source, tag), an installed record phase 1
+	// overwrote with a re-published build of the same release, for phase
+	// 2's comparison and to put back.
+	replaced := map[string]Installed{}
 
 	for _, n := range names {
 		g := ref.Instances[n]
@@ -523,7 +714,7 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 			b = &bucketResult{}
 			buckets[bucketKey] = b
 			cacheDirFor := func(t string) string { return BinDirForVersion(state.Dir(), key, t, u.Source()) }
-			binPath, _, sha, verified, ferr := FetchRemoteVerified(rs, u.Version, "", cacheDirFor, api)
+			binPath, _, sha, verified, ferr := fetchRemoteChecked(rs, u.Version, "", cacheDirFor, api, refuseRepublished(state, key, u.Source(), ref.Name, opts.Force))
 			if ferr != nil {
 				b.err = fmt.Errorf("plugin %s: %w", ref.Name, ferr)
 			} else {
@@ -534,14 +725,15 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 			base.Action, base.Err = ActionFailed, b.err
 			if installed {
 				base.Tag, base.Sha, base.Path, base.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
-				opts.logf("plugin %s: could not reach %s (%v) — keeping the installed build %s (%s)", ref.Name, instRef.Source(), b.err, prev.Resolved, shortSha(prev.Sha256))
+				logKeeping(opts, ref.Name, instRef.Source(), b.err, prev)
 			}
 			perInstance[n] = base
 			continue
 		}
 
 		base.Sha, base.Path = b.sha, b.binPath
-		if prevForTag, had := prevByKey[u.Source()+"\x00"+tag]; had && prevForTag.Sha256 == b.sha {
+		prevForTag, had := prevByKey[u.Source()+"\x00"+tag]
+		if had && prevForTag.Sha256 == b.sha {
 			base.Action, base.Manifest = ActionCurrent, prevForTag.Manifest
 			// Report (and keep using) the RECORDED path, not wherever this
 			// pass just fetched a byte-identical copy to — see the
@@ -582,16 +774,23 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 				state.Put(prevForTag)
 				dirty = true
 			}
+		} else if had {
+			// --force took a re-published build of an installed release
+			// (refuseRepublished): it is compared against the build it
+			// replaces, which phase 1's record below overwrites.
+			base.Action, base.PrevSha = ActionUpdated, prevForTag.Sha256
+			replaced[u.Source()+"\x00"+tag] = prevForTag
 		} else if hadAnyPrevBySource[u.Source()] {
 			base.Action, base.PrevSha = ActionUpdated, prevRepShaBySource[u.Source()]
 		} else {
 			base.Action = ActionInstalled
 		}
 		if base.Action == ActionInstalled || base.Action == ActionUpdated {
-			rec := Installed{Key: key, Kind: ref.Kind(), Name: ref.Name, Use: u.String(), Source: instRef.Source(), Resolved: tag, Sha256: b.sha, Path: b.binPath, ReleaseVerified: b.verified}
-			if existing, ok := state.GetVersion(key, tag, u.Source()); ok {
-				rec.Manifest = existing.Manifest
-			}
+			// A placeholder until phase 2 describes the build: it carries
+			// the schema marker with nothing recorded, so it grants nothing
+			// and is never mistaken for a record to adopt. A failed
+			// describe removes it again (undo below).
+			rec := Installed{Key: key, Kind: ref.Kind(), Name: ref.Name, Use: u.String(), Source: instRef.Source(), Resolved: tag, Sha256: b.sha, Path: b.binPath, ReleaseVerified: b.verified, ManifestSchema: manifestSchema}
 			state.Put(rec)
 			dirty = true
 		}
@@ -618,6 +817,7 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 		err      error
 	}
 	describeCache := map[string]*described{}
+	rechecked := map[string]bool{}
 
 	out := make([]Resolution, 0, len(groups))
 	for _, g := range groups {
@@ -656,8 +856,11 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 				case checkDeclKind(ref, decl) != nil:
 					res.Action, res.Err = ActionFailed, checkDeclKind(ref, decl)
 					cb.err = res.Err
+				case validateCaps(decl.Capabilities, decl.Connection) != nil:
+					res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %s declares capabilities that do not validate: %w", ref.Name, res.Tag, validateCaps(decl.Capabilities, decl.Connection))
+					cb.err = res.Err
 				default:
-					rec.Manifest = manifestFromDecl(decl)
+					rec.Manifest, rec.ManifestSchema = manifestFromDecl(decl), manifestSchema
 					state.Put(rec)
 					dirty = true
 					res.Manifest = rec.Manifest
@@ -665,12 +868,56 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 				}
 				describeCache[describeKey] = cb
 			}
+			prev, hadPrev := replaced[res.Source+"\x00"+res.Tag]
+			if !hadPrev && res.PrevSha != "" {
+				prev, hadPrev = state.findSha(key, res.Source, res.PrevSha)
+			}
+			// undo takes phase 1's record of the new build back out: the
+			// installed build it replaced is put back, and stays in use.
+			undo := func() {
+				if p, ok := replaced[res.Source+"\x00"+res.Tag]; ok {
+					state.Put(p)
+				} else {
+					state.deleteRecord(key, res.Tag, res.Source)
+				}
+				dirty = true
+				if hadPrev {
+					res.Tag, res.Sha, res.Path, res.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
+				}
+			}
+			if res.Action == ActionFailed {
+				undo()
+			}
+			if res.Action == ActionUpdated && res.Err == nil {
+				// The same hold reconcileOne applies (approve.go).
+				if hadPrev {
+					rec, _ := state.GetVersion(key, res.Tag, res.Source)
+					if w := prev.Manifest.Widens(rec.Manifest); len(w) > 0 && !state.approved(rec) {
+						undo()
+						state.putPending(Pending{Installed: rec, Replaces: prev.Resolved, Widens: w})
+						res.Action, res.Widens = ActionHeld, w
+						opts.logf("plugin %s: update %s -> %s HELD: it asks for more than %s — %s. The installed build keeps running; `conductor plugin approve %s` accepts it",
+							ref.Name, prev.Resolved, rec.Resolved, prev.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, rec))
+					} else {
+						state.dropPending(key, res.Source)
+					}
+				}
+			}
 			if res.Action == ActionUpdated {
-				opts.logf("plugin %s: updated %s -> %s (sha %s -> %s); permissions: %s",
-					ref.Name, "", res.Tag, shortSha(res.PrevSha), shortSha(res.Sha), res.Manifest.Summary())
+				opts.logf("plugin %s: updated -> %s (sha %s -> %s); permissions: %s",
+					ref.Name, res.Tag, shortSha(res.PrevSha), shortSha(res.Sha), res.Manifest.Summary())
 			} else if res.Action == ActionInstalled {
 				opts.logf("plugin %s: installed %s from %s (sha %s); permissions: %s",
 					ref.Name, res.Tag, instanceSource(g.ref), shortSha(res.Sha), res.Manifest.Summary())
+			}
+		} else if (res.Action == ActionCurrent || res.Action == ActionPinned) && opts.recheck() && !rechecked[res.Source+"\x00"+res.Tag] {
+			rechecked[res.Source+"\x00"+res.Tag] = true
+			if prev, ok := state.GetVersion(key, res.Tag, res.Source); ok {
+				rec, w, ch := recheckInstalled(g.ref, prev, state, opts)
+				res.Manifest, dirty = rec.Manifest, dirty || ch
+				if len(w) > 0 {
+					res.Action, res.Widens = ActionHeld, w
+				}
 			}
 		}
 		out = append(out, res)
@@ -682,6 +929,40 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 // the group's representative — used only for a log line.
 func instanceSource(ref config.PluginRef) string {
 	return ref.Use.Source()
+}
+
+// refuseRepublished refuses a downloaded build of a release that is
+// installed with a different sha: the release's asset was replaced after the
+// user installed it, which is how a compromised publisher would reach
+// installs that already trust the tag. The installed build keeps running.
+// --force takes it, compared like any update against the build it replaces:
+// held when it declares more, and then nothing of that release runs until
+// it is approved (its bytes replaced the installed build's).
+func refuseRepublished(state *InstallState, key, source, name string, force bool) func(tag, sha string) error {
+	return func(tag, sha string) error {
+		r, ok := state.GetVersion(key, tag, source)
+		if force || !ok || r.Sha256 == "" || strings.EqualFold(r.Sha256, sha) {
+			return nil
+		}
+		return &republishedError{tag: tag, have: r.Sha256, got: sha, name: name}
+	}
+}
+
+type republishedError struct{ tag, have, got, name string }
+
+func (e *republishedError) Error() string {
+	return fmt.Sprintf("release %s now publishes a different build (sha %s) than the one installed from it (sha %s): its asset was replaced after it was installed. Refused; the installed build keeps running. `conductor plugin update %s --force` takes the new one (held for approval if it declares more)",
+		e.tag, shortSha(e.got), shortSha(e.have), e.name)
+}
+
+// logKeeping logs a failed fetch that leaves the installed build running.
+func logKeeping(opts Options, name, source string, err error, prev Installed) {
+	var rp *republishedError
+	if errors.As(err, &rp) {
+		opts.logf("plugin %s: %v", name, err)
+		return
+	}
+	opts.logf("plugin %s: could not reach %s (%v) — keeping the installed build %s (%s)", name, source, err, prev.Resolved, shortSha(prev.Sha256))
 }
 
 // checkDeclKind enforces the kind the reference was declared with against the
@@ -775,7 +1056,12 @@ func manifestFromDecl(decl *Decl) Manifest {
 	c := decl.Capabilities
 	return Manifest{
 		Egress:   append([]string(nil), c.Egress...),
+		Listen:   append([]string(nil), c.Listen...),
+		Read:     append([]string(nil), c.Read...),
+		Write:    append([]string(nil), c.Write...),
 		Commands: append([]string(nil), c.Commands...),
+		Exec:     append([]string(nil), c.Exec...),
+		Keychain: c.Keychain,
 		FS:       append([]string(nil), c.FS...),
 		Spawns:   c.Spawns || len(c.Commands) > 0,
 		Env:      append([]string(nil), c.Env...),

@@ -40,9 +40,10 @@ func describe() plugin.Decl {
 		Type: "acme-instance",
 		Desc: "reference per-instance-decl connector (example plugin)",
 		Connection: plugin.Schema{
-			"token": {Type: "string", Desc: "an example credential"},
+			"token":        {Type: "string", Desc: "an example credential"},
+			"describe_log": {Type: "string", Desc: "file each describe appends a line to (tests)"},
 		},
-		Capabilities: plugin.Capabilities{},
+		Capabilities: plugin.Capabilities{Write: []string{"config:describe_log"}},
 	}
 }
 

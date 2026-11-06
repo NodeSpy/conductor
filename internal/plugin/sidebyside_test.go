@@ -100,11 +100,13 @@ func sideBySideRef(t *testing.T) config.PluginRef {
 	uA, uB := base, base
 	uA.Version, uA.Raw = "=1.0.0", "acme/plugins/acme-echo@1.0.0"
 	uB.Version, uB.Raw = "=2.0.0", "acme/plugins/acme-echo@2.0.0"
+	// These tests are about side-by-side version grouping and reload
+	// mechanics, not the jail, so run trust: full.
 	return config.PluginRef{
-		Name: "acme-echo", Instance: "a", Use: uA,
+		Name: "acme-echo", Instance: "a", Use: uA, TrustFull: true,
 		Instances: map[string]config.ConnectorGrant{
-			"a": {Use: uA},
-			"b": {Use: uB},
+			"a": {Use: uA, TrustFull: true},
+			"b": {Use: uB, TrustFull: true},
 		},
 	}
 }

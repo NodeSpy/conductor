@@ -1,9 +1,18 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-// A code-step engine plugin with no `engines:` config is UNTRUSTED by default:
-// PluginRefs synthesizes a best-effort namespace sandbox with the network denied.
+// A code-step engine plugin with no `engines:` config is UNTRUSTED by
+// default — but the declared-capability jail replaced the old synthesized
+// best-effort namespace sandbox: PluginRefs no longer invents an isolation:
+// block for it at all (that whole mechanism, and defaultEngineIsolation with
+// it, is gone). Instead the engine plugin itself is jailed to exactly what
+// IT declares (internal/plugin's buildJailed), the same as every other
+// plugin: Isolation stays nil, IsolationDefaulted stays false, and TrustFull
+// stays false unless the operator opts out with `trust: full`.
 func TestEngineDefaultSandboxSynthesized(t *testing.T) {
 	c, err := loadYAML(t, engineWF+`      - { id: x, use: wasmtime, code: "x" }
 `)
@@ -14,17 +23,14 @@ func TestEngineDefaultSandboxSynthesized(t *testing.T) {
 	if !ok {
 		t.Fatalf("no engine ref; got %v", keysOf(c.PluginRefs()))
 	}
-	if !ref.IsolationDefaulted {
-		t.Fatal("an engine with no config must be sandboxed-by-default (IsolationDefaulted)")
-	}
 	if ref.TrustFull {
-		t.Fatal("default engine must not be TrustFull")
+		t.Fatal("an engine with no config must not be TrustFull — it is jailed by default")
 	}
-	if ref.Isolation == nil || ref.Isolation.Mode != "namespace" {
-		t.Fatalf("default sandbox should be mode namespace, got %+v", ref.Isolation)
+	if ref.Isolation != nil {
+		t.Fatalf("an engine's jail is its own declaration now, not a synthesized isolation: block: %+v", ref.Isolation)
 	}
-	if ref.Isolation.Network == nil || !ref.Isolation.Network.Deny {
-		t.Fatalf("default sandbox should deny network, got %+v", ref.Isolation.Network)
+	if ref.IsolationDefaulted {
+		t.Fatal("there is no more synthesized-default isolation for an engine (IsolationDefaulted must stay false)")
 	}
 }
 
@@ -52,23 +58,23 @@ func TestEngineTrustFullOptsOut(t *testing.T) {
 	}
 }
 
-// An explicit `isolation:` block is used verbatim and is NOT best-effort: it
-// keeps the fail-closed posture (IsolationDefaulted stays false).
+// An explicit `isolation:` block on an engine is now a LOAD ERROR: the
+// declared-capability jail replaced isolation: for every plugin (connector,
+// runtime, or engine) — an engine's jail is what it declares, narrowed by
+// network:/allow_env, or opted out of entirely with trust: full. There is no
+// more "explicit block wins, synthesized default is best-effort" distinction
+// to keep fail-closed; checkPluginJail refuses the key outright, naming it.
 func TestEngineExplicitIsolationIsFailClosed(t *testing.T) {
-	c, err := loadYAML(t, `engines:
+	_, err := loadYAML(t, `engines:
   wasmtime:
     isolation: { mode: namespace }
 `+engineWF+`      - { id: x, use: wasmtime, code: "x" }
 `)
-	if err != nil {
-		t.Fatalf("load: %v", err)
+	if err == nil {
+		t.Fatal("isolation: on an engine must be refused at load — it no longer applies to a plugin")
 	}
-	ref := c.PluginRefs()["engines/wasmtime"]
-	if ref.Isolation == nil || ref.Isolation.Mode != "namespace" {
-		t.Fatalf("explicit isolation should be used, got %+v", ref.Isolation)
-	}
-	if ref.IsolationDefaulted {
-		t.Fatal("an operator-written isolation block must NOT be marked defaulted (it fails closed)")
+	if !strings.Contains(err.Error(), "engines.wasmtime") || !strings.Contains(err.Error(), "isolation") {
+		t.Fatalf("error must name the engine and isolation:, got: %v", err)
 	}
 }
 

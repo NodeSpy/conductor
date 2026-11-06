@@ -130,6 +130,10 @@ type Spec struct {
 	ReleaseVerified bool
 	// Manifest is the permission manifest recorded at install.
 	Manifest Manifest
+	// Conns are the connection configs of the instances this process
+	// serves: what the plugin's "config:" capability references resolve
+	// against (nil for a type-level probe, which serves none).
+	Conns []map[string]any
 	// Network is the referencing connector's declared egress.
 	Network []string
 	// Isolation is OPTIONAL OS hardening. nil is the normal case.

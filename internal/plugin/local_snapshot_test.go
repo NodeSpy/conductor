@@ -556,6 +556,10 @@ func TestClientStartTouchesLocalSnapshotOnSpawn(t *testing.T) {
 	}
 	spec.Probe = false          // stand in for a live per-instance process, not the type-level probe
 	spec.Manifest.Spawns = true // see comment above
+	// This test is about the GC/snapshot touch-on-spawn mechanic, not the
+	// jail — trust: full skips buildJailed's "conductor's own binary is not
+	// wired" preflight so the spawn can run without a built conductor binary.
+	spec.TrustFull = true
 
 	dir := filepath.Dir(spec.BinPath)
 	old := time.Now().Add(-30 * 24 * time.Hour)

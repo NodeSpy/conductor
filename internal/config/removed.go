@@ -228,3 +228,21 @@ func (c *Config) scopedAgentCapWarnings() []string {
 }
 
 const scopedAgentCapIgnored = "ignored — read only in the global policy; use concurrency.max_runs to cap the runs of a connector or trigger"
+
+// emptyNarrowingWarnings name each connector whose `network: []` or
+// `allow_env: []` now grants none: before the plugin jail an empty list
+// passed everything the plugin declares, and a config written then loads
+// unchanged with the opposite meaning.
+func (c *Config) emptyNarrowingWarnings() []string {
+	var out []string
+	for name, ref := range c.ConnectorsMap {
+		if ref.Network != nil && len(ref.Network) == 0 {
+			out = append(out, fmt.Sprintf("connectors.%s.network: [] grants no network at all (before the plugin jail it granted every destination the plugin declares) — remove the key to grant those", name))
+		}
+		if ref.AllowEnv != nil && len(ref.AllowEnv) == 0 {
+			out = append(out, fmt.Sprintf("connectors.%s.allow_env: [] passes no variables at all (before the plugin jail it passed every one the plugin declares) — remove the key to pass those", name))
+		}
+	}
+	sort.Strings(out)
+	return out
+}

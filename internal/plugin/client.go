@@ -826,6 +826,16 @@ func (c *Client) Describe(ctx context.Context) (*Decl, error) {
 	if p := append(sdk.CheckSemantics(raw), sdk.ValidateSemantics(decl)...); len(p) > 0 {
 		return nil, fmt.Errorf("plugin %s: declarations refused:\n  %s", c.spec.Name, strings.Join(p, "\n  "))
 	}
+	if err := validateCaps(decl.Capabilities, decl.Connection); err != nil {
+		return nil, fmt.Errorf("plugin %s: declaration refused: %w", c.spec.Name, err)
+	}
+	if !c.spec.TrustFull && !c.spec.Manifest.IsZero() {
+		// The jail is the recorded manifest, whatever the build now says;
+		// a build declaring more than was agreed to gets none of it.
+		if w := c.spec.Manifest.Widens(manifestFromDecl(&decl)); len(w) > 0 {
+			c.deps.Log("plugin %s: declares more than its install record (%s) — not granted; `conductor plugin update %s` records it for approval", c.spec.Name, strings.Join(w, "; "), c.spec.Name)
+		}
+	}
 	c.recordCallTimeouts("", decl)
 	return &decl, nil
 }
@@ -1277,23 +1287,27 @@ func (p pidConn) Pid() int { return p.pid }
 // realDial spawns the verified, sandbox-wrapped subprocess and wires the
 // JSON-RPC transport over its stdio, with stderr pumped through the redactor.
 func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
+	if s.Local && !s.TrustFull && !s.Probe && s.Manifest.IsZero() {
+		// A local build has no install record: ask it what it declares, from
+		// a jail with nothing in it, and jail it to that. The operator built
+		// it and pointed conductor at it; the log line is what they see.
+		m, err := localManifest(ctx, s, d)
+		if err != nil {
+			return nil, nil, err
+		}
+		s.Manifest = m
+	}
 	cmd, cleanup, sandboxed, err := buildCommand(s, d.Sandbox)
 	if err != nil {
 		return nil, nil, err
 	}
 	switch {
+	case sandboxed && s.Probe:
+		d.Log("plugin %s: describing it from an empty jail", s.Name)
 	case sandboxed:
-		// A confirmed OS jail — say so positively (this is the good path for an
-		// untrusted-by-default code engine).
-		d.Log("plugin %s: OS-sandboxed", s.Name)
+		d.Log("plugin %s: jailed to what it declares: %s", s.Name, s.Manifest.Summary())
 	case s.TrustFull:
-		// The operator opted this engine out of sandboxing deliberately — quiet.
-	case s.IsolationDefaulted:
-		// A synthesized default that degraded: buildCommand already logged the
-		// actionable warning at the point it knew why. Nothing to add.
-	default:
-		// The app-extension default for a connector/runtime with no isolation:.
-		d.Log("plugin %s: running WITHOUT OS sandbox (no isolation: block) — add one for filesystem/process confinement", s.Name)
+		d.Log("plugin %s: trust: full — running WITHOUT its jail (environment scrubbed only)", s.Name)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -1412,4 +1426,26 @@ func (c *Client) StagingDir(instance string) (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+// localManifest describes a local build from an empty jail and returns what
+// it declares, refused when the declaration does not validate.
+func localManifest(ctx context.Context, s Spec, d Deps) (Manifest, error) {
+	ps := s
+	ps.Probe, ps.Conns, ps.Manifest = true, nil, Manifest{}
+	t, done, err := realDial(ctx, ps, d)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer done()
+	defer t.Close()
+	var decl Decl
+	req := sdk.DescribeRequest{Host: &sdk.HostInfo{Version: d.HostVersion, Semantics: sdk.KnownSemantics()}}
+	if err := t.Call(ctx, MethodDescribe, req, &decl); err != nil {
+		return Manifest{}, fmt.Errorf("plugin %s: describe (local build): %w", s.Name, err)
+	}
+	if err := validateCaps(decl.Capabilities, decl.Connection); err != nil {
+		return Manifest{}, fmt.Errorf("plugin %s: declaration refused: %w", s.Name, err)
+	}
+	return manifestFromDecl(&decl), nil
 }

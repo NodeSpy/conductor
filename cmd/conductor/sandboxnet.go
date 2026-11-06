@@ -73,6 +73,9 @@ func runSandboxNet(args []string) int {
 		case args[i] == "--jail-tmp" && i+1 < len(args):
 			opt.JailTmp = args[i+1]
 			i++
+		case args[i] == "--base" && i+1 < len(args):
+			opt.Base = args[i+1]
+			i++
 		case args[i] == "--chdir" && i+1 < len(args):
 			opt.Chdir = args[i+1]
 			i++

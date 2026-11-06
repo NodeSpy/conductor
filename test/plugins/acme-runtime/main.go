@@ -59,7 +59,7 @@ func describe() plugin.Decl {
 			"calls_log":    {Type: "string", Desc: "file to append one line per call to"},
 			"fail_<verb>":  {Type: "string", Desc: "make that verb fail with this message (\"msg#N\" = first N calls only)"},
 		},
-		Capabilities: plugin.Capabilities{FS: []string{"calls_log"}},
+		Capabilities: plugin.Capabilities{Write: []string{"config:calls_log"}},
 	}
 	for _, v := range verbs {
 		d.Verbs = append(d.Verbs, plugin.Verb{Name: v, Desc: "reference " + v})

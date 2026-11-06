@@ -7,12 +7,14 @@
 connectors:
   gh:
     use: /usr/local/bin/conductor-github
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     api_base: http://mock-github:8080
     token: e2e-dummy-token
     repos: ["func/badfilter"]
 
   slack:
     use: /usr/local/bin/conductor-slack
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     api_base: http://sink-catcher:8080/slackapi
     bot_token: xoxb-e2e-dummy
 

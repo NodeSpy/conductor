@@ -12,10 +12,10 @@ func TestCheckNetworkWithinManifest(t *testing.T) {
 	declared := []string{"*.atlassian.net:443", "api.acme.dev"}
 
 	for _, ok := range [][]string{
-		{"acme.atlassian.net:443"},                   // glob host, exact port
-		{"api.acme.dev:443"},                         // declared with no port: any port
-		{"api.acme.dev:8080"},                        //
-		{"acme.atlassian.net:443", "api.acme.dev:1"}, // several, all covered
+		{"acme.atlassian.net:443"},                     // glob host, exact port
+		{"api.acme.dev:443"},                           // declared with no port: :443, as the jail grants it
+		{"api.acme.dev"},                               // the same, bare
+		{"acme.atlassian.net:443", "api.acme.dev:443"}, // several, all covered
 		nil, // declaring nothing narrows nothing
 	} {
 		if err := CheckNetworkWithinManifest("jira", declared, ok); err != nil {
@@ -26,6 +26,7 @@ func TestCheckNetworkWithinManifest(t *testing.T) {
 	for _, bad := range [][]string{
 		{"evil.example:443"},                     // host not declared at all
 		{"acme.atlassian.net:22"},                // declared host, undeclared port
+		{"api.acme.dev:8080"},                    // a bare declared host is :443 only
 		{"acme.atlassian.net:443", "evil.dev:1"}, // one good, one not
 	} {
 		err := CheckNetworkWithinManifest("jira", declared, bad)
@@ -121,45 +122,6 @@ func TestEffectiveManifestProbeDropsEgressEnvAuthOnly(t *testing.T) {
 	}
 }
 
-// TestEffectiveManifestProbeKeepsDeclaredCommandOnPath is the end-to-end
-// shape of finding 1: a probe's declared command must still resolve on the
-// PATH commandPathDir builds for it (so a type-level describe that shells out
-// to a declared tool does not break during the probe), while the probe still
-// gets no egress.
-func TestEffectiveManifestProbeKeepsDeclaredCommandOnPath(t *testing.T) {
-	dir := t.TempDir()
-	bin := writeBin(t, dir, "b", []byte("x"), 0o755)
-	toolDir := t.TempDir()
-	tool := writeBin(t, toolDir, "mytool", []byte("x"), 0o755)
-	t.Setenv("PATH", toolDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	s := Spec{
-		Name:    "p",
-		BinPath: bin,
-		Probe:   true,
-		Manifest: Manifest{
-			Egress:   []string{"api.github.com:443"},
-			Commands: []string{"mytool"},
-		},
-	}
-	got, err := commandPathDir(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == "" {
-		t.Fatal("expected a confined PATH dir for the probe")
-	}
-	link := got + string(os.PathSeparator) + "mytool"
-	if resolved, err := os.Readlink(link); err != nil {
-		t.Fatalf("declared command %q was not placed on the probe's confined PATH: %v", link, err)
-	} else if resolved != tool {
-		t.Fatalf("confined PATH entry points at %q, want %q", resolved, tool)
-	}
-	if em := s.EffectiveManifest(); len(em.Egress) != 0 {
-		t.Fatalf("probe must still have no egress: %+v", em)
-	}
-}
-
 // TestEffectiveManifestNonProbeUnchanged guards against a fix that
 // accidentally changes the non-probe path: a real connector/runtime Spec's
 // EffectiveManifest must behave exactly as before (see TestEffectiveManifest
@@ -186,20 +148,15 @@ func TestEffectiveManifestNonProbeUnchanged(t *testing.T) {
 }
 
 func TestManifestSummary(t *testing.T) {
-	if s := (Manifest{}).Summary(); s != "no declared capabilities" {
+	if s := (Manifest{}).Summary(); s != "nothing (no network, no files beyond its own, no commands, no env)" {
 		t.Fatalf("empty manifest summary = %q", s)
 	}
 	m := Manifest{Egress: []string{"a:1"}, Commands: []string{"git", "gh"}, FS: []string{"/tmp"}}
 	s := m.Summary()
-	for _, want := range []string{"network a:1", "commands git,gh", "fs /tmp"} {
+	for _, want := range []string{"connects to: a:1", "runs: git, gh", "reads and writes: /tmp"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("summary %q missing %q", s, want)
 		}
-	}
-	// "I spawn things I am not naming" is surfaced AS SUCH rather than as an
-	// empty command list, because it is exactly what cannot be confined.
-	if s := (Manifest{Spawns: true}).Summary(); !strings.Contains(s, "unnamed") {
-		t.Fatalf("an unnamed-spawn declaration should be visible: %q", s)
 	}
 }
 
@@ -219,56 +176,6 @@ func TestHostGlobMatch(t *testing.T) {
 		if got := hostGlobMatch(tc.pattern, tc.host); got != tc.want {
 			t.Errorf("hostGlobMatch(%q,%q) = %v, want %v", tc.pattern, tc.host, got, tc.want)
 		}
-	}
-}
-
-// A plugin declaring commands it cannot name gets NO path rewrite — conductor
-// does not pretend to a confinement it is not performing.
-func TestUnnamedSpawnsGetNoPathConfinement(t *testing.T) {
-	dir := t.TempDir()
-	bin := writeBin(t, dir, "b", []byte("x"), 0o755)
-	s := Spec{Name: "p", BinPath: bin, Manifest: Manifest{Spawns: true}}
-	got, err := commandPathDir(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "" {
-		t.Fatalf("an unnamed-spawn plugin got a confined PATH (%q) — that would be a false claim", got)
-	}
-}
-
-// A declared command that is not installed on this box is simply absent from
-// the confined PATH; the plugin finds out when it tries to use it, and the
-// install does not fail over it.
-func TestMissingDeclaredCommandIsNotFatal(t *testing.T) {
-	dir := t.TempDir()
-	bin := writeBin(t, dir, "b", []byte("x"), 0o755)
-	s := Spec{Name: "p", BinPath: bin, Manifest: Manifest{Commands: []string{"definitely-not-installed-xyz"}}}
-	got, err := commandPathDir(s)
-	if err != nil {
-		t.Fatalf("a missing declared command must not fail the launch: %v", err)
-	}
-	if got == "" {
-		t.Fatal("expected a (empty) confined PATH dir")
-	}
-}
-
-// A declared "command" containing a path separator is not a command NAME and is
-// ignored rather than symlinked somewhere unexpected.
-func TestDeclaredCommandPathsIgnored(t *testing.T) {
-	dir := t.TempDir()
-	bin := writeBin(t, dir, "b", []byte("x"), 0o755)
-	s := Spec{Name: "p", BinPath: bin, Manifest: Manifest{Commands: []string{"../../bin/sh", "/bin/sh"}}}
-	got, err := commandPathDir(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == "" {
-		t.Fatal("expected a confined PATH dir")
-	}
-	// Nothing was linked: both entries were paths, not names.
-	if entries, _ := readDirNames(got); len(entries) != 0 {
-		t.Fatalf("path-shaped declarations were linked: %v", entries)
 	}
 }
 

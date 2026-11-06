@@ -157,7 +157,7 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 		Kind:      Kind(ref.Kind()),
 		Provides:  ref.Name,
 		Version:   ref.Version(),
-		TrustFull: ref.TrustFull,
+		TrustFull: ref.TrustFull && (Kind(ref.Kind()) != KindConnector || shared),
 		Shared:    shared,
 		Use:       ref.Use,
 	}
@@ -173,7 +173,9 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 		// plugin's declared egress" the way it would for an instance that
 		// simply didn't set `network:`.
 		s.Probe = true
+		s.TrustFull = false
 	} else {
+		s.Conns = ref.Conns
 		s.Isolation = ref.Isolation
 		s.IsolationDefaulted = ref.IsolationDefaulted
 		s.Network = ref.Network
@@ -219,8 +221,10 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 // (see SpecFromRef's doc comment): ghA's process gets exactly ghA's
 // allow_env/network/allow_secrets/isolation. A key missing from
 // spec.Instances (should not happen: config.PluginRefs populates one entry
-// per configured instance) leaves the per-instance Spec at its zero grant —
-// least privilege, not a silent widening. The returned Spec carries no
+// per configured instance) gets no connection config, no secrets and not
+// trust: full, and unset network:/allow_env, which narrow nothing: it is
+// jailed to everything the plugin declares that needs no config: value —
+// never more than the declaration, but not a zero grant. The returned Spec carries no
 // Instances map of its own: there is nothing sibling to it once it names one
 // instance.
 func InstanceSpec(spec Spec, instance string) Spec {
@@ -231,7 +235,11 @@ func InstanceSpec(spec Spec, instance string) Spec {
 		instSpec.AllowSecrets = g.AllowSecrets
 		instSpec.AllowEnv = g.AllowEnv
 		instSpec.Isolation = g.Isolation
+		instSpec.Conns = []map[string]any{g.Conn}
+		instSpec.TrustFull = g.TrustFull
 	} else {
+		instSpec.Conns = nil
+		instSpec.TrustFull = false
 		instSpec.Network = nil
 		instSpec.AllowSecrets = nil
 		instSpec.AllowEnv = nil

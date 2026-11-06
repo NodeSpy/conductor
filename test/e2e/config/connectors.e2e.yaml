@@ -7,6 +7,7 @@
 connectors:
   gh:
     use: /usr/local/bin/conductor-github
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     api_base: http://mock-github:8080
     app:
       app_id: 123456
@@ -31,6 +32,7 @@ connectors:
   # isolating every configured instance.
   ghshare:
     use: /usr/local/bin/conductor-github
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     api_base: http://mock-github:8080
     app:
       app_id: 123456
@@ -40,6 +42,7 @@ connectors:
 
   slack:
     use: /usr/local/bin/conductor-slack
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     api_base: http://sink-catcher:8080/slackapi
     # bot_token is all the verb-only face needs; app_token additionally opens
     # Socket Mode (group K10 below) against the sink-catcher's Socket Mode
@@ -79,6 +82,7 @@ connectors:
   # receives.
   aclisten:
     use: /usr/local/bin/conductor-acme-listener
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     listen: "0.0.0.0:18877"
     path: /acme-hook
     expose: tun
@@ -101,6 +105,7 @@ connectors:
   # fires.
   ghlisten:
     use: /usr/local/bin/conductor-github
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     api_base: http://mock-github:8080
     # isolate: true — K4-pid (test/e2e/run.sh) proves the opt-in half of the
     # process model alongside ghshare's proof of the default: ghlisten must
@@ -138,7 +143,13 @@ connectors:
   # smee.md's precedence note in the conductor-plugins repo).
   ghsmee:
     use: /usr/local/bin/conductor-smee
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     channel: "http://mock-smee:8080/e2e-gh-channel"
+
+# The plugin engine (group V) runs without its jail for the same reason as
+# the connectors above: this daemon is root in an unprivileged container.
+engines:
+  acme-engine: { trust: full }
 
 hosts:
   selfbox:

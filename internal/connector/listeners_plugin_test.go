@@ -44,7 +44,9 @@ func TestListenersEndToEndThroughARealPluginAndTunnel(t *testing.T) {
 	bin, sum := buildAcmeListenerPlugin(t)
 	addr := freeLoopbackAddr(t)
 
-	spec := plugin.Spec{Name: "acme-listener", Kind: plugin.KindConnector, Provides: "acme-listener", BinPath: bin, Sha256: sum}
+	// Subject here is the listener/tunnel exposure plumbing, not confinement
+	// — trust: full so it needs no jail wiring.
+	spec := plugin.Spec{Name: "acme-listener", Kind: plugin.KindConnector, Provides: "acme-listener", BinPath: bin, Sha256: sum, TrustFull: true}
 	cl := plugin.NewClient(spec, plugin.Deps{})
 	defer cl.Close()
 

@@ -31,8 +31,11 @@ func TestStagingDirPerInstance(t *testing.T) {
 }
 
 // A plugin's environment is scrubbed except the variables it declares
-// (Capabilities.Env) AND the operator granted (allow_env) — passed through
-// from the daemon's own environment — and never conductor's own.
+// (Capabilities.Env), narrowed by allow_env when the operator set one —
+// installing the plugin is the user's consent to what it declares, so an
+// EMPTY allow_env leaves the declaration as-is rather than denying
+// everything (pluginGrant, jail.go) — and conductor's own control variables
+// never pass, declared or not (spawn.go's withDeclaredEnv).
 func TestDeclaredEnvIsPassedThrough(t *testing.T) {
 	t.Setenv("ACME_TOKEN", "tok")
 	t.Setenv("OTHER_SECRET", "nope")
@@ -42,18 +45,40 @@ func TestDeclaredEnvIsPassedThrough(t *testing.T) {
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Declared but not granted: nothing passes.
-	ungranted, cleanup0, _, err := buildCommand(Spec{Name: "acme", BinPath: bin, Manifest: m}, SandboxDeps{})
+	// This is a real confinement property of the jail, so it is proven
+	// through a real jailed launch (testJailDeps), not a bare SandboxDeps{}
+	// that would merely fail with "conductor's own binary is not wired".
+
+	// No allow_env at all: a declared variable passes on the strength of the
+	// declaration alone. conductor's own control variables never do.
+	cmd0, cleanup0, _, err := buildCommand(Spec{Name: "acme", BinPath: bin, Manifest: m}, testJailDeps(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	cleanup0()
-	if strings.Contains(strings.Join(ungranted.Env, "\n"), "ACME_TOKEN") {
-		t.Fatal("a declared variable passed without the operator's allow_env grant")
+	env0 := strings.Join(cmd0.Env, "\n")
+	if !strings.Contains(env0, "ACME_TOKEN=tok") {
+		t.Fatalf("a declared variable must pass with no allow_env narrowing: %v", cmd0.Env)
 	}
-	// Granted but not declared (OTHER_SECRET): still nothing.
+	if strings.Contains(env0, "CONDUCTOR_SKILL_TOKEN") {
+		t.Fatalf("conductor's own control variables must never pass, declared or not: %v", cmd0.Env)
+	}
+
+	// allow_env NARROWS a declared variable: naming a different subset drops
+	// ACME_TOKEN even though it is declared.
+	narrowed, cleanupN, _, err := buildCommand(Spec{Name: "acme", BinPath: bin, Manifest: m, AllowEnv: []string{"MISSING"}}, testJailDeps(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupN()
+	if strings.Contains(strings.Join(narrowed.Env, "\n"), "ACME_TOKEN") {
+		t.Fatal("allow_env must narrow a declared variable out when it is not named")
+	}
+
+	// Granted but not declared (OTHER_SECRET): still nothing — allow_env can
+	// only narrow the declaration, never widen it.
 	cmd, cleanup, _, err := buildCommand(Spec{Name: "acme", BinPath: bin, Manifest: m,
-		AllowEnv: []string{"ACME_TOKEN", "CONDUCTOR_SKILL_TOKEN", "OTHER_SECRET", "MISSING"}}, SandboxDeps{})
+		AllowEnv: []string{"ACME_TOKEN", "CONDUCTOR_SKILL_TOKEN", "OTHER_SECRET", "MISSING"}}, testJailDeps(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +92,7 @@ func TestDeclaredEnvIsPassedThrough(t *testing.T) {
 			t.Fatalf("%s reached the plugin: %v", leaked, cmd.Env)
 		}
 	}
-	if !strings.Contains(m.Summary(), "env ACME_TOKEN") {
+	if !strings.Contains(m.Summary(), "reads env: ACME_TOKEN") {
 		t.Fatalf("the permission summary must show it: %q", m.Summary())
 	}
 }

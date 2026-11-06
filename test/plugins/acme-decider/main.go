@@ -50,7 +50,7 @@ func describe() plugin.Decl {
 			{Name: plugin.VerbDecide, Desc: "answer a system_one/v1 request"},
 			{Name: plugin.VerbModels, Desc: "list the models this runtime offers"},
 		},
-		Capabilities: plugin.Capabilities{FS: []string{"calls_log"}},
+		Capabilities: plugin.Capabilities{Write: []string{"config:calls_log"}},
 	}
 }
 

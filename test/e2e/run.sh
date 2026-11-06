@@ -2026,6 +2026,14 @@ group_Z_sandbox() {
   banner "Group Z — the agent sandbox: a read-only agent, conductor pushes (signed)"
   local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml
 
+  # This daemon is non-root with user namespaces, so its github plugin runs
+  # jailed to its declaration (every Z row below depends on that plugin).
+  if dc logs "$C" 2>&1 | grep -q 'plugin github: jailed to what it declares: connects to'; then
+    ok "Z the github plugin runs jailed to what it declares" Z plugin-jail
+  else
+    bad "Z github plugin jailed" Z plugin-jail "$(dc logs "$C" 2>&1 | grep 'plugin github' | head -5)"
+  fi
+
   # The fixer on each runtime the sandbox covers: a cli worker, opencode's
   # per-dispatch `opencode serve`, an agent-deck session's tool.
   z_fixer grpz/sandbox cli

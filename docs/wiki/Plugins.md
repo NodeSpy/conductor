@@ -215,11 +215,7 @@ plugin always have (see [Multi-instance isolation](#multi-instance-isolation)
 below) — `use: github` (stay current) on one connector and `use: github@^1`
 on another land in the same process the moment they both resolve to, say,
 `v1.4.0`. `isolate: true` still applies *within* whichever group an instance
-lands in, and so does isolation-compatibility: two non-isolated instances
-landing on the identical version but declaring `isolation:` blocks that
-can't combine (see "Two non-isolated instances' `isolation:` blocks must
-actually combine" below) split into separate processes for that version too
-— resolved-version equality is necessary to share a process, not sufficient.
+lands in.
 
 A local `use: ./path` build is split by its content-addressed snapshot sha
 (see "Local builds are snapshotted" below): two connectors pointed at the
@@ -267,7 +263,7 @@ is installed in your browser, not in your project.
 
 `installed.yaml` records, per **(plugin, resolved version)** pair: the `use:`
 reference as written, the resolved release tag, the verified sha, the binary
-path, and the plugin's **permission manifest** (below). A plugin referenced at
+path, and the plugin's **declaration** (see [Security](#security)). A plugin referenced at
 only one version — the overwhelmingly common case — has exactly one record,
 exactly as it always has; a plugin pinned at two versions side by side (above)
 has two, each with its own subdirectory so the two binaries never collide on
@@ -353,10 +349,12 @@ means *any repo under acme* and cannot reach `github.com/acme-evil/…`.
 ```
 conductor init                     # install everything the config references
 conductor plugin list              # every connector + runtime, with ORIGIN and kind
-conductor plugin list --caps       # …and each one's permission manifest
+conductor plugin list --caps       # …and what each one declares
 conductor plugin show <name>       # one implementation's full surface
 conductor plugin add <ref>         # install, show the permissions, print the stub
 conductor plugin update [name]     # bump everything unpinned, or just one
+conductor plugin update <name> --force  # take a re-published release (see below)
+conductor plugin approve [name@build]   # list held updates, or accept the one listed
 conductor plugin remove <name>     # drop it from install state and delete the binary
 conductor connectors ls            # each instance's resolved use:/origin
 ```
@@ -436,39 +434,275 @@ Freeze one plugin while leaving the rest current by pinning it exactly
 
 ## Security
 
-The default model is a **visible permission manifest with
-can't-exceed-declaration** — *not* an OS jail.
+A plugin says up front what it needs, and runs **jailed to exactly that**.
+You see the list before you agree to it. Anything the plugin did not declare
+is denied, and the plugin fails with an error naming what it reached for.
 
-That is a deliberate change of posture. conductor is a privileged app you chose
-to run, and a plugin you added is one too. Pretending otherwise costs real
-usability (an `isolation:` block you must author before anything works) and buys
-a boundary that a determined adversary walks around anyway. What conductor owes
-you instead is: *here is exactly what this can do, you saw it before you
-accepted it, and it cannot exceed it.*
+conductor never guesses a plugin's needs. It does not read meaning into
+config key names, add hosts for you, or keep per-plugin exceptions. If a
+plugin needs something, the plugin declares it.
 
-### The manifest
+### What a plugin declares
 
-A plugin declares, in its own `describe`:
+A plugin's `plugin.describe` carries a `capabilities` block:
 
-- **`egress`** — the `host:port` targets it calls
-- **`commands`** — the commands it spawns, by name
-- **`fs`** — the filesystem paths it needs
+| Field | What it grants | Forms |
+|---|---|---|
+| `egress` | network destinations | `host:port` (host may glob, `*.example.com:443`; a bare host means `:443`), or `config:<field>[:<port>]` |
+| `listen` | addresses it serves on | `[host]:port`, or `config:<field>` |
+| `read` | files and directories it reads | `/abs`, `~/rel`, `env:VAR[/rel]`, `config:<field>[/rel]`, `command:<name>[/rel]` |
+| `write` | files and directories it reads and writes | same forms as `read` |
+| `commands` | programs it runs, by name | `gh`, `git` |
+| `exec` | files and directories whose programs it (or a command) runs beyond `commands`: a tool's helper programs | same forms as `read`, e.g. `command:git/../../lib/git-core` |
+| `env` | environment variables it reads | `GH_TOKEN` |
+| `keychain` | (macOS) a login stored in the user's Keychain | `true` |
 
-conductor **records** that at install (so it is known before the plugin runs on
-any later boot), **surfaces** it (`plugin add`, `plugin list --caps`, `plugin
-show`), and **confines the subprocess to it**.
+A `config:<field>` entry points at a field of the plugin's **own** connection
+config, and only because the plugin wrote that entry; it may not name a
+secret field. conductor resolves it from each configured instance: a URL
+gives its host and port (`http`/`ws` mean 80, `https`/`wss` mean 443), a
+`host:port` value is used as is, and a path is used as a path. A value that
+globs (`*`, `?`, `[`, `]`), has no port, or is a relative path is an error,
+not a guess. A field that is not set on an instance grants nothing.
 
-A connector may NARROW the declaration — never widen it:
+A resolved path is refused, failing the launch with the reason and the
+declared entry it came from, when:
+
+- it is `/`, your home directory, or a directory containing conductor's own
+  state or config dir;
+- it lies inside conductor's own state or config dir. Nothing there may be
+  written or run; a file there may be read only when its path is a
+  `config:` value (a GitHub App key you configured), never because the
+  plugin names it;
+- it is, contains, or lies inside a directory where other programs serve
+  sockets: `/run`, `/var/run`, `/run/user/<uid>`, `$XDG_RUNTIME_DIR`,
+  `/tmp`, `/var/tmp`, `/dev/shm`, conductor's own temp dir. A grant of a
+  directory includes connecting to every socket in it (a read-only bind
+  does not stop that), and a directory in one may be another program's
+  (`$XDG_RUNTIME_DIR/systemd`, holding systemd's). The one thing granted
+  there is the socket file a plugin needs, declared under `write`
+  (`/run/docker.sock`), which consent shows as `talks to the program
+  serving the socket: …`;
+- it is an `exec` path that is, or contains, a directory of programs or a
+  top-level system directory: the `PATH` directories, `/usr`, `/usr/lib`,
+  `/usr/local`, `/etc`, `/run`, `/proc`, `/var`, `/tmp`, `/opt`, your home's
+  `bin`, `.local` and `.local/bin`, and the like. A tool's own directory
+  inside one (`/usr/lib/git-core`, `/usr/local/aws-cli`) is fine;
+- it lies inside another path the plugin may write (it could swap what is
+  there for a symlink);
+- it goes through a symlink root does not own (one you made, such as a
+  dotfiles-managed `~/.config/tool`): a plugin could have made it. The error
+  names the symlink and what it points to; replace the symlink with what it
+  points to, give the real path where the plugin's config takes one, or set
+  `trust: full`.
+
+An entry starting with `?` is optional: `?command:tool/..`. When its path is
+refused it is skipped, and logged, instead of failing the launch. A path
+that does not exist is skipped either way.
+
+A declared loopback destination may not be a port conductor itself listens
+on.
+
+`env:VAR` is only allowed when `VAR` is also in `env`. `command:<name>/rel`
+is relative to the declared command's resolved file (after symlinks):
+`command:node/..` is the directory the program is in, `command:node/../..`
+the install tree of a tool that reads its own files, and
+`command:git/../../lib/git-core` the helper programs `git` runs. It must
+stay in the command's install tree: the directory the file is in, or, when
+that is a `bin` or `sbin` directory, the prefix above it (`/usr` for
+`/usr/bin/git`). A tool that may be a bundle in its own directory or a
+single file in `/usr/bin` declares `?command:tool/..`: the bundle's
+directory where there is one, nothing where there is not.
+
+A declared command that is a script runs with its `#!` interpreter (and,
+for `#!/usr/bin/env prog`, the `prog` it finds): both are bound with it.
+A command and its interpreter are checked like a declared path: each must
+be an executable file reached through symlinks root owns only, and is
+refused, failing the launch with the reason, when it lies inside conductor's
+own dirs, a runtime dir, or a path the plugin may write (its `write` paths,
+its staging dir), where it could rewrite the `#!` line to name any path.
+A command installed as a symlink you own (`~/.local/bin/tool`, as npm,
+pipx and uv make them) fails the launch, naming the fix: put the directory
+it points into on conductor's `PATH` ahead of it, or set `trust: full`.
+
+The older fields still load: `fs` means `write`, and `spawns` grants nothing
+(name the commands instead).
+
+A declaration conductor cannot check is rejected when the plugin is
+described: an unknown `config:` field, a relative path, a command given as a
+path, a bad port, a path with a `..` component (a `command:` or `env:`
+reference may have one), or any entry holding a control character, a
+terminal escape, or a space other than ` ` (it would be printed at consent
+as written).
+
+### What the user sees
+
+The declaration is recorded at install and shown, in plain words:
+
+- by `conductor plugin add` and `conductor init`, before you agree to it;
+- by `conductor plugin show` and `conductor plugin list --caps`.
+  `plugin add`, `plugin show` and `plugin approve` also say what the paths
+  are on this machine (`on this machine it runs programs in:
+  /usr/lib/git-core`), and where the declared commands are;
+- in the daemon log each time the plugin starts:
+  `plugin gh: jailed to what it declares: connects to api.github.com:443, …`,
+  and when its connector type registers. That line shows the **recorded**
+  declaration, the one enforced. If the running build declares more than
+  its record, the line adds `NOT granted (declared by this build, not in its
+  install record): …`, and the build gets none of it until you approve it.
+
+Variables that look like credentials (`*_TOKEN`, `*_SECRET*`, `*API_KEY`,
+…) are called out, because agreeing to them hands the plugin their values
+when they are set in conductor's environment. A plugin that declares
+managed OAuth shows where conductor will send your client credentials and
+tokens.
+
+What the official plugins declare is in their own source, in
+[conductor-plugins](https://github.com/NodeSpy/conductor-plugins); `conductor
+plugin show <name>` prints it for the build you have.
+
+A plugin that declares nothing reads as `nothing: …`, and gets nothing: no
+network, no files outside its own binary and staging dir, no commands.
+
+### Updates that ask for more
+
+An auto-update whose declaration **widens** (any new destination, path,
+command, exec path, variable, listen address, Keychain access, or a new
+host for its OAuth endpoints) is **held**: the current version keeps
+running, and the daemon logs
+
+```
+plugin github: update v1.4.0 -> v1.5.0 HELD: it asks for more than v1.4.0 — connects to uploads.example.com:443. The installed build keeps running; `conductor plugin approve github@3c1f0a9e2b7d` accepts it
+```
+
+and sends a `plugin_update_held` notification once per held build.
+
+```bash
+conductor plugin approve                       # list held updates and what each adds
+conductor plugin approve github@3c1f0a9e2b7d   # accept that build; the daemon picks it up at the next reload
+```
+
+`approve` takes the plugin's name and the build it lists: a prefix of its
+sha, its tag (`github@github/v1.5.0`) or its version (`github@v1.5.0`). If
+an update pass held a different build since (a newer release that asks for
+more), that build is not approved: `approve` says what is waiting instead.
+
+An update that narrows or keeps the declaration applies as usual.
+Destinations compare as the jail grants them: a bare `api.example.com` is
+`api.example.com:443` on both sides, so it never covers another port.
+
+The same hold applies when you change a `use:` constraint or pin to a
+version that is not installed yet: it is compared with the build you have.
+
+A release whose binary changed under a tag you have installed (its asset
+was re-published: a new sha for the same tag) is refused, and the installed
+build keeps running:
+
+```
+plugin jira: release jira/v2.0.0 now publishes a different build (sha …) than the one installed from it (sha …): its asset was replaced after it was installed. Refused; …
+```
+
+`conductor plugin update <name> --force` takes it, compared with the build
+it replaces: held when it declares more, and then **the plugin does not run
+at all** until you approve it: the new bytes replaced the installed ones on
+disk, so the installed record no longer verifies.
+
+`conductor plugin update <name>` (and `--force`) also re-describes a build
+that is already current. If it now declares more than its record, that is
+held the same way; the running build stays jailed to its record until you
+approve.
+
+Held updates are kept in install state, so they survive restarts, and
+`conductor plugin approve` (its own process) finds them.
+
+### Narrowing, and opting out
+
+Config can **narrow** what a plugin declared, never widen it:
 
 ```yaml
 connectors:
   tickets:
     use: acme/plugins/jira
-    network: ["your-org.atlassian.net:443"]   # ⊆ what the plugin declared
+    network: ["your-org.atlassian.net:443"]   # within what the plugin declared
+    allow_env: [JIRA_TOKEN]                    # within its declared env
 ```
 
-A `network:` entry that is not covered by the plugin's declaration is a **load
-error**, not a silent grant.
+A `network:` entry outside the declaration fails the launch with an error.
+Unset, `network:` and `allow_env:` pass everything the plugin declares; set,
+they pass only the entries listed, and `[]` passes none:
+
+```yaml
+    allow_env: []      # no variables at all
+    network: []        # no network at all
+```
+
+Instances that share one process must narrow it the same way: a different
+`network:` or `allow_env:` on two of them is a load error (`isolate: true`
+one of them).
+
+`trust: full` runs a plugin **without** its jail (environment scrubbed only),
+for a plugin you trust that cannot run inside one:
+
+```yaml
+connectors:
+  tunnel: { use: ngrok, trust: full }
+runtimes:
+  paseo:  { use: paseo, trust: full }
+```
+
+The daemon logs `trust: full — running WITHOUT its jail` each time it starts
+it. Instances that share one process are unjailed only if **all** of them say
+`trust: full`; a mix is a load error (`isolate: true` the one you trust).
+
+`isolation:` on a plugin connector, runtime or engine is a load error: the
+declaration is what confines a plugin now (see [Upgrading](#upgrading)).
+`isolation:` stays for agents and the built-in `cli`/`script` runtimes (see
+[[Isolation]]).
+
+### Upgrading
+
+From a conductor that did not jail plugins:
+
+- **Remove `isolation:` from plugin connectors, runtimes and engines.** It
+  is a load error now. Delete the block. To keep a plugin unconfined as
+  before, set `trust: full` on its entry; to narrow it, use `network:` and
+  `allow_env:`.
+- **Install records are completed on the first start.** The state file a
+  conductor without the jail wrote (`installed.yaml` version 1) holds only
+  part of each declaration: egress, commands, env, OAuth endpoints and
+  `single_process`, but no reads, writes, listen addresses, exec paths or
+  Keychain. On the first start (and on any update pass) the new conductor
+  describes each installed build once. What the old record could not hold
+  is recorded without asking: the build ran with it unconfined, so this
+  only narrows it. What it did hold is compared: a build that now declares
+  more egress, commands, env, OAuth endpoints or `single_process` is held
+  like an update, and runs jailed to the record. The log says
+  `plugin github: recorded what … declares (its install record predates declared permissions, …)`.
+  Only records loaded from a version 1 file are adopted this way; the file
+  is written back as version 2.
+- **Rolling back.** A conductor without the jail does not read a version 2
+  state file: it treats it as empty and installs every plugin again from its
+  release (so the network must be up for that start), writing version 1.
+  The jail keeps a copy of what you agreed to in `consented.yaml` beside the
+  state file, which the older conductor does not touch. Upgrading again
+  adopts the version 1 records against that copy: a build you agreed to gets
+  exactly that record back (held if it now declares more), held updates the
+  older conductor dropped are restored when their binary is still there,
+  and a build it installed meanwhile (the newest release, which may be an
+  update the jail held) is compared with what you last agreed to: when it
+  declares more it is held again, runs jailed to that agreement, and is
+  logged as a `WARNING` naming what it adds.
+- **`allow_env: []` and `network: []` now mean none.** Before, an empty
+  list passed everything the plugin declares; to keep that, remove the key.
+  A config that has one loads, with a warning naming it.
+- **A declared command found through a symlink you own fails the launch**
+  (`~/.local/bin/paseo` from npm, a pipx or uv tool). Put the directory it
+  points into on conductor's `PATH` ahead of it, or set `trust: full`.
+- **Variables the plugin declares now pass through by default.** Check
+  conductor's environment for ones you do not want a plugin to have
+  (`GH_TOKEN`, …), or narrow with `allow_env:`.
+- **A root daemon cannot jail plugins.** Run conductor as a non-root user,
+  or set `trust: full` on the plugin's entry.
 
 ### Multi-instance isolation
 
@@ -481,9 +715,9 @@ connectors:
 ```
 
 — and by default `gh` and `ghlisten` **share one process**: one `github`
-plugin subprocess, serving both configured instances, confined to the UNION
-of what they each declared (`network:`/`allow_secrets:`/`allow_env:`/
-`isolation:`). This is the resource-frugal default — N configured instances
+plugin subprocess, serving both configured instances, jailed to what the
+declaration resolves to for each of them (each instance's own `config:`
+values), narrowed by the `network:`/`allow_env:` they share. This is the resource-frugal default — N configured instances
 of one plugin is one process, not N — and it is also, honestly, a smaller
 blast radius than it sounds: see "What isolation does and doesn't protect
 against" below before you reach for `isolate:` as a security boundary.
@@ -498,7 +732,7 @@ connectors:
 
 Now `gh` shares the (still default) process with any other non-isolated
 instance of `github`, and `ghlisten` gets its own dedicated subprocess — its
-own OS-level sandbox (when `isolation:` is set on it), its own
+own jail, its own
 scrubbed/granted environment, and its own staging directory, confined to
 EXACTLY `ghlisten`'s own grant, never `gh`'s and never the shared union.
 `isolate: true` is a property of that one `connectors:` entry, not of the
@@ -511,8 +745,8 @@ That means, for an isolated instance:
   process that calls them, on top of the existing per-call instance check —
   the shared process cannot even ADDRESS an isolated instance's state or
   managed token, let alone read it, and vice versa;
-- its process is confined to exactly ITS OWN `network:`/`allow_secrets:`/
-  `allow_env:`/`isolation:` — never a sibling's, and never the shared
+- its process is jailed to exactly what the declaration resolves to for
+  ITS OWN config, `network:`, `allow_secrets:` and `allow_env:` — never a sibling's, and never the shared
   process's union;
 - a hot reload (a moved plugin binary) swaps the shared process AND every
   isolated instance's own process, one at a time;
@@ -527,49 +761,20 @@ Non-isolated instances sharing the default process get the coarser,
 pre-isolation guarantee instead: isolation between THEM is scoping by call
 only (credentials, `host.state`/`host.auth`/`host.log`'s per-instance
 checks) — a crash in the shared process takes every non-isolated instance of
-that plugin down together, and the process is confined to the union of what
-every non-isolated instance declared (so `gh`'s process DOES see
-`ghlisten`'s broader `network:` if `ghlisten` is not isolated — narrow what
-you're willing to share, or isolate the instance that needs to be kept
-separate).
+that plugin down together, and the process sees what the declaration
+resolves to for every one of them (so `gh`'s process DOES see `ghlisten`'s
+`config:` values, an App key path say, if `ghlisten` is not isolated —
+isolate the instance that needs to be kept separate).
 
-Two non-isolated instances' `isolation:` blocks must actually combine into
-ONE block the shared process can run under. Advisory `network: {egress: …}`
-lists union, the same way `network:`/`allow_secrets:`/`allow_env:` do. A
-`deny: true` is a promise of no network beyond that instance's own allowlist,
-so a sibling can share its process only with the identical promise (deny,
-same egress). Anything else is a conflict rather than a merge: a merge
-would either open a path the denying instance never asked for, or cut the
-sibling's network. Every other field (`mode`, `container`,
-`limits`, `privileged`, `allow_root`) is a choice of WHICH sandbox shape to
-run, not a point on a shared strictness scale: `mode: namespace` and `mode:
-container` are different, not comparable.
-
-When conductor can tell two instances conflict OFFLINE, from the config
-alone (byte-identical `use:` text — provably the same build, no install
-state needed to know it), it is a **config validation error** naming both
-connectors and the plugin, at load time, before anything spawns.
-
-But two instances can also conflict only once RESOLVED — different `use:`
-text (a pin and a range, say) that happens to land on the identical release
-at this point in time. That can never be a load-time error (resolving a
-range needs install state, which validation never consults), so it is caught
-where resolution actually happens, and handled by **splitting them**: a
-version bucket that would otherwise have been one process, with
-isolation-incompatible non-isolated instances in it, divides into as many
-processes as it needs to — one per mutually-compatible cluster — so every
-instance still runs under **exactly its own declared isolation**, never a
-neighbor's and never silently dropped. This is never a config error and
-never refuses anything: instances that can't share simply don't, the same
-"degrade, don't refuse" posture `single_process` conflicts now follow (just
-below). `conductor plugin show`/`plugin list` names each such sub-group
-distinctly so which instances ended up sharing which process is always
-visible.
-
-Either way, the fix available to the operator is the same: make the blocks
-match, or `isolate: true` one of the conflicting instances to give it (and
-the difference) its own process on purpose instead of by the automatic
-split.
+Non-isolated instances that share a process share one jail: the union of
+what the declaration resolves to for each of them (each instance's own
+`config:` values), narrowed by their `network:`/`allow_env:`. Those must be
+the same on every instance sharing the process — one process cannot honour
+two narrowings, and the union would widen each — so a differing pair is a
+load error (`share one plugin process but narrow it differently`). The shared
+process runs without a jail only if every instance sharing it says
+`trust: full`; a mix is a load error. `isolate: true` the instance that
+should be different.
 
 **The one process-level resource conductor always isolates**: the
 type-level `plugin.describe` probe. When a connector key has a shared
@@ -577,9 +782,9 @@ process at all, that process describes ITSELF — there is nothing
 instance-specific in a type-level describe, so the one process that is
 going to run anyway is the right one to ask. Only a connector whose EVERY
 configured instance isolates has no shared process to ask; for that one case
-a throwaway, minimal-grant process (closed the moment it answers) learns the
-plugin's declared surface instead, confined to NOTHING — neither network,
-secrets, nor env — since a pure self-description needs none of it.
+a throwaway process (closed the moment it answers) learns the plugin's
+declared surface instead, in an empty jail — no network, secrets, env,
+commands or files — since a pure self-description needs none of it.
 
 **Some plugins cannot be split into more than one process at all, and say
 so.** A plugin that keeps a BOX-GLOBAL resource every configured instance
@@ -647,9 +852,8 @@ cannot check is worse than none:
 - **It is the same binary in every process**, shared or isolated. `isolate:
   true` does not run different code, verify anything differently, or trust
   the plugin any less or more — it is a resource/blast-radius knob, not a
-  trust boundary around a plugin you don't trust. For that, see
-  [Security](#security)'s `isolation:` block (OS-level sandboxing) and the
-  permission manifest, both orthogonal to `isolate:`.
+  trust boundary around a plugin you don't trust. That is the jail (see
+  [Security](#security)), which every process gets either way.
 - **What it DOES contain**: a crash, a hang, or an unhandled panic triggered
   by one instance's input (a malformed webhook payload, a hostile upstream
   response) stays in that instance's own process — it does not take a
@@ -663,39 +867,86 @@ cannot check is worse than none:
   a sibling. Isolating it narrows what a SEPARATE bug or exploit arriving
   via a different instance's input could reach FROM that process, which is
   a different claim from "this plugin is contained."
-- **It narrows grants, it does not add a wall.** An isolated instance's
-  process is confined to exactly its own `network:`/`allow_secrets:`/
-  `allow_env:` — smaller than the shared process's union — but that
-  confinement is the same permission-manifest enforcement every plugin gets
-  (egress proxy, command PATH confinement), not an OS jail. Add
-  `isolation:` on top for that.
+- **It narrows the jail.** An isolated instance's process is jailed to
+  what its own config resolves to — smaller than the shared process's
+  union — with the same enforcement every plugin gets.
 
-### What that enforces, exactly
+### What the jail enforces, exactly
 
-Stated plainly, because a security claim you cannot check is worse than none:
+Stated plainly, because a security claim you cannot check is worse than
+none. Each item below is asserted by `TestDeclaredJail`
+(`internal/plugin/jail_integration_test.go`, with the path checks in `jail_redteam_test.go`), which runs a probe
+through the real launch path.
 
-- **Egress confinement is real.** It runs through the same egress proxy the
-  `isolation:` path uses. A host outside the effective set is refused.
-- **Command confinement is default-path confinement, not a jail.** The child's
-  `PATH` becomes a directory holding links to exactly the declared commands, so
-  a plugin reaching for an undeclared tool *by name* fails. A plugin that
-  invokes an absolute path bypasses it. This has teeth against accident and
-  drift, not against a determined adversary.
-- **A plugin declaring "I spawn things I am not naming"** gets no `PATH`
-  rewrite at all, and is shown as `commands (unnamed)`. conductor does not claim
-  a confinement it is not performing.
-- **The install-time `describe` runs before any manifest exists**, confined to
-  nothing. That is safe because `describe` is a pure self-description — it needs
-  neither network nor child processes.
-- **A plugin that declares nothing** is confined to nothing beyond the scrubbed
-  environment. It declared no needs; inventing an allowlist for it would break
-  plugins that predate the manifest.
-- **An ENGINE that declares nothing is confined to NO egress** — the opposite
-  default, deliberately. An engine's job is to execute your code against
-  conductor's data plane; "and reach the internet too" is a thing it should have
-  to say out loud. There are no engine plugins predating the manifest, so there
-  is no field to break. (Same mechanism, same limits: it confines a cooperating
-  client, not a determined one. An `isolation:` block is what makes it a wall.)
+**Linux** (unprivileged user, PID, mount, IPC and network namespaces, then
+`pivot_root` into a fresh root):
+
+- **Files.** The root holds `/usr` (read-only), a short list of `/etc`
+  files (users, name resolution, time zone, TLS roots, the dynamic loader
+  cache), a read-only `/dev`, `/proc`, and an empty noexec `/tmp` and
+  `/dev/shm`. Not `/home`, `/opt`, `/srv`, `/var`, the rest of `/etc`, the
+  daemon's config, state or secrets. Each declared `read` path is bound
+  read-only and noexec, each `write` path read-write and noexec, each `exec`
+  path read-only; paths that do not exist are skipped. The root itself is read-only after the pivot.
+- **Commands.** The bin dirs under `/usr` (`/usr/bin`, `/usr/sbin`,
+  `/usr/local/bin`, `/usr/local/sbin`, and the games dirs) are empty except for the declared commands,
+  bound in by name, then made read-only. The rest of `/usr` (and a
+  split-usr `/lib`, `/lib64`, `/libexec`) is `noexec`, except the top level
+  of the dynamic linker's library directories (the standard ones and those
+  in `ld.so.conf`), so shared libraries load but no program among them, and
+  none in their subdirectories, runs: a tool's helper programs
+  (`/usr/lib/git-core`), a daemon's binaries (`/usr/lib/ssh`). A program
+  that runs helpers declares them in `exec` (bound read-only, executable).
+  Every writable place is `noexec`, so a plugin cannot drop a program and
+  run it. Read-only and `noexec` reach all the way down a bind, its
+  submounts included (a writable directory with a mount inside it is
+  `noexec` there too). A declared path is bound from its real location,
+  never through a symlink that is not root's: it is opened without
+  following any symlink (`openat2`, or one component at a time on an older
+  kernel) and bound by that open file (`open_tree`, or its `/proc/self/fd`
+  link), so a directory swapped for a symlink after the check is refused,
+  not followed. A kernel with neither fails the launch rather than bind by
+  path.
+- **Network.** The network namespace has only loopback. Outbound traffic
+  goes through conductor's egress proxy, which allows exactly the declared
+  destinations (`HTTPS_PROXY`/`HTTP_PROXY` are set; a plugin with raw TCP
+  uses `plugin.DialContext`, which tunnels through the same proxy). A
+  declared loopback destination (say a local service at `127.0.0.1:8123`) is
+  relayed to the host port, that port only. A declared `listen` address is
+  bound on the host by the daemon and forwarded into the jail.
+- **Environment.** A minimal allowlist (`PATH`, `HOME`, `USER`, `TERM`,
+  `TZ`, locale, `TMPDIR` and a few more) plus the declared variables, never
+  the daemon's credentials.
+
+**macOS** (Seatbelt, `sandbox-exec`, deny by default):
+
+- **Commands.** Only the plugin binary, the declared commands and what is
+  in the declared `exec` paths may be executed (for an Xcode stub in
+  `/usr/bin`, also what `xcrun --find` resolves it to; a `command:` path is
+  relative to that).
+- **Files.** Reads of the OS dirs (`/usr/lib`, `/usr/share`, `/System`, a
+  few `/etc` files) and the declared paths; writes of the declared `write`
+  paths and the staging dir. Not `/opt/homebrew`, `/usr/local` or the home
+  dir, unless declared.
+- **Network.** Only the egress proxy's loopback port, declared loopback
+  ports, declared listen ports and declared unix sockets (a `write` path).
+- **Keychain.** The Keychain services and `~/Library/Keychains` only when
+  `keychain: true` is declared.
+
+Other operating systems have no plugin jail: a plugin there runs only with
+`trust: full`.
+
+**Describe runs in an empty jail.** The install-time `plugin.describe` (and
+the first describe of a local build) runs before any declaration is known,
+so it gets nothing at all. A local build is then jailed to what it declared.
+
+**What the jail does not do.** It does not limit CPU or memory, and the
+proxy allows a declared host, not particular URLs on it. A declared glob
+(`*.ghe.com:443`) allows every host it matches. `noexec` stops the jail from
+*running* undeclared programs; a plugin is itself code, and could still load
+a program's bytes it can read into its own memory and run them, inside the
+same jail and with the same reach. A plugin with `trust: full` has your
+user's access, as every plugin did before the jail.
 
 ### What is kept, unchanged
 
@@ -703,7 +954,7 @@ Stated plainly, because a security claim you cannot check is worse than none:
 |---|---|
 | **Download integrity** | The fetched binary is verified against the release's published `checksums.txt`, and the verified sha is recorded. Verify-before-execute re-checks it from a safe path (no group/world-writable binary or ancestor dir) before every spawn — a runtime plugin re-verifies on *every* launch via the `plugin-exec` wrapper. |
 | **Source trust** | `plugin_trust` gates where remote plugins come from. The official repo is allowed by default; anything else needs an entry. |
-| **Least-privilege credentials** | A connector plugin only ever receives creds for instances of **its own** implementation, delivered per-call over the RPC transport — never in argv or env. The child inherits a minimal env allowlist, never the daemon's credential-bearing environment. `allow_secrets:` narrows further. A plugin whose platform CLI reads a token from the environment declares the variable (`capabilities.env`); it is passed only if the connector also grants it (`allow_env: [GH_TOKEN]`, within the declaration). |
+| **Least-privilege credentials** | A connector plugin only ever receives creds for instances of **its own** implementation, delivered per-call over the RPC transport — never in argv or env. `allow_secrets:` narrows further. A plugin whose platform CLI reads a token from the environment declares the variable (`capabilities.env`); `allow_env:` can narrow that. |
 | **Audit attribution** | Every credential hand-off is audited as `plugin_credential` with `plugin@version` and the secret **ref name — never the value**. |
 | **Transport redaction** | Plugin stdout/stderr is scrubbed through the secret redactor. **Best-effort**: it matches known secret *values*; a plugin that transforms a credential before printing can evade it. |
 | **Untrusted output** | Every response is size-bounded (a plugin cannot OOM the daemon). Responses for verbs declaring an `Outputs` schema are validated against it. A connector plugin cannot forge its identity. |
@@ -713,31 +964,12 @@ Stated plainly, because a security claim you cannot check is worse than none:
 fail-closed — a bad sha is a security event, not a degraded-boot condition. A
 plugin that crashes *after* boot degrades to "down".
 
-### Opt-in hardening
-
-The OS isolation layer is still there. It is now **optional**, for a locked-down
-box:
-
-```yaml
-connectors:
-  tickets:
-    use: acme/plugins/jira
-    isolation:
-      mode: namespace
-      network: { egress: ["your-org.atlassian.net:443"] }
-```
-
-With a block present you get process/mount/pid isolation, the daemon's
-config/state/secrets masked away inside the mount namespace, and structurally
-enforced egress. `namespace` is Linux-only; `container` is cross-platform
-(docker/podman); `user` is weakest. See [[Isolation]].
-
-**Runtimes are not wrapped in a heavy sandbox by default.** A runtime plugin
-executes your agents, which is exactly the privilege you already granted
-conductor. It *is* env-scrubbed (`sandbox.MinimalEnv`, so it does not inherit
-`env:`-resolved secrets) and re-verified on every spawn, but it relies on ACP's
-own supervision rather than `internal/plugin`'s crash-loop cap and size cap.
-**Only run runtime plugins you fully trust.**
+**Which plugins this covers.** Connectors, engines, and runtime plugins
+that conductor drives over the plugin protocol (Backend-RPC and decision
+runtimes) are jailed to their declaration. An **ACP runtime plugin** is an
+agent: conductor launches it per session through the agent controller, so it
+runs under the agent sandbox (on by default; the step's `isolation:` applies),
+the same as a built-in agent runtime, not under its declaration's jail.
 
 ## The protocol
 
@@ -937,9 +1169,8 @@ Points worth knowing:
 - **`env:` is your step configuration**, delivered per-call over the transport.
   An engine's own process environment is the scrubbed minimal one every plugin
   gets; a step's `env:` never joins it.
-- **Declare egress if you make network calls.** An engine that declares none is
-  confined to *none* — deny-by-default, unlike a connector (see
-  [the manifest](#the-manifest)).
+- **Declare egress if you make network calls.** An engine that declares none
+  gets none, like every plugin (see [What a plugin declares](#what-a-plugin-declares)).
 
 See `test/plugins/acme-engine/` for a complete reference engine, including both
 denial paths.

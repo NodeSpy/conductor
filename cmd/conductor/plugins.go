@@ -469,6 +469,14 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			rollback()
 			return nil, fmt.Errorf("plugin %s: declared under connectors: but it describes itself as a %s — a %s cannot be wired as a connector", spec.Name, decl.Kind, decl.Kind)
 		}
+		// What the jail enforces is the RECORDED declaration (the one the user
+		// agreed to), not whatever this build says now; a local build has no
+		// record and is jailed to what it declares.
+		live := plugin.ManifestFromDecl(decl)
+		enforced := spec.Manifest
+		if spec.Local {
+			enforced = live
+		}
 		// CAN'T-EXCEED-DECLARATION: every instance's `network:` must be covered
 		// by what the plugin says it needs. A config that widens a plugin's
 		// declared egress is a config error, not a silent grant. Scoped to
@@ -480,7 +488,7 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			if len(cref.Network) == 0 {
 				continue
 			}
-			if err := plugin.CheckNetworkWithinManifest(cname, decl.Capabilities.Egress, cref.Network); err != nil {
+			if err := plugin.CheckNetworkWithinManifest(cname, enforced.Egress, cref.Network); err != nil {
 				rollback()
 				return nil, err
 			}
@@ -489,10 +497,10 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		for cname := range spec.Instances {
 			cref := cfg.ConnectorsMap[cname]
 			for _, n := range cref.AllowEnv {
-				if !slices.Contains(decl.Capabilities.Env, n) {
+				if !slices.Contains(enforced.Env, n) {
 					rollback()
 					return nil, fmt.Errorf("connector %q: allow_env %q is not a variable the %s plugin declares it reads (%s)",
-						cname, n, spec.Name, strings.Join(decl.Capabilities.Env, ", "))
+						cname, n, spec.Name, strings.Join(enforced.Env, ", "))
 				}
 			}
 		}
@@ -501,18 +509,19 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			return nil, fmt.Errorf("plugin %s: %w", spec.Name, err)
 		}
 		registered = append(registered, spec.Provides)
-		// spec.Manifest (the plugin's own DECLARED capabilities), not
-		// spec.EffectiveManifest(): when EVERY configured instance isolates
-		// (no shared process at all), spec here is the type-level Probe Spec
-		// — its EffectiveManifest is deliberately "nothing", not what any
-		// isolated instance actually runs with (that is shown per instance by
-		// `plugin show`/`plugin list --caps`). A spec WITH a shared process's
-		// EffectiveManifest, by contrast, IS what its one real process runs
-		// with — but spec.Manifest here still answers the simpler,
-		// always-true question this log line asks: what does the installed
-		// BINARY declare.
+		// The permissions shown are the ones enforced: the recorded
+		// declaration (before any network:/allow_env narrowing, which `plugin
+		// show` lists per instance), plus anything this build declares
+		// beyond it, which it does not get.
+		perms := "jailed to " + enforced.Summary()
+		if spec.TrustFull {
+			perms = "trust: full — runs WITHOUT its jail"
+		}
+		if w := enforced.Widens(live); len(w) > 0 && !spec.TrustFull {
+			perms += fmt.Sprintf("; NOT granted (declared by this build, not in its install record): %s — `conductor plugin update %s` asks for approval", strings.Join(w, "; "), spec.Name)
+		}
 		logf("plugin %s: registered connector type %q (%d verb(s)); permissions: %s",
-			spec.Ref(), spec.Provides, len(decl.Verbs), spec.Manifest.Summary())
+			spec.Ref(), spec.Provides, len(decl.Verbs), perms)
 	}
 	return mgr, nil
 }
@@ -640,8 +649,8 @@ func pluginRuntimeControllers(cfg *config.Config, skip map[string]bool) (map[str
 			Isolation: ref.Isolation,
 			ScrubEnv:  true, // third-party code: minimal env, no daemon secrets (#54 §8.1)
 		}
-		logf("plugin %s: registered runtime %q (acp, per-spawn re-verified, env-scrubbed); permissions: %s",
-			spec.Ref(), ref.Name, spec.EffectiveManifest().Summary())
+		logf("plugin %s: registered runtime %q (acp, per-spawn re-verified): an agent — it runs under the agent sandbox, not its declaration's jail",
+			spec.Ref(), ref.Name)
 	}
 	return out, nil
 }
@@ -739,9 +748,11 @@ rest:
 // cmdPlugin implements `conductor plugin list|show|add|update|remove`.
 func cmdPlugin(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: conductor plugin list|show <name>|add <ref>|update [name]|remove <name>")
+		return fmt.Errorf("usage: conductor plugin list|show <name>|add <ref>|update [name] [--force]|approve [<name>@<sha or tag>]|remove <name>")
 	}
 	switch args[0] {
+	case "approve":
+		return cmdPluginApprove(args[1:])
 	case "list", "ls":
 		return cmdPluginList(args[1:])
 	case "show":
@@ -753,7 +764,7 @@ func cmdPlugin(args []string) error {
 	case "update":
 		return cmdPluginUpdate(args[1:])
 	default:
-		return fmt.Errorf("unknown plugin subcommand %q (list|show|add|update|remove)", args[0])
+		return fmt.Errorf("unknown plugin subcommand %q (list|show|add|update|approve|remove)", args[0])
 	}
 }
 
@@ -881,7 +892,18 @@ func cmdPluginList(args []string) error {
 // plugin.InstanceSpec would apply to its own process) and is never folded
 // into the shared line.
 func permissionLines(ref config.PluginRef, spec plugin.Spec) []string {
-	lines := []string{"declared capabilities: " + spec.Manifest.Summary()}
+	var lines []string
+	if spec.TrustFull {
+		lines = append(lines, "trust: full — runs WITHOUT its jail; it declares:")
+	} else {
+		lines = append(lines, "runs jailed to what it declares; it may:")
+	}
+	for _, l := range spec.Manifest.Lines() {
+		lines = append(lines, "  "+l)
+	}
+	for _, l := range plugin.HereLines(spec) {
+		lines = append(lines, "  "+l)
+	}
 	if ref.Kind() == config.PluginKindConnector && spec.Manifest.SingleProcess {
 		lines = append(lines, "single_process: the plugin declares every instance must share one process — isolate: true is refused for it")
 	}
@@ -974,7 +996,7 @@ func cmdPluginUpdate(args []string) error {
 		}
 	}
 	if len(only) > 1 {
-		return fmt.Errorf("usage: conductor plugin update [name]")
+		return fmt.Errorf("usage: conductor plugin update [name] [--force] — --force re-resolves an exact pin and takes a re-published release; one that asks for more is held, and the plugin does not run until `conductor plugin approve` accepts it (its new bytes replaced the installed ones)")
 	}
 	if len(only) == 1 {
 		opts.Only = only[0]
@@ -1067,12 +1089,16 @@ func cmdPluginAdd(args []string) error {
 		return fmt.Errorf("plugin %s: expected exactly one resolution, got %d", u.Name, len(results))
 	}
 	manifest := results[0].Manifest
-	fmt.Printf("\n%s declares these permissions:\n  %s\n", u.Name, manifest.Summary())
+	fmt.Printf("\n%s runs jailed to what it declares. By adding it you agree that it may:\n", u.Name)
+	for _, l := range manifest.Lines() {
+		fmt.Printf("  %s\n", l)
+	}
+	for _, l := range plugin.HereLines(plugin.Spec{Name: u.Name, Manifest: manifest}) {
+		fmt.Printf("  %s\n", l)
+	}
+	fmt.Println("Anything else is denied. An update that asks for more waits for `conductor plugin approve`.")
 	fmt.Println("\nAdd it to your config:")
 	fmt.Print("\n" + useSnippet(kind, instance, ref))
-	if kind == config.UseKindConnector && len(manifest.Egress) > 0 {
-		fmt.Printf("    network: [%s]\n", strings.Join(manifest.Egress, ", "))
-	}
 	return nil
 }
 
@@ -1296,6 +1322,64 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 // cmdPluginRemove drops a plugin from local install state and deletes its
 // installed binary. It does NOT touch the config: the reference is the
 // declaration, so removing it there is the operator's edit to make.
+// cmdPluginApprove implements `conductor plugin approve <name>@<build>`: the
+// user's yes to the held update they were shown (its sha or tag), which asks
+// for more than the installed build (or, with no argument, the list of what
+// is waiting).
+func cmdPluginApprove(args []string) error {
+	_, rest, err := loadConfigRest(args)
+	if err != nil {
+		return err
+	}
+	lock, err := plugin.LockInstallStateCLI(plugin.InstallDir(), pluginLockCLITimeout, lockWaitNotice)
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	if len(rest) == 0 {
+		pending := state.PendingUpdates()
+		if len(pending) == 0 {
+			fmt.Println("no plugin update is waiting for approval")
+			return nil
+		}
+		for _, p := range pending {
+			fmt.Printf("%s %s (replacing %s) asks for more:\n", p.Name, p.Resolved, p.Replaces)
+			for _, w := range p.Widens {
+				fmt.Printf("  + %s\n", w)
+			}
+			fmt.Printf("  its full declaration:\n")
+			for _, l := range p.Manifest.Lines() {
+				fmt.Printf("    %s\n", l)
+			}
+			for _, l := range plugin.HereLines(plugin.Spec{Name: p.Name, Manifest: p.Manifest}) {
+				fmt.Printf("    %s\n", l)
+			}
+			fmt.Printf("  approve with: conductor plugin approve %s\n", plugin.ApproveArg(p.Name, p.Installed))
+		}
+		return nil
+	}
+	if len(rest) != 1 {
+		return fmt.Errorf("usage: conductor plugin approve [<name>@<sha or tag>]")
+	}
+	done, err := state.Approve(rest[0])
+	if err != nil {
+		return err
+	}
+	if err := state.Save(); err != nil {
+		return err
+	}
+	for _, p := range done {
+		fmt.Printf("approved %s %s (replacing %s), which also may:\n", p.Name, p.Resolved, p.Replaces)
+		for _, w := range p.Widens {
+			fmt.Printf("  + %s\n", w)
+		}
+		logf("plugin %s: the user approved %s, which asks for more than %s: %s", p.Name, p.Resolved, p.Replaces, strings.Join(p.Widens, "; "))
+	}
+	fmt.Println("\nA running daemon picks it up at its next reload (`conductor reload`) or restart.")
+	return nil
+}
+
 func cmdPluginRemove(args []string) error {
 	cfg, rest, err := loadConfigRest(args)
 	if err != nil {
@@ -1421,11 +1505,14 @@ func reconcilePlugins(cfg *config.Config, opts plugin.Options, cli bool) ([]plug
 }
 
 // describeForInstall spawns a freshly-installed plugin ONCE to record its
-// permission manifest and declared kind. This spawn happens before any manifest
-// exists, so it is confined to nothing — which is safe because describe is a
-// pure self-description that needs neither network nor child processes.
+// permission manifest and declared kind. This spawn happens before the user
+// has agreed to anything, so it is a probe, jailed to nothing whatever its
+// config narrows — which is safe because describe is a pure self-description
+// that needs neither network nor child processes.
 func describeForInstall(cfg *config.Config) plugin.DescribeFunc {
 	return func(ctx context.Context, spec plugin.Spec) (*plugin.Decl, error) {
+		spec.Probe = true
+		spec.Manifest = plugin.Manifest{}
 		sec := secrets.New()
 		deps := pluginDeps(sec, func(map[string]any) {}, nil)
 		cl := plugin.NewClient(spec, deps)
@@ -1706,12 +1793,20 @@ func pendingPluginsStillMissing(cfg *config.Config, state *plugin.InstallState) 
 	for _, f := range failures {
 		logf("plugins: %s: cannot be split into process groups safely (%s) — retrying will not fix this; this should never happen, please report it", f.Name, f.Reason)
 	}
+	held := map[string]bool{}
+	for _, p := range state.PendingUpdates() {
+		if !p.Approved {
+			held[p.Key+"\x00"+p.Source] = true
+		}
+	}
 	for _, ref := range exploded {
 		if ref.Kind() != config.PluginKindConnector {
 			continue
 		}
 		inst, ok := state.GetForConstraint(ref.Use.InstallKey(), ref.Use)
-		if !ok || inst.Path == "" {
+		if (!ok || inst.Path == "") && !held[ref.Use.InstallKey()+"\x00"+ref.Source()] {
+			// A build held for approval is not missing: fetching it again
+			// cannot install it; `conductor plugin approve` does.
 			missing++
 		}
 	}

@@ -138,6 +138,7 @@ func IsExternalType(typ string) bool {
 // — it just drives whatever client comes back, instance-scoped as always.
 func RegisterExternalConnector(clientFor plugin.ClientFactory, spec plugin.Spec, decl *plugin.Decl) (*TypeDecl, error) {
 	td := mapDecl(decl)
+	authSpec := managedAuthSpec(spec, decl)
 	builder := func(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
 		cl, err := clientFor(name)
 		if err != nil {
@@ -169,7 +170,7 @@ func RegisterExternalConnector(clientFor plugin.ClientFactory, spec plugin.Spec,
 		// instance carries an `auth:` block, conductor owns the token exchange
 		// and injects the bearer per-call. nil au = the plugin authenticates
 		// itself from its own connection fields (unchanged behavior).
-		au, err := buildManagedAuth(name, decl.Auth, ref, deps)
+		au, err := buildManagedAuth(name, authSpec, ref, deps)
 		if err != nil {
 			return nil, err
 		}
@@ -368,6 +369,17 @@ func resolveSecrets(path string, v any, sec *secrets.Resolver, allow map[string]
 		return out, nil
 	}
 	return v, nil
+}
+
+// managedAuthSpec is the OAuth endpoints conductor itself (outside any jail)
+// posts the operator's client secret and refresh token to: the install
+// record's, the declaration the user agreed to — never what the running build
+// says now. A local build has no record.
+func managedAuthSpec(spec plugin.Spec, decl *plugin.Decl) *plugin.AuthSpec {
+	if spec.Local {
+		return decl.Auth
+	}
+	return spec.Manifest.Auth
 }
 
 // buildManagedAuth wires conductor's OAuth2 authenticator for a plugin

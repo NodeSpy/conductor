@@ -87,7 +87,7 @@ func TestInstallStateSaveIsAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if e.Name() != installStateFile {
+		if e.Name() != installStateFile && e.Name() != consentFile {
 			t.Fatalf("stray file left in install dir: %s", e.Name())
 		}
 	}

@@ -185,7 +185,11 @@ func describeInstancesForInstall(ctx context.Context, spec plugin.Spec, instance
 // to exactly that instance's grant (plugin.InstanceSpec), never a sibling's —
 // describes it, and closes it before returning.
 func describeOneInstanceForInstall(ctx context.Context, spec plugin.Spec, in connector.PluginInstanceDecl, deps plugin.Deps) (*plugin.Decl, bool, error) {
-	cl := plugin.NewClient(plugin.InstanceSpec(spec, in.Instance), deps)
+	is := plugin.InstanceSpec(spec, in.Instance)
+	// The jail resolves the declaration's config: entries from the
+	// connection being described.
+	is.Conns = []map[string]any{in.Connection}
+	cl := plugin.NewClient(is, deps)
 	defer cl.Close()
 	if err := cl.Start(ctx); err != nil {
 		return nil, false, err

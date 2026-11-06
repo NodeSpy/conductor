@@ -65,7 +65,8 @@ func buildExamplePluginVariant(t *testing.T, name, ldflags string) (string, stri
 // TestExamplePluginRoundTrip drives the REAL subprocess over the real transport.
 func TestExamplePluginRoundTrip(t *testing.T) {
 	bin, sum := buildExamplePlugin(t)
-	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum, Version: "1.0.0"}
+	// This is a wire round-trip test, not the jail.
+	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum, Version: "1.0.0", TrustFull: true}
 	c := NewClient(spec, Deps{})
 	defer c.Close()
 	ctx := context.Background()
@@ -111,7 +112,8 @@ func TestExamplePluginShaMismatchRefused(t *testing.T) {
 // daemon is not stuck), and a later call restarts the plugin and succeeds.
 func TestExamplePluginHangTimeoutAndRecovery(t *testing.T) {
 	bin, sum := buildExamplePlugin(t)
-	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum}
+	// This is a call-timeout/recovery test, not the jail.
+	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum, TrustFull: true}
 	c := NewClient(spec, Deps{CallTimeout: 300 * time.Millisecond})
 	defer c.Close()
 	ctx := context.Background()
