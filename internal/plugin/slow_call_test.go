@@ -36,7 +36,10 @@ func buildSlowPlugin(t *testing.T) Spec {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(data)
-	return Spec{Name: "slow", Kind: KindConnector, Provides: "acme-slow", BinPath: bin, Sha256: hex.EncodeToString(sum[:])}
+	// These tests are about call timeouts, restarts and liveness, not the
+	// jail — trust: full skips needing a built conductor binary wired as
+	// the jail's entry.
+	return Spec{Name: "slow", Kind: KindConnector, Provides: "acme-slow", BinPath: bin, Sha256: hex.EncodeToString(sum[:]), TrustFull: true}
 }
 
 // streamTicks starts the plugin's source and counts its events.

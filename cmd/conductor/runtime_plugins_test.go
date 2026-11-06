@@ -122,6 +122,9 @@ func TestLoadRuntimePlugins_HostRefused(t *testing.T) {
 func TestLoadRuntimePlugins_DecisionRuntime(t *testing.T) {
 	t.Setenv("ACME_DECIDER_KEY", "k-from-env")
 	logPath := filepath.Join(t.TempDir(), "calls.log")
+	if err := os.WriteFile(logPath, nil, 0o600); err != nil { // a declared path must exist to be granted
+		t.Fatal(err)
+	}
 	cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
 		"rt": {Use: buildTestPlugin(t, "acme-decider"), Connection: map[string]any{
 			"api_key": "env:ACME_DECIDER_KEY", "calls_log": logPath,

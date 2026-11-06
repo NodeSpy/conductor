@@ -9,11 +9,15 @@ import (
 
 // conflictingIsolationRef builds one PluginRef with two configured
 // connector instances that resolve to the SAME version (one pinned exactly,
-// one unconstrained — distinct `use:` TEXT, so config.checkIsolationMerge's
-// offline, text-identity-only check never sees them as sharing a group) but
-// declare INCOMPATIBLE isolation: blocks — both deny network, but with
-// different egress allow-lists. This is the reviewer's reproduction for
-// finding 2.
+// one unconstrained — distinct `use:` TEXT, so a text-identity-only offline
+// check never sees them as sharing a group) but declare INCOMPATIBLE
+// isolation: blocks — both deny network, but with different egress
+// allow-lists. This is the reviewer's reproduction for finding 2. (An
+// isolation: block on a real config's plugin connector is refused outright
+// at load now, config.checkPluginJail — this exercises internal/plugin's own
+// group-splitting directly, against a hand-built PluginRef that bypasses
+// that config-layer validation, the same way a caller who resolved install
+// state offline would reach this code.)
 func conflictingIsolationRef(t *testing.T) (ref config.PluginRef, isoPinned, isoRanged *config.IsolationConfig) {
 	t.Helper()
 	base := config.Use{

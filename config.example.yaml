@@ -318,14 +318,13 @@ hosts:
 # scratch:
 #   dir: /mnt/scratch/conductor
 
-# engines: — per-engine hardening for code-step engine PLUGINS (js, lua, …).
-# Unlike connectors, code engines run arbitrary code and are UNTRUSTED by
-# default: with no entry here a `run: js` step is sandboxed (namespace, network
-# denied), best-effort. Override or opt out per engine.
+# engines: — code-step engine PLUGINS (js, lua, …). Like every plugin, an
+# engine runs jailed to exactly what it declares (an engine that declares
+# nothing gets no network, files or commands). isolation: here is a load
+# error: the declaration is what confines a plugin.
 engines:
-  # js: {}                                        # default — sandboxed, nothing to write
-  # lua: { trust: full }                          # opt OUT: run unconfined (an engine you've audited)
-  # wasm: { isolation: { mode: user, user: sandbox } }   # explicit sandbox (fail-closed)
+  # js: {}                                        # default — jailed to its declaration
+  # lua: { trust: full }                          # opt OUT: run without the jail (an engine you've audited)
 
 # code: — the default isolation a LOCAL cli/host code step (use: cli,
 # run: <interpreter>, run: go — not a remote host: step, not an engine
@@ -802,17 +801,25 @@ models:
 # plugin is equal, and what the engine does with its events comes from the
 # semantics it declares — there is nothing per plugin to grant.
 #
-# SECURITY. A plugin declares the hosts it calls and the commands it spawns.
-# Conductor records that manifest when it installs the plugin, SHOWS it to you
-# (`conductor plugin add`, `plugin list --caps`, `plugin show`), and confines
-# the subprocess to it. That is a visible permission manifest, not an OS jail —
-# conductor is a privileged app you chose to run, and so is a plugin you added.
-# OS isolation is still there, as OPT-IN hardening for a locked-down box:
+# SECURITY. A plugin declares what it needs: the hosts it connects to, the
+# addresses it listens on, the files it reads and writes, the commands it
+# runs and the env vars it reads. Conductor records that when it installs the
+# plugin, SHOWS it to you (`conductor plugin add`, `plugin show`, `plugin list
+# --caps`, the boot log), and runs the plugin JAILED to exactly that (Linux:
+# namespaces + egress proxy; macOS: Seatbelt). Anything undeclared is denied.
+# An auto-update that asks for more is held until `conductor plugin approve
+# <name>`. Config can only narrow, or opt a plugin out of its jail:
 #
 # connectors:
 #   jira:
 #     use: acme/plugins/jira
-#     isolation: { mode: namespace, network: { egress: ["your-org.atlassian.net:443"] } }
+#     network: ["your-org.atlassian.net:443"]   # narrow: within what it declares
+#     allow_env: [JIRA_TOKEN]                    # narrow: empty passes every declared var
+#   tunnel:
+#     use: ngrok
+#     trust: full                                # run WITHOUT the jail (logged at every start)
+#
+# isolation: on a plugin connector, runtime or engine is a load error.
 
 # ---------------------------------------------------------------------------
 # STEPS — where an agent's behavior lives now. This replaced `agents:`.

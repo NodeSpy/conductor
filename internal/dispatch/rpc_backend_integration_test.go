@@ -50,7 +50,7 @@ func TestRPCBackendRoundTripsListAgentsAndArchive(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "calls.log")
 
 	spec := plugin.Spec{Name: "rt1", Kind: plugin.KindConnector, Provides: "acme-runtime",
-		BinPath: pluginBin, Local: true}
+		BinPath: pluginBin, Local: true, TrustFull: true} // the protocol, not the jail
 	client := plugin.NewClient(spec, plugin.Deps{})
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -101,7 +101,7 @@ func TestRPCBackendRetriesOverRealSubprocess(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "calls.log")
 
 	spec := plugin.Spec{Name: "rt2", Kind: plugin.KindConnector, Provides: "acme-runtime",
-		BinPath: pluginBin, Local: true}
+		BinPath: pluginBin, Local: true, TrustFull: true} // the protocol, not the jail
 	client := plugin.NewClient(spec, plugin.Deps{})
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

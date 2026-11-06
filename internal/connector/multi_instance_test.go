@@ -68,7 +68,7 @@ connectors:
 	}
 
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	mgr := plugin.NewManager(refs, "", state, plugin.Deps{})
+	mgr := plugin.NewManager(refs, "", state, testJailDeps(t))
 	defer mgr.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -181,9 +181,14 @@ connectors:
 		Key: key, Kind: "connector", Name: "acme-echo",
 		Resolved: "v1.0.0", Sha256: sum, Path: bin,
 		// Matches acme-echo's declared Capabilities.Env exactly.
-		Manifest: plugin.Manifest{Env: []string{"ACME_ECHO_VAR_A", "ACME_ECHO_VAR_B"}},
+		// Declares both instances' narrowed `network:` targets — a config
+		// can only narrow a plugin's declared egress, never widen it.
+		Manifest: plugin.Manifest{
+			Env:    []string{"ACME_ECHO_VAR_A", "ACME_ECHO_VAR_B"},
+			Egress: []string{"one.example:443", "two.example:443"},
+		},
 	})
-	mgr := plugin.NewManager(refs, "", state, plugin.Deps{})
+	mgr := plugin.NewManager(refs, "", state, testJailDeps(t))
 	defer mgr.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -307,7 +312,7 @@ connectors:
 	}
 
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	mgr := plugin.NewManager(refs, "", state, plugin.Deps{})
+	mgr := plugin.NewManager(refs, "", state, testJailDeps(t))
 	defer mgr.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

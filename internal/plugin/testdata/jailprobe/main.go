@@ -63,7 +63,11 @@ func check(k, v string) string {
 		return ok(exec.Command(v).Run())
 	case "copyexec":
 		// Copy this program somewhere and run the copy.
-		self, _ := os.ReadFile("/proc/self/exe")
+		self, err := os.ReadFile("/proc/self/exe")
+		if err != nil {
+			exe, _ := os.Executable()
+			self, _ = os.ReadFile(exe)
+		}
 		if err := os.WriteFile(v, self, 0o755); err != nil {
 			return "denied: write: " + err.Error()
 		}

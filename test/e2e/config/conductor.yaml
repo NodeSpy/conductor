@@ -34,6 +34,7 @@ connectors:
     listen: 0.0.0.0:8099
   github:
     use: /usr/local/bin/conductor-github
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     api_base: http://mock-github:8080
     app:
       app_id: 123456
@@ -54,23 +55,28 @@ connectors:
       verify_signature: true
   notify-discord:
     use: /usr/local/bin/conductor-discord
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     webhook_url: http://sink-catcher:8080/discord
   notify-notifiarr:
     use: /usr/local/bin/conductor-notifiarr
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     api_base: http://sink-catcher:8080/notifiarr/api/v1
     api_key: e2e-notifiarr-key
     channel_id: "42"
   notify-ntfy:
     use: /usr/local/bin/conductor-ntfy
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     server: http://sink-catcher:8080/ntfy
     topic: conductor
   notify-pushover:
     use: /usr/local/bin/conductor-pushover
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     api_base: http://sink-catcher:8080/pushover
     token: e2e-pushover-token
     user: e2e-pushover-user
   notify-slack:
     use: /usr/local/bin/conductor-slack
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     api_base: http://sink-catcher:8080/slackapi
     webhook_url: http://sink-catcher:8080/slack
 runtimes:

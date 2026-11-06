@@ -24,6 +24,7 @@ connectors:
     listen: 0.0.0.0:8099
   github:
     use: /usr/local/bin/conductor-github
+    trust: full   # a root daemon in an unprivileged container: the plugin jail refuses root (sandbox.yaml runs it jailed)
     api_base: http://mock-github:8080
     app:
       app_id: 123456

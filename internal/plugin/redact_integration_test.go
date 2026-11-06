@@ -32,7 +32,8 @@ func TestExamplePluginStderrRedaction(t *testing.T) {
 	buf := &safeBuf{}
 	// Stand-in for secrets.Resolver.Redact over a Tracked value.
 	redact := func(s string) string { return strings.ReplaceAll(s, secret, "«redacted»") }
-	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum}
+	// This test is about stderr redaction, not the jail.
+	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum, TrustFull: true}
 	c := NewClient(spec, Deps{Log: buf.log, Redact: redact})
 	defer c.Close()
 

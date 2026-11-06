@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin
 
 package plugin
 
@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,19 +19,34 @@ import (
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
-// TestDeclaredJailLinux runs a probe program through the real plugin launch
-// (buildCommand: unshare + `conductor sandbox-net` with the minimal base and
-// the egress proxy) and checks that it gets exactly what its manifest
+// TestDeclaredJail runs a probe program through the real plugin launch
+// (buildCommand: on Linux unshare + `conductor sandbox-net` with the minimal
+// base and the egress proxy; on macOS sandbox-exec with the plugin profile
+// and the egress proxy) and checks that it gets exactly what its manifest
 // declares: the declared file, directory, command, variable, loopback
 // destination and listen address work; everything else is denied.
-func TestDeclaredJailLinux(t *testing.T) {
-	if _, err := exec.LookPath("unshare"); err != nil {
-		t.Skip("unshare not on PATH")
+func TestDeclaredJail(t *testing.T) {
+	darwin := runtime.GOOS == "darwin"
+	skip := t.Skip
+	if os.Getenv("CONDUCTOR_REQUIRE_SANDBOX") != "" { // the sandbox canary: fail, never skip
+		skip = t.Fatal
 	}
-	if err := exec.Command("unshare", "--user", "--map-root-user", "--mount", "true").Run(); err != nil {
-		t.Skipf("requires unprivileged root-mapped user namespaces: %v", err)
+	if darwin {
+		if _, err := exec.LookPath("sandbox-exec"); err != nil {
+			skip("sandbox-exec not on PATH")
+		}
+	} else {
+		if _, err := exec.LookPath("unshare"); err != nil {
+			skip("unshare not on PATH")
+		}
+		if err := exec.Command("unshare", "--user", "--map-root-user", "--mount", "true").Run(); err != nil {
+			skip("requires unprivileged root-mapped user namespaces:", err)
+		}
 	}
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir()) // macOS: /var -> /private/var
+	if err != nil {
+		t.Fatal(err)
+	}
 	conductor := filepath.Join(dir, "conductor")
 	if out, err := exec.Command("go", "build", "-o", conductor, "github.com/NodeSpy/conductor/cmd/conductor").CombinedOutput(); err != nil {
 		t.Fatalf("build conductor: %v\n%s", err, out)
@@ -75,7 +91,7 @@ func TestDeclaredJailLinux(t *testing.T) {
 
 	pm := sandbox.NewProxyManager(nil)
 	t.Cleanup(pm.Close)
-	sd := SandboxDeps{Self: conductor, StagingRoot: filepath.Join(dir, "staging"), EgressUnix: pm.UnixEndpoint}
+	sd := SandboxDeps{Self: conductor, StagingRoot: filepath.Join(dir, "staging"), EgressUnix: pm.UnixEndpoint, EgressAddr: pm.Endpoint}
 	s := Spec{
 		Name: "probe", Kind: KindConnector, BinPath: probe,
 		Conns: []map[string]any{{"svc": "http://" + declared}},
@@ -87,7 +103,7 @@ func TestDeclaredJailLinux(t *testing.T) {
 			Commands: []string{"cat"},
 			Env:      []string{"PROBE_DECLARED"},
 		},
-		Args: []string{
+		Args: append([]string{
 			"read=" + filepath.Join(readDir, "login.yml"),
 			"read=" + secret,
 			"read=" + sibling,
@@ -97,15 +113,11 @@ func TestDeclaredJailLinux(t *testing.T) {
 			"writeexec=" + filepath.Join(writeDir, "x.sh"),
 			"copyexec=" + filepath.Join(writeDir, "copy"),
 			"copyexec=/tmp/copy",
-			"copyexec=/dev/shm/copy",
 			"mkdir=/",
 			"mkdir=/usr/bin",
 			"run=cat",
 			"run=ls",
-			"run=/usr/bin/ls",
-			"ls=/usr/bin",
-			"exists=/etc/fstab",
-			"exists=/opt",
+			"run=/bin/ls",
 			"env=PROBE_DECLARED",
 			"env=PROBE_UNDECLARED",
 			"get=http://" + declared,
@@ -113,7 +125,11 @@ func TestDeclaredJailLinux(t *testing.T) {
 			"get=http://blocked.example.com/",
 			"dial=1.1.1.1:443",
 			"listen=127.0.0.1:" + strconv.Itoa(listenPort),
-		},
+		}, osChecks()...),
+	}
+	if darwin {
+		// Seatbelt allows every file's metadata (stat), not its contents.
+		s.Args = append(s.Args, "read="+conductor)
 	}
 	cmd, cleanup, sandboxed, err := buildCommand(s, sd)
 	if err != nil {
@@ -169,27 +185,25 @@ func TestDeclaredJailLinux(t *testing.T) {
 		"read=" + filepath.Join(readDir, "login.yml"): "ok",
 		"read=" + secret:                               "denied",
 		"read=" + sibling:                              "denied",
-		"exists=" + conductor:                          "denied",
 		"write=" + filepath.Join(writeDir, "out"):      "ok",
 		"write=" + filepath.Join(readDir, "tamper"):    "denied",
 		"writeexec=" + filepath.Join(writeDir, "x.sh"): "denied",
 		"copyexec=" + filepath.Join(writeDir, "copy"):  "denied",
 		"copyexec=/tmp/copy":                           "denied",
-		"copyexec=/dev/shm/copy":                       "denied",
 		"mkdir=/":                                      "denied",
 		"mkdir=/usr/bin":                               "denied",
 		"run=cat":                                      "ok",
 		"run=ls":                                       "denied",
-		"run=/usr/bin/ls":                              "denied",
-		"ls=/usr/bin":                                  "ok:cat",
-		"exists=/etc/fstab":                            "denied",
-		"exists=/opt":                                  "denied",
+		"run=/bin/ls":                                  "denied",
 		"env=PROBE_DECLARED":                           "set:yes",
 		"env=PROBE_UNDECLARED":                         "unset",
 		"get=http://" + declared:                       "ok:declared-loopback",
 		"get=http://" + undeclared:                     "denied",
 		"get=http://blocked.example.com/":              "denied",
 		"dial=1.1.1.1:443":                             "denied",
+	}
+	for k, w := range osWant(darwin, conductor) {
+		want[k] = w
 	}
 	for k, w := range want {
 		g, ok := got[k]
@@ -226,4 +240,33 @@ func freePort(t *testing.T) int {
 	}
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// osChecks are the checks whose answer differs by how each OS jails.
+func osChecks() []string {
+	if runtime.GOOS == "darwin" {
+		return []string{"read=/etc/shells", "ls=/usr/bin", "ls=/opt/homebrew", "ls=/usr/local"}
+	}
+	return []string{"copyexec=/dev/shm/copy", "ls=/usr/bin", "exists=/etc/fstab", "exists=/opt"}
+}
+
+func osWant(darwin bool, conductor string) map[string]string {
+	if darwin {
+		return map[string]string{
+			"read=" + conductor: "denied",
+			"read=/etc/shells":  "denied",
+			"ls=/usr/bin":       "denied",
+			"ls=/opt/homebrew":  "denied",
+			"ls=/usr/local":     "denied",
+		}
+	}
+	return map[string]string{
+		// The jail's root holds none of the host's files: not even the
+		// conductor binary that set it up exists in it.
+		"exists=" + conductor:    "denied",
+		"copyexec=/dev/shm/copy": "denied",
+		"ls=/usr/bin":            "ok:cat",
+		"exists=/etc/fstab":      "denied",
+		"exists=/opt":            "denied",
+	}
 }

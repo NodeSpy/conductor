@@ -33,7 +33,7 @@ func buildDecider(t *testing.T) string {
 // realRuntime starts the reference decision runtime as a real subprocess.
 func realRuntime(t *testing.T, conn map[string]any) (*Runtime, *plugin.Decl) {
 	t.Helper()
-	spec := plugin.Spec{Name: "acme", Kind: plugin.KindRuntime, Provides: "acme-decider", BinPath: buildDecider(t), Local: true}
+	spec := plugin.Spec{Name: "acme", Kind: plugin.KindRuntime, Provides: "acme-decider", BinPath: buildDecider(t), Local: true, TrustFull: true} // the protocol, not the jail
 	client := plugin.NewClient(spec, plugin.Deps{})
 	t.Cleanup(func() { _ = client.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

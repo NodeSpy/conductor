@@ -147,20 +147,15 @@ func TestEffectiveManifestNonProbeUnchanged(t *testing.T) {
 }
 
 func TestManifestSummary(t *testing.T) {
-	if s := (Manifest{}).Summary(); s != "no declared capabilities" {
+	if s := (Manifest{}).Summary(); s != "nothing (no network, no files beyond its own, no commands, no env)" {
 		t.Fatalf("empty manifest summary = %q", s)
 	}
 	m := Manifest{Egress: []string{"a:1"}, Commands: []string{"git", "gh"}, FS: []string{"/tmp"}}
 	s := m.Summary()
-	for _, want := range []string{"network a:1", "commands git,gh", "fs /tmp"} {
+	for _, want := range []string{"connects to: a:1", "runs: git, gh", "reads and writes: /tmp"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("summary %q missing %q", s, want)
 		}
-	}
-	// "I spawn things I am not naming" is surfaced AS SUCH rather than as an
-	// empty command list, because it is exactly what cannot be confined.
-	if s := (Manifest{Spawns: true}).Summary(); !strings.Contains(s, "unnamed") {
-		t.Fatalf("an unnamed-spawn declaration should be visible: %q", s)
 	}
 }
 

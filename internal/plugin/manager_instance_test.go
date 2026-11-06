@@ -29,10 +29,15 @@ func managerWithLocalPlugin(t *testing.T, isolate bool) (mgr *Manager, key strin
 	t.Cleanup(func() { config.SetStateDir("") })
 
 	ref := refFor(t, config.UseKindConnector, bin)
+	// These tests are about instance/process mechanics (isolation grouping,
+	// reload, teardown, host-state scoping) — not the jail — so run the
+	// plugin trust: full rather than needing a built conductor binary wired
+	// as the jail's entry.
+	ref.TrustFull = true
 	if isolate {
 		ref.Instances = map[string]config.ConnectorGrant{
-			"a": {Isolate: true},
-			"b": {Isolate: true},
+			"a": {Isolate: true, TrustFull: true},
+			"b": {Isolate: true, TrustFull: true},
 		}
 	}
 	key = ref.Key()

@@ -165,9 +165,11 @@ func TestReferenceEnginePluginEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Subject here is the engine-plugin host round trip and DataGuard, not
+	// confinement — trust: full so it needs no jail wiring.
 	cl := iplugin.NewClient(iplugin.Spec{
 		Name: "acme-engine", Kind: iplugin.KindStep, Provides: "acme-engine",
-		BinPath: bin, Sha256: sum,
+		BinPath: bin, Sha256: sum, TrustFull: true,
 	}, iplugin.Deps{Log: func(string, ...any) {}})
 	defer cl.Close()
 
@@ -225,9 +227,11 @@ func TestReferenceEnginePluginEndToEnd(t *testing.T) {
 // says so, rather than failing the step — the remote `use: cli` posture.
 func TestReferenceEnginePluginWithoutADataPlane(t *testing.T) {
 	bin, sum := buildEnginePlugin(t)
+	// Subject here is the no-data-plane path, not confinement — trust: full
+	// so it needs no jail wiring.
 	cl := iplugin.NewClient(iplugin.Spec{
 		Name: "acme-engine", Kind: iplugin.KindStep, Provides: "acme-engine",
-		BinPath: bin, Sha256: sum,
+		BinPath: bin, Sha256: sum, TrustFull: true,
 	}, iplugin.Deps{Log: func(string, ...any) {}})
 	defer cl.Close()
 

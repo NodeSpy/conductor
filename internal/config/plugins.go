@@ -192,11 +192,12 @@ func (p PluginRef) HasSharedInstance() bool {
 }
 
 // mergeIsolationBestEffort combines two non-isolated instances' isolation:
-// blocks for PluginRefs' running union. It is best-effort: a genuine conflict
-// (two different, incompatible blocks) is reported precisely by
-// validatePluginRefs/checkIsolationMerge, which runs after PluginRefs and
-// gates whether the config loads at all — this just must never panic or
-// silently invent a block neither instance wrote.
+// blocks for PluginRefs' running union. In practice an isolation: block on a
+// plugin connector/runtime/engine is refused outright at load by
+// checkPluginJail (the declared-capability jail replaced it), so this never
+// sees two real, non-nil blocks to reconcile for a config that loaded at
+// all — it just must never panic or silently invent a block neither instance
+// wrote, for a caller that calls PluginRefs before validation has run.
 func mergeIsolationBestEffort(a, b *IsolationConfig) *IsolationConfig {
 	merged, ok := combineIsolation(a, b)
 	if ok {
@@ -374,6 +375,9 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		// is selected as `runtime: modal`).
 		u.Name = name
 		p := PluginRef{Name: name, Instance: name, Use: u, TrustFull: strings.EqualFold(strings.TrimSpace(rt.Trust), "full")}
+		if rt.Connection != nil {
+			p.Conns = []map[string]any{rt.Connection}
+		}
 		out[u.InstallKey()] = p
 	}
 
@@ -405,19 +409,6 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		out[u.InstallKey()] = p
 	})
 	return out
-}
-
-// defaultEngineIsolation is the sandbox an untrusted-by-default code engine gets
-// when the operator sets nothing: a user+pid+mount namespace with the network
-// denied. A code engine is pure computation over inputs delivered on its RPC
-// transport, so denying egress and masking the daemon's own state/config costs
-// it nothing while turning its "no declared capabilities" into a kernel-enforced
-// wall. Enforcement is best-effort (see PluginRef.IsolationDefaulted).
-func defaultEngineIsolation() *IsolationConfig {
-	return &IsolationConfig{
-		Mode:    "namespace",
-		Network: &IsolationNetwork{Deny: true},
-	}
 }
 
 // defaultCodeIsolation is the sandbox a LOCAL cli/host code step (including
@@ -607,71 +598,6 @@ func (c *Config) checkPluginJail() error {
 	for _, n := range enames {
 		if c.Engines[n].Isolation != nil {
 			return isoErr("engines." + n)
-		}
-	}
-	return nil
-}
-
-// checkIsolationMerge is the OFFLINE half of the isolation-merge check
-// PluginRefs' own merge (mergeIsolationBestEffort) defers to: every
-// NON-ISOLATED instance that shares one process must have isolation: blocks
-// that actually combine into a single block that process can run under
-// (combineIsolation) — a plugin with two non-isolated instances declaring
-// mode: namespace and mode: container, say, cannot be satisfied by any one
-// process. The fix the error names is either make the blocks match or set
-// isolate: true on one of them (giving it, and the conflict, its own process).
-//
-// Side-by-side versions (docs/wiki/Plugins.md): config validation runs
-// before install state is ever consulted, so it cannot know which CONCRETE
-// version two differently-WRITTEN `use:` constraints resolve to — only
-// whether they are the identical reference text, which is always the same
-// version. Grouping here is therefore by (key, raw `use:` text), not by key
-// alone: two instances with the exact same pin (or the exact same unpinned
-// reference) are PROVABLY one process and are checked here, offline, for a
-// fast load-time error; two instances whose constraints merely MIGHT
-// resolve to the same version (two different ranges that happen to pick the
-// same release) are deferred to the authoritative check internal/plugin
-// runs once install state is joined and the real grouping is known
-// (cmd/conductor's checkIsolateAgainstKnownSingleProcess's sibling for
-// isolation, loadConnectorPlugins).
-func (c *Config) checkIsolationMerge() error {
-	type entry struct {
-		instance  string
-		isolation *IsolationConfig
-	}
-	byKey := map[string][]entry{}
-	names := make([]string, 0, len(c.ConnectorsMap))
-	for n := range c.ConnectorsMap {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		ref := c.ConnectorsMap[name]
-		if ref.Isolate {
-			continue
-		}
-		u, err := ref.Resolved()
-		if err != nil || u.IsBuiltin() {
-			continue
-		}
-		groupKey := u.InstallKey() + "\x00" + u.String()
-		byKey[groupKey] = append(byKey[groupKey], entry{name, ref.Isolation})
-	}
-	for groupKey, entries := range byKey {
-		if len(entries) < 2 {
-			continue
-		}
-		key, _, _ := strings.Cut(groupKey, "\x00")
-		combined := entries[0].isolation
-		combinedFrom := entries[0].instance
-		for _, e := range entries[1:] {
-			merged, ok := combineIsolation(combined, e.isolation)
-			if !ok {
-				name := strings.TrimPrefix(key, UseKindConnector.Dir()+"/")
-				return fmt.Errorf("config: connectors: %s and %s share the %s plugin %s's one process by default, but declare different isolation: blocks that cannot combine — make them match, or set isolate: true on one to give it its own process",
-					combinedFrom, e.instance, key, name)
-			}
-			combined = merged
 		}
 	}
 	return nil

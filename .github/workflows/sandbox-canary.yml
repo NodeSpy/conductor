@@ -44,6 +44,11 @@ jobs:
         run: |
           go test -race -count=1 ./internal/sandbox/... ./internal/agentsandbox/... ./internal/gitpush/... ./internal/paseosetup/...
           go test -race -count=1 -run 'TestConfinedGit|TestSandboxApplies|TestDispatchIdentity|TestNonCredentialEnv|TestControllerRunnerBinds|TestOpencodeSandboxed|TestAgentDeckSandboxed|TestDeckWrapper' ./internal/controller/
+      - name: plugin jail — a probe plugin gets exactly what it declares
+        env:
+          CONDUCTOR_REQUIRE_SANDBOX: "1"
+          JAIL_VERBOSE: "1"
+        run: go test -count=1 -v -run 'TestDeclaredJail$|TestBuildCommandDarwinSeatbelt' ./internal/plugin/
       - name: canary — conductor sandbox exec around a fake agent
         run: bash test/sandbox-canary/run.sh
 

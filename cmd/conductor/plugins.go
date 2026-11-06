@@ -512,7 +512,7 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		// always-true question this log line asks: what does the installed
 		// BINARY declare.
 		logf("plugin %s: registered connector type %q (%d verb(s)); permissions: %s",
-			spec.Ref(), spec.Provides, len(decl.Verbs), spec.Manifest.Summary())
+			spec.Ref(), spec.Provides, len(decl.Verbs), plugin.ManifestFromDecl(decl).Summary())
 	}
 	return mgr, nil
 }
@@ -640,8 +640,8 @@ func pluginRuntimeControllers(cfg *config.Config, skip map[string]bool) (map[str
 			Isolation: ref.Isolation,
 			ScrubEnv:  true, // third-party code: minimal env, no daemon secrets (#54 §8.1)
 		}
-		logf("plugin %s: registered runtime %q (acp, per-spawn re-verified, env-scrubbed); permissions: %s",
-			spec.Ref(), ref.Name, spec.EffectiveManifest().Summary())
+		logf("plugin %s: registered runtime %q (acp, per-spawn re-verified): an agent — it runs under the agent sandbox, not its declaration's jail",
+			spec.Ref(), ref.Name)
 	}
 	return out, nil
 }
@@ -739,9 +739,11 @@ rest:
 // cmdPlugin implements `conductor plugin list|show|add|update|remove`.
 func cmdPlugin(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: conductor plugin list|show <name>|add <ref>|update [name]|remove <name>")
+		return fmt.Errorf("usage: conductor plugin list|show <name>|add <ref>|update [name]|approve <name>|remove <name>")
 	}
 	switch args[0] {
+	case "approve":
+		return cmdPluginApprove(args[1:])
 	case "list", "ls":
 		return cmdPluginList(args[1:])
 	case "show":
@@ -753,7 +755,7 @@ func cmdPlugin(args []string) error {
 	case "update":
 		return cmdPluginUpdate(args[1:])
 	default:
-		return fmt.Errorf("unknown plugin subcommand %q (list|show|add|update|remove)", args[0])
+		return fmt.Errorf("unknown plugin subcommand %q (list|show|add|update|approve|remove)", args[0])
 	}
 }
 
@@ -881,7 +883,15 @@ func cmdPluginList(args []string) error {
 // plugin.InstanceSpec would apply to its own process) and is never folded
 // into the shared line.
 func permissionLines(ref config.PluginRef, spec plugin.Spec) []string {
-	lines := []string{"declared capabilities: " + spec.Manifest.Summary()}
+	var lines []string
+	if spec.TrustFull {
+		lines = append(lines, "trust: full — runs WITHOUT its jail; it declares:")
+	} else {
+		lines = append(lines, "runs jailed to what it declares; it may:")
+	}
+	for _, l := range spec.Manifest.Lines() {
+		lines = append(lines, "  "+l)
+	}
 	if ref.Kind() == config.PluginKindConnector && spec.Manifest.SingleProcess {
 		lines = append(lines, "single_process: the plugin declares every instance must share one process — isolate: true is refused for it")
 	}
@@ -1067,12 +1077,13 @@ func cmdPluginAdd(args []string) error {
 		return fmt.Errorf("plugin %s: expected exactly one resolution, got %d", u.Name, len(results))
 	}
 	manifest := results[0].Manifest
-	fmt.Printf("\n%s declares these permissions:\n  %s\n", u.Name, manifest.Summary())
+	fmt.Printf("\n%s runs jailed to what it declares. By adding it you agree that it may:\n", u.Name)
+	for _, l := range manifest.Lines() {
+		fmt.Printf("  %s\n", l)
+	}
+	fmt.Println("Anything else is denied. An update that asks for more waits for `conductor plugin approve`.")
 	fmt.Println("\nAdd it to your config:")
 	fmt.Print("\n" + useSnippet(kind, instance, ref))
-	if kind == config.UseKindConnector && len(manifest.Egress) > 0 {
-		fmt.Printf("    network: [%s]\n", strings.Join(manifest.Egress, ", "))
-	}
 	return nil
 }
 
@@ -1296,6 +1307,60 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 // cmdPluginRemove drops a plugin from local install state and deletes its
 // installed binary. It does NOT touch the config: the reference is the
 // declaration, so removing it there is the operator's edit to make.
+// cmdPluginApprove implements `conductor plugin approve <name>`: the user's
+// yes to a held update that asks for more than the installed build (or, with
+// no name, the list of what is waiting).
+func cmdPluginApprove(args []string) error {
+	_, rest, err := loadConfigRest(args)
+	if err != nil {
+		return err
+	}
+	lock, err := plugin.LockInstallStateCLI(plugin.InstallDir(), pluginLockCLITimeout, lockWaitNotice)
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	if len(rest) == 0 {
+		pending := state.PendingUpdates()
+		if len(pending) == 0 {
+			fmt.Println("no plugin update is waiting for approval")
+			return nil
+		}
+		for _, p := range pending {
+			fmt.Printf("%s %s (replacing %s) asks for more:\n", p.Name, p.Resolved, p.Replaces)
+			for _, w := range p.Widens {
+				fmt.Printf("  + %s\n", w)
+			}
+			fmt.Printf("  its full declaration:\n")
+			for _, l := range p.Manifest.Lines() {
+				fmt.Printf("    %s\n", l)
+			}
+			fmt.Printf("  approve with: conductor plugin approve %s\n", p.Name)
+		}
+		return nil
+	}
+	if len(rest) != 1 {
+		return fmt.Errorf("usage: conductor plugin approve [<name>]")
+	}
+	done, err := state.Approve(rest[0])
+	if err != nil {
+		return err
+	}
+	if err := state.Save(); err != nil {
+		return err
+	}
+	for _, p := range done {
+		fmt.Printf("approved %s %s (replacing %s), which also may:\n", p.Name, p.Resolved, p.Replaces)
+		for _, w := range p.Widens {
+			fmt.Printf("  + %s\n", w)
+		}
+		logf("plugin %s: the user approved %s, which asks for more than %s: %s", p.Name, p.Resolved, p.Replaces, strings.Join(p.Widens, "; "))
+	}
+	fmt.Println("\nA running daemon picks it up at its next reload (`conductor reload`) or restart.")
+	return nil
+}
+
 func cmdPluginRemove(args []string) error {
 	cfg, rest, err := loadConfigRest(args)
 	if err != nil {

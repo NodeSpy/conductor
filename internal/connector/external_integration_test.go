@@ -36,8 +36,10 @@ func buildEcho(t *testing.T) (string, string) {
 // validator directly.
 func TestExternalInvokeRejectsBadOutputOverRealWire(t *testing.T) {
 	bin, sum := buildEcho(t)
+	// Subject here is wire/schema validation, not confinement — trust: full
+	// so it needs no jail wiring.
 	cl := plugin.NewClient(plugin.Spec{
-		Name: "echo", Kind: plugin.KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum,
+		Name: "echo", Kind: plugin.KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum, TrustFull: true,
 	}, plugin.Deps{})
 	defer cl.Close()
 

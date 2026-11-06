@@ -178,6 +178,52 @@ hook. A connector whose contract genuinely varies per instance belongs on
 the plugin contract (even as an in-process builtin via
 `connector.RegisterInProcessConnector`), not as a bundled type.
 
+## Declare what you need
+
+A plugin runs jailed to exactly what its declaration's `capabilities` block
+names (see Security in [[Plugins]] for how it is enforced and shown to the
+user). Anything not declared is denied, so list everything:
+
+```go
+Capabilities: plugin.Capabilities{
+    Egress:   []string{"api.example.com:443", "config:base_url"},
+    Listen:   []string{"config:webhook.listen"},
+    Read:     []string{"~/.config/example", "env:EXAMPLE_CONFIG_DIR", "config:key_path"},
+    Write:    []string{"config:state_dir"},
+    Commands: []string{"example-cli"},
+    Env:      []string{"EXAMPLE_TOKEN", "EXAMPLE_CONFIG_DIR"},
+},
+```
+
+- **`config:<field>`** names a field of your own connection schema (a dotted
+  path for a nested one: `webhook.listen`). conductor reads that field from
+  each configured instance; it never infers anything from a field's name, so
+  a field that holds a URL or path you use must be declared this way.
+  `config:<field>:<port>` gives the port for a value that is a bare host.
+- **`env:VAR[/rel]`** is a path taken from an env var, which must also be in
+  `Env`. **`command:<name>[/rel]`** is a path relative to a declared
+  command's resolved file, for a tool that loads files from its own install
+  tree (`command:node/../..`).
+- **`Commands`** are names, never paths; each is found on the daemon's
+  `PATH` and bound into the jail by name.
+- **HTTP** must honour the proxy: use `http.DefaultTransport`, or set
+  `Proxy: http.ProxyFromEnvironment` on your own `http.Transport`. A
+  transport without it cannot reach anything.
+- **Raw TCP** (a database, SMTP, MQTT) dials through `plugin.DialContext`,
+  which tunnels to a declared destination through the same proxy. A direct
+  `net.Dial` to a non-loopback address fails: the jail has no route out.
+- **A declared loopback destination** (`127.0.0.1:8123`) is reached
+  directly, that port only.
+
+What the jail cannot express yet: an address chosen per call (a verb option
+naming a local port or a file path) is not covered by any declaration. Such
+a plugin declares what it can and documents that it needs `trust: full` for
+the rest.
+
+`e2e/declarations_test.go` in the plugins repo builds every plugin and
+validates its declaration; `conductor plugin show <name>` prints what the
+user will read.
+
 ## Heavy dependencies: the build-tag pattern
 
 The base binary stays lean and zero-cgo. A backend that would drag in a

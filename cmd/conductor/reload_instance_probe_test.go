@@ -78,8 +78,9 @@ func TestDescribeInstancesForInstallUsesOnePerInstanceProcess(t *testing.T) {
 	spec := plugin.Spec{
 		Name: "acme-instance", Kind: plugin.KindConnector, Provides: "acme-instance",
 		BinPath: bin, Sha256: sum,
+		TrustFull: true, // host pids: the process mechanics, not the jail
 		Instances: map[string]config.ConnectorGrant{
-			"instA": {}, "instB": {},
+			"instA": {TrustFull: true}, "instB": {TrustFull: true},
 		},
 	}
 	instances := []connector.PluginInstanceDecl{
@@ -150,7 +151,8 @@ func TestDescribeOneInstanceForInstallClosesProcess(t *testing.T) {
 	spec := plugin.Spec{
 		Name: "acme-instance", Kind: plugin.KindConnector, Provides: "acme-instance",
 		BinPath: bin, Sha256: sum,
-		Instances: map[string]config.ConnectorGrant{"solo": {}},
+		TrustFull: true, // host pids: the process mechanics, not the jail
+		Instances: map[string]config.ConnectorGrant{"solo": {TrustFull: true}},
 	}
 	instances := []connector.PluginInstanceDecl{
 		{Instance: "solo", Connection: map[string]any{"token": "secret", "describe_log": logPath}},

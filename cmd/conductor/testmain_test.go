@@ -26,6 +26,11 @@ import (
 // $PASEO_HOME, then ~/.paseo — a developer's live paseo config. A mutant
 // that lost a runtime's home: once wrote conductor's entries there.
 func TestMain(m *testing.M) {
+	// The plugin jail's entry is conductor's own binary (`conductor
+	// sandbox-net …`), which in this package is the test binary: act as it.
+	if len(os.Args) > 1 && os.Args[1] == "sandbox-net" {
+		os.Exit(runSandboxNet(os.Args[2:]))
+	}
 	capAgentSlice = func(string, string, string) error { return nil } // never the real user manager
 	root, err := testhome.Isolate()
 	if err != nil {

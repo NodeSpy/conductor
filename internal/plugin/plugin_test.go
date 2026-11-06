@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -343,23 +344,24 @@ func TestClientRestartBackoff(t *testing.T) {
 	}
 }
 
-// TestNoIsolationIsTheDefaultPath proves the app-extension posture: a plugin
-// with NO isolation: block launches. OS confinement is opt-in hardening, not a
-// precondition — the default confinement is the declared permission manifest.
+// TestNoIsolationIsTheDefaultPath proves the declared-capability jail's
+// posture: a plugin with no `trust: full` is JAILED by default, even when it
+// declares nothing — there is no more "unconfined unless opted into isolation"
+// path. trust: full is the one opt-out (spawn.go's buildCommandIn).
 func TestNoIsolationIsTheDefaultPath(t *testing.T) {
 	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
 	base := Spec{Name: "p", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Local: true}
 
-	cmd, cleanup, sandboxed, err := buildCommand(base, SandboxDeps{})
+	cmd, cleanup, sandboxed, err := buildCommand(base, testJailDeps(t))
 	if err != nil || cmd == nil {
-		t.Fatalf("a plugin with no isolation must launch: cmd=%v err=%v", cmd, err)
+		t.Fatalf("a plugin with no declared capabilities must still launch, jailed: cmd=%v err=%v", cmd, err)
 	}
 	defer cleanup()
-	if sandboxed {
-		t.Fatal("no isolation block should report sandboxed=false")
+	if !sandboxed {
+		t.Fatal("the default path must be jailed (sandboxed=true); only trust: full opts out")
 	}
 	// The env is still scrubbed — the daemon's credential-bearing environment
-	// is never forwarded, isolation or not.
+	// is never forwarded.
 	for _, kv := range cmd.Env {
 		if strings.HasPrefix(kv, "CONDUCTOR_SECRET") {
 			t.Fatalf("daemon env leaked to the plugin: %q", kv)
@@ -368,8 +370,11 @@ func TestNoIsolationIsTheDefaultPath(t *testing.T) {
 }
 
 // TestManifestConfinesCommands proves the declared-commands half of the
-// permission manifest: PATH is replaced with a directory holding exactly the
-// declared commands, so an undeclared tool is not resolvable by name.
+// permission manifest: a declared command's real binary is individually
+// bound, read-only, into the jail (the Linux jail no longer builds a PATH-link
+// confinement directory — it pivot_roots into a minimal base and bind-mounts
+// exactly the declared commands one by one, see jail.go's buildNamespaced), so
+// an undeclared tool is never bound in at all.
 func TestManifestConfinesCommands(t *testing.T) {
 	dir := t.TempDir()
 	bin := writeBin(t, dir, "b", []byte("x"), 0o755)
@@ -377,53 +382,62 @@ func TestManifestConfinesCommands(t *testing.T) {
 		Name: "p", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Local: true,
 		Manifest: Manifest{Commands: []string{"sh"}},
 	}
-	cmd, cleanup, _, err := buildCommand(s, SandboxDeps{})
+	cmd, cleanup, _, err := buildCommand(s, testJailDeps(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	var path string
-	for _, kv := range cmd.Env {
-		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
-			path = v
+	shPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh on PATH")
+	}
+	shReal, err := filepath.EvalSymlinks(shPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := strings.Join(cmd.Args, "\x00")
+	if !strings.Contains(argv, shReal) {
+		t.Fatalf("declared command sh's real binary %q is not bound into the jail: %v", shReal, cmd.Args)
+	}
+	for _, undeclared := range []string{"curl", "wget"} {
+		if p, err := exec.LookPath(undeclared); err == nil {
+			if real, err := filepath.EvalSymlinks(p); err == nil && strings.Contains(argv, real) {
+				t.Fatalf("undeclared command %s is bound into the jail: %v", undeclared, cmd.Args)
+			}
 		}
-	}
-	if path == "" {
-		t.Fatal("declared commands did not produce a confined PATH")
-	}
-	if _, err := os.Stat(filepath.Join(path, "sh")); err != nil {
-		t.Fatalf("declared command not linked into the confined PATH: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(path, "curl")); err == nil {
-		t.Fatal("an undeclared command is present in the confined PATH")
 	}
 }
 
 // TestProbeSpecConfinesToNoEgressEvenWithDeclaredManifest is the finding-2
 // regression: the type-level probe (Spec.Probe) must be routed through the
 // egress proxy with an EMPTY allowlist — confined to no network — even though
-// confineToManifest's ordinary rule for a connector is "an empty allowlist
-// means unconfined" (allow==nil normally skips the proxy entirely). Without
-// Probe forcing confine=true, a probe spec's empty Spec.Network reads as
-// "unconfigured" and EffectiveManifest falls back to the plugin's WHOLE
-// declared egress — this spec declares api.github.com:443, so a stray proxy
-// call recording ANY non-empty allowlist, or no call at all while one was
-// expected, would both be the bug this guards.
+// its Manifest declares egress. Without Probe forcing the grant's egress to
+// nil (pluginGrant), a probe spec's declared egress would leak straight
+// through to the jail's allowlist — this spec declares api.github.com:443, so
+// a stray proxy call recording ANY non-empty allowlist would be the bug this
+// guards. Since the declared-capability jail now proxies EVERY launch
+// (jail.go: "every launch gets the proxy"), both a probe and an ordinary
+// connector with no declared egress end up calling EgressUnix with an empty
+// allowlist — the sibling test below confirms that is true for a non-probe
+// too, so what distinguishes a probe here is that it reaches the SAME empty
+// allowlist despite declaring one.
 func TestProbeSpecConfinesToNoEgressEvenWithDeclaredManifest(t *testing.T) {
 	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
 	var gotAllow []string
 	called := false
-	egressAddr := func(allow []string) (addr, cred string, revoke func(), err error) {
+	sd := testJailDeps(t)
+	real := sd.EgressUnix
+	sd.EgressUnix = func(allow []string) (sock, cred string, revoke func(), err error) {
 		called = true
 		gotAllow = allow
-		return "127.0.0.1:9", "tok", func() {}, nil
+		return real(allow)
 	}
 	s := Spec{
 		Name: "p", Kind: KindConnector, Provides: "acme-github", BinPath: bin, Local: true,
 		Probe:    true,
 		Manifest: Manifest{Egress: []string{"api.github.com:443"}},
 	}
-	cmd, cleanup, _, err := buildCommand(s, SandboxDeps{EgressAddr: egressAddr})
+	cmd, cleanup, _, err := buildCommand(s, sd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +446,7 @@ func TestProbeSpecConfinesToNoEgressEvenWithDeclaredManifest(t *testing.T) {
 		t.Fatal("a probe spec must be routed through the egress proxy (confined to no network), not left unconfined")
 	}
 	if len(gotAllow) != 0 {
-		t.Fatalf("a probe spec's allowlist must be empty (deny all), got %v", gotAllow)
+		t.Fatalf("a probe spec's allowlist must be empty (deny all) despite its declared egress, got %v", gotAllow)
 	}
 	var sawProxy bool
 	for _, kv := range cmd.Env {
@@ -445,47 +459,69 @@ func TestProbeSpecConfinesToNoEgressEvenWithDeclaredManifest(t *testing.T) {
 	}
 }
 
-// TestNonProbeEmptyManifestStaysUnconfined is the control for the above: an
-// ORDINARY connector spec (Probe: false) that declares no egress at all keeps
-// the existing "empty allowlist means unconfined" behavior — Probe-forced
-// confinement must not leak onto every connector.
+// TestNonProbeEmptyManifestStaysUnconfined: the declared-capability jail
+// proxies EVERY launch, probe or not (jail.go: "every launch gets the proxy:
+// with nothing declared its allowlist is empty and it refuses every
+// destination"). So an ORDINARY connector spec that declares no egress at all
+// is NOT exempt from the proxy — it gets the exact same empty-allowlist
+// egress jail a probe gets; "unconfined" now means "no network beyond what is
+// declared" (here: none), not "the proxy is skipped". This is the control for
+// the probe test above: nothing about Probe grants a non-probe spec special
+// treatment, and nothing about declaring no egress exempts a plugin from the
+// jail.
 func TestNonProbeEmptyManifestStaysUnconfined(t *testing.T) {
 	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	var gotAllow []string
 	called := false
-	egressAddr := func(allow []string) (addr, cred string, revoke func(), err error) {
+	sd := testJailDeps(t)
+	real := sd.EgressUnix
+	sd.EgressUnix = func(allow []string) (sock, cred string, revoke func(), err error) {
 		called = true
-		return "127.0.0.1:9", "tok", func() {}, nil
+		gotAllow = allow
+		return real(allow)
 	}
 	s := Spec{Name: "p", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Local: true}
-	cmd, cleanup, _, err := buildCommand(s, SandboxDeps{EgressAddr: egressAddr})
+	cmd, cleanup, _, err := buildCommand(s, sd)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	if called {
-		t.Fatal("a non-probe connector that declares no egress must stay unconfined (the manifest predates this plugin, or declares nothing) — Probe-only confinement leaked")
+	if !called {
+		t.Fatal("every jailed launch goes through the egress proxy now, declared egress or not")
 	}
+	if len(gotAllow) != 0 {
+		t.Fatalf("a connector that declares no egress should get an empty (deny-all) allowlist, got %v", gotAllow)
+	}
+	var sawProxy bool
 	for _, kv := range cmd.Env {
 		if strings.HasPrefix(kv, "HTTP_PROXY=") || strings.HasPrefix(kv, "HTTPS_PROXY=") {
-			t.Fatalf("unconfined connector env should carry no proxy: %v", cmd.Env)
+			sawProxy = true
 		}
+	}
+	if !sawProxy {
+		t.Fatalf("jailed connector env should carry the egress proxy even with nothing declared: %v", cmd.Env)
 	}
 }
 
-// A plugin that declares NOTHING gets no PATH rewrite: it declared no needs, so
-// there is no allowlist to build, and inventing one would break plugins that
-// predate the manifest.
+// A plugin that declares no commands gets exactly the standard jail PATH (the
+// fixed base bin dirs) with no extra directory added for a command it never
+// named — declaring nothing never widens the jail's PATH.
 func TestNoManifestLeavesPathAlone(t *testing.T) {
 	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
 	s := Spec{Name: "p", Kind: KindConnector, BinPath: bin, Local: true}
-	cmd, cleanup, _, err := buildCommand(s, SandboxDeps{})
+	cmd, cleanup, _, err := buildCommand(s, testJailDeps(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	base := spawnBaseEnv()
-	if len(cmd.Env) != len(base) {
-		t.Fatalf("env changed for a plugin that declared nothing: %v vs %v", cmd.Env, base)
+	var path string
+	for _, kv := range cmd.Env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			path = v
+		}
+	}
+	if want := jailPATH(nil); path != want {
+		t.Fatalf("PATH = %q, want the standard jail PATH %q (no declared commands to add)", path, want)
 	}
 }
 
@@ -545,7 +581,9 @@ func TestPluginTmpdirIsItsOwnStagingDir(t *testing.T) {
 	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
 	root := t.TempDir()
 	s := Spec{Name: "p", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Local: true}
-	cmd, cleanup, _, err := buildCommand(s, SandboxDeps{StagingRoot: root})
+	sd := testJailDeps(t)
+	sd.StagingRoot = root
+	cmd, cleanup, _, err := buildCommand(s, sd)
 	if err != nil {
 		t.Fatal(err)
 	}

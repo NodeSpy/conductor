@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -268,6 +269,11 @@ func autoUpdateLoop(ctx context.Context, u config.Update, cfgFile string, notifi
 	} else {
 		logf("auto-update: enabled, checking every %s (binary only; deps: false)", iv)
 	}
+	if notifier != nil {
+		heldNotifier = func(msg string) {
+			notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "updater", Kind: "plugin_update_held"}, msg)
+		}
+	}
 	checker := &releaseChecker{}
 	t := time.NewTicker(iv)
 	defer t.Stop()
@@ -494,8 +500,39 @@ func refreshPlugins(cfg *config.Config) (bool, []plugin.Resolution, error) {
 		if r.Action == plugin.ActionFailed {
 			logf("auto-update: plugin %s: %v", r.Name, r.Err)
 		}
+		if r.Action == plugin.ActionHeld {
+			announceHeld(r)
+		}
 	}
 	return moved, results, nil
+}
+
+// heldNotifier tells the user an update is waiting for their approval
+// (autoUpdateLoop wires its notifier); announced keeps it to once per held
+// build, not once per update pass.
+var (
+	heldNotifier func(msg string)
+	heldMu       sync.Mutex
+	heldSeen     = map[string]bool{}
+)
+
+func announceHeld(r plugin.Resolution) {
+	pending := ""
+	for _, p := range plugin.LoadInstallState(plugin.InstallDir()).PendingUpdates() {
+		if p.Key == r.Key && p.Source == r.Source {
+			pending = p.Resolved + "@" + p.Sha256
+		}
+	}
+	heldMu.Lock()
+	seen := heldSeen[r.Key+"\x00"+pending]
+	heldSeen[r.Key+"\x00"+pending] = true
+	notify := heldNotifier
+	heldMu.Unlock()
+	if seen || notify == nil {
+		return
+	}
+	notify(fmt.Sprintf("plugin %s: an update is held at %s because it asks for more: %s. Run `conductor plugin approve %s` to accept it.",
+		r.Name, r.Tag, strings.Join(r.Widens, "; "), r.Name))
 }
 
 // refreshPluginsStep refreshes the plugins and republishes the installed

@@ -85,7 +85,7 @@ connectors:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "declared capabilities:") {
+	if !strings.Contains(out, "runs jailed to what it declares") {
 		t.Fatalf("--caps did not surface the plugin's declared capabilities:\n%s", out)
 	}
 	if !strings.Contains(out, "shared process") {

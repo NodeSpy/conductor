@@ -41,13 +41,17 @@ func managerWithLocalSingleProcessPlugin(t *testing.T, singleProcess bool, isola
 	t.Cleanup(func() { config.SetStateDir("") })
 
 	ref := refFor(t, config.UseKindConnector, bin)
+	// This fixture is about single_process/isolation PROCESS GROUPING, not
+	// the jail — run trust: full so the spawn needs no built conductor
+	// binary wired as the jail's entry.
+	ref.TrustFull = true
 	iso := map[string]bool{}
 	for _, n := range isolated {
 		iso[n] = true
 	}
 	ref.Instances = map[string]config.ConnectorGrant{
-		"a": {Isolate: iso["a"]},
-		"b": {Isolate: iso["b"]},
+		"a": {Isolate: iso["a"], TrustFull: true},
+		"b": {Isolate: iso["b"], TrustFull: true},
 	}
 	key = ref.Key()
 	state := LoadInstallState(InstallDir())
