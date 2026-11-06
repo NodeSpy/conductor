@@ -337,6 +337,24 @@ func TestResolveListenerPath(t *testing.T) {
 	}
 }
 
+// A wildcard bind is a bind address, not a destination: the exposure is
+// handed the loopback address it can actually reach the listener on.
+func TestDialableAddr(t *testing.T) {
+	for in, want := range map[string]string{
+		":8787":          "127.0.0.1:8787",
+		"0.0.0.0:8787":   "127.0.0.1:8787",
+		"[::]:8787":      "[::1]:8787",
+		"127.0.0.1:8787": "127.0.0.1:8787",
+		"10.0.0.5:8787":  "10.0.0.5:8787",
+		"hooks.lan:8787": "hooks.lan:8787",
+		"not-an-address": "not-an-address",
+	} {
+		if got := dialableAddr(in); got != want {
+			t.Errorf("dialableAddr(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // At instance start, a listener's resolved path is passed to an exposure
 // that declares `exposes.path` AS AN OPTION, and the returned URL lands in
 // url_to UNCHANGED — the smee case: the channel URL already IS the public

@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -165,7 +166,7 @@ func (p *pluginSourceIntegration) openListeners(ctx context.Context) (map[string
 			return nil, func() {}, fmt.Errorf("connector %q: listeners: %s is set with no %s", p.instance, l.Expose, l.Listen)
 		}
 		path := resolveListenerPath(cfg, l)
-		url, closeFn, err := p.openExposure(ctx, expose, listen, path)
+		url, closeFn, err := p.openExposure(ctx, expose, dialableAddr(listen), path)
 		if err != nil {
 			release()
 			return nil, func() {}, fmt.Errorf("connector %q: %w", p.instance, err)
@@ -176,6 +177,26 @@ func (p *pluginSourceIntegration) openListeners(ctx context.Context) (map[string
 		}
 	}
 	return cfg, release, nil
+}
+
+// dialableAddr turns a listen address into one the exposure can connect to:
+// a wildcard bind (":8787", "0.0.0.0:8787", "[::]:8787") is reached on
+// loopback. The exposure dials the listener from this machine — a relay
+// replays each delivery to it, a tunnel forwards to it — and a wildcard is a
+// bind address, not a destination (an HTTP client cannot POST to ":8787",
+// and an egress proxy treats 0.0.0.0 as a remote host, not loopback).
+func dialableAddr(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return listen
+	}
+	switch host {
+	case "", "0.0.0.0":
+		return net.JoinHostPort("127.0.0.1", port)
+	case "::":
+		return net.JoinHostPort("::1", port)
+	}
+	return listen
 }
 
 // resolveListenerPath reads the listener's own HTTP path out of cfg at

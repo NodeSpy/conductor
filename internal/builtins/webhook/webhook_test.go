@@ -109,12 +109,18 @@ func TestValidateRejectionTable(t *testing.T) {
 		cfg     map[string]any
 		wantErr string
 	}{
-		{"no transport", map[string]any{"sources": map[string]any{"s": map[string]any{}}}, "set `listen` and/or `smee_url`"},
+		{"no listener", map[string]any{"sources": map[string]any{"s": map[string]any{"path": "/s"}}}, "required"},
 		{"no sources", map[string]any{"listen": ":0"}, "no sources"},
-		{"path required with listener", map[string]any{"listen": ":0", "sources": map[string]any{"s": map[string]any{}}}, "required with a listener"},
-		{"match required multi-smee", map[string]any{"smee_url": "https://smee.io/x", "sources": map[string]any{
+		{"path required without a relay", map[string]any{"listen": ":0", "sources": map[string]any{"s": map[string]any{}}}, "a source with no path"},
+		{"match required across the relay path", map[string]any{"listen": ":0", "expose": "relay", "sources": map[string]any{
 			"a": map[string]any{}, "b": map[string]any{},
-		}}, "required to route a smee channel"},
+		}}, "required to route the relay path"},
+		{"a source on the relay path", map[string]any{"listen": ":0", "expose": "relay", "sources": map[string]any{
+			"a": map[string]any{"path": "/"},
+		}}, "is the relay path"},
+		{"the retired smee_url names its migration", map[string]any{"listen": ":0", "smee_url": "https://relay.example/ch", "sources": map[string]any{
+			"a": map[string]any{"path": "/a"},
+		}}, "conductor config migrate"},
 		{"bad template", map[string]any{"listen": ":0", "sources": map[string]any{
 			"s": map[string]any{"path": "/x", "title": "{{.broken"},
 		}}, "bad template"},
@@ -528,6 +534,113 @@ func TestStartSourceVerifiesSignature(t *testing.T) {
 	case ev := <-got:
 		t.Fatalf("bad signature must not emit, got %+v", ev)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// The relay path: an exposure that replays every delivery to one path (a
+// relay) reaches every source through it, each routed by its own match and
+// checked against its own signature — a signature that does not verify drops
+// the delivery for that source only.
+func TestStartSourceRelayPathOffersEverySource(t *testing.T) {
+	w := New()
+	addr := freeAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	emit, got := collectEvents()
+	secret := "shh"
+	go func() {
+		_ = w.StartSource(ctx, plugin.StartSourceRequest{
+			Instance: "wh",
+			Config: map[string]any{
+				"listen": addr, "expose": "relay", "path": "/relay",
+				"sources": map[string]any{
+					"alarms": map[string]any{"path": "/alarms", "match": `{{if eq .body.type "alarm"}}true{{end}}`},
+					"deploys": map[string]any{"match": `{{if eq .body.type "deploy"}}true{{end}}`,
+						"sign": map[string]any{"header": "X-Sig", "secret": secret}},
+				},
+			},
+		}, emit)
+	}()
+	waitListening(t, addr)
+
+	sign := func(body string) string {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(body))
+		return hex.EncodeToString(mac.Sum(nil))
+	}
+	for _, c := range []struct{ body, sig, want string }{
+		{`{"type":"alarm"}`, "", "alarms"},
+		{`{"type":"deploy"}`, sign(`{"type":"deploy"}`), "deploys"},
+	} {
+		if code := postTo(t, "http://"+addr+"/relay", c.body, map[string]string{"X-Sig": c.sig}); code != http.StatusAccepted {
+			t.Fatalf("relay POST %s: status = %d", c.body, code)
+		}
+		select {
+		case ev := <-got:
+			if ev.Event != c.want {
+				t.Fatalf("relay POST %s fired %q, want %q", c.body, ev.Event, c.want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("relay POST %s fired nothing, want %q", c.body, c.want)
+		}
+	}
+	// A bad signature is dropped for that source; the request itself is accepted.
+	if code := postTo(t, "http://"+addr+"/relay", `{"type":"deploy"}`, map[string]string{"X-Sig": "deadbeef"}); code != http.StatusAccepted {
+		t.Fatalf("relay POST with a bad signature: status = %d", code)
+	}
+	select {
+	case ev := <-got:
+		t.Fatalf("a bad signature must not fire, got %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+	}
+	// The source's own path still works beside the relay path.
+	postTo(t, "http://"+addr+"/alarms", `{"type":"alarm"}`, nil)
+	select {
+	case ev := <-got:
+		if ev.Event != "alarms" {
+			t.Fatalf("own path fired %q", ev.Event)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the source's own path stopped working")
+	}
+}
+
+// Without expose there is no relay path: the listener serves the sources'
+// own paths only.
+func TestStartSourceNoRelayPathWithoutExpose(t *testing.T) {
+	w := New()
+	addr := freeAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	emit, _ := collectEvents()
+	go func() {
+		_ = w.StartSource(ctx, plugin.StartSourceRequest{
+			Instance: "wh",
+			Config:   map[string]any{"listen": addr, "sources": map[string]any{"s": map[string]any{"path": "/s"}}},
+		}, emit)
+	}()
+	waitListening(t, addr)
+	if code := postTo(t, "http://"+addr+"/", `{}`, nil); code != http.StatusNotFound {
+		t.Fatalf("POST / with no expose: status = %d, want 404", code)
+	}
+}
+
+// The listeners semantic is declared against real connection fields, so the
+// engine opens `expose` for `listen` and passes the relay path along.
+func TestDescribeDeclaresListeners(t *testing.T) {
+	d := New().Describe()
+	if p := plugin.ValidateSemantics(d); len(p) > 0 {
+		t.Fatalf("declarations: %v", p)
+	}
+	if d.Semantics == nil || len(d.Semantics.Listeners) != 1 {
+		t.Fatalf("listeners = %+v", d.Semantics)
+	}
+	l := d.Semantics.Listeners[0]
+	if l.Listen != "listen" || l.Expose != "expose" || l.Path != "path" || l.URLTo != "public_url" {
+		t.Fatalf("listener = %+v", l)
+	}
+	if _, ok := d.Connection["smee_url"]; ok {
+		t.Fatal("smee_url is no longer a webhook connection field")
 	}
 }
 
