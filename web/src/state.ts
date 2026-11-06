@@ -3,7 +3,7 @@
 import { signal } from '@preact/signals'
 import { api } from './api/client'
 import { openEvents } from './api/sse'
-import type { StatusResponse, RunSummary, AttrQualifier } from './api/types'
+import type { StatusResponse, RunSummary, AttrQualifier, AttentionItem } from './api/types'
 
 export const status = signal<StatusResponse | null>(null)
 export const runs = signal<RunSummary[]>([])
@@ -15,9 +15,44 @@ export const liveTick = signal(0)
 // filter bar offers as pills. Loaded once; refreshed when the run set changes.
 export const connAttrs = signal<AttrQualifier[]>([])
 
-// Needs-you / attention aggregator (design §4.1). Runs that need a person —
-// failed runs (the backend's attention topic feeds these) — minus the ones the
-// operator dismissed. Dismissals are local and reversible (an Undo in the UI).
+// attention is the daemon's view of what needs the operator (pending
+// approvals, failed runs, escalations, …): loaded as a snapshot, then kept
+// current from the attention topic. Most urgent first, then newest.
+export const attention = signal<AttentionItem[]>([])
+
+const severityRank: Record<string, number> = { urgent: 0, warn: 1, info: 2 }
+function sortAttention(items: AttentionItem[]): AttentionItem[] {
+  return [...items].sort(
+    (a, b) => (severityRank[a.severity] ?? 3) - (severityRank[b.severity] ?? 3) || b.opened.localeCompare(a.opened),
+  )
+}
+
+// loadAttention refetches the snapshot and returns the event cursor it
+// reflects ('' when it couldn't be loaded).
+export async function loadAttention(): Promise<string> {
+  try {
+    const r = await api.attention()
+    attention.value = sortAttention(r.items || [])
+    return r.cursor
+  } catch {
+    return '' /* keep what we have; the next event or reset refetches */
+  }
+}
+
+function applyAttention(type: string, item: AttentionItem): void {
+  const rest = attention.value.filter((i) => i.key !== item.key)
+  attention.value = sortAttention(type === 'resolved' ? rest : [...rest, item])
+}
+
+// dismissAttention closes a raised item on the daemon; the resolved event
+// removes it here.
+export async function dismissAttention(key: string): Promise<void> {
+  await api.dismissAttention(key)
+  attention.value = attention.value.filter((i) => i.key !== key)
+}
+
+// Runs the operator hid from the Activity table's "Needs attention" group.
+// Local and reversible (an Undo in the UI).
 const DISMISS_KEY = 'needs-dismissed'
 function loadDismissed(): string[] {
   try {
@@ -86,21 +121,41 @@ export async function load(): Promise<void> {
   }
 }
 
-// startLive opens the SSE stream and keeps the snapshots fresh. On each run
-// event it debounce-refetches (the record is the source of truth, so a refetch
-// is always correct); a reset refetches immediately.
+// startLive loads the attention snapshot, then opens the SSE stream from the
+// snapshot's cursor so no attention change between the two is missed. On each
+// run event it debounce-refetches the runs (the record is the source of truth,
+// so a refetch is always correct); a reset refetches everything.
 export function startLive(): () => void {
   let timer: number | undefined
+  let close: (() => void) | undefined
+  let stopped = false
   const refresh = () => {
     liveTick.value++
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => void load(), 250) as unknown as number
   }
-  return openEvents(['run', 'attention'], {
-    onOpen: () => (conn.value = 'live'),
-    onError: () => (conn.value = 'reconnecting'),
-    onRun: refresh,
-    onAttention: refresh,
-    onReset: () => void load(),
+  void loadAttention().then((cursor) => {
+    if (stopped) return
+    close = openEvents(
+      ['run', 'attention'],
+      {
+        onOpen: () => (conn.value = 'live'),
+        onError: () => (conn.value = 'reconnecting'),
+        onRun: refresh,
+        onAttention: (type, item) => {
+          liveTick.value++
+          applyAttention(type, item)
+        },
+        onReset: () => {
+          void load()
+          void loadAttention()
+        },
+      },
+      cursor,
+    )
   })
+  return () => {
+    stopped = true
+    close?.()
+  }
 }

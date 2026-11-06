@@ -1,50 +1,47 @@
-// The one SSE client. It wraps the browser's EventSource, which already handles
-// Last-Event-ID resume natively: it remembers the last `id:` it received and
-// sends it back as the Last-Event-ID header on every automatic reconnect —
-// exactly what the daemon's hub replays from its ring (design §5.2). We add
-// topic routing, the `reset` signal (refetch snapshots), and connection state.
-import type { RunEventData } from './types'
+// The one SSE client, over the daemon's event journal (design: event-journal).
+// It wraps the browser's EventSource, which handles Last-Event-ID resume
+// natively: it remembers the last `id:` (a journal cursor) and sends it back on
+// every automatic reconnect, and the daemon replays everything after it from
+// the journal. We add topic routing, the `reset` signal (the cursor couldn't be
+// continued: refetch snapshots), and connection state.
+import type { AttentionItem, RunEventData } from './types'
 import { parseSafe } from './safe'
 
 export interface EventHandlers {
   onRun?: (d: RunEventData) => void
-  onAttention?: (d: RunEventData) => void
+  onAttention?: (type: string, item: AttentionItem) => void
   onReset?: () => void
   onOpen?: () => void
   onError?: () => void
 }
 
-// openEvents subscribes to the given topics and returns a closer.
-export function openEvents(topics: string[], h: EventHandlers): () => void {
-  const url = `/api/v1/events?topics=${encodeURIComponent(topics.join(','))}`
+// openEvents subscribes to the given topics and returns a closer. cursor (a
+// snapshot's) starts the stream right after it, so nothing between the
+// snapshot and the stream is missed; without one the stream starts from now.
+export function openEvents(topics: string[], h: EventHandlers, cursor = ''): () => void {
+  let url = `/api/v1/events?topics=${encodeURIComponent(topics.join(','))}`
+  if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`
   const es = new EventSource(url)
 
   es.addEventListener('open', () => h.onOpen?.())
   es.addEventListener('error', () => h.onError?.())
 
-  const parse = (e: MessageEvent): RunEventData | undefined => {
+  const parse = <T>(e: Event): { type: string; data: T } | undefined => {
     try {
-      return parseSafe<{ data: RunEventData }>(e.data).data
+      return parseSafe<{ type: string; data: T }>((e as MessageEvent).data)
     } catch {
       return undefined
     }
   }
   es.addEventListener('run', (e) => {
-    const d = parse(e as MessageEvent)
-    if (d) h.onRun?.(d)
+    const ev = parse<RunEventData>(e)
+    if (ev?.data) h.onRun?.(ev.data)
   })
   es.addEventListener('attention', (e) => {
-    const d = parse(e as MessageEvent)
-    if (d) h.onAttention?.(d)
+    const ev = parse<AttentionItem>(e)
+    if (ev?.data) h.onAttention?.(ev.type, ev.data)
   })
-  // `reset` carries no topic, so EventSource delivers it as the default message.
-  es.addEventListener('message', (e) => {
-    try {
-      if (parseSafe<{ type?: string }>((e as MessageEvent).data).type === 'reset') h.onReset?.()
-    } catch {
-      /* ignore */
-    }
-  })
+  es.addEventListener('reset', () => h.onReset?.())
 
   return () => es.close()
 }

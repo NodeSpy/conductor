@@ -25,6 +25,7 @@ import type {
   TestResponse,
   AttrsResponse,
   AttrValuesResponse,
+  AttentionResponse,
 } from './types'
 import { authState, stepUp } from './auth'
 import { parseSafe, readJSON } from './safe'
@@ -114,6 +115,11 @@ export const api = {
     const qs = p.toString()
     return getJSON<RunsResponse>('/api/v1/runs' + (qs ? `?${qs}` : ''))
   },
+  // The attention view: what needs the operator, and the event cursor it
+  // reflects. Only raised items (no source) can be dismissed.
+  attention: () => getJSON<AttentionResponse>('/api/v1/attention'),
+  dismissAttention: (key: string) =>
+    sendJSON<{ dismissed: boolean }>('POST', '/api/v1/attention/' + encodeURIComponent(key) + '/dismiss', {}),
 
   // --- config-edit pipeline ---
   config: () => getJSON<ConfigResponse>('/api/v1/config'),

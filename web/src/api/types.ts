@@ -195,35 +195,90 @@ export interface AttrValuesResponse {
   values: string[];
 }
 /**
- * EventTopic names a stream a client subscribes to via GET /api/v1/events?topics=.
+ * EventTopic names a journal topic a client subscribes to via GET
+ * /api/v1/events?topics=. Topics are the producers'; these are the ones the
+ * dashboard reads.
  */
 export type EventTopic = string;
 /**
  * TopicRun carries run lifecycle events (run_started, step_started,
- * step_done, run_done), sourced from flow.EventHub.
+ * step_done, gate, run_done); data is RunEventData.
  */
 export const TopicRun: EventTopic = "run";
 /**
- * TopicAttention carries items that need a person. In this slice it is fed
- * by failed runs; the full attention aggregator (design §4.1) is Phase 2.
+ * TopicAttention carries the attention view's transitions (opened,
+ * updated, resolved); data is AttentionItem.
  */
 export const TopicAttention: EventTopic = "attention";
 /**
- * Event is one server-sent event. On the wire the SSE `id:` field carries ID
- * (so a reconnect with Last-Event-ID resumes), `event:` carries Topic, and
+ * TopicChat carries each recorded chat message (type "message").
+ */
+export const TopicChat: EventTopic = "chat";
+/**
+ * TopicTicket carries ticket changes (type "changed"); the subject is the
+ * ticket id.
+ */
+export const TopicTicket: EventTopic = "ticket";
+/**
+ * TopicReset is the topic of the one event a stream sends when the
+ * client's cursor can't be continued: refetch snapshots, then carry on
+ * from the reset event's id.
+ */
+export const TopicReset: EventTopic = "reset";
+/**
+ * Event is one journal event. On the SSE wire the `id:` field carries ID (the
+ * cursor to resume after it with Last-Event-ID), `event:` carries Topic, and
  * `data:` is the JSON encoding of this whole envelope.
  */
 export interface Event {
-  id: number /* int64 */;
+  id: string;
+  seq?: number /* int64 */;
   topic: EventTopic;
-  type: string; // run_started | step_started | step_done | run_done | attention | heartbeat | reset
+  type: string;
+  subject?: string;
   ts: string; // RFC3339
   data?: any;
 }
 /**
+ * EventsPage is GET /api/v1/events/since: the events after a cursor and the
+ * cursor to ask from next. Reset means the cursor couldn't be continued (see
+ * TopicReset); the events are then empty.
+ */
+export interface EventsPage {
+  events: Event[];
+  cursor: string;
+  reset?: boolean;
+}
+/**
+ * AttentionItem is one thing that needs an operator.
+ */
+export interface AttentionItem {
+  key: string;
+  kind: string;
+  title: string;
+  detail?: string;
+  link?: string; // a dashboard route, e.g. "#/runs/<id>"
+  subject?: string;
+  severity: string; // info | warn | urgent
+  opened: string; // RFC3339
+  /**
+   * Source is what reports the item; empty for a raised item, which the
+   * operator may dismiss.
+   */
+  source?: string;
+}
+/**
+ * AttentionResponse is GET /api/v1/attention: the open items, oldest first,
+ * and the cursor they reflect. Follow /api/v1/events?topics=attention from
+ * Cursor and no transition is missed.
+ */
+export interface AttentionResponse {
+  items: AttentionItem[];
+  cursor: string;
+}
+/**
  * RunEventData is the payload of a TopicRun event — a projection of
- * flow.RunEvent. (It is also the shape of a TopicAttention event's data, which
- * is a failed run_done in this slice.)
+ * flow.RunEvent.
  */
 export interface RunEventData {
   type: string;

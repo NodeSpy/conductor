@@ -4,10 +4,10 @@
 // on every SSE run event.
 import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
-import { status, runs, loadError, liveTick, statusMark, needsYou, dismiss } from '../state'
+import { status, runs, loadError, liveTick, statusMark, needsYou, attention, dismissAttention } from '../state'
 import { browser, type Purchase } from '../api/browser'
 import { PurchaseRow } from './Purchase'
-import type { RunSummary } from '../api/types'
+import type { AttentionItem, RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
 import { humanDuration, ago, uptime } from '../lib/format'
 
@@ -26,8 +26,9 @@ export function Overview(): JSX.Element {
   const last12 = all.filter((r) => startedMs(r) >= now - 12 * HOUR)
 
   const running = all.filter((r) => r.status === 'running').sort((a, b) => b.duration_ms - a.duration_ms)
-  // Needs-you is the shared attention aggregator (state.needsYou): failed runs
-  // the operator hasn't dismissed. It refreshes on every SSE attention event.
+  // Needs you is the daemon's attention view (state.attention), live from the
+  // attention topic. The Activity table still groups failed runs on its own.
+  const needs = attention.value
   const failed = needsYou(all)
   const finished = all.filter((r) => r.status === 'ok' || r.status === 'retried')
   const longest = running.length ? humanDuration(running[0].duration_ms) : '—'
@@ -42,13 +43,13 @@ export function Overview(): JSX.Element {
       <section class="tiles" aria-label="At a glance">
         <Tile label="Running" value={String(running.length)} sub={running.length ? `longest ${longest}` : 'nothing running'} href="#/activity" />
         <Tile label="Runs · last 12 h" value={String(last12.length)} sub={`${failed12(last12)} failed`} />
-        <Tile label="Needs you" value={String(failed.length)} sub={failed.length ? 'failed runs' : 'all clear'} tone={failed.length ? 'attn' : undefined} />
+        <Tile label="Needs you" value={String(needs.length)} sub={needs.length ? needsSub(needs) : 'all clear'} tone={needs.length ? 'attn' : undefined} />
         <Tile label="Version" value={st?.version ?? '…'} sub={st ? `up ${uptime(st.uptime_sec)}` : ''} mono />
       </section>
 
-      {/* Needs you — fed by failed runs (one of its real sources; the full
-          aggregator is Phase 2). Leads the page. */}
-      <NeedsYou failed={failed} paused={st?.paused ?? false} />
+      {/* Needs you — the attention view: approvals, failed runs, escalations,
+          bot findings. Leads the page. Purchases have their own panel below. */}
+      <NeedsYou items={needs.filter((i) => i.kind !== 'purchase')} paused={st?.paused ?? false} />
 
       <PurchasesWaiting />
 
@@ -134,36 +135,57 @@ function runTitle(r: RunSummary): string {
   return target ? `${r.workflow} · ${target}` : r.workflow
 }
 
-function NeedsYou({ failed, paused }: { failed: RunSummary[]; paused: boolean }): JSX.Element {
+function needsSub(items: AttentionItem[]): string {
+  const urgent = items.filter((i) => i.severity === 'urgent').length
+  return urgent ? `${urgent} urgent` : `${items.length} open`
+}
+
+function NeedsYou({ items, paused }: { items: AttentionItem[]; paused: boolean }): JSX.Element {
+  const [shown, setShown] = useState(5)
+  const [err, setErr] = useState('')
+  const dismiss = (key: string) => {
+    setErr('')
+    dismissAttention(key).catch((e) => setErr(e instanceof Error ? e.message : String(e)))
+  }
   return (
     <section class="panel" aria-label="Needs you">
       <div class="panel-head">
         <h2 class="panel-title serif">Needs you</h2>
+        {items.length ? <span class="count hot">{items.length}</span> : null}
       </div>
       {paused ? <p class="calm">All automation is paused.</p> : null}
-      {failed.length === 0 ? (
+      {err ? <div class="banner err">Couldn't dismiss: {err}</div> : null}
+      {items.length === 0 ? (
         <p class="calm">Nothing needs you right now.</p>
       ) : (
         <ul class="rows">
-          {failed.slice(0, 5).map((r) => (
-            <li class="row" data-row="fail">
-              <StatusMark s="ember" mkOnly />
+          {items.slice(0, shown).map((i) => (
+            <li class="row" data-row={i.severity === 'info' ? undefined : 'fail'} key={i.key}>
+              <StatusMark s={i.severity === 'info' ? 'idle' : 'ember'} mkOnly />
               <div class="row-main">
-                <div class="row-title">{runTitle(r)}</div>
-                <div class="why-line">{r.error || `failed at ${r.failed_step || 'a step'}`}</div>
-                <div class="row-meta mono">{r.id}</div>
+                <div class="row-title">{i.title}</div>
+                {i.detail ? <div class="why-line">{i.detail}</div> : null}
               </div>
-              <div class="row-age">{ago(r.started)}</div>
-              <a class="btn sm" href={'#/runs/' + r.id}>
-                Open
-              </a>
-              <button class="btn sm ghost" type="button" title="Dismiss from Needs you" onClick={() => dismiss(r.id)}>
-                Dismiss
-              </button>
+              <div class="row-age">{ago(i.opened)}</div>
+              {i.link ? (
+                <a class="btn sm" href={i.link}>
+                  Open
+                </a>
+              ) : null}
+              {i.source ? null : (
+                <button class="btn sm ghost" type="button" title="Dismiss from Needs you" onClick={() => dismiss(i.key)}>
+                  Dismiss
+                </button>
+              )}
             </li>
           ))}
         </ul>
       )}
+      {items.length > shown ? (
+        <button class="more-btn" type="button" onClick={() => setShown((n) => n + 10)}>
+          Show more of {items.length}
+        </button>
+      ) : null}
     </section>
   )
 }
