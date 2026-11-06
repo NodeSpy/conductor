@@ -294,6 +294,14 @@ func resolvePacks(configPath string, allowUnlisted bool) (*Lockfile, error) {
 // previous lock (for `hold:`) and local sources are still read relative to
 // the config.
 func resolvePacksInto(configPath, root string, allowUnlisted bool) (*Lockfile, error) {
+	return resolvePacksPinned(configPath, root, allowUnlisted, nil)
+}
+
+// resolvePacksPinned is resolvePacksInto with some top-level instances
+// pinned to a ref (a tag or a commit sha) in place of what their `version:`
+// would resolve to: auto-update's fallback, trying each pack's releases in
+// turn (StagePacksNewestLoadable).
+func resolvePacksPinned(configPath, root string, allowUnlisted bool, pins map[string]string) (*Lockfile, error) {
 	dir := filepath.Dir(configPath)
 	packs, trust, err := loadPacksBlock(configPath)
 	if err != nil {
@@ -320,7 +328,7 @@ func resolvePacksInto(configPath, root string, allowUnlisted bool) (*Lockfile, e
 			prev[e.Instance] = e
 		}
 	}
-	r := &resolver{configDir: dir, lock: &Lockfile{Version: 1}, trust: trust, allowUnlisted: allowUnlisted, prev: prev}
+	r := &resolver{configDir: dir, lock: &Lockfile{Version: 1}, trust: trust, allowUnlisted: allowUnlisted, prev: prev, pins: pins}
 	for _, name := range sortedPackKeys(packs) {
 		if !validPackAlias(name) {
 			return nil, fmt.Errorf("pack instance name %q is invalid (letters, digits, '-', '_' only)", name)
@@ -343,6 +351,7 @@ type resolver struct {
 	trust         *PackTrustConfig
 	allowUnlisted bool
 	prev          map[string]LockEntry // previous lock, by instance — for `hold:`
+	pins          map[string]string    // top-level instance → ref, over its `version:`
 }
 
 func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir string) error {
@@ -378,6 +387,9 @@ func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir
 	// instance re-pins to its previously-locked revision instead of re-resolving,
 	// so auto-update leaves it frozen (an explicit `pack update` clears the hold
 	// path by carrying no prior lock for a changed source).
+	if pin := r.pins[ns]; pin != "" && len(chain) == 1 && spec.git && spec.ref == "" {
+		spec.ref = pin
+	}
 	if spec.git && spec.ref == "" {
 		if inst.Hold {
 			if p, ok := r.prev[ns]; ok && p.Resolved != "" && p.Resolved != "local" {
@@ -507,6 +519,27 @@ func resolveVersionTag(spec sourceSpec, constraint string) (string, error) {
 		return "", fmt.Errorf("no tag satisfies version %q (looked for %q<semver> among %d tags at %s)", constraint, prefix, len(tags), spec.gitURL)
 	}
 	return tag, nil
+}
+
+// versionCandidates lists, newest first, the tags of a git source that its
+// `version:` constraint accepts — what resolveVersionTag picks the first of.
+func versionCandidates(spec sourceSpec, constraint string) ([]string, error) {
+	out, err := runGit("", "ls-remote", "--tags", "--refs", "--", spec.gitURL)
+	if err != nil {
+		return nil, fmt.Errorf("list tags for %s: %s", spec.gitURL, gitErrDetail(out))
+	}
+	prefix := ""
+	if spec.subdir != "" {
+		prefix = spec.subdir + "/"
+	}
+	var cands []string
+	for _, t := range parseLsRemoteTags(out) {
+		if tagMatches(t, prefix, constraint) {
+			cands = append(cands, t)
+		}
+	}
+	sort.Slice(cands, func(i, j int) bool { return CompareVersions(cands[i], cands[j]) > 0 })
+	return cands, nil
 }
 
 // parseLsRemoteTags extracts tag names from `git ls-remote --tags --refs`

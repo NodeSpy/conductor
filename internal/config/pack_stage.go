@@ -38,6 +38,10 @@ type PackStage struct {
 // `hold:`), never written. Discard the stage when done with it; Commit swaps
 // it in.
 func StagePacks(configPath string) (*PackStage, error) {
+	return stagePacks(configPath, nil)
+}
+
+func stagePacks(configPath string, pins map[string]string) (*PackStage, error) {
 	parent := filepath.Join(filepath.Dir(configPath), ".conductor")
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return nil, err
@@ -47,7 +51,7 @@ func StagePacks(configPath string) (*PackStage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stage pack update: %w", err)
 	}
-	lock, err := resolvePacksInto(configPath, root, false)
+	lock, err := resolvePacksPinned(configPath, root, false, pins)
 	if err != nil {
 		os.RemoveAll(root)
 		return nil, err
@@ -117,3 +121,109 @@ func (s *PackStage) Commit() error {
 
 // Discard removes the stage. Safe to call more than once, and after Commit.
 func (s *PackStage) Discard() { os.RemoveAll(s.root) }
+
+// PackFallback is one pack StagePacksNewestLoadable could not take at its
+// newest release.
+type PackFallback struct {
+	Instance string
+	Newest   string // the newest release its constraint accepts
+	Took     string // the release staged instead; "" = held at the current one
+	Err      error  // why Newest did not load
+}
+
+// StagePacksNewestLoadable is auto-update's fallback when the newest packs,
+// staged together, do not load: each top-level pack instead takes the newest
+// release within its `version:` constraint that loads, the others held at
+// what the lockfile has. It never goes below the current release: a pack
+// with no newer loadable release stays where it is. So one pack that cannot
+// move never holds another back. Instances are tried in name order, each
+// against the choices before it. Returns the stage and every pack left short
+// of its newest release.
+//
+// Each try is a full staged resolution and load, so this is the slow path,
+// taken only when the fast one failed.
+func StagePacksNewestLoadable(configPath string) (*PackStage, []PackFallback, error) {
+	packs, _, err := loadPacksBlock(configPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := applyPackSourceDefaults(packs); err != nil {
+		return nil, nil, err
+	}
+	prevLock, _ := ReadLockfile(filepath.Dir(configPath))
+	current := map[string]string{}
+	if prevLock != nil {
+		for _, e := range prevLock.Packs {
+			if e.Resolved != "" && e.Resolved != "local" {
+				current[e.Instance] = e.Resolved
+			}
+		}
+	}
+	// Every pack starts at its current release.
+	pins := map[string]string{}
+	for name := range packs {
+		if c := current[name]; c != "" {
+			pins[name] = c
+		}
+	}
+	var held []PackFallback
+	for _, name := range sortedPackKeys(packs) {
+		inst := packs[name]
+		spec, err := parseSource(inst.Source, filepath.Dir(configPath))
+		c := strings.TrimSpace(inst.Version)
+		if err != nil || !spec.git || spec.ref != "" || inst.Hold || c == "" {
+			continue // nothing to choose between: it resolves one way only
+		}
+		cands, err := versionCandidates(spec, c)
+		if err != nil {
+			return nil, nil, fmt.Errorf("pack %q: %w", name, err)
+		}
+		if len(cands) == 0 {
+			continue
+		}
+		fb := PackFallback{Instance: name, Newest: cands[0]}
+		for _, tag := range cands {
+			trial := map[string]string{}
+			for k, v := range pins {
+				trial[k] = v
+			}
+			trial[name] = tag
+			st, err := stagePacks(configPath, trial)
+			if err != nil {
+				if fb.Err == nil {
+					fb.Err = err
+				}
+				continue
+			}
+			_, lerr := st.Load()
+			resolved := ""
+			for _, e := range st.Lock.Packs {
+				if e.Instance == name {
+					resolved = e.Resolved
+				}
+			}
+			st.Discard()
+			if resolved != "" && resolved == current[name] {
+				break // reached the current release: held there
+			}
+			if lerr == nil {
+				pins[name] = tag
+				if tag != cands[0] {
+					fb.Took = tag
+				}
+				break
+			}
+			if fb.Err == nil {
+				fb.Err = lerr
+			}
+		}
+		if fb.Err != nil {
+			held = append(held, fb)
+		}
+	}
+	st, err := stagePacks(configPath, pins)
+	if err != nil {
+		return nil, held, err
+	}
+	return st, held, nil
+}
