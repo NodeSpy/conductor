@@ -1,4 +1,79 @@
-# Migration (legacy schema → connectors)
+# Migration
+
+## Upgrading: smee moves out of github and the webhook connector
+
+A smee.io channel used to be dialed by whoever received the webhook: the
+github plugin (`webhook.smee_url`) and the bundled `webhook` connector
+(`smee_url`). It is now one thing, the `smee` **exposure connector** (a
+plugin), which relays the channel to a local listener. The receiver only
+listens locally and names its exposure with `expose:` — the same field any
+tunnel plugin (cloudflared, ngrok, tailscale, …) plugs into:
+
+```yaml
+# before                              # after
+gh:                                   gh:
+  use: github                           use: github
+  webhook:                              webhook:
+    smee_url: ${GH_SMEE_URL}              secret: ${GH_WEBHOOK_SECRET}
+    secret: ${GH_WEBHOOK_SECRET}          listen: 127.0.0.1:8787
+                                          path: /webhook
+                                          expose: gh-smee
+                                      gh-smee:
+                                        use: smee
+                                        channel: ${GH_SMEE_URL}
+```
+
+**Nothing to do by hand.** The daemon rewrites the old shape at boot, before
+it loads the config:
+
+- The new smee connector is pinned to the **same channel** (the same
+  `${VAR}` reference, verbatim), so whatever sends to it — a GitHub App's or
+  repo's webhook — keeps working untouched.
+- An existing `listen:` is kept; a missing one gets a free loopback port
+  from 8787 up. The github shape gets `path: /webhook` (its default) written
+  out. A `webhook` connector's deliveries arrive on its relay path (`path:`,
+  default `/`) and are offered to every source, each checking its own
+  signature, as the channel did.
+- The `smee` plugin is installed **first** (the boot gap-fill, bounded to 2
+  minutes). If it can't be fetched, nothing is rewritten and the daemon
+  starts on the config as it is; the next boot tries again.
+- The rewritten config must load and build every touched connector enabled
+  before it replaces yours; otherwise nothing is written and the reason is
+  logged and escalated.
+- Every rewritten file is backed up first as `<file>.pre-smee` (the first
+  backup is kept), comments and key order are preserved, and each file is
+  logged: `config migrate: rewrote <file> (backup <file>.pre-smee)`. A
+  second boot finds nothing to do.
+- Imported files (`imports:`, `connectors: {imports: […]}`, entry
+  `import:`) are rewritten where the connector lives.
+- A connector that sets **both** `smee_url` and `expose:` is left alone and
+  named in the log: one listener has one exposure, so pick one by hand.
+
+`conductor config migrate --dry-run` shows the rewrite without writing;
+`conductor config migrate` runs it by hand. `conductor validate` (and the
+self-update preflight) names a pending rewrite and checks that the smee
+plugin can be fetched.
+
+**Release order.** Conductor and plugins update independently, so every
+combination keeps working:
+
+1. `smee` plugin v1.2.0 (TCP keep-alive on the channel stream, backoff
+   that resets once connected, egress for a pinned non-smee.io channel).
+   Older smee releases also work.
+2. `github` plugin v2.12.0 — `webhook.smee_url` still works, with a
+   deprecation warning in the log. Every github 2.x release already serves
+   `listen` + `expose`, so a migrated config runs on any of them.
+3. This conductor release — the rewrite above; core no longer has a smee
+   client.
+4. A later `github` major removes `webhook.smee_url`, once this release is
+   the oldest conductor in use.
+
+**Rolling back** to an older conductor after the rewrite: github deliveries
+keep flowing (the older conductor already runs the smee connector and the
+listener's exposure), but the `webhook` connector's relay path is new — put
+`<file>.pre-smee` back if you roll back and rely on it.
+
+## Upgrading to the plugin contract
 
 ## Upgrading to the plugin contract
 

@@ -8,22 +8,56 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/pkg/plugin"
 )
+
+// smeeFixture stands in for the smee exposure plugin the example's github
+// webhook names in `expose:`. The example's `use: smee` is swapped for its
+// own type name: registered as `smee`, it would make smee a builtin for the
+// rest of the package, and the config-migrate tests need smee missing.
+type smeeFixture struct{}
+
+const smeeFixtureType = "smee-example-fixture"
+
+func (smeeFixture) Describe() plugin.Decl {
+	return plugin.Decl{
+		Type: smeeFixtureType, Kind: plugin.KindConnector,
+		Connection: plugin.Schema{"channel": {Type: "string"}},
+		Verbs: []plugin.Verb{{
+			Name: "open", Semantics: &plugin.VerbSemantics{HostOnly: true, Exposes: &plugin.Exposes{Local: "local_addr", URL: "public_url"}},
+			Options: plugin.Schema{"local_addr": {Type: "string", Required: true}},
+			Outputs: plugin.Schema{"public_url": {Type: "string", Required: true}},
+		}},
+	}
+}
+
+func (smeeFixture) Invoke(plugin.InvokeRequest) (plugin.InvokeResult, error) {
+	return plugin.InvokeResult{Outputs: map[string]any{"public_url": "https://relay.example/channel"}}, nil
+}
+
+var registerSmeeFixture = sync.OnceFunc(func() { connector.RegisterInProcessConnector(smeeFixture{}) })
 
 // TestExampleConfigValidates proves the shipped connectors-model example
 // loads, builds, and passes the full semantic validation — the same gate a
 // live config passes at boot. Credentials are dummies; the App key path is
 // swapped for a generated throwaway key.
 func TestExampleConfigValidates(t *testing.T) {
+	registerSmeeFixture()
 	raw, err := os.ReadFile("../../config.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	keyPath := writeTempRSAKey(t)
 	doc := strings.Replace(string(raw), "~/.config/conductor/github-app.pem", keyPath, 1)
+	if !strings.Contains(doc, "    use: smee\n") {
+		t.Fatal("the example no longer has a smee connector to stand in for")
+	}
+	doc = strings.ReplaceAll(doc, "    use: smee\n", "    use: "+smeeFixtureType+"\n")
 
 	for _, v := range []string{
 		"GH_WEBHOOK_SECRET", "GH_SMEE_URL", "SLACK_APP_TOKEN",
@@ -204,8 +238,8 @@ func TestStarterConfigFreshSeedLayout(t *testing.T) {
 	if _, err := buildFlowStack(cfg, nil, nil, true); err != nil {
 		t.Fatalf("fresh seed must validate: %v", err)
 	}
-	if len(cfg.ConnectorsMap) != 1 {
-		t.Fatalf("starter connectors: %d, want just gh", len(cfg.ConnectorsMap))
+	if len(cfg.ConnectorsMap) != 2 || cfg.ConnectorsMap["gh"].TypeName() == "" || cfg.ConnectorsMap["gh-smee"].TypeName() != "smee" {
+		t.Fatalf("starter connectors: %v, want gh and its gh-smee exposure", cfg.ConnectorsMap)
 	}
 
 	// Drop a connector file in — it joins the section on the next load.
