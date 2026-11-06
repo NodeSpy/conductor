@@ -102,6 +102,9 @@ func (s *Service) SubscribeChat() (<-chan ChatEvent, func()) {
 }
 
 func (s *Service) publishChat(ev ChatEvent) {
+	if s.Record != nil {
+		s.Record("chat", "message", ev.Conversation, ev)
+	}
 	h := &s.chat
 	h.mu.Lock()
 	defer h.mu.Unlock()

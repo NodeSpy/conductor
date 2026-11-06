@@ -612,7 +612,14 @@ func cmdRun(args []string) error {
 	// Every lifecycle event feeds the conductor.* source (ordinary triggers
 	// alert on them); the source's loop guard keeps a notification
 	// workflow's own events from re-feeding.
-	notifier.SetPublisher(connector.EmitLifecycle)
+	//
+	// The event journal and attention view open first, so an escalation that
+	// hands work to the operator also raises an attention item.
+	journal, attn := openEventJournal(cfg, logf)
+	if journal != nil {
+		defer journal.Close()
+	}
+	notifier.SetPublisher(lifecyclePublisher(attn, connector.EmitLifecycle))
 
 	// The connectors-model stack: secret resolution, the connector registry,
 	// the flow runner, and the lowered source integrations. nil when the
@@ -891,6 +898,11 @@ func cmdRun(args []string) error {
 	if stack != nil {
 		bots = buildBots(cfg, st, stack.Runner, reg, hold, eng, notifier, logf)
 	}
+	var runEvents *flow.EventHub
+	if stack != nil {
+		runEvents = stack.Events
+	}
+	wireEventJournal(ctx, journal, attn, runEvents, bots)
 
 	// The live agent-tool socket: with a memory: section configured — or any
 	// profile opted into the conductor skill (#36 §12) — serve the tool
@@ -1178,6 +1190,9 @@ func cmdRun(args []string) error {
 			// payment cards and purchase approvals, over the same control layer the
 			// CLI uses. Reads empty when no browser is configured.
 			Browser: dashboardBrowser{},
+			// The durable event journal and the attention view
+			// (docs/design/event-journal.md).
+			Journal: journal, Attention: attn,
 		})
 		if err := dash.Start(ctx); err != nil {
 			logf("dashboard: not started: %v", err)

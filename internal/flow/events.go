@@ -37,6 +37,7 @@ type EventHub struct {
 	mu   sync.Mutex
 	subs map[int]*eventSub
 	next int
+	tap  func(RunEvent)
 }
 
 type eventSub struct {
@@ -49,13 +50,32 @@ func NewEventHub() *EventHub {
 	return &EventHub{subs: map[int]*eventSub{}}
 }
 
-// Publish fans an event out to matching subscribers (never blocks).
+// SetTap installs a function every published event is handed to first,
+// synchronously and losslessly (the daemon's event journal). Set it before
+// runs start.
+func (h *EventHub) SetTap(fn func(RunEvent)) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.tap = fn
+	h.mu.Unlock()
+}
+
+// Publish hands an event to the tap, then fans it out to matching
+// subscribers (never blocks on a subscriber).
 func (h *EventHub) Publish(ev RunEvent) {
 	if h == nil {
 		return
 	}
 	if ev.TS.IsZero() {
 		ev.TS = time.Now()
+	}
+	h.mu.Lock()
+	tap := h.tap
+	h.mu.Unlock()
+	if tap != nil {
+		tap(ev)
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()

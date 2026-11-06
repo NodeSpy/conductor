@@ -22,11 +22,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/attention"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/configedit"
 	"github.com/NodeSpy/conductor/internal/dashboard/api"
 	"github.com/NodeSpy/conductor/internal/dashboard/auth"
 	"github.com/NodeSpy/conductor/internal/flow"
+	"github.com/NodeSpy/conductor/internal/journal"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -109,6 +111,14 @@ type Deps struct {
 	// screencast and takeover, personal details, payment cards and purchase
 	// approvals. Nil when no browser runs on this daemon.
 	Browser Browser
+
+	// Journal is the daemon's durable event log and Attention its view of
+	// what needs an operator (design: event-journal). The daemon records run
+	// events into the journal itself (RecordRunEvent from the flow hub's tap).
+	// Nil Journal: the server keeps a private one for its lifetime and bridges
+	// Events into it; nil Attention: a private, unpersisted view.
+	Journal   *journal.Journal
+	Attention *attention.Service
 }
 
 // StepupEvidence re-exports auth.StepupEvidence so a Deps caller (the daemon)
@@ -117,16 +127,18 @@ type StepupEvidence = authStepupEvidence
 
 // Server is the dashboard HTTP server.
 type Server struct {
-	deps    Deps
-	hub     *hub
-	mux     *http.ServeMux
-	started time.Time
-	edit    *configedit.Pipeline // nil when ConfigPath is empty (read-only)
-	auth    *auth.Manager        // nil until wired in New()
-	authErr error                // why auth could not be wired; the API is refused while set
-	tsAPI   localAPI             // tailscaled LocalAPI; nil = the real socket client
-	labels  *stepupLabels        // what each handed-out step-up digest confirms, for approve-login
-	quiet   *applyBudget         // config applies that needed no step-up, rate-limited
+	deps      Deps
+	journal   *journal.Journal
+	attention *attention.Service
+	bridge    bool // journal is private: feed it from deps.Events
+	mux       *http.ServeMux
+	started   time.Time
+	edit      *configedit.Pipeline // nil when ConfigPath is empty (read-only)
+	auth      *auth.Manager        // nil until wired in New()
+	authErr   error                // why auth could not be wired; the API is refused while set
+	tsAPI     localAPI             // tailscaled LocalAPI; nil = the real socket client
+	labels    *stepupLabels        // what each handed-out step-up digest confirms, for approve-login
+	quiet     *applyBudget         // config applies that needed no step-up, rate-limited
 }
 
 // New builds a dashboard server from its dependencies.
@@ -137,7 +149,7 @@ func New(deps Deps) *Server {
 	if deps.Paused == nil {
 		deps.Paused = func() bool { return false }
 	}
-	s := &Server{deps: deps, hub: newHub(), mux: http.NewServeMux(), started: time.Now(), labels: newStepupLabels(deps.Now),
+	s := &Server{deps: deps, journal: deps.Journal, attention: deps.Attention, mux: http.NewServeMux(), started: time.Now(), labels: newStepupLabels(deps.Now),
 		quiet: newApplyBudget(deps.Now, quietBudgetPath(deps))}
 	if deps.ConfigPath != "" {
 		s.edit = configedit.New(configedit.Options{
@@ -150,6 +162,12 @@ func New(deps Deps) *Server {
 			// sign-in off there is only the unowned set).
 			Live: func(owner string) bool { return s.auth == nil || s.auth.SessionLive(owner) },
 		})
+	}
+	if s.journal == nil {
+		s.journal, s.bridge = privateJournal(deps.Log), true
+	}
+	if s.attention == nil {
+		s.attention = attention.New(attention.Options{Journal: s.journal, Log: deps.Log})
 	}
 	s.buildAuth() // the auth Manager + RPs (authwire.go); on error the API is refused (authErr)
 	s.routes()
@@ -166,6 +184,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/runs/{id}/retry", s.handleRetry)
 	s.mux.HandleFunc("POST /api/v1/runs/{id}/stop", s.handleStop)
 	s.mux.HandleFunc("GET /api/v1/events", s.handleEvents)
+	s.mux.HandleFunc("GET /api/v1/events/since", s.handleEventsSince)
+	s.mux.HandleFunc("GET /api/v1/attention", s.handleAttention)
+	s.mux.HandleFunc("POST /api/v1/attention/{key}/dismiss", s.handleAttentionDismiss)
 
 	// Workflows (design §4.4).
 	s.mux.HandleFunc("GET /api/v1/workflows", s.handleWorkflows)
@@ -215,9 +236,9 @@ func (s *Server) routes() {
 // `localhost` keyword binds; `tailscale` is accepted by config but served in
 // Phase 2.
 func (s *Server) Start(ctx context.Context) error {
-	// Bridge the flow event hub into our resumable hub for the lifetime of ctx.
-	if s.deps.Events != nil {
-		go s.hub.run(ctx, s.deps.Events)
+	// Without the daemon's journal, bridge the flow hub into the private one.
+	if s.bridge && s.deps.Events != nil {
+		go s.bridgeRuns(ctx, s.deps.Events)
 	}
 
 	port := s.deps.Cfg.Dashboard.EffectivePort()
@@ -388,22 +409,25 @@ func toSummary(rec store.RunHistory) api.RunSummary {
 	return s
 }
 
-// handleEvents is the SSE stream. ?topics= selects topics (default run,attention);
-// the Last-Event-ID header (or ?last_event_id=) resumes a dropped stream from the
-// hub's ring. Heartbeats go out every 15s so proxies and clients see liveness.
+// handleEvents is the SSE stream over the journal. ?topics= selects topics
+// (default run,attention); the Last-Event-ID header (or ?cursor=) resumes
+// after that event, replaying from the journal however long the client was
+// away. A cursor that can't be continued (another epoch, aged out) gets one
+// reset event first. Heartbeats go out every 15s so proxies and clients see
+// liveness.
+//
+// The stream never skips an event for a slow client: it reads the journal at
+// the client's pace.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "no_stream", "streaming is not supported on this connection", "")
 		return
 	}
-
 	topics := parseTopics(r.URL.Query().Get("topics"))
-	lastID := int64(0)
-	if h := r.Header.Get("Last-Event-ID"); h != "" {
-		lastID, _ = strconv.ParseInt(h, 10, 64)
-	} else if q := r.URL.Query().Get("last_event_id"); q != "" {
-		lastID, _ = strconv.ParseInt(q, 10, 64)
+	cursor := r.Header.Get("Last-Event-ID")
+	if cursor == "" {
+		cursor = r.URL.Query().Get("cursor")
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -411,33 +435,36 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering
 	w.WriteHeader(http.StatusOK)
-
-	ch, missed, reset, cancel := s.hub.subscribe(topics, lastID)
-	defer cancel()
-
-	if reset {
-		// The client fell behind the ring: tell it to refetch its snapshots.
-		writeSSE(w, api.Event{ID: s.hub.lastID(), Type: "reset", TS: time.Now().UTC().Format(time.RFC3339Nano)})
-		flusher.Flush()
-	}
-	for _, ev := range missed {
-		writeSSE(w, ev)
-	}
+	fmt.Fprint(w, ": connected\n\n")
 	flusher.Flush()
 
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	ctx := r.Context()
 	for {
+		changed := s.journal.Changed()
+		evs, next, reset, err := s.journal.Read(cursor, topics, 256)
+		if err != nil {
+			s.deps.Log("dashboard: events: %v", err)
+			return
+		}
+		if reset {
+			writeSSE(w, api.Event{ID: next, Topic: api.TopicReset, Type: "reset", TS: time.Now().UTC().Format(time.RFC3339Nano)})
+		}
+		for _, ev := range evs {
+			writeSSE(w, apiEvent(ev))
+		}
+		if reset || len(evs) > 0 {
+			flusher.Flush()
+		}
+		cursor = next
+		if len(evs) == 256 {
+			continue // more to catch up on
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case ev, ok := <-ch:
-			if !ok {
-				return
-			}
-			writeSSE(w, ev)
-			flusher.Flush()
+		case <-changed:
 		case <-heartbeat.C:
 			// A comment line keeps the connection warm without an id or a topic.
 			fmt.Fprintf(w, ": heartbeat %s\n\n", time.Now().UTC().Format(time.RFC3339))
@@ -446,21 +473,61 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func parseTopics(raw string) []api.EventTopic {
-	if raw == "" {
-		return []api.EventTopic{api.TopicRun, api.TopicAttention}
+// handleEventsSince is the journal as JSON pages: the events after ?cursor=
+// (?topics=, ?limit= up to 1000), for a client catching up without holding a
+// stream. An empty cursor returns no events and the current position.
+func (s *Server) handleEventsSince(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit := 256
+	if v, err := strconv.Atoi(q.Get("limit")); err == nil && v > 0 {
+		limit = min(v, 1000)
 	}
-	var out []api.EventTopic
-	for _, part := range splitComma(raw) {
-		switch api.EventTopic(part) {
-		case api.TopicRun:
-			out = append(out, api.TopicRun)
-		case api.TopicAttention:
-			out = append(out, api.TopicAttention)
-		}
+	evs, next, reset, err := s.journal.Read(q.Get("cursor"), parseTopics(q.Get("topics")), limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "journal", err.Error(), "")
+		return
 	}
+	page := api.EventsPage{Events: make([]api.Event, 0, len(evs)), Cursor: next, Reset: reset}
+	for _, ev := range evs {
+		page.Events = append(page.Events, apiEvent(ev))
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+// handleAttention is the attention view: the open items and the journal
+// cursor they reflect.
+func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
+	items, cursor := s.attention.Snapshot()
+	resp := api.AttentionResponse{Items: make([]api.AttentionItem, 0, len(items)), Cursor: cursor}
+	for _, it := range items {
+		resp.Items = append(resp.Items, api.AttentionItem{
+			Key: it.Key, Kind: it.Kind, Title: it.Title, Detail: it.Detail, Link: it.Link,
+			Subject: it.Subject, Severity: it.Severity, Opened: it.Opened.UTC().Format(time.RFC3339Nano),
+			Source: it.Source,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleAttentionDismiss closes a raised attention item. Items a source
+// reports close when they are dealt with, not by dismissing them.
+func (s *Server) handleAttentionDismiss(w http.ResponseWriter, r *http.Request) {
+	switch err := s.attention.Dismiss(r.PathValue("key")); {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]any{"dismissed": true})
+	case errors.Is(err, attention.ErrUnknown):
+		writeError(w, http.StatusNotFound, "not_found", err.Error(), "")
+	default:
+		writeError(w, http.StatusConflict, "not_dismissable", err.Error(), "")
+	}
+}
+
+// parseTopics reads ?topics=: a comma list of journal topics, default run and
+// attention.
+func parseTopics(raw string) []string {
+	out := splitComma(raw)
 	if len(out) == 0 {
-		return []api.EventTopic{api.TopicRun, api.TopicAttention}
+		return []string{string(api.TopicRun), string(api.TopicAttention)}
 	}
 	return out
 }
@@ -503,8 +570,8 @@ func writeSSE(w http.ResponseWriter, ev api.Event) {
 	if err != nil {
 		return
 	}
-	if ev.ID > 0 {
-		fmt.Fprintf(w, "id: %d\n", ev.ID)
+	if ev.ID != "" {
+		fmt.Fprintf(w, "id: %s\n", ev.ID)
 	}
 	if ev.Topic != "" {
 		fmt.Fprintf(w, "event: %s\n", ev.Topic)

@@ -1330,6 +1330,9 @@ func (s *Service) SubscribeTickets() (<-chan TicketEvent, func()) {
 }
 
 func (s *Service) publishTicket(tid string) {
+	if s.Record != nil {
+		s.Record("ticket", "changed", tid, TicketEvent{Ticket: tid})
+	}
 	h := &s.ticketHub
 	h.mu.Lock()
 	defer h.mu.Unlock()

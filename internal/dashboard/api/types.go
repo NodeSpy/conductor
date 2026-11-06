@@ -172,32 +172,76 @@ type AttrValuesResponse struct {
 	Values []string `json:"values"`
 }
 
-// EventTopic names a stream a client subscribes to via GET /api/v1/events?topics=.
+// EventTopic names a journal topic a client subscribes to via GET
+// /api/v1/events?topics=. Topics are the producers'; these are the ones the
+// dashboard reads.
 type EventTopic string
 
 const (
 	// TopicRun carries run lifecycle events (run_started, step_started,
-	// step_done, run_done), sourced from flow.EventHub.
+	// step_done, gate, run_done); data is RunEventData.
 	TopicRun EventTopic = "run"
-	// TopicAttention carries items that need a person. In this slice it is fed
-	// by failed runs; the full attention aggregator (design §4.1) is Phase 2.
+	// TopicAttention carries the attention view's transitions (opened,
+	// updated, resolved); data is AttentionItem.
 	TopicAttention EventTopic = "attention"
+	// TopicChat carries each recorded chat message (type "message").
+	TopicChat EventTopic = "chat"
+	// TopicTicket carries ticket changes (type "changed"); the subject is the
+	// ticket id.
+	TopicTicket EventTopic = "ticket"
+	// TopicReset is the topic of the one event a stream sends when the
+	// client's cursor can't be continued: refetch snapshots, then carry on
+	// from the reset event's id.
+	TopicReset EventTopic = "reset"
 )
 
-// Event is one server-sent event. On the wire the SSE `id:` field carries ID
-// (so a reconnect with Last-Event-ID resumes), `event:` carries Topic, and
+// Event is one journal event. On the SSE wire the `id:` field carries ID (the
+// cursor to resume after it with Last-Event-ID), `event:` carries Topic, and
 // `data:` is the JSON encoding of this whole envelope.
 type Event struct {
-	ID    int64      `json:"id"`
-	Topic EventTopic `json:"topic"`
-	Type  string     `json:"type"` // run_started | step_started | step_done | run_done | attention | heartbeat | reset
-	TS    string     `json:"ts"`   // RFC3339
-	Data  any        `json:"data,omitempty"`
+	ID      string     `json:"id"`
+	Seq     int64      `json:"seq,omitempty"`
+	Topic   EventTopic `json:"topic"`
+	Type    string     `json:"type"`
+	Subject string     `json:"subject,omitempty"`
+	TS      string     `json:"ts"` // RFC3339
+	Data    any        `json:"data,omitempty"`
+}
+
+// EventsPage is GET /api/v1/events/since: the events after a cursor and the
+// cursor to ask from next. Reset means the cursor couldn't be continued (see
+// TopicReset); the events are then empty.
+type EventsPage struct {
+	Events []Event `json:"events"`
+	Cursor string  `json:"cursor"`
+	Reset  bool    `json:"reset,omitempty"`
+}
+
+// AttentionItem is one thing that needs an operator.
+type AttentionItem struct {
+	Key      string `json:"key"`
+	Kind     string `json:"kind"`
+	Title    string `json:"title"`
+	Detail   string `json:"detail,omitempty"`
+	Link     string `json:"link,omitempty"` // a dashboard route, e.g. "#/runs/<id>"
+	Subject  string `json:"subject,omitempty"`
+	Severity string `json:"severity"` // info | warn | urgent
+	Opened   string `json:"opened"`   // RFC3339
+	// Source is what reports the item; empty for a raised item, which the
+	// operator may dismiss.
+	Source string `json:"source,omitempty"`
+}
+
+// AttentionResponse is GET /api/v1/attention: the open items, oldest first,
+// and the cursor they reflect. Follow /api/v1/events?topics=attention from
+// Cursor and no transition is missed.
+type AttentionResponse struct {
+	Items  []AttentionItem `json:"items"`
+	Cursor string          `json:"cursor"`
 }
 
 // RunEventData is the payload of a TopicRun event — a projection of
-// flow.RunEvent. (It is also the shape of a TopicAttention event's data, which
-// is a failed run_done in this slice.)
+// flow.RunEvent.
 type RunEventData struct {
 	Type       string `json:"type"`
 	Run        string `json:"run"`

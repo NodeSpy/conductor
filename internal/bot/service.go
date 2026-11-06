@@ -134,6 +134,10 @@ type Service struct {
 	// conductor.bot_notify lifecycle event. Both optional.
 	RunUsage func(historyID string) (RunUsage, bool)
 	Notify   func(ctx context.Context, n Notice)
+	// Record puts a change on the daemon's event journal: each recorded chat
+	// message (topic "chat") and each ticket change (topic "ticket"), so
+	// clients can follow them durably. Optional.
+	Record func(topic, typ, subject string, data any)
 
 	// loops counts the bot loops Start began, so WaitLoops can see them end.
 	loops sync.WaitGroup

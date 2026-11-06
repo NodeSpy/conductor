@@ -201,3 +201,19 @@ steps:
 		t.Fatalf("history diff: %q", clipText(diff, 200))
 	}
 }
+
+// TestEventHubTapSeesEveryEvent: the tap is handed every event, even when no
+// subscriber has room for it.
+func TestEventHubTapSeesEveryEvent(t *testing.T) {
+	hub := NewEventHub()
+	var seen int
+	hub.SetTap(func(RunEvent) { seen++ })
+	_, cancel := hub.Subscribe("") // never read: its buffer fills
+	defer cancel()
+	for i := 0; i < 1000; i++ {
+		hub.Publish(RunEvent{Type: "step_done", Run: "r"})
+	}
+	if seen != 1000 {
+		t.Fatalf("tap saw %d of 1000 events", seen)
+	}
+}
