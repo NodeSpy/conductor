@@ -248,18 +248,36 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 		return res, false
 	}
 
+	adopted := false
+	for _, v := range state.AllVersions(key) {
+		if _, ok := adoptLegacyRecord(ref, v, state, opts); ok {
+			adopted = true
+		}
+	}
+	if adopted {
+		prev, installed = state.GetForConstraint(key, ref.Use)
+	}
+
 	// Stay-current is the default; an exact @version pin is the opt-out. A
 	// gaps-only pass (boot) leaves anything installed exactly where it is.
 	if installed {
 		if opts.GapsOnly {
 			res.Action, res.Tag, res.Sha, res.Path = ActionSkipped, prev.Resolved, prev.Sha256, prev.Path
 			res.Manifest = prev.Manifest
-			return res, false
+			return res, adopted
 		}
 		if ref.Use.IsPinned() && !opts.Force && prev.Use == ref.Use.String() && binaryPresent(prev.Path) {
 			res.Action, res.Tag, res.Sha, res.Path = ActionPinned, prev.Resolved, prev.Sha256, prev.Path
 			res.Manifest = prev.Manifest
-			return res, false
+			changed := adopted
+			if opts.recheck() {
+				rec, w, ch := recheckInstalled(ref, prev, state, opts)
+				res.Manifest, changed = rec.Manifest, changed || ch
+				if len(w) > 0 {
+					res.Action, res.Widens = ActionHeld, w
+				}
+			}
+			return res, changed
 		}
 	}
 
@@ -273,7 +291,7 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 			res.Tag, res.Sha, res.Path, res.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
 			opts.logf("plugin %s: could not reach %s (%v) — keeping the installed build %s (%s)", ref.Name, ref.Source(), err, prev.Resolved, shortSha(prev.Sha256))
 		}
-		return res, false
+		return res, adopted
 	}
 
 	res.Tag, res.Sha, res.Path = tag, sha, binPath
@@ -305,17 +323,32 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 		// Nothing moved, but the reference text may have changed (a widened
 		// constraint), or this fetch verified a build an older record did not
 		// mark verified; keep the record honest.
+		changed := adopted
 		if prev.Use != ref.Use.String() || prev.ReleaseVerified != verified {
 			prev.Use = ref.Use.String()
 			prev.ReleaseVerified = verified
 			state.Put(prev)
-			return res, true
+			changed = true
 		}
-		return res, false
+		if opts.recheck() {
+			rec, w, ch := recheckInstalled(ref, prev, state, opts)
+			res.Manifest, changed = rec.Manifest, changed || ch
+			if len(w) > 0 {
+				res.Action, res.Widens = ActionHeld, w
+			}
+		}
+		return res, changed
 	case installed:
 		res.Action, res.PrevSha = ActionUpdated, prev.Sha256
 	default:
 		res.Action = ActionInstalled
+		// A changed constraint or pin that lands on a version not installed
+		// yet still replaces what the user agreed to: compare against the
+		// newest build of this plugin from this source that is installed.
+		if other := versionsForSource(state.AllVersions(key), ref.Source()); len(other) > 0 {
+			prev, installed = other[len(other)-1], true
+			res.Action, res.PrevSha = ActionUpdated, prev.Sha256
+		}
 	}
 
 	// Record the permission manifest (and the declared kind) by describing the
@@ -341,7 +374,7 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 			res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %s declares capabilities that do not validate: %w", ref.Name, tag, err)
 			return res, false
 		}
-		rec.Manifest = manifestFromDecl(decl)
+		rec.Manifest, rec.ManifestSchema = manifestFromDecl(decl), manifestSchema
 	}
 	if res.Action == ActionUpdated {
 		// An update that asks for more than the user agreed to waits for
@@ -367,6 +400,78 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 			ref.Name, tag, ref.Source(), shortSha(sha), rec.Manifest.Summary())
 	}
 	return res, true
+}
+
+// recheck: this pass re-describes builds that are already current — a
+// named `plugin update <name>`, or --force — so a build whose declaration
+// grew past its record is held for approval rather than silently denied.
+func (o Options) recheck() bool { return !o.GapsOnly && o.Describe != nil && (o.Only != "" || o.Force) }
+
+// describeBuild describes the build rec records (its binary is verified
+// against rec.Sha256 before it runs, and it runs jailed to nothing) and
+// returns what it declares.
+func describeBuild(ref config.PluginRef, rec Installed, opts Options) (Manifest, error) {
+	rec.Manifest = Manifest{}
+	decl, err := opts.Describe(context.Background(), SpecFromRef(ref, "", rec, true))
+	if err != nil {
+		return Manifest{}, fmt.Errorf("plugin %s: %s could not describe itself: %w", ref.Name, rec.Resolved, err)
+	}
+	if err := checkDeclKind(ref, decl); err != nil {
+		return Manifest{}, err
+	}
+	if err := decl.Capabilities.Validate(decl.Connection); err != nil {
+		return Manifest{}, fmt.Errorf("plugin %s: %s declares capabilities that do not validate: %w", ref.Name, rec.Resolved, err)
+	}
+	return manifestFromDecl(decl), nil
+}
+
+// adoptLegacyRecord records the full declaration of an installed build whose
+// record predates it (manifestSchema): that build ran unconfined under the
+// conductor that wrote the record, so whatever it declares now narrows it,
+// and it is recorded without a hold. Once per record; a build that cannot be
+// described keeps its old record (and is jailed to it), and the next pass
+// tries again.
+func adoptLegacyRecord(ref config.PluginRef, rec Installed, state *InstallState, opts Options) (Installed, bool) {
+	if rec.ManifestSchema >= manifestSchema || opts.Describe == nil || rec.Sha256 == "" || !binaryPresent(rec.Path) {
+		return rec, false
+	}
+	m, err := describeBuild(ref, rec, opts)
+	if err != nil {
+		opts.logf("plugin %s: its install record predates declared permissions, and recording them failed: %v — it runs jailed to the old record until this succeeds", ref.Name, err)
+		return rec, false
+	}
+	rec.Manifest, rec.ManifestSchema = m, manifestSchema
+	state.Put(rec)
+	opts.logf("plugin %s: recorded what %s declares (its install record predates declared permissions, and it ran unconfined until now): %s", ref.Name, rec.Resolved, m.Summary())
+	return rec, true
+}
+
+// recheckInstalled re-describes an installed build (recheck). One that
+// declares more than its record is held for approval like a widening update,
+// and keeps running jailed to the record; one that declares the same or less
+// is recorded. It returns the record in force, what the build asks for
+// beyond it (held), and whether install state changed.
+func recheckInstalled(ref config.PluginRef, prev Installed, state *InstallState, opts Options) (Installed, []string, bool) {
+	m, err := describeBuild(ref, prev, opts)
+	if err != nil {
+		opts.logf("%v — its record is unchanged", err)
+		return prev, nil, false
+	}
+	next := prev
+	next.Manifest, next.ManifestSchema = m, manifestSchema
+	if prev.ManifestSchema == manifestSchema && reflect.DeepEqual(m, prev.Manifest) {
+		return prev, nil, false
+	}
+	if w := prev.Manifest.Widens(m); len(w) > 0 && !state.approved(next) {
+		state.putPending(Pending{Installed: next, Replaces: prev.Resolved, Widens: w})
+		opts.logf("plugin %s: %s declares more than its install record — %s. HELD: it keeps running jailed to the record; `conductor plugin approve %s` accepts it",
+			ref.Name, prev.Resolved, strings.Join(w, "; "), ref.Name)
+		return prev, w, true
+	}
+	state.dropPending(next.Key, next.Source)
+	state.Put(next)
+	opts.logf("plugin %s: recorded what %s declares: %s", ref.Name, next.Resolved, m.Summary())
+	return next, nil, true
 }
 
 // pinnedTagCache memoizes ReleaseAPI.ListTags by RemoteSource for the span of
@@ -455,6 +560,11 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 	// "this instance's own previous build" just because the tag string
 	// matches (it would misclassify Current/Updated against the wrong sha,
 	// and misreport a cross-source sha in a log line).
+	for _, v := range state.AllVersions(key) {
+		if _, ok := adoptLegacyRecord(ref, v, state, opts); ok {
+			dirty = true
+		}
+	}
 	prevVersions := state.AllVersions(key)
 	hadAnyPrevBySource := make(map[string]bool, len(prevVersions))
 	prevRepShaBySource := make(map[string]string, len(prevVersions))
@@ -642,6 +752,7 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 		err      error
 	}
 	describeCache := map[string]*described{}
+	rechecked := map[string]bool{}
 
 	out := make([]Resolution, 0, len(groups))
 	for _, g := range groups {
@@ -684,7 +795,7 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 					res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %s declares capabilities that do not validate: %w", ref.Name, res.Tag, decl.Capabilities.Validate(decl.Connection))
 					cb.err = res.Err
 				default:
-					rec.Manifest = manifestFromDecl(decl)
+					rec.Manifest, rec.ManifestSchema = manifestFromDecl(decl), manifestSchema
 					state.Put(rec)
 					dirty = true
 					res.Manifest = rec.Manifest
@@ -710,11 +821,20 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 				}
 			}
 			if res.Action == ActionUpdated {
-				opts.logf("plugin %s: updated %s -> %s (sha %s -> %s); permissions: %s",
-					ref.Name, "", res.Tag, shortSha(res.PrevSha), shortSha(res.Sha), res.Manifest.Summary())
+				opts.logf("plugin %s: updated -> %s (sha %s -> %s); permissions: %s",
+					ref.Name, res.Tag, shortSha(res.PrevSha), shortSha(res.Sha), res.Manifest.Summary())
 			} else if res.Action == ActionInstalled {
 				opts.logf("plugin %s: installed %s from %s (sha %s); permissions: %s",
 					ref.Name, res.Tag, instanceSource(g.ref), shortSha(res.Sha), res.Manifest.Summary())
+			}
+		} else if (res.Action == ActionCurrent || res.Action == ActionPinned) && opts.recheck() && !rechecked[res.Source+"\x00"+res.Tag] {
+			rechecked[res.Source+"\x00"+res.Tag] = true
+			if prev, ok := state.GetVersion(key, res.Tag, res.Source); ok {
+				rec, w, ch := recheckInstalled(g.ref, prev, state, opts)
+				res.Manifest, dirty = rec.Manifest, dirty || ch
+				if len(w) > 0 {
+					res.Action, res.Widens = ActionHeld, w
+				}
 			}
 		}
 		out = append(out, res)
@@ -823,6 +943,7 @@ func manifestFromDecl(decl *Decl) Manifest {
 		Read:     append([]string(nil), c.Read...),
 		Write:    append([]string(nil), c.Write...),
 		Commands: append([]string(nil), c.Commands...),
+		Exec:     append([]string(nil), c.Exec...),
 		Keychain: c.Keychain,
 		FS:       append([]string(nil), c.FS...),
 		Spawns:   c.Spawns || len(c.Commands) > 0,

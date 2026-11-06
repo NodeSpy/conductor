@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -13,8 +14,8 @@ import (
 
 // EffectiveManifest is the permission set this plugin actually runs with: what
 // it declared, narrowed by whatever the referencing connector declared under
-// `network:`. Empty `network:` means "no narrowing" — the plugin's own
-// declaration stands.
+// `network:`. Unset `network:` means "no narrowing" — the plugin's own
+// declaration stands; a set but empty one narrows it to no network.
 //
 // A Probe Spec (the type-level `plugin.describe` probe, finding 2) gets NO
 // egress, env, or managed auth at all, regardless of what the plugin
@@ -39,7 +40,7 @@ func (s Spec) EffectiveManifest() Manifest {
 		}
 	}
 	m := s.Manifest
-	if len(s.Network) == 0 {
+	if s.Network == nil {
 		return m
 	}
 	m.Egress = append([]string(nil), s.Network...)
@@ -69,27 +70,38 @@ func CheckNetworkWithinManifest(name string, declared []string, network []string
 }
 
 // egressCovered reports whether target matches at least one declared pattern.
-// Host globs (`*.atlassian.net`) match; a declared entry with no port covers
-// every port on that host, since the plugin declared the host itself.
+// Host globs (`*.atlassian.net`) match. Both sides are read as the jail
+// grants them (normHostPort): a bare host is host:443, on either side, so a
+// declared "api.example.com" covers api.example.com:443 and no other port.
+// A config: entry covers nothing here: what it names is only known once it
+// is resolved against an instance.
 func egressCovered(declared []string, target string) bool {
-	th, tp := splitHostPort(target)
+	th, tp, ok := egressHostPort(target)
+	if !ok {
+		return false
+	}
 	for _, d := range declared {
-		dh, dp := splitHostPort(strings.TrimSpace(d))
-		if !hostGlobMatch(dh, th) {
+		if strings.HasPrefix(d, "config:") {
 			continue
 		}
-		if dp == "" || dp == tp {
+		dh, dp, ok := egressHostPort(d)
+		if ok && dp == tp && hostGlobMatch(dh, th) {
 			return true
 		}
 	}
 	return false
 }
 
-func splitHostPort(s string) (host, port string) {
-	if h, p, ok := strings.Cut(s, ":"); ok {
-		return h, p
+func egressHostPort(s string) (host, port string, ok bool) {
+	hp, err := normHostPort(s)
+	if err != nil {
+		return "", "", false
 	}
-	return s, ""
+	h, p, err := net.SplitHostPort(hp)
+	if err != nil {
+		return "", "", false
+	}
+	return strings.ToLower(h), p, true
 }
 
 // hostGlobMatch matches a declared host pattern against a concrete host. `*`

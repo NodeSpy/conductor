@@ -191,21 +191,29 @@ Capabilities: plugin.Capabilities{
     Read:     []string{"~/.config/example", "env:EXAMPLE_CONFIG_DIR", "config:key_path"},
     Write:    []string{"config:state_dir"},
     Commands: []string{"example-cli"},
+    Exec:     []string{"command:example-cli/../../lib/example-cli"},
     Env:      []string{"EXAMPLE_TOKEN", "EXAMPLE_CONFIG_DIR"},
 },
 ```
 
 - **`config:<field>`** names a field of your own connection schema (a dotted
-  path for a nested one: `webhook.listen`). conductor reads that field from
-  each configured instance; it never infers anything from a field's name, so
-  a field that holds a URL or path you use must be declared this way.
-  `config:<field>:<port>` gives the port for a value that is a bare host.
+  path for a nested one: `webhook.listen`), never a `Secret` one. conductor
+  reads that field from each configured instance; it never infers anything
+  from a field's name, so a field that holds a URL or path you use must be
+  declared this way. `config:<field>:<port>` gives the port for a value that
+  is a bare host.
 - **`env:VAR[/rel]`** is a path taken from an env var, which must also be in
   `Env`. **`command:<name>[/rel]`** is a path relative to a declared
-  command's resolved file, for a tool that loads files from its own install
-  tree (`command:node/../..`).
+  command's resolved file (`command:node/..` is the directory it is in), for
+  a tool that loads files from its own install tree (`command:node/../..`).
 - **`Commands`** are names, never paths; each is found on the daemon's
   `PATH` and bound into the jail by name.
+- **`Exec`** names what a command runs that is not itself a command: a
+  tool's helper programs (`git` runs `git-remote-https` from its exec path,
+  `command:git/../../lib/git-core` on most Linux distributions,
+  `command:git/../../libexec/git-core` on others and with Homebrew). The
+  base system's programs do not run in the jail; only its libraries load.
+  Entries that do not exist are skipped, so list each layout you support.
 - **HTTP** must honour the proxy: use `http.DefaultTransport`, or set
   `Proxy: http.ProxyFromEnvironment` on your own `http.Transport`. A
   transport without it cannot reach anything.

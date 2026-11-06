@@ -66,19 +66,22 @@ func TestCmdPluginListCaps(t *testing.T) {
 	}
 }
 
-// TestCmdPluginListCapsDefaultSharesUnionAsOneProcess is the NEW default:
-// `plugin list --caps` on a connector plugin configured as two instances with
-// DIFFERENT `network:`, neither isolate: true, must show ONE shared-process
-// line carrying the UNION of both — that one process is what actually runs
-// for both of them (docs/wiki/Plugins.md "Multi-instance isolation") — never
-// split per instance, since there is no separate process to split per
-// instance in the first place.
-func TestCmdPluginListCapsDefaultSharesUnionAsOneProcess(t *testing.T) {
-	args := writeCfg(t, `
+// sharedNarrowed is two instances of one plugin sharing its process, narrowed
+// the same way (instances that share a process must: a differing pair is a
+// config error, below).
+const sharedNarrowed = `
 connectors:
-  a: { use: acme/plugins/jira, network: ["one.example:443"] }
-  b: { use: acme/plugins/jira, network: ["two.example:443"] }
-`)
+  a: { use: acme/plugins/jira, network: ["one.example:443", "two.example:443"] }
+  b: { use: acme/plugins/jira, network: ["one.example:443", "two.example:443"] }
+`
+
+// TestCmdPluginListCapsDefaultSharesOneProcess: `plugin list --caps` on a
+// connector plugin configured as two instances, neither isolate: true, shows
+// ONE shared-process line carrying their narrowing — that one process is
+// what actually runs for both of them (docs/wiki/Plugins.md "Multi-instance
+// isolation").
+func TestCmdPluginListCapsDefaultSharesOneProcess(t *testing.T) {
+	args := writeCfg(t, sharedNarrowed)
 	out, err := captureStdout(t, func() error {
 		return cmdPluginList(append(args, "--caps"))
 	})
@@ -92,12 +95,12 @@ connectors:
 		t.Fatalf("--caps did not label the default shared-process grant:\n%s", out)
 	}
 	if !strings.Contains(out, "one.example:443") || !strings.Contains(out, "two.example:443") {
-		t.Fatalf("--caps lost one instance's network from the union:\n%s", out)
+		t.Fatalf("--caps lost the instances' network:\n%s", out)
 	}
 	for _, line := range strings.Split(out, "\n") {
 		if strings.Contains(line, "shared process") {
 			if !strings.Contains(line, "one.example:443") || !strings.Contains(line, "two.example:443") {
-				t.Fatalf("the shared-process grant line did not carry the union of both instances' network:\n%s", out)
+				t.Fatalf("the shared-process grant line did not carry the instances' network:\n%s", out)
 			}
 			if !strings.Contains(line, "a") || !strings.Contains(line, "b") {
 				t.Fatalf("the shared-process grant line did not label which instances it serves:\n%s", out)
@@ -142,14 +145,10 @@ connectors:
 	}
 }
 
-// TestCmdPluginShowDefaultSharesUnionAsOneProcess is `plugin show`'s half of
-// the same default-sharing behavior.
-func TestCmdPluginShowDefaultSharesUnionAsOneProcess(t *testing.T) {
-	args := writeCfg(t, `
-connectors:
-  a: { use: acme/plugins/jira, network: ["one.example:443"] }
-  b: { use: acme/plugins/jira, network: ["two.example:443"] }
-`)
+// TestCmdPluginShowDefaultSharesOneProcess is `plugin show`'s half of the
+// same default-sharing behavior.
+func TestCmdPluginShowDefaultSharesOneProcess(t *testing.T) {
+	args := writeCfg(t, sharedNarrowed)
 	out, err := captureStdout(t, func() error { return cmdPluginShow(append(args, "jira")) })
 	if err != nil {
 		t.Fatal(err)
@@ -160,12 +159,26 @@ connectors:
 	for _, line := range strings.Split(out, "\n") {
 		if strings.Contains(line, "shared process") {
 			if !strings.Contains(line, "one.example:443") || !strings.Contains(line, "two.example:443") {
-				t.Fatalf("shared-process grant line did not carry the union of both instances' network:\n%s", out)
+				t.Fatalf("shared-process grant line did not carry the instances' network:\n%s", out)
 			}
 		}
 	}
 	if strings.Contains(out, "own process") {
 		t.Fatalf("neither instance isolates; plugin show must show no own-process line:\n%s", out)
+	}
+}
+
+// Two instances sharing one process may not narrow it differently: one
+// process cannot honour both, and the union would widen each of them.
+func TestCmdPluginListRefusesDifferingNarrowingOnSharedProcess(t *testing.T) {
+	args := writeCfg(t, `
+connectors:
+  a: { use: acme/plugins/jira, network: ["one.example:443"] }
+  b: { use: acme/plugins/jira, network: ["two.example:443"] }
+`)
+	_, err := captureStdout(t, func() error { return cmdPluginList(append(args, "--caps")) })
+	if err == nil || !strings.Contains(err.Error(), "narrow it differently") {
+		t.Fatalf("differing narrowing on a shared process: %v, want refused", err)
 	}
 }
 

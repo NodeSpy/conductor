@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"golang.org/x/sys/unix"
 
@@ -122,11 +124,18 @@ func buildJailIn(binds []BindMount, jailRoot string, t *jailTmp, base string) er
 	// declared commands into, then made read-only. /etc is the MinimalEtc
 	// list, and there is no /opt.
 	baseDirs := []string{"/usr", "/etc", "/opt"}
+	var libDirs []string
 	if minimal {
 		baseDirs = append([]string{"/usr"}, MinimalEtc...)
+		libDirs = libraryDirs()
 	}
 	for _, d := range baseDirs {
 		if err := bindInto(root, BindMount{Path: d, RO: true}, true); err != nil {
+			return err
+		}
+	}
+	if minimal {
+		if err := noexecSystem(root, "/usr", libDirs); err != nil {
 			return err
 		}
 	}
@@ -158,6 +167,11 @@ func buildJailIn(binds []BindMount, jailRoot string, t *jailTmp, base string) er
 		}
 		if err := baseLink(root, l); err != nil {
 			return err
+		}
+		if fi, err := os.Lstat(l); minimal && err == nil && fi.IsDir() {
+			if err := noexecSystem(root, l, libDirs); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -251,6 +265,13 @@ func remount(p string, flags uintptr) error {
 // caller's declared allow-list it is false, so a missing path fails the launch.
 func bindInto(root string, b BindMount, skipMissing bool) error {
 	src := b.source()
+	if b.NoSymlink {
+		// A declared path was checked when it was granted; one that has
+		// become a symlink since would bind wherever it now points.
+		if lfi, err := os.Lstat(src); err == nil && lfi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("jail bind %s: source is a symlink", src)
+		}
+	}
 	fi, err := os.Stat(src) // Stat: follow symlinks to learn dir-vs-file.
 	if err != nil {
 		if os.IsNotExist(err) && skipMissing {
@@ -280,11 +301,193 @@ func bindInto(root string, b BindMount, skipMissing bool) error {
 		return fmt.Errorf("jail bind %s: %w", src, err)
 	}
 	if b.RO {
-		if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_REC|lockedFlags(src), ""); err != nil {
+		// Read-only all the way down: the submounts under it too.
+		if err := setattr(target, unix.MOUNT_ATTR_RDONLY, true); err != nil {
 			return fmt.Errorf("jail bind-ro %s: %w", b.Path, err)
 		}
 	}
 	return nil
+}
+
+// setattr adds mount attributes (unix.MOUNT_ATTR_*) to the mount at p and,
+// with rec, to every mount under it (mount_setattr AT_RECURSIVE; a remount,
+// even with MS_REC, changes only the top one). A kernel without
+// mount_setattr (before 5.12) gets a remount of p alone.
+func setattr(p string, set uint64, rec bool) error {
+	flags := uint(unix.AT_SYMLINK_NOFOLLOW)
+	if rec {
+		flags |= unix.AT_RECURSIVE
+	}
+	err := unix.MountSetattr(unix.AT_FDCWD, p, flags, &unix.MountAttr{Attr_set: set})
+	if err != unix.ENOSYS {
+		return err
+	}
+	f := uintptr(unix.MS_BIND|unix.MS_REMOUNT) | lockedFlags(p)
+	for _, m := range []struct {
+		attr uint64
+		ms   uintptr
+	}{
+		{unix.MOUNT_ATTR_RDONLY, unix.MS_RDONLY}, {unix.MOUNT_ATTR_NOSUID, unix.MS_NOSUID},
+		{unix.MOUNT_ATTR_NODEV, unix.MS_NODEV}, {unix.MOUNT_ATTR_NOEXEC, unix.MS_NOEXEC},
+	} {
+		if set&m.attr != 0 {
+			f |= m.ms
+		}
+	}
+	var st unix.Statfs_t
+	if unix.Statfs(p, &st) == nil && int64(st.Flags)&unix.ST_RDONLY != 0 {
+		f |= unix.MS_RDONLY
+	}
+	return unix.Mount("", p, "", f, "")
+}
+
+// noexecSystem makes the base-system tree dir (bound read-only at root+dir)
+// noexec, then lets the dynamic linker's library directories under it
+// (libDirs) map and run what is directly in them: shared libraries and the
+// loader itself. Inside a library directory, a subdirectory that is not
+// itself one (a tool's helpers, a daemon's binaries) and a program that is
+// not a shared object stay noexec. What a plugin runs beyond that, its
+// declared commands and exec paths, the caller binds in.
+func noexecSystem(root, dir string, libDirs []string) error {
+	if err := setattr(root+dir, unix.MOUNT_ATTR_NOEXEC|unix.MOUNT_ATTR_NOSUID|unix.MOUNT_ATTR_NODEV, true); err != nil {
+		return fmt.Errorf("jail noexec %s: %w", dir, err)
+	}
+	isLib := map[string]bool{}
+	for _, l := range libDirs {
+		isLib[l] = true
+	}
+	for _, l := range libDirs {
+		if !pathWithin(dir, l) {
+			continue
+		}
+		if err := bindSystem(root, l, false); err != nil {
+			return err
+		}
+		ents, err := os.ReadDir(l)
+		if err != nil {
+			return fmt.Errorf("jail read %s: %w", l, err)
+		}
+		for _, e := range ents {
+			p := filepath.Join(l, e.Name())
+			switch {
+			case e.IsDir():
+				// glibc looks in glibc-hwcaps/<level>/ for optimised builds
+				// of the same libraries.
+				if isLib[p] || e.Name() == "glibc-hwcaps" {
+					continue
+				}
+			case e.Type().IsRegular():
+				fi, err := e.Info()
+				if err != nil || fi.Mode()&0o111 == 0 || sharedObjectName(e.Name()) {
+					continue
+				}
+			default:
+				continue
+			}
+			if err := bindSystem(root, p, true); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// bindSystem binds host p at root+p (no submounts) read-only, nosuid and
+// nodev, and noexec when asked.
+func bindSystem(root, p string, noexec bool) error {
+	if err := unix.Mount(p, root+p, "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("jail bind %s: %w", p, err)
+	}
+	attr := uint64(unix.MOUNT_ATTR_RDONLY | unix.MOUNT_ATTR_NOSUID | unix.MOUNT_ATTR_NODEV)
+	if noexec {
+		attr |= unix.MOUNT_ATTR_NOEXEC
+	}
+	if err := setattr(root+p, attr, false); err != nil {
+		return fmt.Errorf("jail bind %s: %w", p, err)
+	}
+	return nil
+}
+
+// sharedObjectName: "libz.so", "libc.so.6", "ld-linux-x86-64.so.2".
+func sharedObjectName(n string) bool {
+	return strings.HasSuffix(n, ".so") || strings.Contains(n, ".so.")
+}
+
+func pathWithin(dir, p string) bool {
+	return p == dir || strings.HasPrefix(p, dir+"/")
+}
+
+// libraryDirs are the directories the dynamic linker loads libraries from on
+// this machine, symlinks resolved: the standard ones, those /etc/ld.so.conf
+// (and what it includes) lists for glibc, and musl's ld-musl-*.path.
+func libraryDirs() []string {
+	dirs := []string{"/lib", "/lib64", "/lib32", "/libx32", "/usr/lib", "/usr/lib64", "/usr/lib32", "/usr/libx32", "/usr/local/lib"}
+	dirs = append(dirs, ldSoConf("/etc/ld.so.conf", 0)...)
+	if paths, _ := filepath.Glob("/etc/ld-musl-*.path"); len(paths) > 0 {
+		for _, p := range paths {
+			if b, err := os.ReadFile(p); err == nil {
+				dirs = append(dirs, strings.FieldsFunc(string(b), func(r rune) bool { return r == ':' || r == '\n' || r == ' ' || r == '\t' })...)
+			}
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range dirs {
+		if !filepath.IsAbs(d) {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(d)
+		if err != nil || seen[real] {
+			continue
+		}
+		if fi, err := os.Stat(real); err != nil || !fi.IsDir() {
+			continue
+		}
+		seen[real] = true
+		out = append(out, real)
+	}
+	// Shallowest first: a library directory inside another is bound after
+	// (on top of) its parent's noexec subdirectories.
+	sort.Slice(out, func(i, j int) bool {
+		if di, dj := strings.Count(out[i], "/"), strings.Count(out[j], "/"); di != dj {
+			return di < dj
+		}
+		return out[i] < out[j]
+	})
+	return out
+}
+
+// ldSoConf reads the directories a glibc ld.so.conf lists, following its
+// include lines.
+func ldSoConf(path string, depth int) []string {
+	b, err := os.ReadFile(path)
+	if err != nil || depth > 4 {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		line, _, _ = strings.Cut(line, "#")
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if inc, ok := strings.CutPrefix(line, "include"); ok && (strings.HasPrefix(inc, " ") || strings.HasPrefix(inc, "\t")) {
+			pat := strings.TrimSpace(inc)
+			if !filepath.IsAbs(pat) {
+				pat = filepath.Join(filepath.Dir(path), pat)
+			}
+			matches, _ := filepath.Glob(pat)
+			sort.Strings(matches)
+			for _, m := range matches {
+				out = append(out, ldSoConf(m, depth+1)...)
+			}
+			continue
+		}
+		// "dir" or the old "dir=TYPE" form.
+		d, _, _ := strings.Cut(strings.Fields(line)[0], "=")
+		out = append(out, d)
+	}
+	return out
 }
 
 // lockedFlags are the source mount's nosuid/nodev/noexec/relatime flags. In

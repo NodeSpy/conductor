@@ -469,6 +469,14 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			rollback()
 			return nil, fmt.Errorf("plugin %s: declared under connectors: but it describes itself as a %s — a %s cannot be wired as a connector", spec.Name, decl.Kind, decl.Kind)
 		}
+		// What the jail enforces is the RECORDED declaration (the one the user
+		// agreed to), not whatever this build says now; a local build has no
+		// record and is jailed to what it declares.
+		live := plugin.ManifestFromDecl(decl)
+		enforced := spec.Manifest
+		if spec.Local {
+			enforced = live
+		}
 		// CAN'T-EXCEED-DECLARATION: every instance's `network:` must be covered
 		// by what the plugin says it needs. A config that widens a plugin's
 		// declared egress is a config error, not a silent grant. Scoped to
@@ -480,7 +488,7 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			if len(cref.Network) == 0 {
 				continue
 			}
-			if err := plugin.CheckNetworkWithinManifest(cname, decl.Capabilities.Egress, cref.Network); err != nil {
+			if err := plugin.CheckNetworkWithinManifest(cname, enforced.Egress, cref.Network); err != nil {
 				rollback()
 				return nil, err
 			}
@@ -489,10 +497,10 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		for cname := range spec.Instances {
 			cref := cfg.ConnectorsMap[cname]
 			for _, n := range cref.AllowEnv {
-				if !slices.Contains(decl.Capabilities.Env, n) {
+				if !slices.Contains(enforced.Env, n) {
 					rollback()
 					return nil, fmt.Errorf("connector %q: allow_env %q is not a variable the %s plugin declares it reads (%s)",
-						cname, n, spec.Name, strings.Join(decl.Capabilities.Env, ", "))
+						cname, n, spec.Name, strings.Join(enforced.Env, ", "))
 				}
 			}
 		}
@@ -501,18 +509,19 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			return nil, fmt.Errorf("plugin %s: %w", spec.Name, err)
 		}
 		registered = append(registered, spec.Provides)
-		// spec.Manifest (the plugin's own DECLARED capabilities), not
-		// spec.EffectiveManifest(): when EVERY configured instance isolates
-		// (no shared process at all), spec here is the type-level Probe Spec
-		// — its EffectiveManifest is deliberately "nothing", not what any
-		// isolated instance actually runs with (that is shown per instance by
-		// `plugin show`/`plugin list --caps`). A spec WITH a shared process's
-		// EffectiveManifest, by contrast, IS what its one real process runs
-		// with — but spec.Manifest here still answers the simpler,
-		// always-true question this log line asks: what does the installed
-		// BINARY declare.
+		// The permissions shown are the ones enforced: the recorded
+		// declaration (before any network:/allow_env narrowing, which `plugin
+		// show` lists per instance), plus anything this build declares
+		// beyond it, which it does not get.
+		perms := "jailed to " + enforced.Summary()
+		if spec.TrustFull {
+			perms = "trust: full — runs WITHOUT its jail"
+		}
+		if w := enforced.Widens(live); len(w) > 0 && !spec.TrustFull {
+			perms += fmt.Sprintf("; NOT granted (declared by this build, not in its install record): %s — `conductor plugin update %s` asks for approval", strings.Join(w, "; "), spec.Name)
+		}
 		logf("plugin %s: registered connector type %q (%d verb(s)); permissions: %s",
-			spec.Ref(), spec.Provides, len(decl.Verbs), plugin.ManifestFromDecl(decl).Summary())
+			spec.Ref(), spec.Provides, len(decl.Verbs), perms)
 	}
 	return mgr, nil
 }
@@ -1486,11 +1495,14 @@ func reconcilePlugins(cfg *config.Config, opts plugin.Options, cli bool) ([]plug
 }
 
 // describeForInstall spawns a freshly-installed plugin ONCE to record its
-// permission manifest and declared kind. This spawn happens before any manifest
-// exists, so it is confined to nothing — which is safe because describe is a
-// pure self-description that needs neither network nor child processes.
+// permission manifest and declared kind. This spawn happens before the user
+// has agreed to anything, so it is a probe, jailed to nothing whatever its
+// config narrows — which is safe because describe is a pure self-description
+// that needs neither network nor child processes.
 func describeForInstall(cfg *config.Config) plugin.DescribeFunc {
 	return func(ctx context.Context, spec plugin.Spec) (*plugin.Decl, error) {
+		spec.Probe = true
+		spec.Manifest = plugin.Manifest{}
 		sec := secrets.New()
 		deps := pluginDeps(sec, func(map[string]any) {}, nil)
 		cl := plugin.NewClient(spec, deps)
@@ -1771,12 +1783,20 @@ func pendingPluginsStillMissing(cfg *config.Config, state *plugin.InstallState) 
 	for _, f := range failures {
 		logf("plugins: %s: cannot be split into process groups safely (%s) — retrying will not fix this; this should never happen, please report it", f.Name, f.Reason)
 	}
+	held := map[string]bool{}
+	for _, p := range state.PendingUpdates() {
+		if !p.Approved {
+			held[p.Key+"\x00"+p.Source] = true
+		}
+	}
 	for _, ref := range exploded {
 		if ref.Kind() != config.PluginKindConnector {
 			continue
 		}
 		inst, ok := state.GetForConstraint(ref.Use.InstallKey(), ref.Use)
-		if !ok || inst.Path == "" {
+		if (!ok || inst.Path == "") && !held[ref.Use.InstallKey()+"\x00"+ref.Source()] {
+			// A build held for approval is not missing: fetching it again
+			// cannot install it; `conductor plugin approve` does.
 			missing++
 		}
 	}

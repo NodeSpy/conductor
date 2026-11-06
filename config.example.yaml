@@ -802,8 +802,8 @@ models:
 # semantics it declares — there is nothing per plugin to grant.
 #
 # SECURITY. A plugin declares what it needs: the hosts it connects to, the
-# addresses it listens on, the files it reads and writes, the commands it
-# runs and the env vars it reads. Conductor records that when it installs the
+# addresses it listens on, the files it reads and writes, the commands (and
+# their helper programs) it runs and the env vars it reads. Conductor records that when it installs the
 # plugin, SHOWS it to you (`conductor plugin add`, `plugin show`, `plugin list
 # --caps`, the boot log), and runs the plugin JAILED to exactly that (Linux:
 # namespaces + egress proxy; macOS: Seatbelt). Anything undeclared is denied.
@@ -814,12 +814,14 @@ models:
 #   jira:
 #     use: acme/plugins/jira
 #     network: ["your-org.atlassian.net:443"]   # narrow: within what it declares
-#     allow_env: [JIRA_TOKEN]                    # narrow: empty passes every declared var
+#     allow_env: [JIRA_TOKEN]                    # narrow: unset passes every declared var, [] none
 #   tunnel:
 #     use: ngrok
 #     trust: full                                # run WITHOUT the jail (logged at every start)
 #
-# isolation: on a plugin connector, runtime or engine is a load error.
+# Instances sharing one plugin process must set the same network:/allow_env.
+# isolation: on a plugin connector, runtime or engine is a load error: delete
+# it (trust: full keeps a plugin unconfined, as before the jail).
 
 # ---------------------------------------------------------------------------
 # STEPS — where an agent's behavior lives now. This replaced `agents:`.

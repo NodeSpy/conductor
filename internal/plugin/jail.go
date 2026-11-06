@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,11 +29,11 @@ import (
 // What the jail is, per OS:
 //
 //   - Linux: user, pid, mount, IPC and network namespaces; pivot_root into
-//     the minimal base (sandbox.BaseMinimal: /usr's libraries and data but no
-//     programs on the PATH directories, a curated /etc, no /opt) plus the
-//     plugin's own install dir (read-only), its staging dir (TMPDIR), the
-//     declared paths, and the declared commands bound one by one. Everything
-//     writable is noexec. The network namespace has loopback only: TCP out
+//     the minimal base (sandbox.BaseMinimal: /usr's libraries and data but
+//     none of its programs, a curated /etc, no /opt) plus the plugin's own
+//     install dir (read-only), its staging dir (TMPDIR), the declared paths,
+//     the declared commands bound one by one, and the declared exec paths
+//     (read-only, executable). Everything writable is noexec. The network namespace has loopback only: TCP out
 //     goes through conductor's egress proxy (allowlist = declared egress) via
 //     HTTP(S)_PROXY, a declared loopback destination through a relay, and a
 //     declared listen address is listened on by conductor on the host and
@@ -57,7 +58,17 @@ func pluginGrant(s Spec) (sdk.Grant, error) {
 			return "", false
 		}
 		real, err := filepath.EvalSymlinks(p)
-		return real, err == nil
+		if err != nil {
+			return "", false
+		}
+		if spawnGOOS == "darwin" {
+			// A /usr/bin developer-tool stub: "command:tool/…" is relative
+			// to the tool it runs (findCommands).
+			if dev, err := xcrunFind(n); err == nil && dev != "" && dev != real {
+				return dev, true
+			}
+		}
+		return real, true
 	}})
 	if err != nil {
 		return sdk.Grant{}, fmt.Errorf("plugin %s: %w", s.Name, err)
@@ -67,8 +78,10 @@ func pluginGrant(s Spec) (sdk.Grant, error) {
 		g.Egress, g.Listen, g.Env = nil, nil, nil
 		return g, nil
 	}
-	if len(s.Network) > 0 {
-		var narrowed []string
+	// network: and allow_env narrow: unset grants everything declared, a
+	// set list exactly its entries (none, when it is empty).
+	if s.Network != nil {
+		narrowed := []string{}
 		for _, n := range s.Network {
 			hp, err := normHostPort(n)
 			if err != nil {
@@ -81,8 +94,8 @@ func pluginGrant(s Spec) (sdk.Grant, error) {
 		}
 		g.Egress = narrowed
 	}
-	if len(s.AllowEnv) > 0 {
-		var env []string
+	if s.AllowEnv != nil {
+		env := []string{}
 		for _, n := range g.Env {
 			for _, a := range s.AllowEnv {
 				if a == n {
@@ -200,16 +213,134 @@ func jailPATH(cmds []jailCommand) string {
 	return strings.Join(dirs, string(os.PathListSeparator))
 }
 
-// existing keeps the paths that exist (a declared path that does not is
-// skipped, as the declaration says).
-func existing(ps []string) []string {
-	var out []string
-	for _, p := range ps {
-		if _, err := os.Stat(p); err == nil {
-			out = append(out, p)
+// grantedPath is a declared path the jail gives the plugin: path is where the
+// plugin sees it, real the host file it is.
+type grantedPath struct{ path, real string }
+
+// grantedPaths checks the declared read, write and exec paths and keeps
+// those that exist (a declared path that does not is skipped, as the
+// declaration says). A path is refused, failing the launch with the reason,
+// when it:
+//   - is the root, the user's home, or contains conductor's own state or
+//     config dir (sd.MaskPaths) — a config: value naming "~" or "/" would
+//     otherwise hand the plugin all of it; an exact file in them is fine;
+//   - lies inside a path the plugin may write (its own declared write paths,
+//     its staging dir), where it could replace what is there with a symlink
+//     to anything;
+//   - goes through a symlink root does not own (resolveOwned).
+func grantedPaths(s Spec, sd SandboxDeps, g sdk.Grant) (read, write, exec []grantedPath, err error) {
+	home, _ := jailHome()
+	var homes []string
+	if home != "" && home != "/" {
+		homes = append(homes, filepath.Clean(home))
+		if h, err := filepath.EvalSymlinks(home); err == nil {
+			homes = append(homes, h)
 		}
 	}
+	var protected []string
+	for _, p := range sd.MaskPaths {
+		if p == "" {
+			continue
+		}
+		protected = append(protected, filepath.Clean(p))
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			protected = append(protected, r)
+		}
+	}
+	writable := append([]string(nil), g.Write...)
+	if sd.StagingRoot != "" {
+		writable = append(writable, filepath.Clean(sd.StagingRoot))
+	}
+	check := func(kind string, ps []string) ([]grantedPath, error) {
+		var out []grantedPath
+		for _, p := range ps {
+			for _, w := range writable {
+				if w != p && within(w, p) {
+					return nil, fmt.Errorf("plugin %s: %s %s lies inside %s, which it may write — it could replace what is there", s.Name, kind, p, w)
+				}
+			}
+			real, err := resolveOwned(p)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("plugin %s: %s %s refused: %w — point it at the real path", s.Name, kind, p, err)
+			}
+			for _, q := range []string{p, real} {
+				if q == "/" || slices.Contains(homes, q) {
+					return nil, fmt.Errorf("plugin %s: %s %s refused: it is the whole of %s", s.Name, kind, p, q)
+				}
+				for _, prot := range protected {
+					if within(q, prot) {
+						return nil, fmt.Errorf("plugin %s: %s %s refused: it contains conductor's own %s", s.Name, kind, p, prot)
+					}
+				}
+			}
+			out = append(out, grantedPath{path: p, real: real})
+		}
+		return out, nil
+	}
+	if read, err = check("read", g.Read); err != nil {
+		return nil, nil, nil, err
+	}
+	if write, err = check("write", g.Write); err != nil {
+		return nil, nil, nil, err
+	}
+	if exec, err = check("exec", g.Exec); err != nil {
+		return nil, nil, nil, err
+	}
+	return read, write, exec, nil
+}
+
+// within: p is dir or inside it.
+func within(dir, p string) bool {
+	dir, p = filepath.Clean(dir), filepath.Clean(p)
+	if dir == "/" {
+		return true
+	}
+	return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
+}
+
+func reals(ps []grantedPath) []string {
+	var out []string
+	for _, p := range ps {
+		out = append(out, p.real)
+	}
 	return out
+}
+
+// relayed are the ports conductor listens on for plugins (their declared
+// listen addresses): conductor's own listeners, but not its own services.
+var relayed = struct {
+	sync.Mutex
+	ports map[int]int
+}{ports: map[int]int{}}
+
+// ownServicePort reports whether port is one conductor itself serves on (its
+// dashboard, its webhook receiver, …), not counting the plugins' listen
+// relays. A declared loopback destination may not be one: the plugin would
+// reach conductor's own control surfaces from inside its jail.
+var ownServicePort = func(port int) (bool, error) {
+	ports, err := conductorListenPorts()
+	if err != nil {
+		return false, err
+	}
+	relayed.Lock()
+	defer relayed.Unlock()
+	return ports[port] && relayed.ports[port] == 0, nil
+}
+
+func refuseOwnPorts(s Spec, loopPorts []int) error {
+	for _, p := range loopPorts {
+		own, err := ownServicePort(p)
+		if err != nil {
+			return fmt.Errorf("plugin %s: cannot tell whether localhost:%d is conductor's own port: %w", s.Name, p, err)
+		}
+		if own {
+			return fmt.Errorf("plugin %s: egress localhost:%d refused: conductor itself listens there", s.Name, p)
+		}
+	}
+	return nil
 }
 
 // buildJailed builds the jailed launch of argv for s: the wrapped command,
@@ -223,6 +354,9 @@ func buildJailed(s Spec, sd SandboxDeps, argv, env []string) (*exec.Cmd, func(),
 	cmds := findCommands(s, g.Commands)
 	env = replaceEnv(env, "PATH", jailPATH(cmds))
 	remote, loopPorts := splitLoopback(g.Egress)
+	if err := refuseOwnPorts(s, loopPorts); err != nil {
+		return nil, nil, err
+	}
 	var stage string
 	if sd.StagingRoot != "" {
 		stage = filepath.Join(sd.StagingRoot, s.Name)
@@ -230,18 +364,37 @@ func buildJailed(s Spec, sd SandboxDeps, argv, env []string) (*exec.Cmd, func(),
 			return nil, nil, fmt.Errorf("plugin %s: staging dir: %w", s.Name, err)
 		}
 	}
+	paths, err := pathsFor(s, sd, g)
+	if err != nil {
+		return nil, nil, err
+	}
 	if spawnGOOS == "darwin" {
-		return buildSeatbelt(s, sd, g, argv, env, cmds, remote, loopPorts, stage)
+		return buildSeatbelt(s, sd, g, paths, argv, env, cmds, remote, loopPorts, stage)
 	}
 	if spawnGOOS != "linux" {
 		return nil, nil, fmt.Errorf("plugin %s: no plugin jail on %s — set trust: full to run it unjailed", s.Name, spawnGOOS)
 	}
-	return buildNamespaced(s, sd, g, argv, env, cmds, remote, loopPorts, stage)
+	return buildNamespaced(s, sd, g, paths, argv, env, cmds, remote, loopPorts, stage)
 }
 
-func buildNamespaced(s Spec, sd SandboxDeps, g sdk.Grant, argv, env []string, cmds []jailCommand, remote []string, loopPorts []int, stage string) (*exec.Cmd, func(), error) {
+// jailPaths are a launch's checked declared paths (grantedPaths).
+type jailPaths struct{ read, write, exec []grantedPath }
+
+func pathsFor(s Spec, sd SandboxDeps, g sdk.Grant) (jailPaths, error) {
+	r, w, x, err := grantedPaths(s, sd, g)
+	return jailPaths{r, w, x}, err
+}
+
+// jailEUID is the daemon's effective uid (a test var).
+var jailEUID = os.Geteuid
+
+func buildNamespaced(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv, env []string, cmds []jailCommand, remote []string, loopPorts []int, stage string) (*exec.Cmd, func(), error) {
+	if jailEUID() == 0 {
+		// A user namespace maps root to root: the jail would not hold it.
+		return nil, nil, fmt.Errorf("plugin %s: cannot jail it: conductor runs as root, and a plugin jail is no boundary for root — run conductor as a non-root user, or set trust: full on the plugin's entry to run it unjailed", s.Name)
+	}
 	spec := &sandbox.Spec{Mode: "namespace", Deny: true}
-	if err := spec.Check(spawnGOOS, os.Geteuid(), spawnLookPath); err != nil {
+	if err := spec.Check(spawnGOOS, jailEUID(), spawnLookPath); err != nil {
 		return nil, nil, fmt.Errorf("plugin %s: cannot jail it here (%v) — enable unprivileged user namespaces, or set trust: full to run it unjailed", s.Name, err)
 	}
 	if sd.Self == "" {
@@ -254,11 +407,15 @@ func buildNamespaced(s Spec, sd SandboxDeps, g sdk.Grant, argv, env []string, cm
 	if stage != "" {
 		binds = append(binds, sandbox.BindMount{Path: stage, NoExec: true})
 	}
-	for _, p := range existing(g.Read) {
-		binds = append(binds, sandbox.BindMount{Path: p, RO: true, Optional: true})
+	for _, p := range paths.read {
+		// Read is read: what runs is declared under exec.
+		binds = append(binds, sandbox.BindMount{Path: p.path, Src: p.real, RO: true, NoExec: true, Optional: true, NoSymlink: true})
 	}
-	for _, p := range existing(g.Write) {
-		binds = append(binds, sandbox.BindMount{Path: p, NoExec: true, Optional: true})
+	for _, p := range paths.write {
+		binds = append(binds, sandbox.BindMount{Path: p.path, Src: p.real, NoExec: true, Optional: true, NoSymlink: true})
+	}
+	for _, p := range paths.exec {
+		binds = append(binds, sandbox.BindMount{Path: p.path, Src: p.real, RO: true, Optional: true, NoSymlink: true})
 	}
 	for _, c := range cmds {
 		binds = append(binds, sandbox.BindMount{Path: c.path, Src: c.real, RO: true})
@@ -327,7 +484,7 @@ func buildNamespaced(s Spec, sd SandboxDeps, g sdk.Grant, argv, env []string, cm
 	return c, cleanup, nil
 }
 
-func buildSeatbelt(s Spec, sd SandboxDeps, g sdk.Grant, argv, env []string, cmds []jailCommand, remote []string, loopPorts []int, stage string) (*exec.Cmd, func(), error) {
+func buildSeatbelt(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv, env []string, cmds []jailCommand, remote []string, loopPorts []int, stage string) (*exec.Cmd, func(), error) {
 	if _, err := spawnLookPath("sandbox-exec"); err != nil {
 		return nil, nil, fmt.Errorf("plugin %s: cannot jail it here (no sandbox-exec) — set trust: full to run it unjailed", s.Name)
 	}
@@ -340,8 +497,9 @@ func buildSeatbelt(s Spec, sd SandboxDeps, g sdk.Grant, argv, env []string, cmds
 	for _, c := range cmds {
 		p.Exec = append(p.Exec, c.path, c.real)
 	}
-	p.Read = append(p.Read, existing(g.Read)...)
-	p.Write = append(p.Write, existing(g.Write)...)
+	p.Read = append(p.Read, reals(paths.read)...)
+	p.Write = append(p.Write, reals(paths.write)...)
+	p.ExecDirs = append(p.ExecDirs, reals(paths.exec)...)
 	if stage != "" {
 		p.Write = append(p.Write, stage)
 	}
@@ -381,7 +539,17 @@ func serveUnixToTCP(path, addr string) (func(), error) {
 		ln.Close()
 		return nil, err
 	}
-	go pipeAll(ln, func() (net.Conn, error) { return net.Dial("tcp", addr) })
+	_, ps, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(ps)
+	ownPort := ownServicePort
+	go pipeAll(ln, func() (net.Conn, error) {
+		// Checked at each connection too: conductor may have started
+		// serving there since the launch.
+		if own, err := ownPort(port); err != nil || own {
+			return nil, fmt.Errorf("localhost:%d is conductor's own port", port)
+		}
+		return net.Dial("tcp", addr)
+	})
 	return func() { ln.Close() }, nil
 }
 
@@ -392,8 +560,19 @@ func serveTCPToUnix(addr, path string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	relayed.Lock()
+	relayed.ports[port]++
+	relayed.Unlock()
 	go pipeAll(ln, func() (net.Conn, error) { return net.Dial("unix", path) })
-	return func() { ln.Close() }, nil
+	return func() {
+		ln.Close()
+		relayed.Lock()
+		if relayed.ports[port]--; relayed.ports[port] <= 0 {
+			delete(relayed.ports, port)
+		}
+		relayed.Unlock()
+	}, nil
 }
 
 func pipeAll(ln net.Listener, dial func() (net.Conn, error)) {

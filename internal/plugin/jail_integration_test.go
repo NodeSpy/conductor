@@ -84,10 +84,27 @@ func TestDeclaredJail(t *testing.T) {
 	t.Setenv("PROBE_DECLARED", "yes")
 	t.Setenv("PROBE_UNDECLARED", "leak")
 
-	// A host loopback service the probe declares, and one it does not.
+	// A host loopback service the probe declares, and one it does not. They
+	// run in this test process, which stands in for conductor here: the
+	// own-port refusal (TestLoopbackEgressToConductorsOwnPortIsRefused)
+	// must not count them.
 	declared := httpOn(t, "declared-loopback")
 	undeclared := httpOn(t, "undeclared-loopback")
 	listenPort := freePort(t)
+	testServers := map[string]bool{}
+	for _, a := range []string{declared, undeclared} {
+		_, p, _ := net.SplitHostPort(a)
+		testServers[p] = true
+	}
+	ownWas := ownServicePort
+	ownServicePort = func(port int) (bool, error) {
+		if testServers[strconv.Itoa(port)] {
+			return false, nil
+		}
+		return ownWas(port)
+	}
+	t.Cleanup(func() { ownServicePort = ownWas })
+	execDecl, execArgs, execWant := execChecks(t)
 
 	pm := sandbox.NewProxyManager(nil)
 	t.Cleanup(pm.Close)
@@ -101,6 +118,7 @@ func TestDeclaredJail(t *testing.T) {
 			Read:     []string{"~/.config/tool"},
 			Write:    []string{writeDir},
 			Commands: []string{"cat"},
+			Exec:     execDecl,
 			Env:      []string{"PROBE_DECLARED"},
 		},
 		Args: append([]string{
@@ -125,7 +143,7 @@ func TestDeclaredJail(t *testing.T) {
 			"get=http://blocked.example.com/",
 			"dial=1.1.1.1:443",
 			"listen=127.0.0.1:" + strconv.Itoa(listenPort),
-		}, osChecks()...),
+		}, append(osChecks(), execArgs...)...),
 	}
 	if darwin {
 		// Seatbelt allows every file's metadata (stat), not its contents.
@@ -205,6 +223,9 @@ func TestDeclaredJail(t *testing.T) {
 	for k, w := range osWant(darwin, conductor) {
 		want[k] = w
 	}
+	for k, w := range execWant {
+		want[k] = w
+	}
 	for k, w := range want {
 		g, ok := got[k]
 		if !ok {
@@ -240,6 +261,67 @@ func freePort(t *testing.T) int {
 	}
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// execChecks are the Linux checks of what runs from the base system: none of
+// its programs, except what the plugin declares. Two programs in two
+// subdirectories of /usr/lib (a tool's helpers, a daemon's binaries): the
+// directory of one is declared exec, the other is not. And, when there is
+// one, a program directly in /usr/lib among the libraries.
+func execChecks(t *testing.T) (decl, args []string, want map[string]string) {
+	t.Helper()
+	want = map[string]string{}
+	if runtime.GOOS != "linux" {
+		return nil, nil, want
+	}
+	var progs []string
+	var top string
+	dirs, _ := os.ReadDir("/usr/lib")
+	for _, d := range dirs {
+		p := filepath.Join("/usr/lib", d.Name())
+		if d.Type().IsRegular() && top == "" && isELFProgram(p) {
+			top = p
+		}
+		if !d.IsDir() || d.Name() == "glibc-hwcaps" || len(progs) == 2 {
+			continue
+		}
+		files, _ := os.ReadDir(p)
+		for _, f := range files {
+			if fp := filepath.Join(p, f.Name()); f.Type().IsRegular() && isELFProgram(fp) {
+				progs = append(progs, fp)
+				break
+			}
+		}
+	}
+	if len(progs) < 2 {
+		t.Logf("fewer than two programs in /usr/lib subdirectories: exec checks skipped")
+		return nil, nil, want
+	}
+	decl = []string{filepath.Dir(progs[0])}
+	want["exec="+progs[0]] = "ok"
+	want["exec="+progs[1]] = "denied"
+	args = []string{"exec=" + progs[0], "exec=" + progs[1]}
+	if top != "" {
+		want["exec="+top] = "denied"
+		args = append(args, "exec="+top)
+	}
+	return decl, args, want
+}
+
+// isELFProgram: an executable ELF file that is not a shared object by name.
+func isELFProgram(p string) bool {
+	fi, err := os.Stat(p)
+	if err != nil || fi.Mode()&0o111 == 0 || fi.Mode()&(os.ModeSetuid|os.ModeSetgid) != 0 || strings.HasSuffix(p, ".so") || strings.Contains(filepath.Base(p), ".so.") {
+		return false
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	b := make([]byte, 4)
+	_, err = io.ReadFull(f, b)
+	return err == nil && string(b) == "\x7fELF"
 }
 
 // osChecks are the checks whose answer differs by how each OS jails.

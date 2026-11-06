@@ -12,10 +12,10 @@ func TestCheckNetworkWithinManifest(t *testing.T) {
 	declared := []string{"*.atlassian.net:443", "api.acme.dev"}
 
 	for _, ok := range [][]string{
-		{"acme.atlassian.net:443"},                   // glob host, exact port
-		{"api.acme.dev:443"},                         // declared with no port: any port
-		{"api.acme.dev:8080"},                        //
-		{"acme.atlassian.net:443", "api.acme.dev:1"}, // several, all covered
+		{"acme.atlassian.net:443"},                     // glob host, exact port
+		{"api.acme.dev:443"},                           // declared with no port: :443, as the jail grants it
+		{"api.acme.dev"},                               // the same, bare
+		{"acme.atlassian.net:443", "api.acme.dev:443"}, // several, all covered
 		nil, // declaring nothing narrows nothing
 	} {
 		if err := CheckNetworkWithinManifest("jira", declared, ok); err != nil {
@@ -26,6 +26,7 @@ func TestCheckNetworkWithinManifest(t *testing.T) {
 	for _, bad := range [][]string{
 		{"evil.example:443"},                     // host not declared at all
 		{"acme.atlassian.net:22"},                // declared host, undeclared port
+		{"api.acme.dev:8080"},                    // a bare declared host is :443 only
 		{"acme.atlassian.net:443", "evil.dev:1"}, // one good, one not
 	} {
 		err := CheckNetworkWithinManifest("jira", declared, bad)

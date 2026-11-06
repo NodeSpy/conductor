@@ -37,7 +37,8 @@ type ConnectorRef struct {
 	// Network is this instance's DECLARED EGRESS — the "host:port" targets it
 	// is allowed to reach. It is the visible half of the permission manifest:
 	// what the operator accepts when they add the connector. It may not exceed
-	// the implementation's own declared egress.
+	// the implementation's own declared egress. For a plugin, unset grants
+	// every destination it declares and `network: []` none.
 	Network []string `yaml:"network,omitempty"`
 	Enabled *bool    `yaml:"enabled,omitempty"`
 	// Options are the connector's default verb options; each `uses:` call's
@@ -63,8 +64,8 @@ type ConnectorRef struct {
 	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
 	// AllowEnv narrows the daemon environment variables a plugin-backed
 	// connector reads to these (exact names), each one the plugin declares
-	// (capabilities.env). Empty passes every variable it declares: the user
-	// agreed to them with the plugin.
+	// (capabilities.env). Unset passes every variable it declares (the user
+	// agreed to them with the plugin); `allow_env: []` passes none.
 	AllowEnv []string `yaml:"allow_env,omitempty"`
 	// Isolate opts THIS configured instance INTO its own dedicated subprocess,
 	// with exactly its own grant (Network/AllowSecrets/AllowEnv/Isolation),

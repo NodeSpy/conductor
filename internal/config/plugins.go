@@ -338,9 +338,12 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		// report it precisely.
 		if !ref.Isolate {
 			p.Isolation = mergeIsolationBestEffort(p.Isolation, ref.Isolation)
-			p.Network = appendUnique(p.Network, ref.Network...)
+			// network:/allow_env narrow one shared process: every instance
+			// it serves must say the same (checkPluginJail), so this is that
+			// one list. Set-but-empty stays set: it narrows to nothing.
+			p.Network = unionNarrowing(p.Network, ref.Network)
 			p.AllowSecrets = appendUnique(p.AllowSecrets, ref.AllowSecrets...)
-			p.AllowEnv = appendUnique(p.AllowEnv, ref.AllowEnv...)
+			p.AllowEnv = unionNarrowing(p.AllowEnv, ref.AllowEnv)
 			p.Conns = append(p.Conns, ref.Conn())
 			// The shared process is unjailed only when every instance it
 			// serves says so (validateTrust refuses a mix).
@@ -349,9 +352,9 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		p.Instances[name] = ConnectorGrant{
 			Conn:         ref.Conn(),
 			TrustFull:    ref.TrustFull(),
-			Network:      append([]string(nil), ref.Network...),
+			Network:      CloneNarrowing(ref.Network),
 			AllowSecrets: append([]string(nil), ref.AllowSecrets...),
-			AllowEnv:     append([]string(nil), ref.AllowEnv...),
+			AllowEnv:     CloneNarrowing(ref.AllowEnv),
 			Isolation:    ref.Isolation,
 			Isolate:      ref.Isolate,
 			Use:          u,
@@ -540,7 +543,7 @@ func (c *Config) checkPluginJail() error {
 		return nil
 	}
 	isoErr := func(where string) error {
-		return fmt.Errorf("config: %s: isolation: no longer applies to a plugin — a plugin runs jailed to exactly what it declares (`conductor plugin show` lists it); narrow it with network:/allow_env, or opt out with trust: full", where)
+		return fmt.Errorf("config: %s: isolation: was removed for plugins — every plugin now runs jailed to exactly what it declares (`conductor plugin show <name>` lists it). Delete the isolation: block; to narrow the plugin use network:/allow_env, to run it unconfined as before set trust: full (docs/wiki/Plugins.md \"Upgrading\")", where)
 	}
 	names := make([]string, 0, len(c.ConnectorsMap))
 	for n := range c.ConnectorsMap {
@@ -549,6 +552,7 @@ func (c *Config) checkPluginJail() error {
 	sort.Strings(names)
 	shared := map[string]string{} // group → first instance's trust
 	sharedFrom := map[string]string{}
+	narrowing := map[string]string{} // group → first instance's network:/allow_env
 	for _, name := range names {
 		ref := c.ConnectorsMap[name]
 		u, err := ref.Resolved()
@@ -570,7 +574,14 @@ func (c *Config) checkPluginJail() error {
 		if prev, ok := shared[g]; ok && prev != t {
 			return fmt.Errorf("config: connectors: %s and %s share one plugin process but only one sets trust: full — set it on both, or isolate: true one of them", sharedFrom[g], name)
 		}
-		shared[g], sharedFrom[g] = t, name
+		// network: and allow_env narrow the one process instances share, so
+		// they must agree: one instance's narrowing would otherwise narrow
+		// its siblings too, and neither would get what it set.
+		n := "network: " + narrowingKey(ref.Network) + ", allow_env: " + narrowingKey(ref.AllowEnv)
+		if prev, ok := narrowing[g]; ok && prev != n {
+			return fmt.Errorf("config: connectors: %s and %s share one plugin process but narrow it differently (%s vs %s) — set the same network:/allow_env on both, or isolate: true one of them", sharedFrom[g], name, prev, n)
+		}
+		shared[g], sharedFrom[g], narrowing[g] = t, name, n
 	}
 	rnames := make([]string, 0, len(c.Runtimes))
 	for n := range c.Runtimes {
@@ -601,6 +612,42 @@ func (c *Config) checkPluginJail() error {
 		}
 	}
 	return nil
+}
+
+// CloneNarrowing copies a network:/allow_env list keeping the difference
+// between unset (nil: everything the plugin declares) and set but empty
+// (nothing).
+func CloneNarrowing(l []string) []string {
+	if l == nil {
+		return nil
+	}
+	return append([]string{}, l...)
+}
+
+// unionNarrowing joins two instances' network:/allow_env for the one process
+// they share: unset only when both are.
+func unionNarrowing(a, b []string) []string {
+	if a == nil && b == nil {
+		return nil
+	}
+	return appendUnique(CloneNarrowing(append([]string{}, a...)), b...)
+}
+
+// UnionNarrowing is unionNarrowing, for internal/plugin's process groups.
+func UnionNarrowing(a, b []string) []string { return unionNarrowing(a, b) }
+
+// narrowingKey identifies a network:/allow_env setting for comparison:
+// unset, or the set of names.
+func narrowingKey(l []string) string {
+	if l == nil {
+		return "unset"
+	}
+	s := append([]string(nil), l...)
+	for i := range s {
+		s[i] = strings.TrimSpace(s[i])
+	}
+	sort.Strings(s)
+	return "[" + strings.Join(s, ",") + "]"
 }
 
 func errConflict(kind UseKind, name, aInst, aSrc, bInst, bSrc string) error {

@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"net/url"
 	"slices"
 
 	"crypto/sha256"
@@ -42,6 +43,14 @@ const installStateFile = "installed.yaml"
 // re-installs instead of crash-looping.
 const installStateVersion = 1
 
+// manifestSchema marks a record whose Manifest holds the whole declaration
+// the jail enforces (Installed.ManifestSchema). A record without it was
+// written by a conductor that did not jail plugins and did not record
+// listen, read, write, exec or keychain: the next reconcile describes that
+// same build once and records it in full, without a hold (it ran unconfined
+// until now, so whatever it declares is a narrowing).
+const manifestSchema = 1
+
 // Manifest is the permission manifest a plugin declared at install time — what
 // it says it needs, recorded so it is known BEFORE the plugin runs on any
 // later boot, and so a change on update is visible rather than silent.
@@ -55,6 +64,8 @@ type Manifest struct {
 	Write []string `yaml:"write,omitempty"`
 	// Commands are the commands it spawns.
 	Commands []string `yaml:"commands,omitempty"`
+	// Exec are the paths whose programs it runs beyond Commands.
+	Exec []string `yaml:"exec,omitempty"`
 	// Keychain: a command reads a login from the macOS Keychain.
 	Keychain bool `yaml:"keychain,omitempty"`
 	// FS is the older name for Write.
@@ -85,15 +96,15 @@ type Manifest struct {
 
 // IsZero reports whether the plugin declared no capabilities at all.
 func (m Manifest) IsZero() bool {
-	return len(m.Egress) == 0 && len(m.Listen) == 0 && len(m.Read) == 0 && len(m.Write) == 0 &&
-		len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && !m.Keychain && len(m.Env) == 0 && !m.SingleProcess
+	return len(m.Egress) == 0 && len(m.Listen) == 0 && len(m.Read) == 0 && len(m.Write) == 0 && len(m.Exec) == 0 &&
+		len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && !m.Keychain && len(m.Env) == 0 && !m.SingleProcess && m.Auth == nil
 }
 
 // Caps is the manifest as the plugin declared it.
 func (m Manifest) Caps() sdk.Capabilities {
 	return sdk.Capabilities{
 		Egress: m.Egress, Listen: m.Listen, Read: m.Read, Write: m.Write, FS: m.FS,
-		Commands: m.Commands, Keychain: m.Keychain, Env: m.Env,
+		Commands: m.Commands, Exec: m.Exec, Keychain: m.Keychain, Env: m.Env,
 	}
 }
 
@@ -116,9 +127,20 @@ func (m Manifest) Lines() []string {
 	add("reads", m.Read)
 	add("reads and writes", append(append([]string(nil), m.Write...), m.FS...))
 	add("runs", m.Commands)
+	add("runs programs in", m.Exec)
 	add("reads env", m.Env)
+	if secret := secretLooking(m.Env); len(secret) > 0 {
+		out = append(out, "note: "+strings.Join(secret, ", ")+" look like credentials — it gets their values from conductor's environment when they are set there")
+	}
 	if m.Keychain {
 		out = append(out, "reads a login from the macOS Keychain")
+	}
+	if hosts := authEndpoints(m.Auth); len(hosts) > 0 {
+		var ws []string
+		for _, e := range hosts {
+			ws = append(ws, e.where)
+		}
+		out = append(out, "conductor sends your OAuth client credentials and tokens to: "+strings.Join(uniqStrings(ws), ", "))
 	}
 	if m.SingleProcess {
 		out = append(out, "single_process (every instance shares one process)")
@@ -162,6 +184,8 @@ func (m Manifest) Widens(next Manifest) []string {
 		}
 	}
 	exact := func(have []string, e string) bool { return slices.Contains(have, e) }
+	// A destination compares as the jail grants it: a bare host is :443 on
+	// both sides, so "api.example.com" never covers another port.
 	diff("connects to", m.Egress, next.Egress, func(have []string, e string) bool {
 		return exact(have, e) || (!strings.HasPrefix(e, "config:") && egressCovered(have, e))
 	})
@@ -170,9 +194,72 @@ func (m Manifest) Widens(next Manifest) []string {
 	diff("reads", append(append(append([]string(nil), m.Read...), m.Write...), m.FS...), next.Read, exact)
 	diff("writes", append(append([]string(nil), m.Write...), m.FS...), append(append([]string(nil), next.Write...), next.FS...), exact)
 	diff("runs", m.Commands, next.Commands, exact)
+	diff("runs programs in", m.Exec, next.Exec, exact)
 	diff("reads env", m.Env, next.Env, exact)
 	if next.Keychain && !m.Keychain {
 		out = append(out, "reads a login from the macOS Keychain")
+	}
+	// The OAuth endpoints are where conductor itself, outside any jail,
+	// posts the operator's client secret and refresh token: one that moves
+	// to another place is a new destination for them.
+	have := map[string]bool{}
+	for _, e := range authEndpoints(m.Auth) {
+		have[e.field+" "+e.where] = true
+	}
+	for _, e := range authEndpoints(next.Auth) {
+		if !have[e.field+" "+e.where] {
+			out = append(out, "sends OAuth credentials to "+e.where+" ("+e.field+")")
+		}
+	}
+	return out
+}
+
+// authEndpoint is one declared OAuth endpoint: which one, and where it
+// sends to (scheme://host[:port]).
+type authEndpoint struct{ field, where string }
+
+func authEndpoints(a *AuthSpec) []authEndpoint {
+	if a == nil {
+		return nil
+	}
+	var out []authEndpoint
+	for _, e := range []struct{ field, url string }{
+		{"token_url", a.TokenURL}, {"auth_url", a.AuthURL}, {"device_auth_url", a.DeviceAuthURL},
+	} {
+		if strings.TrimSpace(e.url) == "" {
+			continue
+		}
+		where := strings.TrimSpace(e.url)
+		if u, err := url.Parse(where); err == nil && u.Host != "" {
+			where = strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+		}
+		out = append(out, authEndpoint{e.field, where})
+	}
+	return out
+}
+
+// secretLooking lists the variable names that look like credentials, so the
+// user sees that agreeing to them hands the plugin a secret.
+func secretLooking(names []string) []string {
+	var out []string
+	for _, n := range names {
+		u := strings.ToUpper(n)
+		for _, w := range []string{"TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "APIKEY", "PRIVATE_KEY", "ACCESS_KEY", "CREDENTIAL", "AUTH_SOCK"} {
+			if strings.Contains(u, w) {
+				out = append(out, n)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func uniqStrings(in []string) []string {
+	var out []string
+	for _, s := range in {
+		if !slices.Contains(out, s) {
+			out = append(out, s)
+		}
 	}
 	return out
 }
@@ -199,6 +286,9 @@ type Installed struct {
 	Path string `yaml:"path"`
 	// Manifest is the permission manifest recorded at install.
 	Manifest Manifest `yaml:"manifest,omitempty"`
+	// ManifestSchema is manifestSchema when Manifest was recorded in full
+	// (see there); 0 on a record a conductor without the jail wrote.
+	ManifestSchema int `yaml:"manifest_schema,omitempty"`
 	// ReleaseVerified records that Sha256 was VERIFIED against the release at
 	// install — the release's checksums.txt listed the asset with this sha —
 	// rather than merely computed from whatever was downloaded. Absent on
@@ -472,7 +562,7 @@ func LoadInstallState(dir string) *InstallState {
 	if on.Version != installStateVersion {
 		return s
 	}
-	s.Plugins = on.Plugins
+	s.Plugins, s.Pending = on.Plugins, on.Pending
 	return s
 }
 

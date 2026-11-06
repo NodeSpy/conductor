@@ -50,12 +50,20 @@ type BindMount struct {
 	// NoExec mounts the entry noexec: nothing in it can be executed (a
 	// plugin's writable paths — it cannot run what it writes).
 	NoExec bool `json:"noexec,omitempty"`
+	// NoSymlink refuses the entry when its source is a symlink when it is
+	// mounted (a plugin's declared path, checked when it was granted).
+	NoSymlink bool `json:"nosymlink,omitempty"`
 }
 
 // BaseMinimal is the jail base a plugin runs on (EnterOpts.Base): the base
-// system's libraries and data read-only, but no programs on the standard
-// PATH directories except the ones the caller binds in, a curated /etc
-// (MinimalEtc), no /opt, and nothing writable that is also executable.
+// system's libraries and data read-only, but none of its programs: the
+// standard PATH directories are empty except for what the caller binds in,
+// and the rest of /usr (and a split-usr /lib, /lib64, /libexec) is noexec
+// except the top level of the dynamic linker's library directories, so a
+// shared library can be mapped but a program in a subdirectory (a tool's
+// helpers, a daemon's binaries) or a program among the libraries cannot run.
+// A curated /etc (MinimalEtc), no /opt, and nothing writable that is also
+// executable.
 const BaseMinimal = "minimal"
 
 // MinimalEtc are the /etc entries the minimal base shows: name service,

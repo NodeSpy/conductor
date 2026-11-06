@@ -14,6 +14,9 @@ type PluginProfile struct {
 	// Exec are the absolute paths that may be executed: the plugin binary
 	// and each declared command (as found on PATH and its resolved target).
 	Exec []string
+	// ExecDirs are declared exec paths (subtrees): readable, and what is in
+	// them may run.
+	ExecDirs []string
 	// Read and Write are absolute paths (subtrees).
 	Read, Write []string
 	// ProxyPort is the loopback port of the plugin's egress proxy (0: none).
@@ -87,6 +90,9 @@ func seatbeltPluginProfile(p *PluginProfile) string {
 		for _, e := range exec {
 			b.WriteString("(allow file-read* (literal " + sbplString(e) + "))\n")
 		}
+	}
+	for _, x := range resolvePaths(p.ExecDirs) {
+		b.WriteString("(allow file-read* process-exec (subpath " + sbplString(x) + "))\n")
 	}
 	for _, r := range resolvePaths(p.Read) {
 		b.WriteString("(allow file-read* (subpath " + sbplString(r) + "))\n")

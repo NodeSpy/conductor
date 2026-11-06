@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -72,6 +73,20 @@ func check(k, v string) string {
 			return "denied: write: " + err.Error()
 		}
 		return ok(exec.Command(v, "env=PATH").Run())
+	case "exec":
+		// Did the program start? (Its own exit status does not matter.)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		prog, args, _ := strings.Cut(v, " ")
+		var argv []string
+		if args != "" {
+			argv = strings.Fields(args)
+		}
+		err := exec.CommandContext(ctx, prog, argv...).Run()
+		if _, exited := err.(*exec.ExitError); err == nil || exited {
+			return "ok: ran"
+		}
+		return "denied: " + err.Error()
 	case "run":
 		out, err := exec.Command(v).CombinedOutput()
 		if err != nil {
