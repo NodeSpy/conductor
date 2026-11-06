@@ -445,7 +445,7 @@ func runtimeDirs() []string {
 	if x := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(x) {
 		ds = append(ds, filepath.Clean(x))
 	}
-	if t := os.TempDir(); filepath.IsAbs(t) {
+	if t := scratch.SystemTempDir(); filepath.IsAbs(t) {
 		ds = append(ds, filepath.Clean(t))
 	}
 	return ds
