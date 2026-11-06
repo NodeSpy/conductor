@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -298,9 +299,10 @@ func TestReconcilePinnedInstanceRefetchesWhenBinaryDeleted(t *testing.T) {
 // sha against what was already installed for that TAG, not just the tag
 // text — a release that gets RETAGGED upstream (the same tag, "jira/v1.0.0"
 // say, now pointing at different bytes — a forge mistake, or a forced
-// push) must be detected as a real change and re-verified/re-recorded,
-// never silently called "up to date" just because the tag string the
-// instance resolved to didn't move.
+// push) must be detected as a real change, never silently called "up to
+// date" just because the tag string the instance resolved to didn't move:
+// it is refused (the installed build keeps running), and only --force
+// re-verifies and records it.
 func TestReconcileRetaggedReleaseIsReVerifiedNotSilentlyCurrent(t *testing.T) {
 	st := stateAt(t)
 	trust := &config.PackTrustConfig{Allow: []string{"github.com/acme/*"}}
@@ -325,25 +327,35 @@ func TestReconcileRetaggedReleaseIsReVerifiedNotSilentlyCurrent(t *testing.T) {
 	firstSha := res[0].Sha
 
 	// The SAME tag gets retagged upstream, pointing at DIFFERENT bytes —
-	// the tag string never changes, only what it resolves to.
+	// the tag string never changes, only what it resolves to. That is
+	// detected, and refused: the installed build and its bytes stay.
 	apiV2 := stubAPI{tags: []string{"jira/v1.0.0"}, bin: []byte("retagged, completely different bytes"), assetName: RemoteSource{Component: "jira"}.AssetName()}
 	res2, err := Reconcile(refs, st, trust, apiV2, Options{})
 	if err != nil {
 		t.Fatalf("retag pass: %v", err)
 	}
-	if len(res2) != 1 {
-		t.Fatalf("expected one resolution, got %+v", res2)
+	if len(res2) != 1 || res2[0].Action != ActionFailed || res2[0].Err == nil || !strings.Contains(res2[0].Err.Error(), "publishes a different build") {
+		t.Fatalf("a retagged release must be refused, not called current: %+v", res2)
 	}
-	if res2[0].Tag != "jira/v1.0.0" {
-		t.Fatalf("the tag itself must not have changed: %q", res2[0].Tag)
+	rec, _ := st.GetVersion(ref.Key(), "jira/v1.0.0", ref.Use.Source())
+	if got, _ := os.ReadFile(rec.Path); rec.Sha256 != firstSha || string(got) != "original release bytes" {
+		t.Fatalf("the installed build must be kept: %+v %q", rec, got)
+	}
+
+	// --force takes it: re-verified, recorded with the new sha.
+	res2, err = Reconcile(refs, st, trust, apiV2, Options{Force: true})
+	if err != nil {
+		t.Fatalf("forced retag pass: %v", err)
+	}
+	if len(res2) != 1 || res2[0].Tag != "jira/v1.0.0" {
+		t.Fatalf("the tag itself must not have changed: %+v", res2)
 	}
 	if res2[0].Sha == firstSha {
 		t.Fatalf("a retagged release must be re-verified (new sha), got the same sha %q as before", firstSha)
 	}
 	if res2[0].Action != ActionUpdated {
-		t.Fatalf("a retagged release under an unchanged tag must classify as %q, not %q — silently calling it current hides that the bytes actually running changed", ActionUpdated, res2[0].Action)
+		t.Fatalf("a forced retagged release must classify as %q, not %q", ActionUpdated, res2[0].Action)
 	}
-
 	rec, ok := st.GetVersion(ref.Key(), "jira/v1.0.0", ref.Use.Source())
 	if !ok {
 		t.Fatal("expected an installed record for jira/v1.0.0")

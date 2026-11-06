@@ -219,11 +219,6 @@ func buildJailIn(binds []BindMount, jailRoot string, t *jailTmp, base string) er
 		if err != nil {
 			return fmt.Errorf("jail %s: %w", b.Path, err)
 		}
-		if b.NoExec && !b.Tmpfs && b.Link == "" {
-			if err := remount(root+b.Path, unix.MS_NOEXEC|unix.MS_NOSUID|unix.MS_NODEV); err != nil && !(b.Optional && os.IsNotExist(err)) {
-				return fmt.Errorf("jail noexec %s: %w", b.Path, err)
-			}
-		}
 	}
 	// The emptied PATH directories hold only what was bound into them, and
 	// stay that way: read-only, so nothing can be added to run.
@@ -265,14 +260,33 @@ func remount(p string, flags uintptr) error {
 // caller's declared allow-list it is false, so a missing path fails the launch.
 func bindInto(root string, b BindMount, skipMissing bool) error {
 	src := b.source()
+	var isDir bool
+	var err error
+	srcFd := -1
 	if b.NoSymlink {
-		// A declared path was checked when it was granted; one that has
-		// become a symlink since would bind wherever it now points.
-		if lfi, err := os.Lstat(src); err == nil && lfi.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("jail bind %s: source is a symlink", src)
+		// A declared path was checked when it was granted, with no symlink
+		// left in it. It is opened without following one in any component
+		// and bound by that open file, so one made since (by another
+		// plugin that may write a directory above it) is refused, never
+		// followed.
+		srcFd, err = openNoSymlinks(src)
+		if err == nil {
+			defer unix.Close(srcFd)
+			var st unix.Stat_t
+			if err = unix.Fstat(srcFd, &st); err == nil {
+				isDir = st.Mode&unix.S_IFMT == unix.S_IFDIR
+			}
+		} else if err == unix.ELOOP {
+			return fmt.Errorf("jail bind %s: it goes through a symlink now", src)
+		} else {
+			err = &os.PathError{Op: "open", Path: src, Err: err}
+		}
+	} else {
+		var fi os.FileInfo
+		if fi, err = os.Stat(src); err == nil { // Stat: follow symlinks to learn dir-vs-file.
+			isDir = fi.IsDir()
 		}
 	}
-	fi, err := os.Stat(src) // Stat: follow symlinks to learn dir-vs-file.
 	if err != nil {
 		if os.IsNotExist(err) && skipMissing {
 			return nil
@@ -285,7 +299,7 @@ func bindInto(root string, b BindMount, skipMissing bool) error {
 		// /bin link): the bind would land wherever it points.
 		return fmt.Errorf("jail bind %s: target is a symlink", b.Path)
 	}
-	if fi.IsDir() {
+	if isDir {
 		if err := os.MkdirAll(target, 0o755); err != nil {
 			return fmt.Errorf("jail mkdir %s: %w", target, err)
 		}
@@ -297,14 +311,87 @@ func bindInto(root string, b BindMount, skipMissing bool) error {
 			return fmt.Errorf("jail touch %s: %w", target, err)
 		}
 	}
-	if err := unix.Mount(src, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+	if srcFd >= 0 {
+		err = bindFd(srcFd, target)
+	} else {
+		err = unix.Mount(src, target, "", unix.MS_BIND|unix.MS_REC, "")
+	}
+	if err != nil {
 		return fmt.Errorf("jail bind %s: %w", src, err)
 	}
+	// Read-only and noexec all the way down: the submounts under it too.
+	var set uint64
 	if b.RO {
-		// Read-only all the way down: the submounts under it too.
-		if err := setattr(target, unix.MOUNT_ATTR_RDONLY, true); err != nil {
-			return fmt.Errorf("jail bind-ro %s: %w", b.Path, err)
+		set |= unix.MOUNT_ATTR_RDONLY
+	}
+	if b.NoExec {
+		set |= unix.MOUNT_ATTR_NOEXEC | unix.MOUNT_ATTR_NOSUID | unix.MOUNT_ATTR_NODEV
+	}
+	if set != 0 {
+		if err := setattr(target, set, true); err != nil {
+			return fmt.Errorf("jail bind attributes %s: %w", b.Path, err)
 		}
+	}
+	return nil
+}
+
+// openNoSymlinks opens p (O_PATH) without following a symlink in any of
+// its components: openat2 RESOLVE_NO_SYMLINKS, or on a kernel without it
+// (before 5.6) one component at a time with O_NOFOLLOW. A symlink is ELOOP.
+func openNoSymlinks(p string) (int, error) {
+	fd, err := unix.Openat2(unix.AT_FDCWD, p, &unix.OpenHow{
+		Flags:   unix.O_PATH | unix.O_CLOEXEC,
+		Resolve: unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
+	})
+	if err != unix.ENOSYS {
+		return fd, err
+	}
+	if !filepath.IsAbs(p) {
+		return -1, unix.EINVAL
+	}
+	cur, err := unix.Open("/", unix.O_PATH|unix.O_CLOEXEC|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return -1, err
+	}
+	for _, name := range strings.Split(strings.Trim(filepath.Clean(p), "/"), "/") {
+		if name == "" {
+			continue
+		}
+		next, err := unix.Openat(cur, name, unix.O_PATH|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		unix.Close(cur)
+		if err != nil {
+			return -1, err
+		}
+		var st unix.Stat_t
+		if err := unix.Fstat(next, &st); err != nil {
+			unix.Close(next)
+			return -1, err
+		}
+		if st.Mode&unix.S_IFMT == unix.S_IFLNK {
+			unix.Close(next)
+			return -1, unix.ELOOP
+		}
+		cur = next
+	}
+	return cur, nil
+}
+
+// bindFd binds the file open at fd onto target: a clone of its mount tree
+// (open_tree), moved into place, or on a kernel without that (before 5.2) a
+// bind of its /proc/self/fd link, which names the open file itself. Neither
+// resolves a path again. With neither, the bind fails: the launch fails
+// rather than bind by path.
+func bindFd(fd int, target string) error {
+	tree, err := unix.OpenTree(fd, "", unix.OPEN_TREE_CLONE|unix.OPEN_TREE_CLOEXEC|unix.AT_EMPTY_PATH|unix.AT_RECURSIVE)
+	if err == nil {
+		defer unix.Close(tree)
+		return unix.MoveMount(tree, "", unix.AT_FDCWD, target, unix.MOVE_MOUNT_F_EMPTY_PATH)
+	}
+	if err != unix.ENOSYS {
+		return fmt.Errorf("open_tree: %w", err)
+	}
+	if err := unix.Mount(fmt.Sprintf("/proc/self/fd/%d", fd), target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return fmt.Errorf("bind by fd (no open_tree on this kernel, and /proc/self/fd: %w) — refusing to bind by path", err)
 	}
 	return nil
 }

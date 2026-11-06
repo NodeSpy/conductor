@@ -41,14 +41,27 @@ const installStateFile = "installed.yaml"
 // installStateVersion is bumped only on an incompatible format change; an
 // unknown version is treated as "no state" rather than an error, so a downgrade
 // re-installs instead of crash-looping.
-const installStateVersion = 1
+//
+// Version 2 is the file the plugin jail writes: every record in it holds
+// what the user agreed to. A version 1 file was written by a conductor that
+// did not jail plugins (or by one rolled back to): its records are loaded
+// as Legacy, and only those are ever adopted (adoptLegacyRecord).
+const installStateVersion = 2
+
+// legacyStateVersion is the file a conductor without the plugin jail writes.
+const legacyStateVersion = 1
+
+// consentFile keeps a copy of the last version 2 state beside the state
+// file. A conductor without the jail rewrites installed.yaml as version 1,
+// dropping what it does not know (manifest_schema, pending); it never
+// touches this file, so after a rollback and upgrade the adoption compares
+// against what the user last agreed to, and held updates are restored.
+const consentFile = "consented.yaml"
 
 // manifestSchema marks a record whose Manifest holds the whole declaration
 // the jail enforces (Installed.ManifestSchema). A record without it was
 // written by a conductor that did not jail plugins and did not record
-// listen, read, write, exec or keychain: the next reconcile describes that
-// same build once and records it in full, without a hold (it ran unconfined
-// until now, so whatever it declares is a narrowing).
+// listen, read, write, exec or keychain (Installed.Legacy).
 const manifestSchema = 1
 
 // Manifest is the permission manifest a plugin declared at install time — what
@@ -128,6 +141,9 @@ func (m Manifest) Lines() []string {
 	add("reads and writes", append(append([]string(nil), m.Write...), m.FS...))
 	add("runs", m.Commands)
 	add("runs programs in", m.Exec)
+	if len(m.Read)+len(m.Write)+len(m.FS)+len(m.Exec) > 0 {
+		out = append(out, "note: a directory it may read, write or run programs in includes connecting to any socket in it")
+	}
 	add("reads env", m.Env)
 	if secret := secretLooking(m.Env); len(secret) > 0 {
 		out = append(out, "note: "+strings.Join(secret, ", ")+" look like credentials — it gets their values from conductor's environment when they are set there")
@@ -154,6 +170,9 @@ func (m Manifest) Lines() []string {
 // plainEntry spells out a reference: "config:url" is the value of the
 // instance's url field, "env:X/sub" a path under $X.
 func plainEntry(e string) string {
+	if ref, ok := strings.CutPrefix(e, sdk.OptionalPrefix); ok {
+		return plainEntry(ref) + " (if it can be granted)"
+	}
 	if ref, ok := strings.CutPrefix(e, "config:"); ok {
 		return "<" + ref + " from its config>"
 	}
@@ -191,13 +210,21 @@ func (m Manifest) Widens(next Manifest) []string {
 	})
 	diff("listens on", m.Listen, next.Listen, exact)
 	// A path m may write, it may also read.
-	diff("reads", append(append(append([]string(nil), m.Read...), m.Write...), m.FS...), next.Read, exact)
-	diff("writes", append(append([]string(nil), m.Write...), m.FS...), append(append([]string(nil), next.Write...), next.FS...), exact)
+	// An optional path ("?…") is covered by the same path, required.
+	path := func(have []string, e string) bool {
+		return exact(have, e) || exact(have, strings.TrimPrefix(e, sdk.OptionalPrefix))
+	}
+	diff("reads", append(append(append([]string(nil), m.Read...), m.Write...), m.FS...), next.Read, path)
+	diff("writes", append(append([]string(nil), m.Write...), m.FS...), append(append([]string(nil), next.Write...), next.FS...), path)
 	diff("runs", m.Commands, next.Commands, exact)
-	diff("runs programs in", m.Exec, next.Exec, exact)
+	diff("runs programs in", m.Exec, next.Exec, path)
 	diff("reads env", m.Env, next.Env, exact)
 	if next.Keychain && !m.Keychain {
 		out = append(out, "reads a login from the macOS Keychain")
+	}
+	// One process serving every instance is jailed to all of their grants.
+	if next.SingleProcess && !m.SingleProcess {
+		out = append(out, "single_process (every instance shares one process)")
 	}
 	// The OAuth endpoints are where conductor itself, outside any jail,
 	// posts the operator's client secret and refresh token: one that moves
@@ -289,6 +316,12 @@ type Installed struct {
 	// ManifestSchema is manifestSchema when Manifest was recorded in full
 	// (see there); 0 on a record a conductor without the jail wrote.
 	ManifestSchema int `yaml:"manifest_schema,omitempty"`
+	// Legacy marks a record loaded from a version 1 state file (a conductor
+	// without the jail wrote it) that has not been adopted yet. Only such a
+	// record is adopted (adoptLegacyRecord); conductor never sets it on a
+	// record it makes, so a record it wrote is always compared, never
+	// adopted.
+	Legacy bool `yaml:"legacy,omitempty"`
 	// ReleaseVerified records that Sha256 was VERIFIED against the release at
 	// install — the release's checksums.txt listed the asset with this sha —
 	// rather than merely computed from whatever was downloaded. Absent on
@@ -310,6 +343,9 @@ type InstallState struct {
 	Pending []Pending `yaml:"pending,omitempty"`
 
 	dir string `yaml:"-"`
+	// consented is the last version 2 state (consentFile), loaded when the
+	// state file is version 1: what the user agreed to before a rollback.
+	consented *InstallState
 }
 
 // InstallDir is where plugin binaries and install state live:
@@ -559,11 +595,59 @@ func LoadInstallState(dir string) *InstallState {
 	if err := yaml.Unmarshal(b, &on); err != nil {
 		return s
 	}
-	if on.Version != installStateVersion {
-		return s
+	switch on.Version {
+	case installStateVersion:
+		s.Plugins, s.Pending = on.Plugins, on.Pending
+	case legacyStateVersion:
+		s.Plugins = on.Plugins
+		for i := range s.Plugins {
+			s.Plugins[i].Legacy = s.Plugins[i].ManifestSchema < manifestSchema
+		}
+		s.restoreConsented()
 	}
-	s.Plugins, s.Pending = on.Plugins, on.Pending
 	return s
+}
+
+// restoreConsented loads consentFile after a version 1 state file: the
+// records adoption compares against, and the held updates the older
+// conductor dropped, restored when their build is still on disk and is not
+// what is installed now.
+func (s *InstallState) restoreConsented() {
+	b, err := os.ReadFile(filepath.Join(s.dir, consentFile))
+	if err != nil {
+		return
+	}
+	var c InstallState
+	if yaml.Unmarshal(b, &c) != nil || c.Version != installStateVersion {
+		return
+	}
+	s.consented = &c
+	for _, p := range c.Pending {
+		if _, installed := s.findSha(p.Key, p.Source, p.Sha256); installed || !binaryPresent(p.Path) {
+			continue
+		}
+		p.Legacy = false
+		s.Pending = append(s.Pending, p)
+	}
+}
+
+// consentedFor is what the user last agreed to for key from source (before
+// a rollback): the record of that exact build when there is one, else the
+// newest one.
+func (s *InstallState) consentedFor(key, source, sha string) (Installed, bool) {
+	if s == nil || s.consented == nil {
+		return Installed{}, false
+	}
+	if c, ok := s.consented.findSha(key, source, sha); ok && c.ManifestSchema >= manifestSchema {
+		return c, true
+	}
+	all := versionsForSource(s.consented.AllVersions(key), source)
+	for i := len(all) - 1; i >= 0; i-- {
+		if all[i].ManifestSchema >= manifestSchema {
+			return all[i], true
+		}
+	}
+	return Installed{}, false
 }
 
 // Dir returns the install directory this state was loaded from.
@@ -809,6 +893,19 @@ func (s *InstallState) DeleteVersion(key, resolved string) bool {
 	return false
 }
 
+// deleteRecord removes the record of key at resolved from source.
+func (s *InstallState) deleteRecord(key, resolved, source string) {
+	if s == nil {
+		return
+	}
+	for i, p := range s.Plugins {
+		if p.Key == key && p.Resolved == resolved && p.Source == source {
+			s.Plugins = append(s.Plugins[:i], s.Plugins[i+1:]...)
+			return
+		}
+	}
+}
+
 // GCVersions drops every installed (key, version) pair NOT in keep, removing
 // its on-disk directory too — the GC half of side-by-side versions: a
 // version no currently-configured instance resolves to any more (the config
@@ -935,8 +1032,19 @@ func (s *InstallState) Save() error {
 		"# `conductor init` / `conductor plugin update`. Do not commit it.\n"
 	content := append([]byte(header), b...)
 
-	final := filepath.Join(s.dir, installStateFile)
-	tmp, err := os.CreateTemp(s.dir, "."+installStateFile+".tmp-*")
+	// The consent copy first: a crash between the two leaves the state
+	// file as it was, never a newer state file with an older copy.
+	if err := writeAtomic(s.dir, consentFile, content); err != nil {
+		return err
+	}
+	return writeAtomic(s.dir, installStateFile, content)
+}
+
+// writeAtomic writes content to dir/name through a synced temp file renamed
+// over it.
+func writeAtomic(dir, name string, content []byte) error {
+	final := filepath.Join(dir, name)
+	tmp, err := os.CreateTemp(dir, "."+name+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("plugin install state: %w", err)
 	}
@@ -963,9 +1071,9 @@ func (s *InstallState) Save() error {
 	// Best-effort: fsync the directory entry too, so the rename itself
 	// survives a crash (POSIX does not guarantee a rename is durable until
 	// the containing directory is synced).
-	if dir, err := os.Open(s.dir); err == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
 }

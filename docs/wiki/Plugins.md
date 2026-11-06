@@ -463,11 +463,37 @@ gives its host and port (`http`/`ws` mean 80, `https`/`wss` mean 443), a
 globs (`*`, `?`, `[`, `]`), has no port, or is a relative path is an error,
 not a guess. A field that is not set on an instance grants nothing.
 
-A resolved path is refused, failing the launch with the reason, when it is
-`/`, your home directory, or a directory containing conductor's own state or
-config dir (an exact file inside them, such as a GitHub App key, is fine);
-when it lies inside another path the plugin may write (it could swap what is
-there for a symlink); or when it goes through a symlink root does not own.
+A resolved path is refused, failing the launch with the reason and the
+declared entry it came from, when:
+
+- it is `/`, your home directory, or a directory containing conductor's own
+  state or config dir;
+- it lies inside conductor's own state or config dir. Nothing there may be
+  written or run; a file there may be read only when its path is a
+  `config:` value (a GitHub App key you configured), never because the
+  plugin names it;
+- it is, or contains, a directory where other programs serve sockets:
+  `/run`, `/var/run`, `/run/user/<uid>`, `$XDG_RUNTIME_DIR`, `/tmp`,
+  `/var/tmp`, `/dev/shm`. A directory grant includes connecting to every
+  socket in it (a read-only bind does not stop that), and consent says so.
+  Grant the one socket file a plugin needs (`/run/docker.sock`) instead;
+- it is an `exec` path that is, or contains, a directory of programs or a
+  top-level system directory: the `PATH` directories, `/usr`, `/usr/lib`,
+  `/usr/local`, `/etc`, `/run`, `/proc`, `/var`, `/tmp`, `/opt`, your home's
+  `bin`, `.local` and `.local/bin`, and the like. A tool's own directory
+  inside one (`/usr/lib/git-core`, `/usr/local/aws-cli`) is fine;
+- it lies inside another path the plugin may write (it could swap what is
+  there for a symlink);
+- it goes through a symlink root does not own (one you made, such as a
+  dotfiles-managed `~/.config/tool`): a plugin could have made it. The error
+  names the symlink and what it points to; replace the symlink with what it
+  points to, give the real path where the plugin's config takes one, or set
+  `trust: full`.
+
+An entry starting with `?` is optional: `?command:tool/..`. When its path is
+refused it is skipped, and logged, instead of failing the launch. A path
+that does not exist is skipped either way.
+
 A declared loopback destination may not be a port conductor itself listens
 on.
 
@@ -475,7 +501,15 @@ on.
 is relative to the declared command's resolved file (after symlinks):
 `command:node/..` is the directory the program is in, `command:node/../..`
 the install tree of a tool that reads its own files, and
-`command:git/../../lib/git-core` the helper programs `git` runs.
+`command:git/../../lib/git-core` the helper programs `git` runs. It must
+stay in the command's install tree: the directory the file is in, or, when
+that is a `bin` or `sbin` directory, the prefix above it (`/usr` for
+`/usr/bin/git`). A tool that may be a bundle in its own directory or a
+single file in `/usr/bin` declares `?command:tool/..`: the bundle's
+directory where there is one, nothing where there is not.
+
+A declared command that is a script runs with its `#!` interpreter (and,
+for `#!/usr/bin/env prog`, the `prog` it finds): both are bound with it.
 
 The older fields still load: `fs` means `write`, and `spawns` grants nothing
 (name the commands instead).
@@ -489,7 +523,10 @@ path, a bad port.
 The declaration is recorded at install and shown, in plain words:
 
 - by `conductor plugin add` and `conductor init`, before you agree to it;
-- by `conductor plugin show` and `conductor plugin list --caps`;
+- by `conductor plugin show` and `conductor plugin list --caps`.
+  `plugin add`, `plugin show` and `plugin approve` also say what the paths
+  are on this machine (`on this machine it runs programs in:
+  /usr/lib/git-core`), and where the declared commands are;
 - in the daemon log each time the plugin starts:
   `plugin gh: jailed to what it declares: connects to api.github.com:443, …`,
   and when its connector type registers. That line shows the **recorded**
@@ -534,6 +571,18 @@ Destinations compare as the jail grants them: a bare `api.example.com` is
 
 The same hold applies when you change a `use:` constraint or pin to a
 version that is not installed yet: it is compared with the build you have.
+
+A release whose binary changed under a tag you have installed (its asset
+was re-published: a new sha for the same tag) is refused, and the installed
+build keeps running:
+
+```
+plugin jira: release jira/v2.0.0 now publishes a different build (sha …) than the one installed from it (sha …): its asset was replaced after it was installed. Refused; …
+```
+
+`conductor plugin update <name> --force` takes it, compared with the build
+it replaces: held when it declares more, and then that release does not run
+until you approve it (its new bytes replaced the old ones on disk).
 
 `conductor plugin update <name>` (and `--force`) also re-describes a build
 that is already current. If it now declares more than its record, that is
@@ -595,13 +644,29 @@ From a conductor that did not jail plugins:
   is a load error now. Delete the block. To keep a plugin unconfined as
   before, set `trust: full` on its entry; to narrow it, use `network:` and
   `allow_env:`.
-- **Install records are completed on the first start.** A record written
-  before the jail holds only part of the declaration (no reads, listen
-  addresses or Keychain). On its first start (and on any update pass) the new
-  conductor describes the same installed build once and records what it
-  declares, without asking: the build ran unconfined until then, so this
-  only narrows it. The log says
+- **Install records are completed on the first start.** The state file a
+  conductor without the jail wrote (`installed.yaml` version 1) holds only
+  part of each declaration: egress, commands, env, OAuth endpoints and
+  `single_process`, but no reads, writes, listen addresses, exec paths or
+  Keychain. On the first start (and on any update pass) the new conductor
+  describes each installed build once. What the old record could not hold
+  is recorded without asking: the build ran with it unconfined, so this
+  only narrows it. What it did hold is compared: a build that now declares
+  more egress, commands, env, OAuth endpoints or `single_process` is held
+  like an update, and runs jailed to the record. The log says
   `plugin github: recorded what … declares (its install record predates declared permissions, …)`.
+  Only records loaded from a version 1 file are adopted this way; the file
+  is written back as version 2.
+- **Rolling back.** A conductor without the jail does not read a version 2
+  state file: it treats it as empty and installs every plugin again from its
+  release (so the network must be up for that start), writing version 1.
+  The jail keeps a copy of what you agreed to in `consented.yaml` beside the
+  state file, which the older conductor does not touch. Upgrading again
+  adopts the version 1 records against that copy: a build you agreed to gets
+  exactly that record back (held if it now declares more), held updates the
+  older conductor dropped are restored when their binary is still there,
+  and a build it installed meanwhile that declares more than you last agreed
+  to is logged as a `WARNING` naming what it adds.
 - **`allow_env: []` and `network: []` now mean none.** Before, an empty
   list passed everything the plugin declares; to keep that, remove the key.
 - **Variables the plugin declares now pass through by default.** Check
@@ -804,9 +869,15 @@ through the real launch path.
   (`/usr/lib/git-core`), a daemon's binaries (`/usr/lib/ssh`). A program
   that runs helpers declares them in `exec` (bound read-only, executable).
   Every writable place is `noexec`, so a plugin cannot drop a program and
-  run it. Each bind is read-only all the way down, its submounts included.
-  A declared path is bound from its real location, never through a symlink
-  that is not root's.
+  run it. Read-only and `noexec` reach all the way down a bind, its
+  submounts included (a writable directory with a mount inside it is
+  `noexec` there too). A declared path is bound from its real location,
+  never through a symlink that is not root's: it is opened without
+  following any symlink (`openat2`, or one component at a time on an older
+  kernel) and bound by that open file (`open_tree`, or its `/proc/self/fd`
+  link), so a directory swapped for a symlink after the check is refused,
+  not followed. A kernel with neither fails the launch rather than bind by
+  path.
 - **Network.** The network namespace has only loopback. Outbound traffic
   goes through conductor's egress proxy, which allows exactly the declared
   destinations (`HTTPS_PROXY`/`HTTP_PROXY` are set; a plugin with raw TCP

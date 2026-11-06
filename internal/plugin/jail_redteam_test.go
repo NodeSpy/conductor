@@ -152,17 +152,32 @@ func TestLoopbackEgressToConductorsOwnPortIsRefused(t *testing.T) {
 // to the tool's file), and is granted read-only and checked like one.
 func TestExecPathsResolveRelativeToACommand(t *testing.T) {
 	_, sd := jailTestDirs(t)
-	cat, err := spawnLookPath("cat")
-	if err != nil {
-		t.Skip("no cat")
-	}
-	real, _ := filepath.EvalSymlinks(cat)
-	s := Spec{Name: "p", Manifest: Manifest{Commands: []string{"cat"}, Exec: []string{"command:cat/.."}}}
+	tool := fakeTool(t, "opt/tool/tool")
+	s := Spec{Name: "p", Manifest: Manifest{Commands: []string{"tool"}, Exec: []string{"command:tool/.."}}}
 	p, err := grantFor(t, s, sd)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.exec) != 1 || p.exec[0].path != filepath.Dir(real) {
-		t.Fatalf("exec = %+v, want %s", p.exec, filepath.Dir(real))
+	if len(p.exec) != 1 || p.exec[0].path != filepath.Dir(tool) {
+		t.Fatalf("exec = %+v, want %s", p.exec, filepath.Dir(tool))
 	}
+}
+
+// fakeTool makes an executable at rel under a temp dir and puts its
+// directory on PATH.
+func fakeTool(t *testing.T, rel string) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(p)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return p
 }

@@ -137,6 +137,14 @@ func fixedCacheDir(dir string) func(tag string) string {
 // the identical per-platform asset filename and would otherwise silently
 // overwrite one another on disk.
 func FetchRemoteVerified(rs RemoteSource, constraint, pinnedSha string, cacheDirFor func(tag string) string, api ReleaseAPI) (binPath, tag, sha string, verified bool, err error) {
+	return fetchRemoteChecked(rs, constraint, pinnedSha, cacheDirFor, api, nil)
+}
+
+// fetchRemoteChecked is FetchRemoteVerified with accept, which sees the
+// resolved tag and the downloaded build's sha before anything is written
+// to the cache dir: an error from it refuses the build and leaves what is
+// installed there untouched.
+func fetchRemoteChecked(rs RemoteSource, constraint, pinnedSha string, cacheDirFor func(tag string) string, api ReleaseAPI, accept func(tag, sha string) error) (binPath, tag, sha string, verified bool, err error) {
 	tag, err = CheckFetchable(rs, constraint, api)
 	if err != nil {
 		return "", "", "", false, err
@@ -171,6 +179,11 @@ func FetchRemoteVerified(rs RemoteSource, constraint, pinnedSha string, cacheDir
 			return "", "", "", false, fmt.Errorf("sha256 pin mismatch for %s@%s: config pins %s, downloaded %s", asset, tag, pinnedSha, got)
 		}
 		verified = true
+	}
+	if accept != nil {
+		if err := accept(tag, got); err != nil {
+			return "", "", "", false, err
+		}
 	}
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", "", "", false, err

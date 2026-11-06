@@ -901,6 +901,9 @@ func permissionLines(ref config.PluginRef, spec plugin.Spec) []string {
 	for _, l := range spec.Manifest.Lines() {
 		lines = append(lines, "  "+l)
 	}
+	for _, l := range plugin.HereLines(spec) {
+		lines = append(lines, "  "+l)
+	}
 	if ref.Kind() == config.PluginKindConnector && spec.Manifest.SingleProcess {
 		lines = append(lines, "single_process: the plugin declares every instance must share one process — isolate: true is refused for it")
 	}
@@ -1088,6 +1091,9 @@ func cmdPluginAdd(args []string) error {
 	manifest := results[0].Manifest
 	fmt.Printf("\n%s runs jailed to what it declares. By adding it you agree that it may:\n", u.Name)
 	for _, l := range manifest.Lines() {
+		fmt.Printf("  %s\n", l)
+	}
+	for _, l := range plugin.HereLines(plugin.Spec{Name: u.Name, Manifest: manifest}) {
 		fmt.Printf("  %s\n", l)
 	}
 	fmt.Println("Anything else is denied. An update that asks for more waits for `conductor plugin approve`.")
@@ -1343,6 +1349,9 @@ func cmdPluginApprove(args []string) error {
 			}
 			fmt.Printf("  its full declaration:\n")
 			for _, l := range p.Manifest.Lines() {
+				fmt.Printf("    %s\n", l)
+			}
+			for _, l := range plugin.HereLines(plugin.Spec{Name: p.Name, Manifest: p.Manifest}) {
 				fmt.Printf("    %s\n", l)
 			}
 			fmt.Printf("  approve with: conductor plugin approve %s\n", p.Name)

@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -108,6 +109,36 @@ func pluginGrant(s Spec) (sdk.Grant, error) {
 	return g, nil
 }
 
+// HereLines spells out what s's declared paths and commands are on this
+// machine: "command:git/../../lib/git-core" is /usr/lib/git-core here, a
+// config: path is its configured value. Shown with the declaration at
+// consent and in `plugin show`.
+func HereLines(s Spec) []string {
+	g, err := pluginGrant(s)
+	if err != nil {
+		return []string{"on this machine: " + err.Error()}
+	}
+	var out []string
+	add := func(label string, ps []string) {
+		if len(ps) > 0 {
+			out = append(out, "on this machine it "+label+": "+strings.Join(ps, ", "))
+		}
+	}
+	var cmds []string
+	for _, c := range findCommands(s, g.Commands) {
+		if c.path != c.real {
+			cmds = append(cmds, c.path+" ("+c.real+")")
+		} else {
+			cmds = append(cmds, c.path)
+		}
+	}
+	add("runs", cmds)
+	add("runs programs in", g.Exec)
+	add("reads", g.Read)
+	add("reads and writes", g.Write)
+	return out
+}
+
 func normHostPort(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if h, p, err := net.SplitHostPort(s); err == nil {
@@ -174,6 +205,9 @@ func findCommands(s Spec, names []string) []jailCommand {
 			continue
 		}
 		out = append(out, jailCommand{name: n, path: filepath.Join(dir, filepath.Base(p)), real: real})
+		// A command that is a script runs with its #! interpreter: that is
+		// part of running it, and is bound with it.
+		out = append(out, interpreters(n, real)...)
 		if spawnGOOS == "darwin" {
 			// A macOS /usr/bin developer tool is a stub that runs the real
 			// one from the active developer directory: the stub is what the
@@ -182,6 +216,52 @@ func findCommands(s Spec, names []string) []jailCommand {
 				out = append(out, jailCommand{name: n, path: dev, real: dev})
 			}
 		}
+	}
+	return out
+}
+
+// interpreters are the programs a script command needs to start: its #!
+// interpreter, and for "#!/usr/bin/env prog" the prog env finds on PATH.
+func interpreters(name, script string) []jailCommand {
+	f, err := os.Open(script)
+	if err != nil {
+		return nil
+	}
+	head := make([]byte, 256)
+	n, _ := io.ReadFull(f, head)
+	f.Close()
+	line, _, _ := strings.Cut(string(head[:n]), "\n")
+	rest, ok := strings.CutPrefix(line, "#!")
+	if !ok {
+		return nil
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 0 || !filepath.IsAbs(fields[0]) {
+		return nil
+	}
+	progs := []string{fields[0]}
+	if filepath.Base(fields[0]) == "env" {
+		for _, a := range fields[1:] {
+			if strings.HasPrefix(a, "-") || strings.Contains(a, "=") {
+				continue
+			}
+			if p, err := spawnLookPath(a); err == nil {
+				progs = append(progs, p)
+			}
+			break
+		}
+	}
+	var out []jailCommand
+	for _, p := range progs {
+		dir, err := filepath.EvalSymlinks(filepath.Dir(p))
+		if err != nil {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			continue
+		}
+		out = append(out, jailCommand{name: name, path: filepath.Join(dir, filepath.Base(p)), real: real})
 	}
 	return out
 }
@@ -219,15 +299,24 @@ type grantedPath struct{ path, real string }
 
 // grantedPaths checks the declared read, write and exec paths and keeps
 // those that exist (a declared path that does not is skipped, as the
-// declaration says). A path is refused, failing the launch with the reason,
-// when it:
+// declaration says). A path is refused when it:
 //   - is the root, the user's home, or contains conductor's own state or
 //     config dir (sd.MaskPaths) — a config: value naming "~" or "/" would
-//     otherwise hand the plugin all of it; an exact file in them is fine;
+//     otherwise hand the plugin all of it;
+//   - lies inside conductor's own state or config dir, except a file read
+//     whose path is a config: value (an App key the user configured):
+//     writing there would let a plugin rewrite what it was granted;
+//   - is, or contains, a directory of sockets other programs serve on
+//     (runtimeDirs): a read-only bind does not stop connect();
+//   - to run programs in, is or contains a directory of the system's
+//     programs or the user's (execRefused): what runs is named, not swept;
 //   - lies inside a path the plugin may write (its own declared write paths,
 //     its staging dir), where it could replace what is there with a symlink
 //     to anything;
 //   - goes through a symlink root does not own (resolveOwned).
+//
+// A refused path fails the launch, naming the declared entry and the fix,
+// unless the entry is optional ("?…"): then it is skipped and logged.
 func grantedPaths(s Spec, sd SandboxDeps, g sdk.Grant) (read, write, exec []grantedPath, err error) {
 	home, _ := jailHome()
 	var homes []string
@@ -247,36 +336,83 @@ func grantedPaths(s Spec, sd SandboxDeps, g sdk.Grant) (read, write, exec []gran
 			protected = append(protected, r)
 		}
 	}
+	sockets := runtimeDirs()
+	execBroad := execRefused(homes)
 	writable := append([]string(nil), g.Write...)
 	if sd.StagingRoot != "" {
 		writable = append(writable, filepath.Clean(sd.StagingRoot))
 	}
+	refusal := func(kind, p, real string) error {
+		for _, q := range []string{p, real} {
+			if q == "/" || slices.Contains(homes, q) {
+				return fmt.Errorf("it is the whole of %s", q)
+			}
+			for _, prot := range protected {
+				if within(q, prot) {
+					return fmt.Errorf("it contains conductor's own %s", prot)
+				}
+				if !within(prot, q) {
+					continue
+				}
+				if kind != "read" || !g.FromConfig(kind, p) {
+					return fmt.Errorf("it lies inside conductor's own %s — only a file the plugin's config names may be read there", prot)
+				}
+				if fi, err := os.Stat(real); err != nil || fi.IsDir() {
+					return fmt.Errorf("it lies inside conductor's own %s, and is not a file", prot)
+				}
+			}
+			for _, d := range sockets {
+				if within(q, d) || q == "/run/user" || filepath.Dir(q) == "/run/user" {
+					return fmt.Errorf("it contains %s, where other programs' sockets are (a directory grant includes connecting to them) — grant the one socket file it needs instead", d)
+				}
+			}
+			if kind != "exec" {
+				continue
+			}
+			for _, d := range execBroad {
+				if within(q, d) {
+					return fmt.Errorf("it contains %s: what a plugin runs is named (commands:) or a tool's own directory, never a system or user directory of programs", d)
+				}
+			}
+		}
+		return nil
+	}
 	check := func(kind string, ps []string) ([]grantedPath, error) {
 		var out []grantedPath
 		for _, p := range ps {
+			declared := strings.Join(g.Origins(kind, p), ", ")
+			if declared == "" {
+				declared = p
+			}
+			var why error
 			for _, w := range writable {
 				if w != p && within(w, p) {
-					return nil, fmt.Errorf("plugin %s: %s %s lies inside %s, which it may write — it could replace what is there", s.Name, kind, p, w)
+					why = fmt.Errorf("it lies inside %s, which it may write — it could replace what is there", w)
 				}
 			}
 			real, err := resolveOwned(p)
-			if os.IsNotExist(err) {
+			if why == nil && os.IsNotExist(err) {
 				continue
 			}
-			if err != nil {
-				return nil, fmt.Errorf("plugin %s: %s %s refused: %w — point it at the real path", s.Name, kind, p, err)
+			var link *symlinkError
+			switch {
+			case why != nil:
+			case errors.As(err, &link):
+				why = fmt.Errorf("it goes through %s, a symlink to %s that root does not own; the jail never follows a symlink a plugin could have made — replace the symlink with what it points to, give the real path where the plugin's config takes one, or set trust: full on the plugin's entry", link.link, link.target)
+			case err != nil:
+				why = err
+			default:
+				why = refusal(kind, p, real)
 			}
-			for _, q := range []string{p, real} {
-				if q == "/" || slices.Contains(homes, q) {
-					return nil, fmt.Errorf("plugin %s: %s %s refused: it is the whole of %s", s.Name, kind, p, q)
-				}
-				for _, prot := range protected {
-					if within(q, prot) {
-						return nil, fmt.Errorf("plugin %s: %s %s refused: it contains conductor's own %s", s.Name, kind, p, prot)
-					}
-				}
+			if why == nil {
+				out = append(out, grantedPath{path: p, real: real})
+				continue
 			}
-			out = append(out, grantedPath{path: p, real: real})
+			if g.Optional(kind, p) {
+				log.Printf("plugin %s: %s %s (declared %s) skipped: %v", s.Name, kind, p, declared, why)
+				continue
+			}
+			return nil, fmt.Errorf("plugin %s: %s %s (declared %s) refused: %w", s.Name, kind, p, declared, why)
 		}
 		return out, nil
 	}
@@ -290,6 +426,48 @@ func grantedPaths(s Spec, sd SandboxDeps, g sdk.Grant) (read, write, exec []gran
 		return nil, nil, nil, err
 	}
 	return read, write, exec, nil
+}
+
+// symlinkError is a declared path going through a symlink root does not own
+// (resolveOwned).
+type symlinkError struct{ link, target string }
+
+func (e *symlinkError) Error() string {
+	return fmt.Sprintf("%s is a symlink root does not own (to %s)", e.link, e.target)
+}
+
+// runtimeDirs are where programs serve sockets for others: a grant of one
+// of them, or of a directory above one, lets the plugin connect to every
+// socket there (a session bus, an X or tmux server, a docker daemon).
+// Every /run/user/<uid> is one too (refusal).
+func runtimeDirs() []string {
+	ds := []string{"/run", "/var/run", "/tmp", "/var/tmp", "/dev/shm", "/private/tmp", "/private/var/tmp", "/private/var/run"}
+	if x := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(x) {
+		ds = append(ds, filepath.Clean(x))
+	}
+	if t := os.TempDir(); filepath.IsAbs(t) {
+		ds = append(ds, filepath.Clean(t))
+	}
+	return ds
+}
+
+// execRefused are the directories an exec path may not be or contain: the
+// PATH directories, the user's own bin directories, and the system's
+// top-level ones. A tool's own directory inside one (/usr/lib/git-core,
+// /usr/local/aws-cli) is fine.
+func execRefused(homes []string) []string {
+	ds := []string{
+		"/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin",
+		"/usr", "/usr/lib", "/usr/lib32", "/usr/lib64", "/usr/libexec", "/usr/local", "/usr/local/lib", "/usr/local/libexec", "/usr/share",
+		"/lib", "/lib32", "/lib64", "/libexec", "/etc", "/run", "/var", "/tmp", "/proc", "/sys", "/dev",
+		"/opt", "/home", "/root", "/srv", "/mnt", "/media", "/boot", "/nix", "/nix/store", "/snap",
+		"/opt/homebrew", "/opt/homebrew/bin", "/opt/homebrew/lib", "/opt/local", "/opt/local/bin",
+		"/private", "/private/etc", "/private/var", "/private/tmp", "/System", "/Library", "/Applications",
+	}
+	for _, h := range homes {
+		ds = append(ds, filepath.Join(h, "bin"), filepath.Join(h, ".local", "bin"), filepath.Join(h, ".local"), filepath.Join(h, "go", "bin"), filepath.Join(h, ".cargo", "bin"))
+	}
+	return ds
 }
 
 // within: p is dir or inside it.

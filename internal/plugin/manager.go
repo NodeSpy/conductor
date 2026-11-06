@@ -221,8 +221,10 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 // (see SpecFromRef's doc comment): ghA's process gets exactly ghA's
 // allow_env/network/allow_secrets/isolation. A key missing from
 // spec.Instances (should not happen: config.PluginRefs populates one entry
-// per configured instance) leaves the per-instance Spec at its zero grant —
-// least privilege, not a silent widening. The returned Spec carries no
+// per configured instance) gets no connection config, no secrets and not
+// trust: full, and unset network:/allow_env, which narrow nothing: it is
+// jailed to everything the plugin declares that needs no config: value —
+// never more than the declaration, but not a zero grant. The returned Spec carries no
 // Instances map of its own: there is nothing sibling to it once it names one
 // instance.
 func InstanceSpec(spec Spec, instance string) Spec {

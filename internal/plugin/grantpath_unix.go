@@ -38,7 +38,8 @@ func resolveOwned(p string) (string, error) {
 			continue
 		}
 		if st, ok := fi.Sys().(*syscall.Stat_t); !ok || st.Uid != 0 {
-			return "", fmt.Errorf("%s is a symlink root does not own", next)
+			tgt, _ := os.Readlink(next)
+			return "", &symlinkError{link: next, target: tgt}
 		}
 		if hops++; hops > 40 {
 			return "", fmt.Errorf("%s: too many symlinks", p)
