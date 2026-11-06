@@ -25,6 +25,15 @@ type Provisioner interface {
 	RemoveWorktree(ctx context.Context, id string) error
 }
 
+// WorkspaceAdopter is an optional Provisioner capability: take back a
+// workspace it provisioned before a restart, by the id ProvisionWorktree
+// returned, so an interrupted step's agent resumes in it. It returns the
+// workspace's directory, or an error when it can no longer be used (gone,
+// or not one of its own). The adopted workspace is released like a fresh one.
+type WorkspaceAdopter interface {
+	AdoptWorktree(ctx context.Context, req dispatch.Request, id string) (cwd string, err error)
+}
+
 // Assert the concrete dispatcher satisfies Provisioner, so a signature drift fails
 // the build here rather than at a call site.
 var _ Provisioner = (*dispatch.Dispatcher)(nil)
@@ -125,20 +134,15 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 			r.mu.Unlock()
 		}()
 	}
-	var (
-		wsID, cwd string
-		err       error
-	)
-	if r.prov != nil {
-		if wsID, cwd, err = r.prov.ProvisionWorktree(ctx, req); err != nil {
-			// The workspace/worktree never came up — the dispatch never
-			// reached a working runtime. Escalate rather than an ordinary
-			// step failure (#60).
-			return ref, dispatch.Unrecoverable(err)
-		}
+	wsID, cwd, kept, fallback, err := r.workspace(ctx, req)
+	if err != nil {
+		// The workspace/worktree never came up — the dispatch never
+		// reached a working runtime. Escalate rather than an ordinary
+		// step failure (#60).
+		return ref, dispatch.Unrecoverable(err)
 	}
 
-	sess, err := r.c.NewSession(ctx, Spec{Request: req, Cwd: cwd, WorkspaceID: wsID}, r.h)
+	sess, resumed, err := r.open(ctx, req, wsID, cwd, kept, fallback)
 	if err != nil {
 		// The session never opened — including a runtime that crashed before
 		// its first turn (ACP session/new failing mid-launch, J3). Same class
@@ -146,8 +150,8 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		// provisioned would otherwise leak — no session ever bound it (Fix A).
 		// Release it best-effort: the git-native provisioner removes the
 		// worktree; the paseo one is a no-op, and its reaper's orphan sweep is
-		// the backstop there.
-		if r.prov != nil && wsID != "" {
+		// the backstop there. A kept workspace stays: the run may resume it.
+		if r.prov != nil && wsID != "" && !kept {
 			_ = r.prov.RemoveWorktree(ctx, wsID)
 		}
 		return ref, dispatch.Unrecoverable(err)
@@ -158,27 +162,7 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		ref.Workdir = cwd
 	}
 
-	id := sess.ID()
-	bucket := prKey(req)
-	r.mu.Lock()
-	r.live[id] = sess
-	if r.since == nil {
-		r.since = map[string]time.Time{}
-	}
-	r.since[id] = time.Now()
-	if req.DispatchID != "" {
-		r.byDispatch[req.DispatchID] = id
-	}
-	r.bucket[id] = bucket
-	r.byPR[bucket]++
-	if req.Trigger.BoundToTarget() {
-		r.bound[id] = true
-	}
-	if req.DispatchID != "" {
-		r.byDispatch[req.DispatchID] = id
-	}
-	r.mu.Unlock()
-
+	id := r.track(req, sess)
 	ref.AgentID = id
 
 	// A foreground dispatch (a workflow/flow step — as opposed to a background
@@ -197,6 +181,22 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	if req.Wait && !req.Interactive {
 		if w, ok := sess.(waiter); ok {
 			w.Wait(ctx, timeout)
+		}
+		// A resume the runtime could not carry out (the session was not
+		// found) did no work: start a fresh agent in the kept workspace.
+		if rf, ok := sess.(ResumeFailer); ok && resumed && ctx.Err() == nil && !r.wasStopped(id) {
+			if rerr := rf.ResumeErr(); rerr != nil {
+				_ = sess.Cancel(context.WithoutCancel(ctx))
+				r.forget(id)
+				if sess, err = r.fresh(ctx, req, wsID, cwd, kept, "resumed session failed: "+rerr.Error()); err != nil {
+					return ref, dispatch.Unrecoverable(err)
+				}
+				id = r.track(req, sess)
+				ref.AgentID = id
+				if w, ok := sess.(waiter); ok {
+					w.Wait(ctx, timeout)
+				}
+			}
 		}
 		// The wait ended because ctx did (the daemon is shutting down or
 		// reloading), not because the turn finished: whatever output there
@@ -248,6 +248,28 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		}
 	}
 	return ref, nil
+}
+
+// track records an open session in the liveness tables and returns its id.
+func (r *controllerRunner) track(req dispatch.Request, sess Session) string {
+	id := sess.ID()
+	bucket := prKey(req)
+	r.mu.Lock()
+	r.live[id] = sess
+	if r.since == nil {
+		r.since = map[string]time.Time{}
+	}
+	r.since[id] = time.Now()
+	if req.DispatchID != "" {
+		r.byDispatch[req.DispatchID] = id
+	}
+	r.bucket[id] = bucket
+	r.byPR[bucket]++
+	if req.Trigger.BoundToTarget() {
+		r.bound[id] = true
+	}
+	r.mu.Unlock()
+	return id
 }
 
 // enforceSchema applies the runtime-agnostic output_schema contract to a
@@ -482,4 +504,94 @@ func autoApprove(req PermissionRequest) PermissionOutcome {
 	default:
 		return PermissionOutcome{Approved: true}
 	}
+}
+
+// workspace resolves where the dispatch's agent works. A step resuming after a
+// restart gets its kept workspace back when the provisioner can adopt it
+// (kept); otherwise — or with nothing to resume — a fresh one is provisioned,
+// and fallback says why the kept one was not used.
+func (r *controllerRunner) workspace(ctx context.Context, req dispatch.Request) (wsID, cwd string, kept bool, fallback string, err error) {
+	if prior := req.Resume; prior != nil {
+		switch ad, ok := r.prov.(WorkspaceAdopter); {
+		case prior.Workspace == "":
+			// The agent had no workspace of its own: provisioning yields the
+			// same directory again (an operator work_dir, the runtime's own).
+			kept = true
+		case prior.Runtime != r.c.Name():
+			fallback = fmt.Sprintf("the step now runs on runtime %q, not %q", r.c.Name(), prior.Runtime)
+		case !ok:
+			fallback = "this runtime's workspaces cannot be kept across a restart"
+		default:
+			c, aerr := ad.AdoptWorktree(ctx, req, prior.Workspace)
+			if aerr == nil {
+				return prior.Workspace, c, true, "", nil
+			}
+			fallback = "its workspace could not be kept: " + aerr.Error()
+		}
+	}
+	if r.prov != nil {
+		wsID, cwd, err = r.prov.ProvisionWorktree(ctx, req)
+	}
+	return wsID, cwd, kept, fallback, err
+}
+
+// open starts the dispatch's agent: the step's previous session resumed when
+// it has one, a kept workspace and a runtime that can resume it; otherwise a
+// fresh agent — told about the restart when it starts in a kept workspace.
+func (r *controllerRunner) open(ctx context.Context, req dispatch.Request, wsID, cwd string, kept bool, fallback string) (Session, bool, error) {
+	prior := req.Resume
+	if prior == nil || !kept {
+		sess, err := r.fresh(ctx, req, wsID, cwd, false, fallback)
+		return sess, false, err
+	}
+	sr, ok := r.c.(StepResumer)
+	switch {
+	case prior.Runtime != r.c.Name():
+		fallback = fmt.Sprintf("the step now runs on runtime %q, not %q", r.c.Name(), prior.Runtime)
+	case prior.SessionID == "" || !prior.CanResume:
+		fallback = "the runtime reported no session it can resume"
+	case !ok || !sr.CanResumeStep():
+		fallback = "runtime " + r.c.Name() + " cannot resume a session"
+	default:
+		rreq := req
+		rreq.Action.Prompt, rreq.LiteralPrompt = dispatch.ResumeNote, true
+		sess, err := sr.ResumeStep(ctx, Spec{Request: rreq, Cwd: cwd, WorkspaceID: wsID}, prior.SessionID, r.h)
+		if err == nil {
+			r.started(req, sess, wsID, cwd, dispatch.AgentStart{Resumed: true, KeptWorkspace: true})
+			return sess, true, nil
+		}
+		fallback = "resume failed: " + err.Error()
+	}
+	sess, err := r.fresh(ctx, req, wsID, cwd, true, fallback)
+	return sess, false, err
+}
+
+// fresh starts a new agent for the dispatch. In a kept workspace its prompt
+// leads with the restart note: the work there is an earlier agent's.
+func (r *controllerRunner) fresh(ctx context.Context, req dispatch.Request, wsID, cwd string, kept bool, fallback string) (Session, error) {
+	freq := req
+	if kept {
+		freq.Action.Prompt = dispatch.RestartNote + req.Action.Prompt
+	}
+	sess, err := r.c.NewSession(ctx, Spec{Request: freq, Cwd: cwd, WorkspaceID: wsID}, r.h)
+	if err != nil {
+		return nil, err
+	}
+	r.started(req, sess, wsID, cwd, dispatch.AgentStart{KeptWorkspace: kept, Fallback: fallback})
+	return sess, nil
+}
+
+// started reports a started agent to the dispatch's OnAgentStart.
+func (r *controllerRunner) started(req dispatch.Request, sess Session, wsID, cwd string, st dispatch.AgentStart) {
+	if req.OnAgentStart == nil {
+		return
+	}
+	st.Runtime, st.Workspace, st.Cwd = r.c.Name(), wsID, cwd
+	if rs, ok := sess.(ResumableSession); ok {
+		st.SessionID = rs.ResumeID()
+	}
+	if sr, ok := r.c.(StepResumer); ok && sr.CanResumeStep() && st.SessionID != "" {
+		st.CanResume = true
+	}
+	req.OnAgentStart(st)
 }

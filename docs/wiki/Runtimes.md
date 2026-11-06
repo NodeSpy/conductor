@@ -198,7 +198,9 @@ set the same `headless_mode`; give one its own `bin:` to differ.
 `use: cli` runs a tool as a plain subprocess, one process per turn. `tool:`
 picks a built-in recipe — `claude-code` (alias `claude`) or `codex` — that knows
 the tool's flags: headless mode, prompt on stdin, `--resume` for a follow-up
-(claude-code), and a lean session for a [decide step](Decide-Steps). Any other
+(claude-code) or for an agent step interrupted by a restart (the session is
+named up front with `--session-id`), and a lean session for a
+[decide step](Decide-Steps). Any other
 `tool:` name is run as `<tool> <prompt>`.
 
 Each recipe runs its tool by its default name, found on the daemon's `PATH`.

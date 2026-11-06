@@ -75,6 +75,10 @@ type Provisioner struct {
 	TranscriptRetention time.Duration
 	// Now is the reaper's clock, injectable for tests. nil → time.Now.
 	Now func() time.Time
+	// Keep reports a worktree the reaper must leave alone although no live
+	// session claims it: an interrupted step's, kept for its run to resume
+	// after a restart. nil → none.
+	Keep func(path string) bool
 
 	mu     sync.Mutex
 	repoMu map[string]*sync.Mutex // per-repo lock over the base clone's shared state
@@ -163,6 +167,28 @@ func (p *Provisioner) ProvisionWorktree(ctx context.Context, req dispatch.Reques
 	p.live[wt] = base
 	p.mu.Unlock()
 	return wt, wt, nil
+}
+
+// AdoptWorktree takes back a worktree this provisioner made before a restart
+// (controller.WorkspaceAdopter), so an interrupted step's agent resumes in it
+// with its work — uncommitted changes included — intact. Only a direct child
+// of <state>/worktrees that is still there qualifies; from here on it is live
+// and released like any other.
+func (p *Provisioner) AdoptWorktree(_ context.Context, _ dispatch.Request, id string) (string, error) {
+	wt := filepath.Clean(id)
+	if !p.owns(wt) {
+		return "", fmt.Errorf("gitwt: %s is not a conductor worktree", id)
+	}
+	fi, err := os.Lstat(wt)
+	if err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("gitwt: worktree %s is gone", filepath.Base(wt))
+	}
+	p.mu.Lock()
+	if _, ok := p.live[wt]; !ok {
+		p.live[wt] = p.baseOf(wt)
+	}
+	p.mu.Unlock()
+	return wt, nil
 }
 
 // unpackArchive makes the dispatch's own copy of its workspace archive: a
@@ -325,6 +351,9 @@ func (p *Provisioner) Reap(ctx context.Context) {
 		p.mu.Unlock()
 		if live {
 			continue // a session is working in it right now
+		}
+		if p.Keep != nil && p.Keep(path) {
+			continue // an interrupted step resumes in it
 		}
 		fi, err := e.Info()
 		if err != nil || fi.ModTime().After(cutoff) {

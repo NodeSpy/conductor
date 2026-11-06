@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/NodeSpy/conductor/internal/dispatch"
@@ -69,4 +70,21 @@ func (r *routedProvisioner) RemoveWorktree(ctx context.Context, id string) error
 		return nil
 	}
 	return p.RemoveWorktree(ctx, id)
+}
+
+// AdoptWorktree takes a kept workspace back through the provisioner this
+// dispatch routes to (WorkspaceAdopter), which then owns its teardown.
+func (r *routedProvisioner) AdoptWorktree(ctx context.Context, req dispatch.Request, id string) (string, error) {
+	p := r.pick(req)
+	ad, ok := p.(WorkspaceAdopter)
+	if !ok {
+		return "", fmt.Errorf("its workspace provisioner cannot keep workspaces")
+	}
+	cwd, err := ad.AdoptWorktree(ctx, req, id)
+	if err == nil {
+		r.mu.Lock()
+		r.owner[id] = p
+		r.mu.Unlock()
+	}
+	return cwd, err
 }

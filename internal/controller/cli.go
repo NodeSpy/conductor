@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -113,7 +114,23 @@ func (c *cliController) Initialize(context.Context) (Capabilities, error) {
 		Transport:    TransportCLI,
 		CheckoutPR:   true,
 		SendFollowup: c.recipe.resume != nil,
+		ResumeStep:   c.CanResumeStep(),
 	}, nil
+}
+
+// CanResumeStep: a recipe that both names a fresh session up front and can
+// resume one continues an interrupted step's agent (StepResumer).
+func (c *cliController) CanResumeStep() bool {
+	return c.recipe.resume != nil && c.recipe.sessionArgs != nil
+}
+
+// ResumeStep relaunches the tool on its resume command for session id, in the
+// step's kept workspace, with spec's prompt as the next turn.
+func (c *cliController) ResumeStep(ctx context.Context, spec Spec, id string, _ Handler) (Session, error) {
+	if !c.CanResumeStep() || id == "" {
+		return nil, ErrNoFollowup
+	}
+	return c.launchSession(ctx, spec, id)
 }
 
 func (c *cliController) Runner() (Runner, error) {
@@ -126,6 +143,12 @@ func (c *cliController) Runner() (Runner, error) {
 // in the worktree, registers the process in the state table, and returns a handle
 // bound to a conductor-assigned id.
 func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (Session, error) {
+	return c.launchSession(ctx, spec, "")
+}
+
+// launchSession starts a turn: a fresh session, or — resume != "" — the
+// recipe's resume of that tool session.
+func (c *cliController) launchSession(ctx context.Context, spec Spec, resume string) (Session, error) {
 	env, err := dispatch.AgentEnv(spec.Request)
 	if err != nil {
 		return nil, fmt.Errorf("cli: build env: %w", err)
@@ -151,6 +174,21 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 	}
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
 	cwd, cmd := spec.Cwd, c.recipe.cmd(spec.Request.Model, prompt)
+	toolID := resume
+	switch {
+	case resume != "":
+		cmd = c.recipe.resume(resume, prompt)
+		if m := spec.Request.Model; m != "" && c.recipe.modelArgs != nil {
+			cmd.argv = append(cmd.argv, c.recipe.modelArgs(m)...)
+		}
+	case spec.Request.OnAgentStart != nil && c.recipe.sessionArgs != nil:
+		// A step that records its agent for a restart: name the session now,
+		// so it can be resumed even if this turn never finishes.
+		if toolID, err = newSessionUUID(); err != nil {
+			return nil, fmt.Errorf("cli: session id: %w", err)
+		}
+		cmd.argv = append(cmd.argv, c.recipe.sessionArgs(toolID)...)
+	}
 	var dec *decisionRun
 	// A decide step's session runs LEAN when the recipe knows how and it runs
 	// on this box (the scratch dir it needs is local).
@@ -187,6 +225,8 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 		cancel: scancel,
 		ctx:    sctx,
 		wsID:   spec.WorkspaceID,
+		toolID: toolID,
+		resume: resume != "",
 		// This session OWNS the checkout conductor provisioned for it unless it
 		// was opened on another live session's worktree (the corrective
 		// output_schema turn) — see Close.
@@ -361,7 +401,11 @@ type cliRecipe struct {
 	launch  func(prompt string) cliCmd
 	resume  func(toolSessionID, prompt string) cliCmd
 	parseID func(output string) string
-	model   SessionModel
+	// sessionArgs names the session a fresh launch opens, so its id is known
+	// from the start and an interrupted turn can be resumed (StepResumer).
+	// nil → the id is only known from the finished turn's output.
+	sessionArgs func(id string) []string
+	model       SessionModel
 	// modelArgs renders the RESOLVED model as this tool's own flag. nil
 	// means the recipe has no model flag we can speak — an operator-written
 	// `command:`, where they own the argv and conductor must not guess at
@@ -437,10 +481,11 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 			resume: func(id, prompt string) cliCmd {
 				return cliCmd{argv: []string{bin, "-p", "--resume", id, "--output-format", "json", "--dangerously-skip-permissions"}, stdin: prompt}
 			},
-			parseID: parseClaudeSessionID,
-			answer:  parseClaudeResult,
-			failed:  parseClaudeError,
-			model:   ModelResumable,
+			sessionArgs: func(id string) []string { return []string{"--session-id", id} },
+			parseID:     parseClaudeSessionID,
+			answer:      parseClaudeResult,
+			failed:      parseClaudeError,
+			model:       ModelResumable,
 			decide: func(dir, model string, d *config.DecisionLaunch) (cliCmd, string, error) {
 				return claudeDecide(bin, dir, model, d)
 			},
@@ -703,6 +748,8 @@ type cliSession struct {
 	mu     sync.Mutex
 	done   chan struct{}
 	toolID string // the tool's own session id, captured for --resume
+	resume bool   // this turn resumed toolID (ResumeErr)
+	exit   error  // the turn's process exit error
 	out    string
 	ownsWT bool // this session must release wsID on Close
 
@@ -731,9 +778,9 @@ func (s *cliSession) run(proc cliProc) {
 	s.mu.Unlock()
 	go func() {
 		defer close(done)
-		out, _ := proc.Wait()
+		out, werr := proc.Wait()
 		s.mu.Lock()
-		s.out = out
+		s.out, s.exit = out, werr
 		if s.dec != nil {
 			// Read the answer, then drop the scratch dir at once: nothing
 			// else needs it, and a decision must leave nothing behind even
@@ -843,6 +890,48 @@ func (s *cliSession) TurnErr() error {
 		return s.c.recipe.failed(raw)
 	}
 	return nil
+}
+
+// ResumeID is the tool's own session id (ResumableSession): named at launch
+// for a step that may be resumed, else captured from the finished turn.
+func (s *cliSession) ResumeID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.toolID
+}
+
+// ResumeErr reports a resumed turn the tool could not carry out (ResumeFailer):
+// the process failed without producing a session result — the tool did not
+// find the session to resume. Call after Wait.
+func (s *cliSession) ResumeErr() error {
+	s.mu.Lock()
+	resumed, exit, raw := s.resume, s.exit, s.out
+	s.mu.Unlock()
+	if !resumed || exit == nil {
+		return nil
+	}
+	if s.c.recipe.parseID != nil && s.c.recipe.parseID(raw) != "" {
+		return nil
+	}
+	msg := strings.TrimSpace(raw)
+	if len(msg) > maxTurnErrText {
+		msg = msg[:maxTurnErrText] + "…"
+	}
+	if msg == "" {
+		return exit
+	}
+	return fmt.Errorf("%v: %s", exit, msg)
+}
+
+// newSessionUUID mints a random (v4) UUID for a tool session id.
+func newSessionUUID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
 // Cancel kills the in-flight process.

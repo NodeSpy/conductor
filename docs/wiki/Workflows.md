@@ -359,6 +359,17 @@ completed top-level step in `runs.json`: a daemon restart resumes AFTER the
 last completed step, so a `slack.post` that already ran never re-fires; the
 interrupted step re-runs (at-least-once).
 
+An interrupted **agent** step picks its agent back up instead of starting
+over. When the agent starts, the run records its runtime's session id and the
+workspace it works in; that workspace (uncommitted changes included) is kept
+while the run can resume. On restart the step goes back into the same
+workspace and, on a runtime that can resume sessions (the cli `claude-code`
+recipe), continues the same session with a short note that conductor
+restarted. A runtime that can't resume, or a resume that fails, gets a fresh
+agent in the kept workspace, told that an earlier agent's work is there. After
+3 resumes without the step finishing, it starts fresh. This holds for agent
+steps inside called workflows, parallel branches and `for_each` items too.
+
 A trigger (or a reusable workflow) may also set a default `gate:` for every
 agent step it contains — the step's own `gate:` wins ([[Gates]]).
 

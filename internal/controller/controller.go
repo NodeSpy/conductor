@@ -83,6 +83,7 @@ type Capabilities struct {
 	CheckoutPR         bool // accepts a conductor-provisioned PR/branch worktree as cwd
 	InteractiveHandoff bool // can hand a live session to a human to drive
 	SendFollowup       bool // accepts a follow-up prompt on a live session
+	ResumeStep         bool // resumes an interrupted step's session after a restart (StepResumer)
 	Remote             bool // runs the agent off-box
 }
 
@@ -232,6 +233,34 @@ type Runner interface {
 	// DeliverOutput hands a step.done-carried output (any JSON value) to the
 	// waiting schema dispatch. Controller runtimes have no verb-delivery path yet.
 	DeliverOutput(dispatchID string, output any) (bool, error)
+}
+
+// StepResumer is the capability a runtime declares when it can put an
+// interrupted step's agent back after a conductor restart: the session the
+// agent had, continued by the runtime's own means (a CLI's resume flag, a
+// protocol's session load). Conductor supplies only the session id it was
+// told at start (ResumableSession) and the kept workspace in spec.Cwd.
+type StepResumer interface {
+	// CanResumeStep reports whether this runtime, as configured, can resume.
+	CanResumeStep() bool
+	// ResumeStep continues session id in spec.Cwd with spec's prompt as the
+	// next turn, like NewSession does a fresh one. The returned session owns
+	// spec's workspace as a NewSession one would.
+	ResumeStep(ctx context.Context, spec Spec, id string, h Handler) (Session, error)
+}
+
+// ResumableSession is an optional Session capability: the runtime's own id
+// for the session, known from the moment it starts, that StepResumer can
+// resume ("" = none).
+type ResumableSession interface {
+	ResumeID() string
+}
+
+// ResumeFailer is an optional Session capability for a resumed session: after
+// its turn, whether the resume itself failed (the runtime could not find or
+// load the session) — conductor then starts a fresh agent instead.
+type ResumeFailer interface {
+	ResumeErr() error
 }
 
 // Sender is an optional session-follow-up surface (ACP prompt on a live session);
