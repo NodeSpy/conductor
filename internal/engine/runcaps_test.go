@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -24,9 +25,19 @@ type runRecStore struct {
 	recs map[string]store.WorkflowRun
 }
 
+// PutRun keeps a copy, as the real store's file does: a run record read back
+// (a restart) shares no maps with the run that wrote it.
 func (s *runRecStore) PutRun(r store.WorkflowRun) error {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	var c store.WorkflowRun
+	if err := json.Unmarshal(b, &c); err != nil {
+		return err
+	}
 	s.mu.Lock()
-	s.recs[r.ID] = r
+	s.recs[r.ID] = c
 	s.mu.Unlock()
 	return s.flowGateStore.PutRun(r)
 }
@@ -43,7 +54,10 @@ func (s *runRecStore) PendingRuns() []store.WorkflowRun {
 	defer s.mu.Unlock()
 	var out []store.WorkflowRun
 	for _, r := range s.recs {
-		out = append(out, r)
+		b, _ := json.Marshal(r)
+		var c store.WorkflowRun
+		_ = json.Unmarshal(b, &c)
+		out = append(out, c)
 	}
 	return out
 }
