@@ -6,10 +6,14 @@
 # A config in the retired shape — github `webhook.smee_url`, and the bundled
 # webhook connector's `smee_url` — boots on each conductor × plugin
 # combination a fleet passes through while conductor and plugins auto-update
-# independently. In every row, a signed issue_comment posted to the github
-# channel must fire a `gh.new_comment` trigger, and a delivery posted to the
-# webhook channel must fire a `hooks.<source>` trigger. The rows that run the
-# new conductor must also have rewritten the config (backup beside it), and a
+# independently. A signed issue_comment posted to the github channel must
+# fire a `gh.new_comment` trigger, and a delivery posted to the webhook
+# channel a `hooks.<source>` trigger. The new conductor runs the plugins in
+# their jail: there, the smee relay reaches github's listener (expose_local)
+# but never the bundled webhook connector's, conductor's own port, unless
+# its smee connector is `trust: full` — each row says which deliveries must
+# arrive and which must be refused, and logged. The rows that run the new
+# conductor must also have rewritten the config (backup beside it), and a
 # second boot must leave it alone.
 #
 # Hermetic: every daemon gets its own HOME, state and config dirs under WORK;
@@ -179,9 +183,35 @@ post_hooks() { # <row> <n>
     --data-binary "{\"alarm\":\"$1\",\"n\":$2}" -o /dev/null
 }
 
-# row <name> <conductor> <github> <smee> <migrates: yes|no> [hooks: yes|no]
+# expect <name> <what> <channel> <row> <which> <yes|refused> <refusal log>:
+# a delivery on the channel fires its trigger (yes), or, refused by the jail,
+# never arrives and the daemon log names the refusal.
+expect() {
+  local name=$1 what=$2 row=$4 which=$5 mode=$6 why=$7
+  if [ "$mode" = yes ]; then
+    if wait_for 30 fired "$row" "$which"; then pass "$name: a delivery on the channel fired $what"; else fail "$name: $what never fired"; fi
+    return
+  fi
+  sleep 8
+  if fired "$row" "$which"; then fail "$name: $what fired, but its relay should have been refused"; else pass "$name: the jail kept the relay from delivering $what"; fi
+  if grep -q -- "$why" "$WORK/$name/daemon.log"; then pass "$name: the refusal is logged"; else fail "$name: no log line naming the refusal ($why)"; fi
+}
+
+# jailed <name> <plugin>: the new conductor ran the plugin in its jail.
+jailed() {
+  if grep -E "plugin [^ ]*$2[^ ]*: registered connector type .*permissions: jailed to" "$WORK/$1/daemon.log" >/dev/null; then
+    pass "$1: the $2 plugin runs jailed"
+  else
+    fail "$1: the $2 plugin is not jailed"
+  fi
+}
+
+OWN_PORT="its listener 127.0.0.1:[0-9]* is conductor's own port"
+NO_CAP="does not declare expose_local"
+
+# row <name> <conductor> <github> <smee> <migrates: yes|no> <gh: yes|refused> <hooks: yes|refused>
 row() {
-  local name=$1 cond=$2 gh=$3 smee=$4 migrates=$5 hooks=${6:-yes}
+  local name=$1 cond=$2 gh=$3 smee=$4 migrates=$5 ghx=$6 hooksx=$7
   local d="$WORK/$name"
   say "$name"
   mkdir -p "$d/state"
@@ -191,17 +221,14 @@ row() {
   boot "$d" "$cond"
 
   if wait_for 60 subscribed "$name-gh"; then pass "$name: the github channel has a subscriber"; else fail "$name: nobody subscribed to the github channel"; fi
-  if [ "$hooks" = yes ]; then
-    if wait_for 30 subscribed "$name-hooks"; then pass "$name: the webhook channel has a subscriber"; else fail "$name: nobody subscribed to the webhook channel"; fi
-  fi
+  if wait_for 30 subscribed "$name-hooks"; then pass "$name: the webhook channel has a subscriber"; else fail "$name: nobody subscribed to the webhook channel"; fi
   sleep 1 # the listener the relay posts to is up by the time the relay subscribed; give it a beat anyway
+  if [ "$cond" = "$CONDUCTOR_NEW" ]; then jailed "$name" github; jailed "$name" smee; fi
 
   post_github "$name" 1
-  if wait_for 30 fired "$name" gh; then pass "$name: a delivery on the channel fired gh.new_comment"; else fail "$name: gh.new_comment never fired"; fi
-  if [ "$hooks" = yes ]; then
-    post_hooks "$name" 1
-    if wait_for 30 fired "$name" hooks; then pass "$name: a delivery on the channel fired hooks.alarm"; else fail "$name: hooks.alarm never fired"; fi
-  fi
+  expect "$name" gh.new_comment "$name-gh" "$name" gh "$ghx" "$NO_CAP"
+  post_hooks "$name" 1
+  expect "$name" hooks.alarm "$name-hooks" "$name" hooks "$hooksx" "$OWN_PORT"
 
   local now; now=$(cat "$d/cfg/conductor.yaml")
   if [ "$migrates" = yes ]; then
@@ -215,18 +242,19 @@ row() {
     grep -q "config migrate: rewrote" "$WORK/$name/daemon.log" && pass "$name: the rewrite is logged" || fail "$name: the rewrite is not logged"
     # Second boot: idempotent, and still delivering.
     stop "$d"
-    : >"$WORK/mocksmee.log.mark"
     boot "$d" "$cond"
     sleep 2
     if [ "$(cat "$d/cfg/conductor.yaml")" = "$now" ]; then pass "$name: a second boot leaves the config alone"; else fail "$name: the second boot rewrote again"; fi
-    local before; before=$(count_fired "$name" gh)
-    wait_for 60 bash -c "[ \$(grep -c 'subscriber joined \"$name-gh\"' '$WORK/mocksmee.log') -ge 2 ]"
-    sleep 1
-    post_github "$name" 2
-    if wait_for 30 bash -c "[ \$(curl -sf http://127.0.0.1:$P_SINK/_captured | grep -o '\"/harness/$name/gh\"' | wc -l) -gt $before ]"; then
-      pass "$name: still delivering after the second boot"
-    else
-      fail "$name: no delivery after the second boot"
+    if [ "$ghx" = yes ]; then
+      local before; before=$(count_fired "$name" gh)
+      wait_for 60 bash -c "[ \$(grep -c 'subscriber joined \"$name-gh\"' '$WORK/mocksmee.log') -ge 2 ]"
+      sleep 1
+      post_github "$name" 2
+      if wait_for 30 bash -c "[ \$(curl -sf http://127.0.0.1:$P_SINK/_captured | grep -o '\"/harness/$name/gh\"' | wc -l) -gt $before ]"; then
+        pass "$name: still delivering after the second boot"
+      else
+        fail "$name: no delivery after the second boot"
+      fi
     fi
   else
     if [ "$now" = "$orig" ]; then pass "$name: the config is untouched"; else fail "$name: the config changed"; fi
@@ -235,12 +263,36 @@ row() {
   stop "$d"
 }
 
-# The fleet, one row per combination it passes through:
-row old-cond.old-gh   "$CONDUCTOR_OLD" "$GITHUB_OLD" "$SMEE_OLD" no
-row old-cond.new-gh   "$CONDUCTOR_OLD" "$GITHUB_NEW" "$SMEE_OLD" no
-row new-cond.old-gh   "$CONDUCTOR_NEW" "$GITHUB_OLD" "$SMEE_OLD" yes
-row new-cond.new-gh   "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_NEW" yes
-row new-cond.old-smee "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_OLD" yes
+# The fleet, one row per combination it passes through. The new conductor
+# runs every plugin jailed: smee may deliver to github's listener (the
+# listener its expose: wiring names, granted through expose_local), never to
+# the bundled webhook connector's, which is conductor's own port.
+row old-cond.old-gh   "$CONDUCTOR_OLD" "$GITHUB_OLD" "$SMEE_OLD" no  yes yes
+row old-cond.new-gh   "$CONDUCTOR_OLD" "$GITHUB_NEW" "$SMEE_OLD" no  yes yes
+row new-cond.old-gh   "$CONDUCTOR_NEW" "$GITHUB_OLD" "$SMEE_NEW" yes yes refused
+row new-cond.new-gh   "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_NEW" yes yes refused
+# An smee build from before expose_local, jailed: it cannot reach the
+# listener, and the log says what to do.
+row new-cond.old-smee "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_OLD" yes refused refused
+
+# The operator's opt-out for the bundled webhook connector: trust: full on
+# its smee connector (the old relay ran inside conductor, unjailed, too).
+say "new-cond.webhook-trust-full"
+d="$WORK/new-cond.webhook-trust-full"
+mkdir -p "$d/state"
+cp -r "$WORK/new-cond.new-gh/cfg" "$d/cfg"
+rm -f "$d/cfg/conductor.yaml.pre-smee"
+sed -i "s#/new-cond.new-gh-gh#/trustfull-gh#; s#/new-cond.new-gh/#/trustfull/#g; s#new-cond.new-gh-hooks#trustfull-hooks#" "$d/cfg/conductor.yaml" "$d/cfg/conductor.env"
+sed -i 's#^  hooks-smee:$#  hooks-smee:\n    trust: full#' "$d/cfg/conductor.yaml"
+"$BIN/seed" -state "$d/state" "github=$GITHUB_NEW" "smee=$SMEE_NEW" >"$d/seed.log" 2>&1
+boot "$d" "$CONDUCTOR_NEW"
+if wait_for 60 subscribed trustfull-hooks && wait_for 30 subscribed trustfull-gh; then pass "webhook-trust-full: both channels have a subscriber"; else fail "webhook-trust-full: no subscriber"; fi
+sleep 1
+post_hooks trustfull 1
+if wait_for 30 fired trustfull hooks; then pass "webhook-trust-full: hooks.alarm fires through the relay path"; else fail "webhook-trust-full: hooks.alarm never fired"; fi
+post_github trustfull 1
+if wait_for 30 fired trustfull gh; then pass "webhook-trust-full: gh.new_comment still fires"; else fail "webhook-trust-full: gh.new_comment never fired"; fi
+stop "$d"
 
 # Rollback: the previous conductor (doUpdate's <exe>.prev) started on a
 # config the new one already rewrote. github keeps working through the smee

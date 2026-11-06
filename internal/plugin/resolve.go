@@ -465,6 +465,7 @@ func adoptLegacyRecord(ref config.PluginRef, rec Installed, state *InstallState,
 	}
 	base := rec.Manifest
 	base.Listen, base.Read, base.Write, base.Exec, base.Keychain = m.Listen, m.Read, m.Write, m.Exec, m.Keychain
+	base.ExposeLocal = m.ExposeLocal
 	replaces := rec.Resolved
 	// The user's last agreement (consentFile) is the record: for this
 	// build, or for the one before it when the older conductor installed
@@ -1066,6 +1067,9 @@ func manifestFromDecl(decl *Decl) Manifest {
 		FS:       append([]string(nil), c.FS...),
 		Spawns:   c.Spawns || len(c.Commands) > 0,
 		Env:      append([]string(nil), c.Env...),
+		// ExposeLocal is enforced from the record like every capability: an
+		// update that adds it widens the build and is held for approval.
+		ExposeLocal: c.ExposeLocal,
 		// Auth (the plugin's declared OAuth2 endpoints) is recorded so
 		// `conductor connector auth <name>` can run the interactive login
 		// WITHOUT respawning the plugin to re-Describe it.
