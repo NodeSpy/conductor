@@ -33,6 +33,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/callable"
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/configmigrate"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -340,12 +341,14 @@ func memoryGrantOp(sb *skill.Broker) func(token, op string, peer memory.Peer) me
 // Returns the loaded config and any escalate warning to surface. This is the
 // testable boot seam: the gate lives here, not inline in cmdRun.
 func resolveBootConfig(args []string, hup <-chan os.Signal) (*config.Config, string, error) {
+	// Retired config shapes are rewritten before the load (fail-safe: on any
+	// error the config stays as it is, and the warning is surfaced).
+	warning := autoMigrateOnBoot(args)
 	// loadConfig loads the sibling conductor.env first, so ${...} refs resolve
 	// (this is also how launchd — which has no EnvironmentFile — gets secrets).
 	cfg, _, err := loadConfig(args)
-	warning := ""
 	if err != nil {
-		cfg, warning, err = holdDegradedUntilLoadable(args, "", err, hup)
+		cfg, warning, err = holdDegradedUntilLoadable(args, warning, err, hup)
 	}
 	return cfg, warning, err
 }
@@ -436,8 +439,24 @@ func cmdValidate(args []string) error {
 	// it, so a box never auto-updates into a release whose plugins it can
 	// neither find installed nor fetch (it would boot with those connectors
 	// dark — for a one-connector box, all of its automation).
+	// A retired shape the daemon rewrites at its next boot
+	// (internal/configmigrate) is named here, and the plugins that rewrite
+	// will start using are checked with the rest: the self-update preflight
+	// runs this, so a box never moves to a release whose boot rewrite needs
+	// a plugin it can neither find installed nor fetch.
+	fetchCfg := cfg
+	if plan, perr := configmigrate.Compute(path, configmigrate.Options{}); perr != nil {
+		fmt.Printf("warning: config migrate: %v\n", perr)
+	} else {
+		for _, n := range plan.Notes {
+			fmt.Printf("notice: config migrate (the daemon does this at its next boot; `conductor config migrate --dry-run` shows it): %s\n", n)
+		}
+		if plan.Changed() {
+			fetchCfg = withMigrationUses(cfg, plan.Uses)
+		}
+	}
 	missing := 0
-	for _, line := range checkPluginFetchability(cfg) {
+	for _, line := range checkPluginFetchability(fetchCfg) {
 		fmt.Println(line)
 		if strings.HasPrefix(line, "warning: plugin ") {
 			missing++
