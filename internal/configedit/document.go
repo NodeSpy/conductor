@@ -962,6 +962,10 @@ func decodeText(b []byte) (any, error) {
 	return (&Document{refs: refs}).detokenize(v), nil
 }
 
+// Value returns the whole document decoded (aliases expanded, merges
+// resolved, references restored); ok is false when it does not decode.
+func (d *Document) Value() (any, bool) { return d.docValue() }
+
 // docValue decodes the whole document (aliases expanded, merges resolved,
 // references restored).
 func (d *Document) docValue() (any, bool) {

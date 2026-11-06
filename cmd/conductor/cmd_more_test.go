@@ -54,12 +54,10 @@ triggers:
 	}
 }
 
-// `config migrate` went with the legacy schema (plugin-contract.md Q4); the
-// command says so instead of failing as an unknown subcommand.
-func TestCmdConfigMigrateRemoved(t *testing.T) {
-	err := cmdConfig([]string{"migrate"})
-	if err == nil || !strings.Contains(err.Error(), "removed with the legacy config schema") {
-		t.Fatalf("config migrate must explain its removal, got %v", err)
+// `config` has one subcommand, `migrate`; anything else is a usage error.
+func TestCmdConfigUsage(t *testing.T) {
+	if err := cmdConfig([]string{"frobnicate"}); err == nil || !strings.Contains(err.Error(), "usage: conductor config migrate") {
+		t.Fatalf("got %v", err)
 	}
 }
 
