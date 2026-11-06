@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/plugin"
 )
 
 // writeFakeConductor writes a shell script standing in for the downloaded
@@ -205,6 +206,7 @@ func TestRefreshDepsRefusesOnConfigLoadError(t *testing.T) {
 type autoUpdatePackRepo struct {
 	t    *testing.T
 	repo string
+	name string // the pack's name; "" = autopilot
 }
 
 func newAutoUpdatePackRepo(t *testing.T) *autoUpdatePackRepo {
@@ -234,13 +236,26 @@ func (r *autoUpdatePackRepo) git(args ...string) string {
 
 // release commits and tags a pack release; it returns the commit sha.
 func (r *autoUpdatePackRepo) release(tag, floor string) string {
+	return r.releaseNeeding(tag, floor, "")
+}
+
+// releaseNeeding is release with a floor on a `widget` connector ("" for none).
+func (r *autoUpdatePackRepo) releaseNeeding(tag, floor, widget string) string {
 	r.t.Helper()
+	name := r.name
+	if name == "" {
+		name = "autopilot"
+	}
+	connectors := ""
+	if widget != "" {
+		connectors = "\n    connectors: { widget: \"" + widget + "\" }"
+	}
 	manifest := `
 pack:
-  name: autopilot
+  name: ` + name + `
   version: "` + strings.TrimPrefix(tag, "v") + `"
   requires:
-    conductor: "` + floor + `"
+    conductor: "` + floor + `"` + connectors + `
 workflows:
   flow:
     steps:
@@ -358,5 +373,154 @@ func TestRefreshDepsAppliesAPackUpdateThatLoads(t *testing.T) {
 	}
 	if _, err := config.Load(cfgPath); err != nil {
 		t.Fatalf("the applied config must load: %v", err)
+	}
+}
+
+// withWidgetPlugin installs, as far as config's version gate can tell, the
+// `widget` connector plugin at version, and makes the auto-update cycle's
+// plugin refresh move it to next (when next is set).
+func withWidgetPlugin(t *testing.T, version, next string) {
+	t.Helper()
+	config.SetConnectorVersions(map[string][]string{"connectors/widget": {version}})
+	t.Cleanup(func() { config.SetConnectorVersions(nil) })
+	prev := refreshPluginsStep
+	t.Cleanup(func() { refreshPluginsStep = prev })
+	refreshPluginsStep = func(*config.Config) (bool, []plugin.Resolution, error) {
+		if next == "" || next == version {
+			return false, nil, nil
+		}
+		version = next
+		config.SetConnectorVersions(map[string][]string{"connectors/widget": {next}})
+		return true, []plugin.Resolution{{Name: "widget", Action: plugin.ActionUpdated}}, nil
+	}
+}
+
+// setupWidgetPacks writes a config with a widget connector and one pack
+// instance per repo (instance name = the repo's pack name), each tracking
+// `~> 1.0`, and resolves them as `conductor init` would.
+func setupWidgetPacks(t *testing.T, repos ...*autoUpdatePackRepo) string {
+	t.Helper()
+	config.SetRuntimeVersion("v0.66.0")
+	t.Cleanup(func() { config.SetRuntimeVersion("dev") })
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	doc := "connectors:\n  w: { use: widget }\npacks:\n"
+	for _, r := range repos {
+		doc += "  " + r.name + ":\n    source: git::file://" + r.repo + "\n    version: \"~> 1.0\"\n"
+	}
+	if err := os.WriteFile(cfgPath, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.ResolvePacks(cfgPath); err != nil {
+		t.Fatalf("ResolvePacks: %v", err)
+	}
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("initial config must load: %v", err)
+	}
+	return cfgPath
+}
+
+func newWidgetPackRepo(t *testing.T, name string) *autoUpdatePackRepo {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	r := &autoUpdatePackRepo{t: t, repo: t.TempDir(), name: name}
+	r.git("init", "-b", "main")
+	r.releaseNeeding("v1.0.0", ">=0.1", ">=2.8.0")
+	return r
+}
+
+func lockedRevision(t *testing.T, cfgPath, instance string) string {
+	t.Helper()
+	lock, err := config.ReadLockfile(filepath.Dir(cfgPath))
+	if err != nil || lock == nil {
+		t.Fatalf("lockfile: %+v, %v", lock, err)
+	}
+	for _, e := range lock.Packs {
+		if e.Instance == instance {
+			return e.Resolved
+		}
+	}
+	t.Fatalf("no %s in the lockfile", instance)
+	return ""
+}
+
+// The deadlock: a pack release needs a newer plugin, and both are released.
+// Evaluated against the installed plugin the pack update never loads, so
+// neither ever moved. The plugin refreshes first, and the pack is loaded
+// against it: both move in one cycle.
+func TestRefreshDepsTakesAPackReleaseWithThePluginItNeeds(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	r := newWidgetPackRepo(t, "autopilot")
+	withWidgetPlugin(t, "connectors/widget/v2.8.0", "connectors/widget/v2.9.0")
+	cfgPath := setupWidgetPacks(t, r)
+
+	want := r.releaseNeeding("v1.1.0", ">=0.1", ">=2.9.0")
+	packMoved, res, act := refreshDeps(cfgPath)
+	if !act || !packMoved || len(res) == 0 {
+		t.Fatalf("the plugin and the pack must move together (act=%v packMoved=%v plugins=%v)", act, packMoved, res)
+	}
+	if got := lockedRevision(t, cfgPath, "autopilot"); got != want {
+		t.Fatalf("lockfile pins %s, want v1.1.0's %s", got, want)
+	}
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("the applied config must load: %v", err)
+	}
+}
+
+// The fallback: the newest pack release needs a plugin release that doesn't
+// exist yet. The plugin still moves, the pack takes its newest release that
+// loads against it, and another pack is not held back by the first.
+func TestRefreshDepsFallsBackToEachPacksNewestLoadableRelease(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	a := newWidgetPackRepo(t, "autopilot")
+	b := newWidgetPackRepo(t, "other")
+	withWidgetPlugin(t, "connectors/widget/v2.8.0", "connectors/widget/v2.9.0")
+	cfgPath := setupWidgetPacks(t, a, b)
+
+	loadable := a.releaseNeeding("v1.1.0", ">=0.1", ">=2.9.0")
+	a.releaseNeeding("v1.2.0", ">=0.1", ">=3.0.0") // no such plugin release yet
+	otherNew := b.releaseNeeding("v1.1.0", ">=0.1", ">=2.8.0")
+
+	packMoved, res, act := refreshDeps(cfgPath)
+	if !act || !packMoved || len(res) == 0 {
+		t.Fatalf("the plugin and the loadable packs must move (act=%v packMoved=%v plugins=%v)", act, packMoved, res)
+	}
+	if got := lockedRevision(t, cfgPath, "autopilot"); got != loadable {
+		t.Fatalf("autopilot pins %s, want its newest loadable release v1.1.0 (%s)", got, loadable)
+	}
+	if got := lockedRevision(t, cfgPath, "other"); got != otherNew {
+		t.Fatalf("other pins %s, want its v1.1.0 (%s): a refused pack must not hold it back", got, otherNew)
+	}
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("the applied config must load: %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(cfgPath), ".conductor", ".packs-stage-*")); len(left) != 0 {
+		t.Fatalf("staging left %v behind", left)
+	}
+
+	// The next cycle: nothing newer loads, nothing moves.
+	if packMoved, _, act := refreshDeps(cfgPath); act || packMoved {
+		t.Fatalf("a second cycle must be a no-op (act=%v packMoved=%v)", act, packMoved)
+	}
+}
+
+// No pack release loads, but the plugin does: the plugin still moves, and the
+// packs stay where they are.
+func TestRefreshDepsMovesThePluginWhenNoPackReleaseLoads(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	r := newWidgetPackRepo(t, "autopilot")
+	withWidgetPlugin(t, "connectors/widget/v2.8.0", "connectors/widget/v2.9.0")
+	cfgPath := setupWidgetPacks(t, r)
+	current := lockedRevision(t, cfgPath, "autopilot")
+
+	r.releaseNeeding("v1.1.0", ">=0.1", ">=3.0.0")
+	packMoved, res, act := refreshDeps(cfgPath)
+	if !act || packMoved || len(res) == 0 {
+		t.Fatalf("the plugin alone must move (act=%v packMoved=%v plugins=%v)", act, packMoved, res)
+	}
+	if got := lockedRevision(t, cfgPath, "autopilot"); got != current {
+		t.Fatalf("autopilot moved to %s; it must stay at %s", got, current)
 	}
 }

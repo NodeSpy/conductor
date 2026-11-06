@@ -175,22 +175,7 @@ func satisfiesConstraint(version, constraint string) bool {
 func bestMatch(tags []string, prefix, constraint string) (string, bool) {
 	var bestTag string
 	for _, t := range tags {
-		if prefix != "" && !strings.HasPrefix(t, prefix) {
-			continue // a component-prefixed query ignores other components' tags
-		}
-		raw := strings.TrimPrefix(t, prefix)
-		sv, err := parseSemver(raw)
-		if err != nil {
-			continue
-		}
-		// A pre-release is opt-in: only a constraint that names one
-		// (an exact @1.2.3-rc.1 pin) selects it. An unpinned or ranged
-		// reference — and the daemon's own self-update — never moves onto
-		// a release candidate.
-		if sv.pre != "" && !namesPrerelease(constraint) {
-			continue
-		}
-		if !satisfiesConstraint(raw, constraint) {
+		if !tagMatches(t, prefix, constraint) {
 			continue
 		}
 		if bestTag == "" || CompareVersions(t, bestTag) > 0 {
@@ -198,6 +183,27 @@ func bestMatch(tags []string, prefix, constraint string) (string, bool) {
 		}
 	}
 	return bestTag, bestTag != ""
+}
+
+// tagMatches reports whether a tag is a release of prefix's component that
+// the constraint accepts.
+func tagMatches(t, prefix, constraint string) bool {
+	if prefix != "" && !strings.HasPrefix(t, prefix) {
+		return false // a component-prefixed query ignores other components' tags
+	}
+	raw := strings.TrimPrefix(t, prefix)
+	sv, err := parseSemver(raw)
+	if err != nil {
+		return false
+	}
+	// A pre-release is opt-in: only a constraint that names one
+	// (an exact @1.2.3-rc.1 pin) selects it. An unpinned or ranged
+	// reference — and the daemon's own self-update — never moves onto
+	// a release candidate.
+	if sv.pre != "" && !namesPrerelease(constraint) {
+		return false
+	}
+	return satisfiesConstraint(raw, constraint)
 }
 
 // namesPrerelease reports whether a constraint mentions a pre-release

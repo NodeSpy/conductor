@@ -408,6 +408,13 @@ it in only when that load succeeds. A refused update (a pack release that needs 
 newer connector, say) leaves `.conductor/packs/` and `conductor.lock.yaml` exactly as
 they were, so a later restart boots the last config that loaded.
 
+**Plugins and packs move together.** The cycle refreshes plugins first, then loads
+the staged packs against the plugins it just installed. So a pack release that needs
+a newer plugin is taken in the same cycle as that plugin. When the newest packs still
+don't load, each pack takes its newest release that does, within its `version:`
+constraint and never below the one it's on, and the log says which pack was held
+back and why. A pack that can't move never holds back the plugins or the other packs.
+
 **A moved plugin is applied by a hot-reload — no daemon restart — when it can be.**
 The daemon swaps the plugin's subprocess in place (draining in-flight calls first)
 whenever the new build's interface is unchanged (same verbs, ABI, kind, and
