@@ -15,7 +15,11 @@ connectors:
                                    # full resolution path (builtin → official
                                    # plugin repo → an explicit repo → a local binary)
     app: { app_id: 123456, private_key_path: ~/.config/conductor/github-app.pem }
-    webhook: { smee_url: ${GH_SMEE_URL}, secret: ${GH_WEBHOOK_SECRET} }
+    webhook:                       # listens locally; `expose:` names the exposure
+      listen: "127.0.0.1:8787"     # connector that makes it public (smee, cloudflared, …)
+      path: /webhook
+      expose: gh-smee
+      secret: ${GH_WEBHOOK_SECRET}
     me: { logins: [your-login] }
     repos: ["your-org/*"]
     options: { as: me }            # default verb options — every call merges over these

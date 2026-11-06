@@ -33,7 +33,7 @@ conductor connector auth <name> [--revoke] one-time OAuth2 login (or clear store
 conductor secrets check                    unlock every vault, resolve every reference, report (no values)
 conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
 conductor unlock                           seed the default vault key for non-interactive restarts
-conductor config migrate                   removed with the legacy config schema — run it on the release before the plugin contract, then upgrade
+conductor config migrate [--dry-run]       rewrite retired config shapes in place (the daemon also does it at boot); backup first
 conductor mcp memory --socket <path>       stdio MCP server for the live agent tools (memory + run_step; launched by runtimes, not by hand)
 conductor memory rescope (--tag T | --scope PAT | both) --to 'P:{scope}' [--apply]   move the selected entries to a templated scope; dry run unless --apply ([[Memory#operator-commands]])
 conductor memory key --template K [--facts F.json] [--fact n=v …]   render a scope-key template with core's renderer ([[Memory#scope-keys-are-templates]])
@@ -133,8 +133,13 @@ conductor version
 - **vault / unlock** — `vault <name> …` targets a `vaults:` entry (write ops
   only on writable backends); see [[Secrets]] for the unlock chain and why
   it is non-interactive in steady state.
-- **config migrate** — removed with the legacy config schema; run it on the
-  release before the plugin contract, then upgrade. See [[Migration]].
+- **config migrate** — rewrites retired config shapes in place: today, a
+  smee channel configured on a github connector (`webhook.smee_url`) or on
+  the `webhook` connector (`smee_url`) becomes a `smee` exposure connector.
+  The daemon runs the same rewrite at every boot, so you rarely need it by
+  hand; `--dry-run` prints the rewritten files and writes nothing. The legacy
+  config schema is not this command's — run v0.60.0's `config migrate` for
+  that. See [[Migration]].
 - **pause / resume** — the runtime kill switch (a control file, no restart);
   in config, disable one connector or trigger in place with its own
   `enabled: false` (there is no policy-level kill switch — see [[Policy]]).
