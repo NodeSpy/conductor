@@ -244,6 +244,9 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 			if nf != nil {
 				binds = append(binds, nf.Binds...)
 			}
+			if nf != nil && nf.Plugin != nil {
+				return WrapSeatbeltPlugin(argv, nf.Plugin), nil
+			}
 			if nf != nil && nf.Agent != nil {
 				// The agent jail: narrowed exec/Mach rules, scratch home, and
 				// a network that is open or reaches only conductor's proxy.
@@ -305,6 +308,9 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 					return nil, fmt.Errorf("sandbox: encode jail: %w", err)
 				}
 				prefix = append(prefix, "--jail", string(js))
+			}
+			if jailed && nf.Base != "" {
+				prefix = append(prefix, "--base", nf.Base)
 			}
 			if jailed && nf.Chdir != "" {
 				prefix = append(prefix, "--chdir", nf.Chdir)

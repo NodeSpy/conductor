@@ -276,6 +276,8 @@ func narrowRef(ref config.PluginRef, names []string) (config.PluginRef, error) {
 	out := ref
 	out.Instances = make(map[string]config.ConnectorGrant, len(names))
 	out.Network, out.AllowSecrets, out.AllowEnv, out.Isolation = nil, nil, nil, nil
+	out.Conns, out.TrustFull = nil, false
+	trust, anyShared := true, false
 	rep := names[0]
 	out.Use = ref.Instances[rep].Use
 	out.Instance = rep
@@ -289,6 +291,8 @@ func narrowRef(ref config.PluginRef, names []string) (config.PluginRef, error) {
 		out.Network = config.AppendUnique(out.Network, g.Network...)
 		out.AllowSecrets = config.AppendUnique(out.AllowSecrets, g.AllowSecrets...)
 		out.AllowEnv = config.AppendUnique(out.AllowEnv, g.AllowEnv...)
+		out.Conns = append(out.Conns, g.Conn)
+		trust, anyShared = trust && g.TrustFull, true
 		merged, ok := foldIsolation(out.Isolation, isoFrom != "", g)
 		if !ok {
 			return config.PluginRef{}, fmt.Errorf("instances %s and %s resolved to the same process group with isolation: blocks that do not combine — this must never happen (groupRef's isolation split is supposed to prevent it); this is a bug, not a config error", isoFrom, n)
@@ -298,6 +302,7 @@ func narrowRef(ref config.PluginRef, names []string) (config.PluginRef, error) {
 			isoFrom = n
 		}
 	}
+	out.TrustFull = trust && anyShared
 	return out, nil
 }
 

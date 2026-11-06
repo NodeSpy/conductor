@@ -87,16 +87,20 @@ func (t *jailTmp) release() {
 // buildJail builds the jail (see above) and returns what to call once the
 // payload has exited: it removes the jail's on-disk /tmp. tmpParent is where
 // that /tmp is made ("" or unusable: a private tmpfs, as before).
-func buildJail(binds []BindMount, jailRoot, tmpParent string) (func(), error) {
+func buildJail(binds []BindMount, jailRoot, tmpParent, base string) (func(), error) {
 	t := newJailTmp(tmpParent)
-	if err := buildJailIn(binds, jailRoot, t); err != nil {
+	if err := buildJailIn(binds, jailRoot, t, base); err != nil {
 		t.release()
 		return nil, err
 	}
 	return t.release, nil
 }
 
-func buildJailIn(binds []BindMount, jailRoot string, t *jailTmp) error {
+func buildJailIn(binds []BindMount, jailRoot string, t *jailTmp, base string) error {
+	minimal := base == BaseMinimal
+	if base != "" && !minimal {
+		return fmt.Errorf("jail: unknown base %q", base)
+	}
 	root, err := jailRootDir(jailRoot)
 	if err != nil {
 		return fmt.Errorf("jail root: %w", err)
@@ -112,15 +116,46 @@ func buildJailIn(binds []BindMount, jailRoot string, t *jailTmp) error {
 	// skipped so the jail works across distro layouts. /opt carries vendor
 	// installs a /usr/bin wrapper execs (claude-code's /usr/bin/claude →
 	// /opt/claude-code/bin/claude).
-	for _, d := range []string{"/usr", "/etc", "/opt"} {
+	//
+	// The minimal base (a plugin's) shows /usr without its programs: the
+	// standard PATH directories are empty tmpfs mounts the caller binds the
+	// declared commands into, then made read-only. /etc is the MinimalEtc
+	// list, and there is no /opt.
+	baseDirs := []string{"/usr", "/etc", "/opt"}
+	if minimal {
+		baseDirs = append([]string{"/usr"}, MinimalEtc...)
+	}
+	for _, d := range baseDirs {
 		if err := bindInto(root, BindMount{Path: d, RO: true}, true); err != nil {
 			return err
 		}
 	}
+	var binDirs []string
+	if minimal {
+		for _, d := range minimalBinDirs {
+			if fi, err := os.Lstat(root + d); err != nil || !fi.IsDir() {
+				continue
+			}
+			if err := mountTmpfs(root+d, "mode=0755"); err != nil {
+				return fmt.Errorf("jail empty %s: %w", d, err)
+			}
+			binDirs = append(binDirs, d)
+		}
+	}
 	// Merged-usr compatibility: on modern distros /bin,/lib,… are symlinks into
 	// /usr (recreate the symlink); on older split-usr distros they are real
-	// directories (bind them read-only).
+	// directories (bind them read-only; the minimal base leaves a split-usr
+	// /bin and /sbin empty, like /usr/bin).
 	for _, l := range []string{"/bin", "/sbin", "/lib", "/lib64", "/libexec"} {
+		if minimal && (l == "/bin" || l == "/sbin") {
+			if fi, err := os.Lstat(l); err == nil && fi.IsDir() {
+				if err := mountTmpfs(root+l, "mode=0755"); err != nil {
+					return fmt.Errorf("jail empty %s: %w", l, err)
+				}
+				binDirs = append(binDirs, l)
+				continue
+			}
+		}
 		if err := baseLink(root, l); err != nil {
 			return err
 		}
@@ -129,7 +164,7 @@ func buildJailIn(binds []BindMount, jailRoot string, t *jailTmp) error {
 	if err := mountProc(root); err != nil {
 		return err
 	}
-	if err := mountDev(root); err != nil {
+	if err := mountDev(root, minimal); err != nil {
 		return err
 	}
 	// A private /tmp: hides other processes' scratch (and other steps'
@@ -140,6 +175,9 @@ func buildJailIn(binds []BindMount, jailRoot string, t *jailTmp) error {
 		err = bindInto(root, BindMount{Path: "/tmp", Src: t.held.Path}, false)
 	} else {
 		err = mountTmpfs(root+"/tmp", "mode=1777")
+	}
+	if err == nil && minimal {
+		err = remount(root+"/tmp", unix.MS_NOEXEC|unix.MS_NOSUID|unix.MS_NODEV)
 	}
 	if err != nil {
 		return fmt.Errorf("jail /tmp: %w", err)
@@ -167,9 +205,45 @@ func buildJailIn(binds []BindMount, jailRoot string, t *jailTmp) error {
 		if err != nil {
 			return fmt.Errorf("jail %s: %w", b.Path, err)
 		}
+		if b.NoExec && !b.Tmpfs && b.Link == "" {
+			if err := remount(root+b.Path, unix.MS_NOEXEC|unix.MS_NOSUID|unix.MS_NODEV); err != nil && !(b.Optional && os.IsNotExist(err)) {
+				return fmt.Errorf("jail noexec %s: %w", b.Path, err)
+			}
+		}
+	}
+	// The emptied PATH directories hold only what was bound into them, and
+	// stay that way: read-only, so nothing can be added to run.
+	for _, d := range binDirs {
+		if err := unix.Mount("", root+d, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, "mode=0755"); err != nil {
+			return fmt.Errorf("jail read-only %s: %w", d, err)
+		}
 	}
 
-	return pivotInto(root)
+	if err := pivotInto(root); err != nil {
+		return err
+	}
+	if minimal {
+		// The root tmpfs itself (the skeleton the mounts hang on) is
+		// read-only and noexec too: no file can be made there to run.
+		if err := unix.Mount("", "/", "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOEXEC|unix.MS_NOSUID|unix.MS_NODEV, "mode=0755"); err != nil {
+			return fmt.Errorf("jail read-only root: %w", err)
+		}
+	}
+	return nil
+}
+
+// remount re-applies a bind mount at p with extra flags (noexec on a
+// writable path), keeping the flags its source has locked.
+func remount(p string, flags uintptr) error {
+	var st unix.Statfs_t
+	if err := unix.Statfs(p, &st); err != nil {
+		return err
+	}
+	f := uintptr(unix.MS_BIND|unix.MS_REMOUNT) | flags | lockedFlags(p)
+	if int64(st.Flags)&unix.ST_RDONLY != 0 {
+		f |= unix.MS_RDONLY
+	}
+	return unix.Mount("", p, "", f, "")
 }
 
 // bindInto binds b.Path into root at the same path. skipMissing tolerates a
@@ -276,7 +350,7 @@ func mountProc(root string) error {
 // mountDev builds a minimal /dev: a tmpfs with the standard character devices
 // bound in, the /dev/{fd,std*} → /proc/self/fd symlinks shells expect, and a
 // /dev/shm tmpfs.
-func mountDev(root string) error {
+func mountDev(root string, noexec bool) error {
 	dev := root + "/dev"
 	if err := mountTmpfs(dev, "mode=0755"); err != nil {
 		return fmt.Errorf("jail /dev: %w", err)
@@ -304,6 +378,16 @@ func mountDev(root string) error {
 	}
 	if err := mountTmpfs(dev+"/shm", "mode=1777"); err != nil {
 		return fmt.Errorf("jail /dev/shm: %w", err)
+	}
+	if noexec {
+		// Nothing written under /dev runs: /dev/shm noexec, /dev itself
+		// read-only once its nodes are in place.
+		if err := unix.Mount("", dev+"/shm", "", unix.MS_REMOUNT|unix.MS_NOEXEC|unix.MS_NOSUID|unix.MS_NODEV, "mode=1777"); err != nil {
+			return fmt.Errorf("jail /dev/shm noexec: %w", err)
+		}
+		if err := unix.Mount("", dev, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOEXEC|unix.MS_NOSUID, "mode=0755"); err != nil {
+			return fmt.Errorf("jail /dev read-only: %w", err)
+		}
 	}
 	return nil
 }

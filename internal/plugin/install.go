@@ -1,9 +1,12 @@
 package plugin
 
 import (
+	"slices"
+
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 	"os"
 	"path/filepath"
 	"sort"
@@ -43,11 +46,18 @@ const installStateVersion = 1
 // it says it needs, recorded so it is known BEFORE the plugin runs on any
 // later boot, and so a change on update is visible rather than silent.
 type Manifest struct {
-	// Egress are the "host:port" targets the plugin calls.
+	// Egress are the destinations the plugin connects to (plugin.Capabilities).
 	Egress []string `yaml:"egress,omitempty"`
+	// Listen are the addresses it serves on.
+	Listen []string `yaml:"listen,omitempty"`
+	// Read and Write are the paths it reads, and reads and writes.
+	Read  []string `yaml:"read,omitempty"`
+	Write []string `yaml:"write,omitempty"`
 	// Commands are the commands it spawns.
 	Commands []string `yaml:"commands,omitempty"`
-	// FS are the filesystem paths it needs.
+	// Keychain: a command reads a login from the macOS Keychain.
+	Keychain bool `yaml:"keychain,omitempty"`
+	// FS is the older name for Write.
 	FS []string `yaml:"fs,omitempty"`
 	// Spawns records the legacy boolean for a plugin that declares it spawns
 	// children without naming them.
@@ -75,33 +85,96 @@ type Manifest struct {
 
 // IsZero reports whether the plugin declared no capabilities at all.
 func (m Manifest) IsZero() bool {
-	return len(m.Egress) == 0 && len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && len(m.Env) == 0 && !m.SingleProcess
+	return len(m.Egress) == 0 && len(m.Listen) == 0 && len(m.Read) == 0 && len(m.Write) == 0 &&
+		len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && !m.Keychain && len(m.Env) == 0 && !m.SingleProcess
+}
+
+// Caps is the manifest as the plugin declared it.
+func (m Manifest) Caps() sdk.Capabilities {
+	return sdk.Capabilities{
+		Egress: m.Egress, Listen: m.Listen, Read: m.Read, Write: m.Write, FS: m.FS,
+		Commands: m.Commands, Keychain: m.Keychain, Env: m.Env,
+	}
+}
+
+// Lines renders what the plugin may do, one permission per line, in plain
+// words: what `plugin add`, `plugin show` and the boot log show the user.
+func (m Manifest) Lines() []string {
+	var out []string
+	add := func(label string, entries []string) {
+		if len(entries) == 0 {
+			return
+		}
+		var ws []string
+		for _, e := range entries {
+			ws = append(ws, plainEntry(e))
+		}
+		out = append(out, label+": "+strings.Join(ws, ", "))
+	}
+	add("connects to", m.Egress)
+	add("listens on", m.Listen)
+	add("reads", m.Read)
+	add("reads and writes", append(append([]string(nil), m.Write...), m.FS...))
+	add("runs", m.Commands)
+	add("reads env", m.Env)
+	if m.Keychain {
+		out = append(out, "reads a login from the macOS Keychain")
+	}
+	if m.SingleProcess {
+		out = append(out, "single_process (every instance shares one process)")
+	}
+	if len(out) == 0 {
+		out = []string{"nothing: no network, no files beyond its own, no commands, no env"}
+	}
+	return out
+}
+
+// plainEntry spells out a reference: "config:url" is the value of the
+// instance's url field, "env:X/sub" a path under $X.
+func plainEntry(e string) string {
+	if ref, ok := strings.CutPrefix(e, "config:"); ok {
+		return "<" + ref + " from its config>"
+	}
+	if ref, ok := strings.CutPrefix(e, "env:"); ok {
+		return "$" + ref
+	}
+	return e
 }
 
 // Summary renders the manifest as one line for logs and install review.
 func (m Manifest) Summary() string {
 	if m.IsZero() {
-		return "no declared capabilities"
+		return "nothing (no network, no files beyond its own, no commands, no env)"
 	}
-	var parts []string
-	if len(m.Egress) > 0 {
-		parts = append(parts, "network "+strings.Join(m.Egress, ","))
+	return strings.Join(m.Lines(), "; ")
+}
+
+// Widens lists what next declares that m does not: each entry is a new
+// permission the user has not agreed to. Empty means next is the same or
+// narrower. A destination already covered by one of m's globs is not new.
+func (m Manifest) Widens(next Manifest) []string {
+	var out []string
+	diff := func(label string, have, want []string, covered func(have []string, e string) bool) {
+		for _, e := range want {
+			if !covered(have, e) {
+				out = append(out, label+" "+plainEntry(e))
+			}
+		}
 	}
-	if len(m.Commands) > 0 {
-		parts = append(parts, "commands "+strings.Join(m.Commands, ","))
-	} else if m.Spawns {
-		parts = append(parts, "commands (unnamed)")
+	exact := func(have []string, e string) bool { return slices.Contains(have, e) }
+	diff("connects to", m.Egress, next.Egress, func(have []string, e string) bool {
+		return exact(have, e) || (!strings.HasPrefix(e, "config:") && egressCovered(have, e))
+	})
+	diff("listens on", m.Listen, next.Listen, exact)
+	// A path m may write, it may also read.
+	diff("reads", append(append(append([]string(nil), m.Read...), m.Write...), m.FS...), next.Read, exact)
+	diff("writes", append(append([]string(nil), m.Write...), m.FS...), append(append([]string(nil), next.Write...), next.FS...), exact)
+	diff("runs", m.Commands, next.Commands, exact)
+	diff("reads env", m.Env, next.Env, exact)
+	if next.Keychain && !m.Keychain {
+		out = append(out, "reads a login from the macOS Keychain")
 	}
-	if len(m.FS) > 0 {
-		parts = append(parts, "fs "+strings.Join(m.FS, ","))
-	}
-	if len(m.Env) > 0 {
-		parts = append(parts, "env "+strings.Join(m.Env, ","))
-	}
-	if m.SingleProcess {
-		parts = append(parts, "single_process (every instance shares one process)")
-	}
-	return strings.Join(parts, "; ")
+	return out
 }
 
 // Installed is one installed plugin's local record.
@@ -141,6 +214,10 @@ type Installed struct {
 type InstallState struct {
 	Version int         `yaml:"version"`
 	Plugins []Installed `yaml:"plugins,omitempty"`
+	// Pending are updates held because they declare more than the version
+	// they would replace: installed on disk, not run, until the user
+	// approves them (approve.go).
+	Pending []Pending `yaml:"pending,omitempty"`
 
 	dir string `yaml:"-"`
 }

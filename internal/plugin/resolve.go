@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
 )
@@ -34,6 +35,9 @@ const (
 	ActionLocal = "local"
 	// ActionSkipped — a gaps-only pass left an already-installed plugin alone.
 	ActionSkipped = "skipped"
+	// ActionHeld — a newer build declares more than the installed one; it
+	// waits for `conductor plugin approve` and the installed one keeps running.
+	ActionHeld = "held"
 	// ActionFailed — resolution failed; see Err.
 	ActionFailed = "failed"
 )
@@ -70,7 +74,10 @@ type Resolution struct {
 	PrevSha  string // the sha this replaced, when it changed
 	Path     string // installed binary path
 	Manifest Manifest
-	Err      error
+	// Widens, on a held update, is what the newer build asks for beyond the
+	// installed one.
+	Widens []string
+	Err    error
 }
 
 // Changed reports whether this resolution moved anything on disk.
@@ -330,8 +337,25 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 			res.Action, res.Err = ActionFailed, err
 			return res, false
 		}
+		if err := decl.Capabilities.Validate(decl.Connection); err != nil {
+			res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %s declares capabilities that do not validate: %w", ref.Name, tag, err)
+			return res, false
+		}
 		rec.Manifest = manifestFromDecl(decl)
 	}
+	if res.Action == ActionUpdated {
+		// An update that asks for more than the user agreed to waits for
+		// them; the installed build keeps running meanwhile.
+		if w := prev.Manifest.Widens(rec.Manifest); len(w) > 0 && !state.approved(rec) {
+			state.putPending(Pending{Installed: rec, Replaces: prev.Resolved, Widens: w})
+			res.Action, res.Widens = ActionHeld, w
+			res.Tag, res.Sha, res.Path, res.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
+			opts.logf("plugin %s: update %s -> %s HELD: it asks for more than %s — %s. The installed build keeps running; `conductor plugin approve %s` accepts it",
+				ref.Name, prev.Resolved, tag, prev.Resolved, strings.Join(w, "; "), ref.Name)
+			return res, true
+		}
+	}
+	state.dropPending(rec.Key, rec.Source)
 	res.Manifest = rec.Manifest
 	state.Put(rec)
 
@@ -656,6 +680,9 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 				case checkDeclKind(ref, decl) != nil:
 					res.Action, res.Err = ActionFailed, checkDeclKind(ref, decl)
 					cb.err = res.Err
+				case decl.Capabilities.Validate(decl.Connection) != nil:
+					res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %s declares capabilities that do not validate: %w", ref.Name, res.Tag, decl.Capabilities.Validate(decl.Connection))
+					cb.err = res.Err
 				default:
 					rec.Manifest = manifestFromDecl(decl)
 					state.Put(rec)
@@ -664,6 +691,23 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 					cb.manifest = rec.Manifest
 				}
 				describeCache[describeKey] = cb
+			}
+			if res.Action == ActionUpdated && res.Err == nil {
+				// The same hold reconcileOne applies (approve.go).
+				if prev, ok := state.findSha(key, res.Source, res.PrevSha); ok {
+					rec, _ := state.GetVersion(key, res.Tag, res.Source)
+					if w := prev.Manifest.Widens(rec.Manifest); len(w) > 0 && !state.approved(rec) {
+						state.DeleteVersion(key, res.Tag)
+						state.putPending(Pending{Installed: rec, Replaces: prev.Resolved, Widens: w})
+						dirty = true
+						res.Action, res.Widens = ActionHeld, w
+						res.Tag, res.Sha, res.Path, res.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
+						opts.logf("plugin %s: update %s -> %s HELD: it asks for more than %s — %s. The installed build keeps running; `conductor plugin approve %s` accepts it",
+							ref.Name, prev.Resolved, rec.Resolved, prev.Resolved, strings.Join(w, "; "), ref.Name)
+					} else {
+						state.dropPending(key, res.Source)
+					}
+				}
 			}
 			if res.Action == ActionUpdated {
 				opts.logf("plugin %s: updated %s -> %s (sha %s -> %s); permissions: %s",
@@ -775,7 +819,11 @@ func manifestFromDecl(decl *Decl) Manifest {
 	c := decl.Capabilities
 	return Manifest{
 		Egress:   append([]string(nil), c.Egress...),
+		Listen:   append([]string(nil), c.Listen...),
+		Read:     append([]string(nil), c.Read...),
+		Write:    append([]string(nil), c.Write...),
 		Commands: append([]string(nil), c.Commands...),
+		Keychain: c.Keychain,
 		FS:       append([]string(nil), c.FS...),
 		Spawns:   c.Spawns || len(c.Commands) > 0,
 		Env:      append([]string(nil), c.Env...),

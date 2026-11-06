@@ -52,15 +52,19 @@ type ConnectorRef struct {
 	// a jail. Set this on a locked-down box where OS confinement is wanted on
 	// top. Ignored for a builtin connector (nothing separate to confine).
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// Trust: full opts a plugin-backed connector OUT of its jail: it runs
+	// unconfined, with only its environment scrubbed. Empty (the default)
+	// jails it to exactly what the plugin declares (docs/wiki/Plugins.md).
+	Trust string `yaml:"trust,omitempty"`
 	// AllowSecrets optionally tightens which secret refs may cross the process
 	// boundary to a plugin-backed connector — an EXACT-match allowlist (no
 	// globs). Empty = no extra restriction beyond the structural guarantee that
 	// an implementation only ever receives its own instances' credentials.
 	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
-	// AllowEnv grants a plugin-backed connector the daemon environment
-	// variables it may read (exact names): each must be one the plugin
-	// declares (capabilities.env). Nothing passes without a grant — a
-	// plugin's declaration alone cannot pull a secret the daemon holds.
+	// AllowEnv narrows the daemon environment variables a plugin-backed
+	// connector reads to these (exact names), each one the plugin declares
+	// (capabilities.env). Empty passes every variable it declares: the user
+	// agreed to them with the plugin.
 	AllowEnv []string `yaml:"allow_env,omitempty"`
 	// Isolate opts THIS configured instance INTO its own dedicated subprocess,
 	// with exactly its own grant (Network/AllowSecrets/AllowEnv/Isolation),
@@ -106,6 +110,7 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 		AllowSecrets []string         `yaml:"allow_secrets,omitempty"`
 		AllowEnv     []string         `yaml:"allow_env,omitempty"`
 		Isolate      bool             `yaml:"isolate,omitempty"`
+		Trust        string           `yaml:"trust,omitempty"`
 	}
 	var h hdr
 	if err := n.Decode(&h); err != nil {
@@ -115,7 +120,22 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 	r.Isolation, r.AllowSecrets, r.legacyType, r.raw = h.Isolation, h.AllowSecrets, h.Type, *n
 	r.AllowEnv = h.AllowEnv
 	r.Isolate = h.Isolate
+	r.Trust = h.Trust
 	return nil
+}
+
+// TrustFull reports `trust: full`: the plugin runs outside its jail.
+func (r ConnectorRef) TrustFull() bool { return strings.EqualFold(strings.TrimSpace(r.Trust), "full") }
+
+// Conn is the entry's connection config as plain values (what a plugin's
+// "config:" capability references resolve against). Nil when it cannot be
+// decoded.
+func (r ConnectorRef) Conn() map[string]any {
+	var m map[string]any
+	if r.raw.Kind == 0 || r.raw.Decode(&m) != nil {
+		return nil
+	}
+	return m
 }
 
 // Decode unmarshals the raw connector node into a type-specific struct.
@@ -151,6 +171,9 @@ type RuntimeConfig struct {
 	// the old `type:` field plus the whole `plugins:` block; the kind (runtime)
 	// comes from this block. See ParseUse.
 	Use string `yaml:"use,omitempty"`
+	// Trust: full opts a plugin-backed runtime out of its jail (see
+	// ConnectorRef.Trust).
+	Trust string `yaml:"trust,omitempty"`
 	// Agent names the agent driven over the ACP transport (gemini, opencode,
 	// …). Valid only with `use: acp`, which it is required by.
 	Agent string `yaml:"agent,omitempty"`

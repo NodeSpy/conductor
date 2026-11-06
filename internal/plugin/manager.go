@@ -157,7 +157,7 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 		Kind:      Kind(ref.Kind()),
 		Provides:  ref.Name,
 		Version:   ref.Version(),
-		TrustFull: ref.TrustFull,
+		TrustFull: ref.TrustFull && (Kind(ref.Kind()) != KindConnector || shared),
 		Shared:    shared,
 		Use:       ref.Use,
 	}
@@ -173,7 +173,9 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 		// plugin's declared egress" the way it would for an instance that
 		// simply didn't set `network:`.
 		s.Probe = true
+		s.TrustFull = false
 	} else {
+		s.Conns = ref.Conns
 		s.Isolation = ref.Isolation
 		s.IsolationDefaulted = ref.IsolationDefaulted
 		s.Network = ref.Network
@@ -231,7 +233,11 @@ func InstanceSpec(spec Spec, instance string) Spec {
 		instSpec.AllowSecrets = g.AllowSecrets
 		instSpec.AllowEnv = g.AllowEnv
 		instSpec.Isolation = g.Isolation
+		instSpec.Conns = []map[string]any{g.Conn}
+		instSpec.TrustFull = g.TrustFull
 	} else {
+		instSpec.Conns = nil
+		instSpec.TrustFull = false
 		instSpec.Network = nil
 		instSpec.AllowSecrets = nil
 		instSpec.AllowEnv = nil

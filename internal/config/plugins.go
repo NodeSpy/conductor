@@ -38,6 +38,10 @@ type PluginRef struct {
 	// (`engines.<name>.trust: full`). Isolation is nil and the "no OS sandbox"
 	// warning is suppressed — they chose it deliberately.
 	TrustFull bool
+	// Conns are the connection configs of the configured instances the one
+	// shared process serves (non-isolated ones): what the plugin's
+	// "config:" capability references resolve against.
+	Conns []map[string]any
 	// Network is the referencing connector's declared egress. Empty for a
 	// runtime (a runtime executes your agents; its egress is not narrowed).
 	Network []string
@@ -81,6 +85,10 @@ type ConnectorGrant struct {
 	AllowSecrets []string
 	AllowEnv     []string
 	Isolation    *IsolationConfig
+	// Conn is this instance's connection config (ConnectorRef.Conn).
+	Conn map[string]any
+	// TrustFull mirrors ConnectorRef.TrustFull.
+	TrustFull bool
 	// Isolate mirrors ConnectorRef.Isolate: true means this one configured
 	// instance gets its own dedicated process instead of sharing the
 	// plugin's one default process.
@@ -315,7 +323,7 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		}
 		p, seen := out[u.InstallKey()]
 		if !seen {
-			p = PluginRef{Name: u.Name, Instance: name, Use: u, Instances: map[string]ConnectorGrant{}}
+			p = PluginRef{Name: u.Name, Instance: name, Use: u, Instances: map[string]ConnectorGrant{}, TrustFull: true}
 		}
 		// Hardening and declared egress union across NON-ISOLATED instances
 		// only: the DEFAULT shared process runs once for every instance that
@@ -332,8 +340,14 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 			p.Network = appendUnique(p.Network, ref.Network...)
 			p.AllowSecrets = appendUnique(p.AllowSecrets, ref.AllowSecrets...)
 			p.AllowEnv = appendUnique(p.AllowEnv, ref.AllowEnv...)
+			p.Conns = append(p.Conns, ref.Conn())
+			// The shared process is unjailed only when every instance it
+			// serves says so (validateTrust refuses a mix).
+			p.TrustFull = p.TrustFull && ref.TrustFull()
 		}
 		p.Instances[name] = ConnectorGrant{
+			Conn:         ref.Conn(),
+			TrustFull:    ref.TrustFull(),
 			Network:      append([]string(nil), ref.Network...),
 			AllowSecrets: append([]string(nil), ref.AllowSecrets...),
 			AllowEnv:     append([]string(nil), ref.AllowEnv...),
@@ -359,7 +373,7 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		// the reference leaf (`runtimes: { modal: { use: acme/p/conductor-modal } }`
 		// is selected as `runtime: modal`).
 		u.Name = name
-		p := PluginRef{Name: name, Instance: name, Use: u, Isolation: rt.Isolation}
+		p := PluginRef{Name: name, Instance: name, Use: u, TrustFull: strings.EqualFold(strings.TrimSpace(rt.Trust), "full")}
 		out[u.InstallKey()] = p
 	}
 
@@ -385,15 +399,9 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		ec := c.Engines[u.Name]
 		p.Network = ec.Network
 		p.AllowSecrets = ec.AllowSecrets
-		switch {
-		case ec.TrustFull():
-			p.TrustFull = true // unconfined, deliberately — stay quiet
-		case ec.Isolation != nil:
-			p.Isolation = ec.Isolation // explicit → fail-closed
-		default:
-			p.Isolation = defaultEngineIsolation() // untrusted default → best-effort
-			p.IsolationDefaulted = true
-		}
+		// Jailed to what the engine declares (usually nothing) unless the
+		// operator opted it out.
+		p.TrustFull = ec.TrustFull()
 		out[u.InstallKey()] = p
 	})
 	return out
@@ -525,7 +533,83 @@ func (c *Config) validatePluginRefs() error {
 	if engErr != nil {
 		return engErr
 	}
-	return c.checkIsolationMerge()
+	return c.checkPluginJail()
+}
+
+// checkPluginJail refuses what the declared-capability jail replaced: an
+// `isolation:` block on a plugin (the plugin's declaration is its jail; a
+// config may narrow it with network:/allow_env, or opt out with trust: full,
+// never widen it), a trust value other than full, and a shared process whose
+// instances disagree on trust.
+func (c *Config) checkPluginJail() error {
+	trustOK := func(where, v string) error {
+		if t := strings.TrimSpace(v); t != "" && !strings.EqualFold(t, "full") {
+			return fmt.Errorf("config: %s: trust must be \"full\" (run the plugin outside its jail) or empty, got %q", where, v)
+		}
+		return nil
+	}
+	isoErr := func(where string) error {
+		return fmt.Errorf("config: %s: isolation: no longer applies to a plugin — a plugin runs jailed to exactly what it declares (`conductor plugin show` lists it); narrow it with network:/allow_env, or opt out with trust: full", where)
+	}
+	names := make([]string, 0, len(c.ConnectorsMap))
+	for n := range c.ConnectorsMap {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	shared := map[string]string{} // group → first instance's trust
+	sharedFrom := map[string]string{}
+	for _, name := range names {
+		ref := c.ConnectorsMap[name]
+		u, err := ref.Resolved()
+		if err != nil || u.IsBuiltin() {
+			continue
+		}
+		where := "connectors." + name
+		if err := trustOK(where, ref.Trust); err != nil {
+			return err
+		}
+		if ref.Isolation != nil {
+			return isoErr(where)
+		}
+		if ref.Isolate {
+			continue
+		}
+		g := u.InstallKey() + "\x00" + u.String()
+		t := fmt.Sprint(ref.TrustFull())
+		if prev, ok := shared[g]; ok && prev != t {
+			return fmt.Errorf("config: connectors: %s and %s share one plugin process but only one sets trust: full — set it on both, or isolate: true one of them", sharedFrom[g], name)
+		}
+		shared[g], sharedFrom[g] = t, name
+	}
+	rnames := make([]string, 0, len(c.Runtimes))
+	for n := range c.Runtimes {
+		rnames = append(rnames, n)
+	}
+	sort.Strings(rnames)
+	for _, n := range rnames {
+		rt := c.Runtimes[n]
+		u, err := rt.Resolved()
+		if err != nil || u.IsBuiltin() {
+			continue
+		}
+		if err := trustOK("runtimes."+n, rt.Trust); err != nil {
+			return err
+		}
+		if rt.Isolation != nil {
+			return isoErr("runtimes." + n)
+		}
+	}
+	enames := make([]string, 0, len(c.Engines))
+	for n := range c.Engines {
+		enames = append(enames, n)
+	}
+	sort.Strings(enames)
+	for _, n := range enames {
+		if c.Engines[n].Isolation != nil {
+			return isoErr("engines." + n)
+		}
+	}
+	return nil
 }
 
 // checkIsolationMerge is the OFFLINE half of the isolation-merge check

@@ -6,6 +6,6 @@ import "fmt"
 
 // buildJail only ever runs inside a Linux mount namespace (RunEnter carries a
 // Binds allow-list solely when launched there).
-func buildJail([]BindMount, string, string) (func(), error) {
+func buildJail([]BindMount, string, string, string) (func(), error) {
 	return nil, fmt.Errorf("namespace filesystem jail runs inside Linux namespaces only")
 }
