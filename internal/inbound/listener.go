@@ -1,5 +1,5 @@
 // Package inbound is the shared plumbing for integrations that receive events
-// over HTTP or a smee.io channel (the generic webhook receiver, sentry, …). It
+// over HTTP (the generic webhook receiver, sentry, …). It
 // deliberately does NOT touch the github integration, which has its own copy of
 // this shape — this package is for the newer siblings.
 package inbound
