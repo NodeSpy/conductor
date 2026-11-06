@@ -155,7 +155,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 	qk := queuedFlowKey(t)
 	queuedAt := time.Now()
 	act, _ := t.Action.(config.Action)
-	caps := e.runCapsFor(act.FlowRef, spec)
+	caps := e.runCapsOf(t, act.FlowRef, spec)
 	e.queuedMu.Lock()
 	if e.queued == nil {
 		e.queued = map[string]core.Trigger{}
@@ -396,7 +396,7 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 
 	// Synchronous: the grouper's one-run-per-key guarantee depends on this
 	// call not returning until the run finishes.
-	caps := e.runCapsFor(ref, spec)
+	caps := e.runCapsOf(t, ref, spec)
 	if !e.acquireRunCaps(ctx, t, caps) {
 		return
 	}
@@ -529,13 +529,22 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 	e.log("%s resuming flow from step %d", tag(t), r.StepIndex)
 	e.store.Audit(map[string]any{"event": "resume", "repo": t.Target.Repo,
 		"number": t.Target.Number, "kind": t.Kind, "step_index": r.StepIndex})
+	caps := e.runCapsOf(t, act.FlowRef, spec)
+	// A run in flight when the daemon stopped still holds its serialization
+	// key: take it now, before the runs that were waiting on it are
+	// re-queued (ResumeWorkflows re-queues those last).
+	var held []runCap
+	if len(caps) > 0 && caps[0].serial != "" && e.tryAcquireCap(caps[0]) {
+		held, caps = caps[:1], caps[1:]
+	}
 	go func() {
 		// Wait for the slot here, not on the caller: resume runs at startup,
 		// and more persisted runs than slots must not stall it.
-		caps := e.runCapsFor(act.FlowRef, spec)
 		if !e.acquireRunCaps(ctx, t, caps) {
+			releaseRunCaps(held)
 			return
 		}
+		defer releaseRunCaps(held)
 		defer releaseRunCaps(caps)
 		if !e.acquireFor(ctx, t.Interactive()) {
 			return

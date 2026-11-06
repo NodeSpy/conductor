@@ -190,6 +190,20 @@ func GroupKey(spec string, t core.Trigger, data map[string]any) (string, error) 
 	return key, nil
 }
 
+// RenderKey renders a key template (a trigger's `serialize:` key) against a
+// run's data. A key that renders empty is an error: under missingkey=zero a
+// typo'd path renders "", and one key for every target is never meant.
+func RenderKey(spec string, data map[string]any) (string, error) {
+	key, err := render(spec, data)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(key) == "" {
+		return "", fmt.Errorf("key %q rendered empty — check the template path", spec)
+	}
+	return key, nil
+}
+
 // EventIdentity is the per-event group key (dedup signature, else trigger
 // key + title): the fallback that batches nothing across entities.
 func EventIdentity(t core.Trigger) string {

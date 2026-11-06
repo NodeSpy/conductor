@@ -112,6 +112,16 @@ workflows:
 			"{{.zilch}} is not available",
 		},
 		{
+			"serialize key out-of-scope ref",
+			"- on: svc.ping\n  serialize: {key: '{{.zilch}}'}\n  steps: [{uses: svc.post, options: {text: t}}]",
+			"{{.zilch}} is not available",
+		},
+		{
+			"serialize key in scope",
+			"- on: svc.ping\n  serialize: {key: '{{.repo}}#{{.number}}'}\n  steps: [{uses: svc.post, options: {text: t}}]",
+			"",
+		},
+		{
 			"fail hook error ref OK at fail but not at done",
 			"- on: svc.ping\n  hooks: [{at: done, uses: svc.post, options: {text: '{{.error}}'}}]\n  steps: [{uses: svc.post, options: {text: t}}]",
 			"{{.error}} is not available",

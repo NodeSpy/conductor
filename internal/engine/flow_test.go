@@ -248,9 +248,44 @@ func (gateConnImpl) Source([]connector.CompiledTrigger) (core.Integration, error
 }
 func (gateConnImpl) Invoke(_ context.Context, verb string, opts map[string]any) (map[string]any, error) {
 	gateConnMu.Lock()
-	defer gateConnMu.Unlock()
 	gateConnCalls = append(gateConnCalls, opts)
+	block := gateBlock
+	gateConnMu.Unlock()
+	// A post of "block" stands for a long step: it waits for the test.
+	if text, _ := opts["text"].(string); text == "block" && block != nil {
+		<-block
+	}
 	return map[string]any{"ok": true}, nil
+}
+
+// gateBlock, when set, holds every post of "block" until it is closed.
+var gateBlock chan struct{}
+
+func setGateBlock(t *testing.T) chan struct{} {
+	t.Helper()
+	ch := make(chan struct{})
+	gateConnMu.Lock()
+	gateBlock = ch
+	gateConnMu.Unlock()
+	t.Cleanup(func() {
+		gateConnMu.Lock()
+		gateBlock = nil
+		gateConnMu.Unlock()
+	})
+	return ch
+}
+
+// gateCallsWith counts the posts of text.
+func gateCallsWith(text string) int {
+	gateConnMu.Lock()
+	defer gateConnMu.Unlock()
+	n := 0
+	for _, c := range gateConnCalls {
+		if c["text"] == text {
+			n++
+		}
+	}
+	return n
 }
 
 func registerGateConn() {

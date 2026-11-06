@@ -62,3 +62,33 @@ facts); the whole burst is under `{{.group.*}}`:
 Code steps see the same under `ctx.group`.
 
 Related: [[Configuration]] · [[Policy]] · [[Workflows]]
+
+## Serializing runs across triggers
+
+`group:` batches one trigger's events. To keep the runs of *different* triggers
+apart, give them the same `serialize:` key:
+
+```yaml
+triggers:
+  - on: gh.changes_requested
+    serialize: { key: "{{.repo}}#{{.pr}}" }
+    steps: [...]
+  - on: gh.new_comment
+    serialize: { key: "{{.repo}}#{{.pr}}" }
+    steps: [...]
+```
+
+The key is a template over the run's data, like `group.key`. While a run holding
+a rendered key is in flight, a run of any trigger whose key renders the same
+waits, first in first out, and then runs. The wait is logged as
+`waiting on <key> (held by <trigger>)`. Runs with different keys never wait on
+each other. A trigger's own repeat event, while its run is waiting, folds into
+that wait and the newest event is kept. Nothing is dropped. A run still waiting
+when the daemon stops is re-queued at the next start, after the run that held
+the key has resumed. The key is taken before `policy.concurrency.max_runs` and
+the agent slot (`max_agents`).
+
+A pack trigger's key ships with the pack. The operator replaces it in the
+trigger's arm (`packs: <inst>: triggers: <name>: serialize: { key: … }`), or
+turns it off with `serialize: { key: "" }`. A key that renders empty is logged
+once and serializes nothing.

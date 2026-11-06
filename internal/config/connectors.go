@@ -761,6 +761,11 @@ type TriggerSpec struct {
 	// Gate is the default quality gate (#36 §16) for every agent step of
 	// this trigger that doesn't carry its own.
 	Gate *GateSpec `yaml:"gate,omitempty"`
+	// Serialize names a key (a template over the event, e.g. one per
+	// target) that this trigger's runs share with every other trigger
+	// declaring the same rendered key: one run holding it at a time, the
+	// rest waiting in arrival order (see SerializeSpec).
+	Serialize *SerializeSpec `yaml:"serialize,omitempty"`
 	// Isolation is the default isolation: for every agent step of this
 	// trigger (and the workflows it calls) that doesn't carry its own —
 	// `{mode: none}` is the operator's explicit opt-out of the agent sandbox
@@ -1378,6 +1383,18 @@ type WaitSpec struct {
 	Every Duration `yaml:"every,omitempty"`
 	// Timeout bounds the whole wait. Required, positive.
 	Timeout Duration `yaml:"timeout"`
+}
+
+// SerializeSpec is a trigger's `serialize:` block. While a run holding key K
+// is in flight, a run of any trigger whose key renders to K waits, first in
+// first out, then runs. A waiting run of a trigger already waiting on its
+// target coalesces into that wait, keeping the newest event. A waiting run
+// is kept across a restart. An empty key turns serialization off (an
+// operator's override of a pack's).
+type SerializeSpec struct {
+	// Key is a template over the run's data ({{.repo}}, {{.pr}}, the
+	// event's facts).
+	Key string `yaml:"key"`
 }
 
 // GateSpec configures one quality gate (#36 §16): which checks run against

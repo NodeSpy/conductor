@@ -1161,6 +1161,8 @@ triggers:
   - on: gh.new_comment
     filter: { not_comment_author: ["ci-bot"] }
     group: { key: "{{.repo}}#{{.pr}}", window: 15s }
+    # serialize: { key: "{{.repo}}#{{.pr}}" }   # one run at a time per key, across every trigger
+    #                                          #   declaring it; the rest wait FIFO (wiki: Grouping)
     steps:
       - id: handle
         type: agent
