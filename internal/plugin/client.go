@@ -1302,6 +1302,8 @@ func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 		return nil, nil, err
 	}
 	switch {
+	case sandboxed && s.Probe:
+		d.Log("plugin %s: describing it from an empty jail", s.Name)
 	case sandboxed:
 		d.Log("plugin %s: jailed to what it declares: %s", s.Name, s.Manifest.Summary())
 	case s.TrustFull:
