@@ -245,6 +245,23 @@ the agent id) and **acp** (follow-ups via `session/prompt`; resume via
 don't participate — a `session:` on them silently stays fresh-per-event and
 leans on [[Memory]] for continuity.
 
+### Resuming an agent step after a restart
+
+An agent step interrupted by a conductor restart or reload gets its agent back
+in the same workspace (see [[Workflows]]). How each runtime continues it:
+
+| Runtime | What a restart resumes |
+|---|---|
+| `paseo` | The agent keeps running in the paseo daemon. Conductor labels it at launch (`conductor-session=<id>`), finds it again with `paseo ls`, waits for its interrupted turn, then sends it the restart note (`paseo send`). The run workspace or worktree it works in is kept. |
+| `cli` | `claude-code`: the session is named up front (`--session-id`) and resumed with `--resume`. Other recipes start a fresh agent. |
+| `acp` | When the agent advertises `loadSession`: `session/load` of the same session in the kept workspace, then the restart note as the next turn. Without it, a fresh agent. |
+| `opencode` | The same session by id, on a server rooted at the kept workspace. |
+| `agent-deck` | The session keeps running in agent-deck, and the restart note is sent to it (`session send`). |
+
+When the agent or session is gone, or the resume fails, the step starts a fresh
+agent in the kept workspace and tells it that an earlier agent's work is there.
+If the workspace is gone too, the agent starts fresh in a new one.
+
 A runtime conductor launches itself (acp / cli / opencode / agent-deck) may
 carry an `isolation:` block — per-dispatch sandboxing and the network egress
 allowlist for every launch it performs; a step's own `isolation:` wins.

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/store"
 )
@@ -131,7 +132,7 @@ steps:
 		rig := newTestRunner(t, cfg, reg)
 		st := newAgentStore(rig.Store)
 		rig.Runner.Store = st
-		_ = st.PutRunAgent("run1", "fix", store.RunAgent{Runtime: "rt", SessionID: "old", Workspace: "/kept", CanResume: true, Resumes: tc.resumes})
+		_ = st.PutRunAgent("run1", "fix", store.RunAgent{Runtime: config.BuiltinPaseoRuntime, SessionID: "old", Workspace: "/kept", CanResume: true, Resumes: tc.resumes})
 		var seen *dispatch.AgentSession
 		var counted int
 		rig.Agents.dispatchFunc = func(_ context.Context, req dispatch.Request) (dispatch.RunRef, error) {
@@ -186,6 +187,46 @@ steps:
 		}
 		if kept && (a.SessionID != "sess-fixer" || a.Workspace != "/wt" || !a.CanResume) {
 			t.Fatalf("kept record = %+v", a)
+		}
+	}
+}
+
+// A runtime that does not name itself in what it reports is recorded under the
+// step's runtime; a step that has since moved to another runtime never gets
+// its old agent back.
+func TestAgentStepRecordCarriesItsRuntime(t *testing.T) {
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
+	reg := buildRegistry(t, cfg)
+	_ = newFakeState(t, "svc")
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: fix, type: agent, name: fixer, prompt: p, model: x }
+`)
+	for _, prior := range []string{config.BuiltinPaseoRuntime, "elsewhere"} {
+		rig := newTestRunner(t, cfg, reg)
+		st := newAgentStore(rig.Store)
+		rig.Runner.Store = st
+		_ = st.PutRunAgent("run1", "fix", store.RunAgent{Runtime: prior, SessionID: "old", CanResume: true})
+		var seen *dispatch.AgentSession
+		var recorded store.RunAgent
+		ctx, cancel := context.WithCancel(context.Background())
+		rig.Agents.dispatchFunc = func(c context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+			seen = req.Resume
+			req.OnAgentStart(dispatch.AgentStart{AgentSession: dispatch.AgentSession{SessionID: "new", CanResume: true}})
+			recorded, _ = st.RunAgent("run1", "fix")
+			cancel()
+			return dispatch.RunRef{}, c.Err()
+		}
+		run := emptyRun()
+		run.ID = "run1"
+		rig.Runner.Run(ctx, run, newTrigger("ping", nil), spec, rig.Runner.IndexOf(spec), nil, false)
+		cancel()
+		if moved := prior != config.BuiltinPaseoRuntime; (seen == nil) != moved {
+			t.Fatalf("prior runtime %q: Resume = %+v", prior, seen)
+		}
+		if recorded.Runtime != config.BuiltinPaseoRuntime || recorded.SessionID != "new" {
+			t.Fatalf("prior runtime %q: recorded %+v, want it under the step's runtime", prior, recorded)
 		}
 	}
 }

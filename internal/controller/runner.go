@@ -37,6 +37,7 @@ type WorkspaceAdopter interface {
 // Assert the concrete dispatcher satisfies Provisioner, so a signature drift fails
 // the build here rather than at a call site.
 var _ Provisioner = (*dispatch.Dispatcher)(nil)
+var _ WorkspaceAdopter = (*dispatch.Dispatcher)(nil)
 
 // hostedController is an optional Controller capability: report the
 // configured `host:` ("" = launches are local). Used to decide whether the

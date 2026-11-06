@@ -243,7 +243,15 @@ func (c *failNewCtl) NewSession(context.Context, Spec, Handler) (Session, error)
 // ---- the cli runtime ---------------------------------------------------------
 
 func TestCLIClaudeNamesSessionForTrackedStep(t *testing.T) {
-	l := &fakeLauncher{out: func([]string) (string, error) { return `{"session_id":"x","result":"ok"}`, nil }}
+	// The tool reports the session it was named, as claude does — whether
+	// or not its turn has ended by the time ResumeID is read.
+	l := &fakeLauncher{out: func(argv []string) (string, error) {
+		sid := "x"
+		if i := argIndex(argv, "--session-id"); i >= 0 && i+1 < len(argv) {
+			sid = argv[i+1]
+		}
+		return `{"session_id":"` + sid + `","result":"ok"}`, nil
+	}}
 	c := newCLIController("cc", config.ControllerConfig{Transport: "cli", Tool: "claude-code"}, nil)
 	c.launch = l.launch
 	if !c.CanResumeStep() {

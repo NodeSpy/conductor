@@ -56,12 +56,20 @@ func (r *Runner) agentResume(ctx context.Context, t core.Trigger, id string, req
 		return func() {}
 	}
 	key := agentKey(ctx, id)
+	// The runtime the step runs on: a runtime that does not name itself in
+	// what it reports is recorded under it, and a step that moved to another
+	// runtime since never takes its old agent back.
+	runtime := r.runtimeOf(req.Step)
 	resumes := 0
 	if prior, found := st.RunAgent(runID, key); found {
-		if prior.Resumes >= MaxAgentResumes {
+		switch {
+		case prior.Resumes >= MaxAgentResumes:
 			r.Log("%s step %s: its agent was resumed %d times without finishing — starting a fresh agent", flowTag(t), id, prior.Resumes)
 			_ = st.DeleteRunAgent(runID, key)
-		} else {
+		case prior.Runtime != "" && prior.Runtime != runtime:
+			r.Log("%s resume unavailable: the step now runs on runtime %q, not %q, fresh agent (step %s)", flowTag(t), runtime, prior.Runtime, id)
+			_ = st.DeleteRunAgent(runID, key)
+		default:
 			resumes = prior.Resumes + 1
 			prior.Resumes = resumes
 			_ = st.PutRunAgent(runID, key, prior)
@@ -78,6 +86,9 @@ func (r *Runner) agentResume(ctx context.Context, t core.Trigger, id string, req
 			r.Log("%s resume unavailable: %s, fresh agent in kept workspace (step %s)", flowTag(t), s.Fallback, id)
 		case asked:
 			r.Log("%s resume unavailable: %s, fresh agent (step %s)", flowTag(t), s.Fallback, id)
+		}
+		if s.Runtime == "" {
+			s.Runtime = runtime
 		}
 		_ = st.PutRunAgent(runID, key, store.RunAgent{Runtime: s.Runtime, SessionID: s.SessionID,
 			Workspace: s.Workspace, Cwd: s.Cwd, CanResume: s.CanResume, Resumes: resumes, Started: time.Now()})

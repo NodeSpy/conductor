@@ -138,6 +138,40 @@ func (c *agentDeckController) NewSession(ctx context.Context, spec Spec, _ Handl
 	return &agentDeckSession{id: id, c: c, env: env, host: host, opt: opt}, nil
 }
 
+// CanResumeStep: an agent-deck session lives in agent-deck, so a conductor
+// restart leaves it running; an interrupted step's session is sent the next
+// turn (StepResumer).
+func (c *agentDeckController) CanResumeStep() bool { return true }
+
+// ResumeStep sends spec's prompt to session id as its next turn, when
+// agent-deck still has it; when it does not, conductor starts a fresh one.
+func (c *agentDeckController) ResumeStep(ctx context.Context, spec Spec, id string, _ Handler) (Session, error) {
+	if id == "" {
+		return nil, ErrNoFollowup
+	}
+	env, err := dispatch.AgentEnv(spec.Request)
+	if err != nil {
+		return nil, fmt.Errorf("agent-deck: build env: %w", err)
+	}
+	prompt, err := dispatch.RenderPrompt(spec.Request)
+	if err != nil {
+		return nil, fmt.Errorf("agent-deck: render prompt: %w", err)
+	}
+	s := &agentDeckSession{id: id, c: c, env: env, host: resolveHost(c.host, spec.Request.Step.Host), opt: launchOptsFor(c.iso, spec.Request)}
+	if c.deckSandboxed(s.host, s.opt) {
+		// As launched: agent-deck holds no credential, and the session's
+		// workspace registration is released with it.
+		s.env, s.host, s.workspace = nonCredentialEnv(env), "", spec.Cwd
+	}
+	if _, err := c.exec(ctx, s.host, "", s.env, s.opt, "session", "show", id, "--json"); err != nil {
+		return nil, fmt.Errorf("agent-deck: session %s: %w", id, err)
+	}
+	if _, err := c.exec(ctx, s.host, "", s.env, s.opt, "session", "send", id, prompt); err != nil {
+		return nil, fmt.Errorf("agent-deck: session send %s: %w", id, err)
+	}
+	return s, nil
+}
+
 // ResumeSession binds an existing agent-deck session by id (native lifecycle).
 func (c *agentDeckController) ResumeSession(_ context.Context, id string, agentAuthored bool, _ Handler) (Session, error) {
 	return &agentDeckSession{id: id, c: c, host: c.host, opt: resumeOpts(c.iso, agentAuthored)}, nil
@@ -258,6 +292,9 @@ type agentDeckSession struct {
 }
 
 func (s *agentDeckSession) ID() string { return s.id }
+
+// ResumeID is the agent-deck session id (ResumableSession).
+func (s *agentDeckSession) ResumeID() string { return s.id }
 
 // Prompt delivers a follow-up turn (`session send`) and returns a terminal update.
 func (s *agentDeckSession) Prompt(ctx context.Context, msg Message) (<-chan Update, error) {

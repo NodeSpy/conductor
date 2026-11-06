@@ -53,6 +53,21 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	if err := checkPromptSize(prompt); err != nil {
 		return RunRef{}, err
 	}
+	// A step whose agent is recorded for a restart (resume.go): an agent the
+	// step had running before the restart is continued; failing that, the
+	// fresh agent starts in the kept workspace, told about the restart.
+	track := req.OnAgentStart != nil && !d.DryRun && !req.Shadow
+	var kept paseoKept
+	if track && req.Resume != nil {
+		ref, handled, k, err := d.resumeStepAgent(ctx, req)
+		if handled {
+			return ref, err
+		}
+		kept = k
+		if kept.kept {
+			prompt = RestartNote + prompt
+		}
+	}
 
 	sandboxed, optedOut := paseoSandboxDecision(req, d.remote())
 	argv := []string{"run", prompt,
@@ -119,7 +134,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// onto (or adopts) the trigger's PR agent — that agent works elsewhere.
 	// A bot session never queues onto another agent: its binding (and the
 	// one-cwd-per-agent rule) is the whole point of launching it.
-	if !req.Interactive && !d.DryRun && !req.Shadow && len(req.Action.OutputSchema) == 0 && !repoOverride && req.Step.BoundBot == "" {
+	// A step re-dispatched after a restart is that step's own agent again,
+	// never a turn queued onto another one.
+	if !req.Interactive && !d.DryRun && !req.Shadow && len(req.Action.OutputSchema) == 0 && !repoOverride && req.Step.BoundBot == "" && req.Resume == nil {
 		if ref, handled, err := d.queueOrAdopt(ctx, req, prompt); handled || err != nil {
 			return ref, err
 		}
@@ -141,6 +158,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			return RunRef{}, err
 		}
 		cwd = expandTilde(wd)
+	} else if (strat == "checkout-pr" || strat == "branch-off") && kept.ws != "" {
+		// The step's kept worktree, from before the restart.
+		worktreeWS, worktreeCwd = kept.ws, kept.cwd
 	} else if strat == "checkout-pr" || strat == "branch-off" {
 		// The default resolver may clone (a side effect) and needs a live daemon,
 		// so skip it during a preview. An injected resolver is pure — always use it.
@@ -215,6 +235,10 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		switch pin := pinnedWorkspace(req); {
 		case pin != "":
 			argv = append(argv, "--workspace", pin)
+		case cwd == "" && kept.ws != "":
+			// The step's kept run workspace, from before the restart.
+			argv = append(argv, "--workspace", kept.ws)
+			runWS, runDir = kept.ws, kept.cwd
 		case cwd == "" && (d.RunWorkspace != nil || (!d.DryRun && !req.Shadow)):
 			// The built-in resolver creates a workspace and needs a live daemon, so
 			// skip it during a preview; an injected resolver is pure. A preview
@@ -329,6 +353,27 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		}
 	}
 
+	if track {
+		// Name the agent now: its id is known only when its turn ends, and a
+		// restart before then must still find it (paseo_resume.go).
+		token, err := newStepSessionToken()
+		if err != nil {
+			return ref, fmt.Errorf("step session token: %w", err)
+		}
+		argv = append(argv, "--label", stepSessionLabel+"="+token)
+		st := AgentStart{AgentSession: AgentSession{SessionID: token, CanResume: true},
+			KeptWorkspace: kept.kept && (kept.ws == "" || kept.ws == worktreeWS || kept.ws == runWS), Fallback: kept.fallback}
+		switch {
+		case worktreeWS != "":
+			st.Workspace, st.Cwd = worktreeWS, worktreeCwd
+		case runWS != "":
+			st.Workspace, st.Cwd = runWS, runDir
+		default:
+			st.Cwd = ref.Workdir
+		}
+		req.OnAgentStart(st)
+	}
+
 	// Run (with bounded retries on transient git-lock/timeout failures — common
 	// when a sweep fans out worktree creations onto one shared repo) via the
 	// configured Backend — cliBackend by default, shelling to `paseo run`.
@@ -353,7 +398,13 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		// here. A worktree is NOT: createWorktree may have adopted an existing
 		// one (which could hold another live agent), and conductor can't tell
 		// created from adopted, so that one is the runtime's concern.
-		d.reclaimRunWorkspace(ctx, runWS, runDir)
+		//
+		// A launch cut short by a shutdown is not a failed one: the agent
+		// may be working in that workspace still, and the step's record
+		// takes both back after the restart.
+		if !(track && ctx.Err() != nil) {
+			d.reclaimRunWorkspace(ctx, runWS, runDir)
+		}
 		return ref, err
 	}
 	ref.AgentID = res.AgentID

@@ -363,9 +363,10 @@ An interrupted **agent** step picks its agent back up instead of starting
 over. When the agent starts, the run records its runtime's session id and the
 workspace it works in; that workspace (uncommitted changes included) is kept
 while the run can resume. On restart the step goes back into the same
-workspace and, on a runtime that can resume sessions (the cli `claude-code`
-recipe), continues the same session with a short note that conductor
-restarted. A runtime that can't resume, or a resume that fails, gets a fresh
+workspace and continues the same agent session with a short note that
+conductor restarted. paseo, acp (with `loadSession`), opencode, agent-deck and
+the cli `claude-code` recipe resume; see [Runtimes](Runtimes#resuming-an-agent-step-after-a-restart)
+for how each does it. A runtime that can't resume, or a resume that fails, gets a fresh
 agent in the kept workspace, told that an earlier agent's work is there. After
 3 resumes without the step finishing, it starts fresh. This holds for agent
 steps inside called workflows, parallel branches and `for_each` items too.

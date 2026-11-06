@@ -39,6 +39,8 @@ type acpController struct {
 
 	mu    sync.Mutex
 	model SessionModel // cached negotiated model (native until an Initialize proves loadSession)
+	// negotiated: model is what the agent itself advertised, not the default.
+	negotiated bool
 	// cwds remembers each session's worktree, so session/load can re-root
 	// the agent where the session was working. ResumeSession is handed
 	// only an id — the Controller interface carries no Spec there.
@@ -137,7 +139,7 @@ func (c *acpController) Initialize(ctx context.Context) (Capabilities, error) {
 		model = ModelResumable
 	}
 	c.mu.Lock()
-	c.model = model
+	c.model, c.negotiated = model, true
 	c.mu.Unlock()
 
 	return Capabilities{
@@ -162,6 +164,33 @@ func (c *acpController) Runner() (Runner, error) {
 // can wait on completion). h receives the agent's permission requests; nil applies
 // the auto-approve policy.
 func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (Session, error) {
+	return c.launch(ctx, spec, h, "")
+}
+
+// CanResumeStep: the agent advertised loadSession, so an interrupted step's
+// session is loaded back after a restart (StepResumer). Before this process
+// has heard from the agent, the session recorded as resumable is tried:
+// ResumeStep checks the capability itself.
+func (c *acpController) CanResumeStep() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.model == ModelResumable || !c.negotiated
+}
+
+// ResumeStep launches the agent in the step's kept workspace and loads session
+// id (session/load) — the agent replays it and carries on with spec's prompt
+// as the next turn. An agent that cannot load it fails here, and conductor
+// starts a fresh one instead.
+func (c *acpController) ResumeStep(ctx context.Context, spec Spec, id string, h Handler) (Session, error) {
+	if id == "" {
+		return nil, ErrNoFollowup
+	}
+	return c.launch(ctx, spec, h, id)
+}
+
+// launch starts the agent for spec and opens its session — a new one, or
+// (resume != "") session/load of that one — then starts spec's prompt turn.
+func (c *acpController) launch(ctx context.Context, spec Spec, h Handler, resume string) (Session, error) {
 	env, err := dispatch.AgentEnv(spec.Request)
 	if err != nil {
 		return nil, fmt.Errorf("acp: build env: %w", err)
@@ -186,32 +215,64 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 		return nil, err
 	}
 
-	if _, err := client.Initialize(sctx, acp.DefaultInitializeParams(acp.Implementation{
+	init, err := client.Initialize(sctx, acp.DefaultInitializeParams(acp.Implementation{
 		Name: "conductor", Title: "Conductor",
-	})); err != nil {
+	}))
+	if err != nil {
 		cleanup()
 		scancel()
 		return nil, fmt.Errorf("acp: initialize: %w", err)
 	}
-	res, err := client.NewSession(sctx, acp.NewSessionParams{
-		Cwd:        spec.Cwd,
-		McpServers: c.memoryServers(spec),
-		// The RESOLVED model. Empty is a bare launch — the field is
-		// omitted and the agent picks its own. Dropping it here meant an
-		// exact `model:` pin silently ran whatever the tool defaulted to.
-		Model: spec.Request.Model,
-	})
-	if err != nil {
-		cleanup()
-		scancel()
-		return nil, fmt.Errorf("acp: session/new: %w", err)
+	// What this agent negotiates now is what a restart can count on
+	// (CanResumeStep), whether or not Initialize ever ran.
+	c.mu.Lock()
+	if init.AgentCapabilities.LoadSession {
+		c.model = ModelResumable
+	} else {
+		c.model = ModelNative
+	}
+	c.negotiated = true
+	c.mu.Unlock()
+	id := resume
+	if resume != "" {
+		if !init.AgentCapabilities.LoadSession {
+			cleanup()
+			scancel()
+			return nil, fmt.Errorf("acp: %s does not support session/load: %w", c.name, ErrNoFollowup)
+		}
+		// The agent replays the session's history as updates here, before
+		// the turn below opens its output buffer.
+		if err := client.LoadSession(sctx, acp.LoadSessionParams{
+			SessionID:  resume,
+			Cwd:        spec.Cwd,
+			McpServers: c.memoryServers(spec),
+		}); err != nil {
+			cleanup()
+			scancel()
+			return nil, fmt.Errorf("acp: session/load %s: %w", resume, err)
+		}
+	} else {
+		res, err := client.NewSession(sctx, acp.NewSessionParams{
+			Cwd:        spec.Cwd,
+			McpServers: c.memoryServers(spec),
+			// The RESOLVED model. Empty is a bare launch — the field is
+			// omitted and the agent picks its own. Dropping it here meant an
+			// exact `model:` pin silently ran whatever the tool defaulted to.
+			Model: spec.Request.Model,
+		})
+		if err != nil {
+			cleanup()
+			scancel()
+			return nil, fmt.Errorf("acp: session/new: %w", err)
+		}
+		id = res.SessionID
 	}
 
 	// Remember where this session lives, so session/load can re-root the
 	// agent in the same worktree on resume.
-	c.rememberCwd(res.SessionID, spec.Cwd)
+	c.rememberCwd(id, spec.Cwd)
 	s := &acpSession{
-		id:      res.SessionID,
+		id:      id,
 		client:  client,
 		del:     del,
 		cleanup: cleanup,
@@ -414,6 +475,10 @@ type acpSession struct {
 }
 
 func (s *acpSession) ID() string { return s.id }
+
+// ResumeID is the ACP session id, which session/load takes back
+// (ResumableSession).
+func (s *acpSession) ResumeID() string { return s.id }
 
 // Prompt runs a follow-up turn and returns its update stream.
 func (s *acpSession) Prompt(_ context.Context, msg Message) (<-chan Update, error) {
