@@ -34,6 +34,14 @@ it loads the config:
   out. A `webhook` connector's deliveries arrive on its relay path (`path:`,
   default `/`) and are offered to every source, each checking its own
   signature, as the channel did.
+- The smee connector made for a `webhook` connector also gets
+  `trust: full` and `isolate: true`, with a comment saying why. The relay it
+  replaces ran inside conductor, with conductor's trust, and the `webhook`
+  connector's listener is one of conductor's own ports, which a jailed
+  plugin never reaches. With `isolate: true`, that unjailed process serves
+  only this connector. A github connector's smee connector stays jailed:
+  github's listener is the plugin's, and smee reaches it through
+  `expose_local`.
 - The `smee` plugin is installed **first** (the boot gap-fill, bounded to 2
   minutes). If it can't be fetched, nothing is rewritten and the daemon
   starts on the config as it is; the next boot tries again.
@@ -71,16 +79,15 @@ combination keeps working:
 4. A later `github` major removes `webhook.smee_url`, once this release is
    the oldest conductor in use.
 
-**Under the plugin jail.** The smee connector runs jailed like every
-plugin. It may connect to the listeners its `expose:` wiring names, and to
-nothing else on the machine. The bundled `webhook` connector's listener is
-conductor's own port, which a jailed plugin is never granted: for a
-rewritten `webhook` connector, set `trust: full` on its `<name>-smee`
-connector, with `isolate: true` when another smee connector shares the
-plugin's process (the old built-in relay ran inside conductor, unjailed,
-too); otherwise the log names the delivery it refused. A box that already had an older smee
-installed holds the update to v1.2.0 until `conductor plugin approve`,
-because it asks for `expose_local`.
+**Under the plugin jail.** A smee connector runs jailed like every plugin.
+It may connect to the listeners its `expose:` wiring names, and to nothing
+else on the machine. That is why the rewrite unjails only the smee connector
+made for the bundled `webhook` connector (above). Remove its `trust: full`
+and it is refused conductor's own port, and the log names the delivery it
+refused. A smee connector you configure yourself for a `webhook` connector
+needs the same two keys. A box that already had an older smee installed
+holds the update to v1.2.0 until `conductor plugin approve`, because it
+asks for `expose_local`.
 
 **Rolling back** to an older conductor after the rewrite: github deliveries
 keep flowing (the older conductor already runs the smee connector and the

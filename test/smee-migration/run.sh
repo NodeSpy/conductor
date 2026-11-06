@@ -10,9 +10,10 @@
 # fire a `gh.new_comment` trigger, and a delivery posted to the webhook
 # channel a `hooks.<source>` trigger. The new conductor runs the plugins in
 # their jail: there, the smee relay reaches github's listener (expose_local)
-# but never the bundled webhook connector's, conductor's own port, unless
-# its smee connector is `trust: full` — each row says which deliveries must
-# arrive and which must be refused, and logged. The rows that run the new
+# but never the bundled webhook connector's, conductor's own port — so the
+# migration makes that one's smee connector `trust: full` + `isolate: true`,
+# the trust the relay had inside conductor. Each row says which deliveries
+# must arrive and which must be refused, and logged. The rows that run the new
 # conductor must also have rewritten the config (backup beside it), and a
 # second boot must leave it alone.
 #
@@ -209,7 +210,7 @@ jailed() {
 OWN_PORT="its listener 127.0.0.1:[0-9]* is conductor's own port"
 NO_CAP="does not declare expose_local"
 
-# row <name> <conductor> <github> <smee> <migrates: yes|no> <gh: yes|refused> <hooks: yes|refused> [subscribes: yes|no]
+# row <name> <conductor> <github> <smee> <migrates: yes|no> <gh: yes|refused> <hooks: yes|refused> [github channel subscribed: yes|no]
 row() {
   local name=$1 cond=$2 gh=$3 smee=$4 migrates=$5 ghx=$6 hooksx=$7 subs=${8:-yes}
   local d="$WORK/$name"
@@ -222,10 +223,8 @@ row() {
 
   if [ "$subs" = yes ]; then
     if wait_for 60 subscribed "$name-gh"; then pass "$name: the github channel has a subscriber"; else fail "$name: nobody subscribed to the github channel"; fi
-    if wait_for 30 subscribed "$name-hooks"; then pass "$name: the webhook channel has a subscriber"; else fail "$name: nobody subscribed to the webhook channel"; fi
-  else
-    sleep 10
   fi
+  if wait_for 60 subscribed "$name-hooks"; then pass "$name: the webhook channel has a subscriber"; else fail "$name: nobody subscribed to the webhook channel"; fi
   sleep 1 # the listener the relay posts to is up by the time the relay subscribed; give it a beat anyway
   if [ "$cond" = "$CONDUCTOR_NEW" ]; then jailed "$name" github; jailed "$name" smee; fi
 
@@ -236,11 +235,21 @@ row() {
 
   local now; now=$(cat "$d/cfg/conductor.yaml")
   if [ "$migrates" = yes ]; then
-    if grep -q "smee_url" <<<"$now"; then fail "$name: smee_url still in the config"; else pass "$name: the config was rewritten"; fi
+    if grep -v '^ *#' <<<"$now" | grep -q "smee_url"; then fail "$name: smee_url still in the config"; else pass "$name: the config was rewritten"; fi
     if grep -q "use: smee" <<<"$now" && grep -q "channel: \${HOOKS_SMEE_URL}" <<<"$now" && grep -q "secret: \${GH_WEBHOOK_SECRET}" <<<"$now"; then
       pass "$name: smee connectors on the same channels, secrets still references"
     else
       fail "$name: rewrite content"; echo "$now"
+    fi
+    # The bundled webhook connector's smee connector is unjailed and isolated,
+    # with the reason; github's is not.
+    if awk '/^  hooks-smee:/{h=1;next} /^  [^ ]/{h=0} h' <<<"$now" | grep -q "trust: full" &&
+      awk '/^  hooks-smee:/{h=1;next} /^  [^ ]/{h=0} h' <<<"$now" | grep -q "isolate: true" &&
+      awk '/^  hooks-smee:/{h=1;next} /^  [^ ]/{h=0} h' <<<"$now" | grep -q "# trust/isolate: " &&
+      ! awk '/^  gh-smee:/{h=1;next} /^  [^ ]/{h=0} h' <<<"$now" | grep -q "trust"; then
+      pass "$name: the webhook connector's smee connector is trust: full + isolate: true, with the reason; github's stays jailed"
+    else
+      fail "$name: trust on the generated smee connectors"; echo "$now"
     fi
     if [ "$(cat "$d/cfg/conductor.yaml.pre-smee" 2>/dev/null)" = "$orig" ]; then pass "$name: backup holds the original"; else fail "$name: no faithful backup"; fi
     grep -q "config migrate: rewrote" "$WORK/$name/daemon.log" && pass "$name: the rewrite is logged" || fail "$name: the rewrite is not logged"
@@ -268,38 +277,40 @@ row() {
 }
 
 # The fleet, one row per combination it passes through. The new conductor
-# runs every plugin jailed: smee may deliver to github's listener (the
-# listener its expose: wiring names, granted through expose_local), never to
-# the bundled webhook connector's, which is conductor's own port.
+# runs github and gh-smee jailed: smee delivers to github's listener (the
+# listener its expose: wiring names, granted through expose_local). The
+# migration made hooks-smee trust: full + isolate: true, so the bundled
+# webhook connector keeps receiving too.
 row old-cond.old-gh   "$CONDUCTOR_OLD" "$GITHUB_OLD" "$SMEE_OLD" no  yes yes
 row old-cond.new-gh   "$CONDUCTOR_OLD" "$GITHUB_NEW" "$SMEE_OLD" no  yes yes
-row new-cond.old-gh   "$CONDUCTOR_NEW" "$GITHUB_OLD" "$SMEE_NEW" yes yes refused
-row new-cond.new-gh   "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_NEW" yes yes refused
-# An smee build from before expose_local, jailed: it cannot reach the
-# listener, and the log says what to do. (Its egress names smee.io only, so
-# the fake channel's host is outside its jail too and it never subscribes
-# here; on a real smee.io channel it subscribes, and the relay is refused
-# the same way.)
-row new-cond.old-smee "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_OLD" yes refused refused no
+row new-cond.old-gh   "$CONDUCTOR_NEW" "$GITHUB_OLD" "$SMEE_NEW" yes yes yes
+row new-cond.new-gh   "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_NEW" yes yes yes
+# An smee build from before expose_local, jailed (gh-smee): it cannot reach
+# github's listener, and the log says what to do. (Its egress names smee.io
+# only, so the fake channel's host is outside its jail too and it never
+# subscribes here; on a real smee.io channel it subscribes, and the relay is
+# refused the same way.) hooks-smee is unjailed, so it delivers.
+row new-cond.old-smee "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_OLD" yes refused yes no
 
-# The operator's opt-out for the bundled webhook connector: trust: full on
-# its smee connector, isolated from gh-smee's jailed process (the old relay
-# ran inside conductor, unjailed, too).
-say "new-cond.webhook-trust-full"
-d="$WORK/new-cond.webhook-trust-full"
+# The migrated bundled-webhook relay with its trust taken off by hand: jailed,
+# it is refused conductor's own port, and the log names the fix.
+say "new-cond.webhook-jailed-by-hand"
+d="$WORK/new-cond.webhook-jailed-by-hand"
 mkdir -p "$d/state"
 cp -r "$WORK/new-cond.new-gh/cfg" "$d/cfg"
 rm -f "$d/cfg/conductor.yaml.pre-smee"
-sed -i "s#/new-cond.new-gh-gh#/trustfull-gh#; s#/new-cond.new-gh/#/trustfull/#g; s#new-cond.new-gh-hooks#trustfull-hooks#" "$d/cfg/conductor.yaml" "$d/cfg/conductor.env"
-sed -i 's#^  hooks-smee:$#  hooks-smee:\n    trust: full\n    isolate: true#' "$d/cfg/conductor.yaml"
+sed -i "s#/new-cond.new-gh-gh#/byhand-gh#; s#/new-cond.new-gh/#/byhand/#g; s#new-cond.new-gh-hooks#byhand-hooks#" "$d/cfg/conductor.yaml" "$d/cfg/conductor.env"
+sed -i '/^    # trust\/isolate: /d; /^    trust: full$/d; /^    isolate: true$/d' "$d/cfg/conductor.yaml"
 "$BIN/seed" -state "$d/state" "github=$GITHUB_NEW" "smee=$SMEE_NEW" >"$d/seed.log" 2>&1
 boot "$d" "$CONDUCTOR_NEW"
-if wait_for 60 subscribed trustfull-hooks && wait_for 30 subscribed trustfull-gh; then pass "webhook-trust-full: both channels have a subscriber"; else fail "webhook-trust-full: no subscriber"; fi
+if wait_for 60 subscribed byhand-hooks && wait_for 30 subscribed byhand-gh; then pass "webhook-jailed-by-hand: both channels have a subscriber"; else fail "webhook-jailed-by-hand: no subscriber"; fi
 sleep 1
-post_hooks trustfull 1
-if wait_for 30 fired trustfull hooks; then pass "webhook-trust-full: hooks.alarm fires through the relay path"; else fail "webhook-trust-full: hooks.alarm never fired"; fi
-post_github trustfull 1
-if wait_for 30 fired trustfull gh; then pass "webhook-trust-full: gh.new_comment still fires"; else fail "webhook-trust-full: gh.new_comment never fired"; fi
+post_github byhand 1
+if wait_for 30 fired byhand gh; then pass "webhook-jailed-by-hand: gh.new_comment fires"; else fail "webhook-jailed-by-hand: gh.new_comment never fired"; fi
+post_hooks byhand 1
+sleep 8
+if fired byhand hooks; then fail "webhook-jailed-by-hand: hooks.alarm fired through a jailed relay"; else pass "webhook-jailed-by-hand: the jail kept the relay from conductor's own port"; fi
+if grep -q -- "$OWN_PORT" "$d/daemon.log"; then pass "webhook-jailed-by-hand: the refusal is logged"; else fail "webhook-jailed-by-hand: no log line naming the refusal"; fi
 stop "$d"
 
 # Rollback: the previous conductor (doUpdate's <exe>.prev) started on a
