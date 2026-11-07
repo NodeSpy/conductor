@@ -1,8 +1,13 @@
-// New bot (design §4.4): a sheet over the roster. It composes the bot — a
-// display name, what it's for, a team (its defaults shown as inherited), and a
-// face from the identity picker — and stages it as a config change that lands
-// through the same review/apply pipeline as every other edit. A new bot starts
-// in practice mode.
+// New bot (design §4.4): a sheet over the roster, restyled into Daylight's
+// generic modal (design §3: .modal-scrim/.modal, a bottom sheet on a phone —
+// see app.css). It composes the bot — a display name, what it's for, a team
+// (its defaults shown as inherited), and a face from the identity picker — and
+// stages it as a config change that lands through the same review/apply
+// pipeline as every other edit. A new bot starts in practice mode.
+//
+// Left out of this port (the prototype's botwizard.js has no backend yet):
+// the multi-step wizard chrome and the live "what it inherits from its team"
+// preview — the team picker narrates it in one line instead.
 import type { JSX } from 'preact'
 import { useState } from 'preact/hooks'
 import { cfgError, stage as stageEdit } from '../configStore'
@@ -61,56 +66,56 @@ export function NewBotSheet({ teams, workers, onClose, onStaged }: { teams: Team
   }
 
   return (
-    <div class="sheet-backdrop" onClick={onClose}>
-      <aside class="sheet" role="dialog" aria-label="New bot" onClick={(e) => e.stopPropagation()}>
-        <div class="sheet-head">
-          <h2 class="serif">New bot</h2>
-          <button class="btn ghost sm" type="button" onClick={onClose}>Close</button>
-        </div>
-        <div class="sheet-body">
-          <label class="form-field">
+    <div class="modal-scrim" onClick={onClose}>
+      <div class="modal" role="dialog" aria-label="New bot" onClick={(e) => e.stopPropagation()}>
+        <h2>New bot</h2>
+        <div class="modal-body stack">
+          <label class="field">
             <span>Name</span>
-            <input class="field" value={name} placeholder="atlas" onInput={(e) => setName((e.target as HTMLInputElement).value)} />
-            {id && id !== name ? <small class="muted">id: {id}</small> : null}
+            <input class="input" value={name} placeholder="atlas" onInput={(e) => setName((e.target as HTMLInputElement).value)} />
+            {id && id !== name ? <span class="hint">id: {id}</span> : null}
           </label>
-          <label class="form-field">
+          <label class="field">
             <span>Display name</span>
-            <input class="field" value={display} placeholder="Atlas" onInput={(e) => setDisplay((e.target as HTMLInputElement).value)} />
+            <input class="input" value={display} placeholder="Atlas" onInput={(e) => setDisplay((e.target as HTMLInputElement).value)} />
           </label>
-          <label class="form-field">
+          <label class="field">
             <span>What it's for</span>
-            <textarea class="field" rows={2} value={desc} onInput={(e) => setDesc((e.target as HTMLTextAreaElement).value)} />
+            <textarea class="textarea" rows={2} value={desc} onInput={(e) => setDesc((e.target as HTMLTextAreaElement).value)} />
           </label>
-          {teams.length ? <label class="form-field">
-            <span>Team</span>
-            <select class="field" value={team} onChange={(e) => setTeam((e.target as HTMLSelectElement).value)}>
-              <option value="">Solo</option>
-              {teams.map((t) => <option value={t.team}>{t.team}</option>)}
-            </select>
-          </label> : null}
+          {teams.length ? (
+            <label class="field">
+              <span>Team</span>
+              <select class="select" value={team} onChange={(e) => setTeam((e.target as HTMLSelectElement).value)}>
+                <option value="">Solo — not on a team</option>
+                {teams.map((t) => <option value={t.team}>{t.team}</option>)}
+              </select>
+              {team ? <span class="hint">It takes {team}'s rules; the most it may do can only narrow.</span> : null}
+            </label>
+          ) : null}
 
           {workers && workers.length > 1 ? (
-            <label class="form-field">
+            <label class="field">
               <span>Where it works</span>
-              <select class="field" value={worker} onChange={(e) => setWorker((e.target as HTMLSelectElement).value)}>
+              <select class="select" value={worker} onChange={(e) => setWorker((e.target as HTMLSelectElement).value)}>
                 {workers.map((w) => <option value={w}>{w}</option>)}
               </select>
             </label>
           ) : null}
 
-          <div class="form-field">
+          <div class="field">
             <span>Its face</span>
             <IdentityPicker value={choice} onChange={setChoice} />
           </div>
 
           {err ? <div class="banner err">{err}</div> : null}
-          <p class="muted">A new bot starts in practice mode. Staging it adds it to a change you review and apply on the Bots screen.</p>
+          <p class="dl-sub">A new bot starts in practice mode. Staging it adds it to a change you review and apply on the Bots screen.</p>
         </div>
-        <div class="sheet-foot">
+        <div class="modal-foot row-actions">
           <button class="btn" type="button" onClick={onClose}>Cancel</button>
           <button class="btn primary" type="button" disabled={busy} data-testid="create-bot" onClick={() => void create()}>Stage new bot</button>
         </div>
-      </aside>
+      </div>
     </div>
   )
 }

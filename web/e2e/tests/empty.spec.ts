@@ -218,13 +218,13 @@ test('create the first bot from the welcome', async ({ page }) => {
     await card.getByTestId('bots-apply').click()
 
     // The daemon reloads; the roster then shows the new bot, in practice mode.
-    const row = page.locator('li.bot-row[data-bot="scout"]')
+    const row = page.locator('li.m-row[data-bot="scout"]')
     await expect(row).toBeVisible({ timeout: 60_000 })
     await expect(row).toContainText('Scout')
     await expect(row).toContainText('practice mode')
     await expect(page.getByTestId('bots-empty')).toHaveCount(0)
     await expect(page.getByTestId('new-bot')).toBeVisible()
-    await expect(page.locator('h1 .count')).toHaveText('1 bot')
+    await expect(page.locator('h1 .h1-count')).toHaveText('1 bot')
     // The success note is plain words; the config and backup ids wait in Details.
     const head = page.locator('.banner.ok .applied-head')
     await expect(head).toContainText('Applied')

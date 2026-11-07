@@ -44,7 +44,7 @@
 .avatar-stack { position: relative; display: inline-block; height: 40px; flex: none; }
 .avatar-stack .stack-face { position: absolute; top: 0; border-radius: var(--radius-md); box-shadow: 0 0 0 2px var(--color-bg-surface); }
 
-/* --- filter bar --- */
+/* --- filter bar (legacy: Tickets' own search box, not the shared FilterBar) --- */
 .filter-bar {
   display: flex;
   align-items: center;
@@ -53,47 +53,10 @@
   flex-wrap: wrap;
 }
 .filter-bar .field { max-width: 14rem; }
-.filter-spacer { flex: 1; }
-.group-by { display: inline-flex; align-items: center; gap: var(--space-2); font-size: 0.85rem; color: var(--color-text-secondary); }
-.group-by .field { max-width: 8rem; }
 
-/* --- bots roster --- */
-.team-section { margin-bottom: var(--space-4); }
-.team-head {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding-bottom: var(--space-3);
-  border-bottom: 1px solid var(--color-border-subtle);
-  margin-bottom: var(--space-2);
-}
-.team-head-main { flex: 1; min-width: 0; }
-.team-name { font-size: 1.05rem; margin: 0; display: flex; align-items: baseline; gap: var(--space-2); }
-.team-name a { color: var(--color-text-primary); text-decoration: none; }
-.team-name a:hover { text-decoration: underline; }
-.team-rules { font-size: 0.8rem; margin: var(--space-1) 0 0; }
-
-.bot-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.bot-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-.bot-row:last-child { border-bottom: none; }
-.bot-row-link { display: flex; align-items: center; gap: var(--space-3); flex: 1; min-width: 0; text-decoration: none; color: inherit; }
-.bot-row-main { min-width: 0; flex: 1; }
-.bot-row-name { display: flex; align-items: baseline; gap: var(--space-2); }
-.bot-row-name .name { font-weight: 600; color: var(--color-text-primary); }
-.bot-row-desc { margin: 2px 0 0; font-size: 0.85rem; color: var(--color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bot-row .facts { font-size: 0.75rem; margin: 2px 0 0; }
-.empty-row { padding: var(--space-3) 0; }
-
-.status-mark { font-size: 0.75rem; padding: 2px 8px; border-radius: var(--radius-pill); text-decoration: none; white-space: nowrap; }
-.status-mark.needs { background: var(--palette-ember-600, #c0603a); color: #fff; }
-.status-mark.run { background: var(--palette-teal-500, #09a596); color: #fff; }
-.status-mark.idle { color: var(--color-text-secondary); border: 1px solid var(--color-border-subtle); }
+/* Bots' roster (list, a team's and a bot's page) now uses the ported
+   daylight.css classes (.m-team, .m-row, .dl-bothead, .dl-need, …) — see
+   Bots.tsx, TeamDetail.tsx, BotDetail.tsx and Approval.tsx. */
 
 /* --- chips & tags --- */
 .chip {
@@ -117,10 +80,9 @@
 .tag.pri-urgent { background: var(--palette-ember-600, #c0603a); color: #fff; }
 .tag.pri-high { background: var(--palette-ember-200, #f3d3c4); }
 
-/* --- tabs (detail pages) --- */
-.tab-body { margin-top: var(--space-3); }
-.bot-detail-head, .ticket-detail-head { display: flex; align-items: flex-start; gap: var(--space-3); }
-.bot-detail-head-main, .ticket-detail-head-main { flex: 1; min-width: 0; }
+/* --- tabs (Tickets' own detail head; Bots' and Teams' use .dl-bothead) --- */
+.ticket-detail-head { display: flex; align-items: flex-start; gap: var(--space-3); }
+.ticket-detail-head-main { flex: 1; min-width: 0; }
 
 /* --- identity picker --- */
 .identity-picker { display: flex; flex-direction: column; gap: var(--space-3); max-width: 34rem; }
@@ -236,26 +198,9 @@
 .rule-list { padding-left: var(--space-5); }
 .rule-row { margin-bottom: var(--space-1); }
 
-/* --- proposals / approvals --- */
-.proposal-list { list-style: none; margin: 0; padding: 0; }
-.proposal-list.quiet { opacity: 0.7; }
-.proposal-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--color-border-subtle); }
-.proposal-main { flex: 1; min-width: 0; }
-.proposal-title { display: flex; align-items: center; gap: var(--space-2); }
-.proposal-action { margin: var(--space-1) 0 0; font-size: 0.9rem; }
-
-.approval-screen { max-width: 48rem; }
-.approval-action { font-size: 1rem; font-weight: 500; }
-.payload-json, .tf-plan { background: var(--color-bg-sunken); border-radius: var(--radius-md); padding: var(--space-3); overflow-x: auto; font-size: 0.8rem; }
-.tf-plan .tfl.add { color: var(--palette-teal-700, #007067); }
-.tf-plan .tfl.del { color: var(--palette-ember-600, #c0603a); }
-.tf-plan .tfl.change { color: var(--palette-ocean-600, #22708f); }
-.tf-add { color: var(--palette-teal-700, #007067); }
-.tf-change { color: var(--palette-ocean-600, #22708f); }
-.tf-destroy { color: var(--palette-ember-600, #c0603a); }
-.approval-sign { border: 1px solid var(--color-border-strong); }
-.digest-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
-.approval-actions { margin-top: var(--space-3); }
+/* Approvals now use the ported daylight.css proposal classes (.dl-proposal,
+   .dl-changes, .dl-where, .dl-origin, .dl-decide, .dl-audit-d) — see
+   Approval.tsx and BotDetail.tsx's approvals tab (.dl-need). */
 
 /* --- access & memory --- */
 .access-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-4); }

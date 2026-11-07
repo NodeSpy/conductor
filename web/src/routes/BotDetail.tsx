@@ -10,6 +10,7 @@ import { Avatar } from '../components/Avatar'
 import { ChatThread } from '../components/ChatThread'
 import { IdentityPicker, emptyChoice, type IdentityChoice } from '../components/IdentityPicker'
 import { ReviewPanel } from '../components/ReviewPanel'
+import { StatusMark } from '../components/StatusMark'
 import { TicketTable } from './Tickets'
 import { staged, loadConfig, stage, cfgError } from '../configStore'
 import { go } from '../router'
@@ -45,24 +46,24 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
   if (err) return <div class="col"><a class="back" href="#/bots">← Bots</a><div class="banner err" role="alert">{err}</div></div>
   if (!bot) return <div class="col"><p class="muted">Loading {name}…</p></div>
 
+  const facts: string[] = []
+  if (bot.disabled) facts.push('archived')
+  else if (bot.shadow) facts.push('practice mode')
+  facts.push(bot.team ? `team ${bot.team}` : 'solo')
+  if (bot.sandboxed) facts.push('sandbox enforcing')
+  if (bot.home_runtime) facts.push(bot.home_runtime)
+
   return (
-    <div class="col bot-detail" data-bot={name}>
+    <div class="col" data-bot={name}>
       <a class="back" href="#/bots">← Bots</a>
-      <div class="bot-detail-head">
+      <div class="dl-bothead">
         <Avatar id={bot.identity} size={56} />
-        <div class="bot-detail-head-main">
-          <h1 class="screen-title serif">
-            {displayName(bot.identity, name)} <span class="mono id">{name}</span>
-          </h1>
-          <p class="muted">{bot.description}</p>
-          <p class="facts muted">
-            {bot.disabled ? 'archived' : bot.shadow ? 'practice mode' : 'live'}
-            {bot.team ? ` · team ${bot.team}` : ' · solo'}
-            {bot.sandboxed ? ' · sandbox enforcing' : ''}
-            {bot.home_runtime ? ` · ${bot.home_runtime}` : ''}
-          </p>
+        <div>
+          <h1>{displayName(bot.identity, name)} <span class="mono id">{name}</span></h1>
+          {bot.description ? <p class="dl-lead">{bot.description}</p> : null}
+          <span class="fx">{facts.map((f) => <span class="fx-i">{f}</span>)}</span>
         </div>
-        <div class="row-actions">
+        <div class="dl-actions tight ph-hide">
           <a class="btn ghost sm" href={`#/chat/bot:${name}`}>Open in Chat</a>
         </div>
       </div>
@@ -75,7 +76,7 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
         ))}
       </nav>
 
-      <div class="tab-body">
+      <div class="dl-tab-body">
         {active === 'chat' && <ChatThread convId={`bot:${name}`} kind="bot" bots={all} />}
         {active === 'tickets' && <BotTickets name={name} bots={all} />}
         {active === 'approvals' && <BotApprovals name={name} />}
@@ -113,16 +114,17 @@ function BotApprovals({ name }: { name: string }): JSX.Element {
   const pending = proposals.filter((p) => p.status === 'pending')
   const rest = proposals.filter((p) => p.status !== 'pending')
   return (
-    <section class="panel">
-      <span class="panel-title">Approvals</span>
-      {pending.length === 0 ? <p class="muted">Nothing waiting on you.</p> : null}
-      <ul class="proposal-list">
-        {pending.map((p) => <ProposalRowView key={p.proposal} p={p} />)}
-      </ul>
+    <section class="dl-card">
+      <header class="dl-ch"><h2>Approvals</h2></header>
+      {pending.length === 0 ? <p class="dl-sub">Nothing waiting on you.</p> : (
+        <ul class="dl-list dl-needs">
+          {pending.map((p) => <ProposalRowView key={p.proposal} p={p} />)}
+        </ul>
+      )}
       {rest.length ? (
         <>
-          <h3 class="subhead">Earlier</h3>
-          <ul class="proposal-list quiet">
+          <header class="dl-ch" style={{ marginTop: '18px' }}><h3>Earlier</h3></header>
+          <ul class="dl-list dl-needs past-d">
             {rest.map((p) => <ProposalRowView key={p.proposal} p={p} />)}
           </ul>
         </>
@@ -133,20 +135,22 @@ function BotApprovals({ name }: { name: string }): JSX.Element {
 
 export function ProposalRowView({ p }: { p: ProposalRow }): JSX.Element {
   const tf = p.terraform
+  const pending = p.status === 'pending'
   return (
-    <li class="proposal-row" data-proposal={p.proposal} data-status={p.status}>
-      <div class="proposal-main">
-        <div class="proposal-title">
-          <span class={'tag tier-' + p.tier}>{p.tier}</span>
-          <span class="mono">{p.uses || p.kind}</span>
-          <span class={'tag status-' + p.status}>{p.status}</span>
-        </div>
-        <p class="proposal-action">{p.action || p.summary}</p>
-        {tf ? <p class="facts muted">{tf.repo} · {tf.dir} · +{tf.add} ~{tf.change} -{tf.destroy}</p> : null}
-      </div>
-      {p.status === 'pending' ? (
-        <a class="btn primary sm" href={`#/bots/${p.bot}/proposals/${p.proposal}`} data-testid="review-proposal">Review</a>
-      ) : null}
+    <li class="dl-need" data-proposal={p.proposal} data-status={p.status}>
+      <a class="dl-need-a" href={pending ? `#/bots/${p.bot}/proposals/${p.proposal}` : undefined} data-testid={pending ? 'review-proposal' : undefined}>
+        <span class="dl-ng">
+          <StatusMark s={pending ? 'ember' : p.status === 'denied' ? 'fail' : 'ok'} mkOnly lg label={p.status} />
+        </span>
+        <span class="dl-nt">
+          <b>{p.summary || p.uses || p.kind}</b>
+          <span class="dl-why">
+            tier {p.tier}{tf ? ` · ${tf.repo} · +${tf.add} ~${tf.change} -${tf.destroy}` : ''}
+          </span>
+        </span>
+        <span class="dl-age" />
+        <span class="dl-na">{pending ? <span class="btn sm secondary">Review</span> : <span class="fx-i">{p.status}</span>}</span>
+      </a>
     </li>
   )
 }

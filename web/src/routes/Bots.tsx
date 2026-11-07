@@ -10,8 +10,11 @@ import { botsApi, displayName, type BotSummary, type TeamSummary } from '../api/
 import { humanError } from '../api/errors'
 import { Avatar, AvatarPreview } from '../components/Avatar'
 import { EmptyState } from '../components/EmptyState'
+import { FilterBar } from '../components/FilterBar'
+import { Icon } from '../components/Icon'
 import { ReviewPanel } from '../components/ReviewPanel'
-import { apply, applyResult, busy, doReview, loadConfig, review, staged } from '../configStore'
+import { StatusMark } from '../components/StatusMark'
+import { apply, applyResult, busy, doReview, loadConfig, review, stage, staged } from '../configStore'
 import { api } from '../api/client'
 import { NewBotSheet } from './NewBotSheet'
 import { plural } from '../lib/format'
@@ -97,8 +100,8 @@ export function Bots(): JSX.Element {
 
   if (bots === null) {
     return (
-      <div class="col bots-screen">
-        <h1 class="screen-title serif">Bots</h1>
+      <div class="m-page col bots-screen">
+        <div class="dl-phead"><div><h1>Bots</h1></div></div>
         {err ? (
           <div class="banner err" role="alert">
             Couldn't load your bots: {err}{' '}
@@ -113,8 +116,8 @@ export function Bots(): JSX.Element {
 
   if (all.length === 0) {
     return (
-      <div class="col bots-screen">
-        <h1 class="screen-title serif">Bots</h1>
+      <div class="m-page col bots-screen">
+        <div class="dl-phead"><div><h1>Bots</h1></div></div>
         {err ? <div class="banner err" role="alert">{err}</div> : null}
         {applied ? (
           <>
@@ -181,57 +184,103 @@ export function Bots(): JSX.Element {
     )
   }
 
+  const [sel, setSel] = useState<Set<string>>(new Set())
+  const toggleSel = (name: string) =>
+    setSel((s) => {
+      const next = new Set(s)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  const [archiving, setArchiving] = useState(false)
+  const bulkArchive = async () => {
+    const names = [...sel]
+    if (!names.length) return
+    if (!confirm(`Archive ${plural(names.length, 'bot')}? Each stops: it hears no events and starts nothing. Its memory and history stay.`)) return
+    setArchiving(true)
+    try {
+      for (const n of names) await stage(['bots', n, 'disabled'], true, `archive ${n}`)
+    } finally {
+      setSel(new Set())
+      setArchiving(false)
+    }
+  }
+
   return (
-    <div class="col bots-screen">
-      <div class="screen-head">
-        <h1 class="screen-title serif">
-          Bots <span class="count">{rosterCount(all.length, teams.length, soloCount)}</span>
-        </h1>
-        <div class="row-actions">
-          {editable ? <button class="btn primary" type="button" data-testid="new-bot" onClick={() => setNewOpen(true)}>New bot</button> : null}
+    <div class="m-page col bots-screen">
+      <div class="dl-phead">
+        <div>
+          <h1>Bots <span class="h1-count">{rosterCount(all.length, teams.length, soloCount)}</span></h1>
+          {teams.length ? <p class="lede-2">Each team is a section; its header says what its bots may do, who approves and how work reaches it. Solo bots come last.</p> : null}
+        </div>
+        <div class="dl-actions tight">
+          {editable ? <a class="btn primary" href="#/bots" onClick={(e) => { e.preventDefault(); setNewOpen(true) }} data-testid="new-bot"><Icon name="plus" />New bot</a> : null}
         </div>
       </div>
-      {teams.length ? <p class="muted">Each team is a section; its header says what its bots may do, who approves and how work reaches it. Solo bots come last.</p> : null}
 
       {err ? <div class="banner err" role="alert">{err}</div> : null}
       {pendingBots || applied ? <ReviewPanel stagedCount={staged.value.length} /> : null}
 
-      {all.length > 1 ? (
-        <div class="filter-bar" role="search">
-          <input class="field" type="search" placeholder="Find a bot" value={q} onInput={(e) => setQ((e.target as HTMLInputElement).value)} />
-          <select class="field" value={mode} onChange={(e) => setMode((e.target as HTMLSelectElement).value as typeof mode)}>
-            <option value="all">Any mode</option>
-            <option value="live">Live</option>
-            <option value="practice">Practice mode</option>
-            <option value="archived">Archived</option>
-          </select>
-          <span class="filter-spacer" />
-          {teams.length ? (
-            <label class="group-by">
-              Group by
-              <select class="field" value={groupBy} onChange={(e) => setGroupBy((e.target as HTMLSelectElement).value as 'team' | 'none')}>
-                <option value="team">Team</option>
-                <option value="none">None</option>
-              </select>
-            </label>
-          ) : null}
+      {sel.size ? (
+        <div class="m-bulk">
+          <b>{sel.size} selected</b>
+          <button class="btn sm secondary" type="button" disabled={archiving} onClick={() => void bulkArchive()}>Archive…</button>
+          <button class="link" type="button" onClick={() => setSel(new Set())}>Clear</button>
         </div>
       ) : null}
 
+      {all.length > 1 ? (
+        <FilterBar
+          q={q}
+          onQueryChange={setQ}
+          placeholder="Find a bot"
+          ariaLabel="Find a bot"
+          menus={[
+            {
+              key: 'mode',
+              label: 'Mode',
+              selected: mode === 'all' ? [] : [mode],
+              options: [
+                { v: 'live', label: 'Live' },
+                { v: 'practice', label: 'Practice mode' },
+                { v: 'archived', label: 'Archived' },
+              ],
+              onToggle: (v) => setMode((cur) => (cur === v ? 'all' : (v as typeof mode))),
+              onClear: () => setMode('all'),
+            },
+            ...(teams.length
+              ? [
+                  {
+                    key: 'group',
+                    label: 'Group by',
+                    view: true,
+                    selected: [groupBy],
+                    options: [
+                      { v: 'team', label: 'Team' },
+                      { v: 'none', label: 'None' },
+                    ],
+                    onToggle: (v: string) => setGroupBy(v as 'team' | 'none'),
+                  },
+                ]
+              : []),
+          ]}
+        />
+      ) : null}
+
       {groupBy === 'none' || !teams.length ? (
-        <section class="panel">
-          <ul class="bot-list">
-            {filtered.map((b) => <BotRow key={b.bot} b={b} showTeam={groupBy === 'none'} />)}
+        <section class="dl-card m-team">
+          <ul class="m-list m-flat">
+            {filtered.map((b) => <BotRow key={b.bot} b={b} showTeam={groupBy === 'none'} sel={sel} onToggleSel={toggleSel} />)}
           </ul>
-          {filtered.length ? null : <p class="muted empty-row">No bot matches.</p>}
+          {filtered.length ? null : <li class="dl-empty-row">No bot matches.</li>}
         </section>
       ) : (
         <>
           {teams.map((t) => {
             const teamBots = filtered.filter((b) => b.team === t.team)
-            return <TeamSection key={t.team} t={t} bots={teamBots} />
+            return <TeamSection key={t.team} t={t} bots={teamBots} sel={sel} onToggleSel={toggleSel} />
           })}
-          <SoloSection bots={filtered.filter((b) => !b.team)} />
+          <SoloSection bots={filtered.filter((b) => !b.team)} sel={sel} onToggleSel={toggleSel} />
         </>
       )}
 
@@ -282,84 +331,89 @@ function WelcomeFaces(): JSX.Element {
   )
 }
 
-function TeamSection({ t, bots }: { t: TeamSummary; bots: BotSummary[] }): JSX.Element {
+interface SelProps {
+  sel: Set<string>
+  onToggleSel: (name: string) => void
+}
+
+function TeamSection({ t, bots, sel, onToggleSel }: { t: TeamSummary; bots: BotSummary[] } & SelProps): JSX.Element {
   const lead = t.routing?.lead
   const rules: string[] = []
   rules.push(lead ? `led by ${lead}` : 'no lead yet — what you write goes to everyone')
   if (t.operators?.length) rules.push(`approved by ${t.operators.join(', ')}`)
-  if (t.routing?.rules?.length) rules.push(`${t.routing.rules.length} routing rule${t.routing.rules.length === 1 ? '' : 's'}`)
+  if (t.routing?.rules?.length) rules.push(plural(t.routing.rules.length, 'routing rule'))
   rules.push(t.peers === 'none' ? 'bots kept apart' : 'teammates may ask each other')
+  const need = bots.reduce((a, b) => a + (b.pending_proposals || 0), 0)
   return (
-    <section class="panel team-section" data-team={t.team}>
-      <div class="team-head">
-        <Avatar id={t.identity} size={40} kind="team" />
-        <div class="team-head-main">
-          <h2 class="team-name">
-            <a href={`#/teams/${t.team}`}>{displayName(t.identity, t.team)}</a>
-            <span class="count">{plural(t.bots?.length || 0, 'bot')}</span>
-          </h2>
-          <p class="team-rules muted">{t.description ? t.description + ' — ' : ''}{rules.join(' · ')}</p>
+    <section class="dl-card m-team" data-team={t.team}>
+      <header class="m-team-h">
+        <div class="m-team-t">
+          <div class="m-team-n">
+            <Avatar id={t.identity} size={32} kind="team" />
+            <h2><a class="link-plain" href={`#/teams/${t.team}`}>{displayName(t.identity, t.team)}</a></h2>
+          </div>
+          <span class="dl-sub m-team-sum">{plural(t.bots?.length || 0, 'bot')}{t.description ? ` · ${t.description}` : ''}</span>
+          <span class="fx">{rules.map((r) => <span class="fx-i">{r}</span>)}</span>
         </div>
-        <div class="row-actions">
-          <a class="btn ghost sm" href={`#/teams/${t.team}`}>Shape the team</a>
+        <span class="m-st">
+          {need ? <a class="q-st need" href="#/attention"><StatusMark s="ember" mkOnly label="Needs you" />{plural(need, 'need', 'need')} you</a> : null}
+        </span>
+        <div class="m-team-a">
+          <a class="btn sm secondary ph-hide" href={`#/teams/${t.team}`}><Icon name="settings" />Shape the team</a>
         </div>
-      </div>
-      <ul class="bot-list">
-        {bots.length ? bots.map((b) => <BotRow key={b.bot} b={b} />) : <li class="muted empty-row">No bots in this team match.</li>}
+      </header>
+      <ul class="m-list">
+        {bots.length ? bots.map((b) => <BotRow key={b.bot} b={b} sel={sel} onToggleSel={onToggleSel} />) : <li class="dl-empty-row">No bots in this team match.</li>}
       </ul>
     </section>
   )
 }
 
-function SoloSection({ bots }: { bots: BotSummary[] }): JSX.Element {
+function SoloSection({ bots, sel, onToggleSel }: { bots: BotSummary[] } & SelProps): JSX.Element {
   if (!bots.length) return <></>
   return (
-    <section class="panel team-section solo" data-team="(solo)">
-      <div class="team-head">
-        <div class="team-head-main">
-          <h2 class="team-name">Solo bots <span class="count">{bots.length}</span></h2>
-          <p class="team-rules muted">Not on a team — each with its own rules.</p>
+    <section class="dl-card m-team m-solo" data-team="(solo)">
+      <header class="m-team-h">
+        <div class="m-team-t">
+          <div class="m-team-n"><h2>Solo bots</h2></div>
+          <span class="dl-sub m-team-sum">{plural(bots.length, 'bot')} · not on a team, each with its own rules</span>
         </div>
-      </div>
-      <ul class="bot-list">
-        {bots.map((b) => <BotRow key={b.bot} b={b} />)}
+      </header>
+      <ul class="m-list">
+        {bots.map((b) => <BotRow key={b.bot} b={b} sel={sel} onToggleSel={onToggleSel} />)}
       </ul>
     </section>
   )
 }
 
-function BotRow({ b, showTeam }: { b: BotSummary; showTeam?: boolean }): JSX.Element {
+function BotRow({ b, showTeam, sel, onToggleSel }: { b: BotSummary; showTeam?: boolean } & SelProps): JSX.Element {
   const does = b.capabilities?.does || []
   const asks = b.capabilities?.asks || []
   const facts: string[] = []
-  facts.push(b.disabled ? 'archived' : b.shadow ? 'practice mode' : 'live')
   if (showTeam) facts.push(b.team ? `team ${b.team}` : 'solo')
-  if (does.length) facts.push(`does ${does.length} on its own`)
-  if (asks.length) facts.push(`asks for ${asks.length}`)
+  if (b.disabled) facts.push('archived')
+  else if (b.shadow) facts.push('practice mode')
+  facts.push(does.length && asks.length ? `${does.length} on its own · asks before ${asks.length}` : asks.length ? `asks before everything (${asks.length})` : does.length ? `${does.length} on its own` : 'only reads')
   if (b.home_runtime) facts.push(b.home_runtime)
   const needs = b.pending_proposals > 0
   return (
-    <li class="bot-row" data-bot={b.bot}>
-      <a class="bot-row-link" href={`#/bots/${b.bot}`}>
-        <Avatar id={b.identity} size={40} />
-        <div class="bot-row-main">
-          <div class="bot-row-name">
-            <span class="name">{displayName(b.identity, b.bot)}</span>
-            <span class="mono id">{b.bot}</span>
-          </div>
-          <p class="bot-row-desc">{b.description || 'A bot.'}</p>
-          <p class="facts muted">{facts.join(' · ')}</p>
-        </div>
+    <li class={'m-row' + (b.disabled ? ' off' : '')} data-bot={b.bot}>
+      <span class="m-sel">
+        <input type="checkbox" class="cbx" checked={sel.has(b.bot)} onChange={() => onToggleSel(b.bot)} aria-label={`Select ${b.bot}`} />
+      </span>
+      <Avatar id={b.identity} size={32} />
+      <a class="m-main" href={`#/bots/${b.bot}`}>
+        <b>{displayName(b.identity, b.bot)}{displayName(b.identity, b.bot) !== b.bot ? <span class="bav-id mono">{b.bot}</span> : null}</b>
+        <span class="dl-why">{b.description || 'A bot.'}</span>
+        <span class="fx">{facts.map((f) => <span class="fx-i">{f}</span>)}</span>
       </a>
-      <div class="bot-row-status">
+      <span class="m-st">
         {needs ? (
-          <a class="status-mark needs" href={`#/bots/${b.bot}/proposals`} title="Needs you">{b.pending_proposals} needs you</a>
+          <a class="q-st need" href={`#/bots/${b.bot}/approvals`}><StatusMark s="ember" mkOnly label="Needs you" />{plural(b.pending_proposals, 'need', 'need')} you</a>
         ) : b.live_workers > 0 ? (
-          <span class="status-mark run" title="Working now">working</span>
-        ) : (
-          <span class="status-mark idle" title="Idle">idle</span>
-        )}
-      </div>
+          <span class="q-st"><StatusMark s="run" mkOnly label="Working" />Working</span>
+        ) : null}
+      </span>
     </li>
   )
 }
