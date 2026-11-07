@@ -66,11 +66,23 @@ export async function readResponse<T>(res: Response): Promise<T> {
   return body as T
 }
 
+// A command-line error that only makes sense from a CLI (chat.go's
+// ChatOperator, when no operator is configured): on an open dashboard
+// (dashboard.auth.allow_open: true) there's no --as flag to pass, so the raw
+// message would be meaningless on a page. Say what it actually means here.
+const NO_OPERATOR = /say which operator you are/
+
 // humanError is what a screen shows for a caught error: the message and what
 // to do about it. A network failure (fetch's TypeError) and a stray parser
 // exception get plain words instead of the browser's own text.
+
 export function humanError(e: unknown): string {
-  if (e instanceof ApiError) return e.hint ? `${e.message} — ${e.hint}` : e.message
+  if (e instanceof ApiError) {
+    if (NO_OPERATOR.test(e.message)) {
+      return 'Chat needs to know who you are: turn on dashboard sign-in, or add yourself under operators: in config.'
+    }
+    return e.hint ? `${e.message} — ${e.hint}` : e.message
+  }
   if (e instanceof TypeError && /fetch|load failed|network/i.test(e.message))
     return "Couldn't reach conductor — check your connection and that the daemon is running, then try again"
   if (e instanceof SyntaxError) return 'conductor sent back something the dashboard could not read — reload the page'
