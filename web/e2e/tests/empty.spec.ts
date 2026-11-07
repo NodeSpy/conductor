@@ -39,7 +39,6 @@ async function noErrors(page: Page): Promise<void> {
 }
 
 const SCREENS: { route: string; name: string; testid: string; heading: RegExp }[] = [
-  { route: '', name: 'overview', testid: 'overview-empty', heading: /Nothing has run yet/ },
   { route: 'activity', name: 'activity', testid: 'activity-empty', heading: /No runs yet/ },
   { route: 'workflows', name: 'workflows', testid: 'workflows-empty', heading: /No workflows yet/ },
   { route: 'bots', name: 'bots', testid: 'bots-empty', heading: /Meet your first bot/ },
@@ -66,6 +65,25 @@ for (const s of SCREENS) {
     await shot(page, s.name)
   })
 }
+
+// Home on a fresh box (design review note): the layout stays up — the tiles,
+// Needs you, Running now and the runs strip — rather than collapsing to one
+// centred message. Only the panels that have nothing say so, each on its own.
+test('#/ on a fresh box keeps the Home layout, empty only where there is nothing', async ({ page, collector }) => {
+  await page.goto(`${rt.baseURL}/#/`)
+  await expect(page.locator('.dl-glance .dl-tile')).toHaveCount(4)
+  await expect(page.locator('.dl-glance .dl-tile b')).toHaveText(['0', '0', '0', '0'])
+  const need = page.getByTestId('needs-you-empty')
+  await expect(need).toBeVisible()
+  await expect(need.getByRole('heading', { level: 2 })).toHaveText(/Nothing needs you/)
+  await expect(page.locator('.dl-running')).toHaveCount(0)
+  await expect(page.locator('.dl-hours')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Get started' })).toBeVisible()
+  await noErrors(page)
+  expect(collector.failed, 'no failed requests').toEqual([])
+  expect(collector.consoleErrors.filter((e) => !/401/.test(e)), 'no console errors').toEqual([])
+  await shot(page, 'overview')
+})
 
 // Screens that were already fine at zero still show no error and no raw text.
 test('Config names its switches in plain words', async ({ page }) => {

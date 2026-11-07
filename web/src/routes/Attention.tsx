@@ -1,12 +1,14 @@
 // Needs you (design §4.1): the aggregator's own page — one tile per kind, the
-// aggregator's full list. Source: overview() in the prototype's js/screens/runs.js
-// (UI.route('attention')). Left out for now: the search/filter bar (UI.filterBar)
-// and "For your information" (no backend source yet) — noted in the phase report.
+// aggregator's full list, and the same For your information side panel as
+// Home. Source: the prototype's js/screens/runs.js (UI.route('attention')).
+// Left out for now: the search/filter bar (UI.filterBar) — noted in the phase
+// report.
 import type { JSX } from 'preact'
 import { useState } from 'preact/hooks'
-import { needItems, type NeedItem } from '../state'
+import { needItems, fyi, type NeedItem } from '../state'
 import { StatusMark } from '../components/StatusMark'
 import { EmptyState } from '../components/EmptyState'
+import { Fyi } from '../components/Fyi'
 import { ago } from '../lib/format'
 
 const KIND_LABEL: Record<NeedItem['kind'], [string, string]> = {
@@ -60,6 +62,9 @@ export function Attention(): JSX.Element {
             ) : null}
             {NeedList(shown)}
           </section>
+        </div>
+        <div class="dl-col-side">
+          <Fyi items={fyi.value} />
         </div>
       </div>
     </>

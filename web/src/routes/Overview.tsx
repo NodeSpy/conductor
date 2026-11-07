@@ -7,19 +7,24 @@
 // Deliberate differences from the prototype, both noted in CONFORMANCE:
 // Activity (run history) is its own page (design: a structural decision) and
 // no longer duplicated here; the machine's health moved to the rail's host
-// card (Shell.tsx), so there is no "For your information" panel on Home.
+// card (Shell.tsx).
 //
 // Left out this phase (prototype-only, no backend yet): the usage/cost panel
 // (usage display is off by default and has no server-side toggle here).
+//
+// A fresh box is never a single centred message: the layout (the tiles, Needs
+// you, the runs strip) stays up, each panel empty on its own, so the page
+// never collapses to less than the approved design shows (design review note).
 import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
-import { status, runs, loadError, liveTick, needItems, needBreakdown, dismiss } from '../state'
+import { status, runs, loadError, liveTick, needItems, needBreakdown, dismiss, fyi } from '../state'
 import type { NeedItem } from '../state'
 import { botsApi, type BotSummary, type ProposalRow } from '../api/bots'
 import { api } from '../api/client'
 import type { RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
 import { EmptyState } from '../components/EmptyState'
+import { Fyi } from '../components/Fyi'
 import { humanDuration, ago, plural } from '../lib/format'
 
 const HOUR = 3_600_000
@@ -72,20 +77,13 @@ export function Overview(): JSX.Element {
 
       {loadError.value ? <div class="banner err">Couldn't load: {loadError.value}</div> : null}
 
-      {st && all.length === 0 && need.length === 0 && bots.length === 0 ? (
-        // A genuinely fresh daemon: nothing in any section below yet. Kept from
-        // the empty-states pass (PR 242), restyled into Daylight's `.empty` —
-        // the prototype's own demo data is never this empty, so there is no
-        // approved equivalent to match against; CONFORMANCE notes the gap.
-        <EmptyState
-          testid="overview-empty"
-          title="Nothing has run yet"
-          action={{ label: 'See your workflows', href: '#/workflows', testid: 'overview-empty-workflows' }}
-          secondary={{ label: 'Meet your bots', href: '#/bots' }}
-        >
-          <p>Runs appear here as your workflows fire: what is running now, what finished, and anything that needs you.</p>
-        </EmptyState>
-      ) : (
+      {st === null ? null : (
+        // Always the full layout, even on a genuinely fresh box: the tiles
+        // read zero, Needs you and For your information show their own small
+        // empty state, and Running now simply has nothing to list (as in the
+        // prototype). Get started carries PR 242's first-time guidance ("See
+        // your workflows" lives at Activity's own empty state; "Meet your
+        // bots" is this card's "Make a bot" step).
         <>
           <Glance need={need} running={running} last12={last12} bots={bots} />
           <div class="dl-cols">
@@ -95,6 +93,7 @@ export function Overview(): JSX.Element {
             <div class="dl-col-side">
               <RunningNow running={running} />
               <Last12 runs={last12} />
+              <Fyi items={fyi.value} />
             </div>
           </div>
           <GetStarted connected={connected} bots={bots} botsConfigured={botsConfigured} decided={decided} />
