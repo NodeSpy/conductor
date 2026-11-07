@@ -130,6 +130,38 @@ export interface WorkflowSummary {
   failed?: number /* int */;
   last_run?: string; // RFC3339 of its most recent run
   last_key?: string; // id of its most recent run (for a link)
+  /**
+   * Index is the trigger's position in the live CONFIG FILE's own triggers:
+   * list (not the runtime-expanded one), so the dashboard can address it for
+   * a config-stage edit (an on/off switch, a config-file save) without a
+   * name-keyed path (triggers: is a sequence, not a map). -1 when the
+   * trigger has no name: an unnamed trigger has no unambiguous raw-document
+   * identity, so it is addressable for viewing only.
+   */
+  index: number /* int */;
+  /**
+   * Source is where the workflow came from: "" for one in your own config,
+   * "pack:<instance>" for one a pack installed. A bot's own synthesized
+   * workflow is left out of the list entirely (it lives on the bot's page).
+   */
+  source?: string;
+  /**
+   * When is what starts it, in words (an event, a schedule, or "You start
+   * it" for manual). Does is what it does, in words, from its steps. Both
+   * are best-effort sentences, not the full event catalog's labels.
+   */
+  when?: string;
+  does?: string;
+  /**
+   * RunsWeek/FailedWeek/Health are this workflow's recent health (not
+   * whether it's running this second): its runs in the last 7 days and the
+   * share that failed. Health is "none" (no runs this week), "healthy" (0
+   * failed), "some" (fewer than 20% failed) or "failing" (20% or more).
+   */
+  runs_week?: number /* int */;
+  failed_week?: number /* int */;
+  health?: string;
+  last20?: string[]; // its last 20 runs' status, most recent first
 }
 /**
  * WorkflowDetailResponse is GET /api/v1/workflows/{name}: the workflow's graph
@@ -144,6 +176,14 @@ export interface WorkflowDetailResponse {
   yaml: string;
   nodes: GraphNode[];
   runs: RunSummary[];
+  /**
+   * Index addresses the trigger in the live config's triggers: list (see
+   * WorkflowSummary.Index). Source is its ownership (see WorkflowSummary.Source).
+   */
+  index: number /* int */;
+  source?: string;
+  when?: string;
+  does?: string;
 }
 /**
  * GraphNode is one step in a workflow's graph. Needs lists the ids it waits on

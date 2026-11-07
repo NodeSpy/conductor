@@ -228,35 +228,7 @@ pre.raw { margin: 10px 16px 16px; padding: 12px; background: var(--color-bg-rail
 .anno.flag { border-left-color: var(--color-status-danger-solid); }
 @media (max-width: 720px) { .rb-step { grid-template-columns: 24px minmax(0, 1fr); } .rb-ctl { grid-column: 2; } .rb-act .input { min-width: 0; } }
 
-/* ---------- workflows in folders ---------- */
-.wl-layout { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 14px; align-items: start; }
-.wl-folders { position: sticky; top: 12px; }
-.wfn-list { display: flex; flex-direction: column; padding: 6px; }
-.wfn { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 6px 8px 6px calc(8px + var(--d, 0) * 12px); border-radius: var(--radius-control); color: var(--color-text-secondary); text-decoration: none; border: 1px solid transparent; }
-.wfn svg { width: 14px; height: 14px; flex: none; color: var(--color-text-tertiary); }
-.wfn:hover { background: var(--color-bg-raised); color: var(--color-text-primary); }
-.wfn.on { background: var(--color-accent-subtle); color: var(--color-text-primary); box-shadow: inset 2px 0 0 var(--color-accent-default); }
-.wfn.on svg { color: var(--color-text-accent); }
-.wfn.drop-on { border-color: var(--color-accent-default); border-style: dashed; background: var(--color-accent-subtle); }
-.wfn-name { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.wfn-name > .ellipsis { font-weight: 500; font-size: var(--type-body-s-size); }
-.wfn-roll { font: var(--type-caption-size)/1.4 var(--font-family-sans); color: var(--color-text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wl-crumbs { margin: 0 0 8px; font-size: var(--type-caption-size);  font-variant-numeric: tabular-nums;}
-.folder-link { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.folder-link svg { width: 12px; height: 12px; color: var(--color-text-tertiary); }
-tr.dragging { opacity: .45; }
-.wl-table [data-wf-drag] td:first-child { cursor: grab; }
-/* badges in a table column share one width, whatever they say */
-.folder-stats { margin-top: 2px; }
-@media (max-width: 1180px) { .wl-layout { grid-template-columns: minmax(0, 1fr); } .wl-folders { display: none; } }
 @media (max-width: 720px) { .owner { min-width: 0; } }
-@media (min-width: 1181px) { .wl-fsel { display: none !important; } }
-.wl-main { min-width: 0; }
-.wl-main > .panel, .folder-wl > .panel { overflow-x: auto; }
-.wl-table td[data-l="workflow"] b, .wl-table td[data-l="workflow"] a { white-space: nowrap; }
-.wl-table td[data-l="what it does"] { max-width: 420px; } .wl-table th, .wl-table td { padding-left: 10px; padding-right: 10px; }
-.wl-acts { white-space: nowrap; }
-.wl-acts .btn { padding-left: 7px; padding-right: 7px; }
 
 /* ---------- builder: verb grants, locked list ---------- */
 .grants { display: flex; flex-direction: column; gap: 6px; }

@@ -134,9 +134,7 @@ tr.clickable:hover > td {
   align-items: center;
   gap: var(--space-2);
 }
-.run-cols,
-.wf-cols,
-.builder-cols {
+.run-cols {
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--space-4);
@@ -144,10 +142,6 @@ tr.clickable:hover > td {
 @media (min-width: 900px) {
   .run-cols {
     grid-template-columns: 1.6fr 1fr;
-  }
-  .wf-cols,
-  .builder-cols {
-    grid-template-columns: 1fr 1fr;
   }
 }
 
@@ -288,80 +282,6 @@ li.failed > .step-tl b {
   gap: var(--space-2);
 }
 
-/* --- workflow graph --- */
-.graph-wrap {
-  overflow: auto;
-  max-height: 540px;
-}
-.graph {
-  width: 100%;
-  height: auto;
-}
-.graph-edge {
-  fill: none;
-  stroke: var(--color-border-strong, var(--color-border-default));
-  stroke-width: 1.5;
-}
-.graph-box {
-  fill: var(--color-bg-surface);
-  stroke: var(--color-border-default);
-  stroke-width: 1.5;
-}
-.graph-node.pick {
-  cursor: pointer;
-}
-.graph-node.pick:hover .graph-box,
-.graph-node.on .graph-box {
-  stroke: var(--color-accent-default);
-  stroke-width: 2;
-}
-.graph-badge {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 700;
-  fill: var(--color-text-accent);
-}
-.graph-id {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  fill: var(--color-text-primary);
-}
-.graph-kind {
-  font-size: 11px;
-  fill: var(--color-text-muted);
-}
-
-/* --- yaml pane (workflow detail + builder) --- */
-.yaml-pane {
-  counter-reset: none;
-}
-.yaml-l {
-  display: block;
-}
-.yaml-l.hot {
-  background: var(--color-accent-subtle);
-}
-.yaml-gutter {
-  display: inline-block;
-  width: 3ch;
-  margin-right: var(--space-3);
-  color: var(--color-text-muted);
-  text-align: right;
-  font-style: normal;
-  user-select: none;
-}
-
-/* --- builder --- */
-.palette {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-.palette-label {
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-}
 .chip {
   border: 1px solid var(--color-border-default);
   background: var(--color-bg-surface);
@@ -375,39 +295,6 @@ li.failed > .step-tl b {
 .chip:hover {
   border-color: var(--color-accent-default);
   color: var(--color-text-accent);
-}
-.editor {
-  display: flex;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  background: var(--color-bg-code, var(--color-bg-subtle, rgb(0 0 0 / 0.04)));
-}
-.editor-gutter {
-  margin: 0;
-  padding: var(--space-3) var(--space-2);
-  color: var(--color-text-muted);
-  text-align: right;
-  user-select: none;
-  font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
-}
-.editor-area {
-  flex: 1;
-  border: 0;
-  resize: vertical;
-  min-height: 420px;
-  padding: var(--space-3);
-  background: transparent;
-  color: var(--color-text-primary);
-  line-height: 1.5;
-  white-space: pre;
-  tab-size: 2;
-}
-.editor-area:focus-visible {
-  outline: 2px solid var(--color-accent-default);
-  outline-offset: -2px;
 }
 
 .empty {
