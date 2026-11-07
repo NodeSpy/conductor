@@ -198,13 +198,28 @@ func (s *Server) mountBotAPI() {
 		inner.Handle(rt.Pattern, s.botGate(rt))
 	}
 	h := http.StripPrefix("/api", inner)
-	for _, p := range []string{
-		"/api/v1/bots", "/api/v1/bots/",
-		"/api/v1/teams", "/api/v1/teams/",
-		"/api/v1/conversations", "/api/v1/conversations/",
-		"/api/v1/tickets", "/api/v1/tickets/",
-		"/api/v1/proposals",
-	} {
+	for _, p := range botAPIPaths {
+		s.mux.Handle(p, h)
+	}
+}
+
+// botAPIPaths are the paths the bots' operator API owns.
+var botAPIPaths = []string{
+	"/api/v1/bots", "/api/v1/bots/",
+	"/api/v1/teams", "/api/v1/teams/",
+	"/api/v1/conversations", "/api/v1/conversations/",
+	"/api/v1/tickets", "/api/v1/tickets/",
+	"/api/v1/proposals",
+}
+
+// mountNoBots answers the bots' paths on a daemon with no bots configured, so
+// the pages that call them say so instead of getting the SPA's HTML.
+func (s *Server) mountNoBots() {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotFound, "bots_not_configured", "No bots are configured on this daemon.",
+			"Add a bots: section to conductor's config and restart it.")
+	})
+	for _, p := range botAPIPaths {
 		s.mux.Handle(p, h)
 	}
 }

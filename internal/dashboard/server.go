@@ -225,8 +225,14 @@ func (s *Server) routes() {
 	// the `/api/v1/bots/` subtree below never shadows them.
 	if s.deps.BotRoutes != nil {
 		s.mountBotAPI()
+	} else {
+		s.mountNoBots()
 	}
 
+	// An API path nothing serves is a JSON 404, never the SPA's HTML.
+	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotFound, "not_found", "No such API endpoint: "+r.URL.Path, "")
+	})
 	s.mux.Handle("/", spaHandler()) // the embedded SPA, with SPA fallback
 }
 

@@ -135,3 +135,21 @@ func getRuns(t *testing.T, s *Server, url string) api.RunsResponse {
 	}
 	return resp
 }
+
+// TestUnservedAPIPathsAreJSON: with no bots configured, the bots' paths and any
+// unknown API path answer a JSON 404, never the SPA's HTML.
+func TestUnservedAPIPathsAreJSON(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	for path, code := range map[string]string{
+		"/api/v1/conversations": "bots_not_configured",
+		"/api/v1/bots/x/chat":   "bots_not_configured",
+		"/api/v1/nope":          "not_found",
+	} {
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		var body api.ErrorResponse
+		if rr.Code != http.StatusNotFound || json.Unmarshal(rr.Body.Bytes(), &body) != nil || body.Error.Code != code {
+			t.Errorf("%s: %d %q", path, rr.Code, rr.Body.String())
+		}
+	}
+}
