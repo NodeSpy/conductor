@@ -7,6 +7,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { botsApi, displayName, openChatStream, type Conversation, type BotSummary, type TeamSummary } from '../api/bots'
 import { Avatar, StackedTeam, type Identity } from '../components/Avatar'
 import { ChatThread } from '../components/ChatThread'
+import { Icon } from '../components/Icon'
 import { go } from '../router'
 import { EmptyState } from '../components/EmptyState'
 import { humanError } from '../api/errors'
@@ -61,7 +62,7 @@ export function Chat({ convId }: { convId?: string }): JSX.Element {
 
   if (convs === null) {
     return (
-      <div class="col chat-screen">
+      <div class="cv-page">
         {err ? (
           <div class="banner err" role="alert">
             Couldn't load your conversations: {err}{' '}
@@ -77,8 +78,8 @@ export function Chat({ convId }: { convId?: string }): JSX.Element {
   if (convs.length === 0) {
     const anyBot = Object.keys(bots).length > 0
     return (
-      <div class="col chat-screen">
-        <h1 class="screen-title serif">Chat</h1>
+      <div class="cv-page">
+        <h1>Chat</h1>
         <EmptyState
           testid="chat-empty"
           art={<ChatGlyph />}
@@ -94,7 +95,8 @@ export function Chat({ convId }: { convId?: string }): JSX.Element {
 
   const shown = convs.filter((c) => !q || nameOf(c).toLowerCase().includes(q.toLowerCase()) || c.name.toLowerCase().includes(q.toLowerCase()))
   const pinned = shown.filter((c) => c.pinned)
-  const rest = shown.filter((c) => !c.pinned)
+  const teamsShown = shown.filter((c) => c.kind === 'team' && !c.pinned)
+  const recent = shown.filter((c) => c.kind === 'bot' && !c.pinned)
 
   const current = convId ? convs.find((c) => c.id === convId) : undefined
 
@@ -104,30 +106,45 @@ export function Chat({ convId }: { convId?: string }): JSX.Element {
     return (t?.bots || []).map((b) => ({ name: b, lead: b === lead, identity: bots[b]?.identity }))
   }
 
+  const groups: { label: string; items: Conversation[] }[] = [
+    { label: 'Pinned', items: pinned },
+    { label: 'Teams', items: teamsShown },
+    { label: 'Bots', items: recent },
+  ].filter((g) => g.items.length)
+
   return (
-    <div class="col chat-screen">
-      <div class="chat-layout">
-        <aside class="conv-list" data-testid="conv-list">
-          <div class="conv-search">
-            <input class="field" type="search" placeholder="Find a bot or team" value={q} onInput={(e) => setQ((e.target as HTMLInputElement).value)} />
-          </div>
+    <div class="cv-page">
+      <div class="cv-app">
+        <aside class="cv-list" aria-label="Conversations" data-testid="conv-list">
+          <label class="dl-search cv-s">
+            <Icon name="search" />
+            <input type="search" placeholder="Find a bot or a team" value={q} onInput={(e) => setQ((e.target as HTMLInputElement).value)} aria-label="Find a bot or a team" />
+          </label>
           {err ? <div class="banner err">{err}</div> : null}
-          {pinned.length ? <div class="conv-group-label">Pinned</div> : null}
-          {pinned.map((c) => <ConvItem key={c.id} c={c} name={nameOf(c)} id={identityOf(c)} members={c.kind === 'team' ? teamMembers(c.name).map((m) => m.identity).filter(Boolean) as Identity[] : undefined} active={c.id === convId} />)}
-          {rest.map((c) => <ConvItem key={c.id} c={c} name={nameOf(c)} id={identityOf(c)} members={c.kind === 'team' ? teamMembers(c.name).map((m) => m.identity).filter(Boolean) as Identity[] : undefined} active={c.id === convId} />)}
+          {groups.length === 0 ? <p class="dl-sub cv-none">No bot or team by that name.</p> : null}
+          {groups.map((g) => (
+            <>
+              <h2 class="cv-g">{g.label}</h2>
+              <ul class="cv-l">
+                {g.items.map((c) => (
+                  <ConvItem key={c.id} c={c} name={nameOf(c)} id={identityOf(c)} members={c.kind === 'team' ? teamMembers(c.name).map((m) => m.identity).filter(Boolean) as Identity[] : undefined} active={c.id === convId} />
+                ))}
+              </ul>
+            </>
+          ))}
         </aside>
 
-        <section class="conv-main">
+        <section class="cv-main">
           {current ? (
             <>
-              <div class="conv-header">
+              <header class="cv-th">
                 {current.kind === 'team' ? <StackedTeam team={teams[current.name]?.identity} members={teamMembers(current.name).map((m) => m.identity).filter(Boolean) as Identity[]} size={44} /> : <Avatar id={identityOf(current)} size={44} />}
-                <div class="conv-header-main">
-                  <h2 class="conv-title">{nameOf(current)}</h2>
-                  <p class="muted">{current.kind === 'team' ? 'Group chat — the lead picks it up, or @everyone asks all' : 'Direct — delivered when the bot is idle'}</p>
+                <div class="cv-tt">
+                  <h2 class="cv-name">{nameOf(current)}</h2>
+                  <span class="dl-sub">{current.kind === 'team' ? 'Group chat — the lead picks it up, or @everyone asks all' : 'Direct — delivered when the bot is idle'}</span>
                 </div>
-                <button class="btn ghost sm" type="button" onClick={() => void botsApi.pin(current.id).then(load)}>{current.pinned ? 'Unpin' : 'Pin'}</button>
-              </div>
+                <button class="btn sm secondary" type="button" onClick={() => void botsApi.pin(current.id).then(load)}>{current.pinned ? 'Unpin' : 'Pin'}</button>
+              </header>
               <ChatThread
                 convId={current.id}
                 kind={current.kind}
@@ -136,8 +153,8 @@ export function Chat({ convId }: { convId?: string }): JSX.Element {
               />
             </>
           ) : (
-            <div class="conv-empty">
-              <p class="muted">Pick a conversation. Bots are people; teams are group chats.</p>
+            <div class="cv-main fit">
+              <p class="dl-sub">Pick a conversation. Bots are people; teams are group chats.</p>
             </div>
           )}
         </section>
@@ -147,17 +164,17 @@ export function Chat({ convId }: { convId?: string }): JSX.Element {
 
   function ConvItem({ c, name, id, members, active }: { c: Conversation; name: string; id?: Identity; members?: Identity[]; active: boolean }): JSX.Element {
     return (
-      <button class={'conv-item' + (active ? ' on' : '')} type="button" data-conv={c.id} onClick={() => go(`chat/${c.id}`)}>
-        {c.kind === 'team' ? <StackedTeam team={id} members={members} size={40} /> : <Avatar id={id} size={40} />}
-        <div class="conv-item-main">
-          <div class="conv-item-top">
-            <span class="conv-item-name">{name}</span>
-            {c.kind === 'team' ? <span class="chip tiny">team</span> : null}
-          </div>
-          <p class="conv-item-last muted">{c.last?.text || 'No messages yet'}</p>
-        </div>
-        {c.unread > 0 ? <span class="unread">{c.unread}</span> : null}
-      </button>
+      <li class={'cv-li' + (c.pinned ? ' pinned' : '')} data-key={c.id}>
+        <a class={'cv-c' + (active ? ' on' : '')} href={`#/chat/${c.id}`} aria-current={active ? 'page' : undefined} onClick={(e) => { e.preventDefault(); go(`chat/${c.id}`) }}>
+          {c.kind === 'team' ? <StackedTeam team={id} members={members} size={40} /> : <Avatar id={id} size={40} />}
+          <span class="cv-ct">
+            <b>{name}</b>
+            <span class="dl-sub cv-at">{c.last?.at ? '' : ''}</span>
+            <span class="cv-last">{c.last?.text || 'No messages yet'}</span>
+          </span>
+          {c.unread > 0 ? <span class="count hot cv-un">{c.unread}</span> : null}
+        </a>
+      </li>
     )
   }
 }
