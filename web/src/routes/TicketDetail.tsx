@@ -39,7 +39,7 @@ export function TicketDetail({ num }: { num: string }): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [num])
 
-  if (err) return <div class="tk-page"><nav class="dl-crumbs"><a href="#/tickets">Tickets</a></nav><div class="banner err" role="alert">{err}</div></div>
+  if (err) return <div class="tk-page"><nav class="dl-crumbs" aria-label="Where you are"><a href="#/tickets">Tickets</a></nav><div class="banner err" role="alert">{err}</div></div>
   if (!t) return <div class="tk-page"><p class="muted">Loading {num}…</p></div>
 
   const aw = t.assignee ? who(t.assignee) : null
@@ -75,7 +75,11 @@ export function TicketDetail({ num }: { num: string }): JSX.Element {
 
   return (
     <div class="tk-page" data-ticket={num}>
-      <nav class="dl-crumbs"><a href="#/tickets">Tickets</a><span>{t.title}</span></nav>
+      <nav class="dl-crumbs" aria-label="Where you are">
+        <a href="#/tickets">Tickets</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <span class="cur" aria-current="page">{t.title}</span>
+      </nav>
 
       <section class="dl-card case-head tk-head">
         <div class="tk-ht">
