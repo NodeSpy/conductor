@@ -24,6 +24,8 @@ import { Tickets } from './routes/Tickets'
 import { TicketDetail } from './routes/TicketDetail'
 import { Approval } from './routes/Approval'
 import { Browsers } from './routes/Browsers'
+import { Attention } from './routes/Attention'
+import { More } from './routes/More'
 import { load, startLive } from './state'
 import { route, screen, seg } from './router'
 import { refreshState, authState } from './api/auth'
@@ -115,6 +117,10 @@ function Screen(): JSX.Element {
     case 'browser':
       // #/browser, #/browser/<id|logins|add|details|cards>, #/browser/purchases/<id>
       return <Browsers />
+    case 'attention':
+      return <Attention />
+    case 'more':
+      return <More />
     default:
       return <Overview />
   }

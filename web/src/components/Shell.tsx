@@ -1,37 +1,109 @@
-// The app shell: the left rail (logo, nav, theme), and the page container the
-// current screen renders into. Nav items with a `to` route via the hash router;
-// items still in a later phase are shown disabled so the chrome reads true to
-// the approved design without pretending to route somewhere that isn't built.
+// The app shell: rail (desktop/tablet), top strip, phone header + tab bar, and
+// the page container the current screen renders into. Structure and classes
+// are the prototype's (js/ui.js UI.boot/UI.navHTML/UI.hostCard, css/app.css):
+// the rail full height with the brand on top and the host card at its foot,
+// the quiet top bar, the phone header naming the route, and the five-item tab
+// bar. Settings still lists Config, Logs & audit and Access as their own
+// items (a later phase folds them into System, design §5.4) — a deliberate,
+// noted departure from the approved nav for now.
 import type { ComponentChildren, JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
-import { conn } from '../state'
+import { conn, status, needItems } from '../state'
 import { route, screen } from '../router'
+import { Icon } from './Icon'
+import { StatusMark } from './StatusMark'
 
-const NAV: { label: string; to?: string; soon?: boolean }[] = [
-  { label: 'Overview', to: '' },
-  { label: 'Chat', to: 'chat' },
-  { label: 'Activity', to: 'activity' },
-  { label: 'Workflows', to: 'workflows' },
-  { label: 'Bots', to: 'bots' },
-  { label: 'Tickets', to: 'tickets' },
-  { label: 'Browsers', to: 'browser' },
-  { label: 'Config', to: 'config' },
-  { label: 'Secrets', to: 'secrets' },
-  { label: 'Packs', to: 'packs' },
-  { label: 'Plugins & connections', to: 'connections' },
-  { label: 'System', to: 'system' },
-  { label: 'Logs & audit', to: 'audit' },
-  { label: 'Access', to: 'security' },
+type NavItem = { key: string; label: string; icon: string; count?: () => number; hot?: boolean }
+
+const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
+  {
+    label: '',
+    items: [
+      { key: '', label: 'Home', icon: 'overview' },
+      { key: 'chat', label: 'Chat', icon: 'message' },
+      { key: 'attention', label: 'Needs you', icon: 'attention', count: () => needItems().length, hot: true },
+      { key: 'activity', label: 'Activity', icon: 'live' },
+      { key: 'tickets', label: 'Tickets', icon: 'ticket' },
+      { key: 'workflows', label: 'Workflows', icon: 'workflows' },
+      { key: 'bots', label: 'Bots', icon: 'bots' },
+      { key: 'browser', label: 'Browsers', icon: 'globe' },
+    ],
+  },
+  {
+    label: 'Settings',
+    items: [
+      { key: 'connections', label: 'Plugins', icon: 'connectors' },
+      { key: 'packs', label: 'Packs', icon: 'extensions' },
+      { key: 'secrets', label: 'Secrets', icon: 'secrets' },
+      { key: 'system', label: 'System', icon: 'settings' },
+      // Interim, pending the System merge (design §5.4 phase): their own rail
+      // entries so they stay reachable.
+      { key: 'config', label: 'Config', icon: 'settings' },
+      { key: 'audit', label: 'Logs & audit', icon: 'live' },
+      { key: 'security', label: 'Access', icon: 'secrets' },
+    ],
+  },
 ]
 
+// NAV_ALIAS: pages that live inside another nav destination highlight that
+// destination (a run's page highlights Activity, a bot's page highlights Bots).
+const NAV_ALIAS: Record<string, string> = { runs: 'activity', teams: 'bots', access: 'security' }
+
+function navKeyFor(cur: string): string {
+  return NAV_ALIAS[cur] ?? cur
+}
+
+const TAB_ITEMS: { key: string; label: string; icon: string; count?: () => number }[] = [
+  { key: '', label: 'Home', icon: 'overview' },
+  { key: 'attention', label: 'Needs you', icon: 'attention', count: () => needItems().length },
+  { key: 'chat', label: 'Chat', icon: 'message' },
+  { key: 'activity', label: 'Activity', icon: 'live' },
+  { key: 'more', label: 'More', icon: 'more' },
+]
+
+const PAGE_TITLES: Record<string, string> = {
+  '': 'Home',
+  chat: 'Chat',
+  attention: 'Needs you',
+  activity: 'Activity',
+  tickets: 'Tickets',
+  workflows: 'Workflows',
+  bots: 'Bots',
+  browser: 'Browsers',
+  connections: 'Plugins',
+  packs: 'Packs',
+  secrets: 'Secrets',
+  system: 'System',
+  config: 'Config',
+  audit: 'Logs & audit',
+  security: 'Access',
+  more: 'More',
+}
+
 function Mark(): JSX.Element {
-  // The Daylight fermata mark (assets/logo/mark-inline.html), token-coloured so
-  // it follows the theme. The logo is a swappable asset; this is the one copy.
+  // Fermata, strengthened (assets/logo/mark-inline.html): the one inline copy,
+  // token-coloured so it follows the theme. Swapping the logo is a file drop
+  // over design/dashboard-prototype/assets/logo/, ported here verbatim.
   return (
-    <svg class="logo-mark" viewBox="2.5 6 27 20" role="img" aria-label="conductor">
-      <path fill="var(--color-text-primary)" d="M2.5 21a13.5 15 0 0 1 27 0h-5a8.5 9.5 0 0 0-17 0z" />
-      <circle cx="16" cy="21" r="5" fill="var(--color-accent-default)" />
-    </svg>
+    <span class="logo-slot">
+      <svg class="logo-mark" viewBox="2.5 6 27 20" aria-hidden="true" focusable="false">
+        <g fill="var(--color-logo-ink, var(--color-text-primary))">
+          <path d="M2.5 21a13.5 15 0 0 1 27 0h-5a8.5 9.5 0 0 0-17 0z" />
+        </g>
+        <g fill="var(--color-accent-default)">
+          <circle cx="16" cy="21" r="5" />
+        </g>
+      </svg>
+    </span>
+  )
+}
+
+function Lockup(): JSX.Element {
+  return (
+    <span class="lockup" role="img" aria-label="conductor">
+      <Mark />
+      <span class="wordmark" aria-hidden="true">conductor</span>
+    </span>
   )
 }
 
@@ -54,86 +126,127 @@ function currentTheme(): 'light' | 'dark' | 'auto' {
 export function Shell({ children }: { children: ComponentChildren }): JSX.Element {
   const theme = currentTheme()
   const cycle = () => setTheme(theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto')
-  // On a phone the nav folds behind a menu button so each page opens on its
-  // content; it closes again on any nav tap (the current page's too), on a
-  // route change and on Escape.
-  const [open, setOpen] = useState(false)
-  useEffect(() => setOpen(false), [route.value])
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
-    addEventListener('keydown', onKey)
-    return () => removeEventListener('keydown', onKey)
-  }, [open])
+  // On a phone the rail is hidden entirely (the tab bar replaces it); there is
+  // no fold-out nav drawer in the approved design, so there is nothing to
+  // open or close here beyond the avatar's own small menu.
+  const cur = navKeyFor(screen())
+  const title = PAGE_TITLES[cur] ?? 'conductor'
+  // Re-render the chrome (badge counts, the host card) on every route change
+  // and on each SSE tick by reading the signals the counts depend on.
+  void route.value
+  const need = needItems().length
+
   return (
-    <div class="app">
-      <nav class={'rail' + (open ? ' open' : '')} aria-label="Primary">
-        <div class="rail-top">
-          <div class="brand">
-            <Mark />
-            <span class="wordmark">conductor</span>
-            <ConnDot where="bar" />
-            <button
-              class="menu-btn"
-              type="button"
-              aria-expanded={open}
-              aria-controls="primary-nav"
-              data-testid="menu-button"
-              onClick={() => setOpen(!open)}
-            >
-              <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
-                {open ? (
-                  <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-                ) : (
-                  <path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-                )}
-              </svg>
-              {open ? 'Close' : 'Menu'}
-            </button>
-          </div>
-          <ul class="nav" id="primary-nav">
-            {NAV.map((n) => {
-              // Highlight the section for its detail pages too (bots/:name keeps
-              // Bots lit); Overview ('') only on the exact root.
-              const cur = screen()
-              const active = n.to !== undefined && (n.to === '' ? route.value === '' : cur === n.to)
-              return (
-                <li>
-                  {n.to !== undefined ? (
-                    <a class={'nav-item' + (active ? ' on' : '')} aria-current={active ? 'page' : undefined} href={'#/' + n.to} onClick={() => setOpen(false)}>
-                      {n.label}
+    <div class="shell">
+      <a class="skip" href="#main">Skip to the page</a>
+      <aside class="rail" aria-label="Primary">
+        <a class="brand" href="#/" aria-label="conductor: home">
+          <Lockup />
+        </a>
+        <div id="rail-nav">
+          {NAV_GROUPS.map((g) => (
+            <div class="nav-group">
+              {g.label ? <span class="grp">{g.label}</span> : null}
+              <nav class="nav">
+                {g.items.map((n) => {
+                  const on = cur === n.key
+                  const n2 = n.count ? n.count() : 0
+                  return (
+                    <a href={'#/' + n.key} data-nav={n.key} class={on ? 'on' : ''} aria-current={on ? 'page' : undefined}>
+                      <Icon name={n.icon} />
+                      <span class="lbl">{n.label}</span>
+                      {n2 ? <span class={'count' + (n.hot ? ' hot' : '')}>{n2}</span> : null}
                     </a>
-                  ) : (
-                    <span class="nav-item soon" aria-disabled="true" title="Arrives in a later phase">
-                      {n.label}
-                    </span>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
+                  )
+                })}
+              </nav>
+            </div>
+          ))}
         </div>
-        <div class="rail-foot">
-          <button class="theme-btn" type="button" onClick={cycle} title="Switch theme">
-            {theme === 'auto' ? 'Theme: auto' : theme === 'light' ? 'Theme: light' : 'Theme: dark'}
-          </button>
-          <ConnDot where="rail" />
+        <div class="rail-host">
+          <HostCard />
         </div>
+      </aside>
+
+      <header class="strip">
+        <a class="brand ph-brand" href="#/" aria-label="conductor: home">
+          <Mark />
+          <b>{title}</b>
+        </a>
+        <div class="spacer" />
+        <ThemeCell theme={theme} cycle={cycle} />
+        <button type="button" class="cell op-btn" aria-label="Account">
+          <span class="avatar">OP</span>
+        </button>
+      </header>
+
+      <main class="main" id="main" tabindex={-1}>
+        <div class="page dl-page">{children}</div>
+      </main>
+
+      <nav class="tabbar" aria-label="Primary">
+        {TAB_ITEMS.map((t) => {
+          const on = cur === t.key
+          const n = t.count ? t.count() : 0
+          return (
+            <a href={'#/' + t.key} data-nav={t.key} class={on ? 'on' : ''}>
+              <Icon name={t.icon} />
+              <span>{t.label}</span>
+              {n ? <span class="count hot">{n}</span> : null}
+            </a>
+          )
+        })}
       </nav>
-      <main class="page">{children}</main>
+      {/* keep the aggregator warm so the badge above reads true */}
+      <span hidden aria-hidden="true">{need}</span>
     </div>
   )
 }
 
-// ConnDot is the event stream's state. It sits in the rail's foot on a wide
-// screen and in the top bar on a phone, where the foot is folded away.
-function ConnDot({ where }: { where: 'rail' | 'bar' }): JSX.Element {
+// ThemeCell is the quiet top-bar theme cycle (auto → light → dark), plus a
+// small live-connection word when the event stream isn't live (the approved
+// design has no place for this signal; it is surfaced only when it matters).
+function ThemeCell({ theme, cycle }: { theme: 'light' | 'dark' | 'auto'; cycle: () => void }): JSX.Element {
   const c = conn.value
-  const label = c === 'live' ? 'Live' : c === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'
   return (
-    <span class={'conn conn-' + where} data-conn={c} data-testid={'conn-' + where} title={`Event stream: ${label}`}>
-      <span class="conn-dot" />
-      {label}
-    </span>
+    <>
+      {c !== 'live' ? (
+        <span class="cell" data-testid="conn-bar" title="Event stream">
+          {c === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
+        </span>
+      ) : null}
+      <button type="button" class="cell" onClick={cycle} title="Switch theme">
+        <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
+      </button>
+    </>
   )
+}
+
+// HostCard is the machine card at the rail's foot (More on a phone): how the
+// machine is, in one word, and quietly its version — the one place daemon
+// health shows (UI.hostCard). No update block yet: UpdateInfo doesn't carry
+// whether an update needs a person (design gap, phase 7).
+function HostCard(): JSX.Element {
+  const st = status.value
+  const [host, setHost] = useState('this machine')
+  useEffect(() => setHost(location.hostname || 'this machine'), [])
+  if (!st) return <div class="host" />
+  const paused = st.paused
+  const mark = paused ? 'wait' : 'ok'
+  const line = paused ? 'Paused: nothing new starts' : `Healthy · up ${upFor(st.uptime_sec)}`
+  return (
+    <a class={'host' + (paused ? ' need' : '')} href="#/system" aria-label={`${host}: ${line}`}>
+      <StatusMark s={mark} mkOnly label={paused ? 'needs a look' : 'healthy'} />
+      <span class="who">
+        <b>{host}</b>
+        <span id="host-line">{line}</span>
+      </span>
+    </a>
+  )
+}
+
+function upFor(sec: number): string {
+  if (sec < 3600) return `${Math.max(1, Math.round(sec / 60))} min`
+  if (sec < 86400) return `${Math.round(sec / 3600)} h`
+  return `${Math.round(sec / 86400)} d`
 }
