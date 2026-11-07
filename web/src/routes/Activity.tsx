@@ -25,6 +25,7 @@ import { emptyFilter, matchRun, rangeMinutes, hasAnyFilter, STATUSES, type Filte
 import { humanDuration, ago, plural } from '../lib/format'
 import { api } from '../api/client'
 import { go } from '../router'
+import { usePhoneLayout } from '../lib/layout'
 
 const PAGE = 20
 
@@ -48,6 +49,13 @@ function reason(r: RunSummary): string {
 export function Activity(): JSX.Element {
   const tick = liveTick.value
   const skip = dismissed.value
+  // The table's own "Show N more" button (below) is left out of the DOM on a
+  // phone: the phone groups render the identical button for the same
+  // `shown`/`finished`, and CSS alone hiding the table (display: none, not
+  // removed) still leaves it a second, invisible match for any locator that
+  // finds buttons by their text — it collided with the phone disclosure's own
+  // "Show"/"Hide" toggle, which shares the word "Show".
+  const phone = usePhoneLayout()
   const [filter, setFilter] = useState<FilterState>(emptyFilter('12h'))
   const [shown, setShown] = useState(PAGE)
   const [sel, setSel] = useState<Set<string>>(new Set())
@@ -233,7 +241,7 @@ export function Activity(): JSX.Element {
                   <tbody class="g-done">
                     <GroupHead title="Finished" n={finished.length} cols={cols} />
                     {finishedShown.map((r) => <Row r={r} sel={sel.has(r.id)} onSel={() => toggleSel(r.id)} />)}
-                    {finished.length > shown ? (
+                    {finished.length > shown && !phone ? (
                       <tr class="more">
                         <td colSpan={cols + 1}>
                           <button class="btn sm secondary" type="button" onClick={() => setShown((s) => s + PAGE)}>

@@ -20,6 +20,7 @@ import { route, screen } from '../router'
 import { Icon } from './Icon'
 import { StatusMark } from './StatusMark'
 import { Palette, type PaletteItem } from './Palette'
+import { usePhoneLayout } from '../lib/layout'
 
 type NavItem = { key: string; label: string; icon: string; count?: () => number; hot?: boolean }
 
@@ -152,12 +153,19 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
   // On a phone the rail is hidden entirely (the tab bar replaces it); there is
   // no fold-out nav drawer in the approved design, so there is nothing to
   // open or close here beyond the avatar's own small menu.
+  const phone = usePhoneLayout()
   const cur = navKeyFor(screen())
   const title = PAGE_TITLES[cur] ?? 'conductor'
   // Re-render the chrome (badge counts, the host card) on every route change
   // and on each SSE tick by reading the signals the counts depend on.
   void route.value
   const need = needItems().length
+
+  // The Settings group (Plugins/Packs/Secrets/System) is what More.tsx also
+  // carries on a phone; CSS already hides the rest of the rail there, but
+  // leaving this one group out of the DOM too keeps its links from being a
+  // second, invisible match for a plain-text locator of More's own.
+  const navGroups = phone ? NAV_GROUPS.filter((g) => !g.label) : NAV_GROUPS
 
   return (
     <div class="shell">
@@ -167,7 +175,7 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
           <Lockup />
         </a>
         <div id="rail-nav">
-          {NAV_GROUPS.map((g) => (
+          {navGroups.map((g) => (
             <div class="nav-group">
               {g.label ? <span class="grp">{g.label}</span> : null}
               <nav class="nav">
