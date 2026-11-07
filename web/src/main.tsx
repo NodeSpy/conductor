@@ -11,7 +11,7 @@ import './styles/screens.css'
 import './styles/legacy.css'
 import './styles/read.css'
 import './styles/bots.css'
-import './styles/browser.css'
+import './styles/wallet.css'
 import './styles/builder.css'
 
 const root = document.getElementById('app')

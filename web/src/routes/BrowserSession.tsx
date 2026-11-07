@@ -6,6 +6,7 @@
 import type { JSX } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { browser, who, takeover, releaseTakeover, sendInput, type BrowserSession } from '../api/browser'
+import { Icon } from '../components/Icon'
 import { humanError } from '../api/errors'
 
 export function BrowserSessionView({ id }: { id: string }): JSX.Element {
@@ -105,18 +106,20 @@ export function BrowserSessionView({ id }: { id: string }): JSX.Element {
   if (!sess) return <div class="col"><p class="muted">Loading the session…</p></div>
 
   return (
-    <div class="col browser-live" data-session={id}>
-      <a class="back" href="#/browser">← Browsers</a>
+    <div class="wl-page" data-session={id}>
       <div class="page-head">
-        <h1 class="screen-title serif sans-gen">{sess.identity}</h1>
-        <div class="row-actions">
+        <div>
+          <a class="back" href="#/browser">← Browsers</a>
+          <h1 class="gen">{sess.identity}</h1>
+        </div>
+        <div class="actions">
           {leased ? (
             <button class="btn" type="button" disabled={busy} data-testid="release" onClick={() => void doRelease()}>
-              Release
+              <Icon name="undo" />Release
             </button>
           ) : (
             <button class="btn primary" type="button" disabled={busy} data-testid="takeover" onClick={() => void doTakeover()}>
-              {busy ? 'Confirming…' : 'Take over'}
+              <Icon name="hand" />{busy ? 'Confirming…' : 'Take over'}
             </button>
           )}
         </div>
@@ -128,22 +131,26 @@ export function BrowserSessionView({ id }: { id: string }): JSX.Element {
       </p>
       {err ? <div class="banner err">{err}</div> : null}
 
-      <div class="live-grid">
-        <section class="panel live-screen-panel">
-          {leased ? (
-            <div class="ctrl-banner" data-testid="control-banner">
-              You have control · the agent is paused <span class="kbd">Esc</span> to release
-            </div>
-          ) : null}
+      <div class="grid" style="grid-template-columns:minmax(0,1fr) 340px;align-items:start">
+        <div class="panel">
+          <div class="bchrome">
+            <div class="url"><Icon name="lock" class="lockic" /><span class="ellipsis">{sess.profile}</span></div>
+            <span class="row tiny mono muted"><span class="rec" />CDP screencast</span>
+          </div>
           <div
             class={'bscreen' + (leased ? ' takeover' : '')}
             tabIndex={leased ? 0 : -1}
             onClick={onScreenClick}
             onKeyDown={onScreenKey}
           >
+            {leased ? (
+              <div class="ctrl-banner" id="banner" data-testid="control-banner">
+                <Icon name="hand" />You have control · agent paused<span class="kbd on-accent">Esc</span> to release
+              </div>
+            ) : null}
             <img
               ref={imgRef}
-              class="live-frame"
+              style="width:100%;display:block"
               src={frame || browser.peekURL(id)}
               alt="live view"
               onLoad={(e) => {
@@ -152,29 +159,23 @@ export function BrowserSessionView({ id }: { id: string }): JSX.Element {
               }}
             />
           </div>
-          <p class="panel-foot facts muted">jailed Chromium · CDP over a pipe (no debugging port) · egress via the allowlist proxy only</p>
-        </section>
-
-        <aside class="live-side">
-          <section class="panel">
-            <span class="panel-title">Session</span>
-            <dl class="detail-list">
-              <dt>Profile</dt>
-              <dd>{sess.profile}</dd>
-              <dt>Identity</dt>
-              <dd class="mono">{sess.identity}</dd>
-              {sess.agent ? (<><dt>Agent</dt><dd class="mono">{sess.agent}</dd></>) : null}
-              {sess.requester ? (<><dt>Asked for by</dt><dd>{sess.requester}</dd></>) : null}
-            </dl>
-          </section>
-          <section class="panel">
-            <div class="panel-head">
-              <span class="panel-title">Actions</span>
-              <span class="muted small">audited · values never recorded</span>
-            </div>
-            <p class="muted">Each browser action the agent takes is audited (never a value). Keystrokes you type while in control are audited as a length only.</p>
-          </section>
-        </aside>
+          <div class="panel-foot small"><span class="muted"><Icon name="shield" /> jailed Chromium · CDP over a pipe (no debugging port) · egress via the allowlist proxy only</span></div>
+        </div>
+        <div class="stack">
+          <div class="panel">
+            <div class="panel-head"><h3>Session</h3></div>
+            <div class="panel-body"><dl class="kv small">
+              <dt>profile</dt><dd>{sess.profile}</dd>
+              <dt>identity</dt><dd class="mono">{sess.identity}</dd>
+              {sess.agent ? (<><dt>agent</dt><dd class="mono">{sess.agent}</dd></>) : null}
+              {sess.requester ? (<><dt>asked for by</dt><dd>{sess.requester}</dd></>) : null}
+            </dl></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Actions</h3><span class="muted small">audited · values never recorded</span></div>
+            <div class="panel-body"><p class="muted">Each browser action the agent takes is audited (never a value). Keystrokes you type while in control are audited as a length only.</p></div>
+          </div>
+        </div>
       </div>
     </div>
   )

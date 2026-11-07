@@ -1,5 +1,5 @@
 // New bot (design §4.4): a sheet over the roster, restyled into Daylight's
-// generic modal (design §3: .modal-scrim/.modal, a bottom sheet on a phone —
+// generic modal (design §3: .scrim/.modal, a bottom sheet on a phone —
 // see app.css). It composes the bot — a display name, what it's for, a team
 // (its defaults shown as inherited), and a face from the identity picker — and
 // stages it as a config change that lands through the same review/apply
@@ -66,7 +66,7 @@ export function NewBotSheet({ teams, workers, onClose, onStaged }: { teams: Team
   }
 
   return (
-    <div class="modal-scrim" onClick={onClose}>
+    <div class="scrim" onClick={onClose}>
       <div class="modal" role="dialog" aria-label="New bot" onClick={(e) => e.stopPropagation()}>
         <h2>New bot</h2>
         <div class="modal-body stack">

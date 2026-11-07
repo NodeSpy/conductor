@@ -51,6 +51,8 @@ export interface WalletProfile {
   method: string // config | stored
   identities: string[] | null
   sites: { origin: string; fields: string[] }[] | null
+  // visible: field -> hidden (default) | exists | fact | value — what a bot may
+  // learn about a detail without ever being handed its value.
   visible: Record<string, string> | null
   fields: Record<string, FieldView> | null
   editable: boolean
@@ -328,4 +330,35 @@ export function who(id: string): string {
 // hostOf strips scheme and trailing slash from an origin for display.
 export function hostOf(origin: string): string {
   return origin.replace(/^https?:\/\//, '').replace(/\/$/, '')
+}
+
+// kindWord names a card's kind in words (Cards and the purchase approval
+// both show it next to the card).
+export function kindWord(k: string): string {
+  return k === 'virtual' ? 'Virtual card' : k === 'single-use' ? 'Single-use card' : k === 'physical' ? 'Physical card' : 'Card'
+}
+
+// --- what a bot may learn about a personal detail, without ever being handed
+// its value (design §4.5.1): hidden (default) | exists | fact | value. A fact
+// is a narrow, named thing (an email's domain, an address's country), never
+// the value itself.
+const LEARN_FACT: Record<string, string> = {
+  email: "the email's domain",
+  phone: "the phone's country code",
+  birthday: 'whether you’re 18 or older',
+  'address.country': 'the country',
+  'billing.country': 'the billing country',
+}
+
+export function learnWord(field: string, v: string | undefined): string {
+  switch (v) {
+    case 'exists':
+      return `whether it's set`
+    case 'fact':
+      return LEARN_FACT[field] || 'a fact about it'
+    case 'value':
+      return 'the value itself'
+    default:
+      return 'nothing'
+  }
 }
