@@ -10,6 +10,7 @@
 // reference (vault/env/setting) when it saves.
 import type { JSX } from 'preact'
 import { useState } from 'preact/hooks'
+import { Icon } from './Icon'
 
 export type VSource = 'typed' | 'vault' | 'env' | 'setting'
 
@@ -26,6 +27,15 @@ const NAMES: Record<VSource, string> = {
   env: 'Environment variable',
   setting: 'Setting',
 }
+
+const DESC: Record<VSource, string> = {
+  typed: 'Type it once; stored write-only, never shown again.',
+  vault: 'A conductor vault entry, or an item in 1Password or Bitwarden.',
+  env: "Read from conductor's environment when the value is used.",
+  setting: 'A shared value from Config → Settings. Plain config, never for a secret.',
+}
+
+const ICON: Record<VSource, string> = { typed: 'edit', vault: 'lock', env: 'terminal', setting: 'config' }
 
 // sourcesFor returns which sources a field offers. Browser credentials and
 // card/profile details (credential: true) offer only Typed and Vault; a plain
@@ -62,76 +72,76 @@ export function ValueSource({
     onChange({ ...value, source: s })
   }
 
+  const main = sources.filter((s) => !isOther(s, sensitive))
+  const other = sources.filter((s) => isOther(s, sensitive))
+  const opt = (s: VSource): JSX.Element => (
+    <button type="button" role="menuitemradio" class={'vs-opt' + (s === src ? ' on' : '')} aria-checked={s === src} onClick={() => pick(s)}>
+      <Icon name={ICON[s]} />
+      <b>{NAMES[s]}</b>
+      <span>{DESC[s]}</span>
+    </button>
+  )
+
   return (
-    <div class="vs" data-vs={testid} data-src={src}>
-      {label ? <span class="vs-label">{label}</span> : null}
-      <div class="vs-row">
-        <details class="vs-menu" open={menu}>
-          <summary
-            class="vs-src"
-            onClick={(e) => {
-              e.preventDefault()
-              setMenu(!menu)
-            }}
-          >
-            {NAMES[src]} <span class="chev">▾</span>
-          </summary>
-          <ul class="vs-src-list" role="menu">
-            {sources
-              .filter((s) => !isOther(s, sensitive))
-              .map((s) => (
-                <li>
-                  <button type="button" role="menuitem" onClick={() => pick(s)}>
-                    {NAMES[s]}
-                  </button>
-                </li>
-              ))}
-            {sources.some((s) => isOther(s, sensitive)) ? <li class="vs-more">Other sources</li> : null}
-            {sources
-              .filter((s) => isOther(s, sensitive))
-              .map((s) => (
-                <li>
-                  <button type="button" role="menuitem" onClick={() => pick(s)}>
-                    {NAMES[s]}
-                  </button>
-                </li>
-              ))}
-          </ul>
-        </details>
-        <div class="vs-body">
-          {src === 'typed' ? (
-            <input
-              class="vs-input"
-              type={sensitive ? 'password' : 'text'}
-              value={sensitive ? '' : value.value || ''}
-              placeholder={
-                sensitive
-                  ? value.set
-                    ? 'set · type to replace'
-                    : placeholder || 'stored in the vault when you save; the field keeps the reference'
-                  : placeholder || 'a value'
-              }
-              data-testid={testid ? testid + '-input' : undefined}
-              onInput={(e) => onChange({ ...value, value: (e.target as HTMLInputElement).value })}
-            />
-          ) : (
-            <input
-              class="vs-input mono"
-              type="text"
-              value={value.ref || ''}
-              placeholder={refPlaceholder(src)}
-              data-testid={testid ? testid + '-ref' : undefined}
-              onInput={(e) => onChange({ ...value, ref: (e.target as HTMLInputElement).value })}
-            />
-          )}
+    <div class="field" data-vs={testid}>
+      {label ? <span class="flabel">{label}</span> : null}
+      <div class="vs" data-src={src}>
+        <div class="vs-row">
+          <details class="vs-menu" open={menu}>
+            <summary
+              class="vs-srcbtn"
+              onClick={(e) => {
+                e.preventDefault()
+                setMenu(!menu)
+              }}
+            >
+              <Icon name={ICON[src]} />
+              <span>{NAMES[src]}</span>
+              <Icon name="chevd" class="chev" />
+            </summary>
+            {menu ? (
+              <div class="vs-pop" role="menu">
+                {main.map(opt)}
+                {other.length ? <div class="vs-more">Other sources</div> : null}
+                {other.map(opt)}
+              </div>
+            ) : null}
+          </details>
+          <div class="vs-body">
+            {src === 'typed' ? (
+              <input
+                class="input"
+                type={sensitive ? 'password' : 'text'}
+                value={sensitive ? '' : value.value || ''}
+                placeholder={
+                  sensitive
+                    ? value.set
+                      ? 'set · type to replace'
+                      : placeholder || 'stored write-only; the field keeps the reference'
+                    : placeholder || 'a value'
+                }
+                data-testid={testid ? testid + '-input' : undefined}
+                onInput={(e) => onChange({ ...value, value: (e.target as HTMLInputElement).value })}
+              />
+            ) : (
+              <input
+                class="input mono"
+                type="text"
+                value={value.ref || ''}
+                placeholder={refPlaceholder(src)}
+                data-testid={testid ? testid + '-ref' : undefined}
+                onInput={(e) => onChange({ ...value, ref: (e.target as HTMLInputElement).value })}
+              />
+            )}
+          </div>
         </div>
+        {src === 'vault' ? (
+          <p class="vs-check dl-sub">The one reference syntax: {'{{ vault "<vault>" "<key>" }}'} — a value is never shown here.</p>
+        ) : null}
+        {src === 'setting' && sensitive ? (
+          <p class="vs-check callout warn small">Blocked: a setting is plain config, in every diff and backup. A sensitive value has to come from a vault or an env var.</p>
+        ) : null}
       </div>
-      {src === 'vault' ? (
-        <p class="vs-check muted">The one reference syntax: {'{{ vault "<vault>" "<key>" }}'} — a value is never shown here.</p>
-      ) : null}
-      {src === 'setting' && sensitive ? (
-        <p class="vs-msg warn">Blocked: a setting is plain config, in every diff and backup. A sensitive value has to come from a vault or an env var.</p>
-      ) : null}
     </div>
   )
 }

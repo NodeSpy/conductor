@@ -2,15 +2,12 @@ import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { Shell } from './components/Shell'
 import { Overview } from './routes/Overview'
-import { Config } from './routes/Config'
 import { Secrets } from './routes/Secrets'
 import { Packs } from './routes/Packs'
 import { Connections } from './routes/Connections'
 import { System } from './routes/System'
-import { Audit } from './routes/Audit'
 import { Signin } from './routes/Signin'
 import { Enroll } from './routes/Enroll'
-import { Access } from './routes/Access'
 import { Activity } from './routes/Activity'
 import { RunDetail } from './routes/RunDetail'
 import { Workflows } from './routes/Workflows'
@@ -24,6 +21,8 @@ import { Tickets } from './routes/Tickets'
 import { TicketDetail } from './routes/TicketDetail'
 import { Approval } from './routes/Approval'
 import { Browsers } from './routes/Browsers'
+import { Attention } from './routes/Attention'
+import { More } from './routes/More'
 import { load, startLive } from './state'
 import { route, screen, seg } from './router'
 import { refreshState, authState } from './api/auth'
@@ -53,11 +52,22 @@ export function App(): JSX.Element {
   if (!st.signed_in && (st.required || path === '/signin')) return <Signin />
 
   return (
-    <Shell>
-      {st.transport === 'http' ? <PlainHTTPNotice /> : null}
-      <Authed />
+    <>
+      {/* Outside Shell, not inside it: Shell wraps its children in
+          `.page.dl-page` for the current route, and a page's own button
+          sizing (`.dl-page .btn`) would otherwise win over the dialog's own
+          44px tap target (auth.css's `.dialog-foot .btn`) by tie-break of
+          equal specificity plus source order — exactly what made Cancel a
+          36px target (authmethods.spec.ts). The dialog is a fixed overlay
+          that positions itself over everything regardless of where it sits
+          in the tree, so it loses nothing by sitting beside Shell instead of
+          inside it. */}
+      <Shell>
+        {st.transport === 'http' ? <PlainHTTPNotice /> : null}
+        <Authed />
+      </Shell>
       <StepupDialog />
-    </Shell>
+    </>
   )
 }
 
@@ -72,12 +82,32 @@ function Authed(): JSX.Element {
   return <Screen />
 }
 
+// LEGACY_SYSTEM_TABS: routes that used to be their own screens before System
+// absorbed Config, Safety, Updates, Logs & audit and Access as its own
+// sub-navigation (CONFORMANCE, shell note). Each keeps working as a redirect
+// into the matching System tab so old links and bookmarks don't break.
+const LEGACY_SYSTEM_TABS: Record<string, string> = {
+  config: 'config',
+  safety: 'safety',
+  updates: 'updates',
+  audit: 'logs',
+  security: 'access',
+  access: 'access',
+}
+
+function Redirect({ to }: { to: string }): JSX.Element {
+  useEffect(() => {
+    location.replace('#/' + to)
+  }, [to])
+  return <div class="col" />
+}
+
 function Screen(): JSX.Element {
   // Read route.value so this re-renders on every hash change.
   void route.value
-  switch (screen()) {
-    case 'config':
-      return <Config />
+  const s = screen()
+  if (s in LEGACY_SYSTEM_TABS) return <Redirect to={`system/${LEGACY_SYSTEM_TABS[s]}`} />
+  switch (s) {
     case 'secrets':
       return <Secrets />
     case 'packs':
@@ -86,11 +116,6 @@ function Screen(): JSX.Element {
       return <Connections />
     case 'system':
       return <System />
-    case 'audit':
-      return <Audit />
-    case 'security':
-    case 'access':
-      return <Access />
     case 'activity':
       return <Activity />
     case 'runs':
@@ -115,6 +140,10 @@ function Screen(): JSX.Element {
     case 'browser':
       // #/browser, #/browser/<id|logins|add|details|cards>, #/browser/purchases/<id>
       return <Browsers />
+    case 'attention':
+      return <Attention />
+    case 'more':
+      return <More />
     default:
       return <Overview />
   }

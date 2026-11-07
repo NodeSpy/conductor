@@ -46,3 +46,8 @@ export function ago(iso: string): string {
 export function uptime(sec: number): string {
   return humanDuration(sec * 1000)
 }
+
+// plural is a count with its noun: "1 bot", "2 bots".
+export function plural(n: number, one: string, many = one + 's'): string {
+  return `${n} ${n === 1 ? one : many}`
+}

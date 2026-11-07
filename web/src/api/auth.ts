@@ -4,7 +4,7 @@
 // token is learned from auth/state and refreshed on sign-in.
 import { signal } from '@preact/signals'
 import { getAssertion, createCredential, passkeysUsable } from '../lib/webauthn'
-import { readJSON } from './safe'
+import { readResponse } from './errors'
 
 export type Method = 'passkey' | 'ssh' | 'password' | 'totp'
 
@@ -30,22 +30,9 @@ export interface AuthState {
 export const authState = signal<AuthState>({ signed_in: false })
 let csrf = ''
 
-interface APIError {
-  error?: { code?: string; message?: string; hint?: string }
-}
-
-async function handle<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`
-    try {
-      const b = (await readJSON(res)) as APIError
-      if (b?.error?.message) message = b.error.message
-    } catch {
-      /* non-JSON */
-    }
-    throw new Error(message)
-  }
-  return (await readJSON(res)) as T
+// handle reads an answer as data, or throws an ApiError worded for a person.
+function handle<T>(res: Response): Promise<T> {
+  return readResponse<T>(res)
 }
 
 function get<T>(path: string): Promise<T> {

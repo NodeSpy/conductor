@@ -7,6 +7,7 @@ import { signal } from '@preact/signals'
 import { api, validateStream } from './api/client'
 import { authState, stepUp } from './api/auth'
 import type { ConfigResponse, ConfigChange, ReviewResponse, AppliedResponse } from './api/types'
+import { humanError } from './api/errors'
 
 export const config = signal<ConfigResponse | null>(null)
 export const staged = signal<ConfigChange[]>([])
@@ -120,5 +121,5 @@ export async function apply(): Promise<void> {
 }
 
 function msg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e)
+  return humanError(e)
 }

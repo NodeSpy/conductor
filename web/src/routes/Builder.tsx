@@ -1,170 +1,122 @@
-// The workflow builder (design §4.4): a canvas that shows the steps as a graph,
-// beside an editable YAML pane they stay in sync with. You compose a workflow
-// draft here; it is the config-edit pipeline (Config screen) that applies it to
-// the live config, so this page never writes on its own — it builds the YAML and
-// hands it off. The canvas is derived live from the YAML (a light structural
-// parse — the daemon is the real validator, via the dry-run Test).
+// New workflow: name it, pick manual or an event you'll fill in afterwards,
+// and it's staged into the config's triggers: list — the same review → apply
+// pipeline every config edit uses. Once applied, it opens in its own builder
+// page (#/workflows/<name>) where the Config file tab is a full YAML editor.
 import type { JSX } from 'preact'
-import { useMemo, useRef, useState } from 'preact/hooks'
-import { Graph } from '../components/Graph'
-import type { GraphNode } from '../api/types'
+import { useEffect, useRef, useState } from 'preact/hooks'
+import { config, staged, applyResult, loadConfig, stage } from '../configStore'
+import { ReviewPanel } from '../components/ReviewPanel'
+import { go } from '../router'
+import { api } from '../api/client'
 
-const TEMPLATE = `name: my-workflow
-on: manual
-steps:
-  - id: review
-    agent: reviewer
-    prompt: Review the change and summarise risks.
-  - id: comment
-    uses: github.comment
-    options:
-      body: "{{ .review.summary }}"
-`
-
-// A step template per kind, appended when you click a palette chip.
-const PALETTE: { kind: string; label: string; snippet: (id: string) => string }[] = [
-  { kind: 'agent', label: 'Agent', snippet: (id) => `  - id: ${id}\n    agent: worker\n    prompt: Do the work.\n` },
-  { kind: 'verb', label: 'Verb', snippet: (id) => `  - id: ${id}\n    uses: github.comment\n    options:\n      body: "..."\n` },
-  { kind: 'code', label: 'Code', snippet: (id) => `  - id: ${id}\n    run: js\n    code: "return { ok: true }"\n` },
-  { kind: 'decide', label: 'Decide', snippet: (id) => `  - id: ${id}\n    decide:\n      prompt: Is this a test failure?\n` },
-  { kind: 'handoff', label: 'Hand-off', snippet: (id) => `  - id: ${id}\n    agent: author\n    handoff: slack\n    prompt: Draft a reply for review.\n` },
-]
-
-// parseSteps does a light, indentation-aware scan of a workflow YAML's `steps:`
-// list — enough to render the canvas. It is not a YAML parser (the daemon
-// validates on Test); it recognises list items and the one form key each
-// carries, matching config.Step.Form's precedence.
-function parseSteps(yaml: string): GraphNode[] {
-  const lines = yaml.split('\n')
-  let inSteps = false
-  let stepsIndent = -1
-  const items: { startLine: number; lines: string[] }[] = []
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i]
-    const indent = raw.search(/\S/)
-    if (indent < 0) continue
-    if (!inSteps) {
-      if (/^\s*steps\s*:/.test(raw)) {
-        inSteps = true
-        stepsIndent = indent
-      }
-      continue
-    }
-    // Left the steps block (a sibling/parent key at <= steps indent).
-    if (indent <= stepsIndent && !/^\s*-/.test(raw)) break
-    const itemIndent = raw.indexOf('-')
-    if (/^\s*-/.test(raw) && itemIndent > stepsIndent) {
-      items.push({ startLine: i + 1, lines: [raw] })
-    } else if (items.length) {
-      items[items.length - 1].lines.push(raw)
-    }
-  }
-
-  const nodes: GraphNode[] = []
-  let prev = ''
-  items.forEach((it, idx) => {
-    const text = it.lines.join('\n')
-    const idM = text.match(/\bid\s*:\s*([\w.-]+)/)
-    const id = idM ? idM[1] : `step${idx + 1}`
-    const kind = kindOf(text)
-    const label = labelOf(text, kind)
-    nodes.push({ id, kind, label, needs: prev ? [prev] : [], line: it.startLine })
-    prev = id
-  })
-  return nodes
-}
-
-function kindOf(text: string): string {
-  if (/\bhandoff\s*:/.test(text)) return 'handoff'
-  if (/\buses\s*:/.test(text)) return 'verb'
-  if (/\bdecide\s*:/.test(text)) return 'decide'
-  if (/\b(call|workflow)\s*:/.test(text)) return 'call'
-  if (/\b(use|run)\s*:/.test(text)) return 'code'
-  if (/\bagent\s*:/.test(text) || /\bprompt\s*:/.test(text)) return 'agent'
-  if (/\bcommand\s*:/.test(text)) return 'command'
-  if (/\bparallel\s*:/.test(text)) return 'parallel'
-  return 'step'
-}
-
-function labelOf(text: string, kind: string): string {
-  const keys: Record<string, RegExp> = {
-    agent: /\bagent\s*:\s*([\w.-]+)/,
-    verb: /\buses\s*:\s*([\w.-]+)/,
-    handoff: /\bhandoff\s*:\s*([\w.-]+)/,
-    call: /\b(?:call|workflow)\s*:\s*([\w.-]+)/,
-    code: /\b(?:use|run)\s*:\s*([\w.-]+)/,
-  }
-  const re = keys[kind]
-  const m = re && text.match(re)
-  return m ? m[1] : ''
-}
+const NAME_RE = /^[a-z][a-z0-9-]*$/
 
 export function Builder(): JSX.Element {
-  const [yaml, setYaml] = useState(TEMPLATE)
-  const [sel, setSel] = useState('')
-  const taRef = useRef<HTMLTextAreaElement>(null)
-  const nodes = useMemo(() => parseSteps(yaml), [yaml])
+  const [name, setName] = useState('')
+  const [kind, setKind] = useState<'manual' | 'event'>('manual')
+  const [touched, setTouched] = useState(false)
+  const [staging, setStaging] = useState(false)
+  const [waiting, setWaiting] = useState(false)
+  const [gaveUp, setGaveUp] = useState(false)
 
-  const addStep = (p: (typeof PALETTE)[number]) => {
-    const id = `${p.kind}-${nodes.length + 1}`
-    const next = yaml.replace(/\n*$/, '\n') + p.snippet(id)
-    setYaml(next)
-    setSel(id)
+  useEffect(() => void loadConfig(), [])
+
+  const existing = (config.value?.tree?.triggers as { name?: string }[] | undefined) || []
+  const taken = existing.some((t) => t?.name === name)
+  const valid = NAME_RE.test(name) && !taken
+
+  const appliedAtMount = useRef(applyResult.value)
+  const applied = applyResult.value && applyResult.value !== appliedAtMount.current ? applyResult.value : null
+  useEffect(() => {
+    if (!applied) return
+    setWaiting(true)
+    setGaveUp(false)
+    let tries = 0
+    let stop = false
+    const poll = () => {
+      if (stop) return
+      api
+        .workflow(name)
+        .then(() => {
+          if (stop) return
+          go('workflows/' + encodeURIComponent(name))
+        })
+        .catch(() => {
+          if (stop) return
+          if (++tries < 20) setTimeout(poll, 1000)
+          else setGaveUp(true)
+        })
+    }
+    const t = setTimeout(poll, 800)
+    return () => {
+      stop = true
+      clearTimeout(t)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applied])
+
+  const create = async () => {
+    if (!valid) {
+      setTouched(true)
+      return
+    }
+    setStaging(true)
+    try {
+      const next = [...existing, { name, on: 'manual', enabled: kind === 'manual' ? true : false, steps: [] }]
+      await stage(['triggers'], next, `new workflow ${name}`)
+    } finally {
+      setStaging(false)
+    }
   }
 
-  const pick = (n: GraphNode) => {
-    setSel(n.id)
-    const ta = taRef.current
-    const line = n.line ?? 0
-    if (ta && line > 0) {
-      const pos = yaml.split('\n').slice(0, line - 1).join('\n').length + 1
-      ta.focus()
-      ta.setSelectionRange(pos, pos)
-    }
+  const pendingTriggers = staged.value.filter((c) => c.path[0] === 'triggers').length
+
+  if (waiting) {
+    return (
+      <div class="col m-page">
+        <h1 class="screen-title serif">Build a workflow</h1>
+        {gaveUp ? (
+          <div class="banner attn" role="status">Applied, but <span class="mono">{name}</span> hasn't shown up yet. conductor may still be reloading — reload this page in a moment.</div>
+        ) : (
+          <p class="muted">Applying…</p>
+        )}
+      </div>
+    )
   }
 
   return (
-    <div class="col" data-builder>
+    <div class="col m-page">
       <nav class="crumbs" aria-label="Breadcrumb">
         <a href="#/workflows">Workflows</a>
         <span class="crumbs-sep">/</span>
         <span>New workflow</span>
       </nav>
       <h1 class="screen-title serif">Build a workflow</h1>
-      <p class="muted">
-        Compose the steps on the canvas and in the YAML — they stay in sync. When it reads right, copy the YAML into your
-        config through the Config screen's review-and-apply, then Test it from its workflow page.
-      </p>
+      <p class="muted">Name it, then shape its steps and its config in the builder.</p>
 
-      <div class="palette">
-        <span class="palette-label">Add step:</span>
-        {PALETTE.map((p) => (
-          <button type="button" class="chip" onClick={() => addStep(p)}>+ {p.label}</button>
-        ))}
-      </div>
-
-      <div class="builder-cols">
-        <section class="panel builder-canvas" aria-label="Canvas">
-          <div class="panel-head"><span class="panel-title serif">Canvas</span><span class="panel-sub">{nodes.length} steps</span></div>
-          <Graph nodes={nodes} selected={sel} onPick={pick} />
-        </section>
-        <section class="panel builder-yaml" aria-label="YAML">
-          <div class="panel-head"><span class="panel-title serif">YAML</span></div>
-          <div class="editor">
-            <pre class="editor-gutter" aria-hidden="true">
-              {yaml.split('\n').map((_, i) => <span>{i + 1 + '\n'}</span>)}
-            </pre>
-            <textarea
-              ref={taRef}
-              class="editor-area code"
-              spellcheck={false}
-              value={yaml}
-              onInput={(e) => setYaml((e.target as HTMLTextAreaElement).value)}
-              aria-label="Workflow YAML"
-            />
+      {pendingTriggers === 0 ? (
+        <section class="dl-card" style="max-width:480px">
+          <div class="field">
+            <label for="wf-new-name">Name</label>
+            <input id="wf-new-name" class="input mono" value={name} placeholder="e.g. release-notify" onInput={(e) => setName(e.currentTarget.value)} onBlur={() => setTouched(true)} />
+            {touched && name && !NAME_RE.test(name) ? <div class="ferr">Lowercase letters, digits and dashes.</div> : null}
+            {touched && taken ? <div class="ferr">A workflow by that name exists.</div> : null}
           </div>
+          <div class="field">
+            <label>Kind</label>
+            <div class="seg" role="group">
+              <button type="button" class={kind === 'manual' ? 'on' : ''} aria-pressed={kind === 'manual'} onClick={() => setKind('manual')}>Manual</button>
+              <button type="button" class={kind === 'event' ? 'on' : ''} aria-pressed={kind === 'event'} onClick={() => setKind('event')}>An event</button>
+            </div>
+            <div class="hint">{kind === 'manual' ? 'Started by you, from here or conductor run.' : "You'll set up the event in its config file after it's created."}</div>
+          </div>
+          <button class="btn primary" type="button" disabled={staging || !name} onClick={() => void create()}>Create</button>
         </section>
-      </div>
+      ) : (
+        <div class="banner attn" role="status">New workflow <span class="mono">{name}</span> is staged, not applied yet.</div>
+      )}
+
+      {pendingTriggers ? <ReviewPanel stagedCount={staged.value.length} /> : null}
     </div>
   )
 }

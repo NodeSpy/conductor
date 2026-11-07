@@ -8,7 +8,10 @@ import { useEffect, useState } from 'preact/hooks'
 import { go } from '../router'
 import { browser, walletOp, who, type LoginRecord } from '../api/browser'
 import { ValueSource, vsToWire, emptyVS, type VSValue } from '../components/ValueSource'
-import { BrowserTabs } from './Browsers'
+import { BrowserTabs, BrowserCrumbs, RegisterPasskey } from './Browsers'
+import { EmptyState } from '../components/EmptyState'
+import { Icon } from '../components/Icon'
+import { humanError } from '../api/errors'
 
 export function Logins(): JSX.Element {
   const [logins, setLogins] = useState<LoginRecord[] | null>(null)
@@ -16,7 +19,7 @@ export function Logins(): JSX.Element {
   const [testing, setTesting] = useState<Record<string, string>>({})
 
   function load() {
-    browser.logins().then((r) => setLogins(r.logins || [])).catch((e) => setErr(String(e)))
+    browser.logins().then((r) => setLogins(r.logins || [])).catch((e) => setErr(humanError(e)))
   }
   useEffect(load, [])
 
@@ -27,71 +30,88 @@ export function Logins(): JSX.Element {
       const word = r.status === 'ok' ? 'signed in' : r.status === 'needs-you' ? 'needs you: approve on your phone' : 'sign-in refused'
       setTesting((t) => ({ ...t, [name]: word }))
     } catch (e) {
-      setTesting((t) => ({ ...t, [name]: String(e) }))
+      setTesting((t) => ({ ...t, [name]: humanError(e) }))
     }
   }
 
   const credentials = (logins || []).filter((l) => l.method !== 'session')
   const sessions = (logins || []).filter((l) => l.method === 'session')
 
+  // vaultWord names where a credential's fields come from, never the value
+  // (design §4.5.1); "one click away" is this line plus Test, not a value.
+  const vaultWord = (l: LoginRecord): string => {
+    const srcs = Object.values(l.fields || {})
+    const vault = srcs.find((f) => f.kind === 'vault')
+    return vault ? vaultSrcWord(vault.source) : srcs.length ? 'typed in, stored write-only' : ''
+  }
+
   return (
-    <div class="col browsers">
+    <div class="wl-page">
       <div class="page-head">
-        <h1 class="screen-title serif">Browsers</h1>
-        <div class="row-actions">
-          <a class="btn primary sm" href="#/browser/add">Add a login</a>
+        <div>
+          <BrowserCrumbs here="Logins" />
+          <h1>Logins</h1>
+        </div>
+        <div class="actions">
+          <a class="btn primary" href="#/browser/add"><Icon name="key" />Add a login</a>
+          <RegisterPasskey />
         </div>
       </div>
       <BrowserTabs active="logins" />
       {err ? <div class="banner err">{err}</div> : null}
 
-      <section class="panel">
-        <span class="panel-title">Sign-ins</span>
+      <section class="dl-card">
+        <header class="dl-ch"><h2>Sign-ins</h2></header>
         {logins === null ? (
-          <p class="muted">Loading logins…</p>
+          <p class="dl-sub" style="padding:0 var(--pad-card) var(--pad-card)">{err ? 'Nothing to show until conductor answers.' : 'Loading logins…'}</p>
         ) : credentials.length === 0 ? (
-          <p class="muted">No logins yet. Add one so a bot can sign in to a site you choose.</p>
+          <EmptyState small title="No logins yet" testid="logins-empty">
+            <p>Add one so a bot can sign in to a site you choose.</p>
+          </EmptyState>
         ) : (
-          <ul class="dl-list logins">
+          <ul class="dl-list dl-conns wl-flushl">
             {credentials.map((l) => (
-              <li class="login-row" data-login={l.name}>
-                <div class="login-main">
-                  <div class="login-title">
-                    <b>{l.name}</b> <span class="dl-sub">{(l.origins && l.origins[0]) || l.site || ''}</span>
-                    {!l.editable ? <span class="tag">In the config</span> : null}
-                  </div>
-                  <p class="dl-why muted">
+              <li class="dl-conn" data-login={l.name} key={l.name}>
+                <span class="dl-ng"><Icon name="lock" /></span>
+                <span class="dl-nt">
+                  <b>{l.name} <span class="tgt">{(l.origins && l.origins[0] && hostOf(l.origins[0])) || l.site || ''}</span></b>
+                  <span class="dl-why">
                     For {(l.bindings || []).map(who).join(', ') || 'nobody yet'}
                     {' · '}
-                    {l.fields ? Object.keys(l.fields).join(', ') : 'a login'}
+                    {vaultWord(l) || 'a login'}
+                    {l.approval ? ' · approved on your phone' : ''}
                     {l.last_used ? ` · last used ${rel(l.last_used)}` : ' · never used'}
-                  </p>
-                  {testing[l.name] ? <p class="facts">{testing[l.name]}</p> : null}
-                </div>
-                <div class="row-actions">
-                  <button class="btn ghost sm" type="button" onClick={() => void test(l.name)}>Test</button>
-                </div>
+                    {testing[l.name] ? ` · ${testing[l.name]}` : ''}
+                  </span>
+                </span>
+                <span class="dl-na">
+                  {!l.editable ? <span class="tag">In the config</span> : null}
+                  <button class="btn sm secondary" type="button" onClick={() => void test(l.name)}>Test</button>
+                </span>
               </li>
             ))}
           </ul>
         )}
       </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <span class="panel-title">Saved sessions</span>
-          <span class="muted small">signed in yourself · state, not config</span>
-        </div>
+      <section class="dl-card wl-gap">
+        <header class="dl-ch">
+          <h2>Saved sessions</h2>
+          <span class="dl-sub">signed in yourself · state, not config</span>
+        </header>
         {sessions.length === 0 ? (
-          <p class="muted">No saved sessions.</p>
+          <p class="dl-sub" style="padding:0 var(--pad-card) var(--pad-card)">
+            None yet. To add one, run <span class="mono wrap-any">conductor browser credential add NAME --session --site SITE --bind WHO</span> on
+            the conductor machine, then <span class="mono wrap-any">conductor browser seed</span> to sign in once yourself.
+          </p>
         ) : (
-          <ul class="dl-list">
+          <ul class="dl-list dl-conns wl-flushl">
             {sessions.map((l) => (
-              <li class="login-row" data-login={l.name}>
-                <div class="login-main">
-                  <div class="login-title"><b>{l.site || l.name}</b> <span class="tag">session</span></div>
-                  <p class="dl-why muted">{(l.bindings || []).map(who).join(', ')}</p>
-                </div>
+              <li class="dl-conn" data-login={l.name} key={l.name}>
+                <span class="dl-ng"><Icon name="cookie" /></span>
+                <span class="dl-nt"><b>{l.site || l.name} <span class="tgt">session</span></b>
+                  <span class="dl-why">{(l.bindings || []).map(who).join(', ')}</span>
+                </span>
               </li>
             ))}
           </ul>
@@ -99,6 +119,19 @@ export function Logins(): JSX.Element {
       </section>
     </div>
   )
+}
+
+function hostOf(origin: string): string {
+  return origin.replace(/^https?:\/\//, '').replace(/\/$/, '')
+}
+
+// vaultSrcWord names a {{ vault "<v>" "<k>" }} reference's vault in words,
+// never the value (mirrors the prototype's srcWord).
+function vaultSrcWord(ref: string): string {
+  const m = /vault\s+"([^"]+)"\s+"([^"]+)"/.exec(ref)
+  if (!m) return ref
+  const vault = m[1] === 'op' ? '1Password' : m[1] === 'house' ? 'the conductor vault' : m[1]
+  return `${vault} · ${m[2]}`
 }
 
 function rel(iso: string): string {
@@ -151,17 +184,21 @@ export function AddLogin(): JSX.Element {
       })
       go('browser/logins')
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div class="col browsers add-login">
-      <a class="back" href="#/browser/logins">← Logins</a>
-      <h1 class="screen-title serif">Add a login</h1>
-      <p class="muted">A site a bot may sign in to, and who may use it. Every method ends the same way: the exact origins, who may use it, then the config diff.</p>
+    <div class="wl-page">
+      <div class="page-head">
+        <div>
+          <a class="back" href="#/browser/logins">← Logins</a>
+          <h1>Add a login</h1>
+          <p class="sub">A site a bot may sign in to, and who may use it. Every method ends the same way: the exact origins, who may use it, then the config diff.</p>
+        </div>
+      </div>
       {err ? <div class="banner err">{err}</div> : null}
 
       {step === 'method' ? (
@@ -220,11 +257,18 @@ export function AddLogin(): JSX.Element {
   )
 }
 
+const METHOD_ICON: Record<Method, string> = { password: 'key', vault: 'lock', takeover: 'hand' }
+
 function MethodCard({ m, cur, set, title, desc, disabled, disabledWhy }: { m: Method; cur: Method; set: (m: Method) => void; title: string; desc: string; disabled?: boolean; disabledWhy?: string }): JSX.Element {
+  const on = cur === m
   return (
-    <button type="button" class={'choice' + (cur === m ? ' on' : '') + (disabled ? ' disabled' : '')} disabled={disabled} onClick={() => !disabled && set(m)}>
-      <span class="choice-title">{title}</span>
-      <span class="choice-desc">{disabled ? disabledWhy : desc}</span>
+    <button type="button" class="choice" aria-pressed={on} aria-disabled={disabled} disabled={disabled} onClick={() => !disabled && set(m)}>
+      <span class="choice-ic"><Icon name={METHOD_ICON[m]} /></span>
+      <span class="choice-body">
+        <span class="choice-title">{title}</span>
+        <span class="choice-desc">{disabled ? disabledWhy : desc}</span>
+      </span>
+      <span class="choice-check" aria-hidden="true"><Icon name="check" /></span>
     </button>
   )
 }

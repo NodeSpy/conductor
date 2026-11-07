@@ -45,7 +45,7 @@ test.beforeAll(async ({ browser, browserName }) => {
 
   await page.goto(`${rt.baseURL}/signin`)
   await page.getByTestId('signin-button').click()
-  await expect(page.getByRole('link', { name: 'Access' })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByRole('link', { name: 'System' })).toBeVisible({ timeout: 15_000 })
 })
 
 test.afterAll(async () => {
@@ -69,6 +69,8 @@ test('approving a proposal from its page needs a passkey step-up', async () => {
   await review.click()
 
   // The approval screen renders the canonical digest and the signing buttons.
+  // The digest lives in the folded "for audit" details; open it first.
+  await page.locator('.dl-audit-d summary').click()
   await expect(page.getByTestId('approval-digest')).toBeVisible()
   await expect(page.getByTestId('approve')).toBeVisible()
 

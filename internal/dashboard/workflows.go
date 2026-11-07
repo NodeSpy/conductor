@@ -92,7 +92,7 @@ func graphOf(steps []config.Step, yamlText string) []api.GraphNode {
 	var prev string
 	for i, s := range steps {
 		id := stepNodeID(s, i)
-		n := api.GraphNode{ID: id, Kind: stepKind(s), Label: stepLabel(s)}
+		n := api.GraphNode{ID: id, Kind: stepKind(s), Label: stepLabel(s), If: s.If}
 		if i < len(lines) {
 			n.Line = lines[i]
 		}
@@ -144,15 +144,150 @@ func stepItemLines(yamlText string) []int {
 	return out
 }
 
+// rawTriggerIndex finds a named trigger's position in the LIVE CONFIG FILE's
+// own `triggers:` list — as opposed to its position in s.deps.Cfg.Triggers,
+// which is the runtime-expanded list (a multi-source `on: [a, b]` trigger
+// becomes one TriggerSpec per source, and pack/bot triggers are appended to
+// it). A config-stage edit targets the raw document, so it must address the
+// raw list; this is what the Workflows list and builder use for the on/off
+// switch and a config-file save. Only a named trigger can be found this way
+// (an unnamed one has no unambiguous raw identity); callers fall back to -1
+// (not addressable) when a trigger has no name, which the UI treats as
+// read-only for anything that stages a path.
+func (s *Server) rawTriggerIndex(name string) int {
+	if name == "" {
+		return -1
+	}
+	seq, _ := s.liveTree()["triggers"].([]any)
+	for i, item := range seq {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if n, _ := m["name"].(string); n == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// wfSource is a workflow's ownership, as the Workflows list groups it: "" for
+// one in the operator's own config, "pack:<instance>" for one a pack
+// installed. A bot's own synthesized workflow has no row here at all — it
+// lives on the bot's page (wfManual callers must check t.Bot first).
+func wfSource(t config.TriggerSpec) string {
+	if t.PackInstance != "" {
+		return "pack:" + t.PackInstance
+	}
+	return ""
+}
+
+// wfWhen is what starts a workflow, in one short phrase. There is no
+// connector event catalog on this side of the API, so it reads the trigger's
+// own `on:`/`manual` mechanically rather than a curated English sentence per
+// event (that catalog is the connector plugins', not core's to copy).
+func wfWhen(t config.TriggerSpec) string {
+	if t.On == "manual" {
+		return "You start it"
+	}
+	conn, event, ok := strings.Cut(t.On, ".")
+	event = strings.ReplaceAll(event, "_", " ")
+	if !ok || event == "" {
+		return "When " + t.On
+	}
+	return fmt.Sprintf("When %s: %s", conn, event)
+}
+
+// wfDoes is what a workflow does, in one short phrase, from its own steps:
+// the prototype's wfDoes without a description field to prefer (TriggerSpec
+// has none) or a connector verb catalog to pull an imperative label from.
+func wfDoes(t config.TriggerSpec) string {
+	if len(t.Steps) == 0 {
+		return "has no steps yet"
+	}
+	seen := map[string]bool{}
+	var did []string
+	add := func(s string) {
+		if !seen[s] {
+			seen[s] = true
+			did = append(did, s)
+		}
+	}
+	for _, s := range t.Steps {
+		switch stepKind(s) {
+		case "agent":
+			add("an agent works on it")
+		case "code", "command":
+			add("runs a command")
+		case "handoff":
+			add("hands it to a bot")
+		case "verb":
+			add("calls " + s.Uses)
+		case "decide":
+			add("decides what happens next")
+		case "parallel":
+			add("runs steps in parallel")
+		case "call":
+			add("calls " + s.Workflow)
+		}
+		if len(did) >= 3 {
+			break
+		}
+	}
+	if len(did) == 0 {
+		return "runs its steps"
+	}
+	if len(did) == 1 {
+		return did[0]
+	}
+	return strings.Join(did[:len(did)-1], ", ") + " and " + did[len(did)-1]
+}
+
+// FAIL_AT is the failure share at or above which a workflow's week counts as
+// "failing" (58b: a workflow's recent health, not whether it's running now).
+const failAt = 0.2
+
+// wfHealth summarizes a workflow's last 7 days of runs: how many, the share
+// that failed, a health key the Health filter uses, and its last 20 runs'
+// status (most recent first) for the row's strip.
+func wfHealth(recs []store.RunHistory, now time.Time) (runsWeek, failedWeek int, health string, last20 []string) {
+	cutoff := now.Add(-7 * 24 * time.Hour)
+	for i, rec := range recs {
+		if i < 20 {
+			last20 = append(last20, rec.Status)
+		}
+		if rec.Started.Before(cutoff) {
+			continue
+		}
+		runsWeek++
+		if rec.Status == "failed" {
+			failedWeek++
+		}
+	}
+	switch {
+	case runsWeek == 0:
+		health = "none"
+	case float64(failedWeek)/float64(runsWeek) >= failAt:
+		health = "failing"
+	case failedWeek > 0:
+		health = "some"
+	default:
+		health = "healthy"
+	}
+	return
+}
+
 // handleWorkflows serves the Workflows list.
 func (s *Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	recs := s.deps.Store.ListHistory(0)
-	// Tally runs per workflow name. A run's workflow is its Variant, falling
-	// back to Kind (the same projection RunSummary uses).
+	// Tally runs and recent history per workflow name. A run's workflow is
+	// its Variant, falling back to Kind (the same projection RunSummary
+	// uses). Runs are kept most-recent-first for the health strip.
 	type tally struct {
 		runs, failed int
 		last         time.Time
 		lastID       string
+		history      []store.RunHistory
 	}
 	byWF := map[string]*tally{}
 	for _, rec := range recs {
@@ -173,10 +308,15 @@ func (s *Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			t.last = rec.Started
 			t.lastID = rec.ID
 		}
+		t.history = append(t.history, rec)
 	}
+	now := time.Now()
 
 	out := make([]api.WorkflowSummary, 0, len(s.deps.Cfg.Triggers))
 	for _, t := range s.deps.Cfg.Triggers {
+		if t.Bot != "" {
+			continue // a bot's own workflow lives on the bot's page, not here
+		}
 		name := wfName(t)
 		ws := api.WorkflowSummary{
 			Name:     name,
@@ -184,6 +324,10 @@ func (s *Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			Steps:    len(t.Steps),
 			Disabled: t.Enabled != nil && !*t.Enabled,
 			Manual:   wfManual(t),
+			Index:    s.rawTriggerIndex(t.Name),
+			Source:   wfSource(t),
+			When:     wfWhen(t),
+			Does:     wfDoes(t),
 		}
 		if tl := byWF[name]; tl != nil {
 			ws.Runs = tl.runs
@@ -192,6 +336,9 @@ func (s *Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			if !tl.last.IsZero() {
 				ws.LastRun = tl.last.UTC().Format(time.RFC3339Nano)
 			}
+			ws.RunsWeek, ws.FailedWeek, ws.Health, ws.Last20 = wfHealth(tl.history, now)
+		} else {
+			ws.Health = "none"
 		}
 		out = append(out, ws)
 	}
@@ -199,8 +346,8 @@ func (s *Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, api.WorkflowsResponse{Workflows: out})
 }
 
-// findWorkflow resolves a workflow name (trigger name first, then `on:`) to its
-// spec.
+// findWorkflow resolves a workflow name (trigger name first, then `on:`) to
+// its spec.
 func (s *Server) findWorkflow(name string) (config.TriggerSpec, bool) {
 	for _, t := range s.deps.Cfg.Triggers {
 		if t.Name == name {
@@ -225,7 +372,7 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 	yamlText := marshalWorkflow(t)
 
-	var runs []api.RunSummary
+	runs := []api.RunSummary{}
 	for _, rec := range s.deps.Store.ListHistory(0) {
 		rn := rec.Variant
 		if rn == "" {
@@ -248,6 +395,10 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 		YAML:     yamlText,
 		Nodes:    graphOf(t.Steps, yamlText),
 		Runs:     runs,
+		Index:    s.rawTriggerIndex(t.Name),
+		Source:   wfSource(t),
+		When:     wfWhen(t),
+		Does:     wfDoes(t),
 	})
 }
 

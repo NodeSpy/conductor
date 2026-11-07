@@ -67,15 +67,18 @@ export function StatusMark({
   word,
   lg,
   mkOnly,
+  label,
 }: {
   s: string
   word?: string
   lg?: boolean
   mkOnly?: boolean
+  // The mark alone still needs a name for assistive tech (UI.mark's o.label).
+  label?: string
 }): JSX.Element {
   const cls = ['st', lg ? 'lg' : '', mkOnly ? 'mk-only' : ''].filter(Boolean).join(' ')
   return (
-    <span class={cls} data-s={s}>
+    <span class={cls} data-s={s} role={mkOnly && label ? 'img' : undefined} aria-label={mkOnly && label ? label : undefined}>
       <i>{glyph(s)}</i>
       {!mkOnly && word ? <span>{word}</span> : null}
     </span>

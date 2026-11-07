@@ -34,22 +34,24 @@ export function Config(): JSX.Element {
 
   return (
     <div class="col">
-      <h1 class="screen-title serif">Config</h1>
-      <p class="muted">
-        Editing <span class="mono">{c?.path ?? '…'}</span>
-        {c?.sha ? <span class="mono"> · {c.sha}</span> : null}. Changes are staged, reviewed, then applied with a backup and a reload.
-      </p>
+      <div class="dl-phead">
+        <div>
+          <h1>Config</h1>
+          <p class="lede-2">
+            Editing <span class="mono">{c?.path ?? '…'}</span>
+            {c?.sha ? <span class="mono"> · {c.sha}</span> : null}. Changes are staged, reviewed, then applied with a backup and a reload.
+          </p>
+        </div>
+      </div>
 
       {cfgError.value ? <div class="banner err" role="alert">{cfgError.value}</div> : null}
 
       {staged.value.length ? (
-        <section class="panel staged-panel" aria-label="Staged changes">
-          <div class="panel-head">
-            <span class="panel-title">Staged ({staged.value.length})</span>
-          </div>
+        <section class="dl-card" aria-label="Staged changes">
+          <div class="panel-head" style="padding:14px 22px 0"><h2 style="margin:0;font-size:15px">Staged ({staged.value.length})</h2></div>
           <ul class="staged-list">
             {staged.value.map((s) => (
-              <li>
+              <li key={s.id}>
                 <span class="mono id">{s.path.join('.')}</span>
                 {s.delete ? (
                   <span class="staged-val">(remove)</span>
@@ -71,14 +73,17 @@ export function Config(): JSX.Element {
 
       {c
         ? [...groupBySection(c.leaves ?? [])].map(([section, leaves]) => (
-            <section class="panel" aria-label={section}>
-              <div class="panel-head">
-                <span class="panel-title mono">{section}</span>
-                {!EDITABLE.has(section) ? <span class="tag">read-only here</span> : null}
+            <section class="dl-card" aria-label={section} key={section}>
+              <div class="cfg-head" style="padding:14px 22px 0">
+                <h2 style="margin:0;font-size:15px">{sectionTitle(section)}</h2>
+                <span class="cfg-head-sub">
+                  <span class="mono">{section}</span>
+                  {!EDITABLE.has(section) ? <span class="tag">read-only here</span> : null}
+                </span>
               </div>
               <div class="fields">
                 {leaves.map((l) => (
-                  <Field leaf={l} editable={EDITABLE.has(section)} staged={stagedPaths.has(l.path.join('.'))} />
+                  <Field key={l.path.join('.')} leaf={l} editable={EDITABLE.has(section)} staged={stagedPaths.has(l.path.join('.'))} />
                 ))}
               </div>
             </section>
@@ -90,7 +95,11 @@ export function Config(): JSX.Element {
 
 function Field({ leaf, editable, staged: isStaged }: { leaf: ConfigLeaf; editable: boolean; staged: boolean }): JSX.Element {
   const path = leaf.path.join('.')
-  const label = leaf.path.slice(1).join('.') || leaf.path.join('.')
+  const sub = leaf.path.slice(1).join('.') || path
+  const value = fmt(leaf.value)
+  // A long value (a path, a URL) gets a wrapping box across the whole row, so
+  // all of it can be read; a short one stays a one-line input.
+  const long = leaf.kind === 'string' && value.length > 28
 
   const commit = (raw: string | boolean) => {
     let value: unknown = raw
@@ -101,22 +110,40 @@ function Field({ leaf, editable, staged: isStaged }: { leaf: ConfigLeaf; editabl
   }
 
   return (
-    <label class={'field' + (isStaged ? ' is-staged' : '')} data-path={path}>
-      <span class="field-label mono">{label}</span>
+    <label class={'field' + (isStaged ? ' is-staged' : '') + (long ? ' wide' : '')} data-path={path}>
+      <span class="cfg-label">
+        <span class="cfg-name">{leafLabel(leaf.path)}</span>
+        {sub !== leaf.path[leaf.path.length - 1] ? <span class="field-path mono">{sub}</span> : null}
+      </span>
       {!editable ? (
-        <span class="field-ro mono">{fmt(leaf.value)}</span>
+        <span class="field-ro mono">{value}</span>
       ) : leaf.kind === 'bool' ? (
         <input
           type="checkbox"
-          class="field-check"
           checked={leaf.value === true}
           data-path={path}
           onChange={(e) => commit((e.target as HTMLInputElement).checked)}
         />
+      ) : long ? (
+        <textarea
+          class="input field-long mono"
+          rows={1}
+          ref={fit}
+          value={value}
+          data-path={path}
+          onInput={(e) => fit(e.target as HTMLTextAreaElement)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              ;(e.target as HTMLTextAreaElement).blur()
+            }
+          }}
+          onChange={(e) => commit((e.target as HTMLTextAreaElement).value)}
+        />
       ) : (
         <input
           type={leaf.kind === 'int' || leaf.kind === 'float' ? 'number' : 'text'}
-          class="field-input mono"
+          class="input mono"
           value={fmt(leaf.value)}
           data-path={path}
           onChange={(e) => commit((e.target as HTMLInputElement).value)}
@@ -125,6 +152,70 @@ function Field({ leaf, editable, staged: isStaged }: { leaf: ConfigLeaf; editabl
       {isStaged ? <span class="field-badge">staged</span> : null}
     </label>
   )
+}
+
+// Plain names for the core config's sections; anything else is its key,
+// humanized. The dotted key is shown beside it for anyone who edits the file.
+const SECTION_TITLES: Record<string, string> = {
+  settings: 'Settings',
+  dashboard: 'Dashboard',
+  store: 'Where conductor keeps its state',
+  update: 'Updates',
+  sandbox: 'Sandbox',
+  usage: 'Usage limits',
+  callable: 'Workflows other tools can call',
+  memory: 'Memory',
+  connectors: 'Connections',
+  runtimes: 'Runtimes',
+  hosts: 'Hosts',
+  vaults: 'Vaults',
+  secrets: 'Secrets',
+  packs: 'Packs',
+  bots: 'Bots',
+  teams: 'Teams',
+  operators: 'Operators',
+  triggers: 'Workflows',
+  browser: 'Browser',
+  policy: 'Policy',
+}
+
+function sectionTitle(s: string): string {
+  return SECTION_TITLES[s] ?? humanKey(s)
+}
+
+// Plain names for keys whose humanized form would still read as jargon.
+const KEY_LABELS: Record<string, string> = {
+  state_file: 'State file',
+  allow_open: 'Open without sign-in',
+  listen: 'Listens on',
+  use: 'Plugin',
+}
+
+// leafLabel names a value by its key; a list item ("listen.0") by its list,
+// numbered from the second on.
+function leafLabel(path: string[]): string {
+  const last = path[path.length - 1]
+  // "enabled" says what it turns on: "Dashboard on".
+  if (last === 'enabled' && path.length > 1) return humanKey(path[path.length - 2]) + ' on'
+  if (/^\d+$/.test(last) && path.length > 1) {
+    const n = Number(last)
+    return humanKey(path[path.length - 2]) + (n > 0 ? ` (${n + 1})` : '')
+  }
+  return humanKey(last)
+}
+
+// fit grows a long value's box to show all of it, at any width.
+function fit(el: HTMLTextAreaElement | null): void {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = el.scrollHeight + 2 + 'px'
+}
+
+// humanKey turns a config key into a label: "state_file" → "State file".
+function humanKey(k: string): string {
+  if (KEY_LABELS[k]) return KEY_LABELS[k]
+  const words = k.replace(/[_-]+/g, ' ').trim()
+  return words ? words[0].toUpperCase() + words.slice(1) : k
 }
 
 // A staged map or list (a whole section staged at once) is shown in full as
