@@ -34,22 +34,24 @@ export function Config(): JSX.Element {
 
   return (
     <div class="col">
-      <h1 class="screen-title serif">Config</h1>
-      <p class="muted">
-        Editing <span class="mono">{c?.path ?? '…'}</span>
-        {c?.sha ? <span class="mono"> · {c.sha}</span> : null}. Changes are staged, reviewed, then applied with a backup and a reload.
-      </p>
+      <div class="dl-phead">
+        <div>
+          <h1>Config</h1>
+          <p class="lede-2">
+            Editing <span class="mono">{c?.path ?? '…'}</span>
+            {c?.sha ? <span class="mono"> · {c.sha}</span> : null}. Changes are staged, reviewed, then applied with a backup and a reload.
+          </p>
+        </div>
+      </div>
 
       {cfgError.value ? <div class="banner err" role="alert">{cfgError.value}</div> : null}
 
       {staged.value.length ? (
-        <section class="panel staged-panel" aria-label="Staged changes">
-          <div class="panel-head">
-            <span class="panel-title">Staged ({staged.value.length})</span>
-          </div>
+        <section class="dl-card" aria-label="Staged changes">
+          <div class="panel-head" style="padding:14px 22px 0"><h2 style="margin:0;font-size:15px">Staged ({staged.value.length})</h2></div>
           <ul class="staged-list">
             {staged.value.map((s) => (
-              <li>
+              <li key={s.id}>
                 <span class="mono id">{s.path.join('.')}</span>
                 {s.delete ? (
                   <span class="staged-val">(remove)</span>
@@ -71,9 +73,9 @@ export function Config(): JSX.Element {
 
       {c
         ? [...groupBySection(c.leaves ?? [])].map(([section, leaves]) => (
-            <section class="panel" aria-label={section}>
-              <div class="cfg-head">
-                <span class="panel-title">{sectionTitle(section)}</span>
+            <section class="dl-card" aria-label={section} key={section}>
+              <div class="cfg-head" style="padding:14px 22px 0">
+                <h2 style="margin:0;font-size:15px">{sectionTitle(section)}</h2>
                 <span class="cfg-head-sub">
                   <span class="mono">{section}</span>
                   {!EDITABLE.has(section) ? <span class="tag">read-only here</span> : null}
@@ -81,7 +83,7 @@ export function Config(): JSX.Element {
               </div>
               <div class="fields">
                 {leaves.map((l) => (
-                  <Field leaf={l} editable={EDITABLE.has(section)} staged={stagedPaths.has(l.path.join('.'))} />
+                  <Field key={l.path.join('.')} leaf={l} editable={EDITABLE.has(section)} staged={stagedPaths.has(l.path.join('.'))} />
                 ))}
               </div>
             </section>
@@ -118,14 +120,13 @@ function Field({ leaf, editable, staged: isStaged }: { leaf: ConfigLeaf; editabl
       ) : leaf.kind === 'bool' ? (
         <input
           type="checkbox"
-          class="field-check"
           checked={leaf.value === true}
           data-path={path}
           onChange={(e) => commit((e.target as HTMLInputElement).checked)}
         />
       ) : long ? (
         <textarea
-          class="field-input field-long mono"
+          class="input field-long mono"
           rows={1}
           ref={fit}
           value={value}
@@ -142,7 +143,7 @@ function Field({ leaf, editable, staged: isStaged }: { leaf: ConfigLeaf; editabl
       ) : (
         <input
           type={leaf.kind === 'int' || leaf.kind === 'float' ? 'number' : 'text'}
-          class="field-input mono"
+          class="input mono"
           value={fmt(leaf.value)}
           data-path={path}
           onChange={(e) => commit((e.target as HTMLInputElement).value)}

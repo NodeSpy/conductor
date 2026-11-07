@@ -11,9 +11,6 @@ const ITEMS: { key: string; label: string; icon: string }[] = [
   { key: 'packs', label: 'Packs', icon: 'extensions' },
   { key: 'secrets', label: 'Secrets', icon: 'secrets' },
   { key: 'system', label: 'System', icon: 'settings' },
-  { key: 'config', label: 'Config', icon: 'settings' },
-  { key: 'audit', label: 'Logs & audit', icon: 'live' },
-  { key: 'security', label: 'Access', icon: 'secrets' },
 ]
 
 export function More(): JSX.Element {

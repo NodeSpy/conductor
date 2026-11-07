@@ -149,14 +149,6 @@
   background: var(--color-accent-default);
   border-radius: var(--radius-chip);
   padding: 0 var(--space-1); }
-.tab { all: unset;
-  cursor: pointer;
-  padding: var(--space-2) var(--space-3);
-  color: var(--color-text-secondary);
-  border-bottom: 2px solid transparent;
-  font-size: var(--type-body-s-size); }
-.tab.on { color: var(--color-text-primary);
-  border-bottom-color: var(--color-accent-default); }
 .review .panel-head,
 .staged-panel .panel-head { justify-content: space-between; }
 .row-actions { display: inline-flex;

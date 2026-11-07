@@ -6,13 +6,10 @@
 // route, and the five-item tab bar.
 //
 // The rail's Settings group matches the prototype's own four items exactly
-// (Plugins/Packs/Secrets/System) — Config, Logs & audit and Access are real
-// pages in web/ (Config.tsx, Audit.tsx, Security.tsx) but are not their own
-// rail entries in the approved design; they fold into System as its own
-// sub-navigation in a later phase (design §5.4). Until then they stay
-// reachable from More.tsx (phone) and the search palette below, which is
-// deliberately not scoped to the rail's own item list — a documented gap, not
-// a silent drop.
+// (Plugins/Packs/Secrets/System). Config, Safety, Updates, Logs & audit and
+// Access are System's own sub-navigation (CONFORMANCE, shell note), not
+// separate rail entries; their old routes (#/config, #/safety, #/updates,
+// #/audit, #/security) redirect into the matching System tab (app.tsx).
 import type { ComponentChildren, JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { conn, status, needItems, chatUnread } from '../state'
@@ -64,14 +61,22 @@ const PALETTE_ITEMS: PaletteItem[] = [
   { key: 'packs', label: 'Packs', icon: 'extensions' },
   { key: 'secrets', label: 'Secrets', icon: 'secrets' },
   { key: 'system', label: 'System', icon: 'settings' },
-  { key: 'config', label: 'Config', icon: 'settings' },
-  { key: 'audit', label: 'Logs & audit', icon: 'live' },
-  { key: 'security', label: 'Access', icon: 'secrets' },
 ]
 
 // NAV_ALIAS: pages that live inside another nav destination highlight that
-// destination (a run's page highlights Activity, a bot's page highlights Bots).
-const NAV_ALIAS: Record<string, string> = { runs: 'activity', teams: 'bots', access: 'security' }
+// destination (a run's page highlights Activity, a bot's page highlights
+// Bots; System's old standalone routes highlight System, which they redirect
+// into — app.tsx's LEGACY_SYSTEM_TABS).
+const NAV_ALIAS: Record<string, string> = {
+  runs: 'activity',
+  teams: 'bots',
+  config: 'system',
+  safety: 'system',
+  updates: 'system',
+  audit: 'system',
+  security: 'system',
+  access: 'system',
+}
 
 function navKeyFor(cur: string): string {
   return NAV_ALIAS[cur] ?? cur
@@ -98,9 +103,6 @@ const PAGE_TITLES: Record<string, string> = {
   packs: 'Packs',
   secrets: 'Secrets',
   system: 'System',
-  config: 'Config',
-  audit: 'Logs & audit',
-  security: 'Access',
   more: 'More',
 }
 

@@ -76,7 +76,7 @@ export function Access(): JSX.Element {
     const st = authState.value
     return (
       <div class="col">
-        <h1 class="screen-title">Access</h1>
+        <div class="dl-phead"><div><h1>Access</h1></div></div>
         {!st.signed_in && !st.required ? (
           // An open dashboard: no operators, so nobody signs in and there is
           // no one's access to show.
@@ -167,9 +167,9 @@ export function Access(): JSX.Element {
   const canPassword = data.auth_policy.methods.includes('password')
 
   return (
-    <div class="page">
-      <h1 class="screen-title">Access</h1>
-      <p class="panel-sub" style="margin:0 0 16px">
+    <div class="col">
+      <div class="dl-phead"><div><h1>Access</h1></div></div>
+      <p class="dl-sub" style="margin:0 0 16px">
         <b>Only operators can sign in</b>, with{' '}
         {data.auth_policy.methods.map((m) => methodPhrase[m]).join(', ')}
         {data.auth_policy.methods.includes('password') && needsTOTP ? ' (with an authenticator code)' : ''}.
