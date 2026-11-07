@@ -13,7 +13,8 @@ fn main() {
     // deny-by-default and only reachable through an explicit capability grant
     // (see capabilities/default.json for the local setup/settings pages and
     // the runtime "remote-daemon" capability added in lib.rs::complete_setup
-    // for the one command — ssh_sign — the daemon's page may call).
+    // for the two commands the daemon's page may call: ssh_sign and
+    // desktop_operator).
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(
             tauri_build::AppManifest::new().commands(&[
@@ -22,6 +23,7 @@ fn main() {
                 "default_ssh_key",
                 "complete_setup",
                 "ssh_sign",
+                "desktop_operator",
             ]),
         ),
     )

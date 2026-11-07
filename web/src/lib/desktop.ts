@@ -23,3 +23,13 @@ export async function desktopSSHSign(namespace: string, message: string): Promis
   if (typeof sig !== 'string' || !sig.includes('BEGIN SSH SIGNATURE')) throw new Error('the desktop app returned no signature')
   return sig
 }
+
+// desktopOperator is the operator the app is set up for, so the sign-in page
+// can sign the window in on its own.
+export async function desktopOperator(): Promise<string> {
+  const invoke = invoker()
+  if (!invoke) throw new Error('not running in the desktop app')
+  const op = await invoke('desktop_operator', {})
+  if (typeof op !== 'string' || !op) throw new Error('the desktop app has no operator set up')
+  return op
+}

@@ -87,7 +87,8 @@ async fn complete_setup(app: AppHandle, state: tauri::State<'_, AppState>) -> Re
     let capability = CapabilityBuilder::new(REMOTE_CAPABILITY_ID)
         .remote(origin.clone())
         .window("main")
-        .permission("allow-ssh-sign");
+        .permission("allow-ssh-sign")
+            .permission("allow-desktop-operator");
     app.add_capability(capability).map_err(|e| e.to_string())?;
 
     let _ = app.autolaunch().enable();
@@ -181,9 +182,20 @@ async fn ssh_sign(
         return Err("ssh_sign is not available to this origin".to_string());
     }
 
-    let pubkey_path = settings.ssh_public_key_path;
+    let pubkey_path = settings.ssh_public_key_path.clone();
     if pubkey_path.trim().is_empty() {
         return Err("no SSH key configured".to_string());
+    }
+
+    // A sign-in challenge names the operator and the origin it signs in to,
+    // and the daemon only accepts it on that origin: signing one for the
+    // configured operator and daemon can only sign this app's own window in,
+    // so it needs no confirmation. A step-up authorizes an action, and
+    // anything else is shown to the operator first.
+    if namespace == sign::LOGIN_NAMESPACE && login_challenge_matches(&message, &settings) {
+        return sign::ssh_sign(&pubkey_path, &namespace, &message)
+            .await
+            .map_err(|e| e.to_string());
     }
 
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -211,6 +223,32 @@ async fn ssh_sign(
     sign::ssh_sign(&pubkey_path, &namespace, &message)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Whether a sign-in challenge is for the configured operator on the
+/// configured daemon (`conductor-dashboard-login v1 operator=<op>
+/// origin=<origin> ...`).
+fn login_challenge_matches(message: &str, settings: &Settings) -> bool {
+    let Some(origin) = settings.daemon_origin() else {
+        return false;
+    };
+    let mut fields = message.split(' ');
+    fields.next() == Some("conductor-dashboard-login")
+        && fields.next() == Some("v1")
+        && fields.next() == Some(format!("operator={}", settings.operator).as_str())
+        && fields.next() == Some(format!("origin={origin}").as_str())
+}
+
+/// The configured operator name, so the daemon's sign-in page can sign the
+/// window in without asking. Only the configured daemon's page may ask.
+#[tauri::command]
+fn desktop_operator(webview: tauri::Webview, state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let settings = state.snapshot_settings();
+    let url = webview.url().map_err(|e| e.to_string())?;
+    if !settings.allows_origin(&url) {
+        return Err("not available to this origin".to_string());
+    }
+    Ok(settings.operator)
 }
 
 fn open_settings_window(app: &AppHandle) {
@@ -273,6 +311,7 @@ pub fn run() {
             default_ssh_key,
             complete_setup,
             ssh_sign,
+            desktop_operator,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -338,7 +377,8 @@ pub fn run() {
                         let capability = CapabilityBuilder::new(REMOTE_CAPABILITY_ID)
                             .remote(origin)
                             .window("main")
-                            .permission("allow-ssh-sign");
+                            .permission("allow-ssh-sign")
+            .permission("allow-desktop-operator");
                         let _ = app2.add_capability(capability);
                     }
                     let settings = state.snapshot_settings();
@@ -377,4 +417,33 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let _ = (app, event);
         });
+}
+
+#[cfg(test)]
+mod login_challenge_tests {
+    use super::*;
+
+    fn settings() -> Settings {
+        Settings {
+            daemon_url: "https://box.tailnet.ts.net:7788".into(),
+            operator: "daniel".into(),
+            ssh_public_key_path: "~/.ssh/id_ed25519.pub".into(),
+        }
+    }
+
+    #[test]
+    fn matches_only_this_operator_on_this_daemon() {
+        let s = settings();
+        let ok = "conductor-dashboard-login v1 operator=daniel origin=https://box.tailnet.ts.net:7788 nonce=x expires=y";
+        assert!(login_challenge_matches(ok, &s));
+        for bad in [
+            "conductor-dashboard-login v1 operator=eve origin=https://box.tailnet.ts.net:7788 nonce=x",
+            "conductor-dashboard-login v1 operator=daniel origin=https://evil.example:7788 nonce=x",
+            "conductor-dashboard-login v1 operator=daniel origin=https://box.tailnet.ts.net:7788x nonce=x",
+            "conductor-dashboard-stepup v1 operator=daniel origin=https://box.tailnet.ts.net:7788",
+            "",
+        ] {
+            assert!(!login_challenge_matches(bad, &s), "{bad}");
+        }
+    }
 }
