@@ -6,9 +6,20 @@ import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { botsApi, displayName, who, type Ticket, type BotSummary } from '../api/bots'
 import { Avatar } from '../components/Avatar'
+import { Icon } from '../components/Icon'
+import { StatusMark } from '../components/StatusMark'
 import { ago } from '../lib/format'
 import { STATUS_LABEL } from './Tickets'
 import { humanError } from '../api/errors'
+
+const STATUS_MARK: Record<string, string> = {
+  draft: 'draft',
+  ready: 'ready',
+  in_progress: 'progress',
+  waiting: 'ember',
+  done: 'ok',
+  declined: 'fail',
+}
 
 export function TicketDetail({ num }: { num: string }): JSX.Element {
   const [t, setT] = useState<Ticket | null>(null)
@@ -28,11 +39,13 @@ export function TicketDetail({ num }: { num: string }): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [num])
 
-  if (err) return <div class="col"><a class="back" href="#/tickets">← Tickets</a><div class="banner err" role="alert">{err}</div></div>
-  if (!t) return <div class="col"><p class="muted">Loading {num}…</p></div>
+  if (err) return <div class="tk-page"><nav class="dl-crumbs"><a href="#/tickets">Tickets</a></nav><div class="banner err" role="alert">{err}</div></div>
+  if (!t) return <div class="tk-page"><p class="muted">Loading {num}…</p></div>
 
   const aw = t.assignee ? who(t.assignee) : null
   const aId = aw?.kind === 'bot' ? bots[aw.name]?.identity : undefined
+  const open = t.status !== 'done' && t.status !== 'declined'
+  const draft = t.status === 'draft'
 
   async function act(body: Record<string, unknown>) {
     setBusy(true)
@@ -61,87 +74,110 @@ export function TicketDetail({ num }: { num: string }): JSX.Element {
   }
 
   return (
-    <div class="col ticket-detail" data-ticket={num}>
-      <a class="back" href="#/tickets">← Tickets</a>
-      <div class="ticket-detail-head">
-        <div class="ticket-detail-head-main">
-          <h1 class="screen-title serif">{t.title} <span class="mono id">{t.ticket}</span></h1>
-          <p class="facts muted" data-testid="ticket-status">
-            {STATUS_LABEL[t.status] || t.status}
-            {t.created_by ? ` · opened by ${who(t.created_by).name}` : ''}
-            {` · ${ago(t.updated)}`}
-          </p>
+    <div class="tk-page" data-ticket={num}>
+      <nav class="dl-crumbs"><a href="#/tickets">Tickets</a><span>{t.title}</span></nav>
+
+      <section class="dl-card case-head tk-head">
+        <div class="tk-ht">
+          <StatusMark s={STATUS_MARK[t.status]} lg label={STATUS_LABEL[t.status] || t.status} />
+          <h1 class="case-title dl-h1-long">{t.title} <span class="mono id">{t.ticket}</span></h1>
         </div>
-        <div class="row-actions">
-          {t.status === 'draft' ? (
-            <button class="btn primary" type="button" disabled={busy} data-testid="mark-ready" onClick={() => void act({ status: 'ready' })}>Mark ready…</button>
-          ) : null}
-          {t.status !== 'done' && t.status !== 'declined' ? (
+        <p class="dl-sub case-state" data-testid="ticket-status">
+          {STATUS_LABEL[t.status] || t.status}
+          {t.created_by ? ` · opened by ${who(t.created_by).name}` : ''}
+          {` · ${ago(t.updated)}`}
+        </p>
+
+        {draft ? (
+          <div class="tk-ready">
+            <p><b>A draft.</b> Nobody works on it until you mark it ready.</p>
+            <button class="btn primary" type="button" disabled={busy} data-testid="mark-ready" onClick={() => void act({ status: 'ready' })}>
+              <Icon name="check" />Mark ready
+            </button>
+          </div>
+        ) : null}
+
+        <div class="dl-actions">
+          {open ? (
             <>
-              <button class="btn ghost sm" type="button" disabled={busy} onClick={() => void act({ status: 'done' })}>Mark done</button>
-              <button class="btn ghost sm danger" type="button" disabled={busy} onClick={() => void act({ status: 'declined' })}>Decline</button>
+              <button class="btn secondary" type="button" disabled={busy} onClick={() => void act({ status: 'done' })}><Icon name="check" />Mark done</button>
+              <button class="btn secondary" type="button" disabled={busy} onClick={() => void act({ status: 'declined' })}><Icon name="x" />Decline</button>
             </>
           ) : (
-            <button class="btn ghost sm" type="button" disabled={busy} onClick={() => void act({ status: 'ready' })}>Reopen</button>
+            <button class="btn secondary" type="button" disabled={busy} onClick={() => void act({ status: 'ready' })}><Icon name="undo" />Reopen</button>
           )}
         </div>
-      </div>
+      </section>
 
-      {t.status === 'draft' ? <div class="banner attn">A draft is an idea — no bot starts on it. Mark it ready (it needs an assignee) to let work begin.</div> : null}
-
-      <div class="ticket-detail-body">
-        <div class="ticket-main">
-          <section class="panel">
-            <span class="panel-title">Description</span>
-            <p class="ticket-desc">{t.description || <span class="muted">No description.</span>}</p>
+      <div class="grid g-side tk-grid">
+        <div class="stack">
+          <section class="dl-card tk-desc">
+            <header class="dl-ch"><h2>Description</h2></header>
+            <p class="tk-body">{t.description || <span class="dl-sub">No description.</span>}</p>
           </section>
 
-          <section class="panel">
-            <span class="panel-title">Comments</span>
-            <div class="comments">
-              {(t.comments || []).length === 0 ? <p class="muted">No comments yet.</p> : null}
+          <section class="dl-card tk-chat">
+            <header class="dl-ch"><h2>Comments</h2></header>
+            <div class="cm-thread" id="msgs" data-testid="chat-scroll">
+              {(t.comments || []).length === 0 ? <p class="muted cm-empty">No comments yet.</p> : null}
               {(t.comments || []).map((c) => {
                 const cw = who(c.by)
+                const mine = cw.kind === 'operator'
                 const cId = cw.kind === 'bot' ? bots[cw.name]?.identity : undefined
-                return (
-                  <div class="comment" data-from={c.by}>
-                    {cw.kind === 'bot' ? <Avatar id={cId} size={30} /> : null}
-                    <div class="comment-body">
-                      <div class="chat-meta"><span class="chat-who">{cw.kind === 'operator' ? 'You' : displayName(cId, cw.name)}</span><span class="chat-at">{ago(c.at)}</span></div>
-                      <div class="chat-text">{c.text}</div>
-                    </div>
+                const meta = (
+                  <div class="cm-meta">
+                    {mine ? <span>You</span> : <b>{displayName(cId, cw.name)}</b>}
+                    <span class="dl-sub">{ago(c.at)}</span>
+                  </div>
+                )
+                const bubble = <div class="cm-bubble">{c.text}</div>
+                return mine ? (
+                  <div class="cm-row cm-op" data-from={c.by}>{meta}{bubble}</div>
+                ) : (
+                  <div class="cm-row cm-bot" data-from={c.by}>
+                    <Avatar id={cId} size={32} />
+                    <div>{meta}{bubble}</div>
                   </div>
                 )
               })}
             </div>
-            <div class="chat-input-wrap">
-              <textarea class="chat-input" data-testid="comment-input" rows={2} value={comment} placeholder="Comment…" onInput={(e) => setComment((e.target as HTMLTextAreaElement).value)} />
-              <button class="btn primary chat-send" type="button" disabled={busy || !comment.trim()} onClick={() => void postComment()}>Comment</button>
+            <div class="cm-comp">
+              <div class="cm-in">
+                <div class="cm-field">
+                  <textarea class="cm-ta" data-testid="comment-input" rows={2} placeholder="Comment…" value={comment} onInput={(e) => setComment((e.target as HTMLTextAreaElement).value)} />
+                </div>
+                <button class="btn primary cm-send" type="button" disabled={busy || !comment.trim()} onClick={() => void postComment()} aria-label="Comment">
+                  <Icon name="send" />
+                </button>
+              </div>
+              {err ? <p class="cm-err">{err}</p> : null}
             </div>
           </section>
         </div>
 
-        <aside class="ticket-rail">
+        <div class="stack tk-side">
           <section class="panel">
-            <span class="panel-title">Details</span>
-            <dl class="detail-list">
-              <dt>Assigned to</dt>
-              <dd>{aId ? <span class="inline-id"><Avatar id={aId} size={20} /> {displayName(aId, aw!.name)}</span> : t.assignee ? who(t.assignee).name : 'nobody yet'}</dd>
-              <dt>Priority</dt>
-              <dd>{t.priority || 'normal'}</dd>
-              {t.due ? <><dt>Due</dt><dd>{t.due}</dd></> : null}
-              {t.labels?.length ? <><dt>Labels</dt><dd>{t.labels.join(', ')}</dd></> : null}
-            </dl>
+            <div class="panel-head"><h3>Details</h3></div>
+            <div class="tk-fields">
+              <div class="tk-f"><span class="dl-lbl">Status</span><span class="tk-st"><StatusMark s={STATUS_MARK[t.status]} mkOnly /> {STATUS_LABEL[t.status] || t.status}</span></div>
+              <div class="tk-f">
+                <span class="dl-lbl">Assigned to</span>
+                <span>{aId ? <span class="inline-id"><Avatar id={aId} size={20} /> {displayName(aId, aw!.name)}</span> : t.assignee ? who(t.assignee).name : 'nobody yet'}</span>
+              </div>
+              <div class="tk-f"><span class="dl-lbl">Priority</span><span>{t.priority || 'normal'}</span></div>
+              {t.due ? <div class="tk-f"><span class="dl-lbl">Due</span><span>{t.due}</span></div> : null}
+              {t.labels?.length ? <div class="tk-f"><span class="dl-lbl">Labels</span><span>{t.labels.join(', ')}</span></div> : null}
+            </div>
           </section>
           <section class="panel">
-            <span class="panel-title">History</span>
-            <ul class="history-list">
+            <div class="panel-head"><h3>History</h3></div>
+            <ol class="tk-hist">
               {(t.history || []).map((h) => (
-                <li><span class="muted">{ago(h.at)}</span> {h.what} <span class="muted">· {who(h.by).name}</span></li>
+                <li><span>{h.what} <span class="dl-sub">· {who(h.by).name}</span></span><span class="dl-sub">{ago(h.at)}</span></li>
               ))}
-            </ul>
+            </ol>
           </section>
-        </aside>
+        </div>
       </div>
     </div>
   )

@@ -6,6 +6,8 @@ import type { JSX } from 'preact'
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { botsApi, displayName, who, openTicketStream, type Ticket, type BotSummary, type TeamSummary } from '../api/bots'
 import { Avatar } from '../components/Avatar'
+import { Icon } from '../components/Icon'
+import { StatusMark } from '../components/StatusMark'
 import { ago } from '../lib/format'
 import { EmptyState } from '../components/EmptyState'
 import { humanError } from '../api/errors'
@@ -19,12 +21,22 @@ export const STATUS_LABEL: Record<string, string> = {
   done: 'Done',
   declined: 'Declined',
 }
+// The same vocabulary as every list's mark (design §3.2): draft/ready/progress
+// are neutral (marks.css), waiting is the accent ember, done is success.
+const STATUS_MARK: Record<string, string> = {
+  draft: 'draft',
+  ready: 'ready',
+  in_progress: 'progress',
+  waiting: 'ember',
+  done: 'ok',
+  declined: 'fail',
+}
 
-function assigneeId(a: string | undefined, bots: Record<string, BotSummary>): { label: string; identity?: BotSummary['identity'] } {
+function assigneeId(a: string | undefined, bots: Record<string, BotSummary>): { label: string; identity?: BotSummary['identity']; team?: boolean } {
   if (!a) return { label: 'nobody yet' }
   const w = who(a)
   if (w.kind === 'bot') return { label: displayName(bots[w.name]?.identity, w.name), identity: bots[w.name]?.identity }
-  return { label: `team ${w.name}` }
+  return { label: `team ${w.name}`, team: true }
 }
 
 export function Tickets(): JSX.Element {
@@ -89,16 +101,18 @@ export function Tickets(): JSX.Element {
 
   if (tickets === null) {
     return (
-      <div class="col tickets-screen">
-        <h1 class="screen-title serif">Tickets</h1>
-        {err ? (
-          <div class="banner err" role="alert">
-            Couldn't load tickets: {err}{' '}
-            <button class="btn sm" type="button" onClick={() => void load()}>Try again</button>
-          </div>
-        ) : (
-          <p class="muted">Loading…</p>
-        )}
+      <div class="dl-phead">
+        <div>
+          <h1>Tickets</h1>
+          {err ? (
+            <div class="banner err" role="alert">
+              Couldn't load tickets: {err}{' '}
+              <button class="btn sm" type="button" onClick={() => void load()}>Try again</button>
+            </div>
+          ) : (
+            <p class="muted">Loading…</p>
+          )}
+        </div>
       </div>
     )
   }
@@ -106,8 +120,8 @@ export function Tickets(): JSX.Element {
   // Nothing yet, and no filter narrowing it: say what tickets are for.
   if (tickets.length === 0 && !fAssignee && !fPriority) {
     return (
-      <div class="col tickets-screen">
-        <h1 class="screen-title serif">Tickets</h1>
+      <div class="tk-page">
+        <div class="dl-phead"><div><h1>Tickets</h1></div></div>
         {err ? <div class="banner err" role="alert">{err}</div> : null}
         {configured ? (
           <EmptyState
@@ -133,22 +147,23 @@ export function Tickets(): JSX.Element {
     )
   }
 
+  const open = tickets.filter((t) => t.status !== 'done' && t.status !== 'declined').length
+  const drafts = tickets.filter((t) => t.status === 'draft').length
+
   return (
-    <div class="col tickets-screen">
-      <div class="screen-head">
-        <h1 class="screen-title serif">Tickets <span class="count">{tickets.length}</span></h1>
-        <div class="row-actions">
-          <div class="seg-control" role="tablist">
-            <button class={'seg' + (view === 'board' ? ' on' : '')} type="button" onClick={() => setViewP('board')}>Board</button>
-            <button class={'seg' + (view === 'list' ? ' on' : '')} type="button" onClick={() => setViewP('list')}>List</button>
-          </div>
-          <button class="btn primary" type="button" data-testid="new-ticket" onClick={() => setNewOpen(true)}>New ticket</button>
+    <div class="tk-page">
+      <div class="dl-phead">
+        <div>
+          <h1>Tickets <span class="h1-count">{open} open{drafts ? ` · ${drafts} draft${drafts > 1 ? 's' : ''}` : ''}</span></h1>
         </div>
+        <button class="btn primary" type="button" data-testid="new-ticket" onClick={() => setNewOpen(true)}>
+          <Icon name="plus" />New ticket
+        </button>
       </div>
 
       {err ? <div class="banner err">{err}</div> : null}
 
-      <div class="filter-bar">
+      <div class="tk-bar">
         <select class="field" value={fAssignee} onChange={(e) => setFAssignee((e.target as HTMLSelectElement).value)}>
           <option value="">Any assignee</option>
           {Object.keys(bots).map((b) => <option value={`bot:${b}`}>{displayName(bots[b].identity, b)}</option>)}
@@ -158,9 +173,14 @@ export function Tickets(): JSX.Element {
           <option value="">Any priority</option>
           {['urgent', 'high', 'normal', 'low'].map((p) => <option value={p}>{p}</option>)}
         </select>
+        <span class="dl-sp" />
+        <div class="seg fb-seg tk-view" role="group" aria-label="Show as">
+          <button type="button" aria-pressed={view === 'board'} onClick={() => setViewP('board')}><Icon name="grid" /><span class="tk-vl">Board</span></button>
+          <button type="button" aria-pressed={view === 'list'} onClick={() => setViewP('list')}><Icon name="logs" /><span class="tk-vl">List</span></button>
+        </div>
       </div>
 
-      {view === 'board' ? <Board tickets={tickets} bots={bots} /> : <section class="panel"><TicketTable tickets={tickets} bots={bots} /></section>}
+      {view === 'board' ? <Board tickets={tickets} bots={bots} /> : <FlatList tickets={tickets} bots={bots} />}
 
       {newTicket}
     </div>
@@ -175,17 +195,22 @@ function Board({ tickets, bots }: { tickets: Ticket[]; bots: Record<string, BotS
     return m
   }, [tickets])
   return (
-    <div class="board" data-testid="ticket-board">
+    <div class="tk-board" data-testid="ticket-board">
       {STATUSES.map((s) => (
-        <div class="board-col" data-status={s}>
-          <div class="board-col-head">
-            <span class="board-col-name">{STATUS_LABEL[s]}</span>
+        <section class="tk-col" data-col={s} aria-label={STATUS_LABEL[s]}>
+          <header class="tk-colh">
+            <StatusMark s={STATUS_MARK[s]} mkOnly label={STATUS_LABEL[s]} />
+            <h2>{STATUS_LABEL[s]}</h2>
             <span class="count">{byStatus[s].length}</span>
-          </div>
-          <div class="board-col-body">
-            {byStatus[s].map((t) => <TicketCard key={t.ticket} t={t} bots={bots} />)}
-          </div>
-        </div>
+          </header>
+          <ul class="tk-cards">
+            {byStatus[s].length ? (
+              byStatus[s].map((t) => <TicketCard key={t.ticket} t={t} bots={bots} />)
+            ) : (
+              <li class="tk-none dl-sub">{s === 'draft' ? 'No drafts. Write one, or a bot will when it has an idea.' : 'None'}</li>
+            )}
+          </ul>
+        </section>
       ))}
     </div>
   )
@@ -194,45 +219,59 @@ function Board({ tickets, bots }: { tickets: Ticket[]; bots: Record<string, BotS
 function TicketCard({ t, bots }: { t: Ticket; bots: Record<string, BotSummary> }): JSX.Element {
   const a = assigneeId(t.assignee, bots)
   return (
-    <a class="ticket-card" href={`#/tickets/${t.ticket}`} data-ticket={t.ticket} data-priority={t.priority}>
-      <div class="ticket-card-top">
-        <span class="mono id">{t.ticket}</span>
-        {t.priority && t.priority !== 'normal' ? <span class={'tag pri-' + t.priority}>{t.priority}</span> : null}
-      </div>
-      <div class="ticket-card-title">{t.title}</div>
-      <div class="ticket-card-foot">
-        {a.identity ? <Avatar id={a.identity} size={22} /> : null}
-        <span class="muted">{a.label}</span>
-        <span class="muted dot">·</span>
-        <span class="muted">{ago(t.updated)}</span>
-      </div>
-    </a>
+    <li class="tk-card" data-ticket={t.ticket} data-priority={t.priority}>
+      <a class="ticket-card" href={`#/tickets/${t.ticket}`}>
+        <b>{t.title}</b>
+        <span class="dl-why">{a.label}{t.priority && t.priority !== 'normal' ? ` · ${t.priority}` : ''}</span>
+        <span class="fx">
+          {a.identity ? <span class="fx-i"><Avatar id={a.identity} size={16} /> {a.label}</span> : null}
+          <span class="fx-i">{ago(t.updated)}</span>
+        </span>
+      </a>
+    </li>
   )
 }
 
-// TicketTable is the flat list, reused in a bot's and a team's Tickets tab.
+// FlatList is the Board's alternative: one dl-card section, every ticket as a
+// dl-need row (the same anatomy as every list in the app: mark, title, a line
+// in words, the facts, the age). Reused in a bot's and a team's Tickets tab.
 export function TicketTable({ tickets, bots }: { tickets: Ticket[]; bots: Record<string, BotSummary> }): JSX.Element {
   if (!tickets.length) return <p class="muted">No tickets here.</p>
   return (
-    <ul class="ticket-list" data-testid="ticket-list">
-      {tickets.map((t) => {
-        const a = assigneeId(t.assignee, bots)
-        return (
-          <li class="ticket-row" data-ticket={t.ticket} data-status={t.status}>
-            <a class="ticket-row-link" href={`#/tickets/${t.ticket}`}>
-              <span class={'status-dot s-' + t.status} title={STATUS_LABEL[t.status]} />
-              <span class="ticket-row-title">{t.title}</span>
-              <span class="mono id">{t.ticket}</span>
-              <span class="facts muted">
-                {a.label}
-                {t.priority && t.priority !== 'normal' ? ` · ${t.priority}` : ''}
-                {` · ${STATUS_LABEL[t.status] || t.status}`}
-              </span>
-            </a>
-          </li>
-        )
-      })}
+    <ul class="dl-list" data-testid="ticket-list">
+      {tickets.map((t) => <TicketRow key={t.ticket} t={t} bots={bots} />)}
     </ul>
+  )
+}
+
+function FlatList({ tickets, bots }: { tickets: Ticket[]; bots: Record<string, BotSummary> }): JSX.Element {
+  return (
+    <section class="dl-card tk-sec tk-flat">
+      <header class="dl-ch">
+        <h2>All tickets</h2>
+        <span class="count">{tickets.length}</span>
+      </header>
+      <TicketTable tickets={tickets} bots={bots} />
+    </section>
+  )
+}
+
+function TicketRow({ t, bots }: { t: Ticket; bots: Record<string, BotSummary> }): JSX.Element {
+  const a = assigneeId(t.assignee, bots)
+  return (
+    <li class="dl-need tk-row ticket-row" data-ticket={t.ticket} data-status={t.status}>
+      <a class="dl-need-a ticket-row-link" href={`#/tickets/${t.ticket}`}>
+        <span class="dl-ng"><StatusMark s={STATUS_MARK[t.status]} lg label={STATUS_LABEL[t.status]} /></span>
+        <span class="dl-nt">
+          <b>{t.title}</b>
+          <span class="dl-why">{STATUS_LABEL[t.status] || t.status} · {a.label}</span>
+        </span>
+        <span class="dl-age">{ago(t.updated)}</span>
+        <span class="dl-na">
+          {t.status === 'draft' ? <span class="btn sm secondary">Mark ready…</span> : null}
+        </span>
+      </a>
+    </li>
   )
 }
 
