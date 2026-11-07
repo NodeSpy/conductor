@@ -118,6 +118,82 @@ GITHUB_PLUGIN_BIN=/path/to/conductor-github make e2e
 `run.sh` stages it into `plugin-bin/`, which replaces the pinned build in the
 image.
 
+## Hosts that cannot jail plugins
+
+`test/e2e/nojail.sh` (not part of `make e2e` — run it directly, or via CI/
+`release.yml`) is a separate, table-driven harness for the plugin jail's
+escape hatch (`internal/plugin/hostjail.go`, `internal/plugin/asbefore.go`):
+some hosts can never build the jail at all — a root daemon (a user namespace
+maps root to root, no boundary) or **any** host where unprivileged user
+namespaces are blocked, notably a **default** Docker container (no
+`--privileged`, no `--cap-add`, no `--security-opt`: the default seccomp
+profile blocks `unshare(CLONE_NEWUSER)`). A plugin installed **before** the
+jail keeps running unjailed, as before; one installed **since** is refused,
+loudly, with the fix in the error.
+
+```sh
+bash test/e2e/nojail.sh          # both shapes x every row
+NJ_SHAPES=nonroot NJ_ROWS=fresh bash test/e2e/nojail.sh   # narrow a local run
+KEEP=1 bash test/e2e/nojail.sh   # leave the row's containers up for inspection
+```
+
+It builds the same image `make e2e` does (same per-checkout project/tag, so
+one or the other build is a cache hit) and needs no compose network or mock
+service of its own: each row is a standalone `docker run`, and the github
+connector's own webhook listener is driven directly, exactly like
+`conductor-conn`'s `gh:` instance (`connectors.e2e.yaml`) minus the
+`trust: full` that config needs for the *old* behavior (root refused
+outright) — proving the hotfix lets it run pre-jail/unjailed instead is the
+whole point, so `trust: full` would defeat the test.
+
+Two container **shapes**, crossed with three install-state **rows**
+(`config/nojail/entrypoint.sh` seeds `~/.local/state/conductor/plugins/
+installed.yaml` for each, the same pre-seeded-record pattern
+`entrypoint-conn.sh` uses for the reference `acme-engine` plugin — this
+harness has no network, so the fetch is the only part skipped):
+
+| | reason the probe gives |
+|---|---|
+| **root** | conductor runs as root |
+| **nonroot** (uid/gid 1000:1000) | runs in a container that blocks unprivileged user namespaces |
+
+| Row | `installed.yaml` shape | Expected |
+|---|---|---|
+| `prejail-v1` | `version: 1` (no `manifest_schema` at all) | github + js both work |
+| `rewritten-v089` | `version: 2`, `manifest_schema: 1`, `legacy: true` (what v0.88/v0.89 left behind when they could not describe a pre-jail plugin themselves) | github + js both work |
+| `fresh` | `version: 2`, `manifest_schema: 1`, no `legacy`/`pre_jail` on the **js** record (github keeps its pre-jail record) | github keeps working; **js is refused** |
+
+Both `github` (`connectors/github`) and `js` (`engines/js`) are referenced as
+**installed, remote-origin** plugins (`use: github` / `use: js`), never a
+local `use: /path` — a local reference is always treated as pre-jail
+(`asbefore.go`'s `runsAsBefore`), which would never exercise a *fresh*
+(post-jail) record. The image's plugin-build stage (`Dockerfile`) builds
+`conductor-js` from the same pinned `conductor-plugins` commit
+(`GITHUB_PLUGIN_VERSION`) the connectors come from.
+
+Each row asserts, from the daemon's own boot log and a live run: the boot
+warning (`plugins: WARNING: this host cannot jail plugins: …`) names the
+right reason for the shape; github registers its connector type and verbs
+unjailed; js either registers as a code-step engine (the two pre-jail rows)
+or is refused with the fix text naming `trust: full` (the fresh row); and a
+signed GitHub-shaped webhook (`fixtures/new_comment.json`) fires a trigger
+whose `use: js` step runs (or fails in place, for the fresh row) and a final
+`use: cli` step (builtin, never jailed) records its output where the harness
+can read it.
+
+**Add a row:** add a case arm to `config/nojail/entrypoint.sh` that writes
+the new `installed.yaml` shape, then add the row's name and expected `js`
+outcome (`works` or `refused`) to the `ROWS`/`JS_EXPECT` table at the top of
+`nojail.sh` — every assertion above runs against it automatically, in both
+shapes. The next PR, moving the smee relay, adds its own row.
+
+**Bonus, not yet done:** a verb call against `mock-github` (proving a
+pre-jail plugin's narrowed, pre-jail-era egress-proxy allowlist actually
+reaches it) would need this harness to join the compose network and bring up
+`mock-github` alongside each row's container — left for a later PR; today's
+rows only assert registration, the boot warning/refusal, and the
+webhook→`js`→record path.
+
 ## Minimal testability hooks (production behavior unchanged when unset)
 
 The harness needs a few seams into otherwise-hardwired endpoints. Each is env-gated

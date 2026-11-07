@@ -86,6 +86,8 @@ jobs:
     outputs:
       status: ${{ steps.run.outputs.status }}
       matrix: ${{ steps.run.outputs.matrix }}
+      nojail_status: ${{ steps.nojail.outputs.status }}
+      nojail_matrix: ${{ steps.nojail.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
       - name: hermetic e2e (stub controllers, no secrets)
@@ -99,6 +101,22 @@ jobs:
           {
             echo 'matrix<<MATRIX_EOF'
             sed -e 's/\x1b\[[0-9;]*m//g' e2e.log | awk '/^=+ e2e results/{f=1} f' | tail -80
+            echo 'MATRIX_EOF'
+          } >> "$GITHUB_OUTPUT"
+          exit $rc
+      - name: hosts that cannot jail plugins (nojail.sh)
+        id: nojail
+        if: always()
+        run: |
+          set +e
+          # Reuses the image test/e2e/run.sh just built (same per-checkout
+          # project/tag) — a cache hit, not a second build.
+          bash test/e2e/nojail.sh 2>&1 | tee nojail.log
+          rc=${PIPESTATUS[0]}
+          if [ $rc -eq 0 ]; then echo "status=PASS" >> "$GITHUB_OUTPUT"; else echo "status=FAIL" >> "$GITHUB_OUTPUT"; fi
+          {
+            echo 'matrix<<MATRIX_EOF'
+            sed -e 's/\x1b\[[0-9;]*m//g' nojail.log | awk '/^=+ e2e results/{f=1} f' | tail -80
             echo 'MATRIX_EOF'
           } >> "$GITHUB_OUTPUT"
           exit $rc
@@ -126,6 +144,7 @@ jobs:
               covLine = `${cov} (base ${baseCov}, ${d >= 0 ? '+' : ''}${d}pp)`;
             }
             const matrix = (e2e.matrix || '').trim();
+            const nojailMatrix = (e2e.nojail_matrix || '').trim();
             const body = [
               marker,
               `## CI summary`,
@@ -137,8 +156,10 @@ jobs:
               `| unit tests (-race) | ${ (unit.tests || '').startsWith('PASS') ? '✅' : '❌'} ${unit.tests || 'did not run'} |`,
               `| coverage | ${covLine} |`,
               `| e2e (hermetic) | ${icon(e2e.status === 'PASS')} ${e2e.status || e2eResult} |`,
+              `| e2e (hosts that cannot jail plugins) | ${icon(e2e.nojail_status === 'PASS')} ${e2e.nojail_status || 'did not run'} |`,
               ``,
               matrix ? `<details><summary>e2e scenario matrix</summary>\n\n\`\`\`\n${matrix}\n\`\`\`\n</details>` : '_e2e matrix unavailable_',
+              nojailMatrix ? `<details><summary>nojail.sh scenario matrix</summary>\n\n\`\`\`\n${nojailMatrix}\n\`\`\`\n</details>` : '',
               ``,
               `_run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}_`,
             ].join('\n');

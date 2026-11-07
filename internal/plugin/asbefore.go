@@ -179,23 +179,30 @@ func confineToManifest(s Spec, env []string, sd SandboxDeps) ([]string, func(), 
 		env = append(env, sandbox.ProxyEnv(addr, cred)...)
 		cleanup = revoke
 	}
-	if dir, err := commandPathDir(s); err != nil {
+	if dir, err := commandPathDir(s, sd.StagingRoot); err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("plugin %s: confining declared commands: %w", s.Name, err)
 	} else if dir != "" {
 		env = replaceEnv(env, "PATH", dir)
+		revoke := cleanup
+		cleanup = func() { revoke(); os.RemoveAll(dir) }
 	}
 	return env, cleanup, nil
 }
 
-// commandPathDir is the directory, beside the plugin's binary, holding a
-// link per declared command: the pre-jail launch's PATH. "" leaves PATH
-// alone (no install dir, or a plugin that spawns unnamed children).
-func commandPathDir(s Spec) (string, error) {
+// commandPathDir makes a directory holding a link per declared command: the
+// pre-jail launch's PATH, one per launch, removed when it exits. It lives in
+// the plugin's staging dir (conductor's own, always writable), else beside
+// its binary. "" leaves PATH alone (no such dir, or a plugin that spawns
+// unnamed children).
+func commandPathDir(s Spec, stagingRoot string) (string, error) {
 	if s.BinPath == "" {
 		return "", nil
 	}
 	base := filepath.Dir(s.BinPath)
+	if stagingRoot != "" {
+		base = filepath.Join(stagingRoot, s.Name)
+	}
 	if base == "" || base == "." {
 		return "", nil
 	}
@@ -203,11 +210,11 @@ func commandPathDir(s Spec) (string, error) {
 	if m.Spawns && len(m.Commands) == 0 {
 		return "", nil
 	}
-	dir := filepath.Join(base, ".path")
-	if err := os.RemoveAll(dir); err != nil {
+	if err := os.MkdirAll(base, 0o700); err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	dir, err := os.MkdirTemp(base, ".path-")
+	if err != nil {
 		return "", err
 	}
 	cmds := append([]string(nil), m.Commands...)

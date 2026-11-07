@@ -320,3 +320,41 @@ func TestNetworkWithinConfigDestination(t *testing.T) {
 		t.Fatalf("unset field resolved to %v", got)
 	}
 }
+
+// The pre-jail launch's PATH directory is conductor's own (the staging
+// dir), never beside a binary the daemon's user may not write, holds the
+// declared commands, and goes when the plugin exits.
+func TestAsBeforePathDirIsStagingNotBinaryDir(t *testing.T) {
+	defer SetHostJailForTests(noJail)()
+	binDir := t.TempDir()
+	bin := filepath.Join(binDir, "conductor-widget")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(binDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(binDir, 0o755)
+	stage := t.TempDir()
+	s := Spec{Name: "widget", Kind: KindConnector, BinPath: bin, PreJail: true, Manifest: Manifest{Commands: []string{"sh"}}}
+	cmd, cleanup, _, err := buildCommandIn(s, SandboxDeps{StagingRoot: stage})
+	if err != nil {
+		t.Fatalf("launch with a read-only binary dir: %v", err)
+	}
+	var path string
+	for _, kv := range cmd.Env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			path = v
+		}
+	}
+	if !strings.HasPrefix(path, filepath.Join(stage, "widget")+string(filepath.Separator)) {
+		t.Fatalf("PATH %q is not in the staging dir", path)
+	}
+	if _, err := os.Lstat(filepath.Join(path, "sh")); err != nil {
+		t.Fatalf("declared command not linked: %v", err)
+	}
+	cleanup()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("PATH dir left behind: %v", err)
+	}
+}

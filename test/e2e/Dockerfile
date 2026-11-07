@@ -46,6 +46,13 @@ RUN set -e; for p in github slack discord ntfy pushover notifiarr smee; do \
       go install "github.com/NodeSpy/conductor-plugins/connectors/$p@${GITHUB_PLUGIN_VERSION}"; \
       mv "/out/$p" "/out/conductor-$p"; \
     done
+# The js STEP ENGINE (engines/js) is built from the same pin — the can't-jail
+# harness (test/e2e/nojail.sh) needs an INSTALLED (remote-origin) engine
+# alongside the installed github connector, since a local `use: /path`
+# reference is always treated as pre-jail and would never exercise a FRESH
+# (post-jail) install record.
+RUN go install "github.com/NodeSpy/conductor-plugins/engines/js@${GITHUB_PLUGIN_VERSION}" \
+ && mv /out/js /out/conductor-js
 
 # ---- runtime stage ----
 FROM alpine:3.20
