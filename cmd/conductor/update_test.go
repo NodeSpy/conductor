@@ -524,3 +524,26 @@ func TestRefreshDepsMovesThePluginWhenNoPackReleaseLoads(t *testing.T) {
 		t.Fatalf("autopilot moved to %s; it must stay at %s", got, current)
 	}
 }
+
+// Logs & audit's Daemon log tab reads a line's source and level from its raw
+// text (logf writes plain lines; logring keeps no structure of its own —
+// internal/logring). A line like "WARNING: browser: ..." must show "browser"
+// as its source, with the level (warn) carried only in the row's colour —
+// not the level word repeated into the source column.
+func TestDaemonLogSourceSkipsALeadingLevelWord(t *testing.T) {
+	cases := []struct{ line, source, level string }{
+		{"WARNING: browser: no browser is installed yet", "browser", "warn"},
+		{"WARNING: sandbox.agents: off — agents run UNSANDBOXED", "sandbox.agents", "warn"},
+		{"ERROR: plugins: fetch failed", "plugins", "err"},
+		{"gh: sweep 14 repos · 0 missed · next in 30s", "gh", "info"},
+		{"a line with no component prefix at all", "conductor", "info"},
+	}
+	for _, c := range cases {
+		if got := daemonLogSource(c.line); got != c.source {
+			t.Errorf("daemonLogSource(%q) = %q, want %q", c.line, got, c.source)
+		}
+		if got := daemonLogLevel(c.line); got != c.level {
+			t.Errorf("daemonLogLevel(%q) = %q, want %q", c.line, got, c.level)
+		}
+	}
+}

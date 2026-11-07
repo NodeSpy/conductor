@@ -710,10 +710,37 @@ func (rc *releaseChecker) check() (tag string, changed bool, err error) {
 // …) — a heuristic over free text, not a structured field, but an honest one
 // given logf has no structured fields to read instead.
 func daemonLogSource(line string) string {
-	if i := strings.Index(line, ": "); i > 0 && i <= 24 && !strings.ContainsAny(line[:i], " \t") {
-		return line[:i]
+	rest := line
+	// A line like "WARNING: browser: ..." (logf's own ad hoc "WARNING: "
+	// prefix, cmd/conductor/browser.go and friends) puts the level word
+	// before the real component — skip at most one of those so the Logs &
+	// audit source column names what logged it, not how severe it was; the
+	// level itself is still read from the line's text by daemonLogLevel and
+	// shown as the row's colour.
+	for i := 0; i < 2; i++ {
+		idx := strings.Index(rest, ": ")
+		if idx <= 0 || idx > 24 || strings.ContainsAny(rest[:idx], " \t") {
+			break
+		}
+		word := rest[:idx]
+		if isLogLevelWord(word) {
+			rest = strings.TrimSpace(rest[idx+2:])
+			continue
+		}
+		return word
 	}
 	return "conductor"
+}
+
+// isLogLevelWord reports whether word is a level marker (logf's own ad hoc
+// "WARNING: "/"ERROR: " prefixes) rather than a component name.
+func isLogLevelWord(word string) bool {
+	switch strings.ToUpper(word) {
+	case "ERROR", "WARNING", "WARN", "INFO", "DEBUG":
+		return true
+	default:
+		return false
+	}
 }
 
 // daemonLogLevel guesses a log line's level from its text — again a

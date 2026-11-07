@@ -391,12 +391,12 @@ function Updates(): JSX.Element {
     }
   }
 
-  async function install(version: string, force: boolean, title: string, body: string) {
+  async function install(version: string, title: string, body: string) {
     if (!confirm(`${title}\n\n${body}`)) return
     setInstalling(true)
     setErr('')
     try {
-      await api.installUpdate(version, force)
+      await api.installUpdate(version)
       await reload()
     } catch (e) {
       setErr(String(e))
@@ -437,7 +437,7 @@ function Updates(): JSX.Element {
                 </ul>
                 {u.check_error ? <p class="banner err" role="alert">{u.check_error}</p> : null}
                 <div class="dl-actions">
-                  <button class="btn primary" disabled={installing || !!u.check_error} onClick={() => install('', false, `Install ${u.available} now?`, `conductor checks it again, keeps ${u.version} so you can go back, then switches over and restarts. Anything running finishes first.`)}>
+                  <button class="btn primary" disabled={installing || !!u.check_error} onClick={() => install(u.available!, `Install ${u.available} now?`, `conductor checks it again, keeps ${u.version} so you can go back, then switches over and restarts. Anything running finishes first.`)}>
                     <Icon name="download" />{installing ? 'Installing…' : 'Install now'}
                   </button>
                   <span class="dl-sub">The same as the automatic install: the current version is kept, so you can go back.</span>
@@ -452,8 +452,20 @@ function Updates(): JSX.Element {
                 </details>
               </section>
             ) : (
-              <section class="dl-card">
-                <p>{u?.checked ? <>You're on {u.version}, the newest release. Last checked {u.last_check ? ago(u.last_check) : 'just now'}.</> : <>You're on {u?.version}. Check now to look for a newer release.</>}</p>
+              <section class="dl-card" aria-label="Found release">
+                <header class="dl-ch">
+                  <h2>{u?.version}</h2>
+                  {u?.checked && u.last_check ? <span class="dl-sub">· checked {ago(u.last_check)}</span> : null}
+                </header>
+                <p>{u?.checked ? "You're on the newest release." : 'Check now to look for a newer release.'}</p>
+                <details class="dl-tech-d">
+                  <summary><Icon name="chev" />Technical details</summary>
+                  <dl class="dl-facts">
+                    <dt>Check</dt><dd class="mono">git ls-remote for a newer published tag for this platform</dd>
+                    <dt>Kept</dt><dd><span class="mono">conductor.prev</span>: the previous binary, for rolling back</dd>
+                    <dt>Install</dt><dd>an atomic swap of the binary, then a restart; unchanged plugins are reloaded in place when that's on</dd>
+                  </dl>
+                </details>
               </section>
             )}
             <section class="dl-card" aria-label="Releases">
@@ -469,15 +481,15 @@ function Updates(): JSX.Element {
                           <span class="dl-sub">in use</span>
                         ) : r.ready ? (
                           <span class="dl-sub">ready</span>
-                        ) : (
+                        ) : r.older ? (
                           <button
                             class="btn sm secondary"
                             disabled={installing}
-                            onClick={() => install(r.version, true, `Go back to ${r.version}?`, `conductor checks that ${r.version} loads your config, then switches back and restarts. ${u!.version} is kept, so you can return to it.`)}
+                            onClick={() => install(r.version, `Go back to ${r.version}?`, `conductor checks that ${r.version} loads your config, then switches back and restarts. ${u!.version} is kept, so you can return to it.`)}
                           >
                             <Icon name="undo" />Go back to {r.version}…
                           </button>
-                        )}
+                        ) : null}
                       </span>
                     </li>
                   ))
@@ -495,26 +507,28 @@ function Updates(): JSX.Element {
                   <button type="button" role="switch" class={'switch' + (u?.auto ? ' on' : '')} aria-checked={!!u?.auto} aria-label="Install updates automatically" onClick={() => void stage(['update', 'auto'], !(u?.auto ?? false))} />
                   <span><b>Install updates automatically</b> <span class="dl-sub">{u?.auto ? 'on, the default' : 'off'}</span></span>
                 </label>
-                {u?.auto ? (
-                  <div class="upd-sub">
-                    <label class="row">
-                      <button type="button" role="switch" class={'switch' + (u?.deps ? ' on' : '')} aria-checked={!!u?.deps} aria-label="Keep packs and plugins up to date" onClick={() => void stage(['update', 'deps'], !(u?.deps ?? false))} />
-                      <span>Keep packs and plugins up to date too</span>
-                    </label>
-                    <label class="row">
-                      <button type="button" role="switch" class={'switch' + (u?.reload_in_place ? ' on' : '')} aria-checked={!!u?.reload_in_place} aria-label="Restart only the plugins that changed" onClick={() => void stage(['update', 'reload'], u?.reload_in_place ? 'restart' : 'in place')} />
-                      <span>Restart only the plugins that changed</span>
-                    </label>
-                  </div>
-                ) : (
-                  <p class="dl-sub">You install each release yourself, from here. To react to a new release (ask someone first, post it), set that up on a workflow.</p>
-                )}
+                <div class="upd-sub">
+                  <label class="row">
+                    <button type="button" role="switch" class={'switch' + (u?.deps ? ' on' : '')} aria-checked={!!u?.deps} aria-label="Keep packs and plugins up to date" disabled={!u?.auto} onClick={() => void stage(['update', 'deps'], !(u?.deps ?? false))} />
+                    <span>Keep packs and plugins up to date too</span>
+                  </label>
+                  <label class="row">
+                    <button type="button" role="switch" class={'switch' + (u?.reload_in_place ? ' on' : '')} aria-checked={!!u?.reload_in_place} aria-label="Restart only the plugins that changed" disabled={!u?.auto} onClick={() => void stage(['update', 'reload'], u?.reload_in_place ? 'restart' : 'in place')} />
+                    <span>Restart only the plugins that changed</span>
+                  </label>
+                </div>
                 <div class="field">
                   <label for="upd-int">Look for updates every</label>
                   <input class="input mono" id="upd-int" style="width:90px" value={u?.interval ?? ''} placeholder="10m" onChange={(e) => void stage(['update', 'interval'], (e.target as HTMLInputElement).value)} />
                 </div>
+                {staged.value.length === 0 ? (
+                  <button type="button" class="btn" aria-disabled="true" disabled>
+                    Review the change
+                  </button>
+                ) : (
+                  <ReviewPanel stagedCount={staged.value.length} />
+                )}
               </div>
-              <ReviewPanel stagedCount={staged.value.length} />
             </section>
             <p class="dl-sub">A release that can't load this machine's config is never installed, and the previous version is always kept.</p>
           </div>
