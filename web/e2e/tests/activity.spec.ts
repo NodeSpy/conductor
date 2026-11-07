@@ -11,7 +11,7 @@ async function apiRuns(request: { get: (u: string) => Promise<{ json: () => Prom
 }
 
 function dataRows(page: import('@playwright/test').Page) {
-  return page.locator('.tbl tbody tr:not(.grp-row)')
+  return page.locator('.dl-tbl tbody tr:not(.gh):not(.more)')
 }
 
 test('Activity lists every run from the daemon, grouped and filterable', async ({ page, collector }) => {
@@ -19,20 +19,20 @@ test('Activity lists every run from the daemon, grouped and filterable', async (
   expect(runs.length).toBeGreaterThanOrEqual(3)
 
   await page.goto('/#/activity')
-  await expect(page.locator('.screen-title', { hasText: 'Activity' })).toBeVisible()
-  await expect(page.locator('.tbl')).toBeVisible()
+  await expect(page.locator('.dl-phead h1', { hasText: 'Activity' })).toBeVisible()
+  await expect(page.locator('.dl-tbl')).toBeVisible()
 
   // The nav highlights Activity (Shell.tsx's rail, phase 1).
   await expect(page.locator('.rail nav.nav a.on[aria-current="page"]')).toHaveText('Activity')
 
   // Every run id shows in the table.
   for (const r of runs) {
-    await expect(page.locator('.tbl td.id', { hasText: r.id })).toHaveCount(1)
+    await expect(page.locator('.dl-tbl td.id', { hasText: r.id })).toHaveCount(1)
   }
 
   // The runs-per-hour strip rendered with bars and a legend (passed is green).
-  await expect(page.locator('.runs-strip .chart .bar')).not.toHaveCount(0)
-  await expect(page.locator('.runs-strip .legend .legend-item', { hasText: 'Passed' })).toBeVisible()
+  await expect(page.locator('.dl-strip .dl-hours .hb')).not.toHaveCount(0)
+  await expect(page.locator('.dl-strip .hb-legend li', { hasText: 'Passed' })).toBeVisible()
 
   // Free-text search narrows the list: filter to the "build" workflow.
   const buildRuns = runs.filter((r) => r.workflow === 'build')
@@ -50,30 +50,30 @@ test('Activity lists every run from the daemon, grouped and filterable', async (
 
 test('the runs-per-hour bar reveals a tooltip on hover', async ({ page }) => {
   await page.goto('/#/activity')
-  await expect(page.locator('.runs-strip .chart .bar')).not.toHaveCount(0)
+  await expect(page.locator('.dl-strip .dl-hours .hb')).not.toHaveCount(0)
 
   // Hover the last (most recent) bar; a tooltip with per-status counts appears.
-  const bars = page.locator('.runs-strip .chart .bar')
+  const bars = page.locator('.dl-strip .dl-hours .hb')
   await bars.last().hover()
-  const tip = page.locator('.bar-tip')
+  const tip = page.locator('.hb-tip')
   await expect(tip).toBeVisible()
-  await expect(tip.locator('.bar-tip-row', { hasText: 'Passed' })).toBeVisible()
+  await expect(tip.locator('.hb-tip-l li', { hasText: 'Passed' })).toBeVisible()
 })
 
 test('a live run appears in Activity over SSE without a reload', async ({ page, daemon }) => {
   await page.goto('/#/activity')
-  await expect(page.locator('.tbl')).toBeVisible()
+  await expect(page.locator('.dl-tbl')).toBeVisible()
   // The SSE stream connected: the top-bar connection cell only renders while
   // it isn't live (Shell.tsx's ThemeCell), so "live" is its absence.
   await expect(page.getByTestId('conn-bar')).toBeHidden()
 
   const before = await dataRows(page).count()
-  const tickBefore = Number(await page.locator('.col').getAttribute('data-tick'))
+  const tickBefore = Number(await page.locator('[data-tick]').first().getAttribute('data-tick'))
 
   daemon.trigger('deploy')
 
   await expect
-    .poll(async () => Number(await page.locator('.col').getAttribute('data-tick')), { timeout: 10_000 })
+    .poll(async () => Number(await page.locator('[data-tick]').first().getAttribute('data-tick')), { timeout: 10_000 })
     .toBeGreaterThan(tickBefore)
   await expect(dataRows(page)).toHaveCount(before + 1)
 })
@@ -83,9 +83,9 @@ test('clicking a run row opens its run detail', async ({ page }) => {
   const target = runs[0]
 
   await page.goto('/#/activity')
-  await expect(page.locator('.tbl')).toBeVisible()
+  await expect(page.locator('.dl-tbl')).toBeVisible()
 
-  await page.locator(`.tbl tbody tr[data-run="${target.id}"]`).click()
+  await page.locator(`.dl-tbl tbody tr[data-run="${target.id}"]`).click()
   await expect(page).toHaveURL(new RegExp(`#/runs/${target.id}$`))
-  await expect(page.locator('.screen-title')).toContainText(target.workflow)
+  await expect(page.locator('.dl-phead h1')).toContainText(target.workflow)
 })
