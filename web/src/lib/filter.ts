@@ -8,12 +8,19 @@ export interface FilterState {
   q: string
   status: string[]
   workflow: string[]
+  bot: string[]
   since: string // a key from TIME_RANGES, or 'all'
   attrs: Record<string, string[]> // qualifier key (github.repo) -> values
 }
 
 export function emptyFilter(since = '12h'): FilterState {
-  return { q: '', status: [], workflow: [], since, attrs: {} }
+  return { q: '', status: [], workflow: [], bot: [], since, attrs: {} }
+}
+
+// botOfRun returns the bot name a run belongs to (its workflow is
+// "bot:<name>" for a bot's own run), or "" for a plain workflow run.
+export function botOfRun(r: RunSummary): string {
+  return r.workflow.startsWith('bot:') ? r.workflow.slice(4) : ''
 }
 
 // TIME_RANGES: [key, label, minutes]. 0 minutes means "all time".
@@ -57,6 +64,7 @@ export function matchRun(r: RunSummary, f: FilterState, attrs: AttrQualifier[]):
     if (!ok) return false
   }
   if (f.workflow.length && !f.workflow.includes(r.workflow)) return false
+  if (f.bot.length && !f.bot.includes(botOfRun(r))) return false
   for (const [key, vals] of Object.entries(f.attrs)) {
     if (!vals.length) continue
     const attr = attrs.find((a) => a.key === key)
@@ -79,6 +87,7 @@ export function hasAnyFilter(f: FilterState): boolean {
     f.q ||
     f.status.length ||
     f.workflow.length ||
+    f.bot.length ||
     f.since !== 'all' ||
     Object.values(f.attrs).some((v) => v.length)
   )

@@ -39,7 +39,6 @@ async function noErrors(page: Page): Promise<void> {
 }
 
 const SCREENS: { route: string; name: string; testid: string; heading: RegExp }[] = [
-  { route: 'activity', name: 'activity', testid: 'activity-empty', heading: /No runs yet/ },
   { route: 'workflows', name: 'workflows', testid: 'workflows-empty', heading: /No workflows yet/ },
   { route: 'bots', name: 'bots', testid: 'bots-empty', heading: /Meet your first bot/ },
   { route: 'chat', name: 'chat', testid: 'chat-empty', heading: /No one to talk to yet/ },
@@ -64,6 +63,25 @@ for (const s of SCREENS) {
     await shot(page, s.name)
   })
 }
+
+// Activity on a fresh box: unlike the generic screens above, it never
+// collapses into a single blanket empty state (design method §4: a page keeps
+// all its sections, headers and actions; an empty section gets a one-line
+// message in place of its rows) — the filter bar and the runs-per-hour card
+// stay up, and the table/phone list carries the "No runs yet" message in
+// place of its rows.
+test('#/activity on a fresh box keeps the Activity layout, empty only where there is nothing', async ({ page, collector }) => {
+  await page.goto(`${rt.baseURL}/#/activity`)
+  await expect(page.getByRole('heading', { level: 1, name: 'Activity' })).toBeVisible()
+  await expect(page.locator('.fb')).toBeVisible()
+  await expect(page.locator('.dl-strip')).toBeVisible()
+  await expect(page.getByTestId('activity-empty').first()).toContainText(/No runs yet/)
+  await expect(page.getByTestId('activity-empty-workflows').first()).toBeVisible()
+  await noErrors(page)
+  expect(collector.failed, 'no failed requests').toEqual([])
+  expect(collector.consoleErrors, 'no console errors').toEqual([])
+  await shot(page, 'activity')
+})
 
 // Secrets on a fresh box: unlike the other screens, it is never a single
 // blanket empty state (CONFORMANCE "Secrets") — the tabs, the explanation and

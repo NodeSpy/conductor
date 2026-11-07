@@ -17,11 +17,10 @@
 import type { JSX } from 'preact'
 import { useMemo, useState } from 'preact/hooks'
 import { runs, status, liveTick, loadError, connAttrs, statusMark, dismissed } from '../state'
-import { EmptyState } from '../components/EmptyState'
 import type { RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
 import { FilterBar, type Option } from '../components/FilterBar'
-import { emptyFilter, matchRun, rangeMinutes, hasAnyFilter, STATUSES, type FilterState } from '../lib/filter'
+import { emptyFilter, matchRun, rangeMinutes, hasAnyFilter, botOfRun, STATUSES, TIME_RANGES, type FilterState } from '../lib/filter'
 import { humanDuration, ago, plural } from '../lib/format'
 import { api } from '../api/client'
 import { go } from '../router'
@@ -78,14 +77,23 @@ export function Activity(): JSX.Element {
     setShown(PAGE)
     clearSel()
   }
-  const toggle = (key: 'status' | 'workflow', v: string) => {
+  const toggle = (key: 'status' | 'workflow' | 'bot', v: string) => {
     const cur = filter[key]
     update({ [key]: cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v] } as Partial<FilterState>)
   }
 
   const wfOptions: Option[] = useMemo(() => {
     const m = new Map<string, number>()
-    all.forEach((r) => m.set(r.workflow, (m.get(r.workflow) || 0) + 1))
+    all.filter((r) => !r.workflow.startsWith('bot:')).forEach((r) => m.set(r.workflow, (m.get(r.workflow) || 0) + 1))
+    return [...m.entries()].sort().map(([v, n]) => ({ v, label: v, n }))
+  }, [all])
+
+  const botOptions: Option[] = useMemo(() => {
+    const m = new Map<string, number>()
+    all.forEach((r) => {
+      const b = botOfRun(r)
+      if (b) m.set(b, (m.get(b) || 0) + 1)
+    })
     return [...m.entries()].sort().map(([v, n]) => ({ v, label: v, n }))
   }, [all])
 
@@ -141,15 +149,7 @@ export function Activity(): JSX.Element {
       </div>
       {loadError.value ? <div class="banner err">Couldn't load: {loadError.value}</div> : null}
 
-      {status.value && all.length === 0 ? (
-        <EmptyState
-          testid="activity-empty"
-          title="No runs yet"
-          action={{ label: 'See your workflows', href: '#/workflows', testid: 'activity-empty-workflows' }}
-        >
-          <p>Every time a workflow fires, its run lands here with each step, how long it took and what it said. Find, filter and retry them from this page.</p>
-        </EmptyState>
-      ) : (
+      {status.value && (
         <>
           <FilterBar
             q={filter.q}
@@ -158,6 +158,7 @@ export function Activity(): JSX.Element {
             menus={[
               { key: 'status', label: 'Status', multi: true, selected: filter.status, options: STATUSES.map(([v, label]) => ({ v, label })), onToggle: (v) => toggle('status', v) },
               ...(wfOptions.length ? [{ key: 'workflow', label: 'Workflow', multi: true, selected: filter.workflow, options: wfOptions, onToggle: (v: string) => toggle('workflow', v) }] : []),
+              ...(botOptions.length ? [{ key: 'bot', label: 'Bot', multi: true, selected: filter.bot, options: botOptions, onToggle: (v: string) => toggle('bot', v) }] : []),
             ]}
             attrs={attrs}
             attrsValue={filter.attrs}
@@ -165,6 +166,7 @@ export function Activity(): JSX.Element {
             since={filter.since}
             onSinceChange={(v) => update({ since: v })}
             showTime
+            filterByHint
           />
 
           <Strip runs={matched} since={filter.since} />
@@ -214,13 +216,25 @@ export function Activity(): JSX.Element {
                 <tbody>
                   {matched.length === 0 ? (
                     <tr>
-                      <td colSpan={cols + 1} class="dl-empty-row">
-                        No run matches these filters.{' '}
-                        {hasAnyFilter(filter) ? (
-                          <button class="link" type="button" onClick={() => setFilter(emptyFilter('all'))}>
-                            Clear filters
-                          </button>
-                        ) : null}
+                      <td colSpan={cols + 1} class="dl-empty-row" data-testid="activity-empty">
+                        {all.length === 0 ? (
+                          <>
+                            No runs yet. Every time a workflow fires, its run lands here with each step, how long it took and what it
+                            said.{' '}
+                            <a class="link" href="#/workflows" data-testid="activity-empty-workflows">
+                              See your workflows
+                            </a>
+                          </>
+                        ) : (
+                          <>
+                            No run matches these filters.{' '}
+                            {hasAnyFilter(filter) ? (
+                              <button class="link" type="button" onClick={() => setFilter(emptyFilter('all'))}>
+                                Clear filters
+                              </button>
+                            ) : null}
+                          </>
+                        )}
                       </td>
                     </tr>
                   ) : null}
@@ -256,11 +270,34 @@ export function Activity(): JSX.Element {
           </section>
 
           <div class="dl-phone-groups">
-            <PhoneGroups needs={needs} running={running} finished={finished} shown={shown} onMore={() => setShown((s) => s + PAGE)} />
+            {matched.length === 0 ? (
+              <p class="dl-empty-row" data-testid="activity-empty">
+                {all.length === 0 ? (
+                  <>
+                    No runs yet.{' '}
+                    <a class="link" href="#/workflows" data-testid="activity-empty-workflows">
+                      See your workflows
+                    </a>
+                  </>
+                ) : (
+                  <>
+                    No run matches these filters.{' '}
+                    {hasAnyFilter(filter) ? (
+                      <button class="link" type="button" onClick={() => setFilter(emptyFilter('all'))}>
+                        Clear filters
+                      </button>
+                    ) : null}
+                  </>
+                )}
+              </p>
+            ) : (
+              <PhoneGroups needs={needs} running={running} finished={finished} shown={shown} onMore={() => setShown((s) => s + PAGE)} />
+            )}
           </div>
         </>
       )}
       <p class="dl-sub dl-keep">Runs are kept for 14 days; each record is signed, and one that fails its signature shows as tampered.</p>
+
     </div>
   )
 }
@@ -344,7 +381,10 @@ function PhoneGroups({
       ) : null}
       {finished.length ? (
         <button type="button" class="ph-done" aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}>
-          <span><b>{finished.length} finished</b></span>
+          <span>
+            <b>{finished.length} finished</b>
+            {finishedBreakdown(finished) ? ` · ${finishedBreakdown(finished)}` : ''}
+          </span>
           <span class="dl-link">{showDone ? 'Hide' : 'Show'}</span>
         </button>
       ) : null}
@@ -363,6 +403,20 @@ function PhoneGroups({
       ) : null}
     </>
   )
+}
+
+// finishedBreakdown: "8 went fine · 1 parked" — the phone disclosure's summary
+// line (prototype UI.runParts), counted within the Finished group only.
+function finishedBreakdown(rs: RunSummary[]): string {
+  const parts: [number, string][] = [
+    [rs.filter((r) => r.status === 'ok').length, 'went fine'],
+    [rs.filter((r) => r.status === 'retried').length, 'parked'],
+    [rs.filter((r) => r.status === 'failed').length, 'failed'],
+  ]
+  return parts
+    .filter(([n]) => n)
+    .map(([n, t]) => `${n} ${t}`)
+    .join(' · ')
 }
 
 function PhoneRow({ r, rich }: { r: RunSummary; rich?: boolean }): JSX.Element {
@@ -429,11 +483,13 @@ function Strip({ runs: rs, since }: { runs: RunSummary[]; since: string }): JSX.
     return d(b.from).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
   }
 
+  const rangeLabel = since === 'all' ? 'the last 7 days' : `the ${(TIME_RANGES.find(([k]) => k === since)?.[1] || 'last 12 hours').toLowerCase()}`
+
   return (
     <section class="dl-card dl-strip" aria-label="Runs per period">
       <header class="dl-ch">
         <h2>Runs per {unit}</h2>
-        <span class="dl-sub">{plural(rs.length, 'run')}</span>
+        <span class="dl-sub">{rangeLabel}</span>
       </header>
       <svg class="dl-hours" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label={`${plural(rs.length, 'run')}; ${fails.length} failed`}>
         {buckets.map((b, i) => {
