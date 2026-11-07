@@ -8,10 +8,14 @@ import { botsApi, displayName, who, openTicketStream, type Ticket, type BotSumma
 import { Avatar } from '../components/Avatar'
 import { Icon } from '../components/Icon'
 import { StatusMark } from '../components/StatusMark'
+import { FilterBar, type FilterMenu } from '../components/FilterBar'
 import { ago } from '../lib/format'
 import { EmptyState } from '../components/EmptyState'
 import { humanError } from '../api/errors'
 
+// BOARD_STATUSES excludes declined, same as the prototype's board columns
+// (ORDER.filter(k => k !== 'declined')); declined tickets still show in the
+// flat list and count toward the Status filter.
 export const STATUSES = ['draft', 'ready', 'in_progress', 'waiting', 'done'] as const
 export const STATUS_LABEL: Record<string, string> = {
   draft: 'Draft',
@@ -31,12 +35,19 @@ const STATUS_MARK: Record<string, string> = {
   done: 'ok',
   declined: 'fail',
 }
+const PRIORITIES = ['urgent', 'high', 'normal', 'low']
 
 function assigneeId(a: string | undefined, bots: Record<string, BotSummary>): { label: string; identity?: BotSummary['identity']; team?: boolean } {
   if (!a) return { label: 'nobody yet' }
   const w = who(a)
   if (w.kind === 'bot') return { label: displayName(bots[w.name]?.identity, w.name), identity: bots[w.name]?.identity }
   return { label: `team ${w.name}`, team: true }
+}
+
+function tally<T>(xs: T[]): Map<T, number> {
+  const m = new Map<T, number>()
+  for (const x of xs) m.set(x, (m.get(x) || 0) + 1)
+  return m
 }
 
 export function Tickets(): JSX.Element {
@@ -48,12 +59,19 @@ export function Tickets(): JSX.Element {
   const [view, setView] = useState<'board' | 'list'>((localStorage.getItem('tickets.view') as 'board' | 'list') || 'board')
   const [err, setErr] = useState('')
   const [newOpen, setNewOpen] = useState(params.get('new') === '1')
-  const [fAssignee, setFAssignee] = useState(params.get('assignee') || '')
-  const [fPriority, setFPriority] = useState('')
+
+  // Filtering is client-side against the full ticket list, same as the
+  // prototype's own tv/keep() — one fetch, every menu's counts and the board's
+  // columns all read the same data, and "N of M" / Clear match instantly.
+  const [q, setQ] = useState('')
+  const [fAssignee, setFAssignee] = useState<string[]>(params.get('assignee') ? [params.get('assignee')!] : [])
+  const [fStatus, setFStatus] = useState<string[]>([])
+  const [fPriority, setFPriority] = useState<string[]>([])
+  const [fLabel, setFLabel] = useState<string[]>([])
 
   const load = () =>
     botsApi
-      .tickets({ assignee: fAssignee, priority: fPriority })
+      .tickets({})
       .then((r) => {
         setTickets(r.tickets || [])
         setConfigured(r.configured !== false)
@@ -64,7 +82,6 @@ export function Tickets(): JSX.Element {
         setErr(humanError(e))
         return false
       })
-  useEffect(() => void load(), [fAssignee, fPriority])
   useEffect(() => {
     let stop = () => {}
     let gone = false
@@ -96,7 +113,7 @@ export function Tickets(): JSX.Element {
   }
 
   const newTicket = newOpen ? (
-    <NewTicket bots={bots} teams={teams} preAssignee={fAssignee} onClose={() => setNewOpen(false)} onCreated={() => { setNewOpen(false); void load() }} />
+    <NewTicket bots={bots} teams={teams} preAssignee={fAssignee[0]} onClose={() => setNewOpen(false)} onCreated={() => { setNewOpen(false); void load() }} />
   ) : null
 
   if (tickets === null) {
@@ -117,8 +134,8 @@ export function Tickets(): JSX.Element {
     )
   }
 
-  // Nothing yet, and no filter narrowing it: say what tickets are for.
-  if (tickets.length === 0 && !fAssignee && !fPriority) {
+  // Nothing yet at all: say what tickets are for.
+  if (tickets.length === 0) {
     return (
       <div class="tk-page">
         <div class="dl-phead"><div><h1>Tickets</h1></div></div>
@@ -147,40 +164,86 @@ export function Tickets(): JSX.Element {
     )
   }
 
+  const assigneeKey = (t: Ticket): string => t.assignee || 'nobody'
+  const keep = (t: Ticket): boolean =>
+    (!fAssignee.length || fAssignee.includes(assigneeKey(t))) &&
+    (!fStatus.length || fStatus.includes(t.status)) &&
+    (!fPriority.length || fPriority.includes(t.priority || 'normal')) &&
+    (!fLabel.length || (t.labels || []).some((l) => fLabel.includes(l))) &&
+    (!q || `${t.title} ${t.description || ''} ${(t.labels || []).join(' ')}`.toLowerCase().includes(q.toLowerCase()))
+  const shown = tickets.filter(keep)
+  const filtered = shown.length < tickets.length
+
   const open = tickets.filter((t) => t.status !== 'done' && t.status !== 'declined').length
   const drafts = tickets.filter((t) => t.status === 'draft').length
+
+  const assigneeOptions = [...tally(tickets.map(assigneeKey))].map(([v, n]) => ({
+    v,
+    label: v === 'nobody' ? 'Nobody yet' : who(v).kind === 'team' ? `team ${who(v).name}` : displayName(bots[who(v).name]?.identity, who(v).name),
+    n,
+  }))
+  const statusOptions = STATUSES.concat('declined' as (typeof STATUSES)[number]).map((s) => ({ v: s, label: STATUS_LABEL[s], n: tickets.filter((t) => t.status === s).length })).filter((o) => o.n)
+  const priorityOptions = PRIORITIES.map((p) => ({ v: p, label: p, n: tickets.filter((t) => (t.priority || 'normal') === p).length })).filter((o) => o.n)
+  const labelOptions = [...tally(tickets.flatMap((t) => t.labels || []))].map(([v, n]) => ({ v, label: v, n }))
+
+  const clearFilters = () => {
+    setQ('')
+    setFAssignee([])
+    setFStatus([])
+    setFPriority([])
+    setFLabel([])
+  }
+
+  const toggle = (xs: string[], set: (v: string[]) => void, v: string) => set(xs.includes(v) ? xs.filter((x) => x !== v) : [...xs, v])
+
+  const menus: FilterMenu[] = [
+    { key: 'who', label: 'Assignee', multi: true, selected: fAssignee, options: assigneeOptions, onToggle: (v) => toggle(fAssignee, setFAssignee, v), onClear: () => setFAssignee([]) },
+    { key: 'status', label: 'Status', multi: true, selected: fStatus, options: statusOptions, onToggle: (v) => toggle(fStatus, setFStatus, v), onClear: () => setFStatus([]) },
+    { key: 'priority', label: 'Priority', multi: true, selected: fPriority, options: priorityOptions, onToggle: (v) => toggle(fPriority, setFPriority, v), onClear: () => setFPriority([]) },
+    ...(labelOptions.length ? [{ key: 'label', label: 'Label', multi: true, selected: fLabel, options: labelOptions, onToggle: (v: string) => toggle(fLabel, setFLabel, v), onClear: () => setFLabel([]) }] : []),
+  ]
 
   return (
     <div class="tk-page">
       <div class="dl-phead">
         <div>
           <h1>Tickets <span class="h1-count">{open} open{drafts ? ` · ${drafts} draft${drafts > 1 ? 's' : ''}` : ''}</span></h1>
+          <p class="lede-2">A ticket is one piece of work for a team or a bot. Drafts are ideas you and the bots shape together; work starts only once someone marks a ticket ready.</p>
         </div>
-        <button class="btn primary" type="button" data-testid="new-ticket" onClick={() => setNewOpen(true)}>
-          <Icon name="plus" />New ticket
-        </button>
+        <div class="dl-actions">
+          <button class="btn primary" type="button" data-testid="new-ticket" onClick={() => setNewOpen(true)}>
+            <Icon name="plus" />New ticket
+          </button>
+        </div>
       </div>
 
       {err ? <div class="banner err">{err}</div> : null}
 
       <div class="tk-bar">
-        <select class="field" value={fAssignee} onChange={(e) => setFAssignee((e.target as HTMLSelectElement).value)}>
-          <option value="">Any assignee</option>
-          {Object.keys(bots).map((b) => <option value={`bot:${b}`}>{displayName(bots[b].identity, b)}</option>)}
-          {teams.map((t) => <option value={`team:${t.team}`}>team {t.team}</option>)}
-        </select>
-        <select class="field" value={fPriority} onChange={(e) => setFPriority((e.target as HTMLSelectElement).value)}>
-          <option value="">Any priority</option>
-          {['urgent', 'high', 'normal', 'low'].map((p) => <option value={p}>{p}</option>)}
-        </select>
-        <span class="dl-sp" />
+        <FilterBar
+          q={q}
+          onQueryChange={setQ}
+          placeholder="Find a ticket, or filter: status:draft"
+          ariaLabel="Find and filter tickets"
+          menus={menus}
+        />
         <div class="seg fb-seg tk-view" role="group" aria-label="Show as">
           <button type="button" aria-pressed={view === 'board'} onClick={() => setViewP('board')}><Icon name="grid" /><span class="tk-vl">Board</span></button>
           <button type="button" aria-pressed={view === 'list'} onClick={() => setViewP('list')}><Icon name="logs" /><span class="tk-vl">List</span></button>
         </div>
       </div>
 
-      {view === 'board' ? <Board tickets={tickets} bots={bots} /> : <FlatList tickets={tickets} bots={bots} />}
+      {filtered ? (
+        <p class="dl-sub tk-showing">Showing {shown.length} of {tickets.length} · <button class="link" type="button" onClick={clearFilters}>Clear</button></p>
+      ) : null}
+
+      {shown.length === 0 ? (
+        <p class="dl-sub">No ticket matches.</p>
+      ) : view === 'board' ? (
+        <Board tickets={shown} bots={bots} />
+      ) : (
+        <FlatList tickets={shown} bots={bots} />
+      )}
 
       {newTicket}
     </div>
@@ -194,25 +257,45 @@ function Board({ tickets, bots }: { tickets: Ticket[]; bots: Record<string, BotS
     for (const t of tickets) (m[t.status] ||= []).push(t)
     return m
   }, [tickets])
+  // On a phone the board shows one column at a time, picked from the status
+  // tabs above it (screens.css: `.tk-board > .tk-col:not(.on) { display: none }`
+  // at 720px) — without a selection every column is display:none there, which
+  // is what made the phone board read as blank.
+  const [col, setCol] = useState<string>(() => STATUSES.find((s) => byStatus[s]?.length) || 'draft')
+  useEffect(() => {
+    if (!byStatus[col]?.length && STATUSES.some((s) => byStatus[s]?.length)) {
+      setCol(STATUSES.find((s) => byStatus[s]?.length) || 'draft')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tickets])
   return (
-    <div class="tk-board" data-testid="ticket-board">
-      {STATUSES.map((s) => (
-        <section class="tk-col" data-col={s} aria-label={STATUS_LABEL[s]}>
-          <header class="tk-colh">
-            <StatusMark s={STATUS_MARK[s]} mkOnly label={STATUS_LABEL[s]} />
-            <h2>{STATUS_LABEL[s]}</h2>
-            <span class="count">{byStatus[s].length}</span>
-          </header>
-          <ul class="tk-cards">
-            {byStatus[s].length ? (
-              byStatus[s].map((t) => <TicketCard key={t.ticket} t={t} bots={bots} />)
-            ) : (
-              <li class="tk-none dl-sub">{s === 'draft' ? 'No drafts. Write one, or a bot will when it has an idea.' : 'None'}</li>
-            )}
-          </ul>
-        </section>
-      ))}
-    </div>
+    <>
+      <div class="tk-colpick" role="tablist" aria-label="Status">
+        {STATUSES.map((s) => (
+          <button type="button" role="tab" aria-selected={col === s} onClick={() => setCol(s)}>
+            {STATUS_LABEL[s]} <span class="dl-sub">{byStatus[s].length}</span>
+          </button>
+        ))}
+      </div>
+      <div class="tk-board" data-testid="ticket-board">
+        {STATUSES.map((s) => (
+          <section class={'tk-col' + (col === s ? ' on' : '')} data-col={s} aria-label={STATUS_LABEL[s]}>
+            <header class="tk-colh">
+              <StatusMark s={STATUS_MARK[s]} mkOnly label={STATUS_LABEL[s]} />
+              <h2>{STATUS_LABEL[s]}</h2>
+              <span class="count">{byStatus[s].length}</span>
+            </header>
+            <ul class="tk-cards">
+              {byStatus[s].length ? (
+                byStatus[s].map((t) => <TicketCard key={t.ticket} t={t} bots={bots} />)
+              ) : (
+                <li class="tk-none dl-sub">{s === 'draft' ? 'No drafts. Write one, or a bot will when it has an idea.' : 'None'}</li>
+              )}
+            </ul>
+          </section>
+        ))}
+      </div>
+    </>
   )
 }
 
@@ -227,6 +310,7 @@ function TicketCard({ t, bots }: { t: Ticket; bots: Record<string, BotSummary> }
           {a.identity ? <span class="fx-i"><Avatar id={a.identity} size={16} /> {a.label}</span> : null}
           <span class="fx-i">{ago(t.updated)}</span>
         </span>
+        {t.status === 'draft' ? <span class="tk-card-act"><span class="btn sm secondary">Mark ready…</span></span> : null}
       </a>
     </li>
   )
@@ -338,7 +422,7 @@ function NewTicket({
           <label class="form-field">
             <span>Priority</span>
             <select class="field" value={priority} onChange={(e) => setPriority((e.target as HTMLSelectElement).value)}>
-              {['urgent', 'high', 'normal', 'low'].map((p) => <option value={p}>{p}</option>)}
+              {PRIORITIES.map((p) => <option value={p}>{p}</option>)}
             </select>
           </label>
           {err ? <div class="banner err">{err}</div> : null}
