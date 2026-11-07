@@ -64,129 +64,15 @@ tr.clickable:hover > td {
   border-color: transparent;
 }
 
-/* --- filter bar --- */
-.filterbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-.fb-search {
-  position: relative;
-  flex: 1 1 320px;
-  display: flex;
-  align-items: center;
-}
-.fb-ico {
-  position: absolute;
-  left: 10px;
-  width: 16px;
-  height: 16px;
-  color: var(--color-text-muted);
-  pointer-events: none;
-}
-.fb-input {
-  width: 100%;
-  padding: var(--space-2) var(--space-3) var(--space-2) 32px;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  font: inherit;
-}
-.fb-input:focus-visible {
-  outline: 2px solid var(--color-accent-default);
-  outline-offset: 1px;
-}
-.fb-menu {
-  position: relative;
-}
-.fb-menu-btn {
-  list-style: none;
-  cursor: pointer;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
-  white-space: nowrap;
-}
-.fb-menu-btn::-webkit-details-marker {
-  display: none;
-}
-.fb-menu-btn.on {
-  border-color: var(--color-accent-default);
-  color: var(--color-text-accent);
-}
-.fb-menu-pop {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 4px);
-  left: 0;
-  min-width: 200px;
-  max-height: 320px;
-  overflow: auto;
-  padding: var(--space-2);
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md, 0 6px 24px rgb(0 0 0 / 0.14));
-}
-.fb-check {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: var(--font-size-sm);
-}
-.fb-check:hover {
-  background: var(--color-bg-subtle, rgb(0 0 0 / 0.04));
-}
-.fb-n {
-  margin-left: auto;
-  color: var(--color-text-muted);
-  font-variant-numeric: tabular-nums;
-}
-.fb-time {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
-}
-.fb-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-.fb-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 4px 2px 8px;
-  border: 1px solid var(--color-border-default);
-  border-radius: 999px;
-  background: var(--color-bg-subtle, rgb(0 0 0 / 0.04));
-  font-size: var(--font-size-sm);
-}
-.fb-pill-k {
-  color: var(--color-text-secondary);
-}
-.fb-pill-x {
-  border: 0;
-  background: none;
-  cursor: pointer;
-  color: var(--color-text-muted);
-  padding: 0 4px;
-  line-height: 1;
-}
-.fb-pill-x:hover {
-  color: var(--color-text-primary);
-}
+/* The filter bar used to have its own copy here (.filterbar, .fb-input,
+   .fb-menu-btn, …), predating the shared FilterBar component (components/
+   FilterBar.tsx, css/filter.css). It reused several of the same class names
+   (.fb-search, .fb-ico, .fb-menu, .fb-n) with different rules — loading after
+   filter.css, it silently won ties on those properties (position: relative
+   stomping the real menu's position: fixed, the search icon's absolute offset
+   drifting over the field's own text). Nothing renders .filterbar/.fb-input
+   any more; removed rather than left to keep breaking the real filter bar
+   wherever it's used (Activity, Bots, Tickets, …). */
 
 /* --- runs-per-hour strip (interactive) --- */
 .strip .chart.interactive .bar {
