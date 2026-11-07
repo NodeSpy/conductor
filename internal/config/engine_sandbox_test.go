@@ -58,23 +58,21 @@ func TestEngineTrustFullOptsOut(t *testing.T) {
 	}
 }
 
-// An explicit `isolation:` block on an engine is now a LOAD ERROR: the
-// declared-capability jail replaced isolation: for every plugin (connector,
-// runtime, or engine) — an engine's jail is what it declares, narrowed by
-// network:/allow_env, or opted out of entirely with trust: full. There is no
-// more "explicit block wins, synthesized default is best-effort" distinction
-// to keep fail-closed; checkPluginJail refuses the key outright, naming it.
-func TestEngineExplicitIsolationIsFailClosed(t *testing.T) {
-	_, err := loadYAML(t, `engines:
+// An explicit `isolation:` block on an engine loads with a warning: the
+// engine is jailed to what it declares, and the block applies only where the
+// host cannot jail plugins and the engine runs as before the jail.
+func TestEngineExplicitIsolationWarns(t *testing.T) {
+	cfg, err := loadYAML(t, `engines:
   wasmtime:
     isolation: { mode: namespace }
 `+engineWF+`      - { id: x, use: wasmtime, code: "x" }
 `)
-	if err == nil {
-		t.Fatal("isolation: on an engine must be refused at load — it no longer applies to a plugin")
+	if err != nil {
+		t.Fatalf("isolation: on an engine refused at load: %v", err)
 	}
-	if !strings.Contains(err.Error(), "engines.wasmtime") || !strings.Contains(err.Error(), "isolation") {
-		t.Fatalf("error must name the engine and isolation:, got: %v", err)
+	w := strings.Join(cfg.RemovedFieldWarnings(), "\n")
+	if !strings.Contains(w, "engines.wasmtime.isolation") {
+		t.Fatalf("no warning naming the engine's isolation:, got: %s", w)
 	}
 }
 

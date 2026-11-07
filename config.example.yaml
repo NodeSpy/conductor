@@ -819,9 +819,13 @@ models:
 #     use: ngrok
 #     trust: full                                # run WITHOUT the jail (logged at every start)
 #
-# Instances sharing one plugin process must set the same network:/allow_env.
-# isolation: on a plugin connector, runtime or engine is a load error: delete
-# it (trust: full keeps a plugin unconfined, as before the jail).
+# Instances sharing one plugin process should set the same network:/allow_env
+# (different ones get the union, with a warning). isolation: on a plugin
+# connector, runtime or engine no longer applies (a warning): delete it
+# (trust: full keeps a plugin unconfined, as before the jail). On a host that
+# cannot jail plugins (root, a default Docker container, AppArmor-restricted
+# user namespaces) plugins installed before the jail run unjailed, with a
+# warning; ones installed since are refused unless trust: full.
 
 # ---------------------------------------------------------------------------
 # STEPS — where an agent's behavior lives now. This replaced `agents:`.

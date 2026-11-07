@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -363,6 +364,13 @@ type Installed struct {
 	// record it makes, so a record it wrote is always compared, never
 	// adopted.
 	Legacy bool `yaml:"legacy,omitempty"`
+	// PreJail marks a plugin (this key from this source) installed before
+	// the plugin jail: by a conductor without it, or recorded by one with it
+	// that could not adopt it yet. Every build of the plugin carries it, so
+	// it outlives updates. On a host that cannot jail plugins such a plugin
+	// runs as it did before the jail (runsAsBefore); a host that can jails
+	// it like any other.
+	PreJail bool `yaml:"pre_jail,omitempty"`
 	// ReleaseVerified records that Sha256 was VERIFIED against the release at
 	// install — the release's checksums.txt listed the asset with this sha —
 	// rather than merely computed from whatever was downloaded. Absent on
@@ -646,7 +654,61 @@ func LoadInstallState(dir string) *InstallState {
 		}
 		s.restoreConsented()
 	}
+	s.markPreJail()
 	return s
+}
+
+// jailEpoch is when the first conductor with the plugin jail was tagged: a
+// binary on disk older than this was installed by a conductor without it.
+var jailEpoch = time.Date(2026, 11, 6, 23, 33, 54, 0, time.UTC)
+
+// markPreJail marks every build of a plugin installed before the plugin
+// jail (Installed.PreJail). The evidence, any of: a record already marked;
+// a record a conductor without the jail wrote that is not adopted yet
+// (Legacy — a version 1 file, or a version 2 file whose adoption could not
+// describe the build, which is what a host that cannot jail left behind);
+// or a build whose binary predates the jail. Idempotent; the mark is saved
+// with the state, so it outlives the old builds.
+func (s *InstallState) markPreJail() {
+	pre := map[string]bool{}
+	for _, r := range s.Plugins {
+		if r.PreJail || r.Legacy || binaryBefore(r.Path, jailEpoch) {
+			pre[r.Key+"\x00"+r.Source] = true
+		}
+	}
+	for i := range s.Plugins {
+		s.Plugins[i].PreJail = s.Plugins[i].PreJail || pre[s.Plugins[i].Key+"\x00"+s.Plugins[i].Source]
+	}
+	for i := range s.Pending {
+		s.Pending[i].PreJail = s.Pending[i].PreJail || pre[s.Pending[i].Key+"\x00"+s.Pending[i].Source]
+	}
+}
+
+// preJail reports whether a plugin (key from source) was installed before
+// the plugin jail: a new build of it carries the mark too.
+func (s *InstallState) preJail(key, source string) bool {
+	if s == nil {
+		return false
+	}
+	for _, r := range s.Plugins {
+		if r.Key == key && r.Source == source && r.PreJail {
+			return true
+		}
+	}
+	for _, p := range s.Pending {
+		if p.Key == key && p.Source == source && p.PreJail {
+			return true
+		}
+	}
+	return false
+}
+
+func binaryBefore(path string, t time.Time) bool {
+	if path == "" {
+		return false
+	}
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir() && fi.ModTime().Before(t)
 }
 
 // restoreConsented loads consentFile after a version 1 state file: the
@@ -888,6 +950,7 @@ func (s *InstallState) Put(in Installed) {
 	if s == nil {
 		return
 	}
+	in.PreJail = in.PreJail || s.preJail(in.Key, in.Source)
 	for i, p := range s.Plugins {
 		if p.Key == in.Key && p.Resolved == in.Resolved && p.Source == in.Source {
 			s.Plugins[i] = in

@@ -6,58 +6,30 @@ import (
 )
 
 // checkPluginJail is the declared-capability jail's config-time gate
-// (plugins.go): the old isolation: surface on a plugin connector, runtime or
-// engine is refused outright at load (the plugin's own declaration is its
-// jail now), a trust: value other than "full" or empty is refused, and a
+// (plugins.go): a trust: value other than "full" or empty is refused, and a
 // shared process whose non-isolated instances disagree on trust: full is
 // refused — isolate: true on one of them resolves it by giving it its own
-// process.
+// process. What a config written before the jail says loads with a warning.
 
-func TestCheckPluginJailRefusesIsolationOnConnector(t *testing.T) {
-	c := &Config{ConnectorsMap: map[string]ConnectorRef{
-		"a": {Use: "acme/p/jira", Isolation: &IsolationConfig{Mode: "namespace"}},
-	}}
-	err := c.validatePluginRefs()
-	if err == nil {
-		t.Fatal("isolation: on a plugin connector was accepted")
-	}
-	if !strings.Contains(err.Error(), "connectors.a") {
-		t.Fatalf("error must name the key: %v", err)
-	}
-	if !strings.Contains(err.Error(), "isolation") {
-		t.Fatalf("error must name isolation: as the problem: %v", err)
-	}
-}
-
-func TestCheckPluginJailRefusesIsolationOnRuntime(t *testing.T) {
-	c := &Config{Runtimes: map[string]RuntimeConfig{
-		"modal": {Use: "acme/p/modal", Isolation: &IsolationConfig{Mode: "namespace"}},
-	}}
-	err := c.validatePluginRefs()
-	if err == nil {
-		t.Fatal("isolation: on a plugin runtime was accepted")
-	}
-	if !strings.Contains(err.Error(), "runtimes.modal") {
-		t.Fatalf("error must name the key: %v", err)
-	}
-	if !strings.Contains(err.Error(), "isolation") {
-		t.Fatalf("error must name isolation: as the problem: %v", err)
-	}
-}
-
-func TestCheckPluginJailRefusesIsolationOnEngine(t *testing.T) {
-	c := &Config{Engines: map[string]EngineConfig{
-		"wasmtime": {Isolation: &IsolationConfig{Mode: "namespace"}},
-	}}
-	err := c.validatePluginRefs()
-	if err == nil {
-		t.Fatal("isolation: on a plugin engine was accepted")
-	}
-	if !strings.Contains(err.Error(), "engines.wasmtime") {
-		t.Fatalf("error must name the key: %v", err)
-	}
-	if !strings.Contains(err.Error(), "isolation") {
-		t.Fatalf("error must name isolation: as the problem: %v", err)
+// A config written before the jail loads: isolation: on a plugin
+// connector, runtime or engine warns, naming the key and what replaces it,
+// and never refuses (an upgrade never breaks a working setup).
+func TestIsolationOnPluginWarnsNeverRefuses(t *testing.T) {
+	iso := &IsolationConfig{Mode: "namespace"}
+	for where, c := range map[string]*Config{
+		"connectors.a":     {ConnectorsMap: map[string]ConnectorRef{"a": {Use: "acme/p/jira", Isolation: iso}}},
+		"runtimes.modal":   {Runtimes: map[string]RuntimeConfig{"modal": {Use: "acme/p/modal", Isolation: iso}}},
+		"engines.wasmtime": {Engines: map[string]EngineConfig{"wasmtime": {Isolation: iso}}},
+	} {
+		if err := c.validatePluginRefs(); err != nil {
+			t.Errorf("%s: isolation: refused: %v", where, err)
+		}
+		w := strings.Join(c.pluginJailWarnings(), "\n")
+		for _, want := range []string{where + ".isolation", "no longer applies", "trust: full", "Upgrading"} {
+			if !strings.Contains(w, want) {
+				t.Errorf("%s: warning lacks %q: %s", where, want, w)
+			}
+		}
 	}
 }
 
@@ -125,23 +97,10 @@ func TestCheckPluginJailRefusesMixedTrustOnSharedProcess(t *testing.T) {
 	}
 }
 
-// The isolation: refusal is a migration message: what to delete, and what
-// replaces it.
-func TestIsolationOnPluginIsAMigrationMessage(t *testing.T) {
-	c := &Config{ConnectorsMap: map[string]ConnectorRef{
-		"a": {Use: "acme/p/jira", Isolation: &IsolationConfig{Mode: "namespace"}},
-	}}
-	err := c.validatePluginRefs()
-	for _, want := range []string{"was removed", "Delete the isolation: block", "trust: full", "Upgrading"} {
-		if err == nil || !strings.Contains(err.Error(), want) {
-			t.Fatalf("error %v must say %q", err, want)
-		}
-	}
-}
-
-// network: and allow_env narrow one shared process: instances sharing it
-// must agree, unset and empty included (they mean different things).
-func TestCheckPluginJailRefusesDifferingNarrowingOnSharedProcess(t *testing.T) {
+// Instances sharing one process that narrow it differently load (the
+// process gets the union, as before the jail) with a warning naming both;
+// isolate: true on one, or the same narrowing in any order, warns nothing.
+func TestDifferingNarrowingOnSharedProcessWarns(t *testing.T) {
 	for name, pair := range map[string][2]ConnectorRef{
 		"network":         {{Use: "acme/p/jira", Network: []string{"a.example:443"}}, {Use: "acme/p/jira"}},
 		"allow_env":       {{Use: "acme/p/jira", AllowEnv: []string{"X"}}, {Use: "acme/p/jira", AllowEnv: []string{"Y"}}},
@@ -149,26 +108,38 @@ func TestCheckPluginJailRefusesDifferingNarrowingOnSharedProcess(t *testing.T) {
 		"network ordered": {{Use: "acme/p/jira", Network: []string{"a.example:443", "b.example:443"}}, {Use: "acme/p/jira", Network: []string{"c.example:443"}}},
 	} {
 		c := &Config{ConnectorsMap: map[string]ConnectorRef{"a": pair[0], "b": pair[1]}}
-		if err := c.validatePluginRefs(); err == nil || !strings.Contains(err.Error(), "narrow it differently") {
-			t.Errorf("%s: %v", name, err)
+		if err := c.validatePluginRefs(); err != nil {
+			t.Errorf("%s: refused: %v", name, err)
+		}
+		if w := strings.Join(c.pluginJailWarnings(), "\n"); !strings.Contains(w, "narrow it differently") || !strings.Contains(w, "a and b") {
+			t.Errorf("%s: no warning naming both: %q", name, w)
 		}
 		pair[1].Isolate = true
 		c = &Config{ConnectorsMap: map[string]ConnectorRef{"a": pair[0], "b": pair[1]}}
-		if err := c.validatePluginRefs(); err != nil {
-			t.Errorf("%s with isolate: true on one: %v", name, err)
+		if w := c.pluginJailWarnings(); len(w) != 0 {
+			t.Errorf("%s with isolate: true on one: %v", name, w)
 		}
 	}
 	same := &Config{ConnectorsMap: map[string]ConnectorRef{
 		"a": {Use: "acme/p/jira", Network: []string{"b.example:443", "a.example:443"}},
 		"b": {Use: "acme/p/jira", Network: []string{"a.example:443", "b.example:443"}},
 	}}
-	if err := same.validatePluginRefs(); err != nil {
-		t.Fatalf("the same narrowing in another order: %v", err)
+	if w := same.pluginJailWarnings(); len(w) != 0 {
+		t.Fatalf("the same narrowing in another order: %v", w)
+	}
+	// The union is what the shared process gets.
+	c := &Config{ConnectorsMap: map[string]ConnectorRef{
+		"a": {Use: "acme/p/jira", Network: []string{"a.example:443"}},
+		"b": {Use: "acme/p/jira", Network: []string{"b.example:443"}},
+	}}
+	if got := c.PluginRefs()["connectors/jira"].Network; len(got) != 2 {
+		t.Fatalf("shared process network = %v, want both", got)
 	}
 }
 
-// `allow_env: []` and `network: []` survive load as set-but-empty (narrow to
-// nothing); absent stays unset (everything declared).
+// `allow_env: []` survives load as set-but-empty (passes nothing, as it
+// always did); `network: []` loads as unset (every declared destination, as
+// before the jail); absent stays unset.
 func TestEmptyNarrowingSurvivesLoad(t *testing.T) {
 	c := decodeConfig(t, `
 connectors:
@@ -181,8 +152,11 @@ connectors:
 `)
 	refs := c.PluginRefs()
 	a := refs["connectors/jira"]
-	if a.AllowEnv == nil || a.Network == nil || a.Instances["a"].AllowEnv == nil || a.Instances["a"].Network == nil {
-		t.Fatalf("set-but-empty lost: %+v", a)
+	if a.AllowEnv == nil || a.Instances["a"].AllowEnv == nil {
+		t.Fatalf("allow_env: [] lost: %+v", a)
+	}
+	if a.Network != nil || a.Instances["a"].Network != nil {
+		t.Fatalf("network: [] narrows: %+v", a)
 	}
 	b := refs["connectors/other"]
 	if b.AllowEnv != nil || b.Network != nil || b.Instances["b"].AllowEnv != nil {

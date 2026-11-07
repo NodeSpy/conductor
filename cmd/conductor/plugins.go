@@ -488,7 +488,8 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			if len(cref.Network) == 0 {
 				continue
 			}
-			if err := plugin.CheckNetworkWithinManifest(cname, enforced.Egress, cref.Network); err != nil {
+			// A config: destination covers the host this instance configures.
+			if err := plugin.CheckNetworkWithinManifest(cname, plugin.EgressFor(spec.Name, enforced, cref.Conn()), cref.Network); err != nil {
 				rollback()
 				return nil, err
 			}
@@ -516,6 +517,8 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		perms := "jailed to " + enforced.Summary()
 		if spec.TrustFull {
 			perms = "trust: full — runs WITHOUT its jail"
+		} else if h := plugin.HostJailStatus(); !h.OK {
+			perms = "NOT jailed (this host cannot jail plugins); declares " + enforced.Summary()
 		}
 		if w := enforced.Widens(live); len(w) > 0 && !spec.TrustFull {
 			perms += fmt.Sprintf("; NOT granted (declared by this build, not in its install record): %s — `conductor plugin update %s` asks for approval", strings.Join(w, "; "), spec.Name)

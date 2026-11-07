@@ -1287,7 +1287,8 @@ func (p pidConn) Pid() int { return p.pid }
 // realDial spawns the verified, sandbox-wrapped subprocess and wires the
 // JSON-RPC transport over its stdio, with stderr pumped through the redactor.
 func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
-	if s.Local && !s.TrustFull && !s.Probe && s.Manifest.IsZero() {
+	_, asBefore := runsAsBefore(s)
+	if s.Local && !s.TrustFull && !s.Probe && s.Manifest.IsZero() && !asBefore {
 		// A local build has no install record: ask it what it declares, from
 		// a jail with nothing in it, and jail it to that. The operator built
 		// it and pointed conductor at it; the log line is what they see.
@@ -1302,6 +1303,8 @@ func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 		return nil, nil, err
 	}
 	switch {
+	case asBefore:
+		d.Log("plugin %s: WARNING: running UNJAILED, as before the plugin jail — this host cannot jail plugins (%s). To jail it: %s; to run it unjailed on purpose and silence this, set trust: full on its entry", s.Name, HostJailStatus().Reason, HostJailStatus().Fix)
 	case sandboxed && s.Probe:
 		d.Log("plugin %s: describing it from an empty jail", s.Name)
 	case sandboxed:

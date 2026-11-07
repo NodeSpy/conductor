@@ -146,6 +146,10 @@ type Spec struct {
 	// TrustFull marks an engine the operator opted out of sandboxing — nil
 	// Isolation, and the "no OS sandbox" warning is suppressed.
 	TrustFull bool
+	// PreJail: this plugin was installed before the plugin jail
+	// (Installed.PreJail). On a host that cannot jail plugins it runs as it
+	// did then (runsAsBefore); elsewhere it is jailed like any other.
+	PreJail bool
 	// AllowSecrets optionally tightens which secret refs may cross the boundary.
 	AllowSecrets []string
 	// AllowEnv are the daemon environment variables the operator granted

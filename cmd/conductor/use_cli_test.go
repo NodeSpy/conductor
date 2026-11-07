@@ -168,17 +168,17 @@ func TestCmdPluginShowDefaultSharesOneProcess(t *testing.T) {
 	}
 }
 
-// Two instances sharing one process may not narrow it differently: one
-// process cannot honour both, and the union would widen each of them.
-func TestCmdPluginListRefusesDifferingNarrowingOnSharedProcess(t *testing.T) {
+// Two instances sharing one process that narrow it differently loaded before
+// the plugin jail (the process got the union): they still load — the config
+// warns — and plugin list works.
+func TestCmdPluginListLoadsDifferingNarrowingOnSharedProcess(t *testing.T) {
 	args := writeCfg(t, `
 connectors:
   a: { use: acme/plugins/jira, network: ["one.example:443"] }
   b: { use: acme/plugins/jira, network: ["two.example:443"] }
 `)
-	_, err := captureStdout(t, func() error { return cmdPluginList(append(args, "--caps")) })
-	if err == nil || !strings.Contains(err.Error(), "narrow it differently") {
-		t.Fatalf("differing narrowing on a shared process: %v, want refused", err)
+	if _, err := captureStdout(t, func() error { return cmdPluginList(append(args, "--caps")) }); err != nil {
+		t.Fatalf("differing narrowing on a shared process refused: %v", err)
 	}
 }
 

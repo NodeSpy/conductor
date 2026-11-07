@@ -229,18 +229,66 @@ func (c *Config) scopedAgentCapWarnings() []string {
 
 const scopedAgentCapIgnored = "ignored — read only in the global policy; use concurrency.max_runs to cap the runs of a connector or trigger"
 
-// emptyNarrowingWarnings name each connector whose `network: []` or
-// `allow_env: []` now grants none: before the plugin jail an empty list
-// passed everything the plugin declares, and a config written then loads
-// unchanged with the opposite meaning.
+// emptyNarrowingWarnings name each connector whose `network: []` narrows
+// nothing: an empty list granted every destination the plugin declares
+// before the plugin jail, and it still does, so a config written then keeps
+// working. (`allow_env: []` passes none, as it always did.)
 func (c *Config) emptyNarrowingWarnings() []string {
 	var out []string
 	for name, ref := range c.ConnectorsMap {
-		if ref.Network != nil && len(ref.Network) == 0 {
-			out = append(out, fmt.Sprintf("connectors.%s.network: [] grants no network at all (before the plugin jail it granted every destination the plugin declares) — remove the key to grant those", name))
+		if ref.emptyNetwork {
+			out = append(out, fmt.Sprintf("connectors.%s.network: [] does not narrow the plugin — it gets every destination it declares, as before the plugin jail; remove the key, or list the destinations to narrow it to", name))
 		}
-		if ref.AllowEnv != nil && len(ref.AllowEnv) == 0 {
-			out = append(out, fmt.Sprintf("connectors.%s.allow_env: [] passes no variables at all (before the plugin jail it passed every one the plugin declares) — remove the key to pass those", name))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// pluginJailWarnings name what the plugin jail replaced but a config written
+// before it still says: an isolation: block on a plugin (the jail is its
+// confinement now; the block applies only where the host cannot jail
+// plugins and the plugin runs as before), and instances sharing one plugin
+// process that narrow it differently (the process gets the union of their
+// network:/allow_env, as before). Neither refuses the config.
+func (c *Config) pluginJailWarnings() []string {
+	var out []string
+	iso := func(where string) {
+		out = append(out, where+".isolation: no longer applies to a plugin — it runs jailed to exactly what it declares (`conductor plugin show <name>`); the block is used only on a host that cannot jail plugins. Delete it; narrow the plugin with network:/allow_env, or set trust: full to run it unjailed (docs/wiki/Plugins.md \"Upgrading\")")
+	}
+	narrowing, from := map[string]string{}, map[string]string{}
+	names := make([]string, 0, len(c.ConnectorsMap))
+	for n := range c.ConnectorsMap {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ref := c.ConnectorsMap[name]
+		u, err := ref.Resolved()
+		if err != nil || u.IsBuiltin() {
+			continue
+		}
+		if ref.Isolation != nil {
+			iso("connectors." + name)
+		}
+		if ref.Isolate {
+			continue
+		}
+		g := u.InstallKey() + "\x00" + u.String()
+		n := "network: " + narrowingKey(ref.Network) + ", allow_env: " + narrowingKey(ref.AllowEnv)
+		if prev, ok := narrowing[g]; ok && prev != n {
+			out = append(out, fmt.Sprintf("connectors: %s and %s share one plugin process but narrow it differently (%s vs %s) — the process gets both; set the same network:/allow_env on both, or isolate: true one of them", from[g], name, prev, n))
+			continue
+		}
+		narrowing[g], from[g] = n, name
+	}
+	for n, rt := range c.Runtimes {
+		if u, err := rt.Resolved(); err == nil && !u.IsBuiltin() && rt.Isolation != nil {
+			iso("runtimes." + n)
+		}
+	}
+	for n, e := range c.Engines {
+		if e.Isolation != nil {
+			iso("engines." + n)
 		}
 	}
 	sort.Strings(out)

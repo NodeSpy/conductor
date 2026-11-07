@@ -16,6 +16,11 @@ import (
 // 127.0.0.1:PORT → the egress proxy's unix socket, and execs the wrapped
 // launch. Never invoked by operators directly.
 func runSandboxNet(args []string) int {
+	if len(args) == 1 && args[0] == "--noop" {
+		// The payload of the host's jail probe (plugin.ProbeHostJail):
+		// reaching here means the jail was built around it.
+		return 0
+	}
 	opt := sandbox.EnterOpts{}
 	i := 0
 	for ; i < len(args); i++ {

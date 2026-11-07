@@ -68,6 +68,12 @@ func main() {
 	// the daemon version — see config.resolvedConnectorVersion).
 	config.SetRuntimeVersion(version)
 	publishConnectorVersions()
+	// Whether this host can jail plugins is probed once, on the first
+	// plugin launch (or at daemon boot, which says so).
+	plugin.SetHostJailProbe(func() plugin.HostJail {
+		exe, _ := os.Executable()
+		return plugin.ProbeHostJail(exe)
+	})
 	cmd := os.Args[1]
 	args := os.Args[2:]
 	var err error
@@ -626,6 +632,7 @@ func cmdRun(args []string) error {
 	// Plugins first: fetch any referenced plugin that is not installed yet
 	// (bounded; never fatal — a connector whose plugin is still missing runs
 	// disabled and pendingPluginRetry restarts into it once it lands).
+	jailWarning := hostJailBootWarning(cfg)
 	bootGapFill(cfg)
 	stack, err := buildFlowStack(cfg, st, notifier, cfg.DryRun)
 	if err != nil {
@@ -832,6 +839,9 @@ func cmdRun(args []string) error {
 	notifyStackFailures(stack, notifier)
 	if bootWarning != "" {
 		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "config", Kind: "boot"}, bootWarning)
+	}
+	if jailWarning != "" {
+		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "plugins", Kind: "jail"}, jailWarning)
 	}
 	// Shared "never reap" set for interactive hand-off agents: the engine registers
 	// a background step's agent at launch; the reaper skips anything in it.
