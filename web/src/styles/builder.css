@@ -17,6 +17,9 @@
 .wfb-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 42%); }
 .wfb-list { overflow: auto; padding: 18px 22px 120px; background-color: var(--color-bg-canvas); background-image: radial-gradient(var(--color-border-subtle) 1px, transparent 1.3px); background-size: 18px 18px; }
 .wfb-side { border-left: 1px solid var(--color-border-subtle); background: var(--color-bg-rail); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+/* the recipe's right column (CONFORMANCE's builder): Try it, At a glance and
+ * the config file, as their own stacked cards rather than one fixed panel. */
+.wfb-side-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .side-head { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--color-border-subtle); background: var(--color-bg-surface); flex-wrap: wrap; }
 .side-body { flex: 1; overflow: auto; min-height: 0; }
 .side-body .ced .ced-hl { background: transparent; }

@@ -197,6 +197,12 @@ export interface GraphNode {
   label?: string;
   needs?: string[];
   line?: number /* int */;
+  /**
+   * If is the step's raw `if:` condition expression, verbatim (config.Step.If)
+   * — not translated into prose, since the dashboard has no catalog of what
+   * an expression means in words. A step with no condition always runs.
+   */
+  if?: string;
 }
 /**
  * TestResponse is POST /api/v1/workflows/{name}/test: a dry-run that validates

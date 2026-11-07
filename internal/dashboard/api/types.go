@@ -168,6 +168,10 @@ type GraphNode struct {
 	Label string   `json:"label,omitempty"`
 	Needs []string `json:"needs,omitempty"`
 	Line  int      `json:"line,omitempty"`
+	// If is the step's raw `if:` condition expression, verbatim (config.Step.If)
+	// — not translated into prose, since the dashboard has no catalog of what
+	// an expression means in words. A step with no condition always runs.
+	If string `json:"if,omitempty"`
 }
 
 // TestResponse is POST /api/v1/workflows/{name}/test: a dry-run that validates

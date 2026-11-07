@@ -92,7 +92,7 @@ func graphOf(steps []config.Step, yamlText string) []api.GraphNode {
 	var prev string
 	for i, s := range steps {
 		id := stepNodeID(s, i)
-		n := api.GraphNode{ID: id, Kind: stepKind(s), Label: stepLabel(s)}
+		n := api.GraphNode{ID: id, Kind: stepKind(s), Label: stepLabel(s), If: s.If}
 		if i < len(lines) {
 			n.Line = lines[i]
 		}

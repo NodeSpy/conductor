@@ -143,8 +143,9 @@ export function WorkflowDetail({ name }: { name: string }): JSX.Element {
   const readOnly = wf.index < 0
 
   return (
-    <div class="col wfb m-page" data-wf-detail={name}>
+    <div class="col wfb-page m-page" data-wf-detail={name}>
       <Crumbs name={name} />
+      <div class="wfb">
       <div class="dl-phead">
         <div>
           <h1 class="wfb-title">{wf.name}</h1>
@@ -203,7 +204,10 @@ export function WorkflowDetail({ name }: { name: string }): JSX.Element {
       ) : null}
 
       {tab === 'recipe' ? (
-        <RecipeTab wf={wf} sel={sel} onPick={pick} onShowYaml={jumpToYAML} onAddStep={() => setTab('config')} />
+        <div class="wfb-body">
+          <RecipeTab wf={wf} sel={sel} onPick={pick} onShowYaml={jumpToYAML} onAddStep={() => setTab('config')} />
+          <RecipeSide wf={wf} testing={testing} onTest={() => void runTest()} onOpenConfig={() => setTab('config')} />
+        </div>
       ) : tab === 'config' ? (
         <section class="dl-card wfb-side-card" ref={yamlRef}>
           <header class="dl-ch"><h2>Config file</h2><span class="dl-sub">YAML is canonical · edits are reviewed before they apply</span></header>
@@ -270,6 +274,7 @@ export function WorkflowDetail({ name }: { name: string }): JSX.Element {
           <p class="dl-sub">Budgets, isolation and the rest of the workflow's keys are in the <a class="dl-link" href="#" onClick={(e) => { e.preventDefault(); setTab('config') }}>config file</a>.</p>
         </section>
       )}
+      </div>
 
       {hasStaged || review.value ? <ReviewPanel stagedCount={staged.value.length} /> : null}
     </div>
@@ -321,6 +326,11 @@ function RecipeTab({
                   </div>
                   <span class="chev"><Icon name={isOpen ? 'chevd' : 'chev'} /></span>
                 </div>
+                {n.if ? (
+                  <div class="sc-body" style="padding-top:0;border-top:0">
+                    <span class="dl-sub"><Icon name="filter" /> Only if <code class="mono">{n.if}</code></span>
+                  </div>
+                ) : null}
                 {isOpen ? (
                   <div class="sc-body">
                     <p class="muted">{k.label}{n.label ? `: ${n.label}` : ''}{n.needs?.length ? ` · after ${n.needs.join(', ')}` : ''}</p>
@@ -336,6 +346,60 @@ function RecipeTab({
         })}
         {wf.nodes.length === 0 ? <p class="muted">No steps yet.</p> : null}
       </div>
+    </div>
+  )
+}
+
+// RecipeSide: the recipe tab's right column (CONFORMANCE's builder — Try it,
+// At a glance and the config file beside). Everything here comes from data
+// the dashboard already has (wf.runs, wf.source, wf.yaml): no backend change.
+// Left out: a budget figure (no per-workflow budget in config.TriggerSpec
+// today) and Try it's event picker (dry-running against a specific past
+// event needs an events catalog endpoint the daemon doesn't have — Try it
+// here is the same safe, no-side-effect Test as the header's button).
+function RecipeSide({
+  wf,
+  testing,
+  onTest,
+  onOpenConfig,
+}: {
+  wf: WorkflowDetailResponse
+  testing: boolean
+  onTest: () => void
+  onOpenConfig: () => void
+}): JSX.Element {
+  const since = Date.now() - 24 * 60 * 60 * 1000
+  const last24 = wf.runs.filter((r) => new Date(r.started).getTime() >= since)
+  const parts: [number, string][] = [
+    [last24.filter((r) => r.status === 'ok').length, 'ok'],
+    [last24.filter((r) => r.status === 'failed').length, 'failed'],
+    [last24.filter((r) => r.status === 'running').length, 'running'],
+    [last24.filter((r) => r.status === 'retried').length, 'retried'],
+  ]
+  const breakdown = parts.filter(([n]) => n).map(([n, t]) => `${n} ${t}`).join(' · ') || 'none'
+  const owner = wf.source?.startsWith('pack:') ? `pack ${wf.source.slice(5)}` : 'your config'
+  const preview = wf.yaml.split('\n').slice(0, 7).join('\n')
+
+  return (
+    <div class="wfb-side-stack">
+      <section class="dl-card" aria-label="Try it">
+        <header class="dl-ch"><h2>Try it</h2></header>
+        <p class="dl-sub">Runs every step as configured, without dispatching anything.</p>
+        <button class="btn wide" type="button" disabled={testing} onClick={onTest}>
+          <Icon name="play" />{testing ? 'Testing…' : 'Run a test'}
+        </button>
+      </section>
+
+      <section class="dl-card" aria-label="At a glance">
+        <header class="dl-ch"><h2>At a glance</h2></header>
+        <div class="field-row"><span class="dl-sub">Owner</span><span>{owner}</span></div>
+        <div class="field-row"><span class="dl-sub">Last 24 h</span><span>{last24.length} run{last24.length === 1 ? '' : 's'} · {breakdown}</span></div>
+      </section>
+
+      <section class="dl-card wfb-side-card" aria-label="Config file">
+        <header class="dl-ch"><h2>Config file</h2><button type="button" class="link" onClick={onOpenConfig}>Open</button></header>
+        <div class="wfb-side"><div class="side-body"><pre class="dl-code small">{preview}</pre></div></div>
+      </section>
     </div>
   )
 }
