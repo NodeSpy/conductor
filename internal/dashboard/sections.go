@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -307,16 +308,46 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	s.updateMu.Unlock()
 	if s.deps.ListReleases != nil {
 		if tags, err := s.deps.ListReleases(); err == nil {
-			for _, t := range tags {
-				resp.Update.Releases = append(resp.Update.Releases, api.ReleaseInfo{
-					Version: t,
-					Current: t == s.deps.Version,
-					Ready:   t == resp.Update.Available,
-				})
-			}
+			resp.Update.Releases = buildReleaseRows(tags, s.deps.Version, resp.Update.Available)
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// releaseRowCap is how many rows the Releases list shows: the running
+// release plus a handful of recent ones either side of it, matching the
+// design's short list rather than every tag the platform has ever
+// published.
+const releaseRowCap = 5
+
+// buildReleaseRows turns every published tag into the Releases list's rows:
+// pre-releases (-rc.N) dropped unless running is itself one, newest first,
+// capped to releaseRowCap. "Go back to…" only ever makes sense for a release
+// OLDER than the one running — a newer, unverified tag is never offered as a
+// rollback target; the one Check now verified is "ready" instead.
+func buildReleaseRows(tags []string, running, available string) []api.ReleaseInfo {
+	runningIsRC := strings.Contains(running, "-rc")
+	kept := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if strings.Contains(t, "-rc") && !runningIsRC && t != running {
+			continue
+		}
+		kept = append(kept, t)
+	}
+	sort.Slice(kept, func(i, j int) bool { return config.CompareVersions(kept[i], kept[j]) > 0 })
+	if len(kept) > releaseRowCap {
+		kept = kept[:releaseRowCap]
+	}
+	out := make([]api.ReleaseInfo, 0, len(kept))
+	for _, t := range kept {
+		out = append(out, api.ReleaseInfo{
+			Version: t,
+			Current: t == running,
+			Ready:   t == available && available != "",
+			Older:   t != running && config.CompareVersions(t, running) < 0,
+		})
+	}
+	return out
 }
 
 // handleUpdateCheck is Updates' "Check now": looks up the newest published
@@ -351,25 +382,83 @@ func (s *Server) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no_updater", "this daemon has no updater wired", "")
 		return
 	}
+	// force is NOT an accepted field here, on purpose: this endpoint never
+	// skips the preflight, and the only installs it allows are (a) the
+	// release Check now already verified newer, or (b) an older, already
+	// published release (a rollback) — both validated below against
+	// ListReleases, never trusted from the request body.
 	var req struct {
 		Version string `json:"version"`
-		Force   bool   `json:"force"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
 	}
+	tags, lerr := s.listReleaseTags()
+	if lerr != nil {
+		writeError(w, http.StatusBadGateway, "list_failed", lerr.Error(), "")
+		return
+	}
+	if req.Version == "" || !tags[req.Version] {
+		writeError(w, http.StatusBadRequest, "unknown_version", "that version isn't one of this platform's published releases", "")
+		return
+	}
+	// Installing (or rolling back) the running binary changes what code the
+	// daemon runs for every bot and every workflow — the same weight as a
+	// config apply, so it needs the same step-up (passkey/SSH), bound to the
+	// exact version so a stolen token can't be replayed against a different
+	// one, and it's audited like every other privileged action: who, which
+	// version, when.
+	digest := updateInstallDigest(req.Version)
 	if s.authEnforced() {
-		if _, ok := auth.SessionFrom(r); !ok {
-			writeError(w, http.StatusUnauthorized, "sign_in_required", "sign in to install an update", "")
+		sess, ok := auth.SessionFrom(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "sign in to continue", "")
+			return
+		}
+		if _, err := s.auth.RequireStepup(sess, auth.PurposeUpdateNow, digest, r.Header.Get(auth.StepupHeader)); err != nil {
+			desc := fmt.Sprintf("install %s (the version running now is kept, so you can go back)", req.Version)
+			s.labels.note(r, auth.PurposeUpdateNow, digest, desc)
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":  map[string]string{"code": "stepup_required", "message": err.Error(), "hint": "confirm it's you to install an update"},
+				"stepup": map[string]string{"purpose": string(auth.PurposeUpdateNow), "digest": digest, "description": desc},
+			})
 			return
 		}
 	}
-	installed, err := s.deps.InstallUpdate(req.Version, req.Force)
+	installed, err := s.deps.InstallUpdate(req.Version)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "install_failed", err.Error(), "")
 		return
 	}
+	s.audit(r, "dashboard.update.install", digest, "version", req.Version)
 	writeJSON(w, http.StatusOK, map[string]any{"installed": installed})
+}
+
+// updateInstallDigest binds an update install's step-up to the exact version
+// requested, the same way a forced retry's step-up is bound to its run and
+// starting step (retryDigest) — a token confirmed for one version can't be
+// replayed to install a different one.
+func updateInstallDigest(version string) string {
+	b, _ := json.Marshal(map[string]any{"v": "1", "ns": "conductor-dashboard-update", "version": version})
+	return auth.DigestOf(b)
+}
+
+// listReleaseTags is the set of versions this endpoint will ever install —
+// exactly what deps.ListReleases reports, so a request can never name a
+// version that was never actually published for this platform.
+func (s *Server) listReleaseTags() (map[string]bool, error) {
+	out := map[string]bool{}
+	if s.deps.ListReleases == nil {
+		return out, nil
+	}
+	tags, err := s.deps.ListReleases()
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range tags {
+		out[t] = true
+	}
+	return out, nil
 }
 
 // handleDaemonLog is System → Logs & audit's "Daemon log" tab: the process's

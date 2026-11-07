@@ -671,12 +671,14 @@ export interface UpdateChecklist {
   config_loads: boolean;
 }
 /**
- * ReleaseInfo is one published release tag.
+ * ReleaseInfo is one published release tag, part of a short newest-first list
+ * (the latest few; pre-releases dropped unless the running version is one).
  */
 export interface ReleaseInfo {
   version: string;
   current: boolean; // the one running now
-  ready: boolean; // the found/available release, ready to install
+  ready: boolean; // the found/available release, verified and ready to install
+  older: boolean; // older than the version running now — "Go back to…" only ever applies here
 }
 /**
  * AuditResponse is GET /api/v1/audit: recent audit-log entries, newest first.

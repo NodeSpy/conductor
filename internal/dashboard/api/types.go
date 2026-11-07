@@ -594,11 +594,13 @@ type UpdateChecklist struct {
 	ConfigLoads bool `json:"config_loads"`
 }
 
-// ReleaseInfo is one published release tag.
+// ReleaseInfo is one published release tag, part of a short newest-first list
+// (the latest few; pre-releases dropped unless the running version is one).
 type ReleaseInfo struct {
 	Version string `json:"version"`
 	Current bool   `json:"current"` // the one running now
-	Ready   bool   `json:"ready"`   // the found/available release, ready to install
+	Ready   bool   `json:"ready"`   // the found/available release, verified and ready to install
+	Older   bool   `json:"older"`   // older than the version running now — "Go back to…" only ever applies here
 }
 
 // AuditResponse is GET /api/v1/audit: recent audit-log entries, newest first.

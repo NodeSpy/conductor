@@ -58,11 +58,11 @@ type Deps struct {
 	// CheckUpdate looks up the newest published release and, if newer, fetches
 	// and preflights it (never installs) — the Updates tab's "Check now".
 	CheckUpdate func() (api.UpdateInfo, error)
-	// InstallUpdate installs tag (or, tag=="", the newest release), forcing
-	// past a preflight failure when force is true (used for both Install now
-	// and Go back to vX…, which pins an older tag with force). It returns the
-	// tag actually installed; "" with a nil error means already current.
-	InstallUpdate func(tag string, force bool) (installed string, err error)
+	// InstallUpdate installs tag (used for both Install now and Go back to
+	// vX…) — the preflight is never skippable from here, unlike the CLI's
+	// --force. It returns the tag actually installed; "" with a nil error
+	// means already current.
+	InstallUpdate func(tag string) (installed string, err error)
 	// ListReleases lists every published release tag for this platform.
 	ListReleases func() ([]string, error)
 

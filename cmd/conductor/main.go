@@ -1168,8 +1168,8 @@ func cmdRun(args []string) error {
 				}
 				return info, nil
 			},
-			InstallUpdate: func(tag string, force bool) (string, error) {
-				updated, installed, err := doUpdate(force, tag, cfgFile, notifier)
+			InstallUpdate: func(tag string) (string, error) {
+				updated, installed, err := doUpdate(false, tag, cfgFile, notifier)
 				if err != nil {
 					return "", err
 				}

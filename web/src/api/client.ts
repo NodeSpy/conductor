@@ -87,6 +87,42 @@ async function retryRun(id: string, req: RetryRequest): Promise<ActionResponse> 
   return handle<ActionResponse>(res)
 }
 
+// installUpdate installs (or rolls back to) a published version. This
+// changes what code the daemon runs, so — like config apply — a signed-in
+// session confirms it's them first: the first attempt comes back 403 with a
+// step-up description bound to this exact version, we ask for it, then retry
+// once carrying the token. There is no `force`: the dashboard can never skip
+// the updater's own preflight.
+async function installUpdate(version: string): Promise<{ installed: string }> {
+  const path = '/api/v1/system/update/install'
+  const send = (stepup?: string) => {
+    const csrf = authState.value.csrf
+    return fetch(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(csrf ? { 'X-Conductor-CSRF': csrf } : {}),
+        ...(stepup ? { 'X-Conductor-Stepup': stepup } : {}),
+      },
+      body: JSON.stringify({ version }),
+    })
+  }
+  let res = await send()
+  if (res.status === 403) {
+    const b = (await readJSON(res.clone()).catch(() => ({}))) as { stepup?: { purpose: string; digest: string; description?: string } }
+    if (b.stepup) {
+      const token = await stepUp(b.stepup.purpose, b.stepup.digest, {
+        what: `Install ${version}`,
+        description: b.stepup.description,
+      })
+      res = await send(token)
+    }
+  }
+  return handle<{ installed: string }>(res)
+}
+
 // handle reads an answer as data, or throws an ApiError worded for a person.
 function handle<T>(res: Response): Promise<T> {
   return readResponse<T>(res)
@@ -149,7 +185,7 @@ export const api = {
   system: () => getJSON<SystemResponse>('/api/v1/system'),
   setPaused: (paused: boolean) => sendJSON<{ paused: boolean }>('POST', '/api/v1/system/pause', { paused }),
   checkUpdate: () => sendJSON<SystemResponse>('POST', '/api/v1/system/update/check', {}),
-  installUpdate: (version: string, force = false) => sendJSON<{ installed: string }>('POST', '/api/v1/system/update/install', { version, force }),
+  installUpdate: (version: string) => installUpdate(version),
   daemonLog: () => getJSON<LogResponse>('/api/v1/system/log'),
   audit: () => getJSON<AuditResponse>('/api/v1/audit'),
 }
