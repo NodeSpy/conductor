@@ -139,13 +139,17 @@ export function Bots(): JSX.Element {
                   : { label: 'Review and apply', onClick: () => void doReview(), testid: 'bots-review', disabled: busy.value }
               }
             >
-              {review.value?.token ? (
-                <p>What changes is listed below. Apply it and conductor reloads with your new bot, in practice mode.</p>
-              ) : (
-                <p>Check what changes, then apply it. conductor reloads its config and your bot starts in practice mode.</p>
-              )}
+              <dl class="bot-summary" data-testid="bot-summary">
+                {botSummary(staged.value).map(([k, v]) => (
+                  <>
+                    <dt>{k}</dt>
+                    <dd>{v}</dd>
+                  </>
+                ))}
+              </dl>
+              <p>Apply it and conductor reloads with your new bot. It starts in practice mode, so it only suggests until you let it act.</p>
             </EmptyState>
-            <ReviewPanel stagedCount={staged.value.length} />
+            <ReviewPanel stagedCount={staged.value.length} guided />
           </>
         ) : (
           <EmptyState
@@ -242,6 +246,28 @@ function rosterCount(bots: number, teams: number, solo: number): string {
   const parts = [plural(bots, 'bot')]
   if (teams) parts.push(plural(teams, 'team'), `${solo} solo`)
   return parts.join(' · ')
+}
+
+// botSummary says a staged new bot in plain words: its name, what it's for,
+// its team, where it works and its avatar.
+function botSummary(changes: { path: string[]; value?: unknown; delete?: boolean }[]): [string, string][] {
+  const f: Record<string, string> = {}
+  let id = ''
+  for (const c of changes) {
+    if (c.path[0] !== 'bots' || c.delete) continue
+    id = c.path[1]
+    f[c.path.slice(2).join('.')] = String(c.value ?? '')
+  }
+  const out: [string, string][] = [['Name', f['display_name'] || id]]
+  if (f['description']) out.push(['Description', f['description']])
+  if (f['team']) out.push(['Team', f['team']])
+  if (f['worker.runtime']) out.push(['Works on', f['worker.runtime']])
+  const face = f['avatar.icon']
+    ? [[f['avatar.color'], f['avatar.icon'], 'icon'].filter(Boolean).join(' ')]
+    : [[f['avatar.color'], f['avatar.shape']].filter(Boolean).join(' '), f['avatar.eyes'] ? `${f['avatar.eyes']} eyes` : '']
+  const faceText = face.filter(Boolean).join(', ')
+  if (faceText) out.push(['Avatar', faceText])
+  return out
 }
 
 // WelcomeFaces is three sample faces from the identity picker: what a bot

@@ -186,7 +186,6 @@ function sectionTitle(s: string): string {
 const KEY_LABELS: Record<string, string> = {
   state_file: 'State file',
   allow_open: 'Open without sign-in',
-  enabled: 'On',
   listen: 'Listens on',
   use: 'Plugin',
 }
@@ -195,6 +194,8 @@ const KEY_LABELS: Record<string, string> = {
 // numbered from the second on.
 function leafLabel(path: string[]): string {
   const last = path[path.length - 1]
+  // "enabled" says what it turns on: "Dashboard on".
+  if (last === 'enabled' && path.length > 1) return humanKey(path[path.length - 2]) + ' on'
   if (/^\d+$/.test(last) && path.length > 1) {
     const n = Number(last)
     return humanKey(path[path.length - 2]) + (n > 0 ? ` (${n + 1})` : '')

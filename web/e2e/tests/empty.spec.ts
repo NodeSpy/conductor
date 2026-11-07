@@ -68,6 +68,12 @@ for (const s of SCREENS) {
 }
 
 // Screens that were already fine at zero still show no error and no raw text.
+test('Config names its switches in plain words', async ({ page }) => {
+  await page.goto(`${rt.baseURL}/#/config`)
+  await expect(page.locator('label.field[data-path="dashboard.enabled"] .cfg-name')).toHaveText('Dashboard on')
+  await expect(page.locator('label.field[data-path="store.state_file"] .cfg-name')).toHaveText('State file')
+})
+
 for (const r of ['browser', 'browser/cards', 'browser/logins', 'browser/details', 'connections', 'system', 'config']) {
   test(`#/${r} on a fresh box shows no error`, async ({ page }) => {
     await page.goto(`${rt.baseURL}/#/${r}`)
@@ -177,8 +183,19 @@ test('create the first bot from the welcome', async ({ page }) => {
     await expect(card).toBeVisible()
     await noErrors(page)
     await shot(page, 'bots-staged')
+    await expect(card.getByTestId('bot-summary')).toContainText('Scout')
+    await expect(card.getByTestId('bot-summary')).toContainText('Avatar')
     await card.getByTestId('bots-review').click()
-    await expect(page.locator('.effects')).toContainText('bots.scout')
+    await expect(card.getByTestId('bots-apply')).toBeVisible()
+    // One apply action, the card's: the panel below only shows what changes.
+    await expect(page.getByRole('button', { name: /apply/i })).toHaveCount(1)
+    await expect(page.getByRole('button', { name: /Review changes|Review again|Check it first/ })).toHaveCount(0)
+    await expect(page.locator('.diff')).toContainText('scout:')
+    // On a phone the change wraps instead of running off the edge.
+    const overflow = await page.locator('.diff').evaluate((el) => el.scrollWidth - el.clientWidth)
+    if (test.info().project.use.isMobile) expect(overflow, 'the diff fits the screen').toBeLessThanOrEqual(1)
+    // No step-up on an open dashboard, so no note about one.
+    await expect(page.getByTestId('review-guarded')).toHaveCount(0)
     await shot(page, 'bots-staged-reviewed')
     await card.getByTestId('bots-apply').click()
 
