@@ -6,7 +6,8 @@ import { openEvents } from './api/sse'
 import type { StatusResponse, RunSummary, AttrQualifier } from './api/types'
 import { humanError } from './api/errors'
 import { botsApi, type ProposalRow } from './api/bots'
-import { browser, type Purchase } from './api/browser'
+import { browser, hostOf, money, type Purchase } from './api/browser'
+import type { Fact } from './components/Facts'
 
 export const status = signal<StatusResponse | null>(null)
 export const runs = signal<RunSummary[]>([])
@@ -148,6 +149,9 @@ export interface NeedItem {
   why?: string
   href: string
   at: string // RFC3339, for the age column
+  facts?: Fact[] // the facts-chip line under the title: who, where, what kind
+  bot?: string // for the Needs you page's Bot filter
+  workflow?: string // for the Needs you page's Workflow filter (failed runs only today)
 }
 
 function proposalItem(p: ProposalRow): NeedItem {
@@ -159,6 +163,11 @@ function proposalItem(p: ProposalRow): NeedItem {
     why: p.requester ? `Asked by ${p.requester}` : undefined,
     href: `#/bots/${p.bot}/proposals/${p.proposal}`,
     at: p.created || '',
+    facts: ([
+      p.bot ? { icon: 'obj-bot', value: p.bot, label: 'Bot' } : null,
+      p.tier ? { icon: 'shield', value: p.tier, label: 'Tier' } : null,
+      p.uses ? { icon: 'obj-workflow', value: p.uses, label: 'Verb' } : null,
+    ] as (Fact | null)[]).filter((f): f is Fact => !!f),
   }
 }
 
@@ -171,10 +180,16 @@ function purchaseItem(p: Purchase): NeedItem {
     why: p.why,
     href: `#/browser/purchases/${p.id}`,
     at: p.created,
+    facts: ([
+      { icon: 'banknote', tone: 'danger', pri: 1, label: p.recurring ? 'A subscription' : 'Total', value: money(p.total, p.currency) },
+      p.merchant ? { icon: 'store', pri: 1, label: 'Shop', value: hostOf(p.merchant) } : null,
+      p.card ? { icon: 'obj-card', pri: 2, label: 'Card', value: p.card } : null,
+    ] as (Fact | null)[]).filter((f): f is Fact => !!f),
   }
 }
 
 function failedItem(r: RunSummary): NeedItem {
+  const bot = r.workflow.startsWith('bot:') ? r.workflow.slice(4) : ''
   return {
     kind: 'failed',
     mark: 'fail',
@@ -183,6 +198,12 @@ function failedItem(r: RunSummary): NeedItem {
     why: r.error || (r.failed_step ? `failed at ${r.failed_step}` : undefined),
     href: `#/runs/${r.id}`,
     at: r.finished || r.started,
+    bot: bot || undefined,
+    workflow: r.workflow,
+    facts: ([
+      bot ? { icon: 'obj-bot', value: bot, label: 'Bot' } : { icon: 'obj-workflow', value: r.workflow, label: 'Workflow' },
+      r.repo ? { icon: 'tag', value: `${r.repo}${r.number ? `#${r.number}` : ''}`, label: 'Repo' } : null,
+    ] as (Fact | null)[]).filter((f): f is Fact => !!f),
   }
 }
 
