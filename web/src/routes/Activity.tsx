@@ -21,7 +21,7 @@ import { EmptyState } from '../components/EmptyState'
 import type { RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
 import { FilterBar, type Option } from '../components/FilterBar'
-import { emptyFilter, matchRun, rangeMinutes, hasAnyFilter, type FilterState } from '../lib/filter'
+import { emptyFilter, matchRun, rangeMinutes, hasAnyFilter, STATUSES, type FilterState } from '../lib/filter'
 import { humanDuration, ago, plural } from '../lib/format'
 import { api } from '../api/client'
 import { go } from '../router'
@@ -64,6 +64,16 @@ export function Activity(): JSX.Element {
   const running = matched.filter((r) => r.status === 'running')
   const finished = matched.filter((r) => r.status === 'ok' || r.status === 'retried' || (r.status === 'failed' && skip.includes(r.id)))
   const finishedShown = finished.slice(0, shown)
+
+  const update = (patch: Partial<FilterState>) => {
+    setFilter({ ...filter, ...patch })
+    setShown(PAGE)
+    clearSel()
+  }
+  const toggle = (key: 'status' | 'workflow', v: string) => {
+    const cur = filter[key]
+    update({ [key]: cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v] } as Partial<FilterState>)
+  }
 
   const wfOptions: Option[] = useMemo(() => {
     const m = new Map<string, number>()
@@ -133,7 +143,21 @@ export function Activity(): JSX.Element {
         </EmptyState>
       ) : (
         <>
-          <FilterBar value={filter} onChange={(f) => { setFilter(f); setShown(PAGE); clearSel() }} workflows={wfOptions} attrs={attrs} />
+          <FilterBar
+            q={filter.q}
+            onQueryChange={(q) => update({ q })}
+            placeholder={attrs.find((a) => a.field === 'repo') ? 'Search, or filter: status:failed, repo:acme/web' : 'Search, or filter: status:failed'}
+            menus={[
+              { key: 'status', label: 'Status', multi: true, selected: filter.status, options: STATUSES.map(([v, label]) => ({ v, label })), onToggle: (v) => toggle('status', v) },
+              ...(wfOptions.length ? [{ key: 'workflow', label: 'Workflow', multi: true, selected: filter.workflow, options: wfOptions, onToggle: (v: string) => toggle('workflow', v) }] : []),
+            ]}
+            attrs={attrs}
+            attrsValue={filter.attrs}
+            onAttrsChange={(next) => update({ attrs: next })}
+            since={filter.since}
+            onSinceChange={(v) => update({ since: v })}
+            showTime
+          />
 
           <Strip runs={matched} since={filter.since} />
 

@@ -36,13 +36,13 @@ test('Activity lists every run from the daemon, grouped and filterable', async (
 
   // Free-text search narrows the list: filter to the "build" workflow.
   const buildRuns = runs.filter((r) => r.workflow === 'build')
-  await page.locator('.fb-input').fill('build')
-  await page.locator('.fb-input').press('Enter')
+  await page.locator('.fb-in').fill('build')
+  await page.locator('.fb-in').press('Enter')
   await expect(dataRows(page)).toHaveCount(buildRuns.length)
 
   // Clearing the search restores the full list.
-  await page.locator('.fb-input').fill('')
-  await page.locator('.fb-input').press('Enter')
+  await page.locator('.fb-in').fill('')
+  await page.locator('.fb-in').press('Enter')
   await expect(dataRows(page)).toHaveCount(runs.length)
 
   expect(collector.consoleErrors, collector.consoleErrors.join(' | ')).toEqual([])
