@@ -139,8 +139,9 @@ test('the Bots welcome on a box with no agent runtime says what comes first', as
 })
 
 // The empty Hosts card has a way to add one: it stages through the review.
-test('a host can be added from the Hosts card', async ({ page }) => {
-  await page.goto(`${rt.baseURL}/#/connections`)
+// Hosts live on Plugins' Machines tab (CONFORMANCE "Plugins": four tabs).
+test('a host can be added from the Machines tab', async ({ page }) => {
+  await page.goto(`${rt.baseURL}/#/connections/machines`)
   await page.getByTestId('add-host').click()
   const form = page.getByTestId('add-host-form')
   await form.getByRole('textbox', { name: 'Name' }).fill('build-box')

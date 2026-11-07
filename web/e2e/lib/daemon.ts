@@ -7,7 +7,7 @@
 // dispatching a trivial `command` trigger (sh -c true) a few times, so the
 // Overview has real records to render and the SSE stream carries real events.
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, writeFileSync, openSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, openSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
@@ -98,6 +98,30 @@ export async function start(port: number): Promise<Runtime> {
       `  greeting: hello`,
       `connectors:`,
       `  box: { use: command }`,
+      // webhook/cron are true built-ins (compiled in, never fetched) — unlike
+      // github, which the dashboard's PluginInfo.Builtin list still claims is
+      // a built-in (sections.go) but which the plugin host actually fetches
+      // and runs as a subprocess over the network. Seeding a second
+      // connector here must stay offline, so it uses one of the real
+      // built-ins instead (see the phase 7 report's data-gap list for the
+      // stale Builtin claim).
+      `  hooks: { use: webhook }`,
+      `runtimes:`,
+      `  local: { use: cli }`,
+      `hosts:`,
+      `  build-box: { host: build01.example.com, user: ci }`,
+      `vaults:`,
+      `  main: { type: conductor }`,
+      // No top-level `secrets:` block: the config loader hard-rejects it now
+      // ("the secrets: block was replaced by vaults: entries and {{ vault
+      // "<name>" "<key>" }} references" — internal/config/connectors.go). A
+      // real daemon only ever has vaults: entries; a secret value is an
+      // inline {{ vault ... }} template in whatever field needs it, which
+      // the dashboard's /api/v1/secrets handler does not scan for (it still
+      // reads a literal secrets: map) — see the phase 7 report's data-gap
+      // list. Seeding one here would just fail to boot.
+      `packs:`,
+      `  review: { use: ./packs/review }`,
       `triggers:`,
       `  - name: deploy`,
       `    on: manual`,
@@ -112,7 +136,23 @@ export async function start(port: number): Promise<Runtime> {
     { mode: 0o600 },
   )
 
+  // A minimal local pack (packs: review: { use: ./packs/review }), so Packs
+  // has an installed instance to show. No network: a local source still needs
+  // one `conductor init` to vendor + lock it (config.Load refuses an
+  // unresolved pack) — run hermetically, with an explicit --config and HOME
+  // pointed at this throwaway root, same as every other invocation here. It
+  // must NEVER run without --config: that falls back to the operator's real
+  // config/state dirs.
+  const packDir = path.join(root, 'packs', 'review')
+  mkdirSync(packDir, { recursive: true })
+  writeFileSync(
+    path.join(packDir, 'conductor-pack.yaml'),
+    ['pack:', '  name: demo-review', '  version: 0.1.0', '  description: a tiny local pack for the dashboard e2e suite', ''].join('\n'),
+  )
+
   const env = hermeticEnv(home)
+  execFileSync(bin, ['init', '--config', config], { env, stdio: 'ignore' })
+
   const out = openSync(logFile, 'a')
   // detached so we can signal the whole process group on teardown.
   const child: ChildProcess = spawn(bin, ['run', '--config', config], {
