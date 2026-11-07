@@ -7,7 +7,8 @@ import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { botsApi, displayName, type TeamSummary, type BotSummary } from '../api/bots'
 import { Avatar } from '../components/Avatar'
-import { humanError } from '../api/errors'
+import { ApiError, humanError } from '../api/errors'
+import { EmptyState } from '../components/EmptyState'
 import { plural } from '../lib/format'
 
 const TABS = ['overview', 'routing', 'defaults', 'knowledge'] as const
@@ -17,10 +18,12 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
   const active: Tab = (TABS as readonly string[]).includes(tab || '') ? (tab as Tab) : 'overview'
   const [team, setTeam] = useState<TeamSummary | null>(null)
   const [bots, setBots] = useState<Record<string, BotSummary>>({})
-  const [err, setErr] = useState('')
+  const [err, setErr] = useState<unknown>(null)
 
   useEffect(() => {
-    botsApi.team(name).then(setTeam).catch((e) => setErr(humanError(e)))
+    setTeam(null)
+    setErr(null)
+    botsApi.team(name).then(setTeam).catch(setErr)
     botsApi.bots().then((r) => {
       const m: Record<string, BotSummary> = {}
       for (const b of r.bots) m[b.bot] = b
@@ -28,7 +31,20 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
     })
   }, [name])
 
-  if (err) return <div class="col"><a class="back" href="#/bots">← Bots</a><div class="banner err" role="alert">{err}</div></div>
+  if (err) {
+    // A team that doesn't exist is a dead end to name and route back from,
+    // not a raw error banner (the bots list's own empty-state philosophy).
+    if (err instanceof ApiError && err.status === 404) {
+      return (
+        <div class="col">
+          <EmptyState title={`No team named ${name}`} action={{ label: 'Bots', href: '#/bots' }}>
+            <p>It may have been disbanded, renamed, or never existed on this daemon.</p>
+          </EmptyState>
+        </div>
+      )
+    }
+    return <div class="col"><a class="back" href="#/bots">← Bots</a><div class="banner err" role="alert">{humanError(err)}</div></div>
+  }
   if (!team) return <div class="col"><p class="muted">Loading {name}…</p></div>
 
   const lead = team.routing?.lead

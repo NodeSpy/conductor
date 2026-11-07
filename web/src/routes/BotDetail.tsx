@@ -15,7 +15,8 @@ import { TicketTable } from './Tickets'
 import { staged, loadConfig, stage, cfgError } from '../configStore'
 import { go } from '../router'
 import { BotWallet } from './BotWallet'
-import { humanError } from '../api/errors'
+import { ApiError, humanError } from '../api/errors'
+import { EmptyState } from '../components/EmptyState'
 
 const TABS = ['chat', 'tickets', 'approvals', 'memory', 'access', 'settings'] as const
 type Tab = (typeof TABS)[number]
@@ -32,10 +33,12 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
   const active: Tab = (TABS as readonly string[]).includes(tab || '') ? (tab as Tab) : 'chat'
   const [bot, setBot] = useState<BotData | null>(null)
   const [all, setAll] = useState<Record<string, BotSummary>>({})
-  const [err, setErr] = useState('')
+  const [err, setErr] = useState<unknown>(null)
 
   useEffect(() => {
-    botsApi.bot(name).then(setBot).catch((e) => setErr(humanError(e)))
+    setBot(null)
+    setErr(null)
+    botsApi.bot(name).then(setBot).catch(setErr)
     botsApi.bots().then((r) => {
       const m: Record<string, BotSummary> = {}
       for (const b of r.bots) m[b.bot] = b
@@ -43,7 +46,20 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
     })
   }, [name])
 
-  if (err) return <div class="col"><a class="back" href="#/bots">← Bots</a><div class="banner err" role="alert">{err}</div></div>
+  if (err) {
+    // A bot that doesn't exist (a stale link, a typo'd id) is a dead end to
+    // name and route back from, not a raw error banner.
+    if (err instanceof ApiError && err.status === 404) {
+      return (
+        <div class="col">
+          <EmptyState title={`No bot named ${name}`} action={{ label: 'Bots', href: '#/bots' }}>
+            <p>It may have been archived, renamed, or never existed on this daemon.</p>
+          </EmptyState>
+        </div>
+      )
+    }
+    return <div class="col"><a class="back" href="#/bots">← Bots</a><div class="banner err" role="alert">{humanError(err)}</div></div>
+  }
   if (!bot) return <div class="col"><p class="muted">Loading {name}…</p></div>
 
   const facts: string[] = []

@@ -337,6 +337,11 @@ interface SelProps {
 }
 
 function TeamSection({ t, bots, sel, onToggleSel }: { t: TeamSummary; bots: BotSummary[] } & SelProps): JSX.Element {
+  // A section opens by default; its own fold state (m-tog, design §4.4) is the
+  // header's first grid column — without it the rest of the header has no
+  // second/third/fourth column to land in and collapses into that column's
+  // own 28px width instead.
+  const [open, setOpen] = useState(true)
   const lead = t.routing?.lead
   const rules: string[] = []
   rules.push(lead ? `led by ${lead}` : 'no lead yet — what you write goes to everyone')
@@ -347,6 +352,9 @@ function TeamSection({ t, bots, sel, onToggleSel }: { t: TeamSummary; bots: BotS
   return (
     <section class="dl-card m-team" data-team={t.team}>
       <header class="m-team-h">
+        <button type="button" class="m-tog" aria-expanded={open} aria-label={(open ? 'Fold ' : 'Show ') + t.team} onClick={() => setOpen((v) => !v)}>
+          <Icon name={open ? 'chevd' : 'chev'} />
+        </button>
         <div class="m-team-t">
           <div class="m-team-n">
             <Avatar id={t.identity} size={32} kind="team" />
@@ -362,26 +370,34 @@ function TeamSection({ t, bots, sel, onToggleSel }: { t: TeamSummary; bots: BotS
           <a class="btn sm secondary ph-hide" href={`#/teams/${t.team}`}><Icon name="settings" />Shape the team</a>
         </div>
       </header>
-      <ul class="m-list">
-        {bots.length ? bots.map((b) => <BotRow key={b.bot} b={b} sel={sel} onToggleSel={onToggleSel} />) : <li class="dl-empty-row">No bots in this team match.</li>}
-      </ul>
+      {open ? (
+        <ul class="m-list">
+          {bots.length ? bots.map((b) => <BotRow key={b.bot} b={b} sel={sel} onToggleSel={onToggleSel} />) : <li class="dl-empty-row">No bots in this team match.</li>}
+        </ul>
+      ) : null}
     </section>
   )
 }
 
 function SoloSection({ bots, sel, onToggleSel }: { bots: BotSummary[] } & SelProps): JSX.Element {
+  const [open, setOpen] = useState(true)
   if (!bots.length) return <></>
   return (
     <section class="dl-card m-team m-solo" data-team="(solo)">
       <header class="m-team-h">
+        <button type="button" class="m-tog" aria-expanded={open} aria-label={(open ? 'Fold' : 'Show') + ' solo bots'} onClick={() => setOpen((v) => !v)}>
+          <Icon name={open ? 'chevd' : 'chev'} />
+        </button>
         <div class="m-team-t">
           <div class="m-team-n"><h2>Solo bots</h2></div>
           <span class="dl-sub m-team-sum">{plural(bots.length, 'bot')} · not on a team, each with its own rules</span>
         </div>
       </header>
-      <ul class="m-list">
-        {bots.map((b) => <BotRow key={b.bot} b={b} sel={sel} onToggleSel={onToggleSel} />)}
-      </ul>
+      {open ? (
+        <ul class="m-list">
+          {bots.map((b) => <BotRow key={b.bot} b={b} sel={sel} onToggleSel={onToggleSel} />)}
+        </ul>
+      ) : null}
     </section>
   )
 }
