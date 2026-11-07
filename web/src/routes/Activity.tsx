@@ -368,7 +368,7 @@ function PhoneGroups({
 function PhoneRow({ r, rich }: { r: RunSummary; rich?: boolean }): JSX.Element {
   const m = statusMark(r.status)
   return (
-    <li class={rich ? 'attn' : ''} data-s={rich ? 'fail' : undefined}>
+    <li class={rich ? 'attn' : ''} data-s={rich ? 'fail' : undefined} data-run={r.id}>
       <a href={'#/runs/' + r.id}>
         <span class="dl-nt">
           <b>{r.workflow}</b>
