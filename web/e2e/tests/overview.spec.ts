@@ -49,7 +49,12 @@ test('app shell, nav and theme render with zero console errors and zero failed r
     await expect(page.locator('.rail nav.nav a', { hasText: 'Bots' })).toBeVisible()
     await expect(page.locator('.rail nav.nav a', { hasText: 'Browsers' })).toBeVisible()
   }
-  await expect(page.locator('button.cell[title="Switch theme"]')).toBeVisible()
+  // The theme toggle lives in the account menu now, not a top-bar button of
+  // its own (CONFORMANCE: the account menu is the one place theme lives).
+  await expect(page.locator('button.op-btn')).toBeVisible()
+  await page.locator('button.op-btn').click()
+  await expect(page.locator('.menu[role="menu"] button', { hasText: /Light theme|Dark theme/ })).toBeVisible()
+  await page.keyboard.press('Escape')
 
   // The page actually rendered its content.
   await expect(page.locator('.dl-glance .dl-tile')).toHaveCount(4)

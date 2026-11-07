@@ -23,6 +23,8 @@ import { Approval } from './routes/Approval'
 import { Browsers } from './routes/Browsers'
 import { Attention } from './routes/Attention'
 import { More } from './routes/More'
+import { Preferences } from './routes/Preferences'
+import { Glossary } from './routes/Glossary'
 import { load, startLive } from './state'
 import { route, screen, seg } from './router'
 import { refreshState, authState } from './api/auth'
@@ -144,6 +146,10 @@ function Screen(): JSX.Element {
       return <Attention />
     case 'more':
       return <More />
+    case 'preferences':
+      return <Preferences />
+    case 'glossary':
+      return <Glossary />
     default:
       return <Overview />
   }

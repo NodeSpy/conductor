@@ -11,13 +11,17 @@
 // separate rail entries; their old routes (#/config, #/safety, #/updates,
 // #/audit, #/security) redirect into the matching System tab (app.tsx).
 import type { ComponentChildren, JSX } from 'preact'
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { conn, status, needItems, chatUnread } from '../state'
-import { route, screen } from '../router'
+import { route, screen, go } from '../router'
 import { Icon } from './Icon'
 import { StatusMark } from './StatusMark'
 import { Palette, type PaletteItem } from './Palette'
 import { usePhoneLayout } from '../lib/layout'
+import { Menu, type MenuItem } from './Menu'
+import { authState, signOut } from '../api/auth'
+import { staged, loadConfig } from '../configStore'
+import { themeSignal, setTheme, type Theme } from '../lib/theme'
 
 type NavItem = { key: string; label: string; icon: string; count?: () => number; hot?: boolean }
 
@@ -104,6 +108,8 @@ const PAGE_TITLES: Record<string, string> = {
   secrets: 'Secrets',
   system: 'System',
   more: 'More',
+  preferences: 'Preferences',
+  glossary: 'Glossary',
 }
 
 function Mark(): JSX.Element {
@@ -133,28 +139,10 @@ function Lockup(): JSX.Element {
   )
 }
 
-function setTheme(next: 'light' | 'dark' | 'auto') {
-  const root = document.documentElement
-  if (next === 'auto') {
-    root.removeAttribute('data-theme')
-    localStorage.removeItem('theme')
-  } else {
-    root.setAttribute('data-theme', next)
-    localStorage.setItem('theme', next)
-  }
-}
-
-function currentTheme(): 'light' | 'dark' | 'auto' {
-  const v = document.documentElement.getAttribute('data-theme')
-  return v === 'light' || v === 'dark' ? v : 'auto'
-}
-
 export function Shell({ children }: { children: ComponentChildren }): JSX.Element {
-  const theme = currentTheme()
-  const cycle = () => setTheme(theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto')
+  const theme = themeSignal.value
   // On a phone the rail is hidden entirely (the tab bar replaces it); there is
-  // no fold-out nav drawer in the approved design, so there is nothing to
-  // open or close here beyond the avatar's own small menu.
+  // no fold-out nav drawer in the approved design — just the avatar's menu.
   const phone = usePhoneLayout()
   const cur = navKeyFor(screen())
   const title = PAGE_TITLES[cur] ?? 'conductor'
@@ -168,6 +156,14 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
   // leaving this one group out of the DOM too keeps its links from being a
   // second, invisible match for a plain-text locator of More's own.
   const navGroups = phone ? NAV_GROUPS.filter((g) => !g.label) : NAV_GROUPS
+
+  // Load the config once per app session so the top bar's staged-changes cell
+  // (UI.refreshChrome's `${D.pending.length} not applied`) reads true from the
+  // very first screen, not only after visiting Config or Secrets.
+  useEffect(() => {
+    void loadConfig()
+  }, [])
+  const pending = staged.value.length
 
   return (
     <div class="shell">
@@ -208,10 +204,17 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
         </a>
         <Palette items={PALETTE_ITEMS} />
         <div class="spacer" />
-        <ThemeCell theme={theme} cycle={cycle} />
-        <button type="button" class="cell op-btn" aria-label="Account">
-          <span class="avatar">OP</span>
-        </button>
+        {conn.value !== 'live' ? (
+          <span class="cell" data-testid="conn-bar" title="Event stream">
+            {conn.value === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
+          </span>
+        ) : null}
+        {pending ? (
+          <a class="cell staged" href="#/system/config">
+            <StatusMark s="staged" word={`${pending} not applied`} />
+          </a>
+        ) : null}
+        <AccountMenu theme={theme} />
       </header>
 
       <main class="main" id="main" tabindex={-1}>
@@ -237,21 +240,60 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
   )
 }
 
-// ThemeCell is the quiet top-bar theme cycle (auto → light → dark), plus a
-// small live-connection word when the event stream isn't live (the approved
-// design has no place for this signal; it is surfaced only when it matters).
-function ThemeCell({ theme, cycle }: { theme: 'light' | 'dark' | 'auto'; cycle: () => void }): JSX.Element {
-  const c = conn.value
+// AccountMenu is the avatar button and its menu (prototype js/ui.js
+// UI.act('op-menu')): who you are (links to Access), the theme toggle,
+// Preferences, Show Get started (only when it's hidden), Glossary, and Lock.
+// There is no separate theme toggle anywhere else in the top bar or the rail
+// (CONFORMANCE); the account menu is the one place theme lives.
+function AccountMenu({ theme }: { theme: Theme }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [gsHidden, setGsHidden] = useState(() => localStorage.getItem('gs-hidden') === '1')
+  const ref = useRef<HTMLButtonElement>(null)
+  const operator = authState.value.operator || 'you'
+
+  const dark = theme === 'dark' || (theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches)
+
+  const items: MenuItem[] = [
+    { label: `Signed in as ${operator}`, icon: 'shield', onClick: () => go('system/access') },
+    '-',
+    {
+      label: dark ? 'Light theme' : 'Dark theme',
+      icon: dark ? 'sun' : 'moon',
+      onClick: () => setTheme(dark ? 'light' : 'dark'),
+    },
+    { label: 'Preferences', icon: 'settings', onClick: () => go('preferences') },
+    ...(gsHidden
+      ? [{ label: 'Show Get started', icon: 'check', onClick: () => { localStorage.removeItem('gs-hidden'); setGsHidden(false); go('') } } as MenuItem]
+      : []),
+    { label: 'Glossary', icon: 'info', onClick: () => go('glossary') },
+    '-',
+    { label: 'Lock', icon: 'lock', onClick: () => void doLock() },
+  ]
+
+  async function doLock() {
+    try {
+      await signOut()
+    } finally {
+      authState.value = { signed_in: false }
+      location.hash = ''
+      location.assign('/signin')
+    }
+  }
+
   return (
     <>
-      {c !== 'live' ? (
-        <span class="cell" data-testid="conn-bar" title="Event stream">
-          {c === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
-        </span>
-      ) : null}
-      <button type="button" class="cell" onClick={cycle} title="Switch theme">
-        <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
+      <button
+        ref={ref}
+        type="button"
+        class="cell op-btn"
+        aria-label={`${operator}: account and display`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span class="avatar">{operator.slice(0, 2).toUpperCase()}</span>
       </button>
+      {open ? <Menu anchor={ref.current} items={items} onClose={() => setOpen(false)} label="Account and display" /> : null}
     </>
   )
 }
