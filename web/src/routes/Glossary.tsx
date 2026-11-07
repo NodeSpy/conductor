@@ -6,6 +6,23 @@
 // itself, reachable from the account menu.
 import type { JSX } from 'preact'
 
+// renderDesc ports the prototype's glossary.js rendering of a definition: a
+// trailing "(In config: x)" or "(In config and the CLI: x)" becomes "(in
+// config: x)" with the config key in monospace, rather than plain capitalized
+// text.
+const CFG_RE = /\(In config(?: and the CLI)?: ([^)]*)\)/
+function renderDesc(d: string): JSX.Element {
+  const m = CFG_RE.exec(d)
+  if (!m) return <>{d}</>
+  return (
+    <>
+      {d.slice(0, m.index)}
+      <span class="gl-cfg">(in config: <code>{m[1]}</code>)</span>
+      {d.slice(m.index + m[0].length)}
+    </>
+  )
+}
+
 const TERMS: [string, string, string][] = [
   ['bot', 'Bot', 'An AI teammate with memory you can chat with. It watches what you pick, tells you what it finds, and proposes actions; risky ones wait for you.'],
   ['workflow', 'Workflow', 'A fixed recipe: when something happens, run these steps in order. No judgment unless a step asks an agent or hands the event to a bot.'],
@@ -60,7 +77,7 @@ export function Glossary(): JSX.Element {
           {TERMS.map(([k, t, d]) => (
             <div id={'g-' + k} key={k}>
               <dt>{t}</dt>
-              <dd>{d}</dd>
+              <dd>{renderDesc(d)}</dd>
             </div>
           ))}
         </dl>
