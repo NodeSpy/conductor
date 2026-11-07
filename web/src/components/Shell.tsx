@@ -291,7 +291,7 @@ function AccountMenu({ theme }: { theme: Theme }): JSX.Element {
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
       >
-        <span class="avatar">{operator.slice(0, 2).toUpperCase()}</span>
+        <span class="avatar">{operator.slice(0, 2)}</span>
       </button>
       {open ? <Menu anchor={ref.current} items={items} onClose={() => setOpen(false)} label="Account and display" /> : null}
     </>

@@ -89,6 +89,15 @@ function Safety(): JSX.Element {
   const [busy, setBusy] = useState(false)
   const reload = () => api.system().then(setSys).catch((e) => setErr(String(e)))
   useEffect(() => void reload(), [])
+  // Get started's "Check what your bots can do" step is done once the
+  // operator has opened Safety at all (prototype's D.prefs.seenSafety).
+  useEffect(() => {
+    try {
+      localStorage.setItem('seen-safety', '1')
+    } catch {
+      /* storage unavailable (private mode) */
+    }
+  }, [])
   const s = sys?.safety
   const paused = status.value?.paused
   const on = s ? s.sandbox_agents !== 'off' : true
