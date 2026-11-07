@@ -69,8 +69,15 @@ command — see the script, it's short.)
 ```sh
 cargo install tauri-cli --version "^2" --locked   # or: npm i -g @tauri-apps/cli
 cd desktop/src-tauri
-cargo tauri build --target universal-apple-darwin
+cargo tauri build            # this Mac's own architecture
+# A universal (Intel + Apple Silicon) build also needs both targets:
+#   rustup target add aarch64-apple-darwin x86_64-apple-darwin
+#   cargo tauri build --target universal-apple-darwin
 ```
+
+The `.app` lands in `target/release/bundle/macos/` and the `.dmg` in
+`target/release/bundle/dmg/`. If the `.dmg` step fails with "Resource busy",
+Finder or Spotlight was holding the temporary disk image; run it again.
 
 The unsigned build produces a `.dmg` that Gatekeeper will refuse to open by
 double-click. To run it anyway:

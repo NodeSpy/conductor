@@ -258,7 +258,9 @@ pub fn run() {
                 .icon(app.default_window_icon().cloned().unwrap_or_else(|| {
                     tauri::image::Image::new(&[0, 0, 0, 0], 1, 1)
                 }))
-                .icon_as_template(true)
+                // The icon is the full-colour app icon, not a monochrome
+                // template, so macOS must draw it as is.
+                .icon_as_template(false)
                 .tooltip("Conductor")
                 .on_menu_event(move |app, event: MenuEvent| {
                     let app = app.clone();
@@ -335,6 +337,16 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running conductor desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building conductor desktop")
+        .run(|app, event| {
+            // macOS: clicking the Dock icon while the window is hidden
+            // brings it back.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                show_main_window(app);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

@@ -23,17 +23,14 @@
     ],
     "security": {
       "csp": null,
-      "capabilities": ["default"]
-    },
-    "trayIcon": {
-      "iconPath": "icons/32x32.png",
-      "iconAsTemplate": true,
-      "tooltip": "Conductor"
+      "capabilities": [
+        "default"
+      ]
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["appimage", "deb", "dmg"],
+    "targets": "all",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -46,7 +43,10 @@
     "longDescription": "Native tray app that signs in to a conductor daemon with your SSH key, watches for things that need your attention, and shows the dashboard in a window.",
     "linux": {
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"]
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libayatana-appindicator3-1"
+        ]
       }
     },
     "macOS": {
