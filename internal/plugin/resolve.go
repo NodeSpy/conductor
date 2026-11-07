@@ -465,6 +465,11 @@ func adoptLegacyRecord(ref config.PluginRef, rec Installed, state *InstallState,
 	}
 	base := rec.Manifest
 	base.Listen, base.Read, base.Write, base.Exec, base.Keychain = m.Listen, m.Read, m.Write, m.Exec, m.Keychain
+	// Nor did it record config: or env: entries: it cannot resolve them, so
+	// the plugin SDK withholds them from it (HostInfo.ResolvesReferences).
+	// They are what a conductor that never had the SDK withhold them
+	// recorded, so they are taken without a hold too.
+	base.Egress, base.FS = withReferences(base.Egress, m.Egress), withReferences(base.FS, m.FS)
 	replaces := rec.Resolved
 	// The user's last agreement (consentFile) is the record: for this
 	// build, or for the one before it when the older conductor installed
