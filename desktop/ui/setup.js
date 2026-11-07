@@ -48,7 +48,7 @@
       setStatus("Connecting…", "");
       var settings = {
         daemon_url: daemonUrl.value.trim(),
-        operator: operator.value.trim(),
+        operator: operator.value.trim().toLowerCase(), /* conductor operator names are lowercase */
         ssh_public_key_path: sshKey.value.trim(),
       };
       invoke("save_settings", { settings: settings })
