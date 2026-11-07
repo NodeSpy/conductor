@@ -262,28 +262,10 @@
   margin: var(--space-3) 0 0;
   line-height: 1.5;
 }
-.acc-tech {
-  margin-top: var(--space-2);
-}
-.acc-tech summary {
-  cursor: pointer;
-  color: var(--color-text-accent);
-  font-size: var(--type-caption-size);
-}
-.acc-tech dl {
-  margin: var(--space-3) 0 0;
-}
-.acc-tech dt {
-  font-size: var(--type-caption-size);
-  color: var(--color-text-secondary);
-  margin-top: var(--space-2);
-}
-.acc-tech dd {
-  margin: 2px 0 0;
-  font-size: var(--type-caption-size);
-  color: var(--color-text-primary);
-  word-break: break-word;
-}
+/* .acc-tech is always paired with the prototype's own .dl-card.dl-tech-d
+   disclosure now (System's Safety/Access's Technical details) — dl-tech-d in
+   daylight.css already styles the summary (with its chevron) and dl-facts
+   already styles the definition list; nothing app-only to add here. */
 .acc-locked {
   color: var(--color-status-danger-solid, crimson);
   font-size: var(--type-caption-size);

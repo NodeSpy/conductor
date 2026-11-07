@@ -11,11 +11,21 @@ export interface TabItem {
   id: string
   label: string
   href: string
-  count?: number | null
+  count?: number | string | null
   hot?: boolean
 }
 
-export function TabsBar({ items, active, ariaLabel }: { items: TabItem[]; active: string; ariaLabel: string }): JSX.Element {
+export function TabsBar({
+  items,
+  active,
+  ariaLabel,
+  className,
+}: {
+  items: TabItem[]
+  active: string
+  ariaLabel: string
+  className?: string
+}): JSX.Element {
   const ref = useRef<HTMLElement>(null)
   const [over, setOver] = useState<Set<number>>(new Set())
   const [menuOpen, setMenuOpen] = useState(false)
@@ -61,7 +71,7 @@ export function TabsBar({ items, active, ariaLabel }: { items: TabItem[]; active
   const overItems = items.filter((_, i) => over.has(i))
 
   return (
-    <nav class="tabs" role="tablist" aria-label={ariaLabel} ref={ref}>
+    <nav class={className ?? 'tabs'} role="tablist" aria-label={ariaLabel} ref={ref}>
       {items.map((t) => (
         <a class={active === t.id ? 'on' : ''} role="tab" aria-selected={active === t.id} aria-current={active === t.id ? 'page' : undefined} href={t.href} data-tab={t.id}>
           {t.label}

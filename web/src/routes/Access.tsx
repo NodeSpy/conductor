@@ -24,6 +24,7 @@ import {
 } from '../api/auth'
 import { passkeysUsable } from '../lib/webauthn'
 import { CopyBlock, methodLabel, methodPhrase } from '../components/AuthBits'
+import { Icon } from '../components/Icon'
 import { ago, goDuration, humanDuration } from '../lib/format'
 import '../styles/auth.css'
 import { humanError } from '../api/errors'
@@ -408,9 +409,9 @@ export function Access(): JSX.Element {
             </p>
           </section>
 
-          <details class="acc-card acc-tech">
-            <summary>Technical details</summary>
-            <dl>
+          <details class="dl-card dl-tech-d acc-tech">
+            <summary><Icon name="chev" />Technical details</summary>
+            <dl class="dl-facts">
               <dt>Where it listens</dt>
               {data.listeners.map((l) => (
                 <dd class="mono">

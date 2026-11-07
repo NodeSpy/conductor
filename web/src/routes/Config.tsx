@@ -88,7 +88,7 @@ export function Config(): JSX.Element {
 
       <div class="dl-cols">
         <div class="dl-col-main">
-          <details class="panel cfg-sections" data-testid="cfg-edit-sections">
+          <details class="panel dl-files-d cfg-sections" data-testid="cfg-edit-sections">
             <summary class="panel-head"><h3>Edit the config by section</h3><span class="muted small">each section in its editor, or in the YAML</span></summary>
             <div class="panel-body">
               {!c ? (
@@ -141,7 +141,7 @@ function RawConfig({ c }: { c: ConfigResponse | null }): JSX.Element {
           <a class="btn secondary" href="#/system/config">Back to Config</a>
         </div>
       </div>
-      <p class="dl-sub">Read-only here for now: edit a value from a section below, or on the box. Saving this view back as one edit isn't wired yet (design gap).</p>
+      <p class="dl-sub">Read-only here: edit a value from a section below, or on the box.</p>
       <section class="dl-card">
         {c ? <pre class="diff hist-diff mono" style="padding:14px 22px">{c.text}</pre> : <p class="dl-sub" style="padding:14px 22px">Loading…</p>}
       </section>
@@ -200,7 +200,7 @@ function FilesCard({ path, sha }: { path?: string; sha?: string }): JSX.Element 
           <p class="dl-sub">Loading…</p>
         )}
         <p class="dl-sub" style="margin-top:8px">
-          Imports, vendored packs and the lockfile aren't in this list yet (design gap): only the one live config file's sha is read here.
+          This lists the one live config file. Imports, vendored packs and the lockfile don't have a row of their own here.
         </p>
       </div>
     </details>
