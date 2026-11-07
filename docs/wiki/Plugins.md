@@ -627,18 +627,19 @@ connectors:
     allow_env: [JIRA_TOKEN]                    # within its declared env
 ```
 
-A `network:` entry outside the declaration fails the launch with an error.
-Unset, `network:` and `allow_env:` pass everything the plugin declares; set,
-they pass only the entries listed, and `[]` passes none:
+A `network:` entry outside the declaration fails the launch with an error
+(a `config:` destination covers the host that instance configures). Unset,
+`network:` and `allow_env:` pass everything the plugin declares; set, they
+pass only the entries listed. `allow_env: []` passes none; `network: []`
+narrows nothing, as it did before the jail (the config warns):
 
 ```yaml
     allow_env: []      # no variables at all
-    network: []        # no network at all
 ```
 
-Instances that share one process must narrow it the same way: a different
-`network:` or `allow_env:` on two of them is a load error (`isolate: true`
-one of them).
+Instances that share one process should narrow it the same way: a different
+`network:` or `allow_env:` on two of them gives the process both, with a
+warning (`isolate: true` one of them to keep them apart).
 
 `trust: full` runs a plugin **without** its jail (environment scrubbed only),
 for a plugin you trust that cannot run inside one:
@@ -654,19 +655,45 @@ The daemon logs `trust: full — running WITHOUT its jail` each time it starts
 it. Instances that share one process are unjailed only if **all** of them say
 `trust: full`; a mix is a load error (`isolate: true` the one you trust).
 
-`isolation:` on a plugin connector, runtime or engine is a load error: the
-declaration is what confines a plugin now (see [Upgrading](#upgrading)).
+`isolation:` on a plugin connector, runtime or engine no longer applies (the
+config warns): the declaration is what confines a plugin now (see
+[Upgrading](#upgrading)).
 `isolation:` stays for agents and the built-in `cli`/`script` runtimes (see
 [[Isolation]]).
 
 ### Upgrading
 
-From a conductor that did not jail plugins:
+From a conductor that did not jail plugins (an upgrade never breaks a
+working setup):
 
-- **Remove `isolation:` from plugin connectors, runtimes and engines.** It
-  is a load error now. Delete the block. To keep a plugin unconfined as
-  before, set `trust: full` on its entry; to narrow it, use `network:` and
-  `allow_env:`.
+- **A host that cannot jail plugins keeps running the plugins it had.**
+  Conductor checks once at start whether this host can build a plugin jail.
+  It cannot when conductor runs as root (a user namespace maps root to root),
+  inside a default Docker container (its seccomp profile blocks user
+  namespaces), with `kernel.apparmor_restrict_unprivileged_userns=1` (the
+  Ubuntu 23.10+ default), with user namespaces disabled, or on macOS without
+  `sandbox-exec`. There, a plugin installed before the jail runs as it did
+  before: unjailed, its environment scrubbed, its declared egress (a
+  `config:` destination resolved to its configured host) at conductor's
+  egress proxy, its `PATH` narrowed to its declared commands, and an
+  `isolation:` block applied as it was. The log and a notification say
+  `WARNING: this host cannot jail plugins: <why>` with the fix. A plugin
+  installed since is refused there with the same reason and fix. Set
+  `trust: full` on an entry to run it unjailed on purpose; when every plugin
+  has it, the warning stops. A host that can jail plugins jails every one,
+  however old. Which plugins predate the jail is kept in `installed.yaml`
+  (`pre_jail: true`, carried to each new build of the plugin); a state file
+  a jail-era conductor rewrote without being able to describe a plugin (its
+  record still `legacy: true`) counts, so a box that could not start its
+  plugins after the upgrade recovers on its own.
+- **`isolation:` on plugin connectors, runtimes and engines no longer
+  applies.** The config loads, with a warning naming it; delete the block.
+  The plugin runs jailed to what it declares; the block is used only where
+  the host cannot jail plugins (above). To narrow a plugin use `network:`
+  and `allow_env:`; to run it unconfined set `trust: full`.
+- **Instances sharing one process that narrow it differently** load, with a
+  warning: the process gets the union of their `network:`/`allow_env:`, as
+  before. Set the same narrowing on both, or `isolate: true` one of them.
 - **Install records are completed on the first start.** The state file a
   conductor without the jail wrote (`installed.yaml` version 1) holds only
   part of each declaration: egress, commands, env, OAuth endpoints and
@@ -692,17 +719,18 @@ From a conductor that did not jail plugins:
   update the jail held) is compared with what you last agreed to: when it
   declares more it is held again, runs jailed to that agreement, and is
   logged as a `WARNING` naming what it adds.
-- **`allow_env: []` and `network: []` now mean none.** Before, an empty
-  list passed everything the plugin declares; to keep that, remove the key.
-  A config that has one loads, with a warning naming it.
+- **`network: []` narrows nothing**, as before: the plugin gets every
+  destination it declares. A config that has one loads, with a warning; list
+  the destinations to narrow it. `allow_env: []` passes none, as it always
+  did.
 - **A declared command found through a symlink you own fails the launch**
   (`~/.local/bin/paseo` from npm, a pipx or uv tool). Put the directory it
   points into on conductor's `PATH` ahead of it, or set `trust: full`.
 - **Variables the plugin declares now pass through by default.** Check
   conductor's environment for ones you do not want a plugin to have
   (`GH_TOKEN`, …), or narrow with `allow_env:`.
-- **A root daemon cannot jail plugins.** Run conductor as a non-root user,
-  or set `trust: full` on the plugin's entry.
+- **A root daemon cannot jail plugins** (see the first item). Run
+  conductor as a non-root user, or set `trust: full` on the plugin's entry.
 
 ### Multi-instance isolation
 

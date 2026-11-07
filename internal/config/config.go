@@ -1048,6 +1048,7 @@ func load(path, packRoot string) (*Config, error) {
 	c.labelAllowances()
 	c.removedWarnings = append(c.removedWarnings, c.scopedAgentCapWarnings()...)
 	c.removedWarnings = append(c.removedWarnings, c.emptyNarrowingWarnings()...)
+	c.removedWarnings = append(c.removedWarnings, c.pluginJailWarnings()...)
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}

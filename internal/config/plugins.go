@@ -192,12 +192,10 @@ func (p PluginRef) HasSharedInstance() bool {
 }
 
 // mergeIsolationBestEffort combines two non-isolated instances' isolation:
-// blocks for PluginRefs' running union. In practice an isolation: block on a
-// plugin connector/runtime/engine is refused outright at load by
-// checkPluginJail (the declared-capability jail replaced it), so this never
-// sees two real, non-nil blocks to reconcile for a config that loaded at
-// all — it just must never panic or silently invent a block neither instance
-// wrote, for a caller that calls PluginRefs before validation has run.
+// blocks for PluginRefs' running union. An isolation: block on a plugin is
+// used only where the host cannot jail plugins and the plugin runs as before
+// the jail (pluginJailWarnings); this must never panic or silently invent a
+// block neither instance wrote.
 func mergeIsolationBestEffort(a, b *IsolationConfig) *IsolationConfig {
 	merged, ok := combineIsolation(a, b)
 	if ok {
@@ -377,7 +375,7 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		// the reference leaf (`runtimes: { modal: { use: acme/p/conductor-modal } }`
 		// is selected as `runtime: modal`).
 		u.Name = name
-		p := PluginRef{Name: name, Instance: name, Use: u, TrustFull: strings.EqualFold(strings.TrimSpace(rt.Trust), "full")}
+		p := PluginRef{Name: name, Instance: name, Use: u, TrustFull: strings.EqualFold(strings.TrimSpace(rt.Trust), "full"), Isolation: rt.Isolation}
 		if rt.Connection != nil {
 			p.Conns = []map[string]any{rt.Connection}
 		}
@@ -409,6 +407,11 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		// Jailed to what the engine declares (usually nothing) unless the
 		// operator opted it out.
 		p.TrustFull = ec.TrustFull()
+		if !p.TrustFull {
+			// Applied only where the host cannot jail plugins and the
+			// engine runs as before the jail.
+			p.Isolation = ec.Isolation
+		}
 		out[u.InstallKey()] = p
 	})
 	return out
@@ -530,20 +533,16 @@ func (c *Config) validatePluginRefs() error {
 	return c.checkPluginJail()
 }
 
-// checkPluginJail refuses what the declared-capability jail replaced: an
-// `isolation:` block on a plugin (the plugin's declaration is its jail; a
-// config may narrow it with network:/allow_env, or opt out with trust: full,
-// never widen it), a trust value other than full, and a shared process whose
-// instances disagree on trust.
+// checkPluginJail refuses a trust value other than full, and a shared
+// process whose instances disagree on trust. What a config written before
+// the jail says (an isolation: block on a plugin, instances narrowing one
+// process differently) loads with a warning (pluginJailWarnings).
 func (c *Config) checkPluginJail() error {
 	trustOK := func(where, v string) error {
 		if t := strings.TrimSpace(v); t != "" && !strings.EqualFold(t, "full") {
 			return fmt.Errorf("config: %s: trust must be \"full\" (run the plugin outside its jail) or empty, got %q", where, v)
 		}
 		return nil
-	}
-	isoErr := func(where string) error {
-		return fmt.Errorf("config: %s: isolation: was removed for plugins — every plugin now runs jailed to exactly what it declares (`conductor plugin show <name>` lists it). Delete the isolation: block; to narrow the plugin use network:/allow_env, to run it unconfined as before set trust: full (docs/wiki/Plugins.md \"Upgrading\")", where)
 	}
 	names := make([]string, 0, len(c.ConnectorsMap))
 	for n := range c.ConnectorsMap {
@@ -552,7 +551,6 @@ func (c *Config) checkPluginJail() error {
 	sort.Strings(names)
 	shared := map[string]string{} // group → first instance's trust
 	sharedFrom := map[string]string{}
-	narrowing := map[string]string{} // group → first instance's network:/allow_env
 	for _, name := range names {
 		ref := c.ConnectorsMap[name]
 		u, err := ref.Resolved()
@@ -563,9 +561,9 @@ func (c *Config) checkPluginJail() error {
 		if err := trustOK(where, ref.Trust); err != nil {
 			return err
 		}
-		if ref.Isolation != nil {
-			return isoErr(where)
-		}
+		// An isolation: block, or instances of one process narrowing it
+		// differently, loaded before the jail: they warn
+		// (pluginJailWarnings), never refuse.
 		if ref.Isolate {
 			continue
 		}
@@ -574,14 +572,7 @@ func (c *Config) checkPluginJail() error {
 		if prev, ok := shared[g]; ok && prev != t {
 			return fmt.Errorf("config: connectors: %s and %s share one plugin process but only one sets trust: full — set it on both, or isolate: true one of them", sharedFrom[g], name)
 		}
-		// network: and allow_env narrow the one process instances share, so
-		// they must agree: one instance's narrowing would otherwise narrow
-		// its siblings too, and neither would get what it set.
-		n := "network: " + narrowingKey(ref.Network) + ", allow_env: " + narrowingKey(ref.AllowEnv)
-		if prev, ok := narrowing[g]; ok && prev != n {
-			return fmt.Errorf("config: connectors: %s and %s share one plugin process but narrow it differently (%s vs %s) — set the same network:/allow_env on both, or isolate: true one of them", sharedFrom[g], name, prev, n)
-		}
-		shared[g], sharedFrom[g], narrowing[g] = t, name, n
+		shared[g], sharedFrom[g] = t, name
 	}
 	rnames := make([]string, 0, len(c.Runtimes))
 	for n := range c.Runtimes {
@@ -596,19 +587,6 @@ func (c *Config) checkPluginJail() error {
 		}
 		if err := trustOK("runtimes."+n, rt.Trust); err != nil {
 			return err
-		}
-		if rt.Isolation != nil {
-			return isoErr("runtimes." + n)
-		}
-	}
-	enames := make([]string, 0, len(c.Engines))
-	for n := range c.Engines {
-		enames = append(enames, n)
-	}
-	sort.Strings(enames)
-	for _, n := range enames {
-		if c.Engines[n].Isolation != nil {
-			return isoErr("engines." + n)
 		}
 	}
 	return nil

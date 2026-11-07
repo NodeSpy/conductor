@@ -37,6 +37,7 @@ func (s *InstallState) putPending(p Pending) {
 	if s == nil {
 		return
 	}
+	p.PreJail = p.PreJail || s.preJail(p.Key, p.Source)
 	for i, q := range s.Pending {
 		if q.Key == p.Key && q.Source == p.Source {
 			p.Approved = q.Approved && q.Sha256 == p.Sha256 && q.Resolved == p.Resolved

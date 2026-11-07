@@ -1,0 +1,63 @@
+# Config for the "hosts that cannot jail plugins" e2e (test/e2e/nojail.sh).
+# Shared across every row and both container shapes — only the pre-seeded
+# installed.yaml (entrypoint.sh) changes between runs.
+#
+# gh is the SAME github connector plugin every other e2e daemon uses
+# (connectors.e2e.yaml's `gh:`), but WITHOUT `trust: full`: that field exists
+# elsewhere only to work around the OLD behavior (a root daemon in an
+# unprivileged container got refused outright). The whole point here is to
+# prove the hotfix lets it run pre-jail/unjailed instead, so trust: full would
+# defeat the test. `use: github` (not a local /path) resolves it as an
+# INSTALLED, remote-origin plugin — see entrypoint.sh.
+connectors:
+  gh:
+    use: github
+    # Unreached in this harness: no step calls a verb, and the row's
+    # assertions don't need mock-github on the network (a verb call against a
+    # real mock is a documented bonus for a future row — see README.md).
+    api_base: http://mock-github.invalid:8080
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+    webhook:
+      listen: "0.0.0.0:8787"
+      path: /webhook
+      secret: e2e-webhook-secret
+      verify_signature: true
+    sweep: { enabled: false }
+    me: { logins: [conductor-user] }
+    identity:
+      read_token: app
+      write_token: e2e-user-write-token # literal token; no gh binary in the image
+
+# No controllers/agents in this harness — only the plugin jail/can't-jail
+# behavior is under test, so the agent sandbox is irrelevant here (group Z
+# covers it separately, on a privileged, CAN-jail container).
+sandbox:
+  agents: "off"
+
+# The record step is plumbing, not under test: a local code step's default
+# sandbox is a separate mechanism from the plugin jail (a non-root daemon
+# whose host blocks user namespaces fails it at run time), so it is off here.
+code:
+  isolation_default: none
+
+store:
+  state_file: /home/conductor/data/state.json
+  audit_log: /home/conductor/data/audit.jsonl
+
+# A signed GitHub-shaped webhook (fixtures/new_comment.json, the same fixture
+# group K/V drive) fires gh.new_comment, whose context carries `.comment_body`
+# straight from the payload. The js step is the thing actually under test —
+# an INSTALLED (not local) engine plugin, pre-jail in two rows and fresh in
+# the third — and the final `use: cli` (builtin, never jailed) step writes
+# its output where the harness can read it without needing a sink-catcher.
+triggers:
+  - on: gh.new_comment
+    steps:
+      - id: shape
+        use: js
+        code: "return { greeting: 'NOJAIL-JS ' + ctx.comment_body }"
+      - id: record
+        use: cli
+        command: [sh, -c, 'echo "{{.shape.greeting}}" > /home/conductor/data/nojail-result.txt']

@@ -130,9 +130,6 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 
 func buildCommandIn(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandboxed bool, err error) {
 	argv := append([]string{s.BinPath}, s.Args...)
-	if s.Isolation != nil {
-		return nil, nil, false, fmt.Errorf("plugin %s: isolation: no longer applies to a plugin — it runs jailed to what it declares; remove isolation:, or set trust: full", s.Name)
-	}
 	if s.TrustFull {
 		// The operator opted this plugin out of its jail: it runs as
 		// conductor, with only its environment scrubbed (the variables it
@@ -145,6 +142,12 @@ func buildCommandIn(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sand
 		c.Env = withDeclaredEnv(spawnBaseEnv(), g.Env)
 		return c, func() {}, false, nil
 	}
+	if h, before := runsAsBefore(s); before {
+		return buildAsBefore(s, sd, argv)
+	} else if !h.OK {
+		return nil, nil, false, h.Refusal(s.Name)
+	}
+	// An isolation: block is replaced by the jail (the config warns).
 	c, cleanup, err := buildJailed(s, sd, argv, spawnBaseEnv())
 	if err != nil {
 		return nil, nil, false, err

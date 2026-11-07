@@ -2063,7 +2063,7 @@ group_Z_sandbox() {
   if dc logs "$C" 2>&1 | grep -q 'plugin github: jailed to what it declares: connects to'; then
     ok "Z the github plugin runs jailed to what it declares" Z plugin-jail
   else
-    bad "Z github plugin jailed" Z plugin-jail "$(dc logs "$C" 2>&1 | grep 'plugin github' | head -5)"
+    bad "Z github plugin jailed" Z plugin-jail "$(dc logs "$C" 2>&1 | grep -E 'cannot jail plugins|plugin github' | head -5)"
   fi
 
   # The fixer on each runtime the sandbox covers: a cli worker, opencode's

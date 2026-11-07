@@ -365,6 +365,7 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 		Key: key, Kind: ref.Kind(), Name: ref.Name,
 		Use: ref.Use.String(), Source: ref.Source(),
 		Resolved: tag, Sha256: sha, Path: binPath, ReleaseVerified: verified,
+		PreJail: state.preJail(key, ref.Source()),
 	}
 	if opts.Describe != nil {
 		spec := SpecFromRef(ref, "", rec, true)
@@ -790,7 +791,7 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 			// the schema marker with nothing recorded, so it grants nothing
 			// and is never mistaken for a record to adopt. A failed
 			// describe removes it again (undo below).
-			rec := Installed{Key: key, Kind: ref.Kind(), Name: ref.Name, Use: u.String(), Source: instRef.Source(), Resolved: tag, Sha256: b.sha, Path: b.binPath, ReleaseVerified: b.verified, ManifestSchema: manifestSchema}
+			rec := Installed{Key: key, Kind: ref.Kind(), Name: ref.Name, Use: u.String(), Source: instRef.Source(), Resolved: tag, Sha256: b.sha, Path: b.binPath, ReleaseVerified: b.verified, ManifestSchema: manifestSchema, PreJail: state.preJail(key, instRef.Source())}
 			state.Put(rec)
 			dirty = true
 		}

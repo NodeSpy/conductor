@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-// `network: []` and `allow_env: []` on a connector now grant none, where an
-// older conductor read them as everything the plugin declares: the config
-// loads, with a warning naming each one. Unset, or a list with entries,
-// warns nothing.
+// `network: []` on a connector narrows nothing, as before the plugin jail:
+// the config loads, with a warning naming it. `allow_env: []` passes none,
+// as it always did, and warns nothing; nor does unset, or a list with
+// entries.
 func TestEmptyNarrowingWarnsAtLoad(t *testing.T) {
 	path := baseConfigWithReview(t, "")
 	b, _ := os.ReadFile(path)
@@ -22,7 +22,10 @@ func TestEmptyNarrowingWarnsAtLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := strings.Join(cfg.RemovedFieldWarnings(), "\n")
-	for _, want := range []string{"connectors.gh.network: [] grants no network at all", "connectors.gh.allow_env: [] passes no variables at all", "remove the key"} {
+	if strings.Contains(w, "allow_env") {
+		t.Errorf("allow_env: [] warned: %s", w)
+	}
+	for _, want := range []string{"connectors.gh.network: [] does not narrow the plugin", "as before the plugin jail", "remove the key"} {
 		if !strings.Contains(w, want) {
 			t.Errorf("warnings lack %q:\n%s", want, w)
 		}

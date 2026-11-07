@@ -37,8 +37,8 @@ type ConnectorRef struct {
 	// Network is this instance's DECLARED EGRESS — the "host:port" targets it
 	// is allowed to reach. It is the visible half of the permission manifest:
 	// what the operator accepts when they add the connector. It may not exceed
-	// the implementation's own declared egress. For a plugin, unset grants
-	// every destination it declares and `network: []` none.
+	// the implementation's own declared egress. Unset (or `network: []`,
+	// as before the plugin jail) grants every destination it declares.
 	Network []string `yaml:"network,omitempty"`
 	Enabled *bool    `yaml:"enabled,omitempty"`
 	// Options are the connector's default verb options; each `uses:` call's
@@ -95,6 +95,9 @@ type ConnectorRef struct {
 	// — it exists only so validateConnectors can emit a migration-specific error
 	// instead of the silent "missing use:" a dropped field would produce.
 	legacyType string
+	// emptyNetwork: the entry says `network: []`. Before the plugin jail an
+	// empty list narrowed nothing, and it still does (emptyNarrowingWarnings).
+	emptyNetwork bool
 }
 
 // UnmarshalYAML captures the header fields and retains the raw node.
@@ -122,6 +125,9 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 	r.AllowEnv = h.AllowEnv
 	r.Isolate = h.Isolate
 	r.Trust = h.Trust
+	if h.Network != nil && len(h.Network) == 0 {
+		r.Network, r.emptyNetwork = nil, true
+	}
 	return nil
 }
 
