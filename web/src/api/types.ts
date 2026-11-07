@@ -593,12 +593,14 @@ export interface SystemResponse {
    */
   settings_used_by?: { [key: string]: string[]};
   /**
-   * EnvVars are the env: maps under runtimes.*.env and hosts.*.env — names
-   * and where each lives only; a literal value is never read or sent, only
-   * whether it looks like a value (Literal) or is itself a reference
-   * (env:/${…}/{{ vault … }}, shown verbatim in Ref since a reference names
-   * where a value lives, not the value). Read-only here: editing these is a
-   * config-editor feature (design gap, docs/design/dashboard.md).
+   * EnvVars are the env: maps under hosts.*.env (the one place config
+   * declares named, scoped env vars outside a step — a runtimes: entry has
+   * no env: field) — names and where each lives only; a literal value is
+   * never read or sent, only whether it looks like a value (Literal) or is
+   * itself a reference (env:/${…}/{{ vault … }}, shown verbatim in Ref since
+   * a reference names where a value lives, not the value). Read-only here:
+   * editing these is a config-editor feature (design gap, docs/design/
+   * dashboard.md).
    */
   env_vars?: EnvVarInfo[];
   safety: SafetyInfo;
@@ -621,6 +623,21 @@ export interface SafetyInfo {
   egress: string[]; // named egress hosts (empty = default-deny)
   dashboard_listen: string[];
   warnings: string[]; // posture notes (e.g. "agents run unsandboxed")
+  /**
+   * Outside lists what the sandbox doesn't cover: steps and runtimes that
+   * opted out with `trust: full` or `isolation: {mode: none}` — the same
+   * set `conductor validate` names (internal/flow.IsolationWarnings'
+   * codeIsolationOptOutWarnings), reshaped as rows instead of sentences.
+   */
+  outside?: OutsideSandboxItem[];
+}
+/**
+ * OutsideSandboxItem is one step or runtime that runs unconfined.
+ */
+export interface OutsideSandboxItem {
+  what: string; // e.g. "trigger deploy, step 1"
+  why: string; // e.g. "It runs as you, with your files and your network."
+  who: string; // where it's set, e.g. "your config"
 }
 /**
  * UpdateInfo is the System → Updates tab.

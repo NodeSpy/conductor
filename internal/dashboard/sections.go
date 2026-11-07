@@ -6,7 +6,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dashboard/api"
+	"github.com/NodeSpy/conductor/internal/dashboard/auth"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
@@ -274,6 +276,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 			safety.Warnings = append(safety.Warnings, "the dashboard is reachable over the tailnet (dashboard.listen: tailscale)")
 		}
 	}
+	safety.Outside = outsideSandboxItems(s.deps.Cfg)
 	resp.Safety = safety
 
 	// Update block.
@@ -286,6 +289,101 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleSetPaused is System → Safety's "Pause all automation" / "Resume
+// automation" — an emergency stop, not a config widening: the prototype asks
+// for a plain confirmation, never a passkey (CONFORMANCE: turning the sandbox
+// off asks for a passkey because it loosens safety; pausing only narrows what
+// runs, same as it already does for the CLI's `conductor pause`/`resume` and
+// the conductor.pause/resume verbs — deps.SetPaused is literally that same
+// function). A session is required once sign-in is enforced, so the action is
+// attributed; an open dashboard (no operators, e.g. every e2e fixture) may
+// call it directly, matching config apply's own gating.
+func (s *Server) handleSetPaused(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SetPaused == nil {
+		writeError(w, http.StatusNotFound, "no_pause", "this daemon has no pause control wired", "")
+		return
+	}
+	var req struct {
+		Paused bool `json:"paused"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	who := "an open dashboard"
+	if s.authEnforced() {
+		sess, ok := auth.SessionFrom(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "sign in to continue", "")
+			return
+		}
+		who = sess.Operator
+	}
+	if err := s.deps.SetPaused(req.Paused); err != nil {
+		writeError(w, http.StatusBadRequest, "pause_failed", err.Error(), "")
+		return
+	}
+	event := "dashboard.resume"
+	if req.Paused {
+		event = "dashboard.pause"
+	}
+	s.audit(r, event, "", "operator", who)
+	writeJSON(w, http.StatusOK, map[string]any{"paused": req.Paused})
+}
+
+// outsideSandboxItems lists every step and runtime that opted OUT of the
+// confined-by-default posture — `trust: full` or `isolation: {mode: none}` —
+// the same set `conductor validate` warns about (codeIsolationOptOutWarnings,
+// internal/flow/isolationwarn.go), reshaped into what/why/who rows for the
+// Safety screen's "Running outside the sandbox" card instead of one long
+// sentence. Quiet when the whole default is off (code.isolation_default:
+// none): every step runs bare by that global choice, and naming each one
+// would be noise, not signal — mirrors the validate-time behavior exactly.
+func outsideSandboxItems(cfg *config.Config) []api.OutsideSandboxItem {
+	if cfg == nil || !cfg.CodeIsolationDefaultOn() {
+		return nil
+	}
+	var out []api.OutsideSandboxItem
+	cfg.WalkSteps(func(scope config.IdentityScope, slot int, st *config.Step) {
+		if _, class := st.StepEngine(); class != config.EngineCLI && class != config.EngineHost {
+			return
+		}
+		if st.Host != "" || st.SSH != nil {
+			return
+		}
+		where := config.StepLabel(scope, slot, *st)
+		switch {
+		case st.Trust == "full":
+			out = append(out, api.OutsideSandboxItem{
+				What: where,
+				Why:  "trust: full opts it out of the sandbox. It runs unconfined, with this daemon's view of the machine.",
+				Who:  "your config",
+			})
+		case st.Isolation.OptsOut():
+			out = append(out, api.OutsideSandboxItem{
+				What: where,
+				Why:  "isolation: { mode: none } opts it out of the sandbox. It runs unconfined, with this daemon's view of the machine.",
+				Who:  "your config",
+			})
+		}
+	})
+	names := make([]string, 0, len(cfg.Runtimes))
+	for n := range cfg.Runtimes {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		rt := cfg.Runtimes[n]
+		if strings.EqualFold(strings.TrimSpace(rt.Trust), "full") {
+			out = append(out, api.OutsideSandboxItem{
+				What: "the runtime " + n,
+				Why:  "trust: full opts it out of its jail. Every agent it starts runs as you.",
+				Who:  "your config",
+			})
+		}
+	}
+	return out
 }
 
 // envVars collects hosts.*.env — the one place config declares named,

@@ -1689,3 +1689,12 @@ func StateDir() string {
 	}
 	return filepath.Join(h, ".local/state/conductor")
 }
+
+// PausePath is the pause control file beside the state file: its presence
+// means dispatch is paused. Shared by the CLI (`conductor pause`/`resume`),
+// the conductor.pause/resume verbs, the engine's own isPaused check, and the
+// dashboard's System -> Safety "Pause all automation" action, so all four
+// agree on the same file.
+func (c *Config) PausePath() string {
+	return filepath.Join(filepath.Dir(c.Store.StateFile), "paused")
+}

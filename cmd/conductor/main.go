@@ -1146,6 +1146,7 @@ func cmdRun(args []string) error {
 			Version:   version,
 			ConfigSHA: configSHA(cfgFile),
 			Paused:    func() bool { _, err := os.Stat(pausePath(cfg)); return err == nil },
+			SetPaused: func(pause bool) error { return setPaused(cfg, pause) },
 			Log:       logf,
 			// Config-edit pipeline (design §5.3): the dashboard edits the live
 			// config file, validates each candidate on a copy through the

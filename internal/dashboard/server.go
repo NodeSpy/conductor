@@ -42,6 +42,12 @@ type Deps struct {
 	Version   string
 	ConfigSHA string
 	Paused    func() bool // reports whether dispatch is paused (the pause control file)
+	// SetPaused creates or removes the pause control file (cmd/conductor's
+	// setPaused, shared with the CLI `conductor pause`/`resume` and the
+	// conductor.pause/resume verbs) — the System → Safety "Pause all
+	// automation" / "Resume automation" action. Nil on a daemon that hasn't
+	// wired it (reports the action as unavailable, never silently no-ops).
+	SetPaused func(pause bool) error
 	Log       func(string, ...any)
 
 	// Config-edit pipeline (design §5.3). ConfigPath is the live config file;
@@ -196,6 +202,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
 	s.mux.HandleFunc("GET /api/v1/connections", s.handleConnections)
 	s.mux.HandleFunc("GET /api/v1/system", s.handleSystem)
+	s.mux.HandleFunc("POST /api/v1/system/pause", s.handleSetPaused)
 	s.mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
 
 	// The bots' operator API (design §4.4): teams, conversations (chat), tickets,

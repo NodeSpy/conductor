@@ -146,6 +146,7 @@ export const api = {
   plugins: () => getJSON<PluginsResponse>('/api/v1/plugins'),
   connections: () => getJSON<ConnectionsResponse>('/api/v1/connections'),
   system: () => getJSON<SystemResponse>('/api/v1/system'),
+  setPaused: (paused: boolean) => sendJSON<{ paused: boolean }>('POST', '/api/v1/system/pause', { paused }),
   audit: () => getJSON<AuditResponse>('/api/v1/audit'),
 }
 

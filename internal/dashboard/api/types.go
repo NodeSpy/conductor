@@ -551,6 +551,18 @@ type SafetyInfo struct {
 	Egress          []string `json:"egress"`         // named egress hosts (empty = default-deny)
 	DashboardListen []string `json:"dashboard_listen"`
 	Warnings        []string `json:"warnings"` // posture notes (e.g. "agents run unsandboxed")
+	// Outside lists what the sandbox doesn't cover: steps and runtimes that
+	// opted out with `trust: full` or `isolation: {mode: none}` — the same
+	// set `conductor validate` names (internal/flow.IsolationWarnings'
+	// codeIsolationOptOutWarnings), reshaped as rows instead of sentences.
+	Outside []OutsideSandboxItem `json:"outside,omitempty"`
+}
+
+// OutsideSandboxItem is one step or runtime that runs unconfined.
+type OutsideSandboxItem struct {
+	What string `json:"what"` // e.g. "trigger deploy, step 1"
+	Why  string `json:"why"`  // e.g. "It runs as you, with your files and your network."
+	Who  string `json:"who"`  // where it's set, e.g. "your config"
 }
 
 // UpdateInfo is the System → Updates tab.

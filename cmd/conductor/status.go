@@ -74,7 +74,7 @@ func cmdStatus(args []string) error {
 // pausePath is the runtime-pause control file (a sibling of the state file). Its
 // presence makes the running daemon skip all dispatch until removed.
 func pausePath(cfg *config.Config) string {
-	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "paused")
+	return cfg.PausePath()
 }
 
 // cmdPause creates (pause) or removes (resume) the pause control file. The running
