@@ -7,21 +7,32 @@ import { useEffect, useState } from 'preact/hooks'
 import { api } from '../api/client'
 import type { PluginsResponse, ConnectionsResponse } from '../api/types'
 import { humanError } from '../api/errors'
+import { ReviewPanel } from '../components/ReviewPanel'
+import { busy, cfgError, loadConfig, stage, staged } from '../configStore'
 
 export function Connections(): JSX.Element {
   const [plugins, setPlugins] = useState<PluginsResponse | null>(null)
   const [conns, setConns] = useState<ConnectionsResponse | null>(null)
   const [err, setErr] = useState('')
+  const [addHost, setAddHost] = useState(false)
   useEffect(() => {
     api.plugins().then(setPlugins).catch((e) => setErr(humanError(e)))
     api.connections().then(setConns).catch((e) => setErr(humanError(e)))
+    void loadConfig()
   }, [])
 
   const pending = err ? 'Nothing to show until conductor answers.' : 'Loading…'
   return (
     <div class="col">
       <h1 class="screen-title serif">Plugins & Connections</h1>
-      <p class="muted">Plugins come from the <span class="mono">use:</span> references on connectors and runtimes. The version policy is per plugin: pinned to a version, or floating.</p>
+      <p class="muted">
+        What conductor is wired to. <b>Connectors</b> are how it hears from your services (a code host, a chat, a schedule),{' '}
+        <b>runtimes</b> are where agents do their work, and <b>hosts</b> are other machines it can run things on. Each one is
+        powered by a <b>plugin</b>, listed first with the version it is held to.
+      </p>
+      <p class="muted small">In the config file, each connector and runtime names its plugin with <span class="mono">use:</span>.</p>
+
+      <ReviewPanel stagedCount={staged.value.length} />
       {err ? <div class="banner err" role="alert">Couldn't load plugins and connections: {err}</div> : null}
 
       <section class="panel" aria-label="Plugins">
@@ -58,7 +69,15 @@ export function Connections(): JSX.Element {
       </section>
 
       <section class="panel" aria-label="Hosts">
-        <div class="panel-head"><span class="panel-title">Hosts</span></div>
+        <div class="panel-head">
+          <span class="panel-title">Hosts</span>
+          {conns && !addHost ? (
+            <div class="row-actions">
+              <button class="btn primary sm" type="button" data-testid="add-host" onClick={() => setAddHost(true)}>Add a host</button>
+            </div>
+          ) : null}
+        </div>
+        {addHost ? <AddHost onDone={() => setAddHost(false)} /> : null}
         {conns?.hosts?.length ? (
           <table class="tbl">
             <thead><tr><th>Name</th><th>Host</th><th>User</th></tr></thead>
@@ -69,9 +88,54 @@ export function Connections(): JSX.Element {
             </tbody>
           </table>
         ) : (
-          <p class="muted">{conns ? 'No hosts yet. A host is another machine conductor reaches over SSH; add one under hosts: when a workflow needs it.' : pending}</p>
+          <p class="muted">{conns ? 'No hosts yet. A host is another machine conductor can run steps on, over SSH with your usual keys. Add one when a workflow needs to work somewhere else.' : pending}</p>
         )}
       </section>
+    </div>
+  )
+}
+
+// AddHost stages a new hosts: entry (its address, and the user to sign in as);
+// it lands through the same review and apply as every other edit.
+function AddHost({ onDone }: { onDone: () => void }): JSX.Element {
+  const [name, setName] = useState('')
+  const [addr, setAddr] = useState('')
+  const [user, setUser] = useState('')
+  const [msg, setMsg] = useState('')
+  const id = name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-')
+  async function add() {
+    if (!id || !addr.trim()) {
+      setMsg('give the host a name and an address')
+      return
+    }
+    await stage(['hosts', id, 'host'], addr.trim(), `add host ${id}`)
+    if (!cfgError.value && user.trim()) await stage(['hosts', id, 'user'], user.trim(), `${id}: user`)
+    if (cfgError.value) {
+      setMsg(cfgError.value)
+      return
+    }
+    onDone()
+  }
+  return (
+    <div class="add-host" data-testid="add-host-form">
+      <label class="form-field">
+        <span>Name</span>
+        <input class="field" value={name} placeholder="build-box" onInput={(e) => setName((e.target as HTMLInputElement).value)} />
+      </label>
+      <label class="form-field">
+        <span>Address</span>
+        <input class="field" value={addr} placeholder="build01.example.com" onInput={(e) => setAddr((e.target as HTMLInputElement).value)} />
+      </label>
+      <label class="form-field">
+        <span>Sign in as (optional)</span>
+        <input class="field" value={user} placeholder="your usual SSH user" onInput={(e) => setUser((e.target as HTMLInputElement).value)} />
+      </label>
+      {msg ? <div class="banner err" role="alert">{msg}</div> : null}
+      <p class="muted small">conductor connects with this machine's SSH keys and known hosts. The new host is reviewed and applied above.</p>
+      <div class="row-actions">
+        <button class="btn" type="button" onClick={onDone}>Cancel</button>
+        <button class="btn primary" type="button" data-testid="stage-host" disabled={busy.value} onClick={() => void add()}>Add host</button>
+      </div>
     </div>
   )
 }

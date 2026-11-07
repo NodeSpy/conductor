@@ -29,7 +29,8 @@ export function Packs(): JSX.Element {
           <ReviewPanel stagedCount={staged.value.length} />
           <EmptyState testid="packs-empty" art={<BoxGlyph />} title="No packs installed">
             <p>A pack is a ready-made set of workflows (reviewing pull requests, fixing CI) that you connect to your own accounts and secrets.</p>
-            <p>Find one with <code>conductor pack search</code>, then add it with <code>conductor pack add &lt;source&gt;</code>. It shows up here to hold or remove.</p>
+            <p>Packs are added on the conductor machine, not from the dashboard: adding one fetches it and asks you to review what it can do. Find one with <code>conductor pack search</code>, then add it with <code>conductor pack add &lt;source&gt;</code>.</p>
+            <p>Once it's installed it shows up here, where you can hold it at its version or remove it.</p>
           </EmptyState>
         </>
       ) : (

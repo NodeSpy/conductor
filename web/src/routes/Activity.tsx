@@ -10,7 +10,7 @@ import type { RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
 import { FilterBar, type Option } from '../components/FilterBar'
 import { emptyFilter, matchRun, rangeMinutes, hasAnyFilter, type FilterState } from '../lib/filter'
-import { humanDuration, ago } from '../lib/format'
+import { humanDuration, ago, plural } from '../lib/format'
 import { go } from '../router'
 
 const PAGE = 20
@@ -192,9 +192,9 @@ function Strip({ runs: rs, since }: { runs: RunSummary[]; since: string }): JSX.
     <section class="panel strip" aria-label="Runs per period">
       <div class="panel-head">
         <span class="panel-title serif">Runs per {unit}</span>
-        <span class="panel-sub">{rs.length} runs</span>
+        <span class="panel-sub">{plural(rs.length, 'run')}</span>
       </div>
-      <div class="chart interactive" role="img" aria-label={`${rs.length} runs; ${fails.length} failed`}>
+      <div class="chart interactive" role="img" aria-label={`${plural(rs.length, 'run')}; ${fails.length} failed`}>
         {buckets.map((b, i) => {
           const h = (x: number) => `${(x / max) * 100}%`
           return (

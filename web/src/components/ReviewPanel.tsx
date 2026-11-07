@@ -17,9 +17,26 @@ export function ReviewPanel({ stagedCount }: { stagedCount: number }): JSX.Eleme
     return (
       <section class="panel" aria-label="Applied">
         <div class="banner ok" role="status">
-          Applied (config {applied.sha}). The daemon is reloading its config.
-          {applied.backup_id ? <span class="mono"> Backup {applied.backup_id} saved — restore it from History.</span> : null}
-          {applied.reload_error ? <span> (reload signal failed: {applied.reload_error})</span> : null}
+          <p class="applied-head">
+            Applied. conductor is reloading with your change; it takes a few seconds.
+            {applied.backup_id ? ' The config it replaced was backed up first.' : ''}
+          </p>
+          {applied.reload_error ? (
+            <p class="applied-warn">It couldn't be told to reload ({applied.reload_error}), so the change takes effect when conductor next restarts.</p>
+          ) : null}
+          <details class="applied-details">
+            <summary>Details</summary>
+            <dl>
+              <dt>New config</dt>
+              <dd class="mono">{applied.sha}</dd>
+              {applied.backup_id ? (
+                <>
+                  <dt>Backup</dt>
+                  <dd class="mono">{applied.backup_id}</dd>
+                </>
+              ) : null}
+            </dl>
+          </details>
         </div>
       </section>
     )

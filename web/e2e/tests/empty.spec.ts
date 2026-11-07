@@ -114,6 +114,23 @@ test('the Bots welcome on a box with no agent runtime says what comes first', as
   }
 })
 
+// The empty Hosts card has a way to add one: it stages through the review.
+test('a host can be added from the Hosts card', async ({ page }) => {
+  await page.goto(`${rt.baseURL}/#/connections`)
+  await page.getByTestId('add-host').click()
+  const form = page.getByTestId('add-host-form')
+  await form.getByRole('textbox', { name: 'Name' }).fill('build-box')
+  await form.getByRole('textbox', { name: 'Address' }).fill('build01.example.com')
+  await shot(page, 'connections-add-host')
+  await form.getByTestId('stage-host').click()
+  await expect(form).toBeHidden()
+  await page.getByRole('button', { name: 'Review changes' }).click()
+  await expect(page.locator('.effects')).toContainText('hosts.build-box')
+  await noErrors(page)
+  // Leave the fresh box as it was for the screens that follow.
+  await page.request.post(`${rt.baseURL}/api/v1/config/clear`, { data: {} })
+})
+
 test('the bot API answers JSON with nothing configured', async ({ request }) => {
   for (const [p, key] of [
     ['/api/v1/bots', 'bots'],
@@ -155,12 +172,15 @@ test('create the first bot from the welcome', async ({ page }) => {
     await sheet.getByTestId('create-bot').click()
     await expect(sheet).toBeHidden()
 
-    await expect(page.getByTestId('bots-staged')).toBeVisible()
+    // The staged card's own primary button is the next step: review, then apply.
+    const card = page.getByTestId('bots-staged')
+    await expect(card).toBeVisible()
     await noErrors(page)
     await shot(page, 'bots-staged')
-    await page.getByRole('button', { name: 'Review changes' }).click()
-    await page.getByRole('button', { name: 'Apply…' }).click()
-    await page.getByRole('button', { name: 'Confirm apply' }).click()
+    await card.getByTestId('bots-review').click()
+    await expect(page.locator('.effects')).toContainText('bots.scout')
+    await shot(page, 'bots-staged-reviewed')
+    await card.getByTestId('bots-apply').click()
 
     // The daemon reloads; the roster then shows the new bot, in practice mode.
     const row = page.locator('li.bot-row[data-bot="scout"]')
@@ -169,6 +189,12 @@ test('create the first bot from the welcome', async ({ page }) => {
     await expect(row).toContainText('practice mode')
     await expect(page.getByTestId('bots-empty')).toHaveCount(0)
     await expect(page.getByTestId('new-bot')).toBeVisible()
+    await expect(page.locator('h1 .count')).toHaveText('1 bot')
+    // The success note is plain words; the config and backup ids wait in Details.
+    const head = page.locator('.banner.ok .applied-head')
+    await expect(head).toContainText('Applied')
+    await expect(head).not.toContainText(/[0-9a-f]{12}|\d{8}T/)
+    await expect(page.locator('.banner.ok details')).not.toHaveAttribute('open', '')
     // The live stream drops while the daemon reloads, then comes back.
     await expect(page.locator('[data-conn]').first()).toHaveAttribute('data-conn', 'live', { timeout: 30_000 })
     await noErrors(page)

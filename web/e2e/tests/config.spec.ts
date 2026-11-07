@@ -67,6 +67,11 @@ test('edit a setting → review the diff → apply → confirm', async ({ page, 
 })
 
 test('a staged map shows its value, not [object Object]', async ({ page }) => {
+  // The test before applied a change, which restarts the daemon: wait until
+  // it answers again.
+  await expect
+    .poll(async () => (await page.request.get(`${rt.baseURL}/api/v1/status`).catch(() => null))?.status() ?? 0, { timeout: 30_000 })
+    .toBe(200)
   await page.goto(`${rt.baseURL}/#/config`)
   await expect(page.locator('input[data-path="settings.greeting"]')).toBeVisible()
   // A whole section staged at once (as the Packs and System screens can).

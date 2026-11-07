@@ -79,12 +79,13 @@ export function Logins(): JSX.Element {
       </section>
 
       <section class="panel">
-        <div class="panel-head">
-          <span class="panel-title">Saved sessions</span>
-          <span class="muted small">signed in yourself · state, not config</span>
-        </div>
+        <span class="panel-title">Saved sessions</span>
+        <p class="muted small">Sites you signed in to yourself, so a bot can carry on as you without knowing your password.</p>
         {sessions.length === 0 ? (
-          <p class="muted">No saved sessions.</p>
+          <p class="muted">
+            None yet. To add one, run <span class="mono wrap-any">conductor browser credential add NAME --session --site SITE --bind WHO</span> on
+            the conductor machine, then <span class="mono wrap-any">conductor browser seed</span> to sign in once yourself.
+          </p>
         ) : (
           <ul class="dl-list">
             {sessions.map((l) => (

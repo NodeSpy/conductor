@@ -11,9 +11,10 @@ import { humanError } from '../api/errors'
 import { Avatar, AvatarPreview } from '../components/Avatar'
 import { EmptyState } from '../components/EmptyState'
 import { ReviewPanel } from '../components/ReviewPanel'
-import { applyResult, loadConfig, staged } from '../configStore'
+import { apply, applyResult, busy, doReview, loadConfig, review, staged } from '../configStore'
 import { api } from '../api/client'
 import { NewBotSheet } from './NewBotSheet'
+import { plural } from '../lib/format'
 
 export function Bots(): JSX.Element {
   const [bots, setBots] = useState<BotSummary[] | null>(null)
@@ -128,8 +129,21 @@ export function Bots(): JSX.Element {
           </>
         ) : pendingBots ? (
           <>
-            <EmptyState testid="bots-staged" title="Your first bot is ready to apply">
-              <p>Review the change below, then apply it. conductor reloads its config and your bot starts in practice mode.</p>
+            {/* The next step is this card's one button: review, then apply. */}
+            <EmptyState
+              testid="bots-staged"
+              title="Your first bot is ready to apply"
+              action={
+                review.value?.token
+                  ? { label: 'Apply and start your bot', onClick: () => void apply(), testid: 'bots-apply', disabled: busy.value }
+                  : { label: 'Review and apply', onClick: () => void doReview(), testid: 'bots-review', disabled: busy.value }
+              }
+            >
+              {review.value?.token ? (
+                <p>What changes is listed below. Apply it and conductor reloads with your new bot, in practice mode.</p>
+              ) : (
+                <p>Check what changes, then apply it. conductor reloads its config and your bot starts in practice mode.</p>
+              )}
             </EmptyState>
             <ReviewPanel stagedCount={staged.value.length} />
           </>
@@ -167,7 +181,7 @@ export function Bots(): JSX.Element {
     <div class="col bots-screen">
       <div class="screen-head">
         <h1 class="screen-title serif">
-          Bots <span class="count">{all.length} bots · {teams.length} teams · {soloCount} solo</span>
+          Bots <span class="count">{rosterCount(all.length, teams.length, soloCount)}</span>
         </h1>
         <div class="row-actions">
           {editable ? <button class="btn primary" type="button" data-testid="new-bot" onClick={() => setNewOpen(true)}>New bot</button> : null}
@@ -222,6 +236,14 @@ export function Bots(): JSX.Element {
   )
 }
 
+// rosterCount is the header's count: teams and solo bots only once there are
+// teams (without any, every bot is solo).
+function rosterCount(bots: number, teams: number, solo: number): string {
+  const parts = [plural(bots, 'bot')]
+  if (teams) parts.push(plural(teams, 'team'), `${solo} solo`)
+  return parts.join(' · ')
+}
+
 // WelcomeFaces is three sample faces from the identity picker: what a bot
 // looks like here, before there is one.
 function WelcomeFaces(): JSX.Element {
@@ -248,7 +270,7 @@ function TeamSection({ t, bots }: { t: TeamSummary; bots: BotSummary[] }): JSX.E
         <div class="team-head-main">
           <h2 class="team-name">
             <a href={`#/teams/${t.team}`}>{displayName(t.identity, t.team)}</a>
-            <span class="count">{t.bots?.length || 0} bot{(t.bots?.length || 0) === 1 ? '' : 's'}</span>
+            <span class="count">{plural(t.bots?.length || 0, 'bot')}</span>
           </h2>
           <p class="team-rules muted">{t.description ? t.description + ' — ' : ''}{rules.join(' · ')}</p>
         </div>

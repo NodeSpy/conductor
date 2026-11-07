@@ -102,6 +102,56 @@
   font-size: var(--type-caption-size);
   color: var(--color-text-secondary);
 }
+/* Config: a plain label, its dotted key quieter on the line below */
+.cfg-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cfg-name {
+  font-size: var(--type-label-size);
+  color: var(--color-text-primary);
+}
+.field-path {
+  display: block;
+  font-size: var(--type-code-s-size);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+.cfg-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+.cfg-head-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--type-code-s-size);
+  color: var(--color-text-tertiary);
+}
+.cfg-head-sub .tag {
+  white-space: nowrap;
+}
+/* a long value spans the row and wraps, so all of it can be read */
+.field.wide {
+  grid-column: 1 / -1;
+}
+.field-long {
+  field-sizing: content;
+  resize: none;
+  overflow: hidden;
+  min-height: 2.2em;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-family: var(--font-family-mono);
+}
+.wrap-any {
+  overflow-wrap: anywhere;
+}
 .field-input {
   padding: 6px var(--space-2);
   border-radius: var(--radius-control);
@@ -118,6 +168,7 @@
   width: 18px;
   height: 18px;
   align-self: start;
+  accent-color: var(--color-accent-default);
 }
 .field-ro {
   color: var(--color-text-tertiary);
@@ -420,4 +471,17 @@
   .empty-actions .btn.primary {
     align-self: stretch;
   }
+}
+
+/* the Hosts card's add form */
+.add-host {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+}
+.add-host .banner,
+.add-host p,
+.add-host .row-actions {
+  grid-column: 1 / -1;
 }

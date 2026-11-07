@@ -10,7 +10,7 @@ import { PurchaseRow } from './Purchase'
 import type { RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
 import { EmptyState } from '../components/EmptyState'
-import { humanDuration, ago, uptime } from '../lib/format'
+import { humanDuration, ago, uptime, plural } from '../lib/format'
 
 const HOUR = 3_600_000
 
@@ -240,9 +240,9 @@ function Last12({ runs: rs }: { runs: RunSummary[] }): JSX.Element {
     <section class="panel" aria-label="Last 12 hours">
       <div class="panel-head">
         <h2 class="panel-title serif">Last 12 hours</h2>
-        <span class="panel-sub">{total} runs</span>
+        <span class="panel-sub">{plural(total, 'run')}</span>
       </div>
-      <div class="chart" role="img" aria-label={`${total} runs over the last 12 hours`}>
+      <div class="chart" role="img" aria-label={`${plural(total, 'run')} over the last 12 hours`}>
         {buckets.map((b) => {
           const h = (n: number) => `${(n / max) * 100}%`
           return (
@@ -285,7 +285,7 @@ function Activity({
   finished: RunSummary[]
 }): JSX.Element {
   const [shown, setShown] = useState(20)
-  const sentence = `Last 12 hours: ${needs.length + running.length + finished.length} runs. ${needs.length} need attention, ${running.length} running, ${finished.length} finished.`
+  const sentence = `Last 12 hours: ${plural(needs.length + running.length + finished.length, 'run')}. ${needs.length} need${needs.length === 1 ? 's' : ''} attention, ${running.length} running, ${finished.length} finished.`
   return (
     <section class="panel" aria-label="Activity">
       <div class="panel-head">

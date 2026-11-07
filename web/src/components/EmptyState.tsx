@@ -9,6 +9,7 @@ export interface EmptyAction {
   href?: string
   onClick?: () => void
   testid?: string
+  disabled?: boolean
 }
 
 export function EmptyState({
@@ -48,6 +49,6 @@ function ActionButton({ a, primary, hero }: { a: EmptyAction; primary?: boolean;
   return a.href ? (
     <a class={cls} href={a.href} data-testid={a.testid}>{a.label}</a>
   ) : (
-    <button class={cls} type="button" data-testid={a.testid} onClick={a.onClick}>{a.label}</button>
+    <button class={cls} type="button" data-testid={a.testid} disabled={a.disabled} onClick={a.onClick}>{a.label}</button>
   )
 }
