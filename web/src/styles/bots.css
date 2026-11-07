@@ -71,18 +71,9 @@
   border: 1px solid var(--color-border-subtle);
 }
 .chip.tiny { font-size: 0.65rem; padding: 1px 6px; }
-.chip.toggle { cursor: pointer; }
-.chip.toggle.on { background: var(--color-accent-default); color: #fff; border-color: transparent; }
-.chip.token { background: var(--palette-violet-200, #dbd5ff); color: var(--palette-violet-900, #2a1f52); }
-.tag.tier-reversible, .tag.tier-observe { background: var(--palette-teal-200, #b3e7df); }
-.tag.tier-propose, .tag.tier-act { background: var(--palette-sand-200, #ece5d8); }
-.tag.tier-commit_money, .tag.tier-never { background: var(--palette-ember-200, #f3d3c4); }
-.tag.pri-urgent { background: var(--palette-ember-600, #c0603a); color: #fff; }
-.tag.pri-high { background: var(--palette-ember-200, #f3d3c4); }
 
-/* --- tabs (Tickets' own detail head; Bots' and Teams' use .dl-bothead) --- */
-.ticket-detail-head { display: flex; align-items: flex-start; gap: var(--space-3); }
-.ticket-detail-head-main { flex: 1; min-width: 0; }
+/* Tickets' own detail head is gone: its page now uses the ported daylight.css
+   case-head classes (.case-head, .tk-head, .tk-ht) — see TicketDetail.tsx. */
 
 /* --- identity picker --- */
 .identity-picker { display: flex; flex-direction: column; gap: var(--space-3); max-width: 34rem; }
@@ -114,87 +105,20 @@
 .seg-control .seg { padding: 4px 12px; background: none; border: none; cursor: pointer; font-size: 0.85rem; color: var(--color-text-secondary); }
 .seg-control .seg.on { background: var(--color-text-primary); color: var(--color-bg-canvas); }
 
-/* --- chat --- */
-.chat-screen { height: calc(100vh - 6rem); }
-.chat-layout { display: grid; grid-template-columns: 20rem 1fr; gap: var(--space-4); height: 100%; min-height: 0; }
-.conv-list { border-right: 1px solid var(--color-border-subtle); overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.conv-search { padding: var(--space-2); position: sticky; top: 0; background: var(--color-bg-canvas); }
-.conv-group-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-secondary); padding: var(--space-2); }
-.conv-item { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2); border: none; background: none; cursor: pointer; text-align: left; border-radius: var(--radius-md); width: 100%; }
-.conv-item:hover { background: var(--color-bg-raised); }
-.conv-item.on { background: var(--color-bg-raised); }
-.conv-item-main { min-width: 0; flex: 1; }
-.conv-item-top { display: flex; align-items: center; gap: var(--space-2); }
-.conv-item-name { font-weight: 600; font-size: 0.9rem; }
-.conv-item-last { font-size: 0.78rem; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.unread { background: var(--color-accent-default); color: #fff; font-size: 0.7rem; border-radius: var(--radius-pill); padding: 0 6px; min-width: 18px; text-align: center; }
-.conv-main { display: flex; flex-direction: column; min-height: 0; }
-.conv-header { display: flex; align-items: center; gap: var(--space-3); padding-bottom: var(--space-3); border-bottom: 1px solid var(--color-border-subtle); }
-.conv-header-main { flex: 1; }
-.conv-title { margin: 0; font-size: 1.05rem; }
-.conv-empty { display: flex; align-items: center; justify-content: center; height: 100%; }
+/* Chat (the list, a conversation and its composer) is gone: it now uses the
+   prototype's own ported classes (.cv-app, .cv-list, .cv-main, .cv-th, .cm-*)
+   from screens.css — see Chat.tsx and ChatThread.tsx. */
 
-.chat-thread { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.chat-scroll { flex: 1; overflow-y: auto; padding: var(--space-3) 0; display: flex; flex-direction: column; gap: var(--space-3); }
-.chat-empty { text-align: center; margin: auto; }
-.chat-msg { display: flex; gap: var(--space-2); align-items: flex-start; }
-.chat-msg.mine { flex-direction: row-reverse; }
-.chat-bubble { max-width: 70%; background: var(--color-bg-raised); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); }
-.chat-msg.theirs .chat-bubble { border-left: 3px solid var(--bot-rule, var(--color-border-strong)); }
-.chat-msg.mine .chat-bubble { background: var(--palette-ember-100, #f6e3d8); }
-.chat-meta { display: flex; align-items: baseline; gap: var(--space-2); font-size: 0.72rem; color: var(--color-text-secondary); margin-bottom: 2px; }
-.chat-who { font-weight: 600; color: var(--color-text-primary); }
-.chat-text { white-space: pre-wrap; word-break: break-word; }
-.chat-attach { display: flex; gap: var(--space-1); margin-top: var(--space-1); flex-wrap: wrap; }
-.file-chip { font-size: 0.72rem; background: var(--color-bg-field); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); padding: 1px 6px; }
-
-.chat-composer { border-top: 1px solid var(--color-border-subtle); padding-top: var(--space-2); }
-.chat-to { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); flex-wrap: wrap; }
-.chat-to-label { font-size: 0.75rem; color: var(--color-text-secondary); }
-.chat-input-wrap { display: flex; gap: var(--space-2); align-items: flex-end; position: relative; }
-.chat-input { flex: 1; resize: vertical; min-height: 2.5rem; padding: var(--space-2); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-field); color: var(--color-text-primary); font: inherit; }
-.chat-input:focus { outline: none; border-color: var(--color-border-strong); }
-.chat-send { flex: none; }
-.chat-hint { font-size: 0.72rem; margin: var(--space-1) 0 0; }
-.mention-menu { position: absolute; bottom: 100%; left: 0; background: var(--color-bg-overlay); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); list-style: none; margin: 0 0 4px; padding: 4px; min-width: 12rem; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10; }
-.mention-opt { display: flex; align-items: center; gap: var(--space-2); width: 100%; border: none; background: none; padding: 4px 6px; border-radius: var(--radius-sm); cursor: pointer; text-align: left; }
-.mention-opt:hover { background: var(--color-bg-raised); }
-
-/* --- tickets --- */
-.board { display: flex; gap: var(--space-3); overflow-x: auto; padding-bottom: var(--space-3); }
-.board-col { flex: 1; min-width: 14rem; background: var(--color-bg-sunken); border-radius: var(--radius-md); display: flex; flex-direction: column; }
-.board-col-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-border-subtle); font-size: 0.8rem; font-weight: 600; }
-.board-col-body { padding: var(--space-2); display: flex; flex-direction: column; gap: var(--space-2); overflow-y: auto; max-height: 70vh; }
-.ticket-card { display: block; background: var(--color-bg-surface); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); text-decoration: none; color: inherit; }
-.ticket-card:hover { border-color: var(--color-border-strong); }
-.ticket-card-top { display: flex; align-items: center; justify-content: space-between; }
-.ticket-card-title { font-weight: 600; font-size: 0.9rem; margin: 2px 0; }
-.ticket-card-foot { display: flex; align-items: center; gap: var(--space-1); font-size: 0.75rem; }
-.ticket-card-foot .dot { opacity: 0.5; }
-
-.ticket-list { list-style: none; margin: 0; padding: 0; }
-.ticket-row { border-bottom: 1px solid var(--color-border-subtle); }
-.ticket-row:last-child { border-bottom: none; }
-.ticket-row-link { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; text-decoration: none; color: inherit; }
-.ticket-row-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--color-border-strong); }
-.status-dot.s-draft { background: var(--color-border-strong); }
-.status-dot.s-ready { background: var(--palette-teal-400, #49c1b4); }
-.status-dot.s-in_progress { background: var(--palette-ocean-500, #2d8fb8); }
-.status-dot.s-waiting { background: var(--palette-ember-500, #d87a4a); }
-.status-dot.s-done { background: var(--palette-teal-700, #007067); }
-
-.ticket-detail-body { display: grid; grid-template-columns: 1fr 18rem; gap: var(--space-4); align-items: start; }
-.ticket-main { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
-.ticket-desc { white-space: pre-wrap; }
-.comments { display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-3); }
-.comment { display: flex; gap: var(--space-2); align-items: flex-start; }
-.comment-body { flex: 1; }
+/* Tickets (the board, the flat list and a ticket's page) are gone: they now
+   use the prototype's own ported classes (.tk-board, .tk-col, .tk-cards,
+   .dl-list, .dl-need, .tk-head, .tk-fields, .tk-hist) from screens.css and
+   daylight.css — see Tickets.tsx and TicketDetail.tsx. `.ticket-card` stays on
+   the board's card as a second, stable hook for e2e (bots.spec.ts); `.tk-card
+   a` (screens.css) already styles it, so it carries no rule of its own. */
 .detail-list { display: grid; grid-template-columns: auto 1fr; gap: var(--space-1) var(--space-3); margin: 0; font-size: 0.85rem; }
 .detail-list dt { color: var(--color-text-secondary); }
 .detail-list dd { margin: 0; }
 .inline-id { display: inline-flex; align-items: center; gap: 4px; }
-.history-list { list-style: none; margin: 0; padding: 0; font-size: 0.8rem; display: flex; flex-direction: column; gap: var(--space-1); }
 .rule-list { padding-left: var(--space-5); }
 .rule-row { margin-bottom: var(--space-1); }
 
@@ -202,20 +126,6 @@
    .dl-changes, .dl-where, .dl-origin, .dl-decide, .dl-audit-d) — see
    Approval.tsx and BotDetail.tsx's approvals tab (.dl-need). */
 
-/* --- access & memory --- */
-.access-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-4); }
-.access-col h3 { font-size: 0.85rem; margin: 0 0 var(--space-2); }
-.access-col ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); font-size: 0.82rem; }
-.access-col.does h3 { color: var(--palette-teal-700, #007067); }
-.access-col.never h3 { color: var(--color-text-secondary); }
-.tier-ladder { margin-top: var(--space-3); font-size: 0.78rem; }
-.kind-cards { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-2); }
-.kind-card { padding: var(--space-3) var(--space-4); background: var(--color-bg-raised); border-radius: var(--radius-md); font-size: 0.85rem; }
-
-.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
-
-@media (max-width: 860px) {
-  .chat-layout { grid-template-columns: 1fr; }
-  .ticket-detail-body { grid-template-columns: 1fr; }
-  .access-cols { grid-template-columns: 1fr; }
-}
+/* A bot's Access and Memory tabs are gone: they now use the ported
+   daylight.css case classes (.dl-can, .dl-can-grid, .cang) and a plain .tag
+   for Memory's kinds — see BotDetail.tsx. */

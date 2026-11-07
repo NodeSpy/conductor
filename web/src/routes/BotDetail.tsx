@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'preact/hooks'
 import { botsApi, displayName, type BotDetail as BotData, type BotSummary, type ProposalRow, type Ticket } from '../api/bots'
 import { Avatar } from '../components/Avatar'
 import { ChatThread } from '../components/ChatThread'
+import { Icon } from '../components/Icon'
 import { IdentityPicker, emptyChoice, type IdentityChoice } from '../components/IdentityPicker'
 import { ReviewPanel } from '../components/ReviewPanel'
 import { StatusMark } from '../components/StatusMark'
@@ -110,11 +111,12 @@ function BotTickets({ name, bots }: { name: string; bots: Record<string, BotSumm
     botsApi.tickets({ assignee: `bot:${name}` }).then((r) => setTickets(r.tickets || [])).catch(() => setTickets([]))
   }, [name])
   return (
-    <section class="panel">
-      <div class="panel-head">
-        <span class="panel-title">Tickets assigned to {displayName(bots[name]?.identity, name)}</span>
-        <button class="btn ghost sm" type="button" onClick={() => go(`tickets?assignee=bot:${name}&new=1`)}>New ticket</button>
-      </div>
+    <section class="tk-in">
+      <header class="dl-ch tk-inh">
+        <p class="dl-sub">Tickets assigned to {displayName(bots[name]?.identity, name)}: from you, a chat, an event or its own checks.</p>
+        <span class="dl-sp" />
+        <button class="btn sm secondary" type="button" onClick={() => go(`tickets?assignee=bot:${name}&new=1`)}><Icon name="plus" />New ticket for it</button>
+      </header>
       <TicketTable tickets={tickets} bots={bots} />
     </section>
   )
@@ -171,19 +173,20 @@ export function ProposalRowView({ p }: { p: ProposalRow }): JSX.Element {
   )
 }
 
+// BotMemory: a placeholder for the prototype's full memory editor (CodeMirror
+// 6, Write/Preview, [[ completion, evidence chips — docs/design/dashboard.md,
+// CONFORMANCE "A bot's Memory"). There is no backend for entries yet, so this
+// stays a minimal dl-card naming what memory is and, once there's something to
+// show, its kinds as plain tag chips — not the old .kind-cards grid.
 function BotMemory({ bot }: { bot: BotData }): JSX.Element {
   return (
-    <section class="panel">
-      <span class="panel-title">Memory</span>
-      <p class="muted">The bot's memory, by kind (knowledge, runbooks, watch, log, handoff). It keeps writing its own; your edits land as one commit in your name.</p>
-      {bot.memory_repo ? <p class="facts muted">Repo <span class="mono">{bot.memory_repo}</span></p> : null}
-      <div class="kind-cards">
-        {['Knowledge', 'Runbooks', 'Watch', 'Log', 'Handoff'].map((k) => (
-          <div class="kind-card">
-            <span class="kind-name">{k}</span>
-          </div>
-        ))}
-      </div>
+    <section class="dl-card">
+      <header class="dl-ch"><h2>Memory</h2></header>
+      <p class="dl-sub">The bot's memory, by kind (knowledge, runbooks, watch, log, handoff). It keeps writing its own; your edits land as one commit in your name.</p>
+      {bot.memory_repo ? <p class="dl-sub">Repo <span class="mono">{bot.memory_repo}</span></p> : null}
+      <p class="fx">
+        {['Knowledge', 'Runbooks', 'Watch', 'Log', 'Handoff'].map((k) => <span class="tag">{k}</span>)}
+      </p>
     </section>
   )
 }
@@ -191,24 +194,21 @@ function BotMemory({ bot }: { bot: BotData }): JSX.Element {
 function BotAccess({ bot }: { bot: BotData }): JSX.Element {
   const does = bot.capabilities?.does || []
   const asks = bot.capabilities?.asks || []
+  const grp = (label: string, s: string, items: string[], empty: string) => (
+    <div class="cang" data-s={s}>
+      <h3><StatusMark s={s} mkOnly label={label} />{label}</h3>
+      <ul>{items.length ? items.map((v) => <li class="mono">{v}</li>) : <li class="dl-sub">{empty}</li>}</ul>
+    </div>
+  )
   return (
-    <section class="panel">
-      <span class="panel-title">What {displayName(bot.identity, bot.bot)} can do</span>
-      <div class="access-cols">
-        <div class="access-col does">
-          <h3>Does on its own</h3>
-          {bot.shadow ? <p class="muted">Nothing — it's in practice mode, so it only suggests.</p> : does.length ? <ul>{does.map((v) => <li class="mono">{v}</li>)}</ul> : <p class="muted">Nothing yet.</p>}
-        </div>
-        <div class="access-col asks">
-          <h3>Asks you first</h3>
-          {asks.length ? <ul>{asks.map((v) => <li class="mono">{v}</li>)}</ul> : <p class="muted">Nothing.</p>}
-        </div>
-        <div class="access-col never">
-          <h3>Never</h3>
-          <p class="muted">Anything it isn't granted.</p>
-        </div>
+    <section class="dl-card dl-can">
+      <header class="dl-ch"><h2>What {displayName(bot.identity, bot.bot)} can do</h2></header>
+      {bot.shadow ? <p class="dl-sub">In practice mode: even what it does on its own is only recorded, never done.</p> : null}
+      <div class="dl-can-grid">
+        {grp('Does on its own', 'ok', does, bot.shadow ? "Nothing — it's in practice mode, so it only suggests." : 'Nothing: it asks first')}
+        {grp('Asks you first', 'ember', asks, 'Nothing needs your approval')}
+        {grp('Never', 'fail', [], 'Anything it isn’t granted')}
       </div>
-      <p class="muted tier-ladder">Tiers: observe &lt; reversible &lt; propose &lt; commit money &lt; never.</p>
       <BotWallet bot={bot.bot} team={bot.team} />
     </section>
   )
@@ -238,8 +238,8 @@ function BotSettings({ bot }: { bot: BotData }): JSX.Element {
   }
 
   return (
-    <section class="panel bot-settings">
-      <span class="panel-title">Settings</span>
+    <section class="dl-card">
+      <header class="dl-ch"><h2>Settings</h2></header>
       <div class="form-field">
         <span>Its face</span>
         <IdentityPicker value={choice} onChange={setChoice} />
