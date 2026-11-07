@@ -113,20 +113,48 @@ export function Secrets(): JSX.Element {
               </section>
             </>
           ) : (
-            <section class="dl-card" aria-label="Settings">
-              {Object.keys(sys?.settings ?? {}).length ? (
-                <Rows
-                  rows={Object.entries(sys?.settings ?? {}).map(([k, v]) => ({ name: k, value: v, path: ['settings', k] }))}
-                  empty=""
-                />
-              ) : (
-                <p class="dl-sub" data-testid="settings-empty" style="padding:16px 22px">
-                  No settings yet. Settings are named values your workflows and packs share, written as{' '}
-                  <span class="mono">{'${settings.<name>}'}</span>. Add them under <span class="mono">settings:</span> in
-                  the config and they become editable here.
-                </p>
-              )}
-            </section>
+            <>
+              <section class="dl-card" aria-label="Settings">
+                {Object.keys(sys?.settings ?? {}).length ? (
+                  <Rows
+                    rows={Object.entries(sys?.settings ?? {}).map(([k, v]) => ({
+                      name: k,
+                      value: v,
+                      path: ['settings', k],
+                      usedBy: sys?.settings_used_by?.[k] ?? [],
+                    }))}
+                    empty=""
+                  />
+                ) : (
+                  <p class="dl-sub" data-testid="settings-empty" style="padding:16px 22px">
+                    No settings yet. Settings are named values your workflows and packs share, written as{' '}
+                    <span class="mono">{'${settings.<name>}'}</span>. Add them under <span class="mono">settings:</span> in
+                    the config and they become editable here.
+                  </p>
+                )}
+              </section>
+
+              <section class="dl-card" aria-label="Environment variables">
+                <div class="panel-head" style="padding:14px 22px 0"><h2 style="margin:0;font-size:15px">Environment variables</h2></div>
+                <p class="dl-sub" style="padding:0 22px 10px">Set on a runtime's agents or a machine's commands. Read-only here; edit them under <a class="link" href="#/system/config">Config</a>. Values are never shown — only whether one is a reference (where it lives) or a plain value.</p>
+                {sys?.env_vars?.length ? (
+                  <ul class="dl-list dl-conns">
+                    {sys.env_vars.map((e) => (
+                      <li class="dl-conn" key={e.scope + '.' + e.name}>
+                        <span class="dl-ng"><Icon name="terminal" /></span>
+                        <span class="dl-nt">
+                          <b class="mono">{e.name}</b>
+                          <span class="dl-why mono">{e.ref ? e.ref : 'plain value (not shown)'} <span class="tag">{e.scope}</span></span>
+                        </span>
+                        <span class="dl-na" />
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p class="dl-sub" style="padding:0 22px 18px">No env vars on a runtime or a host yet.</p>
+                )}
+              </section>
+            </>
           )}
         </>
       )}
@@ -151,17 +179,24 @@ function Rows({
           <span class="dl-ng"><Icon name="key" /></span>
           <span class="dl-nt">
             <b>{r.name}</b>
-            {r.ref ? (
+            {r.path ? <input class="input mono" value={r.value ?? ''} data-path={r.path.join('.')} onChange={(e) => void stage(r.path!, (e.target as HTMLInputElement).value)} /> : null}
+            {/* One .dl-why per row: a global list rule hides any sibling after
+                the first (daylight.css ".dl-nt > :is(.dl-why,.reason) ~
+                :is(.dl-why,.reason)"), so the reference and its "used by"
+                tags share this single span rather than two. */}
+            {r.ref || r.usedBy?.length ? (
               <span class="dl-why mono">
-                {r.ref}{' '}
-                <button class="icon-btn sm" type="button" title="Copy the reference" aria-label={`Copy ${r.ref}`} onClick={() => void navigator.clipboard?.writeText(r.ref!)}>
-                  <Icon name="copy" />
-                </button>
+                {r.ref ? (
+                  <>
+                    {r.ref}{' '}
+                    <button class="icon-btn sm" type="button" title="Copy the reference" aria-label={`Copy ${r.ref}`} onClick={() => void navigator.clipboard?.writeText(r.ref!)}>
+                      <Icon name="copy" />
+                    </button>
+                  </>
+                ) : null}
+                {r.usedBy?.length ? r.usedBy.map((u) => <span class="tag mono" key={u}>{u}</span>) : null}
               </span>
-            ) : r.path ? (
-              <input class="input mono" value={r.value ?? ''} data-path={r.path.join('.')} onChange={(e) => void stage(r.path!, (e.target as HTMLInputElement).value)} />
             ) : null}
-            {r.usedBy?.length ? <span class="dl-why">{r.usedBy.map((u) => <span class="tag mono" key={u}>{u}</span>)}</span> : null}
           </span>
           <span class="dl-na" />
         </li>
