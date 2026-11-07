@@ -394,10 +394,12 @@ type ConnectionsResponse struct {
 	Hosts      []HostInfo `json:"hosts"`
 }
 
-// NamedUse is a named connector/runtime and its `use:` reference.
+// NamedUse is a named connector/runtime and its `use:` reference. Type is a
+// runtime's built-in kind ("cli", "paseo", …), empty for a plugin's.
 type NamedUse struct {
 	Name string `json:"name"`
 	Use  string `json:"use"`
+	Type string `json:"type,omitempty"`
 }
 
 // HostInfo is one SSH host target.

@@ -6,24 +6,15 @@
 // ever carries a value — only each field's source (design §4.5.1).
 import { authState, stepUp } from './auth'
 import { readJSON } from './safe'
+import { readResponse } from './errors'
 
 function csrf(): string {
   return authState.value.csrf || ''
 }
 
-async function handle<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`
-    try {
-      const b = (await readJSON(res)) as { error?: string | { message?: string } }
-      if (typeof b.error === 'string') message = b.error
-      else if (b.error?.message) message = b.error.message
-    } catch {
-      /* non-JSON */
-    }
-    throw new Error(message)
-  }
-  return (await readJSON(res)) as T
+// handle reads an answer as data, or throws an ApiError worded for a person.
+function handle<T>(res: Response): Promise<T> {
+  return readResponse<T>(res)
 }
 
 function get<T>(path: string): Promise<T> {

@@ -6,6 +6,7 @@ import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { botsApi, displayName, type TeamSummary, type BotSummary } from '../api/bots'
 import { Avatar } from '../components/Avatar'
+import { humanError } from '../api/errors'
 
 const TABS = ['overview', 'routing', 'defaults', 'knowledge'] as const
 type Tab = (typeof TABS)[number]
@@ -17,7 +18,7 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
   const [err, setErr] = useState('')
 
   useEffect(() => {
-    botsApi.team(name).then(setTeam).catch((e) => setErr(String(e)))
+    botsApi.team(name).then(setTeam).catch((e) => setErr(humanError(e)))
     botsApi.bots().then((r) => {
       const m: Record<string, BotSummary> = {}
       for (const b of r.bots) m[b.bot] = b
@@ -25,7 +26,7 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
     })
   }, [name])
 
-  if (err) return <div class="col"><div class="banner err">{err}</div></div>
+  if (err) return <div class="col"><a class="back" href="#/bots">← Bots</a><div class="banner err" role="alert">{err}</div></div>
   if (!team) return <div class="col"><p class="muted">Loading {name}…</p></div>
 
   const lead = team.routing?.lead

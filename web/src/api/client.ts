@@ -4,7 +4,6 @@
 import type {
   StatusResponse,
   RunsResponse,
-  ErrorResponse,
   ConfigResponse,
   ConfigChange,
   ReviewResponse,
@@ -28,6 +27,7 @@ import type {
 } from './types'
 import { authState, stepUp } from './auth'
 import { parseSafe, readJSON } from './safe'
+import { readResponse } from './errors'
 
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
@@ -84,18 +84,9 @@ async function retryRun(id: string, req: RetryRequest): Promise<ActionResponse> 
   return handle<ActionResponse>(res)
 }
 
-async function handle<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`
-    try {
-      const body = (await readJSON(res)) as ErrorResponse
-      if (body?.error?.message) message = body.error.message
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new Error(message)
-  }
-  return (await readJSON(res)) as T
+// handle reads an answer as data, or throws an ApiError worded for a person.
+function handle<T>(res: Response): Promise<T> {
+  return readResponse<T>(res)
 }
 
 export interface RunsQuery {

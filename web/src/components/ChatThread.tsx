@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { botsApi, who, displayName, type ChatMessage, type BotSummary } from '../api/bots'
 import { Avatar, type Identity } from './Avatar'
 import { ago } from '../lib/format'
+import { humanError } from '../api/errors'
 
 interface Mentionable {
   name: string
@@ -43,7 +44,7 @@ export function ChatThread({
     botsApi
       .messages(convId, 0, true)
       .then((r) => setMessages(r.messages || []))
-      .catch((e) => setErr(String(e)))
+      .catch((e) => setErr(humanError(e)))
   }
 
   useEffect(() => {
@@ -87,7 +88,7 @@ export function ChatThread({
       setMentionOpen(false)
       refresh()
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setSending(false)
     }

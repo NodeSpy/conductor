@@ -2,81 +2,210 @@
 // whose header states its shared rules in words, with its bots below; solo bots
 // come last. Group by Team or None. New bot opens a sheet with the identity
 // picker. Managing a bot's settings and faces is on its page; this is the roster.
+// With no bots yet it is a welcome instead: what a bot is for and one way to
+// make the first, staged and applied right here.
 import type { JSX } from 'preact'
-import { useEffect, useMemo, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { botsApi, displayName, type BotSummary, type TeamSummary } from '../api/bots'
-import { Avatar } from '../components/Avatar'
+import { humanError } from '../api/errors'
+import { Avatar, AvatarPreview } from '../components/Avatar'
+import { EmptyState } from '../components/EmptyState'
+import { ReviewPanel } from '../components/ReviewPanel'
+import { applyResult, loadConfig, staged } from '../configStore'
+import { api } from '../api/client'
 import { NewBotSheet } from './NewBotSheet'
 
 export function Bots(): JSX.Element {
-  const [bots, setBots] = useState<BotSummary[]>([])
+  const [bots, setBots] = useState<BotSummary[] | null>(null)
   const [teams, setTeams] = useState<TeamSummary[]>([])
+  const [editable, setEditable] = useState(true)
   const [err, setErr] = useState('')
   const [groupBy, setGroupBy] = useState<'team' | 'none'>('team')
   const [q, setQ] = useState('')
   const [mode, setMode] = useState<'all' | 'live' | 'practice' | 'archived'>('all')
   const [newOpen, setNewOpen] = useState(false)
+  // The cli runtimes a bot's workers can run on (null: not known yet).
+  const [workers, setWorkers] = useState<string[] | null>(null)
 
-  const load = () => {
+  const load = () =>
     botsApi
       .bots()
       .then((r) => {
         setBots(r.bots || [])
         setTeams(r.teams || [])
+        setEditable(r.editable !== false)
+        setErr('')
+        return (r.bots || []).length
       })
-      .catch((e) => setErr(String(e)))
-  }
-  useEffect(load, [])
+      .catch((e) => {
+        setErr(humanError(e))
+        return -1
+      })
+  useEffect(() => {
+    void load()
+    void loadConfig()
+    api
+      .connections()
+      .then((c) => setWorkers((c.runtimes ?? []).filter((r) => r.type === 'cli').map((r) => r.name)))
+      .catch(() => setWorkers(null))
+  }, [])
 
+  // An apply made here reloads the daemon; a new bot shows once it is back.
+  // (applyResult is shared, so one left from another screen doesn't count.)
+  const appliedAtMount = useRef(applyResult.value)
+  const applied = applyResult.value && applyResult.value !== appliedAtMount.current ? applyResult.value : null
+  const before = useRef(0)
+  const [gaveUp, setGaveUp] = useState(false)
+  useEffect(() => {
+    if (!applied) return
+    before.current = bots?.length ?? 0
+    setGaveUp(false)
+    let tries = 0
+    let stop = false
+    const poll = () => {
+      if (stop) return
+      void load().then((n) => {
+        if (stop || n > before.current) return
+        if (++tries < 20) setTimeout(poll, 1000)
+        else setGaveUp(true)
+      })
+    }
+    const t = setTimeout(poll, 800)
+    return () => {
+      stop = true
+      clearTimeout(t)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applied])
+
+  const all = bots || []
   const filtered = useMemo(() => {
-    return bots.filter((b) => {
+    return all.filter((b) => {
       if (q && !(`${b.bot} ${displayName(b.identity, b.bot)} ${b.description}`.toLowerCase().includes(q.toLowerCase()))) return false
       if (mode === 'live' && (b.shadow || b.disabled)) return false
       if (mode === 'practice' && !b.shadow) return false
       if (mode === 'archived' && !b.disabled) return false
       return true
     })
-  }, [bots, q, mode])
+  }, [all, q, mode])
 
-  const soloCount = bots.filter((b) => !b.team).length
+  const soloCount = all.filter((b) => !b.team).length
+  const pendingBots = staged.value.filter((c) => c.path[0] === 'bots').length
+  const noWorkers = workers !== null && workers.length === 0
+  const sheet = newOpen ? <NewBotSheet teams={teams} workers={workers} onClose={() => setNewOpen(false)} onStaged={() => setNewOpen(false)} /> : null
+
+  if (bots === null) {
+    return (
+      <div class="col bots-screen">
+        <h1 class="screen-title serif">Bots</h1>
+        {err ? (
+          <div class="banner err" role="alert">
+            Couldn't load your bots: {err}{' '}
+            <button class="btn sm" type="button" onClick={() => void load()}>Try again</button>
+          </div>
+        ) : (
+          <p class="muted">Loading…</p>
+        )}
+      </div>
+    )
+  }
+
+  if (all.length === 0) {
+    return (
+      <div class="col bots-screen">
+        <h1 class="screen-title serif">Bots</h1>
+        {err ? <div class="banner err" role="alert">{err}</div> : null}
+        {applied ? (
+          <>
+            <ReviewPanel stagedCount={staged.value.length} />
+            {gaveUp ? (
+              <div class="banner attn" role="status" data-testid="bots-waiting">
+                Your bot is applied but hasn't shown up yet. conductor may still be reloading: reload this page in a moment. If it is still missing, the daemon log says why.
+              </div>
+            ) : (
+              <p class="muted" data-testid="bots-waiting">Starting your new bot…</p>
+            )}
+          </>
+        ) : pendingBots ? (
+          <>
+            <EmptyState testid="bots-staged" title="Your first bot is ready to apply">
+              <p>Review the change below, then apply it. conductor reloads its config and your bot starts in practice mode.</p>
+            </EmptyState>
+            <ReviewPanel stagedCount={staged.value.length} />
+          </>
+        ) : (
+          <EmptyState
+            hero
+            testid="bots-empty"
+            art={<WelcomeFaces />}
+            title="Meet your first bot"
+            action={
+              !editable
+                ? undefined
+                : noWorkers
+                  ? { label: 'Open the config', href: '#/config', testid: 'bots-empty-runtime' }
+                  : { label: 'Create your first bot', onClick: () => setNewOpen(true), testid: 'create-first-bot' }
+            }
+          >
+            <p>A bot is a teammate you hand work to. It picks up what comes in, does the jobs you allow on its own, and asks you before anything that matters.</p>
+            <p>Every new bot starts in practice mode: it only suggests, until you let it act.</p>
+            {!editable ? (
+              <p>This dashboard was started without a config file, so it can't add one. Add a bot under <code>bots:</code> in conductor's config instead.</p>
+            ) : noWorkers ? (
+              <p data-testid="bots-need-runtime">
+                First, a bot needs somewhere to do its work: an agent command-line runtime on this machine. Add one under <code>runtimes:</code> in the config (for example <code>claude: {'{'} use: cli, tool: claude-code {'}'}</code>), then come back here.
+              </p>
+            ) : null}
+          </EmptyState>
+        )}
+        {sheet}
+      </div>
+    )
+  }
 
   return (
     <div class="col bots-screen">
       <div class="screen-head">
         <h1 class="screen-title serif">
-          Bots <span class="count">{bots.length} bots · {teams.length} teams · {soloCount} solo</span>
+          Bots <span class="count">{all.length} bots · {teams.length} teams · {soloCount} solo</span>
         </h1>
         <div class="row-actions">
-          <button class="btn primary" type="button" data-testid="new-bot" onClick={() => setNewOpen(true)}>New bot</button>
+          {editable ? <button class="btn primary" type="button" data-testid="new-bot" onClick={() => setNewOpen(true)}>New bot</button> : null}
         </div>
       </div>
-      <p class="muted">Each team is a section; its header says what its bots may do, who approves and how work reaches it. Solo bots come last.</p>
+      {teams.length ? <p class="muted">Each team is a section; its header says what its bots may do, who approves and how work reaches it. Solo bots come last.</p> : null}
 
-      {err ? <div class="banner err">{err}</div> : null}
+      {err ? <div class="banner err" role="alert">{err}</div> : null}
+      {pendingBots || applied ? <ReviewPanel stagedCount={staged.value.length} /> : null}
 
-      <div class="filter-bar" role="search">
-        <input class="field" type="search" placeholder="Find a bot" value={q} onInput={(e) => setQ((e.target as HTMLInputElement).value)} />
-        <select class="field" value={mode} onChange={(e) => setMode((e.target as HTMLSelectElement).value as typeof mode)}>
-          <option value="all">Any mode</option>
-          <option value="live">Live</option>
-          <option value="practice">Practice mode</option>
-          <option value="archived">Archived</option>
-        </select>
-        <span class="filter-spacer" />
-        <label class="group-by">
-          Group by
-          <select class="field" value={groupBy} onChange={(e) => setGroupBy((e.target as HTMLSelectElement).value as 'team' | 'none')}>
-            <option value="team">Team</option>
-            <option value="none">None</option>
+      {all.length > 1 ? (
+        <div class="filter-bar" role="search">
+          <input class="field" type="search" placeholder="Find a bot" value={q} onInput={(e) => setQ((e.target as HTMLInputElement).value)} />
+          <select class="field" value={mode} onChange={(e) => setMode((e.target as HTMLSelectElement).value as typeof mode)}>
+            <option value="all">Any mode</option>
+            <option value="live">Live</option>
+            <option value="practice">Practice mode</option>
+            <option value="archived">Archived</option>
           </select>
-        </label>
-      </div>
+          <span class="filter-spacer" />
+          {teams.length ? (
+            <label class="group-by">
+              Group by
+              <select class="field" value={groupBy} onChange={(e) => setGroupBy((e.target as HTMLSelectElement).value as 'team' | 'none')}>
+                <option value="team">Team</option>
+                <option value="none">None</option>
+              </select>
+            </label>
+          ) : null}
+        </div>
+      ) : null}
 
-      {groupBy === 'none' ? (
+      {groupBy === 'none' || !teams.length ? (
         <section class="panel">
           <ul class="bot-list">
-            {filtered.map((b) => <BotRow key={b.bot} b={b} showTeam />)}
+            {filtered.map((b) => <BotRow key={b.bot} b={b} showTeam={groupBy === 'none'} />)}
           </ul>
+          {filtered.length ? null : <p class="muted empty-row">No bot matches.</p>}
         </section>
       ) : (
         <>
@@ -88,8 +217,20 @@ export function Bots(): JSX.Element {
         </>
       )}
 
-      {newOpen ? <NewBotSheet teams={teams} onClose={() => setNewOpen(false)} onStaged={() => { setNewOpen(false); load() }} /> : null}
+      {sheet}
     </div>
+  )
+}
+
+// WelcomeFaces is three sample faces from the identity picker: what a bot
+// looks like here, before there is one.
+function WelcomeFaces(): JSX.Element {
+  return (
+    <>
+      <AvatarPreview spec={{ shape: 'blob', eyes: 'happy' }} color="violet" size={52} />
+      <AvatarPreview spec={{ shape: 'hexagon', eyes: 'round' }} color="teal" size={68} />
+      <AvatarPreview spec={{ shape: 'squircle', eyes: 'focused' }} color="ocean" size={52} />
+    </>
   )
 }
 

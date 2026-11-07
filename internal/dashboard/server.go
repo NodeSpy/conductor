@@ -201,11 +201,16 @@ func (s *Server) routes() {
 	// so we mount it under `/api/` (strip the prefix) on the paths it owns. The
 	// approval view/decision endpoints stay on the dashboard's own auth mux
 	// (authRoutes), which carries the step-up; the more-specific pattern wins, so
-	// the `/api/v1/bots/` subtree below never shadows them.
-	if s.deps.BotRoutes != nil {
-		s.mountBotAPI()
-	}
+	// the `/api/v1/bots/` subtree below never shadows them. With no bots
+	// configured the same paths answer as an empty roster (botsUnconfigured).
+	s.mountBotAPI()
 
+	// Any other /api path is a JSON 404, never the SPA's index.html: a client
+	// that asks for data must get data or a JSON error it can explain.
+	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotFound, "not_found", "this dashboard has no "+r.Method+" "+r.URL.Path,
+			"the page and the daemon may be different versions: reload the page")
+	})
 	s.mux.Handle("/", spaHandler()) // the embedded SPA, with SPA fallback
 }
 

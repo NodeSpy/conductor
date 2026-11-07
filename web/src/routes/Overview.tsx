@@ -9,6 +9,7 @@ import { browser, type Purchase } from '../api/browser'
 import { PurchaseRow } from './Purchase'
 import type { RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
+import { EmptyState } from '../components/EmptyState'
 import { humanDuration, ago, uptime } from '../lib/format'
 
 const HOUR = 3_600_000
@@ -52,13 +53,27 @@ export function Overview(): JSX.Element {
 
       <PurchasesWaiting />
 
-      <div class="split">
-        <RunningNow running={running} />
-        <Last12 runs={last12} />
-      </div>
+      {st && all.length === 0 ? (
+        // A fresh box: nothing to chart or list yet, so say where runs come from.
+        <EmptyState
+          testid="overview-empty"
+          title="Nothing has run yet"
+          action={{ label: 'See your workflows', href: '#/workflows', testid: 'overview-empty-workflows' }}
+          secondary={{ label: 'Meet your bots', href: '#/bots' }}
+        >
+          <p>Runs appear here as your workflows fire: what is running now, what finished, and anything that needs you.</p>
+        </EmptyState>
+      ) : (
+        <>
+          <div class="split">
+            <RunningNow running={running} />
+            <Last12 runs={last12} />
+          </div>
 
-      {/* Activity: the grouped run table. */}
-      <Activity needs={failed} running={running} finished={finished} />
+          {/* Activity: the grouped run table. */}
+          <Activity needs={failed} running={running} finished={finished} />
+        </>
+      )}
 
       <Health />
     </div>

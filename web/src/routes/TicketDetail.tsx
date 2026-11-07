@@ -8,6 +8,7 @@ import { botsApi, displayName, who, type Ticket, type BotSummary } from '../api/
 import { Avatar } from '../components/Avatar'
 import { ago } from '../lib/format'
 import { STATUS_LABEL } from './Tickets'
+import { humanError } from '../api/errors'
 
 export function TicketDetail({ num }: { num: string }): JSX.Element {
   const [t, setT] = useState<Ticket | null>(null)
@@ -16,7 +17,7 @@ export function TicketDetail({ num }: { num: string }): JSX.Element {
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const load = () => botsApi.ticket(num).then(setT).catch((e) => setErr(String(e)))
+  const load = () => botsApi.ticket(num).then(setT).catch((e) => setErr(humanError(e)))
   useEffect(() => {
     load()
     botsApi.bots().then((r) => {
@@ -27,7 +28,7 @@ export function TicketDetail({ num }: { num: string }): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [num])
 
-  if (err) return <div class="col"><div class="banner err">{err}</div></div>
+  if (err) return <div class="col"><a class="back" href="#/tickets">← Tickets</a><div class="banner err" role="alert">{err}</div></div>
   if (!t) return <div class="col"><p class="muted">Loading {num}…</p></div>
 
   const aw = t.assignee ? who(t.assignee) : null
@@ -39,7 +40,7 @@ export function TicketDetail({ num }: { num: string }): JSX.Element {
       await botsApi.patchTicket(num, body)
       await load()
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }
@@ -53,7 +54,7 @@ export function TicketDetail({ num }: { num: string }): JSX.Element {
       setComment('')
       await load()
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }

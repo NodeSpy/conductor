@@ -10,6 +10,7 @@ import { signIn, signInPassword, sshBegin, sshFinish, sshPoll, authState, signIn
 import { GateMark, PasskeyGlyph } from '../components/GateChrome'
 import { SSHPanel, PlainHTTPNotice, methodLabel } from '../components/AuthBits'
 import '../styles/auth.css'
+import { humanError } from '../api/errors'
 
 const operatorKey = 'conductor.operator'
 
@@ -48,7 +49,7 @@ export function Signin(): JSX.Element {
     try {
       await fn()
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }

@@ -9,6 +9,7 @@ import { liveTick, statusMark } from '../state'
 import { StatusMark } from '../components/StatusMark'
 import { humanDuration, ago } from '../lib/format'
 import { go } from '../router'
+import { humanError } from '../api/errors'
 
 type Tab = 'outputs' | 'inputs' | 'diff' | 'error'
 
@@ -29,7 +30,7 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
         setData(d)
         setErr('')
       })
-      .catch((e) => setErr(String(e instanceof Error ? e.message : e)))
+      .catch((e) => setErr(humanError(e)))
 
   useEffect(() => {
     void reload()
@@ -73,7 +74,7 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
       setNotice(ack.message)
       await reload()
     } catch (e) {
-      setNotice(String(e instanceof Error ? e.message : e))
+      setNotice(humanError(e))
     } finally {
       setBusy(false)
     }
@@ -330,7 +331,7 @@ function RetryForm({
       const ack = await api.retryRun(id, { from: from === '$start' ? '' : from, force })
       onDone(ack.message, ack.run_id || '')
     } catch (e) {
-      setErr(String(e instanceof Error ? e.message : e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }

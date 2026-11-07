@@ -10,6 +10,7 @@ import { StatusMark } from '../components/StatusMark'
 import { statusMark } from '../state'
 import { ago, humanDuration } from '../lib/format'
 import { go } from '../router'
+import { humanError } from '../api/errors'
 
 export function WorkflowDetail({ name }: { name: string }): JSX.Element {
   const [wf, setWf] = useState<WorkflowDetailResponse | null>(null)
@@ -20,7 +21,7 @@ export function WorkflowDetail({ name }: { name: string }): JSX.Element {
   const yamlRef = useRef<HTMLPreElement>(null)
 
   useEffect(() => {
-    api.workflow(name).then(setWf).catch((e) => setErr(String(e instanceof Error ? e.message : e)))
+    api.workflow(name).then(setWf).catch((e) => setErr(humanError(e)))
   }, [name])
 
   const pick = (n: GraphNode) => {
@@ -39,7 +40,7 @@ export function WorkflowDetail({ name }: { name: string }): JSX.Element {
     try {
       setTest(await api.testWorkflow(name))
     } catch (e) {
-      setTest({ ok: false, message: String(e instanceof Error ? e.message : e) })
+      setTest({ ok: false, message: humanError(e) })
     } finally {
       setTesting(false)
     }

@@ -14,6 +14,7 @@ import { TicketTable } from './Tickets'
 import { staged, loadConfig, stage, cfgError } from '../configStore'
 import { go } from '../router'
 import { BotWallet } from './BotWallet'
+import { humanError } from '../api/errors'
 
 const TABS = ['chat', 'tickets', 'approvals', 'memory', 'access', 'settings'] as const
 type Tab = (typeof TABS)[number]
@@ -33,7 +34,7 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
   const [err, setErr] = useState('')
 
   useEffect(() => {
-    botsApi.bot(name).then(setBot).catch((e) => setErr(String(e)))
+    botsApi.bot(name).then(setBot).catch((e) => setErr(humanError(e)))
     botsApi.bots().then((r) => {
       const m: Record<string, BotSummary> = {}
       for (const b of r.bots) m[b.bot] = b
@@ -41,7 +42,7 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
     })
   }, [name])
 
-  if (err) return <div class="col"><div class="banner err">{err}</div></div>
+  if (err) return <div class="col"><a class="back" href="#/bots">← Bots</a><div class="banner err" role="alert">{err}</div></div>
   if (!bot) return <div class="col"><p class="muted">Loading {name}…</p></div>
 
   return (
@@ -106,7 +107,7 @@ function BotApprovals({ name }: { name: string }): JSX.Element {
   const [proposals, setProposals] = useState<ProposalRow[]>([])
   const [err, setErr] = useState('')
   useEffect(() => {
-    botsApi.botProposals(name).then((r) => setProposals(r.proposals || [])).catch((e) => setErr(String(e)))
+    botsApi.botProposals(name).then((r) => setProposals(r.proposals || [])).catch((e) => setErr(humanError(e)))
   }, [name])
   if (err) return <div class="banner err">{err}</div>
   const pending = proposals.filter((p) => p.status === 'pending')

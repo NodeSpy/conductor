@@ -9,6 +9,7 @@ import { api } from '../api/client'
 import type { SystemResponse } from '../api/types'
 import { staged, loadConfig, stage } from '../configStore'
 import { ReviewPanel } from '../components/ReviewPanel'
+import { humanError } from '../api/errors'
 
 type Tab = 'settings' | 'safety' | 'updates'
 
@@ -17,7 +18,7 @@ export function System(): JSX.Element {
   const [tab, setTab] = useState<Tab>('settings')
   const [err, setErr] = useState('')
   useEffect(() => {
-    api.system().then(setSys).catch((e) => setErr(String(e)))
+    api.system().then(setSys).catch((e) => setErr(humanError(e)))
     void loadConfig()
   }, [])
 
@@ -58,8 +59,12 @@ function Settings({ sys }: { sys: SystemResponse | null }): JSX.Element {
             </label>
           ))}
         </div>
+      ) : sys ? (
+        <p class="muted" data-testid="settings-empty">
+          No settings yet. Settings are named values your workflows and packs share, written as <span class="mono">{'${settings.<name>}'}</span>. Add them under <span class="mono">settings:</span> in the config and they become editable here.
+        </p>
       ) : (
-        <p class="muted">No settings defined.</p>
+        <p class="muted">Loading…</p>
       )}
     </section>
   )

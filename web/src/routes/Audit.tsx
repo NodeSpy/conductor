@@ -4,20 +4,29 @@
 import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from '../api/client'
+import { humanError } from '../api/errors'
+import { EmptyState } from '../components/EmptyState'
 
 export function Audit(): JSX.Element {
-  const [entries, setEntries] = useState<Record<string, unknown>[]>([])
+  const [entries, setEntries] = useState<Record<string, unknown>[] | null>(null)
   const [err, setErr] = useState('')
   useEffect(() => {
-    api.audit().then((r) => setEntries(r.entries ?? [])).catch((e) => setErr(String(e)))
+    api.audit().then((r) => setEntries(r.entries ?? [])).catch((e) => setErr(humanError(e)))
   }, [])
 
   return (
     <div class="col">
       <h1 class="screen-title serif">Logs & audit</h1>
       <p class="muted">The audit log, newest first. Config changes applied from this dashboard appear here.</p>
-      {err ? <div class="banner err">{err}</div> : null}
+      {err ? <div class="banner err" role="alert">Couldn't load the audit log: {err}</div> : null}
 
+      {entries === null ? (
+        err ? null : <p class="muted">Loading…</p>
+      ) : entries.length === 0 ? (
+        <EmptyState testid="audit-empty" title="Nothing recorded yet">
+          <p>Every change that matters is written here, newest first: config applied or restored, approvals given, passkeys added, sign-ins. Nothing has happened that needs a record.</p>
+        </EmptyState>
+      ) : (
       <section class="panel" aria-label="Audit log">
         {entries.length ? (
           <ul class="audit-list">
@@ -29,10 +38,9 @@ export function Audit(): JSX.Element {
               </li>
             ))}
           </ul>
-        ) : (
-          <p class="muted">No audit entries yet.</p>
-        )}
+        ) : null}
       </section>
+      )}
     </div>
   )
 }

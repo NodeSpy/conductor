@@ -6,25 +6,28 @@ import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from '../api/client'
 import type { PluginsResponse, ConnectionsResponse } from '../api/types'
+import { humanError } from '../api/errors'
 
 export function Connections(): JSX.Element {
   const [plugins, setPlugins] = useState<PluginsResponse | null>(null)
   const [conns, setConns] = useState<ConnectionsResponse | null>(null)
   const [err, setErr] = useState('')
   useEffect(() => {
-    api.plugins().then(setPlugins).catch((e) => setErr(String(e)))
-    api.connections().then(setConns).catch((e) => setErr(String(e)))
+    api.plugins().then(setPlugins).catch((e) => setErr(humanError(e)))
+    api.connections().then(setConns).catch((e) => setErr(humanError(e)))
   }, [])
 
+  const pending = err ? 'Nothing to show until conductor answers.' : 'Loading…'
   return (
     <div class="col">
       <h1 class="screen-title serif">Plugins & Connections</h1>
       <p class="muted">Plugins come from the <span class="mono">use:</span> references on connectors and runtimes. The version policy is per plugin: pinned to a version, or floating.</p>
-      {err ? <div class="banner err">{err}</div> : null}
+      {err ? <div class="banner err" role="alert">Couldn't load plugins and connections: {err}</div> : null}
 
       <section class="panel" aria-label="Plugins">
         <div class="panel-head"><span class="panel-title">Plugins</span></div>
         {plugins?.plugins?.length ? (
+          <div class="tbl-wrap">
           <table class="tbl">
             <thead><tr><th>Plugin</th><th>Version policy</th><th>Kind</th><th>Used by</th></tr></thead>
             <tbody>
@@ -38,19 +41,20 @@ export function Connections(): JSX.Element {
               ))}
             </tbody>
           </table>
+          </div>
         ) : (
-          <p class="muted">No plugins referenced.</p>
+          <p class="muted">{plugins ? 'No plugins yet. A connector or runtime names its plugin with use:.' : pending}</p>
         )}
       </section>
 
       <section class="panel" aria-label="Connectors">
         <div class="panel-head"><span class="panel-title">Connectors</span></div>
-        <FlatList rows={conns?.connectors ?? []} empty="No connectors." />
+        <FlatList rows={conns ? conns.connectors ?? [] : undefined} pending={pending} empty="No connectors. A connector is how conductor hears from a service (a repo host, a chat, a schedule); add one under connectors: in the config." />
       </section>
 
       <section class="panel" aria-label="Runtimes">
         <div class="panel-head"><span class="panel-title">Runtimes</span></div>
-        <FlatList rows={conns?.runtimes ?? []} empty="No runtimes." />
+        <FlatList rows={conns ? conns.runtimes ?? [] : undefined} pending={pending} empty="No runtimes yet. A runtime is where agent steps and bots do their work (an agent CLI on this machine, or a remote one); add one under runtimes: when you need it." />
       </section>
 
       <section class="panel" aria-label="Hosts">
@@ -65,14 +69,15 @@ export function Connections(): JSX.Element {
             </tbody>
           </table>
         ) : (
-          <p class="muted">No hosts.</p>
+          <p class="muted">{conns ? 'No hosts yet. A host is another machine conductor reaches over SSH; add one under hosts: when a workflow needs it.' : pending}</p>
         )}
       </section>
     </div>
   )
 }
 
-function FlatList({ rows, empty }: { rows: { name: string; use: string }[]; empty: string }): JSX.Element {
+function FlatList({ rows, empty, pending }: { rows?: { name: string; use: string }[] | null; empty: string; pending: string }): JSX.Element {
+  if (!rows) return <p class="muted">{pending}</p>
   if (!rows.length) return <p class="muted">{empty}</p>
   return (
     <table class="tbl">

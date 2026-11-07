@@ -6,6 +6,7 @@
 import type { JSX } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { browser, who, takeover, releaseTakeover, sendInput, type BrowserSession } from '../api/browser'
+import { humanError } from '../api/errors'
 
 export function BrowserSessionView({ id }: { id: string }): JSX.Element {
   const [sess, setSess] = useState<BrowserSession | null>(null)
@@ -23,7 +24,7 @@ export function BrowserSessionView({ id }: { id: string }): JSX.Element {
         setSess(r.session)
         setLeased(!!r.session.leased_by)
       })
-      .catch((e) => setErr(String(e)))
+      .catch((e) => setErr(humanError(e)))
   }, [id])
 
   // Open the screencast WebSocket; each text frame is a base64 JPEG.
@@ -66,7 +67,7 @@ export function BrowserSessionView({ id }: { id: string }): JSX.Element {
       await takeover(id)
       setLeased(true)
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }
@@ -77,7 +78,7 @@ export function BrowserSessionView({ id }: { id: string }): JSX.Element {
       await releaseTakeover(id)
       setLeased(false)
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }

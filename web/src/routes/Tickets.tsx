@@ -7,6 +7,8 @@ import { useEffect, useMemo, useState } from 'preact/hooks'
 import { botsApi, displayName, who, openTicketStream, type Ticket, type BotSummary, type TeamSummary } from '../api/bots'
 import { Avatar } from '../components/Avatar'
 import { ago } from '../lib/format'
+import { EmptyState } from '../components/EmptyState'
+import { humanError } from '../api/errors'
 
 export const STATUSES = ['draft', 'ready', 'in_progress', 'waiting', 'done'] as const
 export const STATUS_LABEL: Record<string, string> = {
@@ -27,7 +29,8 @@ function assigneeId(a: string | undefined, bots: Record<string, BotSummary>): { 
 
 export function Tickets(): JSX.Element {
   const params = new URLSearchParams(location.hash.split('?')[1] || '')
-  const [tickets, setTickets] = useState<Ticket[]>([])
+  const [tickets, setTickets] = useState<Ticket[] | null>(null)
+  const [configured, setConfigured] = useState(true)
   const [bots, setBots] = useState<Record<string, BotSummary>>({})
   const [teams, setTeams] = useState<TeamSummary[]>([])
   const [view, setView] = useState<'board' | 'list'>((localStorage.getItem('tickets.view') as 'board' | 'list') || 'board')
@@ -36,25 +39,98 @@ export function Tickets(): JSX.Element {
   const [fAssignee, setFAssignee] = useState(params.get('assignee') || '')
   const [fPriority, setFPriority] = useState('')
 
-  const load = () => {
-    botsApi.tickets({ assignee: fAssignee, priority: fPriority }).then((r) => setTickets(r.tickets || [])).catch((e) => setErr(String(e)))
-  }
-  useEffect(load, [fAssignee, fPriority])
+  const load = () =>
+    botsApi
+      .tickets({ assignee: fAssignee, priority: fPriority })
+      .then((r) => {
+        setTickets(r.tickets || [])
+        setConfigured(r.configured !== false)
+        setErr('')
+        return r.configured !== false
+      })
+      .catch((e) => {
+        setErr(humanError(e))
+        return false
+      })
+  useEffect(() => void load(), [fAssignee, fPriority])
   useEffect(() => {
-    botsApi.bots().then((r) => {
-      const m: Record<string, BotSummary> = {}
-      for (const b of r.bots) m[b.bot] = b
-      setBots(m)
-      setTeams(r.teams)
+    let stop = () => {}
+    let gone = false
+    // The live stream only exists once there are bots to give tickets to.
+    void load().then((live) => {
+      if (live && !gone) stop = openTicketStream(() => void load())
     })
-    const stop = openTicketStream(() => load())
-    return stop
+    botsApi
+      .bots()
+      .then((r) => {
+        const m: Record<string, BotSummary> = {}
+        for (const b of r.bots) m[b.bot] = b
+        setBots(m)
+        setTeams(r.teams)
+      })
+      .catch(() => {
+        /* assignees fall back to ids; the list's own error is shown */
+      })
+    return () => {
+      gone = true
+      stop()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const setViewP = (v: 'board' | 'list') => {
     setView(v)
     localStorage.setItem('tickets.view', v)
+  }
+
+  const newTicket = newOpen ? (
+    <NewTicket bots={bots} teams={teams} preAssignee={fAssignee} onClose={() => setNewOpen(false)} onCreated={() => { setNewOpen(false); void load() }} />
+  ) : null
+
+  if (tickets === null) {
+    return (
+      <div class="col tickets-screen">
+        <h1 class="screen-title serif">Tickets</h1>
+        {err ? (
+          <div class="banner err" role="alert">
+            Couldn't load tickets: {err}{' '}
+            <button class="btn sm" type="button" onClick={() => void load()}>Try again</button>
+          </div>
+        ) : (
+          <p class="muted">Loading…</p>
+        )}
+      </div>
+    )
+  }
+
+  // Nothing yet, and no filter narrowing it: say what tickets are for.
+  if (tickets.length === 0 && !fAssignee && !fPriority) {
+    return (
+      <div class="col tickets-screen">
+        <h1 class="screen-title serif">Tickets</h1>
+        {err ? <div class="banner err" role="alert">{err}</div> : null}
+        {configured ? (
+          <EmptyState
+            testid="tickets-empty"
+            art={<TicketGlyph />}
+            title="No tickets yet"
+            action={{ label: 'New ticket', onClick: () => setNewOpen(true), testid: 'new-ticket' }}
+          >
+            <p>A ticket is one piece of work for a bot or a team: what you want done, and by when. Mark it ready and the work starts.</p>
+          </EmptyState>
+        ) : (
+          <EmptyState
+            testid="tickets-empty"
+            art={<TicketGlyph />}
+            title="Tickets need a bot to work on them"
+            action={{ label: 'Create a bot', href: '#/bots', testid: 'tickets-empty-bots' }}
+          >
+            <p>A ticket is one piece of work you hand to a bot or a team. There are no bots on this conductor yet, so start with one.</p>
+          </EmptyState>
+        )}
+        {newTicket}
+      </div>
+    )
   }
 
   return (
@@ -86,7 +162,7 @@ export function Tickets(): JSX.Element {
 
       {view === 'board' ? <Board tickets={tickets} bots={bots} /> : <section class="panel"><TicketTable tickets={tickets} bots={bots} /></section>}
 
-      {newOpen ? <NewTicket bots={bots} teams={teams} preAssignee={fAssignee} onClose={() => setNewOpen(false)} onCreated={() => { setNewOpen(false); load() }} /> : null}
+      {newTicket}
     </div>
   )
 }
@@ -136,7 +212,7 @@ function TicketCard({ t, bots }: { t: Ticket; bots: Record<string, BotSummary> }
 
 // TicketTable is the flat list, reused in a bot's and a team's Tickets tab.
 export function TicketTable({ tickets, bots }: { tickets: Ticket[]; bots: Record<string, BotSummary> }): JSX.Element {
-  if (!tickets.length) return <p class="muted">No tickets.</p>
+  if (!tickets.length) return <p class="muted">No tickets here.</p>
   return (
     <ul class="ticket-list" data-testid="ticket-list">
       {tickets.map((t) => {
@@ -196,7 +272,7 @@ function NewTicket({
       if (ready) await botsApi.patchTicket(t.ticket, { status: 'ready' })
       onCreated()
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }
@@ -237,3 +313,13 @@ function NewTicket({
   )
 }
 
+// TicketGlyph is a ticket stub: the empty state's picture.
+function TicketGlyph(): JSX.Element {
+  return (
+    <svg width="64" height="44" viewBox="0 0 64 44" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+      <path d="M4 6h56v10a6 6 0 0 0 0 12v10H4V28a6 6 0 0 0 0-12z" />
+      <path d="M44 8v28" stroke-dasharray="3 4" opacity="0.55" />
+      <path d="M14 18h20M14 26h14" opacity="0.55" />
+    </svg>
+  )
+}

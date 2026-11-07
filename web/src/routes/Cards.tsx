@@ -13,6 +13,7 @@ import { ValueSource, vsToWire, emptyVS, type VSValue } from '../components/Valu
 import { BrowserTabs } from './Browsers'
 import { srcWord } from './Details'
 import { PurchaseRow } from './Purchase'
+import { humanError } from '../api/errors'
 
 function kindWord(k: string): string {
   return k === 'virtual' ? 'Virtual card' : k === 'single-use' ? 'Single-use card' : k === 'physical' ? 'Physical card' : 'Card'
@@ -34,7 +35,7 @@ function CardsList(): JSX.Element {
   const [busy, setBusy] = useState('')
 
   function load() {
-    browser.wallet().then((r) => { setCards(r.cards || []); setSpend(r.spend || []) }).catch((e) => setErr(String(e)))
+    browser.wallet().then((r) => { setCards(r.cards || []); setSpend(r.spend || []) }).catch((e) => setErr(humanError(e)))
     browser.purchases().then((r) => {
       const all = r.purchases || []
       setPending(all.filter((p) => p.status === 'pending'))
@@ -51,7 +52,7 @@ function CardsList(): JSX.Element {
       else await freezeCard(c.name)
       load()
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy('')
     }
@@ -82,7 +83,7 @@ function CardsList(): JSX.Element {
       <section class="panel">
         <span class="panel-title">Cards</span>
         {cards === null ? (
-          <p class="muted">Loading cards…</p>
+          <p class="muted">{err ? 'Nothing to show until conductor answers.' : 'Loading cards…'}</p>
         ) : cards.length === 0 ? (
           <div class="empty">
             <h3>No cards yet</h3>
@@ -141,7 +142,7 @@ function CardPage({ name }: { name: string }): JSX.Element {
     browser.wallet().then((r) => {
       setC((r.cards || []).find((x) => x.name === name) || null)
       setSpend(r.spend || [])
-    }).catch((e) => setErr(String(e)))
+    }).catch((e) => setErr(humanError(e)))
   }
   useEffect(load, [name])
 
@@ -158,7 +159,7 @@ function CardPage({ name }: { name: string }): JSX.Element {
       else await freezeCard(name)
       load()
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }
@@ -278,7 +279,7 @@ function NewCard(): JSX.Element {
       })
       go(`browser/cards/${encodeURIComponent(name)}`)
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }

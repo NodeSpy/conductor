@@ -5,20 +5,31 @@
 // in practice mode.
 import type { JSX } from 'preact'
 import { useState } from 'preact/hooks'
-import { stage } from '../configStore'
+import { cfgError, stage as stageEdit } from '../configStore'
 import { IdentityPicker, emptyChoice, type IdentityChoice } from '../components/IdentityPicker'
 import type { TeamSummary } from '../api/bots'
+import { humanError } from '../api/errors'
 
-export function NewBotSheet({ teams, onClose, onStaged }: { teams: TeamSummary[]; onClose: () => void; onStaged: () => void }): JSX.Element {
+// workers is the cli runtimes a bot's workers can run on: with one it is used
+// without asking; with several the bot needs to be told which.
+export function NewBotSheet({ teams, workers, onClose, onStaged }: { teams: TeamSummary[]; workers?: string[] | null; onClose: () => void; onStaged: () => void }): JSX.Element {
   const [name, setName] = useState('')
   const [display, setDisplay] = useState('')
   const [desc, setDesc] = useState('')
   const [team, setTeam] = useState('')
+  const [worker, setWorker] = useState(workers?.[0] ?? '')
   const [choice, setChoice] = useState<IdentityChoice>(emptyChoice())
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
   const id = name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-')
+
+  // stage records one field; the store keeps a failed stage's error rather
+  // than throwing, so stop at the first one instead of closing as if done.
+  async function stage(path: string[], value: unknown, summary: string) {
+    await stageEdit(path, value, summary)
+    if (cfgError.value) throw new Error(cfgError.value)
+  }
 
   async function create() {
     if (!id) {
@@ -33,6 +44,7 @@ export function NewBotSheet({ teams, onClose, onStaged }: { teams: TeamSummary[]
       await stage(['bots', id, 'description'], desc || 'A bot.', `define bot ${id}`)
       if (display) await stage(['bots', id, 'display_name'], display, `${id}: name`)
       if (team) await stage(['bots', id, 'team'], team, `${id}: team`)
+      if (workers && workers.length > 1 && worker) await stage(['bots', id, 'worker', 'runtime'], worker, `${id}: where it works`)
       await stage(['bots', id, 'avatar', 'color'], choice.color, `${id}: face`)
       if (choice.mode === 'face') {
         await stage(['bots', id, 'avatar', 'shape'], choice.shape, `${id}: face`)
@@ -42,7 +54,7 @@ export function NewBotSheet({ teams, onClose, onStaged }: { teams: TeamSummary[]
       }
       onStaged()
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }
@@ -69,13 +81,22 @@ export function NewBotSheet({ teams, onClose, onStaged }: { teams: TeamSummary[]
             <span>What it's for</span>
             <textarea class="field" rows={2} value={desc} onInput={(e) => setDesc((e.target as HTMLTextAreaElement).value)} />
           </label>
-          <label class="form-field">
+          {teams.length ? <label class="form-field">
             <span>Team</span>
             <select class="field" value={team} onChange={(e) => setTeam((e.target as HTMLSelectElement).value)}>
               <option value="">Solo</option>
               {teams.map((t) => <option value={t.team}>{t.team}</option>)}
             </select>
-          </label>
+          </label> : null}
+
+          {workers && workers.length > 1 ? (
+            <label class="form-field">
+              <span>Where it works</span>
+              <select class="field" value={worker} onChange={(e) => setWorker((e.target as HTMLSelectElement).value)}>
+                {workers.map((w) => <option value={w}>{w}</option>)}
+              </select>
+            </label>
+          ) : null}
 
           <div class="form-field">
             <span>Its face</span>
@@ -83,7 +104,7 @@ export function NewBotSheet({ teams, onClose, onStaged }: { teams: TeamSummary[]
           </div>
 
           {err ? <div class="banner err">{err}</div> : null}
-          <p class="muted">A new bot starts in practice mode. It's staged — review and apply it on the Bots or Config screen.</p>
+          <p class="muted">A new bot starts in practice mode. Staging it adds it to a change you review and apply on the Bots screen.</p>
         </div>
         <div class="sheet-foot">
           <button class="btn" type="button" onClick={onClose}>Cancel</button>

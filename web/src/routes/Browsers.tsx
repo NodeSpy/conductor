@@ -10,6 +10,7 @@ import { Logins, AddLogin } from './Logins'
 import { Details } from './Details'
 import { Cards } from './Cards'
 import { Purchase } from './Purchase'
+import { humanError } from '../api/errors'
 
 export type BrowserTab = 'sessions' | 'logins' | 'details' | 'cards'
 
@@ -57,7 +58,7 @@ function Sessions(): JSX.Element {
   const [sessions, setSessions] = useState<BrowserSession[] | null>(null)
   const [err, setErr] = useState('')
   useEffect(() => {
-    browser.sessions().then((r) => setSessions(r.sessions || [])).catch((e) => setErr(String(e)))
+    browser.sessions().then((r) => setSessions(r.sessions || [])).catch((e) => setErr(humanError(e)))
   }, [])
 
   return (
@@ -74,7 +75,7 @@ function Sessions(): JSX.Element {
 
       {err ? <div class="banner err">{err}</div> : null}
       {sessions === null ? (
-        <p class="muted">Loading live sessions…</p>
+        <p class="muted">{err ? 'Nothing to show until conductor answers.' : 'Loading live sessions…'}</p>
       ) : sessions.length === 0 ? (
         <div class="empty">
           <h3>No browser open right now</h3>

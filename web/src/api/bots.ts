@@ -4,25 +4,16 @@
 // the CSRF token on every write (design §5.1, §6.4).
 import { authState } from './auth'
 import type { Identity } from '../components/Avatar'
-import { parseSafe, readJSON } from './safe'
+import { parseSafe } from './safe'
+import { readResponse } from './errors'
 
 function csrf(): string {
   return authState.value.csrf || ''
 }
 
-async function handle<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`
-    try {
-      const b = (await readJSON(res)) as { error?: string | { message?: string } }
-      if (typeof b.error === 'string') message = b.error
-      else if (b.error?.message) message = b.error.message
-    } catch {
-      /* non-JSON */
-    }
-    throw new Error(message)
-  }
-  return (await readJSON(res)) as T
+// handle reads an answer as data, or throws an ApiError worded for a person.
+function handle<T>(res: Response): Promise<T> {
+  return readResponse<T>(res)
 }
 
 function get<T>(path: string): Promise<T> {
@@ -182,15 +173,17 @@ export interface TicketQuery {
 // --- methods ---
 
 export const botsApi = {
-  bots: () => get<{ bots: BotSummary[]; teams: TeamSummary[] }>('/api/v1/bots'),
+  // configured is false on a daemon with no bots yet (every list then empty);
+  // editable says whether this dashboard can stage the first one.
+  bots: () => get<{ bots: BotSummary[]; teams: TeamSummary[]; configured?: boolean; editable?: boolean }>('/api/v1/bots'),
   bot: (name: string) => get<BotDetail>(`/api/v1/bots/${encodeURIComponent(name)}`),
   botProposals: (name: string) => get<{ bot: string; proposals: ProposalRow[] }>(`/api/v1/bots/${encodeURIComponent(name)}/proposals`),
-  proposals: () => get<{ proposals: ProposalRow[] }>('/api/v1/proposals'),
+  proposals: () => get<{ proposals: ProposalRow[]; configured?: boolean }>('/api/v1/proposals'),
 
-  teams: () => get<{ teams: TeamSummary[] }>('/api/v1/teams'),
+  teams: () => get<{ teams: TeamSummary[]; configured?: boolean }>('/api/v1/teams'),
   team: (name: string) => get<TeamSummary>(`/api/v1/teams/${encodeURIComponent(name)}`),
 
-  conversations: () => get<{ conversations: Conversation[] }>('/api/v1/conversations'),
+  conversations: () => get<{ conversations: Conversation[]; configured?: boolean }>('/api/v1/conversations'),
   messages: (id: string, after = 0, mark = true) =>
     get<{ conversation: string; messages: ChatMessage[] }>(
       `/api/v1/conversations/${encodeURIComponent(id)}/messages?after=${after}${mark ? '&mark=1' : ''}`,
@@ -204,7 +197,7 @@ export const botsApi = {
     const p = new URLSearchParams()
     for (const [k, v] of Object.entries(q)) if (v) p.set(k, String(v))
     const qs = p.toString()
-    return get<{ tickets: Ticket[] | null }>('/api/v1/tickets' + (qs ? `?${qs}` : ''))
+    return get<{ tickets: Ticket[] | null; configured?: boolean }>('/api/v1/tickets' + (qs ? `?${qs}` : ''))
   },
   ticket: (num: string) => get<Ticket>(`/api/v1/tickets/${encodeURIComponent(num)}`),
   createTicket: (body: {

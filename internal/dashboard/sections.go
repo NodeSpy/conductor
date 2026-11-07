@@ -142,7 +142,13 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 			case string:
 				use = entry
 			}
-			resp.Runtimes = append(resp.Runtimes, api.NamedUse{Name: name, Use: use})
+			typ := ""
+			if s.deps.Cfg != nil {
+				if rt, ok := s.deps.Cfg.Runtimes[name]; ok {
+					typ = rt.BuiltinType()
+				}
+			}
+			resp.Runtimes = append(resp.Runtimes, api.NamedUse{Name: name, Use: use, Type: typ})
 		}
 	}
 	if m, ok := tree["hosts"].(map[string]any); ok {

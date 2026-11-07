@@ -436,11 +436,13 @@ export interface ConnectionsResponse {
   hosts: HostInfo[];
 }
 /**
- * NamedUse is a named connector/runtime and its `use:` reference.
+ * NamedUse is a named connector/runtime and its `use:` reference. Type is a
+ * runtime's built-in kind ("cli", "paseo", …), empty for a plugin's.
  */
 export interface NamedUse {
   name: string;
   use: string;
+  type?: string;
 }
 /**
  * HostInfo is one SSH host target.

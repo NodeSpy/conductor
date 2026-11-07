@@ -10,6 +10,7 @@ import { passkeysUsable } from '../lib/webauthn'
 import { GateMark, PasskeyGlyph } from '../components/GateChrome'
 import { CopyBlock } from '../components/AuthBits'
 import '../styles/auth.css'
+import { humanError } from '../api/errors'
 
 // ticketFromURL reads the one-time secret from the URL fragment (#t=…), where the
 // CLI puts it so it never reaches a log.
@@ -60,7 +61,7 @@ export function Enroll(): JSX.Element {
     try {
       await fn()
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }

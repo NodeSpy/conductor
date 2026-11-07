@@ -4,6 +4,7 @@ import { signal } from '@preact/signals'
 import { api } from './api/client'
 import { openEvents } from './api/sse'
 import type { StatusResponse, RunSummary, AttrQualifier } from './api/types'
+import { humanError } from './api/errors'
 
 export const status = signal<StatusResponse | null>(null)
 export const runs = signal<RunSummary[]>([])
@@ -75,7 +76,7 @@ export async function load(): Promise<void> {
     runs.value = r.runs
     loadError.value = ''
   } catch (e) {
-    loadError.value = e instanceof Error ? e.message : String(e)
+    loadError.value = humanError(e)
   }
   // Connector qualifiers are cheap and change rarely; a failure just leaves the
   // filter bar without pills, never blocks the page.

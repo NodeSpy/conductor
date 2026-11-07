@@ -191,13 +191,21 @@ func isRead(method string) bool {
 }
 
 // mountBotAPI puts every bot API route behind the chokepoint and mounts the
-// result under /api.
+// result under /api. With no bots on this daemon the same paths are served by
+// botsUnconfigured instead, so the screens get an empty roster, not a 404 or
+// the SPA's index.html.
 func (s *Server) mountBotAPI() {
-	inner := http.NewServeMux()
-	for _, rt := range s.deps.BotRoutes {
-		inner.Handle(rt.Pattern, s.botGate(rt))
+	var h http.Handler = s.botsUnconfigured()
+	if s.deps.BotRoutes != nil {
+		inner := http.NewServeMux()
+		for _, rt := range s.deps.BotRoutes {
+			inner.Handle(rt.Pattern, s.botGate(rt))
+		}
+		inner.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			botRefuse(w, http.StatusNotFound, "the bot API has no "+r.Method+" /api"+r.URL.Path)
+		})
+		h = http.StripPrefix("/api", inner)
 	}
-	h := http.StripPrefix("/api", inner)
 	for _, p := range []string{
 		"/api/v1/bots", "/api/v1/bots/",
 		"/api/v1/teams", "/api/v1/teams/",
@@ -207,6 +215,34 @@ func (s *Server) mountBotAPI() {
 	} {
 		s.mux.Handle(p, h)
 	}
+}
+
+// botsUnconfigured answers the bot API's paths on a daemon with no bots: a
+// first visit, not a failure. Each list read is its empty list with
+// configured: false (and on the roster, whether this dashboard can stage the
+// first bot); everything else is a JSON 404 that says there are no bots yet.
+func (s *Server) botsUnconfigured() http.Handler {
+	empty := map[string]string{
+		"/api/v1/bots":          "bots",
+		"/api/v1/teams":         "teams",
+		"/api/v1/conversations": "conversations",
+		"/api/v1/tickets":       "tickets",
+		"/api/v1/proposals":     "proposals",
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key, ok := empty[r.URL.Path]
+		if !ok || !isRead(r.Method) {
+			writeError(w, http.StatusNotFound, "no_bots", "there are no bots on this daemon yet",
+				"create the first one on the Bots screen")
+			return
+		}
+		out := map[string]any{key: []any{}, "configured": false}
+		if key == "bots" {
+			out["teams"] = []any{}
+			out["editable"] = s.edit != nil
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
 }
 
 func botRefuse(w http.ResponseWriter, code int, msg string) {

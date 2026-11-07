@@ -4,6 +4,7 @@
 import type { JSX } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import type { SSHChallenge, Method } from '../api/auth'
+import { humanError } from '../api/errors'
 
 // copyText copies via the Clipboard API where the page is a secure context, and
 // falls back to a selected textarea + execCommand on plain HTTP (where the
@@ -117,7 +118,7 @@ export function SSHPanel(props: {
       } catch (e) {
         done.current = true
         clearInterval(t)
-        setErr(e instanceof Error ? e.message : String(e))
+        setErr(humanError(e))
       }
     }, 2000)
     return () => {
@@ -133,7 +134,7 @@ export function SSHPanel(props: {
       await props.onFinish(sig.trim())
       done.current = true
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }

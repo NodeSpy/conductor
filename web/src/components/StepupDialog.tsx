@@ -22,6 +22,7 @@ import {
 } from '../api/auth'
 import { SSHPanel, methodLabel } from './AuthBits'
 import { PasskeyGlyph } from './GateChrome'
+import { humanError } from '../api/errors'
 
 const purposeLabel: Record<string, string> = {
   approve: 'Approve or deny what a bot asked to do',
@@ -109,7 +110,7 @@ function Dialog({ req }: { req: StepupRequest }): JSX.Element {
     try {
       req.resolve(await fn())
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }
@@ -121,7 +122,7 @@ function Dialog({ req }: { req: StepupRequest }): JSX.Element {
     try {
       setCh(await stepupSSHBegin(req.purpose, req.digest))
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      setErr(humanError(e))
     }
   }
   useEffect(() => {

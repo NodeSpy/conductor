@@ -4,7 +4,8 @@
 // live: the signals refresh on each SSE run event.
 import type { JSX } from 'preact'
 import { useMemo, useState } from 'preact/hooks'
-import { runs, liveTick, loadError, connAttrs, statusMark, dismissed } from '../state'
+import { runs, status, liveTick, loadError, connAttrs, statusMark, dismissed } from '../state'
+import { EmptyState } from '../components/EmptyState'
 import type { RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
 import { FilterBar, type Option } from '../components/FilterBar'
@@ -51,6 +52,16 @@ export function Activity(): JSX.Element {
       <h1 class="screen-title serif">Activity</h1>
       {loadError.value ? <div class="banner err">Couldn't load: {loadError.value}</div> : null}
 
+      {status.value && all.length === 0 ? (
+        <EmptyState
+          testid="activity-empty"
+          title="No runs yet"
+          action={{ label: 'See your workflows', href: '#/workflows', testid: 'activity-empty-workflows' }}
+        >
+          <p>Every time a workflow fires, its run lands here with each step, how long it took and what it said. Find, filter and retry them from this page.</p>
+        </EmptyState>
+      ) : (
+        <>
       <FilterBar value={filter} onChange={(f) => { setFilter(f); setShown(PAGE) }} workflows={wfOptions} attrs={attrs} />
 
       <Strip runs={matched} since={filter.since} />
@@ -98,6 +109,8 @@ export function Activity(): JSX.Element {
           </button>
         ) : null}
       </section>
+        </>
+      )}
       <p class="muted small">Runs are kept for 14 days; each record is signed, and one that fails its signature shows as tampered.</p>
     </div>
   )

@@ -9,6 +9,7 @@ import { seg, go } from '../router'
 import { browser, walletOp, who, type WalletProfile, type FieldView } from '../api/browser'
 import { ValueSource, vsToWire, emptyVS, type VSValue } from '../components/ValueSource'
 import { BrowserTabs } from './Browsers'
+import { humanError } from '../api/errors'
 
 const FIELD_WORD: Record<string, string> = {
   name: 'Name', given_name: 'First name', family_name: 'Last name', email: 'Email', phone: 'Phone',
@@ -56,19 +57,19 @@ function DetailsList(): JSX.Element {
   const [profiles, setProfiles] = useState<WalletProfile[] | null>(null)
   const [err, setErr] = useState('')
   useEffect(() => {
-    browser.wallet().then((r) => setProfiles(r.profiles || [])).catch((e) => setErr(String(e)))
+    browser.wallet().then((r) => setProfiles(r.profiles || [])).catch((e) => setErr(humanError(e)))
   }, [])
   return (
     <div class="col browsers">
       <div class="page-head">
         <h1 class="screen-title serif">Browsers</h1>
-        <a class="btn primary sm" href="#/browser/details/new">Add personal details</a>
+        {profiles?.length ? <a class="btn primary sm" href="#/browser/details/new">Add personal details</a> : null}
       </div>
       <p class="muted">A bot asks for these by what they mean, and conductor types them into the form; the bot never receives a value.</p>
       <BrowserTabs active="details" />
       {err ? <div class="banner err">{err}</div> : null}
       {profiles === null ? (
-        <p class="muted">Loading…</p>
+        <p class="muted">{err ? 'Nothing to show until conductor answers.' : 'Loading…'}</p>
       ) : profiles.length === 0 ? (
         <div class="empty">
           <h3>No personal details yet</h3>
@@ -105,7 +106,7 @@ function ProfilePage({ name }: { name: string }): JSX.Element {
     browser
       .wallet()
       .then((r) => setP((r.profiles || []).find((x) => x.name === name) || null))
-      .catch((e) => setErr(String(e)))
+      .catch((e) => setErr(humanError(e)))
   }
   useEffect(load, [name])
 
@@ -190,7 +191,7 @@ function ReplaceValue({ profile, field, onClose }: { profile: string; field: str
       })
       onClose()
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }
@@ -245,7 +246,7 @@ function NewProfile(): JSX.Element {
       })
       go(`browser/details/${encodeURIComponent(name)}`)
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }

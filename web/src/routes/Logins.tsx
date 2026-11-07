@@ -9,6 +9,7 @@ import { go } from '../router'
 import { browser, walletOp, who, type LoginRecord } from '../api/browser'
 import { ValueSource, vsToWire, emptyVS, type VSValue } from '../components/ValueSource'
 import { BrowserTabs } from './Browsers'
+import { humanError } from '../api/errors'
 
 export function Logins(): JSX.Element {
   const [logins, setLogins] = useState<LoginRecord[] | null>(null)
@@ -16,7 +17,7 @@ export function Logins(): JSX.Element {
   const [testing, setTesting] = useState<Record<string, string>>({})
 
   function load() {
-    browser.logins().then((r) => setLogins(r.logins || [])).catch((e) => setErr(String(e)))
+    browser.logins().then((r) => setLogins(r.logins || [])).catch((e) => setErr(humanError(e)))
   }
   useEffect(load, [])
 
@@ -27,7 +28,7 @@ export function Logins(): JSX.Element {
       const word = r.status === 'ok' ? 'signed in' : r.status === 'needs-you' ? 'needs you: approve on your phone' : 'sign-in refused'
       setTesting((t) => ({ ...t, [name]: word }))
     } catch (e) {
-      setTesting((t) => ({ ...t, [name]: String(e) }))
+      setTesting((t) => ({ ...t, [name]: humanError(e) }))
     }
   }
 
@@ -48,7 +49,7 @@ export function Logins(): JSX.Element {
       <section class="panel">
         <span class="panel-title">Sign-ins</span>
         {logins === null ? (
-          <p class="muted">Loading logins…</p>
+          <p class="muted">{err ? 'Nothing to show until conductor answers.' : 'Loading logins…'}</p>
         ) : credentials.length === 0 ? (
           <p class="muted">No logins yet. Add one so a bot can sign in to a site you choose.</p>
         ) : (
@@ -151,7 +152,7 @@ export function AddLogin(): JSX.Element {
       })
       go('browser/logins')
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }

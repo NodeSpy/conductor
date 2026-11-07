@@ -8,12 +8,14 @@ import { api } from '../api/client'
 import type { PacksResponse } from '../api/types'
 import { staged, loadConfig, stage, stageDelete } from '../configStore'
 import { ReviewPanel } from '../components/ReviewPanel'
+import { humanError } from '../api/errors'
+import { EmptyState } from '../components/EmptyState'
 
 export function Packs(): JSX.Element {
   const [data, setData] = useState<PacksResponse | null>(null)
   const [err, setErr] = useState('')
   useEffect(() => {
-    api.packs().then(setData).catch((e) => setErr(String(e)))
+    api.packs().then(setData).catch((e) => setErr(humanError(e)))
     void loadConfig()
   }, [])
 
@@ -22,8 +24,18 @@ export function Packs(): JSX.Element {
   return (
     <div class="col">
       <h1 class="screen-title serif">Packs</h1>
+      {data !== null && !data.packs?.length ? (
+        <>
+          <ReviewPanel stagedCount={staged.value.length} />
+          <EmptyState testid="packs-empty" art={<BoxGlyph />} title="No packs installed">
+            <p>A pack is a ready-made set of workflows (reviewing pull requests, fixing CI) that you connect to your own accounts and secrets.</p>
+            <p>Find one with <code>conductor pack search</code>, then add it with <code>conductor pack add &lt;source&gt;</code>. It shows up here to hold or remove.</p>
+          </EmptyState>
+        </>
+      ) : (
+        <>
       <p class="muted">Installed packs. Hold pins a pack against updates; remove deletes it — both are staged as config edits and applied with a backup.</p>
-      {err ? <div class="banner err">{err}</div> : null}
+      {err ? <div class="banner err" role="alert">Couldn't load packs: {err}</div> : null}
 
       <ReviewPanel stagedCount={staged.value.length} />
 
@@ -54,9 +66,22 @@ export function Packs(): JSX.Element {
             </tbody>
           </table>
         ) : (
-          <p class="muted">No packs installed.</p>
+          <p class="muted">{err ? 'Nothing to show until conductor answers.' : 'Loading…'}</p>
         )}
       </section>
+        </>
+      )}
     </div>
+  )
+}
+
+// BoxGlyph is a parcel: the empty state's picture.
+function BoxGlyph(): JSX.Element {
+  return (
+    <svg width="56" height="52" viewBox="0 0 56 52" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+      <path d="M28 4l22 10v24L28 48 6 38V14z" />
+      <path d="M6 14l22 10 22-10M28 24v24" opacity="0.6" />
+      <path d="M17 9l22 10" opacity="0.45" />
+    </svg>
   )
 }

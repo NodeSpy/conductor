@@ -92,6 +92,7 @@ export async function start(port: number): Promise<Runtime> {
       `dashboard:`,
       `  enabled: true`,
       `  listen: [localhost]`,
+      `  auth: { allow_open: true }`,
       `  port: ${port}`,
       `settings:`,
       `  greeting: hello`,
@@ -160,6 +161,7 @@ export async function startIsolated(port: number): Promise<Runtime> {
       `dashboard:`,
       `  enabled: true`,
       `  listen: [localhost]`,
+      `  auth: { allow_open: true }`,
       `  port: ${port}`,
       `settings:`,
       `  greeting: hello   # inline comment the edit must preserve`,
@@ -179,6 +181,47 @@ export async function startIsolated(port: number): Promise<Runtime> {
   })
   child.unref()
   if (!child.pid) throw new Error('failed to spawn isolated daemon')
+  await waitForStatus(baseURL)
+  return { bin, config, stateDir, home, port, baseURL, pid: child.pid, logFile }
+}
+
+// startEmpty boots a DEDICATED daemon with nothing configured beyond the
+// dashboard and the one connector a config needs to load: no triggers, bots, teams, tickets, packs or
+// secrets — a first visit on a fresh box. Every screen must read as an empty
+// state there, never an error.
+//
+// With runtime (the default) it has one agent command-line runtime, which a
+// bot's workers need, as a box ready for its first bot would; without, the
+// Bots welcome says that comes first.
+export async function startEmpty(port: number, opts: { runtime?: boolean } = {}): Promise<Runtime> {
+  const bin = resolveBin()
+  const root = mkdtempSync(path.join(tmpdir(), 'dash-e2e-empty-'))
+  const stateDir = path.join(root, 'state')
+  const home = path.join(root, 'home')
+  const config = path.join(root, 'config.yaml')
+  const logFile = path.join(root, 'daemon.log')
+  const baseURL = `http://127.0.0.1:${port}`
+  writeFileSync(
+    config,
+    [
+      `store: { state_file: ${path.join(stateDir, 'state.json')} }`,
+      `dashboard:`,
+      `  enabled: true`,
+      `  listen: [localhost]`,
+      `  auth: { allow_open: true }`,
+      `  port: ${port}`,
+      `connectors:`,
+      `  box: { use: command }`,
+      ...(opts.runtime === false ? [] : [`runtimes:`, `  agent: { use: cli, tool: claude-code }`]),
+      ``,
+    ].join('\n'),
+    { mode: 0o600 },
+  )
+  const env = hermeticEnv(home)
+  const out = openSync(logFile, 'a')
+  const child: ChildProcess = spawn(bin, ['run', '--config', config], { env, detached: true, stdio: ['ignore', out, out] })
+  child.unref()
+  if (!child.pid) throw new Error('failed to spawn empty daemon')
   await waitForStatus(baseURL)
   return { bin, config, stateDir, home, port, baseURL, pid: child.pid, logFile }
 }

@@ -7,6 +7,7 @@ import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { approvalView, decideProposal, type ApprovalView } from '../api/auth'
 import { botsApi, type ProposalRow } from '../api/bots'
+import { humanError } from '../api/errors'
 
 export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element {
   const [view, setView] = useState<ApprovalView | null>(null)
@@ -16,7 +17,7 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
   const [done, setDone] = useState('')
 
   useEffect(() => {
-    approvalView(bot, id).then(setView).catch((e) => setErr(String(e)))
+    approvalView(bot, id).then(setView).catch((e) => setErr(humanError(e)))
     botsApi.botProposals(bot).then((r) => setRow(r.proposals.find((p) => p.proposal === id) || null)).catch(() => {})
   }, [bot, id])
 
@@ -27,7 +28,7 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
       await decideProposal(bot, id, decision)
       setDone(decision)
     } catch (e) {
-      const t = e instanceof Error ? e.message : String(e)
+      const t = humanError(e)
       if (!/cancelled/.test(t)) setErr(t)
     } finally {
       setBusy('')

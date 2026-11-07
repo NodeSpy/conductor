@@ -6,6 +6,7 @@
 import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { browser, decidePurchase, money, who, hostOf, type PurchaseDetail, type Purchase as P, type LayerState } from '../api/browser'
+import { humanError } from '../api/errors'
 
 // PurchaseRow is a purchase in a list (Payment cards, Needs you).
 export function PurchaseRow({ p }: { p: P }): JSX.Element {
@@ -50,7 +51,7 @@ export function Purchase({ id }: { id: string }): JSX.Element {
   const [denying, setDenying] = useState(false)
 
   function load() {
-    browser.purchase(id).then(setD).catch((e) => setErr(String(e)))
+    browser.purchase(id).then(setD).catch((e) => setErr(humanError(e)))
   }
   useEffect(load, [id])
 
@@ -61,7 +62,7 @@ export function Purchase({ id }: { id: string }): JSX.Element {
       await decidePurchase(id, decision, decision === 'deny' ? reason : '')
       setDone(decision)
     } catch (e) {
-      setErr(String(e))
+      setErr(humanError(e))
     } finally {
       setBusy('')
     }
