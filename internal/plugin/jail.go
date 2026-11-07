@@ -692,12 +692,15 @@ func noExposeLocal(name string) string {
 const notLoopbackExpose = "an exposure in a jail reaches a listener on 127.0.0.1 only — listen on 127.0.0.1 (or 0.0.0.0)"
 
 // exposeRefusal is why a jailed launch of s would not be granted the
-// listener(s) in addrs ("" when it would), from its recorded manifest alone —
-// grantExposeTargets' judgement without a launch. Conductor's own ports are
+// listener(s) in addrs ("" when it would, or runs unjailed), from its
+// recorded manifest alone — grantExposeTargets' judgement without a launch. Conductor's own ports are
 // not judged: only the running daemon knows which those are.
 func exposeRefusal(s Spec, addrs []string) string {
 	if len(addrs) == 0 || s.Probe || s.TrustFull {
 		return ""
+	}
+	if _, before := runsAsBefore(s); before {
+		return "" // unjailed, as before the jail: it reaches loopback as it did
 	}
 	if !s.Manifest.ExposeLocal {
 		return fmt.Sprintf("plugin %s would not be granted %s, the listener(s) it is wired to expose: %s", s.Name, strings.Join(addrs, ", "), noExposeLocal(s.Name))

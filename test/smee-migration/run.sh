@@ -179,12 +179,26 @@ daemon_env() { # <dir>
     XDG_RUNTIME_DIR="$1/run" TMPDIR="$1/tmp"
 }
 
+# HOST is the host the next daemons boot on: "" (this one, which can jail
+# plugins), root (the daemon runs as root — a default Docker container), or
+# userns-blocked (non-root, user namespaces blocked — a container whose
+# seccomp denies them). On the last two the plugin jail can't be built.
+HOST=""
 boot() { # <dir> <conductor>
-  local d=$1
+  local d=$1 name; name="$(basename "$d")/daemon"
   mkdir -p "$d/home" "$d/run" "$d/tmp"
   chmod 700 "$d/run"
   # shellcheck disable=SC2046
-  start_bg "$(basename "$d")/daemon" $(daemon_env "$d") "$2" run --config "$d/cfg/conductor.yaml" --state-dir "$d/state"
+  local cmd=($(daemon_env "$d") "$2" run --config "$d/cfg/conductor.yaml" --state-dir "$d/state")
+  case "$HOST" in
+    "") start_bg "$name" "${cmd[@]}" ;;
+    root) start_bg "$name" unshare --user --map-root-user -- "${cmd[@]}" ;;
+    userns-blocked)
+      # bwrap forks: the daemon records its own pid (stop_bg kills that).
+      "$BWRAP" --unshare-user --disable-userns --die-with-parent --dev-bind / / -- \
+        sh -c 'echo $$ >"$0"; exec "$@"' "$WORK/$name.pid" "${cmd[@]}" >>"$WORK/$name.log" 2>&1 &
+      wait_for 10 test -s "$WORK/$name.pid" ;;
+  esac
 }
 stop() { stop_bg "$(basename "$1")/daemon" "conductor"; }
 
@@ -226,6 +240,16 @@ expect() {
   if grep -q -- "$why" "$WORK/$name/daemon.log"; then pass "$name: the refusal is logged"; else fail "$name: no log line naming the refusal ($why)"; fi
 }
 
+# asbefore <name> <plugin>: on a host that cannot jail plugins, the plugin
+# ran unjailed as before the jail, and the log says so.
+asbefore() {
+  if grep -E "plugin [^ ]*$2[^ ]*: WARNING: running UNJAILED, as before the plugin jail — this host cannot jail plugins" "$WORK/$1/daemon.log" >/dev/null; then
+    pass "$1: the $2 plugin runs unjailed as before the jail, with the warning"
+  else
+    fail "$1: the $2 plugin did not run as before the jail"
+  fi
+}
+
 # jailed <name> <plugin>: the new conductor ran the plugin in its jail.
 jailed() {
   if grep -E "plugin [^ ]*$2[^ ]*: registered connector type .*permissions: jailed to" "$WORK/$1/daemon.log" >/dev/null; then
@@ -252,7 +276,9 @@ row() {
   local orig; orig=$(cat "$d/cfg/conductor.yaml")
   local seeds=("github=$gh")
   [ "$smee" = - ] || seeds+=("smee=$smee")
-  "$BIN/seed" -state "$d/state" "${seeds[@]}" >"$d/seed.log" 2>&1 || { fail "$name: seed ($(tail -1 "$d/seed.log"))"; return; }
+  local pre=()
+  [ -n "$HOST" ] && pre=(-pre-jail) # a box that upgraded: its plugins predate the jail
+  "$BIN/seed" -state "$d/state" "${pre[@]}" "${seeds[@]}" >"$d/seed.log" 2>&1 || { fail "$name: seed ($(tail -1 "$d/seed.log"))"; return; }
   if [ "$releases" != - ]; then
     # shellcheck disable=SC2086
     forge "$d" ${releases//,/ }
@@ -264,7 +290,10 @@ row() {
   fi
   if wait_for 60 subscribed "$name-hooks"; then pass "$name: the webhook channel has a subscriber"; else fail "$name: nobody subscribed to the webhook channel"; fi
   sleep 1 # the listener the relay posts to is up by the time the relay subscribed; give it a beat anyway
-  if [ "$cond" = "$CONDUCTOR_NEW" ]; then
+  if [ "$cond" = "$CONDUCTOR_NEW" ] && [ -n "$HOST" ]; then
+    asbefore "$name" github
+    asbefore "$name" smee # gh-smee: the smee the migration installed inherits github's treatment
+  elif [ "$cond" = "$CONDUCTOR_NEW" ]; then
     jailed "$name" github
     [ "$migrates" = yes ] && jailed "$name" smee # (hooks-only: the one smee connector is the unjailed hooks-smee)
   fi
@@ -353,6 +382,26 @@ fi
 # An smee from before expose_local is installed, and nothing newer is out:
 # held back like the fresh install.
 row new-cond.old-smee-no-release "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_OLD" "v1.1.0=$SMEE_OLD" hooks-only yes yes
+
+# Hosts that cannot jail plugins, upgraded from a conductor without the jail
+# (github recorded as installed before it), smee not installed and its
+# released build without expose_local. The migration installs smee and it
+# inherits github's treatment there — unjailed, as before the jail, with the
+# warning — instead of being refused as a plugin installed since; so the
+# whole config migrates and both channels keep delivering.
+BWRAP=$(command -v bwrap || true)
+HOST=root
+row cantjail-root.fresh-smee "$CONDUCTOR_NEW" "$GITHUB_NEW" - "v1.1.0=$SMEE_OLD" yes yes yes
+if [ -n "$BWRAP" ]; then
+  HOST=userns-blocked
+  row cantjail-userns-blocked.fresh-smee "$CONDUCTOR_NEW" "$GITHUB_NEW" - "v1.1.0=$SMEE_OLD" yes yes yes
+else
+  fail "cantjail-userns-blocked: needs bwrap (--disable-userns) to block user namespaces"
+fi
+for r in cantjail-root.fresh-smee cantjail-userns-blocked.fresh-smee; do
+  if grep -q "this host cannot jail plugins" "$WORK/$r/daemon.log" 2>/dev/null; then pass "$r: the boot warns this host cannot jail plugins"; else fail "$r: no host-jail warning"; fi
+done
+HOST=""
 
 # The migrated bundled-webhook relay with its trust taken off by hand: jailed,
 # it is refused conductor's own port, and the log names the fix.

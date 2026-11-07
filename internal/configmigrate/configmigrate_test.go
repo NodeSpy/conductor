@@ -418,7 +418,7 @@ func TestEnsureFailureWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	main := write(t, dir, "conductor.yaml", githubOld)
 	var asked []string
-	_, err := Apply(main, Options{PortFree: allFree, Ensure: func(uses []string) error {
+	_, err := Apply(main, Options{PortFree: allFree, Ensure: func(uses []string, _ map[string][]string) error {
 		asked = uses
 		return errors.New("offline")
 	}})
@@ -507,7 +507,7 @@ func TestNothingToDo(t *testing.T) {
 	dir := t.TempDir()
 	body := "connectors:\n  gh:\n    use: github\n    webhook: { listen: \"127.0.0.1:9000\" }\n"
 	main := write(t, dir, "conductor.yaml", body)
-	res, err := Apply(main, Options{PortFree: allFree, Ensure: func([]string) error {
+	res, err := Apply(main, Options{PortFree: allFree, Ensure: func([]string, map[string][]string) error {
 		t.Fatal("nothing to install")
 		return nil
 	}})

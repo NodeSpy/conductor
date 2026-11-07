@@ -42,7 +42,7 @@ func stubMigrateOptions(t *testing.T, ensure func([]string) error, check func(st
 	old := migrateOptions
 	t.Cleanup(func() { migrateOptions = old })
 	migrateOptions = func(string, bool) configmigrate.Options {
-		return configmigrate.Options{Ensure: ensure, Check: check, Logf: logf, PortFree: func(int) bool { return true }}
+		return configmigrate.Options{Ensure: func(u []string, _ map[string][]string) error { return ensure(u) }, Check: check, Logf: logf, PortFree: func(int) bool { return true }}
 	}
 }
 
@@ -224,6 +224,45 @@ func TestApproveForMigration(t *testing.T) {
 			}
 			if len(notes) != 1 || !strings.Contains(notes[0], "approved smee connectors/smee/v1.2.0") || !strings.Contains(notes[0], "expose") {
 				t.Fatalf("notes = %q", notes)
+			}
+		})
+	}
+}
+
+// smee inherits the pre-jail mark of what it takes over: a plugin (github)
+// installed before the jail, or the bundled webhook connector (conductor's
+// own relay); not a plugin installed since. (Not named github here: this
+// test binary registers an in-process github fixture.)
+func TestInheritPreJail(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		from     string
+		ghPre    bool
+		inherits bool
+	}{
+		{"a forge plugin from before the jail", "inherit-forge", true, true},
+		{"a forge plugin installed since", "inherit-forge", false, false},
+		{"the bundled webhook connector", "webhook", false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			config.SetStateDir(t.TempDir())
+			t.Cleanup(func() { config.SetStateDir("") })
+			st := plugin.LoadInstallState(plugin.InstallDir())
+			st.Put(plugin.Installed{Key: "connectors/inherit-forge", Name: "inherit-forge", Resolved: "connectors/inherit-forge/v2.11.1", PreJail: c.ghPre})
+			st.Put(plugin.Installed{Key: "connectors/smee", Name: "smee", Resolved: "connectors/smee/v1.1.0"})
+			if err := st.Save(); err != nil {
+				t.Fatal(err)
+			}
+			got, err := inheritPreJail(map[string][]string{"smee": {c.from}}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got["connectors/smee"] != c.inherits {
+				t.Fatalf("inherits = %v, want %v", got, c.inherits)
+			}
+			rec, _ := plugin.LoadInstallState(plugin.InstallDir()).Get("connectors/smee")
+			if rec.PreJail != c.inherits {
+				t.Fatalf("the installed smee's pre_jail = %v", rec.PreJail)
 			}
 		})
 	}
