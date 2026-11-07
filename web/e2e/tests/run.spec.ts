@@ -40,8 +40,10 @@ test('a finished run offers a retry-from-step form', async ({ page }) => {
   await page.goto(`/#/runs/${run.id}`)
   await expect(page.locator('.dl-tree')).toBeVisible()
 
-  // The Retry control opens the from-step form (no live run → Retry, not Stop).
-  await page.locator('.dl-actions .btn', { hasText: 'Retry' }).click()
+  // A passed run shows no top-level Retry button (the design withholds it for
+  // status 'ok'); the step card's own "Retry from here…" is the affordance.
+  await expect(page.locator('.dl-actions .btn', { hasText: 'Retry' })).toHaveCount(0)
+  await page.locator('.dl-step-open .btn', { hasText: 'Retry from here' }).click()
   await expect(page.locator('.retry-form')).toBeVisible()
   await expect(page.locator('.retry-form select')).toBeVisible()
 })
@@ -73,7 +75,7 @@ test('a forced retry asks to confirm, showing the steps it runs again', async ({
     })
   })
   await page.goto(`/#/runs/${run.id}`)
-  await page.locator('.dl-actions .btn', { hasText: 'Retry' }).click()
+  await page.locator('.dl-step-open .btn', { hasText: 'Retry from here' }).click()
   await page.locator('.retry-form .field-check input').check()
   await page.locator('.retry-form .btn.primary', { hasText: 'Retry' }).click()
   const dialog = page.getByTestId('stepup-dialog')

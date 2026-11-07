@@ -18,11 +18,18 @@ import { api } from '../api/client'
 import type { RunDetailResponse, RunStep } from '../api/types'
 import { liveTick, statusMark } from '../state'
 import { StatusMark } from '../components/StatusMark'
-import { humanDuration, ago } from '../lib/format'
+import { Icon } from '../components/Icon'
+import { humanDuration, ago, plural } from '../lib/format'
 import { go } from '../router'
 import { humanError } from '../api/errors'
 
 type Tab = 'outputs' | 'inputs' | 'diff' | 'error'
+
+type AuditEntry = Record<string, unknown>
+
+function hm(iso: string): string {
+  return new Date(iso).toTimeString().slice(0, 5)
+}
 
 export function RunDetail({ id }: { id: string }): JSX.Element {
   const [data, setData] = useState<RunDetailResponse | null>(null)
@@ -32,6 +39,8 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [retryOpen, setRetryOpen] = useState(false)
+  const [retryFrom, setRetryFrom] = useState<string | undefined>(undefined)
+  const [audit, setAudit] = useState<AuditEntry[]>([])
   const tick = liveTick.value
 
   const reload = () =>
@@ -45,6 +54,15 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
 
   useEffect(() => {
     void reload()
+    // The run's own slice of the audit trail (design: a separate collapsible
+    // card, "N events for this run"): every real audit write that touches a
+    // run carries its id in a "run" field (internal/engine's Audit calls), so
+    // this filters the one audit feed client-side rather than adding a
+    // server-side ?run= filter for a card that only ever shows a handful.
+    api
+      .audit()
+      .then((r) => setAudit((r.entries || []).filter((e) => String((e as AuditEntry)['run'] ?? '') === id)))
+      .catch(() => setAudit([]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
@@ -107,19 +125,29 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
       <div class="dl-actions">
         {data.live ? (
           <button class="btn secondary" type="button" disabled={busy} onClick={stop}>
+            <Icon name="x" />
             Stop run…
           </button>
-        ) : (
-          <button class="btn primary" type="button" onClick={() => setRetryOpen((v) => !v)}>
-            Retry…
+        ) : r.status !== 'ok' ? (
+          <button
+            class="btn primary"
+            type="button"
+            onClick={() => {
+              setRetryFrom(r.failed_step)
+              setRetryOpen((v) => !v)
+            }}
+          >
+            <Icon name="updates" />
+            Retry{r.failed_step ? ` from "${r.failed_step}"` : ''}…
           </button>
-        )}
+        ) : null}
       </div>
 
       {retryOpen && !data.live ? (
         <RetryForm
           steps={steps}
           failedStep={r.failed_step}
+          initialFrom={retryFrom}
           onCancel={() => setRetryOpen(false)}
           onDone={(msg, newID) => {
             setRetryOpen(false)
@@ -142,7 +170,21 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
             <StepTree steps={steps} sel={current?.id || ''} onSel={(sid) => { setSel(sid); setTab('outputs') }} />
           </section>
 
-          {current ? <StepCard step={current} tab={tab} setTab={setTab} /> : null}
+          {current ? (
+            <StepCard
+              step={current}
+              tab={tab}
+              setTab={setTab}
+              onRetryFrom={
+                !data.live && current.status !== 'idle'
+                  ? () => {
+                      setRetryFrom(current.id)
+                      setRetryOpen(true)
+                    }
+                  : undefined
+              }
+            />
+          ) : null}
         </div>
 
         <div class="dl-col-side">
@@ -150,7 +192,7 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
             <header class="dl-ch"><h2>Details</h2></header>
             <dl class="dl-facts">
               <dt>Started</dt>
-              <dd>{ago(r.started)}</dd>
+              <dd>{ago(r.started)} <span class="dl-sub">({hm(r.started)})</span></dd>
               <dt>{data.live ? 'Running for' : 'Took'}</dt>
               <dd>{humanDuration(r.duration_ms)}</dd>
               <dt>Triggered by</dt>
@@ -165,7 +207,7 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
               ) : null}
             </dl>
             <details class="dl-audit-d">
-              <summary>For audit: the run id and its signed record</summary>
+              <summary><Icon name="chev" />For audit: the run id and its signed record</summary>
               <dl class="dl-facts">
                 <dt>Run</dt>
                 <dd class="mono">{r.id}</dd>
@@ -174,9 +216,46 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
               </dl>
             </details>
           </section>
+          <AuditTrailCard entries={audit} runID={id} />
         </div>
       </div>
     </div>
+  )
+}
+
+// AuditTrailCard: the run's own slice of the audit log, a separate
+// collapsible card (prototype's run-audit details). A plain word-for-word
+// rendering (event name, its detail line, how long ago) — the full Audit tab
+// (System → Logs & audit) has the richer "who did what" formatting.
+function AuditTrailCard({ entries, runID }: { entries: AuditEntry[]; runID: string }): JSX.Element {
+  const shown = entries.slice(0, 6)
+  return (
+    <details class="dl-card dl-files-d run-audit">
+      <summary class="panel-head">
+        <h3>Audit trail</h3>
+        <span class="muted small">{plural(entries.length, 'event')} for this run</span>
+      </summary>
+      {shown.length ? (
+        <ul class="dl-list">
+          {shown.map((a, i) => (
+            <li class="dl-audit" key={i}>
+              <span class="dl-nt">
+                <b>{String(a['event'] ?? '').replace(/_/g, ' ')}</b>
+                <span class="dl-why">{String(a['detail'] ?? '')}</span>
+              </span>
+              <span class="dl-age">{a['ts'] ? ago(String(a['ts'])) : ''}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p class="dl-sub">No audit entries recorded for this run.</p>
+      )}
+      <p class="dl-foot-note">
+        <a class="dl-link" href={'#/system/logs?run=' + encodeURIComponent(runID)}>
+          The full audit log for this run →
+        </a>
+      </p>
+    </details>
   )
 }
 
@@ -268,7 +347,25 @@ function tabsFor(s: RunStep): Tab[] {
   return t
 }
 
-function StepCard({ step, tab, setTab }: { step: RunStep; tab: Tab; setTab: (t: Tab) => void }): JSX.Element {
+const STEP_WORD: Record<string, string> = {
+  ok: 'Passed',
+  running: 'Running',
+  failed: 'Failed',
+  skipped: 'Stopped',
+  idle: 'Not reached',
+}
+
+function StepCard({
+  step,
+  tab,
+  setTab,
+  onRetryFrom,
+}: {
+  step: RunStep
+  tab: Tab
+  setTab: (t: Tab) => void
+  onRetryFrom?: () => void
+}): JSX.Element {
   const tabs = tabsFor(step)
   const active = tabs.includes(tab) ? tab : tabs[0]
   const isLive = step.status === 'running'
@@ -276,7 +373,7 @@ function StepCard({ step, tab, setTab }: { step: RunStep; tab: Tab; setTab: (t: 
     <section class="dl-card">
       <header class="dl-ch">
         <h2>{step.id}</h2>
-        <StatusMark s={STEP_MARK[step.status] || 'skip'} word={step.status === 'idle' ? 'Not reached' : undefined} />
+        <StatusMark s={STEP_MARK[step.status] || 'skip'} word={STEP_WORD[step.status] || 'Stopped'} />
         <span class="dl-sp" />
         {!isLive && tabs.length > 1 ? (
           <div class="seg" role="group">
@@ -288,6 +385,21 @@ function StepCard({ step, tab, setTab }: { step: RunStep; tab: Tab; setTab: (t: 
           </div>
         ) : null}
       </header>
+      {isLive ? (
+        <div class="dl-step-open">
+          <button class="btn sm secondary" type="button" disabled title="Restarting a running step isn't wired up in this phase">
+            <Icon name="undo" />
+            Restart this step…
+          </button>
+        </div>
+      ) : onRetryFrom ? (
+        <div class="dl-step-open">
+          <button class="btn sm secondary" type="button" onClick={onRetryFrom}>
+            <Icon name="undo" />
+            Retry from here…
+          </button>
+        </div>
+      ) : null}
       <StepBody step={step} active={active} isLive={isLive} />
       {(step.runtime || step.model) && !isLive ? (
         <p class="dl-sub step-env">
@@ -335,18 +447,20 @@ function DiffView({ diff }: { diff: string }): JSX.Element {
 function RetryForm({
   steps,
   failedStep,
+  initialFrom,
   id,
   onCancel,
   onDone,
 }: {
   steps: RunStep[]
   failedStep?: string
+  initialFrom?: string
   id: string
   onCancel: () => void
   onDone: (msg: string, newID: string) => void
 }): JSX.Element {
   const runnable = steps.filter((s) => s.status !== 'idle')
-  const [from, setFrom] = useState(failedStep || (runnable[0]?.id ?? ''))
+  const [from, setFrom] = useState(initialFrom || failedStep || (runnable[0]?.id ?? ''))
   const [force, setForce] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
