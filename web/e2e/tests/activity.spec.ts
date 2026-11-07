@@ -22,8 +22,8 @@ test('Activity lists every run from the daemon, grouped and filterable', async (
   await expect(page.locator('.screen-title', { hasText: 'Activity' })).toBeVisible()
   await expect(page.locator('.tbl')).toBeVisible()
 
-  // The nav highlights Activity.
-  await expect(page.locator('.nav-item.on[aria-current="page"]')).toHaveText('Activity')
+  // The nav highlights Activity (Shell.tsx's rail, phase 1).
+  await expect(page.locator('.rail nav.nav a.on[aria-current="page"]')).toHaveText('Activity')
 
   // Every run id shows in the table.
   for (const r of runs) {
@@ -31,8 +31,8 @@ test('Activity lists every run from the daemon, grouped and filterable', async (
   }
 
   // The runs-per-hour strip rendered with bars and a legend (passed is green).
-  await expect(page.locator('.strip .chart .bar')).not.toHaveCount(0)
-  await expect(page.locator('.strip .legend .legend-item', { hasText: 'Passed' })).toBeVisible()
+  await expect(page.locator('.runs-strip .chart .bar')).not.toHaveCount(0)
+  await expect(page.locator('.runs-strip .legend .legend-item', { hasText: 'Passed' })).toBeVisible()
 
   // Free-text search narrows the list: filter to the "build" workflow.
   const buildRuns = runs.filter((r) => r.workflow === 'build')
@@ -50,10 +50,10 @@ test('Activity lists every run from the daemon, grouped and filterable', async (
 
 test('the runs-per-hour bar reveals a tooltip on hover', async ({ page }) => {
   await page.goto('/#/activity')
-  await expect(page.locator('.strip .chart .bar')).not.toHaveCount(0)
+  await expect(page.locator('.runs-strip .chart .bar')).not.toHaveCount(0)
 
   // Hover the last (most recent) bar; a tooltip with per-status counts appears.
-  const bars = page.locator('.strip .chart .bar')
+  const bars = page.locator('.runs-strip .chart .bar')
   await bars.last().hover()
   const tip = page.locator('.bar-tip')
   await expect(tip).toBeVisible()
@@ -63,7 +63,9 @@ test('the runs-per-hour bar reveals a tooltip on hover', async ({ page }) => {
 test('a live run appears in Activity over SSE without a reload', async ({ page, daemon }) => {
   await page.goto('/#/activity')
   await expect(page.locator('.tbl')).toBeVisible()
-  await expect(page.locator('.conn:visible')).toHaveAttribute('data-conn', 'live')
+  // The SSE stream connected: the top-bar connection cell only renders while
+  // it isn't live (Shell.tsx's ThemeCell), so "live" is its absence.
+  await expect(page.getByTestId('conn-bar')).toBeHidden()
 
   const before = await dataRows(page).count()
   const tickBefore = Number(await page.locator('.col').getAttribute('data-tick'))

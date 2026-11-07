@@ -189,7 +189,7 @@ function Strip({ runs: rs, since }: { runs: RunSummary[]; since: string }): JSX.
   }
 
   return (
-    <section class="panel strip" aria-label="Runs per period">
+    <section class="panel runs-strip" aria-label="Runs per period">
       <div class="panel-head">
         <span class="panel-title serif">Runs per {unit}</span>
         <span class="panel-sub">{plural(rs.length, 'run')}</span>

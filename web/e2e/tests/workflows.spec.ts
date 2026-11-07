@@ -15,7 +15,7 @@ test('Workflows lists every configured trigger with its run tally', async ({ pag
 
   await page.goto('/#/workflows')
   await expect(page.locator('.screen-title', { hasText: 'Workflows' })).toBeVisible()
-  await expect(page.locator('.nav-item.on[aria-current="page"]')).toHaveText('Workflows')
+  await expect(page.locator('.rail nav.nav a.on[aria-current="page"]')).toHaveText('Workflows')
 
   // A row per configured workflow.
   await expect(page.locator('.tbl tbody tr[data-wf]')).toHaveCount(wfs.length)

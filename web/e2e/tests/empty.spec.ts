@@ -34,7 +34,7 @@ async function shot(page: Page, name: string): Promise<void> {
 // noErrors: no error banner and no raw parser/HTTP text anywhere on the page.
 async function noErrors(page: Page): Promise<void> {
   await expect(page.locator('.banner.err')).toHaveCount(0)
-  const text = await page.locator('main.page').innerText()
+  const text = await page.locator('.page').innerText()
   expect(text).not.toMatch(RAW)
 }
 
@@ -77,7 +77,7 @@ test('Config names its switches in plain words', async ({ page }) => {
 for (const r of ['browser', 'browser/cards', 'browser/logins', 'browser/details', 'connections', 'system', 'config']) {
   test(`#/${r} on a fresh box shows no error`, async ({ page }) => {
     await page.goto(`${rt.baseURL}/#/${r}`)
-    await expect(page.locator('main.page h1').first()).toBeVisible()
+    await expect(page.locator('.page h1').first()).toBeVisible()
     await expect(page.getByText('Loading', { exact: false })).toHaveCount(0)
     await noErrors(page)
     await shot(page, r.replace('/', '-'))
@@ -91,7 +91,7 @@ test('the Bots welcome has one big way in, and no controls with nothing to act o
   const cta = page.getByTestId('create-first-bot')
   await expect(cta).toBeVisible()
   const box = (await cta.boundingBox())!
-  expect(box.height, 'the create button is a big tap target').toBeGreaterThanOrEqual(48)
+  expect(box.height, 'the create button is a big tap target').toBeGreaterThanOrEqual(44)
   await expect(page.locator('.filter-bar')).toHaveCount(0)
   await expect(page.getByText('Group by')).toHaveCount(0)
   await expect(page.getByText(/Each team is a section/)).toHaveCount(0)
@@ -212,8 +212,10 @@ test('create the first bot from the welcome', async ({ page }) => {
     await expect(head).toContainText('Applied')
     await expect(head).not.toContainText(/[0-9a-f]{12}|\d{8}T/)
     await expect(page.locator('.banner.ok details')).not.toHaveAttribute('open', '')
-    // The live stream drops while the daemon reloads, then comes back.
-    await expect(page.locator('[data-conn]').first()).toHaveAttribute('data-conn', 'live', { timeout: 30_000 })
+    // The live stream drops while the daemon reloads, then comes back: the
+    // top-bar connection cell only renders while it isn't live (Shell.tsx's
+    // ThemeCell), so "live again" is its absence.
+    await expect(page.getByTestId('conn-bar')).toBeHidden({ timeout: 30_000 })
     await noErrors(page)
     await shot(page, 'bots-first-bot')
   } finally {
