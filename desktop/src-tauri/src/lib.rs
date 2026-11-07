@@ -69,6 +69,16 @@ async fn complete_setup(app: AppHandle, state: tauri::State<'_, AppState>) -> Re
         .daemon_origin()
         .ok_or_else(|| "daemon URL is not a valid URL".to_string())?;
 
+    // Prove the settings work before saying so: a real sign-in with a
+    // throwaway session reaches the daemon, names the operator and signs
+    // with the key, and each failure gets a message that says which.
+    let probe = Client::new(&settings.daemon_url, &settings.ssh_public_key_path).map_err(|e| e.to_string())?;
+    match tokio::time::timeout(std::time::Duration::from_secs(30), probe.sign_in(&settings.operator)).await {
+        Err(_) => return Err(format!("{} did not answer within 30s.", settings.daemon_url)),
+        Ok(Err(e)) => return Err(setup_error(&settings.daemon_url, &e)),
+        Ok(Ok(())) => {}
+    }
+
     // Dynamic ACL: grant the remote page at this origin (and only this
     // origin) the ssh_sign command on the main window. Re-running this adds a
     // fresh capability each time the daemon URL changes; stale ones from a
@@ -91,6 +101,24 @@ async fn complete_setup(app: AppHandle, state: tauri::State<'_, AppState>) -> Re
         let _ = window.set_focus();
     }
     Ok(())
+}
+
+/// A setup failure in words that say what to fix.
+fn setup_error(url: &str, e: &client::ClientError) -> String {
+    use client::ClientError::*;
+    match e {
+        Network(err) if err.is_connect() || err.is_timeout() => format!(
+            "Can't reach {url}. Check the daemon is running with its dashboard enabled, \
+             listening on this address (dashboard.listen: [localhost, tailscale] for a remote one)."
+        ),
+        Network(err) => format!("Can't talk to {url}: {err}"),
+        Sign(err) => format!("Couldn't sign with your SSH key: {err}"),
+        Status(code, body) => format!("The daemon refused sign-in ({code}): {body}"),
+        Unauthorized | SignIn(_) => format!(
+            "The daemon refused sign-in. Check the operator name, and that operators.<name>.ssh_key \
+             in its config is this key."
+        ),
+    }
 }
 
 async fn restart_subscription(app: &AppHandle, state: &tauri::State<'_, AppState>, settings: Settings) {

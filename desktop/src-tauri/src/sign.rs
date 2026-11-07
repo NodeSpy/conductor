@@ -54,11 +54,12 @@ pub async fn ssh_sign(
         return Err(SignError::NamespaceNotAllowed(namespace.to_string()));
     }
 
+    let key = expand_home(pubkey_path);
     let mut child = Command::new("ssh-keygen")
         .arg("-Y")
         .arg("sign")
         .arg("-f")
-        .arg(pubkey_path)
+        .arg(&key)
         .arg("-n")
         .arg(namespace)
         .stdin(Stdio::piped())
@@ -77,9 +78,12 @@ pub async fn ssh_sign(
         // Drop closes stdin so ssh-keygen sees EOF.
     }
 
-    let output = child
-        .wait_with_output()
+    // ssh-keygen falls back to the private key file when the agent lacks the
+    // key, and a passphrase-protected one would wait for input that never
+    // comes: bound the wait.
+    let output = tokio::time::timeout(std::time::Duration::from_secs(20), child.wait_with_output())
         .await
+        .map_err(|_| SignError::KeygenFailed("timed out — is the key loaded in ssh-agent (`ssh-add -l`)?".into()))?
         .map_err(SignError::Spawn)?;
 
     if !output.status.success() {
@@ -98,9 +102,26 @@ pub async fn ssh_sign(
     Ok(sig)
 }
 
+/// Expands a leading `~/` to the home directory (the setup form shows and
+/// accepts `~/.ssh/...`; no shell is involved to expand it).
+pub fn expand_home(path: &str) -> String {
+    match (path.strip_prefix("~/"), dirs::home_dir()) {
+        (Some(rest), Some(home)) => home.join(rest).to_string_lossy().into_owned(),
+        _ => path.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expands_only_a_leading_tilde() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(expand_home("~/.ssh/k.pub"), home.join(".ssh/k.pub").to_string_lossy());
+        assert_eq!(expand_home("/abs/k.pub"), "/abs/k.pub");
+        assert_eq!(expand_home("a/~/k.pub"), "a/~/k.pub");
+    }
 
     #[test]
     fn allowlist_accepts_only_dashboard_namespaces() {
