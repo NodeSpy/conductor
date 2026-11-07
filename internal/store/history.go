@@ -50,6 +50,10 @@ type RunHistory struct {
 	Trigger json.RawMessage `json:"trigger,omitempty"`
 	Action  json.RawMessage `json:"action,omitempty"`
 	Steps   []StepRecord    `json:"steps,omitempty"`
+	// Def fingerprints the trigger's steps as they were when the run started
+	// (config.StepsFingerprint), so a retry can tell they changed since.
+	// Empty on records written before it existed.
+	Def string `json:"def,omitempty"`
 	// Sig is an HMAC-SHA256 over the record (Sig cleared), keyed by a
 	// per-installation key next to the history files. Retry verifies it
 	// before trusting pinned outputs (#36 review M8); display paths don't.

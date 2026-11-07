@@ -71,6 +71,7 @@ func (r *Runner) beginHistory(ctx context.Context, run store.WorkflowRun, t core
 			Kind:    t.Kind,
 			Variant: spec.Name,
 			On:      spec.On,
+			Def:     config.StepsFingerprint(spec.Steps),
 			Repo:    t.Target.Repo,
 			Number:  t.Target.Number,
 			Started: time.Now(),

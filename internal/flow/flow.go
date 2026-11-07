@@ -290,6 +290,36 @@ func (r *Runner) SpecFor(ref string) (config.TriggerSpec, int, bool) {
 	return r.Cfg.Triggers[idx], idx, true
 }
 
+// Resolve finds the trigger a lowered action belongs to by the trigger's
+// stable identity, and returns the action's FlowRef as it reads against the
+// CURRENT config. Use it for every action that may have been recorded
+// against an earlier config: a persisted run resuming after a restart, a
+// queued run, a history record being retried.
+//
+// A FlowRef's index is the trigger's position in the flattened `triggers:`
+// list, and that position moves whenever an unrelated change adds, removes
+// or reorders a trigger before it (another pack's upgrade, a new pack
+// instance). A named trigger's identity is its name (unique, pack-instance
+// qualified) on its `on:` (a fan-in trigger's variants share the name, one
+// per source), so a named action resolves by that wherever the trigger now
+// sits, and is reported missing only when no trigger carries it. An unnamed
+// trigger has no identity but its position (config.ScopeForTrigger), so it
+// resolves positionally, exactly as SpecFor.
+func (r *Runner) Resolve(act config.Action) (spec config.TriggerSpec, idx int, ref string, ok bool) {
+	name := strings.TrimSpace(act.Name)
+	if name == "" || r.Cfg == nil {
+		spec, idx, ok = r.SpecFor(act.FlowRef)
+		return spec, idx, act.FlowRef, ok
+	}
+	_, on, _ := strings.Cut(act.FlowRef, ":")
+	for i, c := range r.Cfg.Triggers {
+		if c.Name == name && c.On == on {
+			return c, i, connector.CompiledTrigger{Index: i, Spec: c}.Ref(), true
+		}
+	}
+	return config.TriggerSpec{}, 0, "", false
+}
+
 // IndexOf locates a spec in the configured trigger list, for a caller that
 // did not come through SpecFor. A named trigger matches by name (names are
 // unique); an unnamed one by `on:` plus deep equality of its steps, which

@@ -67,16 +67,29 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 	if act.FlowRef == "" {
 		return "", fmt.Errorf("run %s is not a connectors-model run — retry applies to flow runs", rec.ID)
 	}
-	spec, tidx, ok := e.flow.SpecFor(act.FlowRef)
+	// The recorded ref is the trigger's position in the config the run ran
+	// under; unrelated config changes since move it. Find the trigger by its
+	// identity and rebind the ref to where it sits now.
+	act, spec, tidx, ok := e.resolveFlow(act)
 	if !ok {
-		return "", fmt.Errorf("run %s: its trigger is no longer in the config", rec.ID)
+		return "", fmt.Errorf("run %s: its trigger %s is no longer in the config", rec.ID, recordedTrigger(rec, act))
 	}
 	if extra := connector.OptionHooks(t, spec.Options); len(extra) > 0 {
 		spec.Hooks = append(append([]config.Hook{}, spec.Hooks...), extra...)
 	}
+	// A retry always runs the CURRENT definition. When it differs from the
+	// one the run ran (a pack upgrade), the recorded step positions may not
+	// map onto it: steps are matched by id, and a recorded step that no
+	// longer exists, or a changed run-up to it, restarts from the top.
+	changed := defChanged(rec, spec.Steps)
+	var notes []string
+	if changed {
+		notes = append(notes, "the trigger's steps changed since this run; retrying with the current definition")
+	}
 
 	// Resolve the starting step: an explicit id, else the recorded failure,
 	// else the top.
+	explicit := fromStep != ""
 	if fromStep == "" {
 		fromStep = rec.FailedStep
 	}
@@ -85,22 +98,43 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 		// first step it does not show done — rather than replaying the top.
 		fromStep = firstUndone(rec, spec.Steps)
 	}
-	startIdx := 0
-	if fromStep != "" {
-		s, ok := rec.Step(fromStep)
-		if !ok && rec.Status == "interrupted" {
-			// A step the interrupted run never reached: nothing to replay.
-			if i := specStepIndex(spec.Steps, fromStep); i >= 0 {
-				s, ok = store.StepRecord{ID: fromStep, Index: i}, true
+	recordedFrom := fromStep
+	if fromStep != "" && !explicit {
+		switch i := specStepIndex(spec.Steps, fromStep); {
+		case i < 0:
+			notes = append(notes, fmt.Sprintf("its recorded step %q is no longer in the trigger, so it starts from the beginning", fromStep))
+			fromStep = ""
+		case changed && !prefixDone(rec, spec.Steps, i):
+			notes = append(notes, fmt.Sprintf("the steps before %q changed, so it starts from the beginning", fromStep))
+			fromStep = ""
+		}
+		if fromStep == "" && !forceReplay {
+			if done := succeededSteps(rec); len(done) > 0 {
+				return "", fmt.Errorf("run %s: %s; that re-runs steps that already succeeded (%s) and replays their side effects — pass --force-replay to do that deliberately",
+					rec.ID, strings.Join(notes, "; "), strings.Join(done, ", "))
 			}
 		}
-		if !ok {
-			ids := make([]string, 0, len(rec.Steps))
-			for _, sr := range rec.Steps {
-				ids = append(ids, sr.ID)
+	}
+	startIdx := 0
+	if fromStep != "" {
+		cur := specStepIndex(spec.Steps, fromStep)
+		s, ok := rec.Step(fromStep)
+		if cur < 0 || !ok && rec.Status != "interrupted" && !changed {
+			ids := make([]string, 0, len(spec.Steps))
+			for i, st := range spec.Steps {
+				ids = append(ids, specStepID(st, i))
 			}
 			sort.Strings(ids)
 			return "", fmt.Errorf("run %s has no step %q (steps: %s)", rec.ID, fromStep, strings.Join(ids, ", "))
+		}
+		if changed && !prefixDone(rec, spec.Steps, cur) {
+			return "", fmt.Errorf("run %s: the trigger's steps before %q changed since this run, so starting there would skip steps it never ran — retry from an earlier step", rec.ID, fromStep)
+		}
+		if !ok {
+			// A step the record never reached (the interrupted run stopped
+			// before it, or the upgrade added it after what did run):
+			// nothing to replay.
+			s = store.StepRecord{ID: fromStep, Index: cur}
 		}
 		// Re-running a step the record says SUCCEEDED replays its committed
 		// side effects (a posted comment, a push) — refuse unless forced.
@@ -114,30 +148,33 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 				return "", fmt.Errorf("run %s step %q is before the recorded failure (%q) — its steps already ran; pass --force-replay to re-run them", rec.ID, fromStep, rec.FailedStep)
 			}
 		}
-		startIdx = s.Index
+		// The CURRENT position: the run executes the current definition.
+		startIdx = cur
 	}
 
 	// Pin the recorded inputs: outputs of every successful step before the
 	// starting index restore into scope exactly as persisted (checkpoint
 	// form — the resume path re-resolves vault-read markers itself).
 	outputs := map[string]map[string]any{}
-	for _, s := range rec.Steps {
-		if s.Index >= startIdx {
-			continue
-		}
-		if s.Status == "ok" && s.Outputs != nil {
-			outputs[s.ID] = s.Outputs
+	for i := 0; i < startIdx; i++ {
+		id := specStepID(spec.Steps[i], i)
+		if s, ok := rec.Step(id); ok && s.Status == "ok" && s.Outputs != nil {
+			outputs[id] = s.Outputs
 		}
 	}
 
 	// Credentials are minted at dispatch, as on crash resume — the recorded
 	// ones were never persisted.
 	t.Action = act
+	actRaw, err := json.Marshal(act) // the rebound ref, for a resume of this retry
+	if err != nil {
+		return "", fmt.Errorf("run %s: %w", rec.ID, err)
+	}
 
 	run := store.WorkflowRun{
 		ID: rec.RunID, Source: t.Source, Instance: t.Instance,
 		Kind: rec.Kind, Repo: rec.Repo, Number: rec.Number,
-		Trigger: rec.Trigger, Action: rec.Action,
+		Trigger: rec.Trigger, Action: actRaw,
 		Outputs: outputs, StepIndex: startIdx,
 		// A retry starting from step 0 is a fresh attempt — its start
 		// hooks fire, same as a brand new run (StartHooksFired false, the
@@ -154,7 +191,8 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 
 	e.store.Audit(map[string]any{"event": "retry_from_step", "repo": rec.Repo,
 		"number": rec.Number, "kind": rec.Kind, "run": rec.ID, "from_step": fromStep,
-		"step_index": startIdx, "force_replay": forceReplay})
+		"step_index": startIdx, "force_replay": forceReplay, "definition_changed": changed,
+		"recorded_step": recordedFrom})
 	e.log("%s retrying recorded run %s from step %d (%s)", tag(t), rec.ID, startIdx, orTop(fromStep))
 
 	rctx := flow.WithRetryOf(ctx, rec.ID)
@@ -172,8 +210,74 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 		defer e.release()
 		e.runFlow(rctx, run, t, spec, tidx, nil)
 	}()
-	from := orTop(fromStep)
-	return fmt.Sprintf("retrying run %s from %s (recorded inputs pinned)", rec.ID, from), nil
+	msg := fmt.Sprintf("retrying run %s from %s (recorded inputs pinned)", rec.ID, orTop(fromStep))
+	if len(notes) > 0 {
+		msg += " — " + strings.Join(notes, "; ")
+	}
+	return msg, nil
+}
+
+// recordedTrigger names a record's trigger for an error: its name on its
+// `on:` when it has one, else the recorded ref.
+func recordedTrigger(rec store.RunHistory, act config.Action) string {
+	if act.Name != "" {
+		return fmt.Sprintf("%q (on %s)", act.Name, rec.On)
+	}
+	return fmt.Sprintf("%q", act.FlowRef)
+}
+
+// defChanged reports whether the trigger's current steps differ from the ones
+// the recorded run executed: by the record's definition fingerprint when it
+// carries one, else (an older record) by whether every step it recorded
+// still sits at the same position.
+func defChanged(rec store.RunHistory, steps []config.Step) bool {
+	if rec.Def != "" {
+		return rec.Def != config.StepsFingerprint(steps)
+	}
+	for _, s := range rec.Steps {
+		if specStepIndex(steps, s.ID) != s.Index {
+			return true
+		}
+	}
+	return false
+}
+
+// prefixDone reports whether the record shows every current step before
+// index i done — so starting at i skips nothing the run never did.
+func prefixDone(rec store.RunHistory, steps []config.Step, i int) bool {
+	for j := 0; j < i; j++ {
+		r, ok := rec.Step(specStepID(steps[j], j))
+		if !ok || (r.Status != "ok" && r.Status != "skipped" && !r.ContinuedOnError) {
+			return false
+		}
+	}
+	return true
+}
+
+// succeededSteps lists the steps the record shows succeeded, in run order.
+func succeededSteps(rec store.RunHistory) []string {
+	var out []string
+	for _, s := range rec.Steps {
+		if s.Status == "ok" {
+			out = append(out, s.ID)
+		}
+	}
+	return out
+}
+
+// checkpointFits reports whether a persisted run's checkpoint still lines up
+// with the trigger's steps: its step index is within them, and every step it
+// holds outputs for sits before that index.
+func checkpointFits(r store.WorkflowRun, steps []config.Step) bool {
+	if r.StepIndex < 0 || r.StepIndex > len(steps) {
+		return false
+	}
+	for id := range r.Outputs {
+		if i := specStepIndex(steps, id); i < 0 || i >= r.StepIndex {
+			return false
+		}
+	}
+	return true
 }
 
 // specStepID is a top-level step's id as the flow runner records it.
