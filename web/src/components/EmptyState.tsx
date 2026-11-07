@@ -1,7 +1,10 @@
-// A screen's first-visit state: what this place is for and the one thing to do
-// next, in place of a bare "No X." line or a table with nothing in it. `hero`
-// is the big welcome for a screen that is the starting point for its kind of
-// thing (Bots); the default is the quieter panel-sized version.
+// A screen's first-visit state (Daylight's UI.empty: a plain sentence saying
+// what will be here, one primary action, nothing bare or broken). `hero` is
+// the bigger welcome for a screen that is the starting point for its kind of
+// thing (Bots); `small` is the quiet in-card version (Needs you, a list's own
+// empty row). Structure and classes are the prototype's (css/components.css,
+// css/app.css `.empty`); `art` is a departure with no approved equivalent yet
+// (a decorative glyph above the title) kept for screens that already show one.
 import type { ComponentChildren, JSX } from 'preact'
 
 export interface EmptyAction {
@@ -19,6 +22,7 @@ export function EmptyState({
   action,
   secondary,
   hero,
+  small,
   testid,
 }: {
   title: string
@@ -27,28 +31,37 @@ export function EmptyState({
   action?: EmptyAction
   secondary?: EmptyAction
   hero?: boolean
+  small?: boolean
   testid?: string
 }): JSX.Element {
   return (
-    <section class={'empty-state' + (hero ? ' hero' : '')} data-testid={testid} aria-label={title}>
-      {art ? <div class="empty-art" aria-hidden="true">{art}</div> : null}
-      <h2 class="empty-title serif">{title}</h2>
-      {children ? <div class="empty-body">{children}</div> : null}
-      {action || secondary ? (
-        <div class="empty-actions">
-          {action ? <ActionButton a={action} primary hero={hero} /> : null}
-          {secondary ? <ActionButton a={secondary} /> : null}
+    <div class={'empty' + (small ? ' small' : '') + (hero ? ' hero' : '')} data-testid={testid} role="status">
+      {art ? (
+        <div class="empty-art" aria-hidden="true">
+          {art}
         </div>
       ) : null}
-    </section>
+      <h2 class="serif">{title}</h2>
+      {children}
+      {action || secondary ? (
+        <div class="row">
+          {action ? <ActionButton a={action} primary lg={hero} /> : null}
+          {secondary ? <ActionButton a={secondary} lg={hero} /> : null}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
-function ActionButton({ a, primary, hero }: { a: EmptyAction; primary?: boolean; hero?: boolean }): JSX.Element {
-  const cls = primary ? 'btn primary' + (hero ? ' empty-cta' : '') : 'btn ghost'
+function ActionButton({ a, primary, lg }: { a: EmptyAction; primary?: boolean; lg?: boolean }): JSX.Element {
+  const cls = (primary ? 'btn primary' : 'btn ghost') + (lg ? ' lg' : '')
   return a.href ? (
-    <a class={cls} href={a.href} data-testid={a.testid}>{a.label}</a>
+    <a class={cls} href={a.href} data-testid={a.testid}>
+      {a.label}
+    </a>
   ) : (
-    <button class={cls} type="button" data-testid={a.testid} disabled={a.disabled} onClick={a.onClick}>{a.label}</button>
+    <button class={cls} type="button" data-testid={a.testid} disabled={a.disabled} onClick={a.onClick}>
+      {a.label}
+    </button>
   )
 }
