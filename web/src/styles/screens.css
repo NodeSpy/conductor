@@ -505,7 +505,6 @@ tr.folded { display: none; }
   #wl-body tr[data-row] > td[data-l="folder"], #wl-body tr[data-row] > td.wl-acts, #wl-body tr[data-row] > td[data-l="owner"] { display: none; }
   #wl-body tr[data-row] > td[data-l="risk"] { grid-area: risk; }
 }
-}
 .run-row .bar > i { background: var(--color-text-tertiary); }
 .lanes .mark.up { margin-top: -11px; z-index: 1; } .lanes .mark.down { margin-top: 11px; }
 .paused-note { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--gap-section); }
