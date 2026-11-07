@@ -2,16 +2,24 @@
 // the page container the current screen renders into. Structure and classes
 // are the prototype's (js/ui.js UI.boot/UI.navHTML/UI.hostCard, css/app.css):
 // the rail full height with the brand on top and the host card at its foot,
-// the quiet top bar, the phone header naming the route, and the five-item tab
-// bar. Settings still lists Config, Logs & audit and Access as their own
-// items (a later phase folds them into System, design §5.4) — a deliberate,
-// noted departure from the approved nav for now.
+// the quiet top bar (search, then the avatar), the phone header naming the
+// route, and the five-item tab bar.
+//
+// The rail's Settings group matches the prototype's own four items exactly
+// (Plugins/Packs/Secrets/System) — Config, Logs & audit and Access are real
+// pages in web/ (Config.tsx, Audit.tsx, Security.tsx) but are not their own
+// rail entries in the approved design; they fold into System as its own
+// sub-navigation in a later phase (design §5.4). Until then they stay
+// reachable from More.tsx (phone) and the search palette below, which is
+// deliberately not scoped to the rail's own item list — a documented gap, not
+// a silent drop.
 import type { ComponentChildren, JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
-import { conn, status, needItems } from '../state'
+import { conn, status, needItems, chatUnread } from '../state'
 import { route, screen } from '../router'
 import { Icon } from './Icon'
 import { StatusMark } from './StatusMark'
+import { Palette, type PaletteItem } from './Palette'
 
 type NavItem = { key: string; label: string; icon: string; count?: () => number; hot?: boolean }
 
@@ -20,7 +28,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     label: '',
     items: [
       { key: '', label: 'Home', icon: 'overview' },
-      { key: 'chat', label: 'Chat', icon: 'message' },
+      { key: 'chat', label: 'Chat', icon: 'message', count: () => chatUnread.value, hot: true },
       { key: 'attention', label: 'Needs you', icon: 'attention', count: () => needItems().length, hot: true },
       { key: 'activity', label: 'Activity', icon: 'live' },
       { key: 'tickets', label: 'Tickets', icon: 'ticket' },
@@ -36,13 +44,28 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { key: 'packs', label: 'Packs', icon: 'extensions' },
       { key: 'secrets', label: 'Secrets', icon: 'secrets' },
       { key: 'system', label: 'System', icon: 'settings' },
-      // Interim, pending the System merge (design §5.4 phase): their own rail
-      // entries so they stay reachable.
-      { key: 'config', label: 'Config', icon: 'settings' },
-      { key: 'audit', label: 'Logs & audit', icon: 'live' },
-      { key: 'security', label: 'Access', icon: 'secrets' },
     ],
   },
+]
+
+// PALETTE_ITEMS: every screen reachable from the rail, the tab bar or More —
+// the search affordance's index for this phase (see Palette.tsx's note).
+const PALETTE_ITEMS: PaletteItem[] = [
+  { key: '', label: 'Home', icon: 'overview' },
+  { key: 'chat', label: 'Chat', icon: 'message' },
+  { key: 'attention', label: 'Needs you', icon: 'attention' },
+  { key: 'activity', label: 'Activity', icon: 'live' },
+  { key: 'tickets', label: 'Tickets', icon: 'ticket' },
+  { key: 'workflows', label: 'Workflows', icon: 'workflows' },
+  { key: 'bots', label: 'Bots', icon: 'bots' },
+  { key: 'browser', label: 'Browsers', icon: 'globe' },
+  { key: 'connections', label: 'Plugins', icon: 'connectors' },
+  { key: 'packs', label: 'Packs', icon: 'extensions' },
+  { key: 'secrets', label: 'Secrets', icon: 'secrets' },
+  { key: 'system', label: 'System', icon: 'settings' },
+  { key: 'config', label: 'Config', icon: 'settings' },
+  { key: 'audit', label: 'Logs & audit', icon: 'live' },
+  { key: 'security', label: 'Access', icon: 'secrets' },
 ]
 
 // NAV_ALIAS: pages that live inside another nav destination highlight that
@@ -56,7 +79,7 @@ function navKeyFor(cur: string): string {
 const TAB_ITEMS: { key: string; label: string; icon: string; count?: () => number }[] = [
   { key: '', label: 'Home', icon: 'overview' },
   { key: 'attention', label: 'Needs you', icon: 'attention', count: () => needItems().length },
-  { key: 'chat', label: 'Chat', icon: 'message' },
+  { key: 'chat', label: 'Chat', icon: 'message', count: () => chatUnread.value },
   { key: 'activity', label: 'Activity', icon: 'live' },
   { key: 'more', label: 'More', icon: 'more' },
 ]
@@ -173,6 +196,7 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
           <Mark />
           <b>{title}</b>
         </a>
+        <Palette items={PALETTE_ITEMS} />
         <div class="spacer" />
         <ThemeCell theme={theme} cycle={cycle} />
         <button type="button" class="cell op-btn" aria-label="Account">

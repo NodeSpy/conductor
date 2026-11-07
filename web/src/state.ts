@@ -24,6 +24,23 @@ export const connAttrs = signal<AttrQualifier[]>([])
 export const proposalsPending = signal<ProposalRow[]>([])
 export const purchasesPending = signal<Purchase[]>([])
 
+// For your information (design: true, but not waiting on you — the mock's
+// fyi()). The daemon doesn't have a dedicated "info" topic yet; the one real
+// source today is the System → Safety posture's plain-word warnings (for
+// example "agents run unsandboxed"). A connector failure or an available
+// update belongs here too once the daemon exposes them (noted in the phase
+// report, not faked).
+export interface FyiItem {
+  icon: string
+  title: string
+  why?: string
+  href: string
+}
+export const fyi = signal<FyiItem[]>([])
+
+// Unread chat messages across every conversation, for the rail/tab-bar badge.
+export const chatUnread = signal(0)
+
 // Needs-you / attention aggregator (design §4.1). Runs that need a person —
 // failed runs (the backend's attention topic feeds these) — minus the ones the
 // operator dismissed. Dismissals are local and reversible (an Undo in the UI).
@@ -104,6 +121,18 @@ export async function load(): Promise<void> {
     purchasesPending.value = (await browser.purchases('pending')).purchases || []
   } catch {
     purchasesPending.value = []
+  }
+  try {
+    const sys = await api.system()
+    fyi.value = (sys.safety.warnings || []).map((w) => ({ icon: /update/i.test(w) ? 'obj-update' : 'shield', title: w, href: '#/system' }))
+  } catch {
+    fyi.value = []
+  }
+  try {
+    const convs = (await botsApi.conversations()).conversations || []
+    chatUnread.value = convs.reduce((n, c) => n + (c.unread || 0), 0)
+  } catch {
+    chatUnread.value = 0
   }
 }
 

@@ -45,7 +45,7 @@ test.beforeAll(async ({ browser, browserName }) => {
 
   await page.goto(`${rt.baseURL}/signin`)
   await page.getByTestId('signin-button').click()
-  await expect(page.getByRole('link', { name: 'Access' })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByRole('link', { name: 'System' })).toBeVisible({ timeout: 15_000 })
 })
 
 test.afterAll(async () => {
