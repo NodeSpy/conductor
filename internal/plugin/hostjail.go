@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // HostJail is whether this host can jail plugins at all, and if not, why
@@ -86,14 +86,16 @@ type probeEnv struct {
 	euid     int
 	lookPath func(string) (string, error)
 	// run runs argv and returns its combined output.
-	run      func(argv []string) ([]byte, error)
-	readFile func(string) ([]byte, error)
-	stat     func(string) (os.FileInfo, error)
+	run       func(argv []string) ([]byte, error)
+	readFile  func(string) ([]byte, error)
+	stat      func(string) (os.FileInfo, error)
+	mkdirTemp func() (string, error)
 }
 
-// ProbeHostJail builds a real jail, the way a plugin launch does, around a
-// no-op: conductor's own binary (self) as `sandbox-net --noop`. It answers
-// exactly "can a plugin be jailed here", and when not, names the cause.
+// ProbeHostJail builds a real jail, the way a plugin launch does (self is
+// the jail's entry), around a no-op: conductor's own `sandbox-net --noop`.
+// It answers exactly "can a plugin be jailed here", and when not, names the
+// cause.
 func ProbeHostJail(self string) HostJail {
 	return probeHostJail(self, probeEnv{
 		goos:     spawnGOOS,
@@ -106,8 +108,9 @@ func ProbeHostJail(self string) HostJail {
 			c.Env = sandbox.MinimalEnv()
 			return c.CombinedOutput()
 		},
-		readFile: os.ReadFile,
-		stat:     os.Stat,
+		readFile:  os.ReadFile,
+		stat:      os.Stat,
+		mkdirTemp: func() (string, error) { return scratch.MkdirTemp("jailprobe-") },
 	})
 }
 
@@ -137,11 +140,20 @@ func probeHostJail(self string, e probeEnv) HostJail {
 	if self == "" {
 		return HostJail{Reason: "conductor's own binary (the jail's entry) is unknown", Fix: "run conductor from its installed binary"}
 	}
+	// A plugin's jail binds its staging dir (conductor's scratch, noexec);
+	// the probe binds one like it. Its payload is conductor itself, run
+	// through /proc/self/exe: whatever directory conductor is installed in
+	// stays outside the jail, as it does for a plugin.
+	dir, err := e.mkdirTemp()
+	if err != nil {
+		return HostJail{Reason: "no scratch directory for the probe: " + err.Error(), Fix: "make conductor's scratch dir writable"}
+	}
+	defer os.RemoveAll(dir)
 	spec := &sandbox.Spec{Mode: "namespace", Deny: true}
-	argv, err := spec.WrapLocal([]string{self, "sandbox-net", "--noop"}, "", nil, &sandbox.NetForward{
+	argv, err := spec.WrapLocal([]string{"/proc/self/exe", "sandbox-net", "--noop"}, "", nil, &sandbox.NetForward{
 		Self:  self,
 		Base:  sandbox.BaseMinimal,
-		Binds: []sandbox.BindMount{{Path: filepath.Dir(self), RO: true}},
+		Binds: []sandbox.BindMount{{Path: dir, NoExec: true}},
 	})
 	if err != nil {
 		return HostJail{Reason: "the jail cannot be set up: " + err.Error(), Fix: "report this as a bug"}

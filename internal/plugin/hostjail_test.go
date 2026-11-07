@@ -41,6 +41,7 @@ func fakeProbe(goos string, euid int, runErr error, files map[string]string) pro
 			}
 			return nil, os.ErrNotExist
 		},
+		mkdirTemp: func() (string, error) { return "/scratch/jailprobe-1", nil },
 	}
 }
 
@@ -94,7 +95,10 @@ func TestProbeHostJailRunsTheRealJail(t *testing.T) {
 	e.run = func(a []string) ([]byte, error) { argv = a; return nil, nil }
 	probeHostJail("/opt/conductor/conductor", e)
 	got := strings.Join(argv, " ")
-	for _, want := range []string{"unshare --user --map-root-user", "--net", "/opt/conductor/conductor sandbox-net", "--bind-ro /opt/conductor", "--base minimal", "-- /opt/conductor/conductor sandbox-net --noop"} {
+	if strings.Contains(got, "--bind-ro /opt/conductor") {
+		t.Fatalf("the probe binds conductor's own dir, which a plugin's jail never does: %q", got)
+	}
+	for _, want := range []string{"unshare --user --map-root-user", "--net", "/opt/conductor/conductor sandbox-net", `"path":"/scratch/jailprobe-1"`, `"noexec":true`, "--base minimal", "-- /proc/self/exe sandbox-net --noop"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("probe argv %q lacks %q", got, want)
 		}
