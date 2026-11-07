@@ -96,6 +96,11 @@ export async function start(port: number): Promise<Runtime> {
       `  port: ${port}`,
       `settings:`,
       `  greeting: hello`,
+      // A whole-field vault reference, the documented way a real config wires
+      // a credential (internal/secrets.ParseVaultRef) — not the legacy
+      // top-level secrets: map, which config.Load hard-rejects now. This is
+      // what /api/v1/secrets actually has to find on a real box (phase 8).
+      `  api_token: '{{ vault "main" "api-token" }}'`,
       `connectors:`,
       `  box: { use: command }`,
       // webhook/cron are true built-ins (compiled in, never fetched) — unlike
@@ -108,20 +113,23 @@ export async function start(port: number): Promise<Runtime> {
       `  hooks: { use: webhook }`,
       `runtimes:`,
       `  local: { use: cli }`,
+      // hosts.*.env is the one place config has a named, scoped env map
+      // outside a step (config.HostConfig.Env) — a runtimes: entry has none
+      // (config.RuntimeConfig); one literal value and one reference, so the
+      // Settings tab's env list (phase 8) has both shapes to show.
       `hosts:`,
-      `  build-box: { host: build01.example.com, user: ci }`,
+      `  build-box:`,
+      `    host: build01.example.com`,
+      `    user: ci`,
+      `    env:`,
+      `      LOG_LEVEL: debug`,
+      `      DEPLOY_TOKEN: 'env:DEPLOY_TOKEN'`,
       `vaults:`,
       `  main: { type: conductor }`,
-      // No top-level `secrets:` block: the config loader hard-rejects it now
-      // ("the secrets: block was replaced by vaults: entries and {{ vault
-      // "<name>" "<key>" }} references" — internal/config/connectors.go). A
-      // real daemon only ever has vaults: entries; a secret value is an
-      // inline {{ vault ... }} template in whatever field needs it, which
-      // the dashboard's /api/v1/secrets handler does not scan for (it still
-      // reads a literal secrets: map) — see the phase 7 report's data-gap
-      // list. Seeding one here would just fail to boot.
       `packs:`,
-      `  review: { use: ./packs/review }`,
+      `  review:`,
+      `    use: ./packs/review`,
+      `    connectors: { command: box }`,
       `triggers:`,
       `  - name: deploy`,
       `    on: manual`,
@@ -147,7 +155,25 @@ export async function start(port: number): Promise<Runtime> {
   mkdirSync(packDir, { recursive: true })
   writeFileSync(
     path.join(packDir, 'conductor-pack.yaml'),
-    ['pack:', '  name: demo-review', '  version: 0.1.0', '  description: a tiny local pack for the dashboard e2e suite', ''].join('\n'),
+    [
+      'pack:',
+      '  name: demo-review',
+      '  version: 0.1.0',
+      '  description: a tiny local pack for the dashboard e2e suite',
+      '  requires:',
+      '    connectors: { command: "*" }',
+      'workflows:',
+      '  review-flow:',
+      '    steps:',
+      '      - id: summarize',
+      '        uses: command.run',
+      '        options: { command: "true" }',
+      'triggers:',
+      '  - name: on_demand',
+      '    on: manual',
+      '    steps: [{ uses: command.run, options: { command: "true" } }]',
+      '',
+    ].join('\n'),
   )
 
   const env = hermeticEnv(home)

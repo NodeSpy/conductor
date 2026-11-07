@@ -22,6 +22,10 @@ test.afterAll(() => {
 test('edit a setting → review the diff → apply → confirm', async ({ page, collector }) => {
   await page.goto(`${rt.baseURL}/#/config`)
 
+  // The field editor is folded under "Edit the config by section" (the
+  // Applied changes history is the default view, phase 8); open it.
+  await page.getByTestId('cfg-edit-sections').locator('summary').click()
+
   // The settings.greeting field is present and shows the current value.
   const field = page.locator('input[data-path="settings.greeting"]')
   await expect(field).toBeVisible()
@@ -73,6 +77,7 @@ test('a staged map shows its value, not [object Object]', async ({ page }) => {
     .poll(async () => (await page.request.get(`${rt.baseURL}/api/v1/status`).catch(() => null))?.status() ?? 0, { timeout: 30_000 })
     .toBe(200)
   await page.goto(`${rt.baseURL}/#/config`)
+  await page.getByTestId('cfg-edit-sections').locator('summary').click()
   await expect(page.locator('input[data-path="settings.greeting"]')).toBeVisible()
   // A whole section staged at once (as the Packs and System screens can).
   const res = await page.request.post(`${rt.baseURL}/api/v1/config/stage`, {
