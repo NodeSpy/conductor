@@ -29,6 +29,18 @@ function send<T>(method: string, path: string, body?: unknown): Promise<T> {
   }).then((r) => handle<T>(r))
 }
 
+// sendForm posts multipart/form-data (a message or comment with files): the
+// browser sets its own Content-Type (with the boundary), so only Accept and
+// the CSRF header are added here.
+function sendForm<T>(path: string, form: FormData): Promise<T> {
+  return fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { Accept: 'application/json', ...(csrf() ? { 'X-Conductor-CSRF': csrf() } : {}) },
+    body: form,
+  }).then((r) => handle<T>(r))
+}
+
 // --- shapes (mirror the Go read models) ---
 
 export interface Capabilities {
@@ -129,6 +141,22 @@ export interface Conversation {
   position?: number
 }
 
+// Attachment is one file on a message or a ticket comment (internal/store/
+// bots.go's Attachment, as attachmentView projects it).
+export interface Attachment {
+  id: string
+  message?: string
+  case_id?: string
+  name: string
+  media_type: string
+  size: number
+  digest?: string
+  source?: string
+  requester?: string
+  requester_class?: string
+  created: string
+}
+
 export interface TicketComment {
   at: string
   by: string
@@ -190,6 +218,23 @@ export const botsApi = {
     ),
   sendMessage: (id: string, body: { text: string; to?: string[]; everyone?: boolean }) =>
     send<ChatMessage>('POST', `/api/v1/conversations/${encodeURIComponent(id)}/messages`, body),
+  // sendMessageWithFiles uploads files with the message in one call — the
+  // daemon stores them (internal/bot/attachments.go) and checks them against
+  // the target bot's caps before anything is recorded, all or nothing.
+  sendMessageWithFiles: (id: string, body: { text: string; to?: string[]; everyone?: boolean }, files: File[]) => {
+    const f = new FormData()
+    f.set('text', body.text)
+    for (const t of body.to || []) f.append('to', t)
+    if (body.everyone) f.set('everyone', '1')
+    for (const file of files) f.append('file', file, file.name)
+    return sendForm<ChatMessage>(`/api/v1/conversations/${encodeURIComponent(id)}/messages`, f)
+  },
+  // attachment is one attachment's record; bot is whichever target bot it was
+  // stored under (a message's `to`, or the conversation's own bot).
+  attachment: (bot: string, id: string) => get<Attachment>(`/api/v1/bots/${encodeURIComponent(bot)}/attachments/${encodeURIComponent(id)}`),
+  attachmentContentUrl: (bot: string, id: string) => `/api/v1/bots/${encodeURIComponent(bot)}/attachments/${encodeURIComponent(id)}/content`,
+  attachmentThumbnailUrl: (bot: string, id: string, size?: number) =>
+    `/api/v1/bots/${encodeURIComponent(bot)}/attachments/${encodeURIComponent(id)}/thumbnail${size ? `?size=${size}` : ''}`,
   pin: (id: string, position?: number) => send('POST', `/api/v1/conversations/${encodeURIComponent(id)}/pin`, { position: position ?? 0 }),
   unpin: (id: string) => send('DELETE', `/api/v1/conversations/${encodeURIComponent(id)}/pin`),
 
@@ -211,6 +256,12 @@ export const botsApi = {
   }) => send<Ticket>('POST', '/api/v1/tickets', body),
   patchTicket: (num: string, body: Record<string, unknown>) => send<Ticket>('PATCH', `/api/v1/tickets/${encodeURIComponent(num)}`, body),
   comment: (num: string, text: string) => send<Ticket>('POST', `/api/v1/tickets/${encodeURIComponent(num)}/comments`, { text }),
+  commentWithFiles: (num: string, text: string, files: File[]) => {
+    const f = new FormData()
+    f.set('text', text)
+    for (const file of files) f.append('file', file, file.name)
+    return sendForm<Ticket>(`/api/v1/tickets/${encodeURIComponent(num)}/comments`, f)
+  },
 }
 
 // A bot/team's display name from an identity (design §4.4.2: one name per bot).
