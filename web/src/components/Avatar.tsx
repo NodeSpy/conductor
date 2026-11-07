@@ -56,6 +56,20 @@ export function Avatar({ id, size = 40, kind = 'bot' }: { id?: Identity; size?: 
   )
 }
 
+// Sigil is the design's plain letter square (UI.sigil, js/ui.js): a small
+// quiet tile with just the first letter of a name, used where a list row
+// wants a face but not the full mascot/picture treatment (Safety's "What
+// each bot may do" panels). `size` matches the .sigil CSS modifiers.
+export function Sigil({ id, size = '' }: { id?: Identity; size?: 'sm' | 'lg' | '' }): JSX.Element {
+  const label = id?.display_name || id?.name || '?'
+  const letter = (id?.initials || label.slice(0, 1)).slice(0, 1)
+  return (
+    <span class={'sigil' + (size ? ' ' + size : '')} title={label}>
+      {letter}
+    </span>
+  )
+}
+
 // StackedTeam shows a team's own picture, or its members' faces stacked (the
 // conversation list, design §4.4.2).
 export function StackedTeam({ team, members, size = 40 }: { team?: Identity; members?: Identity[]; size?: number }): JSX.Element {

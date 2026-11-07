@@ -92,7 +92,7 @@ const LEGACY_SYSTEM_TABS: Record<string, string> = {
   config: 'config',
   safety: 'safety',
   updates: 'updates',
-  audit: 'logs',
+  audit: 'logs/audit',
   security: 'access',
   access: 'access',
 }

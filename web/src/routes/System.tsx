@@ -9,11 +9,13 @@ import { useEffect, useState } from 'preact/hooks'
 import { api } from '../api/client'
 import type { SystemResponse } from '../api/types'
 import { botsApi, displayName, type BotSummary } from '../api/bots'
-import { Avatar } from '../components/Avatar'
+import { Sigil } from '../components/Avatar'
 import { Icon } from '../components/Icon'
 import { StatusMark } from '../components/StatusMark'
 import { TabsBar } from '../components/TabsBar'
-import { stage } from '../configStore'
+import { ReviewPanel } from '../components/ReviewPanel'
+import { stage, staged } from '../configStore'
+import { ago } from '../lib/format'
 import { seg } from '../router'
 import { status, load } from '../state'
 import { Config } from './Config'
@@ -52,8 +54,12 @@ export function System(): JSX.Element {
   const s = seg(1)
   const tab: Tab = (['config', 'safety', 'updates', 'logs', 'access'] as Tab[]).includes(s as Tab) ? (s as Tab) : 'config'
 
+  // Plain div, not .col: .col's flex `gap` would add space between the tab
+  // bar and the page body that the design doesn't have (its tabs and
+  // dl-phead are plain block siblings) — that extra gap was sitting the page
+  // title lower than the design's on every System tab.
   return (
-    <div class="col m-page">
+    <div class="m-page">
       <SystemTabs active={tab} />
       {tab === 'config' ? <Config /> : null}
       {tab === 'safety' ? <Safety /> : null}
@@ -326,80 +332,194 @@ function WhatEachBotMayDo(): JSX.Element | null {
 function BotMayDoPanel({ b }: { b: BotSummary }): JSX.Element {
   const does = b.capabilities?.does || []
   const asks = b.capabilities?.asks || []
+  // grp ports UI.botCanHTML's own grp (js/screens/bots.js): a small coloured
+  // mark plus the group's name, then plain item rows — no bullets, no mono —
+  // each keeping its raw verb id as a title for anyone who wants it.
   const grp = (label: string, s: string, items: string[], empty: string) => (
     <div class="cang" data-s={s}>
       <h3><StatusMark s={s} mkOnly label={label} />{label}</h3>
-      <ul>{items.length ? items.map((v) => <li key={v} class="mono">{v}</li>) : <li class="dl-sub">{empty}</li>}</ul>
+      <ul>{items.length ? items.map((v) => <li key={v} title={v}>{v}</li>) : <li class="dl-sub">{empty}</li>}</ul>
     </div>
   )
   return (
     <div class="panel">
       <div class="panel-head">
-        <Avatar id={b.identity} size={28} />
+        <Sigil id={b.identity} size="sm" />
         <h3><a class="link-plain" href={`#/bots/${b.bot}/access`}>{displayName(b.identity, b.bot)}</a></h3>
-        <span class="muted small">{b.team ? `team ${b.team}` : 'solo'}</span>
+        <span class="muted small">{b.team ? `team ${b.team} · on its own: only things that can be undone` : 'solo'}</span>
         <div class="tools"><a class="btn sm ghost" href={`#/bots/${b.bot}/access`}><Icon name="edit" />Change</a></div>
       </div>
       <div class="panel-body">
-        {b.shadow ? <p class="dl-sub">In practice mode: even what it does on its own is only recorded, never done.</p> : null}
-        <div class="dl-can-grid">
-          {grp('Does on its own', 'ok', does, b.shadow ? "Nothing — it's in practice mode, so it only suggests." : 'Nothing: it asks first')}
-          {grp('Asks you first', 'ember', asks, 'Nothing needs your approval')}
-          {grp('Never', 'fail', [], "Anything it isn't granted")}
+        <div class="dl-can compact">
+          {b.shadow ? <p class="dl-sub">In practice mode: even what it does on its own is only recorded, never done.</p> : null}
+          <div class="dl-can-grid">
+            {grp('Does on its own', 'ok', does, b.shadow ? "Nothing — it's in practice mode, so it only suggests." : 'Nothing: it asks first')}
+            {grp('Asks you first', 'ember', asks, 'Nothing needs your approval')}
+            {grp('Never', 'fail', [], "Anything it isn't granted")}
+          </div>
         </div>
       </div>
     </div>
   )
 }
 
+// Updates (prototype js/screens/system.js UI.route('updates')): Check now
+// runs the daemon's real self-updater (cmd/conductor's checkUpdate) — a
+// genuine download+verify+preflight of the newest release, never a developer
+// stand-in — and the checklist below shows exactly what it found. Install
+// now and Go back to vX… both call the same doUpdate the CLI and
+// conductor.update verb already use: fetch, verify, preflight, atomic swap,
+// restart, previous binary kept.
 function Updates(): JSX.Element {
   const [sys, setSys] = useState<SystemResponse | null>(null)
   const [err, setErr] = useState('')
-  useEffect(() => {
-    api.system().then(setSys).catch((e) => setErr(String(e)))
-  }, [])
+  const [checking, setChecking] = useState(false)
+  const [installing, setInstalling] = useState(false)
+  const reload = () => api.system().then(setSys).catch((e) => setErr(String(e)))
+  useEffect(() => void reload(), [])
   const u = sys?.update
+
+  async function checkNow() {
+    setChecking(true)
+    setErr('')
+    try {
+      setSys(await api.checkUpdate())
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  async function install(version: string, force: boolean, title: string, body: string) {
+    if (!confirm(`${title}\n\n${body}`)) return
+    setInstalling(true)
+    setErr('')
+    try {
+      await api.installUpdate(version, force)
+      await reload()
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setInstalling(false)
+    }
+  }
+
+  const check = (ok: boolean, t: string) => (
+    <li><StatusMark s={ok ? 'ok' : 'wait'} mkOnly /><span>{t}</span></li>
+  )
+
   return (
     <div class="col">
-      <div class="dl-phead"><div><h1>Updates</h1><p class="lede-2">How conductor keeps itself current.</p></div></div>
-      {err ? <div class="banner err" role="alert">Couldn't load Updates: {err}</div> : null}
-      <div class="dl-cols">
-        <div class="dl-col-main">
-          <section class="dl-card" aria-label="Updates">
-            <header class="dl-ch"><h2>Running now</h2></header>
-            <p class="dl-sub" style="padding:0 22px 18px">
-              {sys ? <>Version <span class="mono">{sys.version}</span> · config <span class="mono">{sys.config_sha}</span></> : 'Loading…'}
-            </p>
-          </section>
-          <section class="dl-card" aria-label="Releases">
-            <header class="dl-ch"><h2>Releases</h2></header>
-            <p class="dl-sub" style="padding:0 22px 18px">This dashboard shows the version running now. To see what changed in other releases, or go back to one you've run before, use <span class="mono">conductor update</span> on the box.</p>
-          </section>
-        </div>
-        <div class="dl-col-side">
-          <section class="dl-card" aria-label="Update policy">
-            <header class="dl-ch"><h2>How updates install</h2></header>
-            <div class="dl-prefs" style="padding:0 22px 18px">
-              <label class="row">
-                <button type="button" role="switch" class={'switch' + (u?.auto ? ' on' : '')} aria-checked={!!u?.auto} aria-label="Install updates automatically" onClick={() => void stage(['update', 'auto'], !(u?.auto ?? false))} />
-                <span><b>Install updates automatically</b> <span class="dl-sub">{u?.auto ? 'on' : 'off'}</span></span>
-              </label>
-              <div class="field">
-                <label>Look for updates every</label>
-                <input class="input mono" style="width:120px" value={u?.interval ?? ''} placeholder="24h" onChange={(e) => void stage(['update', 'interval'], (e.target as HTMLInputElement).value)} />
-              </div>
-              <div class="field">
-                <label>Apply command</label>
-                <input class="input mono" value={u?.apply ?? ''} onChange={(e) => void stage(['update', 'apply'], (e.target as HTMLInputElement).value)} />
-              </div>
-            </div>
-          </section>
-          <p class="dl-sub">
-            This is the policy conductor's own updater follows on the box. Checking for a release, installing one from here, and
-            rolling back all happen through <span class="mono">conductor update</span>, not this page.
-          </p>
+      <div class="dl-phead">
+        <div><h1>Updates</h1></div>
+        <div class="dl-actions tight">
+          <button class="btn secondary" disabled={checking} onClick={checkNow}><Icon name="updates" />{checking ? 'Checking…' : 'Check now'}</button>
         </div>
       </div>
+      {err ? <div class="banner err" role="alert">Couldn't reach the updater: {err}</div> : null}
+      {!sys ? (
+        <p class="muted">Loading…</p>
+      ) : (
+        <div class="dl-cols">
+          <div class="dl-col-main">
+            {u?.available ? (
+              <section class="dl-card" aria-label="Found release">
+                <header class="dl-ch">
+                  <h2>{u.available}</h2>
+                  {u.last_check ? <span class="dl-sub">found {ago(u.last_check)}</span> : null}
+                </header>
+                <ul class="upd-checks">
+                  {check(!!u.checks?.downloaded, "Downloaded, and its signature checks out")}
+                  {check(!!u.checks?.config_loads, "It can load your config (checked on a copy; your live config isn't touched)")}
+                  {check(!!u.checks?.config_loads, 'The plugins it needs are installed or can be fetched')}
+                  {check(!!u.auto, u.auto ? `It installs itself within ${u.interval || 'the configured interval'}` : 'Automatic installs are off: install it yourself')}
+                </ul>
+                {u.check_error ? <p class="banner err" role="alert">{u.check_error}</p> : null}
+                <div class="dl-actions">
+                  <button class="btn primary" disabled={installing || !!u.check_error} onClick={() => install('', false, `Install ${u.available} now?`, `conductor checks it again, keeps ${u.version} so you can go back, then switches over and restarts. Anything running finishes first.`)}>
+                    <Icon name="download" />{installing ? 'Installing…' : 'Install now'}
+                  </button>
+                  <span class="dl-sub">The same as the automatic install: the current version is kept, so you can go back.</span>
+                </div>
+                <details class="dl-tech-d">
+                  <summary><Icon name="chev" />Technical details</summary>
+                  <dl class="dl-facts">
+                    <dt>Check</dt><dd class="mono">{u.available} validate (on a copy of the config and plugin state)</dd>
+                    <dt>Kept</dt><dd><span class="mono">conductor.prev</span>: the previous binary, for rolling back</dd>
+                    <dt>Install</dt><dd>an atomic swap of the binary, then a restart; unchanged plugins are reloaded in place when that's on</dd>
+                  </dl>
+                </details>
+              </section>
+            ) : (
+              <section class="dl-card">
+                <p>{u?.checked ? <>You're on {u.version}, the newest release. Last checked {u.last_check ? ago(u.last_check) : 'just now'}.</> : <>You're on {u?.version}. Check now to look for a newer release.</>}</p>
+              </section>
+            )}
+            <section class="dl-card" aria-label="Releases">
+              <header class="dl-ch"><h2>Releases</h2></header>
+              <ul class="dl-list">
+                {(u?.releases ?? []).length ? (
+                  u!.releases!.map((r) => (
+                    <li key={r.version} class="upd-rel">
+                      <span class="mono">{r.version}</span>
+                      <div class="dl-nt"><span class="dl-sub">{r.current ? 'running now' : ''}</span></div>
+                      <span class="dl-na">
+                        {r.current ? (
+                          <span class="dl-sub">in use</span>
+                        ) : r.ready ? (
+                          <span class="dl-sub">ready</span>
+                        ) : (
+                          <button
+                            class="btn sm secondary"
+                            disabled={installing}
+                            onClick={() => install(r.version, true, `Go back to ${r.version}?`, `conductor checks that ${r.version} loads your config, then switches back and restarts. ${u!.version} is kept, so you can return to it.`)}
+                          >
+                            <Icon name="undo" />Go back to {r.version}…
+                          </button>
+                        )}
+                      </span>
+                    </li>
+                  ))
+                ) : (
+                  <li class="dl-sub">No other releases are published for this platform.</li>
+                )}
+              </ul>
+            </section>
+          </div>
+          <div class="dl-col-side">
+            <section class="dl-card" aria-label="Update policy">
+              <header class="dl-ch"><h2>How updates install</h2></header>
+              <div class="dl-prefs">
+                <label class="row">
+                  <button type="button" role="switch" class={'switch' + (u?.auto ? ' on' : '')} aria-checked={!!u?.auto} aria-label="Install updates automatically" onClick={() => void stage(['update', 'auto'], !(u?.auto ?? false))} />
+                  <span><b>Install updates automatically</b> <span class="dl-sub">{u?.auto ? 'on, the default' : 'off'}</span></span>
+                </label>
+                {u?.auto ? (
+                  <div class="upd-sub">
+                    <label class="row">
+                      <button type="button" role="switch" class={'switch' + (u?.deps ? ' on' : '')} aria-checked={!!u?.deps} aria-label="Keep packs and plugins up to date" onClick={() => void stage(['update', 'deps'], !(u?.deps ?? false))} />
+                      <span>Keep packs and plugins up to date too</span>
+                    </label>
+                    <label class="row">
+                      <button type="button" role="switch" class={'switch' + (u?.reload_in_place ? ' on' : '')} aria-checked={!!u?.reload_in_place} aria-label="Restart only the plugins that changed" onClick={() => void stage(['update', 'reload'], u?.reload_in_place ? 'restart' : 'in place')} />
+                      <span>Restart only the plugins that changed</span>
+                    </label>
+                  </div>
+                ) : (
+                  <p class="dl-sub">You install each release yourself, from here. To react to a new release (ask someone first, post it), set that up on a workflow.</p>
+                )}
+                <div class="field">
+                  <label for="upd-int">Look for updates every</label>
+                  <input class="input mono" id="upd-int" style="width:90px" value={u?.interval ?? ''} placeholder="10m" onChange={(e) => void stage(['update', 'interval'], (e.target as HTMLInputElement).value)} />
+                </div>
+              </div>
+              <ReviewPanel stagedCount={staged.value.length} />
+            </section>
+            <p class="dl-sub">A release that can't load this machine's config is never installed, and the previous version is always kept.</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
