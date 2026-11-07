@@ -16,6 +16,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/plugin"
 	"github.com/NodeSpy/conductor/internal/procexec"
+	"github.com/NodeSpy/conductor/internal/scratch"
 )
 
 // selfUpdatePreflightTimeout bounds the downloaded binary's `validate` dry
@@ -136,52 +137,32 @@ func doUpdate(force bool, pinTag, cfgFile string, notifier *notify.Notifier) (up
 		exe = resolved
 	}
 
-	asset := fmt.Sprintf("conductor_%s_%s", runtime.GOOS, runtime.GOARCH)
-	logf("update: fetching %s %s", asset, tag)
+	// Staged next to exe (not scratch/os.TempDir): the swap below renames
+	// across the same filesystem.
 	dl, err := os.MkdirTemp(filepath.Dir(exe), ".conductor-update-*")
 	if err != nil {
 		return false, tag, fmt.Errorf("stage update next to %s (need write access to its directory): %w", exe, err)
 	}
 	defer os.RemoveAll(dl)
-	g := plugin.GitDist{}
-	bin, err := g.Download(updateRemote(), tag, asset, dl)
-	if err != nil {
-		return false, tag, fmt.Errorf("fetch conductor binary %s: %w", tag, err)
-	}
-	sums, err := g.Download(updateRemote(), tag, "checksums.txt", dl)
-	if err != nil {
-		return false, tag, fmt.Errorf("fetch checksums for %s: %w", tag, err)
-	}
-	if err := plugin.VerifyChecksum(bin, sums, asset); err != nil {
-		return false, tag, err
-	}
-	if err := os.Chmod(bin, 0o755); err != nil {
-		return false, tag, err
-	}
-	// PREFLIGHT: a release that cannot load THIS box's config (a removed
-	// legacy block, a schema change) must never be swapped in — on an
-	// unattended auto-updating box that is a silent crash-loop with no
-	// operator watching. Run the DOWNLOADED binary's own `validate` against
-	// the daemon's config, read-only, bounded — never the running binary's.
-	if cfgFile != "" {
-		if _, statErr := os.Stat(cfgFile); statErr == nil {
-			// A forced update still proves the config loads, but does not
-			// require the release's plugins to be fetchable from here: that
-			// is the operator's escape hatch when a plugin source is
-			// unreachable for a reason they know about.
-			if perr := preflightValidate(bin, cfgFile, !force); perr != nil {
-				msg := fmt.Sprintf("update: %s failed its own config preflight — NOT applying: %v", tag, perr)
-				if !force {
-					msg += " (if a plugin source is unreachable for a reason you know about, `conductor update --force` applies it anyway)"
-				}
-				logf("%s", msg)
-				if notifier != nil {
-					notifier.Emit(context.Background(), notify.EventEscalate,
-						core.Trigger{Source: "updater", Kind: "update_preflight_failed"}, msg)
-				}
-				return false, tag, fmt.Errorf("%s does not load this config (staying on %s): %w", tag, version, perr)
-			}
+	bin, checks, ferr := fetchVerifyPreflight(tag, cfgFile, dl, force)
+	if ferr != nil {
+		if !checks.SignatureOK {
+			return false, tag, ferr // fetch/verify failure
 		}
+		// PREFLIGHT: a release that cannot load THIS box's config (a removed
+		// legacy block, a schema change) must never be swapped in — on an
+		// unattended auto-updating box that is a silent crash-loop with no
+		// operator watching.
+		msg := fmt.Sprintf("update: %s failed its own config preflight — NOT applying: %v", tag, ferr)
+		if !force {
+			msg += " (if a plugin source is unreachable for a reason you know about, `conductor update --force` applies it anyway)"
+		}
+		logf("%s", msg)
+		if notifier != nil {
+			notifier.Emit(context.Background(), notify.EventEscalate,
+				core.Trigger{Source: "updater", Kind: "update_preflight_failed"}, msg)
+		}
+		return false, tag, fmt.Errorf("%s does not load this config (staying on %s): %w", tag, version, ferr)
 	}
 	// Best-effort rollback copy, BEFORE the swap: an operator who hits a
 	// problem the preflight above didn't catch (it only proves the config
@@ -196,6 +177,94 @@ func doUpdate(force bool, pinTag, cfgFile string, notifier *notify.Notifier) (up
 		return false, tag, fmt.Errorf("replace %s (need write access to its directory): %w", exe, err)
 	}
 	return true, tag, nil
+}
+
+// updateChecks are fetchVerifyPreflight's pass/fail results — doUpdate uses
+// them to decide whether to proceed, and the dashboard's Updates tab shows
+// the same checklist for a found release before Install now is offered.
+type updateChecks struct {
+	Downloaded  bool
+	SignatureOK bool
+	ConfigLoads bool
+}
+
+// fetchVerifyPreflight downloads tag's binary into dl, verifies it against
+// the release's checksums.txt, and (when cfgFile exists) preflights it
+// against the live config — read-only throughout; nothing is installed. A
+// forced caller still proves the config loads but does not require the
+// release's plugins to be fetchable from here (the operator's escape hatch
+// when a plugin source is unreachable for a reason they know about).
+func fetchVerifyPreflight(tag, cfgFile, dl string, force bool) (bin string, checks updateChecks, err error) {
+	asset := fmt.Sprintf("conductor_%s_%s", runtime.GOOS, runtime.GOARCH)
+	logf("update: fetching %s %s", asset, tag)
+	g := plugin.GitDist{}
+	bin, err = g.Download(updateRemote(), tag, asset, dl)
+	if err != nil {
+		return "", checks, fmt.Errorf("fetch conductor binary %s: %w", tag, err)
+	}
+	sums, err := g.Download(updateRemote(), tag, "checksums.txt", dl)
+	if err != nil {
+		return "", checks, fmt.Errorf("fetch checksums for %s: %w", tag, err)
+	}
+	checks.Downloaded = true
+	if err := plugin.VerifyChecksum(bin, sums, asset); err != nil {
+		return "", checks, err
+	}
+	checks.SignatureOK = true
+	if err := os.Chmod(bin, 0o755); err != nil {
+		return "", checks, err
+	}
+	if cfgFile == "" {
+		checks.ConfigLoads = true // nothing to validate against
+		return bin, checks, nil
+	}
+	if _, statErr := os.Stat(cfgFile); statErr != nil {
+		checks.ConfigLoads = true
+		return bin, checks, nil
+	}
+	if perr := preflightValidate(bin, cfgFile, !force); perr != nil {
+		return bin, checks, perr
+	}
+	checks.ConfigLoads = true
+	return bin, checks, nil
+}
+
+// UpdateCheck is a dry run of fetchVerifyPreflight for a newly found
+// release: the dashboard's "Check now" runs it to show a real checklist
+// before offering Install now, without installing anything. Install now (or
+// auto-update) repeats the same checks right before the actual swap.
+type UpdateCheck struct {
+	Tag         string
+	Newer       bool
+	Downloaded  bool
+	SignatureOK bool
+	ConfigLoads bool
+	Err         string
+}
+
+// checkUpdate looks up the newest published release and, if it's newer than
+// the running version, fetches and preflights it into a throwaway scratch
+// directory (never os.TempDir() — the binary can be tens of MB), discarding
+// it either way: this never installs anything.
+func checkUpdate(cfgFile string) (UpdateCheck, error) {
+	tag, err := latestRelease()
+	if err != nil {
+		return UpdateCheck{}, err
+	}
+	if !newerRelease(tag, true, version) {
+		return UpdateCheck{Tag: tag}, nil
+	}
+	dl, err := scratch.MkdirTemp("conductor-update-check-*")
+	if err != nil {
+		return UpdateCheck{Tag: tag, Newer: true}, err
+	}
+	defer os.RemoveAll(dl)
+	_, checks, ferr := fetchVerifyPreflight(tag, cfgFile, dl, false)
+	out := UpdateCheck{Tag: tag, Newer: true, Downloaded: checks.Downloaded, SignatureOK: checks.SignatureOK, ConfigLoads: checks.ConfigLoads}
+	if ferr != nil {
+		out.Err = ferr.Error()
+	}
+	return out, nil
 }
 
 // preflightValidate runs the DOWNLOADED (not yet installed) binary's
@@ -634,6 +703,31 @@ func (rc *releaseChecker) check() (tag string, changed bool, err error) {
 	}
 	rc.last = tag
 	return tag, true, nil
+}
+
+// daemonLogSource guesses a log line's area from its own convention: nearly
+// every logf call here is "area: message" (update:, auto-update:, sandbox:,
+// …) — a heuristic over free text, not a structured field, but an honest one
+// given logf has no structured fields to read instead.
+func daemonLogSource(line string) string {
+	if i := strings.Index(line, ": "); i > 0 && i <= 24 && !strings.ContainsAny(line[:i], " \t") {
+		return line[:i]
+	}
+	return "conductor"
+}
+
+// daemonLogLevel guesses a log line's level from its text — again a
+// heuristic, since logf carries no level of its own.
+func daemonLogLevel(line string) string {
+	l := strings.ToLower(line)
+	switch {
+	case strings.Contains(l, "error") || strings.Contains(l, "fail"):
+		return "err"
+	case strings.Contains(l, "warn"):
+		return "warn"
+	default:
+		return "info"
+	}
 }
 
 // tail returns the last n bytes of b, for compact error context.

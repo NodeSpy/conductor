@@ -565,16 +565,60 @@ type OutsideSandboxItem struct {
 	Who  string `json:"who"`  // where it's set, e.g. "your config"
 }
 
-// UpdateInfo is the System → Updates tab.
+// UpdateInfo is the System → Updates tab: the running version, the update
+// policy as configured, and the last check this process has made (reset on a
+// restart — honestly: there is no persisted "last checked" across restarts).
 type UpdateInfo struct {
-	Auto     bool   `json:"auto"`
-	Interval string `json:"interval,omitempty"`
-	Apply    string `json:"apply,omitempty"`
+	Version       string `json:"version"`
+	Auto          bool   `json:"auto"`
+	Deps          bool   `json:"deps"`            // packs/plugins kept current too
+	ReloadInPlace bool   `json:"reload_in_place"` // restart only the plugins that changed
+	Interval      string `json:"interval,omitempty"`
+
+	// Checked is true once Check now has run this process's lifetime.
+	Checked    bool             `json:"checked"`
+	LastCheck  string           `json:"last_check,omitempty"` // RFC3339
+	Available  string           `json:"available,omitempty"`  // a newer release's tag, "" when none newer
+	Checks     *UpdateChecklist `json:"checks,omitempty"`
+	CheckError string           `json:"check_error,omitempty"`
+
+	Releases []ReleaseInfo `json:"releases,omitempty"`
+}
+
+// UpdateChecklist is a found release's real pass/fail checks — the same
+// steps Install now (or auto-update) runs right before it swaps the binary
+// in, run here without installing anything.
+type UpdateChecklist struct {
+	Downloaded  bool `json:"downloaded"`
+	SignatureOK bool `json:"signature_ok"`
+	ConfigLoads bool `json:"config_loads"`
+}
+
+// ReleaseInfo is one published release tag.
+type ReleaseInfo struct {
+	Version string `json:"version"`
+	Current bool   `json:"current"` // the one running now
+	Ready   bool   `json:"ready"`   // the found/available release, ready to install
 }
 
 // AuditResponse is GET /api/v1/audit: recent audit-log entries, newest first.
 type AuditResponse struct {
 	Entries []map[string]any `json:"entries"`
+}
+
+// LogLine is one entry from the daemon's own log ring (internal/logring) —
+// its process log, not the audit trail. Secret values are redacted the same
+// way every other logged line is, before the ring ever sees it.
+type LogLine struct {
+	Time    string `json:"time"` // RFC3339
+	Source  string `json:"source"`
+	Level   string `json:"level"` // info | warn | err
+	Message string `json:"message"`
+}
+
+// LogResponse is GET /api/v1/system/log.
+type LogResponse struct {
+	Lines []LogLine `json:"lines"`
 }
 
 // Error is one API error. Reads and writes that fail return {error: Error}.

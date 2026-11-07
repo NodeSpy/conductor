@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -49,6 +50,25 @@ type Deps struct {
 	// wired it (reports the action as unavailable, never silently no-ops).
 	SetPaused func(pause bool) error
 	Log       func(string, ...any)
+
+	// Update is the System → Updates tab's live operations (cmd/conductor's
+	// own self-updater). Nil fields report that action as unavailable rather
+	// than silently no-opping.
+	//
+	// CheckUpdate looks up the newest published release and, if newer, fetches
+	// and preflights it (never installs) — the Updates tab's "Check now".
+	CheckUpdate func() (api.UpdateInfo, error)
+	// InstallUpdate installs tag (or, tag=="", the newest release), forcing
+	// past a preflight failure when force is true (used for both Install now
+	// and Go back to vX…, which pins an older tag with force). It returns the
+	// tag actually installed; "" with a nil error means already current.
+	InstallUpdate func(tag string, force bool) (installed string, err error)
+	// ListReleases lists every published release tag for this platform.
+	ListReleases func() ([]string, error)
+
+	// DaemonLog returns the daemon's own recent log lines (internal/logring) —
+	// the System → Logs & audit tab's "Daemon log". Nil reports none held.
+	DaemonLog func() []api.LogLine
 
 	// Config-edit pipeline (design §5.3). ConfigPath is the live config file;
 	// Validate runs the daemon's own load+semantic pass against a candidate
@@ -133,6 +153,11 @@ type Server struct {
 	tsAPI   localAPI             // tailscaled LocalAPI; nil = the real socket client
 	labels  *stepupLabels        // what each handed-out step-up digest confirms, for approve-login
 	quiet   *applyBudget         // config applies that needed no step-up, rate-limited
+
+	updateMu sync.Mutex     // guards the fields below
+	updated  bool           // Check now has run at least once this process
+	lastChk  time.Time      // when
+	updInfo  api.UpdateInfo // the rest of what the last check found (Available/Checks/CheckError)
 }
 
 // New builds a dashboard server from its dependencies.
@@ -203,6 +228,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/connections", s.handleConnections)
 	s.mux.HandleFunc("GET /api/v1/system", s.handleSystem)
 	s.mux.HandleFunc("POST /api/v1/system/pause", s.handleSetPaused)
+	s.mux.HandleFunc("POST /api/v1/system/update/check", s.handleUpdateCheck)
+	s.mux.HandleFunc("POST /api/v1/system/update/install", s.handleUpdateInstall)
+	s.mux.HandleFunc("GET /api/v1/system/log", s.handleDaemonLog)
 	s.mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
 
 	// The bots' operator API (design §4.4): teams, conversations (chat), tickets,

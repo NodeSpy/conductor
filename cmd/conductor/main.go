@@ -38,12 +38,14 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/dashboard"
+	"github.com/NodeSpy/conductor/internal/dashboard/api"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/engine"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/gitwt"
 	"github.com/NodeSpy/conductor/internal/hosts"
 	"github.com/NodeSpy/conductor/internal/inbound"
+	"github.com/NodeSpy/conductor/internal/logring"
 	"github.com/NodeSpy/conductor/internal/memory"
 	agentmodels "github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
@@ -1148,6 +1150,48 @@ func cmdRun(args []string) error {
 			Paused:    func() bool { _, err := os.Stat(pausePath(cfg)); return err == nil },
 			SetPaused: func(pause bool) error { return setPaused(cfg, pause) },
 			Log:       logf,
+			// Updates tab (design parity with the prototype's Updates screen):
+			// CheckUpdate/InstallUpdate are cmd/conductor's own self-updater
+			// (checkUpdate/doUpdate, update.go), reused as-is — same preflight,
+			// same rollback-copy, same restart path the CLI and conductor.update
+			// verb already use.
+			CheckUpdate: func() (api.UpdateInfo, error) {
+				chk, err := checkUpdate(cfgFile)
+				if err != nil {
+					return api.UpdateInfo{}, err
+				}
+				info := api.UpdateInfo{Available: ""}
+				if chk.Newer && chk.Tag != version {
+					info.Available = chk.Tag
+					info.Checks = &api.UpdateChecklist{Downloaded: chk.Downloaded, SignatureOK: chk.SignatureOK, ConfigLoads: chk.ConfigLoads}
+					info.CheckError = chk.Err
+				}
+				return info, nil
+			},
+			InstallUpdate: func(tag string, force bool) (string, error) {
+				updated, installed, err := doUpdate(force, tag, cfgFile, notifier)
+				if err != nil {
+					return "", err
+				}
+				if !updated {
+					return "", nil
+				}
+				if _, serr := syncServiceUnit(false); serr != nil {
+					logf("dashboard update: service unit sync failed: %v", serr)
+				}
+				logf("dashboard update: installed %s (was %s) — restarting", installed, version)
+				time.AfterFunc(2*time.Second, func() { applyUpdate(stop) })
+				return installed, nil
+			},
+			ListReleases: func() ([]string, error) { return plugin.GitDist{}.ListTags(updateRemote()) },
+			DaemonLog: func() []api.LogLine {
+				lines := daemonLogRing.Lines()
+				out := make([]api.LogLine, len(lines))
+				for i, l := range lines {
+					out[i] = api.LogLine{Time: l.Time.UTC().Format(time.RFC3339), Source: daemonLogSource(l.Text), Level: daemonLogLevel(l.Text), Message: l.Text}
+				}
+				return out
+			},
 			// Config-edit pipeline (design §5.3): the dashboard edits the live
 			// config file, validates each candidate on a copy through the
 			// daemon's own load+semantic pass, and reloads via SIGHUP on apply.
@@ -2220,12 +2264,18 @@ var logRedact atomic.Pointer[secrets.Resolver]
 // setLogRedactor wires the secrets resolver into the shared logger.
 func setLogRedactor(r *secrets.Resolver) { logRedact.Store(r) }
 
+// daemonLogRing holds this process's own recent log lines (already redacted,
+// below) — the dashboard's "Daemon log" tab reads it; journald/launchd (or
+// whatever a service manager does with stderr) is unchanged and unaffected.
+var daemonLogRing = logring.New(2000)
+
 func logf(format string, a ...any) {
 	line := fmt.Sprintf(format, a...)
 	if r := logRedact.Load(); r != nil {
 		line = r.Redact(line)
 	}
 	fmt.Fprintln(os.Stderr, line)
+	daemonLogRing.Write(line)
 }
 
 // loadEnvFile loads simple KEY=VALUE lines from path into the environment

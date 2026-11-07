@@ -17,6 +17,7 @@ import type {
   PluginsResponse,
   ConnectionsResponse,
   SystemResponse,
+  LogResponse,
   AuditResponse,
   RunDetailResponse,
   ActionResponse,
@@ -147,6 +148,9 @@ export const api = {
   connections: () => getJSON<ConnectionsResponse>('/api/v1/connections'),
   system: () => getJSON<SystemResponse>('/api/v1/system'),
   setPaused: (paused: boolean) => sendJSON<{ paused: boolean }>('POST', '/api/v1/system/pause', { paused }),
+  checkUpdate: () => sendJSON<SystemResponse>('POST', '/api/v1/system/update/check', {}),
+  installUpdate: (version: string, force = false) => sendJSON<{ installed: string }>('POST', '/api/v1/system/update/install', { version, force }),
+  daemonLog: () => getJSON<LogResponse>('/api/v1/system/log'),
   audit: () => getJSON<AuditResponse>('/api/v1/audit'),
 }
 

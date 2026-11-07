@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dashboard/api"
@@ -279,16 +280,107 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	safety.Outside = outsideSandboxItems(s.deps.Cfg)
 	resp.Safety = safety
 
-	// Update block.
+	// Update block: the configured policy, this process's own last check (if
+	// any — Check now runs it; nothing is checked on page load), and the
+	// releases this platform has published.
+	resp.Update.Version = s.deps.Version
 	if up, ok := tree["update"].(map[string]any); ok {
 		resp.Update.Auto, _ = up["auto"].(bool)
 		resp.Update.Interval, _ = up["interval"].(string)
-		resp.Update.Apply = fmt.Sprintf("%v", up["apply"])
-		if _, ok := up["apply"]; !ok {
-			resp.Update.Apply = ""
+		if d, ok := up["deps"].(bool); ok {
+			resp.Update.Deps = d
+		} else {
+			resp.Update.Deps = resp.Update.Auto // Update.Deps follows auto when unset (config.Update.DepsEnabled)
+		}
+		if rv, ok := up["reload"].(string); ok {
+			resp.Update.ReloadInPlace = rv == "in place"
+		}
+	}
+	s.updateMu.Lock()
+	if s.updated {
+		resp.Update.Checked = true
+		resp.Update.LastCheck = s.lastChk.UTC().Format(time.RFC3339)
+		resp.Update.Available = s.updInfo.Available
+		resp.Update.Checks = s.updInfo.Checks
+		resp.Update.CheckError = s.updInfo.CheckError
+	}
+	s.updateMu.Unlock()
+	if s.deps.ListReleases != nil {
+		if tags, err := s.deps.ListReleases(); err == nil {
+			for _, t := range tags {
+				resp.Update.Releases = append(resp.Update.Releases, api.ReleaseInfo{
+					Version: t,
+					Current: t == s.deps.Version,
+					Ready:   t == resp.Update.Available,
+				})
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleUpdateCheck is Updates' "Check now": looks up the newest published
+// release and, if newer, fetches and preflights it (never installs) — real
+// pass/fail checks, not developer copy. The result is kept in memory for
+// subsequent GET /api/v1/system reads, until the next check or a restart.
+func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if s.deps.CheckUpdate == nil {
+		writeError(w, http.StatusNotFound, "no_updater", "this daemon has no updater wired", "")
+		return
+	}
+	info, err := s.deps.CheckUpdate()
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "check_failed", err.Error(), "")
+		return
+	}
+	s.updateMu.Lock()
+	s.updated = true
+	s.lastChk = time.Now()
+	s.updInfo = info
+	s.updateMu.Unlock()
+	s.handleSystem(w, r)
+}
+
+// handleUpdateInstall is Updates' "Install now" (tag "") and "Go back to
+// vX…" (tag set, force implied) — both run deps.InstallUpdate, which is
+// cmd/conductor's own doUpdate: fetch, verify, preflight, atomic swap,
+// restart. A session is required once sign-in is enforced, matching config
+// apply's own gating (this changes what code the daemon runs, same weight).
+func (s *Server) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
+	if s.deps.InstallUpdate == nil {
+		writeError(w, http.StatusNotFound, "no_updater", "this daemon has no updater wired", "")
+		return
+	}
+	var req struct {
+		Version string `json:"version"`
+		Force   bool   `json:"force"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if s.authEnforced() {
+		if _, ok := auth.SessionFrom(r); !ok {
+			writeError(w, http.StatusUnauthorized, "sign_in_required", "sign in to install an update", "")
+			return
+		}
+	}
+	installed, err := s.deps.InstallUpdate(req.Version, req.Force)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "install_failed", err.Error(), "")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"installed": installed})
+}
+
+// handleDaemonLog is System → Logs & audit's "Daemon log" tab: the process's
+// own recent log lines (internal/logring), already redacted the same way
+// every other logged line is.
+func (s *Server) handleDaemonLog(w http.ResponseWriter, r *http.Request) {
+	var lines []api.LogLine
+	if s.deps.DaemonLog != nil {
+		lines = s.deps.DaemonLog()
+	}
+	writeJSON(w, http.StatusOK, api.LogResponse{Lines: lines})
 }
 
 // handleSetPaused is System → Safety's "Pause all automation" / "Resume

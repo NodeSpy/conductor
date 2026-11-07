@@ -640,18 +640,66 @@ export interface OutsideSandboxItem {
   who: string; // where it's set, e.g. "your config"
 }
 /**
- * UpdateInfo is the System → Updates tab.
+ * UpdateInfo is the System → Updates tab: the running version, the update
+ * policy as configured, and the last check this process has made (reset on a
+ * restart — honestly: there is no persisted "last checked" across restarts).
  */
 export interface UpdateInfo {
+  version: string;
   auto: boolean;
+  deps: boolean; // packs/plugins kept current too
+  reload_in_place: boolean; // restart only the plugins that changed
   interval?: string;
-  apply?: string;
+  /**
+   * Checked is true once Check now has run this process's lifetime.
+   */
+  checked: boolean;
+  last_check?: string; // RFC3339
+  available?: string; // a newer release's tag, "" when none newer
+  checks?: UpdateChecklist;
+  check_error?: string;
+  releases?: ReleaseInfo[];
+}
+/**
+ * UpdateChecklist is a found release's real pass/fail checks — the same
+ * steps Install now (or auto-update) runs right before it swaps the binary
+ * in, run here without installing anything.
+ */
+export interface UpdateChecklist {
+  downloaded: boolean;
+  signature_ok: boolean;
+  config_loads: boolean;
+}
+/**
+ * ReleaseInfo is one published release tag.
+ */
+export interface ReleaseInfo {
+  version: string;
+  current: boolean; // the one running now
+  ready: boolean; // the found/available release, ready to install
 }
 /**
  * AuditResponse is GET /api/v1/audit: recent audit-log entries, newest first.
  */
 export interface AuditResponse {
   entries: { [key: string]: any}[];
+}
+/**
+ * LogLine is one entry from the daemon's own log ring (internal/logring) —
+ * its process log, not the audit trail. Secret values are redacted the same
+ * way every other logged line is, before the ring ever sees it.
+ */
+export interface LogLine {
+  time: string; // RFC3339
+  source: string;
+  level: string; // info | warn | err
+  message: string;
+}
+/**
+ * LogResponse is GET /api/v1/system/log.
+ */
+export interface LogResponse {
+  lines: LogLine[];
 }
 /**
  * Error is one API error. Reads and writes that fail return {error: Error}.
