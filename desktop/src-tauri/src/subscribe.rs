@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use tauri::tray::TrayIcon;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_notification::NotificationExt;
 use tokio_util::sync::CancellationToken;
 
@@ -21,7 +21,17 @@ use crate::stream::{next_backoff, Dedup, SseParser};
 use crate::tray;
 use crate::types::StreamEvent;
 
-const TOPICS: &str = "attention,chat";
+/// The app's own screens (Needs you, Chat, Bots) need live updates too, not
+/// just notifications, so the subscription now also follows `ticket` (a
+/// bot's cases, which the Bots screens surface as pending-proposal/open-case
+/// counts) alongside `attention` and `chat`.
+const TOPICS: &str = "attention,chat,ticket";
+
+/// The window event every parsed envelope is emitted to (see `emit_event`),
+/// picked up by `src/state.ts`'s `wireLiveUpdates`. A `reset` is emitted the
+/// same way with `type: "reset"` so the frontend can refetch snapshots
+/// without this module knowing anything about the UI's state.
+const EVENT_NAME: &str = "conductor://event";
 const BURST_DEBOUNCE: Duration = Duration::from_millis(400);
 const SIGNIN_MAX_ATTEMPTS: usize = 6;
 
@@ -227,6 +237,7 @@ async fn stream_once<R: Runtime>(
                     match parsed {
                         Ok(StreamEvent::Reset { .. }) => {
                             flush_burst(app, planner, &mut burst);
+                            emit_event(app, "reset", "reset");
                             return StreamOutcome::Reset;
                         }
                         Ok(StreamEvent::Attention { envelope, item }) => {
@@ -249,6 +260,7 @@ async fn stream_once<R: Runtime>(
                             if change == AttentionChange::Opened && is_new {
                                 burst.push(item, Instant::now(), BURST_DEBOUNCE);
                             }
+                            emit_event(app, &envelope.topic, &envelope.kind);
                         }
                         Ok(StreamEvent::Chat { envelope, chat }) => {
                             last_cursor = Some(envelope.id.clone());
@@ -259,9 +271,13 @@ async fn stream_once<R: Runtime>(
                             if let Some(n) = planner.lock().unwrap().plan_chat(operator, &chat) {
                                 fire(app, &n);
                             }
+                            emit_event(app, &envelope.topic, &envelope.kind);
                         }
                         Ok(StreamEvent::Other(envelope)) => {
                             last_cursor = Some(envelope.id.clone());
+                            // Covers topics this module has no notification logic
+                            // for (e.g. `ticket`): the UI still wants to know.
+                            emit_event(app, &envelope.topic, &envelope.kind);
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, "could not parse an event, skipping it");
@@ -285,6 +301,22 @@ fn flush_burst<R: Runtime>(
     let plan = planner.lock().unwrap().plan_attention(&items);
     for n in plan {
         fire(app, &n);
+    }
+}
+
+/// Emits one event to the main window so the app's own screens (not just
+/// notifications) can refetch live, off the same resumable journal stream
+/// the tray uses. `src/state.ts`'s `wireLiveUpdates` listens for this.
+#[derive(serde::Serialize, Clone)]
+struct UiEvent<'a> {
+    topic: &'a str,
+    #[serde(rename = "type")]
+    kind: &'a str,
+}
+
+fn emit_event<R: Runtime>(app: &AppHandle<R>, topic: &str, kind: &str) {
+    if let Err(e) = app.emit(EVENT_NAME, UiEvent { topic, kind }) {
+        tracing::warn!(error = %e, "could not emit event to the window");
     }
 }
 

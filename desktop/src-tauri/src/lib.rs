@@ -11,24 +11,26 @@ mod types;
 use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;
 
-use tauri::ipc::CapabilityBuilder;
 use tauri::menu::MenuEvent;
 use tauri::tray::{TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
 use tauri_plugin_autostart::ManagerExt as _;
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_opener::OpenerExt;
 use tokio::sync::Mutex as AsyncMutex;
 
-use client::Client;
+use client::{ApprovalKind, ApprovalView, Client, ClientError};
 use settings::Settings;
-
-const REMOTE_CAPABILITY_ID: &str = "remote-daemon";
+use types::AttentionSnapshot;
 
 struct AppState {
     config_dir: PathBuf,
     data_dir: PathBuf,
     settings: StdMutex<Settings>,
+    /// The one shared signed-in session, built by `complete_setup`/startup
+    /// and used both by the background subscription (subscribe.rs) and by
+    /// every Tauri command below — never a separate client per call.
+    client: AsyncMutex<Option<Client>>,
     subscription: AsyncMutex<Option<subscribe::SubscriptionHandle>>,
     tray: StdMutex<Option<TrayIcon<Wry>>>,
 }
@@ -36,6 +38,10 @@ struct AppState {
 impl AppState {
     fn snapshot_settings(&self) -> Settings {
         self.settings.lock().unwrap().clone()
+    }
+
+    async fn current_client(&self) -> Option<Client> {
+        self.client.lock().await.clone()
     }
 }
 
@@ -56,22 +62,22 @@ fn save_settings(state: tauri::State<AppState>, settings: Settings) -> Result<()
     Ok(())
 }
 
-/// Grants the remote daemon origin the one `ssh_sign` command, navigates the
-/// main window there, and (re)starts the background subscription. Called
-/// after the setup/settings form saves.
+/// Builds the shared client, proves it works with a real sign-in, and
+/// (re)starts the background subscription. Called after the setup/settings
+/// form saves. Unlike the old remote-dashboard design, this never navigates
+/// any window anywhere — the main window only ever shows this app's own UI
+/// (`desktop/app`), and the frontend moves on to `#/needs` itself once this
+/// resolves.
 #[tauri::command]
 async fn complete_setup(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let settings = state.snapshot_settings();
     if !settings.is_configured() {
         return Err("settings are incomplete".to_string());
     }
-    let origin = settings
-        .daemon_origin()
-        .ok_or_else(|| "daemon URL is not a valid URL".to_string())?;
 
-    // Prove the settings work before saying so: a real sign-in with a
-    // throwaway session reaches the daemon, names the operator and signs
-    // with the key, and each failure gets a message that says which.
+    // Prove the settings work before saying so: a real sign-in reaches the
+    // daemon, names the operator and signs with the key, and each failure
+    // gets a message that says which.
     let probe = Client::new(&settings.daemon_url, &settings.ssh_public_key_path).map_err(|e| e.to_string())?;
     match tokio::time::timeout(std::time::Duration::from_secs(30), probe.sign_in(&settings.operator)).await {
         Err(_) => return Err(format!("{} did not answer within 30s.", settings.daemon_url)),
@@ -79,28 +85,8 @@ async fn complete_setup(app: AppHandle, state: tauri::State<'_, AppState>) -> Re
         Ok(Ok(())) => {}
     }
 
-    // Dynamic ACL: grant the remote page at this origin (and only this
-    // origin) the ssh_sign command on the main window. Re-running this adds a
-    // fresh capability each time the daemon URL changes; stale ones from a
-    // previous origin are harmless (Tauri resolves by matching URL) but we
-    // use a stable identifier so a repeat call just redefines it.
-    let capability = CapabilityBuilder::new(REMOTE_CAPABILITY_ID)
-        .remote(origin.clone())
-        .window("main")
-        .permission("allow-ssh-sign")
-            .permission("allow-desktop-operator");
-    app.add_capability(capability).map_err(|e| e.to_string())?;
-
     let _ = app.autolaunch().enable();
-
-    restart_subscription(&app, &state, settings.clone()).await;
-
-    if let Some(window) = app.get_webview_window("main") {
-        let url = url::Url::parse(&settings.daemon_url).map_err(|e| e.to_string())?;
-        window.navigate(url).map_err(|e| e.to_string())?;
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
+    restart_subscription(&app, &state, settings.clone(), Some(probe)).await;
     Ok(())
 }
 
@@ -114,6 +100,7 @@ fn setup_error(url: &str, e: &client::ClientError) -> String {
         ),
         Network(err) => format!("Can't talk to {url}: {err}"),
         Sign(err) => format!("Couldn't sign with your SSH key: {err}"),
+        Daemon(d) => format!("The daemon refused sign-in: {}", d.message),
         Status(code, body) => format!("The daemon refused sign-in ({code}): {body}"),
         Unauthorized | SignIn(_) => format!(
             "The daemon refused sign-in. Check the operator name, and that operators.<name>.ssh_key \
@@ -122,22 +109,29 @@ fn setup_error(url: &str, e: &client::ClientError) -> String {
     }
 }
 
-async fn restart_subscription(app: &AppHandle, state: &tauri::State<'_, AppState>, settings: Settings) {
-    let mut guard = state.subscription.lock().await;
-    if let Some(old) = guard.take() {
+/// (Re)builds the shared client (unless one is passed in, already proven by
+/// `complete_setup`'s probe), stores it in `AppState`, and (re)starts the
+/// background subscription with a clone of it.
+async fn restart_subscription(app: &AppHandle, state: &tauri::State<'_, AppState>, settings: Settings, built: Option<Client>) {
+    let mut sub_guard = state.subscription.lock().await;
+    if let Some(old) = sub_guard.take() {
         old.stop().await;
     }
     let Some(tray) = state.tray.lock().unwrap().clone() else {
         tracing::error!("no tray icon yet, cannot start subscription");
         return;
     };
-    let client = match Client::new(&settings.daemon_url, &settings.ssh_public_key_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(error = %e, "could not build http client");
-            return;
-        }
+    let client = match built {
+        Some(c) => c,
+        None => match Client::new(&settings.daemon_url, &settings.ssh_public_key_path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(error = %e, "could not build http client");
+                return;
+            }
+        },
     };
+    *state.client.lock().await = Some(client.clone());
     let handle = subscribe::start(
         app.clone(),
         client,
@@ -145,110 +139,143 @@ async fn restart_subscription(app: &AppHandle, state: &tauri::State<'_, AppState
         state.data_dir.clone(),
         tray,
     );
-    *guard = Some(handle);
+    *sub_guard = Some(handle);
 }
 
-/// The one command the daemon's remote dashboard page may call (see
-/// `capabilities/default.json` for the static/local grant and
-/// `complete_setup` for the runtime remote grant that scopes it to the
-/// configured daemon origin only). Confirms with a native dialog naming the
-/// namespace and the exact text before signing — this is a page-initiated
-/// sign-in or step-up, unlike the app's own background sign-in in
-/// `client::Client::sign_in`, which signs without a prompt.
-#[tauri::command]
-async fn ssh_sign(
-    app: AppHandle,
-    webview: tauri::Webview,
-    state: tauri::State<'_, AppState>,
-    namespace: String,
-    message: String,
-) -> Result<String, String> {
-    if !sign::namespace_allowed(&namespace) {
-        return Err(format!("refusing to sign in namespace {namespace:?}"));
-    }
-    let settings = state.snapshot_settings();
-
-    // Defense in depth, on top of the capability system: the runtime
-    // "remote-daemon" capability (complete_setup) scopes ssh_sign to the
-    // configured origin, but tauri::ipc::RuntimeAuthority::add_capability
-    // only ever appends — reconfiguring to a new daemon does not revoke the
-    // old origin's grant for the life of the running app. So check the
-    // *current* settings against the calling webview's *current* URL on
-    // every call, independent of whatever capability grants have
-    // accumulated.
-    let caller_url = webview.url().map_err(|e| e.to_string())?;
-    if !settings.allows_origin(&caller_url) {
-        tracing::warn!(url = %caller_url, "ssh_sign called from an origin that isn't the configured daemon, refusing");
-        return Err("ssh_sign is not available to this origin".to_string());
-    }
-
-    let pubkey_path = settings.ssh_public_key_path.clone();
-    if pubkey_path.trim().is_empty() {
-        return Err("no SSH key configured".to_string());
-    }
-
-    // A sign-in challenge names the operator and the origin it signs in to,
-    // and the daemon only accepts it on that origin: signing one for the
-    // configured operator and daemon can only sign this app's own window in,
-    // so it needs no confirmation. A step-up authorizes an action, and
-    // anything else is shown to the operator first.
-    if namespace == sign::LOGIN_NAMESPACE && login_challenge_matches(&message, &settings) {
-        return sign::ssh_sign(&pubkey_path, &namespace, &message)
-            .await
-            .map_err(|e| e.to_string());
-    }
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let kind = if namespace == sign::STEPUP_NAMESPACE {
-        "step-up"
-    } else {
-        "sign-in"
-    };
-    app.dialog()
-        .message(format!("Namespace: {namespace}\n\n{message}"))
-        .title(format!("Sign this {kind} request with your SSH key?"))
-        .kind(MessageDialogKind::Info)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Sign".to_string(),
-            "Cancel".to_string(),
-        ))
-        .show(move |confirmed| {
-            let _ = tx.send(confirmed);
-        });
-    let confirmed = rx.await.unwrap_or(false);
-    if !confirmed {
-        return Err("signing was cancelled".to_string());
-    }
-
-    sign::ssh_sign(&pubkey_path, &namespace, &message)
+/// Runs `call` against the shared client, signing in again once and retrying
+/// if the session had expired (`ClientError::Unauthorized`). Every command
+/// below that talks to the daemon goes through this, so there is one retry
+/// policy in one place.
+async fn with_client<T, Fut>(state: &tauri::State<'_, AppState>, call: impl Fn(Client) -> Fut) -> Result<T, String>
+where
+    Fut: std::future::Future<Output = Result<T, ClientError>>,
+{
+    let client = state
+        .current_client()
         .await
-        .map_err(|e| e.to_string())
-}
-
-/// Whether a sign-in challenge is for the configured operator on the
-/// configured daemon (`conductor-dashboard-login v1 operator=<op>
-/// origin=<origin> ...`).
-fn login_challenge_matches(message: &str, settings: &Settings) -> bool {
-    let Some(origin) = settings.daemon_origin() else {
-        return false;
-    };
-    let mut fields = message.split(' ');
-    fields.next() == Some("conductor-dashboard-login")
-        && fields.next() == Some("v1")
-        && fields.next() == Some(format!("operator={}", settings.operator).as_str())
-        && fields.next() == Some(format!("origin={origin}").as_str())
-}
-
-/// The configured operator name, so the daemon's sign-in page can sign the
-/// window in without asking. Only the configured daemon's page may ask.
-#[tauri::command]
-fn desktop_operator(webview: tauri::Webview, state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let settings = state.snapshot_settings();
-    let url = webview.url().map_err(|e| e.to_string())?;
-    if !settings.allows_origin(&url) {
-        return Err("not available to this origin".to_string());
+        .ok_or_else(|| "not connected to a daemon yet".to_string())?;
+    match call(client.clone()).await {
+        Err(ClientError::Unauthorized) => {
+            let operator = state.snapshot_settings().operator;
+            client.sign_in(&operator).await.map_err(|e| e.to_command_error())?;
+            call(client).await.map_err(|e| e.to_command_error())
+        }
+        Ok(v) => Ok(v),
+        Err(e) => Err(e.to_command_error()),
     }
-    Ok(settings.operator)
+}
+
+#[tauri::command]
+async fn attention(state: tauri::State<'_, AppState>) -> Result<AttentionSnapshot, String> {
+    with_client(&state, |c| async move { c.attention_snapshot().await }).await
+}
+
+#[tauri::command]
+async fn dismiss(state: tauri::State<'_, AppState>, key: String) -> Result<(), String> {
+    with_client(&state, move |c| {
+        let key = key.clone();
+        async move { c.dismiss(&key).await }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn approval_view(state: tauri::State<'_, AppState>, kind: String, bot: Option<String>, id: String) -> Result<ApprovalView, String> {
+    let kind = ApprovalKind::parse(&kind)?;
+    with_client(&state, move |c| {
+        let (bot, id) = (bot.clone(), id.clone());
+        async move { c.approval_view(kind, bot.as_deref(), &id).await }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn decide(
+    state: tauri::State<'_, AppState>,
+    kind: String,
+    bot: Option<String>,
+    id: String,
+    decision: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    let kind = ApprovalKind::parse(&kind)?;
+    with_client(&state, move |c| {
+        let (bot, id, decision, reason) = (bot.clone(), id.clone(), decision.clone(), reason.clone());
+        async move { c.decide(kind, bot.as_deref(), &id, &decision, reason.as_deref()).await }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn conversations(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+    with_client(&state, |c| async move { c.conversations().await }).await
+}
+
+#[tauri::command]
+async fn messages(state: tauri::State<'_, AppState>, id: String, after: Option<u64>, mark: Option<bool>) -> Result<serde_json::Value, String> {
+    let after = after.unwrap_or(0);
+    let mark = mark.unwrap_or(true);
+    with_client(&state, move |c| {
+        let id = id.clone();
+        async move { c.messages(&id, after, mark).await }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn send_message(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    text: String,
+    to: Option<Vec<String>>,
+    everyone: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let everyone = everyone.unwrap_or(false);
+    with_client(&state, move |c| {
+        let (id, text, to) = (id.clone(), text.clone(), to.clone());
+        async move { c.send_message(&id, &text, to.as_deref(), everyone).await }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn mark_read(state: tauri::State<'_, AppState>, id: String, upto: u64) -> Result<(), String> {
+    with_client(&state, move |c| {
+        let id = id.clone();
+        async move { c.mark_read(&id, upto).await }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn bots(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+    with_client(&state, |c| async move { c.bots().await }).await
+}
+
+#[tauri::command]
+async fn bot(state: tauri::State<'_, AppState>, name: String) -> Result<serde_json::Value, String> {
+    with_client(&state, move |c| {
+        let name = name.clone();
+        async move { c.bot(&name).await }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn bot_proposals(state: tauri::State<'_, AppState>, name: String) -> Result<serde_json::Value, String> {
+    with_client(&state, move |c| {
+        let name = name.clone();
+        async move { c.bot_proposals(&name).await }
+    })
+    .await
+}
+
+/// Opens a URL in the system browser (the tray's "Open dashboard in
+/// browser", and a Needs you row for something this app doesn't render
+/// in-app, e.g. a run's page).
+#[tauri::command]
+fn open_in_browser(app: AppHandle, url: String) -> Result<(), String> {
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
 fn open_settings_window(app: &AppHandle) {
@@ -257,7 +284,7 @@ fn open_settings_window(app: &AppHandle) {
         let _ = w.set_focus();
         return;
     }
-    let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("setup.html".into()))
+    let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html#/setup".into()))
         .title("Conductor Settings")
         .inner_size(560.0, 640.0)
         .build();
@@ -270,18 +297,26 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
-/// Navigates the main window to a dashboard hash route and shows it — used
-/// both for a clicked notification and the tray's "Open".
+/// Opens the configured daemon's dashboard in the system browser (the tray's
+/// "Open dashboard in browser" — the app's own window never loads it).
+fn open_dashboard_in_browser(app: &AppHandle) {
+    let settings = app.state::<AppState>().snapshot_settings();
+    if settings.daemon_url.is_empty() {
+        return;
+    }
+    let _ = app.opener().open_url(settings.daemon_url, None::<&str>);
+}
+
+/// Tells the main window to navigate to an in-app hash route (e.g.
+/// `#/needs/<key>`, `#/chat/<kind>/<name>`) and shows it — used both for a
+/// clicked notification and, in future, any other in-app deep link. The
+/// window itself never loads a remote origin; this only ever sets its own
+/// location's hash via a window event the frontend listens for
+/// (`conductor://navigate`, see src/state.ts).
 fn open_link(app: &AppHandle, link: Option<&str>) {
     if let Some(window) = app.get_webview_window("main") {
         if let Some(link) = link {
-            let settings = app.state::<AppState>().snapshot_settings();
-            if let Some(origin) = settings.daemon_origin() {
-                let full = format!("{origin}/{}", link.trim_start_matches('/'));
-                if let Ok(url) = url::Url::parse(&full) {
-                    let _ = window.navigate(url);
-                }
-            }
+            let _ = app.emit_to("main", "conductor://navigate", link);
         }
         let _ = window.show();
         let _ = window.set_focus();
@@ -303,15 +338,24 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings,
             default_ssh_key,
             complete_setup,
-            ssh_sign,
-            desktop_operator,
+            attention,
+            dismiss,
+            approval_view,
+            decide,
+            conversations,
+            messages,
+            send_message,
+            mark_read,
+            bots,
+            bot,
+            bot_proposals,
+            open_in_browser,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -335,6 +379,7 @@ pub fn run() {
                         &app,
                         &event,
                         || show_main_window(&app),
+                        || open_dashboard_in_browser(&app),
                         || open_settings_window(&app),
                     );
                 })
@@ -349,15 +394,17 @@ pub fn run() {
                 config_dir: config_dir.clone(),
                 data_dir: data_dir.clone(),
                 settings: StdMutex::new(settings.clone()),
+                client: AsyncMutex::new(None),
                 subscription: AsyncMutex::new(None),
                 tray: StdMutex::new(Some(tray)),
             });
 
             // Clicking a notification body ("tap") shows the main window and,
-            // best-effort, navigates to the link it carried: we stash the
-            // link in the notification's `extra` payload when firing it
-            // (subscribe.rs), but not every desktop notification backend
-            // round-trips `extra` back to the click handler (see README).
+            // best-effort, navigates it to the in-app route the event
+            // carried: we stash it in the notification's `extra` payload
+            // when firing it (subscribe.rs/notify.rs), but not every desktop
+            // notification backend round-trips `extra` back to the click
+            // handler (see README).
             let _ = app.notification().on_action(move |perf| {
                 if perf.action_id() == "tap" {
                     let link = perf
@@ -373,21 +420,8 @@ pub fn run() {
                 let app2 = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let state = app2.state::<AppState>();
-                    if let Some(origin) = state.snapshot_settings().daemon_origin() {
-                        let capability = CapabilityBuilder::new(REMOTE_CAPABILITY_ID)
-                            .remote(origin)
-                            .window("main")
-                            .permission("allow-ssh-sign")
-            .permission("allow-desktop-operator");
-                        let _ = app2.add_capability(capability);
-                    }
                     let settings = state.snapshot_settings();
-                    restart_subscription(&app2, &state, settings.clone()).await;
-                    if let Some(window) = app2.get_webview_window("main") {
-                        if let Ok(url) = url::Url::parse(&settings.daemon_url) {
-                            let _ = window.navigate(url);
-                        }
-                    }
+                    restart_subscription(&app2, &state, settings, None).await;
                 });
             }
 
@@ -417,33 +451,4 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let _ = (app, event);
         });
-}
-
-#[cfg(test)]
-mod login_challenge_tests {
-    use super::*;
-
-    fn settings() -> Settings {
-        Settings {
-            daemon_url: "https://box.tailnet.ts.net:7788".into(),
-            operator: "daniel".into(),
-            ssh_public_key_path: "~/.ssh/id_ed25519.pub".into(),
-        }
-    }
-
-    #[test]
-    fn matches_only_this_operator_on_this_daemon() {
-        let s = settings();
-        let ok = "conductor-dashboard-login v1 operator=daniel origin=https://box.tailnet.ts.net:7788 nonce=x expires=y";
-        assert!(login_challenge_matches(ok, &s));
-        for bad in [
-            "conductor-dashboard-login v1 operator=eve origin=https://box.tailnet.ts.net:7788 nonce=x",
-            "conductor-dashboard-login v1 operator=daniel origin=https://evil.example:7788 nonce=x",
-            "conductor-dashboard-login v1 operator=daniel origin=https://box.tailnet.ts.net:7788x nonce=x",
-            "conductor-dashboard-stepup v1 operator=daniel origin=https://box.tailnet.ts.net:7788",
-            "",
-        ] {
-            assert!(!login_challenge_matches(bad, &s), "{bad}");
-        }
-    }
 }

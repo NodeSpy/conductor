@@ -5,11 +5,10 @@
 // others are one tap away. On success the daemon sets the session cookie and the
 // app loads.
 import type { JSX } from 'preact'
-import { useEffect, useState } from 'preact/hooks'
+import { useState } from 'preact/hooks'
 import { signIn, signInPassword, sshBegin, sshFinish, sshPoll, authState, signInMethods, type Method, type SSHChallenge } from '../api/auth'
 import { GateMark, PasskeyGlyph } from '../components/GateChrome'
 import { SSHPanel, PlainHTTPNotice, methodLabel } from '../components/AuthBits'
-import { inDesktopApp, desktopOperator, desktopSSHSign } from '../lib/desktop'
 import '../styles/auth.css'
 
 const operatorKey = 'conductor.operator'
@@ -32,16 +31,6 @@ function remember(op: string) {
 
 const enter = () => location.assign('/#/overview')
 
-// In the desktop app the window signs itself in: the app knows the operator
-// and signs the challenge with its configured key. On any failure the page
-// falls back to the usual form, with the reason shown.
-async function desktopSignIn(): Promise<void> {
-  const op = await desktopOperator()
-  remember(op)
-  const ch = await sshBegin(op)
-  await sshFinish(ch.challenge_id, await desktopSSHSign(ch.namespace, ch.challenge))
-}
-
 export function Signin(): JSX.Element {
   const st = authState.value
   const methods = signInMethods(st)
@@ -52,16 +41,6 @@ export function Signin(): JSX.Element {
   const [ch, setCh] = useState<SSHChallenge | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const [auto, setAuto] = useState(() => inDesktopApp() && methods.includes('ssh'))
-
-  useEffect(() => {
-    if (!auto) return
-    desktopSignIn().then(enter, (e) => {
-      setErr(`The conductor app couldn't sign you in: ${e instanceof Error ? e.message : String(e)}`)
-      setOperator(rememberedOperator())
-      setAuto(false)
-    })
-  }, [])
 
   const run = async (fn: () => Promise<void>) => {
     setErr('')
@@ -101,13 +80,7 @@ export function Signin(): JSX.Element {
   )
 
   let body: JSX.Element | null = null
-  if (auto) {
-    body = (
-      <p class="acc-note" data-testid="desktop-signin">
-        Signing in with the conductor app…
-      </p>
-    )
-  } else if (method === 'passkey') {
+  if (method === 'passkey') {
     body = (
       <button
         class="btn primary lg block"
@@ -214,7 +187,7 @@ export function Signin(): JSX.Element {
             {err}
           </p>
         ) : null}
-        {methods.length > 1 && !auto ? (
+        {methods.length > 1 ? (
           <div class="other-ways" data-testid="other-ways">
             <span class="gate-group-label">Other ways to sign in</span>
             <div class="method-chips">

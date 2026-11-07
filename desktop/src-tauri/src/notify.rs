@@ -137,7 +137,10 @@ impl NotificationPlanner {
             .map(|item| Notification {
                 title: item.title.clone(),
                 body: item.detail.clone().unwrap_or_default(),
-                link: item.link.clone(),
+                // In-app route, not the item's own daemon-dashboard link:
+                // notifications open #/needs/<key>, which the app's Needs
+                // screen resolves to the right approval or action itself.
+                link: Some(format!("#/needs/{}", item.key)),
             })
             .collect()
     }
@@ -157,7 +160,9 @@ impl NotificationPlanner {
         Some(Notification {
             title: format!("{bot} in {}", chat.conversation),
             body,
-            link: Some(format!("#/chat/{}", chat.conversation)),
+            // conversation ids are "team:<name>" / "bot:<name>"; the app's
+            // chat route is "#/chat/<kind>/<name>".
+            link: Some(format!("#/chat/{}", chat.conversation.replacen(':', "/", 1))),
         })
     }
 }
@@ -250,7 +255,7 @@ mod tests {
         .unwrap();
         let n = p.plan_chat("dan", &chat).unwrap();
         assert_eq!(n.title, "ada in bot:ada");
-        assert_eq!(n.link.as_deref(), Some("#/chat/bot:ada"));
+        assert_eq!(n.link.as_deref(), Some("#/chat/bot/ada"));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities for the main window while it shows the local setup page or has no daemon configured yet.",
+  "description": "Capabilities for the app's local windows (main and settings). The main window only ever shows this app's own bundled UI (desktop/app) and never loads a remote origin, so there is no separate remote capability: every command below is granted only to these local windows.",
   "windows": ["main", "settings"],
   "permissions": [
     "core:default",
@@ -12,9 +12,6 @@
     "core:event:default",
     "notification:default",
     "notification:allow-notify",
-    "dialog:default",
-    "dialog:allow-confirm",
-    "dialog:allow-message",
     "autostart:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
@@ -23,6 +20,18 @@
     "allow-get-settings",
     "allow-save-settings",
     "allow-default-ssh-key",
-    "allow-complete-setup"
+    "allow-complete-setup",
+    "allow-attention",
+    "allow-dismiss",
+    "allow-approval-view",
+    "allow-decide",
+    "allow-conversations",
+    "allow-messages",
+    "allow-send-message",
+    "allow-mark-read",
+    "allow-bots",
+    "allow-bot",
+    "allow-bot-proposals",
+    "allow-open-in-browser"
   ]
 }

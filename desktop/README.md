@@ -1,35 +1,46 @@
 # Conductor desktop client
 
-A small Tauri v2 tray app for Linux and macOS. It is a client of the conductor
-dashboard API and nothing more (see `../docs/design/event-journal.md`, "The
-desktop client"): it signs in with your SSH key, holds its own subscription to
-the attention/chat event stream so it can notify you even while the window is
-closed, and shows the daemon's own dashboard in its main window.
-
-It does not bundle a frontend app. The only page it ships is a tiny local
-setup/settings form (`ui/setup.html`); after setup it navigates its window to
-the daemon's own URL and the daemon serves its normal SPA there.
+A small Tauri v2 app for Linux and macOS, with its own Needs you, Chat and
+Bots screens. It is a client of the conductor dashboard API and nothing more
+(see `../docs/design/event-journal.md`, "The desktop client"): it signs in
+with your SSH key, holds its own subscription to the attention/chat/ticket
+event stream so it can notify you even while the window is closed, and shows
+its own bundled UI in its main window — it never loads the daemon's web
+dashboard or any other remote origin.
 
 ## Layout
 
 ```
 desktop/
+  app/                the local UI: Vite + Preact + TypeScript
+    src/
+      main.tsx          entry point
+      app.tsx           top-level route switch + the "not configured yet" gate
+      router.ts         a tiny hash router (#/needs, #/chat, #/bots, #/setup)
+      state.ts          app-wide signals (attention, conversations, bots) + live updates
+      api/
+        client.ts         typed wrappers over the Tauri commands, one per endpoint
+        invoke.ts          the real invoke, or the `?mock` fixture layer
+        mock.ts            fixture data for `?mock` (dev + conformance screenshots)
+        types.ts            wire types mirroring the Rust/Go shapes
+      components/        Shell (rail + top bar), Approval, icons
+      routes/             Needs, Chat, Bots, BotPage, Setup
+      styles/             copied from design/dashboard-prototype (tokens.css verbatim)
   src-tauri/          the Rust/Tauri app
     src/
       main.rs          entry point
-      lib.rs           Tauri setup: commands, tray, windows, capabilities
+      lib.rs           Tauri setup: AppState (shared Client), commands, tray, windows
       settings.rs       settings persisted in the app config dir
       persist.rs        the event stream cursor, persisted in the app data dir
-      client.rs          HTTP: cookie-jar session, SSH sign-in, snapshot, dismiss
+      client.rs          HTTP: cookie-jar session, SSH sign-in, every daemon call
       stream.rs           SSE parsing, reconnect backoff, dedup
       notify.rs            notification planning: coalescing, chat filtering
-      subscribe.rs          the background task wiring client+stream+notify+tray
-      sign.rs               ssh_sign: shells out to `ssh-keygen -Y sign`
+      subscribe.rs          the background task: client+stream+notify+tray, plus
+                             emitting each event to the main window for live UI updates
+      sign.rs               shells out to `ssh-keygen -Y sign` (sign-in + step-up)
       tray.rs               tray menu/count/tooltip
       types.rs              wire types (Item, events, chat)
-    capabilities/default.json   static ACL for the local setup/settings windows
-    permissions/ssh-sign.toml  the app-defined permission backing `ssh_sign`
-  ui/                 the static setup/settings page
+    capabilities/default.json   ACL for the local main/settings windows (no remote origin)
   build/              Docker-based Linux build (the host has no webkit2gtk)
   ci/desktop.yml       a GitHub Actions workflow template (not wired in yet)
 ```
@@ -48,10 +59,13 @@ desktop/build/linux.sh
 
 This builds `desktop/build/linux.Dockerfile` (`rust:latest` +
 `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`,
-`libssl-dev`, build tools) and runs `cargo tauri build` inside it, with the
-cargo target dir and registry cache on local disk
-(`$HOME/.cache/conductor-design/desktop-{target,registry}` — never
-`~/Projects`, which is NFS) and copies the resulting AppImage and `.deb` into
+`libssl-dev`, Node.js, build tools), installs `desktop/app`'s npm
+dependencies, and runs `cargo tauri build` inside it — which in turn runs
+`desktop/app`'s `npm run build` (`tauri.conf.json`'s `beforeBuildCommand`) to
+produce the bundled UI before packaging. Caches live on local disk
+(`$HOME/.cache/conductor-design/desktop-{target,registry}` and
+`desktop-app/node_modules` — never `~/Projects`, which is NFS), and the
+resulting AppImage and `.deb` land in
 `$HOME/.cache/conductor-design/desktop-out`.
 
 Run the unit tests the same way:
@@ -64,12 +78,26 @@ desktop/build/linux.sh test   # or: docker run ... cargo test, see the script
 `cargo test` run, use the same `docker run` invocation substituting the
 command — see the script, it's short.)
 
+### The local UI on its own
+
+```sh
+cd desktop/app
+npm install
+npm run dev        # vite dev server
+npm run build      # tsc --noEmit && vite build -> dist/
+```
+
+Append `?mock` (or `?mock=empty`) to the dev/preview URL to run the UI
+against fixture data (`src/api/mock.ts`) with no Tauri runtime and no
+daemon — used for local iteration and for conformance screenshots against
+the design prototype.
+
 ### macOS
 
 ```sh
 cargo install tauri-cli --version "^2" --locked   # or: npm i -g @tauri-apps/cli
 cd desktop/src-tauri
-cargo tauri build            # this Mac's own architecture
+cargo tauri build            # this Mac's own architecture; builds desktop/app first
 # A universal (Intel + Apple Silicon) build also needs both targets:
 #   rustup target add aarch64-apple-darwin x86_64-apple-darwin
 #   cargo tauri build --target universal-apple-darwin
@@ -97,135 +125,84 @@ available here). `desktop/ci/desktop.yml` has a commented block showing where
 (AppImage + deb) and macOS (universal dmg, unsigned) and runs `cargo test` on
 both.
 
-## The web-page contract
+## Architecture
 
-The daemon's dashboard page detects it is running inside this app via
-`window.__TAURI_INTERNALS__` (or `window.__TAURI__`, which is present because
-`tauri.conf.json` sets `app.withGlobalTauri: true`) and calls:
-
-```js
-const { invoke } = window.__TAURI__.core;
-const signature = await invoke("ssh_sign", { namespace, message });
-```
-
-- `namespace` must be exactly `"conductor-dashboard-login"` or
-  `"conductor-dashboard-stepup"` (matching
-  `internal/dashboard/auth.LoginNamespace` / `StepupNamespace`) — anything else
-  is rejected before a process is even spawned (`src-tauri/src/sign.rs`).
-- `message` is the exact challenge text the daemon asked to be signed (the
-  dashboard verifies its own stored copy, so the app does not need to, and
-  must not, modify it).
-- The app shows a native confirmation dialog naming the namespace and the
-  full message text before signing, every time. There is no "don't ask again"
-  — each sign-in and each step-up gets its own confirmation.
-- On success it resolves to the armored SSHSIG text (the string
-  `ssh-keygen -Y sign` writes to stdout when it reads the message from stdin
-  with no file arguments — verified against the host's installed OpenSSH:
-  `ssh-keygen -Y sign -f <pubkey> -n <namespace>`, message on stdin, signature
-  on stdout).
-
-`ssh_sign` is the **only** command granted to the daemon's page. The grant is
-scoped to the exact configured daemon origin: `complete_setup` (called after
-the settings form saves) builds a runtime-only capability with
-`CapabilityBuilder::new("remote-daemon").remote(origin).window("main").permission("allow-ssh-sign")`
-and calls `app.add_capability(...)` (Tauri v2's `dynamic-acl` feature, enabled
-by default) — so a daemon on a different origin, or any other page the main
-window might ever navigate to, gets nothing. The static
-`capabilities/default.json` (used for the local setup/settings pages) does
-*not* include `ssh_sign` at all.
-
-### IPC under the daemon's CSP
-
-The design doc notes the daemon's dashboard serves `connect-src 'self'`.
-Tauri v2's default IPC on Linux and macOS goes over a custom
-`https://tauri.localhost` / `ipc://` protocol request, not a same-origin
-`fetch`/`XHR`, so it is not subject to the page's `connect-src` directive —
-this is expected to work unmodified and is the mechanism the "window
-navigates to the daemon's own URL" design relies on. **This has not been
-exercised against a real running daemon in this change** (no daemon build was
-available to test against); if it turns out the custom-protocol request *is*
-blocked in practice on some platform/webview combination, Tauri v2 falls back
-to `window.postMessage` for IPC on an unsupported origin, which `connect-src`
-also does not govern (`postMessage` is a `script-src`-adjacent capability, not
-a fetch). Either path should clear a `connect-src 'self'` CSP; flagging this
-as the one piece of the design not independently verified end-to-end.
-
-## Security model of `ssh_sign`
-
-- The app never touches the private key. `ssh-keygen -Y sign -f <path to the
-  **public** key>` either finds the matching private key loaded in
-  `ssh-agent`, or (if `-f` happens to point at a private key file) uses it
-  directly — the app always configures and passes the public key path, per
-  the design.
-- Only two namespaces are signable, checked before any process is spawned
-  (`sign::namespace_allowed`). This matches the daemon's own namespace
-  separation (`internal/dashboard/auth.LoginNamespace` /
-  `StepupNamespace`): a signature made for one purpose can never be replayed
-  as another, and this app cannot be used to sign, say, a git push or a bot
-  approval.
-- Every call shows a native dialog with the literal namespace and message
-  text before signing — the same text the daemon will independently verify
-  against its own stored challenge, so there is nothing to trust in what the
-  page claims; the operator reads the real thing.
-- Every app command (`get_settings`, `save_settings`, `default_ssh_key`,
-  `complete_setup`, `ssh_sign`) is declared in `build.rs`
-  (`AppManifest::new().commands(&[...])`), which autogenerates a deny-by-default
-  `allow-<command>` permission for each. `capabilities/default.json` (the local
-  setup/settings windows) grants the first four — **not** `allow-ssh-sign` —
-  and the runtime "remote-daemon" capability (added by `complete_setup`,
-  scoped to the configured origin) grants only `allow-ssh-sign` and nothing
-  else (no `core:default`, no notification/dialog/opener). Without the
-  `AppManifest` declaration, Tauri only ACL-checks a *local* window's app
-  commands once the app has *any* app-manifest permission file at all, and
-  always checks a *remote* origin's regardless — declaring every command
-  explicitly removes that conditional and makes every command, local or
-  remote, opt-in only (verified by reading
-  `tauri::webview::Webview::on_message` in the vendored `tauri` 2.12.5
-  source).
-- `tauri::ipc::RuntimeAuthority::add_capability` (what `complete_setup` calls
-  to scope `ssh_sign` to the configured origin) only ever **appends** —
-  reconfiguring to a new daemon does not revoke the previous origin's grant
-  for the life of the running app (verified by reading
-  `add_capability_inner`, which does `entry(cmd_key).or_default().extend(...)`
-  for both allowed and denied commands, never replacing). So `ssh_sign`
-  itself re-checks the calling webview's *current* URL against the
-  *current* settings on every call (`Settings::allows_origin`,
-  unit-tested) — independent of however many stale capability grants have
-  accumulated, only today's configured origin can ever succeed.
-- The app's own background sign-in (`client::Client::sign_in`, used to keep
-  the subscription authenticated) signs the same namespaces the same way,
-  but without a confirmation dialog — it is the app acting as itself, not on
-  behalf of a page, and it is logged.
-- Requests to `/api/v1/auth/ssh/{begin,finish}` never send an `Origin` header
-  (reqwest does not add one for non-browser requests; this is simply the
-  default, stated in `client.rs` so it stays true on purpose).
+- **All daemon traffic goes through Rust.** One shared, signed-in `Client`
+  lives in `AppState` (`lib.rs`) and is used both by the background
+  subscription (`subscribe.rs`) and by every Tauri command the UI calls.
+  Each command maps to exactly one daemon endpoint (`attention`, `dismiss`,
+  `approval_view`, `decide`, `conversations`, `messages`, `send_message`,
+  `mark_read`, `bots`, `bot`, `bot_proposals`, `open_in_browser`) — there is
+  no generic proxy command. A `401` is handled once, in one place
+  (`lib.rs::with_client`): sign in again and retry the same call.
+- **The main window never loads a remote origin.** It only ever shows
+  `desktop/app`'s bundled UI (`frontendDist` in `tauri.conf.json`). There is
+  no `ssh_sign`/`desktop_operator` command exposed to a page, and no runtime
+  "remote-daemon" capability: those existed only because an earlier design
+  had the window navigate to the daemon's own dashboard. The settings window
+  loads the same bundled UI at `#/setup`.
+- **Decisions use SSH step-up, not a page-initiated signature.** Approving or
+  denying in Needs you, a purchase, or a bot's proposals calls the `decide`
+  command, which: GETs the approval view again (the daemon "describes" the
+  action from a GET in the same session before it will mint a step-up),
+  begins an SSH step-up for the decision's digest (`digests.approve` or
+  `digests.deny` from that view — never computed client-side), signs the
+  challenge with the configured key, finishes the step-up, then POSTs the
+  decision with the resulting token in `X-Conductor-Stepup` and the cached
+  CSRF token in `X-Conductor-CSRF`. The in-app Approve/Deny button is the
+  confirmation; there's no extra native dialog on top of it (unlike the old
+  page-initiated `ssh_sign`, which signed on behalf of a daemon page it had
+  to confirm with the operator first).
+- **Live updates.** `subscribe.rs` follows `attention,chat,ticket` and, on
+  every parsed event (plus `reset`), emits a small `{topic, type}` payload to
+  the main window as `conductor://event`. `src/state.ts`'s `wireLiveUpdates`
+  listens for it and refetches the relevant snapshot — the UI doesn't know
+  anything about SSE, reconnects or dedup; that all stays in Rust.
+- **Notifications and the tray open in-app routes.** A notification's `link`
+  is an in-app hash route (`#/needs/<key>`, `#/chat/<kind>/<name>`), not a
+  daemon URL (see `notify.rs`); clicking it emits `conductor://navigate` to
+  the main window instead of calling `WebviewWindow::navigate`. The tray's
+  "Open dashboard in browser" uses the `opener` plugin to open the
+  configured daemon URL in the system browser — the one place this app still
+  points at the daemon's own web dashboard, and only ever through the
+  system's browser, not this app's window.
 
 ## What's implemented vs. notable gaps
 
 - Sign-in, snapshot, SSE subscription with reconnect/backoff/dedup, cursor
   persistence, notification coalescing and chat filtering: implemented and
   unit-tested (`stream.rs`, `notify.rs`, `persist.rs`, `sign.rs`).
+- The `Client`'s decision flow (approval view → SSH step-up begin/sign/finish
+  → decision POST with `X-Conductor-Stepup`), CSRF attachment, the
+  form-encoded `mark_read` call, and daemon error decoding
+  (`{"error":{"code","message","hint"}}`) are unit-tested against a local
+  fake HTTP server (`tiny_http`, dev-only) in `client.rs`.
 - Attention item lifecycle: `opened`/`resolved`/`updated` are all handled
   (`updated` replaces in place and never notifies); `source` (empty = raised,
-  dismissable via `POST /api/v1/attention/{key}/dismiss` with
-  `X-Conductor-CSRF`; non-empty = closes on its own) is modeled on `Item` but
-  there is no tray "Dismiss" action yet — not required by the design, and the
-  client already tolerates the field either way.
+  dismissable via the `dismiss` command; non-empty = closes on its own) is
+  modeled on `Item`, and the Needs you screen dismisses a raised item inline.
 - The `reset` event (`{"type":"reset","topic":"reset","id":"<cursor>"}`)
   triggers a fresh snapshot fetch and resumes from *its* cursor, not the
-  reset's own, per spec.
+  reset's own, per spec, and is relayed to the UI so it refetches too.
 - Clicking a notification shows the main window and, best-effort, navigates
-  to the item's `link`/conversation (stashed as notification `extra`); not
-  every desktop notification backend round-trips `extra` back to the click
-  handler, so on some platforms a click may just surface the app without the
-  deep link. Not independently verified against each of Linux/macOS's native
-  notification centers.
+  to its in-app route (stashed as notification `extra`); not every desktop
+  notification backend round-trips `extra` back to the click handler, so on
+  some platforms a click may just surface the app without the deep link. Not
+  independently verified against each of Linux/macOS's native notification
+  centers.
 - Icons are placeholder art (generated, not designed) — swap
   `src-tauri/icons/*` before shipping.
+- The screens cover what the plan scoped: Needs you (proposal/purchase
+  approvals, raised-item dismiss, "open in browser" for anything else with a
+  link), Chat (conversation list + thread + composer, attachments listed by
+  name), Bots (teams as the page) and a bot page with its proposals approved
+  inline. There is no settings/permission editing on a bot's page (the
+  prototype's much larger config-editing surface) — out of scope here; the
+  daemon has no endpoints for it from this client either.
 - macOS build, code signing/notarization, and the dock badge
   (`WebviewWindow::set_badge_count`) are implemented but unverified: no macOS
   machine or Apple Developer identity was available in this environment.
-- `cargo tauri build`'s AppImage/deb bundling was exercised in Docker (see the
-  final report); the resulting binary has not been run against a live
-  conductor daemon end-to-end (no daemon build available concurrently with
-  this change — the server side was being implemented in parallel).
+- `cargo tauri build`'s AppImage/deb bundling was exercised in Docker; the
+  resulting binary has not been run against a live conductor daemon
+  end-to-end in this change (see the final report for what was and wasn't
+  verified against a throwaway daemon).

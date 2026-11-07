@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "org.conductor.desktop",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../app/dist",
+    "beforeBuildCommand": "npm --prefix ../app run build"
   },
   "app": {
     "withGlobalTauri": true,
@@ -12,7 +13,7 @@
       {
         "label": "main",
         "title": "Conductor",
-        "url": "setup.html",
+        "url": "index.html",
         "width": 1180,
         "height": 820,
         "minWidth": 480,
@@ -40,7 +41,7 @@
     ],
     "category": "DeveloperTool",
     "shortDescription": "Conductor desktop client",
-    "longDescription": "Native tray app that signs in to a conductor daemon with your SSH key, watches for things that need your attention, and shows the dashboard in a window.",
+    "longDescription": "Native app for conductor: sign in with your SSH key, see what needs you, chat with your bots, and manage them — with its own tray notifications.",
     "linux": {
       "deb": {
         "depends": [

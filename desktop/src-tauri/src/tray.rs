@@ -7,15 +7,17 @@ use tauri::{AppHandle, Runtime};
 
 pub const MENU_OPEN: &str = "open";
 pub const MENU_COUNT: &str = "count";
+pub const MENU_OPEN_BROWSER: &str = "open_browser";
 pub const MENU_SETTINGS: &str = "settings";
 pub const MENU_QUIT: &str = "quit";
 
 pub fn build_menu<R: Runtime>(app: &AppHandle<R>, open_count: usize) -> tauri::Result<Menu<R>> {
     let open = MenuItem::with_id(app, MENU_OPEN, "Open", true, None::<&str>)?;
     let count = MenuItem::with_id(app, MENU_COUNT, count_label(open_count), false, None::<&str>)?;
+    let open_browser = MenuItem::with_id(app, MENU_OPEN_BROWSER, "Open dashboard in browser", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)?;
-    Menu::with_items(app, &[&open, &count, &settings, &quit])
+    Menu::with_items(app, &[&open, &count, &open_browser, &settings, &quit])
 }
 
 pub fn count_label(n: usize) -> String {
@@ -69,10 +71,12 @@ pub fn handle_menu_event<R: Runtime>(
     app: &AppHandle<R>,
     event: &MenuEvent,
     on_open: impl FnOnce(),
+    on_open_browser: impl FnOnce(),
     on_settings: impl FnOnce(),
 ) {
     match event.id().as_ref() {
         MENU_OPEN => on_open(),
+        MENU_OPEN_BROWSER => on_open_browser(),
         MENU_SETTINGS => on_settings(),
         MENU_QUIT => app.exit(0),
         _ => {}

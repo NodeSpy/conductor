@@ -4,7 +4,6 @@
 import type { JSX } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import type { SSHChallenge, Method } from '../api/auth'
-import { desktopSSHSign, inDesktopApp } from '../lib/desktop'
 
 // copyText copies via the Clipboard API where the page is a secure context, and
 // falls back to a selected textarea + execCommand on plain HTTP (where the
@@ -140,22 +139,6 @@ export function SSHPanel(props: {
     }
   }
 
-  // Inside the desktop app the SSH agent signs directly (after a native
-  // confirmation): no command to copy, nothing to paste.
-  const desktop = inDesktopApp()
-  const signWithAgent = async () => {
-    setErr('')
-    setBusy(true)
-    try {
-      await props.onFinish(await desktopSSHSign(ch.namespace, ch.challenge))
-      done.current = true
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const origin = location.origin
   const keygen = `printf '%s' ${shellQuote(ch.challenge)} | ssh-keygen -Y sign -n ${ch.namespace} -f ~/.ssh/id_ed25519`
   const digest = /\bdigest=(\S+)/.exec(ch.challenge)?.[1] ?? ''
@@ -163,14 +146,6 @@ export function SSHPanel(props: {
 
   return (
     <div class="ssh-panel" data-testid="ssh-panel">
-      {desktop ? (
-        <div class="ssh-step">
-          <button class="btn primary lg block" type="button" disabled={busy} onClick={signWithAgent} data-testid="ssh-agent-sign">
-            {busy ? 'Signing…' : 'Sign with your SSH agent'}
-          </button>
-          <p class="acc-note">The app asks you to confirm before it signs.</p>
-        </div>
-      ) : null}
       <div class="seg-choice" role="tablist" aria-label="How to sign">
         <button type="button" role="tab" class={tab === 'paste' ? 'on' : ''} aria-selected={tab === 'paste'} onClick={() => setTab('paste')}>
           Sign on this device

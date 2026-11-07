@@ -1,0 +1,6 @@
+/* Daylight webfonts, copied from design/brand/fonts (origin/design/brand). Self-hosted latin subsets, SIL Open
+ * Font License 1.1 (OFL-*.txt here). font-display: swap; index.html preloads Atkinson Next and Fraunces; the mono
+ * loads on demand (code, ids, YAML and logs only). Variable files: one request covers every weight. */
+@font-face { font-family: 'Atkinson Hyperlegible Next'; font-style: normal; font-weight: 200 800; font-display: swap; src: url(AtkinsonNext.woff2) format('woff2'); }
+@font-face { font-family: 'Fraunces'; font-style: normal; font-weight: 100 900; font-display: swap; src: url(Fraunces.woff2) format('woff2'); }
+@font-face { font-family: 'Atkinson Hyperlegible Mono'; font-style: normal; font-weight: 200 800; font-display: swap; src: url(AtkinsonMono.woff2) format('woff2'); }

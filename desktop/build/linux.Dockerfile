@@ -22,8 +22,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# cargo-tauri (the `cargo tauri` subcommand) builds AppImage/deb bundles;
-# there is no JS frontend here, so we don't need @tauri-apps/cli/node at all.
+# cargo-tauri (the `cargo tauri` subcommand) builds AppImage/deb bundles.
 RUN cargo install tauri-cli --version "^2" --locked
+
+# desktop/app (Vite + Preact + TypeScript) is bundled into the Tauri
+# frontendDist; tauri.conf.json's beforeBuildCommand runs `npm run build`
+# there, so the image needs Node.
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work
