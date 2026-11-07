@@ -25,11 +25,12 @@ import (
 // schemas; here we add the flow-side filters, the scoped policy gates, and
 // group batching, then hand the run to the flow runner.
 func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Action, key, dkind, head string) {
-	spec, tidx, ok := e.flow.SpecFor(act.FlowRef)
+	act, spec, tidx, ok := e.resolveFlow(act)
 	if !ok {
-		e.log("%s stale flow ref %q — config changed; dropping", tag(t), act.FlowRef)
+		e.log("%s stale flow ref %q — its trigger is no longer in the config; dropping", tag(t), act.FlowRef)
 		return
 	}
+	t.Action = act
 	if !spec.IsEnabled() {
 		return
 	}
@@ -214,6 +215,21 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 	}()
 }
 
+// resolveFlow re-finds act's trigger by its stable identity (flow.Runner.Resolve)
+// and rebinds act.FlowRef to where that trigger sits in the CURRENT config. A
+// recorded action's ref names the trigger's position when it was recorded,
+// which an unrelated config change moves; every key derived from the ref
+// downstream (run caps, queued-run records, group buckets) must use the
+// current one, or a resumed run lands in a different bucket than a fresh run
+// of the same trigger.
+func (e *Engine) resolveFlow(act config.Action) (config.Action, config.TriggerSpec, int, bool) {
+	spec, tidx, ref, ok := e.flow.Resolve(act)
+	if ok {
+		act.FlowRef = ref
+	}
+	return act, spec, tidx, ok
+}
+
 // fireParkedHooks fires the trigger's workflow-level `at: fail` hooks for a
 // (PR, kind, head) the engine just PARKED: it kept failing and won't be
 // retried until new commits, so it never reaches a run whose own fail hooks
@@ -222,6 +238,10 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 // on the pass that parks — later passes over a parked tuple stay silent.
 func (e *Engine) fireParkedHooks(ctx context.Context, t core.Trigger, act config.Action, head string, attempts int) {
 	if act.FlowRef == "" || e.flow == nil {
+		return
+	}
+	act, _, _, ok := e.resolveFlow(act)
+	if !ok {
 		return
 	}
 	go e.flow.FireParkedHooks(context.WithoutCancel(ctx), t, act.FlowRef, head, attempts)
@@ -327,7 +347,7 @@ func (e *Engine) putQueuedRun(t core.Trigger) {
 // requeueFlowRun puts a run that was queued when the daemon stopped back in
 // the queue.
 func (e *Engine) requeueFlowRun(ctx context.Context, r store.WorkflowRun, t core.Trigger, act config.Action) {
-	spec, tidx, ok := e.flow.SpecFor(act.FlowRef)
+	act, spec, tidx, ok := e.resolveFlow(act)
 	if !ok {
 		e.log("engine: re-queue %s: trigger no longer in config — dropping", r.ID)
 		_ = e.store.DeleteRun(r.ID)
@@ -361,10 +381,24 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 	}
 	t := events[len(events)-1]
 	ref, gkey, _ := strings.Cut(fullKey, "\x00")
-	spec, tidx, ok := e.flow.SpecFor(ref)
+	// The bucket's ref is the trigger's position when the batch opened; a
+	// reload while it buffered may have moved the trigger. Re-find it by the
+	// events' own action.
+	act, _ := t.Action.(config.Action)
+	if act.FlowRef == "" {
+		act.FlowRef = ref
+	}
+	act, spec, tidx, ok := e.resolveFlow(act)
 	if !ok {
-		e.log("%s stale flow ref %q at batch fire — dropping %d events", tag(t), ref, len(events))
+		e.log("%s stale flow ref %q at batch fire — its trigger is no longer in the config; dropping %d events", tag(t), ref, len(events))
 		return
+	}
+	ref = act.FlowRef
+	for i := range events {
+		if a, isAct := events[i].Action.(config.Action); isAct {
+			a.FlowRef = ref
+			events[i].Action = a
+		}
 	}
 	// Consume dedup state now — the flush-time half of what processFlow does
 	// for ungrouped triggers at accept time. Until this point nothing was
@@ -457,7 +491,7 @@ func (e *Engine) policyFor(spec config.TriggerSpec) config.Policy {
 // legacy action (legacy integrations carry no policy of their own).
 func (e *Engine) retryPolicyFor(act config.Action) config.Policy {
 	if act.FlowRef != "" && e.flow != nil {
-		if spec, _, ok := e.flow.SpecFor(act.FlowRef); ok {
+		if _, spec, _, ok := e.resolveFlow(act); ok {
 			return e.policyFor(spec)
 		}
 	}
@@ -516,13 +550,29 @@ func flowRunRecord(t core.Trigger) store.WorkflowRun {
 // ResumeWorkflows): re-find the spec, re-mint tokens, continue after the last
 // checkpointed step.
 func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.Trigger, act config.Action) {
-	spec, tidx, ok := e.flow.SpecFor(act.FlowRef)
+	act, spec, tidx, ok := e.resolveFlow(act)
 	if !ok {
 		e.log("engine: resume %s: trigger no longer in config — dropping", r.ID)
 		_ = e.store.DeleteRun(r.ID)
 		return
 	}
 	t.Action = act
+	// Persist the rebound ref with the run's next checkpoint.
+	if raw, err := json.Marshal(act); err == nil {
+		r.Action = raw
+	}
+	if !checkpointFits(r, spec.Steps) {
+		// The trigger's steps changed under the checkpoint (a pack upgrade
+		// while the daemon was down): its step index and pinned outputs no
+		// longer line up with the current definition, so continuing would
+		// skip steps or feed one step another's outputs. Start over on the
+		// current definition — a resume is at-least-once anyway.
+		e.log("%s resume: the trigger's steps changed since this run checkpointed — restarting it from the beginning on the current definition", tag(t))
+		e.store.Audit(map[string]any{"event": "resume_restarted", "repo": t.Target.Repo,
+			"number": t.Target.Number, "kind": t.Kind, "run": r.ID, "step_index": r.StepIndex,
+			"reason": "definition changed"})
+		r.StepIndex, r.Outputs, r.StartHooksFired = 0, map[string]map[string]any{}, false
+	}
 	if extra := connector.OptionHooks(t, spec.Options); len(extra) > 0 {
 		spec.Hooks = append(append([]config.Hook{}, spec.Hooks...), extra...)
 	}

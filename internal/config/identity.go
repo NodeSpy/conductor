@@ -124,6 +124,20 @@ func (s Step) Fingerprint() string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
+// StepsFingerprint identifies a step list's configuration, the way
+// Fingerprint identifies one step: two lists share it only when every step
+// is configured the same, in the same order. A run's history record carries
+// its trigger's at run start, so a later retry can tell the definition has
+// changed since (a pack upgrade).
+func StepsFingerprint(steps []Step) string {
+	b, err := yaml.Marshal(steps)
+	if err != nil {
+		b = []byte(fmt.Sprintf("%#v", steps))
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])[:16]
+}
+
 // StepIdentities returns each step's identity within a scope, in list order —
 // used by validation and by the migration to check that a config's identities
 // are what the author expects.

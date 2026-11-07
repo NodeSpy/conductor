@@ -193,6 +193,11 @@ x-templates:
     wait_timeout: 5m
 
 triggers:
+  # Q (config drift): run.sh drops triggers into /data/drift.d and reloads,
+  # moving every trigger below — group Q's recorded run included — down the
+  # list. Empty (the glob matches nothing) everywhere else.
+  - imports: ["/data/drift.d/*.yaml"]
+
   # K1: cross-boundary workflow — an agent fixes the conflict while slack
   # hooks announce start and completion.
   - on: gh.merge_conflict

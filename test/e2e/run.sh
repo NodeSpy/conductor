@@ -1322,6 +1322,15 @@ group_P_blob() {
 # prep→fix→tell); retrying an already-succeeded step is refused without
 # --force-replay and re-posts with it; a record tampered on disk is refused by
 # HMAC verification. Gut history/signing and every one of these fails.
+# q_conn_reload reloads the connectors daemon (SIGHUP → re-exec) and waits for
+# the new process to finish booting: one more "running" line in its log.
+q_conn_reload() {
+  local boots; boots="$(dc logs conductor-conn 2>&1 | grep -c 'running (.* integration(s))')"
+  conn reload >/dev/null 2>&1
+  q_booted() { [ "$(dc logs conductor-conn 2>&1 | grep -c 'running (.* integration(s))')" -gt "$boots" ]; }
+  wait_for 60 q_booted || echo "  (conductor-conn did not report a reboot within 60s)"
+}
+
 group_Q_history() {
   banner "Group Q — §20 execution history + retry-from-step"
   post_webhook_to conductor-conn pull_request func_hist_conflict.json >/dev/null
@@ -1350,9 +1359,29 @@ group_Q_history() {
       ok "Q run detail shows every step with its pinned inputs/outputs" Q Q-detail ;;
     *) bad "Q run detail shows per-step in/out" Q Q-detail "detail missing steps or pinned note" ;;
   esac
+  # Config drift: the run recorded its trigger's position in the trigger list.
+  # Add triggers before it (a pack added, other triggers configured) and
+  # reload: every retry below must still find the run's own trigger, by name.
+  cexec conductor-conn sh -c 'mkdir -p /data/drift.d && cat > /data/drift.d/drift.yaml' <<'YAML'
+- name: drift-a
+  on: gh.merge_conflict
+  filter: { repo: ["func/drift-none"] }
+  steps:
+    - { id: never, uses: slack.post, options: { channel: CDRIFT, text: "never" } }
+- name: drift-b
+  on: gh.merge_conflict
+  filter: { repo: ["func/drift-none"] }
+  steps:
+    - { id: never, uses: slack.post, options: { channel: CDRIFT, text: "never" } }
+YAML
+  q_conn_reload
+  local r; r="$(conn runs retry "$id" --from fix 2>&1)"
+  case "$r" in
+    *"already succeeded"*) ok "Q retry after config drift still finds the run's trigger (triggers added before it)" Q Q-drift ;;
+    *) bad "Q retry after config drift finds the run's trigger" Q Q-drift "unexpected retry output: $(echo "$r" | head -1)" ;;
+  esac
   # Retrying a step the record says SUCCEEDED replays side effects → refused
   # without --force-replay.
-  local r; r="$(conn runs retry "$id" --from fix 2>&1)"
   case "$r" in
     *"already succeeded"*"--force-replay"*) ok "Q retry of a succeeded step is refused without --force-replay" Q Q-guard ;;
     *) bad "Q retry guarded" Q Q-guard "unexpected retry output: $(echo "$r" | head -1)" ;;
@@ -1366,6 +1395,9 @@ group_Q_history() {
   else
     bad "Q --force-replay re-runs with pinned inputs" Q Q-replay "no HIST-done after forced replay"
   fi
+  # Undo the drift for the groups after this one.
+  cexec conductor-conn rm -rf /data/drift.d
+  q_conn_reload
   # Tamper the signed record on disk → verified read refuses to trust it.
   cexec conductor-conn sh -c "sed -i 's/hist-prep/hist-XXXX/' /data/history/$id.json"
   r="$(conn runs retry "$id" --from fix --force-replay 2>&1)"

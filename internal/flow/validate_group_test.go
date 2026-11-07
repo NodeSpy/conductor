@@ -447,6 +447,68 @@ triggers:
 	}
 }
 
+// TestResolveByTriggerIdentity: a recorded action finds its trigger by name
+// on its `on:` wherever the config has since moved it, and is missing only
+// when no trigger carries that identity. Unnamed triggers stay positional.
+func TestResolveByTriggerIdentity(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc: { use: fake }
+triggers:
+  - name: other
+    on: svc.ping
+    steps: [{uses: svc.post, options: {text: o}}]
+  - on: svc.ping
+    steps: [{uses: svc.post, options: {text: u}}]
+  - name: fan
+    on: [svc.ping, svc.pong]
+    steps: [{uses: svc.post, options: {text: f}}]
+  - name: pk/mine
+    on: svc.ping
+    steps: [{uses: svc.post, options: {text: m}}]
+`)
+	r := New(Runner{Cfg: cfg})
+	for _, c := range []struct {
+		act     config.Action
+		wantIdx int
+		wantOK  bool
+	}{
+		// Recorded when pk/mine was the first trigger: found where it is now.
+		{config.Action{Name: "pk/mine", FlowRef: "0:svc.ping"}, 4, true},
+		// Its ref already current: same answer.
+		{config.Action{Name: "pk/mine", FlowRef: "4:svc.ping"}, 4, true},
+		// A fan-in trigger's variants share the name: the `on:` picks one.
+		{config.Action{Name: "fan", FlowRef: "0:svc.pong"}, 3, true},
+		{config.Action{Name: "fan", FlowRef: "9:svc.ping"}, 2, true},
+		// Gone: no trigger by that name, though another sits at the index.
+		{config.Action{Name: "pk/removed", FlowRef: "4:svc.ping"}, 0, false},
+		// The name exists, on another event only.
+		{config.Action{Name: "other", FlowRef: "0:svc.pong"}, 0, false},
+		// Unnamed: positional, as SpecFor.
+		{config.Action{FlowRef: "1:svc.ping"}, 1, true},
+		{config.Action{FlowRef: "7:svc.ping"}, 0, false},
+		{config.Action{FlowRef: "garbage"}, 0, false},
+	} {
+		spec, idx, ref, ok := r.Resolve(c.act)
+		if ok != c.wantOK || ok && idx != c.wantIdx {
+			t.Errorf("Resolve(%+v) = idx %d ok %v, want idx %d ok %v", c.act, idx, ok, c.wantIdx, c.wantOK)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if want := fmt.Sprintf("%d:%s", idx, spec.On); ref != want {
+			t.Errorf("Resolve(%+v) ref = %q, want the current %q", c.act, ref, want)
+		}
+		if c.act.Name != "" && spec.Name != c.act.Name {
+			t.Errorf("Resolve(%+v) resolved %q", c.act, spec.Name)
+		}
+		if got, gidx, gok := r.SpecFor(ref); !gok || gidx != idx || got.Name != spec.Name {
+			t.Errorf("the rebound ref %q must resolve to the same trigger", ref)
+		}
+	}
+}
+
 // TestRunWithBatchContext: {{.group.*}} is addressable in steps of a batched
 // run, including from js code.
 func TestRunWithBatchContext(t *testing.T) {
