@@ -541,6 +541,9 @@ var semanticKeys = map[string][]string{
 	"verb": {"reads_revision", "mints_credential", "opens_conversation", "conversation_post", "host_only",
 		"target_args", "exposes", "identity", "call_timeout"},
 	"connection": {"credentials", "scope", "poll", "translate", "listeners", "preflight"},
+	// Not a declaration key: the host resolves a declaration's config: and
+	// env: entries (SemanticReferences).
+	"capabilities": {"references"},
 }
 
 // KnownSemantics lists every semantic this SDK implements, as

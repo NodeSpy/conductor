@@ -489,6 +489,9 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 		if req.Host != nil {
 			StripUnknownOptional(&d, req.Host.Semantics)
 		}
+		if !req.Host.ResolvesReferences() {
+			d.Capabilities = d.Capabilities.WithoutReferences()
+		}
 		return d, nil
 	case MethodPoll:
 		ph, ok := h.(PollHandler)
