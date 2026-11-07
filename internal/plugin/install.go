@@ -177,6 +177,19 @@ func (m Manifest) Lines() []string {
 	return out
 }
 
+// withReferences is have plus the config: and env: entries of declared
+// (optional ones included) that it lacks.
+func withReferences(have, declared []string) []string {
+	out := have
+	for _, e := range declared {
+		v := strings.TrimPrefix(e, sdk.OptionalPrefix)
+		if (strings.HasPrefix(v, "config:") || strings.HasPrefix(v, "env:")) && !slices.Contains(out, e) {
+			out = append(slices.Clip(out), e)
+		}
+	}
+	return out
+}
+
 // plainEntry spells out a reference: "config:url" is the value of the
 // instance's url field, "env:X/sub" a path under $X.
 func plainEntry(e string) string {

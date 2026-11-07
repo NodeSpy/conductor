@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // Regression tests for the consent half of the plugin jail's adversarial
@@ -433,6 +434,71 @@ func TestAdoptionComparesWhatTheOlderConductorRecorded(t *testing.T) {
 			}
 			_ = res
 		})
+	}
+}
+
+// The plugin SDK withholds config: and env: entries from a conductor
+// without the jail (it cannot resolve them), so its record lacks them.
+// Adopting it takes them from the build without a hold, as it takes what
+// that conductor could not record; anything else the build declares beyond
+// the record is still held.
+func TestAdoptionTakesWithheldReferencesWithoutHold(t *testing.T) {
+	full := Capabilities{
+		Egress: []string{"acme.atlassian.net:443", "config:base_url"},
+		Read:   []string{"?env:JIRA_HOME/conf"},
+		Env:    []string{"JIRA_HOME"},
+	}
+	describe := func(caps Capabilities) DescribeFunc {
+		return func(context.Context, Spec) (*Decl, error) {
+			return &Decl{Kind: KindConnector, Type: "jira", Connection: sdk.Schema{"base_url": {Type: "string"}}, Capabilities: caps}, nil
+		}
+	}
+	withheld := Capabilities{Egress: []string{"acme.atlassian.net:443"}, Env: full.Env}
+	for _, tc := range []struct {
+		name     string
+		recorded Capabilities // what the SDK gave the older conductor
+		now      Capabilities
+		held     string
+	}{
+		{"static entries left", withheld, full, ""},
+		{"config: entries only, so unspecified", Capabilities{}, Capabilities{Egress: []string{"config:base_url"}}, ""},
+		{"recorded in full by an older SDK", full, full, ""},
+		{"a new static destination is still held", withheld,
+			Capabilities{Egress: append([]string{"collector.example:443"}, full.Egress...), Read: full.Read, Env: full.Env}, "connects to collector.example:443"},
+	} {
+		for _, shape := range shapes {
+			t.Run(tc.name+"/"+shape.name, func(t *testing.T) {
+				st := stateAt(t)
+				ref := shape.ref(refFor(t, config.UseKindConnector, "acme/plugins/jira"))
+				refs := map[string]config.PluginRef{ref.Key(): ref}
+				if _, err := Reconcile(refs, st, acmeTrust, stubFor("jira", "jira/v1.0.0"), Options{Describe: describe(tc.recorded)}); err != nil {
+					t.Fatal(err)
+				}
+				neverJailed(t, st)
+				st = LoadInstallState(st.Dir())
+				res, err := Reconcile(refs, st, acmeTrust, stubFor("jira", "jira/v1.0.0"), Options{GapsOnly: true, Describe: describe(tc.now)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				cur, _ := st.Get("connectors/jira")
+				p := st.PendingUpdates()
+				if tc.held == "" {
+					if len(p) != 0 || res[0].Action == ActionHeld {
+						t.Fatalf("held %+v; withheld references must be adopted without a hold", p)
+					}
+					if strings.Join(cur.Manifest.Egress, ",") != strings.Join(tc.now.Egress, ",") || strings.Join(cur.Manifest.Read, ",") != strings.Join(tc.now.Read, ",") {
+						t.Fatalf("adopted %+v, want the full declaration %+v", cur.Manifest, tc.now)
+					}
+					return
+				}
+				if len(p) != 1 || strings.Join(p[0].Widens, ";") != tc.held {
+					t.Fatalf("pending %+v, want only %q held", p, tc.held)
+				}
+				if strings.Join(cur.Manifest.Egress, ",") != strings.Join(full.Egress, ",") {
+					t.Fatalf("while held it runs jailed to the record and the withheld references: %+v", cur.Manifest.Egress)
+				}
+			})
+		}
 	}
 }
 
