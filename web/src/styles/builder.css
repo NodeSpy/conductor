@@ -20,6 +20,10 @@
 /* the recipe's right column (CONFORMANCE's builder): Try it, At a glance and
  * the config file, as their own stacked cards rather than one fixed panel. */
 .wfb-side-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* a label/value row (At a glance, Settings' on/off): used unstyled before —
+ * the label and its value ran together with no gap. */
+.field-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 6px 0; }
+.field-row + .field-row { border-top: 1px dashed var(--color-border-subtle); }
 .side-head { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--color-border-subtle); background: var(--color-bg-surface); flex-wrap: wrap; }
 .side-body { flex: 1; overflow: auto; min-height: 0; }
 .side-body .ced .ced-hl { background: transparent; }

@@ -372,7 +372,7 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 	yamlText := marshalWorkflow(t)
 
-	var runs []api.RunSummary
+	runs := []api.RunSummary{}
 	for _, rec := range s.deps.Store.ListHistory(0) {
 		rn := rec.Variant
 		if rn == "" {

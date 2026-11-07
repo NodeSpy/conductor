@@ -137,8 +137,9 @@ export function WorkflowDetail({ name }: { name: string }): JSX.Element {
   }
   if (!wf) return <div class="col m-page"><p class="muted">Loading…</p></div>
 
-  const inflight = wf.runs.filter((r) => r.status === 'running')
-  const recent = wf.runs.filter((r) => r.status !== 'running')
+  const runs = wf.runs || []
+  const inflight = runs.filter((r) => r.status === 'running')
+  const recent = runs.filter((r) => r.status !== 'running')
   const status = applyResult.value && hasStaged === false ? 'live' : hasStaged ? 'staged' : dirty ? 'draft' : 'live'
   const readOnly = wf.index < 0
 
@@ -178,7 +179,7 @@ export function WorkflowDetail({ name }: { name: string }): JSX.Element {
         {([
           ['recipe', 'Recipe'],
           ['config', 'Config file'],
-          ['runs', 'Runs', wf.runs.length],
+          ['runs', 'Runs', runs.length],
           ['settings', 'Settings'],
         ] as [Tab, string, number?][]).map(([k, l, n]) => (
           <a href="#" role="tab" class={tab === k ? 'on' : ''} aria-selected={tab === k} onClick={(e) => { e.preventDefault(); setTab(k) }}>
@@ -369,7 +370,7 @@ function RecipeSide({
   onOpenConfig: () => void
 }): JSX.Element {
   const since = Date.now() - 24 * 60 * 60 * 1000
-  const last24 = wf.runs.filter((r) => new Date(r.started).getTime() >= since)
+  const last24 = (wf.runs || []).filter((r) => new Date(r.started).getTime() >= since)
   const parts: [number, string][] = [
     [last24.filter((r) => r.status === 'ok').length, 'ok'],
     [last24.filter((r) => r.status === 'failed').length, 'failed'],
