@@ -15,12 +15,16 @@
 # the trust the relay had inside conductor. Each row says which deliveries
 # must arrive and which must be refused, and logged. The rows that run the new
 # conductor must also have rewritten the config (backup beside it), and a
-# second boot must leave it alone.
+# second boot must leave it alone. Where no smee release it could be granted
+# expose_local from is available, the github rewrite must be held back with a
+# warning, and the github connector must keep delivering on smee_url.
 #
 # Hermetic: every daemon gets its own HOME, state and config dirs under WORK;
 # the channel, the github API and the sink are local fakes on loopback; the
 # plugins are recorded in each state dir's install state from local builds
-# (seed/), so nothing is fetched. Run it in a PID namespace so nothing it
+# (seed/), and the smee releases a row's migration may install or update to
+# come from a git repo of its own (forge), so nothing is fetched from the
+# network. Run it in a PID namespace so nothing it
 # starts can outlive it:
 #
 #   unshare --user --map-current-user --pid --fork --kill-child --mount --mount-proc \
@@ -66,7 +70,7 @@ freeport() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0
 # start_bg <name> <cmd…>: start in the background, pid recorded in a file.
 start_bg() {
   local name=$1; shift
-  "$@" >"$WORK/$name.log" 2>&1 &
+  "$@" >>"$WORK/$name.log" 2>&1 &
   echo $! >"$WORK/$name.pid"
 }
 # stop_bg <name>: kill the pid recorded for name, once it is checked to still
@@ -99,6 +103,30 @@ for p in $P_SMEE $P_GH $P_SINK; do
 done
 
 SECRET=harness-webhook-secret
+
+# A fake release repo per row: what `use: smee` resolves and fetches, over
+# plain git like the real one (refs/dist/<tag>/<platform>, the binary and
+# checksums.txt). Each row's HOME rewrites the official source's URL to it.
+SMEE_SOURCE=$("$BIN/seed" -source-url smee) || { echo "seed -source-url failed"; exit 2; }
+PLATFORM="$(go env GOOS)_$(go env GOARCH)"
+ASSET="conductor-smee_$PLATFORM"
+# forge <dir> <tag=binary>…: publish each binary as connectors/smee/<tag>.
+forge() {
+  local d=$1; shift
+  local repo="$d/forge.git"
+  git init -q --bare "$repo"
+  for rel in "$@"; do
+    local tag=${rel%%=*} bin=${rel#*=} blob sums tree commit
+    blob=$(git --git-dir="$repo" hash-object -w "$bin")
+    sums=$(printf '%s  %s\n' "$(sha256sum "$bin" | cut -d' ' -f1)" "$ASSET" | git --git-dir="$repo" hash-object -w --stdin)
+    tree=$(printf '100755 blob %s\t%s\n100644 blob %s\tchecksums.txt\n' "$blob" "$ASSET" "$sums" | git --git-dir="$repo" mktree)
+    commit=$(GIT_AUTHOR_NAME=harness GIT_AUTHOR_EMAIL=harness@localhost GIT_COMMITTER_NAME=harness GIT_COMMITTER_EMAIL=harness@localhost \
+      git --git-dir="$repo" commit-tree "$tree" -m "connectors/smee/$tag")
+    git --git-dir="$repo" update-ref "refs/dist/connectors/smee/$tag/$PLATFORM" "$commit"
+  done
+  mkdir -p "$d/home"
+  git config --file "$d/home/.gitconfig" "url.file://$repo.insteadOf" "$SMEE_SOURCE"
+}
 
 # write_config <dir> <row>: the RETIRED shape, both connectors on their own
 # channel of the fake.
@@ -210,15 +238,25 @@ jailed() {
 OWN_PORT="its listener 127.0.0.1:[0-9]* is conductor's own port"
 NO_CAP="does not declare expose_local"
 
-# row <name> <conductor> <github> <smee> <migrates: yes|no> <gh: yes|refused> <hooks: yes|refused> [github channel subscribed: yes|no]
+# row <name> <conductor> <github> <smee installed, or -> <smee releases: tag=binary,… or -> <migrates: yes|hooks-only|no> <gh: yes|refused> <hooks: yes|refused> [github channel subscribed: yes|no]
+#
+# hooks-only: the github rewrite is held back (no smee release it could be
+# granted expose_local from): github keeps its own smee_url client, with a
+# warning, and the bundled webhook connector is migrated anyway.
 row() {
-  local name=$1 cond=$2 gh=$3 smee=$4 migrates=$5 ghx=$6 hooksx=$7 subs=${8:-yes}
+  local name=$1 cond=$2 gh=$3 smee=$4 releases=$5 migrates=$6 ghx=$7 hooksx=$8 subs=${9:-yes}
   local d="$WORK/$name"
   say "$name"
   mkdir -p "$d/state"
   write_config "$d" "$name"
   local orig; orig=$(cat "$d/cfg/conductor.yaml")
-  "$BIN/seed" -state "$d/state" "github=$gh" "smee=$smee" >"$d/seed.log" 2>&1 || { fail "$name: seed ($(tail -1 "$d/seed.log"))"; return; }
+  local seeds=("github=$gh")
+  [ "$smee" = - ] || seeds+=("smee=$smee")
+  "$BIN/seed" -state "$d/state" "${seeds[@]}" >"$d/seed.log" 2>&1 || { fail "$name: seed ($(tail -1 "$d/seed.log"))"; return; }
+  if [ "$releases" != - ]; then
+    # shellcheck disable=SC2086
+    forge "$d" ${releases//,/ }
+  fi
   boot "$d" "$cond"
 
   if [ "$subs" = yes ]; then
@@ -226,7 +264,10 @@ row() {
   fi
   if wait_for 60 subscribed "$name-hooks"; then pass "$name: the webhook channel has a subscriber"; else fail "$name: nobody subscribed to the webhook channel"; fi
   sleep 1 # the listener the relay posts to is up by the time the relay subscribed; give it a beat anyway
-  if [ "$cond" = "$CONDUCTOR_NEW" ]; then jailed "$name" github; jailed "$name" smee; fi
+  if [ "$cond" = "$CONDUCTOR_NEW" ]; then
+    jailed "$name" github
+    [ "$migrates" = yes ] && jailed "$name" smee # (hooks-only: the one smee connector is the unjailed hooks-smee)
+  fi
 
   post_github "$name" 1
   expect "$name" gh.new_comment "$name-gh" "$name" gh "$ghx" "$NO_CAP"
@@ -234,7 +275,16 @@ row() {
   expect "$name" hooks.alarm "$name-hooks" "$name" hooks "$hooksx" "$OWN_PORT"
 
   local now; now=$(cat "$d/cfg/conductor.yaml")
-  if [ "$migrates" = yes ]; then
+  if [ "$migrates" = hooks-only ]; then
+    if grep -q "smee_url: http://127.0.0.1:$P_SMEE/$name-gh" <<<"$now" && ! grep -q "gh-smee" <<<"$now"; then pass "$name: the github connector is held back on smee_url"; else fail "$name: the github connector was rewritten"; echo "$now"; fi
+    if ! grep -v '^ *#' <<<"$now" | grep -q "smee_url: \${HOOKS_SMEE_URL}" && awk '/^  hooks-smee:/{h=1;next} /^  [^ ]/{h=0} h' <<<"$now" | grep -q "trust: full"; then
+      pass "$name: the webhook connector was migrated (trust: full)"
+    else
+      fail "$name: the webhook connector was not migrated"; echo "$now"
+    fi
+    if grep -q "config migrate: warning: the rewrites that wire smee are held back: no smee release declaring expose_local" "$d/daemon.log"; then pass "$name: the hold-back is a warning naming why"; else fail "$name: no hold-back warning"; fi
+    if [ "$(cat "$d/cfg/conductor.yaml.pre-smee" 2>/dev/null)" = "$orig" ]; then pass "$name: backup holds the original"; else fail "$name: no faithful backup"; fi
+  elif [ "$migrates" = yes ]; then
     if grep -v '^ *#' <<<"$now" | grep -q "smee_url"; then fail "$name: smee_url still in the config"; else pass "$name: the config was rewritten"; fi
     if grep -q "use: smee" <<<"$now" && grep -q "channel: \${HOOKS_SMEE_URL}" <<<"$now" && grep -q "secret: \${GH_WEBHOOK_SECRET}" <<<"$now"; then
       pass "$name: smee connectors on the same channels, secrets still references"
@@ -281,16 +331,28 @@ row() {
 # listener its expose: wiring names, granted through expose_local). The
 # migration made hooks-smee trust: full + isolate: true, so the bundled
 # webhook connector keeps receiving too.
-row old-cond.old-gh   "$CONDUCTOR_OLD" "$GITHUB_OLD" "$SMEE_OLD" no  yes yes
-row old-cond.new-gh   "$CONDUCTOR_OLD" "$GITHUB_NEW" "$SMEE_OLD" no  yes yes
-row new-cond.old-gh   "$CONDUCTOR_NEW" "$GITHUB_OLD" "$SMEE_NEW" yes yes yes
-row new-cond.new-gh   "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_NEW" yes yes yes
-# An smee build from before expose_local, jailed (gh-smee): it cannot reach
-# github's listener, and the log says what to do. (Its egress names smee.io
-# only, so the fake channel's host is outside its jail too and it never
-# subscribes here; on a real smee.io channel it subscribes, and the relay is
-# refused the same way.) hooks-smee is unjailed, so it delivers.
-row new-cond.old-smee "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_OLD" yes refused yes no
+row old-cond.old-gh   "$CONDUCTOR_OLD" "$GITHUB_OLD" "$SMEE_OLD" - no  yes yes
+row old-cond.new-gh   "$CONDUCTOR_OLD" "$GITHUB_NEW" "$SMEE_OLD" - no  yes yes
+row new-cond.old-gh   "$CONDUCTOR_NEW" "$GITHUB_OLD" "$SMEE_NEW" - yes yes yes
+row new-cond.new-gh   "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_NEW" - yes yes yes
+
+# smee is not installed, and its latest release predates expose_local: the
+# migration installs it for hooks-smee (unjailed, so it delivers), but holds
+# the github rewrite back — a jailed gh-smee could not reach github's
+# listener. github keeps its own smee_url client, and says it is deprecated.
+row new-cond.fresh-smee-released "$CONDUCTOR_NEW" "$GITHUB_NEW" - "v1.1.0=$SMEE_OLD" hooks-only yes yes
+# An smee from before expose_local is installed, and a release declaring it
+# is out: the migration updates to it and approves what the update asks for
+# (expose_local, and its channel's host), since that is exactly what it wires.
+row new-cond.old-smee-installed "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_OLD" "v1.1.0=$SMEE_OLD,v1.2.0=$SMEE_NEW" yes yes yes
+if grep -q "config migrate: approved smee connectors/smee/v1.2.0 (replacing connectors/smee/v0.0.0-harness), the update the rewrite needs, which also may: .*expose" "$WORK/new-cond.old-smee-installed/daemon.log"; then
+  pass "new-cond.old-smee-installed: the migration's approval is logged, naming what it grants"
+else
+  fail "new-cond.old-smee-installed: no logged approval"
+fi
+# An smee from before expose_local is installed, and nothing newer is out:
+# held back like the fresh install.
+row new-cond.old-smee-no-release "$CONDUCTOR_NEW" "$GITHUB_NEW" "$SMEE_OLD" "v1.1.0=$SMEE_OLD" hooks-only yes yes
 
 # The migrated bundled-webhook relay with its trust taken off by hand: jailed,
 # it is refused conductor's own port, and the log names the fix.

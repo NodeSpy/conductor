@@ -45,7 +45,11 @@ import (
 // granted (docs/wiki/Plugins.md "What a plugin declares"). Isolated, its
 // unjailed process is its own, so no other smee connector shares that trust.
 // A github listener is a plugin's: its smee connector stays jailed, reaching
-// the listener through expose_local.
+// the listener through expose_local, so that rewrite needs the smee plugin
+// granted expose_local and egress to the channel it pins (Grant). A box whose
+// smee can't be (no release declaring it yet; an update that asks for more,
+// held for the operator) keeps that connector on smee_url, which the github
+// plugin still serves, and the next boot tries again.
 //
 // This is the only place left in core that knows the retired keys. It goes
 // once no supported release can still be carrying them.
@@ -102,6 +106,10 @@ func (t *tree) migrateSmee(s connectorSite, all map[string]map[string]any, base 
 		t.note("%s: left as it is — smee_url and expose: %s are both set; one listener has one exposure, so pick one by hand (smee: add a connector `{use: smee, channel: <the url>}` and point expose at it)", where, exp)
 		return nil
 	}
+	if why, held := t.held[smeeUse]; held && github {
+		t.note("%s: left on smee_url for now — the smee connector it would expose through needs %s granted expose_local, and %s; the github plugin's own smee client keeps delivering", where, smeeUse, why)
+		return nil
+	}
 	smeeName, reuse := t.smeeConnectorFor(s.name, url, all)
 	listen, _ := fields["listen"].(string)
 	newListen := ""
@@ -140,6 +148,9 @@ func (t *tree) migrateSmee(s connectorSite, all map[string]map[string]any, base 
 		}
 		all[smeeName] = map[string]any{"use": smeeUse, "channel": url}
 		t.uses = append(t.uses, smeeUse)
+	}
+	if github {
+		t.grants = append(t.grants, Grant{Use: smeeUse, ExposeLocal: true, Egress: []string{"config:channel"}})
 	}
 	t.ruleChanged = true
 	t.touched = append(t.touched, s.name, smeeName)

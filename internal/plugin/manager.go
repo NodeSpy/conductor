@@ -481,6 +481,35 @@ func (m *Manager) SetExposeTargets(targets map[string][]string) {
 	m.mu.Unlock()
 }
 
+// ExposeRefusals names each connector instance whose process would not be
+// granted the listener(s) it is wired to expose (instance → why), as
+// SetExposeTargets last set them: what its launch would refuse and log,
+// known from the recorded install manifest without launching anything. A
+// migration's pre-write check refuses a rewrite that wires one.
+func (m *Manager) ExposeRefusals() map[string]string {
+	m.instMu.Lock()
+	targets := m.exposeTo
+	m.instMu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := map[string]string{}
+	for _, spec := range m.specs {
+		if spec.Kind != KindConnector {
+			continue
+		}
+		for name, g := range spec.Instances {
+			s := spec
+			if g.Isolate {
+				s = InstanceSpec(spec, name)
+			}
+			if why := exposeRefusal(s, sortedUniq(targets[name])); why != "" {
+				out[name] = why
+			}
+		}
+	}
+	return out
+}
+
 func sortedUniq(in []string) []string {
 	out := uniqStrings(in)
 	slices.Sort(out)

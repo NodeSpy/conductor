@@ -3,7 +3,9 @@ package connector
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -137,7 +139,35 @@ func ExposeTargets(cfg *config.Config, logf func(string, ...any)) map[string][]s
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
+	targets, refused := exposeTargets(cfg)
+	for _, name := range slices.Sorted(maps.Keys(refused)) {
+		logf("%s", refused[name])
+	}
+	return targets
+}
+
+// ExposeRefusals names each enabled exposure connector a builtin listener
+// is wired to while it runs jailed (exposure → why): it is never granted
+// conductor's own port, so what it relays never arrives.
+func ExposeRefusals(cfg *config.Config) map[string]string {
+	_, refused := exposeTargets(cfg)
+	out := make(map[string]string, len(refused))
+	for _, why := range refused {
+		out[why.expose] = why.String()
+	}
+	return out
+}
+
+// ownPortRefusal is a builtin listener wired to a jailed exposure.
+type ownPortRefusal struct{ listener, addr, expose string }
+
+func (r ownPortRefusal) String() string {
+	return fmt.Sprintf("connector %q: its listener %s is conductor's own port, which %s (a jailed plugin) is never granted — what it relays will not arrive; set trust: full on %s to run it unjailed (with isolate: true when it shares its plugin's process with another connector), or expose a plugin's listener", r.listener, r.addr, r.expose, r.expose)
+}
+
+func exposeTargets(cfg *config.Config) (map[string][]string, map[string]ownPortRefusal) {
 	out := map[string][]string{}
+	refused := map[string]ownPortRefusal{}
 	names := make([]string, 0, len(cfg.ConnectorsMap))
 	for n := range cfg.ConnectorsMap {
 		names = append(names, n)
@@ -163,15 +193,15 @@ func ExposeTargets(cfg *config.Config, logf func(string, ...any)) map[string][]s
 			}
 			addr := dialableAddr(listen)
 			if !IsExternalType(ref.TypeName()) {
-				if t, ok := cfg.ConnectorsMap[expose]; ok && IsExternalType(t.TypeName()) && !t.TrustFull() {
-					logf("connector %q: its listener %s is conductor's own port, which %s (a jailed plugin) is never granted — what it relays will not arrive; set trust: full on %s to run it unjailed (with isolate: true when it shares its plugin's process with another connector), or expose a plugin's listener", name, addr, expose, expose)
+				if t, ok := cfg.ConnectorsMap[expose]; ok && t.IsEnabled() && IsExternalType(t.TypeName()) && !t.TrustFull() {
+					refused[name+"\x00"+addr] = ownPortRefusal{listener: name, addr: addr, expose: expose}
 				}
 				continue
 			}
 			out[expose] = append(out[expose], addr)
 		}
 	}
-	return out
+	return out, refused
 }
 
 // exposureRetryInitial and exposureRetryMax bound openExposure's backoff —

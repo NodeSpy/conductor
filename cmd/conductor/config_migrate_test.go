@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/configmigrate"
+	"github.com/NodeSpy/conductor/internal/plugin"
 )
 
 // A config still carrying the bundled webhook connector's retired smee_url.
@@ -102,7 +104,7 @@ func TestBootMigrationRefusedWhenItsConnectorWouldBeDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(warning, "hooks-smee would start disabled") {
+	if !strings.Contains(warning, "hooks-smee would not work: it starts disabled") {
 		t.Fatalf("warning = %q", warning)
 	}
 	if got, _ := os.ReadFile(path); string(got) != retiredSmeeConfig {
@@ -164,5 +166,65 @@ func TestValidateNamesPendingMigration(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(path); string(got) != retiredSmeeConfig {
 		t.Fatal("validate rewrote the config")
+	}
+}
+
+// The migration approves a held smee update for exactly what it wires (it
+// declares expose_local and reaches the channel the rewrite pins), and
+// nothing more: an update that also asks for anything else stays held for
+// the operator, and so does the rewrite.
+func TestApproveForMigration(t *testing.T) {
+	grant := configmigrate.Grant{Use: "smee", ExposeLocal: true, Egress: []string{"config:channel"}}
+	old := plugin.Manifest{Egress: []string{"smee.io:443", "config:smee_base"}}
+	for _, c := range []struct {
+		name    string
+		held    *plugin.Manifest
+		wantErr string
+	}{
+		{"exactly what it wires", &plugin.Manifest{Egress: []string{"smee.io:443", "config:smee_base", "config:channel"}, ExposeLocal: true}, ""},
+		{"asks for more", &plugin.Manifest{Egress: []string{"smee.io:443", "config:smee_base", "config:channel", "elsewhere.example:443"}, ExposeLocal: true}, "elsewhere.example:443"},
+		{"does not declare expose_local", &plugin.Manifest{Egress: []string{"smee.io:443", "config:smee_base", "config:channel"}}, "no smee release declaring expose_local"},
+		{"nothing held", nil, "no smee release declaring expose_local"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			config.SetStateDir(t.TempDir())
+			t.Cleanup(func() { config.SetStateDir("") })
+			bin := filepath.Join(t.TempDir(), "conductor-smee")
+			if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			st := plugin.LoadInstallState(plugin.InstallDir())
+			cur := plugin.Installed{Key: "connectors/smee", Kind: config.PluginKindConnector, Name: "smee", Use: "smee",
+				Resolved: "connectors/smee/v1.1.0", Sha256: strings.Repeat("a", 64), Path: bin, Manifest: old}
+			st.Put(cur)
+			if c.held != nil {
+				next := cur
+				next.Resolved, next.Sha256, next.Manifest = "connectors/smee/v1.2.0", strings.Repeat("b", 64), *c.held
+				st.Pending = append(st.Pending, plugin.Pending{Installed: next, Replaces: cur.Resolved, Widens: old.Widens(*c.held)})
+			}
+			if err := st.Save(); err != nil {
+				t.Fatal(err)
+			}
+			notes, err := approveForMigration("connectors/smee", "smee", grant, false)
+			now, _ := plugin.LoadInstallState(plugin.InstallDir()).Get("connectors/smee")
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("err = %v, want it to name %q", err, c.wantErr)
+				}
+				if now.Resolved != cur.Resolved {
+					t.Fatalf("installed %s despite the refusal", now.Resolved)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if now.Resolved != "connectors/smee/v1.2.0" || !now.Manifest.ExposeLocal {
+				t.Fatalf("installed %+v", now)
+			}
+			if len(notes) != 1 || !strings.Contains(notes[0], "approved smee connectors/smee/v1.2.0") || !strings.Contains(notes[0], "expose") {
+				t.Fatalf("notes = %q", notes)
+			}
+		})
 	}
 }

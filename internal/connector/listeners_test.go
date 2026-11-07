@@ -719,4 +719,15 @@ connectors:
 	if len(logged) != 1 || !strings.Contains(logged[0], `"hooks"`) || !strings.Contains(logged[0], "conductor's own port") {
 		t.Fatalf("the builtin's listener is not named: %q", logged)
 	}
+	// The same refusal, for a migration's pre-write check, keyed by the
+	// exposure; none once the exposure runs unjailed.
+	if r := ExposeRefusals(cfg); len(r) != 1 || r["relay"] != logged[0] {
+		t.Fatalf("refusals = %q", r)
+	}
+	ref := cfg.ConnectorsMap["relay"]
+	ref.Trust = "full"
+	cfg.ConnectorsMap["relay"] = ref
+	if r := ExposeRefusals(cfg); len(r) != 0 {
+		t.Fatalf("refusals with trust: full = %q", r)
+	}
 }

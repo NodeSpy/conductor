@@ -45,9 +45,21 @@ it loads the config:
 - The `smee` plugin is installed **first** (the boot gap-fill, bounded to 2
   minutes). If it can't be fetched, nothing is rewritten and the daemon
   starts on the config as it is; the next boot tries again.
-- The rewritten config must load and build every touched connector enabled
-  before it replaces yours; otherwise nothing is written and the reason is
-  logged and escalated.
+- A github connector's rewrite also needs a smee build that declares
+  `expose_local`. An older smee is updated first. That update asks for
+  `expose_local` and for the channel's host, which would normally hold it
+  for `conductor plugin approve`. The migration is the change that wires
+  exactly those, so it records the approval itself and logs it:
+  `config migrate: approved smee <release> (replacing <release>), … which
+  also may: <each new permission>`. An update that asks for anything more
+  stays held for you. If no such smee release is available (or the update
+  stays held), the **github rewrite is held back** with a warning, and only
+  that rewrite. github keeps its own `smee_url` client, which still delivers,
+  and the rest of the migration goes ahead. The next boot tries again.
+- The rewritten config must load and build every touched connector enabled,
+  and each smee connector it wires must be granted the listener it relays
+  to, before it replaces yours. Otherwise nothing is written, and the reason
+  is logged and escalated.
 - Every rewritten file is backed up first as `<file>.pre-smee` (the first
   backup is kept), comments and key order are preserved, and each file is
   logged: `config migrate: rewrote <file> (backup <file>.pre-smee)`. A
@@ -69,8 +81,8 @@ combination keeps working:
    plugin needs to deliver to the listener it relays to (see [[Plugins]],
    "What a plugin declares"); plus TCP keep-alive on the channel stream,
    backoff that resets once connected, and egress for a pinned non-smee.io
-   channel. An older smee runs only with `trust: full`: jailed, it cannot
-   reach the listener, and the log says so.
+   channel. Until it is out, the migration leaves github connectors on
+   `smee_url` (above): jailed, an older smee cannot reach the listener.
 2. `github` plugin v2.12.0 — `webhook.smee_url` still works, with a
    deprecation warning in the log. Every github 2.x release already serves
    `listen` + `expose`, so a migrated config runs on any of them.
@@ -85,9 +97,9 @@ else on the machine. That is why the rewrite unjails only the smee connector
 made for the bundled `webhook` connector (above). Remove its `trust: full`
 and it is refused conductor's own port, and the log names the delivery it
 refused. A smee connector you configure yourself for a `webhook` connector
-needs the same two keys. A box that already had an older smee installed
-holds the update to v1.2.0 until `conductor plugin approve`, because it
-asks for `expose_local`.
+needs the same two keys. Outside a migration, an update of an older smee to
+v1.2.0 is held until `conductor plugin approve`, because it asks for
+`expose_local`.
 
 **Rolling back** to an older conductor after the rewrite: github deliveries
 keep flowing (the older conductor already runs the smee connector and the

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -551,5 +552,79 @@ func TestCheckRefusesANewlyDisabledConnector(t *testing.T) {
 				t.Fatal("not rewritten")
 			}
 		})
+	}
+}
+
+const bothOld = `connectors:
+  gh:
+    use: github
+    webhook:
+      smee_url: ${GH_SMEE_URL}
+      secret: ${GH_WEBHOOK_SECRET}
+  hooks:
+    use: webhook
+    smee_url: ${HOOKS_SMEE_URL}
+`
+
+// The github rewrite wires smee to a jailed listener, so it asks for smee
+// granted expose_local and its channel; when that can't be had, only that
+// rewrite is held back (github's own smee_url keeps working), with a
+// warning, and the bundled webhook connector — whose relay runs unjailed —
+// is migrated anyway.
+func TestGrantHoldsBackOnlyTheJailedRewrite(t *testing.T) {
+	dir := t.TempDir()
+	main := write(t, dir, "conductor.yaml", bothOld)
+	var asked []Grant
+	res, err := Apply(main, Options{PortFree: allFree, Grant: func(g Grant) ([]string, error) {
+		asked = append(asked, g)
+		return nil, errors.New("no smee release declaring expose_local is available yet")
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 || asked[0].Use != "smee" || !asked[0].ExposeLocal || !slices.Equal(asked[0].Egress, []string{"config:channel"}) {
+		t.Fatalf("asked for %+v", asked)
+	}
+	got := read(t, main)
+	if !strings.Contains(got, "smee_url: ${GH_SMEE_URL}") || strings.Contains(got, "gh-smee") {
+		t.Fatalf("the github connector was not held back:\n%s", got)
+	}
+	if strings.Contains(got, "smee_url: ${HOOKS_SMEE_URL}") || !strings.Contains(got, "hooks-smee:") {
+		t.Fatalf("the bundled webhook connector was not migrated:\n%s", got)
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "no smee release declaring expose_local") {
+		t.Fatalf("warnings = %q", res.Warnings)
+	}
+	if !slices.ContainsFunc(res.Notes, func(n string) bool { return strings.HasPrefix(n, "gh.webhook: left on smee_url for now") }) {
+		t.Fatalf("notes = %q", res.Notes)
+	}
+
+	// A second run, with the grant available now, finishes the job; what
+	// the grant did is a note of the run.
+	res, err = Apply(main, Options{PortFree: allFree, Grant: func(Grant) ([]string, error) {
+		return []string{"approved smee v1.2.0"}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, main); strings.Contains(got, "smee_url:") || !strings.Contains(got, "expose: gh-smee") {
+		t.Fatalf("not finished:\n%s", got)
+	}
+	if len(res.Warnings) != 0 || !slices.Contains(res.Notes, "approved smee v1.2.0") {
+		t.Fatalf("warnings = %q, notes = %q", res.Warnings, res.Notes)
+	}
+}
+
+// Only a jailed relay asks for a grant: the bundled webhook connector's is
+// unjailed.
+func TestBundledWebhookAsksNoGrant(t *testing.T) {
+	dir := t.TempDir()
+	main := write(t, dir, "conductor.yaml", "connectors:\n  hooks:\n    use: webhook\n    smee_url: ${HOOKS_SMEE_URL}\n")
+	plan, err := Compute(main, Options{PortFree: allFree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Grants) != 0 {
+		t.Fatalf("grants = %+v", plan.Grants)
 	}
 }

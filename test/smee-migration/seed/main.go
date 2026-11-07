@@ -6,6 +6,9 @@
 //
 // Usage: seed -state <state-dir> <name>=<binary> [<name>=<binary> …]
 //
+//	seed -source-url <name>   the git URL an official plugin is fetched from
+//	                          (the harness points it at a local fake release repo)
+//
 // NOT part of the shipped product; harness-only.
 package main
 
@@ -27,7 +30,16 @@ import (
 
 func main() {
 	state := flag.String("state", "", "the daemon's state dir")
+	sourceURL := flag.String("source-url", "", "print the git URL the official plugin of this name is fetched from")
 	flag.Parse()
+	if *sourceURL != "" {
+		u, err := config.ParseUse(config.UseKindConnector, *sourceURL)
+		if err != nil {
+			fail("%v", err)
+		}
+		fmt.Println(u.GitURL())
+		return
+	}
 	if *state == "" || flag.NArg() == 0 {
 		fmt.Fprintln(os.Stderr, "usage: seed -state <state-dir> <name>=<binary> …")
 		os.Exit(2)
