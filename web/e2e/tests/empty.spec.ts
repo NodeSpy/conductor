@@ -44,7 +44,6 @@ const SCREENS: { route: string; name: string; testid: string; heading: RegExp }[
   { route: 'bots', name: 'bots', testid: 'bots-empty', heading: /Meet your first bot/ },
   { route: 'chat', name: 'chat', testid: 'chat-empty', heading: /No one to talk to yet/ },
   { route: 'tickets', name: 'tickets', testid: 'tickets-empty', heading: /Tickets need a bot/ },
-  { route: 'secrets', name: 'secrets', testid: 'secrets-empty', heading: /No secrets yet/ },
   { route: 'packs', name: 'packs', testid: 'packs-empty', heading: /No packs installed/ },
   { route: 'audit', name: 'audit', testid: 'audit-empty', heading: /Nothing recorded yet/ },
   { route: 'security', name: 'access', testid: 'access-empty', heading: /Nobody signs in here yet/ },
@@ -65,6 +64,27 @@ for (const s of SCREENS) {
     await shot(page, s.name)
   })
 }
+
+// Secrets on a fresh box: unlike the other screens, it is never a single
+// blanket empty state (CONFORMANCE "Secrets") — the tabs, the explanation and
+// an always-present vaults section with Add a vault stay up, and each tab
+// carries its own empty state underneath.
+test('#/secrets on a fresh box keeps the Secrets layout, empty only where there is nothing', async ({ page, collector }) => {
+  await page.goto(`${rt.baseURL}/#/secrets`)
+  await expect(page.getByRole('heading', { level: 1, name: 'Secrets' })).toBeVisible()
+  await expect(page.locator('.tabs a', { hasText: 'Secrets' })).toBeVisible()
+  await expect(page.locator('.tabs a', { hasText: 'Settings' })).toBeVisible()
+  await expect(page.getByText(/Nothing refers to a secret yet/)).toBeVisible()
+  await expect(page.locator('.vaults')).toBeVisible()
+  await expect(page.getByTestId('add-vault')).toBeVisible()
+  await noErrors(page)
+  expect(collector.failed, 'no failed requests').toEqual([])
+  expect(collector.consoleErrors, 'no console errors').toEqual([])
+  await shot(page, 'secrets')
+
+  await page.locator('.tabs a', { hasText: 'Settings' }).click()
+  await expect(page.getByTestId('settings-empty')).toBeVisible()
+})
 
 // Home on a fresh box (design review note): the layout stays up — the tiles,
 // Needs you, Running now and the runs strip — rather than collapsing to one
