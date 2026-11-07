@@ -189,3 +189,42 @@ func TestSetExposeTargetsPerProcess(t *testing.T) {
 		t.Errorf("isolated instance: %v, want %v", c.spec.ExposeTo, want)
 	}
 }
+
+// ExposeRefusals judges each instance's launch from its recorded manifest,
+// as its launch would: an undeclared build is refused its targets, a
+// declared one only a target off loopback, and trust: full nothing.
+func TestExposeRefusals(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		m    Manifest
+		want map[string]string
+	}{
+		{"undeclared", Manifest{}, map[string]string{"a": "does not declare expose_local", "b": "does not declare expose_local"}},
+		{"declared", Manifest{ExposeLocal: true}, map[string]string{"b": "127.0.0.1 only"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			config.SetStateDir(t.TempDir())
+			t.Cleanup(func() { config.SetStateDir("") })
+			ref := refFor(t, config.UseKindConnector, "relay")
+			ref.Instances = map[string]config.ConnectorGrant{"a": {}, "b": {Isolate: true}, "c": {Isolate: true, TrustFull: true}, "idle": {}}
+			st := LoadInstallState(InstallDir())
+			st.Put(Installed{Key: ref.Use.InstallKey(), Name: "relay", Resolved: "connectors/relay/v1.1.0", Path: "/nonexistent", Manifest: c.m})
+			mgr := NewManager(map[string]config.PluginRef{ref.Key(): ref}, "", st, Deps{})
+			defer mgr.Close()
+			mgr.SetExposeTargets(map[string][]string{
+				"a": {"127.0.0.1:8787"},
+				"b": {"192.0.2.7:8788"},
+				"c": {"127.0.0.1:8789"},
+			})
+			got := mgr.ExposeRefusals()
+			if len(got) != len(c.want) {
+				t.Fatalf("refusals = %q, want %d", got, len(c.want))
+			}
+			for name, want := range c.want {
+				if !strings.Contains(got[name], want) {
+					t.Errorf("%s: %q, want it to say %q", name, got[name], want)
+				}
+			}
+		})
+	}
+}

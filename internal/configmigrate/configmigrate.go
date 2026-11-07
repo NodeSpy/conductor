@@ -24,15 +24,23 @@
 //     first backup wins, with the file's mode), swapped in atomically, and
 //     the whole tree is validated once; a failure restores every file.
 //     Validating means more than loading: every connector the rewrite touched
-//     must build enabled, unless it was already disabled before.
+//     must build enabled, and a plugin it wires to a listener must be granted
+//     that listener, unless the connector was already failing before.
+//   - A rewrite that needs a plugin granted something its install record does
+//     not (Grant: smee wired to a jailed listener needs expose_local) gets it
+//     first (Options.Grant). One that can't be granted is held back, left as
+//     it is with a warning while its old shape still works, and the rest of
+//     the migration goes ahead.
 //   - Each rewritten file is logged with its backup, and every decision
 //     worth a human's eye is returned as a note.
 package configmigrate
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -43,16 +51,24 @@ import (
 // Options configure one migration run.
 type Options struct {
 	// Check loads and validates the whole on-disk config tree rooted at the
-	// given main file, returning the connectors that build disabled (name →
-	// reason). Apply runs it on the live config first (the baseline), then on
+	// given main file, returning the connectors that would not work (name →
+	// reason): built disabled, or wired to a listener their plugin is not
+	// granted. Apply runs it on the live config first (the baseline), then on
 	// the rewrite: on a copy of the main file before writing when only the
 	// main file changes, else on the live tree after the swap. nil skips
 	// validation (tests of the rewrite alone).
-	Check func(mainPath string) (disabled map[string]string, err error)
+	Check func(mainPath string) (failing map[string]string, err error)
 	// Ensure installs plugins the rewrite starts referencing (their `use:`
 	// values), before anything is written. An error holds the whole
 	// migration back: nothing is written. nil skips it.
 	Ensure func(uses []string) error
+	// Grant makes the installed plugin g.Use one granted g: installing or
+	// updating it to a release that declares it, and recording the approval
+	// of a held update that asks for exactly what g names (the migration is
+	// the change that wires it). An error holds back the rewrites that need
+	// g — left as they are, with a warning — and the rest goes ahead. Its
+	// notes (what it updated or approved) join the run's. nil skips it.
+	Grant func(g Grant) (notes []string, err error)
 	// Logf receives one line per rewritten file. nil discards.
 	Logf func(string, ...any)
 	// PortFree reports whether a loopback port can be bound now (a seam for
@@ -71,6 +87,21 @@ type Result struct {
 	Notes []string
 	// Uses are the `use:` values the rewrite added (plugins it needs).
 	Uses []string
+	// Warnings are the rewrites held back (a plugin they need could not be
+	// granted what they wire): worth a notification, not a failure.
+	Warnings []string
+}
+
+// Grant is what a plugin a rewrite wires must be granted for the rewrite to
+// work, beyond being installed.
+type Grant struct {
+	// Use is the plugin's `use:` value.
+	Use string
+	// ExposeLocal: it delivers to a listener from its jail.
+	ExposeLocal bool
+	// Egress are destination entries (as a manifest declares them) the
+	// rewrite points it at.
+	Egress []string
 }
 
 // Plan is a computed migration: every file's rewrite, held in memory.
@@ -79,6 +110,8 @@ type Plan struct {
 	Files []*File // the whole import tree, main first
 	Notes []string
 	Uses  []string
+	// Grants are what the plugins the rewrite wires must be granted.
+	Grants []Grant
 	// Touched are the connectors the rewrite changed or added.
 	Touched []string
 	// backupSuffix names this run's backups (the rules that fired).
@@ -140,11 +173,17 @@ var rules = []rule{smeeRule}
 // Compute reads the tree rooted at mainPath and computes every rule's
 // rewrite in memory. Nothing is written.
 func Compute(mainPath string, opt Options) (*Plan, error) {
+	return compute(mainPath, opt, nil)
+}
+
+// compute is Compute with held: plugin use → why it can't be granted what
+// a rewrite needs; rewrites needing it are left as they are.
+func compute(mainPath string, opt Options, held map[string]string) (*Plan, error) {
 	paths, err := discoverFiles(mainPath)
 	if err != nil {
 		return nil, err
 	}
-	t := &tree{portFree: opt.PortFree, main: mainPath}
+	t := &tree{portFree: opt.PortFree, main: mainPath, held: held}
 	if t.portFree == nil {
 		t.portFree = portFree
 	}
@@ -170,7 +209,7 @@ func Compute(mainPath string, opt Options) (*Plan, error) {
 		}
 		t.ruleChanged = false
 	}
-	plan := &Plan{Main: mainPath, Files: t.files, Notes: t.notes, Uses: dedupe(t.uses), Touched: dedupe(t.touched)}
+	plan := &Plan{Main: mainPath, Files: t.files, Notes: t.notes, Uses: dedupe(t.uses), Grants: mergeGrants(t.grants), Touched: dedupe(t.touched)}
 	plan.backupSuffix = ".pre-" + strings.Join(fired, "+")
 	return plan, nil
 }
@@ -197,6 +236,30 @@ func Apply(mainPath string, opt Options) (*Result, error) {
 			return res, fmt.Errorf("the rewritten config needs %s, which could not be installed (%v) — nothing was rewritten; the next boot tries again", strings.Join(plan.Uses, ", "), err)
 		}
 	}
+	if opt.Grant != nil && len(plan.Grants) > 0 {
+		held := map[string]string{}
+		var granted []string
+		for _, g := range plan.Grants {
+			notes, err := opt.Grant(g)
+			granted = append(granted, notes...)
+			if err != nil {
+				held[g.Use] = err.Error()
+			}
+		}
+		res.Notes = append(res.Notes, granted...)
+		if len(held) > 0 {
+			if plan, err = compute(mainPath, opt, held); err != nil {
+				return res, err
+			}
+			res.Notes, res.Uses = append(plan.Notes, granted...), plan.Uses
+			for _, use := range slices.Sorted(maps.Keys(held)) {
+				res.Warnings = append(res.Warnings, fmt.Sprintf("the rewrites that wire %s are held back: %s — those connectors stay as they are and keep working; the next boot tries again", use, held[use]))
+			}
+			if todo = plan.ChangedFiles(); len(todo) == 0 {
+				return res, nil
+			}
+		}
+	}
 	var verify func(path string) error
 	if opt.Check != nil {
 		// A connector already disabled before the rewrite (no credential,
@@ -212,7 +275,7 @@ func Apply(mainPath string, opt Options) (*Result, error) {
 					if _, was := before[name]; was && berr == nil {
 						continue
 					}
-					return fmt.Errorf("connector %s would start disabled: %s", name, why)
+					return fmt.Errorf("connector %s would not work: %s", name, why)
 				}
 			}
 			return nil
@@ -303,6 +366,28 @@ func fileMode(path string) os.FileMode {
 	return 0o600
 }
 
+// mergeGrants folds the grants per plugin, sorted by use.
+func mergeGrants(in []Grant) []Grant {
+	by := map[string]*Grant{}
+	var uses []string
+	for _, g := range in {
+		m, ok := by[g.Use]
+		if !ok {
+			m = &Grant{Use: g.Use}
+			by[g.Use] = m
+			uses = append(uses, g.Use)
+		}
+		m.ExposeLocal = m.ExposeLocal || g.ExposeLocal
+		m.Egress = dedupe(append(m.Egress, g.Egress...))
+	}
+	sort.Strings(uses)
+	out := make([]Grant, 0, len(uses))
+	for _, u := range uses {
+		out = append(out, *by[u])
+	}
+	return out
+}
+
 func dedupe(in []string) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -324,6 +409,8 @@ type tree struct {
 	files       []*File
 	notes       []string
 	uses        []string
+	grants      []Grant
+	held        map[string]string // plugin use → why it can't be granted (compute)
 	touched     []string
 	portFree    func(int) bool
 	takenPorts  map[int]bool

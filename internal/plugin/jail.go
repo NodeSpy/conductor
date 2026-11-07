@@ -665,14 +665,14 @@ func grantExposeTargets(s Spec, logf func(string, ...any)) []string {
 		logf = func(string, ...any) {}
 	}
 	if !s.Manifest.ExposeLocal {
-		logf("plugin %s: NOT granted %s, the listener(s) it is wired to expose: its install record does not declare expose_local, so from its jail it cannot deliver there — update it (`conductor plugin update %s`, then approve), or set trust: full on its connector", s.Name, strings.Join(s.ExposeTo, ", "), s.Name)
+		logf("plugin %s: NOT granted %s, the listener(s) it is wired to expose: %s", s.Name, strings.Join(s.ExposeTo, ", "), noExposeLocal(s.Name))
 		return nil
 	}
 	var out []string
 	for _, a := range s.ExposeTo {
 		port, ok := exposePort(a)
 		if !ok {
-			logf("plugin %s: NOT granted %s: an exposure in a jail reaches a listener on 127.0.0.1 only — listen on 127.0.0.1 (or 0.0.0.0)", s.Name, a)
+			logf("plugin %s: NOT granted %s: %s", s.Name, a, notLoopbackExpose)
 			continue
 		}
 		if own, err := ownServicePort(port); err != nil || own {
@@ -682,6 +682,32 @@ func grantExposeTargets(s Spec, logf func(string, ...any)) []string {
 		out = append(out, a)
 	}
 	return out
+}
+
+// noExposeLocal is why a build without expose_local is refused its targets.
+func noExposeLocal(name string) string {
+	return fmt.Sprintf("its install record does not declare expose_local, so from its jail it cannot deliver there — update it (`conductor plugin update %s`, then approve), or set trust: full on its connector", name)
+}
+
+const notLoopbackExpose = "an exposure in a jail reaches a listener on 127.0.0.1 only — listen on 127.0.0.1 (or 0.0.0.0)"
+
+// exposeRefusal is why a jailed launch of s would not be granted the
+// listener(s) in addrs ("" when it would), from its recorded manifest alone —
+// grantExposeTargets' judgement without a launch. Conductor's own ports are
+// not judged: only the running daemon knows which those are.
+func exposeRefusal(s Spec, addrs []string) string {
+	if len(addrs) == 0 || s.Probe || s.TrustFull {
+		return ""
+	}
+	if !s.Manifest.ExposeLocal {
+		return fmt.Sprintf("plugin %s would not be granted %s, the listener(s) it is wired to expose: %s", s.Name, strings.Join(addrs, ", "), noExposeLocal(s.Name))
+	}
+	for _, a := range addrs {
+		if _, ok := exposePort(a); !ok {
+			return fmt.Sprintf("plugin %s would not be granted %s: %s", s.Name, a, notLoopbackExpose)
+		}
+	}
+	return ""
 }
 
 // exposePort is the port of a listener address an exposure may be granted:
