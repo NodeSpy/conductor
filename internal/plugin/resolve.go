@@ -114,6 +114,11 @@ type Options struct {
 	Prune bool
 	// Force re-resolves even an exact pin (`plugin update --force`).
 	Force bool
+	// PreJail are install keys whose fresh install inherits the pre-jail
+	// mark (Installed.PreJail): a config migration that moves what an
+	// older plugin, or conductor itself, did into a new plugin gives it
+	// that one's treatment on a host that cannot jail plugins.
+	PreJail map[string]bool
 	// AllowUnlisted bypasses the plugin-source trust allowlist.
 	AllowUnlisted bool
 	// Describe records the permission manifest at install (see DescribeFunc).
@@ -365,7 +370,7 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 		Key: key, Kind: ref.Kind(), Name: ref.Name,
 		Use: ref.Use.String(), Source: ref.Source(),
 		Resolved: tag, Sha256: sha, Path: binPath, ReleaseVerified: verified,
-		PreJail: state.preJail(key, ref.Source()),
+		PreJail: state.preJail(key, ref.Source()) || opts.PreJail[key],
 	}
 	if opts.Describe != nil {
 		spec := SpecFromRef(ref, "", rec, true)
@@ -465,6 +470,7 @@ func adoptLegacyRecord(ref config.PluginRef, rec Installed, state *InstallState,
 	}
 	base := rec.Manifest
 	base.Listen, base.Read, base.Write, base.Exec, base.Keychain = m.Listen, m.Read, m.Write, m.Exec, m.Keychain
+	base.ExposeLocal = m.ExposeLocal
 	replaces := rec.Resolved
 	// The user's last agreement (consentFile) is the record: for this
 	// build, or for the one before it when the older conductor installed
@@ -791,7 +797,7 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 			// the schema marker with nothing recorded, so it grants nothing
 			// and is never mistaken for a record to adopt. A failed
 			// describe removes it again (undo below).
-			rec := Installed{Key: key, Kind: ref.Kind(), Name: ref.Name, Use: u.String(), Source: instRef.Source(), Resolved: tag, Sha256: b.sha, Path: b.binPath, ReleaseVerified: b.verified, ManifestSchema: manifestSchema, PreJail: state.preJail(key, instRef.Source())}
+			rec := Installed{Key: key, Kind: ref.Kind(), Name: ref.Name, Use: u.String(), Source: instRef.Source(), Resolved: tag, Sha256: b.sha, Path: b.binPath, ReleaseVerified: b.verified, ManifestSchema: manifestSchema, PreJail: state.preJail(key, instRef.Source()) || opts.PreJail[key]}
 			state.Put(rec)
 			dirty = true
 		}
@@ -1066,6 +1072,9 @@ func manifestFromDecl(decl *Decl) Manifest {
 		FS:       append([]string(nil), c.FS...),
 		Spawns:   c.Spawns || len(c.Commands) > 0,
 		Env:      append([]string(nil), c.Env...),
+		// ExposeLocal is enforced from the record like every capability: an
+		// update that adds it widens the build and is held for approval.
+		ExposeLocal: c.ExposeLocal,
 		// Auth (the plugin's declared OAuth2 endpoints) is recorded so
 		// `conductor connector auth <name>` can run the interactive login
 		// WITHOUT respawning the plugin to re-Describe it.

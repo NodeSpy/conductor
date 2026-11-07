@@ -14,6 +14,10 @@
 // here since the suite needs a deterministic signature round-trip, not a
 // faithful reproduction of that one wart.
 //
+// SMEE_BODY=object switches to smee.io's own frame shape for a JSON body (see
+// deliver) — test/smee-migration needs it to drive every client that ever
+// read a smee channel, not just the smee plugin.
+//
 // NOT part of the shipped product; harness-only.
 package main
 
@@ -90,6 +94,14 @@ func deliver(w http.ResponseWriter, r *http.Request, channel string) {
 	// and is exactly what parseSmeeFrame's primary path (the smee plugin,
 	// connectors/smee) expects: unmarshal `body` as a string first.
 	frame["body"] = string(body)
+	if os.Getenv("SMEE_BODY") == "object" && json.Valid(body) {
+		// smee.io's own shape: a JSON body is forwarded as a JSON VALUE, not
+		// a string (and compacted on the way). A client that reads `body` as
+		// raw JSON — the github plugin's own smee transport did — only works
+		// against this shape; a compact body round-trips byte for byte, so a
+		// signature over it still verifies.
+		frame["body"] = json.RawMessage(body)
+	}
 	b, err := json.Marshal(frame)
 	if err != nil {
 		http.Error(w, "encode frame: "+err.Error(), http.StatusInternalServerError)

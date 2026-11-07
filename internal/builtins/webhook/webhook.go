@@ -3,6 +3,14 @@
 // a field-mapping DSL, plus a generic outbound HTTP post verb, served
 // in-process over the same protocol a spawned plugin speaks.
 //
+// Deliveries arrive on the instance's own HTTP listener (`listen`). Reaching
+// it from outside is an exposure connector's job, through the generic
+// `listeners` connection semantic (plugin-contract.md §2.4): `expose: <conn>`
+// names a tunnel or relay (cloudflared, ngrok, the smee plugin, …) and the
+// engine opens it for `listen` at instance start. A relay replays every
+// delivery to ONE path — the instance's relay `path` (default "/") — and that
+// path offers each delivery to every source, routed by `match`.
+//
 // Each configured `sources:` entry becomes one declared, concrete event (Q6:
 // plugin.describe{instance, config} — the event set depends on the
 // instance's own config, so the type-level Describe() alone cannot name
@@ -67,8 +75,10 @@ func (*Webhook) Describe() plugin.Decl {
 		Type: "webhook", Kind: plugin.KindConnector,
 		Desc: "Webhook: generic inbound JSON delivery via a field-mapping DSL; plus a generic outbound HTTP post verb.",
 		Connection: plugin.Schema{
-			"listen":        {Type: "string", Desc: "direct HTTP listener address, e.g. :8099"},
-			"smee_url":      {Type: "string", Desc: "smee.io channel (no public ingress needed)"},
+			"listen":        {Type: "string", Desc: "HTTP listener address, e.g. 127.0.0.1:8099"},
+			"expose":        {Type: "string", Desc: "an exposure connector (a tunnel or relay) that makes listen reachable from outside; the engine opens it at start"},
+			"path":          {Type: "string", Desc: "the relay path (default /): a delivery here is offered to every source, routed by match — where an exposure that replays to one path (a relay) delivers"},
+			"public_url":    {Type: "string", Desc: "filled in by the engine with the exposure's public URL; never set by hand"},
 			"sources":       {Type: "map", Required: true, Desc: "name -> { path, sign: {header,secret,scheme}, match, title, dedup, repo }. dedup: a template rendering the operator's own signature for replay protection; unset (the default) fires on EVERY delivery — no dedup check at all, so a sender that legitimately re-POSTs an identical payload (heartbeat/status webhooks) is never silently suppressed"},
 			"allow_private": {Type: "boolean", Desc: "permit webhook.post to reach loopback/private/link-local/CGNAT addresses (default false — blocked to prevent SSRF)"},
 			"allow_hosts":   {Type: "list", Desc: "specific hosts (by name) or exact IPs that webhook.post may reach even in an otherwise-blocked range"},
@@ -98,7 +108,22 @@ func (*Webhook) Describe() plugin.Decl {
 				"body":   {Type: "string", Desc: "response body, capped at 64KB"},
 			},
 		}},
+		Semantics: &plugin.ConnSemantics{
+			Listeners: []plugin.Listener{{Listen: "listen", Expose: "expose", URLTo: "public_url", Path: "path"}},
+		},
 	}
+}
+
+// relayPath is the instance's relay path (its `path`, default "/").
+func relayPath(cfg map[string]any) string {
+	p, _ := cfg["path"].(string)
+	if p == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return p
 }
 
 // sourceCfg is one configured `sources:` entry, decoded from the generic
@@ -190,22 +215,33 @@ func mustJSON(v bool) json.RawMessage {
 func (w *Webhook) Validate(_ context.Context, req plugin.ValidateRequest) (plugin.ValidateResult, error) {
 	var problems []plugin.Problem
 	listen, _ := req.Config["listen"].(string)
-	smeeURL, _ := req.Config["smee_url"].(string)
-	if listen == "" && smeeURL == "" {
-		problems = append(problems, plugin.Problem{Path: "listen", Message: "set `listen` and/or `smee_url`"})
+	expose, _ := req.Config["expose"].(string)
+	if _, ok := req.Config["smee_url"]; ok {
+		// Not a transport this connector runs any more: a smee channel is the
+		// smee plugin's, as an exposure. Conductor rewrites this at boot
+		// (`conductor config migrate` does it by hand).
+		problems = append(problems, plugin.Problem{Path: "smee_url",
+			Message: "smee_url moved to a smee connector: run `conductor config migrate` (the daemon does it at boot) — it adds `<name>-smee: {use: smee, channel: <this url>}` and sets `listen` + `expose` here"})
+	}
+	if listen == "" {
+		problems = append(problems, plugin.Problem{Path: "listen", Message: "required"})
 	}
 	srcs, names := sources(req.Config)
 	if len(names) == 0 {
 		problems = append(problems, plugin.Problem{Path: "sources", Message: "no sources"})
 	}
+	relay := relayPath(req.Config)
 	for _, name := range names {
 		sc := srcs[name]
 		p := "sources." + name
-		if listen != "" && sc.Path == "" {
-			problems = append(problems, plugin.Problem{Path: p + ".path", Message: "required with a listener"})
+		if sc.Path == "" && expose == "" {
+			problems = append(problems, plugin.Problem{Path: p + ".path", Message: "required (a source with no path is reached only through the relay path, which needs `expose`)"})
 		}
-		if smeeURL != "" && sc.Match == "" && len(names) > 1 {
-			problems = append(problems, plugin.Problem{Path: p + ".match", Message: "required to route a smee channel across multiple sources"})
+		if expose != "" && sc.Path != "" && normPath(sc.Path) == relay {
+			problems = append(problems, plugin.Problem{Path: p + ".path", Message: fmt.Sprintf("%s is the relay path; give the source its own path, or the relay its own `path`", relay)})
+		}
+		if expose != "" && sc.Match == "" && len(names) > 1 {
+			problems = append(problems, plugin.Problem{Path: p + ".match", Message: "required to route the relay path across multiple sources"})
 		}
 		for field, tmpl := range map[string]string{"match": sc.Match, "title": sc.Title, "dedup": sc.Dedup, "repo": sc.Repo} {
 			if _, err := template.New("t").Parse(tmpl); err != nil {
@@ -222,8 +258,7 @@ func (w *Webhook) Validate(_ context.Context, req plugin.ValidateRequest) (plugi
 	return plugin.ValidateResult{Problems: problems}, nil
 }
 
-// StartSource runs the instance's direct listener and/or smee relay until ctx
-// ends, emitting one event per matched delivery that isn't a duplicate of an
+// StartSource runs the instance's listener until ctx ends, emitting one event per matched delivery that isn't a duplicate of an
 // operator-declared `dedup:` signature (a source with no `dedup:` has no
 // dedup gate: every matched delivery fires). Routing to
 // triggers is entirely generic (the daemon matches `on: <instance>.<source>`
@@ -235,31 +270,56 @@ func (w *Webhook) StartSource(ctx context.Context, req plugin.StartSourceRequest
 		return fmt.Errorf("webhook[%s]: no sources", req.Instance)
 	}
 	listen, _ := req.Config["listen"].(string)
-	smeeURL, _ := req.Config["smee_url"].(string)
+	if listen == "" {
+		return fmt.Errorf("webhook[%s]: no listen address", req.Instance)
+	}
 	seen := inbound.NewDeliveryDedup(2048)
-
-	if listen != "" {
-		for _, name := range names {
-			sc := srcs[name]
+	for _, name := range names {
+		sc := srcs[name]
+		if sc.Path != "" {
 			inbound.Register(ctx, listen, sc.Path, w.handler(ctx, req.Instance, name, sc, seen, emit), discardLog)
 		}
 	}
-	if smeeURL != "" {
-		go func() {
-			_ = inbound.Smee(ctx, smeeURL, discardLog, func(f inbound.Frame) {
-				for _, name := range names {
-					sc := srcs[name]
-					sig := ""
-					if sc.Sign.Header != "" {
-						sig = f.Header(sc.Sign.Header)
-					}
-					w.deliver(req.Instance, name, sc, sig, f.Body, true, seen, emit, f.Header(deliveryIDHeader))
-				}
-			})
-		}()
+	if expose, _ := req.Config["expose"].(string); expose != "" {
+		inbound.Register(ctx, listen, relayPath(req.Config), w.relayHandler(ctx, req.Instance, names, srcs, seen, emit), discardLog)
 	}
 	<-ctx.Done()
 	return nil
+}
+
+func normPath(p string) string {
+	if !strings.HasPrefix(p, "/") {
+		return "/" + p
+	}
+	return p
+}
+
+// relayHandler serves the relay path: one delivery, offered to every source.
+// Each source's own `match` decides whether it is for that source, and each
+// source's own `sign:` is checked per source — a relay may re-serialize the
+// body (smee.io does), so a signature that does not verify drops the delivery
+// for that source alone instead of refusing the request.
+func (w *Webhook) relayHandler(ctx context.Context, instance string, names []string, srcs map[string]sourceCfg, seen *inbound.DeliveryDedup, emit func(any) error) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(rw, r.Body, maxBody))
+		if err != nil {
+			http.Error(rw, "read body", http.StatusBadRequest)
+			return
+		}
+		for _, name := range names {
+			sc := srcs[name]
+			sig := ""
+			if sc.Sign.Header != "" {
+				sig = r.Header.Get(sc.Sign.Header)
+			}
+			w.deliver(instance, name, sc, sig, body, true, seen, emit, r.Header.Get(deliveryIDHeader))
+		}
+		rw.WriteHeader(http.StatusAccepted)
+	}
 }
 
 func discardLog(string, ...any) {}
@@ -287,16 +347,16 @@ func (w *Webhook) handler(ctx context.Context, instance, name string, sc sourceC
 // deliver maps one raw body through a source's templates and emits ONE event,
 // unless the match predicate rejects it or an operator-declared `dedup:`
 // signature says this is a duplicate. A source with no `dedup:` has no dedup
-// gate at all: it fires on every delivery. smeeSig/viaSmee: a smee relay
-// re-serializes the body, so its signature check is best-effort and applied
-// here rather than at a listener boundary.
+// gate at all: it fires on every delivery. relaySig/viaRelay: a delivery on
+// the relay path is checked per source here rather than at a listener
+// boundary, since a relay may re-serialize the body.
 //
 // deliveryID is the sender's own delivery id (deliveryIDHeader), when it set
 // one — used only to help compute a distinct synthetic TARGET key for a
 // source that declares no `dedup:` template (below); it is never a dedup
 // gate.
-func (w *Webhook) deliver(instance, name string, sc sourceCfg, smeeSig string, body []byte, viaSmee bool, seen *inbound.DeliveryDedup, emit func(any) error, deliveryID string) {
-	if viaSmee && sc.Sign.Secret != "" && !inbound.VerifyHMAC(sc.Sign.Secret, body, smeeSig, sc.Sign.Scheme) {
+func (w *Webhook) deliver(instance, name string, sc sourceCfg, relaySig string, body []byte, viaRelay bool, seen *inbound.DeliveryDedup, emit func(any) error, deliveryID string) {
+	if viaRelay && sc.Sign.Secret != "" && !inbound.VerifyHMAC(sc.Sign.Secret, body, relaySig, sc.Sign.Scheme) {
 		return
 	}
 	parsed := parseBody(body)
@@ -329,7 +389,7 @@ func (w *Webhook) deliver(instance, name string, sc sourceCfg, smeeSig string, b
 	if sc.Dedup == "" {
 		synthKey = deliveryFallbackKey(deliveryID, body)
 	} else if !seen.Add(name + "\x00" + synthKey) {
-		return // duplicate delivery (smee redelivery / retried POST) of an operator-declared dedup: signature
+		return // duplicate delivery (a relay's redelivery / retried POST) of an operator-declared dedup: signature
 	}
 
 	title := render(sc.Title, data)

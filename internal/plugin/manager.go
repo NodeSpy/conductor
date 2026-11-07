@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 
@@ -77,6 +78,9 @@ type Manager struct {
 	// nil entries are never stored; an absent map for a key simply means no
 	// isolated instance of it has been asked for yet.
 	instClients map[string]map[string]*Client
+	// exposeTo are the listener addresses the engine hands each configured
+	// connector instance to expose (SetExposeTargets), keyed by instance.
+	exposeTo map[string][]string
 	// forbidden records an isolated instance ForbidIsolated has refused — the
 	// single_process capability discovered only at a live describe, after
 	// the operator already configured isolate: true on it (loadConnectorPlugins).
@@ -435,9 +439,81 @@ func (m *Manager) InstanceClient(key, instance string) (*Client, error) {
 	m.mu.RLock()
 	spec = m.specs[key]
 	m.mu.RUnlock()
-	c := NewClient(InstanceSpec(spec, instance), m.deps)
+	is := InstanceSpec(spec, instance)
+	is.ExposeTo = sortedUniq(m.exposeTo[instance])
+	c := NewClient(is, m.deps)
 	m.instClients[key][instance] = c
 	return c, nil
+}
+
+// SetExposeTargets records, per configured connector instance, the local
+// listener addresses the engine will hand it to expose (a listener whose
+// `expose:` names it). They are what a jailed exposure plugin declaring
+// Capabilities.ExposeLocal may connect to: each process gets its own
+// instances' (a shared process, the union over its non-isolated ones). Call
+// it once every type is registered and before anything is exposed: a
+// process already running with a different set is restarted on its next
+// call, which is harmless only while it holds no exposure open.
+func (m *Manager) SetExposeTargets(targets map[string][]string) {
+	m.instMu.Lock()
+	defer m.instMu.Unlock()
+	m.exposeTo = targets
+	m.mu.Lock()
+	for key, spec := range m.specs {
+		if spec.Kind != KindConnector {
+			continue
+		}
+		var union []string
+		for name, g := range spec.Instances {
+			if !g.Isolate {
+				union = append(union, targets[name]...)
+			}
+		}
+		spec.ExposeTo = sortedUniq(union)
+		m.specs[key] = spec
+		if c, ok := m.clients[key]; ok {
+			c.setExposeTo(spec.ExposeTo)
+		}
+		for name, c := range m.instClients[key] {
+			c.setExposeTo(sortedUniq(targets[name]))
+		}
+	}
+	m.mu.Unlock()
+}
+
+// ExposeRefusals names each connector instance whose process would not be
+// granted the listener(s) it is wired to expose (instance → why), as
+// SetExposeTargets last set them: what its launch would refuse and log,
+// known from the recorded install manifest without launching anything. A
+// migration's pre-write check refuses a rewrite that wires one.
+func (m *Manager) ExposeRefusals() map[string]string {
+	m.instMu.Lock()
+	targets := m.exposeTo
+	m.instMu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := map[string]string{}
+	for _, spec := range m.specs {
+		if spec.Kind != KindConnector {
+			continue
+		}
+		for name, g := range spec.Instances {
+			s := spec
+			if g.Isolate {
+				s = InstanceSpec(spec, name)
+			}
+			if why := exposeRefusal(s, sortedUniq(targets[name])); why != "" {
+				out[name] = why
+			}
+		}
+	}
+	return out
+}
+
+func sortedUniq(in []string) []string {
+	out := uniqStrings(in)
+	slices.Sort(out)
+	return out
 }
 
 // ForbidIsolated refuses isolate: true for one configured connector instance

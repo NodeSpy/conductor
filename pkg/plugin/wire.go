@@ -326,6 +326,15 @@ type Capabilities struct {
 	// environment (a CLI's token variable). Its environment is otherwise
 	// scrubbed; these names, and only these, are passed through.
 	Env []string `json:"env,omitempty"`
+	// ExposeLocal declares that the plugin, an exposure (an `exposes` verb),
+	// connects to the local address conductor hands that verb: a relay that
+	// replays each delivery to it, a tunnel that forwards to it. Conductor is
+	// the one wiring an exposure to a listener (a listener's `expose:`), so it
+	// grants exactly those addresses — a loopback listener a configured
+	// connector exposes through one of this plugin's instances — and never
+	// one of conductor's own ports. Nothing is granted when no listener names
+	// the plugin's instances.
+	ExposeLocal bool `json:"expose_local,omitempty"`
 	// SingleProcess declares that every configured instance of this
 	// connector MUST share ONE process: the plugin keeps state a box-global
 	// RESOURCE forces every instance to agree on (a lease refcount on a

@@ -129,6 +129,9 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		}
 	}()
 
+	// Every listener's exposure is wired now, before anything is exposed:
+	// what a jailed exposure plugin may connect to on this machine.
+	pluginMgr.SetExposeTargets(connector.ExposeTargets(cfg, logf))
 	deps := connector.Deps{Secrets: sec, Log: logf, Config: cfg, Blobs: blobs, Audit: auditSink, Auth: authReg}
 	reg, err := connector.Build(cfg, deps)
 	if err != nil {
