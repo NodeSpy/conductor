@@ -94,6 +94,16 @@ func isBundledWebhook(body map[string]any) bool {
 	return use == "webhook" || (use == "" && typ == "webhook")
 }
 
+// connectorUse is a connector body's `use:` value (its legacy `type:` when
+// it has none).
+func connectorUse(body map[string]any) string {
+	if use, _ := body["use"].(string); use != "" {
+		return use
+	}
+	typ, _ := body["type"].(string)
+	return typ
+}
+
 // migrateSmee rewrites one connector: base is the map holding smee_url and
 // the listener fields (`webhook` for the github shape, the connector body for
 // the bundled webhook connector).
@@ -152,6 +162,10 @@ func (t *tree) migrateSmee(s connectorSite, all map[string]map[string]any, base 
 	if github {
 		t.grants = append(t.grants, Grant{Use: smeeUse, ExposeLocal: true, Egress: []string{"config:channel"}})
 	}
+	if t.from == nil {
+		t.from = map[string][]string{}
+	}
+	t.from[smeeUse] = dedupe(append(t.from[smeeUse], connectorUse(docMap(s.body.doc, s.bodyPath))))
 	t.ruleChanged = true
 	t.touched = append(t.touched, s.name, smeeName)
 	l := listen

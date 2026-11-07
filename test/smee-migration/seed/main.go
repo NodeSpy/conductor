@@ -4,7 +4,10 @@
 // (../run.sh) uses it so a daemon resolves `use: github` / `use: smee` to the
 // builds under test, offline.
 //
-// Usage: seed -state <state-dir> <name>=<binary> [<name>=<binary> …]
+// Usage: seed -state <state-dir> [-pre-jail] <name>=<binary> [<name>=<binary> …]
+//
+// -pre-jail records them as installed before the plugin jail, as a box that
+// upgraded from a conductor without it has them.
 //
 //	seed -source-url <name>   the git URL an official plugin is fetched from
 //	                          (the harness points it at a local fake release repo)
@@ -30,6 +33,7 @@ import (
 
 func main() {
 	state := flag.String("state", "", "the daemon's state dir")
+	preJail := flag.Bool("pre-jail", false, "record them as installed before the plugin jail")
 	sourceURL := flag.String("source-url", "", "print the git URL the official plugin of this name is fetched from")
 	flag.Parse()
 	if *sourceURL != "" {
@@ -67,10 +71,17 @@ func main() {
 		if err != nil {
 			fail("%s: describe: %v", name, err)
 		}
+		u, err := config.ParseUse(config.UseKindConnector, name)
+		if err != nil {
+			fail("%s: %v", name, err)
+		}
 		st.Put(plugin.Installed{
-			Key: "connectors/" + name, Kind: config.PluginKindConnector, Name: name, Use: name,
+			Key: u.InstallKey(), Kind: config.PluginKindConnector, Name: name, Use: name, Source: u.Source(),
 			Resolved: "connectors/" + name + "/v0.0.0-harness", Sha256: sum, Path: bin,
-			Manifest: plugin.ManifestFromDecl(decl),
+			Manifest: plugin.ManifestFromDecl(decl), PreJail: *preJail,
+			// Recorded in full, as a jail-era install does (schema 0 would
+			// read as a legacy record, adopted without consent).
+			ManifestSchema: 1,
 		})
 		fmt.Printf("seeded %s -> %s (egress %v)\n", name, bin, decl.Capabilities.Egress)
 	}

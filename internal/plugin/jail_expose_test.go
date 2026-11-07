@@ -225,6 +225,17 @@ func TestExposeRefusals(t *testing.T) {
 					t.Errorf("%s: %q, want it to say %q", name, got[name], want)
 				}
 			}
+			// A build from before the jail, on a host that cannot jail
+			// plugins, runs unjailed as it did: nothing to refuse.
+			restore := SetHostJailForTests(HostJail{Reason: "root"})
+			defer restore()
+			st.MarkPreJail(ref.Use.InstallKey())
+			pre := NewManager(map[string]config.PluginRef{ref.Key(): ref}, "", st, Deps{})
+			defer pre.Close()
+			pre.SetExposeTargets(map[string][]string{"a": {"127.0.0.1:8787"}, "b": {"192.0.2.7:8788"}})
+			if got := pre.ExposeRefusals(); len(got) != 0 {
+				t.Errorf("as before the jail: refusals = %q", got)
+			}
 		})
 	}
 }

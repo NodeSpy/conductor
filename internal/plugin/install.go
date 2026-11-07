@@ -697,6 +697,33 @@ func (s *InstallState) markPreJail() {
 	}
 }
 
+// MarkPreJail marks every installed build and held update of key as
+// installed before the plugin jail (Installed.PreJail), reporting whether
+// anything changed: what a config migration does when it moves what an
+// older plugin, or conductor itself, did into this one.
+func (s *InstallState) MarkPreJail(key string) bool {
+	changed := false
+	for i := range s.Plugins {
+		if s.Plugins[i].Key == key && !s.Plugins[i].PreJail {
+			s.Plugins[i].PreJail, changed = true, true
+		}
+	}
+	for i := range s.Pending {
+		if s.Pending[i].Key == key && !s.Pending[i].PreJail {
+			s.Pending[i].PreJail, changed = true, true
+		}
+	}
+	return changed
+}
+
+// RunsAsBefore reports whether a launch of rec runs unjailed as before the
+// plugin jail (this host cannot jail plugins, and rec predates the jail),
+// where trust: full is not set.
+func RunsAsBefore(rec Installed) bool {
+	_, before := runsAsBefore(Spec{PreJail: rec.PreJail})
+	return before
+}
+
 // preJail reports whether a plugin (key from source) was installed before
 // the plugin jail: a new build of it carries the mark too.
 func (s *InstallState) preJail(key, source string) bool {

@@ -101,6 +101,17 @@ needs the same two keys. Outside a migration, an update of an older smee to
 v1.2.0 is held until `conductor plugin approve`, because it asks for
 `expose_local`.
 
+**On a host that cannot jail plugins** (root, a default Docker container,
+user namespaces blocked; see [[Plugins]], "From a conductor that did not jail
+plugins"), the plugins installed before the jail keep running unjailed, and
+a plugin installed since is refused. The smee plugin the migration installs
+is not refused for being new there. It takes over what the github plugin or
+conductor itself did before the jail, so it inherits that treatment
+(`pre_jail: true` in `installed.yaml`, logged as `config migrate: smee takes
+over from <connector's use>, which ran before the plugin jail …`). It runs
+unjailed, with the same warning as the github plugin. It needs no
+`expose_local` there, so the whole config migrates even with an older smee.
+
 **Rolling back** to an older conductor after the rewrite: github deliveries
 keep flowing (the older conductor already runs the smee connector and the
 listener's exposure), but the `webhook` connector's relay path is new — put

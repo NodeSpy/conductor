@@ -91,10 +91,12 @@ func cmdConfigMigrate(args []string) error {
 // gets a plugin it wires what that wiring needs (ensureMigrationGrant).
 var migrateOptions = func(mainPath string, cli bool) configmigrate.Options {
 	return configmigrate.Options{
-		Check:  checkConfigConnectors,
-		Ensure: func(uses []string) error { return ensureMigrationPlugins(mainPath, uses, cli) },
-		Grant:  func(g configmigrate.Grant) ([]string, error) { return ensureMigrationGrant(mainPath, g, cli) },
-		Logf:   logf,
+		Check: checkConfigConnectors,
+		Ensure: func(uses []string, from map[string][]string) error {
+			return ensureMigrationPlugins(mainPath, uses, from, cli)
+		},
+		Grant: func(g configmigrate.Grant) ([]string, error) { return ensureMigrationGrant(mainPath, g, cli) },
+		Logf:  logf,
 	}
 }
 
@@ -201,14 +203,25 @@ var migrationPluginTimeout = 2 * time.Minute
 // ensureMigrationPlugins installs every plugin uses names that is not
 // installed yet (the boot gap-fill's own pass, with the migration's uses
 // added to the config's references), and fails unless each ends installed.
-func ensureMigrationPlugins(mainPath string, uses []string, cli bool) error {
+//
+// A plugin taking over what was done before the plugin jail — by a plugin
+// installed before it, or by conductor itself (a builtin connector) —
+// inherits that pre-jail mark (Installed.PreJail), installed or not yet:
+// on a host that cannot jail plugins it then runs unjailed as what it
+// replaces did, rather than being refused as a plugin installed since. The
+// migration upgrades a working setup; it does not start a new one.
+func ensureMigrationPlugins(mainPath string, uses []string, from map[string][]string, cli bool) error {
 	loadEnvFile(filepath.Join(filepath.Dir(mainPath), "conductor.env"))
 	cfg, err := config.Load(mainPath)
 	if err != nil {
 		return fmt.Errorf("load the config to install plugins: %w", err)
 	}
 	cfg = withMigrationUses(cfg, uses)
-	res, err := boundedReconcile(cfg, plugin.Options{GapsOnly: true, Log: logf}, cli)
+	inherit, err := inheritPreJail(from, cli)
+	if err != nil {
+		return err
+	}
+	res, err := boundedReconcile(cfg, plugin.Options{GapsOnly: true, Log: logf, PreJail: inherit}, cli)
 	if err != nil {
 		return err
 	}
@@ -231,6 +244,58 @@ func ensureMigrationPlugins(mainPath string, uses []string, cli bool) error {
 		}
 	}
 	return nil
+}
+
+// inheritPreJail marks each plugin from names (by `use:`) that takes over
+// from a pre-jail plugin or a builtin as pre-jail: its installed builds now,
+// and the install keys returned for a fresh install's record.
+func inheritPreJail(from map[string][]string, cli bool) (map[string]bool, error) {
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	inherit := map[string]bool{}
+	for use, olds := range from {
+		pu, err := config.ParseUse(config.UseKindConnector, use)
+		if err != nil {
+			continue
+		}
+		for _, old := range olds {
+			po, err := config.ParseUse(config.UseKindConnector, old)
+			if err != nil {
+				continue
+			}
+			if rec, ok := state.Get(po.InstallKey()); po.IsBuiltin() || (ok && rec.PreJail) {
+				inherit[pu.InstallKey()] = true
+				if !plugin.HostJailStatus().OK {
+					logf("config migrate: %s takes over from %s, which ran before the plugin jail: on this host, which cannot jail plugins, it runs unjailed as that did", pu.Name, old)
+				}
+				break
+			}
+		}
+	}
+	if len(inherit) == 0 {
+		return nil, nil
+	}
+	var lock *plugin.FileLock
+	var err error
+	if cli {
+		lock, err = plugin.LockInstallStateCLI(plugin.InstallDir(), pluginLockCLITimeout, lockWaitNotice)
+	} else {
+		lock, err = plugin.LockInstallState(plugin.InstallDir())
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Unlock()
+	state = plugin.LoadInstallState(plugin.InstallDir())
+	changed := false
+	for key := range inherit {
+		changed = state.MarkPreJail(key) || changed
+	}
+	if changed {
+		if err := state.Save(); err != nil {
+			return nil, err
+		}
+	}
+	return inherit, nil
 }
 
 // boundedReconcile is a migration's plugin pass, bounded by
@@ -274,7 +339,8 @@ func ensureMigrationGrant(mainPath string, g configmigrate.Grant, cli bool) ([]s
 	if !ok {
 		return nil, fmt.Errorf("%s is not installed", pu.Name)
 	}
-	if declares(cur.Manifest) {
+	if declares(cur.Manifest) || plugin.RunsAsBefore(cur) {
+		// (Unjailed as before the jail, it reaches the listener as it did.)
 		return nil, nil
 	}
 	loadEnvFile(filepath.Join(filepath.Dir(mainPath), "conductor.env"))

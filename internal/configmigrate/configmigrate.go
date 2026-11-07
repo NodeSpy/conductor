@@ -59,9 +59,10 @@ type Options struct {
 	// validation (tests of the rewrite alone).
 	Check func(mainPath string) (failing map[string]string, err error)
 	// Ensure installs plugins the rewrite starts referencing (their `use:`
-	// values), before anything is written. An error holds the whole
-	// migration back: nothing is written. nil skips it.
-	Ensure func(uses []string) error
+	// values), before anything is written. from maps each to the `use:`
+	// values of the connectors whose work it takes over (Plan.From). An
+	// error holds the whole migration back: nothing is written. nil skips it.
+	Ensure func(uses []string, from map[string][]string) error
 	// Grant makes the installed plugin g.Use one granted g: installing or
 	// updating it to a release that declares it, and recording the approval
 	// of a held update that asks for exactly what g names (the migration is
@@ -112,6 +113,11 @@ type Plan struct {
 	Uses  []string
 	// Grants are what the plugins the rewrite wires must be granted.
 	Grants []Grant
+	// From maps each plugin the rewrite wires to the `use:` values of the
+	// connectors whose work it takes over (smee → the github or webhook
+	// connectors whose smee_url it now relays): on a host that cannot jail
+	// plugins it inherits their treatment, so an upgrade breaks nothing.
+	From map[string][]string
 	// Touched are the connectors the rewrite changed or added.
 	Touched []string
 	// backupSuffix names this run's backups (the rules that fired).
@@ -209,7 +215,7 @@ func compute(mainPath string, opt Options, held map[string]string) (*Plan, error
 		}
 		t.ruleChanged = false
 	}
-	plan := &Plan{Main: mainPath, Files: t.files, Notes: t.notes, Uses: dedupe(t.uses), Grants: mergeGrants(t.grants), Touched: dedupe(t.touched)}
+	plan := &Plan{Main: mainPath, Files: t.files, Notes: t.notes, Uses: dedupe(t.uses), Grants: mergeGrants(t.grants), From: t.from, Touched: dedupe(t.touched)}
 	plan.backupSuffix = ".pre-" + strings.Join(fired, "+")
 	return plan, nil
 }
@@ -232,7 +238,7 @@ func Apply(mainPath string, opt Options) (*Result, error) {
 		return res, nil
 	}
 	if opt.Ensure != nil && len(plan.Uses) > 0 {
-		if err := opt.Ensure(plan.Uses); err != nil {
+		if err := opt.Ensure(plan.Uses, plan.From); err != nil {
 			return res, fmt.Errorf("the rewritten config needs %s, which could not be installed (%v) — nothing was rewritten; the next boot tries again", strings.Join(plan.Uses, ", "), err)
 		}
 	}
@@ -410,6 +416,7 @@ type tree struct {
 	notes       []string
 	uses        []string
 	grants      []Grant
+	from        map[string][]string
 	held        map[string]string // plugin use → why it can't be granted (compute)
 	touched     []string
 	portFree    func(int) bool
