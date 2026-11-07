@@ -25,6 +25,9 @@ import type { RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
 import { EmptyState } from '../components/EmptyState'
 import { Fyi } from '../components/Fyi'
+import { FactsLine } from '../components/Facts'
+import { Icon } from '../components/Icon'
+import { TIME_RANGES, rangeMinutes } from '../lib/filter'
 import { humanDuration, ago, plural } from '../lib/format'
 
 const HOUR = 3_600_000
@@ -92,7 +95,7 @@ export function Overview(): JSX.Element {
             </div>
             <div class="dl-col-side">
               <RunningNow running={running} />
-              <Last12 runs={last12} />
+              <RunsCard runs={all} />
               <Fyi items={fyi.value} />
             </div>
           </div>
@@ -151,9 +154,16 @@ function NeedsYou({ need }: { need: NeedItem[] }): JSX.Element {
       <header class="dl-ch">
         <h2>Needs you</h2>
         {need.length ? <span class="count hot">{need.length}</span> : null}
+        <span class="dl-sp" />
+        <a class="dl-link" href="#/attention">See all</a>
       </header>
       {need.length === 0 ? (
-        <EmptyState small title="Nothing needs you" testid="needs-you-empty">
+        <EmptyState
+          small
+          title="Nothing needs you"
+          testid="needs-you-empty"
+          action={{ label: "Choose how you're told", href: '#/preferences' }}
+        >
           <p>When a bot asks for approval or a run fails, it shows up here.</p>
         </EmptyState>
       ) : (
@@ -167,6 +177,7 @@ function NeedsYou({ need }: { need: NeedItem[] }): JSX.Element {
                 <span class="dl-nt">
                   <b>{n.title}</b>
                   {n.why ? <span class="dl-why">{n.why}</span> : null}
+                  <FactsLine facts={n.facts || []} />
                 </span>
                 <span class="dl-age">{n.at ? ago(n.at) : ''}</span>
                 <span class="dl-na">
@@ -224,46 +235,61 @@ function RunningNow({ running }: { running: RunSummary[] }): JSX.Element | null 
   )
 }
 
-// Last12 is the runs-per-hour strip: every hour a bar, passed soft green with a
-// full-green cap, running blue, failed red on top, the rest neutral. Static on
-// Home (no hover, no tap, no per-bar readout — the owner's call).
-function Last12({ runs: rs }: { runs: RunSummary[] }): JSX.Element {
+// RunsCard: the prototype's "Runs" card (overview.js last12()) — a title with
+// its own time-range dropdown, a "N of M runs went fine" stat line, the
+// per-bucket bars (passed soft green with a full-green cap, running blue,
+// failed red on top, the rest neutral) and a failed-runs footnote. Static on
+// Home (no hover, no tap, no per-bar readout — the owner's call, unlike
+// Activity's interactive strip).
+function RunsCard({ runs: all }: { runs: RunSummary[] }): JSX.Element {
+  const [since, setSince] = useState('12h')
+  const span = rangeMinutes(since) || 43200
   const now = Date.now()
+  const rs = all.filter((r) => since === 'all' || now - startedMs(r) <= span * 60000)
+
+  const n = span <= 60 ? 12 : span <= 1440 ? Math.round(span / 60) : span <= 10080 ? 7 : 30
+  const bucketMin = span / n
   const buckets: { ok: number; fail: number; run: number; other: number }[] = []
-  for (let i = 11; i >= 0; i--) {
-    const end = now - i * HOUR
-    const startB = end - HOUR
-    const inB = rs.filter((r) => {
-      const t = startedMs(r)
-      return t >= startB && t < end
-    })
-    buckets.push({
-      ok: inB.filter((r) => r.status === 'ok').length,
-      fail: inB.filter((r) => r.status === 'failed').length,
-      run: inB.filter((r) => r.status === 'running').length,
-      other: inB.filter((r) => r.status === 'retried').length,
-    })
-  }
+  for (let i = 0; i < n; i++) buckets.push({ ok: 0, fail: 0, run: 0, other: 0 })
+  rs.forEach((r) => {
+    const ago2 = (now - startedMs(r)) / 60000
+    if (ago2 > span) return
+    const i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(ago2 / bucketMin)))
+    const b = buckets[i]
+    if (r.status === 'ok') b.ok++
+    else if (r.status === 'failed') b.fail++
+    else if (r.status === 'running') b.run++
+    else b.other++
+  })
+
   const max = Math.max(1, ...buckets.map((b) => b.ok + b.fail + b.run + b.other))
   const total = rs.length
+  const ok = rs.filter((r) => r.status === 'ok').length
   const counts = {
-    ok: rs.filter((r) => r.status === 'ok').length,
+    ok,
     fail: rs.filter((r) => r.status === 'failed').length,
     run: rs.filter((r) => r.status === 'running').length,
+    other: rs.filter((r) => r.status === 'retried').length,
   }
+  const fails = rs.filter((r) => r.status === 'failed').sort((a, b) => startedMs(b) - startedMs(a))
   const w = 300
   const h = 96
   const base = h - 17
-  const n = buckets.length
   const bw = w / n - 6
+  const label = TIME_RANGES.find(([k]) => k === since)?.[1] || since
+  const agoLabel = span <= 1440 ? `${Math.round(span / 60) || 1} h ago` : span === 1440 ? '24 h ago' : `${Math.round(span / 1440)} days ago`
 
   return (
-    <section class="dl-card" aria-label="Last 12 hours">
+    <section class="dl-card ov-runs" aria-label="Runs">
       <header class="dl-ch">
-        <h2>Last 12 hours</h2>
-        <span class="dl-sub">{plural(total, 'run')}</span>
+        <h2>Runs</h2>
+        <TimeRangeMenu since={since} onChange={setSince} />
       </header>
-      <svg class="dl-hours" viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`${plural(total, 'run')} over the last 12 hours`}>
+      <div class="dl-stat-line">
+        <b>{ok}</b>
+        <span>of {total} runs went fine</span>
+      </div>
+      <svg class="dl-hours" viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`${plural(total, 'run')}, ${label.toLowerCase()}: ${plural(fails.length, 'failure')}`}>
         {buckets.map((b, i) => {
           const x = i * (w / n) + 3
           let y = base
@@ -292,7 +318,7 @@ function Last12({ runs: rs }: { runs: RunSummary[] }): JSX.Element {
         })}
         <line x1={0} x2={w} y1={base} y2={base} class="hb-axis" />
         <text x={0} y={h - 3} class="hb-ax">
-          12 h ago
+          {agoLabel}
         </text>
         <text x={w} y={h - 3} class="hb-ax" text-anchor="end">
           now
@@ -312,9 +338,68 @@ function Last12({ runs: rs }: { runs: RunSummary[] }): JSX.Element {
             <i class="hb-sw hb-sw-run" aria-hidden="true" />
             Running <b>{counts.run}</b>
           </li>
+          <li>
+            <i class="hb-sw hb-sw-other" aria-hidden="true" />
+            Waiting or parked <b>{counts.other}</b>
+          </li>
         </ul>
       </div>
+      {fails.length ? (
+        <p class="dl-foot-note">
+          <StatusMark s="fail" mkOnly />
+          <span>
+            {plural(fails.length, 'failed', 'failed')}:{' '}
+            {fails.slice(0, 4).map((r, i) => (
+              <>
+                {i ? ', ' : ''}
+                <a class="dl-link" href={'#/runs/' + r.id}>
+                  {r.workflow} at {ago(r.finished || r.started)}
+                </a>
+              </>
+            ))}
+            {fails.length > 4 ? ` and ${fails.length - 4} more` : ''}
+          </span>
+        </p>
+      ) : (
+        <p class="dl-foot-note">
+          <StatusMark s="ok" mkOnly />
+          Nothing failed.
+        </p>
+      )}
     </section>
+  )
+}
+
+// TimeRangeMenu: a small dropdown in a card header (the prototype's
+// UI.filterBar({noSearch:true}) used just for its time field) — a details/
+// summary chip, not the full search-and-filter bar FilterBar.tsx renders.
+function TimeRangeMenu({ since, onChange }: { since: string; onChange: (v: string) => void }): JSX.Element {
+  const label = TIME_RANGES.find(([k]) => k === since)?.[1] || since
+  // Wrapped in a bare .fb so the shared filter CSS's phone override
+  // (`.dl-ch > .fb .fb-time { display: inline-flex }`) keeps this control
+  // visible on a phone — the generic `.fb-btn { display: none }` phone rule
+  // only backs off for a `.fb-time` that is a descendant of a `.fb` sitting
+  // directly in a `.dl-ch` header, same as the full FilterBar's own time button.
+  return (
+    <span class="fb" style={{ display: 'inline-flex', margin: 0 }}>
+      <details class="fb-time-menu" style={{ position: 'relative', display: 'inline-block' }}>
+        <summary class="fb-btn fb-time on" aria-haspopup="listbox" title="Time range">
+          <Icon name="clock" />
+          <span class="fb-v">{label}</span>
+          <Icon name="chevd" />
+        </summary>
+        <div class="fb-menu" role="listbox" aria-label="Time range" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 2 }}>
+          <ul class="fb-list" role="presentation">
+            {TIME_RANGES.filter(([k]) => k !== 'all').map(([k, l]) => (
+              <li key={k} role="option" aria-selected={since === k} class={'fb-opt' + (since === k ? ' sel' : '')} onClick={(e) => { onChange(k); (e.currentTarget.closest('details') as HTMLDetailsElement).open = false }}>
+                <Icon name="check" />
+                <span class="fb-ol"><b>{l}</b></span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </details>
+    </span>
   )
 }
 
@@ -335,10 +420,18 @@ function GetStarted({
   decided: boolean
 }): JSX.Element | null {
   const [hidden, setHidden] = useState(() => localStorage.getItem('gs-hidden') === '1')
+  const [seenSafety, setSeenSafety] = useState(() => localStorage.getItem('seen-safety') === '1')
+  useEffect(() => {
+    if (seenSafety) return
+    const onStorage = () => setSeenSafety(localStorage.getItem('seen-safety') === '1')
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [seenSafety])
   if (hidden) return null
   const steps = [
     { id: 'connect', done: connected > 0, title: 'Connect a service', text: 'GitHub, Slack, PagerDuty… so bots can see events and act.', href: '#/connections', go: 'Plugins' },
     { id: 'watch', done: bots.length > 0, title: 'Make a bot', text: 'A bot is an AI teammate with memory; tell it what to watch and where to tell you.', href: '#/bots', go: botsConfigured ? 'Bots' : 'New bot' },
+    { id: 'safety', done: seenSafety, title: 'Check what your bots can do', text: 'In plain words: what each bot does on its own, what it asks you first, and what it never does.', href: '#/system/safety', go: 'Safety' },
     { id: 'approve', done: decided, title: 'Try an approval', text: 'Risky actions wait for you. Decide one, and it runs once, exactly as approved.', href: '#/attention', go: 'Needs you' },
   ]
   const left = steps.filter((s) => !s.done)
