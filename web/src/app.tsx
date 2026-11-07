@@ -55,11 +55,22 @@ export function App(): JSX.Element {
   if (!st.signed_in && (st.required || path === '/signin')) return <Signin />
 
   return (
-    <Shell>
-      {st.transport === 'http' ? <PlainHTTPNotice /> : null}
-      <Authed />
+    <>
+      {/* Outside Shell, not inside it: Shell wraps its children in
+          `.page.dl-page` for the current route, and a page's own button
+          sizing (`.dl-page .btn`) would otherwise win over the dialog's own
+          44px tap target (auth.css's `.dialog-foot .btn`) by tie-break of
+          equal specificity plus source order — exactly what made Cancel a
+          36px target (authmethods.spec.ts). The dialog is a fixed overlay
+          that positions itself over everything regardless of where it sits
+          in the tree, so it loses nothing by sitting beside Shell instead of
+          inside it. */}
+      <Shell>
+        {st.transport === 'http' ? <PlainHTTPNotice /> : null}
+        <Authed />
+      </Shell>
       <StepupDialog />
-    </Shell>
+    </>
   )
 }
 

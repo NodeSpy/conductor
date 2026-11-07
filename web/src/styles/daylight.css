@@ -746,7 +746,16 @@ td.run .fx { margin-top: 4px; }
  * Stacked cards and panels keep --gap-stack between them: 20px, 14px on a phone. */
 :root, [data-density] { --control-h: 36px; --control-h-touch: 44px; --title-page: 34px; --title-page-phone: 27.2px; --title-head-phone: 24px; }
 [data-density="compact"] { --control-h: 32px; }
-@media (max-width: 720px) { html[data-density] { --control-h: 44px; --gap-stack: 14px; } }
+/* Fix (not a prototype departure): the prototype's own selector here was
+ * `html[data-density]`, which only matches once something sets a data-density
+ * attribute — neither the prototype's JS nor this port ever does (there is no
+ * density picker yet), so this phone override silently never fired and every
+ * control's line 750 height/min-height below stayed comfortable-sized (36px)
+ * on a phone, under Apple's 44px minimum (caught by authmethods.spec.ts's
+ * StepupDialog Cancel button, but it affects every button, input and select
+ * on a phone). Scoped to `html` so it applies unconditionally, as the comment
+ * above ("44px on a phone") already says it should. */
+@media (max-width: 720px) { html { --control-h: 44px; --gap-stack: 14px; } }
 html .btn, html .btn.sm, html .dl-page .btn, html .dl-page .btn.sm { height: var(--control-h); min-height: var(--control-h); }
 html .icon-btn, html .icon-btn.sm:is(.btn ~ *, :has(~ .btn)) { width: var(--control-h); height: var(--control-h); min-height: var(--control-h); }
 html .input:not(textarea), html .select { height: var(--control-h); min-height: var(--control-h); box-sizing: border-box; }
