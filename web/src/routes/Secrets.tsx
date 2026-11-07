@@ -6,13 +6,13 @@
 // and <vault>/<key> references only; Settings values are plain config scalars
 // and are editable here, same as System → Config.
 import type { JSX } from 'preact'
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from '../api/client'
 import type { SecretsResponse, SystemResponse } from '../api/types'
 import { humanError } from '../api/errors'
-import { EmptyState } from '../components/EmptyState'
 import { FilterBar } from '../components/FilterBar'
 import { Icon } from '../components/Icon'
+import { Menu, type MenuItem } from '../components/Menu'
 import { TabsBar } from '../components/TabsBar'
 import { ReviewPanel } from '../components/ReviewPanel'
 import { busy, cfgError, loadConfig, stage, staged } from '../configStore'
@@ -33,30 +33,20 @@ export function Secrets(): JSX.Element {
   }, [])
 
   const tab: Tab = seg(1) === 'settings' ? 'settings' : 'secrets'
-  const nothing = data !== null && !data.vaults?.length && !data.secrets?.length && !Object.keys(sys?.settings ?? {}).length
 
   return (
     <div class="col m-page">
       <div class="dl-phead">
         <div>
           <h1>Secrets</h1>
-          <p class="lede-2">
-            Secrets are the tokens and passwords your workflows and bots use without ever seeing them; settings are the
-            named values they share in plain sight. Both live by name in the config and are referred to, never shown,
-            here.
-          </p>
         </div>
       </div>
 
       {err ? <div class="banner err" role="alert">Couldn't load secrets: {err}</div> : null}
       <ReviewPanel stagedCount={staged.value.length} />
 
-      {nothing ? (
-        <EmptyState testid="secrets-empty" art={<KeyGlyph />} title="No secrets yet" action={{ label: 'Open the config', href: '#/system/config', testid: 'secrets-empty-config' }}>
-          <p>Add a vault under <code>vaults:</code> in the config (the built-in <code>conductor</code> type needs nothing else), then store values with <code>conductor vault &lt;name&gt; add &lt;key&gt;</code>.</p>
-        </EmptyState>
-      ) : data === null ? (
-        <p class="muted">Loading…</p>
+      {data === null ? (
+        <p class="dl-sub">Loading…</p>
       ) : (
         <>
           <TabsBar
@@ -69,11 +59,36 @@ export function Secrets(): JSX.Element {
           />
 
           {tab === 'secrets' ? (
+            <p class="sec-explain">
+              <Icon name="lock" />
+              <span>
+                <b>A secret</b> is write-only: stored in a vault and never shown again, not here and not to an agent. A
+                field uses it as <code class="mono">{'{{ vault "house" "gh-app-key" }}'}</code>.
+              </span>
+            </p>
+          ) : (
+            <p class="sec-explain">
+              <Icon name="settings" />
+              <span>
+                <b>A setting</b> is a plain value your config reads, visible to anyone who can read the config:{' '}
+                <code class="mono">{'${settings.org}'}</code>, or an environment variable as{' '}
+                <code class="mono">{'${env.NAME}'}</code>.
+              </span>
+            </p>
+          )}
+
+          {tab === 'secrets' ? (
             <>
               {data.secrets?.length ? (
                 <FilterBar q={q} onQueryChange={setQ} placeholder="Find a secret" ariaLabel="Find a secret" menus={[]} />
               ) : null}
-              <section class="dl-card" aria-label="Secret references">
+              <div class="section-title sec-title">
+                <h2>In your vaults</h2>
+                <button class="btn sm secondary vaults-add" type="button" disabled title="Writing a new secret value isn't wired to a daemon endpoint yet: use conductor vault on the box">
+                  <Icon name="plus" />Add a secret
+                </button>
+              </div>
+              <div class="panel">
                 <Rows
                   rows={(data.secrets ?? []).filter((s) => !q || `${s.name} ${s.ref}`.toLowerCase().includes(q.toLowerCase())).map((s) => ({
                     name: s.name,
@@ -81,34 +96,35 @@ export function Secrets(): JSX.Element {
                     usedBy: s.used_by ?? [],
                   }))}
                   empty="Nothing refers to a secret yet. A step or connector that needs one names it as <vault>/<key>."
+                  secretMenu
                 />
-              </section>
+                <div class="panel-foot small muted">
+                  <Icon name="eyeoff" /> No screen, API route or log line returns a secret's value; values are redacted from logs and the audit trail.
+                </div>
+              </div>
 
-              <section class="dl-card" aria-label="Vaults">
-                <div class="panel-head" style="display:flex;align-items:center;justify-content:space-between;padding:14px 22px 0">
-                  <h2 style="margin:0;font-size:15px">Vaults</h2>
+              <section class="vaults" id="vaults">
+                <div class="section-title">
+                  <h2>Where they're stored</h2>
+                  <span class="caps">{data.vaults?.length ?? 0} vault{(data.vaults?.length ?? 0) === 1 ? '' : 's'}</span>
                   {!addVault ? (
-                    <button class="btn ghost sm" type="button" data-testid="add-vault" onClick={() => setAddVault(true)}>
+                    <button class="btn sm secondary vaults-add" type="button" data-testid="add-vault" onClick={() => setAddVault(true)}>
                       <Icon name="plus" />Add a vault
                     </button>
                   ) : null}
                 </div>
                 {addVault ? <AddVault onDone={() => setAddVault(false)} /> : null}
                 {data.vaults?.length ? (
-                  <ul class="dl-list dl-conns">
+                  <div class="grid g4">
                     {data.vaults.map((v) => (
-                      <li class="dl-conn" key={v.name}>
-                        <span class="dl-ng"><Icon name="secrets" /></span>
-                        <span class="dl-nt">
-                          <b>{v.name}</b>
-                          <span class="dl-why mono">{v.type || 'conductor (built in)'}</span>
-                        </span>
-                        <span class="dl-na" />
-                      </li>
+                      <div class="panel stat vault-card" id={`vault-${v.name}`} key={v.name}>
+                        <span class="k"><Icon name="secrets" /> {v.name} <span class="dl-sub" style="text-transform:none;letter-spacing:0;margin-left:auto">{v.type || 'conductor'}</span></span>
+                        <span class="d">conductor can store values here.</span>
+                      </div>
                     ))}
-                  </ul>
+                  </div>
                 ) : (
-                  <p class="dl-sub" style="padding:8px 22px 18px">No vaults. Add one under <span class="mono">vaults:</span> in the config.</p>
+                  <p class="dl-sub" data-testid="vaults-empty">No vaults. Add one above, or under <span class="mono">vaults:</span> in the config.</p>
                 )}
               </section>
             </>
@@ -163,13 +179,20 @@ export function Secrets(): JSX.Element {
 }
 
 // Rows renders the shared Secrets/Settings row: a readable name with its exact
-// reference (with Copy) or an editable value, and who uses it.
+// reference (with Copy) or an editable value, and who uses it. A secret row
+// (secretMenu) also carries the prototype's ⋯ menu (Change the value / Copy
+// the reference / Delete); changing or deleting a secret value has no backend
+// endpoint yet (GET /api/v1/secrets is read-only — see the report), so those
+// two stay disabled with the real reason, same convention as every other
+// disabled control in the dashboard (UI.off).
 function Rows({
   rows,
   empty,
+  secretMenu,
 }: {
   rows: { name: string; ref?: string; value?: string; usedBy?: string[]; path?: string[] }[]
   empty: string
+  secretMenu?: boolean
 }): JSX.Element {
   if (!rows.length) return <p class="dl-sub" style="padding:8px 22px 18px">{empty}</p>
   return (
@@ -198,10 +221,29 @@ function Rows({
               </span>
             ) : null}
           </span>
-          <span class="dl-na" />
+          <span class="dl-na">{secretMenu && r.ref ? <SecretMenu name={r.name} reference={r.ref} /> : null}</span>
         </li>
       ))}
     </ul>
+  )
+}
+
+function SecretMenu({ name, reference }: { name: string; reference: string }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const noBackend = 'Not wired to a daemon endpoint yet: use conductor vault on the box'
+  const items: MenuItem[] = [
+    { label: 'Change the value', icon: 'edit', disabled: noBackend },
+    { label: 'Copy the reference', icon: 'copy', onClick: () => void navigator.clipboard?.writeText(reference) },
+    { label: 'Delete', icon: 'trash', disabled: noBackend },
+  ]
+  return (
+    <>
+      <button ref={btnRef} type="button" class="icon-btn" aria-label={`More for ${name}`} onClick={() => setOpen((o) => !o)}>
+        <Icon name="more" />
+      </button>
+      {open ? <Menu anchor={btnRef.current} items={items} onClose={() => setOpen(false)} label={`More for ${name}`} /> : null}
+    </>
   )
 }
 
@@ -238,16 +280,5 @@ function AddVault({ onDone }: { onDone: () => void }): JSX.Element {
         <button class="btn primary" type="button" disabled={busy.value} data-testid="stage-vault" onClick={() => void add()}>Add vault</button>
       </div>
     </div>
-  )
-}
-
-// KeyGlyph is a key: the empty state's picture.
-function KeyGlyph(): JSX.Element {
-  return (
-    <svg width="64" height="40" viewBox="0 0 64 40" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="16" cy="20" r="10" />
-      <circle cx="16" cy="20" r="3" opacity="0.55" />
-      <path d="M26 20h32M50 20v8M42 20v6" />
-    </svg>
   )
 }
