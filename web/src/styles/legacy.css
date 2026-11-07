@@ -1,0 +1,236 @@
+/* Compatibility shims for screens not yet ported to Daylight (phases 2-7).
+ * These classes existed only in the old web CSS (before the prototype CSS
+ * replaced app.css/screens.css in phase 1) and have no prototype equivalent;
+ * phases 2-7 still use them until each screen is ported to the dl- vocabulary.
+ * `.banner` is still used everywhere (a load error); the rest were extracted
+ * from the pre-phase-1 app.css/screens.css, trimmed to the classes still
+ * referenced by an unported route or component. `.tiles`/`.tile`/`.split`
+ * (the old Overview's stat tiles and two-up layout) are gone: nothing uses
+ * them any more. Delete a rule here once every screen using it is ported. */
+.banner {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-card);
+  font-size: var(--type-body-s-size);
+}
+.banner.err {
+  background: var(--color-status-danger-bg);
+  border: var(--border-width) solid var(--color-status-danger-border);
+  color: var(--color-status-danger-fg);
+}
+
+/* ---- page layout and the runs table/chart (RunDetail, Activity internals) ---- */
+.col { display: flex;
+  flex-direction: column;
+  gap: var(--gap-stack);
+  min-width: 0; }
+.panel-title { font-size: var(--type-h2-size);
+  margin: 0;
+  color: var(--color-text-primary); }
+.panel-sub,
+.panel-say { font-size: var(--type-body-s-size);
+  color: var(--color-text-secondary); }
+.panel-say { margin: 0 0 var(--space-3); }
+.rows { list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column; }
+.row-main { flex: 1;
+  min-width: 0; }
+.row-title { font-weight: 500;
+  color: var(--color-text-primary); }
+.row-meta { font-size: var(--type-code-s-size);
+  color: var(--color-text-tertiary);
+  margin-top: 2px; }
+.row-age { font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  white-space: nowrap; }
+.more-btn { all: unset;
+  cursor: pointer;
+  margin-top: var(--space-3);
+  color: var(--color-text-accent);
+  font-size: var(--type-body-s-size); }
+.chart { display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 120px;
+  padding: var(--space-2) 0; }
+.bar-stack { width: 100%;
+  display: flex;
+  flex-direction: column-reverse;
+  height: 100%;
+  justify-content: flex-start;
+  border-radius: 3px;
+  overflow: hidden; }
+.seg.passed { background: var(--color-status-success-chart);
+  border-top: 2px solid var(--run-strip-cap); }
+.seg.running { background: var(--run-strip-running); }
+.seg.other { background: var(--run-strip-waiting); }
+.legend { display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary); }
+.legend-item { display: inline-flex;
+  align-items: center;
+  gap: var(--space-2); }
+.swatch { width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  display: inline-block; }
+.swatch.passed { background: var(--color-status-success-chart); }
+.swatch.running { background: var(--run-strip-running); }
+.swatch.failed { background: var(--run-strip-failed); }
+.cell-title { font-weight: 500;
+  color: var(--color-text-primary); }
+
+/* ---- config-edit screens (Config, Secrets, Packs, Connections, System,
+   Logs & audit) and the shared review panel ---- */
+.screen-title { font-size: var(--type-title-m-size, 1.4rem);
+  margin: 0 0 var(--space-2); }
+.fields { display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-3); }
+.field-label { font-size: var(--type-caption-size);
+  color: var(--color-text-secondary); }
+.cfg-label { display: flex;
+  flex-direction: column;
+  gap: 2px; }
+.cfg-name { font-size: var(--type-label-size);
+  color: var(--color-text-primary); }
+.field-path { display: block;
+  font-size: var(--type-code-s-size);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere; }
+.cfg-head { display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2); }
+.cfg-head-sub { display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--type-code-s-size);
+  color: var(--color-text-tertiary); }
+.cfg-head-sub .tag { white-space: nowrap; }
+.field-long { field-sizing: content;
+  resize: none;
+  overflow: hidden;
+  min-height: 2.2em;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-family: var(--font-family-mono); }
+.wrap-any { overflow-wrap: anywhere; }
+.field-input { padding: 6px var(--space-2);
+  border-radius: var(--radius-control);
+  border: var(--border-width) solid var(--color-border-control);
+  background: var(--color-bg-field);
+  color: var(--color-text-primary);
+  font-size: var(--type-body-s-size); }
+.field-input:focus { outline: 2px solid var(--color-accent-subtle);
+  border-color: var(--color-accent-default); }
+.field-check { width: 18px;
+  height: 18px;
+  align-self: start;
+  accent-color: var(--color-accent-default); }
+.field-ro { color: var(--color-text-tertiary);
+  font-size: var(--type-body-s-size);
+  word-break: break-word; }
+.field.is-staged .field-input,
+.field.is-staged .field-check { border-color: var(--color-accent-default); }
+.field-badge { position: absolute;
+  top: 0;
+  right: 0;
+  font-size: 10px;
+  color: var(--color-text-on-accent);
+  background: var(--color-accent-default);
+  border-radius: var(--radius-chip);
+  padding: 0 var(--space-1); }
+.review .panel-head,
+.staged-panel .panel-head { justify-content: space-between; }
+.row-actions { display: inline-flex;
+  gap: var(--space-2); }
+.staged-list,
+.effects,
+.widen-list { list-style: none;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1); }
+.staged-list li,
+.effects li { display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  justify-content: space-between; }
+.effects li.widens .eff-text { color: var(--color-status-warning-fg); }
+.staged-val { flex: 1;
+  color: var(--color-text-primary); }
+.staged-tree { margin: 0;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-sm); }
+.widening { display: block; }
+.dl .gutter { width: 1.5ch;
+  flex: none;
+  color: var(--color-text-tertiary); }
+.validate-row { display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3) var(--space-3); }
+.validate-msg.ok { color: var(--color-status-success-fg); }
+.validate-msg.error { color: var(--color-status-danger-fg); }
+.confirm { display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3); }
+.audit-list { list-style: none;
+  margin: 0;
+  padding: 0; }
+.audit-row { display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--color-border-subtle);
+  font-size: var(--type-body-s-size); }
+.audit-ts { color: var(--color-text-tertiary);
+  flex: none; }
+.audit-event { font-weight: 600;
+  flex: none; }
+.audit-rest { color: var(--color-text-secondary);
+  overflow-x: auto; }
+.add-host { display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-3) 0; }
+.add-host .banner,
+.add-host p,
+.add-host .row-actions { grid-column: 1 / -1; }
+.bot-summary { display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0 auto var(--space-3);
+  text-align: left;
+  max-width: 34rem; }
+.bot-summary dt { color: var(--color-text-tertiary); }
+.bot-summary dd { margin: 0;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere; }
+
+@media (max-width: 640px) {
+  .fields { grid-template-columns: 1fr; }
+  .tabs { overflow-x: auto; }
+  .validate-row,
+  .confirm,
+  .row-actions { flex-wrap: wrap; }
+  .audit-row { flex-direction: column;
+    gap: var(--space-1); }
+  .staged-list li,
+  .effects li { flex-wrap: wrap; }
+  /* a structured value takes its own full-width line under its path */
+  .staged-list li .staged-tree { order: 1;
+    flex-basis: 100%; }
+}

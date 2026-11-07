@@ -19,18 +19,18 @@ test('a run detail renders its step tree and recorded step output', async ({ pag
   await page.goto(`/#/runs/${run.id}`)
 
   // Header mirrors the run; breadcrumb back to Activity.
-  await expect(page.locator('.screen-title')).toContainText(run.workflow)
-  await expect(page.locator('.crumbs a', { hasText: 'Activity' })).toBeVisible()
+  await expect(page.locator('.dl-phead h1')).toContainText(run.workflow)
+  await expect(page.locator('.dl-crumbs a', { hasText: 'Activity' })).toBeVisible()
 
   // The step tree has one button per recorded step, keyed by step id.
-  await expect(page.locator('.step-tree .step-tl')).toHaveCount(detail.steps.length)
+  await expect(page.locator('.dl-tree .tl')).toHaveCount(detail.steps.length)
   for (const s of detail.steps) {
-    await expect(page.locator('.step-tree .step-tl b', { hasText: s.id }).first()).toBeVisible()
+    await expect(page.locator('.dl-tree .tl b', { hasText: s.id }).first()).toBeVisible()
   }
 
   // The Details panel mirrors the run id and links to its workflow.
-  await expect(page.locator('.facts div', { hasText: 'Run' }).locator('dd')).toContainText(run.id)
-  await expect(page.locator('.facts a', { hasText: run.workflow })).toBeVisible()
+  await expect(page.locator('.dl-facts dt', { hasText: 'Run' }).locator('xpath=following-sibling::dd[1]')).toContainText(run.id)
+  await expect(page.locator('.dl-facts a', { hasText: run.workflow })).toBeVisible()
 
   expect(collector.consoleErrors, collector.consoleErrors.join(' | ')).toEqual([])
 })
@@ -38,10 +38,10 @@ test('a run detail renders its step tree and recorded step output', async ({ pag
 test('a finished run offers a retry-from-step form', async ({ page }) => {
   const run = await firstRun(page.request)
   await page.goto(`/#/runs/${run.id}`)
-  await expect(page.locator('.step-tree')).toBeVisible()
+  await expect(page.locator('.dl-tree')).toBeVisible()
 
   // The Retry control opens the from-step form (no live run → Retry, not Stop).
-  await page.locator('.run-actions .btn', { hasText: 'Retry' }).click()
+  await page.locator('.dl-actions .btn', { hasText: 'Retry' }).click()
   await expect(page.locator('.retry-form')).toBeVisible()
   await expect(page.locator('.retry-form select')).toBeVisible()
 })
@@ -73,7 +73,7 @@ test('a forced retry asks to confirm, showing the steps it runs again', async ({
     })
   })
   await page.goto(`/#/runs/${run.id}`)
-  await page.locator('.run-actions .btn', { hasText: 'Retry' }).click()
+  await page.locator('.dl-actions .btn', { hasText: 'Retry' }).click()
   await page.locator('.retry-form .field-check input').check()
   await page.locator('.retry-form .btn.primary', { hasText: 'Retry' }).click()
   const dialog = page.getByTestId('stepup-dialog')

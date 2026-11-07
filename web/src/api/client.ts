@@ -4,15 +4,16 @@
 import type {
   StatusResponse,
   RunsResponse,
-  ErrorResponse,
   ConfigResponse,
   ConfigChange,
   ReviewResponse,
   AppliedResponse,
   HistoryItem,
+  HistoryDiffResponse,
   StageRequest,
   SecretsResponse,
   PacksResponse,
+  PackManifestResponse,
   PluginsResponse,
   ConnectionsResponse,
   SystemResponse,
@@ -28,6 +29,7 @@ import type {
 } from './types'
 import { authState, stepUp } from './auth'
 import { parseSafe, readJSON } from './safe'
+import { readResponse } from './errors'
 
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
@@ -84,18 +86,9 @@ async function retryRun(id: string, req: RetryRequest): Promise<ActionResponse> 
   return handle<ActionResponse>(res)
 }
 
-async function handle<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`
-    try {
-      const body = (await readJSON(res)) as ErrorResponse
-      if (body?.error?.message) message = body.error.message
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new Error(message)
-  }
-  return (await readJSON(res)) as T
+// handle reads an answer as data, or throws an ApiError worded for a person.
+function handle<T>(res: Response): Promise<T> {
+  return readResponse<T>(res)
 }
 
 export interface RunsQuery {
@@ -124,8 +117,10 @@ export const api = {
   apply: (token: string, stepupToken?: string) =>
     sendJSON<AppliedResponse>('POST', '/api/v1/config/apply', { token, ...(stepupToken ? { stepup_token: stepupToken } : {}) }),
   history: () => getJSON<{ history: HistoryItem[] }>('/api/v1/config/history'),
+  historyDiff: (id: string) => getJSON<HistoryDiffResponse>('/api/v1/config/history/' + encodeURIComponent(id) + '/diff'),
   restoreReview: (id: string) => sendJSON<ReviewResponse>('POST', '/api/v1/config/restore/review', { id }),
-  restore: (id: string, token: string) => sendJSON<AppliedResponse>('POST', '/api/v1/config/restore', { id, token }),
+  restore: (id: string, token: string, stepupToken?: string) =>
+    sendJSON<AppliedResponse>('POST', '/api/v1/config/restore', { id, token, ...(stepupToken ? { stepup_token: stepupToken } : {}) }),
 
   // --- run detail + controls ---
   run: (id: string) => getJSON<RunDetailResponse>('/api/v1/runs/' + encodeURIComponent(id)),
@@ -147,6 +142,7 @@ export const api = {
   // --- section reads ---
   secrets: () => getJSON<SecretsResponse>('/api/v1/secrets'),
   packs: () => getJSON<PacksResponse>('/api/v1/packs'),
+  packManifest: (name: string) => getJSON<PackManifestResponse>('/api/v1/packs/' + encodeURIComponent(name) + '/manifest'),
   plugins: () => getJSON<PluginsResponse>('/api/v1/plugins'),
   connections: () => getJSON<ConnectionsResponse>('/api/v1/connections'),
   system: () => getJSON<SystemResponse>('/api/v1/system'),

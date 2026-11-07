@@ -392,6 +392,11 @@ func appliedDTO(a configedit.Applied) api.AppliedResponse {
 	return api.AppliedResponse{SHA: a.SHA, BackupID: a.BackupID, ReloadError: a.ReloadError, Unchanged: a.Unchanged}
 }
 
+// historyPathCap bounds how many changed leaf paths one history row reports,
+// so a bulk restore or a big staged batch stays "readable at a glance" rather
+// than listing hundreds of paths.
+const historyPathCap = 12
+
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if !s.editAvailable(w) {
 		return
@@ -401,11 +406,77 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "history", err.Error(), "")
 		return
 	}
+	byBackup := auditByBackup(s.deps.AuditPath)
 	out := make([]api.HistoryItem, 0, len(hist))
 	for _, h := range hist {
-		out = append(out, api.HistoryItem{ID: h.ID, TS: h.TS, SHA: h.SHA, Bytes: h.Bytes})
+		item := api.HistoryItem{ID: h.ID, TS: h.TS, SHA: h.SHA, Bytes: h.Bytes}
+		if a, ok := byBackup[h.ID]; ok {
+			item.Operator, _ = a["operator"].(string)
+			switch a["event"] {
+			case "dashboard.config.apply":
+				item.Event = "apply"
+			case "dashboard.config.restore":
+				item.Event = "restore"
+				item.RestoredFrom, _ = a["from"].(string)
+			}
+		}
+		if ac, err := s.edit.AppliedChange(h.ID); err == nil {
+			item.Added, item.Removed = ac.Diff.Added, ac.Diff.Removed
+			paths := make([]string, 0, len(ac.Leaves))
+			for _, l := range ac.Leaves {
+				paths = append(paths, l.Path)
+			}
+			sort.Strings(paths)
+			if len(paths) > historyPathCap {
+				paths = paths[:historyPathCap]
+			}
+			item.Changed = paths
+		}
+		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"history": out})
+}
+
+// auditByBackup indexes the audit log's config apply/restore entries by the
+// backup id each one produced, so the history view can say who made a change
+// and when without keeping a second record of it.
+func auditByBackup(path string) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	for _, e := range readAuditTail(path, 0) {
+		ev, _ := e["event"].(string)
+		if ev != "dashboard.config.apply" && ev != "dashboard.config.restore" {
+			continue
+		}
+		backup, _ := e["backup"].(string)
+		if backup == "" {
+			continue
+		}
+		if _, exists := out[backup]; !exists {
+			out[backup] = e
+		}
+	}
+	return out
+}
+
+// handleHistoryDiff renders one history entry's own diff: what that apply
+// changed, line by line (unlike restore/review, which diffs a backup against
+// the CURRENT config — right for confirming a restore, wrong for reading what
+// an older entry did when later entries have since changed the same lines).
+func (s *Server) handleHistoryDiff(w http.ResponseWriter, r *http.Request) {
+	if !s.editAvailable(w) {
+		return
+	}
+	id := r.PathValue("id")
+	ac, err := s.edit.AppliedChange(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "history_diff", err.Error(), "")
+		return
+	}
+	resp := api.HistoryDiffResponse{Changed: ac.Diff.Changed, Added: ac.Diff.Added, Removed: ac.Diff.Removed, Unified: ac.Diff.Unified}
+	for _, l := range ac.Diff.Lines {
+		resp.Lines = append(resp.Lines, api.DiffLineDTO{Op: string(l.Op), Text: l.Text, OldLine: l.OldLine, NewLine: l.NewLine})
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleRestoreReview(w http.ResponseWriter, r *http.Request) {

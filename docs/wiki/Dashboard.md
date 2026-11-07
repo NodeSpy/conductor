@@ -375,6 +375,12 @@ is refused with 403, and a write on a bot, team or ticket needs you to be one of
 its operators (`bots.<name>.operators`, `teams.<name>.operators`; none listed:
 every operator). Reads are open to every operator, as on the socket.
 
+With no bots on the daemon yet, the list reads (`/bots`, `/teams`,
+`/conversations`, `/tickets`, `/proposals`) answer their empty list with
+`"configured": false`, and `/bots` adds `"editable"`: whether this dashboard can
+stage the first bot. Every other bot path answers a JSON 404 (`no_bots`). Any
+`/api/` path the dashboard doesn't serve is a JSON 404 too, never the SPA page.
+
 ## Building the UI
 
 The SPA lives in `web/` (Preact + Vite). It builds into

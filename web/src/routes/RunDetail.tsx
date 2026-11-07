@@ -1,6 +1,17 @@
-// One run in full (design §4.3): the step tree, each step's recorded
-// inputs/outputs/diff, and the retry/stop controls. Live runs refresh on each
-// SSE event; everything shown comes from the signed history record.
+// One run in full (design §4.3, prototype js/screens/runs.js UI.route('runs/:id')):
+// the step tree, each step's recorded inputs/outputs/diff, and the retry/stop
+// controls. Live runs refresh on each SSE event; everything shown comes from
+// the signed history record.
+//
+// Markup and classes are the prototype's (css/daylight.css .dl-tree, .dl-code,
+// .dl-facts, .dl-crumbs): the plain title, the lead sentence, the status mark,
+// the step tree, the selected step's card, and Details.
+//
+// Left out (prototype-only, no backend yet): Compare with an earlier run, the
+// ⋯ menu (Dismiss from Needs you already has its own control elsewhere), Open
+// in paseo (no live paseo session concept here) and the live log tail (a
+// running step says it's working; its recorded output appears once it's
+// stepped past, same as the prototype's non-live tabs).
 import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from '../api/client'
@@ -9,6 +20,7 @@ import { liveTick, statusMark } from '../state'
 import { StatusMark } from '../components/StatusMark'
 import { humanDuration, ago } from '../lib/format'
 import { go } from '../router'
+import { humanError } from '../api/errors'
 
 type Tab = 'outputs' | 'inputs' | 'diff' | 'error'
 
@@ -29,7 +41,7 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
         setData(d)
         setErr('')
       })
-      .catch((e) => setErr(String(e instanceof Error ? e.message : e)))
+      .catch((e) => setErr(humanError(e)))
 
   useEffect(() => {
     void reload()
@@ -44,17 +56,17 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
 
   if (err) {
     return (
-      <div class="col">
-        <Crumbs id={id} />
-        <div class="empty">
-          <h2>There is no run {id}</h2>
-          <p class="muted">It may be older than the 14 days runs are kept.</p>
+      <div>
+        <Crumbs id={id} notFound />
+        <div class="empty" role="status">
+          <h2 class="serif">There is no run {id}</h2>
+          <p>It may be older than the 14 days runs are kept.</p>
           <a class="btn" href="#/activity">Back to Activity</a>
         </div>
       </div>
     )
   }
-  if (!data) return <div class="col"><p class="muted">Loading…</p></div>
+  if (!data) return <p class="dl-sub">Loading…</p>
 
   const r = data.run
   const m = statusMark(r.status)
@@ -73,28 +85,28 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
       setNotice(ack.message)
       await reload()
     } catch (e) {
-      setNotice(String(e instanceof Error ? e.message : e))
+      setNotice(humanError(e))
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div class="col" data-run-detail={id}>
+    <div data-run-detail={id}>
       <Crumbs id={id} title={runTitle(r)} />
-      <div class="run-head">
+      <div class="dl-phead">
         <div>
-          <h1 class="screen-title serif">{runTitle(r)}</h1>
-          <p class="run-lead">{lead(data)}</p>
+          <h1 class="dl-h1-long">{runTitle(r)}</h1>
+          <p class="dl-lead">{lead(data)}</p>
         </div>
         <StatusMark s={m.s} word={m.word} lg />
       </div>
 
       {notice ? <div class="banner info">{notice}</div> : null}
 
-      <div class="run-actions">
+      <div class="dl-actions">
         {data.live ? (
-          <button class="btn" type="button" disabled={busy} onClick={stop}>
+          <button class="btn secondary" type="button" disabled={busy} onClick={stop}>
             Stop run…
           </button>
         ) : (
@@ -118,33 +130,49 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
         />
       ) : null}
 
-      <div class="run-cols">
-        <div class="run-main">
-          <section class="panel">
-            <div class="panel-head">
-              <span class="panel-title serif">What happened</span>
-              <span class="panel-sub">
+      <div class="dl-cols">
+        <div class="dl-col-main">
+          <section class="dl-card">
+            <header class="dl-ch">
+              <h2>What happened</h2>
+              <span class="dl-sub">
                 {steps.length} step{steps.length === 1 ? '' : 's'} · {data.live ? 'running' : humanDuration(r.duration_ms)}
               </span>
-            </div>
+            </header>
             <StepTree steps={steps} sel={current?.id || ''} onSel={(sid) => { setSel(sid); setTab('outputs') }} />
           </section>
 
           {current ? <StepCard step={current} tab={tab} setTab={setTab} /> : null}
         </div>
 
-        <div class="run-side">
-          <section class="panel">
-            <div class="panel-head"><span class="panel-title serif">Details</span></div>
-            <dl class="facts">
-              <div><dt>Started</dt><dd>{ago(r.started)}</dd></div>
-              <div><dt>{data.live ? 'Running for' : 'Took'}</dt><dd>{humanDuration(r.duration_ms)}</dd></div>
-              <div><dt>Triggered by</dt><dd>{data.trigger || '—'}</dd></div>
-              <div><dt>Workflow</dt><dd><a class="link" href={'#/workflows/' + encodeURIComponent(r.workflow)}>{r.workflow}</a></dd></div>
-              {r.retry_of ? <div><dt>Retry of</dt><dd><a class="link mono" href={'#/runs/' + r.retry_of}>{r.retry_of}</a></dd></div> : null}
-              <div><dt>Run</dt><dd class="mono">{r.id}</dd></div>
-              <div><dt>Record</dt><dd>{data.live ? 'signed when it finishes' : 'signed; the signature checks out'}</dd></div>
+        <div class="dl-col-side">
+          <section class="dl-card">
+            <header class="dl-ch"><h2>Details</h2></header>
+            <dl class="dl-facts">
+              <dt>Started</dt>
+              <dd>{ago(r.started)}</dd>
+              <dt>{data.live ? 'Running for' : 'Took'}</dt>
+              <dd>{humanDuration(r.duration_ms)}</dd>
+              <dt>Triggered by</dt>
+              <dd>{data.trigger || '—'}</dd>
+              <dt>Workflow</dt>
+              <dd><a class="dl-link" href={'#/workflows/' + encodeURIComponent(r.workflow)}>{r.workflow}</a></dd>
+              {r.retry_of ? (
+                <>
+                  <dt>Retry of</dt>
+                  <dd><a class="mono dl-link" href={'#/runs/' + r.retry_of}>{r.retry_of}</a></dd>
+                </>
+              ) : null}
             </dl>
+            <details class="dl-audit-d">
+              <summary>For audit: the run id and its signed record</summary>
+              <dl class="dl-facts">
+                <dt>Run</dt>
+                <dd class="mono">{r.id}</dd>
+                <dt>Record</dt>
+                <dd>{data.live ? 'signed when it finishes' : 'signed; the signature checks out'}</dd>
+              </dl>
+            </details>
           </section>
         </div>
       </div>
@@ -152,12 +180,12 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
   )
 }
 
-function Crumbs({ id, title }: { id: string; title?: string }): JSX.Element {
+function Crumbs({ id, title, notFound }: { id: string; title?: string; notFound?: boolean }): JSX.Element {
   return (
-    <nav class="crumbs" aria-label="Breadcrumb">
+    <nav class="dl-crumbs run-nav" aria-label="Where you are">
       <a href="#/activity">Activity</a>
-      <span class="crumbs-sep">/</span>
-      <span>{title || id}</span>
+      <span class="sep" aria-hidden="true">›</span>
+      <span class="cur" aria-current="page">{notFound ? "A run that isn't here" : title || id}</span>
     </nav>
   )
 }
@@ -188,25 +216,25 @@ const STEP_MARK: Record<string, string> = {
 
 function StepTree({ steps, sel, onSel }: { steps: RunStep[]; sel: string; onSel: (id: string) => void }): JSX.Element {
   return (
-    <ol class="step-tree">
+    <ol class="dl-tree">
       {steps.map((s, i) => {
         const disabled = s.status === 'idle'
         return (
           <li class={s.status === 'failed' ? 'failed' : s.status === 'idle' ? 'skipped' : ''}>
             <button
               type="button"
-              class={'step-tl' + (s.id === sel ? ' on' : '')}
+              class={'tl' + (s.id === sel ? ' on' : '')}
               disabled={disabled}
               aria-pressed={s.id === sel}
               onClick={() => !disabled && onSel(s.id)}
             >
-              <span class="step-n">{i + 1}</span>
+              <span class="tn">{i + 1}</span>
               <StatusMark s={STEP_MARK[s.status] || 'skip'} mkOnly />
-              <span class="step-tt">
+              <span class="tt">
                 <b>{s.id}</b>
-                <span class="step-say">{stepSentence(s)}</span>
+                <span>{stepSentence(s)}</span>
               </span>
-              <span class="step-kind">{s.kind}</span>
+              <span />
               <em>{s.duration_ms ? humanDuration(s.duration_ms) : ''}</em>
             </button>
           </li>
@@ -245,24 +273,24 @@ function StepCard({ step, tab, setTab }: { step: RunStep; tab: Tab; setTab: (t: 
   const active = tabs.includes(tab) ? tab : tabs[0]
   const isLive = step.status === 'running'
   return (
-    <section class="panel step-card">
-      <div class="panel-head">
-        <span class="panel-title serif">{step.id}</span>
+    <section class="dl-card">
+      <header class="dl-ch">
+        <h2>{step.id}</h2>
         <StatusMark s={STEP_MARK[step.status] || 'skip'} word={step.status === 'idle' ? 'Not reached' : undefined} />
-        <span class="panel-grow" />
+        <span class="dl-sp" />
         {!isLive && tabs.length > 1 ? (
-          <div class="seg-tabs" role="tablist">
+          <div class="seg" role="group">
             {tabs.map((t) => (
-              <button type="button" role="tab" aria-selected={t === active} class={'seg-tab' + (t === active ? ' on' : '')} onClick={() => setTab(t)}>
+              <button type="button" aria-pressed={t === active} class={t === active ? 'on' : ''} onClick={() => setTab(t)}>
                 {t[0].toUpperCase() + t.slice(1)}
               </button>
             ))}
           </div>
         ) : null}
-      </div>
+      </header>
       <StepBody step={step} active={active} isLive={isLive} />
       {(step.runtime || step.model) && !isLive ? (
-        <p class="muted small step-env">
+        <p class="dl-sub step-env">
           {step.runtime ? `runtime ${step.runtime}` : ''}
           {step.runtime && step.model ? ' · ' : ''}
           {step.model ? `model ${step.model}` : ''}
@@ -275,27 +303,27 @@ function StepCard({ step, tab, setTab }: { step: RunStep; tab: Tab; setTab: (t: 
 
 function StepBody({ step, active, isLive }: { step: RunStep; active: Tab; isLive: boolean }): JSX.Element {
   if (isLive) {
-    return <p class="muted">This step is running now. Its recorded output will appear when it finishes; the page refreshes live.</p>
+    return <p class="dl-sub">This step is running now. Its recorded output will appear when it finishes; the page refreshes live.</p>
   }
   if (step.status === 'idle') {
-    return <p class="muted">Not reached: the run stopped before this step, so it never ran.</p>
+    return <p class="dl-sub">Not reached: the run stopped before this step, so it never ran.</p>
   }
   switch (active) {
     case 'inputs':
-      return <pre class="code">{step.inputs_yaml}</pre>
+      return <pre class="dl-code">{step.inputs_yaml}</pre>
     case 'diff':
       return <DiffView diff={step.diff || ''} />
     case 'error':
-      return <pre class="code err-code">{step.error}</pre>
+      return <pre class="dl-code err-code">{step.error}</pre>
     case 'outputs':
     default:
-      return step.outputs_yaml ? <pre class="code">{step.outputs_yaml}</pre> : <p class="muted">No recorded output for this step.</p>
+      return step.outputs_yaml ? <pre class="dl-code">{step.outputs_yaml}</pre> : <p class="dl-sub">No recorded output for this step.</p>
   }
 }
 
 function DiffView({ diff }: { diff: string }): JSX.Element {
   return (
-    <pre class="code diff">
+    <pre class="dl-code diff">
       {diff.split('\n').map((l) => {
         const cls = l.startsWith('+') && !l.startsWith('+++') ? 'add' : l.startsWith('-') && !l.startsWith('---') ? 'del' : l.startsWith('@@') ? 'hunk' : ''
         return <span class={'diff-l ' + cls}>{l + '\n'}</span>
@@ -330,16 +358,16 @@ function RetryForm({
       const ack = await api.retryRun(id, { from: from === '$start' ? '' : from, force })
       onDone(ack.message, ack.run_id || '')
     } catch (e) {
-      setErr(String(e instanceof Error ? e.message : e))
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <section class="panel retry-form">
-      <div class="panel-head"><span class="panel-title serif">Retry from a step</span></div>
-      <p class="muted">Re-runs the pinned trigger. Steps before the chosen one are replayed from their recorded outputs; nothing they did is repeated.</p>
+    <section class="dl-card retry-form">
+      <header class="dl-ch"><h2>Retry from a step</h2></header>
+      <p class="dl-sub">Re-runs the pinned trigger. Steps before the chosen one are replayed from their recorded outputs; nothing they did is repeated.</p>
       <label class="field">
         <span class="field-label">Start again from</span>
         <select value={from} onChange={(e) => setFrom((e.target as HTMLSelectElement).value)}>
@@ -353,11 +381,11 @@ function RetryForm({
         <input type="checkbox" checked={force} onChange={(e) => setForce((e.target as HTMLInputElement).checked)} />
         <span>
           Run the earlier steps again too{' '}
-          <span class="muted">(otherwise they're replayed from what they recorded; running them again repeats what they did, so with sign-in on it asks you to confirm)</span>
+          <span class="dl-sub">(otherwise they're replayed from what they recorded; running them again repeats what they did, so with sign-in on it asks you to confirm)</span>
         </span>
       </label>
       {err ? <div class="banner err">{err}</div> : null}
-      <div class="run-actions">
+      <div class="dl-actions tight">
         <button class="btn primary" type="button" disabled={busy} onClick={submit}>Retry</button>
         <button class="btn" type="button" onClick={onCancel}>Cancel</button>
       </div>

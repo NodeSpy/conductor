@@ -78,7 +78,7 @@ func (dashboardBrowser) Control(ctx context.Context, cmd, operator string, reqJS
 		if len(reqJSON) > 0 {
 			_ = json.Unmarshal(reqJSON, &lq)
 		}
-		lq.Via = "dashboard"
+		lq.DryRun, lq.Via = dryRun, "dashboard"
 		req.Login = &lq
 		resp := browserLoginControl(cfg, m, req)
 		return resp.Data, changeOf(resp.Data), errOf(resp)

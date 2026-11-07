@@ -1,12 +1,39 @@
-// The approval screen (design §6.6): a proposal's canonical payload and digest,
-// rendered from the daemon (never agent text), with a colourised Terraform plan
-// when it's a plan. Approve or Deny steps up over the per-decision digest (a
-// passkey, SSH key or authenticator code); the decision itself is a no-tabs
-// choice in the view.
+// The approval screen (design §4.4, prototype js/screens/bots.js proposalDetail,
+// the approved mock's approvalPage): a needs-you kicker with age and expiry, the
+// plain title, what it asks, why, the four change counts (a plan's Adds /
+// Changes / Replaces / Destroys, or exactly what the action sends), where /
+// effect / undo, who started it, Approve with passkey / Deny, who can approve,
+// and the technical detail (ids, hashes, the digest a passkey signs) folded at
+// the end. It stands alone at every width: no bot head or tabs above it, one
+// Back.
+//
+// Deliberate departures the brief carries over from CONFORMANCE.md: the
+// status is a mark and a word, not a capsule; the decision bar is pinned
+// (`.prop-decide`, sticky via CSS); the Rotate session / Sweep now / Deliver
+// an event / Workers actions the mock has no place for are left for the
+// bot's own page, not drawn here.
+//
+// Data gaps (the daemon's ProposalRow carries no env, impact or reversible-undo
+// text yet): Where/Effect/Undo only renders what's there (a Terraform plan's
+// workspace), and the risk fact under the title is inferred from the plan's
+// workspace name containing "prod" — a real `env` field would read better.
+// Deny has no reason field in the decision API yet, so "Deny…" decides
+// straight away rather than opening a reason sheet.
 import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { approvalView, decideProposal, type ApprovalView } from '../api/auth'
 import { botsApi, type ProposalRow } from '../api/bots'
+import { humanError } from '../api/errors'
+import { Icon } from '../components/Icon'
+import { StatusMark } from '../components/StatusMark'
+import { ago, humanDuration } from '../lib/format'
+
+function expiresIn(iso?: string): string {
+  if (!iso) return ''
+  const ms = new Date(iso).getTime() - Date.now()
+  if (Number.isNaN(ms) || ms <= 0) return ''
+  return `expires in ${humanDuration(ms)}`
+}
 
 export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element {
   const [view, setView] = useState<ApprovalView | null>(null)
@@ -16,7 +43,7 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
   const [done, setDone] = useState('')
 
   useEffect(() => {
-    approvalView(bot, id).then(setView).catch((e) => setErr(String(e)))
+    approvalView(bot, id).then(setView).catch((e) => setErr(humanError(e)))
     botsApi.botProposals(bot).then((r) => setRow(r.proposals.find((p) => p.proposal === id) || null)).catch(() => {})
   }, [bot, id])
 
@@ -27,22 +54,24 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
       await decideProposal(bot, id, decision)
       setDone(decision)
     } catch (e) {
-      const t = e instanceof Error ? e.message : String(e)
+      const t = humanError(e)
       if (!/cancelled/.test(t)) setErr(t)
     } finally {
       setBusy('')
     }
   }
 
-  if (err && !view) return <div class="col"><div class="banner err">{err}</div></div>
+  if (err && !view) return <div class="col"><a class="back" href={`#/bots/${bot}/approvals`}>← {bot}'s approvals</a><div class="banner err">{err}</div></div>
   if (!view) return <div class="col"><p class="muted">Loading the proposal…</p></div>
 
-  // The view's summary carries the canonical action under `action` (what the
-  // digest pins and what runs) and the requester's own words beside it.
   const summary = (view.summary as Record<string, unknown>) || {}
   const action = (summary.action as Record<string, unknown>) || {}
   const requesterWords = String(summary.requester_summary || '')
   const tf = row?.terraform
+  const title = row?.summary || String(action.uses || action.kind || 'this proposal')
+  const ask = row?.action || (tf ? `${bot} wants to run terraform apply on ${tf.workspace}.` : `${bot} wants to ${title}.`)
+  const prod = !!(tf && /prod/i.test(tf.workspace))
+  const operators = view.operators || []
 
   if (done) {
     return (
@@ -54,63 +83,110 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
   }
 
   return (
-    <div class="col approval-screen" data-proposal={id}>
+    <div class="col" data-proposal={id}>
       <a class="back" href={`#/bots/${bot}/approvals`}>← {bot}'s approvals</a>
-      <h1 class="screen-title serif">Approve this?</h1>
-      <p class="muted">Review exactly what {bot} would do. You confirm your decision (passkey, SSH key or authenticator code), and the confirmation is bound to this plan, so it can never be replayed onto a different action.</p>
-
       {err ? <div class="banner err" role="alert">{err}</div> : null}
 
-      <section class="panel approval-payload">
-        <span class="panel-title">The action, exactly as it will run</span>
-        <dl class="detail-list">
-          {String(action.uses || '') ? <><dt>Verb</dt><dd class="mono">{String(action.uses)}</dd></> : null}
-          <dt>Kind</dt><dd>{String(action.kind || '')}</dd>
-          <dt>Tier</dt><dd>{String(summary.tier || row?.tier || '')}</dd>
-          <dt>Requested by</dt><dd>{String(summary.requester_class || row?.requester_class || 'a worker')}</dd>
-          {row?.case ? <><dt>Ticket</dt><dd class="mono">{row.case}</dd></> : null}
-        </dl>
-        <pre class="payload-json" data-testid="approval-canonical">{JSON.stringify(action, null, 2)}</pre>
-        {requesterWords ? (
-          <p class="facts muted" data-testid="approval-requester-words">
-            The requester's own words (not checked): {requesterWords}
-          </p>
-        ) : null}
-      </section>
+      <div class="prop-single">
+        <article class="dl-card dl-proposal">
+          <div class="dl-kick">
+            <StatusMark s="ember" mkOnly label="Needs you" />
+            Needs you{row?.created ? ` · asked ${ago(row.created)}` : ''}{row?.expires && expiresIn(row.expires) ? ` · ${expiresIn(row.expires)}` : ''}
+          </div>
+          <h1 class="dl-ptitle">{title}</h1>
+          <p class="dl-ask">{ask}</p>
+          {tf || prod ? (
+            <span class="fx">
+              {prod ? <span class="fx-i prod">production</span> : null}
+              {tf ? <span class="fx-i">changes infrastructure</span> : null}
+            </span>
+          ) : null}
 
-      {tf ? (
-        <section class="panel">
-          <span class="panel-title">Terraform plan</span>
-          <p class="facts muted">{tf.repo} · {tf.dir} · workspace {tf.workspace} · <strong class="tf-add">+{tf.add}</strong> <strong class="tf-change">~{tf.change}</strong> <strong class="tf-destroy">-{tf.destroy}</strong></p>
-          {tf.destroyed?.length ? <p class="banner attn">Destroys: {tf.destroyed.join(', ')}</p> : null}
-          {tf.plan ? <pre class="tf-plan" data-testid="tf-plan">{tf.plan.split('\n').map((l) => <div class={tfLineClass(l)}>{l}</div>)}</pre> : null}
-          {tf.plan_sha256 ? <p class="facts muted">plan sha256 <span class="mono">{tf.plan_sha256.slice(0, 16)}…</span></p> : null}
-        </section>
-      ) : null}
+          <div class="prop-body">
+            {tf ? (
+              <div class="dl-pwhy prop-what">
+                <span class="dl-lbl">What will change</span>
+                <div class="dl-changes">
+                  <div class={tf.add ? '' : 'zero'}><b>{tf.add}</b><span>Adds</span></div>
+                  <div class={tf.change ? '' : 'zero'}><b>{tf.change}</b><span>Changes</span></div>
+                  <div class={tf.replaced?.length ? '' : 'zero'} data-s={tf.replaced?.length ? 'wait' : undefined}><b>{tf.replaced?.length || 0}</b><span>Replaces</span></div>
+                  <div class={tf.destroy ? '' : 'zero'} data-s={tf.destroy ? 'fail' : undefined}><b>{tf.destroy}</b><span>Destroys</span></div>
+                </div>
+                {tf.replaced?.length ? (
+                  <p class="dl-chg-note">
+                    <StatusMark s="wait" mkOnly label="Replaces" />
+                    <span><b>Replaces {tf.replaced.length} {tf.replaced.length === 1 ? 'resource' : 'resources'}</b> ({tf.replaced.join(', ')}). Stateful things such as databases are never replaced without a separate rule.</span>
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <div class="dl-pwhy">
+                <span class="dl-lbl">Exactly what it sends</span>
+                <pre class="dl-code" data-testid="approval-canonical">{JSON.stringify(action, null, 2)}</pre>
+              </div>
+            )}
 
-      <section class="panel approval-sign">
-        <div class="digest-row">
-          <span class="muted">Approval digest</span>
-          <span class="mono digest" data-testid="approval-digest">{view.action_sha256.slice(0, 24)}…</span>
-        </div>
-        <p class="muted">May be decided by: {view.operators.join(', ') || 'a configured operator'}.</p>
-        <div class="row-actions approval-actions">
-          <button class="btn primary" type="button" disabled={!!busy} data-testid="approve" onClick={() => void decide('approve')}>
-            {busy === 'approve' ? 'Confirming…' : 'Approve…'}
-          </button>
-          <button class="btn ghost danger" type="button" disabled={!!busy} data-testid="deny" onClick={() => void decide('deny')}>
-            {busy === 'deny' ? 'Confirming…' : 'Deny…'}
-          </button>
-        </div>
-      </section>
+            {requesterWords ? (
+              <div class="dl-pwhy">
+                <span class="dl-lbl">Why</span>
+                <p data-testid="approval-requester-words">The requester's own words (not checked): {requesterWords}</p>
+              </div>
+            ) : null}
+
+            {tf?.workspace ? (
+              <dl class="dl-where">
+                <dt>Where</dt>
+                <dd>{tf.workspace[0].toUpperCase()}{tf.workspace.slice(1)} · workspace {tf.workspace}</dd>
+              </dl>
+            ) : null}
+
+            <p class="dl-origin">
+              {originIcon(row?.requester_class)}
+              {originText(bot, row?.requester, row?.requester_class)}
+            </p>
+
+            <details class="dl-audit-d">
+              <summary><Icon name="chev" />For audit: ids, hashes and the digest your passkey signs</summary>
+              <dl class="dl-facts">
+                <dt>Proposal</dt><dd><span class="mono">{row?.proposal || id}</span> · tier <span class="mono">{row?.tier || String(summary.tier || '')}</span></dd>
+                <dt>Verb</dt><dd class="mono">{String(action.uses || row?.uses || '')}</dd>
+                {tf ? <><dt>Exact command</dt><dd class="mono">terraform apply · repo {tf.repo} · dir {tf.dir} · workspace {tf.workspace}</dd></> : null}
+                {tf?.plan_sha256 ? <><dt>Plan sha256</dt><dd class="mono">{tf.plan_sha256.slice(0, 16)}…</dd></> : null}
+                {row?.case ? <><dt>Ticket</dt><dd><a class="dl-link mono" href={`#/tickets/${row.case}`}>{row.case}</a></dd></> : null}
+                <dt>Asked for by</dt><dd class="mono">{row?.requester || '—'}{row?.requester_class ? ` (${row.requester_class})` : ''}</dd>
+                <dt>Digest</dt><dd class="mono" data-testid="approval-digest">{view.action_sha256.slice(0, 24)}…</dd>
+              </dl>
+            </details>
+          </div>
+
+          <div class="dl-decide prop-decide">
+            <button class="btn lg primary" type="button" disabled={!!busy} data-testid="approve" onClick={() => void decide('approve')}>
+              <Icon name="passkey" />
+              {busy === 'approve' ? 'Confirming…' : 'Approve with passkey'}
+            </button>
+            <button class="btn lg secondary" type="button" disabled={!!busy} data-testid="deny" onClick={() => void decide('deny')}>
+              {busy === 'deny' ? 'Confirming…' : 'Deny…'}
+            </button>
+            <span class="hint">{operators.length ? `Only ${operators.join(' or ')} can approve.` : 'Any operator can approve.'}</span>
+          </div>
+        </article>
+      </div>
     </div>
   )
 }
 
-function tfLineClass(l: string): string {
-  const t = l.trimStart()
-  if (t.startsWith('+')) return 'tfl add'
-  if (t.startsWith('-')) return 'tfl del'
-  if (t.startsWith('~') || t.startsWith('-/+')) return 'tfl change'
-  return 'tfl'
+function originIcon(cls?: string): JSX.Element {
+  if (cls === 'event') return <Icon name="zap" />
+  if (cls === 'user') return <Icon name="warn" />
+  if (cls === 'proactive') return <Icon name="clock" />
+  if (cls === 'peer') return <Icon name="bots" />
+  return <Icon name="users" />
+}
+
+function originText(bot: string, requester?: string, cls?: string): string {
+  if (cls === 'event') return `Started by an event (${requester || 'unknown'}), not a person.`
+  if (cls === 'user') return `Asked for in chat by someone who isn't one of your operators (${requester || 'unknown'}); it runs with no more trust than they have.`
+  if (cls === 'proactive') return `Found on ${bot}'s own routine check; nobody asked.`
+  if (cls === 'peer') return `Asked for by another bot (${requester || 'unknown'}), carrying the original requester's trust.`
+  return `Asked for by an operator (${requester || 'unknown'}).`
 }

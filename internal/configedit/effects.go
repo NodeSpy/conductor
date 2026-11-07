@@ -153,7 +153,7 @@ var guardedSections = []struct {
 	{[]string{"browser"}, "changes conductor's browser for agents"},
 	{[]string{"callable"}, "changes what outside callers can run (callable)"},
 	{[]string{"policy"}, "changes the policy that limits what bots may do"},
-	{[]string{"bots"}, "changes the bots: their tokens and what they act on"},
+	{[]string{"bots"}, "adds or changes a bot, which gets its own access token and acts only within what you allow"},
 	{[]string{"teams"}, "changes teams: who bots take requests from"},
 	{[]string{"update"}, "changes self-update: whether conductor installs and runs new releases"},
 	{[]string{"dry_run"}, "changes dry_run: whether steps act for real"},

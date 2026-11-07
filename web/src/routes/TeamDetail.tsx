@@ -1,11 +1,15 @@
-// A team's page (design §4.4): Overview (its bots and lead, routing decisions,
-// delegations), Routing (the ordered rules), Defaults (what bots inherit) and
-// Knowledge (the shared repo with bot proposals). Editing routing, defaults and
-// membership are config edits through the pipeline.
+// A team's page (design §4.4, CONFORMANCE "Teams take the bot page's header"):
+// Overview (its bots and lead, routing decisions, delegations), Routing (the
+// ordered rules), Defaults (what bots inherit) and Knowledge (the shared repo
+// with bot proposals). Editing routing, defaults and membership are config
+// edits through the pipeline.
 import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { botsApi, displayName, type TeamSummary, type BotSummary } from '../api/bots'
 import { Avatar } from '../components/Avatar'
+import { ApiError, humanError } from '../api/errors'
+import { EmptyState } from '../components/EmptyState'
+import { plural } from '../lib/format'
 
 const TABS = ['overview', 'routing', 'defaults', 'knowledge'] as const
 type Tab = (typeof TABS)[number]
@@ -14,10 +18,12 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
   const active: Tab = (TABS as readonly string[]).includes(tab || '') ? (tab as Tab) : 'overview'
   const [team, setTeam] = useState<TeamSummary | null>(null)
   const [bots, setBots] = useState<Record<string, BotSummary>>({})
-  const [err, setErr] = useState('')
+  const [err, setErr] = useState<unknown>(null)
 
   useEffect(() => {
-    botsApi.team(name).then(setTeam).catch((e) => setErr(String(e)))
+    setTeam(null)
+    setErr(null)
+    botsApi.team(name).then(setTeam).catch(setErr)
     botsApi.bots().then((r) => {
       const m: Record<string, BotSummary> = {}
       for (const b of r.bots) m[b.bot] = b
@@ -25,24 +31,37 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
     })
   }, [name])
 
-  if (err) return <div class="col"><div class="banner err">{err}</div></div>
+  if (err) {
+    // A team that doesn't exist is a dead end to name and route back from,
+    // not a raw error banner (the bots list's own empty-state philosophy).
+    if (err instanceof ApiError && err.status === 404) {
+      return (
+        <div class="col">
+          <EmptyState title={`No team named ${name}`} action={{ label: 'Bots', href: '#/bots' }}>
+            <p>It may have been disbanded, renamed, or never existed on this daemon.</p>
+          </EmptyState>
+        </div>
+      )
+    }
+    return <div class="col"><a class="back" href="#/bots">← Bots</a><div class="banner err" role="alert">{humanError(err)}</div></div>
+  }
   if (!team) return <div class="col"><p class="muted">Loading {name}…</p></div>
 
   const lead = team.routing?.lead
+  const facts: string[] = [plural(team.bots?.length || 0, 'bot')]
+  facts.push(lead ? `led by ${lead}` : 'no lead yet')
+  if (team.operators?.length) facts.push(`approved by ${team.operators.join(', ')}`)
+  facts.push(team.peers === 'none' ? 'bots kept apart' : 'teammates may ask each other')
 
   return (
-    <div class="col team-detail" data-team={name}>
+    <div class="col" data-team={name}>
       <a class="back" href="#/bots">← Bots</a>
-      <div class="bot-detail-head">
+      <div class="dl-bothead">
         <Avatar id={team.identity} size={56} kind="team" />
-        <div class="bot-detail-head-main">
-          <h1 class="screen-title serif">{displayName(team.identity, name)} <span class="mono id">team {name}</span></h1>
-          <p class="muted">{team.description}</p>
-          <p class="facts muted">
-            {team.bots?.length || 0} bots{lead ? ` · led by ${lead}` : ' · no lead yet'}
-            {team.operators?.length ? ` · approved by ${team.operators.join(', ')}` : ''}
-            {` · ${team.peers === 'none' ? 'bots kept apart' : 'teammates may ask each other'}`}
-          </p>
+        <div>
+          <h1>{displayName(team.identity, name)} <span class="mono id">team {name}</span></h1>
+          {team.description ? <p class="dl-lead">{team.description}</p> : null}
+          <span class="fx">{facts.map((f) => <span class="fx-i">{f}</span>)}</span>
         </div>
       </div>
 
@@ -54,50 +73,46 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
         ))}
       </nav>
 
-      <div class="tab-body">
+      <div class="dl-tab-body">
         {active === 'overview' && (
-          <section class="panel">
-            <span class="panel-title">Bots</span>
-            <ul class="bot-list">
-              {(team.bots || []).map((b) => (
-                <li class="bot-row" data-bot={b}>
-                  <a class="bot-row-link" href={`#/bots/${b}`}>
-                    <Avatar id={bots[b]?.identity} size={36} />
-                    <div class="bot-row-main">
-                      <div class="bot-row-name"><span class="name">{displayName(bots[b]?.identity, b)}</span>{b === lead ? <span class="chip tiny">lead</span> : null}</div>
-                      <p class="bot-row-desc">{bots[b]?.description || ''}</p>
-                    </div>
+          <section class="dl-card m-team">
+            <ul class="m-list m-flat">
+              {(team.bots || []).length ? (team.bots || []).map((b) => (
+                <li class="m-row" data-bot={b}>
+                  <span class="m-sel" />
+                  <Avatar id={bots[b]?.identity} size={32} />
+                  <a class="m-main" href={`#/bots/${b}`}>
+                    <b>{displayName(bots[b]?.identity, b)}{b === lead ? <span class="bav-id mono">lead</span> : null}</b>
+                    <span class="dl-why">{bots[b]?.description || ''}</span>
                   </a>
+                  <span class="m-st" />
                 </li>
-              ))}
+              )) : <li class="dl-empty-row">No bots on this team yet.</li>}
             </ul>
           </section>
         )}
         {active === 'routing' && (
-          <section class="panel">
-            <span class="panel-title">Routing</span>
-            <p class="muted">First matching rule wins; then the lead triages; then the fallback.</p>
+          <section class="dl-card">
+            <p class="dl-sub">First matching rule wins; then the lead triages; then the fallback.</p>
             <ol class="rule-list">
               {(team.routing?.rules || []).map((r) => (
-                <li class="rule-row"><span class="mono">{r.rule}</span> → <span class="mono">{r.to}</span> <span class="facts muted">on {JSON.stringify(r.match)}</span></li>
+                <li class="rule-row"><span class="mono">{r.rule}</span> → <span class="mono">{r.to}</span> <span class="fx-i muted">on {JSON.stringify(r.match)}</span></li>
               ))}
             </ol>
-            <p class="facts muted">Lead: {lead || '—'} · Fallback: {team.routing?.fallback || '—'}</p>
+            <p class="dl-sub">Lead: {lead || '—'} · Fallback: {team.routing?.fallback || '—'}</p>
           </section>
         )}
         {active === 'defaults' && (
-          <section class="panel">
-            <span class="panel-title">Defaults</span>
-            <p class="muted">What every bot inherits from the team, and narrows (never widens). Peers: {team.peers}.</p>
+          <section class="dl-card">
+            <p class="dl-sub">What every bot inherits from the team, and narrows (never widens). Peers: {team.peers}.</p>
           </section>
         )}
         {active === 'knowledge' && (
-          <section class="panel">
-            <span class="panel-title">Knowledge</span>
+          <section class="dl-card">
             {team.knowledge ? (
-              <p class="facts muted">Shared repo <span class="mono">{team.knowledge.repo}</span> · promotion {team.knowledge.promotion}</p>
+              <p class="dl-sub">Shared repo <span class="mono">{team.knowledge.repo}</span> · promotion {team.knowledge.promotion}</p>
             ) : (
-              <p class="muted">No shared knowledge repo configured.</p>
+              <p class="dl-sub">No shared knowledge repo configured.</p>
             )}
           </section>
         )}

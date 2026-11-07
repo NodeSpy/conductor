@@ -17,6 +17,7 @@ import {
   totpConfirm,
   removeTOTP,
   addPasskeyHere,
+  authState,
   type AccessData,
   type SessionRow,
   type TOTPEnrollment,
@@ -25,9 +26,11 @@ import { passkeysUsable } from '../lib/webauthn'
 import { CopyBlock, methodLabel, methodPhrase } from '../components/AuthBits'
 import { ago, goDuration, humanDuration } from '../lib/format'
 import '../styles/auth.css'
+import { humanError } from '../api/errors'
+import { EmptyState } from '../components/EmptyState'
 
 function errText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e)
+  return humanError(e)
 }
 
 // groupKey shows a base32 key in 4-character blocks for typing; copying takes
@@ -69,7 +72,31 @@ export function Access(): JSX.Element {
   }
   useEffect(reload, [])
 
-  if (err && !data) return <div class="banner err">Couldn't load Access: {err}</div>
+  if (err && !data) {
+    const st = authState.value
+    return (
+      <div class="col">
+        <div class="dl-phead"><div><h1>Access</h1></div></div>
+        {!st.signed_in && !st.required ? (
+          // An open dashboard: no operators, so nobody signs in and there is
+          // no one's access to show.
+          <EmptyState testid="access-empty" title="Nobody signs in here yet">
+            <p>This dashboard is open: it runs without sign-in, so there are no passkeys or sessions to manage.</p>
+            <p>To require sign-in, add yourself under <code>operators:</code> in the config with your SSH public key, then run <code>conductor dashboard enroll --operator &lt;name&gt;</code> for a link that sets up your passkey.</p>
+          </EmptyState>
+        ) : !st.signed_in ? (
+          <EmptyState testid="access-signed-out" title="You're signed out" action={{ label: 'Sign in', href: '/signin' }}>
+            <p>Sign in to see your passkeys and the devices signed in as you.</p>
+          </EmptyState>
+        ) : (
+          <div class="banner err" role="alert">
+            Couldn't load Access: {err}{' '}
+            <button class="btn sm" type="button" onClick={reload}>Try again</button>
+          </div>
+        )}
+      </div>
+    )
+  }
   if (!data) return <div class="page">Loading…</div>
 
   // act runs a credential change (each asks for a confirmation first), then
@@ -140,9 +167,9 @@ export function Access(): JSX.Element {
   const canPassword = data.auth_policy.methods.includes('password')
 
   return (
-    <div class="page">
-      <h1 class="screen-title">Access</h1>
-      <p class="panel-sub" style="margin:0 0 16px">
+    <div class="col">
+      <div class="dl-phead"><div><h1>Access</h1></div></div>
+      <p class="dl-sub" style="margin:0 0 16px">
         <b>Only operators can sign in</b>, with{' '}
         {data.auth_policy.methods.map((m) => methodPhrase[m]).join(', ')}
         {data.auth_policy.methods.includes('password') && needsTOTP ? ' (with an authenticator code)' : ''}.

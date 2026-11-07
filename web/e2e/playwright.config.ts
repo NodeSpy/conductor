@@ -9,7 +9,8 @@ process.env.DASH_E2E_PORT = String(PORT)
 
 // The project rule: verify on Chromium desktop AND WebKit iPhone, OS dark. The
 // iPhone 15 descriptor carries the WebKit engine, viewport and DPR; we force the
-// OS colour scheme to dark on both so dark mode is exercised on each engine.
+// OS colour scheme to dark on both so dark mode is exercised on each engine. The
+// empty-state suite runs on the iPhone in OS light as well.
 const iphone = devices['iPhone 15'] ?? devices['iPhone 14'] ?? devices['iPhone 13']
 
 export default defineConfig({
@@ -37,6 +38,12 @@ export default defineConfig({
     {
       name: 'webkit-iphone15',
       use: { ...iphone, colorScheme: 'dark' },
+    },
+    // The empty states are also checked in OS light on the phone.
+    {
+      name: 'webkit-iphone15-light',
+      use: { ...iphone, colorScheme: 'light' },
+      testMatch: /empty\.spec\.ts/,
     },
   ],
 })
