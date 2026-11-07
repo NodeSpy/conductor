@@ -58,6 +58,7 @@ export function WorkflowDetail({ name }: { name: string }): JSX.Element {
   const [testing, setTesting] = useState(false)
   const [parseErr, setParseErr] = useState('')
   const [saveErr, setSaveErr] = useState('')
+  const [hlLine, setHlLine] = useState<number | undefined>(undefined)
   const yamlRef = useRef<HTMLElement>(null)
 
   const load = () =>
@@ -83,6 +84,7 @@ export function WorkflowDetail({ name }: { name: string }): JSX.Element {
     setSel(n.id)
     setTab('config')
     const ln = n.line ?? 0
+    setHlLine(ln > 0 ? ln : undefined)
     if (ln > 0) {
       requestAnimationFrame(() => {
         const el = yamlRef.current?.querySelector(`[data-ln="${ln}"]`) as HTMLElement | null
@@ -206,7 +208,7 @@ export function WorkflowDetail({ name }: { name: string }): JSX.Element {
         <section class="dl-card wfb-side-card" ref={yamlRef}>
           <header class="dl-ch"><h2>Config file</h2><span class="dl-sub">YAML is canonical · edits are reviewed before they apply</span></header>
           {parseErr ? <div class="banner err" role="alert">That doesn't parse as YAML: {parseErr}</div> : null}
-          <CodeEditor id="wf-yaml" text={text} onChange={(t) => setText(t)} readOnly={readOnly} minRows={16} label={`${wf.name} YAML`} />
+          <CodeEditor id="wf-yaml" text={text} onChange={(t) => { setText(t); setHlLine(undefined) }} readOnly={readOnly} minRows={16} label={`${wf.name} YAML`} hlLine={hlLine} />
         </section>
       ) : tab === 'runs' ? (
         <>

@@ -95,6 +95,7 @@ export function CodeEditor({
   minRows = 10,
   label = 'YAML',
   errLines = [],
+  hlLine,
 }: {
   id: string
   text: string
@@ -103,6 +104,7 @@ export function CodeEditor({
   minRows?: number
   label?: string
   errLines?: number[]
+  hlLine?: number
 }): JSX.Element {
   const preRef = useRef<HTMLPreElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -111,7 +113,7 @@ export function CodeEditor({
     <div class="ced" data-lang="yaml" id={id} data-readonly={readOnly ? '1' : undefined}>
       <pre class="code ced-hl" aria-hidden="true" ref={preRef}>
         {lines.map((l, i) => (
-          <Line raw={l} n={i + 1} hl={false} err={errLines.includes(i + 1)} />
+          <Line raw={l} n={i + 1} hl={hlLine === i + 1} err={errLines.includes(i + 1)} />
         ))}
       </pre>
       <textarea
