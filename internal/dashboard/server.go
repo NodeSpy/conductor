@@ -185,12 +185,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/config/validate", s.handleValidate)
 	s.mux.HandleFunc("POST /api/v1/config/apply", s.handleApply)
 	s.mux.HandleFunc("GET /api/v1/config/history", s.handleHistory)
+	s.mux.HandleFunc("GET /api/v1/config/history/{id}/diff", s.handleHistoryDiff)
 	s.mux.HandleFunc("POST /api/v1/config/restore/review", s.handleRestoreReview)
 	s.mux.HandleFunc("POST /api/v1/config/restore", s.handleRestore)
 
 	// Section read models.
 	s.mux.HandleFunc("GET /api/v1/secrets", s.handleSecrets)
 	s.mux.HandleFunc("GET /api/v1/packs", s.handlePacks)
+	s.mux.HandleFunc("GET /api/v1/packs/{name}/manifest", s.handlePackManifest)
 	s.mux.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
 	s.mux.HandleFunc("GET /api/v1/connections", s.handleConnections)
 	s.mux.HandleFunc("GET /api/v1/system", s.handleSystem)

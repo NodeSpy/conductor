@@ -330,12 +330,39 @@ type AppliedResponse struct {
 	Unchanged   bool   `json:"unchanged,omitempty"`
 }
 
-// HistoryItem is one restorable backup (mirrors configedit.HistoryEntry).
+// HistoryItem is one restorable backup (mirrors configedit.HistoryEntry), with
+// what changed and who applied it, for the Config screen's applied-changes
+// history (design: "applied changes full width, readable at a glance").
 type HistoryItem struct {
 	ID    string `json:"id"`
 	TS    string `json:"ts"`
 	SHA   string `json:"sha"`
 	Bytes int64  `json:"bytes"`
+
+	// Event is "apply" or "restore" when an audit entry for this backup is
+	// found, "" when the audit log doesn't go back that far (still a valid,
+	// restorable backup).
+	Event    string `json:"event,omitempty"`
+	Operator string `json:"operator,omitempty"`
+	// RestoredFrom is the backup id this entry restored from, set only when
+	// Event is "restore".
+	RestoredFrom string `json:"restored_from,omitempty"`
+
+	// Changed are the leaf paths this apply touched, dotted (e.g.
+	// "triggers.nightly.policy.budget.max_cost_usd"), capped and sorted.
+	Changed []string `json:"changed,omitempty"`
+	Added   int      `json:"added,omitempty"`
+	Removed int      `json:"removed,omitempty"`
+}
+
+// HistoryDiffResponse is GET /api/v1/config/history/{id}/diff: the line-by-line
+// diff of what that one historical apply changed (see handleHistoryDiff).
+type HistoryDiffResponse struct {
+	Changed bool          `json:"changed"`
+	Added   int           `json:"added"`
+	Removed int           `json:"removed"`
+	Lines   []DiffLineDTO `json:"lines"`
+	Unified string        `json:"unified"`
 }
 
 // StageRequest is POST /api/v1/config/stage.
@@ -405,6 +432,50 @@ type PackInfo struct {
 	Hold    bool   `json:"hold"`
 }
 
+// PackManifestResponse is GET /api/v1/packs/{name}/manifest: the pack's guided
+// override surface (design CONFORMANCE "Pack overrides") — what it needs
+// (from its vendored manifest's requires:) matched against what this instance
+// is already bound to (its live packs.<name> entry). Roles and step/trigger
+// names only; staging an override still goes through the normal config-edit
+// pipeline at packs.<name>.<field>.
+type PackManifestResponse struct {
+	Name       string            `json:"name"`
+	Connectors []PackRoleInfo    `json:"connectors,omitempty"`
+	Stores     []PackRoleInfo    `json:"stores,omitempty"`
+	Secrets    []PackRoleInfo    `json:"secrets,omitempty"`
+	Handoffs   []PackRoleInfo    `json:"handoffs,omitempty"`
+	Steps      []PackStepInfo    `json:"steps,omitempty"`
+	Triggers   []PackTriggerInfo `json:"triggers,omitempty"`
+}
+
+// PackRoleInfo is one bind-only role the pack's requires: declares (a
+// connector, store, secret or handoff name), what it's bound to today, and —
+// for a connector — the consumer's own connectors of a compatible kind.
+type PackRoleInfo struct {
+	Name       string   `json:"name"`
+	Kind       string   `json:"kind"` // connector | store | secret | handoff
+	Bound      string   `json:"bound,omitempty"`
+	Candidates []string `json:"candidates,omitempty"`
+}
+
+// PackStepInfo is one step the pack's own workflows define (<workflow>/<id>),
+// and this instance's override, if any (packs.<name>.steps.<ref>).
+type PackStepInfo struct {
+	Ref        string `json:"ref"`
+	Runtime    string `json:"runtime,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Overridden bool   `json:"overridden,omitempty"`
+}
+
+// PackTriggerInfo is one trigger the pack ships disarmed, and whether this
+// instance has armed it (consent: enabled plus at least one repo).
+type PackTriggerInfo struct {
+	Name  string   `json:"name"`
+	On    string   `json:"on,omitempty"`
+	Armed bool     `json:"armed"`
+	Repos []string `json:"repos,omitempty"`
+}
+
 // PluginsResponse is GET /api/v1/plugins: the flat plugin list and the version
 // policy, derived from the `use:` references across connectors/runtimes.
 type PluginsResponse struct {
@@ -450,8 +521,28 @@ type SystemResponse struct {
 	Version   string            `json:"version"`
 	ConfigSHA string            `json:"config_sha"`
 	Settings  map[string]string `json:"settings"`
-	Safety    SafetyInfo        `json:"safety"`
-	Update    UpdateInfo        `json:"update"`
+	// SettingsUsedBy is, for a setting with at least one, the dotted config
+	// paths that read it as ${settings.<name>}.
+	SettingsUsedBy map[string][]string `json:"settings_used_by,omitempty"`
+	// EnvVars are the env: maps under hosts.*.env (the one place config
+	// declares named, scoped env vars outside a step — a runtimes: entry has
+	// no env: field) — names and where each lives only; a literal value is
+	// never read or sent, only whether it looks like a value (Literal) or is
+	// itself a reference (env:/${…}/{{ vault … }}, shown verbatim in Ref since
+	// a reference names where a value lives, not the value). Read-only here:
+	// editing these is a config-editor feature (design gap, docs/design/
+	// dashboard.md).
+	EnvVars []EnvVarInfo `json:"env_vars,omitempty"`
+	Safety  SafetyInfo   `json:"safety"`
+	Update  UpdateInfo   `json:"update"`
+}
+
+// EnvVarInfo is one env var declared on a runtime or a host.
+type EnvVarInfo struct {
+	Name    string `json:"name"`
+	Scope   string `json:"scope"` // "runtime:<name>" | "host:<name>"
+	Ref     string `json:"ref,omitempty"`
+	Literal bool   `json:"literal,omitempty"`
 }
 
 // SafetyInfo summarizes the live security posture for the System → Safety tab.

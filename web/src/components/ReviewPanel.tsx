@@ -6,7 +6,7 @@
 // bound to the exact candidate just reviewed).
 import type { JSX } from 'preact'
 import { useState } from 'preact/hooks'
-import { review, applyResult, cfgError, busy, apply, doReview, runValidate, validateMsg } from '../configStore'
+import { review, applyResult, cfgError, busy, apply, doReview, runValidate, validateMsg, restoreId, cancelRestore } from '../configStore'
 import { authState } from '../api/auth'
 
 // guided is for a flow that owns its own one apply button (the first bot): the
@@ -16,6 +16,7 @@ import { authState } from '../api/auth'
 export function ReviewPanel({ stagedCount, guided }: { stagedCount: number; guided?: boolean }): JSX.Element | null {
   const rev = review.value
   const applied = applyResult.value
+  const restoring = !!restoreId.value
   const [confirming, setConfirming] = useState(false)
 
   if (applied) {
@@ -47,20 +48,27 @@ export function ReviewPanel({ stagedCount, guided }: { stagedCount: number; guid
     )
   }
 
-  if (stagedCount === 0) return null
+  if (stagedCount === 0 && !restoring) return null
   if (guided && !rev && !cfgError.value) return null
 
   return (
-    <section class="panel review" aria-label="Review changes">
+    <section class="panel review" aria-label={restoring ? 'Review restore' : 'Review changes'}>
       <div class="panel-head">
-        <span class="panel-title">{guided ? 'What changes in the config' : `Review ${stagedCount} change${stagedCount === 1 ? '' : 's'}`}</span>
-        {guided ? null : (
+        <span class="panel-title">
+          {restoring ? 'Restore to before this backup' : guided ? 'What changes in the config' : `Review ${stagedCount} change${stagedCount === 1 ? '' : 's'}`}
+        </span>
+        {guided || restoring ? null : (
           <div class="row-actions">
             <button class="btn" type="button" disabled={busy.value} onClick={() => void doReview()}>
               {rev ? 'Review again' : 'Review changes'}
             </button>
           </div>
         )}
+        {restoring ? (
+          <button class="btn ghost sm" type="button" onClick={() => cancelRestore()}>
+            Cancel
+          </button>
+        ) : null}
       </div>
 
       {cfgError.value ? <div class="banner err" role="alert">{cfgError.value}</div> : null}
@@ -131,14 +139,14 @@ export function ReviewPanel({ stagedCount, guided }: { stagedCount: number; guid
           )}
 
           {guided ? null : !rev.changed ? (
-            <p class="muted">No change — the staged edits match the current config.</p>
+            <p class="muted">{restoring ? 'No change — the live config already matches this backup.' : 'No change — the staged edits match the current config.'}</p>
           ) : !confirming ? (
             <button class="btn primary" type="button" onClick={() => setConfirming(true)}>
-              Apply…
+              {restoring ? 'Restore…' : 'Apply…'}
             </button>
           ) : (
-            <div class="confirm" role="group" aria-label="Confirm apply">
-              <span>Apply to the live config and reload the daemon?</span>
+            <div class="confirm" role="group" aria-label={restoring ? 'Confirm restore' : 'Confirm apply'}>
+              <span>{restoring ? 'Restore the config to this backup and reload the daemon?' : 'Apply to the live config and reload the daemon?'}</span>
               <button
                 class="btn primary"
                 type="button"
@@ -148,7 +156,7 @@ export function ReviewPanel({ stagedCount, guided }: { stagedCount: number; guid
                   void apply()
                 }}
               >
-                Confirm apply
+                {restoring ? 'Confirm restore' : 'Confirm apply'}
               </button>
               <button class="btn ghost" type="button" onClick={() => setConfirming(false)}>
                 Cancel

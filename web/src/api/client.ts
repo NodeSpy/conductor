@@ -9,9 +9,11 @@ import type {
   ReviewResponse,
   AppliedResponse,
   HistoryItem,
+  HistoryDiffResponse,
   StageRequest,
   SecretsResponse,
   PacksResponse,
+  PackManifestResponse,
   PluginsResponse,
   ConnectionsResponse,
   SystemResponse,
@@ -115,8 +117,10 @@ export const api = {
   apply: (token: string, stepupToken?: string) =>
     sendJSON<AppliedResponse>('POST', '/api/v1/config/apply', { token, ...(stepupToken ? { stepup_token: stepupToken } : {}) }),
   history: () => getJSON<{ history: HistoryItem[] }>('/api/v1/config/history'),
+  historyDiff: (id: string) => getJSON<HistoryDiffResponse>('/api/v1/config/history/' + encodeURIComponent(id) + '/diff'),
   restoreReview: (id: string) => sendJSON<ReviewResponse>('POST', '/api/v1/config/restore/review', { id }),
-  restore: (id: string, token: string) => sendJSON<AppliedResponse>('POST', '/api/v1/config/restore', { id, token }),
+  restore: (id: string, token: string, stepupToken?: string) =>
+    sendJSON<AppliedResponse>('POST', '/api/v1/config/restore', { id, token, ...(stepupToken ? { stepup_token: stepupToken } : {}) }),
 
   // --- run detail + controls ---
   run: (id: string) => getJSON<RunDetailResponse>('/api/v1/runs/' + encodeURIComponent(id)),
@@ -138,6 +142,7 @@ export const api = {
   // --- section reads ---
   secrets: () => getJSON<SecretsResponse>('/api/v1/secrets'),
   packs: () => getJSON<PacksResponse>('/api/v1/packs'),
+  packManifest: (name: string) => getJSON<PackManifestResponse>('/api/v1/packs/' + encodeURIComponent(name) + '/manifest'),
   plugins: () => getJSON<PluginsResponse>('/api/v1/plugins'),
   connections: () => getJSON<ConnectionsResponse>('/api/v1/connections'),
   system: () => getJSON<SystemResponse>('/api/v1/system'),

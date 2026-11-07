@@ -376,13 +376,45 @@ export interface AppliedResponse {
   unchanged?: boolean;
 }
 /**
- * HistoryItem is one restorable backup (mirrors configedit.HistoryEntry).
+ * HistoryItem is one restorable backup (mirrors configedit.HistoryEntry), with
+ * what changed and who applied it, for the Config screen's applied-changes
+ * history (design: "applied changes full width, readable at a glance").
  */
 export interface HistoryItem {
   id: string;
   ts: string;
   sha: string;
   bytes: number /* int64 */;
+  /**
+   * Event is "apply" or "restore" when an audit entry for this backup is
+   * found, "" when the audit log doesn't go back that far (still a valid,
+   * restorable backup).
+   */
+  event?: string;
+  operator?: string;
+  /**
+   * RestoredFrom is the backup id this entry restored from, set only when
+   * Event is "restore".
+   */
+  restored_from?: string;
+  /**
+   * Changed are the leaf paths this apply touched, dotted (e.g.
+   * "triggers.nightly.policy.budget.max_cost_usd"), capped and sorted.
+   */
+  changed?: string[];
+  added?: number /* int */;
+  removed?: number /* int */;
+}
+/**
+ * HistoryDiffResponse is GET /api/v1/config/history/{id}/diff: the line-by-line
+ * diff of what that one historical apply changed (see handleHistoryDiff).
+ */
+export interface HistoryDiffResponse {
+  changed: boolean;
+  added: number /* int */;
+  removed: number /* int */;
+  lines: DiffLineDTO[];
+  unified: string;
 }
 /**
  * StageRequest is POST /api/v1/config/stage.
@@ -456,6 +488,54 @@ export interface PackInfo {
   hold: boolean;
 }
 /**
+ * PackManifestResponse is GET /api/v1/packs/{name}/manifest: the pack's guided
+ * override surface (design CONFORMANCE "Pack overrides") — what it needs
+ * (from its vendored manifest's requires:) matched against what this instance
+ * is already bound to (its live packs.<name> entry). Roles and step/trigger
+ * names only; staging an override still goes through the normal config-edit
+ * pipeline at packs.<name>.<field>.
+ */
+export interface PackManifestResponse {
+  name: string;
+  connectors?: PackRoleInfo[];
+  stores?: PackRoleInfo[];
+  secrets?: PackRoleInfo[];
+  handoffs?: PackRoleInfo[];
+  steps?: PackStepInfo[];
+  triggers?: PackTriggerInfo[];
+}
+/**
+ * PackRoleInfo is one bind-only role the pack's requires: declares (a
+ * connector, store, secret or handoff name), what it's bound to today, and —
+ * for a connector — the consumer's own connectors of a compatible kind.
+ */
+export interface PackRoleInfo {
+  name: string;
+  kind: string; // connector | store | secret | handoff
+  bound?: string;
+  candidates?: string[];
+}
+/**
+ * PackStepInfo is one step the pack's own workflows define (<workflow>/<id>),
+ * and this instance's override, if any (packs.<name>.steps.<ref>).
+ */
+export interface PackStepInfo {
+  ref: string;
+  runtime?: string;
+  model?: string;
+  overridden?: boolean;
+}
+/**
+ * PackTriggerInfo is one trigger the pack ships disarmed, and whether this
+ * instance has armed it (consent: enabled plus at least one repo).
+ */
+export interface PackTriggerInfo {
+  name: string;
+  on?: string;
+  armed: boolean;
+  repos?: string[];
+}
+/**
  * PluginsResponse is GET /api/v1/plugins: the flat plugin list and the version
  * policy, derived from the `use:` references across connectors/runtimes.
  */
@@ -507,8 +587,31 @@ export interface SystemResponse {
   version: string;
   config_sha: string;
   settings: { [key: string]: string};
+  /**
+   * SettingsUsedBy is, for a setting with at least one, the dotted config
+   * paths that read it as ${settings.<name>}.
+   */
+  settings_used_by?: { [key: string]: string[]};
+  /**
+   * EnvVars are the env: maps under runtimes.*.env and hosts.*.env — names
+   * and where each lives only; a literal value is never read or sent, only
+   * whether it looks like a value (Literal) or is itself a reference
+   * (env:/${…}/{{ vault … }}, shown verbatim in Ref since a reference names
+   * where a value lives, not the value). Read-only here: editing these is a
+   * config-editor feature (design gap, docs/design/dashboard.md).
+   */
+  env_vars?: EnvVarInfo[];
   safety: SafetyInfo;
   update: UpdateInfo;
+}
+/**
+ * EnvVarInfo is one env var declared on a runtime or a host.
+ */
+export interface EnvVarInfo {
+  name: string;
+  scope: string; // "runtime:<name>" | "host:<name>"
+  ref?: string;
+  literal?: boolean;
 }
 /**
  * SafetyInfo summarizes the live security posture for the System → Safety tab.

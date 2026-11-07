@@ -4,10 +4,13 @@
 // file with a backup and reloads the daemon. Edits never touch comments or
 // sections this binary does not know — the edit is spliced, not re-serialized.
 import type { JSX } from 'preact'
-import { useEffect } from 'preact/hooks'
-import { config, staged, cfgError, loadConfig, stage, unstage } from '../configStore'
-import type { ConfigLeaf } from '../api/types'
+import { useEffect, useState } from 'preact/hooks'
+import { config, staged, cfgError, loadConfig, stage, unstage, history, loadHistory, restoreToReview, restoreId } from '../configStore'
+import { api } from '../api/client'
+import type { ConfigLeaf, HistoryItem, DiffLineDTO } from '../api/types'
 import { ReviewPanel } from '../components/ReviewPanel'
+import { Icon } from '../components/Icon'
+import { ago } from '../lib/format'
 
 // Sections whose scalars are safe to edit inline. Everything else is read-only
 // in this screen (bots, teams, workflows have their own screens / are edited as
@@ -27,6 +30,7 @@ function groupBySection(leaves: ConfigLeaf[]): Map<string, ConfigLeaf[]> {
 export function Config(): JSX.Element {
   useEffect(() => {
     void loadConfig()
+    void loadHistory()
   }, [])
 
   const c = config.value
@@ -71,25 +75,113 @@ export function Config(): JSX.Element {
 
       <ReviewPanel stagedCount={staged.value.length} />
 
-      {c
-        ? [...groupBySection(c.leaves ?? [])].map(([section, leaves]) => (
-            <section class="dl-card" aria-label={section} key={section}>
-              <div class="cfg-head" style="padding:14px 22px 0">
-                <h2 style="margin:0;font-size:15px">{sectionTitle(section)}</h2>
-                <span class="cfg-head-sub">
-                  <span class="mono">{section}</span>
-                  {!EDITABLE.has(section) ? <span class="tag">read-only here</span> : null}
-                </span>
-              </div>
-              <div class="fields">
-                {leaves.map((l) => (
-                  <Field key={l.path.join('.')} leaf={l} editable={EDITABLE.has(section)} staged={stagedPaths.has(l.path.join('.'))} />
-                ))}
-              </div>
-            </section>
-          ))
-        : null}
+      <HistoryCard />
+
+      {c ? (
+        <details class="panel cfg-sections" data-testid="cfg-edit-sections">
+          <summary class="panel-head"><h3>Edit the config by section</h3></summary>
+          <div class="panel-body">
+            {[...groupBySection(c.leaves ?? [])].map(([section, leaves]) => (
+              <section class="dl-card" aria-label={section} key={section}>
+                <div class="cfg-head" style="padding:14px 22px 0">
+                  <h2 style="margin:0;font-size:15px">{sectionTitle(section)}</h2>
+                  <span class="cfg-head-sub">
+                    <span class="mono">{section}</span>
+                    {!EDITABLE.has(section) ? <span class="tag">read-only here</span> : null}
+                  </span>
+                </div>
+                <div class="fields">
+                  {leaves.map((l) => (
+                    <Field key={l.path.join('.')} leaf={l} editable={EDITABLE.has(section)} staged={stagedPaths.has(l.path.join('.'))} />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </details>
+      ) : null}
     </div>
+  )
+}
+
+// HistoryCard: "applied changes full width, readable at a glance" (design
+// CONFORMANCE "System · Config"). Each row names who applied a change and
+// when, with the paths it touched; Diff expands the exact lines, and every
+// entry but the newest offers a one-click restore (the pipeline's own
+// backup → validate → diff → confirm → apply gate, same as a staged edit).
+function HistoryCard(): JSX.Element | null {
+  const items = history.value
+  if (!items.length) return null
+  return (
+    <section class="dl-card cfg-hist" aria-label="Applied changes">
+      <header class="dl-ch">
+        <h2>Applied changes</h2>
+        <span class="dl-sub">newest first · each keeps a backup you can go back to</span>
+      </header>
+      <ul class="dl-list">
+        {items.map((h, i) => <HistoryRow key={h.id} h={h} canRestore={i > 0} />)}
+      </ul>
+      <p class="dl-sub cfg-note">Restore goes back to before a change, undoing everything since. It's checked on a copy and backed up before it applies.</p>
+    </section>
+  )
+}
+
+function HistoryRow({ h, canRestore }: { h: HistoryItem; canRestore: boolean }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const who = h.operator ? (h.event === 'restore' ? `${h.operator}, restoring ${h.restored_from ?? ''}` : h.operator) : 'Someone (outside the dashboard, or before this audit log)'
+  const what = h.changed && h.changed.length
+    ? h.changed.length === 1 ? h.changed[0] : `${h.changed.length} paths, incl. ${h.changed[0]}`
+    : h.added || h.removed ? `${h.added} added, ${h.removed} removed` : 'no textual change'
+  return (
+    <li class="cfg-h">
+      <div class="cfg-h-row">
+        <span class="dl-ng"><Icon name="clock" /></span>
+        <span class="dl-nt">
+          <b class="mono">{what}</b>
+          {open ? <span class="dl-tech mono">{h.sha}</span> : null}
+        </span>
+        <span class="cfg-who">
+          <span>{who}</span>
+          <span class="dl-sub">{ago(h.ts)} · {new Date(h.ts).toLocaleString()}</span>
+        </span>
+        <span class="dl-na">
+          <button class="btn sm ghost" type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {open ? 'Hide the diff' : 'Diff'}
+          </button>
+          {canRestore ? (
+            <button class="btn sm ghost" type="button" onClick={() => void restoreToReview(h.id)} disabled={!!restoreId.value}>
+              Restore to before this…
+            </button>
+          ) : (
+            <span class="dl-sub">in use now</span>
+          )}
+        </span>
+      </div>
+      {open ? <HistoryDiff id={h.id} /> : null}
+    </li>
+  )
+}
+
+function HistoryDiff({ id }: { id: string }): JSX.Element {
+  const [lines, setLines] = useState<DiffLineDTO[] | null>(null)
+  const [err, setErr] = useState('')
+  useEffect(() => {
+    let live = true
+    api.historyDiff(id).then((r) => { if (live) setLines(r.lines ?? []) }).catch((e) => { if (live) setErr(String(e)) })
+    return () => { live = false }
+  }, [id])
+  if (err) return <p class="dl-sub hist-diff">Couldn't load the diff: {err}</p>
+  if (!lines) return <p class="dl-sub hist-diff">Loading…</p>
+  if (!lines.length) return <p class="dl-sub hist-diff">This change was made outside the dashboard; its diff is in the backup <span class="mono">{id}</span>.</p>
+  return (
+    <pre class="diff hist-diff" aria-label="Unified diff">
+      {lines.map((l) => (
+        <div class={'dl ' + l.op}>
+          <span class="gutter">{l.op === 'add' ? '+' : l.op === 'del' ? '-' : ' '}</span>
+          <span class="dtext">{l.text}</span>
+        </div>
+      ))}
+    </pre>
   )
 }
 

@@ -121,6 +121,53 @@ func (p *Pipeline) History() ([]HistoryEntry, error) {
 	return out, nil
 }
 
+// AppliedChange is what one historical backup turned into: the leaf-level
+// changes between the config as it stood just before that apply (the backup
+// itself) and the config right after it (the next backup taken, or the live
+// config for the most recent entry). It is computed on demand — nothing extra
+// is stored — from the same backups History() lists and the same classifier
+// Review uses, so the history view and the review a staged edit gets agree.
+type AppliedChange struct {
+	Leaves []LeafChange
+	Diff   Diff
+}
+
+// AppliedChange renders what changed for one history entry (see AppliedChange
+// type doc). Returns an error if id does not name a known backup.
+func (p *Pipeline) AppliedChange(id string) (AppliedChange, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	hist, err := p.History()
+	if err != nil {
+		return AppliedChange{}, err
+	}
+	idx := -1
+	for i, h := range hist {
+		if h.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return AppliedChange{}, fmt.Errorf("configedit: unknown backup %q", id)
+	}
+	before, err := p.backupContent(id)
+	if err != nil {
+		return AppliedChange{}, err
+	}
+	var after []byte
+	if idx == 0 {
+		after, err = p.current()
+	} else {
+		after, err = p.backupContent(hist[idx-1].ID)
+	}
+	if err != nil {
+		return AppliedChange{}, err
+	}
+	_, _, leaves := classify(before, after)
+	return AppliedChange{Leaves: leaves, Diff: ComputeDiff(before, after)}, nil
+}
+
 // backupContent returns a backup's bytes.
 func (p *Pipeline) backupContent(id string) ([]byte, error) {
 	if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
