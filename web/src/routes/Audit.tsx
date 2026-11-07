@@ -97,9 +97,14 @@ export function Audit(): JSX.Element {
 
   const audit = useMemo(() => (entries ?? []).filter(isAccountable), [entries])
 
+  // Plain div, not .col: .col's flex `gap` would add its stack gap between
+  // the title and the Daemon log/Audit sub-tabs that the design doesn't have
+  // — the same page-title gap bug fixed on System's own tab bar (System.tsx).
+  // The sub-tab row's own margin-bottom (.tabs) is spacing enough before the
+  // tab body below it.
   return (
-    <div class="col">
-      <div class="dl-phead"><div><h1>Logs &amp; audit</h1></div></div>
+    <div class="m-page">
+      <div class="dl-phead" style="margin-bottom:4px"><div><h1>Logs &amp; audit</h1></div></div>
       {err ? <div class="banner err" role="alert">Couldn't load the log: {err}</div> : null}
 
       {entries === null ? (
@@ -181,6 +186,7 @@ function DaemonLog(): JSX.Element {
         onQueryChange={setQ}
         placeholder="Find in the log"
         ariaLabel="Find and filter the daemon log"
+        filterByHint
         menus={[
           { key: 'level', label: 'Level', multi: true, selected: level, options: levelOpts, onToggle: (v) => toggle(setLevel, level, v) },
           { key: 'src', label: 'From', multi: true, selected: src, options: srcOpts, onToggle: (v) => toggle(setSrc, src, v) },
@@ -189,12 +195,12 @@ function DaemonLog(): JSX.Element {
         onSinceChange={setSince}
         showTime
       />
-      <div class="panel">
+      <div class="panel log-panel">
         <div class="panel-head">
           <StatusMark s="run" word="Following" />
           <span class="dl-sub">{filtered.length} of {all.length} lines</span>
         </div>
-        <div class="log" style="min-height:300px">
+        <div class="log">
           {filtered.length ? (
             filtered.map((l, i) => (
               <div key={i} class={'l' + (l.level === 'err' ? ' err' : l.level === 'warn' ? ' warn' : '')}>

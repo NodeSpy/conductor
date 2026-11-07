@@ -48,6 +48,7 @@ export function FilterBar({
   since,
   onSinceChange,
   showTime = false,
+  filterByHint = false,
 }: {
   q: string
   onQueryChange: (q: string) => void
@@ -60,6 +61,11 @@ export function FilterBar({
   since?: string
   onSinceChange?: (v: string) => void
   showTime?: boolean
+  // filterByHint shows the "Filter by…" chip in the search field even with
+  // no connector-published qualifiers (attrs) — a screen whose own menus
+  // (Level, From, …) are the only filters still gets the design's chip
+  // pointing at them.
+  filterByHint?: boolean
 }): JSX.Element {
   const [text, setText] = useState(q)
   useEffect(() => setText(q), [q])
@@ -142,7 +148,7 @@ export function FilterBar({
             if (v !== q) onQueryChange(v)
           }}
         />
-        {attrs.length ? (
+        {attrs.length || filterByHint ? (
           <button type="button" class="fb-by" title="Every filter you can type" onClick={() => (document.activeElement as HTMLElement)?.blur()}>
             Filter by…
           </button>
