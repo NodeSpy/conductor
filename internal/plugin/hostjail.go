@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -90,12 +92,15 @@ type probeEnv struct {
 	readFile  func(string) ([]byte, error)
 	stat      func(string) (os.FileInfo, error)
 	mkdirTemp func() (string, error)
+	// place puts conductor (self) in dir as a plugin binary would be, and
+	// returns its path there.
+	place func(self, dir string) (string, error)
 }
 
 // ProbeHostJail builds a real jail, the way a plugin launch does (self is
-// the jail's entry), around a no-op: conductor's own `sandbox-net --noop`.
-// It answers exactly "can a plugin be jailed here", and when not, names the
-// cause.
+// the jail's entry), around a no-op: conductor's own `sandbox-net --noop`,
+// placed and run the way a plugin's binary is. It answers exactly "can a
+// plugin be jailed here", and when not, names the cause.
 func ProbeHostJail(self string) HostJail {
 	return probeHostJail(self, probeEnv{
 		goos:     spawnGOOS,
@@ -111,6 +116,7 @@ func ProbeHostJail(self string) HostJail {
 		readFile:  os.ReadFile,
 		stat:      os.Stat,
 		mkdirTemp: func() (string, error) { return scratch.MkdirTemp("jailprobe-") },
+		place:     placeProbeBinary,
 	})
 }
 
@@ -140,20 +146,29 @@ func probeHostJail(self string, e probeEnv) HostJail {
 	if self == "" {
 		return HostJail{Reason: "conductor's own binary (the jail's entry) is unknown", Fix: "run conductor from its installed binary"}
 	}
-	// A plugin's jail binds its staging dir (conductor's scratch, noexec);
-	// the probe binds one like it. Its payload is conductor itself, run
-	// through /proc/self/exe: whatever directory conductor is installed in
-	// stays outside the jail, as it does for a plugin.
+	// A plugin's jail binds the directory its binary is in, read-only, and
+	// its staging dir (conductor's scratch, noexec), and runs the binary from
+	// inside. The probe does the same with a copy of conductor in a scratch
+	// dir: whatever directory conductor itself is installed in stays outside
+	// the jail, as it does for a plugin.
 	dir, err := e.mkdirTemp()
 	if err != nil {
 		return HostJail{Reason: "no scratch directory for the probe: " + err.Error(), Fix: "make conductor's scratch dir writable"}
 	}
 	defer os.RemoveAll(dir)
+	bin, err := e.place(self, filepath.Join(dir, "bin"))
+	if err != nil {
+		return HostJail{Reason: "cannot place conductor in the probe's scratch dir: " + err.Error(), Fix: "make conductor's scratch dir writable"}
+	}
+	stage := filepath.Join(dir, "stage")
 	spec := &sandbox.Spec{Mode: "namespace", Deny: true}
-	argv, err := spec.WrapLocal([]string{"/proc/self/exe", "sandbox-net", "--noop"}, "", nil, &sandbox.NetForward{
-		Self:  self,
-		Base:  sandbox.BaseMinimal,
-		Binds: []sandbox.BindMount{{Path: dir, NoExec: true}},
+	argv, err := spec.WrapLocal([]string{bin, "sandbox-net", "--noop"}, "", nil, &sandbox.NetForward{
+		Self: self,
+		Base: sandbox.BaseMinimal,
+		Binds: []sandbox.BindMount{
+			{Path: filepath.Dir(bin), RO: true},
+			{Path: stage, NoExec: true},
+		},
 	})
 	if err != nil {
 		return HostJail{Reason: "the jail cannot be set up: " + err.Error(), Fix: "report this as a bug"}
@@ -163,6 +178,34 @@ func probeHostJail(self string, e probeEnv) HostJail {
 		return HostJail{OK: true}
 	}
 	return diagnoseUserns(lastLine(out, err), e)
+}
+
+// placeProbeBinary links (else copies) self into dir.
+func placeProbeBinary(self, dir string) (string, error) {
+	if err := os.MkdirAll(filepath.Join(filepath.Dir(dir), "stage"), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	dst := filepath.Join(dir, "conductor")
+	if os.Link(self, dst) == nil {
+		return dst, nil
+	}
+	src, err := os.Open(self) //nolint:gosec // conductor's own binary
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o500) //nolint:gosec // a fresh scratch dir of our own
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		out.Close()
+		return "", err
+	}
+	return dst, out.Close()
 }
 
 // diagnoseUserns names why a namespaced jail failed: the usual causes, in
