@@ -2,7 +2,7 @@
 // the approved mock's approvalPage): a needs-you kicker with age and expiry, the
 // plain title, what it asks, why, the four change counts (a plan's Adds /
 // Changes / Replaces / Destroys, or exactly what the action sends), where /
-// effect / undo, who started it, Approve with passkey / Deny, who can approve,
+// effect / undo, who started it, Approve / Deny, who can approve,
 // and the technical detail (ids, hashes, the digest a passkey signs) folded at
 // the end. It stands alone at every width: no bot head or tabs above it, one
 // Back.
@@ -21,30 +21,33 @@
 // straight away rather than opening a reason sheet.
 import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
-import { approvalView, decideProposal, type ApprovalView } from '../api/auth'
-import { botsApi, type ProposalRow } from '../api/bots'
+import { approvalView, authState, confirmLabel, decideProposal, stepupMethods, type ApprovalView } from '../api/auth'
+
+// usesPasskey: the passkey glyph only when a passkey is what confirms.
+const usesPasskey = () => stepupMethods(authState.value)[0] === 'passkey'
+import { botsApi, displayName } from '../api/bots'
 import { humanError } from '../api/errors'
 import { Icon } from '../components/Icon'
 import { StatusMark } from '../components/StatusMark'
-import { ago, humanDuration } from '../lib/format'
+import { FactsLine } from '../components/Facts'
+import { actionFact, agoText, envFact, envOf, expiresIn, originText, proposalTitle, proposalWhy, useVerbs, type ProposalRowD } from './BotDetail'
 
-function expiresIn(iso?: string): string {
-  if (!iso) return ''
-  const ms = new Date(iso).getTime() - Date.now()
-  if (Number.isNaN(ms) || ms <= 0) return ''
-  return `expires in ${humanDuration(ms)}`
-}
+// The detail page spells a span out (prototype UI.humanSpan): "23 h 52 min".
+const humanSpan = (t: string) => t.replace(/(\d+)d\b/g, '$1 d').replace(/(\d+)h\b/g, '$1 h').replace(/(\d+)m\b/g, '$1 min')
 
 export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element {
   const [view, setView] = useState<ApprovalView | null>(null)
-  const [row, setRow] = useState<ProposalRow | null>(null)
+  const [row, setRow] = useState<ProposalRowD | null>(null)
+  const [who, setWho] = useState<{ name: string; team: string }>({ name: bot, team: '' })
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState<'approve' | 'deny' | ''>('')
   const [done, setDone] = useState('')
+  const verbs = useVerbs()
 
   useEffect(() => {
     approvalView(bot, id).then(setView).catch((e) => setErr(humanError(e)))
     botsApi.botProposals(bot).then((r) => setRow(r.proposals.find((p) => p.proposal === id) || null)).catch(() => {})
+    botsApi.bot(bot).then((b) => setWho({ name: displayName(b.identity, bot), team: b.team || '' })).catch(() => {})
   }, [bot, id])
 
   async function decide(decision: 'approve' | 'deny') {
@@ -68,9 +71,19 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
   const action = (summary.action as Record<string, unknown>) || {}
   const requesterWords = String(summary.requester_summary || '')
   const tf = row?.terraform
-  const title = row?.summary || String(action.uses || action.kind || 'this proposal')
-  const ask = row?.action || (tf ? `${bot} wants to run terraform apply on ${tf.workspace}.` : `${bot} wants to ${title}.`)
-  const prod = !!(tf && /prod/i.test(tf.workspace))
+  const title = row ? proposalTitle(row) : String(action.uses || action.kind || 'this proposal')
+  // The ask in words (never the raw verb and payload: those are "Exactly what it sends" below).
+  const nm = who.name
+  const pend = !row || row.status === 'pending'
+  const ok = row?.status === 'executed' || row?.status === 'approved'
+  const ds = ok ? 'ok' : row?.status === 'denied' || row?.status === 'refused' || row?.status === 'failed' ? 'fail' : 'idle'
+  const word = row ? (ok ? 'Approved' : row.status[0].toUpperCase() + row.status.slice(1)) : ''
+  const next = row?.status === 'executed' ? 'Done: conductor applied exactly what was signed.'
+    : ok ? (tf ? 'Next: conductor checks the plan is unchanged, applies it, and posts the result on the ticket.' : 'Next: it runs once, exactly as approved; the result lands on the ticket.')
+    : row?.status === 'denied' ? `${nm} was told${row.reason ? ` why: “${row.reason.replace(/[.!?]\s*$/, '')}”` : ''}. Nothing runs.`
+    : row?.status === 'refused' ? 'conductor refused it before it reached you; nothing ran.'
+    : row?.status === 'expired' ? 'Nobody decided in time; nothing ran.' : ''
+  const ask = row?.kind === 'knowledge' ? proposalWhy(row, nm) : tf ? `${nm} wants to run terraform apply on ${(row && envOf(row)) || tf.workspace}.` : `${nm} wants to ${row?.summary || `run ${String(action.uses || row?.uses || 'an action')}`}.`
   const operators = view.operators || []
 
   if (done) {
@@ -84,23 +97,36 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
 
   return (
     <div class="col" data-proposal={id}>
-      <a class="back" href={`#/bots/${bot}/approvals`}>← {bot}'s approvals</a>
+      <nav class="dl-crumbs prop-crumbs" aria-label="Where you are">
+        <a href="#/bots">Bots</a>
+        {who.team ? <><span class="sep" aria-hidden="true">›</span><a href={`#/teams/${who.team}`}>{who.team}</a></> : null}
+        <span class="sep" aria-hidden="true">›</span><a href={`#/bots/${bot}`}>{nm}</a>
+        <span class="sep" aria-hidden="true">›</span><a href={`#/bots/${bot}/proposals`}>Approvals</a>
+        <span class="sep" aria-hidden="true">›</span><span class="cur" aria-current="page">{title}</span>
+      </nav>
       {err ? <div class="banner err" role="alert">{err}</div> : null}
 
       <div class="prop-single">
-        <article class="dl-card dl-proposal">
-          <div class="dl-kick">
-            <StatusMark s="ember" mkOnly label="Needs you" />
-            Needs you{row?.created ? ` · asked ${ago(row.created)}` : ''}{row?.expires && expiresIn(row.expires) ? ` · ${expiresIn(row.expires)}` : ''}
-          </div>
+        <article class={'dl-card dl-proposal' + (pend ? '' : ' decided')}>
+          {pend ? (
+            <div class="dl-kick">
+              <StatusMark s="ember" mkOnly label="Needs you" />
+              Needs you{row?.created ? <> · <span class="nowrap">asked {agoText(row.created)}</span></> : null}{row?.expires && expiresIn(row.expires) ? <> · <span class="nowrap">expires in {humanSpan(expiresIn(row.expires))}</span></> : null}
+            </div>
+          ) : (
+            <div class="prop-decided" data-s={ds} data-testid="approval-decided">
+              <p class="prop-decided-h">
+                <StatusMark s={ds} mkOnly lg label={word} />
+                <b>{word}</b>
+                {row?.approver ? ` by ${row.approver.replace(/^operator:/, '') === authState.value.operator ? 'you' : row.approver.replace(/^operator:/, '')}` : ''}
+                {row?.decided ? ` · ${agoText(row.decided)}` : ''}
+              </p>
+              {next ? <p class="prop-decided-n">{next}</p> : null}
+            </div>
+          )}
           <h1 class="dl-ptitle">{title}</h1>
           <p class="dl-ask">{ask}</p>
-          {tf || prod ? (
-            <span class="fx">
-              {prod ? <span class="fx-i prod">production</span> : null}
-              {tf ? <span class="fx-i">changes infrastructure</span> : null}
-            </span>
-          ) : null}
+          {row ? <FactsLine facts={[envFact(row), actionFact(row, verbs)]} /> : null}
 
           <div class="prop-body">
             {tf ? (
@@ -122,14 +148,14 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
             ) : (
               <div class="dl-pwhy">
                 <span class="dl-lbl">Exactly what it sends</span>
-                <pre class="dl-code" data-testid="approval-canonical">{JSON.stringify(action, null, 2)}</pre>
+                <Payload action={action} />
               </div>
             )}
 
             {requesterWords ? (
               <div class="dl-pwhy">
                 <span class="dl-lbl">Why</span>
-                <p data-testid="approval-requester-words">The requester's own words (not checked): {requesterWords}</p>
+                <p data-testid="approval-requester-words">{requesterWords}</p>
               </div>
             ) : null}
 
@@ -142,11 +168,13 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
 
             <p class="dl-origin">
               {originIcon(row?.requester_class)}
-              {originText(bot, row?.requester, row?.requester_class)}
+              {originText(nm, row?.requester, row?.requester_class)}
             </p>
 
+            <p class="dl-sub prop-can-link"><a class="dl-link" href={`#/bots/${bot}/access`}>What {nm} may do on its own, and what it asks first →</a></p>
+
             <details class="dl-audit-d">
-              <summary><Icon name="chev" />For audit: ids, hashes and the digest your passkey signs</summary>
+              <summary><Icon name="chev" />For audit: ids, hashes and the digest your approval signs</summary>
               <dl class="dl-facts">
                 <dt>Proposal</dt><dd><span class="mono">{row?.proposal || id}</span> · tier <span class="mono">{row?.tier || String(summary.tier || '')}</span></dd>
                 <dt>Verb</dt><dd class="mono">{String(action.uses || row?.uses || '')}</dd>
@@ -159,16 +187,16 @@ export function Approval({ bot, id }: { bot: string; id: string }): JSX.Element 
             </details>
           </div>
 
-          <div class="dl-decide prop-decide">
+          {pend ? <div class="dl-decide prop-decide">
             <button class="btn lg primary" type="button" disabled={!!busy} data-testid="approve" onClick={() => void decide('approve')}>
-              <Icon name="passkey" />
-              {busy === 'approve' ? 'Confirming…' : 'Approve with passkey'}
+              {usesPasskey() ? <Icon name="passkey" /> : null}
+              {busy === 'approve' ? 'Confirming…' : confirmLabel('Approve')}
             </button>
             <button class="btn lg secondary" type="button" disabled={!!busy} data-testid="deny" onClick={() => void decide('deny')}>
               {busy === 'deny' ? 'Confirming…' : 'Deny…'}
             </button>
             <span class="hint">{operators.length ? `Only ${operators.join(' or ')} can approve.` : 'Any operator can approve.'}</span>
-          </div>
+          </div> : null}
         </article>
       </div>
     </div>
@@ -183,10 +211,27 @@ function originIcon(cls?: string): JSX.Element {
   return <Icon name="users" />
 }
 
-function originText(bot: string, requester?: string, cls?: string): string {
-  if (cls === 'event') return `Started by an event (${requester || 'unknown'}), not a person.`
-  if (cls === 'user') return `Asked for in chat by someone who isn't one of your operators (${requester || 'unknown'}); it runs with no more trust than they have.`
-  if (cls === 'proactive') return `Found on ${bot}'s own routine check; nobody asked.`
-  if (cls === 'peer') return `Asked for by another bot (${requester || 'unknown'}), carrying the original requester's trust.`
-  return `Asked for by an operator (${requester || 'unknown'}).`
+// Payload is exactly what the action sends, field by field (prototype UI.payloadHTML): the verb, then each option; a
+// long or multi-line value gets a block of its own.
+function Payload({ action }: { action: Record<string, unknown> }): JSX.Element {
+  const opts = (action.options as Record<string, unknown>) || Object.fromEntries(Object.entries(action).filter(([k]) => k !== 'uses' && k !== 'kind'))
+  const entries = Object.entries(opts)
+  return (
+    <div class="payload" data-testid="approval-canonical">
+      <div class="pl-row"><span class="pl-k">verb</span><span class="pl-v mono">{String(action.uses || action.kind || '')}</span></div>
+      {entries.length ? (
+        entries.map(([k, v]) => {
+          const t = typeof v === 'object' ? JSON.stringify(v) : String(v)
+          return (
+            <div class="pl-row">
+              <span class="pl-k mono">{k}</span>
+              {t.length > 80 || /\n/.test(t) ? <div class="pl-long">{t}</div> : <span class="pl-v mono">{t}</span>}
+            </div>
+          )
+        })
+      ) : (
+        <div class="pl-row muted small">no options</div>
+      )}
+    </div>
+  )
 }

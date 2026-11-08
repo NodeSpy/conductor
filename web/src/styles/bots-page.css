@@ -1,0 +1,18 @@
+/* A bot's page (prototype css: .bav.xl in the head, the phone's 44px face). The app's Avatar draws the face inside
+   the .bav.xl box, so it fills the box at every width. */
+.dl-bothead > .bav.xl { width: 64px; height: 64px; border-radius: 16px; background: none; }
+.dl-bothead > .bav.xl > .avatar, .dl-bothead > .bav.xl > .avatar > svg, .dl-bothead > .bav.xl > img { width: 100% !important; height: 100% !important; }
+@media (max-width: 720px) { .dl-bothead > .bav.xl { width: 44px; height: 44px; border-radius: 12px; grid-column: 1; grid-row: 1 / span 2; } }
+.watch-empty > .st { display: inline-flex; align-items: center; gap: 6px; }
+/* The Home session panel fits the screen under the head and tabs (the prototype measures it once; here a bound keeps a
+   tall window from stretching it without end). */
+.chat-grid > .panel.chat.fit { height: max(360px, min(calc(var(--dvh, 100vh) - 290px), 640px)); }
+@media (max-width: 720px) { .chat-grid > .panel.chat.fit { height: max(320px, calc(var(--dvh, 100vh) - 300px)); } }
+.dl-bothead > .bav.xl > .avatar { border: 0; background: none; border-radius: 0; }
+@media (max-width: 720px) { .chat-grid > .panel.chat.fit { height: max(320px, min(calc(var(--dvh, 100vh) - 300px), 520px)); } }
+
+/* long proposal titles (a file name, a summary with no spaces) wrap instead of overflowing */
+.bot-page .dl-nt b, .bot-page .cm-side-a b, .prop-single .dl-ptitle, .prop-crumbs .cur { overflow-wrap: anywhere; }
+/* the "isn't watching anything" callout sits above the chat: take its height off too, so the composer keeps its gap */
+.bot-page:has(.watch-empty) .chat-grid > .panel.chat.fit { height: max(360px, min(calc(var(--dvh, 100vh) - 380px), 640px)); }
+@media (max-width: 720px) { .bot-page:has(.watch-empty) .chat-grid > .panel.chat.fit { height: max(320px, min(calc(var(--dvh, 100vh) - 420px), 520px)); } }

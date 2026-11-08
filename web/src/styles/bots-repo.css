@@ -1,0 +1,29 @@
+/* The repo browser (components/RepoView.tsx): the pieces the shared sheets
+   don't already style. Tokens only. */
+.md-cm textarea.md-ta {
+  display: block;
+  width: 100%;
+  min-height: 120px; /* five lines at least */
+  max-height: var(--ed-max);
+  overflow-y: auto;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--type-code-size);
+  line-height: 1.6;
+  padding: 10px 14px;
+}
+.rp-find .seg { align-self: flex-start; }
+.search-res { border-top: 1px solid var(--line); max-height: 360px; overflow: auto; }
+.search-res .item b { display: block; }
+/* history subjects: two lines, the whole subject on hover */
+.repo-hist .rp-commit .rp-subj { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+/* a denial's reason wraps inside its row */
+.kprop .st { white-space: normal; overflow-wrap: anywhere; }
+
+/* a long field value (a query, a URL) wraps inside its box instead of running off a phone screen */
+.prop-fields { min-width: 0; }
+.prop-fields > div { overflow-wrap: anywhere; }

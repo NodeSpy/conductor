@@ -112,6 +112,8 @@ test('give a bot a face (stage an avatar change)', async () => {
   await page.goto(`${rt.baseURL}/#/bots/atlas/settings`)
   await page.reload() // boot the SPA cleanly at this hash, free of prior in-SPA nav
   await expect(page.getByRole('heading', { name: /Atlas/ })).toBeVisible({ timeout: 10_000 })
+  // Settings → Identity & charter → Mascot · Change… opens the picker.
+  await page.getByTestId('mascot-change').click()
   await expect(page.getByTestId('identity-picker')).toBeVisible({ timeout: 10_000 })
   // Pick a different colour, then use it — it stages a config change.
   await page.locator('[data-testid="idp-colors"] [data-color="plum"]').click()
@@ -119,6 +121,6 @@ test('give a bot a face (stage an avatar change)', async () => {
 
   // The review panel appears with the staged change; reviewing shows the diff.
   await expect(page.getByText(/Review \d change/)).toBeVisible({ timeout: 10_000 })
-  await page.getByRole('button', { name: 'Review changes' }).click()
+  await page.locator('section.review').getByRole('button', { name: 'Review changes' }).click()
   await expect(page.locator('.diff')).toContainText('plum', { timeout: 10_000 })
 })
