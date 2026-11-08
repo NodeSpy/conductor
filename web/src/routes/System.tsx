@@ -531,7 +531,7 @@ function Updates(): JSX.Element {
                   <input class="input mono" id="upd-int" style="width:90px" value={u?.interval ?? ''} placeholder="10m" onChange={(e) => void stage(['update', 'interval'], (e.target as HTMLInputElement).value)} />
                 </div>
                 {staged.value.length === 0 ? (
-                  <button type="button" class="btn" aria-disabled="true" disabled>
+                  <button type="button" class="btn sm primary" style="justify-self:start" aria-disabled="true" disabled title="Change a setting first">
                     Review the change
                   </button>
                 ) : (
