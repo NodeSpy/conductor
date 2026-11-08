@@ -94,12 +94,14 @@ export function TeamRouting({ ctx }: { ctx: TeamCtx }): JSX.Element {
       .then((r) => (r.ok ? r.json() : { connections: [] }))
       .then((r: { connections?: Conn[] }) => setConns((r.connections || []).map((x) => ({ name: x.name, events: x.events || [] }))))
       .catch(() => setConns([]))
+    // Real past work to try the rules on: tickets for the team and for each of its bots (an event's
+    // ticket assigned straight to a bot is still something a rule could have routed), then routed cases.
     botsApi
-      .tickets({ assignee: 'team:' + name, status: 'draft,ready,in_progress,waiting,done,declined' })
-      .then((r) => setEvents(pastEvents(r.tickets || [], (ctx.team.routed || []) as Routed[])))
+      .tickets({ status: 'draft,ready,in_progress,waiting,done,declined' })
+      .then((r) => setEvents(pastEvents((r.tickets || []).filter((t) => t.assignee === 'team:' + name || members.some((m) => t.assignee === 'bot:' + m)), (ctx.team.routed || []) as Routed[])))
       .catch(() => setEvents(pastEvents([], (ctx.team.routed || []) as Routed[])))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name])
+  }, [name, members.join(',')])
 
   // stageRules stages the new list; a team with no routing yet gets one (the
   // daemon needs its fallback).

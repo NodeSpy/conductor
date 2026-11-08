@@ -46,6 +46,7 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
   const [modal, setModal] = useState<JSX.Element | null>(null)
   const [menuAt, setMenuAt] = useState<HTMLElement | null>(null)
   const moreRef = useRef<HTMLButtonElement>(null)
+  const [scopedN, setScopedN] = useState<number | null>(null)
 
   const load = () => {
     botsApi.team(name).then(setTeam).catch(setErr)
@@ -179,7 +180,7 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
       body = <TeamDefaults ctx={ctx} />
       break
     case 'tickets':
-      body = <Tickets scope={'team:' + name} />
+      body = <Tickets scope={'team:' + name} onCount={setScopedN} />
       break
     case 'knowledge':
       body = c.knowledge || team.knowledge ? (
@@ -254,8 +255,8 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
         />
       ) : null}
       <div class="dl-actions">
-        {/* the Tickets tab has its own "New ticket for the team" */}
-        {active === 'tickets' ? null : (
+        {/* with no tickets at all the Tickets tab's hero has "New ticket for the team" */}
+        {active === 'tickets' && scopedN === 0 ? null : (
           <a class="btn secondary" href={`#/tickets?new=1&assignee=${encodeURIComponent('team:' + name)}`} data-testid="team-new-ticket">
             <Icon name="plus" />
             New ticket
@@ -275,7 +276,7 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
         active={active}
         items={[
           { id: 'overview', label: 'Overview', href: `#/teams/${name}` },
-          { id: 'routing', label: 'Routing', href: `#/teams/${name}/routing`, count: rules.length || null },
+          { id: 'routing', label: 'Routing', href: `#/teams/${name}/routing`, count: rules.length },
           { id: 'defaults', label: 'Ceilings & scopes', href: `#/teams/${name}/defaults` },
           { id: 'tickets', label: 'Tickets', href: `#/teams/${name}/tickets`, count: ticketCount || null },
           { id: 'knowledge', label: 'Knowledge', href: `#/teams/${name}/knowledge`, count: pend || null },
