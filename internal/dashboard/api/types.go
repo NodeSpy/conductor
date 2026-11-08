@@ -270,12 +270,15 @@ type RunEventData struct {
 // raw text, a generic decoded tree for section rendering, and a flattened list
 // of scalar leaves (path+value) for the settings-style editors.
 type ConfigResponse struct {
-	Path   string         `json:"path"`
-	SHA    string         `json:"sha"`
-	Text   string         `json:"text"`
-	Tree   any            `json:"tree"`   // generic decode of the YAML (maps/lists/scalars)
-	Leaves []ConfigLeaf   `json:"leaves"` // every scalar, by dotted path
-	Staged []ConfigChange `json:"staged"` // the currently staged edits
+	Path string `json:"path"`
+	SHA  string `json:"sha"`
+	// DiskSHA is the short sha256 of the file as it is on disk now; it differs
+	// from SHA (what the daemon loaded) when someone edited the file since.
+	DiskSHA string         `json:"disk_sha"`
+	Text    string         `json:"text"`
+	Tree    any            `json:"tree"`   // generic decode of the YAML (maps/lists/scalars)
+	Leaves  []ConfigLeaf   `json:"leaves"` // every scalar, by dotted path
+	Staged  []ConfigChange `json:"staged"` // the currently staged edits
 }
 
 // ConfigLeaf is one scalar value in the config, addressed by its path segments.
@@ -699,7 +702,7 @@ type PluginRef struct {
 
 // ConnectorRow is one configured connection.
 type ConnectorRow struct {
-	Name string `json:"name"`
+	Name      string `json:"name"`
 	PluginRef `tstype:",extends"`
 	// Unavailable says why the connection can't run yet (its plugin isn't
 	// installed); empty when the connector registry has it.
@@ -714,11 +717,11 @@ type RuntimeRow struct {
 	Name string `json:"name"`
 	// Type is a built-in runtime's kind ("cli", "paseo", …), empty for a
 	// plugin's.
-	Type string `json:"type,omitempty"`
+	Type      string `json:"type,omitempty"`
 	PluginRef `tstype:",extends"`
-	Tool    string `json:"tool,omitempty"`
-	Default bool   `json:"default,omitempty"`
-	Host    string `json:"host,omitempty"`
+	Tool      string `json:"tool,omitempty"`
+	Default   bool   `json:"default,omitempty"`
+	Host      string `json:"host,omitempty"`
 	// Isolation is its isolation mode as configured ("" when it sets none).
 	Isolation string   `json:"isolation,omitempty"`
 	Bots      []string `json:"bots,omitempty"` // bots whose worker runs on it
@@ -742,7 +745,7 @@ type HostInfo struct {
 type LanguageInfo struct {
 	Name string `json:"name"`
 	// Class: builtin | host (a program on this machine) | plugin.
-	Class string `json:"class"`
+	Class     string `json:"class"`
 	PluginRef `tstype:",extends"`
 	Steps     int      `json:"steps"`              // code steps that run it
 	Workflows []string `json:"workflows"`          // the workflows and triggers they're in

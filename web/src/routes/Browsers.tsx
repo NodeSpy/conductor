@@ -239,7 +239,7 @@ function IdentitySettings(): JSX.Element {
   return (
     <details class="panel dl-files-d ident-d">
       <summary class="panel-head"><h3>Settings per identity</h3><span class="muted small">which sites each may reach, its logins and credentials (browser.* in config)</span></summary>
-      {note ? <div class="callout small" role="status" style="margin:0 var(--space-4) var(--space-3)">{note} <a class="dl-link" href="#/system/config">Review and apply</a></div> : null}
+      {note ? <div class="callout small" role="status" style="margin:0 var(--space-4) var(--space-3)">{note} <a class="dl-link" href="#/system/config/apply">Review and apply</a></div> : null}
       <table class="tbl responsive">
         <thead><tr><th>identity</th><th>allowlist</th><th>logged-in sites</th><th>credentials</th><th>evaluate</th><th></th></tr></thead>
         <tbody>

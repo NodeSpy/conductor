@@ -1,5 +1,6 @@
 import { render } from 'preact'
 import { App } from './app'
+import { watchAdvanced } from './lib/advanced'
 import './styles/tokens.css'
 import './styles/app.css'
 import './styles/marks.css'
@@ -16,3 +17,4 @@ import './styles/builder.css'
 
 const root = document.getElementById('app')
 if (root) render(<App />, root)
+watchAdvanced()

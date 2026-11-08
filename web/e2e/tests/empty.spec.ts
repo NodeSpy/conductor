@@ -127,9 +127,9 @@ test('#/ on a fresh box keeps the Home layout, empty only where there is nothing
 
 // Screens that were already fine at zero still show no error and no raw text.
 test('Config names its switches in plain words', async ({ page }) => {
-  await page.goto(`${rt.baseURL}/#/config`)
-  await page.getByTestId('cfg-edit-sections').locator('summary').click()
+  await page.goto(`${rt.baseURL}/#/system/config/section/dashboard`)
   await expect(page.locator('label.field[data-path="dashboard.enabled"] .cfg-name')).toHaveText('Dashboard on')
+  await page.goto(`${rt.baseURL}/#/system/config/section/store`)
   await expect(page.locator('label.field[data-path="store.state_file"] .cfg-name')).toHaveText('State file')
 })
 
@@ -190,9 +190,9 @@ test('a host can be added from the Machines tab', async ({ page }) => {
   await shot(page, 'connections-add-host')
   await page.locator('#gen-submit').click()
   await expect(form).toBeHidden()
-  await expect(page).toHaveURL(/#\/system\/config/)
-  await page.getByRole('button', { name: 'Review changes' }).click()
-  await expect(page.locator('.effects')).toContainText('hosts.build-box')
+  // Staging lands on Review and apply (the design's UI.staged).
+  await expect(page).toHaveURL(/#\/system\/config\/apply/)
+  await expect(page.locator('.staged-list')).toContainText('hosts.build-box')
   await noErrors(page)
   // Leave the fresh box as it was for the screens that follow.
   await page.request.post(`${rt.baseURL}/api/v1/config/clear`, { data: {} })

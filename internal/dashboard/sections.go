@@ -358,8 +358,11 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		} else {
 			resp.Update.Deps = resp.Update.Auto // Update.Deps follows auto when unset (config.Update.DepsEnabled)
 		}
-		if rv, ok := up["reload"].(string); ok {
-			resp.Update.ReloadInPlace = rv == "in place"
+		// reload is a bool that follows deps when unset (config.Update.ReloadEnabled).
+		if rv, ok := up["reload"].(bool); ok {
+			resp.Update.ReloadInPlace = rv
+		} else {
+			resp.Update.ReloadInPlace = resp.Update.Deps
 		}
 	}
 	s.updateMu.Lock()

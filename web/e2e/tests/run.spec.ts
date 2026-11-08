@@ -44,8 +44,8 @@ test('a finished run offers a retry-from-step form', async ({ page }) => {
   // status 'ok'); the step card's own "Retry from here…" is the affordance.
   await expect(page.locator('.dl-actions .btn', { hasText: 'Retry' })).toHaveCount(0)
   await page.locator('.dl-step-open .btn', { hasText: 'Retry from here' }).click()
-  await expect(page.locator('.retry-form')).toBeVisible()
-  await expect(page.locator('.retry-form select')).toBeVisible()
+  await expect(page.getByTestId('retry-form')).toBeVisible()
+  await expect(page.getByTestId('retry-form').locator('select')).toBeVisible()
 })
 
 test('an unknown run id shows the empty state', async ({ page }) => {
@@ -76,8 +76,8 @@ test('a forced retry asks to confirm, showing the steps it runs again', async ({
   })
   await page.goto(`/#/runs/${run.id}`)
   await page.locator('.dl-step-open .btn', { hasText: 'Retry from here' }).click()
-  await page.locator('.retry-form .field-check input').check()
-  await page.locator('.retry-form .btn.primary', { hasText: 'Retry' }).click()
+  await page.getByTestId('retry-form').locator('[data-field="force"] input').check()
+  await page.getByTestId('retry-form-submit').click()
   const dialog = page.getByTestId('stepup-dialog')
   await expect(dialog).toBeVisible()
   await expect(dialog).toContainText('Re-run steps of a run that already ran')

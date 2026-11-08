@@ -1,31 +1,33 @@
-// Activity (design §4.2, prototype js/screens/runs.js activityPage/strip): every
-// run in one place, grouped by who needs to act — Needs attention, Running now,
-// Finished (paged) — with the interactive runs-per-hour strip above it (a
-// tooltip per bar, unlike Home's static one) and the shared filter bar.
+// Activity (design §4.2), a line-for-line port of the prototype's
+// js/screens/runs.js activityPage: every run in one place, grouped by who
+// needs to act — Needs attention, Running now, Finished (paged) — under the
+// shared filter bar (Status · Workflow · Bot, the time range at the far
+// right) and the runs-per-period chart (a tooltip per bar). A desktop grouped
+// table with a checkbox column and a selection bar; on a phone the list
+// (#act-phone) and no chart (#act-strip hides at the narrow breakpoint).
 // Everything is live: the signals refresh on each SSE run event.
 //
-// Markup and classes are the prototype's (css/daylight.css .dl-tbl.grouped,
-// .dl-strip, .dl-selbar, .dl-phone-groups): a desktop grouped table with a
-// checkbox column and a pinned selection bar, and a phone list (CSS swaps
-// between them at the narrow breakpoint, so both render and only one shows).
-//
-// Left out (prototype-only, no backend yet): the Bot filter menu (the daemon's
-// RunSummary carries no bot id of its own — bot runs are named "bot:<id>" in
-// workflow today) and the usage/cost column (usage display has no server-side
-// toggle). Bulk Retry/Stop call the same single-run endpoints as the row
-// action, once per selected run — there is no bulk daemon verb.
+// Bulk Retry/Stop call the same single-run endpoints as a run's page, once per
+// selected run (the daemon has no bulk verb). The usage/cost column stays out
+// (usage display has no daemon-side switch).
 import type { JSX } from 'preact'
-import { useMemo, useState } from 'preact/hooks'
-import { runs, status, liveTick, loadError, connAttrs, statusMark, dismissed } from '../state'
+import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { runs, status, liveTick, loadError, connAttrs, dismissed } from '../state'
 import type { RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
 import { EmptyState } from '../components/EmptyState'
-import { FilterBar, type Option } from '../components/FilterBar'
+import { FilterBar, type FilterMenu, type Option } from '../components/FilterBar'
+import { ConfirmModal } from '../components/FormModal'
+import { toast, ToastHost } from '../components/ChatBits'
+import { Icon } from '../components/Icon'
 import { emptyFilter, matchRun, rangeMinutes, hasAnyFilter, botOfRun, STATUSES, TIME_RANGES, type FilterState } from '../lib/filter'
-import { humanDuration, ago, plural } from '../lib/format'
+import { agoText, isFailedRun, plainError, runDur, runMark, runTargetWords } from '../components/RunBits'
+import { hm, runningFor } from '../lib/runwords'
 import { api } from '../api/client'
+import { humanError } from '../api/errors'
 import { go } from '../router'
 import { usePhoneLayout } from '../lib/layout'
+import '../styles/runs-repass.css'
 
 const PAGE = 20
 
@@ -33,33 +35,62 @@ function startedMs(r: RunSummary): number {
   return new Date(r.started).getTime()
 }
 
-function factsLine(r: RunSummary): JSX.Element | null {
-  if (!r.repo) return null
+function hasFacts(r: RunSummary): boolean {
+  return !!(r.repo && !r.repo.startsWith('manual:'))
+}
+
+function FactsLine({ r }: { r: RunSummary }): JSX.Element | null {
+  if (!hasFacts(r)) return null
   return (
     <span class="fx">
-      <span class="fx-i">{r.repo}{r.number ? `#${r.number}` : ''}</span>
+      <span class="fx-i" data-pri={r.number ? 1 : 3} title="Repo">
+        <Icon name={r.number ? 'pr' : 'git-fork'} />
+        {r.repo}
+        {r.number ? `#${r.number}` : ''}
+      </span>
     </span>
   )
 }
 
+function RunName({ r }: { r: RunSummary }): JSX.Element {
+  return (
+    <>
+      <b>{r.workflow.startsWith('bot:') ? r.workflow.slice(4) : r.workflow}</b>
+      {hasFacts(r) ? null : <> <span class="tgt">{runTargetWords(r)}</span></>}
+    </>
+  )
+}
+
+// reason: where it stopped and why, the step named once (runs.js reason)
 function reason(r: RunSummary): string {
-  return `${r.failed_step ? `Failed at “${r.failed_step}”` : 'Failed'}${r.error ? `: ${r.error}` : '.'}`
+  const e = plainError(r)
+  return `${r.failed_step ? `Failed at “${r.failed_step}”` : 'Failed'}${e ? `: ${e}` : ''}${/\.$/.test(e) ? '' : '.'}`
+}
+
+function runParts(rs: RunSummary[]): string {
+  return (
+    [
+      [rs.filter((r) => r.status === 'ok').length, 'went fine'],
+      [rs.filter(isFailedRun).length, 'failed'],
+      [rs.filter((r) => r.status === 'running').length, 'running'],
+      [rs.filter((r) => r.status === 'retried').length, 'retried'],
+      [rs.filter((r) => r.status === 'interrupted').length, 'interrupted'],
+    ] as [number, string][]
+  )
+    .filter(([n]) => n)
+    .map(([n, t]) => `${n} ${t}`)
+    .join(' · ')
 }
 
 export function Activity(): JSX.Element {
   const tick = liveTick.value
   const skip = dismissed.value
-  // The table's own "Show N more" button (below) is left out of the DOM on a
-  // phone: the phone groups render the identical button for the same
-  // `shown`/`finished`, and CSS alone hiding the table (display: none, not
-  // removed) still leaves it a second, invisible match for any locator that
-  // finds buttons by their text — it collided with the phone disclosure's own
-  // "Show"/"Hide" toggle, which shares the word "Show".
   const phone = usePhoneLayout()
   const [filter, setFilter] = useState<FilterState>(emptyFilter('12h'))
   const [shown, setShown] = useState(PAGE)
   const [sel, setSel] = useState<Set<string>>(new Set())
-  const [busy, setBusy] = useState(false)
+  const [last, setLast] = useState<number | null>(null)
+  const [ask, setAsk] = useState<null | 'retry' | 'stop'>(null)
   const attrs = connAttrs.value
   const all = runs.value
 
@@ -68,78 +99,78 @@ export function Activity(): JSX.Element {
     [all, filter, attrs, tick],
   )
 
-  const needs = matched.filter((r) => r.status === 'failed' && !skip.includes(r.id))
+  const needs = matched.filter((r) => isFailedRun(r) && !skip.includes(r.id))
   const running = matched.filter((r) => r.status === 'running')
-  const finished = matched.filter((r) => r.status === 'ok' || r.status === 'retried' || (r.status === 'failed' && skip.includes(r.id)))
+  const finished = matched.filter((r) => !needs.includes(r) && r.status !== 'running')
   const finishedShown = finished.slice(0, shown)
+  const visible = [...needs, ...running, ...finishedShown]
 
+  // functional updates: a typed status:failed toggles a menu and sets the search in one go
   const update = (patch: Partial<FilterState>) => {
-    setFilter({ ...filter, ...patch })
+    setFilter((f) => ({ ...f, ...patch }))
     setShown(PAGE)
-    clearSel()
   }
   const toggle = (key: 'status' | 'workflow' | 'bot', v: string) => {
-    const cur = filter[key]
-    update({ [key]: cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v] } as Partial<FilterState>)
+    setFilter((f) => ({ ...f, [key]: f[key].includes(v) ? f[key].filter((x) => x !== v) : [...f[key], v] }))
+    setShown(PAGE)
   }
 
-  const wfOptions: Option[] = useMemo(() => {
+  const count = (xs: string[]): Option[] => {
     const m = new Map<string, number>()
-    all.filter((r) => !r.workflow.startsWith('bot:')).forEach((r) => m.set(r.workflow, (m.get(r.workflow) || 0) + 1))
-    return [...m.entries()].sort().map(([v, n]) => ({ v, label: v, n }))
-  }, [all])
+    xs.forEach((x) => x && m.set(x, (m.get(x) || 0) + 1))
+    return [...m.entries()].map(([v, n]) => ({ v, label: v, n }))
+  }
+  const wfOptions = useMemo(() => count(all.filter((r) => !r.workflow.startsWith('bot:')).map((r) => r.workflow)), [all])
+  const botOptions = useMemo(() => count(all.map(botOfRun)), [all])
+  const botMenu: FilterMenu = { key: 'bot', label: 'Bot', multi: true, selected: filter.bot, options: botOptions, onToggle: (v: string) => toggle('bot', v), emptyText: 'No bot has run yet.' }
 
-  const botOptions: Option[] = useMemo(() => {
-    const m = new Map<string, number>()
-    all.forEach((r) => {
-      const b = botOfRun(r)
-      if (b) m.set(b, (m.get(b) || 0) + 1)
-    })
-    return [...m.entries()].sort().map(([v, n]) => ({ v, label: v, n }))
-  }, [all])
-
-  const toggleSel = (id: string) => {
+  const toggleSel = (id: string, shift: boolean) => {
+    const i = visible.findIndex((r) => r.id === id)
     setSel((s) => {
       const next = new Set(s)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      const on = !next.has(id)
+      if (shift && last != null && i >= 0) visible.slice(Math.min(last, i), Math.max(last, i) + 1).forEach((r) => (on ? next.add(r.id) : next.delete(r.id)))
+      else if (on) next.add(id)
+      else next.delete(id)
       return next
     })
+    setLast(i)
   }
-  const selAll = () => setSel(new Set([...needs, ...running, ...finishedShown].map((r) => r.id)))
+  const selAll = () => setSel(new Set(visible.map((r) => r.id)))
   const selMatching = () => setSel(new Set(matched.map((r) => r.id)))
   const clearSel = () => setSel(new Set())
 
   const selRuns = all.filter((r) => sel.has(r.id))
-  const selRetryable = selRuns.filter((r) => r.status === 'failed').length
-  const selStoppable = selRuns.filter((r) => r.status === 'running').length
-
-  const bulkRetry = async () => {
-    const rs = selRuns.filter((r) => r.status === 'failed')
-    if (!rs.length) return
-    if (!confirm(`Retry ${rs.length} run${rs.length > 1 ? 's' : ''}? Each starts again from the step that failed.`)) return
-    setBusy(true)
-    try {
-      for (const r of rs) await api.retryRun(r.id, {}).catch(() => undefined)
-    } finally {
-      clearSel()
-      setBusy(false)
-    }
-  }
-  const bulkStop = async () => {
-    const rs = selRuns.filter((r) => r.status === 'running')
-    if (!rs.length) return
-    if (!confirm(`Stop ${rs.length} running run${rs.length > 1 ? 's' : ''}? Each stops mid-step; you can retry it from any step.`)) return
-    setBusy(true)
-    try {
-      for (const r of rs) await api.stopRun(r.id).catch(() => undefined)
-    } finally {
-      clearSel()
-      setBusy(false)
-    }
+  const retryable = selRuns.filter(isFailedRun)
+  const stoppable = selRuns.filter((r) => r.status === 'running')
+  const clearFilters = () => {
+    setFilter(emptyFilter('all'))
+    setShown(PAGE)
   }
 
-  const cols = 6 // sel, run, status, when, took, id (+ act)
+  const cols = 6
+  const selBar = (
+    <div class="dl-selbar" role="region" aria-label="Selection">
+      <b>{sel.size} selected</b>
+      <button class="btn sm secondary" type="button" aria-disabled={retryable.length ? undefined : 'true'} data-tip={retryable.length ? undefined : 'None of the selected runs failed'} onClick={() => retryable.length && setAsk('retry')}>
+        <Icon name="undo" />
+        Retry{retryable.length && retryable.length < sel.size ? ` ${retryable.length}` : ''}…
+      </button>
+      <button class="btn sm secondary" type="button" aria-disabled={stoppable.length ? undefined : 'true'} data-tip={stoppable.length ? undefined : 'None of the selected runs is running'} onClick={() => stoppable.length && setAsk('stop')}>
+        <Icon name="x" />
+        Stop{stoppable.length && stoppable.length < sel.size ? ` ${stoppable.length}` : ''}…
+      </button>
+      <span class="dl-sp" />
+      {matched.length > sel.size ? (
+        <button class="btn sm ghost" type="button" onClick={selMatching}>
+          Select all {matched.length} matching
+        </button>
+      ) : null}
+      <button class="btn sm ghost" type="button" onClick={clearSel}>
+        Clear
+      </button>
+    </div>
+  )
 
   return (
     <div data-tick={tick}>
@@ -152,8 +183,7 @@ export function Activity(): JSX.Element {
 
       {status.value && all.length === 0 ? (
         // No run has happened at all (within the 14 days kept): the screen's one
-        // thing doesn't exist yet, so it is the hero, not an empty table under a
-        // filter bar and a chart of zeros.
+        // thing doesn't exist yet, so it is the hero.
         <EmptyState
           hero
           icon="live"
@@ -163,53 +193,42 @@ export function Activity(): JSX.Element {
         >
           <p>Every time a workflow fires, its run lands here with each step, how long it took and what it said.</p>
         </EmptyState>
-      ) : status.value && (
-        <>
-          <FilterBar
-            q={filter.q}
-            onQueryChange={(q) => update({ q })}
-            placeholder={attrs.find((a) => a.field === 'repo') ? 'Search, or filter: status:failed, repo:acme/web' : 'Search, or filter: status:failed'}
-            menus={[
-              { key: 'status', label: 'Status', multi: true, selected: filter.status, options: STATUSES.map(([v, label]) => ({ v, label })), onToggle: (v) => toggle('status', v) },
-              ...(wfOptions.length ? [{ key: 'workflow', label: 'Workflow', multi: true, selected: filter.workflow, options: wfOptions, onToggle: (v: string) => toggle('workflow', v) }] : []),
-              ...(botOptions.length ? [{ key: 'bot', label: 'Bot', multi: true, selected: filter.bot, options: botOptions, onToggle: (v: string) => toggle('bot', v) }] : []),
-            ]}
-            attrs={attrs}
-            attrsValue={filter.attrs}
-            onAttrsChange={(next) => update({ attrs: next })}
-            since={filter.since}
-            onSinceChange={(v) => update({ since: v })}
-            showTime
-            filterByHint
-          />
+      ) : (
+        status.value && (
+          <>
+            <div id="act-filters">
+              <FilterBar
+                q={filter.q}
+                onQueryChange={(q) => update({ q })}
+                placeholder="Search, or filter: status:failed"
+                ariaLabel="Search and filter runs"
+                menus={[
+                  { key: 'status', label: 'Status', multi: true, selected: filter.status, options: STATUSES.map(([v, label, f]) => ({ v, label, n: all.filter(f).length })), onToggle: (v) => toggle('status', v) },
+                  { key: 'workflow', label: 'Workflow', multi: true, selected: filter.workflow, options: wfOptions, onToggle: (v: string) => toggle('workflow', v) },
+                  botMenu,
+                ]}
+                attrs={attrs}
+                attrsValue={filter.attrs}
+                onAttrsChange={(next) => update({ attrs: next })}
+                since={filter.since}
+                onSinceChange={(v) => update({ since: v })}
+                sinceDef="12h"
+                showTime
+                filterByHint
+                qualifiers
+              />
+            </div>
 
-          <Strip runs={matched} since={filter.since} />
+            <div id="act-strip">
+              <Strip all={all} runs={matched} filter={filter} onAllTime={() => update({ since: 'all' })} />
+            </div>
 
-          <section class="dl-card dl-flush dl-runs-card" aria-label="Runs">
-              <table class="dl-tbl grouped">
+            <section class="dl-card dl-flush dl-runs-card">
+              <table class="dl-tbl grouped" id="act-tbl">
                 {sel.size ? (
                   <thead class="selecting">
                     <tr>
-                      <th colSpan={cols + 1}>
-                        <div class="dl-selbar" role="region" aria-label="Selection">
-                          <b>{sel.size} selected</b>
-                          <button class="btn sm secondary" type="button" disabled={busy || !selRetryable} onClick={bulkRetry}>
-                            Retry{selRetryable && selRetryable < sel.size ? ` ${selRetryable}` : ''}…
-                          </button>
-                          <button class="btn sm secondary" type="button" disabled={busy || !selStoppable} onClick={bulkStop}>
-                            Stop{selStoppable && selStoppable < sel.size ? ` ${selStoppable}` : ''}…
-                          </button>
-                          <span class="dl-sp" />
-                          {matched.length > sel.size ? (
-                            <button class="btn sm ghost" type="button" onClick={selMatching}>
-                              Select all {matched.length} matching
-                            </button>
-                          ) : null}
-                          <button class="btn sm ghost" type="button" onClick={clearSel}>
-                            Clear
-                          </button>
-                        </div>
-                      </th>
+                      <th colSpan={cols + 1}>{selBar}</th>
                     </tr>
                   </thead>
                 ) : (
@@ -227,40 +246,38 @@ export function Activity(): JSX.Element {
                     </tr>
                   </thead>
                 )}
-                <tbody>
-                  {matched.length === 0 ? (
+                {matched.length === 0 ? (
+                  <tbody>
                     <tr>
                       <td colSpan={cols + 1} class="dl-empty-row" data-testid="activity-none-match">
                         No run matches these filters.{' '}
-                        {hasAnyFilter(filter) ? (
-                          <button class="link" type="button" onClick={() => setFilter(emptyFilter('all'))}>
-                            Clear filters
-                          </button>
-                        ) : null}
+                        <button class="link" type="button" onClick={clearFilters}>
+                          Clear filters
+                        </button>
                       </td>
                     </tr>
-                  ) : null}
-                </tbody>
+                  </tbody>
+                ) : null}
                 {needs.length ? (
                   <tbody class="g-attn">
                     <GroupHead title="Needs attention" n={needs.length} cols={cols} />
-                    {needs.map((r) => <Row r={r} rich sel={sel.has(r.id)} onSel={() => toggleSel(r.id)} />)}
+                    {needs.map((r) => <Row r={r} rich sel={sel.has(r.id)} onSel={(sh) => toggleSel(r.id, sh)} />)}
                   </tbody>
                 ) : null}
                 {running.length ? (
                   <tbody class="g-live">
                     <GroupHead title="Running now" n={running.length} cols={cols} />
-                    {running.map((r) => <Row r={r} sel={sel.has(r.id)} onSel={() => toggleSel(r.id)} />)}
+                    {running.map((r) => <Row r={r} sel={sel.has(r.id)} onSel={(sh) => toggleSel(r.id, sh)} />)}
                   </tbody>
                 ) : null}
                 {finished.length ? (
                   <tbody class="g-done">
                     <GroupHead title="Finished" n={finished.length} cols={cols} />
-                    {finishedShown.map((r) => <Row r={r} sel={sel.has(r.id)} onSel={() => toggleSel(r.id)} />)}
+                    {finishedShown.map((r) => <Row r={r} sel={sel.has(r.id)} onSel={(sh) => toggleSel(r.id, sh)} />)}
                     {finished.length > shown && !phone ? (
                       <tr class="more">
                         <td colSpan={cols + 1}>
-                          <button class="btn sm secondary" type="button" onClick={() => setShown((s) => s + PAGE)}>
+                          <button class="btn sm secondary" type="button" id="act-more" onClick={() => setShown((s) => s + PAGE)}>
                             Show {Math.min(PAGE, finished.length - shown)} more ({finished.length} in all)
                           </button>
                         </td>
@@ -269,26 +286,59 @@ export function Activity(): JSX.Element {
                   </tbody>
                 ) : null}
               </table>
-          </section>
+            </section>
 
-          <div class="dl-phone-groups">
-            {matched.length === 0 ? (
-              <p class="dl-empty-row" data-testid="activity-none-match">
-                No run matches these filters.{' '}
-                {hasAnyFilter(filter) ? (
-                  <button class="link" type="button" onClick={() => setFilter(emptyFilter('all'))}>
-                    Clear filters
-                  </button>
-                ) : null}
-              </p>
-            ) : (
-              <PhoneGroups needs={needs} running={running} finished={finished} shown={shown} onMore={() => setShown((s) => s + PAGE)} />
-            )}
-          </div>
-        </>
+            <div class="dl-phone-groups" id="act-phone">
+              {matched.length === 0 ? (
+                <p class="dl-empty-row" data-testid="activity-none-match">
+                  No run matches these filters.{' '}
+                  {hasAnyFilter(filter) ? (
+                    <button class="link" type="button" onClick={clearFilters}>
+                      Clear filters
+                    </button>
+                  ) : null}
+                </p>
+              ) : (
+                <PhoneGroups needs={needs} running={running} finished={finished} shown={shown} onMore={() => setShown((s) => s + PAGE)} />
+              )}
+            </div>
+          </>
+        )
       )}
       <p class="dl-sub dl-keep">Runs are kept for 14 days; each record is signed, and one that fails its signature shows as tampered.</p>
 
+      {ask === 'retry' ? (
+        <ConfirmModal
+          title={`Retry ${retryable.length} run${retryable.length > 1 ? 's' : ''}?`}
+          body="Each starts again from the step that failed; the steps before it are replayed from what they recorded, so nothing they did is repeated."
+          ok={`Retry ${retryable.length}`}
+          onClose={() => setAsk(null)}
+          onOk={async () => {
+            let bad = ''
+            for (const r of retryable) await api.retryRun(r.id, { from: r.failed_step || '' }).catch((e) => (bad = humanError(e)))
+            clearSel()
+            if (bad) toast('Some runs didn’t retry', bad, 'fail')
+            else toast(`Retried ${retryable.length} run${retryable.length > 1 ? 's' : ''}`, 'they’re running now', 'run')
+          }}
+        />
+      ) : null}
+      {ask === 'stop' ? (
+        <ConfirmModal
+          title={`Stop ${stoppable.length} running run${stoppable.length > 1 ? 's' : ''}?`}
+          body="Each stops mid-step; anything already pushed stays. You can retry them from any step."
+          ok={`Stop ${stoppable.length}`}
+          danger
+          onClose={() => setAsk(null)}
+          onOk={async () => {
+            let bad = ''
+            for (const r of stoppable) await api.stopRun(r.id).catch((e) => (bad = humanError(e)))
+            clearSel()
+            if (bad) toast('Some runs didn’t stop', bad, 'fail')
+            else toast(`Stopped ${stoppable.length}`, 'retry them from any step', 'ok')
+          }}
+        />
+      ) : null}
+      <ToastHost />
     </div>
   )
 }
@@ -304,35 +354,46 @@ function GroupHead({ title, n, cols }: { title: string; n: number; cols: number 
   )
 }
 
-function Row({ r, rich, sel, onSel }: { r: RunSummary; rich?: boolean; sel: boolean; onSel: () => void }): JSX.Element {
-  const m = statusMark(r.status)
-  const edge = rich ? 'fail' : undefined
+function Row({ r, rich, sel, onSel }: { r: RunSummary; rich?: boolean; sel: boolean; onSel: (shift: boolean) => void }): JSX.Element {
+  const m = runMark(r.status)
   return (
     <tr
       class={rich ? 'attn' : ''}
-      data-s={edge}
+      data-s={rich ? 'fail' : undefined}
       data-run={r.id}
       data-href={'#/runs/' + r.id}
       onClick={(e) => {
-        if ((e.target as HTMLElement).closest('input, button, a')) return
+        if ((e.target as HTMLElement).closest('a, button, input, label, select')) return
         go('runs/' + r.id)
       }}
     >
       <td class="sel">
-        <input type="checkbox" class="cbx" checked={sel} aria-label={`Select ${r.workflow} ${r.id}`} onChange={onSel} />
+        <input
+          type="checkbox"
+          class="cbx"
+          checked={sel}
+          aria-label={`Select ${r.workflow} ${r.id}`}
+          onClick={(e) => onSel((e as MouseEvent).shiftKey)}
+        />
       </td>
       <td class="run">
-        <b>{r.workflow}</b>
+        <RunName r={r} />
         {rich ? <span class="reason">{reason(r)}</span> : null}
-        {factsLine(r)}
+        <FactsLine r={r} />
       </td>
       <td class="st-c">
         <StatusMark s={m.s} word={m.word} />
       </td>
-      <td class="when nowrap">{ago(r.started)}</td>
-      <td class="num">{humanDuration(r.duration_ms)}</td>
+      <td class="when nowrap">{agoText(r.started)}</td>
+      <td class="num">{r.status === 'running' ? <span class="dl-sub">{runningFor(r.started)} so far</span> : runDur(r)}</td>
       <td class="mono id">{r.id}</td>
-      <td class="act">{rich ? <a class="btn sm secondary row-act" href={'#/runs/' + r.id}>See why</a> : null}</td>
+      <td class="act">
+        {rich ? (
+          <a class="btn sm secondary row-act" href={'#/runs/' + r.id}>
+            See why
+          </a>
+        ) : null}
+      </td>
     </tr>
   )
 }
@@ -352,39 +413,35 @@ function PhoneGroups({
 }): JSX.Element {
   const [showDone, setShowDone] = useState(false)
   const finishedShown = finished.slice(0, shown)
+  const grp = (t: string, xs: RunSummary[], rich: boolean, total = xs.length) =>
+    xs.length ? (
+      <>
+        <h3 class="ph-g">
+          {t}
+          <span>{total}</span>
+        </h3>
+        <ul class="dl-list dl-runs-phone">
+          {xs.map((r) => (
+            <PhoneRow r={r} rich={rich} />
+          ))}
+        </ul>
+      </>
+    ) : null
   return (
     <>
-      {needs.length ? (
-        <>
-          <h3 class="ph-g">Needs attention<span>{needs.length}</span></h3>
-          <ul class="dl-list dl-runs-phone">
-            {needs.map((r) => <PhoneRow r={r} rich />)}
-          </ul>
-        </>
-      ) : null}
-      {running.length ? (
-        <>
-          <h3 class="ph-g">Running now<span>{running.length}</span></h3>
-          <ul class="dl-list dl-runs-phone">
-            {running.map((r) => <PhoneRow r={r} />)}
-          </ul>
-        </>
-      ) : null}
+      {grp('Needs attention', needs, true)}
+      {grp('Running now', running, false)}
       {finished.length ? (
         <button type="button" class="ph-done" aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}>
           <span>
-            <b>{finished.length} finished</b>
-            {finishedBreakdown(finished) ? ` · ${finishedBreakdown(finished)}` : ''}
+            <b>{finished.length} finished</b> · {runParts(finished)}
           </span>
           <span class="dl-link">{showDone ? 'Hide' : 'Show'}</span>
         </button>
       ) : null}
       {showDone ? (
         <>
-          <h3 class="ph-g">Finished<span>{finished.length}</span></h3>
-          <ul class="dl-list dl-runs-phone">
-            {finishedShown.map((r) => <PhoneRow r={r} />)}
-          </ul>
+          {grp('Finished', finishedShown, false, finished.length)}
           {finished.length > shown ? (
             <button class="btn sm secondary" type="button" onClick={onMore}>
               Show {Math.min(PAGE, finished.length - shown)} more ({finished.length} in all)
@@ -396,152 +453,165 @@ function PhoneGroups({
   )
 }
 
-// finishedBreakdown: "8 went fine · 1 parked" — the phone disclosure's summary
-// line (prototype UI.runParts), counted within the Finished group only.
-function finishedBreakdown(rs: RunSummary[]): string {
-  const parts: [number, string][] = [
-    [rs.filter((r) => r.status === 'ok').length, 'went fine'],
-    [rs.filter((r) => r.status === 'retried').length, 'parked'],
-    [rs.filter((r) => r.status === 'failed').length, 'failed'],
-  ]
-  return parts
-    .filter(([n]) => n)
-    .map(([n, t]) => `${n} ${t}`)
-    .join(' · ')
-}
-
 function PhoneRow({ r, rich }: { r: RunSummary; rich?: boolean }): JSX.Element {
-  const m = statusMark(r.status)
+  const m = runMark(r.status)
   return (
     <li class={rich ? 'attn' : ''} data-s={rich ? 'fail' : undefined} data-run={r.id}>
       <a href={'#/runs/' + r.id}>
         <span class="dl-nt">
-          <b>{r.workflow}</b>
+          <b>
+            <RunName r={r} />
+          </b>
           {rich ? <span class="reason">{reason(r)}</span> : null}
-          {factsLine(r)}
+          <FactsLine r={r} />
           <StatusMark s={m.s} word={m.word} />
         </span>
-        <span class="dl-age">{ago(r.started).replace(' ago', '')}</span>
+        <span class="dl-age">{agoText(r.started).replace(' ago', '')}</span>
       </a>
     </li>
   )
 }
 
-// Strip is the interactive runs-per-hour chart (prototype UI.stackBars with
-// o.tip): unlike Home's static strip, each bar is a tooltip stop (hover, tap or
-// the arrow keys) naming its window, each kind's count and the failures in it.
-function Strip({ runs: rs, since }: { runs: RunSummary[]; since: string }): JSX.Element {
-  const [hover, setHover] = useState<number | null>(null)
-  const span = rangeMinutes(since) || 10080
-  const n = span <= 60 ? 12 : span <= 1440 ? Math.round(span / 60) : span <= 10080 ? 7 : 30
-  const bucketMin = span / n
-  const now = Date.now()
+type Per = { ok: number; other: number; run: number; fail: number }
+const SEG: [keyof Per, string, string][] = [
+  ['ok', 'hb-ok', 'Passed'],
+  ['other', 'hb-other', 'Waiting or parked'],
+  ['run', 'hb-run', 'Running'],
+  ['fail', 'hb-fail', 'Failed'],
+]
+const bucketOf = (r: RunSummary): keyof Per => (isFailedRun(r) ? 'fail' : r.status === 'ok' ? 'ok' : r.status === 'running' ? 'run' : 'other')
+const failedAt = (r: RunSummary) => hm(r.finished || r.started)
 
-  type B = { ok: number; fail: number; run: number; other: number; from: number; to: number }
-  const buckets: B[] = []
-  for (let i = 0; i < n; i++) {
-    const to = now - (n - 1 - i) * bucketMin * 60000
-    const from = to - bucketMin * 60000
-    buckets.push({ ok: 0, fail: 0, run: 0, other: 0, from, to })
-  }
-  rs.forEach((r) => {
-    const t = startedMs(r)
-    const idx = Math.floor((t - buckets[0].from) / (bucketMin * 60000))
-    if (idx < 0 || idx >= n) return
-    const b = buckets[idx]
-    if (r.status === 'ok') b.ok++
-    else if (r.status === 'failed') b.fail++
-    else if (r.status === 'running') b.run++
-    else b.other++
-  })
-  const max = Math.max(4, ...buckets.map((b) => b.ok + b.fail + b.run + b.other))
-  const counts = {
-    ok: rs.filter((r) => r.status === 'ok').length,
-    fail: rs.filter((r) => r.status === 'failed').length,
-    run: rs.filter((r) => r.status === 'running').length,
-    other: rs.filter((r) => r.status === 'retried').length,
-  }
-  const fails = rs.filter((r) => r.status === 'failed')
-  const unit = span <= 60 ? '5 minutes' : span <= 1440 ? 'hour' : 'day'
+// Strip is the runs-per-period chart (runs.js strip + overview.js UI.stackBars
+// with o.tip and UI.barLegend): an aggregate strip, failures stacked in the
+// danger colour and named below; each bar a tooltip stop (hover, focus, tap,
+// the arrow keys).
+function Strip({ all, runs: rs, filter, onAllTime }: { all: RunSummary[]; runs: RunSummary[]; filter: FilterState; onAllTime: () => void }): JSX.Element {
+  const [tip, setTip] = useState<{ i: number; g: Element; x: number; y: number; placed: boolean } | null>(null)
+  const cardRef = useRef<HTMLElement>(null)
+  const tipRef = useRef<HTMLDivElement>(null)
+  const sinceMin = rangeMinutes(filter.since)
+  const span = sinceMin || 10080
+  const n = span <= 60 ? 12 : span <= 1440 ? Math.round(span / 60) : span <= 10080 ? 7 : 30
+  const bucket = span / n
   const w = 960
   const h = 96
   const base = h - 17
-  const bw = w / n - 6
-
-  const fmtWhen = (b: B): string => {
-    const d = (ms: number) => new Date(ms)
-    if (span <= 1440) return `${hm(d(b.from))}–${b.to >= now - 60000 ? 'now' : hm(d(b.to))}`
-    return d(b.from).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  const now = Date.now()
+  const per: Per[] = Array.from({ length: n }, () => ({ ok: 0, other: 0, run: 0, fail: 0 }))
+  const failedIn: RunSummary[][] = Array.from({ length: n }, () => [])
+  rs.forEach((r) => {
+    const m = (now - startedMs(r)) / 60000
+    if (m > span) return
+    const i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(m / bucket)))
+    const k = bucketOf(r)
+    per[i][k]++
+    if (k === 'fail') failedIn[i].push(r)
+  })
+  const at = (min: number) => new Date(now - min * 60000).toISOString()
+  const unitOf = span <= 1440 ? 'time' : 'day'
+  const when = (i: number) => {
+    const from = (n - i) * bucket
+    const to = (n - 1 - i) * bucket
+    return unitOf === 'day'
+      ? new Date(at(from - bucket / 2)).toLocaleDateString(undefined, span > 10080 ? { month: 'short', day: 'numeric' } : { weekday: 'long' })
+      : `${hm(at(from))}–${to ? hm(at(to)) : 'now'}`
   }
-
-  const rangeLabel = since === 'all' ? 'the last 7 days' : `the ${(TIME_RANGES.find(([k]) => k === since)?.[1] || 'last 12 hours').toLowerCase()}`
+  const label = (TIME_RANGES.find(([v]) => v === filter.since) || TIME_RANGES[1])[1].toLowerCase().replace('last ', '')
+  const unit = span <= 60 ? '5 minutes' : span <= 1440 ? 'hour' : 'day'
+  const fails = rs.filter((r) => isFailedRun(r) && (now - startedMs(r)) / 60000 <= span)
+  // failures from before the range aren't listed either; say how many, one click from showing them
+  const older = sinceMin ? all.filter((r) => isFailedRun(r) && matchRun(r, { ...filter, since: 'all' }, []) && now - startedMs(r) > sinceMin * 60000).length : 0
+  const olderNote = older ? (
+    <>
+      {' '}
+      <button class="link" type="button" onClick={onAllTime}>
+        {older} older failure{older > 1 ? 's' : ''} · show all time
+      </button>
+    </>
+  ) : null
+  const mx = Math.max(4, ...per.map((p) => p.ok + p.other + p.run + p.fail))
+  const bw = w / n - 6
+  const words = (p: Per) => {
+    const xs = SEG.filter(([k]) => p[k]).map(([k, , l]) => `${p[k]} ${l.toLowerCase()}`)
+    return xs.length ? xs.join(', ') : 'no runs'
+  }
+  const show = (i: number, g: Element) => setTip({ i, g, x: 0, y: 0, placed: false })
+  // place it once it has drawn (its own size): above the chart, over its bar, kept inside the card
+  useLayoutEffect(() => {
+    if (!tip || tip.placed) return
+    const card = cardRef.current
+    if (!card || !tipRef.current) return
+    const cr = card.getBoundingClientRect()
+    const br = tip.g.getBoundingClientRect()
+    const top = (tip.g as SVGGElement).ownerSVGElement?.getBoundingClientRect().top ?? br.top
+    const tw = tipRef.current.offsetWidth
+    const th = tipRef.current.offsetHeight
+    setTip({ ...tip, placed: true, x: Math.min(Math.max(8, br.left + br.width / 2 - cr.left - tw / 2), cr.width - tw - 8), y: Math.max(8 - cr.top, top - cr.top - th - 6) })
+  }, [tip])
+  const totals: Per = { ok: 0, other: 0, run: 0, fail: 0 }
+  per.forEach((p) => (Object.keys(totals) as (keyof Per)[]).forEach((k) => (totals[k] += p[k])))
+  const tp = tip ? per[tip.i] : null
 
   return (
-    <section class="dl-card dl-strip" aria-label="Runs per period">
+    <section class={'dl-card dl-strip' + (tip ? ' hb-tipped' : '')} ref={cardRef} onMouseLeave={() => setTip(null)}>
       <header class="dl-ch">
         <h2>Runs per {unit}</h2>
-        <span class="dl-sub">{rangeLabel}</span>
+        <span class="dl-sub">{sinceMin ? `the last ${label}` : 'the last 7 days'}</span>
       </header>
-      <svg class="dl-hours" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label={`${plural(rs.length, 'run')}; ${fails.length} failed`}>
-        {buckets.map((b, i) => {
+      <svg class="dl-hours" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label={`Runs per ${unit}: ${fails.length} failed`}>
+        {per.map((p, i) => {
           const x = i * (w / n) + 3
           let y = base
-          const order: ['fail' | 'run' | 'other' | 'ok', string][] = [
-            ['fail', 'hb-fail'],
-            ['run', 'hb-run'],
-            ['other', 'hb-other'],
-            ['ok', 'hb-ok'],
-          ]
+          const segs = SEG.filter(([k]) => p[k])
           return (
             <g
-              class={'hb' + (hover === i ? ' on' : '')}
-              tabIndex={0}
-              onMouseEnter={() => setHover(i)}
-              onMouseLeave={() => setHover((h2) => (h2 === i ? null : h2))}
-              onFocus={() => setHover(i)}
-              onBlur={() => setHover((h2) => (h2 === i ? null : h2))}
+              class={'hb' + (tip?.i === i ? ' on' : '')}
+              tabIndex={i === n - 1 ? 0 : -1}
+              role="img"
+              aria-label={`${when(i)}: ${words(p)}`}
+              data-i={i}
+              data-hbtip=""
+              onMouseEnter={(e) => show(i, e.currentTarget)}
+              onFocus={(e) => show(i, e.currentTarget)}
+              onClick={(e) => (tip?.i === i && (e as unknown as PointerEvent).pointerType === 'touch' ? setTip(null) : show(i, e.currentTarget))}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') return setTip(null)
+                if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+                e.preventDefault()
+                const next = (e.currentTarget.parentNode as Element).querySelector<SVGGElement>(`.hb[data-i="${i + (e.key === 'ArrowRight' ? 1 : -1)}"]`)
+                next?.focus()
+              }}
             >
               <rect class="hb-hit" x={x - 3} y={0} width={w / n} height={base} />
-              {order.map(([k, cls], j) => {
-                if (!b[k]) return null
-                const hh = (b[k] / max) * (h - 22)
+              {segs.map(([k, cls], j) => {
+                const hh = (p[k] / mx) * (h - 22)
                 y -= hh
-                const gap = j ? 2 : 0
+                const g = j ? 2 : 0
                 return (
                   <>
-                    <rect x={x} y={y} width={bw} height={Math.max(0, hh - gap)} rx={2} class={cls} />
-                    {k === 'ok' ? <rect x={x} y={y} width={bw} height={Math.min(2, hh - gap)} class="hb-cap" /> : null}
+                    <rect x={x} y={y} width={bw} height={Math.max(0, hh - g)} rx={2} class={cls} />
+                    {k === 'ok' ? <rect x={x} y={y} width={bw} height={Math.min(2, hh - g)} class="hb-cap" /> : null}
                   </>
                 )
               })}
             </g>
           )
         })}
-        <line x1={0} x2={w} y1={base} y2={base} class="hb-axis" />
-        <text x={0} y={h - 3} class="hb-ax">
-          {span <= 1440 ? `${Math.round(span / 60) || 1} h ago` : span === 1440 ? '24 h ago' : `${Math.round(span / 1440)} days ago`}
-        </text>
-        <text x={w} y={h - 3} class="hb-ax" text-anchor="end">
-          now
-        </text>
+        <line x1={0} x2={w} y1={h - 17} y2={h - 17} class="hb-axis" />
       </svg>
-      {hover != null ? (
-        <div class="hb-tip" role="tooltip" style={{ left: `${((hover + 0.5) / n) * 100}%`, bottom: '100%', transform: 'translateX(-50%)', marginBottom: '8px' }}>
-          <b class="hb-tip-h">{fmtWhen(buckets[hover])}</b>
-          <ul class="hb-tip-l">
-            <TipRow cls="ok" label="Passed" n={buckets[hover].ok} />
-            <TipRow cls="run" label="Running" n={buckets[hover].run} />
-            <TipRow cls="fail" label="Failed" n={buckets[hover].fail} />
-            {buckets[hover].other ? <TipRow cls="other" label="Waiting or parked" n={buckets[hover].other} /> : null}
-          </ul>
-        </div>
-      ) : null}
+      <div class="dl-axis">
+        <span>{sinceMin ? `${label.replace(/^hour$/, '1 hour')} ago` : '7 days ago'}</span>
+        <span>now</span>
+      </div>
       <div class="hb-foot">
         <ul class="hb-legend">
-          <li><i class="hb-sw hb-sw-ok" aria-hidden="true" />Passed <b>{counts.ok}</b></li>
-          <li><i class="hb-sw hb-sw-fail" aria-hidden="true" />Failed <b>{counts.fail}</b></li>
-          <li><i class="hb-sw hb-sw-run" aria-hidden="true" />Running <b>{counts.run}</b></li>
-          <li><i class="hb-sw hb-sw-other" aria-hidden="true" />Waiting or parked <b>{counts.other}</b></li>
+          {([['ok', 'Passed'], ['fail', 'Failed'], ['run', 'Running'], ['other', 'Waiting or parked']] as [keyof Per, string][]).map(([k, l]) => (
+            <li>
+              <i class={`hb-sw hb-sw-${k}`} aria-hidden="true" />
+              {l} <b>{totals[k]}</b>
+            </li>
+          ))}
         </ul>
       </div>
       {fails.length ? (
@@ -553,32 +623,53 @@ function Strip({ runs: rs, since }: { runs: RunSummary[]; since: string }): JSX.
               <>
                 {i ? ', ' : ''}
                 <a class="dl-link" href={'#/runs/' + r.id}>
-                  {r.workflow} at {r.failed_step || 'a step'}
+                  {r.workflow.replace(/^bot:/, '')} at {failedAt(r)}
                 </a>
               </>
             ))}
-            {fails.length > 4 ? ` and ${fails.length - 4} more` : ''}.
+            {fails.length > 4 ? ` and ${fails.length - 4} more` : ''}.{olderNote}
           </span>
         </p>
       ) : (
         <p class="dl-foot-note">
           <StatusMark s="ok" mkOnly />
-          <span>Nothing failed in this range.</span>
+          <span>
+            Nothing failed {sinceMin ? `in the last ${label}` : 'in the last 7 days'}.{olderNote}
+          </span>
         </p>
       )}
+      <div class="hb-tip" role="tooltip" ref={tipRef} hidden={!tip} style={tip ? { left: `${tip.x}px`, top: `${tip.y}px`, visibility: tip.placed ? undefined : 'hidden' } : undefined}>
+        {tip && tp ? (
+          <>
+            <b class="hb-tip-h">{when(tip.i)}</b>
+            {SEG.some(([k]) => tp[k]) ? (
+              <ul class="hb-tip-l">
+                {SEG.filter(([k]) => tp[k]).map(([k, , l]) => (
+                  <li>
+                    <i class={`hb-sw hb-sw-${k}`} aria-hidden="true" />
+                    {l} <b>{tp[k]}</b>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <span class="dl-sub">No runs</span>
+            )}
+            {failedIn[tip.i].length ? (
+              <p class="hb-tip-f">
+                {failedIn[tip.i].slice(0, 3).map((r, i) => (
+                  <>
+                    {i ? ', ' : ''}
+                    <a class="dl-link" href={'#/runs/' + r.id}>
+                      {r.workflow.replace(/^bot:/, '')} at {failedAt(r)}
+                    </a>
+                  </>
+                ))}
+                {failedIn[tip.i].length > 3 ? ` and ${failedIn[tip.i].length - 3} more` : ''}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+      </div>
     </section>
-  )
-}
-
-function hm(d: Date): string {
-  return d.toTimeString().slice(0, 5)
-}
-
-function TipRow({ cls, label, n }: { cls: string; label: string; n: number }): JSX.Element {
-  return (
-    <li>
-      <i class={`hb-sw hb-sw-${cls}`} aria-hidden="true" />
-      {label} <b>{n}</b>
-    </li>
   )
 }

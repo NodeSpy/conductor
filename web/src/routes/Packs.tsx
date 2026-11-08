@@ -97,7 +97,7 @@ function StagedTag({ name }: { name: string }): JSX.Element | null {
 
 // Go to the review the way the design's UI.staged does, once a stage landed.
 function toReview() {
-  if (!cfgError.value) location.hash = '#/system/config'
+  if (!cfgError.value) location.hash = '#/system/config/apply'
 }
 
 function updateDeps(): boolean {
@@ -1485,7 +1485,7 @@ function PackCustomize({ name }: { name: string }): JSX.Element {
         </div>
         <div class="dl-actions tight">
           {isStaged ? (
-            <a class="btn primary" href="#/system/config">
+            <a class="btn primary" href="#/system/config/apply">
               Review the change
             </a>
           ) : null}

@@ -14,6 +14,7 @@ import type { ComponentChildren, JSX } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { conn, status, needItems, chatUnread } from '../state'
 import { route, screen, go } from '../router'
+import { gsHidden, setGsHidden } from '../lib/gs'
 import { Icon } from './Icon'
 import { StatusMark } from './StatusMark'
 import { Palette, type PaletteItem } from './Palette'
@@ -73,6 +74,7 @@ const PALETTE_ITEMS: PaletteItem[] = [
 // Bots; System's old standalone routes highlight System, which they redirect
 // into — app.tsx's LEGACY_SYSTEM_TABS).
 const NAV_ALIAS: Record<string, string> = {
+  overview: '',
   runs: 'activity',
   teams: 'bots',
   config: 'system',
@@ -212,7 +214,7 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
           </span>
         ) : null}
         {pending ? (
-          <a class="cell staged" href="#/system/config">
+          <a class="cell staged" href="#/system/config/apply">
             <StatusMark s="staged" word={`${pending} not applied`} />
           </a>
         ) : null}
@@ -249,7 +251,7 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
 // (CONFORMANCE); the account menu is the one place theme lives.
 function AccountMenu({ theme }: { theme: Theme }): JSX.Element {
   const [open, setOpen] = useState(false)
-  const [gsHidden, setGsHidden] = useState(() => localStorage.getItem('gs-hidden') === '1')
+  const gsHid = gsHidden.value
   const ref = useRef<HTMLButtonElement>(null)
   const operator = authState.value.operator || 'you'
 
@@ -264,8 +266,8 @@ function AccountMenu({ theme }: { theme: Theme }): JSX.Element {
       onClick: () => setTheme(dark ? 'light' : 'dark'),
     },
     { label: 'Preferences', icon: 'settings', onClick: () => go('preferences') },
-    ...(gsHidden
-      ? [{ label: 'Show Get started', icon: 'check', onClick: () => { localStorage.removeItem('gs-hidden'); setGsHidden(false); go('') } } as MenuItem]
+    ...(gsHid
+      ? [{ label: 'Show Get started', icon: 'check', onClick: () => { setGsHidden(false); go('overview') } } as MenuItem]
       : []),
     { label: 'Glossary', icon: 'info', onClick: () => go('glossary') },
     '-',
@@ -313,7 +315,7 @@ function HostCard(): JSX.Element {
   const mark = paused ? 'wait' : 'ok'
   const line = paused ? 'Paused: nothing new starts' : `Healthy · up ${upFor(st.uptime_sec)}`
   return (
-    <a class={'host' + (paused ? ' need' : '')} href="#/system" aria-label={`${host}: ${line}`}>
+    <a class={'host' + (paused ? ' need' : '')} href="#/system/updates" aria-label={`${host}: ${line}`}>
       <StatusMark s={mark} mkOnly label={paused ? 'needs a look' : 'healthy'} />
       <span class="who">
         <b>{host}</b>

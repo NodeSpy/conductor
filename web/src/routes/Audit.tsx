@@ -20,9 +20,12 @@ import { EmptyState } from '../components/EmptyState'
 import { FilterBar } from '../components/FilterBar'
 import { StatusMark } from '../components/StatusMark'
 import { TabsBar } from '../components/TabsBar'
-import { ago } from '../lib/format'
+import { Icon } from '../components/Icon'
+import { FactsLine, type Fact } from '../components/Facts'
+import { agoShort } from '../components/SysBits'
+import { authState } from '../api/auth'
 import { rangeMinutes } from '../lib/filter'
-import { seg } from '../router'
+import { seg, query } from '../router'
 
 type Entry = Record<string, unknown>
 
@@ -52,19 +55,61 @@ const EVW: Record<string, string> = {
   'dashboard.config.restore': 'restored a previous config',
   'dashboard.approval': 'decided an approval',
   'dashboard.purchase': 'decided a purchase',
+  'dashboard.pause': 'paused all automation',
+  'dashboard.resume': 'resumed automation',
+  'dashboard.secret.write': 'stored a secret value',
+  'dashboard.secret.delete': 'removed a secret value',
+  'dashboard.update.install': 'installed an update',
+  dashboard_stepup: 'confirmed it was them',
+  dashboard_ssh_approved: 'approved a sign-in from the command line',
 }
 
+// actorWords: who did it (the prototype's actorWords): "You" for the
+// operator signed in here, else the operator's name.
 function actorWords(e: Entry): string {
   const op = String(e['operator'] ?? '')
-  if (op) return op
+  if (op) return op === authState.value.operator ? 'You' : op
   const addr = String(e['addr'] ?? '')
-  return addr ? `Someone at ${addr}` : 'Someone'
+  return addr ? `Someone at ${hostOf(addr)}` : 'Someone'
+}
+
+const hostOf = (addr: string) => addr.replace(/:\d+$/, '').replace(/^\[|\]$/g, '')
+
+// AREA (the prototype's AREA): what an entry is about, for the About menu and
+// the first fact of its row.
+const AREA: [string, string, RegExp, string][] = [
+  ['signin', 'Sign-ins', /^dashboard_/, 'key'],
+  ['bots', 'Bots and tickets', /^dashboard\.approval/, 'bots'],
+  ['browser', 'Browsers', /^dashboard\.purchase/, 'globe'],
+  ['config', 'Config and updates', /^dashboard\.(config|update)/, 'settings'],
+  ['secrets', 'Secrets', /^dashboard\.secret/, 'secrets'],
+  ['safety', 'Pausing automation', /^dashboard\.(pause|resume)/, 'shield'],
+]
+const areaOf = (e: Entry) => (AREA.find(([, , re]) => re.test(String(e['event'] ?? ''))) ?? ['other'])[0]
+
+const METHOD_WORDS: Record<string, string> = { ssh: 'with the SSH key', passkey: 'with a passkey', password: 'with a password', totp: 'with an authenticator code' }
+
+// auditFacts: the facts line under an entry — what it's about, then what
+// the record holds (how, where from, what it touched).
+function auditFacts(e: Entry): Fact[] {
+  const fx: Fact[] = []
+  const area = AREA.find(([, , re]) => re.test(String(e['event'] ?? '')))
+  if (area) fx.push({ icon: area[3], value: area[1], label: 'About' })
+  const addr = String(e['addr'] ?? '')
+  if (addr) fx.push({ icon: 'globe', value: `from ${hostOf(addr)}${e['listener'] === 'tailscale' ? ' (tailnet)' : ''}`, label: 'Where from' })
+  if (e['backup']) fx.push({ icon: 'clock', value: 'backed up first', label: 'Backup' })
+  if (e['stepup'] === true || e['stepup'] === 'yes') fx.push({ icon: 'passkey', value: 'confirmed it was them', label: 'Confirmed' })
+  return fx
 }
 
 function words(e: Entry): string {
   const ev = String(e['event'] ?? '')
   const fallback = ev.replace(/^dashboard\.?/, '').replace(/[._]/g, ' ').trim() || 'did something'
-  return EVW[ev] ?? fallback
+  const w = EVW[ev] ?? fallback
+  const how = METHOD_WORDS[String(e['method'] ?? '')]
+  const out = (ev === 'dashboard_signin' || ev === 'dashboard_stepup') && how ? `${w} ${how}` : w
+  // "You were signed out", not "You was"
+  return actorWords(e) === 'You' ? out.replace(/^was /, 'were ') : out
 }
 
 // isAccountable: a row a person caused, the way the Audit tab means it —
@@ -187,17 +232,19 @@ function DaemonLog(): JSX.Element {
         placeholder="Find in the log"
         ariaLabel="Find and filter the daemon log"
         filterByHint
+        qualifiers
         menus={[
           { key: 'level', label: 'Level', multi: true, selected: level, options: levelOpts, onToggle: (v) => toggle(setLevel, level, v) },
           { key: 'src', label: 'From', multi: true, selected: src, options: srcOpts, onToggle: (v) => toggle(setSrc, src, v) },
         ]}
         since={since}
         onSinceChange={setSince}
+        sinceDef="7d"
         showTime
       />
       <div class="panel log-panel">
         <div class="panel-head">
-          <StatusMark s="run" word="Following" />
+          <StatusMark s="run" word="Following" sm />
           <span class="dl-sub">{filtered.length} of {all.length} lines</span>
         </div>
         <div class="log">
@@ -222,13 +269,30 @@ function DaemonLog(): JSX.Element {
 function AuditTab({ entries }: { entries: Entry[] }): JSX.Element {
   const [q, setQ] = useState('')
   const [since, setSince] = useState('7d')
+  const [area, setArea] = useState<string[]>([])
+  const [actor, setActor] = useState<string[]>([])
+  const toggle = (set: (v: string[]) => void, cur: string[], v: string) => set(cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v])
+  const who = (e: Entry) => String(e['operator'] ?? e['addr'] ?? '')
+  // ?run=<id> (a run page's "The full audit log for this run"): only entries
+  // that name that run
+  const [runF, setRunF] = useState(query('run'))
+  useEffect(() => {
+    const on = () => setRunF(query('run'))
+    addEventListener('hashchange', on)
+    return () => removeEventListener('hashchange', on)
+  }, [])
 
   const filtered = useMemo(() => {
-    const byRange = entries.filter((e) => withinRange(String(e['ts'] ?? ''), since))
-    if (!q.trim()) return byRange
-    const needle = q.toLowerCase()
-    return byRange.filter((e) => JSON.stringify(e).toLowerCase().includes(needle))
-  }, [entries, since, q])
+    const needle = q.trim().toLowerCase()
+    return entries.filter(
+      (e) =>
+        withinRange(String(e['ts'] ?? ''), since) &&
+        (!area.length || area.includes(areaOf(e))) &&
+        (!actor.length || actor.includes(who(e))) &&
+        (!runF || e['run'] === runF || JSON.stringify(e).includes(runF)) &&
+        (!needle || `${actorWords(e)} ${words(e)} ${JSON.stringify(e)}`.toLowerCase().includes(needle)),
+    )
+  }, [entries, since, q, area, actor, runF])
 
   if (entries.length === 0) {
     return (
@@ -237,16 +301,34 @@ function AuditTab({ entries }: { entries: Entry[] }): JSX.Element {
       </EmptyState>
     )
   }
+  const areaOpts = AREA.map(([v, label]) => ({ v, label, n: entries.filter((e) => areaOf(e) === v).length })).filter((o) => o.n)
+  const actorOpts = [...new Set(entries.map(who))].map((v) => ({ v, label: actorWords(entries.find((e) => who(e) === v)!), n: entries.filter((e) => who(e) === v).length }))
   return (
     <>
-      <FilterBar q={q} onQueryChange={setQ} placeholder="Find in the audit log" ariaLabel="Find and filter the audit log" since={since} onSinceChange={setSince} showTime />
+      <FilterBar
+        q={q}
+        onQueryChange={setQ}
+        placeholder="Find in the audit log"
+        ariaLabel="Find and filter the audit log"
+        filterByHint
+        qualifiers
+        menus={[
+          { key: 'area', label: 'About', multi: true, selected: area, options: areaOpts, onToggle: (v) => toggle(setArea, area, v) },
+          { key: 'actor', label: 'Who', multi: true, selected: actor, options: actorOpts, onToggle: (v) => toggle(setActor, actor, v) },
+        ]}
+        since={since}
+        onSinceChange={setSince}
+        sinceDef="7d"
+        showTime
+      />
+      {runF ? <p class="dl-sub tk-showing">Only what concerns one run · <a class="link" href="#/system/logs/audit">Show everything</a></p> : null}
       <section class="dl-card au-card" aria-label="Audit log">
-        <p class="dl-sub au-n">{filtered.length} of {entries.length} entries · append-only; every dashboard action is recorded with who did it and when</p>
-        <ul class="au-list dl-list">
+        <p class="dl-sub au-n">{filtered.length} of {entries.length} {entries.length === 1 ? 'entry' : 'entries'} · append-only; every dashboard action is recorded with who did it and when, and a sign-in with how and from where</p>
+        <ul class="au-list">
           {filtered.length ? (
             filtered.map((e, i) => <AuditRow key={i} e={e} />)
           ) : (
-            <li class="dl-empty-row">No entry matches.</li>
+            <li class="dl-empty-row">No entries match.</li>
           )}
         </ul>
       </section>
@@ -255,22 +337,29 @@ function AuditTab({ entries }: { entries: Entry[] }): JSX.Element {
 }
 
 function AuditRow({ e }: { e: Entry }): JSX.Element {
-  const who = actorWords(e)
+  const name = actorWords(e)
+  const op = String(e['operator'] ?? '')
+  const ts = String(e['ts'] ?? '')
   return (
     <li>
       <details class="au-row">
         <summary>
-          <span class="avatar au-you" aria-hidden="true">{who.slice(0, 2).toUpperCase()}</span>
+          {op ? (
+            <span class="avatar au-you" aria-hidden="true">{op.slice(0, 2)}</span>
+          ) : (
+            <span class="sc-ic sm au-wf" aria-hidden="true"><Icon name="dot" /></span>
+          )}
           <span class="au-main">
-            <span class="au-what"><b>{who}</b> {words(e)}</span>
+            <span class="au-what"><b>{name}</b> {words(e)}</span>
+            <FactsLine facts={auditFacts(e)} />
           </span>
-          <span class="dl-sub au-when">{e['ts'] ? ago(String(e['ts'])) : ''}</span>
+          <span class="dl-sub au-when">{ts ? `${agoShort(ts)} ago` : ''}</span>
         </summary>
         <dl class="dl-facts">
           <dt>Event</dt><dd class="mono">{String(e['event'] ?? '')}</dd>
-          <dt>Who</dt><dd class="mono">{who}</dd>
+          <dt>Who</dt><dd class="mono">{op ? `operator:${op}` : String(e['addr'] ?? '')}</dd>
           <dt>Detail</dt><dd>{summarize(e)}</dd>
-          <dt>When</dt><dd>{e['ts'] ? new Date(String(e['ts'])).toLocaleString() : ''}</dd>
+          <dt>When</dt><dd>{ts ? new Date(ts).toLocaleString() : ''}</dd>
         </dl>
       </details>
     </li>

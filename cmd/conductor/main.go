@@ -1226,7 +1226,10 @@ func cmdRun(args []string) error {
 			// Run controls (design §4.3): retry reuses the engine's deliberate
 			// re-run-from-step; stop cancels a live run; RunActive is the
 			// authority on "still running" the history file lags behind.
-			Retry:     eng.RetryRunByID,
+			// the retry outlives the HTTP request that asked for it (as RunManual)
+			Retry: func(ctx context.Context, id, from string, force bool) (string, error) {
+				return eng.RetryRunByID(context.WithoutCancel(ctx), id, from, force)
+			},
 			Stop:      func(ctx context.Context, id string) error { return eng.StopRunByID(id) },
 			RunActive: eng.RunActiveByID,
 			// Run now (Workflows): the same manual dispatch `conductor run`

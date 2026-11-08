@@ -40,6 +40,8 @@ export interface FilterMenu {
   more?: boolean
   // alias is the qualifier key typed in the search field (status:draft)
   alias?: string
+  // emptyText is the menu's own line when it has no options (Activity's Bot menu)
+  emptyText?: string
 }
 
 export function FilterBar({
@@ -239,10 +241,10 @@ export function FilterBar({
           onInput={(e) => {
             const v = (e.target as HTMLInputElement).value
             setText(v)
-            if (qualifiers) {
-              if (!/(^|\s)[\w.-]+:\S*$/.test(v)) onQueryChange(v)
-              suggest(v)
-            }
+            // the list follows the search as you type (filter.js: every input commits the free text);
+            // a half-typed qualifier waits until it's whole
+            if (!qualifiers || !/(^|\s)[\w.-]+:\S*$/.test(v)) onQueryChange(v)
+            if (qualifiers) suggest(v)
           }}
           onFocus={(e) => qualifiers && suggest((e.target as HTMLInputElement).value)}
           onKeyDown={(e) => {
@@ -360,7 +362,7 @@ export function FilterBar({
         ))}
 
         {showTime && since !== undefined && onSinceChange ? (
-          <TimeButton since={since} onChange={onSinceChange} def={sinceDef} alone={noSearch} />
+          <TimeButton since={since} onChange={onSinceChange} def={sinceDef} alone={noSearch} push={!viewMenus.length} />
         ) : null}
         {end ?? null}
       </div>
@@ -438,7 +440,7 @@ function MenuButton({ menu, openNow }: { menu: FilterMenu; openNow?: boolean }):
               </li>
             )
           })}
-          {!menu.options.length ? <li class="fb-none" role="presentation">Nothing to filter by yet.</li> : null}
+          {!menu.options.length ? <li class="fb-none" role="presentation">{menu.emptyText || 'Nothing to filter by yet.'}</li> : null}
         </ul>
       </div>
     </details>
@@ -447,7 +449,7 @@ function MenuButton({ menu, openNow }: { menu: FilterMenu; openNow?: boolean }):
 
 // def is the range that counts as no filter (the time field's def: '7d' on a
 // workflow's Runs tab); alone (a bar with no search) it sits at the far right.
-function TimeButton({ since, onChange, def = 'all', alone = false }: { since: string; onChange: (v: string) => void; def?: string; alone?: boolean }): JSX.Element {
+function TimeButton({ since, onChange, def = 'all', alone = false, push = false }: { since: string; onChange: (v: string) => void; def?: string; alone?: boolean; push?: boolean }): JSX.Element {
   const ref = useRef<HTMLDetailsElement>(null)
   useEffect(() => {
     const el = ref.current
@@ -460,13 +462,15 @@ function TimeButton({ since, onChange, def = 'all', alone = false }: { since: st
   }, [])
   const label = TIME_RANGES.find(([k]) => k === since)?.[1] || since
   return (
-    <details ref={ref} style={{ position: 'relative', display: 'inline-block', ...(alone ? { marginLeft: 'auto' } : {}) }}>
+    // the details is the bar's flex item, so it carries the design's
+    // `.fb-btn.fb-time { margin-left: auto }`: the range sits at the far right
+    <details ref={ref} class="fb-time-d" style={{ position: 'relative', display: 'inline-block', marginLeft: alone || push ? 'auto' : undefined }}>
       <summary class={'fb-btn fb-time' + (since !== def ? ' on' : '')} aria-haspopup="listbox" title="Time range">
         <Icon name="clock" />
         <span class="fb-v">{label}</span>
         <Icon name="chevd" />
       </summary>
-      <div class="fb-menu" role="listbox" aria-label="Time range" style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0 }}>
+      <div class="fb-menu" role="listbox" aria-label="Time range" style={{ position: 'absolute', top: 'calc(100% + 6px)', ...(alone || push ? { right: 0 } : { left: 0 }) }}>
         <div class="fb-mh">
           <b>Time range</b>
         </div>
@@ -552,6 +556,7 @@ function Sheet({
                     </li>
                   )
                 })}
+                {!m.options.length && m.emptyText ? <li class="fb-none" role="presentation">{m.emptyText}</li> : null}
               </ul>
             </li>
           ))}

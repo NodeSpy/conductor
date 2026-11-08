@@ -139,6 +139,7 @@ const SHAPES: Record<string, [string, Record<string, string>][]> = {
   // The workflow builder: Open in the builder (canvas) and Try it's event picker (pr).
   canvas: [['rect', { width: '18', height: '18', x: '3', y: '3', rx: '2' }], ['path', { d: 'M3 9h18' }], ['path', { d: 'M9 21V9' }]],
   pr: [['circle', { cx: '18', cy: '18', r: '3' }], ['circle', { cx: '6', cy: '6', r: '3' }], ['path', { d: 'M13 6h3a2 2 0 0 1 2 2v7' }], ['line', { x1: '6', x2: '6', y1: '9', y2: '21' }]],
+  // runs: Compare with an earlier run (prototype icons.js split)
 }
 
 export function Icon({ name, class: cls = '' }: { name: string; class?: string }): JSX.Element {

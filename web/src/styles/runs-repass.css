@@ -1,0 +1,24 @@
+/* Activity and a run's page: the prototype's rules the shared sheets lose to
+   later app-only rules (tokens only, no raw colours). */
+
+/* a step's Outputs / Inputs: the prototype's line-numbered YAML block (app.css
+   .code), monospace on the inset code surface, never read.css's older .code */
+[data-run-detail] .code, .cmp-page .code {
+  font: var(--type-code); background: var(--code-bg); color: var(--code-fg);
+  border: var(--border-width) solid var(--code-border); border-radius: var(--radius-box);
+  padding: var(--space-2) 0; max-height: none; white-space: normal; margin: 0;
+}
+
+/* a failed run's reason wraps in full on a phone (no two-line clamp) */
+.dl-runs-phone > li .dl-nt > .reason { display: block; -webkit-line-clamp: unset; line-clamp: none; overflow: visible; min-height: 0; }
+
+/* a live log keeps its newest line in view */
+[data-run-detail] .dl-log { max-height: 420px; }
+
+/* the run page's crumbs: daylight's .dl-crumbs spacing, not screens.css's
+   older .run-nav (which loads later here than in the prototype) */
+.dl-crumbs.run-nav { gap: 4px 6px; margin-bottom: 10px; }
+
+/* a failed run's reason breaks inside a long unbroken token ({{.step.field}}),
+   so the row's time stays inside its card on a phone */
+.dl-runs-phone .reason, .dl-tbl .reason { overflow-wrap: anywhere; }

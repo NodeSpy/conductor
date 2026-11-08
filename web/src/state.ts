@@ -8,6 +8,7 @@ import { humanError } from './api/errors'
 import { botsApi, type ProposalRow } from './api/bots'
 import { browser, hostOf, money, type Purchase } from './api/browser'
 import type { Fact } from './components/Facts'
+import { notifyNew } from './lib/notify'
 
 export const status = signal<StatusResponse | null>(null)
 export const runs = signal<RunSummary[]>([])
@@ -134,7 +135,8 @@ export async function load(): Promise<void> {
     chatUnread.value = convs.reduce((n, c) => n + (c.unread || 0), 0)
   } catch {
     chatUnread.value = 0
-  }
+  }  // How you're told (Preferences): a notification for what is new since the last load
+  notifyNew(needItems())
 }
 
 // --- Needs you (design §4.1): one aggregator, one vocabulary, every kind the
@@ -160,32 +162,51 @@ function proposalItem(p: ProposalRow): NeedItem {
     mark: 'ember',
     verb: 'Review',
     title: p.summary || p.action || `${p.bot} · ${p.kind}`,
-    why: p.requester ? `Asked by ${p.requester}` : undefined,
+    // the prototype's "Atlas wants to run terraform apply on production": who, and the action in its own words
+    why: `${p.bot} wants to run ${p.uses}${typeof p.options?.command === 'string' ? `: ${p.options.command}` : ''}${p.requester ? `, asked by ${p.requester}` : ''}`,
     href: `#/bots/${p.bot}/proposals/${p.proposal}`,
+    bot: p.bot || undefined,
     at: p.created || '',
     facts: ([
-      p.bot ? { icon: 'obj-bot', value: p.bot, label: 'Bot' } : null,
+      p.bot ? { icon: 'obj-bot', value: p.bot, label: 'Bot', pri: 1, href: `#/bots/${p.bot}` } : null,
       p.tier ? { icon: 'shield', value: p.tier, label: 'Tier' } : null,
       p.uses ? { icon: 'obj-workflow', value: p.uses, label: 'Verb' } : null,
     ] as (Fact | null)[]).filter((f): f is Fact => !!f),
   }
 }
 
+// purchaseItem: the prototype's UI.purchaseTitle and UI.purchaseFacts(p, short)
+// (js/screens/wallet.js): "Buy 2 × Replacement filter for $49.00", then the
+// money, the shop and who asked; a bot's pending purchase is decided on its
+// proposal, anyone else's on the purchase page.
 function purchaseItem(p: Purchase): NeedItem {
+  const it = p.items || []
+  const what = it.length ? `${(it[0].qty || 1) > 1 ? `${it[0].qty} × ` : ''}${it[0].name}${it.length > 1 ? ` and ${it.length - 1} more` : ''}` : 'a purchase'
+  const per = p.recurring ? ` a ${p.interval || 'period'}` : ''
+  const asker = p.identity?.startsWith('dir:') ? `an agent you started in ${p.identity.slice(4)}` : p.identity || p.requester || ''
   return {
     kind: 'purchase',
     mark: 'ember',
     verb: 'Review',
-    title: `${p.merchant} · ${p.currency} ${p.total.toFixed(2)}`,
+    title: `Buy ${what} for ${money(p.total, p.currency)}${per}`,
     why: p.why,
-    href: `#/browser/purchases/${p.id}`,
+    href: p.bot && p.bot_proposal ? `#/bots/${p.bot}/proposals/${p.bot_proposal}` : `#/browser/purchases/${p.id}`,
+    bot: p.bot || undefined,
     at: p.created,
     facts: ([
-      { icon: 'banknote', tone: 'danger', pri: 1, label: p.recurring ? 'A subscription' : 'Total', value: money(p.total, p.currency) },
+      { icon: 'banknote', tone: 'danger', pri: 1, label: p.recurring ? 'A subscription' : 'Total', value: `${money(p.total, p.currency)}${per}` },
       p.merchant ? { icon: 'store', pri: 1, label: 'Shop', value: hostOf(p.merchant) } : null,
-      p.card ? { icon: 'obj-card', pri: 2, label: 'Card', value: p.card } : null,
+      p.bot ? { icon: 'obj-bot', value: p.bot, href: `#/bots/${p.bot}`, pri: 1, label: 'Bot' } : asker ? { icon: 'obj-sandbox', value: asker, pri: 2, label: 'Asked for by' } : null,
     ] as (Fact | null)[]).filter((f): f is Fact => !!f),
   }
+}
+
+// failWhy says where a run stopped in words: the step, then the step's own
+// error without the engine's `step "x": ` prefix.
+export function failWhy(r: { error?: string; failed_step?: string }): string | undefined {
+  const err = (r.error || '').replace(/^step "[^"]*": /, '')
+  if (r.failed_step) return `Step “${r.failed_step}” failed${err ? `: ${err}` : '.'}`
+  return err || undefined
 }
 
 function failedItem(r: RunSummary): NeedItem {
@@ -194,14 +215,14 @@ function failedItem(r: RunSummary): NeedItem {
     kind: 'failed',
     mark: 'fail',
     verb: 'See why',
-    title: r.repo ? `${r.workflow} · ${r.repo}${r.number ? `#${r.number}` : ''}` : r.workflow,
-    why: r.error || (r.failed_step ? `failed at ${r.failed_step}` : undefined),
+    title: `${r.workflow} failed${r.repo ? ` on ${r.repo}${r.number ? `#${r.number}` : ''}` : ''}`,
+    why: failWhy(r),
     href: `#/runs/${r.id}`,
     at: r.finished || r.started,
     bot: bot || undefined,
     workflow: r.workflow,
     facts: ([
-      bot ? { icon: 'obj-bot', value: bot, label: 'Bot' } : { icon: 'obj-workflow', value: r.workflow, label: 'Workflow' },
+      bot ? { icon: 'obj-bot', value: bot, label: 'Bot', pri: 1, href: `#/bots/${bot}` } : { icon: 'obj-workflow', value: r.workflow, label: 'Workflow', pri: 1, href: `#/workflows/${encodeURIComponent(r.workflow)}` },
       r.repo ? { icon: 'tag', value: `${r.repo}${r.number ? `#${r.number}` : ''}`, label: 'Repo' } : null,
     ] as (Fact | null)[]).filter((f): f is Fact => !!f),
   }

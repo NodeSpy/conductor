@@ -64,6 +64,9 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 		len(rec.Action) == 0 || json.Unmarshal(rec.Action, &act) != nil {
 		return "", fmt.Errorf("run %s carries no retryable trigger record", rec.ID)
 	}
+	// A retry is a new run with its own record: never the first run's pinned
+	// history id (a dashboard Run now pins one), which would overwrite it.
+	t.HistoryID = ""
 	if act.FlowRef == "" {
 		return "", fmt.Errorf("run %s is not a connectors-model run — retry applies to flow runs", rec.ID)
 	}

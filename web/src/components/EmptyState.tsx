@@ -48,7 +48,10 @@ export function EmptyState({
       ) : null}
       <h2 class="serif">{title}</h2>
       {children}
-      {action || secondary ? (
+      {small && action && !secondary ? (
+        // the in-card form's one action is the prototype's small secondary button (UI.empty({ small: true }))
+        <ActionButton a={action} cls="btn sm secondary" />
+      ) : action || secondary ? (
         <div class="row">
           {action ? <ActionButton a={action} primary lg={hero} /> : null}
           {secondary ? <ActionButton a={secondary} lg={hero} /> : null}
@@ -58,8 +61,8 @@ export function EmptyState({
   )
 }
 
-function ActionButton({ a, primary, lg }: { a: EmptyAction; primary?: boolean; lg?: boolean }): JSX.Element {
-  const cls = (primary ? 'btn primary' : 'btn ghost') + (lg ? ' lg' : '')
+function ActionButton({ a, primary, lg, cls: given }: { a: EmptyAction; primary?: boolean; lg?: boolean; cls?: string }): JSX.Element {
+  const cls = given || (primary ? 'btn primary' : 'btn ghost') + (lg ? ' lg' : '')
   return a.href ? (
     <a class={cls} href={a.href} data-testid={a.testid}>
       {a.label}

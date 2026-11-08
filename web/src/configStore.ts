@@ -171,7 +171,7 @@ async function applyRestore(rev: ReviewResponse, id: string): Promise<void> {
     busy.value = true
     let stepupToken: string | undefined
     if (rev.stepup && authState.value.signed_in) {
-      stepupToken = await stepUp('config.restore', rev.token, { what: 'Restore this backup', description: rev.description })
+      stepupToken = await stepUp('config.apply', rev.token, { what: 'Restore this backup', description: rev.description })
     }
     const res = await api.restore(id, rev.token, stepupToken)
     applyResult.value = res

@@ -182,7 +182,7 @@ export function Secrets(): JSX.Element {
   }
   // A staged config change goes to the review, like every change.
   const toReview = () => {
-    location.hash = '#/system/config'
+    location.hash = '#/system/config/apply'
   }
 
   return (
@@ -384,7 +384,7 @@ function SecretsTab({ data, open }: { data: SecretsResponse; open: (m: Modal) =>
               <h2>{n}</h2>
               <StatusMark s="staged" word="Added, not applied" />
               <span class="dl-sp"></span>
-              <a class="btn sm secondary" href="#/system/config">
+              <a class="btn sm secondary" href="#/system/config/apply">
                 Review the change
               </a>
             </header>
@@ -680,7 +680,7 @@ function SettingsTab({ sys, open }: { sys: SystemResponse | null; open: (m: Moda
             </b>
             , not applied yet. Each is checked on a copy of the config before it applies.
           </span>
-          <a class="btn sm primary" href="#/system/config">
+          <a class="btn sm primary" href="#/system/config/apply">
             Review {pendN}
           </a>
         </div>

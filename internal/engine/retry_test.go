@@ -314,3 +314,47 @@ func TestRetryRefusesTamperedHistory(t *testing.T) {
 
 func (*capturingDispatcher) AgentForDispatch(string) string { return "" }
 func (*capturingDispatcher) DispatchInFlight(string) bool   { return false }
+
+// TestRetryOfPinnedHistoryIDGetsItsOwnRecord: a run started with a pinned
+// history id (a dashboard Run now) carries it in its trigger record; its
+// retry must still be a new record, never the first run's id (which it
+// would overwrite).
+func TestRetryOfPinnedHistoryIDGetsItsOwnRecord(t *testing.T) {
+	eng, st, _, _ := buildFlowEngine(t, retryCfg)
+	resetGateCalls()
+	rec := recordedRun(t)
+	trig := flowTrigger("d1")
+	trig.Action = nil
+	trig.HistoryID = "rprev"
+	raw, err := json.Marshal(trig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Trigger = raw
+	_ = st.PutHistory(rec)
+
+	if _, err := eng.RetryRunByID(context.Background(), "rprev", "", false); err != nil {
+		t.Fatal(err)
+	}
+	waitGateCalls(t, 1)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		st.mu.Lock()
+		orig := st.history["rprev"]
+		var linked bool
+		for id, r := range st.history {
+			if id != "rprev" && r.RetryOf == "rprev" {
+				linked = true
+			}
+		}
+		st.mu.Unlock()
+		if linked {
+			if orig.Status != "failed" || orig.RetryOf != "" {
+				t.Fatalf("the first run's record was overwritten: %+v", orig)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("no separate retry record appeared")
+}
