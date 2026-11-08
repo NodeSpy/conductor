@@ -17,7 +17,24 @@ function renderDesc(d: string): JSX.Element {
   return (
     <>
       {d.slice(0, m.index)}
-      <span class="gl-cfg">(in config: <code>{m[1]}</code>)</span>
+      <span class="gl-cfg">
+        (in config:{' '}
+        {/* each key its own chip (owner rule: inline code is a <code> chip); the sentence's full stop stays outside it */}
+        {m[1].replace(/\.$/, '').split(', ').map((k, i, all) => (
+          <>
+            {i ? ', ' : ''}
+            {/* the last chip keeps its ".)" with it, so a phone never wraps the punctuation alone */}
+            {i === all.length - 1 ? (
+              <span class="nowrap">
+                <code>{k}</code>
+                {m[1].endsWith('.') ? '.' : ''})
+              </span>
+            ) : (
+              <code>{k}</code>
+            )}
+          </>
+        ))}
+      </span>
       {d.slice(m.index + m[0].length)}
     </>
   )
@@ -66,8 +83,8 @@ export const TERMS: [string, string, string][] = [
 
 export function Glossary(): JSX.Element {
   return (
-    <div class="col">
-      <div class="dl-phead">
+    <div>
+      <div class="page-head">
         <div>
           <h1>Glossary</h1>
         </div>

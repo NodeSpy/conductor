@@ -12,6 +12,8 @@
 import type { JSX } from 'preact'
 import { useState } from 'preact/hooks'
 import { themeSignal, setTheme } from '../lib/theme'
+import { advancedOn, setAdvanced as saveAdvanced } from '../lib/advanced'
+import { askNotifyPermission, notifyPermission, NOTIFY_PREFS } from '../lib/notify'
 
 type Density = 'comfortable' | 'compact'
 type UsageDisplay = 'off' | 'subscription' | 'api'
@@ -64,18 +66,23 @@ export function Preferences(): JSX.Element {
   const theme = themeSignal.value
   const [density, setDensityState] = useState<Density>(currentDensity)
   const [usage, setUsage] = useState<UsageDisplay>(() => (localStorage.getItem('usage-mode') as UsageDisplay) || 'off')
-  const [advanced, setAdvanced] = useState(() => boolPref('pref-advanced'))
-  const [planned, setPlanned] = useState(() => boolPref('pref-planned'))
-  const [notifyApprovals, setNotifyApprovals] = useState(() => boolPref('pref-notify-approvals', true))
-  const [notifyPush, setNotifyPush] = useState(() => boolPref('pref-notify-push', true))
-  const [notifyFailed, setNotifyFailed] = useState(() => boolPref('pref-notify-failed', true))
+  const [advanced, setAdvanced] = useState(advancedOn)
+  const [notifyApprovals, setNotifyApprovals] = useState(() => boolPref(NOTIFY_PREFS.approvals, true))
+  const [notifyFailed, setNotifyFailed] = useState(() => boolPref(NOTIFY_PREFS.failed, false))
+  const [perm, setPerm] = useState(notifyPermission)
+  // turning a kind on asks this browser for permission to notify, once
+  const notifyToggle = (key: string, set: (v: boolean) => void) => async (v: boolean) => {
+    set(v)
+    setBoolPref(key, v)
+    if (v) setPerm(await askNotifyPermission())
+  }
 
   return (
-    <div class="col">
+    <div>
       <div class="dl-phead">
         <div>
           <h1>Preferences</h1>
-          <p class="lede-2">For this browser only: they change nothing in conductor and need no review.</p>
+          <p class="dl-lead">For this browser only: they change nothing in conductor and need no review.</p>
         </div>
       </div>
       <div class="dl-cols">
@@ -110,7 +117,7 @@ export function Preferences(): JSX.Element {
                     setDensityState(v)
                   }}
                 />
-                <div class="hint">Compact shows one-line rows in tables, lists and the bot tree. Always comfortable on a phone.</div>
+                <div class="hint">Compact shows one-line rows (36px) in tables, lists and the bot tree.</div>
               </div>
               <div class="field">
                 <label>Usage display</label>
@@ -126,36 +133,37 @@ export function Preferences(): JSX.Element {
                     localStorage.setItem('usage-mode', v)
                   }}
                 />
-                <div class="hint">Off by default. Subscription shows runs per provider; API adds what they cost. Providers are never added together.</div>
+                <div class="hint">
+                  Off by default. <b>Subscription</b> shows runs per provider; <b>API</b> adds what they cost. Providers are never added together.
+                  {usage === 'subscription' ? ' Conductor doesn’t record which provider each run used yet, so Subscription shows nothing for now.' : ''}
+                </div>
               </div>
               <Switch
                 on={advanced}
                 onChange={(v) => {
                   setAdvanced(v)
-                  setBoolPref('pref-advanced', v)
+                  saveAdvanced(v)
                 }}
-                label={<><b>Show advanced</b> <span class="muted">puts "Edit as YAML" and technical details within reach on every form; off by default (they stay one click away)</span></>}
-              />
-              <Switch
-                on={planned}
-                onChange={(v) => {
-                  setPlanned(v)
-                  setBoolPref('pref-planned', v)
-                }}
-                label={<><b>Show planned features</b> <span class="muted">previews of multi-user sign-in, designed but not built yet; off by default</span></>}
+                label={<><b>Show advanced</b> <span class="muted">puts “Edit as YAML” and technical details within reach on every form; off by default (they stay one click away)</span></>}
               />
             </div>
           </section>
         </div>
         <div class="dl-col-side">
           <section class="dl-card" id="notify">
-            <header class="dl-ch"><h2>How you're told</h2></header>
+            <header class="dl-ch"><h2>How you’re told</h2></header>
             <div class="dl-prefs">
-              <Switch on={notifyApprovals} label="When a bot asks for approval" onChange={(v) => { setNotifyApprovals(v); setBoolPref('pref-notify-approvals', v) }} />
-              <Switch on={notifyPush} label="When a browser sign-in needs me" onChange={(v) => { setNotifyPush(v); setBoolPref('pref-notify-push', v) }} />
-              <Switch on={notifyFailed} label="When any run fails" onChange={(v) => { setNotifyFailed(v); setBoolPref('pref-notify-failed', v) }} />
+              <Switch on={notifyApprovals} label="When a bot asks for approval" onChange={notifyToggle(NOTIFY_PREFS.approvals, setNotifyApprovals)} />
+              <Switch on={notifyFailed} label="When any run fails" onChange={notifyToggle(NOTIFY_PREFS.failed, setNotifyFailed)} />
             </div>
-            <p class="dl-sub">Alerts outside the dashboard (Slack, PagerDuty) are set up as workflows on conductor's own events.</p>
+            <p class="dl-sub">
+              {perm === 'denied'
+                ? 'This browser blocks notifications from the dashboard; allow them in its site settings. '
+                : perm === 'unsupported'
+                  ? 'This browser can’t show notifications. '
+                  : 'A notification from this browser while the dashboard is open. '}
+              Alerts outside the dashboard (Slack, PagerDuty) are set up as workflows on conductor’s own events.
+            </p>
           </section>
         </div>
       </div>

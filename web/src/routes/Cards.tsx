@@ -167,12 +167,15 @@ function CardsList(): JSX.Element {
         )}
         <p class="dl-sub wl-foot">
           <Icon name="shield" />{' '}
+          {/* one text box beside the icon, so the bold lead never becomes its own narrow flex column on a phone */}
+          <span>
           {approvers.length ? (
             <>{listWords(approvers)} approve{approvers.length === 1 ? 's' : ''} purchases, each with a passkey. An approval is used once, within an hour.</>
           ) : (
             <><b>Nobody can approve a purchase yet</b> (no operator has a key), so every purchase will wait.</>
           )}{' '}
           Pause all automation also stops every payment.
+          </span>
         </p>
       </section>
 
