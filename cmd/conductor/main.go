@@ -1197,6 +1197,7 @@ func cmdRun(args []string) error {
 			// daemon's own load+semantic pass, and reloads via SIGHUP on apply.
 			ConfigPath: cfgFile,
 			Validate:   validateConfigFile,
+			Prepare:    prepareConfigFile,
 			Reload:     func() error { return signalReload(cfg) },
 			AuditPath:  cfg.Store.AuditLog,
 			// Auth (design §6): operators gate sign-in; the approval bridge feeds
@@ -1228,6 +1229,10 @@ func cmdRun(args []string) error {
 			// payment cards and purchase approvals, over the same control layer the
 			// CLI uses. Reads empty when no browser is configured.
 			Browser: dashboardBrowser{},
+			// Packs → Browse's registry override (CONDUCTOR_PACK_REGISTRY),
+			// the same knob `conductor pack search --registry` takes; empty
+			// means the official registry.
+			PackRegistry: os.Getenv("CONDUCTOR_PACK_REGISTRY"),
 		})
 		if err := dash.Start(ctx); err != nil {
 			logf("dashboard: not started: %v", err)

@@ -247,14 +247,21 @@ func (e Edits) Restore(id, token string) (Applied, error) {
 		p.dropTokenLocked(token)
 		return Applied{SHA: sha[:12], Unchanged: true}, nil
 	}
-	if err := p.validateCandidate(after); err != nil {
+	prep, err := p.prepareCandidate(after)
+	if err != nil {
+		prep.discard()
 		return Applied{}, fmt.Errorf("the backup does not validate against this binary: %w", err)
 	}
 	backupID, err := p.backup(before)
 	if err != nil {
+		prep.discard()
 		return Applied{}, fmt.Errorf("backup before restore: %w", err)
 	}
 	if err := writeAtomic(p.path, after); err != nil {
+		prep.discard()
+		return Applied{}, err
+	}
+	if err := p.commitPrepared(prep, before, backupID); err != nil {
 		return Applied{}, err
 	}
 	p.dropTokenLocked(token)

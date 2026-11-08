@@ -376,7 +376,7 @@ func (s *Server) handlePluginCatalog(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	resp := api.CatalogResponse{Kind: string(kind), Items: []api.CatalogItem{}}
+	resp := api.PluginCatalogResponse{Kind: string(kind), Items: []api.CatalogItem{}}
 	for _, it := range items {
 		if kind == config.UseKindConnector {
 			fillDecl(it)

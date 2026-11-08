@@ -566,12 +566,12 @@ func TestPackUseLowersToSource(t *testing.T) {
 		{
 			name:  "use: carries a version suffix",
 			packs: map[string]PackInstance{"kit": {Use: "acme/packs/kit@~> 1.2"}},
-			want:  map[string]string{"kit": "github.com/acme/packs//kit@~> 1.2"},
+			want:  map[string]string{"kit": "github.com/acme/packs//kit"}, // the suffix is its version:, never a git ref
 		},
 		{
 			name:  "the reserved namespace carries a version suffix too",
 			packs: map[string]PackInstance{"kit": {Use: "conductor-packs/kit@^1.2"}},
-			want:  map[string]string{"kit": "github.com/NodeSpy/conductor-packs//kit@^1.2"},
+			want:  map[string]string{"kit": "github.com/NodeSpy/conductor-packs//kit"},
 		},
 		{
 			name:  "an explicit source: still wins",
@@ -650,7 +650,7 @@ func TestOfficialPackRepoIsTrustedByDefault(t *testing.T) {
 // Asserted through the RESOLVER's own output, so the alias and the trust check
 // cannot drift: a trust check that silently misses is worse than a strict one.
 func TestPacksNamespaceAliasIsDefaultTrusted(t *testing.T) {
-	src, err := packUseSource(PacksNamespaceAlias + "/pr-review-team")
+	src, _, err := packUseSource(PacksNamespaceAlias + "/pr-review-team")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -672,7 +672,7 @@ func TestPacksNamespaceAliasIsDefaultTrusted(t *testing.T) {
 	}
 
 	// …while a third-party pack still needs an explicit entry.
-	third, err := packUseSource("stranger/packs/foo")
+	third, _, err := packUseSource("stranger/packs/foo")
 	if err != nil {
 		t.Fatal(err)
 	}

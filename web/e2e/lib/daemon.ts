@@ -307,6 +307,164 @@ export async function startEmpty(port: number, opts: { runtime?: boolean } = {})
   return { bin, config, stateDir, home, port, baseURL, pid: child.pid, logFile }
 }
 
+// startWithCatalog boots a DEDICATED daemon with CONDUCTOR_PACK_REGISTRY
+// pointed at a throwaway local directory of synthetic packs (neutral names,
+// no copy of a real pack), so Packs → Browse has something to list offline,
+// the way an operator's configured registry would. One pack of its own is
+// installed (vendored by a hermetic `init` on this throwaway config, like the
+// populated starter), so Installed has a row to act on. No network.
+export async function startWithCatalog(port: number): Promise<Runtime & { registry: string }> {
+  const bin = resolveBin()
+  const root = mkdtempSync(path.join(tmpdir(), 'dash-e2e-cat-'))
+  const stateDir = path.join(root, 'state')
+  const home = path.join(root, 'home')
+  const config = path.join(root, 'config.yaml')
+  const logFile = path.join(root, 'daemon.log')
+  const baseURL = `http://127.0.0.1:${port}`
+  const registry = path.join(root, 'registry')
+
+  const pack = (dir: string, yaml: string[]) => {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, 'conductor-pack.yaml'), [...yaml, ''].join('\n'))
+  }
+  const needsCommand = ['  requires:', '    connectors: { command: "*" }']
+  pack(path.join(registry, 'greeter'), [
+    'pack:',
+    '  name: greeter',
+    '  version: 1.0.0',
+    '  description: says hello on a schedule',
+    ...needsCommand,
+    'workflows:',
+    '  say-hi: { steps: [ { id: hello, uses: command.run, options: { command: "true" } } ] }',
+    'triggers:',
+    '  - { name: on_tick, on: manual, steps: [ { uses: command.run, options: { command: "true" } } ] }',
+  ])
+  pack(path.join(registry, 'tidy-kit'), [
+    'pack:',
+    '  name: tidy-kit',
+    '  version: 2.1.0',
+    '  description: tidies up stale branches on request',
+    ...needsCommand,
+    'workflows:',
+    '  tidy: { steps: [ { id: sweep, uses: command.run, options: { command: "true" } } ] }',
+  ])
+  pack(path.join(registry, 'helper-kit'), [
+    'pack:',
+    '  name: helper-kit',
+    '  version: 0.5.0',
+    '  description: a bot template only',
+    'bots:',
+    '  buddy:',
+    '    description: A helper',
+    '    charter: "Help out."',
+  ])
+  pack(path.join(root, 'packs', 'house'), [
+    'pack:',
+    '  name: house',
+    '  version: 0.1.0',
+    '  description: our own house checks',
+    ...needsCommand,
+    'workflows:',
+    '  check: { steps: [ { id: lint, uses: command.run, options: { command: "true" } } ] }',
+    'triggers:',
+    '  - { name: on_save, on: manual, steps: [ { uses: command.run, options: { command: "true" } } ] }',
+  ])
+
+  writeFileSync(
+    config,
+    [
+      `store: { state_file: ${path.join(stateDir, 'state.json')} }`,
+      `dashboard:`,
+      `  enabled: true`,
+      `  listen: [localhost]`,
+      `  auth: { allow_open: true }`,
+      `  port: ${port}`,
+      `connectors:`,
+      `  box: { use: command }`,
+      `packs:`,
+      `  house: { use: ./packs/house }`,
+      ``,
+    ].join('\n'),
+    { mode: 0o600 },
+  )
+
+  const env = { ...hermeticEnv(home), CONDUCTOR_PACK_REGISTRY: registry }
+  execFileSync(bin, ['init', '--config', config], { env, stdio: 'ignore' })
+  const out = openSync(logFile, 'a')
+  const child: ChildProcess = spawn(bin, ['run', '--config', config], { env, detached: true, stdio: ['ignore', out, out] })
+  child.unref()
+  if (!child.pid) throw new Error('failed to spawn catalog daemon')
+  await waitForStatus(baseURL)
+  return { bin, config, stateDir, home, port, baseURL, pid: child.pid, logFile, registry }
+}
+
+// startWithGitCatalog boots a DEDICATED daemon whose registry is a throwaway
+// git repo of synthetic packs (CONDUCTOR_PACK_REGISTRY=file://…), tagged the
+// way a pack monorepo is (<pack>/vX.Y.Z), so an install is a real git source
+// with releases: Add → apply fetches it, and a release tagged mid-test is an
+// update to apply. Nothing installed and no `init`: every pack arrives
+// through the dashboard's own apply. No network.
+export async function startWithGitCatalog(port: number): Promise<Runtime & { registry: string; release: (name: string, version: string) => void }> {
+  const bin = resolveBin()
+  const root = mkdtempSync(path.join(tmpdir(), 'dash-e2e-gitcat-'))
+  const stateDir = path.join(root, 'state')
+  const home = path.join(root, 'home')
+  const config = path.join(root, 'config.yaml')
+  const logFile = path.join(root, 'daemon.log')
+  const baseURL = `http://127.0.0.1:${port}`
+  const registry = path.join(root, 'registry')
+  mkdirSync(home, { recursive: true })
+  const gitEnv = { ...hermeticEnv(home), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e' }
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: registry, env: gitEnv, stdio: 'ignore' })
+  const manifest = (name: string, version: string) =>
+    [
+      'pack:',
+      `  name: ${name}`,
+      `  version: ${version}`,
+      '  description: says hello on a schedule',
+      '  requires:',
+      '    connectors: { command: "*" }',
+      'workflows:',
+      '  say-hi: { steps: [ { id: hello, uses: command.run, options: { command: "true" } } ] }',
+      'triggers:',
+      '  - { name: on_tick, on: manual, steps: [ { uses: command.run, options: { command: "true" } } ] }',
+      '',
+    ].join('\n')
+  const release = (name: string, version: string) => {
+    mkdirSync(path.join(registry, name), { recursive: true })
+    writeFileSync(path.join(registry, name, 'conductor-pack.yaml'), manifest(name, version))
+    git('add', '-A')
+    git('commit', '-q', '-m', `${name} ${version}`)
+    git('tag', `${name}/v${version}`)
+  }
+  mkdirSync(registry, { recursive: true })
+  git('init', '-q', '-b', 'main')
+  release('greeter', '1.0.0')
+
+  writeFileSync(
+    config,
+    [
+      `store: { state_file: ${path.join(stateDir, 'state.json')} }`,
+      `dashboard:`,
+      `  enabled: true`,
+      `  listen: [localhost]`,
+      `  auth: { allow_open: true }`,
+      `  port: ${port}`,
+      `connectors:`,
+      `  box: { use: command }`,
+      ``,
+    ].join('\n'),
+    { mode: 0o600 },
+  )
+  const env = { ...hermeticEnv(home), CONDUCTOR_PACK_REGISTRY: 'file://' + registry }
+  const out = openSync(logFile, 'a')
+  const child: ChildProcess = spawn(bin, ['run', '--config', config], { env, detached: true, stdio: ['ignore', out, out] })
+  child.unref()
+  if (!child.pid) throw new Error('failed to spawn git catalog daemon')
+  await waitForStatus(baseURL)
+  return { bin, config, stateDir, home, port, baseURL, pid: child.pid, logFile, registry, release }
+}
+
 // trigger dispatches a manual trigger on the running daemon (used mid-test to
 // prove the live SSE update path). It returns once the daemon has accepted it.
 export function trigger(rt: Runtime, name: string): void {

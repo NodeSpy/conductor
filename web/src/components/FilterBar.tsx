@@ -34,6 +34,8 @@ export interface FilterMenu {
   onToggle: (v: string) => void
   onClear?: () => void
   view?: boolean
+  // title heads the open menu (default "Filter by <label>")
+  title?: string
 }
 
 export function FilterBar({
@@ -242,7 +244,7 @@ function MenuButton({ menu }: { menu: FilterMenu }): JSX.Element {
       </summary>
       <div class="fb-menu" role="listbox" aria-label={menu.label} aria-multiselectable={menu.multi} style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0 }}>
         <div class="fb-mh">
-          <b>Filter by {menu.label.toLowerCase()}</b>
+          <b>{menu.title || `Filter by ${menu.label.toLowerCase()}`}</b>
           {menu.multi && menu.selected.length ? (
             <button type="button" class="link" onClick={() => (menu.onClear ? menu.onClear() : menu.selected.forEach((v) => menu.onToggle(v)))}>
               Clear

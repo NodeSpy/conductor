@@ -227,3 +227,83 @@ func StagePacksNewestLoadable(configPath string) (*PackStage, []PackFallback, er
 	}
 	return st, held, nil
 }
+
+// PacksNeedResolve reports whether a config's packs: block asks for more
+// than its lockfile and vendor dir hold: an instance added or removed, or
+// one whose source or version: constraint changed since it was locked. A
+// config edit that says yes must have its packs resolved (staged, loaded,
+// committed) before the daemon can load it; one that says no loads against
+// what is vendored now.
+func PacksNeedResolve(configPath string) (bool, error) {
+	packs, _, err := loadPacksBlock(configPath)
+	if err != nil {
+		return false, err
+	}
+	if err := applyPackSourceDefaults(packs); err != nil {
+		return false, err
+	}
+	dir := filepath.Dir(configPath)
+	lock, err := ReadLockfile(dir)
+	if err != nil {
+		return false, err
+	}
+	locked := map[string]LockEntry{}
+	if lock != nil {
+		for _, e := range lock.Packs {
+			if !strings.Contains(e.Instance, "/") {
+				locked[e.Instance] = e
+			}
+		}
+	}
+	if len(locked) != len(packs) {
+		return true, nil
+	}
+	for name, inst := range packs {
+		e, ok := locked[name]
+		if !ok || e.Source != inst.Source || e.Version != strings.TrimSpace(inst.Version) {
+			return true, nil
+		}
+		if _, err := os.Stat(filepath.Join(packVendorDir(dir), name, PackManifestFile)); err != nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// StagePacksKeepingLocked is StagePacks for a config edit: every instance
+// whose source and version: are what the lockfile records stays at its
+// locked revision, so adding, changing or removing one pack never moves the
+// others onto newer releases. The changed ones resolve fresh.
+func StagePacksKeepingLocked(configPath string) (*PackStage, error) {
+	packs, _, err := loadPacksBlock(configPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := applyPackSourceDefaults(packs); err != nil {
+		return nil, err
+	}
+	pins := map[string]string{}
+	if lock, _ := ReadLockfile(filepath.Dir(configPath)); lock != nil {
+		for _, e := range lock.Packs {
+			inst, ok := packs[e.Instance]
+			if ok && e.Resolved != "" && e.Resolved != "local" && e.Source == inst.Source && e.Version == strings.TrimSpace(inst.Version) {
+				pins[e.Instance] = e.Resolved
+			}
+		}
+	}
+	st, err := stagePacks(configPath, pins)
+	if err != nil || len(packs) > 0 {
+		return st, err
+	}
+	// The edit removed the last pack: an empty vendor tree and lockfile
+	// swap in on Commit, so the removed copies go with it.
+	if err := os.MkdirAll(packVendorDir(st.root), 0o755); err != nil {
+		st.Discard()
+		return nil, err
+	}
+	if err := writeLockfile(st.root, st.Lock); err != nil {
+		st.Discard()
+		return nil, err
+	}
+	return st, nil
+}

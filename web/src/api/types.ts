@@ -518,13 +518,177 @@ export interface PacksResponse {
   packs: PackInfo[];
 }
 /**
- * PackInfo is one installed pack instance.
+ * PackInfo is one installed pack instance — Packs → Installed's facts line
+ * and dormant/needs-you treatment, from the same vendored manifest the
+ * catalog and the pack overrides screen read.
  */
 export interface PackInfo {
   name: string;
   use: string;
   version?: string;
   hold: boolean;
+  description?: string;
+  /**
+   * Source is where it comes from (a `use:`/`source:` value); Official is
+   * whether that's the official registry alias.
+   */
+  source?: string;
+  official: boolean;
+  /**
+   * Constraint is the version: (or use: @suffix) the config names; Pinned
+   * whether it names one at all. Version is what is installed (the
+   * vendored manifest's), falling back to the constraint.
+   */
+  constraint?: string;
+  pinned: boolean;
+  /**
+   * Local is a pack from a path on this machine (your own).
+   */
+  local: boolean;
+  /**
+   * Contents is what it ships, by kind and count (workflows, triggers,
+   * bot_templates, …) — the manifest's own ManifestContents.
+   */
+  contents?: { [key: string]: number /* int */};
+  /**
+   * TemplateOnly: it ships only bot templates (it belongs to New bot, not
+   * this list).
+   */
+  template_only: boolean;
+  /**
+   * TriggersArmed/TriggersTotal: how many of its shipped triggers this
+   * instance has armed (automation on) versus shipped disarmed (off).
+   */
+  triggers_armed: number /* int */;
+  triggers_total: number /* int */;
+  /**
+   * Roles are the connector roles it requires; Unbound those with nothing
+   * chosen and no single connection of their kind to bind automatically.
+   * Dormant: an armed trigger with an unbound role (it needs you).
+   */
+  roles?: string[];
+  unbound?: string[];
+  /**
+   * RoleCandidates counts this config's connections of each role's kind
+   * (one binds automatically), so a staged binding change can be judged.
+   */
+  role_candidates?: { [key: string]: number /* int */};
+  dormant: boolean;
+  /**
+   * Vendored is false when the instance is in config but its manifest
+   * hasn't been fetched yet (`conductor init` pending) — everything above
+   * but Name/Use/Version/Hold is then unavailable.
+   */
+  vendored: boolean;
+}
+/**
+ * CatalogResponse is GET /api/v1/packs/catalog — the Packs → Browse tab's
+ * marketplace grid: every pack the registry (official, or a configured one)
+ * and this config's own installed packs offer, searched and deduplicated.
+ * Mirrors config.CatalogResult. Instances are this config's packs: instance
+ * names (what a new instance must not reuse).
+ */
+export interface CatalogResponse {
+  packs: CatalogPackInfo[];
+  hidden_template_packs: number /* int */;
+  registry_problems?: string[];
+  registry_error?: string;
+  config_error?: string;
+  instances: string[];
+}
+/**
+ * CatalogPackInfo is one catalog entry (installed or not).
+ */
+export interface CatalogPackInfo {
+  name: string;
+  version: string;
+  description: string;
+  contents?: { [key: string]: number /* int */};
+  template_only: boolean;
+  installed: boolean;
+  pack_instance?: string;
+  official: boolean;
+  source?: string;
+  /**
+   * Install is the packs: block that installs it (empty for an already-
+   * installed pack); InstallKey/InstallRef are that block's one field
+   * (use: or source:) and Local whether it's a path on this machine.
+   */
+  install?: string;
+  install_key?: string;
+  install_ref?: string;
+  local?: boolean;
+  /**
+   * Requires are the connector roles it needs bound.
+   */
+  requires?: string[];
+  /**
+   * Latest is the registry's release of an installed pack.
+   */
+  latest?: string;
+  /**
+   * Review is what installing it adds (its manifest, as `conductor pack
+   * add` reports it), for its Details page and the Add review.
+   */
+  review?: PackReview;
+}
+/**
+ * PackReviewRequest is POST /api/v1/packs/review: fetch a pack source (a
+ * catalog entry's install_ref, or any owner/repo, git URL or local ./path)
+ * and build its install review, without staging anything.
+ */
+export interface PackReviewRequest {
+  source: string;
+}
+/**
+ * PackReview is what adding a pack shows: what it brings, what it may do,
+ * and what it needs bound (config.PackReview). A connector role carries its
+ * candidates among this config's connections.
+ */
+export interface PackReview {
+  name: string;
+  version: string;
+  description: string;
+  connectors?: PackRoleInfo[];
+  stores?: string[];
+  secrets?: string[];
+  grants?: PackReviewGrant[];
+  triggers?: PackReviewTrigger[];
+  workflows?: string[];
+  bots?: string[];
+  agent_steps: number /* int */;
+}
+/**
+ * PackReviewResponse is the review of a fetched source, plus the suggested
+ * instance name and the packs:<instance> block Add stages (with the
+ * operator's bindings) through the normal config staging endpoint
+ * (POST /api/v1/config/stage) when the operator confirms.
+ */
+export interface PackReviewResponse {
+  review: PackReview;
+  instance: string;
+  install_key: string;
+  install_ref: string;
+  local: boolean;
+  official: boolean;
+  config_value: { [key: string]: any};
+}
+/**
+ * PackReviewGrant is one step's skill request (what it may do).
+ */
+export interface PackReviewGrant {
+  where: string;
+  verbs?: string[];
+  secrets?: string[];
+}
+/**
+ * PackReviewTrigger is one trigger the pack ships disarmed, with the
+ * connection kind it listens on (the part of on: before the dot).
+ */
+export interface PackReviewTrigger {
+  name: string;
+  on?: string;
+  connector?: string;
 }
 /**
  * PackManifestResponse is GET /api/v1/packs/{name}/manifest: the pack's guided
@@ -712,7 +876,7 @@ export interface LanguageInfo extends PluginRef {
  * connection fields its declaration carries, read from the plugin's own
  * declaration at runtime (core never lists a plugin's fields itself).
  */
-export interface CatalogResponse {
+export interface PluginCatalogResponse {
   kind: string;
   items: CatalogItem[];
 }

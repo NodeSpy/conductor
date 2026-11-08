@@ -465,11 +465,14 @@ func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir
 			// named a source: fall back to the dependency's own `use:`. If
 			// that is empty too there is nothing left to infer — the alias no
 			// longer implies the official repo — so this errors.
-			src, err := packDependencySource(alias, child.Use)
+			src, ver, err := packDependencySource(alias, child.Use)
 			if err != nil {
 				return fmt.Errorf("pack %q: dependency %q: %w (set packs.%s.use or requires.packs.%s.source)", ns, alias, err, alias, alias)
 			}
 			child.Source = src
+			if child.Version, err = useVersion(alias, child.Version, ver); err != nil {
+				return fmt.Errorf("pack %q: dependency: %w", ns, err)
+			}
 		}
 		if err := r.resolve(
 			append(append([]string{}, chain...), alias),

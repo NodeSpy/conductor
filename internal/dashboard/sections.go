@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -153,22 +154,90 @@ func scanVaultRefs(tree any) []api.SecretInfo {
 
 func (s *Server) handlePacks(w http.ResponseWriter, r *http.Request) {
 	tree := s.liveTree()
+	connByKind := connectorKindMap(tree)
 	var resp api.PacksResponse
 	if packs, ok := tree["packs"].(map[string]any); ok {
 		for _, name := range sortedKeys(packs) {
 			pi := api.PackInfo{Name: name}
+			var inst map[string]any
 			if m, ok := packs[name].(map[string]any); ok {
+				inst = m
 				pi.Use, _ = m["use"].(string)
-				pi.Version, _ = m["version"].(string)
+				pi.Source, _ = m["source"].(string)
+				pi.Constraint, _ = m["version"].(string)
 				pi.Hold, _ = m["hold"].(bool)
-				if pi.Version == "" {
-					pi.Version = versionFromUse(pi.Use)
+				if pi.Constraint == "" {
+					pi.Constraint = versionFromUse(pi.Use)
 				}
+				pi.Version = pi.Constraint
+				pi.Pinned = pi.Constraint != ""
 			}
+			src := pi.Source
+			if src == "" {
+				src = pi.Use
+			}
+			if ref, err := config.ParsePackRef(strings.SplitN(src, "@", 2)[0]); err == nil {
+				pi.Official, pi.Local = ref.Official, ref.Local
+			}
+			s.fillPackManifestFacts(&pi, name, inst, connByKind)
 			resp.Packs = append(resp.Packs, pi)
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// fillPackManifestFacts reads a pack instance's vendored manifest (when it
+// has been fetched — `conductor init`) for the Installed tab's facts line:
+// what it ships, its description, whether a required connection has nothing
+// to bind to (dormant — "needs you"), and how many of its triggers this
+// instance has armed.
+func (s *Server) fillPackManifestFacts(pi *api.PackInfo, name string, inst map[string]any, connByKind map[string][]string) {
+	if s.deps.ConfigPath == "" {
+		return
+	}
+	dir := filepath.Join(config.PackVendorDir(filepath.Dir(s.deps.ConfigPath)), name)
+	man, err := config.LoadPackManifestForLint(dir)
+	if err != nil {
+		return // not vendored yet (`conductor init` pending)
+	}
+	pi.Vendored = true
+	pi.Description = man.Pack.Description
+	if man.Pack.Version != "" {
+		pi.Version = man.Pack.Version // what is installed, not the constraint
+	}
+	contents := config.ManifestContents(man)
+	if len(contents.Kinds) > 0 {
+		pi.Contents = contents.Counts
+	}
+	pi.TemplateOnly = contents.TemplateOnly()
+	pi.TriggersTotal = contents.Counts[config.KindTriggers]
+	boundTriggers, _ := inst["triggers"].(map[string]any)
+	for _, t := range man.Triggers {
+		if t.Name == "" {
+			continue
+		}
+		if v, ok := boundTriggers[t.Name]; ok {
+			if m, ok := v.(map[string]any); ok {
+				if en, _ := m["enabled"].(bool); en {
+					pi.TriggersArmed++
+				}
+			}
+		}
+	}
+	// A role binds automatically to the only connection of its kind; with
+	// none (or several) and nothing chosen, it is unbound — and a pack with an
+	// armed trigger and an unbound role is not working yet (it needs you).
+	boundConn, _ := inst["connectors"].(map[string]any)
+	pi.Roles = man.Pack.Requires.ConnectorNames()
+	pi.RoleCandidates = map[string]int{}
+	for _, role := range pi.Roles {
+		pi.RoleCandidates[role] = len(connByKind[role])
+		if _, ok := boundConn[role]; ok || len(connByKind[role]) == 1 {
+			continue
+		}
+		pi.Unbound = append(pi.Unbound, role)
+	}
+	pi.Dormant = len(pi.Unbound) > 0 && pi.TriggersArmed > 0
 }
 
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {

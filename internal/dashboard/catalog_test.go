@@ -63,9 +63,9 @@ triggers:
         command: "true"
 `
 
-// newCatalogServer serves catalogCfg with a synthetic install state that
+// newPluginCatalogServer serves catalogCfg with a synthetic install state that
 // holds one build of the synthetic plugin.
-func newCatalogServer(t *testing.T) (*Server, string, string) {
+func newPluginCatalogServer(t *testing.T) (*Server, string, string) {
 	t.Helper()
 	registerSynthKind(t)
 	dir := t.TempDir()
@@ -119,7 +119,7 @@ func getJSONInto(t *testing.T, s *Server, path string, v any) {
 }
 
 func TestConnectionsRowsFromConfigAndInstallState(t *testing.T) {
-	s, _, _ := newCatalogServer(t)
+	s, _, _ := newPluginCatalogServer(t)
 	var resp api.ConnectionsResponse
 	getJSONInto(t, s, "/api/v1/connections", &resp)
 
@@ -171,8 +171,8 @@ func TestConnectionsRowsFromConfigAndInstallState(t *testing.T) {
 }
 
 func TestCatalogFieldsComeFromTheDeclaration(t *testing.T) {
-	s, _, _ := newCatalogServer(t)
-	var resp api.CatalogResponse
+	s, _, _ := newPluginCatalogServer(t)
+	var resp api.PluginCatalogResponse
 	getJSONInto(t, s, "/api/v1/plugins/catalog?kind=connector", &resp)
 	var it *api.CatalogItem
 	for i := range resp.Items {
@@ -197,7 +197,7 @@ func TestCatalogFieldsComeFromTheDeclaration(t *testing.T) {
 	if rr := do(t, s, http.MethodGet, "/api/v1/plugins/catalog?kind=nonsense", nil); rr.Code != http.StatusBadRequest {
 		t.Errorf("a bad kind is refused: %d", rr.Code)
 	}
-	var rt api.CatalogResponse
+	var rt api.PluginCatalogResponse
 	getJSONInto(t, s, "/api/v1/plugins/catalog?kind=runtime", &rt)
 	found := false
 	for _, x := range rt.Items {
@@ -211,7 +211,7 @@ func TestCatalogFieldsComeFromTheDeclaration(t *testing.T) {
 }
 
 func TestReviewMatchesPluginAdd(t *testing.T) {
-	s, _, _ := newCatalogServer(t)
+	s, _, _ := newPluginCatalogServer(t)
 	var rev api.AddReview
 	getJSONInto(t, s, "/api/v1/plugins/review?kind=connector&use="+synthKind+"&as=w2", &rev)
 	if !rev.Trusted || rev.Origin != "official" || rev.Installed != "v1.2.0" || rev.Instance != "w2" || !rev.HasSchema {
@@ -236,7 +236,7 @@ func TestReviewMatchesPluginAdd(t *testing.T) {
 // install nothing, and staging the connectors: block leaves the config file
 // on disk untouched until Review & apply.
 func TestAddingOnlyStages(t *testing.T) {
-	s, cfgPath, stDir := newCatalogServer(t)
+	s, cfgPath, stDir := newPluginCatalogServer(t)
 	before, _ := os.ReadFile(cfgPath)
 
 	do(t, s, http.MethodGet, "/api/v1/plugins/catalog?kind=connector", nil)
