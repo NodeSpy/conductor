@@ -31,11 +31,12 @@ const startedAt = async (page: Page) => {
 
 // review → apply → confirm on the config page, then wait for the restart
 async function applyStaged(page: Page) {
-  await expect(page).toHaveURL(/#\/system\/config/)
+  // Staging lands on Review and apply; Apply once the check on a copy passed.
+  await expect(page).toHaveURL(/#\/system\/config\/apply/)
   const before = await startedAt(page)
-  await page.getByRole('button', { name: 'Review changes' }).click()
-  await page.getByRole('button', { name: 'Apply…' }).click()
-  await page.getByRole('button', { name: 'Confirm apply' }).click()
+  const go = page.getByTestId('apply-go')
+  await expect(go).not.toHaveAttribute('aria-disabled', 'true', { timeout: 30_000 })
+  await go.click()
   await expect(page.locator('.banner.ok')).toContainText('Applied', { timeout: 60_000 })
   await expect.poll(async () => { const s = await startedAt(page); return s !== '' && s !== before }, { timeout: 60_000 }).toBe(true)
 }

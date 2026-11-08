@@ -86,6 +86,8 @@ test('a staged map shows its value, not [object Object]', async ({ page }) => {
   })
   expect(res.ok()).toBeTruthy()
   await page.goto(`${rt.baseURL}/#/system/config/apply`)
+  // a hash change alone doesn't reload: read the staged set again
+  await page.reload()
   const tree = page.getByTestId('staged-tree')
   await expect(tree).toBeVisible()
   await expect(tree).toContainText('"greeting": "hi there"')
