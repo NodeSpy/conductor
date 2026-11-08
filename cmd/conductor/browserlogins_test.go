@@ -329,3 +329,29 @@ func TestBrowserLoginRemoveDropsSessions(t *testing.T) {
 		t.Fatalf("left: %+v", jars)
 	}
 }
+
+func TestBrowserLoginListSavedSessionsNoValue(t *testing.T) {
+	call, m, _ := loginRig(t)
+	if err := m.Logins().Save(browser.Jar{Identity: "bot:b1", Site: "app.example.com", Cookies: []browser.Cookie{{Name: "sid", Value: "secretvalue", Domain: "app.example.com"}}}); err != nil {
+		t.Fatal(err)
+	}
+	r := call("browser-login-list", browserLoginReq{})
+	if r.Error != "" {
+		t.Fatal(r.Error)
+	}
+	var v struct {
+		Saved []struct {
+			Identity, Site string
+			Cookies        int
+		} `json:"saved"`
+	}
+	if err := json.Unmarshal(r.Data, &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Saved) != 1 || v.Saved[0].Identity != "bot:b1" || v.Saved[0].Site != "app.example.com" || v.Saved[0].Cookies != 1 {
+		t.Fatalf("saved: %s", r.Data)
+	}
+	if strings.Contains(string(r.Data), "secretvalue") {
+		t.Fatalf("a cookie value crossed: %s", r.Data)
+	}
+}

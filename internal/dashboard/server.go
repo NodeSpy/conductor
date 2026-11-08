@@ -25,6 +25,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/configedit"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/dashboard/api"
 	"github.com/NodeSpy/conductor/internal/dashboard/auth"
 	"github.com/NodeSpy/conductor/internal/flow"
@@ -105,6 +106,9 @@ type Deps struct {
 	// daemon (the proposal endpoints report so).
 	ApprovalView   func(bot, id string) (digest, summaryJSON string, operators []string, ok bool)
 	DecideProposal func(ctx context.Context, bot, id, decision, operator, reason string, ev StepupEvidence) error
+	// DecideProposalEdit approves a knowledge proposal with the operator's
+	// edited text (approve with changes, approve_edit.go). Nil: not offered.
+	DecideProposalEdit func(ctx context.Context, bot, id, operator, edit string, ev StepupEvidence) error
 
 	// Run controls (design §4.3). Retry re-runs a recorded execution from a step
 	// (the engine's RetryRunByID); Stop cancels a live run by its history id;
@@ -146,6 +150,12 @@ type Deps struct {
 	// GET /api/v1/packs/catalog read through this — same knob, same
 	// config.PackCatalog the CLI uses.
 	PackRegistry string
+
+	// ConnectorDecl returns a configured connection's live declaration (its
+	// per-instance one: the events its own config names), for New bot's
+	// event list (newbot.go). Nil: the plugin's type-level declaration is
+	// used instead.
+	ConnectorDecl func(name string) (*connector.TypeDecl, bool)
 }
 
 // StepupEvidence re-exports auth.StepupEvidence so a Deps caller (the daemon)
@@ -244,6 +254,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/plugins/catalog", s.handlePluginCatalog)
 	s.mux.HandleFunc("GET /api/v1/plugins/review", s.handlePluginReview)
 	s.mux.HandleFunc("GET /api/v1/connections", s.handleConnections)
+	s.mux.HandleFunc("GET /api/v1/connections/verbs", s.handleBotVerbs)
+	s.mux.HandleFunc("GET /api/v1/newbot/connections", s.handleNewbotConnections) // New bot: events and verbs (newbot.go)
+	s.mux.HandleFunc("GET /api/v1/newbot/templates", s.handleNewbotTemplates)
 	s.mux.HandleFunc("GET /api/v1/system", s.handleSystem)
 	s.mux.HandleFunc("POST /api/v1/system/pause", s.handleSetPaused)
 	s.mux.HandleFunc("POST /api/v1/system/update/check", s.handleUpdateCheck)

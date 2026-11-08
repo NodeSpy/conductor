@@ -1210,6 +1210,19 @@ func cmdRun(args []string) error {
 			},
 			ApprovalView:   dashboardApprovalView,
 			DecideProposal: dashboardDecide,
+			// New bot's event list: a connection's live, per-instance declaration
+			ConnectorDecl: func(name string) (*connector.TypeDecl, bool) {
+				if stack == nil || stack.Registry == nil {
+					return nil, false
+				}
+				in, ok := stack.Registry.Get(name)
+				if !ok || in.Decl == nil {
+					return nil, false
+				}
+				return in.Decl, true
+			},
+			// approve a team knowledge proposal with the operator's changes
+			DecideProposalEdit: dashboardDecideEdit,
 			// Run controls (design §4.3): retry reuses the engine's deliberate
 			// re-run-from-step; stop cancels a live run; RunActive is the
 			// authority on "still running" the history file lags behind.

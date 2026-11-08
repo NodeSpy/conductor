@@ -261,3 +261,22 @@ func TestAddingOnlyStages(t *testing.T) {
 		t.Errorf("nothing was installed (install dir: %v)", err)
 	}
 }
+
+func TestBotVerbsFromThePluginDeclaration(t *testing.T) {
+	s, _, _ := newPluginCatalogServer(t)
+	d, _ := connector.TypeDeclFor(synthKind)
+	d.Verbs = []connector.VerbDecl{{Name: "read", Desc: "Read a widget"}}
+	var resp struct {
+		Verbs []botVerb `json:"verbs"`
+	}
+	getJSONInto(t, s, "/api/v1/connections/verbs", &resp)
+	var got *botVerb
+	for i := range resp.Verbs {
+		if resp.Verbs[i].Verb == "w1.read" {
+			got = &resp.Verbs[i]
+		}
+	}
+	if got == nil || got.Desc != "Read a widget" || got.Connection != "w1" {
+		t.Fatalf("verbs: %+v", resp.Verbs)
+	}
+}
