@@ -17,6 +17,7 @@ import { route, screen, go } from '../router'
 import { Icon } from './Icon'
 import { StatusMark } from './StatusMark'
 import { Palette, type PaletteItem } from './Palette'
+import { Shortcuts } from './Shortcuts'
 import { usePhoneLayout } from '../lib/layout'
 import { Menu, type MenuItem } from './Menu'
 import { authState, signOut } from '../api/auth'
@@ -51,7 +52,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 ]
 
 // PALETTE_ITEMS: every screen reachable from the rail, the tab bar or More —
-// the search affordance's index for this phase (see Palette.tsx's note).
+// the ⌘K palette's pages (Palette.tsx adds the rest of its index).
 const PALETTE_ITEMS: PaletteItem[] = [
   { key: '', label: 'Home', icon: 'overview' },
   { key: 'chat', label: 'Chat', icon: 'message' },
@@ -203,6 +204,7 @@ export function Shell({ children }: { children: ComponentChildren }): JSX.Elemen
           <b>{title}</b>
         </a>
         <Palette items={PALETTE_ITEMS} />
+        <Shortcuts />
         <div class="spacer" />
         {conn.value !== 'live' ? (
           <span class="cell" data-testid="conn-bar" title="Event stream">
