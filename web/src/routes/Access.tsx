@@ -433,14 +433,19 @@ export function Access(): JSX.Element {
             <ul class="acc-asks">
               <li>Approving or denying what a bot asks to do, a purchase included</li>
               {data.auth_policy.config_stepup === 'guarded' ? (
-                <li data-testid="config-asks">Changes that give bots more access or loosen safety: a new permission, a new allowed site, the sandbox off; and every restore</li>
+                <li data-testid="config-asks">
+                  Every restore, and config changes (a new bot avatar too) except: setting{' '}
+                  <code>usage.mode</code> or raising an existing price under{' '}
+                  <code>pricing</code> (at most tenfold), up to 5 in 10 minutes (
+                  <code>config_stepup: guarded</code>)
+                </li>
               ) : (
-                <li data-testid="config-asks">Every config change and every restore</li>
+                <li data-testid="config-asks">Every config change (a new bot avatar too) and every restore</li>
               )}
-              <li>Storing or replacing a secret value in a vault</li>
+              {/* what really asks (no vault line: storing a secret uses the session) */}
               <li>Taking over a browser a bot is signed in to</li>
-              <li>Letting a bot spend more, in a browser or on a ticket</li>
-              <li>Retrying a run so steps that already succeeded run again</li>
+              <li>Loosening a browser wallet limit or a ticket's spend limit, or giving a spend limit to another bot (assigning or reopening its ticket)</li>
+              <li>Retrying a run so that steps that already succeeded run again</li>
               <li>Installing an update, or going back to an older one</li>
               <li>Adding or removing a way to sign in</li>
             </ul>
