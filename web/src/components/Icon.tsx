@@ -13,6 +13,14 @@ import { h } from 'preact'
 import type { JSX } from 'preact'
 
 const SHAPES: Record<string, [string, Record<string, string>][]> = {
+  // Browsers (logins menu, live session facts, config tags)
+  'runs': [['path', {d: 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8'}], ['path', {d: 'M3 3v5h5'}], ['path', {d: 'M12 7v5l4 2'}]],
+  'obj-config': [['path', {d: 'M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z'}], ['path', {d: 'M9 10h6'}], ['path', {d: 'M12 13V7'}], ['path', {d: 'M9 17h6'}]],
+  'obj-team': [['path', {d: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'}], ['path', {d: 'M16 3.128a4 4 0 0 1 0 7.744'}], ['path', {d: 'M22 21v-2a4 4 0 0 0-3-3.87'}], ['circle', {cx: '9', cy: '7', r: '4'}]],
+  'obj-run': [['path', {d: 'M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z'}], ['circle', {cx: '12', cy: '12', r: '10'}]],
+  'obj-login': [['path', {d: 'm10 17 5-5-5-5'}], ['path', {d: 'M15 12H3'}], ['path', {d: 'M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4'}]],
+  'external': [['path', {d: 'M15 3h6v6'}], ['path', {d: 'M10 14 21 3'}], ['path', {d: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6'}]],
+  'phone': [['rect', {width: '14', height: '20', x: '5', y: '2', rx: '2', ry: '2'}], ['path', {d: 'M12 18h.01'}]],
   plug: [['path',{d:'M12 22v-5'}],['path',{d:'M9 8V2'}],['path',{d:'M15 8V2'}],['path',{d:'M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z'}]],
   'badge-check': [['path',{d:'M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z'}],['path',{d:'m16 9-5.5 5.5L8 12'}]],
   'git-fork': [['circle',{cx:'12',cy:'18',r:'3'}],['circle',{cx:'6',cy:'6',r:'3'}],['circle',{cx:'18',cy:'6',r:'3'}],['path',{d:'M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9'}],['path',{d:'M12 12v3'}]],
