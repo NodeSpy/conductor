@@ -46,7 +46,7 @@ const installStateFile = "installed.yaml"
 // Version 2 is the file the plugin jail writes: every record in it holds
 // what the user agreed to. A version 1 file was written by a conductor that
 // did not jail plugins (or by one rolled back to): its records are loaded
-// as Legacy, and only those are ever adopted (adoptLegacyRecord).
+// as Legacy, and only those are adopted wholesale (adoptOlderRecord).
 const installStateVersion = 2
 
 // legacyStateVersion is the file a conductor without the plugin jail writes.
@@ -60,10 +60,17 @@ const legacyStateVersion = 1
 const consentFile = "consented.yaml"
 
 // manifestSchema marks a record whose Manifest holds the whole declaration
-// the jail enforces (Installed.ManifestSchema). A record without it was
+// the jail enforces (Installed.ManifestSchema). A record without one was
 // written by a conductor that did not jail plugins and did not record
-// listen, read, write, exec or keychain (Installed.Legacy).
-const manifestSchema = 1
+// listen, read, write, exec or keychain (Installed.Legacy). One with
+// jailSchema was written by a jailing conductor the plugin SDK withheld
+// part of the declaration from (HostInfo.ResolvesReferences,
+// HostInfo.GrantsExposeLocal): its config: and env: entries, its
+// expose_local. Both are adopted once (adoptOlderRecord).
+const (
+	jailSchema     = 1
+	manifestSchema = 2
+)
 
 // Manifest is the permission manifest a plugin declared at install time — what
 // it says it needs, recorded so it is known BEFORE the plugin runs on any
@@ -89,6 +96,9 @@ type Manifest struct {
 	Spawns bool `yaml:"spawns,omitempty"`
 	// Env are the daemon environment variables passed through to it.
 	Env []string `yaml:"env,omitempty"`
+	// ExposeLocal: an exposure that connects to the local listeners conductor
+	// wires to it (Capabilities.ExposeLocal).
+	ExposeLocal bool `yaml:"expose_local,omitempty"`
 	// Auth records the plugin's declared OAuth2 endpoints (Decl.Auth) so
 	// `conductor connector auth <name>` can run the one-time interactive login
 	// from the CLI without respawning the plugin to re-Describe it. nil for a
@@ -111,7 +121,7 @@ type Manifest struct {
 // IsZero reports whether the plugin declared no capabilities at all.
 func (m Manifest) IsZero() bool {
 	return len(m.Egress) == 0 && len(m.Listen) == 0 && len(m.Read) == 0 && len(m.Write) == 0 && len(m.Exec) == 0 &&
-		len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && !m.Keychain && len(m.Env) == 0 && !m.SingleProcess && m.Auth == nil
+		len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && !m.Keychain && len(m.Env) == 0 && !m.SingleProcess && m.Auth == nil && !m.ExposeLocal
 }
 
 // Caps is the manifest as the plugin declared it.
@@ -119,8 +129,12 @@ func (m Manifest) Caps() sdk.Capabilities {
 	return sdk.Capabilities{
 		Egress: m.Egress, Listen: m.Listen, Read: m.Read, Write: m.Write, FS: m.FS,
 		Commands: m.Commands, Exec: m.Exec, Keychain: m.Keychain, Env: m.Env,
+		ExposeLocal: m.ExposeLocal,
 	}
 }
+
+// exposeLocalLabel is Capabilities.ExposeLocal in plain words.
+const exposeLocalLabel = "connects to the local listeners conductor exposes through it (only those a connector's expose: names; never conductor's own ports)"
 
 // Lines renders what the plugin may do, one permission per line, in plain
 // words: what `plugin add`, `plugin show` and the boot log show the user.
@@ -161,6 +175,9 @@ func (m Manifest) Lines() []string {
 	if m.Keychain {
 		out = append(out, "reads a login from the macOS Keychain")
 	}
+	if m.ExposeLocal {
+		out = append(out, exposeLocalLabel)
+	}
 	if hosts := authEndpoints(m.Auth); len(hosts) > 0 {
 		var ws []string
 		for _, e := range hosts {
@@ -175,6 +192,17 @@ func (m Manifest) Lines() []string {
 		out = []string{"nothing: no network, no files beyond its own, no commands, no env"}
 	}
 	return out
+}
+
+// withWithheld is have plus what the plugin SDK withholds from a conductor
+// that cannot grant it, as m declares it: its config: and env: entries,
+// and expose_local.
+func withWithheld(have, m Manifest) Manifest {
+	have.Egress, have.Listen = withReferences(have.Egress, m.Egress), withReferences(have.Listen, m.Listen)
+	have.Read, have.Write = withReferences(have.Read, m.Read), withReferences(have.Write, m.Write)
+	have.FS, have.Exec = withReferences(have.FS, m.FS), withReferences(have.Exec, m.Exec)
+	have.ExposeLocal = have.ExposeLocal || m.ExposeLocal
+	return have
 }
 
 // withReferences is have plus the config: and env: entries of declared
@@ -277,6 +305,9 @@ func (m Manifest) Widens(next Manifest) []string {
 	if next.Keychain && !m.Keychain {
 		out = append(out, "reads a login from the macOS Keychain")
 	}
+	if next.ExposeLocal && !m.ExposeLocal {
+		out = append(out, exposeLocalLabel)
+	}
 	// One process serving every instance is jailed to all of their grants.
 	if next.SingleProcess && !m.SingleProcess {
 		out = append(out, "single_process (every instance shares one process)")
@@ -369,11 +400,12 @@ type Installed struct {
 	// Manifest is the permission manifest recorded at install.
 	Manifest Manifest `yaml:"manifest,omitempty"`
 	// ManifestSchema is manifestSchema when Manifest was recorded in full
-	// (see there); 0 on a record a conductor without the jail wrote.
+	// (see there); jailSchema on one a conductor the plugin SDK withheld
+	// part of it from wrote, 0 on one a conductor without the jail wrote.
 	ManifestSchema int `yaml:"manifest_schema,omitempty"`
 	// Legacy marks a record loaded from a version 1 state file (a conductor
 	// without the jail wrote it) that has not been adopted yet. Only such a
-	// record is adopted (adoptLegacyRecord); conductor never sets it on a
+	// record is adopted (adoptOlderRecord); conductor never sets it on a
 	// record it makes, so a record it wrote is always compared, never
 	// adopted.
 	Legacy bool `yaml:"legacy,omitempty"`
@@ -663,7 +695,7 @@ func LoadInstallState(dir string) *InstallState {
 	case legacyStateVersion:
 		s.Plugins = on.Plugins
 		for i := range s.Plugins {
-			s.Plugins[i].Legacy = s.Plugins[i].ManifestSchema < manifestSchema
+			s.Plugins[i].Legacy = s.Plugins[i].ManifestSchema < jailSchema
 		}
 		s.restoreConsented()
 	}
@@ -695,6 +727,33 @@ func (s *InstallState) markPreJail() {
 	for i := range s.Pending {
 		s.Pending[i].PreJail = s.Pending[i].PreJail || pre[s.Pending[i].Key+"\x00"+s.Pending[i].Source]
 	}
+}
+
+// MarkPreJail marks every installed build and held update of key as
+// installed before the plugin jail (Installed.PreJail), reporting whether
+// anything changed: what a config migration does when it moves what an
+// older plugin, or conductor itself, did into this one.
+func (s *InstallState) MarkPreJail(key string) bool {
+	changed := false
+	for i := range s.Plugins {
+		if s.Plugins[i].Key == key && !s.Plugins[i].PreJail {
+			s.Plugins[i].PreJail, changed = true, true
+		}
+	}
+	for i := range s.Pending {
+		if s.Pending[i].Key == key && !s.Pending[i].PreJail {
+			s.Pending[i].PreJail, changed = true, true
+		}
+	}
+	return changed
+}
+
+// RunsAsBefore reports whether a launch of rec runs unjailed as before the
+// plugin jail (this host cannot jail plugins, and rec predates the jail),
+// where trust: full is not set.
+func RunsAsBefore(rec Installed) bool {
+	_, before := runsAsBefore(Spec{PreJail: rec.PreJail})
+	return before
 }
 
 // preJail reports whether a plugin (key from source) was installed before
@@ -754,12 +813,12 @@ func (s *InstallState) consentedFor(key, source, sha string) (Installed, bool) {
 	if s == nil || s.consented == nil {
 		return Installed{}, false
 	}
-	if c, ok := s.consented.findSha(key, source, sha); ok && c.ManifestSchema >= manifestSchema {
+	if c, ok := s.consented.findSha(key, source, sha); ok && c.ManifestSchema >= jailSchema {
 		return c, true
 	}
 	all := versionsForSource(s.consented.AllVersions(key), source)
 	for i := len(all) - 1; i >= 0; i-- {
-		if all[i].ManifestSchema >= manifestSchema {
+		if all[i].ManifestSchema >= jailSchema {
 			return all[i], true
 		}
 	}

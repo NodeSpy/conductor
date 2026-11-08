@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -337,6 +338,24 @@ func TestResolveListenerPath(t *testing.T) {
 	}
 }
 
+// A wildcard bind is a bind address, not a destination: the exposure is
+// handed the loopback address it can actually reach the listener on.
+func TestDialableAddr(t *testing.T) {
+	for in, want := range map[string]string{
+		":8787":          "127.0.0.1:8787",
+		"0.0.0.0:8787":   "127.0.0.1:8787",
+		"[::]:8787":      "[::1]:8787",
+		"127.0.0.1:8787": "127.0.0.1:8787",
+		"10.0.0.5:8787":  "10.0.0.5:8787",
+		"hooks.lan:8787": "hooks.lan:8787",
+		"not-an-address": "not-an-address",
+	} {
+		if got := dialableAddr(in); got != want {
+			t.Errorf("dialableAddr(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // At instance start, a listener's resolved path is passed to an exposure
 // that declares `exposes.path` AS AN OPTION, and the returned URL lands in
 // url_to UNCHANGED — the smee case: the channel URL already IS the public
@@ -649,5 +668,66 @@ func TestPluginSourceListenerExposureBackoffNeverExceedsCap(t *testing.T) {
 		if waits[i] != w*time.Millisecond {
 			t.Fatalf("wait %d = %s, want %s (schedule %v)", i+1, waits[i], w*time.Millisecond, waits)
 		}
+	}
+}
+
+// ExposeTargets is the engine's wiring, read the way openListeners reads it:
+// each exposure gets the dialable address of every enabled listener whose
+// expose names it. A builtin's listener is conductor's own port: never a
+// target, and said so when the exposure is a jailed plugin.
+func TestExposeTargets(t *testing.T) {
+	listeners := &sdk.ConnSemantics{Listeners: []sdk.Listener{{Listen: "webhook.listen", Expose: "webhook.expose", URLTo: "webhook.public_url"}}}
+	for _, typ := range []string{"exposetgt-ext", "exposetgt-relay"} {
+		d := &TypeDecl{Type: typ, Connection: Schema{"webhook": {Type: TMap}}}
+		if typ == "exposetgt-ext" {
+			d.Semantics = listeners
+		}
+		if err := RegisterExternalTypeGroup(d, nil, "connectors/"+typ+"@v1.0.0", "connectors/"+typ); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { UnregisterExternalType(typ) })
+	}
+	registerTypeForTest(&TypeDecl{Type: "exposetgt-builtin", Connection: Schema{"webhook": {Type: TMap}}, Semantics: listeners},
+		func(string, config.ConnectorRef, Deps) (Impl, error) { return &noopImpl{}, nil })
+	cfg := mustDecodeConfig(t, `
+connectors:
+  gh:
+    use: exposetgt-ext
+    webhook: { listen: "0.0.0.0:8787", expose: relay }
+  gh2:
+    use: exposetgt-ext
+    webhook: { listen: "127.0.0.1:8790", expose: relay }
+  off:
+    use: exposetgt-ext
+    enabled: false
+    webhook: { listen: "127.0.0.1:8791", expose: relay }
+  plain:
+    use: exposetgt-ext
+    webhook: { listen: "127.0.0.1:8792" }
+  hooks:
+    use: exposetgt-builtin
+    webhook: { listen: ":8099", expose: relay }
+  relay:
+    use: exposetgt-relay
+`)
+	var logged []string
+	got := ExposeTargets(cfg, func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) })
+	want := map[string][]string{"relay": {"127.0.0.1:8787", "127.0.0.1:8790"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("targets = %v, want %v", got, want)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], `"hooks"`) || !strings.Contains(logged[0], "conductor's own port") {
+		t.Fatalf("the builtin's listener is not named: %q", logged)
+	}
+	// The same refusal, for a migration's pre-write check, keyed by the
+	// exposure; none once the exposure runs unjailed.
+	if r := ExposeRefusals(cfg); len(r) != 1 || r["relay"] != logged[0] {
+		t.Fatalf("refusals = %q", r)
+	}
+	ref := cfg.ConnectorsMap["relay"]
+	ref.Trust = "full"
+	cfg.ConnectorsMap["relay"] = ref
+	if r := ExposeRefusals(cfg); len(r) != 0 {
+		t.Fatalf("refusals with trust: full = %q", r)
 	}
 }

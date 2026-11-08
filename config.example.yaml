@@ -84,15 +84,19 @@ connectors:
       private_key_path: ~/.config/conductor/github-app.pem
     # token: ${GH_PAT}                  # the App-less alternative
     webhook:
-      smee_url: ${GH_SMEE_URL} # and/or a direct listener:
-      # listen: "127.0.0.1:8787"
-      # path: /webhook
+      # The plugin only listens locally. A public URL comes from an exposure
+      # connector named in `expose:` — gh-smee below relays a smee.io channel
+      # here; cloudflared/ngrok/tailscale/… work the same way. Drop `expose:`
+      # when GitHub can reach `listen` directly.
+      listen: "127.0.0.1:8787"
+      path: /webhook
+      expose: gh-smee
       # The secret and the signature switch are WEBHOOK settings, not App auth
       # — an App-less instance verifies deliveries just the same.
       secret: ${GH_WEBHOOK_SECRET}
       # verify_signature: false         # default true; smee re-serializes the
       #                                 # body so the HMAC can miss — flip it
-      #                                 # off there, keep it on behind `listen`
+      #                                 # off if deliveries fail it
     # Catch-up polling. ON by default and fully optional — omit the whole block
     # and it sweeps every repo the App is installed on. List `repos:` (names or
     # `owner/*`) only to NARROW it. Cadence auto-picks: adaptive (min_interval→
@@ -111,6 +115,16 @@ connectors:
       rate_limits: { per_minute: 60 } # outbound verb cap
       backoff: { base: 10s, max: 30m } # retry cadence past the attempt threshold
       # reply_to_bots: decline_only  # bot-authored comments: decline_only (default) | off | full
+
+  # The smee exposure (a plugin): relays the channel to whatever listener
+  # names it in `expose:` (gh above). Pin `channel:` to the URL your GitHub
+  # App/repo webhook already sends to; omit it to have smee.io mint one.
+  # (Configs that still carry github `webhook.smee_url` or the webhook
+  # connector's `smee_url` are rewritten to this shape at boot — see
+  # `conductor config migrate` in the Migration wiki page.)
+  gh-smee:
+    use: smee
+    channel: ${GH_SMEE_URL}
 
   slack-ops:
     use: slack
@@ -177,6 +191,9 @@ connectors:
   hooks:
     use: webhook
     listen: ":8099" # shared with other listeners on the same address
+    # expose: hooks-smee  # an exposure connector relaying to this listener;
+    #                     # deliveries reach `path:` below ("/" by default)
+    #                     # and are offered to every source (match picks one)
     sources:
       cloudwatch:
         path: /hooks/cloudwatch

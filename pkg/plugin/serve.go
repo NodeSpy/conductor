@@ -492,6 +492,9 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 		if !req.Host.ResolvesReferences() {
 			d.Capabilities = d.Capabilities.WithoutReferences()
 		}
+		if !req.Host.GrantsExposeLocal() {
+			d.Capabilities.ExposeLocal = false
+		}
 		return d, nil
 	case MethodPoll:
 		ph, ok := h.(PollHandler)

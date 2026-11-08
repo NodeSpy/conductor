@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -73,10 +74,79 @@ func TestKnownSemanticsAdvertisesReferences(t *testing.T) {
 	}
 }
 
-// oldHostSemantics is HostInfo.Semantics as conductor v0.61 through v0.89.0
-// sent it: everything this SDK knows but SemanticReferences.
+// oldHostSemantics is HostInfo.Semantics as conductor v0.61 through v0.89.x
+// sent it: everything this SDK knows but SemanticReferences and
+// SemanticExposeLocal.
 func oldHostSemantics() []string {
-	return slices.DeleteFunc(KnownSemantics(), func(s string) bool { return s == SemanticReferences })
+	return slices.DeleteFunc(KnownSemantics(), func(s string) bool { return s == SemanticReferences || s == SemanticExposeLocal })
+}
+
+// v090Semantics is HostInfo.Semantics as conductor v0.90 sent it: it
+// resolves references, but has never heard of expose_local.
+func v090Semantics() []string {
+	return slices.DeleteFunc(KnownSemantics(), func(s string) bool { return s == SemanticExposeLocal })
+}
+
+// exposeHandler declares expose_local.
+type exposeHandler struct{}
+
+func (exposeHandler) Describe() Decl {
+	return Decl{Type: "t", Capabilities: Capabilities{Egress: []string{"relay.example:443", "config:channel"}, ExposeLocal: true}}
+}
+func (exposeHandler) Invoke(InvokeRequest) (InvokeResult, error) { return InvokeResult{}, nil }
+
+// Serve sends expose_local only to a host that advertises it grants it;
+// every older conductor (which ignores the field) gets the declaration
+// without it, and the rest of the declaration as before.
+func TestServeWithholdsExposeLocalFromOldHosts(t *testing.T) {
+	if !slices.Contains(KnownSemantics(), SemanticExposeLocal) {
+		t.Fatalf("KnownSemantics() = %v: a host built with this SDK must advertise %s", KnownSemantics(), SemanticExposeLocal)
+	}
+	hosts := []*HostInfo{
+		nil, // before v0.61
+		{Version: "dev", Semantics: oldHostSemantics()}, // v0.61 – v0.89.x
+		{Version: "dev", Semantics: v090Semantics()},    // v0.90
+		{Version: "dev", Semantics: KnownSemantics()},   // this SDK
+	}
+	var reqs []string
+	for i, h := range hosts {
+		b, err := json.Marshal(DescribeRequest{Host: h})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reqs = append(reqs, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"plugin.describe","params":%s}`, i+1, b))
+	}
+	var out strings.Builder
+	if err := serve(strings.NewReader(strings.Join(reqs, "\n")+"\n"), &out, exposeHandler{}); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	byID := decodeResponses(t, out.String())
+	for i, want := range []struct {
+		expose bool
+		egress []string
+	}{
+		{false, []string{"relay.example:443"}},
+		{false, []string{"relay.example:443"}},
+		{false, []string{"relay.example:443", "config:channel"}},
+		{true, []string{"relay.example:443", "config:channel"}},
+	} {
+		m := byID[fmt.Sprint(i+1)]
+		if m.Error != nil {
+			t.Fatalf("host %d: %+v", i, m.Error)
+		}
+		var d struct {
+			Capabilities map[string]json.RawMessage `json:"capabilities"`
+		}
+		if err := json.Unmarshal(m.Result, &d); err != nil {
+			t.Fatal(err)
+		}
+		_, sent := d.Capabilities["expose_local"]
+		var egress []string
+		_ = json.Unmarshal(d.Capabilities["egress"], &egress)
+		if sent != want.expose || !slices.Equal(egress, want.egress) {
+			t.Errorf("host %d: expose_local sent=%v egress=%v, want %v %v", i, sent, egress, want.expose, want.egress)
+		}
+	}
 }
 
 // refHandler declares references at type and instance level.

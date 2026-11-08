@@ -66,7 +66,7 @@ func ForceNoCheckout(a config.Action) config.Action {
 }
 
 // DeliveryDedup is a bounded set of recently-seen delivery ids, for suppressing
-// duplicate deliveries (smee reconnect redelivery, retried POSTs) before emitting.
+// duplicate deliveries (a relay's redelivery, retried POSTs) before emitting.
 // Copied from the github integration's deliveryDedup.
 type DeliveryDedup struct {
 	mu   sync.Mutex

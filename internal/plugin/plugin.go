@@ -136,6 +136,11 @@ type Spec struct {
 	Conns []map[string]any
 	// Network is the referencing connector's declared egress.
 	Network []string
+	// ExposeTo are the local listener addresses the engine hands this
+	// process's instances to expose (Manager.SetExposeTargets): what a
+	// plugin declaring Capabilities.ExposeLocal may connect to from its
+	// jail, and nothing else on this machine.
+	ExposeTo []string
 	// Isolation is OPTIONAL OS hardening. nil is the normal case.
 	Isolation *config.IsolationConfig
 	// IsolationDefaulted marks an Isolation conductor synthesized (an

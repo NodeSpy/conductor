@@ -3,6 +3,10 @@ package connector
 import (
 	"context"
 	"fmt"
+	"maps"
+	"net"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -122,6 +126,84 @@ func (r *Registry) checkListenerExposures(cfg *config.Config, log func(string, .
 	}
 }
 
+// ExposeTargets maps each exposure connector instance to the listener
+// addresses the engine will hand it to expose (openListeners): every enabled
+// connector's declared listener whose expose field names it, at the address
+// dialableAddr makes of its listen field. The engine wires exposures to
+// listeners, so this is what an exposure plugin declaring expose_local may
+// connect to from its jail (plugin.Manager.SetExposeTargets), and nothing
+// more. A listener a builtin serves is conductor's own port, which a jailed
+// plugin is never granted: it is left out, and said so when the exposure is
+// a jailed plugin.
+func ExposeTargets(cfg *config.Config, logf func(string, ...any)) map[string][]string {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	targets, refused := exposeTargets(cfg)
+	for _, name := range slices.Sorted(maps.Keys(refused)) {
+		logf("%s", refused[name])
+	}
+	return targets
+}
+
+// ExposeRefusals names each enabled exposure connector a builtin listener
+// is wired to while it runs jailed (exposure → why): it is never granted
+// conductor's own port, so what it relays never arrives.
+func ExposeRefusals(cfg *config.Config) map[string]string {
+	_, refused := exposeTargets(cfg)
+	out := make(map[string]string, len(refused))
+	for _, why := range refused {
+		out[why.expose] = why.String()
+	}
+	return out
+}
+
+// ownPortRefusal is a builtin listener wired to a jailed exposure.
+type ownPortRefusal struct{ listener, addr, expose string }
+
+func (r ownPortRefusal) String() string {
+	return fmt.Sprintf("connector %q: its listener %s is conductor's own port, which %s (a jailed plugin) is never granted — what it relays will not arrive; set trust: full on %s to run it unjailed (with isolate: true when it shares its plugin's process with another connector), or expose a plugin's listener", r.listener, r.addr, r.expose, r.expose)
+}
+
+func exposeTargets(cfg *config.Config) (map[string][]string, map[string]ownPortRefusal) {
+	out := map[string][]string{}
+	refused := map[string]ownPortRefusal{}
+	names := make([]string, 0, len(cfg.ConnectorsMap))
+	for n := range cfg.ConnectorsMap {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ref := cfg.ConnectorsMap[name]
+		if !ref.IsEnabled() {
+			continue
+		}
+		d, _, ok := declFor(ref.TypeName(), name)
+		if !ok || d == nil || d.Semantics == nil || len(d.Semantics.Listeners) == 0 {
+			continue
+		}
+		var raw map[string]any
+		if ref.Decode(&raw) != nil {
+			continue
+		}
+		for _, l := range d.Semantics.Listeners {
+			expose, listen := stringAtPath(raw, l.Expose), stringAtPath(raw, l.Listen)
+			if expose == "" || listen == "" {
+				continue
+			}
+			addr := dialableAddr(listen)
+			if !IsExternalType(ref.TypeName()) {
+				if t, ok := cfg.ConnectorsMap[expose]; ok && t.IsEnabled() && IsExternalType(t.TypeName()) && !t.TrustFull() {
+					refused[name+"\x00"+addr] = ownPortRefusal{listener: name, addr: addr, expose: expose}
+				}
+				continue
+			}
+			out[expose] = append(out[expose], addr)
+		}
+	}
+	return out, refused
+}
+
 // exposureRetryInitial and exposureRetryMax bound openExposure's backoff —
 // vars so a test can shrink them rather than wait out a real tunnel's
 // timeout.
@@ -165,7 +247,7 @@ func (p *pluginSourceIntegration) openListeners(ctx context.Context) (map[string
 			return nil, func() {}, fmt.Errorf("connector %q: listeners: %s is set with no %s", p.instance, l.Expose, l.Listen)
 		}
 		path := resolveListenerPath(cfg, l)
-		url, closeFn, err := p.openExposure(ctx, expose, listen, path)
+		url, closeFn, err := p.openExposure(ctx, expose, dialableAddr(listen), path)
 		if err != nil {
 			release()
 			return nil, func() {}, fmt.Errorf("connector %q: %w", p.instance, err)
@@ -176,6 +258,26 @@ func (p *pluginSourceIntegration) openListeners(ctx context.Context) (map[string
 		}
 	}
 	return cfg, release, nil
+}
+
+// dialableAddr turns a listen address into one the exposure can connect to:
+// a wildcard bind (":8787", "0.0.0.0:8787", "[::]:8787") is reached on
+// loopback. The exposure dials the listener from this machine — a relay
+// replays each delivery to it, a tunnel forwards to it — and a wildcard is a
+// bind address, not a destination (an HTTP client cannot POST to ":8787",
+// and an egress proxy treats 0.0.0.0 as a remote host, not loopback).
+func dialableAddr(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return listen
+	}
+	switch host {
+	case "", "0.0.0.0":
+		return net.JoinHostPort("127.0.0.1", port)
+	case "::":
+		return net.JoinHostPort("::1", port)
+	}
+	return listen
 }
 
 // resolveListenerPath reads the listener's own HTTP path out of cfg at

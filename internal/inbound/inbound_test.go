@@ -50,29 +50,6 @@ func mustHex(t *testing.T, s string) []byte {
 	return b
 }
 
-func TestParseSmeeFrame(t *testing.T) {
-	// Object body: headers come from scalar keys, body is the re-serialized object.
-	f, ok := parseSmeeFrame(`{"x-source":"cloudwatch","content-type":"application/json","body":{"alarm":"cpu"}}`)
-	if !ok {
-		t.Fatal("object-body frame should parse")
-	}
-	if f.Header("X-Source") != "cloudwatch" {
-		t.Fatalf("header lookup case-insensitive failed: %+v", f.Headers)
-	}
-	if string(f.Body) != `{"alarm":"cpu"}` {
-		t.Fatalf("body not preserved: %s", f.Body)
-	}
-	// String body.
-	f2, ok := parseSmeeFrame(`{"body":"raw text"}`)
-	if !ok || string(f2.Body) != "raw text" {
-		t.Fatalf("string body should unwrap, got %q ok=%v", f2.Body, ok)
-	}
-	// Control frame with no body is skipped.
-	if _, ok := parseSmeeFrame(`{"message":"ready"}`); ok {
-		t.Fatal("bodyless control frame should be skipped")
-	}
-}
-
 func TestSyntheticTargetStable(t *testing.T) {
 	a := SyntheticTarget("rss:changelog", "guid-123")
 	b := SyntheticTarget("rss:changelog", "guid-123")

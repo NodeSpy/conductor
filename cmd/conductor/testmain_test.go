@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -31,6 +32,15 @@ func TestMain(m *testing.M) {
 	// sandbox-net …`), which in this package is the test binary: act as it.
 	if len(os.Args) > 1 && os.Args[1] == "sandbox-net" {
 		os.Exit(runSandboxNet(os.Args[2:]))
+	}
+	// checkConfigConnectors re-runs this binary as `config migrate-check`;
+	// under go test that is the test binary, so serve it here.
+	if len(os.Args) > 2 && os.Args[1] == "config" && os.Args[2] == "migrate-check" {
+		if err := cmdConfigMigrateCheck(os.Args[3:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 	capAgentSlice = func(string, string, string) error { return nil } // never the real user manager
 	// The jailed plugins' fixtures (a configured log file) live in the
