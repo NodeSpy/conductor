@@ -5,6 +5,7 @@
 import type { JSX } from 'preact'
 import type { FyiItem } from '../state'
 import { Icon } from './Icon'
+import { Chipped } from './Chips'
 
 export function Fyi({ items }: { items: FyiItem[] }): JSX.Element | null {
   if (items.length === 0) return null
@@ -22,7 +23,7 @@ export function Fyi({ items }: { items: FyiItem[] }): JSX.Element | null {
               </span>
               <span class="dl-nt">
                 <b>{a.title}</b>
-                {a.why ? <span class="dl-why">{a.why}</span> : null}
+                {a.why ? <span class="dl-why"><Chipped text={a.why} /></span> : null}
               </span>
             </a>
           </li>

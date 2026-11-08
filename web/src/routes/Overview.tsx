@@ -32,6 +32,7 @@ import { ago, plural } from '../lib/format'
 import { gsHidden, setGsHidden } from '../lib/gs'
 import { toast, ToastHost } from '../components/ChatBits'
 import { hm, runningFor, runTarget, runTitle } from '../lib/runwords'
+import { Chipped } from '../components/Chips'
 
 const HOUR = 3_600_000
 
@@ -179,7 +180,7 @@ function NeedsYou({ need }: { need: NeedItem[] }): JSX.Element {
                 </span>
                 <span class="dl-nt">
                   <b>{n.title}</b>
-                  {n.why ? <span class="dl-why">{n.why}</span> : null}
+                  {n.why ? <span class="dl-why"><Chipped text={n.why} /></span> : null}
                   <FactsLine facts={n.facts || []} />
                 </span>
                 <span class="dl-age">{n.at ? ago(n.at) : ''}</span>
@@ -284,8 +285,15 @@ function RunsCard({ runs: all }: { runs: RunSummary[] }): JSX.Element {
         <TimeRangeMenu since={since} onChange={setSince} />
       </header>
       <div class="dl-stat-line">
-        <b>{ok}</b>
-        <span>of {total} runs went fine</span>
+        {total ? (
+          <>
+            <b>{ok}</b>
+            <span>of {total} runs went fine</span>
+          </>
+        ) : (
+          // the chart's own words for an empty range (UI.barWords: "no runs")
+          <span data-testid="runs-none">No runs {label.toLowerCase().replace(/^last /, 'in the last ')}</span>
+        )}
         {localStorage.getItem('usage-mode') === 'api' ? (
           <>
             <b class="r">${rs.reduce((a, r) => a + (r.cost_usd || 0), 0).toFixed(2)}</b>
@@ -329,6 +337,7 @@ function RunsCard({ runs: all }: { runs: RunSummary[] }): JSX.Element {
           now
         </text>
       </svg>
+      {total ? (
       <div class="hb-foot">
         <ul class="hb-legend">
           <li>
@@ -349,7 +358,8 @@ function RunsCard({ runs: all }: { runs: RunSummary[] }): JSX.Element {
           </li>
         </ul>
       </div>
-      {fails.length ? (
+      ) : null}
+      {!total ? null : fails.length ? (
         <p class="dl-foot-note">
           <StatusMark s="fail" mkOnly />
           <span>

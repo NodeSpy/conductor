@@ -33,7 +33,11 @@ function Cell({ s }: { s?: RunStep }): JSX.Element {
 
 function Delta({ x, y }: { x?: number; y?: number }): JSX.Element | null {
   if (x == null || y == null) return null
-  return <span class={y > x * 1.2 ? 'warn-t' : 'dl-sub'}>{y >= x ? '+' : '−'}{durText(Math.abs(y - x)) === '—' ? '0 s' : durText(Math.abs(y - x))}</span>
+  // from the seconds as shown (durText's rounding), so "1 s" against "1 s" is never "+1 s"
+  const sec = (ms: number) => (ms > 0 ? Math.max(1, Math.round(ms / 1000)) : 0)
+  const d = sec(y) - sec(x)
+  if (!d) return <span class="dl-sub">0 s</span>
+  return <span class={y > x * 1.2 ? 'warn-t' : 'dl-sub'}>{d > 0 ? '+' : '−'}{durText(Math.abs(d) * 1000)}</span>
 }
 
 function RunCell({ x }: { x: RunSummary }): JSX.Element {

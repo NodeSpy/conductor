@@ -13,10 +13,11 @@ import {
   restoreToReview, restoreId, cancelRestore, review, applyResult, doReview, apply, runValidate, validateMsg,
 } from '../configStore'
 import { api } from '../api/client'
-import { confirmLabel } from '../api/auth'
+import { confirmLabel, stepupMethods, authState } from '../api/auth'
 import type { ConfigLeaf, ConfigResponse, HistoryItem, DiffLineDTO, ConfigChange } from '../api/types'
 import { Icon } from '../components/Icon'
 import { EmptyState } from '../components/EmptyState'
+import { Chipped } from '../components/Chips'
 import { StatusMark } from '../components/StatusMark'
 import { CodeEditor } from '../components/CodeEditor'
 import { Menu, type MenuItem } from '../components/Menu'
@@ -149,7 +150,7 @@ function HistoryCard(): JSX.Element {
     <section class="dl-card cfg-hist" aria-label="Applied changes">
       <header class="dl-ch">
         <h2>Applied changes</h2>
-        <span class="dl-sub">newest first · each keeps a backup you can go back to</span>
+        {items.length ? <span class="dl-sub">newest first · each keeps a backup you can go back to</span> : null}
       </header>
       {items.length ? (
         <>
@@ -450,14 +451,17 @@ function ConfigApply(): JSX.Element {
   const cur = checking || vBad ? 1 : 2
   const states = STEPS.map((_, i) => (i < cur ? 'done' : i === cur ? (vBad && i === 1 ? 'bad' : 'cur') : ''))
   const touched = (rev?.effects ?? []).map((e) => e.path).filter((p) => p && p !== '(restore)')
-  const CHECKS: [string, string, string][] = [
-    ['Node-level edit', restoring ? 'the whole file is replaced by the backup' : `${touched.length} node${touched.length === 1 ? '' : 's'} changed${touched.length ? ` (${touched.slice(0, 4).join(', ')}${touched.length > 4 ? ` and ${touched.length - 4} more` : ''})` : ''}`, 'ok'],
-    ['Base unchanged', baseOk ? `config.yaml is still ${config.value?.sha ?? ''}: no one edited it since conductor loaded it` : `config.yaml changed on disk (${disk}) since conductor loaded ${config.value?.sha}`, baseOk ? 'ok' : 'wait'],
+  const sha = (x?: string) => <code>{x ?? ''}</code>
+  const CHECKS: [string, JSX.Element | string, string][] = [
+    ['Node-level edit', restoring ? 'the whole file is replaced by the backup' : <>{touched.length} node{touched.length === 1 ? '' : 's'} changed{touched.length ? <> ({touched.slice(0, 4).map((t, k) => <>{k ? ', ' : ''}<code>{t}</code></>)}{touched.length > 4 ? ` and ${touched.length - 4} more` : ''})</> : null}</>, 'ok'],
+    ['Base unchanged', baseOk ? <>config.yaml is still {sha(config.value?.sha)}: no one edited it since conductor loaded it</> : <>config.yaml changed on disk ({sha(disk)}) since conductor loaded {sha(config.value?.sha)}</>, baseOk ? 'ok' : 'wait'],
     ['conductor validate on a copy', !v || v.type === 'start' ? 'running on a scratch copy; the live config is untouched' : v.message || (vBad ? 'failed' : 'no errors'), !v || v.type === 'start' ? 'run' : vBad ? 'fail' : 'ok'],
     ['Widening', wid.length ? `${wid.length} change${wid.length > 1 ? 's' : ''} widen what agents can do: acknowledge them below` : 'your change widens nothing', wid.length ? 'wait' : 'ok'],
   ]
   const failed = CHECKS.filter((c) => c[2] === 'fail').length
   const needs = !!rev?.stepup
+  // the fingerprint only when a passkey is what confirms (as confirmLabel words it)
+  const byPasskey = stepupMethods(authState.value)[0] === 'passkey'
   const okLabel = restoring ? 'Restore' : 'Apply'
   const discardAll = async () => {
     if (restoring) { cancelRestore(); go('system/config'); return }
@@ -537,14 +541,14 @@ function ConfigApply(): JSX.Element {
               ) : null}
               <div class={'pk-why ' + (needs ? 'needs' : 'none')} id="pk-why">
                 {needs ? (
-                  <><Icon name="passkey" /><span><b>{confirmLabel('x').endsWith('passkey') ? 'Needs your passkey' : "Needs you to confirm it's you"}:</b> {(wid[0] ?? rev?.guarded?.[0])?.text ?? (restoring ? 'a restore rewrites the whole file' : 'this config asks for it on every change')}.</span></>
+                  <><Icon name={byPasskey ? 'passkey' : 'shield'} /><span><b>{byPasskey ? 'Needs your passkey' : "Needs you to confirm it's you"}:</b> <Chipped text={(wid[0] ?? rev?.guarded?.[0])?.text ?? (restoring ? 'a restore rewrites the whole file' : 'this config asks for it on every change')} keys={P.map((x) => x.path.join('.'))} />.</span></>
                 ) : (
                   <><Icon name="check" /><span><b>No confirmation needed:</b> nothing here lets bots or agents do more. It's still checked on a copy, backed up first, and can be rolled back.</span></>
                 )}
               </div>
               <div class="small muted"><Icon name="download" /> A backup is written before anything changes. Applying reloads conductor with the new config.</div>
               <button class="btn lg primary" type="button" data-testid="apply-go" {...off(blocked || (busy.value ? 'Working…' : ''))} onClick={() => { if (!blocked && !busy.value) void apply() }}>
-                {needs ? <><Icon name="passkey" />{confirmLabel(okLabel)}</> : <><Icon name="check" />{okLabel}</>}
+                {needs ? <>{byPasskey ? <Icon name="passkey" /> : null}{confirmLabel(okLabel)}</> : <><Icon name="check" />{okLabel}</>}
               </button>
             </div>
           </div>
@@ -562,7 +566,7 @@ function StagedItem({ c, widens }: { c: ConfigChange; widens: string[] }): JSX.E
     <div class="item" style="align-items:flex-start">
       <StatusMark s={c.delete ? 'fail' : 'run'} mkOnly />
       <div class="grow">
-        <div class="small"><b>{c.summary || (c.delete ? `Remove ${path}` : structured ? `Set ${path}` : `Set ${path} to ${String(c.value)}`)}</b></div>
+        <div class="small"><b><Chipped text={c.summary || (c.delete ? `Remove ${path}` : structured ? `Set ${path}` : `Set ${path} to ${String(c.value)}`)} keys={[path]} /></b></div>
         <div class="mono tiny muted">{path} · {c.delete ? 'remove' : 'edit'}</div>
         {structured && !c.delete ? <pre class="staged-val staged-tree mono tiny" data-testid="staged-tree">{JSON.stringify(c.value, null, 2)}</pre> : null}
         {widens.map((w) => <span class="tag" data-s="wait"><Icon name="warn" /> widens: {w}</span>)}
@@ -681,7 +685,14 @@ function RawConfig({ c }: { c: ConfigResponse | null }): JSX.Element {
         <div>
           <BrCrumbs trail={[['Config', '#/system/config'], ['The config file']]} />
           <h1>config.yaml</h1>
-          <p class="sub">{c ? <>{c.path} · sha {c.sha}{staged.value.length ? ` · ${staged.value.length} staged change${staged.value.length > 1 ? 's' : ''} wait in the review` : ''}</> : 'Loading…'}</p>
+          <p class="sub">{c ? (
+            // each part stays whole, so a narrow screen breaks between them, never inside one
+            <>
+              <span class="nowrap">{c.path.replace(/^\/home\/[^/]+|^\/Users\/[^/]+/, '~')}</span>{' '}
+              <span class="nowrap">· sha {String(c.sha).slice(0, 12)}</span>
+              {staged.value.length ? <>{' '}<span class="nowrap">· {staged.value.length} staged change{staged.value.length > 1 ? 's wait' : ' waits'} in the review</span></> : null}
+            </>
+          ) : 'Loading…'}</p>
         </div>
         <div class="actions">
           <span class="mono tiny muted" id="raw-state">{changed ? `${changed} lines edited` : 'no edits'}</span>

@@ -29,6 +29,8 @@ import { plural } from '../lib/format'
 import { go, seg } from '../router'
 import { humanError } from '../api/errors'
 import '../styles/runs-repass.css'
+import { Chipped } from '../components/Chips'
+import { EmptyState } from '../components/EmptyState'
 
 type Tab = 'outputs' | 'inputs' | 'log' | 'diff'
 type AuditEntry = Record<string, unknown>
@@ -168,11 +170,9 @@ function RunPage({ id }: { id: string }): JSX.Element {
           <span class="sep" aria-hidden="true">›</span>
           <span class="cur" aria-current="page">A run that isn’t here</span>
         </nav>
-        <div class="empty" role="status">
-          <h2 class="serif">There is no run {id}</h2>
+        <EmptyState hero icon="obj-run" title={`There is no run ${id}`} testid="run-missing" action={{ label: 'Back to Activity', href: '#/activity' }}>
           <p>It may be older than the 14 days runs are kept.</p>
-          <a class="btn" href="#/activity">Back to Activity</a>
-        </div>
+        </EmptyState>
       </div>
     )
   }
@@ -220,7 +220,7 @@ function RunPage({ id }: { id: string }): JSX.Element {
     lead = (
       <>
         {r.status === 'stopped' ? 'Stopped' : 'Failed'} at step <b>{failAt}</b>
-        {e ? `: ${e}` : ''}
+        {e ? <>: <Chipped text={e} /></> : ''}
         {/\.$/.test(e) ? '' : '.'}
       </>
     )
@@ -363,7 +363,7 @@ function RunPage({ id }: { id: string }): JSX.Element {
                     <StatusMark s={STEP_S[x.status] || 'skip'} mkOnly label={runMark(x.status === 'running' ? 'running' : x.status === 'idle' ? '' : x.status).word} />
                     <span class="tt">
                       <b>{x.id}</b>
-                      <span>{stepSentence(r, x)}</span>
+                      <span><Chipped text={stepSentence(r, x)} /></span>
                     </span>
                     <span />
                     <em>{x.started ? durText(Math.max(1, stepMs(x))) : ''}</em>
@@ -414,6 +414,8 @@ function RunPage({ id }: { id: string }): JSX.Element {
               </dl>
             </details>
           </section>
+          {/* no audited events for this run: no section, rather than a "0 events" fold */}
+          {runAudit.length ? (
           <details class="dl-card dl-files-d run-audit">
             <summary class="panel-head">
               <h3>Audit trail</h3>
@@ -429,7 +431,6 @@ function RunPage({ id }: { id: string }): JSX.Element {
                   <span class="dl-age">{a['ts'] ? agoText(String(a['ts'])) : ''}</span>
                 </li>
               ))}
-              {runAudit.length ? null : <li class="dl-sub">Nothing about this run has been audited yet.</li>}
             </ul>
             <p class="dl-foot-note">
               <a class="dl-link" href={'#/system/logs/audit?run=' + encodeURIComponent(id)}>
@@ -437,6 +438,7 @@ function RunPage({ id }: { id: string }): JSX.Element {
               </a>
             </p>
           </details>
+          ) : null}
         </div>
       </div>
 

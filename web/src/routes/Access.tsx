@@ -244,7 +244,8 @@ export function Access(): JSX.Element {
               ) : null}
             </header>
             <ul class="dl-list" data-testid="passkey-list">
-              {data.passkeys.length === 0 ? <li class="acc-row dl-sub">No passkeys yet.</li> : null}
+              {/* one or the other: the Add button already says there are none to list */}
+              {data.passkeys.length === 0 && !(data.passkey_here && passkeysUsable()) ? <li class="acc-row dl-sub">No passkeys yet.</li> : null}
               {data.passkeys.map((k) => (
                 <li class="acc-row">
                   <div class="dl-nt">

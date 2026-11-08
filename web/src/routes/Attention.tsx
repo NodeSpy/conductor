@@ -15,6 +15,7 @@ import { Fyi } from '../components/Fyi'
 import { FactsLine } from '../components/Facts'
 import { FilterBar } from '../components/FilterBar'
 import { ago } from '../lib/format'
+import { Chipped } from '../components/Chips'
 
 const KIND_LABEL: Record<NeedItem['kind'], [string, string]> = {
   approval: ['approval', 'approvals'],
@@ -144,6 +145,15 @@ export function Attention(): JSX.Element {
         />
         </div>
       ) : null}
+      {!items.length ? (
+        // nothing at all: one page-level hero (and any FYI below it), no empty card
+        <>
+          <EmptyState hero icon="attention" title="Nothing needs you" testid="attention-empty" action={{ label: 'Open Activity', href: '#/activity' }}>
+            <p>When a bot asks for approval or a run fails, it shows up here.</p>
+          </EmptyState>
+          {fyi.value.length ? <Fyi items={fyi.value} /> : null}
+        </>
+      ) : (
       <div class="dl-cols">
         <div class="dl-col-main">
           <section class="dl-card" id="need-body">
@@ -164,7 +174,7 @@ export function Attention(): JSX.Element {
                 </button>
               </p>
             ) : null}
-            {NeedList(shown.slice(from, from + PAGE), items.length === 0)}
+            {NeedList(shown.slice(from, from + PAGE))}
             {pages > 1 ? (
               <div class="pk-pages need-pages">
                 <span class="dl-sub">
@@ -186,19 +196,14 @@ export function Attention(): JSX.Element {
           <Fyi items={fyi.value} />
         </div>
       </div>
+      )}
     </>
   )
 }
 
-function NeedList(items: NeedItem[], none: boolean): JSX.Element {
+function NeedList(items: NeedItem[]): JSX.Element {
   if (!items.length) {
-    return none ? (
-      <EmptyState small title="Nothing needs you" testid="attention-empty">
-        <p>When a bot asks for approval or a run fails, it shows up here.</p>
-      </EmptyState>
-    ) : (
-      <EmptyState small title="Nothing matches these filters" />
-    )
+    return <EmptyState small title="Nothing matches these filters" />
   }
   return (
     <ul class="dl-list dl-needs">
@@ -210,7 +215,7 @@ function NeedList(items: NeedItem[], none: boolean): JSX.Element {
             </span>
             <span class="dl-nt">
               <b>{a.title}</b>
-              {a.why ? <span class="dl-why">{a.why}</span> : null}
+              {a.why ? <span class="dl-why"><Chipped text={a.why} /></span> : null}
               <FactsLine facts={a.facts || []} />
             </span>
             <span class="dl-age">{a.at ? ago(a.at) : ''}</span>
