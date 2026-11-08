@@ -45,11 +45,13 @@ function useBrowserCounts(): Partial<Record<BrowserTab, number>> {
 
 export function BrowserTabs({ active }: { active: BrowserTab }): JSX.Element {
   const counts = useBrowserCounts()
+  // a count only when there is something to count: no "0" beside a tab
+  const n = (v?: number) => (v ? v : undefined)
   const tabs: TabItem[] = [
-    { id: 'sessions', label: 'Sessions', href: '#/browser', count: counts.sessions },
-    { id: 'logins', label: 'Logins', href: '#/browser/logins', count: counts.logins },
-    { id: 'details', label: 'Personal details', href: '#/browser/details', count: counts.details },
-    { id: 'cards', label: 'Payment cards', href: '#/browser/cards', count: counts.cards },
+    { id: 'sessions', label: 'Sessions', href: '#/browser', count: n(counts.sessions) },
+    { id: 'logins', label: 'Logins', href: '#/browser/logins', count: n(counts.logins) },
+    { id: 'details', label: 'Personal details', href: '#/browser/details', count: n(counts.details) },
+    { id: 'cards', label: 'Payment cards', href: '#/browser/cards', count: n(counts.cards) },
   ]
   return <TabsBar items={tabs} active={active} ariaLabel="Browsers" />
 }

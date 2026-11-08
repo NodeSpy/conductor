@@ -28,6 +28,7 @@ import { humanError } from '../api/errors'
 import { go } from '../router'
 import { usePhoneLayout } from '../lib/layout'
 import '../styles/runs-repass.css'
+import { Chipped } from '../components/Chips'
 
 const PAGE = 20
 
@@ -378,7 +379,7 @@ function Row({ r, rich, sel, onSel }: { r: RunSummary; rich?: boolean; sel: bool
       </td>
       <td class="run">
         <RunName r={r} />
-        {rich ? <span class="reason">{reason(r)}</span> : null}
+        {rich ? <span class="reason"><Chipped text={reason(r)} /></span> : null}
         <FactsLine r={r} />
       </td>
       <td class="st-c">
@@ -462,7 +463,7 @@ function PhoneRow({ r, rich }: { r: RunSummary; rich?: boolean }): JSX.Element {
           <b>
             <RunName r={r} />
           </b>
-          {rich ? <span class="reason">{reason(r)}</span> : null}
+          {rich ? <span class="reason"><Chipped text={reason(r)} /></span> : null}
           <FactsLine r={r} />
           <StatusMark s={m.s} word={m.word} />
         </span>

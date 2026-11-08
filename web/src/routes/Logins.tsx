@@ -127,11 +127,13 @@ export function Logins(): JSX.Element {
           <BrowserCrumbs here="Logins" />
           <h1>Logins</h1>
         </div>
-        <div class="actions">
-          {/* With no login yet the hero below carries the one Add a login. */}
-          {none ? null : <a class="btn primary" href="#/browser/add"><Icon name="key" />Add a login</a>}
-          <RegisterPasskey />
-        </div>
+        {/* With no login yet the hero below is the page: no header actions beside it. */}
+        {none ? null : (
+          <div class="actions">
+            <a class="btn primary" href="#/browser/add"><Icon name="key" />Add a login</a>
+            <RegisterPasskey />
+          </div>
+        )}
       </div>
       <BrowserTabs active="logins" />
       {err ? <div class="callout danger small" role="alert">{err}</div> : null}
@@ -201,6 +203,7 @@ export function Logins(): JSX.Element {
         </div>
       )}
 
+      {none ? null : (
       <div class="panel wl-gap">
         <div class="panel-head">
           <h3>Saved sessions</h3>
@@ -233,6 +236,7 @@ export function Logins(): JSX.Element {
           )}
         </div>
       </div>
+      )}
 
       {menu ? <Menu anchor={menu.el} items={menuItems(menu.l)} label={`More for ${menu.l.name}`} onClose={() => setMenu(null)} /> : null}
       {testing ? <TestLogin l={testing} onClose={() => { setTesting(null); load() }} /> : null}

@@ -262,7 +262,7 @@ function Safety(): JSX.Element {
 
         <div class="dl-col-side">
           <section class="dl-card" aria-label="Running outside the sandbox">
-            <header class="dl-ch"><h2>Running outside the sandbox</h2><span class="dl-sub">{s?.outside?.length ?? 0}</span></header>
+            <header class="dl-ch"><h2>Running outside the sandbox</h2>{s?.outside?.length ? <span class="dl-sub nowrap">{s.outside.length}</span> : null}</header>
             {s?.outside?.length ? (
               <ul class="dl-list">
                 {s.outside.map((o) => (
@@ -362,6 +362,9 @@ function WhatEachBotMayDo(): JSX.Element {
             {!bots ? 'Loading…' : !bots.length ? 'No bots yet: each one you add shows here with what it may do.' : own ? `${own} action${own > 1 ? 's' : ''} beyond reading run${own > 1 ? '' : 's'} without asking.` : 'Nothing beyond reading runs without asking.'}
           </p>
         </div>
+        {bots && !bots.length ? (
+          <div class="actions"><a class="btn sm secondary" href="#/bots?new=1"><Icon name="plus" />New bot</a></div>
+        ) : null}
       </div>
       {bots?.length ? (
         <div class="stack" style="margin-top:14px">

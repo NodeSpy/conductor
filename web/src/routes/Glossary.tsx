@@ -5,18 +5,21 @@
 // (UI.term) are a separate, later port — this phase only needs the page
 // itself, reachable from the account menu.
 import type { JSX } from 'preact'
+import { Chipped } from '../components/Chips'
 
 // renderDesc ports the prototype's glossary.js rendering of a definition: a
 // trailing "(In config: x)" or "(In config and the CLI: x)" becomes "(in
 // config: x)" with the config key in monospace, rather than plain capitalized
 // text.
+// config names written into the prose itself (not in an "(In config: …)" tail)
+const PROSE_KEYS = ['<connection>.<action>', 'gh.comment']
 const CFG_RE = /\(In config(?: and the CLI)?: ([^)]*)\)/
 function renderDesc(d: string): JSX.Element {
   const m = CFG_RE.exec(d)
-  if (!m) return <>{d}</>
+  if (!m) return <Chipped text={d} keys={PROSE_KEYS} />
   return (
     <>
-      {d.slice(0, m.index)}
+      <Chipped text={d.slice(0, m.index)} keys={PROSE_KEYS} />
       <span class="gl-cfg">
         (in config:{' '}
         {/* each key its own chip (owner rule: inline code is a <code> chip); the sentence's full stop stays outside it */}
@@ -35,7 +38,7 @@ function renderDesc(d: string): JSX.Element {
           </>
         ))}
       </span>
-      {d.slice(m.index + m[0].length)}
+      <Chipped text={d.slice(m.index + m[0].length)} keys={PROSE_KEYS} />
     </>
   )
 }

@@ -111,6 +111,12 @@ function CardsList(): JSX.Element {
         <div class="callout warn small wl-gapb"><Icon name="pause" /><span><b>All automation is paused,</b> so nothing is paid until you resume it. <a class="dl-link" href="#/system">Safety</a></span></div>
       ) : null}
 
+      {none && !wait.length && !past.length ? (
+        // nothing at all yet: one page-level hero, no empty cards around it
+        <EmptyState hero icon="obj-card" title="No cards yet" testid="cards-empty" action={{ label: 'Add a card', href: '#/browser/cards/new', testid: 'cards-empty-add' }}>
+          <p>Add a virtual or single-use card with its own limits; bots can then propose purchases with it for you to approve.</p>
+        </EmptyState>
+      ) : (<>
       {wait.length ? (
         <section class="dl-card wl-gapb">
           <header class="dl-ch"><h2>Waiting for you</h2><span class="count hot">{wait.length}</span></header>
@@ -183,6 +189,7 @@ function CardsList(): JSX.Element {
         <header class="dl-ch"><h2>Purchases</h2><span class="dl-sub">receipts and decisions</span></header>
         {past.length ? <ul class="dl-list dl-needs">{past.map((p) => <PurchaseRow key={p.id} p={p} card={cardOf(p.card)} />)}</ul> : <p class="dl-sub">Nothing bought yet.</p>}
       </section>
+      </>)}
     </div>
   )
 }
