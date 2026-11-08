@@ -53,6 +53,27 @@ function glyph(s: string): JSX.Element {
           <rect x="9.1" y="4" width="2.4" height="8" rx="1" />
         </svg>
       )
+    // A ticket's stages (the brand's ready dot, dashed draft capsule and
+    // part-filled in-progress capsule).
+    case 'ready':
+      return (
+        <svg viewBox="0 0 16 16">
+          <circle cx="8" cy="8" r="3.6" fill="none" stroke="currentColor" stroke-width="1.8" />
+        </svg>
+      )
+    case 'draft':
+      return (
+        <svg viewBox="0 0 16 16">
+          <rect x="2.2" y="4.9" width="11.6" height="6.2" rx="3.1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-dasharray="2.2 1.8" />
+        </svg>
+      )
+    case 'progress':
+      return (
+        <svg viewBox="0 0 16 16">
+          <rect x="2.2" y="4.9" width="11.6" height="6.2" rx="3.1" fill="none" stroke="currentColor" stroke-width="1.6" />
+          <rect x="3.8" y="6.5" width="5" height="3" rx="1.5" fill="currentColor" />
+        </svg>
+      )
     default:
       return (
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round">

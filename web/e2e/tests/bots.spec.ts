@@ -88,24 +88,30 @@ test('create a ticket and mark it ready', async () => {
   await page.getByTestId('ticket-assignee').selectOption('bot:atlas')
   await page.getByTestId('create-ready').click()
 
-  // The sheet closes and the new ticket shows on the board, past Draft (a ready
-  // ticket with an assignee; atlas may already have picked it up).
-  const card = page.locator('.ticket-card', { hasText: 'Investigate elevated 5xx' }).first()
-  await expect(card).toBeVisible({ timeout: 10_000 })
-  await card.click()
+  // The new ticket's page opens, past Draft (a ready ticket with an assignee;
+  // atlas may already have picked it up), and it shows on the board.
   await expect(page.getByTestId('ticket-status')).toContainText(/Ready|In progress/, { timeout: 10_000 })
+  await page.goto(`${rt.baseURL}/#/tickets`)
+  await expect(page.locator('.ticket-card', { hasText: 'Investigate elevated 5xx' }).first()).toBeVisible({ timeout: 10_000 })
 })
 
 test('a team chat message can address everyone', async () => {
   await page.goto(`${rt.baseURL}/#/chat/team:platform`)
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 10_000 })
   await page.getByTestId('to-everyone').click()
+  await expect(page.getByTestId('to-everyone')).toHaveAttribute('aria-pressed', 'true')
   await page.getByTestId('chat-input').fill('status check please, everyone')
   await page.getByTestId('chat-send').click()
 
   const scroll = page.getByTestId('chat-scroll')
   await expect(scroll).toContainText('status check please, everyone', { timeout: 10_000 })
-  await expect(scroll.getByText('to everyone').first()).toBeVisible()
+  // The daemon stored it for everyone on the team, not just the lead.
+  const sent = await page.evaluate(async () => {
+    const r = await fetch('/api/v1/conversations/team:platform/messages?after=0', { credentials: 'same-origin' })
+    const j = (await r.json()) as { messages: { text: string; mode?: string }[] }
+    return j.messages.find((m) => m.text === 'status check please, everyone')
+  })
+  expect(sent?.mode).toBe('everyone')
 })
 
 test('give a bot a face (stage an avatar change)', async () => {

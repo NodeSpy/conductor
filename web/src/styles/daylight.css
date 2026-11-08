@@ -757,7 +757,7 @@ td.run .fx { margin-top: 4px; }
  * StepupDialog Cancel button, but it affects every button, input and select
  * on a phone). Scoped to `html` so it applies unconditionally, as the comment
  * above ("44px on a phone") already says it should. */
-@media (max-width: 720px) { html { --control-h: 44px; --gap-stack: 14px; } }
+@media (max-width: 720px) { :root, html[data-density] { --control-h: 44px; --gap-stack: 14px; } } /* :root, not html: the :root rule above outranks a bare html */
 html .btn, html .btn.sm, html .dl-page .btn, html .dl-page .btn.sm { height: var(--control-h); min-height: var(--control-h); }
 html .icon-btn, html .icon-btn.sm:is(.btn ~ *, :has(~ .btn)) { width: var(--control-h); height: var(--control-h); min-height: var(--control-h); }
 html .input:not(textarea), html .select { height: var(--control-h); min-height: var(--control-h); box-sizing: border-box; }
