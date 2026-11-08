@@ -107,7 +107,8 @@ export async function startAuthDaemon(port: number, opts: AuthDaemonOptions = {}
         `  bind:`,
         `    - { address: "${ip}:${opts.bindPort}", hostnames: ["${ip}"], allow_plain_http: true }`,
       ]
-    : [`dashboard: { enabled: true, listen: [localhost], port: ${port} }`]
+    : [`dashboard:`, `  enabled: true`, `  listen: [localhost]`, `  port: ${port}`]
+  if (opts.auth) dashboard.push(`  auth: ${opts.auth}`)
 
   const now = new Date()
   const expires = new Date(now.getTime() + 60 * 60 * 1000)
