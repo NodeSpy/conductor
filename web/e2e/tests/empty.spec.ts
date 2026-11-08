@@ -92,9 +92,11 @@ test('#/secrets on a fresh box keeps the Secrets layout, empty only where there 
   await expect(page.getByRole('heading', { level: 1, name: 'Secrets' })).toBeVisible()
   await expect(page.locator('.tabs a', { hasText: 'Secrets' })).toBeVisible()
   await expect(page.locator('.tabs a', { hasText: 'Settings' })).toBeVisible()
-  await expect(page.getByText(/Nothing refers to a secret yet/)).toBeVisible()
   await expect(page.locator('.vaults')).toBeVisible()
   await expect(page.getByTestId('add-vault')).toBeVisible()
+  await expect(page.getByTestId('vaults-empty')).toContainText('Secrets live in a vault')
+  await expect(page.getByTestId('add-vault-empty')).toBeVisible()
+  await expect(page.getByText('<vault>/<key>')).toHaveCount(0)
   await noErrors(page)
   expect(collector.failed, 'no failed requests').toEqual([])
   expect(collector.consoleErrors, 'no console errors').toEqual([])
@@ -102,6 +104,7 @@ test('#/secrets on a fresh box keeps the Secrets layout, empty only where there 
 
   await page.locator('.tabs a', { hasText: 'Settings' }).click()
   await expect(page.getByTestId('settings-empty')).toBeVisible()
+  await expect(page.getByTestId('add-setting')).toBeVisible()
 })
 
 // Home on a fresh box (design review note): the layout stays up — the tiles,
