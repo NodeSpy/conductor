@@ -222,6 +222,8 @@ func (s *Server) routes() {
 
 	// Section read models.
 	s.mux.HandleFunc("GET /api/v1/secrets", s.handleSecrets)
+	s.mux.HandleFunc("POST /api/v1/secrets/write", s.handleSecretWrite)
+	s.mux.HandleFunc("POST /api/v1/secrets/delete", s.handleSecretDelete)
 	s.mux.HandleFunc("GET /api/v1/packs", s.handlePacks)
 	s.mux.HandleFunc("GET /api/v1/packs/{name}/manifest", s.handlePackManifest)
 	s.mux.HandleFunc("GET /api/v1/plugins", s.handlePlugins)

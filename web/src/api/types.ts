@@ -467,11 +467,33 @@ export interface SecretsResponse {
   secrets: SecretInfo[];
 }
 /**
- * VaultInfo is one named vault (values never rendered).
+ * VaultInfo is one named vault (values never rendered), with its live
+ * reachability from the running daemon's own vault registry (internal/vaults —
+ * the same registry every connector and secret resolution uses) rather than
+ * anything re-derived here.
  */
 export interface VaultInfo {
   name: string;
   type: string;
+  /**
+   * Status is "ok" when the vault unlocked and is in the live registry,
+   * "fail" when it failed to unlock/build (Reason explains why), or
+   * "unknown" when the registry hasn't built it yet (e.g. config changed
+   * since the last reload).
+   */
+  status: string;
+  reason?: string; // set when Status is "fail"
+  /**
+   * Writable reports whether this vault's backend accepts a value write
+   * (conductor, pass, hashicorp) as opposed to read-only (onepassword, file).
+   */
+  writable: boolean;
+  /**
+   * Listed is true when the vault's entry names were read (names only,
+   * never values) and every stored entry is in Secrets; false when the
+   * type can't list or the vault isn't open.
+   */
+  listed?: boolean;
 }
 /**
  * SecretInfo is one top-level secret ref and its vault/key, with the config
@@ -480,7 +502,14 @@ export interface VaultInfo {
 export interface SecretInfo {
   name: string;
   ref: string; // <vault>/<key>
+  vault: string;
+  key: string;
   used_by?: string[];
+  /**
+   * Stored is true when the entry's name was listed from its vault (the
+   * vault holds it); false for a reference found only in the config.
+   */
+  stored?: boolean;
 }
 /**
  * PacksResponse is GET /api/v1/packs.
@@ -624,6 +653,11 @@ export interface EnvVarInfo {
   scope: string; // "runtime:<name>" | "host:<name>"
   ref?: string;
   literal?: boolean;
+  /**
+   * UsedBy is the dotted config paths that read this variable as
+   * ${env.<name>} (empty: declared but not read anywhere in config yet).
+   */
+  used_by?: string[];
 }
 /**
  * SafetyInfo summarizes the live security posture for the System → Safety tab.

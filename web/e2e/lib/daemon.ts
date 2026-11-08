@@ -11,6 +11,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, openSync, readFileSync, existsSy
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
+import { randomBytes } from 'node:crypto'
 
 export interface Runtime {
   bin: string
@@ -99,8 +100,11 @@ export async function start(port: number): Promise<Runtime> {
       // A whole-field vault reference, the documented way a real config wires
       // a credential (internal/secrets.ParseVaultRef) — not the legacy
       // top-level secrets: map, which config.Load hard-rejects now. This is
-      // what /api/v1/secrets actually has to find on a real box (phase 8).
+      // what /api/v1/secrets actually has to find on a real box.
       `  api_token: '{{ vault "main" "api-token" }}'`,
+      // A reference to a vault nothing declares, for the Secrets screen's
+      // "Not in any vault" card.
+      `  stray_token: '{{ vault "ghost" "webhook-secret" }}'`,
       `connectors:`,
       `  box: { use: command }`,
       // webhook/cron are true built-ins (compiled in, never fetched) — unlike
@@ -125,7 +129,13 @@ export async function start(port: number): Promise<Runtime> {
       `      LOG_LEVEL: debug`,
       `      DEPLOY_TOKEN: 'env:DEPLOY_TOKEN'`,
       `vaults:`,
-      `  main: { type: conductor }`,
+      // A real, initialized conductor vault (its key in a file beside it),
+      // so the Secrets screen can store a value end to end.
+      `  main: { type: conductor, path: ${path.join(root, 'vault.json')}, unlock: { key: "file:${path.join(root, 'vault.key')}" } }`,
+      // A second, read-only vault (no Writer face, and no `op` on the box,
+      // so it can't be reached): the Secrets screen's second vault card and
+      // its can't-be-reached state.
+      `  onepass: { type: onepassword, account: example }`,
       `packs:`,
       `  review:`,
       `    use: ./packs/review`,
@@ -178,6 +188,11 @@ export async function start(port: number): Promise<Runtime> {
 
   const env = hermeticEnv(home)
   execFileSync(bin, ['init', '--config', config], { env, stdio: 'ignore' })
+  // The main vault: a key file, then `vault main init` (creates the vault
+  // file only; hermetic, explicit --config) and one stored entry.
+  writeFileSync(path.join(root, 'vault.key'), randomBytes(24).toString('hex') + '\n', { mode: 0o600 })
+  execFileSync(bin, ['vault', 'main', 'init', '--config', config], { env, stdio: 'ignore' })
+  execFileSync(bin, ['vault', 'main', 'add', 'api-token', '--config', config], { env, input: 'example-value', stdio: ['pipe', 'ignore', 'ignore'] })
 
   const out = openSync(logFile, 'a')
   // detached so we can signal the whole process group on teardown.
