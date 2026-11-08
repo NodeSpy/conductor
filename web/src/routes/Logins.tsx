@@ -158,7 +158,7 @@ export function Logins(): JSX.Element {
                 const parts = ['username', 'password', 'otp', 'passkey'].filter((k) => f[k])
                 return (
                   <li class={'dl-conn login-row' + (attn ? ' attn' : '')} data-s={s} data-login={l.name} key={l.name}>
-                    <span class="dl-ng">{attn ? <StatusMark s={s === 'wait' ? 'ember' : 'fail'} mkOnly lg label={s === 'wait' ? 'Needs you' : 'Failed'} /> : null}</span>
+                    <span class="dl-ng">{attn ? <StatusMark s={s === 'wait' ? 'ember' : 'fail'} mkOnly lg label={s === 'wait' ? 'Needs you' : 'Failed'} /> : <Icon name="obj-login" />}</span>
                     <span class="dl-nt">
                       <b>{l.name} <span class="tgt">{host(originOf(l))}</span> </b>
                       <span class={attn ? 'reason' : 'dl-why'}>{whyWords(l, s)}</span>

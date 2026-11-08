@@ -22,3 +22,19 @@
 /* The config file editor is a wide page (the prototype's .page.wide) */
 .dl-page:has(> .m-page > .cfg-raw) { max-width: none; }
 .cfg-raw .raw-grid { align-items: start; }
+
+/* Safety spacing: the lead keeps the section gap above the first cards; the
+   side column's Details sits at the column's own gap (not gap + its margin);
+   the practice-mode line sits right under the bot's header. */
+.sf-head { margin-bottom: var(--gap-section, 24px); }
+.dl-col-side > .dl-card + .sf-tech { margin-top: 0; }
+.sf-shadow { margin: 0 0 10px; }
+/* on a narrow phone the site field takes the whole row (its example never
+   clipped) and "Allow this site" goes under it */
+@media (max-width: 420px) { .sb-add { flex-wrap: wrap; } .sb-add > .input { flex: 1 1 100%; } }
+/* a staged change keeps Edit and Discard together on its own row's right, on a phone too */
+.staged-list .item.staged-item { flex-wrap: nowrap; }
+.staged-item .staged-acts { display: flex; gap: 4px; flex: none; }
+.staged-item .staged-acts { margin-top: -6px; }
+/* on a phone the two are icons (named for screen readers), so the change's own words keep the width */
+@media (max-width: 720px) { .staged-item .staged-lbl { display: none; } }
