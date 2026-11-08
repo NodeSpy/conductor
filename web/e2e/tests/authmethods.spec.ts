@@ -254,10 +254,10 @@ test('set a password and an authenticator from Access, confirming with the SSH k
   // The notice keeps the cards' spacing; a card's heading stays on one line
   // (on a phone its button goes below it).
   const notice = (await page.getByTestId('access-msg').boundingBox())!
-  const grid = (await page.locator('.acc').boundingBox())!
+  const grid = (await page.locator('.dl-cols').boundingBox())!
   expect(grid.y - (notice.y + notice.height), 'gap under the notice').toBeGreaterThanOrEqual(12)
   for (const title of ['Signed in now', 'Your passkeys']) {
-    const h = page.locator('.acc-card h2', { hasText: title })
+    const h = page.locator('.dl-card h2', { hasText: title })
     // the rendered lines of the title's own text
     const lines = await h.evaluate((el, t) => {
       const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
@@ -276,7 +276,7 @@ test('set a password and an authenticator from Access, confirming with the SSH k
   }
   await shot(page, info, 'access')
   // the sessions card alone (a full-page capture draws the sticky header over it)
-  const sessions = page.locator('.acc-card', { hasText: 'Signed in now' })
+  const sessions = page.locator('.dl-card', { hasText: 'Signed in now' })
   await sessions.evaluate((el) => el.scrollIntoView({ block: 'center' }))
   await sessions.screenshot({ path: path.join(SHOT_DIR, `authmethods-access-sessions-${info.project.name}.png`) })
 })

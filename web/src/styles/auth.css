@@ -177,77 +177,12 @@
   margin: var(--space-3) 0;
 }
 
-/* Access screen. */
-.acc {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: var(--space-4);
-  align-items: start;
-}
-@media (max-width: 860px) {
-  .acc {
-    grid-template-columns: 1fr;
-  }
-}
-.acc-col {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-.acc-card {
-  background: var(--color-bg-surface);
-  border: var(--border-width) solid var(--color-border-subtle);
-  border-radius: var(--radius-card);
-  padding: var(--space-4);
-}
-.acc-card h2 {
-  font-size: var(--type-body-m-size, 1rem);
-  margin: 0 0 var(--space-3);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-/* the heading keeps its line; a button that doesn't fit beside it goes below */
-.acc-title {
-  white-space: nowrap;
-}
-.acc-card h2 .btn {
-  margin-left: auto;
-}
+/* Access screen. The card/list/row anatomy (dl-card, dl-ch, dl-list, acc-row,
+   dl-nt, dl-why, dl-na) is the prototype's own, already in daylight.css —
+   nothing Access-specific to add for it here. */
 /* a notice above the cards keeps the cards' own spacing */
 .acc-banner {
   margin-bottom: var(--space-4);
-}
-.acc-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.acc-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) 0;
-  border-top: var(--border-width) solid var(--color-border-subtle);
-}
-.acc-row:first-child {
-  border-top: none;
-}
-.acc-row .acc-main {
-  min-width: 0;
-}
-.acc-row b {
-  color: var(--color-text-primary);
-  font-weight: 600;
-}
-.acc-why {
-  display: block;
-  font-size: var(--type-caption-size);
-  color: var(--color-text-secondary);
-}
-.acc-row .acc-act {
-  margin-left: auto;
 }
 .acc-asks {
   margin: 0;
@@ -436,7 +371,7 @@
 .acc-row.acc-form {
   display: block;
 }
-.acc-row .acc-act {
+.acc-row .dl-na {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;

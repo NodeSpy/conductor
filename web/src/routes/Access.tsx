@@ -23,9 +23,9 @@ import {
   type TOTPEnrollment,
 } from '../api/auth'
 import { passkeysUsable } from '../lib/webauthn'
-import { CopyBlock, methodLabel, methodPhrase } from '../components/AuthBits'
+import { CopyBlock, methodPhrase } from '../components/AuthBits'
 import { Icon } from '../components/Icon'
-import { ago, goDuration, humanDuration } from '../lib/format'
+import { ago, goDuration } from '../lib/format'
 import '../styles/auth.css'
 import { humanError } from '../api/errors'
 import { EmptyState } from '../components/EmptyState'
@@ -40,16 +40,32 @@ function groupKey(k: string): string {
   return k.replace(/(.{4})(?=.)/g, '$1 ')
 }
 
-function sessionHow(s: SessionRow): string {
-  const where =
-    s.transport === 'http'
-      ? `plain HTTP${s.host ? ' to ' + s.host : ''} (not encrypted)`
-      : s.listener === 'tailscale'
-        ? 'over your tailnet'
-        : s.listener === 'localhost'
-          ? 'on this computer'
-          : `HTTPS${s.host ? ' to ' + s.host : ''}`
-  return `${methodLabel[s.method] ?? s.method} · ${where}`
+// sessionWhere is the design's dl-why shape for a session row ("over your
+// tailnet · signed in X ago · last active Y ago"): just where the session
+// reaches the dashboard from, in plain words. A session's sign-in method is
+// already named in the page's lead sentence, so it doesn't repeat here.
+function sessionWhere(s: SessionRow): string {
+  return s.transport === 'http'
+    ? `plain HTTP${s.host ? ' to ' + s.host : ''} (not encrypted)`
+    : s.listener === 'tailscale'
+      ? 'over your tailnet'
+      : s.listener === 'localhost'
+        ? 'on this computer'
+        : `HTTPS${s.host ? ' to ' + s.host : ''}`
+}
+
+// listenerPhrase reads the real listeners for the lead sentence's "from …"
+// clause ("from this computer and your tailnet"), in the design's words for
+// the listener kinds this box actually has.
+function listenerPhrase(listeners: AccessData['listeners']): string {
+  const words = Array.from(
+    new Set(
+      listeners.map((l) => (l.listener === 'tailscale' ? 'your tailnet' : l.listener === 'localhost' ? 'this computer' : l.listener)),
+    ),
+  )
+  if (!words.length) return 'nowhere configured'
+  if (words.length === 1) return words[0]
+  return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`
 }
 
 export function Access(): JSX.Element {
@@ -169,12 +185,17 @@ export function Access(): JSX.Element {
 
   return (
     <div class="col">
-      <div class="dl-phead"><div><h1>Access</h1></div></div>
-      <p class="dl-sub" style="margin:0 0 16px">
-        <b>Only operators can sign in</b>, with{' '}
-        {data.auth_policy.methods.map((m) => methodPhrase[m]).join(', ')}
-        {data.auth_policy.methods.includes('password') && needsTOTP ? ' (with an authenticator code)' : ''}.
-      </p>
+      <div class="dl-phead">
+        <div>
+          <h1>Access</h1>
+          <p class="dl-lead">
+            <b>Only you can sign in</b>, with{' '}
+            {data.auth_policy.methods.map((m) => methodPhrase[m]).join(', ')}
+            {data.auth_policy.methods.includes('password') && needsTOTP ? ' (with an authenticator code)' : ''}, from{' '}
+            {listenerPhrase(data.listeners)}.
+          </p>
+        </div>
+      </div>
       {msg ? (
         <div class="banner ok acc-banner" role="status" data-testid="access-msg">
           {msg}
@@ -185,30 +206,31 @@ export function Access(): JSX.Element {
           {err}
         </div>
       ) : null}
-      <div class="acc">
-        <div class="acc-col">
-          <section class="acc-card">
-            <h2>
-              <span class="acc-title">Your passkeys</span>
+      <div class="dl-cols">
+        <div class="dl-col-main">
+          <section class="dl-card">
+            <header class="dl-ch">
+              <h2>Your passkeys</h2>
+              <span class="dl-sp"></span>
               {data.passkey_here && passkeysUsable() ? (
-                <button class="btn sm" type="button" disabled={!!busy} onClick={onAddPasskey} data-testid="passkey-add">
-                  Add a passkey here
+                <button class="btn sm secondary" type="button" disabled={!!busy} onClick={onAddPasskey} data-testid="passkey-add">
+                  <Icon name="plus" />Add a passkey
                 </button>
               ) : null}
-            </h2>
-            <ul class="acc-list" data-testid="passkey-list">
-              {data.passkeys.length === 0 ? <li class="acc-row">No passkeys yet.</li> : null}
+            </header>
+            <ul class="dl-list" data-testid="passkey-list">
+              {data.passkeys.length === 0 ? <li class="acc-row dl-sub">No passkeys yet.</li> : null}
               {data.passkeys.map((k) => (
                 <li class="acc-row">
-                  <div class="acc-main">
+                  <div class="dl-nt">
                     <b>{k.name}</b>
                     {k.locked ? <span class="acc-locked"> · locked (possible clone)</span> : null}
-                    <span class="acc-why">
+                    <span class="dl-why">
                       {k.device_bound ? 'Stays on this device' : 'Synced to your other devices'} · {k.rp_id} · last
                       used {k.last_used ? ago(k.last_used) : 'never'}
                     </span>
                   </div>
-                  <span class="acc-act">
+                  <span class="dl-na">
                     {data.passkeys.length > 1 ? (
                       <button class="btn sm ghost" onClick={() => onRemovePasskey(k.id, k.name)}>
                         Remove…
@@ -222,7 +244,7 @@ export function Access(): JSX.Element {
                 </li>
               ))}
             </ul>
-            <p class="acc-note">
+            <p class="dl-sub acc-note">
               {data.passkey_here
                 ? 'A passkey added here works on this hostname. '
                 : 'Passkeys need HTTPS (or localhost) on a hostname conductor serves; this connection has none. '}
@@ -231,18 +253,18 @@ export function Access(): JSX.Element {
             </p>
           </section>
 
-          <section class="acc-card" data-testid="password-card">
-            <h2>Password and authenticator app</h2>
-            <ul class="acc-list">
+          <section class="dl-card" data-testid="password-card">
+            <header class="dl-ch"><h2>Password and authenticator app</h2></header>
+            <ul class="dl-list">
               <li class="acc-row">
-                <div class="acc-main">
+                <div class="dl-nt">
                   <b>Password</b>
-                  <span class="acc-why" data-testid="password-state">
+                  <span class="dl-why" data-testid="password-state">
                     {data.password.set ? `Set ${ago(data.password.set_at)}` : 'Not set'}
                     {!canPassword ? ' · password sign-in is off in the config' : ''}
                   </span>
                 </div>
-                <span class="acc-act">
+                <span class="dl-na">
                   <button class="btn sm" type="button" disabled={!!busy} onClick={() => setPwOpen(!pwOpen)} data-testid="password-open">
                     {data.password.set ? 'Change…' : 'Set…'}
                   </button>
@@ -276,13 +298,13 @@ export function Access(): JSX.Element {
                 </li>
               ) : null}
               <li class="acc-row">
-                <div class="acc-main">
+                <div class="dl-nt">
                   <b>Authenticator app</b>
-                  <span class="acc-why" data-testid="totp-state">
+                  <span class="dl-why" data-testid="totp-state">
                     {data.totp.set ? `Set up ${ago(data.totp.set_at)}` : 'Not set up'}
                   </span>
                 </div>
-                <span class="acc-act">
+                <span class="dl-na">
                   {data.totp.set ? (
                     <>
                       <button class="btn sm" type="button" disabled={!!busy || !!totp} onClick={onTOTPStart} data-testid="totp-replace">
@@ -305,11 +327,11 @@ export function Access(): JSX.Element {
                     <img class="totp-qr" src={totp.qr} alt="QR code for your authenticator app" width={180} height={180} />
                     <div class="totp-side">
                       {data.totp.set ? (
-                        <p class="acc-note" data-testid="totp-replace-note">
+                        <p class="dl-sub acc-note" data-testid="totp-replace-note">
                           A new key for your app. The one you have keeps working until you confirm this one with a code.
                         </p>
                       ) : null}
-                      <p class="acc-note">Scan it, or type this key into the app (time-based, 6 digits, 30 seconds):</p>
+                      <p class="dl-sub acc-note">Scan it, or type this key into the app (time-based, 6 digits, 30 seconds):</p>
                       <CopyBlock text={totp.secret} display={groupKey(totp.secret)} testid="totp-secret" words />
                     </div>
                   </div>
@@ -335,7 +357,7 @@ export function Access(): JSX.Element {
                 </li>
               ) : null}
             </ul>
-            <p class="acc-note">
+            <p class="dl-sub acc-note">
               {needsTOTP
                 ? 'A password signs in only together with a code from the authenticator app.'
                 : 'This config lets a password sign in on its own (password_requires_totp: false); with an app set up, its code is still asked for.'}{' '}
@@ -343,27 +365,28 @@ export function Access(): JSX.Element {
             </p>
           </section>
 
-          <section class="acc-card">
-            <h2>
-              <span class="acc-title">Signed in now</span>
-              <button class="btn sm" onClick={onSignOutAll}>
+          <section class="dl-card">
+            <header class="dl-ch">
+              <h2>Signed in now</h2>
+              <span class="dl-sp"></span>
+              <button class="btn sm secondary" onClick={onSignOutAll}>
                 Sign out everywhere…
               </button>
-            </h2>
-            <ul class="acc-list" data-testid="session-list">
+            </header>
+            <ul class="dl-list" data-testid="session-list">
               {data.sessions.map((s) => (
                 <li class="acc-row">
-                  <div class="acc-main">
+                  <div class="dl-nt">
                     <b>
                       {s.device}
                       {s.current ? ' (this one)' : ''}
                     </b>
-                    <span class="acc-why">
-                      {sessionHow(s)} · signed in {s.created ? ago(s.created) : ''}
-                      {s.expires ? ` · ends within ${humanDuration(new Date(s.expires).getTime() - Date.now())}` : ''}
+                    <span class="dl-why">
+                      {sessionWhere(s)} · signed in {s.created ? ago(s.created) : ''} · last active{' '}
+                      {s.last_seen ? ago(s.last_seen) : ''}
                     </span>
                   </div>
-                  <span class="acc-act">
+                  <span class="dl-na">
                     {s.current ? null : (
                       <button class="btn sm ghost" onClick={() => onEndSession(s.id)}>
                         Sign out
@@ -373,15 +396,15 @@ export function Access(): JSX.Element {
                 </li>
               ))}
             </ul>
-            <p class="acc-note">
+            <p class="dl-sub acc-note">
               A session ends after {goDuration(data.session_policy.idle)} idle, or {goDuration(data.session_policy.max)} at most.
             </p>
           </section>
         </div>
 
-        <div class="acc-col">
-          <section class="acc-card">
-            <h2>When it asks you to confirm</h2>
+        <div class="dl-col-side">
+          <section class="dl-card">
+            <header class="dl-ch"><h2>When it needs your passkey</h2></header>
             <ul class="acc-asks">
               <li>Approving or denying what a bot asks to do, a purchase included</li>
               {data.auth_policy.config_stepup === 'guarded' ? (
@@ -402,17 +425,25 @@ export function Access(): JSX.Element {
               <li>Taking over a browser a bot is signed in to</li>
               <li>Adding or removing a way to sign in</li>
             </ul>
-            <p class="acc-note" data-testid="stepup-methods">
+            <p class="dl-sub" data-testid="stepup-methods">
               You can confirm with:{' '}
               {data.stepup_methods.length ? data.stepup_methods.map((m) => methodPhrase[m]).join(', ') : 'nothing on this connection'}
-              . Everything else uses your signed-in session.
+              . Everything else, including routine config changes, uses your signed-in session.
+            </p>
+          </section>
+
+          <section class="dl-card">
+            <header class="dl-ch"><h2>Approvals</h2></header>
+            <p class="dl-sub">
+              Any of your passkeys can approve. Requiring one that never leaves its device (never synced to another
+              of your devices) isn't configurable yet.
             </p>
           </section>
 
           <details class="dl-card dl-tech-d acc-tech">
             <summary><Icon name="chev" />Technical details</summary>
             <dl class="dl-facts">
-              <dt>Where it listens</dt>
+              <dt>Addresses</dt>
               {data.listeners.map((l) => (
                 <dd class="mono">
                   {l.rp_id}: {l.origins.join(', ')}
