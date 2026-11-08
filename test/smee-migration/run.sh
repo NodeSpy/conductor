@@ -455,12 +455,16 @@ stop "$d"
 #   S2  this conductor released; the box updates to it: the migration runs
 #   S3  (informational) the box rolled back to its old conductor
 #
-# Deliveries on both channels must fire at S0, S1 and S2. Runs when
+# Deliveries on both channels must fire at S0, S1 and S2, except github's at
+# S0 and S1 on a conductor the plugin SDK withholds config: entries from
+# (v0.88, v0.89: no capabilities.references): the harness channel is on
+# loopback, which github reaches only through its config:webhook.smee_url
+# egress, while a real smee.io channel is declared literally. Runs when
 # OLD_CONDUCTORS names them ("<label>=<binary> …"), with GITHUB_REL and
 # SMEE_REL the released plugin builds.
 joins() { grep -c "subscriber joined \"$1\"" "$WORK/mocksmee.log"; }
 FLEET=() N=100
-fleet_step() { # <name> <step> <conductor> <yes|info>
+fleet_step() { # <name> <step> <conductor> <yes|hooks|info>: which deliveries must fire
   local name=$1 step=$2 cond=$3 must=$4 d="$WORK/$1" jg jh which res before
   jg=$(joins "$name-gh"); jh=$(joins "$name-hooks")
   echo "=== $step" >>"$d/daemon.log"
@@ -474,7 +478,7 @@ fleet_step() { # <name> <step> <conductor> <yes|info>
     if [ "$which" = gh ]; then post_github "$name" "$N"; else post_hooks "$name" "$N"; fi
     if wait_for 30 bash -c "[ \$(curl -sf http://127.0.0.1:$P_SINK/_captured | grep -o '\"/harness/$name/$which\"' | wc -l) -gt $before ]"; then res=fires; else res="does not fire"; fi
     FLEET+=("$name | $step | $which | $res")
-    if [ "$must" = yes ]; then
+    if [ "$must" = yes ] || [ "$must" = "$which" ]; then
       if [ "$res" = fires ]; then pass "$name $step: $which fires"; else fail "$name $step: $which does not fire"; fi
     fi
   done
@@ -487,20 +491,22 @@ fleet() { # <label> <old conductor>
   write_config "$d" "$name"
   publish "$d" github v2.11.2 "$GITHUB_REL"
   publish "$d" smee v1.1.1 "$SMEE_REL"
-  fleet_step "$name" "S0 $1, released plugins" "$old" yes
+  local early=yes
+  case $1 in v0.88* | v0.89*) early=hooks ;; esac
+  fleet_step "$name" "S0 $1, released plugins" "$old" $early
   publish "$d" github v2.12.0 "$GITHUB_NEW"
   publish "$d" smee v1.2.0 "$SMEE_NEW"
   # shellcheck disable=SC2046
   $(daemon_env "$d") "$old" plugin update --config "$d/cfg/conductor.yaml" --state-dir "$d/state" >"$d/plugin-update.log" 2>&1
   grep -E "plugin (github|smee)" "$d/plugin-update.log" | sed "s/^/   [$name S1 plugin update] /" | cut -c1-260
-  fleet_step "$name" "S1 $1, plugins updated" "$old" yes
+  fleet_step "$name" "S1 $1, plugins updated" "$old" $early
   fleet_step "$name" "S2 this conductor" "$CONDUCTOR_NEW" yes
   if grep -q "expose: gh-smee" "$d/cfg/conductor.yaml" && grep -q "expose: hooks-smee" "$d/cfg/conductor.yaml"; then
     pass "$name S2: the config was migrated"
   else
     fail "$name S2: the config was not migrated"
   fi
-  grep -hE "config migrate: (approved|recorded|updated|warning)" "$d/daemon.log" | sed "s/^/   [$name S2] /" | cut -c1-260
+  grep -hE "config migrate: (approved|recorded|updated|warning)|could not record" "$d/daemon.log" | sed "s/^/   [$name S2] /" | cut -c1-260
   fleet_step "$name" "S3 rolled back to $1" "$old" info
 }
 if [ -n "${OLD_CONDUCTORS:-}" ]; then
