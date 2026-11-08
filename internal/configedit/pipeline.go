@@ -34,6 +34,7 @@ type Pipeline struct {
 
 	path     string             // the live config file
 	validate func(string) error // run the daemon's load+validate pass on a path
+	prepare  PrepareFunc
 	guarded  func(string) (any, error)
 	reload   func() error // signal the daemon to re-read its config (SIGHUP)
 	now      func() time.Time
@@ -89,8 +90,14 @@ type Change struct {
 type Options struct {
 	Path     string
 	Validate func(string) error
-	Reload   func() error
-	Now      func() time.Time // injectable clock for tests
+	// Prepare, when set, replaces Validate for a candidate that needs more
+	// than its own text to load: it readies what the candidate needs beside
+	// it, held aside from the live state, and validates against that. Commit
+	// makes it live once the file is written; Discard drops it. A preflight
+	// validate discards. Optional.
+	Prepare PrepareFunc
+	Reload  func() error
+	Now     func() time.Time // injectable clock for tests
 	// Guarded loads the config at path and returns its guarded part (all but
 	// the inert paths) in comparable form. Edits are compared on it as well as
 	// on the text, so a change that reaches a guarded setting through imports
@@ -113,7 +120,7 @@ type Options struct {
 // New builds a Pipeline. Validate and Reload may be nil (validate then accepts
 // anything and reload is a no-op) — the dashboard always wires both.
 func New(opt Options) *Pipeline {
-	p := &Pipeline{path: opt.Path, validate: opt.Validate, reload: opt.Reload, now: opt.Now, guarded: opt.Guarded, collect: opt.Collect, live: opt.Live}
+	p := &Pipeline{path: opt.Path, validate: opt.Validate, prepare: opt.Prepare, reload: opt.Reload, now: opt.Now, guarded: opt.Guarded, collect: opt.Collect, live: opt.Live}
 	if p.validate == nil {
 		p.validate = func(string) error { return nil }
 	}
@@ -470,7 +477,9 @@ func (e Edits) Validate() error {
 	if err != nil {
 		return err
 	}
-	return e.p.validateCandidate(after)
+	prep, err := e.p.prepareCandidate(after)
+	prep.discard()
+	return err
 }
 
 // Validate is the unowned set's Validate.
@@ -525,19 +534,26 @@ func (e Edits) ApplyWith(token string, gate func(needsStepup bool) error) (Appli
 	// validate-on-copy: write the candidate beside the config so relative
 	// imports and the sibling conductor.env resolve identically, then run the
 	// daemon's own load+validate pass against it.
-	if err := p.validateCandidate(after); err != nil {
+	prep, err := p.prepareCandidate(after)
+	if err != nil {
+		prep.discard()
 		return Applied{}, fmt.Errorf("the candidate config does not validate: %w", err)
 	}
 
 	// backup
 	backupID, err := p.backup(before)
 	if err != nil {
+		prep.discard()
 		return Applied{}, fmt.Errorf("backup before apply: %w", err)
 	}
 
 	// apply atomically
 	if err := writeAtomic(p.path, after); err != nil {
+		prep.discard()
 		return Applied{}, fmt.Errorf("write config: %w", err)
+	}
+	if err := p.commitPrepared(prep, before, backupID); err != nil {
+		return Applied{}, err
 	}
 
 	p.dropTokenLocked(token)
@@ -604,6 +620,52 @@ type Applied struct {
 // runs the validate pass against it.
 func (p *Pipeline) validateCandidate(b []byte) error {
 	return p.withCandidateFile(b, p.validate)
+}
+
+// PrepareFunc readies and validates a candidate at path (see
+// Options.Prepare).
+type PrepareFunc func(path string) (Prepared, error)
+
+// Prepared is what a Prepare readied for one candidate.
+type Prepared struct {
+	Commit  func() error // make it live; after the file is written
+	Discard func()       // drop it; safe after Commit
+}
+
+func (pr Prepared) discard() {
+	if pr.Discard != nil {
+		pr.Discard()
+	}
+}
+
+// commitPrepared makes what a written candidate was validated against go
+// live with it. If that fails, the previous file goes back, so the file and
+// what it needs never disagree. Caller holds p.mu.
+func (p *Pipeline) commitPrepared(prep Prepared, before []byte, backupID string) error {
+	if prep.Commit == nil {
+		return nil
+	}
+	if err := prep.Commit(); err != nil {
+		if rerr := writeAtomic(p.path, before); rerr != nil {
+			return fmt.Errorf("apply: %v; and putting the previous config back failed: %v (backup %s)", err, rerr, backupID)
+		}
+		return fmt.Errorf("apply: %w (the previous config is kept)", err)
+	}
+	return nil
+}
+
+// prepareCandidate is validateCandidate through Prepare when one is set.
+func (p *Pipeline) prepareCandidate(b []byte) (Prepared, error) {
+	if p.prepare == nil {
+		return Prepared{}, p.validateCandidate(b)
+	}
+	var prep Prepared
+	err := p.withCandidateFile(b, func(name string) error {
+		var err error
+		prep, err = p.prepare(name)
+		return err
+	})
+	return prep, err
 }
 
 // withCandidateFile writes b to a scratch file beside the config, runs fn on

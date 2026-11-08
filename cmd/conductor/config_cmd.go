@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/configedit"
 )
 
 // cmdConfig handles `conductor config`. Its one subcommand, `migrate`, went
@@ -79,6 +80,35 @@ func validateConfigFile(path string) error {
 	stack, err := buildFlowStack(cfg, nil, nil, true)
 	stack.Close()
 	return err
+}
+
+// prepareConfigFile is validateConfigFile for a dashboard config edit that
+// changes packs: — what `conductor init` does for packs, held aside. The
+// candidate's packs resolve into a stage (unchanged ones at their locked
+// revisions), the config loads and builds against the stage, and the stage
+// is committed only once the edited file is written. An edit that leaves
+// packs: as locked validates as before.
+func prepareConfigFile(path string) (configedit.Prepared, error) {
+	need, err := config.PacksNeedResolve(path)
+	if err != nil || !need {
+		return configedit.Prepared{}, validateConfigFile(path)
+	}
+	st, err := config.StagePacksKeepingLocked(path)
+	if err != nil {
+		return configedit.Prepared{}, fmt.Errorf("couldn't fetch its packs: %w", err)
+	}
+	loadEnvFile(filepath.Join(filepath.Dir(path), "conductor.env"))
+	cfg, err := st.Load()
+	if err == nil {
+		var stack *flowStack
+		stack, err = buildFlowStack(cfg, nil, nil, true)
+		stack.Close()
+	}
+	if err != nil {
+		st.Discard()
+		return configedit.Prepared{}, err
+	}
+	return configedit.Prepared{Commit: st.Commit, Discard: st.Discard}, nil
 }
 
 // reloadSignals subscribes to SIGHUP. cmdRun calls it before anything else:

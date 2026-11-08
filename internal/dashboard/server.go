@@ -77,8 +77,12 @@ type Deps struct {
 	// unavailable (a read-only dashboard).
 	ConfigPath string
 	Validate   func(path string) error
-	Reload     func() error
-	AuditPath  string // the audit log file (JSONL), for the Logs & audit screen
+	// Prepare, when set, validates a candidate with what it needs beside
+	// it readied first (configedit.Options.Prepare), such as packs it adds
+	// fetched into a stage. Bounded by prepareTimeout per call.
+	Prepare   func(path string) (configedit.Prepared, error)
+	Reload    func() error
+	AuditPath string // the audit log file (JSONL), for the Logs & audit screen
 
 	// Auth (design §6). When Operators returns one or more operators the
 	// dashboard enforces passkey sign-in on every /api call and a step-up on
@@ -181,6 +185,7 @@ func New(deps Deps) *Server {
 		s.edit = configedit.New(configedit.Options{
 			Path:     deps.ConfigPath,
 			Validate: deps.Validate,
+			Prepare:  withPrepareTimeout(deps.Prepare),
 			Reload:   deps.Reload,
 			Guarded:  guardedConfig,
 			Collect:  deps.AvatarCollect,
@@ -604,4 +609,41 @@ func guardedConfig(path string) (any, error) {
 		}
 	}
 	return c, nil
+}
+
+// prepareTimeout bounds one candidate's Prepare (fetching what it adds)
+// inside the request that asked for it.
+var prepareTimeout = 3 * time.Minute
+
+// withPrepareTimeout bounds a Prepare: past the deadline the request gets a
+// plain error, and whatever the late call readies is discarded when it
+// finishes.
+func withPrepareTimeout(prep func(string) (configedit.Prepared, error)) configedit.PrepareFunc {
+	if prep == nil {
+		return nil
+	}
+	return func(path string) (configedit.Prepared, error) {
+		type res struct {
+			p   configedit.Prepared
+			err error
+		}
+		ch := make(chan res, 1)
+		go func() {
+			p, err := prep(path)
+			ch <- res{p, err}
+		}()
+		t := time.NewTimer(prepareTimeout)
+		defer t.Stop()
+		select {
+		case r := <-ch:
+			return r.p, r.err
+		case <-t.C:
+			go func() {
+				if r := <-ch; r.p.Discard != nil {
+					r.p.Discard()
+				}
+			}()
+			return configedit.Prepared{}, fmt.Errorf("fetching what this change adds took longer than %s; try again, or check the source is reachable", prepareTimeout)
+		}
+	}
 }

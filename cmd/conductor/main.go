@@ -1197,6 +1197,7 @@ func cmdRun(args []string) error {
 			// daemon's own load+semantic pass, and reloads via SIGHUP on apply.
 			ConfigPath: cfgFile,
 			Validate:   validateConfigFile,
+			Prepare:    prepareConfigFile,
 			Reload:     func() error { return signalReload(cfg) },
 			AuditPath:  cfg.Store.AuditLog,
 			// Auth (design §6): operators gate sign-in; the approval bridge feeds
