@@ -8,8 +8,11 @@ export interface Fact {
   icon: string
   value: string
   label?: string
-  tone?: 'change' | 'warning' | 'danger'
+  tone?: 'change' | 'warning' | 'danger' | 'update' | 'custom' | 'held'
   pri?: number
+  // glyph replaces the icon with the fact's own mark (the plugin facts'
+  // built-in mark, ui.js UI.pluginFact.origin).
+  glyph?: JSX.Element
 }
 
 export function FactsLine({ facts }: { facts: (Fact | null | undefined)[] }): JSX.Element | null {
@@ -19,7 +22,7 @@ export function FactsLine({ facts }: { facts: (Fact | null | undefined)[] }): JS
     <span class="fx">
       {xs.map((f, i) => (
         <span class={'fx-i' + (f.tone ? ' t-' + f.tone : '')} data-pri={f.pri || 2} title={f.label} key={i}>
-          {f.tone === 'danger' ? <span class="fx-tile"><Icon name={f.icon} /></span> : <Icon name={f.icon || 'dot'} />}
+          {f.glyph ? f.glyph : f.tone === 'danger' ? <span class="fx-tile"><Icon name={f.icon} /></span> : <Icon name={f.icon || 'dot'} />}
           {f.value}
         </span>
       ))}

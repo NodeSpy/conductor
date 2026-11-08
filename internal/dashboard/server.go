@@ -227,6 +227,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/packs", s.handlePacks)
 	s.mux.HandleFunc("GET /api/v1/packs/{name}/manifest", s.handlePackManifest)
 	s.mux.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
+	s.mux.HandleFunc("GET /api/v1/plugins/catalog", s.handlePluginCatalog)
+	s.mux.HandleFunc("GET /api/v1/plugins/review", s.handlePluginReview)
 	s.mux.HandleFunc("GET /api/v1/connections", s.handleConnections)
 	s.mux.HandleFunc("GET /api/v1/system", s.handleSystem)
 	s.mux.HandleFunc("POST /api/v1/system/pause", s.handleSetPaused)

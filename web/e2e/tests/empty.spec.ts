@@ -179,17 +179,21 @@ test('the Bots welcome on a box with no agent runtime says what comes first', as
   }
 })
 
-// The empty Hosts card has a way to add one: it stages through the review.
-// Hosts live on Plugins' Machines tab (CONFORMANCE "Plugins": four tabs).
+// With no machines, the Machines tab is the hero, whose one action adds a
+// host: it stages, and the review shows it (CONFORMANCE "Plugins").
 test('a host can be added from the Machines tab', async ({ page }) => {
   await page.goto(`${rt.baseURL}/#/connections/machines`)
-  await page.getByTestId('add-host').click()
-  const form = page.getByTestId('add-host-form')
+  await expect(page.getByTestId('plugins-empty-machines')).toBeVisible()
+  await expect(page.locator('.page-head .actions')).toHaveCount(0)
+  await page.getByTestId('plugins-add-machines').click()
+  const form = page.locator('#gen-form')
   await form.getByRole('textbox', { name: 'Name' }).fill('build-box')
   await form.getByRole('textbox', { name: 'Address' }).fill('build01.example.com')
+  await form.getByRole('textbox', { name: 'User' }).fill('ci')
   await shot(page, 'connections-add-host')
-  await form.getByTestId('stage-host').click()
+  await page.locator('#gen-submit').click()
   await expect(form).toBeHidden()
+  await expect(page).toHaveURL(/#\/system\/config/)
   await page.getByRole('button', { name: 'Review changes' }).click()
   await expect(page.locator('.effects')).toContainText('hosts.build-box')
   await noErrors(page)

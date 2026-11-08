@@ -264,7 +264,7 @@ func TestSectionReads(t *testing.T) {
 
 	var plugins api.PluginsResponse
 	json.Unmarshal(do(t, s, http.MethodGet, "/api/v1/plugins", nil).Body.Bytes(), &plugins)
-	if len(plugins.Plugins) != 1 || plugins.Plugins[0].Name != "github" || !plugins.Plugins[0].Pinned || !plugins.Plugins[0].Builtin {
+	if len(plugins.Plugins) != 1 || plugins.Plugins[0].Name != "github" || !plugins.Plugins[0].Pinned || plugins.Plugins[0].Builtin != config.BuiltinConnector("github") {
 		t.Fatalf("plugins: %+v", plugins.Plugins)
 	}
 

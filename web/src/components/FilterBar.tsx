@@ -49,6 +49,7 @@ export function FilterBar({
   onSinceChange,
   showTime = false,
   filterByHint = false,
+  end,
 }: {
   q: string
   onQueryChange: (q: string) => void
@@ -66,6 +67,9 @@ export function FilterBar({
   // (Level, From, …) are the only filters still gets the design's chip
   // pointing at them.
   filterByHint?: boolean
+  // end is drawn last in the bar (the catalog picker's "Add from a git URL or
+  // custom source…", filter.js's `end`).
+  end?: JSX.Element
 }): JSX.Element {
   const [text, setText] = useState(q)
   useEffect(() => setText(q), [q])
@@ -185,6 +189,7 @@ export function FilterBar({
         {showTime && since !== undefined && onSinceChange ? (
           <TimeButton since={since} onChange={onSinceChange} />
         ) : null}
+        {end ?? null}
       </div>
 
       {sheetOpen ? (
@@ -230,8 +235,8 @@ function MenuButton({ menu }: { menu: FilterMenu }): JSX.Element {
     return () => document.removeEventListener('click', onDoc)
   }, [])
   return (
-    <details ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
-      <summary class={'fb-btn' + (menu.selected.length ? ' on' : '') + (menu.view ? ' fb-view' : '')} aria-haspopup="listbox">
+    <details ref={ref} style={{ position: 'relative', display: 'inline-block', ...(menu.view ? { marginLeft: 'auto' } : {}) }}>
+      <summary class={'fb-btn' + (menu.selected.length && !menu.view ? ' on' : '') + (menu.view ? ' fb-view' : '')} aria-haspopup="listbox">
         {btnLabel(menu)}
         <Icon name="chevd" />
       </summary>
