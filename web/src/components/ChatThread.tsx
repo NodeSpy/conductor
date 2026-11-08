@@ -65,6 +65,9 @@ export function ChatThread({
   members,
   placeholder,
   comments,
+  frame,
+  head,
+  sendLit,
 }: {
   convId: string
   kind: 'bot' | 'team'
@@ -72,6 +75,13 @@ export function ChatThread({
   members?: Mentionable[]
   placeholder?: string
   comments?: boolean // a ticket's comments use the same component with a plainer composer
+  // frame replaces the wrapper's classes (a bot page's Chat tab: "panel chat fit"),
+  // and head is drawn first inside it (that tab's Home session panel head).
+  frame?: string
+  head?: JSX.Element
+  // sendLit keeps Send lit while the composer is empty (the prototype's
+  // composer; an empty send does nothing) instead of greying it out.
+  sendLit?: boolean
 }): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [text, setText] = useState('')
@@ -276,7 +286,8 @@ export function ChatThread({
   })()
 
   return (
-    <div class={'cv-chat chat' + (drag ? ' drop' : '')} data-conv={convId} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+    <div class={(frame || 'cv-chat chat') + (drag ? ' drop' : '')} data-conv={convId} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+      {head}
       <div class="cm-drop" aria-hidden={!drag}><Icon name="attach" /><span>Drop to attach</span></div>
       <div class="cm-thread" id="msgs" role="log" ref={scroller} data-testid="chat-scroll">
         {messages.length === 0 ? (
@@ -429,7 +440,7 @@ export function ChatThread({
               ))}
             </div>
           ) : null}
-          <button class="btn primary cm-send" type="button" data-testid="chat-send" aria-label={comments ? 'Post comment' : 'Send'} disabled={sending || (!text.trim() && !pending.length)} onClick={() => void doSend()}>
+          <button class="btn primary cm-send" type="button" data-testid="chat-send" aria-label={comments ? 'Post comment' : 'Send'} disabled={sending || (!sendLit && !text.trim() && !pending.length)} onClick={() => void doSend()}>
             <Icon name="send" />
           </button>
         </div>

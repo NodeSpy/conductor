@@ -252,7 +252,7 @@ export function Tickets(): JSX.Element {
   )
 }
 
-function Board({ tickets, bots }: { tickets: Ticket[]; bots: Record<string, BotSummary> }): JSX.Element {
+export function Board({ tickets, bots }: { tickets: Ticket[]; bots: Record<string, BotSummary> }): JSX.Element {
   const byStatus = useMemo(() => {
     const m: Record<string, Ticket[]> = {}
     for (const s of STATUSES) m[s] = []
@@ -330,7 +330,7 @@ export function TicketTable({ tickets, bots }: { tickets: Ticket[]; bots: Record
   )
 }
 
-function FlatList({ tickets, bots }: { tickets: Ticket[]; bots: Record<string, BotSummary> }): JSX.Element {
+export function FlatList({ tickets, bots }: { tickets: Ticket[]; bots: Record<string, BotSummary> }): JSX.Element {
   return (
     <section class="dl-card tk-sec tk-flat">
       <header class="dl-ch">
@@ -361,7 +361,7 @@ function TicketRow({ t, bots }: { t: Ticket; bots: Record<string, BotSummary> })
   )
 }
 
-function NewTicket({
+export function NewTicket({
   bots,
   teams,
   preAssignee,

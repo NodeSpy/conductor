@@ -51,9 +51,15 @@ export function Avatar({ id, size = 40, kind = 'bot' }: { id?: Identity; size?: 
       title={label}
       style={{ width: size, height: size, background: bg, color: fg, fontSize: Math.round(size * 0.4) }}
     >
-      {id?.initials || label.slice(0, 1).toUpperCase()}
+      {kind === 'team' ? teamInitials(id?.name || label) : id?.initials || label.slice(0, 1).toUpperCase()}
     </span>
   )
+}
+
+// teamInitials is a team's tile text (prototype identity.js UI.teamAvOf): its
+// first two letters or digits, lowercase ("pl" for platform).
+export function teamInitials(name: string): string {
+  return name.replace(/[^a-z0-9]/gi, '').slice(0, 2).toLowerCase()
 }
 
 // Sigil is the design's plain letter square (UI.sigil, js/ui.js): a small

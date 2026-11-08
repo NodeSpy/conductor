@@ -95,7 +95,7 @@ export function TabsBar({
       {items.map((t) => (
         <a class={[active === t.id ? 'on' : '', over.has(items.indexOf(t)) ? 'tab-over' : ''].filter(Boolean).join(' ')} role="tab" aria-selected={active === t.id} aria-current={active === t.id ? 'page' : undefined} href={t.href} data-tab={t.id}>
           {t.label}
-          {t.count != null ? <span class={'count' + (t.hot ? ' hot' : '')}>{t.count}</span> : null}
+          {t.count != null ? <>{' '}<span class={'count' + (t.hot ? ' hot' : '')}>{t.count}</span></> : null}
         </a>
       ))}
       {/* the ghost is "More ▾" at its real size, never shown: its width is
@@ -120,7 +120,7 @@ export function TabsBar({
               {overItems.map((t) => (
                 <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); location.hash = t.href.replace(/^#/, '') }}>
                   {t.label}
-                  {t.count != null ? <span class={'count' + (t.hot ? ' hot' : '')}>{t.count}</span> : null}
+                  {t.count != null ? <>{' '}<span class={'count' + (t.hot ? ' hot' : '')}>{t.count}</span></> : null}
                 </button>
               ))}
             </div>

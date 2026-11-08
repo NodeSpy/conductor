@@ -5,8 +5,8 @@
 // filters a list (Activity, Bots, …) renders the same `.fb` markup so they
 // pick up one fix together; only the menus and qualifiers differ per screen.
 //
-// Left out of this port (no backend/UI need yet): the "More filters" overflow
-// menu, recent-picks ranking and the qualifier autocomplete dropdown under the
+// A menu marked `more` waits under "More filters ▾" until it is used.
+// Left out of this port (no backend/UI need yet): recent-picks ranking and the qualifier autocomplete dropdown under the
 // search field. Typing `qualifier:value` and pressing Enter still turns it
 // into a pill; it is just not suggested as you type.
 import type { JSX } from 'preact'
@@ -36,6 +36,9 @@ export interface FilterMenu {
   view?: boolean
   // title heads the open menu (default "Filter by <label>")
   title?: string
+  // more lists the menu under "More filters ▾" until something in it is
+  // picked (prototype filter.js `more`); then it shows as its own button.
+  more?: boolean
 }
 
 export function FilterBar({
@@ -167,9 +170,10 @@ export function FilterBar({
       </div>
 
       <div class="fb-bar" role="group" aria-label="Filters">
-        {liveMenus.map((m) => (
+        {liveMenus.filter((m) => !m.more || m.selected.length).map((m) => (
           <MenuButton key={m.key} menu={m} />
         ))}
+        {liveMenus.some((m) => m.more && !m.selected.length) ? <MoreFilters menus={liveMenus.filter((m) => m.more && !m.selected.length)} /> : null}
 
         <button type="button" class={'fb-phone' + (nOn ? ' on' : '')} aria-haspopup="dialog" onClick={() => setSheetOpen(true)}>
           <Icon name="filter" />
@@ -265,6 +269,48 @@ function MenuButton({ menu }: { menu: FilterMenu }): JSX.Element {
             )
           })}
           {!menu.options.length ? <li class="fb-none" role="presentation">Nothing to filter by yet.</li> : null}
+        </ul>
+      </div>
+    </details>
+  )
+}
+
+// MoreFilters is "More filters ▾": the menus kept out of the bar until one is
+// used, each under its own heading; picking an option sets that filter (its
+// button then shows in the bar).
+function MoreFilters({ menus }: { menus: FilterMenu[] }): JSX.Element {
+  const ref = useRef<HTMLDetailsElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const onDoc = (e: MouseEvent) => {
+      if (el.open && !el.contains(e.target as Node)) el.open = false
+    }
+    document.addEventListener('click', onDoc)
+    return () => document.removeEventListener('click', onDoc)
+  }, [])
+  return (
+    <details ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
+      <summary class="fb-btn fb-more-btn" aria-haspopup="menu">
+        <span class="fb-l">More filters</span>
+        <Icon name="chevd" />
+      </summary>
+      <div class="fb-menu fb-more" role="menu" aria-label="More filters" style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0 }}>
+        <div class="fb-mh"><b>More filters</b></div>
+        <ul class="fb-list" role="presentation">
+          {menus.map((m) => (
+            <>
+              <li class="fb-gh" role="presentation">{m.label}</li>
+              {m.options.map((o) => (
+                <li key={m.key + o.v} role="menuitem" class="fb-opt" onClick={() => { m.onToggle(o.v); if (ref.current) ref.current.open = false }}>
+                  <Icon name="check" />
+                  <span class="fb-ol"><b>{o.label}</b></span>
+                  {o.n != null ? <span class="fb-on">{o.n}</span> : null}
+                </li>
+              ))}
+              {!m.options.length ? <li class="fb-none" role="presentation">Nothing to filter by yet.</li> : null}
+            </>
+          ))}
         </ul>
       </div>
     </details>

@@ -5,6 +5,25 @@
 // needed. Screens never draw status markup by hand — they use this component.
 import type { JSX } from 'preact'
 
+// protoGlyph is the prototype's own mark shape for a state (js/icons.js
+// GLYPHS, via UI.mark): a filled dot for success, a bare × for danger. Opt-in
+// per mark (StatusMark's proto prop), so other screens keep their marks.
+function protoGlyph(s: string): JSX.Element | null {
+  if (s === 'ok' || s === 'success')
+    return (
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="3.4" fill="currentColor" stroke="none" />
+      </svg>
+    )
+  if (s === 'fail')
+    return (
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M4.4 4.4l7.2 7.2M11.6 4.4l-7.2 7.2" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" />
+      </svg>
+    )
+  return null
+}
+
 function glyph(s: string): JSX.Element {
   switch (s) {
     case 'ok':
@@ -68,8 +87,11 @@ export function StatusMark({
   lg,
   mkOnly,
   label,
+  proto,
 }: {
   s: string
+  // proto draws the prototype's own mark shape (see protoGlyph) where it has one.
+  proto?: boolean
   word?: string
   lg?: boolean
   mkOnly?: boolean
@@ -79,7 +101,7 @@ export function StatusMark({
   const cls = ['st', lg ? 'lg' : '', mkOnly ? 'mk-only' : ''].filter(Boolean).join(' ')
   return (
     <span class={cls} data-s={s} role={mkOnly && label ? 'img' : undefined} aria-label={mkOnly && label ? label : undefined}>
-      <i>{glyph(s)}</i>
+      <i>{(proto && protoGlyph(s)) || glyph(s)}</i>
       {!mkOnly && word ? <span>{word}</span> : null}
     </span>
   )

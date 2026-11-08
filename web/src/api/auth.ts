@@ -72,6 +72,13 @@ export function stepupMethods(st: AuthState): Method[] {
   return (st.stepup_methods ?? []).filter((m) => m !== 'passkey' || passkeysUsable())
 }
 
+// confirmLabel words a button that ends in a step-up: "Approve with passkey"
+// only when a passkey is what this session will confirm with; otherwise the
+// plain verb with an ellipsis (the sheet then offers what this operator has).
+export function confirmLabel(verb: string, st: AuthState = authState.value): string {
+  return stepupMethods(st)[0] === 'passkey' ? `${verb} with passkey` : `${verb}…`
+}
+
 // --- sign-in ---
 
 export async function signIn(): Promise<void> {
