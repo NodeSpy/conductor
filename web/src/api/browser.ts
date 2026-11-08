@@ -197,6 +197,15 @@ export const browser = {
   },
 }
 
+// withoutValues is a wallet change as the passkey sheet shows it: a typed
+// value (a password, a card number) never goes back on screen, only that it
+// was typed.
+function withoutValues(req: Record<string, unknown>): Record<string, unknown> {
+  const v = req.values as Record<string, string> | undefined
+  if (!v || typeof v !== 'object') return req
+  return { ...req, values: Object.fromEntries(Object.keys(v).map((k) => [k, '(typed, stored write-only)'])) }
+}
+
 // op runs a wallet mutation. The server classifies the change; a widening one
 // comes back 401 with the digest to step up over, so we sign and retry once
 // (design §4.5 — add a profile/card, a binding, a site, a shop, a higher limit,
@@ -212,7 +221,7 @@ export async function walletOp(cmd: string, req: Record<string, unknown>): Promi
   if (res.status === 401) {
     const b = (await readJSON(res.clone()).catch(() => ({}))) as { stepup?: { purpose: string; digest: string; description?: string } }
     if (b.stepup) {
-      const token = await stepUp(b.stepup.purpose, b.stepup.digest, { what: `Wallet change: ${cmd}`, description: b.stepup.description, action: req })
+      const token = await stepUp(b.stepup.purpose, b.stepup.digest, { what: `Wallet change: ${cmd}`, description: b.stepup.description, action: withoutValues(req) })
       res = await fetch('/api/v1/browser/op', {
         method: 'POST',
         credentials: 'same-origin',
