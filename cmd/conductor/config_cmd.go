@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -349,6 +350,9 @@ func ensureMigrationGrant(mainPath string, g configmigrate.Grant, cli bool) ([]s
 		return nil, fmt.Errorf("load the config to update %s: %w", pu.Name, err)
 	}
 	cfg = withMigrationUses(cfg, []string{g.Use})
+	if notes, ok := recordFromInstalledBuild(cfg, key, pu.Name, cur, g, cli); ok {
+		return notes, nil
+	}
 	update := func() error {
 		_, err := boundedReconcile(cfg, plugin.Options{Only: pu.Name, Log: logf}, cli)
 		return err
@@ -373,6 +377,57 @@ func ensureMigrationGrant(mainPath string, g configmigrate.Grant, cli bool) ([]s
 		return notes, fmt.Errorf("%s did not install a release declaring expose_local", pu.Name)
 	}
 	return notes, nil
+}
+
+// recordFromInstalledBuild covers an installed build that declares what g
+// needs but whose record lacks it: one installed by a conductor before
+// expose_local (the plugin SDK withholds it from those, and they would not
+// record it anyway), and on v0.88/v0.89 without its config: entries too.
+// The build itself is asked (a describe, from an empty jail); when it
+// declares everything g needs, exactly those items are recorded — what the
+// migration would approve in an update — and returned as a note. ok is
+// false when the build does not declare them, or cannot be asked.
+func recordFromInstalledBuild(cfg *config.Config, key, name string, cur plugin.Installed, g configmigrate.Grant, cli bool) (notes []string, ok bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), migrationPluginTimeout)
+	defer cancel()
+	decl, err := describeForInstall(cfg)(ctx, plugin.Spec{
+		Name: name, Kind: plugin.KindConnector, Provides: name,
+		BinPath: cur.Path, Sha256: cur.Sha256, Resolved: cur.Resolved, PreJail: cur.PreJail,
+	})
+	if err != nil || decl == nil {
+		return nil, false
+	}
+	declared := plugin.ManifestFromDecl(decl)
+	if g.ExposeLocal && !declared.ExposeLocal {
+		return nil, false
+	}
+	var lock *plugin.FileLock
+	if cli {
+		lock, err = plugin.LockInstallStateCLI(plugin.InstallDir(), pluginLockCLITimeout, lockWaitNotice)
+	} else {
+		lock, err = plugin.LockInstallState(plugin.InstallDir())
+	}
+	if err != nil {
+		return nil, false
+	}
+	defer lock.Unlock()
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	rec, found := state.Get(key)
+	if !found || rec.Sha256 != cur.Sha256 {
+		return nil, false // replaced meanwhile: the update path judges it
+	}
+	before := rec.Manifest
+	rec.Manifest.ExposeLocal = rec.Manifest.ExposeLocal || g.ExposeLocal
+	for _, e := range g.Egress {
+		if slices.Contains(declared.Egress, e) && !slices.Contains(rec.Manifest.Egress, e) {
+			rec.Manifest.Egress = append(slices.Clone(rec.Manifest.Egress), e)
+		}
+	}
+	state.Put(rec)
+	if err := state.Save(); err != nil {
+		return nil, false
+	}
+	return []string{fmt.Sprintf("recorded for %s %s what the rewrite wires it for, which that build declares but the conductor that installed it could not record: %s", name, rec.Resolved, strings.Join(before.Widens(rec.Manifest), "; "))}, true
 }
 
 // approveForMigration approves the update held for key when it declares what

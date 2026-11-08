@@ -57,3 +57,27 @@ func (c Capabilities) WithoutReferences() Capabilities {
 	c.Exec = strip(c.Exec)
 	return c
 }
+
+// SemanticExposeLocal is the semantic a host advertises (HostInfo.Semantics)
+// when it grants Capabilities.ExposeLocal: an exposure reaching, from its
+// jail, the local listeners the engine wires to it. Every host built with
+// this SDK advertises it.
+const SemanticExposeLocal = "capabilities.expose_local"
+
+// GrantsExposeLocal reports whether the host asking for a declaration grants
+// Capabilities.ExposeLocal. Only the advertised semantic counts, as for
+// ResolvesReferences: no conductor before it can be told apart by version.
+// Those conductors do not know the field and ignore it; Serve withholds it
+// from them anyway, so what such a host is sent is exactly what it can act
+// on, and what it records is what it was shown.
+func (h *HostInfo) GrantsExposeLocal() bool {
+	if h == nil {
+		return false
+	}
+	for _, s := range h.Semantics {
+		if s == SemanticExposeLocal {
+			return true
+		}
+	}
+	return false
+}
