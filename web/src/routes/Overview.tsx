@@ -17,7 +17,7 @@
 // never collapses to less than the approved design shows (design review note).
 import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
-import { status, runs, loadError, liveTick, needItems, needBreakdown, dismiss, fyi } from '../state'
+import { status, runs, loadError, liveTick, needItems, needBreakdown, fyi } from '../state'
 import type { NeedItem } from '../state'
 import { botsApi, type BotSummary, type ProposalRow } from '../api/bots'
 import { api } from '../api/client'
@@ -172,7 +172,7 @@ function NeedsYou({ need }: { need: NeedItem[] }): JSX.Element {
             <li class="dl-need" data-s={n.mark} key={n.href}>
               <a class="dl-need-a" href={n.href}>
                 <span class="dl-ng">
-                  <StatusMark s={n.mark} mkOnly />
+                  <StatusMark s={n.mark} mkOnly lg label={n.mark === 'fail' ? 'failed' : 'needs you'} />
                 </span>
                 <span class="dl-nt">
                   <b>{n.title}</b>
@@ -184,11 +184,6 @@ function NeedsYou({ need }: { need: NeedItem[] }): JSX.Element {
                   <span class="btn sm secondary">{n.verb}</span>
                 </span>
               </a>
-              {n.kind === 'failed' ? (
-                <button class="btn sm ghost" type="button" title="Dismiss from Needs you" onClick={() => dismiss(n.href.replace('#/runs/', ''))}>
-                  Dismiss
-                </button>
-              ) : null}
             </li>
           ))}
         </ul>
