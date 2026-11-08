@@ -28,14 +28,7 @@
 .tm-line > b { flex: none; }
 .tm-line .bav-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tm-line .tag { flex: none; }
-/* A bot's or team's Tickets tab on a phone: the search takes the whole row, Filter and the view switch go under it. */
-@media (max-width: 720px) {
-  .tk-in .fb { flex-wrap: wrap; }
-  .tk-in .fb-search, .tk-in .fb-search:focus-within, .tk-in .fb-search.has-q { flex: 1 1 100%; max-width: none; }
-  .tk-in .fb-bar { flex: 1 1 auto; }
-  /* the desktop menus are hidden here (Filter opens them in a sheet); their empty wrappers would still take a gap each */
-  .tk-in .fb-bar > details { display: none !important; }
-}
+
 /* A team's bot row keeps Make lead and Remove side by side; "Add a bot" never breaks. */
 .tm-acts { display: inline-flex; align-items: center; gap: 4px; flex: none; white-space: nowrap; }
 .tm-add-l { white-space: nowrap; flex: none; }
@@ -70,3 +63,6 @@
   .tm-add select { flex: 1 1 auto; min-width: 0; max-width: 100%; }
 }
 .bot-unwatched .bu-sep { white-space: pre; }
+@media (max-width: 720px) { .bot-unwatched .bu-long { display: none; } }
+/* on a phone the line may run under the ⋯ column (the button sits on the name's row), so it is never cut */
+@media (max-width: 720px) { .dl-bothead .bot-unwatched { margin-right: -56px; } }

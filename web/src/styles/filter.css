@@ -122,3 +122,6 @@
 /* a narrow bar (a side column, a card): the search takes the width there is and never spills out of its card; it is
    here, after the base rule, so it wins */
 @container (max-width: 420px) { .fb-search { min-width: 0; max-width: none; flex: 1 1 100%; } .fb-search .fb-in { min-width: 60px; } }
+/* On a phone the menus live in the Filter sheet: their hidden buttons' wrappers must not take a gap each in the row
+   (that pushed the search narrower than the prototype's single row: search, Filter, view). */
+@media (max-width: 720px) { .fb-bar > details:has(> summary.fb-btn:not(.fb-time)), .fb-bar > span:has(> .fb-more-btn) { display: none !important; } }

@@ -293,7 +293,7 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
   const watchNote =
     triggers !== null && !watched ? (
       <p class="bot-working bot-unwatched" data-testid="watch-empty">
-        <span class="bu-why">Watches nothing yet: it only answers when asked</span>
+        <span class="bu-why">Watches nothing yet<span class="bu-long">: it only answers when asked</span></span>
         <span class="bu-sep"> · </span>
         <button class="link" type="button" onClick={() => setModal('watch')}>Choose what it watches</button>
       </p>
@@ -569,7 +569,8 @@ function ChatTab({ name, nm, bot, all, pending, open, onPaseo }: { name: string;
         {pending.length ? <a class="dl-link" href={`#/bots/${name}/proposals`}><StatusMark s="ember" mkOnly label="Needs you" /> {pending.length} waiting for you</a> : null}
         {open.length ? <a class="dl-link" href={`#/bots/${name}/tickets`}>Working on {open.length}</a> : null}
       </p>
-      <div class="grid g-side chat-grid">
+      {/* with nothing waiting and nothing open the side column is empty: the chat takes the width */}
+      <div class={'grid chat-grid' + (pending.length || open.length ? ' g-side' : '')}>
         <ChatThread convId={`bot:${name}`} kind="bot" bots={all} cls="fit" head={head} placeholder={`Message ${nm}`} empty={
           <div class="empty cm-hero" data-testid="chat-empty">
             <Icon name="message" class="empty-ic" />

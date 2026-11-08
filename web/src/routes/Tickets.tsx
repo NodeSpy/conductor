@@ -138,9 +138,8 @@ export function Tickets({ scope }: { scope?: string } = {}): JSX.Element {
   if (sc && tickets.length === 0) {
     return (
       wrap(<>
-        {head()}
         <EmptyState hero testid="tickets-empty" art={<TicketGlyph />} title={sc.kind === 'team' ? `No tickets for team ${sc.name} yet` : `No tickets for ${scName} yet`} action={{ label: sc.kind === 'team' ? 'New ticket for the team' : 'New ticket for it', href: newHref, testid: 'scoped-new-ticket' }}>
-          <p>{sc.kind === 'team' ? 'Work you hand the team lands here, and its lead or routing picks the bot that does it.' : `Work you, a chat or an event hand ${scName} lands here, and it keeps its notes on each.`}</p>
+          <p>{sc.kind === 'team' ? `Tickets for team ${sc.name} and its bots show up here once someone asks them for something.` : `Tickets for ${scName} show up here once someone asks it for something.`}</p>
         </EmptyState>
       </>)
     )
@@ -152,11 +151,11 @@ export function Tickets({ scope }: { scope?: string } = {}): JSX.Element {
         {head()}
         {configured ? (
           <EmptyState hero testid="tickets-empty" art={<TicketGlyph />} title="No tickets yet" action={{ label: 'New ticket', href: '#/tickets/new', testid: 'new-ticket' }}>
-            <p>A ticket is one piece of work for a bot or a team: what you want done, and by when. Drafts are ideas you shape together; work starts once you mark one ready.</p>
+            <p>A ticket is one piece of work you hand a bot or a team, and work on it starts once you mark it ready.</p>
           </EmptyState>
         ) : (
           <EmptyState hero testid="tickets-empty" art={<TicketGlyph />} title="Tickets need a bot to work on them" action={{ label: 'Create a bot', href: '#/bots', testid: 'tickets-empty-bots' }}>
-            <p>A ticket is one piece of work you hand to a bot or a team. There are no bots on this conductor yet, so start with one.</p>
+            <p>A ticket is work you hand to a bot, and this conductor has no bots yet, so start with one.</p>
           </EmptyState>
         )}
       </div>
