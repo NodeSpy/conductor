@@ -1042,17 +1042,17 @@ func cmdPluginAdd(args []string) error {
 		}
 	}
 	ref := rest[0]
-	u, err := config.ParseUse(kind, ref)
+	// The same read-only review the dashboard's add flow shows (plugin.ReviewAdd):
+	// what the reference resolves to, and the config entry that wires it.
+	rev, err := plugin.ReviewAdd(kind, ref, instance, cfg.PluginTrust, nil)
 	if err != nil {
 		return err
 	}
-	if u.IsBuiltin() {
+	u, instance := rev.Use, rev.Instance
+	if rev.Builtin {
 		fmt.Printf("%s is a builtin %s — nothing to install.\n\n", u.Name, kind)
-		fmt.Print(useSnippet(kind, orDefault(instance, u.Name), u.Name))
+		fmt.Print(rev.Snippet)
 		return nil
-	}
-	if instance == "" {
-		instance = u.Name
 	}
 
 	pr := config.PluginRef{Name: u.Name, Instance: instance, Use: u}
@@ -1090,26 +1090,13 @@ func cmdPluginAdd(args []string) error {
 	}
 	manifest := results[0].Manifest
 	fmt.Printf("\n%s runs jailed to what it declares. By adding it you agree that it may:\n", u.Name)
-	for _, l := range manifest.Lines() {
-		fmt.Printf("  %s\n", l)
-	}
-	for _, l := range plugin.HereLines(plugin.Spec{Name: u.Name, Manifest: manifest}) {
+	for _, l := range plugin.Agreement(u.Name, manifest) {
 		fmt.Printf("  %s\n", l)
 	}
 	fmt.Println("Anything else is denied. An update that asks for more waits for `conductor plugin approve`.")
 	fmt.Println("\nAdd it to your config:")
-	fmt.Print("\n" + useSnippet(kind, instance, ref))
+	fmt.Print("\n" + rev.Snippet)
 	return nil
-}
-
-// useSnippet is the config the operator should paste. Connectors and runtimes
-// have a block; an ENGINE does not — its reference lives on the step that runs
-// it, so printing `engines:` would name a block that does not exist.
-func useSnippet(kind config.UseKind, instance, ref string) string {
-	if kind == config.UseKindEngine {
-		return fmt.Sprintf("steps:\n  - { id: <step>, use: %s, code: \"…\" }\n", ref)
-	}
-	return fmt.Sprintf("%s:\n  %s:\n    use: %s\n", kind.Block(), instance, ref)
 }
 
 // cmdPluginShow prints one implementation's surface. For a builtin it prints the
@@ -1544,13 +1531,6 @@ func printResolutions(results []plugin.Resolution) error {
 		}
 	}
 	return firstErr
-}
-
-func orDefault(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
 }
 
 func sortedKeys(s plugin.Schema) []string {

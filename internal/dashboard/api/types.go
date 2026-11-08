@@ -499,27 +499,161 @@ type PluginInfo struct {
 	UsedBy  []string `json:"used_by"` // the connector/runtime names using it
 }
 
-// ConnectionsResponse is GET /api/v1/connections: connectors, runtimes and hosts
-// as a flat list for the Connections screen.
+// ConnectionsResponse is GET /api/v1/connections: the Plugins screen's four
+// tabs — connections, agent runtimes, code languages and machines — each row
+// with what the daemon really knows about it (its plugin's origin and
+// installed version, its version policy, what uses it). Nothing here is a
+// health probe: a connection's status is what the run history and the
+// connector registry say, never a guess.
 type ConnectionsResponse struct {
-	Connectors []NamedUse `json:"connectors"`
-	Runtimes   []NamedUse `json:"runtimes"`
-	Hosts      []HostInfo `json:"hosts"`
+	Connectors []ConnectorRow `json:"connectors"`
+	Runtimes   []RuntimeRow   `json:"runtimes"`
+	Hosts      []HostInfo     `json:"hosts"`
+	Languages  []LanguageInfo `json:"languages"`
+	// Version is this conductor's version: what a built-in plugin runs at.
+	Version string `json:"version"`
 }
 
-// NamedUse is a named connector/runtime and its `use:` reference. Type is a
-// runtime's built-in kind ("cli", "paseo", …), empty for a plugin's.
-type NamedUse struct {
+// PluginRef is the plugin behind a connector, runtime or code language, as
+// its `use:` reference and install state describe it.
+type PluginRef struct {
+	Use    string `json:"use"`    // the `use:` reference as written
+	Plugin string `json:"plugin"` // the plugin's name (the reference minus any @version)
+	// Origin: builtin | official | custom (a third-party source) | local
+	// (a path on this machine).
+	Origin string `json:"origin"`
+	Source string `json:"source,omitempty"` // where a fetched plugin comes from
+	// Version is the installed build (a built-in's is conductor's own); empty
+	// when nothing is installed yet.
+	Version string `json:"version,omitempty"`
+	// Policy is how its version moves: current (takes each new release),
+	// range (@^1.2 / @~1.2), or pinned (@v1.2.3). Empty for a built-in.
+	Policy     string `json:"policy,omitempty"`
+	Constraint string `json:"constraint,omitempty"` // the @… part of `use:`
+	// Waiting is set when a newer build is held for approval because it asks
+	// for more than the installed one (conductor plugin approve).
+	Waiting string `json:"waiting,omitempty"`
+	// Permissions is what the installed build may do, in plain words (the
+	// list `conductor plugin add` shows); empty for a built-in.
+	Permissions []string `json:"permissions,omitempty"`
+}
+
+// ConnectorRow is one configured connection.
+type ConnectorRow struct {
 	Name string `json:"name"`
-	Use  string `json:"use"`
+	PluginRef `tstype:",extends"`
+	// Unavailable says why the connection can't run yet (its plugin isn't
+	// installed); empty when the connector registry has it.
+	Unavailable string   `json:"unavailable,omitempty"`
+	Disabled    bool     `json:"disabled,omitempty"` // enabled: false
+	RunsToday   int      `json:"runs_today"`         // runs its events started today
+	Bots        []string `json:"bots,omitempty"`     // bots granted one of its verbs
+}
+
+// RuntimeRow is one configured agent runtime.
+type RuntimeRow struct {
+	Name string `json:"name"`
+	// Type is a built-in runtime's kind ("cli", "paseo", …), empty for a
+	// plugin's.
 	Type string `json:"type,omitempty"`
+	PluginRef `tstype:",extends"`
+	Tool    string `json:"tool,omitempty"`
+	Default bool   `json:"default,omitempty"`
+	Host    string `json:"host,omitempty"`
+	// Isolation is its isolation mode as configured ("" when it sets none).
+	Isolation string   `json:"isolation,omitempty"`
+	Bots      []string `json:"bots,omitempty"` // bots whose worker runs on it
 }
 
 // HostInfo is one SSH host target.
 type HostInfo struct {
+	Name     string   `json:"name"`
+	Host     string   `json:"host"`
+	User     string   `json:"user,omitempty"`
+	Port     int      `json:"port,omitempty"`
+	Env      int      `json:"env,omitempty"`      // how many env entries it sets
+	Runtimes []string `json:"runtimes,omitempty"` // runtimes that run on it
+}
+
+// LanguageInfo is one code-step engine (Plugins → Code languages): conductor's
+// built-in engines, a program on this machine a step names (`run: python3`),
+// or an engine plugin. An engine has no block of its own — a code step names
+// it — so this is read from every workflow and trigger step, plus the
+// optional `engines:` hardening entries.
+type LanguageInfo struct {
 	Name string `json:"name"`
-	Host string `json:"host"`
-	User string `json:"user,omitempty"`
+	// Class: builtin | host (a program on this machine) | plugin.
+	Class string `json:"class"`
+	PluginRef `tstype:",extends"`
+	Steps     int      `json:"steps"`              // code steps that run it
+	Workflows []string `json:"workflows"`          // the workflows and triggers they're in
+	Hardened  bool     `json:"hardened,omitempty"` // has an engines: entry
+}
+
+// CatalogResponse is GET /api/v1/plugins/catalog?kind=connector|runtime|engine:
+// what can be added on the Plugins page — the built-in kinds, every plugin in
+// install state, and every kind the config already names — each with the
+// connection fields its declaration carries, read from the plugin's own
+// declaration at runtime (core never lists a plugin's fields itself).
+type CatalogResponse struct {
+	Kind  string        `json:"kind"`
+	Items []CatalogItem `json:"items"`
+}
+
+// CatalogItem is one addable kind.
+type CatalogItem struct {
+	Name       string `json:"name"`
+	Desc       string `json:"desc,omitempty"`
+	Origin     string `json:"origin"` // builtin | official | custom | local
+	Source     string `json:"source,omitempty"`
+	Installed  string `json:"installed,omitempty"` // installed version; a built-in's is conductor's
+	Configured int    `json:"configured"`          // instances already configured
+	// HasSchema is true when conductor holds this kind's declaration (it is
+	// built in, or its plugin is loaded), so Fields is its real field list.
+	HasSchema bool           `json:"has_schema"`
+	Fields    []CatalogField `json:"fields,omitempty"`
+	// Unavailable says why its declaration can't be read yet.
+	Unavailable string `json:"unavailable,omitempty"`
+}
+
+// CatalogField mirrors one declared connection field (internal/connector.
+// Field / pkg/plugin.Field): its wire type, whether it's required, and
+// whether it's a credential. A Secret field's form control is the vault
+// reference picker or "store a new secret", never a plain value box.
+type CatalogField struct {
+	Key      string   `json:"key"`
+	Type     string   `json:"type"`
+	Required bool     `json:"required,omitempty"`
+	Secret   bool     `json:"secret,omitempty"`
+	Enum     []string `json:"enum,omitempty"`
+	Desc     string   `json:"desc,omitempty"`
+}
+
+// AddReview is GET /api/v1/plugins/review?kind=&use=&as=: what adding a
+// `use:` reference means before anything is fetched — the same review
+// `conductor plugin add` prints (internal/plugin.ReviewAdd).
+type AddReview struct {
+	Kind     string `json:"kind"`
+	Use      string `json:"use"`
+	Plugin   string `json:"plugin"`
+	Instance string `json:"instance"`
+	Origin   string `json:"origin"`
+	Source   string `json:"source,omitempty"`
+	Builtin  bool   `json:"builtin"`
+	Official bool   `json:"official"`
+	// Trusted is false when the source needs a plugin_trust.allow entry
+	// (TrustEntry) before conductor will install it.
+	Trusted    bool   `json:"trusted"`
+	TrustEntry string `json:"trust_entry,omitempty"`
+	// Installed is the installed version when a build is already on this
+	// machine; Permissions then lists what it may do.
+	Installed   string   `json:"installed,omitempty"`
+	Permissions []string `json:"permissions,omitempty"`
+	Snippet     string   `json:"snippet"`
+	// Fields are the declared connection fields when conductor holds the
+	// kind's declaration (HasSchema).
+	HasSchema bool           `json:"has_schema"`
+	Fields    []CatalogField `json:"fields,omitempty"`
 }
 
 // SystemResponse is GET /api/v1/system: the System screen's tabs — version and

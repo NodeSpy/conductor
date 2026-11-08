@@ -18,12 +18,6 @@ import (
 // config file (so they reflect exactly what is on disk, the same bytes the
 // editor stages against). Secret VALUES are never read or returned.
 
-// builtinPlugins are the connector/runtime names conductor ships in the binary —
-// not fetched, so the version policy does not apply to them.
-var builtinPlugins = map[string]bool{
-	"github": true, "rss": true, "webhook": true, "cron": true,
-}
-
 func (s *Server) handleSecrets(w http.ResponseWriter, r *http.Request) {
 	tree := s.liveTree()
 	var resp api.SecretsResponse
@@ -176,52 +170,8 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		sort.Strings(a.usedBy)
 		resp.Plugins = append(resp.Plugins, api.PluginInfo{
 			Name: name, Version: a.version, Pinned: a.pinned,
-			Builtin: builtinPlugins[name], UsedBy: a.usedBy,
+			Builtin: config.BuiltinConnector(name) || config.BuiltinRuntime(name), UsedBy: a.usedBy,
 		})
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
-	tree := s.liveTree()
-	var resp api.ConnectionsResponse
-
-	if m, ok := tree["connectors"].(map[string]any); ok {
-		for _, name := range sortedKeys(m) {
-			use := ""
-			if entry, ok := m[name].(map[string]any); ok {
-				use, _ = entry["use"].(string)
-			}
-			resp.Connectors = append(resp.Connectors, api.NamedUse{Name: name, Use: use})
-		}
-	}
-	if m, ok := tree["runtimes"].(map[string]any); ok {
-		for _, name := range sortedKeys(m) {
-			use := ""
-			switch entry := m[name].(type) {
-			case map[string]any:
-				use, _ = entry["use"].(string)
-			case string:
-				use = entry
-			}
-			typ := ""
-			if s.deps.Cfg != nil {
-				if rt, ok := s.deps.Cfg.Runtimes[name]; ok {
-					typ = rt.BuiltinType()
-				}
-			}
-			resp.Runtimes = append(resp.Runtimes, api.NamedUse{Name: name, Use: use, Type: typ})
-		}
-	}
-	if m, ok := tree["hosts"].(map[string]any); ok {
-		for _, name := range sortedKeys(m) {
-			hi := api.HostInfo{Name: name}
-			if entry, ok := m[name].(map[string]any); ok {
-				hi.Host, _ = entry["host"].(string)
-				hi.User, _ = entry["user"].(string)
-			}
-			resp.Hosts = append(resp.Hosts, hi)
-		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
