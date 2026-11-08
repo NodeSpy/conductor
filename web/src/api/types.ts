@@ -91,6 +91,16 @@ export interface RunStep {
   cost_usd?: number /* float64 */;
   runtime?: string;
   model?: string;
+  /**
+   * EnvVars is this step's environment, by scope — names only, values never
+   * shown (same shape and rule as SystemResponse.EnvVars). Only computed
+   * for a step kind the config can actually name a scope for (agent, code,
+   * decide): today that is a step's `host:` (hosts.<name>.env). Empty for
+   * every other kind, and often empty for these three too (no `host:` set)
+   * — the run page only offers the "Its environment" disclosure at all for
+   * the three kinds, regardless of whether this ends up empty.
+   */
+  env_vars?: EnvVarInfo[];
 }
 /**
  * RetryRequest is POST /api/v1/runs/{id}/retry: re-run a recorded execution

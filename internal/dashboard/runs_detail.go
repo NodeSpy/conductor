@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -57,7 +58,7 @@ func (s *Server) runSteps(rec store.RunHistory) []api.RunStep {
 		byID[sr.ID] = sr
 	}
 
-	project := func(sr store.StepRecord, kind string, idx int) api.RunStep {
+	project := func(sr store.StepRecord, kind string, idx int, st config.Step) api.RunStep {
 		status := sr.Status
 		switch {
 		case status == "" && !sr.Started.IsZero():
@@ -71,6 +72,7 @@ func (s *Server) runSteps(rec store.RunHistory) []api.RunStep {
 			ContinuedOnError: sr.ContinuedOnError,
 			Tokens:           sr.Tokens, CostUSD: sr.CostUSD,
 			Runtime: sr.Runtime, Model: sr.Model,
+			EnvVars: s.stepEnvVars(kind, st),
 		}
 		if !sr.Started.IsZero() {
 			rs.Started = sr.Started.UTC().Format(time.RFC3339Nano)
@@ -95,23 +97,23 @@ func (s *Server) runSteps(rec store.RunHistory) []api.RunStep {
 		for i, st := range specSteps {
 			id := stepNodeID(st, i)
 			if sr, ok := byID[id]; ok {
-				out = append(out, project(sr, kinds[id], i))
+				out = append(out, project(sr, kinds[id], i, st))
 				delete(byID, id)
 			} else {
-				out = append(out, api.RunStep{ID: id, Index: i, Kind: stepKind(st), Status: "idle"})
+				out = append(out, api.RunStep{ID: id, Index: i, Kind: stepKind(st), Status: "idle", EnvVars: s.stepEnvVars(stepKind(st), st)})
 			}
 		}
 		// Any recorded step not in the spec (config changed since the run) is
 		// appended so nothing recorded is lost.
 		for i, sr := range rec.Steps {
 			if _, dropped := byID[sr.ID]; dropped {
-				out = append(out, project(sr, "step", len(specSteps)+i))
+				out = append(out, project(sr, "step", len(specSteps)+i, config.Step{}))
 			}
 		}
 		return out
 	}
 	for i, sr := range rec.Steps {
-		out = append(out, project(sr, "step", i))
+		out = append(out, project(sr, "step", i, config.Step{}))
 	}
 	return out
 }
@@ -271,6 +273,45 @@ func retryRunID(msg string) string {
 		}
 	}
 	return ""
+}
+
+// stepEnvVars is the run page's "Its environment" disclosure (prototype
+// js/screens/runs.js stepCard, env-tech): only agent/code/decide steps get
+// the disclosure at all (a command/verb/assert/… step has no scope worth
+// naming today). The one real, config-declared scope a step can point at is
+// its own `host:` (hosts.<name>.env — the same field Settings' env list
+// reads); there is no runtime-level or daemon-level env in this config
+// schema (see envVars's own comment), so those scopes from the prototype's
+// mock stay out. Names and references only, same rule as envVars.
+func (s *Server) stepEnvVars(kind string, st config.Step) []api.EnvVarInfo {
+	if kind != "agent" && kind != "code" && kind != "decide" {
+		return nil
+	}
+	if st.Host == "" {
+		return nil
+	}
+	h, ok := s.deps.Cfg.Hosts[st.Host]
+	if !ok || len(h.Env) == 0 {
+		return nil
+	}
+	scope := "host:" + st.Host
+	names := make([]string, 0, len(h.Env))
+	for k := range h.Env {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	out := make([]api.EnvVarInfo, 0, len(names))
+	for _, k := range names {
+		v := h.Env[k]
+		ev := api.EnvVarInfo{Name: k, Scope: scope}
+		if isRefLiteral(v) {
+			ev.Ref = v
+		} else {
+			ev.Literal = true
+		}
+		out = append(out, ev)
+	}
+	return out
 }
 
 // handleStop cancels a live run (design §4.3). It stops mid-step; anything
