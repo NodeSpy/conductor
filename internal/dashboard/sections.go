@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -113,22 +114,84 @@ func scanVaultRefs(tree any) []api.SecretInfo {
 
 func (s *Server) handlePacks(w http.ResponseWriter, r *http.Request) {
 	tree := s.liveTree()
+	connByKind := connectorKindMap(tree)
 	var resp api.PacksResponse
 	if packs, ok := tree["packs"].(map[string]any); ok {
 		for _, name := range sortedKeys(packs) {
 			pi := api.PackInfo{Name: name}
+			var inst map[string]any
 			if m, ok := packs[name].(map[string]any); ok {
+				inst = m
 				pi.Use, _ = m["use"].(string)
+				pi.Source, _ = m["source"].(string)
 				pi.Version, _ = m["version"].(string)
 				pi.Hold, _ = m["hold"].(bool)
 				if pi.Version == "" {
 					pi.Version = versionFromUse(pi.Use)
 				}
+				pi.Pinned = pi.Version != "" || strings.Contains(pi.Use, "@")
 			}
+			src := pi.Source
+			if src == "" {
+				src = pi.Use
+			}
+			pi.Official = strings.HasPrefix(src, config.PacksNamespaceAlias+"/")
+			s.fillPackManifestFacts(&pi, name, inst, connByKind)
 			resp.Packs = append(resp.Packs, pi)
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// fillPackManifestFacts reads a pack instance's vendored manifest (when it
+// has been fetched — `conductor init`) for the Installed tab's facts line:
+// what it ships, its description, whether a required connection has nothing
+// to bind to (dormant — "needs you"), and how many of its triggers this
+// instance has armed.
+func (s *Server) fillPackManifestFacts(pi *api.PackInfo, name string, inst map[string]any, connByKind map[string][]string) {
+	if s.deps.ConfigPath == "" {
+		return
+	}
+	dir := filepath.Join(config.PackVendorDir(filepath.Dir(s.deps.ConfigPath)), name)
+	man, err := config.LoadPackManifestForLint(dir)
+	if err != nil {
+		return // not vendored yet (`conductor init` pending)
+	}
+	pi.Vendored = true
+	pi.Description = man.Pack.Description
+	if pi.Version == "" {
+		pi.Version = man.Pack.Version
+	}
+	contents := config.ManifestContents(man)
+	if len(contents.Kinds) > 0 {
+		pi.Contents = contents.Counts
+	}
+	pi.TriggersTotal = contents.Counts[config.KindTriggers]
+	boundTriggers, _ := inst["triggers"].(map[string]any)
+	for _, t := range man.Triggers {
+		if t.Name == "" {
+			continue
+		}
+		if v, ok := boundTriggers[t.Name]; ok {
+			if m, ok := v.(map[string]any); ok {
+				if en, _ := m["enabled"].(bool); en {
+					pi.TriggersArmed++
+				}
+			}
+		}
+	}
+	boundConn, _ := inst["connectors"].(map[string]any)
+	for _, role := range man.Pack.Requires.ConnectorNames() {
+		if _, ok := boundConn[role]; ok {
+			continue // already bound
+		}
+		if len(connByKind[role]) > 0 {
+			continue // nothing bound yet, but a candidate exists to pick
+		}
+		pi.Dormant = true
+		pi.Why = fmt.Sprintf("Not working yet: it needs a %s connection.", role)
+		break
+	}
 }
 
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {

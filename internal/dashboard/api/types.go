@@ -432,12 +432,104 @@ type PacksResponse struct {
 	Packs []PackInfo `json:"packs"`
 }
 
-// PackInfo is one installed pack instance.
+// PackInfo is one installed pack instance — Packs → Installed's facts line
+// and dormant/needs-you treatment, from the same vendored manifest the
+// catalog and the pack overrides screen read.
 type PackInfo struct {
-	Name    string `json:"name"`
-	Use     string `json:"use"`
-	Version string `json:"version,omitempty"`
-	Hold    bool   `json:"hold"`
+	Name        string `json:"name"`
+	Use         string `json:"use"`
+	Version     string `json:"version,omitempty"`
+	Hold        bool   `json:"hold"`
+	Description string `json:"description,omitempty"`
+	// Source is where it comes from (a `use:`/`source:` value); Official is
+	// whether that's the official registry alias.
+	Source   string `json:"source,omitempty"`
+	Official bool   `json:"official"`
+	// Pinned is whether the config names an exact version/ref rather than
+	// tracking (floating).
+	Pinned bool `json:"pinned"`
+	// Contents is what it ships, by kind and count (workflows, triggers,
+	// bot_templates, …) — the manifest's own ManifestContents.
+	Contents map[string]int `json:"contents,omitempty"`
+	// TriggersArmed/TriggersTotal: how many of its shipped triggers this
+	// instance has armed (automation on) versus shipped disarmed (off).
+	TriggersArmed int `json:"triggers_armed"`
+	TriggersTotal int `json:"triggers_total"`
+	// Dormant is true when a connector role the pack requires has nothing it
+	// could be bound to yet (no candidate connector exists); Why names the
+	// role in plain words for the "needs you" amber treatment.
+	Dormant bool   `json:"dormant"`
+	Why     string `json:"why,omitempty"`
+	// Vendored is false when the instance is in config but its manifest
+	// hasn't been fetched yet (`conductor init` pending) — everything above
+	// but Name/Use/Version/Hold is then unavailable.
+	Vendored bool `json:"vendored"`
+}
+
+// CatalogResponse is GET /api/v1/packs/catalog — the Packs → Browse tab's
+// marketplace grid: every pack the registry (official, or a configured one)
+// and this config's own installed packs offer, searched and deduplicated.
+// Mirrors config.CatalogResult; registry/config errors are plain-words
+// explanations for the catalog's error state, never raw for display.
+type CatalogResponse struct {
+	Packs               []CatalogPackInfo `json:"packs"`
+	HiddenTemplatePacks int               `json:"hidden_template_packs"`
+	RegistryProblems    []string          `json:"registry_problems,omitempty"`
+	RegistryError       string            `json:"registry_error,omitempty"`
+	ConfigError         string            `json:"config_error,omitempty"`
+}
+
+// CatalogPackInfo is one catalog entry (installed or not).
+type CatalogPackInfo struct {
+	Name         string         `json:"name"`
+	Version      string         `json:"version"`
+	Description  string         `json:"description"`
+	Contents     map[string]int `json:"contents,omitempty"`
+	TemplateOnly bool           `json:"template_only"`
+	Installed    bool           `json:"installed"`
+	Instance     string         `json:"pack_instance,omitempty"`
+	Official     bool           `json:"official"`
+	Source       string         `json:"source,omitempty"`
+	// Install is the packs: block that installs it (empty for an already-
+	// installed pack) — shown in the Details view, and what Add reviews.
+	Install string `json:"install,omitempty"`
+}
+
+// PackReviewRequest is POST /api/v1/packs/review: fetch a pack source (a
+// registry's `install` value, or any owner/repo, git URL or local ./path)
+// and build its install review, without staging anything.
+type PackReviewRequest struct {
+	Source string `json:"source"`
+}
+
+// PackReviewResponse is what the Add dialog shows: what the pack brings, what
+// it may do, and what it needs bound — plus the suggested instance name and
+// the packs:<instance> block Add stages verbatim through the normal config
+// staging endpoint (POST /api/v1/config/stage) when the operator confirms.
+type PackReviewResponse struct {
+	Name        string              `json:"name"`
+	Version     string              `json:"version"`
+	Description string              `json:"description"`
+	Connectors  []string            `json:"connectors,omitempty"`
+	Stores      []string            `json:"stores,omitempty"`
+	Secrets     []string            `json:"secrets,omitempty"`
+	Grants      []PackReviewGrant   `json:"grants,omitempty"`
+	Triggers    []PackReviewTrigger `json:"triggers,omitempty"`
+	Instance    string              `json:"instance"`
+	ConfigValue map[string]any      `json:"config_value"`
+}
+
+// PackReviewGrant is one step's skill request (what it may do).
+type PackReviewGrant struct {
+	Where   string   `json:"where"`
+	Verbs   []string `json:"verbs,omitempty"`
+	Secrets []string `json:"secrets,omitempty"`
+}
+
+// PackReviewTrigger is one trigger the pack ships disarmed.
+type PackReviewTrigger struct {
+	Name string `json:"name"`
+	On   string `json:"on,omitempty"`
 }
 
 // PackManifestResponse is GET /api/v1/packs/{name}/manifest: the pack's guided

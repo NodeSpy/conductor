@@ -178,6 +178,54 @@ func RegistryPacks(registry, dir string, official bool) ([]PackSummary, []string
 	return out, problems
 }
 
+// CatalogResult is the pack catalog: installed packs then the registry's,
+// filtered — `conductor pack search`'s own return shape, shared with the
+// dashboard's Packs → Browse tab so core carries no pack-specific rendering,
+// only this generic read model.
+type CatalogResult struct {
+	Packs               []PackSummary `json:"packs"`
+	HiddenTemplatePacks int           `json:"hidden_template_packs"`
+	RegistryProblems    []string      `json:"registry_problems,omitempty"`
+	RegistryError       string        `json:"registry_error,omitempty"`
+	ConfigError         string        `json:"config_error,omitempty"`
+}
+
+// PackCatalog lists the packs a config already has installed, then (unless
+// installedOnly) the registry's — the official one by default, or the one
+// named by registry (a directory or a git source, as RegistryDir resolves
+// it) — filtered by search and deduplicated against what's installed. It is
+// the one place this logic lives: `conductor pack search` and the dashboard's
+// catalog read model both call it.
+func PackCatalog(cfgPath, search, registry string, installedOnly, includeTemplates bool) CatalogResult {
+	var out CatalogResult
+	var all []PackSummary
+	installed := map[string]bool{}
+	if cfg, err := Load(cfgPath); err == nil {
+		all = cfg.InstalledPacks()
+		for _, p := range all {
+			installed[p.Name] = true
+		}
+	} else {
+		out.ConfigError = err.Error()
+	}
+	if !installedOnly {
+		dir, official, err := RegistryDir(registry)
+		if err != nil {
+			out.RegistryError = err.Error()
+		} else {
+			reg, problems := RegistryPacks(registry, dir, official)
+			for _, p := range reg {
+				if !installed[p.Name] {
+					all = append(all, p)
+				}
+			}
+			out.RegistryProblems = problems
+		}
+	}
+	out.Packs, out.HiddenTemplatePacks = FilterPacks(all, search, includeTemplates)
+	return out
+}
+
 // FilterPacks keeps the packs a search matches (every word, in the name or
 // description or a kind), and template-only packs only when asked.
 func FilterPacks(ps []PackSummary, search string, includeTemplates bool) (kept []PackSummary, hiddenTemplates int) {

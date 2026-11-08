@@ -26,6 +26,26 @@ import (
 // renders as staged JSON (no raw-YAML editor exists anywhere in this port,
 // Config included; see the Config screen's own gap note).
 
+// connectorKindMap groups a config tree's connector instance names by their
+// `use:` kind (its base name, before any `@version`) — what a pack's
+// requires.connectors role names, and what the dashboard offers as
+// candidates to bind a role to, or checks to tell a dormant pack from a
+// working one.
+func connectorKindMap(tree map[string]any) map[string][]string {
+	connByKind := map[string][]string{}
+	if m, ok := tree["connectors"].(map[string]any); ok {
+		for _, cname := range sortedKeys(m) {
+			use := ""
+			if e, ok := m[cname].(map[string]any); ok {
+				use, _ = e["use"].(string)
+			}
+			kind, _ := splitUse(use)
+			connByKind[kind] = append(connByKind[kind], cname)
+		}
+	}
+	return connByKind
+}
+
 func (s *Server) handlePackManifest(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	tree := s.liveTree()
@@ -57,17 +77,7 @@ func (s *Server) handlePackManifest(w http.ResponseWriter, r *http.Request) {
 	boundSecret, _ := inst["secrets"].(map[string]any)
 	boundHandoff, _ := inst["handoffs"].(map[string]any)
 
-	connByKind := map[string][]string{}
-	if m, ok := tree["connectors"].(map[string]any); ok {
-		for _, cname := range sortedKeys(m) {
-			use := ""
-			if e, ok := m[cname].(map[string]any); ok {
-				use, _ = e["use"].(string)
-			}
-			kind, _ := splitUse(use)
-			connByKind[kind] = append(connByKind[kind], cname)
-		}
-	}
+	connByKind := connectorKindMap(tree)
 	for _, role := range man.Pack.Requires.ConnectorNames() {
 		role := role
 		ri := api.PackRoleInfo{Name: role, Kind: "connector"}

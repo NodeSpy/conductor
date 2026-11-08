@@ -135,6 +135,13 @@ type Deps struct {
 	// screencast and takeover, personal details, payment cards and purchase
 	// approvals. Nil when no browser runs on this daemon.
 	Browser Browser
+
+	// PackRegistry overrides the pack catalog's registry source (a directory
+	// or a git source, as `conductor pack search --registry` takes it); empty
+	// means the official registry. The Packs → Browse tab and
+	// GET /api/v1/packs/catalog read through this — same knob, same
+	// config.PackCatalog the CLI uses.
+	PackRegistry string
 }
 
 // StepupEvidence re-exports auth.StepupEvidence so a Deps caller (the daemon)
@@ -223,6 +230,8 @@ func (s *Server) routes() {
 	// Section read models.
 	s.mux.HandleFunc("GET /api/v1/secrets", s.handleSecrets)
 	s.mux.HandleFunc("GET /api/v1/packs", s.handlePacks)
+	s.mux.HandleFunc("GET /api/v1/packs/catalog", s.handlePacksCatalog)
+	s.mux.HandleFunc("POST /api/v1/packs/review", s.handlePackReview)
 	s.mux.HandleFunc("GET /api/v1/packs/{name}/manifest", s.handlePackManifest)
 	s.mux.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
 	s.mux.HandleFunc("GET /api/v1/connections", s.handleConnections)

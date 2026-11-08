@@ -139,41 +139,39 @@ func cmdPackAdd(args []string) error {
 	if err != nil {
 		return err
 	}
-	m := man.Pack
-	fmt.Printf("%s v%s — %s\n", m.Name, m.Version, m.Description)
+	rv := config.BuildPackReview(man)
+	fmt.Printf("%s v%s — %s\n", rv.Name, rv.Version, rv.Description)
 	fmt.Println("\ninstall review:")
-	man.WalkPackSteps(func(where string, st *config.Step) {
-		if s := st.Skill; s != nil && (len(s.Verbs) > 0 || len(s.AllowSecrets) > 0) {
-			fmt.Printf("  step %s", where)
-			if len(s.Verbs) > 0 {
-				fmt.Printf("  !! skill: %s", strings.Join(s.Verbs, ", "))
-			}
-			if len(s.AllowSecrets) > 0 {
-				fmt.Printf("  !! secrets: %s", strings.Join(s.AllowSecrets, ", "))
-			}
-			fmt.Println()
+	for _, g := range rv.Grants {
+		fmt.Printf("  step %s", g.Where)
+		if len(g.Verbs) > 0 {
+			fmt.Printf("  !! skill: %s", strings.Join(g.Verbs, ", "))
 		}
-	})
-	for _, tr := range man.Triggers {
+		if len(g.Secrets) > 0 {
+			fmt.Printf("  !! secrets: %s", strings.Join(g.Secrets, ", "))
+		}
+		fmt.Println()
+	}
+	for _, tr := range rv.Triggers {
 		fmt.Printf("  ships trigger %q on:%s (disarmed — you arm it)\n", tr.Name, tr.On)
 	}
 	// Ready-to-paste block.
 	fmt.Println("\nadd to your config's packs: block, then `conductor init`:")
-	inst := m.Name
+	inst := rv.Name
 	fmt.Printf("  %s:\n    source: %s\n", inst, source)
-	if m.Version != "" {
-		fmt.Printf("    version: %s\n", m.Version)
+	if rv.Version != "" {
+		fmt.Printf("    version: %s\n", rv.Version)
 	}
-	for _, c := range m.Requires.Connectors.Names() {
+	for _, c := range rv.Connectors {
 		fmt.Printf("    connectors: { %s: <your-connector> }\n", c)
 	}
-	for _, s := range m.Requires.Stores {
+	for _, s := range rv.Stores {
 		fmt.Printf("    stores: { %s: <your-store> }\n", s)
 	}
-	for name := range m.Requires.Secrets {
+	for _, name := range rv.Secrets {
 		fmt.Printf("    secrets: { %s: <your-secret-or-vault-ref> }\n", name)
 	}
-	for _, tr := range man.Triggers {
+	for _, tr := range rv.Triggers {
 		fmt.Printf("    triggers: { %s: { enabled: true, repos: [your-org/repo] } }\n", tr.Name)
 	}
 	return nil
@@ -383,36 +381,20 @@ func cmdPackSearch(args []string) error {
 // op serve: the installed packs, then the registry's (installedOnly: just
 // the installed), filtered.
 func packCatalog(cfgPath, search, registry string, installedOnly, includeTemplates bool) (map[string]any, error) {
-	out := map[string]any{}
-	var all []config.PackSummary
-	installed := map[string]bool{}
-	if cfg, err := config.Load(cfgPath); err == nil {
-		all = cfg.InstalledPacks()
-		for _, p := range all {
-			installed[p.Name] = true
-		}
-	} else {
-		out["config_error"] = err.Error()
+	r := config.PackCatalog(cfgPath, search, registry, installedOnly, includeTemplates)
+	out := map[string]any{
+		"packs":                 toJSONList(r.Packs),
+		"hidden_template_packs": r.HiddenTemplatePacks,
 	}
-	if !installedOnly {
-		dir, official, err := config.RegistryDir(registry)
-		if err != nil {
-			out["registry_error"] = err.Error()
-		} else {
-			reg, problems := config.RegistryPacks(registry, dir, official)
-			for _, p := range reg {
-				if !installed[p.Name] {
-					all = append(all, p)
-				}
-			}
-			if len(problems) > 0 {
-				out["registry_problems"] = problems
-			}
-		}
+	if len(r.RegistryProblems) > 0 {
+		out["registry_problems"] = r.RegistryProblems
 	}
-	kept, hidden := config.FilterPacks(all, search, includeTemplates)
-	out["packs"] = toJSONList(kept)
-	out["hidden_template_packs"] = hidden
+	if r.RegistryError != "" {
+		out["registry_error"] = r.RegistryError
+	}
+	if r.ConfigError != "" {
+		out["config_error"] = r.ConfigError
+	}
 	return out, nil
 }
 

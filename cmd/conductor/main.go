@@ -1228,6 +1228,10 @@ func cmdRun(args []string) error {
 			// payment cards and purchase approvals, over the same control layer the
 			// CLI uses. Reads empty when no browser is configured.
 			Browser: dashboardBrowser{},
+			// Packs → Browse's registry override (CONDUCTOR_PACK_REGISTRY),
+			// the same knob `conductor pack search --registry` takes; empty
+			// means the official registry.
+			PackRegistry: os.Getenv("CONDUCTOR_PACK_REGISTRY"),
 		})
 		if err := dash.Start(ctx); err != nil {
 			logf("dashboard: not started: %v", err)
