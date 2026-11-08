@@ -142,7 +142,7 @@ function index(pages: PaletteItem[], d: Data): Entry[] {
   add('action', 'Connect a service (Slack, GitHub…)', to('connections?add=1'), { icon: 'plus', words: 'connector connection plugin slack github pagerduty add integrate' })
   add('action', status.value?.paused ? 'Resume automation' : 'Pause all automation', () => void togglePause(), { icon: 'pause', words: 'stop halt dispatch emergency kill' })
   const pending = staged.value.length
-  add('action', 'Review and apply staged changes', to('system/config'), { icon: 'check', words: 'apply diff staged', hint: pending ? `${pending} staged` : 'nothing staged' })
+  add('action', 'Review and apply staged changes', to('system/config/apply'), { icon: 'check', words: 'apply diff staged', hint: pending ? `${pending} staged` : 'nothing staged' })
   add('action', 'Switch to the ' + (isDark() ? 'light' : 'dark') + ' theme', () => setTheme(isDark() ? 'light' : 'dark'), { icon: 'sun', words: 'theme dark light mode' })
   add('action', 'What can my bots do? (System → Safety)', to('system/safety'), { icon: 'shield', words: 'safety permissions tiers sandbox' })
   add('action', 'Keyboard shortcuts', () => (shortcutsOpen.value = true), { icon: 'keyboard', words: 'keys help ?' })

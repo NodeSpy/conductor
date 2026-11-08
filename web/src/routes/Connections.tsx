@@ -106,7 +106,7 @@ export function Connections(): JSX.Element {
   const hosts = data?.hosts ?? []
 
   // After staging, go to the review (UI.staged): the change is applied there.
-  const staged1 = () => go('system/config')
+  const staged1 = () => go('system/config/apply')
   const open = (el: EventTarget | null, label: string, items: MenuItem[]) => setMenu({ el: el as HTMLElement, items, label })
 
   // ---------- Connections ----------
@@ -211,7 +211,7 @@ export function Connections(): JSX.Element {
         <div class="item bot-card" style="border-style:dashed" key={c.id} data-staged={c.path[1]}>
           <span class="conn-name"><b>{c.path[1]}</b> <span class="item-id">{coll === 'hosts' ? (c.value as { host?: string })?.host : String((c.value as { use?: string })?.use ?? '').split('@')[0]}</span></span>
           <span class="grow"><span class="tag" data-s="run">new · staged</span> <span class="muted small">Not live until you apply it.</span></span>
-          <a class="btn sm" href="#/system/config">Review</a>
+          <a class="btn sm" href="#/system/config/apply">Review</a>
         </div>
       ))
 
