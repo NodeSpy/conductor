@@ -20,15 +20,11 @@ export function TabsBar({
   active,
   ariaLabel,
   className,
-  compact,
 }: {
   items: TabItem[]
   active: string
   ariaLabel: string
   className?: string
-  /** When the row overflows, keep only the first tab and the active one
-      (then More), rather than as many as fit. */
-  compact?: boolean
 }): JSX.Element {
   const ref = useRef<HTMLElement>(null)
   const ghost = useRef<HTMLSpanElement>(null)
@@ -46,28 +42,27 @@ export function TabsBar({
       const anchors = Array.from(el.querySelectorAll<HTMLAnchorElement>(':scope > a'))
       // Measure every tab at its natural width: show them all first.
       anchors.forEach((a) => a.classList.remove('tab-over'))
-      const cs = getComputedStyle(el)
-      const gap = parseFloat(cs.columnGap) || 0
-      const inner = el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0)
-      const widths = anchors.map((a) => a.getBoundingClientRect().width)
-      const total = widths.reduce((x, w) => x + w, 0) + gap * Math.max(0, widths.length - 1)
+      // The prototype's UI.fitTabs (ui.js), step for step: nothing to do when the row fits or has under
+      // three tabs; else keep tabs left to right while they fit the row less 76px for "More ▾" (a
+      // shorter one after a long one may still fit), then make sure the active tab is among them.
       let overSet = new Set<number>()
-      if (anchors.length > 1 && total > inner + 0.5) {
-        // Room for the tabs once "More ▾" (its real width, measured on an
-        // always-rendered ghost) and its gap are reserved.
-        const room = inner - (ghost.current?.getBoundingClientRect().width ?? 64) - gap
-        const activeIdx = items.findIndex((t) => t.id === active)
-        const sumOf = (ks: number[]) => ks.reduce((x, k) => x + widths[k], 0) + gap * Math.max(0, ks.length - 1)
+      if (el.scrollWidth > el.clientWidth + 1 && anchors.length >= 3) {
+        const gap = parseFloat(getComputedStyle(el).columnGap) || 16
+        const room = el.clientWidth - 76
+        const w = anchors.map((a) => a.getBoundingClientRect().width)
+        const on = items.findIndex((t) => t.id === active)
+        let used = 0
         const keep: number[] = []
-        for (let k = 0; k < widths.length; k++) {
-          if (compact && k > 0) break
-          // a tab that doesn't fit moves to More; a shorter one after it may still fit
-          if (sumOf([...keep, k]) <= room + 1) keep.push(k)
-        }
-        if (activeIdx >= 0 && !keep.includes(activeIdx)) {
-          while (keep.length && sumOf([...keep, activeIdx]) > room + 1) keep.pop()
-          keep.push(activeIdx)
-          keep.sort((a, b) => a - b)
+        w.forEach((wi, i) => {
+          if (used + wi <= room) {
+            keep.push(i)
+            used += wi + gap
+          }
+        })
+        if (on >= 0 && !keep.includes(on)) {
+          while (keep.length && keep.reduce((x, i) => x + w[i] + gap, 0) + w[on] > room) keep.pop()
+          keep.push(on)
+          keep.sort((x, y) => x - y)
         }
         overSet = new Set(anchors.map((_, k) => k).filter((k) => !keep.includes(k)))
       }
@@ -91,7 +86,7 @@ export function TabsBar({
       window.removeEventListener('resize', later)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig, compact])
+  }, [sig])
 
   const overItems = items.filter((_, i) => over.has(i))
 

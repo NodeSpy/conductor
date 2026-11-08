@@ -254,10 +254,13 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
         />
       ) : null}
       <div class="dl-actions">
-        <a class="btn secondary" href={`#/tickets?new=1&assignee=${encodeURIComponent('team:' + name)}`} data-testid="team-new-ticket">
-          <Icon name="plus" />
-          New ticket
-        </a>
+        {/* the Tickets tab has its own "New ticket for the team" */}
+        {active === 'tickets' ? null : (
+          <a class="btn secondary" href={`#/tickets?new=1&assignee=${encodeURIComponent('team:' + name)}`} data-testid="team-new-ticket">
+            <Icon name="plus" />
+            New ticket
+          </a>
+        )}
         <button class="btn secondary ph-hide" type="button" onClick={routeHere} data-testid="team-deliver">
           <Icon name="send" />
           Route an event here
@@ -268,7 +271,6 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
         </button>
       </div>
       <TabsBar
-        compact
         ariaLabel="Team"
         active={active}
         items={[
