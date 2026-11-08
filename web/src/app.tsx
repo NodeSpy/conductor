@@ -15,6 +15,7 @@ import { WorkflowDetail } from './routes/WorkflowDetail'
 import { Builder } from './routes/Builder'
 import { Bots } from './routes/Bots'
 import { BotDetail } from './routes/BotDetail'
+import { NewBotWizard } from './routes/NewBotWizard'
 import { TeamDetail } from './routes/TeamDetail'
 import { Chat } from './routes/Chat'
 import { Tickets } from './routes/Tickets'
@@ -128,6 +129,16 @@ function Screen(): JSX.Element {
     case 'bots':
       // #/bots, #/bots/<bot>[/<tab>], #/bots/<bot>/proposals/<id> (the approval)
       if (seg(1) && seg(2) === 'proposals' && seg(3)) return <Approval bot={seg(1)} id={seg(3)} />
+      // #/bots/new[?team=<t>]: the guided New bot, a sheet over the Bots page
+      if (seg(1) === 'new' && !seg(2))
+        return (
+          <>
+            <div class="nb-under" aria-hidden="true" {...({ inert: true } as Record<string, unknown>)}>
+              <Bots />
+            </div>
+            <NewBotWizard />
+          </>
+        )
       if (seg(1)) return <BotDetail name={seg(1)} tab={seg(2)} />
       return <Bots />
     case 'teams':

@@ -1,0 +1,4 @@
+/* Bots list: the prototype's phone stack gap (daylight.css: --gap-stack 14px, --control-h 44px
+   under 720px). The shared `html { --gap-stack: 14px }` override loses to
+   tokens.css's `:root` rule, so the list sets it on itself. */
+@media (max-width: 720px) { .bot-list { --gap-stack: 14px; --control-h: 44px; } }
