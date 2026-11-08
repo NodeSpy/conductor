@@ -38,6 +38,12 @@ export function isFailedRun(r: { status: string }): boolean {
   return r.status === 'failed' || r.status === 'stopped'
 }
 
+/** The chart bucket a run counts in, the one definition Home and Activity share (UI.runBucket + FAILED). */
+export type RunBucket = 'ok' | 'fail' | 'run' | 'other'
+export function runBucket(r: { status: string }): RunBucket {
+  return isFailedRun(r) ? 'fail' : r.status === 'ok' ? 'ok' : r.status === 'running' ? 'run' : 'other'
+}
+
 /** The status vocabulary for a run (UI.runS + UI.runWord). */
 export function runMark(status: string): { s: string; word: string } {
   switch (status) {

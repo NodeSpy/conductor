@@ -317,7 +317,17 @@ function RunPage({ id }: { id: string }): JSX.Element {
                 </button>
               )
             ) : null}
-            {more.length ? <MoreButton items={more} /> : null}
+            {/* with no recommended next step, its few choices are plain buttons, never a lone ⋯ */}
+            {!rec1 && more.length ? (
+              more.map((it) => it === '-' ? null : (
+                <button class="btn secondary" type="button" onClick={() => it.onClick?.()}>
+                  {it.icon ? <Icon name={it.icon} /> : null}
+                  {it.label}
+                </button>
+              ))
+            ) : more.length ? (
+              <MoreButton items={more} />
+            ) : null}
             {rec1 && rec1.why ? <p class="dl-sub run-next-why">{rec1.why}</p> : null}
           </>
         )}

@@ -21,7 +21,7 @@ import { ConfirmModal } from '../components/FormModal'
 import { toast, ToastHost } from '../components/ChatBits'
 import { Icon } from '../components/Icon'
 import { emptyFilter, matchRun, rangeMinutes, hasAnyFilter, botOfRun, STATUSES, TIME_RANGES, type FilterState } from '../lib/filter'
-import { agoText, isFailedRun, plainError, runDur, runMark, runTargetWords } from '../components/RunBits'
+import { agoText, isFailedRun, plainError, runBucket, runDur, runMark, runTargetWords } from '../components/RunBits'
 import { hm, runningFor } from '../lib/runwords'
 import { api } from '../api/client'
 import { humanError } from '../api/errors'
@@ -480,7 +480,7 @@ const SEG: [keyof Per, string, string][] = [
   ['run', 'hb-run', 'Running'],
   ['fail', 'hb-fail', 'Failed'],
 ]
-const bucketOf = (r: RunSummary): keyof Per => (isFailedRun(r) ? 'fail' : r.status === 'ok' ? 'ok' : r.status === 'running' ? 'run' : 'other')
+const bucketOf = (r: RunSummary): keyof Per => runBucket(r)
 const failedAt = (r: RunSummary) => hm(r.finished || r.started)
 
 // Strip is the runs-per-period chart (runs.js strip + overview.js UI.stackBars

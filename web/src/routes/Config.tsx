@@ -562,17 +562,21 @@ function ConfigApply(): JSX.Element {
 function StagedItem({ c, widens }: { c: ConfigChange; widens: string[] }): JSX.Element {
   const path = c.path.join('.')
   const structured = typeof c.value === 'object' && c.value !== null
+  const said = c.summary || (c.delete ? `Remove ${path}` : structured ? `Set ${path}` : `Set ${path} to ${String(c.value)}`)
   return (
-    <div class="item" style="align-items:flex-start">
+    <div class="item staged-item" style="align-items:flex-start">
       <StatusMark s={c.delete ? 'fail' : 'run'} mkOnly />
       <div class="grow">
-        <div class="small"><b><Chipped text={c.summary || (c.delete ? `Remove ${path}` : structured ? `Set ${path}` : `Set ${path} to ${String(c.value)}`)} keys={[path]} /></b></div>
-        <div class="mono tiny muted">{path} · {c.delete ? 'remove' : 'edit'}</div>
+        <div class="small"><b><Chipped text={said} keys={[path]} /></b></div>
+        {/* the key once: only when the summary above doesn't already name it */}
+        {said.includes(path) ? null : <div class="tiny muted"><code>{path}</code></div>}
         {structured && !c.delete ? <pre class="staged-val staged-tree mono tiny" data-testid="staged-tree">{JSON.stringify(c.value, null, 2)}</pre> : null}
         {widens.map((w) => <span class="tag" data-s="wait"><Icon name="warn" /> widens: {w}</span>)}
       </div>
-      <a class="btn sm ghost" href={sectionHref(c.path[0])}><Icon name="edit" />Edit</a>
-      <button class="btn sm ghost" type="button" aria-label={`Discard ${c.summary || path}`} onClick={() => void unstage(c.id)}><Icon name="x" />Discard</button>
+      <div class="staged-acts">
+        <a class="btn sm ghost" href={sectionHref(c.path[0])} aria-label={`Edit ${path}`}><Icon name="edit" /><span class="staged-lbl">Edit</span></a>
+        <button class="btn sm ghost" type="button" aria-label={`Discard ${c.summary || path}`} onClick={() => void unstage(c.id)}><Icon name="x" /><span class="staged-lbl">Discard</span></button>
+      </div>
     </div>
   )
 }

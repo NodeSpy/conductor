@@ -33,6 +33,7 @@ import { gsHidden, setGsHidden } from '../lib/gs'
 import { toast, ToastHost } from '../components/ChatBits'
 import { hm, runningFor, runTarget, runTitle } from '../lib/runwords'
 import { Chipped } from '../components/Chips'
+import { runBucket } from '../components/RunBits'
 
 const HOUR = 3_600_000
 
@@ -254,23 +255,16 @@ function RunsCard({ runs: all }: { runs: RunSummary[] }): JSX.Element {
     const ago2 = (now - startedMs(r)) / 60000
     if (ago2 > span) return
     const i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(ago2 / bucketMin)))
-    const b = buckets[i]
-    if (r.status === 'ok') b.ok++
-    else if (r.status === 'failed') b.fail++
-    else if (r.status === 'running') b.run++
-    else b.other++
+    buckets[i][runBucket(r)]++
   })
 
   const max = Math.max(1, ...buckets.map((b) => b.ok + b.fail + b.run + b.other))
   const total = rs.length
   const ok = rs.filter((r) => r.status === 'ok').length
-  const counts = {
-    ok,
-    fail: rs.filter((r) => r.status === 'failed').length,
-    run: rs.filter((r) => r.status === 'running').length,
-    other: rs.filter((r) => r.status === 'retried').length,
-  }
-  const fails = rs.filter((r) => r.status === 'failed').sort((a, b) => startedMs(b) - startedMs(a))
+  // one definition with Activity's chart (runBucket)
+  const counts = { ok: 0, fail: 0, run: 0, other: 0 }
+  rs.forEach((r) => counts[runBucket(r)]++)
+  const fails = rs.filter((r) => runBucket(r) === 'fail').sort((a, b) => startedMs(b) - startedMs(a))
   const w = 300
   const h = 96
   const base = h - 17

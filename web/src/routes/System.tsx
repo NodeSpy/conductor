@@ -174,7 +174,7 @@ function Safety(): JSX.Element {
 
   return (
     <>
-      <div class="dl-phead">
+      <div class="dl-phead sf-head">
         <div>
           <h1>Safety</h1>
           <p class="dl-lead">
@@ -283,7 +283,7 @@ function Safety(): JSX.Element {
             <header class="dl-ch"><h2>Containers</h2></header>
             <p class="dl-sub">No containers are running.</p>
           </section>
-          <details class="dl-card dl-tech-d acc-tech">
+          <details class="dl-card dl-tech-d acc-tech sf-tech">
             <summary><Icon name="chev" />Details</summary>
             <dl class="dl-facts">
               <dt>Agent sandbox</dt><dd class="mono">{s?.sandbox_agents || 'on (the default)'}</dd>
@@ -398,7 +398,7 @@ function BotMayDoPanel({ b, labels }: { b: BotSummary; labels: Record<string, st
       </div>
       <div class="panel-body">
         <div class="dl-can compact">
-          {b.shadow ? <p class="dl-sub">In practice mode: even what it does on its own is only recorded, never done.</p> : null}
+          {b.shadow ? <p class="dl-sub sf-shadow">In practice mode: even what it does on its own is only recorded, never done.</p> : null}
           <div class="dl-can-grid">
             {grp('Does on its own', 'ok', does, 'Nothing: it asks first')}
             {grp('Asks you first', 'ember', asks, 'Nothing needs your approval')}

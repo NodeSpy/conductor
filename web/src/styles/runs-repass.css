@@ -22,3 +22,9 @@
 /* a failed run's reason breaks inside a long unbroken token ({{.step.field}}),
    so the row's time stays inside its card on a phone */
 .dl-runs-phone .reason, .dl-tbl .reason { overflow-wrap: anywhere; }
+
+/* Step durations: the highlighted row keeps a little room at its right edge,
+   and on a phone the duration stays on the step's first line, at the right
+   (the empty spacer cell would otherwise push it to a row of its own). */
+.dl-tree .tl.on { padding-right: 8px; }
+@media (max-width: 720px) { .dl-tree .tl > span:empty { display: none; } }
