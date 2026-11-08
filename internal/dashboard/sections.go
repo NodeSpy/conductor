@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/dashboard/api"
 	"github.com/NodeSpy/conductor/internal/dashboard/auth"
 	"github.com/NodeSpy/conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/vaults"
 )
 
 // Section reads (design §5.4): one derived shape per screen, read from the live
@@ -27,15 +29,40 @@ var builtinPlugins = map[string]bool{
 func (s *Server) handleSecrets(w http.ResponseWriter, r *http.Request) {
 	tree := s.liveTree()
 	var resp api.SecretsResponse
+	var listed []api.SecretInfo
 
-	if vaults, ok := tree["vaults"].(map[string]any); ok {
-		names := sortedKeys(vaults)
+	if vts, ok := tree["vaults"].(map[string]any); ok {
+		names := sortedKeys(vts)
 		for _, name := range names {
 			vi := api.VaultInfo{Name: name}
-			if m, ok := vaults[name].(map[string]any); ok {
+			if m, ok := vts[name].(map[string]any); ok {
 				if t, ok := m["type"].(string); ok {
 					vi.Type = t
 				}
+			}
+			// Live reachability comes from the running daemon's own vault
+			// registry (internal/vaults), the one every {{ vault ... }}
+			// resolution goes through; nothing is opened here on the side.
+			vi.Writable = writableVaultTypes[vi.Type]
+			if reason := vaults.Broken(name); reason != "" {
+				vi.Status, vi.Reason = "fail", reason
+			} else if b, err := vaults.Use(name); err == nil {
+				vi.Status = "ok"
+				_, vi.Writable = b.(vaults.Writer)
+				// Entry NAMES only (never a value), for the types that list.
+				if l, ok := b.(vaults.Lister); ok {
+					ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+					keys, lerr := l.List(ctx)
+					cancel()
+					if lerr == nil {
+						vi.Listed = true
+						for _, k := range keys {
+							listed = append(listed, api.SecretInfo{Name: k, Ref: name + "/" + k, Vault: name, Key: k, Stored: true})
+						}
+					}
+				}
+			} else {
+				vi.Status = "unknown"
 			}
 			resp.Vaults = append(resp.Vaults, vi)
 		}
@@ -46,6 +73,9 @@ func (s *Server) handleSecrets(w http.ResponseWriter, r *http.Request) {
 		for _, name := range names {
 			ref, _ := secs[name].(string)
 			si := api.SecretInfo{Name: name, Ref: ref}
+			if v, k, ok := secrets.ParseVaultRef(ref); ok {
+				si.Vault, si.Key = v, k
+			}
 			// Where is ${settings.<name>}-style or the secret name referenced?
 			si.UsedBy = scanRefs(tree, "${secrets."+name+"}")
 			resp.Secrets = append(resp.Secrets, si)
@@ -58,8 +88,20 @@ func (s *Server) handleSecrets(w http.ResponseWriter, r *http.Request) {
 	// internal/secrets.ParseVaultRef recognizes — a whole-field reference, the
 	// documented form for credentials) so those show here too, under the vault
 	// entry's own key name, with every path that names it.
-	for _, vr := range scanVaultRefs(tree) {
+	refs := scanVaultRefs(tree)
+	byRef := map[string]int{}
+	for _, vr := range refs {
+		byRef[vr.Ref] = len(resp.Secrets)
 		resp.Secrets = append(resp.Secrets, vr)
+	}
+	// A listed entry merges with the references to it; one nothing uses yet
+	// still shows (so a value just stored here appears under its vault).
+	for _, le := range listed {
+		if i, ok := byRef[le.Ref]; ok {
+			resp.Secrets[i].Stored = true
+			continue
+		}
+		resp.Secrets = append(resp.Secrets, le)
 	}
 	sort.Slice(resp.Secrets, func(i, j int) bool {
 		if resp.Secrets[i].Name != resp.Secrets[j].Name {
@@ -76,6 +118,10 @@ func (s *Server) handleSecrets(w http.ResponseWriter, r *http.Request) {
 // returns one SecretInfo per distinct vault/key pair, named by its key, with
 // every dotted path that references it. The vault's actual value is never
 // read: this only recognizes the reference syntax in the config text itself.
+// writableVaultTypes are the vault types whose backend takes a value write
+// (vaults.Writer), for a vault the daemon hasn't opened.
+var writableVaultTypes = map[string]bool{"conductor": true, "pass": true, "hashicorp": true}
+
 func scanVaultRefs(tree any) []api.SecretInfo {
 	type key struct{ vault, name string }
 	usedBy := map[key][]string{}
@@ -106,7 +152,7 @@ func scanVaultRefs(tree any) []api.SecretInfo {
 	for _, k := range order {
 		by := usedBy[k]
 		sort.Strings(by)
-		out = append(out, api.SecretInfo{Name: k.name, Ref: k.vault + "/" + k.name, UsedBy: by})
+		out = append(out, api.SecretInfo{Name: k.name, Ref: k.vault + "/" + k.name, Vault: k.vault, Key: k.name, UsedBy: by})
 	}
 	return out
 }
@@ -596,6 +642,7 @@ func envVars(tree any) []api.EnvVarInfo {
 			} else {
 				ev.Literal = true
 			}
+			ev.UsedBy = scanRefs(t, "${env."+k+"}")
 			out = append(out, ev)
 		}
 	}

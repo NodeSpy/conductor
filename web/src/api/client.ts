@@ -12,6 +12,7 @@ import type {
   HistoryDiffResponse,
   StageRequest,
   SecretsResponse,
+  SecretInfo,
   PacksResponse,
   PackManifestResponse,
   PluginsResponse,
@@ -123,6 +124,46 @@ async function installUpdate(version: string): Promise<{ installed: string }> {
   return handle<{ installed: string }>(res)
 }
 
+// postStepup POSTs a body; a 403 carrying a step-up challenge is confirmed
+// (passkey or SSH, described by the server) and the request sent once more
+// with the token.
+async function postStepup<T>(path: string, body: unknown, what: string): Promise<T> {
+  const send = (stepup?: string) => {
+    const csrf = authState.value.csrf
+    return fetch(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(csrf ? { 'X-Conductor-CSRF': csrf } : {}),
+        ...(stepup ? { 'X-Conductor-Stepup': stepup } : {}),
+      },
+      body: JSON.stringify(body),
+    })
+  }
+  let res = await send()
+  if (res.status === 403) {
+    const b = (await readJSON(res.clone()).catch(() => ({}))) as { stepup?: { purpose: string; digest: string; description?: string } }
+    if (b.stepup) {
+      const token = await stepUp(b.stepup.purpose, b.stepup.digest, { what, description: b.stepup.description })
+      res = await send(token)
+    }
+  }
+  return handle<T>(res)
+}
+
+// writeSecret stores (or replaces) one vault entry's value. The value goes
+// to the daemon once and never comes back: the answer names the entry only.
+function writeSecret(vault: string, key: string, value: string): Promise<SecretInfo> {
+  return postStepup<SecretInfo>('/api/v1/secrets/write', { vault, key, value }, `Store ${vault}/${key}`)
+}
+
+// deleteSecret removes one entry from its vault (a step-up too).
+async function deleteSecret(vault: string, key: string): Promise<void> {
+  await postStepup<{ deleted: string }>('/api/v1/secrets/delete', { vault, key }, `Delete ${vault}/${key}`)
+}
+
 // handle reads an answer as data, or throws an ApiError worded for a person.
 function handle<T>(res: Response): Promise<T> {
   return readResponse<T>(res)
@@ -178,6 +219,8 @@ export const api = {
 
   // --- section reads ---
   secrets: () => getJSON<SecretsResponse>('/api/v1/secrets'),
+  writeSecret: (vault: string, key: string, value: string) => writeSecret(vault, key, value),
+  deleteSecret: (vault: string, key: string) => deleteSecret(vault, key),
   packs: () => getJSON<PacksResponse>('/api/v1/packs'),
   packManifest: (name: string) => getJSON<PackManifestResponse>('/api/v1/packs/' + encodeURIComponent(name) + '/manifest'),
   plugins: () => getJSON<PluginsResponse>('/api/v1/plugins'),

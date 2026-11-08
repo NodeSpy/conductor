@@ -413,10 +413,26 @@ type SecretsResponse struct {
 	Secrets []SecretInfo `json:"secrets"`
 }
 
-// VaultInfo is one named vault (values never rendered).
+// VaultInfo is one named vault (values never rendered), with its live
+// reachability from the running daemon's own vault registry (internal/vaults —
+// the same registry every connector and secret resolution uses) rather than
+// anything re-derived here.
 type VaultInfo struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
+	// Status is "ok" when the vault unlocked and is in the live registry,
+	// "fail" when it failed to unlock/build (Reason explains why), or
+	// "unknown" when the registry hasn't built it yet (e.g. config changed
+	// since the last reload).
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"` // set when Status is "fail"
+	// Writable reports whether this vault's backend accepts a value write
+	// (conductor, pass, hashicorp) as opposed to read-only (onepassword, file).
+	Writable bool `json:"writable"`
+	// Listed is true when the vault's entry names were read (names only,
+	// never values) and every stored entry is in Secrets; false when the
+	// type can't list or the vault isn't open.
+	Listed bool `json:"listed,omitempty"`
 }
 
 // SecretInfo is one top-level secret ref and its vault/key, with the config
@@ -424,7 +440,12 @@ type VaultInfo struct {
 type SecretInfo struct {
 	Name   string   `json:"name"`
 	Ref    string   `json:"ref"` // <vault>/<key>
+	Vault  string   `json:"vault"`
+	Key    string   `json:"key"`
 	UsedBy []string `json:"used_by,omitempty"`
+	// Stored is true when the entry's name was listed from its vault (the
+	// vault holds it); false for a reference found only in the config.
+	Stored bool `json:"stored,omitempty"`
 }
 
 // PacksResponse is GET /api/v1/packs.
@@ -551,6 +572,9 @@ type EnvVarInfo struct {
 	Scope   string `json:"scope"` // "runtime:<name>" | "host:<name>"
 	Ref     string `json:"ref,omitempty"`
 	Literal bool   `json:"literal,omitempty"`
+	// UsedBy is the dotted config paths that read this variable as
+	// ${env.<name>} (empty: declared but not read anywhere in config yet).
+	UsedBy []string `json:"used_by,omitempty"`
 }
 
 // SafetyInfo summarizes the live security posture for the System → Safety tab.
