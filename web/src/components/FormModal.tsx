@@ -12,7 +12,9 @@ import { Icon } from './Icon'
 export interface FormField {
   k: string
   label?: string
-  type?: 'string' | 'text' | 'enum' | 'seg'
+  type?: 'string' | 'text' | 'enum' | 'seg' | 'bool'
+  // on: a bool field's words beside its checkbox (UI.form fd.on); its value is 'true' or ''
+  on?: string
   req?: boolean
   readonly?: boolean
   mono?: boolean
@@ -208,6 +210,14 @@ function FieldRow({ f, v, err, set }: { f: FormField; v: string; err?: string; s
         </select>
       )
       break
+    case 'bool':
+      input = (
+        <label class="row small" style="min-height:30px">
+          <input type="checkbox" class="cbx" id={id} data-k={f.k} checked={v === 'true'} onChange={(e) => set((e.target as HTMLInputElement).checked ? 'true' : '')} />{' '}
+          {f.on || 'on'}
+        </label>
+      )
+      break
     case 'seg':
       input = (
         <div class="seg" role="group" aria-label={labelOf(f)}>
@@ -243,7 +253,7 @@ function FieldRow({ f, v, err, set }: { f: FormField; v: string; err?: string; s
       )
   }
   return (
-    <div class={'field' + (err ? ' bad' : '')} data-field={f.k}>
+    <div class={'field' + (f.type === 'bool' ? ' boolf' : '') + (err ? ' bad' : '')} data-field={f.k}>
       <label for={id}>
         {labelOf(f)}{' '}
         {f.req ? (

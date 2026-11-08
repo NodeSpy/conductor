@@ -21,21 +21,23 @@ export interface VSValue {
   set?: boolean // true when a value is already stored (shows "set")
 }
 
-const NAMES: Record<VSource, string> = {
-  typed: 'Typed value',
-  vault: 'Vault item',
-  env: 'Environment variable',
-  setting: 'Setting',
+// SRCW is the prototype's wording (js/valuesource.js SRCW): a typed value in a
+// sensitive field is a Secret (stored encrypted, never shown again); in a plain
+// field it is a Typed value, written into the config as it is.
+function SRCW(s: VSource, sensitive: boolean): [string, string, string] {
+  switch (s) {
+    case 'typed':
+      return sensitive
+        ? ['Secret', 'Type it once; conductor stores it encrypted in its vault. It never comes back to the browser.', 'key']
+        : ['Typed value', 'Written into the config as it is. Not for anything secret.', 'edit']
+    case 'vault':
+      return ['Vault item', 'A conductor vault entry, or an item in 1Password or Bitwarden, read when needed.', 'lock']
+    case 'env':
+      return ['Environment variable', 'Read from conductor’s environment when the value is used.', 'terminal']
+    default:
+      return ['Setting', 'A shared value from Config → Settings. Plain config, so never for a secret.', 'config']
+  }
 }
-
-const DESC: Record<VSource, string> = {
-  typed: 'Type it once; stored write-only, never shown again.',
-  vault: 'A conductor vault entry, or an item in 1Password or Bitwarden.',
-  env: "Read from conductor's environment when the value is used.",
-  setting: 'A shared value from Config → Settings. Plain config, never for a secret.',
-}
-
-const ICON: Record<VSource, string> = { typed: 'edit', vault: 'lock', env: 'terminal', setting: 'config' }
 
 // sourcesFor returns which sources a field offers. Browser credentials and
 // card/profile details (credential: true) offer only Typed and Vault; a plain
@@ -80,9 +82,9 @@ export function ValueSource({
   const other = sources.filter((s) => isOther(s, sensitive))
   const opt = (s: VSource): JSX.Element => (
     <button type="button" role="menuitemradio" class={'vs-opt' + (s === src ? ' on' : '')} aria-checked={s === src} onClick={() => pick(s)}>
-      <Icon name={ICON[s]} />
-      <b>{NAMES[s]}</b>
-      <span>{DESC[s]}</span>
+      <Icon name={SRCW(s, sensitive)[2]} />
+      <b>{SRCW(s, sensitive)[0]}</b>
+      <span>{SRCW(s, sensitive)[1]}</span>
     </button>
   )
 
@@ -99,8 +101,8 @@ export function ValueSource({
                 setMenu(!menu)
               }}
             >
-              <Icon name={ICON[src]} />
-              <span>{NAMES[src]}</span>
+              <Icon name={SRCW(src, sensitive)[2]} />
+              <span>{SRCW(src, sensitive)[0]}</span>
               <Icon name="chevd" class="chev" />
             </summary>
             {menu ? (

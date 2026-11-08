@@ -739,7 +739,6 @@ td.run .fx { margin-top: 4px; }
   .b-audit { margin: var(--space-2) 0 var(--space-3); }
 }
 
-.dl-tabs a .count { margin-left: 4px; vertical-align: 1px; }
 
 /* ---------- one control height, one stack gap (desktop-audit.md §1, §3) ----------
  * Every button, icon button, input, select, segmented control and filter menu is --control-h tall: 36px, 32px in

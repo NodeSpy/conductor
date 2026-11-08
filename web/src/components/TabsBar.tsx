@@ -27,7 +27,6 @@ export function TabsBar({
   className?: string
 }): JSX.Element {
   const ref = useRef<HTMLElement>(null)
-  const ghost = useRef<HTMLSpanElement>(null)
   const [over, setOver] = useState<Set<number>>(new Set())
   const [menuOpen, setMenuOpen] = useState(false)
   // What the row's width depends on: every label and count (counts arrive
@@ -48,10 +47,10 @@ export function TabsBar({
       const widths = anchors.map((a) => a.getBoundingClientRect().width)
       const total = widths.reduce((x, w) => x + w, 0) + gap * Math.max(0, widths.length - 1)
       let overSet = new Set<number>()
-      if (anchors.length > 1 && total > inner + 0.5) {
-        // Room for the tabs once "More ▾" (its real width, measured on an
-        // always-rendered ghost) and its gap are reserved.
-        const room = inner - (ghost.current?.getBoundingClientRect().width ?? 64) - gap
+      if (anchors.length > 2 && total > inner + 0.5) {
+        // Room for the tabs once "More ▾" is reserved: the design's fixed 76px
+        // off the row's width (UI.fitTabs), so a phone shows the same tabs.
+        const room = el.clientWidth - 76
         const activeIdx = items.findIndex((t) => t.id === active)
         const sumOf = (ks: number[]) => ks.reduce((x, k) => x + widths[k], 0) + gap * Math.max(0, ks.length - 1)
         const keep: number[] = []
@@ -95,14 +94,9 @@ export function TabsBar({
       {items.map((t) => (
         <a class={[active === t.id ? 'on' : '', over.has(items.indexOf(t)) ? 'tab-over' : ''].filter(Boolean).join(' ')} role="tab" aria-selected={active === t.id} aria-current={active === t.id ? 'page' : undefined} href={t.href} data-tab={t.id}>
           {t.label}
-          {t.count != null ? <span class={'count' + (t.hot ? ' hot' : '')}>{t.count}</span> : null}
+          {t.count != null ? <>{' '}<span class={'count' + (t.hot ? ' hot' : '')}>{t.count}</span></> : null}
         </a>
       ))}
-      {/* the ghost is "More ▾" at its real size, never shown: its width is
-          what the row keeps free whenever a tab has to move into More */}
-      <span ref={ghost} class="tab-more" aria-hidden="true" style="position:absolute;visibility:hidden;pointer-events:none;left:-9999px">
-        More<Icon name="chevd" />
-      </span>
       {overItems.length ? (
         <div class="tab-more-wrap" style="position:relative;margin-left:auto">
           <button
@@ -120,7 +114,7 @@ export function TabsBar({
               {overItems.map((t) => (
                 <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); location.hash = t.href.replace(/^#/, '') }}>
                   {t.label}
-                  {t.count != null ? <span class={'count' + (t.hot ? ' hot' : '')}>{t.count}</span> : null}
+                  {t.count != null ? <>{' '}<span class={'count' + (t.hot ? ' hot' : '')}>{t.count}</span></> : null}
                 </button>
               ))}
             </div>
