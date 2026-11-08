@@ -17,7 +17,7 @@ import { EmptyState } from '../components/EmptyState'
 import { humanError } from '../api/errors'
 import { Count, ToastHost, toast } from '../components/ChatBits'
 import {
-  ORDER, PRI, STATUS, ALL_STATUSES, statusWord, statusMark, by, cap, ticketFacts, teamOf, TicketAct, TicketRow, TicketGlyph, pendingByCase,
+  ORDER, PRI, STATUS, ALL_STATUSES, statusWord, statusMark, by, cap, ticketFacts, teamOf, TicketAct, TicketRow, TicketGlyph, pendingByCase, reviewOf,
   useMarkReady, loadNames, type Names,
 } from '../components/TicketKit'
 import { who, displayName } from '../api/bots'
@@ -39,7 +39,7 @@ function tally<T>(xs: T[]): Map<T, number> {
 // scope narrows the page to one assignee, for a bot's or a team's Tickets tab
 // ('bot:<name>' or 'team:<name>'; a team's also holds its bots' tickets): the
 // same board, list and filters, under the tab's own lede instead of the page head.
-export function Tickets({ scope }: { scope?: string } = {}): JSX.Element {
+export function Tickets({ scope, onCount }: { scope?: string; onCount?: (n: number) => void } = {}): JSX.Element {
   const [allTickets, setTickets] = useState<Ticket[] | null>(null)
   const [configured, setConfigured] = useState(true)
   const [n, setN] = useState<Names>({ bots: {}, teams: {} })
@@ -87,6 +87,8 @@ export function Tickets({ scope }: { scope?: string } = {}): JSX.Element {
   const sc = scope ? who(scope) : null
   const inScope = (t: Ticket) => !sc || t.assignee === scope || (sc.kind === 'team' && teamOf(t, n) === sc.name)
   const tickets = allTickets && sc ? allTickets.filter(inScope) : allTickets
+  // how many the scope holds (a team page hides its own New ticket while the tab shows the empty hero)
+  useEffect(() => { if (tickets) onCount?.(tickets.length) }, [tickets?.length])
   const scName = sc ? (sc.kind === 'team' ? sc.name : displayName(n.bots[sc.name]?.identity, sc.name)) : ''
   const newHref = sc ? `#/tickets/new?${sc.kind}=${encodeURIComponent(sc.name)}` : '#/tickets/new'
   const wrap = (children: JSX.Element) =>
@@ -279,7 +281,7 @@ export function Tickets({ scope }: { scope?: string } = {}): JSX.Element {
           <b>{t.title}</b>
           <span class="dl-why">{cap(by(t, n))}</span>
           <FactsLine one facts={ticketFacts(t, n)} />
-          {t.status === 'draft' || (t.status === 'waiting' && review[t.id]) ? <span class="tk-card-act"><TicketAct t={t} onReady={markReady} review={review[t.id]} /></span> : null}
+          {t.status === 'draft' || (t.status === 'waiting' && reviewOf(review, t)) ? <span class="tk-card-act"><TicketAct t={t} onReady={markReady} review={reviewOf(review, t)} /></span> : null}
         </a>
       </li>
     )
@@ -334,7 +336,7 @@ export function Tickets({ scope }: { scope?: string } = {}): JSX.Element {
     body = all.length ? (
       <section class="dl-card tk-sec tk-flat">
         <ul class="dl-list" data-testid="ticket-list">
-          {xs.map((t) => <TicketRow key={t.ticket} t={t} n={n} statusFact onReady={markReady} review={review[t.id]} />)}
+          {xs.map((t) => <TicketRow key={t.ticket} t={t} n={n} statusFact onReady={markReady} review={reviewOf(review, t)} />)}
         </ul>
         {pages > 1 ? (
           <div class="pk-pages">

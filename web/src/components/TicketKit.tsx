@@ -242,12 +242,16 @@ export function loadNames(set: (n: Names) => void): void {
     })
 }
 
-// pendingByCase: each ticket's pending approval, for its Review act.
+// pendingByCase: each ticket's pending approval, for its Review act. Case
+// ids are per bot (two bots can both have a c2), so the key is bot/case:
+// read it with reviewOf.
 export function pendingByCase(ps: ProposalRow[]): Record<string, ProposalRow> {
   const out: Record<string, ProposalRow> = {}
-  for (const p of ps) if (p.status === 'pending' && p.case && !out[p.case]) out[p.case] = p
+  for (const p of ps) if (p.status === 'pending' && p.case && !out[p.bot + '/' + p.case]) out[p.bot + '/' + p.case] = p
   return out
 }
+export const reviewOf = (review: Record<string, ProposalRow>, t: Ticket): ProposalRow | undefined =>
+  t.assignee && who(t.assignee).kind === 'bot' ? review[who(t.assignee).name + '/' + t.id] : undefined
 
 // ALL_STATUSES asks the ticket list for every ticket (with no status the
 // daemon leaves out done and declined ones).

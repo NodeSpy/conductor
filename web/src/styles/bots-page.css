@@ -55,12 +55,17 @@
 }
 @media (max-width: 720px) {
   /* a team's bot row on a phone: who it is takes the whole width; Make lead and Remove go under it, together */
-  .list .item:has(> .tm-acts) { flex-wrap: wrap; row-gap: 2px; }
-  .list .item:has(> .tm-acts) > a { flex: 1 1 100%; }
-  .tm-acts { margin-left: 34px; }
-  /* Add a bot: the label and picker share the first row (the picker shrinks), the Add button goes under */
-  .tm-add > label { flex: 1 1 100%; min-width: 0; }
+  /* the lead's row keeps its one Remove inline; a row with Make lead and Remove puts them, together, under it */
+  .list .item:has(> .tm-acts > :nth-child(2)) { flex-wrap: wrap; row-gap: 2px; }
+  .list .item:has(> .tm-acts > :nth-child(2)) > a { flex: 1 1 100%; }
+  .list .item:has(> .tm-acts > :nth-child(2)) > .tm-acts { margin-left: 34px; }
+  /* Add a bot: label, picker and Add to team on one row, as the prototype; the picker gives way */
+  .tm-add { flex-wrap: nowrap; }
+  .tm-add > label { flex: 1 1 auto; min-width: 0; }
   .tm-add select { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+  .tm-add > .btn { flex: none; }
+  /* as the prototype: on a narrow row "Add a bot" takes two lines so the picker keeps "Choose a bot…" whole */
+  .tm-add .tm-add-l { white-space: normal; flex: 0 1 auto; max-width: 4.2em; }
 }
 .bot-unwatched .bu-sep { white-space: pre; }
 @media (max-width: 720px) { .bot-unwatched .bu-long { display: none; } }
