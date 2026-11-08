@@ -96,6 +96,7 @@ export function CodeEditor({
   label = 'YAML',
   errLines = [],
   hlLine,
+  hlLines,
 }: {
   id: string
   text: string
@@ -105,6 +106,8 @@ export function CodeEditor({
   label?: string
   errLines?: number[]
   hlLine?: number
+  // several highlighted lines (the builder's selected step spans its range)
+  hlLines?: number[]
 }): JSX.Element {
   const preRef = useRef<HTMLPreElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -113,7 +116,7 @@ export function CodeEditor({
     <div class="ced" data-lang="yaml" id={id} data-readonly={readOnly ? '1' : undefined}>
       <pre class="code ced-hl" aria-hidden="true" ref={preRef}>
         {lines.map((l, i) => (
-          <Line raw={l} n={i + 1} hl={hlLine === i + 1} err={errLines.includes(i + 1)} />
+          <Line raw={l} n={i + 1} hl={hlLine === i + 1 || !!hlLines?.includes(i + 1)} err={errLines.includes(i + 1)} />
         ))}
       </pre>
       <textarea

@@ -52,6 +52,8 @@ export function FilterBar({
   showTime = false,
   filterByHint = false,
   end,
+  noSearch = false,
+  sinceDef = 'all',
 }: {
   q: string
   onQueryChange: (q: string) => void
@@ -72,6 +74,11 @@ export function FilterBar({
   // end is drawn last in the bar (the catalog picker's "Add from a git URL or
   // custom source…", filter.js's `end`).
   end?: JSX.Element
+  // noSearch drops the search field: a bar of one control (a workflow's Runs
+  // tab time range, filter.js `noSearch`).
+  noSearch?: boolean
+  // sinceDef: the time range that isn't a filter (not marked on)
+  sinceDef?: string
 }): JSX.Element {
   const [text, setText] = useState(q)
   useEffect(() => setText(q), [q])
@@ -123,8 +130,8 @@ export function FilterBar({
   }
 
   return (
-    <div class="fb" role="search">
-      <div class={'fb-search' + (any ? ' has-q' : '')}>
+    <div class="fb" role="search" data-nosearch={noSearch ? '' : undefined}>
+      {noSearch ? null : <div class={'fb-search' + (any ? ' has-q' : '')}>
         <Icon name="search" class="fb-ico" />
         {anyPills ? (
           <span class="fb-pills">
@@ -164,7 +171,7 @@ export function FilterBar({
             <Icon name="x" />
           </button>
         ) : null}
-      </div>
+      </div>}
 
       <div class="fb-bar" role="group" aria-label="Filters">
         {liveMenus.map((m) => (
@@ -189,7 +196,7 @@ export function FilterBar({
         ))}
 
         {showTime && since !== undefined && onSinceChange ? (
-          <TimeButton since={since} onChange={onSinceChange} />
+          <TimeButton since={since} onChange={onSinceChange} def={sinceDef} alone={noSearch} />
         ) : null}
         {end ?? null}
       </div>
@@ -271,7 +278,9 @@ function MenuButton({ menu }: { menu: FilterMenu }): JSX.Element {
   )
 }
 
-function TimeButton({ since, onChange }: { since: string; onChange: (v: string) => void }): JSX.Element {
+// def is the range that counts as no filter (the time field's def: '7d' on a
+// workflow's Runs tab); alone (a bar with no search) it sits at the far right.
+function TimeButton({ since, onChange, def = 'all', alone = false }: { since: string; onChange: (v: string) => void; def?: string; alone?: boolean }): JSX.Element {
   const ref = useRef<HTMLDetailsElement>(null)
   useEffect(() => {
     const el = ref.current
@@ -284,8 +293,8 @@ function TimeButton({ since, onChange }: { since: string; onChange: (v: string) 
   }, [])
   const label = TIME_RANGES.find(([k]) => k === since)?.[1] || since
   return (
-    <details ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
-      <summary class={'fb-btn fb-time' + (since !== 'all' ? ' on' : '')} aria-haspopup="listbox" title="Time range">
+    <details ref={ref} style={{ position: 'relative', display: 'inline-block', ...(alone ? { marginLeft: 'auto' } : {}) }}>
+      <summary class={'fb-btn fb-time' + (since !== def ? ' on' : '')} aria-haspopup="listbox" title="Time range">
         <Icon name="clock" />
         <span class="fb-v">{label}</span>
         <Icon name="chevd" />

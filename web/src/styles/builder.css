@@ -92,7 +92,7 @@
 .sc-form > .wf-field:has(textarea), .sc-form > .wf-field:has(.code-wrap), .sc-form > .wf-field:has(.listed), .sc-form > .wf-field:has(.kvedit), .sc-form > .wf-field:has(.seg), .sc-form > .field:has(.q-list), .sc-form > .acct-row, .sc-form > details, .sc-form > .field:has(.prompt-ro) { grid-column: 1 / -1; }
 .acct-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
 .wf-field > label { display: flex; align-items: center; gap: 6px; }
-.ref-btn { margin-left: auto; height: 20px; padding: 0 6px; border-radius: var(--radius-sm); border: 1px solid var(--color-border-default); background: var(--color-bg-raised); color: var(--color-text-tertiary); cursor: pointer; display: inline-grid; place-items: center; }
+:where(.ref-btn) { margin-left: auto; height: 20px; padding: 0 6px; border-radius: var(--radius-sm); border: 1px solid var(--color-border-default); background: var(--color-bg-raised); color: var(--color-text-tertiary); cursor: pointer; display: inline-grid; place-items: center; }
 .ref-btn svg { width: 11px; height: 11px; }
 .ref-btn:hover { color: var(--color-text-accent); border-color: var(--color-accent-default); }
 .wf-field .ferr { color: var(--color-status-danger-fg); font-size: var(--type-caption-size); }
@@ -100,10 +100,10 @@
 .code-wrap { border: 1px solid var(--color-border-default); border-radius: var(--radius-control); background: var(--color-bg-rail); overflow: hidden; }
 .code-wrap .ced .ced-hl { background: transparent; }
 .prompt-ro { white-space: pre-wrap; padding: 8px 10px; border: 1px dashed var(--color-border-default); border-radius: var(--radius-control); color: var(--color-text-secondary); }
-details.adv > summary { cursor: pointer; color: var(--color-text-tertiary); font-size: var(--type-caption-size); padding: 4px 0; list-style: none; display: flex; gap: 6px; align-items: center; }
+:where(details.adv > summary) { cursor: pointer; color: var(--color-text-tertiary); font-size: var(--type-caption-size); padding: 4px 0; list-style: none; display: flex; gap: 6px; align-items: center; }
 details.adv > summary::before { content: "▸"; font-size: var(--type-caption-size); transition: transform var(--motion-duration-fast); }
 details.adv[open] > summary::before { transform: rotate(90deg); }
-details.adv > summary::-webkit-details-marker { display: none; }
+:where(details.adv > summary)::-webkit-details-marker { display: none; }
 .adv-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; margin-top: 8px; }
 .q-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
 .q-row { display: grid; grid-template-columns: 130px 96px minmax(0, 1fr) 30px; gap: 6px; align-items: center; }
@@ -168,15 +168,15 @@ details.adv > summary::-webkit-details-marker { display: none; }
 .icon-btn.sm { width: 24px; height: 24px; }
 .icon-btn.sm svg { width: 12px; height: 12px; }
 .par-join { position: relative; height: 22px; margin: 6px 28px 0; border: 2px solid color-mix(in srgb, var(--color-icon-default) 50%, var(--color-border-default)); border-top: 0; border-radius: 0 0 10px 10px; text-align: center; }
-.par-join .caps { position: relative; top: 12px; background: color-mix(in srgb, var(--color-icon-default) 5%, var(--color-bg-rail)); padding: 0 8px; font-size: var(--type-caption-size); color: var(--color-text-secondary); }
+:where(.par-join .caps) { position: relative; top: 12px; background: color-mix(in srgb, var(--color-icon-default) 5%, var(--color-bg-rail)); padding: 0 8px; font-size: var(--type-caption-size); color: var(--color-text-secondary); }
 
 /* picker */
 .picker .input-icon { margin-bottom: 12px; }
-.pk-list { max-height: min(60vh, 560px); overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+:where(.pk-list) { max-height: min(60vh, 560px); overflow: auto; display: flex; flex-direction: column; gap: 12px; }
 .pk-group > .caps { margin-bottom: 6px; }
 .pk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; }
 .pk-item { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
-.pk-item .grow { display: flex; flex-direction: column; min-width: 0; }
+:where(.pk-item .grow) { display: flex; flex-direction: column; min-width: 0; }
 .pk-item .grow b { font-size: var(--type-body-s-size); font-weight: 600; }
 .pk-item .grow .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pk-item:hover, .pk-item:focus-visible { border-color: var(--color-accent-default); background: var(--color-accent-subtle); }
@@ -231,3 +231,16 @@ details.adv > summary::-webkit-details-marker { display: none; }
 @media (max-width: 720px) { .sc-risk .risk-w { display: none; } }
 /* the four "add a hook" buttons: two by two on a phone, never three and one */
 @media (max-width: 720px) { .hook-adds { display: grid !important; grid-template-columns: 1fr 1fr; } .hook-adds .btn { justify-content: center; } }
+
+/* app: a step inside a parallel lane is narrow, so its kind label gives way
+   to the step's name; the "Add a branch" lane has no spine */
+.par-lanes .lane .sc-ty { display: none; }
+.par-lanes .add-lane::before { display: none; }
+/* app: read.css's older .code rule (line-height 1.5, max-height 460px) loads
+   after app.css here; the builder's editors keep app.css's .code, as the
+   prototype has it */
+.wfb-page .ced pre.code { font: var(--type-code); padding: var(--space-2) 0; max-height: none; }
+/* app: lanes that don't fit side by side wrap to a second row instead of
+   crushing each branch; a lane's step keeps its summary to one line */
+.par-lanes { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); overflow-x: visible; }
+.par-lanes .lane .sc-sum, .par-lanes .lane .sc-title b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
