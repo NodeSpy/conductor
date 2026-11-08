@@ -174,11 +174,14 @@ func applyPackSourceDefaults(packs map[string]PackInstance) error {
 	for _, name := range sortedPackKeys(packs) {
 		inst := packs[name]
 		if inst.Source == "" {
-			src, err := packDependencySource(name, inst.Use)
+			src, ver, err := packDependencySource(name, inst.Use)
 			if err != nil {
 				return err
 			}
 			inst.Source = src
+			if inst.Version, err = useVersion(name, inst.Version, ver); err != nil {
+				return err
+			}
 		}
 		packs[name] = inst
 	}
@@ -189,44 +192,59 @@ func applyPackSourceDefaults(packs map[string]PackInstance) error {
 // empty `use:` is an error naming both remote routes: the key used to imply a
 // bare name (→ the official repo), which is exactly the ambiguity the reserved
 // `conductor-packs/` namespace replaced.
-func packDependencySource(name, use string) (string, error) {
+func packDependencySource(name, use string) (string, string, error) {
 	ref := strings.TrimSpace(use)
 	if ref == "" {
-		return "", fmt.Errorf("pack %q: no use: — a pack entry must name where it comes from: write %q for the official registry, %q for a third-party pack, or a local path such as %q",
+		return "", "", fmt.Errorf("pack %q: no use: — a pack entry must name where it comes from: write %q for the official registry, %q for a third-party pack, or a local path such as %q",
 			name, "use: "+PacksNamespaceAlias+"/"+name, "use: owner/repo/"+name, "use: ./packs/"+name)
 	}
-	src, err := packUseSource(ref)
+	src, ver, err := packUseSource(ref)
 	if err != nil {
-		return "", fmt.Errorf("pack %q: %w", name, err)
+		return "", "", fmt.Errorf("pack %q: %w", name, err)
 	}
-	return src, nil
+	return src, ver, nil
+}
+
+// useVersion merges a use: @suffix into the instance's version: constraint.
+// The suffix is a release constraint, the same thing version: says, so it
+// resolves against the source's tags (<pack>/vX.Y.Z in a monorepo) and is
+// never a git ref. Saying two different things is an error.
+func useVersion(name, version, suffix string) (string, error) {
+	version = strings.TrimSpace(version)
+	switch {
+	case suffix == "":
+		return version, nil
+	case version == "" || version == suffix:
+		return suffix, nil
+	}
+	return "", fmt.Errorf("pack %q: use: …@%s and version: %s disagree — keep one", name, suffix, version)
 }
 
 // packUseSource turns a pack `use:` reference into the `source:` string the
 // resolver understands. A local path passes through; anything else resolves
 // through the shared use: search path, with `conductor-packs/<name>` landing
 // in the official pack repo.
-func packUseSource(ref string) (string, error) {
+func packUseSource(ref string) (src, version string, err error) {
 	u, err := ParseUse(UseKindPack, ref)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	switch u.Origin {
 	case OriginLocal:
-		return u.Path, nil
+		return u.Path, "", nil
 	case OriginBuiltin:
 		// There are no builtin packs, so ParseUse cannot produce this; guard
 		// rather than emit an empty source if that ever changes.
-		return "", fmt.Errorf("use: %q resolves to a builtin, which is not a pack", ref)
+		return "", "", fmt.Errorf("use: %q resolves to a builtin, which is not a pack", ref)
 	}
-	src := u.Host + "/" + u.Repo
+	src = u.Host + "/" + u.Repo
 	if u.Component != "" {
 		src += "//" + u.Component
 	}
-	if u.Version != "" {
-		src += "@" + u.Version
-	}
-	return src, nil
+	// The @suffix is a release constraint, returned apart: appended to the
+	// source it would be read as a git ref, which <pack>/vX.Y.Z tags never
+	// match.
+	return src, u.Version, nil
 }
 
 // Binding is the polymorphic satisfy-a-resource value (§4): its YAML shape

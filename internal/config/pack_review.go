@@ -115,7 +115,7 @@ func ParsePackRef(ref string) (PackRef, error) {
 	if strings.HasPrefix(ref, "git::") || strings.Contains(ref, "://") || strings.Contains(first, ":") || strings.Contains(first, ".") {
 		return PackRef{Key: "source", Value: ref, Fetch: ref}, nil
 	}
-	src, err := packUseSource(ref)
+	src, _, err := packUseSource(ref)
 	if err != nil {
 		return PackRef{}, err
 	}
