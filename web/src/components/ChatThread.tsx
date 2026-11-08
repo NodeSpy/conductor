@@ -68,6 +68,7 @@ export function ChatThread({
   frame,
   head,
   sendLit,
+  empty,
 }: {
   convId: string
   kind: 'bot' | 'team'
@@ -82,6 +83,8 @@ export function ChatThread({
   // sendLit keeps Send lit while the composer is empty (the prototype's
   // composer; an empty send does nothing) instead of greying it out.
   sendLit?: boolean
+  // empty is what an empty thread says (the prototype's UI.chatThread o.empty)
+  empty?: string
 }): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [text, setText] = useState('')
@@ -291,7 +294,7 @@ export function ChatThread({
       <div class="cm-drop" aria-hidden={!drag}><Icon name="attach" /><span>Drop to attach</span></div>
       <div class="cm-thread" id="msgs" role="log" ref={scroller} data-testid="chat-scroll">
         {messages.length === 0 ? (
-          <p class="cm-empty dl-sub">No messages yet. Say something below.</p>
+          <p class="cm-empty dl-sub">{empty || 'No messages yet. Say something below.'}</p>
         ) : (
           messages.map((m) => {
             const w = who(m.from)

@@ -21,6 +21,7 @@
 import type { ComponentChildren, JSX } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { authState, stepupMethods } from '../api/auth'
+import { EmptyState } from './EmptyState'
 
 // usesPasskey: the passkey glyph only when a passkey is what confirms.
 const usesPasskey = () => stepupMethods(authState.value)[0] === 'passkey'
@@ -944,8 +945,8 @@ export function RepoView({ target, title }: { target: string; title?: string }):
           ? rs.map((x, i) => (
               <>
                 {i ? ', ' : ''}
-                <a class="link mono" href={`#/bots/${x}`}>
-                  {x}
+                <a class="readers-bot" href={`#/bots/${x}`}>
+                  <code>{x}</code>
                 </a>
               </>
             ))
@@ -2751,11 +2752,30 @@ export function RepoView({ target, title }: { target: string; title?: string }):
       </div>
     )
   const sideTitle = isTeam ? 'Team knowledge' : 'What it knows'
+  // nothing at all in the repo yet: one page-level hero instead of empty rails, zero counts and an empty history
+  const firstKind = kinds.find((k) => !k.readonly)
+  const bare = !isNew && !key && !(view === 'files' && file) && allEntries.length === 0
   const histRows = hist || []
 
   return (
     <div class="repo" data-repo={target} data-testid="repo-view">
       {isTeam ? Proposals() : null}
+      {bare ? (
+        <div class="panel repo-empty" data-testid="repo-empty">
+          <EmptyState
+            hero
+            icon="file"
+            title={isTeam ? 'No shared knowledge yet' : 'Nothing in its memory yet'}
+            action={firstKind ? { label: `New ${firstKind.one}`, onClick: () => newEntry(firstKind), testid: 'repo-empty-new' } : undefined}
+          >
+            <p>
+              {isTeam
+                ? 'Every bot on the team reads what’s kept here, and bots suggest additions for you to approve.'
+                : 'It writes down what it learns as it works, and you can add entries it reads every time.'}
+            </p>
+          </EmptyState>
+        </div>
+      ) : (
       <div class={'grid repo-grid' + (fit ? ` fit ${ph ? 'ph-list' : 'ph-entry'}` : '')} data-repo={target}>
         <div class="rp-rail">
           {fit && (key || isNew) ? (
@@ -2907,6 +2927,7 @@ export function RepoView({ target, title }: { target: string; title?: string }):
         </div>
         {mainPane}
       </div>
+      )}
 
       {modal?.t === 'new' ? NewModal() : null}
       {modal?.t === 'import' ? <Run key="import" fn={() => ImportModal({ docs: modal.docs })} /> : null}

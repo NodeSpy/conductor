@@ -325,6 +325,7 @@ export function BotAccess({ bot }: { bot: BotData }): JSX.Element {
           {grp('Asks you first', 'ember', x.asks, 'Nothing needs your approval')}
           {grp('Never', 'fail', x.never, 'Nothing is refused outright')}
         </div>
+        <SpendLine spend={bot.spend} />
         <p class="dl-sub" style={{ margin: '12px 0 0' }}>
           Use an item’s menu to move it or take it away; each change waits for your review
           {teamName ? `, and on the ${teamName} team a bot does on its own only things that ${ceiling === 'observe' ? 'just read' : 'can be undone'}` : ''}.
@@ -509,5 +510,30 @@ export function BotAccess({ bot }: { bot: BotData }): JSX.Element {
         />
       ) : null}
     </>
+  )
+}
+
+// SpendLine is the prototype's "Cloud spend it caused this period" sentence,
+// from what the daemon recorded against the bot in its spend period. With no
+// record it says so in the same spot rather than dropping the line.
+function SpendLine({ spend }: { spend: BotData['spend'] }): JSX.Element {
+  const money = (n: number, cur: string): string => {
+    try {
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).format(n)
+    } catch {
+      return `${n.toFixed(2)} ${cur}`
+    }
+  }
+  let body: JSX.Element
+  if (!spend) body = <>Cloud spend it caused this period: not available from this daemon.</>
+  else if (!spend.entries && !spend.spent) body = <>Cloud spend it caused this period: none recorded{spend.cap == null ? ', and it has no limit for spending money, so it can’t spend any' : ''}.</>
+  else {
+    const within = spend.cap == null ? '' : spend.spent <= spend.cap ? ', within its limit for spending money' : ', over its limit for spending money'
+    body = <>Cloud spend it caused this period: <b>{money(spend.spent, spend.currency)}</b>{within}.</>
+  }
+  return (
+    <p class="small sentence" style={{ margin: '12px 0 0' }} data-cloud-spend data-testid="acc-spend">
+      <Icon name="dollar" />{body}
+    </p>
   )
 }

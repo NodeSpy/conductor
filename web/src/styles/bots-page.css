@@ -16,3 +16,21 @@
 /* the "isn't watching anything" callout sits above the chat: take its height off too, so the composer keeps its gap */
 .bot-page:has(.watch-empty) .chat-grid > .panel.chat.fit { height: max(360px, min(calc(var(--dvh, 100vh) - 380px), 640px)); }
 @media (max-width: 720px) { .bot-page:has(.watch-empty) .chat-grid > .panel.chat.fit { height: max(320px, min(calc(var(--dvh, 100vh) - 420px), 520px)); } }
+/* the head's "not watching" line: one quiet line, its action a plain link */
+.bot-unwatched .link { font: inherit; }
+@media (max-width: 720px) {
+  /* on a phone the head keeps the bot's description to one line */
+  .bot-page .dl-bothead .dl-lead { -webkit-line-clamp: 1; line-clamp: 1; }
+}
+/* A team's bot row: the name, id and "lead" tag stay on one line; the id gives way first. */
+.tm-who { min-width: 0; }
+.tm-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; white-space: nowrap; }
+.tm-line > b { flex: none; }
+.tm-line .bav-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tm-line .tag { flex: none; }
+/* A bot's or team's Tickets tab on a phone: the search takes the whole row, Filter and the view switch go under it. */
+@media (max-width: 720px) {
+  .tk-in .fb { flex-wrap: wrap; }
+  .tk-in .fb-search, .tk-in .fb-search:focus-within, .tk-in .fb-search.has-q { flex: 1 1 100%; max-width: none; }
+  .tk-in .fb-bar { flex: 1 1 auto; }
+}

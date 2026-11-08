@@ -289,13 +289,13 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
         (s) => s?.bot && (!s.bot.action || s.bot.action === 'deliver') && (s.bot.name === name || (!!bot.team && s.bot.team === bot.team)),
       ),
     )
+  // Not watching anything: said quietly in the head (where the prototype says what it's doing), not as a banner.
   const watchNote =
     triggers !== null && !watched ? (
-      <div class="callout wait watch-empty" style={{ margin: '0 0 14px' }} data-testid="watch-empty">
-        <span class="st" data-s="wait"><StatusMark s="wait" mkOnly label="Not watching" /><b>{nm} isn't watching anything yet.</b></span>{' '}
-        <span class="grow">No trigger hands it events and it doesn't check in on its own, so it only answers when someone talks to it: you here, or anyone in a chat it's in.</span>
-        <button class="btn sm primary" type="button" onClick={() => setModal('watch')}><Icon name="plus" />Choose what it watches</button>
-      </div>
+      <p class="bot-working bot-unwatched" data-testid="watch-empty">
+        Not watching anything yet, so it only answers when someone talks to it ·{' '}
+        <button class="link" type="button" onClick={() => setModal('watch')}>Choose what it watches</button>
+      </p>
     ) : null
 
   const menuItems: MenuItem[] = [
@@ -325,7 +325,7 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
 
   return (
     <div class={'bot-page' + (active === 'tickets' ? ' tk-page' : '')} data-bot={name}>
-      <Hero bot={bot} name={name} tickets={open} sub={active === 'workers' ? 'Workers' : ''} onMore={(el) => setMenuAt(menuAt ? null : el)} />
+      <Hero bot={bot} name={name} tickets={open} watch={watchNote} sub={active === 'workers' ? 'Workers' : ''} onMore={(el) => setMenuAt(menuAt ? null : el)} />
       {menuAt ? <Menu anchor={menuAt} items={menuItems} onClose={() => setMenuAt(null)} label={`More for ${name}`} /> : null}
       {note ? (
         <div class={'banner ' + (note.ok ? 'ok' : 'err')} role={note.ok ? 'status' : 'alert'} data-testid="bot-note">
@@ -346,7 +346,6 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
       ) : null}
 
       <div class="dl-tab-body">
-        {['chat', 'settings', 'access'].includes(active) ? watchNote : null}
         {active === 'proposals' && <Approvals name={name} nm={nm} list={proposals} />}
         {active === 'chat' && <ChatTab name={name} nm={nm} bot={bot} all={all} pending={pending} open={open} onPaseo={() => setModal('paseo')} />}
         {active === 'tickets' && <ScopedTickets assignee={`bot:${name}`} />}
@@ -470,7 +469,7 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
 
 /* ---------- the head ---------- */
 
-function Hero({ bot, name, tickets, sub, onMore }: { bot: BotPage; name: string; tickets: Ticket[]; sub: string; onMore: (el: HTMLElement) => void }): JSX.Element {
+function Hero({ bot, name, tickets, watch, sub, onMore }: { bot: BotPage; name: string; tickets: Ticket[]; watch?: JSX.Element | null; sub: string; onMore: (el: HTMLElement) => void }): JSX.Element {
   const nm = displayName(bot.identity, name)
   const role = bot.description || (bot.team ? `A bot on the ${bot.team} team` : 'A bot')
   // working on: a ticket in progress, never one that's only ready
@@ -504,7 +503,7 @@ function Hero({ bot, name, tickets, sub, onMore }: { bot: BotPage; name: string;
           <p class="dl-lead">{role}</p>
           {cur && (live || bot.live_workers > 0) ? (
             <p class="bot-working">Working on: <a href={`#/tickets/${cur.ticket}`}>{cur.title}</a></p>
-          ) : null}
+          ) : watch || null}
         </div>
         {now}
         <button class="icon-btn" type="button" aria-label={`More for ${name}`} data-testid="bot-more" onClick={(e) => onMore(e.currentTarget as HTMLElement)}>
@@ -559,7 +558,7 @@ function ChatTab({ name, nm, bot, all, pending, open, onPaseo }: { name: string;
       {bot.home ? (
         <button class="btn sm secondary" type="button" data-testid="open-paseo" onClick={onPaseo}><Icon name="external" />Open in paseo</button>
       ) : (
-        <span class="dl-sub" data-testid="paseo-none">Its home session isn't running, so paseo has nothing to open.</span>
+        <button class="btn sm secondary" type="button" data-testid="paseo-none" disabled title="Its home session isn't running, so paseo has nothing to open" aria-label="Open in paseo: its home session isn't running, so paseo has nothing to open"><Icon name="external" />Open in paseo</button>
       )}
     </div>
   )
@@ -570,7 +569,7 @@ function ChatTab({ name, nm, bot, all, pending, open, onPaseo }: { name: string;
         {open.length ? <a class="dl-link" href={`#/bots/${name}/tickets`}>Working on {open.length}</a> : null}
       </p>
       <div class="grid g-side chat-grid">
-        <ChatThread convId={`bot:${name}`} kind="bot" bots={all} frame="panel chat fit" head={head} placeholder={`Message ${nm}`} sendLit />
+        <ChatThread convId={`bot:${name}`} kind="bot" bots={all} frame="panel chat fit" head={head} placeholder={`Message ${nm}`} sendLit empty={`No conversation yet. Ask ${nm} anything; it answers here.`} />
         <div class="stack cm-side">
           {pending.length ? (
             <section class="panel cm-need">
@@ -591,10 +590,10 @@ function ChatTab({ name, nm, bot, all, pending, open, onPaseo }: { name: string;
               </ul>
             </section>
           ) : null}
+          {open.length ? (
           <section class="panel">
             <div class="panel-head"><h3>Working on</h3><a class="btn sm ghost" style={{ marginLeft: 'auto' }} href={`#/bots/${name}/tickets`}>All tickets</a></div>
-            {open.length ? (
-              <ul class="cm-side-l">
+            <ul class="cm-side-l">
                 {open.map((t) => (
                   <li>
                     <a class="cm-side-a" href={`#/tickets/${t.ticket}`}>
@@ -603,11 +602,9 @@ function ChatTab({ name, nm, bot, all, pending, open, onPaseo }: { name: string;
                     </a>
                   </li>
                 ))}
-              </ul>
-            ) : (
-              <p class="dl-sub cm-side-none">Nothing open.</p>
-            )}
+            </ul>
           </section>
+          ) : null}
         </div>
       </div>
     </>

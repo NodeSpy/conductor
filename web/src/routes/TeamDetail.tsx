@@ -192,7 +192,7 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
             hero
             action={editable ? { label: 'Add a knowledge repo', onClick: () => void stageEdits([[['teams', name, 'knowledge'], {}]], `team ${name}: a shared knowledge repo`), testid: 'team-add-knowledge' } : undefined}
           >
-            <p>A team can keep one repo every bot on it reads. You write to it directly; bots propose and you approve.</p>
+            <p>A team can keep one repo that every bot on it reads, where you write directly and bots propose changes for you to approve.</p>
           </EmptyState>
         </div>
       )
@@ -268,6 +268,7 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
         </button>
       </div>
       <TabsBar
+        compact
         ariaLabel="Team"
         active={active}
         items={[

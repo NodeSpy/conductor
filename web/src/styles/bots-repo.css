@@ -27,3 +27,7 @@
 /* a long field value (a query, a URL) wraps inside its box instead of running off a phone screen */
 .prop-fields { min-width: 0; }
 .prop-fields > div { overflow-wrap: anywhere; }
+/* "read by" names are code tokens that link to the bot, not underlined prose. */
+.readers .readers-bot { text-decoration: none; color: inherit; }
+.readers .readers-bot code { color: var(--color-text-accent); }
+.readers .readers-bot:hover code { border-color: var(--color-border-strong, currentColor); }

@@ -52,10 +52,9 @@ function connsOf(b: BotSummary): string[] {
   const t = cfgTree()
   const sv = getPath(t.bots?.[b.bot], 'skill.verbs')
   const vs: string[] = Array.isArray(sv) ? sv : sv ? Object.keys(sv) : []
-  const out = vs
-    .map((v) => String(v).split('.')[0])
-    .map((inst) => String(t.connectors?.[inst]?.use || '').split('@')[0])
-    .filter(Boolean)
+  // The connection's own name (connectors.<name>), as the operator called it:
+  // its plugin (`use:`) can be a generic one like "command" shared by many.
+  const out = vs.map((v) => String(v).split('.')[0]).filter((inst) => inst && t.connectors?.[inst])
   return [...new Set(out)]
 }
 const mayWords = (b: BotSummary): string => {
@@ -372,7 +371,7 @@ export function Bots(): JSX.Element {
             }
           >
             <p>
-              A bot is a teammate you hand work to. It picks up what comes in, does the jobs you allow on its own, and asks you before anything that matters. Every new bot starts in practice mode: it only suggests, until you let it act.
+              A bot is a teammate you hand work to: it does the jobs you allow on its own, asks before anything that matters, and starts in practice mode.
             </p>
             {!editable ? (
               <p>This dashboard was started without a config file, so it can't add one. Add a bot under <code>bots:</code> in conductor's config instead.</p>

@@ -231,8 +231,8 @@ export function TeamOverview({ ctx }: { ctx: TeamCtx }): JSX.Element {
                 <div class="item" data-bot={m}>
                   <a href={`#/bots/${m}`} class="row grow" style="gap:10px">
                     <Avatar id={bots[m]?.identity} size={32} />
-                    <div>
-                      <b>{nm(m)}</b> <span class="bav-id">{m}</span> {lead === m ? <span class="tag">lead</span> : null}
+                    <div class="tm-who">
+                      <div class="tm-line"><b>{nm(m)}</b> <span class="bav-id">{m}</span> {lead === m ? <span class="tag">lead</span> : null}</div>
                       <div class="muted tiny">{bots[m]?.description || tree.bots?.[m]?.description || ''}</div>
                     </div>
                   </a>

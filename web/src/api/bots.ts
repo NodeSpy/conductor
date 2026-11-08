@@ -87,6 +87,8 @@ export interface TeamSummary {
 export interface BotDetail extends BotSummary {
   memory_repo?: string
   sandboxed?: boolean
+  /** What it spent in its spend period; cap is set only when it has a spend cap. */
+  spend?: { spent: number; currency: string; period_hours: number; entries: number; cap?: number }
 }
 
 export interface ProposalRow {
