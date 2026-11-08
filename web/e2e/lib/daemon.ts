@@ -383,6 +383,73 @@ export async function startWithCatalog(port: number): Promise<Runtime & { regist
   return { bin, config, stateDir, home, port, baseURL, pid: child.pid, logFile, registry }
 }
 
+// startWithGitCatalog boots a DEDICATED daemon whose registry is a throwaway
+// git repo of synthetic packs (CONDUCTOR_PACK_REGISTRY=file://…), tagged the
+// way a pack monorepo is (<pack>/vX.Y.Z), so an install is a real git source
+// with releases: Add → apply fetches it, and a release tagged mid-test is an
+// update to apply. Nothing installed and no `init`: every pack arrives
+// through the dashboard's own apply. No network.
+export async function startWithGitCatalog(port: number): Promise<Runtime & { registry: string; release: (name: string, version: string) => void }> {
+  const bin = resolveBin()
+  const root = mkdtempSync(path.join(tmpdir(), 'dash-e2e-gitcat-'))
+  const stateDir = path.join(root, 'state')
+  const home = path.join(root, 'home')
+  const config = path.join(root, 'config.yaml')
+  const logFile = path.join(root, 'daemon.log')
+  const baseURL = `http://127.0.0.1:${port}`
+  const registry = path.join(root, 'registry')
+  mkdirSync(home, { recursive: true })
+  const gitEnv = { ...hermeticEnv(home), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e' }
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: registry, env: gitEnv, stdio: 'ignore' })
+  const manifest = (name: string, version: string) =>
+    [
+      'pack:',
+      `  name: ${name}`,
+      `  version: ${version}`,
+      '  description: says hello on a schedule',
+      '  requires:',
+      '    connectors: { command: "*" }',
+      'workflows:',
+      '  say-hi: { steps: [ { id: hello, uses: command.run, options: { command: "true" } } ] }',
+      'triggers:',
+      '  - { name: on_tick, on: manual, steps: [ { uses: command.run, options: { command: "true" } } ] }',
+      '',
+    ].join('\n')
+  const release = (name: string, version: string) => {
+    mkdirSync(path.join(registry, name), { recursive: true })
+    writeFileSync(path.join(registry, name, 'conductor-pack.yaml'), manifest(name, version))
+    git('add', '-A')
+    git('commit', '-q', '-m', `${name} ${version}`)
+    git('tag', `${name}/v${version}`)
+  }
+  mkdirSync(registry, { recursive: true })
+  git('init', '-q', '-b', 'main')
+  release('greeter', '1.0.0')
+
+  writeFileSync(
+    config,
+    [
+      `store: { state_file: ${path.join(stateDir, 'state.json')} }`,
+      `dashboard:`,
+      `  enabled: true`,
+      `  listen: [localhost]`,
+      `  auth: { allow_open: true }`,
+      `  port: ${port}`,
+      `connectors:`,
+      `  box: { use: command }`,
+      ``,
+    ].join('\n'),
+    { mode: 0o600 },
+  )
+  const env = { ...hermeticEnv(home), CONDUCTOR_PACK_REGISTRY: 'file://' + registry }
+  const out = openSync(logFile, 'a')
+  const child: ChildProcess = spawn(bin, ['run', '--config', config], { env, detached: true, stdio: ['ignore', out, out] })
+  child.unref()
+  if (!child.pid) throw new Error('failed to spawn git catalog daemon')
+  await waitForStatus(baseURL)
+  return { bin, config, stateDir, home, port, baseURL, pid: child.pid, logFile, registry, release }
+}
+
 // trigger dispatches a manual trigger on the running daemon (used mid-test to
 // prove the live SSE update path). It returns once the daemon has accepted it.
 export function trigger(rt: Runtime, name: string): void {
