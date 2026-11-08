@@ -45,7 +45,9 @@ function SystemTabs({ active }: { active: Tab }): JSX.Element {
     label: t.label,
     href: t.href,
     count: t.id === 'safety' && paused ? '!' : null,
-    hot: true,
+    // only a tab that needs a look is hot (UI.fitTabs: More carries a dot
+    // only when a tab it holds is)
+    hot: t.id === 'safety' && !!paused,
   }))
   return <TabsBar items={items} active={active} ariaLabel="System" className="dl-tabs dl-subnav" />
 }
