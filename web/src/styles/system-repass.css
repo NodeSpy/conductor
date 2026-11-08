@@ -1,0 +1,24 @@
+/* System tabs repass (Config, Safety, Updates, Logs & audit, Access): rules the
+   prototype has that the ported sheets lack. Tokens only. */
+
+/* Safety: a kind of sandbox this conductor doesn't offer reads as disabled */
+.sb-kinds .sb-kind.is-off { opacity: 0.55; cursor: not-allowed; }
+.sb-kinds .sb-kind.is-off input { cursor: not-allowed; }
+
+.staged-list .staged-tree { margin: 6px 0 0; white-space: pre-wrap; color: var(--color-text-secondary); }
+
+/* Access: the prototype's list and note (auth.css's older .acc-asks/.acc-note
+   sizes don't apply on the System tab) */
+.dl-card .acc-asks { margin: 0 0 10px; padding-left: 18px; display: grid; gap: 6px; color: inherit; line-height: inherit; font-size: inherit; }
+.dl-card p.dl-sub.acc-note { margin: 10px 0 0; color: var(--color-text-tertiary); font: var(--type-body-s); }
+.nowrap { white-space: nowrap; }
+
+/* Audit: the avatar and the time sit centred on the row, like the prototype */
+.au-list .au-row > summary { align-items: center; }
+
+/* Updates: on a phone a release row without a date or notes leaves no blank line */
+@media (max-width: 720px) { .upd-rel > :empty { display: none; } .upd-rel { gap: 4px; } }
+
+/* The config file editor is a wide page (the prototype's .page.wide) */
+.dl-page:has(> .m-page > .cfg-raw) { max-width: none; }
+.cfg-raw .raw-grid { align-items: start; }

@@ -29,6 +29,18 @@ import { ago, goDuration } from '../lib/format'
 import '../styles/auth.css'
 import { humanError } from '../api/errors'
 import { EmptyState } from '../components/EmptyState'
+import { FormModal } from '../components/FormModal'
+import { useConfirm } from '../components/SysBits'
+
+// spanWords reads a Go duration as the prototype's words: "30 minutes",
+// "12 hours", "1 hour 30 minutes".
+function spanWords(d: string): string {
+  const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(d || '')
+  if (!m || !d) return goDuration(d)
+  const [h, mi, se] = [Number(m[1] || 0), Number(m[2] || 0), Number(m[3] || 0)]
+  const w = (n: number, u: string) => (n ? `${n} ${u}${n === 1 ? '' : 's'}` : '')
+  return [w(h, 'hour'), w(mi, 'minute'), h || mi ? '' : w(se, 'second')].filter(Boolean).join(' ') || goDuration(d)
+}
 
 function errText(e: unknown): string {
   return humanError(e)
@@ -78,6 +90,8 @@ export function Access(): JSX.Element {
   const [totp, setTOTP] = useState<TOTPEnrollment | null>(null)
   const [otp, setOtp] = useState('')
   const [busy, setBusy] = useState('')
+  const [naming, setNaming] = useState(false)
+  const [confirmNode, ask] = useConfirm()
 
   const reload = () => {
     access()
@@ -138,14 +152,14 @@ export function Access(): JSX.Element {
   }
 
   const onRemovePasskey = async (id: string, name: string) => {
-    if (!confirm(`Remove "${name}"? It can no longer sign in or approve, and any session it started ends now.`)) return
+    if (!(await ask({ title: `Remove “${name}”?`, body: 'It can no longer sign in or approve, and any session it started ends now. Your other passkeys keep working.', ok: 'Remove passkey', danger: true }))) return
     await act('passkey', () => removePasskey(id).then(() => undefined), `Removed “${name}”.`)
   }
   const onEndSession = async (id: string) => {
     await act('session', () => endSession(id).then(() => undefined), 'Signed that session out.')
   }
   const onSignOutAll = async () => {
-    if (!confirm('Sign out everywhere? Every device is signed out, this one too.')) return
+    if (!(await ask({ title: 'Sign out everywhere?', body: 'Every device is signed out, this one too. You sign in again the way you usually do.', ok: 'Sign out everywhere', danger: true }))) return
     await signOutEverywhere()
     await refreshState()
     location.assign('/signin')
@@ -174,11 +188,7 @@ export function Access(): JSX.Element {
     const done = data.totp.set ? 'Authenticator app replaced. The old one no longer works.' : 'Authenticator app set up.'
     if (await act('totp', () => totpConfirm(data, otp.trim()), done)) setTOTP(null)
   }
-  const onAddPasskey = async () => {
-    const name = prompt('Name this passkey', 'this device')
-    if (name === null) return
-    await act('passkey-add', () => addPasskeyHere(data, name.trim() || 'this device'), 'Passkey added.')
-  }
+  const onAddPasskey = () => setNaming(true)
 
   const needsTOTP = data.auth_policy.password_requires_totp
   const canPassword = data.auth_policy.methods.includes('password')
@@ -192,7 +202,7 @@ export function Access(): JSX.Element {
   const sshFallback = confirmWith.length === 0 && data.stepup_methods.includes('ssh')
 
   return (
-    <div class="col">
+    <>
       <div class="dl-phead">
         <div>
           <h1>Access</h1>
@@ -204,12 +214,9 @@ export function Access(): JSX.Element {
                 {haveBrowser.includes('password') && (needsTOTP || data.totp.set) ? ' and authenticator code' : ''}, from {listenerPhrase(data.listeners)}.
               </>
             ) : data.auth_policy.methods.includes('ssh') ? (
-              <>
-                , for now with your SSH key, from {listenerPhrase(data.listeners)}. Add a passkey or a password below to sign in
-                without it.
-              </>
+              <>, with your SSH key, from {listenerPhrase(data.listeners)}.</>
             ) : (
-              <>, from {listenerPhrase(data.listeners)}. Add a passkey or a password below to sign in.</>
+              <>, from {listenerPhrase(data.listeners)}.</>
             )}
           </p>
         </div>
@@ -263,11 +270,11 @@ export function Access(): JSX.Element {
               ))}
             </ul>
             <p class="dl-sub acc-note">
-              {data.passkey_here
-                ? 'A passkey added here works on this hostname. '
-                : 'Passkeys need HTTPS (or localhost) on a hostname conductor serves; this connection has none. '}
-              On the box, <code>conductor dashboard enroll</code> prints a one-time link to add one on
-              localhost.
+              {data.passkey_here ? (
+                <>Add one here, or with a one-time link from the command line on this computer <span class="nowrap">(<code>conductor dashboard enroll</code>).</span></>
+              ) : (
+                <>Adding a passkey needs a one-time link from the command line on this computer <span class="nowrap">(<code>conductor dashboard enroll</code>),</span> so only someone with your SSH access can add one.</>
+              )}
             </p>
           </section>
 
@@ -397,7 +404,7 @@ export function Access(): JSX.Element {
                   <div class="dl-nt">
                     <b>
                       {s.device}
-                      {s.current ? ' (this one)' : ''}
+                      {s.current ? <> <span class="dl-sub">(this one)</span></> : null}
                     </b>
                     <span class="dl-why">
                       {sessionWhere(s)} · signed in {s.created ? ago(s.created) : ''} · last active{' '}
@@ -415,7 +422,7 @@ export function Access(): JSX.Element {
               ))}
             </ul>
             <p class="dl-sub acc-note">
-              A session ends after {goDuration(data.session_policy.idle)} idle, or {goDuration(data.session_policy.max)} at most.
+              A session ends after {spanWords(data.session_policy.idle)} idle, or {spanWords(data.session_policy.max)} at most.
             </p>
           </section>
         </div>
@@ -426,43 +433,37 @@ export function Access(): JSX.Element {
             <ul class="acc-asks">
               <li>Approving or denying what a bot asks to do, a purchase included</li>
               {data.auth_policy.config_stepup === 'guarded' ? (
-                <li data-testid="config-asks">
-                  Every restore, and config changes (a new bot avatar too) except: setting{' '}
-                  <code>usage.mode</code> or raising an existing price under{' '}
-                  <code>pricing</code> (at most tenfold), up to 5 in 10 minutes (
-                  <code>config_stepup: guarded</code>)
-                </li>
+                <li data-testid="config-asks">Changes that give bots more access or loosen safety: a new permission, a new allowed site, the sandbox off; and every restore</li>
               ) : (
-                <li data-testid="config-asks">Every config change (a new bot avatar too) and every restore</li>
+                <li data-testid="config-asks">Every config change and every restore</li>
               )}
-              <li>
-                Loosening a browser wallet limit or a ticket's spend limit, or giving a spend limit to another bot
-                (assigning or reopening its ticket)
-              </li>
-              <li>Retrying a run so that steps that already succeeded run again</li>
+              <li>Storing or replacing a secret value in a vault</li>
               <li>Taking over a browser a bot is signed in to</li>
+              <li>Letting a bot spend more, in a browser or on a ticket</li>
+              <li>Retrying a run so steps that already succeeded run again</li>
+              <li>Installing an update, or going back to an older one</li>
               <li>Adding or removing a way to sign in</li>
             </ul>
             <p class="dl-sub" data-testid="stepup-methods">
               {confirmWith.length ? (
-                <>You can confirm with your {confirmWith.map((m) => methodPhrase[m]).join(' or your ')}.</>
+                <>You confirm with your {confirmWith.map((m) => methodPhrase[m]).join(' or your ')}. </>
               ) : sshFallback ? (
-                <>
-                  For now you confirm with your SSH key. Add a passkey or an authenticator app here and you won't need it
-                  in the browser.
-                </>
-              ) : (
-                <>You have nothing to confirm with on this connection yet: add a passkey or an authenticator app here.</>
-              )}{' '}
-              Everything else, including routine config changes, uses your signed-in session.
+                <>For now you confirm with your SSH key. </>
+              ) : null}
+              {data.auth_policy.config_stepup === 'guarded'
+                ? 'Everything else, including routine config changes, uses your signed-in session.'
+                : 'Everything else uses your signed-in session.'}
             </p>
           </section>
 
           <section class="dl-card">
             <header class="dl-ch"><h2>Approvals</h2></header>
             <p class="dl-sub">
-              Any of your passkeys can approve. Requiring one that never leaves its device (never synced to another
-              of your devices) isn't configurable yet.
+              {data.passkeys.length
+                ? 'Any of your passkeys can approve.'
+                : confirmWith.length || sshFallback
+                  ? `You approve the same way you confirm it’s you: with your ${confirmWith.length ? confirmWith.map((m) => methodPhrase[m]).join(' or your ') : 'SSH key'}.`
+                  : 'Add a passkey to approve from this browser.'}
             </p>
           </section>
 
@@ -496,6 +497,21 @@ export function Access(): JSX.Element {
           </details>
         </div>
       </div>
-    </div>
+      {naming ? (
+        <FormModal
+          title="Add a passkey"
+          intro="Your browser or device makes the passkey; you name it so you know it again."
+          fields={[{ k: 'name', label: 'Name this passkey', req: true, def: 'this device' }]}
+          submit="Create passkey"
+          submitIcon="passkey"
+          onSubmit={async (v) => {
+            setNaming(false)
+            await act('passkey-add', () => addPasskeyHere(data, v.name.trim() || 'this device'), 'Passkey added.')
+          }}
+          onClose={() => setNaming(false)}
+        />
+      ) : null}
+      {confirmNode}
+    </>
   )
 }

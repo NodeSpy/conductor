@@ -127,9 +127,9 @@ test('#/ on a fresh box keeps the Home layout, empty only where there is nothing
 
 // Screens that were already fine at zero still show no error and no raw text.
 test('Config names its switches in plain words', async ({ page }) => {
-  await page.goto(`${rt.baseURL}/#/config`)
-  await page.getByTestId('cfg-edit-sections').locator('summary').click()
+  await page.goto(`${rt.baseURL}/#/system/config/section/dashboard`)
   await expect(page.locator('label.field[data-path="dashboard.enabled"] .cfg-name')).toHaveText('Dashboard on')
+  await page.goto(`${rt.baseURL}/#/system/config/section/store`)
   await expect(page.locator('label.field[data-path="store.state_file"] .cfg-name')).toHaveText('State file')
 })
 

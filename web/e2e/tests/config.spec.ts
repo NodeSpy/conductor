@@ -22,9 +22,10 @@ test.afterAll(() => {
 test('edit a setting → review the diff → apply → confirm', async ({ page, collector }) => {
   await page.goto(`${rt.baseURL}/#/config`)
 
-  // The field editor is folded under "Edit the config by section" (the
-  // Applied changes history is the default view, phase 8); open it.
+  // "Edit the config by section" lists the sections; settings opens its own
+  // value editor (#/system/config/section/settings).
   await page.getByTestId('cfg-edit-sections').locator('summary').click()
+  await page.getByTestId('cfg-edit-sections').getByRole('link', { name: /^settings \d+$/ }).click()
 
   // The settings.greeting field is present and shows the current value.
   const field = page.locator('input[data-path="settings.greeting"]')
@@ -35,11 +36,11 @@ test('edit a setting → review the diff → apply → confirm', async ({ page, 
   await field.fill('howdy')
   await field.blur()
 
-  // It shows as staged.
+  // It shows as staged; Review opens Review and apply.
+  await page.getByRole('link', { name: 'Review 1 change' }).click()
   await expect(page.locator('.staged-list')).toContainText('settings.greeting')
 
-  // Review → the one-line diff appears (one del + one add), comment preserved.
-  await page.getByRole('button', { name: 'Review changes' }).click()
+  // The one-line diff (one del + one add), comment preserved.
   const diff = page.locator('.diff')
   await expect(diff).toBeVisible()
   await expect(diff.locator('.dl.del')).toHaveCount(1)
@@ -48,9 +49,10 @@ test('edit a setting → review the diff → apply → confirm', async ({ page, 
   // The inline comment survives on the added line.
   await expect(diff.locator('.dl.add')).toContainText('inline comment')
 
-  // Apply → confirm (step-up).
-  await page.getByRole('button', { name: 'Apply…' }).click()
-  await page.getByRole('button', { name: 'Confirm apply' }).click()
+  // Apply, once the check on a copy has passed.
+  const go = page.getByTestId('apply-go')
+  await expect(go).not.toHaveAttribute('aria-disabled', 'true', { timeout: 30_000 })
+  await go.click()
 
   // The success banner appears and names a backup.
   const ok = page.locator('.banner.ok')
@@ -76,15 +78,14 @@ test('a staged map shows its value, not [object Object]', async ({ page }) => {
   await expect
     .poll(async () => (await page.request.get(`${rt.baseURL}/api/v1/status`).catch(() => null))?.status() ?? 0, { timeout: 30_000 })
     .toBe(200)
-  await page.goto(`${rt.baseURL}/#/config`)
-  await page.getByTestId('cfg-edit-sections').locator('summary').click()
+  await page.goto(`${rt.baseURL}/#/system/config/section/settings`)
   await expect(page.locator('input[data-path="settings.greeting"]')).toBeVisible()
   // A whole section staged at once (as the Packs and System screens can).
   const res = await page.request.post(`${rt.baseURL}/api/v1/config/stage`, {
     data: { path: ['settings'], value: { greeting: 'hi there', concurrency: 2, tags: ['a', 'b'] } },
   })
   expect(res.ok()).toBeTruthy()
-  await page.reload()
+  await page.goto(`${rt.baseURL}/#/system/config/apply`)
   const tree = page.getByTestId('staged-tree')
   await expect(tree).toBeVisible()
   await expect(tree).toContainText('"greeting": "hi there"')
