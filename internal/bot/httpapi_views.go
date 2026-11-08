@@ -166,6 +166,17 @@ func proposalRow(bot string, p store.Proposal) map[string]any {
 	if !p.Expires.IsZero() {
 		row["expires"] = p.Expires
 	}
+	// A decided proposal says who decided it, when, and why (the bot page's
+	// Past decisions).
+	if p.Approver != "" {
+		row["approver"] = p.Approver
+	}
+	if !p.Decided.IsZero() {
+		row["decided"] = p.Decided
+	}
+	if p.Reason != "" {
+		row["reason"] = p.Reason
+	}
 	if p.Options != nil {
 		row["options"] = p.Options
 	}

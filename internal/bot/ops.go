@@ -691,7 +691,7 @@ func (s *Service) teamStatus(ctx context.Context, team string, full bool) map[st
 				if c.Team != team || c.Routing == nil {
 					continue
 				}
-				routed = append(routed, map[string]any{"bot": n, "case": c.ID, "title": c.Title, "status": c.Status,
+				routed = append(routed, map[string]any{"bot": n, "case": c.ID, "ticket": c.Ticket, "source": c.Source, "title": c.Title, "status": c.Status,
 					"via": c.Routing.Via, "rule": c.Routing.Rule, "lead": c.Routing.Lead, "lead_case": c.Routing.LeadCase,
 					"assignee": c.Routing.Assignee, "assignee_case": c.Routing.AssigneeCase, "state": c.Routing.State,
 					"requester": c.Requester, "requester_class": c.RequesterClass, "created": c.Created.Format(time.RFC3339)})
@@ -723,11 +723,21 @@ func (s *Service) teamStatus(ctx context.Context, team string, full bool) map[st
 				break
 			}
 			ds = append(ds, map[string]any{"delegation": d.ID, "from": d.From, "from_case": d.FromCase, "to": d.To, "to_case": d.ToCase,
-				"title": d.Title, "status": d.Status, "requester": d.Requester, "requester_class": d.RequesterClass, "depth": d.Depth})
+				"from_ticket": s.caseTicket(d.From, d.FromCase), "to_ticket": s.caseTicket(d.To, d.ToCase),
+				"title": d.Title, "status": d.Status, "result": d.Result, "requester": d.Requester, "requester_class": d.RequesterClass, "depth": d.Depth,
+				"created": d.Created.Format(time.RFC3339), "updated": d.Updated.Format(time.RFC3339)})
 		}
 		out["delegations"] = ds
 	}
 	return out
+}
+
+// caseTicket is the ticket id (T-<n>) of a bot's case, "" when unknown.
+func (s *Service) caseTicket(bot, id string) string {
+	if c := s.Ledger.Bot(bot).Cases[id]; c != nil {
+		return c.Ticket
+	}
+	return ""
 }
 
 func (s *Service) statusOf(name string) map[string]any {

@@ -112,7 +112,9 @@ func OperatorRoutes(s *Service) Routes {
 	mux.HandleFunc("POST /v1/conversations/{id}/pin", s.apiConversationPin)
 	mux.HandleFunc("DELETE /v1/conversations/{id}/pin", s.apiConversationUnpin)
 	mux.HandleFunc("PUT /v1/conversations/pins", s.apiConversationPins)
-	s.registerViewRoutes(mux) // bot roster, detail, proposals (design §4.4)
+	s.registerViewRoutes(mux)  // bot roster, detail, proposals (design §4.4)
+	s.registerBotOpRoutes(mux) // rotate, sweep, deliver, workers (the bot page's ⋯ menu)
+	s.registerRepoRoutes(mux)  // a bot's memory and a team's knowledge (httpapi_repo.go)
 	return *mux
 }
 
