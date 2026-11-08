@@ -153,6 +153,13 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
           </button>
         ) : null}
         {inNeeds ? <RunMoreMenu runID={id} onDismiss={() => dismiss(id)} /> : null}
+        {data.live || r.status === 'ok' ? null : (
+          <p class="dl-sub run-next-why">
+            {r.failed_step
+              ? `Steps before "${r.failed_step}" are replayed from their recorded outputs; only it runs again.`
+              : 'Steps already recorded are replayed from their outputs; nothing they did repeats.'}
+          </p>
+        )}
       </div>
 
       {retryOpen && !data.live ? (
