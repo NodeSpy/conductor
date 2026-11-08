@@ -10,6 +10,7 @@ import { api } from '../api/client'
 import type { ConfigLeaf, ConfigResponse, HistoryItem, DiffLineDTO } from '../api/types'
 import { ReviewPanel } from '../components/ReviewPanel'
 import { Icon } from '../components/Icon'
+import { EmptyState } from '../components/EmptyState'
 import { ago } from '../lib/format'
 import { seg } from '../router'
 
@@ -99,7 +100,7 @@ export function Config(): JSX.Element {
                     <div class="cfg-head" style="padding:14px 22px 0">
                       <h2 style="margin:0;font-size:15px">{sectionTitle(section)}</h2>
                       <span class="cfg-head-sub">
-                        <span class="mono">{section}</span>
+                        <code>{section}</code>
                         {!EDITABLE.has(section) ? <span class="tag">read-only here</span> : null}
                       </span>
                     </div>
@@ -133,7 +134,7 @@ function RawConfig({ c }: { c: ConfigResponse | null }): JSX.Element {
         <div>
           <h1>Config · the file</h1>
           <p class="dl-lead">
-            <span class="mono">{c?.path ?? '…'}</span>
+            {c?.path ? <code>{c.path}</code> : '…'}
             {c?.sha ? <span class="mono"> · {c.sha}</span> : null}
           </p>
         </div>
@@ -160,7 +161,7 @@ function HistoryCard(): JSX.Element {
     <section class="dl-card cfg-hist" aria-label="Applied changes">
       <header class="dl-ch">
         <h2>Applied changes</h2>
-        <span class="dl-sub">newest first · each keeps a backup you can go back to</span>
+        {items.length ? <span class="dl-sub">newest first · each keeps a backup you can go back to</span> : null}
       </header>
       {items.length ? (
         <>
@@ -170,7 +171,9 @@ function HistoryCard(): JSX.Element {
           <p class="dl-sub cfg-note">Restore goes back to before a change, undoing everything since. It's checked on a copy and backed up before it applies.</p>
         </>
       ) : (
-        <p class="dl-sub" style="padding:0 22px 18px">No changes applied yet.</p>
+        <EmptyState hero icon="clock" title="No changes applied yet" testid="history-empty">
+          <p>Each change you apply from here is listed with who made it and when, and keeps a backup you can go back to.</p>
+        </EmptyState>
       )}
     </section>
   )
@@ -215,7 +218,7 @@ function SafeCard(): JSX.Element {
       <summary class="panel-head"><h3>How a change is kept safe</h3></summary>
       <div class="panel-body small stack tight">
         <div class="row guard"><span class="grow">Edits are node-level: comments, anchors and unknown keys are kept.</span></div>
-        <div class="row guard"><span class="grow">Validated on a copy, with copied plugin state; conductor validate is not read-only.</span></div>
+        <div class="row guard"><span class="grow">Validated on a copy, with copied plugin state; <code>conductor validate</code> is not read-only.</span></div>
         <div class="row guard"><span class="grow">A config this binary can't load is never written.</span></div>
         <div class="row guard"><span class="grow">Boot guard: a config that fails at boot is restored automatically.</span></div>
       </div>

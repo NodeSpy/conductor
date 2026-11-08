@@ -142,6 +142,7 @@ export function Tickets(): JSX.Element {
         {err ? <div class="banner err" role="alert">{err}</div> : null}
         {configured ? (
           <EmptyState
+            hero
             testid="tickets-empty"
             art={<TicketGlyph />}
             title="No tickets yet"
@@ -151,6 +152,7 @@ export function Tickets(): JSX.Element {
           </EmptyState>
         ) : (
           <EmptyState
+            hero
             testid="tickets-empty"
             art={<TicketGlyph />}
             title="Tickets need a bot to work on them"

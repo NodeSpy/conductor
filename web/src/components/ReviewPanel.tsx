@@ -81,7 +81,7 @@ export function ReviewPanel({ stagedCount, guided }: { stagedCount: number; guid
               <ul class="widen-list">
                 {rev.widening.map((w) => (
                   <li>
-                    {w.text} <span class="mono id">{w.path}</span>
+                    {w.text} <code>{w.path}</code>
                   </li>
                 ))}
               </ul>
@@ -112,7 +112,7 @@ export function ReviewPanel({ stagedCount, guided }: { stagedCount: number; guid
               {(rev.effects ?? []).map((e) => (
                 <li class={e.widens ? 'widens' : ''}>
                   <span class="eff-text">{e.text}</span>
-                  {e.text.includes(e.path) ? null : <span class="mono id">{e.path}</span>}
+                  {e.text.includes(e.path) ? null : <code>{e.path}</code>}
                 </li>
               ))}
             </ul>

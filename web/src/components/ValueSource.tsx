@@ -136,7 +136,7 @@ export function ValueSource({
           </div>
         </div>
         {src === 'vault' ? (
-          <p class="vs-check dl-sub">The one reference syntax: {'{{ vault "<vault>" "<key>" }}'} — a value is never shown here.</p>
+          <p class="vs-check dl-sub">The one reference syntax: <code>{'{{ vault "<vault>" "<key>" }}'}</code> — a value is never shown here.</p>
         ) : null}
         {src === 'setting' && sensitive ? (
           <p class="vs-check callout warn small">Blocked: a setting is plain config, in every diff and backup. A sensitive value has to come from a vault or an env var.</p>

@@ -69,9 +69,12 @@ function DetailsList(): JSX.Element {
           <h1>Personal details</h1>
           <p class="lede-2">A bot asks for these by what they mean, and conductor types them into the form; the bot never receives a value.</p>
         </div>
-        <div class="actions">
-          <a class="btn primary" href="#/browser/details/new"><Icon name="plus" />Add personal details</a>
-        </div>
+        {/* With nothing saved yet the empty state below carries the one Add personal details. */}
+        {profiles === null || profiles.length ? (
+          <div class="actions">
+            <a class="btn primary" href="#/browser/details/new"><Icon name="plus" />Add personal details</a>
+          </div>
+        ) : null}
       </div>
       <BrowserTabs active="details" />
       {err ? <div class="banner err">{err}</div> : null}
@@ -80,7 +83,7 @@ function DetailsList(): JSX.Element {
       ) : (
         <section class="dl-card">
           {profiles.length === 0 ? (
-            <EmptyState small title="No personal details yet" testid="details-empty" action={{ label: 'Add personal details', href: '#/browser/details/new' }}>
+            <EmptyState hero icon="obj-profile" title="No personal details yet" testid="details-empty" action={{ label: 'Add personal details', href: '#/browser/details/new', testid: 'details-empty-add' }}>
               <p>Add a set of details (a name, an email, an address) for a bot to fill in on the sites you choose.</p>
             </EmptyState>
           ) : (

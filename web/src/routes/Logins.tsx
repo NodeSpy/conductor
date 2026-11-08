@@ -53,7 +53,8 @@ export function Logins(): JSX.Element {
           <h1>Logins</h1>
         </div>
         <div class="actions">
-          <a class="btn primary" href="#/browser/add"><Icon name="key" />Add a login</a>
+          {/* With no login yet the empty state below carries the one Add a login. */}
+          {credentials.length || logins === null ? <a class="btn primary" href="#/browser/add"><Icon name="key" />Add a login</a> : null}
           <RegisterPasskey />
         </div>
       </div>
@@ -65,7 +66,7 @@ export function Logins(): JSX.Element {
         {logins === null ? (
           <p class="dl-sub" style="padding:0 var(--pad-card) var(--pad-card)">{err ? 'Nothing to show until conductor answers.' : 'Loading logins…'}</p>
         ) : credentials.length === 0 ? (
-          <EmptyState small title="No logins yet" testid="logins-empty">
+          <EmptyState hero icon="key" title="No logins yet" testid="logins-empty" action={{ label: 'Add a login', href: '#/browser/add', testid: 'logins-empty-add' }}>
             <p>Add one so a bot can sign in to a site you choose.</p>
           </EmptyState>
         ) : (
@@ -101,8 +102,8 @@ export function Logins(): JSX.Element {
         </header>
         {sessions.length === 0 ? (
           <p class="dl-sub" style="padding:0 var(--pad-card) var(--pad-card)">
-            None yet. To add one, run <span class="mono wrap-any">conductor browser credential add NAME --session --site SITE --bind WHO</span> on
-            the conductor machine, then <span class="mono wrap-any">conductor browser seed</span> to sign in once yourself.
+            None yet. To add one, run <code>conductor browser credential add NAME --session --site SITE --bind WHO</code> on
+            the conductor machine, then <code>conductor browser seed</code> to sign in once yourself.
           </p>
         ) : (
           <ul class="dl-list dl-conns wl-flushl">

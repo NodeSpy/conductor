@@ -87,6 +87,7 @@ export function Workflows(): JSX.Element {
       <div class="col m-page">
         <div class="dl-phead"><div><h1>Workflows</h1></div></div>
         <EmptyState
+          hero
           testid="workflows-empty"
           art={<FlowGlyph />}
           title="No workflows yet"

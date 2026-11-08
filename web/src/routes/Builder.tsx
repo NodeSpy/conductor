@@ -108,7 +108,7 @@ export function Builder(): JSX.Element {
               <button type="button" class={kind === 'manual' ? 'on' : ''} aria-pressed={kind === 'manual'} onClick={() => setKind('manual')}>Manual</button>
               <button type="button" class={kind === 'event' ? 'on' : ''} aria-pressed={kind === 'event'} onClick={() => setKind('event')}>An event</button>
             </div>
-            <div class="hint">{kind === 'manual' ? 'Started by you, from here or conductor run.' : "You'll set up the event in its config file after it's created."}</div>
+            <div class="hint">{kind === 'manual' ? <>Started by you, from here or <code>conductor run</code>.</> : "You'll set up the event in its config file after it's created."}</div>
           </div>
           <button class="btn primary" type="button" disabled={staging || !name} onClick={() => void create()}>Create</button>
         </section>

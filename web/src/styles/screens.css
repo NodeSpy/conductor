@@ -130,7 +130,6 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 .cm-meta { display: flex; gap: var(--space-2); align-items: baseline; font: var(--type-caption); color: var(--color-text-secondary); margin-bottom: var(--space-1); flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 .cm-meta b { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); } .cm-meta svg { width: 14px; height: 14px; align-self: center; color: var(--color-icon-default); }
 .cm-bubble { padding: 10px var(--space-4); border-radius: var(--radius-card); font: var(--type-body-m); line-height: 1.55; overflow-wrap: anywhere; }
-.cm-bubble code.mono { background: var(--color-bg-sunken); padding: 1px var(--space-1); border-radius: var(--radius-xs); }
 .cm-bot { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: var(--space-3); align-items: start; }
 .cm-bot .cm-bubble { background: var(--color-bg-raised); border: var(--border-width) solid var(--color-border-subtle); border-top-left-radius: var(--radius-xs); }
 .cm-op { align-self: flex-end; display: grid; justify-items: end; }
@@ -225,7 +224,6 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 .prose { font: var(--type-body-m); line-height: 1.65; max-width: var(--layout-container-prose); }
 .prose h1 { font: var(--type-h2); letter-spacing: var(--type-h2-tracking); font-variation-settings: var(--type-h2-variation); margin: 0 0 var(--space-3); }
 .prose h2 { font: var(--type-h4); margin: var(--space-5) 0 var(--space-2); }
-.prose code { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); background: var(--color-bg-sunken); padding: 1px var(--space-1); border-radius: var(--radius-xs); }
 .prose ul { padding-left: var(--space-5); }
 .wtree { padding: var(--space-4) var(--pad-card); }
 .wnode { display: flex; gap: var(--space-3); align-items: flex-start; position: relative; padding: var(--space-2) 0; }

@@ -454,8 +454,8 @@ function Updates(): JSX.Element {
                 <details class="dl-tech-d">
                   <summary><Icon name="chev" />Technical details</summary>
                   <dl class="dl-facts">
-                    <dt>Check</dt><dd class="mono">{u.available} validate (on a copy of the config and plugin state)</dd>
-                    <dt>Kept</dt><dd><span class="mono">conductor.prev</span>: the previous binary, for rolling back</dd>
+                    <dt>Check</dt><dd><code>conductor validate</code> with {u.available}, on a copy of the config and plugin state</dd>
+                    <dt>Kept</dt><dd><code>conductor.prev</code>: the previous binary, for rolling back</dd>
                     <dt>Install</dt><dd>an atomic swap of the binary, then a restart; unchanged plugins are reloaded in place when that's on</dd>
                   </dl>
                 </details>
@@ -470,8 +470,8 @@ function Updates(): JSX.Element {
                 <details class="dl-tech-d">
                   <summary><Icon name="chev" />Technical details</summary>
                   <dl class="dl-facts">
-                    <dt>Check</dt><dd class="mono">git ls-remote for a newer published tag for this platform</dd>
-                    <dt>Kept</dt><dd><span class="mono">conductor.prev</span>: the previous binary, for rolling back</dd>
+                    <dt>Check</dt><dd><code>git ls-remote</code> for a newer published tag for this platform</dd>
+                    <dt>Kept</dt><dd><code>conductor.prev</code>: the previous binary, for rolling back</dd>
                     <dt>Install</dt><dd>an atomic swap of the binary, then a restart; unchanged plugins are reloaded in place when that's on</dd>
                   </dl>
                 </details>

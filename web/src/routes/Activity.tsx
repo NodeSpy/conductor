@@ -19,6 +19,7 @@ import { useMemo, useState } from 'preact/hooks'
 import { runs, status, liveTick, loadError, connAttrs, statusMark, dismissed } from '../state'
 import type { RunSummary } from '../api/types'
 import { StatusMark } from '../components/StatusMark'
+import { EmptyState } from '../components/EmptyState'
 import { FilterBar, type Option } from '../components/FilterBar'
 import { emptyFilter, matchRun, rangeMinutes, hasAnyFilter, botOfRun, STATUSES, TIME_RANGES, type FilterState } from '../lib/filter'
 import { humanDuration, ago, plural } from '../lib/format'
@@ -149,7 +150,20 @@ export function Activity(): JSX.Element {
       </div>
       {loadError.value ? <div class="banner err">Couldn't load: {loadError.value}</div> : null}
 
-      {status.value && (
+      {status.value && all.length === 0 ? (
+        // No run has happened at all (within the 14 days kept): the screen's one
+        // thing doesn't exist yet, so it is the hero, not an empty table under a
+        // filter bar and a chart of zeros.
+        <EmptyState
+          hero
+          icon="live"
+          testid="activity-empty"
+          title="No runs yet"
+          action={{ label: 'See your workflows', href: '#/workflows', testid: 'activity-empty-workflows' }}
+        >
+          <p>Every time a workflow fires, its run lands here with each step, how long it took and what it said.</p>
+        </EmptyState>
+      ) : status.value && (
         <>
           <FilterBar
             q={filter.q}
@@ -216,25 +230,13 @@ export function Activity(): JSX.Element {
                 <tbody>
                   {matched.length === 0 ? (
                     <tr>
-                      <td colSpan={cols + 1} class="dl-empty-row" data-testid="activity-empty">
-                        {all.length === 0 ? (
-                          <>
-                            No runs yet. Every time a workflow fires, its run lands here with each step, how long it took and what it
-                            said.{' '}
-                            <a class="link" href="#/workflows" data-testid="activity-empty-workflows">
-                              See your workflows
-                            </a>
-                          </>
-                        ) : (
-                          <>
-                            No run matches these filters.{' '}
-                            {hasAnyFilter(filter) ? (
-                              <button class="link" type="button" onClick={() => setFilter(emptyFilter('all'))}>
-                                Clear filters
-                              </button>
-                            ) : null}
-                          </>
-                        )}
+                      <td colSpan={cols + 1} class="dl-empty-row" data-testid="activity-none-match">
+                        No run matches these filters.{' '}
+                        {hasAnyFilter(filter) ? (
+                          <button class="link" type="button" onClick={() => setFilter(emptyFilter('all'))}>
+                            Clear filters
+                          </button>
+                        ) : null}
                       </td>
                     </tr>
                   ) : null}
@@ -271,24 +273,13 @@ export function Activity(): JSX.Element {
 
           <div class="dl-phone-groups">
             {matched.length === 0 ? (
-              <p class="dl-empty-row" data-testid="activity-empty">
-                {all.length === 0 ? (
-                  <>
-                    No runs yet.{' '}
-                    <a class="link" href="#/workflows" data-testid="activity-empty-workflows">
-                      See your workflows
-                    </a>
-                  </>
-                ) : (
-                  <>
-                    No run matches these filters.{' '}
-                    {hasAnyFilter(filter) ? (
-                      <button class="link" type="button" onClick={() => setFilter(emptyFilter('all'))}>
-                        Clear filters
-                      </button>
-                    ) : null}
-                  </>
-                )}
+              <p class="dl-empty-row" data-testid="activity-none-match">
+                No run matches these filters.{' '}
+                {hasAnyFilter(filter) ? (
+                  <button class="link" type="button" onClick={() => setFilter(emptyFilter('all'))}>
+                    Clear filters
+                  </button>
+                ) : null}
               </p>
             ) : (
               <PhoneGroups needs={needs} running={running} finished={finished} shown={shown} onMore={() => setShown((s) => s + PAGE)} />

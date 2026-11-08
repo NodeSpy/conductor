@@ -158,7 +158,7 @@ export function Attention(): JSX.Element {
                 </button>
               </p>
             ) : null}
-            {NeedList(shown)}
+            {NeedList(shown, items.length === 0)}
           </section>
         </div>
         <div class="dl-col-side">
@@ -169,12 +169,14 @@ export function Attention(): JSX.Element {
   )
 }
 
-function NeedList(items: NeedItem[]): JSX.Element {
+function NeedList(items: NeedItem[], none: boolean): JSX.Element {
   if (!items.length) {
-    return (
-      <EmptyState small title="Nothing needs you">
+    return none ? (
+      <EmptyState hero icon="check" title="Nothing needs you" testid="attention-empty">
         <p>When a bot asks for approval or a run fails, it shows up here.</p>
       </EmptyState>
+    ) : (
+      <EmptyState small title="Nothing matches these filters" />
     )
   }
   return (

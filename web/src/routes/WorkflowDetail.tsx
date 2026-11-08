@@ -329,7 +329,7 @@ function RecipeTab({
                 </div>
                 {n.if ? (
                   <div class="sc-body" style="padding-top:0;border-top:0">
-                    <span class="dl-sub"><Icon name="filter" /> Only if <code class="mono">{n.if}</code></span>
+                    <span class="dl-sub"><Icon name="filter" /> Only if <code>{n.if}</code></span>
                   </div>
                 ) : null}
                 {isOpen ? (

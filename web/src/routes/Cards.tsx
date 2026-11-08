@@ -72,9 +72,12 @@ function CardsList(): JSX.Element {
           <h1>Payment cards</h1>
           <p class="lede-2">Every purchase waits for your approval, and the card never reaches a bot.</p>
         </div>
-        <div class="actions">
-          <a class="btn primary" href="#/browser/cards/new"><Icon name="plus" />Add a card</a>
-        </div>
+        {/* With no card yet the empty state below carries the one Add a card. */}
+        {cards === null || cards.length ? (
+          <div class="actions">
+            <a class="btn primary" href="#/browser/cards/new"><Icon name="plus" />Add a card</a>
+          </div>
+        ) : null}
       </div>
       <BrowserTabs active="cards" />
       {err ? <div class="banner err">{err}</div> : null}
@@ -91,7 +94,7 @@ function CardsList(): JSX.Element {
         {cards === null ? (
           <p class="dl-sub" style="padding:0 var(--pad-card) var(--pad-card)">{err ? 'Nothing to show until conductor answers.' : 'Loading cards…'}</p>
         ) : cards.length === 0 ? (
-          <EmptyState small title="No cards yet" testid="cards-empty" action={{ label: 'Add a card', href: '#/browser/cards/new' }}>
+          <EmptyState hero icon="obj-card" title="No cards yet" testid="cards-empty" action={{ label: 'Add a card', href: '#/browser/cards/new', testid: 'cards-empty-add' }}>
             <p>Add a virtual or single-use card with its own limits; bots can then propose purchases with it for you to approve.</p>
           </EmptyState>
         ) : (

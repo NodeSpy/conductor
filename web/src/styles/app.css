@@ -39,6 +39,13 @@ button, input, select, textarea { font: inherit; color: inherit; letter-spacing:
 h1, h2, h3, h4 { text-wrap: balance; }
 /* mono: literal code, ids, digests, YAML and logs only, never under the code-s size, last on the line */
 .mono { font-family: var(--font-family-mono); font-size: max(var(--type-code-s-size), .86em); letter-spacing: 0; font-variant-numeric: normal; }
+/* inline code in a sentence (a command, a config key, a template ref, an env var, a path) is a sunken chip with a
+   hairline so it reads as code. It is one inline box sitting on the text baseline, so a short command never splits
+   across lines; with line-height 1.2 the chip (text + 1px padding + hairline) stays shorter than the surrounding
+   line, so a line with code is no taller than one without. A ref longer than the line wraps inside its own chip.
+   Code blocks (pre, .code, logs, YAML, diffs) set their own surface and reset it. */
+code { display: inline-block; max-width: 100%; vertical-align: baseline; font-family: var(--font-family-mono); font-size: var(--type-code-s-size); line-height: 1.2; letter-spacing: 0; font-variant-numeric: normal; background: var(--color-bg-sunken); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-xs); padding: 1px var(--space-1); margin-block: -2px; overflow-wrap: anywhere; }
+:is(pre, .code, .log, .log-panel, .yaml, .diff, .plan, .dl-code, .ced) code { display: inline; max-width: none; margin: 0; font: inherit; background: none; border: 0; border-radius: 0; padding: 0; overflow-wrap: inherit; }
 /* the serif: five words or fewer, written by a person, 20px or larger, in a title role */
 .serif { font-family: var(--font-family-serif); font-weight: var(--font-weight-semibold); font-variation-settings: 'SOFT' 100, 'WONK' 0; letter-spacing: -.01em; }
 .muted { color: var(--color-text-tertiary); } .dim { color: var(--color-text-secondary); }
@@ -372,6 +379,10 @@ html, body { overflow: hidden; overscroll-behavior-x: none; }
 .empty p { margin: 0; max-width: 30rem; }
 .empty .btn { margin-top: var(--space-2); }
 .empty.small { padding: var(--space-5); }
+/* the hero: a screen whose main thing doesn't exist yet (Bots' welcome is the model). Its sentence reads at body size,
+   and a screen without a glyph of its own gets one line icon above the title. */
+.empty.hero p { font: var(--type-body-m); color: var(--color-text-secondary); }
+.empty-ic { width: 44px; height: 44px; stroke-width: 1.5; color: var(--color-text-tertiary); }
 
 /* command palette */
 .palette { position: fixed; top: 12vh; left: 50%; transform: translateX(-50%); width: min(640px, calc(100% - 24px)); background: var(--modal-bg); border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-overlay); box-shadow: var(--shadow-4); z-index: var(--z-popover); overflow: hidden; animation: pop var(--motion-duration-slow) var(--motion-easing-out); }

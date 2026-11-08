@@ -22,6 +22,7 @@ import type { EnvVarInfo, SecretInfo, SecretsResponse, SystemResponse, VaultInfo
 import { humanError } from '../api/errors'
 import { FilterBar, type FilterMenu } from '../components/FilterBar'
 import { Icon } from '../components/Icon'
+import { EmptyState } from '../components/EmptyState'
 import { Menu, type MenuItem } from '../components/Menu'
 import { TabsBar } from '../components/TabsBar'
 import { StatusMark } from '../components/StatusMark'
@@ -204,7 +205,7 @@ export function Secrets(): JSX.Element {
           <Icon name="lock" />
           <span>
             <b>A secret</b> is write-only: stored in a vault and never shown again, not here and not to an agent. A field uses it as{' '}
-            <code class="mono">{'{{ vault "house" "gh-app-key" }}'}</code>.
+            <code>{'{{ vault "house" "gh-app-key" }}'}</code>.
           </span>
         </p>
       ) : (
@@ -212,7 +213,7 @@ export function Secrets(): JSX.Element {
           <Icon name="settings" />
           <span>
             <b>A setting</b> is a plain value your config reads, visible to anyone who can read the config:{' '}
-            <code class="mono">{'${settings.org}'}</code>, or an environment variable as <code class="mono">{'${env.NAME}'}</code>.
+            <code>{'${settings.org}'}</code>, or an environment variable as <code>{'${env.NAME}'}</code>.
           </span>
         </p>
       )}
@@ -320,6 +321,7 @@ function SecretsTab({ data, open }: { data: SecretsResponse; open: (m: Modal) =>
   const bad = vaults.filter((v) => v.status === 'fail')
   const dangling = secrets.filter((s) => s.vault && !known.has(s.vault)).filter(match)
   const shownVaults = vaults.filter((v) => !fVault.length || fVault.includes(v.name))
+  const noVaults = !vaults.length && !stagedNew.length
   const countWords = !vaults.length
     ? 'none yet'
     : `${vaults.length} vault${vaults.length === 1 ? '' : 's'}${bad.length ? ` · ${bad.length === 1 ? 'one can’t' : `${bad.length} can’t`} be reached` : vaults.every((v) => v.status === 'ok') ? ', all reachable' : ''}`
@@ -340,27 +342,36 @@ function SecretsTab({ data, open }: { data: SecretsResponse; open: (m: Modal) =>
           </a>
         </div>
       ) : null}
-      <FilterBar q={q} onQueryChange={setQ} placeholder="Find a secret by name, vault or what uses it" ariaLabel="Find and filter secrets" menus={menus} filterByHint />
+      {noVaults && !dangling.length ? null : (
+        <FilterBar q={q} onQueryChange={setQ} placeholder="Find a secret by name, vault or what uses it" ariaLabel="Find and filter secrets" menus={menus} filterByHint />
+      )}
 
       <section class="vaults" id="vaults">
         <div class="section-title sec-title">
           <h2>Your vaults</h2>
-          <span class="dl-sub" data-testid="vaults-count">{countWords}</span>
-          <button class="btn sm secondary vaults-add" type="button" data-testid="add-vault" onClick={() => open({ kind: 'vault' })}>
-            <Icon name="plus" />
-            Add a vault
-          </button>
+          {/* With no vault yet the hero below carries the one Add a vault, so the header has no count and no button of its own. */}
+          {noVaults ? null : (
+            <>
+              <span class="dl-sub" data-testid="vaults-count">{countWords}</span>
+              <button class="btn sm secondary vaults-add" type="button" data-testid="add-vault" onClick={() => open({ kind: 'vault' })}>
+                <Icon name="plus" />
+                Add a vault
+              </button>
+            </>
+          )}
         </div>
 
-        {!vaults.length && !stagedNew.length ? (
-          <section class="dl-card" data-testid="vaults-empty">
-            <p class="dl-sub" style="margin:0 0 12px">
-              Secrets live in a vault, so add one first: conductor can keep its own, or read 1Password, pass, HashiCorp Vault or a mounted folder.
-            </p>
-            <button class="btn primary" type="button" data-testid="add-vault-empty" onClick={() => open({ kind: 'vault' })}>
-              <Icon name="plus" />
-              Add a vault
-            </button>
+        {noVaults ? (
+          <section class="dl-card">
+            <EmptyState
+              hero
+              icon="lock"
+              testid="vaults-empty"
+              title="No vaults yet"
+              action={{ label: 'Add a vault', onClick: () => open({ kind: 'vault' }), testid: 'add-vault-empty' }}
+            >
+              <p>Secrets live in a vault, so add one first: conductor can keep its own, or read 1Password, pass, HashiCorp Vault or a mounted folder.</p>
+            </EmptyState>
           </section>
         ) : null}
 
@@ -678,7 +689,7 @@ function SettingsTab({ sys, open }: { sys: SystemResponse | null; open: (m: Moda
         <section id="settings">
           <div class="section-title">
             <h2>Settings</h2>
-            <span class="caps">read in config as {'${settings.NAME}'}</span>
+            <span class="caps">read in config as <code>{'${settings.NAME}'}</code></span>
             <button class="btn sm secondary vaults-add" type="button" data-testid="add-setting" onClick={() => open({ kind: 'setting' })}>
               <Icon name="plus" />
               Add a setting
@@ -699,7 +710,7 @@ function SettingsTab({ sys, open }: { sys: SystemResponse | null; open: (m: Moda
         <section id="env">
           <div class="section-title">
             <h2>Environment variables</h2>
-            <span class="caps">read in config as {'${env.NAME}'}</span>
+            <span class="caps">read in config as <code>{'${env.NAME}'}</code></span>
             <button class="btn sm secondary vaults-add" type="button" data-testid="env-import" onClick={() => open({ kind: 'env-import' })}>
               <Icon name="upload" />
               Import
@@ -1050,7 +1061,7 @@ function Modals({
           title={`Remove vault ${m.name}?`}
           body={
             <>
-              Stages removing it from <span class="mono">vaults:</span>. The values in it stay where they are.{' '}
+              Stages removing it from <code>vaults:</code>. The values in it stay where they are.{' '}
               {users.length
                 ? `The config still reads ${users.length} secret${users.length === 1 ? '' : 's'} from it, so the check refuses it until those point elsewhere.`
                 : 'Nothing in the config reads from it.'}
@@ -1115,7 +1126,7 @@ function Modals({
           note={
             sec && sec.used_by?.length ? (
               <>
-                <b>Used by</b> {sec.used_by.map((u) => <span class="mono">{u} </span>)}. Those pick up the new value on the next reload.
+                <b>Used by</b> {sec.used_by.map((u, i) => <>{i ? ', ' : ''}<code>{u}</code></>)}. Those pick up the new value on the next reload.
               </>
             ) : undefined
           }
@@ -1219,7 +1230,7 @@ function Modals({
           title={`Delete the setting ${m.name}?`}
           body={
             <>
-              Anything reading <span class="mono">{'${settings.' + m.name + '}'}</span> would get nothing. This stages the change; it’s checked before it applies.
+              Anything reading <code>{'${settings.' + m.name + '}'}</code> would get nothing. This stages the change; it’s checked before it applies.
             </>
           }
           ok="Stage removal"
@@ -1287,7 +1298,7 @@ function Modals({
           title={`Remove ${m.e.name}?`}
           body={
             <>
-              Stages removing it from {scopeLabel(m.e.scope)}. Anything reading <span class="mono">{'${env.' + m.e.name + '}'}</span> would get nothing.
+              Stages removing it from {scopeLabel(m.e.scope)}. Anything reading <code>{'${env.' + m.e.name + '}'}</code> would get nothing.
             </>
           }
           ok="Stage removal"
@@ -1323,8 +1334,8 @@ function Modals({
           title={`Move ${m.e.name} into the vault?`}
           body={
             <>
-              Stores the current value as <span class="mono">{target.name}/{key}</span> (write-only{passkey ? ', with your passkey' : ''}), and stages {m.e.name} as{' '}
-              <span class="mono">{refOf(target.name, key)}</span>, so the plain-text line leaves {scopeLabel(m.e.scope)}.
+              Stores the current value as <code>{target.name}/{key}</code> (write-only{passkey ? ', with your passkey' : ''}), and stages {m.e.name} as{' '}
+              <code>{refOf(target.name, key)}</code>, so the plain-text line leaves {scopeLabel(m.e.scope)}.
             </>
           }
           ok="Continue"

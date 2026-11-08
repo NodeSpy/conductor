@@ -166,7 +166,7 @@ function DaemonLog(): JSX.Element {
 
   if (!all.length) {
     return (
-      <EmptyState testid="daemon-log-empty" title="Nothing in the log yet">
+      <EmptyState hero icon="logs" testid="daemon-log-empty" title="Nothing in the log yet">
         <p>conductor's own recent log lines show here once it has written any since it started. The Audit tab covers sign-ins, config changes and decisions made through the dashboard.</p>
       </EmptyState>
     )
@@ -232,7 +232,7 @@ function AuditTab({ entries }: { entries: Entry[] }): JSX.Element {
 
   if (entries.length === 0) {
     return (
-      <EmptyState testid="audit-empty" title="Nothing recorded yet">
+      <EmptyState hero icon="logs" testid="audit-empty" title="Nothing recorded yet">
         <p>Every change that matters is written here, newest first: config applied or restored, approvals given, passkeys added, sign-ins. Nothing has happened that needs a record.</p>
       </EmptyState>
     )

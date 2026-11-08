@@ -64,38 +64,37 @@ for (const s of SCREENS) {
   })
 }
 
-// Activity on a fresh box: unlike the generic screens above, it never
-// collapses into a single blanket empty state (design method §4: a page keeps
-// all its sections, headers and actions; an empty section gets a one-line
-// message in place of its rows) — the filter bar and the runs-per-hour card
-// stay up, and the table/phone list carries the "No runs yet" message in
-// place of its rows.
-test('#/activity on a fresh box keeps the Activity layout, empty only where there is nothing', async ({ page, collector }) => {
+// Activity on a fresh box: no run has ever happened, so the screen's one thing
+// doesn't exist yet and it is the hero (owner rule: a centred title, one
+// sentence, one primary action), not an empty table under a chart of zeros.
+test('#/activity on a fresh box is the hero, with one way to the workflows', async ({ page, collector }) => {
   await page.goto(`${rt.baseURL}/#/activity`)
   await expect(page.getByRole('heading', { level: 1, name: 'Activity' })).toBeVisible()
-  await expect(page.locator('.fb')).toBeVisible()
-  await expect(page.locator('.dl-strip')).toBeVisible()
-  await expect(page.getByTestId('activity-empty').first()).toContainText(/No runs yet/)
-  await expect(page.getByTestId('activity-empty-workflows').first()).toBeVisible()
+  const empty = page.getByTestId('activity-empty')
+  await expect(empty.getByRole('heading', { level: 2 })).toHaveText('No runs yet')
+  await expect(page.getByTestId('activity-empty-workflows')).toHaveAttribute('href', '#/workflows')
+  await expect(page.locator('.dl-strip')).toHaveCount(0)
   await noErrors(page)
   expect(collector.failed, 'no failed requests').toEqual([])
   expect(collector.consoleErrors, 'no console errors').toEqual([])
   await shot(page, 'activity')
 })
 
-// Secrets on a fresh box: unlike the other screens, it is never a single
-// blanket empty state (CONFORMANCE "Secrets") — the tabs, the explanation and
-// an always-present vaults section with Add a vault stay up, and each tab
-// carries its own empty state underneath.
+// Secrets on a fresh box: the tabs, the explanation and the vaults section stay
+// up; with no vault the section is the hero, which carries the one Add a vault
+// (the section header has no button or count of its own then).
 test('#/secrets on a fresh box keeps the Secrets layout, empty only where there is nothing', async ({ page, collector }) => {
   await page.goto(`${rt.baseURL}/#/secrets`)
   await expect(page.getByRole('heading', { level: 1, name: 'Secrets' })).toBeVisible()
   await expect(page.locator('.tabs a', { hasText: 'Secrets' })).toBeVisible()
   await expect(page.locator('.tabs a', { hasText: 'Settings' })).toBeVisible()
   await expect(page.locator('.vaults')).toBeVisible()
-  await expect(page.getByTestId('add-vault')).toBeVisible()
+  await expect(page.getByTestId('add-vault')).toHaveCount(0)
+  await expect(page.getByTestId('vaults-count')).toHaveCount(0)
+  await expect(page.getByTestId('vaults-empty').getByRole('heading', { level: 2 })).toHaveText('No vaults yet')
   await expect(page.getByTestId('vaults-empty')).toContainText('Secrets live in a vault')
   await expect(page.getByTestId('add-vault-empty')).toBeVisible()
+  await expect(page.locator('.sec-explain code')).toHaveText('{{ vault "house" "gh-app-key" }}')
   await expect(page.getByText('<vault>/<key>')).toHaveCount(0)
   await noErrors(page)
   expect(collector.failed, 'no failed requests').toEqual([])

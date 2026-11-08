@@ -81,6 +81,7 @@ export function Chat({ convId }: { convId?: string }): JSX.Element {
       <div class="cv-page">
         <h1>Chat</h1>
         <EmptyState
+          hero
           testid="chat-empty"
           art={<ChatGlyph />}
           title={anyBot ? 'No conversations yet' : 'No one to talk to yet'}

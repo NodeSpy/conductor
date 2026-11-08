@@ -82,7 +82,7 @@ export function RegisterPasskey(): JSX.Element {
             <h2>Register a passkey</h2>
             <div class="modal-body stack">
               <p>A dedicated passkey for one login, registered live on its own site — conductor drives a real sign-in so the site itself creates it. That needs a real browser window, so it runs from the machine conductor is on, not from here:</p>
-              <p class="mono wrap-any">conductor browser passkey register CREDENTIAL</p>
+              <p><code>conductor browser passkey register CREDENTIAL</code></p>
               <p class="dl-sub">It is revocable on the site without touching any passkey of your own.</p>
             </div>
             <div class="modal-foot row-actions">
@@ -132,7 +132,8 @@ function Sessions(): JSX.Element {
           <p class="lede-2">conductor's Chromium: one per agent session, sandboxed.</p>
         </div>
         <div class="actions">
-          <a class="btn" href="#/browser/add"><Icon name="key" />Add a login</a>
+          {/* With no browser open the empty state below carries the one Add a login. */}
+          {sessions === null || sessions.length ? <a class="btn" href="#/browser/add"><Icon name="key" />Add a login</a> : null}
           <RegisterPasskey />
         </div>
       </div>
@@ -142,8 +143,8 @@ function Sessions(): JSX.Element {
       {sessions === null ? (
         <p class="muted">{err ? 'Nothing to show until conductor answers.' : 'Loading live sessions…'}</p>
       ) : sessions.length === 0 ? (
-        <EmptyState title="No browser open right now" testid="sessions-empty">
-          <p>When an agent opens conductor's browser, its live session shows here — watch it, or take over.</p>
+        <EmptyState hero icon="globe" title="No browser open right now" testid="sessions-empty" action={{ label: 'Add a login', href: '#/browser/add', testid: 'sessions-empty-add' }}>
+          <p>When an agent opens conductor's browser, its live session shows here — watch it, or take over. Add a login so a bot can sign in to a site you choose.</p>
         </EmptyState>
       ) : (
         <div class="grid g3">
