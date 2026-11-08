@@ -15,33 +15,40 @@ export interface Fact {
   tone?: string
   pri?: number
   href?: string
+  // a fact that does something on this page (an update badge opens the
+  // update) rather than going to another one
+  onClick?: () => void
 }
 
 export function FactsLine({ facts }: { facts: (Fact | null | undefined)[] }): JSX.Element | null {
   const xs = facts.filter((f): f is Fact => !!f && !!f.value)
   if (!xs.length) return null
-  const go = (e: Event, href: string) => {
+  const go = (e: Event, f: Fact) => {
     e.preventDefault()
     e.stopPropagation()
-    location.hash = href.replace(/^#/, '')
+    if (f.onClick) f.onClick()
+    else if (f.href) location.hash = f.href.replace(/^#/, '')
   }
   return (
     <span class="fx">
-      {xs.map((f, i) => (
+      {xs.map((f, i) => {
+        const act = !!(f.href || f.onClick)
+        return (
         <span
-          class={'fx-i' + (f.href ? ' ln' : '') + (f.tone ? ' t-' + f.tone : '')}
+          class={'fx-i' + (act ? ' ln' : '') + (f.tone ? ' t-' + f.tone : '')}
           data-pri={f.pri || 2}
           title={f.label}
           key={i}
-          role={f.href ? 'link' : undefined}
-          tabIndex={f.href ? 0 : undefined}
-          onClick={f.href ? (e) => go(e, f.href!) : undefined}
-          onKeyDown={f.href ? (e) => (e.key === 'Enter' || e.key === ' ') && go(e, f.href!) : undefined}
+          role={f.onClick ? 'button' : f.href ? 'link' : undefined}
+          tabIndex={act ? 0 : undefined}
+          onClick={act ? (e) => go(e, f) : undefined}
+          onKeyDown={act ? (e) => (e.key === 'Enter' || e.key === ' ') && go(e, f) : undefined}
         >
           {f.tone === 'danger' ? <span class="fx-tile"><Icon name={f.icon} /></span> : <Icon name={f.icon || 'dot'} />}
           {f.value}
         </span>
-      ))}
+        )
+      })}
     </span>
   )
 }

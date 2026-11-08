@@ -218,17 +218,34 @@ function instRef(c: Record<string, any> | null): { key: 'use' | 'source'; ref: s
   return { key: 'use', ref: String(c?.use || '') }
 }
 
+// The exact release an entry is pinned to: version: =1.2.0 (a bare 1.2.0 is
+// ">= 1.2.0" and still takes new releases), or a release as the reference's
+// own @ref. A range (^1) or no version at all takes new releases.
+function exactPin(c: Record<string, any> | null): string {
+  const v = String(c?.version || '')
+  const m = /^==?\s*(v?\d+\.\d+\.\d+\S*)$/.exec(v.trim())
+  if (m) return m[1]
+  const at = c?.version ? '' : instRef(c).ref.split('@')[1] || ''
+  return /^v?\d+\.\d+\.\d+$/.test(at) ? at : ''
+}
+
 // The pack actions every place shares: hold / let it update, remove, update.
 function usePackActions(onToast: (t: { title: string; sub: string }) => void) {
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [plan, setPlan] = useState<{ p: PackInfo; latest?: string } | null>(null)
   const hold = async (name: string) => {
     const c = packView(name) || {}
+    const pin = exactPin(c)
+    const release = !!(c.hold || pin)
     if (c.hold) await stageDelete(['packs', name, 'hold'], `let packs.${name} update again`)
-    else await stage(['packs', name, 'hold'], true, `hold packs.${name} at this version`)
+    else if (pin && c.version) await stageDelete(['packs', name, 'version'], `let packs.${name} update again`)
+    else if (pin) {
+      const { key, ref } = instRef(c)
+      await stage(['packs', name, key], ref.split('@')[0], `let packs.${name} update again`)
+    } else await stage(['packs', name, 'hold'], true, `hold packs.${name} at this version`)
     if (!cfgError.value) {
       const n = staged.value.length
-      onToast({ title: `Staged: ${c.hold ? `let ${name} update again` : `hold ${name} at this version`}`, sub: `Not applied yet · ${n} change${n > 1 ? 's' : ''} to review and apply` })
+      onToast({ title: `Staged: ${release ? `let ${name} update again` : `hold ${name} at this version`}`, sub: `Not applied yet · ${n} change${n > 1 ? 's' : ''} to review and apply` })
     }
   }
   const remove = async (name: string) => {
@@ -240,8 +257,12 @@ function usePackActions(onToast: (t: { title: string; sub: string }) => void) {
     const c = packView(name) || {}
     const { key, ref } = instRef(c)
     setPlan(null)
-    if (key === 'use') await stage(['packs', name, 'use'], ref.split('@')[0] + '@' + to, `update packs.${name} to ${to}`)
-    else await stage(['packs', name, 'version'], to, `update packs.${name} to ${to}`)
+    // a release is a version: (see installBlock); an @suffix on the
+    // reference would otherwise outrank it as a git ref
+    if (ref.includes('@')) await stage(['packs', name, key], ref.split('@')[0], `update packs.${name} to ${to}`)
+    // an exact pin moves to the new release and stays pinned; otherwise
+    // "at least the new release" (a bare version is >=)
+    if (!cfgError.value) await stage(['packs', name, 'version'], exactPin(c) ? `=${to}` : to, `update packs.${name} to ${to}`)
     toReview()
   }
   const modals = (
@@ -414,30 +435,33 @@ function PackRow({ p, latest, actions }: { p: PackInfo; latest: string; actions:
   const n = p.triggers_total
   const unbound = (p.roles || []).filter((r) => !(c.connectors || {})[r] && (p.role_candidates?.[r] ?? 0) !== 1)
   const dormant = unbound.length > 0 && armed > 0
-  const upd = !p.local && latest && p.version && cmpVer(latest, p.version) > 0 && !String(c.use || '').endsWith('@' + latest) ? latest : ''
+  const upd = !p.local && latest && p.version && cmpVer(latest, p.version) > 0 && String(c.version || '') !== latest && !String(c.use || '').endsWith('@' + latest) ? latest : ''
+  const pin = exactPin(c)
+  const held = !!(c.hold || pin)
   const tp = p.contents?.bot_templates || 0
   const src = instRef(c).ref.split('@')[0] || (p.source || p.use || '').split('@')[0]
   const page = `#/packs/pack/${enc(p.name)}`
   const facts: (Fact | null)[] = [
-    upd ? fact.update(upd) : null,
+    upd ? { ...fact.update(upd), onClick: () => actions.showPlan(p, latest) } : null,
     tp ? { icon: 'bots', value: `Includes ${plural(tp, 'bot template')}`, href: '#/bots', label: 'Start a bot from it in New bot' } : null,
     { icon: 'play', value: !n ? 'Nothing to switch on' : n === 1 ? (armed ? 'Automation on' : 'Automation off') : `${armed} of ${n} automations on`, label: 'Its automations' },
     p.official ? fact.origin(true) : { ...fact.origin(false), value: p.local ? 'Your own' : `Third party · ${src}` },
-    p.version && !p.local ? fact.policy(!!c.hold, p.version) : null,
-    p.version && !p.local ? fact.version(p.version) : null,
+    // a pack of your own has no releases to take or hold
+    !p.local ? fact.policy(held, pin || p.version || '') : null,
+    fact.version(p.version || ''),
   ]
   const btnRef = useRef<HTMLButtonElement>(null)
   const [menu, setMenu] = useState(false)
   const items: MenuItem[] = [
     { label: 'Customize', icon: 'edit', onClick: () => (location.hash = page) },
     { label: 'What an update would change…', icon: 'eye', onClick: () => actions.showPlan(p, latest) },
-    { label: c.hold ? 'Let it update again' : 'Hold it at this version', icon: 'pause', onClick: () => void actions.hold(p.name) },
+    { label: held ? 'Let it update again' : 'Hold it at this version', icon: 'pause', onClick: () => void actions.hold(p.name) },
     '-',
     { label: 'Remove this pack…', icon: 'trash', onClick: () => actions.askRemove(p.name) },
   ]
   return (
-    <li class={'dl-conn pack-row' + (dormant ? ' attn' : '')} data-s={dormant ? 'wait' : c.hold ? 'idle' : 'ok'} data-pack={p.name}>
-      <span class="dl-ng">{dormant ? <StatusMark s="wait" lg mkOnly label="Waiting" /> : c.hold ? <StatusMark s="idle" lg mkOnly label="Parked" /> : null}</span>
+    <li class={'dl-conn pack-row' + (dormant ? ' attn' : '')} data-s={dormant ? 'wait' : held ? 'idle' : 'ok'} data-pack={p.name}>
+      <span class="dl-ng">{dormant ? <StatusMark s="wait" lg mkOnly label="Waiting" /> : held ? <StatusMark s="idle" lg mkOnly label="Parked" /> : null}</span>
       <span class="dl-nt">
         <b>
           {p.name} <StagedTag name={p.name} />
@@ -890,8 +914,10 @@ function installBlock(key: string, ref: string, fetch: string, local: boolean, l
   const major = String(latest).replace(/^v/, '').split('.')[0]
   if (local || ver === 'latest' || !latest) return { [key]: ref }
   if (ver === 'branch') return { source: (key === 'source' ? ref : fetch) + '@' + (branch || 'main') }
-  const v = ver === 'major' ? `^${major}` : latest
-  return key === 'use' ? { use: `${ref}@${v}` } : { source: ref, version: v }
+  const v = ver === 'major' ? `^${major}` : `=${latest}` // a bare version would mean >=
+  // version: works for use: and source: alike (a use: …@suffix reaches git
+  // as a raw ref, which a monorepo's <pack>/vX.Y.Z tags never match)
+  return { [key]: ref, version: v }
 }
 
 const blockWords = (b: Record<string, any>) =>
@@ -960,7 +986,7 @@ function InstallForm(props: {
   })
   const uniqWrites = Array.from(new Set(writes))
   const nw = (rv.workflows || []).length
-  const lock = `packs:\n  ${inst || rv.name}:\n    ${Object.entries(block).map(([k, v]) => `${k}: ${v}`).join('\n    ')}\n    version: ${latest || 'latest'}\n    requires: [${(rv.connectors || []).map((r) => r.name).join(', ')}]`
+  const lock = `packs:\n  ${inst || rv.name}:\n    ${Object.entries(block).filter(([k]) => k !== 'version').map(([k, v]) => `${k}: ${v}`).join('\n    ')}\n    version: ${latest || 'latest'}\n    requires: [${(rv.connectors || []).map((r) => r.name).join(', ')}]`
   const hint = local
     ? 'A folder on this machine: it changes when the folder does.'
     : { latest: 'Follows every release automatically (update.deps).', major: `Takes ${major}.x updates; a new major waits for you.`, exact: 'Pinned: never updates until you change it.', branch: 'Tracks a branch head; for testing.' }[ver]

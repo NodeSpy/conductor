@@ -597,6 +597,8 @@ button.sec-main:hover { background: var(--color-state-hover); }
 @media (max-width: 720px) { .bot-list .dl-need-a { grid-template-columns: 32px minmax(0, 1fr) auto; } }
 @media (max-width: 720px) { #wl-body tr[data-row] > td.wl-acts { width: auto !important; justify-self: end; } #wl-body tr[data-row] { grid-template-areas: "wf last" "on acts" !important; } }
 .pack-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dl-list.pack-list > li .dl-nt > .reason { display: block; -webkit-line-clamp: unset; line-clamp: none; overflow: visible; min-height: 0; } /* a needs-you reason wraps in full, phone included */
+@media (max-width: 720px) { #iw-form .seg { display: flex; flex-wrap: wrap; max-width: 100%; } } /* the version choices wrap on a phone, none cut off */
 .dl-bot-av.sm { font-family: var(--font-family-sans); font-weight: var(--font-weight-semibold); }
 
 /* a list's rows are peers: the time and the action sit in fixed columns, so every row's button is the same size and
