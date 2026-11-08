@@ -244,3 +244,24 @@ details.adv[open] > summary::before { transform: rotate(90deg); }
    crushing each branch; a lane's step keeps its summary to one line */
 .par-lanes { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); overflow-x: visible; }
 .par-lanes .lane .sc-sum, .par-lanes .lane .sc-title b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* app: a workflows hero (none yet, or no such workflow) sits in the middle of
+   the page's free height, as the other screens' heroes do; its sentence
+   wraps evenly (no lone last word) and its two actions centre together */
+.wf-hero-page { display: flex; flex-direction: column; min-height: calc(var(--dvh, 100dvh) - 160px); }
+.wf-hero-page > .empty.hero { flex: 1 1 auto; }
+.wf-hero-page > .empty.hero p { text-wrap: balance; }
+.wf-hero-page > .empty.hero > .row { flex-wrap: wrap; justify-content: center; }
+.wf-hero-name { white-space: nowrap; } /* a name never breaks, even at its dashes */
+@media (max-width: 720px) { .wf-hero-page { min-height: calc(var(--dvh, 100dvh) - var(--sat, 0px) - 240px); } }
+
+/* app: the step picker's search takes the quiet field focus, not the ring */
+.picker .input-icon .input:focus { box-shadow: none; border-color: var(--color-border-strong); }
+
+/* app: a map field here has no per-row remove button, so its rows don't keep
+   the empty third column */
+.wf-map .kvrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .wf-map .kvrow > span:empty { display: none; }
+
+/* app: a workflow's Runs tab keeps each run to one line on a phone */
+.wfb-tab .dl-row-a .dl-nt b, .wfb-tab .dl-row-a .dl-why { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.wfb-tab .dl-row-a .dl-nt { min-width: 0; }
