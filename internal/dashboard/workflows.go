@@ -201,8 +201,11 @@ func wfWhen(t config.TriggerSpec) string {
 // wfDoes is what a workflow does, in one short phrase, from its own steps:
 // the prototype's wfDoes without a description field to prefer (TriggerSpec
 // has none) or a connector verb catalog to pull an imperative label from.
-func wfDoes(t config.TriggerSpec) string {
-	if len(t.Steps) == 0 {
+func wfDoes(t config.TriggerSpec) string { return stepsDoes(t.Steps) }
+
+// stepsDoes is wfDoes over a bare step list (a reusable workflow's too).
+func stepsDoes(steps []config.Step) string {
+	if len(steps) == 0 {
 		return "has no steps yet"
 	}
 	seen := map[string]bool{}
@@ -213,7 +216,7 @@ func wfDoes(t config.TriggerSpec) string {
 			did = append(did, s)
 		}
 	}
-	for _, s := range t.Steps {
+	for _, s := range steps {
 		switch stepKind(s) {
 		case "agent":
 			add("an agent works on it")
@@ -290,6 +293,13 @@ func (s *Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		history      []store.RunHistory
 	}
 	byWF := map[string]*tally{}
+	byWFHist := func(m map[string]*tally) map[string][]store.RunHistory {
+		h := make(map[string][]store.RunHistory, len(m))
+		for k, v := range m {
+			h[k] = v.history
+		}
+		return h
+	}
 	for _, rec := range recs {
 		name := rec.Variant
 		if name == "" {
@@ -342,6 +352,7 @@ func (s *Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, ws)
 	}
+	out = append(out, s.reusableSummaries(byWFHist(byWF), now)...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	writeJSON(w, http.StatusOK, api.WorkflowsResponse{Workflows: out})
 }
@@ -367,6 +378,10 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	t, ok := s.findWorkflow(name)
 	if !ok {
+		if def, ok := s.deps.Cfg.Workflows[name]; ok {
+			s.writeReusableDetail(w, name, def)
+			return
+		}
 		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no workflow %q", name), "")
 		return
 	}
@@ -421,6 +436,16 @@ func (s *Server) handleWorkflowTest(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	t, ok := s.findWorkflow(name)
 	if !ok {
+		if def, ok := s.deps.Cfg.Workflows[name]; ok {
+			resp := api.TestResponse{Ok: len(def.Steps) > 0, Nodes: graphOf(def.Steps, "")}
+			if resp.Ok {
+				resp.Message = fmt.Sprintf("Resolves: %d step(s) would run, in order, when a workflow calls it. No agent or outbound verb was dispatched.", len(def.Steps))
+			} else {
+				resp.Message = "This workflow has no steps, so a call would do nothing."
+			}
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
 		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no workflow %q", name), "")
 		return
 	}

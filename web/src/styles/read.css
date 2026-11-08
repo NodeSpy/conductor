@@ -59,7 +59,8 @@ tr.clickable:hover > td {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.btn.ghost {
+/* a disabled ghost keeps interact.css's disabled border */
+.btn.ghost:not([aria-disabled='true']) {
   background: transparent;
   border-color: transparent;
 }

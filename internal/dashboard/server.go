@@ -114,6 +114,10 @@ type Deps struct {
 	Retry     func(ctx context.Context, id, fromStep string, force bool) (string, error)
 	Stop      func(ctx context.Context, id string) error
 	RunActive func(id string) bool
+	// RunManual starts a workflow that starts by hand (on: manual), the same
+	// dispatch `conductor run <name>` makes, and returns the run's history id.
+	// Nil on a read-only daemon (the endpoint reports it unavailable).
+	RunManual func(ctx context.Context, name string, inputs map[string]any) (string, error)
 
 	// BotRoutes is the bots' operator API (internal/bot.OperatorRoutes plus the
 	// avatar and wallet routes), which serves teams, conversations, tickets,
@@ -212,7 +216,10 @@ func (s *Server) routes() {
 
 	// Workflows (design §4.4).
 	s.mux.HandleFunc("GET /api/v1/workflows", s.handleWorkflows)
+	s.mux.HandleFunc("GET /api/v1/workflows/catalog", s.handleWorkflowCatalog)
 	s.mux.HandleFunc("GET /api/v1/workflows/{name}", s.handleWorkflow)
+	s.mux.HandleFunc("GET /api/v1/workflows/{name}/builder", s.handleWorkflowBuilder)
+	s.mux.HandleFunc("POST /api/v1/workflows/{name}/run", s.handleWorkflowRun)
 	s.mux.HandleFunc("POST /api/v1/workflows/{name}/test", s.handleWorkflowTest)
 
 	// Connector-published filters (design §4.2).

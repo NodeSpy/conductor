@@ -1216,6 +1216,15 @@ func cmdRun(args []string) error {
 			Retry:     eng.RetryRunByID,
 			Stop:      func(ctx context.Context, id string) error { return eng.StopRunByID(id) },
 			RunActive: eng.RunActiveByID,
+			// Run now (Workflows): the same manual dispatch `conductor run`
+			// makes over the control socket, with the history id pinned so
+			// the page can open the run it started.
+			RunManual: func(ctx context.Context, name string, inputs map[string]any) (string, error) {
+				histID := callable.NewRunID()
+				// the run outlives the HTTP request that started it
+				_, err := runManualTrigger(context.WithoutCancel(ctx), manualTriggersByName(cfg), controlRequest{Name: name, Inputs: inputs, HistoryID: histID}, eng.Emit)
+				return histID, err
+			},
 			// The bots' operator API (design §4.4): the same routes the unix
 			// socket serves (teams, chat, tickets, avatars, read models), mounted
 			// into the web surface under /api behind the session chokepoint. Nil

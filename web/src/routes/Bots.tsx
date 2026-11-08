@@ -18,6 +18,7 @@ import { apply, applyResult, busy, doReview, loadConfig, review, stage, staged }
 import { api } from '../api/client'
 import { NewBotSheet } from './NewBotSheet'
 import { plural } from '../lib/format'
+import { useHashFlag } from '../lib/hashFlag'
 
 export function Bots(): JSX.Element {
   const [bots, setBots] = useState<BotSummary[] | null>(null)
@@ -28,6 +29,8 @@ export function Bots(): JSX.Element {
   const [q, setQ] = useState('')
   const [mode, setMode] = useState<'all' | 'live' | 'practice' | 'archived'>('all')
   const [newOpen, setNewOpen] = useState(false)
+  // #/bots?new=1 (the ⌘K palette's New bot) opens the sheet.
+  useHashFlag('new', () => setNewOpen(true))
   // The cli runtimes a bot's workers can run on (null: not known yet).
   const [workers, setWorkers] = useState<string[] | null>(null)
 

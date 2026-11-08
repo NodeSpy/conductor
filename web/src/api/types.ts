@@ -172,6 +172,12 @@ export interface WorkflowSummary {
   failed_week?: number /* int */;
   health?: string;
   last20?: string[]; // its last 20 runs' status, most recent first
+  /**
+   * Kind is "workflow" for a reusable workflows: entry (run with call:);
+   * empty for a trigger.
+   */
+  kind?: string;
+  description?: string;
 }
 /**
  * WorkflowDetailResponse is GET /api/v1/workflows/{name}: the workflow's graph
@@ -194,6 +200,11 @@ export interface WorkflowDetailResponse {
   source?: string;
   when?: string;
   does?: string;
+  /**
+   * Kind is "workflow" for a reusable workflows: entry; empty for a trigger.
+   */
+  kind?: string;
+  description?: string;
 }
 /**
  * GraphNode is one step in a workflow's graph. Needs lists the ids it waits on

@@ -23,7 +23,7 @@ function renderDesc(d: string): JSX.Element {
   )
 }
 
-const TERMS: [string, string, string][] = [
+export const TERMS: [string, string, string][] = [
   ['bot', 'Bot', 'An AI teammate with memory you can chat with. It watches what you pick, tells you what it finds, and proposes actions; risky ones wait for you.'],
   ['workflow', 'Workflow', 'A fixed recipe: when something happens, run these steps in order. No judgment unless a step asks an agent or hands the event to a bot.'],
   ['trigger', 'Trigger', 'The "when" of a workflow: the event it waits for (a failed check, an incident, a schedule) and which ones count.'],

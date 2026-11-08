@@ -46,58 +46,56 @@ test('a workflow page shows its recipe, config file and a passing dry-run Test',
   await page.goto('/#/workflows/deploy')
   await expect(page.locator('.wfb-title', { hasText: 'deploy' })).toBeVisible()
 
-  // Recipe: one step card per node, in the default tab.
-  await expect(page.locator('.step-card')).toHaveCount(wf.nodes.length)
+  // Recipe: the trigger card, then one step card per top-level step.
+  await expect(page.locator('.trig-card')).toBeVisible()
+  await expect(page.locator('.wfb-list .step-card').first()).toBeVisible()
 
   // The Config file tab shows the same workflow's real YAML (the `on:` line).
   await page.locator('.dl-tabs a', { hasText: 'Config file' }).click()
   await expect(page.locator('#wf-yaml')).toContainText('manual')
 
   // Dry-run Test resolves without dispatching anything.
-  await page.locator('.btn', { hasText: 'Test' }).click()
-  await expect(page.locator('.banner', { hasText: 'Resolves' })).toBeVisible()
+  await page.locator('.wfb-bar .btn', { hasText: 'Test' }).click()
+  await expect(page.locator('.toast', { hasText: 'Tested deploy' })).toBeVisible()
 })
 
-test('showing a step in the config file switches tabs and highlights its line', async ({ page }) => {
-  const res = await page.request.get('/api/v1/workflows/deploy')
-  const wf = (await res.json()) as WorkflowDetailResponse
-  const first = wf.nodes[0]
-  test.skip(!first?.line, 'this workflow\'s first step carries no source line')
-
+test('Show in YAML on a step switches to the config file and highlights the step', async ({ page }) => {
   await page.goto('/#/workflows/deploy')
-  await expect(page.locator('.step-card').first()).toBeVisible()
-
-  // Opening a step card, then "Show in the config file", switches to the
-  // Config file tab and highlights that step's real YAML line.
-  await page.locator('.step-card .sc-head').first().click()
-  await page.locator('.step-card .sc-body .btn', { hasText: 'Show in the config file' }).first().click()
+  const card = page.locator('.wfb-list .step-card').first()
+  await expect(card).toBeVisible()
+  await card.locator('.sc-more').click()
+  await page.locator('.menu button', { hasText: 'Show in YAML' }).click()
   await expect(page.locator('.dl-tabs a.on')).toHaveText('Config file')
-  await expect(page.locator(`#wf-yaml [data-ln="${first.line}"]`)).toHaveClass(/hl/)
+  await expect(page.locator('#wf-yaml .ln.hl').first()).toBeVisible()
 })
 
-test('creating a workflow validates its name and stages it, not applies it', async ({ page }) => {
-  // This runs against the suite's SHARED daemon (not an isolated one), and
-  // every project in the run shares it too — so the staged-but-unapplied
-  // change this test makes must not outlive it, or the next project's run of
-  // this same test (or any other test reading staged state) inherits it.
+test('New workflow names a draft, the builder opens on it, and Save stages it (not applies it)', async ({ page }) => {
+  // This runs against the suite's SHARED daemon: the staged change must not
+  // outlive the test.
+  const name = 'e2e-new-wf-' + Date.now().toString(36)
   try {
+    // the old page address opens the dialog on the list
     await page.goto('/#/workflows/new')
-    await expect(page.locator('h1', { hasText: 'Build a workflow' })).toBeVisible()
+    await expect(page.locator('.modal h2', { hasText: 'Name your workflow' })).toBeVisible()
 
-    // An existing name is refused before anything is staged.
-    await page.locator('#wf-new-name').fill('deploy')
-    await page.locator('#wf-new-name').blur()
-    await expect(page.locator('.ferr', { hasText: 'exists' })).toBeVisible()
-    await page.locator('.btn.primary', { hasText: 'Create' }).click()
-    await expect(page.locator('.banner')).toHaveCount(0)
+    // An existing name is refused.
+    await page.locator('#f-name').fill('deploy')
+    await page.getByTestId('wf-new-submit').click()
+    await expect(page.locator('.modal .ferr', { hasText: 'exists' })).toBeVisible()
 
-    // A fresh, valid name stages a new manual trigger — review it, don't apply.
-    const name = 'e2e-new-wf-' + Date.now().toString(36)
-    await page.locator('#wf-new-name').fill(name)
-    await page.locator('.btn.primary', { hasText: 'Create' }).click()
-    await expect(page.locator('.banner', { hasText: name })).toBeVisible()
-    await expect(page.locator('.banner', { hasText: 'staged, not applied' })).toBeVisible()
+    // A fresh name opens the builder on a draft; nothing is staged yet.
+    await page.locator('#f-name').fill(name)
+    await page.getByTestId('wf-new-submit').click()
+    await expect(page.locator('.wfb-title', { hasText: name })).toBeVisible()
+    await expect(page.locator('#wf-state')).toHaveText('Unsaved changes')
+
+    // Save (Ctrl+S) stages it through config staging.
+    await page.keyboard.press('Control+s')
+    await expect(page.locator('.toast', { hasText: 'Saved' })).toBeVisible()
+    const cfg = (await (await page.request.get('/api/v1/config')).json()) as { staged: { summary?: string }[] }
+    expect(cfg.staged.some((c) => (c.summary || '').includes(name))).toBe(true)
   } finally {
     await page.request.post('/api/v1/config/clear')
+    await page.evaluate((n) => localStorage.removeItem('cd-wf-draft:' + n), name).catch(() => {})
   }
 })

@@ -166,7 +166,8 @@
   color: var(--color-button-danger-fg, crimson);
   border-color: var(--color-border-default);
 }
-.btn.ghost {
+/* a disabled ghost keeps interact.css's disabled border */
+.btn.ghost:not([aria-disabled='true']) {
   border-color: transparent;
 }
 .btn[disabled],

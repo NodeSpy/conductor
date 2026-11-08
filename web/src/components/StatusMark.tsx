@@ -76,18 +76,24 @@ export function StatusMark({
   sm,
   mkOnly,
   label,
+  cls,
+  tip,
 }: {
   s: string
+  // the small mark (UI.statusMark's o.sm), an extra class (o.cls: tpill,
+  // val-pill, wf-state…) and a tooltip (o.tip)
+  sm?: boolean
+  cls?: string
+  tip?: string
   word?: string
   lg?: boolean
-  sm?: boolean
   mkOnly?: boolean
   // The mark alone still needs a name for assistive tech (UI.mark's o.label).
   label?: string
 }): JSX.Element {
-  const cls = ['st', mkOnly ? 'mk-only' : '', sm ? 'sm' : '', lg ? 'lg' : ''].filter(Boolean).join(' ')
+  const klass = ['st', sm ? 'sm' : '', lg ? 'lg' : '', mkOnly ? 'mk-only' : '', cls || ''].filter(Boolean).join(' ')
   return (
-    <span class={cls} data-s={s} role={mkOnly && label ? 'img' : undefined} aria-label={mkOnly && label ? label : undefined}>
+    <span class={klass} data-s={s} data-tip={tip} role={mkOnly && label ? 'img' : undefined} aria-label={mkOnly && label ? label : undefined}>
       <i>
         <Glyph n={markGlyph(s)} />
       </i>
