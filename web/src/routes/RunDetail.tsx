@@ -7,23 +7,27 @@
 // .dl-facts, .dl-crumbs): the plain title, the lead sentence, the status mark,
 // the step tree, the selected step's card, and Details.
 //
-// Left out (prototype-only, no backend yet): Compare with an earlier run, the
-// ⋯ menu (Dismiss from Needs you already has its own control elsewhere), Open
-// in paseo (no live paseo session concept here) and the live log tail (a
-// running step says it's working; its recorded output appears once it's
-// stepped past, same as the prototype's non-live tabs).
+// Left out (prototype-only, no backend yet): Compare with an earlier run
+// (no "other runs of this workflow" read model wired here yet), Open in paseo
+// (no live paseo session concept here) and a true Log tab/live log tail (the
+// store never keeps a step's raw line-by-line log once it's finished — only
+// its scrubbed inputs/outputs/error — so a running step just says it's
+// working, and a finished one has no separate Log tab, same as the
+// prototype's own tabsFor when a step recorded no log lines).
 import type { JSX } from 'preact'
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from '../api/client'
-import type { RunDetailResponse, RunStep } from '../api/types'
-import { liveTick, statusMark } from '../state'
+import type { EnvVarInfo, RunDetailResponse, RunStep } from '../api/types'
+import { dismiss, dismissed, liveTick, statusMark } from '../state'
 import { StatusMark } from '../components/StatusMark'
 import { Icon } from '../components/Icon'
+import { Menu, type MenuItem } from '../components/Menu'
+import { Yaml } from '../components/Yaml'
 import { humanDuration, ago, plural } from '../lib/format'
 import { go } from '../router'
 import { humanError } from '../api/errors'
 
-type Tab = 'outputs' | 'inputs' | 'diff' | 'error'
+type Tab = 'outputs' | 'inputs' | 'diff'
 
 type AuditEntry = Record<string, unknown>
 
@@ -109,6 +113,13 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
     }
   }
 
+  // inNeeds/wasDismissed: whether this failed run is currently one of Home's
+  // "Needs you" items (prototype's run-dismiss ⋯ item) — the one entry this
+  // phase's ⋯ menu carries (Compare/Open-in-paseo are the two left-out items).
+  const isFailed = r.status === 'failed'
+  const wasDismissed = dismissed.value.includes(id)
+  const inNeeds = isFailed && !wasDismissed
+
   return (
     <div data-run-detail={id}>
       <Crumbs id={id} title={runTitle(r)} />
@@ -141,6 +152,7 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
             Retry{r.failed_step ? ` from "${r.failed_step}"` : ''}…
           </button>
         ) : null}
+        {inNeeds ? <RunMoreMenu runID={id} onDismiss={() => dismiss(id)} /> : null}
       </div>
 
       {retryOpen && !data.live ? (
@@ -259,6 +271,23 @@ function AuditTrailCard({ entries, runID }: { entries: AuditEntry[]; runID: stri
   )
 }
 
+// RunMoreMenu: the run page's "⋯" (prototype's run-more), one item today —
+// dismissing a failed run from Needs you is reversible, so it asks nothing
+// (the toast there carries Undo; here a plain confirm-free action is enough).
+function RunMoreMenu({ runID, onDismiss }: { runID: string; onDismiss: () => void }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const items: MenuItem[] = [{ label: 'Dismiss from Needs you', icon: 'check', onClick: onDismiss }]
+  return (
+    <>
+      <button ref={btnRef} class="icon-btn" type="button" aria-label={`More for this run`} onClick={() => setOpen((o) => !o)}>
+        <Icon name="more" />
+      </button>
+      {open ? <Menu anchor={btnRef.current} items={items} onClose={() => setOpen(false)} label={`More for ${runID}`} /> : null}
+    </>
+  )
+}
+
 function Crumbs({ id, title, notFound }: { id: string; title?: string; notFound?: boolean }): JSX.Element {
   return (
     <nav class="dl-crumbs run-nav" aria-label="Where you are">
@@ -338,12 +367,16 @@ function stepSentence(s: RunStep): string {
   }
 }
 
+// tabsFor matches the prototype's own set exactly (outputs, inputs, a real
+// Log — never present here, see the header note — and diff): no separate
+// "error" tab. A failed step's error is already the step-tree's one-line
+// sentence (stepSentence) and the run's own lead sentence; StepBody falls
+// back to showing it in the body only when there is nothing else to tab to.
 function tabsFor(s: RunStep): Tab[] {
   const t: Tab[] = []
   if (s.outputs_yaml) t.push('outputs')
   if (s.inputs_yaml) t.push('inputs')
   if (s.diff) t.push('diff')
-  if (s.error) t.push('error')
   return t
 }
 
@@ -409,11 +442,12 @@ function StepCard({
           {step.tokens ? ` · ${step.tokens.toLocaleString()} tokens` : ''}
         </p>
       ) : null}
+      <EnvDisclosure step={step} isLive={isLive} />
     </section>
   )
 }
 
-function StepBody({ step, active, isLive }: { step: RunStep; active: Tab; isLive: boolean }): JSX.Element {
+function StepBody({ step, active, isLive }: { step: RunStep; active?: Tab; isLive: boolean }): JSX.Element {
   if (isLive) {
     return <p class="dl-sub">This step is running now. Its recorded output will appear when it finishes; the page refreshes live.</p>
   }
@@ -422,15 +456,54 @@ function StepBody({ step, active, isLive }: { step: RunStep; active: Tab; isLive
   }
   switch (active) {
     case 'inputs':
-      return <pre class="dl-code">{step.inputs_yaml}</pre>
+      return <Yaml text={step.inputs_yaml || ''} />
     case 'diff':
       return <DiffView diff={step.diff || ''} />
-    case 'error':
-      return <pre class="dl-code err-code">{step.error}</pre>
     case 'outputs':
+      return step.outputs_yaml ? <Yaml text={step.outputs_yaml} /> : <p class="dl-sub">No recorded output for this step.</p>
     default:
-      return step.outputs_yaml ? <pre class="dl-code">{step.outputs_yaml}</pre> : <p class="dl-sub">No recorded output for this step.</p>
+      // No outputs/inputs/diff at all (e.g. a failed assert, which records
+      // neither): the error is the only thing to show, same text as the
+      // step tree's own sentence.
+      return step.error ? <p class="dl-sub">{step.error}</p> : <p class="dl-sub">No recorded output for this step.</p>
   }
+}
+
+// EnvDisclosure: the run page's "Its environment" (prototype env-tech) —
+// offered only for a step kind the config can name a real scope for (agent,
+// code, decide; see internal/dashboard's stepEnvVars). Names and where they
+// come from only, never a value.
+function EnvDisclosure({ step, isLive }: { step: RunStep; isLive: boolean }): JSX.Element | null {
+  if (isLive || !['agent', 'code', 'decide'].includes(step.kind)) return null
+  const rows = step.env_vars || []
+  return (
+    <details class="dl-tech-d env-tech">
+      <summary>
+        <Icon name="chev" />
+        Its environment <span class="dl-sub">the variables this step saw, by scope; values are never shown</span>
+      </summary>
+      {rows.length ? (
+        <table class="tbl compact responsive">
+          <thead>
+            <tr>
+              <th>name</th>
+              <th>comes from</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((v: EnvVarInfo) => (
+              <tr key={v.scope + ':' + v.name}>
+                <td class="mono" data-l="name">{v.name}</td>
+                <td class="mono" data-l="comes from">{v.scope}{v.ref ? ` (${v.ref})` : ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p class="dl-sub">No env vars reach this step.</p>
+      )}
+    </details>
+  )
 }
 
 function DiffView({ diff }: { diff: string }): JSX.Element {
