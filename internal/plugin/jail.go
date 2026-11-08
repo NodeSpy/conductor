@@ -661,6 +661,9 @@ func grantExposeTargets(s Spec, logf func(string, ...any)) []string {
 	if len(s.ExposeTo) == 0 || s.Probe || s.TrustFull {
 		return nil
 	}
+	if _, before := runsAsBefore(s); before {
+		return nil // unjailed, as before the jail: there is nothing to grant
+	}
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}

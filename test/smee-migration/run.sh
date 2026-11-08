@@ -109,23 +109,25 @@ SECRET=harness-webhook-secret
 # checksums.txt). Each row's HOME rewrites the official source's URL to it.
 SMEE_SOURCE=$("$BIN/seed" -source-url smee) || { echo "seed -source-url failed"; exit 2; }
 PLATFORM="$(go env GOOS)_$(go env GOARCH)"
-ASSET="conductor-smee_$PLATFORM"
+# publish <dir> <plugin> <tag> <binary>: release the binary as
+# connectors/<plugin>/<tag> in the row's repo, and point the official
+# source's URL at that repo.
+publish() {
+  local d=$1 plugin=$2 tag=$3 bin=$4 repo="$1/forge.git" asset="conductor-$2_$PLATFORM" blob sums tree commit
+  [ -d "$repo" ] || git init -q --bare "$repo"
+  blob=$(git --git-dir="$repo" hash-object -w "$bin")
+  sums=$(printf '%s  %s\n' "$(sha256sum "$bin" | cut -d' ' -f1)" "$asset" | git --git-dir="$repo" hash-object -w --stdin)
+  tree=$(printf '100755 blob %s\t%s\n100644 blob %s\tchecksums.txt\n' "$blob" "$asset" "$sums" | git --git-dir="$repo" mktree)
+  commit=$(GIT_AUTHOR_NAME=harness GIT_AUTHOR_EMAIL=harness@localhost GIT_COMMITTER_NAME=harness GIT_COMMITTER_EMAIL=harness@localhost \
+    git --git-dir="$repo" commit-tree "$tree" -m "connectors/$plugin/$tag")
+  git --git-dir="$repo" update-ref "refs/dist/connectors/$plugin/$tag/$PLATFORM" "$commit"
+  mkdir -p "$d/home"
+  git config --file "$d/home/.gitconfig" "url.file://$repo.insteadOf" "$SMEE_SOURCE"
+}
 # forge <dir> <tag=binary>…: publish each binary as connectors/smee/<tag>.
 forge() {
   local d=$1; shift
-  local repo="$d/forge.git"
-  git init -q --bare "$repo"
-  for rel in "$@"; do
-    local tag=${rel%%=*} bin=${rel#*=} blob sums tree commit
-    blob=$(git --git-dir="$repo" hash-object -w "$bin")
-    sums=$(printf '%s  %s\n' "$(sha256sum "$bin" | cut -d' ' -f1)" "$ASSET" | git --git-dir="$repo" hash-object -w --stdin)
-    tree=$(printf '100755 blob %s\t%s\n100644 blob %s\tchecksums.txt\n' "$blob" "$ASSET" "$sums" | git --git-dir="$repo" mktree)
-    commit=$(GIT_AUTHOR_NAME=harness GIT_AUTHOR_EMAIL=harness@localhost GIT_COMMITTER_NAME=harness GIT_COMMITTER_EMAIL=harness@localhost \
-      git --git-dir="$repo" commit-tree "$tree" -m "connectors/smee/$tag")
-    git --git-dir="$repo" update-ref "refs/dist/connectors/smee/$tag/$PLATFORM" "$commit"
-  done
-  mkdir -p "$d/home"
-  git config --file "$d/home/.gitconfig" "url.file://$repo.insteadOf" "$SMEE_SOURCE"
+  for rel in "$@"; do publish "$d" smee "${rel%%=*}" "${rel#*=}"; done
 }
 
 # write_config <dir> <row>: the RETIRED shape, both connectors on their own
@@ -441,6 +443,72 @@ sleep 1
 post_github rollback 1
 if wait_for 30 fired rollback gh; then pass "rollback: gh.new_comment fires under the older conductor"; else fail "rollback: gh.new_comment never fired"; fi
 stop "$d"
+
+# The fleet over time: a box on an older conductor that installs its plugins
+# itself (from its own release repo, so its install records are exactly what
+# that conductor writes), through each step of the release sequence:
+#
+#   S0  today: the released plugins
+#   S1  github v2.12.0 + smee v1.2.0 released; the box takes its plugin
+#       updates (`plugin update`, what its auto-update does) on its own
+#       conductor
+#   S2  this conductor released; the box updates to it: the migration runs
+#   S3  (informational) the box rolled back to its old conductor
+#
+# Deliveries on both channels must fire at S0, S1 and S2. Runs when
+# OLD_CONDUCTORS names them ("<label>=<binary> …"), with GITHUB_REL and
+# SMEE_REL the released plugin builds.
+joins() { grep -c "subscriber joined \"$1\"" "$WORK/mocksmee.log"; }
+FLEET=() N=100
+fleet_step() { # <name> <step> <conductor> <yes|info>
+  local name=$1 step=$2 cond=$3 must=$4 d="$WORK/$1" jg jh which res before
+  jg=$(joins "$name-gh"); jh=$(joins "$name-hooks")
+  echo "=== $step" >>"$d/daemon.log"
+  boot "$d" "$cond"
+  wait_for 60 bash -c "[ \$(grep -c 'subscriber joined \"$name-gh\"' '$WORK/mocksmee.log') -gt $jg ]"
+  wait_for 30 bash -c "[ \$(grep -c 'subscriber joined \"$name-hooks\"' '$WORK/mocksmee.log') -gt $jh ]"
+  sleep 1
+  for which in gh hooks; do
+    before=$(count_fired "$name" "$which")
+    N=$((N + 1))
+    if [ "$which" = gh ]; then post_github "$name" "$N"; else post_hooks "$name" "$N"; fi
+    if wait_for 30 bash -c "[ \$(curl -sf http://127.0.0.1:$P_SINK/_captured | grep -o '\"/harness/$name/$which\"' | wc -l) -gt $before ]"; then res=fires; else res="does not fire"; fi
+    FLEET+=("$name | $step | $which | $res")
+    if [ "$must" = yes ]; then
+      if [ "$res" = fires ]; then pass "$name $step: $which fires"; else fail "$name $step: $which does not fire"; fi
+    fi
+  done
+  stop "$d"
+}
+fleet() { # <label> <old conductor>
+  local name="fleet.$1" old=$2 d="$WORK/fleet.$1"
+  say "$name"
+  mkdir -p "$d/state"
+  write_config "$d" "$name"
+  publish "$d" github v2.11.2 "$GITHUB_REL"
+  publish "$d" smee v1.1.1 "$SMEE_REL"
+  fleet_step "$name" "S0 $1, released plugins" "$old" yes
+  publish "$d" github v2.12.0 "$GITHUB_NEW"
+  publish "$d" smee v1.2.0 "$SMEE_NEW"
+  # shellcheck disable=SC2046
+  $(daemon_env "$d") "$old" plugin update --config "$d/cfg/conductor.yaml" --state-dir "$d/state" >"$d/plugin-update.log" 2>&1
+  grep -E "plugin (github|smee)" "$d/plugin-update.log" | sed "s/^/   [$name S1 plugin update] /" | cut -c1-260
+  fleet_step "$name" "S1 $1, plugins updated" "$old" yes
+  fleet_step "$name" "S2 this conductor" "$CONDUCTOR_NEW" yes
+  if grep -q "expose: gh-smee" "$d/cfg/conductor.yaml" && grep -q "expose: hooks-smee" "$d/cfg/conductor.yaml"; then
+    pass "$name S2: the config was migrated"
+  else
+    fail "$name S2: the config was not migrated"
+  fi
+  grep -hE "config migrate: (approved|recorded|updated|warning)" "$d/daemon.log" | sed "s/^/   [$name S2] /" | cut -c1-260
+  fleet_step "$name" "S3 rolled back to $1" "$old" info
+}
+if [ -n "${OLD_CONDUCTORS:-}" ]; then
+  for v in GITHUB_REL SMEE_REL; do [ -x "${!v:-}" ] || { fail "fleet: $v must name an executable"; }; done
+  for oc in $OLD_CONDUCTORS; do fleet "${oc%%=*}" "${oc#*=}"; done
+  say "fleet"
+  printf '%s\n' "${FLEET[@]}"
+fi
 
 say "result"
 echo "$PASSED passed, $FAILED failed"

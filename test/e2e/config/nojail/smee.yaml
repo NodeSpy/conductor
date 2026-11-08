@@ -1,0 +1,53 @@
+# Config for the smee-migration row of the "hosts that cannot jail plugins"
+# e2e (test/e2e/nojail.sh, ROW=smee-migration). It is written in the RETIRED
+# smee shape: github's `webhook.smee_url` and the bundled webhook connector's
+# `smee_url`, each on its own channel of a mocksmee inside the container
+# (entrypoint.sh starts it on 127.0.0.1:3300). Booting rewrites it in place
+# (internal/configmigrate): each relay becomes a smee connector, which the
+# migration installs from a local release repo. On a host that cannot jail
+# plugins that fresh install is not refused: it takes over what the
+# pre-jail github plugin and conductor itself did, so it runs unjailed as
+# they did.
+connectors:
+  gh:
+    use: github
+    api_base: http://mock-github.invalid:8080
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+    webhook:
+      smee_url: http://127.0.0.1:3300/nojail-gh
+      secret: e2e-webhook-secret
+      verify_signature: true
+    sweep: { enabled: false }
+    me: { logins: [conductor-user] }
+    identity:
+      read_token: app
+      write_token: e2e-user-write-token
+  hooks:
+    use: webhook
+    smee_url: http://127.0.0.1:3300/nojail-hooks
+    allow_private: true
+    sources:
+      alarm: { path: /alarm }
+
+sandbox:
+  agents: "off"
+code:
+  isolation_default: none
+
+store:
+  state_file: /home/conductor/data/state.json
+  audit_log: /home/conductor/data/audit.jsonl
+
+triggers:
+  - on: gh.new_comment
+    steps:
+      - id: record
+        use: cli
+        command: [sh, -c, 'echo "NOJAIL-SMEE-GH {{.comment_body}}" > /home/conductor/data/gh-result.txt']
+  - on: hooks.alarm
+    steps:
+      - id: record
+        use: cli
+        command: [sh, -c, 'echo "NOJAIL-SMEE-HOOKS" > /home/conductor/data/hooks-result.txt']

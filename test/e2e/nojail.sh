@@ -33,6 +33,14 @@
 #                   (github keeps its pre-jail record): js must be REFUSED,
 #                   github must keep working regardless.
 #
+# ...and one more row, smee-migration (run_smee_row): a config in the retired
+# smee_url shape (config/nojail/smee.yaml) on such a host. Boot migrates it,
+# installing the smee plugin fresh (from a local release repo); that install
+# takes over from the pre-jail github plugin and from conductor's own relay,
+# so it runs unjailed as they did (with the warning) instead of being
+# refused, and a delivery on each local fake smee channel reaches its trigger
+# (gh.new_comment through gh-smee, hooks.alarm through hooks-smee).
+#
 # Add a row: a new case arm in config/nojail/entrypoint.sh, then add its name
 # and expected js outcome to the ROWS/JS_EXPECT table below — every assertion
 # (boot warning, connector registration, webhook→js→record completion) runs
@@ -63,7 +71,7 @@ COMPOSE=(docker compose -f "$DIR/docker-compose.yml" -p "$PROJECT")
 # NJ_SHAPES / NJ_ROWS narrow a local run (space-separated); both default to
 # everything.
 SHAPES="${NJ_SHAPES:-root nonroot}"
-ROWS="${NJ_ROWS:-prejail-v1 rewritten-v089 fresh}"
+ROWS="${NJ_ROWS:-prejail-v1 rewritten-v089 fresh smee-migration}"
 declare -A JS_EXPECT=( [prejail-v1]=works [rewritten-v089]=works [fresh]=refused )
 
 WORK="$(mktemp -d)"
@@ -218,10 +226,121 @@ run_row() {
   fi
 }
 
+# post_smee <container> <channel> <github|plain> — POST a delivery to the
+# container's mocksmee channel, as the sender (a GitHub App, an alarm) does.
+post_smee() {
+  docker exec "$1" bash -c '
+    set -e
+    f=/fixtures/new_comment.json
+    if [ "$2" = github ]; then
+      sig=$(openssl dgst -sha256 -hmac e2e-webhook-secret "$f" | sed "s/^.*= //")
+      curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:3300/$1" \
+        -H "X-GitHub-Event: issue_comment" \
+        -H "X-GitHub-Delivery: $(head -c16 /dev/urandom | od -An -tx1 | tr -d " \n")" \
+        -H "X-Hub-Signature-256: sha256=$sig" \
+        -H "Content-Type: application/json" \
+        --data-binary @"$f"
+    else
+      curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:3300/$1" \
+        -H "Content-Type: application/json" --data-binary "{\"alarm\":\"nojail\"}"
+    fi
+  ' _ "$2" "$3"
+}
+
+# run_smee_row <shape> — the smee-migration row (see the header).
+run_smee_row() {
+  local shape="$1" row=smee-migration
+  local name="nojail-$shape-$row"
+  local scen="$shape/$row"
+  local log="$WORK/$name.log"
+  local user_args=()
+  [ "$shape" = nonroot ] && user_args=(--user 1000:1000)
+
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker run -d --name "$name" "${user_args[@]}" \
+    -e "ROW=$row" -e HOME=/home/conductor \
+    -v "$DIR/config/nojail/smee.yaml:/etc/conductor/smee.yaml:ro" \
+    -v "$DIR/config/nojail/entrypoint.sh:/etc/conductor/nojail-entrypoint.sh:ro" \
+    -v "$PEM:/etc/conductor/github-app.pem:ro" \
+    -v "$DIR/fixtures:/fixtures:ro" \
+    "$IMAGE" bash /etc/conductor/nojail-entrypoint.sh /etc/conductor/smee.yaml \
+    >/dev/null || { bad "$scen container started" NJ "$scen-up" "docker run failed"; return; }
+
+  # The migration installs smee before the daemon is ready: allow for it.
+  if ! wait_for 90 docker exec "$name" test -S /home/conductor/data/control.sock; then
+    bad "$scen daemon reached readiness" NJ "$scen-up" "no control socket after 90s"
+    docker logs "$name" > "$log" 2>&1
+    echo "    log: $log"
+    [ "$KEEP" = 1 ] || docker rm -f "$name" >/dev/null 2>&1
+    return
+  fi
+  ok "$scen daemon booted" NJ "$scen-up"
+
+  local cfg
+  cfg="$(docker exec "$name" cat /home/conductor/cfg/conductor.yaml)"
+  if docker exec "$name" test -f /home/conductor/cfg/conductor.yaml.pre-smee \
+    && ! grep -v '^ *#' <<<"$cfg" | grep -q 'smee_url:' \
+    && grep -q 'expose: gh-smee' <<<"$cfg" && grep -q 'expose: hooks-smee' <<<"$cfg"; then
+    ok "$scen config migrated (backup beside it)" NJ "$scen-migrate"
+  else
+    bad "$scen config migration" NJ "$scen-migrate" "smee_url not rewritten into gh-smee/hooks-smee, or no backup: $cfg"
+  fi
+
+  # Both channels subscribed: the smee connectors are up.
+  if wait_for 60 docker exec "$name" grep -q 'subscriber joined "nojail-gh"' /home/conductor/data/mocksmee.log \
+    && wait_for 30 docker exec "$name" grep -q 'subscriber joined "nojail-hooks"' /home/conductor/data/mocksmee.log; then
+    ok "$scen both smee channels subscribed" NJ "$scen-subs"
+  else
+    bad "$scen smee subscriptions" NJ "$scen-subs" "a channel has no subscriber — see $log"
+  fi
+  sleep 1
+  docker logs "$name" > "$log" 2>&1
+
+  if grep -q 'plugin smee: installed connectors/smee/v1.1.0' "$log" \
+    && grep -q 'config migrate: smee takes over from github, which ran before the plugin jail' "$log"; then
+    ok "$scen the migration installed smee fresh; it takes over github's pre-jail treatment" NJ "$scen-install"
+  else
+    bad "$scen fresh smee install" NJ "$scen-install" "no 'installed connectors/smee/v1.1.0' + 'smee takes over from github' — see $log"
+  fi
+  if grep -q 'plugin github: registered connector type "github" ([1-9][0-9]* verb(s)); permissions: NOT jailed' "$log" \
+    && grep -qE 'plugin smee[^:]*: WARNING: running UNJAILED, as before the plugin jail' "$log" \
+    && ! grep -q 'plugin smee.*cannot jail it on this host' "$log" \
+    && ! grep -q 'plugin smee: NOT granted' "$log"; then
+    ok "$scen github and gh-smee run unjailed, with the warning; smee is not refused" NJ "$scen-unjailed"
+  else
+    bad "$scen unjailed github + smee" NJ "$scen-unjailed" "github not NOT-jailed, smee not running as before, or smee refused — see $log"
+  fi
+
+  post_smee "$name" nojail-gh github >/dev/null
+  if wait_for 30 docker exec "$name" grep -qF 'NOJAIL-SMEE-GH' /home/conductor/data/gh-result.txt; then
+    ok "$scen smee channel -> gh-smee -> github listener -> gh.new_comment" NJ "$scen-gh"
+  else
+    docker logs "$name" > "$log" 2>&1
+    bad "$scen github delivery" NJ "$scen-gh" "no gh-result.txt — see $log"
+  fi
+  post_smee "$name" nojail-hooks plain >/dev/null
+  if wait_for 30 docker exec "$name" grep -qF 'NOJAIL-SMEE-HOOKS' /home/conductor/data/hooks-result.txt; then
+    ok "$scen smee channel -> hooks-smee -> webhook listener -> hooks.alarm" NJ "$scen-hooks"
+  else
+    docker logs "$name" > "$log" 2>&1
+    bad "$scen webhook delivery" NJ "$scen-hooks" "no hooks-result.txt — see $log"
+  fi
+
+  if [ "$KEEP" = 1 ]; then
+    echo "    KEEP=1 — leaving $name up; log: $log"
+  else
+    docker rm -f "$name" >/dev/null 2>&1
+  fi
+}
+
 banner "hosts that cannot jail plugins: $SHAPES x $ROWS"
 for shape in $SHAPES; do
   for row in $ROWS; do
-    run_row "$shape" "$row"
+    if [ "$row" = smee-migration ]; then
+      run_smee_row "$shape"
+    else
+      run_row "$shape" "$row"
+    fi
   done
 done
 

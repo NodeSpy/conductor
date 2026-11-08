@@ -162,6 +162,7 @@ harness has no network, so the fetch is the only part skipped):
 | `prejail-v1` | `version: 1` (no `manifest_schema` at all) | github + js both work |
 | `rewritten-v089` | `version: 2`, `manifest_schema: 1`, `legacy: true` (what v0.88/v0.89 left behind when they could not describe a pre-jail plugin themselves) | github + js both work |
 | `fresh` | `version: 2`, `manifest_schema: 1`, no `legacy`/`pre_jail` on the **js** record (github keeps its pre-jail record) | github keeps working; **js is refused** |
+| `smee-migration` | `version: 1`, github alone; the config (`config/nojail/smee.yaml`) in the retired `smee_url` shape | boot migrates it and installs smee **fresh** from a local release repo; that install inherits github's pre-jail treatment (runs unjailed with the warning, not refused); a delivery on each local mocksmee channel reaches `gh.new_comment` and `hooks.alarm` |
 
 Both `github` (`connectors/github`) and `js` (`engines/js`) are referenced as
 **installed, remote-origin** plugins (`use: github` / `use: js`), never a

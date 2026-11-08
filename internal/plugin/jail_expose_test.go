@@ -137,6 +137,14 @@ func TestGrantExposeTargets(t *testing.T) {
 	if p := exposePorts(Spec{ExposeTo: got}); p != nil {
 		t.Errorf("a build without expose_local got ports %v", p)
 	}
+	// Unjailed as before the jail (a host that cannot jail plugins): no
+	// grant applies, and no refusal is logged.
+	restore := SetHostJailForTests(HostJail{Reason: "root"})
+	defer restore()
+	logged = nil
+	if g := grantExposeTargets(Spec{Name: "relay", PreJail: true, ExposeTo: []string{"127.0.0.1:8787"}}, func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }); g != nil || len(logged) != 0 {
+		t.Errorf("as before the jail: granted %v, logged %q", g, logged)
+	}
 }
 
 // The capability is recorded, shown at consent, and an update that adds it
