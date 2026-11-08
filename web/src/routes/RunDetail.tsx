@@ -1,50 +1,111 @@
-// One run in full (design §4.3, prototype js/screens/runs.js UI.route('runs/:id')):
-// the step tree, each step's recorded inputs/outputs/diff, and the retry/stop
-// controls. Live runs refresh on each SSE event; everything shown comes from
-// the signed history record.
+// One run in full (design §4.3), a line-for-line port of the prototype's
+// js/screens/runs.js UI.route('runs/:id'): the crumbs, the plain title and its
+// lead sentence, one recommended next step (everything else in ⋯), the step
+// tree, the selected step's card (Outputs / Inputs / Log / Diff, Retry from
+// here or Restart this step, its environment), Details with the For-audit
+// fold, and the run's own Audit trail. #/runs/:id/compare[/:other] is Compare.
 //
-// Markup and classes are the prototype's (css/daylight.css .dl-tree, .dl-code,
-// .dl-facts, .dl-crumbs): the plain title, the lead sentence, the status mark,
-// the step tree, the selected step's card, and Details.
-//
-// Left out (prototype-only, no backend yet): Compare with an earlier run
-// (no "other runs of this workflow" read model wired here yet), Open in paseo
-// (no live paseo session concept here) and a true Log tab/live log tail (the
-// store never keeps a step's raw line-by-line log once it's finished — only
-// its scrubbed inputs/outputs/error — so a running step just says it's
-// working, and a finished one has no separate Log tab, same as the
-// prototype's own tabsFor when a step recorded no log lines).
+// Everything is the daemon's: the signed run record (GET /api/v1/runs/:id),
+// the run events over SSE while it runs, the audit log. The daemon keeps no
+// step's raw output stream, so a step's Log is what conductor recorded about
+// it (when it started, how it ended, its error), and the live log streams the
+// run's own events as they arrive.
 import type { JSX } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from '../api/client'
-import type { EnvVarInfo, RunDetailResponse, RunStep } from '../api/types'
-import { dismiss, dismissed, liveTick, statusMark } from '../state'
+import { openEvents } from '../api/sse'
+import type { RunDetailResponse, RunStep, RunSummary } from '../api/types'
+import { dismiss, dismissed, liveTick, runs } from '../state'
 import { StatusMark } from '../components/StatusMark'
 import { Icon } from '../components/Icon'
 import { Menu, type MenuItem } from '../components/Menu'
 import { Yaml } from '../components/Yaml'
-import { humanDuration, ago, plural } from '../lib/format'
-import { go } from '../router'
+import { ConfirmModal, FormModal } from '../components/FormModal'
+import { toast, ToastHost } from '../components/ChatBits'
+import { EnvTech, StepDiff, agoText, durText, isFailedRun, plainError, retryAndFind, runDur, runMark, runTitle } from '../components/RunBits'
+import { RunCompare } from '../components/RunCompare'
+import { hm, runTarget } from '../lib/runwords'
+import { plural } from '../lib/format'
+import { go, seg } from '../router'
 import { humanError } from '../api/errors'
+import '../styles/runs-repass.css'
 
-type Tab = 'outputs' | 'inputs' | 'diff'
-
+type Tab = 'outputs' | 'inputs' | 'log' | 'diff'
 type AuditEntry = Record<string, unknown>
+type LogLine = [string, string, string, string] // [time, source, kind, text]
 
-function hm(iso: string): string {
-  return new Date(iso).toTimeString().slice(0, 5)
+const STEP_S: Record<string, string> = { ok: 'ok', running: 'run', failed: 'fail', stopped: 'skip', skipped: 'skip', idle: 'skip' }
+
+function hms(iso?: string | number): string {
+  return iso ? new Date(iso).toTimeString().slice(0, 8) : ''
+}
+
+/** A step's own elapsed time: recorded, or so far while it runs. */
+function stepMs(s: RunStep): number {
+  if (s.status === 'running' && s.started) return Date.now() - new Date(s.started).getTime()
+  return s.duration_ms || 0
+}
+
+/** What conductor recorded about a step, as log lines: when it started, how it ended. */
+function stepLog(s: RunStep): [string, string][] {
+  if (!s.started) return []
+  const out: [string, string][] = [['', `${hms(s.started)} started (${s.kind})`]]
+  const end = s.duration_ms ? new Date(new Date(s.started).getTime() + s.duration_ms).toISOString() : s.started
+  if (s.status === 'ok') out.push(['', `${hms(end)} passed in ${s.duration_ms ? `${s.duration_ms} ms` : 'under a millisecond'}`])
+  else if (s.status === 'failed') out.push(['err', `${hms(end)} failed: ${s.error || 'no error recorded'}`])
+  else if (s.status === 'stopped' || s.status === 'skipped') out.push(['', `${hms(end)} stopped${s.error ? `: ${s.error}` : ''}`])
+  if (s.continued_on_error) out.push(['', 'the run went on past this step’s failure (continue_on_error)'])
+  return out
+}
+
+/** A failed step with no outputs: its error is what it produced. */
+function outputsOf(s: RunStep): string {
+  if (s.outputs_yaml) return s.outputs_yaml
+  if ((s.status === 'failed' || s.status === 'stopped') && s.error) return `error: ${JSON.stringify(s.error)}`
+  return ''
+}
+
+function tabsFor(s: RunStep): [Tab, string][] {
+  const t: [Tab, string][] = []
+  if (outputsOf(s)) t.push(['outputs', 'Outputs'])
+  if (s.inputs_yaml) t.push(['inputs', 'Inputs'])
+  if (stepLog(s).length) t.push(['log', 'Log'])
+  if (s.diff) t.push(['diff', 'Diff'])
+  return t
+}
+
+function stepSentence(r: RunSummary, s: RunStep): string {
+  if (s.status === 'idle') return 'Not reached'
+  if (s.status === 'running') return 'Working on it now'
+  if (s.status === 'failed' || s.status === 'stopped') return (r.failed_step === s.id && r.error ? plainError(r) : '') || s.error || 'Failed'
+  const out = s.outputs_yaml || ''
+  if (/^exit_code: 0$/m.test(out)) return 'Passed: every check came back clean'
+  const sum = out.match(/^summary: (.+)$/m)
+  return sum ? sum[1].replace(/^"|"$/g, '') : 'Done'
+}
+
+function auditDetail(a: AuditEntry): string {
+  return Object.entries(a)
+    .filter(([k, v]) => !['event', 'ts', 'run'].includes(k) && v !== '' && v !== 0 && v !== null && v !== false && typeof v !== 'object')
+    .map(([k, v]) => `${k.replace(/_/g, ' ')} ${String(v)}`)
+    .join(' · ')
 }
 
 export function RunDetail({ id }: { id: string }): JSX.Element {
+  if (seg(2) === 'compare') return <RunCompare id={id} other={seg(3)} />
+  return <RunPage id={id} />
+}
+
+function RunPage({ id }: { id: string }): JSX.Element {
   const [data, setData] = useState<RunDetailResponse | null>(null)
   const [err, setErr] = useState('')
   const [sel, setSel] = useState<string>('')
   const [tab, setTab] = useState<Tab>('outputs')
-  const [busy, setBusy] = useState(false)
-  const [notice, setNotice] = useState('')
-  const [retryOpen, setRetryOpen] = useState(false)
-  const [retryFrom, setRetryFrom] = useState<string | undefined>(undefined)
   const [audit, setAudit] = useState<AuditEntry[]>([])
+  const [retryFrom, setRetryFrom] = useState<string | null>(null)
+  const [ask, setAsk] = useState<null | { kind: 'stop' } | { kind: 'restart'; step: string }>(null)
+  const [events, setEvents] = useState<LogLine[]>([])
+  const [, setNow] = useState(0)
   const tick = liveTick.value
 
   const reload = () =>
@@ -57,29 +118,56 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
       .catch((e) => setErr(humanError(e)))
 
   useEffect(() => {
+    setData(null)
+    setSel('')
+    setEvents([])
     void reload()
-    // The run's own slice of the audit trail (design: a separate collapsible
-    // card, "N events for this run"): every real audit write that touches a
-    // run carries its id in a "run" field (internal/engine's Audit calls), so
-    // this filters the one audit feed client-side rather than adding a
-    // server-side ?run= filter for a card that only ever shows a handful.
     api
       .audit()
-      .then((r) => setAudit((r.entries || []).filter((e) => String((e as AuditEntry)['run'] ?? '') === id)))
+      .then((r) => setAudit((r.entries || []) as AuditEntry[]))
       .catch(() => setAudit([]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
-  // Refresh a live run when SSE pulses.
+  // A live run refreshes on each SSE pulse; its elapsed times tick each second.
   useEffect(() => {
     if (data?.live) void reload()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick])
+  useEffect(() => {
+    if (!data?.live) return
+    const t = setInterval(() => setNow((n) => n + 1), 1000)
+    // the run's own events, as they arrive: each one a log line
+    const close = openEvents(['run'], {
+      onRun: (d) => {
+        if (d.run !== id) return
+        const text =
+          d.type === 'gate'
+            ? `gate ${d.status || ''}${d.detail ? `: ${d.detail}` : ''}`
+            : d.type === 'step_started'
+              ? 'started'
+              : d.type === 'step_done'
+                ? `${d.status === 'ok' ? 'passed' : d.status || 'done'}${d.duration_ms ? ` in ${durText(d.duration_ms)}` : ''}${d.detail ? `: ${d.detail}` : ''}`
+                : d.type === 'run_done'
+                  ? `run ${d.status === 'ok' ? 'passed' : d.status || 'ended'}${d.detail ? `: ${d.detail}` : ''}`
+                  : `${d.type.replace(/_/g, ' ')}${d.detail ? `: ${d.detail}` : ''}`
+        setEvents((xs) => [...xs, [hms(Date.now()), d.step || '', d.status === 'failed' ? 'err' : '', text]])
+      },
+    })
+    return () => {
+      clearInterval(t)
+      close()
+    }
+  }, [data?.live, id])
 
   if (err) {
     return (
       <div>
-        <Crumbs id={id} notFound />
+        <nav class="dl-crumbs run-nav" aria-label="Where you are">
+          <a href="#/activity">Activity</a>
+          <span class="sep" aria-hidden="true">›</span>
+          <span class="cur" aria-current="page">A run that isn’t here</span>
+        </nav>
         <div class="empty" role="status">
           <h2 class="serif">There is no run {id}</h2>
           <p>It may be older than the 14 days runs are kept.</p>
@@ -91,91 +179,149 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
   if (!data) return <p class="dl-sub">Loading…</p>
 
   const r = data.run
-  const m = statusMark(r.status)
+  const live = data.live || r.status === 'running'
+  const m = runMark(live ? 'running' : r.status)
   const steps = data.steps
-  const current =
-    steps.find((s) => s.id === sel) ||
-    steps.find((s) => s.status === 'running') ||
-    steps.find((s) => s.id === r.failed_step) ||
+  const failAt = r.failed_step || steps.find((s) => s.status === 'failed')?.id || ''
+  const runningStep = steps.find((s) => s.status === 'running')
+  const s =
+    steps.find((x) => x.id === sel) ||
+    runningStep ||
+    steps.find((x) => x.id === failAt) ||
+    steps.find((x) => x.kind === 'agent') ||
     steps[steps.length - 1]
+  const target = runTarget(r)
+  const title = `${runTitle({ workflow: r.workflow, status: live ? 'running' : r.status })}${target ? ` on ${target}` : ''}`
+  const all = runs.value
+  const same = all.filter((x) => x.workflow === r.workflow && x.id !== r.id && x.status !== 'running')
+  const retry = all.filter((x) => x.retry_of === r.id).sort((a, b) => new Date(b.started).getTime() - new Date(a.started).getTime())[0]
+  const orig = r.retry_of ? all.find((x) => x.id === r.retry_of) : undefined
+  const inNeeds = r.status === 'failed' && !dismissed.value.includes(id)
+  const runAudit = audit.filter((a) => String(a['run'] ?? '') === id)
+  const retryFromStep = (rid: string) => String(audit.find((a) => a['event'] === 'retry_from_step' && a['run'] === rid)?.['from_step'] ?? '')
+  const trig = data.trigger || 'Started by hand'
 
-  const stop = async () => {
-    if (!confirm('Stop this run? It stops mid-step; anything already pushed stays. You can retry it from any step.')) return
-    setBusy(true)
-    try {
-      const ack = await api.stopRun(id)
-      setNotice(ack.message)
-      await reload()
-    } catch (e) {
-      setNotice(humanError(e))
-    } finally {
-      setBusy(false)
+  // the lead: what happened, in a sentence (runs.js lead + UI.runStory)
+  const at = steps.findIndex((x) => x.id === failAt)
+  const maker = at > 0 ? steps.slice(0, at).reverse().find((x) => x.diff) : undefined
+  const failed = steps[at]
+  let lead: JSX.Element | string = ''
+  if (r.retry_of && live) {
+    const from = retryFromStep(r.retry_of)
+    lead = (
+      <>
+        You retried it{from ? ` from “${from}”` : ''} {agoText(r.started)}. The first run:{' '}
+        <a class="dl-link" href={'#/runs/' + r.retry_of}>{orig ? runTitle(orig) : r.retry_of}</a>
+        {orig ? `, ${agoText(orig.started)}` : ''}. Now on step <b>{runningStep?.id || s.id}</b>.
+      </>
+    )
+  } else if (isFailedRun(r) && !live) {
+    const e = plainError(r)
+    lead = (
+      <>
+        {r.status === 'stopped' ? 'Stopped' : 'Failed'} at step <b>{failAt}</b>
+        {e ? `: ${e}` : ''}
+        {/\.$/.test(e) ? '' : '.'}
+      </>
+    )
+  } else if (live) {
+    lead = (
+      <>
+        {trig} {agoText(r.started)}; now on step <b>{runningStep?.id || s.id}</b>.
+      </>
+    )
+  } else if (r.status === 'ok') lead = `Finished in ${runDur(r)}; every step passed.`
+
+  // one recommended next step, with its reason in a line; everything else in ⋯
+  type Rec = { href?: string; from?: string; label: string; why: string }
+  let rec1: Rec | null = null
+  if (retry && !live) {
+    const rf = retryFromStep(r.id)
+    rec1 = {
+      href: '#/runs/' + retry.id,
+      label: retry.status === 'running' ? 'Open the retry' : 'Open its retry',
+      why: `You retried it ${agoText(retry.started)}${rf ? ` from “${rf}”` : ''}; it ${retry.status === 'running' ? 'is running now' : retry.status === 'ok' ? 'passed' : isFailedRun(retry) ? 'failed too' : 'stopped'}.`,
     }
+  } else if (!live && (isFailedRun(r) || r.status === 'retried')) {
+    rec1 =
+      maker && failed && failed.kind !== 'agent'
+        ? { from: maker.id, label: `Retry from “${maker.id}”…`, why: `“${failAt}” failed on the change “${maker.id}” made, so redo that step; its agent sees the failure.` }
+        : { from: failAt, label: `Retry${failAt ? ` from “${failAt}”` : ''}…`, why: '' }
+  }
+  const more: MenuItem[] = [
+    rec1 && maker && failed && failed.kind !== 'agent' ? { label: `Rerun “${failAt}” only…`, icon: 'updates', onClick: () => setRetryFrom(failAt) } : null,
+    same.length ? { label: 'Compare with an earlier run', icon: 'split', onClick: () => go(`runs/${id}/compare`) } : null,
+    inNeeds
+      ? {
+          label: 'Dismiss from Needs you',
+          icon: 'check',
+          onClick: () => {
+            dismiss(id)
+            toast('Dismissed from Needs you', 'the run and its record stay in Activity', 'ok')
+          },
+        }
+      : null,
+  ].filter(Boolean) as MenuItem[]
+
+  const openRetry = (from: string) => {
+    const busy = all.find((x) => x.retry_of === r.id && x.status === 'running')
+    if (busy) {
+      toast('It’s already being retried', `opened the retry that’s running (${busy.id})`, 'run')
+      go('runs/' + busy.id)
+      return
+    }
+    setRetryFrom(from)
   }
 
-  // inNeeds/wasDismissed: whether this failed run is currently one of Home's
-  // "Needs you" items (prototype's run-dismiss ⋯ item) — the one entry this
-  // phase's ⋯ menu carries (Compare/Open-in-paseo are the two left-out items).
-  const isFailed = r.status === 'failed'
-  const wasDismissed = dismissed.value.includes(id)
-  const inNeeds = isFailed && !wasDismissed
+  const facts: [string, JSX.Element | string][] = [
+    ['Started', <>{agoText(r.started)} <span class="dl-sub">({hm(r.started)})</span></>],
+    live ? ['Running for', durText(Date.now() - new Date(r.started).getTime())] : ['Took', runDur(r)],
+    ['Triggered by', trig],
+    ['Workflow', <a class="dl-link" href={'#/workflows/' + encodeURIComponent(r.workflow)}>{r.workflow}</a>],
+  ]
+  if (r.retry_of) facts.push(['Retry of', <a class="mono dl-link" href={'#/runs/' + r.retry_of}>{r.retry_of}</a>])
 
   return (
     <div data-run-detail={id}>
-      <Crumbs id={id} title={runTitle(r)} />
+      <nav class="dl-crumbs run-nav" aria-label="Where you are">
+        <a href="#/activity">Activity</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <span class="cur" aria-current="page">{title}</span>
+      </nav>
       <div class="dl-phead">
         <div>
-          <h1 class="dl-h1-long">{runTitle(r)}</h1>
-          <p class="dl-lead">{lead(data)}</p>
+          <h1 class="dl-h1-long">{title}</h1>
+          {lead ? <p class="dl-lead">{lead}</p> : null}
         </div>
         <StatusMark s={m.s} word={m.word} lg />
       </div>
 
-      {notice ? <div class="banner info">{notice}</div> : null}
-
       <div class="dl-actions">
-        {data.live ? (
-          <button class="btn secondary" type="button" disabled={busy} onClick={stop}>
-            <Icon name="x" />
-            Stop run…
-          </button>
-        ) : r.status !== 'ok' ? (
-          <button
-            class="btn primary"
-            type="button"
-            onClick={() => {
-              setRetryFrom(r.failed_step)
-              setRetryOpen((v) => !v)
-            }}
-          >
-            <Icon name="updates" />
-            Retry{r.failed_step ? ` from "${r.failed_step}"` : ''}…
-          </button>
-        ) : null}
-        {inNeeds ? <RunMoreMenu runID={id} onDismiss={() => dismiss(id)} /> : null}
-        {data.live || r.status === 'ok' ? null : (
-          <p class="dl-sub run-next-why">
-            {r.failed_step
-              ? `Steps before "${r.failed_step}" are replayed from their recorded outputs; only it runs again.`
-              : 'Steps already recorded are replayed from their outputs; nothing they did repeats.'}
-          </p>
+        {live ? (
+          <>
+            <button class="btn secondary" type="button" onClick={() => setAsk({ kind: 'stop' })}>
+              <Icon name="x" />
+              Stop run…
+            </button>
+            {more.length ? <MoreButton items={more} /> : null}
+          </>
+        ) : (
+          <>
+            {rec1 ? (
+              rec1.href ? (
+                <a class="btn primary" href={rec1.href}>{rec1.label}</a>
+              ) : (
+                <button class="btn primary" type="button" onClick={() => openRetry(rec1!.from || '')}>
+                  <Icon name="updates" />
+                  {rec1.label}
+                </button>
+              )
+            ) : null}
+            {more.length ? <MoreButton items={more} /> : null}
+            {rec1 && rec1.why ? <p class="dl-sub run-next-why">{rec1.why}</p> : null}
+          </>
         )}
       </div>
-
-      {retryOpen && !data.live ? (
-        <RetryForm
-          steps={steps}
-          failedStep={r.failed_step}
-          initialFrom={retryFrom}
-          onCancel={() => setRetryOpen(false)}
-          onDone={(msg, newID) => {
-            setRetryOpen(false)
-            setNotice(msg)
-            if (newID) go('runs/' + newID)
-          }}
-          id={id}
-        />
-      ) : null}
 
       <div class="dl-cols">
         <div class="dl-col-main">
@@ -183,406 +329,337 @@ export function RunDetail({ id }: { id: string }): JSX.Element {
             <header class="dl-ch">
               <h2>What happened</h2>
               <span class="dl-sub">
-                {steps.length} step{steps.length === 1 ? '' : 's'} · {data.live ? 'running' : humanDuration(r.duration_ms)}
+                {plural(steps.length, 'step')} · {live ? 'running' : durText(r.duration_ms)}
               </span>
             </header>
-            <StepTree steps={steps} sel={current?.id || ''} onSel={(sid) => { setSel(sid); setTab('outputs') }} />
+            <ol class="dl-tree">
+              {steps.map((x, i) => (
+                <li class={x.status === 'failed' ? 'failed' : x.status === 'idle' ? 'skipped' : ''}>
+                  <button
+                    type="button"
+                    class={'tl' + (x.id === s?.id ? ' on' : '')}
+                    aria-pressed={x.id === s?.id}
+                    aria-disabled={x.status === 'idle' ? 'true' : undefined}
+                    data-tip={x.status === 'idle' ? 'Not reached: the run stopped before this step' : undefined}
+                    data-step={x.id}
+                    onClick={() => {
+                      if (x.status === 'idle') {
+                        toast(`“${x.id}” wasn’t reached`, 'the run stopped before it; the step that stopped it stays in view', 'idle')
+                        return
+                      }
+                      setSel(x.id)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+                      const btns = Array.from(document.querySelectorAll<HTMLButtonElement>('.dl-tree .tl'))
+                      const next = btns[btns.indexOf(e.currentTarget as HTMLButtonElement) + (e.key === 'ArrowDown' ? 1 : -1)]
+                      if (!next) return
+                      e.preventDefault()
+                      next.click()
+                      next.focus()
+                    }}
+                  >
+                    <span class="tn">{i + 1}</span>
+                    <StatusMark s={STEP_S[x.status] || 'skip'} mkOnly label={runMark(x.status === 'running' ? 'running' : x.status === 'idle' ? '' : x.status).word} />
+                    <span class="tt">
+                      <b>{x.id}</b>
+                      <span>{stepSentence(r, x)}</span>
+                    </span>
+                    <span />
+                    <em>{x.started ? durText(Math.max(1, stepMs(x))) : ''}</em>
+                  </button>
+                </li>
+              ))}
+            </ol>
           </section>
 
-          {current ? (
+          {s ? (
             <StepCard
-              step={current}
+              r={r}
+              live={live}
+              s={s}
               tab={tab}
               setTab={setTab}
-              onRetryFrom={
-                !data.live && current.status !== 'idle'
-                  ? () => {
-                      setRetryFrom(current.id)
-                      setRetryOpen(true)
-                    }
-                  : undefined
-              }
+              events={events}
+              steps={steps}
+              onRetry={() => openRetry(s.id)}
+              onRestart={() => setAsk({ kind: 'restart', step: s.id })}
             />
           ) : null}
         </div>
 
         <div class="dl-col-side">
           <section class="dl-card">
-            <header class="dl-ch"><h2>Details</h2></header>
+            <header class="dl-ch">
+              <h2>Details</h2>
+            </header>
             <dl class="dl-facts">
-              <dt>Started</dt>
-              <dd>{ago(r.started)} <span class="dl-sub">({hm(r.started)})</span></dd>
-              <dt>{data.live ? 'Running for' : 'Took'}</dt>
-              <dd>{humanDuration(r.duration_ms)}</dd>
-              <dt>Triggered by</dt>
-              <dd>{data.trigger || '—'}</dd>
-              <dt>Workflow</dt>
-              <dd><a class="dl-link" href={'#/workflows/' + encodeURIComponent(r.workflow)}>{r.workflow}</a></dd>
-              {r.retry_of ? (
+              {facts.map(([k, v]) => (
                 <>
-                  <dt>Retry of</dt>
-                  <dd><a class="mono dl-link" href={'#/runs/' + r.retry_of}>{r.retry_of}</a></dd>
+                  <dt>{k}</dt>
+                  <dd>{v}</dd>
                 </>
-              ) : null}
+              ))}
             </dl>
             <details class="dl-audit-d">
-              <summary><Icon name="chev" />For audit: the run id and its signed record</summary>
+              <summary>
+                <Icon name="chev" />
+                For audit: the run id and its signed record
+              </summary>
               <dl class="dl-facts">
                 <dt>Run</dt>
                 <dd class="mono">{r.id}</dd>
                 <dt>Record</dt>
-                <dd>{data.live ? 'signed when it finishes' : 'signed; the signature checks out'}</dd>
+                <dd>{live ? 'signed when it finishes' : 'signed; the signature checks out'}</dd>
               </dl>
             </details>
           </section>
-          <AuditTrailCard entries={audit} runID={id} />
+          <details class="dl-card dl-files-d run-audit">
+            <summary class="panel-head">
+              <h3>Audit trail</h3>
+              <span class="muted small">{plural(runAudit.length, 'event')} for this run</span>
+            </summary>
+            <ul class="dl-list">
+              {runAudit.slice(0, 6).map((a) => (
+                <li class="dl-audit">
+                  <span class="dl-nt">
+                    <b>{String(a['event'] ?? '').replace(/_/g, ' ')}</b>
+                    <span class="dl-why">{auditDetail(a)}</span>
+                  </span>
+                  <span class="dl-age">{a['ts'] ? agoText(String(a['ts'])) : ''}</span>
+                </li>
+              ))}
+              {runAudit.length ? null : <li class="dl-sub">Nothing about this run has been audited yet.</li>}
+            </ul>
+            <p class="dl-foot-note">
+              <a class="dl-link" href={'#/system/logs/audit?run=' + encodeURIComponent(id)}>
+                The full audit log for this run →
+              </a>
+            </p>
+          </details>
         </div>
       </div>
+
+      {retryFrom !== null ? (
+        <FormModal
+          caps={`${r.workflow.replace(/^bot:/, '')}${target ? ' on ' + target : ''}`}
+          title="Retry from a step"
+          intro="Re-runs the pinned trigger. Steps before the chosen one are replayed from their recorded outputs; nothing they did is repeated."
+          testid="retry-form"
+          fields={[
+            {
+              k: 'from',
+              type: 'enum',
+              label: 'Start again from',
+              req: true,
+              options: [...steps.map((x): [string, string] => [x.id, x.id + (x.id === failAt ? ' (where it failed)' : '')]), ['$start', 'the beginning']],
+              def: retryFrom || failAt || steps[0]?.id,
+            },
+            { k: 'note', label: 'Tell the agent', readonly: true, mono: false, ph: 'A retry can’t carry a note yet', help: 'Optional. conductor can’t pass a note to the agent on a retry yet; it starts again from what the run recorded.' },
+            { k: 'force', type: 'bool', label: 'Run the earlier steps again too', on: 'otherwise they’re replayed from what they recorded' },
+          ]}
+          submit="Retry"
+          submitIcon="play"
+          onClose={() => setRetryFrom(null)}
+          onSubmit={async (v) => {
+            const from = v.from === '$start' ? '' : v.from || ''
+            try {
+              const { newID } = await retryAndFind(id, from, v.force === 'true')
+              toast(`Retrying from “${from || 'the beginning'}”`, 'the first run links to it', 'run')
+              if (newID) go('runs/' + newID)
+              else void reload()
+            } catch (e) {
+              return humanError(e)
+            }
+          }}
+        />
+      ) : null}
+
+      {ask?.kind === 'stop' ? (
+        <ConfirmModal
+          title="Stop this run?"
+          body="It stops mid-step; anything already pushed stays. You can retry it from any step."
+          ok="Stop run"
+          danger
+          onClose={() => setAsk(null)}
+          onOk={async () => {
+            try {
+              await api.stopRun(id)
+              toast(`Stopped ${id}`, 'retry it from any step', 'fail')
+              await waitStopped(id)
+              await reload()
+            } catch (e) {
+              toast('Couldn’t stop it', humanError(e), 'fail')
+            }
+          }}
+        />
+      ) : null}
+      {ask?.kind === 'restart' ? (
+        <ConfirmModal
+          title={`Restart ${ask.step}?`}
+          body={
+            <>
+              This stops {id} first (the step gets a short grace to checkpoint), then starts a retry from <b>{ask.step}</b>. Steps before it are replayed from their recorded outputs; what this step did so far is discarded.
+            </>
+          }
+          ok="Stop and restart"
+          cancel="Keep it running"
+          danger
+          onClose={() => setAsk(null)}
+          onOk={async () => {
+            const step = ask.step
+            try {
+              await api.stopRun(id)
+              await waitStopped(id)
+              const { newID } = await retryAndFind(id, step, true)
+              toast(`Restarted “${step}”`, 'the stopped run links to it', 'run')
+              if (newID) go('runs/' + newID)
+              else await reload()
+            } catch (e) {
+              toast('Couldn’t restart it', humanError(e), 'fail')
+              await reload()
+            }
+          }}
+        />
+      ) : null}
+      <ToastHost />
     </div>
   )
 }
 
-// AuditTrailCard: the run's own slice of the audit log, a separate
-// collapsible card (prototype's run-audit details). A plain word-for-word
-// rendering (event name, its detail line, how long ago) — the full Audit tab
-// (System → Logs & audit) has the richer "who did what" formatting.
-function AuditTrailCard({ entries, runID }: { entries: AuditEntry[]; runID: string }): JSX.Element {
-  const shown = entries.slice(0, 6)
-  return (
-    <details class="dl-card dl-files-d run-audit">
-      <summary class="panel-head">
-        <h3>Audit trail</h3>
-        <span class="muted small">{plural(entries.length, 'event')} for this run</span>
-      </summary>
-      {shown.length ? (
-        <ul class="dl-list">
-          {shown.map((a, i) => (
-            <li class="dl-audit" key={i}>
-              <span class="dl-nt">
-                <b>{String(a['event'] ?? '').replace(/_/g, ' ')}</b>
-                <span class="dl-why">{String(a['detail'] ?? '')}</span>
-              </span>
-              <span class="dl-age">{a['ts'] ? ago(String(a['ts'])) : ''}</span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p class="dl-sub">No audit entries recorded for this run.</p>
-      )}
-      <p class="dl-foot-note">
-        <a class="dl-link" href={'#/system/logs?run=' + encodeURIComponent(runID)}>
-          The full audit log for this run →
-        </a>
-      </p>
-    </details>
-  )
+/** waitStopped waits (briefly) until the daemon says the run has ended. */
+async function waitStopped(id: string): Promise<void> {
+  for (let i = 0; i < 40; i++) {
+    const d = await api.run(id).catch(() => null)
+    if (d && !d.live && d.run.status !== 'running') return
+    await new Promise((r) => setTimeout(r, 250))
+  }
 }
 
-// RunMoreMenu: the run page's "⋯" (prototype's run-more), one item today —
-// dismissing a failed run from Needs you is reversible, so it asks nothing
-// (the toast there carries Undo; here a plain confirm-free action is enough).
-function RunMoreMenu({ runID, onDismiss }: { runID: string; onDismiss: () => void }): JSX.Element {
+function MoreButton({ items }: { items: MenuItem[] }): JSX.Element {
   const [open, setOpen] = useState(false)
-  const btnRef = useRef<HTMLButtonElement>(null)
-  const items: MenuItem[] = [{ label: 'Dismiss from Needs you', icon: 'check', onClick: onDismiss }]
+  const ref = useRef<HTMLButtonElement>(null)
   return (
     <>
-      <button ref={btnRef} class="icon-btn" type="button" aria-label={`More for this run`} onClick={() => setOpen((o) => !o)}>
+      <button ref={ref} class="icon-btn" type="button" aria-label="More for this run" onClick={() => setOpen((o) => !o)}>
         <Icon name="more" />
       </button>
-      {open ? <Menu anchor={btnRef.current} items={items} onClose={() => setOpen(false)} label={`More for ${runID}`} /> : null}
+      {open ? <Menu anchor={ref.current} items={items} onClose={() => setOpen(false)} label="More for this run" /> : null}
     </>
   )
 }
 
-function Crumbs({ id, title, notFound }: { id: string; title?: string; notFound?: boolean }): JSX.Element {
-  return (
-    <nav class="dl-crumbs run-nav" aria-label="Where you are">
-      <a href="#/activity">Activity</a>
-      <span class="sep" aria-hidden="true">›</span>
-      <span class="cur" aria-current="page">{notFound ? "A run that isn't here" : title || id}</span>
-    </nav>
-  )
-}
-
-function runTitle(r: RunDetailResponse['run']): string {
-  const target = r.repo ? `${r.repo}${r.number ? `#${r.number}` : ''}` : ''
-  return target ? `${r.workflow} on ${target}` : r.workflow
-}
-
-function lead(d: RunDetailResponse): string {
-  const r = d.run
-  if (d.live) {
-    const running = d.steps.find((s) => s.status === 'running')
-    return `${d.trigger}; now on step “${running?.id || '…'}”.`
-  }
-  if (r.status === 'ok') return `Finished in ${humanDuration(r.duration_ms)}; every step passed.`
-  if (r.status === 'failed') return `Failed${r.failed_step ? ` at “${r.failed_step}”` : ''}${r.error ? `: ${r.error}` : ''}.`
-  return d.trigger || ''
-}
-
-const STEP_MARK: Record<string, string> = {
-  ok: 'ok',
-  running: 'run',
-  failed: 'fail',
-  skipped: 'skip',
-  idle: 'skip',
-}
-
-function StepTree({ steps, sel, onSel }: { steps: RunStep[]; sel: string; onSel: (id: string) => void }): JSX.Element {
-  return (
-    <ol class="dl-tree">
-      {steps.map((s, i) => {
-        const disabled = s.status === 'idle'
-        return (
-          <li class={s.status === 'failed' ? 'failed' : s.status === 'idle' ? 'skipped' : ''}>
-            <button
-              type="button"
-              class={'tl' + (s.id === sel ? ' on' : '')}
-              disabled={disabled}
-              aria-pressed={s.id === sel}
-              onClick={() => !disabled && onSel(s.id)}
-            >
-              <span class="tn">{i + 1}</span>
-              <StatusMark s={STEP_MARK[s.status] || 'skip'} mkOnly />
-              <span class="tt">
-                <b>{s.id}</b>
-                <span>{stepSentence(s)}</span>
-              </span>
-              <span />
-              <em>{s.duration_ms ? humanDuration(s.duration_ms) : ''}</em>
-            </button>
-          </li>
-        )
-      })}
-    </ol>
-  )
-}
-
-function stepSentence(s: RunStep): string {
-  switch (s.status) {
-    case 'idle':
-      return 'Not reached'
-    case 'running':
-      return 'Working on it now'
-    case 'failed':
-      return s.error || 'Failed'
-    case 'skipped':
-      return 'Skipped'
-    default:
-      return 'Done'
-  }
-}
-
-// tabsFor matches the prototype's own set exactly (outputs, inputs, a real
-// Log — never present here, see the header note — and diff): no separate
-// "error" tab. A failed step's error is already the step-tree's one-line
-// sentence (stepSentence) and the run's own lead sentence; StepBody falls
-// back to showing it in the body only when there is nothing else to tab to.
-function tabsFor(s: RunStep): Tab[] {
-  const t: Tab[] = []
-  if (s.outputs_yaml) t.push('outputs')
-  if (s.inputs_yaml) t.push('inputs')
-  if (s.diff) t.push('diff')
-  return t
-}
-
-const STEP_WORD: Record<string, string> = {
-  ok: 'Passed',
-  running: 'Running',
-  failed: 'Failed',
-  skipped: 'Stopped',
-  idle: 'Not reached',
-}
-
 function StepCard({
-  step,
+  r,
+  live,
+  s,
   tab,
   setTab,
-  onRetryFrom,
+  events,
+  steps,
+  onRetry,
+  onRestart,
 }: {
-  step: RunStep
+  r: RunSummary
+  live: boolean
+  s: RunStep
   tab: Tab
   setTab: (t: Tab) => void
-  onRetryFrom?: () => void
+  events: LogLine[]
+  steps: RunStep[]
+  onRetry: () => void
+  onRestart: () => void
 }): JSX.Element {
-  const tabs = tabsFor(step)
-  const active = tabs.includes(tab) ? tab : tabs[0]
-  const isLive = step.status === 'running'
+  const tabs = tabsFor(s)
+  const active = tabs.some(([v]) => v === tab) ? tab : (tabs[0] || [''])[0]
+  const running = s.status === 'running'
+  const word = s.status === 'idle' ? 'Not reached' : s.status === 'stopped' || s.status === 'skipped' ? 'Stopped' : undefined
+  let body: JSX.Element
+  if (running) body = <LiveLog r={r} steps={steps} step={s} events={events} />
+  else if (s.status === 'idle')
+    body = <p class="dl-sub">Not reached: the run stopped at {r.failed_step || steps.find((x) => x.status === 'failed')?.id || 'an earlier step'}, so this step never ran.</p>
+  else if (active === 'outputs') body = <Yaml text={outputsOf(s)} />
+  else if (active === 'inputs') body = <Yaml text={s.inputs_yaml || ''} />
+  else if (active === 'log')
+    body = (
+      <pre class="dl-code" style="--gut:5ch">
+        {stepLog(s).map(([k, t], i) => (
+          <span class={'ln' + (k === 'err' ? ' fail' : '')}>
+            <i>{i + 1}</i>
+            {t}
+          </span>
+        ))}
+      </pre>
+    )
+  else if (active === 'diff') body = <StepDiff diff={s.diff || ''} />
+  else body = <p class="dl-sub">This step recorded nothing to show.</p>
   return (
-    <section class="dl-card">
+    <section class="dl-card" id="run-step">
       <header class="dl-ch">
-        <h2>{step.id}</h2>
-        <StatusMark s={STEP_MARK[step.status] || 'skip'} word={STEP_WORD[step.status] || 'Stopped'} />
+        <h2>{s.id}</h2>
+        <StatusMark s={STEP_S[s.status] || 'skip'} word={word || runMark(s.status === 'running' ? 'running' : s.status).word} />
         <span class="dl-sp" />
-        {!isLive && tabs.length > 1 ? (
+        {!running && tabs.length > 1 ? (
           <div class="seg" role="group">
-            {tabs.map((t) => (
-              <button type="button" aria-pressed={t === active} class={t === active ? 'on' : ''} onClick={() => setTab(t)}>
-                {t[0].toUpperCase() + t.slice(1)}
+            {tabs.map(([v, l]) => (
+              <button type="button" data-v={v} aria-pressed={v === active} class={v === active ? 'on' : ''} onClick={() => setTab(v)}>
+                {l}
               </button>
             ))}
           </div>
         ) : null}
       </header>
-      {isLive ? (
+      {running ? (
         <div class="dl-step-open">
-          <button class="btn sm secondary" type="button" disabled title="Restarting a running step isn't wired up in this phase">
+          <button class="btn sm secondary" type="button" onClick={onRestart}>
             <Icon name="undo" />
             Restart this step…
           </button>
         </div>
-      ) : onRetryFrom ? (
+      ) : !live && s.status !== 'idle' ? (
         <div class="dl-step-open">
-          <button class="btn sm secondary" type="button" onClick={onRetryFrom}>
+          <button class="btn sm secondary" type="button" onClick={onRetry}>
             <Icon name="undo" />
             Retry from here…
           </button>
         </div>
       ) : null}
-      <StepBody step={step} active={active} isLive={isLive} />
-      {(step.runtime || step.model) && !isLive ? (
-        <p class="dl-sub step-env">
-          {step.runtime ? `runtime ${step.runtime}` : ''}
-          {step.runtime && step.model ? ' · ' : ''}
-          {step.model ? `model ${step.model}` : ''}
-          {step.tokens ? ` · ${step.tokens.toLocaleString()} tokens` : ''}
-        </p>
-      ) : null}
-      <EnvDisclosure step={step} isLive={isLive} />
+      {body}
+      {!running ? <EnvTech step={s} /> : null}
     </section>
   )
 }
 
-function StepBody({ step, active, isLive }: { step: RunStep; active?: Tab; isLive: boolean }): JSX.Element {
-  if (isLive) {
-    return <p class="dl-sub">This step is running now. Its recorded output will appear when it finishes; the page refreshes live.</p>
-  }
-  if (step.status === 'idle') {
-    return <p class="dl-sub">Not reached: the run stopped before this step, so it never ran.</p>
-  }
-  switch (active) {
-    case 'inputs':
-      return <Yaml text={step.inputs_yaml || ''} />
-    case 'diff':
-      return <DiffView diff={step.diff || ''} />
-    case 'outputs':
-      return step.outputs_yaml ? <Yaml text={step.outputs_yaml} /> : <p class="dl-sub">No recorded output for this step.</p>
-    default:
-      // No outputs/inputs/diff at all (e.g. a failed assert, which records
-      // neither): the error is the only thing to show, same text as the
-      // step tree's own sentence.
-      return step.error ? <p class="dl-sub">{step.error}</p> : <p class="dl-sub">No recorded output for this step.</p>
-  }
-}
-
-// EnvDisclosure: the run page's "Its environment" (prototype env-tech) —
-// offered only for a step kind the config can name a real scope for (agent,
-// code, decide; see internal/dashboard's stepEnvVars). Names and where they
-// come from only, never a value.
-function EnvDisclosure({ step, isLive }: { step: RunStep; isLive: boolean }): JSX.Element | null {
-  if (isLive || !['agent', 'code', 'decide'].includes(step.kind)) return null
-  const rows = step.env_vars || []
-  return (
-    <details class="dl-tech-d env-tech">
-      <summary>
-        <Icon name="chev" />
-        Its environment <span class="dl-sub">the variables this step saw, by scope; values are never shown</span>
-      </summary>
-      {rows.length ? (
-        <table class="tbl compact responsive">
-          <thead>
-            <tr>
-              <th>name</th>
-              <th>comes from</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((v: EnvVarInfo) => (
-              <tr key={v.scope + ':' + v.name}>
-                <td class="mono" data-l="name">{v.name}</td>
-                <td class="mono" data-l="comes from">{v.scope}{v.ref ? ` (${v.ref})` : ''}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <p class="dl-sub">No env vars reach this step.</p>
-      )}
-    </details>
-  )
-}
-
-function DiffView({ diff }: { diff: string }): JSX.Element {
-  return (
-    <pre class="dl-code diff">
-      {diff.split('\n').map((l) => {
-        const cls = l.startsWith('+') && !l.startsWith('+++') ? 'add' : l.startsWith('-') && !l.startsWith('---') ? 'del' : l.startsWith('@@') ? 'hunk' : ''
-        return <span class={'diff-l ' + cls}>{l + '\n'}</span>
-      })}
-    </pre>
-  )
-}
-
-function RetryForm({
-  steps,
-  failedStep,
-  initialFrom,
-  id,
-  onCancel,
-  onDone,
-}: {
-  steps: RunStep[]
-  failedStep?: string
-  initialFrom?: string
-  id: string
-  onCancel: () => void
-  onDone: (msg: string, newID: string) => void
-}): JSX.Element {
-  const runnable = steps.filter((s) => s.status !== 'idle')
-  const [from, setFrom] = useState(initialFrom || failedStep || (runnable[0]?.id ?? ''))
-  const [force, setForce] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-
-  const submit = async () => {
-    setBusy(true)
-    setErr('')
-    try {
-      const ack = await api.retryRun(id, { from: from === '$start' ? '' : from, force })
-      onDone(ack.message, ack.run_id || '')
-    } catch (e) {
-      setErr(humanError(e))
-    } finally {
-      setBusy(false)
+// LiveLog: the running step's log (prototype stepCard's dl-log): what conductor
+// recorded for the steps so far, then the run's events as they stream in, and
+// the blinking cursor while it works.
+function LiveLog({ steps, step, events }: { r: RunSummary; steps: RunStep[]; step: RunStep; events: LogLine[] }): JSX.Element {
+  const ref = useRef<HTMLPreElement>(null)
+  const lines: LogLine[] = []
+  for (const x of steps) {
+    if (!x.started) continue
+    lines.push([hms(x.started), x.id, '', x.id === step.id ? `started (${x.kind}); working on it` : `started (${x.kind})`])
+    if (x.status !== 'running' && x.status !== 'idle') {
+      const end = new Date(new Date(x.started).getTime() + (x.duration_ms || 0)).toISOString()
+      lines.push([hms(end), x.id, x.status === 'failed' ? 'err' : '', x.status === 'ok' ? `passed in ${durText(x.duration_ms)}` : `${x.status}${x.error ? `: ${x.error}` : ''}`])
     }
   }
-
+  const all = [...lines, ...events.filter((e) => !/^started$|^passed|^run /.test(e[3]) || e[3].includes(':'))]
+  useEffect(() => {
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight
+  }, [all.length])
   return (
-    <section class="dl-card retry-form">
-      <header class="dl-ch"><h2>Retry from a step</h2></header>
-      <p class="dl-sub">Re-runs the pinned trigger. Steps before the chosen one are replayed from their recorded outputs; nothing they did is repeated.</p>
-      <label class="field">
-        <span class="field-label">Start again from</span>
-        <select value={from} onChange={(e) => setFrom((e.target as HTMLSelectElement).value)}>
-          {runnable.map((s) => (
-            <option value={s.id}>{s.id}{s.id === failedStep ? ' (where it failed)' : ''}</option>
-          ))}
-          <option value="$start">the beginning</option>
-        </select>
-      </label>
-      <label class="field-check">
-        <input type="checkbox" checked={force} onChange={(e) => setForce((e.target as HTMLInputElement).checked)} />
-        <span>
-          Run the earlier steps again too{' '}
-          <span class="dl-sub">(otherwise they're replayed from what they recorded; running them again repeats what they did, so with sign-in on it asks you to confirm)</span>
+    <pre class="dl-code dl-log" id="log" data-volatile ref={ref}>
+      {all.map(([t, src, k, text]) => (
+        <span class={'ln' + (k === 'err' ? ' fail' : '')}>
+          <i>{t}</i>
+          <span class="src">{src}</span> {text}
         </span>
-      </label>
-      {err ? <div class="banner err">{err}</div> : null}
-      <div class="dl-actions tight">
-        <button class="btn primary" type="button" disabled={busy} onClick={submit}>Retry</button>
-        <button class="btn" type="button" onClick={onCancel}>Cancel</button>
-      </div>
-    </section>
+      ))}
+      <span class="ln">
+        <i />
+        <span class="cursor-blink" />
+      </span>
+    </pre>
   )
 }
