@@ -2,9 +2,9 @@
 // teams, chat conversations, tickets and proposals. It wraps the daemon's
 // operator API, mounted under /api; same-origin, carrying the session cookie and
 // the CSRF token on every write (design §5.1, §6.4).
-import { authState } from './auth'
+import { authState, stepUp } from './auth'
 import type { Identity } from '../components/Avatar'
-import { parseSafe } from './safe'
+import { parseSafe, readJSON } from './safe'
 import { readResponse } from './errors'
 
 function csrf(): string {
@@ -21,12 +21,30 @@ function get<T>(path: string): Promise<T> {
 }
 
 function send<T>(method: string, path: string, body?: unknown): Promise<T> {
-  return fetch(path, {
-    method,
-    credentials: 'same-origin',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...(csrf() ? { 'X-Conductor-CSRF': csrf() } : {}) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  }).then((r) => handle<T>(r))
+  const go = (stepup?: string) =>
+    fetch(path, {
+      method,
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(csrf() ? { 'X-Conductor-CSRF': csrf() } : {}),
+        ...(stepup ? { 'X-Conductor-Stepup': stepup } : {}),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+  // A write that widens what a bot may spend (a ticket's spend limit) comes
+  // back 401 with the digest to confirm over: confirm it's you, then retry once.
+  return go().then(async (r) => {
+    if (r.status === 401) {
+      const b = (await readJSON(r.clone()).catch(() => ({}))) as { stepup?: { purpose: string; digest: string; description?: string } }
+      if (b.stepup) {
+        const token = await stepUp(b.stepup.purpose, b.stepup.digest, { what: 'A change to what a bot may spend on a ticket', description: b.stepup.description, action: body })
+        return handle<T>(await go(token))
+      }
+    }
+    return handle<T>(r)
+  })
 }
 
 // sendForm posts multipart/form-data (a message or comment with files): the
@@ -161,6 +179,7 @@ export interface TicketComment {
   at: string
   by: string
   text: string
+  attachments?: string[]
 }
 
 export interface TicketHistory {
@@ -188,6 +207,24 @@ export interface Ticket {
   holder?: string
   comments?: TicketComment[]
   history?: TicketHistory[]
+  // tickets: the rest of the ticket view (internal/bot/tickets.go TicketView)
+  team?: string
+  urgent?: boolean
+  outcome?: string
+  workers?: string[]
+  proposals?: string[]
+  queue?: string
+  spend_limit?: TicketSpendLimit
+  spend_for?: string
+  spent?: { known: boolean; spent?: string; remaining?: string; currency: string; why?: string }
+  spend_held?: string
+}
+
+export interface TicketSpendLimit {
+  amount: string
+  currency: string
+  card?: string
+  merchants?: string[]
 }
 
 export interface TicketQuery {
@@ -253,6 +290,7 @@ export const botsApi = {
     due?: string
     labels?: string[]
     ready?: boolean
+    spend_limit?: TicketSpendLimit
   }) => send<Ticket>('POST', '/api/v1/tickets', body),
   patchTicket: (num: string, body: Record<string, unknown>) => send<Ticket>('PATCH', `/api/v1/tickets/${encodeURIComponent(num)}`, body),
   comment: (num: string, text: string) => send<Ticket>('POST', `/api/v1/tickets/${encodeURIComponent(num)}/comments`, { text }),

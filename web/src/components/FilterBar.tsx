@@ -36,6 +36,10 @@ export interface FilterMenu {
   view?: boolean
   // title heads the open menu (default "Filter by <label>")
   title?: string
+  // more lists the menu under "More filters" until it's set (filter.js f.more)
+  more?: boolean
+  // alias is the qualifier key typed in the search field (status:draft)
+  alias?: string
 }
 
 export function FilterBar({
@@ -52,6 +56,7 @@ export function FilterBar({
   showTime = false,
   filterByHint = false,
   end,
+  qualifiers = false,
 }: {
   q: string
   onQueryChange: (q: string) => void
@@ -72,8 +77,25 @@ export function FilterBar({
   // end is drawn last in the bar (the catalog picker's "Add from a git URL or
   // custom source…", filter.js's `end`).
   end?: JSX.Element
+  // qualifiers: the menus are also typed filters (key:value in the search
+  // field), and "Filter by…" lists them (filter.js qf/suggest).
+  qualifiers?: boolean
 }): JSX.Element {
   const [text, setText] = useState(q)
+  const [ac, setAc] = useState<{ ins: string; key: string; hint: string; v?: string }[] | null>(null)
+  const [acI, setAcI] = useState(0)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [forced, setForced] = useState<string[]>([])
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (!moreOpen) return
+    const off = () => setMoreOpen(false)
+    const t = setTimeout(() => document.addEventListener('click', off), 0)
+    return () => {
+      clearTimeout(t)
+      document.removeEventListener('click', off)
+    }
+  }, [moreOpen])
   useEffect(() => setText(q), [q])
   const [sheetOpen, setSheetOpen] = useState(false)
 
@@ -84,7 +106,67 @@ export function FilterBar({
   const findAttr = (token: string): AttrQualifier | undefined =>
     attrs.find((a) => a.key === token || aliasOf(a) === token)
 
+  const menuFor = (k: string) => menus.find((x) => !x.view && ((x.alias || x.key) === k || x.key === k))
+  // a typed key:value turns on that menu's option (by value or label); the
+  // rest of the text stays the free search
+  const applyTyped = (raw: string): string => {
+    if (!qualifiers) return raw
+    const rest: string[] = []
+    for (const tok of raw.split(/\s+/).filter(Boolean)) {
+      const m = tok.match(/^([\w.-]+):(.+)$/)
+      const menu = m && menuFor(m[1])
+      if (!m || !menu) {
+        rest.push(tok)
+        continue
+      }
+      for (const want of m[2].split(',')) {
+        const o = menu.options.find((x) => x.v.toLowerCase() === want.toLowerCase() || x.label.toLowerCase() === want.toLowerCase())
+        if (o && !menu.selected.includes(o.v)) menu.onToggle(o.v)
+      }
+      setForced((f) => (f.includes(menu.key) ? f : [...f, menu.key]))
+    }
+    return rest.join(' ')
+  }
+  const suggest = (raw: string, all = false) => {
+    if (!qualifiers) return
+    const w = raw.split(/\s+/).pop() || ''
+    const m = w.match(/^([\w.-]+):(.*)$/)
+    const keyOf = (x: FilterMenu) => x.alias || x.key
+    if (m) {
+      const menu = menuFor(m[1])
+      if (!menu) return setAc(null)
+      const cur = m[2].toLowerCase()
+      setAc(menu.options.filter((o) => `${o.v} ${o.label}`.toLowerCase().includes(cur)).slice(0, 8).map((o) => ({ ins: `${keyOf(menu)}:${o.v} `, key: keyOf(menu), hint: o.label, v: o.v })))
+    } else if (w.length) {
+      const lw = w.toLowerCase()
+      setAc(liveMenus.filter((x) => keyOf(x).startsWith(lw) || x.label.toLowerCase().startsWith(lw)).map((x) => ({ ins: `${keyOf(x)}:`, key: keyOf(x), hint: x.label })))
+    } else if (all || !raw.trim()) setAc(liveMenus.map((x) => ({ ins: `${keyOf(x)}:`, key: keyOf(x), hint: x.label })))
+    else setAc(null)
+    setAcI(0)
+  }
+  const accept = (i: number) => {
+    const it = ac?.[i]
+    if (!it) return
+    const words = text.split(/\s+/)
+    words.pop()
+    let next = [...words, it.ins].join(' ').replace(/^\s+/, '')
+    if (it.v !== undefined) {
+      next = applyTyped(next)
+      onQueryChange(next)
+      setAc(null)
+    } else suggest(next)
+    setText(next)
+    setTimeout(() => inputRef.current?.focus())
+  }
+
   const commitSearch = (raw: string) => {
+    if (qualifiers) {
+      const rest = applyTyped(raw)
+      setText(rest)
+      onQueryChange(rest)
+      setAc(null)
+      return
+    }
     const m = raw.match(/^([\w.]+):(.+)$/)
     if (m) {
       const attr = findAttr(m[1])
@@ -116,6 +198,7 @@ export function FilterBar({
   const nOn = (q ? 1 : 0) + liveMenus.filter((m) => m.selected.length > 0).length + Object.keys(attrsValue).filter((k) => attrsValue[k]?.length).length
 
   const clearAll = () => {
+    setForced([])
     onQueryChange('')
     setText('')
     if (onAttrsChange) onAttrsChange({})
@@ -142,8 +225,38 @@ export function FilterBar({
           placeholder={placeholder}
           aria-label={ariaLabel}
           value={text}
-          onInput={(e) => setText((e.target as HTMLInputElement).value)}
+          ref={inputRef}
+          role={qualifiers ? 'combobox' : undefined}
+          aria-expanded={qualifiers ? !!ac?.length : undefined}
+          autoComplete="off"
+          onInput={(e) => {
+            const v = (e.target as HTMLInputElement).value
+            setText(v)
+            if (qualifiers) {
+              if (!/(^|\s)[\w.-]+:\S*$/.test(v)) onQueryChange(v)
+              suggest(v)
+            }
+          }}
+          onFocus={(e) => qualifiers && suggest((e.target as HTMLInputElement).value)}
           onKeyDown={(e) => {
+            if (ac?.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+              e.preventDefault()
+              setAcI((i) => (i + (e.key === 'ArrowDown' ? 1 : ac.length - 1)) % ac.length)
+              return
+            }
+            if (ac?.length && (e.key === 'Tab' || e.key === 'Enter') && /\S$/.test((e.target as HTMLInputElement).value) && /[\w.-]+:?\S*$/.test((e.target as HTMLInputElement).value) && ((e.target as HTMLInputElement).value.split(/\s+/).pop() || '').length) {
+              const last = (e.target as HTMLInputElement).value.split(/\s+/).pop() || ''
+              if (last.includes(':') || liveMenus.some((x) => (x.alias || x.key).startsWith(last.toLowerCase()))) {
+                e.preventDefault()
+                accept(acI)
+                return
+              }
+            }
+            if (e.key === 'Escape' && ac) {
+              e.preventDefault()
+              setAc(null)
+              return
+            }
             if (e.key === 'Enter') {
               e.preventDefault()
               commitSearch((e.target as HTMLInputElement).value)
@@ -151,13 +264,39 @@ export function FilterBar({
           }}
           onBlur={(e) => {
             const v = (e.target as HTMLInputElement).value
+            setTimeout(() => setAc(null), 150)
+            if (qualifiers) return
             if (v !== q) onQueryChange(v)
           }}
         />
-        {attrs.length || filterByHint ? (
-          <button type="button" class="fb-by" title="Every filter you can type" onClick={() => (document.activeElement as HTMLElement)?.blur()}>
+        {attrs.length || filterByHint || qualifiers ? (
+          <button
+            type="button"
+            class="fb-by"
+            data-fb-by
+            title="Every filter you can type"
+            onMouseDown={(e) => qualifiers && e.preventDefault()}
+            onClick={() => {
+              if (!qualifiers) return (document.activeElement as HTMLElement)?.blur()
+              const v = text && !/\s$/.test(text) ? text + ' ' : text
+              setText(v)
+              inputRef.current?.focus()
+              suggest(v, true)
+            }}
+          >
             Filter by…
           </button>
+        ) : null}
+        {qualifiers && ac?.length ? (
+          <ul class="fb-ac" role="listbox" data-testid="fb-ac">
+            {ac.map((x, i) => (
+              <li role="option" class={i === acI ? 'act' : ''} aria-selected={i === acI} key={x.ins} onMouseDown={(e) => { e.preventDefault(); accept(i) }}>
+                <span class="fb-ak">{x.key}:</span>
+                {x.v !== undefined ? <b>{x.v}</b> : null}
+                <small>{x.hint}</small>
+              </li>
+            ))}
+          </ul>
         ) : null}
         {any ? (
           <button type="button" class="fb-x" aria-label="Clear the search and every filter" onClick={clearAll}>
@@ -167,8 +306,8 @@ export function FilterBar({
       </div>
 
       <div class="fb-bar" role="group" aria-label="Filters">
-        {liveMenus.map((m) => (
-          <MenuButton key={m.key} menu={m} />
+        {liveMenus.filter((m) => !m.more || m.selected.length || forced.includes(m.key)).map((m) => (
+          <MenuButton key={m.key} menu={m} openNow={forced[forced.length - 1] === m.key && !m.selected.length} />
         ))}
 
         <button type="button" class={'fb-phone' + (nOn ? ' on' : '')} aria-haspopup="dialog" onClick={() => setSheetOpen(true)}>
@@ -176,6 +315,31 @@ export function FilterBar({
           Filter
           {nOn ? <span class="fb-n">{nOn}</span> : null}
         </button>
+
+        {liveMenus.some((m) => m.more && !m.selected.length && !forced.includes(m.key)) ? (
+          <span style={{ position: 'relative', display: 'inline-block' }}>
+            <button type="button" class="fb-btn fb-more-btn" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((o) => !o)}>
+              <span class="fb-l">More filters</span>
+              <Icon name="chevd" />
+            </button>
+            {moreOpen ? (
+              <div class="fb-menu fb-more" role="menu" aria-label="More filters" style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0 }}>
+                <div class="fb-mh"><b>More filters</b></div>
+                <ul class="fb-list">
+                  {liveMenus.filter((m) => m.more && !m.selected.length && !forced.includes(m.key)).map((m) => (
+                    <li key={m.key}>
+                      <button type="button" role="menuitem" class="fb-opt fb-mi" onClick={() => { setMoreOpen(false); setForced((f) => [...f, m.key]) }}>
+                        <span></span>
+                        <span class="fb-ol"><b>{m.label}</b><small>{m.alias || m.key}:</small></span>
+                        <Icon name="chev" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </span>
+        ) : null}
 
         {any ? (
           <button type="button" class="fb-reset" onClick={clearAll}>
@@ -225,8 +389,11 @@ function btnLabel(m: FilterMenu): JSX.Element {
   )
 }
 
-function MenuButton({ menu }: { menu: FilterMenu }): JSX.Element {
+function MenuButton({ menu, openNow }: { menu: FilterMenu; openNow?: boolean }): JSX.Element {
   const ref = useRef<HTMLDetailsElement>(null)
+  useEffect(() => {
+    if (openNow && ref.current) setTimeout(() => ref.current && (ref.current.open = true), 0)
+  }, [openNow])
   useEffect(() => {
     const el = ref.current
     if (!el) return

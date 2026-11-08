@@ -19,6 +19,7 @@ import { TeamDetail } from './routes/TeamDetail'
 import { Chat } from './routes/Chat'
 import { Tickets } from './routes/Tickets'
 import { TicketDetail } from './routes/TicketDetail'
+import { TicketNew } from './routes/TicketNew'
 import { Approval } from './routes/Approval'
 import { Browsers } from './routes/Browsers'
 import { Attention } from './routes/Attention'
@@ -137,6 +138,7 @@ function Screen(): JSX.Element {
       // #/chat or #/chat/bot:atlas (the conversation id carries its own colon)
       return <Chat convId={seg(1) || undefined} />
     case 'tickets':
+      if (seg(1) === 'new') return <TicketNew />
       if (seg(1)) return <TicketDetail num={seg(1)} />
       return <Tickets />
     case 'browser':
