@@ -236,24 +236,26 @@ export function TeamOverview({ ctx }: { ctx: TeamCtx }): JSX.Element {
                       <div class="muted tiny">{bots[m]?.description || tree.bots?.[m]?.description || ''}</div>
                     </div>
                   </a>
-                  {lead === m ? null : (
-                    <button class="btn sm ghost" type="button" disabled={!!off} title={off} onClick={() => makeLead(m)} data-testid="team-make-lead">
-                      Make lead
+                  <span class="tm-acts">
+                    {lead === m ? null : (
+                      <button class="btn sm ghost" type="button" disabled={!!off} title={off} onClick={() => makeLead(m)} data-testid="team-make-lead">
+                        Make lead
+                      </button>
+                    )}
+                    <button class="btn sm ghost" type="button" disabled={!!off} title={off} aria-label={`Remove ${m} from team`} onClick={() => remove(m)} data-testid="team-remove">
+                      <Icon name="x" />
+                      Remove
                     </button>
-                  )}
-                  <button class="btn sm ghost" type="button" disabled={!!off} title={off} aria-label={`Remove ${m} from team`} onClick={() => remove(m)} data-testid="team-remove">
-                    <Icon name="x" />
-                    Remove
-                  </button>
+                  </span>
                 </div>
               ))
             ) : (
               <div class="item muted small">No bots yet.</div>
             )}
           </div>
-          <div class="panel-foot">
+          <div class="panel-foot tm-add">
             <label class="row small grow">
-              <span class="muted">Add a bot</span>
+              <span class="muted tm-add-l">Add a bot</span>
               <select
                 class={'select mono' + (nudge ? ' nudge' : '')}
                 aria-label="Bot to add"
