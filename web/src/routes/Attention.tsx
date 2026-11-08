@@ -6,7 +6,8 @@
 // that actually carry one (failed runs today) — a paused state or a purchase
 // has neither, same as the prototype's tally() over empty facts.
 import type { JSX } from 'preact'
-import { useMemo, useState } from 'preact/hooks'
+import { useEffect, useMemo, useState } from 'preact/hooks'
+import { Icon } from '../components/Icon'
 import { needItems, fyi, type NeedItem } from '../state'
 import { StatusMark } from '../components/StatusMark'
 import { EmptyState } from '../components/EmptyState'
@@ -44,6 +45,14 @@ export function Attention(): JSX.Element {
       byQuery(i),
   )
 
+  // 20 to a page with where you are and Previous/Next; a new filter starts at its first page
+  const PAGE = 20
+  const [page, setPage] = useState(0)
+  const sig = JSON.stringify([q, kinds, bots, workflows])
+  useEffect(() => setPage(0), [sig])
+  const pages = Math.max(1, Math.ceil(shown.length / PAGE))
+  const from = Math.min(page, pages - 1) * PAGE
+
   const kindOptions = useMemo(
     () =>
       (Object.keys(KIND_LABEL) as NeedItem['kind'][])
@@ -70,19 +79,20 @@ export function Attention(): JSX.Element {
         </div>
       </div>
       {items.length ? (
-        <section class="dl-glance" id="need-tiles" aria-label="What needs you, by kind">
+        <div id="need-tiles">
+        <section class="dl-glance" aria-label="What needs you, by kind">
           {(Object.keys(KIND_LABEL) as NeedItem['kind'][]).map((k) => {
             const kItems = items.filter((i) => i.kind === k)
             const n = kItems.length
             if (!n) return null
             const [one, many] = KIND_LABEL[k]
-            const on = kinds.includes(k)
+            const on = kinds.length === 1 && kinds[0] === k
             return (
               <button
                 type="button"
-                class={'dl-tile' + (on ? ' on' : '')}
+                class={'dl-tile' + (k !== 'failed' ? ' hot' : '') + (on ? ' on' : '')}
                 aria-pressed={on}
-                onClick={() => setKinds(on ? kinds.filter((x) => x !== k) : [...kinds, k])}
+                onClick={() => setKinds(on ? [] : [k])}
               >
                 <span class="dl-lbl">{n === 1 ? one[0].toUpperCase() + one.slice(1) : many[0].toUpperCase() + many.slice(1)}</span>
                 <b>{n}</b>
@@ -91,14 +101,17 @@ export function Attention(): JSX.Element {
             )
           })}
         </section>
+        </div>
       ) : null}
       {items.length ? (
+        <div class="need-filter">
         <FilterBar
           q={q}
           onQueryChange={setQ}
           placeholder="Search, or filter: kind:approval"
           ariaLabel="Search and filter what needs you"
           filterByHint
+          qualifiers
           menus={[
             {
               key: 'kind',
@@ -109,39 +122,32 @@ export function Attention(): JSX.Element {
               onToggle: (v) => setKinds((ks) => (ks.includes(v) ? ks.filter((x) => x !== v) : [...ks, v])),
               onClear: () => setKinds([]),
             },
-            ...(botOptions.length
-              ? [
-                  {
-                    key: 'bot',
-                    label: 'Bot',
-                    multi: true,
-                    selected: bots,
-                    options: botOptions,
-                    onToggle: (v: string) => setBots((bs) => (bs.includes(v) ? bs.filter((x) => x !== v) : [...bs, v])),
-                    onClear: () => setBots([]),
-                  },
-                ]
-              : []),
-            ...(workflowOptions.length
-              ? [
-                  {
-                    key: 'workflow',
-                    label: 'Workflow',
-                    multi: true,
-                    selected: workflows,
-                    options: workflowOptions,
-                    onToggle: (v: string) => setWorkflows((ws) => (ws.includes(v) ? ws.filter((x) => x !== v) : [...ws, v])),
-                    onClear: () => setWorkflows([]),
-                  },
-                ]
-              : []),
+            {
+              key: 'bot',
+              label: 'Bot',
+              multi: true,
+              selected: bots,
+              options: botOptions,
+              onToggle: (v: string) => setBots((bs) => (bs.includes(v) ? bs.filter((x) => x !== v) : [...bs, v])),
+              onClear: () => setBots([]),
+            },
+            {
+              key: 'workflow',
+              label: 'Workflow',
+              multi: true,
+              selected: workflows,
+              options: workflowOptions,
+              onToggle: (v: string) => setWorkflows((ws) => (ws.includes(v) ? ws.filter((x) => x !== v) : [...ws, v])),
+              onClear: () => setWorkflows([]),
+            },
           ]}
         />
+        </div>
       ) : null}
       <div class="dl-cols">
         <div class="dl-col-main">
-          <section class="dl-card">
-            {(kinds.length || bots.length || workflows.length || q) && shown.length < items.length ? (
+          <section class="dl-card" id="need-body">
+            {shown.length < items.length ? (
               <p class="need-shown">
                 Showing {shown.length} of {items.length} ·{' '}
                 <button
@@ -158,7 +164,22 @@ export function Attention(): JSX.Element {
                 </button>
               </p>
             ) : null}
-            {NeedList(shown, items.length === 0)}
+            {NeedList(shown.slice(from, from + PAGE), items.length === 0)}
+            {pages > 1 ? (
+              <div class="pk-pages need-pages">
+                <span class="dl-sub">
+                  {from + 1}–{from + Math.min(PAGE, shown.length - from)} of {shown.length}
+                </span>
+                <button class="btn sm" type="button" disabled={page === 0} title={page === 0 ? 'The first page' : undefined} onClick={() => setPage(page - 1)}>
+                  <Icon name="chev" class="flip" />
+                  Previous
+                </button>
+                <button class="btn sm" type="button" disabled={page >= pages - 1} title={page >= pages - 1 ? 'The last page' : undefined} onClick={() => setPage(page + 1)}>
+                  Next
+                  <Icon name="chev" />
+                </button>
+              </div>
+            ) : null}
           </section>
         </div>
         <div class="dl-col-side">
@@ -172,7 +193,7 @@ export function Attention(): JSX.Element {
 function NeedList(items: NeedItem[], none: boolean): JSX.Element {
   if (!items.length) {
     return none ? (
-      <EmptyState hero icon="check" title="Nothing needs you" testid="attention-empty">
+      <EmptyState small title="Nothing needs you" testid="attention-empty">
         <p>When a bot asks for approval or a run fails, it shows up here.</p>
       </EmptyState>
     ) : (

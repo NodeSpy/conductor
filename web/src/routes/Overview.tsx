@@ -28,7 +28,10 @@ import { Fyi } from '../components/Fyi'
 import { FactsLine } from '../components/Facts'
 import { Icon } from '../components/Icon'
 import { TIME_RANGES, rangeMinutes } from '../lib/filter'
-import { humanDuration, ago, plural } from '../lib/format'
+import { ago, plural } from '../lib/format'
+import { gsHidden, setGsHidden } from '../lib/gs'
+import { toast, ToastHost } from '../components/ChatBits'
+import { hm, runningFor, runTarget, runTitle } from '../lib/runwords'
 
 const HOUR = 3_600_000
 
@@ -44,7 +47,7 @@ export function Overview(): JSX.Element {
   const now = Date.now()
   const last12 = all.filter((r) => startedMs(r) >= now - 12 * HOUR)
 
-  const running = all.filter((r) => r.status === 'running').sort((a, b) => b.duration_ms - a.duration_ms)
+  const running = all.filter((r) => r.status === 'running').sort((a, b) => startedMs(a) - startedMs(b))
   // Needs you: one aggregator (state.needItems) for every kind the daemon can
   // tell us about today — paused, pending approvals, pending purchases and
   // failed runs the operator hasn't dismissed.
@@ -100,6 +103,7 @@ export function Overview(): JSX.Element {
             </div>
           </div>
           <GetStarted connected={connected} bots={bots} botsConfigured={botsConfigured} decided={decided} />
+          <ToastHost />
         </>
       )}
     </div>
@@ -109,13 +113,13 @@ export function Overview(): JSX.Element {
 // Glance is the mock's "At a glance": four quiet figures, Needs you first and
 // agreeing with its own card and the tab bar's badge (UI.statTile/UI.glance).
 function Glance({ need, running, last12, bots }: { need: NeedItem[]; running: RunSummary[]; last12: RunSummary[]; bots: BotSummary[] }): JSX.Element {
-  const longest = running.length ? humanDuration(Math.max(...running.map((r) => r.duration_ms))) : ''
+  const longest = running.length ? runningFor(new Date(Math.min(...running.map(startedMs))).toISOString()) : ''
   const breakdown = needBreakdown(need)
   const working = bots.filter((b) => !b.disabled && !b.shadow).length
   return (
     <section class="dl-glance" aria-label="At a glance">
       <Tile label="Needs you" value={String(need.length)} detail={breakdown || 'nothing'} hot={need.length > 0} href="#/attention" />
-      <Tile label="Running" value={String(running.length)} detail={running.length ? `longest ${longest}` : 'nothing right now'} href="#/activity" />
+      <Tile label="Running" value={String(running.length)} detail={running.length ? `longest ${longest}` : 'nothing right now'} href="#/activity?status=running" />
       <Tile label="Runs, last 12 h" value={String(last12.length)} detail={runParts(last12) || 'none'} href="#/activity" />
       <Tile label="Bots" value={String(bots.length)} detail={`${working} working now`} href="#/bots" />
     </section>
@@ -148,7 +152,6 @@ function Tile({ label, value, detail, href, hot }: { label: string; value: strin
 // NeedsYou: the mock's list (mark, plain title, why, the age, one verb). Every
 // kind the daemon exposes today shares this one row shape and vocabulary.
 function NeedsYou({ need }: { need: NeedItem[] }): JSX.Element {
-  const paused = need.some((n) => n.kind === 'paused')
   return (
     <section class="dl-card dl-needs-card" aria-label="Needs you">
       <header class="dl-ch">
@@ -188,15 +191,15 @@ function NeedsYou({ need }: { need: NeedItem[] }): JSX.Element {
           ))}
         </ul>
       )}
-      {paused ? <p class="dl-sub">All automation is paused.</p> : null}
+      {need.length > 5 ? (
+        <p class="dl-foot-note dl-more">
+          <a class="dl-link" href="#/attention">{`${need.length - 5} more need${need.length - 5 === 1 ? 's' : ''} you →`}</a>
+        </p>
+      ) : null}
     </section>
   )
 }
 
-function runTitle(r: RunSummary): string {
-  const target = r.repo ? `${r.repo}${r.number ? `#${r.number}` : ''}` : ''
-  return target ? `${r.workflow} · ${target}` : r.workflow
-}
 
 function RunningNow({ running }: { running: RunSummary[] }): JSX.Element | null {
   if (running.length === 0) return null
@@ -212,13 +215,13 @@ function RunningNow({ running }: { running: RunSummary[] }): JSX.Element | null 
           <li key={r.id}>
             <a class="dl-row-a" href={'#/runs/' + r.id}>
               <span class="dl-ng">
-                <StatusMark s="run" mkOnly />
+                <StatusMark s="run" mkOnly lg label="Running" />
               </span>
               <span class="dl-nt">
                 <b>{runTitle(r)}</b>
-                <span class="dl-why mono">{r.id}</span>
+                <span class="dl-why">{r.workflow.startsWith('bot:') ? runTarget(r) || 'its own work' : `${r.workflow} · ${runTarget(r) || r.kind}`}</span>
               </span>
-              <span class="dl-age">{humanDuration(r.duration_ms)}</span>
+              <span class="dl-age">{runningFor(r.started)}</span>
             </a>
           </li>
         ))}
@@ -283,21 +286,28 @@ function RunsCard({ runs: all }: { runs: RunSummary[] }): JSX.Element {
       <div class="dl-stat-line">
         <b>{ok}</b>
         <span>of {total} runs went fine</span>
+        {localStorage.getItem('usage-mode') === 'api' ? (
+          <>
+            <b class="r">${rs.reduce((a, r) => a + (r.cost_usd || 0), 0).toFixed(2)}</b>
+            <span>spent</span>
+          </>
+        ) : null}
       </div>
       <svg class="dl-hours" viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`${plural(total, 'run')}, ${label.toLowerCase()}: ${plural(fails.length, 'failure')}`}>
         {buckets.map((b, i) => {
           const x = i * (w / n) + 3
           let y = base
+          // from the axis up: passed, waiting or parked, running, failed on top (UI.stackBars' SEG)
           const order: ['fail' | 'run' | 'other' | 'ok', string][] = [
-            ['fail', 'hb-fail'],
-            ['run', 'hb-run'],
-            ['other', 'hb-other'],
             ['ok', 'hb-ok'],
+            ['other', 'hb-other'],
+            ['run', 'hb-run'],
+            ['fail', 'hb-fail'],
           ]
+          const segs = order.filter(([k]) => b[k])
           return (
             <g class="hb" key={i}>
-              {order.map(([k, cls], j) => {
-                if (!b[k]) return null
+              {segs.map(([k, cls], j) => {
                 const hh = (b[k] / max) * (h - 22)
                 y -= hh
                 const gap = j ? 2 : 0
@@ -348,7 +358,7 @@ function RunsCard({ runs: all }: { runs: RunSummary[] }): JSX.Element {
               <>
                 {i ? ', ' : ''}
                 <a class="dl-link" href={'#/runs/' + r.id}>
-                  {r.workflow} at {ago(r.finished || r.started)}
+                  {r.workflow} at {hm(r.finished || r.started)}
                 </a>
               </>
             ))}
@@ -376,9 +386,9 @@ function TimeRangeMenu({ since, onChange }: { since: string; onChange: (v: strin
   // only backs off for a `.fb-time` that is a descendant of a `.fb` sitting
   // directly in a `.dl-ch` header, same as the full FilterBar's own time button.
   return (
-    <span class="fb" style={{ display: 'inline-flex', margin: 0 }}>
+    <span class="fb" data-nosearch style={{ display: 'inline-flex' }}>
       <details class="fb-time-menu" style={{ position: 'relative', display: 'inline-block' }}>
-        <summary class="fb-btn fb-time on" aria-haspopup="listbox" title="Time range">
+        <summary class={'fb-btn fb-time' + (since !== '12h' ? ' on' : '')} aria-haspopup="listbox" title="Show runs from">
           <Icon name="clock" />
           <span class="fb-v">{label}</span>
           <Icon name="chevd" />
@@ -414,7 +424,7 @@ function GetStarted({
   botsConfigured: boolean
   decided: boolean
 }): JSX.Element | null {
-  const [hidden, setHidden] = useState(() => localStorage.getItem('gs-hidden') === '1')
+  const hidden = gsHidden.value
   const [seenSafety, setSeenSafety] = useState(() => localStorage.getItem('seen-safety') === '1')
   useEffect(() => {
     if (seenSafety) return
@@ -425,7 +435,7 @@ function GetStarted({
   if (hidden) return null
   const steps = [
     { id: 'connect', done: connected > 0, title: 'Connect a service', text: 'GitHub, Slack, PagerDuty… so bots can see events and act.', href: '#/connections', go: 'Plugins' },
-    { id: 'watch', done: bots.length > 0, title: 'Make a bot', text: 'A bot is an AI teammate with memory; tell it what to watch and where to tell you.', href: '#/bots', go: botsConfigured ? 'Bots' : 'New bot' },
+    { id: 'watch', done: bots.length > 0, title: 'Make a bot that watches something', text: 'A bot is an AI teammate with memory; tell it what to watch and where to tell you.', href: botsConfigured ? '#/bots?new=1' : '#/bots', go: 'New bot' },
     { id: 'safety', done: seenSafety, title: 'Check what your bots can do', text: 'In plain words: what each bot does on its own, what it asks you first, and what it never does.', href: '#/system/safety', go: 'Safety' },
     { id: 'approve', done: decided, title: 'Try an approval', text: 'Risky actions wait for you. Decide one, and it runs once, exactly as approved.', href: '#/attention', go: 'Needs you' },
   ]
@@ -442,8 +452,8 @@ function GetStarted({
           class="btn sm ghost"
           type="button"
           onClick={() => {
-            localStorage.setItem('gs-hidden', '1')
-            setHidden(true)
+            setGsHidden(true)
+            toast('Get started hidden', 'Bring it back from your menu, top right: Show Get started.')
           }}
         >
           Hide
