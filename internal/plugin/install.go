@@ -46,7 +46,7 @@ const installStateFile = "installed.yaml"
 // Version 2 is the file the plugin jail writes: every record in it holds
 // what the user agreed to. A version 1 file was written by a conductor that
 // did not jail plugins (or by one rolled back to): its records are loaded
-// as Legacy, and only those are ever adopted (adoptLegacyRecord).
+// as Legacy, and only those are adopted wholesale (adoptOlderRecord).
 const installStateVersion = 2
 
 // legacyStateVersion is the file a conductor without the plugin jail writes.
@@ -60,10 +60,17 @@ const legacyStateVersion = 1
 const consentFile = "consented.yaml"
 
 // manifestSchema marks a record whose Manifest holds the whole declaration
-// the jail enforces (Installed.ManifestSchema). A record without it was
+// the jail enforces (Installed.ManifestSchema). A record without one was
 // written by a conductor that did not jail plugins and did not record
-// listen, read, write, exec or keychain (Installed.Legacy).
-const manifestSchema = 1
+// listen, read, write, exec or keychain (Installed.Legacy). One with
+// jailSchema was written by a jailing conductor the plugin SDK withheld
+// part of the declaration from (HostInfo.ResolvesReferences,
+// HostInfo.GrantsExposeLocal): its config: and env: entries, its
+// expose_local. Both are adopted once (adoptOlderRecord).
+const (
+	jailSchema     = 1
+	manifestSchema = 2
+)
 
 // Manifest is the permission manifest a plugin declared at install time — what
 // it says it needs, recorded so it is known BEFORE the plugin runs on any
@@ -185,6 +192,17 @@ func (m Manifest) Lines() []string {
 		out = []string{"nothing: no network, no files beyond its own, no commands, no env"}
 	}
 	return out
+}
+
+// withWithheld is have plus what the plugin SDK withholds from a conductor
+// that cannot grant it, as m declares it: its config: and env: entries,
+// and expose_local.
+func withWithheld(have, m Manifest) Manifest {
+	have.Egress, have.Listen = withReferences(have.Egress, m.Egress), withReferences(have.Listen, m.Listen)
+	have.Read, have.Write = withReferences(have.Read, m.Read), withReferences(have.Write, m.Write)
+	have.FS, have.Exec = withReferences(have.FS, m.FS), withReferences(have.Exec, m.Exec)
+	have.ExposeLocal = have.ExposeLocal || m.ExposeLocal
+	return have
 }
 
 // withReferences is have plus the config: and env: entries of declared
@@ -382,11 +400,12 @@ type Installed struct {
 	// Manifest is the permission manifest recorded at install.
 	Manifest Manifest `yaml:"manifest,omitempty"`
 	// ManifestSchema is manifestSchema when Manifest was recorded in full
-	// (see there); 0 on a record a conductor without the jail wrote.
+	// (see there); jailSchema on one a conductor the plugin SDK withheld
+	// part of it from wrote, 0 on one a conductor without the jail wrote.
 	ManifestSchema int `yaml:"manifest_schema,omitempty"`
 	// Legacy marks a record loaded from a version 1 state file (a conductor
 	// without the jail wrote it) that has not been adopted yet. Only such a
-	// record is adopted (adoptLegacyRecord); conductor never sets it on a
+	// record is adopted (adoptOlderRecord); conductor never sets it on a
 	// record it makes, so a record it wrote is always compared, never
 	// adopted.
 	Legacy bool `yaml:"legacy,omitempty"`
@@ -676,7 +695,7 @@ func LoadInstallState(dir string) *InstallState {
 	case legacyStateVersion:
 		s.Plugins = on.Plugins
 		for i := range s.Plugins {
-			s.Plugins[i].Legacy = s.Plugins[i].ManifestSchema < manifestSchema
+			s.Plugins[i].Legacy = s.Plugins[i].ManifestSchema < jailSchema
 		}
 		s.restoreConsented()
 	}
@@ -794,12 +813,12 @@ func (s *InstallState) consentedFor(key, source, sha string) (Installed, bool) {
 	if s == nil || s.consented == nil {
 		return Installed{}, false
 	}
-	if c, ok := s.consented.findSha(key, source, sha); ok && c.ManifestSchema >= manifestSchema {
+	if c, ok := s.consented.findSha(key, source, sha); ok && c.ManifestSchema >= jailSchema {
 		return c, true
 	}
 	all := versionsForSource(s.consented.AllVersions(key), source)
 	for i := len(all) - 1; i >= 0; i-- {
-		if all[i].ManifestSchema >= manifestSchema {
+		if all[i].ManifestSchema >= jailSchema {
 			return all[i], true
 		}
 	}

@@ -112,10 +112,12 @@ over from <connector's use>, which ran before the plugin jail …`). It runs
 unjailed, with the same warning as the github plugin. It needs no
 `expose_local` there, so the whole config migrates even with an older smee.
 
-**Rolling back** to an older conductor after the rewrite: github deliveries
-keep flowing (the older conductor already runs the smee connector and the
-listener's exposure), but the `webhook` connector's relay path is new — put
-`<file>.pre-smee` back if you roll back and rely on it.
+**Rolling back** to an older conductor after the rewrite: put
+`<file>.pre-smee` back. A conductor without the plugin jail (v0.87) keeps
+github deliveries flowing on the rewritten config, but a jailing one before
+this release (v0.88 to v0.90) does not grant `expose_local`, so its jailed
+smee connector cannot reach github's listener; and the `webhook`
+connector's relay path is new on every older conductor.
 
 ## Upgrading to the plugin contract
 

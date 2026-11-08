@@ -256,7 +256,7 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 
 	adopted := false
 	for _, v := range state.AllVersions(key) {
-		if _, ok := adoptLegacyRecord(ref, v, state, opts); ok {
+		if _, ok := adoptOlderRecord(ref, v, state, opts); ok {
 			adopted = true
 		}
 	}
@@ -445,37 +445,49 @@ func describeBuild(ref config.PluginRef, rec Installed, opts Options) (Manifest,
 	return manifestFromDecl(decl), nil
 }
 
-// adoptLegacyRecord records the full declaration of an installed build whose
-// record a conductor without the jail wrote (Installed.Legacy: loaded from a
-// version 1 state file). That conductor recorded the build's egress,
-// commands, env, OAuth endpoints and single_process, but not what it reads,
-// writes, listens on or runs beyond its commands: those are taken from what
-// the build declares now, without a hold, since it ran with them unconfined.
+// adoptOlderRecord records the full declaration of an installed build whose
+// record an older conductor wrote, once per record.
+//
+// A conductor without the jail (Installed.Legacy: loaded from a version 1
+// state file) recorded the build's egress, commands, env, OAuth endpoints
+// and single_process, but not what it reads, writes, listens on or runs
+// beyond its commands: those are taken from what the build declares now,
+// without a hold, since it ran with them unconfined.
+//
+// Nor did a conductor the plugin SDK withheld them from (jailSchema:
+// HostInfo.ResolvesReferences, HostInfo.GrantsExposeLocal) record the
+// build's config: and env: entries or its expose_local: they name the
+// operator's own config, and the listeners conductor wires from it, so a
+// conductor that never had the SDK withhold them recorded them, and they
+// are taken without a hold too.
+//
 // The rest is compared like any update: what the build now declares beyond
 // the record is held for approval, and it runs jailed to the record
 // meanwhile. When the user agreed to a build before a rollback
 // (consentFile), the last agreement is the record instead: for this build,
 // or, when the older conductor installed this one meanwhile, for the one
 // before it, so a build it re-installed that declares more (an update this
-// conductor held) is held again, and reported loudly. Once per record; a build that cannot be described
-// keeps its old record (and is jailed to it), and the next pass tries again.
-func adoptLegacyRecord(ref config.PluginRef, rec Installed, state *InstallState, opts Options) (Installed, bool) {
-	if !rec.Legacy || opts.Describe == nil || rec.Sha256 == "" || !binaryPresent(rec.Path) {
+// conductor held) is held again, and reported loudly. A build that cannot
+// be described keeps its old record (and is jailed to it), and the next
+// pass tries again.
+func adoptOlderRecord(ref config.PluginRef, rec Installed, state *InstallState, opts Options) (Installed, bool) {
+	if (!rec.Legacy && rec.ManifestSchema != jailSchema) || opts.Describe == nil || rec.Sha256 == "" || !binaryPresent(rec.Path) {
 		return rec, false
 	}
 	m, err := describeBuild(ref, rec, opts)
 	if err != nil {
-		opts.logf("plugin %s: its install record predates declared permissions, and recording them failed: %v — it runs jailed to the old record until this succeeds", ref.Name, err)
+		if rec.Legacy {
+			opts.logf("plugin %s: its install record predates declared permissions, and recording them failed: %v — it runs jailed to the old record until this succeeds", ref.Name, err)
+		} else {
+			opts.logf("plugin %s: recording what the conductor that installed it could not record failed: %v — it runs jailed to its record until this succeeds", ref.Name, err)
+		}
 		return rec, false
 	}
 	base := rec.Manifest
-	base.Listen, base.Read, base.Write, base.Exec, base.Keychain = m.Listen, m.Read, m.Write, m.Exec, m.Keychain
-	// Nor did it record config: or env: entries: it cannot resolve them, so
-	// the plugin SDK withholds them from it (HostInfo.ResolvesReferences).
-	// They are what a conductor that never had the SDK withhold them
-	// recorded, so they are taken without a hold too.
-	base.Egress, base.FS = withReferences(base.Egress, m.Egress), withReferences(base.FS, m.FS)
-	base.ExposeLocal = m.ExposeLocal
+	if rec.Legacy {
+		base.Listen, base.Read, base.Write, base.Exec, base.Keychain = m.Listen, m.Read, m.Write, m.Exec, m.Keychain
+	}
+	base = withWithheld(base, m)
 	replaces := rec.Resolved
 	// The user's last agreement (consentFile) is the record: for this
 	// build, or for the one before it when the older conductor installed
@@ -486,6 +498,9 @@ func adoptLegacyRecord(ref config.PluginRef, rec Installed, state *InstallState,
 	rolled := hadConsent && consented.Sha256 != rec.Sha256
 	if hadConsent {
 		base = consented.Manifest
+		if consented.ManifestSchema < manifestSchema {
+			base = withWithheld(base, m)
+		}
 		replaces = consented.Resolved
 	}
 	next := rec
@@ -494,7 +509,12 @@ func adoptLegacyRecord(ref config.PluginRef, rec Installed, state *InstallState,
 	switch w := base.Widens(m); {
 	case len(w) == 0 || state.approved(next):
 		state.Put(next)
-		opts.logf("plugin %s: recorded what %s declares (its install record predates declared permissions, and it ran unconfined until now): %s", ref.Name, rec.Resolved, m.Summary())
+		switch added := rec.Manifest.Widens(m); {
+		case rec.Legacy:
+			opts.logf("plugin %s: recorded what %s declares (its install record predates declared permissions, and it ran unconfined until now): %s", ref.Name, rec.Resolved, m.Summary())
+		case len(added) > 0:
+			opts.logf("plugin %s: recorded what %s declares that the conductor which installed it could not record: %s", ref.Name, rec.Resolved, strings.Join(added, "; "))
+		}
 	case rolled:
 		cur.Manifest = base
 		state.Put(cur)
@@ -626,7 +646,7 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 	// matches (it would misclassify Current/Updated against the wrong sha,
 	// and misreport a cross-source sha in a log line).
 	for _, v := range state.AllVersions(key) {
-		if _, ok := adoptLegacyRecord(ref, v, state, opts); ok {
+		if _, ok := adoptOlderRecord(ref, v, state, opts); ok {
 			dirty = true
 		}
 	}

@@ -731,6 +731,15 @@ working setup):
   `plugin github: recorded what … declares (its install record predates declared permissions, …)`.
   Only records loaded from a version 1 file are adopted this way; the file
   is written back as version 2.
+- **Records an earlier jailing conductor wrote are completed once, too.**
+  The plugin SDK withholds from a conductor what it cannot grant: `config:`
+  and `env:` entries from v0.88 and v0.89, `expose_local` from those and
+  v0.90. Their records (`manifest_schema: 1`) lack them, so the first start
+  of a conductor that grants them describes each such build once and
+  records them without asking: they name your own config and the listeners
+  conductor wires from it. The log says
+  `plugin github: recorded what … declares that the conductor which installed it could not record: …`.
+  Anything else the build declares beyond its record is held as above.
 - **Rolling back.** A conductor without the jail does not read a version 2
   state file: it treats it as empty and installs every plugin again from its
   release (so the network must be up for that start), writing version 1.

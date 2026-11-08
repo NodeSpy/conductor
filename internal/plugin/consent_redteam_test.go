@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -499,6 +501,100 @@ func TestAdoptionTakesWithheldReferencesWithoutHold(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A jailing conductor the plugin SDK withheld config: and env: entries and
+// expose_local from (v0.88 to v0.90) recorded the build without them. The
+// first pass of a conductor that grants them takes them from the build
+// without a hold, once; anything else the build declares beyond the record
+// is still held. A record this conductor wrote is never re-described.
+func TestJailSchemaRecordTakesWithheldWithoutHold(t *testing.T) {
+	full := Capabilities{
+		Egress:      []string{"acme.atlassian.net:443", "config:base_url"},
+		Listen:      []string{"config:listen"},
+		Env:         []string{"JIRA_HOME"},
+		ExposeLocal: true,
+	}
+	withheld := Capabilities{Egress: []string{"acme.atlassian.net:443"}, Env: full.Env}
+	for _, tc := range []struct {
+		name   string
+		schema int
+		now    Capabilities
+		held   string
+		same   bool
+	}{
+		{"withheld entries taken", jailSchema, full, "", false},
+		{"a new static destination is still held", jailSchema,
+			Capabilities{Egress: append([]string{"collector.example:443"}, full.Egress...), Listen: full.Listen, Env: full.Env, ExposeLocal: true}, "connects to collector.example:443", false},
+		{"this conductor's record is not re-described", manifestSchema, full, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			describes := 0
+			describe := func(caps Capabilities) DescribeFunc {
+				return func(context.Context, Spec) (*Decl, error) {
+					describes++
+					return &Decl{Kind: KindConnector, Type: "jira", Connection: sdk.Schema{"base_url": {Type: "string"}, "listen": {Type: "string"}}, Capabilities: caps}, nil
+				}
+			}
+			st := stateAt(t)
+			ref := refFor(t, config.UseKindConnector, "acme/plugins/jira")
+			refs := map[string]config.PluginRef{ref.Key(): ref}
+			if _, err := Reconcile(refs, st, acmeTrust, stubFor("jira", "jira/v1.0.0"), Options{Describe: describe(withheld)}); err != nil {
+				t.Fatal(err)
+			}
+			rec, _ := st.Get("connectors/jira")
+			rec.ManifestSchema = tc.schema
+			st.Put(rec)
+			if err := st.Save(); err != nil {
+				t.Fatal(err)
+			}
+			st = LoadInstallState(st.Dir())
+			describes = 0
+			var logs []string
+			res, err := Reconcile(refs, st, acmeTrust, stubFor("jira", "jira/v1.0.0"), Options{GapsOnly: true, Describe: describe(tc.now), Log: func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cur, _ := st.Get("connectors/jira")
+			if tc.same {
+				if describes != 0 || !reflect.DeepEqual(cur.Manifest, rec.Manifest) {
+					t.Fatalf("re-described (%d) or changed: %+v", describes, cur.Manifest)
+				}
+				return
+			}
+			if cur.ManifestSchema != manifestSchema {
+				t.Fatalf("not marked: %+v", cur)
+			}
+			p := st.PendingUpdates()
+			if tc.held == "" {
+				if len(p) != 0 || res[0].Action == ActionHeld {
+					t.Fatalf("held %+v", p)
+				}
+				if !reflect.DeepEqual(cur.Manifest, manifestFromDecl(&Decl{Capabilities: full})) {
+					t.Fatalf("recorded %+v, want the full declaration", cur.Manifest)
+				}
+				if !slices.ContainsFunc(logs, func(l string) bool {
+					return strings.Contains(l, "could not record") && strings.Contains(l, "listens on")
+				}) {
+					t.Errorf("what was taken is not logged: %q", logs)
+				}
+			} else {
+				if len(p) != 1 || strings.Join(p[0].Widens, ";") != tc.held {
+					t.Fatalf("pending %+v, want only %q held", p, tc.held)
+				}
+				if !slices.Equal(cur.Manifest.Egress, full.Egress) || !slices.Equal(cur.Manifest.Listen, full.Listen) || !cur.Manifest.ExposeLocal {
+					t.Fatalf("while held it runs jailed to the record and the withheld entries: %+v", cur.Manifest)
+				}
+			}
+			describes = 0
+			if _, err := Reconcile(refs, LoadInstallState(st.Dir()), acmeTrust, stubFor("jira", "jira/v1.0.0"), Options{GapsOnly: true, Describe: describe(tc.now)}); err != nil {
+				t.Fatal(err)
+			}
+			if describes != 0 {
+				t.Errorf("adopted twice")
+			}
+		})
 	}
 }
 
