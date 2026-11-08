@@ -98,7 +98,14 @@ func (h *histRec) step(id string, idx int) *store.StepRecord {
 	return &h.rec.Steps[len(h.rec.Steps)-1]
 }
 
-// stepStart stamps a step's start time.
+// stepStart stamps a step's start time and persists it: a long-running step
+// (an agent thinking, a command sleeping, anything slower than the next
+// completed step) must show as running on the run page the whole time it
+// runs, not just once it's done. Before this persisted, the dashboard's
+// GetHistory read the on-disk record, which stepDone was the only writer
+// of — a step mid-flight had no Started on disk, so runs_detail.go's
+// idle/running inference (status=="" && Started zero => idle) showed a truly
+// running step as "idle" ("Not reached") until it finished.
 func (h *histRec) stepStart(id string, idx int) {
 	if h == nil {
 		return
@@ -106,6 +113,7 @@ func (h *histRec) stepStart(id string, idx int) {
 	h.mu.Lock()
 	h.step(id, idx).Started = time.Now()
 	h.mu.Unlock()
+	h.persist()
 	h.emit("step_started", id, "running", "", 0)
 }
 

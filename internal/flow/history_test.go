@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
@@ -182,6 +183,69 @@ func TestConcurrentStepDoneNoLostUpdate(t *testing.T) {
 		if len(w.Steps) > max {
 			max = len(w.Steps)
 		}
+	}
+}
+
+// TestStepStartPersistsWhileRunning is the dashboard run page's own
+// requirement: a step that's genuinely still running (an agent step, or any
+// slow step) must be visible as "running" on disk the whole time it runs, not
+// only once it finishes. Before stepStart persisted, a step's Started was set
+// only in the in-memory histRec — the store's own copy (what GetHistory, and
+// so the dashboard, reads) had no Started until stepDone's persist, so a live
+// run's own run page showed its currently-executing step as "idle"/"Not
+// reached" for its entire duration.
+func TestStepStartPersistsWhileRunning(t *testing.T) {
+	cfg := loadConfig(t, histCfg)
+	reg := buildRegistry(t, cfg)
+	newFakeState(t, "svc")
+	rig := newTestRunner(t, cfg, reg)
+	release := make(chan struct{})
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		<-release
+		return dispatch.RunRef{AgentID: "a1", Output: `{"usage":{},"total_cost_usd":0}`}, nil
+	}
+	spec := mustSpec(t, `
+on: svc.ping
+name: slow
+steps:
+  - id: fix
+    type: agent
+    <<: *fixer
+    prompt: "fix it"
+`)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		run := store.WorkflowRun{ID: "ping:slow", Outputs: map[string]map[string]any{}}
+		runTriggerWithRun(rig, run, newTrigger("ping", nil), spec)
+	}()
+
+	// Poll for the step's Started to land on disk while the dispatch above is
+	// still blocked on release — a generous deadline since this only races
+	// the test goroutine's own scheduling, never real I/O.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if rec, ok := rig.Store.lastHistory(); ok {
+			if s, found := rec.Step("fix"); found && !s.Started.IsZero() && s.Status == "" {
+				break // seen running (persisted Started, no terminal status yet)
+			}
+		}
+		if time.Now().After(deadline) {
+			close(release)
+			<-done
+			t.Fatal("step's Started never appeared on disk before it finished — stepStart isn't persisting")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	<-done
+
+	rec, ok := rig.Store.lastHistory()
+	if !ok {
+		t.Fatal("no history recorded")
+	}
+	if fix, _ := rec.Step("fix"); fix.Status != "ok" {
+		t.Fatalf("fix did not finish ok: %+v", fix)
 	}
 }
 
