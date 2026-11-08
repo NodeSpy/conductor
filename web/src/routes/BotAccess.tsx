@@ -229,7 +229,7 @@ export function BotAccess({ bot }: { bot: BotData }): JSX.Element {
   )
   const grp = (h: string, s: string, items: Item[], empty: string) => (
     <div class="cang" data-s={s}>
-      <h3><StatusMark s={s} mkOnly proto label={h} />{h}</h3>
+      <h3><StatusMark s={s} mkOnly label={h} />{h}</h3>
       <ul>{items.length ? items.map(item) : <li class="dl-sub">{empty}</li>}</ul>
     </div>
   )

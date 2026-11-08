@@ -160,13 +160,15 @@ type sessionExpiry struct {
 	Saved    time.Time  `json:"saved"`
 	Expires  *time.Time `json:"expires,omitempty"`
 	Note     string     `json:"note,omitempty"`
+	// Cookies is how many cookies the saved session keeps (never a value).
+	Cookies int `json:"cookies"`
 }
 
 // jarExpiry reads a saved session's expiry from its cookies: the earliest
 // persistent cookie's; unknown when one is a session cookie (it lasts as
 // long as the site lets it — the cookie doesn't say).
 func jarExpiry(j browser.Jar) sessionExpiry {
-	e := sessionExpiry{Identity: j.Identity, Saved: j.Saved}
+	e := sessionExpiry{Identity: j.Identity, Saved: j.Saved, Cookies: len(j.Cookies)}
 	var earliest float64
 	for _, c := range j.Cookies {
 		if c.Expires <= 0 {

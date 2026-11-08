@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import { createHash } from 'node:crypto'
+import { hermeticPath } from './nopaseo'
 
 export interface Runtime {
   bin: string
@@ -36,7 +37,7 @@ export interface Runtime {
 
 function hermeticEnv(home: string): NodeJS.ProcessEnv {
   return {
-    PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+    PATH: hermeticPath(),
     HOME: home,
     TMPDIR: process.env.TMPDIR ?? '/tmp',
     TERM: 'dumb',
@@ -484,7 +485,7 @@ export async function seedSample(rt: Runtime): Promise<void> {
     },
   }
 
-  // Three purchases on the household card: one pending, one a pending
+  // Purchases on the household card: one pending, one a pending
   // subscription, one already paid above the approved amount — so the
   // approval, the subscription flag and the receipt section each have a real
   // example. Same "write the ledger, restart the daemon" technique as the
@@ -492,7 +493,7 @@ export async function seedSample(rt: Runtime): Promise<void> {
   const day = 24 * 60 * 60 * 1000
   const paidAt = new Date(now.getTime() - 3 * day)
   const ledger = {
-    next: 4,
+    next: 6,
     purchases: {
       pu1: {
         id: 'pu1',
@@ -552,6 +553,41 @@ export async function seedSample(rt: Runtime): Promise<void> {
           at: paidAt.toISOString(),
           note: 'Charged $5.20 more than approved',
         },
+      },
+      // Two an agent you started asked for (not a bot's, so the operator
+      // decides them on the purchase page itself; a bot's purchase is decided
+      // on its proposal): a one-off and a subscription.
+      pu4: {
+        id: 'pu4',
+        card: 'household',
+        merchant: 'https://shop.example.com',
+        items: [{ name: 'USB-C dock', qty: 1, amount: 39.0 }],
+        total: 39.0,
+        currency: 'USD',
+        why: 'The desk dock stopped charging the laptop',
+        identity: 'dir:/home/ops/house',
+        requester: 'operator:ops',
+        status: 'pending',
+        created: new Date(now.getTime() - 5 * 60 * 1000).toISOString(),
+        expires: new Date(now.getTime() + 55 * 60 * 1000).toISOString(),
+        digest: 'seeded-digest-4',
+      },
+      pu5: {
+        id: 'pu5',
+        card: 'household',
+        merchant: 'https://shop.example.com',
+        items: [{ name: 'Password manager, family plan', qty: 1, amount: 4.99 }],
+        total: 4.99,
+        currency: 'USD',
+        recurring: true,
+        interval: 'month',
+        why: 'Shared vault for the household',
+        identity: 'dir:/home/ops/house',
+        requester: 'operator:ops',
+        status: 'pending',
+        created: new Date(now.getTime() - 2 * 60 * 1000).toISOString(),
+        expires: new Date(now.getTime() + 58 * 60 * 1000).toISOString(),
+        digest: 'seeded-digest-5',
       },
     },
     spend: [{ card: 'household', identity: 'bot:scout', bot: 'scout', amount: 54.2, currency: 'USD', purchase: 'pu3', at: paidAt.toISOString() }],

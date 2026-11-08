@@ -145,6 +145,10 @@ type WorkflowSummary struct {
 	FailedWeek int      `json:"failed_week,omitempty"`
 	Health     string   `json:"health,omitempty"`
 	Last20     []string `json:"last20,omitempty"` // its last 20 runs' status, most recent first
+	// Kind is "workflow" for a reusable workflows: entry (run with call:);
+	// empty for a trigger.
+	Kind        string `json:"kind,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // WorkflowDetailResponse is GET /api/v1/workflows/{name}: the workflow's graph
@@ -164,6 +168,9 @@ type WorkflowDetailResponse struct {
 	Source string `json:"source,omitempty"`
 	When   string `json:"when,omitempty"`
 	Does   string `json:"does,omitempty"`
+	// Kind is "workflow" for a reusable workflows: entry; empty for a trigger.
+	Kind        string `json:"kind,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // GraphNode is one step in a workflow's graph. Needs lists the ids it waits on

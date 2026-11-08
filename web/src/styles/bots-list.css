@@ -2,3 +2,5 @@
    under 720px). The shared `html { --gap-stack: 14px }` override loses to
    tokens.css's `:root` rule, so the list sets it on itself. */
 @media (max-width: 720px) { .bot-list { --gap-stack: 14px; --control-h: 44px; } }
+/* the welcome hero balances its lines: no one-word last line on a phone */
+[data-testid="bots-empty"] p { text-wrap: balance; }

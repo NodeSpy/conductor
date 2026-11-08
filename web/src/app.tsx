@@ -12,7 +12,6 @@ import { Activity } from './routes/Activity'
 import { RunDetail } from './routes/RunDetail'
 import { Workflows } from './routes/Workflows'
 import { WorkflowDetail } from './routes/WorkflowDetail'
-import { Builder } from './routes/Builder'
 import { Bots } from './routes/Bots'
 import { BotDetail } from './routes/BotDetail'
 import { NewBotWizard } from './routes/NewBotWizard'
@@ -20,6 +19,7 @@ import { TeamDetail } from './routes/TeamDetail'
 import { Chat } from './routes/Chat'
 import { Tickets } from './routes/Tickets'
 import { TicketDetail } from './routes/TicketDetail'
+import { TicketNew } from './routes/TicketNew'
 import { Approval } from './routes/Approval'
 import { Browsers } from './routes/Browsers'
 import { Attention } from './routes/Attention'
@@ -124,7 +124,8 @@ function Screen(): JSX.Element {
     case 'runs':
       return seg(1) ? <RunDetail id={seg(1)} /> : <Activity />
     case 'workflows':
-      if (seg(1) === 'new') return <Builder />
+      // the builder's own page is gone: New workflow is a dialog on the list (#/workflows?new=1)
+      if (seg(1) === 'new') return <Redirect to="workflows?new=1" />
       return seg(1) ? <WorkflowDetail name={seg(1)} /> : <Workflows />
     case 'bots':
       // #/bots, #/bots/<bot>[/<tab>], #/bots/<bot>/proposals/<id> (the approval)
@@ -148,6 +149,7 @@ function Screen(): JSX.Element {
       // #/chat or #/chat/bot:atlas (the conversation id carries its own colon)
       return <Chat convId={seg(1) || undefined} />
     case 'tickets':
+      if (seg(1) === 'new') return <TicketNew />
       if (seg(1)) return <TicketDetail num={seg(1)} />
       return <Tickets />
     case 'browser':

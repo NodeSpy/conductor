@@ -169,6 +169,35 @@ func (m *Manager) ReleaseLease(id, operator string) error {
 	return nil
 }
 
+// CloseByOperator ends one session's browsers at an operator's request (the
+// dashboard's Close browser): an open takeover lease is released first so a
+// waiting agent action resumes and finds the browser gone; the agent's next
+// browser call opens a fresh one. Its ephemeral profile is discarded.
+func (m *Manager) CloseByOperator(id, operator string) error {
+	m.mu.Lock()
+	var s *session
+	for k, x := range m.sessions {
+		if x.id == id {
+			s = x
+			delete(m.sessions, k)
+			break
+		}
+	}
+	m.mu.Unlock()
+	if s == nil {
+		return fmt.Errorf("browser: no session %q", id)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.leaseCh != nil {
+		close(s.leaseCh)
+	}
+	s.leaseBy, s.leaseCh = "", nil
+	m.closeSession(s)
+	m.audit(map[string]any{"action": "close", "identity": s.caller.Identity, "operator": operator, "outcome": "ok", "by": "operator"})
+	return nil
+}
+
 // LeaseBy reports who holds the takeover lease ("" when free).
 func (m *Manager) LeaseBy(id string) string {
 	s := m.sessionByID(id)

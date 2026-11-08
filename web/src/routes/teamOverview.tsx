@@ -336,7 +336,7 @@ export function TeamOverview({ ctx }: { ctx: TeamCtx }): JSX.Element {
               <div class="item small muted">No delegations yet.</div>
             )}
           </div>
-          <div class="panel-foot small muted">Beyond the team, a bot delegates only to a bot it's linked with (both list each other as peers, or an operator's bot_links pair).</div>
+          <div class="panel-foot small muted">Beyond the team, a bot delegates only to a bot it's linked with (both list each other as peers, or an operator's <code>bot_links</code> pair).</div>
         </div>
 
         <div class="panel">

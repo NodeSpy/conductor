@@ -26,6 +26,7 @@ import { StatusMark } from '../components/StatusMark'
 import { TabsBar } from '../components/TabsBar'
 import { cfgError, config, loadConfig, stage, stageDelete, staged } from '../configStore'
 import { go, seg } from '../router'
+import { useHashFlag } from '../lib/hashFlag'
 import { Confirm, ConnForm, HostForm, LanguageSheet, Permissions, Picker, RangeForm, RuntimeForm, SourceForm, pluginFact, type ConnTarget, type Kind } from './PluginForms'
 
 type Tab = 'connectors' | 'runtimes' | 'languages' | 'machines'
@@ -386,6 +387,8 @@ export function Connections(): JSX.Element {
 
   const [act, addLabel] = ({ runtimes: ['rt-add', 'Add a runtime'], languages: ['lang-add', 'Add a language'], machines: ['host-add', 'Add a machine'] } as Record<string, [string, string]>)[tab] ?? ['conn-add', 'Add a connection']
   const add = () => (tab === 'machines' ? setSheet({ t: 'host' }) : setSheet({ t: 'pick', kind: tab === 'runtimes' ? 'runtime' : tab === 'languages' ? 'engine' : 'connector' }))
+  // #/connections?add=1 (the ⌘K palette's Connect a service) opens the connection picker.
+  useHashFlag('add', () => setSheet({ t: 'pick', kind: 'connector' }))
 
   async function picked(kind: Kind, it: CatalogItem) {
     try {

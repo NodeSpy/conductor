@@ -30,7 +30,7 @@ import { Menu, type MenuItem } from '../components/Menu'
 import { ConfirmModal, FormModal } from '../components/FormModal'
 import { ReviewPanel } from '../components/ReviewPanel'
 import { stage, staged } from '../configStore'
-import { ScopedTickets } from './ScopedTickets'
+import { Tickets } from './Tickets'
 import { BotMemory } from './BotMemory'
 import { BotAccess } from './BotAccess'
 import { BotSettings } from './BotSettings'
@@ -293,7 +293,8 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
   const watchNote =
     triggers !== null && !watched ? (
       <p class="bot-working bot-unwatched" data-testid="watch-empty">
-        Not watching anything yet, so it only answers when someone talks to it ·{' '}
+        <span class="bu-why">Watches nothing yet: it only answers when asked</span>
+        <span class="bu-sep"> · </span>
         <button class="link" type="button" onClick={() => setModal('watch')}>Choose what it watches</button>
       </p>
     ) : null
@@ -348,7 +349,7 @@ export function BotDetail({ name, tab }: { name: string; tab?: string }): JSX.El
       <div class="dl-tab-body">
         {active === 'proposals' && <Approvals name={name} nm={nm} list={proposals} />}
         {active === 'chat' && <ChatTab name={name} nm={nm} bot={bot} all={all} pending={pending} open={open} onPaseo={() => setModal('paseo')} />}
-        {active === 'tickets' && <ScopedTickets assignee={`bot:${name}`} />}
+        {active === 'tickets' && <Tickets scope={`bot:${name}`} />}
         {active === 'memory' && <BotMemory bot={bot} />}
         {active === 'access' && <BotAccess bot={bot} />}
         {active === 'settings' && <BotSettings bot={bot} />}
@@ -569,7 +570,13 @@ function ChatTab({ name, nm, bot, all, pending, open, onPaseo }: { name: string;
         {open.length ? <a class="dl-link" href={`#/bots/${name}/tickets`}>Working on {open.length}</a> : null}
       </p>
       <div class="grid g-side chat-grid">
-        <ChatThread convId={`bot:${name}`} kind="bot" bots={all} frame="panel chat fit" head={head} placeholder={`Message ${nm}`} sendLit empty={`No conversation yet. Ask ${nm} anything; it answers here.`} />
+        <ChatThread convId={`bot:${name}`} kind="bot" bots={all} cls="fit" head={head} placeholder={`Message ${nm}`} empty={
+          <div class="empty cm-hero" data-testid="chat-empty">
+            <Icon name="message" class="empty-ic" />
+            <h2 class="serif">No conversation with {nm} yet</h2>
+            <p>Write below and it answers here, between turns of its work.</p>
+          </div>
+        } />
         <div class="stack cm-side">
           {pending.length ? (
             <section class="panel cm-need">
@@ -634,7 +641,7 @@ function Approvals({ name, nm, list }: { name: string; nm: string; list: Proposa
             ) : null}
           </>
         ) : (
-          <p class="dl-sub">Nothing waits for you. When {name} wants to do something it has to ask about, it shows up here and in Needs you.</p>
+          <p class="dl-sub">Nothing waits for you. When <code>{name}</code> wants to do something it has to ask about, it shows up here and in Needs you.</p>
         )}
       </section>
       {past.length ? (

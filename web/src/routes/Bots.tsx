@@ -24,6 +24,7 @@ import { api } from '../api/client'
 import { plural } from '../lib/format'
 import { AddToTeamForm, ArchiveConfirm, CloneForm, ModelForm, MoveForm, botPractice, setArchived, setPractice } from './botListActions'
 import '../styles/bots-list.css'
+import { useHashFlag } from '../lib/hashFlag'
 import { TeamDelete, TeamForm, TeamPicture, cfgTree, toReview } from './TeamForm'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -199,6 +200,8 @@ export function Bots(): JSX.Element {
   const [menu, setMenu] = useState<{ anchor: HTMLElement; items: MenuItem[]; label: string } | null>(null)
   const [modal, setModal] = useState<Modal>(null)
   const [note, setNote] = useState('')
+  // #/bots?new=1 (the ⌘K palette's New bot) opens the New bot wizard.
+  useHashFlag('new', () => { location.hash = '#/bots/new' })
   // The cli runtimes a bot's workers can run on (null: not known yet).
   const [workers, setWorkers] = useState<string[] | null>(null)
 

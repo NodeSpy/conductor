@@ -45,3 +45,28 @@
 .list .item:has(> .tm-acts) { flex-wrap: nowrap; }
 .list .item:has(> .tm-acts) > a { min-width: 0; }
 .tm-add > label { flex: 1 0 auto; }
+/* A bot's empty chat: a small hero in the middle of the thread; the composer under it is the action. */
+.cm-thread > .cm-hero:only-child { margin: auto; padding: var(--space-6) var(--space-4); }
+.cm-hero .empty-ic { width: 36px; height: 36px; }
+/* "Open in paseo" with no home session: disabled, but still a button (outline and label visible). */
+.cm-head [data-testid="paseo-none"]:disabled { opacity: 1; color: var(--color-text-tertiary); border-color: var(--color-border-default); background: transparent; cursor: not-allowed; }
+.cm-head [data-testid="paseo-none"]:disabled svg { color: var(--color-text-tertiary); }
+/* Not watching: on a phone the reason gives way first, so "Choose what it watches" always shows. */
+.bot-unwatched { display: flex; align-items: baseline; min-width: 0; white-space: nowrap; }
+.bot-unwatched .bu-why { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.bot-unwatched .bu-sep, .bot-unwatched .link { flex: none; }
+@media (max-width: 720px) {
+  .dl-bothead .bot-working.bot-unwatched { overflow: visible; }
+  /* the two buttons keep one row together under the heading, never one alone */
+  .cm-head > h3 { flex: 1 1 100%; }
+}
+@media (max-width: 720px) {
+  /* a team's bot row on a phone: who it is takes the whole width; Make lead and Remove go under it, together */
+  .list .item:has(> .tm-acts) { flex-wrap: wrap; row-gap: 2px; }
+  .list .item:has(> .tm-acts) > a { flex: 1 1 100%; }
+  .tm-acts { margin-left: 34px; }
+  /* Add a bot: the label and picker share the first row (the picker shrinks), the Add button goes under */
+  .tm-add > label { flex: 1 1 100%; min-width: 0; }
+  .tm-add select { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+}
+.bot-unwatched .bu-sep { white-space: pre; }

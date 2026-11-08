@@ -16,7 +16,7 @@ import { StatusMark } from '../components/StatusMark'
 import { TabsBar } from '../components/TabsBar'
 import { FormModal, ConfirmModal } from '../components/FormModal'
 import { config, staged, loadConfig, stage, stageDelete, cfgError } from '../configStore'
-import { ScopedTickets } from './ScopedTickets'
+import { Tickets } from './Tickets'
 import { RepoView } from '../components/RepoView'
 import { TeamForm, TeamPicture } from './TeamForm'
 import { overlay, touches, type Edit, type TeamCtx, type Tree } from './teamLib'
@@ -179,7 +179,7 @@ export function TeamDetail({ name, tab }: { name: string; tab?: string }): JSX.E
       body = <TeamDefaults ctx={ctx} />
       break
     case 'tickets':
-      body = <ScopedTickets assignee={'team:' + name} />
+      body = <Tickets scope={'team:' + name} />
       break
     case 'knowledge':
       body = c.knowledge || team.knowledge ? (

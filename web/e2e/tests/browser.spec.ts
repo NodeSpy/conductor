@@ -80,15 +80,18 @@ test('freezing a card narrows it at once — no passkey needed', async () => {
 
 test('approving a purchase needs a passkey step-up and records the decision', async () => {
   await page.goto(`${rt.baseURL}/#/browser/purchases/pu1`)
-  await expect(page.getByRole('heading', { name: /Buy Widget/ })).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByRole('heading', { name: /Buy 2 × Widget/ })).toBeVisible({ timeout: 10_000 })
   // The terms: items, the card (last four only) and the stacked limits.
   await expect(page.getByTestId('purchase-kicker')).toContainText('Needs you')
   await expect(page.locator('.wl-items')).toContainText('Widget')
   await expect(page.getByTestId('approve')).toBeVisible()
 
   await page.getByTestId('approve').click()
-  // The step-up dialog offers the passkey first; the virtual authenticator
+  // The signing sheet says what you're agreeing to in words; its button asks
+  // for the passkey. The step-up dialog offers the passkey first; the virtual authenticator
   // satisfies it automatically, the decision lands and the screen confirms it.
+  await expect(page.getByTestId('purchase-seal')).toContainText('You’re letting')
+  await page.getByTestId('approve-confirm').click()
   await page.getByTestId('stepup-passkey').click()
   await expect(page.getByTestId('purchase-done')).toContainText('Approved', { timeout: 15_000 })
 })

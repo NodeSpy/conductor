@@ -1,0 +1,5 @@
+#!/bin/sh
+# Test daemons must never reach the operator's real paseo (it listens on a
+# fixed localhost port, whatever HOME says), so this stub shadows it on PATH.
+echo "paseo is disabled for this hermetic test daemon" >&2
+exit 127

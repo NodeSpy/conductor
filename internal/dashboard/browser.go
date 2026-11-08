@@ -195,14 +195,40 @@ func (s *Server) handleBrowserOp(w http.ResponseWriter, r *http.Request) {
 }
 
 // describeWalletOp is a widening wallet change's description: the command and
-// its request, pretty-printed in full.
+// its request, pretty-printed in full — except a typed value (a password, a
+// card number), which shows only that it was typed. The description is shown
+// on the sheet and kept for approve-login on another device; the digest still
+// covers the whole request.
 func describeWalletOp(cmd string, req json.RawMessage) string {
 	var b strings.Builder
 	b.WriteString(auth.SafeText("a wallet change that widens what a bot can do: " + cmd))
-	for _, l := range auth.SafeLines(prettyJSON(req)) {
+	for _, l := range auth.SafeLines(prettyJSON(withoutTypedValues(req))) {
 		b.WriteString("\n  " + l)
 	}
 	return b.String()
+}
+
+// withoutTypedValues replaces each value in a wallet request's "values" (the
+// typed, write-only ones) with a placeholder; references ("refs") stay.
+func withoutTypedValues(req json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(req, &m); err != nil {
+		return req
+	}
+	var vals map[string]json.RawMessage
+	if raw, ok := m["values"]; !ok || json.Unmarshal(raw, &vals) != nil || len(vals) == 0 {
+		return req
+	}
+	masked := make(map[string]string, len(vals))
+	for k := range vals {
+		masked[k] = "(typed, stored write-only)"
+	}
+	m["values"], _ = json.Marshal(masked)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return req
+	}
+	return out
 }
 
 // --- takeover (step-up lease) + input + screencast ---

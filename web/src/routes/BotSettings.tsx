@@ -31,7 +31,7 @@ interface DF {
   sec?: string
   mono?: boolean
   on?: string
-  help?: string
+  help?: string | JSX.Element
   ph?: string
   options?: (ctx: Ctx) => [string, string][]
   create?: { label: string; href: string }
@@ -80,7 +80,7 @@ const FIELDS: DF[] = [
     type: 'select-multi',
     label: 'Peers (bots it may message)',
     options: (c) => opt(c.bots),
-    help: 'Teammates are already peers. A link needs both bots to list each other (or an operator bot_links pair).',
+    help: <>Teammates are already peers. A link needs both bots to list each other (or an operator <code>bot_links</code> pair).</>,
   },
 ]
 
@@ -262,7 +262,7 @@ export function BotSettings({ bot }: { bot: BotData }): JSX.Element {
   const charter = (
     <div class="field" data-field="df.charter">
       <label for="df-charter">
-        Charter <span class="opt">{charterFile || "config.yaml"} · config only</span>
+        Charter <span class="opt"><code>{charterFile || "config.yaml"}</code> · config only</span>
       </label>
       <textarea
         class="textarea"

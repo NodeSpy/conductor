@@ -23,6 +23,13 @@ const SHAPES: Record<string, [string, Record<string, string>][]> = {
   'italic': [['line',{x1:'19',x2:'10',y1:'4',y2:'4'}],['line',{x1:'14',x2:'5',y1:'20',y2:'20'}],['line',{x1:'15',x2:'9',y1:'4',y2:'20'}]],
   'split': [['rect',{width:'18',height:'18',x:'3',y:'3',rx:'2'}],['path',{d:'M12 3v18'}]],
   'obj-approval': [['path',{d:'M14 13V8.5C14 7 15 7 15 5a3 3 0 0 0-6 0c0 2 1 2 1 3.5V13'}],['path',{d:'M20 15.5a2.5 2.5 0 0 0-2.5-2.5h-11A2.5 2.5 0 0 0 4 15.5V17a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1z'}],['path',{d:'M5 22h14'}]],
+  // Browsers (logins menu, live session facts, config tags)
+  'obj-config': [['path', {d: 'M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z'}], ['path', {d: 'M9 10h6'}], ['path', {d: 'M12 13V7'}], ['path', {d: 'M9 17h6'}]],
+  'obj-team': [['path', {d: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'}], ['path', {d: 'M16 3.128a4 4 0 0 1 0 7.744'}], ['path', {d: 'M22 21v-2a4 4 0 0 0-3-3.87'}], ['circle', {cx: '9', cy: '7', r: '4'}]],
+  'obj-run': [['path', {d: 'M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z'}], ['circle', {cx: '12', cy: '12', r: '10'}]],
+  'obj-login': [['path', {d: 'm10 17 5-5-5-5'}], ['path', {d: 'M15 12H3'}], ['path', {d: 'M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4'}]],
+  'external': [['path', {d: 'M15 3h6v6'}], ['path', {d: 'M10 14 21 3'}], ['path', {d: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6'}]],
+  'phone': [['rect', {width: '14', height: '20', x: '5', y: '2', rx: '2', ry: '2'}], ['path', {d: 'M12 18h.01'}]],
   plug: [['path',{d:'M12 22v-5'}],['path',{d:'M9 8V2'}],['path',{d:'M15 8V2'}],['path',{d:'M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z'}]],
   'badge-check': [['path',{d:'M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z'}],['path',{d:'m16 9-5.5 5.5L8 12'}]],
   'git-fork': [['circle',{cx:'12',cy:'18',r:'3'}],['circle',{cx:'6',cy:'6',r:'3'}],['circle',{cx:'18',cy:'6',r:'3'}],['path',{d:'M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9'}],['path',{d:'M12 12v3'}]],
@@ -86,6 +93,7 @@ const SHAPES: Record<string, [string, Record<string, string>][]> = {
   // obj-update, kept as its own key so the SHAPES lookup never silently
   // falls back to the ellipsis "more" icon for it.
   updates: [['path', { d: 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8' }], ['path', { d: 'M21 3v5h-5' }], ['path', { d: 'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16' }], ['path', { d: 'M8 16H3v5' }]],
+  keyboard: [['path', { d: 'M10 8h.01' }], ['path', { d: 'M12 12h.01' }], ['path', { d: 'M14 8h.01' }], ['path', { d: 'M16 12h.01' }], ['path', { d: 'M18 8h.01' }], ['path', { d: 'M6 8h.01' }], ['path', { d: 'M7 16h10' }], ['path', { d: 'M8 12h.01' }], ['rect', { width: '20', height: '16', x: '2', y: '4', rx: '2' }]],
   'act-money': [['rect', { width: '20', height: '12', x: '2', y: '6', rx: '2' }], ['circle', { cx: '12', cy: '12', r: '2' }], ['path', { d: 'M6 12h.01M18 12h.01' }]],
   login: [['path', { d: 'm10 17 5-5-5-5' }], ['path', { d: 'M15 12H3' }], ['path', { d: 'M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4' }]],
   'obj-bot': [['path', { d: 'M12 8V4H8' }], ['rect', { width: '16', height: '12', x: '4', y: '8', rx: '2' }], ['path', { d: 'M2 14h2' }], ['path', { d: 'M20 14h2' }], ['path', { d: 'M15 13v2' }], ['path', { d: 'M9 13v2' }]],
@@ -114,7 +122,6 @@ const SHAPES: Record<string, [string, Record<string, string>][]> = {
   // Packs' facts (the design's UI.pluginFact): origin, update policy, an update.
   eye: [['path', { d: 'M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0' }], ['circle', { cx: '12', cy: '12', r: '3' }]],
   // Bots list facts (botlist.js): a team, archived, practice mode, a budget.
-  'obj-team': [['path', { d: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2' }], ['path', { d: 'M16 3.128a4 4 0 0 1 0 7.744' }], ['path', { d: 'M22 21v-2a4 4 0 0 0-3-3.87' }], ['circle', { cx: '9', cy: '7', r: '4' }]],
   box: [['path', { d: 'M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z' }], ['path', { d: 'm3.3 7 8.7 5 8.7-5' }], ['path', { d: 'M12 22V12' }]],
   ghost: [['path', { d: 'M15 10v1' }], ['path', { d: 'M7.528 20.472a1.6 1.6 0 012.277 0l1.057 1.056a1.6 1.6 0 002.276 0l1.057-1.056a1.6 1.6 0 012.277 0l1.114 1.114a1.4 1.4 0 002.414-1V10a8 8 0 00-16 0v10.586a1.4 1.4 0 002.414 1z' }], ['path', { d: 'M9 10v1' }]],
   dollar: [['circle', { cx: '12', cy: '12', r: '10' }], ['path', { d: 'M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8' }], ['path', { d: 'M12 18V6' }]],
@@ -126,10 +133,12 @@ const SHAPES: Record<string, [string, Record<string, string>][]> = {
   'act-infra': [['path', { d: 'm10.852 14.772-.383.923' }], ['path', { d: 'M13.148 14.772a3 3 0 1 0-2.296-5.544l-.383-.923' }], ['path', { d: 'm13.148 9.228.383-.923' }], ['path', { d: 'm13.53 15.696-.382-.924a3 3 0 1 1-2.296-5.544' }], ['path', { d: 'm14.772 10.852.923-.383' }], ['path', { d: 'm14.772 13.148.923.383' }], ['path', { d: 'M4.5 10H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-.5' }], ['path', { d: 'M4.5 14H4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2h-.5' }], ['path', { d: 'M6 18h.01' }], ['path', { d: 'M6 6h.01' }], ['path', { d: 'm9.228 10.852-.923-.383' }], ['path', { d: 'm9.228 13.148-.923.383' }]],
   'act-destroy': [['path', { d: 'M10 11v6' }], ['path', { d: 'M14 11v6' }], ['path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6' }], ['path', { d: 'M3 6h18' }], ['path', { d: 'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' }]],
   'act-permission': [['path', { d: 'M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z' }], ['path', { d: 'M12 8v4' }], ['path', { d: 'M12 16h.01' }]],
-  external: [['path', { d: 'M15 3h6v6' }], ['path', { d: 'M10 14 21 3' }], ['path', { d: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' }]],
   // New bot's purpose cards (botwizard.js): a branch and a checklist.
   'nb-branch': [['path', { d: 'M15 6a9 9 0 0 0-9 9V3' }], ['circle', { cx: '18', cy: '6', r: '3' }], ['circle', { cx: '6', cy: '18', r: '3' }]],
   'nb-obj-check': [['path', { d: 'M13 5h8' }], ['path', { d: 'M13 12h8' }], ['path', { d: 'M13 19h8' }], ['path', { d: 'm3 17 2 2 4-4' }], ['path', { d: 'm3 7 2 2 4-4' }]],
+  // The workflow builder: Open in the builder (canvas) and Try it's event picker (pr).
+  canvas: [['rect', { width: '18', height: '18', x: '3', y: '3', rx: '2' }], ['path', { d: 'M3 9h18' }], ['path', { d: 'M9 21V9' }]],
+  pr: [['circle', { cx: '18', cy: '18', r: '3' }], ['circle', { cx: '6', cy: '6', r: '3' }], ['path', { d: 'M13 6h3a2 2 0 0 1 2 2v7' }], ['line', { x1: '6', x2: '6', y1: '9', y2: '21' }]],
 }
 
 export function Icon({ name, class: cls = '' }: { name: string; class?: string }): JSX.Element {
