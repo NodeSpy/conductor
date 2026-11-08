@@ -68,6 +68,45 @@ func (dashboardBrowser) Control(ctx context.Context, cmd, operator string, reqJS
 		return nil, "", fmt.Errorf("browser: no wallet store on this daemon")
 	}
 
+	if cmd == "browser-session-close" {
+		// Close one live session's browser (an operator's Close browser). It
+		// only narrows: no passkey.
+		var q struct {
+			Session string `json:"session"`
+		}
+		_ = json.Unmarshal(reqJSON, &q)
+		if dryRun {
+			b, _ := json.Marshal(map[string]any{"change": "narrowing", "dry_run": true})
+			return b, "narrowing", nil
+		}
+		if err := m.CloseByOperator(q.Session, operator); err != nil {
+			return nil, "", err
+		}
+		b, _ := json.Marshal(map[string]any{"change": "narrowing", "closed": q.Session})
+		return b, "narrowing", nil
+	}
+	if cmd == "browser-logout" {
+		// Revoke one saved session (its cookie jar): it only narrows, so it
+		// needs no passkey. The CLI's `conductor browser logout`.
+		var q struct {
+			Identity string `json:"identity"`
+			Site     string `json:"site"`
+		}
+		_ = json.Unmarshal(reqJSON, &q)
+		if q.Identity == "" || q.Site == "" {
+			return nil, "", fmt.Errorf("browser: an identity and a site are required")
+		}
+		if dryRun {
+			b, _ := json.Marshal(map[string]any{"change": "narrowing", "dry_run": true})
+			return b, "narrowing", nil
+		}
+		resp := browserControl(nil, controlRequest{Cmd: "browser-logout", Identity: q.Identity, Site: q.Site})
+		if resp.Error != "" {
+			return nil, "", errOf(resp)
+		}
+		b, _ := json.Marshal(map[string]any{"change": "narrowing", "msg": resp.Msg})
+		return b, "narrowing", nil
+	}
 	if cmd == "browser-logins" {
 		cmd = "browser-login-list"
 	}
