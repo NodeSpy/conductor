@@ -10,11 +10,12 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import { enroll, stop, type AuthRuntime } from './authdaemon'
+import { hermeticPath } from './nopaseo'
 
 export { enroll, stop } from './authdaemon'
 
 function hermeticEnv(home: string): NodeJS.ProcessEnv {
-  return { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, TMPDIR: process.env.TMPDIR ?? '/tmp', TERM: 'dumb' }
+  return { PATH: hermeticPath(), HOME: home, TMPDIR: process.env.TMPDIR ?? '/tmp', TERM: 'dumb' }
 }
 
 function resolveBin(): string {

@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import { createHash } from 'node:crypto'
+import { hermeticPath } from './nopaseo'
 
 export interface Runtime {
   bin: string
@@ -36,7 +37,7 @@ export interface Runtime {
 
 function hermeticEnv(home: string): NodeJS.ProcessEnv {
   return {
-    PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+    PATH: hermeticPath(),
     HOME: home,
     TMPDIR: process.env.TMPDIR ?? '/tmp',
     TERM: 'dumb',

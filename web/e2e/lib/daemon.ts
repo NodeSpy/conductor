@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import { randomBytes } from 'node:crypto'
+import { hermeticPath } from './nopaseo'
 
 export interface Runtime {
   bin: string
@@ -32,7 +33,7 @@ const RUNTIME_FILE = path.resolve(__dirname, '..', '.runtime.json')
 // every path from the config's state_file, so this stays fully isolated.
 function hermeticEnv(home: string): NodeJS.ProcessEnv {
   return {
-    PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+    PATH: hermeticPath(),
     HOME: home,
     TMPDIR: process.env.TMPDIR ?? '/tmp',
     TERM: 'dumb',

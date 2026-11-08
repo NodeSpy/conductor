@@ -9,6 +9,7 @@ import { tmpdir, networkInterfaces } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import { createHash } from 'node:crypto'
+import { hermeticPath } from './nopaseo'
 
 // actionDigest mirrors bot.ActionDigest: the sha256 of the canonical verb action
 // (Go marshals the map with sorted keys), so an approval seeded here passes the
@@ -49,7 +50,7 @@ export function externalIPv4(): string {
 }
 
 function hermeticEnv(home: string): NodeJS.ProcessEnv {
-  return { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, TMPDIR: process.env.TMPDIR ?? '/tmp', TERM: 'dumb' }
+  return { PATH: hermeticPath(), HOME: home, TMPDIR: process.env.TMPDIR ?? '/tmp', TERM: 'dumb' }
 }
 
 function resolveBin(): string {
