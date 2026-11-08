@@ -175,6 +175,8 @@ func concrete(pattern string) (method, path string) {
 			return "devbot"
 		case "{bot}":
 			return "devbot"
+		case "{team}":
+			return "devteam"
 		}
 		return "x"
 	})

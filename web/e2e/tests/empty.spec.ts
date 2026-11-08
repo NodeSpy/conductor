@@ -155,11 +155,8 @@ test('the Bots welcome has one big way in, and no controls with nothing to act o
   await expect(page.getByText('Group by')).toHaveCount(0)
   await expect(page.getByText(/Each team is a section/)).toHaveCount(0)
   await expect(page.getByTestId('new-bot')).toHaveCount(0)
-  await cta.click()
-  await expect(page.getByRole('dialog', { name: 'New bot' })).toBeVisible()
-  // No teams yet: the sheet doesn't offer a team picker with only "Solo" in it.
-  await expect(page.getByRole('dialog').getByText('Team', { exact: true })).toHaveCount(0)
-  await shot(page, 'bots-new-sheet')
+  // The welcome's one way in is the New bot flow (its own route).
+  await expect(cta).toHaveAttribute('href', '#/bots/new')
 })
 
 // A box with no agent runtime can't run a bot yet: the welcome says that comes
@@ -235,11 +232,30 @@ test('create the first bot from the welcome', async ({ page }) => {
   try {
     await page.goto(`${own.baseURL}/#/bots`)
     await page.getByTestId('create-first-bot').click()
-    const sheet = page.getByRole('dialog', { name: 'New bot' })
-    await sheet.getByRole('textbox', { name: 'Name', exact: true }).fill('scout')
-    await sheet.getByRole('textbox', { name: 'Display name' }).fill('Scout')
-    await sheet.getByRole('textbox', { name: "What it's for" }).fill('Keeps an eye on the build')
-    await sheet.getByTestId('create-bot').click()
+    // The guided New bot: Purpose → Watches → Tells you where → What it may do → Review.
+    const sheet = page.getByTestId('new-bot-wizard')
+    await expect(sheet.getByTestId('nb-step')).toHaveText('Step 1 of 5 · Purpose')
+    await expect(sheet.getByTestId('nb-next')).toHaveAttribute('aria-disabled', 'true')
+    await sheet.getByTestId('nb-purpose-custom').click()
+    await sheet.getByRole('textbox', { name: 'Name' }).fill('scout')
+    await sheet.getByRole('textbox', { name: "What it's for, in a line" }).fill('Keeps an eye on the build')
+    // No teams yet: a solo bot, said so.
+    await expect(sheet.getByText('No teams yet', { exact: false })).toBeVisible()
+    await sheet.getByTestId('nb-next').click()
+    await expect(sheet.getByTestId('nb-step')).toHaveText('Step 2 of 5 · Watches')
+    // Watching nothing is allowed, but never by accident.
+    await sheet.getByTestId('nb-next').click()
+    await page.getByRole('button', { name: 'Continue without events' }).click()
+    await expect(sheet.getByTestId('nb-step')).toHaveText('Step 3 of 5 · Tells you where')
+    await sheet.getByTestId('nb-next').click()
+    await expect(sheet.getByTestId('nb-step')).toHaveText('Step 4 of 5 · What it may do')
+    await sheet.getByTestId('nb-next').click()
+    await expect(sheet.getByTestId('nb-step')).toHaveText('Step 5 of 5 · Review')
+    // The config it writes is shown before anything is staged.
+    await sheet.getByTestId('nb-yaml').locator('summary').click()
+    await expect(sheet.getByTestId('nb-yaml')).toContainText('scout:')
+    await expect(sheet.getByTestId('nb-yaml')).toContainText('shadow: true')
+    await sheet.getByTestId('nb-create').click()
     await expect(sheet).toBeHidden()
 
     // The staged card's own primary button is the next step: review, then apply.
@@ -247,7 +263,7 @@ test('create the first bot from the welcome', async ({ page }) => {
     await expect(card).toBeVisible()
     await noErrors(page)
     await shot(page, 'bots-staged')
-    await expect(card.getByTestId('bot-summary')).toContainText('Scout')
+    await expect(card.getByTestId('bot-summary')).toContainText('scout')
     await expect(card.getByTestId('bot-summary')).toContainText('Avatar')
     await card.getByTestId('bots-review').click()
     await expect(card.getByTestId('bots-apply')).toBeVisible()
@@ -266,11 +282,11 @@ test('create the first bot from the welcome', async ({ page }) => {
     // The daemon reloads; the roster then shows the new bot, in practice mode.
     const row = page.locator('li.m-row[data-bot="scout"]')
     await expect(row).toBeVisible({ timeout: 60_000 })
-    await expect(row).toContainText('Scout')
+    await expect(row).toContainText('scout')
     await expect(row).toContainText('practice mode')
     await expect(page.getByTestId('bots-empty')).toHaveCount(0)
     await expect(page.getByTestId('new-bot')).toBeVisible()
-    await expect(page.locator('h1 .h1-count')).toHaveText('1 bot')
+    await expect(page.locator('h1 .h1-count')).toHaveText('1 bot · 0 teams · 1 solo')
     // The success note is plain words; the config and backup ids wait in Details.
     const head = page.locator('.banner.ok .applied-head')
     await expect(head).toContainText('Applied')

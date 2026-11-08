@@ -1,0 +1,72 @@
+/* A bot's page (prototype css: .bav.xl in the head, the phone's 44px face). The app's Avatar draws the face inside
+   the .bav.xl box, so it fills the box at every width. */
+.dl-bothead > .bav.xl { width: 64px; height: 64px; border-radius: 16px; background: none; }
+.dl-bothead > .bav.xl > .avatar, .dl-bothead > .bav.xl > .avatar > svg, .dl-bothead > .bav.xl > img { width: 100% !important; height: 100% !important; }
+@media (max-width: 720px) { .dl-bothead > .bav.xl { width: 44px; height: 44px; border-radius: 12px; grid-column: 1; grid-row: 1 / span 2; } }
+.watch-empty > .st { display: inline-flex; align-items: center; gap: 6px; }
+/* The Home session panel fits the screen under the head and tabs (the prototype measures it once; here a bound keeps a
+   tall window from stretching it without end). */
+.chat-grid > .panel.chat.fit { height: max(360px, min(calc(var(--dvh, 100vh) - 290px), 640px)); }
+@media (max-width: 720px) { .chat-grid > .panel.chat.fit { height: max(320px, calc(var(--dvh, 100vh) - 300px)); } }
+.dl-bothead > .bav.xl > .avatar { border: 0; background: none; border-radius: 0; }
+@media (max-width: 720px) { .chat-grid > .panel.chat.fit { height: max(320px, min(calc(var(--dvh, 100vh) - 300px), 520px)); } }
+
+/* long proposal titles (a file name, a summary with no spaces) wrap instead of overflowing */
+.bot-page .dl-nt b, .bot-page .cm-side-a b, .prop-single .dl-ptitle, .prop-crumbs .cur { overflow-wrap: anywhere; }
+/* the "isn't watching anything" callout sits above the chat: take its height off too, so the composer keeps its gap */
+.bot-page:has(.watch-empty) .chat-grid > .panel.chat.fit { height: max(360px, min(calc(var(--dvh, 100vh) - 380px), 640px)); }
+@media (max-width: 720px) { .bot-page:has(.watch-empty) .chat-grid > .panel.chat.fit { height: max(320px, min(calc(var(--dvh, 100vh) - 420px), 520px)); } }
+/* the head's "not watching" line: one quiet line, its action a plain link */
+.bot-unwatched .link { font: inherit; }
+@media (max-width: 720px) {
+  /* on a phone the head keeps the bot's description to one line */
+  .bot-page .dl-bothead .dl-lead { -webkit-line-clamp: 1; line-clamp: 1; }
+}
+/* A team's bot row: the name, id and "lead" tag stay on one line; the id gives way first. */
+.tm-who { min-width: 0; }
+.tm-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; white-space: nowrap; }
+.tm-line > b { flex: none; }
+.tm-line .bav-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tm-line .tag { flex: none; }
+/* A bot's or team's Tickets tab on a phone: the search takes the whole row, Filter and the view switch go under it. */
+@media (max-width: 720px) {
+  .tk-in .fb { flex-wrap: wrap; }
+  .tk-in .fb-search, .tk-in .fb-search:focus-within, .tk-in .fb-search.has-q { flex: 1 1 100%; max-width: none; }
+  .tk-in .fb-bar { flex: 1 1 auto; }
+  /* the desktop menus are hidden here (Filter opens them in a sheet); their empty wrappers would still take a gap each */
+  .tk-in .fb-bar > details { display: none !important; }
+}
+/* A team's bot row keeps Make lead and Remove side by side; "Add a bot" never breaks. */
+.tm-acts { display: inline-flex; align-items: center; gap: 4px; flex: none; white-space: nowrap; }
+.tm-add-l { white-space: nowrap; flex: none; }
+/* the bot picker keeps "Choose a bot…" whole; on a narrow row the Add button moves under it */
+.tm-add { flex-wrap: wrap; row-gap: 8px; }
+.tm-add select { min-width: 10em; }
+.list .item:has(> .tm-acts) { flex-wrap: nowrap; }
+.list .item:has(> .tm-acts) > a { min-width: 0; }
+.tm-add > label { flex: 1 0 auto; }
+/* A bot's empty chat: a small hero in the middle of the thread; the composer under it is the action. */
+.cm-thread > .cm-hero:only-child { margin: auto; padding: var(--space-6) var(--space-4); }
+.cm-hero .empty-ic { width: 36px; height: 36px; }
+/* "Open in paseo" with no home session: disabled, but still a button (outline and label visible). */
+.cm-head [data-testid="paseo-none"]:disabled { opacity: 1; color: var(--color-text-tertiary); border-color: var(--color-border-default); background: transparent; cursor: not-allowed; }
+.cm-head [data-testid="paseo-none"]:disabled svg { color: var(--color-text-tertiary); }
+/* Not watching: on a phone the reason gives way first, so "Choose what it watches" always shows. */
+.bot-unwatched { display: flex; align-items: baseline; min-width: 0; white-space: nowrap; }
+.bot-unwatched .bu-why { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.bot-unwatched .bu-sep, .bot-unwatched .link { flex: none; }
+@media (max-width: 720px) {
+  .dl-bothead .bot-working.bot-unwatched { overflow: visible; }
+  /* the two buttons keep one row together under the heading, never one alone */
+  .cm-head > h3 { flex: 1 1 100%; }
+}
+@media (max-width: 720px) {
+  /* a team's bot row on a phone: who it is takes the whole width; Make lead and Remove go under it, together */
+  .list .item:has(> .tm-acts) { flex-wrap: wrap; row-gap: 2px; }
+  .list .item:has(> .tm-acts) > a { flex: 1 1 100%; }
+  .tm-acts { margin-left: 34px; }
+  /* Add a bot: the label and picker share the first row (the picker shrinks), the Add button goes under */
+  .tm-add > label { flex: 1 1 100%; min-width: 0; }
+  .tm-add select { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+}
+.bot-unwatched .bu-sep { white-space: pre; }

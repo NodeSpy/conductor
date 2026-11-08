@@ -36,8 +36,11 @@ function tally<T>(xs: T[]): Map<T, number> {
   return m
 }
 
-export function Tickets(): JSX.Element {
-  const [tickets, setTickets] = useState<Ticket[] | null>(null)
+// scope narrows the page to one assignee, for a bot's or a team's Tickets tab
+// ('bot:<name>' or 'team:<name>'; a team's also holds its bots' tickets): the
+// same board, list and filters, under the tab's own lede instead of the page head.
+export function Tickets({ scope }: { scope?: string } = {}): JSX.Element {
+  const [allTickets, setTickets] = useState<Ticket[] | null>(null)
   const [configured, setConfigured] = useState(true)
   const [n, setN] = useState<Names>({ bots: {}, teams: {} })
   const [view, setView] = useState<'board' | 'list'>((localStorage.getItem('tickets.view') as 'board' | 'list') || 'board')
@@ -81,9 +84,28 @@ export function Tickets(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const [review, setReview] = useState<Record<string, ProposalRow>>({})
+  const sc = scope ? who(scope) : null
+  const inScope = (t: Ticket) => !sc || t.assignee === scope || (sc.kind === 'team' && teamOf(t, n) === sc.name)
+  const tickets = allTickets && sc ? allTickets.filter(inScope) : allTickets
+  const scName = sc ? (sc.kind === 'team' ? sc.name : displayName(n.bots[sc.name]?.identity, sc.name)) : ''
+  const newHref = sc ? `#/tickets/new?${sc.kind}=${encodeURIComponent(sc.name)}` : '#/tickets/new'
+  const wrap = (children: JSX.Element) =>
+    sc ? <section class="tk-in" data-assignee={scope} data-testid="scoped-tickets">{children}</section> : <div class="tk-page">{children}</div>
   const [markReady, readyModal] = useMarkReady(n, () => void load())
 
-  const head = (count?: JSX.Element) => (
+  const head = (count?: JSX.Element) => sc ? (
+    <header class="dl-ch tk-inh">
+      {sc.kind === 'team' ? (
+        <p class="dl-sub">Tickets for team {sc.name} and its bots. One for the team goes to its lead or routing, which picks a bot.</p>
+      ) : (
+        <p class="dl-sub">Tickets assigned to {scName}: from you, a chat, an event or its own checks. It keeps its notes on each and the parts it hands to teammates.</p>
+      )}
+      <span class="dl-sp" />
+      {count ? (
+        <a class="btn sm secondary" href={newHref} data-testid="scoped-new-ticket"><Icon name="plus" />{sc.kind === 'team' ? 'New ticket for the team' : 'New ticket for it'}</a>
+      ) : null}
+    </header>
+  ) : (
     <div class="dl-phead">
       <div>
         <h1>Tickets {count}</h1>
@@ -99,7 +121,7 @@ export function Tickets(): JSX.Element {
 
   if (tickets === null) {
     return (
-      <div class="tk-page">
+      wrap(<>
         {head()}
         {err ? (
           <div class="banner err" role="alert">
@@ -109,7 +131,18 @@ export function Tickets(): JSX.Element {
         ) : (
           <p class="dl-sub">Loading…</p>
         )}
-      </div>
+      </>)
+    )
+  }
+
+  if (sc && tickets.length === 0) {
+    return (
+      wrap(<>
+        {head()}
+        <EmptyState hero testid="tickets-empty" art={<TicketGlyph />} title={sc.kind === 'team' ? `No tickets for team ${sc.name} yet` : `No tickets for ${scName} yet`} action={{ label: sc.kind === 'team' ? 'New ticket for the team' : 'New ticket for it', href: newHref, testid: 'scoped-new-ticket' }}>
+          <p>{sc.kind === 'team' ? 'Work you hand the team lands here, and its lead or routing picks the bot that does it.' : `Work you, a chat or an event hand ${scName} lands here, and it keeps its notes on each.`}</p>
+        </EmptyState>
+      </>)
     )
   }
 
@@ -316,7 +349,7 @@ export function Tickets(): JSX.Element {
   }
 
   return (
-    <div class="tk-page">
+    wrap(<>
       {head(<span class="h1-count">{open} open{drafts ? ` · ${drafts} draft${drafts > 1 ? 's' : ''}` : ''}</span>)}
       {err ? <div class="banner err">{err}</div> : null}
       <FilterBar q={q} onQueryChange={(v) => { setQ(v); setPage(0) }} placeholder="Find a ticket, or filter: status:draft" ariaLabel="Find and filter tickets" menus={menus} qualifiers end={viewCtl} />
@@ -328,7 +361,7 @@ export function Tickets(): JSX.Element {
       {body ? body : <p class="dl-sub">{filtered ? 'No ticket matches.' : 'No tickets yet.'}</p>}
       {readyModal}
       <ToastHost />
-    </div>
+    </>)
   )
 }
 

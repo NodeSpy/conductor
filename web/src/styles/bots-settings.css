@@ -1,0 +1,4 @@
+/* A bot's Settings: the prototype's def-bar "Edit as YAML" is a quiet link (css/interact.css .link), not underlined. */
+.def-bar .link.def-yaml-btn { text-decoration: none; }
+/* A disabled Reset reads as the prototype's (interact.css .btn[aria-disabled]); legacy .btn.ghost would blank its border. */
+.def-bar .btn.ghost[aria-disabled="true"] { background: var(--button-disabled-bg); border-color: var(--button-disabled-border); }

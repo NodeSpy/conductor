@@ -122,6 +122,15 @@ var botWriteRules = map[string]botTargets{
 	"POST /v1/bots/{name}/avatar/apply":    pathTarget("bot", "name"),
 	"POST /v1/teams/{name}/avatar/plan":    pathTarget("team", "name"),
 	"POST /v1/teams/{name}/avatar/apply":   pathTarget("team", "name"),
+	// a bot's memory and a team's knowledge (internal/bot/httpapi_repo.go)
+	"POST /v1/bots/{bot}/memory/edit":        pathTarget("bot", "bot"),
+	"POST /v1/bots/{bot}/memory/new":         pathTarget("bot", "bot"),
+	"POST /v1/bots/{bot}/memory/consolidate": pathTarget("bot", "bot"),
+	"POST /v1/teams/{team}/knowledge/edit":   pathTarget("team", "team"),
+	"POST /v1/teams/{team}/knowledge/new":    pathTarget("team", "team"),
+	"POST /v1/bots/{bot}/rotate":             pathTarget("bot", "bot"),
+	"POST /v1/bots/{bot}/sweep":              pathTarget("bot", "bot"),
+	"POST /v1/bots/{bot}/deliver":            pathTarget("bot", "bot"),
 }
 
 // botStepups are the writes that can widen what a bot may spend: a ticket's

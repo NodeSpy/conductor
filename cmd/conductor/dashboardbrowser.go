@@ -110,6 +110,32 @@ func (dashboardBrowser) Control(ctx context.Context, cmd, operator string, reqJS
 	if cmd == "browser-logins" {
 		cmd = "browser-login-list"
 	}
+	if cmd == "browser-logout" {
+		// Log a saved session out: delete one identity's cookie jar for a
+		// site (`conductor browser logout`). It only ever narrows.
+		var q struct {
+			Identity string `json:"identity"`
+			Site     string `json:"site"`
+		}
+		_ = json.Unmarshal(reqJSON, &q)
+		if q.Identity == "" || q.Site == "" {
+			return nil, "", fmt.Errorf("browser: logout needs an identity and a site")
+		}
+		if dryRun {
+			b, _ := json.Marshal(map[string]any{"change": changeNarrowing, "dry_run": true})
+			return b, changeNarrowing, nil
+		}
+		ok, err := m.Logins().Delete(q.Identity, q.Site)
+		if err != nil {
+			return nil, "", err
+		}
+		if m.Audit != nil {
+			m.Audit(map[string]any{"event": "browser", "by": "operator", "operator": operator, "via": "dashboard", "action": "session-delete",
+				"identity": q.Identity, "site": q.Site, "outcome": map[bool]string{true: "ok", false: "none"}[ok]})
+		}
+		b, _ := json.Marshal(map[string]any{"removed": ok, "change": changeNarrowing})
+		return b, changeNarrowing, nil
+	}
 	req := controlRequest{Cmd: cmd}
 	switch {
 	case browserLoginOps[cmd]:

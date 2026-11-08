@@ -105,6 +105,8 @@ export interface TeamSummary {
 export interface BotDetail extends BotSummary {
   memory_repo?: string
   sandboxed?: boolean
+  /** What it spent in its spend period; cap is set only when it has a spend cap. */
+  spend?: { spent: number; currency: string; period_hours: number; entries: number; cap?: number }
 }
 
 export interface ProposalRow {
@@ -338,4 +340,23 @@ export function openTicketStream(on: (t: Ticket) => void): () => void {
     }
   })
   return () => es.close()
+}
+
+// --- a bot's page: its ⋯ menu (internal/bot/httpapi_botops.go) ---
+
+export interface BotPageWorker {
+  id: string
+  status: string
+  case_id?: string
+  brief?: string
+  started?: string
+  read_only?: boolean
+}
+
+export const botPageApi = {
+  rotate: (bot: string) => send<Record<string, unknown>>('POST', `/api/v1/bots/${encodeURIComponent(bot)}/rotate`, {}),
+  sweep: (bot: string) => send<{ sweep: string; worker: string; status: string }>('POST', `/api/v1/bots/${encodeURIComponent(bot)}/sweep`, {}),
+  deliver: (bot: string, body: { title: string; text?: string; urgent?: boolean; requester?: 'operator' | 'event' }) =>
+    send<{ case: string; ticket?: string }>('POST', `/api/v1/bots/${encodeURIComponent(bot)}/deliver`, body),
+  workers: (bot: string) => get<{ workers: BotPageWorker[] }>(`/api/v1/bots/${encodeURIComponent(bot)}/workers`),
 }

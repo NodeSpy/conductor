@@ -1,0 +1,24 @@
+/* A team's page (routes/TeamDetail.tsx): what the prototype's markup needs that
+   the shared sheets don't give it here. bots.css (an older sheet, loaded later)
+   still pads .rule-list as a bulleted list; the prototype's list is a flush
+   numbered grid (css/screens.css .rule-list), so undo that on this page. */
+.team-page .rule-list { padding-left: 0; }
+.team-page .rule-row { margin-bottom: 0; }
+/* the team's face is the app's .avatar, not the prototype's .bav.xl: same sizes */
+.team-page .dl-bothead > .team-av { align-self: start; display: inline-flex; }
+.team-page .dl-bothead > .team-av > .avatar { border-radius: 16px; }
+@media (max-width: 720px) {
+  .team-page .dl-bothead > .team-av { grid-column: 1; grid-row: 1 / span 2; }
+  .team-page .dl-bothead > .team-av > .avatar { width: 44px !important; height: 44px !important; border-radius: 12px; }
+}
+/* read.css (legacy, loaded later) resizes .small to the old token, a step
+   larger than the prototype's; keep the prototype's type scale here. */
+.team-page .small { font: var(--type-body-s); }
+.team-page .tiny { font: var(--type-caption); }
+/* tab counts as the prototype's UI.count: caption type, tight to the label
+   (bots.css gives every .count a legacy margin and size) */
+.team-page .tabs a .count { margin-left: 0; font: var(--type-caption); font-weight: var(--font-weight-semibold); color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
+/* a disabled select keeps its caret (app.css's disabled background shorthand drops it) */
+.team-page .select[disabled] { background-image: linear-gradient(45deg, transparent 50%, var(--color-icon-default) 50%), linear-gradient(135deg, var(--color-icon-default) 50%, transparent 50%); background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+/* the team's initials tile, as the prototype's .tav.ini.xl */
+.team-page .team-av > .avatar.initials { background: var(--color-bg-sunken) !important; border: var(--border-width) solid var(--color-border-default); color: var(--color-text-primary) !important; font-family: var(--font-family-serif); font-weight: 600; font-size: 22px !important; }

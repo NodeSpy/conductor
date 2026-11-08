@@ -346,6 +346,7 @@ func (s *Server) tailnetGuard(api localAPI, status tsStatus, port int) http.Hand
 func (s *Server) authRoutes() {
 	s.mux.HandleFunc("GET /api/v1/bots/{bot}/proposals/{id}/approval", s.handleApprovalView)
 	s.mux.HandleFunc("POST /api/v1/bots/{bot}/proposals/{id}/decision", s.handleApprovalDecision)
+	s.approveEditRoutes() // approve a knowledge proposal with changes (approve_edit.go)
 }
 
 // handleApprovalView returns the canonical approval digest and a human summary

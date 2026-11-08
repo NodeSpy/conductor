@@ -326,7 +326,14 @@ func browserLoginControl(cfg *config.Config, m *browser.Manager, req controlRequ
 			}
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-		return data(map[string]any{"logins": out})
+		// Every saved session (cookie jar) by identity and site, whichever
+		// login or browser.logins site it was seeded for — no cookie value.
+		saved := []map[string]any{}
+		for _, j := range full {
+			e := jarExpiry(j)
+			saved = append(saved, map[string]any{"identity": j.Identity, "site": j.Site, "saved": j.Saved, "source": j.Source, "cookies": len(j.Cookies), "expires": e.Expires})
+		}
+		return data(map[string]any{"logins": out, "saved": saved})
 
 	case "browser-login-usage":
 		limit := q.Limit

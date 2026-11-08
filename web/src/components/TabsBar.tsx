@@ -20,11 +20,15 @@ export function TabsBar({
   active,
   ariaLabel,
   className,
+  compact,
 }: {
   items: TabItem[]
   active: string
   ariaLabel: string
   className?: string
+  /** When the row overflows, keep only the first tab and the active one
+      (then More), rather than as many as fit. */
+  compact?: boolean
 }): JSX.Element {
   const ref = useRef<HTMLElement>(null)
   const ghost = useRef<HTMLSpanElement>(null)
@@ -56,6 +60,7 @@ export function TabsBar({
         const sumOf = (ks: number[]) => ks.reduce((x, k) => x + widths[k], 0) + gap * Math.max(0, ks.length - 1)
         const keep: number[] = []
         for (let k = 0; k < widths.length; k++) {
+          if (compact && k > 0) break
           // a tab that doesn't fit moves to More; a shorter one after it may still fit
           if (sumOf([...keep, k]) <= room + 1) keep.push(k)
         }
@@ -86,7 +91,7 @@ export function TabsBar({
       window.removeEventListener('resize', later)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig])
+  }, [sig, compact])
 
   const overItems = items.filter((_, i) => over.has(i))
 
@@ -95,7 +100,7 @@ export function TabsBar({
       {items.map((t) => (
         <a class={[active === t.id ? 'on' : '', over.has(items.indexOf(t)) ? 'tab-over' : ''].filter(Boolean).join(' ')} role="tab" aria-selected={active === t.id} aria-current={active === t.id ? 'page' : undefined} href={t.href} data-tab={t.id}>
           {t.label}
-          {t.count != null ? <span class={'count' + (t.hot ? ' hot' : '')}>{t.count}</span> : null}
+          {t.count != null ? <>{' '}<span class={'count' + (t.hot ? ' hot' : '')}>{t.count}</span></> : null}
         </a>
       ))}
       {/* the ghost is "More ▾" at its real size, never shown: its width is
@@ -120,7 +125,7 @@ export function TabsBar({
               {overItems.map((t) => (
                 <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); location.hash = t.href.replace(/^#/, '') }}>
                   {t.label}
-                  {t.count != null ? <span class={'count' + (t.hot ? ' hot' : '')}>{t.count}</span> : null}
+                  {t.count != null ? <>{' '}<span class={'count' + (t.hot ? ' hot' : '')}>{t.count}</span></> : null}
                 </button>
               ))}
             </div>

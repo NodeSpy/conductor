@@ -611,6 +611,7 @@ export function ChatThread({
   me,
   onRead,
   cls = '',
+  head,
 }: {
   convId: string
   kind: 'bot' | 'team'
@@ -618,10 +619,13 @@ export function ChatThread({
   teams?: Record<string, TeamSummary>
   members?: { name: string; lead?: boolean; identity?: Identity }[]
   placeholder?: string
-  empty?: string
+  /** What an empty thread shows: a sentence, or a whole element (a bot's Chat tab draws a small hero). */
+  empty?: string | JSX.Element
   me?: string
   onRead?: () => void
   cls?: string
+  /** Drawn first inside the panel (a bot page's Chat tab: its Home session panel head). */
+  head?: JSX.Element
 }): JSX.Element {
   const name = who(convId).name
   const [messages, setMessages] = useState<ChatMessage[] | null>(null)
@@ -702,13 +706,14 @@ export function ChatThread({
       onDragLeave={(e) => { const n = e.relatedTarget as Node | null; if (!n || !(e.currentTarget as HTMLElement).contains(n)) setDrag(false) }}
       onDrop={(e) => { e.preventDefault(); setDrag(false); setDropped([...(e.dataTransfer?.files || [])]) }}
     >
+      {head}
       <div class="cm-thread" id="msgs" role="log" aria-label={`Conversation with ${label}`} ref={scroller} data-testid="chat-scroll">
         {messages === null ? (
           err ? <p class="cm-empty dl-sub" role="alert">Couldn’t load this conversation: {err}</p> : null
         ) : rows.length ? (
           <ChatRows rows={rows} bots={bots} attBot={(r) => (kind === 'bot' ? [name] : messages.find((m) => m.seq === r.seq)?.to || memberNames)} ticketFrom={ticketFrom} mention={mentionColor} />
         ) : (
-          <p class="cm-empty dl-sub">{empty || `No conversation yet. Ask ${label} anything; it answers here.`}</p>
+          typeof empty === 'object' && empty ? empty : <p class="cm-empty dl-sub">{empty || `No conversation yet. Ask ${label} anything; it answers here.`}</p>
         )}
       </div>
       {kind === 'team' ? (
