@@ -467,7 +467,10 @@ type PackInfo struct {
 	// Dormant: an armed trigger with an unbound role (it needs you).
 	Roles   []string `json:"roles,omitempty"`
 	Unbound []string `json:"unbound,omitempty"`
-	Dormant bool     `json:"dormant"`
+	// RoleCandidates counts this config's connections of each role's kind
+	// (one binds automatically), so a staged binding change can be judged.
+	RoleCandidates map[string]int `json:"role_candidates,omitempty"`
+	Dormant        bool           `json:"dormant"`
 	// Vendored is false when the instance is in config but its manifest
 	// hasn't been fetched yet (`conductor init` pending) — everything above
 	// but Name/Use/Version/Hold is then unavailable.

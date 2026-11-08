@@ -189,7 +189,9 @@ func (s *Server) fillPackManifestFacts(pi *api.PackInfo, name string, inst map[s
 	// armed trigger and an unbound role is not working yet (it needs you).
 	boundConn, _ := inst["connectors"].(map[string]any)
 	pi.Roles = man.Pack.Requires.ConnectorNames()
+	pi.RoleCandidates = map[string]int{}
 	for _, role := range pi.Roles {
+		pi.RoleCandidates[role] = len(connByKind[role])
 		if _, ok := boundConn[role]; ok || len(connByKind[role]) == 1 {
 			continue
 		}
