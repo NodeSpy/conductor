@@ -1,6 +1,10 @@
 package config
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // PackReview is what adding a pack shows before it's staged: what the pack
 // is, what it needs bound (connectors/stores/secrets, by role name — bind-only,
@@ -24,12 +28,17 @@ type PackReview struct {
 	// Triggers are what the pack ships, always disarmed until the operator
 	// arms one (a widening that needs its own consent, separate from install).
 	Triggers []PackReviewTrigger
+	// Workflows and Bots (bot template names) are what it adds, by name;
+	// AgentSteps counts the steps that run an agent.
+	Workflows  []string
+	Bots       []string
+	AgentSteps int
 }
 
 // PackReviewGrant is one step's skill request: a pack step may ask for verbs
 // (what it can call) and secrets (what the broker may hand it).
 type PackReviewGrant struct {
-	Where   string   // workflow/step id
+	Where   string // workflow/step id
 	Verbs   []string
 	Secrets []string
 }
@@ -58,7 +67,12 @@ func BuildPackReview(man *PackManifest) PackReview {
 		rv.Secrets = append(rv.Secrets, name)
 	}
 	sort.Strings(rv.Secrets)
+	rv.Workflows = sortedNames(man.Workflows)
+	rv.Bots = sortedNames(man.Bots)
 	man.WalkPackSteps(func(where string, st *Step) {
+		if st.Form() == "agent" {
+			rv.AgentSteps++
+		}
 		if s := st.Skill; s != nil && (len(s.Verbs) > 0 || len(s.AllowSecrets) > 0) {
 			rv.Grants = append(rv.Grants, PackReviewGrant{Where: where, Verbs: s.Verbs, Secrets: s.AllowSecrets})
 		}
@@ -72,17 +86,48 @@ func BuildPackReview(man *PackManifest) PackReview {
 	return rv
 }
 
-// PackConfigBlock is the packs:<instance> value to stage for installing this
-// pack at source — just where it comes from and (when the manifest names
-// one) the version to pin, the same minimal block `conductor pack add`
-// prints ready to paste. Bind-only roles (connectors/stores/secrets) and
-// arming a trigger are deliberately left for afterwards, on the pack's own
-// page (Pack overrides), through the same stage/review/apply pipeline —
-// never written sight-unseen here.
-func PackConfigBlock(source string, man *PackManifest) map[string]any {
-	block := map[string]any{"source": source}
-	if man.Pack.Version != "" {
-		block["version"] = man.Pack.Version
+// PackRef is how a pack reference an operator typed (or a catalog entry
+// installs from) is written into a packs: entry and fetched for review.
+type PackRef struct {
+	// Key is the packs:<instance> field it is written under: "use" (an
+	// official conductor-packs/<name>, an owner/repo/<path> or a local path)
+	// or "source" (an explicit git source: git::…, https://…, host.tld/…).
+	Key   string
+	Value string
+	// Fetch is the resolver's source form, what FetchPackForReview takes.
+	Fetch string
+	// Local is a path on this machine (no version to choose).
+	Local bool
+	// Official is the official registry (trusted by default).
+	Official bool
+}
+
+// ParsePackRef classifies a pack reference the way a packs: entry reads it.
+func ParsePackRef(ref string) (PackRef, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return PackRef{}, fmt.Errorf("empty pack source")
 	}
-	return block
+	if isLocalUsePath(ref) || strings.HasPrefix(ref, "file://") || strings.HasPrefix(ref, "~") {
+		return PackRef{Key: "use", Value: ref, Fetch: ref, Local: true}, nil
+	}
+	first := strings.SplitN(ref, "/", 2)[0]
+	if strings.HasPrefix(ref, "git::") || strings.Contains(ref, "://") || strings.Contains(first, ":") || strings.Contains(first, ".") {
+		return PackRef{Key: "source", Value: ref, Fetch: ref}, nil
+	}
+	src, err := packUseSource(ref)
+	if err != nil {
+		return PackRef{}, err
+	}
+	return PackRef{Key: "use", Value: ref, Fetch: src, Official: strings.HasPrefix(ref, PacksNamespaceAlias+"/")}, nil
+}
+
+// PackConfigBlock is the packs:<instance> value that installs this pack
+// from ref, tracking its releases: just where it comes from, the same
+// minimal block `conductor pack add` prints ready to paste. Binding its roles
+// and arming a trigger are the operator's own additions (the dashboard's Add
+// review, or the pack's own page afterwards), through the same
+// stage/review/apply pipeline — never written sight-unseen here.
+func PackConfigBlock(ref PackRef) map[string]any {
+	return map[string]any{ref.Key: ref.Value}
 }

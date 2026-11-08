@@ -445,21 +445,29 @@ type PackInfo struct {
 	// whether that's the official registry alias.
 	Source   string `json:"source,omitempty"`
 	Official bool   `json:"official"`
-	// Pinned is whether the config names an exact version/ref rather than
-	// tracking (floating).
-	Pinned bool `json:"pinned"`
+	// Constraint is the version: (or use: @suffix) the config names; Pinned
+	// whether it names one at all. Version is what is installed (the
+	// vendored manifest's), falling back to the constraint.
+	Constraint string `json:"constraint,omitempty"`
+	Pinned     bool   `json:"pinned"`
+	// Local is a pack from a path on this machine (your own).
+	Local bool `json:"local"`
 	// Contents is what it ships, by kind and count (workflows, triggers,
 	// bot_templates, …) — the manifest's own ManifestContents.
 	Contents map[string]int `json:"contents,omitempty"`
+	// TemplateOnly: it ships only bot templates (it belongs to New bot, not
+	// this list).
+	TemplateOnly bool `json:"template_only"`
 	// TriggersArmed/TriggersTotal: how many of its shipped triggers this
 	// instance has armed (automation on) versus shipped disarmed (off).
 	TriggersArmed int `json:"triggers_armed"`
 	TriggersTotal int `json:"triggers_total"`
-	// Dormant is true when a connector role the pack requires has nothing it
-	// could be bound to yet (no candidate connector exists); Why names the
-	// role in plain words for the "needs you" amber treatment.
-	Dormant bool   `json:"dormant"`
-	Why     string `json:"why,omitempty"`
+	// Roles are the connector roles it requires; Unbound those with nothing
+	// chosen and no single connection of their kind to bind automatically.
+	// Dormant: an armed trigger with an unbound role (it needs you).
+	Roles   []string `json:"roles,omitempty"`
+	Unbound []string `json:"unbound,omitempty"`
+	Dormant bool     `json:"dormant"`
 	// Vendored is false when the instance is in config but its manifest
 	// hasn't been fetched yet (`conductor init` pending) — everything above
 	// but Name/Use/Version/Hold is then unavailable.
@@ -469,14 +477,15 @@ type PackInfo struct {
 // CatalogResponse is GET /api/v1/packs/catalog — the Packs → Browse tab's
 // marketplace grid: every pack the registry (official, or a configured one)
 // and this config's own installed packs offer, searched and deduplicated.
-// Mirrors config.CatalogResult; registry/config errors are plain-words
-// explanations for the catalog's error state, never raw for display.
+// Mirrors config.CatalogResult. Instances are this config's packs: instance
+// names (what a new instance must not reuse).
 type CatalogResponse struct {
 	Packs               []CatalogPackInfo `json:"packs"`
 	HiddenTemplatePacks int               `json:"hidden_template_packs"`
 	RegistryProblems    []string          `json:"registry_problems,omitempty"`
 	RegistryError       string            `json:"registry_error,omitempty"`
 	ConfigError         string            `json:"config_error,omitempty"`
+	Instances           []string          `json:"instances"`
 }
 
 // CatalogPackInfo is one catalog entry (installed or not).
@@ -491,32 +500,57 @@ type CatalogPackInfo struct {
 	Official     bool           `json:"official"`
 	Source       string         `json:"source,omitempty"`
 	// Install is the packs: block that installs it (empty for an already-
-	// installed pack) — shown in the Details view, and what Add reviews.
-	Install string `json:"install,omitempty"`
+	// installed pack); InstallKey/InstallRef are that block's one field
+	// (use: or source:) and Local whether it's a path on this machine.
+	Install    string `json:"install,omitempty"`
+	InstallKey string `json:"install_key,omitempty"`
+	InstallRef string `json:"install_ref,omitempty"`
+	Local      bool   `json:"local,omitempty"`
+	// Requires are the connector roles it needs bound.
+	Requires []string `json:"requires,omitempty"`
+	// Latest is the registry's release of an installed pack.
+	Latest string `json:"latest,omitempty"`
+	// Review is what installing it adds (its manifest, as `conductor pack
+	// add` reports it), for its Details page and the Add review.
+	Review *PackReview `json:"review,omitempty"`
 }
 
 // PackReviewRequest is POST /api/v1/packs/review: fetch a pack source (a
-// registry's `install` value, or any owner/repo, git URL or local ./path)
+// catalog entry's install_ref, or any owner/repo, git URL or local ./path)
 // and build its install review, without staging anything.
 type PackReviewRequest struct {
 	Source string `json:"source"`
 }
 
-// PackReviewResponse is what the Add dialog shows: what the pack brings, what
-// it may do, and what it needs bound — plus the suggested instance name and
-// the packs:<instance> block Add stages verbatim through the normal config
-// staging endpoint (POST /api/v1/config/stage) when the operator confirms.
-type PackReviewResponse struct {
+// PackReview is what adding a pack shows: what it brings, what it may do,
+// and what it needs bound (config.PackReview). A connector role carries its
+// candidates among this config's connections.
+type PackReview struct {
 	Name        string              `json:"name"`
 	Version     string              `json:"version"`
 	Description string              `json:"description"`
-	Connectors  []string            `json:"connectors,omitempty"`
+	Connectors  []PackRoleInfo      `json:"connectors,omitempty"`
 	Stores      []string            `json:"stores,omitempty"`
 	Secrets     []string            `json:"secrets,omitempty"`
 	Grants      []PackReviewGrant   `json:"grants,omitempty"`
 	Triggers    []PackReviewTrigger `json:"triggers,omitempty"`
-	Instance    string              `json:"instance"`
-	ConfigValue map[string]any      `json:"config_value"`
+	Workflows   []string            `json:"workflows,omitempty"`
+	Bots        []string            `json:"bots,omitempty"`
+	AgentSteps  int                 `json:"agent_steps"`
+}
+
+// PackReviewResponse is the review of a fetched source, plus the suggested
+// instance name and the packs:<instance> block Add stages (with the
+// operator's bindings) through the normal config staging endpoint
+// (POST /api/v1/config/stage) when the operator confirms.
+type PackReviewResponse struct {
+	Review      PackReview     `json:"review"`
+	Instance    string         `json:"instance"`
+	InstallKey  string         `json:"install_key"`
+	InstallRef  string         `json:"install_ref"`
+	Local       bool           `json:"local"`
+	Official    bool           `json:"official"`
+	ConfigValue map[string]any `json:"config_value"`
 }
 
 // PackReviewGrant is one step's skill request (what it may do).
@@ -526,10 +560,12 @@ type PackReviewGrant struct {
 	Secrets []string `json:"secrets,omitempty"`
 }
 
-// PackReviewTrigger is one trigger the pack ships disarmed.
+// PackReviewTrigger is one trigger the pack ships disarmed, with the
+// connection kind it listens on (the part of on: before the dot).
 type PackReviewTrigger struct {
-	Name string `json:"name"`
-	On   string `json:"on,omitempty"`
+	Name      string `json:"name"`
+	On        string `json:"on,omitempty"`
+	Connector string `json:"connector,omitempty"`
 }
 
 // PackManifestResponse is GET /api/v1/packs/{name}/manifest: the pack's guided

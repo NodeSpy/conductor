@@ -124,18 +124,21 @@ func (s *Server) handlePacks(w http.ResponseWriter, r *http.Request) {
 				inst = m
 				pi.Use, _ = m["use"].(string)
 				pi.Source, _ = m["source"].(string)
-				pi.Version, _ = m["version"].(string)
+				pi.Constraint, _ = m["version"].(string)
 				pi.Hold, _ = m["hold"].(bool)
-				if pi.Version == "" {
-					pi.Version = versionFromUse(pi.Use)
+				if pi.Constraint == "" {
+					pi.Constraint = versionFromUse(pi.Use)
 				}
-				pi.Pinned = pi.Version != "" || strings.Contains(pi.Use, "@")
+				pi.Version = pi.Constraint
+				pi.Pinned = pi.Constraint != ""
 			}
 			src := pi.Source
 			if src == "" {
 				src = pi.Use
 			}
-			pi.Official = strings.HasPrefix(src, config.PacksNamespaceAlias+"/")
+			if ref, err := config.ParsePackRef(strings.SplitN(src, "@", 2)[0]); err == nil {
+				pi.Official, pi.Local = ref.Official, ref.Local
+			}
 			s.fillPackManifestFacts(&pi, name, inst, connByKind)
 			resp.Packs = append(resp.Packs, pi)
 		}
@@ -159,13 +162,14 @@ func (s *Server) fillPackManifestFacts(pi *api.PackInfo, name string, inst map[s
 	}
 	pi.Vendored = true
 	pi.Description = man.Pack.Description
-	if pi.Version == "" {
-		pi.Version = man.Pack.Version
+	if man.Pack.Version != "" {
+		pi.Version = man.Pack.Version // what is installed, not the constraint
 	}
 	contents := config.ManifestContents(man)
 	if len(contents.Kinds) > 0 {
 		pi.Contents = contents.Counts
 	}
+	pi.TemplateOnly = contents.TemplateOnly()
 	pi.TriggersTotal = contents.Counts[config.KindTriggers]
 	boundTriggers, _ := inst["triggers"].(map[string]any)
 	for _, t := range man.Triggers {
@@ -180,18 +184,18 @@ func (s *Server) fillPackManifestFacts(pi *api.PackInfo, name string, inst map[s
 			}
 		}
 	}
+	// A role binds automatically to the only connection of its kind; with
+	// none (or several) and nothing chosen, it is unbound — and a pack with an
+	// armed trigger and an unbound role is not working yet (it needs you).
 	boundConn, _ := inst["connectors"].(map[string]any)
-	for _, role := range man.Pack.Requires.ConnectorNames() {
-		if _, ok := boundConn[role]; ok {
-			continue // already bound
+	pi.Roles = man.Pack.Requires.ConnectorNames()
+	for _, role := range pi.Roles {
+		if _, ok := boundConn[role]; ok || len(connByKind[role]) == 1 {
+			continue
 		}
-		if len(connByKind[role]) > 0 {
-			continue // nothing bound yet, but a candidate exists to pick
-		}
-		pi.Dormant = true
-		pi.Why = fmt.Sprintf("Not working yet: it needs a %s connection.", role)
-		break
+		pi.Unbound = append(pi.Unbound, role)
 	}
+	pi.Dormant = len(pi.Unbound) > 0 && pi.TriggersArmed > 0
 }
 
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {

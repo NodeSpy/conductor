@@ -94,8 +94,15 @@ func TestPacksCatalogEndpoint(t *testing.T) {
 	if resp.HiddenTemplatePacks != 1 {
 		t.Fatalf("hidden_template_packs = %d, want 1", resp.HiddenTemplatePacks)
 	}
-	if resp.Packs[0].Install == "" {
-		t.Fatalf("greeter should carry an install block")
+	g := resp.Packs[0]
+	if g.Install == "" || g.InstallKey != "use" || g.InstallRef == "" || !g.Local {
+		t.Fatalf("greeter should carry how it installs (a local registry → use: <path>): %+v", g)
+	}
+	if g.Review == nil || len(g.Review.Triggers) != 1 || g.Review.Triggers[0].Name != "on_tick" || g.Review.Triggers[0].Connector != "cron" {
+		t.Fatalf("greeter should carry its install review: %+v", g.Review)
+	}
+	if len(g.Review.Workflows) != 1 || g.Review.Workflows[0] != "say_hi" {
+		t.Fatalf("review workflows: %+v", g.Review.Workflows)
 	}
 
 	// Search narrows by name/description/kind.
@@ -134,15 +141,19 @@ func TestPackReviewStagesConfigOnly(t *testing.T) {
   version: 2.0.0
   description: a pack with a role and a trigger
   requires:
-    connectors: [github]
+    connectors: [tracker]
 triggers:
-  - { name: on_push, on: github }
+  - { name: on_push, on: tracker.push }
+workflows:
+  sort_it:
+    steps:
+      - { id: think, agent: helper, prompt: "sort it", skill: { verbs: [tracker.label] } }
 `
 	if err := os.WriteFile(filepath.Join(srcDir, config.PackManifestFile), []byte(man), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	s := newCatalogServer(t, "", "")
+	s := newCatalogServer(t, "runtimes:\n  claude: { use: cli, tool: claude-code }\nconnectors:\n  main-tracker: { use: tracker }\n", "")
 	before := do(t, s, http.MethodGet, "/api/v1/config", nil)
 	var beforeCfg api.ConfigResponse
 	json.Unmarshal(before.Body.Bytes(), &beforeCfg)
@@ -155,16 +166,19 @@ triggers:
 	if err := json.Unmarshal(rr.Body.Bytes(), &rv); err != nil {
 		t.Fatal(err)
 	}
-	if rv.Name != "reviewer" || rv.Version != "2.0.0" {
+	if rv.Review.Name != "reviewer" || rv.Review.Version != "2.0.0" {
 		t.Fatalf("review: %+v", rv)
 	}
-	if len(rv.Connectors) != 1 || rv.Connectors[0] != "github" {
-		t.Fatalf("review connectors: %+v", rv.Connectors)
+	if len(rv.Review.Connectors) != 1 || rv.Review.Connectors[0].Name != "tracker" || len(rv.Review.Connectors[0].Candidates) != 1 || rv.Review.Connectors[0].Candidates[0] != "main-tracker" {
+		t.Fatalf("review connectors (with this config's candidates): %+v", rv.Review.Connectors)
 	}
-	if len(rv.Triggers) != 1 || rv.Triggers[0].Name != "on_push" {
-		t.Fatalf("review triggers: %+v", rv.Triggers)
+	if len(rv.Review.Triggers) != 1 || rv.Review.Triggers[0].Name != "on_push" || rv.Review.Triggers[0].Connector != "tracker" {
+		t.Fatalf("review triggers: %+v", rv.Review.Triggers)
 	}
-	if rv.ConfigValue["source"] != srcDir || rv.ConfigValue["version"] != "2.0.0" {
+	if len(rv.Review.Grants) != 1 || rv.Review.Grants[0].Verbs[0] != "tracker.label" || rv.Review.AgentSteps != 1 {
+		t.Fatalf("review grants/agent steps: %+v / %d", rv.Review.Grants, rv.Review.AgentSteps)
+	}
+	if rv.InstallKey != "use" || !rv.Local || rv.ConfigValue["use"] != srcDir || len(rv.ConfigValue) != 1 {
 		t.Fatalf("config value: %+v", rv.ConfigValue)
 	}
 
@@ -184,7 +198,7 @@ triggers:
 	// generic config-stage endpoint, nothing bespoke.
 	stageReq := api.StageRequest{
 		Path: []string{"packs", rv.Instance}, Value: rv.ConfigValue,
-		Summary: "install " + rv.Name,
+		Summary: "install " + rv.Review.Name,
 	}
 	rr = do(t, s, http.MethodPost, "/api/v1/config/stage", stageReq)
 	if rr.Code != 200 {
@@ -217,5 +231,21 @@ func TestPackReviewBadSource(t *testing.T) {
 	rr := do(t, s, http.MethodPost, "/api/v1/packs/review", api.PackReviewRequest{Source: filepath.Join(t.TempDir(), "nonexistent")})
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("code %d, want 400: %s", rr.Code, rr.Body)
+	}
+}
+
+// TestPackReviewSuggestsAFreeInstance: adding a pack already installed
+// under its own name suggests <name>-2, never overwriting the instance.
+func TestPackReviewSuggestsAFreeInstance(t *testing.T) {
+	registry := writeCatalogRegistry(t)
+	s := newCatalogServer(t, "runtimes:\n  claude: { use: cli, tool: claude-code }\npacks:\n  greeter: { use: ./nowhere }\n", "")
+	rr := do(t, s, http.MethodPost, "/api/v1/packs/review", api.PackReviewRequest{Source: filepath.Join(registry, "greeter")})
+	if rr.Code != 200 {
+		t.Fatalf("review code %d: %s", rr.Code, rr.Body)
+	}
+	var rv api.PackReviewResponse
+	json.Unmarshal(rr.Body.Bytes(), &rv)
+	if rv.Instance != "greeter-2" {
+		t.Fatalf("instance = %q, want greeter-2", rv.Instance)
 	}
 }

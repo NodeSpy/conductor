@@ -96,6 +96,14 @@ type PackSummary struct {
 	// installs it (a registry pack).
 	Source  string `json:"source,omitempty"`
 	Install string `json:"install,omitempty"`
+	// Requires are the connector roles it needs bound.
+	Requires []string `json:"requires,omitempty"`
+	// Latest is, for an installed pack the registry also lists, the
+	// registry's release (an update when it is newer than Version).
+	Latest string `json:"latest,omitempty"`
+	// Manifest is the manifest it was read from, for a caller that renders
+	// more of it (the dashboard's install review); never serialized.
+	Manifest *PackManifest `json:"-"`
 }
 
 // InstalledPacks are the config's top-level pack instances, from their
@@ -110,7 +118,8 @@ func (c *Config) InstalledPacks() []PackSummary {
 		}
 		pc := ManifestContents(man)
 		out = append(out, PackSummary{Name: man.Pack.Name, Version: man.Pack.Version, Description: man.Pack.Description,
-			Contents: pc, TemplateOnly: pc.TemplateOnly(), Installed: true, Instance: inst, Source: packSourceOf(c.Packs[inst])})
+			Contents: pc, TemplateOnly: pc.TemplateOnly(), Installed: true, Instance: inst, Source: packSourceOf(c.Packs[inst]),
+			Requires: man.Pack.Requires.ConnectorNames(), Manifest: man})
 	}
 	return out
 }
@@ -173,7 +182,8 @@ func RegistryPacks(registry, dir string, official bool) ([]PackSummary, []string
 		k, v := RegistrySource(registry, dir, e.Name(), official)
 		out = append(out, PackSummary{Name: man.Pack.Name, Version: man.Pack.Version, Description: man.Pack.Description,
 			Contents: pc, TemplateOnly: pc.TemplateOnly(), Source: v,
-			Install: fmt.Sprintf("packs: { %s: { %s: %s } }", e.Name(), k, v)})
+			Install:  fmt.Sprintf("packs: { %s: { %s: %s } }", e.Name(), k, v),
+			Requires: man.Pack.Requires.ConnectorNames(), Manifest: man})
 	}
 	return out, problems
 }
@@ -217,6 +227,13 @@ func PackCatalog(cfgPath, search, registry string, installedOnly, includeTemplat
 			for _, p := range reg {
 				if !installed[p.Name] {
 					all = append(all, p)
+					continue
+				}
+				// Installed already: the registry's release is its latest.
+				for i := range all {
+					if all[i].Installed && all[i].Name == p.Name {
+						all[i].Latest = p.Version
+					}
 				}
 			}
 			out.RegistryProblems = problems
