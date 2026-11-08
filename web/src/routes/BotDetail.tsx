@@ -4,18 +4,17 @@
 // face: the identity picker stages the change through the config pipeline and the
 // new face shows everywhere at once.
 import type { JSX } from 'preact'
-import { useEffect, useMemo, useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { botsApi, displayName, type BotDetail as BotData, type BotSummary, type ProposalRow, type Ticket } from '../api/bots'
 import { Avatar } from '../components/Avatar'
 import { ChatThread } from '../components/ChatThread'
 import { Icon } from '../components/Icon'
-import { IdentityPicker, emptyChoice, type IdentityChoice } from '../components/IdentityPicker'
-import { ReviewPanel } from '../components/ReviewPanel'
 import { StatusMark } from '../components/StatusMark'
 import { TicketTable } from './Tickets'
-import { staged, loadConfig, stage, cfgError } from '../configStore'
+import { BotMemory } from './BotMemory'
+import { BotAccess } from './BotAccess'
+import { BotSettings } from './BotSettings'
 import { go } from '../router'
-import { BotWallet } from './BotWallet'
 import { ApiError, humanError } from '../api/errors'
 import { EmptyState } from '../components/EmptyState'
 
@@ -173,90 +172,3 @@ export function ProposalRowView({ p }: { p: ProposalRow }): JSX.Element {
   )
 }
 
-// BotMemory: a placeholder for the prototype's full memory editor (CodeMirror
-// 6, Write/Preview, [[ completion, evidence chips — docs/design/dashboard.md,
-// CONFORMANCE "A bot's Memory"). Checked again in phase 8: the engine behind
-// this is real (internal/bot.Repo — a git repo of typed Markdown documents,
-// memops.go/memread.go/memrepo.go) and a CLI reaches it (memorycli.go), but
-// the operator API the dashboard is built on (internal/bot.OperatorRoutes,
-// httpapi.go) has no route for it at all — no list, read, write, evidence or
-// history endpoint for a memory entry, only messages/tickets/attachments/
-// teams/conversations. There is nothing an HTTP handler in this package could
-// call. This stays a minimal dl-card naming what memory is and its kinds as
-// plain tag chips until internal/bot grows that surface (a daemon feature,
-// out of scope here — see /var/tmp/dashempty/gaps.md).
-function BotMemory({ bot }: { bot: BotData }): JSX.Element {
-  return (
-    <section class="dl-card">
-      <header class="dl-ch"><h2>Memory</h2></header>
-      <p class="dl-sub">The bot's memory, by kind (knowledge, runbooks, watch, log, handoff). It keeps writing its own; your edits land as one commit in your name.</p>
-      {bot.memory_repo ? <p class="dl-sub">Repo <span class="mono">{bot.memory_repo}</span></p> : null}
-      <p class="fx">
-        {['Knowledge', 'Runbooks', 'Watch', 'Log', 'Handoff'].map((k) => <span class="tag">{k}</span>)}
-      </p>
-    </section>
-  )
-}
-
-function BotAccess({ bot }: { bot: BotData }): JSX.Element {
-  const does = bot.capabilities?.does || []
-  const asks = bot.capabilities?.asks || []
-  const grp = (label: string, s: string, items: string[], empty: string) => (
-    <div class="cang" data-s={s}>
-      <h3><StatusMark s={s} mkOnly label={label} />{label}</h3>
-      <ul>{items.length ? items.map((v) => <li class="mono">{v}</li>) : <li class="dl-sub">{empty}</li>}</ul>
-    </div>
-  )
-  return (
-    <section class="dl-card dl-can">
-      <header class="dl-ch"><h2>What {displayName(bot.identity, bot.bot)} can do</h2></header>
-      {bot.shadow ? <p class="dl-sub">In practice mode: even what it does on its own is only recorded, never done.</p> : null}
-      <div class="dl-can-grid">
-        {grp('Does on its own', 'ok', does, bot.shadow ? "Nothing — it's in practice mode, so it only suggests." : 'Nothing: it asks first')}
-        {grp('Asks you first', 'ember', asks, 'Nothing needs your approval')}
-        {grp('Never', 'fail', [], 'Anything it isn’t granted')}
-      </div>
-      <BotWallet bot={bot.bot} team={bot.team} />
-    </section>
-  )
-}
-
-function BotSettings({ bot }: { bot: BotData }): JSX.Element {
-  const start = useMemo<IdentityChoice>(() => {
-    const a = bot.identity?.avatar
-    const base = emptyChoice()
-    if (a?.icon) return { ...base, mode: 'icon', icon: a.icon, color: a.color || base.color }
-    if (a?.shape) return { ...base, mode: 'face', shape: a.shape, eyes: a.eyes || base.eyes, color: a.color || base.color }
-    return { ...base, color: bot.identity?.color || base.color }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bot.bot])
-  const [choice, setChoice] = useState<IdentityChoice>(start)
-
-  useEffect(() => { void loadConfig() }, [])
-
-  async function stageFace() {
-    await stage(['bots', bot.bot, 'avatar', 'color'], choice.color, `${bot.bot}: its face`)
-    if (choice.mode === 'face') {
-      await stage(['bots', bot.bot, 'avatar', 'shape'], choice.shape, `${bot.bot}: its face`)
-      await stage(['bots', bot.bot, 'avatar', 'eyes'], choice.eyes, `${bot.bot}: its face`)
-    } else {
-      await stage(['bots', bot.bot, 'avatar', 'icon'], choice.icon, `${bot.bot}: its face`)
-    }
-  }
-
-  return (
-    <section class="dl-card">
-      <header class="dl-ch"><h2>Settings</h2></header>
-      <div class="form-field">
-        <span>Its face</span>
-        <IdentityPicker value={choice} onChange={setChoice} />
-        <div class="row-actions">
-          <button class="btn" type="button" data-testid="stage-face" onClick={() => void stageFace()}>Use this face</button>
-        </div>
-      </div>
-
-      {cfgError.value ? <div class="banner err" role="alert">{cfgError.value}</div> : null}
-      <ReviewPanel stagedCount={staged.value.length} />
-    </section>
-  )
-}
