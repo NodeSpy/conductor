@@ -312,6 +312,11 @@ export interface RunEventData {
 export interface ConfigResponse {
   path: string;
   sha: string;
+  /**
+   * DiskSHA is the short sha256 of the file as it is on disk now; it differs
+   * from SHA (what the daemon loaded) when someone edited the file since.
+   */
+  disk_sha: string;
   text: string;
   tree: any; // generic decode of the YAML (maps/lists/scalars)
   leaves: ConfigLeaf[]; // every scalar, by dotted path

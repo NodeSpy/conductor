@@ -2,6 +2,8 @@ package dashboard
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -196,11 +198,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	tree = normalizeYAML(tree)
 
 	resp := api.ConfigResponse{
-		Path:   path,
-		SHA:    s.deps.ConfigSHA,
-		Text:   string(b),
-		Tree:   tree,
-		Leaves: flattenLeaves(tree),
+		Path:    path,
+		SHA:     s.deps.ConfigSHA,
+		DiskSHA: shortSHA(b),
+		Text:    string(b),
+		Tree:    tree,
+		Leaves:  flattenLeaves(tree),
 	}
 	if s.edit != nil {
 		resp.Staged = stagedDTO(s.edits(r))
@@ -680,4 +683,11 @@ func readAuditTail(path string, n int) []map[string]any {
 		all = all[:n]
 	}
 	return all
+}
+
+// shortSHA is the short hex sha256 the daemon uses for a config file's
+// identity (the same 12 characters as Deps.ConfigSHA).
+func shortSHA(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])[:12]
 }
