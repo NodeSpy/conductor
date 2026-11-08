@@ -87,6 +87,7 @@ export async function stageDelete(path: string[], summary = ''): Promise<void> {
     staged.value = r.staged ?? []
     review.value = null
     restoreId.value = ''
+    applyResult.value = null // a new edit starts a new review, as stage() does
     cfgError.value = ''
   } catch (e) {
     cfgError.value = msg(e)

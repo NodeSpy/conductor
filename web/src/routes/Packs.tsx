@@ -218,15 +218,13 @@ function instRef(c: Record<string, any> | null): { key: 'use' | 'source'; ref: s
   return { key: 'use', ref: String(c?.use || '') }
 }
 
-// The exact release an entry is pinned to: version: =1.2.0 (a bare 1.2.0 is
-// ">= 1.2.0" and still takes new releases), or a release as the reference's
-// own @ref. A range (^1) or no version at all takes new releases.
+// The exact release an entry is pinned to: =1.2.0, as its version: or as its
+// use: @suffix (the same constraint). A bare 1.2.0 means ">= 1.2.0" and a
+// range (^1) or no version at all takes new releases.
 function exactPin(c: Record<string, any> | null): string {
-  const v = String(c?.version || '')
-  const m = /^==?\s*(v?\d+\.\d+\.\d+\S*)$/.exec(v.trim())
-  if (m) return m[1]
-  const at = c?.version ? '' : instRef(c).ref.split('@')[1] || ''
-  return /^v?\d+\.\d+\.\d+$/.test(at) ? at : ''
+  const v = String(c?.version || (c?.use ? String(c.use).split('@')[1] || '' : '')).trim()
+  const m = /^==?\s*(v?\d+\.\d+\.\d+\S*)$/.exec(v)
+  return m ? m[1] : ''
 }
 
 // The pack actions every place shares: hold / let it update, remove, update.
