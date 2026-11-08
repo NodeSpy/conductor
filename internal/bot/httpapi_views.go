@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/store"
@@ -51,6 +52,24 @@ func (s *Service) botSummary(name string) map[string]any {
 		"open_cases": open, "pending_proposals": pending, "live_workers": workers,
 		"capabilities": s.capabilityWords(name),
 	}
+}
+
+// botSpend is what a bot spent in its spend period (its cap's, else the
+// default), with the cap when it has one: the "spend it caused this period"
+// line on its What it can do tab.
+func botSpend(m config.BotConfig, rec store.BotRecord, now time.Time) map[string]any {
+	sc := config.SpendCap{}
+	if m.Autonomy.SpendCap != nil {
+		sc = *m.Autonomy.SpendCap
+	}
+	out := map[string]any{
+		"spent": spentSince(rec, now.Add(-sc.PeriodD())), "currency": sc.CurrencyOr(),
+		"period_hours": sc.PeriodD().Hours(), "entries": len(rec.Spend),
+	}
+	if m.Autonomy.SpendCap != nil {
+		out["cap"] = sc.PerPeriod
+	}
+	return out
 }
 
 // capabilityWords is "Does on its own / Asks you first / Never" for a bot,
@@ -113,6 +132,7 @@ func (s *Service) apiBot(w http.ResponseWriter, r *http.Request) {
 	out := s.statusOf(name)
 	out["capabilities"] = s.capabilityWords(name)
 	out["team"] = string(s.Cfg().Bots[name].Team)
+	out["spend"] = botSpend(s.Cfg().Bots[name], s.Ledger.Bot(name), time.Now())
 	apiJSON(w, http.StatusOK, out)
 }
 
