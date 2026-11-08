@@ -1,8 +1,10 @@
 // The step-up dialog (dashboard-auth-methods): every sensitive write calls
 // stepUp(purpose, digest); this dialog lets the operator confirm with whichever
-// method they have and policy allows — passkey, SSH key, authenticator code or
-// (only when configured) password — and hands the single-use token back. The
-// strongest available method is the primary action; the others are one tap away.
+// browser method they have and policy allows — passkey, authenticator code or
+// (only when configured) password with its code — and hands the single-use token
+// back. The methods are a segmented choice at the top, the last one used picked
+// first. The SSH key is offered only when the operator has nothing else enrolled
+// (so nobody is locked out), with a line saying how to stop needing it.
 import type { JSX } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import {
@@ -20,7 +22,7 @@ import {
   type StepupDetail,
   type StepupRequest,
 } from '../api/auth'
-import { SSHPanel, methodLabel } from './AuthBits'
+import { SSHPanel, MethodTabs, browserMethods, rememberedMethod, rememberMethod } from './AuthBits'
 import { PasskeyGlyph } from './GateChrome'
 import { humanError } from '../api/errors'
 
@@ -73,7 +75,7 @@ function What({ detail, digest }: { detail?: StepupDetail; digest: string }): JS
         </pre>
       ) : null}
       <p class="acc-note stepup-digest">
-        Confirmation digest <span class="mono">{digest.slice(0, 12)}</span>… (approve-login shows the same)
+        Confirmation digest <code>{digest.slice(0, 12)}</code>… (approve-login shows the same)
       </p>
     </div>
   )
@@ -85,9 +87,15 @@ export function StepupDialog(): JSX.Element | null {
   return <Dialog req={req} />
 }
 
+const methodKey = 'conductor.stepup.method'
+
 function Dialog({ req }: { req: StepupRequest }): JSX.Element {
-  const methods = stepupMethods(authState.value)
-  const [method, setMethod] = useState<Method | undefined>(methods[0])
+  const usable = stepupMethods(authState.value)
+  const offered = browserMethods(usable)
+  // The SSH key only as the fallback: nothing else is enrolled.
+  const sshOnly = offered.length === 0 && usable.includes('ssh')
+  const methods: Method[] = sshOnly ? ['ssh'] : offered
+  const [method, setMethod] = useState<Method | undefined>(() => rememberedMethod(methodKey, methods))
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [code, setCode] = useState('')
@@ -108,7 +116,9 @@ function Dialog({ req }: { req: StepupRequest }): JSX.Element {
     setErr('')
     setBusy(true)
     try {
-      req.resolve(await fn())
+      const tok = await fn()
+      if (method) rememberMethod(methodKey, method)
+      req.resolve(tok)
     } catch (e) {
       setErr(humanError(e))
     } finally {
@@ -137,30 +147,30 @@ function Dialog({ req }: { req: StepupRequest }): JSX.Element {
         <What detail={req.detail} digest={req.digest} />
 
         {methods.length === 0 ? (
-          <p class="gate-err" role="alert">
-            You have no way to confirm on this connection. Set up an authenticator app or a passkey from Access, or sign
-            in where your passkey works.
+          <p class="gate-err" role="alert" data-testid="stepup-none">
+            You have no way to confirm on this connection. Set up an authenticator app or a passkey in System → Access, or
+            open the dashboard where your passkey works.
           </p>
         ) : null}
 
         {methods.length > 1 ? (
-          <div class="method-chips" role="tablist" aria-label="Confirm with">
-            {methods.map((m) => (
-              <button
-                type="button"
-                role="tab"
-                class={'chip' + (m === method ? ' on' : '')}
-                aria-selected={m === method}
-                data-testid={`stepup-method-${m}`}
-                onClick={() => {
-                  setErr('')
-                  setMethod(m)
-                }}
-              >
-                {methodLabel[m]}
-              </button>
-            ))}
-          </div>
+          <MethodTabs
+            methods={methods}
+            value={method}
+            label="Confirm with"
+            testid="stepup-method"
+            onPick={(m) => {
+              setErr('')
+              setMethod(m)
+              rememberMethod(methodKey, m)
+            }}
+          />
+        ) : null}
+
+        {sshOnly ? (
+          <p class="gate-callout stepup-ssh-why" data-testid="stepup-ssh-fallback">
+            You have no passkey or authenticator yet, so this uses your SSH key. Set one up in System → Access.
+          </p>
         ) : null}
 
         {method === 'passkey' ? (
@@ -214,6 +224,7 @@ function Dialog({ req }: { req: StepupRequest }): JSX.Element {
                 type="password"
                 autocomplete="current-password"
                 value={password}
+                data-testid="stepup-password"
                 onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
               />
             </label>
@@ -229,7 +240,7 @@ function Dialog({ req }: { req: StepupRequest }): JSX.Element {
                 onInput={(e) => setPwCode((e.target as HTMLInputElement).value)}
               />
             </label>
-            <button class="btn primary lg block" type="submit" disabled={busy || !password}>
+            <button class="btn primary lg block" type="submit" disabled={busy || !password} data-testid="stepup-password-submit">
               {busy ? 'Checking…' : 'Confirm'}
             </button>
           </form>

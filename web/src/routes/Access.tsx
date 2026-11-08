@@ -23,7 +23,7 @@ import {
   type TOTPEnrollment,
 } from '../api/auth'
 import { passkeysUsable } from '../lib/webauthn'
-import { CopyBlock, methodPhrase } from '../components/AuthBits'
+import { CopyBlock, methodPhrase, browserMethods } from '../components/AuthBits'
 import { Icon } from '../components/Icon'
 import { ago, goDuration } from '../lib/format'
 import '../styles/auth.css'
@@ -182,6 +182,14 @@ export function Access(): JSX.Element {
 
   const needsTOTP = data.auth_policy.password_requires_totp
   const canPassword = data.auth_policy.methods.includes('password')
+  // What the browser offers: the SSH key signs in and confirms from the CLI and
+  // the desktop app; in the browser it is only a fallback.
+  // The browser methods this operator really has set up (and the policy allows).
+  const haveBrowser = browserMethods(data.auth_policy.methods).filter((m) =>
+    m === 'passkey' ? data.passkeys.length > 0 : m === 'password' ? data.password.set && (!needsTOTP || data.totp.set) : false,
+  )
+  const confirmWith = browserMethods(data.stepup_methods)
+  const sshFallback = confirmWith.length === 0 && data.stepup_methods.includes('ssh')
 
   return (
     <div class="col">
@@ -189,10 +197,20 @@ export function Access(): JSX.Element {
         <div>
           <h1>Access</h1>
           <p class="dl-lead">
-            <b>Only you can sign in</b>, with{' '}
-            {data.auth_policy.methods.map((m) => methodPhrase[m]).join(', ')}
-            {data.auth_policy.methods.includes('password') && needsTOTP ? ' (with an authenticator code)' : ''}, from{' '}
-            {listenerPhrase(data.listeners)}.
+            <b>Only you can sign in</b>
+            {haveBrowser.length ? (
+              <>
+                , with your {haveBrowser.map((m) => methodPhrase[m]).join(' or your ')}
+                {haveBrowser.includes('password') && (needsTOTP || data.totp.set) ? ' and authenticator code' : ''}, from {listenerPhrase(data.listeners)}.
+              </>
+            ) : data.auth_policy.methods.includes('ssh') ? (
+              <>
+                , for now with your SSH key, from {listenerPhrase(data.listeners)}. Add a passkey or a password below to sign in
+                without it.
+              </>
+            ) : (
+              <>, from {listenerPhrase(data.listeners)}. Add a passkey or a password below to sign in.</>
+            )}
           </p>
         </div>
       </div>
@@ -248,7 +266,7 @@ export function Access(): JSX.Element {
               {data.passkey_here
                 ? 'A passkey added here works on this hostname. '
                 : 'Passkeys need HTTPS (or localhost) on a hostname conductor serves; this connection has none. '}
-              On the box, <span class="mono">conductor dashboard enroll</span> prints a one-time link to add one on
+              On the box, <code>conductor dashboard enroll</code> prints a one-time link to add one on
               localhost.
             </p>
           </section>
@@ -361,7 +379,7 @@ export function Access(): JSX.Element {
               {needsTOTP
                 ? 'A password signs in only together with a code from the authenticator app.'
                 : 'This config lets a password sign in on its own (password_requires_totp: false); with an app set up, its code is still asked for.'}{' '}
-              Lost the app? <span class="mono">conductor dashboard reset</span>, signed with your SSH key, clears it.
+              Lost the app? <code>conductor dashboard reset</code>, signed with your SSH key, clears it.
             </p>
           </section>
 
@@ -410,9 +428,9 @@ export function Access(): JSX.Element {
               {data.auth_policy.config_stepup === 'guarded' ? (
                 <li data-testid="config-asks">
                   Every restore, and config changes (a new bot avatar too) except: setting{' '}
-                  <span class="mono">usage.mode</span> or raising an existing price under{' '}
-                  <span class="mono">pricing</span> (at most tenfold), up to 5 in 10 minutes (
-                  <span class="mono">config_stepup: guarded</span>)
+                  <code>usage.mode</code> or raising an existing price under{' '}
+                  <code>pricing</code> (at most tenfold), up to 5 in 10 minutes (
+                  <code>config_stepup: guarded</code>)
                 </li>
               ) : (
                 <li data-testid="config-asks">Every config change (a new bot avatar too) and every restore</li>
@@ -426,9 +444,17 @@ export function Access(): JSX.Element {
               <li>Adding or removing a way to sign in</li>
             </ul>
             <p class="dl-sub" data-testid="stepup-methods">
-              You can confirm with:{' '}
-              {data.stepup_methods.length ? data.stepup_methods.map((m) => methodPhrase[m]).join(', ') : 'nothing on this connection'}
-              . Everything else, including routine config changes, uses your signed-in session.
+              {confirmWith.length ? (
+                <>You can confirm with your {confirmWith.map((m) => methodPhrase[m]).join(' or your ')}.</>
+              ) : sshFallback ? (
+                <>
+                  For now you confirm with your SSH key. Add a passkey or an authenticator app here and you won't need it
+                  in the browser.
+                </>
+              ) : (
+                <>You have nothing to confirm with on this connection yet: add a passkey or an authenticator app here.</>
+              )}{' '}
+              Everything else, including routine config changes, uses your signed-in session.
             </p>
           </section>
 

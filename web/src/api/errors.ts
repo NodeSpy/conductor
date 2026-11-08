@@ -85,6 +85,10 @@ export function humanError(e: unknown): string {
   }
   if (e instanceof TypeError && /fetch|load failed|network/i.test(e.message))
     return "Couldn't reach conductor — check your connection and that the daemon is running, then try again"
+  // WebAuthn's refusal reads the same whether it was cancelled, timed out or
+  // found no passkey for this site (the spec hides which, for privacy).
+  if (e instanceof Error && e.name === 'NotAllowedError')
+    return "The passkey wasn't used: it was cancelled, timed out, or this device has no passkey for conductor. Try again, or use another way."
   if (e instanceof SyntaxError) return 'conductor sent back something the dashboard could not read — reload the page'
   if (e instanceof Error) return e.message
   return String(e)

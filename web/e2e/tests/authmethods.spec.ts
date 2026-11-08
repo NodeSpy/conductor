@@ -1,11 +1,13 @@
 // Sign-in methods e2e (dashboard-auth-methods): the passkey-less paths, on
 // Chromium AND WebKit (iPhone), against a dedicated daemon that also listens on
 // the machine's non-loopback address over plain HTTP. Through that origin — not
-// a secure context, so no passkey — the operator signs in by pasting an SSH
+// a secure context, so no passkey — the gate offers the password, with the SSH
+// key behind its fallback link; the operator signs in by pasting an SSH
 // signature, sets a password and an authenticator from Access (each confirmed
-// with the SSH key in the step-up dialog), signs in with password + code, signs
-// in from "another device" by approving the login code with the CLI, and approves
-// a bot proposal with an authenticator-code step-up. TOTP codes are computed here
+// with the SSH key, the only thing enrolled so far), signs in with password +
+// code, signs in from "another device" by approving the login code with the CLI,
+// and approves a bot proposal with an authenticator-code step-up (the SSH key no
+// longer offered). TOTP codes are computed here
 // from the enrolled secret; each accepted time step is spent, so the next code
 // must come from a later step.
 import { test, expect, type Page, type BrowserContext, type Browser, type TestInfo, type Locator } from '@playwright/test'
@@ -159,12 +161,14 @@ test('a plain-HTTP origin says it is unencrypted and offers no passkey', async (
   await expect(page.getByTestId('transport')).toContainText(new URL(remote).host)
   await expect(page.getByTestId('transport')).not.toContainText('bind:')
   await expect(page.getByTestId('signin-operator')).toHaveAttribute('placeholder', /operator/)
-  // The SSH key is the primary method; no passkey button, no passkey chip.
-  await expect(page.getByTestId('ssh-begin')).toBeVisible()
+  // The password is the one browser method here: no passkey, and the SSH key
+  // only behind its quiet fallback link.
+  await expect(page.getByTestId('password-form')).toBeVisible()
   await expect(page.getByTestId('signin-button')).toHaveCount(0)
   await expect(page.getByTestId('method-passkey')).toHaveCount(0)
-  await expect(page.getByTestId('method-password')).toBeVisible()
-  await fitsInside(page.getByTestId('ssh-begin'), page.locator('.gate-card'))
+  await expect(page.getByTestId('ssh-begin')).toHaveCount(0)
+  await expect(page.getByTestId('method-ssh')).toHaveText('Use your SSH key instead')
+  await fitsInside(page.getByTestId('signin-password-submit'), page.locator('.gate-card'))
   await noHorizontalOverflow(page)
   await shot(page, info, 'signin-dark')
 
@@ -180,6 +184,7 @@ test('a plain-HTTP origin says it is unencrypted and offers no passkey', async (
 
 test('sign in by pasting an SSH signature', async ({}, info) => {
   await page.goto('/signin')
+  await page.getByTestId('method-ssh').click()
   await page.getByTestId('signin-operator').fill('ops')
   await page.getByTestId('ssh-begin').click()
   await expect(page.getByTestId('ssh-panel')).toBeVisible()
@@ -223,11 +228,13 @@ test('set a password and an authenticator from Access, confirming with the SSH k
   await page.getByTestId('password-save').click()
 
   // Changing a credential asks for a confirmation; on this connection that is
-  // the SSH key (no passkey here, no authenticator yet).
+  // the SSH key (no passkey here, no authenticator yet), offered as the
+  // fallback with a line on how to stop needing it.
   const dialog = page.getByTestId('stepup-dialog')
   await expect(dialog).toBeVisible()
   await expect(dialog).toContainText('Change how you sign in')
   await expect(dialog.getByTestId('ssh-panel')).toBeVisible()
+  await expect(dialog.getByTestId('stepup-ssh-fallback')).toBeVisible()
   await noHorizontalOverflow(page)
   await shot(page, info, 'stepup-ssh')
   await pasteSSH(dialog)
@@ -302,7 +309,8 @@ test('replace the authenticator app: the old one works until the new one is conf
   const dialog = page.getByTestId('stepup-dialog')
   await expect(dialog).toBeVisible()
   await expect(dialog.getByTestId('stepup-what')).toContainText('Replace your authenticator app')
-  await dialog.getByTestId('stepup-method-totp').click()
+  // The authenticator is enrolled, so the SSH key is no longer offered.
+  await expect(dialog.getByTestId('ssh-panel')).toHaveCount(0)
   await dialog.getByTestId('stepup-totp-code').fill(code)
   await dialog.getByTestId('stepup-totp-submit').click()
   await expect(dialog).toHaveCount(0)
@@ -314,7 +322,6 @@ test('sign in with a password and an authenticator code', async ({ browser }, in
   pwCtx = await newDeviceContext(browser, info)
   pwPage = await pwCtx.newPage()
   await pwPage.goto('/signin')
-  await pwPage.getByTestId('method-password').click()
   await pwPage.getByTestId('signin-operator').fill('ops')
   await pwPage.getByTestId('signin-password').fill(PASSWORD)
 
@@ -335,6 +342,7 @@ test('sign in from another device: approve the login code with the CLI', async (
   try {
     const p = await ctx.newPage()
     await p.goto('/signin')
+    await p.getByTestId('method-ssh').click()
     await p.getByTestId('signin-operator').fill('ops')
     await p.getByTestId('ssh-begin').click()
     await p.getByRole('tab', { name: 'Approve from another device' }).click()
@@ -399,10 +407,11 @@ test('approve a proposal with an authenticator-code step-up', async ({}, info) =
   await fitsInside(action, dialog)
   const cancel = (await dialog.getByTestId('stepup-cancel').boundingBox())!
   expect(cancel.height, 'Cancel is a 44px tap target').toBeGreaterThanOrEqual(44)
-  // No passkey on plain HTTP; the SSH key and the authenticator are offered.
+  // No passkey on plain HTTP, and the SSH key isn't offered once the
+  // authenticator is enrolled: the code is the one way, no method choice.
   await expect(dialog.getByTestId('stepup-method-passkey')).toHaveCount(0)
-  await expect(dialog.getByTestId('stepup-method-ssh')).toBeVisible()
-  await dialog.getByTestId('stepup-method-totp').click()
+  await expect(dialog.getByTestId('stepup-method-ssh')).toHaveCount(0)
+  await expect(dialog.getByTestId('ssh-panel')).toHaveCount(0)
   await dialog.getByTestId('stepup-totp-code').fill(await freshCode())
   await fitsInside(dialog.getByTestId('stepup-totp-submit'), dialog)
   await noHorizontalOverflow(pwPage)

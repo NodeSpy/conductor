@@ -2,39 +2,116 @@
    Access screen. Tokens only, so light and dark both come for free. */
 
 /* The gate: a centred card on the canvas, for sign-in and enrolment. */
+/* The page itself never scrolls (html, body clip), so the gate scrolls on its
+   own; auto margins centre the card without clipping its top when it is taller
+   than the screen. */
 .gate {
-  min-height: 100dvh;
+  box-sizing: border-box;
+  height: var(--dvh, 100dvh);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
   padding: var(--space-4);
   background: var(--color-bg-canvas);
 }
+.gate > .gate-card {
+  margin: auto 0;
+  flex: none;
+}
 .gate-card {
-  width: min(560px, 100%);
+  width: min(440px, 100%);
+  box-sizing: border-box;
   background: var(--color-bg-surface);
   border: var(--border-width) solid var(--color-border-subtle);
   border-radius: var(--radius-card);
-  box-shadow: var(--shadow-raised, 0 1px 3px rgba(0, 0, 0, 0.1));
-  padding: var(--space-5);
+  box-shadow: var(--shadow-3);
+  padding: var(--space-8) var(--space-8) var(--space-6);
 }
+/* Enrolment carries a pairing form and a QR code: the prototype's wider card. */
+.gate .card.gate-wide {
+  width: min(560px, 100%);
+}
+/* The logo kit's stacked lockup, centred over the card: the mark on top, the
+   wordmark under it. */
 .gate-brand {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-4);
+  justify-content: center;
+  margin: 0 0 var(--space-6);
 }
-.gate-brand .wordmark {
-  font-family: var(--type-serif, Fraunces, Georgia, serif);
-  font-weight: 600;
-  font-size: 1.25rem;
-  color: var(--color-text-primary);
+.gate-logo {
+  display: block;
+  width: 236px;
+  max-width: 80%;
+  height: auto;
 }
 .gate-card h1 {
   font-family: var(--type-serif, Fraunces, Georgia, serif);
   font-size: 1.6rem;
   margin: 0 0 var(--space-2);
   color: var(--color-text-primary);
+  text-align: center;
+}
+.gate-card > .gate-sub {
+  text-align: center;
+}
+/* The method choice: a full-width segmented control at the top of the form;
+   each segment switches the form below in place. */
+.seg.method-tabs {
+  display: flex;
+  width: 100%;
+  margin: 0 0 var(--space-4);
+}
+.seg.method-tabs button {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: var(--type-body-s-size, 0.875rem);
+}
+.seg.method-tabs button:not(.on) {
+  color: var(--color-text-secondary);
+}
+.seg.method-tabs button.on {
+  font-weight: 600;
+  /* the prototype's seg thumb, ringed so it reads at a glance on the dark track */
+  box-shadow: var(--shadow-1), inset 0 0 0 var(--border-width) var(--color-border-strong);
+}
+.seg.method-tabs button:focus-visible {
+  outline: 2px solid var(--color-accent-default);
+  outline-offset: 1px;
+}
+/* The quiet way to the SSH fallback (and back): a small underlined text link. */
+.gate-alt {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: block;
+  margin: var(--space-4) auto 0;
+  padding: 4px 6px;
+  min-height: 32px;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-strong);
+  text-underline-offset: 3px;
+  text-align: center;
+}
+.gate-alt:hover {
+  color: var(--color-text-primary);
+}
+.gate-alt:focus-visible {
+  outline: 2px solid var(--color-accent-default);
+  outline-offset: 2px;
+  border-radius: var(--radius-control);
+}
+.gate-hint {
+  text-align: center;
+}
+.gate-foot svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
 }
 .gate-sub {
   color: var(--color-text-secondary);
@@ -472,7 +549,10 @@
     padding: var(--space-4) var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
   }
   .gate-card {
-    padding: var(--space-4);
+    padding: var(--space-6) var(--space-5) var(--space-5);
+  }
+  .gate-logo {
+    width: 184px;
   }
   /* 16px keeps iOS Safari from zooming the page when a field takes focus. */
   .gate-field input,
