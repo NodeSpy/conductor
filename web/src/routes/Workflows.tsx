@@ -171,7 +171,7 @@ export function Workflows(): JSX.Element {
 
   if (all.length === 0) {
     return (
-      <div class="m-page">
+      <div class="m-page wf-hero-page">
         <div class="dl-phead"><div><h1>Workflows</h1></div></div>
         <EmptyState
           hero
@@ -181,7 +181,7 @@ export function Workflows(): JSX.Element {
           action={{ label: 'Build a workflow', href: '#/workflows?new=1', testid: 'workflows-empty-new' }}
           secondary={{ label: 'Get one from a pack', href: '#/packs' }}
         >
-          <p>A workflow is a fixed recipe: when something happens, run these steps. Want an AI to decide what to do? Hand the event to a bot instead.</p>
+          <p>A workflow is a fixed recipe that runs its steps whenever something happens.</p>
         </EmptyState>
         {newModal ? createPortal(newModal, document.body) : null}
       </div>

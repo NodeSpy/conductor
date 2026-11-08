@@ -6,6 +6,7 @@
 // palette's own (Palette.tsx).
 import type { JSX } from 'preact'
 import { useEffect, useRef } from 'preact/hooks'
+import { createPortal } from 'preact/compat'
 import { go } from '../router'
 import { Icon } from './Icon'
 import { paletteOpen, shortcutsOpen } from '../lib/overlays'
@@ -133,7 +134,9 @@ function ShortcutSheet(): JSX.Element {
     return () => document.removeEventListener('keydown', onEsc, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  return (
+  // on <body>, as the prototype's UI.modal mounts it: inside the top strip it
+  // would inherit the strip's smaller type
+  return createPortal(
     <div class="scrim" id="scrim" onClick={(e) => e.target === e.currentTarget && close()}>
       <div class="modal" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" tabIndex={-1} ref={modal}>
         <span class="sheet-grip only-phone" aria-hidden="true" />
@@ -157,6 +160,7 @@ function ShortcutSheet(): JSX.Element {
           </dl>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

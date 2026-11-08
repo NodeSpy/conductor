@@ -26,8 +26,9 @@ import { ReviewPanel } from '../components/ReviewPanel'
 import { Menu, type MenuItem } from '../components/Menu'
 import { FormModal } from '../components/FormModal'
 import { FilterBar } from '../components/FilterBar'
+import { EmptyState } from '../components/EmptyState'
 import { statusMark } from '../state'
-import { ago } from '../lib/format'
+import { ago, humanDuration } from '../lib/format'
 import { TIME_RANGES, rangeMinutes } from '../lib/filter'
 import { go } from '../router'
 import { humanError } from '../api/errors'
@@ -2089,9 +2090,9 @@ export function WorkflowDetail({ name }: { name: string }): JSX.Element {
                         <span class="dl-ng"><StatusMark s={m.s} lg mkOnly label={m.word} /></span>
                         <span class="dl-nt">
                           <b>
-                            {r.workflow || b.name} <span class="tgt">{r.repo ? `${r.repo}${r.number ? '#' + r.number : ''}` : ''}</span>
+                            {runTitle(r)} <span class="tgt">{r.repo ? `${r.repo}${r.number ? '#' + r.number : ''}` : ''}</span>
                           </b>
-                          <span class="dl-why">{m.word} · <span class="mono">{r.id}</span></span>
+                          <span class="dl-why">{m.word} · <span class="mono" title={r.id}>{shortRunId(r.id)}</span></span>
                         </span>
                         <span class="dl-age">{ago(r.started)}</span>
                       </a>
@@ -2244,6 +2245,25 @@ export function WorkflowDetail({ name }: { name: string }): JSX.Element {
       )}
     </div>
   )
+}
+
+// A run in a workflow's own list says what happened, not the workflow's name
+// again (the list is already this workflow's): the run summary carries no
+// title of its own, so it's built from its outcome.
+function runTitle(r: { status: string; steps: number; duration_ms: number; failed_step?: string; error?: string }): string {
+  const n = `${r.steps} step${r.steps === 1 ? '' : 's'}`
+  if (r.status === 'failed') return r.failed_step ? `Stopped at “${r.failed_step}”` : 'Stopped before it finished'
+  if (r.status === 'running') return `Running, ${n} so far`
+  if (r.status === 'ok') return `Ran ${n} in ${r.duration_ms < 1000 ? 'under 1 s' : humanDuration(r.duration_ms)}`
+  if (r.status === 'retried') return 'Retried'
+  return n
+}
+// The short form of a run id the prototype shows (r-7f3a): the id's own
+// random tail, enough to tell the runs in one list apart. The full id is the
+// row's link and its tooltip.
+function shortRunId(id: string): string {
+  const tail = id.split('-').pop() || id
+  return 'r-' + tail.slice(0, 6)
 }
 
 function collectModels(tree: Obj): string[] {
@@ -2492,11 +2512,12 @@ function InputAdd({ ro, onAdd }: { ro: string; onAdd: (n: string, type: string, 
 
 function Missing({ name }: { name: string }): JSX.Element {
   return (
-    <div class="col">
-      <div class="empty">
-        <span class="serif">No workflow named {name}</span>
-        <a class="btn" href="#/workflows">All workflows</a>
-      </div>
+    <div class="wf-hero-page">
+      <EmptyState hero icon="workflows" testid="workflow-missing" title="No such workflow" action={{ label: 'All workflows', href: '#/workflows', testid: 'workflow-missing-all' }}>
+        <p>
+          There’s no workflow named <b class="wf-hero-name">{name}</b> in this config: it may have been renamed or removed.
+        </p>
+      </EmptyState>
     </div>
   )
 }

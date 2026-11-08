@@ -11,6 +11,7 @@
 // Shortcuts.tsx.
 import type { JSX } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { createPortal } from 'preact/compat'
 import { go } from '../router'
 import { Icon } from './Icon'
 import { api } from '../api/client'
@@ -290,7 +291,9 @@ function PaletteDialog({ items }: { items: PaletteItem[] }): JSX.Element {
     setSel(0)
   }
 
-  return (
+  // on <body>, as the prototype mounts it (inside the top strip it would
+  // inherit the strip's smaller type)
+  return createPortal(
     <div>
       <div class="scrim" id="pal-scrim" style={{ placeItems: 'start center' }} onClick={close} />
       <div class="palette" role="dialog" aria-label="Command line">
@@ -371,6 +374,7 @@ function PaletteDialog({ items }: { items: PaletteItem[] }): JSX.Element {
           <span><span class="kbd">?</span> all shortcuts</span>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
