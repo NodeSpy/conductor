@@ -13,7 +13,7 @@ import { Icon } from '../components/Icon'
 import { FactsLine, type Fact } from '../components/Facts'
 import { agoText, botName, host, listWords, loadRoster, roster, whoWord } from '../lib/browserwords'
 import { humanError } from '../api/errors'
-import { authState } from '../api/auth'
+import { authState, confirmLabel } from '../api/auth'
 import { cardName, kindOf, usd } from '../lib/walletwords'
 
 /** A purchase's status: a pending or approved one past its expiry has lapsed. */
@@ -298,7 +298,7 @@ export function Purchase({ id }: { id: string }): JSX.Element {
           ) : pend ? (
             <div class="dl-decide prop-decide">
               <button class="btn lg primary" type="button" data-testid="approve" onClick={() => (card?.frozen ? setErr(`${p.card} is frozen: unfreeze it before approving a purchase with it.`) : setSeal('approve'))}>
-                <Icon name="passkey" />Approve with passkey
+                <Icon name="passkey" />{confirmLabel('Approve')}
               </button>
               <button class="btn lg secondary" type="button" data-testid="deny" onClick={() => setSeal('deny')}>Deny…</button>
               <span class="hint">{ops.length ? `Only ${ops.join(' or ')} can approve.` : 'No operator can approve yet.'}{card?.frozen ? ' The card is frozen: unfreeze it first.' : ''}</span>
@@ -385,7 +385,7 @@ function Seal({ p, card, deny, layers, onClose, onDone }: { p: P; card: WalletCa
         <div class="modal-foot">
           <button class="btn ghost" type="button" onClick={onClose}>Cancel</button>
           <button class={'btn ' + (deny ? 'danger' : 'primary')} type="button" id="seal-go" disabled={busy} data-testid={deny ? 'deny-confirm' : 'approve-confirm'} onClick={() => void go()}>
-            <Icon name="passkey" />{deny ? 'Deny with passkey' : 'Approve with passkey'}
+            <Icon name="passkey" />{confirmLabel(deny ? 'Deny' : 'Approve')}
           </button>
         </div>
       </div>
