@@ -54,6 +54,7 @@ export function ValueSource({
   label,
   placeholder,
   testid,
+  suggest,
 }: {
   value: VSValue
   onChange: (v: VSValue) => void
@@ -62,6 +63,9 @@ export function ValueSource({
   label?: string
   placeholder?: string
   testid?: string
+  // suggest offers known references (a vault's entries) to pick from while
+  // typing a reference.
+  suggest?: string[]
 }): JSX.Element {
   const [menu, setMenu] = useState(false)
   const sources = sourcesFor(sensitive, credential)
@@ -130,11 +134,17 @@ export function ValueSource({
                 value={value.ref || ''}
                 placeholder={refPlaceholder(src)}
                 data-testid={testid ? testid + '-ref' : undefined}
+                list={src === 'vault' && suggest?.length && testid ? testid + '-refs' : undefined}
                 onInput={(e) => onChange({ ...value, ref: (e.target as HTMLInputElement).value })}
               />
             )}
           </div>
         </div>
+        {src === 'vault' && suggest?.length && testid ? (
+          <datalist id={testid + '-refs'}>
+            {suggest.map((r) => <option value={r} key={r} />)}
+          </datalist>
+        ) : null}
         {src === 'vault' ? (
           <p class="vs-check dl-sub">The one reference syntax: {'{{ vault "<vault>" "<key>" }}'} — a value is never shown here.</p>
         ) : null}

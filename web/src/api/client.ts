@@ -16,6 +16,8 @@ import type {
   PackManifestResponse,
   PluginsResponse,
   ConnectionsResponse,
+  CatalogResponse,
+  AddReview,
   SystemResponse,
   LogResponse,
   AuditResponse,
@@ -182,6 +184,9 @@ export const api = {
   packManifest: (name: string) => getJSON<PackManifestResponse>('/api/v1/packs/' + encodeURIComponent(name) + '/manifest'),
   plugins: () => getJSON<PluginsResponse>('/api/v1/plugins'),
   connections: () => getJSON<ConnectionsResponse>('/api/v1/connections'),
+  pluginCatalog: (kind: 'connector' | 'runtime' | 'engine') => getJSON<CatalogResponse>('/api/v1/plugins/catalog?kind=' + kind),
+  pluginReview: (kind: 'connector' | 'runtime' | 'engine', use: string, as = '') =>
+    getJSON<AddReview>(`/api/v1/plugins/review?kind=${kind}&use=${encodeURIComponent(use)}&as=${encodeURIComponent(as)}`),
   system: () => getJSON<SystemResponse>('/api/v1/system'),
   setPaused: (paused: boolean) => sendJSON<{ paused: boolean }>('POST', '/api/v1/system/pause', { paused }),
   checkUpdate: () => sendJSON<SystemResponse>('POST', '/api/v1/system/update/check', {}),

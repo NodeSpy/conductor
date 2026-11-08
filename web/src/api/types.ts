@@ -563,22 +563,90 @@ export interface PluginInfo {
   used_by: string[]; // the connector/runtime names using it
 }
 /**
- * ConnectionsResponse is GET /api/v1/connections: connectors, runtimes and hosts
- * as a flat list for the Connections screen.
+ * ConnectionsResponse is GET /api/v1/connections: the Plugins screen's four
+ * tabs — connections, agent runtimes, code languages and machines — each row
+ * with what the daemon really knows about it (its plugin's origin and
+ * installed version, its version policy, what uses it). Nothing here is a
+ * health probe: a connection's status is what the run history and the
+ * connector registry say, never a guess.
  */
 export interface ConnectionsResponse {
-  connectors: NamedUse[];
-  runtimes: NamedUse[];
+  connectors: ConnectorRow[];
+  runtimes: RuntimeRow[];
   hosts: HostInfo[];
+  languages: LanguageInfo[];
+  /**
+   * Version is this conductor's version: what a built-in plugin runs at.
+   */
+  version: string;
 }
 /**
- * NamedUse is a named connector/runtime and its `use:` reference. Type is a
- * runtime's built-in kind ("cli", "paseo", …), empty for a plugin's.
+ * PluginRef is the plugin behind a connector, runtime or code language, as
+ * its `use:` reference and install state describe it.
  */
-export interface NamedUse {
+export interface PluginRef {
+  use: string; // the `use:` reference as written
+  plugin: string; // the plugin's name (the reference minus any @version)
+  /**
+   * Origin: builtin | official | custom (a third-party source) | local
+   * (a path on this machine).
+   */
+  origin: string;
+  source?: string; // where a fetched plugin comes from
+  /**
+   * Version is the installed build (a built-in's is conductor's own); empty
+   * when nothing is installed yet.
+   */
+  version?: string;
+  /**
+   * Policy is how its version moves: current (takes each new release),
+   * range (@^1.2 / @~1.2), or pinned (@v1.2.3). Empty for a built-in.
+   */
+  policy?: string;
+  constraint?: string; // the @… part of `use:`
+  /**
+   * Waiting is set when a newer build is held for approval because it asks
+   * for more than the installed one (conductor plugin approve).
+   */
+  waiting?: string;
+  /**
+   * Permissions is what the installed build may do, in plain words (the
+   * list `conductor plugin add` shows); empty for a built-in.
+   */
+  permissions?: string[];
+}
+/**
+ * ConnectorRow is one configured connection.
+ */
+export interface ConnectorRow extends PluginRef {
   name: string;
-  use: string;
+  /**
+   * Unavailable says why the connection can't run yet (its plugin isn't
+   * installed); empty when the connector registry has it.
+   */
+  unavailable?: string;
+  disabled?: boolean; // enabled: false
+  runs_today: number /* int */; // runs its events started today
+  bots?: string[]; // bots granted one of its verbs
+}
+/**
+ * RuntimeRow is one configured agent runtime.
+ */
+export interface RuntimeRow extends PluginRef {
+  name: string;
+  /**
+   * Type is a built-in runtime's kind ("cli", "paseo", …), empty for a
+   * plugin's.
+   */
   type?: string;
+  tool?: string;
+  default?: boolean;
+  host?: string;
+  /**
+   * Isolation is its isolation mode as configured ("" when it sets none).
+   */
+  isolation?: string;
+  bots?: string[]; // bots whose worker runs on it
 }
 /**
  * HostInfo is one SSH host target.
@@ -587,6 +655,106 @@ export interface HostInfo {
   name: string;
   host: string;
   user?: string;
+  port?: number /* int */;
+  env?: number /* int */; // how many env entries it sets
+  runtimes?: string[]; // runtimes that run on it
+}
+/**
+ * LanguageInfo is one code-step engine (Plugins → Code languages): conductor's
+ * built-in engines, a program on this machine a step names (`run: python3`),
+ * or an engine plugin. An engine has no block of its own — a code step names
+ * it — so this is read from every workflow and trigger step, plus the
+ * optional `engines:` hardening entries.
+ */
+export interface LanguageInfo extends PluginRef {
+  name: string;
+  /**
+   * Class: builtin | host (a program on this machine) | plugin.
+   */
+  class: string;
+  steps: number /* int */; // code steps that run it
+  workflows: string[]; // the workflows and triggers they're in
+  hardened?: boolean; // has an engines: entry
+}
+/**
+ * CatalogResponse is GET /api/v1/plugins/catalog?kind=connector|runtime|engine:
+ * what can be added on the Plugins page — the built-in kinds, every plugin in
+ * install state, and every kind the config already names — each with the
+ * connection fields its declaration carries, read from the plugin's own
+ * declaration at runtime (core never lists a plugin's fields itself).
+ */
+export interface CatalogResponse {
+  kind: string;
+  items: CatalogItem[];
+}
+/**
+ * CatalogItem is one addable kind.
+ */
+export interface CatalogItem {
+  name: string;
+  desc?: string;
+  origin: string; // builtin | official | custom | local
+  source?: string;
+  installed?: string; // installed version; a built-in's is conductor's
+  configured: number /* int */; // instances already configured
+  /**
+   * HasSchema is true when conductor holds this kind's declaration (it is
+   * built in, or its plugin is loaded), so Fields is its real field list.
+   */
+  has_schema: boolean;
+  fields?: CatalogField[];
+  /**
+   * Unavailable says why its declaration can't be read yet.
+   */
+  unavailable?: string;
+}
+/**
+ * CatalogField mirrors one declared connection field (internal/connector.
+ * Field / pkg/plugin.Field): its wire type, whether it's required, and
+ * whether it's a credential. A Secret field's form control is the vault
+ * reference picker or "store a new secret", never a plain value box.
+ */
+export interface CatalogField {
+  key: string;
+  type: string;
+  required?: boolean;
+  secret?: boolean;
+  enum?: string[];
+  desc?: string;
+}
+/**
+ * AddReview is GET /api/v1/plugins/review?kind=&use=&as=: what adding a
+ * `use:` reference means before anything is fetched — the same review
+ * `conductor plugin add` prints (internal/plugin.ReviewAdd).
+ */
+export interface AddReview {
+  kind: string;
+  use: string;
+  plugin: string;
+  instance: string;
+  origin: string;
+  source?: string;
+  builtin: boolean;
+  official: boolean;
+  /**
+   * Trusted is false when the source needs a plugin_trust.allow entry
+   * (TrustEntry) before conductor will install it.
+   */
+  trusted: boolean;
+  trust_entry?: string;
+  /**
+   * Installed is the installed version when a build is already on this
+   * machine; Permissions then lists what it may do.
+   */
+  installed?: string;
+  permissions?: string[];
+  snippet: string;
+  /**
+   * Fields are the declared connection fields when conductor holds the
+   * kind's declaration (HasSchema).
+   */
+  has_schema: boolean;
+  fields?: CatalogField[];
 }
 /**
  * SystemResponse is GET /api/v1/system: the System screen's tabs — version and
