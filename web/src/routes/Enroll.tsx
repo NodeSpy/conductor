@@ -7,7 +7,7 @@ import type { ComponentChildren, JSX } from 'preact'
 import { useState } from 'preact/hooks'
 import { enrollRedeem, enroll, enrollPasswordBegin, enrollPasswordFinish, authState, type TOTPEnrollment } from '../api/auth'
 import { passkeysUsable } from '../lib/webauthn'
-import { GateMark, PasskeyGlyph } from '../components/GateChrome'
+import { GateLogo, PasskeyGlyph } from '../components/GateChrome'
 import { CopyBlock } from '../components/AuthBits'
 import '../styles/auth.css'
 import { humanError } from '../api/errors'
@@ -22,10 +22,9 @@ function ticketFromURL(): string {
 function Card({ children }: { children: ComponentChildren }): JSX.Element {
   return (
     <div class="gate">
-      <div class="gate-card">
+      <div class="panel card gate-card gate-wide">
         <div class="gate-brand">
-          <GateMark />
-          <span class="wordmark">conductor</span>
+          <GateLogo />
         </div>
         {children}
       </div>
@@ -153,7 +152,7 @@ export function Enroll(): JSX.Element {
     <Card>
       <h1>Enrol</h1>
       <p class="gate-sub">
-        You opened the one-time link <span class="mono">conductor dashboard enroll</span> printed. It works once, on
+        You opened the one-time link <code>conductor dashboard enroll</code> printed. It works once, on
         localhost, for 10 minutes.
       </p>
       <div class="gate-code">
