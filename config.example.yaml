@@ -825,7 +825,9 @@ models:
 # --caps`, the boot log), and runs the plugin JAILED to exactly that (Linux:
 # namespaces + egress proxy; macOS: Seatbelt). Anything undeclared is denied.
 # An auto-update that asks for more is held until `conductor plugin approve
-# <name>`. Config can only narrow, or opt a plugin out of its jail:
+# <name>`, unless it is a verified release of an official plugin: that one is
+# installed, and what it added is logged. Config can only narrow, or opt a
+# plugin out of its jail:
 #
 # connectors:
 #   jira:

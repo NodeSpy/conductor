@@ -135,7 +135,7 @@ func TestLegacyRecordIsRecordedInFullWithoutHold(t *testing.T) {
 
 // `plugin update <name>` on a build that is already current re-describes it:
 // one that now declares more than its record is held for approval (so the
-// "`conductor plugin update` records it for approval" hint is true), and
+// "`conductor plugin update` records it" hint is true for a third-party build), and
 // approving it records the wider declaration for the same build.
 func TestNamedUpdateHoldsACurrentBuildThatDeclaresMore(t *testing.T) {
 	for _, shape := range []struct {

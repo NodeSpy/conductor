@@ -399,13 +399,15 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 	if res.Action == ActionUpdated {
 		// An update that asks for more than the user agreed to waits for
 		// them; the installed build keeps running meanwhile.
-		if w := prev.Manifest.Widens(rec.Manifest); len(w) > 0 && !state.approved(rec) {
+		if w := prev.Manifest.Widens(rec.Manifest); len(w) > 0 && !state.accepts(rec) {
 			state.putPending(Pending{Installed: rec, Replaces: prev.Resolved, Widens: w})
 			res.Action, res.Widens = ActionHeld, w
 			res.Tag, res.Sha, res.Path, res.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
 			opts.logf("plugin %s: update %s -> %s HELD: it asks for more than %s — %s. The installed build keeps running; `conductor plugin approve %s` accepts it",
 				ref.Name, prev.Resolved, tag, prev.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, rec))
 			return res, true
+		} else if len(w) > 0 && !state.approved(rec) {
+			logAutoAccepted(opts, ref.Name, rec, prev.Resolved, w)
 		}
 	}
 	state.dropPending(rec.Key, rec.Source)
@@ -507,8 +509,11 @@ func adoptOlderRecord(ref config.PluginRef, rec Installed, state *InstallState, 
 	next.Legacy, next.ManifestSchema, next.Manifest = false, manifestSchema, m
 	cur := next
 	switch w := base.Widens(m); {
-	case len(w) == 0 || state.approved(next):
+	case len(w) == 0 || state.accepts(next):
 		state.Put(next)
+		if len(w) > 0 && !state.approved(next) {
+			logAutoAccepted(opts, ref.Name, next, replaces, w)
+		}
 		switch added := rec.Manifest.Widens(m); {
 		case rec.Legacy:
 			opts.logf("plugin %s: recorded what %s declares (its install record predates declared permissions, and it ran unconfined until now): %s", ref.Name, rec.Resolved, m.Summary())
@@ -547,11 +552,13 @@ func recheckInstalled(ref config.PluginRef, prev Installed, state *InstallState,
 	if prev.ManifestSchema == manifestSchema && reflect.DeepEqual(m, prev.Manifest) {
 		return prev, nil, false
 	}
-	if w := prev.Manifest.Widens(m); len(w) > 0 && !state.approved(next) {
+	if w := prev.Manifest.Widens(m); len(w) > 0 && !state.accepts(next) {
 		state.putPending(Pending{Installed: next, Replaces: prev.Resolved, Widens: w})
 		opts.logf("plugin %s: %s declares more than its install record — %s. HELD: it keeps running jailed to the record; `conductor plugin approve %s` accepts it",
 			ref.Name, prev.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, next))
 		return prev, w, true
+	} else if len(w) > 0 && !state.approved(next) {
+		logAutoAccepted(opts, ref.Name, next, "its install record", w)
 	}
 	state.dropPending(next.Key, next.Source)
 	state.Put(next)
@@ -924,13 +931,16 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 				// The same hold reconcileOne applies (approve.go).
 				if hadPrev {
 					rec, _ := state.GetVersion(key, res.Tag, res.Source)
-					if w := prev.Manifest.Widens(rec.Manifest); len(w) > 0 && !state.approved(rec) {
+					if w := prev.Manifest.Widens(rec.Manifest); len(w) > 0 && !state.accepts(rec) {
 						undo()
 						state.putPending(Pending{Installed: rec, Replaces: prev.Resolved, Widens: w})
 						res.Action, res.Widens = ActionHeld, w
 						opts.logf("plugin %s: update %s -> %s HELD: it asks for more than %s — %s. The installed build keeps running; `conductor plugin approve %s` accepts it",
 							ref.Name, prev.Resolved, rec.Resolved, prev.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, rec))
 					} else {
+						if len(w) > 0 && !state.approved(rec) {
+							logAutoAccepted(opts, ref.Name, rec, prev.Resolved, w)
+						}
 						state.dropPending(key, res.Source)
 					}
 				}
