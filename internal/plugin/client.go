@@ -834,7 +834,7 @@ func (c *Client) Describe(ctx context.Context) (*Decl, error) {
 		// The jail is the recorded manifest, whatever the build now says;
 		// a build declaring more than was agreed to gets none of it.
 		if w := c.spec.Manifest.Widens(manifestFromDecl(&decl)); len(w) > 0 {
-			c.deps.Log("plugin %s: declares more than its install record (%s) — not granted; `conductor plugin update %s` records it for approval", c.spec.Name, strings.Join(w, "; "), c.spec.Name)
+			c.deps.Log("plugin %s: declares more than its install record (%s) — not granted; `conductor plugin update %s` records it (a verified official release is taken; any other is held for approval)", c.spec.Name, strings.Join(w, "; "), c.spec.Name)
 		}
 	}
 	c.recordCallTimeouts("", decl)

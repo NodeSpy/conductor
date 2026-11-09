@@ -601,6 +601,20 @@ plugin github: update v1.4.0 -> v1.5.0 HELD: it asks for more than v1.4.0 — co
 
 and sends a `plugin_update_held` notification once per held build.
 
+A **verified release of an official plugin** (from
+`github.com/NodeSpy/conductor-plugins`, its binary matching the release's
+`checksums.txt`) is not held. It is installed like any update and runs
+jailed to its new declaration, and the daemon logs what it added:
+
+```
+plugin github: github/v1.5.0 asks for more than github/v1.4.0 — connects to uploads.example.com:443. Accepted without a hold: it is a verified release of the official plugin repo
+```
+
+That repo is already trusted with no `plugin_trust` entry. Holding its
+updates only left a plugin running jailed to a record its newer builds had
+outgrown. A third-party, local or unverified build is held as below. To
+review an official update before it runs, pin the plugin's version.
+
 ```bash
 conductor plugin approve                       # list held updates and what each adds
 conductor plugin approve github@3c1f0a9e2b7d   # accept that build; the daemon picks it up at the next reload
@@ -633,8 +647,8 @@ disk, so the installed record no longer verifies.
 
 `conductor plugin update <name>` (and `--force`) also re-describes a build
 that is already current. If it now declares more than its record, that is
-held the same way; the running build stays jailed to its record until you
-approve.
+held the same way (a verified official release is recorded instead); the
+running build stays jailed to its record until you approve.
 
 Held updates are kept in install state, so they survive restarts, and
 `conductor plugin approve` (its own process) finds them.

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path"
 	"strings"
+
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // Consent to a wider declaration (docs/wiki/Plugins.md "Updates that ask for
@@ -12,7 +14,8 @@ import (
 // installed build keeps running. `conductor plugin approve <name>@<sha>`
 // records the user's yes to that build; the held build is then installed like any update, and the
 // next reload or restart runs it. Narrower or unchanged declarations apply
-// as usual.
+// as usual, and so does a verified release of an official plugin
+// (autoAccepted): it is installed, and what it added is logged.
 
 // Pending is one held update.
 type Pending struct {
@@ -75,6 +78,33 @@ func (s *InstallState) approved(rec Installed) bool {
 		}
 	}
 	return false
+}
+
+// accepts reports that rec is installed even where it declares more than
+// the build it replaces: the user approved exactly this build (approved),
+// or it is a verified release of an official plugin (autoAccepted).
+func (s *InstallState) accepts(rec Installed) bool {
+	return s.approved(rec) || autoAccepted(rec)
+}
+
+// autoAccepted reports that rec is a release of the official plugin repo
+// (config.IsOfficialSource, the source plugin_trust admits with no entry)
+// whose binary was verified against the release's own checksums
+// (Installed.ReleaseVerified). Its wider declaration is taken without a
+// hold: the user already trusts that repo by default, and holding its
+// updates only leaves a plugin running on a record its newer builds
+// outgrew. It still runs jailed to exactly what it declares, and what it
+// added is logged (logAutoAccepted). A third-party, local or unverified
+// build is held as before.
+func autoAccepted(rec Installed) bool {
+	return rec.ReleaseVerified && config.IsOfficialSource(rec.Source)
+}
+
+// logAutoAccepted logs a widening that autoAccepted let through without the
+// user's approval, naming what it added.
+func logAutoAccepted(opts Options, name string, rec Installed, replaces string, widens []string) {
+	opts.logf("plugin %s: %s asks for more than %s — %s. Accepted without a hold: it is a verified release of the official plugin repo",
+		name, rec.Resolved, replaces, strings.Join(widens, "; "))
 }
 
 // ApproveArg is what `conductor plugin approve` takes to accept rec, held
