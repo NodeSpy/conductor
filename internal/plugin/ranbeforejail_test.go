@@ -99,10 +99,12 @@ func bootLaunch(t *testing.T, dir, key string) (map[string]any, string) {
 // first launch after the upgrade, decided from install state alone, with
 // no update pass (dependency updates off) and nothing held: its record may
 // lack a file it reads, and its connector keeps working. The evidence: a
-// version 1 record, a mark saved in its record (adoption clears Legacy), or
-// a binary older than the jail. A build installed under the jail, a later
-// build of the same pre-jail plugin included, has a complete record and is
-// jailed: the same read is refused.
+// record still in the format a conductor without the jail wrote (a version
+// 1 record, or a version 2 one whose adoption could not describe it), or
+// the mark that saved (adoption clears Legacy). A build a jailing conductor
+// recorded stays jailed, its binary's age notwithstanding, and so does a
+// build installed under the jail, a later build of a pre-jail plugin
+// included: the same read is refused.
 func TestABuildThatRanBeforeTheJailKeepsWorkingFromBoot(t *testing.T) {
 	defer SetHostJailForTests(HostJail{OK: true})()
 	for _, c := range []struct {
@@ -117,9 +119,12 @@ func TestABuildThatRanBeforeTheJailKeepsWorkingFromBoot(t *testing.T) {
 		{"adopted record marked as having run before the jail", func(bin, sum string) string {
 			return "version: 2\nplugins:\n- {key: connectors/acme-echo, name: acme-echo, kind: connector, source: SRC, resolved: connectors/acme-echo/v1.0.0, sha256: " + sum + ", path: " + bin + ", manifest_schema: 2, pre_jail: true, ran_before_jail: true}\n"
 		}, false, true},
-		{"adopted record whose binary predates the jail", func(bin, sum string) string {
+		{"version 2 record whose adoption could not describe the build", func(bin, sum string) string {
+			return "version: 2\nplugins:\n- {key: connectors/acme-echo, name: acme-echo, kind: connector, source: SRC, resolved: connectors/acme-echo/v1.0.0, sha256: " + sum + ", path: " + bin + ", legacy: true}\n"
+		}, false, true},
+		{"adopted record whose binary predates the jail (it ran jailed since)", func(bin, sum string) string {
 			return "version: 2\nplugins:\n- {key: connectors/acme-echo, name: acme-echo, kind: connector, source: SRC, resolved: connectors/acme-echo/v1.0.0, sha256: " + sum + ", path: " + bin + ", manifest_schema: 2, pre_jail: true}\n"
-		}, true, true},
+		}, true, false},
 		{"build installed under the jail, of a pre-jail plugin", func(bin, sum string) string {
 			return "version: 2\nplugins:\n- {key: connectors/acme-echo, name: acme-echo, kind: connector, source: SRC, resolved: connectors/acme-echo/v1.0.0, sha256: " + sum + ", path: " + bin + ", manifest_schema: 2, pre_jail: true}\n"
 		}, false, false},

@@ -418,8 +418,11 @@ type Installed struct {
 	PreJail bool `yaml:"pre_jail,omitempty"`
 	// RanBeforeJail marks this build (not the plugin: unlike PreJail, a new
 	// build does not carry it) as one that ran before the plugin jail: a
-	// conductor without the jail installed it (its record was Legacy, or its
-	// binary predates the jail). Its declaration was written for a conductor
+	// conductor without the jail installed it, and its record is still in
+	// the format that conductor wrote (Legacy: a version 1 record not yet
+	// adopted, or one whose adoption could not describe the build). A
+	// binary's age is no evidence: a build a jailing conductor recorded
+	// already ran jailed, and stays jailed. Its declaration was written for a conductor
 	// that enforced none of it, so its record may lack what it uses (a key
 	// file it reads). It runs as it did before the jail (runsAsBefore), from
 	// its first launch, on any host, until a build installed under the jail
@@ -734,16 +737,18 @@ var jailEpoch = time.Date(2026, 11, 6, 23, 33, 54, 0, time.UTC)
 // a record a conductor without the jail wrote that is not adopted yet
 // (Legacy — a version 1 file, or a version 2 file whose adoption could not
 // describe the build, which is what a host that cannot jail left behind);
-// or a build whose binary predates the jail. That build itself is marked
-// RanBeforeJail. Idempotent; the marks are saved with the state, so they
+// or a build whose binary predates the jail. A record still in the format a
+// conductor without the jail wrote (Legacy) marks that build itself
+// RanBeforeJail; a binary's age alone does not: a build a jailing conductor
+// recorded already ran jailed. Idempotent; the marks are saved with the state, so they
 // outlive adoption and the old builds.
 func (s *InstallState) markPreJail() {
 	pre := map[string]bool{}
 	for i, r := range s.Plugins {
-		if r.Legacy || binaryBefore(r.Path, jailEpoch) {
+		if r.Legacy {
 			s.Plugins[i].RanBeforeJail = true
 		}
-		if r.PreJail || s.Plugins[i].RanBeforeJail {
+		if r.PreJail || s.Plugins[i].RanBeforeJail || binaryBefore(r.Path, jailEpoch) {
 			pre[r.Key+"\x00"+r.Source] = true
 		}
 	}

@@ -758,15 +758,17 @@ working setup):
   Its declaration was written for a conductor that enforced none of it, so
   its record may lack something it uses (a key file it reads), and jailing
   it would stop it working. So the build a conductor without the jail
-  installed (`ran_before_jail: true` in `installed.yaml`: its record came
-  from a version 1 file, or its binary predates the jail) runs from its
+  installed (`ran_before_jail: true` in `installed.yaml`: its record is
+  still in the format that conductor wrote, a version 1 record not yet
+  adopted or one whose adoption could not describe the build) runs from its
   first launch after the upgrade as it did then: unjailed, its environment
   scrubbed, its egress at conductor's proxy, its `PATH` narrowed to its
   declared commands. That is decided from install state alone, before it
   starts, so it holds with dependency updates off too. The log says
   `plugin <name>: running UNJAILED, as before the plugin jail … this build ran before the jail`.
-  The next build of it (an update that declares the same, or one you
-  approve) was installed under the jail, and runs jailed. To jail an old
+  A build a jailing conductor already recorded stays jailed, however old
+  its binary. The next build of it (an update that declares the same, or
+  one you approve) was installed under the jail, and runs jailed. To jail an old
   build sooner, update it: `conductor plugin update <name>`.
 - **`isolation:` on plugin connectors, runtimes and engines no longer
   applies.** The config loads, with a warning naming it; delete the block.
