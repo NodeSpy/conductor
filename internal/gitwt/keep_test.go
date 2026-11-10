@@ -59,3 +59,19 @@ func TestKeptWorktreeSurvivesRestartAndIsAdopted(t *testing.T) {
 		t.Fatal("adopted a directory outside <state>/worktrees")
 	}
 }
+
+// A worktree a live session of this process runs in is never adopted by
+// another: a kept worktree is one a previous daemon life left. Shared, the
+// first session's teardown removed it from under the second's agent.
+func TestLiveWorktreeIsNotAdoptedBySecondSession(t *testing.T) {
+	origin := originRepo(t)
+	p := newProv(t, origin)
+	ctx := context.Background()
+	id, _, err := p.ProvisionWorktree(ctx, prReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.AdoptWorktree(ctx, prReq(), id); err == nil {
+		t.Fatalf("a live session's worktree was adopted by another (%q)", got)
+	}
+}

@@ -357,6 +357,11 @@ func (d *detector) start() {
 					d.checkGit()
 				}
 				d.checkDisk()
+				if d.hasKilled() {
+					// The launch is killed: nothing of it is left to
+					// watch (close still sweeps for leftovers).
+					return
+				}
 			}
 		}
 	}()
@@ -503,6 +508,13 @@ func (d *detector) detected(kind, reason string, always bool) {
 	if kill {
 		d.killAll()
 	}
+}
+
+// hasKilled reports the watcher killed its launch.
+func (d *detector) hasKilled() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.killed
 }
 
 // report audits a detection once per kind and reason (every time when

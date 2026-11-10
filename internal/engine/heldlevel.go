@@ -84,7 +84,7 @@ func (e *Engine) holdLevel(ctx context.Context, t core.Trigger, act config.Actio
 	e.log("%s held — an agent is already working/parked for it; re-delivered when its run ends", tag(t))
 	// The run may have ended between the live check and the hold, in which
 	// case its end already found nothing to re-deliver. Look again.
-	if !e.hasLiveAgentFor(ctx, act, key, t.Kind) {
+	if !e.liveFor(ctx, t, act, key) {
 		e.redeliverHeld(key)
 	}
 	return true

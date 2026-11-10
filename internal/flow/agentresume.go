@@ -56,6 +56,25 @@ func (r *Runner) agentResume(ctx context.Context, t core.Trigger, id string, req
 		return func() {}
 	}
 	key := agentKey(ctx, id)
+	// Every run of one trigger on one target shares its run record, so a
+	// concurrent run's step finds the agent another run of this process is
+	// running under its own key. That agent is not this step's to resume —
+	// taking it adopted the other run's workspace, which that run then tore
+	// down — nor its record this step's to overwrite or drop: it runs a fresh
+	// agent, unrecorded. Only an agent no dispatch of this process runs (one
+	// a previous daemon life left) is resumed.
+	claim := runID + "\x00" + key
+	if r.liveAgents != nil {
+		if _, taken := r.liveAgents.LoadOrStore(claim, true); taken {
+			r.Log("%s step %s: another run of this trigger is running it on the same target — fresh agent, not resumed", flowTag(t), id)
+			return func() {}
+		}
+	}
+	release := func() {
+		if r.liveAgents != nil {
+			r.liveAgents.Delete(claim)
+		}
+	}
 	// The runtime the step runs on: a runtime that does not name itself in
 	// what it reports is recorded under it, and a step that moved to another
 	// runtime since never takes its old agent back.
@@ -94,6 +113,7 @@ func (r *Runner) agentResume(ctx context.Context, t core.Trigger, id string, req
 			Workspace: s.Workspace, Cwd: s.Cwd, CanResume: s.CanResume, Resumes: resumes, Started: time.Now()})
 	}
 	return func() {
+		defer release()
 		if !shuttingDown(ctx) {
 			_ = st.DeleteRunAgent(runID, key)
 		}

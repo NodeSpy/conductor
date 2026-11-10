@@ -238,6 +238,9 @@ type Runner struct {
 	// operator can Stop a running run (see cancel.go). A pointer so the Runner
 	// stays copyable by value (New takes one by value) without copying a lock.
 	cancelReg *cancelReg
+	// liveAgents are the agent steps this process is dispatching, by run
+	// record and step key (agentResume). A pointer for the same reason.
+	liveAgents *sync.Map
 }
 
 // New builds a Runner with defaults filled in.
@@ -262,6 +265,9 @@ func New(r Runner) *Runner {
 	}
 	if r.cancelReg == nil {
 		r.cancelReg = &cancelReg{}
+	}
+	if r.liveAgents == nil {
+		r.liveAgents = &sync.Map{}
 	}
 	return &r
 }
