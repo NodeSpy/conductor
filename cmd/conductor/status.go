@@ -15,6 +15,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/controller"
+	"github.com/NodeSpy/conductor/internal/plugin"
 )
 
 // cmdStatus prints a snapshot of what conductor is doing — read entirely from the
@@ -57,6 +58,20 @@ func cmdStatus(args []string) error {
 	fmt.Printf("\ntracked objects: %d  (retrying/backoff: %d)\n", len(recs), len(stuck))
 	for _, s := range stuck {
 		fmt.Printf("  %-34s %-16s %d attempts  (last %s)\n", s.key, s.kind, s.attempts, ago(s.last))
+	}
+
+	// Plugin updates waiting for the user's approval.
+	var held []plugin.Pending
+	for _, p := range plugin.LoadInstallState(plugin.InstallDir()).PendingUpdates() {
+		if p.Waiting() {
+			held = append(held, p)
+		}
+	}
+	if len(held) > 0 {
+		fmt.Printf("\nplugin updates waiting for your approval (%d) — `conductor plugin approve` lists them:\n", len(held))
+		for _, p := range held {
+			fmt.Printf("  %-18s %s -> %s: %s\n", p.Name, p.Replaces, p.Resolved, heldChange(p))
+		}
 	}
 
 	// Recent items that wanted your attention.

@@ -78,7 +78,11 @@ type Resolution struct {
 	// Widens, on a held update, is what the newer build asks for beyond the
 	// installed one.
 	Widens []string
-	Err    error
+	// Relaunch: an update of a build installed before the plugin jail was
+	// newly held this pass, so that build (the same binary) now runs as it
+	// did before the jail (runsAsBefore) and must be restarted to.
+	Relaunch bool
+	Err      error
 }
 
 // Changed reports whether this resolution moved anything on disk.
@@ -170,6 +174,12 @@ func Reconcile(refs map[string]config.PluginRef, state *InstallState, trust *con
 	sort.Strings(keys)
 
 	api = &pinnedTagCache{api: api, tags: map[string][]string{}}
+	waitingBefore := map[string]bool{}
+	for _, p := range state.PendingUpdates() {
+		if !p.Approved {
+			waitingBefore[p.Key+"\x00"+p.Source] = true
+		}
+	}
 
 	var (
 		results []Resolution
@@ -213,6 +223,19 @@ func Reconcile(refs map[string]config.PluginRef, state *InstallState, trust *con
 	// (see Options.Prune), the pass must not be scoped to one plugin, and a
 	// gaps-only pass touches nothing. A partial refs map is a subset of the
 	// desired set, and "absent from a subset" is not evidence of "unused".
+	// A pre-jail build whose update this pass newly held now runs as it did
+	// before the jail: ask for it to be restarted (Resolution.Relaunch).
+	for i, r := range results {
+		if r.Action != ActionHeld || waitingBefore[r.Key+"\x00"+r.Source] {
+			continue
+		}
+		if cur, ok := state.GetVersion(r.Key, r.Tag, r.Source); ok && cur.PreJail {
+			if p, held := state.HeldFor(r.Key, r.Source); held && !strings.EqualFold(p.Sha256, cur.Sha256) {
+				results[i].Relaunch = true
+			}
+		}
+	}
+
 	if opts.Prune && opts.Only == "" && !opts.GapsOnly {
 		dropped, err := state.GCVersions(keep)
 		if err != nil {
@@ -288,7 +311,7 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 	}
 
 	rs := RemoteSource{URL: ref.Use.GitURL(), Component: ref.Use.Component}
-	cacheDirFor := func(tag string) string { return BinDirForVersion(state.Dir(), key, tag, ref.Source()) }
+	cacheDirFor := func(tag, sha string) string { return stageDir(state, key, tag, ref.Source(), sha) }
 	binPath, tag, sha, verified, err := fetchRemoteChecked(rs, ref.Use.Version, "", cacheDirFor, api, refuseRepublished(state, key, ref.Source(), ref.Name, opts.Force))
 	if err != nil {
 		res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %w", ref.Name, err)
@@ -397,17 +420,14 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 		rec.Manifest, rec.ManifestSchema = manifestFromDecl(decl), manifestSchema
 	}
 	if res.Action == ActionUpdated {
-		// An update that asks for more than the user agreed to waits for
-		// them; the installed build keeps running meanwhile.
-		if w := prev.Manifest.Widens(rec.Manifest); len(w) > 0 && !state.accepts(rec) {
-			state.putPending(Pending{Installed: rec, Replaces: prev.Resolved, Widens: w})
-			res.Action, res.Widens = ActionHeld, w
+		// An update that changes what the user agreed to waits for them;
+		// the installed build keeps running meanwhile, exactly as it was.
+		if adds, removes := boundaryChange(prev.Manifest, rec.Manifest); (len(adds) > 0 || len(removes) > 0) && !state.approved(rec) {
+			state.putPending(Pending{Installed: rec, Replaces: prev.Resolved, Widens: adds, Removes: removes})
+			res.Action, res.Widens = ActionHeld, adds
 			res.Tag, res.Sha, res.Path, res.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
-			opts.logf("plugin %s: update %s -> %s HELD: it asks for more than %s — %s. The installed build keeps running; `conductor plugin approve %s` accepts it",
-				ref.Name, prev.Resolved, tag, prev.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, rec))
+			logHeldUpdate(opts, ref.Name, prev.Resolved, rec, adds, removes)
 			return res, true
-		} else if len(w) > 0 && !state.approved(rec) {
-			logAutoAccepted(opts, ref.Name, rec, prev.Resolved, w)
 		}
 	}
 	state.dropPending(rec.Key, rec.Source)
@@ -509,27 +529,34 @@ func adoptOlderRecord(ref config.PluginRef, rec Installed, state *InstallState, 
 	next.Legacy, next.ManifestSchema, next.Manifest = false, manifestSchema, m
 	cur := next
 	switch w := base.Widens(m); {
-	case len(w) == 0 || state.accepts(next):
+	case len(w) == 0 || state.approved(next):
 		state.Put(next)
-		if len(w) > 0 && !state.approved(next) {
-			logAutoAccepted(opts, ref.Name, next, replaces, w)
-		}
 		switch added := rec.Manifest.Widens(m); {
 		case rec.Legacy:
 			opts.logf("plugin %s: recorded what %s declares (its install record predates declared permissions, and it ran unconfined until now): %s", ref.Name, rec.Resolved, m.Summary())
 		case len(added) > 0:
 			opts.logf("plugin %s: recorded what %s declares that the conductor which installed it could not record: %s", ref.Name, rec.Resolved, strings.Join(added, "; "))
 		}
+	case rolled && binaryPresent(consented.Path) && consented.Sha256 != "":
+		// The build the user agreed to is still on disk: it runs again,
+		// as it was, and the one the older conductor installed is held.
+		state.deleteRecord(rec.Key, rec.Resolved, rec.Source)
+		cur = consented
+		cur.Legacy = false
+		state.Put(cur)
+		state.putPending(Pending{Installed: next, Replaces: replaces, Widens: w, Removes: m.Widens(base)})
+		opts.logf("plugin %s: WARNING: %s was installed by a conductor without the plugin jail (a rollback) and ran unconfined. It declares more than you agreed to for %s — %s. HELD: %s, which you agreed to, runs again; review it with `conductor plugin approve`, accept it with `conductor plugin approve %s`, or pin %s",
+			ref.Name, rec.Resolved, consented.Resolved, strings.Join(w, "; "), consented.Resolved, ApproveArg(ref.Name, next), consented.Resolved)
 	case rolled:
 		cur.Manifest = base
 		state.Put(cur)
-		state.putPending(Pending{Installed: next, Replaces: replaces, Widens: w})
+		state.putPending(Pending{Installed: next, Replaces: replaces, Widens: w, Removes: m.Widens(base)})
 		opts.logf("plugin %s: WARNING: %s was installed by a conductor without the plugin jail (a rollback) and ran unconfined. It declares more than you agreed to for %s — %s. HELD: it runs jailed to what you agreed to for %s; review it with `conductor plugin approve`, accept it with `conductor plugin approve %s`, or pin %s",
 			ref.Name, rec.Resolved, consented.Resolved, strings.Join(w, "; "), consented.Resolved, ApproveArg(ref.Name, next), consented.Resolved)
 	default:
 		cur.Manifest = base
 		state.Put(cur)
-		state.putPending(Pending{Installed: next, Replaces: replaces, Widens: w})
+		state.putPending(Pending{Installed: next, Replaces: replaces, Widens: w, Removes: m.Widens(base)})
 		opts.logf("plugin %s: %s declares more than its install record — %s. HELD: it runs jailed to the record; `conductor plugin approve %s` accepts it",
 			ref.Name, rec.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, next))
 	}
@@ -552,13 +579,11 @@ func recheckInstalled(ref config.PluginRef, prev Installed, state *InstallState,
 	if prev.ManifestSchema == manifestSchema && reflect.DeepEqual(m, prev.Manifest) {
 		return prev, nil, false
 	}
-	if w := prev.Manifest.Widens(m); len(w) > 0 && !state.accepts(next) {
-		state.putPending(Pending{Installed: next, Replaces: prev.Resolved, Widens: w})
-		opts.logf("plugin %s: %s declares more than its install record — %s. HELD: it keeps running jailed to the record; `conductor plugin approve %s` accepts it",
-			ref.Name, prev.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, next))
-		return prev, w, true
-	} else if len(w) > 0 && !state.approved(next) {
-		logAutoAccepted(opts, ref.Name, next, "its install record", w)
+	if adds, removes := boundaryChange(prev.Manifest, m); (len(adds) > 0 || len(removes) > 0) && !state.approved(next) {
+		state.putPending(Pending{Installed: next, Replaces: prev.Resolved, Widens: adds, Removes: removes})
+		opts.logf("plugin %s: %s now declares other than its install record — %s. HELD: it keeps running jailed to the record; `conductor plugin approve %s` accepts it",
+			ref.Name, prev.Resolved, changeText(adds, removes), ApproveArg(ref.Name, next))
+		return prev, adds, true
 	}
 	state.dropPending(next.Key, next.Source)
 	state.Put(next)
@@ -752,7 +777,7 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 		if !ok {
 			b = &bucketResult{}
 			buckets[bucketKey] = b
-			cacheDirFor := func(t string) string { return BinDirForVersion(state.Dir(), key, t, u.Source()) }
+			cacheDirFor := func(t, sha string) string { return stageDir(state, key, t, u.Source(), sha) }
 			binPath, _, sha, verified, ferr := fetchRemoteChecked(rs, u.Version, "", cacheDirFor, api, refuseRepublished(state, key, u.Source(), ref.Name, opts.Force))
 			if ferr != nil {
 				b.err = fmt.Errorf("plugin %s: %w", ref.Name, ferr)
@@ -931,16 +956,12 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 				// The same hold reconcileOne applies (approve.go).
 				if hadPrev {
 					rec, _ := state.GetVersion(key, res.Tag, res.Source)
-					if w := prev.Manifest.Widens(rec.Manifest); len(w) > 0 && !state.accepts(rec) {
+					if adds, removes := boundaryChange(prev.Manifest, rec.Manifest); (len(adds) > 0 || len(removes) > 0) && !state.approved(rec) {
 						undo()
-						state.putPending(Pending{Installed: rec, Replaces: prev.Resolved, Widens: w})
-						res.Action, res.Widens = ActionHeld, w
-						opts.logf("plugin %s: update %s -> %s HELD: it asks for more than %s — %s. The installed build keeps running; `conductor plugin approve %s` accepts it",
-							ref.Name, prev.Resolved, rec.Resolved, prev.Resolved, strings.Join(w, "; "), ApproveArg(ref.Name, rec))
+						state.putPending(Pending{Installed: rec, Replaces: prev.Resolved, Widens: adds, Removes: removes})
+						res.Action, res.Widens = ActionHeld, adds
+						logHeldUpdate(opts, ref.Name, prev.Resolved, rec, adds, removes)
 					} else {
-						if len(w) > 0 && !state.approved(rec) {
-							logAutoAccepted(opts, ref.Name, rec, prev.Resolved, w)
-						}
 						state.dropPending(key, res.Source)
 					}
 				}

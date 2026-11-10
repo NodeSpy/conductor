@@ -143,9 +143,10 @@ const (
 	PurposeBrowserWrite   Purpose = "browser.write"    // a wallet change that WIDENS (new profile/card, a binding, a site, a shop, a higher limit, an unfreeze)
 	PurposePurchase       Purpose = "browser.purchase" // approve/deny a purchase (digest = the purchase decision digest)
 	PurposeUpdateNow      Purpose = "update.apply"
-	PurposeRunReplay      Purpose = "run.replay"    // a forced retry: re-runs steps that already succeeded
-	PurposePackChange     Purpose = "pack.change"   // pack/plugin add/remove
-	PurposeEnrollSecond   Purpose = "enroll.second" // enrol another passkey
+	PurposeRunReplay      Purpose = "run.replay"     // a forced retry: re-runs steps that already succeeded
+	PurposePackChange     Purpose = "pack.change"    // pack/plugin add/remove
+	PurposePluginApprove  Purpose = "plugin.approve" // approve what a held plugin may do (digest = PluginApproveDigest)
+	PurposeEnrollSecond   Purpose = "enroll.second"  // enrol another passkey
 	PurposeKnowledgePromo Purpose = "knowledge.promote"
 	// PurposeCredential adds or removes a sign-in credential while signed in: a
 	// password, a TOTP authenticator, a passkey (digest = CredentialDigest(op, action)).

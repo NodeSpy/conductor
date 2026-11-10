@@ -1,12 +1,15 @@
 package dashboard
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"path"
 	"sort"
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/dashboard/api"
+	"github.com/NodeSpy/conductor/internal/dashboard/auth"
 )
 
 // Section reads (design §5.4): one derived shape per screen, read from the live
@@ -108,14 +111,26 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// What waits for approval is keyed by the plugin's implementation name:
+	// the last segment of its `use:` reference.
+	held := map[string]api.PluginHeld{}
+	if s.deps.PluginHeld != nil {
+		for _, h := range s.deps.PluginHeld() {
+			held[h.Name] = h
+		}
+	}
 	var resp api.PluginsResponse
 	for _, name := range sortedKeys(mapKeysToAny(plugins)) {
 		a := plugins[name]
 		sort.Strings(a.usedBy)
-		resp.Plugins = append(resp.Plugins, api.PluginInfo{
+		info := api.PluginInfo{
 			Name: name, Version: a.version, Pinned: a.pinned,
 			Builtin: builtinPlugins[name], UsedBy: a.usedBy,
-		})
+		}
+		if h, ok := held[path.Base(name)]; ok {
+			info.Held = &h
+		}
+		resp.Plugins = append(resp.Plugins, info)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -251,4 +266,112 @@ func splitUse(use string) (name, version string) {
 func versionFromUse(use string) string {
 	_, v := splitUse(use)
 	return v
+}
+
+// heldPlugin is the update waiting for the plugin named in the request, if
+// its declaration is the one the operator was shown; otherwise it writes the
+// refusal (nothing waits: 404; it changed since: 409).
+func (s *Server) heldPlugin(w http.ResponseWriter, r *http.Request) (api.PluginHeld, bool) {
+	name := r.PathValue("name")
+	var req api.ApprovePluginRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	for _, h := range s.deps.PluginHeld() {
+		if h.Name != name && h.Name != path.Base(name) {
+			continue
+		}
+		if req.Fingerprint != h.Fingerprint {
+			writeError(w, http.StatusConflict, "changed", "plugin "+name+": the update waiting for approval has changed since you looked; review it again", "")
+			return api.PluginHeld{}, false
+		}
+		return h, true
+	}
+	writeError(w, http.StatusNotFound, "not_held", "plugin "+name+": no update is waiting for approval", "")
+	return api.PluginHeld{}, false
+}
+
+// handlePluginApprove applies a held plugin update, as `conductor plugin
+// approve <name>` does: the held build replaces the running one. It is
+// exactly the update the operator was shown (its fingerprint), never one held
+// since. With sign-in on it needs a step-up bound to the plugin, the versions
+// and the change. The daemon then reloads, so the approved build runs.
+func (s *Server) handlePluginApprove(w http.ResponseWriter, r *http.Request) {
+	if s.deps.ApprovePlugin == nil || s.deps.PluginHeld == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "plugin approval is not available on this daemon", "")
+		return
+	}
+	held, ok := s.heldPlugin(w, r)
+	if !ok {
+		return
+	}
+	if s.authEnforced() {
+		sess, ok := auth.SessionFrom(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "sign in to continue", "")
+			return
+		}
+		digest := pluginApproveDigest(held)
+		if _, err := s.auth.RequireStepup(sess, auth.PurposePluginApprove, digest, r.Header.Get(auth.StepupHeader)); err != nil {
+			desc := auth.SafeText(pluginApproveDescription(held))
+			s.labels.note(r, auth.PurposePluginApprove, digest, desc)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":  map[string]string{"code": "stepup_required", "message": err.Error(), "hint": "confirm it's you to change what this plugin may do"},
+				"stepup": map[string]string{"purpose": string(auth.PurposePluginApprove), "digest": digest, "description": desc},
+			})
+			return
+		}
+	}
+	msg, err := s.deps.ApprovePlugin(held.Name, held.Fingerprint)
+	if err != nil {
+		writeError(w, http.StatusConflict, "approve_failed", err.Error(), "")
+		return
+	}
+	if s.deps.Reload != nil {
+		if err := s.deps.Reload(); err != nil {
+			msg += " — it runs at the next reload (" + err.Error() + ")"
+		} else {
+			msg += " — reloading to run it"
+		}
+	}
+	writeJSON(w, http.StatusOK, api.ActionResponse{Message: msg})
+}
+
+// handlePluginDecline keeps the running build instead of a held update, as
+// `conductor plugin decline <name>` does. It changes nothing that runs, so
+// the session suffices.
+func (s *Server) handlePluginDecline(w http.ResponseWriter, r *http.Request) {
+	if s.deps.DeclinePlugin == nil || s.deps.PluginHeld == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "plugin approval is not available on this daemon", "")
+		return
+	}
+	held, ok := s.heldPlugin(w, r)
+	if !ok {
+		return
+	}
+	msg, err := s.deps.DeclinePlugin(held.Name, held.Fingerprint)
+	if err != nil {
+		writeError(w, http.StatusConflict, "decline_failed", err.Error(), "")
+		return
+	}
+	writeJSON(w, http.StatusOK, api.ActionResponse{Message: msg})
+}
+
+// pluginApproveDescription says what approving h does, for the step-up.
+func pluginApproveDescription(h api.PluginHeld) string {
+	d := "replace plugin " + h.Name + " " + h.Running + " with " + h.Version
+	if len(h.Adds) > 0 {
+		d += "\nadds:\n  + " + strings.Join(h.Adds, "\n  + ")
+	}
+	if len(h.Removes) > 0 {
+		d += "\nremoves:\n  - " + strings.Join(h.Removes, "\n  - ")
+	}
+	return d
+}
+
+// pluginApproveDigest binds a plugin approval's step-up to the plugin, the
+// running and held versions, the declaration and the change.
+func pluginApproveDigest(h api.PluginHeld) string {
+	b, _ := json.Marshal(map[string]any{"v": "1", "ns": "conductor-dashboard-plugin-approve", "plugin": h.Name, "running": h.Running, "version": h.Version, "fingerprint": h.Fingerprint, "adds": h.Adds, "removes": h.Removes})
+	return auth.DigestOf(b)
 }

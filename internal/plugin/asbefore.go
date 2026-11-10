@@ -24,10 +24,18 @@ import (
 
 // runsAsBefore reports whether s runs unjailed as before the jail: the host
 // cannot jail plugins, and s was installed before the jail (or is the
-// operator's own local build, which never had an install record).
+// operator's own local build, which never had an install record). A build
+// installed before the jail also runs as before while an update of it is
+// held or declined (Spec.UpdateHeld), on any host: it is the build the user
+// keeps, and jailing it to a declaration its newer build outgrew (a build
+// that never declared a key file it reads) would stop it working until the
+// user approved the update. Once a build is approved, it runs jailed.
 func runsAsBefore(s Spec) (HostJail, bool) {
 	h := HostJailStatus()
-	return h, !h.OK && !s.TrustFull && (s.PreJail || s.Local)
+	if s.TrustFull {
+		return h, false
+	}
+	return h, (!h.OK && (s.PreJail || s.Local)) || (s.PreJail && s.UpdateHeld && !s.Probe)
 }
 
 func buildAsBefore(s Spec, sd SandboxDeps, argv []string) (cmd *exec.Cmd, cleanup func(), sandboxed bool, err error) {

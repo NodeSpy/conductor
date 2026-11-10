@@ -98,9 +98,8 @@ made for the bundled `webhook` connector (above). Remove its `trust: full`
 and it is refused conductor's own port, and the log names the delivery it
 refused. A smee connector you configure yourself for a `webhook` connector
 needs the same two keys. Outside a migration, an update of an older smee to
-v1.2.0 asks for `expose_local`. A verified release from the official repo
-takes it without a hold, and the log says so. Any other build is held until
-`conductor plugin approve`.
+v1.2.0 asks for `expose_local`, so it is held until `conductor plugin
+approve` (or the dashboard), and the smee build you have keeps running.
 
 **On a host that cannot jail plugins** (root, a default Docker container,
 user namespaces blocked; see [[Plugins]], "From a conductor that did not jail

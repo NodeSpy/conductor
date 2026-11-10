@@ -351,10 +351,11 @@ conductor init                     # install everything the config references
 conductor plugin list              # every connector + runtime, with ORIGIN and kind
 conductor plugin list --caps       # …and what each one declares
 conductor plugin show <name>       # one implementation's full surface
-conductor plugin add <ref>         # install, show the permissions, print the stub
+conductor plugin add <ref>         # install, show the permissions you agree to, print the stub
 conductor plugin update [name]     # bump everything unpinned, or just one
 conductor plugin update <name> --force  # take a re-published release (see below)
-conductor plugin approve [name@build]   # list held updates, or accept the one listed
+conductor plugin approve [name]    # list the updates waiting for approval, or apply one
+conductor plugin decline <name>    # keep the running build instead of its held update
 conductor plugin remove <name>     # drop it from install state and delete the binary
 conductor connectors ls            # each instance's resolved use:/origin
 ```
@@ -588,48 +589,70 @@ plugin show <name>` prints it for the build you have.
 A plugin that declares nothing reads as `nothing: …`, and gets nothing: no
 network, no files outside its own binary and staging dir, no commands.
 
-### Updates that ask for more
+### Updates that change what a plugin may do
 
-An auto-update whose declaration **widens** (any new destination, path,
-command, exec path, variable, listen address, Keychain access, or a new
-host for its OAuth endpoints) is **held**: the current version keeps
-running, and the daemon logs
+Installing a plugin is agreeing to what it declares: `conductor plugin add`
+and `conductor init` show it. After that, every update is compared with the
+build it would replace **before** it is installed:
+
+- **The same declaration**: the update replaces the running build, as
+  usual (live where it can be, see
+  [Keeping plugins current](#keeping-plugins-current)).
+- **A different declaration** (anything added or removed: a destination,
+  path, command, exec path, variable, listen address, Keychain access or
+  OAuth host): the update is **held**. The running build keeps running
+  exactly as it was, the same binary under the same install record, and its
+  connectors keep working. The new build is fetched, verified and staged in
+  a directory of its own, and never run until you approve it.
+
+That is the rule for every plugin, the official repo's included, and for
+every third-party source `plugin_trust` allows. A narrowing is held too: it
+still changes what the plugin does, and approving it is one command.
+
+The daemon logs
 
 ```
-plugin github: update v1.4.0 -> v1.5.0 HELD: it asks for more than v1.4.0 — connects to uploads.example.com:443. The installed build keeps running; `conductor plugin approve github@3c1f0a9e2b7d` accepts it
+plugin jira: update jira/v1.4.0 -> jira/v1.5.0 HELD: it changes what the plugin may do — adds: connects to uploads.example.com:443. jira/v1.4.0 keeps running as it is; `conductor plugin approve jira@3c1f0a9e2b7d` accepts it
 ```
 
-and sends a `plugin_update_held` notification once per held build.
+and sends it once, as a `plugin_update_held` notification (a
+`conductor.escalate` event, so a trigger alerting on escalations hears it),
+with the running and held versions and what it adds and removes; the audit
+log records it. A restart does not send it again. A newer release held in
+its place is sent anew, compared with the running build. Until you decide:
 
-A **verified release of an official plugin** (from
-`github.com/NodeSpy/conductor-plugins`, its binary matching the release's
-`checksums.txt`) is not held. It is installed like any update and runs
-jailed to its new declaration, and the daemon logs what it added:
-
-```
-plugin github: github/v1.5.0 asks for more than github/v1.4.0 — connects to uploads.example.com:443. Accepted without a hold: it is a verified release of the official plugin repo
-```
-
-That repo is already trusted with no `plugin_trust` entry. Holding its
-updates only left a plugin running jailed to a record its newer builds had
-outgrown. A third-party, local or unverified build is held as below. To
-review an official update before it runs, pin the plugin's version.
+- `conductor plugin list` marks the plugin `update <version> waiting for
+  approval`, with each `+` addition and `-` removal and the commands below;
+- `conductor status` lists it;
+- the dashboard's **Plugins & Connections** screen shows it first: running
+  version → held version, what it adds and removes, an **Approve** button
+  and a **Keep** button.
 
 ```bash
-conductor plugin approve                       # list held updates and what each adds
-conductor plugin approve github@3c1f0a9e2b7d   # accept that build; the daemon picks it up at the next reload
+conductor plugin approve                     # list what waits, what each adds and removes
+conductor plugin approve jira                # apply the update waiting for jira now
+conductor plugin approve jira@3c1f0a9e2b7d   # apply exactly the declaration listed
+conductor plugin decline jira                # keep the running build
 ```
 
-`approve` takes the plugin's name and the build it lists: a prefix of its
-sha, its tag (`github@github/v1.5.0`) or its version (`github@v1.5.0`). If
-an update pass held a different build since (a newer release that asks for
-more), that build is not approved: `approve` says what is waiting instead.
+Approving installs the held build in place of the running one; the daemon
+picks it up at its next reload (the dashboard reloads it for you). With
+dashboard sign-in on, approving there needs a passkey (or SSH) step-up
+bound to the plugin, both versions and the change. `jira@3c1f0a9e2b7d`
+names the declaration (a digest of what it may do), not the build: if an
+update pass held a different one since you looked, it is not approved, and
+`approve` says what is waiting instead. A build's sha prefix, tag or
+version still names it too.
 
-An update that narrows or keeps the declaration applies as usual.
+An approval is of a declaration: a newer build that declares the same as
+the one you approved installs without asking. Declining keeps the running
+build and stops asking about that declaration; a later release that
+declares something else is held and sent again, and `approve` still takes a
+declined one.
+
 Destinations compare as the jail grants them: a bare `api.example.com` is
-`api.example.com:443` on both sides, so it never covers another port.
-
-The same hold applies when you change a `use:` constraint or pin to a
+`api.example.com:443` on both sides, so it never covers another port. The
+same comparison applies when you change a `use:` constraint or pin to a
 version that is not installed yet: it is compared with the build you have.
 
 A release whose binary changed under a tag you have installed (its asset
@@ -641,17 +664,25 @@ plugin jira: release jira/v2.0.0 now publishes a different build (sha …) than 
 ```
 
 `conductor plugin update <name> --force` takes it, compared with the build
-it replaces: held when it declares more, and then **the plugin does not run
-at all** until you approve it: the new bytes replaced the installed ones on
-disk, so the installed record no longer verifies.
+it replaces like any update. The new bytes are staged beside the installed
+ones (`<version>+<sha>`), never over them, so a held re-publish leaves the
+running build intact.
 
 `conductor plugin update <name>` (and `--force`) also re-describes a build
-that is already current. If it now declares more than its record, that is
-held the same way (a verified official release is recorded instead); the
-running build stays jailed to its record until you approve.
+that is already current. If it now declares other than its record, that is
+held the same way; the running build stays jailed to its record until you
+approve.
 
-Held updates are kept in install state, so they survive restarts, and
-`conductor plugin approve` (its own process) finds them.
+A build installed by a conductor that did not jail plugins (`pre_jail`, see
+[Upgrading](#upgrading)) runs as it did before, unjailed with its
+environment scrubbed and its egress at the proxy, for as long as an update
+of it is held or declined: its record may lack what it needs, and the
+update that declares it is the one waiting for you. Approving the update
+jails it to the new declaration.
+
+What waits for approval, what you declined, and whether it was announced
+are kept in install state, so they survive restarts, and `conductor plugin
+approve` (its own process) finds them.
 
 ### Narrowing, and opting out
 
@@ -741,7 +772,7 @@ working setup):
   is recorded without asking: the build ran with it unconfined, so this
   only narrows it. What it did hold is compared: a build that now declares
   more egress, commands, env, OAuth endpoints or `single_process` is held
-  like an update, and runs jailed to the record. The log says
+  like an update, and runs as it did before the jail until you approve it. The log says
   `plugin github: recorded what … declares (its install record predates declared permissions, …)`.
   Only records loaded from a version 1 file are adopted this way; the file
   is written back as version 2.
@@ -764,8 +795,9 @@ working setup):
   older conductor dropped are restored when their binary is still there,
   and a build it installed meanwhile (the newest release, which may be an
   update the jail held) is compared with what you last agreed to: when it
-  declares more it is held again, runs jailed to that agreement, and is
-  logged as a `WARNING` naming what it adds.
+  declares more it is held again and logged as a `WARNING` naming what it
+  adds, and the build you agreed to runs again when its binary is still
+  there (otherwise the newer one runs jailed to that agreement).
 - **`network: []` narrows nothing**, as before: the plugin gets every
   destination it declares. A config that has one loads, with a warning; list
   the destinations to narrow it. `allow_env: []` passes none, as it always

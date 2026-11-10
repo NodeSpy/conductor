@@ -724,6 +724,11 @@ func TestRollbackReinstalledHeldBuildIsHeldAgain(t *testing.T) {
 			if s := cur.Manifest.Summary(); strings.Contains(s, "~/.ssh") || strings.Contains(s, "evil.example.com") {
 				t.Fatalf("runs %s with %s, want what the user agreed to for jira/v1.0.0", cur.Resolved, s)
 			}
+			// The build the user agreed to runs again, not the one the older
+			// conductor installed under its record.
+			if cur.Resolved != "jira/v1.0.0" || !binaryPresent(cur.Path) {
+				t.Fatalf("runs %s, want jira/v1.0.0 back", cur.Resolved)
+			}
 			p := st.PendingUpdates()
 			if len(p) != 1 || p[0].Resolved != "jira/v2.0.0" || p[0].Replaces != "jira/v1.0.0" {
 				t.Fatalf("pending %+v, want jira/v2.0.0 held against jira/v1.0.0", p)
@@ -734,7 +739,7 @@ func TestRollbackReinstalledHeldBuildIsHeldAgain(t *testing.T) {
 				}
 			}
 			all := strings.Join(logs, "\n")
-			for _, want := range []string{"WARNING: jira/v2.0.0 was installed by a conductor without the plugin jail", "HELD: it runs jailed to what you agreed to for jira/v1.0.0", "plugin approve " + ApproveArg("jira", p[0].Installed)} {
+			for _, want := range []string{"WARNING: jira/v2.0.0 was installed by a conductor without the plugin jail", "HELD: jira/v1.0.0, which you agreed to, runs again", "plugin approve " + ApproveArg("jira", p[0].Installed)} {
 				if !strings.Contains(all, want) {
 					t.Errorf("logs lack %q:\n%s", want, all)
 				}
@@ -743,11 +748,11 @@ func TestRollbackReinstalledHeldBuildIsHeldAgain(t *testing.T) {
 	}
 }
 
-// `plugin approve` accepts the build the user was shown, named by its sha
-// or tag: an update held after the listing (the periodic pass replaced the
-// held one with a newer, wider build) is not approved by an approval of
-// the one listed, and a bare name approves nothing.
-func TestApproveAcceptsOnlyTheListedBuild(t *testing.T) {
+// `plugin approve` approves what the user was shown: a declaration, named
+// by its fingerprint (or a bare name: what is held now). A declaration held
+// after the listing (the periodic pass replaced the held build with a
+// newer, wider one) is not approved by an approval of the one listed.
+func TestApproveAcceptsOnlyTheListedDeclaration(t *testing.T) {
 	ref := refFor(t, config.UseKindConnector, "acme/plugins/jira")
 	refs := map[string]config.PluginRef{ref.Key(): ref}
 	st := stateAt(t)
@@ -761,9 +766,6 @@ func TestApproveAcceptsOnlyTheListedBuild(t *testing.T) {
 	if len(listed) != 1 || listed[0].Resolved != "jira/v2.0.0" {
 		t.Fatalf("pending %+v", listed)
 	}
-	if _, err := st.Approve("jira"); err == nil || !strings.Contains(err.Error(), ApproveArg("jira", listed[0].Installed)) {
-		t.Fatalf("bare name: %v, want refused naming the build to approve", err)
-	}
 
 	// The periodic pass holds a newer build that asks for even more.
 	api3 := stubFor("jira", "jira/v1.0.0", "jira/v2.0.0", "jira/v3.0.0")
@@ -773,7 +775,7 @@ func TestApproveAcceptsOnlyTheListedBuild(t *testing.T) {
 		t.Fatalf("pending %+v, want jira/v3.0.0 held in its place", p)
 	}
 	for _, arg := range []string{ApproveArg("jira", listed[0].Installed), "jira@jira/v2.0.0", "jira@v2.0.0"} {
-		if _, err := st.Approve(arg); err == nil || !strings.Contains(err.Error(), "is not the update waiting") {
+		if _, err := st.Approve(arg); err == nil || !strings.Contains(err.Error(), "is not what is waiting") {
 			t.Errorf("approve %s: %v, want refused", arg, err)
 		}
 	}
@@ -783,6 +785,9 @@ func TestApproveAcceptsOnlyTheListedBuild(t *testing.T) {
 	shown := st.PendingUpdates()[0]
 	done, err := st.Approve(ApproveArg("jira", shown.Installed))
 	if err != nil || len(done) != 1 || done[0].Sha256 != shown.Sha256 {
-		t.Fatalf("approve the shown build: %+v %v", done, err)
+		t.Fatalf("approve the shown declaration: %+v %v", done, err)
+	}
+	if cur, _ := st.Get("connectors/jira"); cur.Resolved != "jira/v3.0.0" {
+		t.Fatalf("installed %s, want jira/v3.0.0", cur.Resolved)
 	}
 }

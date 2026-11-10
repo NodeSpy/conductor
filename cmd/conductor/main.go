@@ -231,10 +231,11 @@ usage:
   conductor plugin list                 list plugins: bundled connectors/runtimes + external
   conductor plugin show <name>          a plugin's surface (Decl + capability/credential disclosure)
   conductor plugin update [name] [--force]  re-resolve plugins; --force also takes an exact pin's
-                                        re-published release: if it asks for more it is held, and the
-                                        plugin does not run until plugin approve accepts it (its bytes replaced
-                                        the installed ones)
-  conductor plugin approve [name@build] list held updates, or accept the one listed (its sha or tag)
+                                        re-published release (staged beside the installed build; held like
+                                        any update that changes what the plugin may do)
+  conductor plugin approve [name@fp]    list updates waiting for approval, or apply one: the held
+                                        build replaces the running one
+  conductor plugin decline <name>       keep the running build instead of its held update
   conductor plugin remove <name>        how to remove an external plugin from your plugins: block
   conductor schema <connector>          print a connector's event/filter/verb/option schemas
   conductor secrets check               resolve every secret reference and report
@@ -862,6 +863,12 @@ func cmdRun(args []string) error {
 	if jailWarning != "" {
 		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "plugins", Kind: "jail"}, jailWarning)
 	}
+	// A plugin waiting for the user's approval of what it may do is
+	// announced once (held.go): here, and after every reconcile pass.
+	setHeldNotifier(func(msg string) {
+		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "updater", Kind: "plugin_update_held"}, msg)
+	})
+	announceHeld()
 	// Shared "never reap" set for interactive hand-off agents: the engine registers
 	// a background step's agent at launch; the reaper skips anything in it.
 	hold := dispatch.NewHoldSet(filepath.Join(filepath.Dir(cfg.Store.StateFile), "holds.json"))
@@ -1183,6 +1190,11 @@ func cmdRun(args []string) error {
 			Validate:   validateConfigFile,
 			Reload:     func() error { return signalReload(cfg) },
 			AuditPath:  cfg.Store.AuditLog,
+			// The Plugins screen lists plugin updates waiting for approval,
+			// and approves or declines them (held.go).
+			PluginHeld:    dashboardPluginHeld,
+			ApprovePlugin: dashboardApprovePlugin,
+			DeclinePlugin: dashboardDeclinePlugin,
 			// Auth (design §6): operators gate sign-in; the approval bridge feeds
 			// a WebAuthn-authenticated decision into the same Executor.Decide the
 			// CLI uses (botCtl is wired just below, so the callbacks resolve it per

@@ -824,9 +824,12 @@ models:
 # plugin, SHOWS it to you (`conductor plugin add`, `plugin show`, `plugin list
 # --caps`, the boot log), and runs the plugin JAILED to exactly that (Linux:
 # namespaces + egress proxy; macOS: Seatbelt). Anything undeclared is denied.
-# An auto-update that asks for more is held until `conductor plugin approve
-# <name>`, unless it is a verified release of an official plugin: that one is
-# installed, and what it added is logged. Config can only narrow, or opt a
+# Installing a plugin is agreeing to that. An update that declares the same
+# replaces the running build; one that changes it (adds or removes anything),
+# from any source, the official repo included, is held: the running build
+# keeps running as it is until you approve the update (`conductor plugin
+# approve <name>`, or the dashboard) or decline it (`conductor plugin decline
+# <name>`). Config can only narrow, or opt a
 # plugin out of its jail:
 #
 # connectors:

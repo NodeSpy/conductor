@@ -751,11 +751,13 @@ rest:
 // cmdPlugin implements `conductor plugin list|show|add|update|remove`.
 func cmdPlugin(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: conductor plugin list|show <name>|add <ref>|update [name] [--force]|approve [<name>@<sha or tag>]|remove <name>")
+		return fmt.Errorf("usage: conductor plugin list|show <name>|add <ref>|update [name] [--force]|approve [<name>[@<fingerprint>]]|decline <name>|remove <name>")
 	}
 	switch args[0] {
 	case "approve":
 		return cmdPluginApprove(args[1:])
+	case "decline":
+		return cmdPluginDecline(args[1:])
 	case "list", "ls":
 		return cmdPluginList(args[1:])
 	case "show":
@@ -767,7 +769,7 @@ func cmdPlugin(args []string) error {
 	case "update":
 		return cmdPluginUpdate(args[1:])
 	default:
-		return fmt.Errorf("unknown plugin subcommand %q (list|show|add|update|approve|remove)", args[0])
+		return fmt.Errorf("unknown plugin subcommand %q (list|show|add|update|approve|decline|remove)", args[0])
 	}
 }
 
@@ -863,7 +865,20 @@ func cmdPluginList(args []string) error {
 			sort.Strings(insts)
 			name = fmt.Sprintf("%s (%s)", ref.Name, strings.Join(insts, ","))
 		}
-		fmt.Printf("%-18s %-10s %-9s %-14s %s\n", name, ref.Kind(), ref.Use.Origin, ver, pluginStatus(spec))
+		status := pluginStatus(spec)
+		held, waiting := plugin.Pending{}, false
+		if !spec.Local {
+			held, waiting = state.HeldFor(ref.Use.InstallKey(), ref.Source())
+		}
+		if waiting {
+			status += " — update " + held.Resolved + " waiting for approval"
+		}
+		fmt.Printf("%-18s %-10s %-9s %-14s %s\n", name, ref.Kind(), ref.Use.Origin, ver, status)
+		if waiting {
+			for _, l := range heldLines(held) {
+				fmt.Printf("%-18s   %s\n", "", l)
+			}
+		}
 		if caps {
 			fmt.Printf("%-18s   use: %s\n", "", ref.Use.String())
 			fmt.Printf("%-18s   permissions:\n", "")
@@ -999,7 +1014,7 @@ func cmdPluginUpdate(args []string) error {
 		}
 	}
 	if len(only) > 1 {
-		return fmt.Errorf("usage: conductor plugin update [name] [--force] — --force re-resolves an exact pin and takes a re-published release; one that asks for more is held, and the plugin does not run until `conductor plugin approve` accepts it (its new bytes replaced the installed ones)")
+		return fmt.Errorf("usage: conductor plugin update [name] [--force] — --force re-resolves an exact pin and takes a re-published release; one that changes what the plugin may do is held, and the running build keeps running until `conductor plugin approve` applies it")
 	}
 	if len(only) == 1 {
 		opts.Only = only[0]
@@ -1092,6 +1107,16 @@ func cmdPluginAdd(args []string) error {
 		return fmt.Errorf("plugin %s: expected exactly one resolution, got %d", u.Name, len(results))
 	}
 	manifest := results[0].Manifest
+	if results[0].Action == plugin.ActionHeld {
+		// Already installed, and the build this add resolved changes what
+		// it may do: held, like any such update.
+		if held, ok := state.HeldFor(u.InstallKey(), pr.Source()); ok {
+			fmt.Println()
+			for _, l := range heldLines(held) {
+				fmt.Println(l)
+			}
+		}
+	}
 	fmt.Printf("\n%s runs jailed to what it declares. By adding it you agree that it may:\n", u.Name)
 	for _, l := range manifest.Lines() {
 		fmt.Printf("  %s\n", l)
@@ -1099,7 +1124,7 @@ func cmdPluginAdd(args []string) error {
 	for _, l := range plugin.HereLines(plugin.Spec{Name: u.Name, Manifest: manifest}) {
 		fmt.Printf("  %s\n", l)
 	}
-	fmt.Println("Anything else is denied. An update that asks for more waits for `conductor plugin approve`.")
+	fmt.Println("Anything else is denied. An update that declares the same installs as usual; one that changes this waits for `conductor plugin approve`.")
 	fmt.Println("\nAdd it to your config:")
 	fmt.Print("\n" + useSnippet(kind, instance, ref))
 	return nil
@@ -1322,6 +1347,75 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 	return nil
 }
 
+// heldLines renders an update waiting for approval: the running and held
+// versions, what it adds and removes, and how to approve or decline it.
+func heldLines(p plugin.Pending) []string {
+	lines := []string{fmt.Sprintf("%s: update %s -> %s changes what it may do; %s keeps running as it is until you approve it:", p.Name, p.Replaces, p.Resolved, p.Replaces)}
+	for _, w := range p.Widens {
+		lines = append(lines, "  + "+w)
+	}
+	for _, r := range p.Removes {
+		lines = append(lines, "  - "+r)
+	}
+	return append(lines,
+		"  approve with: conductor plugin approve "+plugin.ApproveArg(p.Name, p.Installed),
+		"  keep "+p.Replaces+" with: conductor plugin decline "+p.Name)
+}
+
+// logApproved logs the user's approval of a held update; by says through
+// what ("the user", "the dashboard").
+func logApproved(p plugin.Pending, by string) {
+	logf("plugin %s: %s approved update %s -> %s, which changes what it may do: %s", p.Name, by, p.Replaces, p.Resolved, heldChange(p))
+}
+
+// logDeclined logs the user's decline of a held update.
+func logDeclined(p plugin.Pending, by string) {
+	logf("plugin %s: %s declined update %s -> %s (%s); %s keeps running", p.Name, by, p.Replaces, p.Resolved, heldChange(p), p.Replaces)
+}
+
+// heldChange is what a held update adds and removes, in one line.
+func heldChange(p plugin.Pending) string {
+	var parts []string
+	if len(p.Widens) > 0 {
+		parts = append(parts, "adds "+strings.Join(p.Widens, "; "))
+	}
+	if len(p.Removes) > 0 {
+		parts = append(parts, "removes "+strings.Join(p.Removes, "; "))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// cmdPluginDecline implements `conductor plugin decline <name>`: keep the
+// installed build instead of the update waiting for approval. The held build
+// is not installed, and that declaration is not asked about again.
+func cmdPluginDecline(args []string) error {
+	_, rest, err := loadConfigRest(args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		return fmt.Errorf("usage: conductor plugin decline <name>")
+	}
+	lock, err := plugin.LockInstallStateCLI(plugin.InstallDir(), pluginLockCLITimeout, lockWaitNotice)
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	done, err := state.Decline(rest[0])
+	if err != nil {
+		return err
+	}
+	if err := state.Save(); err != nil {
+		return err
+	}
+	for _, p := range done {
+		fmt.Printf("declined %s %s: %s keeps running. A later update that declares something else is asked about again; `conductor plugin approve %s` still takes this one.\n", p.Name, p.Resolved, p.Replaces, p.Name)
+		logDeclined(p, "the user")
+	}
+	return nil
+}
+
 // cmdPluginRemove drops a plugin from local install state and deletes its
 // installed binary. It does NOT touch the config: the reference is the
 // declaration, so removing it there is the operator's edit to make.
@@ -1341,15 +1435,21 @@ func cmdPluginApprove(args []string) error {
 	defer lock.Unlock()
 	state := plugin.LoadInstallState(plugin.InstallDir())
 	if len(rest) == 0 {
-		pending := state.PendingUpdates()
-		if len(pending) == 0 {
-			fmt.Println("no plugin update is waiting for approval")
-			return nil
+		var waiting, declined []plugin.Pending
+		for _, p := range state.PendingUpdates() {
+			switch {
+			case p.Waiting():
+				waiting = append(waiting, p)
+			case p.Declined:
+				declined = append(declined, p)
+			}
 		}
-		for _, p := range pending {
-			fmt.Printf("%s %s (replacing %s) asks for more:\n", p.Name, p.Resolved, p.Replaces)
-			for _, w := range p.Widens {
-				fmt.Printf("  + %s\n", w)
+		if len(waiting) == 0 {
+			fmt.Println("no plugin update is waiting for approval")
+		}
+		for _, p := range waiting {
+			for _, l := range heldLines(p) {
+				fmt.Println(l)
 			}
 			fmt.Printf("  its full declaration:\n")
 			for _, l := range p.Manifest.Lines() {
@@ -1358,12 +1458,14 @@ func cmdPluginApprove(args []string) error {
 			for _, l := range plugin.HereLines(plugin.Spec{Name: p.Name, Manifest: p.Manifest}) {
 				fmt.Printf("    %s\n", l)
 			}
-			fmt.Printf("  approve with: conductor plugin approve %s\n", plugin.ApproveArg(p.Name, p.Installed))
+		}
+		for _, p := range declined {
+			fmt.Printf("declined: %s %s (%s keeps running); `conductor plugin approve %s` still takes it\n", p.Name, p.Resolved, p.Replaces, p.Name)
 		}
 		return nil
 	}
 	if len(rest) != 1 {
-		return fmt.Errorf("usage: conductor plugin approve [<name>@<sha or tag>]")
+		return fmt.Errorf("usage: conductor plugin approve [<name>[@<fingerprint>]]")
 	}
 	done, err := state.Approve(rest[0])
 	if err != nil {
@@ -1373,11 +1475,8 @@ func cmdPluginApprove(args []string) error {
 		return err
 	}
 	for _, p := range done {
-		fmt.Printf("approved %s %s (replacing %s), which also may:\n", p.Name, p.Resolved, p.Replaces)
-		for _, w := range p.Widens {
-			fmt.Printf("  + %s\n", w)
-		}
-		logf("plugin %s: the user approved %s, which asks for more than %s: %s", p.Name, p.Resolved, p.Replaces, strings.Join(p.Widens, "; "))
+		fmt.Printf("approved %s %s, replacing %s: %s\n", p.Name, p.Resolved, p.Replaces, heldChange(p))
+		logApproved(p, "the user")
 	}
 	fmt.Println("\nA running daemon picks it up at its next reload (`conductor reload`) or restart.")
 	return nil
@@ -1470,6 +1569,14 @@ const pluginLockCLITimeout = 10 * time.Minute
 func lockWaitNotice(msg string) { logf("plugin: %s", msg) }
 
 func reconcilePlugins(cfg *config.Config, opts plugin.Options, cli bool) ([]plugin.Resolution, error) {
+	res, err := reconcilePluginsLocked(cfg, opts, cli)
+	// Anything this pass held for approval is announced (once) by the
+	// daemon; a CLI command has no notifier, and leaves it to the daemon.
+	announceHeld()
+	return res, err
+}
+
+func reconcilePluginsLocked(cfg *config.Config, opts plugin.Options, cli bool) ([]plugin.Resolution, error) {
 	reconcileMu.Lock()
 	defer reconcileMu.Unlock()
 	// Finding 6: reconcileMu only serializes THIS process's own goroutines.
@@ -1542,6 +1649,8 @@ func printResolutions(results []plugin.Resolution) error {
 			fmt.Printf("  %-20s %-11s %s (sha %s -> %s)\n", r.Name, r.Action, r.Tag, shortSha(r.PrevSha), shortSha(r.Sha))
 		case plugin.ActionLocal:
 			fmt.Printf("  %-20s %-11s %s\n", r.Name, r.Action, r.Path)
+		case plugin.ActionHeld:
+			fmt.Printf("  %-20s %-11s %s keeps running; an update waits for your approval (`conductor plugin approve %s`)\n", r.Name, r.Action, r.Tag, r.Name)
 		default:
 			fmt.Printf("  %-20s %-11s %s (%s)\n", r.Name, r.Action, r.Tag, shortSha(r.Sha))
 		}

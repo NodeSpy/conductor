@@ -34,6 +34,7 @@ const purposeLabel: Record<string, string> = {
   'update.apply': 'Apply an update',
   'run.replay': 'Re-run steps of a run that already ran',
   'pack.change': 'Add or remove a pack or plugin',
+  'plugin.approve': 'Approve a plugin update that changes what it may do',
 }
 
 // prettyAction renders an action for reading: JSON indented, a JSON string

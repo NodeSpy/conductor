@@ -1265,6 +1265,9 @@ func (c *Client) Reload(newSpec Spec) error {
 	c.spec.BinPath = newSpec.BinPath
 	c.spec.Sha256 = newSpec.Sha256
 	c.spec.Resolved = newSpec.Resolved
+	// How it launches (as before the jail while its update is held) is read
+	// only at dial, under mu, like the binary.
+	c.spec.UpdateHeld = newSpec.UpdateHeld
 	c.digest = ""
 	c.starts = nil
 	c.totalStart = 0

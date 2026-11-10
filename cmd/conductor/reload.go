@@ -62,7 +62,7 @@ func reloadMoved(cfg *config.Config, mgr *plugin.Manager, reg *connector.Registr
 	}
 	var todo []pending
 	for _, r := range moved {
-		if !r.Changed() {
+		if !r.Changed() && !r.Relaunch {
 			continue
 		}
 		ref, ok := refs[r.GroupKey]

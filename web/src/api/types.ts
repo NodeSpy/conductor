@@ -425,6 +425,31 @@ export interface PluginInfo {
   pinned: boolean; // true when a @version is set (the version policy)
   builtin: boolean; // a conductor built-in, not fetched
   used_by: string[]; // the connector/runtime names using it
+  /**
+   * Held is an update waiting for the operator's approval because it
+   * changes what the plugin may do. Absent when nothing is waiting.
+   */
+  held?: PluginHeld;
+}
+/**
+ * PluginHeld is a plugin update held until the operator approves it: the
+ * running build keeps running, exactly as it is, until then.
+ */
+export interface PluginHeld {
+  name: string; // the plugin's implementation name
+  running: string; // the build that keeps running
+  version: string; // the held build
+  fingerprint: string; // names what it declares; approve/decline send it back
+  adds?: string[]; // what it may do that the running build may not, in the jail's words
+  removes?: string[]; // what the running build may do that it no longer declares
+}
+/**
+ * ApprovePluginRequest is POST /api/v1/plugins/{name}/approve (the held
+ * build replaces the running one) and /decline (the running one stays): the
+ * held update the operator was shown, by its declaration's fingerprint.
+ */
+export interface ApprovePluginRequest {
+  fingerprint: string;
 }
 /**
  * ConnectionsResponse is GET /api/v1/connections: connectors, runtimes and hosts

@@ -416,6 +416,12 @@ type Installed struct {
 	// runs as it did before the jail (runsAsBefore); a host that can jails
 	// it like any other.
 	PreJail bool `yaml:"pre_jail,omitempty"`
+	// UpdateHeld marks the installed record of a plugin with an update that
+	// is held or declined (computed at load, never saved). A pre-jail build
+	// in that state keeps running as it did before the jail
+	// (runsAsBefore): it is the build the user keeps, and jailing it to a
+	// declaration its newer build outgrew would stop it doing its work.
+	UpdateHeld bool `yaml:"-"`
 	// ReleaseVerified records that Sha256 was VERIFIED against the release at
 	// install — the release's checksums.txt listed the asset with this sha —
 	// rather than merely computed from whatever was downloaded. Absent on
@@ -450,6 +456,19 @@ func InstallDir() string {
 		return ""
 	}
 	return filepath.Join(sd, "plugins")
+}
+
+// stageDir is where a fetched build of key at tag from source, with sha,
+// goes: its version directory (BinDirForVersion), or, when a different build
+// of that same release is installed (a re-published asset taken with
+// --force), a sibling directory of its own, so the installed (possibly
+// running) binary is never overwritten by a build that may yet be held.
+func stageDir(s *InstallState, key, tag, source, sha string) string {
+	dir := BinDirForVersion(s.Dir(), key, tag, source)
+	if r, ok := s.GetVersion(key, tag, source); ok && r.Sha256 != "" && !strings.EqualFold(r.Sha256, sha) && len(sha) >= 12 {
+		return dir + "+" + strings.ToLower(sha[:12])
+	}
+	return dir
 }
 
 // BinDirFor is a plugin KEY's installation directory: <install-dir>/<key> —
@@ -700,7 +719,25 @@ func LoadInstallState(dir string) *InstallState {
 		s.restoreConsented()
 	}
 	s.markPreJail()
+	s.markUpdateHeld()
 	return s
+}
+
+// markUpdateHeld sets Installed.UpdateHeld on each installed record with an
+// update held, or declined, for its plugin.
+func (s *InstallState) markUpdateHeld() {
+	held := map[string]string{}
+	for _, p := range s.Pending {
+		if !p.Approved {
+			held[p.Key+"\x00"+p.Source] = p.Sha256
+		}
+	}
+	// Never the held build itself: a record running the held binary (the
+	// re-describe of a current build) keeps its jail as it was.
+	for i, r := range s.Plugins {
+		sha, ok := held[r.Key+"\x00"+r.Source]
+		s.Plugins[i].UpdateHeld = ok && !strings.EqualFold(sha, r.Sha256)
+	}
 }
 
 // jailEpoch is when the first conductor with the plugin jail was tagged: a
@@ -752,7 +789,7 @@ func (s *InstallState) MarkPreJail(key string) bool {
 // plugin jail (this host cannot jail plugins, and rec predates the jail),
 // where trust: full is not set.
 func RunsAsBefore(rec Installed) bool {
-	_, before := runsAsBefore(Spec{PreJail: rec.PreJail})
+	_, before := runsAsBefore(Spec{PreJail: rec.PreJail, UpdateHeld: rec.UpdateHeld})
 	return before
 }
 
