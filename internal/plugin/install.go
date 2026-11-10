@@ -416,6 +416,18 @@ type Installed struct {
 	// runs as it did before the jail (runsAsBefore); a host that can jails
 	// it like any other.
 	PreJail bool `yaml:"pre_jail,omitempty"`
+	// RanBeforeJail marks this build (not the plugin: unlike PreJail, a new
+	// build does not carry it) as one that ran before the plugin jail: a
+	// conductor without the jail installed it, and its record is still in
+	// the format that conductor wrote (Legacy: a version 1 record not yet
+	// adopted, or one whose adoption could not describe the build). A
+	// binary's age is no evidence: a build a jailing conductor recorded
+	// already ran jailed, and stays jailed. Its declaration was written for a conductor
+	// that enforced none of it, so its record may lack what it uses (a key
+	// file it reads). It runs as it did before the jail (runsAsBefore), from
+	// its first launch, on any host, until a build installed under the jail
+	// replaces it. Saved, since adoption clears Legacy.
+	RanBeforeJail bool `yaml:"ran_before_jail,omitempty"`
 	// ReleaseVerified records that Sha256 was VERIFIED against the release at
 	// install — the release's checksums.txt listed the asset with this sha —
 	// rather than merely computed from whatever was downloaded. Absent on
@@ -450,6 +462,19 @@ func InstallDir() string {
 		return ""
 	}
 	return filepath.Join(sd, "plugins")
+}
+
+// stageDir is where a fetched build of key at tag from source, with sha,
+// goes: its version directory (BinDirForVersion), or, when a different build
+// of that same release is installed (a re-published asset taken with
+// --force), a sibling directory of its own, so the installed (possibly
+// running) binary is never overwritten by a build that may yet be held.
+func stageDir(s *InstallState, key, tag, source, sha string) string {
+	dir := BinDirForVersion(s.Dir(), key, tag, source)
+	if r, ok := s.GetVersion(key, tag, source); ok && r.Sha256 != "" && !strings.EqualFold(r.Sha256, sha) && len(sha) >= 12 {
+		return dir + "+" + strings.ToLower(sha[:12])
+	}
+	return dir
 }
 
 // BinDirFor is a plugin KEY's installation directory: <install-dir>/<key> —
@@ -712,12 +737,18 @@ var jailEpoch = time.Date(2026, 11, 6, 23, 33, 54, 0, time.UTC)
 // a record a conductor without the jail wrote that is not adopted yet
 // (Legacy — a version 1 file, or a version 2 file whose adoption could not
 // describe the build, which is what a host that cannot jail left behind);
-// or a build whose binary predates the jail. Idempotent; the mark is saved
-// with the state, so it outlives the old builds.
+// or a build whose binary predates the jail. A record still in the format a
+// conductor without the jail wrote (Legacy) marks that build itself
+// RanBeforeJail; a binary's age alone does not: a build a jailing conductor
+// recorded already ran jailed. Idempotent; the marks are saved with the state, so they
+// outlive adoption and the old builds.
 func (s *InstallState) markPreJail() {
 	pre := map[string]bool{}
-	for _, r := range s.Plugins {
-		if r.PreJail || r.Legacy || binaryBefore(r.Path, jailEpoch) {
+	for i, r := range s.Plugins {
+		if r.Legacy {
+			s.Plugins[i].RanBeforeJail = true
+		}
+		if r.PreJail || s.Plugins[i].RanBeforeJail || binaryBefore(r.Path, jailEpoch) {
 			pre[r.Key+"\x00"+r.Source] = true
 		}
 	}
@@ -749,10 +780,9 @@ func (s *InstallState) MarkPreJail(key string) bool {
 }
 
 // RunsAsBefore reports whether a launch of rec runs unjailed as before the
-// plugin jail (this host cannot jail plugins, and rec predates the jail),
-// where trust: full is not set.
+// plugin jail (runsAsBefore), where trust: full is not set.
 func RunsAsBefore(rec Installed) bool {
-	_, before := runsAsBefore(Spec{PreJail: rec.PreJail})
+	_, before := runsAsBefore(Spec{PreJail: rec.PreJail, RanBeforeJail: rec.RanBeforeJail})
 	return before
 }
 
@@ -1108,9 +1138,6 @@ func (s *InstallState) GCVersions(keep map[VersionKey]bool) ([]VersionKey, error
 		}
 		dropped = append(dropped, vk)
 	}
-	if len(dropped) == 0 {
-		return nil, nil
-	}
 	s.Plugins = kept
 	for _, vk := range dropped {
 		dir := BinDirForVersion(s.dir, vk.Key, vk.Resolved, vk.Source)
@@ -1118,8 +1145,77 @@ func (s *InstallState) GCVersions(keep map[VersionKey]bool) ([]VersionKey, error
 		if err := removeVersionDir(keyDir, dir); err != nil {
 			return dropped, fmt.Errorf("plugin %s@%s: %w", vk.Key, vk.Resolved, err)
 		}
+		if err := s.removeStaged(vk, false); err != nil {
+			return dropped, err
+		}
+	}
+	for _, p := range kept {
+		if err := s.removeStaged(VersionKey{Key: p.Key, Resolved: p.Resolved, Source: p.Source}, true); err != nil {
+			return dropped, err
+		}
 	}
 	return dropped, nil
+}
+
+// removeStaged removes the directories of a version's builds that nothing
+// uses any more: each re-published build staged beside it (stageDir's
+// "<dir>+<sha>"), and, with own, the version's own directory once its record
+// runs from a staged one (an approved re-publish). A directory an installed
+// record or a held (or declined) update still runs from, or would, is kept.
+func (s *InstallState) removeStaged(vk VersionKey, own bool) error {
+	dir := BinDirForVersion(s.dir, vk.Key, vk.Resolved, vk.Source)
+	keyDir := BinDirFor(s.dir, vk.Key)
+	entries, err := os.ReadDir(filepath.Dir(dir))
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for _, e := range entries {
+		if rest, ok := strings.CutPrefix(e.Name(), filepath.Base(dir)+"+"); ok && e.IsDir() && isStagedSuffix(rest) {
+			dirs = append(dirs, filepath.Join(filepath.Dir(dir), e.Name()))
+		}
+	}
+	if own && len(dirs) > 0 {
+		dirs = append(dirs, dir)
+	}
+	for _, d := range dirs {
+		if s.runsFrom(d) {
+			continue
+		}
+		if err := removeVersionDir(keyDir, d); err != nil {
+			return fmt.Errorf("plugin %s@%s: %w", vk.Key, vk.Resolved, err)
+		}
+	}
+	return nil
+}
+
+// isStagedSuffix: what stageDir appends after the "+": 12 lowercase hex.
+func isStagedSuffix(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// runsFrom reports whether an installed record or a held update has its
+// binary inside dir.
+func (s *InstallState) runsFrom(dir string) bool {
+	for _, p := range s.Plugins {
+		if p.Path != "" && isStrictlyWithin(dir, p.Path) {
+			return true
+		}
+	}
+	for _, p := range s.Pending {
+		if p.Path != "" && isStrictlyWithin(dir, p.Path) {
+			return true
+		}
+	}
+	return false
 }
 
 // removeVersionDir is GCVersions' actual removal step for ONE installed

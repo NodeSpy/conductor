@@ -1265,6 +1265,9 @@ func (c *Client) Reload(newSpec Spec) error {
 	c.spec.BinPath = newSpec.BinPath
 	c.spec.Sha256 = newSpec.Sha256
 	c.spec.Resolved = newSpec.Resolved
+	// How it launches (as before the jail, for a build that ran before it)
+	// belongs to the build: read only at dial, under mu, like the binary.
+	c.spec.RanBeforeJail = newSpec.RanBeforeJail
 	c.digest = ""
 	c.starts = nil
 	c.totalStart = 0
@@ -1322,6 +1325,8 @@ func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 		return nil, nil, err
 	}
 	switch {
+	case asBefore && HostJailStatus().OK:
+		d.Log("plugin %s: running UNJAILED, as before the plugin jail (environment scrubbed, egress at conductor's proxy): this build ran before the jail, and its install record may not declare everything it uses. A build installed under the jail replaces it at its next update, and runs jailed", s.Name)
 	case asBefore:
 		d.Log("plugin %s: WARNING: running UNJAILED, as before the plugin jail — this host cannot jail plugins (%s). To jail it: %s; to run it unjailed on purpose and silence this, set trust: full on its entry", s.Name, HostJailStatus().Reason, HostJailStatus().Fix)
 	case sandboxed && s.Probe:

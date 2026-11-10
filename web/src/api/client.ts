@@ -20,6 +20,7 @@ import type {
   RunDetailResponse,
   ActionResponse,
   RetryRequest,
+  PluginHeld,
   WorkflowsResponse,
   WorkflowDetailResponse,
   TestResponse,
@@ -81,6 +82,57 @@ async function retryRun(id: string, req: RetryRequest): Promise<ActionResponse> 
       res = await send(token)
     }
   }
+  return handle<ActionResponse>(res)
+}
+
+// approvePlugin applies a held plugin update: the one shown (its
+// fingerprint), whose build then replaces the running one. With sign-in on it
+// comes back 401 with a step-up to confirm, described by the server; we
+// confirm and send it once more.
+async function approvePlugin(h: PluginHeld): Promise<ActionResponse> {
+  const path = '/api/v1/plugins/' + encodeURIComponent(h.name) + '/approve'
+  const send = (stepup?: string) => {
+    const csrf = authState.value.csrf
+    return fetch(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(csrf ? { 'X-Conductor-CSRF': csrf } : {}),
+        ...(stepup ? { 'X-Conductor-Stepup': stepup } : {}),
+      },
+      body: JSON.stringify({ fingerprint: h.fingerprint }),
+    })
+  }
+  let res = await send()
+  if (res.status === 401) {
+    const b = (await readJSON(res.clone()).catch(() => ({}))) as { stepup?: { purpose: string; digest: string; description?: string } }
+    if (b.stepup) {
+      const token = await stepUp(b.stepup.purpose, b.stepup.digest, {
+        what: `Approve the ${h.name} update`,
+        description: b.stepup.description,
+      })
+      res = await send(token)
+    }
+  }
+  return handle<ActionResponse>(res)
+}
+
+// declinePlugin keeps the running build of a plugin instead of its held
+// update (the one shown, by its fingerprint).
+async function declinePlugin(h: PluginHeld): Promise<ActionResponse> {
+  const csrf = authState.value.csrf
+  const res = await fetch('/api/v1/plugins/' + encodeURIComponent(h.name) + '/decline', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...(csrf ? { 'X-Conductor-CSRF': csrf } : {}),
+    },
+    body: JSON.stringify({ fingerprint: h.fingerprint }),
+  })
   return handle<ActionResponse>(res)
 }
 
@@ -148,6 +200,8 @@ export const api = {
   secrets: () => getJSON<SecretsResponse>('/api/v1/secrets'),
   packs: () => getJSON<PacksResponse>('/api/v1/packs'),
   plugins: () => getJSON<PluginsResponse>('/api/v1/plugins'),
+  approvePlugin: (h: PluginHeld) => approvePlugin(h),
+  declinePlugin: (h: PluginHeld) => declinePlugin(h),
   connections: () => getJSON<ConnectionsResponse>('/api/v1/connections'),
   system: () => getJSON<SystemResponse>('/api/v1/system'),
   audit: () => getJSON<AuditResponse>('/api/v1/audit'),

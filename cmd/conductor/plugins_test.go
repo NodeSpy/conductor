@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"os"
 	"path/filepath"
 	"strings"
@@ -254,6 +255,9 @@ func TestPendingPluginsStillMissingNeverSnapshotsLocalPlugins(t *testing.T) {
 func TestPendingPluginRetryWontRestartOnBadConfig(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	bin := buildTestPlugin(t, "acme-ticker") // declares ONE event: "tick"; no verbs
+	// The validate below registers the type globally; a later run (-count)
+	// must meet the same config, not "already provided by another plugin".
+	t.Cleanup(func() { connector.UnregisterExternalType("acme-ticker") })
 
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
 	doc := fmt.Sprintf(`
@@ -284,24 +288,22 @@ triggers:
 	pendingPluginInterval = 10 * time.Millisecond
 	t.Cleanup(func() { pendingPluginInterval, pendingPluginBackoffCap = oldInterval, oldCap })
 
-	stopped := make(chan struct{})
-	stop := func() { close(stopped) }
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// No wall clock: the retry either restarts (stop) or returns, and the
+	// test waits for whichever it does, however slow the box (go test's
+	// own -timeout bounds a hang). The context is never cancelled during
+	// the wait, so a return can only be the retry giving up on its own; the
+	// log says why.
+	restarted := false
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		pendingPluginRetry(ctx, cfg, cfgPath, stop)
-		close(done)
-	}()
-
-	select {
-	case <-stopped:
+	logs := captureLogf(t, func() {
+		pendingPluginRetry(ctx, cfg, cfgPath, func() { restarted = true })
+	})
+	if restarted {
 		t.Fatal("must not restart into a plugin the config does not validate against")
-	case <-done:
-		// returned without restarting — correct: give up rather than loop.
-	case <-time.After(4 * time.Second):
-		t.Fatal("pendingPluginRetry neither restarted nor returned")
+	}
+	if !strings.Contains(logs, `has no event "not_a_real_event"`) || !strings.Contains(logs, "NOT restarting") {
+		t.Fatalf("returned without giving up on the invalid config:\n%s", logs)
 	}
 }
 

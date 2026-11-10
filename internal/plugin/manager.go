@@ -210,6 +210,7 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 		s.Manifest = inst.Manifest
 		s.ReleaseVerified = inst.ReleaseVerified && inst.Sha256 != ""
 		s.PreJail = inst.PreJail
+		s.RanBeforeJail = inst.RanBeforeJail
 	}
 	return s
 }
@@ -683,7 +684,7 @@ func (m *Manager) Reload(key string, newSpec Spec) error {
 	}
 	m.mu.Lock()
 	if s, ok := m.specs[key]; ok {
-		s.BinPath, s.Sha256, s.Resolved = newSpec.BinPath, newSpec.Sha256, newSpec.Resolved
+		s.BinPath, s.Sha256, s.Resolved, s.RanBeforeJail = newSpec.BinPath, newSpec.Sha256, newSpec.Resolved, newSpec.RanBeforeJail
 		m.specs[key] = s
 	}
 	m.mu.Unlock()

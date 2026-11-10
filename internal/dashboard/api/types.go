@@ -384,6 +384,27 @@ type PluginInfo struct {
 	Pinned  bool     `json:"pinned"`  // true when a @version is set (the version policy)
 	Builtin bool     `json:"builtin"` // a conductor built-in, not fetched
 	UsedBy  []string `json:"used_by"` // the connector/runtime names using it
+	// Held is an update waiting for the operator's approval because it
+	// changes what the plugin may do. Absent when nothing is waiting.
+	Held *PluginHeld `json:"held,omitempty"`
+}
+
+// PluginHeld is a plugin update held until the operator approves it: the
+// running build keeps running, exactly as it is, until then.
+type PluginHeld struct {
+	Name        string   `json:"name"`              // the plugin's implementation name
+	Running     string   `json:"running"`           // the build that keeps running
+	Version     string   `json:"version"`           // the held build
+	Fingerprint string   `json:"fingerprint"`       // names what it declares; approve/decline send it back
+	Adds        []string `json:"adds,omitempty"`    // what it may do that the running build may not, in the jail's words
+	Removes     []string `json:"removes,omitempty"` // what the running build may do that it no longer declares
+}
+
+// ApprovePluginRequest is POST /api/v1/plugins/{name}/approve (the held
+// build replaces the running one) and /decline (the running one stays): the
+// held update the operator was shown, by its declaration's fingerprint.
+type ApprovePluginRequest struct {
+	Fingerprint string `json:"fingerprint"`
 }
 
 // ConnectionsResponse is GET /api/v1/connections: connectors, runtimes and hosts

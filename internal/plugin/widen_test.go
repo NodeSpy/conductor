@@ -147,10 +147,10 @@ func TestReconcileWideningUpdateIsHeld(t *testing.T) {
 	}
 }
 
-// TestReconcileNarrowingUpdateAppliesWithoutHolding proves the other half:
-// an update that declares the same or less than the installed build is not
-// held — it is a normal ActionUpdated, and nothing lands in Pending.
-func TestReconcileNarrowingUpdateAppliesWithoutHolding(t *testing.T) {
+// TestReconcileNarrowingUpdateIsHeld: an update that declares less than the
+// installed build changes its boundary too, so it is held like a widening,
+// listing what it removes; the installed build keeps running.
+func TestReconcileNarrowingUpdateIsHeld(t *testing.T) {
 	st := stateAt(t)
 	ref := refFor(t, config.UseKindConnector, "acme/plugins/jira")
 	trust := &config.PackTrustConfig{Allow: []string{"github.com/acme/*"}}
@@ -176,18 +176,16 @@ func TestReconcileNarrowingUpdateAppliesWithoutHolding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res) != 1 || res[0].Action != ActionUpdated {
-		t.Fatalf("a narrowing update must apply normally: %+v", res)
-	}
-	if res[0].Tag != "jira/v2.0.0" {
-		t.Fatalf("the new build must be what's running: %+v", res[0])
+	if len(res) != 1 || res[0].Action != ActionHeld {
+		t.Fatalf("a narrowing update changes the boundary and is held: %+v", res)
 	}
 	got, ok := st.Get("connectors/jira")
-	if !ok || got.Resolved != "jira/v2.0.0" {
-		t.Fatalf("install state must have moved to v2: %+v", got)
+	if !ok || got.Resolved != "jira/v1.0.0" {
+		t.Fatalf("v1 keeps running: %+v", got)
 	}
-	if len(st.PendingUpdates()) != 0 {
-		t.Fatalf("a narrowing update must never be held: %+v", st.PendingUpdates())
+	p := st.PendingUpdates()
+	if len(p) != 1 || len(p[0].Widens) != 0 || strings.Join(p[0].Removes, ";") != "runs git" {
+		t.Fatalf("held narrowing: %+v", p)
 	}
 }
 

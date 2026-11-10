@@ -105,6 +105,16 @@ type Deps struct {
 	// every text that is or may become the config. Optional.
 	AvatarCollect func(refs [][]byte)
 
+	// PluginHeld lists the plugin updates waiting for the operator's
+	// approval, for the Plugins screen. ApprovePlugin applies the held
+	// update of the plugin named name whose declaration is fingerprint (the
+	// held build replaces the running one); DeclinePlugin keeps the running
+	// build instead. Each returns what it did. Nil: nothing is shown, and the
+	// decisions are unavailable.
+	PluginHeld    func() []api.PluginHeld
+	ApprovePlugin func(name, fingerprint string) (string, error)
+	DeclinePlugin func(name, fingerprint string) (string, error)
+
 	// Browser is the browser/wallet surface (design §4.5): live sessions with a
 	// screencast and takeover, personal details, payment cards and purchase
 	// approvals. Nil when no browser runs on this daemon.
@@ -192,6 +202,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/secrets", s.handleSecrets)
 	s.mux.HandleFunc("GET /api/v1/packs", s.handlePacks)
 	s.mux.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
+	s.mux.HandleFunc("POST /api/v1/plugins/{name}/approve", s.handlePluginApprove)
+	s.mux.HandleFunc("POST /api/v1/plugins/{name}/decline", s.handlePluginDecline)
 	s.mux.HandleFunc("GET /api/v1/connections", s.handleConnections)
 	s.mux.HandleFunc("GET /api/v1/system", s.handleSystem)
 	s.mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
