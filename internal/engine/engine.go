@@ -141,6 +141,7 @@ type Engine struct {
 	queuedMu    sync.Mutex              // guards queued
 	queued      map[string]core.Trigger // flow runs waiting for a slot, by queuedFlowKey → newest trigger
 	queuedRec   map[string]bool         // queued runs whose record is persisted (guarded by queuedMu); see putQueuedRun
+	inflight    map[string]int          // flow runs queued or running, by inFlightKey (guarded by queuedMu); see trackInFlight
 	runCaps     runCaps                 // policy.concurrency.max_runs pools, per scope
 	closedAt    map[string]time.Time    // PR key → when its _closed arrived (guarded by queuedMu); see closedSince
 	baseCtx     context.Context         // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
@@ -933,7 +934,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// another review agent on a PR whose first review was still parked.
 		// Single-action fixers instead fall through to dispatch, which queues new
 		// work to the agent already on this PR (or spawns one) — see paseo.go.
-		if (len(act.Steps) > 0 || act.FlowRef != "") && e.hasLiveAgentFor(ctx, act, key, t.Kind) {
+		if (len(act.Steps) > 0 || act.FlowRef != "") && e.liveFor(ctx, t, act, key) {
 			// Exception: a review re-request on a NEW head. If we've never dispatched
 			// review_requested at the current head, the parked agent is reviewing stale
 			// code — re-engage on the new head instead of being blocked indefinitely by

@@ -208,7 +208,7 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 		defer e.recoverDispatch(rctx, t, run, "flow retry")
 		defer releaseRunCaps(caps)
 		defer e.release()
-		e.runFlow(rctx, run, t, spec, tidx, nil)
+		e.runFlow(rctx, run, t, spec, tidx, nil, nil)
 	}()
 	msg := fmt.Sprintf("retrying run %s from %s (recorded inputs pinned)", rec.ID, orTop(fromStep))
 	if len(notes) > 0 {

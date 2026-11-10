@@ -34,6 +34,9 @@ type gitGuard struct {
 	files   []guardFile
 	hooks   string
 	hookSet map[string]string
+	// removed: the .git's removal was reported; it is not again while it
+	// stays removed.
+	removed bool
 }
 
 // newGitGuard records ws's git files (nil: no .git).
@@ -72,6 +75,26 @@ func recordFile(p string, config bool) guardFile {
 func (g *gitGuard) check() []string {
 	var out []string
 	fi, err := os.Lstat(g.gitPath)
+	if err != nil {
+		// The workspace gone with it is its teardown (on Linux an agent
+		// cannot remove the directory its sandbox is mounted on), and either
+		// way there is no git left there for anyone to run.
+		if _, werr := os.Lstat(filepath.Dir(g.gitPath)); werr != nil {
+			return nil
+		}
+		// A .git directory removed from a workspace still there cannot be
+		// rebuilt: reported once — it staying removed is not a new change
+		// on every check. (A removed pointer is restored below.)
+		if g.isDir {
+			if g.removed {
+				return nil
+			}
+			g.removed = true
+			return []string{fmt.Sprintf("%s was removed", g.gitPath)}
+		}
+	} else {
+		g.removed = false
+	}
 	if err != nil || fi.IsDir() != g.isDir || (!g.isDir && !fi.Mode().IsRegular()) {
 		// .git itself replaced (a dir by a pointer, a file by a link): the
 		// replacement is moved aside; the original cannot be rebuilt here.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -191,6 +192,12 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 		}
 		persisted := e.queuedRec[qk]
 		delete(e.queuedRec, qk)
+		// Counted in flight as it leaves the queue, under the same lock: a
+		// redelivery never finds it in neither.
+		var untrack func()
+		if ok {
+			untrack = e.trackInFlightLocked(t)
+		}
 		e.queuedMu.Unlock()
 		if !ok {
 			// Shutdown while waiting: a run under a cap keeps its queued
@@ -198,6 +205,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 			// re-derives.
 			return
 		}
+		defer untrack()
 		defer e.release()
 		defer releaseRunCaps(caps)
 		if persisted {
@@ -211,7 +219,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 		}
 		run := e.newFlowRun(t, spec, false)
 		defer e.recoverDispatch(ctx, t, run, "flow dispatch")
-		e.runFlow(ctx, run, t, spec, tidx, batch)
+		e.runFlow(ctx, run, t, spec, tidx, batch, untrack)
 	}()
 }
 
@@ -304,6 +312,65 @@ func queuedFlowKey(t core.Trigger) string {
 	return act.FlowRef + "\x00" + t.Key()
 }
 
+// inFlightKey identifies the flow runs of one flow on one target at one
+// revision.
+func inFlightKey(ref string, t core.Trigger) string {
+	return ref + "\x00" + t.Key() + "\x00" + t.Target.HeadSHA
+}
+
+// trackInFlight counts a run of t's flow as running until the
+// returned func is called. In memory only: a run resumed after a restart
+// goes through runFlow and is counted again.
+func (e *Engine) trackInFlight(t core.Trigger) func() {
+	e.queuedMu.Lock()
+	defer e.queuedMu.Unlock()
+	return e.trackInFlightLocked(t)
+}
+
+// trackInFlightLocked is trackInFlight with queuedMu held.
+func (e *Engine) trackInFlightLocked(t core.Trigger) func() {
+	act, _ := t.Action.(config.Action)
+	k := inFlightKey(act.FlowRef, t)
+	if e.inflight == nil {
+		e.inflight = map[string]int{}
+	}
+	e.inflight[k]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			e.queuedMu.Lock()
+			if e.inflight[k]--; e.inflight[k] <= 0 {
+				delete(e.inflight, k)
+			}
+			e.queuedMu.Unlock()
+		})
+	}
+}
+
+// flowInFlight reports a run of act's flow running on t's target
+// at t's revision.
+func (e *Engine) flowInFlight(t core.Trigger, act config.Action) bool {
+	if act.FlowRef == "" || e.flow == nil {
+		return false
+	}
+	if a, _, _, ok := e.resolveFlow(act); ok {
+		act = a
+	}
+	e.queuedMu.Lock()
+	defer e.queuedMu.Unlock()
+	return e.inflight[inFlightKey(act.FlowRef, t)] > 0
+}
+
+// liveFor is the live gate's answer for a level-triggered event: an agent
+// the runtime reports on the target, or a run of the event's flow already
+// running on it at the same revision (one still waiting for a slot takes the
+// event in instead: coalesceQueued) — which the runtime does not
+// see before that run starts an agent, or when its steps run elsewhere. A run
+// at another revision is not this event's: a new revision still re-engages.
+func (e *Engine) liveFor(ctx context.Context, t core.Trigger, act config.Action, key string) bool {
+	return e.hasLiveAgentFor(ctx, act, key, t.Kind) || e.flowInFlight(t, act)
+}
+
 // coalesceQueued folds t into an identical flow+target run already waiting for
 // a slot, keeping the newest event, and reports whether it did. Without it a
 // sweep re-emitting a still-pending review_requested every pass would stack a
@@ -370,8 +437,16 @@ func (e *Engine) requeueFlowRun(ctx context.Context, r store.WorkflowRun, t core
 // held on its target while it ran (heldlevel.go). Every non-shadow flow run —
 // fresh, batch, resumed, retried — goes through here, so none can end without
 // it. Deferred: a run that panics still ended.
-func (e *Engine) runFlow(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, tidx int, batch *flow.Batch) {
+//
+// untrack is the run's in-flight count when its caller already took it (nil:
+// taken here); either way it is released before held events are re-delivered,
+// so they find the run ended.
+func (e *Engine) runFlow(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, tidx int, batch *flow.Batch, untrack func()) {
 	defer e.redeliverHeld(t.Key())
+	if untrack == nil {
+		untrack = e.trackInFlight(t)
+	}
+	defer untrack()
 	e.flow.Run(ctx, run, t, spec, tidx, batch, false)
 }
 
@@ -440,7 +515,7 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 	}
 	defer e.release()
 	run := e.newFlowRun(t, spec, false)
-	e.runFlow(ctx, run, t, spec, tidx, &flow.Batch{Key: gkey, Events: events})
+	e.runFlow(ctx, run, t, spec, tidx, &flow.Batch{Key: gkey, Events: events}, nil)
 }
 
 // recordBatch writes each grouped event's dedup/attempt/comment-mark state
@@ -587,7 +662,11 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 	if len(caps) > 0 && caps[0].serial != "" && e.tryAcquireCap(caps[0]) {
 		held, caps = caps[:1], caps[1:]
 	}
+	// In flight from now, not from when it gets a slot: a source's poll
+	// re-deriving its event right after the restart must find it.
+	untrack := e.trackInFlight(t)
 	go func() {
+		defer untrack()
 		// Wait for the slot here, not on the caller: resume runs at startup,
 		// and more persisted runs than slots must not stall it.
 		if !e.acquireRunCaps(ctx, t, caps) {
@@ -601,7 +680,7 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 		}
 		defer e.release()
 		defer e.recoverDispatch(ctx, t, r, "flow resume")
-		e.runFlow(ctx, r, t, spec, tidx, nil)
+		e.runFlow(ctx, r, t, spec, tidx, nil, untrack)
 	}()
 }
 

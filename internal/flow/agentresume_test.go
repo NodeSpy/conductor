@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -228,5 +229,74 @@ steps:
 		if recorded.Runtime != config.BuiltinPaseoRuntime || recorded.SessionID != "new" {
 			t.Fatalf("prior runtime %q: recorded %+v, want it under the step's runtime", prior, recorded)
 		}
+	}
+}
+
+// Two runs of one trigger on one target share a run record (its id is the
+// flow, kind and target), so a step of the second found the first's live
+// agent recorded under its own key and "resumed" it: the second run adopted
+// the first's workspace, and the first's teardown pulled it from under the
+// second's agent. Only an agent no dispatch of this process is running —
+// one a previous daemon life left — is resumed.
+func TestConcurrentRunDoesNotResumeAnotherRunsLiveAgent(t *testing.T) {
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
+	reg := buildRegistry(t, cfg)
+	_ = newFakeState(t, "svc")
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: fix, type: agent, name: fixer, prompt: p, model: x }
+`)
+	rig := newTestRunner(t, cfg, reg)
+	st := newAgentStore(rig.Store)
+	rig.Runner.Store = st
+
+	started, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	var resumes []*dispatch.AgentSession
+	var blocked atomic.Bool
+	rig.Agents.dispatchFunc = func(_ context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		mu.Lock()
+		resumes = append(resumes, req.Resume)
+		mu.Unlock()
+		if req.OnAgentStart != nil {
+			req.OnAgentStart(dispatch.AgentStart{AgentSession: dispatch.AgentSession{
+				Runtime: config.BuiltinPaseoRuntime, SessionID: "sess", Workspace: "/wt-of-a", CanResume: true}})
+		}
+		if blocked.CompareAndSwap(false, true) {
+			close(started)
+			<-release // run A's agent is still working
+		}
+		return dispatch.RunRef{Output: "{}"}, nil
+	}
+	run := emptyRun()
+	run.ID = "flow:ping:shared"
+	done := make(chan struct{})
+	go func() { runTriggerWithRun(rig, run, newTrigger("ping", nil), spec); close(done) }()
+	<-started
+	runB := emptyRun()
+	runB.ID = run.ID
+	runTriggerWithRun(rig, runB, newTrigger("ping", nil), spec)
+	close(release)
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(resumes) != 2 {
+		t.Fatalf("dispatches = %d, want 2", len(resumes))
+	}
+	if resumes[1] != nil {
+		t.Fatalf("run B resumed run A's live agent (workspace %q)", resumes[1].Workspace)
+	}
+
+	// After a restart nothing of this process runs the step: its recorded
+	// agent is resumed as before.
+	_ = st.PutRunAgent(run.ID, "fix", store.RunAgent{Runtime: config.BuiltinPaseoRuntime, SessionID: "old", Workspace: "/kept", CanResume: true})
+	resumes = nil
+	mu.Unlock()
+	runTriggerWithRun(rig, run, newTrigger("ping", nil), spec)
+	mu.Lock()
+	if len(resumes) != 1 || resumes[0] == nil || resumes[0].Workspace != "/kept" {
+		t.Fatalf("a recorded agent no live dispatch runs must still be resumed, got %+v", resumes)
 	}
 }

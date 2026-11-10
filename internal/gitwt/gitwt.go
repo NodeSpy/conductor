@@ -184,10 +184,14 @@ func (p *Provisioner) AdoptWorktree(_ context.Context, _ dispatch.Request, id st
 		return "", fmt.Errorf("gitwt: worktree %s is gone", filepath.Base(wt))
 	}
 	p.mu.Lock()
-	if _, ok := p.live[wt]; !ok {
-		p.live[wt] = p.baseOf(wt)
+	defer p.mu.Unlock()
+	if _, ok := p.live[wt]; ok {
+		// A session of this process already runs in it: a kept worktree is
+		// one a previous daemon life left, never one shared with a live run
+		// (whose teardown would pull it from under this one).
+		return "", fmt.Errorf("gitwt: worktree %s is in use by another session", filepath.Base(wt))
 	}
-	p.mu.Unlock()
+	p.live[wt] = p.baseOf(wt)
 	return wt, nil
 }
 

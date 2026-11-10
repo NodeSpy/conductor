@@ -288,7 +288,23 @@ func (c *cliController) launchOn(ctx context.Context, host, dir string, env []st
 	// session ctx ends so it cannot outlive the dispatch (#36 iso-review round
 	// 2, item 4).
 	context.AfterFunc(ctx, revoke)
-	return proc, nil
+	// …or when the process exits, whichever is first: the launch is over —
+	// its sandbox's watcher stops with it (a session outlives its turns, and
+	// a watcher left running on an ended launch reported its workspace's
+	// later teardown as tampering, every tick).
+	return exitHook{proc, revoke}, nil
+}
+
+// exitHook runs fn once its process has exited.
+type exitHook struct {
+	cliProc
+	fn func()
+}
+
+func (p exitHook) Wait() (string, error) {
+	out, err := p.cliProc.Wait()
+	p.fn()
+	return out, err
 }
 
 func (c *cliController) forget(id string) {
@@ -952,8 +968,15 @@ func (s *cliSession) Cancel(context.Context) error {
 func (s *cliSession) Close(ctx context.Context) error {
 	s.cancel()
 	s.c.forget(s.id)
+	// The cancelled turn's launch is torn down as its process exits; the
+	// worktree goes after it, so the launch's last look at its workspace
+	// never finds it half removed.
+	s.Wait(ctx, closeExitWait)
 	return s.releaseWorktree(ctx)
 }
+
+// closeExitWait bounds how long Close waits for a cancelled turn to exit.
+const closeExitWait = 10 * time.Second
 
 // releaseWorktree hands the provisioned checkout back to whoever made it, once.
 // A session that only borrowed another's worktree (ReuseWorkspace), a resumed
