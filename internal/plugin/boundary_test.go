@@ -3,6 +3,7 @@ package plugin
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -203,86 +204,102 @@ func TestRepublishedBuildIsStagedBesideTheRunningOne(t *testing.T) {
 	if err := VerifyOnly(SpecFromRef(ref, "", cur, true)); err != nil || cur.Sha256 != v1.Sha256 {
 		t.Fatalf("the running build must still verify: %v (%+v)", err, cur)
 	}
-	if p, _ := st.HeldFor(ref.Use.InstallKey(), ref.Source()); p.Path == v1.Path || !binaryPresent(p.Path) {
+	p, _ := st.HeldFor(ref.Use.InstallKey(), ref.Source())
+	if p.Path == v1.Path || !binaryPresent(p.Path) || filepath.Dir(p.Path) != filepath.Dir(v1.Path)+"+"+p.Sha256[:12] {
 		t.Fatalf("held build staged at %s", p.Path)
 	}
-}
 
-// The scenario a held update used to break: a build installed before the
-// plugin jail that never declared a file it reads (its newer build does).
-// While the newer build is held, the installed one keeps running as it did
-// before the jail, on any host, and the pass that held it asks for it to be
-// relaunched so; once approved, the new build runs jailed.
-func TestPreJailBuildKeepsWorkingWhileItsUpdateIsHeld(t *testing.T) {
-	st, refs, ref, v1 := installWidget(t, officialWidget, nil, shapes[0].ref, widgetNarrow)
-	if !st.MarkPreJail(v1.Key) {
-		t.Fatal("mark pre-jail")
+	// Its directory goes when nothing runs from it, and never before: kept
+	// while it is the held build, kept (and the version's own directory
+	// removed) once approved it is the running one, removed with its
+	// version when that is dropped.
+	vk := VersionKey{Key: v1.Key, Resolved: v1.Resolved, Source: v1.Source}
+	if _, err := st.GCVersions(map[VersionKey]bool{vk: true}); err != nil || !binaryPresent(p.Path) || !binaryPresent(v1.Path) {
+		t.Fatalf("a prune removed the held or the running build: %v", err)
 	}
-	if err := st.Save(); err != nil {
-		t.Fatal(err)
-	}
-	st = LoadInstallState(st.Dir())
-	if cur, _ := st.Get(v1.Key); cur.UpdateHeld {
-		t.Fatal("nothing held yet")
-	}
-
-	res, _ := Reconcile(refs, st, nil, widgetBin("v2", "connectors/widget/v1.0.0", "connectors/widget/v2.0.0"), Options{Describe: widgetDecl(widgetWide)})
-	if res[0].Action != ActionHeld || !res[0].Relaunch {
-		t.Fatalf("the pass that holds it asks for a relaunch: %+v", res[0])
-	}
-	st = LoadInstallState(st.Dir())
-	cur, _ := st.Get(v1.Key)
-	spec := SpecFromRef(ref, "", cur, true)
-	if cur.Resolved != v1.Resolved || !spec.UpdateHeld {
-		t.Fatalf("v1 with its update held: %+v", cur)
-	}
-	if _, before := runsAsBefore(spec); !before {
-		t.Fatal("while its update is held, the pre-jail build must run as it did before the jail")
-	}
-	if res, _ := Reconcile(refs, st, nil, widgetBin("v2", "connectors/widget/v1.0.0", "connectors/widget/v2.0.0"), Options{Describe: widgetDecl(widgetWide)}); res[0].Relaunch {
-		t.Fatal("only the pass that newly holds it relaunches")
-	}
-
 	if _, err := st.Approve(ref.Name); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Save(); err != nil {
+	if cur, _ := st.Get(v1.Key); cur.Path != p.Path {
+		t.Fatalf("approved, it runs from %s", cur.Path)
+	}
+	if _, err := st.GCVersions(map[VersionKey]bool{vk: true}); err != nil || !binaryPresent(p.Path) {
+		t.Fatalf("a prune removed the running build: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(v1.Path)); !os.IsNotExist(err) {
+		t.Fatalf("the replaced build's directory is left behind: %v", err)
+	}
+	if _, err := st.GCVersions(map[VersionKey]bool{}); err != nil {
 		t.Fatal(err)
 	}
-	cur, _ = LoadInstallState(st.Dir()).Get(v1.Key)
-	if spec := SpecFromRef(ref, "", cur, true); cur.Resolved != "connectors/widget/v2.0.0" || spec.UpdateHeld {
-		t.Fatalf("approved: %+v", cur)
-	} else if _, before := runsAsBefore(spec); before && HostJailStatus().OK {
-		t.Fatal("the approved build runs jailed")
+	if _, err := os.Stat(filepath.Dir(p.Path)); !os.IsNotExist(err) {
+		t.Fatalf("the staged build's directory outlived its version: %v", err)
 	}
 }
 
-// A build that is not pre-jail keeps its jail while its update is held, and
-// a re-describe of the running build (the held build IS the running binary)
-// never runs as before.
-func TestOnlyAPreJailBuildRunsAsBeforeWhileHeld(t *testing.T) {
-	st, refs, ref, v1 := installWidget(t, officialWidget, nil, shapes[0].ref, widgetNarrow)
-	res, _ := Reconcile(refs, st, nil, widgetBin("v2", "connectors/widget/v1.0.0", "connectors/widget/v2.0.0"), Options{Describe: widgetDecl(widgetWide)})
-	if res[0].Relaunch {
-		t.Fatal("a jailed build is not relaunched")
+// The #247 case: a build that ran before the plugin jail, whose update
+// declares a file the build reads but its record does not, keeps running as
+// it did before the jail while that update is held; approving it replaces
+// the build with the jailed new one (the mark is the build's, not the
+// plugin's). An update that declares the same replaces it too.
+func TestPreJailBuildKeepsWorkingWhileItsUpdateIsHeld(t *testing.T) {
+	defer SetHostJailForTests(HostJail{OK: true})()
+	for _, approve := range []bool{true, false} {
+		st, refs, ref, v1 := installWidget(t, officialWidget, nil, shapes[0].ref, widgetNarrow)
+		st.Plugins[0].RanBeforeJail = true
+		if err := st.Save(); err != nil {
+			t.Fatal(err)
+		}
+		st = LoadInstallState(st.Dir())
+		next := widgetWide
+		if !approve {
+			next = widgetNarrow
+		}
+		res, _ := Reconcile(refs, st, nil, widgetBin("v2", "connectors/widget/v1.0.0", "connectors/widget/v2.0.0"), Options{Describe: widgetDecl(next)})
+		if approve {
+			if res[0].Action != ActionHeld {
+				t.Fatalf("held: %+v", res[0])
+			}
+			cur, _ := LoadInstallState(st.Dir()).Get(v1.Key)
+			if _, before := runsAsBefore(SpecFromRef(ref, "", cur, true)); cur.Resolved != v1.Resolved || !before {
+				t.Fatalf("while its update is held, the build that ran before the jail runs as it did: %+v", cur)
+			}
+			if _, err := st.Approve(ref.Name); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Save(); err != nil {
+				t.Fatal(err)
+			}
+		} else if res[0].Action != ActionUpdated {
+			t.Fatalf("the same declaration replaces it: %+v", res[0])
+		}
+		cur, _ := LoadInstallState(st.Dir()).Get(v1.Key)
+		if _, before := runsAsBefore(SpecFromRef(ref, "", cur, true)); cur.Resolved != "connectors/widget/v2.0.0" || !cur.PreJail || cur.RanBeforeJail || before {
+			t.Fatalf("the build that replaces it was installed under the jail and runs jailed: %+v", cur)
+		}
 	}
-	cur, _ := LoadInstallState(st.Dir()).Get(v1.Key)
-	if _, before := runsAsBefore(SpecFromRef(ref, "", cur, true)); before && HostJailStatus().OK {
-		t.Fatal("a build installed under the jail keeps its jail while its update is held")
-	}
+}
 
-	st, refs, ref, v1 = installWidget(t, officialWidget, nil, shapes[0].ref, widgetNarrow)
+// Only a build that itself ran before the jail runs as before: a build of a
+// pre-jail plugin installed under the jail keeps its jail, held update or
+// not, and so does a describe of the build that did.
+func TestOnlyABuildThatRanBeforeTheJailRunsAsBefore(t *testing.T) {
+	defer SetHostJailForTests(HostJail{OK: true})()
+	st, refs, ref, v1 := installWidget(t, officialWidget, nil, shapes[0].ref, widgetNarrow)
 	st.MarkPreJail(v1.Key)
-	Reconcile(refs, st, nil, widgetBin("v1", "connectors/widget/v1.0.0"), Options{Describe: widgetDecl(widgetWide), Only: ref.Name})
-	if _, ok := st.HeldFor(v1.Key, v1.Source); !ok {
-		t.Fatal("the re-described build is held")
-	}
+	Reconcile(refs, st, nil, widgetBin("v2", "connectors/widget/v1.0.0", "connectors/widget/v2.0.0"), Options{Describe: widgetDecl(widgetWide)})
 	if err := st.Save(); err != nil {
 		t.Fatal(err)
 	}
-	cur, _ = LoadInstallState(st.Dir()).Get(v1.Key)
-	if cur.UpdateHeld {
-		t.Fatal("the held build is the running binary: it keeps its jail")
+	cur, _ := LoadInstallState(st.Dir()).Get(v1.Key)
+	if _, before := runsAsBefore(SpecFromRef(ref, "", cur, true)); !cur.PreJail || before {
+		t.Fatalf("a build installed under the jail keeps its jail while its update is held: %+v", cur)
+	}
+	if _, before := runsAsBefore(Spec{RanBeforeJail: true, Probe: true}); before {
+		t.Fatal("a describe runs from an empty jail")
+	}
+	if _, before := runsAsBefore(Spec{RanBeforeJail: true, TrustFull: true}); before {
+		t.Fatal("trust: full is its own launch")
 	}
 }
 

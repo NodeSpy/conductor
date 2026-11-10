@@ -78,11 +78,7 @@ type Resolution struct {
 	// Widens, on a held update, is what the newer build asks for beyond the
 	// installed one.
 	Widens []string
-	// Relaunch: an update of a build installed before the plugin jail was
-	// newly held this pass, so that build (the same binary) now runs as it
-	// did before the jail (runsAsBefore) and must be restarted to.
-	Relaunch bool
-	Err      error
+	Err    error
 }
 
 // Changed reports whether this resolution moved anything on disk.
@@ -174,12 +170,6 @@ func Reconcile(refs map[string]config.PluginRef, state *InstallState, trust *con
 	sort.Strings(keys)
 
 	api = &pinnedTagCache{api: api, tags: map[string][]string{}}
-	waitingBefore := map[string]bool{}
-	for _, p := range state.PendingUpdates() {
-		if !p.Approved {
-			waitingBefore[p.Key+"\x00"+p.Source] = true
-		}
-	}
 
 	var (
 		results []Resolution
@@ -223,19 +213,6 @@ func Reconcile(refs map[string]config.PluginRef, state *InstallState, trust *con
 	// (see Options.Prune), the pass must not be scoped to one plugin, and a
 	// gaps-only pass touches nothing. A partial refs map is a subset of the
 	// desired set, and "absent from a subset" is not evidence of "unused".
-	// A pre-jail build whose update this pass newly held now runs as it did
-	// before the jail: ask for it to be restarted (Resolution.Relaunch).
-	for i, r := range results {
-		if r.Action != ActionHeld || waitingBefore[r.Key+"\x00"+r.Source] {
-			continue
-		}
-		if cur, ok := state.GetVersion(r.Key, r.Tag, r.Source); ok && cur.PreJail {
-			if p, held := state.HeldFor(r.Key, r.Source); held && !strings.EqualFold(p.Sha256, cur.Sha256) {
-				results[i].Relaunch = true
-			}
-		}
-	}
-
 	if opts.Prune && opts.Only == "" && !opts.GapsOnly {
 		dropped, err := state.GCVersions(keep)
 		if err != nil {

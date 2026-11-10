@@ -488,9 +488,7 @@ func refreshPlugins(cfg *config.Config) (bool, []plugin.Resolution, error) {
 	}
 	moved := false
 	for _, r := range results {
-		// A pre-jail build whose update was just held is relaunched (the
-		// same binary) to run as it did before the jail (Relaunch).
-		if r.Changed() || r.Relaunch {
+		if r.Changed() {
 			moved = true
 		}
 		if r.Action == plugin.ActionFailed {

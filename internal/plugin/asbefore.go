@@ -14,8 +14,8 @@ import (
 )
 
 // A plugin that ran before the plugin jail existed, on a host that cannot
-// jail plugins (HostJailStatus), runs as it did then: an upgrade never
-// breaks a working setup. That is the launch below — the one conductor
+// jail plugins (HostJailStatus), and a build that itself ran before it, on
+// any host, run as they did then: an upgrade never breaks a working setup. That is the launch below — the one conductor
 // used before the jail: the environment scrubbed to what the plugin
 // declares and allow_env grants, HTTP(S)_PROXY at conductor's egress proxy
 // with what it declares (resolved, so a config: destination is its
@@ -24,18 +24,19 @@ import (
 
 // runsAsBefore reports whether s runs unjailed as before the jail: the host
 // cannot jail plugins, and s was installed before the jail (or is the
-// operator's own local build, which never had an install record). A build
-// installed before the jail also runs as before while an update of it is
-// held or declined (Spec.UpdateHeld), on any host: it is the build the user
-// keeps, and jailing it to a declaration its newer build outgrew (a build
-// that never declared a key file it reads) would stop it working until the
-// user approved the update. Once a build is approved, it runs jailed.
+// operator's own local build, which never had an install record); or s is
+// a build that itself ran before the jail (Spec.RanBeforeJail), on any
+// host. Its declaration was never enforced, so its record may lack what it
+// uses (a key file it reads), and jailing it would stop it working. That is
+// decided from install state alone, so it holds from its first launch, with
+// no update pass needed. A build installed under the jail, including any
+// that replaces it, runs jailed.
 func runsAsBefore(s Spec) (HostJail, bool) {
 	h := HostJailStatus()
 	if s.TrustFull {
 		return h, false
 	}
-	return h, (!h.OK && (s.PreJail || s.Local)) || (s.PreJail && s.UpdateHeld && !s.Probe)
+	return h, (!h.OK && (s.PreJail || s.Local)) || (s.RanBeforeJail && !s.Probe)
 }
 
 func buildAsBefore(s Spec, sd SandboxDeps, argv []string) (cmd *exec.Cmd, cleanup func(), sandboxed bool, err error) {

@@ -666,19 +666,19 @@ plugin jira: release jira/v2.0.0 now publishes a different build (sha …) than 
 `conductor plugin update <name> --force` takes it, compared with the build
 it replaces like any update. The new bytes are staged beside the installed
 ones (`<version>+<sha>`), never over them, so a held re-publish leaves the
-running build intact.
+running build intact. A pruning update pass removes such a directory once
+nothing runs from it or waits in it: the replaced build's directory once
+the re-publish is approved, and the re-publish's with its version.
 
 `conductor plugin update <name>` (and `--force`) also re-describes a build
 that is already current. If it now declares other than its record, that is
 held the same way; the running build stays jailed to its record until you
 approve.
 
-A build installed by a conductor that did not jail plugins (`pre_jail`, see
-[Upgrading](#upgrading)) runs as it did before, unjailed with its
-environment scrubbed and its egress at the proxy, for as long as an update
-of it is held or declined: its record may lack what it needs, and the
-update that declares it is the one waiting for you. Approving the update
-jails it to the new declaration.
+A build installed by a conductor that did not jail plugins keeps running
+as it did before the jail while an update of it is held or declined (see
+[Upgrading](#upgrading)); approving the update replaces it with the new
+build, jailed to the new declaration.
 
 What waits for approval, what you declined, and whether it was announced
 are kept in install state, so they survive restarts, and `conductor plugin
@@ -749,12 +749,25 @@ working setup):
   `WARNING: this host cannot jail plugins: <why>` with the fix. A plugin
   installed since is refused there with the same reason and fix. Set
   `trust: full` on an entry to run it unjailed on purpose; when every plugin
-  has it, the warning stops. A host that can jail plugins jails every one,
-  however old. Which plugins predate the jail is kept in `installed.yaml`
+  has it, the warning stops. Which plugins predate the jail is kept in `installed.yaml`
   (`pre_jail: true`, carried to each new build of the plugin); a state file
   a jail-era conductor rewrote without being able to describe a plugin (its
   record still `legacy: true`) counts, so a box that could not start its
   plugins after the upgrade recovers on its own.
+- **A build that ran before the jail keeps running as it did, on any host.**
+  Its declaration was written for a conductor that enforced none of it, so
+  its record may lack something it uses (a key file it reads), and jailing
+  it would stop it working. So the build a conductor without the jail
+  installed (`ran_before_jail: true` in `installed.yaml`: its record came
+  from a version 1 file, or its binary predates the jail) runs from its
+  first launch after the upgrade as it did then: unjailed, its environment
+  scrubbed, its egress at conductor's proxy, its `PATH` narrowed to its
+  declared commands. That is decided from install state alone, before it
+  starts, so it holds with dependency updates off too. The log says
+  `plugin <name>: running UNJAILED, as before the plugin jail … this build ran before the jail`.
+  The next build of it (an update that declares the same, or one you
+  approve) was installed under the jail, and runs jailed. To jail an old
+  build sooner, update it: `conductor plugin update <name>`.
 - **`isolation:` on plugin connectors, runtimes and engines no longer
   applies.** The config loads, with a warning naming it; delete the block.
   The plugin runs jailed to what it declares; the block is used only where
@@ -772,7 +785,7 @@ working setup):
   is recorded without asking: the build ran with it unconfined, so this
   only narrows it. What it did hold is compared: a build that now declares
   more egress, commands, env, OAuth endpoints or `single_process` is held
-  like an update, and runs as it did before the jail until you approve it. The log says
+  like an update; the build keeps running as it did before the jail (above). The log says
   `plugin github: recorded what … declares (its install record predates declared permissions, …)`.
   Only records loaded from a version 1 file are adopted this way; the file
   is written back as version 2.

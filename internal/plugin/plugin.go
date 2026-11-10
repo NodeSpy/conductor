@@ -155,9 +155,9 @@ type Spec struct {
 	// (Installed.PreJail). On a host that cannot jail plugins it runs as it
 	// did then (runsAsBefore); elsewhere it is jailed like any other.
 	PreJail bool
-	// UpdateHeld: an update of this build is held or declined
-	// (Installed.UpdateHeld); a pre-jail build then runs as before.
-	UpdateHeld bool
+	// RanBeforeJail: this build ran before the plugin jail
+	// (Installed.RanBeforeJail), so it runs as it did then.
+	RanBeforeJail bool
 	// AllowSecrets optionally tightens which secret refs may cross the boundary.
 	AllowSecrets []string
 	// AllowEnv are the daemon environment variables the operator granted

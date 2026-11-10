@@ -324,6 +324,17 @@
   overflow-wrap: anywhere;
   padding: 2px var(--space-1);
 }
+/* what an update adds is what to scrutinise (attention, not "good" green);
+ * what it removes only narrows it (neutral) */
+.held-diff .dl.add {
+  background: var(--color-status-warning-bg);
+  color: var(--color-status-warning-fg);
+  font-weight: 600;
+}
+.held-diff .dl.del {
+  background: var(--color-status-neutral-bg);
+  color: var(--color-text-secondary);
+}
 .held-legend {
   font-size: var(--type-caption-size);
   margin-bottom: var(--space-2);

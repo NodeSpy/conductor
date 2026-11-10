@@ -1089,8 +1089,8 @@ func cmdPluginAdd(args []string) error {
 	// so even the plugin being added is not referenced anywhere.
 	results, err := plugin.Reconcile(
 		map[string]config.PluginRef{u.InstallKey(): pr}, state, cfg.PluginTrust,
-		plugin.GitDist{},
-		plugin.Options{AllowUnlisted: allowUnlisted, Describe: describeForInstall(cfg), Log: logf},
+		addReleaseAPI,
+		plugin.Options{AllowUnlisted: allowUnlisted, Describe: addDescribe(cfg), Log: logf},
 	)
 	if err != nil {
 		return err
@@ -1619,6 +1619,14 @@ func reconcilePluginsLocked(cfg *config.Config, opts plugin.Options, cli bool) (
 // has agreed to anything, so it is a probe, jailed to nothing whatever its
 // config narrows — which is safe because describe is a pure self-description
 // that needs neither network nor child processes.
+// addReleaseAPI and addDescribe are where `conductor plugin add` fetches
+// releases from and how it asks a build what it declares: a test points them
+// at a local release source.
+var (
+	addReleaseAPI plugin.ReleaseAPI = plugin.GitDist{}
+	addDescribe                     = describeForInstall
+)
+
 func describeForInstall(cfg *config.Config) plugin.DescribeFunc {
 	return func(ctx context.Context, spec plugin.Spec) (*plugin.Decl, error) {
 		spec.Probe = true

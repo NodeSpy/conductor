@@ -139,7 +139,7 @@ function Held({ held, onApprove, onDecline }: { held: PluginHeld; onApprove: (h:
           <div class="dl del" data-removes><span class="gutter">−</span><span>{r}</span></div>
         ))}
       </div>
-      <p class="muted held-legend">+ it may do this, and {version(held.running)} may not · − {version(held.running)} may, and it no longer asks to</p>
+      <p class="muted held-legend">+ new: it would be allowed to do this, and {version(held.running)} is not · − {version(held.running)} may, and it no longer asks to</p>
       <div class="row-actions held-actions">
         <button class="btn primary sm" type="button" data-testid="approve-plugin" onClick={() => onApprove(held)}>Approve {version(held.version)}</button>
         <button class="btn ghost sm" type="button" data-testid="decline-plugin" onClick={() => onDecline(held)}>Keep {version(held.running)}</button>

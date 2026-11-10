@@ -1,6 +1,10 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,5 +212,80 @@ func TestDashboardDecidesTheShownUpdate(t *testing.T) {
 				t.Fatalf("%s: install state runs %s, want %s", decision, got, want)
 			}
 		})
+	}
+}
+
+// localReleases is a release source on local disk: each tag publishes its
+// own binary, with a checksums.txt listing it.
+type localReleases map[string][]byte
+
+func (l localReleases) ListTags(plugin.RemoteSource) ([]string, error) {
+	var tags []string
+	for t := range l {
+		tags = append(tags, t)
+	}
+	return tags, nil
+}
+
+func (l localReleases) Download(rs plugin.RemoteSource, tag, file, destDir string) (string, error) {
+	bin, ok := l[tag]
+	if !ok {
+		return "", fmt.Errorf("no release %s", tag)
+	}
+	p := filepath.Join(destDir, file)
+	if file == "checksums.txt" {
+		sum := sha256.Sum256(bin)
+		return p, os.WriteFile(p, []byte(hex.EncodeToString(sum[:])+"  "+rs.AssetName()+"\n"), 0o644)
+	}
+	return p, os.WriteFile(p, bin, 0o755)
+}
+
+// `conductor plugin add` of a plugin already installed, whose newest release
+// changes what it may do, holds that release like any update and prints it:
+// the running and held versions, what it adds and removes, and how to
+// approve or decline it. The installed build stays.
+func TestPluginAddPrintsAHeldUpdate(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	args := writeCfg(t, "plugin_trust: { allow: [\"github.com/acme/*\"] }\nconnectors:\n  hooks: { use: webhook }\n")
+	u, err := config.ParseUse(config.UseKindConnector, "acme/plugins/widget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1, v2 := u.TagPrefix()+"v1.0.0", u.TagPrefix()+"v2.0.0"
+	declares := map[string][]string{}
+	oldAPI, oldDescribe := addReleaseAPI, addDescribe
+	t.Cleanup(func() { addReleaseAPI, addDescribe = oldAPI, oldDescribe })
+	addDescribe = func(*config.Config) plugin.DescribeFunc {
+		return func(_ context.Context, s plugin.Spec) (*plugin.Decl, error) {
+			b, err := os.ReadFile(s.BinPath)
+			if err != nil {
+				return nil, err
+			}
+			return &plugin.Decl{Kind: plugin.KindConnector, Type: "widget", Capabilities: plugin.Capabilities{Egress: declares[string(b)]}}, nil
+		}
+	}
+	declares["v1"] = []string{"api.widget.example:443"}
+	declares["v2"] = []string{"uploads.widget.example:443"}
+
+	addReleaseAPI = localReleases{v1: []byte("v1")}
+	if _, err := captureStdout(t, func() error { return cmdPluginAdd(append(args, "acme/plugins/widget")) }); err != nil {
+		t.Fatal(err)
+	}
+	addReleaseAPI = localReleases{v1: []byte("v1"), v2: []byte("v2")}
+	out, err := captureStdout(t, func() error { return cmdPluginAdd(append(args, "acme/plugins/widget")) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{
+		"widget: update " + v1 + " -> " + v2 + " changes what it may do; " + v1 + " keeps running as it is until you approve it:",
+		"+ connects to uploads.widget.example:443", "- connects to api.widget.example:443",
+		"approve with: conductor plugin approve widget@", "keep " + v1 + " with: conductor plugin decline widget",
+	} {
+		if !strings.Contains(out, w) {
+			t.Fatalf("plugin add lacks %q:\n%s", w, out)
+		}
+	}
+	if got := installedWidget(t); got != v1 {
+		t.Fatalf("held, %s keeps running; install state runs %s", v1, got)
 	}
 }

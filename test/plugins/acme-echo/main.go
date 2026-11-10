@@ -41,6 +41,15 @@ var singleProcess = "false"
 // unaffected.
 var pingVerb = "false"
 
+// readVerb selects whether this build's Decl ALSO declares a verb "read",
+// which reads the file at its path option and returns what it holds or why
+// it could not — overridden with `-ldflags "-X main.readVerb=true"`. The
+// Decl declares no read paths, so it is the fixture for a build whose
+// declaration lacks a file it uses: in a jail the read fails, run as before
+// the jail it succeeds (internal/plugin's ranbeforejail_test.go). A plain
+// build is "false": every other test that builds acme-echo is unaffected.
+var readVerb = "false"
+
 func describe() plugin.Decl {
 	sp, _ := strconv.ParseBool(singleProcess)
 	verbs := []plugin.Verb{{
@@ -62,6 +71,14 @@ func describe() plugin.Decl {
 			Name:    "ping",
 			Desc:    "a verb only the pingVerb=true (\"v2\") build declares",
 			Outputs: plugin.Schema{"pong": {Type: "boolean", Required: true}},
+		})
+	}
+	if read, _ := strconv.ParseBool(readVerb); read {
+		verbs = append(verbs, plugin.Verb{
+			Name:    "read",
+			Desc:    "read the file at path (a verb only the readVerb=true build declares)",
+			Options: plugin.Schema{"path": {Type: "string", Required: true}},
+			Outputs: plugin.Schema{"content": {Type: "string"}, "error": {Type: "string"}},
 		})
 	}
 	return plugin.Decl{
@@ -86,6 +103,14 @@ func invoke(req plugin.InvokeRequest) (plugin.InvokeResult, error) {
 		if ping, _ := strconv.ParseBool(pingVerb); ping {
 			return plugin.InvokeResult{Outputs: map[string]any{"pong": true}}, nil
 		}
+	}
+	if read, _ := strconv.ParseBool(readVerb); read && req.Verb == "read" {
+		path, _ := req.Options["path"].(string)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return plugin.InvokeResult{Outputs: map[string]any{"error": err.Error()}}, nil
+		}
+		return plugin.InvokeResult{Outputs: map[string]any{"content": string(b)}}, nil
 	}
 	if req.Verb != "echo" {
 		return plugin.InvokeResult{}, plugin.Errorf(plugin.CodeInvalidParams, "unknown verb "+req.Verb)
