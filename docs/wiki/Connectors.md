@@ -15,10 +15,8 @@ connectors:
                                    # full resolution path (builtin → official
                                    # plugin repo → an explicit repo → a local binary)
     app: { app_id: 123456, private_key_path: ~/.config/conductor/github-app.pem }
-    webhook:                       # listens locally; `expose:` names the exposure
-      listen: "127.0.0.1:8787"     # connector that makes it public (smee, cloudflared, …)
-      path: /webhook
-      expose: gh-smee
+    webhook:                       # `expose:` names the exposure connector that
+      expose: gh-smee              # makes the listener public (smee, cloudflared, …)
       secret: ${GH_WEBHOOK_SECRET}
     me: { logins: [your-login] }
     repos: ["your-org/*"]
@@ -131,6 +129,35 @@ template reference against these declarations at load time.
   counts. `--require-plugins` is the narrower, existing check self-update
   itself uses (a referenced plugin must be installed or fetchable) and is
   independent of `--strict`.
+
+## Exposing a listener
+
+A connector that receives deliveries (github's `webhook`, the bundled
+`webhook` connector, any plugin declaring a listener) names an **exposure
+connector** in `expose:` — a relay such as `smee`, or a tunnel such as
+`cloudflared` — and conductor wires the two: it opens the exposure when the
+connector starts, for the listener's address and path.
+
+`listen:` and `path:` are optional next to `expose:`:
+
+- **Neither set** — the hop from the exposure to the listener is
+  conductor's own. Conductor picks a free `127.0.0.1` port for the listener
+  when the daemon starts (the same one again on a reload), and the path the
+  exposure delivers to: the path the plugin declares as its default
+  (`/webhook` for github, from the github release that declares it), else
+  `/`, written for the listener too so both agree. You never see either in
+  your config.
+- **`listen:` set** — the listener serves there, and the exposure delivers
+  there too: it stays reachable at that address for anything else you point
+  at it (a direct POST, a second tunnel). With no `path:`, the exposure
+  delivers to the plugin's declared default path (else `/`).
+- **`path:` set** — always wins, for the listener and the exposure alike.
+
+A conductor-picked port is on loopback, as reachable from this machine as
+the `127.0.0.1:<port>` you would have written; the listener's own check of
+each delivery (a webhook secret, a signature) is what guards it, as before.
+Under the plugin jail, a jailed exposure is granted exactly the listeners
+wired to it (see [[Plugins]], "What a plugin declares").
 
 ## Option merging and identity
 

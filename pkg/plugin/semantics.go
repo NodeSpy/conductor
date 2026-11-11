@@ -518,11 +518,22 @@ type TranslateSemantics struct {
 // `exposes`): a verb declaring `exposes.path` receives the resolved path as
 // an option and its returned URL is used as is; one that doesn't gets the
 // resolved path appended to its returned URL instead.
+//
+// DefaultPath is the path the plugin serves when the Path field is unset —
+// its own default, so an operator setting `expose:` need not repeat it. A
+// host that does not advertise SemanticListenerDefaultPath is never sent it
+// (Serve), and resolves an unset path to "/" as before.
+//
+// Listen may be left unset when Expose is set: the host then picks a local
+// address for the listener itself and passes it in the Listen field (and,
+// when the Path field is unset, the path it resolved in the Path field), so
+// the listener and its exposure agree without the operator naming either.
 type Listener struct {
-	Listen string `json:"listen"`
-	Expose string `json:"expose,omitempty"`
-	URLTo  string `json:"url_to,omitempty"`
-	Path   string `json:"path,omitempty"`
+	Listen      string `json:"listen"`
+	Expose      string `json:"expose,omitempty"`
+	URLTo       string `json:"url_to,omitempty"`
+	Path        string `json:"path,omitempty"`
+	DefaultPath string `json:"default_path,omitempty"`
 }
 
 // PreflightSemantics: commands checked at boot.
@@ -545,6 +556,9 @@ var semanticKeys = map[string][]string{
 	// env: entries (SemanticReferences), and grants expose_local
 	// (SemanticExposeLocal).
 	"capabilities": {"references", "expose_local"},
+	// Not a declaration key either: the host reads a listener's
+	// default_path (SemanticListenerDefaultPath).
+	"listeners": {"default_path"},
 }
 
 // KnownSemantics lists every semantic this SDK implements, as
@@ -898,6 +912,9 @@ func ValidateSemantics(d Decl) []string {
 			checkConnField("expose", l.Expose)
 			checkConnField("url_to", l.URLTo)
 			checkConnField("path", l.Path)
+			if l.DefaultPath != "" && (l.Path == "" || !strings.HasPrefix(l.DefaultPath, "/")) {
+				p = append(p, fmt.Sprintf("semantics.listeners[%d].default_path: needs path declared, and must start with /", i))
+			}
 		}
 	}
 	sort.Strings(p)

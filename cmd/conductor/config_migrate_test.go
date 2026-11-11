@@ -42,7 +42,7 @@ func stubMigrateOptions(t *testing.T, ensure func([]string) error, check func(st
 	old := migrateOptions
 	t.Cleanup(func() { migrateOptions = old })
 	migrateOptions = func(string, bool) configmigrate.Options {
-		return configmigrate.Options{Ensure: func(u []string, _ map[string][]string) error { return ensure(u) }, Check: check, Logf: logf, PortFree: func(int) bool { return true }}
+		return configmigrate.Options{Ensure: func(u []string, _ map[string][]string) error { return ensure(u) }, Check: check, Logf: logf}
 	}
 }
 

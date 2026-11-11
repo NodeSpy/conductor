@@ -511,3 +511,21 @@ func TestValidateSemanticsAttachments(t *testing.T) {
 		t.Fatalf("an undeclared fetch verb: %q", p)
 	}
 }
+
+// A listener's default_path needs the path field it defaults, and is a path.
+func TestValidateSemanticsListenerDefaultPath(t *testing.T) {
+	for l, bad := range map[Listener]bool{
+		{Listen: "listen", Path: "path", DefaultPath: "/hook"}: false,
+		{Listen: "listen", DefaultPath: "/hook"}:               true,
+		{Listen: "listen", Path: "path", DefaultPath: "hook"}:  true,
+	} {
+		d := Decl{
+			Connection: Schema{"listen": {Type: "string"}, "path": {Type: "string"}},
+			Semantics:  &ConnSemantics{Listeners: []Listener{l}},
+		}
+		p := strings.Join(ValidateSemantics(d), "\n")
+		if got := strings.Contains(p, "default_path"); got != bad {
+			t.Errorf("%+v: refused=%v (%q)", l, got, p)
+		}
+	}
+}

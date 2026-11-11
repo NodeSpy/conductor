@@ -35,7 +35,9 @@ import (
 // Two gates, at two different times:
 //   - load time (checkListenerExposures, called from Build): the expose
 //     target names a connector that exists and declares an exposes verb, and
-//     `listen` is set whenever `expose` is — the same config-mistake class
+//     `listen` is set whenever `expose` is (AssignListenAddrs fills it in
+//     first when the operator left it out, so this only catches a listener
+//     it could not give an address) — the same config-mistake class
 //     web's own `expose:` already catches (checkExposures), just read
 //     straight off the instance's YAML rather than through an Impl method,
 //     because at this point the registry (and so exposureVerb's lookup) may
@@ -281,13 +283,17 @@ func dialableAddr(listen string) string {
 }
 
 // resolveListenerPath reads the listener's own HTTP path out of cfg at
-// l.Path (default "/" when the listener declares no Path field, or the
-// field is unset at this instance), normalized to start with "/".
+// l.Path (when the listener declares no Path field, "/"; when the field is
+// unset at this instance, the listener's declared DefaultPath, else "/"),
+// normalized to start with "/".
 func resolveListenerPath(cfg map[string]any, l sdk.Listener) string {
 	if l.Path == "" {
 		return "/"
 	}
 	p := stringAtPath(cfg, l.Path)
+	if p == "" {
+		p = l.DefaultPath
+	}
 	if p == "" {
 		return "/"
 	}
