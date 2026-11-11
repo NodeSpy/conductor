@@ -73,7 +73,12 @@ func startKeyring(t *testing.T) *testKeyring {
 		t.Fatalf("dbus-daemon: %v", err)
 	}
 	addr := strings.TrimSpace(line)
+	// CONDUCTOR_TEST_SECRET_SERVICE names another Secret Service to run
+	// instead (a KWallet one, say), started with the same environment.
 	gk := exec.Command("gnome-keyring-daemon", "--foreground", "--unlock", "--components=secrets")
+	if other := os.Getenv("CONDUCTOR_TEST_SECRET_SERVICE"); other != "" {
+		gk = exec.Command(other)
+	}
 	gk.Env = []string{"PATH=" + os.Getenv("PATH"), "DBUS_SESSION_BUS_ADDRESS=" + addr,
 		"XDG_RUNTIME_DIR=" + filepath.Join(dir, "run"), "XDG_DATA_HOME=" + filepath.Join(dir, "data"), "HOME=" + filepath.Join(dir, "home")}
 	gk.Stdin = strings.NewReader("throwaway")
@@ -101,7 +106,7 @@ func startKeyring(t *testing.T) *testKeyring {
 			break
 		}
 		if i > 100 {
-			t.Fatalf("gnome-keyring did not come up: %s", gkErr.String())
+			t.Fatalf("the Secret Service did not come up: %s", gkErr.String())
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
