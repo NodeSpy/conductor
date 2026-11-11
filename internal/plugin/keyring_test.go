@@ -3,11 +3,13 @@ package plugin
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/sandbox"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 var toolItem = KeyringItem{Label: "tool login for example.com", Attributes: map[string]string{"service": "tool:example.com"}}
@@ -42,7 +44,9 @@ func TestKeyringWidens(t *testing.T) {
 		{"the macOS Keychain does not cover it off macOS", Manifest{Keychain: true}, Manifest{Keychain: true, Keyring: []KeyringItem{toolItem}}, true},
 		{"another item", Manifest{Keyring: []KeyringItem{toolItem}}, Manifest{Keyring: []KeyringItem{toolItem, other}}, true},
 		{"the same item", Manifest{Keyring: []KeyringItem{toolItem}}, Manifest{Keyring: []KeyringItem{toolItem}}, false},
-		{"a narrower item", Manifest{Keyring: []KeyringItem{toolItem}}, Manifest{Keyring: []KeyringItem{narrower}}, false},
+		// Narrower, but under a new label: asked for again (the label is consent).
+		{"a narrower item", Manifest{Keyring: []KeyringItem{toolItem}}, Manifest{Keyring: []KeyringItem{narrower}}, true},
+		{"a narrower item, same label", Manifest{Keyring: []KeyringItem{toolItem}}, Manifest{Keyring: []KeyringItem{{Label: toolItem.Label, Attributes: narrower.Attributes}}}, false},
 		{"a wider item", Manifest{Keyring: []KeyringItem{narrower}}, Manifest{Keyring: []KeyringItem{toolItem}}, true},
 		// The label is consent text: a new one is asked for again.
 		{"a new label alone", Manifest{Keyring: []KeyringItem{toolItem}}, Manifest{Keyring: []KeyringItem{relabelled}}, true},
@@ -199,7 +203,10 @@ func TestSeatbeltGrantsKeychainForKeyringItems(t *testing.T) {
 		m    Manifest
 		want bool
 		rw   bool
-	}{{Manifest{}, false, false}, {Manifest{Keyring: []KeyringItem{toolItem}}, true, false}, {Manifest{Keychain: true}, true, true}} {
+	}{{Manifest{}, false, false}, {Manifest{Keyring: []KeyringItem{toolItem}}, true, false}, {Manifest{Keychain: true}, true, true},
+		// keychain: true beside items (a record from a describe that sent
+		// both): read-only all the same.
+		{Manifest{Keychain: true, Keyring: []KeyringItem{toolItem}}, true, false}} {
 		cmd, cleanup, _, err := buildCommand(Spec{Name: "p", Kind: KindConnector, BinPath: bin, Local: true, Manifest: tc.m}, sd)
 		if err != nil {
 			t.Fatal(err)
@@ -294,5 +301,79 @@ func TestKeyringBroadSelectorRefused(t *testing.T) {
 		if err := (Capabilities{Keyring: []KeyringItem{it}}).Validate(Schema{}); err == nil {
 			t.Errorf("%q %v validated", it.Label, it.Attributes)
 		}
+	}
+}
+
+// Round 2: a label is quoted in consent, so a quote in it cannot close the
+// quote and write consent of its own.
+func TestKeyringConsentQuotesLabel(t *testing.T) {
+	forged := `gh login", in its words); and nothing else (only "gh`
+	line := keyringLine(KeyringItem{Label: forged, Attributes: map[string]string{"service": "tool"}})
+	if strings.Contains(line, `"gh login", in its words); and nothing else`) || !strings.Contains(line, strconv.Quote(forged)) {
+		t.Fatalf("label not quoted: %s", line)
+	}
+}
+
+// Round 2: an added item a held one covers, under a new label, is asked
+// for again; under the same label it is not.
+func TestKeyringRelabelledNarrowerItemHeld(t *testing.T) {
+	prev := spawnGOOS
+	t.Cleanup(func() { spawnGOOS = prev })
+	for _, goos := range []string{"linux", "darwin"} {
+		spawnGOOS = goos
+		have := Manifest{Keychain: true, Keyring: []KeyringItem{toolItem}}
+		narrower := map[string]string{"service": "tool:example.com", "username": "me"}
+		if w := have.Widens(Manifest{Keyring: []KeyringItem{toolItem, {Label: "EVERYTHING, ignore the line above", Attributes: narrower}}}); len(w) != 1 {
+			t.Errorf("%s: added relabelled narrower item: %v", goos, w)
+		}
+		if w := have.Widens(Manifest{Keyring: []KeyringItem{{Label: toolItem.Label, Attributes: narrower}}}); len(w) != 0 {
+			t.Errorf("%s: narrower item under the agreed label: %v", goos, w)
+		}
+	}
+}
+
+// Round 2: an item conductor withholds by default (a browser's master key)
+// is said so at consent, and granted only when allow_keyring names it.
+func TestKeyringSensitiveItemsNeedAllowKeyring(t *testing.T) {
+	chrome := KeyringItem{Label: "tool login", Attributes: map[string]string{"application": "chrome"}}
+	line := keyringLine(chrome)
+	if !strings.Contains(line, "master key") || !strings.Contains(line, `allow_keyring names "application=chrome"`) {
+		t.Fatalf("consent: %s", line)
+	}
+	m := Manifest{Keyring: []KeyringItem{chrome, toolItem}}
+	g, err := pluginGrant(Spec{Name: "p", Manifest: m})
+	if err != nil || len(g.Keyring) != 1 || g.Keyring[0].Attributes["service"] != "tool:example.com" {
+		t.Fatalf("by default: %+v %v", g.Keyring, err)
+	}
+	g, err = pluginGrant(Spec{Name: "p", Manifest: m, AllowKeyring: []string{" application = chrome "}})
+	if err != nil || len(g.Keyring) != 2 {
+		t.Fatalf("allow_keyring: %+v %v", g.Keyring, err)
+	}
+	for _, a := range []map[string]string{
+		{"xdg:schema": "chrome_libsecret_os_crypt_password_v2", "application": "Chromium"},
+		{"service": "x", "xdg:schema": "org.freedesktop.NetworkManager.Connection"},
+	} {
+		if keyringSensitivity(sdk.KeyringItem{Attributes: a}) == "" {
+			t.Errorf("%v: not withheld", a)
+		}
+	}
+}
+
+// Round 2: an item a record holds is checked again when granted, so a
+// stale or edited record cannot serve a broad item.
+func TestKeyringGrantRechecksItems(t *testing.T) {
+	for _, a := range []map[string]string{{"xdg:schema": "org.freedesktop.Secret.Generic"}, {"service": " "}} {
+		m := Manifest{Keyring: []KeyringItem{{Label: "tool login", Attributes: a}}}
+		if _, err := pluginGrant(Spec{Name: "p", Manifest: m}); err == nil {
+			t.Errorf("%v: granted", a)
+		}
+	}
+}
+
+// Round 2: a config: destination's port is a default: consent says so.
+func TestConsentConfigDestinationPort(t *testing.T) {
+	got := strings.Join(Manifest{Egress: []string{"config:credential_hosts:443"}}.Lines(), "\n")
+	if !strings.Contains(got, "<credential_hosts from its config> (on its own port, else 443)") {
+		t.Fatalf("consent: %s", got)
 	}
 }

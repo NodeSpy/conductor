@@ -68,7 +68,7 @@ func TestResolveCopiesKeyring(t *testing.T) {
 type keyringHandler struct{}
 
 func (keyringHandler) Describe() Decl {
-	return Decl{Type: "t", Capabilities: Capabilities{Commands: []string{"tool"},
+	return Decl{Type: "t", Capabilities: Capabilities{Commands: []string{"tool"}, Keychain: true,
 		Keyring: []KeyringItem{{Label: "tool login", Attributes: map[string]string{"service": "tool"}}}}}
 }
 func (keyringHandler) Invoke(InvokeRequest) (InvokeResult, error) { return InvokeResult{}, nil }
@@ -98,6 +98,11 @@ func TestServeWithholdsKeyringFromOldHosts(t *testing.T) {
 		}
 		if _, sent := d.Capabilities["keyring"]; sent != want {
 			t.Errorf("host %d: keyring sent=%v, want %v", i, sent, want)
+		}
+		// keychain: true (read-write on macOS) is only for hosts that do
+		// not grant the items: one that does reads them read-only.
+		if _, sent := d.Capabilities["keychain"]; sent == want {
+			t.Errorf("host %d: keychain sent=%v alongside keyring=%v", i, sent, want)
 		}
 		if _, sent := d.Capabilities["commands"]; !sent {
 			t.Errorf("host %d: the rest of the declaration was withheld too", i)
@@ -218,5 +223,37 @@ func TestKeyringEnvRefNotSecret(t *testing.T) {
 		if err := c.Validate(Schema{}); err == nil {
 			t.Errorf("%s: validated", v)
 		}
+	}
+}
+
+// Round 2: blank values, padded names, and credential-looking variables by
+// more names (…_PAT, …_KEY, …AUTH, …COOKIE, …SESSION) are refused; Check
+// refuses the same as Validate for one resolved item.
+func TestKeyringBlankAndCredentialNames(t *testing.T) {
+	for _, a := range []map[string]string{
+		{"service": " "}, {"service": "\t"}, {"service ": "x"}, {" service": "x"},
+	} {
+		it := KeyringItem{Label: "l", Attributes: a}
+		if err := (Capabilities{Keyring: []KeyringItem{it}}).Validate(Schema{}); err == nil {
+			t.Errorf("%q validated", a)
+		}
+		if it.Check() == nil {
+			t.Errorf("%q: Check passed", a)
+		}
+	}
+	for _, v := range []string{"GH_PAT", "OPENAI_KEY", "NPM_AUTH", "SESSION_COOKIE", "MY_SESSION", "DB_PASS", "KEY"} {
+		c := Capabilities{Env: []string{v}, Keyring: []KeyringItem{{Label: "l", Attributes: map[string]string{"service": "tool:${env:" + v + "}"}}}}
+		if err := c.Validate(Schema{}); err == nil {
+			t.Errorf("%s: validated", v)
+		}
+	}
+	for _, v := range []string{"GH_HOST", "TOOL_HOST", "KEYBOARD_LAYOUT", "PATH"} {
+		c := Capabilities{Env: []string{v}, Keyring: []KeyringItem{{Label: "l", Attributes: map[string]string{"service": "tool:${env:" + v + "}"}}}}
+		if err := c.Validate(Schema{}); err != nil {
+			t.Errorf("%s: %v", v, err)
+		}
+	}
+	if (KeyringItem{Label: "l", Attributes: map[string]string{"xdg:schema": "s"}}).Check() == nil {
+		t.Error("Check passed an item naming no identifying attribute")
 	}
 }

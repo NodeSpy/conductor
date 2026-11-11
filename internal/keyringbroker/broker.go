@@ -111,9 +111,12 @@ func Serve(path string, items []sdk.KeyringItem, o Options) (*Broker, error) {
 	if len(items) == 0 {
 		return nil, errors.New("keyring broker: no items declared")
 	}
+	// Each item is checked once more where it is served: the declared
+	// attributes are the whole boundary, so one that would match other
+	// programs' items is refused here too.
 	for _, it := range items {
-		if len(it.Attributes) == 0 {
-			return nil, fmt.Errorf("keyring broker: item %q names no attributes", it.Label)
+		if err := it.Check(); err != nil {
+			return nil, fmt.Errorf("keyring broker: %w", err)
 		}
 	}
 	ln, err := net.Listen("unix", path)

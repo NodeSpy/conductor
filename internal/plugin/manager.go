@@ -186,6 +186,7 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 		s.Network = ref.Network
 		s.AllowSecrets = ref.AllowSecrets
 		s.AllowEnv = ref.AllowEnv
+		s.AllowKeyring = ref.AllowKeyring
 	}
 	if ref.Use.Origin == config.OriginLocal {
 		bin := ref.Use.Path
@@ -241,6 +242,7 @@ func InstanceSpec(spec Spec, instance string) Spec {
 		instSpec.Network = g.Network
 		instSpec.AllowSecrets = g.AllowSecrets
 		instSpec.AllowEnv = g.AllowEnv
+		instSpec.AllowKeyring = g.AllowKeyring
 		instSpec.Isolation = g.Isolation
 		instSpec.Conns = []map[string]any{g.Conn}
 		instSpec.TrustFull = g.TrustFull
@@ -250,6 +252,7 @@ func InstanceSpec(spec Spec, instance string) Spec {
 		instSpec.Network = nil
 		instSpec.AllowSecrets = nil
 		instSpec.AllowEnv = nil
+		instSpec.AllowKeyring = nil
 		instSpec.Isolation = nil
 	}
 	instSpec.Instances = nil

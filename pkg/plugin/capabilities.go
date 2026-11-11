@@ -339,16 +339,29 @@ func hostOf(v string) (string, error) {
 	return strings.ToLower(h), nil
 }
 
-// secretName reports whether a variable's name looks like a credential's.
+// secretName reports whether a variable's name looks like a credential's:
+// a word such as TOKEN, PASSWORD, AUTH, COOKIE or SESSION in it, or a name
+// that is or ends in KEY or PAT.
 func secretName(n string) bool {
 	u := strings.ToUpper(n)
-	for _, w := range []string{"TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "APIKEY", "PRIVATE_KEY", "ACCESS_KEY", "CREDENTIAL", "AUTH_SOCK"} {
+	for _, w := range []string{"TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASSPHRASE", "API_KEY", "APIKEY", "PRIVATE_KEY", "ACCESS_KEY",
+		"CREDENTIAL", "CREDS", "AUTH", "COOKIE", "SESSION", "BEARER", "JWT"} {
 		if strings.Contains(u, w) {
+			return true
+		}
+	}
+	for _, w := range []string{"KEY", "PAT", "PASS", "PWD"} {
+		if u == w || strings.HasSuffix(u, "_"+w) || strings.Contains(u, "_"+w+"_") {
 			return true
 		}
 	}
 	return false
 }
+
+// Check checks one item on its own, as Validate does: a label, attributes
+// that name whose item it is, nothing blank or unprintable. A host checks
+// each item again where it grants it, after references are resolved.
+func (it KeyringItem) Check() error { return it.validate() }
 
 // IdentifyingKeys are the attribute names that say which program's or
 // site's item it is. Each declared item names at least one: the others
@@ -382,8 +395,8 @@ func (it KeyringItem) validate() error {
 		return fmt.Errorf("%q names none of %s: attributes such as xdg:schema or protocol alone match many programs' items", it.Label, strings.Join(IdentifyingKeys, ", "))
 	}
 	for k, v := range it.Attributes {
-		if k == "" || v == "" {
-			return fmt.Errorf("%q: attribute %q=%q: names and values may not be empty", it.Label, k, v)
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" || strings.TrimSpace(k) != k {
+			return fmt.Errorf("%q: attribute %q=%q: names and values may not be blank, nor a name padded", it.Label, k, v)
 		}
 		if !printable(k) || !printable(v) {
 			return fmt.Errorf("%q: attribute %q=%q has a control character", it.Label, k, v)

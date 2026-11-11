@@ -189,7 +189,7 @@ func expandPathValue(v reflect.Value) bool {
 // connectorHeaderKeys are a connector's common header keys: not connection
 // fields (options: are verb options; isolation: is a struct the pass handles).
 var connectorHeaderKeys = map[string]bool{"use": true, "type": true, "network": true, "enabled": true,
-	"options": true, "policy": true, "isolation": true, "allow_secrets": true, "allow_env": true, "isolate": true}
+	"options": true, "policy": true, "isolation": true, "allow_secrets": true, "allow_env": true, "allow_keyring": true, "isolate": true}
 
 // pathKey reports whether a raw connection key names a path.
 func pathKey(k string) bool {

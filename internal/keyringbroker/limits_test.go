@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // serveCounted serves the fake keyring and counts how often the upstream is
@@ -281,5 +283,20 @@ func TestPacer(t *testing.T) {
 	}
 	if d := time.Since(start); d < 150*time.Millisecond {
 		t.Fatalf("5 calls at 20/s, burst 1, took %v", d)
+	}
+}
+
+// Round 2: the broker checks each item once more: an item naming no
+// identifying attribute, or a blank value, is never served.
+func TestServeRefusesBroadItems(t *testing.T) {
+	dir := t.TempDir()
+	for i, it := range []sdk.KeyringItem{
+		{Label: "l", Attributes: map[string]string{"xdg:schema": "org.freedesktop.Secret.Generic"}},
+		{Label: "l", Attributes: map[string]string{"service": " "}},
+	} {
+		if b, err := Serve(filepath.Join(dir, strconv.Itoa(i)), []sdk.KeyringItem{it}, Options{}); err == nil {
+			b.Close()
+			t.Errorf("%v: served", it.Attributes)
+		}
 	}
 }

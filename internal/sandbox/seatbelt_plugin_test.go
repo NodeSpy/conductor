@@ -142,3 +142,19 @@ func TestSeatbeltPluginProfileKeychainOnlyWhenDeclared(t *testing.T) {
 		t.Fatalf("Keychain: true with no Home must not render a Keychains path:\n%s", noHome)
 	}
 }
+
+// A keyring item reads the Keychain: its files read-only, and none of the
+// services that show the user a dialog. keychain: true keeps both.
+func TestPluginProfileKeychainReadOnly(t *testing.T) {
+	ro := seatbeltPluginProfile(&PluginProfile{KeychainRead: true, Home: "/Users/u"})
+	if !strings.Contains(ro, `(allow file-read* (subpath "/Users/u/Library/Keychains"))`) || strings.Contains(ro, `file-write* (subpath "/Users/u/Library/Keychains")`) {
+		t.Fatalf("read-only Keychain files:\n%s", ro)
+	}
+	if !strings.Contains(ro, `"com.apple.SecurityServer"`) || strings.Contains(ro, `"com.apple.security.agent"`) || strings.Contains(ro, `"com.apple.security.authhost"`) {
+		t.Fatalf("read-only Keychain services:\n%s", ro)
+	}
+	rw := seatbeltPluginProfile(&PluginProfile{Keychain: true, KeychainRead: true, Home: "/Users/u"})
+	if !strings.Contains(rw, `file-write* (subpath "/Users/u/Library/Keychains")`) || !strings.Contains(rw, `"com.apple.security.agent"`) {
+		t.Fatalf("keychain: true:\n%s", rw)
+	}
+}

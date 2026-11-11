@@ -497,6 +497,10 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 		}
 		if !req.Host.GrantsKeyring() {
 			d.Capabilities.Keyring = nil
+		} else if len(d.Capabilities.Keyring) > 0 {
+			// Keychain (read-write on macOS) is for hosts before keyring
+			// items; one that grants the items reads them read-only.
+			d.Capabilities.Keychain = false
 		}
 		if !req.Host.ReadsListenerDefaultPath() {
 			WithoutListenerDefaultPath(&d)

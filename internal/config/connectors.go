@@ -67,6 +67,11 @@ type ConnectorRef struct {
 	// (capabilities.env). Unset passes every variable it declares (the user
 	// agreed to them with the plugin); `allow_env: []` passes none.
 	AllowEnv []string `yaml:"allow_env,omitempty"`
+	// AllowKeyring lets a plugin-backed connector read keyring items
+	// conductor withholds by default (a browser's or the desktop's own
+	// secrets), each named by its attributes as the plugin declares them
+	// ("application=chrome"). Only items the plugin declares.
+	AllowKeyring []string `yaml:"allow_keyring,omitempty"`
 	// Isolate opts THIS configured instance INTO its own dedicated subprocess,
 	// with exactly its own grant (Network/AllowSecrets/AllowEnv/Isolation),
 	// instead of sharing its plugin VERSION's one process with every sibling
@@ -113,6 +118,7 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 		Isolation    *IsolationConfig `yaml:"isolation,omitempty"`
 		AllowSecrets []string         `yaml:"allow_secrets,omitempty"`
 		AllowEnv     []string         `yaml:"allow_env,omitempty"`
+		AllowKeyring []string         `yaml:"allow_keyring,omitempty"`
 		Isolate      bool             `yaml:"isolate,omitempty"`
 		Trust        string           `yaml:"trust,omitempty"`
 	}
@@ -123,6 +129,7 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 	r.Use, r.Network, r.Enabled, r.Options, r.Policy = h.Use, h.Network, h.Enabled, h.Options, h.Policy
 	r.Isolation, r.AllowSecrets, r.legacyType, r.raw = h.Isolation, h.AllowSecrets, h.Type, *n
 	r.AllowEnv = h.AllowEnv
+	r.AllowKeyring = h.AllowKeyring
 	r.Isolate = h.Isolate
 	r.Trust = h.Trust
 	if h.Network != nil && len(h.Network) == 0 {

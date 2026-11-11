@@ -477,8 +477,26 @@ github.com. Each item names at least one attribute that says whose item it
 is: `service`, `server`, `host`, `domain`, `url`, `origin` or
 `application`. Attributes many programs' items share (`xdg:schema`,
 `protocol`, `port`, a user name) cannot make up a declaration on their own,
-since they would read all of those programs' items. A label is a few words
-without control or formatting characters.
+since they would read all of those programs' items. No name or value may
+be blank. A label is a few words without control or formatting characters,
+and is always shown quoted. Each item is checked again as resolved, both
+when the plugin is launched and by the broker, so a stale or edited record
+can't serve a broader item.
+
+Some items unlock far more than a CLI's login: a browser's master key
+(`application=chrome`, `chromium`, `brave`, `firefox`, …, or the
+`chrome_libsecret_os_crypt_password_v2` schema), a network's secrets, the
+desktop's online accounts, another keyring's password, or a password
+manager's key. conductor withholds such an item even when a plugin declares
+it. Consent says what it is, the log says it was withheld, and it is
+granted only if the connector's entry names it by its attributes:
+
+```yaml
+connectors:
+  example:
+    use: example
+    allow_keyring: ["application=chrome"]
+```
 
 One attribute value per item may name the instance's own config or a
 declared variable, as a path or destination can:
@@ -494,7 +512,7 @@ of the instance's `api_base`. A field or variable that is not set gives no
 item. A value with no host, or with a control character, fails the launch
 naming the field. As with `config:` destinations, the field may not be a
 secret one, and the variable may not look like a credential (`…TOKEN`,
-`…PASSWORD`, `…API_KEY`, …). A variable your entry's `allow_env` leaves out
+`…PASSWORD`, `…AUTH`, `…COOKIE`, `…SESSION`, `…_KEY`, `…_PAT`, …). A variable your entry's `allow_env` leaves out
 gives no item. You are shown the reference (`service=gh:<host of api_base
 from its config>`). `conductor plugin show` lists the items it resolves to
 on this machine and how many items in your keyring each matches now. A
@@ -522,15 +540,21 @@ plugin's label in its own words:
   seconds, an idle connection closed after 5 minutes, and every plugin's
   calls to your keyring paced together (50 a second). A string your bus
   would refuse never reaches it.
-- **macOS.** A declared item grants the Keychain read-only: its services,
-  and `~/Library/Keychains` to read, not write (`keychain: true` grants it
-  read-write). macOS cannot confine a program to some Keychain items, so
+- **macOS.** A declared item grants the Keychain read-only: the services
+  reading an item needs (not the ones that show you a dialog: an item whose
+  access control doesn't trust the program fails rather than prompting
+  you), and `~/Library/Keychains` to read, not write. `keychain: true`
+  grants it read-write, but only to a plugin that declares no items: a
+  plugin built with this SDK doesn't send `keychain` to a conductor that
+  grants items, and conductor ignores it beside items. macOS cannot confine a program to some Keychain items, so
   the plugin may read any item the Keychain's own per-item access control
   lets it read, and the consent line says so:
   `reads your macOS Keychain, read-only, for every item with service=gh:github.com ("gh login for github.com", in its words): …`.
-  Writes the Keychain makes through its own system service (the
-  data-protection keychain) are outside what the sandbox's file rules
-  stop.
+  Checked on macOS 26 against a throwaway keychain: under the profile,
+  `security find-generic-password` and the Security API read an item.
+  Adding, modifying and deleting items fails, through `security` and
+  through the API. The data-protection keychain refuses a plugin binary
+  anyway, because it lacks the entitlement the keychain asks for.
 - **Locked keyring.** conductor never unlocks your keyring, and never shows
   an unlock prompt, for a plugin. The CLI fails as it would with a locked
   keyring, and the log says
@@ -545,7 +569,8 @@ plugin's label in its own words:
   conductor finds your session bus from `DBUS_SESSION_BUS_ADDRESS`, else
   `$XDG_RUNTIME_DIR/bus`. It never launches a bus.
 - **Updates.** A release that adds a keyring item, or gives a declared
-  one a new label (the label is what you agreed to), asks for a new
+  one a new label (the label is what you agreed to, so an item is covered
+  only by one you agreed to under the same label), asks for a new
   permission, so it is held like any other (below) until you approve it. A build that
   an older conductor installed with the item withheld is held the same way
   on the first start after you upgrade conductor (below). On macOS, a

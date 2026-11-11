@@ -70,13 +70,30 @@ const seatbeltPluginBase = `(version 1)
 `
 
 // seatbeltPluginProfile renders the plugin profile.
+// pluginMachKeychainRead are the Keychain services reading an item needs:
+// agentMachKeychain without the security agent and its auth host, which
+// show the user dialogs (an access prompt, an unlock prompt). Without them
+// an item whose access control does not trust the program fails to read
+// rather than asking the user. Reads, and the denial of writes, were
+// checked on macOS 26 against a throwaway keychain.
+var pluginMachKeychainRead = []string{
+	"com.apple.SecurityServer",
+	"com.apple.securityd.xpc",
+	"com.apple.ocspd",
+	"com.apple.security.syspolicy",
+	"com.apple.CoreAuthentication.daemon",
+}
+
 func seatbeltPluginProfile(p *PluginProfile) string {
 	var b strings.Builder
 	b.WriteString(seatbeltPluginBase)
 	b.WriteString("(allow mach-lookup")
 	mach := append([]string(nil), agentMachBase...)
-	if p.Keychain || p.KeychainRead {
+	switch {
+	case p.Keychain:
 		mach = append(mach, agentMachKeychain...)
+	case p.KeychainRead:
+		mach = append(mach, pluginMachKeychainRead...)
 	}
 	for _, s := range mach {
 		b.WriteString("\n  (global-name " + sbplString(s) + ")")
