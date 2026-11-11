@@ -498,6 +498,16 @@ connectors:
     allow_keyring: ["application=chrome"]
 ```
 
+On Linux this is checked twice: against the declared item, and again by the
+broker against the attributes each item in your keyring really carries. An
+Electron app keeps its master key as Chromium does (`application=Slack`
+beside the `chrome_libsecret_os_crypt_password_v2` schema), so a plugin
+declaring `application=Slack` matches it without naming the schema. The
+broker leaves such an item out of every search and refuses its secret, and
+the log says it was withheld. The app's other items are still served. An
+`allow_keyring` entry names every item that carries all of its `k=v` pairs
+exactly (`application=Slack` names the app's master key as well).
+
 One attribute value per item may name the instance's own config or a
 declared variable, as a path or destination can:
 
@@ -513,13 +523,14 @@ item. A value with no host, or with a control character, fails the launch
 naming the field. As with `config:` destinations, the field may not be a
 secret one, and the variable may not look like a credential (`…TOKEN`,
 `…PASSWORD`, `…AUTH`, `…COOKIE`, `…SESSION`, `…_KEY`, `…_PAT`, …). A variable your entry's `allow_env` leaves out
-gives no item. You are shown the reference (`service=gh:<host of api_base
-from its config>`). `conductor plugin show` lists the items it resolves to
+gives no item. You are shown the reference (`service="gh:<host of api_base
+from its config>"`). `conductor plugin show` lists the items it resolves to
 on this machine and how many items in your keyring each matches now. A
 conductor that does not resolve references is not sent such an item. You
 are shown what is enforced, every item with those attributes, and the
-plugin's label in its own words:
-`reads every item in your keyring with service=gh:github.com ("gh login for github.com", in its words)`.
+plugin's label in its own words. Labels and values are the plugin's text and are
+always quoted, and so is an attribute name that isn't a plain name:
+`reads every item in your keyring with service="gh:github.com" ("gh login for github.com", in its words)`.
 
 - **Linux.** The jail never gets your session bus: it reaches every program
   in your desktop session, and the Secret Service has no per-item access
@@ -549,12 +560,17 @@ plugin's label in its own words:
   grants items, and conductor ignores it beside items. macOS cannot confine a program to some Keychain items, so
   the plugin may read any item the Keychain's own per-item access control
   lets it read, and the consent line says so:
-  `reads your macOS Keychain, read-only, for every item with service=gh:github.com ("gh login for github.com", in its words): …`.
+  `reads your macOS Keychain, read-only, for every item with service="gh:github.com" ("gh login for github.com", in its words): …`.
   Checked on macOS 26 against a throwaway keychain: under the profile,
   `security find-generic-password` and the Security API read an item.
   Adding, modifying and deleting items fails, through `security` and
   through the API. The data-protection keychain refuses a plugin binary
-  anyway, because it lacks the entitlement the keychain asks for.
+  anyway, because it lacks the entitlement the keychain asks for. Locking a
+  keychain is not refused: `security lock-keychain` and `SecKeychainLock`
+  lock it under the profile. They go through the same service
+  (`com.apple.SecurityServer`) as reads, and without it nothing can be read.
+  A plugin can therefore lock your keychains, so the next program to read
+  one asks you to unlock it. It cannot read or change anything by doing so.
 - **Locked keyring.** conductor never unlocks your keyring, and never shows
   an unlock prompt, for a plugin. The CLI fails as it would with a locked
   keyring, and the log says

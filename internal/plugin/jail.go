@@ -928,8 +928,9 @@ func buildNamespaced(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv,
 			path := filepath.Join(dir, "bus")
 			name := s.Name
 			kb, err := keyringbroker.Serve(path, g.Keyring, keyringbroker.Options{
-				Logf: func(format string, args ...any) { log.Printf("plugin %s: "+format, append([]any{name}, args...)...) },
-				Dial: keyringUpstream,
+				Logf:  func(format string, args ...any) { log.Printf("plugin %s: "+format, append([]any{name}, args...)...) },
+				Dial:  keyringUpstream,
+				Allow: s.AllowKeyring,
 			})
 			if err != nil {
 				cleanup()

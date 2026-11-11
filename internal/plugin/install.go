@@ -284,7 +284,7 @@ func keyringLine(it KeyringItem) string {
 	sort.Strings(keys)
 	var parts []string
 	for _, k := range keys {
-		parts = append(parts, shown(k)+"="+plainKeyringValue(it.Attributes[k]))
+		parts = append(parts, keyringKey(k)+"="+plainKeyringValue(it.Attributes[k]))
 	}
 	sel := strings.Join(parts, ", ")
 	// The label is the plugin's text: quoted, so it cannot close the quote
@@ -303,10 +303,13 @@ func keyringLine(it KeyringItem) string {
 // plainKeyringValue spells out a keyring attribute value's reference, as
 // plainEntry does a path's: "gh:${host:config:api_base}" is
 // "gh:<host of api_base from its config>".
+//
+// The value is the plugin's text: quoted, as the label is, so it cannot
+// close the line's own words and write consent of its own.
 func plainKeyringValue(v string) string {
 	r, ok, err := sdk.ParseKeyringValue(v)
 	if err != nil || !ok {
-		return shown(v)
+		return strconv.Quote(v)
 	}
 	var what string
 	switch {
@@ -319,7 +322,18 @@ func plainKeyringValue(v string) string {
 	default:
 		what = "$" + shown(r.Name)
 	}
-	return shown(r.Prefix) + what + shown(r.Suffix)
+	return strconv.Quote(r.Prefix + what + r.Suffix)
+}
+
+// keyringKey is an attribute name as consent shows it: as it is when it is
+// a plain name (letters, digits, ":", "_", ".", "-"), quoted otherwise.
+func keyringKey(k string) string {
+	for _, r := range k {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune(":_.-", r)) {
+			return strconv.Quote(k)
+		}
+	}
+	return k
 }
 
 // keyringCovers reports whether m already grants reading the item: one of

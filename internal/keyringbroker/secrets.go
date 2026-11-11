@@ -414,7 +414,53 @@ func (b *Broker) search(attrs map[string]string) (unlocked, locked []dbus.Object
 			}
 		}
 	}
+	// A result is an item the declared attributes match; what else it
+	// carries is the keyring's, so each is checked as served (check).
+	if unlocked, err = b.served(unlocked); err != nil {
+		return nil, nil, err
+	}
+	if locked, err = b.served(locked); err != nil {
+		return nil, nil, err
+	}
 	return unlocked, locked, nil
+}
+
+// served keeps the paths check serves.
+func (b *Broker) served(paths []dbus.ObjectPath) ([]dbus.ObjectPath, error) {
+	var out []dbus.ObjectPath
+	for _, p := range paths {
+		a, _, err := b.check(p)
+		if err != nil {
+			return nil, err
+		}
+		if a != nil {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// withheld reports (once per item) whether an item the declaration matches
+// is sensitive by the attributes it really carries, and allow_keyring does
+// not name it.
+func (b *Broker) withheld(attrs map[string]string) bool {
+	what := Sensitivity(attrs)
+	if what == "" || Allows(b.allow, attrs) {
+		return false
+	}
+	sel := b.selectorFor(attrs)
+	b.report("withheld:"+sel+":"+what, "keyring item %s withheld: the item it matches is %s — name it in the connector's allow_keyring to grant it", strconv.Quote(sel), what)
+	return true
+}
+
+// selectorFor is the selector of the declared item matching attrs.
+func (b *Broker) selectorFor(attrs map[string]string) string {
+	for _, it := range b.items {
+		if it.Matches(attrs) {
+			return it.Selector()
+		}
+	}
+	return ""
 }
 
 // check reads an item's attributes and lock from the keyring: nil
@@ -439,7 +485,7 @@ func (b *Broker) check(path dbus.ObjectPath) (attrs map[string]string, locked bo
 		return nil, false, err
 	}
 	a, ok := v.Value().(map[string]string)
-	if !ok || !b.declared(a) {
+	if !ok || !b.declared(a) || b.withheld(a) {
 		return nil, false, nil
 	}
 	if lv, err := up.Prop(path, "Locked"); err == nil {

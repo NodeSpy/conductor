@@ -164,7 +164,8 @@ type Spec struct {
 	// (allow_env); only those the plugin also declares are passed.
 	AllowEnv []string
 	// AllowKeyring are the withheld-by-default keyring items the config
-	// lets it read (sensitiveKeyring), by selector.
+	// lets it read (keyringbroker.Sensitivity): "k=v, ..." entries, each
+	// naming the items that carry all of its pairs (keyringbroker.Allows).
 	AllowKeyring []string
 	// Shared reports whether this key's DEFAULT process should exist: true
 	// for every runtime/engine Spec (neither has more than one "instance"

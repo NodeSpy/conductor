@@ -80,6 +80,7 @@ type Upstream interface {
 // Broker serves one plugin launch's declared keyring items on a socket.
 type Broker struct {
 	items []sdk.KeyringItem
+	allow []string
 	logf  func(string, ...any)
 	dial  func() (Upstream, error)
 
@@ -103,6 +104,10 @@ type Options struct {
 	// Dial reaches the user's keyring; nil is the session bus's Secret
 	// Service (SessionUpstream).
 	Dial func() (Upstream, error)
+	// Allow are the user's allow_keyring entries: a served item that is
+	// sensitive (Sensitivity of the attributes it really carries) is
+	// withheld unless one names it (Allows).
+	Allow []string
 }
 
 // Serve listens on a unix socket at path and serves items there until the
@@ -127,7 +132,7 @@ func Serve(path string, items []sdk.KeyringItem, o Options) (*Broker, error) {
 		ln.Close()
 		return nil, err
 	}
-	b := &Broker{items: items, logf: o.Logf, dial: o.Dial, ln: ln, conns: map[net.Conn]bool{}, logged: map[string]bool{},
+	b := &Broker{items: items, allow: o.Allow, logf: o.Logf, dial: o.Dial, ln: ln, conns: map[net.Conn]bool{}, logged: map[string]bool{},
 		authTimeout: authTimeout, idleTimeout: idleTimeout}
 	if b.logf == nil {
 		b.logf = func(string, ...any) {}

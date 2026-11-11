@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"maps"
 	"math/big"
 	"os"
@@ -119,6 +120,12 @@ var declared = []sdk.KeyringItem{{Label: "tool login for example.com", Attribute
 
 func serveFake(t *testing.T, up Upstream, items []sdk.KeyringItem) (*dbus.Conn, *logs) {
 	t.Helper()
+	return serveFakeAllowing(t, up, items, nil)
+}
+
+// serveFakeAllowing is serveFake with the user's allow_keyring.
+func serveFakeAllowing(t *testing.T, up Upstream, items []sdk.KeyringItem, allow []string) (*dbus.Conn, *logs) {
+	t.Helper()
 	dir, err := os.MkdirTemp("", "kb")
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +134,8 @@ func serveFake(t *testing.T, up Upstream, items []sdk.KeyringItem) (*dbus.Conn, 
 	path := filepath.Join(dir, "bus")
 	lg := &logs{}
 	b, err := Serve(path, items, Options{
-		Logf: func(f string, a ...any) { lg.mu.Lock(); lg.l = append(lg.l, f); lg.mu.Unlock() },
+		Logf:  func(f string, a ...any) { lg.mu.Lock(); lg.l = append(lg.l, fmt.Sprintf(f, a...)); lg.mu.Unlock() },
+		Allow: allow,
 		Dial: func() (Upstream, error) {
 			if up == nil {
 				return nil, errNoBus

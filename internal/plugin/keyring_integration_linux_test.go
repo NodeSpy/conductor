@@ -200,12 +200,18 @@ func runJailedProbe(t *testing.T, m Manifest, args ...string) (map[string]string
 // runJailedProbeFor is runJailedProbe for instances configured as conns.
 func runJailedProbeFor(t *testing.T, conns []map[string]any, m Manifest, args ...string) (map[string]string, string) {
 	t.Helper()
+	return runJailedProbeAllowing(t, conns, nil, m, args...)
+}
+
+// runJailedProbeAllowing is runJailedProbeFor with the user's allow_keyring.
+func runJailedProbeAllowing(t *testing.T, conns []map[string]any, allow []string, m Manifest, args ...string) (map[string]string, string) {
+	t.Helper()
 	sd := testJailDeps(t)
 	var logs syncBuf
 	prev := log.Writer()
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(prev) })
-	s := Spec{Name: "probe", Kind: KindConnector, BinPath: keyringProbe(t), Manifest: m, Args: args, Conns: conns}
+	s := Spec{Name: "probe", Kind: KindConnector, BinPath: keyringProbe(t), Manifest: m, Args: args, Conns: conns, AllowKeyring: allow}
 	cmd, cleanup, sandboxed, err := buildCommand(s, sd)
 	if err != nil {
 		t.Fatal(err)
@@ -481,5 +487,44 @@ func TestJailedKeyringGitCredentialHelper(t *testing.T) {
 	}
 	if strings.Contains(other, "git_undeclared") {
 		t.Errorf("another host's login was read: %s", other)
+	}
+}
+
+// TestJailedKeyringSafeStorageWithheld: an app's safe-storage key (Chromium's
+// schema, the app's name) is the app's master key. A declaration naming the
+// app alone matches it; the jail reads the app's own login and never the key,
+// whatever it searches for, unless the user's allow_keyring names it. Naming
+// a browser outright, or through config, withholds the item at the grant.
+func TestJailedKeyringSafeStorageWithheld(t *testing.T) {
+	requireKeyringTools(t, "secret-tool")
+	k := startKeyring(t)
+	const cs = "chrome_libsecret_os_crypt_password_v2"
+	k.store(t, "Slack Safe Storage", "SLACK-MASTER-KEY", map[string]string{"xdg:schema": cs, "application": "Slack"})
+	k.store(t, "Chrome Safe Storage", "CHROME-MASTER-KEY", map[string]string{"xdg:schema": cs, "application": "chrome"})
+	k.store(t, "Slack CLI", "slack-cli-token", map[string]string{"application": "Slack", "service": "slack-cli"})
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", k.addr)
+	search := "out=secret-tool search --all xdg:schema " + cs
+	lookup := "out=secret-tool lookup application Slack"
+	for _, it := range []KeyringItem{
+		{Label: "Slack CLI login", Attributes: map[string]string{"application": "Slack"}},
+		{Label: "browser", Attributes: map[string]string{"application": "chrome"}},
+		{Label: "browser", Attributes: map[string]string{"application": "${config:app}"}},
+	} {
+		m := Manifest{Commands: []string{"secret-tool"}, Keyring: []KeyringItem{it}}
+		got, logs := runJailedProbeFor(t, []map[string]any{{"app": "chrome"}}, m, search, lookup)
+		if strings.Contains(got[search], "MASTER-KEY") || strings.Contains(got[lookup], "MASTER-KEY") {
+			t.Errorf("%v read a master key: %q", it.Attributes, got)
+		}
+		if !strings.Contains(logs, "withheld") {
+			t.Errorf("%v: nothing logged as withheld:\n%s", it.Attributes, logs)
+		}
+		if it.Attributes["application"] == "Slack" && got[lookup] != "ok:slack-cli-token" {
+			t.Errorf("the app's own login: %q\n%s", got[lookup], logs)
+		}
+	}
+	m := Manifest{Commands: []string{"secret-tool"}, Keyring: []KeyringItem{{Label: "Slack CLI login", Attributes: map[string]string{"application": "Slack"}}}}
+	got, logs := runJailedProbeAllowing(t, nil, []string{"application=Slack"}, m, search)
+	if !strings.Contains(got[search], "SLACK-MASTER-KEY") || strings.Contains(got[search], "CHROME-MASTER-KEY") {
+		t.Errorf("allowed by allow_keyring: %q\n%s", got[search], logs)
 	}
 }

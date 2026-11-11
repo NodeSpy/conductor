@@ -16,7 +16,7 @@ var toolItem = KeyringItem{Label: "tool login for example.com", Attributes: map[
 
 func TestKeyringConsentLine(t *testing.T) {
 	m := Manifest{Keyring: []KeyringItem{toolItem}}
-	want := "reads every item in your keyring with service=tool:example.com (\"tool login for example.com\", in its words)"
+	want := "reads every item in your keyring with service=\"tool:example.com\" (\"tool login for example.com\", in its words)"
 	if got := strings.Join(m.Lines(), "\n"); !strings.Contains(got, want) {
 		t.Fatalf("consent lines:\n%s\nwant a line %q", got, want)
 	}
@@ -58,7 +58,7 @@ func TestKeyringWidens(t *testing.T) {
 	if r := (Manifest{Keyring: []KeyringItem{toolItem}}).Widens(Manifest{}); len(r) != 0 {
 		t.Errorf("dropping an item widens: %v", r)
 	}
-	if r := (Manifest{}).Widens(Manifest{Keyring: []KeyringItem{toolItem}}); len(r) != 1 || !strings.Contains(r[0], "in your keyring with service=tool:example.com") {
+	if r := (Manifest{}).Widens(Manifest{Keyring: []KeyringItem{toolItem}}); len(r) != 1 || !strings.Contains(r[0], "in your keyring with service=\"tool:example.com\"") {
 		t.Errorf("the widening names the item: %v", r)
 	}
 	// On macOS a keyring item is granted as the Keychain: a build that has
@@ -102,7 +102,7 @@ func TestReconcileUpdateAddingKeyringIsHeld(t *testing.T) {
 	if len(res) != 1 || res[0].Action != ActionHeld {
 		t.Fatalf("resolution = %+v, want held", res)
 	}
-	if got := strings.Join(res[0].Widens, "; "); got != "reads every item in your keyring with service=tool:example.com (\"tool login for example.com\", in its words)" {
+	if got := strings.Join(res[0].Widens, "; "); got != "reads every item in your keyring with service=\"tool:example.com\" (\"tool login for example.com\", in its words)" {
 		t.Fatalf("held for: %q", got)
 	}
 	if rec, _ := st.Get("connectors/jira"); rec.Resolved != "jira/v1.0.0" || len(rec.Manifest.Keyring) != 0 {
@@ -224,6 +224,13 @@ func TestSeatbeltGrantsKeychainForKeyringItems(t *testing.T) {
 
 // A referencing item is shown as its reference, as a config: path is.
 func TestKeyringConsentLineReferences(t *testing.T) {
+	// A value is the plugin's text, quoted as the label is: it cannot
+	// close the line and write consent of its own; nor can a name.
+	v := strings.Join(Manifest{Keyring: []KeyringItem{{Label: "x", Attributes: map[string]string{
+		"service": `tool ("x", in its words); reads nothing else`, `a key, with=words`: "v"}}}}.Lines(), "\n")
+	if want := `with "a key, with=words"="v", service="tool (\"x\", in its words); reads nothing else" ("x", in its words)`; !strings.Contains(v, want) {
+		t.Errorf("consent %q: want %q", v, want)
+	}
 	m := Manifest{Keyring: []KeyringItem{
 		{Label: "tool login for your server", Attributes: map[string]string{"service": "tool:${host:config:api_base}"}},
 		{Label: "registry login", Attributes: map[string]string{"server": "${config:registries}", "kind": "1"}},
@@ -231,9 +238,9 @@ func TestKeyringConsentLineReferences(t *testing.T) {
 	}}
 	got := strings.Join(m.Lines(), "\n")
 	for _, want := range []string{
-		"reads every item in your keyring with service=tool:<host of api_base from its config> (\"tool login for your server\", in its words)",
-		"reads every item in your keyring with kind=1, server=<registries from its config> (\"registry login\", in its words)",
-		"reads every item in your keyring with service=tool:$TOOL_HOST (\"tool login for $TOOL_HOST\", in its words)",
+		"reads every item in your keyring with service=\"tool:<host of api_base from its config>\" (\"tool login for your server\", in its words)",
+		"reads every item in your keyring with kind=\"1\", server=\"<registries from its config>\" (\"registry login\", in its words)",
+		"reads every item in your keyring with service=\"tool:$TOOL_HOST\" (\"tool login for $TOOL_HOST\", in its words)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("consent lines:\n%s\nwant a line %q", got, want)
@@ -248,7 +255,7 @@ func TestKeyringConsentLineDarwin(t *testing.T) {
 	t.Cleanup(func() { spawnGOOS = prev })
 	spawnGOOS = "darwin"
 	got := strings.Join(Manifest{Keyring: []KeyringItem{toolItem}}.Lines(), "\n")
-	for _, want := range []string{"macOS Keychain, read-only", "service=tool:example.com", "cannot confine it", "per-item access controls"} {
+	for _, want := range []string{"macOS Keychain, read-only", `service="tool:example.com"`, "cannot confine it", "per-item access controls"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("darwin consent %q: no %q", got, want)
 		}
