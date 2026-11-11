@@ -87,14 +87,27 @@ func check(k, v string) string {
 			return "ok: ran"
 		}
 		return "denied: " + err.Error()
-	case "out":
+	case "out", "outin":
 		// Run a command line (fields split on spaces) and report what it
-		// printed: "ok:<stdout>" when it succeeded.
+		// printed: "ok:<stdout>" when it succeeded. outin's first field is
+		// a file the command reads as its stdin.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		f := strings.Fields(v)
+		var stdin *os.File
+		if k == "outin" {
+			in, err := os.Open(f[0])
+			if err != nil {
+				return "denied: " + err.Error()
+			}
+			defer in.Close()
+			stdin, f = in, f[1:]
+		}
 		var stderr strings.Builder
 		c := exec.CommandContext(ctx, f[0], f[1:]...)
+		if stdin != nil {
+			c.Stdin = stdin
+		}
 		c.Stderr = &stderr
 		out, err := c.Output()
 		if err != nil {

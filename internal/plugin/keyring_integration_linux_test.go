@@ -423,3 +423,58 @@ func TestJailedKeyringConfigReference(t *testing.T) {
 	got, logs = runJailedProbeFor(t, []map[string]any{{}}, m, "out=gh auth token --hostname ghe.example.test")
 	wantResults(t, got, map[string]string{"out=gh auth token --hostname ghe.example.test": "denied"}, logs)
 }
+
+// TestJailedKeyringGitCredentialHelper: git's own keyring helper
+// (git-credential-libsecret, libsecret's encrypted session) reads, in the
+// jail, the org.git.Password login of a host the instance's config names,
+// and not another host's.
+func TestJailedKeyringGitCredentialHelper(t *testing.T) {
+	requireKeyringTools(t, "git")
+	helper := ""
+	for _, d := range []string{"/usr/lib/git-core", "/usr/libexec/git-core"} {
+		if _, err := os.Stat(filepath.Join(d, "git-credential-libsecret")); err == nil {
+			helper = d
+		}
+	}
+	if helper == "" {
+		if os.Getenv("CONDUCTOR_REQUIRE_KEYRING") != "" && os.Getenv("CONDUCTOR_REQUIRE_GIT_LIBSECRET") != "" {
+			t.Fatal("git-credential-libsecret is not installed")
+		}
+		t.Skip("git-credential-libsecret is not installed")
+	}
+	k := startKeyring(t)
+	git := func(host string) map[string]string {
+		return map[string]string{"xdg:schema": "org.git.Password", "protocol": "https", "server": host, "user": "me"}
+	}
+	k.store(t, "Git: https://git.example.test/", "git_declared", git("git.example.test"))
+	k.store(t, "Git: https://other.example.test/", "git_undeclared", git("other.example.test"))
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", k.addr)
+	in := t.TempDir()
+	for host, f := range map[string]string{"git.example.test": "declared", "other.example.test": "other"} {
+		if err := os.WriteFile(filepath.Join(in, f), []byte("protocol=https\nhost="+host+"\nusername=me\n\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := Manifest{
+		Read:     []string{in},
+		Commands: []string{"git"},
+		Exec:     []string{"command:git/../../lib/git-core", "command:git/../../libexec/git-core"},
+		Keyring: []KeyringItem{{Label: "git login for a host in its credential_hosts",
+			Attributes: map[string]string{"xdg:schema": "org.git.Password", "protocol": "https", "server": "${host:config:credential_hosts}"}}},
+	}
+	conns := []map[string]any{{"credential_hosts": []any{"https://git.example.test"}}}
+	get := "git -c credential.helper=libsecret credential-libsecret get"
+	got, logs := runJailedProbeFor(t, conns, m,
+		"outin="+filepath.Join(in, "declared")+" "+get,
+		"outin="+filepath.Join(in, "other")+" "+get)
+	declared := got["outin="+filepath.Join(in, "declared")+" "+get]
+	other := got["outin="+filepath.Join(in, "other")+" "+get]
+	t.Logf("declared host: %s", declared)
+	t.Logf("other host:    %s", other)
+	if !strings.Contains(declared, "password=git_declared") {
+		t.Errorf("the declared host's login was not read: %s\n%s", declared, logs)
+	}
+	if strings.Contains(other, "git_undeclared") {
+		t.Errorf("another host's login was read: %s", other)
+	}
+}
