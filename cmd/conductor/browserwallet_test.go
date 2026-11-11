@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -116,10 +117,16 @@ func TestBrowserWalletOpsNoValueCrosses(t *testing.T) {
 	if st := m.Effective(); !st.Cards["visa"].Frozen || st.Cards["visa"].Limits.PerPurchase != 20 {
 		t.Fatalf("effective: %+v", st.Cards["visa"])
 	}
+	// frozen_at (and any other timestamp) is RFC3339Nano metadata, not a
+	// secret, and its nanosecond fraction coincidentally contains the 3-digit
+	// CVC "987" about once in 200 runs. Strip timestamps before scanning so
+	// the check only fires on a real value.
+	tsRE := regexp.MustCompile(`\d{4}-\d{2}-\d{2}T[0-9:.]+Z`)
 	for i, r := range all {
 		b, _ := json.Marshal(r)
+		scan := tsRE.ReplaceAllString(string(b), "")
 		for _, v := range []string{wCard, "12/34", "987", wEmail} {
-			if strings.Contains(string(b), v) {
+			if strings.Contains(scan, v) {
 				t.Fatalf("response %d carries a value %q: %s", i, v, b)
 			}
 		}
