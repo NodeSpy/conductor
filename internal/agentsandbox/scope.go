@@ -35,8 +35,8 @@ type Allowance struct {
 // tripwires and egress limits.
 type Scope struct {
 	Allow *Allowance `json:"allow,omitempty"`
-	// DetectAction is DetectKill, DetectAlert or DetectOff ("": the
-	// global setting).
+	// DetectAction is DetectKill, DetectTerminate, DetectAlert or DetectOff
+	// ("": the global setting).
 	DetectAction string `json:"detect_action,omitempty"`
 	// Tripwires overrides sandbox.detect.tripwires (nil: the global).
 	Tripwires *bool `json:"tripwires,omitempty"`
@@ -125,7 +125,7 @@ func applyScope(p *Policy, base *Allowance, s *Scope) {
 	if s != nil {
 		own = s.Allow
 		switch s.DetectAction {
-		case DetectKill, DetectAlert, DetectOff:
+		case DetectKill, DetectTerminate, DetectAlert, DetectOff:
 			p.Detect.Action = s.DetectAction
 		}
 		if s.Tripwires != nil {
