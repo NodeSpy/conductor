@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -480,6 +481,55 @@ func (m *Manager) SetExposeTargets(targets map[string][]string) {
 		}
 	}
 	m.mu.Unlock()
+}
+
+// SetConns replaces the connection config of the given configured connector
+// instances (instance → config) — the engine filling in a listener address
+// it picked (connector.AssignListenAddrs) after the types were described. A
+// process's grant resolves config: entries against these, so a process
+// already up whose configs changed is restarted on its next call, as
+// SetExposeTargets does: harmless only before any source has started.
+func (m *Manager) SetConns(conns map[string]map[string]any) {
+	if len(conns) == 0 {
+		return
+	}
+	m.instMu.Lock()
+	defer m.instMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, spec := range m.specs {
+		if spec.Kind != KindConnector {
+			continue
+		}
+		touched := false
+		insts := make(map[string]config.ConnectorGrant, len(spec.Instances))
+		for name, g := range spec.Instances {
+			if c, ok := conns[name]; ok {
+				g.Conn, touched = c, true
+				if cl, ok := m.instClients[key][name]; ok {
+					cl.setConns([]map[string]any{c})
+				}
+			}
+			insts[name] = g
+		}
+		if !touched {
+			continue
+		}
+		spec.Instances = insts
+		if spec.Shared {
+			var shared []map[string]any
+			for _, name := range slices.Sorted(maps.Keys(insts)) {
+				if !insts[name].Isolate {
+					shared = append(shared, insts[name].Conn)
+				}
+			}
+			spec.Conns = shared
+			if c, ok := m.clients[key]; ok {
+				c.setConns(shared)
+			}
+		}
+		m.specs[key] = spec
+	}
 }
 
 // ExposeRefusals names each connector instance whose process would not be

@@ -84,12 +84,14 @@ connectors:
       private_key_path: ~/.config/conductor/github-app.pem
     # token: ${GH_PAT}                  # the App-less alternative
     webhook:
-      # The plugin only listens locally. A public URL comes from an exposure
-      # connector named in `expose:` — gh-smee below relays a smee.io channel
-      # here; cloudflared/ngrok/tailscale/… work the same way. Drop `expose:`
-      # when GitHub can reach `listen` directly.
-      listen: "127.0.0.1:8787"
-      path: /webhook
+      # A public URL comes from an exposure connector named in `expose:` —
+      # gh-smee below relays a smee.io channel to the plugin's listener;
+      # cloudflared/ngrok/tailscale/… work the same way. With `expose:`,
+      # `listen:` and `path:` are optional: conductor picks a local address
+      # for the hop itself. Set `listen:` (and drop `expose:`) when GitHub can
+      # reach the listener directly, or keep both to reach it yourself too.
+      # listen: "127.0.0.1:8787"
+      # path: /webhook                  # the plugin's default
       expose: gh-smee
       # The secret and the signature switch are WEBHOOK settings, not App auth
       # — an App-less instance verifies deliveries just the same.
@@ -191,7 +193,8 @@ connectors:
   hooks:
     use: webhook
     listen: ":8099" # shared with other listeners on the same address
-    # expose: hooks-smee  # an exposure connector relaying to this listener;
+    # expose: hooks-smee  # an exposure connector relaying to this listener
+    #                     # (with it, listen is optional: conductor picks one);
     #                     # deliveries reach `path:` below ("/" by default)
     #                     # and are offered to every source (match picks one)
     sources:

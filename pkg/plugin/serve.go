@@ -495,6 +495,9 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 		if !req.Host.GrantsExposeLocal() {
 			d.Capabilities.ExposeLocal = false
 		}
+		if !req.Host.ReadsListenerDefaultPath() {
+			WithoutListenerDefaultPath(&d)
+		}
 		return d, nil
 	case MethodPoll:
 		ph, ok := h.(PollHandler)

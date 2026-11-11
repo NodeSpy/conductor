@@ -11,9 +11,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/configedit"
 )
 
-// allFree is a PortFree that finds every port bindable.
-func allFree(int) bool { return true }
-
 func write(t *testing.T, dir, name, body string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
@@ -66,8 +63,6 @@ connectors:
     token: ${GH_TOKEN}
     webhook:
       secret: ${GH_WEBHOOK_SECRET}
-      listen: 127.0.0.1:8787
-      path: /webhook
       expose: gh-smee
     sweep: { enabled: false }
 
@@ -89,7 +84,7 @@ triggers:
 func TestGithubSmeeURLBecomesASmeeConnector(t *testing.T) {
 	dir := t.TempDir()
 	main := write(t, dir, "conductor.yaml", githubOld)
-	res, err := Apply(main, Options{PortFree: allFree})
+	res, err := Apply(main, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,18 +113,18 @@ func TestGithubSmeeURLBecomesASmeeConnector(t *testing.T) {
 func TestIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	main := write(t, dir, "conductor.yaml", githubOld)
-	if _, err := Apply(main, Options{PortFree: allFree}); err != nil {
+	if _, err := Apply(main, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	once := read(t, main)
-	res, err := Apply(main, Options{PortFree: allFree})
+	res, err := Apply(main, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(res.Files) != 0 || read(t, main) != once {
 		t.Fatalf("second run rewrote: %+v\n%s", res, read(t, main))
 	}
-	plan, err := Compute(main, Options{PortFree: allFree})
+	plan, err := Compute(main, Options{})
 	if err != nil || plan.Changed() {
 		t.Fatalf("plan over migrated output: changed=%v err=%v", plan != nil && plan.Changed(), err)
 	}
@@ -151,7 +146,7 @@ func TestSecretRefsVerbatim(t *testing.T) {
       smee_url: "${GH_SMEE_URL}"
       secret: ${settings.webhook_secret}
 `)
-	if _, err := Apply(main, Options{PortFree: allFree}); err != nil {
+	if _, err := Apply(main, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	got := read(t, main)
@@ -165,8 +160,9 @@ func TestSecretRefsVerbatim(t *testing.T) {
 	}
 }
 
-// The bundled webhook connector: listen + expose on the connector itself, the
-// relay path left at its default.
+// The bundled webhook connector: expose on the connector itself, no listen
+// (conductor picks the local address at load), the relay path left at its
+// default.
 func TestBundledWebhookSmee(t *testing.T) {
 	dir := t.TempDir()
 	main := write(t, dir, "conductor.yaml", `connectors:
@@ -176,7 +172,7 @@ func TestBundledWebhookSmee(t *testing.T) {
     sources:
       alarms: { path: /alarms, match: '{{if .body.alarm}}true{{end}}' }
 `)
-	if _, err := Apply(main, Options{PortFree: allFree}); err != nil {
+	if _, err := Apply(main, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	want := `connectors:
@@ -184,7 +180,6 @@ func TestBundledWebhookSmee(t *testing.T) {
     use: webhook
     sources:
       alarms: { path: /alarms, match: '{{if .body.alarm}}true{{end}}' }
-    listen: 127.0.0.1:8787
     expose: hooks-smee
   hooks-smee:
     use: smee
@@ -198,7 +193,7 @@ func TestBundledWebhookSmee(t *testing.T) {
 	}
 	// A github listener is a plugin's: its smee connector stays jailed.
 	gh := write(t, dir, "gh.yaml", "connectors:\n  gh:\n    use: github\n    webhook:\n      smee_url: https://relay.example/ch2\n")
-	if _, err := Apply(gh, Options{PortFree: allFree}); err != nil {
+	if _, err := Apply(gh, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := read(t, gh); strings.Contains(got, "trust") || strings.Contains(got, "isolate") {
@@ -211,7 +206,7 @@ func TestBundledWebhookSmee(t *testing.T) {
 func TestBundledWebhookSmeeFlowStyle(t *testing.T) {
 	dir := t.TempDir()
 	main := write(t, dir, "conductor.yaml", "connectors:\n  hooks: { use: webhook, smee_url: https://relay.example/ch1, sources: { a: { path: /a } } }\n")
-	if _, err := Apply(main, Options{PortFree: allFree}); err != nil {
+	if _, err := Apply(main, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(read(t, main), trustComment) {
@@ -228,9 +223,10 @@ func TestBundledWebhookSmeeFlowStyle(t *testing.T) {
 	}
 }
 
-// An existing listen address is kept (the relay posts to it); new ports skip
-// every port the tree already listens on and ports something holds now.
-func TestListenKeptAndPortsAvoided(t *testing.T) {
+// An existing listen address and path are kept (the relay posts to them,
+// and the listener stays reachable there); a listener with neither gets
+// neither written — conductor picks its local address at load.
+func TestListenKeptNoneWritten(t *testing.T) {
 	dir := t.TempDir()
 	main := write(t, dir, "conductor.yaml", `connectors:
   direct:
@@ -248,20 +244,61 @@ func TestListenKeptAndPortsAvoided(t *testing.T) {
     listen: 127.0.0.1:8787
     sources: { s: { path: /s } }
 `)
-	held := func(p int) bool { return p != 8788 }
-	if _, err := Apply(main, Options{PortFree: held}); err != nil {
+	if _, err := Apply(main, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	got := read(t, main)
 	for _, want := range []string{
 		"listen: 0.0.0.0:9000\n      path: /gh\n      expose: direct-smee",
-		"other:\n    use: github\n    webhook:\n      listen: 127.0.0.1:8789\n      path: /webhook\n      expose: other-smee",
+		"other:\n    use: github\n    webhook:\n      expose: other-smee\n",
 		"direct-smee:\n    use: smee\n    channel: https://relay.example/a",
 		"other-smee:\n    use: smee\n    channel: https://relay.example/b",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
+	}
+	if strings.Count(got, "listen:") != 2 || strings.Count(got, "path: /gh") != 1 || strings.Contains(got, "/webhook") {
+		t.Fatalf("a listen or path was written:\n%s", got)
+	}
+}
+
+// A config an earlier release of this rule rewrote, with the listen and path
+// it wrote then, is left exactly as it is: nothing to rewrite, no backup.
+func TestEarlierRewriteLeftAsItIs(t *testing.T) {
+	dir := t.TempDir()
+	body := `connectors:
+  gh:
+    use: github
+    webhook:
+      secret: ${GH_WEBHOOK_SECRET}
+      listen: 127.0.0.1:8787
+      path: /webhook
+      expose: gh-smee
+  gh-smee:
+    use: smee
+    channel: https://relay.example/a
+  hooks:
+    use: webhook
+    sources: { s: { path: /s } }
+    listen: 127.0.0.1:8788
+    expose: hooks-smee
+  hooks-smee:
+    use: smee
+    channel: https://relay.example/b
+    trust: full
+    isolate: true
+`
+	main := write(t, dir, "conductor.yaml", body)
+	res, err := Apply(main, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read(t, main) != body || len(res.Files) != 0 {
+		t.Fatalf("an earlier rewrite was touched (files %v):\n%s", res.Files, read(t, main))
+	}
+	if _, err := os.Stat(main + ".pre-smee"); !os.IsNotExist(err) {
+		t.Fatal("a backup was written for nothing")
 	}
 }
 
@@ -289,7 +326,7 @@ func TestReuseAndNameClash(t *testing.T) {
   c-smee:
     use: ntfy
 `)
-	res, err := Apply(main, Options{PortFree: allFree})
+	res, err := Apply(main, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +357,7 @@ func TestSmeeURLWithExposeLeftAlone(t *testing.T) {
       smee_url: https://relay.example/a
 `
 	main := write(t, dir, "conductor.yaml", body)
-	res, err := Apply(main, Options{PortFree: allFree})
+	res, err := Apply(main, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,17 +379,17 @@ func TestFlowStyleWebhook(t *testing.T) {
     webhook: { smee_url: "${GH_SMEE_URL}", secret: "${S}" }
   # trailing comment
 `)
-	if _, err := Apply(main, Options{PortFree: allFree}); err != nil {
+	if _, err := Apply(main, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	got := read(t, main)
-	for _, want := range []string{"use: github # keep me", "# trailing comment", "secret: ${S}", "listen: 127.0.0.1:8787", "expose: gh-smee", "channel: ${GH_SMEE_URL}"} {
+	for _, want := range []string{"use: github # keep me", "# trailing comment", "secret: ${S}", "expose: gh-smee", "channel: ${GH_SMEE_URL}"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "smee_url") {
-		t.Fatalf("smee_url left:\n%s", got)
+	if strings.Contains(got, "smee_url") || strings.Contains(got, "listen") {
+		t.Fatalf("smee_url left, or a listen written:\n%s", got)
 	}
 }
 
@@ -385,7 +422,7 @@ connectors:
 webhook:
   smee_url: https://relay.example/body
 `)
-	res, err := Apply(main, Options{PortFree: allFree})
+	res, err := Apply(main, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,12 +441,10 @@ webhook:
 	if got := read(t, main); !strings.Contains(got, "body-smee:\n    use: smee\n    channel: https://relay.example/body") {
 		t.Fatalf("main (holds the body file's sibling):\n%s", got)
 	}
-	// Four listeners, four distinct ports, none clashing with 9100.
+	// Nothing but the listen that was already there.
 	all := read(t, base) + read(t, sect) + read(t, body)
-	for _, p := range []string{"8787", "8788", "8789"} {
-		if strings.Count(all, "127.0.0.1:"+p) != 1 {
-			t.Fatalf("port %s used %d times:\n%s", p, strings.Count(all, "127.0.0.1:"+p), all)
-		}
+	if strings.Count(all, "listen:") != 1 {
+		t.Fatalf("a listen was written:\n%s", all)
 	}
 }
 
@@ -418,7 +453,7 @@ func TestEnsureFailureWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	main := write(t, dir, "conductor.yaml", githubOld)
 	var asked []string
-	_, err := Apply(main, Options{PortFree: allFree, Ensure: func(uses []string, _ map[string][]string) error {
+	_, err := Apply(main, Options{Ensure: func(uses []string, _ map[string][]string) error {
 		asked = uses
 		return errors.New("offline")
 	}})
@@ -442,7 +477,7 @@ func TestValidateBeforeWrite(t *testing.T) {
 	dir := t.TempDir()
 	main := write(t, dir, "conductor.yaml", githubOld)
 	var seen []string
-	_, err := Apply(main, Options{PortFree: allFree, Check: func(p string) (map[string]string, error) {
+	_, err := Apply(main, Options{Check: func(p string) (map[string]string, error) {
 		if p == main {
 			return nil, nil // the baseline
 		}
@@ -482,7 +517,7 @@ func TestValidateAfterSwapRestoresEveryFile(t *testing.T) {
 `)
 	origMain, origMore := read(t, main), read(t, more)
 	calls := 0
-	_, err := Apply(main, Options{PortFree: allFree, Check: func(p string) (map[string]string, error) {
+	_, err := Apply(main, Options{Check: func(p string) (map[string]string, error) {
 		calls++
 		if p != main {
 			t.Fatalf("validated %s, want the live main file", p)
@@ -507,7 +542,7 @@ func TestNothingToDo(t *testing.T) {
 	dir := t.TempDir()
 	body := "connectors:\n  gh:\n    use: github\n    webhook: { listen: \"127.0.0.1:9000\" }\n"
 	main := write(t, dir, "conductor.yaml", body)
-	res, err := Apply(main, Options{PortFree: allFree, Ensure: func([]string, map[string][]string) error {
+	res, err := Apply(main, Options{Ensure: func([]string, map[string][]string) error {
 		t.Fatal("nothing to install")
 		return nil
 	}})
@@ -536,7 +571,7 @@ func TestCheckRefusesANewlyDisabledConnector(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			main := write(t, dir, "conductor.yaml", githubOld)
-			_, err := Apply(main, Options{PortFree: allFree, Check: func(p string) (map[string]string, error) {
+			_, err := Apply(main, Options{Check: func(p string) (map[string]string, error) {
 				if p == main {
 					return c.before, nil
 				}
@@ -575,7 +610,7 @@ func TestGrantHoldsBackOnlyTheJailedRewrite(t *testing.T) {
 	dir := t.TempDir()
 	main := write(t, dir, "conductor.yaml", bothOld)
 	var asked []Grant
-	res, err := Apply(main, Options{PortFree: allFree, Grant: func(g Grant) ([]string, error) {
+	res, err := Apply(main, Options{Grant: func(g Grant) ([]string, error) {
 		asked = append(asked, g)
 		return nil, errors.New("no smee release declaring expose_local is available yet")
 	}})
@@ -601,7 +636,7 @@ func TestGrantHoldsBackOnlyTheJailedRewrite(t *testing.T) {
 
 	// A second run, with the grant available now, finishes the job; what
 	// the grant did is a note of the run.
-	res, err = Apply(main, Options{PortFree: allFree, Grant: func(Grant) ([]string, error) {
+	res, err = Apply(main, Options{Grant: func(Grant) ([]string, error) {
 		return []string{"approved smee v1.2.0"}, nil
 	}})
 	if err != nil {
@@ -620,7 +655,7 @@ func TestGrantHoldsBackOnlyTheJailedRewrite(t *testing.T) {
 func TestBundledWebhookAsksNoGrant(t *testing.T) {
 	dir := t.TempDir()
 	main := write(t, dir, "conductor.yaml", "connectors:\n  hooks:\n    use: webhook\n    smee_url: ${HOOKS_SMEE_URL}\n")
-	plan, err := Compute(main, Options{PortFree: allFree})
+	plan, err := Compute(main, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

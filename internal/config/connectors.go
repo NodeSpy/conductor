@@ -148,6 +148,64 @@ func (r ConnectorRef) Conn() map[string]any {
 // Decode unmarshals the raw connector node into a type-specific struct.
 func (r ConnectorRef) Decode(v any) error { return r.raw.Decode(v) }
 
+// WithString is a copy of r whose connection config has the dotted field path
+// ("webhook.listen") set to val, creating the maps along it. r itself, and
+// any node it shares, is left as it was. It fails when a segment of path is
+// already set to something that is not a map.
+func (r ConnectorRef) WithString(path string, val string) (ConnectorRef, error) {
+	if r.raw.Kind != yaml.MappingNode {
+		return r, fmt.Errorf("connector config is not a map")
+	}
+	root := copyNode(&r.raw)
+	at := root
+	parts := strings.Split(path, ".")
+	for i, p := range parts {
+		var next *yaml.Node
+		for j := 0; j+1 < len(at.Content); j += 2 {
+			if at.Content[j].Value == p {
+				next = at.Content[j+1]
+				break
+			}
+		}
+		last := i == len(parts)-1
+		if next == nil {
+			next = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			if last {
+				next = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str"}
+			}
+			at.Content = append(at.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: p}, next)
+		}
+		if last {
+			if next.Kind != yaml.ScalarNode {
+				return r, fmt.Errorf("%s is not a string", path)
+			}
+			next.Tag, next.Value, next.Style = "!!str", val, 0
+			break
+		}
+		if next.Kind != yaml.MappingNode {
+			return r, fmt.Errorf("%s is not a map", strings.Join(parts[:i+1], "."))
+		}
+		at = next
+	}
+	r.raw = *root
+	return r, nil
+}
+
+// copyNode deep-copies a YAML node, so an edit of the copy never reaches
+// the original.
+func copyNode(n *yaml.Node) *yaml.Node {
+	if n == nil {
+		return nil
+	}
+	c := *n
+	c.Content = make([]*yaml.Node, len(n.Content))
+	for i, k := range n.Content {
+		c.Content[i] = copyNode(k)
+	}
+	c.Alias = copyNode(n.Alias)
+	return &c
+}
+
 // IsEnabled reports whether the connector is enabled (default true).
 func (r ConnectorRef) IsEnabled() bool { return r.Enabled == nil || *r.Enabled }
 

@@ -731,3 +731,14 @@ connectors:
 		t.Fatalf("refusals with trust: full = %q", r)
 	}
 }
+
+// An unset path field resolves to the listener's declared default path.
+func TestResolveListenerPathDeclaredDefault(t *testing.T) {
+	l := sdk.Listener{Path: "webhook.path", DefaultPath: "/hook"}
+	if got := resolveListenerPath(map[string]any{}, l); got != "/hook" {
+		t.Fatalf("unset = %q", got)
+	}
+	if got := resolveListenerPath(map[string]any{"webhook": map[string]any{"path": "/mine"}}, l); got != "/mine" {
+		t.Fatalf("set = %q", got)
+	}
+}

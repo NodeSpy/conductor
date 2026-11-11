@@ -72,9 +72,6 @@ type Options struct {
 	Grant func(g Grant) (notes []string, err error)
 	// Logf receives one line per rewritten file. nil discards.
 	Logf func(string, ...any)
-	// PortFree reports whether a loopback port can be bound now (a seam for
-	// tests; nil uses a real bind probe).
-	PortFree func(port int) bool
 }
 
 // Result is a run's outcome.
@@ -189,10 +186,7 @@ func compute(mainPath string, opt Options, held map[string]string) (*Plan, error
 	if err != nil {
 		return nil, err
 	}
-	t := &tree{portFree: opt.PortFree, main: mainPath, held: held}
-	if t.portFree == nil {
-		t.portFree = portFree
-	}
+	t := &tree{main: mainPath, held: held}
 	for _, p := range paths {
 		raw, err := os.ReadFile(p)
 		if err != nil {
@@ -419,8 +413,6 @@ type tree struct {
 	from        map[string][]string
 	held        map[string]string // plugin use → why it can't be granted (compute)
 	touched     []string
-	portFree    func(int) bool
-	takenPorts  map[int]bool
 	ruleChanged bool
 }
 

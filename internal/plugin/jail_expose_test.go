@@ -6,6 +6,7 @@ import (
 	"net"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -245,5 +246,53 @@ func TestExposeRefusals(t *testing.T) {
 				t.Errorf("as before the jail: refusals = %q", got)
 			}
 		})
+	}
+}
+
+// SetConns gives the processes the connection configs the engine filled in
+// (a listener address it picked): the shared process every non-isolated
+// instance's, an isolated instance its own — and the jail grants the listen
+// address those configs now name.
+func TestSetConnsReachesGrants(t *testing.T) {
+	config.SetStateDir(t.TempDir())
+	t.Cleanup(func() { config.SetStateDir("") })
+	ref := refFor(t, config.UseKindConnector, "listener")
+	old := map[string]any{"webhook": map[string]any{"expose": "relay"}}
+	ref.Instances = map[string]config.ConnectorGrant{"a": {Conn: old}, "b": {Conn: map[string]any{"x": "y"}}, "c": {Conn: old, Isolate: true}}
+	key := ref.Key()
+	mgr := NewManager(map[string]config.PluginRef{key: ref}, "", LoadInstallState(InstallDir()), Deps{})
+	defer mgr.Close()
+	iso, err := mgr.InstanceClient(key, "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	connA := map[string]any{"webhook": map[string]any{"expose": "relay", "listen": "127.0.0.1:19401"}}
+	connC := map[string]any{"webhook": map[string]any{"expose": "relay", "listen": "127.0.0.1:19402"}}
+	mgr.SetConns(map[string]map[string]any{"a": connA, "c": connC, "other": {"z": 1}})
+	spec, _ := mgr.Spec(key)
+	if got := spec.Instances["a"].Conn; !reflect.DeepEqual(got, connA) {
+		t.Errorf("instance a: %v", got)
+	}
+	if want := []map[string]any{connA, {"x": "y"}}; !reflect.DeepEqual(spec.Conns, want) {
+		t.Errorf("shared spec conns: %v, want %v", spec.Conns, want)
+	}
+	shared, ok := mgr.Client(key)
+	if !ok || !reflect.DeepEqual(shared.spec.Conns, spec.Conns) {
+		t.Errorf("shared client conns: %v", shared.spec.Conns)
+	}
+	if want := []map[string]any{connC}; !reflect.DeepEqual(iso.spec.Conns, want) {
+		t.Errorf("isolated client conns: %v, want %v", iso.spec.Conns, want)
+	}
+	listen := ManifestFromDecl(&Decl{Capabilities: Capabilities{Listen: []string{"config:webhook.listen"}}})
+	for name, s := range map[string]Spec{"shared": shared.spec, "isolated": iso.spec} {
+		s.Manifest = listen
+		g, err := pluginGrant(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]string{"shared": "127.0.0.1:19401", "isolated": "127.0.0.1:19402"}[name]
+		if !slices.Contains(g.Listen, want) {
+			t.Errorf("%s: listen grant %v, want %s", name, g.Listen, want)
+		}
 	}
 }

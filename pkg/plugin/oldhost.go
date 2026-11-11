@@ -81,3 +81,39 @@ func (h *HostInfo) GrantsExposeLocal() bool {
 	}
 	return false
 }
+
+// SemanticListenerDefaultPath is the semantic a host advertises
+// (HostInfo.Semantics) when it reads Listener.DefaultPath. Every host built
+// with this SDK advertises it.
+const SemanticListenerDefaultPath = "listeners.default_path"
+
+// ReadsListenerDefaultPath reports whether the host asking for a declaration
+// reads Listener.DefaultPath. A host before it decodes a declaration's
+// listeners strictly and would refuse the plugin over the unknown field, so
+// Serve withholds it (WithoutListenerDefaultPath).
+func (h *HostInfo) ReadsListenerDefaultPath() bool {
+	if h == nil {
+		return false
+	}
+	for _, s := range h.Semantics {
+		if s == SemanticListenerDefaultPath {
+			return true
+		}
+	}
+	return false
+}
+
+// WithoutListenerDefaultPath clears every listener's DefaultPath, for a
+// host that does not read it. The Listeners slice is copied, never edited
+// in place.
+func WithoutListenerDefaultPath(d *Decl) {
+	if d.Semantics == nil || len(d.Semantics.Listeners) == 0 {
+		return
+	}
+	sem := *d.Semantics
+	sem.Listeners = append([]Listener(nil), sem.Listeners...)
+	for i := range sem.Listeners {
+		sem.Listeners[i].DefaultPath = ""
+	}
+	d.Semantics = &sem
+}

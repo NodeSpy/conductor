@@ -2,8 +2,6 @@ package configmigrate
 
 import (
 	"fmt"
-	"net"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -22,21 +20,21 @@ import (
 //	  use: github                        use: github
 //	  webhook:                           webhook:
 //	    smee_url: ${GH_SMEE_URL}           secret: ${GH_WEBHOOK_SECRET}
-//	    secret: ${GH_WEBHOOK_SECRET}       listen: 127.0.0.1:8787
-//	                                       path: /webhook
-//	                                       expose: gh-smee
+//	    secret: ${GH_WEBHOOK_SECRET}       expose: gh-smee
 //	                                   gh-smee:
 //	                                     use: smee
 //	                                     channel: ${GH_SMEE_URL}
 //
 // The smee connector is pinned to the SAME channel, so whatever sends to it
 // (a GitHub App's or repo's webhook) keeps working untouched. An existing
-// listen address is kept (smee relays to it); a missing one gets a free
-// loopback port. The github shape also gets its path written out (/webhook,
-// the plugin's own default), because the engine's default for an unset
-// listener path is "/". The bundled webhook connector's relay path stays its
-// default ("/"), where a delivery is offered to every source as the smee
-// channel did.
+// listen address and path are kept (smee relays to them, and the listener
+// stays reachable there); none is written when there was none: a listener
+// with expose: and no listen gets a local address from conductor at load
+// (connector.AssignListenAddrs), and the path its relay delivers to with it.
+// Configs this rule rewrote before that, with a listen and path written in,
+// are left exactly as they are. The bundled webhook connector's relay path
+// stays its default ("/"), where a delivery is offered to every source as
+// the smee channel did.
 //
 // A smee connector made for the bundled webhook connector also gets
 // `trust: full` and `isolate: true`, with a comment saying why: the relay it
@@ -55,10 +53,8 @@ import (
 // once no supported release can still be carrying them.
 
 const (
-	smeeUse         = "smee"
-	githubSmeeKey   = "smee_url"
-	githubPath      = "/webhook"
-	firstListenPort = 8787
+	smeeUse       = "smee"
+	githubSmeeKey = "smee_url"
 )
 
 var smeeRule = rule{name: "smee", apply: applySmee}
@@ -121,29 +117,8 @@ func (t *tree) migrateSmee(s connectorSite, all map[string]map[string]any, base 
 		return nil
 	}
 	smeeName, reuse := t.smeeConnectorFor(s.name, url, all)
-	listen, _ := fields["listen"].(string)
-	newListen := ""
-	if listen == "" {
-		port, err := t.freePort()
-		if err != nil {
-			t.note("%s: left as it is — %v", where, err)
-			return nil
-		}
-		newListen = net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-	}
-	path, _ := fields["path"].(string)
 
 	edit := func(d *configedit.Document, base []string) error {
-		if newListen != "" {
-			if err := d.SetScalar(append(clone(base), "listen"), newListen); err != nil {
-				return err
-			}
-		}
-		if github && path == "" {
-			if err := d.SetScalar(append(clone(base), "path"), githubPath); err != nil {
-				return err
-			}
-		}
 		if err := d.SetScalar(append(clone(base), "expose"), smeeName); err != nil {
 			return err
 		}
@@ -168,16 +143,12 @@ func (t *tree) migrateSmee(s connectorSite, all map[string]map[string]any, base 
 	t.from[smeeUse] = dedupe(append(t.from[smeeUse], connectorUse(docMap(s.body.doc, s.bodyPath))))
 	t.ruleChanged = true
 	t.touched = append(t.touched, s.name, smeeName)
-	l := listen
-	if l == "" {
-		l = newListen
-	}
 	if reuse {
-		t.note("%s: smee_url → expose: %s (the existing smee connector on the same channel), listening on %s", where, smeeName, l)
+		t.note("%s: smee_url → expose: %s (the existing smee connector on the same channel)", where, smeeName)
 	} else if !github {
-		t.note("%s: smee_url → a new smee connector %s on the same channel (use: %s, trust: full, isolate: true — the relay ran inside conductor, and this listener is conductor's own port), exposing the listener on %s", where, smeeName, smeeUse, l)
+		t.note("%s: smee_url → a new smee connector %s on the same channel (use: %s, trust: full, isolate: true — the relay ran inside conductor, and this listener is conductor's own port)", where, smeeName, smeeUse)
 	} else {
-		t.note("%s: smee_url → a new smee connector %s on the same channel (use: %s), exposing the listener on %s", where, smeeName, smeeUse, l)
+		t.note("%s: smee_url → a new smee connector %s on the same channel (use: %s)", where, smeeName, smeeUse)
 	}
 	return nil
 }
@@ -318,58 +289,6 @@ func (t *tree) commentAbove(f *File, name, key, comment string) error {
 		}
 	}
 	return nil
-}
-
-// freePort picks a loopback port for a new listener: from 8787 up, one no
-// listener in the tree uses and nothing holds right now.
-func (t *tree) freePort() (int, error) {
-	if t.takenPorts == nil {
-		t.takenPorts = map[int]bool{}
-		for _, f := range t.files {
-			v, _ := f.doc.Value()
-			collectListenPorts(v, t.takenPorts)
-		}
-	}
-	for p := firstListenPort; p < firstListenPort+200; p++ {
-		if t.takenPorts[p] || !t.portFree(p) {
-			continue
-		}
-		t.takenPorts[p] = true
-		return p, nil
-	}
-	return 0, fmt.Errorf("no free loopback port in %d-%d for its listener; set listen by hand", firstListenPort, firstListenPort+199)
-}
-
-// collectListenPorts records the port of every `listen` (or `*_listen`)
-// address anywhere in v.
-func collectListenPorts(v any, into map[int]bool) {
-	switch x := v.(type) {
-	case map[string]any:
-		for k, e := range x {
-			if s, ok := e.(string); ok && (k == "listen" || strings.HasSuffix(k, "_listen")) {
-				if _, p, err := net.SplitHostPort(s); err == nil {
-					if n, err := strconv.Atoi(p); err == nil {
-						into[n] = true
-					}
-				}
-			}
-			collectListenPorts(e, into)
-		}
-	case []any:
-		for _, e := range x {
-			collectListenPorts(e, into)
-		}
-	}
-}
-
-// portFree probes whether a loopback port can be bound now.
-func portFree(port int) bool {
-	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	if err != nil {
-		return false
-	}
-	_ = ln.Close()
-	return true
 }
 
 func mustYAML(v any) []byte {
