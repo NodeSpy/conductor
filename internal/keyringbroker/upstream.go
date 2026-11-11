@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -85,7 +86,35 @@ func (u *sessionUpstream) Secret(item dbus.ObjectPath) ([]byte, string, error) {
 	return s.Value, s.ContentType, nil
 }
 
+func (u *sessionUpstream) Connected() bool { return u.conn.Connected() }
+
 func (u *sessionUpstream) Close() {
 	_ = u.conn.Object(secretsName, u.session).Call(ifSession+".Close", 0).Err
 	u.conn.Close()
+}
+
+// Count is how many items in the user's keyring carry attrs, locked or not:
+// a search, which reads no secret and unlocks nothing.
+func Count(attrs map[string]string) (int, error) {
+	type result struct {
+		n   int
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		up, err := SessionUpstream()
+		if err != nil {
+			done <- result{0, err}
+			return
+		}
+		defer up.Close()
+		u, l, err := up.Search(attrs)
+		done <- result{len(u) + len(l), err}
+	}()
+	select {
+	case r := <-done:
+		return r.n, r.err
+	case <-time.After(5 * time.Second):
+		return 0, errors.New("the keyring did not answer")
+	}
 }

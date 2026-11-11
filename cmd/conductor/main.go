@@ -45,6 +45,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/gitwt"
 	"github.com/NodeSpy/conductor/internal/hosts"
 	"github.com/NodeSpy/conductor/internal/inbound"
+	"github.com/NodeSpy/conductor/internal/keyringbroker"
 	"github.com/NodeSpy/conductor/internal/memory"
 	agentmodels "github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
@@ -63,6 +64,9 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+	// `plugin show` and consent say how many keyring items a declared one
+	// matches now.
+	plugin.KeyringMatches = keyringbroker.Count
 	// Let pack requires.conductor constraints check against the running
 	// version, and requires.connectors constraints against each installed
 	// plugin connector's resolved release (a builtin connector's version IS

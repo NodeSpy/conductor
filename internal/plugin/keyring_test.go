@@ -14,7 +14,7 @@ var toolItem = KeyringItem{Label: "tool login for example.com", Attributes: map[
 
 func TestKeyringConsentLine(t *testing.T) {
 	m := Manifest{Keyring: []KeyringItem{toolItem}}
-	want := "reads its tool login for example.com from your keyring (the item service=tool:example.com)"
+	want := "reads every item in your keyring with service=tool:example.com (\"tool login for example.com\", in its words)"
 	if got := strings.Join(m.Lines(), "\n"); !strings.Contains(got, want) {
 		t.Fatalf("consent lines:\n%s\nwant a line %q", got, want)
 	}
@@ -44,7 +44,8 @@ func TestKeyringWidens(t *testing.T) {
 		{"the same item", Manifest{Keyring: []KeyringItem{toolItem}}, Manifest{Keyring: []KeyringItem{toolItem}}, false},
 		{"a narrower item", Manifest{Keyring: []KeyringItem{toolItem}}, Manifest{Keyring: []KeyringItem{narrower}}, false},
 		{"a wider item", Manifest{Keyring: []KeyringItem{narrower}}, Manifest{Keyring: []KeyringItem{toolItem}}, true},
-		{"a new label alone", Manifest{Keyring: []KeyringItem{toolItem}}, Manifest{Keyring: []KeyringItem{relabelled}}, false},
+		// The label is consent text: a new one is asked for again.
+		{"a new label alone", Manifest{Keyring: []KeyringItem{toolItem}}, Manifest{Keyring: []KeyringItem{relabelled}}, true},
 	} {
 		if w := tc.have.Widens(tc.next); (len(w) > 0) != tc.widens {
 			t.Errorf("%s: widens %v, want widening=%v", tc.name, w, tc.widens)
@@ -53,7 +54,7 @@ func TestKeyringWidens(t *testing.T) {
 	if r := (Manifest{Keyring: []KeyringItem{toolItem}}).Widens(Manifest{}); len(r) != 0 {
 		t.Errorf("dropping an item widens: %v", r)
 	}
-	if r := (Manifest{}).Widens(Manifest{Keyring: []KeyringItem{toolItem}}); len(r) != 1 || !strings.Contains(r[0], "from your keyring") {
+	if r := (Manifest{}).Widens(Manifest{Keyring: []KeyringItem{toolItem}}); len(r) != 1 || !strings.Contains(r[0], "in your keyring with service=tool:example.com") {
 		t.Errorf("the widening names the item: %v", r)
 	}
 	// On macOS a keyring item is granted as the Keychain: a build that has
@@ -64,6 +65,9 @@ func TestKeyringWidens(t *testing.T) {
 	}
 	if w := (Manifest{}).Widens(Manifest{Keyring: []KeyringItem{toolItem}}); len(w) != 1 {
 		t.Errorf("macOS: a new item without the Keychain: %v", w)
+	}
+	if w := (Manifest{Keychain: true, Keyring: []KeyringItem{toolItem}}).Widens(Manifest{Keychain: true, Keyring: []KeyringItem{relabelled}}); len(w) != 1 {
+		t.Errorf("macOS: a new label under a Keychain grant: %v", w)
 	}
 }
 
@@ -94,7 +98,7 @@ func TestReconcileUpdateAddingKeyringIsHeld(t *testing.T) {
 	if len(res) != 1 || res[0].Action != ActionHeld {
 		t.Fatalf("resolution = %+v, want held", res)
 	}
-	if got := strings.Join(res[0].Widens, "; "); got != "reads its tool login for example.com from your keyring (the item service=tool:example.com)" {
+	if got := strings.Join(res[0].Widens, "; "); got != "reads every item in your keyring with service=tool:example.com (\"tool login for example.com\", in its words)" {
 		t.Fatalf("held for: %q", got)
 	}
 	if rec, _ := st.Get("connectors/jira"); rec.Resolved != "jira/v1.0.0" || len(rec.Manifest.Keyring) != 0 {
@@ -160,7 +164,7 @@ func TestOlderRecordHoldsKeyring(t *testing.T) {
 			if tc.held != (len(p) == 1) {
 				t.Fatalf("pending %+v, want held=%v", p, tc.held)
 			}
-			if tc.held && !strings.Contains(strings.Join(p[0].Widens, ";"), "from your keyring") {
+			if tc.held && !strings.Contains(strings.Join(p[0].Widens, ";"), "in your keyring with") {
 				t.Fatalf("held for: %v", p[0].Widens)
 			}
 			if !tc.held && cur.ManifestSchema != manifestSchema {
@@ -179,7 +183,7 @@ func TestOlderRecordHoldsKeyring(t *testing.T) {
 }
 
 // On macOS a declared keyring item is read from the Keychain: the jail's
-// profile grants it, as keychain: true does.
+// profile grants it read-only (keychain: true, read-write).
 func TestSeatbeltGrantsKeychainForKeyringItems(t *testing.T) {
 	oldG, oldL, oldC, oldH := spawnGOOS, spawnLookPath, sandbox.CheckGOOS, jailHome
 	spawnGOOS = "darwin"
@@ -194,7 +198,8 @@ func TestSeatbeltGrantsKeychainForKeyringItems(t *testing.T) {
 	for _, tc := range []struct {
 		m    Manifest
 		want bool
-	}{{Manifest{}, false}, {Manifest{Keyring: []KeyringItem{toolItem}}, true}, {Manifest{Keychain: true}, true}} {
+		rw   bool
+	}{{Manifest{}, false, false}, {Manifest{Keyring: []KeyringItem{toolItem}}, true, false}, {Manifest{Keychain: true}, true, true}} {
 		cmd, cleanup, _, err := buildCommand(Spec{Name: "p", Kind: KindConnector, BinPath: bin, Local: true, Manifest: tc.m}, sd)
 		if err != nil {
 			t.Fatal(err)
@@ -202,6 +207,10 @@ func TestSeatbeltGrantsKeychainForKeyringItems(t *testing.T) {
 		cleanup()
 		if got := strings.Contains(cmd.Args[2], filepath.Join(home, "Library/Keychains")); got != tc.want {
 			t.Errorf("%+v: Keychain granted=%v, want %v", tc.m, got, tc.want)
+		}
+		// A keyring item reads the Keychain; only keychain: true writes it.
+		if got := strings.Contains(cmd.Args[2], "file-write* (subpath \""+filepath.Join(home, "Library/Keychains")); got != tc.rw {
+			t.Errorf("%+v: Keychain writable=%v, want %v", tc.m, got, tc.rw)
 		}
 	}
 }
@@ -215,12 +224,75 @@ func TestKeyringConsentLineReferences(t *testing.T) {
 	}}
 	got := strings.Join(m.Lines(), "\n")
 	for _, want := range []string{
-		"reads its tool login for your server from your keyring (the item service=tool:<host of api_base from its config>)",
-		"reads its registry login from your keyring (the item kind=1, server=<registries from its config>)",
-		"reads its tool login for $TOOL_HOST from your keyring (the item service=tool:$TOOL_HOST)",
+		"reads every item in your keyring with service=tool:<host of api_base from its config> (\"tool login for your server\", in its words)",
+		"reads every item in your keyring with kind=1, server=<registries from its config> (\"registry login\", in its words)",
+		"reads every item in your keyring with service=tool:$TOOL_HOST (\"tool login for $TOOL_HOST\", in its words)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("consent lines:\n%s\nwant a line %q", got, want)
+		}
+	}
+}
+
+// On macOS the consent says what a keyring item really grants: the
+// Keychain, read-only, which macOS cannot narrow to the item.
+func TestKeyringConsentLineDarwin(t *testing.T) {
+	prev := spawnGOOS
+	t.Cleanup(func() { spawnGOOS = prev })
+	spawnGOOS = "darwin"
+	got := strings.Join(Manifest{Keyring: []KeyringItem{toolItem}}.Lines(), "\n")
+	for _, want := range []string{"macOS Keychain, read-only", "service=tool:example.com", "cannot confine it", "per-item access controls"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("darwin consent %q: no %q", got, want)
+		}
+	}
+}
+
+// An env: reference resolves from the env allow_env leaves the plugin, as
+// its env does: a variable the config withholds names no item.
+func TestKeyringEnvRefNarrowedByAllowEnv(t *testing.T) {
+	t.Setenv("TOOL_HOST", "env.example.test")
+	m := Manifest{Env: []string{"TOOL_HOST"}, Keyring: []KeyringItem{{Label: "tool login for $TOOL_HOST", Attributes: map[string]string{"service": "tool:${host:env:TOOL_HOST}"}}}}
+	g, err := pluginGrant(Spec{Name: "p", Manifest: m})
+	if err != nil || len(g.Keyring) != 1 || g.Keyring[0].Attributes["service"] != "tool:env.example.test" {
+		t.Fatalf("allowed: %+v %v", g.Keyring, err)
+	}
+	g, err = pluginGrant(Spec{Name: "p", Manifest: m, AllowEnv: []string{}})
+	if err != nil || len(g.Keyring) != 0 {
+		t.Fatalf("allow_env: [] still resolves the item: %+v %v", g.Keyring, err)
+	}
+}
+
+// plugin show says how many keyring items each declared one matches now.
+func TestHereLinesCountsKeyringMatches(t *testing.T) {
+	prevG, prevM := spawnGOOS, KeyringMatches
+	t.Cleanup(func() { spawnGOOS, KeyringMatches = prevG, prevM })
+	spawnGOOS = "linux"
+	KeyringMatches = func(attrs map[string]string) (int, error) {
+		if attrs["service"] == "tool:example.com" {
+			return 3, nil
+		}
+		return 0, nil
+	}
+	here := strings.Join(HereLines(Spec{Name: "p", Manifest: Manifest{Keyring: []KeyringItem{toolItem}}}), "\n")
+	if !strings.Contains(here, "service=tool:example.com (3 items match now)") {
+		t.Fatalf("here lines: %s", here)
+	}
+}
+
+// Red-team regressions: a declaration that would read a whole class of the
+// user's keyring (a schema alone, a protocol alone) is refused at install,
+// whatever its label says; so is a label a bidi override disguises.
+func TestKeyringBroadSelectorRefused(t *testing.T) {
+	for _, it := range []KeyringItem{
+		{Label: "tool login", Attributes: map[string]string{"xdg:schema": "org.gnome.keyring.NetworkPassword"}},
+		{Label: "tool login", Attributes: map[string]string{"xdg:schema": "org.freedesktop.Secret.Generic"}},
+		{Label: "tool login", Attributes: map[string]string{"xdg:schema": "chrome_libsecret_os_crypt_password_v2"}},
+		{Label: "tool login‮", Attributes: map[string]string{"protocol": "https"}},
+		{Label: "tool login‮", Attributes: map[string]string{"service": "tool"}},
+	} {
+		if err := (Capabilities{Keyring: []KeyringItem{it}}).Validate(Schema{}); err == nil {
+			t.Errorf("%q %v validated", it.Label, it.Attributes)
 		}
 	}
 }

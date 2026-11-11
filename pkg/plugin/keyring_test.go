@@ -183,3 +183,40 @@ func TestKeyringReferences(t *testing.T) {
 		t.Fatalf("WithoutReferences kept: %+v", w.Keyring)
 	}
 }
+
+// An item made only of attributes many programs' items share (a schema, a
+// protocol, a user) would read all of them: it is refused, as is a label a
+// format character (a bidi override) could make read as something else.
+func TestKeyringBroadOrDisguisedRefused(t *testing.T) {
+	for _, it := range []KeyringItem{
+		{Label: "tool login", Attributes: map[string]string{"xdg:schema": "org.freedesktop.Secret.Generic"}},
+		{Label: "tool login", Attributes: map[string]string{"xdg:schema": "org.gnome.keyring.NetworkPassword", "protocol": "https"}},
+		{Label: "tool login", Attributes: map[string]string{"username": "me", "port": "443"}},
+		{Label: "tool login‮", Attributes: map[string]string{"service": "tool"}},
+		{Label: "tool​login", Attributes: map[string]string{"service": "tool"}},
+		{Label: "tool login", Attributes: map[string]string{"service": "tool‮"}},
+	} {
+		if err := (Capabilities{Keyring: []KeyringItem{it}}).Validate(Schema{}); err == nil {
+			t.Errorf("%q %v: validated", it.Label, it.Attributes)
+		}
+	}
+	for _, it := range []KeyringItem{
+		{Label: "tool login", Attributes: map[string]string{"service": "tool"}},
+		{Label: "tool login", Attributes: map[string]string{"xdg:schema": "org.example.Password", "server": "example.com"}},
+	} {
+		if err := (Capabilities{Keyring: []KeyringItem{it}}).Validate(Schema{}); err != nil {
+			t.Errorf("%v: %v", it.Attributes, err)
+		}
+	}
+}
+
+// An env: reference may not name a variable that looks like a credential,
+// as a config: reference may not name a secret field.
+func TestKeyringEnvRefNotSecret(t *testing.T) {
+	for _, v := range []string{"TOOL_TOKEN", "TOOL_PASSWORD", "MY_API_KEY", "SSH_AUTH_SOCK"} {
+		c := Capabilities{Env: []string{v}, Keyring: []KeyringItem{{Label: "l", Attributes: map[string]string{"service": "tool:${env:" + v + "}"}}}}
+		if err := c.Validate(Schema{}); err == nil {
+			t.Errorf("%s: validated", v)
+		}
+	}
+}

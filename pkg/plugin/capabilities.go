@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Grant is a plugin's declaration (Capabilities) resolved against the
@@ -210,6 +212,11 @@ func (c Capabilities) Validate(conn Schema) error {
 				if !env[r.Name] {
 					return fmt.Errorf("capabilities.keyring[%d] %q: %s refers to %s, which capabilities.env does not declare", i, it.Label, v, r.Name)
 				}
+				// As a secret config field is refused: a credential's
+				// value is never what names a keyring item.
+				if secretName(r.Name) {
+					return fmt.Errorf("capabilities.keyring[%d] %q: %s refers to %s, which looks like a credential", i, it.Label, v, r.Name)
+				}
 			}
 		}
 	}
@@ -332,6 +339,23 @@ func hostOf(v string) (string, error) {
 	return strings.ToLower(h), nil
 }
 
+// secretName reports whether a variable's name looks like a credential's.
+func secretName(n string) bool {
+	u := strings.ToUpper(n)
+	for _, w := range []string{"TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "APIKEY", "PRIVATE_KEY", "ACCESS_KEY", "CREDENTIAL", "AUTH_SOCK"} {
+		if strings.Contains(u, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// IdentifyingKeys are the attribute names that say which program's or
+// site's item it is. Each declared item names at least one: the others
+// (xdg:schema, protocol, port, user, ...) are shared by many programs' items,
+// and a declaration made only of them would read all of those.
+var IdentifyingKeys = []string{"service", "server", "host", "domain", "url", "origin", "application"}
+
 // maxKeyringLabel bounds a keyring item's label: a few words for the user.
 const maxKeyringLabel = 80
 
@@ -348,6 +372,15 @@ func (it KeyringItem) validate() error {
 	if len(it.Attributes) == 0 {
 		return fmt.Errorf("%q names no attributes: an item is declared by the attributes it is stored under", it.Label)
 	}
+	identified := false
+	for _, k := range IdentifyingKeys {
+		if it.Attributes[k] != "" {
+			identified = true
+		}
+	}
+	if !identified {
+		return fmt.Errorf("%q names none of %s: attributes such as xdg:schema or protocol alone match many programs' items", it.Label, strings.Join(IdentifyingKeys, ", "))
+	}
 	for k, v := range it.Attributes {
 		if k == "" || v == "" {
 			return fmt.Errorf("%q: attribute %q=%q: names and values may not be empty", it.Label, k, v)
@@ -359,9 +392,11 @@ func (it KeyringItem) validate() error {
 	return nil
 }
 
+// printable: no control or format character (a bidi override would reorder
+// what the user reads), no line or paragraph separator.
 func printable(s string) bool {
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == '\u2028' || r == '\u2029' {
+		if !utf8.ValidRune(r) || r == utf8.RuneError || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
 			return false
 		}
 	}

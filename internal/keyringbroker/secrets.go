@@ -83,7 +83,7 @@ func (c *conn) service(m *dbus.Message, iface, member string) {
 	case "SearchItems":
 		attrs, ok := attrsArg(m)
 		if !ok {
-			c.fail(m, secretsID, "org.freedesktop.DBus.Error.InvalidArgs", "SearchItems takes a{ss}")
+			c.fail(m, secretsID, "org.freedesktop.DBus.Error.InvalidArgs", "SearchItems takes a{ss}, of at most 32 attributes of at most 1 KiB")
 			return
 		}
 		unlocked, locked, err := c.b.search(attrs)
@@ -173,7 +173,7 @@ func (c *conn) collection(m *dbus.Message, iface, member string) {
 	case "SearchItems":
 		attrs, ok := attrsArg(m)
 		if !ok {
-			c.fail(m, secretsID, "org.freedesktop.DBus.Error.InvalidArgs", "SearchItems takes a{ss}")
+			c.fail(m, secretsID, "org.freedesktop.DBus.Error.InvalidArgs", "SearchItems takes a{ss}, of at most 32 attributes of at most 1 KiB")
 			return
 		}
 		u, l, err := c.b.search(attrs)
@@ -328,12 +328,21 @@ func (c *conn) props(m *dbus.Message, get func(iface, name string) (dbus.Variant
 	}
 }
 
+// attrsArg is a search's attributes, within maxAttrs and maxAttrLen.
 func attrsArg(m *dbus.Message) (map[string]string, bool) {
 	if len(m.Body) < 1 {
 		return nil, false
 	}
 	a, ok := m.Body[0].(map[string]string)
-	return a, ok
+	if !ok || len(a) > maxAttrs {
+		return nil, false
+	}
+	for k, v := range a {
+		if len(k) > maxAttrLen || len(v) > maxAttrLen {
+			return nil, false
+		}
+	}
+	return a, true
 }
 
 func pathsArg(m *dbus.Message) ([]dbus.ObjectPath, bool) {
@@ -388,7 +397,7 @@ func (b *Broker) search(attrs map[string]string) (unlocked, locked []dbus.Object
 	for i, q := range queries {
 		u, l, err := up.Search(q)
 		if err != nil {
-			b.drop(up)
+			b.drop(up, err)
 			return nil, nil, err
 		}
 		if len(l) > 0 {
@@ -426,7 +435,7 @@ func (b *Broker) check(path dbus.ObjectPath) (attrs map[string]string, locked bo
 			de.Name == "org.freedesktop.DBus.Error.UnknownProperty" || de.Name == errNoObject) {
 			return nil, false, nil
 		}
-		b.drop(up)
+		b.drop(up, err)
 		return nil, false, err
 	}
 	a, ok := v.Value().(map[string]string)

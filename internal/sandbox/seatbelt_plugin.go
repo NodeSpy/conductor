@@ -27,6 +27,9 @@ type PluginProfile struct {
 	ListenPorts []int
 	// Keychain allows the login Keychain's services and files.
 	Keychain bool
+	// KeychainRead allows the Keychain's services, and its files read-only
+	// (a declared keyring item: a login the plugin reads, never writes).
+	KeychainRead bool
 	// Home is the user's home (for the Keychain's directory).
 	Home string
 }
@@ -72,7 +75,7 @@ func seatbeltPluginProfile(p *PluginProfile) string {
 	b.WriteString(seatbeltPluginBase)
 	b.WriteString("(allow mach-lookup")
 	mach := append([]string(nil), agentMachBase...)
-	if p.Keychain {
+	if p.Keychain || p.KeychainRead {
 		mach = append(mach, agentMachKeychain...)
 	}
 	for _, s := range mach {
@@ -100,8 +103,11 @@ func seatbeltPluginProfile(p *PluginProfile) string {
 	for _, w := range resolvePaths(p.Write) {
 		b.WriteString("(allow file-read* file-write* (subpath " + sbplString(w) + "))\n")
 	}
-	if p.Keychain && p.Home != "" {
+	switch {
+	case p.Keychain && p.Home != "":
 		b.WriteString("(allow file-read* file-write* (subpath " + sbplString(p.Home+"/Library/Keychains") + "))\n")
+	case p.KeychainRead && p.Home != "":
+		b.WriteString("(allow file-read* (subpath " + sbplString(p.Home+"/Library/Keychains") + "))\n")
 	}
 	b.WriteString("(deny network*)\n")
 	// A declared unix socket is a written path: connecting to it is allowed.

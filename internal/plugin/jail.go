@@ -58,7 +58,15 @@ var keyringUpstream func() (keyringbroker.Upstream, error)
 func pluginGrant(s Spec) (sdk.Grant, error) {
 	home, _ := jailHome()
 	caps := s.Manifest.Caps()
-	g, err := caps.Resolve(sdk.ResolveEnv{Home: home, Getenv: os.LookupEnv, Conns: s.Conns, Command: func(n string) (string, bool) {
+	// An env: reference resolves from the env the config lets it have
+	// (allow_env), as its env does.
+	getenv := func(n string) (string, bool) {
+		if s.AllowEnv != nil && !slices.Contains(s.AllowEnv, n) {
+			return "", false
+		}
+		return os.LookupEnv(n)
+	}
+	g, err := caps.Resolve(sdk.ResolveEnv{Home: home, Getenv: getenv, Conns: s.Conns, Command: func(n string) (string, bool) {
 		p, err := spawnLookPath(n)
 		if err != nil {
 			return "", false
@@ -115,6 +123,28 @@ func pluginGrant(s Spec) (sdk.Grant, error) {
 	return g, nil
 }
 
+// KeyringMatches counts the items in the user's keyring that carry attrs;
+// nil (tests, and hosts that cannot search it) shows no count. The command
+// line sets it.
+var KeyringMatches func(attrs map[string]string) (int, error)
+
+// keyringMatchCount is how many keyring items a declared one matches now,
+// for the user to see what it reads: on macOS, where the jail reads the
+// Keychain, none is counted.
+func keyringMatchCount(it sdk.KeyringItem) string {
+	if KeyringMatches == nil || spawnGOOS == "darwin" {
+		return ""
+	}
+	n, err := KeyringMatches(it.Attributes)
+	switch {
+	case err != nil:
+		return " (your keyring could not be searched: " + shown(err.Error()) + ")"
+	case n == 1:
+		return " (1 item matches now)"
+	}
+	return fmt.Sprintf(" (%d items match now)", n)
+}
+
 // HereLines spells out what s's declared paths and commands are on this
 // machine: "command:git/../../lib/git-core" is /usr/lib/git-core here, a
 // config: path is its configured value. Shown with the declaration at
@@ -157,7 +187,7 @@ func HereLines(s Spec) []string {
 	add("talks to the program serving the socket", sockets)
 	var items []string
 	for _, it := range g.Keyring {
-		items = append(items, shown(it.Selector()))
+		items = append(items, shown(it.Selector())+keyringMatchCount(it))
 	}
 	add("reads from your keyring the items", items)
 	return out
@@ -935,9 +965,10 @@ func buildSeatbelt(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv, e
 		return nil, nil, fmt.Errorf("plugin %s: cannot jail it here (no sandbox-exec) — set trust: full to run it unjailed", s.Name)
 	}
 	home, _ := jailHome()
-	// A declared keyring item is read from the Keychain: macOS gates each
-	// item by the Keychain's own per-item access control.
-	p := &sandbox.PluginProfile{Keychain: g.Keychain || len(g.Keyring) > 0, Home: home, LoopbackPorts: loopPorts}
+	// A declared keyring item is read from the Keychain, read-only: the
+	// sandbox cannot narrow it to the item, and macOS gates each item by
+	// the Keychain's own per-item access control.
+	p := &sandbox.PluginProfile{Keychain: g.Keychain, KeychainRead: len(g.Keyring) > 0, Home: home, LoopbackPorts: loopPorts}
 	if s.BinPath != "" {
 		p.Exec = append(p.Exec, s.BinPath)
 		p.Read = append(p.Read, filepath.Dir(s.BinPath))

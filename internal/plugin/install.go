@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"maps"
 	"net/url"
 	"slices"
 
@@ -278,7 +279,11 @@ func keyringLine(it KeyringItem) string {
 	for _, k := range keys {
 		parts = append(parts, shown(k)+"="+plainKeyringValue(it.Attributes[k]))
 	}
-	return "reads its " + shown(it.Label) + " from your keyring (the item " + strings.Join(parts, ", ") + ")"
+	sel := strings.Join(parts, ", ")
+	if spawnGOOS == "darwin" {
+		return "reads your macOS Keychain, read-only, for every item with " + sel + " (\"" + shown(it.Label) + "\", in its words): macOS cannot confine it to those items, so it may read any Keychain item macOS's own per-item access controls let it read"
+	}
+	return "reads every item in your keyring with " + sel + " (\"" + shown(it.Label) + "\", in its words)"
 }
 
 // plainKeyringValue spells out a keyring attribute value's reference, as
@@ -308,6 +313,13 @@ func plainKeyringValue(v string) string {
 // every item carrying its attributes). On macOS a Keychain grant covers it
 // too, since a keyring item is granted there as the Keychain.
 func (m Manifest) keyringCovers(it KeyringItem) bool {
+	// The label is what the user agreed to: the same attributes under a
+	// new label are asked for again.
+	for _, h := range m.Keyring {
+		if maps.Equal(h.Attributes, it.Attributes) {
+			return h.Label == it.Label
+		}
+	}
 	if spawnGOOS == "darwin" && m.Keychain {
 		return true
 	}
