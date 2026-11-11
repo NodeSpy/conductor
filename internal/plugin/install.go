@@ -66,10 +66,13 @@ const consentFile = "consented.yaml"
 // jailSchema was written by a jailing conductor the plugin SDK withheld
 // part of the declaration from (HostInfo.ResolvesReferences,
 // HostInfo.GrantsExposeLocal): its config: and env: entries, its
-// expose_local. Both are adopted once (adoptOlderRecord).
+// expose_local. One with refsSchema was written by a conductor the SDK
+// withheld keyring items from (HostInfo.GrantsKeyring). Each is adopted
+// once (adoptOlderRecord).
 const (
 	jailSchema     = 1
-	manifestSchema = 2
+	refsSchema     = 2
+	manifestSchema = 3
 )
 
 // Manifest is the permission manifest a plugin declared at install time — what
@@ -434,8 +437,9 @@ type Installed struct {
 	// Manifest is the permission manifest recorded at install.
 	Manifest Manifest `yaml:"manifest,omitempty"`
 	// ManifestSchema is manifestSchema when Manifest was recorded in full
-	// (see there); jailSchema on one a conductor the plugin SDK withheld
-	// part of it from wrote, 0 on one a conductor without the jail wrote.
+	// (see there); jailSchema or refsSchema on one a conductor the plugin
+	// SDK withheld part of it from wrote, 0 on one a conductor without the
+	// jail wrote.
 	ManifestSchema int `yaml:"manifest_schema,omitempty"`
 	// Legacy marks a record loaded from a version 1 state file (a conductor
 	// without the jail wrote it) that has not been adopted yet. Only such a

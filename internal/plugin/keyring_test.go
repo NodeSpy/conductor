@@ -102,43 +102,79 @@ func TestReconcileUpdateAddingKeyringIsHeld(t *testing.T) {
 	}
 }
 
-// A record a conductor the SDK withheld keyring from is not given the
-// item on adoption: unlike a withheld config: reference, it is a new
-// permission, held for approval.
-func TestJailSchemaRecordHoldsKeyring(t *testing.T) {
+// A record a conductor the SDK withheld keyring from (v0.88 to v0.90:
+// jailSchema; after that, until keyring: refsSchema) is described again on
+// the first pass, once. A keyring item the build declares is not given on
+// adoption: unlike a withheld config: reference it is a new permission, so
+// it is held for approval. A build that declares none is recorded quietly.
+func TestOlderRecordHoldsKeyring(t *testing.T) {
 	prevGOOS := spawnGOOS
 	t.Cleanup(func() { spawnGOOS = prevGOOS })
 	spawnGOOS = "linux"
-	st := stateAt(t)
-	ref := refFor(t, config.UseKindConnector, "acme/plugins/jira")
-	refs := map[string]config.PluginRef{ref.Key(): ref}
-	decl := func(c Capabilities) DescribeFunc {
-		return func(context.Context, Spec) (*Decl, error) {
-			return &Decl{Kind: KindConnector, Type: "jira", Capabilities: c}, nil
-		}
-	}
 	withheld := Capabilities{Commands: []string{"tool"}, Keychain: true}
-	if _, err := Reconcile(refs, st, acmeTrust, stubFor("jira", "jira/v1.0.0"), Options{Describe: decl(withheld)}); err != nil {
-		t.Fatal(err)
-	}
-	rec, _ := st.Get("connectors/jira")
-	rec.ManifestSchema = jailSchema
-	st.Put(rec)
-	if err := st.Save(); err != nil {
-		t.Fatal(err)
-	}
-	st = LoadInstallState(st.Dir())
 	full := withheld
 	full.Keyring = []KeyringItem{toolItem}
-	if _, err := Reconcile(refs, st, acmeTrust, stubFor("jira", "jira/v1.0.0"), Options{GapsOnly: true, Describe: decl(full)}); err != nil {
-		t.Fatal(err)
-	}
-	if cur, _ := st.Get("connectors/jira"); len(cur.Manifest.Keyring) != 0 {
-		t.Fatalf("adoption granted the keyring item without approval: %+v", cur.Manifest)
-	}
-	p := st.PendingUpdates()
-	if len(p) != 1 || !strings.Contains(strings.Join(p[0].Widens, ";"), "from your keyring") {
-		t.Fatalf("pending: %+v", p)
+	for _, tc := range []struct {
+		name   string
+		schema int
+		now    Capabilities
+		held   bool
+	}{
+		{"jailSchema, an item", jailSchema, full, true},
+		{"refsSchema, an item", refsSchema, full, true},
+		{"refsSchema, no item", refsSchema, withheld, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := stateAt(t)
+			ref := refFor(t, config.UseKindConnector, "acme/plugins/jira")
+			refs := map[string]config.PluginRef{ref.Key(): ref}
+			describes := 0
+			decl := func(c Capabilities) DescribeFunc {
+				return func(context.Context, Spec) (*Decl, error) {
+					describes++
+					return &Decl{Kind: KindConnector, Type: "jira", Capabilities: c}, nil
+				}
+			}
+			if _, err := Reconcile(refs, st, acmeTrust, stubFor("jira", "jira/v1.0.0"), Options{Describe: decl(withheld)}); err != nil {
+				t.Fatal(err)
+			}
+			rec, _ := st.Get("connectors/jira")
+			rec.ManifestSchema = tc.schema
+			st.Put(rec)
+			if err := st.Save(); err != nil {
+				t.Fatal(err)
+			}
+			st = LoadInstallState(st.Dir())
+			describes = 0
+			if _, err := Reconcile(refs, st, acmeTrust, stubFor("jira", "jira/v1.0.0"), Options{GapsOnly: true, Describe: decl(tc.now)}); err != nil {
+				t.Fatal(err)
+			}
+			if describes != 1 {
+				t.Fatalf("described %d times, want once", describes)
+			}
+			cur, _ := st.Get("connectors/jira")
+			if len(cur.Manifest.Keyring) != 0 {
+				t.Fatalf("adoption granted the keyring item without approval: %+v", cur.Manifest)
+			}
+			p := st.PendingUpdates()
+			if tc.held != (len(p) == 1) {
+				t.Fatalf("pending %+v, want held=%v", p, tc.held)
+			}
+			if tc.held && !strings.Contains(strings.Join(p[0].Widens, ";"), "from your keyring") {
+				t.Fatalf("held for: %v", p[0].Widens)
+			}
+			if !tc.held && cur.ManifestSchema != manifestSchema {
+				t.Fatalf("schema %d, want %d", cur.ManifestSchema, manifestSchema)
+			}
+			// Once recorded, the next pass does not describe it again.
+			describes = 0
+			if _, err := Reconcile(refs, st, acmeTrust, stubFor("jira", "jira/v1.0.0"), Options{GapsOnly: true, Describe: decl(tc.now)}); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.held && describes != 0 {
+				t.Fatalf("a recorded build was described again (%d)", describes)
+			}
+		})
 	}
 }
 

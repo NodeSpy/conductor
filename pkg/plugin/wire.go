@@ -318,7 +318,7 @@ type Capabilities struct {
 	// Keychain (a CLI that stores its token there). Ignored elsewhere.
 	Keychain bool `json:"keychain,omitempty"`
 	// Keyring are the logins in the user's OS keyring that the plugin, or a
-	// command it runs, reads: a CLI that keeps its token there (gh, glab).
+	// command it runs, reads: a CLI that keeps its token there.
 	// Each names one item by the attributes it is stored under. On Linux the
 	// jail's only session bus is a Secret Service conductor serves: it finds
 	// and reads, from the user's keyring, the items that carry every
@@ -386,7 +386,7 @@ type Capabilities struct {
 // (Capabilities.Keyring).
 type KeyringItem struct {
 	// Label says what the item is, in plain words, for the user agreeing to
-	// it: "gh login for github.com". Shown with the attributes, which are
+	// it: "tool login for example.com". Shown with the attributes, which are
 	// what is enforced.
 	Label string `json:"label"`
 	// Attributes are the Secret Service attributes the item is stored

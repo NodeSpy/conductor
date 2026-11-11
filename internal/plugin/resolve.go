@@ -459,7 +459,8 @@ func describeBuild(ref config.PluginRef, rec Installed, opts Options) (Manifest,
 // build's config: and env: entries or its expose_local: they name the
 // operator's own config, and the listeners conductor wires from it, so a
 // conductor that never had the SDK withhold them recorded them, and they
-// are taken without a hold too.
+// are taken without a hold too. Keyring items (refsSchema:
+// HostInfo.GrantsKeyring) are not: each is a new permission, held below.
 //
 // The rest is compared like any update: what the build now declares beyond
 // the record is held for approval, and it runs jailed to the record
@@ -471,7 +472,7 @@ func describeBuild(ref config.PluginRef, rec Installed, opts Options) (Manifest,
 // be described keeps its old record (and is jailed to it), and the next
 // pass tries again.
 func adoptOlderRecord(ref config.PluginRef, rec Installed, state *InstallState, opts Options) (Installed, bool) {
-	if (!rec.Legacy && rec.ManifestSchema != jailSchema) || opts.Describe == nil || rec.Sha256 == "" || !binaryPresent(rec.Path) {
+	if (!rec.Legacy && (rec.ManifestSchema < jailSchema || rec.ManifestSchema >= manifestSchema)) || opts.Describe == nil || rec.Sha256 == "" || !binaryPresent(rec.Path) {
 		return rec, false
 	}
 	m, err := describeBuild(ref, rec, opts)

@@ -507,7 +507,9 @@ which are what is enforced:
   conductor finds your session bus from `DBUS_SESSION_BUS_ADDRESS`, else
   `$XDG_RUNTIME_DIR/bus`. It never launches a bus.
 - **Updates.** A release that adds a keyring item asks for a new permission,
-  so it is held like any other (below) until you approve it. On macOS, a
+  so it is held like any other (below) until you approve it. A build that
+  an older conductor installed with the item withheld is held the same way
+  on the first start after you upgrade conductor (below). On macOS, a
   build that already has `keychain: true` is not held for an item, since
   the Keychain grant already covers it. A conductor older than this does not
   grant `keyring`, so the SDK withholds it from that conductor. When you
@@ -855,8 +857,11 @@ working setup):
   `plugin github: recorded what … declares that the conductor which installed it could not record: …`.
   Anything else the build declares beyond its record is held as above. That
   includes `keyring`, which the SDK withholds from every conductor that does
-  not grant it: a keyring item is a new permission, not a reference to your
-  config, so it waits for `conductor plugin approve`.
+  not grant it. Records those conductors wrote (`manifest_schema: 1` or `2`)
+  are described once on the first start, and a keyring item the build
+  declares is held for `conductor plugin approve`: it is a new permission,
+  not a reference to your config. A build that declares none is recorded
+  without a word.
 - **Rolling back.** A conductor without the jail does not read a version 2
   state file: it treats it as empty and installs every plugin again from its
   release (so the network must be up for that start), writing version 1.

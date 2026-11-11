@@ -283,14 +283,16 @@ func ghHome(t *testing.T, fileToken string) string {
 	return dir
 }
 
-var ghItem = KeyringItem{Label: "gh login for github.com", Attributes: map[string]string{"service": "gh:github.com"}}
+// probeItem is the probe's declared item: what the gh CLI it runs stores
+// its github.com login under.
+var probeItem = KeyringItem{Label: "probe login", Attributes: map[string]string{"service": "gh:github.com"}}
 
 func ghManifest(ghDir string) Manifest {
 	return Manifest{
 		Read:     []string{ghDir},
 		Commands: []string{"gh", "secret-tool"},
 		Env:      []string{"GH_CONFIG_DIR", "GH_NO_UPDATE_NOTIFIER"},
-		Keyring:  []KeyringItem{ghItem},
+		Keyring:  []KeyringItem{probeItem},
 	}
 }
 
@@ -368,7 +370,7 @@ func TestJailedKeyringLocked(t *testing.T) {
 	gh := ghHome(t, "")
 	got, logs := runJailedProbe(t, ghManifest(gh), "out=gh auth token")
 	wantResults(t, got, map[string]string{"out=gh auth token": "denied"}, logs)
-	if !strings.Contains(logs, `plugin probe: its keyring item "gh login for github.com" is locked: unlock your keyring`) {
+	if !strings.Contains(logs, `plugin probe: its keyring item "probe login" is locked: unlock your keyring`) {
 		t.Errorf("no clear message for a locked keyring; logged:\n%s", logs)
 	}
 }
@@ -387,7 +389,7 @@ func TestJailedKeyringNoSessionBus(t *testing.T) {
 		"out=gh auth token":                            "ok:gho_from_file",
 		"out=secret-tool lookup service gh:github.com": "denied",
 	}, logs)
-	if !strings.Contains(logs, "plugin probe: its keyring items (gh login for github.com) cannot be read: no session bus: DBUS_SESSION_BUS_ADDRESS is unset") {
+	if !strings.Contains(logs, "plugin probe: its keyring items (probe login) cannot be read: no session bus: DBUS_SESSION_BUS_ADDRESS is unset") {
 		t.Errorf("no clear message for a box without a session bus; logged:\n%s", logs)
 	}
 }

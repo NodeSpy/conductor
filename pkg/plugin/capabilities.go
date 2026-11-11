@@ -198,7 +198,7 @@ const maxKeyringLabel = 80
 
 func (it KeyringItem) validate() error {
 	if strings.TrimSpace(it.Label) == "" {
-		return fmt.Errorf("a label is required (what the item is, in plain words: \"gh login for github.com\")")
+		return fmt.Errorf("a label is required (what the item is, in plain words: \"tool login for example.com\")")
 	}
 	if len([]rune(it.Label)) > maxKeyringLabel {
 		return fmt.Errorf("label %q is longer than %d characters", it.Label, maxKeyringLabel)
@@ -243,7 +243,7 @@ func (it KeyringItem) Matches(attrs map[string]string) bool {
 	return true
 }
 
-// Selector renders the attributes in a stable order: "service=gh:github.com".
+// Selector renders the attributes in a stable order: "service=tool:example.com".
 func (it KeyringItem) Selector() string {
 	keys := make([]string, 0, len(it.Attributes))
 	for k := range it.Attributes {

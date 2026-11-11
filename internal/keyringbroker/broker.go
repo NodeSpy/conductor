@@ -1,7 +1,7 @@
 // Package keyringbroker serves a jailed plugin the keyring items it declares
 // (plugin.Capabilities.Keyring), and nothing else.
 //
-// A CLI that keeps its login in the OS keyring (gh, glab) reads it on Linux
+// A CLI that keeps its login in the OS keyring reads it on Linux
 // over the D-Bus session bus, from the Secret Service (GNOME Keyring,
 // KWallet, KeePassXC). A jail cannot be handed that bus: it reaches every
 // program in the desktop session, and the Secret Service has no per-item
@@ -226,7 +226,7 @@ func (b *Broker) unavailable(err error) {
 	var de dbus.Error
 	switch {
 	case errors.Is(err, errNoBus):
-		b.report("nobus", "its keyring items (%s) cannot be read: %v. A CLI that also keeps its login in a file (gh's hosts.yml) still uses that; otherwise run conductor in a desktop session with an unlocked keyring, or give the CLI its token another way", b.labels(), err)
+		b.report("nobus", "its keyring items (%s) cannot be read: %v. A CLI that also keeps its login in a file still uses that; otherwise run conductor in a desktop session with an unlocked keyring, or give the CLI its token another way", b.labels(), err)
 	case errors.As(err, &de) && (de.Name == "org.freedesktop.DBus.Error.ServiceUnknown" || de.Name == "org.freedesktop.DBus.Error.NameHasNoOwner"):
 		b.report("nosvc", "its keyring items (%s) cannot be read: no keyring (Secret Service) is running in conductor's session — start one (GNOME Keyring, KWallet, KeePassXC) and log in to it", b.labels())
 	default:
