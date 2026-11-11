@@ -23,9 +23,8 @@ connectors:
       app_id: 0 # <- your GitHub App id
       private_key_path: ~/.config/conductor/github-app.pem
     webhook:
-      listen: "127.0.0.1:8787" # local only; gh-smee relays the public channel here
-      path: /webhook
-      expose: gh-smee # drop this when GitHub can reach `listen` directly
+      expose: gh-smee # gh-smee relays the public channel to the listener; conductor picks its local address
+      # listen: "127.0.0.1:8787" # set it (and drop expose) when GitHub can reach it directly
       secret: ${GH_WEBHOOK_SECRET} # a webhook setting, not App auth — App-less configs verify too
       verify_signature: false # smee re-serializes the body; true with a direct `listen` receiver
     me: { logins: [] } # <- your GitHub login(s), e.g. [octocat] — defines "you"

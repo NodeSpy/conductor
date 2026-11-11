@@ -37,6 +37,12 @@
 #   GITHUB_NEW      the github plugin with smee_url deprecated (required)
 #   SMEE_OLD        the released smee plugin (required)
 #   SMEE_NEW        the smee plugin from the same change (required)
+#   GITHUB_DP       the github plugin declaring its listener's default path
+#                   (optional: the explicit-listen rows without a path)
+#   CONDUCTOR_V090  a jailing conductor from before expose_local (optional:
+#                   the default-path github build loads and serves there)
+#   CONDUCTOR_PREV  the conductor release before this tree (optional: the
+#                   rows proving it unaffected, and the failing-before row)
 #   WORK            scratch dir (default: a fresh dir under $TMPDIR)
 set -uo pipefail
 
@@ -317,6 +323,8 @@ row() {
     if [ "$(cat "$d/cfg/conductor.yaml.pre-smee" 2>/dev/null)" = "$orig" ]; then pass "$name: backup holds the original"; else fail "$name: no faithful backup"; fi
   elif [ "$migrates" = yes ]; then
     if grep -v '^ *#' <<<"$now" | grep -q "smee_url"; then fail "$name: smee_url still in the config"; else pass "$name: the config was rewritten"; fi
+    # No listen or path written: conductor gives the listeners their address.
+    if grep -qE '^ +(listen|path): ' <<<"$now"; then fail "$name: the rewrite wrote a listen or path"; echo "$now"; else pass "$name: the rewrite wrote no listen and no path"; fi
     if grep -q "use: smee" <<<"$now" && grep -q "channel: \${HOOKS_SMEE_URL}" <<<"$now" && grep -q "secret: \${GH_WEBHOOK_SECRET}" <<<"$now"; then
       pass "$name: smee connectors on the same channels, secrets still references"
     else
@@ -427,10 +435,12 @@ if grep -q -- "$OWN_PORT" "$d/daemon.log"; then pass "webhook-jailed-by-hand: th
 stop "$d"
 
 # Rollback: the previous conductor (doUpdate's <exe>.prev) started on a
-# config the new one already rewrote. github keeps working through the smee
-# connector (listeners predate the move); the bundled webhook connector of an
-# older conductor has no relay path, so its deliveries wait for the backup to
-# be restored (or the new conductor to come back).
+# config the new one already rewrote. The rewrite wrote no listen, which only
+# a conductor that picks the address itself can serve: an older one disables
+# the github connector, naming the missing field (no crash, the rest runs),
+# until the backup is restored or a listen is added. A config an earlier
+# release rewrote, with listen and path written in, keeps delivering under
+# the older conductor through the smee connector (listeners predate the move).
 say "rollback-after-migration"
 d="$WORK/rollback"
 mkdir -p "$d/state"
@@ -438,11 +448,178 @@ cp -r "$WORK/new-cond.new-gh/cfg" "$d/cfg"
 sed -i "s#/new-cond.new-gh-gh#/rollback-gh#; s#/new-cond.new-gh/#/rollback/#g; s#new-cond.new-gh-hooks#rollback-hooks#" "$d/cfg/conductor.yaml" "$d/cfg/conductor.env"
 "$BIN/seed" -state "$d/state" "github=$GITHUB_NEW" "smee=$SMEE_NEW" >"$d/seed.log" 2>&1
 boot "$d" "$CONDUCTOR_OLD"
-if wait_for 60 subscribed rollback-gh; then pass "rollback: the smee connector subscribed under the older conductor"; else fail "rollback: no subscriber"; fi
-sleep 1
-post_github rollback 1
-if wait_for 30 fired rollback gh; then pass "rollback: gh.new_comment fires under the older conductor"; else fail "rollback: gh.new_comment never fired"; fi
+if wait_for 60 grep -q 'connector "gh" disabled.*webhook.expose is set with no webhook.listen' "$d/daemon.log"; then pass "rollback: the older conductor disables github, naming the missing listen"; else fail "rollback: no disabled-github line"; fi
+if wait_for 30 grep -q 'connector "hooks" disabled' "$d/daemon.log"; then pass "rollback: the older conductor disables the webhook connector too (no listen)"; else fail "rollback: no disabled-hooks line"; fi
+sleep 3
+if [ -d "/proc/$(cat "$WORK/rollback/daemon.pid")" ]; then pass "rollback: the daemon keeps running"; else fail "rollback: the daemon exited"; fi
 stop "$d"
+# The same, with the listen and path an earlier release wrote.
+d="$WORK/rollback-earlier"
+mkdir -p "$d/state"
+cp -r "$WORK/new-cond.new-gh/cfg" "$d/cfg"
+sed -i "s#/new-cond.new-gh-gh#/rollback-earlier-gh#; s#/new-cond.new-gh/#/rollback-earlier/#g; s#new-cond.new-gh-hooks#rollback-earlier-hooks#" "$d/cfg/conductor.yaml" "$d/cfg/conductor.env"
+P_EARLIER=$(freeport)
+sed -i "s#^      expose: gh-smee#      listen: 127.0.0.1:$P_EARLIER\n      path: /webhook\n      expose: gh-smee#" "$d/cfg/conductor.yaml"
+P_EARLIER_H=$(freeport)
+sed -i "s#^    expose: hooks-smee#    listen: 127.0.0.1:$P_EARLIER_H\n    expose: hooks-smee#" "$d/cfg/conductor.yaml"
+"$BIN/seed" -state "$d/state" "github=$GITHUB_NEW" "smee=$SMEE_NEW" >"$d/seed.log" 2>&1
+boot "$d" "$CONDUCTOR_OLD"
+if wait_for 60 subscribed rollback-earlier-gh; then pass "rollback-earlier: the smee connector subscribed under the older conductor"; else fail "rollback-earlier: no subscriber"; fi
+sleep 1
+post_github rollback-earlier 1
+if wait_for 30 fired rollback-earlier gh; then pass "rollback-earlier: gh.new_comment fires under the older conductor"; else fail "rollback-earlier: gh.new_comment never fired"; fi
+stop "$d"
+
+# A listener's listen and path are optional next to expose. Configs in the
+# current shape (no smee_url, nothing to migrate):
+#
+#   expose-only   no listen, no path: conductor picks the address, the relay
+#                 delivers through it (github and smee jailed)
+#   listen        an explicit listen, no path: the relay delivers there, to
+#                 the plugin's declared default path, AND a direct POST to
+#                 the listen address arrives too
+#   listen-path   an explicit listen and path: both arrive, on any github
+#
+# modern_row <name> <conductor> <github> <shape> <gh: yes|disabled> [direct: yes]
+write_modern() { # <dir> <row> <shape> <gh port> <hooks port>
+  local d=$1 row=$2 shape=$3 pg=$4 ph=$5 ghl="" hl=""
+  case $shape in
+    listen) ghl="      listen: 127.0.0.1:$pg"; hl="    listen: 127.0.0.1:$ph" ;;
+    listen-path) ghl="      listen: 127.0.0.1:$pg
+      path: /webhook"; hl="    listen: 127.0.0.1:$ph" ;;
+  esac
+  mkdir -p "$d/cfg"
+  printf 'GH_WEBHOOK_SECRET=%s\n' "$SECRET" >"$d/cfg/conductor.env"
+  cat >"$d/cfg/conductor.yaml" <<YAML
+# harness row $row — current shape, $shape
+update: { auto: false }
+connectors:
+  gh:
+    use: github
+    api_base: http://127.0.0.1:$P_GH
+    token: harness-static-token
+    webhook:
+$ghl
+      expose: gh-smee
+      secret: \${GH_WEBHOOK_SECRET}
+    sweep: { enabled: false }
+    me: { logins: [harness-user] }
+  gh-smee:
+    use: smee
+    channel: http://127.0.0.1:$P_SMEE/$row-gh
+  hooks:
+    use: webhook
+$hl
+    expose: hooks-smee
+    allow_private: true
+    sources:
+      alarm: { path: /alarm }
+  hooks-smee:
+    use: smee
+    channel: http://127.0.0.1:$P_SMEE/$row-hooks
+    trust: full
+    isolate: true
+triggers:
+  - on: gh.new_comment
+    name: gh-comment
+    filter: { repo: ["harness/svc"] }
+    steps:
+      - id: tell
+        uses: hooks.post
+        options: { url: "http://127.0.0.1:$P_SINK/harness/$row/gh", body: "fired" }
+  - on: hooks.alarm
+    name: hooks-alarm
+    steps:
+      - id: tell
+        uses: hooks.post
+        options: { url: "http://127.0.0.1:$P_SINK/harness/$row/hooks", body: "fired" }
+YAML
+  sed -i '/^$/d' "$d/cfg/conductor.yaml"
+}
+post_github_direct() { # <row> <n> <url>
+  local body sig
+  body=$(printf '{"action":"created","installation":{"id":42},"repository":{"full_name":"harness/svc","name":"svc","default_branch":"main","owner":{"login":"harness"}},"issue":{"number":%d,"html_url":"https://forge.test/harness/svc/pull/%d","user":{"login":"harness-user"},"pull_request":{"url":"https://forge.test/harness/svc/pull/%d"}},"comment":{"id":%d,"user":{"login":"a-reviewer"},"body":"direct %s %d"}}' "$2" "$2" "$2" "$((7000 + $2))" "$1" "$2")
+  sig=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
+  curl -sf -X POST "$3" -H "Content-Type: application/json" \
+    -H "X-GitHub-Event: issue_comment" -H "X-GitHub-Delivery: direct-$1-$2-$RANDOM" \
+    -H "X-Hub-Signature-256: sha256=$sig" --data-binary "$body" -o /dev/null
+}
+# arrives <name> <row> <which> <what>: one more <which> fired since the last
+# call for this row/which.
+arrives() {
+  local name=$1 row=$2 which=$3 what=$4 before=${5:-0}
+  if wait_for 30 bash -c "[ \$(curl -sf http://127.0.0.1:$P_SINK/_captured | grep -o '\"/harness/$row/$which\"' | wc -l) -gt $before ]"; then
+    pass "$name: $what"
+  else
+    fail "$name: $what — never arrived"
+  fi
+}
+modern_row() {
+  local name=$1 cond=$2 gh=$3 shape=$4 ghx=$5 d="$WORK/$1" pg ph b
+  say "$name"
+  pg=$(freeport) ph=$(freeport)
+  mkdir -p "$d/state"
+  write_modern "$d" "$name" "$shape" "$pg" "$ph"
+  local orig; orig=$(cat "$d/cfg/conductor.yaml")
+  "$BIN/seed" -state "$d/state" "github=$gh" "smee=$SMEE_NEW" >"$d/seed.log" 2>&1 || { fail "$name: seed ($(tail -1 "$d/seed.log"))"; return; }
+  boot "$d" "$cond"
+  # The bundled webhook connector's relay path came with the move: a
+  # conductor before it serves only github's side of these rows.
+  local hooks=yes
+  [ "$cond" = "$CONDUCTOR_OLD" ] && hooks=no
+  if [ "$ghx" = disabled ]; then
+    if wait_for 30 grep -q 'connector "gh" disabled.*webhook.expose is set with no webhook.listen' "$d/daemon.log"; then pass "$name: github is disabled for the missing listen"; else fail "$name: github not disabled"; fi
+    if grep -q 'connector "hooks" disabled' "$d/daemon.log"; then pass "$name: the webhook connector is disabled for the missing listen"; else fail "$name: the webhook connector not disabled"; fi
+    post_github "$name" 1
+    sleep 8
+    if fired "$name" gh; then fail "$name: gh.new_comment fired"; else pass "$name: no github delivery"; fi
+    stop "$d"
+    return
+  fi
+  # direct: a jailed conductor before expose_local (v0.88 – v0.90) never lets
+  # a jailed smee reach a listener; only the direct POST is checked there.
+  [ "$ghx" = direct ] && hooks=no
+  [ "$hooks" = yes ] && { if wait_for 60 subscribed "$name-hooks"; then pass "$name: the webhook relay subscribed"; else fail "$name: nobody subscribed to the webhook channel"; fi; }
+  if wait_for 60 subscribed "$name-gh"; then pass "$name: the github relay subscribed"; else fail "$name: nobody subscribed to the github channel"; fi
+  if [ "$cond" = "$CONDUCTOR_NEW" ]; then jailed "$name" github; jailed "$name" smee; fi
+  sleep 1
+  if [ "$ghx" != direct ]; then
+    post_github "$name" 1
+    arrives "$name" "$name" gh "a smee delivery fired gh.new_comment"
+  fi
+  if [ "$hooks" = yes ]; then
+    post_hooks "$name" 1
+    arrives "$name" "$name" hooks "a smee delivery fired hooks.alarm"
+  fi
+  if [ "$shape" != expose-only ]; then
+    b=$(count_fired "$name" gh)
+    post_github_direct "$name" 2 "http://127.0.0.1:$pg/webhook"
+    arrives "$name" "$name" gh "a direct POST to the explicit listen address fired gh.new_comment" "$b"
+    if [ "$hooks" = yes ]; then
+      b=$(count_fired "$name" hooks)
+      curl -sf -X POST "http://127.0.0.1:$ph/alarm" -H "Content-Type: application/json" --data-binary '{"alarm":"direct"}' -o /dev/null
+      arrives "$name" "$name" hooks "a direct POST to the webhook connector's listen address fired hooks.alarm" "$b"
+    fi
+  fi
+  if [ "$(cat "$d/cfg/conductor.yaml")" = "$orig" ]; then pass "$name: the config is untouched"; else fail "$name: the config changed"; fi
+  stop "$d"
+}
+modern_row now.expose-only.old-gh   "$CONDUCTOR_NEW" "$GITHUB_OLD" expose-only yes
+modern_row now.expose-only.new-gh   "$CONDUCTOR_NEW" "$GITHUB_NEW" expose-only yes
+modern_row now.listen-path.old-gh   "$CONDUCTOR_NEW" "$GITHUB_OLD" listen-path yes
+if [ -n "${GITHUB_DP:-}" ]; then
+  modern_row now.expose-only.dp-gh  "$CONDUCTOR_NEW" "$GITHUB_DP" expose-only yes
+  modern_row now.listen.dp-gh       "$CONDUCTOR_NEW" "$GITHUB_DP" listen yes
+  # Older conductors, the default-path github build: unaffected (the SDK
+  # withholds default_path from them), on a config they can serve.
+  modern_row old-cond.listen-path.dp-gh "$CONDUCTOR_OLD" "$GITHUB_DP" listen-path yes
+  [ -n "${CONDUCTOR_PREV:-}" ] && modern_row prev-cond.listen-path.dp-gh "$CONDUCTOR_PREV" "$GITHUB_DP" listen-path yes
+  [ -n "${CONDUCTOR_V090:-}" ] && modern_row v090-cond.listen-path.dp-gh "$CONDUCTOR_V090" "$GITHUB_DP" listen-path direct
+fi
+if [ -n "${CONDUCTOR_PREV:-}" ]; then
+  # Before this change: expose with no listen disables the listener.
+  modern_row prev-cond.expose-only.new-gh "$CONDUCTOR_PREV" "$GITHUB_NEW" expose-only disabled
+fi
 
 # The fleet over time: a box on an older conductor that installs its plugins
 # itself (from its own release repo, so its install records are exactly what

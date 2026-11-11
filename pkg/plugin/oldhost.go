@@ -1,6 +1,9 @@
 package plugin
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // SemanticReferences is the semantic a host advertises (HostInfo.Semantics)
 // when it resolves the config: and env: entries of a declaration
@@ -108,14 +111,38 @@ const SemanticKeyring = "capabilities.keyring"
 // ignores it; Serve withholds it anyway, so what such a host records is
 // what it was shown, and the conductor that grants it holds it for the
 // user's approval as a new permission.
-func (h *HostInfo) GrantsKeyring() bool {
+func (h *HostInfo) GrantsKeyring() bool { return h.advertises(SemanticKeyring) }
+
+// SemanticListenerDefaultPath is the semantic a host advertises
+// (HostInfo.Semantics) when it reads Listener.DefaultPath. Every host built
+// with this SDK advertises it.
+const SemanticListenerDefaultPath = "listeners.default_path"
+
+// ReadsListenerDefaultPath reports whether the host asking for a declaration
+// reads Listener.DefaultPath. A host before it decodes a declaration's
+// listeners strictly and would refuse the plugin over the unknown field, so
+// Serve withholds it (WithoutListenerDefaultPath).
+func (h *HostInfo) ReadsListenerDefaultPath() bool { return h.advertises(SemanticListenerDefaultPath) }
+
+// advertises reports whether the host advertises semantic s.
+func (h *HostInfo) advertises(s string) bool {
 	if h == nil {
 		return false
 	}
-	for _, s := range h.Semantics {
-		if s == SemanticKeyring {
-			return true
-		}
+	return slices.Contains(h.Semantics, s)
+}
+
+// WithoutListenerDefaultPath clears every listener's DefaultPath, for a
+// host that does not read it. The Listeners slice is copied, never edited
+// in place.
+func WithoutListenerDefaultPath(d *Decl) {
+	if d.Semantics == nil || len(d.Semantics.Listeners) == 0 {
+		return
 	}
-	return false
+	sem := *d.Semantics
+	sem.Listeners = append([]Listener(nil), sem.Listeners...)
+	for i := range sem.Listeners {
+		sem.Listeners[i].DefaultPath = ""
+	}
+	d.Semantics = &sem
 }

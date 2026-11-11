@@ -79,14 +79,16 @@ func TestKnownSemanticsAdvertisesReferences(t *testing.T) {
 // SemanticExposeLocal.
 func oldHostSemantics() []string {
 	return slices.DeleteFunc(KnownSemantics(), func(s string) bool {
-		return s == SemanticReferences || s == SemanticExposeLocal || s == SemanticKeyring
+		return s == SemanticReferences || s == SemanticExposeLocal || s == SemanticKeyring || s == SemanticListenerDefaultPath
 	})
 }
 
 // v090Semantics is HostInfo.Semantics as conductor v0.90 sent it: it
 // resolves references, but has never heard of expose_local.
 func v090Semantics() []string {
-	return slices.DeleteFunc(KnownSemantics(), func(s string) bool { return s == SemanticExposeLocal || s == SemanticKeyring })
+	return slices.DeleteFunc(KnownSemantics(), func(s string) bool {
+		return s == SemanticExposeLocal || s == SemanticKeyring || s == SemanticListenerDefaultPath
+	})
 }
 
 // exposeHandler declares expose_local.
@@ -235,5 +237,83 @@ func TestServeWithholdsReferencesFromOldHosts(t *testing.T) {
 	}
 	if c, _ := caps("5"); !reflect.DeepEqual(c.Egress, []string{"config:base_url"}) {
 		t.Errorf("describe 5 (current host, instance): egress = %v, want [config:base_url]", c.Egress)
+	}
+}
+
+// v094Semantics is HostInfo.Semantics as conductor v0.91 through v0.94 sent
+// it: everything but SemanticListenerDefaultPath.
+func v094Semantics() []string {
+	return slices.DeleteFunc(KnownSemantics(), func(s string) bool { return s == SemanticListenerDefaultPath })
+}
+
+// defaultPathHandler declares a listener with a default path.
+type defaultPathHandler struct{}
+
+func (defaultPathHandler) Describe() Decl {
+	return Decl{Type: "t",
+		Connection: Schema{"webhook": {Type: "map"}},
+		Semantics:  &ConnSemantics{Listeners: []Listener{{Listen: "webhook.listen", Expose: "webhook.expose", Path: "webhook.path", DefaultPath: "/hook"}}}}
+}
+func (defaultPathHandler) Invoke(InvokeRequest) (InvokeResult, error) { return InvokeResult{}, nil }
+
+// Serve sends a listener's default_path only to a host that advertises it
+// reads it. An older host decodes listeners strictly and would refuse the
+// plugin over the field; it gets the declaration it got before the field
+// existed, which its own must-understand check accepts.
+func TestServeWithholdsListenerDefaultPathFromOldHosts(t *testing.T) {
+	if !slices.Contains(KnownSemantics(), SemanticListenerDefaultPath) {
+		t.Fatalf("KnownSemantics() = %v: a host built with this SDK must advertise %s", KnownSemantics(), SemanticListenerDefaultPath)
+	}
+	hosts := []*HostInfo{
+		nil,
+		{Version: "dev", Semantics: oldHostSemantics()},
+		{Version: "dev", Semantics: v090Semantics()},
+		{Version: "dev", Semantics: v094Semantics()},
+		{Version: "dev", Semantics: KnownSemantics()},
+	}
+	var reqs []string
+	for i, h := range hosts {
+		b, err := json.Marshal(DescribeRequest{Host: h})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reqs = append(reqs, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"plugin.describe","params":%s}`, i+1, b))
+	}
+	var out strings.Builder
+	if err := serve(strings.NewReader(strings.Join(reqs, "\n")+"\n"), &out, defaultPathHandler{}); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	byID := decodeResponses(t, out.String())
+	// What a host before the field decodes listeners into.
+	type oldListener struct {
+		Listen string `json:"listen"`
+		Expose string `json:"expose,omitempty"`
+		URLTo  string `json:"url_to,omitempty"`
+		Path   string `json:"path,omitempty"`
+	}
+	for i := range hosts {
+		m := byID[fmt.Sprint(i+1)]
+		if m.Error != nil {
+			t.Fatalf("host %d: %+v", i, m.Error)
+		}
+		var d struct {
+			Semantics struct {
+				Listeners []json.RawMessage `json:"listeners"`
+			} `json:"semantics"`
+		}
+		if err := json.Unmarshal(m.Result, &d); err != nil || len(d.Semantics.Listeners) != 1 {
+			t.Fatalf("host %d: %s (%v)", i, m.Result, err)
+		}
+		raw := d.Semantics.Listeners[0]
+		newHost := i == len(hosts)-1
+		if sent := strings.Contains(string(raw), "default_path"); sent != newHost {
+			t.Errorf("host %d: default_path sent=%v: %s", i, sent, raw)
+		}
+		if !newHost {
+			var ol oldListener
+			if err := strictDecode(raw, &ol); err != nil || ol.Path != "webhook.path" {
+				t.Errorf("host %d: an older host's strict decode: %v (%+v)", i, err, ol)
+			}
+		}
 	}
 }

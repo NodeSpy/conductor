@@ -129,6 +129,10 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		}
 	}()
 
+	// A listener reached only through its exposure (expose: with no listen)
+	// gets its local address now, before anything reads the connector
+	// configs: the plugin processes' grants, the exposure targets, Build.
+	pluginMgr.SetConns(connector.AssignListenAddrs(cfg, logf))
 	// Every listener's exposure is wired now, before anything is exposed:
 	// what a jailed exposure plugin may connect to on this machine.
 	pluginMgr.SetExposeTargets(connector.ExposeTargets(cfg, logf))

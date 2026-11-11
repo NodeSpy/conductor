@@ -5,9 +5,9 @@
 A smee.io channel used to be dialed by whoever received the webhook: the
 github plugin (`webhook.smee_url`) and the bundled `webhook` connector
 (`smee_url`). It is now one thing, the `smee` **exposure connector** (a
-plugin), which relays the channel to a local listener. The receiver only
-listens locally and names its exposure with `expose:` — the same field any
-tunnel plugin (cloudflared, ngrok, tailscale, …) plugs into:
+plugin), which relays the channel to a local listener. The receiver names its
+exposure with `expose:`, the same field any tunnel plugin (cloudflared, ngrok,
+tailscale, …) plugs into, and conductor wires the two together:
 
 ```yaml
 # before                              # after
@@ -15,9 +15,7 @@ gh:                                   gh:
   use: github                           use: github
   webhook:                              webhook:
     smee_url: ${GH_SMEE_URL}              secret: ${GH_WEBHOOK_SECRET}
-    secret: ${GH_WEBHOOK_SECRET}          listen: 127.0.0.1:8787
-                                          path: /webhook
-                                          expose: gh-smee
+    secret: ${GH_WEBHOOK_SECRET}          expose: gh-smee
                                       gh-smee:
                                         use: smee
                                         channel: ${GH_SMEE_URL}
@@ -29,11 +27,17 @@ it loads the config:
 - The new smee connector is pinned to the **same channel** (the same
   `${VAR}` reference, verbatim), so whatever sends to it — a GitHub App's or
   repo's webhook — keeps working untouched.
-- An existing `listen:` is kept; a missing one gets a free loopback port
-  from 8787 up. The github shape gets `path: /webhook` (its default) written
-  out. A `webhook` connector's deliveries arrive on its relay path (`path:`,
-  default `/`) and are offered to every source, each checking its own
-  signature, as the channel did.
+- An existing `listen:` and `path:` are kept: smee delivers there, and the
+  listener stays reachable at that address for anything else you point at
+  it. None is written when there was none: the hop from smee to the
+  listener is conductor's own, so conductor gives a listener with `expose:`
+  and no `listen:` a local address itself at every start (see
+  [[Connectors]], "Exposing a listener"). A `webhook` connector's deliveries
+  arrive on its relay path (`path:`, default `/`) and are offered to every
+  source, each checking its own signature, as the channel did.
+- Configs an earlier release rewrote, with `listen: 127.0.0.1:8787` and
+  `path: /webhook` written in, are left exactly as they are. Both still
+  work; delete them by hand if you don't use them.
 - The smee connector made for a `webhook` connector also gets
   `trust: full` and `isolate: true`, with a comment saying why. The relay it
   replaces ran inside conductor, with conductor's trust, and the `webhook`
@@ -90,6 +94,15 @@ combination keeps working:
    client.
 4. A later `github` major removes `webhook.smee_url`, once this release is
    the oldest conductor in use.
+
+**Rolling back.** The rewrite writes no `listen:`, so it needs a conductor
+that gives such a listener its address itself (this release and later). On
+an earlier conductor the rewritten github (or `webhook`) connector is
+disabled, and the log says `webhook.expose is set with no webhook.listen`
+(`expose is set with no listen` for `webhook`), until you add a `listen:`
+— and for github `path: /webhook`, where it serves by default — or restore
+`<file>.pre-smee`. A config an earlier release rewrote has both written in
+and runs on every conductor since the move.
 
 **Under the plugin jail.** A smee connector runs jailed like every plugin.
 It may connect to the listeners its `expose:` wiring names, and to nothing

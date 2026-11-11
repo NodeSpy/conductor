@@ -1293,6 +1293,19 @@ func (c *Client) setExposeTo(addrs []string) {
 	}
 }
 
+// setConns sets the connection configs this client's process is granted
+// against (Manager.SetConns). A process already up is torn down: the next
+// call re-dials, jailed to grants resolved from the new configs.
+func (c *Client) setConns(conns []map[string]any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.spec.Conns = conns
+	if c.conn != nil && !c.spec.TrustFull {
+		c.teardownLocked()
+		c.starts = nil
+	}
+}
+
 // pidConn is *acp.Conn (satisfying transport by promotion) plus the pid of
 // the subprocess it talks to, so Client.PID can report it without the
 // transport interface itself needing to grow a method every fake in the test

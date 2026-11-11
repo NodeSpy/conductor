@@ -606,7 +606,8 @@ An exposure plugin (one with an `exposes` verb: a tunnel, a relay such as
 wiring, decides the address: each listener a configured connector exposes
 through one of the plugin's instances (`expose: <instance>`), at its
 `listen` address (a `0.0.0.0` or `:port` listen is reached on
-`127.0.0.1`), and nothing else. Consent shows it as `connects to the local
+`127.0.0.1`; a listener with no `listen` gets a `127.0.0.1` port conductor
+picks, see [[Connectors]], "Exposing a listener"), and nothing else. Consent shows it as `connects to the local
 listeners conductor exposes through it`. It is not granted, and the log
 says why, for:
 

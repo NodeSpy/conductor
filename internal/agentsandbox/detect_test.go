@@ -308,6 +308,20 @@ func TestApplyScope(t *testing.T) {
 	if !so.RequireTLS || !slices.Equal(so.NonTLS, []string{"bastion.example:22"}) || so.NonTLSBy != "sandbox + workflow deploy" {
 		t.Fatalf("session %+v", so)
 	}
+	// Every action a scope may name replaces the global one; anything else
+	// leaves it.
+	for _, a := range []string{DetectKill, DetectTerminate, DetectAlert, DetectOff} {
+		p = Policy{Detect: DetectSpec{Action: "global"}}
+		applyScope(&p, nil, &Scope{DetectAction: a})
+		if p.Detect.Action != a {
+			t.Fatalf("scope action %q gave the launch %q", a, p.Detect.Action)
+		}
+	}
+	p = Policy{Detect: DetectSpec{Action: DetectAlert}}
+	applyScope(&p, nil, &Scope{DetectAction: "unknown"})
+	if p.Detect.Action != DetectAlert {
+		t.Fatalf("an unknown scope action replaced the global one: %q", p.Detect.Action)
+	}
 	// Detection off takes the tripwires with it, whatever the scope says.
 	on := true
 	p = Policy{}
