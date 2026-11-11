@@ -104,3 +104,82 @@ func TestServeWithholdsKeyringFromOldHosts(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyringReferences(t *testing.T) {
+	conn := Schema{"api_base": {Type: "string"}, "hosts": {Type: "list"}, "token": {Type: "string", Secret: true}}
+	item := func(v string) KeyringItem {
+		return KeyringItem{Label: "tool login", Attributes: map[string]string{"service": v, "kind": "tool"}}
+	}
+	for v, wantErr := range map[string]bool{
+		"tool:${host:config:api_base}":    false,
+		"${config:hosts}":                 false,
+		"tool:${env:TOOL_HOST}":           false,
+		"tool:${host:env:TOOL_HOST}/x":    false,
+		"tool:${config:nope}":             true, // not a field
+		"tool:${config:token}":            true, // a secret field
+		"tool:${env:UNDECLARED}":          true, // not in env
+		"tool:${config:api_base":          true, // unclosed
+		"${config:hosts}${env:TOOL_HOST}": true,
+		"tool:${file:/etc/passwd}":        true,
+	} {
+		err := Capabilities{Env: []string{"TOOL_HOST"}, Keyring: []KeyringItem{item(v)}}.Validate(conn)
+		if (err != nil) != wantErr {
+			t.Errorf("%q: err=%v, want error=%v", v, err, wantErr)
+		}
+	}
+	two := KeyringItem{Label: "l", Attributes: map[string]string{"a": "${config:api_base}", "b": "${env:TOOL_HOST}"}}
+	if err := (Capabilities{Env: []string{"TOOL_HOST"}, Keyring: []KeyringItem{two}}).Validate(conn); err == nil {
+		t.Error("two references in one item validated")
+	}
+
+	c := Capabilities{Env: []string{"TOOL_HOST"}, Keyring: []KeyringItem{
+		item("tool:example.com"),
+		item("tool:${host:config:api_base}"),
+		item("${config:hosts}"),
+		item("tool:${host:env:TOOL_HOST}"),
+	}}
+	env := ResolveEnv{
+		Conns: []map[string]any{
+			{"api_base": "https://GHE.example.test/api/v3", "hosts": []any{"registry.example.test", "other.example.test:5000"}},
+			{"api_base": "https://ghe.example.test/api/v3"}, // the same host twice: one item
+		},
+		Getenv: func(n string) (string, bool) {
+			return map[string]string{"TOOL_HOST": "env.example.test:8443"}[n], n == "TOOL_HOST"
+		},
+	}
+	g, err := c.Resolve(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range g.Keyring {
+		got = append(got, it.Selector())
+	}
+	slices.Sort(got)
+	want := []string{
+		"kind=tool, service=other.example.test:5000",
+		"kind=tool, service=registry.example.test",
+		"kind=tool, service=tool:env.example.test",
+		"kind=tool, service=tool:example.com",
+		"kind=tool, service=tool:ghe.example.test",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("resolved:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// Unset: the referencing items are not granted at all.
+	g, err = c.Resolve(ResolveEnv{})
+	if err != nil || len(g.Keyring) != 1 || g.Keyring[0].Attributes["service"] != "tool:example.com" {
+		t.Fatalf("unset references: %+v %v", g.Keyring, err)
+	}
+	// A value with no host is an error naming the field, not a guess.
+	if _, err := c.Resolve(ResolveEnv{Conns: []map[string]any{{"api_base": "https:///nohost"}}}); err == nil || !strings.Contains(err.Error(), "api_base") {
+		t.Fatalf("hostless value: %v", err)
+	}
+	if _, err := c.Resolve(ResolveEnv{Conns: []map[string]any{{"hosts": "a\x1bb"}}}); err == nil {
+		t.Fatal("a control character in a configured value resolved")
+	}
+	// A conductor that does not resolve references is not sent them.
+	if w := c.WithoutReferences(); len(w.Keyring) != 1 || w.Keyring[0].Attributes["service"] != "tool:example.com" {
+		t.Fatalf("WithoutReferences kept: %+v", w.Keyring)
+	}
+}

@@ -269,7 +269,38 @@ func socketEntry(e string) bool {
 // attributes that are enforced: the label is the plugin's, the attributes
 // are what the jail is held to.
 func keyringLine(it KeyringItem) string {
-	return "reads its " + shown(it.Label) + " from your keyring (the item " + shown(it.Selector()) + ")"
+	keys := make([]string, 0, len(it.Attributes))
+	for k := range it.Attributes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		parts = append(parts, shown(k)+"="+plainKeyringValue(it.Attributes[k]))
+	}
+	return "reads its " + shown(it.Label) + " from your keyring (the item " + strings.Join(parts, ", ") + ")"
+}
+
+// plainKeyringValue spells out a keyring attribute value's reference, as
+// plainEntry does a path's: "gh:${host:config:api_base}" is
+// "gh:<host of api_base from its config>".
+func plainKeyringValue(v string) string {
+	r, ok, err := sdk.ParseKeyringValue(v)
+	if err != nil || !ok {
+		return shown(v)
+	}
+	var what string
+	switch {
+	case r.Kind == "config" && r.Host:
+		what = "<host of " + shown(r.Name) + " from its config>"
+	case r.Kind == "config":
+		what = "<" + shown(r.Name) + " from its config>"
+	case r.Host:
+		what = "<host of $" + shown(r.Name) + ">"
+	default:
+		what = "$" + shown(r.Name)
+	}
+	return shown(r.Prefix) + what + shown(r.Suffix)
 }
 
 // keyringCovers reports whether m already grants reading the item: one of

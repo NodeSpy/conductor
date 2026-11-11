@@ -473,7 +473,25 @@ declares each login it reads under `keyring`:
 
 An item matches when it carries every declared attribute with the same
 value; `{"service": "gh:github.com"}` covers each account gh keeps for
-github.com. You are shown the plugin's label together with the attributes,
+github.com.
+
+One attribute value per item may name the instance's own config or a
+declared variable, as a path or destination can:
+
+| In a value | Is |
+|---|---|
+| `${config:<field>}` | the connection field's value (a list gives an item per entry) |
+| `${env:<VAR>}` | the daemon's variable (one the plugin declares in `env`) |
+| `${host:config:<field>}`, `${host:env:<VAR>}` | that value's host: a URL's host name, `host:port`'s host |
+
+So `{"service": "gh:${host:config:api_base}"}` is gh's login for the host
+of the instance's `api_base`. A field or variable that is not set gives no
+item. A value with no host, or with a control character, fails the launch
+naming the field. As with `config:` destinations, the field may not be a
+secret one. You are shown the reference (`service=gh:<host of api_base from
+its config>`), and `conductor plugin show` lists the items it resolves to
+on this machine. A conductor that does not resolve references is not sent
+such an item. You are shown the plugin's label together with the attributes,
 which are what is enforced:
 `reads its gh login for github.com from your keyring (the item service=gh:github.com)`.
 

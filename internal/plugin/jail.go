@@ -80,8 +80,9 @@ func pluginGrant(s Spec) (sdk.Grant, error) {
 		return sdk.Grant{}, fmt.Errorf("plugin %s: %w", s.Name, err)
 	}
 	if s.Probe {
-		// A type-level describe serves no instance: no network, no env.
-		g.Egress, g.Listen, g.Env = nil, nil, nil
+		// A type-level describe serves no instance: no network, no env,
+		// no keyring.
+		g.Egress, g.Listen, g.Env, g.Keyring = nil, nil, nil, nil
 		return g, nil
 	}
 	// network: and allow_env narrow: unset grants everything declared, a
@@ -154,6 +155,11 @@ func HereLines(s Spec) []string {
 	}
 	add("reads and writes", files)
 	add("talks to the program serving the socket", sockets)
+	var items []string
+	for _, it := range g.Keyring {
+		items = append(items, shown(it.Selector()))
+	}
+	add("reads from your keyring the items", items)
 	return out
 }
 

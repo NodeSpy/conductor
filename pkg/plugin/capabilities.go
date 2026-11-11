@@ -189,8 +189,147 @@ func (c Capabilities) Validate(conn Schema) error {
 		if err := it.validate(); err != nil {
 			return fmt.Errorf("capabilities.keyring[%d]: %w", i, err)
 		}
+		refs := 0
+		for k, v := range it.Attributes {
+			r, ok, err := ParseKeyringValue(v)
+			if err != nil {
+				return fmt.Errorf("capabilities.keyring[%d] %q: attribute %s: %w", i, it.Label, k, err)
+			}
+			if !ok {
+				continue
+			}
+			if refs++; refs > 1 {
+				return fmt.Errorf("capabilities.keyring[%d] %q: only one attribute may hold a reference", i, it.Label)
+			}
+			switch r.Kind {
+			case "config":
+				if err := field("keyring", r.Name); err != nil {
+					return err
+				}
+			case "env":
+				if !env[r.Name] {
+					return fmt.Errorf("capabilities.keyring[%d] %q: %s refers to %s, which capabilities.env does not declare", i, it.Label, v, r.Name)
+				}
+			}
+		}
 	}
 	return nil
+}
+
+// KeyringRef is a reference in a keyring attribute value: the value is
+// Prefix, then what the reference names, then Suffix.
+//
+//	"${config:<field>}"       the instance's connection field (a list gives
+//	                          an item per entry)
+//	"${env:<VAR>}"            the daemon's variable (one in Env)
+//	"${host:config:<field>}"  the host of that value: a URL's host name, or
+//	"${host:env:<VAR>}"       the host of host:port, or the value itself
+//
+// A field or variable that is not set gives no item.
+type KeyringRef struct {
+	Prefix, Suffix string
+	// Kind is "config" or "env"; Name the field or variable.
+	Kind, Name string
+	// Host takes the host of the value.
+	Host bool
+}
+
+// ParseKeyringValue reads a keyring attribute value: ok when it holds a
+// reference, an error when it holds a malformed one or more than one.
+func ParseKeyringValue(v string) (KeyringRef, bool, error) {
+	i := strings.Index(v, "${")
+	if i < 0 {
+		return KeyringRef{}, false, nil
+	}
+	j := strings.Index(v[i:], "}")
+	if j < 0 {
+		return KeyringRef{}, false, fmt.Errorf("%q: an unclosed ${", v)
+	}
+	r := KeyringRef{Prefix: v[:i], Suffix: v[i+j+1:]}
+	if strings.Contains(r.Suffix, "${") {
+		return KeyringRef{}, false, fmt.Errorf("%q: a value may hold one reference", v)
+	}
+	body := v[i+2 : i+j]
+	if b, ok := strings.CutPrefix(body, "host:"); ok {
+		r.Host, body = true, b
+	}
+	kind, name, _ := strings.Cut(body, ":")
+	if (kind != "config" && kind != "env") || name == "" || strings.ContainsAny(name, " \t${}") {
+		return KeyringRef{}, false, fmt.Errorf("%q: a reference is ${config:<field>}, ${env:<VAR>}, ${host:config:<field>} or ${host:env:<VAR>}", v)
+	}
+	r.Kind, r.Name = kind, name
+	return r, true, nil
+}
+
+// resolveKeyring is a declared item as the jail grants it: an item with no
+// reference as declared; one with a reference once per value it names (none
+// when unset). A value that is not plain text, or has no host when one is
+// taken, is an error naming the field.
+func resolveKeyring(it KeyringItem, e ResolveEnv) ([]KeyringItem, error) {
+	var key string
+	var ref KeyringRef
+	for k, v := range it.Attributes {
+		if r, ok, err := ParseKeyringValue(v); err != nil {
+			return nil, err
+		} else if ok {
+			key, ref = k, r
+		}
+	}
+	if key == "" {
+		return []KeyringItem{{Label: it.Label, Attributes: maps.Clone(it.Attributes)}}, nil
+	}
+	var vals []string
+	switch ref.Kind {
+	case "config":
+		vals = configValues(e.Conns, ref.Name)
+	case "env":
+		if e.Getenv != nil {
+			if v, ok := e.Getenv(ref.Name); ok && strings.TrimSpace(v) != "" {
+				vals = []string{strings.TrimSpace(v)}
+			}
+		}
+	}
+	var out []KeyringItem
+	for _, v := range vals {
+		if ref.Host {
+			h, err := hostOf(v)
+			if err != nil {
+				return nil, fmt.Errorf("capabilities.keyring %q: %s:%s: %w", it.Label, ref.Kind, ref.Name, err)
+			}
+			v = h
+		}
+		if !printable(v) {
+			return nil, fmt.Errorf("capabilities.keyring %q: %s:%s: %q has a control character", it.Label, ref.Kind, ref.Name, v)
+		}
+		attrs := maps.Clone(it.Attributes)
+		attrs[key] = ref.Prefix + v + ref.Suffix
+		out = append(out, KeyringItem{Label: it.Label, Attributes: attrs})
+	}
+	return out, nil
+}
+
+// hostOf is a value's host: a URL's host name, host:port's host, or the
+// value itself when it is a bare host.
+func hostOf(v string) (string, error) {
+	var h string
+	switch {
+	case strings.Contains(v, "://"):
+		u, err := url.Parse(v)
+		if err != nil || u.Hostname() == "" {
+			return "", fmt.Errorf("%q is not a URL with a host", v)
+		}
+		h = u.Hostname()
+	default:
+		if hh, _, err := net.SplitHostPort(v); err == nil {
+			h = hh
+		} else {
+			h = v
+		}
+	}
+	if h == "" || strings.ContainsAny(h, "/ \t*?[]\\@") {
+		return "", fmt.Errorf("%q is not a host", v)
+	}
+	return strings.ToLower(h), nil
 }
 
 // maxKeyringLabel bounds a keyring item's label: a few words for the user.
@@ -311,8 +450,18 @@ func (c Capabilities) Resolve(e ResolveEnv) (Grant, error) {
 	g.Commands = append([]string(nil), c.Commands...)
 	g.Env = append([]string(nil), c.Env...)
 	g.Keychain = c.Keychain
+	seen := map[string]bool{}
 	for _, it := range c.Keyring {
-		g.Keyring = append(g.Keyring, KeyringItem{Label: it.Label, Attributes: maps.Clone(it.Attributes)})
+		items, err := resolveKeyring(it, e)
+		if err != nil {
+			return Grant{}, err
+		}
+		for _, r := range items {
+			if k := r.Selector(); !seen[k] {
+				seen[k] = true
+				g.Keyring = append(g.Keyring, r)
+			}
+		}
 	}
 	for _, l := range []*[]string{&g.Egress, &g.Listen, &g.Read, &g.Write, &g.Exec, &g.Commands, &g.Env} {
 		*l = uniqSorted(*l)

@@ -36,7 +36,8 @@ func (h *HostInfo) ResolvesReferences() bool {
 // WithoutReferences is the declaration for a host that does not resolve
 // references (HostInfo.ResolvesReferences): every config: and env: entry is
 // dropped, optional ("?") ones included, and a list left with nothing is
-// returned unspecified (nil), which such a host does not confine.
+// returned unspecified (nil), which such a host does not confine. So is a
+// keyring item whose attributes hold a reference.
 func (c Capabilities) WithoutReferences() Capabilities {
 	strip := func(in []string) []string {
 		var out []string
@@ -55,6 +56,19 @@ func (c Capabilities) WithoutReferences() Capabilities {
 	c.Write = strip(c.Write)
 	c.FS = strip(c.FS)
 	c.Exec = strip(c.Exec)
+	var items []KeyringItem
+	for _, it := range c.Keyring {
+		ref := false
+		for _, v := range it.Attributes {
+			if _, ok, _ := ParseKeyringValue(v); ok {
+				ref = true
+			}
+		}
+		if !ref {
+			items = append(items, it)
+		}
+	}
+	c.Keyring = items
 	return c
 }
 

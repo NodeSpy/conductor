@@ -189,12 +189,18 @@ func keyringProbe(t *testing.T) string {
 // check's result and what conductor logged meanwhile.
 func runJailedProbe(t *testing.T, m Manifest, args ...string) (map[string]string, string) {
 	t.Helper()
+	return runJailedProbeFor(t, nil, m, args...)
+}
+
+// runJailedProbeFor is runJailedProbe for instances configured as conns.
+func runJailedProbeFor(t *testing.T, conns []map[string]any, m Manifest, args ...string) (map[string]string, string) {
+	t.Helper()
 	sd := testJailDeps(t)
 	var logs syncBuf
 	prev := log.Writer()
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(prev) })
-	s := Spec{Name: "probe", Kind: KindConnector, BinPath: keyringProbe(t), Manifest: m, Args: args}
+	s := Spec{Name: "probe", Kind: KindConnector, BinPath: keyringProbe(t), Manifest: m, Args: args, Conns: conns}
 	cmd, cleanup, sandboxed, err := buildCommand(s, sd)
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +277,8 @@ func ghHome(t *testing.T, fileToken string) string {
 		t.Fatal(err)
 	}
 	hosts := "github.com:\n    git_protocol: https\n    users:\n        testuser:\n    user: testuser\n" +
-		"other.example:\n    git_protocol: https\n    users:\n        testuser:\n    user: testuser\n"
+		"other.example:\n    git_protocol: https\n    users:\n        testuser:\n    user: testuser\n" +
+		"ghe.example.test:\n    git_protocol: https\n    users:\n        testuser:\n    user: testuser\n"
 	if fileToken != "" {
 		hosts = "github.com:\n    git_protocol: https\n    oauth_token: " + fileToken + "\n    user: testuser\n"
 	}
@@ -392,4 +399,27 @@ func TestJailedKeyringNoSessionBus(t *testing.T) {
 	if !strings.Contains(logs, "plugin probe: its keyring items (probe login) cannot be read: no session bus: DBUS_SESSION_BUS_ADDRESS is unset") {
 		t.Errorf("no clear message for a box without a session bus; logged:\n%s", logs)
 	}
+}
+
+// TestJailedKeyringConfigReference: an item named by the instance's config
+// (an enterprise host from its API base URL) is served; the static one it
+// does not declare is not.
+func TestJailedKeyringConfigReference(t *testing.T) {
+	requireKeyringTools(t, "gh")
+	k := startKeyring(t)
+	k.store(t, "gh enterprise", "ghe_declared", map[string]string{"service": "gh:ghe.example.test", "username": "testuser"})
+	k.store(t, "gh github.com", "gho_undeclared", map[string]string{"service": "gh:github.com", "username": "testuser"})
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", k.addr)
+	gh := ghHome(t, "")
+	m := ghManifest(gh)
+	m.Keyring = []KeyringItem{{Label: "probe enterprise login", Attributes: map[string]string{"service": "gh:${host:config:api_base}"}}}
+	conns := []map[string]any{{"api_base": "https://ghe.example.test/api/v3"}}
+	got, logs := runJailedProbeFor(t, conns, m, "out=gh auth token --hostname ghe.example.test", "out=gh auth token")
+	wantResults(t, got, map[string]string{
+		"out=gh auth token --hostname ghe.example.test": "ok:ghe_declared",
+		"out=gh auth token":                             "denied",
+	}, logs)
+	// Unconfigured, the item is not granted at all.
+	got, logs = runJailedProbeFor(t, []map[string]any{{}}, m, "out=gh auth token --hostname ghe.example.test")
+	wantResults(t, got, map[string]string{"out=gh auth token --hostname ghe.example.test": "denied"}, logs)
 }

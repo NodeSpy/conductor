@@ -205,3 +205,22 @@ func TestSeatbeltGrantsKeychainForKeyringItems(t *testing.T) {
 		}
 	}
 }
+
+// A referencing item is shown as its reference, as a config: path is.
+func TestKeyringConsentLineReferences(t *testing.T) {
+	m := Manifest{Keyring: []KeyringItem{
+		{Label: "tool login for your server", Attributes: map[string]string{"service": "tool:${host:config:api_base}"}},
+		{Label: "registry login", Attributes: map[string]string{"server": "${config:registries}", "kind": "1"}},
+		{Label: "tool login for $TOOL_HOST", Attributes: map[string]string{"service": "tool:${env:TOOL_HOST}"}},
+	}}
+	got := strings.Join(m.Lines(), "\n")
+	for _, want := range []string{
+		"reads its tool login for your server from your keyring (the item service=tool:<host of api_base from its config>)",
+		"reads its registry login from your keyring (the item kind=1, server=<registries from its config>)",
+		"reads its tool login for $TOOL_HOST from your keyring (the item service=tool:$TOOL_HOST)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("consent lines:\n%s\nwant a line %q", got, want)
+		}
+	}
+}
