@@ -49,6 +49,20 @@ jobs:
           CONDUCTOR_REQUIRE_SANDBOX: "1"
           JAIL_VERBOSE: "1"
         run: go test -count=1 -v -run 'TestDeclaredJail$|TestBuildCommandDarwinSeatbelt' ./internal/plugin/
+      # A jailed plugin's gh (and secret-tool) reads exactly the keyring items
+      # it declares from a real gnome-keyring on a private session bus the
+      # test starts; every other item, writes and the bus itself are refused.
+      - name: plugin jail — declared keyring items from a real Secret Service
+        if: runner.os == 'Linux'
+        env:
+          CONDUCTOR_REQUIRE_SANDBOX: "1"
+          CONDUCTOR_REQUIRE_KEYRING: "1"
+          JAIL_VERBOSE: "1"
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends gnome-keyring libsecret-tools dbus-daemon
+          gh --version
+          go test -race -count=1 -v -run 'TestJailedKeyring|TestBroker' ./internal/plugin/ ./internal/keyringbroker/
       - name: canary — conductor sandbox exec around a fake agent
         run: bash test/sandbox-canary/run.sh
 

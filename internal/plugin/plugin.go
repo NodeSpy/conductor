@@ -302,6 +302,7 @@ type (
 	Verb               = sdk.Verb
 	Event              = sdk.Event
 	Capabilities       = sdk.Capabilities
+	KeyringItem        = sdk.KeyringItem
 	Decl               = sdk.Decl
 	AuthSpec           = sdk.AuthSpec
 	InvokeRequest      = sdk.InvokeRequest

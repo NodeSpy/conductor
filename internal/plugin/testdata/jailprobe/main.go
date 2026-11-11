@@ -87,6 +87,26 @@ func check(k, v string) string {
 			return "ok: ran"
 		}
 		return "denied: " + err.Error()
+	case "out":
+		// Run a command line (fields split on spaces) and report what it
+		// printed: "ok:<stdout>" when it succeeded.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		f := strings.Fields(v)
+		var stderr strings.Builder
+		c := exec.CommandContext(ctx, f[0], f[1:]...)
+		c.Stderr = &stderr
+		out, err := c.Output()
+		if err != nil {
+			return "denied: " + err.Error() + " " + strings.TrimSpace(stderr.String())
+		}
+		return "ok:" + strings.ReplaceAll(strings.TrimSpace(string(out)), "\n", " | ")
+	case "dialunix":
+		c, err := net.DialTimeout("unix", v, 3*time.Second)
+		if err == nil {
+			c.Close()
+		}
+		return ok(err)
 	case "run":
 		out, err := exec.Command(v).CombinedOutput()
 		if err != nil {

@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"path/filepath"
@@ -29,6 +30,8 @@ type Grant struct {
 	// Env are variable names.
 	Env      []string `json:"env,omitempty"`
 	Keychain bool     `json:"keychain,omitempty"`
+	// Keyring are the keyring items the plugin reads (Capabilities.Keyring).
+	Keyring []KeyringItem `json:"keyring,omitempty"`
 	// From maps each Read, Write and Exec path to the declared entries it
 	// came from ("read:" + path), so a check on the path can name the
 	// entry, tell a config: value from a static path, and tell an optional
@@ -182,7 +185,76 @@ func (c Capabilities) Validate(conn Schema) error {
 			return fmt.Errorf("capabilities.commands: %q is not a program name", cmd)
 		}
 	}
+	for i, it := range c.Keyring {
+		if err := it.validate(); err != nil {
+			return fmt.Errorf("capabilities.keyring[%d]: %w", i, err)
+		}
+	}
 	return nil
+}
+
+// maxKeyringLabel bounds a keyring item's label: a few words for the user.
+const maxKeyringLabel = 80
+
+func (it KeyringItem) validate() error {
+	if strings.TrimSpace(it.Label) == "" {
+		return fmt.Errorf("a label is required (what the item is, in plain words: \"gh login for github.com\")")
+	}
+	if len([]rune(it.Label)) > maxKeyringLabel {
+		return fmt.Errorf("label %q is longer than %d characters", it.Label, maxKeyringLabel)
+	}
+	if !printable(it.Label) {
+		return fmt.Errorf("label %q has a control character", it.Label)
+	}
+	if len(it.Attributes) == 0 {
+		return fmt.Errorf("%q names no attributes: an item is declared by the attributes it is stored under", it.Label)
+	}
+	for k, v := range it.Attributes {
+		if k == "" || v == "" {
+			return fmt.Errorf("%q: attribute %q=%q: names and values may not be empty", it.Label, k, v)
+		}
+		if !printable(k) || !printable(v) {
+			return fmt.Errorf("%q: attribute %q=%q has a control character", it.Label, k, v)
+		}
+	}
+	return nil
+}
+
+func printable(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == '\u2028' || r == '\u2029' {
+			return false
+		}
+	}
+	return true
+}
+
+// Matches reports whether an item stored under attrs is this declared one:
+// it carries every declared attribute, with the same value.
+func (it KeyringItem) Matches(attrs map[string]string) bool {
+	if len(it.Attributes) == 0 {
+		return false
+	}
+	for k, v := range it.Attributes {
+		if got, ok := attrs[k]; !ok || got != v {
+			return false
+		}
+	}
+	return true
+}
+
+// Selector renders the attributes in a stable order: "service=gh:github.com".
+func (it KeyringItem) Selector() string {
+	keys := make([]string, 0, len(it.Attributes))
+	for k := range it.Attributes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+it.Attributes[k])
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Resolve turns a declaration into the Grant conductor enforces. It never
@@ -239,6 +311,9 @@ func (c Capabilities) Resolve(e ResolveEnv) (Grant, error) {
 	g.Commands = append([]string(nil), c.Commands...)
 	g.Env = append([]string(nil), c.Env...)
 	g.Keychain = c.Keychain
+	for _, it := range c.Keyring {
+		g.Keyring = append(g.Keyring, KeyringItem{Label: it.Label, Attributes: maps.Clone(it.Attributes)})
+	}
 	for _, l := range []*[]string{&g.Egress, &g.Listen, &g.Read, &g.Write, &g.Exec, &g.Commands, &g.Env} {
 		*l = uniqSorted(*l)
 	}

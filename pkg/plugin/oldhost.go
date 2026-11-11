@@ -81,3 +81,27 @@ func (h *HostInfo) GrantsExposeLocal() bool {
 	}
 	return false
 }
+
+// SemanticKeyring is the semantic a host advertises (HostInfo.Semantics)
+// when it grants Capabilities.Keyring: on Linux it serves the jail the
+// declared keyring items, on macOS it grants the Keychain for them. Every
+// host built with this SDK advertises it.
+const SemanticKeyring = "capabilities.keyring"
+
+// GrantsKeyring reports whether the host asking for a declaration grants
+// Capabilities.Keyring. Only the advertised semantic counts, as for
+// GrantsExposeLocal. A conductor before it does not know the field and
+// ignores it; Serve withholds it anyway, so what such a host records is
+// what it was shown, and the conductor that grants it holds it for the
+// user's approval as a new permission.
+func (h *HostInfo) GrantsKeyring() bool {
+	if h == nil {
+		return false
+	}
+	for _, s := range h.Semantics {
+		if s == SemanticKeyring {
+			return true
+		}
+	}
+	return false
+}

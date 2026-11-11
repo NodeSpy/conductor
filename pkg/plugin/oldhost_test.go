@@ -78,13 +78,15 @@ func TestKnownSemanticsAdvertisesReferences(t *testing.T) {
 // sent it: everything this SDK knows but SemanticReferences and
 // SemanticExposeLocal.
 func oldHostSemantics() []string {
-	return slices.DeleteFunc(KnownSemantics(), func(s string) bool { return s == SemanticReferences || s == SemanticExposeLocal })
+	return slices.DeleteFunc(KnownSemantics(), func(s string) bool {
+		return s == SemanticReferences || s == SemanticExposeLocal || s == SemanticKeyring
+	})
 }
 
 // v090Semantics is HostInfo.Semantics as conductor v0.90 sent it: it
 // resolves references, but has never heard of expose_local.
 func v090Semantics() []string {
-	return slices.DeleteFunc(KnownSemantics(), func(s string) bool { return s == SemanticExposeLocal })
+	return slices.DeleteFunc(KnownSemantics(), func(s string) bool { return s == SemanticExposeLocal || s == SemanticKeyring })
 }
 
 // exposeHandler declares expose_local.

@@ -89,6 +89,9 @@ type Manifest struct {
 	Exec []string `yaml:"exec,omitempty"`
 	// Keychain: a command reads a login from the macOS Keychain.
 	Keychain bool `yaml:"keychain,omitempty"`
+	// Keyring are the logins in the user's OS keyring it reads, each by the
+	// attributes it is stored under (Capabilities.Keyring).
+	Keyring []KeyringItem `yaml:"keyring,omitempty"`
 	// FS is the older name for Write.
 	FS []string `yaml:"fs,omitempty"`
 	// Spawns records the legacy boolean for a plugin that declares it spawns
@@ -121,14 +124,14 @@ type Manifest struct {
 // IsZero reports whether the plugin declared no capabilities at all.
 func (m Manifest) IsZero() bool {
 	return len(m.Egress) == 0 && len(m.Listen) == 0 && len(m.Read) == 0 && len(m.Write) == 0 && len(m.Exec) == 0 &&
-		len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && !m.Keychain && len(m.Env) == 0 && !m.SingleProcess && m.Auth == nil && !m.ExposeLocal
+		len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && !m.Keychain && len(m.Keyring) == 0 && len(m.Env) == 0 && !m.SingleProcess && m.Auth == nil && !m.ExposeLocal
 }
 
 // Caps is the manifest as the plugin declared it.
 func (m Manifest) Caps() sdk.Capabilities {
 	return sdk.Capabilities{
 		Egress: m.Egress, Listen: m.Listen, Read: m.Read, Write: m.Write, FS: m.FS,
-		Commands: m.Commands, Exec: m.Exec, Keychain: m.Keychain, Env: m.Env,
+		Commands: m.Commands, Exec: m.Exec, Keychain: m.Keychain, Keyring: m.Keyring, Env: m.Env,
 		ExposeLocal: m.ExposeLocal,
 	}
 }
@@ -174,6 +177,9 @@ func (m Manifest) Lines() []string {
 	}
 	if m.Keychain {
 		out = append(out, "reads a login from the macOS Keychain")
+	}
+	for _, it := range m.Keyring {
+		out = append(out, keyringLine(it))
 	}
 	if m.ExposeLocal {
 		out = append(out, exposeLocalLabel)
@@ -256,6 +262,29 @@ func socketEntry(e string) bool {
 	return false
 }
 
+// keyringLine is a declared keyring item in plain words, with the
+// attributes that are enforced: the label is the plugin's, the attributes
+// are what the jail is held to.
+func keyringLine(it KeyringItem) string {
+	return "reads its " + shown(it.Label) + " from your keyring (the item " + shown(it.Selector()) + ")"
+}
+
+// keyringCovers reports whether m already grants reading the item: one of
+// its items is it or matches more of the keyring (a declared item covers
+// every item carrying its attributes). On macOS a Keychain grant covers it
+// too, since a keyring item is granted there as the Keychain.
+func (m Manifest) keyringCovers(it KeyringItem) bool {
+	if spawnGOOS == "darwin" && m.Keychain {
+		return true
+	}
+	for _, h := range m.Keyring {
+		if h.Matches(it.Attributes) {
+			return true
+		}
+	}
+	return false
+}
+
 // Summary renders the manifest as one line for logs and install review.
 func (m Manifest) Summary() string {
 	if m.IsZero() {
@@ -304,6 +333,11 @@ func (m Manifest) Widens(next Manifest) []string {
 	diff("reads env", m.Env, next.Env, exact)
 	if next.Keychain && !m.Keychain {
 		out = append(out, "reads a login from the macOS Keychain")
+	}
+	for _, it := range next.Keyring {
+		if !m.keyringCovers(it) {
+			out = append(out, keyringLine(it))
+		}
 	}
 	if next.ExposeLocal && !m.ExposeLocal {
 		out = append(out, exposeLocalLabel)

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/NodeSpy/conductor/internal/keyringbroker"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/scratch"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
@@ -47,6 +48,10 @@ import (
 
 // jailHome is the user's home, for "~/" entries (a test var).
 var jailHome = os.UserHomeDir
+
+// keyringUpstream reaches the user's keyring for a jail's keyring broker (a
+// test var; nil is the session bus's Secret Service).
+var keyringUpstream func() (keyringbroker.Upstream, error)
 
 // pluginGrant resolves s's declaration into what its jail allows, narrowed
 // by the config (network:, allow_env), never widened by it.
@@ -860,13 +865,31 @@ func buildNamespaced(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv,
 	binds = append(binds, sandbox.BindMount{Path: sock, RO: true})
 	env = append(env, sandbox.ProxyEnv(sandbox.ForwardAddr, cred)...)
 
-	if len(loopPorts) > 0 || len(g.Listen) > 0 {
+	if len(loopPorts) > 0 || len(g.Listen) > 0 || len(g.Keyring) > 0 {
 		dir, err := os.MkdirTemp(scratch.SystemTempDir(), "cpj")
 		if err != nil {
 			cleanup()
 			return nil, nil, fmt.Errorf("plugin %s: jail sockets: %w", s.Name, err)
 		}
 		closers = append(closers, func() { os.RemoveAll(dir) })
+		if len(g.Keyring) > 0 {
+			// The jail's only session bus: a Secret Service that serves the
+			// declared keyring items from the user's keyring, and nothing
+			// else (keyringbroker). The bus itself is never reachable.
+			path := filepath.Join(dir, "bus")
+			name := s.Name
+			kb, err := keyringbroker.Serve(path, g.Keyring, keyringbroker.Options{
+				Logf: func(format string, args ...any) { log.Printf("plugin %s: "+format, append([]any{name}, args...)...) },
+				Dial: keyringUpstream,
+			})
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("plugin %s: keyring: %w", s.Name, err)
+			}
+			closers = append(closers, kb.Close)
+			binds = append(binds, sandbox.BindMount{Path: path, RO: true})
+			env = replaceEnv(env, "DBUS_SESSION_BUS_ADDRESS", keyringbroker.Address(path))
+		}
 		for i, port := range loopPorts {
 			path := filepath.Join(dir, "r"+strconv.Itoa(i))
 			stop, err := serveUnixToTCP(path, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
@@ -906,7 +929,9 @@ func buildSeatbelt(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv, e
 		return nil, nil, fmt.Errorf("plugin %s: cannot jail it here (no sandbox-exec) — set trust: full to run it unjailed", s.Name)
 	}
 	home, _ := jailHome()
-	p := &sandbox.PluginProfile{Keychain: g.Keychain, Home: home, LoopbackPorts: loopPorts}
+	// A declared keyring item is read from the Keychain: macOS gates each
+	// item by the Keychain's own per-item access control.
+	p := &sandbox.PluginProfile{Keychain: g.Keychain || len(g.Keyring) > 0, Home: home, LoopbackPorts: loopPorts}
 	if s.BinPath != "" {
 		p.Exec = append(p.Exec, s.BinPath)
 		p.Read = append(p.Read, filepath.Dir(s.BinPath))

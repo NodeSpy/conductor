@@ -457,7 +457,61 @@ A plugin's `plugin.describe` carries a `capabilities` block:
 | `exec` | files and directories whose programs it (or a command) runs beyond `commands`: a tool's helper programs | same forms as `read`, e.g. `command:git/../../lib/git-core` |
 | `env` | environment variables it reads | `GH_TOKEN` |
 | `keychain` | (macOS) a login stored in the user's Keychain | `true` |
+| `keyring` | logins in your OS keyring that it (or a command it runs) reads, each named by the attributes it is stored under | `[{label: "gh login for github.com", attributes: {service: "gh:github.com"}}]` |
 | `expose_local` | (an exposure) connecting to the listeners conductor wires to it | `true` |
+
+#### Keyring logins
+
+A CLI such as `gh` or `glab` keeps your login in the OS keyring: on Linux
+the Secret Service (GNOME Keyring, KWallet, KeePassXC) over the desktop
+session's D-Bus bus, on macOS the Keychain. A plugin that runs such a CLI
+declares each login it reads under `keyring`:
+
+```json
+"keyring": [{"label": "gh login for github.com", "attributes": {"service": "gh:github.com"}}]
+```
+
+An item matches when it carries every declared attribute with the same
+value; `{"service": "gh:github.com"}` covers each account gh keeps for
+github.com. You are shown the plugin's label together with the attributes,
+which are what is enforced:
+`reads its gh login for github.com from your keyring (the item service=gh:github.com)`.
+
+- **Linux.** The jail never gets your session bus: it reaches every program
+  in your desktop session, and the Secret Service has no per-item access
+  control, so even a bus filtered to the Secret Service would expose every
+  secret you keep. Instead the jail's only session bus is a socket conductor
+  serves outside it (`DBUS_SESSION_BUS_ADDRESS` points there). It answers as
+  a read-only Secret Service whose only items are your keyring items that
+  match a declared one. Each lookup is made in your keyring at that moment
+  (a login gh refreshes is read as it is now), with the declared attributes
+  added to the CLI's search, so your keyring is never searched for anything
+  else. An item is checked against the declaration again before its secret is
+  read. Nothing can be written, deleted, locked or unlocked, and no other
+  service on the bus exists. Both lookups CLIs use work: go-keyring's
+  (`gh`, `glab`) and libsecret's (`secret-tool`, with its encrypted session).
+- **macOS.** A declared item grants the Keychain, as `keychain: true` does,
+  and the Keychain's own per-item access control decides what a program
+  reads. On macOS conductor does not narrow it further.
+- **Locked keyring.** conductor never unlocks your keyring, and never shows
+  an unlock prompt, for a plugin. The CLI fails as it would with a locked
+  keyring, and the log says
+  `plugin github: its keyring item "gh login for github.com" is locked: unlock your keyring …`.
+  Unlock it by logging in to your desktop session, or in your keyring
+  manager.
+- **No keyring.** On a box with no session bus (a server, a container), or
+  no Secret Service on it, a lookup finds nothing, and a CLI that also keeps
+  its login in a file uses that, as it would without the jail (gh's
+  `hosts.yml` is read when the plugin declares its config dir). The log says
+  `plugin github: its keyring items (gh login for github.com) cannot be read: no session bus: …`.
+  conductor finds your session bus from `DBUS_SESSION_BUS_ADDRESS`, else
+  `$XDG_RUNTIME_DIR/bus`. It never launches a bus.
+- **Updates.** A release that adds a keyring item asks for a new permission,
+  so it is held like any other (below) until you approve it. On macOS, a
+  build that already has `keychain: true` is not held for an item, since
+  the Keychain grant already covers it. A conductor older than this does not
+  grant `keyring`, so the SDK withholds it from that conductor. When you
+  upgrade, the item is held for approval, not recorded silently.
 
 A `config:<field>` entry points at a field of the plugin's **own** connection
 config, and only because the plugin wrote that entry; it may not name a
@@ -599,8 +653,8 @@ build it would replace **before** it is installed:
   usual (live where it can be, see
   [Keeping plugins current](#keeping-plugins-current)).
 - **A different declaration** (anything added or removed: a destination,
-  path, command, exec path, variable, listen address, Keychain access or
-  OAuth host): the update is **held**. The running build keeps running
+  path, command, exec path, variable, listen address, Keychain access,
+  keyring item or OAuth host): the update is **held**. The running build keeps running
   exactly as it was, the same binary under the same install record, and its
   connectors keep working. The new build is fetched, verified and staged in
   a directory of its own, and never run until you approve it.
@@ -799,7 +853,10 @@ working setup):
   records them without asking: they name your own config and the listeners
   conductor wires from it. The log says
   `plugin github: recorded what … declares that the conductor which installed it could not record: …`.
-  Anything else the build declares beyond its record is held as above.
+  Anything else the build declares beyond its record is held as above. That
+  includes `keyring`, which the SDK withholds from every conductor that does
+  not grant it: a keyring item is a new permission, not a reference to your
+  config, so it waits for `conductor plugin approve`.
 - **Rolling back.** A conductor without the jail does not read a version 2
   state file: it treats it as empty and installs every plugin again from its
   release (so the network must be up for that start), writing version 1.
@@ -1039,6 +1096,10 @@ through the real launch path.
 - **Environment.** A minimal allowlist (`PATH`, `HOME`, `USER`, `TERM`,
   `TZ`, locale, `TMPDIR` and a few more) plus the declared variables, never
   the daemon's credentials.
+- **Keyring.** No session bus. With `keyring` items declared, the only
+  bus is conductor's read-only Secret Service for those items
+  ([Keyring logins](#keyring-logins)). Without them there is none, even if
+  `DBUS_SESSION_BUS_ADDRESS` is declared in `env`.
 
 **macOS** (Seatbelt, `sandbox-exec`, deny by default):
 
@@ -1053,7 +1114,7 @@ through the real launch path.
 - **Network.** Only the egress proxy's loopback port, declared loopback
   ports, declared listen ports and declared unix sockets (a `write` path).
 - **Keychain.** The Keychain services and `~/Library/Keychains` only when
-  `keychain: true` is declared.
+  `keychain: true` or a `keyring` item is declared.
 
 Other operating systems have no plugin jail: a plugin there runs only with
 `trust: full`.

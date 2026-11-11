@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1089,6 +1090,14 @@ func sameEvents(a, b []Event) bool {
 // no install-state record to source one from).
 func ManifestFromDecl(decl *Decl) Manifest { return manifestFromDecl(decl) }
 
+func cloneKeyring(in []KeyringItem) []KeyringItem {
+	var out []KeyringItem
+	for _, it := range in {
+		out = append(out, KeyringItem{Label: it.Label, Attributes: maps.Clone(it.Attributes)})
+	}
+	return out
+}
+
 func manifestFromDecl(decl *Decl) Manifest {
 	if decl == nil {
 		return Manifest{}
@@ -1102,6 +1111,7 @@ func manifestFromDecl(decl *Decl) Manifest {
 		Commands: append([]string(nil), c.Commands...),
 		Exec:     append([]string(nil), c.Exec...),
 		Keychain: c.Keychain,
+		Keyring:  cloneKeyring(c.Keyring),
 		FS:       append([]string(nil), c.FS...),
 		Spawns:   c.Spawns || len(c.Commands) > 0,
 		Env:      append([]string(nil), c.Env...),
