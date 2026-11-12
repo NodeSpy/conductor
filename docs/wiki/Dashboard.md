@@ -71,6 +71,23 @@ dashboard:
   any other name (`box.lan` pointing at 127.0.0.1) browsers treat it as plain
   HTTP, so passkeys are not offered there.
 
+### Links to a run: `public_url`
+
+A run's page is `#/runs/<id>`. Workflow hooks get its full address as
+`{{.run.url}}` (see [[Workflows]], "Progress"), so a PR status's **Details**
+link, say, opens the run live. The address is:
+
+- `dashboard.public_url`, when set (`https://box.example.ts.net:7788`);
+- else the tailnet listener's, when it serves HTTPS
+  (`https://<MagicDNS name>:<port>`);
+- else the first `bind` entry that serves HTTPS
+  (`https://<first hostname>:<port>`);
+- else nothing: a localhost-only dashboard is no link for anyone else, and
+  `{{.run.url}}` is `""`.
+
+A link posted somewhere shows this address to whoever can read it there.
+Opening it still needs a route to the dashboard and a signed-in operator.
+
 ## Before any operator is enrolled
 
 With no `operators:` entries configured, there is nothing to sign in as — and

@@ -125,9 +125,10 @@ func TestACPSkillClaimInjection(t *testing.T) {
 		t.Fatalf("authorize: %v", err)
 	}
 	// A credential without skill: still carries the auto-granted done signal
-	// (step.done replaced the background reaper) and git.push (conductor
-	// pushes a sandboxed agent's commits) — and nothing else.
-	if len(id.Policy.Verbs) != 2 || id.Policy.Verbs[0] != "step.done" || id.Policy.Verbs[1] != "git.push" || id.Policy.SecretsVia != "" {
-		t.Errorf("a credential without skill: must grant only step.done + git.push, got %+v", id.Policy)
+	// (step.done replaced the background reaper), step.progress (what it is
+	// doing now) and git.push (conductor pushes a sandboxed agent's commits)
+	// — and nothing else.
+	if len(id.Policy.Verbs) != 3 || id.Policy.Verbs[0] != "step.done" || id.Policy.Verbs[1] != "step.progress" || id.Policy.Verbs[2] != "git.push" || id.Policy.SecretsVia != "" {
+		t.Errorf("a credential without skill: must grant only step.done + step.progress + git.push, got %+v", id.Policy)
 	}
 }

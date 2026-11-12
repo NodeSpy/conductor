@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,12 @@ type DashboardConfig struct {
 	// answers to (a Host allowlist, against DNS rebinding) and an optional TLS
 	// certificate. Plain HTTP off loopback needs allow_plain_http: true.
 	Bind []DashboardBind `yaml:"bind,omitempty"`
+	// PublicURL is the address a person reaches this dashboard at
+	// ("https://box.example.ts.net:7788"): where a run's link
+	// ({{.run.url}}) points. Unset, conductor uses the tailnet HTTPS
+	// listener's address when it serves one, else the first HTTPS bind:
+	// entry's; with neither, runs carry no link.
+	PublicURL string `yaml:"public_url,omitempty"`
 }
 
 // Dashboard sign-in / step-up method names (dashboard.auth).
@@ -337,6 +344,12 @@ func (c *Config) validateDashboard() error {
 	}
 	if err := d.validateBind(); err != nil {
 		return err
+	}
+	if u := d.PublicURL; u != "" {
+		pu, err := url.Parse(u)
+		if err != nil || (pu.Scheme != "https" && pu.Scheme != "http") || pu.Host == "" || pu.RawQuery != "" || pu.Fragment != "" {
+			return fmt.Errorf("config: dashboard.public_url: %q is not an absolute http(s) URL without a query or fragment", u)
+		}
 	}
 	if d.Tailscale.TLS.Off && !d.Tailscale.Cert.Auto() {
 		return fmt.Errorf("config: dashboard.tailscale.cert is set but tailscale.tls is off — drop one")

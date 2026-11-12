@@ -2045,6 +2045,14 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #       allow_plain_http: true             # REQUIRED for plain HTTP off loopback: the
 #                            # session cookie crosses the network unencrypted.
 #                            # A warning is logged at boot.
+#   public_url: https://box.example.ts.net:7788  # where a person reaches the
+#                            # dashboard: a run's link ({{.run.url}}, e.g. a PR
+#                            # status's Details) points here. Unset: the tailnet
+#                            # HTTPS listener's address when it serves one, else
+#                            # the first HTTPS bind: entry's; with neither, runs
+#                            # carry no link. Anyone who can see the link sees
+#                            # the address (not the dashboard: it still needs
+#                            # sign-in and a route to it).
 #
 # Build the UI into the binary with `make web` (needs Node; the built assets are
 # committed, so a normal `go build`/`go install` does not). Reach it at

@@ -1069,6 +1069,11 @@ type Step struct {
 	// and leaves identity alone.
 	Name string `yaml:"name,omitempty"`
 	If   string `yaml:"if,omitempty"`
+	// Progress is the short phrase the run's progress reports while this
+	// step runs ({{.progress.text}} in an `at: progress` hook), e.g.
+	// "reading the CI results". A template over the step's scope. Unset:
+	// conductor's own neutral wording.
+	Progress string `yaml:"progress,omitempty"`
 	// Type is agent | command for the do-work forms ("" for uses/run/use).
 	Type string `yaml:"type,omitempty"`
 
@@ -1651,11 +1656,34 @@ func (r *RetrySpec) StepRetry() *StepRetry {
 // anchored to a workflow (trigger-level `hooks:`) or to a single step
 // (step-level `hooks:`).
 type Hook struct {
-	At      string         `yaml:"at,omitempty"` // start | done | fail | stop
+	At      string         `yaml:"at,omitempty"` // start | done | fail | stop | progress
 	ID      string         `yaml:"id,omitempty"`
 	If      string         `yaml:"if,omitempty"`
 	Uses    string         `yaml:"uses,omitempty"`
 	Options map[string]any `yaml:"options,omitempty"`
+	// Every bounds how often an `at: progress` hook fires: at most once per
+	// interval, and only when what it would send changed (default
+	// DefaultProgressEvery, never under MinProgressEvery). Progress hooks
+	// only.
+	Every Duration `yaml:"every,omitempty"`
+}
+
+// Progress hook pacing (Hook.Every).
+const (
+	DefaultProgressEvery = 30 * time.Second
+	MinProgressEvery     = 10 * time.Second
+)
+
+// ProgressEvery is h's effective pacing interval.
+func (h Hook) ProgressEvery() time.Duration {
+	d := h.Every.D()
+	if d <= 0 {
+		return DefaultProgressEvery
+	}
+	if d < MinProgressEvery {
+		return MinProgressEvery
+	}
+	return d
 }
 
 // Policy is the cross-cutting control block, valid at three scopes — global,
@@ -2168,7 +2196,7 @@ func (c *Config) validateConnectors() error {
 		if err := validateSteps(where, t.Steps, c); err != nil {
 			return err
 		}
-		if err := validateHooks(where, t.Hooks); err != nil {
+		if err := validateHooks(where, t.Hooks, true); err != nil {
 			return err
 		}
 	}
@@ -2259,7 +2287,7 @@ func validateStep(w string, s Step, c *Config) error {
 				return err
 			}
 		}
-		return validateHooks(w, s.Hooks)
+		return validateHooks(w, s.Hooks, false)
 	}
 	if forms == 0 {
 		return fmt.Errorf("config: %s: set one of `type: agent`, `type: command`, `decide:`, `use:` (an engine, with `code:`/`command:`), `uses:`, `call:`, or a helper (`sleep:`/`log:`/`set:`/`assert:`/`fail:`/`wait_for:`)", w)
@@ -2329,7 +2357,7 @@ func validateStep(w string, s Step, c *Config) error {
 	if err := validateWatch(w, s.Watch, c); err != nil {
 		return err
 	}
-	return validateHooks(w, s.Hooks)
+	return validateHooks(w, s.Hooks, false)
 }
 
 // CheckoutPR is a step's `checkout_pr:` — see Step.CheckoutPR.
@@ -2500,13 +2528,21 @@ func validateWatch(where string, w *WatchSpec, c *Config) error {
 }
 
 // validateHooks checks hook phases and that each hook is a verb action unit.
-func validateHooks(where string, hooks []Hook) error {
+// progress hooks belong to a trigger (workflow): they report the run.
+func validateHooks(where string, hooks []Hook, trigger bool) error {
 	for i, h := range hooks {
 		w := fmt.Sprintf("%s hooks[%d]", where, i)
 		switch h.At {
 		case "start", "done", "fail", "stop":
+		case "progress":
+			if !trigger {
+				return fmt.Errorf("config: %s: `at: progress` reports the whole run — put it in the trigger's hooks:, not a step's", w)
+			}
 		default:
-			return fmt.Errorf("config: %s: `at:` must be start|done|fail|stop, got %q", w, h.At)
+			return fmt.Errorf("config: %s: `at:` must be start|done|fail|stop|progress, got %q", w, h.At)
+		}
+		if h.Every != 0 && h.At != "progress" {
+			return fmt.Errorf("config: %s: `every:` paces progress hooks only", w)
 		}
 		if h.Uses == "" {
 			return fmt.Errorf("config: %s: hooks are verb action units — set `uses: <connector>.<verb>`", w)

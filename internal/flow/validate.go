@@ -158,6 +158,10 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "start", runHookScope(sc)); err != nil {
 		return err
 	}
+	// at:progress sees what at:start sees, plus {{.progress.*}} (progress.go).
+	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "progress", progressHookScope(sc)); err != nil {
+		return err
+	}
 	if err := validateStepList(cfg, reg, where, spec.Steps, sc); err != nil {
 		return err
 	}
@@ -182,6 +186,14 @@ func runHookScope(sc *scope) *scope {
 	out := sc.clone()
 	out.add("hook")
 	out.add("run")
+	return out
+}
+
+// progressHookScope is an `at: progress` hook's scope: a start hook's, plus
+// the {{.progress.*}} report.
+func progressHookScope(sc *scope) *scope {
+	out := runHookScope(sc)
+	out.add("progress")
 	return out
 }
 
@@ -262,6 +274,10 @@ func validateManualTrigger(cfg *config.Config, reg *connector.Registry, where st
 	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "start", runHookScope(sc)); err != nil {
 		return err
 	}
+	// at:progress sees what at:start sees, plus {{.progress.*}} (progress.go).
+	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "progress", progressHookScope(sc)); err != nil {
+		return err
+	}
 	if err := validateStepList(cfg, reg, where, spec.Steps, sc); err != nil {
 		return err
 	}
@@ -337,6 +353,12 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w, id string, 
 	}
 	if step.If != "" {
 		if err := checkCondRefs(w+" if", step.If, stepScope); err != nil {
+			return err
+		}
+	}
+	if step.Progress != "" {
+		// Rendered once as the step starts, before any fan-out.
+		if err := checkRefs(w+" progress", step.Progress, sc); err != nil {
 			return err
 		}
 	}

@@ -116,6 +116,14 @@ type Update struct {
 	Err     error
 }
 
+// ActivityWatcher is a Session that can see what its agent is doing as it
+// works (its tool calls) and report it, one short phrase at a time, to fn
+// (dispatch.Request.Activity). Optional: a session that streams nothing
+// does not implement it.
+type ActivityWatcher interface {
+	WatchActivity(fn func(string))
+}
+
 // PermissionRequest is an agent's request to take a gated action (ACP
 // session/request_permission): run a tool, write a file, execute a command.
 type PermissionRequest struct {

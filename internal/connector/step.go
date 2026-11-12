@@ -23,7 +23,7 @@ import (
 // refused for any agent not in the ownership ledger (dispatch.OwnedSet).
 var stepDecl = &TypeDecl{
 	Type: "step",
-	Desc: "The dispatched step's own lifecycle: step.done signals the agent's task is complete (optionally delivering its structured output) so conductor reclaims its workspace; step.bail / step.rerun are watch-rule actions on a live step. Always available; done is auto-granted to every conductor-launched agent.",
+	Desc: "The dispatched step's own lifecycle: step.done signals the agent's task is complete (optionally delivering its structured output) so conductor reclaims its workspace; step.progress says what the agent is doing now; step.bail / step.rerun are watch-rule actions on a live step. Always available; done and progress are auto-granted to every conductor-launched agent.",
 	Events: []EventDecl{
 		{Name: "bailed", Desc: "a live step was torn down because its reason went away", Context: stepEventContext},
 		{Name: "superseded", Desc: "a live step was replaced by a re-run on new state", Context: stepEventContext},
@@ -39,6 +39,13 @@ var stepDecl = &TypeDecl{
 			Name: "rerun", Desc: "supersede this live step by re-running the SAME step on the current state. A watch-step action. To run a DIFFERENT workflow, use a `workflow:` step instead.",
 			Options: Schema{"prompt": {Type: TString, Desc: "extra text appended to the step's prompt on the re-run"}},
 			Outputs: Schema{"superseded": {Type: TBool}},
+		},
+		{
+			Name: "progress", Desc: "say what you are doing now, in a few words (\"reading the review comments\", \"running the tests\", \"pushing the fix\"), whenever you start a new part of the task. Cheap and optional; the run's progress shows the latest one.",
+			Options: Schema{
+				"text": {Type: TString, Required: true, Desc: "a short phrase, under 80 characters, about the work itself — no secrets, nothing addressed to a reader"},
+			},
+			Outputs: Schema{"ok": {Type: TBool, Desc: "the run took the report (false: nothing is reporting this step's progress)"}},
 		},
 		{
 			Name: "done", Desc: "your task is fully complete — deliver your result (when a schema was required) and release this agent's workspace back to conductor. Call as your final action.",
@@ -62,6 +69,9 @@ type StepOps struct {
 	// token-bound dispatch id (daemon-injected, never agent-supplied); agentID
 	// is a legacy fallback identity; reason is the agent's optional summary.
 	Done func(ctx context.Context, dispatchID, agentID, reason string, output any, hasOutput bool) error
+	// Progress hands the calling dispatch's progress note to the run it
+	// belongs to; false when nothing reports that run's progress.
+	Progress func(dispatchID, text string) bool
 }
 
 var (
@@ -114,6 +124,14 @@ func (stepImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (m
 		// Watch-step actions: the engine performs these directly (it holds the
 		// live step in scope). They are not reachable through the skill surface.
 		return nil, fmt.Errorf("step.%s runs from a watch step, not as a direct call", verb)
+	case "progress":
+		ops := stepOps()
+		if ops == nil || ops.Progress == nil {
+			return map[string]any{"ok": false}, nil
+		}
+		dispatchID, _ := opts["__dispatch"].(string)
+		text, _ := opts["text"].(string)
+		return map[string]any{"ok": dispatchID != "" && ops.Progress(dispatchID, text)}, nil
 	case "done":
 		ops := stepOps()
 		if ops == nil || ops.Done == nil {

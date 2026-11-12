@@ -56,6 +56,8 @@ type headLog struct {
 	heads []string
 	reads int
 	log   []string
+	// onPost, when set, runs after each post is recorded (outside the lock).
+	onPost func(text string)
 }
 
 func (l *headLog) add(s string) {
@@ -112,6 +114,12 @@ func (h *headImpl) Invoke(_ context.Context, verb string, opts map[string]any) (
 		return nil, errors.New("the hook's API said no")
 	}
 	l.add(fmt.Sprintf("post:%v", opts["text"]))
+	l.mu.Lock()
+	on := l.onPost
+	l.mu.Unlock()
+	if on != nil {
+		on(fmt.Sprint(opts["text"]))
+	}
 	return map[string]any{"id": 1}, nil
 }
 func (h *headImpl) head() map[string]any {

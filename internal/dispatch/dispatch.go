@@ -136,6 +136,12 @@ type Request struct {
 	// OnAgentStart, when set, is called by a runtime that reports its
 	// sessions, once the step's agent has started (again after a fallback).
 	OnAgentStart func(AgentStart)
+	// Activity, when set, is told what the agent is doing while a foreground
+	// dispatch runs: one short phrase per observation ("editing main.go",
+	// "running go test ./..."), as the runtime sees it in the agent's stream.
+	// Best-effort and optional — a runtime that cannot see its agent's
+	// activity never calls it. Must not block.
+	Activity func(phrase string)
 }
 
 // Input is one materialized `workspace.inputs` entry.

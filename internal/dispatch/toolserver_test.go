@@ -200,11 +200,12 @@ func TestBothToolPathsCarryTheDispatchAnchor(t *testing.T) {
 
 func TestEffectiveSkillPolicyAutoGrantsHandoffDone(t *testing.T) {
 	// A non-interactive step gets its own grant plus the auto-granted done
-	// signal (step.done replaced the background reaper) and git.push (how a
+	// signal (step.done replaced the background reaper), step.progress (what
+	// it is doing now, for the run's progress report) and git.push (how a
 	// sandboxed agent's commits are pushed — by conductor).
 	base := Request{Step: config.Step{Skill: &config.SkillPolicy{Verbs: []string{"gh.pr_get"}}}}
-	if got := effectiveSkillPolicy(base).Verbs; !slices.Equal(got, []string{"gh.pr_get", "step.done", "git.push"}) {
-		t.Fatalf("non-interactive: got %v, want [gh.pr_get step.done git.push]", got)
+	if got := effectiveSkillPolicy(base).Verbs; !slices.Equal(got, []string{"gh.pr_get", "step.done", "step.progress", "git.push"}) {
+		t.Fatalf("non-interactive: got %v, want [gh.pr_get step.done step.progress git.push]", got)
 	}
 
 	// An interactive hand-off auto-gets handoff.done on top of its grant...
@@ -219,14 +220,14 @@ func TestEffectiveSkillPolicyAutoGrantsHandoffDone(t *testing.T) {
 
 	// An interactive hand-off with NO skill: block still gets the done pair.
 	bare := Request{Interactive: true}
-	if got := effectiveSkillPolicy(bare).Verbs; !slices.Equal(got, []string{"step.done", "git.push", "handoff.done"}) {
-		t.Fatalf("bare interactive: got %v, want [step.done git.push handoff.done]", got)
+	if got := effectiveSkillPolicy(bare).Verbs; !slices.Equal(got, []string{"step.done", "step.progress", "git.push", "handoff.done"}) {
+		t.Fatalf("bare interactive: got %v, want [step.done step.progress git.push handoff.done]", got)
 	}
 
 	// Idempotent: an operator who already granted it doesn't get a duplicate.
 	dup := Request{Interactive: true, Step: config.Step{Skill: &config.SkillPolicy{Verbs: []string{"handoff.done", "step.done"}}}}
-	if got := effectiveSkillPolicy(dup).Verbs; !slices.Equal(got, []string{"handoff.done", "step.done", "git.push"}) {
-		t.Fatalf("duplicate grant: got %v, want [handoff.done step.done git.push]", got)
+	if got := effectiveSkillPolicy(dup).Verbs; !slices.Equal(got, []string{"handoff.done", "step.done", "step.progress", "git.push"}) {
+		t.Fatalf("duplicate grant: got %v, want [handoff.done step.done step.progress git.push]", got)
 	}
 
 	if !wantsSkillCreds(bare) {

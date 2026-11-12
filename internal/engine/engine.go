@@ -1585,10 +1585,16 @@ func (e *Engine) acquire(ctx context.Context) bool {
 
 // acquireFor is acquire at a trigger's slot priority (slotPriority).
 func (e *Engine) acquireFor(ctx context.Context, interactive bool) bool {
+	return e.acquireWatch(ctx, interactive, nil)
+}
+
+// acquireWatch is acquireFor, telling pos (when set) how many runs are ahead
+// of this one while it waits (slots.acquireWatch).
+func (e *Engine) acquireWatch(ctx context.Context, interactive bool, pos func(ahead int)) bool {
 	if e.sem == nil {
 		return true
 	}
-	return e.sem.acquire(ctx, slotPriority(interactive))
+	return e.sem.acquireWatch(ctx, slotPriority(interactive), pos)
 }
 
 // release returns a concurrency slot.

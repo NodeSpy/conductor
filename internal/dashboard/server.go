@@ -17,9 +17,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -131,12 +133,50 @@ type Server struct {
 	hub     *hub
 	mux     *http.ServeMux
 	started time.Time
-	edit    *configedit.Pipeline // nil when ConfigPath is empty (read-only)
-	auth    *auth.Manager        // nil until wired in New()
-	authErr error                // why auth could not be wired; the API is refused while set
-	tsAPI   localAPI             // tailscaled LocalAPI; nil = the real socket client
-	labels  *stepupLabels        // what each handed-out step-up digest confirms, for approve-login
-	quiet   *applyBudget         // config applies that needed no step-up, rate-limited
+	edit    *configedit.Pipeline   // nil when ConfigPath is empty (read-only)
+	auth    *auth.Manager          // nil until wired in New()
+	authErr error                  // why auth could not be wired; the API is refused while set
+	tsAPI   localAPI               // tailscaled LocalAPI; nil = the real socket client
+	labels  *stepupLabels          // what each handed-out step-up digest confirms, for approve-login
+	quiet   *applyBudget           // config applies that needed no step-up, rate-limited
+	public  atomic.Pointer[string] // the address a person reaches the dashboard at (PublicURL)
+}
+
+// offerPublicURL records u as the dashboard's public address unless one is
+// configured (dashboard.public_url) or already recorded: the first HTTPS
+// listener up wins.
+func (s *Server) offerPublicURL(u string) {
+	if s.deps.Cfg != nil && s.deps.Cfg.Dashboard.PublicURL != "" {
+		return
+	}
+	s.public.CompareAndSwap(nil, &u)
+}
+
+// PublicURL is the address a person reaches this dashboard at: the
+// configured dashboard.public_url, else the first HTTPS listener started
+// (tailnet, then bind:). "" when there is none — a localhost-only dashboard
+// is no link for anyone else.
+func (s *Server) PublicURL() string {
+	if s == nil {
+		return ""
+	}
+	if s.deps.Cfg != nil && s.deps.Cfg.Dashboard.PublicURL != "" {
+		return strings.TrimRight(s.deps.Cfg.Dashboard.PublicURL, "/")
+	}
+	if u := s.public.Load(); u != nil {
+		return *u
+	}
+	return ""
+}
+
+// RunURL is a recorded run's page, by its history id ({{.run.url}}); "" when
+// the dashboard has no public address.
+func (s *Server) RunURL(historyID string) string {
+	base := s.PublicURL()
+	if base == "" || historyID == "" {
+		return ""
+	}
+	return base + "/#/runs/" + url.PathEscape(historyID)
 }
 
 // New builds a dashboard server from its dependencies.
