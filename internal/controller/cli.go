@@ -908,6 +908,13 @@ func (s *cliSession) TurnErr() error {
 	return nil
 }
 
+// ExitErr is the turn's process exit error (ExitErrer). Call after Wait.
+func (s *cliSession) ExitErr() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.exit
+}
+
 // ResumeID is the tool's own session id (ResumableSession): named at launch
 // for a step that may be resumed, else captured from the finished turn.
 func (s *cliSession) ResumeID() string {

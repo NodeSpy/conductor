@@ -101,6 +101,12 @@ func TestSlowCallDoesNotKillThePlugin(t *testing.T) {
 	if !strings.Contains(err.Error(), "did not answer within 300ms") {
 		t.Fatalf("the error should say which bound passed: %v", err)
 	}
+	// An unanswered call is the plugin's infrastructure failing, not an
+	// answer: the error says so, so a run waits it out instead of failing.
+	var un *UnresponsiveError
+	if !errors.As(err, &un) || un.Infrastructure() != "plugin "+spec.Name {
+		t.Fatalf("the deadline error is not marked as an infrastructure failure: %#v", err)
+	}
 	// plugin.cancel reached the verb's ctx.
 	deadline := time.Now().Add(3 * time.Second)
 	for {

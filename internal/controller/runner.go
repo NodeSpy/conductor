@@ -155,7 +155,11 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		if r.prov != nil && wsID != "" && !kept {
 			_ = r.prov.RemoveWorktree(ctx, wsID)
 		}
-		return ref, dispatch.Unrecoverable(err)
+		// The agent never started: that is the runtime (its launcher, the
+		// sandbox's disk guard, …), not the step — an infrastructure
+		// failure the run waits out. Still Unrecoverable underneath, which
+		// is what it reads as once the wait gives up on it.
+		return ref, dispatch.Infra("the agent runtime could not start a session: "+err.Error(), "", dispatch.Unrecoverable(err))
 	}
 	// The provisioned worktree is where gate checks run and the proposed
 	// diff is read (#36 §16/§17); remote-host launches have no local path.
@@ -233,7 +237,25 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		// records the run "ok".
 		if te, ok := sess.(TurnErrorer); ok {
 			if terr := te.TurnErr(); terr != nil {
+				// An API/transport/auth error is the runtime failing, not
+				// the agent: the run waits for it instead of failing.
+				if ie := dispatch.ClassifyText(terr.Error()); ie != nil {
+					return ref, dispatch.Infra(ie.Reason, ref.Output, terr)
+				}
 				return ref, terr
+			}
+		}
+		// A turn whose process exited non-zero with no answer — nothing at
+		// all, or only the runtime's own error line — never reached the
+		// agent: an infrastructure failure, with what it printed kept.
+		if ee, ok := sess.(ExitErrer); ok {
+			// A process killed by a signal is not this case: the sandbox's
+			// detection or limits kill a launch on purpose, and that step
+			// must not be re-run as if the runtime had merely been down.
+			if xerr := ee.ExitErr(); xerr != nil && !strings.Contains(xerr.Error(), "signal:") {
+				if ie := dispatch.ClassifyReply(ref.Output); ie != nil {
+					return ref, dispatch.Infra(ie.Reason+" (exit: "+xerr.Error()+")", ref.Output, xerr)
+				}
 			}
 		}
 		// A controller runtime has no native --output-schema; conductor enforces

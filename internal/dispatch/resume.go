@@ -23,6 +23,12 @@ type AgentSession struct {
 	Cwd       string
 	// CanResume: the runtime declared it can resume SessionID.
 	CanResume bool
+	// DispatchID is the id the agent was dispatched under. A resume keeps
+	// it: what the dispatch owns is keyed by it — the sandbox's
+	// per-dispatch home, where a runtime keeps the session it resumes, and
+	// an untrusted target's sandbox identity — so a resume under a new id
+	// finds none of it.
+	DispatchID string
 }
 
 // AgentStart is what a runtime reports through Request.OnAgentStart.

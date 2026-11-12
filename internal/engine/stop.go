@@ -13,9 +13,33 @@ func (e *Engine) StopRunByID(histID string) error {
 		return fmt.Errorf("stop: no connectors-model flow runner is configured")
 	}
 	if !e.flow.Stop(histID) {
+		// A run waiting for its runtime is not running, but it is not over
+		// either: stopping it drops it, as if its target had gone.
+		if e.stopWaiting(histID) {
+			return nil
+		}
 		return fmt.Errorf("run %s is not running (it may have already finished)", histID)
 	}
 	return nil
+}
+
+// stopWaiting drops the run whose waiting execution is histID, reporting
+// whether there was one.
+func (e *Engine) stopWaiting(histID string) bool {
+	e.infra.mu.Lock()
+	var hit *infraWaiter
+	for _, w := range e.infra.runs {
+		if !w.claimed && w.run.InfraWait != nil && w.run.InfraWait.History == histID {
+			hit = w
+			break
+		}
+	}
+	e.infra.mu.Unlock()
+	if hit == nil {
+		return false
+	}
+	e.dropWaiter(e.infraCtx(), hit, "stopped by an operator")
+	return true
 }
 
 // RunActiveByID reports whether a run with the given history id is live in this

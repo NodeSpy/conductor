@@ -300,3 +300,53 @@ steps:
 		t.Fatalf("a recorded agent no live dispatch runs must still be resumed, got %+v", resumes)
 	}
 }
+
+// A step resumed after a restart runs under the dispatch id its agent started
+// with, not the new execution's. Everything the dispatch owns is keyed by that
+// id — above all the sandbox's per-dispatch home, where a CLI runtime keeps
+// the conversation it is asked to resume — so under a new id the runtime
+// found no conversation and every restart threw the agent's work away.
+func TestResumedAgentStepKeepsItsDispatchID(t *testing.T) {
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
+	reg := buildRegistry(t, cfg)
+	_ = newFakeState(t, "svc")
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: fix, type: agent, name: fixer, prompt: p, model: x }
+`)
+	rig := newTestRunner(t, cfg, reg)
+	st := newAgentStore(rig.Store)
+	rig.Runner.Store = st
+
+	// Life 1: the agent starts, the daemon stops under it.
+	var first string
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	rig.Agents.dispatchFunc = func(c context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		first = req.DispatchID
+		req.OnAgentStart(dispatch.AgentStart{AgentSession: dispatch.AgentSession{SessionID: "sess", Workspace: "/wt", CanResume: true}})
+		cancel1()
+		return dispatch.RunRef{}, c.Err()
+	}
+	run := emptyRun()
+	run.ID = "run1"
+	rig.Runner.Run(ctx1, run, newTrigger("ping", nil), spec, rig.Runner.IndexOf(spec), nil, false)
+	cancel1()
+	if rec, ok := st.RunAgent("run1", "fix"); !ok || first == "" || rec.DispatchID != first {
+		t.Fatalf("the kept record does not carry the dispatch id %q: %+v", first, rec)
+	}
+
+	// Life 2: a new execution (a new history id) resumes the step.
+	var got, resumeID string
+	rig.Agents.dispatchFunc = func(_ context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		got = req.DispatchID
+		if req.Resume != nil {
+			resumeID = req.Resume.DispatchID
+		}
+		return dispatch.RunRef{Output: "{}"}, nil
+	}
+	rig.Runner.Run(context.Background(), run, newTrigger("ping", nil), spec, rig.Runner.IndexOf(spec), nil, false)
+	if got != first || resumeID != first {
+		t.Fatalf("resumed dispatch id = %q (Resume %q), want the original %q", got, resumeID, first)
+	}
+}

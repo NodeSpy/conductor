@@ -258,6 +258,11 @@ in the same workspace (see [[Workflows]]). How each runtime continues it:
 | `opencode` | The same session by id, on a server rooted at the kept workspace. |
 | `agent-deck` | The session keeps running in agent-deck, and the restart note is sent to it (`session send`). |
 
+The resumed step keeps the dispatch id its agent started with, so anything
+keyed by the dispatch is the same across the restart. That includes the
+sandbox's per-dispatch home, where a CLI tool keeps the conversation it is
+asked to resume.
+
 When the agent or session is gone, or the resume fails, the step starts a fresh
 agent in the kept workspace and tells it that an earlier agent's work is there.
 If the workspace is gone too, the agent starts fresh in a new one.

@@ -145,6 +145,7 @@ type Engine struct {
 	runCaps     runCaps                 // policy.concurrency.max_runs pools, per scope
 	closedAt    map[string]time.Time    // PR key → when its _closed arrived (guarded by queuedMu); see closedSince
 	baseCtx     context.Context         // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
+	infra       infraWaits              // runs waiting for their agent runtime; see infrawait.go
 
 	// flow runs connectors-model triggers (actions carrying a FlowRef);
 	// grouper batches their grouped events. nil when the config has no
@@ -308,6 +309,7 @@ func New(o Options) *Engine {
 		ch:          make(chan core.Trigger, 256),
 		meter:       cost.NewMeter(),
 		deferCounts: map[string]int{},
+		infra:       infraWaits{backoff: append([]time.Duration(nil), infraProbeBackoff...), escalateAfter: infraEscalateAfter},
 	}
 	if cap := o.Config.AgentCap(); cap > 0 {
 		e.sem = newSlots(cap)
@@ -330,6 +332,9 @@ func New(o Options) *Engine {
 		// The runner's agent/command steps dispatch through the engine's own
 		// runtime resolution, tokens, and hand-off machinery.
 		e.flow.Agents = e.flowAgentServices()
+		// A step whose runtime did not work keeps its run waiting; the
+		// engine resumes it once the runtime answers (infrawait.go).
+		e.flow.InfraWait = e.onInfraWait
 		e.grouper = flow.NewGrouper(nil, e.runBatch)
 	}
 	return e
@@ -1450,6 +1455,13 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 			}
 			if strings.HasPrefix(r.ID, queuedRunPrefix) {
 				waiting = append(waiting, requeue{r, t, act})
+				continue
+			}
+			if r.InfraWait != nil {
+				// Waiting for its runtime: it resumes when a probe says the
+				// runtime works, not blindly now.
+				e.log("%s still waiting for its agent runtime (since %s) — probing it", tag(t), r.InfraWait.Since.Format(time.RFC3339))
+				e.registerInfraWait(ctx, r, t, act)
 				continue
 			}
 			e.resumeFlowRun(ctx, r, t, act)

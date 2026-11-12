@@ -93,7 +93,15 @@ func (r *Runner) agentResume(ctx context.Context, t core.Trigger, id string, req
 			prior.Resumes = resumes
 			_ = st.PutRunAgent(runID, key, prior)
 			req.Resume = &dispatch.AgentSession{Runtime: prior.Runtime, SessionID: prior.SessionID,
-				Workspace: prior.Workspace, Cwd: prior.Cwd, CanResume: prior.CanResume}
+				Workspace: prior.Workspace, Cwd: prior.Cwd, CanResume: prior.CanResume, DispatchID: prior.DispatchID}
+			// The resumed execution has a new history id, so a new
+			// dispatch id — and everything keyed by the dispatch (the
+			// sandbox's per-dispatch home, where the runtime keeps the
+			// session it is about to resume) would be new and empty. The
+			// agent continues under the id it started with.
+			if prior.DispatchID != "" {
+				req.DispatchID = prior.DispatchID
+			}
 		}
 	}
 	asked := req.Resume != nil
@@ -110,7 +118,8 @@ func (r *Runner) agentResume(ctx context.Context, t core.Trigger, id string, req
 			s.Runtime = runtime
 		}
 		_ = st.PutRunAgent(runID, key, store.RunAgent{Runtime: s.Runtime, SessionID: s.SessionID,
-			Workspace: s.Workspace, Cwd: s.Cwd, CanResume: s.CanResume, Resumes: resumes, Started: time.Now()})
+			Workspace: s.Workspace, Cwd: s.Cwd, CanResume: s.CanResume, Resumes: resumes, Started: time.Now(),
+			DispatchID: req.DispatchID})
 	}
 	return func() {
 		defer release()

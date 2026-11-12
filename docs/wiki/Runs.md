@@ -59,9 +59,13 @@ conductor run <id>                # same detail (a configured trigger name alway
 List/detail read the history directory straight off disk — no daemon needed.
 Each record carries:
 
-- run status (`running` / `ok` / `failed` / `interrupted` / `stopped`),
-  start/finish, total spend (§14);
-- per top-level step: status (`ok` / `failed` / `skipped`), start + duration,
+- run status (`running` / `ok` / `failed` / `interrupted` / `waiting` /
+  `stopped`), start/finish, total spend (§14). `waiting` means a step failed
+  because its agent runtime (or a plugin) did not work. The error says why
+  and keeps what the runtime printed. Conductor resumes the run once the
+  runtime answers, under a new record linked by `retry_of` (see
+  [Workflows](Workflows#when-the-runtime-not-the-step-fails));
+- per top-level step: status (`ok` / `failed` / `skipped` / `waiting`), start + duration,
   the **rendered** verb options (or the agent's prompt source), the step's
   outputs in checkpoint form, error text, and agent-step token/$ usage;
 - the pinned trigger + action (tokens stripped — they're re-minted on retry);
