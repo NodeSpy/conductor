@@ -275,8 +275,11 @@ func (c *Config) pluginJailWarnings() []string {
 		}
 		g := u.InstallKey() + "\x00" + u.String()
 		n := "network: " + narrowingKey(ref.Network) + ", allow_env: " + narrowingKey(ref.AllowEnv)
+		if len(ref.AllowKeyring) > 0 {
+			n += ", allow_keyring: " + narrowingKey(ref.AllowKeyring)
+		}
 		if prev, ok := narrowing[g]; ok && prev != n {
-			out = append(out, fmt.Sprintf("connectors: %s and %s share one plugin process but narrow it differently (%s vs %s) — the process gets both; set the same network:/allow_env on both, or isolate: true one of them", from[g], name, prev, n))
+			out = append(out, fmt.Sprintf("connectors: %s and %s share one plugin process but narrow it differently (%s vs %s) — the process gets both; set the same network:/allow_env/allow_keyring on both, or isolate: true one of them", from[g], name, prev, n))
 			continue
 		}
 		narrowing[g], from[g] = n, name

@@ -553,9 +553,9 @@ var semanticKeys = map[string][]string{
 		"target_args", "exposes", "identity", "call_timeout"},
 	"connection": {"credentials", "scope", "poll", "translate", "listeners", "preflight"},
 	// Not declaration keys: the host resolves a declaration's config: and
-	// env: entries (SemanticReferences), and grants expose_local
-	// (SemanticExposeLocal).
-	"capabilities": {"references", "expose_local"},
+	// env: entries (SemanticReferences), grants expose_local
+	// (SemanticExposeLocal), and grants keyring items (SemanticKeyring).
+	"capabilities": {"references", "expose_local", "keyring"},
 	// Not a declaration key either: the host reads a listener's
 	// default_path (SemanticListenerDefaultPath).
 	"listeners": {"default_path"},

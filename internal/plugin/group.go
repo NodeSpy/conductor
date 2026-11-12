@@ -291,6 +291,7 @@ func narrowRef(ref config.PluginRef, names []string) (config.PluginRef, error) {
 		out.Network = config.UnionNarrowing(out.Network, g.Network)
 		out.AllowSecrets = config.AppendUnique(out.AllowSecrets, g.AllowSecrets...)
 		out.AllowEnv = config.UnionNarrowing(out.AllowEnv, g.AllowEnv)
+		out.AllowKeyring = config.AppendUnique(out.AllowKeyring, g.AllowKeyring...)
 		out.Conns = append(out.Conns, g.Conn)
 		trust, anyShared = trust && g.TrustFull, true
 		merged, ok := foldIsolation(out.Isolation, isoFrom != "", g)

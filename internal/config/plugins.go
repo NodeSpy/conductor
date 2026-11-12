@@ -51,6 +51,9 @@ type PluginRef struct {
 	// AllowEnv are the daemon environment variables the operator granted the
 	// plugin (connectors.<name>.allow_env), within what it declares.
 	AllowEnv []string
+	// AllowKeyring are the withheld-by-default keyring items the operator
+	// let the plugin read (connectors.<name>.allow_keyring).
+	AllowKeyring []string
 	// Instances carries each CONFIGURED CONNECTOR INSTANCE's own grants —
 	// Network/AllowSecrets/AllowEnv/Isolation/Isolate exactly as that one
 	// connectors: entry declared them, never unioned with a sibling
@@ -84,6 +87,7 @@ type ConnectorGrant struct {
 	Network      []string
 	AllowSecrets []string
 	AllowEnv     []string
+	AllowKeyring []string
 	Isolation    *IsolationConfig
 	// Conn is this instance's connection config (ConnectorRef.Conn).
 	Conn map[string]any
@@ -342,6 +346,7 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 			p.Network = unionNarrowing(p.Network, ref.Network)
 			p.AllowSecrets = appendUnique(p.AllowSecrets, ref.AllowSecrets...)
 			p.AllowEnv = unionNarrowing(p.AllowEnv, ref.AllowEnv)
+			p.AllowKeyring = appendUnique(p.AllowKeyring, ref.AllowKeyring...)
 			p.Conns = append(p.Conns, ref.Conn())
 			// The shared process is unjailed only when every instance it
 			// serves says so (validateTrust refuses a mix).
@@ -353,6 +358,7 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 			Network:      CloneNarrowing(ref.Network),
 			AllowSecrets: append([]string(nil), ref.AllowSecrets...),
 			AllowEnv:     CloneNarrowing(ref.AllowEnv),
+			AllowKeyring: append([]string(nil), ref.AllowKeyring...),
 			Isolation:    ref.Isolation,
 			Isolate:      ref.Isolate,
 			Use:          u,

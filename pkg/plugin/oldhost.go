@@ -1,6 +1,9 @@
 package plugin
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // SemanticReferences is the semantic a host advertises (HostInfo.Semantics)
 // when it resolves the config: and env: entries of a declaration
@@ -36,7 +39,8 @@ func (h *HostInfo) ResolvesReferences() bool {
 // WithoutReferences is the declaration for a host that does not resolve
 // references (HostInfo.ResolvesReferences): every config: and env: entry is
 // dropped, optional ("?") ones included, and a list left with nothing is
-// returned unspecified (nil), which such a host does not confine.
+// returned unspecified (nil), which such a host does not confine. So is a
+// keyring item whose attributes hold a reference.
 func (c Capabilities) WithoutReferences() Capabilities {
 	strip := func(in []string) []string {
 		var out []string
@@ -55,6 +59,19 @@ func (c Capabilities) WithoutReferences() Capabilities {
 	c.Write = strip(c.Write)
 	c.FS = strip(c.FS)
 	c.Exec = strip(c.Exec)
+	var items []KeyringItem
+	for _, it := range c.Keyring {
+		ref := false
+		for _, v := range it.Attributes {
+			if _, ok, _ := ParseKeyringValue(v); ok {
+				ref = true
+			}
+		}
+		if !ref {
+			items = append(items, it)
+		}
+	}
+	c.Keyring = items
 	return c
 }
 
@@ -82,6 +99,20 @@ func (h *HostInfo) GrantsExposeLocal() bool {
 	return false
 }
 
+// SemanticKeyring is the semantic a host advertises (HostInfo.Semantics)
+// when it grants Capabilities.Keyring: on Linux it serves the jail the
+// declared keyring items, on macOS it grants the Keychain for them. Every
+// host built with this SDK advertises it.
+const SemanticKeyring = "capabilities.keyring"
+
+// GrantsKeyring reports whether the host asking for a declaration grants
+// Capabilities.Keyring. Only the advertised semantic counts, as for
+// GrantsExposeLocal. A conductor before it does not know the field and
+// ignores it; Serve withholds it anyway, so what such a host records is
+// what it was shown, and the conductor that grants it holds it for the
+// user's approval as a new permission.
+func (h *HostInfo) GrantsKeyring() bool { return h.advertises(SemanticKeyring) }
+
 // SemanticListenerDefaultPath is the semantic a host advertises
 // (HostInfo.Semantics) when it reads Listener.DefaultPath. Every host built
 // with this SDK advertises it.
@@ -91,16 +122,14 @@ const SemanticListenerDefaultPath = "listeners.default_path"
 // reads Listener.DefaultPath. A host before it decodes a declaration's
 // listeners strictly and would refuse the plugin over the unknown field, so
 // Serve withholds it (WithoutListenerDefaultPath).
-func (h *HostInfo) ReadsListenerDefaultPath() bool {
+func (h *HostInfo) ReadsListenerDefaultPath() bool { return h.advertises(SemanticListenerDefaultPath) }
+
+// advertises reports whether the host advertises semantic s.
+func (h *HostInfo) advertises(s string) bool {
 	if h == nil {
 		return false
 	}
-	for _, s := range h.Semantics {
-		if s == SemanticListenerDefaultPath {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(h.Semantics, s)
 }
 
 // WithoutListenerDefaultPath clears every listener's DefaultPath, for a

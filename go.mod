@@ -12,6 +12,7 @@ require (
 	github.com/descope/virtualwebauthn v1.0.5
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/go-webauthn/webauthn v0.18.2
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/redis/go-redis/v9 v9.22.0

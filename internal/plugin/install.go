@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,10 +67,13 @@ const consentFile = "consented.yaml"
 // jailSchema was written by a jailing conductor the plugin SDK withheld
 // part of the declaration from (HostInfo.ResolvesReferences,
 // HostInfo.GrantsExposeLocal): its config: and env: entries, its
-// expose_local. Both are adopted once (adoptOlderRecord).
+// expose_local. One with refsSchema was written by a conductor the SDK
+// withheld keyring items from (HostInfo.GrantsKeyring). Each is adopted
+// once (adoptOlderRecord).
 const (
 	jailSchema     = 1
-	manifestSchema = 2
+	refsSchema     = 2
+	manifestSchema = 3
 )
 
 // Manifest is the permission manifest a plugin declared at install time — what
@@ -89,6 +93,9 @@ type Manifest struct {
 	Exec []string `yaml:"exec,omitempty"`
 	// Keychain: a command reads a login from the macOS Keychain.
 	Keychain bool `yaml:"keychain,omitempty"`
+	// Keyring are the logins in the user's OS keyring it reads, each by the
+	// attributes it is stored under (Capabilities.Keyring).
+	Keyring []KeyringItem `yaml:"keyring,omitempty"`
 	// FS is the older name for Write.
 	FS []string `yaml:"fs,omitempty"`
 	// Spawns records the legacy boolean for a plugin that declares it spawns
@@ -121,14 +128,14 @@ type Manifest struct {
 // IsZero reports whether the plugin declared no capabilities at all.
 func (m Manifest) IsZero() bool {
 	return len(m.Egress) == 0 && len(m.Listen) == 0 && len(m.Read) == 0 && len(m.Write) == 0 && len(m.Exec) == 0 &&
-		len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && !m.Keychain && len(m.Env) == 0 && !m.SingleProcess && m.Auth == nil && !m.ExposeLocal
+		len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && !m.Keychain && len(m.Keyring) == 0 && len(m.Env) == 0 && !m.SingleProcess && m.Auth == nil && !m.ExposeLocal
 }
 
 // Caps is the manifest as the plugin declared it.
 func (m Manifest) Caps() sdk.Capabilities {
 	return sdk.Capabilities{
 		Egress: m.Egress, Listen: m.Listen, Read: m.Read, Write: m.Write, FS: m.FS,
-		Commands: m.Commands, Exec: m.Exec, Keychain: m.Keychain, Env: m.Env,
+		Commands: m.Commands, Exec: m.Exec, Keychain: m.Keychain, Keyring: m.Keyring, Env: m.Env,
 		ExposeLocal: m.ExposeLocal,
 	}
 }
@@ -174,6 +181,9 @@ func (m Manifest) Lines() []string {
 	}
 	if m.Keychain {
 		out = append(out, "reads a login from the macOS Keychain")
+	}
+	for _, it := range m.Keyring {
+		out = append(out, keyringLine(it))
 	}
 	if m.ExposeLocal {
 		out = append(out, exposeLocalLabel)
@@ -225,6 +235,13 @@ func plainEntry(e string) string {
 		return plainEntry(ref) + " (if it can be granted)"
 	}
 	if ref, ok := strings.CutPrefix(e, "config:"); ok {
+		// A destination's port is a default: a value that names its own
+		// port (a URL's, host:port's) is granted that one.
+		if f, port, ok := strings.Cut(ref, ":"); ok && !strings.Contains(f, "/") {
+			if _, err := strconv.Atoi(port); err == nil {
+				return "<" + shown(f) + " from its config> (on its own port, else " + port + ")"
+			}
+		}
 		return "<" + shown(ref) + " from its config>"
 	}
 	if ref, ok := strings.CutPrefix(e, "env:"); ok {
@@ -254,6 +271,89 @@ func socketEntry(e string) bool {
 		}
 	}
 	return false
+}
+
+// keyringLine is a declared keyring item in plain words, with the
+// attributes that are enforced: the label is the plugin's, the attributes
+// are what the jail is held to.
+func keyringLine(it KeyringItem) string {
+	keys := make([]string, 0, len(it.Attributes))
+	for k := range it.Attributes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		parts = append(parts, keyringKey(k)+"="+plainKeyringValue(it.Attributes[k]))
+	}
+	sel := strings.Join(parts, ", ")
+	// The label is the plugin's text: quoted, so it cannot close the quote
+	// and write consent of its own.
+	label := strconv.Quote(it.Label)
+	line := "reads every item in your keyring with " + sel + " (" + label + ", in its words)"
+	if spawnGOOS == "darwin" {
+		line = "reads your macOS Keychain, read-only, for every item with " + sel + " (" + label + ", in its words): macOS cannot confine it to those items, so it may read any Keychain item macOS's own per-item access controls let it read"
+	}
+	if what := keyringSensitivity(it); what != "" {
+		line += " — that is " + what + "; conductor withholds it unless the connector's allow_keyring names " + strconv.Quote(it.Selector())
+	}
+	return line
+}
+
+// plainKeyringValue spells out a keyring attribute value's reference, as
+// plainEntry does a path's: "gh:${host:config:api_base}" is
+// "gh:<host of api_base from its config>".
+//
+// The value is the plugin's text: quoted, as the label is, so it cannot
+// close the line's own words and write consent of its own.
+func plainKeyringValue(v string) string {
+	r, ok, err := sdk.ParseKeyringValue(v)
+	if err != nil || !ok {
+		return strconv.Quote(v)
+	}
+	var what string
+	switch {
+	case r.Kind == "config" && r.Host:
+		what = "<host of " + shown(r.Name) + " from its config>"
+	case r.Kind == "config":
+		what = "<" + shown(r.Name) + " from its config>"
+	case r.Host:
+		what = "<host of $" + shown(r.Name) + ">"
+	default:
+		what = "$" + shown(r.Name)
+	}
+	return strconv.Quote(r.Prefix + what + r.Suffix)
+}
+
+// keyringKey is an attribute name as consent shows it: as it is when it is
+// a plain name (letters, digits, ":", "_", ".", "-"), quoted otherwise.
+func keyringKey(k string) string {
+	for _, r := range k {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune(":_.-", r)) {
+			return strconv.Quote(k)
+		}
+	}
+	return k
+}
+
+// keyringCovers reports whether m already grants reading the item: one of
+// its items is it or matches more of the keyring (a declared item covers
+// every item carrying its attributes). On macOS a Keychain grant covers it
+// too, since a keyring item is granted there as the Keychain.
+func (m Manifest) keyringCovers(it KeyringItem) bool {
+	// The label is what the user agreed to: an item is covered only by one
+	// they agreed to under the same label — a new label, on the same
+	// attributes or narrower ones, is asked for again.
+	agreed := false
+	for _, h := range m.Keyring {
+		if h.Matches(it.Attributes) {
+			if h.Label == it.Label {
+				return true
+			}
+			agreed = true
+		}
+	}
+	return !agreed && spawnGOOS == "darwin" && m.Keychain
 }
 
 // Summary renders the manifest as one line for logs and install review.
@@ -304,6 +404,11 @@ func (m Manifest) Widens(next Manifest) []string {
 	diff("reads env", m.Env, next.Env, exact)
 	if next.Keychain && !m.Keychain {
 		out = append(out, "reads a login from the macOS Keychain")
+	}
+	for _, it := range next.Keyring {
+		if !m.keyringCovers(it) {
+			out = append(out, keyringLine(it))
+		}
 	}
 	if next.ExposeLocal && !m.ExposeLocal {
 		out = append(out, exposeLocalLabel)
@@ -400,8 +505,9 @@ type Installed struct {
 	// Manifest is the permission manifest recorded at install.
 	Manifest Manifest `yaml:"manifest,omitempty"`
 	// ManifestSchema is manifestSchema when Manifest was recorded in full
-	// (see there); jailSchema on one a conductor the plugin SDK withheld
-	// part of it from wrote, 0 on one a conductor without the jail wrote.
+	// (see there); jailSchema or refsSchema on one a conductor the plugin
+	// SDK withheld part of it from wrote, 0 on one a conductor without the
+	// jail wrote.
 	ManifestSchema int `yaml:"manifest_schema,omitempty"`
 	// Legacy marks a record loaded from a version 1 state file (a conductor
 	// without the jail wrote it) that has not been adopted yet. Only such a

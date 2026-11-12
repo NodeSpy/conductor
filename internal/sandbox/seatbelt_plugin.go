@@ -27,6 +27,9 @@ type PluginProfile struct {
 	ListenPorts []int
 	// Keychain allows the login Keychain's services and files.
 	Keychain bool
+	// KeychainRead allows the Keychain's services, and its files read-only
+	// (a declared keyring item: a login the plugin reads, never writes).
+	KeychainRead bool
 	// Home is the user's home (for the Keychain's directory).
 	Home string
 }
@@ -67,13 +70,30 @@ const seatbeltPluginBase = `(version 1)
 `
 
 // seatbeltPluginProfile renders the plugin profile.
+// pluginMachKeychainRead are the Keychain services reading an item needs:
+// agentMachKeychain without the security agent and its auth host, which
+// show the user dialogs (an access prompt, an unlock prompt). Without them
+// an item whose access control does not trust the program fails to read
+// rather than asking the user. Reads, and the denial of writes, were
+// checked on macOS 26 against a throwaway keychain.
+var pluginMachKeychainRead = []string{
+	"com.apple.SecurityServer",
+	"com.apple.securityd.xpc",
+	"com.apple.ocspd",
+	"com.apple.security.syspolicy",
+	"com.apple.CoreAuthentication.daemon",
+}
+
 func seatbeltPluginProfile(p *PluginProfile) string {
 	var b strings.Builder
 	b.WriteString(seatbeltPluginBase)
 	b.WriteString("(allow mach-lookup")
 	mach := append([]string(nil), agentMachBase...)
-	if p.Keychain {
+	switch {
+	case p.Keychain:
 		mach = append(mach, agentMachKeychain...)
+	case p.KeychainRead:
+		mach = append(mach, pluginMachKeychainRead...)
 	}
 	for _, s := range mach {
 		b.WriteString("\n  (global-name " + sbplString(s) + ")")
@@ -100,8 +120,11 @@ func seatbeltPluginProfile(p *PluginProfile) string {
 	for _, w := range resolvePaths(p.Write) {
 		b.WriteString("(allow file-read* file-write* (subpath " + sbplString(w) + "))\n")
 	}
-	if p.Keychain && p.Home != "" {
+	switch {
+	case p.Keychain && p.Home != "":
 		b.WriteString("(allow file-read* file-write* (subpath " + sbplString(p.Home+"/Library/Keychains") + "))\n")
+	case p.KeychainRead && p.Home != "":
+		b.WriteString("(allow file-read* (subpath " + sbplString(p.Home+"/Library/Keychains") + "))\n")
 	}
 	b.WriteString("(deny network*)\n")
 	// A declared unix socket is a written path: connecting to it is allowed.

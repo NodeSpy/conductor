@@ -317,6 +317,16 @@ type Capabilities struct {
 	// Keychain declares that a command reads a login from the user's macOS
 	// Keychain (a CLI that stores its token there). Ignored elsewhere.
 	Keychain bool `json:"keychain,omitempty"`
+	// Keyring are the logins in the user's OS keyring that the plugin, or a
+	// command it runs, reads: a CLI that keeps its token there.
+	// Each names one item by the attributes it is stored under. On Linux the
+	// jail's only session bus is a Secret Service conductor serves: it finds
+	// and reads, from the user's keyring, the items that carry every
+	// attribute of a declared one, and nothing else (no other item, no
+	// other service on the session bus, no writes). On macOS a declared
+	// item grants the Keychain as Keychain does: the Keychain's own
+	// per-item access control decides which items a program reads.
+	Keyring []KeyringItem `json:"keyring,omitempty"`
 	// FS is the older name for Write: read-write paths.
 	FS []string `json:"fs,omitempty"`
 	// Spawns is the older "I run programs I do not name". It grants nothing:
@@ -370,6 +380,21 @@ type Capabilities struct {
 	// out of band (its own README, a connection-field check) rather than
 	// assume an old host enforces it.
 	SingleProcess bool `json:"single_process,omitempty"`
+}
+
+// KeyringItem is one login in the user's OS keyring a plugin reads
+// (Capabilities.Keyring).
+type KeyringItem struct {
+	// Label says what the item is, in plain words, for the user agreeing to
+	// it: "tool login for example.com". Shown with the attributes, which are
+	// what is enforced.
+	Label string `json:"label"`
+	// Attributes are the Secret Service attributes the item is stored
+	// under; an item matches when it carries every one, with the same
+	// value. A CLI that uses the common go-keyring convention stores its
+	// login under {"service": "<name>", "username": "<user>"}: declaring
+	// the service alone covers each of its users.
+	Attributes map[string]string `json:"attributes"`
 }
 
 // Decl is a plugin's full self-description, returned by Describe.

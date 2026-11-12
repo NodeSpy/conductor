@@ -77,8 +77,9 @@ type HostInfo struct {
 	// Semantics are the semantics the host implements ("event.cursor", …).
 	// Serve drops every OPTIONAL semantic the host lacks from the Decl
 	// before replying (StripUnknownOptional), every config: and env:
-	// capability entry when it lacks SemanticReferences, and expose_local
-	// when it lacks SemanticExposeLocal.
+	// capability entry when it lacks SemanticReferences, expose_local
+	// when it lacks SemanticExposeLocal, and keyring when it lacks
+	// SemanticKeyring.
 	Semantics []string `json:"semantics,omitempty"`
 }
 

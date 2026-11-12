@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Grant is a plugin's declaration (Capabilities) resolved against the
@@ -29,6 +32,8 @@ type Grant struct {
 	// Env are variable names.
 	Env      []string `json:"env,omitempty"`
 	Keychain bool     `json:"keychain,omitempty"`
+	// Keyring are the keyring items the plugin reads (Capabilities.Keyring).
+	Keyring []KeyringItem `json:"keyring,omitempty"`
 	// From maps each Read, Write and Exec path to the declared entries it
 	// came from ("read:" + path), so a check on the path can name the
 	// entry, tell a config: value from a static path, and tell an optional
@@ -182,7 +187,261 @@ func (c Capabilities) Validate(conn Schema) error {
 			return fmt.Errorf("capabilities.commands: %q is not a program name", cmd)
 		}
 	}
+	for i, it := range c.Keyring {
+		if err := it.validate(); err != nil {
+			return fmt.Errorf("capabilities.keyring[%d]: %w", i, err)
+		}
+		refs := 0
+		for k, v := range it.Attributes {
+			r, ok, err := ParseKeyringValue(v)
+			if err != nil {
+				return fmt.Errorf("capabilities.keyring[%d] %q: attribute %s: %w", i, it.Label, k, err)
+			}
+			if !ok {
+				continue
+			}
+			if refs++; refs > 1 {
+				return fmt.Errorf("capabilities.keyring[%d] %q: only one attribute may hold a reference", i, it.Label)
+			}
+			switch r.Kind {
+			case "config":
+				if err := field("keyring", r.Name); err != nil {
+					return err
+				}
+			case "env":
+				if !env[r.Name] {
+					return fmt.Errorf("capabilities.keyring[%d] %q: %s refers to %s, which capabilities.env does not declare", i, it.Label, v, r.Name)
+				}
+				// As a secret config field is refused: a credential's
+				// value is never what names a keyring item.
+				if secretName(r.Name) {
+					return fmt.Errorf("capabilities.keyring[%d] %q: %s refers to %s, which looks like a credential", i, it.Label, v, r.Name)
+				}
+			}
+		}
+	}
 	return nil
+}
+
+// KeyringRef is a reference in a keyring attribute value: the value is
+// Prefix, then what the reference names, then Suffix.
+//
+//	"${config:<field>}"       the instance's connection field (a list gives
+//	                          an item per entry)
+//	"${env:<VAR>}"            the daemon's variable (one in Env)
+//	"${host:config:<field>}"  the host of that value: a URL's host name, or
+//	"${host:env:<VAR>}"       the host of host:port, or the value itself
+//
+// A field or variable that is not set gives no item.
+type KeyringRef struct {
+	Prefix, Suffix string
+	// Kind is "config" or "env"; Name the field or variable.
+	Kind, Name string
+	// Host takes the host of the value.
+	Host bool
+}
+
+// ParseKeyringValue reads a keyring attribute value: ok when it holds a
+// reference, an error when it holds a malformed one or more than one.
+func ParseKeyringValue(v string) (KeyringRef, bool, error) {
+	i := strings.Index(v, "${")
+	if i < 0 {
+		return KeyringRef{}, false, nil
+	}
+	j := strings.Index(v[i:], "}")
+	if j < 0 {
+		return KeyringRef{}, false, fmt.Errorf("%q: an unclosed ${", v)
+	}
+	r := KeyringRef{Prefix: v[:i], Suffix: v[i+j+1:]}
+	if strings.Contains(r.Suffix, "${") {
+		return KeyringRef{}, false, fmt.Errorf("%q: a value may hold one reference", v)
+	}
+	body := v[i+2 : i+j]
+	if b, ok := strings.CutPrefix(body, "host:"); ok {
+		r.Host, body = true, b
+	}
+	kind, name, _ := strings.Cut(body, ":")
+	if (kind != "config" && kind != "env") || name == "" || strings.ContainsAny(name, " \t${}") {
+		return KeyringRef{}, false, fmt.Errorf("%q: a reference is ${config:<field>}, ${env:<VAR>}, ${host:config:<field>} or ${host:env:<VAR>}", v)
+	}
+	r.Kind, r.Name = kind, name
+	return r, true, nil
+}
+
+// resolveKeyring is a declared item as the jail grants it: an item with no
+// reference as declared; one with a reference once per value it names (none
+// when unset). A value that is not plain text, or has no host when one is
+// taken, is an error naming the field.
+func resolveKeyring(it KeyringItem, e ResolveEnv) ([]KeyringItem, error) {
+	var key string
+	var ref KeyringRef
+	for k, v := range it.Attributes {
+		if r, ok, err := ParseKeyringValue(v); err != nil {
+			return nil, err
+		} else if ok {
+			key, ref = k, r
+		}
+	}
+	if key == "" {
+		return []KeyringItem{{Label: it.Label, Attributes: maps.Clone(it.Attributes)}}, nil
+	}
+	var vals []string
+	switch ref.Kind {
+	case "config":
+		vals = configValues(e.Conns, ref.Name)
+	case "env":
+		if e.Getenv != nil {
+			if v, ok := e.Getenv(ref.Name); ok && strings.TrimSpace(v) != "" {
+				vals = []string{strings.TrimSpace(v)}
+			}
+		}
+	}
+	var out []KeyringItem
+	for _, v := range vals {
+		if ref.Host {
+			h, err := hostOf(v)
+			if err != nil {
+				return nil, fmt.Errorf("capabilities.keyring %q: %s:%s: %w", it.Label, ref.Kind, ref.Name, err)
+			}
+			v = h
+		}
+		if !printable(v) {
+			return nil, fmt.Errorf("capabilities.keyring %q: %s:%s: %q has a control character", it.Label, ref.Kind, ref.Name, v)
+		}
+		attrs := maps.Clone(it.Attributes)
+		attrs[key] = ref.Prefix + v + ref.Suffix
+		out = append(out, KeyringItem{Label: it.Label, Attributes: attrs})
+	}
+	return out, nil
+}
+
+// hostOf is a value's host: a URL's host name, host:port's host, or the
+// value itself when it is a bare host.
+func hostOf(v string) (string, error) {
+	var h string
+	switch {
+	case strings.Contains(v, "://"):
+		u, err := url.Parse(v)
+		if err != nil || u.Hostname() == "" {
+			return "", fmt.Errorf("%q is not a URL with a host", v)
+		}
+		h = u.Hostname()
+	default:
+		if hh, _, err := net.SplitHostPort(v); err == nil {
+			h = hh
+		} else {
+			h = v
+		}
+	}
+	if h == "" || strings.ContainsAny(h, "/ \t*?[]\\@") {
+		return "", fmt.Errorf("%q is not a host", v)
+	}
+	return strings.ToLower(h), nil
+}
+
+// secretName reports whether a variable's name looks like a credential's:
+// a word such as TOKEN, PASSWORD, AUTH, COOKIE or SESSION in it, or a name
+// that is or ends in KEY or PAT.
+func secretName(n string) bool {
+	u := strings.ToUpper(n)
+	for _, w := range []string{"TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASSPHRASE", "API_KEY", "APIKEY", "PRIVATE_KEY", "ACCESS_KEY",
+		"CREDENTIAL", "CREDS", "AUTH", "COOKIE", "SESSION", "BEARER", "JWT"} {
+		if strings.Contains(u, w) {
+			return true
+		}
+	}
+	for _, w := range []string{"KEY", "PAT", "PASS", "PWD"} {
+		if u == w || strings.HasSuffix(u, "_"+w) || strings.Contains(u, "_"+w+"_") {
+			return true
+		}
+	}
+	return false
+}
+
+// Check checks one item on its own, as Validate does: a label, attributes
+// that name whose item it is, nothing blank or unprintable. A host checks
+// each item again where it grants it, after references are resolved.
+func (it KeyringItem) Check() error { return it.validate() }
+
+// IdentifyingKeys are the attribute names that say which program's or
+// site's item it is. Each declared item names at least one: the others
+// (xdg:schema, protocol, port, user, ...) are shared by many programs' items,
+// and a declaration made only of them would read all of those.
+var IdentifyingKeys = []string{"service", "server", "host", "domain", "url", "origin", "application"}
+
+// maxKeyringLabel bounds a keyring item's label: a few words for the user.
+const maxKeyringLabel = 80
+
+func (it KeyringItem) validate() error {
+	if strings.TrimSpace(it.Label) == "" {
+		return fmt.Errorf("a label is required (what the item is, in plain words: \"tool login for example.com\")")
+	}
+	if len([]rune(it.Label)) > maxKeyringLabel {
+		return fmt.Errorf("label %q is longer than %d characters", it.Label, maxKeyringLabel)
+	}
+	if !printable(it.Label) {
+		return fmt.Errorf("label %q has a control character", it.Label)
+	}
+	if len(it.Attributes) == 0 {
+		return fmt.Errorf("%q names no attributes: an item is declared by the attributes it is stored under", it.Label)
+	}
+	identified := false
+	for _, k := range IdentifyingKeys {
+		if it.Attributes[k] != "" {
+			identified = true
+		}
+	}
+	if !identified {
+		return fmt.Errorf("%q names none of %s: attributes such as xdg:schema or protocol alone match many programs' items", it.Label, strings.Join(IdentifyingKeys, ", "))
+	}
+	for k, v := range it.Attributes {
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" || strings.TrimSpace(k) != k {
+			return fmt.Errorf("%q: attribute %q=%q: names and values may not be blank, nor a name padded", it.Label, k, v)
+		}
+		if !printable(k) || !printable(v) {
+			return fmt.Errorf("%q: attribute %q=%q has a control character", it.Label, k, v)
+		}
+	}
+	return nil
+}
+
+// printable: no control or format character (a bidi override would reorder
+// what the user reads), no line or paragraph separator.
+func printable(s string) bool {
+	for _, r := range s {
+		if !utf8.ValidRune(r) || r == utf8.RuneError || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
+			return false
+		}
+	}
+	return true
+}
+
+// Matches reports whether an item stored under attrs is this declared one:
+// it carries every declared attribute, with the same value.
+func (it KeyringItem) Matches(attrs map[string]string) bool {
+	if len(it.Attributes) == 0 {
+		return false
+	}
+	for k, v := range it.Attributes {
+		if got, ok := attrs[k]; !ok || got != v {
+			return false
+		}
+	}
+	return true
+}
+
+// Selector renders the attributes in a stable order: "service=tool:example.com".
+func (it KeyringItem) Selector() string {
+	keys := make([]string, 0, len(it.Attributes))
+	for k := range it.Attributes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+it.Attributes[k])
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Resolve turns a declaration into the Grant conductor enforces. It never
@@ -239,6 +498,19 @@ func (c Capabilities) Resolve(e ResolveEnv) (Grant, error) {
 	g.Commands = append([]string(nil), c.Commands...)
 	g.Env = append([]string(nil), c.Env...)
 	g.Keychain = c.Keychain
+	seen := map[string]bool{}
+	for _, it := range c.Keyring {
+		items, err := resolveKeyring(it, e)
+		if err != nil {
+			return Grant{}, err
+		}
+		for _, r := range items {
+			if k := r.Selector(); !seen[k] {
+				seen[k] = true
+				g.Keyring = append(g.Keyring, r)
+			}
+		}
+	}
 	for _, l := range []*[]string{&g.Egress, &g.Listen, &g.Read, &g.Write, &g.Exec, &g.Commands, &g.Env} {
 		*l = uniqSorted(*l)
 	}

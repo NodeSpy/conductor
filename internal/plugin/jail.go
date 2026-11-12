@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/NodeSpy/conductor/internal/keyringbroker"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/scratch"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
@@ -48,12 +49,24 @@ import (
 // jailHome is the user's home, for "~/" entries (a test var).
 var jailHome = os.UserHomeDir
 
+// keyringUpstream reaches the user's keyring for a jail's keyring broker (a
+// test var; nil is the session bus's Secret Service).
+var keyringUpstream func() (keyringbroker.Upstream, error)
+
 // pluginGrant resolves s's declaration into what its jail allows, narrowed
 // by the config (network:, allow_env), never widened by it.
 func pluginGrant(s Spec) (sdk.Grant, error) {
 	home, _ := jailHome()
 	caps := s.Manifest.Caps()
-	g, err := caps.Resolve(sdk.ResolveEnv{Home: home, Getenv: os.LookupEnv, Conns: s.Conns, Command: func(n string) (string, bool) {
+	// An env: reference resolves from the env the config lets it have
+	// (allow_env), as its env does.
+	getenv := func(n string) (string, bool) {
+		if s.AllowEnv != nil && !slices.Contains(s.AllowEnv, n) {
+			return "", false
+		}
+		return os.LookupEnv(n)
+	}
+	g, err := caps.Resolve(sdk.ResolveEnv{Home: home, Getenv: getenv, Conns: s.Conns, Command: func(n string) (string, bool) {
 		p, err := spawnLookPath(n)
 		if err != nil {
 			return "", false
@@ -75,9 +88,23 @@ func pluginGrant(s Spec) (sdk.Grant, error) {
 		return sdk.Grant{}, fmt.Errorf("plugin %s: %w", s.Name, err)
 	}
 	if s.Probe {
-		// A type-level describe serves no instance: no network, no env.
-		g.Egress, g.Listen, g.Env = nil, nil, nil
+		// A type-level describe serves no instance: no network, no env,
+		// no keyring.
+		g.Egress, g.Listen, g.Env, g.Keyring = nil, nil, nil, nil
 		return g, nil
+	}
+	// Each item is checked again as resolved (a record could have been
+	// edited, or written by a build that checked less), and one of the
+	// items conductor withholds is granted only when the config names it.
+	for _, it := range g.Keyring {
+		if err := it.Check(); err != nil {
+			return sdk.Grant{}, fmt.Errorf("plugin %s: capabilities.keyring: %w", s.Name, err)
+		}
+	}
+	var withheld []sdk.KeyringItem
+	g.Keyring, withheld = allowedKeyring(g.Keyring, s.AllowKeyring)
+	for _, it := range withheld {
+		log.Printf("plugin %s: keyring item %s withheld: it is %s — name it in the connector's allow_keyring to grant it", s.Name, strconv.Quote(it.Selector()), keyringSensitivity(it))
 	}
 	// network: and allow_env narrow: unset grants everything declared, a
 	// set list exactly its entries (none, when it is empty).
@@ -107,6 +134,28 @@ func pluginGrant(s Spec) (sdk.Grant, error) {
 		g.Env = env
 	}
 	return g, nil
+}
+
+// KeyringMatches counts the items in the user's keyring that carry attrs;
+// nil (tests, and hosts that cannot search it) shows no count. The command
+// line sets it.
+var KeyringMatches func(attrs map[string]string) (int, error)
+
+// keyringMatchCount is how many keyring items a declared one matches now,
+// for the user to see what it reads: on macOS, where the jail reads the
+// Keychain, none is counted.
+func keyringMatchCount(it sdk.KeyringItem) string {
+	if KeyringMatches == nil || spawnGOOS == "darwin" {
+		return ""
+	}
+	n, err := KeyringMatches(it.Attributes)
+	switch {
+	case err != nil:
+		return " (your keyring could not be searched: " + shown(err.Error()) + ")"
+	case n == 1:
+		return " (1 item matches now)"
+	}
+	return fmt.Sprintf(" (%d items match now)", n)
 }
 
 // HereLines spells out what s's declared paths and commands are on this
@@ -149,6 +198,11 @@ func HereLines(s Spec) []string {
 	}
 	add("reads and writes", files)
 	add("talks to the program serving the socket", sockets)
+	var items []string
+	for _, it := range g.Keyring {
+		items = append(items, shown(it.Selector())+keyringMatchCount(it))
+	}
+	add("reads from your keyring the items", items)
 	return out
 }
 
@@ -860,13 +914,32 @@ func buildNamespaced(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv,
 	binds = append(binds, sandbox.BindMount{Path: sock, RO: true})
 	env = append(env, sandbox.ProxyEnv(sandbox.ForwardAddr, cred)...)
 
-	if len(loopPorts) > 0 || len(g.Listen) > 0 {
+	if len(loopPorts) > 0 || len(g.Listen) > 0 || len(g.Keyring) > 0 {
 		dir, err := os.MkdirTemp(scratch.SystemTempDir(), "cpj")
 		if err != nil {
 			cleanup()
 			return nil, nil, fmt.Errorf("plugin %s: jail sockets: %w", s.Name, err)
 		}
 		closers = append(closers, func() { os.RemoveAll(dir) })
+		if len(g.Keyring) > 0 {
+			// The jail's only session bus: a Secret Service that serves the
+			// declared keyring items from the user's keyring, and nothing
+			// else (keyringbroker). The bus itself is never reachable.
+			path := filepath.Join(dir, "bus")
+			name := s.Name
+			kb, err := keyringbroker.Serve(path, g.Keyring, keyringbroker.Options{
+				Logf:  func(format string, args ...any) { log.Printf("plugin %s: "+format, append([]any{name}, args...)...) },
+				Dial:  keyringUpstream,
+				Allow: s.AllowKeyring,
+			})
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("plugin %s: keyring: %w", s.Name, err)
+			}
+			closers = append(closers, kb.Close)
+			binds = append(binds, sandbox.BindMount{Path: path, RO: true})
+			env = replaceEnv(env, "DBUS_SESSION_BUS_ADDRESS", keyringbroker.Address(path))
+		}
 		for i, port := range loopPorts {
 			path := filepath.Join(dir, "r"+strconv.Itoa(i))
 			stop, err := serveUnixToTCP(path, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
@@ -906,7 +979,12 @@ func buildSeatbelt(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv, e
 		return nil, nil, fmt.Errorf("plugin %s: cannot jail it here (no sandbox-exec) — set trust: full to run it unjailed", s.Name)
 	}
 	home, _ := jailHome()
-	p := &sandbox.PluginProfile{Keychain: g.Keychain, Home: home, LoopbackPorts: loopPorts}
+	// A declared keyring item is read from the Keychain, read-only: the
+	// sandbox cannot narrow it to the item, and macOS gates each item by
+	// the Keychain's own per-item access control.
+	// keychain: true (read-write) is for conductors before keyring items:
+	// a plugin that declares items reads the Keychain read-only.
+	p := &sandbox.PluginProfile{Keychain: g.Keychain && len(g.Keyring) == 0, KeychainRead: len(g.Keyring) > 0, Home: home, LoopbackPorts: loopPorts}
 	if s.BinPath != "" {
 		p.Exec = append(p.Exec, s.BinPath)
 		p.Read = append(p.Read, filepath.Dir(s.BinPath))

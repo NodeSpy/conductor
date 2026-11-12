@@ -163,6 +163,10 @@ type Spec struct {
 	// AllowEnv are the daemon environment variables the operator granted
 	// (allow_env); only those the plugin also declares are passed.
 	AllowEnv []string
+	// AllowKeyring are the withheld-by-default keyring items the config
+	// lets it read (keyringbroker.Sensitivity): "k=v, ..." entries, each
+	// naming the items that carry all of its pairs (keyringbroker.Allows).
+	AllowKeyring []string
 	// Shared reports whether this key's DEFAULT process should exist: true
 	// for every runtime/engine Spec (neither has more than one "instance"
 	// sharing a Manager key to begin with) and for a connector Spec with at
@@ -302,6 +306,7 @@ type (
 	Verb               = sdk.Verb
 	Event              = sdk.Event
 	Capabilities       = sdk.Capabilities
+	KeyringItem        = sdk.KeyringItem
 	Decl               = sdk.Decl
 	AuthSpec           = sdk.AuthSpec
 	InvokeRequest      = sdk.InvokeRequest

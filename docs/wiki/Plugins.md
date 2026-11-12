@@ -457,7 +457,143 @@ A plugin's `plugin.describe` carries a `capabilities` block:
 | `exec` | files and directories whose programs it (or a command) runs beyond `commands`: a tool's helper programs | same forms as `read`, e.g. `command:git/../../lib/git-core` |
 | `env` | environment variables it reads | `GH_TOKEN` |
 | `keychain` | (macOS) a login stored in the user's Keychain | `true` |
+| `keyring` | logins in your OS keyring that it (or a command it runs) reads, each named by the attributes it is stored under | `[{label: "gh login for github.com", attributes: {service: "gh:github.com"}}]` |
 | `expose_local` | (an exposure) connecting to the listeners conductor wires to it | `true` |
+
+#### Keyring logins
+
+A CLI such as `gh` or `glab` keeps your login in the OS keyring: on Linux
+the Secret Service (GNOME Keyring, KWallet, KeePassXC) over the desktop
+session's D-Bus bus, on macOS the Keychain. A plugin that runs such a CLI
+declares each login it reads under `keyring`:
+
+```json
+"keyring": [{"label": "gh login for github.com", "attributes": {"service": "gh:github.com"}}]
+```
+
+An item matches when it carries every declared attribute with the same
+value; `{"service": "gh:github.com"}` covers each account gh keeps for
+github.com. Each item names at least one attribute that says whose item it
+is: `service`, `server`, `host`, `domain`, `url`, `origin` or
+`application`. Attributes many programs' items share (`xdg:schema`,
+`protocol`, `port`, a user name) cannot make up a declaration on their own,
+since they would read all of those programs' items. No name or value may
+be blank. A label is a few words without control or formatting characters,
+and is always shown quoted. Each item is checked again as resolved, both
+when the plugin is launched and by the broker, so a stale or edited record
+can't serve a broader item.
+
+Some items unlock far more than a CLI's login: a browser's master key
+(`application=chrome`, `chromium`, `brave`, `firefox`, …, or the
+`chrome_libsecret_os_crypt_password_v2` schema), a network's secrets, the
+desktop's online accounts, another keyring's password, or a password
+manager's key. conductor withholds such an item even when a plugin declares
+it. Consent says what it is, the log says it was withheld, and it is
+granted only if the connector's entry names it by its attributes:
+
+```yaml
+connectors:
+  example:
+    use: example
+    allow_keyring: ["application=chrome"]
+```
+
+On Linux this is checked twice: against the declared item, and again by the
+broker against the attributes each item in your keyring really carries. An
+Electron app keeps its master key as Chromium does (`application=Slack`
+beside the `chrome_libsecret_os_crypt_password_v2` schema), so a plugin
+declaring `application=Slack` matches it without naming the schema. The
+broker leaves such an item out of every search and refuses its secret, and
+the log says it was withheld. The app's other items are still served. An
+`allow_keyring` entry names every item that carries all of its `k=v` pairs
+exactly (`application=Slack` names the app's master key as well).
+
+One attribute value per item may name the instance's own config or a
+declared variable, as a path or destination can:
+
+| In a value | Is |
+|---|---|
+| `${config:<field>}` | the connection field's value (a list gives an item per entry) |
+| `${env:<VAR>}` | the daemon's variable (one the plugin declares in `env`) |
+| `${host:config:<field>}`, `${host:env:<VAR>}` | that value's host: a URL's host name, `host:port`'s host |
+
+So `{"service": "gh:${host:config:api_base}"}` is gh's login for the host
+of the instance's `api_base`. A field or variable that is not set gives no
+item. A value with no host, or with a control character, fails the launch
+naming the field. As with `config:` destinations, the field may not be a
+secret one, and the variable may not look like a credential (`…TOKEN`,
+`…PASSWORD`, `…AUTH`, `…COOKIE`, `…SESSION`, `…_KEY`, `…_PAT`, …). A variable your entry's `allow_env` leaves out
+gives no item. You are shown the reference (`service="gh:<host of api_base
+from its config>"`). `conductor plugin show` lists the items it resolves to
+on this machine and how many items in your keyring each matches now. A
+conductor that does not resolve references is not sent such an item. You
+are shown what is enforced, every item with those attributes, and the
+plugin's label in its own words. Labels and values are the plugin's text and are
+always quoted, and so is an attribute name that isn't a plain name:
+`reads every item in your keyring with service="gh:github.com" ("gh login for github.com", in its words)`.
+
+- **Linux.** The jail never gets your session bus: it reaches every program
+  in your desktop session, and the Secret Service has no per-item access
+  control, so even a bus filtered to the Secret Service would expose every
+  secret you keep. Instead the jail's only session bus is a socket conductor
+  serves outside it (`DBUS_SESSION_BUS_ADDRESS` points there). It answers as
+  a read-only Secret Service whose only items are your keyring items that
+  match a declared one. Each lookup is made in your keyring at that moment
+  (a login gh refreshes is read as it is now), with the declared attributes
+  added to the CLI's search, so your keyring is never searched for anything
+  else. An item is checked against the declaration again before its secret is
+  read. Nothing can be written, deleted, locked or unlocked, and no other
+  service on the bus exists. Both lookups CLIs use work: go-keyring's
+  (`gh`, `glab`) and libsecret's (`secret-tool`, with its encrypted session).
+  Your keyring daemon serves your whole desktop, so the broker is bounded:
+  at most 8 connections at a time, a message at most 64 KiB, a search at
+  most 32 attributes of at most 1 KiB, the connection handshake within 10
+  seconds, an idle connection closed after 5 minutes, and every plugin's
+  calls to your keyring paced together (50 a second). A string your bus
+  would refuse never reaches it.
+- **macOS.** A declared item grants the Keychain read-only: the services
+  reading an item needs (not the ones that show you a dialog: an item whose
+  access control doesn't trust the program fails rather than prompting
+  you), and `~/Library/Keychains` to read, not write. `keychain: true`
+  grants it read-write, but only to a plugin that declares no items: a
+  plugin built with this SDK doesn't send `keychain` to a conductor that
+  grants items, and conductor ignores it beside items. macOS cannot confine a program to some Keychain items, so
+  the plugin may read any item the Keychain's own per-item access control
+  lets it read, and the consent line says so:
+  `reads your macOS Keychain, read-only, for every item with service="gh:github.com" ("gh login for github.com", in its words): …`.
+  Checked on macOS 26 against a throwaway keychain: under the profile,
+  `security find-generic-password` and the Security API read an item.
+  Adding, modifying and deleting items fails, through `security` and
+  through the API. The data-protection keychain refuses a plugin binary
+  anyway, because it lacks the entitlement the keychain asks for. Locking a
+  keychain is not refused: `security lock-keychain` and `SecKeychainLock`
+  lock it under the profile. They go through the same service
+  (`com.apple.SecurityServer`) as reads, and without it nothing can be read.
+  A plugin can therefore lock your keychains, so the next program to read
+  one asks you to unlock it. It cannot read or change anything by doing so.
+- **Locked keyring.** conductor never unlocks your keyring, and never shows
+  an unlock prompt, for a plugin. The CLI fails as it would with a locked
+  keyring, and the log says
+  `plugin github: its keyring item "gh login for github.com" is locked: unlock your keyring …`.
+  Unlock it by logging in to your desktop session, or in your keyring
+  manager.
+- **No keyring.** On a box with no session bus (a server, a container), or
+  no Secret Service on it, a lookup finds nothing, and a CLI that also keeps
+  its login in a file uses that, as it would without the jail (gh's
+  `hosts.yml` is read when the plugin declares its config dir). The log says
+  `plugin github: its keyring items (gh login for github.com) cannot be read: no session bus: …`.
+  conductor finds your session bus from `DBUS_SESSION_BUS_ADDRESS`, else
+  `$XDG_RUNTIME_DIR/bus`. It never launches a bus.
+- **Updates.** A release that adds a keyring item, or gives a declared
+  one a new label (the label is what you agreed to, so an item is covered
+  only by one you agreed to under the same label), asks for a new
+  permission, so it is held like any other (below) until you approve it. A build that
+  an older conductor installed with the item withheld is held the same way
+  on the first start after you upgrade conductor (below). On macOS, a
+  build that already has `keychain: true` is not held for an item, since
+  the Keychain grant already covers it. A conductor older than this does not
+  grant `keyring`, so the SDK withholds it from that conductor. When you
+  upgrade, the item is held for approval, not recorded silently.
 
 A `config:<field>` entry points at a field of the plugin's **own** connection
 config, and only because the plugin wrote that entry; it may not name a
@@ -600,8 +736,8 @@ build it would replace **before** it is installed:
   usual (live where it can be, see
   [Keeping plugins current](#keeping-plugins-current)).
 - **A different declaration** (anything added or removed: a destination,
-  path, command, exec path, variable, listen address, Keychain access or
-  OAuth host): the update is **held**. The running build keeps running
+  path, command, exec path, variable, listen address, Keychain access,
+  keyring item or OAuth host): the update is **held**. The running build keeps running
   exactly as it was, the same binary under the same install record, and its
   connectors keep working. The new build is fetched, verified and staged in
   a directory of its own, and never run until you approve it.
@@ -800,7 +936,13 @@ working setup):
   records them without asking: they name your own config and the listeners
   conductor wires from it. The log says
   `plugin github: recorded what … declares that the conductor which installed it could not record: …`.
-  Anything else the build declares beyond its record is held as above.
+  Anything else the build declares beyond its record is held as above. That
+  includes `keyring`, which the SDK withholds from every conductor that does
+  not grant it. Records those conductors wrote (`manifest_schema: 1` or `2`)
+  are described once on the first start, and a keyring item the build
+  declares is held for `conductor plugin approve`: it is a new permission,
+  not a reference to your config. A build that declares none is recorded
+  without a word.
 - **Rolling back.** A conductor without the jail does not read a version 2
   state file: it treats it as empty and installs every plugin again from its
   release (so the network must be up for that start), writing version 1.
@@ -1040,6 +1182,10 @@ through the real launch path.
 - **Environment.** A minimal allowlist (`PATH`, `HOME`, `USER`, `TERM`,
   `TZ`, locale, `TMPDIR` and a few more) plus the declared variables, never
   the daemon's credentials.
+- **Keyring.** No session bus. With `keyring` items declared, the only
+  bus is conductor's read-only Secret Service for those items
+  ([Keyring logins](#keyring-logins)). Without them there is none, even if
+  `DBUS_SESSION_BUS_ADDRESS` is declared in `env`.
 
 **macOS** (Seatbelt, `sandbox-exec`, deny by default):
 
@@ -1054,7 +1200,7 @@ through the real launch path.
 - **Network.** Only the egress proxy's loopback port, declared loopback
   ports, declared listen ports and declared unix sockets (a `write` path).
 - **Keychain.** The Keychain services and `~/Library/Keychains` only when
-  `keychain: true` is declared.
+  `keychain: true` (read-write) or a `keyring` item (read-only) is declared.
 
 Other operating systems have no plugin jail: a plugin there runs only with
 `trust: full`.

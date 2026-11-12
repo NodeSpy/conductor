@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -458,7 +459,8 @@ func describeBuild(ref config.PluginRef, rec Installed, opts Options) (Manifest,
 // build's config: and env: entries or its expose_local: they name the
 // operator's own config, and the listeners conductor wires from it, so a
 // conductor that never had the SDK withhold them recorded them, and they
-// are taken without a hold too.
+// are taken without a hold too. Keyring items (refsSchema:
+// HostInfo.GrantsKeyring) are not: each is a new permission, held below.
 //
 // The rest is compared like any update: what the build now declares beyond
 // the record is held for approval, and it runs jailed to the record
@@ -470,7 +472,7 @@ func describeBuild(ref config.PluginRef, rec Installed, opts Options) (Manifest,
 // be described keeps its old record (and is jailed to it), and the next
 // pass tries again.
 func adoptOlderRecord(ref config.PluginRef, rec Installed, state *InstallState, opts Options) (Installed, bool) {
-	if (!rec.Legacy && rec.ManifestSchema != jailSchema) || opts.Describe == nil || rec.Sha256 == "" || !binaryPresent(rec.Path) {
+	if (!rec.Legacy && (rec.ManifestSchema < jailSchema || rec.ManifestSchema >= manifestSchema)) || opts.Describe == nil || rec.Sha256 == "" || !binaryPresent(rec.Path) {
 		return rec, false
 	}
 	m, err := describeBuild(ref, rec, opts)
@@ -1089,6 +1091,14 @@ func sameEvents(a, b []Event) bool {
 // no install-state record to source one from).
 func ManifestFromDecl(decl *Decl) Manifest { return manifestFromDecl(decl) }
 
+func cloneKeyring(in []KeyringItem) []KeyringItem {
+	var out []KeyringItem
+	for _, it := range in {
+		out = append(out, KeyringItem{Label: it.Label, Attributes: maps.Clone(it.Attributes)})
+	}
+	return out
+}
+
 func manifestFromDecl(decl *Decl) Manifest {
 	if decl == nil {
 		return Manifest{}
@@ -1102,6 +1112,7 @@ func manifestFromDecl(decl *Decl) Manifest {
 		Commands: append([]string(nil), c.Commands...),
 		Exec:     append([]string(nil), c.Exec...),
 		Keychain: c.Keychain,
+		Keyring:  cloneKeyring(c.Keyring),
 		FS:       append([]string(nil), c.FS...),
 		Spawns:   c.Spawns || len(c.Commands) > 0,
 		Env:      append([]string(nil), c.Env...),
