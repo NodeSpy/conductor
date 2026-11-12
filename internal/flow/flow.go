@@ -241,6 +241,12 @@ type Runner struct {
 	// liveAgents are the agent steps this process is dispatching, by run
 	// record and step key (agentResume). A pointer for the same reason.
 	liveAgents *sync.Map
+	// InfraWait is told about a run that entered an infrastructure wait
+	// (infrawait.go): a step failed because its agent runtime did not work,
+	// and the run was kept at that step, recorded, instead of failing. The
+	// engine resumes it once the runtime works. nil: an infrastructure
+	// failure fails the run like any other.
+	InfraWait func(run store.WorkflowRun, t core.Trigger)
 }
 
 // New builds a Runner with defaults filled in.
@@ -578,6 +584,10 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		hist.finish("interrupted", "daemon shutdown", failedStepID(err), runCost)
 		return
 	}
+	if r.waitsOnInfra(&run, err) {
+		r.enterInfraWait(ctx, run, t, err, hist, runCost)
+		return
+	}
 	if errors.Is(err, dispatch.ErrTargetClosed) {
 		// The PR merged or closed while a fixer was on it, and conductor
 		// stopped it: the work is moot, not failed — no failure hooks, no
@@ -740,9 +750,13 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			// a REST secret in a URL query rides url.Error verbatim. Redact
 			// before the string reaches hooks' template scope or disk.
 			errStr := r.redactErr(err)
+			waits := checkpoint && r.waitsOnInfra(run, err)
 			switch {
 			case shuttingDown(ctx):
 				// Interrupted, not ended: the step re-runs on resume.
+			case waits:
+				// Waiting, not ended: the runtime failed, not the step,
+				// which re-runs once the runtime works (infrawait.go).
 			case errors.Is(err, dispatch.ErrTargetClosed):
 				// Moot, not failed: the step's stop hooks, not its fail hooks.
 				r.fireHooks(ctx, t, step.Hooks, "stop", "stopped", run.ID, id, data, nil, "step "+id)
@@ -752,6 +766,10 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			}
 			r.audit(map[string]any{"event": "step_error", "repo": t.Target.Repo,
 				"number": t.Target.Number, "kind": t.Kind, "step": id, "error": errStr})
+			if waits {
+				hist.stepDone(id, i, step, "waiting", nil, errStr, false)
+				return &stepError{id: id, err: err}
+			}
 			if r.continuesPast(t, step, id, outputs, err, errStr, data) {
 				r.Log("%s step %s failed (continue_on_error): %v", flowTag(t), id, err)
 				outputs = continuedOutputs(outputs, errStr)
@@ -2196,6 +2214,16 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// outcome including failure, before the error return below — a dispatch
 	// that failed is exactly the one an operator is looking for.
 	r.auditDispatch(t, id, ref, err)
+	if ie, ok := dispatch.AsInfra(err); ok {
+		// What the dispatch ran on, for the recovery's probe.
+		ie.Runtime, ie.Model, ie.Provider = r.runtimeOf(req.Step), model, provider
+		// The attempt never reached the agent, so its session holds nothing
+		// worth keeping — and a kept one keeps the target "live" to the
+		// level gate, which then skips every later event for it.
+		if ref.AgentID != "" && r.Agents.Archive != nil && !step.Background {
+			r.Agents.Archive(ref.AgentID)
+		}
+	}
 	switch {
 	case shadow || ref.Shadowed || ref.Skipped || ref.Queued || err != nil:
 		if r.Agents.CancelBudget != nil {

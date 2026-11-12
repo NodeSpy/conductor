@@ -155,6 +155,14 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		if r.prov != nil && wsID != "" && !kept {
 			_ = r.prov.RemoveWorktree(ctx, wsID)
 		}
+		// A launch refused for the machine's state (the sandbox's disk
+		// guard declares itself) is an infrastructure failure the run
+		// waits out. Any other launch failure — a controller conductor
+		// cannot drive, an agent that crashes as it starts — is no
+		// transient condition: it escalates as before.
+		if dispatch.IsInfra(err) {
+			return ref, dispatch.Infra("the agent runtime could not start a session: "+err.Error(), "", dispatch.Unrecoverable(err))
+		}
 		return ref, dispatch.Unrecoverable(err)
 	}
 	// The provisioned worktree is where gate checks run and the proposed
@@ -233,7 +241,25 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		// records the run "ok".
 		if te, ok := sess.(TurnErrorer); ok {
 			if terr := te.TurnErr(); terr != nil {
+				// An API/transport/auth error is the runtime failing, not
+				// the agent: the run waits for it instead of failing.
+				if ie := dispatch.ClassifyText(terr.Error()); ie != nil {
+					return ref, dispatch.Infra(ie.Reason, ref.Output, terr)
+				}
 				return ref, terr
+			}
+		}
+		// A turn whose process exited non-zero with no answer — nothing at
+		// all, or only the runtime's own error line — never reached the
+		// agent: an infrastructure failure, with what it printed kept.
+		if ee, ok := sess.(ExitErrer); ok {
+			// A process killed by a signal is not this case: the sandbox's
+			// detection or limits kill a launch on purpose, and that step
+			// must not be re-run as if the runtime had merely been down.
+			if xerr := ee.ExitErr(); xerr != nil && !strings.Contains(xerr.Error(), "signal:") {
+				if ie := dispatch.ClassifyReply(ref.Output); ie != nil {
+					return ref, dispatch.Infra(ie.Reason+" (exit: "+xerr.Error()+")", ref.Output, xerr)
+				}
 			}
 		}
 		// A controller runtime has no native --output-schema; conductor enforces

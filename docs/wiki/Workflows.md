@@ -122,7 +122,11 @@ A step is one of seven forms (all share `id` and `if`):
   Either way the contract is identical and always on — there is no config to
   disable or select it — so the step's outputs are populated the same; the
   only visible difference is the number of turns a slow/incapable provider
-  takes. This means an AUTO review judge can run directly on a bare-CLI
+  takes. A reply that is the runtime's own error (an API, connection or
+  auth error, or nothing at all) is not a miss: it spends no corrective turn,
+  and the run waits for the runtime (see
+  [When the runtime, not the step, fails](#when-the-runtime-not-the-step-fails)).
+  This means an AUTO review judge can run directly on a bare-CLI
   runtime and still hand structured outputs to the next step.
 - `type: command` — a host command (POSIX sh semantics; argv list). With
   `host:` it runs over SSH and outputs `{stdout, stderr, exit_code}`.
@@ -370,6 +374,57 @@ for how each does it. A runtime that can't resume, or a resume that fails, gets 
 agent in the kept workspace, told that an earlier agent's work is there. After
 3 resumes without the step finishing, it starts fresh. This holds for agent
 steps inside called workflows, parallel branches and `for_each` items too.
+
+### When the runtime, not the step, fails
+
+A step can fail without the agent ever answering. The agent runtime may not
+reach its model (a TLS, connection or auth failure, a rate limit, an
+overloaded API). It may print nothing, or the runtime's own error line
+instead of an answer. The sandbox may refuse to launch it because the disk
+is nearly full. Or a plugin may not answer a verb call before its deadline.
+(Any other launch failure, such as a controller conductor cannot drive or an
+agent that crashes as it starts, still escalates at once.) None of these is the step's fault: the same
+step run against a working runtime succeeds. Conductor tells them apart and
+recovers on its own:
+
+- **The reply is kept.** The run record and `conductor runs <id>` show what
+  the runtime printed, truncated and with credentials masked, e.g.
+  `agent runtime unavailable: API Error: Unable to connect to API: SSL
+  certificate verification failed`. A real `output_schema` miss keeps the
+  agent's reply too (`…; the agent replied: …`).
+- **No corrective retry is spent** on an error message. No prompt fixes a
+  broken connection.
+- **The run waits instead of failing.** Its record stays at the failed step,
+  marked waiting. Its execution is recorded `waiting`, with no `fail` hooks
+  and no failure notification, so what `start` put up (a pending status, a
+  👀) keeps saying pending, which it is. The failed attempt's agent is
+  released at once. While the run waits, its target counts as live to the
+  level gate, so a sweep re-emitting the event doesn't start a second run that
+  would fail the same way.
+- **Conductor probes the runtime** with one tiny turn on a backoff (30s, then
+  1m, 2m, 5m, then every 10m). One probe answers for every run waiting on the
+  same runtime and model. When it answers, every waiting run resumes from its
+  failed step with the earlier steps' outputs pinned, exactly like
+  `conductor runs retry`. The new execution record links back with
+  `retry_of`. A plugin that stopped answering has no cheap probe, so its
+  run's own step is re-run on the same backoff.
+- **A run whose target is gone is dropped, not resumed.** That covers a
+  target that closed or merged, a target that moved to a new revision since
+  the wait began, and a trigger removed from the config. Its `at: stop`
+  hooks fire and its execution is recorded `stopped`. The level gate opens
+  again, and events held for the target are re-delivered.
+- **It survives a restart.** Waiting runs are records; the next daemon life
+  probes and resumes them.
+- **A long outage is reported once.** After 30 minutes, one `escalate`
+  notification per runtime: `agents can't reach the model (runtime …): <reason>;
+  N run(s) waiting since …, will resume automatically`. It is not repeated
+  per run, per probe, or after a restart.
+- **It is bounded.** A failure that only looks like the runtime's (the probe
+  answers, the step fails the same way again) fails the run normally after 5
+  resumes.
+
+Audit events: `workflow_waiting`, `infra_probe`, `infra_wait_resumed`,
+`infra_wait_dropped`, `infra_outage_escalated`, `infra_recovered`.
 
 A trigger (or a reusable workflow) may also set a default `gate:` for every
 agent step it contains — the step's own `gate:` wins ([[Gates]]).

@@ -105,8 +105,9 @@ func (d *Dispatcher) dispatchOutputSchema(ctx context.Context, req Request, nati
 		// ordinary dispatch failure. Falling back here would spend a second
 		// run on a problem the fallback can't fix, and would wrongly teach
 		// the cache "native unsupported" from an outage rather than a real
-		// capability gap.
-		return res, err
+		// capability gap. One that names a transport/auth/capacity failure
+		// is an infrastructure failure: the run waits for the runtime.
+		return res, infraRunErr(err)
 	}
 	if obj, ok := tolerantExtractObject(res.Output); ok {
 		if verr := validateSchema(schema, obj); verr == nil {
@@ -167,7 +168,7 @@ func (d *Dispatcher) runSoftSchema(ctx context.Context, req Request, nativeArgv 
 
 	res, err := d.backend().RunAgent(ctx, RunAgentOptions{Args: argv, Cwd: cwd})
 	if err != nil {
-		return res, err
+		return res, infraRunErr(err)
 	}
 	if res.AgentID != "" {
 		ref.AgentID = res.AgentID
@@ -203,14 +204,49 @@ const softLogTail = 20
 // from the schema DOCUMENT echoed back in the `[User]` prompt line (a schema is
 // not an instance of itself, so it never validates).
 func (d *Dispatcher) captureSchemaAnswer(ctx context.Context, res RunAgentResult, schema map[string]any) (map[string]any, bool) {
+	obj, ok, _ := d.captureSchemaAnswerLog(ctx, res, schema)
+	return obj, ok
+}
+
+// captureSchemaAnswerLog is captureSchemaAnswer that also returns the log
+// tail it read, so a miss can say what the agent wrote instead.
+func (d *Dispatcher) captureSchemaAnswerLog(ctx context.Context, res RunAgentResult, schema map[string]any) (map[string]any, bool, string) {
 	if res.AgentID == "" {
-		return nil, false
+		return nil, false, ""
 	}
 	logText, err := d.backend().AgentLog(ctx, res.AgentID, softLogTail)
 	if err != nil || strings.TrimSpace(logText) == "" {
-		return nil, false
+		return nil, false, ""
 	}
-	return extractSchemaMatch(logText, schema)
+	obj, ok := extractSchemaMatch(logText, schema)
+	return obj, ok, logText
+}
+
+// logTailNote is the end of an agent's log as a schema failure carries it:
+// its last words, which follow the echoed prompt.
+func logTailNote(logText string) string {
+	s := strings.TrimSpace(logText)
+	if s == "" {
+		return ""
+	}
+	if len(s) > maxExcerpt {
+		s = s[len(s)-maxExcerpt:]
+	}
+	return "; the agent's log ends: " + Excerpt(s)
+}
+
+// infraRunErr turns a failed `paseo run` whose error names a transport, auth
+// or capacity failure into an infrastructure failure; any other error is
+// returned as it is.
+func infraRunErr(err error) error {
+	if err == nil || IsInfra(err) {
+		return err
+	}
+	if ie := ClassifyText(err.Error()); ie != nil {
+		ie.cause = err
+		return ie
+	}
+	return err
 }
 
 // correctiveRetry is the SOFT path's single bounded retry: told exactly why
@@ -226,7 +262,7 @@ func (d *Dispatcher) correctiveRetry(ctx context.Context, req Request, prevArgv 
 
 	res, err := d.backend().RunAgent(ctx, RunAgentOptions{Args: argv, Cwd: cwd})
 	if err != nil {
-		return res, err
+		return res, infraRunErr(err)
 	}
 	if res.AgentID != "" {
 		ref.AgentID = res.AgentID
@@ -235,12 +271,12 @@ func (d *Dispatcher) correctiveRetry(ctx context.Context, req Request, prevArgv 
 		res.Output = marshalCanonicalValue(out)
 		return res, nil
 	}
-	obj, ok := d.captureSchemaAnswer(ctx, res, schema)
+	obj, ok, logText := d.captureSchemaAnswerLog(ctx, res, schema)
 	if !ok {
 		if merr := classifyModelUnsupported(res.Output); merr != nil {
 			return res, merr
 		}
-		return res, fmt.Errorf("output_schema: soft fallback: response is not valid JSON matching the schema after one corrective retry")
+		return res, fmt.Errorf("output_schema: soft fallback: response is not valid JSON matching the schema after one corrective retry%s", logTailNote(logText))
 	}
 	res.Output = marshalCanonical(obj)
 	return res, nil
@@ -330,8 +366,14 @@ func EnforceSchema(ctx context.Context, schema map[string]any, basePrompt, answe
 	if obj, ok := extractSchemaMatch(answer, schema); ok {
 		return marshalCanonical(obj), nil
 	}
+	// A reply that is the runtime's own error message (or nothing at all) is
+	// not an answer the agent got wrong: no corrective prompt fixes a broken
+	// connection, so the corrective turn is not spent on it.
+	if ie := ClassifyReply(answer); ie != nil {
+		return "", ie
+	}
 	if retry == nil {
-		return "", fmt.Errorf("output_schema: response is not valid JSON matching the schema")
+		return "", fmt.Errorf("output_schema: response is not valid JSON matching the schema%s", replyNote(answer))
 	}
 	corrective := basePrompt + "\n\nYour previous reply was not valid JSON matching the schema. Return ONLY the JSON object."
 	text, err := retry(ctx, corrective)
@@ -341,7 +383,20 @@ func EnforceSchema(ctx context.Context, schema map[string]any, basePrompt, answe
 	if obj, ok := extractSchemaMatch(text, schema); ok {
 		return marshalCanonical(obj), nil
 	}
-	return "", fmt.Errorf("output_schema: response is not valid JSON matching the schema after one corrective retry")
+	if ie := ClassifyReply(text); ie != nil {
+		return "", ie
+	}
+	return "", fmt.Errorf("output_schema: response is not valid JSON matching the schema after one corrective retry%s", replyNote(text))
+}
+
+// replyNote is the excerpt of the agent's reply a schema failure carries, so
+// the run record says what the agent answered instead (e.g. a refusal, or an
+// error the classifier did not recognise) rather than only that it missed.
+func replyNote(reply string) string {
+	if ex := Excerpt(reply); ex != "" {
+		return "; the agent replied: " + ex
+	}
+	return "; the agent's reply was empty"
 }
 
 // stripOutputSchemaFlag removes a "--output-schema <value>" pair from argv, if

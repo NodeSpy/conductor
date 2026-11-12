@@ -1034,11 +1034,11 @@ func (c *Client) callFor(ctx context.Context, timeout time.Duration, method stri
 		// is wedged is a separate question, answered by a ping.
 		if errors.Is(cctx.Err(), context.DeadlineExceeded) {
 			if ctx.Err() == nil && c.missedDeadline(conn) {
-				return fmt.Errorf("plugin %s: %s did not answer within %s; %d calls in a row missed their deadline, so the plugin was restarted: %w", c.spec.Name, method, timeout, maxMissedDeadlines, err)
+				return c.unresponsive(fmt.Errorf("plugin %s: %s did not answer within %s; %d calls in a row missed their deadline, so the plugin was restarted: %w", c.spec.Name, method, timeout, maxMissedDeadlines, err))
 			}
 			c.checkLiveness(conn)
 			if ctx.Err() == nil {
-				return fmt.Errorf("plugin %s: %s did not answer within %s (the call was cancelled; the plugin keeps running): %w", c.spec.Name, method, timeout, err)
+				return c.unresponsive(fmt.Errorf("plugin %s: %s did not answer within %s (the call was cancelled; the plugin keeps running): %w", c.spec.Name, method, timeout, err))
 			}
 		}
 		return err
@@ -1061,9 +1061,26 @@ func (c *Client) callFor(ctx context.Context, timeout time.Duration, method stri
 	// deadline, which already reads fine on its own. The cause stays
 	// reachable via %w.
 	if cctx.Err() == nil {
-		return fmt.Errorf("plugin %s process exited or closed its connection: %w", c.spec.Name, err)
+		return c.unresponsive(fmt.Errorf("plugin %s process exited or closed its connection: %w", c.spec.Name, err))
 	}
 	return err
+}
+
+// UnresponsiveError is a call the plugin did not answer: it outlived its
+// deadline, or the process went away under it. That is the plugin's
+// infrastructure failing, not the call's answer — a run waits it out and
+// re-runs the step instead of failing (it satisfies dispatch.InfraMarker).
+type UnresponsiveError struct {
+	Plugin string
+	err    error
+}
+
+func (e *UnresponsiveError) Error() string          { return e.err.Error() }
+func (e *UnresponsiveError) Unwrap() error          { return e.err }
+func (e *UnresponsiveError) Infrastructure() string { return "plugin " + e.Plugin }
+
+func (c *Client) unresponsive(err error) error {
+	return &UnresponsiveError{Plugin: c.spec.Name, err: err}
 }
 
 // missedDeadline records that a call on conn outlived its own deadline and,

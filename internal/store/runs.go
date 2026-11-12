@@ -42,6 +42,42 @@ type WorkflowRun struct {
 	// step's run-scoped key, so a restart can resume a step's agent where it
 	// was. Owned by PutRunAgent/DeleteRunAgent: PutRun keeps what is stored.
 	Agents map[string]RunAgent `json:"agents,omitempty"`
+	// InfraWait marks a run that is WAITING for its agent runtime: a step
+	// failed for an infrastructure reason (the runtime could not reach its
+	// model, returned nothing, did not start), so the run was kept at that
+	// step instead of failing. The engine resumes it once the runtime works
+	// again, or drops it when its target is gone. nil: not waiting.
+	InfraWait *InfraWait `json:"infra_wait,omitempty"`
+	// InfraResumes counts the times this run was resumed after an
+	// infrastructure wait; the flow bounds it, so a failure that only looks
+	// like one cannot cycle forever.
+	InfraResumes int `json:"infra_resumes,omitempty"`
+}
+
+// InfraWait is why and since when a run waits for its agent runtime.
+type InfraWait struct {
+	Since  time.Time `json:"since"`
+	Reason string    `json:"reason"`
+	// Step is the step the run resumes from.
+	Step string `json:"step,omitempty"`
+	// Runtime / Model / Provider are what the failed step ran on: the
+	// recovery probes exactly that.
+	Runtime  string `json:"runtime,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	// Subject is what failed when it was not an agent runtime ("plugin
+	// <name>": a call it did not answer). Such a wait has no probe: the
+	// step itself is re-run on the backoff.
+	Subject string `json:"subject,omitempty"`
+	// History is the execution record the wait ended; the resumed execution
+	// links back to it.
+	History string `json:"history,omitempty"`
+	// Head is the target's revision when the wait began: a target that has
+	// moved on since is a superseded run, dropped instead of resumed.
+	Head string `json:"head,omitempty"`
+	// Escalated: the outage this run waits out was already reported, so a
+	// restart does not report it again.
+	Escalated bool `json:"escalated,omitempty"`
 }
 
 // RunAgent is one step's running agent: the session its runtime reported and
@@ -52,6 +88,8 @@ type RunAgent struct {
 	Workspace string `json:"workspace,omitempty"`
 	Cwd       string `json:"cwd,omitempty"`
 	CanResume bool   `json:"can_resume,omitempty"`
+	// DispatchID is the dispatch the agent ran under; its resume keeps it.
+	DispatchID string `json:"dispatch_id,omitempty"`
 	// Resumes counts the restarts this step's agent has been resumed through
 	// without finishing.
 	Resumes int       `json:"resumes,omitempty"`

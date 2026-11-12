@@ -1,6 +1,7 @@
 package agentsandbox
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -96,8 +97,15 @@ func TestDiskGuard(t *testing.T) {
 	withLimits(t, false)
 	f := newPolicyFixture(t)
 	f.pol.Limits = LimitSpec{DiskFreeBytes: 1 << 62}
-	if _, err := Wrap(f.pol, []string{"claude"}, f.deps); err == nil || !strings.Contains(err.Error(), "disk guard") {
+	_, err := Wrap(f.pol, []string{"claude"}, f.deps)
+	if err == nil || !strings.Contains(err.Error(), "disk guard") {
 		t.Fatalf("a launch on a full disk: %v", err)
+	}
+	// A full disk is the machine's state, not the step's: the refusal says
+	// so, and the run waits for space instead of failing.
+	var m interface{ Infrastructure() string }
+	if !errors.As(err, &m) {
+		t.Fatalf("the disk guard's refusal is not marked as an infrastructure failure: %#v", err)
 	}
 	f.pol.Limits = LimitSpec{DiskFreeBytes: 1 << 62, DiskOff: true}
 	if l, err := Wrap(f.pol, []string{"claude"}, f.deps); err != nil {

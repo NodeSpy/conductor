@@ -368,7 +368,7 @@ func (e *Engine) flowInFlight(t core.Trigger, act config.Action) bool {
 // see before that run starts an agent, or when its steps run elsewhere. A run
 // at another revision is not this event's: a new revision still re-engages.
 func (e *Engine) liveFor(ctx context.Context, t core.Trigger, act config.Action, key string) bool {
-	return e.hasLiveAgentFor(ctx, act, key, t.Kind) || e.flowInFlight(t, act)
+	return e.hasLiveAgentFor(ctx, act, key, t.Kind) || e.flowInFlight(t, act) || e.infraWaitingFor(t, act)
 }
 
 // coalesceQueued folds t into an identical flow+target run already waiting for

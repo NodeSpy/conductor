@@ -292,6 +292,14 @@ type TurnErrorer interface {
 	TurnErr() error
 }
 
+// ExitErrer is an optional Session capability: after Wait, the error the
+// turn's process exited with (nil for a clean exit, or a session with no
+// process of its own). The runner reads a non-zero exit with no answer as an
+// infrastructure failure — the runtime died, the agent never replied.
+type ExitErrer interface {
+	ExitErr() error
+}
+
 // CaptureSender is an optional Sender upgrade: deliver a follow-up AND wait
 // for the turn, returning its output. paseo implements it via
 // `paseo send --json`; sessions on senders without it emit follow-up turns
