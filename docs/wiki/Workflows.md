@@ -380,8 +380,10 @@ steps inside called workflows, parallel branches and `for_each` items too.
 A step can fail without the agent ever answering. The agent runtime may not
 reach its model (a TLS, connection or auth failure, a rate limit, an
 overloaded API). It may print nothing, or the runtime's own error line
-instead of an answer. Its launch may not start. Or a plugin may not answer a
-verb call before its deadline. None of these is the step's fault: the same
+instead of an answer. The sandbox may refuse to launch it because the disk
+is nearly full. Or a plugin may not answer a verb call before its deadline.
+(Any other launch failure, such as a controller conductor cannot drive or an
+agent that crashes as it starts, still escalates at once.) None of these is the step's fault: the same
 step run against a working runtime succeeds. Conductor tells them apart and
 recovers on its own:
 

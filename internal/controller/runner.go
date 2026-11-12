@@ -155,11 +155,15 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		if r.prov != nil && wsID != "" && !kept {
 			_ = r.prov.RemoveWorktree(ctx, wsID)
 		}
-		// The agent never started: that is the runtime (its launcher, the
-		// sandbox's disk guard, …), not the step — an infrastructure
-		// failure the run waits out. Still Unrecoverable underneath, which
-		// is what it reads as once the wait gives up on it.
-		return ref, dispatch.Infra("the agent runtime could not start a session: "+err.Error(), "", dispatch.Unrecoverable(err))
+		// A launch refused for the machine's state (the sandbox's disk
+		// guard declares itself) is an infrastructure failure the run
+		// waits out. Any other launch failure — a controller conductor
+		// cannot drive, an agent that crashes as it starts — is no
+		// transient condition: it escalates as before.
+		if dispatch.IsInfra(err) {
+			return ref, dispatch.Infra("the agent runtime could not start a session: "+err.Error(), "", dispatch.Unrecoverable(err))
+		}
+		return ref, dispatch.Unrecoverable(err)
 	}
 	// The provisioned worktree is where gate checks run and the proposed
 	// diff is read (#36 §16/§17); remote-host launches have no local path.

@@ -90,6 +90,14 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"auditDispatchDeferred", "as above, for a dispatch a gate held back"},
 		{"auditBudgetShed", "as above, for a dispatch a spend cap held back before it reached a runtime"},
 	},
+	"internal/flow/infrawait.go": {
+		{"enterInfraWait", "the workflow_waiting audit row; what the run waits on is keyed by its runtime and its record by run.ID"},
+		{"EndWaiting", "the workflow_stopped audit row"},
+	},
+	"internal/engine/infrawait.go": {
+		{"dropWaiter", "the infra_wait_dropped audit row; the drop decision reads the target through the connector's own head read and t.Key()"},
+		{"resumeWaiter", "the infra_wait_resumed audit row"},
+	},
 	"internal/flow/flow.go": {
 		{"flowTag", "a log prefix"},
 		{"auditRunCost", "an audit row"},

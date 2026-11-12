@@ -238,7 +238,7 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		return nil, fmt.Errorf("agentsandbox: launcher not wired")
 	}
 	if why := p.Limits.diskLow(p.Workspace, p.Home); why != "" {
-		return nil, fmt.Errorf("agentsandbox: not launching: %s", why)
+		return nil, &DiskLowError{Why: why}
 	}
 	goos := sandbox.CheckGOOS
 	argv = append([]string(nil), argv...)
@@ -601,3 +601,12 @@ func withCAEnv(env []string, bundle string) []string {
 	}
 	return out
 }
+
+// DiskLowError is a launch the disk guard refused: the disk is nearly full.
+// That is the machine's state, not the step's, so it declares itself an
+// infrastructure failure (dispatch.InfraMarker): the run waits for space
+// instead of failing.
+type DiskLowError struct{ Why string }
+
+func (e *DiskLowError) Error() string          { return "agentsandbox: not launching: " + e.Why }
+func (e *DiskLowError) Infrastructure() string { return "agent sandbox disk" }
