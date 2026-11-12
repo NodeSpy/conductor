@@ -197,7 +197,7 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 
 	rctx := flow.WithRetryOf(ctx, rec.ID)
 	caps := e.runCapsOf(t, act.FlowRef, spec)
-	if !e.acquireRunCaps(rctx, t, caps) {
+	if !e.acquireRunCaps(rctx, t, caps, nil) {
 		return "", fmt.Errorf("retry cancelled while waiting for a run slot")
 	}
 	if !e.acquire(rctx) {

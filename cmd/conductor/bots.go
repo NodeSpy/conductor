@@ -306,7 +306,7 @@ func (m *botStack) wrapStepOps(base func() *connector.StepOps) func() *connector
 				m.svc.WorkerDone(ctx, dispatchID, reason, out)
 			}
 			return inner.Done(ctx, dispatchID, agentID, reason, output, hasOutput)
-		}}
+		}, Progress: inner.Progress}
 	}
 }
 

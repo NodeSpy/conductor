@@ -294,6 +294,7 @@ to execute belongs here.
 | Field | Meaning |
 | --- | --- |
 | `name` | Pins the step's identity (see above). Shareable on purpose. |
+| `progress` | A short phrase saying what the step does (`"reading the CI results"`), shown in the run's progress report while it runs; on a `for_each` step, the label of its `3/8 done` count. A template over the step's scope. See [[Workflows]], "Progress". |
 | `id` | The step's slot: how outputs are addressed (`steps.<id>.outputs.*`), what a step reference points at, and — absent a `name:` — the structural half of its identity. |
 | `use` | The code ENGINE this step runs on (`run:` is the same key). See [[Code-Steps]]. |
 | `command` | The argv for `use: cli` and for `type: command` — a list of words, or one string split on whitespace (quotes honored, no shell). |
@@ -530,7 +531,7 @@ is ignored. With no `runtimes:` configured at all, every agent step runs on `pas
 distinction is invisible until you actually introduce a second runtime. See [[Runtimes]] for the
 full resolution order and runtime kinds ([[Controllers]] is the legacy name).
 
-## The step lifecycle: `step.done`, `step.bail`, `step.rerun`
+## The step lifecycle: `step.done`, `step.progress`, `step.bail`, `step.rerun`
 
 Every agent conductor launches carries the built-in `step` connector's verbs
 (the `handoff.*` spellings remain as deprecated aliases):
@@ -543,6 +544,14 @@ Every agent conductor launches carries the built-in `step` connector's verbs
   one atomic final action, validated against the schema at the verb boundary
   (an invalid value gets a precise, retryable error). Any JSON value shape the
   schema admits works — object, array, string, number, boolean, enum.
+- **`step.progress`** — what the agent is doing now, in a few words
+  (`conductor call step.progress --text "running the tests"`). Auto-granted
+  with `step.done`, it reaches only the caller's own run (the dispatch comes
+  from its token), costs nothing against `skill.max_calls`, and only updates
+  the run's progress report ([[Workflows]], "Progress"), which the trigger's
+  `at: progress` hooks may post somewhere. The text is cut to one line of 80
+  characters, with tracked secrets redacted. `ok: false` means nothing
+  reports this run's progress.
 - **`step.bail` / `step.rerun`** — `watch:` rule actions on the LIVE step (not
   agent-callable): tear it down when its reason is gone, or supersede it with a
   re-run on the current state.

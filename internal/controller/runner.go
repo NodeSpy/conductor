@@ -165,6 +165,7 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 
 	id := r.track(req, sess)
 	ref.AgentID = id
+	watchActivity(req, sess)
 
 	// A foreground dispatch (a workflow/flow step — as opposed to a background
 	// hand-off, which returns immediately so you can drive the live session)
@@ -194,6 +195,7 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 				}
 				id = r.track(req, sess)
 				ref.AgentID = id
+				watchActivity(req, sess)
 				if w, ok := sess.(waiter); ok {
 					w.Wait(ctx, timeout)
 				}
@@ -249,6 +251,17 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		}
 	}
 	return ref, nil
+}
+
+// watchActivity hands the dispatch's Activity to a session that can report
+// what its agent does (ActivityWatcher).
+func watchActivity(req dispatch.Request, sess Session) {
+	if req.Activity == nil {
+		return
+	}
+	if aw, ok := sess.(ActivityWatcher); ok {
+		aw.WatchActivity(req.Activity)
+	}
 }
 
 // track records an open session in the liveness tables and returns its id.

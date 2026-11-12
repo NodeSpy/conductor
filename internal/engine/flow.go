@@ -174,13 +174,16 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 		e.putQueuedRun(t)
 	}
 	e.queuedMu.Unlock()
+	// The run's progress report (flow/progress.go) begins now, so the wait
+	// for a slot is reported as it happens; the run carries it on.
+	prog := e.flow.NewProgress(ctx, t, spec)
 	go func() {
-		ok := e.acquireRunCaps(ctx, t, caps)
+		ok := e.acquireRunCaps(ctx, t, caps, prog)
 		if ok {
 			if e.sem != nil && e.sem.full() {
 				e.log("%s waiting for an agent slot (all %d busy)", tag(t), e.cfg.AgentCap())
 			}
-			if ok = e.acquireFor(ctx, t.Interactive()); !ok {
+			if ok = e.acquireWatch(ctx, t.Interactive(), func(ahead int) { prog.Queued("an agent slot", ahead) }); !ok {
 				releaseRunCaps(caps)
 			}
 		}
@@ -203,6 +206,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 			// Shutdown while waiting: a run under a cap keeps its queued
 			// record and is re-queued on restart; any other, the sweep
 			// re-derives.
+			prog.Close()
 			return
 		}
 		defer untrack()
@@ -215,11 +219,12 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 			// The target closed while this run waited for a slot: the work
 			// it was bound to is gone.
 			e.log("%s dropped — its target closed while waiting for an agent slot", tag(t))
+			prog.Close()
 			return
 		}
 		run := e.newFlowRun(t, spec, false)
 		defer e.recoverDispatch(ctx, t, run, "flow dispatch")
-		e.runFlow(ctx, run, t, spec, tidx, batch, untrack)
+		e.runFlow(flow.WithProgress(ctx, prog), run, t, spec, tidx, batch, untrack)
 	}()
 }
 
@@ -506,7 +511,7 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 	// Synchronous: the grouper's one-run-per-key guarantee depends on this
 	// call not returning until the run finishes.
 	caps := e.runCapsOf(t, ref, spec)
-	if !e.acquireRunCaps(ctx, t, caps) {
+	if !e.acquireRunCaps(ctx, t, caps, nil) {
 		return
 	}
 	defer releaseRunCaps(caps)
@@ -669,7 +674,7 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 		defer untrack()
 		// Wait for the slot here, not on the caller: resume runs at startup,
 		// and more persisted runs than slots must not stall it.
-		if !e.acquireRunCaps(ctx, t, caps) {
+		if !e.acquireRunCaps(ctx, t, caps, nil) {
 			releaseRunCaps(held)
 			return
 		}

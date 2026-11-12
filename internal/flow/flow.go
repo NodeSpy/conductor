@@ -241,6 +241,12 @@ type Runner struct {
 	// liveAgents are the agent steps this process is dispatching, by run
 	// record and step key (agentResume). A pointer for the same reason.
 	liveAgents *sync.Map
+	// RunURL is a recorded run's page on the dashboard, by its history id
+	// ({{.run.url}}); "" (or nil) when no dashboard is reachable to link.
+	RunURL func(historyID string) string
+	// progressTap maps a running agent step's dispatch id to its run's
+	// progress (step.progress, progress.go). A pointer for the same reason.
+	progressTap *sync.Map
 }
 
 // New builds a Runner with defaults filled in.
@@ -268,6 +274,9 @@ func New(r Runner) *Runner {
 	}
 	if r.liveAgents == nil {
 		r.liveAgents = &sync.Map{}
+	}
+	if r.progressTap == nil {
+		r.progressTap = &sync.Map{}
 	}
 	return &r
 }
@@ -462,6 +471,14 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	ctx = r.withRunBudget(ctx, t, spec)
 	ctx, runCost := withCostAcc(ctx)
 	ctx, hist := r.beginHistory(ctx, run, t, spec, shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow))
+	// The run's progress report (progress.go): the one begun while it waited
+	// for a slot, else a fresh one when the trigger has progress hooks.
+	prog := progressFrom(ctx)
+	if prog == nil {
+		prog = r.NewProgress(ctx, t, spec)
+		ctx = WithProgress(ctx, prog)
+	}
+	defer prog.Close()
 	// Register a cancel for this run so an operator can Stop it (cancel.go).
 	// Only a recorded run (its history id is non-empty) is stoppable — a
 	// shadow/dry run has nothing to stop and nothing to retry.
@@ -506,6 +523,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	if len(spec.Hooks) > 0 {
 		facts.startSHA, facts.state, facts.stopWords = r.readHead(ctx, t)
 		facts.headSHA = facts.startSHA
+		facts.url = r.runURL(hist.runHistoryID())
 	}
 	endFacts := func(phase, reason string) runFacts {
 		f := facts
@@ -560,11 +578,17 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 			}
 		}
 		if persisted && hasPhase(spec.Hooks, "start") {
-			r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", withRun(data, facts), nil, "workflow")
+			prog.hold(func() {
+				r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", withRun(data, facts), nil, "workflow")
+			})
 		}
 	}
+	prog.begin(ctx, t, withRun(r.progressBase(t, batch), facts), hist.runHistoryID())
 
 	err := r.runSteps(ctx, &run, t, spec.Steps, data, shadow, true)
+	// The report ends before any outcome hook fires, so no progress update
+	// lands after (and over) what the run's end says.
+	prog.Close()
 	if err != nil && shuttingDown(ctx) {
 		// The daemon is shutting down under the run. That is neither a
 		// failure nor a stop: the run record stays, and the run resumes on
@@ -732,6 +756,9 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			}
 		}
 
+		if prog := progressFrom(ctx); prog != nil {
+			prog.stepStart(id, r.stepLabel(step, data), step.Type == "agent")
+		}
 		r.fireHooks(ctx, t, step.Hooks, "start", "running", run.ID, id, data, nil, "step "+id)
 		hist.stepStart(id, i)
 		outputs, err := r.execStepWithFlow(ctx, t, step, id, slot, data, shadow)
@@ -1027,11 +1054,15 @@ func (r *Runner) execForEach(ctx context.Context, t core.Trigger, step config.St
 	results := make([]any, len(items))
 	concurrent := step.Parallel != nil && step.Parallel.Concurrent
 	var firstErr error
+	prog := progressFrom(ctx)
+	prog.fanOut(id, r.stepLabel(step, data), len(items))
+	defer prog.fanEnd(id)
 	runOne := func(i int) error {
 		local := cloneData(data)
 		local["item"] = items[i]
 		local["index"] = i
 		out, err := r.execWithRetry(ctx, t, step, fmt.Sprintf("%s[%d]", id, i), fmt.Sprintf("%s[%d]", slot, i), local, shadow)
+		prog.fanItemDone(id)
 		if err != nil {
 			return fmt.Errorf("item %d: %w", i, err)
 		}
@@ -1127,6 +1158,7 @@ func (r *Runner) execWithRetry(ctx context.Context, t core.Trigger, step config.
 			break
 		}
 		r.Log("%s step %s attempt %d failed: %v — retrying in %s", flowTag(t), id, attempt+1, err, backoff)
+		progressFrom(ctx).retrying(id, attempt+2, max+1)
 		if serr := r.sleep(ctx, backoff); serr != nil {
 			return nil, err
 		}
@@ -2186,6 +2218,12 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if inputs != nil {
 		req.Inputs, req.InputsDir = inputs.list, inputs.dir
 	}
+	if prog := progressFrom(ctx); prog != nil && !shadow && !step.Background {
+		// What the agent says it is doing (step.progress) and what its
+		// runtime sees it do feed the run's progress report.
+		req.Activity = func(s string) { prog.agentActivity(r.cleanPhrase(s)) }
+		defer r.tapProgress(req.DispatchID, prog)()
+	}
 	settled := r.agentResume(ctx, t, id, &req)
 	ref, err := r.Agents.Dispatch(ctx, req)
 	settled()
@@ -2279,6 +2317,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// before expect_push judges whether the work landed).
 	var unlanded error
 	if r.PushWork != nil && !shadow && !step.Background && !inGate(ctx) && ref.Workdir != "" {
+		progressFrom(ctx).lifecycle("pushing")
 		pushed, perr := r.PushWork(ctx, req.DispatchID)
 		switch {
 		case perr == nil:

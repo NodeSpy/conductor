@@ -154,6 +154,11 @@ func (s *Server) startBind(ctx context.Context, b config.DashboardBind) error {
 			b.Address, strings.Join(b.Hostnames, ", "))
 	} else {
 		s.deps.Log("dashboard: serving on %s://%s (%s)", t.Scheme(), b.Address, strings.Join(b.Hostnames, ", "))
+		if len(b.Hostnames) > 0 {
+			if _, port, perr := net.SplitHostPort(b.Address); perr == nil {
+				s.offerPublicURL("https://" + net.JoinHostPort(b.Hostnames[0], port))
+			}
+		}
 	}
 	return nil
 }

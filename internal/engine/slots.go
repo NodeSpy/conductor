@@ -32,7 +32,16 @@ type slots struct {
 	mu      sync.Mutex
 	cap     int
 	used    int
-	waiters [numPrios][]chan struct{}
+	waiters [numPrios][]*slotWaiter
+}
+
+// slotWaiter is one blocked acquire: closed ch hands it the slot; pos, when
+// set, is told how many waiters will be served before it, whenever that
+// changes.
+type slotWaiter struct {
+	ch    chan struct{}
+	pos   func(ahead int)
+	ahead int
 }
 
 func newSlots(cap int) *slots { return &slots{cap: cap} }
@@ -40,23 +49,34 @@ func newSlots(cap int) *slots { return &slots{cap: cap} }
 // acquire takes a slot, blocking until one is handed over. Returns false if ctx
 // is cancelled first (the slot, if handed over in the race, is passed on).
 func (s *slots) acquire(ctx context.Context, prio int) bool {
+	return s.acquireWatch(ctx, prio, nil)
+}
+
+// acquireWatch is acquire, telling pos (when set) how many waiters are ahead
+// of this one: once as it starts waiting, then whenever the queue moves.
+// pos is called without the lock held and must not block.
+func (s *slots) acquireWatch(ctx context.Context, prio int, pos func(ahead int)) bool {
 	s.mu.Lock()
 	if s.used < s.cap && s.queued() == 0 {
 		s.used++
 		s.mu.Unlock()
 		return true
 	}
-	ch := make(chan struct{})
-	s.waiters[prio] = append(s.waiters[prio], ch)
+	w := &slotWaiter{ch: make(chan struct{}), pos: pos, ahead: -1}
+	s.waiters[prio] = append(s.waiters[prio], w)
+	moved := s.positions()
 	s.mu.Unlock()
+	tell(moved)
 
 	select {
-	case <-ch:
+	case <-w.ch:
 		return true
 	case <-ctx.Done():
 		s.mu.Lock()
-		if s.remove(prio, ch) {
+		if s.remove(prio, w) {
+			moved := s.positions()
 			s.mu.Unlock()
+			tell(moved)
 			return false
 		}
 		s.mu.Unlock()
@@ -64,6 +84,35 @@ func (s *slots) acquire(ctx context.Context, prio int) bool {
 		// so give it to the next waiter rather than leak it.
 		s.release()
 		return false
+	}
+}
+
+// positionCall is one pending position report.
+type positionCall struct {
+	fn    func(int)
+	ahead int
+}
+
+// positions recomputes each watching waiter's place (s.mu held) and returns
+// the reports to make — only those whose place changed.
+func (s *slots) positions() []positionCall {
+	var out []positionCall
+	n := 0
+	for p := numPrios - 1; p >= 0; p-- {
+		for _, w := range s.waiters[p] {
+			if w.pos != nil && w.ahead != n {
+				w.ahead = n
+				out = append(out, positionCall{w.pos, n})
+			}
+			n++
+		}
+	}
+	return out
+}
+
+func tell(calls []positionCall) {
+	for _, c := range calls {
+		c.fn(c.ahead)
 	}
 }
 
@@ -82,17 +131,20 @@ func (s *slots) tryAcquire() bool {
 // stays constant across a hand-off).
 func (s *slots) release() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for p := numPrios - 1; p >= 0; p-- {
 		if q := s.waiters[p]; len(q) > 0 {
 			s.waiters[p] = q[1:]
-			close(q[0])
+			close(q[0].ch)
+			moved := s.positions()
+			s.mu.Unlock()
+			tell(moved)
 			return
 		}
 	}
 	if s.used > 0 {
 		s.used--
 	}
+	s.mu.Unlock()
 }
 
 func (s *slots) queued() int {
@@ -103,10 +155,10 @@ func (s *slots) queued() int {
 	return n
 }
 
-func (s *slots) remove(prio int, ch chan struct{}) bool {
+func (s *slots) remove(prio int, w *slotWaiter) bool {
 	q := s.waiters[prio]
 	for i, c := range q {
-		if c == ch {
+		if c == w {
 			s.waiters[prio] = append(q[:i:i], q[i+1:]...)
 			return true
 		}

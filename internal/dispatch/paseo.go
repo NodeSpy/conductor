@@ -385,6 +385,16 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// straight to the SOFT fallback (schema injected into the prompt, JSON
 	// extracted + validated conductor-side). Every other dispatch is
 	// byte-for-byte unchanged. See output_schema.go.
+	if req.Activity != nil && req.Wait {
+		// While `paseo run` blocks, watch the agent from the side and report
+		// what it is doing (activity.go).
+		if token, terr := newStepSessionToken(); terr == nil {
+			argv = append(argv, "--label", activityLabel+"="+token)
+			actx, stopWatch := context.WithCancel(ctx)
+			defer stopWatch()
+			go d.watchActivity(actx, token, req.Activity)
+		}
+	}
 	var res RunAgentResult
 	if len(req.Action.OutputSchema) > 0 && req.Wait {
 		res, err = d.dispatchOutputSchema(ctx, req, argv, prompt, cwd, &ref, credsDelivered)

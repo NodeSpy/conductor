@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -157,13 +158,20 @@ func (e *Engine) runCapsOf(t core.Trigger, ref string, spec config.TriggerSpec) 
 
 // acquireRunCaps takes a slot in each cap, in order, logging the wait when
 // one is full. false: ctx ended first, and nothing is held.
-func (e *Engine) acquireRunCaps(ctx context.Context, t core.Trigger, caps []runCap) bool {
+func (e *Engine) acquireRunCaps(ctx context.Context, t core.Trigger, caps []runCap, prog *flow.Progress) bool {
 	for i, c := range caps {
 		if used, n := c.slots.usage(); used >= n {
 			if c.serial != "" {
-				e.log("%s waiting on %s (held by %s)", tag(t), c.serial, orUnknown(e.runCaps.holder(c.serial)))
+				holder := e.runCaps.holder(c.serial)
+				e.log("%s waiting on %s (held by %s)", tag(t), c.serial, orUnknown(holder))
+				if holder != "" {
+					prog.Queued("a run of "+holder+" to finish", -1)
+				} else {
+					prog.Queued("another run to finish", -1)
+				}
 			} else {
 				e.log("%s waiting for a run slot (%d/%d running, %s)", tag(t), used, n, c.scope)
+				prog.Queued(fmt.Sprintf("a run slot (%d/%d running)", used, n), -1)
 			}
 		}
 		if !c.slots.acquire(ctx, prioNormal) {

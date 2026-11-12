@@ -288,6 +288,9 @@ func (s *Server) startTailnet(ctx context.Context, port int) error {
 	if !tlsOn {
 		scheme = "http"
 	}
+	if tlsOn {
+		s.offerPublicURL(fmt.Sprintf("https://%s:%d", status.MagicDNSName, port))
+	}
 	s.deps.Log("dashboard: serving on %s://%s:%d (tailnet; tls=%v, allow_tagged=%v, %d allow_users)",
 		scheme, status.MagicDNSName, port, tlsOn, tcfg.AllowTagged, len(tcfg.AllowUsers))
 	return nil

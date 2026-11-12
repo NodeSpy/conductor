@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/NodeSpy/conductor/internal/acp"
 	"github.com/NodeSpy/conductor/internal/config"
@@ -563,9 +564,32 @@ func (s *acpSession) Close(context.Context) error {
 type acpDelegate struct {
 	handler Handler
 
-	mu     sync.Mutex
-	stream chan<- Update
-	buf    strings.Builder
+	mu       sync.Mutex
+	stream   chan<- Update
+	buf      strings.Builder
+	activity func(string) // the dispatch's Activity, when it asks (WatchActivity)
+}
+
+// WatchActivity reports each tool call the agent starts, by its title, to fn
+// (ActivityWatcher).
+func (s *acpSession) WatchActivity(fn func(string)) {
+	s.del.mu.Lock()
+	s.del.activity = fn
+	s.del.mu.Unlock()
+}
+
+// toolPhrase is a tool call's title as one short line.
+func toolPhrase(title string) string {
+	title = strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return ' '
+		}
+		return r
+	}, title)), " ")
+	if r := []rune(title); len(r) > 80 {
+		title = string(r[:79]) + "…"
+	}
+	return title
 }
 
 func (d *acpDelegate) setStream(ch chan<- Update) {
@@ -596,7 +620,13 @@ func (d *acpDelegate) SessionUpdate(_ context.Context, n acp.SessionNotification
 		d.buf.WriteString(text)
 	}
 	ch := d.stream
+	activity := d.activity
 	d.mu.Unlock()
+	if tc := n.Update.ToolCall; activity != nil && tc != nil && n.Update.Kind == acp.UpdateToolCall {
+		if p := toolPhrase(tc.Title); p != "" {
+			activity(p)
+		}
+	}
 	if ch != nil && text != "" {
 		sendUpdate(ch, Update{Kind: UpdateOutput, Output: text})
 	}

@@ -204,9 +204,14 @@ func (e *Engine) startIdleTimer(parent, runCtx context.Context, t core.Trigger, 
 	}()
 }
 
-// StepOps exposes step.done (wired in main via connector.SetStepOps).
+// StepOps exposes step.done and step.progress (wired in main via
+// connector.SetStepOps).
 func (e *Engine) StepOps() *connector.StepOps {
-	return &connector.StepOps{Done: e.doneSignal}
+	so := &connector.StepOps{Done: e.doneSignal}
+	if e.flow != nil {
+		so.Progress = e.flow.ReportProgress
+	}
+	return so
 }
 
 // doneSignal is THE shared done handler behind step.done and handoff.done:

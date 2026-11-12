@@ -663,6 +663,10 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer stack.Close() // stop plugin subprocesses on daemon shutdown (#54)
+	// {{.run.url}}: a run's page on the dashboard, once it serves somewhere
+	// a person can reach (set below, when it starts).
+	var runLinks atomic.Pointer[dashboard.Server]
+	stack.Runner.RunURL = func(id string) string { return runLinks.Load().RunURL(id) }
 
 	igs := stackIntegrations(stack)
 	retry := cfg.DispatchRetry()
@@ -1065,8 +1069,14 @@ func cmdRun(args []string) error {
 						}
 						// The per-session call cap (skill.max_calls) charges
 						// BEFORE dispatch — a capped session runs nothing.
-						if err := sb.ChargeVerbCall(token, asPeer(peer)); err != nil {
-							return nil, err
+						// step.progress is exempt: a progress note only
+						// replaces the run's in-memory report, and an agent
+						// that reports often must not spend the budget its
+						// real verbs need.
+						if uses != dispatch.StepProgressVerb {
+							if err := sb.ChargeVerbCall(token, asPeer(peer)); err != nil {
+								return nil, err
+							}
 						}
 						return runner.RunSkillVerb(vctx, flow.SkillIdentity{
 							Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
@@ -1231,6 +1241,8 @@ func cmdRun(args []string) error {
 		})
 		if err := dash.Start(ctx); err != nil {
 			logf("dashboard: not started: %v", err)
+		} else {
+			runLinks.Store(dash)
 		}
 		dashboardMgr = dash.AuthManager()
 	}

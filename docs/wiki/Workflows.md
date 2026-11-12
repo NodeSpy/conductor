@@ -199,9 +199,10 @@ values) and work bare or as a comparison's left side:
 `hooks:` entries are verb action units `{at, uses, options, if, id}` at
 `start` (on match, before steps, synchronous — before any worktree is
 provisioned or agent launched), `done` (steps succeeded), `fail` (the run
-failed, however it failed — see [Failure paths](#failure-paths)), or `stop`
+failed, however it failed — see [Failure paths](#failure-paths)), `stop`
 (the run's target went away under it — see [Stops and
-shutdowns](#stops-and-shutdowns)); multiple per phase run in order. **Hooks nest on steps
+shutdowns](#stops-and-shutdowns)), or `progress` (while the run waits and
+works — see [Progress](#progress)); multiple per phase run in order. **Hooks nest on steps
 too** — the same unit under a step's own `hooks:` fires around that step, so
 a step can announce itself, post its result the moment it finishes, or handle
 its own failure. A failing step fires its own `at: fail` hooks, then (unless
@@ -219,8 +220,8 @@ lifecycle moment, so a handler parses the same shape regardless of phase:
 
 | field | when | meaning |
 | --- | --- | --- |
-| `hook.phase` | all | `start` \| `done` \| `fail` \| `stop` |
-| `hook.status` | all | `running` \| `ok` \| `failed` \| `stopped` |
+| `hook.phase` | all | `start` \| `done` \| `fail` \| `stop` \| `progress` |
+| `hook.status` | all | `running` \| `ok` \| `failed` \| `stopped`; at `progress`, the report's state |
 | `hook.run_id` | all | the workflow run id |
 | `hook.step` | step-level | the step the hook is scoped to |
 | `hook.failure` | `fail` | the failure sub-object (below) |
@@ -260,6 +261,7 @@ what the run did to its target:
 | `run.head_short` | `head_sha`'s first 7 characters |
 | `run.pushed` | the head moved during the run (both ends known and different) |
 | `run.reason` | at `fail`: a short, public-safe phrase. It is `the agent couldn't be started`, `the change was never pushed`, `timed out`, `step "<id>" failed`, `parked after repeated tries — needs a human or new commits`, `internal error`, or `the run failed`, and never the error text. At `stop`: `the PR merged` or `the PR closed`. `""` otherwise |
+| `run.url` | the run's page on the dashboard, for a recorded run when the dashboard has an address a person can reach (see [[Dashboard]], "Links to a run"); `""` otherwise, and while the run is still queued (it has no page yet) |
 
 A head is the target's current revision as its connector knows it (a pull
 request's head commit on github). It's read only when the trigger declares a
@@ -323,6 +325,83 @@ Two endings are not failures:
   step `timeout:`, a timed one-shot run) timed out, and that's a failure.
 
 `stop` hooks are best-effort, like every hook.
+
+### Progress
+
+`at: progress` hooks report a run while it waits and works, so whoever
+looks at its target can see what is happening now and for how long. They
+belong to a trigger (a step's `hooks:` refuses them) and see what an
+`at: start` hook sees, plus `progress`:
+
+| field | meaning |
+| --- | --- |
+| `progress.state` | `queued` (waiting to start), `running`, `retrying`, or `waiting` |
+| `progress.text` | one line saying what is happening now (see below) |
+| `progress.step` | the step running (a called workflow's own step, inside one) |
+| `progress.source` | where `text` came from: `lifecycle`, `agent`, or `activity` |
+| `progress.note` | the agent's last `step.progress` note |
+| `progress.activity` | the last thing the agent's runtime saw it do, such as `editing main.go` |
+| `progress.elapsed` | time since the run was queued or started: `<1m`, `12m`, `1h05m` |
+| `progress.since` | when that was (RFC 3339) |
+| `progress.ahead` | while queued for an agent slot: runs that go first (`0` = next, `-1` = not counted) |
+| `progress.done`, `progress.total` | a `for_each` step's finished and total items (`0` when none is running) |
+| `progress.attempt`, `progress.attempts` | a retrying step's attempt and its limit |
+
+and the [run facts](#run-facts), `run.url` among them.
+
+`progress.text` comes from, in order:
+
+- **the queue**: `queued — waiting for an agent slot (2 ahead)`, `queued —
+  waiting for a run of <trigger> to finish` (a `serialize:` key held by
+  another run), `queued — waiting for a run slot (1/1 running)`;
+- **the run**: `starting`, each step as it starts (its `progress:` phrase,
+  else `running step <id>`, or `agent working (step <id>)` for an agent
+  step), `<label>: 9/18 done` while a `for_each` step runs (its `progress:`
+  phrase, else its id, as the label), `retrying <step> (attempt 2 of 3)`,
+  and `pushing` (the end-of-step push);
+- **the agent**: what it says through the `step.progress` verb (auto-granted
+  to every agent conductor launches, like `step.done`), as one cleaned line
+  of up to 80 characters;
+- **its runtime**: the agent's tool calls, when the runtime can see them
+  (`editing adapter.go`, `running go test ./...`). An agent's own note
+  outranks these for two minutes. A `for_each` count outranks both while it
+  runs.
+
+A step names what it does with `progress:`, a template over its scope:
+
+```yaml
+- id: ci
+  uses: gh.check_failures
+  progress: "reading the CI results"
+```
+
+**Pacing.** A progress hook fires when its rendered options change, at most
+once per `every:` (default `30s`, never under `10s`), and at once when the
+run's state changes (queued → running, say). `elapsed` moves in whole
+minutes, so a quiet run re-posts once a minute at most, which is enough to
+show it is alive. The report stops before the run's `done`, `fail` or `stop`
+hooks fire, so a progress update never lands after (and over) the outcome.
+A run interrupted by a shutdown fires nothing more; it reports again when it
+resumes.
+
+```yaml
+hooks:
+  - { at: start, uses: gh.set_status,
+      options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: pending,
+                 context: "{{.me.login}} / comment", description: "replying",
+                 target_url: "{{.run.url}}" } }
+  - { at: progress, every: 30s, uses: gh.set_status,
+      options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: pending,
+                 context: "{{.me.login}} / comment",
+                 description: "{{.progress.text}} · {{.progress.elapsed}}",
+                 target_url: "{{.run.url}}" } }
+```
+
+Progress hooks are best-effort, like every hook. A queued run's report
+reads the target's head as it starts waiting, so `{{.run.start_sha}}` is
+set while queued; the run's own start reads it again. If the head moved in
+between (another run pushed), what was posted on the old head while queued
+stays there; the run reports on its new start head from then on.
 
 ## Control flow
 

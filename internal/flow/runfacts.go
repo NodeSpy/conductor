@@ -23,6 +23,9 @@ import (
 //	run.pushed      the head moved during the run (both ends known, unequal)
 //	run.reason      at fail / stop: a short, public-safe phrase for why
 //	                (never the error text); "" otherwise
+//	run.url         the run's page on the dashboard, when the run is
+//	                recorded and the dashboard has an address a person can
+//	                reach (Runner.RunURL); "" otherwise
 //
 // Heads come from the event connector's HeadReader (a PR's head commit); a
 // target with none, or a read that fails, leaves the shas "" and pushed
@@ -30,6 +33,8 @@ import (
 // so a hookless trigger costs nothing.
 type runFacts struct {
 	startSHA, headSHA, reason string
+	// url is the run's page on the dashboard ("" without one): run.url.
+	url string
 	// state is the target's state as of the last head read (open | closed |
 	// accepted | ""), and stopWords the connector's phrase for a stop in it.
 	state, stopWords string
@@ -42,6 +47,7 @@ func (f runFacts) data() map[string]any {
 		"head_short": shortSHA(f.headSHA),
 		"pushed":     f.startSHA != "" && f.headSHA != "" && f.headSHA != f.startSHA,
 		"reason":     f.reason,
+		"url":        f.url,
 	}
 }
 
