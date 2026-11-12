@@ -83,7 +83,7 @@ triggers:
     hooks:
       - { at: progress, uses: eg.post, options: { text: "P {{.progress.state}}: {{.progress.text}}" } }
     steps:
-      - { id: p, uses: eg.post, options: { text: "ran {{.msg}}" } }
+      - { id: p, uses: eg.post, options: { text: "{{.msg}}" } }
 `
 
 // A run that waits for an agent slot says so on its progress hook at once,
@@ -94,12 +94,16 @@ func TestQueuedRunReportsItsWait(t *testing.T) {
 	gateConnMu.Lock()
 	gateConnCalls = nil
 	gateConnMu.Unlock()
+	// The first run's step ("block") stays open until the test lets it go, so
+	// the run is still working when its running report is due: a run that
+	// has already finished reports nothing more, by design.
+	hold := setGateBlock(t)
 	if !eng.acquire(context.Background()) { // a long fixer holds the only slot
 		t.Fatal("acquire")
 	}
 	first := flowTrigger("w1")
 	first.Target.Number = 101
-	first.Context = map[string]any{"msg": "w1"}
+	first.Context = map[string]any{"msg": "block"}
 	eng.process(context.Background(), first)
 	waitCond(t, "the first run's queued report", func() bool {
 		return gateCallsWith("P queued: queued — waiting for an agent slot (next)") == 1
@@ -111,13 +115,14 @@ func TestQueuedRunReportsItsWait(t *testing.T) {
 	waitCond(t, "the second run's queued report", func() bool {
 		return gateCallsWith("P queued: queued — waiting for an agent slot (1 ahead)") == 1
 	})
-	if gateCallsWith("ran w1") != 0 {
+	if gateCallsWith("block") != 0 {
 		t.Fatal("ran while the cap was full")
 	}
 	eng.release()
-	waitCond(t, "the first run", func() bool { return gateCallsWith("ran w1") == 1 })
+	waitCond(t, "the first run", func() bool { return gateCallsWith("block") == 1 })
 	waitCond(t, "the first run's running report", func() bool {
 		return gateCallsWith("P running: starting") >= 1 || gateCallsWith("P running: running step p") >= 1
 	})
-	waitCond(t, "the second run", func() bool { return gateCallsWith("ran w2") == 1 })
+	close(hold)
+	waitCond(t, "the second run", func() bool { return gateCallsWith("w2") == 1 })
 }
