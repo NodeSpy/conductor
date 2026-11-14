@@ -136,6 +136,12 @@ type Config struct {
 	// temporary data that can be large (plugin call staging, clones, sandbox
 	// jails, the TMPDIR of what it launches). See ScratchDir.
 	Scratch ScratchConfig `yaml:"scratch,omitempty"`
+	// Commands names the program file for a command a plugin declares
+	// (`commands: { gh: /opt/homebrew/Cellar/gh/2.101.0/bin/gh }`), for
+	// every plugin that declares it. It wins over finding the command on
+	// PATH; see CommandPaths and docs/wiki/Plugins.md "Where a declared
+	// command comes from".
+	Commands map[string]string `yaml:"commands,omitempty" path:"local"`
 	// Code is the OPTIONAL top-level `code:` block tuning the default
 	// isolation a local cli/host/go code step gets when it declares none of
 	// its own. See CodeConfig.
@@ -1414,6 +1420,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateInspectedEgress(); err != nil {
+		return err
+	}
+	if err := c.validateCommands(); err != nil {
 		return err
 	}
 	if err := validateCodeConfig(c.Code); err != nil {

@@ -85,8 +85,8 @@ func TestPathFieldsTagged(t *testing.T) {
 		if f.tag != "" && !valid[f.tag] {
 			t.Errorf("%s: path:%q is not one of local, remote, step, ref, -", f.id, f.tag)
 		}
-		if f.tag == pathLocal && f.kind != reflect.String && f.kind != reflect.Slice {
-			t.Errorf("%s: path:\"local\" on a %s; it applies to a string or []string", f.id, f.kind)
+		if f.tag == pathLocal && f.kind != reflect.String && f.kind != reflect.Slice && f.kind != reflect.Map {
+			t.Errorf("%s: path:\"local\" on a %s; it applies to a string, []string or map[string]string", f.id, f.kind)
 		}
 		if f.kind != reflect.String && f.kind != reflect.Slice {
 			continue
@@ -114,6 +114,7 @@ var pathCases = []struct {
 	{"Store.AuditLog", "store: { audit_log: ~/st/audit.jsonl }", func(c *Config) string { return c.Store.AuditLog }},
 	{"MemoryConfig.Dir", "memory: { dir: ~/mem }", func(c *Config) string { return c.Memory.Dir }},
 	{"ScratchConfig.Dir", "scratch: { dir: ~/scratch }", func(c *Config) string { return c.Scratch.Dir }},
+	{"Config.Commands", "commands: { gh: ~/bin/gh }", func(c *Config) string { return c.Commands["gh"] }},
 	{"SandboxConfig.StateDir", "sandbox: { state_dir: ~/agent-state }", func(c *Config) string { return c.Sandbox.StateDir }},
 	{"SandboxPush.SigningKey", "sandbox: { push: { signing_key: ~/.ssh/id_ed25519 } }", func(c *Config) string { return c.Sandbox.Push.SigningKey }},
 	{"DashboardBind.CertFile", "dashboard: { bind: [ { cert_file: ~/tls/c.pem } ] }", func(c *Config) string { return c.Dashboard.Bind[0].CertFile }},

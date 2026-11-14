@@ -169,6 +169,7 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 	if s.Kind == KindConnector {
 		s.Instances = ref.Instances
 	}
+	s.Commands = ref.Commands
 	if s.Kind == KindConnector && !shared {
 		// No shared process exists for this key (every configured instance
 		// isolates): the type-level Spec gets no grant of its own (the

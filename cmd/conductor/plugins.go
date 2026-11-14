@@ -1073,7 +1073,7 @@ func cmdPluginAdd(args []string) error {
 		instance = u.Name
 	}
 
-	pr := config.PluginRef{Name: u.Name, Instance: instance, Use: u}
+	pr := config.PluginRef{Name: u.Name, Instance: instance, Use: u, Commands: cfg.CommandPaths()}
 	// Finding 6: cross-process advisory lock, held across this whole
 	// load-mutate-save cycle — see reconcilePlugins' identical comment.
 	lock, err := plugin.LockInstallStateCLI(plugin.InstallDir(), pluginLockCLITimeout, lockWaitNotice)
@@ -1121,7 +1121,7 @@ func cmdPluginAdd(args []string) error {
 	for _, l := range manifest.Lines() {
 		fmt.Printf("  %s\n", l)
 	}
-	for _, l := range plugin.HereLines(plugin.Spec{Name: u.Name, Manifest: manifest}) {
+	for _, l := range plugin.HereLines(plugin.Spec{Name: u.Name, Manifest: manifest, Commands: cfg.CommandPaths()}) {
 		fmt.Printf("  %s\n", l)
 	}
 	fmt.Println("Anything else is denied. An update that declares the same installs as usual; one that changes this waits for `conductor plugin approve`.")
@@ -1424,7 +1424,7 @@ func cmdPluginDecline(args []string) error {
 // for more than the installed build (or, with no argument, the list of what
 // is waiting).
 func cmdPluginApprove(args []string) error {
-	_, rest, err := loadConfigRest(args)
+	cfg, rest, err := loadConfigRest(args)
 	if err != nil {
 		return err
 	}
@@ -1455,7 +1455,7 @@ func cmdPluginApprove(args []string) error {
 			for _, l := range p.Manifest.Lines() {
 				fmt.Printf("    %s\n", l)
 			}
-			for _, l := range plugin.HereLines(plugin.Spec{Name: p.Name, Manifest: p.Manifest}) {
+			for _, l := range plugin.HereLines(plugin.Spec{Name: p.Name, Manifest: p.Manifest, Commands: cfg.CommandPaths()}) {
 				fmt.Printf("    %s\n", l)
 			}
 		}

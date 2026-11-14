@@ -67,20 +67,25 @@ func pluginGrant(s Spec) (sdk.Grant, error) {
 		return os.LookupEnv(n)
 	}
 	g, err := caps.Resolve(sdk.ResolveEnv{Home: home, Getenv: getenv, Conns: s.Conns, Command: func(n string) (string, bool) {
-		p, err := spawnLookPath(n)
-		if err != nil {
-			return "", false
+		// Where the command is, as findCommands finds it: the program file
+		// the config names, else PATH's. This only anchors a
+		// "command:tool/…" path; the path it gives is checked as declared
+		// (grantedPaths), and the command itself by findCommands.
+		p, named := s.Commands[n]
+		if !named {
+			var err error
+			if p, err = spawnLookPath(n); err != nil {
+				return "", false
+			}
 		}
 		real, err := filepath.EvalSymlinks(p)
 		if err != nil {
 			return "", false
 		}
-		if spawnGOOS == "darwin" {
-			// A /usr/bin developer-tool stub: "command:tool/…" is relative
-			// to the tool it runs (findCommands).
-			if dev, err := xcrunFind(n); err == nil && dev != "" && dev != real {
-				return dev, true
-			}
+		// A /usr/bin developer-tool stub: "command:tool/…" is relative to
+		// the tool it runs (findCommands).
+		if dev, ok := developerTool(jailCommand{name: n, path: p, real: real, source: fromPATH}); ok && !named {
+			return dev, true
 		}
 		return real, true
 	}})
@@ -179,11 +184,11 @@ func HereLines(s Spec) []string {
 	}
 	var cmds []string
 	for _, c := range found {
+		at := c.path
 		if c.path != c.real {
-			cmds = append(cmds, c.path+" ("+c.real+")")
-		} else {
-			cmds = append(cmds, c.path)
+			at += " → " + c.real
 		}
+		cmds = append(cmds, at+" ("+c.source+")")
 	}
 	add("runs", cmds)
 	add("runs programs in", g.Exec)
@@ -249,23 +254,26 @@ type jailCommand struct {
 	name string
 	path string // where the daemon's PATH finds it, directories resolved
 	real string // the file it resolves to
+	// source is where it was found (locateCommand: fromConfig, fromPATH,
+	// fromHomebrew), or what it is part of (an interpreter, a developer
+	// tool), for `plugin show`.
+	source string
 }
 
-// findCommands locates the declared commands on the daemon's PATH, with the
-// #! interpreter of one that is a script. One that is not installed is left
-// out (the plugin's own call fails, naming it) and logged. One found is
+// findCommands locates the declared commands (locateCommand: the config's
+// `commands:`, PATH, the package manager that linked one onto PATH), with
+// the #! interpreter of one that is a script. One that is not installed is
+// left out (the plugin's own call fails, naming it) and logged. One found is
 // checked like a declared path (grantChecks.program): a command or an
 // interpreter that is refused fails the launch, naming it and the fix.
 func findCommands(s Spec, gc *grantChecks, names []string) ([]jailCommand, error) {
 	var out []jailCommand
 	for _, n := range names {
-		p, err := spawnLookPath(n)
-		if err != nil {
+		c, p, err := locateCommand(s, gc, n)
+		if errors.Is(err, errNotInstalled) {
 			log.Printf("plugin %s: declared command %s is not installed here", s.Name, n)
 			continue
 		}
-		p, _ = filepath.Abs(p)
-		c, err := gc.program(n, p)
 		if err != nil {
 			return nil, fmt.Errorf("plugin %s: command %s (%s) refused: %w", s.Name, n, p, err)
 		}
@@ -277,22 +285,40 @@ func findCommands(s Spec, gc *grantChecks, names []string) ([]jailCommand, error
 			if err != nil {
 				return nil, fmt.Errorf("plugin %s: command %s (%s) refused: its #! interpreter %s: %w", s.Name, n, c.real, ip, err)
 			}
+			ic.source = "#! of " + n
 			out = append(out, ic)
 		}
-		if spawnGOOS == "darwin" {
+		if dev, ok := developerTool(c); ok {
 			// A macOS /usr/bin developer tool is a stub that runs the real
 			// one from the active developer directory: the stub is what the
 			// plugin declared, the tool it runs is part of it.
-			if dev, err := xcrunFind(n); err == nil && dev != "" && dev != c.real {
-				dc, err := gc.program(n, dev)
-				if err != nil {
-					return nil, fmt.Errorf("plugin %s: command %s (%s) refused: the developer tool it runs, %s: %w", s.Name, n, p, dev, err)
-				}
-				out = append(out, dc)
+			dc, err := gc.program(n, dev)
+			if err != nil {
+				return nil, fmt.Errorf("plugin %s: command %s (%s) refused: the developer tool it runs, %s: %w", s.Name, n, p, dev, err)
 			}
+			dc.source = "developer tool " + n + " runs"
+			out = append(out, dc)
 		}
 	}
 	return out, nil
+}
+
+// developerTool is the tool a macOS /usr/bin developer-tool stub found on
+// PATH runs (`xcrun --find`), when it is another file. Only a /usr/bin hit
+// is asked: for any other command xcrun answers from PATH, naming the
+// command itself (or, for a symlink conductor did not follow, the link).
+func developerTool(c jailCommand) (string, bool) {
+	if spawnGOOS != "darwin" || c.source != fromPATH || filepath.Dir(c.path) != "/usr/bin" {
+		return "", false
+	}
+	dev, err := xcrunFind(c.name)
+	if err != nil || dev == "" {
+		return "", false
+	}
+	if r, err := filepath.EvalSymlinks(dev); err == nil {
+		dev = r
+	}
+	return dev, dev != c.real
 }
 
 // interpreters are the programs a script needs to start: its #!
@@ -483,10 +509,21 @@ func (c *grantChecks) program(name, p string) (jailCommand, error) {
 		if real, rerr := filepath.EvalSymlinks(p); rerr == nil {
 			fix += ", or, for a command found on PATH, put " + filepath.Dir(real) + " ahead of it on conductor's PATH"
 		}
-		return jailCommand{}, fmt.Errorf("it goes through %s, a symlink to %s that root does not own; the jail never follows a symlink a plugin could have made — %s, or set trust: full on the plugin's entry", link.link, link.target, fix)
+		return jailCommand{}, &linkRefusal{link: link, msg: fmt.Sprintf("it goes through %s, a symlink to %s that root does not own; the jail never follows a symlink a plugin could have made — %s, or set trust: full on the plugin's entry", link.link, link.target, fix)}
 	}
 	return jailCommand{}, err
 }
+
+// linkRefusal is program refusing a path for a symlink root does not own:
+// the message names the fix, and the symlink is there for a caller that
+// asks an authority where the program is instead (locateCommand).
+type linkRefusal struct {
+	link *symlinkError
+	msg  string
+}
+
+func (e *linkRefusal) Error() string { return e.msg }
+func (e *linkRefusal) Unwrap() error { return e.link }
 
 func (c *grantChecks) checkProgram(cmd jailCommand) error {
 	fi, err := os.Stat(cmd.real)

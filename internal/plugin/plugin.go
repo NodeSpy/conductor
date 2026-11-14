@@ -134,6 +134,10 @@ type Spec struct {
 	// serves: what the plugin's "config:" capability references resolve
 	// against (nil for a type-level probe, which serves none).
 	Conns []map[string]any
+	// Commands is where the config names a declared command's program
+	// file (config.Config.CommandPaths), by command name: it wins over
+	// finding the command on PATH (locateCommand).
+	Commands map[string]string
 	// Network is the referencing connector's declared egress.
 	Network []string
 	// ExposeTo are the local listener addresses the engine hands this

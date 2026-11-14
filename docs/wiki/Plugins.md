@@ -683,9 +683,53 @@ be an executable file reached through symlinks root owns only, and is
 refused, failing the launch with the reason, when it lies inside conductor's
 own dirs, a runtime dir, or a path the plugin may write (its `write` paths,
 its staging dir), where it could rewrite the `#!` line to name any path.
-A command installed as a symlink you own (`~/.local/bin/tool`, as npm,
-pipx and uv make them) fails the launch, naming the fix: put the directory
-it points into on conductor's `PATH` ahead of it, or set `trust: full`.
+
+#### Where a declared command comes from
+
+Conductor finds each declared command by asking, in order:
+
+1. **Your config.** A top-level `commands:` block names the program file
+   for a command, for every plugin that declares it:
+
+   ```yaml
+   commands:
+     gh: /opt/homebrew/Cellar/gh/2.101.0/bin/gh
+   ```
+
+   It wins over `PATH`. The path is absolute (`~/` expands) and the file is
+   named for the command (the plugin runs it by name). If the path is a
+   symlink, it is followed, as a runtime's `bin:` is, unless a link on the
+   way is, or lies inside, a path the plugin may write. The file it names
+   is then checked like any command. A named file that is missing fails the
+   launch.
+2. **`PATH`**, as `command -v` finds it. If that is the program file, or a
+   symlink root owns (`/usr/bin/python3`), it is used.
+3. **The package manager that linked it there.** When `PATH` finds a
+   symlink that conductor's own user owns, conductor asks the package
+   manager where the program it installed is. Today that is Homebrew, on
+   macOS and Linux: the `brew` on `PATH`, else the one in `/opt/homebrew`,
+   `/usr/local` or `/home/linuxbrew/.linuxbrew`.
+   - If brew's `--prefix` is the directory above the link, conductor looks
+     in brew's `--cellar` for the formula keg's program that is the same
+     file the link runs, and checks that `brew list --versions <formula>`
+     lists that version. That keg file (`/opt/homebrew/Cellar/gh/2.101.0/bin/gh`)
+     is what the jail binds and runs, and its directory is on the jail's
+     `PATH`. Conductor never reads the link itself.
+   - brew runs as conductor's user, outside the jail. So it is not run when
+     brew, a link on the way to it, its prefix or repository, or a file it
+     reads settings from (`~/.homebrew`, `$XDG_CONFIG_HOME/homebrew`,
+     `/etc/homebrew`) overlaps a path the plugin may write.
+4. **Otherwise the launch fails**, naming the `commands:` line to add with
+   the path filled in.
+
+Conductor never follows a symlink it owns on its own: a plugin running as
+that user could have made it. A command installed some other way as a link
+you own (`~/.local/bin/tool`, as npm, pipx and uv make them) needs its
+`commands:` line, or `trust: full`.
+
+`conductor plugin show <name>` says where each command came from, for
+example `on this machine it runs: /opt/homebrew/Cellar/gh/2.101.0/bin/gh
+(homebrew), /usr/bin/git (PATH)`.
 
 The older fields still load: `fs` means `write`, and `spawns` grants nothing
 (name the commands instead).
@@ -961,8 +1005,10 @@ working setup):
   the destinations to narrow it. `allow_env: []` passes none, as it always
   did.
 - **A declared command found through a symlink you own fails the launch**
-  (`~/.local/bin/paseo` from npm, a pipx or uv tool). Put the directory it
-  points into on conductor's `PATH` ahead of it, or set `trust: full`.
+  (`~/.local/bin/paseo` from npm, a pipx or uv tool), unless Homebrew
+  installed it. Name its program file under `commands:` (the error gives
+  the line), or set `trust: full`. See "Where a declared command comes
+  from".
 - **Variables the plugin declares now pass through by default.** Check
   conductor's environment for ones you do not want a plugin to have
   (`GH_TOKEN`, …), or narrow with `allow_env:`.
