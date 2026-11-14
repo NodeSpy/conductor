@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"gopkg.in/yaml.v3"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -532,4 +533,51 @@ func (st *packInstantiation) applyAllowanceGrants(ns string, inst PackInstance, 
 			ns, name, strings.Join(req.Steps, ", "), firstNonEmptyString(req.Reason, "no reason given"), req.Allow.Describe(), name, firstNonEmptyString(pins[name], "<its steps are missing>"), ns))
 	}
 	return nil
+}
+
+// IsolationFS is every fs: path an isolation block anywhere in the config
+// lets a launch write (runtimes, engines, hosts, workflows, triggers, steps,
+// plugin entries), home expanded: found by walking the config, so a new
+// place an isolation block may sit is counted without being listed.
+func (c *Config) IsolationFS() []string {
+	var out []string
+	seen := map[uintptr]bool{}
+	isoType := reflect.TypeOf(IsolationConfig{})
+	var walk func(v reflect.Value)
+	walk = func(v reflect.Value) {
+		switch v.Kind() {
+		case reflect.Ptr:
+			if v.IsNil() || seen[v.Pointer()] {
+				return
+			}
+			seen[v.Pointer()] = true
+			walk(v.Elem())
+		case reflect.Interface:
+			if !v.IsNil() {
+				walk(v.Elem())
+			}
+		case reflect.Struct:
+			if v.Type() == isoType {
+				for _, p := range v.Interface().(IsolationConfig).FS {
+					out = append(out, ExpandHome(p))
+				}
+				return
+			}
+			for i := 0; i < v.NumField(); i++ {
+				if v.Type().Field(i).IsExported() {
+					walk(v.Field(i))
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < v.Len(); i++ {
+				walk(v.Index(i))
+			}
+		case reflect.Map:
+			for _, k := range v.MapKeys() {
+				walk(v.MapIndex(k))
+			}
+		}
+	}
+	walk(reflect.ValueOf(c))
+	return out
 }

@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -315,7 +316,19 @@ func loadConfig(args []string) (*config.Config, []string, error) {
 	// Large temporary data goes in the scratch dir on disk, never in
 	// os.TempDir() (often a RAM-backed tmpfs).
 	scratch.SetRoot(cfg.ScratchDir())
+	// What sandboxed launches were let write, kept across restarts: a
+	// program a launch left there is never one conductor trusts.
+	if lerr := sandbox.UseWriteLedger(filepath.Join(config.StateDir(), "sandbox-writes"), config.StateDir(), filepath.Dir(path)); lerr != nil {
+		logf("sandbox write ledger: %v", lerr)
+	}
 	if err == nil {
+		// What `plugin show`/`add` say a command resolves to is checked
+		// against what every configured plugin may write, as a launch is.
+		plugin.HerePeers = sync.OnceValue(func() []string {
+			state := plugin.LoadInstallState(plugin.InstallDir())
+			exploded, _ := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+			return plugin.PeerWrites(exploded, cfg.BaseDir(), state)
+		})
 		// usage.mode: what every report and notification of this process may
 		// show of model usage (display only; caps enforce in every mode).
 		cost.SetDisplayMode(cfg.UsageMode())
@@ -637,6 +650,7 @@ func cmdRun(args []string) error {
 		return err
 	}
 	sweepBootLeftovers()
+	reportUnconfiguredWrites(cfg)
 	// Everything this daemon and what it launches write to TMPDIR lands in
 	// the scratch dir on disk.
 	releaseTmp, err := scratch.UseForProcessTmp()
@@ -2349,4 +2363,17 @@ func sweepLegacyJailRoots(dir string, olderThan time.Duration) int {
 		}
 	}
 	return n
+}
+
+// reportUnconfiguredWrites tells the write ledger what this config grants
+// launches write (every fs: path, every plugin's write), and logs what an
+// earlier config granted and this one does not: still counted, since what
+// launches left there stays, and how to clear it. Only the daemon does.
+func reportUnconfiguredWrites(cfg *config.Config) {
+	ws := cfg.IsolationFS()
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	exploded, _ := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	ws = append(ws, plugin.PeerWrites(exploded, cfg.BaseDir(), state)...)
+	sandbox.SetConfiguredWrites(ws)
+	sandbox.ReportUnconfigured(logf)
 }

@@ -147,18 +147,66 @@ func TestStarterConfigValidates(t *testing.T) {
 	for _, v := range []string{"GH_WEBHOOK_SECRET", "GH_SMEE_URL"} {
 		t.Setenv(v, "dummy")
 	}
+	// The forge and its exposure stand in for the plugins the starter
+	// names, so its listener (expose: with no listen) is checked as it is
+	// on a machine that has them installed.
+	registerSmeeFixture()
+	registerListenerFixture()
+	doc := string(raw)
+	for from, to := range map[string]string{"    use: github\n": "    use: " + listenerFixtureType + "\n", "    use: smee\n": "    use: " + smeeFixtureType + "\n"} {
+		if !strings.Contains(doc, from) {
+			t.Fatalf("the starter no longer has %q to stand in for", strings.TrimSpace(from))
+		}
+		doc = strings.Replace(doc, from, to, 1)
+	}
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("starter config must load: %v", err)
 	}
-	if _, err := buildFlowStack(cfg, nil, nil, true); err != nil {
+	stack, err := buildFlowStack(cfg, nil, nil, true)
+	if err != nil {
 		t.Fatalf("starter config must validate: %v", err)
 	}
+	// Turned off, and for no other reason: `conductor validate` reported
+	// the listener's missing listen, which conductor only picks for an
+	// enabled connector.
+	for _, name := range stack.Registry.Names() {
+		if in, _ := stack.Registry.Get(name); in.DisabledReason != "" {
+			t.Errorf("connector %q: %s", name, in.DisabledReason)
+		}
+	}
 }
+
+// listenerFixture stands in for the starter's forge connector: a source
+// whose webhook listener is exposed through another connector.
+type listenerFixture struct{}
+
+const listenerFixtureType = "listener-starter-fixture"
+
+func (listenerFixture) Describe() plugin.Decl {
+	obj := plugin.Field{Type: "object"}
+	ctx := plugin.Schema{"repo": {Type: "string"}, "pr": {Type: "integer"}, "base": {Type: "string"}}
+	var events []plugin.Event
+	for _, n := range []string{"merge_conflict", "failing_checks", "changes_requested"} {
+		events = append(events, plugin.Event{Name: n, Context: ctx, Options: plugin.Schema{"flaky_rerun": obj}})
+	}
+	return plugin.Decl{
+		Type: listenerFixtureType, Kind: plugin.KindConnector,
+		Connection: plugin.Schema{"app": obj, "webhook": obj, "me": obj, "repos": {Type: "array"}},
+		Semantics:  &plugin.ConnSemantics{Listeners: []plugin.Listener{{Listen: "webhook.listen", Expose: "webhook.expose", URLTo: "webhook.public_url"}}},
+		Events:     events,
+	}
+}
+
+func (listenerFixture) Invoke(plugin.InvokeRequest) (plugin.InvokeResult, error) {
+	return plugin.InvokeResult{}, nil
+}
+
+var registerListenerFixture = sync.OnceFunc(func() { connector.RegisterInProcessConnector(listenerFixture{}) })
 
 // TestPaseoRuntimeWithHost: a paseo runtime with host: is valid and gets a
 // dedicated SSH-backed dispatcher; a distinct local bin gets its own too.

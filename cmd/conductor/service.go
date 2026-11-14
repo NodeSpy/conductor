@@ -2,13 +2,16 @@ package main
 
 import (
 	"fmt"
-	"github.com/NodeSpy/conductor/internal/confdir"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/NodeSpy/conductor/internal/confdir"
+	"github.com/NodeSpy/conductor/internal/plugin"
 )
 
 // This file owns the per-user service unit (systemd on Linux, launchd on
@@ -124,32 +127,34 @@ func isDir(p string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// servicePATH builds the PATH the service should run with. A --user service
-// otherwise inherits systemd/launchd's minimal PATH, so `paseo`, `gh`, `go`, and
-// `claude` in ~/.local/bin aren't found. Guarantee ~/.local/bin + the standard
-// dirs, then append the install-time PATH (deduped) so wherever the user keeps
-// those tools comes along too.
+// servicePATH builds the PATH the service runs with: what the daemon runs
+// for a bare name (`claude`, `gh`, `paseo`, `go`, git). A --user service
+// otherwise inherits systemd/launchd's minimal PATH, so the tools in
+// ~/.local/bin aren't found. ~/.local/bin, then the standard dirs, then the
+// install-time PATH, deduped. The order is the one every earlier release
+// wrote, and an update rewrites the unit with it: an update must never
+// change which program a name runs. An entry that is not an absolute path
+// is dropped (it would resolve against whatever directory the service is
+// in); at run time the daemon also leaves out any directory a plugin, or
+// any other sandboxed launch, may write. The install-time PATH is the
+// daemon's own as it started, not as that guard left it, so a rewrite does
+// not record what the guard dropped.
 func servicePATH() string {
-	seen := map[string]bool{}
-	var parts []string
-	add := func(p string) {
-		if p != "" && !seen[p] {
-			seen[p] = true
+	parts := pathList(nil, filepath.Join(home(), ".local/bin"),
+		"/opt/homebrew/bin", "/opt/homebrew/sbin", // macOS (Apple silicon)
+		"/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+		"/usr/local/go/bin", "/usr/lib/go/bin", filepath.Join(home(), "go/bin"))
+	return strings.Join(pathList(parts, filepath.SplitList(plugin.UnguardedPATH())...), ":")
+}
+
+// pathList appends each absolute dir in add to parts, once.
+func pathList(parts []string, add ...string) []string {
+	for _, p := range add {
+		if filepath.IsAbs(p) && !slices.Contains(parts, p) {
 			parts = append(parts, p)
 		}
 	}
-	add(filepath.Join(home(), ".local/bin"))
-	for _, p := range []string{
-		"/opt/homebrew/bin", "/opt/homebrew/sbin", // macOS (Apple silicon)
-		"/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
-		"/usr/local/go/bin", "/usr/lib/go/bin", filepath.Join(home(), "go/bin"),
-	} {
-		add(p)
-	}
-	for _, p := range strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)) {
-		add(p)
-	}
-	return strings.Join(parts, ":")
+	return parts
 }
 
 // unitPathAndContent returns the install path and rendered content of the

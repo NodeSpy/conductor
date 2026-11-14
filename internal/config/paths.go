@@ -160,9 +160,25 @@ func expandStructPaths(v reflect.Value) bool {
 	return changed
 }
 
-// expandPathValue expands a path:"local" string or []string field.
+// expandPathValue expands a path:"local" string, []string or
+// map[string]string field (the map's values).
 func expandPathValue(v reflect.Value) bool {
 	switch v.Kind() {
+	case reflect.Map:
+		if v.Type().Key().Kind() != reflect.String || v.Type().Elem().Kind() != reflect.String || v.Len() == 0 {
+			return false
+		}
+		out := reflect.MakeMapWithSize(v.Type(), v.Len())
+		changed := false
+		for it := v.MapRange(); it.Next(); {
+			x := expandHome(it.Value().String())
+			changed = changed || x != it.Value().String()
+			out.SetMapIndex(it.Key(), reflect.ValueOf(x).Convert(v.Type().Elem()))
+		}
+		if changed {
+			v.Set(out)
+		}
+		return changed
 	case reflect.String:
 		if p := expandHome(v.String()); p != v.String() {
 			v.SetString(p)

@@ -2,33 +2,25 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/NodeSpy/conductor/internal/plugin"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 func TestServicePATHAndUnit(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	t.Setenv("PATH", "/custom/tool/bin:/usr/bin")
+	t.Setenv("PATH", "/custom/tool/bin:relative/bin::/usr/bin")
 
 	p := servicePATH()
-	parts := strings.Split(p, ":")
-	if parts[0] != filepath.Join(tmp, ".local/bin") {
-		t.Fatalf("~/.local/bin must be first: %q", p)
-	}
-	if !strings.Contains(p, "/custom/tool/bin") {
-		t.Fatalf("install-time PATH entries should carry over: %q", p)
-	}
-	seen := map[string]bool{}
-	for _, x := range parts {
-		if seen[x] {
-			t.Fatalf("PATH has a duplicate %q: %q", x, p)
-		}
-		seen[x] = true
+	want := filepath.Join(tmp, ".local/bin") + ":/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/go/bin:/usr/lib/go/bin:" + filepath.Join(tmp, "go/bin") + ":/custom/tool/bin"
+	if p != want {
+		t.Fatalf("service PATH\n %q, want\n %q", p, want)
 	}
 
 	// The rendered unit must set PATH so the service can find paseo/gh/etc.
@@ -36,8 +28,119 @@ func TestServicePATHAndUnit(t *testing.T) {
 		t.Skip("no service manager on this OS")
 	}
 	_, content := unitPathAndContent()
-	if !strings.Contains(content, "PATH="+p) && !strings.Contains(content, p) {
-		t.Fatalf("unit should embed the service PATH:\n%s", content)
+	if !strings.Contains(content, p) || strings.Contains(content, "CONDUCTOR_COMMAND_PATH") {
+		t.Fatalf("unit should embed the service PATH, and only it:\n%s", content)
+	}
+}
+
+// mainServicePATH is servicePATH as every release before this one wrote
+// it, verbatim: what a unit on an operator's box says today.
+func mainServicePATH() string {
+	seen := map[string]bool{}
+	var parts []string
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			parts = append(parts, p)
+		}
+	}
+	add(filepath.Join(home(), ".local/bin"))
+	for _, p := range []string{
+		"/opt/homebrew/bin", "/opt/homebrew/sbin", // macOS (Apple silicon)
+		"/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+		"/usr/local/go/bin", "/usr/lib/go/bin", filepath.Join(home(), "go/bin"),
+	} {
+		add(p)
+	}
+	for _, p := range strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)) {
+		add(p)
+	}
+	return strings.Join(parts, ":")
+}
+
+// An update must never change which program the daemon runs for a name.
+// Ported from the review, inverted: for a unit an earlier release wrote,
+// the PATH this one writes when it rewrites the unit (an update's
+// syncServiceUnit, run in the daemon, whose PATH is the old unit's)
+// resolves every name on either PATH to the same file. A user wrapper in
+// ~/.local/bin that shadows a system program (`claude`, `sh`) stays the
+// one run.
+func TestServicePATHAfterUpdateRunsTheSamePrograms(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	for _, f := range []string{".local/bin/claude", ".local/bin/sh", ".local/bin/git", "go/bin/tool", "custom/bin/sh", "custom/bin/only-here"} {
+		p := filepath.Join(tmp, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, install := range []string{
+		os.Getenv("PATH"),
+		filepath.Join(tmp, "custom/bin") + ":/usr/bin:/bin",
+		"/usr/bin:/bin:" + filepath.Join(tmp, ".local/bin") + ":relative::" + filepath.Join(tmp, "custom/bin"),
+		"",
+	} {
+		t.Setenv("PATH", install)
+		old := mainServicePATH()
+		// The daemon runs with the old unit's PATH and rewrites the unit.
+		t.Setenv("PATH", old)
+		got := servicePATH()
+		var abs []string
+		for _, d := range strings.Split(old, ":") {
+			if filepath.IsAbs(d) {
+				abs = append(abs, d)
+			}
+		}
+		if got != strings.Join(abs, ":") {
+			t.Fatalf("install PATH %q: the update writes\n %q, the old unit has\n %q", install, got, old)
+		}
+		// Every name on either PATH resolves to the same file.
+		names := map[string]bool{"claude": true, "gemini": true, "docker-compose": true, "eb": true}
+		for _, d := range append(strings.Split(old, ":"), strings.Split(got, ":")...) {
+			ents, _ := os.ReadDir(d)
+			for _, e := range ents {
+				names[e.Name()] = true
+			}
+		}
+		for n := range names {
+			t.Setenv("PATH", old)
+			was, werr := exec.LookPath(n)
+			t.Setenv("PATH", got)
+			is, ierr := exec.LookPath(n)
+			if was != is || (werr == nil) != (ierr == nil) {
+				t.Fatalf("install PATH %q: %s ran %q (%v), runs %q (%v) after the update", install, n, was, werr, is, ierr)
+			}
+		}
+		t.Setenv("PATH", old)
+		if p, _ := exec.LookPath("claude"); p != filepath.Join(tmp, ".local/bin/claude") {
+			t.Fatalf("claude is %q", p)
+		}
+		// A second rewrite changes nothing.
+		t.Setenv("PATH", got)
+		if again := servicePATH(); again != got {
+			t.Fatalf("a second update writes %q, want %q", again, got)
+		}
+	}
+}
+
+// The unit records the PATH the daemon started with, not what the guard
+// left of it: a dir a plugin may write today comes back once it may not.
+func TestServicePATHRecordsTheUnguardedPATH(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	w := filepath.Join(tmp, "work")
+	t.Setenv("PATH", w+"/bin:/usr/bin")
+	want := servicePATH()
+	m := plugin.NewManager(nil, "", plugin.LoadInstallState(filepath.Join(tmp, "state")), plugin.Deps{GuardPATH: true, Sandbox: plugin.SandboxDeps{PeerWritable: func() []string { return []string{w} }}})
+	defer m.Close()
+	if strings.Contains(os.Getenv("PATH"), w) {
+		t.Fatalf("the guard left %s on PATH: %q", w, os.Getenv("PATH"))
+	}
+	if got := servicePATH(); got != want {
+		t.Fatalf("the unit would record %q, want %q", got, want)
 	}
 }
 
@@ -297,5 +400,13 @@ func TestPathFlagsExpandHome(t *testing.T) {
 	a := map[string]any{}
 	if err := attachFiles(a, "~/note.txt"); err != nil {
 		t.Fatalf("--attach ~/…: %v", err)
+	}
+}
+
+// The daemon's plugin Managers keep plugin-writable dirs off the PATH
+// conductor runs its own tools from (plugin.Deps.GuardPATH).
+func TestPluginDepsGuardPATH(t *testing.T) {
+	if !pluginDeps(secrets.New(), func(map[string]any) {}, nil).GuardPATH {
+		t.Fatal("pluginDeps must guard PATH")
 	}
 }

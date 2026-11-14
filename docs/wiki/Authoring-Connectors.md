@@ -206,8 +206,11 @@ Capabilities: plugin.Capabilities{
   `Env`. **`command:<name>[/rel]`** is a path relative to a declared
   command's resolved file (`command:node/..` is the directory it is in), for
   a tool that loads files from its own install tree (`command:node/../..`).
-- **`Commands`** are names, never paths; each is found on the daemon's
-  `PATH` and bound into the jail by name.
+- **`Commands`** are names, never paths; each is found the way the
+  operator's shell finds it (or where their config's `commands:` names it)
+  and bound into the jail, where the plugin runs it by name. A Homebrew
+  command's other programs and its dependencies' do not run in the jail
+  (see [[Plugins#where-a-declared-command-comes-from]]).
 - **`Exec`** names what a command runs that is not itself a command: a
   tool's helper programs (`git` runs `git-remote-https` from its exec path,
   `command:git/../../lib/git-core` on most Linux distributions,

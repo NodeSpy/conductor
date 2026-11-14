@@ -96,6 +96,18 @@ type SandboxDeps struct {
 	StagingRoot string
 	EgressUnix  EgressUnixFunc // enforced-egress endpoint minter (namespaced launch)
 	EgressAddr  EgressAddrFunc // enforced-egress endpoint minter (default launch)
+	// PeerWritable is what the other jailed plugins may write
+	// (Manager.pluginWrites: every jailed plugin's declared writes): a
+	// program, link or library one of them could have placed is never bound
+	// into a jail. Every path a sandboxed launch was let write
+	// (sandbox.GrantedForms) counts too, always. nil: only the launching
+	// plugin's own writes and those are known.
+	// Given to NewManager, it adds to what the Manager knows (a probe's view
+	// of the configured plugins).
+	PeerWritable func() []string
+	// owner is the Client launching (NewClient sets it): what its jail
+	// binds to run stays registered across its restarts (registerBound).
+	owner *Client
 }
 
 // buildCommand prepares the (possibly sandbox-wrapped) *exec.Cmd for a plugin,

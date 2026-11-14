@@ -35,6 +35,12 @@ func buildSlowPlugin(t *testing.T) Spec {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// macOS assesses a new binary the first time it runs (a few hundred
+	// ms), which a test's tight call deadline would otherwise absorb. Run
+	// it once now: with no stdin it exits at once.
+	warm, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(warm, bin).Run()
 	sum := sha256.Sum256(data)
 	// These tests are about call timeouts, restarts and liveness, not the
 	// jail — trust: full skips needing a built conductor binary wired as

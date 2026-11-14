@@ -56,6 +56,10 @@ func check(k, v string) string {
 		return ok(err)
 	case "write":
 		return ok(os.WriteFile(v, []byte("x"), 0o644))
+	case "writepath":
+		// Write file v in the first directory on PATH.
+		first, _, _ := strings.Cut(os.Getenv("PATH"), string(os.PathListSeparator))
+		return ok(os.WriteFile(filepath.Join(first, v), []byte("x"), 0o755))
 	case "writeexec":
 		// Write a script and try to run it.
 		if err := os.WriteFile(v, []byte("#!/bin/sh\necho ran\n"), 0o755); err != nil {

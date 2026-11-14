@@ -113,10 +113,20 @@ the unit.
 
 **PATH is baked into the unit.** A `--user` service otherwise inherits a minimal
 PATH and can't find `paseo`, `gh`, `go`, or `claude` under `~/.local/bin`. The
-generated unit sets `PATH` to `~/.local/bin` plus the standard bin dirs (including
-Homebrew and Go) plus your install-time PATH. If a tool lives somewhere unusual,
-add a systemd drop-in (`Environment=PATH=…`) or set `PATH` directly in
-`conductor.env`.
+generated unit sets `PATH` to `~/.local/bin`, then `/opt/homebrew/bin`,
+`/opt/homebrew/sbin`, `/usr/local/bin`, `/usr/bin`, `/bin`, `/usr/sbin`,
+`/sbin`, `/usr/local/go/bin`, `/usr/lib/go/bin` and `~/go/bin`, then the rest
+of your install-time PATH. An entry that is not an absolute path is dropped.
+An update rewrites the unit in the same order, so it never changes which
+program a name runs. The daemon runs its tools from this PATH, and looks up a
+plugin's declared commands on it. At run time it also leaves out any
+directory that a jailed plugin, or any other sandboxed launch, may write
+(each one is logged); see [Plugins](Plugins.md), "Where a declared command
+comes from".
+
+If a tool lives somewhere unusual, add a systemd drop-in
+(`Environment=PATH=…`) or set `PATH` directly in `conductor.env`; for a
+plugin's command, name its program file under `commands:` in the config.
 
 ## Behavior
 

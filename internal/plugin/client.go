@@ -102,6 +102,10 @@ type Deps struct {
 	Auth AuthProvider
 	// HostVersion is the daemon version sent on describe.
 	HostVersion string
+	// GuardPATH: keep every directory a plugin this Manager runs may write
+	// off the process's PATH, which conductor runs its own tools from
+	// (guardPATH).
+	GuardPATH bool
 
 	// dial is the transport opener; nil uses the real subprocess dialer.
 	// Tests inject a fake.
@@ -230,6 +234,7 @@ func NewClient(spec Spec, deps Deps) *Client {
 	}
 	c := &Client{spec: spec, runs: map[string]RunHost{}, served: map[string]bool{}, active: map[string]bool{}}
 	c.reloadCond = sync.NewCond(&c.mu)
+	deps.Sandbox.owner = c
 	deps.onNotify = c.handleNotify
 	deps.onRequest = c.handleRequest
 	c.deps = deps
@@ -1152,6 +1157,7 @@ func (c *Client) Close() error {
 	defer c.mu.Unlock()
 	c.closed = true
 	c.teardownLocked()
+	releaseBound(c)
 	return nil
 }
 

@@ -15,6 +15,9 @@ import (
 var toolItem = KeyringItem{Label: "tool login for example.com", Attributes: map[string]string{"service": "tool:example.com"}}
 
 func TestKeyringConsentLine(t *testing.T) {
+	prevGOOS := spawnGOOS
+	t.Cleanup(func() { spawnGOOS = prevGOOS })
+	spawnGOOS = "linux"
 	m := Manifest{Keyring: []KeyringItem{toolItem}}
 	want := "reads every item in your keyring with service=\"tool:example.com\" (\"tool login for example.com\", in its words)"
 	if got := strings.Join(m.Lines(), "\n"); !strings.Contains(got, want) {
@@ -224,6 +227,9 @@ func TestSeatbeltGrantsKeychainForKeyringItems(t *testing.T) {
 
 // A referencing item is shown as its reference, as a config: path is.
 func TestKeyringConsentLineReferences(t *testing.T) {
+	prevGOOS := spawnGOOS
+	t.Cleanup(func() { spawnGOOS = prevGOOS })
+	spawnGOOS = "linux"
 	// A value is the plugin's text, quoted as the label is: it cannot
 	// close the line and write consent of its own; nor can a name.
 	v := strings.Join(Manifest{Keyring: []KeyringItem{{Label: "x", Attributes: map[string]string{

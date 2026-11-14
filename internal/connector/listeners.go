@@ -91,8 +91,8 @@ func setAtParts(cfg map[string]any, parts []string, val any) map[string]any {
 // forward reference to an exposure connector declared later in the file
 // resolves). A listener whose `expose` field is unset is a plain local
 // listener — never exposed, nothing to validate. One that's set must name a
-// connector that exists and declares an exposes verb, and `listen` must be
-// set too. Failing either disables the connector, same as an `expose:`
+// connector that exists and declares an exposes verb, and an enabled one
+// must have a `listen` (its own, or the one AssignListenAddrs gave it). Failing either disables the connector, same as an `expose:`
 // config mistake does for web (checkExposures).
 func (r *Registry) checkListenerExposures(cfg *config.Config, log func(string, ...any)) {
 	for _, name := range r.order {
@@ -113,7 +113,11 @@ func (r *Registry) checkListenerExposures(cfg *config.Config, log func(string, .
 			if expose == "" {
 				continue
 			}
-			if stringAtPath(raw, l.Listen) == "" {
+			// An enabled listener with no listen was given none by
+			// AssignListenAddrs (it found no free port). A connector the
+			// config turns off is given none and needs none: only its
+			// exposure is checked.
+			if stringAtPath(raw, l.Listen) == "" && in.Enabled {
 				in.DisabledReason = fmt.Sprintf("listeners: %s is set with no %s", l.Expose, l.Listen)
 				break
 			}

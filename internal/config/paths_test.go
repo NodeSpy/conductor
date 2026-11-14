@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,8 +86,8 @@ func TestPathFieldsTagged(t *testing.T) {
 		if f.tag != "" && !valid[f.tag] {
 			t.Errorf("%s: path:%q is not one of local, remote, step, ref, -", f.id, f.tag)
 		}
-		if f.tag == pathLocal && f.kind != reflect.String && f.kind != reflect.Slice {
-			t.Errorf("%s: path:\"local\" on a %s; it applies to a string or []string", f.id, f.kind)
+		if f.tag == pathLocal && f.kind != reflect.String && f.kind != reflect.Slice && f.kind != reflect.Map {
+			t.Errorf("%s: path:\"local\" on a %s; it applies to a string, []string or map[string]string", f.id, f.kind)
 		}
 		if f.kind != reflect.String && f.kind != reflect.Slice {
 			continue
@@ -114,6 +115,7 @@ var pathCases = []struct {
 	{"Store.AuditLog", "store: { audit_log: ~/st/audit.jsonl }", func(c *Config) string { return c.Store.AuditLog }},
 	{"MemoryConfig.Dir", "memory: { dir: ~/mem }", func(c *Config) string { return c.Memory.Dir }},
 	{"ScratchConfig.Dir", "scratch: { dir: ~/scratch }", func(c *Config) string { return c.Scratch.Dir }},
+	{"Config.Commands", "commands: { gh: ~/bin/gh }", func(c *Config) string { return c.Commands["gh"] }},
 	{"SandboxConfig.StateDir", "sandbox: { state_dir: ~/agent-state }", func(c *Config) string { return c.Sandbox.StateDir }},
 	{"SandboxPush.SigningKey", "sandbox: { push: { signing_key: ~/.ssh/id_ed25519 } }", func(c *Config) string { return c.Sandbox.Push.SigningKey }},
 	{"DashboardBind.CertFile", "dashboard: { bind: [ { cert_file: ~/tls/c.pem } ] }", func(c *Config) string { return c.Dashboard.Bind[0].CertFile }},
@@ -374,5 +376,25 @@ func TestRefsAndStepFSExpandHome(t *testing.T) {
 	}
 	if err := validateIsolation("step s", &IsolationConfig{Mode: "namespace", FS: []string{"~other/x"}}, false); err == nil {
 		t.Fatal("~user is not expanded, so it is not absolute")
+	}
+}
+
+// Every isolation block's fs: paths are what the config grants launches
+// write, wherever the block sits: home expanded.
+func TestIsolationFSFindsEveryBlock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	c := decodeConfig(t, `
+engines: { e: { isolation: { mode: namespace, fs: [/srv/engine] } } }
+checks:
+  c: { use: cli, isolation: { mode: namespace, fs: [~/check] } }
+workflows:
+  w: { steps: [ { id: s, use: cli, isolation: { mode: namespace, fs: [/srv/step] } } ] }
+`)
+	got := c.IsolationFS()
+	for _, want := range []string{"/srv/engine", filepath.Join(home, "check"), "/srv/step"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("%s missing from %v", want, got)
+		}
 	}
 }
