@@ -254,7 +254,8 @@ type jailCommand struct {
 // findCommands locates the declared commands on the daemon's PATH, with the
 // #! interpreter of one that is a script. One that is not installed is left
 // out (the plugin's own call fails, naming it) and logged. One found is
-// checked like a declared path (grantChecks.program): a command or an
+// checked like a declared path (grantChecks.program), after following a
+// symlink the operator's PATH led to (grantChecks.command): a command or an
 // interpreter that is refused fails the launch, naming it and the fix.
 func findCommands(s Spec, gc *grantChecks, names []string) ([]jailCommand, error) {
 	var out []jailCommand
@@ -265,7 +266,7 @@ func findCommands(s Spec, gc *grantChecks, names []string) ([]jailCommand, error
 			continue
 		}
 		p, _ = filepath.Abs(p)
-		c, err := gc.program(n, p)
+		c, err := gc.command(n, p)
 		if err != nil {
 			return nil, fmt.Errorf("plugin %s: command %s (%s) refused: %w", s.Name, n, p, err)
 		}
@@ -284,11 +285,15 @@ func findCommands(s Spec, gc *grantChecks, names []string) ([]jailCommand, error
 			// one from the active developer directory: the stub is what the
 			// plugin declared, the tool it runs is part of it.
 			if dev, err := xcrunFind(n); err == nil && dev != "" && dev != c.real {
-				dc, err := gc.program(n, dev)
+				// xcrun answers from PATH for a tool that is no stub: the
+				// same command, through the same symlink.
+				dc, err := gc.command(n, dev)
 				if err != nil {
 					return nil, fmt.Errorf("plugin %s: command %s (%s) refused: the developer tool it runs, %s: %w", s.Name, n, p, dev, err)
 				}
-				out = append(out, dc)
+				if dc.real != c.real {
+					out = append(out, dc)
+				}
 			}
 		}
 	}
@@ -483,9 +488,85 @@ func (c *grantChecks) program(name, p string) (jailCommand, error) {
 		if real, rerr := filepath.EvalSymlinks(p); rerr == nil {
 			fix += ", or, for a command found on PATH, put " + filepath.Dir(real) + " ahead of it on conductor's PATH"
 		}
-		return jailCommand{}, fmt.Errorf("it goes through %s, a symlink to %s that root does not own; the jail never follows a symlink a plugin could have made — %s, or set trust: full on the plugin's entry", link.link, link.target, fix)
+		return jailCommand{}, &linkRefusal{link: link, msg: fmt.Sprintf("it goes through %s, a symlink to %s that root does not own; the jail never follows a symlink a plugin could have made — %s, or set trust: full on the plugin's entry", link.link, link.target, fix)}
 	}
 	return jailCommand{}, err
+}
+
+// linkRefusal is program refusing a path for a symlink root does not own: the
+// message names the fix, and the symlink is there for a caller that may
+// follow it (command).
+type linkRefusal struct {
+	link *symlinkError
+	msg  string
+}
+
+func (e *linkRefusal) Error() string { return e.msg }
+func (e *linkRefusal) Unwrap() error { return e.link }
+
+// command checks a declared command the daemon's PATH found at p. PATH is
+// the operator's, and a package manager that installs into a prefix its
+// user owns (Homebrew, npm, pipx, uv) puts a symlink there, never the
+// program: such a command is followed to the file it names and checked as
+// if PATH had found it there, which is what putting that file's directory
+// first on PATH would do. A symlink on the way that lies in a path the
+// plugin may write is still refused: that one the plugin could have made.
+func (c *grantChecks) command(name, p string) (jailCommand, error) {
+	cmd, err := c.program(name, p)
+	var link *symlinkError
+	if !errors.As(err, &link) {
+		return cmd, err
+	}
+	real, lerr := c.followLinks(p)
+	if lerr != nil {
+		return jailCommand{}, lerr
+	}
+	return c.program(name, real)
+}
+
+// followLinks resolves p through every symlink, whoever owns it, refusing
+// one that is, or lies inside, a path the plugin may write.
+func (c *grantChecks) followLinks(p string) (string, error) {
+	cur := string(filepath.Separator)
+	rest := strings.Split(filepath.Clean(p), string(filepath.Separator))
+	for hops := 0; len(rest) > 0; {
+		name := rest[0]
+		rest = rest[1:]
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur)
+			continue
+		}
+		next := filepath.Join(cur, name)
+		fi, err := os.Lstat(next)
+		if err != nil {
+			return "", err
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			cur = next
+			continue
+		}
+		for _, w := range c.writable {
+			if within(w, next) {
+				return "", fmt.Errorf("it goes through %s, a symlink inside %s, which it may write — it could have made it", next, w)
+			}
+		}
+		if hops++; hops > 40 {
+			return "", fmt.Errorf("%s: too many symlinks", p)
+		}
+		tgt, err := os.Readlink(next)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(tgt) {
+			tgt = filepath.Join(cur, tgt)
+		}
+		rest = append(strings.Split(filepath.Clean(tgt), string(filepath.Separator)), rest...)
+		cur = string(filepath.Separator)
+	}
+	return cur, nil
 }
 
 func (c *grantChecks) checkProgram(cmd jailCommand) error {

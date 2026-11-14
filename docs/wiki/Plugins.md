@@ -683,9 +683,13 @@ be an executable file reached through symlinks root owns only, and is
 refused, failing the launch with the reason, when it lies inside conductor's
 own dirs, a runtime dir, or a path the plugin may write (its `write` paths,
 its staging dir), where it could rewrite the `#!` line to name any path.
-A command installed as a symlink you own (`~/.local/bin/tool`, as npm,
-pipx and uv make them) fails the launch, naming the fix: put the directory
-it points into on conductor's `PATH` ahead of it, or set `trust: full`.
+A command conductor's `PATH` finds through a symlink you own
+(`/opt/homebrew/bin/tool` from Homebrew, `~/.local/bin/tool` as npm, pipx
+and uv make them) is followed to the program it names, and that program is
+checked and run from its own directory, as if `PATH` had found it there. A
+symlink that lies in a path the plugin may write is still refused: the
+plugin could have made it. A `#!` interpreter is not followed this way: its
+path comes from the script, not from your `PATH`.
 
 The older fields still load: `fs` means `write`, and `spawns` grants nothing
 (name the commands instead).
@@ -960,9 +964,11 @@ working setup):
   destination it declares. A config that has one loads, with a warning; list
   the destinations to narrow it. `allow_env: []` passes none, as it always
   did.
-- **A declared command found through a symlink you own fails the launch**
-  (`~/.local/bin/paseo` from npm, a pipx or uv tool). Put the directory it
-  points into on conductor's `PATH` ahead of it, or set `trust: full`.
+- **A declared command found through a symlink you own is followed** to
+  the program it names (`/opt/homebrew/bin/gh` from Homebrew,
+  `~/.local/bin/paseo` from npm, a pipx or uv tool), unless the symlink lies
+  in a path the plugin may write. A `#!` interpreter reached through such a
+  symlink still fails the launch.
 - **Variables the plugin declares now pass through by default.** Check
   conductor's environment for ones you do not want a plugin to have
   (`GH_TOKEN`, …), or narrow with `allow_env:`.

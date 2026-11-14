@@ -201,3 +201,57 @@ func TestScriptCommandBindsItsInterpreter(t *testing.T) {
 		t.Fatalf("commands %v, want the tool and %s", got, real)
 	}
 }
+
+// A declared command the daemon's PATH finds through a symlink the operator
+// owns (Homebrew's bin/tool -> ../Cellar/tool/1.0/bin/tool) is followed to
+// the program and runs from there: the jail's PATH carries the program's
+// own directory, never the symlink's. A symlink in a path the plugin may
+// write is one it could have made, and is still refused.
+func TestCommandThroughAnOperatorSymlinkIsFollowed(t *testing.T) {
+	home, sd := jailTestDirs(t)
+	bin := filepath.Join(home, "prefix", "bin")
+	cellar := filepath.Join(home, "prefix", "Cellar", "mytool", "1.0", "bin")
+	for _, d := range []string{bin, cellar} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	real := filepath.Join(cellar, "mytool")
+	if err := os.WriteFile(real, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../Cellar/mytool/1.0/bin/mytool", filepath.Join(bin, "mytool")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	find := func(m Manifest) ([]jailCommand, error) {
+		t.Helper()
+		s := Spec{Name: "p", Manifest: m}
+		g, err := pluginGrant(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return findCommands(s, newGrantChecks(sd, g), []string{"mytool"})
+	}
+
+	cmds, err := find(Manifest{Commands: []string{"mytool"}})
+	if err != nil {
+		t.Fatalf("a command through the operator's symlink: %v", err)
+	}
+	if len(cmds) == 0 || cmds[0].path != real || cmds[0].real != real {
+		t.Fatalf("commands = %+v, want mytool at %s", cmds, real)
+	}
+	if path := jailPATH(cmds); !strings.Contains(path, cellar) || strings.Contains(path, bin) {
+		t.Fatalf("jail PATH = %s, want the program's directory %s and not the symlink's", path, cellar)
+	}
+
+	// The symlink's directory is one the plugin may write.
+	if _, err := find(Manifest{Commands: []string{"mytool"}, Write: []string{"~/prefix/bin"}}); err == nil || !strings.Contains(err.Error(), "command mytool") || !strings.Contains(err.Error(), "it could have made it") {
+		t.Fatalf("a symlink inside a write grant: %v, want it refused", err)
+	}
+	// So is the program's.
+	if _, err := find(Manifest{Commands: []string{"mytool"}, Write: []string{"~/prefix/Cellar"}}); err == nil || !strings.Contains(err.Error(), "which it may write") {
+		t.Fatalf("a program inside a write grant: %v, want it refused", err)
+	}
+}
