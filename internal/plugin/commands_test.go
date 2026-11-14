@@ -12,10 +12,11 @@ import (
 
 // brewRig is a Homebrew-shaped prefix in a temp dir: prefix/bin/tool is a
 // symlink (conductor's user owns it) to the formula keg's program
-// prefix/Cellar/tool/1.0/bin/tool, and prefix/bin/brew a fake brew that
-// answers --prefix, --cellar and list --versions, logging every call.
+// prefix/Cellar/tool/1.0/bin/tool, installed with libfoo 2.0, and
+// prefix/bin/brew a fake brew that answers --prefix, --cellar, deps and
+// list --versions, logging every call.
 type brewRig struct {
-	prefix, cellar, link, real, brew, log string
+	prefix, cellar, link, real, brew, log, lib string
 }
 
 func newBrewRig(t *testing.T, home string) brewRig {
@@ -26,7 +27,8 @@ func newBrewRig(t *testing.T, home string) brewRig {
 	r.link = filepath.Join(r.prefix, "bin", "tool")
 	r.brew = filepath.Join(r.prefix, "bin", "brew")
 	r.log = filepath.Join(home, "brew.log")
-	for _, d := range []string{filepath.Dir(r.real), filepath.Dir(r.link)} {
+	r.lib = filepath.Join(r.cellar, "libfoo", "2.0")
+	for _, d := range []string{filepath.Dir(r.real), filepath.Dir(r.link), filepath.Join(r.lib, "lib")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -45,10 +47,16 @@ func newBrewRig(t *testing.T, home string) brewRig {
 	return r
 }
 
-// answer rewrites the fake brew to answer prefix, cellar and versions.
+// answer rewrites the fake brew to answer prefix, cellar and the tool's
+// versions; libfoo is its one dependency, at libVersions.
 func (r brewRig) answer(t *testing.T, prefix, cellar, versions string) {
 	t.Helper()
-	script := fmt.Sprintf("#!/bin/sh\necho \"$*\" >> %q\ncase \"$1\" in\n--prefix) echo %q ;;\n--cellar) echo %q ;;\nlist) echo %q ;;\nesac\n", r.log, prefix, cellar, versions)
+	r.answerDeps(t, prefix, cellar, versions, "libfoo 2.0")
+}
+
+func (r brewRig) answerDeps(t *testing.T, prefix, cellar, versions, libVersions string) {
+	t.Helper()
+	script := fmt.Sprintf("#!/bin/sh\necho \"$*\" >> %q\ncase \"$1\" in\n--prefix) echo %q ;;\n--cellar) echo %q ;;\ndeps) echo libfoo ;;\nlist) case \"$3\" in libfoo) echo %q ;; *) echo %q ;; esac ;;\nesac\n", r.log, prefix, cellar, libVersions, versions)
 	if err := os.WriteFile(r.brew, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -82,15 +90,86 @@ func TestCommandFromHomebrew(t *testing.T) {
 	if len(cmds) != 2 || cmds[0].path != r.real || cmds[0].real != r.real || cmds[0].source != fromHomebrew {
 		t.Fatalf("commands = %+v, want the keg's program from homebrew", cmds)
 	}
+	if want := []string{filepath.Join(r.cellar, "tool", "1.0"), r.lib}; strings.Join(cmds[0].reads, ",") != strings.Join(want, ",") {
+		t.Fatalf("reads = %v, want its keg and its dependency's: %v", cmds[0].reads, want)
+	}
 	if !strings.Contains(r.calls(), "list --versions tool") {
 		t.Fatalf("brew was not asked about the formula: %q", r.calls())
 	}
-	if p := jailPATH(cmds); !strings.Contains(p, filepath.Dir(r.real)) || strings.Contains(p, filepath.Dir(r.link)) {
-		t.Fatalf("jail PATH %q must carry the keg's bin, not the linked bin", p)
+	if p := jailPATH(cmds); !strings.HasPrefix(p, filepath.Dir(r.real)+string(os.PathListSeparator)) || strings.Contains(p, filepath.Dir(r.link)) {
+		t.Fatalf("jail PATH %q must lead with the keg's bin (ahead of a /usr/bin namesake), not carry the linked bin", p)
 	}
 	here := strings.Join(HereLines(s), "\n")
-	if !strings.Contains(here, r.real+" (homebrew)") {
-		t.Fatalf("plugin show must say where it came from:\n%s", here)
+	if !strings.Contains(here, r.real+" (homebrew)") || !strings.Contains(here, r.lib) {
+		t.Fatalf("plugin show must say where it came from, and what it reads to run:\n%s", here)
+	}
+}
+
+// What brew says a program was installed with is read only as a real keg
+// directory in its Cellar: a version that climbs out of it is skipped, a
+// keg reached through a symlink conductor's user owns, or one the plugin
+// may write, fails the launch.
+func TestHomebrewDependencyKegsAreChecked(t *testing.T) {
+	home, sd := jailTestDirs(t)
+	r := newBrewRig(t, home)
+	s := Spec{Name: "p", Manifest: Manifest{Commands: []string{"tool"}}}
+
+	r.answerDeps(t, r.prefix, r.cellar, "tool 1.0", "libfoo ../../../../.. 2.0")
+	cmds, err := findTool(t, s, sd)
+	if err != nil || len(cmds[0].reads) != 2 || cmds[0].reads[1] != r.lib {
+		t.Fatalf("commands %+v, err %v; want the climbing version skipped", cmds, err)
+	}
+
+	r.answerDeps(t, r.prefix, r.cellar, "tool 1.0", "libfoo 2.0")
+	s.Manifest.Write = []string{"~/brew/Cellar/libfoo"}
+	if cmds, err := findTool(t, s, sd); err == nil || !strings.Contains(err.Error(), "may write") {
+		t.Fatalf("commands %+v, err %v; want a dependency keg the plugin may write refused", cmds, err)
+	}
+	s.Manifest.Write = nil
+
+	// A Cellar outside the prefix (HOMEBREW_CELLAR): the prefix check does
+	// not cover it, the keg's own does.
+	xcellar := filepath.Join(home, "xcellar")
+	for _, d := range []string{filepath.Join(xcellar, "tool", "1.0", "bin"), filepath.Join(xcellar, "libfoo", "2.0")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Link(r.real, filepath.Join(xcellar, "tool", "1.0", "bin", "tool")); err != nil {
+		t.Fatal(err)
+	}
+	r.answerDeps(t, r.prefix, xcellar, "tool 1.0", "libfoo 2.0")
+	if _, err := findTool(t, s, sd); err != nil {
+		t.Fatalf("a Cellar outside the prefix: %v", err)
+	}
+	s.Manifest.Write = []string{"~/xcellar/libfoo"}
+	if cmds, err := findTool(t, s, sd); err == nil || !strings.Contains(err.Error(), "installed it with") {
+		t.Fatalf("commands %+v, err %v; want a dependency keg the plugin may write refused", cmds, err)
+	}
+	s.Manifest.Write = nil
+	r.answerDeps(t, r.prefix, r.cellar, "tool 1.0", "libfoo 2.0")
+
+	// A dependency keg that holds conductor's own dir is refused like any
+	// read of it.
+	inLib := filepath.Join(r.lib, "conductor-state")
+	if err := os.MkdirAll(inLib, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sdLib := sd
+	sdLib.MaskPaths = append([]string{inLib}, sd.MaskPaths...)
+	if cmds, err := findTool(t, s, sdLib); err == nil || !strings.Contains(err.Error(), "conductor's own") {
+		t.Fatalf("commands %+v, err %v; want a keg holding conductor's dir refused", cmds, err)
+	}
+
+	elsewhere := filepath.Join(home, "elsewhere-libfoo")
+	if err := os.Rename(filepath.Join(r.cellar, "libfoo"), elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(r.cellar, "libfoo")); err != nil {
+		t.Fatal(err)
+	}
+	if cmds, err := findTool(t, s, sd); err == nil || !strings.Contains(err.Error(), "root does not own") {
+		t.Fatalf("commands %+v, err %v; want a dependency keg through a user-owned symlink refused", cmds, err)
 	}
 }
 

@@ -191,6 +191,15 @@ func HereLines(s Spec) []string {
 		cmds = append(cmds, at+" ("+c.source+")")
 	}
 	add("runs", cmds)
+	var loads []string
+	for _, c := range found {
+		for _, d := range c.reads {
+			if !slices.Contains(loads, d) {
+				loads = append(loads, d)
+			}
+		}
+	}
+	add("reads, to run them (what their package manager installed them with)", loads)
 	add("runs programs in", g.Exec)
 	add("reads", g.Read)
 	var files, sockets []string
@@ -258,6 +267,10 @@ type jailCommand struct {
 	// fromHomebrew), or what it is part of (an interpreter, a developer
 	// tool), for `plugin show`.
 	source string
+	// reads are the directories it reads to run, as the package manager
+	// that installed it says (its install tree, the libraries it loads),
+	// checked when found (grantChecks.programDir).
+	reads []string
 }
 
 // findCommands locates the declared commands (locateCommand: the config's
@@ -366,22 +379,20 @@ var xcrunFind = func(tool string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// jailPATH is the PATH a jailed plugin runs with: the standard directories
-// (which hold only its declared commands) and the directory of any declared
-// command found elsewhere.
+// jailPATH is the PATH a jailed plugin runs with: the directory of each
+// declared command found outside the standard directories, then the
+// standard directories (which hold only its declared commands). A command
+// found elsewhere comes first, so its name runs what was found — Homebrew's
+// git, not the /usr/bin stub of the same name.
 func jailPATH(cmds []jailCommand) string {
-	dirs := []string{"/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"}
+	std := []string{"/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"}
+	var dirs []string
 	for _, c := range cmds {
-		d := filepath.Dir(c.path)
-		found := false
-		for _, x := range dirs {
-			found = found || x == d
-		}
-		if !found {
+		if d := filepath.Dir(c.path); !slices.Contains(std, d) && !slices.Contains(dirs, d) {
 			dirs = append(dirs, d)
 		}
 	}
-	return strings.Join(dirs, string(os.PathListSeparator))
+	return strings.Join(append(dirs, std...), string(os.PathListSeparator))
 }
 
 // grantedPath is a declared path the jail gives the plugin: path is where the
@@ -927,6 +938,11 @@ func buildNamespaced(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv,
 		// file it was then, never through a symlink or a directory made
 		// since.
 		binds = append(binds, sandbox.BindMount{Path: c.path, Src: c.real, RO: true, NoSymlink: true, NotDir: true})
+		for _, d := range c.reads {
+			// The libraries it loads are mapped executable: read-only,
+			// not noexec.
+			binds = append(binds, sandbox.BindMount{Path: d, RO: true, Optional: true, NoSymlink: true})
+		}
 	}
 	nf := &sandbox.NetForward{Self: sd.Self, Base: sandbox.BaseMinimal}
 	var closers []func()
@@ -1028,6 +1044,7 @@ func buildSeatbelt(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv, e
 	}
 	for _, c := range cmds {
 		p.Exec = append(p.Exec, c.path, c.real)
+		p.Read = append(p.Read, c.reads...)
 	}
 	p.Read = append(p.Read, reals(paths.read)...)
 	p.Write = append(p.Write, reals(paths.write)...)

@@ -713,8 +713,15 @@ Conductor finds each declared command by asking, in order:
      in brew's `--cellar` for the formula keg's program that is the same
      file the link runs, and checks that `brew list --versions <formula>`
      lists that version. That keg file (`/opt/homebrew/Cellar/gh/2.101.0/bin/gh`)
-     is what the jail binds and runs, and its directory is on the jail's
-     `PATH`. Conductor never reads the link itself.
+     is what the jail binds and runs. Its directory comes first on the
+     jail's `PATH`, so the name runs it and not a `/usr/bin` namesake.
+     Conductor never reads the link itself.
+   - The jail also reads what the program needs to run, as brew says: its
+     own keg, and the keg of every installed version of each formula
+     `brew deps --installed` lists (the libraries it loads). Each must be a
+     real directory in the Cellar that the plugin may not write. On Linux
+     these are bound read-only and may be mapped executable, since the
+     libraries are loaded from them.
    - brew runs as conductor's user, outside the jail. So it is not run when
      brew, a link on the way to it, its prefix or repository, or a file it
      reads settings from (`~/.homebrew`, `$XDG_CONFIG_HOME/homebrew`,
@@ -727,9 +734,9 @@ that user could have made it. A command installed some other way as a link
 you own (`~/.local/bin/tool`, as npm, pipx and uv make them) needs its
 `commands:` line, or `trust: full`.
 
-`conductor plugin show <name>` says where each command came from, for
-example `on this machine it runs: /opt/homebrew/Cellar/gh/2.101.0/bin/gh
-(homebrew), /usr/bin/git (PATH)`.
+`conductor plugin show <name>` says where each command came from, and
+what it reads to run, for example `on this machine it runs:
+/opt/homebrew/Cellar/gh/2.101.0/bin/gh (homebrew), /usr/bin/git (PATH)`.
 
 The older fields still load: `fs` means `write`, and `spawns` grants nothing
 (name the commands instead).
