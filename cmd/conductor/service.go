@@ -126,9 +126,10 @@ func isDir(p string) bool {
 
 // servicePATH builds the PATH the service should run with. A --user service
 // otherwise inherits systemd/launchd's minimal PATH, so `paseo`, `gh`, `go`, and
-// `claude` in ~/.local/bin aren't found. Guarantee ~/.local/bin + the standard
-// dirs, then append the install-time PATH (deduped) so wherever the user keeps
-// those tools comes along too.
+// `claude` in ~/.local/bin aren't found. The install-time PATH comes first, in
+// its own order, so the service runs the program the installing shell's
+// `command -v` names; ~/.local/bin and the standard dirs follow (deduped) for
+// an install run from a shell that lacks them.
 func servicePATH() string {
 	seen := map[string]bool{}
 	var parts []string
@@ -138,15 +139,15 @@ func servicePATH() string {
 			parts = append(parts, p)
 		}
 	}
+	for _, p := range strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)) {
+		add(p)
+	}
 	add(filepath.Join(home(), ".local/bin"))
 	for _, p := range []string{
 		"/opt/homebrew/bin", "/opt/homebrew/sbin", // macOS (Apple silicon)
 		"/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
 		"/usr/local/go/bin", "/usr/lib/go/bin", filepath.Join(home(), "go/bin"),
 	} {
-		add(p)
-	}
-	for _, p := range strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)) {
 		add(p)
 	}
 	return strings.Join(parts, ":")

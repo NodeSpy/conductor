@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,11 +18,14 @@ func TestServicePATHAndUnit(t *testing.T) {
 
 	p := servicePATH()
 	parts := strings.Split(p, ":")
-	if parts[0] != filepath.Join(tmp, ".local/bin") {
-		t.Fatalf("~/.local/bin must be first: %q", p)
+	// The install-time PATH leads, in its order: the service runs what the
+	// installing shell's `command -v` finds, not a standard dir's namesake
+	// (/opt/homebrew/bin's, /usr/bin's) ahead of it.
+	if len(parts) < 2 || parts[0] != "/custom/tool/bin" || parts[1] != "/usr/bin" {
+		t.Fatalf("the install-time PATH must lead, in its order: %q", p)
 	}
-	if !strings.Contains(p, "/custom/tool/bin") {
-		t.Fatalf("install-time PATH entries should carry over: %q", p)
+	if !slices.Contains(parts, filepath.Join(tmp, ".local/bin")) || !slices.Contains(parts, "/opt/homebrew/bin") {
+		t.Fatalf("~/.local/bin and the standard dirs must follow: %q", p)
 	}
 	seen := map[string]bool{}
 	for _, x := range parts {
