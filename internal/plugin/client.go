@@ -234,6 +234,7 @@ func NewClient(spec Spec, deps Deps) *Client {
 	}
 	c := &Client{spec: spec, runs: map[string]RunHost{}, served: map[string]bool{}, active: map[string]bool{}}
 	c.reloadCond = sync.NewCond(&c.mu)
+	deps.Sandbox.owner = c
 	deps.onNotify = c.handleNotify
 	deps.onRequest = c.handleRequest
 	c.deps = deps
@@ -1156,6 +1157,7 @@ func (c *Client) Close() error {
 	defer c.mu.Unlock()
 	c.closed = true
 	c.teardownLocked()
+	releaseBound(c)
 	return nil
 }
 

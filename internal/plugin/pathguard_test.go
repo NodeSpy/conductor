@@ -89,9 +89,8 @@ func TestManagerKeepsPluginWritesOffPATH(t *testing.T) {
 	}
 }
 
-// A declared command is looked up on CONDUCTOR_COMMAND_PATH (the
-// installing shell's order) when set: absolute entries only, executable
-// files only; unset, on PATH.
+// A declared command is looked up on PATH, as the daemon runs a bare
+// name: absolute entries only, executable files only.
 func TestCommandLookPath(t *testing.T) {
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -110,18 +109,17 @@ func TestCommandLookPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	t.Setenv("PATH", "/usr/bin:/bin")
-	t.Setenv(CommandPathEnv, "user:"+noexec+":"+user+":/usr/bin")
+	t.Setenv("PATH", "user:"+noexec+":"+user+":/usr/bin")
 	if p, err := commandLookPath("tool"); err != nil || p != filepath.Join(user, "tool") {
 		t.Fatalf("tool is %q (%v), want %s", p, err, filepath.Join(user, "tool"))
 	}
 	found, err := findCommands(Spec{Name: "p"}, newGrantChecks(SandboxDeps{}, sdk.Grant{}), []string{"tool"})
 	if err != nil || found[0].path != filepath.Join(user, "tool") {
-		t.Fatalf("a declared command is found on %s: %+v %v", CommandPathEnv, found, err)
+		t.Fatalf("a declared command is found on PATH: %+v %v", found, err)
 	}
-	t.Setenv(CommandPathEnv, "")
+	t.Setenv("PATH", "/usr/bin:/bin")
 	if p, err := commandLookPath("tool"); err == nil {
-		t.Fatalf("unset, PATH is used: found %s", p)
+		t.Fatalf("found %s off PATH", p)
 	}
 }
 
@@ -153,7 +151,6 @@ func TestWriteThroughSymlinkedAncestorOfMissingDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", pathDir+":/usr/bin:/bin")
-	t.Setenv(CommandPathEnv, "")
 	for _, sd := range []SandboxDeps{
 		{PeerWritable: func() []string { return []string{filepath.Join(link, "out")} }},
 	} {
@@ -183,8 +180,7 @@ func TestSandboxedLaunchWritesAreRefused(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(gobin, "tool"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", "/usr/bin:/bin")
-	t.Setenv(CommandPathEnv, gobin+":/usr/bin:/bin")
+	t.Setenv("PATH", gobin+":/usr/bin:/bin")
 	m := NewManager(nil, "", stateAt(t), Deps{Sandbox: sd, GuardPATH: true})
 	defer m.Close()
 	t.Setenv("PATH", gobin+":/usr/bin:/bin")
@@ -196,8 +192,12 @@ func TestSandboxedLaunchWritesAreRefused(t *testing.T) {
 	if _, err := (&sandbox.Spec{Mode: "container", Image: "img", FS: []string{filepath.Join(home, "go")}}).WrapLocal([]string{"true"}, "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if cmds, err := findTool(t, a, m.deps.Sandbox); err == nil || !strings.Contains(err.Error(), "a plugin conductor runs may write") {
+	named := Spec{Name: "a", Manifest: a.Manifest, Commands: map[string]string{"tool": filepath.Join(gobin, "tool")}}
+	if cmds, err := findTool(t, named, m.deps.Sandbox); err == nil || !strings.Contains(err.Error(), "a plugin conductor runs may write") {
 		t.Fatalf("commands %+v, err %v; want a program a code step may write refused", cmds, err)
+	}
+	if cmds, err := findTool(t, a, m.deps.Sandbox); err == nil && len(cmds) != 0 {
+		t.Fatalf("commands %+v; want ~/go/bin/tool no longer found", cmds)
 	}
 	if got := os.Getenv("PATH"); got != "/usr/bin:/bin" {
 		t.Fatalf("PATH %q, want ~/go/bin left out once a sandboxed launch may write it", got)
@@ -226,7 +226,6 @@ func TestWritingOverABoundProgramIsRefused(t *testing.T) {
 	sd := testJailDeps(t)
 	tool := fakeTool(t, "go/bin/tool")
 	gohome := filepath.Dir(filepath.Dir(tool))
-	t.Setenv(CommandPathEnv, "")
 	ctr := func() error {
 		_, err := (&sandbox.Spec{Mode: "container", Image: "img", FS: []string{gohome}}).WrapLocal([]string{"true"}, "", nil, nil)
 		return err
@@ -256,7 +255,7 @@ func TestWritingOverABoundProgramIsRefused(t *testing.T) {
 	// A write inside a directory a jail loads from (a keg it reads) is
 	// refused too.
 	keg := filepath.Join(gohome, "Cellar", "tool", "1.0")
-	unbind := registerBound("gh", []jailCommand{{name: "tool", path: tool, real: tool, reads: []string{keg}}})
+	unbind := registerBound(nil, "gh", boundPaths([]jailCommand{{name: "tool", path: tool, real: tool, reads: []string{keg}}}))
 	if err := sandbox.AdmitWrites(filepath.Join(keg, "lib", "x")); err == nil {
 		t.Fatal("a write inside a keg a jail loads from was admitted")
 	}

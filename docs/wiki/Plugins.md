@@ -703,10 +703,9 @@ Conductor finds each declared command by asking, in order:
    is then checked like any command. A named file that is missing fails the
    launch.
 2. **`PATH`**, as `command -v` finds it. If that is the program file, or a
-   symlink root owns (`/usr/bin/python3`), it is used. For a service
-   installed with `conductor service install`, this is the installing
-   shell's `PATH`, in its order (`CONDUCTOR_COMMAND_PATH` in the unit), not
-   the `PATH` conductor runs its own tools from.
+   symlink root owns (`/usr/bin/python3`), it is used. This is the daemon's
+   own `PATH` (see [Installation](Installation.md)), so a plugin gets the
+   program the daemon runs for that name.
 3. **What the package manager that linked it there recorded.** When `PATH`
    finds a symlink that conductor's own user owns, conductor reads what the
    package manager wrote when it installed the program. Today that is
@@ -748,8 +747,14 @@ not just the plugin being launched: every jailed plugin's `write` paths
 and the staging dirs, and every path any sandboxed launch was let write (a
 code step's `isolation.fs`, an agent's workspace and tool state, a
 container's mounts). Conductor records those as it wraps each launch and
-keeps the list in `<state dir>/sandbox-writes`, so it holds across restarts
-(a path that no longer exists is dropped). One launch could otherwise
+keeps the list in `<state dir>/sandbox-writes`, so it holds across restarts.
+A path that no longer exists is dropped. A path the config granted (an
+`fs:` path, a plugin's `write`) is dropped when the daemon starts with a
+config that no longer grants it; the log names it, when it was recorded,
+and the file. A path a run was let write (its workspace) is kept while it
+exists. When a command is refused, or a directory is left off conductor's
+`PATH`, because of a recorded path, the message names that path and where
+it came from. One launch could otherwise
 place a program, a link or a library that a plugin's jail then binds. The
 same goes for a command `PATH` finds directly, and for a file `commands:`
 names. (A `trust: full` plugin, and a launch with no sandbox, are not
@@ -759,7 +764,9 @@ It works the other way round too. While a jail runs a program, a launch
 that would be let write over it or the directories it loads from is
 refused, naming the program and the plugin. For example, a code step with
 `isolation: { fs: [~/go] }` is refused while a plugin runs
-`~/go/bin/git`.
+`~/go/bin/git`. A plugin keeps its programs held while it restarts, or
+while it is parked after crashing, until it is removed or relaunched with
+other programs.
 
 In the jail, the standard directories (`/usr/local/bin`, `/usr/bin`,
 `/bin`, and the `sbin`s) hold only the declared commands found there. A
@@ -1058,11 +1065,10 @@ working setup):
   launch, as one inside the launching plugin's own did. A code step,
   agent or plugin whose writes would cover a program a running plugin
   uses is refused while that plugin runs.
-- **The service's `PATH` puts the system's directories first again.**
-  Conductor runs its own tools (git, ssh-keygen, unshare, ps, lsof) from
-  it, unjailed, and drops from it any directory a plugin may write. A
-  plugin's declared commands are still looked up in your shell's order: run
-  `conductor service install` again to record it.
+- **The daemon drops from its `PATH` any directory a plugin, or any other
+  sandboxed launch, may write**, and logs each one. Otherwise the
+  service's `PATH` is unchanged: an update never changes which program
+  the daemon runs for a name.
 - **Variables the plugin declares now pass through by default.** Check
   conductor's environment for ones you do not want a plugin to have
   (`GH_TOKEN`, …), or narrow with `allow_env:`.

@@ -650,6 +650,7 @@ func cmdRun(args []string) error {
 		return err
 	}
 	sweepBootLeftovers()
+	forgetUnconfiguredWrites(cfg)
 	// Everything this daemon and what it launches write to TMPDIR lands in
 	// the scratch dir on disk.
 	releaseTmp, err := scratch.UseForProcessTmp()
@@ -2362,4 +2363,20 @@ func sweepLegacyJailRoots(dir string, olderThan time.Duration) int {
 		}
 	}
 	return n
+}
+
+// forgetUnconfiguredWrites tells the write ledger what this config grants
+// launches write (every fs: path, every plugin's write), and forgets what
+// an earlier config granted and this one does not (each is logged). Only
+// the daemon does: a CLI command run with another config must not forget
+// what the daemon's launches were let write.
+func forgetUnconfiguredWrites(cfg *config.Config) {
+	ws := cfg.IsolationFS()
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	exploded, _ := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	ws = append(ws, plugin.PeerWrites(exploded, cfg.BaseDir(), state)...)
+	sandbox.SetConfiguredWrites(ws)
+	if err := sandbox.ForgetUnconfigured(logf); err != nil {
+		logf("sandbox write ledger: %v", err)
+	}
 }

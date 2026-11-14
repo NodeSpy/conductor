@@ -12,28 +12,18 @@ import (
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
-// CommandPathEnv names the PATH a declared command is looked up on, in the
-// order the operator's shell looks it up (`command -v`): `service install`
-// writes the installing shell's PATH there. Unset, PATH is used. It is only
-// where conductor looks for a plugin's commands — what it finds is checked
-// like any program — never the PATH conductor runs its own tools from.
-const CommandPathEnv = "CONDUCTOR_COMMAND_PATH"
-
 // commandLookPath finds a declared command (or a script's `env`
-// interpreter) the way the operator's shell would: on CommandPathEnv when
-// set, else PATH. A test var.
+// interpreter) on PATH, as the daemon runs a bare name: the first
+// executable file of that name in an absolute PATH entry. A test var.
 var commandLookPath = func(name string) (string, error) {
-	cp := os.Getenv(CommandPathEnv)
-	if cp == "" || strings.Contains(name, "/") {
+	if strings.Contains(name, "/") {
 		return spawnLookPath(name)
 	}
-	for _, d := range filepath.SplitList(cp) {
-		if !filepath.IsAbs(d) {
-			continue
-		}
-		p := filepath.Join(d, name)
-		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
-			return p, nil
+	for _, d := range filepath.SplitList(os.Getenv("PATH")) {
+		if filepath.IsAbs(d) {
+			if p, err := exec.LookPath(filepath.Join(d, name)); err == nil {
+				return p, nil
+			}
 		}
 	}
 	return "", &exec.Error{Name: name, Err: exec.ErrNotFound}
@@ -89,7 +79,7 @@ func guardPATH(m *Manager, writes []string) {
 	kept, dropped := guardedPATH(pathGuard.orig, all)
 	for _, d := range dropped {
 		if !slices.Contains(pathGuard.dropped, d) {
-			log.Printf("conductor's PATH: %s is left out: a plugin conductor runs may write it, or it lies inside a path one may write", d)
+			log.Printf("conductor's PATH: %s is left out: a plugin conductor runs may write it, or it lies inside a path one may write%s", d, ledgerNote(d))
 		}
 	}
 	pathGuard.dropped = dropped
@@ -97,6 +87,33 @@ func guardPATH(m *Manager, writes []string) {
 		os.Setenv("PATH", kept)
 	}
 	pathGuard.set, pathGuard.guarded = kept, true
+}
+
+// ledgerNote says, when p overlaps a path a sandboxed launch was let
+// write, where that came from (sandbox.WriteSource): "" otherwise.
+func ledgerNote(p string) string {
+	ps := pathForms(p)
+	for _, g := range sandbox.GrantedWrites() {
+		for _, gf := range pathForms(g) {
+			for _, x := range ps {
+				if within(x, gf) || within(gf, x) {
+					return "; " + sandbox.WriteSource(g)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// UnguardedPATH is PATH as it was before the guard left directories out
+// of it: what to record as the PATH the daemon was started with.
+func UnguardedPATH() string {
+	pathGuard.Lock()
+	defer pathGuard.Unlock()
+	if cur := os.Getenv("PATH"); !pathGuard.guarded || cur != pathGuard.set {
+		return cur
+	}
+	return pathGuard.orig
 }
 
 // guardedPATH is path less its relative and empty entries and every

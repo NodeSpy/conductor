@@ -1,10 +1,13 @@
 package sandbox
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 )
 
 // Every launch the sandbox wraps records the host paths it lets the launch
@@ -68,5 +71,103 @@ func TestWrapsRecordWhatTheyLetWrite(t *testing.T) {
 	got = GrantedWrites()
 	if !slices.Contains(got, rw) || !slices.Contains(got, ctrFS) || slices.Contains(got, gone) {
 		t.Fatalf("reloaded %v, want what exists and not %s", got, gone)
+	}
+}
+
+// A path the config granted (an fs: path, a plugin's write) is forgotten
+// when the daemon starts with a config that no longer grants it, with a
+// log line naming it, when it was recorded and where; one a run was let
+// write is kept while it exists, as is one both granted. An earlier
+// ledger's bare lines load as a run's.
+func TestConfiguredWritesAreForgottenWithTheConfig(t *testing.T) {
+	t.Cleanup(ResetWriteLedger)
+	dir := t.TempDir()
+	mk := func(n string) string {
+		p := filepath.Join(dir, n)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	fsDir, kept, run, both, legacy := mk("fs"), mk("kept"), mk("run"), mk("both"), mk("legacy")
+	ledger := filepath.Join(dir, "ledger")
+	if err := os.WriteFile(ledger, []byte(legacy+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := UseWriteLedger(ledger); err != nil {
+		t.Fatal(err)
+	}
+	SetConfiguredWrites([]string{fsDir, kept, both, legacy})
+	if err := AdmitWrites(fsDir, kept, run, both); err != nil {
+		t.Fatal(err)
+	}
+	// A run's launch is let write it too (the config no longer names it then).
+	SetConfiguredWrites(nil)
+	if err := AdmitWrites(both); err != nil {
+		t.Fatal(err)
+	}
+	if src := WriteSource(fsDir); !strings.Contains(src, "the config let a sandboxed launch write "+fsDir) || !strings.Contains(src, ledger) {
+		t.Fatalf("source %q", src)
+	}
+	if src := WriteSource(run); !strings.Contains(src, "a run's sandboxed launch") {
+		t.Fatalf("source %q", src)
+	}
+	// The daemon restarts with fs: dropped from the config, and kept still in it.
+	ResetWriteLedger()
+	if err := UseWriteLedger(ledger); err != nil {
+		t.Fatal(err)
+	}
+	SetConfiguredWrites([]string{kept})
+	var logs []string
+	if err := ForgetUnconfigured(func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }); err != nil {
+		t.Fatal(err)
+	}
+	got := GrantedWrites()
+	if slices.Contains(got, fsDir) {
+		t.Fatalf("%s is still recorded: %v", fsDir, got)
+	}
+	for _, want := range []string{kept, run, legacy, both} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("%s forgotten: %v", want, got)
+		}
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0], fsDir) || !strings.Contains(logs[0], ledger) || !strings.Contains(logs[0], "no longer does") {
+		t.Fatalf("logs %q", logs)
+	}
+	// What was forgotten stays forgotten across a restart.
+	ResetWriteLedger()
+	if err := UseWriteLedger(ledger); err != nil {
+		t.Fatal(err)
+	}
+	if got := GrantedWrites(); slices.Contains(got, fsDir) || !slices.Contains(got, kept) {
+		t.Fatalf("reloaded %v", got)
+	}
+}
+
+// Nothing is admitted while Exclusive runs: AdmitWrites waits for it.
+func TestExclusiveHoldsAdmission(t *testing.T) {
+	t.Cleanup(ResetWriteLedger)
+	if err := UseWriteLedger(""); err != nil {
+		t.Fatal(err)
+	}
+	p := t.TempDir()
+	in, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		_ = Exclusive(func() error { close(in); <-release; return nil })
+	}()
+	<-in
+	go func() { _ = AdmitWrites(p); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("a launch was admitted while Exclusive ran")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if slices.Contains(GrantedWrites(), p) {
+		t.Fatal("recorded while Exclusive ran")
+	}
+	close(release)
+	<-done
+	if !slices.Contains(GrantedWrites(), p) {
+		t.Fatal("not recorded once Exclusive returned")
 	}
 }

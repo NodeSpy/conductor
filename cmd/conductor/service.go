@@ -127,46 +127,24 @@ func isDir(p string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// servicePATH builds the PATH the service runs with, and so the PATH
-// conductor runs its own tools from, unjailed (git, ssh-keygen, unshare,
-// ps, lsof). A --user service otherwise inherits systemd/launchd's minimal
-// PATH, so `paseo`, `gh`, `go`, and `claude` in ~/.local/bin aren't found.
-// The system's dirs lead, so conductor's own tools are the system's; then
-// the package managers' and Go's, then the user's own bin dirs, then the
-// rest of the install-time PATH. An entry that is not an absolute path is
-// dropped: it would resolve against whatever directory the service is in.
-// (At run time the daemon also drops any directory a plugin may write.)
+// servicePATH builds the PATH the service runs with: what the daemon runs
+// for a bare name (`claude`, `gh`, `paseo`, `go`, git). A --user service
+// otherwise inherits systemd/launchd's minimal PATH, so the tools in
+// ~/.local/bin aren't found. ~/.local/bin, then the standard dirs, then the
+// install-time PATH, deduped. The order is the one every earlier release
+// wrote, and an update rewrites the unit with it: an update must never
+// change which program a name runs. An entry that is not an absolute path
+// is dropped (it would resolve against whatever directory the service is
+// in); at run time the daemon also leaves out any directory a plugin, or
+// any other sandboxed launch, may write. The install-time PATH is the
+// daemon's own as it started, not as that guard left it, so a rewrite does
+// not record what the guard dropped.
 func servicePATH() string {
-	parts := pathList(nil)
-	for _, p := range []string{
-		"/usr/bin", "/bin", "/usr/sbin", "/sbin",
-		"/usr/local/bin", "/opt/homebrew/bin", "/opt/homebrew/sbin", // macOS (Apple silicon)
-		"/usr/local/go/bin", "/usr/lib/go/bin",
-		filepath.Join(home(), ".local/bin"), filepath.Join(home(), "go/bin"),
-	} {
-		parts = pathList(parts, p)
-	}
-	return strings.Join(pathList(parts, installPATH()...), ":")
-}
-
-// installPATH is the installing shell's PATH: CONDUCTOR_COMMAND_PATH when
-// set (the running service's, which has it from the unit, regenerating its
-// unit on update), else PATH.
-func installPATH() []string {
-	if p := os.Getenv(plugin.CommandPathEnv); p != "" {
-		return filepath.SplitList(p)
-	}
-	return filepath.SplitList(os.Getenv("PATH"))
-}
-
-// commandPATH is where the service looks for a plugin's declared commands
-// (plugin.CommandPathEnv): the install-time PATH in its own order, so a
-// command is the one the installing shell's `command -v` names, then
-// servicePATH's dirs for an install run from a shell that lacks them. It
-// only says where to look: what is found there is checked like any
-// program a plugin runs.
-func commandPATH() string {
-	return strings.Join(pathList(pathList(nil, installPATH()...), strings.Split(servicePATH(), ":")...), ":")
+	parts := pathList(nil, filepath.Join(home(), ".local/bin"),
+		"/opt/homebrew/bin", "/opt/homebrew/sbin", // macOS (Apple silicon)
+		"/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+		"/usr/local/go/bin", "/usr/lib/go/bin", filepath.Join(home(), "go/bin"))
+	return strings.Join(pathList(parts, filepath.SplitList(plugin.UnguardedPATH())...), ":")
 }
 
 // pathList appends each absolute dir in add to parts, once.
@@ -216,12 +194,11 @@ ExecStart=%s run
 Restart=always
 RestartSec=5
 Environment=PATH=%s
-Environment=%s=%s
 %sEnvironmentFile=-%s/conductor.env
 
 [Install]
 WantedBy=default.target
-`, exe, servicePATH(), plugin.CommandPathEnv, commandPATH(), sdEnv, cfg)
+`, exe, servicePATH(), sdEnv, cfg)
 	case "launchd":
 		path = filepath.Join(home(), "Library/LaunchAgents", "sh."+name+".plist")
 		log := launchdLog()
@@ -236,14 +213,14 @@ WantedBy=default.target
         <string>run</string>
     </array>
     <key>EnvironmentVariables</key>
-    <dict><key>PATH</key><string>%s</string><key>%s</key><string>%s</string>%s</dict>
+    <dict><key>PATH</key><string>%s</string>%s</dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>StandardOutPath</key><string>%s</string>
     <key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, name, exe, servicePATH(), plugin.CommandPathEnv, commandPATH(), ldEnv, log, log)
+`, name, exe, servicePATH(), ldEnv, log, log)
 	}
 	return path, content
 }

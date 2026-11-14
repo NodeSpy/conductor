@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -375,5 +376,25 @@ func TestRefsAndStepFSExpandHome(t *testing.T) {
 	}
 	if err := validateIsolation("step s", &IsolationConfig{Mode: "namespace", FS: []string{"~other/x"}}, false); err == nil {
 		t.Fatal("~user is not expanded, so it is not absolute")
+	}
+}
+
+// Every isolation block's fs: paths are what the config grants launches
+// write, wherever the block sits: home expanded.
+func TestIsolationFSFindsEveryBlock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	c := decodeConfig(t, `
+engines: { e: { isolation: { mode: namespace, fs: [/srv/engine] } } }
+checks:
+  c: { use: cli, isolation: { mode: namespace, fs: [~/check] } }
+workflows:
+  w: { steps: [ { id: s, use: cli, isolation: { mode: namespace, fs: [/srv/step] } } ] }
+`)
+	got := c.IsolationFS()
+	for _, want := range []string{"/srv/engine", filepath.Join(home, "check"), "/srv/step"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("%s missing from %v", want, got)
+		}
 	}
 }

@@ -545,7 +545,7 @@ func (c *grantChecks) programWritable(p string) error {
 	}
 	for _, w := range c.peer {
 		if within(w, p) || within(p, w) {
-			return fmt.Errorf("%s overlaps %s, which a plugin conductor runs may write — it could have placed what is there", p, w)
+			return fmt.Errorf("%s overlaps %s, which a plugin conductor runs may write — it could have placed what is there%s", p, w, ledgerNote(p))
 		}
 	}
 	return nil
@@ -1019,7 +1019,18 @@ func buildJailed(s Spec, sd SandboxDeps, argv, env []string) (*exec.Cmd, func(),
 		unlink()
 		return nil, nil, err
 	}
-	unbind := registerBound(s.Name, cmds)
+	unbind, err := bindLaunch(sd.owner, s.Name, cmds, func() []string {
+		ws := sandbox.GrantedWrites()
+		if sd.PeerWritable != nil {
+			ws = append(ws, sd.PeerWritable()...)
+		}
+		return ws
+	})
+	if err != nil {
+		cleanup()
+		unlink()
+		return nil, nil, err
+	}
 	return c, func() { cleanup(); unlink(); unbind() }, nil
 }
 

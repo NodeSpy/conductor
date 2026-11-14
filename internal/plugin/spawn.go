@@ -104,6 +104,9 @@ type SandboxDeps struct {
 	// Given to NewManager, it adds to what the Manager knows (a probe's view
 	// of the configured plugins).
 	PeerWritable func() []string
+	// owner is the Client launching (NewClient sets it): what its jail
+	// binds to run stays registered across its restarts (registerBound).
+	owner *Client
 }
 
 // buildCommand prepares the (possibly sandbox-wrapped) *exec.Cmd for a plugin,
