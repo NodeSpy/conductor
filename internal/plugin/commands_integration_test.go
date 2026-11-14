@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,8 +18,8 @@ import (
 
 // TestHomebrewCommandRunsJailed runs a command Homebrew linked onto PATH
 // (git, or CONDUCTOR_TEST_BREW_COMMAND) through the real plugin launch: it
-// is found by asking brew, and runs in the jail with the libraries of what
-// it was installed with. Skipped where PATH has no such command (CI's Linux
+// is found from what Homebrew recorded installing, and runs in the jail
+// with the libraries of what it was installed with. Skipped where PATH has no such command (CI's Linux
 // runners; a Mac whose git is Apple's).
 func TestHomebrewCommandRunsJailed(t *testing.T) {
 	name := os.Getenv("CONDUCTOR_TEST_BREW_COMMAND")
@@ -57,6 +58,22 @@ func TestHomebrewCommandRunsJailed(t *testing.T) {
 	}
 	t.Logf("%s: %s, reads %v", name, found[0].real, found[0].reads)
 
+	t.Setenv("HOME", home)
+	// git's system config is the prefix's etc/gitconfig, which the plugin
+	// does not declare: a plugin running git says so (as it would).
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	key := "out=" + name + " --version"
+	got := runProbePlugin(t, dir, sd, m, key)[key]
+	if !strings.HasPrefix(got, "ok:") {
+		t.Fatalf("%s in the jail: %q", key, got)
+	}
+	t.Logf("jailed %s: %s", key, got)
+}
+
+// runProbePlugin launches the jail probe as plugin "probe" with manifest m
+// through the real jailed launch, and returns what it reported for keys.
+func runProbePlugin(t *testing.T, dir string, sd SandboxDeps, m Manifest, keys ...string) map[string]string {
+	t.Helper()
 	conductor := filepath.Join(dir, "conductor")
 	if out, err := exec.Command("go", "build", "-o", conductor, "github.com/NodeSpy/conductor/cmd/conductor").CombinedOutput(); err != nil {
 		t.Fatalf("build conductor: %v\n%s", err, out)
@@ -69,15 +86,10 @@ func TestHomebrewCommandRunsJailed(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", probe, "./testdata/jailprobe").CombinedOutput(); err != nil {
 		t.Fatalf("build probe: %v\n%s", err, out)
 	}
-	t.Setenv("HOME", home)
-	// git's system config is the prefix's etc/gitconfig, which the plugin
-	// does not declare: a plugin running git says so (as it would).
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	pm := sandbox.NewProxyManager(nil)
 	t.Cleanup(pm.Close)
 	sd.Self, sd.EgressUnix, sd.EgressAddr = conductor, pm.UnixEndpoint, pm.Endpoint
-	key := "out=" + name + " --version"
-	s := Spec{Name: "probe", Kind: KindConnector, BinPath: probe, Manifest: m, Args: []string{key}}
+	s := Spec{Name: "probe", Kind: KindConnector, BinPath: probe, Manifest: m, Args: keys}
 	cmd, cleanup, sandboxed, err := buildCommand(s, sd)
 	if err != nil {
 		t.Fatal(err)
@@ -93,14 +105,14 @@ func TestHomebrewCommandRunsJailed(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	got := ""
+	got := map[string]string{}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		sc := bufio.NewScanner(stdout)
 		for sc.Scan() {
-			if k, v, ok := strings.Cut(sc.Text(), "\t"); ok && k == key {
-				got = v
+			if k, v, ok := strings.Cut(sc.Text(), "\t"); ok && slices.Contains(keys, k) {
+				got[k] = v
 			}
 			if sc.Text() == "READY" {
 				return
@@ -114,8 +126,8 @@ func TestHomebrewCommandRunsJailed(t *testing.T) {
 	}
 	stdin.Close()
 	_ = cmd.Wait()
-	if !strings.HasPrefix(got, "ok:") {
-		t.Fatalf("%s in the jail: %q\nstderr:\n%s", key, got, stderr.String())
+	if len(got) != len(keys) {
+		t.Fatalf("probe reported %v for %v; stderr:\n%s", got, keys, stderr.String())
 	}
-	t.Logf("jailed %s: %s", key, got)
+	return got
 }

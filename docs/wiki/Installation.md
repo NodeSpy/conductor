@@ -113,10 +113,24 @@ the unit.
 
 **PATH is baked into the unit.** A `--user` service otherwise inherits a minimal
 PATH and can't find `paseo`, `gh`, `go`, or `claude` under `~/.local/bin`. The
-generated unit sets `PATH` to `~/.local/bin` plus the standard bin dirs (including
-Homebrew and Go) plus your install-time PATH. If a tool lives somewhere unusual,
-add a systemd drop-in (`Environment=PATH=…`) or set `PATH` directly in
-`conductor.env`.
+generated unit sets two:
+
+- `PATH`, which conductor runs its own tools from (git, ssh-keygen, unshare,
+  ps, lsof), unjailed: the system's bin dirs first (`/usr/bin`, `/bin`,
+  `/usr/sbin`, `/sbin`), then `/usr/local/bin`, Homebrew's and Go's, then
+  `~/.local/bin` and `~/go/bin`, then the rest of your install-time PATH.
+  An entry that is not an absolute path is dropped. At run time the daemon
+  also leaves out any directory a jailed plugin may write (logged).
+- `CONDUCTOR_COMMAND_PATH`, where a plugin's declared commands are looked
+  up: your install-time PATH in its own order, so a plugin gets the `gh`
+  your shell's `command -v gh` names, then the dirs above. Run
+  `conductor service install` again from a shell whose PATH you want
+  recorded. See [Plugins](Plugins.md), "Where a declared command comes
+  from".
+
+If a tool lives somewhere unusual, add a systemd drop-in
+(`Environment=PATH=…`) or set `PATH` directly in `conductor.env`; for a
+plugin's command, name its program file under `commands:` in the config.
 
 ## Behavior
 

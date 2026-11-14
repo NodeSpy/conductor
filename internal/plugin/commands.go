@@ -1,30 +1,31 @@
 package plugin
 
 import (
-	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 )
 
 // Where a declared command is found, in order (locateCommand):
 //
 //  1. the config's `commands:` block names the program file (fromConfig);
-//  2. PATH, as `command -v` finds it, when that is the program itself or a
-//     symlink root owns (fromPATH);
-//  3. when PATH finds a symlink conductor's user owns, the package manager
-//     that made it, asked where the program it installed is (fromHomebrew);
+//  2. PATH, as `command -v` finds it (commandLookPath), when that is the
+//     program itself or a symlink root owns (fromPATH);
+//  3. when PATH finds a symlink conductor's user owns, what the package
+//     manager that made it recorded installing, read as data — conductor
+//     never runs the package manager (fromHomebrew);
 //
 // and otherwise the launch fails, naming the `commands:` line that names it.
 // Conductor never follows a symlink its own user owns to find a command: a
-// plugin running as that user could have made it. It asks an authority —
-// the operator's config, or the package manager — and checks the program
-// file that names like any other (grantChecks.program).
+// plugin running as that user could have made it. It takes an authority's
+// word — the operator's config, or the package manager's records — and
+// checks the program file that names like any other (grantChecks.program),
+// against what every jailed plugin may write.
 const (
 	fromConfig   = "config"
 	fromPATH     = "PATH"
@@ -64,7 +65,7 @@ func locateCommand(s Spec, gc *grantChecks, name string) (c jailCommand, at stri
 		c, err := gc.named(name, p)
 		return c, p, err
 	}
-	p, err := spawnLookPath(name)
+	p, err := commandLookPath(name)
 	if err != nil {
 		return jailCommand{}, "", errNotInstalled
 	}
@@ -78,7 +79,7 @@ func locateCommand(s Spec, gc *grantChecks, name string) (c jailCommand, at stri
 	for _, m := range packageManagers {
 		found, ok, merr := m.locate(gc, name, p)
 		if merr != nil {
-			return jailCommand{}, p, fmt.Errorf("it goes through %s, a symlink that root does not own, and asking %s where %s is failed: %w — %s", link.link, m.name, name, merr, commandFix(name, p))
+			return jailCommand{}, p, fmt.Errorf("it goes through %s, a symlink that root does not own, and what %s recorded about %s is refused: %w — %s", link.link, m.name, name, merr, commandFix(name, p))
 		}
 		if !ok {
 			continue
@@ -113,10 +114,7 @@ func (c *grantChecks) programDir(d string) error {
 	if err := c.refusal("read", d, real); err != nil {
 		return err
 	}
-	if w := c.overlapsWritable(real); w != "" {
-		return fmt.Errorf("it overlaps %s, which the plugin may write", w)
-	}
-	return nil
+	return c.programWritable(real)
 }
 
 // commandFix is the config line that names the command's program file,
@@ -166,22 +164,11 @@ func (c *grantChecks) followNamed(p string) (string, error) {
 		return "", err
 	}
 	for _, h := range hops {
-		if w := c.overlapsWritable(h); w != "" {
-			return "", fmt.Errorf("it goes through %s, a symlink inside %s, which the plugin may write — it could have made it", h, w)
+		if err := c.programWritable(h); err != nil {
+			return "", fmt.Errorf("it goes through the symlink %s: %w", h, err)
 		}
 	}
 	return real, nil
-}
-
-// overlapsWritable is the path the plugin may write that p lies inside, or
-// that lies inside p, or "".
-func (c *grantChecks) overlapsWritable(p string) string {
-	for _, w := range c.writable {
-		if within(w, p) || within(p, w) {
-			return w
-		}
-	}
-	return ""
 }
 
 // linkHops resolves p, returning every symlink on the way (each a path
@@ -226,189 +213,118 @@ func linkHops(p string) (hops []string, real string, err error) {
 	return hops, cur, nil
 }
 
-// brewPrefixes are where Homebrew installs, for a brew PATH does not find
-// (a test var).
-var brewPrefixes = []string{"/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew"}
+// maxReceipt bounds the INSTALL_RECEIPT.json read (a few KB in practice).
+const maxReceipt = 4 << 20
 
-// brewTimeout bounds one brew call (a test var).
-var brewTimeout = 10 * time.Second
-
-// homebrewLocate asks Homebrew where the program PATH finds at p is. A brew
-// that says p is in its prefix's bin (or sbin) names its Cellar; the
-// formula keg's program there that is the same file p runs (os.SameFile,
-// the kernel's resolution, not conductor reading links) is the answer, when
-// brew also lists that formula at that version. So whatever brew answers,
-// what runs is what PATH already runs, now at its keg's real path.
+// homebrewLocate finds the program PATH finds at p, a link in a Homebrew
+// prefix's bin (or sbin), from what Homebrew recorded when it installed it,
+// read as data: conductor never runs brew. brew is a program of conductor's
+// user, with code, settings and caches a plugin could reach; run unjailed
+// to answer a lookup, it would be the way out of the jail this lookup
+// serves. What brew would answer is on disk:
 //
-// brew itself runs unjailed, as conductor's user, so one is asked only when
-// nothing the plugin may write overlaps its path, the symlinks on the way
-// to it, its prefix or repository, or the files brew reads its settings
-// from (brewRunnable): a plugin cannot plant or change the brew conductor
-// runs.
+//   - the prefix is the directory above p's, and its Cellar is
+//     <prefix>/Cellar (a custom HOMEBREW_CELLAR is not followed: name the
+//     program under commands:);
+//   - the formula keg's program that is the same file p runs
+//     (os.SameFile: the kernel's resolution, not conductor reading the
+//     link) is the program;
+//   - the keg holds the INSTALL_RECEIPT.json Homebrew writes when it
+//     installs one, and its runtime_dependencies (every formula the
+//     program loads, transitively) name the kegs it reads to run: each
+//     installed version of each.
+//
+// A prefix that overlaps a path some plugin may write is refused: a plugin
+// could have placed the link, the keg or the receipt.
 func homebrewLocate(gc *grantChecks, name, p string) (located, bool, error) {
 	dir := filepath.Dir(p)
-	for _, brew := range brewCandidates() {
-		if err := gc.brewRunnable(brew); err != nil {
-			return located{}, false, err
-		}
-		prefix, err := runBrew(brew, "--prefix")
-		if err != nil || !filepath.IsAbs(prefix) {
-			continue
-		}
-		prefix = filepath.Clean(prefix)
-		if dir != filepath.Join(prefix, "bin") && dir != filepath.Join(prefix, "sbin") {
-			continue
-		}
-		if w := gc.overlapsWritable(prefix); w != "" {
-			return located{}, false, fmt.Errorf("its prefix %s overlaps %s, which the plugin may write", prefix, w)
-		}
-		cellar, err := runBrew(brew, "--cellar")
-		if err != nil || !filepath.IsAbs(cellar) {
-			return located{}, false, fmt.Errorf("%s --cellar: %v", brew, err)
-		}
-		want, err := os.Stat(p)
-		if err != nil {
-			return located{}, false, err
-		}
-		for _, sub := range []string{"bin", "sbin"} {
-			kegs, _ := filepath.Glob(filepath.Join(filepath.Clean(cellar), "*", "*", sub))
-			for _, k := range kegs {
-				f := filepath.Join(k, name)
-				fi, err := os.Stat(f)
-				if err != nil || !os.SameFile(fi, want) {
-					continue
-				}
-				verDir := filepath.Dir(filepath.Dir(f))
-				formula, version := filepath.Base(filepath.Dir(verDir)), filepath.Base(verDir)
-				out, err := runBrew(brew, "list", "--versions", formula)
-				if err != nil {
-					return located{}, false, fmt.Errorf("%s list --versions %s: %v", brew, formula, err)
-				}
-				if fields := strings.Fields(out); len(fields) < 2 || fields[0] != formula || !slices.Contains(fields[1:], version) {
-					return located{}, false, fmt.Errorf("%s is in %s's keg %s, which brew does not list as installed (%q)", p, formula, version, out)
-				}
-				reads, err := brewKegs(brew, cellar, formula, version)
-				if err != nil {
-					return located{}, false, err
-				}
-				return located{real: f, reads: reads}, true, nil
-			}
-		}
-		// brew's prefix, but no formula's keg program: not one brew
-		// installed (a cask, a link someone else made).
+	if b := filepath.Base(dir); b != "bin" && b != "sbin" {
 		return located{}, false, nil
 	}
+	prefix := filepath.Dir(dir)
+	cellar := filepath.Join(prefix, "Cellar")
+	if fi, err := os.Lstat(cellar); err != nil || !fi.IsDir() {
+		return located{}, false, nil
+	}
+	if err := gc.programWritable(prefix); err != nil {
+		return located{}, false, fmt.Errorf("the Homebrew prefix %s: %w", prefix, err)
+	}
+	want, err := os.Stat(p)
+	if err != nil {
+		return located{}, false, err
+	}
+	for _, sub := range []string{"bin", "sbin"} {
+		kegs, _ := filepath.Glob(filepath.Join(cellar, "*", "*", sub))
+		for _, k := range kegs {
+			f := filepath.Join(k, name)
+			fi, err := os.Stat(f)
+			if err != nil || !os.SameFile(fi, want) {
+				continue
+			}
+			keg := filepath.Dir(k)
+			deps, err := receiptDeps(keg)
+			if err != nil {
+				return located{}, false, fmt.Errorf("%s is in %s, which Homebrew did not record installing: %w", p, keg, err)
+			}
+			reads := []string{keg}
+			for _, d := range deps {
+				reads = append(reads, installedKegs(cellar, d)...)
+			}
+			return located{real: f, reads: reads}, true, nil
+		}
+	}
+	// A Homebrew prefix, but no formula's keg program: not one Homebrew
+	// installed as a formula (a cask, a link someone else made).
 	return located{}, false, nil
 }
 
-// brewKegs are the directories a formula's program reads to run: its own
-// keg, and the kegs of every installed version of each formula brew says
-// it depends on (`brew deps --installed`) — the libraries it loads. A
-// program finds them through Homebrew's opt links; reading the keg a link
-// names is what reading through it needs, so the links are not granted.
-func brewKegs(brew, cellar, formula, version string) ([]string, error) {
-	cellar = filepath.Clean(cellar)
-	out := []string{filepath.Join(cellar, formula, version)}
-	deps, err := runBrew(brew, "deps", "--installed", "--formula", formula)
+// receiptDeps reads a keg's INSTALL_RECEIPT.json, as data, for the names of
+// the formulas it depends on at run time.
+func receiptDeps(keg string) ([]string, error) {
+	rp := filepath.Join(keg, "INSTALL_RECEIPT.json")
+	fi, err := os.Lstat(rp)
 	if err != nil {
-		return nil, fmt.Errorf("%s deps --installed --formula %s: %v", brew, formula, err)
+		return nil, err
 	}
-	for _, dep := range strings.Fields(deps) {
-		if strings.ContainsAny(dep, "/\\") || dep == "." || dep == ".." {
-			// A tap-qualified name (user/tap/formula) is installed
-			// under its own name in the Cellar.
-			dep = filepath.Base(dep)
-		}
-		vs, err := runBrew(brew, "list", "--versions", dep)
-		if err != nil {
-			return nil, fmt.Errorf("%s list --versions %s: %v", brew, dep, err)
-		}
-		fields := strings.Fields(vs)
-		if len(fields) < 2 || fields[0] != dep {
+	if !fi.Mode().IsRegular() || fi.Size() > maxReceipt {
+		return nil, fmt.Errorf("%s is not a receipt file", rp)
+	}
+	b, err := os.ReadFile(rp)
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		Deps []struct {
+			FullName string `json:"full_name"`
+		} `json:"runtime_dependencies"`
+	}
+	if err := json.Unmarshal(b, &r); err != nil {
+		return nil, fmt.Errorf("%s: %w", rp, err)
+	}
+	var out []string
+	for _, d := range r.Deps {
+		// A tap formula (user/tap/name) is installed under its name.
+		n := path.Base(d.FullName)
+		if n == "" || n == "." || n == ".." || n == "/" || strings.ContainsAny(n, "/\\") || slices.Contains(out, n) {
 			continue
 		}
-		for _, v := range fields[1:] {
-			k := filepath.Join(cellar, dep, v)
-			if filepath.Dir(filepath.Dir(k)) != cellar {
-				continue
-			}
-			if fi, err := os.Lstat(k); err == nil && fi.IsDir() {
-				out = append(out, k)
-			}
-		}
+		out = append(out, n)
 	}
 	return out, nil
 }
 
-// brewCandidates are the brews to ask: PATH's, then each standard prefix's.
-func brewCandidates() []string {
+// installedKegs are the installed versions of formula: the real
+// directories in <cellar>/<formula>.
+func installedKegs(cellar, formula string) []string {
+	ents, err := os.ReadDir(filepath.Join(cellar, formula))
+	if err != nil {
+		return nil
+	}
 	var out []string
-	add := func(p string) {
-		if p == "" || slices.Contains(out, p) {
-			return
+	for _, e := range ents {
+		if e.Type().IsDir() {
+			out = append(out, filepath.Join(cellar, formula, e.Name()))
 		}
-		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
-			out = append(out, p)
-		}
-	}
-	if p, err := spawnLookPath("brew"); err == nil {
-		if p, err = filepath.Abs(p); err == nil {
-			add(p)
-		}
-	}
-	for _, pre := range brewPrefixes {
-		add(filepath.Join(pre, "bin", "brew"))
 	}
 	return out
-}
-
-// brewRunnable is why conductor will not run brew (nil: it may): brew, a
-// symlink on the way to it, the repository it runs from (its bin's
-// parent), or a file it reads its settings from overlaps a path the plugin
-// may write, or brew lies in conductor's own dirs.
-func (c *grantChecks) brewRunnable(brew string) error {
-	hops, real, err := linkHops(brew)
-	if err != nil {
-		return fmt.Errorf("brew %s: %w", brew, err)
-	}
-	// Its prefix (where it is linked) and repository (where it runs from)
-	// hold the code and settings it reads.
-	check := append([]string{brew, real, filepath.Dir(filepath.Dir(brew)), filepath.Dir(filepath.Dir(real))}, hops...)
-	home, _ := jailHome()
-	if home != "" {
-		check = append(check, filepath.Join(home, ".homebrew"))
-	}
-	if x := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(x) {
-		check = append(check, filepath.Join(x, "homebrew"))
-	}
-	check = append(check, "/etc/homebrew")
-	for _, q := range check {
-		if w := c.overlapsWritable(q); w != "" {
-			return fmt.Errorf("brew %s: %s overlaps %s, which the plugin may write — conductor does not run a brew it could have changed", brew, q, w)
-		}
-		for _, prot := range c.protected {
-			if within(prot, q) {
-				return fmt.Errorf("brew %s lies inside conductor's own %s", brew, prot)
-			}
-		}
-	}
-	return nil
-}
-
-// runBrew runs brew with args and returns its trimmed output. Homebrew's
-// automatic update, analytics and hints are off: this is a lookup.
-var runBrew = func(brew string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), brewTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, brew, args...) //nolint:gosec // a brew brewRunnable checked, fixed arguments and a formula name from its own Cellar
-	cmd.Env = append(os.Environ(), "HOMEBREW_NO_AUTO_UPDATE=1", "HOMEBREW_NO_ANALYTICS=1", "HOMEBREW_NO_ENV_HINTS=1", "HOMEBREW_NO_INSTALL_FROM_API=1")
-	out, err := cmd.Output()
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(ee.Stderr)))
-		}
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }

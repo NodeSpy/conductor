@@ -74,7 +74,7 @@ func pluginGrant(s Spec) (sdk.Grant, error) {
 		p, named := s.Commands[n]
 		if !named {
 			var err error
-			if p, err = spawnLookPath(n); err != nil {
+			if p, err = commandLookPath(n); err != nil {
 				return "", false
 			}
 		}
@@ -359,7 +359,7 @@ func interpreters(script string) []string {
 			if strings.HasPrefix(a, "-") || strings.Contains(a, "=") {
 				continue
 			}
-			if p, err := spawnLookPath(a); err == nil {
+			if p, err := commandLookPath(a); err == nil {
 				if p, err = filepath.Abs(p); err == nil {
 					progs = append(progs, p)
 				}
@@ -379,20 +379,57 @@ var xcrunFind = func(tool string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// jailPATH is the PATH a jailed plugin runs with: the directory of each
-// declared command found outside the standard directories, then the
-// standard directories (which hold only its declared commands). A command
-// found elsewhere comes first, so its name runs what was found — Homebrew's
-// git, not the /usr/bin stub of the same name.
-func jailPATH(cmds []jailCommand) string {
-	std := []string{"/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"}
-	var dirs []string
+// jailPATH is the PATH a jailed plugin runs with: the standard directories
+// first, then the directory of each declared command found outside them.
+// links, when set, is a directory holding a link for each declared command
+// found outside them, by its name, to the program found (commandLinks): it
+// leads instead of their directories, so a declared name runs what was
+// found (Homebrew's git, not the /usr/bin stub of that name on macOS), and
+// a name the plugin did not declare never resolves into a keg's bin dir.
+func jailPATH(cmds []jailCommand, links string) string {
+	dirs := []string{"/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"}
+	if links != "" {
+		return strings.Join(append([]string{links}, dirs...), string(os.PathListSeparator))
+	}
 	for _, c := range cmds {
-		if d := filepath.Dir(c.path); !slices.Contains(std, d) && !slices.Contains(dirs, d) {
+		if d := filepath.Dir(c.path); !slices.Contains(dirs, d) {
 			dirs = append(dirs, d)
 		}
 	}
-	return strings.Join(append(dirs, std...), string(os.PathListSeparator))
+	return strings.Join(dirs, string(os.PathListSeparator))
+}
+
+// stdCommandDir: a directory jailPATH always carries.
+func stdCommandDir(d string) bool {
+	return slices.Contains([]string{"/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"}, d)
+}
+
+// commandLinks makes, in the launch's staging dir, a directory of links to
+// the declared commands found outside the standard directories, each by
+// its name (jailPATH). Empty when there are none. The links only steer
+// PATH: what the jail lets run is still the declared programs alone.
+func commandLinks(stage string, cmds []jailCommand) (string, func(), error) {
+	var out []jailCommand
+	for _, c := range cmds {
+		if !stdCommandDir(filepath.Dir(c.path)) {
+			out = append(out, c)
+		}
+	}
+	if stage == "" || len(out) == 0 {
+		return "", func() {}, nil
+	}
+	dir, err := os.MkdirTemp(stage, ".commands-")
+	if err != nil {
+		return "", nil, err
+	}
+	done := func() { os.RemoveAll(dir) }
+	for _, c := range out {
+		if err := os.Symlink(c.real, filepath.Join(dir, c.name)); err != nil && !os.IsExist(err) {
+			done()
+			return "", nil, err
+		}
+	}
+	return dir, done, nil
 }
 
 // grantedPath is a declared path the jail gives the plugin: path is where the
@@ -408,6 +445,9 @@ type grantedPath struct {
 type grantChecks struct {
 	g                                              sdk.Grant
 	homes, protected, sockets, execBroad, writable []string
+	// peer is what every jailed plugin may write (SandboxDeps.PeerWritable),
+	// for the programs, links and libraries a jail binds (programWritable).
+	peer []string
 }
 
 func newGrantChecks(sd SandboxDeps, g sdk.Grant) *grantChecks {
@@ -439,7 +479,36 @@ func newGrantChecks(sd SandboxDeps, g sdk.Grant) *grantChecks {
 			c.writable = append(c.writable, r)
 		}
 	}
+	if sd.PeerWritable != nil {
+		for _, w := range sd.PeerWritable() {
+			if !filepath.IsAbs(w) {
+				continue
+			}
+			c.peer = append(c.peer, filepath.Clean(w))
+			if r, err := filepath.EvalSymlinks(w); err == nil {
+				c.peer = append(c.peer, r)
+			}
+		}
+	}
 	return c
+}
+
+// programWritable is why a program, a link to one or a directory of its
+// libraries at p is refused for lying in, or holding, a path some plugin
+// may write, or nil: this plugin could replace it, or another plugin could
+// have placed it for this one's jail to bind.
+func (c *grantChecks) programWritable(p string) error {
+	for _, w := range c.writable {
+		if within(w, p) || within(p, w) {
+			return fmt.Errorf("%s overlaps %s, which it may write — it could replace what is there", p, w)
+		}
+	}
+	for _, w := range c.peer {
+		if within(w, p) || within(p, w) {
+			return fmt.Errorf("%s overlaps %s, which a plugin conductor runs may write — it could have placed what is there", p, w)
+		}
+	}
+	return nil
 }
 
 // refusal is why the jail does not grant p (resolving to real) as kind
@@ -550,6 +619,11 @@ func (c *grantChecks) checkProgram(cmd jailCommand) error {
 	for _, q := range []string{cmd.path, cmd.real} {
 		if err := c.insideWritable(q); err != nil {
 			return err
+		}
+		for _, w := range c.peer {
+			if within(w, q) {
+				return fmt.Errorf("it lies inside %s, which a plugin conductor runs may write — it could have placed it", w)
+			}
 		}
 	}
 	return nil
@@ -860,7 +934,7 @@ func buildJailed(s Spec, sd SandboxDeps, argv, env []string) (*exec.Cmd, func(),
 	if err != nil {
 		return nil, nil, err
 	}
-	env = replaceEnv(env, "PATH", jailPATH(cmds))
+	env = replaceEnv(env, "PATH", jailPATH(cmds, ""))
 	remote, loopPorts := splitLoopback(g.Egress)
 	if err := refuseOwnPorts(s, loopPorts); err != nil {
 		return nil, nil, err
@@ -884,13 +958,27 @@ func buildJailed(s Spec, sd SandboxDeps, argv, env []string) (*exec.Cmd, func(),
 	if err != nil {
 		return nil, nil, err
 	}
-	if spawnGOOS == "darwin" {
-		return buildSeatbelt(s, sd, g, paths, argv, env, cmds, remote, loopPorts, stage)
-	}
-	if spawnGOOS != "linux" {
+	build := buildNamespaced
+	switch spawnGOOS {
+	case "darwin":
+		build = buildSeatbelt
+	case "linux":
+	default:
 		return nil, nil, fmt.Errorf("plugin %s: no plugin jail on %s — set trust: full to run it unjailed", s.Name, spawnGOOS)
 	}
-	return buildNamespaced(s, sd, g, paths, argv, env, cmds, remote, loopPorts, stage)
+	links, unlink, err := commandLinks(stage, cmds)
+	if err != nil {
+		return nil, nil, fmt.Errorf("plugin %s: command links: %w", s.Name, err)
+	}
+	if links != "" {
+		env = replaceEnv(env, "PATH", jailPATH(cmds, links))
+	}
+	c, cleanup, err := build(s, sd, g, paths, argv, env, cmds, remote, loopPorts, stage)
+	if err != nil {
+		unlink()
+		return nil, nil, err
+	}
+	return c, func() { cleanup(); unlink() }, nil
 }
 
 // jailPaths are a launch's checked declared paths (grantedPaths).
@@ -920,6 +1008,17 @@ func buildNamespaced(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv,
 	if s.BinPath != "" {
 		binds = append(binds, sandbox.BindMount{Path: filepath.Dir(s.BinPath), RO: true})
 	}
+	// What a command's package manager installed it with is read
+	// (noexec), but for the libraries it maps executable: each install
+	// tree's lib dir. Bound first, so the declared program in it, and a
+	// declared exec path inside one, are bound over it.
+	for _, c := range cmds {
+		for _, d := range c.reads {
+			binds = append(binds,
+				sandbox.BindMount{Path: d, RO: true, NoExec: true, Optional: true, NoSymlink: true},
+				sandbox.BindMount{Path: filepath.Join(d, "lib"), RO: true, Optional: true, NoSymlink: true})
+		}
+	}
 	if stage != "" {
 		binds = append(binds, sandbox.BindMount{Path: stage, NoExec: true})
 	}
@@ -938,11 +1037,6 @@ func buildNamespaced(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv,
 		// file it was then, never through a symlink or a directory made
 		// since.
 		binds = append(binds, sandbox.BindMount{Path: c.path, Src: c.real, RO: true, NoSymlink: true, NotDir: true})
-		for _, d := range c.reads {
-			// The libraries it loads are mapped executable: read-only,
-			// not noexec.
-			binds = append(binds, sandbox.BindMount{Path: d, RO: true, Optional: true, NoSymlink: true})
-		}
 	}
 	nf := &sandbox.NetForward{Self: sd.Self, Base: sandbox.BaseMinimal}
 	var closers []func()
@@ -1058,7 +1152,6 @@ func buildSeatbelt(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv, e
 			p.ListenPorts = append(p.ListenPorts, n)
 		}
 	}
-	cleanup := func() {}
 	if sd.EgressAddr == nil {
 		return nil, nil, fmt.Errorf("plugin %s: cannot jail it: no egress proxy is wired", s.Name)
 	}
@@ -1066,7 +1159,7 @@ func buildSeatbelt(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv, e
 	if err != nil {
 		return nil, nil, fmt.Errorf("plugin %s: egress proxy: %w", s.Name, err)
 	}
-	cleanup = revoke
+	cleanup := revoke
 	_, port, _ := net.SplitHostPort(addr)
 	p.ProxyPort, _ = strconv.Atoi(port)
 	env = append(env, sandbox.ProxyEnv(addr, cred)...)

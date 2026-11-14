@@ -340,9 +340,9 @@ hosts:
 
 # commands: — the program file for a command a plugin declares (gh, git),
 # for every plugin that declares it. It wins over PATH. Without it,
-# conductor uses what PATH finds, and for a Homebrew link it asks brew for
-# the formula's own program. Name one here when neither works; the plugin's
-# launch error gives the line to add.
+# conductor uses what PATH finds, and for a Homebrew link it reads what
+# Homebrew recorded installing (it never runs brew). Name one here when
+# neither works; the plugin's launch error gives the line to add.
 # commands:
 #   gh: /opt/homebrew/Cellar/gh/2.101.0/bin/gh
 

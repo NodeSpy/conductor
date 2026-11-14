@@ -520,7 +520,7 @@ func TestNoManifestLeavesPathAlone(t *testing.T) {
 			path = v
 		}
 	}
-	if want := jailPATH(nil); path != want {
+	if want := jailPATH(nil, ""); path != want {
 		t.Fatalf("PATH = %q, want the standard jail PATH %q (no declared commands to add)", path, want)
 	}
 }

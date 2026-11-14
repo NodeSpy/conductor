@@ -102,6 +102,10 @@ type Deps struct {
 	Auth AuthProvider
 	// HostVersion is the daemon version sent on describe.
 	HostVersion string
+	// GuardPATH: keep every directory a plugin this Manager runs may write
+	// off the process's PATH, which conductor runs its own tools from
+	// (guardPATH).
+	GuardPATH bool
 
 	// dial is the transport opener; nil uses the real subprocess dialer.
 	// Tests inject a fake.

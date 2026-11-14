@@ -72,6 +72,7 @@ func pluginDeps(sec *secrets.Resolver, audit func(map[string]any), auth plugin.A
 		State:       pluginStateStore(),
 		Auth:        auth,
 		HostVersion: acp.ClientVersion,
+		GuardPATH:   true,
 		Sandbox: plugin.SandboxDeps{
 			Self:      exe,
 			MaskPaths: masks,

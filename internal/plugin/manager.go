@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/NodeSpy/conductor/internal/config"
 )
@@ -60,6 +61,9 @@ type Manager struct {
 	mu sync.RWMutex
 	// specs are the resolved specs, keyed by "<kind>/<name>".
 	specs map[string]Spec
+	// specSnap is a copy of specs, republished under mu.Lock whenever they
+	// change: what pluginWrites reads during a launch without taking mu.
+	specSnap atomic.Pointer[[]Spec]
 	// decls records each plugin's Decl from its FIRST StartAndDescribe/
 	// ProbeDescribe — the surface the daemon's registrations were built
 	// against, captured at boot BEFORE any auto-update overwrites the binary
@@ -287,8 +291,12 @@ func NewManager(plugins map[string]config.PluginRef, configDir string, state *In
 		decls:       make(map[string]*Decl, len(plugins)),
 		instClients: make(map[string]map[string]*Client, len(plugins)),
 		reloading:   make(map[string]bool),
-		deps:        deps,
 	}
+	// Every launch's program checks see what every plugin this Manager runs
+	// may write (pluginWrites): one plugin cannot place a program, a link or
+	// a library another plugin's jail then binds.
+	deps.Sandbox.PeerWritable = m.pluginWrites
+	m.deps = deps
 	m.instCond = sync.NewCond(&m.instMu)
 	for key := range plugins {
 		m.order = append(m.order, key)
@@ -309,7 +317,52 @@ func NewManager(plugins map[string]config.PluginRef, configDir string, state *In
 			m.clients[key] = NewClient(spec, deps)
 		}
 	}
+	m.publishSpecs()
 	return m
+}
+
+// publishSpecs republishes specSnap from specs (callers hold mu, or own m
+// exclusively).
+func (m *Manager) publishSpecs() {
+	snap := make([]Spec, 0, len(m.specs))
+	for _, k := range m.order {
+		if s, ok := m.specs[k]; ok {
+			snap = append(snap, s)
+		}
+	}
+	m.specSnap.Store(&snap)
+	if m.deps.GuardPATH {
+		guardPATH(m, append(m.pluginWrites(), m.deps.Sandbox.StagingRoot))
+	}
+}
+
+// pluginWrites are the paths any jailed plugin this Manager runs may write:
+// every declared write of every spec and instance it could launch.
+// A trust: full plugin is not counted: it runs unjailed, as you, and was
+// chosen so.
+func (m *Manager) pluginWrites() []string {
+	snap := m.specSnap.Load()
+	if snap == nil {
+		return nil
+	}
+	var out []string
+	add := func(s Spec) {
+		if s.TrustFull || s.InProcess != nil {
+			return
+		}
+		if g, err := pluginGrant(s); err == nil {
+			out = append(out, g.Write...)
+		}
+	}
+	// Every way a spec is launched, whether or not it is now: a shared
+	// process, the type's own, each instance's (more is only safer).
+	for _, s := range *snap {
+		add(s)
+		for name := range s.Instances {
+			add(InstanceSpec(s, name))
+		}
+	}
+	return out
 }
 
 // Names returns the plugin names in sorted order.
@@ -484,6 +537,7 @@ func (m *Manager) SetExposeTargets(targets map[string][]string) {
 			c.setExposeTo(sortedUniq(targets[name]))
 		}
 	}
+	m.publishSpecs()
 	m.mu.Unlock()
 }
 
@@ -534,6 +588,7 @@ func (m *Manager) SetConns(conns map[string]map[string]any) {
 		}
 		m.specs[key] = spec
 	}
+	m.publishSpecs()
 }
 
 // ExposeRefusals names each connector instance whose process would not be
@@ -741,6 +796,7 @@ func (m *Manager) Reload(key string, newSpec Spec) error {
 		s.BinPath, s.Sha256, s.Resolved, s.RanBeforeJail = newSpec.BinPath, newSpec.Sha256, newSpec.Resolved, newSpec.RanBeforeJail
 		m.specs[key] = s
 	}
+	m.publishSpecs()
 	m.mu.Unlock()
 	return finish(nil)
 }
@@ -751,6 +807,9 @@ func (m *Manager) Reload(key string, newSpec Spec) error {
 // be none once the caller is shutting down, but a defensive guard costs
 // nothing) creates no client this method will never reach.
 func (m *Manager) Close() error {
+	if m.deps.GuardPATH {
+		guardPATH(m, nil)
+	}
 	m.instMu.Lock()
 	instClients := m.instClients
 	m.instClients = nil
