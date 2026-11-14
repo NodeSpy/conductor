@@ -726,9 +726,13 @@ Conductor finds each declared command by asking, in order:
      the Cellar. A custom `HOMEBREW_CELLAR` outside the prefix is not
      followed: name the program under `commands:`.
    - On Linux these install trees are bound read-only and noexec, except
-     each one's `lib` directory, which the program maps its libraries from.
-     So the declared program runs, and the other programs in its keg and
-     its dependencies' kegs do not (declare one under `exec` to run it).
+     each one's `lib` directory, which the program maps its libraries from
+     (a noexec mount cannot hold a shared library). So the declared
+     program runs, and the programs in its keg's and its dependencies'
+     `bin` do not (declare one under `exec` to run it). Whatever is
+     executable inside those `lib` directories can run in the jail,
+     though: for example a dependency's bundled tools (`node_modules`
+     binaries, a linker), or Linuxbrew's own `ld.so`.
    - The prefix is refused when it overlaps a path a plugin may write: one
      could have placed the link, the keg or the receipt.
 4. **Otherwise the launch fails**, naming the `commands:` line to add with
@@ -739,18 +743,30 @@ that user could have made it. A command installed some other way as a link
 you own (`~/.local/bin/tool`, as npm, pipx and uv make them) needs its
 `commands:` line, or `trust: full`.
 
-"A path a plugin may write" here means any jailed plugin conductor runs,
-not just the one being launched: every plugin's `write` paths and the
-staging dirs. One plugin could otherwise place a program, a link or a
-library that another plugin's jail then binds. The same goes for a
-command `PATH` finds directly, and for a file `commands:` names. (A
-`trust: full` plugin is not counted: it runs as you, unjailed.)
+"A path a plugin may write" here means anything conductor runs sandboxed,
+not just the plugin being launched: every jailed plugin's `write` paths
+and the staging dirs, and every path any sandboxed launch was let write (a
+code step's `isolation.fs`, an agent's workspace and tool state, a
+container's mounts). Conductor records those as it wraps each launch and
+keeps the list in `<state dir>/sandbox-writes`, so it holds across restarts
+(a path that no longer exists is dropped). One launch could otherwise
+place a program, a link or a library that a plugin's jail then binds. The
+same goes for a command `PATH` finds directly, and for a file `commands:`
+names. (A `trust: full` plugin, and a launch with no sandbox, are not
+counted: they run as you, unconfined.)
+
+It works the other way round too. While a jail runs a program, a launch
+that would be let write over it or the directories it loads from is
+refused, naming the program and the plugin. For example, a code step with
+`isolation: { fs: [~/go] }` is refused while a plugin runs
+`~/go/bin/git`.
 
 In the jail, the standard directories (`/usr/local/bin`, `/usr/bin`,
 `/bin`, and the `sbin`s) hold only the declared commands found there. A
 declared command found anywhere else is reached by its name through a
-per-launch directory, in the staging dir, of links to the declared
-commands. That directory leads the jail's `PATH`, so `git` runs the
+per-launch directory of links to the declared commands. It is made beside
+the plugins' staging dirs, not in one, and the jail reads it but cannot
+change it. That directory leads the jail's `PATH`, so `git` runs the
 Homebrew git that was found, not a `/usr/bin` namesake, and a name the
 plugin did not declare never resolves into a keg's `bin`.
 
@@ -1036,9 +1052,12 @@ working setup):
   installed it. Name its program file under `commands:` (the error gives
   the line), or set `trust: full`. See "Where a declared command comes
   from".
-- **A program, link or library another plugin may write is refused too.**
-  A declared command inside any jailed plugin's `write` paths or staging
-  dir fails the launch, as one inside the launching plugin's own did.
+- **A program, link or library any sandboxed launch may write is refused
+  too.** A declared command inside any jailed plugin's `write` paths or
+  staging dir, or a path a code step or agent was let write, fails the
+  launch, as one inside the launching plugin's own did. A code step,
+  agent or plugin whose writes would cover a program a running plugin
+  uses is refused while that plugin runs.
 - **The service's `PATH` puts the system's directories first again.**
   Conductor runs its own tools (git, ssh-keygen, unshare, ps, lsof) from
   it, unjailed, and drops from it any directory a plugin may write. A

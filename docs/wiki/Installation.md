@@ -120,7 +120,8 @@ generated unit sets two:
   `/usr/sbin`, `/sbin`), then `/usr/local/bin`, Homebrew's and Go's, then
   `~/.local/bin` and `~/go/bin`, then the rest of your install-time PATH.
   An entry that is not an absolute path is dropped. At run time the daemon
-  also leaves out any directory a jailed plugin may write (logged).
+  also leaves out any directory that a jailed plugin, or any other
+  sandboxed launch, may write (each one is logged).
 - `CONDUCTOR_COMMAND_PATH`, where a plugin's declared commands are looked
   up: your install-time PATH in its own order, so a plugin gets the `gh`
   your shell's `command -v gh` names, then the dirs above. Run

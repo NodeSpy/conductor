@@ -163,6 +163,10 @@ func keyringMatchCount(it sdk.KeyringItem) string {
 	return fmt.Sprintf(" (%d items match now)", n)
 }
 
+// HerePeers is what the configured plugins may write, for HereLines'
+// command checks (set by the CLI once it has the config). nil: none known.
+var HerePeers func() []string
+
 // HereLines spells out what s's declared paths and commands are on this
 // machine: "command:git/../../lib/git-core" is /usr/lib/git-core here, a
 // config: path is its configured value. Shown with the declaration at
@@ -178,7 +182,13 @@ func HereLines(s Spec) []string {
 			out = append(out, "on this machine it "+label+": "+strings.Join(ps, ", "))
 		}
 	}
-	found, err := findCommands(s, newGrantChecks(SandboxDeps{}, g), g.Commands)
+	found, err := findCommands(s, newGrantChecks(SandboxDeps{PeerWritable: func() []string {
+		ws := sandbox.GrantedWrites()
+		if HerePeers != nil {
+			ws = append(ws, HerePeers()...)
+		}
+		return ws
+	}}, g), g.Commands)
 	if err != nil {
 		return []string{"on this machine: " + err.Error()}
 	}
@@ -404,27 +414,34 @@ func stdCommandDir(d string) bool {
 	return slices.Contains([]string{"/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"}, d)
 }
 
-// commandLinks makes, in the launch's staging dir, a directory of links to
-// the declared commands found outside the standard directories, each by
-// its name (jailPATH). Empty when there are none. The links only steer
-// PATH: what the jail lets run is still the declared programs alone.
-func commandLinks(stage string, cmds []jailCommand) (string, func(), error) {
+// commandLinks makes a directory of links to the declared commands found
+// outside the standard directories, each by its name, to where the jail
+// has the program (jailPATH). Empty when there are none. It is made in the
+// staging root beside the plugins' own staging dirs, in none of them, and
+// bound into the jail read-only: the plugin cannot repoint its PATH. The
+// links only steer PATH: what the jail lets run is still the declared
+// programs alone.
+func commandLinks(stagingRoot, plugin string, cmds []jailCommand) (string, func(), error) {
 	var out []jailCommand
 	for _, c := range cmds {
 		if !stdCommandDir(filepath.Dir(c.path)) {
 			out = append(out, c)
 		}
 	}
-	if stage == "" || len(out) == 0 {
+	if stagingRoot == "" || len(out) == 0 {
 		return "", func() {}, nil
 	}
-	dir, err := os.MkdirTemp(stage, ".commands-")
+	root := filepath.Join(stagingRoot, ".command-links")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", nil, err
+	}
+	dir, err := os.MkdirTemp(root, plugin+"-")
 	if err != nil {
 		return "", nil, err
 	}
 	done := func() { os.RemoveAll(dir) }
 	for _, c := range out {
-		if err := os.Symlink(c.real, filepath.Join(dir, c.name)); err != nil && !os.IsExist(err) {
+		if err := os.Symlink(c.path, filepath.Join(dir, c.name)); err != nil && !os.IsExist(err) {
 			done()
 			return "", nil, err
 		}
@@ -474,23 +491,46 @@ func newGrantChecks(sd SandboxDeps, g sdk.Grant) *grantChecks {
 		ws = append(ws, sd.StagingRoot)
 	}
 	for _, w := range ws {
-		c.writable = append(c.writable, filepath.Clean(w))
-		if r, err := filepath.EvalSymlinks(w); err == nil {
-			c.writable = append(c.writable, r)
-		}
+		c.writable = append(c.writable, pathForms(w)...)
 	}
 	if sd.PeerWritable != nil {
 		for _, w := range sd.PeerWritable() {
-			if !filepath.IsAbs(w) {
-				continue
-			}
-			c.peer = append(c.peer, filepath.Clean(w))
-			if r, err := filepath.EvalSymlinks(w); err == nil {
-				c.peer = append(c.peer, r)
+			if filepath.IsAbs(w) {
+				c.peer = append(c.peer, pathForms(w)...)
 			}
 		}
 	}
 	return c
+}
+
+// pathForms are the forms a path is compared in: as given (cleaned), and
+// resolved (realPath) when that differs.
+func pathForms(p string) []string {
+	p = filepath.Clean(p)
+	if r := realPath(p); r != p {
+		return []string{p, r}
+	}
+	return []string{p}
+}
+
+// realPath resolves the symlinks in p's longest existing prefix and joins
+// on what does not exist yet: a write grant made through a symlinked
+// ancestor (/var → /private/var) names the same place before its last
+// directory exists as after.
+func realPath(p string) string {
+	p = filepath.Clean(p)
+	rest := ""
+	for cur := p; ; {
+		if r, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
 
 // programWritable is why a program, a link to one or a directory of its
@@ -966,27 +1006,34 @@ func buildJailed(s Spec, sd SandboxDeps, argv, env []string) (*exec.Cmd, func(),
 	default:
 		return nil, nil, fmt.Errorf("plugin %s: no plugin jail on %s — set trust: full to run it unjailed", s.Name, spawnGOOS)
 	}
-	links, unlink, err := commandLinks(stage, cmds)
+	links, unlink, err := commandLinks(sd.StagingRoot, s.Name, cmds)
 	if err != nil {
 		return nil, nil, fmt.Errorf("plugin %s: command links: %w", s.Name, err)
 	}
 	if links != "" {
 		env = replaceEnv(env, "PATH", jailPATH(cmds, links))
 	}
+	paths.links = links
 	c, cleanup, err := build(s, sd, g, paths, argv, env, cmds, remote, loopPorts, stage)
 	if err != nil {
 		unlink()
 		return nil, nil, err
 	}
-	return c, func() { cleanup(); unlink() }, nil
+	unbind := registerBound(s.Name, cmds)
+	return c, func() { cleanup(); unlink(); unbind() }, nil
 }
 
 // jailPaths are a launch's checked declared paths (grantedPaths).
-type jailPaths struct{ read, write, exec []grantedPath }
+type jailPaths struct {
+	read, write, exec []grantedPath
+	// links is the launch's read-only dir of links to its declared
+	// commands (commandLinks), or "".
+	links string
+}
 
 func pathsFor(s Spec, gc *grantChecks) (jailPaths, error) {
 	r, w, x, err := grantedPaths(s, gc)
-	return jailPaths{r, w, x}, err
+	return jailPaths{read: r, write: w, exec: x}, err
 }
 
 // jailEUID is the daemon's effective uid (a test var).
@@ -1021,6 +1068,9 @@ func buildNamespaced(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv,
 	}
 	if stage != "" {
 		binds = append(binds, sandbox.BindMount{Path: stage, NoExec: true})
+	}
+	if paths.links != "" {
+		binds = append(binds, sandbox.BindMount{Path: paths.links, RO: true, NoSymlink: true})
 	}
 	for _, p := range paths.read {
 		// Read is read: what runs is declared under exec.
@@ -1141,6 +1191,9 @@ func buildSeatbelt(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv, e
 		p.Read = append(p.Read, c.reads...)
 	}
 	p.Read = append(p.Read, reals(paths.read)...)
+	if paths.links != "" {
+		p.Read = append(p.Read, paths.links)
+	}
 	p.Write = append(p.Write, reals(paths.write)...)
 	p.ExecDirs = append(p.ExecDirs, reals(paths.exec)...)
 	if stage != "" {
@@ -1163,6 +1216,10 @@ func buildSeatbelt(s Spec, sd SandboxDeps, g sdk.Grant, paths jailPaths, argv, e
 	_, port, _ := net.SplitHostPort(addr)
 	p.ProxyPort, _ = strconv.Atoi(port)
 	env = append(env, sandbox.ProxyEnv(addr, cred)...)
+	if err := sandbox.AdmitWrites(p.Writes()...); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("plugin %s: %w", s.Name, err)
+	}
 	wrapped := sandbox.WrapSeatbeltPlugin(argv, p)
 	c := exec.Command(wrapped[0], wrapped[1:]...) //nolint:gosec // verified binary, jailed
 	c.Env = env

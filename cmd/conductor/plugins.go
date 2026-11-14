@@ -1232,7 +1232,13 @@ func cmdPluginShow(args []string) error {
 // needs when it already has to run, rather than spawning the binary twice.
 func probeDecl(cfg *config.Config, ref config.PluginRef, state *plugin.InstallState) (*plugin.Decl, error) {
 	sec := secrets.New()
-	mgr := plugin.NewManager(map[string]config.PluginRef{ref.Key(): ref}, cfg.BaseDir(), state, pluginDeps(sec, func(map[string]any) {}, nil))
+	deps := pluginDeps(sec, func(map[string]any) {}, nil)
+	// The probe's checks see what every configured plugin may write, not
+	// just the one it runs, as the daemon's launches do.
+	exploded, _ := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	peers := plugin.PeerWrites(exploded, cfg.BaseDir(), state)
+	deps.Sandbox.PeerWritable = func() []string { return peers }
+	mgr := plugin.NewManager(map[string]config.PluginRef{ref.Key(): ref}, cfg.BaseDir(), state, deps)
 	defer mgr.Close()
 	return mgr.StartAndDescribe(context.Background(), ref.Key())
 }

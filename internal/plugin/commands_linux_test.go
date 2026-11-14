@@ -73,19 +73,20 @@ func TestHomebrewKegsRunOnlyTheDeclaredProgram(t *testing.T) {
 	if err != nil || found[0].source != fromHomebrew {
 		t.Fatalf("found %+v, err %v; want the keg's tool from homebrew", found, err)
 	}
-	keys := []string{"out=tool", "exec=" + filepath.Join(keg, "bin", "other"), "exec=" + filepath.Join(lib, "bin", "helper"), "exec=other", "env=PATH"}
+	keys := []string{"out=tool", "exec=" + filepath.Join(keg, "bin", "other"), "exec=" + filepath.Join(lib, "bin", "helper"), "exec=other", "env=PATH", "writepath=planted"}
 	got := runProbePlugin(t, dir, sd, m, keys...)
 	if got[keys[0]] != "ok:foo=42" {
 		t.Fatalf("the declared program with its dependency's library: %q", got[keys[0]])
 	}
-	for _, k := range keys[1:4] {
+	for _, k := range []string{keys[1], keys[2], keys[3], keys[5]} {
 		if !strings.HasPrefix(got[k], "denied") {
 			t.Errorf("%s: %q, want it refused", k, got[k])
 		}
 	}
 	// No keg's bin dir is on the jail's PATH: tool is reached through the
-	// launch's links to its declared commands.
-	if p := got["env=PATH"]; strings.Contains(p, cellar) || !strings.Contains(p, filepath.Join(sd.StagingRoot, "probe", ".commands-")) {
+	// launch's links to its declared commands, which the plugin cannot
+	// change (writepath, above, is refused).
+	if p := got["env=PATH"]; strings.Contains(p, cellar) || !strings.Contains(p, filepath.Join(sd.StagingRoot, ".command-links", "probe-")) {
 		t.Errorf("jail PATH %q, want the command links and no keg bin dir", p)
 	}
 }

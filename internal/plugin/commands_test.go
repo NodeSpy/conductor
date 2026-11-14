@@ -103,7 +103,7 @@ func TestCommandFromHomebrew(t *testing.T) {
 
 // The jail's PATH leads with the standard directories; a declared command
 // found elsewhere is reached through a per-launch directory of links named
-// for the declared commands only, never through its keg's bin dir, where
+// for the declared commands only (outside the plugin's writable stage), never through its keg's bin dir, where
 // an undeclared name would find the keg's other programs.
 func TestJailPATHCarriesDeclaredNamesOnly(t *testing.T) {
 	home, sd := jailTestDirs(t)
@@ -123,9 +123,12 @@ func TestJailPATHCarriesDeclaredNamesOnly(t *testing.T) {
 	if err := os.MkdirAll(stage, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	links, done, err := commandLinks(stage, cmds)
+	links, done, err := commandLinks(sd.StagingRoot, "p", cmds)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if within(stage, links) {
+		t.Fatalf("links dir %s is inside the plugin's writable stage", links)
 	}
 	if p := jailPATH(cmds, links); p != links+":"+std {
 		t.Fatalf("jail PATH %q, want the links dir then the standard dirs", p)
@@ -141,7 +144,7 @@ func TestJailPATHCarriesDeclaredNamesOnly(t *testing.T) {
 	if _, err := os.Stat(links); !os.IsNotExist(err) {
 		t.Fatalf("links dir left behind: %v", err)
 	}
-	if links, _, _ := commandLinks(stage, cmds[1:]); links != "" {
+	if links, _, _ := commandLinks(sd.StagingRoot, "p", cmds[1:]); links != "" {
 		t.Fatalf("a command in a standard dir needs no link dir: %s", links)
 	}
 }

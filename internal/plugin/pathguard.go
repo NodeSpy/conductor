@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // CommandPathEnv names the PATH a declared command is looked up on, in the
@@ -51,11 +53,14 @@ var pathGuard struct {
 	// A PATH set since by anything else is taken as the new orig.
 	orig, set string
 	guarded   bool
+	hooked    bool
 	writes    map[*Manager][]string
 	dropped   []string
 }
 
-// guardPATH sets m's writable paths (nil: m is gone) and re-derives PATH.
+// guardPATH sets m's writable paths (nil: m is gone; m nil: only
+// re-derive) and re-derives PATH, from them and every path a sandboxed
+// launch was let write (sandbox.GrantedWrites).
 func guardPATH(m *Manager, writes []string) {
 	pathGuard.Lock()
 	defer pathGuard.Unlock()
@@ -65,12 +70,19 @@ func guardPATH(m *Manager, writes []string) {
 	if cur := os.Getenv("PATH"); !pathGuard.guarded || cur != pathGuard.set {
 		pathGuard.orig = cur
 	}
-	if writes == nil {
+	switch {
+	case m == nil:
+	case writes == nil:
 		delete(pathGuard.writes, m)
-	} else {
+	default:
 		pathGuard.writes[m] = writes
 	}
-	var all []string
+	if !pathGuard.hooked {
+		// A sandboxed launch let write a new path re-derives PATH.
+		pathGuard.hooked = true
+		sandbox.OnGrantedWrites(func() { guardPATH(nil, nil) })
+	}
+	all := sandbox.GrantedWrites()
 	for _, ws := range pathGuard.writes {
 		all = append(all, ws...)
 	}
@@ -93,12 +105,8 @@ func guardPATH(m *Manager, writes []string) {
 func guardedPATH(path string, writes []string) (kept string, dropped []string) {
 	var ws []string
 	for _, w := range writes {
-		if !filepath.IsAbs(w) {
-			continue
-		}
-		ws = append(ws, filepath.Clean(w))
-		if r, err := filepath.EvalSymlinks(w); err == nil {
-			ws = append(ws, r)
+		if filepath.IsAbs(w) {
+			ws = append(ws, pathForms(w)...)
 		}
 	}
 	var out []string
@@ -106,10 +114,7 @@ func guardedPATH(path string, writes []string) (kept string, dropped []string) {
 		if !filepath.IsAbs(d) {
 			continue
 		}
-		ds := []string{filepath.Clean(d)}
-		if r, err := filepath.EvalSymlinks(d); err == nil {
-			ds = append(ds, r)
-		}
+		ds := pathForms(d)
 		over := false
 		for _, x := range ds {
 			for _, w := range ws {

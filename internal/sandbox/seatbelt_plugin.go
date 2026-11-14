@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -144,7 +145,18 @@ func seatbeltPluginProfile(p *PluginProfile) string {
 	return b.String()
 }
 
+// Writes are the host paths p lets the plugin write (AdmitWrites them
+// before wrapping: WrapSeatbeltPlugin only records them).
+func (p *PluginProfile) Writes() []string {
+	ws := append([]string(nil), p.Write...)
+	if p.Keychain && p.Home != "" {
+		ws = append(ws, filepath.Join(p.Home, "Library", "Keychains"))
+	}
+	return ws
+}
+
 // WrapSeatbeltPlugin wraps argv in the macOS plugin jail.
 func WrapSeatbeltPlugin(argv []string, p *PluginProfile) []string {
+	recordWrites(p.Writes()...)
 	return append([]string{"sandbox-exec", "-p", seatbeltPluginProfile(p)}, argv...)
 }

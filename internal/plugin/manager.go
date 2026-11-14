@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // Manager owns the set of external plugin Clients for one loaded config and
@@ -295,7 +296,14 @@ func NewManager(plugins map[string]config.PluginRef, configDir string, state *In
 	// Every launch's program checks see what every plugin this Manager runs
 	// may write (pluginWrites): one plugin cannot place a program, a link or
 	// a library another plugin's jail then binds.
-	deps.Sandbox.PeerWritable = m.pluginWrites
+	extra := deps.Sandbox.PeerWritable
+	deps.Sandbox.PeerWritable = func() []string {
+		ws := append(m.pluginWrites(), sandbox.GrantedWrites()...)
+		if extra != nil {
+			ws = append(ws, extra()...)
+		}
+		return ws
+	}
 	m.deps = deps
 	m.instCond = sync.NewCond(&m.instMu)
 	for key := range plugins {
@@ -332,19 +340,42 @@ func (m *Manager) publishSpecs() {
 	}
 	m.specSnap.Store(&snap)
 	if m.deps.GuardPATH {
-		guardPATH(m, append(m.pluginWrites(), m.deps.Sandbox.StagingRoot))
+		guardPATH(m, append(m.deps.Sandbox.PeerWritable(), m.deps.Sandbox.StagingRoot))
 	}
 }
 
 // pluginWrites are the paths any jailed plugin this Manager runs may write:
-// every declared write of every spec and instance it could launch.
-// A trust: full plugin is not counted: it runs unjailed, as you, and was
-// chosen so.
+// every declared write of every spec and instance it could launch. A
+// trust: full plugin is not counted: it runs unjailed, as you, and was
+// chosen so. One whose grant does not resolve now (or a local build not
+// yet described) is not here; its writes are checked when it launches,
+// against what every running jail has bound (registerBound), and recorded
+// then (sandbox.GrantedWrites).
 func (m *Manager) pluginWrites() []string {
 	snap := m.specSnap.Load()
 	if snap == nil {
 		return nil
 	}
+	return specWrites(*snap)
+}
+
+// PeerWrites is what the plugins refs configures may write, jailed: for a
+// probe Manager that runs one of them, the rest (SandboxDeps.PeerWritable).
+func PeerWrites(refs map[string]config.PluginRef, configDir string, state *InstallState) []string {
+	var specs []Spec
+	for _, ref := range refs {
+		if ref.Use.Origin == config.OriginLocal {
+			specs = append(specs, SpecFromRef(ref, configDir, Installed{}, false))
+			continue
+		}
+		inst, ok := state.GetForConstraint(ref.Use.InstallKey(), ref.Use)
+		specs = append(specs, SpecFromRef(ref, configDir, inst, ok))
+	}
+	return specWrites(specs)
+}
+
+// specWrites are specs' declared writes (each that resolves).
+func specWrites(specs []Spec) []string {
 	var out []string
 	add := func(s Spec) {
 		if s.TrustFull || s.InProcess != nil {
@@ -356,7 +387,7 @@ func (m *Manager) pluginWrites() []string {
 	}
 	// Every way a spec is launched, whether or not it is now: a shared
 	// process, the type's own, each instance's (more is only safer).
-	for _, s := range *snap {
+	for _, s := range specs {
 		add(s)
 		for name := range s.Instances {
 			add(InstanceSpec(s, name))

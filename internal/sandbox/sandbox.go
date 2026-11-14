@@ -245,7 +245,21 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 				binds = append(binds, nf.Binds...)
 			}
 			if nf != nil && nf.Plugin != nil {
+				if err := AdmitWrites(nf.Plugin.Writes()...); err != nil {
+					return nil, err
+				}
 				return WrapSeatbeltPlugin(argv, nf.Plugin), nil
+			}
+			ws := writableBinds(binds)
+			if nf != nil && nf.Agent != nil {
+				a := nf.Agent
+				ws = append(append(ws, a.ReadWrite...), a.Unhide...)
+				if a.Keychain && a.Home != "" {
+					ws = append(ws, filepath.Join(a.Home, "Library", "Keychains"))
+				}
+			}
+			if err := AdmitWrites(ws...); err != nil {
+				return nil, err
 			}
 			if nf != nil && nf.Agent != nil {
 				// The agent jail: narrowed exec/Mach rules, scratch home, and
@@ -280,6 +294,17 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 			prefix = append(prefix, "--net")
 		}
 		prefix = append(prefix, "--")
+		if jailed {
+			// Unjailed (no binds), the launch sees the host as it is: it is
+			// not a write boundary, and is not counted as one.
+			ws := writableBinds(nf.Binds)
+			if scratch.Root() != "" {
+				ws = append(ws, filepath.Join(scratch.Root(), JailTmpDir))
+			}
+			if err := AdmitWrites(ws...); err != nil {
+				return nil, err
+			}
+		}
 		if nf != nil && (nf.UnixSocket != "" || len(nf.Masks) > 0 || jailed) {
 			prefix = append(prefix, nf.Self, "sandbox-net")
 			if jailed && scratch.Root() != "" {
@@ -338,6 +363,9 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 			return nil, fmt.Errorf("sandbox: isolation mode container needs `container.image:`")
 		}
 		out := []string{s.engine(), "run", "--rm", "-i"}
+		if err := AdmitWrites(append([]string{dir}, s.FS...)...); err != nil {
+			return nil, err
+		}
 		if dir != "" {
 			out = append(out, "-v", dir+":"+dir, "-w", dir)
 		}
