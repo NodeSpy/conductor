@@ -3,6 +3,7 @@
 package plugin
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -179,5 +180,11 @@ func fakeTool(t *testing.T, rel string) string {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Dir(p)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// On macOS findCommands also asks xcrun for a developer tool of the
+	// same name, and xcrun answers with whatever PATH has: the machine's
+	// Xcode, not the fake tool, would decide the result.
+	prevXcrun := xcrunFind
+	t.Cleanup(func() { xcrunFind = prevXcrun })
+	xcrunFind = func(string) (string, error) { return "", errors.New("no developer tools in this test") }
 	return p
 }

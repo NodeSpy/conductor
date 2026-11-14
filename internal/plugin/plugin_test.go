@@ -560,7 +560,10 @@ func TestPluginProcessOutlivesTheStartingCall(t *testing.T) {
 	fc := newFakeConn()
 	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Type: "jira"}
 	var lifetime context.Context
-	c := NewClient(connectorSpec(), Deps{dial: func(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
+	// verify() runs against BinPath, so point at a real file.
+	sp := connectorSpec()
+	sp.BinPath = writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	c := NewClient(sp, Deps{dial: func(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 		lifetime = ctx
 		return fakeDial(fc)(ctx, s, d)
 	}})
