@@ -4,31 +4,58 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/NodeSpy/conductor/internal/plugin"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 func TestServicePATHAndUnit(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	t.Setenv("PATH", "/custom/tool/bin:/usr/bin")
+	t.Setenv("PATH", "/custom/tool/bin:relative/bin::/usr/bin")
+	t.Setenv(plugin.CommandPathEnv, "")
 
 	p := servicePATH()
 	parts := strings.Split(p, ":")
-	if parts[0] != filepath.Join(tmp, ".local/bin") {
-		t.Fatalf("~/.local/bin must be first: %q", p)
+	// The system's dirs lead: conductor runs its own tools (git, unshare,
+	// ps…) from this PATH, unjailed, so a user dir cannot shadow them.
+	if len(parts) < 4 || strings.Join(parts[:4], ":") != "/usr/bin:/bin:/usr/sbin:/sbin" {
+		t.Fatalf("the system dirs must lead: %q", p)
 	}
-	if !strings.Contains(p, "/custom/tool/bin") {
-		t.Fatalf("install-time PATH entries should carry over: %q", p)
+	if !slices.Contains(parts, filepath.Join(tmp, ".local/bin")) || !slices.Contains(parts, "/opt/homebrew/bin") || parts[len(parts)-1] != "/custom/tool/bin" {
+		t.Fatalf("~/.local/bin, the package managers' dirs and then the install-time PATH must follow: %q", p)
 	}
-	seen := map[string]bool{}
 	for _, x := range parts {
-		if seen[x] {
-			t.Fatalf("PATH has a duplicate %q: %q", x, p)
+		if !filepath.IsAbs(x) {
+			t.Fatalf("PATH has a relative or empty entry %q: %q", x, p)
 		}
-		seen[x] = true
+	}
+	// Commands are looked up in the installing shell's order.
+	c := strings.Split(commandPATH(), ":")
+	if len(c) < 2 || c[0] != "/custom/tool/bin" || c[1] != "/usr/bin" || !slices.Contains(c, "/opt/homebrew/bin") {
+		t.Fatalf("the command PATH must lead with the install-time PATH, in its order: %q", c)
+	}
+	for _, path := range [][]string{parts, c} {
+		seen := map[string]bool{}
+		for _, x := range path {
+			if seen[x] || !filepath.IsAbs(x) {
+				t.Fatalf("PATH has a duplicate or relative %q: %q", x, path)
+			}
+			seen[x] = true
+		}
+	}
+	// The running service regenerating its unit (update) keeps the
+	// installing shell's order: it has it in CONDUCTOR_COMMAND_PATH.
+	t.Setenv(plugin.CommandPathEnv, commandPATH())
+	t.Setenv("PATH", p)
+	if got := commandPATH(); got != strings.Join(c, ":") {
+		t.Fatalf("regenerated command PATH %q, want %q", got, strings.Join(c, ":"))
+	}
+	if got := servicePATH(); got != p {
+		t.Fatalf("regenerated PATH %q, want %q", got, p)
 	}
 
 	// The rendered unit must set PATH so the service can find paseo/gh/etc.
@@ -36,8 +63,8 @@ func TestServicePATHAndUnit(t *testing.T) {
 		t.Skip("no service manager on this OS")
 	}
 	_, content := unitPathAndContent()
-	if !strings.Contains(content, "PATH="+p) && !strings.Contains(content, p) {
-		t.Fatalf("unit should embed the service PATH:\n%s", content)
+	if !strings.Contains(content, p) || !strings.Contains(content, plugin.CommandPathEnv) || !strings.Contains(content, commandPATH()) {
+		t.Fatalf("unit should embed the service PATH and the command PATH:\n%s", content)
 	}
 }
 
@@ -297,5 +324,13 @@ func TestPathFlagsExpandHome(t *testing.T) {
 	a := map[string]any{}
 	if err := attachFiles(a, "~/note.txt"); err != nil {
 		t.Fatalf("--attach ~/…: %v", err)
+	}
+}
+
+// The daemon's plugin Managers keep plugin-writable dirs off the PATH
+// conductor runs its own tools from (plugin.Deps.GuardPATH).
+func TestPluginDepsGuardPATH(t *testing.T) {
+	if !pluginDeps(secrets.New(), func(map[string]any) {}, nil).GuardPATH {
+		t.Fatal("pluginDeps must guard PATH")
 	}
 }

@@ -393,6 +393,7 @@ func recordFromInstalledBuild(cfg *config.Config, key, name string, cur plugin.I
 	decl, err := describeForInstall(cfg)(ctx, plugin.Spec{
 		Name: name, Kind: plugin.KindConnector, Provides: name,
 		BinPath: cur.Path, Sha256: cur.Sha256, Resolved: cur.Resolved, PreJail: cur.PreJail,
+		Commands: cfg.CommandPaths(),
 	})
 	if err != nil || decl == nil {
 		return nil, false

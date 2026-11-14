@@ -90,6 +90,35 @@ connectors:
 	}
 }
 
+// A connector the config turns off is given no listen address
+// (AssignListenAddrs skips it) and needs none: it is not reported as
+// disabled over the listen field it was never given — the starter config's
+// `expose:` with `enabled: false`.
+func TestDisabledListenerNeedsNoListen(t *testing.T) {
+	registerListenerTestType(t, "listenerfake7")
+	cfg := mustDecodeConfig(t, `
+connectors:
+  src:
+    use: listenerfake7
+    enabled: false
+    webhook:
+      expose: tun
+  tun:
+    use: tunnel
+    enabled: false
+    command: [sh, -c, "echo https://unused.example"]
+`)
+	AssignListenAddrs(cfg, t.Logf)
+	reg, err := Build(cfg, Deps{Secrets: secrets.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _ := reg.Get("src")
+	if src.DisabledReason != "" {
+		t.Fatalf("disabled reason = %q, want none: enabled: false is the only reason", src.DisabledReason)
+	}
+}
+
 // A listener with no `expose` configured at all is untouched — a plain local
 // listener is not a config mistake.
 func TestListenerWithNoExposeIsNotDisabled(t *testing.T) {

@@ -520,7 +520,7 @@ func TestNoManifestLeavesPathAlone(t *testing.T) {
 			path = v
 		}
 	}
-	if want := jailPATH(nil); path != want {
+	if want := jailPATH(nil, ""); path != want {
 		t.Fatalf("PATH = %q, want the standard jail PATH %q (no declared commands to add)", path, want)
 	}
 }
@@ -560,7 +560,10 @@ func TestPluginProcessOutlivesTheStartingCall(t *testing.T) {
 	fc := newFakeConn()
 	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Type: "jira"}
 	var lifetime context.Context
-	c := NewClient(connectorSpec(), Deps{dial: func(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
+	// verify() runs against BinPath, so point at a real file.
+	sp := connectorSpec()
+	sp.BinPath = writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	c := NewClient(sp, Deps{dial: func(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 		lifetime = ctx
 		return fakeDial(fc)(ctx, s, d)
 	}})

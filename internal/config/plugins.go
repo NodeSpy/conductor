@@ -74,6 +74,9 @@ type PluginRef struct {
 	// isolation, never ghB's, never the shared union — see
 	// docs/wiki/Plugins.md "Multi-instance isolation".
 	Instances map[string]ConnectorGrant
+	// Commands is the config's `commands:` block (CommandPaths): where a
+	// command the plugin declares is, when the config names it.
+	Commands map[string]string
 }
 
 // ConnectorGrant is one configured connector instance's own sandbox/
@@ -420,6 +423,12 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		}
 		out[u.InstallKey()] = p
 	})
+	if cmds := c.CommandPaths(); cmds != nil {
+		for k, p := range out {
+			p.Commands = cmds
+			out[k] = p
+		}
+	}
 	return out
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // fakeProbe is a host for probeHostJail: what is installed, what the jail
@@ -91,6 +92,11 @@ func TestProbeHostJailNamesWhyNot(t *testing.T) {
 // The probe builds the jail a plugin launch builds: conductor's own binary
 // as the jail's entry and payload, the same namespaces, the minimal base.
 func TestProbeHostJailRunsTheRealJail(t *testing.T) {
+	// The probe is faked as Linux; the jail it builds is the sandbox
+	// package's, which reads the platform from sandbox.CheckGOOS.
+	prevGOOS := sandbox.CheckGOOS
+	t.Cleanup(func() { sandbox.CheckGOOS = prevGOOS })
+	sandbox.CheckGOOS = "linux"
 	var argv []string
 	e := fakeProbe("linux", 1000, nil, map[string]string{"bin:unshare": ""})
 	e.run = func(a []string) ([]byte, error) { argv = a; return nil, nil }

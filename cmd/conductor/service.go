@@ -2,13 +2,16 @@ package main
 
 import (
 	"fmt"
-	"github.com/NodeSpy/conductor/internal/confdir"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/NodeSpy/conductor/internal/confdir"
+	"github.com/NodeSpy/conductor/internal/plugin"
 )
 
 // This file owns the per-user service unit (systemd on Linux, launchd on
@@ -124,32 +127,56 @@ func isDir(p string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// servicePATH builds the PATH the service should run with. A --user service
-// otherwise inherits systemd/launchd's minimal PATH, so `paseo`, `gh`, `go`, and
-// `claude` in ~/.local/bin aren't found. Guarantee ~/.local/bin + the standard
-// dirs, then append the install-time PATH (deduped) so wherever the user keeps
-// those tools comes along too.
+// servicePATH builds the PATH the service runs with, and so the PATH
+// conductor runs its own tools from, unjailed (git, ssh-keygen, unshare,
+// ps, lsof). A --user service otherwise inherits systemd/launchd's minimal
+// PATH, so `paseo`, `gh`, `go`, and `claude` in ~/.local/bin aren't found.
+// The system's dirs lead, so conductor's own tools are the system's; then
+// the package managers' and Go's, then the user's own bin dirs, then the
+// rest of the install-time PATH. An entry that is not an absolute path is
+// dropped: it would resolve against whatever directory the service is in.
+// (At run time the daemon also drops any directory a plugin may write.)
 func servicePATH() string {
-	seen := map[string]bool{}
-	var parts []string
-	add := func(p string) {
-		if p != "" && !seen[p] {
-			seen[p] = true
+	parts := pathList(nil)
+	for _, p := range []string{
+		"/usr/bin", "/bin", "/usr/sbin", "/sbin",
+		"/usr/local/bin", "/opt/homebrew/bin", "/opt/homebrew/sbin", // macOS (Apple silicon)
+		"/usr/local/go/bin", "/usr/lib/go/bin",
+		filepath.Join(home(), ".local/bin"), filepath.Join(home(), "go/bin"),
+	} {
+		parts = pathList(parts, p)
+	}
+	return strings.Join(pathList(parts, installPATH()...), ":")
+}
+
+// installPATH is the installing shell's PATH: CONDUCTOR_COMMAND_PATH when
+// set (the running service's, which has it from the unit, regenerating its
+// unit on update), else PATH.
+func installPATH() []string {
+	if p := os.Getenv(plugin.CommandPathEnv); p != "" {
+		return filepath.SplitList(p)
+	}
+	return filepath.SplitList(os.Getenv("PATH"))
+}
+
+// commandPATH is where the service looks for a plugin's declared commands
+// (plugin.CommandPathEnv): the install-time PATH in its own order, so a
+// command is the one the installing shell's `command -v` names, then
+// servicePATH's dirs for an install run from a shell that lacks them. It
+// only says where to look: what is found there is checked like any
+// program a plugin runs.
+func commandPATH() string {
+	return strings.Join(pathList(pathList(nil, installPATH()...), strings.Split(servicePATH(), ":")...), ":")
+}
+
+// pathList appends each absolute dir in add to parts, once.
+func pathList(parts []string, add ...string) []string {
+	for _, p := range add {
+		if filepath.IsAbs(p) && !slices.Contains(parts, p) {
 			parts = append(parts, p)
 		}
 	}
-	add(filepath.Join(home(), ".local/bin"))
-	for _, p := range []string{
-		"/opt/homebrew/bin", "/opt/homebrew/sbin", // macOS (Apple silicon)
-		"/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
-		"/usr/local/go/bin", "/usr/lib/go/bin", filepath.Join(home(), "go/bin"),
-	} {
-		add(p)
-	}
-	for _, p := range strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)) {
-		add(p)
-	}
-	return strings.Join(parts, ":")
+	return parts
 }
 
 // unitPathAndContent returns the install path and rendered content of the
@@ -189,11 +216,12 @@ ExecStart=%s run
 Restart=always
 RestartSec=5
 Environment=PATH=%s
+Environment=%s=%s
 %sEnvironmentFile=-%s/conductor.env
 
 [Install]
 WantedBy=default.target
-`, exe, servicePATH(), sdEnv, cfg)
+`, exe, servicePATH(), plugin.CommandPathEnv, commandPATH(), sdEnv, cfg)
 	case "launchd":
 		path = filepath.Join(home(), "Library/LaunchAgents", "sh."+name+".plist")
 		log := launchdLog()
@@ -208,14 +236,14 @@ WantedBy=default.target
         <string>run</string>
     </array>
     <key>EnvironmentVariables</key>
-    <dict><key>PATH</key><string>%s</string>%s</dict>
+    <dict><key>PATH</key><string>%s</string><key>%s</key><string>%s</string>%s</dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>StandardOutPath</key><string>%s</string>
     <key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, name, exe, servicePATH(), ldEnv, log, log)
+`, name, exe, servicePATH(), plugin.CommandPathEnv, commandPATH(), ldEnv, log, log)
 	}
 	return path, content
 }

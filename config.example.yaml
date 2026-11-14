@@ -338,6 +338,14 @@ hosts:
 # scratch:
 #   dir: /mnt/scratch/conductor
 
+# commands: — the program file for a command a plugin declares (gh, git),
+# for every plugin that declares it. It wins over PATH. Without it,
+# conductor uses what PATH finds, and for a Homebrew link it reads what
+# Homebrew recorded installing (it never runs brew). Name one here when
+# neither works; the plugin's launch error gives the line to add.
+# commands:
+#   gh: /opt/homebrew/Cellar/gh/2.101.0/bin/gh
+
 # engines: — code-step engine PLUGINS (js, lua, …). Like every plugin, an
 # engine runs jailed to exactly what it declares (an engine that declares
 # nothing gets no network, files or commands). isolation: here is a load

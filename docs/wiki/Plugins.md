@@ -683,9 +683,96 @@ be an executable file reached through symlinks root owns only, and is
 refused, failing the launch with the reason, when it lies inside conductor's
 own dirs, a runtime dir, or a path the plugin may write (its `write` paths,
 its staging dir), where it could rewrite the `#!` line to name any path.
-A command installed as a symlink you own (`~/.local/bin/tool`, as npm,
-pipx and uv make them) fails the launch, naming the fix: put the directory
-it points into on conductor's `PATH` ahead of it, or set `trust: full`.
+
+#### Where a declared command comes from
+
+Conductor finds each declared command by asking, in order:
+
+1. **Your config.** A top-level `commands:` block names the program file
+   for a command, for every plugin that declares it:
+
+   ```yaml
+   commands:
+     gh: /opt/homebrew/Cellar/gh/2.101.0/bin/gh
+   ```
+
+   It wins over `PATH`. The path is absolute (`~/` expands) and the file is
+   named for the command (the plugin runs it by name). If the path is a
+   symlink, it is followed, as a runtime's `bin:` is, unless a link on the
+   way is, or lies inside, a path a plugin may write. The file it names
+   is then checked like any command. A named file that is missing fails the
+   launch.
+2. **`PATH`**, as `command -v` finds it. If that is the program file, or a
+   symlink root owns (`/usr/bin/python3`), it is used. For a service
+   installed with `conductor service install`, this is the installing
+   shell's `PATH`, in its order (`CONDUCTOR_COMMAND_PATH` in the unit), not
+   the `PATH` conductor runs its own tools from.
+3. **What the package manager that linked it there recorded.** When `PATH`
+   finds a symlink that conductor's own user owns, conductor reads what the
+   package manager wrote when it installed the program. Today that is
+   Homebrew, on macOS and Linux. Conductor never runs `brew`: it runs as
+   your user, outside the jail, with code and caches a plugin could reach.
+   - The link must be in a `bin` or `sbin` directory whose parent (the
+     prefix) holds a real `Cellar` directory. Conductor looks in
+     `<prefix>/Cellar/*/*/bin` (and `sbin`) for the formula keg's program
+     that is the same file the link runs (the same file to the kernel;
+     conductor never reads the link). That keg file
+     (`/opt/homebrew/Cellar/gh/2.101.0/bin/gh`) is what the jail binds and
+     runs.
+   - The keg must hold the `INSTALL_RECEIPT.json` Homebrew writes when it
+     installs a formula. The jail also reads the keg, and every installed
+     version of each formula the receipt's `runtime_dependencies` lists
+     (the libraries the program loads). Each must be a real directory in
+     the Cellar. A custom `HOMEBREW_CELLAR` outside the prefix is not
+     followed: name the program under `commands:`.
+   - On Linux these install trees are bound read-only and noexec, except
+     each one's `lib` directory, which the program maps its libraries from
+     (a noexec mount cannot hold a shared library). So the declared
+     program runs, and the programs in its keg's and its dependencies'
+     `bin` do not (declare one under `exec` to run it). Whatever is
+     executable inside those `lib` directories can run in the jail,
+     though: for example a dependency's bundled tools (`node_modules`
+     binaries, a linker), or Linuxbrew's own `ld.so`.
+   - The prefix is refused when it overlaps a path a plugin may write: one
+     could have placed the link, the keg or the receipt.
+4. **Otherwise the launch fails**, naming the `commands:` line to add with
+   the path filled in.
+
+Conductor never follows a symlink it owns on its own: a plugin running as
+that user could have made it. A command installed some other way as a link
+you own (`~/.local/bin/tool`, as npm, pipx and uv make them) needs its
+`commands:` line, or `trust: full`.
+
+"A path a plugin may write" here means anything conductor runs sandboxed,
+not just the plugin being launched: every jailed plugin's `write` paths
+and the staging dirs, and every path any sandboxed launch was let write (a
+code step's `isolation.fs`, an agent's workspace and tool state, a
+container's mounts). Conductor records those as it wraps each launch and
+keeps the list in `<state dir>/sandbox-writes`, so it holds across restarts
+(a path that no longer exists is dropped). One launch could otherwise
+place a program, a link or a library that a plugin's jail then binds. The
+same goes for a command `PATH` finds directly, and for a file `commands:`
+names. (A `trust: full` plugin, and a launch with no sandbox, are not
+counted: they run as you, unconfined.)
+
+It works the other way round too. While a jail runs a program, a launch
+that would be let write over it or the directories it loads from is
+refused, naming the program and the plugin. For example, a code step with
+`isolation: { fs: [~/go] }` is refused while a plugin runs
+`~/go/bin/git`.
+
+In the jail, the standard directories (`/usr/local/bin`, `/usr/bin`,
+`/bin`, and the `sbin`s) hold only the declared commands found there. A
+declared command found anywhere else is reached by its name through a
+per-launch directory of links to the declared commands. It is made beside
+the plugins' staging dirs, not in one, and the jail reads it but cannot
+change it. That directory leads the jail's `PATH`, so `git` runs the
+Homebrew git that was found, not a `/usr/bin` namesake, and a name the
+plugin did not declare never resolves into a keg's `bin`.
+
+`conductor plugin show <name>` says where each command came from, and
+what it reads to run, for example `on this machine it runs:
+/opt/homebrew/Cellar/gh/2.101.0/bin/gh (homebrew), /usr/bin/git (PATH)`.
 
 The older fields still load: `fs` means `write`, and `spawns` grants nothing
 (name the commands instead).
@@ -961,8 +1048,21 @@ working setup):
   the destinations to narrow it. `allow_env: []` passes none, as it always
   did.
 - **A declared command found through a symlink you own fails the launch**
-  (`~/.local/bin/paseo` from npm, a pipx or uv tool). Put the directory it
-  points into on conductor's `PATH` ahead of it, or set `trust: full`.
+  (`~/.local/bin/paseo` from npm, a pipx or uv tool), unless Homebrew
+  installed it. Name its program file under `commands:` (the error gives
+  the line), or set `trust: full`. See "Where a declared command comes
+  from".
+- **A program, link or library any sandboxed launch may write is refused
+  too.** A declared command inside any jailed plugin's `write` paths or
+  staging dir, or a path a code step or agent was let write, fails the
+  launch, as one inside the launching plugin's own did. A code step,
+  agent or plugin whose writes would cover a program a running plugin
+  uses is refused while that plugin runs.
+- **The service's `PATH` puts the system's directories first again.**
+  Conductor runs its own tools (git, ssh-keygen, unshare, ps, lsof) from
+  it, unjailed, and drops from it any directory a plugin may write. A
+  plugin's declared commands are still looked up in your shell's order: run
+  `conductor service install` again to record it.
 - **Variables the plugin declares now pass through by default.** Check
   conductor's environment for ones you do not want a plugin to have
   (`GH_TOKEN`, …), or narrow with `allow_env:`.
@@ -1162,6 +1262,9 @@ through the real launch path.
   none in their subdirectories, runs: a tool's helper programs
   (`/usr/lib/git-core`), a daemon's binaries (`/usr/lib/ssh`). A program
   that runs helpers declares them in `exec` (bound read-only, executable).
+  A Homebrew command's keg, and those of what it was installed with, are
+  bound read-only and `noexec`, except each one's `lib` directory, so its
+  libraries load and only the declared program runs.
   Every writable place is `noexec`, so a plugin cannot drop a program and
   run it. Read-only and `noexec` reach all the way down a bind, its
   submounts included (a writable directory with a mount inside it is
@@ -1196,7 +1299,8 @@ through the real launch path.
 - **Files.** Reads of the OS dirs (`/usr/lib`, `/usr/share`, `/System`, a
   few `/etc` files) and the declared paths; writes of the declared `write`
   paths and the staging dir. Not `/opt/homebrew`, `/usr/local` or the home
-  dir, unless declared.
+  dir, unless declared; a Homebrew command's keg, and those of what it was
+  installed with, are read.
 - **Network.** Only the egress proxy's loopback port, declared loopback
   ports, declared listen ports and declared unix sockets (a `write` path).
 - **Keychain.** The Keychain services and `~/Library/Keychains` only when
