@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -74,12 +75,13 @@ func TestWrapsRecordWhatTheyLetWrite(t *testing.T) {
 	}
 }
 
-// A path the config granted (an fs: path, a plugin's write) is forgotten
-// when the daemon starts with a config that no longer grants it, with a
-// log line naming it, when it was recorded and where; one a run was let
-// write is kept while it exists, as is one both granted. An earlier
+// A path the config granted (an fs: path, a plugin's write) stays recorded
+// while it exists, after the config stops granting it: what launches left
+// there stays. The daemon logs it, naming it, when it was recorded, the
+// ledger, and how to clear it; once the directory is gone it is forgotten.
+// A path is recorded as the config's or a run's (both: a run's); an earlier
 // ledger's bare lines load as a run's.
-func TestConfiguredWritesAreForgottenWithTheConfig(t *testing.T) {
+func TestConfiguredWritesStayWhileTheyExist(t *testing.T) {
 	t.Cleanup(ResetWriteLedger)
 	dir := t.TempDir()
 	mk := func(n string) string {
@@ -119,28 +121,74 @@ func TestConfiguredWritesAreForgottenWithTheConfig(t *testing.T) {
 	}
 	SetConfiguredWrites([]string{kept})
 	var logs []string
-	if err := ForgetUnconfigured(func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }); err != nil {
-		t.Fatal(err)
-	}
+	ReportUnconfigured(func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
 	got := GrantedWrites()
-	if slices.Contains(got, fsDir) {
-		t.Fatalf("%s is still recorded: %v", fsDir, got)
-	}
-	for _, want := range []string{kept, run, legacy, both} {
+	for _, want := range []string{fsDir, kept, run, legacy, both} {
 		if !slices.Contains(got, want) {
 			t.Fatalf("%s forgotten: %v", want, got)
 		}
 	}
-	if len(logs) != 1 || !strings.Contains(logs[0], fsDir) || !strings.Contains(logs[0], ledger) || !strings.Contains(logs[0], "no longer does") {
+	if len(logs) != 1 || !strings.Contains(logs[0], fsDir) || !strings.Contains(logs[0], ledger) || !strings.Contains(logs[0], "still counted") || !strings.Contains(logs[0], "remove the directory") {
 		t.Fatalf("logs %q", logs)
 	}
-	// What was forgotten stays forgotten across a restart.
+	if src := WriteSource(fsDir); !strings.Contains(src, "delete its line from "+ledger) {
+		t.Fatalf("source %q", src)
+	}
+	// Removed, it is forgotten at the next start.
+	if err := os.RemoveAll(fsDir); err != nil {
+		t.Fatal(err)
+	}
 	ResetWriteLedger()
 	if err := UseWriteLedger(ledger); err != nil {
 		t.Fatal(err)
 	}
 	if got := GrantedWrites(); slices.Contains(got, fsDir) || !slices.Contains(got, kept) {
 		t.Fatalf("reloaded %v", got)
+	}
+}
+
+// Paths are resolved before any lock is taken: one whose resolution hangs
+// (a network mount) holds up the launch that names it, and no other
+// launch, nor Exclusive.
+func TestAHungResolveHoldsUpOnlyItsLaunch(t *testing.T) {
+	t.Cleanup(ResetWriteLedger)
+	if err := UseWriteLedger(""); err != nil {
+		t.Fatal(err)
+	}
+	slow, other := filepath.Join(t.TempDir(), "nfs"), t.TempDir()
+	release := make(chan struct{})
+	t.Cleanup(func() { ResolveWrite = func(p string) []string { return []string{filepath.Clean(p)} } })
+	ResolveWrite = func(p string) []string {
+		if p == slow {
+			<-release
+		}
+		return []string{filepath.Clean(p)}
+	}
+	hung := make(chan error, 1)
+	go func() { hung <- AdmitWrites(slow) }()
+	time.Sleep(50 * time.Millisecond)
+	done := make(chan error, 1)
+	go func() {
+		if err := AdmitWrites(other); err != nil {
+			done <- err
+			return
+		}
+		done <- Exclusive(func() error { return nil })
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("an unrelated launch waited on a hung resolve")
+	}
+	close(release)
+	if err := <-hung; err != nil {
+		t.Fatal(err)
+	}
+	if got := GrantedWrites(); !slices.Contains(got, slow) || !slices.Contains(got, other) {
+		t.Fatalf("recorded %v", got)
 	}
 }
 
@@ -169,5 +217,62 @@ func TestExclusiveHoldsAdmission(t *testing.T) {
 	<-done
 	if !slices.Contains(GrantedWrites(), p) {
 		t.Fatal("not recorded once Exclusive returned")
+	}
+}
+
+// A prune forgets what it found gone, unless it was granted again since it
+// looked: that launch may have made it by now. And a hook that runs when a
+// path is added (re-deriving PATH) runs outside the admission lock.
+func TestPruneKeepsWhatWasGrantedMeanwhile(t *testing.T) {
+	t.Cleanup(ResetWriteLedger)
+	if err := UseWriteLedger(""); err != nil {
+		t.Fatal(err)
+	}
+	was := maxGranted
+	t.Cleanup(func() { maxGranted, afterPruneStat = was, func() {} })
+	maxGranted = 2
+	dir := t.TempDir()
+	again, gone := filepath.Join(dir, "again"), filepath.Join(dir, "gone")
+	recordWrites(again, gone, filepath.Join(dir, "third"))
+	afterPruneStat = func() {
+		afterPruneStat = func() {}
+		addWrites(resolveWrites([]string{again})) // granted again while the prune looked
+	}
+	recordWrites(t.TempDir()) // over maxGranted: prunes
+	got := GrantedWrites()
+	if !slices.Contains(got, again) || slices.Contains(got, gone) {
+		t.Fatalf("recorded %v: want %s kept and %s forgotten", got, again, gone)
+	}
+}
+
+var hookHold atomic.Pointer[chan struct{}]
+
+func TestHooksRunOutsideTheAdmissionLock(t *testing.T) {
+	t.Cleanup(ResetWriteLedger)
+	if err := UseWriteLedger(""); err != nil {
+		t.Fatal(err)
+	}
+	in := make(chan struct{}, 1)
+	hold := make(chan struct{})
+	hookHold.Store(&hold)
+	t.Cleanup(func() { hookHold.Store(nil); close(hold) })
+	OnGrantedWrites(func() {
+		if h := hookHold.Load(); h != nil {
+			select {
+			case in <- struct{}{}:
+			default:
+			}
+			<-*h
+		}
+	})
+	p := t.TempDir()
+	go func() { _ = AdmitWrites(p) }()
+	<-in
+	done := make(chan error, 1)
+	go func() { done <- Exclusive(func() error { return nil }) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a hook held the admission lock")
 	}
 }

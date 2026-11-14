@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -26,33 +27,64 @@ type boundLaunch struct {
 	paths  []string
 }
 
-func init() { sandbox.WriteGuard = boundOverlap }
+func init() {
+	sandbox.WriteGuard = boundOverlap
+	sandbox.ResolveWrite = pathForms
+}
+
+// bindHook runs inside bindLaunch's exclusive step (a test's hold).
+var bindHook = func() {}
 
 // bindLaunch checks that no path a launch was let write since its commands
 // were checked overlaps what it binds to run, and registers what it binds
 // (registerBound), as one step against sandbox.AdmitWrites: a launch
 // admitted between the check and the registration could otherwise write
-// what this one runs. writable is every path a launch may write now.
-func bindLaunch(owner *Client, plugin string, cmds []jailCommand, writable func() []string) (func(), error) {
-	var unbind func()
-	err := sandbox.Exclusive(func() error {
-		ps := boundPaths(cmds)
-		for _, w := range writable() {
-			if !filepath.IsAbs(w) {
-				continue
+// what this one runs. peers is what the other plugins may write. Every
+// path is resolved before the step, which only compares strings: a path
+// that cannot be resolved (a hung network mount) holds up this launch, not
+// every launch.
+func bindLaunch(owner *Client, plugin string, cmds []jailCommand, peers func() []string) (func(), error) {
+	ps := boundPaths(cmds)
+	var ws []sandbox.Write
+	if peers != nil {
+		for _, w := range peers() {
+			if filepath.IsAbs(w) {
+				ws = append(ws, sandbox.Write{Path: w, Forms: pathForms(w)})
 			}
-			for _, wf := range pathForms(w) {
-				for _, p := range ps {
-					if within(wf, p) || within(p, wf) {
-						return fmt.Errorf("plugin %s: it runs %s, and a launch was let write %s since it was checked%s", plugin, p, w, ledgerNote(w))
-					}
-				}
+		}
+	}
+	var unbind func()
+	var hitW, hitP string
+	err := sandbox.Exclusive(func() error {
+		bindHook()
+		for _, w := range append(ws, sandbox.GrantedForms()...) {
+			if p := overlapping(w.Forms, ps); p != "" {
+				hitW, hitP = w.Path, p
+				return errBound
 			}
 		}
 		unbind = registerBound(owner, plugin, ps)
 		return nil
 	})
-	return unbind, err
+	if err != nil {
+		return nil, fmt.Errorf("plugin %s: it runs %s, and a launch was let write %s since it was checked%s", plugin, hitP, hitW, ledgerNote(pathForms(hitW)))
+	}
+	return unbind, nil
+}
+
+var errBound = errors.New("bound")
+
+// overlapping is the first of ps that one of forms lies inside, or holds,
+// or "".
+func overlapping(forms, ps []string) string {
+	for _, wf := range forms {
+		for _, p := range ps {
+			if within(wf, p) || within(p, wf) {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 // boundPaths are every form of the paths cmds bind to run.
@@ -112,20 +144,13 @@ func releaseBound(owner *Client) {
 
 // boundOverlap refuses writes that overlap (either inside the other) what
 // a running jail has bound to run.
-func boundOverlap(writes []string) error {
+func boundOverlap(writes []sandbox.Write) error {
 	bound.Lock()
 	defer bound.Unlock()
 	for _, w := range writes {
-		if !filepath.IsAbs(w) {
-			continue
-		}
-		for _, wf := range pathForms(w) {
-			for _, b := range bound.m {
-				for _, p := range b.paths {
-					if within(wf, p) || within(p, wf) {
-						return fmt.Errorf("it would be let write %s, and plugin %s runs %s from there: it could change what that plugin runs — narrow the write, or name the program elsewhere under commands:", w, b.plugin, p)
-					}
-				}
+		for _, b := range bound.m {
+			if p := overlapping(w.Forms, b.paths); p != "" {
+				return fmt.Errorf("it would be let write %s, and plugin %s runs %s from there: it could change what that plugin runs — narrow the write, or name the program elsewhere under commands:", w.Path, b.plugin, p)
 			}
 		}
 	}

@@ -3,9 +3,11 @@
 package plugin
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,7 +42,7 @@ func TestWriteAdmittedBetweenCheckAndBindIsCaught(t *testing.T) {
 	if err := sandbox.AdmitWrites(x); err != nil { // a launch in between
 		t.Fatalf("nothing binds x yet: %v", err)
 	}
-	if unbind, err := bindLaunch(nil, "p", cmds, sandbox.GrantedWrites); err == nil || !strings.Contains(err.Error(), "since it was checked") {
+	if unbind, err := bindLaunch(nil, "p", cmds, nil); err == nil || !strings.Contains(err.Error(), "since it was checked") {
 		if unbind != nil {
 			unbind()
 		}
@@ -56,7 +58,7 @@ func TestWriteAdmittedBetweenCheckAndBindIsCaught(t *testing.T) {
 		t.Fatal(err)
 	}
 	withKeg := []jailCommand{{name: "tool", path: cmds[0].path, real: cmds[0].real, reads: []string{keg}}}
-	if unbind, err := bindLaunch(nil, "p", withKeg, sandbox.GrantedWrites); err == nil {
+	if unbind, err := bindLaunch(nil, "p", withKeg, nil); err == nil {
 		unbind()
 		t.Fatal("bound a program whose keg a launch was let write into after the check")
 	}
@@ -64,7 +66,7 @@ func TestWriteAdmittedBetweenCheckAndBindIsCaught(t *testing.T) {
 	if err := sandbox.UseWriteLedger(""); err != nil {
 		t.Fatal(err)
 	}
-	unbind, err := bindLaunch(nil, "p", cmds, sandbox.GrantedWrites)
+	unbind, err := bindLaunch(nil, "p", cmds, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,12 +119,13 @@ func TestAdmissionWaitsForTheBind(t *testing.T) {
 	tool := fakeTool(t, "x/bin/tool")
 	checking, release := make(chan struct{}), make(chan struct{})
 	done := make(chan error, 1)
+	t.Cleanup(func() { bindHook = func() {} })
+	bindHook = func() {
+		close(checking)
+		<-release
+	}
 	go func() {
-		unbind, err := bindLaunch(nil, "p", []jailCommand{{name: "tool", path: tool, real: tool}}, func() []string {
-			close(checking)
-			<-release
-			return nil
-		})
+		unbind, err := bindLaunch(nil, "p", []jailCommand{{name: "tool", path: tool, real: tool}}, nil)
 		if err == nil {
 			t.Cleanup(unbind)
 		}
@@ -142,5 +145,121 @@ func TestAdmissionWaitsForTheBind(t *testing.T) {
 	}
 	if err := <-admitted; err == nil {
 		t.Fatal("admitted over what the jail registered")
+	}
+}
+
+// A jail's bind step compares strings only: a peer path whose resolution
+// hangs (a network mount) holds up that launch, never another launch's
+// bind or admission.
+func TestAHungResolveDoesNotHoldUpOtherBinds(t *testing.T) {
+	a, b := fakeTool(t, "a/bin/tool"), fakeTool(t, "b/bin/tool")
+	hang := filepath.Join(t.TempDir(), "nfs")
+	release := make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	hung := make(chan error, 1)
+	go func() {
+		_, err := bindLaunch(nil, "slow", []jailCommand{{name: "tool", path: a, real: a}}, func() []string {
+			// Never asked under the bind step's lock.
+			free := make(chan struct{})
+			go func() { _ = sandbox.Exclusive(func() error { return nil }); close(free) }()
+			select {
+			case <-free:
+			case <-time.After(2 * time.Second):
+				t.Error("the peers' paths are resolved holding the bind step's lock")
+				return nil
+			}
+			<-release // resolving what the peers may write hangs
+			return []string{hang}
+		})
+		hung <- err
+	}()
+	done := make(chan error, 1)
+	go func() {
+		unbind, err := bindLaunch(nil, "p", []jailCommand{{name: "tool", path: b, real: b}}, nil)
+		if err == nil {
+			unbind()
+			err = sandbox.AdmitWrites(t.TempDir())
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("another launch waited on a hung resolve")
+	}
+	once.Do(func() { close(release) })
+	if err := <-hung; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Ported from the review, inverted: narrowing a code step's fs: from ~/go
+// to ~/go/pkg/mod does not make what it planted in ~/go/bin while it was
+// let write trusted. ~/go stays recorded while it exists: the program is
+// refused and ~/go/bin stays off conductor's PATH, and the daemon's log
+// says why and how to clear it.
+func TestNarrowedConfigKeepsWhatWasPlanted(t *testing.T) {
+	home, sd := jailTestDirs(t)
+	dir := t.TempDir()
+	ledger := filepath.Join(dir, "sandbox-writes")
+	t.Cleanup(sandbox.ResetWriteLedger)
+	if err := sandbox.UseWriteLedger(ledger); err != nil {
+		t.Fatal(err)
+	}
+	gohome := filepath.Join(home, "go")
+	gobin := filepath.Join(gohome, "bin")
+	if err := os.MkdirAll(filepath.Join(gohome, "pkg", "mod"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sandbox.SetConfiguredWrites([]string{gohome})
+	if _, err := (&sandbox.Spec{Mode: "container", Image: "img", FS: []string{gohome}}).WrapLocal([]string{"true"}, "", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	// What the step planted while it was let write ~/go.
+	if err := os.MkdirAll(gobin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gobin, "tool"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The daemon restarts with fs: narrowed to ~/go/pkg/mod.
+	sandbox.ResetWriteLedger()
+	if err := sandbox.UseWriteLedger(ledger); err != nil {
+		t.Fatal(err)
+	}
+	sandbox.SetConfiguredWrites([]string{filepath.Join(gohome, "pkg", "mod")})
+	var logs []string
+	sandbox.ReportUnconfigured(func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
+	if len(logs) != 1 || !strings.Contains(logs[0], gohome) || !strings.Contains(logs[0], ledger) {
+		t.Fatalf("logs %q", logs)
+	}
+	s := Spec{Name: "p", Manifest: Manifest{Commands: []string{"tool"}}, Commands: map[string]string{"tool": filepath.Join(gobin, "tool")}}
+	if cmds, err := findTool(t, s, sd); err == nil || !strings.Contains(err.Error(), "the config let a sandboxed launch write "+gohome) || !strings.Contains(err.Error(), ledger) {
+		t.Fatalf("commands %+v, err %v; want the planted program refused, naming where that came from", cmds, err)
+	}
+	if kept, _ := guardedPATH(gobin+":/usr/bin", sandbox.GrantedWrites()); kept != "/usr/bin" {
+		t.Fatalf("PATH %q: ~/go/bin back on conductor's PATH", kept)
+	}
+}
+
+// A write is compared in its resolved form: one through a symlink to where
+// a running jail's program is is refused like the real path.
+func TestAWriteThroughASymlinkIsResolved(t *testing.T) {
+	tool := fakeTool(t, "real/bin/tool")
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(filepath.Dir(filepath.Dir(tool)), link); err != nil {
+		t.Fatal(err)
+	}
+	unbind, err := bindLaunch(nil, "p", []jailCommand{{name: "tool", path: tool, real: tool}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unbind()
+	if err := sandbox.AdmitWrites(link); err == nil {
+		t.Fatalf("admitted to write %s, a symlink to where plugin p's program is", link)
 	}
 }

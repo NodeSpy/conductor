@@ -748,13 +748,17 @@ and the staging dirs, and every path any sandboxed launch was let write (a
 code step's `isolation.fs`, an agent's workspace and tool state, a
 container's mounts). Conductor records those as it wraps each launch and
 keeps the list in `<state dir>/sandbox-writes`, so it holds across restarts.
-A path that no longer exists is dropped. A path the config granted (an
-`fs:` path, a plugin's `write`) is dropped when the daemon starts with a
-config that no longer grants it; the log names it, when it was recorded,
-and the file. A path a run was let write (its workspace) is kept while it
-exists. When a command is refused, or a directory is left off conductor's
-`PATH`, because of a recorded path, the message names that path and where
-it came from. One launch could otherwise
+A path is dropped only once it no longer exists. What a launch left there
+stays after the grant goes, so narrowing or removing an `fs:` path, or a
+plugin's `write`, does not make what was written there trusted again. At
+start the daemon logs each recorded path the config no longer grants,
+saying it is still counted. When a command is refused, or a directory is
+left off conductor's `PATH`, because of a recorded path, the message names
+that path, whether the config or a run granted it, and when. To clear a
+path, remove the directory (once you've checked what is in it), or stop
+conductor, delete its line from `<state dir>/sandbox-writes`
+(`~/.local/state/conductor/sandbox-writes` by default) and start it
+again. One launch could otherwise
 place a program, a link or a library that a plugin's jail then binds. The
 same goes for a command `PATH` finds directly, and for a file `commands:`
 names. (A `trust: full` plugin, and a launch with no sandbox, are not

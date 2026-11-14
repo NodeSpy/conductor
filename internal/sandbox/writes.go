@@ -21,11 +21,14 @@ import (
 // (WrapLocal, WrapSeatbeltPlugin): the one place every sandboxed launch
 // goes through, so a new kind of launch is counted without being listed.
 // With a ledger (UseWriteLedger) the paths persist across restarts, since
-// what a launch wrote outlives it. A path is forgotten when it no longer
-// exists, and, for one the config granted (an fs: path, a plugin's write),
-// when the daemon starts with a config that no longer grants it
-// (ForgetUnconfigured). One a run was let write (its workspace) is kept
-// while it exists. Without a ledger nothing is recorded (a test binary).
+// what a launch wrote outlives it. A path is forgotten only once it no
+// longer exists: what a launch left there while it was let write stays,
+// whether the config still grants the path or not (ReportUnconfigured says
+// so). Without a ledger nothing is recorded (a test binary).
+//
+// Each path is resolved (ResolveWrite) before any lock is taken, and kept
+// with its forms: a path on a hung network mount holds up the one launch
+// that names it, never every launch.
 var granted struct {
 	sync.Mutex
 	on    bool
@@ -33,17 +36,23 @@ var granted struct {
 	skip  []string
 	paths []string
 	meta  map[string]grant
+	tick  uint64
 	hooks []func()
-	// configured are the paths the config grants launches (SetConfiguredWrites).
+	// configured are the forms of the paths the config grants launches
+	// (SetConfiguredWrites).
 	configured []string
 }
 
-// grant is what the ledger says of a path: when it was first recorded, and
+// grant is what the ledger says of a path: when it was first recorded,
 // whether the config granted it (kindConfig) or a run was let write it
-// (kindRun).
+// (kindRun), and its forms (ResolveWrite).
 type grant struct {
-	at   time.Time
-	kind string
+	at    time.Time
+	kind  string
+	forms []string
+	// seen is the tick it was last granted at: a prune that checked it
+	// before then leaves it be.
+	seen uint64
 }
 
 const (
@@ -51,18 +60,65 @@ const (
 	kindRun    = "run"
 )
 
+// ResolveWrite gives the forms of a path to compare (the path cleaned and,
+// where it differs, resolved): set once at start-up by what defines how
+// paths are compared; cleaned only by default. It may block (a network
+// mount); it is never called holding a lock.
+var ResolveWrite = func(p string) []string { return []string{filepath.Clean(p)} }
+
+// Write is a path a launch is to be let write, with its forms.
+type Write struct {
+	Path  string
+	Forms []string
+}
+
+// resolveWrites resolves ps (absolute paths only), with no lock held.
+func resolveWrites(ps []string) []Write {
+	var out []Write
+	for _, p := range ps {
+		if filepath.IsAbs(p) {
+			out = append(out, Write{Path: filepath.Clean(p), Forms: ResolveWrite(p)})
+		}
+	}
+	return out
+}
+
 // admit serialises admitting a launch's writes (AdmitWrites) with work
 // that must see no admission in between (Exclusive).
 var admit sync.Mutex
 
 // maxGranted is when recording prunes paths that no longer exist (each
 // run's workspace is a new path).
-const maxGranted = 1024
+var maxGranted = 1024
 
 // UseWriteLedger turns recording on, persisting to file ("" keeps it in
-// memory), and loads what file holds. Paths inside skip (conductor's own
-// dirs, which every check already refuses) are not recorded.
+// memory), and loads what file holds, less what no longer exists. Paths
+// inside skip (conductor's own dirs, which every check already refuses)
+// are not recorded.
 func UseWriteLedger(file string, skip ...string) error {
+	var loaded []string
+	var gs []grant
+	if file != "" {
+		f, err := os.Open(file)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err == nil {
+			sc := bufio.NewScanner(f)
+			for sc.Scan() {
+				p, g := parseGrant(sc.Text())
+				if !filepath.IsAbs(p) {
+					continue
+				}
+				if _, err := os.Lstat(p); os.IsNotExist(err) {
+					continue
+				}
+				g.forms = ResolveWrite(p)
+				loaded, gs = append(loaded, p), append(gs, g)
+			}
+			f.Close()
+		}
+	}
 	granted.Lock()
 	defer granted.Unlock()
 	granted.on, granted.file = true, file
@@ -72,23 +128,12 @@ func UseWriteLedger(file string, skip ...string) error {
 			granted.skip = append(granted.skip, filepath.Clean(s))
 		}
 	}
+	for i, p := range loaded {
+		addGranted(p, gs[i])
+	}
 	if file == "" {
 		return nil
 	}
-	f, err := os.Open(file)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		p, g := parseGrant(sc.Text())
-		addGranted(p, g)
-	}
-	f.Close()
-	pruneGranted()
 	return rewriteGranted()
 }
 
@@ -119,60 +164,43 @@ func ResetWriteLedger() {
 
 // SetConfiguredWrites names the paths the config grants launches (every
 // fs: path, every plugin's write): a path recorded that is one of them is
-// recorded as the config's, and forgotten when the config stops granting it
-// (ForgetUnconfigured). Paths not named here are recorded as a run's.
+// recorded as the config's, which is what the messages about it say. It
+// is forgotten, like any other, only once it no longer exists.
 func SetConfiguredWrites(paths []string) {
+	var forms []string
+	for _, w := range resolveWrites(paths) {
+		forms = append(forms, w.Forms...)
+	}
 	granted.Lock()
 	defer granted.Unlock()
-	granted.configured = nil
-	for _, p := range paths {
-		if filepath.IsAbs(p) {
-			granted.configured = append(granted.configured, dirForms(p)...)
-		}
-	}
+	granted.configured = forms
 }
 
-// ForgetUnconfigured forgets every path recorded as the config's that the
-// config set by SetConfiguredWrites no longer grants, logging each through
-// logf: a dir an operator stopped granting comes back onto conductor's
-// PATH, and its programs are trusted again, once no launch may write it. A
-// path a run was let write is kept while it exists.
-func ForgetUnconfigured(logf func(string, ...any)) error {
+// ReportUnconfigured logs, through logf, every recorded path the config
+// granted that the config set by SetConfiguredWrites no longer grants: it
+// is still counted as writable — what launches left there stays — and the
+// line says how to clear it.
+func ReportUnconfigured(logf func(string, ...any)) {
 	granted.Lock()
 	defer granted.Unlock()
-	n := len(granted.paths)
-	granted.paths = slices.DeleteFunc(granted.paths, func(p string) bool {
+	for _, p := range granted.paths {
 		g := granted.meta[p]
-		if g.kind != kindConfig || configured(p) {
-			return false
+		if g.kind != kindConfig || configured(g.forms) {
+			continue
 		}
-		logf("sandbox writes: %s is forgotten: the config let launches write it (recorded %s in %s), and no longer does", p, g.at.Format(time.DateOnly), granted.file)
-		delete(granted.meta, p)
-		return true
-	})
-	if len(granted.paths) == n {
-		return nil
+		logf("sandbox writes: %s is still counted as writable: the config let launches write it (recorded %s in %s) and no longer does, but what they left there stays — remove the directory, or delete its line from %s and restart conductor, to clear it", p, g.at.Format(time.DateOnly), granted.file, granted.file)
 	}
-	return rewriteGranted()
 }
 
-// configured: p is a path the config grants (callers hold the lock).
-func configured(p string) bool {
-	for _, f := range dirForms(p) {
+// configured: one of forms is a path the config grants (callers hold the
+// lock).
+func configured(forms []string) bool {
+	for _, f := range forms {
 		if slices.Contains(granted.configured, f) {
 			return true
 		}
 	}
 	return false
-}
-
-// dirForms are p cleaned and, when it resolves, resolved.
-func dirForms(p string) []string {
-	out := []string{filepath.Clean(p)}
-	if r, err := filepath.EvalSymlinks(p); err == nil && r != out[0] {
-		out = append(out, r)
-	}
-	return out
 }
 
 // GrantedWrites is every path recorded as writable by a sandboxed launch.
@@ -182,8 +210,20 @@ func GrantedWrites() []string {
 	return slices.Clone(granted.paths)
 }
 
-// WriteSource says where a recorded path came from, for a refusal or a log
-// line: "" when p is not recorded.
+// GrantedForms is every recorded path with its forms, as resolved when it
+// was recorded: comparing against them needs no filesystem call.
+func GrantedForms() []Write {
+	granted.Lock()
+	defer granted.Unlock()
+	out := make([]Write, 0, len(granted.paths))
+	for _, p := range granted.paths {
+		out = append(out, Write{Path: p, Forms: slices.Clone(granted.meta[p].forms)})
+	}
+	return out
+}
+
+// WriteSource says where a recorded path came from, and how to clear it,
+// for a refusal or a log line: "" when p is not recorded.
 func WriteSource(p string) string {
 	granted.Lock()
 	defer granted.Unlock()
@@ -192,45 +232,57 @@ func WriteSource(p string) string {
 		return ""
 	}
 	where := "the sandboxed launches' write ledger"
+	clear := "it is forgotten once it no longer exists"
 	if granted.file != "" {
 		where = granted.file
+		clear = "remove it, or delete its line from " + where + " and restart conductor, to clear it"
 	}
+	who := "a run's sandboxed launch was let write"
 	if g.kind == kindConfig {
-		return fmt.Sprintf("the config let a sandboxed launch write %s (recorded %s in %s; forgotten once the config stops granting it)", p, g.at.Format(time.DateOnly), where)
+		who = "the config let a sandboxed launch write"
 	}
-	return fmt.Sprintf("a run's sandboxed launch was let write %s (recorded %s in %s; forgotten once it no longer exists)", p, g.at.Format(time.DateOnly), where)
+	return fmt.Sprintf("%s %s (recorded %s in %s; %s)", who, p, g.at.Format(time.DateOnly), where, clear)
 }
 
-// OnGrantedWrites calls f (outside the lock) whenever a path is added.
+// OnGrantedWrites calls f (outside every lock) whenever a path is added.
 func OnGrantedWrites(f func()) {
 	granted.Lock()
 	defer granted.Unlock()
 	granted.hooks = append(granted.hooks, f)
 }
 
-// WriteGuard, when set, is asked before a launch is let write paths: an
-// error refuses the launch (a program another jail runs lies there). Set
-// once at start-up.
-var WriteGuard func(paths []string) error
+// WriteGuard, when set, is asked before a launch is let write ws: an
+// error refuses the launch (a program another jail runs lies there). It
+// compares forms only: it is called holding the admission lock. Set once
+// at start-up.
+var WriteGuard func(ws []Write) error
 
 // AdmitWrites asks WriteGuard whether a launch may write paths, and
 // records them when it may: one step, so nothing that runs under
-// Exclusive sees the question asked but the paths not yet recorded.
+// Exclusive sees the question asked but the paths not yet recorded. The
+// paths are resolved first, with no lock held.
 func AdmitWrites(paths ...string) error {
+	ws := resolveWrites(paths)
+	pruneIfFull()
 	admit.Lock()
-	defer admit.Unlock()
 	if WriteGuard != nil {
-		if err := WriteGuard(paths); err != nil {
+		if err := WriteGuard(ws); err != nil {
+			admit.Unlock()
 			return err
 		}
 	}
-	recordWrites(paths...)
+	added := addWrites(ws)
+	admit.Unlock()
+	if added {
+		runHooks()
+	}
 	return nil
 }
 
 // Exclusive runs f with no launch's writes admitted while it runs: what f
-// reads of GrantedWrites stays true until it returns, so a check on what a
+// reads of GrantedForms stays true until it returns, so a check on what a
 // launch may write and registering what WriteGuard refuses are one step.
+// f must not touch the filesystem: resolve before.
 func Exclusive(f func() error) error {
 	admit.Lock()
 	defer admit.Unlock()
@@ -239,63 +291,69 @@ func Exclusive(f func() error) error {
 
 // recordWrites records the writable host paths of a launch being built.
 func recordWrites(ps ...string) {
-	granted.Lock()
-	if !granted.on {
-		granted.Unlock()
-		return
+	ws := resolveWrites(ps)
+	pruneIfFull()
+	if addWrites(ws) {
+		runHooks()
 	}
-	rewrite := len(granted.paths) > maxGranted
-	if rewrite {
-		pruneGranted()
+}
+
+// addWrites records ws, appending what is new to the ledger file; true
+// when something was.
+func addWrites(ws []Write) bool {
+	granted.Lock()
+	defer granted.Unlock()
+	if !granted.on {
+		return false
 	}
 	var added []string
 	now := time.Now()
-	for _, p := range ps {
-		if !filepath.IsAbs(p) {
-			continue
-		}
-		g := grant{at: now, kind: kindRun}
-		if configured(p) {
+	for _, w := range ws {
+		g := grant{at: now, kind: kindRun, forms: w.Forms}
+		if configured(w.Forms) {
 			g.kind = kindConfig
 		}
-		if addGranted(p, g) {
-			p = filepath.Clean(p)
-			added = append(added, granted.meta[p].line(p))
+		if addGranted(w.Path, g) {
+			added = append(added, granted.meta[w.Path].line(w.Path))
 		}
 	}
-	if (rewrite || len(added) > 0) && granted.file != "" {
-		if rewrite {
-			_ = rewriteGranted()
-		} else if f, err := os.OpenFile(granted.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+	if len(added) > 0 && granted.file != "" {
+		if f, err := os.OpenFile(granted.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 			_, _ = f.WriteString(strings.Join(added, "\n") + "\n")
 			f.Close()
 		}
 	}
+	return len(added) > 0
+}
+
+func runHooks() {
+	granted.Lock()
 	hooks := slices.Clone(granted.hooks)
 	granted.Unlock()
-	if len(added) > 0 {
-		for _, h := range hooks {
-			h()
-		}
+	for _, h := range hooks {
+		h()
 	}
 }
 
 // addGranted adds p (callers hold the lock): false when it is not an
 // absolute path, already recorded as it is, or inside a skipped dir. A path
-// recorded both as the config's and a run's is a run's (kept while it
-// exists): that is a change to record.
+// recorded both as the config's and a run's is a run's: that is a change
+// to record.
 func addGranted(p string, g grant) bool {
 	if !filepath.IsAbs(p) {
 		return false
 	}
 	p = filepath.Clean(p)
+	granted.tick++
+	g.seen = granted.tick
 	if old, ok := granted.meta[p]; ok {
-		if old.kind == kindConfig && g.kind == kindRun {
+		old.seen = g.seen
+		changed := old.kind == kindConfig && g.kind == kindRun
+		if changed {
 			old.kind = kindRun
-			granted.meta[p] = old
-			return true
 		}
-		return false
+		granted.meta[p] = old
+		return changed
 	}
 	for _, s := range granted.skip {
 		if p == s || strings.HasPrefix(p, s+string(filepath.Separator)) {
@@ -310,15 +368,43 @@ func addGranted(p string, g grant) bool {
 	return true
 }
 
-func pruneGranted() {
+// pruneIfFull forgets the recorded paths that no longer exist once there
+// are more than maxGranted (each run's workspace is a new path). The paths
+// are checked with no lock held.
+// afterPruneStat runs between pruneIfFull's checks and its forgetting (a
+// test's hook).
+var afterPruneStat = func() {}
+
+func pruneIfFull() {
+	granted.Lock()
+	if len(granted.paths) <= maxGranted {
+		granted.Unlock()
+		return
+	}
+	ps := slices.Clone(granted.paths)
+	tick := granted.tick
+	granted.Unlock()
+	gone := map[string]bool{}
+	for _, p := range ps {
+		if _, err := os.Lstat(p); os.IsNotExist(err) {
+			gone[p] = true
+		}
+	}
+	if len(gone) == 0 {
+		return
+	}
+	afterPruneStat()
+	granted.Lock()
+	defer granted.Unlock()
+	// One granted again since it was checked may exist by now: kept.
 	granted.paths = slices.DeleteFunc(granted.paths, func(p string) bool {
-		_, err := os.Lstat(p)
-		if os.IsNotExist(err) {
+		if gone[p] && granted.meta[p].seen <= tick {
 			delete(granted.meta, p)
 			return true
 		}
 		return false
 	})
+	_ = rewriteGranted()
 }
 
 func rewriteGranted() error {

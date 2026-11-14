@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 
 	"github.com/NodeSpy/conductor/internal/config"
-	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // Manager owns the set of external plugin Clients for one loaded config and
@@ -298,7 +297,7 @@ func NewManager(plugins map[string]config.PluginRef, configDir string, state *In
 	// a library another plugin's jail then binds.
 	extra := deps.Sandbox.PeerWritable
 	deps.Sandbox.PeerWritable = func() []string {
-		ws := append(m.pluginWrites(), sandbox.GrantedWrites()...)
+		ws := m.pluginWrites()
 		if extra != nil {
 			ws = append(ws, extra()...)
 		}

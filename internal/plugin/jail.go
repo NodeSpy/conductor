@@ -500,6 +500,10 @@ func newGrantChecks(sd SandboxDeps, g sdk.Grant) *grantChecks {
 			}
 		}
 	}
+	// What sandboxed launches were let write, as resolved when recorded.
+	for _, g := range sandbox.GrantedForms() {
+		c.peer = append(c.peer, g.Forms...)
+	}
 	return c
 }
 
@@ -545,7 +549,7 @@ func (c *grantChecks) programWritable(p string) error {
 	}
 	for _, w := range c.peer {
 		if within(w, p) || within(p, w) {
-			return fmt.Errorf("%s overlaps %s, which a plugin conductor runs may write — it could have placed what is there%s", p, w, ledgerNote(p))
+			return fmt.Errorf("%s overlaps %s, which a plugin conductor runs may write — it could have placed what is there%s", p, w, ledgerNote(pathForms(p)))
 		}
 	}
 	return nil
@@ -662,7 +666,7 @@ func (c *grantChecks) checkProgram(cmd jailCommand) error {
 		}
 		for _, w := range c.peer {
 			if within(w, q) {
-				return fmt.Errorf("it lies inside %s, which a plugin conductor runs may write — it could have placed it", w)
+				return fmt.Errorf("it lies inside %s, which a plugin conductor runs may write — it could have placed it%s", w, ledgerNote([]string{w}))
 			}
 		}
 	}
@@ -1019,13 +1023,7 @@ func buildJailed(s Spec, sd SandboxDeps, argv, env []string) (*exec.Cmd, func(),
 		unlink()
 		return nil, nil, err
 	}
-	unbind, err := bindLaunch(sd.owner, s.Name, cmds, func() []string {
-		ws := sandbox.GrantedWrites()
-		if sd.PeerWritable != nil {
-			ws = append(ws, sd.PeerWritable()...)
-		}
-		return ws
-	})
+	unbind, err := bindLaunch(sd.owner, s.Name, cmds, sd.PeerWritable)
 	if err != nil {
 		cleanup()
 		unlink()
