@@ -180,3 +180,36 @@ func TestEndOfStepPushNothingToPushKinds(t *testing.T) {
 		t.Fatalf("output_schema + expect_push must push: %v %v", out, err)
 	}
 }
+
+// The push gate: once the dispatch's PR closed under it, neither the agent's
+// git.push nor the end-of-step push pushes — the branch stays where it was
+// (or stays deleted) — and the refusal is a stop, audited as one.
+func TestPushRefusedAfterTargetClosed(t *testing.T) {
+	var rows []map[string]any
+	p := testPusher(&rows)
+	closed := false
+	p.refuse = (&flow.Runner{TargetClosed: func(string) bool { return closed }}).PushRefusal
+	ctx := context.Background()
+	ws, remote, git := prWorkspace(t, "run2:fix", config.Step{})
+	before := git(remote, "rev-parse", "refs/heads/pr-1")
+
+	git(ws, "commit", "-q", "--allow-empty", "-m", "fix")
+	closed = true
+	if _, err := p.push(ctx, "run2:fix"); !errors.Is(err, dispatch.ErrTargetClosed) {
+		t.Fatalf("git.push after the close: %v, want a target-closed refusal", err)
+	}
+	if _, err := p.pushAtStepEnd(ctx, "run2:fix"); !errors.Is(err, dispatch.ErrTargetClosed) {
+		t.Fatalf("end-of-step push after the close: %v, want a target-closed refusal", err)
+	}
+	if after := git(remote, "rev-parse", "refs/heads/pr-1"); after != before {
+		t.Fatalf("the branch moved after the PR closed: %s → %s", before, after)
+	}
+	if len(rows) == 0 || rows[len(rows)-1]["outcome"] != "stopped" {
+		t.Fatalf("audit rows: %v, want the refusal audited as stopped", rows)
+	}
+
+	closed = false // open again: it pushes
+	if out, err := p.push(ctx, "run2:fix"); err != nil || out["pushed"] != true {
+		t.Fatalf("push with the PR open: %v %v", out, err)
+	}
+}
