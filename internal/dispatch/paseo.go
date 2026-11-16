@@ -57,10 +57,30 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// step had running before the restart is continued; failing that, the
 	// fresh agent starts in the kept workspace, told about the restart.
 	track := req.OnAgentStart != nil && !d.DryRun && !req.Shadow
+	// A foreground dispatch of a run bound to its target names its agent, so
+	// that a run stopped because the target closed can find and archive it
+	// (paseo_stop.go).
+	var boundLabels map[string]string
+	if req.Trigger.BoundToTarget() && req.Wait && !req.Interactive && !d.DryRun && !req.Shadow {
+		if targetClosed(ctx) {
+			return RunRef{}, ErrTargetClosed
+		}
+		token, err := newStepSessionToken()
+		if err != nil {
+			return RunRef{}, fmt.Errorf("bound dispatch token: %w", err)
+		}
+		boundLabels = map[string]string{boundLabel: token}
+	}
 	var kept paseoKept
 	if track && req.Resume != nil {
 		ref, handled, k, err := d.resumeStepAgent(ctx, req)
 		if handled {
+			if boundLabels != nil && targetClosed(ctx) {
+				// The agent being resumed carries the session token the run
+				// recorded for it, not this dispatch's.
+				d.archiveStopped(ctx, map[string]string{"conductor": "1", stepSessionLabel: req.Resume.SessionID}, ref.AgentID)
+				return RunRef{Backend: ref.Backend, Kind: ref.Kind, Output: ref.Output}, ErrTargetClosed
+			}
 			return ref, err
 		}
 		kept = k
@@ -284,6 +304,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	for _, l := range append(labelArgs(req), sandboxLabel(sandboxed, optedOut)...) {
 		argv = append(argv, "--label", l)
 	}
+	for k, v := range boundLabels {
+		argv = append(argv, "--label", k+"="+v)
+	}
 	if p.WaitTimeout > 0 {
 		argv = append(argv, "--wait-timeout", p.WaitTimeout.String())
 	}
@@ -402,6 +425,17 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		res, err = d.backend().RunAgent(ctx, RunAgentOptions{Args: argv, Cwd: cwd})
 	}
 	ref.Output = res.Output
+	if boundLabels != nil && targetClosed(ctx) {
+		// The target closed under the launch: its agent is archived, which
+		// takes the workspace conductor made for it. When that left this
+		// dispatch's run workspace behind (no agent ever came up, or it could
+		// not be placed), it is reclaimed here.
+		d.archiveStopped(ctx, boundLabels, res.AgentID)
+		if d.Owned.HasWorkspace(runWS) {
+			d.reclaimRunWorkspace(ctx, runWS, runDir)
+		}
+		return ref, ErrTargetClosed
+	}
 	if err != nil {
 		// A failed launch records no agent, so nothing will ever archive the
 		// workspace it ran in. This dispatch's own run workspace is reclaimed

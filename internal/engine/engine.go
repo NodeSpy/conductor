@@ -847,6 +847,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if t.ClosesTarget() {
 		_ = e.store.Delete(key)
 		runs := e.markClosed(key)
+		e.markRunsClosed(key)
 		e.dropHeld(key)
 		e.log("%s closed; dropped state", tag(t))
 		e.stopFixers(ctx, t, runs)
@@ -1456,6 +1457,13 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 				continue
 			}
 			if strings.HasPrefix(r.ID, queuedRunPrefix) {
+				if !r.TargetClosedAt.IsZero() {
+					// Its target closed while it waited, and the daemon
+					// stopped before it was dropped.
+					e.log("%s not re-queued — its target closed while it waited", tag(t))
+					_ = e.store.DeleteRun(r.ID)
+					continue
+				}
 				waiting = append(waiting, requeue{r, t, act})
 				continue
 			}

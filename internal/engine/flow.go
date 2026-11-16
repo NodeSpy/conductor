@@ -629,6 +629,7 @@ func flowRunRecord(t core.Trigger) store.WorkflowRun {
 		Number:   t.Target.Number,
 		Outputs:  map[string]map[string]any{},
 	}
+	run.StartedAt = time.Now() // a close of its target from here on stops it, across a restart too
 	tp := t
 	act, _ := tp.Action.(config.Action)
 	tp.Action = nil
@@ -697,6 +698,13 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 		}
 		defer e.release()
 		defer e.recoverDispatch(ctx, t, r, "flow resume")
+		// Bound from when the run first began, not from this resume: a close
+		// recorded on it before the restart, or re-delivered since, stops it.
+		if since := e.resumedSince(r, t.Key()); !since.IsZero() {
+			var unbind func()
+			ctx, unbind = e.bindRunToTarget(ctx, t, since)
+			defer unbind()
+		}
 		e.runFlow(ctx, r, t, spec, tidx, nil, untrack)
 	}()
 }

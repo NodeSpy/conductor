@@ -11,8 +11,10 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // acquireAsync starts an acquire and reports its result on the returned channel.
@@ -237,5 +239,77 @@ func TestClosedPRStopsRunningFixers(t *testing.T) {
 	defer d.mu.Unlock()
 	if len(d.stopped) != 1 || d.stopped[0] != closed.Key() {
 		t.Fatalf("StopTarget calls = %v, want one for %s", d.stopped, closed.Key())
+	}
+}
+
+// A run bound to its target that was in flight when the target closed, and
+// that the daemon stopped before it ended, is not carried on after the
+// restart: the close was recorded on the stored run, and the resumed run
+// starts stopped. A run on a target that did not close resumes.
+func TestRunWhoseTargetClosedIsNotResumedAfterARestart(t *testing.T) {
+	registerGateConn()
+	build := func(st *store.Store) *Engine {
+		t.Helper()
+		var cfg config.Config
+		if err := yaml.Unmarshal([]byte(gateCfg), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		if err := cfg.NormalizeTriggers(); err != nil {
+			t.Fatal(err)
+		}
+		reg, err := connector.Build(&cfg, connector.Deps{Secrets: secrets.New(), Config: &cfg})
+		if err != nil {
+			t.Fatal(err)
+		}
+		notif := &fakeNotif{}
+		runner := flow.New(flow.Runner{Cfg: &cfg, Conns: reg, Secrets: secrets.New(), Store: st, Notif: notif})
+		return New(Options{Config: &cfg, Store: st, Dispatch: fakeFlowDispatcher{}, Notifier: notif, Flow: runner, Connectors: reg})
+	}
+	st := tempStore(t)
+	fix := flowTrigger("fix1")
+	fix.Kind = "new_comment"
+	fix.Context = map[string]any{"msg": "closed target"}
+	open := fix
+	open.Target.Number = 2
+	open.Context = map[string]any{"msg": "open target"}
+	for _, tr := range []core.Trigger{fix, open} {
+		if err := st.PutRun(flowRunRecord(tr)); err != nil { // in flight in the last daemon life
+			t.Fatal(err)
+		}
+	}
+
+	// The last daemon life: the close arrives, and the daemon stops before
+	// the run on that target reaches its next step.
+	closed := flowTrigger("")
+	closed.Kind = "_closed"
+	closed.Action = nil
+	build(st).process(context.Background(), closed)
+	var marked int
+	for _, r := range st.PendingRuns() {
+		if !r.TargetClosedAt.IsZero() {
+			marked++
+		}
+	}
+	if marked != 1 {
+		t.Fatalf("%d stored runs marked closed, want the one on the closed target", marked)
+	}
+
+	// The restart.
+	posted := func(msg string) int {
+		gateConnMu.Lock()
+		defer gateConnMu.Unlock()
+		n := 0
+		for _, c := range gateConnCalls {
+			if s, _ := c["text"].(string); s == msg {
+				n++
+			}
+		}
+		return n
+	}
+	build(st).ResumeWorkflows(context.Background())
+	waitCond(t, "the run on the open target to resume", func() bool { return posted("open target") == 1 })
+	waitCond(t, "both runs to end", func() bool { return len(st.PendingRuns()) == 0 })
+	if n := posted("closed target"); n != 0 {
+		t.Fatalf("a run whose target closed ran %d step(s) after the restart", n)
 	}
 }

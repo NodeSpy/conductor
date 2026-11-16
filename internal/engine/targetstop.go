@@ -2,10 +2,12 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // A run bound to its target (the trigger declared bound_to_target) ends the
@@ -130,4 +132,47 @@ func (e *Engine) dispatchTargetClosed(dispatchID string) bool {
 	}
 	at, ok := e.closedAt[d.key]
 	return ok && !at.Before(d.since)
+}
+
+// The engine's record of closes is in memory. A run whose target closed just
+// before the daemon stopped (cancelled, but interrupted by the shutdown
+// before it ended as stopped) would resume as if the target were open. So a
+// close is also marked on the stored runs bound to the target, and a resumed
+// run takes it back.
+
+// markRunsClosed records the close of key's target on the stored runs bound
+// to it.
+func (e *Engine) markRunsClosed(key string) {
+	m, ok := e.store.(interface {
+		MarkRunsTargetClosed(func(store.WorkflowRun) bool, time.Time) (int, error)
+	})
+	if !ok {
+		return
+	}
+	_, _ = m.MarkRunsTargetClosed(func(r store.WorkflowRun) bool {
+		var t core.Trigger
+		return json.Unmarshal(r.Trigger, &t) == nil && t.Key() == key && t.BoundToTarget()
+	}, time.Now())
+}
+
+// resumedSince is when a resumed run began, for bindRunToTarget: its recorded
+// start, and no later than a close of its target recorded on it, which it
+// puts back in the engine's memory of closes. Zero when the record says
+// neither (written before either was kept): the run counts from its resume.
+func (e *Engine) resumedSince(r store.WorkflowRun, key string) time.Time {
+	since := r.StartedAt
+	if at := r.TargetClosedAt; !at.IsZero() {
+		e.queuedMu.Lock()
+		if e.closedAt == nil {
+			e.closedAt = map[string]time.Time{}
+		}
+		if e.closedAt[key].Before(at) {
+			e.closedAt[key] = at
+		}
+		e.queuedMu.Unlock()
+		if since.IsZero() || since.After(at) {
+			since = at
+		}
+	}
+	return since
 }

@@ -3,6 +3,7 @@ package store
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestRunAgentsPersistWithTheRun(t *testing.T) {
@@ -54,4 +55,50 @@ func TestRunAgentsPersistWithTheRun(t *testing.T) {
 	if s.KeepsWorkspace("/wt/c") {
 		t.Fatal("a gone run keeps no workspace")
 	}
+}
+
+// A close of a run's target is marked on the stored run, once, and survives
+// both the running flow's checkpoints (written from its own copy of the
+// record, which never saw the mark) and a restart. The run's start does too.
+func TestRunTargetClosedMarkOutlivesCheckpoints(t *testing.T) {
+	s := newTestStore(t, 0, 0)
+	began := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	closed := began.Add(time.Minute)
+	_ = s.PutRun(WorkflowRun{ID: "r1", Repo: "o/r", Number: 7, StartedAt: began})
+	_ = s.PutRun(WorkflowRun{ID: "r2", Repo: "o/r", Number: 8, StartedAt: began})
+	onSeven := func(r WorkflowRun) bool { return r.Number == 7 }
+
+	if n, err := s.MarkRunsTargetClosed(onSeven, closed); err != nil || n != 1 {
+		t.Fatalf("MarkRunsTargetClosed = %d, %v, want 1", n, err)
+	}
+	// Marked once: a second close does not move it.
+	if n, _ := s.MarkRunsTargetClosed(onSeven, closed.Add(time.Hour)); n != 0 {
+		t.Fatalf("marked %d runs already marked", n)
+	}
+	// A checkpoint carrying neither field keeps both.
+	_ = s.PutRun(WorkflowRun{ID: "r1", Repo: "o/r", Number: 7, StepIndex: 2})
+
+	check := func(s *Store, when string) {
+		t.Helper()
+		for _, r := range s.PendingRuns() {
+			switch r.ID {
+			case "r1":
+				if !r.TargetClosedAt.Equal(closed) || !r.StartedAt.Equal(began) || r.StepIndex != 2 {
+					t.Fatalf("%s: r1 = closed %v, started %v, step %d", when, r.TargetClosedAt, r.StartedAt, r.StepIndex)
+				}
+			case "r2":
+				if !r.TargetClosedAt.IsZero() {
+					t.Fatalf("%s: a run on another target was marked closed", when)
+				}
+			}
+		}
+	}
+	check(s, "after a checkpoint")
+
+	s2, err := Open(Options{StatePath: filepath.Join(filepath.Dir(s.runsPath), "state.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s2.Close() })
+	check(s2, "after reopen")
 }
