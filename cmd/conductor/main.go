@@ -1138,6 +1138,7 @@ func cmdRun(args []string) error {
 	}
 	if stack != nil {
 		defer wireWorkPusher(cfg, stack.Runner, st.Audit, logf)()
+		defer wireHomeReclaim(stack.Runner, st)()
 	}
 
 	// Mount connector ask surfaces (web pages, discord gateways) and fan

@@ -461,6 +461,7 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	}
 	defer stopSandbox()
 	defer wireWorkPusher(cfg, stack.Runner, st.Audit, logf)()
+	defer wireHomeReclaim(stack.Runner, st)()
 
 	// One-shot mode doesn't wire Backend-RPC runtime plugins (no long-lived
 	// dispatcher/reaper here); ACP runtime plugins still resolve as before.

@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/NodeSpy/conductor/internal/skill"
 )
@@ -73,25 +72,14 @@ func TestDispatchHomesAreEphemeral(t *testing.T) {
 		t.Fatal("a scope's persist: none over home kept the identity's home")
 	}
 
-	// The sweep removes an ended session's home once it is old, never a
-	// live one.
-	r.Persist = PersistNone
-	reg.Register(Entry{Workspace: ws, Identity: "agent:fixer@acme/app", Dispatch: "run2:fix"})
-	old := time.Now().Add(-48 * time.Hour)
-	for _, h := range []string{a.Home, b.Home} {
-		os.Chtimes(h, old, old)
+	// Every per-dispatch home is indexed under its dispatch, for the
+	// reclaim; an identity home is not.
+	idx := loadHomeIndex(r.homesDir())
+	if rec := idx[filepath.Base(a.Home)]; rec.Dispatch != "run1:fix" || rec.Used.IsZero() {
+		t.Fatalf("index record of a: %+v", rec)
 	}
-	if n := r.SweepDispatchHomes(); n < 1 {
-		t.Fatalf("swept %d", n)
-	}
-	if _, err := os.Stat(a.Home); !os.IsNotExist(err) {
-		t.Fatal("an ended dispatch's old home was kept")
-	}
-	if _, err := os.Stat(b.Home); err != nil {
-		t.Fatal("a live dispatch's home was swept")
-	}
-	if _, err := os.Stat(c2.Home); err != nil {
-		t.Fatal("a recent home was swept")
+	if _, ok := idx[filepath.Base(bot.Home)]; ok {
+		t.Fatal("an identity home was indexed as a dispatch's")
 	}
 }
 

@@ -3,18 +3,17 @@ package agentsandbox
 import (
 	"os"
 	"path/filepath"
-	"sync/atomic"
-	"time"
 )
 
 // Ephemeral homes. An identity home that outlives its dispatch is a place
 // one run plants what the next run of the identity executes: a settings
 // hook, a shell rc file, a poisoned build cache. By default
 // (sandbox.persist: none) a dispatch's agent gets a home of its own — fresh,
-// seeded from the operator's settings like any new home, kept for the
-// dispatch's resumes and removed a day after its session ends. `cache` adds
-// back a per-identity cache directory (~/.cache, and ~/Library/Caches on
-// macOS); `home` keeps the whole identity home across dispatches, as before.
+// seeded from the operator's settings like any new home, kept while its run
+// or an agent in it can still use it and removed when neither can
+// (reclaim.go). `cache` adds back a per-identity cache directory (~/.cache,
+// and ~/Library/Caches on macOS); `home` keeps the whole identity home
+// across dispatches, as before.
 // A launch with no dispatch (a bot's home session) keeps its identity's
 // home either way.
 
@@ -31,9 +30,6 @@ const dispatchHomes = ".dispatch-homes"
 
 // cacheRoots holds each identity's persisted cache (persist: cache).
 const cacheRoots = ".caches"
-
-// DispatchHomeTTL is how long a per-dispatch home outlives its session.
-var DispatchHomeTTL = 24 * time.Hour
 
 // homeFor is where e's home lives under persist (sandbox.persist, or its
 // scope's): the identity's own, or one of the dispatch's.
@@ -77,47 +73,4 @@ func (r *Resolver) persistCache(e Entry, home, persist string) (string, error) {
 		}
 	}
 	return dir, nil
-}
-
-var lastSweep atomic.Int64
-
-// maybeSweep runs SweepDispatchHomes at most hourly, in the background.
-func (r *Resolver) maybeSweep() {
-	now := time.Now().Unix()
-	if last := lastSweep.Load(); now-last < 3600 || !lastSweep.CompareAndSwap(last, now) {
-		return
-	}
-	go r.SweepDispatchHomes()
-}
-
-// SweepDispatchHomes removes the per-dispatch homes whose session has
-// ended (no registered workspace of their dispatch) and that nothing has
-// touched for DispatchHomeTTL.
-func (r *Resolver) SweepDispatchHomes() int {
-	root := filepath.Join(r.StateRoot, dispatchHomes)
-	ents, err := os.ReadDir(root)
-	if err != nil {
-		return 0
-	}
-	live := map[string]bool{}
-	for _, e := range r.registry().entries() {
-		if e.Dispatch != "" {
-			live[IdentityKey(e.Identity+"@"+e.Dispatch)] = true
-		}
-	}
-	n := 0
-	for _, ent := range ents {
-		if live[ent.Name()] {
-			continue
-		}
-		p := filepath.Join(root, ent.Name())
-		fi, err := os.Lstat(p)
-		if err != nil || time.Since(fi.ModTime()) < DispatchHomeTTL {
-			continue
-		}
-		if os.RemoveAll(p) == nil {
-			n++
-		}
-	}
-	return n
 }

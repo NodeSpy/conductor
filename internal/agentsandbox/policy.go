@@ -538,6 +538,11 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		closers = append(closers, stopDetect)
 		outEnv = append(outEnv, markerEnv+"="+marker)
 	}
+	if lock := homeLockPath(p.Home); lock != "" {
+		// A per-dispatch home is not reclaimed while this launch runs in it
+		// (reclaim.go); released last, once the launch is torn down.
+		closers = append([]func(){lockHomeShared(lock)}, closers...)
+	}
 	return &Launch{Argv: wrapped, Env: outEnv, Dir: dir, Cleanup: cleanupAll, Exposed: exposed}, nil
 }
 

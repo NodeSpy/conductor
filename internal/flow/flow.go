@@ -203,9 +203,14 @@ type Runner struct {
 	// after its work began (the engine's record): PushRefusal refuses every
 	// push for it. nil: never.
 	TargetClosed func(dispatchID string) bool
-	Cfg          *config.Config
-	Conns        *connector.Registry
-	Agents       AgentServices
+	// RunEnded is told a recorded run's history id once the run has ended
+	// for good (done, failed or stopped — not interrupted by a shutdown,
+	// which resumes): what conductor kept for the run's dispatches (the
+	// agent sandbox's per-dispatch homes) is reclaimed then. nil: nothing.
+	RunEnded func(historyID string)
+	Cfg      *config.Config
+	Conns    *connector.Registry
+	Agents   AgentServices
 	// Bots is the bot autonomy gate (nil when no bot is configured;
 	// a bot-bound skill grant then fails closed).
 	Bots BotGate
@@ -974,6 +979,9 @@ func (r *Runner) finishRun(ctx context.Context, run store.WorkflowRun) {
 	// blob owner (H2), not run.ID — so a re-trigger of the same dedup key is not
 	// tombstoned out of its own blob namespace.
 	r.releaseRunBlobs(blob.OwnerFrom(ctx))
+	if id := histFrom(ctx).runHistoryID(); id != "" && r.RunEnded != nil {
+		r.RunEnded(id)
+	}
 }
 
 // execStepWithFlow wraps one step's execution with the control-flow
