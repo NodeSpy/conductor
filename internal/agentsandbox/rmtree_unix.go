@@ -45,27 +45,26 @@ func removeAt(dirfd int, name string, dev uint64, at string) (int64, error) {
 	}
 	size := int64(st.Blocks) * 512
 	if st.Mode&unix.S_IFMT != unix.S_IFDIR {
+		// Unlinked by name, never opened or chmodded: a symlink or a hard
+		// link to a file outside the home loses only this name.
 		if err := unix.Unlinkat(dirfd, name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 			return 0, fmt.Errorf("%s: %w", at, err)
 		}
 		return size, nil
 	}
 	if uint64(st.Dev) != dev {
-		return 0, fmt.Errorf("%s: a mount point, not removed", at)
-	}
-	if st.Mode&0o700 != 0o700 {
-		if err := chmodDirNoFollow(dirfd, name); err != nil {
-			return 0, fmt.Errorf("%s: make writable: %w", at, err)
+		// Another filesystem: a mount point is never entered; a btrfs
+		// subvolume (its own st_dev, no mount) is the home's and goes.
+		if mount, known := isMountRoot(dirfd, name); mount || !known {
+			return 0, fmt.Errorf("%s: a mount point, not removed", at)
 		}
+		dev = uint64(st.Dev)
 	}
-	fd, err := unix.Openat(dirfd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	// The directory is opened, made writable and checked to be the one
+	// stat'ed above (dev/ino) without ever going through a symlink.
+	fd, err := openDirForRemoval(dirfd, name, &st)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", at, err)
-	}
-	var fst unix.Stat_t
-	if err := unix.Fstat(fd, &fst); err != nil || fst.Ino != st.Ino || fst.Dev != st.Dev {
-		unix.Close(fd)
-		return 0, fmt.Errorf("%s: changed while being removed", at)
 	}
 	d := os.NewFile(uintptr(fd), at)
 	names, rerr := d.Readdirnames(-1)
@@ -86,3 +85,8 @@ func removeAt(dirfd int, name string, dev uint64, at string) (int64, error) {
 	}
 	return size, first
 }
+
+// errChanged: the entry is no longer the directory stat'ed (a swap).
+var errChanged = errors.New("changed while being removed")
+
+func sameInode(a, b *unix.Stat_t) bool { return a.Dev == b.Dev && a.Ino == b.Ino }

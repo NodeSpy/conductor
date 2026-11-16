@@ -542,6 +542,8 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		// A per-dispatch home is not reclaimed while this launch runs in it
 		// (reclaim.go); released last, once the launch is torn down.
 		closers = append([]func(){lockHomeShared(lock)}, closers...)
+		// Taken over from the daemon, when the daemon launches in-process.
+		releaseDaemonHold(lock)
 	}
 	return &Launch{Argv: wrapped, Env: outEnv, Dir: dir, Cleanup: cleanupAll, Exposed: exposed}, nil
 }

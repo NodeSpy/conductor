@@ -20,7 +20,14 @@ import (
 //   - a launch is running in it: every launch holds a shared lock on the
 //     home's lock file (lockHomeShared) until it ends — an agent a run left
 //     running past its end (a background or hand-off step) keeps its home,
-//     and a launcher that dies drops its lock with it.
+//     and a launcher that dies drops its lock with it. The daemon itself
+//     holds the lock from the moment it prepares the home until the launch
+//     takes it over (or LaunchGrace passes): a run that ends while its last
+//     launch is starting does not lose that launch's home;
+//   - a session registered in it is live: the workspace registry names the
+//     dispatch, the session has not ended, and its workspace still exists —
+//     an agent that outlives its launcher (paseo restarts the provider and
+//     relaunches it with --resume) finds its home.
 //
 // When a run ends for good its homes go at once (ReclaimRun, from the run's
 // end). The sweep (SweepDispatchHomes, at the daemon's start, at every run
@@ -47,7 +54,62 @@ var LaunchGrace = 10 * time.Minute
 
 // homesMu serializes a per-dispatch home's preparation, its index and its
 // reclaim: a home is never moved aside while a launch is being prepared in it.
+// Nothing slow (a registry workspace's stat, a run's history) runs under it.
 var homesMu sync.Mutex
+
+// sweepMu runs one sweep at a time.
+var sweepMu sync.Mutex
+
+// daemonHolds are the locks the daemon holds on homes it prepared, until the
+// launch takes them over (releaseDaemonHold) or LaunchGrace passes.
+var daemonHolds = struct {
+	sync.Mutex
+	m map[string]*daemonHold
+}{m: map[string]*daemonHold{}}
+
+type daemonHold struct {
+	release func()
+	timer   *time.Timer
+}
+
+// holdForLaunch holds home's lock for the launch being prepared in it. When
+// the hold lapses unclaimed, a sweep runs: a home its run left behind while
+// the hold kept it goes then.
+func (r *Resolver) holdForLaunch(home string) {
+	lock := homeLockPath(home)
+	if lock == "" {
+		return
+	}
+	daemonHolds.Lock()
+	defer daemonHolds.Unlock()
+	if h, ok := daemonHolds.m[lock]; ok {
+		h.timer.Reset(LaunchGrace)
+		return
+	}
+	h := &daemonHold{release: lockHomeShared(lock)}
+	h.timer = time.AfterFunc(LaunchGrace, func() {
+		releaseDaemonHold(lock)
+		r.SweepDispatchHomes()
+	})
+	daemonHolds.m[lock] = h
+}
+
+// releaseDaemonHold drops the daemon's hold on a home's lock (the launch
+// holds its own now).
+func releaseDaemonHold(lock string) {
+	daemonHolds.Lock()
+	h, ok := daemonHolds.m[lock]
+	delete(daemonHolds.m, lock)
+	daemonHolds.Unlock()
+	if ok {
+		h.timer.Stop()
+		h.release()
+	}
+}
+
+// failedOnce names the homes whose removal failed and was reported: a
+// removal that keeps failing is reported once, not at every sweep.
+var failedOnce sync.Map
 
 var homeNow = time.Now
 
@@ -113,6 +175,7 @@ func (r *Resolver) prepareDispatchHome(key, dispatch string, prepare func() erro
 		return err
 	}
 	dir := r.homesDir()
+	r.holdForLaunch(filepath.Join(dir, IdentityKey(key)))
 	idx := loadHomeIndex(dir)
 	idx[IdentityKey(key)] = homeRec{Dispatch: dispatch, Used: homeNow()}
 	r.saveHomeIndex(dir, idx)
@@ -153,12 +216,17 @@ func (r *Resolver) ReclaimRun(run string) int {
 		return r.SweepDispatchHomes()
 	}
 	dir := r.homesDir()
+	registered := r.registeredHomes()
 	homesMu.Lock()
 	idx := loadHomeIndex(dir)
 	var trash []string
 	held := 0
 	for name, rec := range idx {
 		if RunOf(rec.Dispatch) != run {
+			continue
+		}
+		if registered[name] {
+			held++
 			continue
 		}
 		t, busy := r.detachHome(dir, name, idx)
@@ -172,7 +240,7 @@ func (r *Resolver) ReclaimRun(run string) int {
 	r.saveHomeIndex(dir, idx)
 	homesMu.Unlock()
 	if held > 0 {
-		r.logf("agent sandbox: run %s ended; %d dispatch home(s) kept while their agent runs", run, held)
+		r.logf("agent sandbox: run %s ended; %d dispatch home(s) kept while their agent or session is live", run, held)
 	}
 	return r.removeHomes(trash, "run "+run+" ended") + r.SweepDispatchHomes()
 }
@@ -189,10 +257,27 @@ func (r *Resolver) maybeSweep() {
 }
 
 // SweepDispatchHomes removes the orphaned per-dispatch homes (no live run,
-// no launch holding them) and any left half-removed. Returns the number
-// removed.
+// no launch holding them, no live session registered in them) and any left
+// half-removed. Returns the number removed.
 func (r *Resolver) SweepDispatchHomes() int {
+	sweepMu.Lock()
+	defer sweepMu.Unlock()
 	dir := r.homesDir()
+	if _, err := os.Stat(dir); err != nil {
+		return 0
+	}
+	// What can be slow is asked before homesMu is taken: a launch never
+	// waits on a registry workspace's filesystem or a run's history.
+	registered := r.registeredHomes()
+	runLive := map[string]bool{}
+	if r.RunLive != nil {
+		for _, rec := range loadHomeIndex(dir) {
+			run := RunOf(rec.Dispatch)
+			if _, ok := runLive[run]; !ok {
+				runLive[run] = r.RunLive(run)
+			}
+		}
+	}
 	homesMu.Lock()
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -200,7 +285,6 @@ func (r *Resolver) SweepDispatchHomes() int {
 		return 0
 	}
 	idx := loadHomeIndex(dir)
-	var legacy map[string]bool
 	var trash []string
 	present := map[string]bool{}
 	for _, ent := range ents {
@@ -214,10 +298,7 @@ func (r *Resolver) SweepDispatchHomes() int {
 		}
 		present[name] = true
 		rec, indexed := idx[name]
-		if !indexed && legacy == nil {
-			legacy = r.registeredHomes()
-		}
-		if !r.orphan(filepath.Join(dir, name), rec, indexed, legacy) {
+		if registered[name] || !r.orphan(filepath.Join(dir, name), rec, indexed, runLive) {
 			continue
 		}
 		if t, _ := r.detachHome(dir, name, idx); t != "" {
@@ -234,29 +315,29 @@ func (r *Resolver) SweepDispatchHomes() int {
 	return r.removeHomes(trash, "orphaned")
 }
 
-// orphan reports whether a home no launch holds may go: its run is neither
-// running nor resumable. A home with no index record (made before the index
-// existed) goes unless a registered workspace that still exists names it.
-func (r *Resolver) orphan(path string, rec homeRec, indexed bool, legacy map[string]bool) bool {
+// orphan reports whether a home no launch holds and no live session names
+// may go: its run is neither running nor resumable. A run whose answer was
+// not asked for (indexed since) is live. A home with no index record (made
+// before the index existed) goes once it is past the launch grace.
+func (r *Resolver) orphan(path string, rec homeRec, indexed bool, runLive map[string]bool) bool {
 	if indexed {
 		if homeNow().Sub(rec.Used) < LaunchGrace || r.RunLive == nil {
 			return false
 		}
-		return !r.RunLive(RunOf(rec.Dispatch))
-	}
-	if legacy[filepath.Base(path)] {
-		return false
+		live, asked := runLive[RunOf(rec.Dispatch)]
+		return asked && !live
 	}
 	fi, err := os.Lstat(path)
 	return err == nil && homeNow().Sub(fi.ModTime()) >= LaunchGrace
 }
 
-// registeredHomes are the per-dispatch homes the registry's entries name
-// whose workspace still exists.
+// registeredHomes are the per-dispatch homes of the registry's live
+// sessions: entries with a dispatch whose session has not ended and whose
+// workspace still exists.
 func (r *Resolver) registeredHomes() map[string]bool {
 	out := map[string]bool{}
 	for _, e := range r.registry().entries() {
-		if e.Dispatch == "" {
+		if e.Dispatch == "" || e.SessionEnded {
 			continue
 		}
 		if fi, err := os.Stat(e.Workspace); err == nil && fi.IsDir() {
@@ -269,19 +350,23 @@ func (r *Resolver) registeredHomes() map[string]bool {
 // removeHomes removes homes already moved aside, and logs what it freed and
 // what it could not remove (a failed one stays aside, for the next sweep).
 func (r *Resolver) removeHomes(trash []string, why string) int {
-	n, failed := 0, 0
+	n, failed, newFail := 0, 0, false
 	var freed int64
 	for _, t := range trash {
 		b, err := removeTree(t)
 		freed += b
 		if err != nil {
 			failed++
-			r.logf("agent sandbox: remove dispatch home %s: %v", filepath.Base(t), err)
+			if _, told := failedOnce.LoadOrStore(filepath.Base(t), true); !told {
+				newFail = true
+				r.logf("agent sandbox: remove dispatch home %s: %v (kept aside; retried at each sweep, not reported again)", filepath.Base(t), err)
+			}
 			continue
 		}
+		failedOnce.Delete(filepath.Base(t))
 		n++
 	}
-	if n > 0 || failed > 0 {
+	if n > 0 || newFail {
 		r.logf("agent sandbox: reclaimed %d dispatch home(s) (%s), %s freed; %d failed", n, why, humanBytes(uint64(freed)), failed)
 	}
 	return n

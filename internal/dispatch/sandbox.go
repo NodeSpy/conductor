@@ -135,6 +135,12 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 		// it. Another dispatch of the same identity re-registers: its push
 		// and its step-end check find the workspace by its own dispatch id.
 		if e.Dispatch == "" || (e.Identity == identity && (req == nil || req.DispatchID == e.Dispatch)) {
+			if e.SessionEnded {
+				// A relaunch of the dispatch (a resume): its session is
+				// live again, and so its home.
+				e.SessionEnded = false
+				reg.Register(e)
+			}
 			return e, nil
 		}
 		prev = &e

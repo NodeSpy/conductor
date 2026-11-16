@@ -61,6 +61,15 @@ type Entry struct {
 	// common dir and its own git dir: each launch gets a private view of the
 	// common dir (see GitLayout.Common).
 	GitCommon, GitWorktree string
+	// SessionEnded: the session that last launched here has ended. The
+	// entry stays — it is the workspace's trusted layout for a later
+	// dispatch into it — but no longer keeps the dispatch's home
+	// (reclaim.go). A launch of the dispatch clears it.
+	SessionEnded bool
+	// InProcess: the session runs as a child of this daemon, so it ends
+	// when the daemon does — a restart reloads the entry with its session
+	// ended.
+	InProcess bool
 }
 
 // PushTarget is where conductor — never the agent — pushes a workspace.
@@ -111,6 +120,8 @@ type persisted struct {
 	Scope       *Scope      `json:"scope,omitempty"`
 	GitCommon   string      `json:"git_common,omitempty"`
 	GitWorktree string      `json:"git_worktree,omitempty"`
+	Ended       bool        `json:"session_ended,omitempty"`
+	InProcess   bool        `json:"in_process,omitempty"`
 }
 
 // PersistTo loads the registry saved at path (entries whose workspace is
@@ -142,7 +153,8 @@ func (r *Registry) PersistTo(path string) error {
 			continue
 		}
 		ent := Entry{Workspace: ws, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
-			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree}
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
+			SessionEnded: e.Ended || e.InProcess, InProcess: e.InProcess}
 		// The file is conductor's, but what it names is bound read-write
 		// into the next launch: re-checked as a fresh layout would be, and
 		// dropped (the workspace resolves anew) when it no longer passes.
@@ -178,7 +190,8 @@ func (r *Registry) saveLocked() {
 	list := make([]persisted, 0, len(r.byWS))
 	for _, e := range r.byWS {
 		list = append(list, persisted{Workspace: e.Workspace, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
-			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree})
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
+			Ended: e.SessionEnded, InProcess: e.InProcess})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Workspace < list[j].Workspace })
 	b, err := json.MarshalIndent(list, "", " ")
@@ -215,6 +228,37 @@ func (r *Registry) Register(e Entry) func() {
 			}
 			r.mu.Unlock()
 		})
+	}
+}
+
+// EndSession records that dispatch's session has ended: its entries stay
+// (the workspace's layout), but no longer keep its home.
+func (r *Registry) EndSession(dispatch string) {
+	r.setSession(dispatch, func(e *Entry) { e.SessionEnded = true })
+}
+
+// MarkInProcess records that dispatch's session is a child of this daemon:
+// it does not outlive a restart.
+func (r *Registry) MarkInProcess(dispatch string) {
+	r.setSession(dispatch, func(e *Entry) { e.InProcess = true })
+}
+
+func (r *Registry) setSession(dispatch string, fn func(*Entry)) {
+	if dispatch == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	changed := false
+	for ws, e := range r.byWS {
+		if e.Dispatch == dispatch {
+			fn(&e)
+			r.byWS[ws] = e
+			changed = true
+		}
+	}
+	if changed {
+		r.saveLocked()
 	}
 }
 

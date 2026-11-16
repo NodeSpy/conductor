@@ -972,6 +972,7 @@ func (s *cliSession) Close(ctx context.Context) error {
 	// worktree goes after it, so the launch's last look at its workspace
 	// never finds it half removed.
 	s.Wait(ctx, closeExitWait)
+	endSandboxSession(s.opt.agent)
 	return s.releaseWorktree(ctx)
 }
 

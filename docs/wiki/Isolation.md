@@ -715,23 +715,31 @@ only while something can still use it:
 - its run is running, or a restart interrupted it and it can still resume;
 - an agent is running in it. Every launch holds a lock on its home until it
   exits, so an agent a run leaves running (a background or hand-off step)
-  keeps its home. A launcher that dies drops its lock.
+  keeps its home. A launcher that dies drops its lock. The daemon holds the
+  lock itself from the moment it prepares the home until the launch takes
+  it over, or for 10 minutes at most;
+- its agent's session is still live. Conductor registered the session's
+  workspace, the session has not ended, and the workspace still exists. An
+  agent its launcher restarts (paseo relaunching a hand-off with `--resume`)
+  finds its home. A session that runs inside the daemon ends with it, so a
+  restart does not keep its home.
 
 When the run ends (done, failed or stopped), its homes are removed at once.
-A home an agent is still running in goes when that agent exits. A sweep
-removes orphans: homes whose run ended while no daemon was running, and
-removals that failed. It runs when the daemon starts, at every run end, and
-at most hourly on launches. A home launched into within the last 10 minutes
-is never swept. Which run a home belongs to is recorded at launch in an
-index conductor owns, not read from the home.
+A home that is still held or still has a live session goes as soon as it is
+neither. A sweep removes orphans: homes whose run ended while no daemon was
+running, homes released after their run ended, and removals that failed. It
+runs when the daemon starts, at every run end, when the daemon's own hold on
+a home lapses, and at most hourly on launches. Which run a home belongs to is
+recorded at launch in an index conductor owns, not read from the home.
 
-Removal treats the home as the agent's. It never follows a symlink out of
-the home, and never descends into another filesystem. Before it removes a
+Removal treats the home as the agent's. It never follows a symlink or
+chmods a hard link out of the home, and never descends into a mount (a btrfs
+subvolume inside the home is removed with it). Before it removes a
 read-only directory's entries, it makes the directory writable by its owner.
 A Go module cache is such a directory (Go makes it read-only). The daemon log
 records how many homes each reclaim removed and how much space it freed, and
-each home it could not remove. A home that could not be removed is kept aside
-and retried at the next sweep.
+each home it could not remove (once per home). A home that could not be
+removed is kept aside and retried at each sweep.
 
 Tools that download into the home (a Go module cache in `~/go/pkg/mod`, an
 npm cache) download again on every run, because each run starts from a fresh
