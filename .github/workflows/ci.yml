@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   unit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       gofmt: ${{ steps.checks.outputs.gofmt }}
       vet: ${{ steps.checks.outputs.vet }}
@@ -82,7 +82,7 @@ jobs:
           echo "coverage=${cov:-n/a}" >> "$GITHUB_OUTPUT"
 
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       status: ${{ steps.run.outputs.status }}
       matrix: ${{ steps.run.outputs.matrix }}
@@ -122,7 +122,7 @@ jobs:
           exit $rc
 
   summary:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [unit, e2e]
     if: always() && github.event_name == 'pull_request'
     steps:
