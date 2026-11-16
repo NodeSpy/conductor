@@ -56,6 +56,18 @@ type BindMount struct {
 	// NotDir refuses the entry when its source is a directory when it is
 	// mounted (a program, a socket file: checked when it was granted).
 	NotDir bool `json:"notdir,omitempty"`
+	// Overlay mounts an overlay at Path instead of a bind: Overlay.Lower
+	// shown read-only beneath, every write going to Overlay.Upper (a
+	// shared dependency cache under a run's own writes). Linux only.
+	Overlay *Overlay `json:"overlay,omitempty"`
+}
+
+// Overlay is an overlay mount's layers, host paths: Lower is never
+// written; Upper and Work are on one filesystem.
+type Overlay struct {
+	Lower string `json:"lower"`
+	Upper string `json:"upper"`
+	Work  string `json:"work"`
 }
 
 // BaseMinimal is the jail base a plugin runs on (EnterOpts.Base): the base
@@ -94,7 +106,7 @@ func (b BindMount) source() string {
 
 // simple reports an entry the legacy --bind/--bind-ro flags can carry.
 func (b BindMount) simple() bool {
-	return b.Src == "" && !b.Tmpfs && b.Link == "" && !b.Optional && !b.NoExec && !b.NoSymlink && !b.NotDir
+	return b.Src == "" && !b.Tmpfs && b.Link == "" && !b.Optional && !b.NoExec && !b.NoSymlink && !b.NotDir && b.Overlay == nil
 }
 
 // NetForward carries the in-sandbox wiring into WrapLocal: the path of this

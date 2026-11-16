@@ -1,0 +1,82 @@
+# Bundled cache recipes: data, not code. Conductor core knows only
+# "detect files + key template + paths + env + warm command"; everything
+# about an ecosystem is here. An operator's sandbox.caches.recipes replaces a
+# recipe by name or adds new ones.
+#
+# Paths: "~/rel" is in the agent's home, "rel" in its workspace.
+# Env values expand {{home}} and {{workspace}}.
+# Key templates: {{hash "glob" ...}}, {{os}}, {{arch}}.
+# A warm runs in a checkout of the default branch, in the agent sandbox,
+# with the recipe's env. Install scripts are not run where a tool allows it.
+
+- name: go
+  detect: ["go.sum"]
+  key: 'go-{{os}}-{{arch}}-{{hash "**/go.sum"}}'
+  restore_keys: ['go-{{os}}-{{arch}}-']
+  paths: ["~/go/pkg/mod", "~/.cache/go-build"]
+  env:
+    GOMODCACHE: "{{home}}/go/pkg/mod"
+    GOCACHE: "{{home}}/.cache/go-build"
+    GOFLAGS: "-modcacherw"
+  warm: 'go mod download && { go build ./... >/dev/null 2>&1 || true; }'
+
+- name: npm
+  detect: ["package-lock.json", "npm-shrinkwrap.json"]
+  key: 'npm-{{os}}-{{hash "**/package-lock.json" "**/npm-shrinkwrap.json"}}'
+  restore_keys: ['npm-{{os}}-']
+  paths: ["~/.npm"]
+  env:
+    npm_config_cache: "{{home}}/.npm"
+  warm: 'npm ci --ignore-scripts --no-audit --no-fund'
+
+- name: pnpm
+  detect: ["pnpm-lock.yaml"]
+  key: 'pnpm-{{os}}-{{hash "**/pnpm-lock.yaml"}}'
+  restore_keys: ['pnpm-{{os}}-']
+  paths: ["~/.local/share/pnpm/store"]
+  env:
+    npm_config_store_dir: "{{home}}/.local/share/pnpm/store"
+  warm: 'pnpm fetch'
+
+- name: yarn
+  detect: ["yarn.lock"]
+  key: 'yarn-{{os}}-{{hash "**/yarn.lock"}}'
+  restore_keys: ['yarn-{{os}}-']
+  paths: ["~/.cache/yarn"]
+  env:
+    YARN_CACHE_FOLDER: "{{home}}/.cache/yarn"
+  warm: 'yarn install --frozen-lockfile --ignore-scripts'
+
+- name: pip
+  detect: ["requirements.txt", "requirements*.txt"]
+  key: 'pip-{{os}}-{{arch}}-{{hash "requirements*.txt"}}'
+  restore_keys: ['pip-{{os}}-{{arch}}-']
+  paths: ["~/.cache/pip"]
+  env:
+    PIP_CACHE_DIR: "{{home}}/.cache/pip"
+  warm: 'for f in requirements*.txt; do python3 -m pip download -q -r "$f" -d "$TMPDIR/pip-warm" || exit 1; done'
+
+- name: uv
+  detect: ["uv.lock"]
+  key: 'uv-{{os}}-{{arch}}-{{hash "**/uv.lock"}}'
+  restore_keys: ['uv-{{os}}-{{arch}}-']
+  paths: ["~/.cache/uv"]
+  env:
+    UV_CACHE_DIR: "{{home}}/.cache/uv"
+  warm: 'uv sync --frozen --no-install-project'
+
+- name: cargo
+  detect: ["Cargo.lock"]
+  key: 'cargo-{{os}}-{{hash "**/Cargo.lock"}}'
+  restore_keys: ['cargo-{{os}}-']
+  paths: ["~/.cargo/registry", "~/.cargo/git"]
+  warm: 'cargo fetch --locked'
+
+- name: bundler
+  detect: ["Gemfile.lock"]
+  key: 'bundler-{{os}}-{{arch}}-{{hash "**/Gemfile.lock"}}'
+  restore_keys: ['bundler-{{os}}-{{arch}}-']
+  paths: ["~/.bundle/vendor"]
+  env:
+    BUNDLE_PATH: "{{home}}/.bundle/vendor"
+  warm: 'bundle install --jobs 4'

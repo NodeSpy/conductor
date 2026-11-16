@@ -64,10 +64,23 @@ func TestAnUntrustedDispatchGetsNoPushTarget(t *testing.T) {
 	if e.Push != nil {
 		t.Fatalf("an untrusted dispatch got a push target: %+v", e.Push)
 	}
+	// Nor a repository's dependency caches: the sender named the repo.
+	if e.Repo != "" {
+		t.Fatalf("an untrusted dispatch is shown %s's caches", e.Repo)
+	}
 	agentsandbox.Default.Forget(repo)
 	e, err = RegisterSandboxWorkspace(repo, "agent:x@acme/widget", "claude-code", &Request{DispatchID: "t1",
 		Trigger: core.Trigger{Target: core.Target{Repo: "acme/widget"}, TargetTrusted: true}})
 	if err != nil || e.Push == nil {
 		t.Fatalf("a trusted dispatch's push target: %+v %v", e.Push, err)
+	}
+	if e.Repo != "acme/widget" {
+		t.Fatalf("a trusted dispatch's cache repo %q", e.Repo)
+	}
+	// A follow-up dispatch into the workspace keeps the recorded repo.
+	e, err = RegisterSandboxWorkspace(repo, "agent:y@acme/widget", "claude-code", &Request{DispatchID: "t2",
+		Trigger: core.Trigger{Target: core.Target{Repo: "other/repo"}, TargetTrusted: true}})
+	if err != nil || e.Repo != "acme/widget" {
+		t.Fatalf("follow-up cache repo %q %v", e.Repo, err)
 	}
 }

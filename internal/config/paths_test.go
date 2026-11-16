@@ -118,6 +118,7 @@ var pathCases = []struct {
 	{"Config.Commands", "commands: { gh: ~/bin/gh }", func(c *Config) string { return c.Commands["gh"] }},
 	{"SandboxConfig.StateDir", "sandbox: { state_dir: ~/agent-state }", func(c *Config) string { return c.Sandbox.StateDir }},
 	{"SandboxPush.SigningKey", "sandbox: { push: { signing_key: ~/.ssh/id_ed25519 } }", func(c *Config) string { return c.Sandbox.Push.SigningKey }},
+	{"SandboxCaches.Dir", "sandbox: { caches: { dir: ~/repo-caches } }", func(c *Config) string { return c.Sandbox.Caches.Dir }},
 	{"DashboardBind.CertFile", "dashboard: { bind: [ { cert_file: ~/tls/c.pem } ] }", func(c *Config) string { return c.Dashboard.Bind[0].CertFile }},
 	{"DashboardBind.KeyFile", "dashboard: { bind: [ { key_file: ~/tls/k.pem } ] }", func(c *Config) string { return c.Dashboard.Bind[0].KeyFile }},
 	{"DashboardCert.CertFile", "dashboard: { tailscale: { cert: { cert_file: ~/ts/c.pem, key_file: ~/ts/k.pem } } }", func(c *Config) string { return c.Dashboard.Tailscale.Cert.CertFile }},

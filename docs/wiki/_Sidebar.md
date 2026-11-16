@@ -38,6 +38,7 @@ The model
 - [[Hosts]]
 - [[Isolation]]
 - [[Paseo-Sandbox]]
+- [[Repo-Caches]]
 - [[Browser]]
 - [[Trust-and-Isolation]]
 

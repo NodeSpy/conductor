@@ -136,6 +136,8 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		// (wireHomeReclaim) and reclaimed, logged, when it ends.
 		RunLive: sandboxRunLive,
 		Log:     logf,
+		// Repository dependency caches (repocaches.go), once wired.
+		Caches: restoreRepoCaches,
 	}
 	if cfg.Sandbox != nil && cfg.Sandbox.Limits != nil {
 		l := cfg.Sandbox.Limits

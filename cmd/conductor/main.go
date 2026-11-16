@@ -1132,6 +1132,8 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer stopSandbox()
+	// Repository dependency caches for the sandbox's launches (after it).
+	wireRepoCaches(ctx, cfg, gitProv, logf)
 	// The browser (after the sandbox, whose identities it serves).
 	browserLedger.Store(st)
 	defer wireBrowser(ctx, cfg, notifier, st.Audit, logf)()

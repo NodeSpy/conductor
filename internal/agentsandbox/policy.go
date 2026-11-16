@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/repocache"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
@@ -108,6 +109,11 @@ type Policy struct {
 	// ModelHosts are the egress entries added for the tool's model traffic
 	// (not the operator's): dropped when the gateway carries it all.
 	ModelHosts []string `json:"model_hosts,omitempty"`
+	// Caches are the repository's dependency caches shown to the launch
+	// (internal/repocache): each an overlay whose lower layer is the shared,
+	// read-only cache and whose upper layer — every write — is in the
+	// launch's home. Linux; macOS restores by clone before the launch.
+	Caches []repocache.Mount `json:"caches,omitempty"`
 	// Note is something the launcher should tell its operator about this
 	// policy (a scratch workspace in place of a refused directory).
 	Note string `json:"note,omitempty"`
@@ -166,6 +172,20 @@ func (p Policy) Validate() error {
 		h, port, err := net.SplitHostPort(x)
 		if n, perr := strconv.Atoi(port); err != nil || !isLoopbackHost(h) || perr != nil || n <= 0 || n > 65535 {
 			return fmt.Errorf("agentsandbox: exposed address %q is not a loopback host:port", x)
+		}
+	}
+	for _, c := range p.Caches {
+		// A cache is shown only in the home or the workspace, its layers
+		// only from conductor's own directory in the home.
+		if !filepath.IsAbs(c.Target) || !(within(c.Target, p.Home) || within(c.Target, p.Workspace)) || c.Target == p.Home || c.Target == p.Workspace {
+			return fmt.Errorf("agentsandbox: cache target %q is not inside the home or the workspace", c.Target)
+		}
+		layers := filepath.Join(p.Home, repocache.LayersDir)
+		if !within(c.Upper, layers) || !within(c.Work, layers) || c.Upper == layers || c.Work == layers {
+			return fmt.Errorf("agentsandbox: cache layers %q, %q are not conductor's", c.Upper, c.Work)
+		}
+		if !filepath.IsAbs(c.Lower) || within(c.Lower, p.Home) || within(c.Lower, p.Workspace) {
+			return fmt.Errorf("agentsandbox: cache lower layer %q may not be in the home or the workspace", c.Lower)
 		}
 	}
 	for _, list := range [][]string{p.ReadOnly, p.ReadWrite, p.Hide} {
@@ -332,6 +352,11 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	}
 	for _, q := range p.Hide {
 		binds = append(binds, sandbox.BindMount{Path: q, Tmpfs: true})
+	}
+	if goos != "darwin" {
+		for _, c := range p.Caches {
+			binds = append(binds, sandbox.BindMount{Path: c.Target, Overlay: &sandbox.Overlay{Lower: c.Lower, Upper: c.Upper, Work: c.Work}})
+		}
 	}
 	if goos == "darwin" {
 		// Seatbelt allow rules add up: a read-only path inside a read-write
@@ -556,7 +581,7 @@ func seatbeltBinds(binds []sandbox.BindMount) []sandbox.BindMount {
 	var out []sandbox.BindMount
 	for _, b := range binds {
 		switch {
-		case b.Link != "" || b.Tmpfs:
+		case b.Link != "" || b.Tmpfs || b.Overlay != nil:
 			continue
 		case b.Src != "":
 			out = append(out, sandbox.BindMount{Path: b.Src, RO: b.RO})

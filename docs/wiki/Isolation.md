@@ -220,6 +220,7 @@ sandbox:
   #   required: false             # true: refuse a launch whose limits can't be applied
   #   off: false
   # persist: none                 # cache | home
+  # caches: { max_size: 10GiB }   # repository dependency caches (Repo-Caches.md)
   # git: { shared: protected }    # direct
   # macos_posix_ipc: false
 ```
@@ -766,6 +767,14 @@ so the sandbox never shares one. `persist: cache` is the opt-in.
 - `persist: home` keeps the whole identity home, as before.
 - A launch with no dispatch (a bot's home session, your own paseo session)
   keeps its identity's home.
+
+A fresh home does not have to mean downloading every dependency again.
+[Repository caches](Repo-Caches) restore a repository's module and build
+caches into the fresh home without copying them: an overlay on Linux whose
+read-only lower layer is the shared cache and whose upper layer lives in the
+run's home, a copy-on-write clone on macOS. A run never writes the shared
+copy. Only conductor publishes one, by running the cache's warm command in
+this same sandbox over a checkout of the repository's default branch.
 
 **IPC.** A Linux sandbox has its own System V IPC namespace. On macOS the
 agent's profile grants no POSIX shared memory or semaphores, because they are

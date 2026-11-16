@@ -81,6 +81,9 @@ type SandboxConfig struct {
 	// entries later runs of the identity execute); `home` — the whole home
 	// is kept (a run can plant settings, hooks and shell rc files).
 	Persist string `yaml:"persist,omitempty"`
+	// Caches are per-repository dependency caches restored into agent
+	// launches (SandboxCaches).
+	Caches *SandboxCaches `yaml:"caches,omitempty"`
 	// MacOSPosixIPC (macOS) lets agents use POSIX shared memory and
 	// semaphores (Python multiprocessing needs them). Off by default: they
 	// are named host-wide, so an agent could open a host process's.
@@ -367,6 +370,9 @@ func (c *Config) validateSandbox() error {
 		if err := validateEgressEntry("sandbox.egress", e); err != nil {
 			return err
 		}
+	}
+	if err := s.Caches.validate(); err != nil {
+		return err
 	}
 	if s.StateDir != "" && !filepath.IsAbs(s.StateDir) {
 		return fmt.Errorf("config: sandbox.state_dir %q must be an absolute path", s.StateDir)

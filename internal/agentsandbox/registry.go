@@ -54,6 +54,10 @@ type Entry struct {
 	// registered it ("" unknown): commits past it are the agent's own, the
 	// work an unpushed step end would lose.
 	StartHead string
+	// Repo is the repository (owner/name) the workspace is a checkout of,
+	// when conductor checked it out for a target it trusts ("" otherwise):
+	// the repository whose dependency caches the launch is shown.
+	Repo string
 	// Scope is what the dispatch's own scopes (its isolation: blocks, a
 	// pack grant) change of the sandbox; nil: nothing.
 	Scope *Scope
@@ -112,6 +116,7 @@ type persisted struct {
 	Env         []string    `json:"env,omitempty"`
 	Push        *PushTarget `json:"push,omitempty"`
 	StartHead   string      `json:"start_head,omitempty"`
+	Repo        string      `json:"repo,omitempty"`
 	Scope       *Scope      `json:"scope,omitempty"`
 	GitCommon   string      `json:"git_common,omitempty"`
 	GitWorktree string      `json:"git_worktree,omitempty"`
@@ -147,7 +152,7 @@ func (r *Registry) PersistTo(path string) error {
 			continue
 		}
 		ent := Entry{Workspace: ws, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
-			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Repo: e.Repo, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
 			Session: loadedSession(e.Session, e.Dispatch)}
 		// The file is conductor's, but what it names is bound read-write
 		// into the next launch: re-checked as a fresh layout would be, and
@@ -184,7 +189,7 @@ func (r *Registry) saveLocked() {
 	list := make([]persisted, 0, len(r.byWS))
 	for _, e := range r.byWS {
 		list = append(list, persisted{Workspace: e.Workspace, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
-			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Repo: e.Repo, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
 			Session: savedSession(e.Session)})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Workspace < list[j].Workspace })
