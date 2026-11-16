@@ -259,7 +259,20 @@ type DetectSpec struct {
 	// shape is audited as allowed (see sandbox.SessionOpts).
 	ShapeAllowed  []string `json:"shape_allowed,omitempty"`
 	ShapeAllowAll bool     `json:"shape_allow_all,omitempty"`
+	// Unobservable is what a launch the watcher cannot see gets (a process
+	// hiding its binary and descriptors, a process table it cannot list):
+	// UnobservableAlert ("" too) — audited and notified, the launch runs
+	// on; UnobservableEnforce — the detection's Action. ssh-agent and
+	// gpg-agent make themselves undumpable, and an agent's gpg starts the
+	// latter: enforcing kills such launches.
+	Unobservable string `json:"unobservable,omitempty"`
 }
+
+// What a launch the watcher cannot see gets (DetectSpec.Unobservable).
+const (
+	UnobservableAlert   = "alert"
+	UnobservableEnforce = "enforce"
+)
 
 // allows reports whether the launch's allowance covers a verdict of kind
 // on program name.
@@ -475,7 +488,7 @@ func (d *detector) scan() {
 		n := d.listFailures
 		d.mu.Unlock()
 		if n >= blindScans && !errors.Is(err, errNoWatcher) {
-			d.detected("unobservable", "the process table cannot be read: "+err.Error(), false)
+			d.unobservable("the process table cannot be read: " + err.Error())
 		}
 		return
 	}
@@ -490,6 +503,10 @@ func (d *detector) scan() {
 	root := agentRoot(procs, d.self)
 	for _, p := range procs {
 		vs := verdicts(p, d.allow, p.pid == root, d.self != "" && p.exe == d.self)
+		if d.spec.Unobservable != UnobservableEnforce && len(vs) > 0 && vs[0].kind == "unobservable" {
+			d.unobservable(fmt.Sprintf("pid %d: %s", p.pid, vs[0].reason))
+			vs = vs[1:]
+		}
 		if len(vs) == 0 {
 			continue
 		}
@@ -559,6 +576,24 @@ func (d *detector) report(kind, reason string, always bool) {
 	d.mu.Unlock()
 	if (first || always) && d.event != nil {
 		d.event("detection", map[string]any{"run": d.run, "kind": kind, "reason": reason, "action": d.spec.action()})
+	}
+}
+
+// unobservable responds to the watcher not seeing what it must judge: a
+// detection under the launch's action when the launch enforces it, else
+// audited (once per reason) as an alert.
+func (d *detector) unobservable(reason string) {
+	if d.spec.Unobservable == UnobservableEnforce {
+		d.detected("unobservable", reason, false)
+		return
+	}
+	d.mu.Lock()
+	key := "unobservable\x00" + reason
+	first := !d.reported[key]
+	d.reported[key] = true
+	d.mu.Unlock()
+	if first && d.event != nil {
+		d.event("detection", map[string]any{"run": d.run, "kind": "unobservable", "reason": reason, "action": DetectAlert})
 	}
 }
 
