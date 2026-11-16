@@ -222,6 +222,10 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 			prog.Close()
 			return
 		}
+		// Bound from when it queued: a close after the check above, or
+		// at any point from here, stops it.
+		ctx, unbind := e.bindRunToTarget(ctx, t, queuedAt)
+		defer unbind()
 		run := e.newFlowRun(t, spec, false)
 		defer e.recoverDispatch(ctx, t, run, "flow dispatch")
 		e.runFlow(flow.WithProgress(ctx, prog), run, t, spec, tidx, batch, untrack)
@@ -264,8 +268,10 @@ func (e *Engine) fireParkedHooks(ctx context.Context, t core.Trigger, act config
 // far longer than any wait for an agent slot.
 const closedRetention = 24 * time.Hour
 
-// markClosed records that key's PR just closed (merged or not).
-func (e *Engine) markClosed(key string) {
+// markClosed records that key's PR just closed (merged or not) and, in the
+// same critical section, stops every bound run live on it (targetstop.go).
+// Returns how many runs it stopped.
+func (e *Engine) markClosed(key string) int {
 	now := time.Now()
 	e.queuedMu.Lock()
 	defer e.queuedMu.Unlock()
@@ -278,28 +284,32 @@ func (e *Engine) markClosed(key string) {
 		}
 	}
 	e.closedAt[key] = now
+	return e.stopTargetRunsLocked(key)
 }
 
 // stopFixers kills every fixer still running on t's PR, across all runtimes —
 // the PR merged or closed, so its work is moot and any push it makes from here
 // lands on a dead branch (or, as happened, re-creates it and opens a follow-up
 // PR). Each stopped run ends as "stopped", not failed.
-func (e *Engine) stopFixers(ctx context.Context, t core.Trigger) {
-	if e.controllers == nil {
-		return
-	}
+//
+// runs is how many bound flow runs markClosed already stopped (their
+// contexts are cancelled; this kills the agents, including any a runtime
+// still holds outside a run).
+func (e *Engine) stopFixers(ctx context.Context, t core.Trigger, runs int) {
 	n := 0
-	for _, r := range e.controllers.Runners() {
-		if s, ok := r.(interface {
-			StopTarget(context.Context, string) int
-		}); ok {
-			n += s.StopTarget(ctx, t.Key())
+	if e.controllers != nil {
+		for _, r := range e.controllers.Runners() {
+			if s, ok := r.(interface {
+				StopTarget(context.Context, string) int
+			}); ok {
+				n += s.StopTarget(ctx, t.Key())
+			}
 		}
 	}
-	if n > 0 {
-		e.log("%s closed; stopped %d running fixer(s)", tag(t), n)
+	if n > 0 || runs > 0 {
+		e.log("%s closed; stopped %d running fixer(s), %d run(s)", tag(t), n, runs)
 		e.store.Audit(map[string]any{"event": "fixers_stopped", "repo": t.Target.Repo,
-			"number": t.Target.Number, "count": n})
+			"number": t.Target.Number, "count": n, "runs": runs})
 	}
 }
 
@@ -448,6 +458,8 @@ func (e *Engine) requeueFlowRun(ctx context.Context, r store.WorkflowRun, t core
 // so they find the run ended.
 func (e *Engine) runFlow(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, tidx int, batch *flow.Batch, untrack func()) {
 	defer e.redeliverHeld(t.Key())
+	ctx, unbind := e.bindRunToTarget(ctx, t, time.Now())
+	defer unbind()
 	if untrack == nil {
 		untrack = e.trackInFlight(t)
 	}
