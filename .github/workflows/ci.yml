@@ -14,12 +14,23 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Every Linux image the sandbox must work on, named explicitly: a runner
+  # image roll never changes what is tested. ubuntu-24.04 is the primary
+  # leg (fmt, vet, coverage, cross-compile); each leg reports its own tests.
+  # (A matrix leg's empty output does not override another's.)
   unit:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
+    env:
+      PRIMARY: ${{ matrix.os == 'ubuntu-24.04' }}
     outputs:
       gofmt: ${{ steps.checks.outputs.gofmt }}
       vet: ${{ steps.checks.outputs.vet }}
-      tests: ${{ steps.checks.outputs.tests }}
+      tests_2404: ${{ steps.checks.outputs.tests_2404 }}
+      tests_2604: ${{ steps.checks.outputs.tests_2604 }}
       coverage: ${{ steps.checks.outputs.coverage }}
       base_coverage: ${{ steps.base.outputs.coverage }}
     steps:
@@ -35,30 +46,35 @@ jobs:
         id: checks
         run: |
           set +e
+          # out KEY=VALUE: a step output; the shared ones from the primary leg only.
+          out() { echo "$1" >> "$GITHUB_OUTPUT"; }
+          shared() { if [ "$PRIMARY" = true ]; then out "$1"; fi; }
+          leg=$(echo "${{ matrix.os }}" | tr -dc 0-9)
           fmt_out=$(gofmt -l .)
-          if [ -z "$fmt_out" ]; then echo "gofmt=clean" >> "$GITHUB_OUTPUT"; else
-            echo "gofmt=DIRTY: $fmt_out" >> "$GITHUB_OUTPUT"; fi
+          if [ -z "$fmt_out" ]; then shared "gofmt=clean"; else
+            shared "gofmt=DIRTY: $fmt_out"; fi
 
           vet_out=$(go vet ./... 2>&1)
           vet_rc=$?
-          if [ $vet_rc -eq 0 ]; then echo "vet=clean" >> "$GITHUB_OUTPUT"; else
-            echo "vet=FAILED" >> "$GITHUB_OUTPUT"; echo "$vet_out"; fi
+          if [ $vet_rc -eq 0 ]; then shared "vet=clean"; else
+            shared "vet=FAILED"; echo "$vet_out"; fi
 
           go test -race -coverprofile=cover.out ./... > test.log 2>&1
           test_rc=$?
           okpkgs=$(grep -c '^ok ' test.log || true)
           failpkgs=$(grep -c '^FAIL' test.log || true)
           if [ $test_rc -eq 0 ]; then
-            echo "tests=PASS ($okpkgs packages)" >> "$GITHUB_OUTPUT"
+            out "tests_$leg=PASS ($okpkgs packages)"
           else
-            echo "tests=FAIL ($failpkgs failing / $okpkgs ok packages)" >> "$GITHUB_OUTPUT"
+            out "tests_$leg=FAIL ($failpkgs failing / $okpkgs ok packages)"
             cat test.log
           fi
           cov=$(go tool cover -func=cover.out 2>/dev/null | tail -1 | awk '{print $3}')
-          echo "coverage=${cov:-n/a}" >> "$GITHUB_OUTPUT"
+          shared "coverage=${cov:-n/a}"
           # The gate: fmt, vet, and tests must all be green.
           if [ -n "$fmt_out" ] || [ $vet_rc -ne 0 ] || [ $test_rc -ne 0 ]; then exit 1; fi
       - name: cross-compile release targets (arch portability)
+        if: env.PRIMARY == 'true'
         run: |
           set -euo pipefail
           # Mirror release.yml's target matrix so an arch-specific break (e.g. a
@@ -71,7 +87,7 @@ jobs:
           done
       - name: base coverage (for the delta)
         id: base
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && env.PRIMARY == 'true'
         continue-on-error: true
         run: |
           git fetch --depth 1 origin "${{ github.base_ref }}"
@@ -82,7 +98,7 @@ jobs:
           echo "coverage=${cov:-n/a}" >> "$GITHUB_OUTPUT"
 
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       status: ${{ steps.run.outputs.status }}
       matrix: ${{ steps.run.outputs.matrix }}
@@ -122,7 +138,7 @@ jobs:
           exit $rc
 
   summary:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [unit, e2e]
     if: always() && github.event_name == 'pull_request'
     steps:
@@ -153,7 +169,8 @@ jobs:
               `|---|---|`,
               `| gofmt | ${unit.gofmt === 'clean' ? '✅ clean' : '❌ ' + (unit.gofmt || 'did not run')} |`,
               `| go vet | ${unit.vet === 'clean' ? '✅ clean' : '❌ ' + (unit.vet || 'did not run')} |`,
-              `| unit tests (-race) | ${ (unit.tests || '').startsWith('PASS') ? '✅' : '❌'} ${unit.tests || 'did not run'} |`,
+              ...[['ubuntu-24.04', unit.tests_2404], ['ubuntu-26.04', unit.tests_2604]].map(([os, t]) =>
+                `| unit tests (-race, ${os}) | ${(t || '').startsWith('PASS') ? '✅' : '❌'} ${t || 'did not run'} |`),
               `| coverage | ${covLine} |`,
               `| e2e (hermetic) | ${icon(e2e.status === 'PASS')} ${e2e.status || e2eResult} |`,
               `| e2e (hosts that cannot jail plugins) | ${icon(e2e.nojail_status === 'PASS')} ${e2e.nojail_status || 'did not run'} |`,
