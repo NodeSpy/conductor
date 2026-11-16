@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -76,7 +77,7 @@ func TestHandleNewerReleaseModes(t *testing.T) {
 
 	// Default (apply unset = true): install + apply, no emission.
 	n, got := capturePublisher()
-	_, applied := handleNewerRelease(context.Background(), config.Update{Auto: true}, "v9.9.9", "", n, nil, "")
+	_, applied, _ := handleNewerRelease(context.Background(), config.Update{Auto: true}, "v9.9.9", "", n, nil, "")
 	if !applied || installs != 1 || applies != 1 {
 		t.Fatalf("default mode: applied=%v installs=%d applies=%d", applied, installs, applies)
 	}
@@ -89,7 +90,7 @@ func TestHandleNewerReleaseModes(t *testing.T) {
 	if err := yaml.Unmarshal([]byte("auto: true\napply: workflow"), &wu); err != nil {
 		t.Fatal(err)
 	}
-	announced, applied := handleNewerRelease(context.Background(), wu, "v9.9.9", "", n, nil, "")
+	announced, applied, _ := handleNewerRelease(context.Background(), wu, "v9.9.9", "", n, nil, "")
 	if applied || announced != "v9.9.9" {
 		t.Fatalf("workflow mode: applied=%v announced=%q", applied, announced)
 	}
@@ -102,14 +103,14 @@ func TestHandleNewerReleaseModes(t *testing.T) {
 		t.Fatalf("emission: %v", evs)
 	}
 	// The same tag announces once.
-	if a2, _ := handleNewerRelease(context.Background(), wu, "v9.9.9", announced, n, nil, ""); a2 != "v9.9.9" {
+	if a2, _, _ := handleNewerRelease(context.Background(), wu, "v9.9.9", announced, n, nil, ""); a2 != "v9.9.9" {
 		t.Fatalf("re-announce: %q", a2)
 	}
 	if evs := got(); len(evs) != 1 {
 		t.Fatalf("same tag re-emitted: %v", evs)
 	}
 	// A NEWER tag announces again.
-	if _, _ = handleNewerRelease(context.Background(), wu, "v9.9.10", "v9.9.9", n, nil, ""); len(got()) != 2 {
+	if _, _, _ = handleNewerRelease(context.Background(), wu, "v9.9.10", "v9.9.9", n, nil, ""); len(got()) != 2 {
 		t.Fatalf("new tag not announced: %v", got())
 	}
 }
@@ -145,5 +146,45 @@ func TestEmitUpdatedOnBoot(t *testing.T) {
 	if len(evs) != 1 || !strings.HasPrefix(evs[0], "updated "+version) ||
 		!strings.Contains(evs[0], "v0.0.1-old → "+version) {
 		t.Fatalf("updated event: %v", evs)
+	}
+}
+
+// A failed install is retried: handleNewerRelease reports it, and the
+// checker, told to forget, reports the same tag as changed on the next check
+// (without forget it says "nothing new" and the box stays on the old version
+// until another release comes out).
+func TestFailedInstallIsRetried(t *testing.T) {
+	origInstall, origApply := installRelease, applyRelease
+	fail := true
+	installRelease = func(force bool, tag, cfgFile string, notifier *notify.Notifier) (bool, string, error) {
+		if fail {
+			return false, "", fmt.Errorf("fetch checksums for %s: early EOF", tag)
+		}
+		return true, tag, nil
+	}
+	applies := 0
+	applyRelease = func(func()) { applies++ }
+	t.Cleanup(func() { installRelease, applyRelease = origInstall, origApply })
+
+	rc := &releaseChecker{latest: func() (string, error) { return "v9.9.9", nil }}
+	tag, changed, _ := rc.check()
+	if !newerRelease(tag, changed, "v1.0.0") {
+		t.Fatal("first check: want an install")
+	}
+	_, applied, failed := handleNewerRelease(context.Background(), config.Update{Auto: true}, tag, "", nil, nil, "")
+	if applied || !failed {
+		t.Fatalf("applied=%v failed=%v, want a failed install", applied, failed)
+	}
+	if tag, changed, _ = rc.check(); newerRelease(tag, changed, "v1.0.0") {
+		t.Fatal("without forget the checker re-reports the tag (precondition for this test is wrong)")
+	}
+	rc.forget()
+	tag, changed, _ = rc.check()
+	if !newerRelease(tag, changed, "v1.0.0") {
+		t.Fatal("after a failed install, the next check must offer the release again")
+	}
+	fail = false
+	if _, applied, failed = handleNewerRelease(context.Background(), config.Update{Auto: true}, tag, "", nil, nil, ""); !applied || failed || applies != 1 {
+		t.Fatalf("retry: applied=%v failed=%v applies=%d, want installed and applied", applied, failed, applies)
 	}
 }
