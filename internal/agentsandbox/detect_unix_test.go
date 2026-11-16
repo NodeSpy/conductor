@@ -171,8 +171,6 @@ func TestDetectorFollowsTheRootItsLauncherNames(t *testing.T) {
 	}
 }
 
-// fakeTool is a copy of sleep named name (macOS kills a copied platform
-// binary unless it is re-signed).
 // asHostTools makes the host's binary index the given tools': an allowance
 // covers only a binary identified as the tool it names.
 func asHostTools(t *testing.T, tools ...string) {
@@ -187,43 +185,64 @@ func asHostTools(t *testing.T, tools ...string) {
 	t.Cleanup(func() { hostBinaries = old })
 }
 
+// fakeTool is a long-running binary named name: a copy of this test binary
+// that sleeps (see TestMain). Not a copy of the host's sleep: that is one
+// multicall binary for every coreutils program on some distributions
+// (uutils), which refuses to run under a name it does not know. On macOS a
+// re-signed copy of sleep (macOS kills a copied platform binary unless it
+// is re-signed, and re-signs a copy, not a modified one).
+func fakeTool(t *testing.T, name string) string {
+	t.Helper()
+	if runtime.GOOS == "darwin" {
+		return signedCopy(t, "sleep", name)
+	}
+	return trailered(t, name, fakeToolTrailer)
+}
+
 // strangerTool is a long-running binary named name that is neither the
-// tool it is named after nor a copy of it (a copy of yes: macOS signs a
-// copy, not a modified one).
+// tool it is named after nor a copy of it: the test binary with another
+// trailer (on macOS a re-signed copy of yes).
 func strangerTool(t *testing.T, name string) string {
 	t.Helper()
-	yes, err := exec.LookPath("yes")
-	if err != nil {
-		t.Skip("no yes")
+	if runtime.GOOS == "darwin" {
+		return signedCopy(t, "yes", name)
 	}
-	p := filepath.Join(t.TempDir(), name)
-	b, _ := os.ReadFile(yes)
-	if err := os.WriteFile(p, b, 0o755); err != nil {
+	return trailered(t, name, fakeStrangerTrailer)
+}
+
+// trailered is a copy of this test binary named name, with trailer
+// appended.
+func trailered(t *testing.T, name, trailer string) string {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS == "darwin" {
-		if out, err := exec.Command("codesign", "-s", "-", "-f", p).CombinedOutput(); err != nil {
-			t.Skipf("codesign: %v %s", err, out)
-		}
+	b, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(p, append(b, trailer...), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	return p
 }
 
-func fakeTool(t *testing.T, name string) string {
+// signedCopy is a re-signed copy of the host program prog named name.
+func signedCopy(t *testing.T, prog, name string) string {
 	t.Helper()
-	sleep, err := exec.LookPath("sleep")
+	src, err := exec.LookPath(prog)
 	if err != nil {
-		t.Skip("no sleep")
+		t.Skip("no " + prog)
 	}
 	p := filepath.Join(t.TempDir(), name)
-	b, _ := os.ReadFile(sleep)
+	b, _ := os.ReadFile(src)
 	if err := os.WriteFile(p, b, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS == "darwin" {
-		if out, err := exec.Command("codesign", "-s", "-", "-f", p).CombinedOutput(); err != nil {
-			t.Skipf("codesign: %v %s", err, out)
-		}
+	if out, err := exec.Command("codesign", "-s", "-", "-f", p).CombinedOutput(); err != nil {
+		t.Skipf("codesign: %v %s", err, out)
 	}
 	return p
 }
@@ -453,11 +472,6 @@ func TestDetectorSeesThroughRenamesAndDescriptors(t *testing.T) {
 		t.Skip("no sh")
 	}
 	sh, _ = filepath.EvalSymlinks(sh)
-	tail, err := exec.LookPath("tail")
-	if err != nil {
-		t.Skip("no tail")
-	}
-	tail, _ = filepath.EvalSymlinks(tail)
 	cp := func(src, dst string) string {
 		b, err := os.ReadFile(src)
 		if err != nil {
@@ -468,11 +482,23 @@ func TestDetectorSeesThroughRenamesAndDescriptors(t *testing.T) {
 		}
 		return dst
 	}
-	// The host's "socat" is a copy of tail here: a long-running binary no
-	// other process of the test runs.
-	bin, work := t.TempDir(), t.TempDir()
-	cp(tail, filepath.Join(bin, "socat"))
-	shellSrc, tunnelSrc, tunnelName, tunnelArgs := sh, tail, "socat", []string{"-f", "/dev/null"}
+	// The host's "socat" is a long-running binary no other process of the
+	// test runs: the test's stand-in tool (on macOS a copy of tail, the
+	// renamed copy then made of tail itself).
+	work := t.TempDir()
+	tunnelSrc, tunnelArgs := fakeTool(t, "socat"), []string{"60"}
+	bin := filepath.Dir(tunnelSrc)
+	if runtime.GOOS == "darwin" {
+		tail, err := exec.LookPath("tail")
+		if err != nil {
+			t.Skip("no tail")
+		}
+		tail, _ = filepath.EvalSymlinks(tail)
+		bin = t.TempDir()
+		cp(tail, filepath.Join(bin, "socat"))
+		tunnelSrc, tunnelArgs = tail, []string{"-f", "/dev/null"}
+	}
+	shellSrc, tunnelName := sh, "socat"
 	if runtime.GOOS == "darwin" {
 		// macOS kills a copy of a platform binary as it starts; Homebrew's
 		// are not platform binaries, so their copies run.

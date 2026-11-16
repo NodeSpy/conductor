@@ -3,6 +3,7 @@
 package agentsandbox
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // A launch process that starts its own group and leaves a daemon behind —
@@ -109,5 +112,78 @@ func TestSignalProcRefusesAPidWhoseStartTimeChanged(t *testing.T) {
 	}
 	if p, ok := procStat(pid); !ok || p.comm != "sleep" {
 		t.Fatal("the process was killed despite the start-time mismatch")
+	}
+}
+
+func init() {
+	fakeToolSetup = func(args []string) {
+		for _, a := range args {
+			if a == "hide" {
+				_ = unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
+			}
+		}
+	}
+}
+
+// A launch process that hides from the watcher — undumpable, so neither its
+// binary nor its descriptors can be read — is a detection, not a process
+// judged clean (a binary whose name says nothing — a reverse shell in an
+// interpreter would look the same).
+func TestDetectorKillsAProcessItCannotSee(t *testing.T) {
+	marker := newMarker()
+	tool := fakeTool(t, "dep-sync")
+	c := exec.Command(tool, "60", "hide")
+	c.Env = append(os.Environ(), markerEnv+"="+marker)
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Process.Kill(); waitOnce(c) })
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Readlink("/proc/" + strconv.Itoa(c.Process.Pid) + "/exe"); err == nil {
+		t.Skip("this watcher can read an undumpable process (it holds CAP_SYS_PTRACE over it)")
+	}
+	var kinds []string
+	d := &detector{spec: DetectSpec{}, run: "r", allow: map[string]bool{}, marker: marker,
+		signal: signalProc, reported: map[string]bool{},
+		event: func(_ string, f map[string]any) { kinds = append(kinds, f["kind"].(string)+" "+f["action"].(string)) }}
+	d.list = listProcs(marker, d.isRoot)
+	// Its environment (the marker) is hidden too: it is the launch's as the
+	// root its launcher names, or a descendant of one.
+	d.started(c.Process.Pid)
+	d.scan()
+	if len(kinds) == 0 || kinds[0] != "unobservable "+DetectKill {
+		t.Fatalf("events %v", kinds)
+	}
+	ch := make(chan struct{})
+	go func() { waitOnce(c); close(ch) }()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hidden process was not killed")
+	}
+}
+
+// A watcher that cannot list processes reports itself blind (after a
+// passing failure or two) and kills its launch; a platform with no watcher
+// is not a blind one.
+func TestDetectorThatCannotListIsBlind(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{{errors.New("no /proc"), true}, {errNoWatcher, false}} {
+		var kinds []string
+		d := &detector{spec: DetectSpec{}, run: "r", allow: map[string]bool{}, reported: map[string]bool{},
+			event: func(_ string, f map[string]any) { kinds = append(kinds, f["kind"].(string)) }}
+		d.list = func() ([]procInfo, error) { return nil, tc.err }
+		for i := 0; i < blindScans-1; i++ {
+			d.scan()
+		}
+		if len(kinds) != 0 {
+			t.Fatalf("%v: blind after %d scans: %v", tc.err, blindScans-1, kinds)
+		}
+		d.scan()
+		if got := len(kinds) == 1 && kinds[0] == "unobservable" && d.hasKilled(); got != tc.want {
+			t.Fatalf("%v: events %v, killed %v", tc.err, kinds, d.hasKilled())
+		}
 	}
 }

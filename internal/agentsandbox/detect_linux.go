@@ -5,6 +5,7 @@ package agentsandbox
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -94,12 +95,22 @@ func enrich(p *procInfo) {
 	if b, err := os.ReadFile(dir + "/cmdline"); err == nil {
 		p.args = strings.Split(strings.TrimRight(string(b), "\x00"), "\x00")
 	}
-	p.exe, _ = os.Readlink(dir + "/exe")
+	exe, err := os.Readlink(dir + "/exe")
+	p.exe = exe
+	if errors.Is(err, fs.ErrPermission) {
+		// The operator's own process, alive, whose binary the watcher may
+		// not read: it made itself undumpable (prctl), or runs a binary
+		// that gained privilege. Either way it is not judged clean.
+		p.hidden = hiddenReason(p.pid, "its binary cannot be read")
+	}
 	// The magic link reaches the binary whatever mount namespace it is in.
 	p.id, _ = hostBinaries().identify(dir + "/exe")
 	inet := inetInodes(dir)
 	fds, err := os.ReadDir(dir + "/fd")
 	if err != nil {
+		if p.hidden == "" && errors.Is(err, fs.ErrPermission) {
+			p.hidden = hiddenReason(p.pid, "its descriptors cannot be read")
+		}
 		return
 	}
 	for _, fd := range fds {
@@ -127,6 +138,37 @@ func enrich(p *procInfo) {
 			p.stdio[n] = kind
 		}
 	}
+}
+
+// hiddenReason is why a launch process cannot be read, or "" when it runs
+// with privilege the operator does not have (a set-user-ID or file-capability
+// binary: what it does is not the agent's code, and the watcher, the
+// operator's, cannot see into it by design).
+func hiddenReason(pid int, what string) string {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return what
+	}
+	uid := strconv.Itoa(os.Getuid())
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		switch f[0] {
+		case "Uid:":
+			for _, u := range f[1:] {
+				if u != uid {
+					return ""
+				}
+			}
+		case "CapEff:":
+			if strings.Trim(f[1], "0") != "" {
+				return ""
+			}
+		}
+	}
+	return what
 }
 
 // inetInodes are the socket inodes of the process's network namespace's

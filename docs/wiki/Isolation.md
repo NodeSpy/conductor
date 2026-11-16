@@ -540,6 +540,7 @@ The watcher looks for:
 | `tunnel_tool` | ssh, socat, nc, chisel, websocat, cloudflared, ngrok, `openssl s_client`, tor, …, by name or by binary |
 | `reverse_shell` | a shell (sh, bash, dash, zsh, busybox, …) holding a TCP/UDP socket on **any** descriptor, or an interpreter (python, perl, node, …) whose stdin or stdout is one. An interpreter's own sockets are its work: pip and npm hold them. |
 | `pty_relay` | Linux: a process other than the agent itself holding a pty master and an inet socket (the Linux sandbox has no pty devices, so this guards a jail that has one) |
+| `unobservable` | the watcher cannot see what it must judge. Linux: one of the launch's own processes (same user, no added privilege) whose binary or descriptors it may not read, because the process made itself undumpable. Any platform: the process table could not be listed for three scans in a row. No allowance covers it. A set-user-ID or file-capability program the launch runs is not counted. |
 | `tripwire` | a read of a decoy credential in the home: `.ssh/id_ed25519`, `.ssh/id_rsa`, `.git-credentials`, `.vault-token`, `.pypirc` |
 | `git` | the git guard undid a change |
 
