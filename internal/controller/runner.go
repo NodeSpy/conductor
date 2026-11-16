@@ -91,6 +91,17 @@ type controllerRunner struct {
 	// (token-bound to the dispatch id) resolves through them.
 	byDispatch map[string]string
 	inflight   map[string]bool
+	// starting holds the bound dispatches still provisioning or opening
+	// their session: StopTarget marks them, and the dispatch cancels its
+	// turn the moment the session is tracked — no window where a
+	// just-launched agent escapes a stop.
+	starting map[*startTicket]struct{}
+}
+
+// startTicket is one bound dispatch on its way to a tracked session.
+type startTicket struct {
+	key     string
+	stopped bool
 }
 
 func newControllerRunner(c Controller, prov Provisioner, h Handler) *controllerRunner {
@@ -123,12 +134,6 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		return ref, nil
 	}
 
-	// The target closed after the run began and before this step: nothing to
-	// prepare.
-	if targetClosed(req) {
-		return ref, dispatch.ErrTargetClosed
-	}
-
 	if req.DispatchID != "" {
 		// In flight from before the session opens: an agent can call
 		// step.done during its first turn, before NewSession returns.
@@ -141,6 +146,8 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 			r.mu.Unlock()
 		}()
 	}
+	tk := r.beginStart(req)
+	defer r.endStart(tk)
 	wsID, cwd, kept, fallback, err := r.workspace(ctx, req)
 	if err != nil {
 		// The workspace/worktree never came up — the dispatch never
@@ -171,13 +178,11 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 
 	id := r.track(req, sess)
 	ref.AgentID = id
-	watchActivity(req, sess)
-	// The target closed while the workspace and session came up, when
-	// StopTarget had no session to stop. Asked only now that the session is
-	// tracked: a close from here on finds it there.
-	if r.stopIfClosed(ctx, req, id, sess) {
+	if r.stopIfStopped(ctx, tk, id, sess) && !(req.Wait && !req.Interactive) {
+		// Nothing below waits for the turn: report the stop now.
 		return ref, dispatch.ErrTargetClosed
 	}
+	watchActivity(req, sess)
 
 	// A foreground dispatch (a workflow/flow step — as opposed to a background
 	// hand-off, which returns immediately so you can drive the live session)
@@ -208,9 +213,6 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 				id = r.track(req, sess)
 				ref.AgentID = id
 				watchActivity(req, sess)
-				if r.stopIfClosed(ctx, req, id, sess) {
-					return ref, dispatch.ErrTargetClosed
-				}
 				if w, ok := sess.(waiter); ok {
 					w.Wait(ctx, timeout)
 				}
@@ -399,10 +401,18 @@ func (r *controllerRunner) HasLiveAgent(_ context.Context, prKeyStr, kind string
 // key (its trigger declared bound_to_target) — the target closed, so the work is moot
 // and any push it makes from here lands on a dead or wrong branch. Sessions are
 // cancelled, not closed: the dispatch returns and the normal archive releases
-// the worktree. Returns how many sessions it stopped.
+// the worktree. A bound dispatch still provisioning or opening its session is
+// stopped too, the moment its session is tracked. Returns how many it stopped.
 func (r *controllerRunner) StopTarget(ctx context.Context, key string) int {
 	r.mu.Lock()
 	var hit []Session
+	starting := 0
+	for tk := range r.starting {
+		if tk.key == key && !tk.stopped {
+			tk.stopped = true
+			starting++
+		}
+	}
 	for id, b := range r.bucket {
 		k, _, _ := strings.Cut(b, "\x00")
 		if k != key || !r.bound[id] || r.stopped[id] {
@@ -417,29 +427,51 @@ func (r *controllerRunner) StopTarget(ctx context.Context, key string) int {
 	for _, sess := range hit {
 		_ = sess.Cancel(ctx)
 	}
-	return len(hit)
+	return len(hit) + starting
 }
 
-// targetClosed asks the request whether its target closed since its run began.
-func targetClosed(req dispatch.Request) bool {
-	return req.TargetClosed != nil && req.TargetClosed()
+// beginStart registers a bound dispatch as starting (nil: not bound).
+func (r *controllerRunner) beginStart(req dispatch.Request) *startTicket {
+	if !req.Trigger.BoundToTarget() {
+		return nil
+	}
+	tk := &startTicket{key: req.Trigger.Key()}
+	r.mu.Lock()
+	if r.starting == nil {
+		r.starting = map[*startTicket]struct{}{}
+	}
+	r.starting[tk] = struct{}{}
+	r.mu.Unlock()
+	return tk
 }
 
-// stopIfClosed kills the just-tracked session id when its request's target
-// closed while it was being opened, as StopTarget would have had it been live.
-// Reports whether the target had closed.
-func (r *controllerRunner) stopIfClosed(ctx context.Context, req dispatch.Request, id string, sess Session) bool {
-	if !targetClosed(req) {
+func (r *controllerRunner) endStart(tk *startTicket) {
+	if tk == nil {
+		return
+	}
+	r.mu.Lock()
+	delete(r.starting, tk)
+	r.mu.Unlock()
+}
+
+// stopIfStopped: a StopTarget that ran while tk's dispatch was starting
+// stops the session it just opened (id) — marked stopped, so its wait ends in
+// ErrTargetClosed, and its turn cancelled. Reports whether it did.
+func (r *controllerRunner) stopIfStopped(ctx context.Context, tk *startTicket, id string, sess Session) bool {
+	if tk == nil {
 		return false
 	}
 	r.mu.Lock()
-	already := r.stopped[id]
-	r.stopped[id] = true
+	stop := tk.stopped
+	if stop {
+		r.stopped[id] = true
+	}
+	delete(r.starting, tk)
 	r.mu.Unlock()
-	if !already {
+	if stop {
 		_ = sess.Cancel(context.WithoutCancel(ctx))
 	}
-	return true
+	return stop
 }
 
 func (r *controllerRunner) wasStopped(id string) bool {

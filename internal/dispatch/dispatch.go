@@ -142,14 +142,6 @@ type Request struct {
 	// Best-effort and optional — a runtime that cannot see its agent's
 	// activity never calls it. Must not block.
 	Activity func(phrase string)
-	// TargetClosed, when set, reports whether the request's target closed
-	// since its run began (the run is bound to that target, and the engine
-	// saw its closing event). A runtime asks it before it prepares anything,
-	// and again once its session can be stopped: a close that arrives while
-	// the workspace and session are still coming up finds nothing to stop,
-	// so the runtime must look for itself. A request it reports closed ends
-	// with ErrTargetClosed.
-	TargetClosed func() bool
 }
 
 // Input is one materialized `workspace.inputs` entry.
@@ -225,11 +217,6 @@ type Dispatcher struct {
 	// runs, including output_schema retries). A step.done for an in-flight
 	// dispatch defers to the step-boundary archive; see Dispatcher.Archive.
 	inflight sync.Map
-
-	// bound are the foreground dispatches in flight for runs bound to their
-	// target, which StopTarget stops when it closes; see paseo_stop.go.
-	boundMu sync.Mutex
-	bound   map[*boundRun]struct{}
 
 	// outputSlots holds each schema dispatch's rendezvous for a verb-delivered
 	// output (step.done carrying `output`); see output_schema.go.

@@ -12,7 +12,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
-	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
@@ -243,79 +242,10 @@ func TestClosedPRStopsRunningFixers(t *testing.T) {
 	}
 }
 
-// reqRecDispatcher is a runtime that keeps the requests it was handed.
-type reqRecDispatcher struct {
-	fakeFlowDispatcher
-	mu   sync.Mutex
-	reqs []dispatch.Request
-}
-
-func (d *reqRecDispatcher) Dispatch(_ context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.reqs = append(d.reqs, req)
-	return dispatch.RunRef{}, nil
-}
-
-// stopFixers stops the sessions live when a close arrives. A run that is
-// between steps, or whose session is still coming up, has none: its dispatch
-// carries the means to ask (Request.TargetClosed), true once the target closed
-// at or after the run began. A run begun after the close (a reopened target)
-// and a run not bound to its target are never told so.
-func TestDispatchLearnsItsTargetClosedUnderTheRun(t *testing.T) {
-	eng, _, _, _ := buildFlowEngine(t, gateCfg)
-	d := &reqRecDispatcher{}
-	fix := flowTrigger("fix1")
-	fix.Kind = "new_comment"
-	if !fix.BoundToTarget() {
-		t.Fatal("test trigger is not bound to its target")
-	}
-	began := time.Now()
-	send := func(ctx context.Context, tr core.Trigger) dispatch.Request {
-		t.Helper()
-		if _, err := eng.dispatchAgent(ctx, d, dispatch.Request{Trigger: tr}); err != nil {
-			t.Fatal(err)
-		}
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		return d.reqs[len(d.reqs)-1]
-	}
-
-	req := send(withRunSince(context.Background(), began), fix)
-	if req.TargetClosed == nil {
-		t.Fatal("a bound run's dispatch cannot ask whether its target closed")
-	}
-	if req.TargetClosed() {
-		t.Fatal("target reported closed before any close")
-	}
-	eng.markClosed(fix.Key())
-	if !req.TargetClosed() {
-		t.Fatal("target closed under the run, and its dispatch was not told")
-	}
-
-	// Another target's close is not this run's.
-	other := fix
-	other.Target.Number = 2
-	if send(withRunSince(context.Background(), began), other).TargetClosed() {
-		t.Fatal("another target's close stopped this run")
-	}
-	// Begun after the close: the target was reopened.
-	if send(withRunSince(context.Background(), time.Now().Add(time.Second)), fix).TargetClosed() {
-		t.Fatal("a run begun after the close was told its target closed")
-	}
-	// Not bound to its target, or not a flow run: nothing to ask.
-	if send(withRunSince(context.Background(), began), flowTrigger("p1")).TargetClosed != nil {
-		t.Fatal("a run not bound to its target was given a close to watch")
-	}
-	if send(context.Background(), fix).TargetClosed != nil {
-		t.Fatal("a dispatch outside a flow run was given a close to watch")
-	}
-}
-
 // A run bound to its target that was in flight when the target closed, and
-// that the daemon stopped before it noticed, is not carried on after the
+// that the daemon stopped before it ended, is not carried on after the
 // restart: the close was recorded on the stored run, and the resumed run
-// stops before its next step. A run on a target that did not close resumes.
+// starts stopped. A run on a target that did not close resumes.
 func TestRunWhoseTargetClosedIsNotResumedAfterARestart(t *testing.T) {
 	registerGateConn()
 	build := func(st *store.Store) *Engine {

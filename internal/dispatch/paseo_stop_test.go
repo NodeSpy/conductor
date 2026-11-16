@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,123 +25,10 @@ func shortBoundPoll(t *testing.T) {
 	t.Cleanup(func() { boundPoll = old })
 }
 
-// dispatchAsync runs the dispatch and delivers its error.
-func dispatchAsync(d *Dispatcher, req Request) <-chan error {
-	errc := make(chan error, 1)
-	go func() {
-		_, err := d.Dispatch(context.Background(), req)
-		errc <- err
-	}()
-	return errc
-}
-
-func wantStopped(t *testing.T, errc <-chan error) {
-	t.Helper()
-	select {
-	case err := <-errc:
-		if !errors.Is(err, ErrTargetClosed) {
-			t.Fatalf("Dispatch err = %v, want ErrTargetClosed", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Dispatch still waiting on an agent whose target closed")
-	}
-}
-
 func (b *daemonBackend) counts() (agents, runs, archived, wsArchived int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.agents), len(b.runs), len(b.archived), len(b.wsArchived)
-}
-
-// When a target closes, the agent a foreground dispatch has running for a run
-// bound to it is archived, and the dispatch ends as stopped rather than
-// failed. Its run workspace goes with it. Another target's close, and a run
-// not bound to its target, are left alone.
-func TestPaseoStopTargetStopsTheBoundAgent(t *testing.T) {
-	shortBoundPoll(t)
-	b := newDaemonBackend()
-	b.hang = true
-	d := newResumeDispatcher(t, b)
-	req := boundStep()
-	errc := dispatchAsync(d, req)
-	waitFor(t, "the agent to launch", func() bool { a, _, _, _ := b.counts(); return a == 1 })
-
-	if n := d.StopTarget(context.Background(), "gh:acme/other#9"); n != 0 {
-		t.Fatalf("stopped %d dispatches on another target", n)
-	}
-	if n := d.StopTarget(context.Background(), req.Trigger.Key()); n != 1 {
-		t.Fatalf("StopTarget = %d, want 1", n)
-	}
-	wantStopped(t, errc)
-	agents, _, archived, wsArchived := b.counts()
-	if agents != 0 || archived != 1 {
-		t.Fatalf("agents live=%d archived=%d, want the one agent archived", agents, archived)
-	}
-	if wsArchived != 1 {
-		t.Fatalf("run workspaces archived = %d, want 1", wsArchived)
-	}
-	if n := d.StopTarget(context.Background(), req.Trigger.Key()); n != 0 {
-		t.Fatalf("StopTarget after the dispatch ended = %d, want 0", n)
-	}
-
-	// Not bound to its target: nothing to stop.
-	b2 := newDaemonBackend()
-	b2.hang = true
-	d2 := newResumeDispatcher(t, b2)
-	var starts []AgentStart
-	free := resumeStep(&starts)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _, _ = d2.Dispatch(ctx, free) }()
-	waitFor(t, "the unbound agent to launch", func() bool { a, _, _, _ := b2.counts(); return a == 1 })
-	if n := d2.StopTarget(context.Background(), free.Trigger.Key()); n != 0 {
-		t.Fatalf("stopped %d dispatches not bound to their target", n)
-	}
-	if a, _, archived, _ := b2.counts(); a != 1 || archived != 0 {
-		t.Fatalf("an unbound agent was archived (live=%d archived=%d)", a, archived)
-	}
-}
-
-// A target that closed before the step launches nothing; one that closes
-// while the launch is being prepared is caught by the second ask, made once
-// the dispatch can be stopped.
-func TestPaseoDispatchAsksWhetherItsTargetClosed(t *testing.T) {
-	shortBoundPoll(t)
-	b := newDaemonBackend()
-	d := newResumeDispatcher(t, b)
-	req := boundStep()
-	req.TargetClosed = func() bool { return true }
-	wantStopped(t, dispatchAsync(d, req))
-	if _, runs, _, _ := b.counts(); runs != 0 {
-		t.Fatalf("%d agents launched for a target already closed", runs)
-	}
-
-	asked := 0
-	req.TargetClosed = func() bool { asked++; return asked > 1 }
-	wantStopped(t, dispatchAsync(d, req))
-	if _, runs, _, _ := b.counts(); runs != 0 {
-		t.Fatalf("%d agents launched for a target that closed as the launch began", runs)
-	}
-
-	// Still open: the launch goes ahead, labelled so a later close finds it.
-	req.TargetClosed = func() bool { return false }
-	if _, err := d.Dispatch(context.Background(), req); err != nil {
-		t.Fatal(err)
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if len(b.runs) != 1 {
-		t.Fatalf("runs = %d, want 1", len(b.runs))
-	}
-	found := false
-	for _, l := range argAfter(b.runs[0], "--label") {
-		if len(l) > len(boundLabel)+1 && l[:len(boundLabel)+1] == boundLabel+"=" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("a bound launch carries no %s label: %v", boundLabel, argAfter(b.runs[0], "--label"))
-	}
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
@@ -153,4 +41,86 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// A run bound to its target is cancelled with cause ErrTargetClosed when the
+// target closes. That ends the `paseo run` conductor waits on, not the agent
+// in the paseo daemon: the dispatch archives it, and the run workspace with
+// it, and ends as stopped. A cancellation for any other reason (a shutdown)
+// keeps both for the restart, and a run not bound to its target is never
+// labelled or archived this way.
+func TestPaseoArchivesTheAgentOfARunWhoseTargetClosed(t *testing.T) {
+	shortBoundPoll(t)
+	b := newDaemonBackend()
+	b.hang = true
+	d := newResumeDispatcher(t, b)
+	ctx, stop := context.WithCancelCause(context.Background())
+	errc := make(chan error, 1)
+	go func() {
+		_, err := d.Dispatch(ctx, boundStep())
+		errc <- err
+	}()
+	waitFor(t, "the agent to launch", func() bool { a, _, _, _ := b.counts(); return a == 1 })
+	b.mu.Lock()
+	labelled := false
+	for _, l := range argAfter(b.runs[0], "--label") {
+		labelled = labelled || strings.HasPrefix(l, boundLabel+"=")
+	}
+	b.mu.Unlock()
+	if !labelled {
+		t.Fatalf("a bound launch carries no %s label", boundLabel)
+	}
+
+	stop(ErrTargetClosed) // the target closes
+	select {
+	case err := <-errc:
+		if !errors.Is(err, ErrTargetClosed) {
+			t.Fatalf("Dispatch err = %v, want ErrTargetClosed", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Dispatch still waiting on an agent whose target closed")
+	}
+	if agents, _, archived, wsArchived := b.counts(); agents != 0 || archived != 1 || wsArchived != 1 {
+		t.Fatalf("live=%d archived=%d workspaces archived=%d, want the agent and its run workspace archived",
+			agents, archived, wsArchived)
+	}
+
+	// Already closed when the step starts: nothing is launched.
+	if _, err := d.Dispatch(ctx, boundStep()); !errors.Is(err, ErrTargetClosed) {
+		t.Fatalf("Dispatch on a closed target: err = %v, want ErrTargetClosed", err)
+	}
+	if _, runs, _, _ := b.counts(); runs != 1 {
+		t.Fatalf("%d launches, want none for a target already closed", runs-1)
+	}
+
+	// A shutdown is not a close: the agent and workspace stay for the restart.
+	b2 := newDaemonBackend()
+	b2.hang = true
+	d2 := newResumeDispatcher(t, b2)
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	go func() {
+		_, err := d2.Dispatch(ctx2, boundStep())
+		errc <- err
+	}()
+	waitFor(t, "the second agent to launch", func() bool { a, _, _, _ := b2.counts(); return a == 1 })
+	cancel2()
+	if err := <-errc; err == nil || errors.Is(err, ErrTargetClosed) {
+		t.Fatalf("a shutdown reported as %v", err)
+	}
+	if agents, _, archived, wsArchived := b2.counts(); agents != 1 || archived != 0 || wsArchived != 0 {
+		t.Fatalf("a shutdown archived the agent or its workspace (live=%d archived=%d ws=%d)", agents, archived, wsArchived)
+	}
+
+	// Not bound to its target: no label.
+	b3 := newDaemonBackend()
+	d3 := newResumeDispatcher(t, b3)
+	var starts []AgentStart
+	if _, err := d3.Dispatch(context.Background(), resumeStep(&starts)); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range argAfter(b3.runs[0], "--label") {
+		if strings.HasPrefix(l, boundLabel+"=") {
+			t.Fatalf("an unbound launch carries a %s label", boundLabel)
+		}
+	}
 }

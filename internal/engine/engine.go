@@ -144,7 +144,12 @@ type Engine struct {
 	inflight    map[string]int          // flow runs queued or running, by inFlightKey (guarded by queuedMu); see trackInFlight
 	runCaps     runCaps                 // policy.concurrency.max_runs pools, per scope
 	closedAt    map[string]time.Time    // PR key → when its _closed arrived (guarded by queuedMu); see closedSince
-	baseCtx     context.Context         // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
+	// targetRuns: live bound runs per target key, cancelled when it closes;
+	// dispatchTargets: dispatch id → its target, for the push gate (both
+	// guarded by queuedMu; see targetstop.go).
+	targetRuns      map[string]map[*targetRun]struct{}
+	dispatchTargets map[string]dispatchTarget
+	baseCtx         context.Context // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
 
 	// flow runs connectors-model triggers (actions carrying a FlowRef);
 	// grouper batches their grouped events. nil when the config has no
@@ -330,7 +335,7 @@ func New(o Options) *Engine {
 		// The runner's agent/command steps dispatch through the engine's own
 		// runtime resolution, tokens, and hand-off machinery.
 		e.flow.Agents = e.flowAgentServices()
-		e.flow.TargetClosed = e.targetClosedUnder
+		e.flow.TargetClosed = e.dispatchTargetClosed
 		e.grouper = flow.NewGrouper(nil, e.runBatch)
 	}
 	return e
@@ -524,7 +529,7 @@ func (e *Engine) capabilityCard(sk *config.SkillPolicy) string {
 // (one-shot/cli), which stay fresh-per-event and lean on shared memory.
 func (e *Engine) dispatchAgent(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
 	e.rememberDispatch(req.DispatchID, runner)
-	req = e.watchTargetClosed(ctx, req)
+	e.noteDispatchTarget(ctx, req.DispatchID, req.Trigger)
 	// A detach launch is always a fresh, unbound agent: it never joins a
 	// runtime's session pool (that would deliver its prompt to a live
 	// conductor-held session, or bind the new agent to one).
@@ -841,11 +846,11 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// then runs like any other (after the housekeeping, so it is not stopped).
 	if t.ClosesTarget() {
 		_ = e.store.Delete(key)
-		e.markClosed(key)
+		runs := e.markClosed(key)
 		e.markRunsClosed(key)
 		e.dropHeld(key)
 		e.log("%s closed; dropped state", tag(t))
-		e.stopFixers(ctx, t)
+		e.stopFixers(ctx, t, runs)
 		if t.Action == nil {
 			return
 		}

@@ -199,11 +199,10 @@ type Runner struct {
 	// error wrapping ErrNothingToPush (an unsandboxed agent, a review step):
 	// nothing is pushed.
 	PushWork func(ctx context.Context, dispatchID string) (map[string]any, error)
-	// TargetClosed reports whether the run on ctx is bound to t's target and
-	// that target closed since the run began. Asked before each step: a run
-	// between steps when its target closes has no agent to stop, and its
-	// next step (a push, a reply) must not run. nil: never.
-	TargetClosed func(ctx context.Context, t core.Trigger) bool
+	// TargetClosed reports whether the target a dispatch works on closed
+	// after its work began (the engine's record): PushRefusal refuses every
+	// push for it. nil: never.
+	TargetClosed func(dispatchID string) bool
 	Cfg          *config.Config
 	Conns        *connector.Registry
 	Agents       AgentServices
@@ -607,13 +606,19 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		hist.finish("interrupted", "daemon shutdown", failedStepID(err), runCost)
 		return
 	}
+	if err != nil {
+		err = asTargetClosed(ctx, err)
+	}
 	if errors.Is(err, dispatch.ErrTargetClosed) {
+		// The stop cancelled the run's context; what is left — the stop
+		// hooks, the record — runs on one it did not.
+		ctx = context.WithoutCancel(ctx)
 		// The PR merged or closed while a fixer was on it, and conductor
 		// stopped it: the work is moot, not failed — no failure hooks, no
 		// failed/escalate notification, and nothing left for a retry. The
 		// `stop` hooks fire instead, so whatever the start hooks put up (a
 		// 👀, a pending status) can be taken down.
-		r.Log("%s workflow stopped — its target closed at step %s", flowTag(t), failedStepID(err))
+		r.Log("%s workflow stopped — the PR closed while step %s was running", flowTag(t), failedStepID(err))
 		if hasPhase(spec.Hooks, "stop") {
 			f := endFacts("stop", "")
 			f.reason = stopReason(f.stopWords)
@@ -747,6 +752,11 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 		id := stepID(step, i)
 		slot := config.StepSlot(step, i)
 
+		// The target closed under the run: no further step starts.
+		if targetClosed(ctx) && !shuttingDown(ctx) {
+			return &stepError{id: id, err: dispatch.ErrTargetClosed}
+		}
+
 		if step.If != "" {
 			ok, err := expr.Eval(step.If, data)
 			if err != nil {
@@ -761,18 +771,15 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			}
 		}
 
-		// The target closed since the run began: the run stops here, before
-		// the step starts (so no step hooks: there is nothing to take down).
-		if !shadow && r.TargetClosed != nil && r.TargetClosed(ctx, t) {
-			return &stepError{id: id, err: dispatch.ErrTargetClosed}
-		}
-
 		if prog := progressFrom(ctx); prog != nil {
 			prog.stepStart(id, r.stepLabel(step, data), step.Type == "agent")
 		}
 		r.fireHooks(ctx, t, step.Hooks, "start", "running", run.ID, id, data, nil, "step "+id)
 		hist.stepStart(id, i)
 		outputs, err := r.execStepWithFlow(ctx, t, step, id, slot, data, shadow)
+		if !shuttingDown(ctx) {
+			err = asTargetClosed(ctx, err)
+		}
 		if err != nil {
 			// Error strings carry whatever the failing transport embedded —
 			// a REST secret in a URL query rides url.Error verbatim. Redact
@@ -782,15 +789,16 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			case shuttingDown(ctx):
 				// Interrupted, not ended: the step re-runs on resume.
 			case errors.Is(err, dispatch.ErrTargetClosed):
-				// Moot, not failed: the step's stop hooks, not its fail hooks.
-				r.fireHooks(ctx, t, step.Hooks, "stop", "stopped", run.ID, id, data, nil, "step "+id)
+				// Moot, not failed: the step's stop hooks, not its fail hooks
+				// — on a context the stop did not cancel.
+				r.fireHooks(context.WithoutCancel(ctx), t, step.Hooks, "stop", "stopped", run.ID, id, data, nil, "step "+id)
 			default:
 				r.fireHooks(ctx, t, step.Hooks, "fail", "failed", run.ID, id, data,
 					failureCtx(err, errStr, id), "step "+id)
 			}
 			r.audit(map[string]any{"event": "step_error", "repo": t.Target.Repo,
 				"number": t.Target.Number, "kind": t.Kind, "step": id, "error": errStr})
-			if r.continuesPast(t, step, id, outputs, err, errStr, data) {
+			if !errors.Is(err, dispatch.ErrTargetClosed) && !shuttingDown(ctx) && r.continuesPast(t, step, id, outputs, err, errStr, data) {
 				r.Log("%s step %s failed (continue_on_error): %v", flowTag(t), id, err)
 				outputs = continuedOutputs(outputs, errStr)
 				if aid, _ := outputs["agent_id"].(string); aid != "" && releasesAtRunEnd(context.WithValue(ctx, stepReleaseKey{}, true), step, id) {
@@ -2328,11 +2336,22 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// before expect_push judges whether the work landed).
 	var unlanded error
 	if r.PushWork != nil && !shadow && !step.Background && !inGate(ctx) && ref.Workdir != "" {
+		// The target closed while the agent worked: its work is moot and
+		// its branch may be gone — push nothing (PushWork's own gate
+		// refuses too; this is the run's view of the same stop).
+		if targetClosed(ctx) {
+			r.Log("%s step %s: stopped: PR closed — its work is not pushed", flowTag(t), id)
+			return outputs, ref.Output, ErrPushTargetClosed
+		}
 		progressFrom(ctx).lifecycle("pushing")
 		pushed, perr := r.PushWork(ctx, req.DispatchID)
 		switch {
 		case perr == nil:
 			outputs["push"] = pushed
+		case errors.Is(perr, dispatch.ErrTargetClosed):
+			// The push gate refused (and logged it): a stop, not work
+			// left behind.
+			return outputs, ref.Output, perr
 		case errors.Is(perr, ErrNothingToPush):
 		default:
 			outputs["push"] = map[string]any{"error": perr.Error()}

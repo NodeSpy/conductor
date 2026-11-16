@@ -23,6 +23,9 @@ type workPusher struct {
 	cfg   *config.Config
 	audit func(map[string]any)
 	logf  func(string, ...any)
+	// refuse is the push gate (flow.Runner.PushRefusal): non-nil refuses
+	// the dispatch's push before anything reads the workspace. nil: none.
+	refuse func(dispatchID string) error
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -81,6 +84,21 @@ func (p *workPusher) push(ctx context.Context, dispatchID string) (map[string]an
 	e, ok := agentsandbox.Default.ForDispatch(dispatchID)
 	if !ok {
 		return nil, flow.ErrUnsandboxed
+	}
+	// The one gate every push passes, whoever asked (the agent's git.push,
+	// the end-of-step push): the dispatch's target closed after its work
+	// began, so its branch is dead or deleted — a push would re-create it.
+	// A stop, not a failure: logged as one, audited as refused.
+	if p.refuse != nil {
+		if err := p.refuse(dispatchID); err != nil {
+			row := map[string]any{"event": "git_push", "dispatch": dispatchID, "outcome": "stopped", "reason": "target closed"}
+			if e.Push != nil {
+				row["repo"], row["branch"] = e.Push.Repo, e.Push.Branch
+			}
+			p.audit(row)
+			p.logf("git push for dispatch %s: stopped: PR closed — not pushed", dispatchID)
+			return nil, err
+		}
 	}
 	if e.Push == nil {
 		return nil, fmt.Errorf("%w: conductor has no branch to push this workspace to (a review step, a detached checkout, or no remote)", errNothingToPush)
@@ -198,6 +216,9 @@ func wireWorkPusher(cfg *config.Config, runner *flow.Runner, audit func(map[stri
 		return func() {}
 	}
 	p := &workPusher{cfg: cfg, audit: audit, logf: logf}
+	if runner != nil {
+		p.refuse = runner.PushRefusal
+	}
 	connector.SetGitOps(func() *connector.GitOps { return &connector.GitOps{Push: p.push} })
 	if runner != nil && cfg.Sandbox.PushAtStepEnd() {
 		runner.PushWork = p.pushAtStepEnd
