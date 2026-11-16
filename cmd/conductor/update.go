@@ -302,10 +302,17 @@ func autoUpdateLoop(ctx context.Context, u config.Update, cfgFile string, notifi
 			if !newerRelease(tag, changed, version) {
 				continue // 304 (nothing new), or the latest is what we already run
 			}
-			var applied bool
-			announced, applied = handleNewerRelease(ctx, u, tag, announced, notifier, stop, cfgFile)
+			var applied, failed bool
+			announced, applied, failed = handleNewerRelease(ctx, u, tag, announced, notifier, stop, cfgFile)
 			if applied {
 				return // shutting down for a manager restart, or re-exec'd
+			}
+			if failed {
+				// The checker remembers the tag it reported, so the next
+				// check would say "nothing new" and the failed install would
+				// never be retried until another release came out. Forget
+				// it: the next tick tries again.
+				checker.forget()
 			}
 		}
 	}
@@ -523,10 +530,13 @@ var (
 // an unattended box self-updates. apply: false installs and stages.
 // apply: workflow installs NOTHING — it emits conductor.update_available
 // (once per tag) so a trigger drives the update as a workflow.
-func handleNewerRelease(ctx context.Context, u config.Update, tag, announced string, notifier *notify.Notifier, stop func(), cfgFile string) (newAnnounced string, applied bool) {
+//
+// failed reports an install that did not complete (a fetch timed out, a
+// checksum did not match): the caller retries it on the next check.
+func handleNewerRelease(ctx context.Context, u config.Update, tag, announced string, notifier *notify.Notifier, stop func(), cfgFile string) (newAnnounced string, applied, failed bool) {
 	if u.ApplyWorkflow() {
 		if tag == announced {
-			return announced, false // one announcement per release
+			return announced, false, false // one announcement per release
 		}
 		logf("auto-update: %s available (apply: workflow) — emitting conductor.update_available", tag)
 		if notifier != nil {
@@ -535,15 +545,15 @@ func handleNewerRelease(ctx context.Context, u config.Update, tag, announced str
 				fmt.Sprintf("release %s available (running %s)", tag, version),
 				map[string]any{"version": tag})
 		}
-		return tag, false
+		return tag, false, false
 	}
 	updated, installed, err := installRelease(false, tag, cfgFile, notifier)
 	if err != nil {
-		logf("auto-update: install %s failed: %v", tag, err)
-		return announced, false
+		logf("auto-update: install %s failed: %v — retrying on the next check", tag, err)
+		return announced, false, true
 	}
 	if !updated {
-		return announced, false
+		return announced, false, false
 	}
 	logf("auto-update: installed %s (was %s)", installed, version)
 	// Refresh the unit so the restart below comes up with the new template
@@ -553,10 +563,10 @@ func handleNewerRelease(ctx context.Context, u config.Update, tag, announced str
 	}
 	if !u.ShouldApply() {
 		logf("auto-update: %s staged — restart to apply (apply: false)", installed)
-		return announced, false
+		return announced, false, false
 	}
 	applyRelease(stop)
-	return announced, true
+	return announced, true, false
 }
 
 // newerRelease reports whether a check result warrants an install: something
@@ -598,6 +608,10 @@ func (rc *releaseChecker) check() (tag string, changed bool, err error) {
 	rc.last = tag
 	return tag, true, nil
 }
+
+// forget makes the next check report its tag as changed again (a failed
+// install of it is retried).
+func (rc *releaseChecker) forget() { rc.last = "" }
 
 // tail returns the last n bytes of b, for compact error context.
 func tail(b []byte, n int) string {
