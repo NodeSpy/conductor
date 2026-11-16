@@ -223,6 +223,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 			return
 		}
 		run := e.newFlowRun(t, spec, false)
+		run.StartedAt = queuedAt // carried into the run's checkpoints
 		defer e.recoverDispatch(ctx, t, run, "flow dispatch")
 		e.runFlow(flow.WithProgress(withRunSince(ctx, queuedAt), prog), run, t, spec, tidx, batch, untrack)
 	}()
@@ -323,6 +324,50 @@ func withRunSince(ctx context.Context, since time.Time) context.Context {
 func runSince(ctx context.Context) (time.Time, bool) {
 	since, ok := ctx.Value(runSinceKey{}).(time.Time)
 	return since, ok
+}
+
+// targetClosedUnder reports whether the run on ctx is bound to t's target and
+// that target closed at or after the run began.
+func (e *Engine) targetClosedUnder(ctx context.Context, t core.Trigger) bool {
+	since, ok := runSince(ctx)
+	return ok && t.BoundToTarget() && e.closedSince(t.Key(), since)
+}
+
+// markRunsClosed records the close of key's target on the stored runs bound
+// to it, so a restart before they notice does not resume them (resumeFlowRun).
+func (e *Engine) markRunsClosed(key string) {
+	m, ok := e.store.(interface {
+		MarkRunsTargetClosed(func(store.WorkflowRun) bool, time.Time) (int, error)
+	})
+	if !ok {
+		return
+	}
+	_, _ = m.MarkRunsTargetClosed(func(r store.WorkflowRun) bool {
+		var t core.Trigger
+		return json.Unmarshal(r.Trigger, &t) == nil && t.Key() == key && t.BoundToTarget()
+	}, time.Now())
+}
+
+// resumedSince is when a resumed run began, for closedSince: its recorded
+// start, and no later than a close of its target recorded on it, which it
+// puts back in the engine's memory of closes. Zero when the record says
+// neither (written before either was kept): the run counts from now.
+func (e *Engine) resumedSince(r store.WorkflowRun, key string) time.Time {
+	since := r.StartedAt
+	if at := r.TargetClosedAt; !at.IsZero() {
+		e.queuedMu.Lock()
+		if e.closedAt == nil {
+			e.closedAt = map[string]time.Time{}
+		}
+		if e.closedAt[key].Before(at) {
+			e.closedAt[key] = at
+		}
+		e.queuedMu.Unlock()
+		if since.IsZero() || since.After(at) {
+			since = at
+		}
+	}
+	return since
 }
 
 // watchTargetClosed gives a dispatch of a run bound to its target the means to
@@ -641,13 +686,14 @@ func (e *Engine) newFlowRun(t core.Trigger, spec config.TriggerSpec, shadow bool
 // flowRunRecord is the persisted record of a flow run of t, not yet started.
 func flowRunRecord(t core.Trigger) store.WorkflowRun {
 	run := store.WorkflowRun{
-		ID:       "flow:" + t.Kind + ":" + t.Key(),
-		Source:   t.Source,
-		Instance: t.Instance,
-		Kind:     t.Kind,
-		Repo:     t.Target.Repo,
-		Number:   t.Target.Number,
-		Outputs:  map[string]map[string]any{},
+		StartedAt: time.Now(),
+		ID:        "flow:" + t.Kind + ":" + t.Key(),
+		Source:    t.Source,
+		Instance:  t.Instance,
+		Kind:      t.Kind,
+		Repo:      t.Target.Repo,
+		Number:    t.Target.Number,
+		Outputs:   map[string]map[string]any{},
 	}
 	tp := t
 	act, _ := tp.Action.(config.Action)
@@ -717,6 +763,9 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 		}
 		defer e.release()
 		defer e.recoverDispatch(ctx, t, r, "flow resume")
+		if since := e.resumedSince(r, t.Key()); !since.IsZero() {
+			ctx = withRunSince(ctx, since)
+		}
 		e.runFlow(ctx, r, t, spec, tidx, nil, untrack)
 	}()
 }

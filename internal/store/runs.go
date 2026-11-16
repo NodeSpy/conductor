@@ -42,6 +42,15 @@ type WorkflowRun struct {
 	// step's run-scoped key, so a restart can resume a step's agent where it
 	// was. Owned by PutRunAgent/DeleteRunAgent: PutRun keeps what is stored.
 	Agents map[string]RunAgent `json:"agents,omitempty"`
+	// StartedAt is when the run began (when it was queued, for a run that
+	// waited for a slot). A close of its target at or after it makes the
+	// run's work moot. Zero on a record written before the field existed.
+	StartedAt time.Time `json:"started_at,omitempty"`
+	// TargetClosedAt is when the run's target closed under it, for a run
+	// bound to its target: a restart before the run noticed must not resume
+	// it as if nothing happened. Owned by MarkRunsTargetClosed: PutRun keeps
+	// what is stored.
+	TargetClosedAt time.Time `json:"target_closed_at,omitempty"`
 }
 
 // RunAgent is one step's running agent: the session its runtime reported and
@@ -66,10 +75,37 @@ func (s *Store) PutRun(r WorkflowRun) error {
 	rr.Agents = nil
 	if cur := s.runs[r.ID]; cur != nil {
 		rr.Agents = cur.Agents
+		// The running flow checkpoints its own copy of the record, which
+		// never saw a close marked since.
+		if rr.TargetClosedAt.IsZero() {
+			rr.TargetClosedAt = cur.TargetClosedAt
+		}
+		if rr.StartedAt.IsZero() {
+			rr.StartedAt = cur.StartedAt
+		}
 	}
 	s.runs[r.ID] = &rr
 	s.mu.Unlock()
 	return s.saveRuns()
+}
+
+// MarkRunsTargetClosed records at as the time the target closed on every
+// stored run match accepts that carries no such mark yet, and reports how
+// many it marked.
+func (s *Store) MarkRunsTargetClosed(match func(WorkflowRun) bool, at time.Time) (int, error) {
+	s.mu.Lock()
+	n := 0
+	for _, r := range s.runs {
+		if r.TargetClosedAt.IsZero() && match(*r) {
+			r.TargetClosedAt = at
+			n++
+		}
+	}
+	s.mu.Unlock()
+	if n == 0 {
+		return 0, nil
+	}
+	return n, s.saveRuns()
 }
 
 // DeleteRun removes a finished/failed run.

@@ -57,11 +57,68 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// step had running before the restart is continued; failing that, the
 	// fresh agent starts in the kept workspace, told about the restart.
 	track := req.OnAgentStart != nil && !d.DryRun && !req.Shadow
+	// The target closed since the run began: nothing to launch.
+	if !d.DryRun && !req.Shadow && req.TargetClosed != nil && req.TargetClosed() {
+		return RunRef{}, ErrTargetClosed
+	}
+	// A foreground dispatch of a run bound to its target is stopped when the
+	// target closes (paseo_stop.go). Tracked from here, before anything is
+	// prepared, so a close is seen whenever it arrives; and the request is
+	// asked once more now that it is, for a close that arrived just before.
+	// runCtx is the launch's own context: stopping it ends the launch.
+	runCtx := ctx
+	var bound *boundRun
+	var boundToken string
+	// stopped reports whether the dispatch was stopped.
+	stopped := func(...string) bool { return false }
+	if req.Trigger.BoundToTarget() && req.Wait && !req.Interactive && !d.DryRun && !req.Shadow {
+		if boundToken, err = newStepSessionToken(); err != nil {
+			return RunRef{}, fmt.Errorf("bound dispatch token: %w", err)
+		}
+		bound = d.trackBound(req.Trigger.Key(), boundToken)
+		defer d.untrackBound(bound)
+		if req.TargetClosed != nil && req.TargetClosed() {
+			return RunRef{}, ErrTargetClosed
+		}
+		var cancelRun context.CancelFunc
+		runCtx, cancelRun = context.WithCancel(ctx)
+		defer cancelRun()
+		wctx, stopWatch := context.WithCancel(ctx)
+		defer stopWatch()
+		watched := make(chan struct{})
+		go func() {
+			defer close(watched)
+			d.stopWhenClosed(wctx, bound, cancelRun)
+		}()
+		// It ends the watch first; when the dispatch was stopped, whatever
+		// agent it has (ids: what the launch reported) is archived before it
+		// returns.
+		stopped = func(ids ...string) bool {
+			stopWatch()
+			<-watched
+			if !bound.isStopped() {
+				return false
+			}
+			d.archiveBound(ctx, bound, ids...)
+			return true
+		}
+	}
 	var kept paseoKept
 	if track && req.Resume != nil {
-		ref, handled, k, err := d.resumeStepAgent(ctx, req)
+		if bound != nil {
+			// The agent being resumed carries the session token the run
+			// recorded for it, not this dispatch's.
+			bound.find(map[string]string{"conductor": "1", stepSessionLabel: req.Resume.SessionID})
+		}
+		ref, handled, k, err := d.resumeStepAgent(runCtx, req)
 		if handled {
+			if stopped(ref.AgentID) {
+				return RunRef{Backend: ref.Backend, Kind: ref.Kind, Output: ref.Output}, ErrTargetClosed
+			}
 			return ref, err
+		}
+		if bound != nil {
+			bound.find(map[string]string{boundLabel: boundToken})
 		}
 		kept = k
 		if kept.kept {
@@ -284,6 +341,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	for _, l := range append(labelArgs(req), sandboxLabel(sandboxed, optedOut)...) {
 		argv = append(argv, "--label", l)
 	}
+	if bound != nil {
+		argv = append(argv, "--label", boundLabel+"="+boundToken)
+	}
 	if p.WaitTimeout > 0 {
 		argv = append(argv, "--wait-timeout", p.WaitTimeout.String())
 	}
@@ -397,11 +457,21 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	}
 	var res RunAgentResult
 	if len(req.Action.OutputSchema) > 0 && req.Wait {
-		res, err = d.dispatchOutputSchema(ctx, req, argv, prompt, cwd, &ref, credsDelivered)
+		res, err = d.dispatchOutputSchema(runCtx, req, argv, prompt, cwd, &ref, credsDelivered)
 	} else {
-		res, err = d.backend().RunAgent(ctx, RunAgentOptions{Args: argv, Cwd: cwd})
+		res, err = d.backend().RunAgent(runCtx, RunAgentOptions{Args: argv, Cwd: cwd})
 	}
 	ref.Output = res.Output
+	if stopped(res.AgentID) {
+		// The target closed under the launch. Archiving its agent takes the
+		// workspace conductor made for it; when that left this dispatch's
+		// run workspace behind (no agent ever came up, or it could not be
+		// placed), it is reclaimed here.
+		if d.Owned.HasWorkspace(runWS) {
+			d.reclaimRunWorkspace(ctx, runWS, runDir)
+		}
+		return ref, ErrTargetClosed
+	}
 	if err != nil {
 		// A failed launch records no agent, so nothing will ever archive the
 		// workspace it ran in. This dispatch's own run workspace is reclaimed

@@ -199,9 +199,14 @@ type Runner struct {
 	// error wrapping ErrNothingToPush (an unsandboxed agent, a review step):
 	// nothing is pushed.
 	PushWork func(ctx context.Context, dispatchID string) (map[string]any, error)
-	Cfg      *config.Config
-	Conns    *connector.Registry
-	Agents   AgentServices
+	// TargetClosed reports whether the run on ctx is bound to t's target and
+	// that target closed since the run began. Asked before each step: a run
+	// between steps when its target closes has no agent to stop, and its
+	// next step (a push, a reply) must not run. nil: never.
+	TargetClosed func(ctx context.Context, t core.Trigger) bool
+	Cfg          *config.Config
+	Conns        *connector.Registry
+	Agents       AgentServices
 	// Bots is the bot autonomy gate (nil when no bot is configured;
 	// a bot-bound skill grant then fails closed).
 	Bots BotGate
@@ -608,7 +613,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		// failed/escalate notification, and nothing left for a retry. The
 		// `stop` hooks fire instead, so whatever the start hooks put up (a
 		// 👀, a pending status) can be taken down.
-		r.Log("%s workflow stopped — the PR closed while step %s was running", flowTag(t), failedStepID(err))
+		r.Log("%s workflow stopped — its target closed at step %s", flowTag(t), failedStepID(err))
 		if hasPhase(spec.Hooks, "stop") {
 			f := endFacts("stop", "")
 			f.reason = stopReason(f.stopWords)
@@ -754,6 +759,12 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 				r.checkpoint(ctx, run, i, id, step, nil, checkpoint)
 				continue
 			}
+		}
+
+		// The target closed since the run began: the run stops here, before
+		// the step starts (so no step hooks: there is nothing to take down).
+		if !shadow && r.TargetClosed != nil && r.TargetClosed(ctx, t) {
+			return &stepError{id: id, err: dispatch.ErrTargetClosed}
 		}
 
 		if prog := progressFrom(ctx); prog != nil {
