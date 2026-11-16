@@ -146,6 +146,11 @@ type SandboxDetect struct {
 	// (an interactive channel, a bulk upload): `alert` (default) — audited
 	// and notified; `close` — the tunnel is also closed; `off`.
 	Connections string `yaml:"connections,omitempty"`
+	// Unobservable is what a launch gets when the watcher cannot see one of
+	// its processes (it made itself undumpable, as ssh-agent and gpg-agent
+	// do) or cannot list processes at all: `alert` (default) — audited and
+	// notified; `enforce` — handled by Action like any detection.
+	Unobservable string `yaml:"unobservable,omitempty"`
 }
 
 // SandboxLimits are default resource limits for agent launches.
@@ -313,6 +318,14 @@ func (s *SandboxConfig) DetectConnections() string {
 	return s.Detect.Connections
 }
 
+// DetectUnobservable is sandbox.detect.unobservable ("alert" by default).
+func (s *SandboxConfig) DetectUnobservable() string {
+	if s == nil || s.Detect == nil || s.Detect.Unobservable == "" {
+		return "alert"
+	}
+	return s.Detect.Unobservable
+}
+
 // DetectAllow is sandbox.detect.allow.
 func (s *SandboxConfig) DetectAllow() []string {
 	if s == nil || s.Detect == nil {
@@ -408,6 +421,11 @@ func (c *Config) validateSandbox() error {
 		case "", "alert", "close", "off":
 		default:
 			return fmt.Errorf("config: sandbox.detect.connections must be alert|close|off, got %q", d.Connections)
+		}
+		switch d.Unobservable {
+		case "", "alert", "enforce":
+		default:
+			return fmt.Errorf("config: sandbox.detect.unobservable must be alert|enforce, got %q", d.Unobservable)
 		}
 		if _, err := ParseLimitDuration(d.Interval); err != nil {
 			return fmt.Errorf("config: sandbox.detect.interval: %w", err)

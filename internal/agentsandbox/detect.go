@@ -3,6 +3,7 @@ package agentsandbox
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -70,6 +71,10 @@ type procInfo struct {
 	// id is what the process's binary is, when it is one of the host's
 	// known shells, interpreters or tunnel tools (see identity.go).
 	id identity
+	// hidden says why a launch process's binary or descriptors could not
+	// be read though it is alive and the operator's ("" = they were): a
+	// process the watcher cannot see is not judged clean.
+	hidden string
 }
 
 // toolName is the program a process runs: its binary's identity when known
@@ -125,7 +130,7 @@ var shells = map[string]bool{
 
 // verdict is a detection.
 type verdict struct {
-	kind   string // "tunnel_tool", "reverse_shell", "pty_relay"
+	kind   string // "tunnel_tool", "reverse_shell", "pty_relay", "unobservable"
 	reason string
 }
 
@@ -166,10 +171,15 @@ func verdicts(p procInfo, allow map[string]bool, root, self bool) []verdict {
 		return nil
 	}
 	name := p.toolName()
-	if allow[name] && p.id.name != "" {
+	if allow[name] && p.id.name != "" && p.hidden == "" {
 		return nil
 	}
 	var out []verdict
+	if p.hidden != "" {
+		// Nothing an allowance names covers a process whose binary and
+		// descriptors are hidden from the watcher.
+		out = append(out, verdict{"unobservable", fmt.Sprintf("%s hides from the watcher: %s (%s)", name, p.hidden, argString(p.args))})
+	}
 	class := p.class()
 	stdioFD := -1
 	for fd := 0; fd < 2; fd++ {
@@ -249,7 +259,20 @@ type DetectSpec struct {
 	// shape is audited as allowed (see sandbox.SessionOpts).
 	ShapeAllowed  []string `json:"shape_allowed,omitempty"`
 	ShapeAllowAll bool     `json:"shape_allow_all,omitempty"`
+	// Unobservable is what a launch the watcher cannot see gets (a process
+	// hiding its binary and descriptors, a process table it cannot list):
+	// UnobservableAlert ("" too) — audited and notified, the launch runs
+	// on; UnobservableEnforce — the detection's Action. ssh-agent and
+	// gpg-agent make themselves undumpable, and an agent's gpg starts the
+	// latter: enforcing kills such launches.
+	Unobservable string `json:"unobservable,omitempty"`
 }
+
+// What a launch the watcher cannot see gets (DetectSpec.Unobservable).
+const (
+	UnobservableAlert   = "alert"
+	UnobservableEnforce = "enforce"
+)
 
 // allows reports whether the launch's allowance covers a verdict of kind
 // on program name.
@@ -306,6 +329,8 @@ type detector struct {
 	identity string
 	// off: detection is off — only the disk guard runs.
 	off bool
+	// listFailures counts the scans in a row that could not list processes.
+	listFailures int
 	// diskLow names a filesystem of the launch below the disk guard's
 	// minimum ("" = fine; nil = no guard).
 	diskLow func() string
@@ -455,8 +480,21 @@ func isLauncher(p procInfo) bool {
 func (d *detector) scan() {
 	all, err := d.list()
 	if err != nil {
+		// A watcher that cannot list processes sees nothing: that is a
+		// detection, not a quiet pass — once it is not a passing failure
+		// (a fork refused under load), and where there is a watcher at all.
+		d.mu.Lock()
+		d.listFailures++
+		n := d.listFailures
+		d.mu.Unlock()
+		if n >= blindScans && !errors.Is(err, errNoWatcher) {
+			d.unobservable("the process table cannot be read: " + err.Error())
+		}
 		return
 	}
+	d.mu.Lock()
+	d.listFailures = 0
+	d.mu.Unlock()
 	procs := launchProcs(all)
 	d.noteGroups(procs, all)
 	if d.usage != nil {
@@ -465,6 +503,10 @@ func (d *detector) scan() {
 	root := agentRoot(procs, d.self)
 	for _, p := range procs {
 		vs := verdicts(p, d.allow, p.pid == root, d.self != "" && p.exe == d.self)
+		if d.spec.Unobservable != UnobservableEnforce && len(vs) > 0 && vs[0].kind == "unobservable" {
+			d.unobservable(fmt.Sprintf("pid %d: %s", p.pid, vs[0].reason))
+			vs = vs[1:]
+		}
 		if len(vs) == 0 {
 			continue
 		}
@@ -492,6 +534,13 @@ func (d *detector) scan() {
 		d.detected(v.kind, reason, false)
 	}
 }
+
+// blindScans is how many scans in a row may fail to list processes before
+// the watcher reports itself blind.
+const blindScans = 3
+
+// errNoWatcher is a platform with no process watcher.
+var errNoWatcher = errors.New("no process watcher on this platform")
 
 // detected responds to one detection: reported once per kind and reason,
 // the launch killed when the action is kill or terminate (which reaches here
@@ -527,6 +576,24 @@ func (d *detector) report(kind, reason string, always bool) {
 	d.mu.Unlock()
 	if (first || always) && d.event != nil {
 		d.event("detection", map[string]any{"run": d.run, "kind": kind, "reason": reason, "action": d.spec.action()})
+	}
+}
+
+// unobservable responds to the watcher not seeing what it must judge: a
+// detection under the launch's action when the launch enforces it, else
+// audited (once per reason) as an alert.
+func (d *detector) unobservable(reason string) {
+	if d.spec.Unobservable == UnobservableEnforce {
+		d.detected("unobservable", reason, false)
+		return
+	}
+	d.mu.Lock()
+	key := "unobservable\x00" + reason
+	first := !d.reported[key]
+	d.reported[key] = true
+	d.mu.Unlock()
+	if first && d.event != nil {
+		d.event("detection", map[string]any{"run": d.run, "kind": "unobservable", "reason": reason, "action": DetectAlert})
 	}
 }
 

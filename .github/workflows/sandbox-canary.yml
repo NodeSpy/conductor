@@ -22,11 +22,13 @@ permissions:
   contents: read
 
 jobs:
+  # Linux images named explicitly (see ci.yml's unit job): every one the
+  # sandbox must work on.
   sandbox:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-latest]
+        os: [ubuntu-24.04, ubuntu-26.04, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

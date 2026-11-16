@@ -5,7 +5,7 @@ package agentsandbox
 import "errors"
 
 func listProcs(string, func(int) bool) func() ([]procInfo, error) {
-	return func() ([]procInfo, error) { return nil, errors.New("no process watcher on this platform") }
+	return func() ([]procInfo, error) { return nil, errNoWatcher }
 }
 
 func signalProc(int, uint64) error { return errors.New("unsupported") }
