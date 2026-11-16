@@ -474,3 +474,77 @@ func TestControllerRunnerListsLiveAgents(t *testing.T) {
 		t.Fatalf("%d live after forget", n)
 	}
 }
+
+// A close that arrives while a fixer's workspace and session are still coming
+// up finds no session for StopTarget to stop. The dispatch asks the request
+// instead (TargetClosed): before it prepares anything, and again once the
+// session is tracked, where it is killed like any other stopped fixer.
+func TestDispatchStopsAFixerWhoseTargetClosedWhileItOpened(t *testing.T) {
+	// Closed before the step began: no workspace, no session.
+	sess := newCancelSession("fix-1")
+	r := newControllerRunner(&cancelCtl{sess: sess}, &fakeProv{}, nil)
+	req := makeReq("new_comment", "address it")
+	req.Wait = true
+	req.TargetClosed = func() bool { return true }
+	stopped := func(r *controllerRunner, req dispatch.Request) {
+		t.Helper()
+		errc := make(chan error, 1)
+		go func() {
+			_, err := r.Dispatch(context.Background(), req)
+			errc <- err
+		}()
+		select {
+		case err := <-errc:
+			if !errors.Is(err, dispatch.ErrTargetClosed) {
+				t.Fatalf("Dispatch err = %v, want ErrTargetClosed", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Dispatch still waiting on a fixer whose target closed")
+		}
+	}
+	stopped(r, req)
+	if n := len(r.LiveAgents()); n != 0 {
+		t.Fatalf("%d sessions opened for a target already closed", n)
+	}
+	select {
+	case <-sess.cancelled:
+		t.Fatal("a session that never opened was cancelled")
+	default:
+	}
+
+	// Closed while the session opened: open at the first ask, closed by the
+	// time the session is tracked.
+	sess = newCancelSession("fix-2")
+	r = newControllerRunner(&cancelCtl{sess: sess}, &fakeProv{}, nil)
+	asked := 0
+	req.TargetClosed = func() bool { asked++; return asked > 1 }
+	stopped(r, req)
+	select {
+	case <-sess.cancelled:
+	default:
+		t.Fatal("the fixer's turn was left running on a closed target")
+	}
+	// Already stopped: a late StopTarget has nothing left to stop.
+	if n := r.StopTarget(context.Background(), req.Trigger.Key()); n != 0 {
+		t.Fatalf("StopTarget stopped %d sessions already stopped", n)
+	}
+
+	// Still open: the turn runs as usual.
+	sess = newCancelSession("fix-3")
+	r = newControllerRunner(&cancelCtl{sess: sess}, &fakeProv{}, nil)
+	req.TargetClosed = func() bool { return false }
+	go func() { _, _ = r.Dispatch(context.Background(), req) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for !r.HasLiveAgent(context.Background(), req.Trigger.Key(), req.Trigger.Kind) {
+		if time.Now().After(deadline) {
+			t.Fatal("fixer on an open target never went live")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case <-sess.cancelled:
+		t.Fatal("a fixer on an open target was cancelled")
+	default:
+	}
+	_ = sess.Cancel(context.Background())
+}

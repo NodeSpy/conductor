@@ -123,6 +123,12 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		return ref, nil
 	}
 
+	// The target closed after the run began and before this step: nothing to
+	// prepare.
+	if targetClosed(req) {
+		return ref, dispatch.ErrTargetClosed
+	}
+
 	if req.DispatchID != "" {
 		// In flight from before the session opens: an agent can call
 		// step.done during its first turn, before NewSession returns.
@@ -166,6 +172,12 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	id := r.track(req, sess)
 	ref.AgentID = id
 	watchActivity(req, sess)
+	// The target closed while the workspace and session came up, when
+	// StopTarget had no session to stop. Asked only now that the session is
+	// tracked: a close from here on finds it there.
+	if r.stopIfClosed(ctx, req, id, sess) {
+		return ref, dispatch.ErrTargetClosed
+	}
 
 	// A foreground dispatch (a workflow/flow step — as opposed to a background
 	// hand-off, which returns immediately so you can drive the live session)
@@ -196,6 +208,9 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 				id = r.track(req, sess)
 				ref.AgentID = id
 				watchActivity(req, sess)
+				if r.stopIfClosed(ctx, req, id, sess) {
+					return ref, dispatch.ErrTargetClosed
+				}
 				if w, ok := sess.(waiter); ok {
 					w.Wait(ctx, timeout)
 				}
@@ -403,6 +418,28 @@ func (r *controllerRunner) StopTarget(ctx context.Context, key string) int {
 		_ = sess.Cancel(ctx)
 	}
 	return len(hit)
+}
+
+// targetClosed asks the request whether its target closed since its run began.
+func targetClosed(req dispatch.Request) bool {
+	return req.TargetClosed != nil && req.TargetClosed()
+}
+
+// stopIfClosed kills the just-tracked session id when its request's target
+// closed while it was being opened, as StopTarget would have had it been live.
+// Reports whether the target had closed.
+func (r *controllerRunner) stopIfClosed(ctx context.Context, req dispatch.Request, id string, sess Session) bool {
+	if !targetClosed(req) {
+		return false
+	}
+	r.mu.Lock()
+	already := r.stopped[id]
+	r.stopped[id] = true
+	r.mu.Unlock()
+	if !already {
+		_ = sess.Cancel(context.WithoutCancel(ctx))
+	}
+	return true
 }
 
 func (r *controllerRunner) wasStopped(id string) bool {

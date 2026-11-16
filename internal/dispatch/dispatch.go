@@ -142,6 +142,14 @@ type Request struct {
 	// Best-effort and optional — a runtime that cannot see its agent's
 	// activity never calls it. Must not block.
 	Activity func(phrase string)
+	// TargetClosed, when set, reports whether the request's target closed
+	// since its run began (the run is bound to that target, and the engine
+	// saw its closing event). A runtime asks it before it prepares anything,
+	// and again once its session can be stopped: a close that arrives while
+	// the workspace and session are still coming up finds nothing to stop,
+	// so the runtime must look for itself. A request it reports closed ends
+	// with ErrTargetClosed.
+	TargetClosed func() bool
 }
 
 // Input is one materialized `workspace.inputs` entry.

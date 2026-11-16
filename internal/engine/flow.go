@@ -224,7 +224,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 		}
 		run := e.newFlowRun(t, spec, false)
 		defer e.recoverDispatch(ctx, t, run, "flow dispatch")
-		e.runFlow(flow.WithProgress(ctx, prog), run, t, spec, tidx, batch, untrack)
+		e.runFlow(flow.WithProgress(withRunSince(ctx, queuedAt), prog), run, t, spec, tidx, batch, untrack)
 	}()
 }
 
@@ -309,6 +309,35 @@ func (e *Engine) closedSince(key string, since time.Time) bool {
 	defer e.queuedMu.Unlock()
 	at, ok := e.closedAt[key]
 	return ok && !at.Before(since)
+}
+
+// runSinceKey carries, on a flow run's context, when the run began: the moment
+// it was queued, or for a run that never queued (a batch, a resume) the moment
+// it started. A close of its target at or after that makes its work moot.
+type runSinceKey struct{}
+
+func withRunSince(ctx context.Context, since time.Time) context.Context {
+	return context.WithValue(ctx, runSinceKey{}, since)
+}
+
+func runSince(ctx context.Context) (time.Time, bool) {
+	since, ok := ctx.Value(runSinceKey{}).(time.Time)
+	return since, ok
+}
+
+// watchTargetClosed gives a dispatch of a run bound to its target the means to
+// learn the target closed under the run (dispatch.Request.TargetClosed).
+// stopFixers stops the sessions live when the close arrives; a run between
+// steps, or one whose session is still coming up, has none, so its dispatch
+// asks instead.
+func (e *Engine) watchTargetClosed(ctx context.Context, req dispatch.Request) dispatch.Request {
+	since, ok := runSince(ctx)
+	if !ok || req.TargetClosed != nil || !req.Trigger.BoundToTarget() {
+		return req
+	}
+	key := req.Trigger.Key()
+	req.TargetClosed = func() bool { return e.closedSince(key, since) }
+	return req
 }
 
 // queuedFlowKey identifies a flow run waiting for a slot: the flow + target.
@@ -452,6 +481,9 @@ func (e *Engine) runFlow(ctx context.Context, run store.WorkflowRun, t core.Trig
 		untrack = e.trackInFlight(t)
 	}
 	defer untrack()
+	if _, ok := runSince(ctx); !ok {
+		ctx = withRunSince(ctx, time.Now())
+	}
 	e.flow.Run(ctx, run, t, spec, tidx, batch, false)
 }
 

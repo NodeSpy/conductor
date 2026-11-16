@@ -523,6 +523,7 @@ func (e *Engine) capabilityCard(sk *config.SkillPolicy) string {
 // (one-shot/cli), which stay fresh-per-event and lean on shared memory.
 func (e *Engine) dispatchAgent(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
 	e.rememberDispatch(req.DispatchID, runner)
+	req = e.watchTargetClosed(ctx, req)
 	// A detach launch is always a fresh, unbound agent: it never joins a
 	// runtime's session pool (that would deliver its prompt to a live
 	// conductor-held session, or bind the new agent to one).
