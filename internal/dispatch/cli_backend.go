@@ -130,6 +130,21 @@ func (b *cliBackend) ListAgents(ctx context.Context, labels map[string]string) (
 	return agents, nil
 }
 
+// ListLiveAgents runs `paseo ls -g --background --json`: every non-archived
+// agent, in every directory, background ones included (not -a, which also
+// lists archived agents).
+func (b *cliBackend) ListLiveAgents(ctx context.Context) ([]AgentInfo, error) {
+	out, err := b.exec.paseoCmd(ctx, "ls", "-g", "--background", "--json").Output()
+	if err != nil {
+		return nil, err
+	}
+	var agents []AgentInfo
+	if err := json.Unmarshal(out, &agents); err != nil {
+		return nil, err
+	}
+	return agents, nil
+}
+
 // sortedLabelArgs renders a label map as sorted `--label k=v` argv pairs.
 func sortedLabelArgs(labels map[string]string) []string {
 	if len(labels) == 0 {

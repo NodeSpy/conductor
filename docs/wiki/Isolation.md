@@ -707,10 +707,58 @@ below the minimum, whatever the detection action. This applies on Linux and
 macOS. `disk_free_min: off` turns it off.
 
 **Ephemeral homes (`sandbox.persist`).** By default each dispatch's agent gets
-a fresh home of its own, seeded like an identity home. The home is kept for
-the dispatch's own resumes and swept a day after its session ends, so
-nothing one run plants (a settings hook, a shell rc file, a poisoned build
-cache) reaches the next.
+a fresh home of its own, seeded like an identity home, so nothing one run
+plants (a settings hook, a shell rc file, a poisoned build cache) reaches the
+next. The home lives under `<state>/agent-state/.dispatch-homes/` and is kept
+only while something can still use it:
+
+- its run is running, or a restart interrupted it and it can still resume;
+- an agent is running in it. Every launch holds a lock on its home until it
+  exits, so an agent a run leaves running (a background or hand-off step)
+  keeps its home. A launcher that dies drops its lock. The daemon holds the
+  lock itself from the moment it prepares the home until the launch takes
+  it over, or for 10 minutes at most;
+- its agent's session still exists. A paseo or agent-deck agent can outlive
+  its launcher and its run: paseo relaunches a hand-off with `--resume`,
+  and a background agent stays open. Each launch records the session it
+  started. Each sweep then asks paseo or agent-deck which sessions still
+  exist. It asks paseo with `paseo ls -g --background`, which lists every
+  agent that is not archived, in any directory. Plain `paseo ls` leaves some
+  out, and an agent left out would lose its home. It asks agent-deck with
+  `list --json`. A paseo runtime driven through a plugin cannot list every
+  agent yet, so it counts as a tool that cannot answer. An agent archived
+  or removed there, by conductor or in the tool's own UI, no longer keeps
+  its home. If
+  the tool cannot answer, its sessions' homes are kept for at most 7 days
+  after their launch, and a log line says when one stops being kept. A
+  session the daemon runs itself (the cli, acp and opencode runtimes) cannot
+  outlive the daemon, so its run and its lock are enough.
+
+When the run ends (done, failed or stopped), its homes are removed at once.
+A home that is still held or still has a live session goes as soon as it is
+neither. A sweep removes orphans: homes whose run ended while no daemon was
+running, homes released after their run ended, and removals that failed. It
+runs when the daemon starts, at every run end, when the daemon's own hold on
+a home lapses, and at most hourly on launches. Which run a home belongs to is
+recorded at launch in an index conductor owns, not read from the home.
+
+Removal treats the home as the agent's. It never follows a symlink or
+chmods a hard link out of the home. It never enters a mount point, including
+a bind mount of the same filesystem; a btrfs subvolume inside the home is
+removed with it. It refuses a tree deeper than 256 levels. On macOS a
+directory its owner can neither read nor search (mode 000) is refused,
+because macOS can only chmod it by name, which is not safe against a swap.
+A refused or failed home is kept aside and reported once. Before it removes a
+read-only directory's entries, it makes the directory writable by its owner.
+A Go module cache is such a directory (Go makes it read-only). The daemon log
+records how many homes each reclaim removed and how much space it freed, and
+each home it could not remove. A home that could not be removed is retried
+at each sweep.
+
+Tools that download into the home (a Go module cache in `~/go/pkg/mod`, an
+npm cache) download again on every run, because each run starts from a fresh
+home. A cache shared across runs would be a channel from one run to the next,
+so the sandbox never shares one. `persist: cache` is the opt-in.
 
 - `persist: cache` keeps a per-identity cache dir (`~/.cache`, and
   `~/Library/Caches` on macOS) across dispatches. A run can then plant

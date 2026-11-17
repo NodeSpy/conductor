@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -369,4 +370,44 @@ func AllowanceOf(a *config.SandboxAllow) *agentsandbox.Allowance {
 		Tunnels: a.TunnelTools(), TunnelHosts: a.TunnelHosts(), TunnelAnyHost: a.TunnelAnyHost(), NonTLS: a.RawTargets(),
 		ReverseShell: a.ReverseShell, Pty: a.Pty, By: a.Origin,
 	}
+}
+
+// sandboxSessionBackend names this dispatcher's paseo as the agent sandbox's
+// session backend: agents it launched are kept homes while it lists them.
+func (d *Dispatcher) sandboxSessionBackend() string {
+	return "paseo:" + d.PaseoBin + "|" + d.Server + "|" + d.Home
+}
+
+// RegisterSandboxSessions lets the agent sandbox ask this dispatcher's paseo
+// which of its agents still exist (not archived): the sweep keeps an agent's
+// home exactly that long. A remote paseo's agents are not sandboxed here.
+func (d *Dispatcher) RegisterSandboxSessions() {
+	if d.DryRun || d.remote() {
+		return
+	}
+	agentsandbox.RegisterSessionLister(d.sandboxSessionBackend(), d.liveSandboxSessions)
+}
+
+// errNoCompleteListing: the backend cannot list every live agent, so none of
+// its agents can be judged gone (their homes are kept, boundedly).
+var errNoCompleteListing = errors.New("this paseo backend cannot list every live agent")
+
+// liveSandboxSessions is the set of agent ids paseo still has. It must be
+// complete: an agent missing from it loses its home. So it never uses
+// ListAgents' filtered default listing; a backend with no complete listing
+// answers that it cannot tell.
+func (d *Dispatcher) liveSandboxSessions(ctx context.Context) (map[string]bool, error) {
+	l, ok := d.backend().(liveAgentLister)
+	if !ok {
+		return nil, errNoCompleteListing
+	}
+	agents, err := l.ListLiveAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	live := make(map[string]bool, len(agents))
+	for _, a := range agents {
+		live[a.ID] = true
+	}
+	return live, nil
 }

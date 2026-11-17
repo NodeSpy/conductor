@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 )
@@ -54,7 +55,7 @@ func newAgentDeckController(name string, cc config.ControllerConfig, prov Provis
 	if cc.Bin != "" {
 		bin = cc.Bin
 	}
-	return &agentDeckController{
+	c := &agentDeckController{
 		name:         name,
 		bin:          bin,
 		args:         extra,
@@ -63,6 +64,10 @@ func newAgentDeckController(name string, cc config.ControllerConfig, prov Provis
 		iso:          cc.Isolation,
 		pollInterval: 2 * time.Second,
 	}
+	// A sandboxed agent-deck session's home is kept while agent-deck still
+	// lists it (agentsandbox session.go).
+	agentsandbox.RegisterSessionLister(c.sandboxSessionBackend(), c.liveSessionIDs)
+	return c
 }
 
 func (c *agentDeckController) Name() string           { return c.name }
@@ -204,6 +209,29 @@ func (c *agentDeckController) exec(ctx context.Context, host, dir string, env []
 	}
 	cmd.Env = append(os.Environ(), localEnv...)
 	return cmd.CombinedOutput()
+}
+
+// sandboxSessionBackend names this runtime's agent-deck as the agent
+// sandbox's session backend.
+func (c *agentDeckController) sandboxSessionBackend() string { return "agent-deck:" + c.name }
+
+// liveSessionIDs lists the ids of the sessions agent-deck still has.
+func (c *agentDeckController) liveSessionIDs(ctx context.Context) (map[string]bool, error) {
+	out, err := c.exec(ctx, "", "", nil, launchOpts{}, "list", "--json")
+	if err != nil {
+		return nil, err
+	}
+	var sessions []deckSession
+	if err := json.Unmarshal(out, &sessions); err != nil {
+		return nil, err
+	}
+	live := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		if id := s.id(); id != "" {
+			live[id] = true
+		}
+	}
+	return live, nil
 }
 
 // findByTitle returns the id of the session whose title matches (via list --json),

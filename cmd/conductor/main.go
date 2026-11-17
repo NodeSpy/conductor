@@ -860,6 +860,13 @@ func cmdRun(args []string) error {
 		reg.OverridePaseo(name, d, d)
 		logf("runtime %s: dedicated paseo dispatcher (backend-rpc plugin)", name)
 	}
+	// The agent sandbox asks each paseo which of its agents still exist: an
+	// agent outliving its run keeps its home exactly that long (and the
+	// daemon's start-up sweep can already ask).
+	disp.RegisterSandboxSessions()
+	for _, d := range paseoOverrides {
+		d.RegisterSandboxSessions()
+	}
 	broker := controller.NewBroker(reg, st, logf)
 
 	// The connectors-model stack (secret resolution, connector registry, flow
@@ -1138,6 +1145,7 @@ func cmdRun(args []string) error {
 	}
 	if stack != nil {
 		defer wireWorkPusher(cfg, stack.Runner, st.Audit, logf)()
+		defer wireHomeReclaim(stack.Runner, st)()
 	}
 
 	// Mount connector ask surfaces (web pages, discord gateways) and fan

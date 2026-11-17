@@ -74,6 +74,13 @@ type Resolver struct {
 	// otherwise resolve it to a verb-less `dir:` identity. nil: no bot
 	// sessions on this daemon (the lookup is wired by the bot service).
 	Session func(cwd string) (Entry, bool)
+	// RunLive reports whether a run (a dispatch id's run, RunOf) is running
+	// or still resumable: its per-dispatch homes are kept while it is
+	// (reclaim.go). nil: every run is — the sweep removes no indexed home.
+	RunLive func(run string) bool
+	// Log reports the reclaim of per-dispatch homes and its failures (nil:
+	// not reported).
+	Log func(format string, args ...any)
 }
 
 func (r *Resolver) registry() *Registry {
@@ -221,11 +228,22 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		persist = scope.Persist
 	}
 	homeRoot, homeKey := r.homeFor(e, persist)
-	home, logins, err := PrepareHome(HomeSpec{
-		Root: homeRoot, Key: homeKey, Tool: tool, RealHome: r.RealHome,
-		GitName: r.GitName, GitEmail: r.GitEmail, GOOS: r.GOOS,
-		ShareLogins: r.ModelCredential == CredLoginShare,
-	})
+	var home string
+	var logins []Login
+	prepare := func() (err error) {
+		home, logins, err = PrepareHome(HomeSpec{
+			Root: homeRoot, Key: homeKey, Tool: tool, RealHome: r.RealHome,
+			GitName: r.GitName, GitEmail: r.GitEmail, GOOS: r.GOOS,
+			ShareLogins: r.ModelCredential == CredLoginShare,
+		})
+		return err
+	}
+	var err error
+	if homeRoot == r.homesDir() {
+		err = r.prepareDispatchHome(homeKey, e.Dispatch, prepare)
+	} else {
+		err = prepare()
+	}
 	if err != nil {
 		return Policy{}, err
 	}

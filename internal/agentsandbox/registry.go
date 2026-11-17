@@ -61,6 +61,10 @@ type Entry struct {
 	// common dir and its own git dir: each launch gets a private view of the
 	// common dir (see GitLayout.Common).
 	GitCommon, GitWorktree string
+	// Session is the session the last launch here started (BindSession):
+	// an out-of-process one keeps the dispatch's home while its backend
+	// still lists it (session.go).
+	Session SessionRef
 }
 
 // PushTarget is where conductor — never the agent — pushes a workspace.
@@ -111,6 +115,7 @@ type persisted struct {
 	Scope       *Scope      `json:"scope,omitempty"`
 	GitCommon   string      `json:"git_common,omitempty"`
 	GitWorktree string      `json:"git_worktree,omitempty"`
+	Session     *SessionRef `json:"session,omitempty"`
 }
 
 // PersistTo loads the registry saved at path (entries whose workspace is
@@ -142,7 +147,8 @@ func (r *Registry) PersistTo(path string) error {
 			continue
 		}
 		ent := Entry{Workspace: ws, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
-			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree}
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
+			Session: loadedSession(e.Session, e.Dispatch)}
 		// The file is conductor's, but what it names is bound read-write
 		// into the next launch: re-checked as a fresh layout would be, and
 		// dropped (the workspace resolves anew) when it no longer passes.
@@ -178,7 +184,8 @@ func (r *Registry) saveLocked() {
 	list := make([]persisted, 0, len(r.byWS))
 	for _, e := range r.byWS {
 		list = append(list, persisted{Workspace: e.Workspace, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
-			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree})
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
+			Session: savedSession(e.Session)})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Workspace < list[j].Workspace })
 	b, err := json.MarshalIndent(list, "", " ")
@@ -216,6 +223,27 @@ func (r *Registry) Register(e Entry) func() {
 			r.mu.Unlock()
 		})
 	}
+}
+
+// loadedSession is a recorded entry's session as a restarted daemon sees
+// it: an in-process session ended with the old daemon; an entry recorded
+// with none (before sessions were bound) has a backend that cannot be asked,
+// from now.
+func loadedSession(s *SessionRef, dispatch string) SessionRef {
+	switch {
+	case s == nil && dispatch != "":
+		return SessionRef{Backend: backendUnknown, Bound: homeNow()}
+	case s == nil || s.Backend == BackendInProcess:
+		return SessionRef{}
+	}
+	return *s
+}
+
+func savedSession(s SessionRef) *SessionRef {
+	if s.Backend == "" {
+		return nil
+	}
+	return &s
 }
 
 // Forget removes the entry registered for exactly ws.

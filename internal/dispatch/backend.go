@@ -5,6 +5,15 @@ import (
 	"encoding/json"
 )
 
+// liveAgentLister is a Backend that can list every agent that still exists:
+// in every directory, background agents included, archived ones not. Its
+// listing is complete, so an agent missing from it is gone. ListAgents'
+// default listing is filtered (the caller's directory, no background
+// agents) and must never be read that way.
+type liveAgentLister interface {
+	ListLiveAgents(ctx context.Context) ([]AgentInfo, error)
+}
+
 // Backend is the paseo-daemon operations the Dispatcher performs: launching
 // and querying agents, and creating/archiving the workspaces (including
 // isolated worktrees) they run in. cliBackend implements it by shelling to

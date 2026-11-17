@@ -141,6 +141,9 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	if err != nil {
 		return nil, "", nil, nil, err
 	}
+	// This launch is the daemon's own child: it cannot outlive the daemon,
+	// so the registry keeps no home for it (its run and its lock do).
+	agentsandbox.Default.BindSession(entry.Workspace, entry.Dispatch, agentsandbox.SessionRef{Backend: agentsandbox.BackendInProcess})
 	entry = withInputs(entry, a.req)
 	if iso := opt.iso; iso != nil {
 		// An explicit namespace block shapes the sandbox further: its

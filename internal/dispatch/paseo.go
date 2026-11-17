@@ -452,6 +452,13 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		return ref, err
 	}
 	ref.AgentID = res.AgentID
+	if sandboxed && worktreeCwd != "" && !d.DryRun && !req.Shadow && res.AgentID != "" {
+		// The agent can outlive this launch and its run (a background or
+		// hand-off agent; paseo relaunching it with --resume): its home is
+		// kept while paseo still lists it.
+		d.RegisterSandboxSessions()
+		agentsandbox.Default.BindSession(worktreeCwd, req.DispatchID, agentsandbox.SessionRef{Backend: d.sandboxSessionBackend(), ID: res.AgentID})
+	}
 	// Conductor launched this agent: record it in the ownership ledger (archive
 	// eligibility is a recorded fact, never guessed) and bind the dispatch id to
 	// it so the agent's own step.done call — whose token carries only the

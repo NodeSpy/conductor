@@ -132,6 +132,10 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		// by buildBots, which ran earlier) resolves such a cwd to the bot's own
 		// identity and granted verbs. nil when no bots are configured.
 		Session: botSessionLookup,
+		// Per-dispatch homes are kept while their run is live
+		// (wireHomeReclaim) and reclaimed, logged, when it ends.
+		RunLive: sandboxRunLive,
+		Log:     logf,
 	}
 	if cfg.Sandbox != nil && cfg.Sandbox.Limits != nil {
 		l := cfg.Sandbox.Limits
