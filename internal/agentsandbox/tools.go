@@ -132,3 +132,22 @@ func CanonicalTool(name string) string {
 	}
 	return ""
 }
+
+// ToolStatePaths are the home-relative paths every known agent CLI keeps
+// its state, login and settings in: what a repository cache may never
+// hold or hide (internal/repocache).
+func ToolStatePaths() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range tools {
+		for _, list := range [][]string{t.state, t.login, t.seed} {
+			for _, p := range list {
+				if !seen[p] {
+					seen[p] = true
+					out = append(out, filepath.ToSlash(p))
+				}
+			}
+		}
+	}
+	return out
+}

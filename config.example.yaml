@@ -1532,6 +1532,23 @@ sandbox:
   #   off: false
   # persist: none               # a fresh home per dispatch; cache: keep a per-identity cache dir;
   #                             #   home: keep the identity home (a run can plant hooks for the next)
+  # caches:                     # per-repository dependency caches (docs/wiki/Repo-Caches.md): restored into a
+  #                             #   run's fresh home by overlay (Linux) or clone (macOS), never written by a run;
+  #                             #   only conductor publishes, from a sandboxed warm on the default branch
+  #   enabled: false            # off by default (an upgrade starts no warms); true needs the agent sandbox
+  #   dir: ""                   # default <state dir>/repo-caches; never under an isolation fs: path
+  #   max_size: 10GiB           # all of dir (caches, warm scratch; not a running launch's writes); least recently used
+  #                             #   evicted past this (never one in use); a bigger cache is not published; off = no cap
+  #   autodetect: true          # bundled recipes: go, npm, pnpm, yarn, pip, uv, cargo, bundler
+  #   repo_file: true           # read the repository's .conductor.yaml (default branch only; grants nothing:
+  #                             #   its env is limited to cache-location variables inside its own paths)
+  #   warm_on_miss: true        # warm the default branch when a launch misses (at most every 10m per repo)
+  #   warm_every: ""            # also re-warm every known repository on this period (at least 10m)
+  #   warm_timeout: 20m
+  #   recipes: []               # replace a bundled recipe by name, or add one (detect, key, restore_keys,
+  #                             #   paths, env, warm); disabled: true removes one
+  #   defaults: []              # caches for every repository: [{ recipe: go }, { name: x, key: ..., paths: [...] }]
+  #   repos: {}                 # per repository: { acme/app: [{ recipe: npm, warm: "npm ci --ignore-scripts" }] }
   # git:
   #   shared: protected         # a linked worktree's shared git dir: only objects/refs/logs/lfs
   #                             #   writable; direct: all of it but config/hooks/info/alternates

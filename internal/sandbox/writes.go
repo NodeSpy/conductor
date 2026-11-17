@@ -429,6 +429,10 @@ func writableBinds(binds []BindMount) []string {
 		if b.RO || b.Tmpfs || b.Link != "" {
 			continue
 		}
+		if b.Overlay != nil {
+			out = append(out, b.Overlay.Upper)
+			continue
+		}
 		if b.Src != "" {
 			out = append(out, b.Src)
 		} else if b.Path != "" {

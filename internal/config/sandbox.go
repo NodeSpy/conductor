@@ -81,6 +81,9 @@ type SandboxConfig struct {
 	// entries later runs of the identity execute); `home` — the whole home
 	// is kept (a run can plant settings, hooks and shell rc files).
 	Persist string `yaml:"persist,omitempty"`
+	// Caches are per-repository dependency caches restored into agent
+	// launches (SandboxCaches).
+	Caches *SandboxCaches `yaml:"caches,omitempty"`
 	// MacOSPosixIPC (macOS) lets agents use POSIX shared memory and
 	// semaphores (Python multiprocessing needs them). Off by default: they
 	// are named host-wide, so an agent could open a host process's.
@@ -368,6 +371,19 @@ func (c *Config) validateSandbox() error {
 			return err
 		}
 	}
+	if err := s.Caches.validate(); err != nil {
+		return err
+	}
+	if c.CachesOn() {
+		// The store holds every launch's overlay layers, which mount(2)
+		// takes as paths: no launch may see it, cached or not.
+		dir := filepath.Clean(c.CachesDir())
+		for _, p := range c.IsolationFS() {
+			if p = filepath.Clean(p); overlapsPath(dir, p) {
+				return fmt.Errorf("config: sandbox.caches.dir %s overlaps the fs: grant %s (launches may write there); keep the cache store out of every fs: path", dir, p)
+			}
+		}
+	}
 	if s.StateDir != "" && !filepath.IsAbs(s.StateDir) {
 		return fmt.Errorf("config: sandbox.state_dir %q must be an absolute path", s.StateDir)
 	}
@@ -587,4 +603,24 @@ func (c *Config) SandboxStateDir() string {
 		return c.Sandbox.StateDir
 	}
 	return filepath.Join(filepath.Dir(c.Store.StateFile), "agent-state")
+}
+
+// overlapsPath reports a and b equal or one inside the other, compared as
+// given and with their symlinks resolved.
+func overlapsPath(a, b string) bool {
+	as, bs := []string{a}, []string{b}
+	if r, err := filepath.EvalSymlinks(a); err == nil {
+		as = append(as, r)
+	}
+	if r, err := filepath.EvalSymlinks(b); err == nil {
+		bs = append(bs, r)
+	}
+	for _, x := range as {
+		for _, y := range bs {
+			if x == y || strings.HasPrefix(x, y+string(filepath.Separator)) || strings.HasPrefix(y, x+string(filepath.Separator)) || y == string(filepath.Separator) || x == string(filepath.Separator) {
+				return true
+			}
+		}
+	}
+	return false
 }

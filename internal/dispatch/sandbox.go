@@ -189,6 +189,17 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 				e.Push = pushTarget(dir, layout, repo)
 			}
 		}
+		switch {
+		case req.WorkspaceArchive != "":
+		case prev != nil:
+			e.Repo = prev.Repo
+		case layout.GitDir != "":
+			// The repository whose dependency caches the launch is shown:
+			// one conductor checked out for a target it trusts.
+			if repo, err := CheckoutRepo(*req); err == nil {
+				e.Repo = repo
+			}
+		}
 		if layout.GitDir != "" || prev == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			e.StartHead, _ = gitpush.HeadCommit(ctx, dir, layout.GitDir, layout.HeadDir)

@@ -42,6 +42,8 @@ conductor memory export --scope S [--scope …] --out DIR [--name N] [--force]  
 conductor workflows [ls]                   config workflows and triggers by name, then saved (agent-promoted) workflows with review state and health
 conductor workflows review <name>          print the workflow's provenance + FULL steps, then clear it for reuse (dry-run it first; runs stay policy-guarded)
 conductor workflows rm <name>              remove a saved workflow
+conductor sandbox caches [--config PATH]   repository dependency caches: repo, cache, key, size, last used, origin, in use — [[Repo-Caches]]
+conductor sandbox caches clear [--force] <owner/repo> [name [key]]   remove caches (one a running launch overlays is kept unless --force)
 conductor browser logins                   saved browser sessions, login sites, credentials (never values) — [[Browser]]
 conductor browser seed --identity ID --site SITE [--url U]   log in yourself in a window; only SITE's session is kept
 conductor browser cookies import --identity ID --site SITE FILE   import one domain's cookies as a saved session

@@ -38,6 +38,8 @@ func cmdSandbox(args []string) int {
 	switch args[0] {
 	case "exec":
 		return cmdSandboxExec(args[1:])
+	case "caches":
+		return cmdSandboxCaches(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "conductor sandbox: unknown subcommand %q\n%s", args[0], sandboxUsage)
 		return 2
@@ -45,6 +47,7 @@ func cmdSandbox(args []string) int {
 }
 
 const sandboxUsage = `usage: conductor sandbox exec [--tool NAME] [--bin NAME]... [--config PATH | --socket PATH] -- COMMAND [ARGS...]
+       conductor sandbox caches [clear ...]   (repository dependency caches: see --help)
 
 Runs COMMAND — an agent CLI — under conductor's agent sandbox, with the
 policy the running conductor daemon gives this directory: the workspace

@@ -207,6 +207,13 @@ func buildJailIn(binds []BindMount, jailRoot string, t *jailTmp, base string) er
 		switch {
 		case b.Tmpfs:
 			err = mountTmpfs(root+b.Path, "mode=0700")
+		case b.Overlay != nil:
+			// A cache that cannot be shown (its target became a link, the
+			// kernel refuses the mount) is skipped, not fatal: the launch
+			// runs without it.
+			if oerr := mountOverlay(root, b); oerr != nil {
+				fmt.Fprintf(os.Stderr, "conductor sandbox: a cache at %s is not mounted: %v\n", b.Path, oerr)
+			}
 		case b.Link != "":
 			if err = os.MkdirAll(filepath.Dir(root+b.Path), 0o755); err == nil {
 				if err = os.Symlink(b.Link, root+b.Path); os.IsExist(err) {
@@ -334,6 +341,62 @@ func bindInto(root string, b BindMount, skipMissing bool) error {
 		if err := setattr(target, set, true); err != nil {
 			return fmt.Errorf("jail bind attributes %s: %w", b.Path, err)
 		}
+	}
+	return nil
+}
+
+// mountOverlay mounts b's overlay at root+b.Path. The target's directories
+// are made without following a symlink (a workspace is the agent's own,
+// and a link it left there must not send the mount anywhere else), and the
+// mount lands on the directory opened that way, never on a path resolved
+// again. The lower layer is never written: the kernel sends every write to
+// the upper one.
+func mountOverlay(root string, b BindMount) error {
+	o := b.Overlay
+	for _, p := range []string{o.Lower, o.Upper, o.Work} {
+		if !filepath.IsAbs(p) || strings.ContainsAny(p, ",:\x00") {
+			return fmt.Errorf("overlay layer %q: must be an absolute path without ',' or ':'", p)
+		}
+	}
+	if !filepath.IsAbs(b.Path) {
+		return fmt.Errorf("overlay target %q is not absolute", b.Path)
+	}
+	cur := root
+	for _, c := range strings.Split(strings.Trim(filepath.Clean(b.Path), "/"), "/") {
+		cur = filepath.Join(cur, c)
+		fi, err := os.Lstat(cur)
+		if os.IsNotExist(err) {
+			if err = os.Mkdir(cur, 0o755); err == nil || os.IsExist(err) {
+				fi, err = os.Lstat(cur)
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("overlay target %s: %w", cur, err)
+		}
+		if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+			return fmt.Errorf("overlay target %s is not a directory (a symlink is never followed)", cur)
+		}
+	}
+	fd, err := openNoSymlinks(root + b.Path)
+	if err != nil {
+		return fmt.Errorf("overlay target %s: %w", b.Path, err)
+	}
+	defer unix.Close(fd)
+	target := fmt.Sprintf("/proc/self/fd/%d", fd)
+	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", o.Lower, o.Upper, o.Work)
+	flags := uintptr(unix.MS_NOSUID | unix.MS_NODEV)
+	// volatile: the upper layer is the launch's scratch, deleted when the
+	// launch ends, so the overlay never syncs it — without it, tearing the namespace down
+	// syncs the whole upper filesystem, seconds on a busy disk. A kernel
+	// before 5.10 refuses the option; one that wants user xattrs for an
+	// unprivileged mount says so the same way (EINVAL).
+	for _, extra := range []string{",volatile", "", ",userxattr,volatile", ",userxattr"} {
+		if err = unix.Mount("overlay", target, "overlay", flags, opts+extra); err != unix.EINVAL {
+			break
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("overlay at %s: %w", b.Path, err)
 	}
 	return nil
 }

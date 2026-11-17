@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/NodeSpy/conductor/internal/repocache"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
@@ -65,6 +66,12 @@ type Resolver struct {
 	// Rescope recomputes a workspace's recorded scope from the live config
 	// (nil: the recorded scope as is).
 	Rescope func(*Scope) *Scope
+	// Caches restores a repository's dependency caches into a launch
+	// (internal/repocache): overlays, environment, and the directory the
+	// agent must not see. Called for a workspace conductor checked out of
+	// a repository it trusts (Entry.Repo); it logs its own failures, and a
+	// launch whose caches fail runs without them. nil: no caches.
+	Caches func(repocache.Request) repocache.Grant
 	// Session resolves a cwd that is NOT in the registry to a live bot
 	// session's entry (its identity, its granted skill verbs, its read-only
 	// paths), consulted before a default workspace is built. This is how a
@@ -288,6 +295,22 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 	} else if cache != "" {
 		p.ReadWrite = append(append([]string(nil), p.ReadWrite...), cache)
 	}
+	// Caches after the home is final (persistCache may make ~/.cache a link
+	// to the identity's kept cache dir: a cache path through it is then not
+	// restored). A cache that does not check out is dropped, logged: the
+	// launch runs without it, never fails for it.
+	if r.Caches != nil && e.Repo != "" {
+		g := r.Caches(repocache.Request{Repo: e.Repo, Workspace: canon(e.Workspace), Home: home, Run: firstNonEmpty(e.Dispatch, e.Identity)})
+		p.Env = append(append([]string(nil), p.Env...), g.Env...)
+		p.CacheLock = g.Lock
+		for _, c := range g.Mounts {
+			if err := p.validateCache(c); err != nil {
+				r.logf("agent sandbox: cache at %s not shown: %v", c.Target, err)
+				continue
+			}
+			p.Caches = append(p.Caches, c)
+		}
+	}
 	if r.Socket != "" && e.Skill != nil && r.Mint != nil {
 		id := *e.Skill
 		if id.Sandbox == nil {
@@ -306,4 +329,30 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		}
 	}
 	return p, nil
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// WarmPolicy is the policy a repository cache's warm step runs under
+// (internal/repocache): an agent's sandbox — the operator's egress, its
+// allowance, limits and detection — with no conductor socket or token, no
+// model endpoint and no login, in workspace (a checkout of the default
+// branch) with home (fresh). What it leaves at the cache's paths is what
+// conductor publishes, so it is never given more than an agent.
+func (r *Resolver) WarmPolicy(workspace, home, identity string) Policy {
+	p := Policy{
+		Identity: identity, Workspace: workspace, Home: home,
+		Egress: append([]string(nil), r.Egress...),
+		Detect: r.Detect, Limits: r.Limits, Run: identity,
+		ModelCredential: CredLoginCopy,
+		EgressAnyBytes:  r.EgressAnyBytes, EgressIdle: r.EgressIdle,
+		EgressUpload: r.EgressUpload, EgressDownload: r.EgressDownload,
+	}
+	applyScope(&p, r.Allow, nil)
+	return p
 }
