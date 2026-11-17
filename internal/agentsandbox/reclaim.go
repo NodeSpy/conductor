@@ -24,9 +24,9 @@ import (
 //     holds the lock from the moment it prepares the home until the launch
 //     takes it over (or LaunchGrace passes): a run that ends while its last
 //     launch is starting does not lose that launch's home;
-//   - a session registered in it is live: the workspace registry names the
-//     dispatch, the session has not ended, and its workspace still exists —
-//     an agent that outlives its launcher (paseo restarts the provider and
+//   - its out-of-process session still exists: the workspace registry binds
+//     the dispatch to a session its backend still lists (session.go) — an
+//     agent that outlives its launcher (paseo restarts the provider and
 //     relaunches it with --resume) finds its home.
 //
 // When a run ends for good its homes go at once (ReclaimRun, from the run's
@@ -70,28 +70,54 @@ var daemonHolds = struct {
 type daemonHold struct {
 	release func()
 	timer   *time.Timer
+	// gen tells this hold from a later one on the same home: a lapsing
+	// timer only ever releases its own.
+	gen uint64
 }
+
+var holdGen atomic.Uint64
 
 // holdForLaunch holds home's lock for the launch being prepared in it. When
 // the hold lapses unclaimed, a sweep runs: a home its run left behind while
-// the hold kept it goes then.
+// the hold kept it goes then. The lock is taken before any of the holds'
+// state is locked, and without waiting.
 func (r *Resolver) holdForLaunch(home string) {
 	lock := homeLockPath(home)
 	if lock == "" {
 		return
 	}
-	daemonHolds.Lock()
-	defer daemonHolds.Unlock()
-	if h, ok := daemonHolds.m[lock]; ok {
-		h.timer.Reset(LaunchGrace)
-		return
-	}
-	h := &daemonHold{release: lockHomeShared(lock)}
+	release := tryLockHomeShared(lock)
+	gen := holdGen.Add(1)
+	h := &daemonHold{release: release, gen: gen}
 	h.timer = time.AfterFunc(LaunchGrace, func() {
-		releaseDaemonHold(lock)
-		r.SweepDispatchHomes()
+		if expireHold(lock, gen) {
+			r.SweepDispatchHomes()
+		}
 	})
+	daemonHolds.Lock()
+	old := daemonHolds.m[lock]
 	daemonHolds.m[lock] = h
+	daemonHolds.Unlock()
+	if old != nil {
+		// Replaced only once the new hold is in place: no gap.
+		old.timer.Stop()
+		old.release()
+	}
+}
+
+// expireHold drops lock's hold if it is still generation gen (a lapsing
+// timer racing a renewed hold releases nothing).
+func expireHold(lock string, gen uint64) bool {
+	daemonHolds.Lock()
+	h, ok := daemonHolds.m[lock]
+	if !ok || h.gen != gen {
+		daemonHolds.Unlock()
+		return false
+	}
+	delete(daemonHolds.m, lock)
+	daemonHolds.Unlock()
+	h.release()
+	return true
 }
 
 // releaseDaemonHold drops the daemon's hold on a home's lock (the launch
@@ -216,7 +242,7 @@ func (r *Resolver) ReclaimRun(run string) int {
 		return r.SweepDispatchHomes()
 	}
 	dir := r.homesDir()
-	registered := r.registeredHomes()
+	registered := r.liveSessionHomes()
 	homesMu.Lock()
 	idx := loadHomeIndex(dir)
 	var trash []string
@@ -268,7 +294,7 @@ func (r *Resolver) SweepDispatchHomes() int {
 	}
 	// What can be slow is asked before homesMu is taken: a launch never
 	// waits on a registry workspace's filesystem or a run's history.
-	registered := r.registeredHomes()
+	registered := r.liveSessionHomes()
 	runLive := map[string]bool{}
 	if r.RunLive != nil {
 		for _, rec := range loadHomeIndex(dir) {
@@ -329,22 +355,6 @@ func (r *Resolver) orphan(path string, rec homeRec, indexed bool, runLive map[st
 	}
 	fi, err := os.Lstat(path)
 	return err == nil && homeNow().Sub(fi.ModTime()) >= LaunchGrace
-}
-
-// registeredHomes are the per-dispatch homes of the registry's live
-// sessions: entries with a dispatch whose session has not ended and whose
-// workspace still exists.
-func (r *Resolver) registeredHomes() map[string]bool {
-	out := map[string]bool{}
-	for _, e := range r.registry().entries() {
-		if e.Dispatch == "" || e.SessionEnded {
-			continue
-		}
-		if fi, err := os.Stat(e.Workspace); err == nil && fi.IsDir() {
-			out[IdentityKey(e.Identity+"@"+e.Dispatch)] = true
-		}
-	}
-	return out
 }
 
 // removeHomes removes homes already moved aside, and logs what it freed and

@@ -206,5 +206,6 @@ func (c *agentDeckController) newSandboxedDeckSession(ctx context.Context, spec 
 	if out, err := c.exec(ctx, host, "", env, opt, "session", "send", id, prompt); err != nil {
 		return fail(id, fmt.Errorf("agent-deck: send the task to %s (did its sandbox start? `conductor sandbox exec` refuses when it cannot be built): %w: %s", id, err, strings.TrimSpace(string(out))))
 	}
+	agentsandbox.Default.BindSession(dir, req.DispatchID, agentsandbox.SessionRef{Backend: c.sandboxSessionBackend(), ID: id})
 	return &agentDeckSession{id: id, c: c, env: env, host: host, opt: opt, workspace: dir}, nil
 }

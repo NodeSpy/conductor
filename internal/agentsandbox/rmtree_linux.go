@@ -25,7 +25,8 @@ func openDirForRemoval(dirfd int, name string, st *unix.Stat_t) (int, error) {
 		return -1, errChanged
 	}
 	if cur.Mode&0o700 != 0o700 {
-		// chmod through the fd's /proc link reaches the fd's own inode.
+		// Made owner-writable (and readable, searchable) through the
+		// O_PATH fd's /proc link: the fd's own inode, checked above.
 		if err := unix.Chmod("/proc/self/fd/"+strconv.Itoa(pfd), uint32(cur.Mode&0o7777)|0o700); err != nil {
 			return -1, err
 		}

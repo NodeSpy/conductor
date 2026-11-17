@@ -3,9 +3,12 @@
 package agentsandbox
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -126,12 +129,11 @@ func TestReclaimRemovesReadOnlyTrees(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A directory the agent locked its owner out of entirely.
-	locked := filepath.Join(h, "locked")
-	os.MkdirAll(filepath.Join(locked, "in"), 0o700)
-	os.WriteFile(filepath.Join(locked, "in", "f"), []byte("x"), 0o400)
-	os.Chmod(filepath.Join(locked, "in"), 0)
-	os.Chmod(locked, 0)
+	// A directory its owner may search but not read.
+	search := filepath.Join(h, "search")
+	os.MkdirAll(filepath.Join(search, "in"), 0o700)
+	os.WriteFile(filepath.Join(search, "in", "f"), []byte("x"), 0o400)
+	os.Chmod(search, 0o100)
 	g.live["rA"] = false
 	if n := g.r.ReclaimRun("rA"); n != 1 || exists(h) {
 		t.Fatalf("reclaimed %d; home still there: %v", n, exists(h))
@@ -206,7 +208,10 @@ func TestSweepAfterRestartRemovesOnlyOrphans(t *testing.T) {
 	defer unlock()
 	g.live["rEnded"], g.live["rHeld"] = false, false
 	r2 := g.resolver(g.r.StateRoot)
+	// An entry recorded before sessions were bound, reloaded: its backend
+	// cannot be asked, so it keeps its home (boundedly).
 	r2.Registry.Register(Entry{Workspace: ws, Identity: "agent:x", Dispatch: "rOld:fix"})
+	r2.Registry.BindSession(ws, "rOld:fix", SessionRef{Backend: backendUnknown})
 	g.r = r2
 	fresh := g.home("rFresh:fix") // launched just now; RunLive says no
 	if n := r2.SweepDispatchHomes(); n != 3 {
@@ -249,50 +254,154 @@ func TestReclaimRunKeepsAHeldHome(t *testing.T) {
 	}
 }
 
-// An agent can outlive its launcher: paseo restarts kill the provider and
-// `conductor sandbox exec` (the lock goes), then relaunch the agent with
-// --resume. While its session is registered — not ended, its workspace
-// there — its home stays, through its run's end and any sweep; once the
-// session ends it goes. A daemon restart ends an in-process session.
-func TestALiveRegisteredSessionKeepsItsHome(t *testing.T) {
+// fakeBackend is a session backend: the sessions it lists, or an error.
+type fakeBackend struct {
+	mu   sync.Mutex
+	live map[string]bool
+	err  error
+}
+
+func (b *fakeBackend) set(err error, ids ...string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.err, b.live = err, map[string]bool{}
+	for _, id := range ids {
+		b.live[id] = true
+	}
+}
+
+func (b *fakeBackend) list(context.Context) (map[string]bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.live, b.err
+}
+
+func newFakeBackend(t *testing.T, ids ...string) (string, *fakeBackend) {
+	name := "fake:" + t.Name()
+	b := &fakeBackend{}
+	b.set(nil, ids...)
+	RegisterSessionLister(name, b.list)
+	return name, b
+}
+
+// An agent can outlive its launcher and its run (paseo restarts the provider
+// and relaunches it with --resume; a hand-off stays open). Its home is kept
+// while its backend still lists the session — not while conductor's
+// bookkeeping says so: an agent archived in the backend's own UI, a session
+// a crash never closed, goes at the next sweep.
+func TestAnOutOfProcessSessionsHomeFollowsItsBackend(t *testing.T) {
 	g := newReclaimRig(t)
+	backend, fb := newFakeBackend(t, "a1")
 	g.live["rH"] = true
 	reg := g.r.Registry
 	reg.Register(Entry{Workspace: g.ws, Identity: "agent:fixer@acme/app", Dispatch: "rH:handoff"})
 	h := g.home("rH:handoff")
-	launched(h) // the launcher held the lock, then paseo restarted
+	reg.BindSession(g.ws, "rH:handoff", SessionRef{Backend: backend, ID: "a1"})
+	launched(h) // the launcher held the lock, then the backend restarted it
 	g.live["rH"] = false
 	g.r.ReclaimRun("rH")
 	ageIndex(t, g.r)
-	g.r.ReclaimRun("rOther")
+	g.r.SweepDispatchHomes()
 	if !exists(h) {
-		t.Fatal("a registered live session's home was reclaimed once its launcher's lock was gone")
+		t.Fatal("the home of a session its backend still lists was reclaimed")
 	}
-	reg.EndSession("rH:handoff")
+	fb.set(nil) // archived in the backend's UI; conductor was never told
 	if n := g.r.SweepDispatchHomes(); n != 1 || exists(h) {
-		t.Fatalf("after the session ended: swept %d, home still there: %v", n, exists(h))
+		t.Fatalf("after the backend stopped listing it: swept %d, home still there: %v", n, exists(h))
+	}
+}
+
+// A backend that cannot answer keeps its sessions' homes, but not forever:
+// SessionMaxUnknown after the launch, then they go (reported once). An
+// entry recorded before sessions were bound counts from the restart.
+func TestAnUnanswerableBackendKeepsHomesBoundedly(t *testing.T) {
+	g := newReclaimRig(t)
+	backend, fb := newFakeBackend(t)
+	fb.set(errors.New("paseo daemon not running"))
+	reg := g.r.Registry
+	ws2 := t.TempDir()
+	reg.Register(Entry{Workspace: g.ws, Identity: "agent:fixer@acme/app", Dispatch: "rN:fix"})
+	reg.Register(Entry{Workspace: ws2, Identity: "agent:fixer@acme/app", Dispatch: "rO:fix"})
+	g.live["rN"], g.live["rO"] = true, true
+	recent, old := g.home("rN:fix"), g.home("rO:fix")
+	launched(recent, old)
+	reg.BindSession(g.ws, "rN:fix", SessionRef{Backend: backend, ID: "n"})
+	reg.BindSession(ws2, "rO:fix", SessionRef{Backend: backend, ID: "o", Bound: time.Now().Add(-SessionMaxUnknown - time.Hour)})
+	g.live["rN"], g.live["rO"] = false, false
+	ageIndex(t, g.r)
+	if n := g.r.SweepDispatchHomes(); n != 1 || exists(old) || !exists(recent) {
+		t.Fatalf("swept %d; old kept %v, recent kept %v", n, exists(old), exists(recent))
+	}
+	g.r.SweepDispatchHomes()
+	g.mu.Lock()
+	expired := 0
+	for _, l := range g.logs {
+		if strings.Contains(l, "could not be confirmed live") {
+			expired++
+		}
+	}
+	g.mu.Unlock()
+	if expired != 1 {
+		t.Fatalf("the expiry was reported %d times, want once", expired)
 	}
 
-	// The registry, reloaded by a restarted daemon: an in-process session
-	// is over, one that outlives the daemon (paseo's) is not.
+	// Recorded before sessions were bound: reloaded with a backend that
+	// cannot be asked, from the restart on.
+	path := filepath.Join(t.TempDir(), "registry.json")
+	os.WriteFile(path, []byte(`[{"workspace":"`+ws2+`","identity":"agent:x","dispatch":"rL:fix"}]`), 0o600)
+	reloaded := &Registry{}
+	if err := reloaded.PersistTo(path); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := reloaded.Lookup(ws2); e.Session.Backend != backendUnknown || time.Since(e.Session.Bound) > time.Minute {
+		t.Fatalf("a pre-session entry reloaded as %+v", e.Session)
+	}
+}
+
+// Each launch binds the session it actually started: a dispatch resumed
+// in-process after a paseo launch is no longer kept by paseo's listing, a
+// hand-off to paseo after an in-process launch is kept across a restart, and
+// a newer session of the dispatch is never ended by an older one's going.
+func TestTheLaunchPathRebindsTheSession(t *testing.T) {
+	g := newReclaimRig(t)
+	backend, fb := newFakeBackend(t, "a1", "a2")
+	reg := g.r.Registry
+	g.live["rR"] = true
+	reg.Register(Entry{Workspace: g.ws, Identity: "agent:fixer@acme/app", Dispatch: "rR:fix"})
+	h := g.home("rR:fix")
+	launched(h)
+	reg.BindSession(g.ws, "rR:fix", SessionRef{Backend: backend, ID: "a1"})
+	reg.BindSession(g.ws, "rR:fix", SessionRef{Backend: BackendInProcess})
+	g.live["rR"] = false
+	if g.r.ReclaimRun("rR"); exists(h) {
+		t.Fatal("an in-process relaunch's home was kept by the earlier paseo session's listing")
+	}
+
 	path := filepath.Join(t.TempDir(), "registry.json")
 	saved := &Registry{}
 	if err := saved.PersistTo(path); err != nil {
 		t.Fatal(err)
 	}
-	inproc, outlives := t.TempDir(), t.TempDir()
-	saved.Register(Entry{Workspace: inproc, Identity: "agent:a", Dispatch: "rI:fix"})
-	saved.MarkInProcess("rI:fix")
-	saved.Register(Entry{Workspace: outlives, Identity: "agent:b", Dispatch: "rP:fix"})
-	reloaded := &Registry{}
-	if err := reloaded.PersistTo(path); err != nil {
+	ws2 := t.TempDir()
+	saved.Register(Entry{Workspace: ws2, Identity: "agent:fixer@acme/app", Dispatch: "rS:fix"})
+	saved.BindSession(ws2, "rS:fix", SessionRef{Backend: BackendInProcess})
+	saved.BindSession(ws2, "rS:fix", SessionRef{Backend: backend, ID: "a1"})
+	saved.BindSession(ws2, "rS:fix", SessionRef{Backend: backend, ID: "a2"}) // resumed as a new agent
+	g.r = g.resolver(g.r.StateRoot)
+	g.r.Registry = &Registry{}
+	if err := g.r.Registry.PersistTo(path); err != nil { // the daemon restarts
 		t.Fatal(err)
 	}
-	if e, _ := reloaded.Lookup(inproc); !e.SessionEnded {
-		t.Fatal("an in-process session survived a daemon restart")
-	}
-	if e, _ := reloaded.Lookup(outlives); e.SessionEnded {
-		t.Fatal("a session that outlives the daemon was ended by a restart")
+	g.live["rS"] = true
+	h2 := g.home("rS:fix")
+	launched(h2)
+	g.live["rS"] = false
+	fb.set(nil, "a2") // the older agent is gone, the newer one lives
+	g.r.ReclaimRun("rS")
+	ageIndex(t, g.r)
+	g.r.SweepDispatchHomes()
+	if !exists(h2) {
+		t.Fatal("the hand-off's home went after a restart, or with its older session")
 	}
 }
 
@@ -350,54 +459,193 @@ func TestRemovalNeverChmodsAHardLinkedOutsideFile(t *testing.T) {
 	}
 }
 
-// The window between the stat and the chmod of a directory cannot be won:
-// a directory swapped for a hard link to an outside file (a symlink, or
-// another directory) after it was stat'ed is refused, and nothing is
-// chmodded.
+// A directory the agent locked its owner out of entirely (mode 000): Linux
+// opens it O_PATH and chmods that fd, so it goes; macOS can only chmod it by
+// name, so it is refused — kept aside, reported once — never chmodded.
+func TestReclaimOfADirectoryWithNoPermissions(t *testing.T) {
+	g := newReclaimRig(t)
+	g.live["rA"] = true
+	h := g.home("rA:fix")
+	launched(h)
+	locked := filepath.Join(h, "locked")
+	os.MkdirAll(filepath.Join(locked, "in"), 0o700)
+	os.WriteFile(filepath.Join(locked, "in", "f"), []byte("x"), 0o400)
+	os.Chmod(filepath.Join(locked, "in"), 0)
+	os.Chmod(locked, 0)
+	g.live["rA"] = false
+	n := g.r.ReclaimRun("rA")
+	aside, _ := filepath.Glob(filepath.Join(g.r.homesDir(), reclaimPrefix+"*"))
+	if runtime.GOOS != "darwin" {
+		if n != 1 || exists(h) || len(aside) != 0 {
+			t.Fatalf("reclaimed %d; home %v; aside %v", n, exists(h), aside)
+		}
+		return
+	}
+	t.Cleanup(func() {
+		for _, a := range aside {
+			os.Chmod(filepath.Join(a, "locked"), 0o700)
+			os.Chmod(filepath.Join(a, "locked", "in"), 0o700)
+		}
+	})
+	if n != 0 || exists(h) || len(aside) != 1 {
+		t.Fatalf("reclaimed %d; home %v; aside %v — want it refused and kept aside", n, exists(h), aside)
+	}
+	if fi, err := os.Lstat(filepath.Join(aside[0], "locked")); err != nil || fi.Mode().Perm() != 0 {
+		t.Fatalf("the locked directory: %v %v, want left mode 000", fi.Mode(), err)
+	}
+	g.r.SweepDispatchHomes()
+	g.mu.Lock()
+	reported := 0
+	for _, l := range g.logs {
+		if strings.Contains(l, "remove dispatch home") {
+			reported++
+		}
+	}
+	g.mu.Unlock()
+	if reported != 1 {
+		t.Fatalf("the failed removal was reported %d times, want once", reported)
+	}
+}
+
+// The window between a directory's stat and its chmod cannot be won: a
+// directory swapped, after it was stat'ed, for a hard link to an outside
+// file, a symlink or another directory is refused, and nothing is chmodded
+// — whatever mode the stat'ed directory had (readable, search-only, none).
 func TestRemovalRefusesAnEntrySwappedAfterItsStat(t *testing.T) {
-	root := t.TempDir()
-	target := filepath.Join(root, "outside")
-	os.WriteFile(target, []byte("precious"), 0o400)
-	home := filepath.Join(root, "home")
-	os.Mkdir(home, 0o755)
-	os.Mkdir(filepath.Join(home, "d"), 0o500)
-	os.Mkdir(filepath.Join(home, "other"), 0o500)
-	defer os.Chmod(filepath.Join(home, "other"), 0o700)
-	hfd, err := unix.Open(home, unix.O_RDONLY|unix.O_DIRECTORY, 0)
-	if err != nil {
-		t.Fatal(err)
+	for _, mode := range []os.FileMode{0o500, 0o100, 0} {
+		t.Run(mode.String(), func(t *testing.T) {
+			root := t.TempDir()
+			target := filepath.Join(root, "outside")
+			os.WriteFile(target, []byte("precious"), 0o400)
+			home := filepath.Join(root, "home")
+			os.Mkdir(home, 0o755)
+			os.Mkdir(filepath.Join(home, "d"), 0o700)
+			os.Mkdir(filepath.Join(home, "other"), 0o500)
+			t.Cleanup(func() {
+				os.Chmod(filepath.Join(home, "other"), 0o700)
+				os.Chmod(filepath.Join(home, "orig"), 0o700)
+				os.Chmod(filepath.Join(home, "d"), 0o700)
+			})
+			os.Chmod(filepath.Join(home, "d"), mode)
+			hfd, err := unix.Open(home, unix.O_RDONLY|unix.O_DIRECTORY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer unix.Close(hfd)
+			var st unix.Stat_t
+			if err := unix.Fstatat(hfd, "d", &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+				t.Fatal(err)
+			}
+			// The stat'ed directory stays alive, aside: no swapped-in entry
+			// can take its inode number.
+			if err := os.Rename(filepath.Join(home, "d"), filepath.Join(home, "orig")); err != nil {
+				t.Fatal(err)
+			}
+			swaps := []struct {
+				what string
+				make func(string) error
+			}{
+				{"hard link", func(p string) error { return os.Link(target, p) }},
+				{"symlink", func(p string) error { return os.Symlink(filepath.Join(home, "other"), p) }},
+				{"directory", func(p string) error {
+					if err := os.Mkdir(p, 0o700); err != nil {
+						return err
+					}
+					return os.Chmod(p, mode)
+				}},
+			}
+			for _, sw := range swaps {
+				if fi, err := os.Lstat(filepath.Join(home, "d")); err == nil && fi.IsDir() {
+					os.Chmod(filepath.Join(home, "d"), 0o700)
+				}
+				os.Remove(filepath.Join(home, "d"))
+				if err := sw.make(filepath.Join(home, "d")); err != nil {
+					t.Fatal(err)
+				}
+				fd, err := openDirForRemoval(hfd, "d", &st)
+				if err == nil {
+					unix.Close(fd)
+					t.Fatalf("%s swapped in: opened", sw.what)
+				}
+				if sw.what == "directory" {
+					if fi, _ := os.Lstat(filepath.Join(home, "d")); fi.Mode().Perm() != mode {
+						t.Fatalf("the swapped-in directory was chmodded to %v", fi.Mode().Perm())
+					}
+				}
+			}
+			for p, want := range map[string]os.FileMode{target: 0o400, filepath.Join(home, "other"): 0o500} {
+				if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != want {
+					t.Fatalf("%s: mode %v (%v), want %v untouched", p, fi.Mode().Perm(), err, want)
+				}
+			}
+		})
 	}
-	defer unix.Close(hfd)
-	var st unix.Stat_t
-	if err := unix.Fstatat(hfd, "d", &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-		t.Fatal(err)
-	}
-	swaps := map[string]func(string) error{
-		"hard link": func(p string) error { return os.Link(target, p) },
-		"symlink":   func(p string) error { return os.Symlink(filepath.Join(home, "other"), p) },
-		"directory": func(p string) error { return os.Mkdir(p, 0o500) },
-	}
-	// The stat'ed directory stays alive, aside: no swapped-in entry can
-	// take its inode number.
-	if err := os.Rename(filepath.Join(home, "d"), filepath.Join(home, "orig")); err != nil {
-		t.Fatal(err)
-	}
-	for what, swap := range swaps {
-		os.Remove(filepath.Join(home, "d"))
-		if err := swap(filepath.Join(home, "d")); err != nil {
+}
+
+// A tree deeper than maxRemoveDepth is refused, not walked; one within it
+// goes.
+func TestRemovalIsDepthBounded(t *testing.T) {
+	chain := func(root string, depth int) {
+		p := root
+		for i := 0; i < depth; i++ {
+			p = filepath.Join(p, "d")
+		}
+		if err := os.MkdirAll(p, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		fd, err := openDirForRemoval(hfd, "d", &st)
-		if err == nil {
-			unix.Close(fd)
-		}
-		if !errors.Is(err, errChanged) && !errors.Is(err, unix.ELOOP) && !errors.Is(err, unix.ENOTDIR) {
-			t.Fatalf("%s swapped in: %v, want refused", what, err)
-		}
+		os.WriteFile(filepath.Join(p, "leaf"), []byte("x"), 0o400)
 	}
-	for p, want := range map[string]os.FileMode{target: 0o400, filepath.Join(home, "other"): 0o500} {
-		if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != want {
-			t.Fatalf("%s: mode %v (%v), want %v untouched", p, fi.Mode().Perm(), err, want)
-		}
+	base := t.TempDir()
+	ok, deep := filepath.Join(base, "ok"), filepath.Join(base, "deep")
+	chain(ok, maxRemoveDepth-1)
+	chain(deep, maxRemoveDepth+5)
+	if _, err := removeTree(ok); err != nil || exists(ok) {
+		t.Fatalf("a tree within the bound: %v, still there %v", err, exists(ok))
+	}
+	if _, err := removeTree(deep); !errors.Is(err, errTooDeep) {
+		t.Fatalf("a tree past the bound: %v, want refused as too deep", err)
+	}
+}
+
+// A renewed hold is never released by the lapsing timer of the hold it
+// replaced.
+func TestALapsingHoldNeverReleasesARenewedOne(t *testing.T) {
+	g := newReclaimRig(t)
+	g.live["rG"] = true
+	h := g.home("rG:fix")
+	lock := homeLockPath(h)
+	daemonHolds.Lock()
+	first := daemonHolds.m[lock].gen
+	daemonHolds.Unlock()
+	g.home("rG:fix") // a relaunch renews the hold
+	if expireHold(lock, first) {
+		t.Fatal("the first hold's timer released the renewed hold")
+	}
+	if _, free := tryLockHomeExclusive(lock); free {
+		t.Fatal("the renewed hold is gone")
+	}
+	releaseDaemonHold(lock)
+}
+
+// Preparing a home never waits on its lock: another process holding it
+// exclusively does not stall the launch (nor every launch behind homesMu).
+func TestPreparingAHomeNeverBlocksOnItsLock(t *testing.T) {
+	g := newReclaimRig(t)
+	g.live["rK"] = true
+	key := IdentityKey("agent:fixer@acme/app@rK:fix")
+	lock := filepath.Join(g.r.homesDir(), homeLocks, key)
+	os.MkdirAll(filepath.Dir(lock), 0o700)
+	os.WriteFile(lock, nil, 0o600)
+	release, free := tryLockHomeExclusive(lock)
+	if !free {
+		t.Fatal("could not take the lock")
+	}
+	defer release()
+	done := make(chan struct{})
+	go func() { g.home("rK:fix"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("preparing the home blocked on its lock")
 	}
 }

@@ -141,9 +141,9 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	if err != nil {
 		return nil, "", nil, nil, err
 	}
-	// This launch is the daemon's own child: its session cannot outlive a
-	// restart, so a reloaded registry does not keep its home for it.
-	agentsandbox.Default.MarkInProcess(entry.Dispatch)
+	// This launch is the daemon's own child: it cannot outlive the daemon,
+	// so the registry keeps no home for it (its run and its lock do).
+	agentsandbox.Default.BindSession(entry.Workspace, entry.Dispatch, agentsandbox.SessionRef{Backend: agentsandbox.BackendInProcess})
 	entry = withInputs(entry, a.req)
 	if iso := opt.iso; iso != nil {
 		// An explicit namespace block shapes the sandbox further: its
@@ -247,15 +247,6 @@ func withInputs(e agentsandbox.Entry, req *dispatch.Request) agentsandbox.Entry 
 // registerWorkspace is dispatch.RegisterSandboxWorkspace.
 func registerWorkspace(dir, identity, tool string, req *dispatch.Request) (agentsandbox.Entry, error) {
 	return dispatch.RegisterSandboxWorkspace(dir, identity, tool, req)
-}
-
-// endSandboxSession records that an agent launch's session is over: the
-// workspace stays registered (its layout), but its dispatch's home is no
-// longer kept for it (agentsandbox reclaim).
-func endSandboxSession(a *agentLaunch) {
-	if a != nil && a.req != nil {
-		agentsandbox.Default.EndSession(a.req.DispatchID)
-	}
 }
 
 // forgetWorkspace drops dir from the sandbox registry (its session ended).

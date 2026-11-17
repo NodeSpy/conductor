@@ -61,15 +61,10 @@ type Entry struct {
 	// common dir and its own git dir: each launch gets a private view of the
 	// common dir (see GitLayout.Common).
 	GitCommon, GitWorktree string
-	// SessionEnded: the session that last launched here has ended. The
-	// entry stays — it is the workspace's trusted layout for a later
-	// dispatch into it — but no longer keeps the dispatch's home
-	// (reclaim.go). A launch of the dispatch clears it.
-	SessionEnded bool
-	// InProcess: the session runs as a child of this daemon, so it ends
-	// when the daemon does — a restart reloads the entry with its session
-	// ended.
-	InProcess bool
+	// Session is the session the last launch here started (BindSession):
+	// an out-of-process one keeps the dispatch's home while its backend
+	// still lists it (session.go).
+	Session SessionRef
 }
 
 // PushTarget is where conductor — never the agent — pushes a workspace.
@@ -120,8 +115,7 @@ type persisted struct {
 	Scope       *Scope      `json:"scope,omitempty"`
 	GitCommon   string      `json:"git_common,omitempty"`
 	GitWorktree string      `json:"git_worktree,omitempty"`
-	Ended       bool        `json:"session_ended,omitempty"`
-	InProcess   bool        `json:"in_process,omitempty"`
+	Session     *SessionRef `json:"session,omitempty"`
 }
 
 // PersistTo loads the registry saved at path (entries whose workspace is
@@ -154,7 +148,7 @@ func (r *Registry) PersistTo(path string) error {
 		}
 		ent := Entry{Workspace: ws, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
 			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
-			SessionEnded: e.Ended || e.InProcess, InProcess: e.InProcess}
+			Session: loadedSession(e.Session, e.Dispatch)}
 		// The file is conductor's, but what it names is bound read-write
 		// into the next launch: re-checked as a fresh layout would be, and
 		// dropped (the workspace resolves anew) when it no longer passes.
@@ -191,7 +185,7 @@ func (r *Registry) saveLocked() {
 	for _, e := range r.byWS {
 		list = append(list, persisted{Workspace: e.Workspace, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
 			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
-			Ended: e.SessionEnded, InProcess: e.InProcess})
+			Session: savedSession(e.Session)})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Workspace < list[j].Workspace })
 	b, err := json.MarshalIndent(list, "", " ")
@@ -231,35 +225,25 @@ func (r *Registry) Register(e Entry) func() {
 	}
 }
 
-// EndSession records that dispatch's session has ended: its entries stay
-// (the workspace's layout), but no longer keep its home.
-func (r *Registry) EndSession(dispatch string) {
-	r.setSession(dispatch, func(e *Entry) { e.SessionEnded = true })
+// loadedSession is a recorded entry's session as a restarted daemon sees
+// it: an in-process session ended with the old daemon; an entry recorded
+// with none (before sessions were bound) has a backend that cannot be asked,
+// from now.
+func loadedSession(s *SessionRef, dispatch string) SessionRef {
+	switch {
+	case s == nil && dispatch != "":
+		return SessionRef{Backend: backendUnknown, Bound: homeNow()}
+	case s == nil || s.Backend == BackendInProcess:
+		return SessionRef{}
+	}
+	return *s
 }
 
-// MarkInProcess records that dispatch's session is a child of this daemon:
-// it does not outlive a restart.
-func (r *Registry) MarkInProcess(dispatch string) {
-	r.setSession(dispatch, func(e *Entry) { e.InProcess = true })
-}
-
-func (r *Registry) setSession(dispatch string, fn func(*Entry)) {
-	if dispatch == "" {
-		return
+func savedSession(s SessionRef) *SessionRef {
+	if s.Backend == "" {
+		return nil
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	changed := false
-	for ws, e := range r.byWS {
-		if e.Dispatch == dispatch {
-			fn(&e)
-			r.byWS[ws] = e
-			changed = true
-		}
-	}
-	if changed {
-		r.saveLocked()
-	}
+	return &s
 }
 
 // Forget removes the entry registered for exactly ws.

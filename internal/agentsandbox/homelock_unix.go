@@ -5,6 +5,7 @@ package agentsandbox
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -33,6 +34,32 @@ func lockHomeShared(path string) func() {
 		return func() {}
 	}
 	return func() { f.Close() }
+}
+
+// tryLockHomeShared is lockHomeShared without waiting: the daemon's hold,
+// taken while it holds homesMu, never blocks on another process's lock. A
+// lock held exclusively (only a reclaim takes it so, under homesMu) is
+// retried briefly, then left untaken.
+func tryLockHomeShared(path string) func() {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return func() {}
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return func() {}
+	}
+	for i := 0; i < 20; i++ {
+		err = unix.Flock(int(f.Fd()), unix.LOCK_SH|unix.LOCK_NB)
+		if err == nil {
+			return func() { f.Close() }
+		}
+		if err != unix.EWOULDBLOCK && err != unix.EINTR {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	f.Close()
+	return func() {}
 }
 
 // tryLockHomeExclusive takes a home's lock exclusively, without waiting:

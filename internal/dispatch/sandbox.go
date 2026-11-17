@@ -135,12 +135,6 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 		// it. Another dispatch of the same identity re-registers: its push
 		// and its step-end check find the workspace by its own dispatch id.
 		if e.Dispatch == "" || (e.Identity == identity && (req == nil || req.DispatchID == e.Dispatch)) {
-			if e.SessionEnded {
-				// A relaunch of the dispatch (a resume): its session is
-				// live again, and so its home.
-				e.SessionEnded = false
-				reg.Register(e)
-			}
 			return e, nil
 		}
 		prev = &e
@@ -375,4 +369,30 @@ func AllowanceOf(a *config.SandboxAllow) *agentsandbox.Allowance {
 		Tunnels: a.TunnelTools(), TunnelHosts: a.TunnelHosts(), TunnelAnyHost: a.TunnelAnyHost(), NonTLS: a.RawTargets(),
 		ReverseShell: a.ReverseShell, Pty: a.Pty, By: a.Origin,
 	}
+}
+
+// sandboxSessionBackend names this dispatcher's paseo as the agent sandbox's
+// session backend: agents it launched are kept homes while it lists them.
+func (d *Dispatcher) sandboxSessionBackend() string {
+	return "paseo:" + d.PaseoBin + "|" + d.Server + "|" + d.Home
+}
+
+// RegisterSandboxSessions lets the agent sandbox ask this dispatcher's paseo
+// which of its agents still exist (not archived): the sweep keeps an agent's
+// home exactly that long. A remote paseo's agents are not sandboxed here.
+func (d *Dispatcher) RegisterSandboxSessions() {
+	if d.DryRun || d.remote() {
+		return
+	}
+	agentsandbox.RegisterSessionLister(d.sandboxSessionBackend(), func(ctx context.Context) (map[string]bool, error) {
+		agents, err := d.backend().ListAgents(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		live := make(map[string]bool, len(agents))
+		for _, a := range agents {
+			live[a.ID] = true
+		}
+		return live, nil
+	})
 }

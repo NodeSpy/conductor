@@ -718,11 +718,16 @@ only while something can still use it:
   keeps its home. A launcher that dies drops its lock. The daemon holds the
   lock itself from the moment it prepares the home until the launch takes
   it over, or for 10 minutes at most;
-- its agent's session is still live. Conductor registered the session's
-  workspace, the session has not ended, and the workspace still exists. An
-  agent its launcher restarts (paseo relaunching a hand-off with `--resume`)
-  finds its home. A session that runs inside the daemon ends with it, so a
-  restart does not keep its home.
+- its agent's session still exists. A paseo or agent-deck agent can outlive
+  its launcher and its run: paseo relaunches a hand-off with `--resume`,
+  and a background agent stays open. Each launch records the session it
+  started. Each sweep then asks paseo (`paseo ls`) or agent-deck
+  (`list --json`) which sessions still exist. An agent archived or removed
+  there, by conductor or in the tool's own UI, no longer keeps its home. If
+  the tool cannot answer, its sessions' homes are kept for at most 7 days
+  after their launch, and a log line says when one stops being kept. A
+  session the daemon runs itself (the cli, acp and opencode runtimes) cannot
+  outlive the daemon, so its run and its lock are enough.
 
 When the run ends (done, failed or stopped), its homes are removed at once.
 A home that is still held or still has a live session goes as soon as it is
@@ -733,13 +738,17 @@ a home lapses, and at most hourly on launches. Which run a home belongs to is
 recorded at launch in an index conductor owns, not read from the home.
 
 Removal treats the home as the agent's. It never follows a symlink or
-chmods a hard link out of the home, and never descends into a mount (a btrfs
-subvolume inside the home is removed with it). Before it removes a
+chmods a hard link out of the home. It never enters a mount point, including
+a bind mount of the same filesystem; a btrfs subvolume inside the home is
+removed with it. It refuses a tree deeper than 256 levels. On macOS a
+directory its owner can neither read nor search (mode 000) is refused,
+because macOS can only chmod it by name, which is not safe against a swap.
+A refused or failed home is kept aside and reported once. Before it removes a
 read-only directory's entries, it makes the directory writable by its owner.
 A Go module cache is such a directory (Go makes it read-only). The daemon log
 records how many homes each reclaim removed and how much space it freed, and
-each home it could not remove (once per home). A home that could not be
-removed is kept aside and retried at each sweep.
+each home it could not remove. A home that could not be removed is retried
+at each sweep.
 
 Tools that download into the home (a Go module cache in `~/go/pkg/mod`, an
 npm cache) download again on every run, because each run starts from a fresh
