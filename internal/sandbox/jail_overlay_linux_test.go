@@ -19,7 +19,7 @@ const (
 	ovlNoCache    = 11 // the cache's content was not visible at the target
 	ovlNoWrite    = 12 // a write at the target failed
 	ovlSawLower   = 13 // the lower layer's own path was visible in the jail
-	ovlSawLayers  = 14 // the run's layer directory was not hidden
+	ovlSawLayers  = 14 // the run's overlay layers were reachable in the jail
 	ovlUnmounted  = 15 // the payload could unmount the overlay
 	ovlCannot     = 42
 	ovlSymlinkHit = 16 // a symlinked target was mounted through
@@ -29,7 +29,9 @@ const (
 // the cache's content at its target and writes there freely, every write
 // lands in its upper layer, and the lower layer — the shared cache — is
 // unchanged, never visible by its own path, and cannot be reached by
-// unmounting the overlay. The layers directory is hidden from the payload.
+// unmounting the overlay. The upper and work directories are conductor's,
+// outside the home (mount(2) follows a symlink in them): the payload can
+// neither see nor reach them.
 func TestJailOverlayCache(t *testing.T) {
 	switch os.Getenv("OVL_ROLE") {
 	case "probe":
@@ -41,7 +43,7 @@ func TestJailOverlayCache(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	lower := filepath.Join(dir, "store", "data")
-	layers := filepath.Join(home, ".layers")
+	layers := filepath.Join(dir, "store", ".layers")
 	upper, work := filepath.Join(layers, "s", "upper"), filepath.Join(layers, "s", "work")
 	// The kernel leaves an overlay's work/work mode 0.
 	t.Cleanup(func() { chmodTree(work) })
@@ -100,7 +102,7 @@ func TestJailOverlayRefusesSymlinkTarget(t *testing.T) {
 	home := filepath.Join(dir, "home")
 	lower := filepath.Join(dir, "store", "data")
 	elsewhere := filepath.Join(dir, "elsewhere")
-	layers := filepath.Join(home, ".layers")
+	layers := filepath.Join(dir, "store", ".layers")
 	upper, work := filepath.Join(layers, "s", "upper"), filepath.Join(layers, "s", "work")
 	for _, d := range []string{home, lower, upper, work, elsewhere} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -188,7 +190,6 @@ func runOverlayOuter() int {
 	return RunEnter(EnterOpts{
 		Binds: []BindMount{
 			{Path: os.Getenv("OVL_HOME")},
-			{Path: os.Getenv("OVL_LAYERS"), Tmpfs: true},
 			{Path: os.Getenv("OVL_TARGET"), Overlay: &Overlay{Lower: os.Getenv("OVL_LOWER"), Upper: os.Getenv("OVL_UPPER"), Work: os.Getenv("OVL_WORK")}},
 			{Path: filepath.Dir(os.Args[0]), RO: true},
 		},
@@ -220,8 +221,10 @@ func runOverlayProbe() int {
 	if _, err := os.Stat(os.Getenv("OVL_LOWER")); err == nil {
 		return ovlSawLower
 	}
-	if ents, err := os.ReadDir(os.Getenv("OVL_LAYERS")); err != nil || len(ents) != 0 {
-		return ovlSawLayers
+	for _, p := range []string{os.Getenv("OVL_LAYERS"), os.Getenv("OVL_UPPER"), os.Getenv("OVL_WORK")} {
+		if _, err := os.Lstat(p); err == nil {
+			return ovlSawLayers
+		}
 	}
 	if err := unix.Unmount(target, unix.MNT_DETACH); err == nil {
 		return ovlUnmounted

@@ -84,7 +84,6 @@ func TestRepoCacheEndToEnd(t *testing.T) {
 	m := &repocache.Manager{
 		Store: &repocache.Store{Dir: filepath.Join(state, "repo-caches")}, Recipes: repocache.Recipes(nil),
 		Autodetect: true, RepoFileOn: true, Protected: agentsandbox.ToolStatePaths(), MaxSize: 10 << 30,
-		HomeRoots:   []string{filepath.Join(agentState, ".dispatch-homes"), agentState},
 		DefaultFile: gp.DefaultBranchFile, Checkout: gp.DefaultBranchCheckout, Warm: RunCacheWarm,
 		WarmTimeout: 10 * time.Minute, Logf: logf,
 	}
@@ -103,7 +102,7 @@ func TestRepoCacheEndToEnd(t *testing.T) {
 
 	// An agent run in a PR checkout: build, then report where the modules
 	// came from.
-	agentRun := func(id string, offline bool) (home, out string) {
+	agentRun := func(id string, offline bool) (home, out string, layers []string) {
 		t.Helper()
 		req := dispatch.Request{DispatchID: id, Trigger: core.Trigger{TargetTrusted: true, Kind: "pr",
 			Target: core.Target{Repo: "acme/app", PR: 7, Number: 7, BaseRef: "main"}, Context: map[string]any{"head_ref": "feature"}}}
@@ -143,11 +142,17 @@ func TestRepoCacheEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatalf("agent run %s: %v\n%s", id, err, b)
 		}
-		return pol.Home, string(b)
+		for _, c := range pol.Caches {
+			if strings.HasPrefix(c.Upper, pol.Home+"/") || strings.HasPrefix(c.Work, pol.Home+"/") {
+				t.Fatalf("overlay layers in the agent's home: %+v", c)
+			}
+			layers = append(layers, filepath.Dir(c.Upper))
+		}
+		return pol.Home, string(b), layers
 	}
 
 	// 1. The first run: nothing published, a miss; it fetches its own.
-	home1, out1 := agentRun("d1", false)
+	home1, out1, _ := agentRun("d1", false)
 	if !hasLine(logs, "go (autodetect): miss") {
 		t.Fatalf("no miss logged: %v", logs)
 	}
@@ -169,12 +174,20 @@ func TestRepoCacheEndToEnd(t *testing.T) {
 	before := treeDigest(t, pub.Dir)
 
 	// 3. A second run, offline for modules: everything from the cache.
-	home2, out2 := agentRun("d2", true)
+	home2, out2, layers2 := agentRun("d2", true)
 	if !hasLine(logs, "go (autodetect): hit") {
 		t.Fatalf("no hit logged: %v", logs)
 	}
+	// The run's disk: its home and its overlay layers (conductor's, beside
+	// the store).
 	used2 := repocache.DiskUsage(home2)
-	t.Logf("run 2 (hit, GOPROXY=off): home %s (published cache %s)\n%s", repocache.HumanSize(used2), repocache.HumanSize(pub.Size), out2)
+	for _, l := range layers2 {
+		used2 += repocache.DiskUsage(l)
+	}
+	if len(layers2) == 0 {
+		t.Fatal("run 2 has no overlay layers")
+	}
+	t.Logf("run 2 (hit, GOPROXY=off): home + layers %s (published cache %s)\n%s", repocache.HumanSize(used2), repocache.HumanSize(pub.Size), out2)
 	if !strings.Contains(out2, "hello from a cached module") {
 		t.Fatalf("run 2 output:\n%s", out2)
 	}
@@ -186,6 +199,19 @@ func TestRepoCacheEndToEnd(t *testing.T) {
 	}
 	if !m.InUse(pub.Dir) {
 		t.Fatal("the overlaid cache is not in use while its home exists")
+	}
+	// The home gone, the cache is free and the run's layers go.
+	if err := repocache.RemoveAll(home2); err != nil {
+		t.Fatal(err)
+	}
+	m.Evict()
+	if m.InUse(pub.Dir) {
+		t.Fatal("still in use after its home went")
+	}
+	for _, l := range layers2 {
+		if _, err := os.Lstat(l); err == nil {
+			t.Fatalf("run 2's layers outlived its home: %s", l)
+		}
 	}
 }
 

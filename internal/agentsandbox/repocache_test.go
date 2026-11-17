@@ -1,7 +1,6 @@
 package agentsandbox
 
 import (
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -13,19 +12,17 @@ import (
 )
 
 // A workspace conductor checked out of a repository gets its caches: the
-// hook is asked with the launch's own home and workspace, and its overlays,
-// environment and hidden layers dir are the policy's.
+// hook is asked with the launch's own home and workspace, and its overlays
+// and environment are the policy's.
 func TestPolicyRestoresRepoCaches(t *testing.T) {
 	ws := t.TempDir()
 	var got []repocache.Request
 	r := &Resolver{Registry: &Registry{}, StateRoot: t.TempDir(), Caches: func(req repocache.Request) repocache.Grant {
 		got = append(got, req)
-		layers := filepath.Join(req.Home, repocache.LayersDir)
 		return repocache.Grant{
 			Mounts: []repocache.Mount{{Target: filepath.Join(req.Home, "go", "pkg", "mod"), Lower: "/store/o~r/go/k/data/home/go/pkg/mod",
-				Upper: filepath.Join(layers, "s", "upper"), Work: filepath.Join(layers, "s", "work")}},
-			Env:  []string{"GOFLAGS=-modcacherw"},
-			Hide: []string{layers},
+				Upper: "/store/.layers/r/s/upper", Work: "/store/.layers/r/s/work"}},
+			Env: []string{"GOFLAGS=-modcacherw"},
 		}
 	}}
 	p, err := r.PolicyForEntry(Entry{Workspace: ws, Identity: "agent:x", Dispatch: "d-1", Repo: "o/r"}, "claude", nil, skill.ProcessAnchor{})
@@ -35,7 +32,7 @@ func TestPolicyRestoresRepoCaches(t *testing.T) {
 	if len(got) != 1 || got[0].Repo != "o/r" || got[0].Home != p.Home || got[0].Workspace != canon(ws) || got[0].Run != "d-1" {
 		t.Fatalf("hook asked %+v", got)
 	}
-	if len(p.Caches) != 1 || !slices.Contains(p.Env, "GOFLAGS=-modcacherw") || !slices.Contains(p.Hide, filepath.Join(p.Home, repocache.LayersDir)) {
+	if len(p.Caches) != 1 || !slices.Contains(p.Env, "GOFLAGS=-modcacherw") {
 		t.Fatalf("policy %+v", p)
 	}
 	// No repository (a member, a dir: workspace, an artifact): no caches.
@@ -48,44 +45,33 @@ func TestPolicyRestoresRepoCaches(t *testing.T) {
 	}
 }
 
-// A home a cached launch used keeps its layers hidden, cache or not.
-func TestLayersDirAlwaysHidden(t *testing.T) {
-	ws := t.TempDir()
-	r := &Resolver{Registry: &Registry{}, StateRoot: t.TempDir(), Persist: PersistHome}
-	e := Entry{Workspace: ws, Identity: "agent:z"}
-	p, err := r.PolicyForEntry(e, "claude", nil, skill.ProcessAnchor{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if slices.Contains(p.Hide, filepath.Join(p.Home, repocache.LayersDir)) {
-		t.Fatal("hid a layers dir that does not exist")
-	}
-	if err := os.MkdirAll(filepath.Join(p.Home, repocache.LayersDir), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	p, _ = r.PolicyForEntry(e, "claude", nil, skill.ProcessAnchor{})
-	if !slices.Contains(p.Hide, filepath.Join(p.Home, repocache.LayersDir)) {
-		t.Fatalf("layers dir shown: %v", p.Hide)
-	}
-}
-
+// An overlay's upper and work directories are paths mount(2) follows a
+// symlink in: a policy never takes them from anywhere the agent can write —
+// its home, its workspace, or any directory it is granted read-write.
 func TestValidateRefusesStrayCacheMounts(t *testing.T) {
 	f := newPolicyFixture(t)
-	layers := filepath.Join(f.pol.Home, repocache.LayersDir)
-	ok := repocache.Mount{Target: filepath.Join(f.pol.Home, "go"), Lower: "/store/x", Upper: filepath.Join(layers, "s", "u"), Work: filepath.Join(layers, "s", "w")}
+	ok := repocache.Mount{Target: filepath.Join(f.pol.Home, "go"), Lower: "/store/x", Upper: "/store/.layers/r/s/u", Work: "/store/.layers/r/s/w"}
+	rw := f.pol.ReadWrite[0]
 	f.pol.Caches = []repocache.Mount{ok}
 	if err := f.pol.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	for name, m := range map[string]repocache.Mount{
-		"target outside": {Target: "/etc", Lower: ok.Lower, Upper: ok.Upper, Work: ok.Work},
-		"target is home": {Target: f.pol.Home, Lower: ok.Lower, Upper: ok.Upper, Work: ok.Work},
-		"target is ws":   {Target: f.pol.Workspace, Lower: ok.Lower, Upper: ok.Upper, Work: ok.Work},
-		"upper outside":  {Target: ok.Target, Lower: ok.Lower, Upper: "/store/x", Work: ok.Work},
-		"work in home":   {Target: ok.Target, Lower: ok.Lower, Upper: ok.Upper, Work: filepath.Join(f.pol.Home, "w")},
-		"lower in home":  {Target: ok.Target, Lower: filepath.Join(f.pol.Home, "l"), Upper: ok.Upper, Work: ok.Work},
-		"lower in ws":    {Target: ok.Target, Lower: filepath.Join(f.pol.Workspace, "l"), Upper: ok.Upper, Work: ok.Work},
-		"lower relative": {Target: ok.Target, Lower: "store/x", Upper: ok.Upper, Work: ok.Work},
+		"target outside":    {Target: "/etc", Lower: ok.Lower, Upper: ok.Upper, Work: ok.Work},
+		"target is home":    {Target: f.pol.Home, Lower: ok.Lower, Upper: ok.Upper, Work: ok.Work},
+		"target is ws":      {Target: f.pol.Workspace, Lower: ok.Lower, Upper: ok.Upper, Work: ok.Work},
+		"upper in home":     {Target: ok.Target, Lower: ok.Lower, Upper: filepath.Join(f.pol.Home, ".conductor-cache-layers", "s", "u"), Work: ok.Work},
+		"work in home":      {Target: ok.Target, Lower: ok.Lower, Upper: ok.Upper, Work: filepath.Join(f.pol.Home, "w")},
+		"upper in ws":       {Target: ok.Target, Lower: ok.Lower, Upper: filepath.Join(f.pol.Workspace, "u"), Work: ok.Work},
+		"upper is home":     {Target: ok.Target, Lower: ok.Lower, Upper: f.pol.Home, Work: ok.Work},
+		"upper in a rw dir": {Target: ok.Target, Lower: ok.Lower, Upper: filepath.Join(rw, "u"), Work: ok.Work},
+		"work above a rw":   {Target: ok.Target, Lower: ok.Lower, Upper: ok.Upper, Work: filepath.Dir(rw)},
+		"upper relative":    {Target: ok.Target, Lower: ok.Lower, Upper: "store/u", Work: ok.Work},
+		"upper unclean":     {Target: ok.Target, Lower: ok.Lower, Upper: "/store/.layers/../x", Work: ok.Work},
+		"upper is work":     {Target: ok.Target, Lower: ok.Lower, Upper: ok.Upper, Work: ok.Upper},
+		"lower in home":     {Target: ok.Target, Lower: filepath.Join(f.pol.Home, "l"), Upper: ok.Upper, Work: ok.Work},
+		"lower in ws":       {Target: ok.Target, Lower: filepath.Join(f.pol.Workspace, "l"), Upper: ok.Upper, Work: ok.Work},
+		"lower relative":    {Target: ok.Target, Lower: "store/x", Upper: ok.Upper, Work: ok.Work},
 	} {
 		f.pol.Caches = []repocache.Mount{m}
 		if err := f.pol.Validate(); err == nil {
@@ -97,11 +83,9 @@ func TestValidateRefusesStrayCacheMounts(t *testing.T) {
 func TestWrapLinuxMountsCacheOverlays(t *testing.T) {
 	withPlatform(t, "linux")
 	f := newPolicyFixture(t)
-	layers := filepath.Join(f.pol.Home, repocache.LayersDir)
 	m := repocache.Mount{Target: filepath.Join(f.pol.Home, "go", "pkg", "mod"), Lower: "/store/o~r/go/k/data/home/go/pkg/mod",
-		Upper: filepath.Join(layers, "s", "upper"), Work: filepath.Join(layers, "s", "work")}
+		Upper: "/store/.layers/r/s/upper", Work: "/store/.layers/r/s/work"}
 	f.pol.Caches = []repocache.Mount{m}
-	f.pol.Hide = append(f.pol.Hide, layers)
 	l, err := Wrap(f.pol, []string{"claude"}, f.deps)
 	if err != nil {
 		t.Fatal(err)
@@ -119,16 +103,12 @@ func TestWrapLinuxMountsCacheOverlays(t *testing.T) {
 	if ov == nil || ov.Path != m.Target || *ov.Overlay != (sandbox.Overlay{Lower: m.Lower, Upper: m.Upper, Work: m.Work}) {
 		t.Fatalf("overlay bind %+v in %+v", ov, bs)
 	}
-	if !hasBind(bs, sandbox.BindMount{Path: layers, Tmpfs: true}) {
-		t.Fatal("the layers dir is not hidden")
-	}
 }
 
 func TestWrapDarwinIgnoresCacheOverlays(t *testing.T) {
 	withPlatform(t, "darwin")
 	f := newPolicyFixture(t)
-	layers := filepath.Join(f.pol.Home, repocache.LayersDir)
-	f.pol.Caches = []repocache.Mount{{Target: filepath.Join(f.pol.Home, "go"), Lower: "/store/x", Upper: filepath.Join(layers, "u"), Work: filepath.Join(layers, "w")}}
+	f.pol.Caches = []repocache.Mount{{Target: filepath.Join(f.pol.Home, "go"), Lower: "/store/x", Upper: "/store/.layers/r/u", Work: "/store/.layers/r/w"}}
 	l, err := Wrap(f.pol, []string{"claude"}, f.deps)
 	if err != nil {
 		t.Fatal(err)

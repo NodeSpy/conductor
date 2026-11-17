@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -146,7 +147,11 @@ func Resolve(s Sources) ([]Def, []string) {
 	}
 	var warn []string
 	byName := map[string]Def{}
+	// fileEnv is the environment a repository's own file set itself (not
+	// the recipe's it names): held to an allow-list.
+	fileEnv := map[string]map[string]string{}
 	set := func(c Cache, origin string) {
+		own := c.Env
 		if c.Recipe != "" {
 			base, ok := recipes[c.Recipe]
 			if !ok {
@@ -162,6 +167,9 @@ func Resolve(s Sources) ([]Def, []string) {
 			return // a higher-precedence source already defined it
 		}
 		byName[c.Name] = Def{Cache: c, Origin: origin}
+		if origin == OriginRepoFile {
+			fileEnv[c.Name] = own
+		}
 	}
 	for _, c := range s.Repo {
 		set(c, OriginConfig)
@@ -194,9 +202,69 @@ func Resolve(s Sources) ([]Def, []string) {
 			warn = append(warn, fmt.Sprintf("%v (%s; ignored)", err, d.Origin))
 			continue
 		}
+		if d.Origin == OriginRepoFile {
+			if err := checkRepoFileEnv(fileEnv[d.Name], d.Cache, s.Protected); err != nil {
+				warn = append(warn, fmt.Sprintf("%v (%s; ignored)", err, d.Origin))
+				continue
+			}
+		}
 		out = append(out, d)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	sort.Strings(warn)
 	return out, warn
+}
+
+// repoFileEnvPaths are the variables a repository's own file may set: each
+// names where a tool keeps its download or build cache, and its value must
+// be inside one of the cache's own paths. A repository file grants nothing,
+// so it never sets a checksum database, registry, proxy, insecure
+// transport, toolchain, toolexec or shell variable.
+var repoFileEnvPaths = map[string]bool{
+	"GOMODCACHE": true, "GOCACHE": true,
+	"npm_config_cache": true, "NPM_CONFIG_CACHE": true, "npm_config_store_dir": true, "NPM_CONFIG_STORE_DIR": true,
+	"YARN_CACHE_FOLDER": true, "PIP_CACHE_DIR": true, "UV_CACHE_DIR": true, "BUNDLE_PATH": true,
+}
+
+// repoFileEnvExact are variables a repository file may set to one value.
+var repoFileEnvExact = map[string]string{"GOFLAGS": "-modcacherw"}
+
+// checkRepoFileEnv holds the environment a repository file set to the
+// allow-list.
+func checkRepoFileEnv(env map[string]string, c Cache, protected []string) error {
+	paths := c.ParsedPaths(protected)
+	for _, k := range sortedKeys(env) {
+		v := env[k]
+		if want, ok := repoFileEnvExact[k]; ok {
+			if v != want {
+				return fmt.Errorf("cache %s: env %s: a repository file may only set it to %q", c.Name, k, want)
+			}
+			continue
+		}
+		if !repoFileEnvPaths[k] {
+			return fmt.Errorf("cache %s: env %s: a repository file may only set cache-location variables", c.Name, k)
+		}
+		var raw string
+		if rel, ok := strings.CutPrefix(v, "{{home}}/"); ok {
+			raw = "~/" + rel
+		} else if rel, ok := strings.CutPrefix(v, "{{workspace}}/"); ok {
+			raw = rel
+		} else {
+			return fmt.Errorf("cache %s: env %s: must be {{home}}/<path> or {{workspace}}/<path>", c.Name, k)
+		}
+		p, err := ParsePath(raw, protected)
+		if err != nil {
+			return fmt.Errorf("cache %s: env %s: %w", c.Name, k, err)
+		}
+		inside := false
+		for _, q := range paths {
+			if q.Area == p.Area && (p.Rel == q.Rel || strings.HasPrefix(p.Rel, q.Rel+"/")) {
+				inside = true
+			}
+		}
+		if !inside {
+			return fmt.Errorf("cache %s: env %s: %s is not inside one of the cache's paths", c.Name, k, p)
+		}
+	}
+	return nil
 }

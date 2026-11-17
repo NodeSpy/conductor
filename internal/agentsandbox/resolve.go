@@ -294,14 +294,6 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		g := r.Caches(repocache.Request{Repo: e.Repo, Workspace: canon(e.Workspace), Home: home, Run: firstNonEmpty(e.Dispatch, e.Identity)})
 		p.Caches = g.Mounts
 		p.Env = append(append([]string(nil), p.Env...), g.Env...)
-		p.Hide = append(append([]string(nil), p.Hide...), g.Hide...)
-	}
-	if layers := filepath.Join(home, repocache.LayersDir); !slices.Contains(p.Hide, layers) {
-		// A home a cached launch used keeps its layers hidden from every
-		// later launch: conductor's directory, never the agent's.
-		if _, err := os.Lstat(layers); err == nil {
-			p.Hide = append(append([]string(nil), p.Hide...), layers)
-		}
 	}
 	if cache, err := r.persistCache(e, home, persist); err != nil {
 		return Policy{}, fmt.Errorf("agentsandbox: identity cache: %w", err)

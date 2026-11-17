@@ -11,9 +11,11 @@ default branch. Each later run in a checkout of that repository then starts
 with the cache already at those paths. Restoring a cache copies nothing, and
 a run can never change the shared copy.
 
-Caches are on by default with the agent sandbox. Recipes for common
-ecosystems are detected in the checkout, so most repositories need no
-configuration.
+Caches are **off** until you turn them on with `sandbox.caches.enabled:
+true`, and they need the agent sandbox. An upgrade never starts warms, uses
+disk or fetches anything for a config that did not ask for it. Once caches
+are on, recipes for common ecosystems are detected in the checkout, so most
+repositories need no further configuration.
 
 ## How a run gets its caches
 
@@ -27,11 +29,14 @@ repository it trusts (a dispatch's PR or branch worktree):
    newest cache whose key starts with one of the `restore_keys`.
 3. It shows the cache at its paths:
    - **Linux:** an overlay mount. The shared cache is the read-only lower
-     layer. Everything the run writes there goes to an upper layer in the
-     run's own home, which is deleted with the home. The overlay is mounted
-     inside the run's namespace, with no extra privilege. The layers
-     directory is hidden from the agent, and the store itself is never
-     visible inside the sandbox.
+     layer. Everything the run writes there goes to an upper layer that
+     belongs to the run. The overlay is mounted inside the run's namespace,
+     with no extra privilege. The upper and work directories sit **beside the
+     store** (`<dir>/.layers/`), never in the run's home or workspace.
+     `mount(2)` takes them as paths and follows a symlink in them, so they
+     must be somewhere no agent can write. The store, and these layers, are
+     never visible inside the sandbox. A run's layers are removed once its
+     home is gone.
    - **macOS:** a copy-on-write clone (APFS `clonefile`) into the home or
      workspace. It costs almost no disk until the run changes a file.
    - **Neither available** (a kernel before 5.11 or a filesystem overlay
@@ -86,9 +91,20 @@ A PR that changes its lockfile therefore gets a partial restore (the default
 branch's cache, under a matching restore key) and fetches the difference
 itself. Its cache is published after the PR merges.
 
-**Eviction.** The store is capped (`max_size`, default 10 GiB). When it is
-over the cap, the least recently restored caches are removed first. A cache
-that a live home still has an overlay on is never removed.
+**Eviction.** The store is capped (`max_size`, default 10 GiB). The cap
+covers everything under `dir`: published caches, warm scratch, and the runs'
+overlay layers. When the store is over the cap, the least recently restored
+caches are removed first. A cache that a live run still has an overlay on is
+never removed. Whether a run is live is conductor's own record, kept beside
+the store: it names the run's home, and holds while that home exists.
+Nothing in a home is ever read for it.
+
+A warm whose output is larger than the cap is not published, because it
+would be evicted straight away. The log says so once, and that key is not
+warmed again until the daemon restarts.
+
+A warm in flight is cancelled when the daemon stops. Scratch left by a daemon
+that died mid-warm is removed when the next one starts.
 
 ## Where definitions come from
 
@@ -146,10 +162,19 @@ letter or digit, and is at most 200 characters. A restore key is a prefix:
   files (`~/.claude`, `~/.codex`, …), credentials (`~/.ssh`, `~/.gnupg`,
   `~/.netrc`, `~/.aws`, `~/.docker`, `~/.kube`, `~/.config/gh`, git config),
   or shell start-up files.
-- `env` values expand `{{home}}` and `{{workspace}}`. A cache may not set the
+- `env` values expand `{{home}}` and `{{workspace}}`. No cache may set the
   loader, shell, proxy, CA, git or conductor variables (`PATH`, `HOME`,
   `LD_*`, `DYLD_*`, `*_PROXY`, `SSL_CERT_*`, `NODE_OPTIONS`, `GIT_*`,
-  `CONDUCTOR_*`, …) or anything named like a credential.
+  `CONDUCTOR_*`, …), or anything named like a credential.
+- A repository's own file is held to an **allow-list**. It may set only
+  cache-location variables (`GOMODCACHE`, `GOCACHE`, `npm_config_cache`,
+  `npm_config_store_dir`, `YARN_CACHE_FOLDER`, `PIP_CACHE_DIR`,
+  `UV_CACHE_DIR`, `BUNDLE_PATH`), each to `{{home}}/…` or `{{workspace}}/…`
+  inside one of that cache's own paths. It may also set `GOFLAGS` to exactly
+  `-modcacherw`. A definition that sets anything else (a checksum database, a
+  registry, an insecure transport, a toolchain, `-toolexec`, a shell
+  variable) is ignored, with a warning. Your own config is not limited this
+  way.
 
 ## The repository file: `.conductor.yaml`
 
@@ -175,7 +200,8 @@ caches:
   or changes has no effect until it is merged. Otherwise a PR could point a
   cache at a file of its choosing, or choose the command a warm runs.
 - **It grants nothing.** It cannot add egress, show a path outside the home or
-  workspace, or lift any sandbox setting. Its warm commands run in the same
+  workspace, set any but a cache-location variable, or lift any sandbox
+  setting. Its warm commands run in the same
   sandbox as an agent, against the default branch, which is trusted for the
   same reason the default branch's CI is.
 - `version: 1` is required. Keys this conductor does not read are logged as
@@ -193,9 +219,9 @@ is read from its default branch.
 ```yaml
 sandbox:
   caches:
-    # enabled: true            # default with the agent sandbox
+    enabled: true              # off by default; needs the agent sandbox
     # dir: <state dir>/repo-caches
-    # max_size: 10GiB          # LRU-evicted past this; "off" = no cap
+    # max_size: 10GiB          # everything under dir; LRU-evicted past this; "off" = no cap
     # autodetect: true
     # repo_file: true          # read .conductor.yaml from the default branch
     # warm_on_miss: true       # warm when a launch misses (at most every 10m per repo)
@@ -253,5 +279,9 @@ fetches through whatever that sandbox fetches through, and a cache adds no
 - An overlay's upper layer is mounted `volatile`, so it is never synced to
   disk. It is the run's scratch space: after a host crash, a run's own
   writes over a cache may be lost.
+- A run's layers, and the caches they sit on, last as long as its home. A
+  per-dispatch home is swept a day after its session ends. A kept identity
+  home (`persist: home`) keeps its layers, and the caches it last restored,
+  until you remove it.
 - A cache's content is only as trustworthy as the default branch it was
   built from, and the dependencies that branch names.

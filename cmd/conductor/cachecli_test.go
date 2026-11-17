@@ -32,12 +32,20 @@ func TestSandboxCachesListAndClear(t *testing.T) {
 	pub("acme/web", "go", "go-linux-aaa")
 	inUse := pub("acme/web", "npm", "npm-linux-bbb")
 	pub("acme/api", "go", "go-linux-ccc")
-	// A live per-dispatch home overlays the npm cache.
-	layers := filepath.Join(agentState, ".dispatch-homes", "agent_x@d1", repocache.LayersDir)
-	if err := os.MkdirAll(layers, 0o700); err != nil {
+	// A live per-dispatch home overlays the npm cache: conductor's ledger
+	// beside the store names the home and what its overlays sit on.
+	home := filepath.Join(agentState, ".dispatch-homes", "agent_x@d1")
+	run := filepath.Join(store, ".layers", "r1")
+	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(layers, "uses"), []byte(inUse.Dir+"\n"), 0o600); err != nil {
+	if err := os.MkdirAll(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(run, "home"), []byte(home), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(run, "uses"), []byte(inUse.Dir+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

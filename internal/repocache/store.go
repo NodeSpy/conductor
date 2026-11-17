@@ -20,6 +20,9 @@ import (
 //	<dir>/<repo slug>/<name>/<key>/meta.json   what was published, when, from where
 //	<dir>/<repo slug>/<name>/<key>/data/home/<rel>, data/workspace/<rel>
 //	<dir>/<repo slug>/<name>/<key>/.used       mtime = last restore
+//	<dir>/.warm/<repo slug>-*/                 a warm's checkout and home (scratch)
+//	<dir>/.layers/<run>/home, uses, <slot>/{upper,work}
+//	                                           a run's overlay layers and which caches they sit on
 //
 // A published key directory is immutable: it is built under a dot name and
 // renamed into place, and only ever removed whole (eviction, clear). A
@@ -294,8 +297,8 @@ func (s *Store) Size() int64 {
 // Evict removes least-recently-used caches until the store is within max
 // bytes, never one inUse reports. It returns what it removed.
 func (s *Store) Evict(max int64, inUse func(dir string) bool) []Entry {
-	if max <= 0 {
-		return nil
+	if max < 0 {
+		max = 0 // the space left once scratch is counted: everything unused goes
 	}
 	all := s.List()
 	var total int64

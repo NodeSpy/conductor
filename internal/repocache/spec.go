@@ -135,12 +135,7 @@ var alwaysProtected = []string{
 	".ssh", ".gnupg", ".gitconfig", ".config/git", ".netrc", ".git-credentials",
 	".aws", ".kube", ".docker", ".config/gh", ".bashrc", ".bash_profile", ".bash_login",
 	".profile", ".zshrc", ".zshenv", ".zprofile", ".zlogin", ".config/fish", ".tmp",
-	LayersDir,
 }
-
-// LayersDir is the directory in a home that holds the run's overlay upper
-// layers: conductor's, hidden from the agent.
-const LayersDir = ".conductor-cache-layers"
 
 func overlaps(a, b string) bool {
 	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")

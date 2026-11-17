@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -140,7 +141,7 @@ func TestParsePath(t *testing.T) {
 	for _, bad := range []string{
 		"", "~", "~/", "/abs", "~/../x", "a/../../x", "../x", ".", "~/.", ".git", "a/.git/x", "~root/x",
 		"~/.ssh", "~/.ssh/id", "~/.gitconfig", "~/.config", "~/.config/git", "~/.bashrc", "~/.claude", "~/.claude/x",
-		"~/.claude.json", "~/" + LayersDir, "a,b", "a:b", `a\b`,
+		"~/.claude.json", "a,b", "a:b", `a\b`,
 	} {
 		if p, err := ParsePath(bad, prot); err == nil {
 			t.Errorf("ParsePath(%q) = %v, want refused", bad, p)
@@ -320,32 +321,6 @@ func TestEvictNeverRemovesInUse(t *testing.T) {
 	}
 	if _, err := os.Stat(mid.Dir); err != nil {
 		t.Fatal("an in-use cache was evicted")
-	}
-}
-
-func TestEvictHonoursLiveHomes(t *testing.T) {
-	s := &Store{Dir: t.TempDir()}
-	homes := t.TempDir()
-	e := publish(t, s, "o/r", "a", "k", time.Now().Add(-time.Hour), map[string]string{"f": "x"})
-	layers := filepath.Join(homes, "id@run", LayersDir)
-	if err := os.MkdirAll(layers, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeUses(layers, []string{e.Dir}, nil); err != nil {
-		t.Fatal(err)
-	}
-	m := &Manager{Store: s, MaxSize: 1, HomeRoots: []string{homes}}
-	m.Evict()
-	if _, err := os.Stat(e.Dir); err != nil {
-		t.Fatal("evicted a cache a live home uses")
-	}
-	// The home gone, the cache goes.
-	if err := RemoveAll(filepath.Join(homes, "id@run")); err != nil {
-		t.Fatal(err)
-	}
-	m.Evict()
-	if _, err := os.Stat(e.Dir); err == nil {
-		t.Fatal("not evicted once unused")
 	}
 }
 
@@ -543,7 +518,7 @@ func newHarness(t *testing.T, overlay bool) *harness {
 	}}}
 	h.m = &Manager{
 		Store: &Store{Dir: t.TempDir()}, Recipes: Recipes(nil), Autodetect: true, RepoFileOn: true,
-		Protected: []string{".claude"}, MaxSize: 1 << 30, HomeRoots: []string{h.homes},
+		Protected: []string{".claude"}, MaxSize: 1 << 30,
 		DefaultFile: h.repo.file, Checkout: h.repo.checkout,
 		Overlay: func() (bool, string) { return overlay, "test" },
 		Logf: func(f string, a ...any) {
@@ -740,7 +715,7 @@ func TestRestoreNeverWritesTheStore(t *testing.T) {
 		t.Fatalf("mounts %+v", g.Mounts)
 	}
 	for _, mt := range g.Mounts {
-		if !within(mt.Upper, filepath.Join(req.Home, LayersDir)) || !within(mt.Lower, h.m.Store.Dir) {
+		if !within(mt.Upper, h.m.Store.layersRoot()) || !within(mt.Lower, h.m.Store.Dir) {
 			t.Errorf("mount %+v", mt)
 		}
 		if !within(mt.Target, req.Home) {
@@ -750,10 +725,12 @@ func TestRestoreNeverWritesTheStore(t *testing.T) {
 	if !slices.Contains(g.Env, "GOFLAGS=-modcacherw") || !slices.Contains(g.Env, "GOMODCACHE="+req.Home+"/go/pkg/mod") {
 		t.Errorf("env %v", g.Env)
 	}
-	if len(g.Hide) != 1 || g.Hide[0] != filepath.Join(req.Home, LayersDir) {
-		t.Errorf("hide %v", g.Hide)
-	}
 	after := snapshot(t, h.m.Store.Dir)
+	for p := range after {
+		if within(p, h.m.Store.layersRoot()) {
+			delete(after, p) // the runs' layers and ledger, beside the store's entries
+		}
+	}
 	for p, v := range before {
 		if strings.HasSuffix(p, ".used") {
 			continue
@@ -765,7 +742,7 @@ func TestRestoreNeverWritesTheStore(t *testing.T) {
 	if len(after) != len(before) {
 		t.Errorf("restore added to the store: %d → %d", len(before), len(after))
 	}
-	// The home names what it uses, so eviction keeps it.
+	// Conductor's ledger names what the run uses, so eviction keeps it.
 	if !h.m.InUse(g.Mounts[0].Lower[:strings.Index(g.Mounts[0].Lower, "/data/")]) {
 		t.Error("an overlaid cache is not in use")
 	}
@@ -850,19 +827,6 @@ func TestRestoreRefusesSymlinkAndNonEmptyTargets(t *testing.T) {
 	}
 	if len(g.Mounts) != 1 {
 		t.Errorf("mounts %+v", g.Mounts)
-	}
-	// A layers dir the agent replaced with a symlink is conductor's again.
-	if err := RemoveAll(filepath.Join(req.Home, LayersDir)); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(elsewhere, filepath.Join(req.Home, LayersDir)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.m.Restore(context.Background(), req); err != nil {
-		t.Fatal(err)
-	}
-	if fi, err := os.Lstat(filepath.Join(req.Home, LayersDir)); err != nil || fi.Mode()&os.ModeSymlink != 0 {
-		t.Fatal("the layers dir is still a symlink")
 	}
 	if ents, _ := os.ReadDir(elsewhere); len(ents) != 0 {
 		t.Fatalf("wrote through the symlink: %v", ents)
@@ -1004,5 +968,287 @@ func TestReadInTreeRefusesSymlinks(t *testing.T) {
 	}
 	if b, err := readInTree(t.TempDir(), RepoFileName); err != nil || b != nil {
 		t.Fatalf("absent: %q %v", b, err)
+	}
+}
+
+// A repository's own file grants nothing: the environment it may set is an
+// allow-list of cache-location variables pointing inside the cache's own
+// paths (and GOFLAGS=-modcacherw) — never a checksum, registry, proxy,
+// insecure-transport, toolexec or shell variable.
+func TestRepoFileEnvIsAnAllowList(t *testing.T) {
+	bad := map[string]string{
+		"GOSUMDB": "off", "GONOSUMDB": "*", "GONOSUMCHECK": "1", "GOINSECURE": "*", "GOPRIVATE": "*",
+		"GOFLAGS": "-insecure", "npm_config_registry": "http://evil", "PIP_INDEX_URL": "http://evil",
+		"ZDOTDIR": "{{home}}/.cache/x", "GCONV_PATH": "{{home}}/.cache/x", "GOTOOLCHAIN": "go1.99",
+		"CARGO_HOME": "{{home}}/.cache/x", "GRADLE_USER_HOME": "{{home}}/.cache/x",
+	}
+	for k, v := range bad {
+		f := &RepoFile{Version: 1, Caches: []Cache{{Name: "x", Key: "x", Paths: []string{"~/.cache/x"}, Env: map[string]string{k: v}}}}
+		defs, warn := Resolve(Sources{File: f, Recipes: Bundled()})
+		if len(defs) != 0 || len(warn) == 0 {
+			t.Errorf("repo file set %s=%s: defs %+v", k, v, defs)
+		}
+	}
+	for _, env := range []map[string]string{
+		{"GOFLAGS": "-modcacherw -toolexec=/x"},
+		{"GOMODCACHE": "{{home}}/elsewhere"}, // not one of the cache's paths
+		{"GOMODCACHE": "{{home}}/go/pkg/mod/../../.ssh"},
+		{"GOMODCACHE": "/abs/go/pkg/mod"},
+	} {
+		f := &RepoFile{Version: 1, Caches: []Cache{{Recipe: "go", Env: env}}}
+		defs, _ := Resolve(Sources{File: f, Recipes: Bundled()})
+		if len(defs) != 0 {
+			t.Errorf("repo file override %v kept: %+v", env, defs[0].Env)
+		}
+	}
+	// What a cache needs is still allowed.
+	f := &RepoFile{Version: 1, Caches: []Cache{
+		{Recipe: "go"},
+		{Name: "tools", Key: "t", Paths: []string{"~/.cache/tools", "build/cache"}, Env: map[string]string{
+			"GOCACHE": "{{home}}/.cache/tools/go-build", "GOFLAGS": "-modcacherw", "npm_config_cache": "{{workspace}}/build/cache"}},
+	}}
+	defs, warn := Resolve(Sources{File: f, Recipes: Bundled()})
+	if len(defs) != 2 || len(warn) != 0 {
+		t.Fatalf("allowed env refused: %+v %v", defs, warn)
+	}
+	// The operator's own config is the operator's: not limited this way.
+	defs, _ = Resolve(Sources{Defaults: []Cache{{Name: "x", Key: "x", Paths: []string{"~/.cache/x"}, Env: map[string]string{"GONOSUMDB": "corp.example"}}}})
+	if len(defs) != 1 {
+		t.Fatal("operator env refused")
+	}
+}
+
+// A cache larger than the store's cap is never published (it would be
+// evicted at once, and re-warmed on every miss): the warm is logged once and
+// not run again for that key.
+func TestWarmRefusesACacheOverTheCap(t *testing.T) {
+	h := newHarness(t, true)
+	h.m.MaxSize = 128 << 10
+	h.m.WarmOnMiss = true
+	warm := h.m.Warm
+	goWarms := 0
+	h.m.Warm = func(ctx context.Context, w WarmRun) error {
+		if err := warm(ctx, w); err != nil {
+			return err
+		}
+		if w.Cache == "go" {
+			goWarms++
+			return os.WriteFile(filepath.Join(w.Home, "go", "pkg", "mod", "dep@v1", "big"), make([]byte, 512<<10), 0o644)
+		}
+		return nil
+	}
+	for i := 0; i < 2; i++ {
+		_ = h.m.WarmRepo(context.Background(), "o/r")
+	}
+	for _, e := range h.m.Store.List() {
+		if e.Name == "go" {
+			t.Fatalf("published a cache over the cap: %+v", e)
+		}
+	}
+	if goWarms != 1 {
+		t.Fatalf("the over-cap cache was warmed %d times", goWarms)
+	}
+	// A launch that misses it does not start another warm for it.
+	h.m.mu.Lock()
+	h.m.lastWarm = map[string]time.Time{}
+	h.m.mu.Unlock()
+	checkouts := h.repo.checkouts
+	req, _ := h.run(t, "r1", map[string]string{"go.sum": "default-branch deps\n", "tool.lock": "v1\n"})
+	if _, err := h.m.Restore(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	h.m.Wait()
+	if h.repo.checkouts != checkouts {
+		t.Fatal("a miss on an over-cap key checked the default branch out again")
+	}
+	if goWarms != 1 {
+		t.Fatalf("a miss re-warmed the over-cap cache (%d warms)", goWarms)
+	}
+	n := 0
+	for _, l := range h.logs {
+		if strings.Contains(l, "larger than the store's cap") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("logged %d times: %v", n, h.logs)
+	}
+}
+
+// An overlay's upper and work directories are passed to mount(2) as paths,
+// and the kernel follows a symlink in them. So they are never anywhere an
+// agent can write: not the home, not the workspace, but conductor's own
+// directory beside the store, which no sandbox can see. The home holds
+// nothing of conductor's.
+func TestRestoreKeepsLayersOutOfTheHome(t *testing.T) {
+	h := newHarness(t, true)
+	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := h.run(t, "r1", map[string]string{"go.sum": "default-branch deps\n", "tool.lock": "v1\n"})
+	g, err := h.m.Restore(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Mounts) != 3 {
+		t.Fatalf("mounts %+v", g.Mounts)
+	}
+	for _, mt := range g.Mounts {
+		for _, p := range []string{mt.Upper, mt.Work} {
+			if within(p, req.Home) || within(p, req.Workspace) || !within(p, h.m.Store.Dir) {
+				t.Errorf("layer %s is not conductor's alone", p)
+			}
+			if fi, err := os.Lstat(p); err != nil || !fi.IsDir() {
+				t.Errorf("layer %s: %v", p, err)
+			}
+		}
+	}
+	if ents, _ := os.ReadDir(req.Home); len(ents) != 0 {
+		t.Errorf("the restore wrote into the home: %v", ents)
+	}
+}
+
+// Whether a cache is in use is conductor's own record, never a file an
+// agent can write: a home's forged list does not pin a cache, and a FIFO in
+// its place never blocks eviction.
+func TestInUseNeverReadsAHome(t *testing.T) {
+	h := newHarness(t, true)
+	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	list := h.m.Store.List()
+	if len(list) == 0 {
+		t.Fatal("nothing published")
+	}
+	for i, name := range []string{"forged", "fifo"} {
+		d := filepath.Join(h.homes, name, ".conductor-cache-layers")
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			var b strings.Builder
+			for _, e := range list {
+				b.WriteString(e.Dir + "\n")
+			}
+			write(t, filepath.Join(d, "uses"), b.String())
+		} else if err := syscall.Mkfifo(filepath.Join(d, "uses"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.m.MaxSize = 1
+	done := make(chan bool, 1)
+	go func() {
+		h.m.Evict()
+		done <- true
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("eviction blocked on a file in a home")
+	}
+	if left := h.m.Store.List(); len(left) != 0 {
+		t.Fatalf("a home's forged list pinned %d cache(s)", len(left))
+	}
+}
+
+// The real record still holds: a cache a live home overlays is kept; once
+// the home is gone, the cache and the run's layers go.
+func TestInUseFollowsLiveHomes(t *testing.T) {
+	h := newHarness(t, true)
+	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := h.run(t, "live", map[string]string{"go.sum": "default-branch deps\n", "tool.lock": "v1\n"})
+	g, err := h.m.Restore(context.Background(), req)
+	if err != nil || len(g.Mounts) == 0 {
+		t.Fatalf("%v %+v", err, g)
+	}
+	h.m.MaxSize = 1
+	h.m.Evict()
+	if len(h.m.Store.List()) != 2 {
+		t.Fatal("evicted a cache a live home uses")
+	}
+	if err := RemoveAll(req.Home); err != nil {
+		t.Fatal(err)
+	}
+	if dir := g.Mounts[0].Lower[:strings.Index(g.Mounts[0].Lower, "/data/")]; h.m.InUse(dir) {
+		t.Fatal("in use after its home went")
+	}
+	h.m.Evict()
+	if left := h.m.Store.List(); len(left) != 0 {
+		t.Fatalf("kept %d cache(s) after the home went", len(left))
+	}
+	for _, mt := range g.Mounts {
+		if _, err := os.Lstat(mt.Upper); err == nil {
+			t.Errorf("the run's layer %s outlived its home", mt.Upper)
+		}
+	}
+}
+
+// Warm scratch never outlives the daemon: a leftover from a run that died
+// is swept when the manager starts, a warm in flight is cancelled when it
+// stops, and scratch counts toward the store's cap.
+func TestWarmScratchIsBounded(t *testing.T) {
+	h := newHarness(t, true)
+	stale := filepath.Join(h.m.Store.Dir, ".warm", "o~r-dead", "tree")
+	write(t, filepath.Join(stale, "f"), "left by a daemon that died mid-warm")
+	started, stopped := make(chan bool, 1), make(chan error, 1)
+	h.m.Warm = func(ctx context.Context, w WarmRun) error {
+		select {
+		case started <- true:
+		default:
+		}
+		<-ctx.Done()
+		stopped <- ctx.Err()
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	ran := make(chan bool)
+	go func() { h.m.Run(ctx); close(ran) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Lstat(filepath.Dir(stale)); err != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a dead warm's scratch was not swept at start")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	h.m.WarmAsync("o/r")
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the warm did not start")
+	}
+	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stopping the manager did not cancel the warm")
+	}
+	select {
+	case <-ran:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	if ents, _ := os.ReadDir(filepath.Join(h.m.Store.Dir, ".warm")); len(ents) != 0 {
+		t.Fatalf("warm scratch left after stop: %v", ents)
+	}
+
+	// Scratch counts toward the cap.
+	h2 := newHarness(t, true)
+	if err := h2.m.WarmRepo(context.Background(), "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, e := range h2.m.Store.List() {
+		total += e.Size
+	}
+	write(t, filepath.Join(h2.m.Store.Dir, ".warm", "o~r-x", "big"), strings.Repeat("x", 1<<20))
+	h2.m.MaxSize = total + 64<<10
+	h2.m.Evict()
+	if len(h2.m.Store.List()) == 2 {
+		t.Fatal("scratch did not count toward the cap")
 	}
 }

@@ -14,7 +14,20 @@ func TestSandboxCachesDefaultsAndKnobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	var c *SandboxCaches
-	if !cfg.CachesOn() || !c.AutodetectOn() || !c.RepoFileOn() || !c.WarmOnMissOn() || c.MaxSizeBytes() != DefaultCachesMax ||
+	// Off unless configured: an upgrade never starts warms, disk use or
+	// fetches on a config that did not ask for them.
+	if cfg.CachesOn() {
+		t.Fatal("caches on without sandbox.caches.enabled")
+	}
+	for _, y := range []string{"sandbox:\n  caches: {}\n", "sandbox:\n  caches: { max_size: 1GiB }\n", "sandbox:\n  caches: { enabled: false }\n"} {
+		if c2, err := loadCfg(t, base+y); err != nil || c2.CachesOn() {
+			t.Fatalf("%q: on=%v err=%v", y, c2 != nil && c2.CachesOn(), err)
+		}
+	}
+	if c2, err := loadCfg(t, base+"sandbox:\n  caches: { enabled: true }\n"); err != nil || !c2.CachesOn() {
+		t.Fatalf("enabled: true is off (%v)", err)
+	}
+	if !c.AutodetectOn() || !c.RepoFileOn() || !c.WarmOnMissOn() || c.MaxSizeBytes() != DefaultCachesMax ||
 		c.WarmEveryDur() != 0 || c.WarmTimeoutDur() != 20*time.Minute {
 		t.Fatal("defaults")
 	}

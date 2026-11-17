@@ -175,14 +175,24 @@ func (p Policy) Validate() error {
 		}
 	}
 	for _, c := range p.Caches {
-		// A cache is shown only in the home or the workspace, its layers
-		// only from conductor's own directory in the home.
+		// A cache is shown only in the home or the workspace. Its upper and
+		// work directories reach mount(2) as paths, which follows a
+		// symlink: they are never anywhere the agent can write.
 		if !filepath.IsAbs(c.Target) || !(within(c.Target, p.Home) || within(c.Target, p.Workspace)) || c.Target == p.Home || c.Target == p.Workspace {
 			return fmt.Errorf("agentsandbox: cache target %q is not inside the home or the workspace", c.Target)
 		}
-		layers := filepath.Join(p.Home, repocache.LayersDir)
-		if !within(c.Upper, layers) || !within(c.Work, layers) || c.Upper == layers || c.Work == layers {
-			return fmt.Errorf("agentsandbox: cache layers %q, %q are not conductor's", c.Upper, c.Work)
+		if c.Upper == c.Work {
+			return fmt.Errorf("agentsandbox: cache upper and work directories are one: %q", c.Upper)
+		}
+		for _, l := range []string{c.Upper, c.Work} {
+			if !filepath.IsAbs(l) || filepath.Clean(l) != l {
+				return fmt.Errorf("agentsandbox: cache layer %q is not a clean absolute path", l)
+			}
+			for _, w := range append([]string{p.Home, p.Workspace}, p.ReadWrite...) {
+				if w != "" && (l == w || within(l, w) || within(w, l)) {
+					return fmt.Errorf("agentsandbox: cache layer %q overlaps %q, which the agent can write", l, w)
+				}
+			}
 		}
 		if !filepath.IsAbs(c.Lower) || within(c.Lower, p.Home) || within(c.Lower, p.Workspace) {
 			return fmt.Errorf("agentsandbox: cache lower layer %q may not be in the home or the workspace", c.Lower)

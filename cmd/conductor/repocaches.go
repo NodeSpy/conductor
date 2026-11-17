@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -33,7 +32,6 @@ func repoCacheManager(cfg *config.Config, gitProv *gitwt.Provisioner, logf func(
 		WarmOnMiss:  c.WarmOnMissOn(),
 		WarmEvery:   c.WarmEveryDur(),
 		WarmTimeout: c.WarmTimeoutDur(),
-		HomeRoots:   cacheHomeRoots(cfg),
 		Logf:        logf,
 	}
 	if c != nil {
@@ -50,25 +48,29 @@ func repoCacheManager(cfg *config.Config, gitProv *gitwt.Provisioner, logf func(
 	return m
 }
 
-// cacheHomeRoots are the directories whose children are agent homes: the
-// per-dispatch homes and the identity homes.
-func cacheHomeRoots(cfg *config.Config) []string {
-	root := cfg.SandboxStateDir()
-	return []string{filepath.Join(root, ".dispatch-homes"), root}
-}
-
 // wireRepoCaches turns repository caches on for the agent sandbox's
 // launches: the resolver restores them, and the manager evicts and (when
-// configured) re-warms on a schedule until ctx ends.
-func wireRepoCaches(ctx context.Context, cfg *config.Config, gitProv *gitwt.Provisioner, logf func(string, ...any)) {
+// configured) re-warms on a schedule until ctx ends. The returned stop
+// cancels any warm in flight and waits (briefly) for it to clean up.
+func wireRepoCaches(ctx context.Context, cfg *config.Config, gitProv *gitwt.Provisioner, logf func(string, ...any)) (stop func()) {
 	m := repoCacheManager(cfg, gitProv, logf)
 	if sandboxResolver.Load() == nil || m == nil {
 		repoCaches.Store(nil)
-		return
+		return func() {}
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := m.Start(ctx)
 	repoCaches.Store(&repoCacheWiring{m: m, ctx: ctx, logf: logf})
 	logf("repo caches: on (store %s, cap %s, autodetect %v, repo file %v)", m.Store.Dir, capString(m.MaxSize), m.Autodetect, m.RepoFileOn)
-	go m.Run(ctx)
+	return func() {
+		repoCaches.Store(nil)
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			logf("repo caches: a warm was still stopping 30s after shutdown began")
+		}
+	}
 }
 
 // repoCaches is the daemon's cache manager (nil: off), read by the

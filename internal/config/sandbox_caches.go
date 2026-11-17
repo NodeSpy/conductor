@@ -20,7 +20,9 @@ import (
 // defaults, the repository's own .conductor.yaml (default branch only), and
 // the recipes autodetected in the checkout.
 type SandboxCaches struct {
-	// Enabled turns caches on (default on with the agent sandbox).
+	// Enabled turns caches on (default off: an upgrade never starts warms,
+	// disk use or fetches a config did not ask for). They need the agent
+	// sandbox.
 	Enabled *bool `yaml:"enabled,omitempty"`
 	// Dir is the cache store (default <state dir>/repo-caches).
 	Dir string `yaml:"dir,omitempty" path:"local"`
@@ -54,7 +56,7 @@ func (c *Config) CachesOn() bool {
 		return false
 	}
 	s := c.Sandbox
-	return s == nil || s.Caches == nil || s.Caches.Enabled == nil || *s.Caches.Enabled
+	return s != nil && s.Caches != nil && s.Caches.Enabled != nil && *s.Caches.Enabled
 }
 
 // CachesDir is the cache store.

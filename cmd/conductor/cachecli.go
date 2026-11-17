@@ -48,14 +48,14 @@ func cmdSandboxCaches(args []string) int {
 		return 1
 	}
 	st := &repocache.Store{Dir: cfg.CachesDir()}
-	used := repocache.UsedDirs(cacheHomeRoots(cfg))
+	used := st.Used()
 	if !clear {
 		if len(pos) > 0 {
 			fmt.Fprintf(os.Stderr, "conductor sandbox caches: unexpected %q\n%s", pos[0], cachesUsage)
 			return 2
 		}
 		if !cfg.CachesOn() {
-			fmt.Println("repository caches are off (sandbox.caches.enabled: false, or the agent sandbox is off)")
+			fmt.Println("repository caches are off (sandbox.caches.enabled is not true, or the agent sandbox is off)")
 		}
 		return printCaches(st, used)
 	}
