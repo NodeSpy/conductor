@@ -45,6 +45,8 @@ func RunCacheWarm(ctx context.Context, w repocache.WarmRun) error {
 	cmd := exec.Command(launch.Argv[0], launch.Argv[1:]...)
 	cmd.Env, cmd.Dir = launch.Env, launch.Dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	unlock := warmDeathSignal(cmd.SysProcAttr)
+	defer unlock()
 	out := &tailBuffer{max: 4096}
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.WaitDelay = 10 * time.Second

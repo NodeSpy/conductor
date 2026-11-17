@@ -18,7 +18,8 @@ repository's .conductor.yaml, or autodetect).
 
 clear removes a repository's caches, one named cache, or one key. A cache a
 running launch has an overlay on is kept unless --force (the launch
-keeps the files it has open; a later lookup in it fails).
+keeps the files it has open; a later lookup in it fails). It also forgets
+that a cleared key's last warm was over max_size, so it is warmed again.
 `
 
 // cmdSandboxCaches is `conductor sandbox caches`.
@@ -71,7 +72,16 @@ func cmdSandboxCaches(args []string) int {
 	n, kept, failed := 0, 0, false
 	// What is in use and its removal are one critical section with the
 	// daemon's restores: a launch never gets a cache being removed.
+	name, key := "", ""
+	if len(pos) > 1 {
+		name = pos[1]
+	}
+	if len(pos) > 2 {
+		key = pos[2]
+	}
 	st.Locked(func() {
+		// A cleared key that was over the cap is warmed again.
+		st.ClearMarks(repo, name, key)
 		used := st.Used()
 		for _, e := range st.List() {
 			if e.Repo != repo || (len(pos) > 1 && e.Name != pos[1]) || (len(pos) > 2 && e.Key != pos[2]) {

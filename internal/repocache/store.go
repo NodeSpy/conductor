@@ -36,6 +36,8 @@ type Store struct {
 	LaunchGrace time.Duration
 
 	mu sync.Mutex
+	// testHook is called at points tests interleave with.
+	testHook func(point string)
 }
 
 // Meta is a published cache's record.

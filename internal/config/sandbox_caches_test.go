@@ -109,3 +109,24 @@ func TestSandboxCachesRefused(t *testing.T) {
 		}
 	}
 }
+
+// The cache store holds launches' overlay layers, which mount(2) takes as
+// paths: a config whose fs: grant shows it (or a directory above it) to
+// launches — cached or not — is refused.
+func TestCachesDirUnderAnFSGrantIsRefused(t *testing.T) {
+	const base = "connectors:\n  gh: { use: github, token: x, repos: [\"acme/*\"] }\nsandbox:\n  caches: { enabled: true, dir: /srv/caches/store }\n"
+	if _, err := loadCfg(t, base+"engines: { e: { isolation: { mode: namespace, fs: [/srv/media] } } }\n"); err != nil {
+		t.Fatalf("an unrelated fs: grant: %v", err)
+	}
+	for _, grant := range []string{"/srv/caches", "/srv/caches/store", "/srv/caches/store/.layers"} {
+		_, err := loadCfg(t, base+"engines: { e: { isolation: { mode: namespace, fs: ["+grant+"] } } }\n")
+		if err == nil || !strings.Contains(err.Error(), "sandbox.caches.dir") {
+			t.Errorf("fs: [%s]: %v", grant, err)
+		}
+	}
+	// Caches off: nothing to protect.
+	off := strings.Replace(base, "enabled: true", "enabled: false", 1)
+	if _, err := loadCfg(t, off+"engines: { e: { isolation: { mode: namespace, fs: [/srv/caches] } } }\n"); err != nil {
+		t.Fatalf("caches off: %v", err)
+	}
+}

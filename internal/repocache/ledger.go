@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -156,13 +157,28 @@ func (s *Store) Used() map[string]bool {
 
 // sweepLaunches removes the layers and ledger entry of every launch that
 // has ended (its lock free, past the grace) without removing its own.
+// The launch's lock is held exclusively through the removal: a launch
+// that takes its lock meanwhile waits, then finds its entry gone (and runs
+// without its caches) rather than lose its layers under it.
 func (s *Store) sweepLaunches() {
 	for _, l := range s.launches() {
-		if !l.live {
-			_ = RemoveAll(l.dir)
+		if l.live {
+			continue
 		}
+		release, ok := tryLock(filepath.Join(l.dir, launchLockFile))
+		if !ok {
+			continue
+		}
+		if s.testHook != nil {
+			s.testHook("sweep-locked")
+		}
+		_ = RemoveAll(l.dir)
+		release()
 	}
 }
+
+// errSwept is a launch lock taken after its entry was swept.
+var errSwept = errors.New("the launch's cache layers were swept")
 
 // tooBigMark is the file marking a key whose warm left more than the cap.
 func (s *Store) tooBigMark(repo, name, key string) string {
@@ -170,14 +186,44 @@ func (s *Store) tooBigMark(repo, name, key string) string {
 	return filepath.Join(s.Dir, tooBigDirName, hex.EncodeToString(h[:16]))
 }
 
-func (s *Store) markTooBig(repo, name, key string) {
+// markTooBig records that key's warm left size bytes, more than the cap.
+func (s *Store) markTooBig(repo, name, key string, size int64) {
 	p := s.tooBigMark(repo, name, key)
 	if os.MkdirAll(filepath.Dir(p), 0o700) == nil {
-		_ = os.WriteFile(p, []byte(repo+" "+name+" "+key+"\n"), 0o600)
+		_ = writeAtomic(p, []byte(fmt.Sprintf("%s %s %s %d\n", repo, name, key, size)))
 	}
 }
 
-func (s *Store) isTooBig(repo, name, key string) bool {
-	_, err := os.Lstat(s.tooBigMark(repo, name, key))
-	return err == nil
+// isTooBig reports a key whose last warm left more than max (the cap now):
+// a raised cap, or none, lets it warm again.
+func (s *Store) isTooBig(repo, name, key string, max int64) bool {
+	b, err := os.ReadFile(s.tooBigMark(repo, name, key))
+	if err != nil || max <= 0 {
+		return false
+	}
+	f := strings.Fields(string(b))
+	if len(f) != 4 {
+		return false
+	}
+	size, err := strconv.ParseInt(f[3], 10, 64)
+	return err == nil && size > max
+}
+
+// ClearMarks removes the over-cap marks of repo's caches (of one name, and
+// one key, when given), so they are warmed again.
+func (s *Store) ClearMarks(repo, name, key string) {
+	dir := filepath.Join(s.Dir, tooBigDirName)
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		p := filepath.Join(dir, e.Name())
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		f := strings.Fields(string(b))
+		if len(f) < 3 || f[0] != repo || (name != "" && f[1] != name) || (key != "" && f[2] != key) {
+			continue
+		}
+		_ = os.Remove(p)
+	}
 }

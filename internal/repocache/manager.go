@@ -60,6 +60,9 @@ type Manager struct {
 	lastWarm map[string]time.Time
 	files    map[string]repoFileCache
 	warned   map[string]bool
+	// noRoom holds keys whose warm fitted the cap but not the room beside
+	// the caches in use, with the size they need.
+	noRoom map[string]int64
 	// testHook is called at points tests interleave with.
 	testHook func(point string)
 	wg       sync.WaitGroup
@@ -131,6 +134,7 @@ func (m *Manager) init() {
 		m.lastWarm = map[string]time.Time{}
 		m.files = map[string]repoFileCache{}
 		m.warned = map[string]bool{}
+		m.noRoom = map[string]int64{}
 	}
 }
 
@@ -209,16 +213,56 @@ func (m *Manager) Restore(ctx context.Context, r Request) (Grant, error) {
 	if len(defs) == 0 {
 		return g, nil
 	}
+	// Keys are rendered over the checkout before the store's lock: hashing a
+	// large tree never holds up another repository's launches.
+	plans := make([]restorePlan, 0, len(defs))
+	for _, d := range defs {
+		pl := restorePlan{d: d}
+		if m.testHook != nil {
+			m.testHook("key")
+		}
+		if pl.key, pl.err = RenderKey(d.Key, r.Workspace); pl.err == nil {
+			for _, t := range d.RestoreKeys {
+				if p, err := renderPrefix(t, r.Workspace); err == nil {
+					pl.prefixes = append(pl.prefixes, p)
+				}
+			}
+		}
+		plans = append(plans, pl)
+	}
 	overlay, why := m.overlay()
 	var err error
+	var copies []copyJob
 	needWarm := false
 	// The lookup and the record of what this launch uses are one critical
 	// section with eviction: a cache found here is never one being removed.
+	// A copy restore pins its entry here and copies after the lock.
 	m.Store.Locked(func() {
-		g, needWarm, err = m.restoreLocked(r, defs, overlay, why)
+		g, copies, needWarm, err = m.restoreLocked(r, plans, overlay)
 	})
 	if err != nil {
 		return Grant{}, err
+	}
+	for _, j := range copies {
+		n := 0
+		for _, it := range j.items {
+			if m.testHook != nil {
+				m.testHook("copy")
+			}
+			if err := m.copyIn(it.lower, it.base, it.target); err != nil {
+				m.logf("repo cache %s %s: %s not restored: %v", r.Repo, j.d.Name, it.p, err)
+				continue
+			}
+			n++
+		}
+		m.unpin(j.e.Dir)
+		if n > 0 {
+			note := ""
+			if why != "" {
+				note = " — " + why
+			}
+			m.logf("repo cache %s %s (%s): %s %s for %s, %d path(s) by copy%s (run %s)", r.Repo, j.d.Name, j.d.Origin, j.kind, j.e.Key, j.key, n, note, r.Run)
+		}
 	}
 	if needWarm && m.WarmOnMiss {
 		m.WarmAsync(r.Repo)
@@ -226,7 +270,30 @@ func (m *Manager) Restore(ctx context.Context, r Request) (Grant, error) {
 	return g, nil
 }
 
-func (m *Manager) restoreLocked(r Request, defs []Def, overlay bool, why string) (g Grant, needWarm bool, err error) {
+// restorePlan is one cache's key, rendered before the store's lock.
+type restorePlan struct {
+	d        Def
+	key      string
+	prefixes []string
+	err      error
+}
+
+// copyJob is a copy restore found under the store's lock (its entry
+// pinned) and done after it.
+type copyJob struct {
+	d     Def
+	e     Entry
+	kind  string
+	key   string
+	items []copyItem
+}
+
+type copyItem struct {
+	p                   Path
+	lower, base, target string
+}
+
+func (m *Manager) restoreLocked(r Request, plans []restorePlan, overlay bool) (g Grant, copies []copyJob, needWarm bool, err error) {
 	// The launch's overlay layers and ledger entry are its own, beside the
 	// store: mount(2) takes the upper and work directories as paths and
 	// follows a symlink in them, so they are never where an agent can
@@ -234,37 +301,37 @@ func (m *Manager) restoreLocked(r Request, defs []Def, overlay bool, why string)
 	var launch string
 	if overlay {
 		if launch, err = m.Store.newLaunch(r.Home); err != nil {
-			return Grant{}, false, fmt.Errorf("repo cache: %w", err)
+			return Grant{}, nil, false, fmt.Errorf("repo cache: %w", err)
 		}
+	}
+	fail := func(err error) (Grant, []copyJob, bool, error) {
+		if launch != "" {
+			_ = RemoveAll(launch)
+		}
+		for _, j := range copies {
+			m.unpin(j.e.Dir)
+		}
+		return Grant{}, nil, false, err
 	}
 	var used []string
 	var targets []string
-	for _, d := range defs {
+	for _, pl := range plans {
+		d, key := pl.d, pl.key
 		g.Env = append(g.Env, d.ExpandEnv(r.Home, r.Workspace)...)
-		key, err := RenderKey(d.Key, r.Workspace)
-		if err != nil {
-			m.logf("repo cache %s %s: key: %v (not restored)", r.Repo, d.Name, err)
+		if pl.err != nil {
+			m.logf("repo cache %s %s: key: %v (not restored)", r.Repo, d.Name, pl.err)
 			continue
 		}
-		var prefixes []string
-		for _, t := range d.RestoreKeys {
-			if p, err := renderPrefix(t, r.Workspace); err == nil {
-				prefixes = append(prefixes, p)
-			}
-		}
-		e, kind, ok := m.Store.Lookup(r.Repo, d.Name, key, prefixes)
+		e, kind, ok := m.Store.Lookup(r.Repo, d.Name, key, pl.prefixes)
 		if !ok {
 			m.logf("repo cache %s %s (%s): miss for %s (run %s)", r.Repo, d.Name, d.Origin, key, r.Run)
-			needWarm = needWarm || (d.Warm != "" && !m.Store.isTooBig(r.Repo, d.Name, key))
+			needWarm = needWarm || m.wantWarm(r.Repo, d, key)
 			continue
 		}
 		if kind != Exact {
-			needWarm = needWarm || (d.Warm != "" && !m.Store.isTooBig(r.Repo, d.Name, key))
+			needWarm = needWarm || m.wantWarm(r.Repo, d, key)
 		}
-		mode := "overlay"
-		if !overlay {
-			mode = "copy"
-		}
+		job := copyJob{d: d, e: e, kind: kind, key: key}
 		n := 0
 		for _, p := range d.ParsedPaths(m.Protected) {
 			lower := e.Lower(p)
@@ -280,44 +347,42 @@ func (m *Manager) restoreLocked(r Request, defs []Def, overlay bool, why string)
 				m.logf("repo cache %s %s: %s overlaps %s of another cache (skipped)", r.Repo, d.Name, p, clash)
 				continue
 			}
-			if _, err := safeTarget(base, target); err != nil {
+			if !overlay {
+				job.items = append(job.items, copyItem{p: p, lower: lower, base: base, target: target})
+				targets = append(targets, target)
+				continue
+			}
+			if err := prepareTarget(base, target, false); err != nil {
 				m.logf("repo cache %s %s: %s not restored: %v", r.Repo, d.Name, p, err)
 				continue
 			}
-			if overlay {
-				slot := filepath.Join(launch, slotName(e.Dir, p))
-				if err := m.slot(slot); err != nil {
-					_ = RemoveAll(launch)
-					return Grant{}, false, fmt.Errorf("repo cache: %s: %w", slot, err)
-				}
-				g.Mounts = append(g.Mounts, Mount{Target: target, Lower: lower,
-					Upper: filepath.Join(slot, "upper"), Work: filepath.Join(slot, "work")})
-			} else if err := m.copyIn(e, lower, base, target); err != nil {
-				m.logf("repo cache %s %s: %s not restored: %v", r.Repo, d.Name, p, err)
-				continue
+			slot := filepath.Join(launch, slotName(e.Dir, p))
+			if err := m.slot(slot); err != nil {
+				return fail(fmt.Errorf("repo cache: %s: %w", slot, err))
 			}
+			g.Mounts = append(g.Mounts, Mount{Target: target, Lower: lower,
+				Upper: filepath.Join(slot, "upper"), Work: filepath.Join(slot, "work")})
 			targets = append(targets, target)
 			n++
+		}
+		if len(job.items) > 0 {
+			m.pin(e.Dir)
+			copies = append(copies, job)
+			m.Store.Touch(e)
+			continue
 		}
 		if n == 0 {
 			continue
 		}
-		if overlay {
-			used = append(used, e.Dir)
-		}
+		used = append(used, e.Dir)
 		m.Store.Touch(e)
-		note := ""
-		if !overlay && why != "" {
-			note = " — " + why
-		}
-		m.logf("repo cache %s %s (%s): %s %s for %s, %d path(s) by %s%s (run %s)", r.Repo, d.Name, d.Origin, kind, e.Key, key, n, mode, note, r.Run)
+		m.logf("repo cache %s %s (%s): %s %s for %s, %d path(s) by overlay (run %s)", r.Repo, d.Name, d.Origin, kind, e.Key, key, n, r.Run)
 	}
 	if launch != "" {
 		if len(g.Mounts) == 0 {
 			_ = RemoveAll(launch)
 		} else if err := writeUses(launch, used); err != nil {
-			_ = RemoveAll(launch)
-			return Grant{}, false, err
+			return fail(err)
 		} else {
 			g.Lock = LaunchLock(launch)
 		}
@@ -325,7 +390,7 @@ func (m *Manager) restoreLocked(r Request, defs []Def, overlay bool, why string)
 	if m.testHook != nil {
 		m.testHook("restored")
 	}
-	return g, needWarm, nil
+	return g, copies, needWarm, nil
 }
 
 func (m *Manager) overlay() (bool, string) {
@@ -360,21 +425,14 @@ func overlapsAny(p string, list []string) string {
 	return ""
 }
 
-// copyIn clones (or, under CopyMax, copies) a cache path into target.
-func (m *Manager) copyIn(e Entry, lower, base, target string) error {
-	m.pin(e.Dir)
-	defer m.unpin(e.Dir)
-	exists, err := safeTarget(base, target)
-	if err != nil {
+// copyIn clones (or, under CopyMax, copies) a cache path into target,
+// replacing what the target held. Its entry is pinned by the caller.
+func (m *Manager) copyIn(lower, base, target string) error {
+	if err := prepareTarget(base, target, true); err != nil {
 		return err
 	}
-	if err := mkdirUnder(base, filepath.Dir(target)); err != nil {
+	if err := os.Remove(target); err != nil {
 		return err
-	}
-	if exists {
-		if err := os.Remove(target); err != nil {
-			return err
-		}
 	}
 	if cloneDir(lower, target) {
 		return nil
@@ -556,7 +614,7 @@ func (m *Manager) warmOne(ctx context.Context, repo, commit, tree, tmp string, d
 		m.logf("repo cache %s %s: %s is up to date (default branch %s)", repo, d.Name, key, short(commit))
 		return nil
 	}
-	if m.Store.isTooBig(repo, d.Name, key) {
+	if m.Store.isTooBig(repo, d.Name, key, m.MaxSize) || m.waitingForRoom(repo, d.Name, key, tmp) {
 		return nil
 	}
 	home := filepath.Join(tmp, "home-"+d.Name)
@@ -606,14 +664,18 @@ func (m *Manager) warmOne(ctx context.Context, repo, commit, tree, tmp string, d
 		}
 		if size > m.MaxSize {
 			// Never fits: marked in the store, so no daemon warms it again.
-			m.Store.markTooBig(repo, d.Name, key)
+			m.Store.markTooBig(repo, d.Name, key, size)
 			m.logf("repo cache %s %s: %s is %s, larger than the store's cap (%s): not published, and not warmed again", repo, d.Name, key, HumanSize(size), HumanSize(m.MaxSize))
 			return nil
 		}
 		if room := m.room(tmp); size > room {
 			// Would fit, but not beside what live launches use now: not
-			// published, and not marked — a later warm may find room.
-			m.logf("repo cache %s %s: %s is %s, more than the room left beside the caches in use (%s): not published now", repo, d.Name, key, HumanSize(size), HumanSize(max(room, 0)))
+			// published, and not warmed again until there is room for it.
+			m.mu.Lock()
+			m.init()
+			m.noRoom[repo+"\x00"+d.Name+"\x00"+key] = size
+			m.mu.Unlock()
+			m.logf("repo cache %s %s: %s is %s, more than the room left beside the caches in use (%s): not published until there is room", repo, d.Name, key, HumanSize(size), HumanSize(max(room, 0)))
 			return nil
 		}
 	}
@@ -625,6 +687,9 @@ func (m *Manager) warmOne(ctx context.Context, repo, commit, tree, tmp string, d
 		}
 		return nil
 	})
+	m.mu.Lock()
+	delete(m.noRoom, repo+"\x00"+d.Name+"\x00"+key)
+	m.mu.Unlock()
 	if errors.Is(err, ErrExists) {
 		return nil
 	}
@@ -732,6 +797,22 @@ func (m *Manager) knownRepos() []string {
 	return out
 }
 
+// wantWarm reports whether a miss (or partial hit) of key should warm it:
+// it has a warm command, its last warm did not leave more than the cap,
+// and it is not waiting for room beside the caches in use.
+func (m *Manager) wantWarm(repo string, d Def, key string) bool {
+	return d.Warm != "" && !m.Store.isTooBig(repo, d.Name, key, m.MaxSize) && !m.waitingForRoom(repo, d.Name, key, "")
+}
+
+// waitingForRoom reports a key whose last warm fitted the cap but not the
+// room left beside the caches in use, while there is still not room for it.
+func (m *Manager) waitingForRoom(repo, name, key, own string) bool {
+	m.mu.Lock()
+	need, ok := m.noRoom[repo+"\x00"+name+"\x00"+key]
+	m.mu.Unlock()
+	return ok && m.MaxSize > 0 && m.room(own) < need
+}
+
 // room is what the cap leaves beside the caches live launches use and the
 // warm scratch of other warms (own is this warm's, its output in it).
 func (m *Manager) room(own string) int64 {
@@ -742,7 +823,10 @@ func (m *Manager) room(own string) int64 {
 			inUse += e.Size
 		}
 	}
-	scratch := DiskUsage(m.Store.warmRoot()) - DiskUsage(own)
+	scratch := DiskUsage(m.Store.warmRoot())
+	if own != "" {
+		scratch -= DiskUsage(own)
+	}
 	return m.MaxSize - inUse - scratch
 }
 

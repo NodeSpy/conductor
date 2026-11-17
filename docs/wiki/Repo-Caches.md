@@ -40,6 +40,14 @@ repository it trusts (a dispatch's PR or branch worktree):
      the launch ends. A cache at a path that cannot be shown (for example
      under `~/.cache` when `persist: cache` links it elsewhere) is skipped
      and logged; the launch runs without that cache, never fails for it.
+   - **A path that already has content** (a kept home, `persist: home`,
+     whose earlier launch missed and filled `~/go/pkg/mod` itself) still
+     gets the cache. An overlay is mounted over it: the home's own files
+     are hidden for the launch and left as they were. A copy replaces
+     them. A file found where the cache or a directory on its way should
+     be is moved aside, to `<name>.conductor-moved-<random>`, and a
+     directory made in its place. A symlink on the way is never followed
+     or replaced: that cache is skipped for the launch.
    - **macOS:** a copy-on-write clone (APFS `clonefile`) into the home or
      workspace. It costs almost no disk until the run changes a file.
    - **Neither available** (a kernel before 5.11 or a filesystem overlay
@@ -110,13 +118,21 @@ low-disk guard watches the store's filesystem as well as the home's and
 the workspace's.
 
 A warm whose output is larger than the cap is not published, because it
-would be evicted straight away. The log says so once, and the store keeps a
-mark so that key is not warmed again, across restarts. A warm that fits the
-cap but not the room the caches in use leave is not published this time,
-and is tried again later.
+would be evicted straight away. The log says so, and the store keeps a mark
+with the size, so that key is not warmed again, across restarts, while the
+cap is smaller than that. Raising `max_size` (or setting it `off`) lets it
+warm again; so does `conductor sandbox caches clear` for that repository,
+cache or key. A warm that fits the cap but not the room the caches in use
+leave is not published, and not warmed again until there is room for it.
 
-A warm in flight is cancelled when the daemon stops. Scratch left by a daemon
-that died mid-warm is removed when the next one starts.
+A warm in flight is cancelled when the daemon stops, and on Linux killed if
+the daemon dies. Scratch left by a daemon that died mid-warm is removed when
+the next one starts.
+
+`sandbox.caches.dir` must not be inside, equal to or above any `fs:` path
+of an `isolation:` block: the store holds the launches' overlay layers, and
+a launch that can see them could redirect a mount. Such a config is refused
+at load.
 
 ## Where definitions come from
 
@@ -270,7 +286,8 @@ $ conductor sandbox caches clear acme/app go         # one cache
 $ conductor sandbox caches clear acme/app go KEY     # one key
 ```
 
-`clear` keeps a cache that a running launch has an overlay on, unless
+`clear` also forgets that a cleared key's warm was over `max_size`. It keeps
+a cache that a running launch has an overlay on, unless
 you pass `--force`.
 
 ## With the package proxy

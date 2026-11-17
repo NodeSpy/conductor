@@ -47,7 +47,29 @@ func LockShared(p string) (release func(), err error) {
 		f.Close()
 		return func() {}, err
 	}
+	// A sweep removes an ended launch's entry holding its lock: one taken
+	// after is on a file that is gone, and its layers with it.
+	var held, now unix.Stat_t
+	if unix.Fstat(int(f.Fd()), &held) != nil || unix.Stat(p, &now) != nil || held.Ino != now.Ino || held.Dev != now.Dev || held.Nlink == 0 {
+		f.Close()
+		return func() {}, errSwept
+	}
 	return func() { f.Close() }, nil
+}
+
+// tryLock takes p's lock exclusively if no one holds it. ok is false
+// while someone does; a lock file that is gone is no one's (ok, nothing
+// to release).
+func tryLock(p string) (release func(), ok bool) {
+	f, err := os.OpenFile(p, os.O_RDWR, 0)
+	if err != nil {
+		return func() {}, os.IsNotExist(err)
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		f.Close()
+		return func() {}, false
+	}
+	return func() { f.Close() }, true
 }
 
 // lockHeld reports p's lock held by someone (a live launch).

@@ -229,3 +229,87 @@ echo B-ok`)
 		t.Fatalf("layers outlived their launches: %v", ents)
 	}
 }
+
+// A kept home (persist: home) whose first launch missed and filled
+// ~/go/pkg/mod itself gets the cache on its next launch, once published —
+// and an agent planting a file there does not turn it off.
+func TestSandboxKeptHomeGetsTheCacheAfterAMiss(t *testing.T) {
+	root := requireSandbox(t)
+	ws := filepath.Join(root, "ws")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := &repocache.Store{Dir: filepath.Join(root, "caches")}
+	t.Cleanup(func() { _ = repocache.RemoveAll(store.Dir) })
+	if err := os.MkdirAll(store.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if ok, why := repocache.OverlayUsable(store.Dir, filepath.Join(store.Dir, ".layers")); !ok {
+		t.Skipf("no overlay here: %s", why)
+	}
+	m := &repocache.Manager{Store: store, MaxSize: 1 << 30,
+		Repos: map[string][]repocache.Cache{"o/r": {{Name: "go", Key: "k1", Paths: []string{"~/go/pkg/mod"}}}}}
+	lastSweep.Store(time.Now().Unix())
+	r := &Resolver{Registry: &Registry{}, StateRoot: filepath.Join(root, "st"), GOOS: "linux", Persist: PersistHome,
+		RunLive: func(string) bool { return true },
+		Caches: func(req repocache.Request) repocache.Grant {
+			g, err := m.Restore(context.Background(), req)
+			if err != nil {
+				t.Errorf("restore: %v", err)
+			}
+			return g
+		}}
+	pm := sandbox.NewProxyManager(nil)
+	defer pm.Close()
+	run := func(dispatch, script string) (Policy, string) {
+		pol, err := r.PolicyForEntry(Entry{Workspace: ws, Identity: "bot:o/r", Dispatch: dispatch, Repo: "o/r"}, "claude", nil, skill.ProcessAnchor{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pol.Detect, pol.Limits = DetectSpec{Action: DetectOff}, LimitSpec{Off: true}
+		l, err := Wrap(pol, []string{"/bin/sh", "-c", script}, Deps{
+			SelfExe: selfConductor(t), EgressUnix: pm.UnixEndpoint, EgressAddr: pm.Endpoint,
+			LookPath: exec.LookPath, RealHome: filepath.Join(root, "real"), Inherited: os.Environ(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(l.Argv[0], l.Argv[1:]...)
+		cmd.Dir, cmd.Env = l.Dir, l.Env
+		out, err := cmd.CombinedOutput()
+		l.Cleanup()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", dispatch, err, out)
+		}
+		return pol, string(out)
+	}
+	// 1. A miss: the launch fills the module cache itself.
+	pol, _ := run("r1:fix", `set -e; mkdir -p ~/go/pkg/mod/own; echo own >~/go/pkg/mod/own/f`)
+	if len(pol.Caches) != 0 {
+		t.Fatal("restored from an empty store")
+	}
+	// 2. The warm publishes.
+	if _, err := store.Publish(repocache.Meta{Repo: "o/r", Name: "go", Key: "k1", Paths: []string{"~/go/pkg/mod"}}, func(data string) error {
+		d := filepath.Join(data, "home", "go", "pkg", "mod", "dep")
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(d, "f"), []byte("cached"), 0o644)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 3. The next launch in the kept home gets it.
+	pol, out := run("r2:fix", `cat ~/go/pkg/mod/dep/f; echo; touch ~/go/pkg/mod/x`)
+	if len(pol.Caches) != 1 || !strings.Contains(out, "cached") {
+		t.Fatalf("the kept home's next launch has no cache: %+v\n%s", pol.Caches, out)
+	}
+	if b, err := os.ReadFile(filepath.Join(pol.Home, "go", "pkg", "mod", "own", "f")); err != nil || string(b) != "own\n" {
+		t.Fatalf("the home's own modules: %q %v", b, err)
+	}
+	// 4. A file planted in place of the target does not turn it off.
+	run("r3:fix", `rm -rf ~/go.old; mv ~/go ~/go.old; mkdir -p ~/go/pkg; echo x >~/go/pkg/mod`)
+	pol, out = run("r4:fix", `cat ~/go/pkg/mod/dep/f`)
+	if len(pol.Caches) != 1 || !strings.Contains(out, "cached") {
+		t.Fatalf("a planted file turned the cache off: %+v\n%s", pol.Caches, out)
+	}
+}

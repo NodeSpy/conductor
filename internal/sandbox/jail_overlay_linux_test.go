@@ -23,6 +23,7 @@ const (
 	ovlUnmounted  = 15 // the payload could unmount the overlay
 	ovlCannot     = 42
 	ovlSymlinkHit = 16 // a symlinked target was mounted through
+	ovlSawOwn     = 17 // the home's own content at the target showed through
 )
 
 // TestJailOverlayCache proves a cache overlay in the real jail: the run sees
@@ -52,6 +53,13 @@ func TestJailOverlayCache(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A kept home's target has content of its own (an earlier launch's
+	// downloads): the cache is mounted over it, and it is left as it was.
+	own := filepath.Join(home, "go", "mod", "own")
+	if err := os.MkdirAll(filepath.Dir(own), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, own, "the home's")
 	mustWrite(t, filepath.Join(lower, "pkg", "f"), "cached")
 	mustWrite(t, filepath.Join(lower, "g"), "doomed")
 	// A read-only module cache, as Go leaves one.
@@ -77,6 +85,12 @@ func TestJailOverlayCache(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(lower, "new")); err == nil {
 		t.Error("a write reached the lower layer")
+	}
+	if b, err := os.ReadFile(own); err != nil || string(b) != "the home's" {
+		t.Errorf("the home's own content under the target = %q, %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "go", "mod", "new")); err == nil {
+		t.Error("a write under the cache reached the home")
 	}
 	// Every write is in the run's upper layer.
 	if b, err := os.ReadFile(filepath.Join(upper, "new")); err != nil || string(b) != "run" {
@@ -208,6 +222,9 @@ func runOverlayProbe() int {
 	target := os.Getenv("OVL_TARGET")
 	if b, err := os.ReadFile(filepath.Join(target, "pkg", "f")); err != nil || string(b) != "cached" {
 		return ovlNoCache
+	}
+	if _, err := os.Stat(filepath.Join(target, "own")); err == nil {
+		return ovlSawOwn
 	}
 	if err := os.WriteFile(filepath.Join(target, "new"), []byte("run"), 0o644); err != nil {
 		return ovlNoWrite

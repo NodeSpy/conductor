@@ -805,7 +805,10 @@ func hasLog(h *harness, s string) bool {
 	return false
 }
 
-func TestRestoreRefusesSymlinkAndNonEmptyTargets(t *testing.T) {
+// A symlink on the way to a cache's target is never followed or replaced:
+// that cache is not restored. A target with content is (see
+// TestAKeptHomeKeepsItsCaches): the cache never depends on it being empty.
+func TestRestoreRefusesSymlinkTargets(t *testing.T) {
 	h := newHarness(t, true)
 	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
 		t.Fatal(err)
@@ -820,16 +823,99 @@ func TestRestoreRefusesSymlinkAndNonEmptyTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var targets []string
 	for _, mt := range g.Mounts {
-		if strings.Contains(mt.Target, "/go/") || strings.HasSuffix(mt.Target, "/.tool") {
-			t.Errorf("restored onto %s", mt.Target)
+		targets = append(targets, mt.Target)
+		if strings.Contains(mt.Target, "/go/") {
+			t.Errorf("restored through a symlink onto %s", mt.Target)
 		}
 	}
-	if len(g.Mounts) != 1 {
-		t.Errorf("mounts %+v", g.Mounts)
+	if len(g.Mounts) != 2 || !slices.Contains(targets, filepath.Join(req.Home, ".tool")) {
+		t.Errorf("mounts %v", targets)
 	}
 	if ents, _ := os.ReadDir(elsewhere); len(ents) != 0 {
 		t.Fatalf("wrote through the symlink: %v", ents)
+	}
+	if b, err := os.ReadFile(filepath.Join(req.Home, ".tool", "mine")); err != nil || string(b) != "the run's own" {
+		t.Fatalf("the home's own content under a target changed: %q %v", b, err)
+	}
+}
+
+// A kept home (persist: home, a bot's) whose first launch missed — and
+// filled ~/go/pkg/mod itself, as Go does — gets the cache on every launch
+// after it is published; and nothing an agent plants there (a file under
+// the target, a file in place of the target or of a directory on the way)
+// turns the cache off for later launches.
+func TestAKeptHomeKeepsItsCaches(t *testing.T) {
+	h := newHarness(t, true)
+	files := map[string]string{"go.sum": "default-branch deps\n", "tool.lock": "v1\n"}
+	req, _ := h.run(t, "kept", files)
+	g, err := h.m.Restore(context.Background(), req)
+	if err != nil || len(g.Mounts) != 0 {
+		t.Fatalf("%v %+v", err, g)
+	}
+	// The missed launch downloads its own modules into the kept home.
+	write(t, filepath.Join(req.Home, "go", "pkg", "mod", "own@v0", "x.go"), "its own")
+	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	modTarget := func(g Grant) bool {
+		for _, mt := range g.Mounts {
+			if strings.HasSuffix(mt.Target, "/go/pkg/mod") {
+				return true
+			}
+		}
+		return false
+	}
+	req2 := req
+	req2.Run = "kept-2"
+	g, err = h.m.Restore(context.Background(), req2)
+	if err != nil || !modTarget(g) {
+		t.Fatalf("the kept home's second launch did not get the module cache: %v %+v\n%v", err, g.Mounts, h.logs)
+	}
+	if b, err := os.ReadFile(filepath.Join(req.Home, "go", "pkg", "mod", "own@v0", "x.go")); err != nil || string(b) != "its own" {
+		t.Fatalf("the home's own modules changed: %q %v", b, err)
+	}
+	// Planted: a file where the target goes, and a file in place of a
+	// directory on the way to another target.
+	for name, plant := range map[string]string{"file-target": "go/pkg/mod", "file-on-the-way": "go"} {
+		req3, _ := h.run(t, name, files)
+		write(t, filepath.Join(req3.Home, plant), "planted")
+		g, err := h.m.Restore(context.Background(), req3)
+		if err != nil || !modTarget(g) {
+			t.Fatalf("%s: a planted file turned the cache off: %v %+v\n%v", name, err, g.Mounts, h.logs)
+		}
+		// What was planted is a directory now (the jail makes the rest).
+		if fi, err := os.Lstat(filepath.Join(req3.Home, plant)); err != nil || !fi.IsDir() {
+			t.Fatalf("%s: %v %v", name, fi, err)
+		}
+		moved, _ := filepath.Glob(filepath.Join(req3.Home, plant+".conductor-moved-*"))
+		if len(moved) != 1 {
+			t.Fatalf("%s: the planted file was not moved aside: %v", name, moved)
+		}
+	}
+}
+
+// By copy, a target with content is replaced by the cache.
+func TestAKeptHomeKeepsItsCachesByCopy(t *testing.T) {
+	h := newHarness(t, false)
+	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := h.run(t, "kept", map[string]string{"go.sum": "default-branch deps\n"})
+	ro := filepath.Join(req.Home, "go", "pkg", "mod", "own@v0")
+	write(t, filepath.Join(ro, "x.go"), "its own")
+	if err := os.Chmod(ro, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.m.Restore(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(req.Home, "go", "pkg", "mod", "dep@v1", "dep.go")); err != nil || string(b) != "from default-branch deps\n" {
+		t.Fatalf("copy over a kept target: %q %v\n%v", b, err, h.logs)
+	}
+	if _, err := os.Lstat(ro); err == nil {
+		t.Fatal("the target's old content is still there")
 	}
 }
 
@@ -1080,6 +1166,32 @@ func TestWarmRefusesACacheOverTheCap(t *testing.T) {
 	if goWarms != 1 {
 		t.Fatalf("a restarted daemon re-warmed the over-cap cache (%d warms)", goWarms)
 	}
+	// The mark is against the cap of the time: raised past the cache, or
+	// off, it is warmed (and published) again.
+	for i, max := range []int64{4 << 20, 0} {
+		h3 := newHarness(t, true)
+		h3.m.Store, h3.m.MaxSize, h3.m.Warm = h.m.Store, max, h.m.Warm
+		_ = h3.m.WarmRepo(context.Background(), "o/r")
+		if goWarms != 2+i {
+			t.Fatalf("cap %d: the over-cap mark held (%d warms)", max, goWarms)
+		}
+		for _, e := range h.m.Store.List() {
+			if e.Name == "go" {
+				_ = h.m.Store.Remove(e)
+			}
+		}
+	}
+	// Under the small cap it is marked again; clear forgets the mark.
+	_ = h.m.WarmRepo(context.Background(), "o/r")
+	_ = h.m.WarmRepo(context.Background(), "o/r")
+	if goWarms != 3 {
+		t.Fatalf("re-marked: %d warms", goWarms)
+	}
+	h.m.Store.ClearMarks("o/r", "go", "")
+	_ = h.m.WarmRepo(context.Background(), "o/r")
+	if goWarms != 4 {
+		t.Fatalf("a cleared mark held: %d warms", goWarms)
+	}
 }
 
 // A cache that fits the cap but not the room the caches live launches use
@@ -1149,10 +1261,33 @@ func TestWarmWaitsForRoomBesideCachesInUse(t *testing.T) {
 	if !strings.Contains(logs, "more than the room left") || strings.Contains(logs, "evicted") {
 		t.Fatalf("logs:\n%s", logs)
 	}
-	if h.m.Store.isTooBig("o/r", "tool", tool.Key) {
+	if h.m.Store.isTooBig("o/r", "tool", tool.Key, h.m.MaxSize) {
 		t.Fatal("marked over the cap a cache that fits it")
 	}
+	// While there is still no room, it is not warmed again: not by a
+	// scheduled warm, not by a launch that misses it.
+	toolWarms := func() (n int) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		for _, w := range h.warmed {
+			if w.Cache == "tool" {
+				n++
+			}
+		}
+		return n
+	}
+	before := toolWarms()
+	_ = h.m.WarmRepo(context.Background(), "o/r")
+	if toolWarms() != before {
+		t.Fatal("re-warmed while there is still no room for it")
+	}
+	if h.m.wantWarm("o/r", Def{Cache: Cache{Name: "tool", Warm: "make-tool"}}, tool.Key) {
+		t.Fatal("a miss would re-warm it while there is still no room")
+	}
 	release()
+	if !h.m.wantWarm("o/r", Def{Cache: Cache{Name: "tool", Warm: "make-tool"}}, tool.Key) {
+		t.Fatal("not warmed once there is room")
+	}
 	_ = h.m.WarmRepo(context.Background(), "o/r")
 	found := false
 	for _, e := range h.m.Store.List() {
@@ -1459,5 +1594,100 @@ func TestWarmScratchIsBounded(t *testing.T) {
 	h2.m.Evict()
 	if len(h2.m.Store.List()) == 2 {
 		t.Fatal("scratch did not count toward the cap")
+	}
+}
+
+// An ended launch's entry is swept holding its lock: a launch that reaches
+// for the lock meanwhile waits, then finds its layers gone (and runs
+// without them) — never holds a lock over layers being removed.
+func TestSweepHoldsALaunchsLockThroughRemoval(t *testing.T) {
+	h := newHarness(t, true)
+	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	h.m.Store.LaunchGrace = time.Nanosecond
+	req, _ := h.run(t, "late", map[string]string{"go.sum": "default-branch deps\n"})
+	g, err := h.m.Restore(context.Background(), req)
+	if err != nil || g.Lock == "" {
+		t.Fatalf("%v %+v", err, g)
+	}
+	got := make(chan error, 1)
+	h.m.Store.testHook = func(p string) {
+		if p != "sweep-locked" {
+			return
+		}
+		go func() {
+			release, err := LockShared(g.Lock)
+			release()
+			got <- err
+		}()
+		select {
+		case err := <-got:
+			t.Errorf("the launch took its lock while its layers were being swept (%v)", err)
+			got <- err
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	h.m.Evict()
+	if err := <-got; err == nil {
+		t.Fatal("the launch holds its lock over swept layers")
+	}
+	if _, err := os.Lstat(filepath.Dir(g.Lock)); err == nil {
+		t.Fatal("not swept")
+	}
+}
+
+// A restore renders its keys (hashing the checkout) and copies (up to the
+// copy cap) without the store's lock — another repository's launches,
+// evictions and clears never wait on them — and a copy's entry is pinned
+// while it copies.
+func TestRestoreRendersAndCopiesOutsideTheStoreLock(t *testing.T) {
+	h := newHarness(t, false)
+	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	free := func() bool {
+		release, ok := tryLock(filepath.Join(h.m.Store.Dir, storeLockName))
+		release()
+		return ok
+	}
+	var keyHeld, copyHeld, unpinned int
+	var keys, copies int
+	h.m.testHook = func(p string) {
+		switch p {
+		case "key":
+			keys++
+			if !free() {
+				keyHeld++
+			}
+		case "copy":
+			copies++
+			if !free() {
+				copyHeld++
+			}
+			h.m.mu.Lock()
+			if len(h.m.pins) == 0 {
+				unpinned++
+			}
+			h.m.mu.Unlock()
+		}
+	}
+	req, _ := h.run(t, "r", map[string]string{"go.sum": "default-branch deps\n", "tool.lock": "v1\n"})
+	if _, err := h.m.Restore(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if keys == 0 || copies == 0 {
+		t.Fatalf("keys %d copies %d", keys, copies)
+	}
+	if keyHeld != 0 || copyHeld != 0 {
+		t.Fatalf("held the store's lock rendering %d key(s), copying %d path(s)", keyHeld, copyHeld)
+	}
+	if unpinned != 0 {
+		t.Fatal("copied from an entry not pinned")
+	}
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	if len(h.m.pins) != 0 {
+		t.Fatalf("pins left: %v", h.m.pins)
 	}
 }

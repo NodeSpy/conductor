@@ -1536,7 +1536,7 @@ sandbox:
   #                             #   run's fresh home by overlay (Linux) or clone (macOS), never written by a run;
   #                             #   only conductor publishes, from a sandboxed warm on the default branch
   #   enabled: false            # off by default (an upgrade starts no warms); true needs the agent sandbox
-  #   dir: ""                   # default <state dir>/repo-caches
+  #   dir: ""                   # default <state dir>/repo-caches; never under an isolation fs: path
   #   max_size: 10GiB           # all of dir (caches, warm scratch; not a running launch's writes); least recently used
   #                             #   evicted past this (never one in use); a bigger cache is not published; off = no cap
   #   autodetect: true          # bundled recipes: go, npm, pnpm, yarn, pip, uv, cargo, bundler

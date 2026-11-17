@@ -85,6 +85,17 @@ func TestSandboxCachesListAndClear(t *testing.T) {
 	if l := st.List(); len(l) != 1 || l[0].Repo != "acme/api" {
 		t.Fatalf("left %+v", l)
 	}
+	// Clearing forgets that a key's warm was over the cap (it is warmed
+	// again); another repository's mark stays.
+	marks := filepath.Join(store, ".toobig")
+	if err := os.MkdirAll(marks, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"a": "acme/api go go-linux-ccc 999999\n", "b": "acme/other go k 999999\n"} {
+		if err := os.WriteFile(filepath.Join(marks, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// Clear's in-use check and removal wait for the store's lock, held here
 	// as a daemon's restore would hold it (another process's flock).
 	held, release := make(chan struct{}), make(chan struct{})
@@ -103,6 +114,9 @@ func TestSandboxCachesListAndClear(t *testing.T) {
 	}
 	if len(st.List()) != 0 {
 		t.Fatalf("left %+v", st.List())
+	}
+	if ents, _ := os.ReadDir(marks); len(ents) != 1 || ents[0].Name() != "b" {
+		t.Fatalf("over-cap marks after clear: %v", ents)
 	}
 	if c := cmdSandboxCaches(append([]string{"clear"}, append(args, "../etc")...)); c != 2 {
 		t.Fatalf("bad repo exit %d", c)
