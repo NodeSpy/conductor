@@ -721,9 +721,14 @@ only while something can still use it:
 - its agent's session still exists. A paseo or agent-deck agent can outlive
   its launcher and its run: paseo relaunches a hand-off with `--resume`,
   and a background agent stays open. Each launch records the session it
-  started. Each sweep then asks paseo (`paseo ls`) or agent-deck
-  (`list --json`) which sessions still exist. An agent archived or removed
-  there, by conductor or in the tool's own UI, no longer keeps its home. If
+  started. Each sweep then asks paseo or agent-deck which sessions still
+  exist. It asks paseo with `paseo ls -g --background`, which lists every
+  agent that is not archived, in any directory. Plain `paseo ls` leaves some
+  out, and an agent left out would lose its home. It asks agent-deck with
+  `list --json`. A paseo runtime driven through a plugin cannot list every
+  agent yet, so it counts as a tool that cannot answer. An agent archived
+  or removed there, by conductor or in the tool's own UI, no longer keeps
+  its home. If
   the tool cannot answer, its sessions' homes are kept for at most 7 days
   after their launch, and a log line says when one stops being kept. A
   session the daemon runs itself (the cli, acp and opencode runtimes) cannot

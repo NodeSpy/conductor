@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -384,15 +385,29 @@ func (d *Dispatcher) RegisterSandboxSessions() {
 	if d.DryRun || d.remote() {
 		return
 	}
-	agentsandbox.RegisterSessionLister(d.sandboxSessionBackend(), func(ctx context.Context) (map[string]bool, error) {
-		agents, err := d.backend().ListAgents(ctx, nil)
-		if err != nil {
-			return nil, err
-		}
-		live := make(map[string]bool, len(agents))
-		for _, a := range agents {
-			live[a.ID] = true
-		}
-		return live, nil
-	})
+	agentsandbox.RegisterSessionLister(d.sandboxSessionBackend(), d.liveSandboxSessions)
+}
+
+// errNoCompleteListing: the backend cannot list every live agent, so none of
+// its agents can be judged gone (their homes are kept, boundedly).
+var errNoCompleteListing = errors.New("this paseo backend cannot list every live agent")
+
+// liveSandboxSessions is the set of agent ids paseo still has. It must be
+// complete: an agent missing from it loses its home. So it never uses
+// ListAgents' filtered default listing; a backend with no complete listing
+// answers that it cannot tell.
+func (d *Dispatcher) liveSandboxSessions(ctx context.Context) (map[string]bool, error) {
+	l, ok := d.backend().(liveAgentLister)
+	if !ok {
+		return nil, errNoCompleteListing
+	}
+	agents, err := l.ListLiveAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	live := make(map[string]bool, len(agents))
+	for _, a := range agents {
+		live[a.ID] = true
+	}
+	return live, nil
 }
