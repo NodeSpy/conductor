@@ -102,7 +102,7 @@ func TestRepoCacheEndToEnd(t *testing.T) {
 
 	// An agent run in a PR checkout: build, then report where the modules
 	// came from.
-	agentRun := func(id string, offline bool) (home, out string, layers []string) {
+	agentRun := func(id string, offline bool) (home, out string, layers []string, layerSize int64, inUse bool) {
 		t.Helper()
 		req := dispatch.Request{DispatchID: id, Trigger: core.Trigger{TargetTrusted: true, Kind: "pr",
 			Target: core.Target{Repo: "acme/app", PR: 7, Number: 7, BaseRef: "main"}, Context: map[string]any{"head_ref": "feature"}}}
@@ -135,10 +135,15 @@ func TestRepoCacheEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer l.Cleanup()
 		cmd := exec.Command(l.Argv[0], l.Argv[1:]...)
 		cmd.Env, cmd.Dir = l.Env, l.Dir
 		b, err := cmd.CombinedOutput()
+		// Measured while the launch holds them: its layers end with it.
+		for _, c := range pol.Caches {
+			layerSize += repocache.DiskUsage(filepath.Dir(c.Upper))
+		}
+		inUse = len(m.Store.Used()) > 0
+		l.Cleanup()
 		if err != nil {
 			t.Fatalf("agent run %s: %v\n%s", id, err, b)
 		}
@@ -148,11 +153,11 @@ func TestRepoCacheEndToEnd(t *testing.T) {
 			}
 			layers = append(layers, filepath.Dir(c.Upper))
 		}
-		return pol.Home, string(b), layers
+		return pol.Home, string(b), layers, layerSize, inUse
 	}
 
 	// 1. The first run: nothing published, a miss; it fetches its own.
-	home1, out1, _ := agentRun("d1", false)
+	home1, out1, _, _, _ := agentRun("d1", false)
 	if !hasLine(logs, "go (autodetect): miss") {
 		t.Fatalf("no miss logged: %v", logs)
 	}
@@ -174,16 +179,13 @@ func TestRepoCacheEndToEnd(t *testing.T) {
 	before := treeDigest(t, pub.Dir)
 
 	// 3. A second run, offline for modules: everything from the cache.
-	home2, out2, layers2 := agentRun("d2", true)
+	home2, out2, layers2, layerSize2, inUse2 := agentRun("d2", true)
 	if !hasLine(logs, "go (autodetect): hit") {
 		t.Fatalf("no hit logged: %v", logs)
 	}
 	// The run's disk: its home and its overlay layers (conductor's, beside
 	// the store).
-	used2 := repocache.DiskUsage(home2)
-	for _, l := range layers2 {
-		used2 += repocache.DiskUsage(l)
-	}
+	used2 := repocache.DiskUsage(home2) + layerSize2
 	if len(layers2) == 0 {
 		t.Fatal("run 2 has no overlay layers")
 	}
@@ -197,21 +199,21 @@ func TestRepoCacheEndToEnd(t *testing.T) {
 	if after := treeDigest(t, pub.Dir); after != before {
 		t.Fatal("the run changed the shared cache")
 	}
-	if !m.InUse(pub.Dir) {
-		t.Fatal("the overlaid cache is not in use while its home exists")
+	if !inUse2 {
+		t.Fatal("the overlaid cache was not in use while its launch ran")
 	}
-	// The home gone, the cache is free and the run's layers go.
-	if err := repocache.RemoveAll(home2); err != nil {
-		t.Fatal(err)
-	}
-	m.Evict()
+	// The launch over, its layers are gone and the cache is free, though
+	// its home is still there.
 	if m.InUse(pub.Dir) {
-		t.Fatal("still in use after its home went")
+		t.Fatal("still in use after its launch ended")
 	}
 	for _, l := range layers2 {
 		if _, err := os.Lstat(l); err == nil {
-			t.Fatalf("run 2's layers outlived its home: %s", l)
+			t.Fatalf("run 2's layers outlived its launch: %s", l)
 		}
+	}
+	if _, err := os.Stat(home2); err != nil {
+		t.Fatalf("run 2's home: %v", err)
 	}
 }
 

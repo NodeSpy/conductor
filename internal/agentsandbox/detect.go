@@ -708,8 +708,8 @@ func startDetection(p Policy, self string, caps *sandbox.Spec, event func(string
 		d.git = newGitGuard(p.Workspace)
 	}
 	if diskOn {
-		lim, ws, home := p.Limits, p.Workspace, p.Home
-		d.diskLow = func() string { return lim.diskLow(ws, home) }
+		lim, paths := p.Limits, p.diskPaths()
+		d.diskLow = func() string { return lim.diskLow(paths...) }
 	}
 	for _, a := range p.Detect.Allow {
 		d.allow[strings.ToLower(a)] = true

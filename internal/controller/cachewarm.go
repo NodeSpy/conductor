@@ -47,6 +47,7 @@ func RunCacheWarm(ctx context.Context, w repocache.WarmRun) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	out := &tailBuffer{max: 4096}
 	cmd.Stdout, cmd.Stderr = out, out
+	cmd.WaitDelay = 10 * time.Second
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("cache warm: %w", err)
 	}
@@ -57,10 +58,10 @@ func RunCacheWarm(ctx context.Context, w repocache.WarmRun) error {
 	case err = <-done:
 	case <-ctx.Done():
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		select {
-		case <-done:
-		case <-time.After(10 * time.Second):
-		}
+		// The scratch is removed (launch.Cleanup) only once the sandbox
+		// that writes it is gone; WaitDelay keeps a held pipe from
+		// stalling that past the process's own exit.
+		<-done
 		err = ctx.Err()
 	}
 	if err != nil {

@@ -1073,6 +1073,94 @@ func TestWarmRefusesACacheOverTheCap(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("logged %d times: %v", n, h.logs)
 	}
+	// The mark is the store's: a restarted daemon does not warm it again.
+	h2 := newHarness(t, true)
+	h2.m.Store, h2.m.MaxSize, h2.m.Warm = h.m.Store, h.m.MaxSize, h.m.Warm
+	_ = h2.m.WarmRepo(context.Background(), "o/r")
+	if goWarms != 1 {
+		t.Fatalf("a restarted daemon re-warmed the over-cap cache (%d warms)", goWarms)
+	}
+}
+
+// A cache that fits the cap but not the room the caches live launches use
+// leave is not published now — and not marked: once they end, it is.
+func TestWarmWaitsForRoomBesideCachesInUse(t *testing.T) {
+	h := newHarness(t, true)
+	warm := h.m.Warm
+	toolBig := false
+	h.m.Warm = func(ctx context.Context, w WarmRun) error {
+		if err := warm(ctx, w); err != nil {
+			return err
+		}
+		switch {
+		case w.Cache == "go":
+			return os.WriteFile(filepath.Join(w.Home, "go", "pkg", "mod", "dep@v1", "big"), make([]byte, 512<<10), 0o644)
+		case w.Cache == "tool" && toolBig:
+			return os.WriteFile(filepath.Join(w.Home, ".tool", "big"), make([]byte, 256<<10), 0o644)
+		}
+		return nil
+	}
+	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	var tool, goE Entry
+	for _, e := range h.m.Store.List() {
+		switch e.Name {
+		case "tool":
+			tool = e
+		case "go":
+			goE = e
+		}
+	}
+	// A launch overlays the go cache; the tool cache is dropped, and its
+	// next warm fits the cap but not beside the go cache in use.
+	h.m.Store.LaunchGrace = time.Nanosecond
+	req, _ := h.run(t, "busy", map[string]string{"go.sum": "default-branch deps\n"})
+	g, err := h.m.Restore(context.Background(), req)
+	if err != nil || g.Lock == "" {
+		t.Fatalf("%v %+v", err, g)
+	}
+	release, _ := LockShared(g.Lock)
+	if err := h.m.Store.Remove(tool); err != nil {
+		t.Fatal(err)
+	}
+	toolBig = true
+	h.m.MaxSize = goE.Size + 128<<10 // the tool cache alone is ~260KiB
+	if 300<<10 > h.m.MaxSize {
+		h.m.MaxSize = 300 << 10
+	}
+	if goE.Size+(300<<10) <= h.m.MaxSize {
+		t.Fatalf("test sizes: go %d cap %d", goE.Size, h.m.MaxSize)
+	}
+	h.mu.Lock()
+	h.logs = nil
+	h.mu.Unlock()
+	_ = h.m.WarmRepo(context.Background(), "o/r")
+	for _, e := range h.m.Store.List() {
+		if e.Name == "tool" {
+			t.Fatal("published past the room left beside a cache in use")
+		}
+	}
+	// Refused before publishing — not published and then evicted, which
+	// could take a cache another launch is about to restore.
+	h.mu.Lock()
+	logs := strings.Join(h.logs, "\n")
+	h.mu.Unlock()
+	if !strings.Contains(logs, "more than the room left") || strings.Contains(logs, "evicted") {
+		t.Fatalf("logs:\n%s", logs)
+	}
+	if h.m.Store.isTooBig("o/r", "tool", tool.Key) {
+		t.Fatal("marked over the cap a cache that fits it")
+	}
+	release()
+	_ = h.m.WarmRepo(context.Background(), "o/r")
+	found := false
+	for _, e := range h.m.Store.List() {
+		found = found || e.Name == "tool"
+	}
+	if !found {
+		t.Fatalf("not published once there was room: %v", h.logs)
+	}
 }
 
 // An overlay's upper and work directories are passed to mount(2) as paths,
@@ -1151,37 +1239,158 @@ func TestInUseNeverReadsAHome(t *testing.T) {
 	}
 }
 
-// The real record still holds: a cache a live home overlays is kept; once
-// the home is gone, the cache and the run's layers go.
-func TestInUseFollowsLiveHomes(t *testing.T) {
+// A cache is in use for as long as the launch that overlays it runs — its
+// ledger lock held — and no longer: a home that is never reclaimed (a kept
+// identity home, a bot's) pins nothing once its launches have ended. An
+// ended launch's layers go at the next eviction.
+func TestInUseFollowsTheLaunch(t *testing.T) {
 	h := newHarness(t, true)
 	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
 		t.Fatal(err)
 	}
-	req, _ := h.run(t, "live", map[string]string{"go.sum": "default-branch deps\n", "tool.lock": "v1\n"})
+	h.m.Store.LaunchGrace = time.Nanosecond
+	req, _ := h.run(t, "kept", map[string]string{"go.sum": "default-branch deps\n", "tool.lock": "v1\n"})
+	g, err := h.m.Restore(context.Background(), req)
+	if err != nil || len(g.Mounts) == 0 || g.Lock == "" {
+		t.Fatalf("%v %+v", err, g)
+	}
+	dir := entryOf(g.Mounts[0])
+	release, err := LockShared(g.Lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.m.MaxSize = 1
+	h.m.Evict()
+	if !h.m.InUse(dir) || len(h.m.Store.List()) != 2 {
+		t.Fatal("evicted a cache a running launch overlays")
+	}
+	release() // the launch ends (without removing its layers); its home stays
+	if h.m.InUse(dir) {
+		t.Fatal("a cache stays in use after its launch ended, while the home lives on")
+	}
+	h.m.Evict()
+	if left := h.m.Store.List(); len(left) != 0 {
+		t.Fatalf("kept %d cache(s) after the launch ended", len(left))
+	}
+	if _, err := os.Lstat(filepath.Dir(g.Lock)); err == nil {
+		t.Error("an ended launch's layers outlived it")
+	}
+}
+
+func entryOf(mt Mount) string { return mt.Lower[:strings.Index(mt.Lower, "/data/")] }
+
+// Launches sharing a home (a kept identity home, a bot's) each get their
+// own layers and ledger entry: one never removes, resets or unpins
+// another's, over the same cache or not.
+func TestLaunchesSharingAHomeKeepTheirOwnLayers(t *testing.T) {
+	h := newHarness(t, true)
+	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	h.m.Store.LaunchGrace = time.Nanosecond
+	req, _ := h.run(t, "shared", map[string]string{"go.sum": "default-branch deps\n", "tool.lock": "v1\n"})
+	ga, err := h.m.Restore(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relA, _ := LockShared(ga.Lock)
+	defer relA()
+	// A writes into its upper layer, as its run does through the overlay.
+	write(t, filepath.Join(ga.Mounts[0].Upper, "mine"), "A's")
+	gb, err := h.m.Restore(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relB, _ := LockShared(gb.Lock)
+	if len(ga.Mounts) != len(gb.Mounts) || ga.Lock == gb.Lock {
+		t.Fatalf("A %+v B %+v", ga, gb)
+	}
+	for i := range ga.Mounts {
+		a, b := ga.Mounts[i], gb.Mounts[i]
+		if a.Upper == b.Upper || a.Work == b.Work {
+			t.Fatalf("two launches share a layer: %+v %+v", a, b)
+		}
+		for _, p := range []string{a.Upper, a.Work} {
+			if _, err := os.Lstat(p); err != nil {
+				t.Fatalf("B's restore removed A's layer %s", p)
+			}
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(ga.Mounts[0].Upper, "mine")); err != nil || string(b) != "A's" {
+		t.Fatalf("B's restore reset A's upper layer: %q %v", b, err)
+	}
+	// B ends; A's caches stay in use and are kept.
+	relB()
+	_ = RemoveAll(filepath.Dir(gb.Lock))
+	h.m.MaxSize = 1
+	h.m.Evict()
+	for _, mt := range ga.Mounts {
+		if _, err := os.Lstat(mt.Lower); err != nil {
+			t.Fatalf("A's cache was evicted when B ended: %v", err)
+		}
+	}
+}
+
+// A restore and an eviction never interleave: a launch is never granted a
+// cache an eviction already chose to remove.
+func TestRestoreAndEvictAreOneCriticalSection(t *testing.T) {
+	h := newHarness(t, true)
+	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := h.run(t, "racer", map[string]string{"go.sum": "default-branch deps\n", "tool.lock": "v1\n"})
+	var g Grant
+	restored := make(chan bool)
+	h.m.testHook = func(point string) {
+		if point != "evict-used" {
+			return
+		}
+		h.m.testHook = nil
+		// The eviction has read what is in use; a restore now must wait.
+		go func() {
+			var err error
+			g, err = h.m.Restore(context.Background(), req)
+			if err != nil {
+				t.Error(err)
+			}
+			close(restored)
+		}()
+		select {
+		case <-restored:
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	h.m.MaxSize = 1
+	h.m.Evict()
+	<-restored
+	for _, mt := range g.Mounts {
+		if _, err := os.Lstat(mt.Lower); err != nil {
+			t.Fatalf("granted a cache the eviction removed: %s", mt.Lower)
+		}
+	}
+}
+
+// A live launch's own writes (its overlay's upper layer) never evict other
+// caches: they are not counted against the store's cap.
+func TestLaunchWritesDoNotEvictOtherCaches(t *testing.T) {
+	h := newHarness(t, true)
+	if err := h.m.WarmRepo(context.Background(), "o/r"); err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, e := range h.m.Store.List() {
+		total += e.Size
+	}
+	req, _ := h.run(t, "writer", map[string]string{"go.sum": "default-branch deps\n"})
 	g, err := h.m.Restore(context.Background(), req)
 	if err != nil || len(g.Mounts) == 0 {
 		t.Fatalf("%v %+v", err, g)
 	}
-	h.m.MaxSize = 1
+	write(t, filepath.Join(g.Mounts[0].Upper, "big"), strings.Repeat("x", 2<<20))
+	h.m.MaxSize = total + 64<<10
 	h.m.Evict()
-	if len(h.m.Store.List()) != 2 {
-		t.Fatal("evicted a cache a live home uses")
-	}
-	if err := RemoveAll(req.Home); err != nil {
-		t.Fatal(err)
-	}
-	if dir := g.Mounts[0].Lower[:strings.Index(g.Mounts[0].Lower, "/data/")]; h.m.InUse(dir) {
-		t.Fatal("in use after its home went")
-	}
-	h.m.Evict()
-	if left := h.m.Store.List(); len(left) != 0 {
-		t.Fatalf("kept %d cache(s) after the home went", len(left))
-	}
-	for _, mt := range g.Mounts {
-		if _, err := os.Lstat(mt.Upper); err == nil {
-			t.Errorf("the run's layer %s outlived its home", mt.Upper)
-		}
+	if n := len(h.m.Store.List()); n != 2 {
+		t.Fatalf("a launch's writes evicted %d cache(s)", 2-n)
 	}
 }
 

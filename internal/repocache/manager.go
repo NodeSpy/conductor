@@ -60,15 +60,12 @@ type Manager struct {
 	lastWarm map[string]time.Time
 	files    map[string]repoFileCache
 	warned   map[string]bool
-	// tooBig are keys whose warm left more than MaxSize: never published,
-	// never warmed again (this process).
-	tooBig map[string]bool
-	wg     sync.WaitGroup
+	// testHook is called at points tests interleave with.
+	testHook func(point string)
+	wg       sync.WaitGroup
 	// base is the context background warms run under: Run's, so stopping
 	// the manager cancels them.
 	base context.Context
-	// lmu orders the run ledger's writes and sweeps.
-	lmu sync.Mutex
 }
 
 // WarmRun is one warm command for the sandbox to run.
@@ -111,10 +108,14 @@ type Mount struct {
 	Work   string `json:"work"`
 }
 
-// Grant is what a launch gets: overlays to mount and environment.
+// Grant is what a launch gets: overlays to mount and environment. Lock is
+// the launch's ledger lock ("" when it has no overlay): the launch holds it
+// shared while it runs — the caches it overlays are in use so long, and no
+// longer — and removes its layers (the lock's directory) when it ends.
 type Grant struct {
 	Mounts []Mount
 	Env    []string
+	Lock   string
 }
 
 func (m *Manager) logf(format string, args ...any) {
@@ -130,7 +131,6 @@ func (m *Manager) init() {
 		m.lastWarm = map[string]time.Time{}
 		m.files = map[string]repoFileCache{}
 		m.warned = map[string]bool{}
-		m.tooBig = map[string]bool{}
 	}
 }
 
@@ -209,20 +209,36 @@ func (m *Manager) Restore(ctx context.Context, r Request) (Grant, error) {
 	if len(defs) == 0 {
 		return g, nil
 	}
-	// The run's overlay layers and its ledger entry are conductor's, beside
-	// the store: mount(2) takes the upper and work directories as paths and
-	// follows a symlink in them, so they are never where an agent can write.
-	m.lmu.Lock()
-	defer m.lmu.Unlock()
-	run, err := m.Store.runDir(r.Home)
-	if err != nil {
-		return g, fmt.Errorf("repo cache: %w", err)
-	}
 	overlay, why := m.overlay()
-	var used []string
-	slots := map[string]bool{}
-	var targets []string
+	var err error
 	needWarm := false
+	// The lookup and the record of what this launch uses are one critical
+	// section with eviction: a cache found here is never one being removed.
+	m.Store.Locked(func() {
+		g, needWarm, err = m.restoreLocked(r, defs, overlay, why)
+	})
+	if err != nil {
+		return Grant{}, err
+	}
+	if needWarm && m.WarmOnMiss {
+		m.WarmAsync(r.Repo)
+	}
+	return g, nil
+}
+
+func (m *Manager) restoreLocked(r Request, defs []Def, overlay bool, why string) (g Grant, needWarm bool, err error) {
+	// The launch's overlay layers and ledger entry are its own, beside the
+	// store: mount(2) takes the upper and work directories as paths and
+	// follows a symlink in them, so they are never where an agent can
+	// write, and never another launch's (launches can share a home).
+	var launch string
+	if overlay {
+		if launch, err = m.Store.newLaunch(r.Home); err != nil {
+			return Grant{}, false, fmt.Errorf("repo cache: %w", err)
+		}
+	}
+	var used []string
+	var targets []string
 	for _, d := range defs {
 		g.Env = append(g.Env, d.ExpandEnv(r.Home, r.Workspace)...)
 		key, err := RenderKey(d.Key, r.Workspace)
@@ -239,11 +255,11 @@ func (m *Manager) Restore(ctx context.Context, r Request) (Grant, error) {
 		e, kind, ok := m.Store.Lookup(r.Repo, d.Name, key, prefixes)
 		if !ok {
 			m.logf("repo cache %s %s (%s): miss for %s (run %s)", r.Repo, d.Name, d.Origin, key, r.Run)
-			needWarm = needWarm || (d.Warm != "" && !m.isTooBig(r.Repo, d.Name, key))
+			needWarm = needWarm || (d.Warm != "" && !m.Store.isTooBig(r.Repo, d.Name, key))
 			continue
 		}
 		if kind != Exact {
-			needWarm = needWarm || (d.Warm != "" && !m.isTooBig(r.Repo, d.Name, key))
+			needWarm = needWarm || (d.Warm != "" && !m.Store.isTooBig(r.Repo, d.Name, key))
 		}
 		mode := "overlay"
 		if !overlay {
@@ -269,11 +285,11 @@ func (m *Manager) Restore(ctx context.Context, r Request) (Grant, error) {
 				continue
 			}
 			if overlay {
-				slot := filepath.Join(run, slotName(e.Dir, p))
+				slot := filepath.Join(launch, slotName(e.Dir, p))
 				if err := m.slot(slot); err != nil {
-					return Grant{}, fmt.Errorf("repo cache: %s: %w", slot, err)
+					_ = RemoveAll(launch)
+					return Grant{}, false, fmt.Errorf("repo cache: %s: %w", slot, err)
 				}
-				slots[filepath.Base(slot)] = true
 				g.Mounts = append(g.Mounts, Mount{Target: target, Lower: lower,
 					Upper: filepath.Join(slot, "upper"), Work: filepath.Join(slot, "work")})
 			} else if err := m.copyIn(e, lower, base, target); err != nil {
@@ -296,13 +312,20 @@ func (m *Manager) Restore(ctx context.Context, r Request) (Grant, error) {
 		}
 		m.logf("repo cache %s %s (%s): %s %s for %s, %d path(s) by %s%s (run %s)", r.Repo, d.Name, d.Origin, kind, e.Key, key, n, mode, note, r.Run)
 	}
-	if err := writeUses(run, r.Home, used, slots); err != nil {
-		return Grant{}, err
+	if launch != "" {
+		if len(g.Mounts) == 0 {
+			_ = RemoveAll(launch)
+		} else if err := writeUses(launch, used); err != nil {
+			_ = RemoveAll(launch)
+			return Grant{}, false, err
+		} else {
+			g.Lock = LaunchLock(launch)
+		}
 	}
-	if needWarm && m.WarmOnMiss {
-		m.WarmAsync(r.Repo)
+	if m.testHook != nil {
+		m.testHook("restored")
 	}
-	return g, nil
+	return g, needWarm, nil
 }
 
 func (m *Manager) overlay() (bool, string) {
@@ -312,22 +335,15 @@ func (m *Manager) overlay() (bool, string) {
 	return OverlayUsable(m.Store.Dir, m.Store.layersRoot())
 }
 
-// slot prepares an overlay's upper and work directories: conductor's,
-// the upper reused across a run's launches over the same lower layer, the
-// work directory fresh each time (a volatile overlay leaves a marker there
-// that refuses the next mount).
+// slot makes a fresh overlay upper and work directory in a launch's own
+// layers directory.
 func (m *Manager) slot(slot string) error {
-	if err := realDir(slot); err != nil {
-		return err
+	for _, d := range []string{slot, filepath.Join(slot, "upper"), filepath.Join(slot, "work")} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			return err
+		}
 	}
-	if err := realDir(filepath.Join(slot, "upper")); err != nil {
-		return err
-	}
-	work := filepath.Join(slot, "work")
-	if err := RemoveAll(work); err != nil {
-		return err
-	}
-	return os.Mkdir(work, 0o700)
+	return nil
 }
 
 func slotName(entryDir string, p Path) string {
@@ -398,22 +414,31 @@ func (m *Manager) InUse(dir string) bool {
 }
 
 // Evict trims the store to MaxSize, least recently used first, never a
-// cache in use. Warm scratch and the runs' overlay layers count toward the
-// cap; the layers of a run whose home is gone are removed first.
+// cache in use. Warm scratch counts toward the cap; a live launch's overlay
+// layers do not (they are its own writes, bounded by the disk guard on the
+// store's filesystem, and gone when it ends), so one launch's writes never
+// evict other caches. The layers of launches that have ended go first. The
+// check of what is in use and the removal are one critical section with a
+// restore's lookup and record.
 func (m *Manager) Evict() {
-	m.lmu.Lock()
-	m.Store.sweepRuns()
-	m.lmu.Unlock()
-	if m.MaxSize <= 0 {
-		return
-	}
-	used := m.Store.Used()
-	scratch := DiskUsage(m.Store.warmRoot()) + DiskUsage(m.Store.layersRoot())
-	for _, e := range m.Store.Evict(m.MaxSize-scratch, func(d string) bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return m.pins[d] > 0 || used[d]
-	}) {
+	var evicted []Entry
+	m.Store.Locked(func() {
+		m.Store.sweepLaunches()
+		if m.MaxSize <= 0 {
+			return
+		}
+		used := m.Store.Used()
+		if m.testHook != nil {
+			m.testHook("evict-used")
+		}
+		scratch := DiskUsage(m.Store.warmRoot())
+		evicted = m.Store.Evict(m.MaxSize-scratch, func(d string) bool {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return m.pins[d] > 0 || used[d]
+		})
+	})
+	for _, e := range evicted {
 		m.logf("repo cache %s %s: evicted %s (%s, last used %s)", e.Repo, e.Name, e.Key, HumanSize(e.Size), e.LastUsed.Format(time.RFC3339))
 	}
 }
@@ -531,7 +556,7 @@ func (m *Manager) warmOne(ctx context.Context, repo, commit, tree, tmp string, d
 		m.logf("repo cache %s %s: %s is up to date (default branch %s)", repo, d.Name, key, short(commit))
 		return nil
 	}
-	if m.isTooBig(repo, d.Name, key) {
+	if m.Store.isTooBig(repo, d.Name, key) {
 		return nil
 	}
 	home := filepath.Join(tmp, "home-"+d.Name)
@@ -580,10 +605,15 @@ func (m *Manager) warmOne(ctx context.Context, repo, commit, tree, tmp string, d
 			size += DiskUsage(mv.src)
 		}
 		if size > m.MaxSize {
-			m.mu.Lock()
-			m.tooBig[tooBigKey(repo, d.Name, key)] = true
-			m.mu.Unlock()
+			// Never fits: marked in the store, so no daemon warms it again.
+			m.Store.markTooBig(repo, d.Name, key)
 			m.logf("repo cache %s %s: %s is %s, larger than the store's cap (%s): not published, and not warmed again", repo, d.Name, key, HumanSize(size), HumanSize(m.MaxSize))
+			return nil
+		}
+		if room := m.room(tmp); size > room {
+			// Would fit, but not beside what live launches use now: not
+			// published, and not marked — a later warm may find room.
+			m.logf("repo cache %s %s: %s is %s, more than the room left beside the caches in use (%s): not published now", repo, d.Name, key, HumanSize(size), HumanSize(max(room, 0)))
 			return nil
 		}
 	}
@@ -702,13 +732,18 @@ func (m *Manager) knownRepos() []string {
 	return out
 }
 
-func tooBigKey(repo, name, key string) string { return repo + "\x00" + name + "\x00" + key }
-
-func (m *Manager) isTooBig(repo, name, key string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.init()
-	return m.tooBig[tooBigKey(repo, name, key)]
+// room is what the cap leaves beside the caches live launches use and the
+// warm scratch of other warms (own is this warm's, its output in it).
+func (m *Manager) room(own string) int64 {
+	used := m.Store.Used()
+	var inUse int64
+	for _, e := range m.Store.List() {
+		if used[e.Dir] {
+			inUse += e.Size
+		}
+	}
+	scratch := DiskUsage(m.Store.warmRoot()) - DiskUsage(own)
+	return m.MaxSize - inUse - scratch
 }
 
 func short(sha string) string {

@@ -290,15 +290,26 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 		p.Inspect = appendInspect(p.Inspect, h)
 	}
 	applyScope(&p, r.Allow, scope)
-	if r.Caches != nil && e.Repo != "" {
-		g := r.Caches(repocache.Request{Repo: e.Repo, Workspace: canon(e.Workspace), Home: home, Run: firstNonEmpty(e.Dispatch, e.Identity)})
-		p.Caches = g.Mounts
-		p.Env = append(append([]string(nil), p.Env...), g.Env...)
-	}
 	if cache, err := r.persistCache(e, home, persist); err != nil {
 		return Policy{}, fmt.Errorf("agentsandbox: identity cache: %w", err)
 	} else if cache != "" {
 		p.ReadWrite = append(append([]string(nil), p.ReadWrite...), cache)
+	}
+	// Caches after the home is final (persistCache may make ~/.cache a link
+	// to the identity's kept cache dir: a cache path through it is then not
+	// restored). A cache that does not check out is dropped, logged: the
+	// launch runs without it, never fails for it.
+	if r.Caches != nil && e.Repo != "" {
+		g := r.Caches(repocache.Request{Repo: e.Repo, Workspace: canon(e.Workspace), Home: home, Run: firstNonEmpty(e.Dispatch, e.Identity)})
+		p.Env = append(append([]string(nil), p.Env...), g.Env...)
+		p.CacheLock = g.Lock
+		for _, c := range g.Mounts {
+			if err := p.validateCache(c); err != nil {
+				r.logf("agent sandbox: cache at %s not shown: %v", c.Target, err)
+				continue
+			}
+			p.Caches = append(p.Caches, c)
+		}
 	}
 	if r.Socket != "" && e.Skill != nil && r.Mint != nil {
 		id := *e.Skill

@@ -111,9 +111,14 @@ type Policy struct {
 	ModelHosts []string `json:"model_hosts,omitempty"`
 	// Caches are the repository's dependency caches shown to the launch
 	// (internal/repocache): each an overlay whose lower layer is the shared,
-	// read-only cache and whose upper layer — every write — is in the
-	// launch's home. Linux; macOS restores by clone before the launch.
+	// read-only cache and whose upper and work directories — every write —
+	// are the launch's own, beside the store, out of the agent's reach.
+	// Linux; macOS restores by clone before the launch.
 	Caches []repocache.Mount `json:"caches,omitempty"`
+	// CacheLock is the launch's cache ledger lock: held shared while the
+	// launch runs (its caches are in use so long), and its directory — the
+	// launch's layers — removed when it ends.
+	CacheLock string `json:"cache_lock,omitempty"`
 	// Note is something the launcher should tell its operator about this
 	// policy (a scratch workspace in place of a refused directory).
 	Note string `json:"note,omitempty"`
@@ -174,28 +179,14 @@ func (p Policy) Validate() error {
 			return fmt.Errorf("agentsandbox: exposed address %q is not a loopback host:port", x)
 		}
 	}
+	if len(p.Caches) > 0 {
+		if !filepath.IsAbs(p.CacheLock) || filepath.Clean(p.CacheLock) != p.CacheLock {
+			return fmt.Errorf("agentsandbox: cache lock %q is not a clean absolute path", p.CacheLock)
+		}
+	}
 	for _, c := range p.Caches {
-		// A cache is shown only in the home or the workspace. Its upper and
-		// work directories reach mount(2) as paths, which follows a
-		// symlink: they are never anywhere the agent can write.
-		if !filepath.IsAbs(c.Target) || !(within(c.Target, p.Home) || within(c.Target, p.Workspace)) || c.Target == p.Home || c.Target == p.Workspace {
-			return fmt.Errorf("agentsandbox: cache target %q is not inside the home or the workspace", c.Target)
-		}
-		if c.Upper == c.Work {
-			return fmt.Errorf("agentsandbox: cache upper and work directories are one: %q", c.Upper)
-		}
-		for _, l := range []string{c.Upper, c.Work} {
-			if !filepath.IsAbs(l) || filepath.Clean(l) != l {
-				return fmt.Errorf("agentsandbox: cache layer %q is not a clean absolute path", l)
-			}
-			for _, w := range append([]string{p.Home, p.Workspace}, p.ReadWrite...) {
-				if w != "" && (l == w || within(l, w) || within(w, l)) {
-					return fmt.Errorf("agentsandbox: cache layer %q overlaps %q, which the agent can write", l, w)
-				}
-			}
-		}
-		if !filepath.IsAbs(c.Lower) || within(c.Lower, p.Home) || within(c.Lower, p.Workspace) {
-			return fmt.Errorf("agentsandbox: cache lower layer %q may not be in the home or the workspace", c.Lower)
+		if err := p.validateCache(c); err != nil {
+			return err
 		}
 	}
 	for _, list := range [][]string{p.ReadOnly, p.ReadWrite, p.Hide} {
@@ -267,7 +258,7 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	if d.SelfExe == nil || d.LookPath == nil {
 		return nil, fmt.Errorf("agentsandbox: launcher not wired")
 	}
-	if why := p.Limits.diskLow(p.Workspace, p.Home); why != "" {
+	if why := p.Limits.diskLow(p.diskPaths()...); why != "" {
 		return nil, fmt.Errorf("agentsandbox: not launching: %s", why)
 	}
 	goos := sandbox.CheckGOOS
@@ -363,9 +354,25 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	for _, q := range p.Hide {
 		binds = append(binds, sandbox.BindMount{Path: q, Tmpfs: true})
 	}
-	if goos != "darwin" {
-		for _, c := range p.Caches {
-			binds = append(binds, sandbox.BindMount{Path: c.Target, Overlay: &sandbox.Overlay{Lower: c.Lower, Upper: c.Upper, Work: c.Work}})
+	var cacheDone func()
+	cacheHanded := false
+	if goos != "darwin" && len(p.Caches) > 0 {
+		// The launch holds its cache ledger lock while it runs, and removes
+		// its layers when it ends. A lock that is gone (the layers swept: the
+		// launch came too late) means running without the caches.
+		if release, err := repocache.LockShared(p.CacheLock); err != nil {
+			p.Caches = nil
+		} else {
+			dir := filepath.Dir(p.CacheLock)
+			cacheDone = func() { _ = repocache.RemoveAll(dir); release() }
+			defer func() {
+				if !cacheHanded {
+					cacheDone()
+				}
+			}()
+			for _, c := range p.Caches {
+				binds = append(binds, sandbox.BindMount{Path: c.Target, Overlay: &sandbox.Overlay{Lower: c.Lower, Upper: c.Upper, Work: c.Work}})
+			}
 		}
 	}
 	if goos == "darwin" {
@@ -453,6 +460,11 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		}
 	}
 	var closers []func()
+	if cacheDone != nil {
+		// Run last at cleanup, once the jail (and its mounts) are gone.
+		closers = append(closers, cacheDone)
+		cacheHanded = true
+	}
 	if caDir != "" {
 		closers = append(closers, func() { _ = os.RemoveAll(caDir) })
 	}
@@ -640,6 +652,77 @@ func withCAEnv(env []string, bundle string) []string {
 	}
 	for _, k := range sandbox.InspectCAEnv {
 		out = append(out, k+"="+bundle)
+	}
+	return out
+}
+
+// validateCache checks one cache overlay against the policy. A cache is
+// shown only in the home or the workspace. Its upper and work directories
+// reach mount(2) as paths, which follows a symlink: they are the launch's
+// own, under its cache lock's directory, and never anywhere the agent can
+// write or read; its lower layer is never anywhere the agent can write.
+// Grant paths are compared as given and with their symlinks resolved.
+func (p Policy) validateCache(c repocache.Mount) error {
+	if !filepath.IsAbs(c.Target) || !(within(c.Target, p.Home) || within(c.Target, p.Workspace)) || c.Target == p.Home || c.Target == p.Workspace {
+		return fmt.Errorf("agentsandbox: cache target %q is not inside the home or the workspace", c.Target)
+	}
+	if c.Upper == c.Work {
+		return fmt.Errorf("agentsandbox: cache upper and work directories are one: %q", c.Upper)
+	}
+	launch := filepath.Dir(p.CacheLock)
+	writable := append([]string{p.Home, p.Workspace}, p.ReadWrite...)
+	for _, l := range []string{c.Upper, c.Work} {
+		if !filepath.IsAbs(l) || filepath.Clean(l) != l {
+			return fmt.Errorf("agentsandbox: cache layer %q is not a clean absolute path", l)
+		}
+		if !within(l, launch) {
+			return fmt.Errorf("agentsandbox: cache layer %q is not the launch's own (%s)", l, launch)
+		}
+		if w := overlapsGrant(l, append(append([]string(nil), writable...), p.ReadOnly...)); w != "" {
+			return fmt.Errorf("agentsandbox: cache layer %q overlaps %q, which the agent can reach", l, w)
+		}
+	}
+	if !filepath.IsAbs(c.Lower) || filepath.Clean(c.Lower) != c.Lower {
+		return fmt.Errorf("agentsandbox: cache lower layer %q is not a clean absolute path", c.Lower)
+	}
+	if w := overlapsGrant(c.Lower, writable); w != "" {
+		return fmt.Errorf("agentsandbox: cache lower layer %q overlaps %q, which the agent can write", c.Lower, w)
+	}
+	return nil
+}
+
+// overlapsGrant is the first grant p is in, equal to or above, comparing
+// both as given and with symlinks resolved ("" when none).
+func overlapsGrant(p string, grants []string) string {
+	ps := []string{p}
+	if r, err := filepath.EvalSymlinks(p); err == nil && r != p {
+		ps = append(ps, r)
+	}
+	for _, g := range grants {
+		if g == "" {
+			continue
+		}
+		gs := []string{g}
+		if r, err := filepath.EvalSymlinks(g); err == nil && r != g {
+			gs = append(gs, r)
+		}
+		for _, a := range ps {
+			for _, b := range gs {
+				if a == b || within(a, b) || within(b, a) {
+					return g
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// diskPaths are the filesystems a launch writes to: its workspace, its
+// home, and the store's, where its cache overlays' writes land.
+func (p Policy) diskPaths() []string {
+	out := []string{p.Workspace, p.Home}
+	if len(p.Caches) > 0 && p.CacheLock != "" {
+		out = append(out, filepath.Dir(p.CacheLock))
 	}
 	return out
 }

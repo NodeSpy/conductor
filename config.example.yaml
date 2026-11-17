@@ -1537,7 +1537,7 @@ sandbox:
   #                             #   only conductor publishes, from a sandboxed warm on the default branch
   #   enabled: false            # off by default (an upgrade starts no warms); true needs the agent sandbox
   #   dir: ""                   # default <state dir>/repo-caches
-  #   max_size: 10GiB           # all of dir (caches, warm scratch, run layers); least recently used
+  #   max_size: 10GiB           # all of dir (caches, warm scratch; not a running launch's writes); least recently used
   #                             #   evicted past this (never one in use); a bigger cache is not published; off = no cap
   #   autodetect: true          # bundled recipes: go, npm, pnpm, yarn, pip, uv, cargo, bundler
   #   repo_file: true           # read the repository's .conductor.yaml (default branch only; grants nothing:

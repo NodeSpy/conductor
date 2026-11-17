@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,10 +33,11 @@ func TestSandboxCachesListAndClear(t *testing.T) {
 	pub("acme/web", "go", "go-linux-aaa")
 	inUse := pub("acme/web", "npm", "npm-linux-bbb")
 	pub("acme/api", "go", "go-linux-ccc")
-	// A live per-dispatch home overlays the npm cache: conductor's ledger
-	// beside the store names the home and what its overlays sit on.
+	// A live launch overlays the npm cache: conductor's ledger beside the
+	// store names it and what its overlays sit on.
 	home := filepath.Join(agentState, ".dispatch-homes", "agent_x@d1")
-	run := filepath.Join(store, ".layers", "r1")
+	// Named for when it was restored, so it is live within the grace.
+	run := filepath.Join(store, ".layers", fmt.Sprintf("%d-r1", time.Now().UnixNano()))
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +62,7 @@ func TestSandboxCachesListAndClear(t *testing.T) {
 			t.Errorf("list lacks %q:\n%s", want, out)
 		}
 	}
-	// Clearing a repository keeps what a live home uses.
+	// Clearing a repository keeps what a running launch uses.
 	out, _ = captureStdout(t, func() error {
 		if c := cmdSandboxCaches(append([]string{"clear"}, append(args, "acme/web")...)); c != 1 {
 			t.Errorf("clear with a kept cache exit %d", c)
@@ -82,6 +84,25 @@ func TestSandboxCachesListAndClear(t *testing.T) {
 	})
 	if l := st.List(); len(l) != 1 || l[0].Repo != "acme/api" {
 		t.Fatalf("left %+v", l)
+	}
+	// Clear's in-use check and removal wait for the store's lock, held here
+	// as a daemon's restore would hold it (another process's flock).
+	held, release := make(chan struct{}), make(chan struct{})
+	go (&repocache.Store{Dir: store}).Locked(func() { close(held); <-release })
+	<-held
+	start := time.Now()
+	time.AfterFunc(300*time.Millisecond, func() { close(release) })
+	captureStdout(t, func() error {
+		if c := cmdSandboxCaches(append([]string{"clear"}, append(args, "acme/api")...)); c != 0 {
+			t.Errorf("clear exit %d", c)
+		}
+		return nil
+	})
+	if d := time.Since(start); d < 250*time.Millisecond {
+		t.Fatalf("clear did not wait for the store's lock (%v)", d)
+	}
+	if len(st.List()) != 0 {
+		t.Fatalf("left %+v", st.List())
 	}
 	if c := cmdSandboxCaches(append([]string{"clear"}, append(args, "../etc")...)); c != 2 {
 		t.Fatalf("bad repo exit %d", c)

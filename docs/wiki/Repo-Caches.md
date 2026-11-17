@@ -35,8 +35,11 @@ repository it trusts (a dispatch's PR or branch worktree):
      store** (`<dir>/.layers/`), never in the run's home or workspace.
      `mount(2)` takes them as paths and follows a symlink in them, so they
      must be somewhere no agent can write. The store, and these layers, are
-     never visible inside the sandbox. A run's layers are removed once its
-     home is gone.
+     never visible inside the sandbox. Each launch has its own layers, even
+     when launches share a home (`persist: home`), and they are removed when
+     the launch ends. A cache at a path that cannot be shown (for example
+     under `~/.cache` when `persist: cache` links it elsewhere) is skipped
+     and logged; the launch runs without that cache, never fails for it.
    - **macOS:** a copy-on-write clone (APFS `clonefile`) into the home or
      workspace. It costs almost no disk until the run changes a file.
    - **Neither available** (a kernel before 5.11 or a filesystem overlay
@@ -92,16 +95,25 @@ branch's cache, under a matching restore key) and fetches the difference
 itself. Its cache is published after the PR merges.
 
 **Eviction.** The store is capped (`max_size`, default 10 GiB). The cap
-covers everything under `dir`: published caches, warm scratch, and the runs'
-overlay layers. When the store is over the cap, the least recently restored
-caches are removed first. A cache that a live run still has an overlay on is
-never removed. Whether a run is live is conductor's own record, kept beside
-the store: it names the run's home, and holds while that home exists.
-Nothing in a home is ever read for it.
+covers the published caches and warm scratch. When the store is over the
+cap, the least recently restored caches are removed first. A cache that a
+running launch has an overlay on is never removed. That record is
+conductor's own, kept beside the store: one entry per launch, held for as
+long as the launch runs and removed when it ends (or, if the daemon died,
+swept once its lock is free). A home that is kept, or never removed, pins
+nothing once its launches have ended. Nothing in a home is ever read for it.
+
+What a running launch writes over a cache (its upper layer) is not counted
+against the cap, so one launch's writes never evict the caches others
+restore. It is bounded like the rest of the run's disk: the sandbox's
+low-disk guard watches the store's filesystem as well as the home's and
+the workspace's.
 
 A warm whose output is larger than the cap is not published, because it
-would be evicted straight away. The log says so once, and that key is not
-warmed again until the daemon restarts.
+would be evicted straight away. The log says so once, and the store keeps a
+mark so that key is not warmed again, across restarts. A warm that fits the
+cap but not the room the caches in use leave is not published this time,
+and is tried again later.
 
 A warm in flight is cancelled when the daemon stops. Scratch left by a daemon
 that died mid-warm is removed when the next one starts.
@@ -258,7 +270,7 @@ $ conductor sandbox caches clear acme/app go         # one cache
 $ conductor sandbox caches clear acme/app go KEY     # one key
 ```
 
-`clear` keeps a cache that a live agent home still has an overlay on, unless
+`clear` keeps a cache that a running launch has an overlay on, unless
 you pass `--force`.
 
 ## With the package proxy
@@ -279,9 +291,8 @@ fetches through whatever that sandbox fetches through, and a cache adds no
 - An overlay's upper layer is mounted `volatile`, so it is never synced to
   disk. It is the run's scratch space: after a host crash, a run's own
   writes over a cache may be lost.
-- A run's layers, and the caches they sit on, last as long as its home. A
-  per-dispatch home is swept a day after its session ends. A kept identity
-  home (`persist: home`) keeps its layers, and the caches it last restored,
-  until you remove it.
+- A launch's layers, and its pin on the caches they sit on, last as long as
+  the launch. A run's writes over a cache are not kept for its next launch,
+  even in a kept home.
 - A cache's content is only as trustworthy as the default branch it was
   built from, and the dependencies that branch names.

@@ -92,7 +92,8 @@ func TestJailOverlayCache(t *testing.T) {
 
 // TestJailOverlayRefusesSymlinkTarget: a target reached through a symlink
 // (a workspace is the agent's, and a link it left could send the mount
-// anywhere) fails the jail rather than mount through it.
+// anywhere) is never mounted through. The launch still runs, without that
+// cache, and says so.
 func TestJailOverlayRefusesSymlinkTarget(t *testing.T) {
 	if os.Getenv("OVL_ROLE") != "" {
 		return
@@ -116,11 +117,15 @@ func TestJailOverlayRefusesSymlinkTarget(t *testing.T) {
 		"OVL_HOME": home, "OVL_LOWER": lower, "OVL_UPPER": upper, "OVL_WORK": work,
 		"OVL_TARGET": filepath.Join(home, "go", "mod"), "OVL_LAYERS": layers,
 	})
-	if code == ovlOK {
-		t.Fatalf("the jail mounted through a symlinked target\n%s", out)
+	if code == ovlCannot {
+		t.Skipf("environment cannot mount an overlay in a user namespace:\n%s", out)
 	}
-	if !strings.Contains(out, "symlink") && !strings.Contains(out, "not a directory") {
-		t.Fatalf("exit %d without naming the symlink:\n%s", code, out)
+	// The payload ran, and found no cache at the target.
+	if code != ovlNoCache {
+		t.Fatalf("exit %d; want the payload to run without the cache\n%s", code, out)
+	}
+	if !strings.Contains(out, "is not mounted") || (!strings.Contains(out, "symlink") && !strings.Contains(out, "not a directory")) {
+		t.Fatalf("no warning naming the symlink:\n%s", out)
 	}
 	if ents, _ := os.ReadDir(elsewhere); len(ents) != 0 {
 		t.Fatalf("the symlink's target was written: %v", ents)

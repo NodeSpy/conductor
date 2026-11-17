@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,14 +22,20 @@ import (
 //	<dir>/<repo slug>/<name>/<key>/data/home/<rel>, data/workspace/<rel>
 //	<dir>/<repo slug>/<name>/<key>/.used       mtime = last restore
 //	<dir>/.warm/<repo slug>-*/                 a warm's checkout and home (scratch)
-//	<dir>/.layers/<run>/home, uses, <slot>/{upper,work}
-//	                                           a run's overlay layers and which caches they sit on
+//	<dir>/.layers/<launch>/lock, home, uses, <slot>/{upper,work}
+//	                                           a launch's overlay layers and which caches they sit on
+//	<dir>/.toobig/<hash>                       a key whose warm left more than the cap
 //
 // A published key directory is immutable: it is built under a dot name and
 // renamed into place, and only ever removed whole (eviction, clear). A
 // restore reads it as an overlay's read-only lower layer or clones it.
 type Store struct {
 	Dir string
+	// LaunchGrace is how long a launch's ledger entry is live before its
+	// launch holds the entry's lock (0: DefaultLaunchGrace).
+	LaunchGrace time.Duration
+
+	mu sync.Mutex
 }
 
 // Meta is a published cache's record.

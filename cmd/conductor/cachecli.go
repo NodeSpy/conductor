@@ -17,7 +17,7 @@ a launch last restored it, and where its definition came from (config, the
 repository's .conductor.yaml, or autodetect).
 
 clear removes a repository's caches, one named cache, or one key. A cache a
-live agent home still has an overlay on is kept unless --force (its run
+running launch has an overlay on is kept unless --force (the launch
 keeps the files it has open; a later lookup in it fails).
 `
 
@@ -48,8 +48,8 @@ func cmdSandboxCaches(args []string) int {
 		return 1
 	}
 	st := &repocache.Store{Dir: cfg.CachesDir()}
-	used := st.Used()
 	if !clear {
+		used := st.Used()
 		if len(pos) > 0 {
 			fmt.Fprintf(os.Stderr, "conductor sandbox caches: unexpected %q\n%s", pos[0], cachesUsage)
 			return 2
@@ -68,22 +68,31 @@ func cmdSandboxCaches(args []string) int {
 		fmt.Fprintf(os.Stderr, "conductor sandbox caches clear: %v\n", err)
 		return 2
 	}
-	n, kept := 0, 0
-	for _, e := range st.List() {
-		if e.Repo != repo || (len(pos) > 1 && e.Name != pos[1]) || (len(pos) > 2 && e.Key != pos[2]) {
-			continue
+	n, kept, failed := 0, 0, false
+	// What is in use and its removal are one critical section with the
+	// daemon's restores: a launch never gets a cache being removed.
+	st.Locked(func() {
+		used := st.Used()
+		for _, e := range st.List() {
+			if e.Repo != repo || (len(pos) > 1 && e.Name != pos[1]) || (len(pos) > 2 && e.Key != pos[2]) {
+				continue
+			}
+			if used[e.Dir] && !force {
+				fmt.Printf("kept %s %s %s: a running launch uses it (--force to remove anyway)\n", e.Repo, e.Name, e.Key)
+				kept++
+				continue
+			}
+			if err := st.Remove(e); err != nil {
+				fmt.Fprintf(os.Stderr, "conductor sandbox caches clear: %s %s %s: %v\n", e.Repo, e.Name, e.Key, err)
+				failed = true
+				return
+			}
+			fmt.Printf("removed %s %s %s (%s)\n", e.Repo, e.Name, e.Key, repocache.HumanSize(e.Size))
+			n++
 		}
-		if used[e.Dir] && !force {
-			fmt.Printf("kept %s %s %s: a live agent home uses it (--force to remove anyway)\n", e.Repo, e.Name, e.Key)
-			kept++
-			continue
-		}
-		if err := st.Remove(e); err != nil {
-			fmt.Fprintf(os.Stderr, "conductor sandbox caches clear: %s %s %s: %v\n", e.Repo, e.Name, e.Key, err)
-			return 1
-		}
-		fmt.Printf("removed %s %s %s (%s)\n", e.Repo, e.Name, e.Key, repocache.HumanSize(e.Size))
-		n++
+	})
+	if failed {
+		return 1
 	}
 	if n == 0 && kept == 0 {
 		fmt.Println("no matching cache")

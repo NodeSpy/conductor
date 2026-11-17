@@ -208,7 +208,12 @@ func buildJailIn(binds []BindMount, jailRoot string, t *jailTmp, base string) er
 		case b.Tmpfs:
 			err = mountTmpfs(root+b.Path, "mode=0700")
 		case b.Overlay != nil:
-			err = mountOverlay(root, b)
+			// A cache that cannot be shown (its target became a link, the
+			// kernel refuses the mount) is skipped, not fatal: the launch
+			// runs without it.
+			if oerr := mountOverlay(root, b); oerr != nil {
+				fmt.Fprintf(os.Stderr, "conductor sandbox: a cache at %s is not mounted: %v\n", b.Path, oerr)
+			}
 		case b.Link != "":
 			if err = os.MkdirAll(filepath.Dir(root+b.Path), 0o755); err == nil {
 				if err = os.Symlink(b.Link, root+b.Path); os.IsExist(err) {
@@ -380,8 +385,8 @@ func mountOverlay(root string, b BindMount) error {
 	target := fmt.Sprintf("/proc/self/fd/%d", fd)
 	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", o.Lower, o.Upper, o.Work)
 	flags := uintptr(unix.MS_NOSUID | unix.MS_NODEV)
-	// volatile: the upper layer is the run's scratch, deleted with its home,
-	// so the overlay never syncs it — without it, tearing the namespace down
+	// volatile: the upper layer is the launch's scratch, deleted when the
+	// launch ends, so the overlay never syncs it — without it, tearing the namespace down
 	// syncs the whole upper filesystem, seconds on a busy disk. A kernel
 	// before 5.10 refuses the option; one that wants user xattrs for an
 	// unprivileged mount says so the same way (EINVAL).
