@@ -72,6 +72,10 @@ func (s *Store) PutRun(r WorkflowRun) error {
 	s.mu.Lock()
 	r.UpdatedAt = s.now()
 	rr := r
+	// The caller keeps writing its own record's Outputs while saves of
+	// other runs serialize the stored one: store a copy, never the
+	// caller's map.
+	rr.Outputs = copyOutputs(r.Outputs)
 	rr.Agents = nil
 	if cur := s.runs[r.ID]; cur != nil {
 		rr.Agents = cur.Agents
@@ -197,7 +201,35 @@ func (s *Store) PendingRuns() []WorkflowRun {
 	defer s.mu.Unlock()
 	out := make([]WorkflowRun, 0, len(s.runs))
 	for _, r := range s.runs {
-		out = append(out, *r)
+		c := *r
+		c.Outputs = copyOutputs(r.Outputs)
+		if r.Agents != nil {
+			c.Agents = make(map[string]RunAgent, len(r.Agents))
+			for k, v := range r.Agents {
+				c.Agents[k] = v
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// copyOutputs copies a run's outputs map and each step's map in it.
+func copyOutputs(in map[string]map[string]any) map[string]map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]map[string]any, len(in))
+	for id, m := range in {
+		if m == nil {
+			out[id] = nil
+			continue
+		}
+		c := make(map[string]any, len(m))
+		for k, v := range m {
+			c[k] = v
+		}
+		out[id] = c
 	}
 	return out
 }
