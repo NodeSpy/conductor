@@ -387,6 +387,11 @@ func (h *inspectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if why == "" {
 			op, repo = gitOp(r, np)
 		}
+		if op == gitFetch && r.URL.RawPath != "" {
+			// An escaped path (%2F) the forge may read otherwise: no
+			// credential.
+			op = gitNone
+		}
 		switch op {
 		case gitPush:
 			if h.p.OnDeny != nil {

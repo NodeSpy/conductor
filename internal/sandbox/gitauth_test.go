@@ -119,6 +119,7 @@ func TestGitFetchCredentialOnlyOnFetchesInScope(t *testing.T) {
 				{"GET", "/organization/x.git/info/refs?service=git-upload-pack"},
 				{"GET", "/org/../other/secret.git/info/refs?service=git-upload-pack"},
 				{"GET", "/org/%2e%2e/other/secret.git/info/refs?service=git-upload-pack"},
+				{"GET", "/org/dep.git%2Finfo%2Frefs?service=git-upload-pack"},
 				{"GET", "/org/dep.git/info/refs"},                          // dumb HTTP
 				{"POST", "/org/dep.git/info/refs?service=git-upload-pack"}, // wrong method
 				{"GET", "/org/dep.git/git-upload-pack"},                    // wrong method
@@ -210,7 +211,9 @@ func TestGitOp(t *testing.T) {
 		{"GET", "/o/r.git/info/refs?service=git-upload-pack", gitFetch, "/o/r"},
 		{"HEAD", "/o/r/info/refs?service=git-upload-pack", gitFetch, "/o/r"},
 		{"GET", "/o/r.git/info/refs?service=git-receive-pack", gitPush, "/o/r"},
-		{"GET", "/o/r.git/info/refs?service=git-upload-pack&service=git-receive-pack", gitFetch, "/o/r"},
+		{"GET", "/o/r.git/info/refs?service=git-upload-pack&service=git-receive-pack", gitPush, "/o/r"},
+		{"GET", "/o/r.git/info/refs?service=git-upload-pack&service=git-upload-pack", gitNone, ""},
+		{"GET", "/o/r.git/info/refs?service=git-upload-pack&service=x", gitNone, ""},
 		{"POST", "/o/r.git/git-upload-pack", gitFetch, "/o/r"},
 		{"POST", "/o/r.git/git-receive-pack", gitPush, "/o/r"},
 		{"PUT", "/o/r.git/git-receive-pack", gitPush, "/o/r"},

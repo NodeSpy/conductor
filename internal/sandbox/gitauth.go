@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -129,11 +130,13 @@ func gitOp(r *http.Request, p string) (op, repo string) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			return gitNone, ""
 		}
-		switch r.URL.Query().Get("service") {
-		case "git-upload-pack":
-			op = gitFetch
-		case "git-receive-pack":
+		// Exactly one service: a server may read either of two.
+		svc := r.URL.Query()["service"]
+		switch {
+		case slices.Contains(svc, "git-receive-pack"):
 			op = gitPush
+		case len(svc) == 1 && svc[0] == "git-upload-pack":
+			op = gitFetch
 		default:
 			return gitNone, ""
 		}
