@@ -252,6 +252,7 @@ func TestAPIGitHost(t *testing.T) {
 		"https://ghe.corp/api/v3":         "ghe.corp",
 		"https://api.x.ghe.com":           "x.ghe.com",
 		"https://api.corp/api/v3":         "api.corp",
+		"https://api.corp.example/api/v3": "api.corp.example",
 		"https://api.localhost":           "api.localhost",
 		"https://ghe.corp:443/api/v3":     "ghe.corp",
 		"https://ghe.corp:8443/api/v3":    "ghe.corp:8443",
