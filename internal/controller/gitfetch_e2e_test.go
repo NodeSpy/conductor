@@ -286,8 +286,19 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	// hidden from the sandbox, as it should be: the warm half needs one the
 	// sandbox shows.
 	warmYarn := yarn
-	if h, _ := os.UserHomeDir(); yarn != "" && h != "" && strings.HasPrefix(yarn, h+"/") {
-		warmYarn = ""
+	if h, _ := os.UserHomeDir(); yarn != "" && h != "" {
+		for _, d := range filepath.SplitList(os.Getenv("PATH")) {
+			p := filepath.Join(d, "yarn")
+			if _, err := os.Stat(p); err != nil {
+				continue
+			}
+			if r, err := filepath.EvalSymlinks(p); err == nil {
+				p = r
+			}
+			if strings.HasPrefix(p, h+"/") || strings.HasPrefix(filepath.Clean(d), h+"/") {
+				warmYarn = ""
+			}
+		}
 	}
 	origin := appOrigin(t, root, forge, yarn)
 	forge.reset()
