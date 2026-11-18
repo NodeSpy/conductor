@@ -157,6 +157,9 @@ type Engine struct {
 	flow       *flow.Runner
 	grouper    *flow.Grouper
 	connectors *connector.Registry
+	// gitMem: the git fetch state of an engine whose store keeps none
+	// (gitfetch.go).
+	gitMem gitMem
 
 	budgetMu  sync.Mutex  // guards agentDisp (rolling agent-dispatch timestamps)
 	agentDisp []time.Time // agent-dispatch times in the last hour (runaway budget)

@@ -56,6 +56,8 @@ type Store struct {
 	sessionsPath string
 	affinityPath string
 	plansPath    string
+	gitFetchPath string
+	learnedPath  string
 	ttl          time.Duration
 	maxPRs       int
 	recs         map[string]*Record
@@ -63,6 +65,8 @@ type Store struct {
 	sessions     map[string]*SessionRecord
 	affinity     map[string]*AffinityRecord
 	plans        map[string]*PlanRecord
+	gitFetch     map[string]string
+	learned      map[string]map[string][]string
 	audit        *auditLog
 	now          func() time.Time
 
@@ -112,6 +116,8 @@ func Open(o Options) (*Store, error) {
 		sessionsPath: filepath.Join(filepath.Dir(o.StatePath), "sessions.json"),
 		affinityPath: filepath.Join(filepath.Dir(o.StatePath), "affinity.json"),
 		plansPath:    filepath.Join(filepath.Dir(o.StatePath), "plans.json"),
+		gitFetchPath: filepath.Join(filepath.Dir(o.StatePath), "git-fetch.json"),
+		learnedPath:  filepath.Join(filepath.Dir(o.StatePath), "git-learned.json"),
 		ttl:          o.TTL,
 		maxPRs:       o.MaxPRs,
 		recs:         map[string]*Record{},
@@ -119,6 +125,8 @@ func Open(o Options) (*Store, error) {
 		sessions:     map[string]*SessionRecord{},
 		affinity:     map[string]*AffinityRecord{},
 		plans:        map[string]*PlanRecord{},
+		gitFetch:     map[string]string{},
+		learned:      map[string]map[string][]string{},
 		now:          time.Now,
 
 		historyMaxAge:  o.HistoryMaxAge,
@@ -169,6 +177,22 @@ func Open(o Options) (*Store, error) {
 		_ = json.Unmarshal(b, &s.plans)
 		if s.plans == nil {
 			s.plans = map[string]*PlanRecord{}
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if b, err := os.ReadFile(s.gitFetchPath); err == nil {
+		_ = json.Unmarshal(b, &s.gitFetch)
+		if s.gitFetch == nil {
+			s.gitFetch = map[string]string{}
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if b, err := os.ReadFile(s.learnedPath); err == nil {
+		_ = json.Unmarshal(b, &s.learned)
+		if s.learned == nil {
+			s.learned = map[string]map[string][]string{}
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, err

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -309,4 +310,92 @@ func TestSandboxControlRefusesAnotherUID(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("another uid's event was recorded: %v", got)
 	}
+}
+
+// A `conductor sandbox exec` launch in a workspace conductor checked out
+// of a repository it trusts (a hand-off) gets that repository's git fetch
+// credentials: the daemon sends them beside the policy — whose own JSON
+// never holds the secret — and the exec process's proxy applies them. A
+// directory conductor never checked out gets none, and asks for none.
+func TestSandboxExecGitFetchCredential(t *testing.T) {
+	old := sandboxResolver.Load()
+	t.Cleanup(func() { sandboxResolver.Store(old) })
+	const secret = "s3cr3t-fetch-token"
+	var asked []string
+	ws, other := t.TempDir(), t.TempDir()
+	reg := &agentsandbox.Registry{}
+	reg.Register(agentsandbox.Entry{Workspace: ws, Identity: "agent:x", Dispatch: "d-1", Repo: "org/app"})
+	sandboxResolver.Store(&agentsandbox.Resolver{Registry: reg, StateRoot: t.TempDir(), GOOS: sandbox.CheckGOOS,
+		GitAuth: func(repo string) []sandbox.GitAuth {
+			asked = append(asked, repo)
+			return []sandbox.GitAuth{{Host: "forge.example", Repos: []string{"/org/app", "/org/dep"}, For: repo, Username: "x-access", Secret: secret}}
+		}})
+
+	// The daemon's own uid on the other end of a real connection.
+	peer := unixPeer(t)
+	resp := sandboxPolicyResponse(peer, controlRequest{Cwd: ws, Tool: "claude"}, t.Logf)
+	if resp.Error != "" || resp.Policy == nil || len(resp.GitAuth) != 1 || resp.GitAuth[0].Secret != secret || resp.GitAuth[0].For != "org/app" {
+		t.Fatalf("hand-off workspace: %+v", resp)
+	}
+	// No peer credentials to check the uid against: the policy, never the
+	// secret.
+	if r := sandboxPolicyResponse(nil, controlRequest{Cwd: ws, Tool: "claude"}, t.Logf); r.Error != "" || r.Policy == nil || len(r.GitAuth) != 0 {
+		t.Fatalf("unchecked caller: %+v", r)
+	}
+	if len(asked) != 1 {
+		t.Fatalf("an unchecked caller had a credential minted: asked %v", asked)
+	}
+	if b, _ := json.Marshal(resp.Policy); strings.Contains(string(b), secret) {
+		t.Fatal("the policy's JSON holds the secret")
+	}
+	if !slices.Equal(asked, []string{"org/app"}) {
+		t.Fatalf("asked for %v", asked)
+	}
+	asked = nil
+	if r := sandboxPolicyResponse(peer, controlRequest{Cwd: other, Tool: "claude"}, t.Logf); r.Error != "" || len(r.GitAuth) != 0 || len(asked) != 0 {
+		t.Fatalf("a directory conductor never checked out: %+v (asked %v)", r, asked)
+	}
+
+	// Over the control socket, into the exec process's policy.
+	sock, _ := fakeControl(t, func(controlRequest) controlResponse { return resp })
+	pol, err := fetchSandboxPolicy(sock, controlRequest{Cmd: "sandbox-policy", Cwd: ws, Tool: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pol.GitAuth) != 1 || pol.GitAuth[0].Secret != secret || pol.GitAuth[0].Host != "forge.example" || pol.GitAuth[0].Username != "x-access" || !slices.Equal(pol.GitAuth[0].Repos, []string{"/org/app", "/org/dep"}) || pol.GitAuth[0].For != "org/app" {
+		t.Fatalf("exec's policy: %+v", pol.GitAuth)
+	}
+	if err := pol.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// unixPeer is the server end of a unix connection this process made: its
+// peer credentials are this process's.
+func unixPeer(t *testing.T) net.Conn {
+	t.Helper()
+	dir, err := agentsandbox.SocketDir("peer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	ln, err := net.Listen("unix", filepath.Join(dir, "s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	c, err := net.Dial("unix", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	s, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if _, _, ok := peerCred(s); !ok {
+		t.Skip("no peer credentials on this platform")
+	}
+	return s
 }

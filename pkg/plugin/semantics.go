@@ -453,7 +453,39 @@ type ConnSemantics struct {
 	Translate   *TranslateSemantics `json:"translate,omitempty"`
 	Listeners   []Listener          `json:"listeners,omitempty"`
 	Preflight   *PreflightSemantics `json:"preflight,omitempty"`
-	Optional    []string            `json:"optional,omitempty"`
+	// GitFetch: git fetches the host authenticates with one of the
+	// credentials above. See GitFetch.
+	GitFetch []GitFetch `json:"git_fetch,omitempty"`
+	Optional []string   `json:"optional,omitempty"`
+}
+
+// GitFetch declares that a read credential also authenticates git's
+// fetches (smart HTTP, read only) on a host. An agent's sandbox holds no
+// credential and no SSH key: the host rewrites the SSH forms of the host's
+// URLs to HTTPS for the agent's git, and its egress proxy adds the
+// credential to fetches of the repositories conductor scopes it to — the
+// secret never enters the sandbox, and a push to the host is refused.
+//
+// The plugin declares the host and the credential only. Which repositories
+// a launch's credential covers is conductor's: the repository the work is
+// for, and the dependencies its default branch's cache warm fetched.
+// Declaring git_fetch admits the host to every launch's egress for those
+// fetches; a build that adds or changes one is held for approval.
+type GitFetch struct {
+	// Credential names a declared credential of role read.
+	Credential string `json:"credential"`
+	// Hosts are exact host names, with :port when not 443: the hosts when
+	// HostFrom is unset, or the instance does not set it.
+	Hosts []string `json:"hosts"`
+	// HostFrom names a connection setting holding the forge's API base URL
+	// (a self-hosted forge's API base URL). When an instance sets it,
+	// the git host is that URL's host instead of Hosts — less a leading
+	// "api." label when the API is served at the host's root
+	// (https://api.example.com is example.com; https://forge.example.com/api/v3
+	// is forge.example.com).
+	HostFrom string `json:"host_from,omitempty"`
+	// Username is the HTTP basic username sent with the credential.
+	Username string `json:"username"`
 }
 
 // Credential is one credential agents dispatched on this connection's
@@ -551,7 +583,7 @@ var semanticKeys = map[string][]string{
 		"private", "secret", "conversation_reply", "option_hooks", "attachments"},
 	"verb": {"reads_revision", "mints_credential", "opens_conversation", "conversation_post", "host_only",
 		"target_args", "exposes", "identity", "call_timeout"},
-	"connection": {"credentials", "scope", "poll", "translate", "listeners", "preflight"},
+	"connection": {"credentials", "scope", "poll", "translate", "listeners", "preflight", "git_fetch"},
 	// Not declaration keys: the host resolves a declaration's config: and
 	// env: entries (SemanticReferences), grants expose_local
 	// (SemanticExposeLocal), and grants keyring items (SemanticKeyring).
@@ -893,6 +925,32 @@ func ValidateSemantics(d Decl) []string {
 				p = append(p, fmt.Sprintf("%s.mint.verb: verb %q must declare mints_credential: {credential: %s}", path, cr.Mint.Verb, cr.Name))
 			}
 		}
+		for i, g := range c.GitFetch {
+			path := fmt.Sprintf("semantics.git_fetch[%d]", i)
+			role := ""
+			for _, cr := range c.Credentials {
+				if cr.Name == g.Credential {
+					role = cr.Role
+				}
+			}
+			if role != "read" {
+				p = append(p, path+".credential: must name a declared credential of role read")
+			}
+			if len(g.Hosts) == 0 {
+				p = append(p, path+".hosts: required")
+			}
+			for _, h := range g.Hosts {
+				if !gitHostName(h) {
+					p = append(p, fmt.Sprintf("%s.hosts: %q is not an exact host name (with :port when not 443)", path, h))
+				}
+			}
+			if g.Username == "" || strings.ContainsAny(g.Username, ":\r\n") {
+				p = append(p, path+".username: required, with no ':' or newline")
+			}
+			if g.HostFrom != "" && !connFieldDeclared(d.Connection, g.HostFrom) {
+				p = append(p, fmt.Sprintf("%s.host_from: %q is not a declared connection field", path, g.HostFrom))
+			}
+		}
 		if s := c.Scope; s != nil && (s.Dimension == "" || s.Option == "") {
 			p = append(p, "semantics.scope: dimension and option are required")
 		}
@@ -952,4 +1010,23 @@ func FactName(s string) string {
 		return t[3 : len(t)-2]
 	}
 	return s
+}
+
+// gitHostName reports an exact lower-case DNS name, optionally :port.
+func gitHostName(h string) bool {
+	name, port, hasPort := strings.Cut(h, ":")
+	if hasPort {
+		if port == "" || len(port) > 5 || strings.Trim(port, "0123456789") != "" || port[0] == '0' {
+			return false
+		}
+	}
+	if name == "" || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") || strings.Contains(name, "..") {
+		return false
+	}
+	for _, c := range name {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	return true
 }

@@ -460,6 +460,13 @@ A plugin's `plugin.describe` carries a `capabilities` block:
 | `keyring` | logins in your OS keyring that it (or a command it runs) reads, each named by the attributes it is stored under | `[{label: "gh login for github.com", attributes: {service: "gh:github.com"}}]` |
 | `expose_local` | (an exposure) connecting to the listeners conductor wires to it | `true` |
 
+A connector's `semantics.git_fetch` ([[Isolation#git-fetch]]) is recorded
+and held the same way: it admits its host to every agent launch's egress
+for git fetches authenticated with the plugin's credential, so a build that
+adds one, or changes its host, `host_from`, credential or username, waits
+for `conductor plugin approve` (`lets agents' git fetch with its credential
+read as x-access-token from github.com`).
+
 #### Keyring logins
 
 A CLI such as `gh` or `glab` keeps your login in the OS keyring: on Linux

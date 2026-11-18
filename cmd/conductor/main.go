@@ -933,6 +933,8 @@ func cmdRun(args []string) error {
 		cost.SetPricing(models, def)
 	}
 	eng := engine.New(engOpts)
+	// A cache warm's git fetch credentials (sandbox.git_fetch).
+	controller.WarmGitAuth, controller.WarmGitLearned, controller.ScopedGitAuth = eng.GitFetchWarm, eng.GitLearned, eng.GitFetchFor
 	// Model selection (docs/design/runtimes-models-packs.md §2.3): the
 	// resolver owns the fleet ladder and the discovered rosters. Discovery
 	// is lazy and degrade-safe — a box that cannot enumerate simply bare
@@ -1705,6 +1707,9 @@ type controlResponse struct {
 	// Policy answers sandbox-policy: the launch's sandbox, with a token
 	// minted for this launch alone.
 	Policy *agentsandbox.Policy `json:"policy,omitempty"`
+	// GitAuth is the policy's git fetch credentials, which the Policy never
+	// serializes (sandboxpolicy.go).
+	GitAuth []gitAuthWire `json:"git_auth,omitempty"`
 	// Data answers a browser-* command.
 	Data json.RawMessage `json:"data,omitempty"`
 	// Result is a bot command's structured answer.

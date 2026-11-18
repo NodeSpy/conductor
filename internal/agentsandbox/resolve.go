@@ -72,6 +72,12 @@ type Resolver struct {
 	// a repository it trusts (Entry.Repo); it logs its own failures, and a
 	// launch whose caches fail runs without them. nil: no caches.
 	Caches func(repocache.Request) repocache.Grant
+	// GitAuth is the git fetch credentials (sandbox.GitAuth) for a launch
+	// in a workspace conductor checked out of repo, a repository it trusts
+	// (Entry.Repo) — a `conductor sandbox exec` launch's, whose proxy is
+	// the exec process's own; asked only for a caller anchored to a process
+	// (PolicyFor's root). nil: none.
+	GitAuth func(repo string) []sandbox.GitAuth
 	// Session resolves a cwd that is NOT in the registry to a live bot
 	// session's entry (its identity, its granted skill verbs, its read-only
 	// paths), consulted before a default workspace is built. This is how a
@@ -153,6 +159,11 @@ func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK b
 func (r *Resolver) policyForCwd(e Entry, cwd, tool string, launcherEnv []string, root skill.ProcessAnchor) (Policy, error) {
 	p, err := r.PolicyForEntry(e, tool, launcherEnv, root)
 	p.Cwd = canon(cwd)
+	// Like a token, a git credential goes only to a caller anchored to its
+	// process tree (root): one whose uid could not be checked gets none.
+	if err == nil && r.GitAuth != nil && e.Repo != "" && !root.Empty() {
+		p.GitAuth = r.GitAuth(e.Repo)
+	}
 	if err == nil && p.Tool == "claude-code" && e.Dispatch != "" && p.Cwd != p.Workspace {
 		err = trustClaudeWorkspace(p.Home, p.Cwd)
 	}
@@ -352,6 +363,12 @@ func (r *Resolver) WarmPolicy(workspace, home, identity string) Policy {
 		ModelCredential: CredLoginCopy,
 		EgressAnyBytes:  r.EgressAnyBytes, EgressIdle: r.EgressIdle,
 		EgressUpload: r.EgressUpload, EgressDownload: r.EgressDownload,
+	}
+	// sandbox.inspect applies to every launch: a warm's https:// path
+	// entries, and the upstream CA a git fetch host (a private forge) is
+	// verified with.
+	for _, h := range r.Inspect {
+		p.Inspect = appendInspect(p.Inspect, h)
 	}
 	applyScope(&p, r.Allow, nil)
 	return p

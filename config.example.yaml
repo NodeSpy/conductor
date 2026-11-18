@@ -1486,6 +1486,11 @@ sandbox:
   #                             #   (checked before the dial; SSH and unknown bytes refused);
   #                             #   false lets any protocol through an allowed host. Alias:
   #                             #   egress_require_tls. One target: allow.raw below.
+  # git_fetch: true             # a connector's declared git fetch credential (github: its read
+  #                             #   token) authenticates the agent's git fetches of the repo and
+  #                             #   the dependencies its default branch's cache warm fetched,
+  #                             #   added by the egress proxy (never given to the agent); their
+  #                             #   SSH URLs are fetched over HTTPS. Pushes refused.
   # (egress: entries also take exact names and CIDRs that reach private space, and
   #  http://host:port/prefix/ for a plain-HTTP mirror restricted to a path; an https:// path
   #  is a validate error unless the host is inspected. Isolation.md § A local package mirror.)

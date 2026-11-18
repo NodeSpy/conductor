@@ -3,6 +3,7 @@ package gitpush
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -204,7 +205,18 @@ func TestSnapshotIgnoresAlternatesAndSymlinks(t *testing.T) {
 	f.commit(t, "b.txt", "b\n")
 	elsewhere := t.TempDir()
 	os.WriteFile(filepath.Join(elsewhere, "loot"), []byte("x"), 0o644)
-	os.Symlink(elsewhere, filepath.Join(f.ws, ".git", "objects", "ee"))
+	// An object dir name the clone does not already have (one of its own
+	// objects may start with any two hex digits).
+	link := ""
+	for i := 0; i < 256 && link == ""; i++ {
+		n := fmt.Sprintf("%02x", i)
+		if _, err := os.Lstat(filepath.Join(f.ws, ".git", "objects", n)); err != nil {
+			link = n
+		}
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(f.ws, ".git", "objects", link)); err != nil {
+		t.Fatal(err)
+	}
 	dst := t.TempDir()
 	if err := snapshotObjects(f.ws, dst); err != nil {
 		t.Fatal(err)
@@ -212,7 +224,7 @@ func TestSnapshotIgnoresAlternatesAndSymlinks(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dst, "info")); err == nil {
 		t.Fatal("objects/info is never copied")
 	}
-	if _, err := os.Stat(filepath.Join(dst, "ee")); err == nil {
+	if _, err := os.Stat(filepath.Join(dst, link)); err == nil {
 		t.Fatal("a symlinked object dir is never followed")
 	}
 }

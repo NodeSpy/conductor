@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -1123,6 +1124,9 @@ func manifestFromDecl(decl *Decl) Manifest {
 		// `conductor connector auth <name>` can run the interactive login
 		// WITHOUT respawning the plugin to re-Describe it.
 		Auth: decl.Auth,
+		// git_fetch admits a host to agents' egress: recorded, so an
+		// update that adds or changes one is held for approval.
+		GitFetch: gitFetchEntries(decl),
 		// SingleProcess (the plugin's shared-process requirement) is part of
 		// the recorded manifest for the same reason every other capability
 		// is: SameReloadSurface compares manifests field for field, so a
@@ -1183,4 +1187,24 @@ func PruneOrphans(state *InstallState) error {
 		}
 	}
 	return nil
+}
+
+// gitFetchEntries spells out decl's git_fetch, one entry per host,
+// sorted: "<credential> as <username> from <host>".
+func gitFetchEntries(decl *Decl) []string {
+	if decl.Semantics == nil {
+		return nil
+	}
+	var out []string
+	for _, g := range decl.Semantics.GitFetch {
+		hosts := append([]string(nil), g.Hosts...)
+		if g.HostFrom != "" {
+			hosts = append(hosts, "config:"+g.HostFrom)
+		}
+		for _, h := range hosts {
+			out = append(out, g.Credential+" as "+g.Username+" from "+h)
+		}
+	}
+	sort.Strings(out)
+	return slices.Compact(out)
 }

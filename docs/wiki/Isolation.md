@@ -176,6 +176,95 @@ inside the sandbox too — the checkout's `.git/config` and `.gitattributes` are
 the agent's. Each dispatch gets **its own clone** (objects borrowed from the
 base clone through `alternates`), so one agent cannot move another's branch.
 
+### Private git dependencies: fetched over HTTPS, with conductor's credential {#git-fetch}
+
+A sandboxed agent has no SSH key and no forge token, so a dependency named by
+its SSH URL — `"dep": "git+ssh://git@github.com/acme/dep.git"` in a
+`package.json`, a `go.mod` replace, a Cargo git dependency — cannot be fetched
+over SSH. (ssh also refuses its config inside the jail, and the detector
+treats any ssh process as a tunnel tool.) Instead, for the hosts a connector
+declares a **git fetch credential** for, the fetch goes over HTTPS and
+conductor authenticates it:
+
+- **The URL is rewritten for the agent's git.** The launch's environment
+  carries git config (`GIT_CONFIG_COUNT` and its pairs) rewriting
+  `ssh://git@<host>/`, `git+ssh://git@<host>/`, `ssh://<host>/` and
+  `git@<host>:` to `https://<host>/`. Nothing is written to the home or the
+  workspace, so the git guard's refusal of an `insteadOf` the agent sets is
+  unchanged, and no ssh runs.
+- **The proxy adds the credential; the agent never holds it.** The launch's
+  egress proxy [inspects](#tls-inspection) each declared host. On a git
+  **fetch** — `GET …/info/refs?service=git-upload-pack` or
+  `POST …/git-upload-pack` — of a repository in scope, it sets the
+  request's `Authorization` itself (replacing whatever the agent sent). The
+  secret is not in the agent's environment, files or the policy, and is never
+  logged; the audit row is marked `allowed_by: git fetch credential`.
+- **Read only.** A **push** to a declared host (`git-receive-pack`, either
+  request) is refused by the proxy with 403, whatever the scope: conductor
+  pushes, never the agent. Every other request to the host (a web page, the
+  dumb HTTP protocol, `git-upload-archive`, Git LFS) never carries the
+  credential, and passes only if your egress allows it.
+- **Scoped to what the repository depends on — learned, not configured.**
+  The connector declares only the host and the credential. Which
+  repositories a launch's credential covers is conductor's:
+  - A **cache warm** ([[Repo-Caches]]) runs the repository's **default
+    branch**, with the default branch's `.conductor.yaml`. Its credential
+    covers any repository on the host the credential can read, and the proxy
+    notes each one the forge served it. When the warm succeeds, those are
+    the repository's **learned dependencies** for that recipe, replacing
+    what its previous warm learned (a dependency the default branch dropped
+    drops off).
+  - **Every other launch** — a dispatch on a PR branch, a review, a fixer,
+    a `conductor sandbox exec` hand-off — gets the repository it works on
+    plus its learned dependencies, nothing more. A PR can never add one: a
+    PR that adds a new private dependency cannot fetch it until it is on the
+    default branch and the next warm learns it. Such a fetch goes without
+    the credential, and its audit row says so: `git credential withheld for
+    acme/newdep: not a learned dependency of acme/app; it is learned when
+    the default branch's cache warm fetches it`.
+
+  A warm runs the default branch's install, its dependencies' install
+  scripts included: whatever that code fetches with the credential is
+  learned. That is the trust you give your default branch anyway — it is
+  the code you deploy. Repositories compare exactly, case-insensitively
+  (forges name them so), after the same checks as `https://` path entries:
+  a dot segment, `//`, a backslash or a percent sign left after decoding
+  never matches.
+- **Kept across restarts.** The learned sets and which connector instance
+  mints for each repository are in conductor's state dir
+  (`git-learned.json`, `git-fetch.json`: repository and instance names,
+  never a credential), out of every sandbox's view; a restart or an
+  auto-update keeps them.
+- **Reach.** Declaring `git_fetch` admits its host to every launch's
+  egress for those fetches, even when the egress allowlist does not name
+  it; so a plugin build that adds a `git_fetch` host, or changes one, is
+  held for your approval like any other new permission
+  ([[Plugins]]). A host resolving to a private or loopback address still
+  needs an exact egress entry (the SSRF rule of every egress host).
+- **Which instance, and its scope at every use.** A dispatch's credential
+  is the one its connector minted for its target, held by its own egress
+  session and gone when the launch ends; a launch for a target the platform
+  did not assign gets none. A warm or a hand-off mints one through the
+  connector instance that last dispatched trusted work on the repository —
+  and only while that instance still covers it: an instance whose `repos:`
+  (its declared repository scope) no longer matches the repository mints
+  none. A forge connector that names its API host per instance (the github
+  plugin's `api_base`, for GitHub Enterprise Server) fetches from that
+  instance's host, never the public one.
+- **Hand-offs.** A `conductor sandbox exec` launch's proxy runs in the exec
+  process, outside the sandbox, so the daemon sends the credential to that
+  process over the control socket — only to a caller whose uid it checked
+  (your own) and whose process the launch's token is anchored to; never
+  into the policy the sandbox sees. The control socket is hidden from every
+  sandbox.
+
+Only connectors declare it (a plugin's `git_fetch`, naming one of its `read`
+credentials); there is nothing to configure. `sandbox.git_fetch: false`
+turns it off for every launch. A `conductor sandbox exec` launch in a
+directory conductor never checked out (your own paseo workspace, an
+agent-deck session, a scratch dir) gets none: there is no trusted repository
+to scope it to.
+
 **The Verified badge.** Signatures verify `G` with your key locally. GitHub
 shows "Verified" on a pushed commit only when the signing key is registered on
 your account as an **SSH signing key** (Settings → SSH and GPG keys → New SSH
@@ -200,6 +289,7 @@ sandbox:
   # The containment knobs below are all optional; the values shown are the defaults.
   # model_credential: gateway     # login-copy | login-share
   # egress_protocol_check: true   # TLS, HTTP/1 and HTTP/2 naming their host pass; false: any bytes (alias egress_require_tls)
+  # git_fetch: true               # a connector's git fetch credential authenticates the agent's git fetches (§ Private git dependencies)
   # egress_limits: { idle: 10m, upload: 512MiB, download: 20GiB, model_upload: 16GiB, model_download: 16GiB }   # each takes "off"
   # detect:
   #   action: kill                # terminate | alert | off

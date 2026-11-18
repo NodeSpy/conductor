@@ -377,7 +377,40 @@ func (h *inspectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusMethodNotAllowed, "refused", "CONNECT inside an inspected connection")
 		return
 	}
-	if h.prefixes != nil {
+	// A git fetch of a repository in the launch's git scope carries its
+	// credential (and passes whatever the path entries say); a push to a
+	// host it holds one for is refused — conductor pushes, never the agent.
+	var gitCred *GitAuth
+	gitRepo, withheld := "", ""
+	if auths := h.sess.gitAuths(h.target); len(auths) > 0 {
+		np, why := requestPath(r.URL)
+		op, repo := gitNone, ""
+		if why == "" {
+			op, repo = gitOp(r, np)
+		}
+		if op == gitFetch && r.URL.RawPath != "" {
+			// An escaped path (%2F) the forge may read otherwise: no
+			// credential.
+			op = gitNone
+		}
+		switch op {
+		case gitPush:
+			if h.p.OnDeny != nil {
+				h.p.OnDeny(h.target + r.URL.Path)
+			}
+			refuse(http.StatusForbidden, "denied", "git push from the sandbox (conductor pushes; an agent never does)")
+			return
+		case gitFetch:
+			gitCred, gitRepo = h.sess.gitCredentialFor(h.target, repo), repo
+			if gitCred == nil {
+				withheld = h.sess.gitWithheld(h.target, repo)
+			}
+		}
+	}
+	if gitCred != nil {
+		r.Header.Set("Authorization", gitCred.basicAuth())
+		rec.AllowedBy = "git fetch credential"
+	} else if h.prefixes != nil {
 		np, why := requestPath(r.URL)
 		if why == "" && !pathAllowed(np, h.prefixes) {
 			why = "not under an allowed path (" + strings.Join(h.prefixes, ", ") + ")"
@@ -386,10 +419,18 @@ func (h *inspectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if h.p.OnDeny != nil {
 				h.p.OnDeny(h.target + r.URL.Path)
 			}
+			if withheld != "" {
+				why = why + "; " + withheld
+			}
 			refuse(http.StatusForbidden, "denied", "path "+why)
 			return
 		}
 	}
+	if gitCred == nil && withheld != "" {
+		// Passed by the egress, without the credential: say why.
+		rec.Reason = withheld
+	}
+	learned := gitCred != nil && gitCred.Learn && gitCred.OnFetch != nil
 	var up, down atomic.Int64
 	var failed string
 	if r.Body != nil && r.Body != http.NoBody {
@@ -407,6 +448,10 @@ func (h *inspectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ModifyResponse: func(resp *http.Response) error {
 			if resp.StatusCode != http.StatusSwitchingProtocols && resp.Body != nil {
 				resp.Body = &countingBody{r: resp.Body, n: &down}
+			}
+			if learned && resp.StatusCode == http.StatusOK {
+				// A warm's fetch the forge served: a dependency it learns.
+				gitCred.OnFetch(gitRepo)
 			}
 			return nil
 		},

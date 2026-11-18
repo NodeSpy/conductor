@@ -58,6 +58,9 @@ type SessionOpts struct {
 	// Inspect is the launch's TLS inspection (nil: none): a CONNECT to a
 	// host it covers is terminated and read request by request.
 	Inspect *Inspector
+	// Git are the launch's git fetch credentials (gitauth.go): each host
+	// must also be one Inspect covers.
+	Git []GitAuth
 }
 
 // Tunnel shapes and what a flagged one gets.
@@ -167,6 +170,7 @@ type Session struct {
 	nonTLSBy   string
 	shape      SessionOpts
 	inspect    *Inspector
+	git        []GitAuth
 
 	up, down atomic.Int64
 
@@ -176,7 +180,7 @@ type Session struct {
 }
 
 func newSession(o SessionOpts) *Session {
-	return &Session{Run: o.Run, lim: o.Limits.resolved(), requireTLS: o.RequireTLS, nonTLS: o.NonTLS, nonTLSBy: o.NonTLSBy, shape: o, inspect: o.Inspect, conns: map[*tunnel]struct{}{}}
+	return &Session{Run: o.Run, lim: o.Limits.resolved(), requireTLS: o.RequireTLS, nonTLS: o.NonTLS, nonTLSBy: o.NonTLSBy, shape: o, inspect: o.Inspect, git: o.Git, conns: map[*tunnel]struct{}{}}
 }
 
 // Bytes reports the session's totals.

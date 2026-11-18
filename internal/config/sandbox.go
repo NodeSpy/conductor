@@ -66,6 +66,12 @@ type SandboxConfig struct {
 	// https:// path entries are enforced request by request. Exact
 	// hostnames only.
 	Inspect []InspectEntry `yaml:"inspect,omitempty"`
+	// GitFetch (default true): a connector's declared git fetch credential
+	// (its git_fetch) authenticates the agent's git fetches on its hosts —
+	// added by the egress proxy, never given to the agent — and the SSH
+	// forms of those hosts' URLs are fetched over HTTPS. false: no launch
+	// gets one.
+	GitFetch *bool `yaml:"git_fetch,omitempty"`
 	// EgressLimits bound each launch's egress session.
 	EgressLimits *SandboxEgressLimits `yaml:"egress_limits,omitempty"`
 	// Detect configures the host-side watcher, tripwires and response.
@@ -278,6 +284,11 @@ func (s *SandboxConfig) EgressTLSRequired() bool {
 		return *s.EgressRequireTLS
 	}
 	return true
+}
+
+// GitFetchOn reports sandbox.git_fetch (default true).
+func (s *SandboxConfig) GitFetchOn() bool {
+	return s == nil || s.GitFetch == nil || *s.GitFetch
 }
 
 // DetectAction is sandbox.detect.action (default kill).

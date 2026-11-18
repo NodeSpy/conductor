@@ -161,8 +161,8 @@ checks:
 - a brand-new verb the type decl never named is fine, as long as it carries
   no `semantics` of its own (rest/graphql's user-declared, plain verbs);
 - connection-level semantics (`credentials`, `listeners`, `poll`, `scope`,
-  `preflight`, `translate`) and the `capabilities` manifest must match the
-  type-level declaration exactly — these are fixed at install, not per
+  `preflight`, `translate`, `git_fetch`) and the `capabilities` manifest
+  must match the type-level declaration exactly — these are fixed at install, not per
   instance;
 - a brand-new event (one the type decl never declared) is exempt — this is
   Q6's whole point. A **same-named** event may not add or change
