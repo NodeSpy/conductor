@@ -80,6 +80,9 @@ func newFakeForge(t *testing.T, root string) *fakeForge {
 	}
 	backend := filepath.Join(strings.TrimSpace(string(execPath)), "git-http-backend")
 	if _, err := os.Stat(backend); err != nil {
+		if os.Getenv("CONDUCTOR_REQUIRE_SANDBOX") == "1" {
+			t.Fatalf("no git-http-backend: %v", err)
+		}
 		t.Skipf("no git-http-backend: %v", err)
 	}
 	f := &fakeForge{root: filepath.Join(root, "forge")}
@@ -276,6 +279,9 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	t.Cleanup(func() { _ = repocache.RemoveAll(root) })
 	forge := newFakeForge(t, root)
 	yarn, _ := exec.LookPath("yarn")
+	if yarn == "" && os.Getenv("CONDUCTOR_REQUIRE_SANDBOX") == "1" {
+		t.Fatal("no yarn: the cache warm half of this test needs it")
+	}
 	origin := appOrigin(t, root, forge, yarn)
 	forge.reset()
 
