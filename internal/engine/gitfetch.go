@@ -6,6 +6,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/sandbox"
+	"github.com/NodeSpy/conductor/internal/store"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
@@ -49,9 +50,41 @@ func (e *Engine) gitFetchAuth(sem *sdk.ConnSemantics, name, instance, repo, val 
 		}
 	}
 	if len(out) > 0 {
-		e.gitRepos.Store(repo, instance)
+		e.recordGitFetch(repo, instance)
 	}
 	return out
+}
+
+// gitFetchStore persists the repo → instance map across restarts.
+// *store.Store satisfies it.
+type gitFetchStore interface {
+	PutGitFetchInstance(repo, instance string) error
+	GitFetchInstance(repo string) (string, bool)
+}
+
+var _ gitFetchStore = (*store.Store)(nil)
+
+// recordGitFetch notes that instance's git fetch credential covered
+// trusted work on repo: a later warm of repo — after a restart too —
+// mints through it.
+func (e *Engine) recordGitFetch(repo, instance string) {
+	e.gitRepos.Store(repo, instance)
+	if gs, ok := e.store.(gitFetchStore); ok {
+		if err := gs.PutGitFetchInstance(repo, instance); err != nil {
+			e.log("git fetch: record %s for %s: %v", instance, repo, err)
+		}
+	}
+}
+
+// gitFetchInstance is the instance recorded for repo, this run or before.
+func (e *Engine) gitFetchInstance(repo string) (string, bool) {
+	if v, ok := e.gitRepos.Load(repo); ok {
+		return v.(string), true
+	}
+	if gs, ok := e.store.(gitFetchStore); ok {
+		return gs.GitFetchInstance(repo)
+	}
+	return "", false
 }
 
 // renderRepoScope renders one git_fetch repos entry for repo as a path
@@ -84,14 +117,13 @@ func renderRepoScope(tmpl, repo string) string {
 
 // GitFetchFor mints the git fetch credentials for a cache warm of repo:
 // through the connector instance that last dispatched trusted work on
-// repo with a git fetch credential (none before such work — a repository
-// the platform never assigned to it gets nothing).
+// repo with a git fetch credential, as recorded in the store (none before
+// such work — a repository the platform never assigned to it gets nothing).
 func (e *Engine) GitFetchFor(ctx context.Context, repo string) []sandbox.GitAuth {
-	v, ok := e.gitRepos.Load(repo)
+	instance, ok := e.gitFetchInstance(repo)
 	if !ok || e.connectors == nil {
 		return nil
 	}
-	instance := v.(string)
 	in, ok := e.connectors.Get(instance)
 	if !ok || in.Decl == nil || in.Decl.Semantics == nil || !in.Enabled {
 		return nil

@@ -415,5 +415,7 @@ func fetchSandboxPolicy(sock string, req controlRequest) (agentsandbox.Policy, e
 	if resp.Policy == nil {
 		return agentsandbox.Policy{}, fmt.Errorf("the conductor daemon at %s returned no policy (an older conductor?)", sock)
 	}
-	return *resp.Policy, nil
+	pol := *resp.Policy
+	pol.GitAuth = gitAuthFromWire(resp.GitAuth)
+	return pol, nil
 }

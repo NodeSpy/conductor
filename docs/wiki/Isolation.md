@@ -218,13 +218,22 @@ conductor authenticates it:
   for its target, held by its own egress session and gone when the launch
   ends; a launch for a target the platform did not assign gets none. A cache
   warm gets one minted, for that repository, through the connector instance
-  that last dispatched trusted work on it ([[Repo-Caches]]).
+  that last dispatched trusted work on it ([[Repo-Caches]]). Which instance
+  that is is kept in the state dir (`git-fetch.json`: repository and
+  instance names, never a credential), so a warm right after a restart or an
+  auto-update gets the credential as before. A `conductor sandbox exec`
+  launch (a paseo hand-off) in a workspace conductor checked out for a
+  repository it trusts gets one minted the same way; its proxy runs in the
+  exec process, outside the sandbox, so the daemon sends the credential to
+  that process over the control socket (which answers only your own uid and
+  is hidden from every sandbox) — never into the policy the sandbox sees.
 
 Only connectors declare it (a plugin's `git_fetch`, naming one of its `read`
 credentials); there is no per-repository config. `sandbox.git_fetch: false`
-turns it off for every launch. A launch made by `conductor sandbox exec` (a
-paseo hand-off, agent-deck) gets none: its policy crosses the control socket,
-which carries no secret.
+turns it off for every launch. A `conductor sandbox exec` launch in a
+directory conductor never checked out (your own paseo workspace, an
+agent-deck session, a scratch dir) gets none: there is no trusted repository
+to scope it to.
 
 **The Verified badge.** Signatures verify `G` with your key locally. GitHub
 shows "Verified" on a pushed commit only when the signing key is registered on

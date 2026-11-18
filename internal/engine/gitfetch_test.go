@@ -2,10 +2,15 @@ package engine
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/store"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
@@ -82,5 +87,66 @@ func TestRenderRepoScope(t *testing.T) {
 		if got := renderRepoScope(c.tmpl, c.repo); got != c.want {
 			t.Errorf("%q over %q = %q, want %q", c.tmpl, c.repo, got, c.want)
 		}
+	}
+}
+
+// A daemon restart (a new engine over the same state dir) keeps a
+// repository's git fetch instance: a cache warm right after it mints the
+// credential exactly as before, with no dispatch in between. The state
+// holds names only, never the credential.
+func TestGitFetchSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	open := func() *store.Store {
+		st, err := store.Open(store.Options{StatePath: filepath.Join(dir, "s.json"), AuditPath: filepath.Join(dir, "a.jsonl"), MaxPRs: 100, AuditMaxSize: 1 << 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	reg := forgeRegistry(t)
+	in, _ := reg.Get("i")
+	sem := *in.Decl.Semantics
+	sem.GitFetch = []sdk.GitFetch{{Credential: "read", Hosts: []string{"forge.example"}, Username: "x-access", Repos: []string{"{{.repo}}"}}}
+	in.Decl.Semantics = &sem
+	var minted []string
+	verbs := func(_ context.Context, inst, verb string, opts map[string]any) (map[string]any, error) {
+		r, _ := opts["repo"].(string)
+		minted = append(minted, inst+"."+verb+":"+r)
+		return map[string]any{"token": "tok-" + verb}, nil
+	}
+	engine := func(st *store.Store) *Engine {
+		return New(Options{Config: baseCfg(), Store: st, Dispatch: &fakeDispatcher{}, Notifier: &fakeNotifier{},
+			Author: dispatch.Author{Name: "Me"}, InvokeVerb: verbs, Connectors: reg})
+	}
+
+	st1 := open()
+	e1 := engine(st1)
+	tr := core.Trigger{Instance: "i", TargetTrusted: true, Target: core.Target{Repo: "org/app", Number: 1}, Context: map[string]any{"repo": "org/app"}}
+	if c, err := e1.declaredCredentials(context.Background(), tr, "i", &sem, false); err != nil || len(c.Git) != 1 {
+		t.Fatalf("dispatch: %+v %v", c.Git, err)
+	}
+	st1.Close()
+	b, err := os.ReadFile(filepath.Join(dir, "git-fetch.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "tok-") {
+		t.Fatalf("the state holds a credential: %s", b)
+	}
+
+	// The restart: a new store from disk, a new engine, no dispatch.
+	st2 := open()
+	defer st2.Close()
+	e2 := engine(st2)
+	minted = nil
+	g := e2.GitFetchFor(context.Background(), "org/app")
+	if len(g) != 1 || g[0].Secret != "tok-read_token" || !reflect.DeepEqual(g[0].Repos, []string{"/org/app"}) {
+		t.Fatalf("warm after restart: %+v", g)
+	}
+	if !reflect.DeepEqual(minted, []string{"i.read_token:org/app"}) {
+		t.Fatalf("minted %v", minted)
+	}
+	if g := e2.GitFetchFor(context.Background(), "org/other"); len(g) != 0 {
+		t.Fatalf("a repository no trusted work ran on: %+v", g)
 	}
 }

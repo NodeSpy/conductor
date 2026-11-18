@@ -1707,6 +1707,9 @@ type controlResponse struct {
 	// Policy answers sandbox-policy: the launch's sandbox, with a token
 	// minted for this launch alone.
 	Policy *agentsandbox.Policy `json:"policy,omitempty"`
+	// GitAuth is the policy's git fetch credentials, which the Policy never
+	// serializes (sandboxpolicy.go).
+	GitAuth []gitAuthWire `json:"git_auth,omitempty"`
 	// Data answers a browser-* command.
 	Data json.RawMessage `json:"data,omitempty"`
 	// Result is a bot command's structured answer.

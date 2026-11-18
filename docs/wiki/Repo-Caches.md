@@ -300,9 +300,9 @@ it ([[Isolation#git-fetch]]): the warm's git rewrites the SSH URL to HTTPS,
 and its egress proxy adds a git fetch credential to fetches of the
 repositories in scope. The credential comes from the connector that declares
 one (`git_fetch`), minted for the warmed repository through the connector
-instance that last dispatched trusted work on it. Until such work has run
-since the daemon started, a warm gets none, and the fetch fails as it would
-without this:
+instance that last dispatched trusted work on it — recorded in the state dir,
+so restarts and auto-updates keep it. A repository no trusted work has ever
+run on gets none, and the fetch fails as it would without this:
 
 ```
 Bad owner or permissions on /etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -61,8 +62,35 @@ func sandboxPolicyResponse(conn net.Conn, req controlRequest, log func(string, .
 		log("sandbox-policy for %s refused: %v", req.Cwd, err)
 		return controlResponse{Error: err.Error()}
 	}
-	log("sandbox-policy: %s in %s (identity %s, egress %d host(s), %d relay(s))", pol.Tool, req.Cwd, pol.Identity, len(pol.Egress), len(pol.Loopback))
-	return controlResponse{OK: true, Policy: &pol}
+	log("sandbox-policy: %s in %s (identity %s, egress %d host(s), %d relay(s), %d git fetch credential(s))", pol.Tool, req.Cwd, pol.Identity, len(pol.Egress), len(pol.Loopback), len(pol.GitAuth))
+	return controlResponse{OK: true, Policy: &pol, GitAuth: gitAuthToWire(pol.GitAuth)}
+}
+
+// gitAuthWire carries a git fetch credential, secret included, from the
+// daemon to `conductor sandbox exec` — whose proxy, outside the sandbox,
+// applies it. Only this daemon's uid gets a policy (sandboxPolicyResponse);
+// the Policy itself never serializes the secret.
+type gitAuthWire struct {
+	Host     string   `json:"host"`
+	Repos    []string `json:"repos"`
+	Username string   `json:"username"`
+	Secret   string   `json:"secret"`
+}
+
+func gitAuthToWire(in []sandbox.GitAuth) []gitAuthWire {
+	var out []gitAuthWire
+	for _, g := range in {
+		out = append(out, gitAuthWire{Host: g.Host, Repos: g.Repos, Username: g.Username, Secret: g.Secret})
+	}
+	return out
+}
+
+func gitAuthFromWire(in []gitAuthWire) []sandbox.GitAuth {
+	var out []sandbox.GitAuth
+	for _, g := range in {
+		out = append(out, sandbox.GitAuth{Host: g.Host, Repos: g.Repos, Username: g.Username, Secret: g.Secret})
+	}
+	return out
 }
 
 // sandboxTokenTTL bounds a `conductor sandbox exec` launch's token: a paseo
@@ -138,6 +166,20 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		Log:     logf,
 		// Repository dependency caches (repocaches.go), once wired.
 		Caches: restoreRepoCaches,
+	}
+	if cfg.Sandbox.GitFetchOn() {
+		// A `conductor sandbox exec` launch in a workspace conductor checked
+		// out (a hand-off): the repository's git fetch credentials, minted
+		// as for a cache warm (controller.WarmGitAuth, once the engine runs).
+		r.GitAuth = func(repo string) []sandbox.GitAuth {
+			f := controller.WarmGitAuth
+			if f == nil {
+				return nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			return f(ctx, repo)
+		}
 	}
 	if cfg.Sandbox != nil && cfg.Sandbox.Limits != nil {
 		l := cfg.Sandbox.Limits
