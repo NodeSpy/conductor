@@ -93,10 +93,14 @@ func (r *Runner) agentResume(ctx context.Context, t core.Trigger, id string, req
 			prior.Resumes = resumes
 			_ = st.PutRunAgent(runID, key, prior)
 			req.Resume = &dispatch.AgentSession{Runtime: prior.Runtime, SessionID: prior.SessionID,
-				Workspace: prior.Workspace, Cwd: prior.Cwd, CanResume: prior.CanResume}
+				Workspace: prior.Workspace, Cwd: prior.Cwd, CanResume: prior.CanResume, Home: prior.Home}
 		}
 	}
 	asked := req.Resume != nil
+	// The agent's sandbox home: the one its session was created in, under
+	// the dispatch that started it — every resume's dispatch id is new (the
+	// resumed run gets a history id of its own), the home is not.
+	home := req.HomeDispatch()
 	req.OnAgentStart = func(s dispatch.AgentStart) {
 		switch {
 		case s.Resumed:
@@ -110,7 +114,7 @@ func (r *Runner) agentResume(ctx context.Context, t core.Trigger, id string, req
 			s.Runtime = runtime
 		}
 		_ = st.PutRunAgent(runID, key, store.RunAgent{Runtime: s.Runtime, SessionID: s.SessionID,
-			Workspace: s.Workspace, Cwd: s.Cwd, CanResume: s.CanResume, Resumes: resumes, Started: time.Now()})
+			Workspace: s.Workspace, Cwd: s.Cwd, CanResume: s.CanResume, Home: home, Resumes: resumes, Started: time.Now()})
 	}
 	return func() {
 		defer release()

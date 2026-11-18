@@ -104,15 +104,16 @@ const PaseoDefaultProvider = "claude"
 // repository — the tool state (HOME) it keeps across its launches and
 // resumes, shared with no other profile and no other repository. The
 // repository is the TRUSTED one: a dispatch whose target the event's sender
-// chose gets a tool state of its own (keyed by the dispatch), never the
-// real repository's.
+// chose gets a tool state of its own (keyed by the dispatch — a resumed
+// step's by the dispatch its session was created in), never the real
+// repository's.
 func SandboxIdentity(req Request, tool string) string {
 	who := req.Action.Agent
 	if who == "" {
 		who = "runtime-" + tool
 	}
 	if !req.Trigger.TargetTrusted {
-		return "agent:" + who + "@dispatch-" + req.DispatchID
+		return "agent:" + who + "@dispatch-" + req.HomeDispatch()
 	}
 	if repo := req.Trigger.OwnRepo(); repo != "" {
 		return "agent:" + who + "@" + repo
@@ -168,6 +169,11 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 	}
 	if req != nil {
 		e.Dispatch = req.DispatchID
+		if h := req.HomeDispatch(); h != req.DispatchID {
+			// A resumed step: its agent's home is the one its session was
+			// created in, not a fresh one under its new dispatch id.
+			e.Home = h
+		}
 		e.Model = sandboxModel(*req)
 		e.Scope = SandboxScope(*req)
 		if id, ok := SkillIdentityFor(*req); ok {

@@ -37,7 +37,11 @@ import (
 //
 // Which run a home belongs to is recorded at launch in an index conductor
 // owns (.index.json beside the homes): a home is the agent's to write, so
-// nothing in it is believed.
+// nothing in it is believed. A step resumed after a restart runs under a new
+// dispatch id (its run's new history id) in the home its session was
+// created in (Entry.Home): its launch re-indexes that home under the
+// resumed run, which then keeps it and reclaims it at its end. Until the
+// resumed launch, the interrupted run — resumable — keeps it.
 
 const (
 	homeIndexFile = ".index.json"

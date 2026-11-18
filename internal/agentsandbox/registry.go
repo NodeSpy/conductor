@@ -35,6 +35,10 @@ type Entry struct {
 	Model string
 	// Dispatch is the dispatch id the workspace serves ("" for a member).
 	Dispatch string
+	// Home is the dispatch id the launch's per-dispatch home is keyed by
+	// when it is not Dispatch: a resumed step's agent runs under a new
+	// dispatch id in the home its session was created in.
+	Home string
 	// Skill is what a fresh token for a launch here stands for — the
 	// dispatch's (or member's) real provenance and skill policy. nil: no
 	// token is minted.
@@ -109,6 +113,7 @@ type persisted struct {
 	Tool        string      `json:"tool,omitempty"`
 	Model       string      `json:"model,omitempty"`
 	Dispatch    string      `json:"dispatch,omitempty"`
+	Home        string      `json:"home,omitempty"`
 	Egress      []string    `json:"egress,omitempty"`
 	ReadOnly    []string    `json:"read_only,omitempty"`
 	ReadWrite   []string    `json:"read_write,omitempty"`
@@ -151,7 +156,7 @@ func (r *Registry) PersistTo(path string) error {
 		if _, live := r.byWS[ws]; live {
 			continue
 		}
-		ent := Entry{Workspace: ws, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
+		ent := Entry{Workspace: ws, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch, Home: e.Home,
 			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Repo: e.Repo, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
 			Session: loadedSession(e.Session, e.Dispatch)}
 		// The file is conductor's, but what it names is bound read-write
@@ -188,7 +193,7 @@ func (r *Registry) saveLocked() {
 	}
 	list := make([]persisted, 0, len(r.byWS))
 	for _, e := range r.byWS {
-		list = append(list, persisted{Workspace: e.Workspace, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch,
+		list = append(list, persisted{Workspace: e.Workspace, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch, Home: e.Home,
 			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Repo: e.Repo, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
 			Session: savedSession(e.Session)})
 	}
