@@ -451,7 +451,6 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		assertForgeHits(t, forge)
 	})
 
-
 }
 
 // assertForgeHits: the forge saw the credential on git fetches of org's

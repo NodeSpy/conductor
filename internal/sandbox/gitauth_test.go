@@ -119,7 +119,7 @@ func TestGitFetchCredentialOnlyOnFetchesInScope(t *testing.T) {
 				{"GET", "/organization/x.git/info/refs?service=git-upload-pack"},
 				{"GET", "/org/../other/secret.git/info/refs?service=git-upload-pack"},
 				{"GET", "/org/%2e%2e/other/secret.git/info/refs?service=git-upload-pack"},
-				{"GET", "/org/dep.git/info/refs"},                         // dumb HTTP
+				{"GET", "/org/dep.git/info/refs"},                          // dumb HTTP
 				{"POST", "/org/dep.git/info/refs?service=git-upload-pack"}, // wrong method
 				{"GET", "/org/dep.git/git-upload-pack"},                    // wrong method
 				{"GET", "/org/dep"},
