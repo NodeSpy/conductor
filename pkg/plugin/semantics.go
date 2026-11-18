@@ -478,11 +478,11 @@ type GitFetch struct {
 	// HostFrom is unset, or the instance does not set it.
 	Hosts []string `json:"hosts"`
 	// HostFrom names a connection setting holding the forge's API base URL
-	// (a GitHub Enterprise Server's api_base). When an instance sets it,
+	// (a self-hosted forge's API base URL). When an instance sets it,
 	// the git host is that URL's host instead of Hosts — less a leading
 	// "api." label when the API is served at the host's root
-	// (https://api.example.com is example.com; https://ghe.example.com/api/v3
-	// is ghe.example.com).
+	// (https://api.example.com is example.com; https://forge.example.com/api/v3
+	// is forge.example.com).
 	HostFrom string `json:"host_from,omitempty"`
 	// Username is the HTTP basic username sent with the credential.
 	Username string `json:"username"`
