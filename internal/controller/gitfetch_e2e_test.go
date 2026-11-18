@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -125,8 +126,9 @@ func newFakeForge(t *testing.T, root string) *fakeForge {
 
 // auth is the launch's git fetch credential for the forge: org's
 // repositories only.
-func (f *fakeForge) auth() sandbox.GitAuth {
-	return sandbox.GitAuth{Host: "forge.test:" + f.port, Repos: []string{"/org/"}, Username: forgeUser, Secret: forgeSecret}
+// auth is a launch's credential for acme/app, scoped to repos.
+func (f *fakeForge) auth(repos ...string) sandbox.GitAuth {
+	return sandbox.GitAuth{Host: "forge.test:" + f.port, Repos: repos, For: "acme/app", Username: forgeUser, Secret: forgeSecret}
 }
 
 // forgeCA is a private CA and the localhost leaf it signed.
@@ -325,7 +327,7 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	var recMu sync.Mutex
 	var recs []sandbox.ConnRecord
 	pm.OnConn = func(r sandbox.ConnRecord) { recMu.Lock(); recs = append(recs, r); recMu.Unlock() }
-	oldU, oldA, oldUS, oldAS, oldSB, oldWG := EgressProxyUnix, EgressProxyFor, EgressProxyUnixSession, EgressProxyForSession, AgentSandbox, WarmGitAuth
+	oldU, oldA, oldUS, oldAS, oldSB, oldWG, oldWL := EgressProxyUnix, EgressProxyFor, EgressProxyUnixSession, EgressProxyForSession, AgentSandbox, WarmGitAuth, WarmGitLearned
 	EgressProxyUnix, EgressProxyFor, EgressProxyUnixSession, EgressProxyForSession = pm.UnixEndpoint, pm.Endpoint, pm.UnixEndpointSession, pm.EndpointSession
 	rel, err := agentsandbox.NewRelayer()
 	if err != nil {
@@ -333,7 +335,7 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		launchSelfExe = oldSelf
-		EgressProxyUnix, EgressProxyFor, EgressProxyUnixSession, EgressProxyForSession, AgentSandbox, WarmGitAuth = oldU, oldA, oldUS, oldAS, oldSB, oldWG
+		EgressProxyUnix, EgressProxyFor, EgressProxyUnixSession, EgressProxyForSession, AgentSandbox, WarmGitAuth, WarmGitLearned = oldU, oldA, oldUS, oldAS, oldSB, oldWG, oldWL
 		pm.Close()
 		rel.Close()
 	})
@@ -394,6 +396,34 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		return string(out)
 	}
 
+	// WarmGitLearned is how a successful default-branch warm hands over
+	// what it fetched; nothing else may call it.
+	var learnMu sync.Mutex
+	var learnCalls [][]string
+	WarmGitLearned = func(repo, recipe string, fetched []string) {
+		learnMu.Lock()
+		defer learnMu.Unlock()
+		if repo != "acme/app" || recipe != "yarn" {
+			t.Errorf("learned for %s %s", repo, recipe)
+		}
+		learnCalls = append(learnCalls, fetched)
+	}
+	learnedCalls := func() [][]string {
+		learnMu.Lock()
+		defer learnMu.Unlock()
+		return append([][]string(nil), learnCalls...)
+	}
+	withheld := func(t *testing.T, repo string) bool {
+		recMu.Lock()
+		defer recMu.Unlock()
+		for _, r := range recs {
+			if strings.Contains(r.Reason, "git credential withheld for "+repo+": not a learned dependency of acme/app; it is learned when the default branch's cache warm fetches it") {
+				return true
+			}
+		}
+		return false
+	}
+
 	t.Run("agent launch without a git fetch credential fails as before", func(t *testing.T) {
 		out := launch(t, "nocred", nil)
 		t.Logf("probe:\n%s", out)
@@ -403,31 +433,23 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		}
 	})
 
-	t.Run("agent launch", func(t *testing.T) {
-		out := launch(t, "cred", []sandbox.GitAuth{forge.auth()})
+	t.Run("a PR launch gets no credential for a dependency not learned", func(t *testing.T) {
+		out := launch(t, "unlearned", []sandbox.GitAuth{forge.auth("/acme/app")})
 		t.Logf("probe:\n%s", out)
-		if strings.Contains(out, "FAIL") || strings.Count(out, "ok ") != 8 {
-			t.Fatalf("probe:\n%s", out)
+		if !strings.Contains(out, "FAIL ls-remote of the ssh:// URL") || !strings.Contains(out, "FAIL clone of the scp-form URL") ||
+			strings.Contains(out, "FAIL the secret") || strings.Contains(out, "FAIL another owner") {
+			t.Fatalf("an unlearned dependency was fetched:\n%s", out)
 		}
-		if strings.Contains(out, "has ssh") {
-			t.Log("(ssh is installed in the sandbox's view, and was never needed)")
-		}
-		assertForgeHits(t, forge)
-		if _, err := os.Stat(filepath.Join(forge.root, "org", "dep.git", "refs", "heads", "pushed")); err == nil {
-			t.Fatal("the push landed")
-		}
-		recMu.Lock()
-		defer recMu.Unlock()
-		var credited, pushDenied bool
-		for _, r := range recs {
-			if strings.Contains(r.Reason, forgeSecret) || strings.Contains(r.Path, forgeSecret) {
-				t.Fatalf("the secret was recorded: %+v", r)
+		for _, h := range forge.hits() {
+			if h.auth {
+				t.Fatalf("the credential reached the forge: %+v", h)
 			}
-			credited = credited || (r.Inspected && r.AllowedBy == "git fetch credential" && strings.HasPrefix(r.Path, "/org/dep.git/"))
-			pushDenied = pushDenied || (r.Inspected && r.Outcome == "denied" && strings.Contains(r.Reason, "git push"))
 		}
-		if !credited || !pushDenied {
-			t.Fatalf("credited fetch %v, denied push %v in the audit: %+v", credited, pushDenied, recs)
+		if !withheld(t, "org/dep") {
+			t.Fatal("no record says why the credential was withheld")
+		}
+		if n := len(learnedCalls()); n != 0 {
+			t.Fatalf("a PR launch taught %d time(s)", n)
 		}
 	})
 
@@ -435,7 +457,11 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		if warmYarn == "" {
 			t.Skip("no yarn the sandbox shows")
 		}
-		WarmGitAuth = nil
+		// A credential for another host: the ssh:// dependency still fails,
+		// and a failed warm teaches nothing.
+		WarmGitAuth = func(context.Context, string) []sandbox.GitAuth {
+			return []sandbox.GitAuth{{Host: "unrelated.test", Learn: true, For: "acme/app", Username: forgeUser, Secret: forgeSecret}}
+		}
 		if err := m.WarmRepo(context.Background(), "acme/app"); err == nil {
 			t.Fatal("the warm fetched the ssh:// dependency with no credential")
 		} else {
@@ -444,18 +470,25 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		if l := m.Store.List(); len(l) != 0 {
 			t.Fatalf("published %+v", l)
 		}
+		if n := len(learnedCalls()); n != 0 {
+			t.Fatalf("a failed warm taught %d time(s)", n)
+		}
 	})
 
-	t.Run("cache warm", func(t *testing.T) {
+	// The default branch's warm learns org/dep (where yarn runs here; else
+	// the learned scope it would have handed over).
+	learned := []string{"forge.test:" + forge.port + "/org/dep"}
+	t.Run("cache warm learns the dependency", func(t *testing.T) {
 		if warmYarn == "" {
 			t.Skip("no yarn the sandbox shows: the warm's package manager")
 		}
+		forge.reset()
 		WarmGitAuth = func(_ context.Context, repo string) []sandbox.GitAuth {
 			if repo != "acme/app" {
 				t.Errorf("warm credential asked for %q", repo)
 				return nil
 			}
-			return []sandbox.GitAuth{forge.auth()}
+			return []sandbox.GitAuth{{Host: "forge.test:" + forge.port, Learn: true, For: "acme/app", Username: forgeUser, Secret: forgeSecret}}
 		}
 		if err := m.WarmRepo(context.Background(), "acme/app"); err != nil {
 			t.Fatalf("warm: %v\nlogs: %v", err, logs)
@@ -481,8 +514,53 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 			t.Fatal("the private dependency is not in the published yarn cache")
 		}
 		assertForgeHits(t, forge)
+		calls := learnedCalls()
+		if len(calls) != 1 {
+			t.Fatalf("learned %d time(s): %v", len(calls), calls)
+		}
+		got := slices.Compact(slices.Sorted(slices.Values(calls[0])))
+		if !slices.Equal(got, learned) {
+			t.Fatalf("learned %v, want %v", got, learned)
+		}
 	})
 
+	t.Run("agent launch fetches the learned dependency", func(t *testing.T) {
+		var repos []string
+		for _, l := range learned {
+			_, p, _ := strings.Cut(l, "/")
+			repos = append(repos, "/"+p)
+		}
+		before := len(learnedCalls())
+		forge.reset()
+		out := launch(t, "cred", []sandbox.GitAuth{forge.auth(append([]string{"/acme/app"}, repos...)...)})
+		t.Logf("probe:\n%s", out)
+		if strings.Contains(out, "FAIL") || strings.Count(out, "ok ") != 8 {
+			t.Fatalf("probe:\n%s", out)
+		}
+		if strings.Contains(out, "has ssh") {
+			t.Log("(ssh is installed in the sandbox's view, and was never needed)")
+		}
+		assertForgeHits(t, forge)
+		if _, err := os.Stat(filepath.Join(forge.root, "org", "dep.git", "refs", "heads", "pushed")); err == nil {
+			t.Fatal("the push landed")
+		}
+		if n := len(learnedCalls()); n != before {
+			t.Fatal("a PR launch taught")
+		}
+		recMu.Lock()
+		defer recMu.Unlock()
+		var credited, pushDenied bool
+		for _, r := range recs {
+			if strings.Contains(r.Reason, forgeSecret) || strings.Contains(r.Path, forgeSecret) {
+				t.Fatalf("the secret was recorded: %+v", r)
+			}
+			credited = credited || (r.Inspected && r.AllowedBy == "git fetch credential" && strings.HasPrefix(r.Path, "/org/dep.git/"))
+			pushDenied = pushDenied || (r.Inspected && r.Outcome == "denied" && strings.Contains(r.Reason, "git push"))
+		}
+		if !credited || !pushDenied {
+			t.Fatalf("credited fetch %v, denied push %v in the audit: %+v", credited, pushDenied, recs)
+		}
+	})
 }
 
 // assertForgeHits: the forge saw the credential on git fetches of org's

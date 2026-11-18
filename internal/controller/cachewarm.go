@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -26,11 +27,23 @@ func RunCacheWarm(ctx context.Context, w repocache.WarmRun) error {
 	}
 	pol := sw.Resolver.WarmPolicy(w.Workspace, w.Home, "cache-warm:"+w.Repo)
 	pol.Env = append(pol.Env, w.Env...)
+	// A dependency on another private repository (git+ssh in a
+	// package.json) is fetched over HTTPS, the proxy adding the credential;
+	// the warm itself never holds it. A warm is the default branch's, so
+	// what it fetches is what the repository depends on: learned, when it
+	// succeeds, as the scope every other launch's credential gets.
+	var learnMu sync.Mutex
+	learned := []string{}
 	if sw.GitFetch && WarmGitAuth != nil {
-		// A dependency on another private repository (git+ssh in a
-		// package.json) is fetched over HTTPS, the proxy adding the
-		// credential; the warm itself never holds it.
 		pol.GitAuth = WarmGitAuth(ctx, w.Repo)
+		for i := range pol.GitAuth {
+			host := pol.GitAuth[i].Host
+			pol.GitAuth[i].OnFetch = func(repo string) {
+				learnMu.Lock()
+				learned = append(learned, host+repo)
+				learnMu.Unlock()
+			}
+		}
 	}
 	launch, err := agentsandbox.Wrap(pol, []string{"sh", "-c", w.Command}, agentsandbox.Deps{
 		SelfExe:           launchSelfExe,
@@ -74,6 +87,12 @@ func RunCacheWarm(ctx context.Context, w repocache.WarmRun) error {
 	}
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(out.String()))
+	}
+	if len(pol.GitAuth) > 0 && WarmGitLearned != nil {
+		learnMu.Lock()
+		got := append([]string(nil), learned...)
+		learnMu.Unlock()
+		WarmGitLearned(w.Repo, w.Cache, got)
 	}
 	return nil
 }

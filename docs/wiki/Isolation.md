@@ -204,32 +204,62 @@ conductor authenticates it:
   pushes, never the agent. Every other request to the host (a web page, the
   dumb HTTP protocol, `git-upload-archive`, Git LFS) never carries the
   credential, and passes only if your egress allows it.
-- **Scoped.** The connector declares which repositories the credential
-  covers, as paths under the host rendered for the work's repository — the
-  github plugin's covers every repository of the same owner, so a private
-  dependency in your organization resolves and another organization's does
-  not. Paths are compared exactly as sent (case-sensitively) after the same
-  checks as `https://` path entries: a dot segment, `//`, a backslash or a
-  percent sign left after decoding never matches.
-- **Reach.** A declared host the egress allowlist does not name is reachable
-  for those fetches alone. A host resolving to a private or loopback address
-  still needs an exact egress entry (the SSRF rule of every egress host).
-- **Per launch.** A dispatch's credential is the one its connector minted
-  for its target, held by its own egress session and gone when the launch
-  ends; a launch for a target the platform did not assign gets none. A cache
-  warm gets one minted, for that repository, through the connector instance
-  that last dispatched trusted work on it ([[Repo-Caches]]). Which instance
-  that is is kept in the state dir (`git-fetch.json`: repository and
-  instance names, never a credential), so a warm right after a restart or an
-  auto-update gets the credential as before. A `conductor sandbox exec`
-  launch (a paseo hand-off) in a workspace conductor checked out for a
-  repository it trusts gets one minted the same way; its proxy runs in the
-  exec process, outside the sandbox, so the daemon sends the credential to
-  that process over the control socket (which answers only your own uid and
-  is hidden from every sandbox) — never into the policy the sandbox sees.
+- **Scoped to what the repository depends on — learned, not configured.**
+  The connector declares only the host and the credential. Which
+  repositories a launch's credential covers is conductor's:
+  - A **cache warm** ([[Repo-Caches]]) runs the repository's **default
+    branch**, with the default branch's `.conductor.yaml`. Its credential
+    covers any repository on the host the credential can read, and the proxy
+    notes each one the forge served it. When the warm succeeds, those are
+    the repository's **learned dependencies** for that recipe, replacing
+    what its previous warm learned (a dependency the default branch dropped
+    drops off).
+  - **Every other launch** — a dispatch on a PR branch, a review, a fixer,
+    a `conductor sandbox exec` hand-off — gets the repository it works on
+    plus its learned dependencies, nothing more. A PR can never add one: a
+    PR that adds a new private dependency cannot fetch it until it is on the
+    default branch and the next warm learns it. Such a fetch goes without
+    the credential, and its audit row says so: `git credential withheld for
+    acme/newdep: not a learned dependency of acme/app; it is learned when
+    the default branch's cache warm fetches it`.
+
+  A warm runs the default branch's install, its dependencies' install
+  scripts included: whatever that code fetches with the credential is
+  learned. That is the trust you give your default branch anyway — it is
+  the code you deploy. Repositories compare exactly, case-insensitively
+  (forges name them so), after the same checks as `https://` path entries:
+  a dot segment, `//`, a backslash or a percent sign left after decoding
+  never matches.
+- **Kept across restarts.** The learned sets and which connector instance
+  mints for each repository are in conductor's state dir
+  (`git-learned.json`, `git-fetch.json`: repository and instance names,
+  never a credential), out of every sandbox's view; a restart or an
+  auto-update keeps them.
+- **Reach.** Declaring `git_fetch` admits its host to every launch's
+  egress for those fetches, even when the egress allowlist does not name
+  it; so a plugin build that adds a `git_fetch` host, or changes one, is
+  held for your approval like any other new permission
+  ([[Plugins]]). A host resolving to a private or loopback address still
+  needs an exact egress entry (the SSRF rule of every egress host).
+- **Which instance, and its scope at every use.** A dispatch's credential
+  is the one its connector minted for its target, held by its own egress
+  session and gone when the launch ends; a launch for a target the platform
+  did not assign gets none. A warm or a hand-off mints one through the
+  connector instance that last dispatched trusted work on the repository —
+  and only while that instance still covers it: an instance whose `repos:`
+  (its declared repository scope) no longer matches the repository mints
+  none. A forge connector that names its API host per instance (the github
+  plugin's `api_base`, for GitHub Enterprise Server) fetches from that
+  instance's host, never the public one.
+- **Hand-offs.** A `conductor sandbox exec` launch's proxy runs in the exec
+  process, outside the sandbox, so the daemon sends the credential to that
+  process over the control socket — only to a caller whose uid it checked
+  (your own) and whose process the launch's token is anchored to; never
+  into the policy the sandbox sees. The control socket is hidden from every
+  sandbox.
 
 Only connectors declare it (a plugin's `git_fetch`, naming one of its `read`
-credentials); there is no per-repository config. `sandbox.git_fetch: false`
+credentials); there is nothing to configure. `sandbox.git_fetch: false`
 turns it off for every launch. A `conductor sandbox exec` launch in a
 directory conductor never checked out (your own paseo workspace, an
 agent-deck session, a scratch dir) gets none: there is no trusted repository

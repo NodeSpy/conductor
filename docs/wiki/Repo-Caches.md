@@ -297,12 +297,25 @@ you pass `--force`.
 A lockfile that names a private repository by its SSH URL
 (`git+ssh://git@github.com/acme/dep.git`) is warmed the way an agent fetches
 it ([[Isolation#git-fetch]]): the warm's git rewrites the SSH URL to HTTPS,
-and its egress proxy adds a git fetch credential to fetches of the
-repositories in scope. The credential comes from the connector that declares
-one (`git_fetch`), minted for the warmed repository through the connector
-instance that last dispatched trusted work on it — recorded in the state dir,
-so restarts and auto-updates keep it. A repository no trusted work has ever
-run on gets none, and the fetch fails as it would without this:
+and its egress proxy adds a git fetch credential. The credential comes from
+the connector that declares one (`git_fetch`), minted for the warmed
+repository through the connector instance that last dispatched trusted work
+on it.
+
+A warm is the default branch's, so it is what **teaches** the repository's
+dependencies: its credential covers any repository on the host, and each
+one the forge served it during a successful warm is recorded as a learned
+dependency of the repository (per recipe, replacing that recipe's previous
+warm's — so a dependency removed from the default branch drops off). Every
+other launch on the repository — a PR's, a fixer's, a hand-off's — gets the
+repository plus those learned dependencies. A PR that adds a new private
+dependency fetches it once the change is on the default branch and its warm
+has run; until then its launches' audit rows say the credential was
+withheld, and why. Nothing is configured, nothing is read from the lockfile,
+and the state lives in conductor's state dir, kept across restarts.
+
+A repository no trusted work has ever run on gets no credential, and the
+fetch fails as it would without this:
 
 ```
 Bad owner or permissions on /etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf

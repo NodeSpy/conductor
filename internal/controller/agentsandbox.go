@@ -38,9 +38,19 @@ type SandboxWiring struct {
 // AgentSandbox is the wiring (nil = off).
 var AgentSandbox *SandboxWiring
 
-// WarmGitAuth mints a cache warm's git fetch credentials for repo
-// (engine.GitFetchFor; nil: none).
-var WarmGitAuth func(ctx context.Context, repo string) []sandbox.GitAuth
+// Git fetch credentials outside a dispatch (engine/gitfetch.go; nil: none):
+//
+//   - WarmGitAuth mints a default-branch cache warm's, for any repository
+//     on the host (engine.GitFetchWarm); WarmGitLearned records what the
+//     successful warm fetched with it (engine.GitLearned) — the only way a
+//     repository's learned dependencies change.
+//   - ScopedGitAuth mints a hand-off's: the repository and its learned
+//     dependencies (engine.GitFetchFor).
+var (
+	WarmGitAuth    func(ctx context.Context, repo string) []sandbox.GitAuth
+	WarmGitLearned func(repo, recipe string, fetched []string)
+	ScopedGitAuth  func(ctx context.Context, repo string) []sandbox.GitAuth
+)
 
 // agentLaunch marks a launch as an agent runtime's own (cli/acp), the
 // launches the agent sandbox covers.

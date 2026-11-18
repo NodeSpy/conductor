@@ -106,6 +106,13 @@ type Manifest struct {
 	// ExposeLocal: an exposure that connects to the local listeners conductor
 	// wires to it (Capabilities.ExposeLocal).
 	ExposeLocal bool `yaml:"expose_local,omitempty"`
+	// GitFetch are the git fetch credentials the plugin declares
+	// (Decl.Semantics.git_fetch), one entry per host: which credential, as
+	// whom, on which host (or "config:<setting>", the host an instance's
+	// setting names). Each admits its host to every agent launch's egress
+	// for git fetches, so one an update adds or changes is held for
+	// approval like any other new permission.
+	GitFetch []string `yaml:"git_fetch,omitempty"`
 	// Auth records the plugin's declared OAuth2 endpoints (Decl.Auth) so
 	// `conductor connector auth <name>` can run the one-time interactive login
 	// from the CLI without respawning the plugin to re-Describe it. nil for a
@@ -410,6 +417,7 @@ func (m Manifest) Widens(next Manifest) []string {
 			out = append(out, keyringLine(it))
 		}
 	}
+	diff("lets agents' git fetch with its credential", m.GitFetch, next.GitFetch, exact)
 	if next.ExposeLocal && !m.ExposeLocal {
 		out = append(out, exposeLocalLabel)
 	}

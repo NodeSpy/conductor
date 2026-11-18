@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -20,6 +21,11 @@ const testGitSecret = "gh-secret-0123456789"
 // session holds a git fetch credential for its org's repositories.
 // broad: the allowlist also names the forge's host (any path).
 func gitRig(t *testing.T, broad bool) (*inspectRig, string) {
+	return gitRigWith(t, broad, GitAuth{Repos: []string{"/org/dep", "/org/sub/deep"}, For: "org/app"})
+}
+
+// gitRigWith: auth's Host, Username and Secret are the rig's.
+func gitRigWith(t *testing.T, broad bool, auth GitAuth) (*inspectRig, string) {
 	t.Helper()
 	echo := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -50,7 +56,7 @@ func gitRig(t *testing.T, broad bool) (*inspectRig, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(rig.p.Close)
-	auth := GitAuth{Host: "example.com:" + port, Repos: []string{"/org/"}, Username: "x-user", Secret: testGitSecret}
+	auth.Host, auth.Username, auth.Secret = "example.com:"+port, "x-user", testGitSecret
 	if err := auth.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +100,7 @@ func TestGitFetchCredentialOnlyOnFetchesInScope(t *testing.T) {
 				{"GET", "/org/dep/info/refs?service=git-upload-pack"},
 				{"POST", "/org/dep.git/git-upload-pack"},
 				{"POST", "/org/sub/deep.git/git-upload-pack"},
+				{"GET", "/ORG/Dep.git/info/refs?service=git-upload-pack"}, // forges' case
 			} {
 				code, body := do(t, c, f.method, rig.mirrorURL(f.path), mine)
 				if code != 200 || !strings.Contains(body, "auth="+want+" ") {
@@ -117,6 +124,9 @@ func TestGitFetchCredentialOnlyOnFetchesInScope(t *testing.T) {
 				{"GET", "/other/secret.git/info/refs?service=git-upload-pack"},
 				{"POST", "/other/secret.git/git-upload-pack"},
 				{"GET", "/organization/x.git/info/refs?service=git-upload-pack"},
+				{"GET", "/org/dep-evil.git/info/refs?service=git-upload-pack"},
+				{"GET", "/org/dep/x.git/info/refs?service=git-upload-pack"},
+				{"GET", "/org/other.git/info/refs?service=git-upload-pack"},
 				{"GET", "/org/../other/secret.git/info/refs?service=git-upload-pack"},
 				{"GET", "/org/%2e%2e/other/secret.git/info/refs?service=git-upload-pack"},
 				{"GET", "/org/dep.git%2Finfo%2Frefs?service=git-upload-pack"},
@@ -150,8 +160,17 @@ func TestGitFetchCredentialOnlyOnFetchesInScope(t *testing.T) {
 				credited++
 			}
 		}
-		if credited != 8 {
-			t.Fatalf("broad=%v: %d credited records, want 8: %+v", broad, credited, rig.records())
+		if credited != 10 {
+			t.Fatalf("broad=%v: %d credited records, want 10: %+v", broad, credited, rig.records())
+		}
+		// A fetch out of scope says why it went without the credential.
+		withheld := false
+		for _, r := range rig.records() {
+			withheld = withheld || (strings.Contains(r.Path, "/org/other.git") &&
+				strings.Contains(r.Reason, "git credential withheld for org/other: not a learned dependency of org/app; it is learned when the default branch's cache warm fetches it"))
+		}
+		if !withheld {
+			t.Fatalf("broad=%v: no withheld reason: %+v", broad, rig.records())
 		}
 	}
 }
@@ -175,7 +194,7 @@ func TestGitHostAdmittedForGitAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth := GitAuth{Host: "forge.example", Repos: []string{"/o/"}, Username: "u", Secret: "s"}
+	auth := GitAuth{Host: "forge.example", Repos: []string{"/o/r"}, Username: "u", Secret: "s"}
 	client := func(o SessionOpts) *http.Client {
 		cred, _ := p.MintSession(o)
 		pu, _ := url.Parse("http://" + proxyUser + ":" + cred + "@" + addr)
@@ -184,7 +203,7 @@ func TestGitHostAdmittedForGitAlone(t *testing.T) {
 	for name, o := range map[string]SessionOpts{
 		"no credential":   {Run: "r", Inspect: in},
 		"not inspected":   {Run: "r", Git: []GitAuth{auth}},
-		"other host cred": {Run: "r", Inspect: in, Git: []GitAuth{{Host: "forge.example:8443", Repos: []string{"/o/"}, Username: "u", Secret: "s"}}},
+		"other host cred": {Run: "r", Inspect: in, Git: []GitAuth{{Host: "forge.example:8443", Repos: []string{"/o/r"}, Username: "u", Secret: "s"}}},
 	} {
 		if _, err := client(o).Get("https://forge.example/o/r.git/info/refs?service=git-upload-pack"); err == nil || !strings.Contains(err.Error(), "Forbidden") {
 			t.Fatalf("%s: CONNECT allowed: %v", name, err)
@@ -234,24 +253,28 @@ func TestGitOp(t *testing.T) {
 }
 
 func TestGitAuthValidate(t *testing.T) {
-	ok := GitAuth{Host: "github.com", Repos: []string{"/org/"}, Username: "u", Secret: "s"}
+	ok := GitAuth{Host: "github.com", Repos: []string{"/org/r"}, Username: "u", Secret: "s"}
+	if err := (GitAuth{Host: "github.com", Learn: true, Username: "u", Secret: "s"}).Validate(); err != nil {
+		t.Fatalf("a warm's: %v", err)
+	}
 	if err := ok.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []GitAuth{
-		{Host: "*.github.com", Repos: []string{"/o/"}, Username: "u", Secret: "s"},
-		{Host: "10.0.0.1", Repos: []string{"/o/"}, Username: "u", Secret: "s"},
-		{Host: "github.com:0", Repos: []string{"/o/"}, Username: "u", Secret: "s"},
-		{Host: "github.com:x", Repos: []string{"/o/"}, Username: "u", Secret: "s"},
+		{Host: "*.github.com", Repos: []string{"/o/r"}, Username: "u", Secret: "s"},
+		{Host: "10.0.0.1", Repos: []string{"/o/r"}, Username: "u", Secret: "s"},
+		{Host: "github.com:0", Repos: []string{"/o/r"}, Username: "u", Secret: "s"},
+		{Host: "github.com:x", Repos: []string{"/o/r"}, Username: "u", Secret: "s"},
 		{Host: "github.com", Repos: nil, Username: "u", Secret: "s"},
 		{Host: "github.com", Repos: []string{"/"}, Username: "u", Secret: "s"},
 		{Host: "github.com", Repos: []string{"o/"}, Username: "u", Secret: "s"},
 		{Host: "github.com", Repos: []string{"/o/../x"}, Username: "u", Secret: "s"},
 		{Host: "github.com", Repos: []string{"/o//x"}, Username: "u", Secret: "s"},
-		{Host: "github.com", Repos: []string{"/o/"}, Username: "", Secret: "s"},
-		{Host: "github.com", Repos: []string{"/o/"}, Username: "a:b", Secret: "s"},
-		{Host: "github.com", Repos: []string{"/o/"}, Username: "u", Secret: ""},
-		{Host: "github.com", Repos: []string{"/o/"}, Username: "u", Secret: "a\nb"},
+		{Host: "github.com", Repos: []string{"/o/"}, Username: "u", Secret: "s"},
+		{Host: "github.com", Repos: []string{"/o/r"}, Username: "", Secret: "s"},
+		{Host: "github.com", Repos: []string{"/o/r"}, Username: "a:b", Secret: "s"},
+		{Host: "github.com", Repos: []string{"/o/r"}, Username: "u", Secret: ""},
+		{Host: "github.com", Repos: []string{"/o/r"}, Username: "u", Secret: "a\nb"},
 	} {
 		if bad.Validate() == nil {
 			t.Errorf("accepted %+v", bad)
@@ -281,5 +304,40 @@ func TestGitRewriteEnv(t *testing.T) {
 	}
 	if strings.Count(got, "GIT_CONFIG_COUNT=") != 1 {
 		t.Fatalf("count set twice:\n%s", got)
+	}
+}
+
+// TestGitLearnFetchesAnyRepositoryOnTheHost: a default-branch warm's
+// credential is added to a fetch of any repository on the host, and the
+// proxy reports each one the forge served (OK); a push is still refused,
+// and nothing that is not a fetch is reported.
+func TestGitLearnFetchesAnyRepositoryOnTheHost(t *testing.T) {
+	var mu sync.Mutex
+	var heard []string
+	rig, want := gitRigWith(t, false, GitAuth{Learn: true, For: "org/app", OnFetch: func(r string) {
+		mu.Lock()
+		heard = append(heard, r)
+		mu.Unlock()
+	}})
+	c := rig.client(caPool(rig.in.CAPEM()), false)
+	for _, p := range []string{"/org/dep.git/info/refs?service=git-upload-pack", "/other/lib/info/refs?service=git-upload-pack"} {
+		if code, body := do(t, c, "GET", rig.mirrorURL(p), nil); code != 200 || !strings.Contains(body, "auth="+want+" ") {
+			t.Fatalf("%s: %d %q", p, code, body)
+		}
+	}
+	if code, _ := do(t, c, "POST", rig.mirrorURL("/org/dep.git/git-receive-pack"), nil); code != 403 {
+		t.Fatalf("push: %d", code)
+	}
+	if code, body := do(t, c, "GET", rig.mirrorURL("/org/dep"), nil); code != 403 || strings.Contains(body, want) {
+		t.Fatalf("not a fetch: %d %q", code, body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(heard, ",") != "/org/dep,/other/lib" {
+		t.Fatalf("heard %v", heard)
+	}
+	b, _ := json.Marshal(GitAuth{Host: "h", Learn: true, Username: "u", Secret: "s"})
+	if strings.Contains(string(b), "learn") || strings.Contains(string(b), "\"s\"") {
+		t.Fatalf("a warm's credential serializes: %s", b)
 	}
 }

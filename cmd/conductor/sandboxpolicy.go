@@ -63,7 +63,17 @@ func sandboxPolicyResponse(conn net.Conn, req controlRequest, log func(string, .
 		return controlResponse{Error: err.Error()}
 	}
 	log("sandbox-policy: %s in %s (identity %s, egress %d host(s), %d relay(s), %d git fetch credential(s))", pol.Tool, req.Cwd, pol.Identity, len(pol.Egress), len(pol.Loopback), len(pol.GitAuth))
-	return controlResponse{OK: true, Policy: &pol, GitAuth: gitAuthToWire(pol.GitAuth)}
+	resp := controlResponse{OK: true, Policy: &pol}
+	if len(pol.GitAuth) > 0 {
+		if credOK {
+			resp.GitAuth = gitAuthToWire(pol.GitAuth)
+		} else {
+			// No peer credentials to check the caller's uid against: the
+			// launch runs, without them.
+			log("sandbox-policy for %s: git fetch credentials withheld (the caller's uid cannot be checked)", req.Cwd)
+		}
+	}
+	return resp
 }
 
 // gitAuthWire carries a git fetch credential, secret included, from the
@@ -73,6 +83,7 @@ func sandboxPolicyResponse(conn net.Conn, req controlRequest, log func(string, .
 type gitAuthWire struct {
 	Host     string   `json:"host"`
 	Repos    []string `json:"repos"`
+	For      string   `json:"for,omitempty"`
 	Username string   `json:"username"`
 	Secret   string   `json:"secret"`
 }
@@ -80,7 +91,7 @@ type gitAuthWire struct {
 func gitAuthToWire(in []sandbox.GitAuth) []gitAuthWire {
 	var out []gitAuthWire
 	for _, g := range in {
-		out = append(out, gitAuthWire{Host: g.Host, Repos: g.Repos, Username: g.Username, Secret: g.Secret})
+		out = append(out, gitAuthWire{Host: g.Host, Repos: g.Repos, For: g.For, Username: g.Username, Secret: g.Secret})
 	}
 	return out
 }
@@ -88,7 +99,7 @@ func gitAuthToWire(in []sandbox.GitAuth) []gitAuthWire {
 func gitAuthFromWire(in []gitAuthWire) []sandbox.GitAuth {
 	var out []sandbox.GitAuth
 	for _, g := range in {
-		out = append(out, sandbox.GitAuth{Host: g.Host, Repos: g.Repos, Username: g.Username, Secret: g.Secret})
+		out = append(out, sandbox.GitAuth{Host: g.Host, Repos: g.Repos, For: g.For, Username: g.Username, Secret: g.Secret})
 	}
 	return out
 }
@@ -170,9 +181,10 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	if cfg.Sandbox.GitFetchOn() {
 		// A `conductor sandbox exec` launch in a workspace conductor checked
 		// out (a hand-off): the repository's git fetch credentials, minted
-		// as for a cache warm (controller.WarmGitAuth, once the engine runs).
+		// for the repository and its learned dependencies
+		// (controller.ScopedGitAuth, once the engine runs).
 		r.GitAuth = func(repo string) []sandbox.GitAuth {
-			f := controller.WarmGitAuth
+			f := controller.ScopedGitAuth
 			if f == nil {
 				return nil
 			}

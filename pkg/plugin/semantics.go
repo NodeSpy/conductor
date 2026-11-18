@@ -460,25 +460,32 @@ type ConnSemantics struct {
 }
 
 // GitFetch declares that a read credential also authenticates git's
-// fetches (smart HTTP, read only) on Hosts. An agent's sandbox holds no
-// credential and no SSH key: the host rewrites the SSH forms of these
-// hosts' URLs to HTTPS for the agent's git, and its egress proxy adds the
-// credential to fetches of the repositories in Repos — the secret never
-// enters the sandbox, and a push to these hosts is refused.
+// fetches (smart HTTP, read only) on a host. An agent's sandbox holds no
+// credential and no SSH key: the host rewrites the SSH forms of the host's
+// URLs to HTTPS for the agent's git, and its egress proxy adds the
+// credential to fetches of the repositories conductor scopes it to — the
+// secret never enters the sandbox, and a push to the host is refused.
 //
-// Repos are repository path prefixes on the host, templates over the
-// repository the work is for: {{.repo}} (owner/name) and {{.repo_owner}}
-// (everything before its last /). "{{.repo_owner}}/" is every repository
-// of the same owner (a private dependency in the same organization);
-// default ["{{.repo}}"], the repository alone.
+// The plugin declares the host and the credential only. Which repositories
+// a launch's credential covers is conductor's: the repository the work is
+// for, and the dependencies its default branch's cache warm fetched.
+// Declaring git_fetch admits the host to every launch's egress for those
+// fetches; a build that adds or changes one is held for approval.
 type GitFetch struct {
 	// Credential names a declared credential of role read.
 	Credential string `json:"credential"`
-	// Hosts are exact host names, with :port when not 443.
+	// Hosts are exact host names, with :port when not 443: the hosts when
+	// HostFrom is unset, or the instance does not set it.
 	Hosts []string `json:"hosts"`
+	// HostFrom names a connection setting holding the forge's API base URL
+	// (a GitHub Enterprise Server's api_base). When an instance sets it,
+	// the git host is that URL's host instead of Hosts — less a leading
+	// "api." label when the API is served at the host's root
+	// (https://api.example.com is example.com; https://ghe.example.com/api/v3
+	// is ghe.example.com).
+	HostFrom string `json:"host_from,omitempty"`
 	// Username is the HTTP basic username sent with the credential.
-	Username string   `json:"username"`
-	Repos    []string `json:"repos,omitempty"`
+	Username string `json:"username"`
 }
 
 // Credential is one credential agents dispatched on this connection's
@@ -940,10 +947,8 @@ func ValidateSemantics(d Decl) []string {
 			if g.Username == "" || strings.ContainsAny(g.Username, ":\r\n") {
 				p = append(p, path+".username: required, with no ':' or newline")
 			}
-			for _, r := range g.Repos {
-				if strings.TrimSpace(r) == "" || strings.HasPrefix(r, "/") || strings.Contains(r, "..") {
-					p = append(p, fmt.Sprintf("%s.repos: %q must be a repository path relative to the host", path, r))
-				}
+			if g.HostFrom != "" && !connFieldDeclared(d.Connection, g.HostFrom) {
+				p = append(p, fmt.Sprintf("%s.host_from: %q is not a declared connection field", path, g.HostFrom))
 			}
 		}
 		if s := c.Scope; s != nil && (s.Dimension == "" || s.Option == "") {

@@ -75,7 +75,8 @@ type Resolver struct {
 	// GitAuth is the git fetch credentials (sandbox.GitAuth) for a launch
 	// in a workspace conductor checked out of repo, a repository it trusts
 	// (Entry.Repo) — a `conductor sandbox exec` launch's, whose proxy is
-	// the exec process's own. nil: none.
+	// the exec process's own; asked only for a caller anchored to a process
+	// (PolicyFor's root). nil: none.
 	GitAuth func(repo string) []sandbox.GitAuth
 	// Session resolves a cwd that is NOT in the registry to a live bot
 	// session's entry (its identity, its granted skill verbs, its read-only
@@ -158,7 +159,9 @@ func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK b
 func (r *Resolver) policyForCwd(e Entry, cwd, tool string, launcherEnv []string, root skill.ProcessAnchor) (Policy, error) {
 	p, err := r.PolicyForEntry(e, tool, launcherEnv, root)
 	p.Cwd = canon(cwd)
-	if err == nil && r.GitAuth != nil && e.Repo != "" {
+	// Like a token, a git credential goes only to a caller anchored to its
+	// process tree (root): one whose uid could not be checked gets none.
+	if err == nil && r.GitAuth != nil && e.Repo != "" && !root.Empty() {
 		p.GitAuth = r.GitAuth(e.Repo)
 	}
 	if err == nil && p.Tool == "claude-code" && e.Dispatch != "" && p.Cwd != p.Workspace {

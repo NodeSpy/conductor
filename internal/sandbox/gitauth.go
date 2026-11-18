@@ -29,13 +29,23 @@ import (
 type GitAuth struct {
 	// Host is an exact host name, with :port when not 443.
 	Host string `json:"host"`
-	// Repos are the repository path prefixes on Host the credential is
-	// used for ("/org/" — every repository under org — or "/org/repo").
+	// Repos are the repositories on Host the credential is used for
+	// ("/org/repo"), each matched exactly — case-insensitively, as forges
+	// name them.
 	Repos []string `json:"repos"`
+	// For is the repository the launch's work is for (owner/name): what a
+	// refusal names.
+	For string `json:"for,omitempty"`
 	// Username is the HTTP basic username sent with Secret.
 	Username string `json:"username"`
 	// Secret is the credential. Never serialized.
 	Secret string `json:"-"`
+	// Learn: a default-branch cache warm's credential, used for a fetch
+	// of any repository on Host (Repos unused); OnFetch hears each one the
+	// forge served. Never serialized: no launch but a warm in this process
+	// holds one.
+	Learn   bool              `json:"-"`
+	OnFetch func(repo string) `json:"-"`
 }
 
 // Validate refuses a GitAuth the proxy cannot apply exactly.
@@ -53,12 +63,12 @@ func (g GitAuth) Validate() error {
 	if g.Secret == "" || strings.ContainsAny(g.Secret, "\r\n") {
 		return fmt.Errorf("sandbox: git credential for %s: no usable secret", g.Host)
 	}
-	if len(g.Repos) == 0 {
+	if len(g.Repos) == 0 && !g.Learn {
 		return fmt.Errorf("sandbox: git credential for %s: no repositories in scope", g.Host)
 	}
 	for _, r := range g.Repos {
-		if !strings.HasPrefix(r, "/") || r == "/" || path.Clean(r)+trailingSlash(r) != r {
-			return fmt.Errorf("sandbox: git credential for %s: repository scope %q is not a clean path below /", g.Host, r)
+		if !strings.HasPrefix(r, "/") || r == "/" || path.Clean(r) != r {
+			return fmt.Errorf("sandbox: git credential for %s: repository %q is not a clean path below /", g.Host, r)
 		}
 	}
 	return nil
@@ -168,14 +178,39 @@ func (s *Session) gitAuths(target string) []GitAuth {
 }
 
 // gitCredentialFor is the credential a fetch of repo on target carries
-// (nil: none covers it).
+// (nil: none covers it). Repository paths compare case-insensitively.
 func (s *Session) gitCredentialFor(target, repo string) *GitAuth {
+	if repo == "" {
+		return nil
+	}
+	lr := strings.ToLower(repo)
 	for _, g := range s.gitAuths(target) {
-		if repo != "" && pathAllowed(repo, g.Repos) {
+		if g.Learn {
 			return &g
+		}
+		for _, r := range g.Repos {
+			if strings.ToLower(r) == lr {
+				return &g
+			}
 		}
 	}
 	return nil
+}
+
+// gitWithheld is why a fetch of repo on target carries no credential.
+func (s *Session) gitWithheld(target, repo string) string {
+	of := ""
+	for _, g := range s.gitAuths(target) {
+		if g.For != "" {
+			of = g.For
+			break
+		}
+	}
+	if of == "" {
+		return "git credential withheld for " + strings.TrimPrefix(repo, "/") + ": not in this launch's scope"
+	}
+	return "git credential withheld for " + strings.TrimPrefix(repo, "/") + ": not a learned dependency of " + of +
+		"; it is learned when the default branch's cache warm fetches it"
 }
 
 // basicAuth is the Authorization header value for g.
