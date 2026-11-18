@@ -250,7 +250,7 @@ git ls-remote https://forge.test:$FORGE_PORT/org/../other/secret.git >/dev/null 
 grep -q "git push from the sandbox" "$TMPDIR/push"; say $? "push refused by the proxy"
 needle="s3cr3t-""forge"
 env | grep -q "$needle"; [ $? != 0 ]; say $? "the secret is not in the environment"
-grep -rqs "$needle" "$HOME" "$TMPDIR" . ; [ $? != 0 ]; say $? "the secret is nowhere on disk the agent sees"
+find "$HOME" "$TMPDIR" . -type f -exec grep -l "$needle" {} + 2>/dev/null | grep -q .; [ $? != 0 ]; say $? "the secret is nowhere on disk the agent sees"
 command -v ssh >/dev/null && echo "has ssh" || true
 `
 
@@ -279,8 +279,15 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	t.Cleanup(func() { _ = repocache.RemoveAll(root) })
 	forge := newFakeForge(t, root)
 	yarn, _ := exec.LookPath("yarn")
-	if yarn == "" && os.Getenv("CONDUCTOR_REQUIRE_SANDBOX") == "1" {
+	if yarn == "" && os.Getenv("CONDUCTOR_REQUIRE_SANDBOX") == "1" && runtime.GOOS == "linux" {
 		t.Fatal("no yarn: the cache warm half of this test needs it")
+	}
+	// A yarn inside the operator's home (a macOS runner's ~/.yarn) is
+	// hidden from the sandbox, as it should be: the warm half needs one the
+	// sandbox shows.
+	warmYarn := yarn
+	if h, _ := os.UserHomeDir(); yarn != "" && h != "" && strings.HasPrefix(yarn, h+"/") {
+		warmYarn = ""
 	}
 	origin := appOrigin(t, root, forge, yarn)
 	forge.reset()
@@ -406,8 +413,8 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	})
 
 	t.Run("cache warm without a credential fails as before", func(t *testing.T) {
-		if yarn == "" {
-			t.Skip("no yarn here")
+		if warmYarn == "" {
+			t.Skip("no yarn the sandbox shows")
 		}
 		WarmGitAuth = nil
 		if err := m.WarmRepo(context.Background(), "acme/app"); err == nil {
@@ -421,8 +428,8 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	})
 
 	t.Run("cache warm", func(t *testing.T) {
-		if yarn == "" {
-			t.Skip("no yarn here: the warm's package manager")
+		if warmYarn == "" {
+			t.Skip("no yarn the sandbox shows: the warm's package manager")
 		}
 		WarmGitAuth = func(_ context.Context, repo string) []sandbox.GitAuth {
 			if repo != "acme/app" {
