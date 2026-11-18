@@ -56,6 +56,13 @@ func TestDispatchIdentity(t *testing.T) {
 	if got := DispatchIdentity(req, "claude-code"); got != "agent:fixer@dispatch-d1" {
 		t.Fatalf("a sender-chosen target never shares the real repo's tool state: %s", got)
 	}
+	// Resumed under a new dispatch id, it keeps the tool state its session
+	// was created in.
+	resumed := req
+	resumed.DispatchID, resumed.Resume = "d2", &dispatch.AgentSession{SessionID: "s", Home: "d1"}
+	if got := DispatchIdentity(resumed, "claude-code"); got != "agent:fixer@dispatch-d1" {
+		t.Fatalf("resumed: %s", got)
+	}
 	req.Action.Agent = ""
 	req.Trigger = core.Trigger{TargetTrusted: true}
 	if got := DispatchIdentity(req, "codex"); got != "agent:runtime-codex" {

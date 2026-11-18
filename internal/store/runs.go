@@ -61,6 +61,10 @@ type RunAgent struct {
 	Workspace string `json:"workspace,omitempty"`
 	Cwd       string `json:"cwd,omitempty"`
 	CanResume bool   `json:"can_resume,omitempty"`
+	// Home is the dispatch id whose sandbox home the agent's tool state (its
+	// session transcript) lives in: the dispatch that first started it. A
+	// resumed agent launches there again, under its new dispatch id.
+	Home string `json:"home,omitempty"`
 	// Resumes counts the restarts this step's agent has been resumed through
 	// without finishing.
 	Resumes int       `json:"resumes,omitempty"`

@@ -108,7 +108,7 @@ func (r *Resolver) liveSessionHomes() map[string]bool {
 				cancel()
 			}
 		}
-		key := IdentityKey(e.Identity + "@" + e.Dispatch)
+		key := IdentityKey(dispatchHomeKey(e))
 		if live, known := answers[s.Backend]; known {
 			if live[s.ID] {
 				out[key] = true

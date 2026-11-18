@@ -300,3 +300,59 @@ steps:
 		t.Fatalf("a recorded agent no live dispatch runs must still be resumed, got %+v", resumes)
 	}
 }
+
+// A resumed step runs under a new dispatch id (the resumed run's history id
+// is its own), but its agent's sandbox home is the one its session was
+// created in: the record carries that dispatch through every restart.
+func TestResumedAgentStepKeepsItsHomeDispatch(t *testing.T) {
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
+	reg := buildRegistry(t, cfg)
+	_ = newFakeState(t, "svc")
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: fix, type: agent, name: fixer, prompt: p, model: x }
+`)
+	var st *agentStore
+	type seen struct {
+		dispatch, home string
+	}
+	// interrupted runs the step once, as a daemon that stops mid-step does.
+	interrupted := func() seen {
+		t.Helper()
+		rig := newTestRunner(t, cfg, reg)
+		if st == nil {
+			st = newAgentStore(rig.Store)
+		}
+		rig.Runner.Store = st
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var s seen
+		rig.Agents.dispatchFunc = func(c context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+			s = seen{dispatch: req.DispatchID, home: req.HomeDispatch()}
+			req.OnAgentStart(dispatch.AgentStart{AgentSession: dispatch.AgentSession{SessionID: "sess", Cwd: "/wt", CanResume: true}})
+			cancel()
+			return dispatch.RunRef{}, c.Err()
+		}
+		run := emptyRun()
+		run.ID = "run1"
+		rig.Runner.Run(ctx, run, newTrigger("ping", nil), spec, rig.Runner.IndexOf(spec), nil, false)
+		return s
+	}
+	first := interrupted()
+	if first.dispatch == "" || first.home != first.dispatch {
+		t.Fatalf("first launch: %+v", first)
+	}
+	if a, _ := st.RunAgent("run1", "fix"); a.Home != first.dispatch {
+		t.Fatalf("record home = %q, want %q", a.Home, first.dispatch)
+	}
+	for i := 0; i < 2; i++ {
+		again := interrupted()
+		if again.dispatch == first.dispatch || again.home != first.dispatch {
+			t.Fatalf("resume %d: %+v, want a new dispatch in home %q", i+1, again, first.dispatch)
+		}
+		if a, _ := st.RunAgent("run1", "fix"); a.Home != first.dispatch {
+			t.Fatalf("resume %d: record home = %q", i+1, a.Home)
+		}
+	}
+}

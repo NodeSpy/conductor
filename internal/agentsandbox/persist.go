@@ -37,7 +37,17 @@ func (r *Resolver) homeFor(e Entry, persist string) (root, key string) {
 	if persist == PersistHome || e.Dispatch == "" {
 		return r.StateRoot, e.Identity
 	}
-	return filepath.Join(r.StateRoot, dispatchHomes), e.Identity + "@" + e.Dispatch
+	return filepath.Join(r.StateRoot, dispatchHomes), dispatchHomeKey(e)
+}
+
+// dispatchHomeKey names e's per-dispatch home: its identity at the dispatch
+// the home was created for (Entry.Home, a resumed step's), or its own.
+func dispatchHomeKey(e Entry) string {
+	d := e.Dispatch
+	if e.Home != "" {
+		d = e.Home
+	}
+	return e.Identity + "@" + d
 }
 
 // persistCache links the identity's persisted cache into a per-dispatch

@@ -711,7 +711,9 @@ macOS. `disk_free_min: off` turns it off.
 a fresh home of its own, seeded like an identity home, so nothing one run
 plants (a settings hook, a shell rc file, a poisoned build cache) reaches the
 next. The home lives under `<state>/agent-state/.dispatch-homes/` and is kept
-only while something can still use it:
+only while something can still use it. A step resumed after a restart runs
+in the home its agent was created in, so the resumed session finds its
+transcript; that home then belongs to the resumed run.
 
 - its run is running, or a restart interrupted it and it can still resume;
 - an agent is running in it. Every launch holds a lock on its home until it

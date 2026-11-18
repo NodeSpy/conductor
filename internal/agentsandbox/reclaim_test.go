@@ -649,3 +649,98 @@ func TestPreparingAHomeNeverBlocksOnItsLock(t *testing.T) {
 		t.Fatal("preparing the home blocked on its lock")
 	}
 }
+
+// A step resumed after a restart runs under a new dispatch id (its run's new
+// history id) in the home its session was created in: the transcript it
+// resumes is there. That home is kept while the interrupted run awaits its
+// resume, belongs to the resumed run once relaunched, and goes when that run
+// ends.
+func TestAResumedStepRelaunchesInItsHome(t *testing.T) {
+	g := newReclaimRig(t)
+	g.live["rOld"] = true
+	launch := func(r *Resolver, e Entry) string {
+		t.Helper()
+		e.Workspace, e.Identity = g.ws, "agent:fixer@acme/app"
+		p, err := r.PolicyForEntry(e, "claude", nil, skill.ProcessAnchor{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.Home
+	}
+	home := launch(g.r, Entry{Dispatch: "rOld:address"})
+	transcript := filepath.Join(home, ".claude", "projects", "wt", "fcd6fab7.jsonl")
+	os.MkdirAll(filepath.Dir(transcript), 0o700)
+	os.WriteFile(transcript, []byte("{}\n"), 0o600)
+	launched(home)
+	ageIndex(t, g.r)
+
+	// The daemon restarts: the run was interrupted and can resume. The
+	// startup sweep (before ResumeWorkflows) keeps its home.
+	r2 := g.resolver(g.r.StateRoot)
+	if n := r2.SweepDispatchHomes(); n != 0 || !exists(transcript) {
+		t.Fatalf("startup sweep removed %d; transcript kept: %v", n, exists(transcript))
+	}
+
+	// The resumed run (history id rNew) relaunches the step.
+	g.live["rNew"] = true
+	if got := launch(r2, Entry{Dispatch: "rNew:address", Home: "rOld:address"}); got != home {
+		t.Fatalf("resumed launch home = %s, want the session's %s", got, home)
+	}
+	other := launch(r2, Entry{Dispatch: "rNew:other"})
+	if other == home {
+		t.Fatal("another step of the resumed run shares the resumed step's home")
+	}
+	launched(other)
+	if rec := loadHomeIndex(r2.homesDir())[filepath.Base(home)]; rec.Dispatch != "rNew:address" {
+		t.Fatalf("index record = %+v, want it re-indexed under the resumed run", rec)
+	}
+	launched(home)
+
+	// Interrupted again: the resumed run is resumable, its home stays even
+	// once the old run is no longer.
+	g.live["rOld"] = false
+	ageIndex(t, r2)
+	if n := r2.SweepDispatchHomes(); n != 0 || !exists(transcript) {
+		t.Fatalf("sweep with the resumed run resumable removed %d; transcript kept: %v", n, exists(transcript))
+	}
+
+	// The resumed run ends: its homes go, the resumed step's included.
+	g.live["rNew"] = false
+	if n := r2.ReclaimRun("rNew"); n != 2 || exists(home) || exists(other) {
+		t.Fatalf("resumed run ended: reclaimed %d, homes kept: %v %v", n, exists(home), exists(other))
+	}
+}
+
+// An out-of-process session bound in a resumed step's workspace keeps the
+// home the step runs in, not one under its new dispatch id.
+func TestAResumedSessionKeepsItsOwnHome(t *testing.T) {
+	g := newReclaimRig(t)
+	backend, _ := newFakeBackend(t, "sess-1")
+	e := Entry{Workspace: g.ws, Identity: "agent:fixer@acme/app", Dispatch: "rNew:address", Home: "rOld:address"}
+	g.r.Registry.Register(e)
+	g.r.Registry.BindSession(g.ws, e.Dispatch, SessionRef{Backend: backend, ID: "sess-1"})
+	live := g.r.liveSessionHomes()
+	if !live[IdentityKey("agent:fixer@acme/app@rOld:address")] || len(live) != 1 {
+		t.Fatalf("live session homes = %v", live)
+	}
+
+	// The registry a restarted daemon reloads keeps the home: a relaunch
+	// found by its directory (a profile-less resume, `sandbox exec` under
+	// paseo) gets the session's home, not one under the dispatch id.
+	path := filepath.Join(t.TempDir(), "registry.json")
+	if err := g.r.Registry.PersistTo(path); err != nil {
+		t.Fatal(err)
+	}
+	g.r.Registry.Register(e)
+	reloaded := &Registry{}
+	if err := reloaded.PersistTo(path); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reloaded.Lookup(g.ws)
+	if !ok || got.Home != "rOld:address" || got.Dispatch != "rNew:address" {
+		t.Fatalf("reloaded entry = %+v", got)
+	}
+	if _, key := g.r.homeFor(got, PersistNone); key != "agent:fixer@acme/app@rOld:address" {
+		t.Fatalf("reloaded entry's home key = %s", key)
+	}
+}

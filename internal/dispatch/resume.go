@@ -23,6 +23,19 @@ type AgentSession struct {
 	Cwd       string
 	// CanResume: the runtime declared it can resume SessionID.
 	CanResume bool
+	// Home is the dispatch id whose agent sandbox home holds the session's
+	// tool state ("" = the request's own DispatchID): a resumed step's
+	// dispatch id is new, its agent's home is the one it was created in.
+	Home string
+}
+
+// HomeDispatch is the dispatch id req's agent sandbox home is keyed by: the
+// resumed session's own home, or req's dispatch.
+func (r Request) HomeDispatch() string {
+	if r.Resume != nil && r.Resume.Home != "" {
+		return r.Resume.Home
+	}
+	return r.DispatchID
 }
 
 // AgentStart is what a runtime reports through Request.OnAgentStart.
