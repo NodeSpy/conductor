@@ -97,7 +97,9 @@ func (e *Engine) GitFetchFor(ctx context.Context, repo string) []sandbox.GitAuth
 		return nil
 	}
 	sem := in.Decl.Semantics
-	t := core.Trigger{Instance: instance, TargetTrusted: true, Target: core.Target{Repo: repo}}
+	// The trigger only carries the repo to the mint verb's args: the
+	// repository's trust was decided by the dispatch that recorded it.
+	t := core.Trigger{Instance: instance, Target: core.Target{Repo: repo}}
 	var out []sandbox.GitAuth
 	for _, cr := range sem.Credentials {
 		used := false

@@ -104,7 +104,7 @@ func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, instan
 			c.Templates[cr.Template] = val
 		}
 		c.Guidance += cr.Guidance
-		c.Git = append(c.Git, e.gitFetchAuth(sem, cr.Name, instance, t.Target.Repo, val)...)
+		c.Git = append(c.Git, e.gitFetchAuth(sem, cr.Name, instance, t.OwnRepo(), val)...)
 	}
 	return c, errors.Join(failed...)
 }
