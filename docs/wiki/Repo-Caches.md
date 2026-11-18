@@ -83,7 +83,9 @@ Conductor fills a cache with a **warm** step:
    **in the agent sandbox**, with the default-branch checkout as its
    workspace and a fresh, empty home. It gets your `sandbox.egress` and
    `sandbox.allow`, limits and detection, like any agent. It gets no
-   conductor socket, no token, no model endpoint and no login.
+   conductor socket, no token, no model endpoint and no login. A dependency
+   on another private repository by its SSH URL is fetched over HTTPS with
+   a git fetch credential the warm never holds (below).
 4. If the command succeeds, conductor publishes **only the declared paths**.
    A path that is a symlink is not published. The cache is built under a
    temporary name and renamed into place in one step. A published key is
@@ -289,6 +291,29 @@ $ conductor sandbox caches clear acme/app go KEY     # one key
 `clear` also forgets that a cleared key's warm was over `max_size`. It keeps
 a cache that a running launch has an overlay on, unless
 you pass `--force`.
+
+## Private git dependencies
+
+A lockfile that names a private repository by its SSH URL
+(`git+ssh://git@github.com/acme/dep.git`) is warmed the way an agent fetches
+it ([[Isolation#git-fetch]]): the warm's git rewrites the SSH URL to HTTPS,
+and its egress proxy adds a git fetch credential to fetches of the
+repositories in scope. The credential comes from the connector that declares
+one (`git_fetch`), minted for the warmed repository through the connector
+instance that last dispatched trusted work on it. Until such work has run
+since the daemon started, a warm gets none, and the fetch fails as it would
+without this:
+
+```
+Bad owner or permissions on /etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf
+fatal: Could not read from remote repository.
+```
+
+yarn 1 prints `You don't appear to have an internet connection` at the start
+of every warm. It decides that from the network interfaces it sees, and the
+sandbox's network namespace has only loopback. It is a warning only: yarn
+reaches the registry and git hosts through the egress proxy
+(`HTTPS_PROXY`), which resolves names itself.
 
 ## With the package proxy
 
