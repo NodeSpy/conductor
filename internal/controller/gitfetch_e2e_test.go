@@ -285,8 +285,16 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	// A yarn inside the operator's home (a macOS runner's ~/.yarn) is
 	// hidden from the sandbox, as it should be: the warm half needs one the
 	// sandbox shows.
+	// (HOME may be a test's temp dir here: check the real homes too.)
 	warmYarn := yarn
-	if h, _ := os.UserHomeDir(); yarn != "" && h != "" {
+	if yarn != "" {
+		h, _ := os.UserHomeDir()
+		if h == "" {
+			h = "/nonexistent"
+		}
+		inHome := func(p string) bool {
+			return strings.HasPrefix(p, h+"/") || (runtime.GOOS == "darwin" && strings.HasPrefix(p, "/Users/"))
+		}
 		for _, d := range filepath.SplitList(os.Getenv("PATH")) {
 			p := filepath.Join(d, "yarn")
 			if _, err := os.Stat(p); err != nil {
@@ -295,7 +303,7 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 			if r, err := filepath.EvalSymlinks(p); err == nil {
 				p = r
 			}
-			if strings.HasPrefix(p, h+"/") || strings.HasPrefix(filepath.Clean(d), h+"/") {
+			if inHome(p) || inHome(filepath.Clean(d)+"/") {
 				warmYarn = ""
 			}
 		}
