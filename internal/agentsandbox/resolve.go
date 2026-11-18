@@ -353,6 +353,12 @@ func (r *Resolver) WarmPolicy(workspace, home, identity string) Policy {
 		EgressAnyBytes:  r.EgressAnyBytes, EgressIdle: r.EgressIdle,
 		EgressUpload: r.EgressUpload, EgressDownload: r.EgressDownload,
 	}
+	// sandbox.inspect applies to every launch: a warm's https:// path
+	// entries, and the upstream CA a git fetch host (a private forge) is
+	// verified with.
+	for _, h := range r.Inspect {
+		p.Inspect = appendInspect(p.Inspect, h)
+	}
 	applyScope(&p, r.Allow, nil)
 	return p
 }

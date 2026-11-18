@@ -497,8 +497,13 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 		}
 		prefixes = pathPrefixes(p.Allow, "https", target)
 		if len(prefixes) == 0 {
-			p.deny(w, target, sess)
-			return
+			if len(sess.gitAuths(target)) == 0 {
+				p.deny(w, target, sess)
+				return
+			}
+			// Reached for the launch's git fetch credential alone: its
+			// git fetches in scope pass (inspectHandler), nothing else.
+			prefixes = []string{}
 		}
 		if !inspected {
 			why := "path-restricted (" + strings.Join(prefixes, ", ") + ") but this launch does not inspect " + host + " (inspect:)"
@@ -658,6 +663,9 @@ type ProxyManager struct {
 	// OnConn receives every request's record (Proxy.OnConn), set before
 	// the first proxy starts.
 	OnConn func(ConnRecord)
+	// Resolve looks a target's host up for every proxy (nil: the system
+	// resolver), set before the first proxy starts: a test's fake host.
+	Resolve func(ctx context.Context, host string) ([]net.IPAddr, error)
 
 	mu      sync.Mutex
 	byKey   map[string]*Proxy
@@ -759,7 +767,7 @@ func (m *ProxyManager) proxyFor(allow []string) (*Proxy, string, error) {
 	if p, ok := m.byKey[key]; ok {
 		return p, m.addrs[key], nil
 	}
-	p := &Proxy{Allow: allow, OnConn: m.OnConn}
+	p := &Proxy{Allow: allow, OnConn: m.OnConn, resolveIP: m.Resolve}
 	if m.OnDeny != nil {
 		p.OnDeny = func(hostport string) { m.OnDeny(key, hostport) }
 	}

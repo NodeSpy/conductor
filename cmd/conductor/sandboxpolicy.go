@@ -197,7 +197,8 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	controller.AgentSandbox = &controller.SandboxWiring{
 		Resolver: r, Relay: rel.Relay,
 		// What an agent-deck session's wrapper runs: this daemon's policy.
-		Exec: []string{self, "sandbox", "exec", "--socket", controlSockPath(cfg)},
+		Exec:     []string{self, "sandbox", "exec", "--socket", controlSockPath(cfg)},
+		GitFetch: cfg.Sandbox.GitFetchOn(),
 	}
 	// conductor's own reads of a sandboxed workspace (the diff preview) run
 	// sandboxed too: the agent wrote that checkout's git config.

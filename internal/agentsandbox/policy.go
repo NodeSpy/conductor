@@ -100,6 +100,13 @@ type Policy struct {
 	// sandbox trusts the CA, and https:// path entries for them are
 	// enforced per request.
 	Inspect []sandbox.InspectHost `json:"inspect,omitempty"`
+	// GitAuth are the launch's git fetch credentials (sandbox.GitAuth): the
+	// SSH forms of each host's URLs are rewritten to HTTPS in the agent's
+	// git, each host is inspected, and the proxy adds the credential to
+	// fetches of repositories in scope. The secrets never enter the
+	// sandbox, and never travel with the policy (it carries none over the
+	// control socket).
+	GitAuth []sandbox.GitAuth `json:"-"`
 	// Limits are the launch's resource limits and disk guard
 	// (sandbox.limits; the zero value is the default).
 	Limits LimitSpec `json:"limits,omitempty"`
@@ -187,6 +194,11 @@ func (p Policy) Validate() error {
 	for _, c := range p.Caches {
 		if err := p.validateCache(c); err != nil {
 			return err
+		}
+	}
+	for _, g := range p.GitAuth {
+		if err := g.Validate(); err != nil {
+			return fmt.Errorf("agentsandbox: %w", err)
 		}
 	}
 	for _, list := range [][]string{p.ReadOnly, p.ReadWrite, p.Hide} {
@@ -427,6 +439,14 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	// only; the sandbox is shown the system roots plus its certificate.
 	var insp *sandbox.Inspector
 	var caDir string
+	if len(p.GitAuth) > 0 {
+		// Git fetches over HTTPS through the proxy, which inspects each
+		// host to add the credential (sandbox/gitauth.go).
+		for _, g := range p.GitAuth {
+			p.Inspect = appendInspect(p.Inspect, sandbox.InspectHost{Host: g.HostName()})
+		}
+		env = sandbox.GitRewriteEnv(env, p.GitAuth)
+	}
 	if len(p.Inspect) > 0 {
 		if d.EgressUnixSession == nil {
 			return nil, fmt.Errorf("agentsandbox: inspect: this launcher has no egress session to inspect through")
@@ -439,6 +459,7 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	}
 	if so := p.EgressSession(); d.EgressUnixSession != nil {
 		so.Inspect = insp
+		so.Git = p.GitAuth
 		so.Shape, so.ShapeAllowed, so.ShapeAllowAll, so.ShapeAllowedBy = p.Detect.Connections, p.Detect.ShapeAllowed, p.Detect.ShapeAllowAll, p.Detect.AllowedBy
 		if p.Detect.Action == DetectOff {
 			so.Shape = sandbox.ShapeOff

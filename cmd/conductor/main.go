@@ -933,6 +933,8 @@ func cmdRun(args []string) error {
 		cost.SetPricing(models, def)
 	}
 	eng := engine.New(engOpts)
+	// A cache warm's git fetch credentials (sandbox.git_fetch).
+	controller.WarmGitAuth = eng.GitFetchFor
 	// Model selection (docs/design/runtimes-models-packs.md §2.3): the
 	// resolver owns the fleet ladder and the discovered rosters. Discovery
 	// is lazy and degrade-safe — a box that cannot enumerate simply bare

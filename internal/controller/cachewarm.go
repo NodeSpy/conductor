@@ -26,6 +26,12 @@ func RunCacheWarm(ctx context.Context, w repocache.WarmRun) error {
 	}
 	pol := sw.Resolver.WarmPolicy(w.Workspace, w.Home, "cache-warm:"+w.Repo)
 	pol.Env = append(pol.Env, w.Env...)
+	if sw.GitFetch && WarmGitAuth != nil {
+		// A dependency on another private repository (git+ssh in a
+		// package.json) is fetched over HTTPS, the proxy adding the
+		// credential; the warm itself never holds it.
+		pol.GitAuth = WarmGitAuth(ctx, w.Repo)
+	}
 	launch, err := agentsandbox.Wrap(pol, []string{"sh", "-c", w.Command}, agentsandbox.Deps{
 		SelfExe:           launchSelfExe,
 		EgressUnix:        EgressProxyUnix,

@@ -29,10 +29,18 @@ type SandboxWiring struct {
 	// a process conductor does not start itself (agent-deck's tmux
 	// session): `conductor sandbox exec --socket <control socket>`.
 	Exec []string
+	// GitFetch is sandbox.git_fetch: a dispatch's git fetch credentials
+	// (its connector's git_fetch) reach its launch's egress proxy, and a
+	// cache warm's come from WarmGitAuth.
+	GitFetch bool
 }
 
 // AgentSandbox is the wiring (nil = off).
 var AgentSandbox *SandboxWiring
+
+// WarmGitAuth mints a cache warm's git fetch credentials for repo
+// (engine.GitFetchFor; nil: none).
+var WarmGitAuth func(ctx context.Context, repo string) []sandbox.GitAuth
 
 // agentLaunch marks a launch as an agent runtime's own (cli/acp), the
 // launches the agent sandbox covers.
@@ -183,6 +191,10 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	pol.Env = append(pol.Env, a.env...)
 	pol.ReadOnly = append(pol.ReadOnly, a.files...)
 	pol.Expose = append(pol.Expose, a.expose...)
+	if w.GitFetch && a.req != nil {
+		// Applied by the launch's egress proxy; never in the agent's env.
+		pol.GitAuth = a.req.Credentials.Git
+	}
 	launch, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
 		SelfExe:           launchSelfExe,
 		EgressUnix:        EgressProxyUnix,

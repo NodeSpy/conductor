@@ -377,7 +377,31 @@ func (h *inspectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusMethodNotAllowed, "refused", "CONNECT inside an inspected connection")
 		return
 	}
-	if h.prefixes != nil {
+	// A git fetch of a repository in the launch's git scope carries its
+	// credential (and passes whatever the path entries say); a push to a
+	// host it holds one for is refused — conductor pushes, never the agent.
+	var gitCred *GitAuth
+	if auths := h.sess.gitAuths(h.target); len(auths) > 0 {
+		np, why := requestPath(r.URL)
+		op, repo := gitNone, ""
+		if why == "" {
+			op, repo = gitOp(r, np)
+		}
+		switch op {
+		case gitPush:
+			if h.p.OnDeny != nil {
+				h.p.OnDeny(h.target + r.URL.Path)
+			}
+			refuse(http.StatusForbidden, "denied", "git push from the sandbox (conductor pushes; an agent never does)")
+			return
+		case gitFetch:
+			gitCred = h.sess.gitCredentialFor(h.target, repo)
+		}
+	}
+	if gitCred != nil {
+		r.Header.Set("Authorization", gitCred.basicAuth())
+		rec.AllowedBy = "git fetch credential"
+	} else if h.prefixes != nil {
 		np, why := requestPath(r.URL)
 		if why == "" && !pathAllowed(np, h.prefixes) {
 			why = "not under an allowed path (" + strings.Join(h.prefixes, ", ") + ")"

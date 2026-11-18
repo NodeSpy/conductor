@@ -157,6 +157,9 @@ type Engine struct {
 	flow       *flow.Runner
 	grouper    *flow.Grouper
 	connectors *connector.Registry
+	// gitRepos: repo → the connector instance that last carried a git
+	// fetch credential for trusted work on it (GitFetchFor).
+	gitRepos sync.Map
 
 	budgetMu  sync.Mutex  // guards agentDisp (rolling agent-dispatch timestamps)
 	agentDisp []time.Time // agent-dispatch times in the last hour (runaway budget)

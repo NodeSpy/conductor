@@ -19,6 +19,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
@@ -34,6 +35,9 @@ type Credentials struct {
 	Templates map[string]string
 	// Guidance is appended to an agent's prompt.
 	Guidance string
+	// Git are git fetch credentials (the connector's git_fetch): applied
+	// by the agent sandbox's egress proxy, never put in the agent's env.
+	Git []sandbox.GitAuth
 }
 
 // EnvList is Env as KEY=VALUE pairs, sorted for a stable argv.
