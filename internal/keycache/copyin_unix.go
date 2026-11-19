@@ -21,8 +21,9 @@ import (
 // regular file once open, and devices, FIFOs and sockets are skipped. A
 // regular file is cloned where the filesystem can (reflink, APFS), else
 // copied — never hard-linked, so nothing in the home shares an inode with
-// the store. budget is what may still be written (allocated bytes); past
-// it the copy stops with errCopyCap.
+// the store. budget is what may still be written (a file is charged the
+// larger of its allocated blocks and its size); past it the copy stops
+// with errCopyCap.
 func copyFromHome(home, rel, dst string, budget *int64) error {
 	fd, err := unix.Open(home, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -105,7 +106,9 @@ func copyFileAt(fd int, name, dst string, budget *int64) error {
 	if err := unix.Fstat(sfd, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG {
 		return nil // a FIFO or a device swapped in: never read
 	}
-	if *budget -= int64(st.Blocks) * 512; *budget < 0 {
+	// Charged at the larger of its allocated blocks and its size: a copy
+	// that cannot clone writes a sparse file's holes out in full.
+	if *budget -= copyCost(true, int64(st.Blocks)*512, st.Size); *budget < 0 {
 		return errCopyCap
 	}
 	mode := os.FileMode(st.Mode&0o777) | 0o200

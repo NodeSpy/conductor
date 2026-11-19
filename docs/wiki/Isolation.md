@@ -194,11 +194,21 @@ conductor authenticates it:
   unchanged, and no ssh runs.
 - **The proxy adds the credential; the agent never holds it.** The launch's
   egress proxy [inspects](#tls-inspection) each declared host. On a git
-  **fetch** — `GET …/info/refs?service=git-upload-pack` or
-  `POST …/git-upload-pack` — of any repository on the host, it sets the
-  request's `Authorization` itself (replacing whatever the agent sent). The
-  secret is not in the agent's environment, files or the policy, and is never
-  logged; the audit row is marked `allowed_by: git fetch credential`.
+  **fetch** of a repository — exactly
+  `GET /<owner>/<name>[.git]/info/refs?service=git-upload-pack` or
+  `POST /<owner>/<name>[.git]/git-upload-pack`, with no other query — it
+  sets the request's `Authorization` itself (replacing whatever the agent
+  sent). The secret is not in the agent's environment, files or the policy,
+  and is never logged; the audit row is marked
+  `allowed_by: git fetch credential`.
+- **Repository paths only.** `<owner>` and `<name>` are plain names, and
+  `<owner>` is never one a forge serves something else under (`api`,
+  `login`, `graphql`, `site`, `_`, `-`, in any case): on GitHub Enterprise
+  Server the REST API is `/api/v3/…` on the git host itself, and a route
+  that merely ends in `git-upload-pack` gets no credential. Such a request,
+  a nested path (a GitLab subgroup's `/<group>/<sub>/<name>`) or an extra
+  query parameter is an ordinary request: the host's egress path entries
+  decide it.
 - **Read only.** A **push** to a declared host (`git-receive-pack`, either
   request) is refused by the proxy with 403: conductor
   pushes, never the agent. Every other request to the host (a web page, the

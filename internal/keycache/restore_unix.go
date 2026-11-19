@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -44,7 +45,8 @@ func (m *Manager) copyIn(home, lower, target string) error {
 		// never replaced.
 		return fmt.Errorf("%s is a symlink", target)
 	}
-	stage := ".conductor-restore-" + randHex()
+	sweepLeftovers(pfd, leaf)
+	stage := restoreStagePrefix + randHex()
 	if m.testHook != nil {
 		m.testHook("copy-parent")
 	}
@@ -69,6 +71,42 @@ func (m *Manager) copyIn(home, lower, target string) error {
 	return nil
 }
 
+// restoreStagePrefix names a copy restore's staging directory, and
+// movedAsideInfix what a restore moved out of the way.
+const (
+	restoreStagePrefix = ".conductor-restore-"
+	movedAsideInfix    = ".conductor-moved-"
+)
+
+// staleStage is how old a staging directory must be to be another
+// restore's leftover (it crashed) rather than one in progress.
+const staleStage = time.Hour
+
+// sweepLeftovers removes, in the directory dfd, what an earlier restore
+// into it left behind when conductor stopped in the middle: a staging
+// directory (a whole cache copy) no longer being written, and what was
+// moved aside for leaf.
+func sweepLeftovers(dfd int, leaf string) {
+	nfd, err := unix.Openat(dfd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return
+	}
+	d := os.NewFile(uintptr(nfd), ".")
+	names, _ := d.Readdirnames(-1)
+	d.Close()
+	for _, n := range names {
+		switch {
+		case strings.HasPrefix(n, restoreStagePrefix):
+			var st unix.Stat_t
+			if unix.Fstatat(dfd, n, &st, unix.AT_SYMLINK_NOFOLLOW) == nil && time.Since(time.Unix(st.Mtim.Unix())) > staleStage {
+				_ = removeAt(dfd, n)
+			}
+		case strings.HasPrefix(n, leaf+movedAsideInfix):
+			_ = removeAt(dfd, n)
+		}
+	}
+}
+
 // clearAt makes name in dfd absent: a directory is removed (by fd, never
 // following a symlink), anything else that is not a symlink moved aside
 // to "<name>.conductor-moved-<random>", a symlink unlinked (it was not one
@@ -85,7 +123,7 @@ func clearAt(dfd int, name string) error {
 	case st.Mode&unix.S_IFMT == unix.S_IFLNK:
 		return unix.Unlinkat(dfd, name, 0)
 	default:
-		return unix.Renameat(dfd, name, dfd, name+".conductor-moved-"+randHex())
+		return unix.Renameat(dfd, name, dfd, name+movedAsideInfix+randHex())
 	}
 }
 
@@ -122,7 +160,7 @@ func openParent(base, target string) (int, string, error) {
 			unix.Close(dfd)
 			return -1, "", fmt.Errorf("%s is a symlink", cur)
 		case st.Mode&unix.S_IFMT != unix.S_IFDIR:
-			if err := unix.Renameat(dfd, c, dfd, c+".conductor-moved-"+randHex()); err != nil {
+			if err := unix.Renameat(dfd, c, dfd, c+movedAsideInfix+randHex()); err != nil {
 				unix.Close(dfd)
 				return -1, "", fmt.Errorf("move %s aside: %w", cur, err)
 			}

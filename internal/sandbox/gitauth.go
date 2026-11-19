@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -169,8 +170,44 @@ func gitOp(r *http.Request, p string) (op, repo string) {
 	default:
 		return gitNone, ""
 	}
-	return op, strings.TrimSuffix(repo, ".git")
+	repo = strings.TrimSuffix(repo, ".git")
+	if op == gitFetch && !gitFetchShape(r, p, repo) {
+		// Not a repository's smart-HTTP fetch: no credential, and the
+		// host's path allowlist decides it like any other request.
+		return gitNone, ""
+	}
+	return op, repo
 }
+
+// gitReserved are first path segments a forge serves something other than
+// a repository under (GitHub Enterprise Server's REST API is /api/v3 on the
+// git host itself): never a fetch the credential is added to.
+var gitReserved = map[string]bool{"api": true, "login": true, "graphql": true, "site": true, "_": true, "-": true}
+
+// gitFetchShape reports a fetch request that is exactly a repository's:
+// /owner/name[.git]/info/refs?service=git-upload-pack (GET or HEAD) or
+// /owner/name[.git]/git-upload-pack (POST, no query) — two plain segments,
+// the first not reserved. Anything else (an API route that merely ends in
+// git-upload-pack, an extra query parameter, a nested path) carries no
+// credential.
+func gitFetchShape(r *http.Request, p, repo string) bool {
+	segs := strings.Split(strings.TrimPrefix(repo, "/"), "/")
+	if len(segs) != 2 || !strings.HasPrefix(repo, "/") || gitReserved[strings.ToLower(segs[0])] {
+		return false
+	}
+	for _, s := range segs {
+		if !gitNameRE.MatchString(s) {
+			return false
+		}
+	}
+	if strings.HasSuffix(p, "/info/refs") {
+		return r.URL.RawQuery == "service=git-upload-pack"
+	}
+	return r.URL.RawQuery == ""
+}
+
+// gitNameRE is an owner or repository name as forges allow them.
+var gitNameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
 
 // gitAuths are the session's credentials for target (host:port).
 func (s *Session) gitAuths(target string) []GitAuth {

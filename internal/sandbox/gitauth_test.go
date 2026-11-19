@@ -98,12 +98,10 @@ func TestGitFetchCredentialOnlyOnFetches(t *testing.T) {
 				{"GET", "/org/dep.git/info/refs?service=git-upload-pack"},
 				{"GET", "/org/dep/info/refs?service=git-upload-pack"},
 				{"POST", "/org/dep.git/git-upload-pack"},
-				{"POST", "/org/sub/deep.git/git-upload-pack"},
 				{"GET", "/ORG/Dep.git/info/refs?service=git-upload-pack"}, // forges' case
 				{"GET", "/other/secret.git/info/refs?service=git-upload-pack"},
 				{"POST", "/other/secret.git/git-upload-pack"},
 				{"GET", "/organization/x.git/info/refs?service=git-upload-pack"},
-				{"GET", "/org/dep/x.git/info/refs?service=git-upload-pack"},
 				{"GET", "/org/other.git/info/refs?service=git-upload-pack"},
 			} {
 				code, body := do(t, c, f.method, rig.mirrorURL(f.path), mine)
@@ -125,6 +123,13 @@ func TestGitFetchCredentialOnlyOnFetches(t *testing.T) {
 			// Not a smart-HTTP fetch: never the credential; refused unless
 			// the allowlist names the host itself.
 			for _, f := range []struct{ method, path string }{
+				{"POST", "/org/sub/deep.git/git-upload-pack"},               // nested: not owner/name
+				{"GET", "/org/dep/x.git/info/refs?service=git-upload-pack"}, // nested
+				{"GET", "/api/v3/repos/o/r/info/refs?service=git-upload-pack"},
+				{"GET", "/API/x/info/refs?service=git-upload-pack"},       // reserved, any case
+				{"GET", "/org/dep/info/refs?service=git-upload-pack&x=1"}, // extra query
+				{"POST", "/org/dep.git/git-upload-pack?x=1"},
+				{"GET", "/.hidden/dep/info/refs?service=git-upload-pack"},
 				{"GET", "/org/../other/secret.git/info/refs?service=git-upload-pack"},
 				{"GET", "/org/%2e%2e/other/secret.git/info/refs?service=git-upload-pack"},
 				{"GET", "/org/dep.git%2Finfo%2Frefs?service=git-upload-pack"},
@@ -158,8 +163,8 @@ func TestGitFetchCredentialOnlyOnFetches(t *testing.T) {
 				credited++
 			}
 		}
-		if credited != 20 {
-			t.Fatalf("broad=%v: %d credited records, want 20: %+v", broad, credited, rig.records())
+		if credited != 16 {
+			t.Fatalf("broad=%v: %d credited records, want 16: %+v", broad, credited, rig.records())
 		}
 	}
 }

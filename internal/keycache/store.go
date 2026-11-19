@@ -454,6 +454,42 @@ func DiskUsage(root string) int64 {
 	return n
 }
 
+// copyUsage is what copying a tree may write: each regular file at the
+// larger of its allocated blocks and its size (a copy that cannot clone
+// writes a sparse file's holes out in full), counted once per inode, never
+// following a symlink.
+func copyUsage(root string) int64 {
+	var n int64
+	seen := map[fileID]bool{}
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if id, links, ok := idOf(fi); ok && links > 1 && !fi.IsDir() {
+			if seen[id] {
+				return nil
+			}
+			seen[id] = true
+		}
+		n += copyCost(fi.Mode().IsRegular(), allocated(fi), fi.Size())
+		return nil
+	})
+	return n
+}
+
+// copyCost is what copying one entry may write: a regular file's larger of
+// allocated and size.
+func copyCost(regular bool, alloc, size int64) int64 {
+	if regular {
+		return max(alloc, size)
+	}
+	return alloc
+}
+
 // usage is the disk a set of published versions takes, each file counted
 // once however many of them hold it: a version built over another (a
 // restore_from key's, or its own key's previous one) hard-links the

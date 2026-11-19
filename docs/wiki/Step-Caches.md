@@ -86,11 +86,15 @@ under its home. A directory becomes one of the key's **paths** once
 publishes it. Once a directory is learned, the directories inside it are
 part of it.
 
-Paths are learned per **template**, not per rendered key: runs of
-`pr-{{.repo}}-{{.pr}}` for every PR count together, and the learned paths
-are kept across restarts. So a key that is new for every PR does not start
-learning from nothing. Once the template has learned its paths, a new PR's
-first successful run publishes, and its second run gets a hit.
+Paths are learned per **template and family**, not per rendered key. A
+key's family is the first key it restores from (`restore_from[0]`), or the
+key itself when it restores from none. Runs of `pr-{{.repo}}-{{.pr}}` that
+restore from `{{.repo}}` count together for every PR of one repository, so
+a key that is new for every PR does not start learning from nothing. Once
+the family has learned its paths, a new PR's first successful run
+publishes, and its second run gets a hit. Another repository's runs are
+another family: they never count toward, or decide, its paths. The learned
+paths are kept across restarts.
 
 **The granularity rule.** A candidate is a directory **directly inside**
 the home or one of these base directories: `~/.cache`, `~/.local`,
@@ -125,6 +129,11 @@ A list always misses some, so what a publish is about to commit is also
 checked, from what conductor itself knows (see [Publishing](#publishing)):
 a file holding a credential conductor gave a run is left out, and so is a
 tree holding a git repository.
+
+These checks catch a credential a tool wrote by accident. They do not stop
+an agent that means to smuggle one out in an encoding conductor does not
+look for (gzip, a cipher). What decides whose runs may write a shared key
+is still [who writes a key](#publishing).
 
 ## How a run gets its cache
 
@@ -164,6 +173,10 @@ When conductor launches a sandboxed agent for a keyed step:
    - **Neither available** (a kernel before 5.11, or a filesystem overlay
      cannot use; a volume without clones): a plain copy, up to 1 GiB, or no
      restore.
+   - **Leftovers.** If conductor stopped in the middle of a copy restore,
+     the next restore into that home removes its staging directory
+     (`.conductor-restore-<random>`, once it is an hour old) and what was
+     moved aside for the path.
 
 A second launch of the same dispatch in the same home (a resumed session,
 an `output_schema` re-run) continues the first: it takes over the first
@@ -195,18 +208,33 @@ launch that ran (which, after a resume, holds both launches' writes):
    replaced directories included. Elsewhere it is copied from the home,
    walked by descriptor: a symlink is copied as a link and never followed,
    and FIFOs, sockets and devices are skipped. Nothing in the store ever
-   shares an inode with a home.
+   shares an inode with a home. A copied file is charged its size, not
+   only its allocated blocks, against the store's cap: a sparse file is
+   written out in full when it cannot be cloned, so it is refused before
+   the copy rather than after.
 3. It checks what it built (each skipped file or path is logged by path,
    never by content):
-   - a path holding a git repository (a `.git` anywhere in it) is not
-     published at all: a clone's `.git/config` keeps the token it was
-     cloned with, and its hooks run code;
-   - a file the run wrote that holds a credential **value** conductor gave
-     it, or another launch in the last day (the dispatch's credential env
-     and template values, git fetch credentials, its skill token, any
-     variable of its environment named like a credential), is left out.
-     Files the copy kept from the version it restored were checked when
-     that version was published. The scan reads in bounded chunks;
+   - a path holding a git repository is not published at all: a `.git`
+     anywhere in it, or a bare repository (`HEAD` and `config` beside
+     `objects/`, `refs/` or `hooks/`). A clone's config keeps the token it
+     was cloned with, and its hooks run code. The exception is a bare
+     repository in a version-control cache tools keep (Go's
+     `pkg/mod/cache/vcs`, Cargo's `git/db`) whose config carries no
+     credential (no user in a URL, no extra header, no credential helper)
+     and whose hooks are only git's samples;
+   - a credential **value** the launch holds, or another launch in the
+     last day or in the same home, is looked for: in each file's content,
+     in each entry's name and in each symlink's target, raw and as tools
+     encode it (base64 of the value, and of `user:value` as a Basic auth
+     header, docker's or npm's `auth` field keep it). The values are the
+     launch's environment (a variable named like a credential, and any
+     other value shaped like a token that conductor's own environment does
+     not carry), the `{{.secrets}}` and `{{.vaults}}` values its step could
+     render, the tokens in the login files shared or copied into its home,
+     the dispatch's credentials, git fetch credentials and its skill token.
+     An entry holding one is left out. Only the very files the copy kept
+     from the version it restored are not read again: they were checked
+     when that version was published. The scan reads in bounded chunks;
    - a file named like a credential (`id_*`, `*.pem`, `*.key`,
      `credentials*`, `*token*`, `adbkey*`) is left out when its content
      looks like one too: a private key block, a forge or cloud token shape,
@@ -214,8 +242,14 @@ launch that ran (which, after a resume, holds both launches' writes):
      Source and certificates with those names (`token.go`, `token.rs`,
      `cacert.pem`) are kept, so a module cache is not broken;
    - if conductor restarted while the launch ran, it no longer knows the
-     values the launch was given, and nothing is published.
-   Merged files lose any setuid, setgid or sticky bit.
+     values the launch was given, and nothing is published. The same holds
+     for a launch that resumed one from before a restart, and for a home an
+     earlier conductor process gave runs credentials in (a resumed
+     dispatch's, or `persist: home`): its files may hold values nothing
+     can check for any more, so its publishes are refused until the home
+     is gone.
+   Merged files lose any setuid, setgid or sticky bit, and every file
+   loses its extended attributes.
 4. It writes the copy to disk under a temporary name, then renames it into
    place as the key's newest version.
 

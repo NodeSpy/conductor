@@ -2,7 +2,11 @@ package keycache
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -22,14 +26,25 @@ import (
 // checks what it is about to commit, from what conductor itself knows:
 //
 //   - the credential VALUES conductor gave the run (and the other launches
-//     it started recently: a kept home holds their files too). A new file
-//     — one this run wrote, not one hard-linked from the version it
-//     restored, which was checked when it was published — holding any of
-//     them is left out. Conductor knows these values; nothing is guessed.
-//     Read in bounded chunks: memory does not grow with the file.
-//   - a tree holding a git repository (a `.git` anywhere in it: a clone's
-//     .git/config keeps the token it was cloned with, its hooks run code)
-//     is not published at all.
+//     it started recently, and every launch in the same home: a kept home
+//     holds their files too), raw and in the base64 forms tools store them
+//     in (of the value, and of user:value as a Basic auth header, docker's
+//     or npm's auth field keeps it). A new file — any file but the very
+//     ones of the version it restored, which were checked when it was
+//     published — holding one is left out, and so is an entry whose name
+//     or symlink target holds one. Conductor knows these values; nothing
+//     is guessed. Read in bounded chunks: memory does not grow with the
+//     file. Extended attributes are stripped from what is published.
+//   - a launch whose values this process no longer holds (it restarted,
+//     or the launch resumed one from before a restart), or whose home an
+//     earlier conductor process gave runs credentials in, is not
+//     published: its files cannot be checked.
+//   - a tree holding a git repository (a `.git` anywhere in it, or a bare
+//     repository: HEAD, config and objects/; a clone's config keeps the
+//     token it was cloned with, its hooks run code) is not published at
+//     all — except a bare repository inside a known version-control cache
+//     (Go's pkg/mod/cache/vcs, Cargo's git/db) whose config carries no
+//     credential and whose hooks are only git's samples.
 //   - a file whose name says credential (id_*, *.pem, *.key, credentials*,
 //     *token*, adbkey*) and whose content looks like one: a private key
 //     block, a known token shape, JSON naming a token or secret, or a
@@ -39,6 +54,10 @@ import (
 //     it was meant to speed up.
 //
 // Each file or path left out is logged by path, never by value.
+//
+// The screen catches a credential a tool wrote by accident. It does not
+// stop an agent that means to smuggle one out: an encoding it has not
+// heard of (gzip, a cipher, a byte-reversed copy) passes.
 
 // secretMin is the shortest value scanned for: shorter ones match by
 // chance.
@@ -52,6 +71,39 @@ const secretKeep = 24 * time.Hour
 // never the values. A publish of a launch so marked whose values this
 // process does not hold (it restarted) is refused.
 const launchSecretsFile = "secrets"
+
+// launchSecretsUnknownFile marks a launch that continues one whose values
+// this process never held (a resume after a restart): sticky, whatever
+// values the launch is given since.
+const launchSecretsUnknownFile = "secrets-unknown"
+
+// homesDirName holds, per home, a mark for each conductor process (its
+// epoch) that gave a launch in that home credentials: a publish from a
+// home an earlier process did is refused (its values are gone).
+const homesDirName = ".homes"
+
+// secretUsers are the HTTP basic usernames forges pair a token with: the
+// base64 of user:token is screened for each.
+var secretUsers = []string{"x-access-token", "x-oauth-basic", "oauth2", "git", "token"}
+
+// secretForms are v and the forms tools store it in: its base64 (standard
+// and URL alphabets, padding dropped: a prefix of the padded form), and
+// that of user:v for each of secretUsers.
+func secretForms(v string) []string {
+	out := []string{v}
+	for _, s := range append([]string{v}, userPairs(v)...) {
+		out = append(out, base64.RawStdEncoding.EncodeToString([]byte(s)), base64.RawURLEncoding.EncodeToString([]byte(s)))
+	}
+	return out
+}
+
+func userPairs(v string) []string {
+	out := make([]string, 0, len(secretUsers))
+	for _, u := range secretUsers {
+		out = append(out, u+":"+v)
+	}
+	return out
+}
 
 type secretSet struct {
 	at   time.Time
@@ -68,17 +120,22 @@ func (m *Manager) AddSecrets(lock string, vals []string) {
 	}
 	var set [][]byte
 	seen := map[string]bool{}
-	for _, v := range vals {
-		v = strings.TrimSpace(v)
-		if len(v) < secretMin || seen[v] {
+	for _, raw := range vals {
+		raw = strings.TrimSpace(raw)
+		if len(raw) < secretMin {
 			continue
 		}
-		seen[v] = true
-		set = append(set, []byte(v))
+		for _, v := range secretForms(raw) {
+			if !seen[v] {
+				seen[v] = true
+				set = append(set, []byte(v))
+			}
+		}
 	}
 	if len(set) == 0 {
 		return
 	}
+	home := readSmall(filepath.Join(launch, launchHomeFile))
 	m.mu.Lock()
 	if m.secrets == nil {
 		m.secrets = map[string]secretSet{}
@@ -93,14 +150,84 @@ func (m *Manager) AddSecrets(lock string, vals []string) {
 	cur.vals = append(cur.vals, set...)
 	m.secrets[launch] = cur
 	n := len(cur.vals)
+	if filepath.IsAbs(home) {
+		// A kept home's files outlive the launch: its values are screened
+		// for in the home's publishes while this process runs.
+		if m.homeVals == nil {
+			m.homeVals = map[string][][]byte{}
+		}
+		m.homeVals[home] = append(m.homeVals[home], set...)
+	}
 	m.mu.Unlock()
 	_ = writeAtomic(filepath.Join(launch, launchSecretsFile), []byte(strconv.Itoa(n)))
+	if filepath.IsAbs(home) {
+		d := m.homeMarkDir(home)
+		if os.MkdirAll(d, 0o700) == nil {
+			_ = writeAtomic(filepath.Join(d, m.processEpoch()), []byte(home))
+		}
+	}
+}
+
+// processEpoch names this process's run of the manager: a home mark of
+// another epoch is a previous process's.
+func (m *Manager) processEpoch() string {
+	m.epochOnce.Do(func() { m.epoch = randHex() })
+	return m.epoch
+}
+
+// homeMarkDir is home's directory of process marks.
+func (m *Manager) homeMarkDir(home string) string {
+	h := sha256.Sum256([]byte(filepath.Clean(home)))
+	return filepath.Join(m.Store.Dir, homesDirName, hex.EncodeToString(h[:16]))
+}
+
+// homeUnknown reports a home an earlier conductor process gave a launch
+// credentials in: their values are gone, so what the home holds cannot be
+// checked for them.
+func (m *Manager) homeUnknown(home string) bool {
+	ents, _ := os.ReadDir(m.homeMarkDir(home))
+	for _, e := range ents {
+		if e.Name() != m.processEpoch() && !strings.HasPrefix(e.Name(), ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// sweepHomes forgets the marks (and the values) of homes that are gone.
+func (m *Manager) sweepHomes() {
+	root := filepath.Join(m.Store.Dir, homesDirName)
+	dirs, _ := os.ReadDir(root)
+	for _, d := range dirs {
+		dir := filepath.Join(root, d.Name())
+		marks, _ := os.ReadDir(dir)
+		home := ""
+		for _, mk := range marks {
+			if home = readSmall(filepath.Join(dir, mk.Name())); home != "" {
+				break
+			}
+		}
+		if home == "" || !filepath.IsAbs(home) {
+			if len(marks) == 0 {
+				_ = os.Remove(dir)
+			}
+			continue
+		}
+		if _, err := os.Lstat(home); errors.Is(err, fs.ErrNotExist) {
+			if RemoveAll(dir) == nil {
+				m.mu.Lock()
+				delete(m.homeVals, home)
+				m.mu.Unlock()
+			}
+		}
+	}
 }
 
 // secretsFor is what a publish of launch scans for: every value recorded
 // recently, and whether the launch's own are known (false: it was given
 // some, and this process no longer holds them).
 func (m *Manager) secretsFor(launch string) ([][]byte, bool) {
+	home := readSmall(filepath.Join(launch, launchHomeFile))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	_, known := m.secrets[launch]
@@ -109,15 +236,24 @@ func (m *Manager) secretsFor(launch string) ([][]byte, bool) {
 			known = true // given none
 		}
 	}
+	if _, err := os.Lstat(filepath.Join(launch, launchSecretsUnknownFile)); err == nil {
+		known = false // it continues a launch whose values are gone
+	}
 	var out [][]byte
 	seen := map[string]bool{}
-	for _, s := range m.secrets {
-		for _, v := range s.vals {
+	add := func(vals [][]byte) {
+		for _, v := range vals {
 			if !seen[string(v)] {
 				seen[string(v)] = true
 				out = append(out, v)
 			}
 		}
+	}
+	for _, s := range m.secrets {
+		add(s.vals)
+	}
+	if home != "" {
+		add(m.homeVals[home])
 	}
 	return out, known
 }
@@ -125,8 +261,15 @@ func (m *Manager) secretsFor(launch string) ([][]byte, bool) {
 // handSecrets moves launch from's recorded values (and its mark) to to:
 // a resume takes over the launch it continues.
 func (m *Manager) handSecrets(from, to string) {
+	_, marked := os.Lstat(filepath.Join(from, launchSecretsFile))
+	_, unknown := os.Lstat(filepath.Join(from, launchSecretsUnknownFile))
 	m.mu.Lock()
 	s, ok := m.secrets[from]
+	if unknown == nil || (marked == nil && !ok) {
+		// from was given values this process does not hold (it ran before
+		// a restart): what it wrote cannot be checked, whatever to is given.
+		_ = writeAtomic(filepath.Join(to, launchSecretsUnknownFile), []byte("1"))
+	}
 	if ok {
 		delete(m.secrets, from)
 		cur := m.secrets[to]
@@ -141,9 +284,13 @@ func (m *Manager) handSecrets(from, to string) {
 }
 
 // screen checks what a publish built at data/<p> for each path: a path
-// holding a git repository is removed whole, and a file that holds a
-// credential is removed. It returns the paths still there.
-func (m *Manager) screen(key Key, data string, paths []string, secrets [][]byte) []string {
+// holding a git repository is removed whole; an entry whose name or
+// symlink target holds a credential, and a file whose content does, is
+// removed; extended attributes are stripped. restored are the files of
+// the versions the launch restored (hard-linked in, checked when they
+// were published): their content is not read again. It returns the paths
+// still there.
+func (m *Manager) screen(key Key, data string, paths []string, secrets [][]byte, restored map[fileID]bool) []string {
 	var kept []string
 	for _, p := range paths {
 		root := filepath.Join(data, filepath.FromSlash(p))
@@ -153,28 +300,42 @@ func (m *Manager) screen(key Key, data string, paths []string, secrets [][]byte)
 			continue
 		}
 		_ = filepath.WalkDir(root, func(f string, d fs.DirEntry, err error) error {
-			if err != nil || !d.Type().IsRegular() {
+			if err != nil {
 				return nil
 			}
 			rel, _ := filepath.Rel(data, f)
 			why := ""
-			if suspectName(d.Name()) && looksLikeCredential(f) {
-				why = "looks like a credential"
-			} else if len(secrets) > 0 {
-				if fi, err := d.Info(); err == nil {
-					// A file hard-linked from the restored version was
-					// checked when that version was published.
-					if _, links, ok := idOf(fi); !ok || links == 1 {
-						if holdsAny(f, secrets) {
-							why = "holds a credential conductor gave a run"
-						}
-					}
+			switch {
+			case f != root && holdsIn([]byte(d.Name()), secrets):
+				why = "is named with a credential conductor gave a run"
+			case d.Type()&fs.ModeSymlink != 0:
+				if l, err := os.Readlink(f); err == nil && holdsIn([]byte(l), secrets) {
+					why = "links to a path holding a credential conductor gave a run"
+				}
+			case d.Type().IsRegular():
+				fi, err := d.Info()
+				if err != nil {
+					return nil
+				}
+				id, _, ok := idOf(fi)
+				if ok && restored[id] {
+					return nil // the restored version's own file
+				}
+				stripXattrs(f)
+				if suspectName(d.Name()) && looksLikeCredential(f) {
+					why = "looks like a credential"
+				} else if len(secrets) > 0 && holdsAny(f, secrets) {
+					why = "holds a credential conductor gave a run"
 				}
 			}
-			if why != "" {
-				if os.Remove(f) == nil {
-					m.logf("cache %s: ~/%s %s: left out", key, filepath.ToSlash(rel), why)
-				}
+			if why == "" {
+				return nil
+			}
+			if RemoveAll(f) == nil {
+				m.logf("cache %s: ~/%s %s: left out", key, filepath.ToSlash(rel), why)
+			}
+			if d.IsDir() {
+				return fs.SkipDir
 			}
 			return nil
 		})
@@ -183,20 +344,85 @@ func (m *Manager) screen(key Key, data string, paths []string, secrets [][]byte)
 	return kept
 }
 
-// findGit is the first `.git` under root (root-relative), "" when none.
+// holdsIn reports b holding any of vals.
+func holdsIn(b []byte, vals [][]byte) bool {
+	for _, v := range vals {
+		if bytes.Contains(b, v) {
+			return true
+		}
+	}
+	return false
+}
+
+// findGit is the first git repository under root (root-relative): a
+// `.git`, or a bare repository other than an allowed version-control
+// cache's (vcsCacheRepo); "" when none.
 func findGit(root string) string {
 	found := ""
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
+		if err != nil || p == root || !d.IsDir() && d.Name() != ".git" {
 			return nil
 		}
-		if d.Name() == ".git" && p != root {
+		if d.Name() == ".git" || (bareRepo(p) && !vcsCacheRepo(root, p)) {
 			found, _ = filepath.Rel(root, p)
 			return fs.SkipAll
 		}
 		return nil
 	})
 	return found
+}
+
+// bareRepo reports a directory laid out as a bare git repository: HEAD
+// and config files, and an objects/, refs/ or hooks/ directory.
+func bareRepo(dir string) bool {
+	h, err1 := os.Lstat(filepath.Join(dir, "HEAD"))
+	c, err2 := os.Lstat(filepath.Join(dir, "config"))
+	if err1 != nil || err2 != nil || !h.Mode().IsRegular() || !c.Mode().IsRegular() {
+		return false
+	}
+	for _, sub := range []string{"objects", "refs", "hooks"} {
+		if fi, err := os.Lstat(filepath.Join(dir, sub)); err == nil && fi.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// vcsCacheDirs are where tools keep bare clones of the modules they fetch.
+var vcsCacheDirs = []string{"/pkg/mod/cache/vcs/", "/.cargo/git/db/", "/cargo/git/db/"}
+
+// credConfigRE are git config lines that carry a credential: a URL with
+// userinfo, an extra header, a credential helper or store.
+var credConfigRE = regexp.MustCompile(`(?i)(://[^/\s]*@|extraheader|^\s*\[credential|helper\s*=|password|token)`)
+
+// vcsCacheRepo reports a bare repository a version-control cache keeps
+// (vcsCacheDirs) holding no credential in its config and no hook but
+// git's samples.
+func vcsCacheRepo(root, dir string) bool {
+	slash := filepath.ToSlash(dir) + "/"
+	in := false
+	for _, v := range vcsCacheDirs {
+		in = in || strings.Contains(slash, v)
+	}
+	if !in {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "config"))
+	if err != nil || len(b) > 64<<10 {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if credConfigRE.MatchString(line) {
+			return false
+		}
+	}
+	hooks, _ := os.ReadDir(filepath.Join(dir, "hooks"))
+	for _, h := range hooks {
+		if !strings.HasSuffix(h.Name(), ".sample") {
+			return false
+		}
+	}
+	return true
 }
 
 // holdsAny reports whether the file at p holds any of vals, read in

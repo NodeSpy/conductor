@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -444,12 +446,23 @@ func grantedValues(req *dispatch.Request) []string {
 }
 
 // credentialEnvRE names an environment variable that carries a credential.
-var credentialEnvRE = regexp.MustCompile(`(?i)(token|secret|password|passwd|credential|api_?key|auth|private_?key|session)`)
+var credentialEnvRE = regexp.MustCompile(`(?i)(token|secret|pass|credential|api_?key|auth|private_?key|session|cookie|(^|_)(key|keys|pat)($|_))`)
 
-// launchSecrets are the credential values a launch was given: the
-// dispatch's credentials (env and template values, git fetch secrets), its
-// skill token, and any variable of its environment named like a
-// credential.
+// secretShapeRE is a value that looks like a credential whatever it is
+// named: 16 or more token characters, with letters and digits both.
+var secretShapeRE = regexp.MustCompile(`^[A-Za-z0-9._~+/=:@-]{16,}$`)
+
+// launchSecrets are the credential values a launch holds, for its
+// publish's scan (keycache.Manager.AddSecrets):
+//
+//   - its environment's: a variable named like a credential, and any
+//     other value shaped like one (secretShape) that conductor's own
+//     environment does not carry;
+//   - the named secrets and vault entries its step's templates could
+//     render ({{.secrets.x}}, {{.vaults.v.k}}) into its prompt or env;
+//   - the token values of the login files shared or copied into its home;
+//   - the dispatch's credentials (env and template values, git fetch
+//     secrets, with their HTTP usernames), and its skill token.
 func launchSecrets(req *dispatch.Request, pol agentsandbox.Policy, env []string) []string {
 	var out []string
 	if req != nil {
@@ -459,17 +472,110 @@ func launchSecrets(req *dispatch.Request, pol agentsandbox.Policy, env []string)
 		for _, v := range req.Credentials.Templates {
 			out = append(out, v)
 		}
+		for _, scope := range []string{"secrets", "vaults"} {
+			out = appendLeaves(out, req.Data[scope], 0)
+		}
 	}
 	for _, g := range pol.GitAuth {
 		out = append(out, g.Secret)
+		if g.Username != "" {
+			out = append(out, g.Username+":"+g.Secret)
+		}
 	}
 	if pol.Token != "" {
 		out = append(out, pol.Token)
 	}
+	base := map[string]bool{}
+	for _, kv := range os.Environ() {
+		if _, v, ok := strings.Cut(kv, "="); ok {
+			base[v] = true
+		}
+	}
 	for _, kv := range env {
-		if k, v, ok := strings.Cut(kv, "="); ok && credentialEnvRE.MatchString(k) {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || v == "" {
+			continue
+		}
+		if credentialEnvRE.MatchString(k) || (!base[v] && secretShape(v)) {
 			out = append(out, v)
 		}
 	}
+	for _, l := range pol.Logins {
+		out = append(out, loginTokens(l.Src)...)
+	}
+	return out
+}
+
+// secretShape reports a value that looks like a credential: token
+// characters with letters and digits both, never a path or a plain URL.
+func secretShape(v string) bool {
+	if !secretShapeRE.MatchString(v) || strings.HasPrefix(v, "/") || strings.HasPrefix(v, "~") {
+		return false
+	}
+	if i := strings.Index(v, "://"); i >= 0 && !strings.Contains(v[i:], "@") {
+		return false
+	}
+	return strings.ContainsAny(v, "0123456789") && strings.IndexFunc(v, func(r rune) bool {
+		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+	}) >= 0
+}
+
+// appendLeaves appends v's string leaves (a scope of named values).
+func appendLeaves(out []string, v any, depth int) []string {
+	if depth > 4 {
+		return out
+	}
+	switch t := v.(type) {
+	case string:
+		return append(out, t)
+	case map[string]any:
+		for _, x := range t {
+			out = appendLeaves(out, x, depth+1)
+		}
+	case map[string]string:
+		for _, x := range t {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// loginTokenKeyRE names a login file's field that holds a token.
+var loginTokenKeyRE = regexp.MustCompile(`(?i)(token|secret|key|password)`)
+
+// loginTokens are the token values of a login file (JSON): every string
+// under a key naming a token, 16 characters or more.
+func loginTokens(p string) []string {
+	f, err := os.Open(p)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var v any
+	if json.NewDecoder(io.LimitReader(f, 1<<20)).Decode(&v) != nil {
+		return nil
+	}
+	var out []string
+	var walk func(v any, key string, depth int)
+	walk = func(v any, key string, depth int) {
+		if depth > 8 {
+			return
+		}
+		switch t := v.(type) {
+		case string:
+			if len(t) >= 16 && loginTokenKeyRE.MatchString(key) {
+				out = append(out, t)
+			}
+		case map[string]any:
+			for k, x := range t {
+				walk(x, k, depth+1)
+			}
+		case []any:
+			for _, x := range t {
+				walk(x, key, depth+1)
+			}
+		}
+	}
+	walk(v, "", 0)
 	return out
 }

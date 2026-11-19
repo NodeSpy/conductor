@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -47,6 +48,12 @@ type Manager struct {
 	// secrets are the credential values launches were given (AddSecrets),
 	// by launch directory.
 	secrets map[string]secretSet
+	// homeVals are the values launches in each home were given (a kept
+	// home's files outlive their launch), while this process runs.
+	homeVals map[string][][]byte
+	// epoch names this process's run (homeUnknown).
+	epoch     string
+	epochOnce sync.Once
 	// testHook is called at points tests interleave with.
 	testHook func(point string)
 }
@@ -646,7 +653,12 @@ func (m *Manager) publish(ctx context.Context, launch string) (*Published, error
 		m.logf("cache %s: the credentials run %s was given are not known to this conductor (it restarted): not published", key, filepath.Base(launch))
 		return nil, nil
 	}
-	built = m.screen(key, st.Data, built, secrets)
+	if m.homeUnknown(home) {
+		st.abort()
+		m.logf("cache %s: an earlier conductor gave runs in this home credentials it no longer knows: not published (run %s)", key, filepath.Base(launch))
+		return nil, nil
+	}
+	built = m.screen(key, st.Data, built, secrets, restoredFiles(bySlot))
 	if len(built) == 0 {
 		st.abort()
 		return nil, nil
@@ -672,6 +684,30 @@ func (m *Manager) publish(ctx context.Context, launch string) (*Published, error
 	return &Published{Key: key, Entry: e, Home: home, Dispatch: readSmall(filepath.Join(launch, launchDispatchFile))}, nil
 }
 
+// restoredFiles are the files of the versions a launch's overlays
+// restored: what a publish hard-links in from them.
+func restoredFiles(bySlot map[string]slot) map[fileID]bool {
+	out := map[fileID]bool{}
+	for _, s := range bySlot {
+		lower := lowerOf(s)
+		if lower == "" {
+			continue
+		}
+		_ = filepath.WalkDir(lower, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || !d.Type().IsRegular() {
+				return nil
+			}
+			if fi, err := d.Info(); err == nil {
+				if id, _, ok := idOf(fi); ok {
+					out[id] = true
+				}
+			}
+			return nil
+		})
+	}
+	return out
+}
+
 // estimate is what building p would take: whole, and new (the restored
 // version's files it keeps are hard-linked, not copied).
 func (m *Manager) estimate(home, p string, bySlot map[string]slot) (whole, fresh int64) {
@@ -679,7 +715,8 @@ func (m *Manager) estimate(home, p string, bySlot map[string]slot) (whole, fresh
 		up := DiskUsage(s.Upper)
 		return DiskUsage(filepath.Join(s.Entry, "data", filepath.FromSlash(p))) + up, up
 	}
-	n := DiskUsage(filepath.Join(home, filepath.FromSlash(p)))
+	// Copied out of the home: charged at what the copy may write.
+	n := copyUsage(filepath.Join(home, filepath.FromSlash(p)))
 	f := n
 	for q, s := range bySlot {
 		if strings.HasPrefix(q, p+"/") {
@@ -756,6 +793,7 @@ func (m *Manager) room() int64 {
 // step when the store is over the cap. The check of what is in use and the
 // removal are one critical section with a restore's lookup and record.
 func (m *Manager) Evict() {
+	m.sweepHomes()
 	var evicted []Entry
 	m.Store.Locked(func() {
 		m.Store.sweepLaunches(false)

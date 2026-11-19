@@ -81,7 +81,9 @@ func mergeLayers(lower, upper, dst string, budget *int64) error {
 			}
 			// What a published copy holds is plain files: no setuid,
 			// setgid or sticky bit survives the move in (copyFromHome
-			// masks the same way).
+			// masks the same way), and no extended attribute the run set
+			// (a later launch's overlay lower is this very file).
+			stripXattrs(t)
 			return os.Chmod(t, fi.Mode().Perm())
 		case d.Type()&os.ModeSymlink != 0:
 			l, err := os.Readlink(p)
