@@ -1,11 +1,11 @@
 package sandbox
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,20 +19,20 @@ import (
 // HTTPS instead: the launch's git rewrites the SSH forms of the declared
 // hosts to https:// (GitRewriteEnv), the launch's proxy inspects those
 // hosts, and on each git fetch request — smart HTTP's upload-pack, read
-// only — for a repository in scope it adds the credential itself. The
-// credential never enters the sandbox: what an agent can do with it is
-// fetch the repositories in scope, through this proxy, while its launch
-// lasts. A push (receive-pack) to a declared host is refused outright —
-// conductor pushes, never the agent.
+// only — it adds the credential itself, for any repository on the host.
+//
+// A launch gets a git fetch credential only when it already holds that
+// very token (GitAuthHeld): another credential it was granted carries the
+// identical value. The fetch then reaches nothing the agent could not
+// already reach with what it holds; a launch holding no such token gets no
+// git auth, and its fetch of a private repository fails. The proxy never
+// shows the credential to the sandbox. A push (receive-pack) to a declared
+// host is refused outright — conductor pushes, never the agent.
 
 // GitAuth is one host's git fetch credential for a launch.
 type GitAuth struct {
 	// Host is an exact host name, with :port when not 443.
 	Host string `json:"host"`
-	// Repos are the repositories on Host the credential is used for
-	// ("/org/repo"), each matched exactly — case-insensitively, as forges
-	// name them.
-	Repos []string `json:"repos"`
 	// For is the repository the launch's work is for (owner/name): what a
 	// refusal names.
 	For string `json:"for,omitempty"`
@@ -40,12 +40,29 @@ type GitAuth struct {
 	Username string `json:"username"`
 	// Secret is the credential. Never serialized.
 	Secret string `json:"-"`
-	// Learn: a teaching launch's credential (a default-branch run of a
-	// step that declared cache: { teach: true }), used for a fetch of any repository on Host (Repos
-	// unused); OnFetch hears each one the forge served. Never serialized:
-	// no launch but a teaching one in this process holds one.
-	Learn   bool              `json:"-"`
-	OnFetch func(repo string) `json:"-"`
+}
+
+// GitAuthHeld is the auths whose Secret the launch already holds: equal,
+// byte for byte, to one of held (the credential values the launch was
+// granted). Compared in constant time; what a credential is named or for
+// never matters, only its value.
+func GitAuthHeld(auths []GitAuth, held []string) []GitAuth {
+	var out []GitAuth
+	for _, g := range auths {
+		if g.Secret == "" {
+			continue
+		}
+		has := 0
+		for _, v := range held {
+			if len(v) == len(g.Secret) {
+				has |= subtle.ConstantTimeCompare([]byte(v), []byte(g.Secret))
+			}
+		}
+		if has == 1 {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 // Validate refuses a GitAuth the proxy cannot apply exactly.
@@ -62,14 +79,6 @@ func (g GitAuth) Validate() error {
 	}
 	if g.Secret == "" || strings.ContainsAny(g.Secret, "\r\n") {
 		return fmt.Errorf("sandbox: git credential for %s: no usable secret", g.Host)
-	}
-	if len(g.Repos) == 0 && !g.Learn {
-		return fmt.Errorf("sandbox: git credential for %s: no repositories in scope", g.Host)
-	}
-	for _, r := range g.Repos {
-		if !strings.HasPrefix(r, "/") || r == "/" || path.Clean(r) != r {
-			return fmt.Errorf("sandbox: git credential for %s: repository %q is not a clean path below /", g.Host, r)
-		}
 	}
 	return nil
 }
@@ -178,39 +187,15 @@ func (s *Session) gitAuths(target string) []GitAuth {
 }
 
 // gitCredentialFor is the credential a fetch of repo on target carries
-// (nil: none covers it). Repository paths compare case-insensitively.
+// (nil: none for target).
 func (s *Session) gitCredentialFor(target, repo string) *GitAuth {
 	if repo == "" {
 		return nil
 	}
-	lr := strings.ToLower(repo)
-	for _, g := range s.gitAuths(target) {
-		if g.Learn {
-			return &g
-		}
-		for _, r := range g.Repos {
-			if strings.ToLower(r) == lr {
-				return &g
-			}
-		}
+	if g := s.gitAuths(target); len(g) > 0 {
+		return &g[0]
 	}
 	return nil
-}
-
-// gitWithheld is why a fetch of repo on target carries no credential.
-func (s *Session) gitWithheld(target, repo string) string {
-	of := ""
-	for _, g := range s.gitAuths(target) {
-		if g.For != "" {
-			of = g.For
-			break
-		}
-	}
-	if of == "" {
-		return "git credential withheld for " + strings.TrimPrefix(repo, "/") + ": not in this launch's scope"
-	}
-	return "git credential withheld for " + strings.TrimPrefix(repo, "/") + ": not a learned dependency of " + of +
-		"; it is learned when a default-branch run of a step with cache: { teach: true } fetches it"
 }
 
 // basicAuth is the Authorization header value for g.

@@ -195,51 +195,33 @@ conductor authenticates it:
 - **The proxy adds the credential; the agent never holds it.** The launch's
   egress proxy [inspects](#tls-inspection) each declared host. On a git
   **fetch** — `GET …/info/refs?service=git-upload-pack` or
-  `POST …/git-upload-pack` — of a repository in scope, it sets the
+  `POST …/git-upload-pack` — of any repository on the host, it sets the
   request's `Authorization` itself (replacing whatever the agent sent). The
   secret is not in the agent's environment, files or the policy, and is never
   logged; the audit row is marked `allowed_by: git fetch credential`.
 - **Read only.** A **push** to a declared host (`git-receive-pack`, either
-  request) is refused by the proxy with 403, whatever the scope: conductor
+  request) is refused by the proxy with 403: conductor
   pushes, never the agent. Every other request to the host (a web page, the
   dumb HTTP protocol, `git-upload-archive`, Git LFS) never carries the
   credential, and passes only if your egress allows it.
-- **Scoped to what the repository depends on — learned, not configured.**
-  The connector declares only the host and the credential. Which
-  repositories a launch's credential covers is conductor's:
-  - A **teaching launch** ([[Step-Caches#private-git-dependencies]]) is a
-    run of a step that declares `cache: { teach: true }`, in a checkout
-    conductor made fresh at the head of the repository's **default
-    branch**, for a target the platform assigned. Its credential covers any
-    repository on the host the credential can read, and the proxy notes
-    each one the forge served it. When its step succeeds and publishes its
-    cache, and the checkout is still at the head it started at, those are
-    the repository's **learned dependencies** for that key, replacing what the key's previous teaching run learned (a
-    dependency the default branch dropped drops off). A failed step teaches
-    nothing.
-  - **Every other launch** — a dispatch on a PR branch, a review, a fixer,
-    a `conductor sandbox exec` hand-off — gets the repository it works on
-    plus its learned dependencies, nothing more. A PR can never add one: a
-    PR that adds a new private dependency cannot fetch it until it is on the
-    default branch and a teaching run learns it. Such a fetch goes without
-    the credential, and its audit row says so: `git credential withheld for
-    acme/newdep: not a learned dependency of acme/app; it is learned when a
-    default-branch run of a step with cache: { teach: true } fetches it`.
-
-  A teaching run runs the default branch's code, its dependencies' install
-  scripts included: whatever that code fetches with the credential is
-  learned. That is the trust you give your default branch anyway — it is
-  the code you deploy. Declare `teach:` only on a step whose prompt no
-  event's sender writes (a push or schedule trigger): the launch holds a
-  credential for every repository on the host while it follows its prompt. Repositories compare exactly, case-insensitively
-  (forges name them so), after the same checks as `https://` path entries:
-  a dot segment, `//`, a backslash or a percent sign left after decoding
-  never matches.
-- **Kept across restarts.** The learned sets and which connector instance
-  mints for each repository are in conductor's state dir
-  (`git-learned.json`, `git-fetch.json`: repository and instance names,
-  never a credential), out of every sandbox's view; a restart or an
-  auto-update keeps them.
+- **Only for a launch that already holds the token.** The connector
+  declares only the hosts and the credential. The proxy applies it to a
+  launch only when the launch was already granted a credential whose value
+  is **identical** to the git fetch credential's: the dispatch's own
+  credentials (a fixer's `GH_TOKEN`, when the connector mints its read
+  and write tokens from the same login), or, for a `conductor sandbox exec`
+  hand-off, the exec process's own environment. The values are compared at
+  launch, in constant time; names and roles do not matter. The fetch then
+  reaches no further than what the launch already holds: that token can
+  already clone every repository it reads. A launch granted no such
+  credential (none, or a different token, such as the App's installation
+  token while `git_fetch` carries the operator's) gets no git auth: its
+  fetch goes out unauthenticated and fails as before. Nothing is learned,
+  listed, or read from a lockfile, so a PR that adds a new private
+  dependency fetches it on its first run.
+- **Kept across restarts.** Which connector instance mints for each
+  repository is in conductor's state dir (`git-fetch.json`: repository
+  and instance names, never a credential), out of every sandbox's view.
 - **Reach.** Declaring `git_fetch` admits its host to every launch's
   egress for those fetches, even when the egress allowlist does not name
   it; so a plugin build that adds a `git_fetch` host, or changes one, is
@@ -249,7 +231,7 @@ conductor authenticates it:
 - **Which instance, and its scope at every use.** A dispatch's credential
   is the one its connector minted for its target, held by its own egress
   session and gone when the launch ends; a launch for a target the platform
-  did not assign gets none. A warm or a hand-off mints one through the
+  did not assign gets none. A hand-off mints one through the
   connector instance that last dispatched trusted work on the repository —
   and only while that instance still covers it: an instance whose `repos:`
   (its declared repository scope) no longer matches the repository mints
@@ -268,7 +250,7 @@ credentials); there is nothing to configure. `sandbox.git_fetch: false`
 turns it off for every launch. A `conductor sandbox exec` launch in a
 directory conductor never checked out (your own paseo workspace, an
 agent-deck session, a scratch dir) gets none: there is no trusted repository
-to scope it to.
+to mint it for.
 
 **The Verified badge.** Signatures verify `G` with your key locally. GitHub
 shows "Verified" on a pushed commit only when the signing key is registered on

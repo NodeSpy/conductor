@@ -1487,10 +1487,11 @@ sandbox:
   #                             #   false lets any protocol through an allowed host. Alias:
   #                             #   egress_require_tls. One target: allow.raw below.
   # git_fetch: true             # a connector's declared git fetch credential (github: its read
-  #                             #   token) authenticates the agent's git fetches of the repo and
-  #                             #   the dependencies its default branch's cache warm fetched,
-  #                             #   added by the egress proxy (never given to the agent); their
-  #                             #   SSH URLs are fetched over HTTPS. Pushes refused.
+  #                             #   token) authenticates the agent's git fetches of any repo on
+  #                             #   its host, added by the egress proxy (never given to the
+  #                             #   agent), for a launch already granted that same token (by
+  #                             #   value); others get no git auth. SSH URLs are fetched over
+  #                             #   HTTPS. Pushes refused.
   # (egress: entries also take exact names and CIDRs that reach private space, and
   #  http://host:port/prefix/ for a plain-HTTP mirror restricted to a path; an https:// path
   #  is a validate error unless the host is inspected. Isolation.md § A local package mirror.)
@@ -1542,8 +1543,7 @@ sandbox:
   #                             #   step or as its workflow's default) starts from the key's newest published copy,
   #                             #   by overlay (Linux) or clone (macOS); when its step succeeds, what its run filled
   #                             #   is published to its own key only. What a key holds is learned per template,
-  #                             #   never agent state, credentials or a git repository; `teach: true` on a
-  #                             #   default-branch step learns the repo's private git dependencies. The old recipe fields (autodetect, repo_file, warm_*,
+  #                             #   never agent state, credentials or a git repository. The old recipe fields (autodetect, repo_file, warm_*,
   #                             #   recipes, defaults, repos) are ignored with a warning.
   #   enabled: false            # off by default; true needs the agent sandbox
   #   dir: ""                   # default <state dir>/repo-caches; never under an isolation fs: path

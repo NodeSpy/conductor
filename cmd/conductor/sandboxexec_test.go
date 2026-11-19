@@ -328,7 +328,7 @@ func TestSandboxExecGitFetchCredential(t *testing.T) {
 	sandboxResolver.Store(&agentsandbox.Resolver{Registry: reg, StateRoot: t.TempDir(), GOOS: sandbox.CheckGOOS,
 		GitAuth: func(repo string) []sandbox.GitAuth {
 			asked = append(asked, repo)
-			return []sandbox.GitAuth{{Host: "forge.example", Repos: []string{"/org/app", "/org/dep"}, For: repo, Username: "x-access", Secret: secret}}
+			return []sandbox.GitAuth{{Host: "forge.example", For: repo, Username: "x-access", Secret: secret}}
 		}})
 
 	// The daemon's own uid on the other end of a real connection.
@@ -362,7 +362,7 @@ func TestSandboxExecGitFetchCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pol.GitAuth) != 1 || pol.GitAuth[0].Secret != secret || pol.GitAuth[0].Host != "forge.example" || pol.GitAuth[0].Username != "x-access" || !slices.Equal(pol.GitAuth[0].Repos, []string{"/org/app", "/org/dep"}) || pol.GitAuth[0].For != "org/app" {
+	if len(pol.GitAuth) != 1 || pol.GitAuth[0].Secret != secret || pol.GitAuth[0].Host != "forge.example" || pol.GitAuth[0].Username != "x-access" || pol.GitAuth[0].For != "org/app" {
 		t.Fatalf("exec's policy: %+v", pol.GitAuth)
 	}
 	if err := pol.Validate(); err != nil {

@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/url"
 	"path"
-	"sort"
 	"strings"
 	"sync"
 
@@ -17,33 +16,20 @@ import (
 
 // Git fetch credentials (the connection's git_fetch, sandbox/gitauth.go):
 // a declared read credential that also authenticates the agent's git
-// fetches on its host, applied by the sandbox's egress proxy — never handed
+// fetches on its hosts, applied by the sandbox's egress proxy — never handed
 // to the agent.
 //
-// The plugin declares the host and the credential; the scope is
-// conductor's, LEARNED:
-//
-//   - A TEACHING launch of a repository may fetch any repository on the
-//     host the credential can read: a launch in conductor's own checkout of
-//     the default branch's head, by a step the operator (or a pack)
-//     declared cache: { teach: true } on (agentsandbox.CacheBinding.Teach).
-//     The proxy hears each repository the forge served, and when the step
-//     succeeds, its cache is published and its checkout is still at the
-//     head it started at, that set replaces what the key's previous teaching run learned (a
-//     dependency it no longer fetched drops off).
-//   - Every other launch (a dispatch on a PR branch, a review, a fixer, a
-//     `conductor sandbox exec` hand-off) gets the repository itself plus
-//     its learned dependencies, and nothing a PR branch names: a PR that
-//     adds a new private dependency fetches it once the default branch has
-//     it and the next teaching run learns it.
+// The plugin declares the hosts and the credential. The proxy adds it to a
+// fetch of any repository on those hosts, for a launch that already holds
+// the same token (sandbox.GitAuthHeld, at launch): the fetch reaches no
+// further than what the agent already could. A launch holding no such
+// token gets no git auth.
 
-// gitFetchStore persists the repo → instance map and the learned sets
-// across restarts. *store.Store satisfies it.
+// gitFetchStore persists the repo → instance map across restarts.
+// *store.Store satisfies it.
 type gitFetchStore interface {
 	PutGitFetchInstance(repo, instance string) error
 	GitFetchInstance(repo string) (string, bool)
-	PutGitLearned(repo, instance, recipe string, fetched []string) error
-	GitLearned(repo, instance string) []string
 }
 
 var _ gitFetchStore = (*store.Store)(nil)
@@ -52,7 +38,6 @@ var _ gitFetchStore = (*store.Store)(nil)
 type gitMem struct {
 	mu       sync.Mutex
 	instance map[string]string
-	learned  map[string]map[string][]string
 }
 
 func (e *Engine) gitStore() gitFetchStore {
@@ -67,50 +52,32 @@ func (e *Engine) gitStore() gitFetchStore {
 func gitKey(repo string) string { return strings.ToLower(strings.TrimSpace(repo)) }
 
 // gitFetchAuth is credential name's git fetch credentials for trusted work
-// on repo, carrying val: the repository and its learned dependencies.
-// Work with no repository gets none.
+// on repo, carrying val. Work with no repository gets none.
 func (e *Engine) gitFetchAuth(sem *sdk.ConnSemantics, name, instance, repo, val string) []sandbox.GitAuth {
-	out := e.gitAuths(sem, name, instance, repo, val, false)
+	out := e.gitAuths(sem, name, instance, repo, val)
 	if len(out) > 0 {
 		e.recordGitFetch(repo, instance)
 	}
 	return out
 }
 
-// gitAuths builds the credentials; learn: a teaching launch's, for any
-// repository on the host.
-func (e *Engine) gitAuths(sem *sdk.ConnSemantics, name, instance, repo, val string, learn bool) []sandbox.GitAuth {
+// gitAuths builds the credentials, one per declared host.
+func (e *Engine) gitAuths(sem *sdk.ConnSemantics, name, instance, repo, val string) []sandbox.GitAuth {
 	if sem == nil || repo == "" || val == "" || strings.Contains(repo, "..") {
 		return nil
 	}
-	learned := e.gitLearned(repo, instance)
 	var out []sandbox.GitAuth
 	for _, g := range sem.GitFetch {
 		if g.Credential != name {
 			continue
 		}
 		for _, h := range e.gitFetchHosts(instance, g) {
-			a := sandbox.GitAuth{Host: h, For: repo, Username: g.Username, Secret: val, Learn: learn}
-			if !learn {
-				a.Repos = append([]string{"/" + gitKey(repo)}, learnedOn(learned, h)...)
-			}
+			a := sandbox.GitAuth{Host: h, For: repo, Username: g.Username, Secret: val}
 			if err := a.Validate(); err != nil {
 				e.log("git fetch credential %s on %s: %v", name, instance, err)
 				continue
 			}
 			out = append(out, a)
-		}
-	}
-	return out
-}
-
-// learnedOn is the learned entries ("host/path") on host, as paths.
-func learnedOn(learned []string, host string) []string {
-	var out []string
-	pre := strings.ToLower(host) + "/"
-	for _, l := range learned {
-		if p, ok := strings.CutPrefix(l, pre); ok && p != "" {
-			out = append(out, "/"+p)
 		}
 	}
 	return out
@@ -171,8 +138,8 @@ func (e *Engine) connectionSetting(instance, key string) any {
 }
 
 // recordGitFetch notes that instance's git fetch credential covered
-// trusted work on repo: a later teaching launch or hand-off of repo — after a restart
-// too — mints through it.
+// trusted work on repo: a later hand-off of repo — after a restart too —
+// mints through it.
 func (e *Engine) recordGitFetch(repo, instance string) {
 	k := gitKey(repo)
 	if gs := e.gitStore(); gs != nil {
@@ -201,80 +168,17 @@ func (e *Engine) gitFetchInstance(repo string) (string, bool) {
 	return v, ok
 }
 
-// gitLearned is repo's learned dependencies through instance.
-func (e *Engine) gitLearned(repo, instance string) []string {
-	k := gitKey(repo)
-	if gs := e.gitStore(); gs != nil {
-		return gs.GitLearned(k, instance)
-	}
-	e.gitMem.mu.Lock()
-	defer e.gitMem.mu.Unlock()
-	var out []string
-	for _, l := range e.gitMem.learned[k+"\x00"+instance] {
-		out = append(out, l...)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// GitLearned records what a successful teaching run of repo fetched with
-// the credential ("host/path" each), under its label (the run's cache key,
-// "cache:<id>"), replacing what that label's previous run learned. Only
-// controller.TaughtGit calls it. (A set an older conductor's recipe warm
-// recorded keeps its recipe's label, and stays learned.)
-func (e *Engine) GitLearned(repo, recipe string, fetched []string) {
-	instance, ok := e.gitFetchInstance(repo)
-	if !ok {
-		return
-	}
-	k := gitKey(repo)
-	var clean []string
-	for _, f := range fetched {
-		f = strings.ToLower(f)
-		if host, p, ok := strings.Cut(f, "/"); ok && host != "" && p != "" && path.Clean("/"+p) == "/"+p && strings.TrimSuffix(p, "/") != k {
-			clean = append(clean, host+"/"+p)
-		}
-	}
-	if gs := e.gitStore(); gs != nil {
-		if err := gs.PutGitLearned(k, instance, recipe, clean); err != nil {
-			e.log("git fetch: record what %s of %s learned: %v", recipe, repo, err)
-		}
-	} else {
-		e.gitMem.mu.Lock()
-		if e.gitMem.learned == nil {
-			e.gitMem.learned = map[string]map[string][]string{}
-		}
-		m := e.gitMem.learned[k+"\x00"+instance]
-		if m == nil {
-			m = map[string][]string{}
-			e.gitMem.learned[k+"\x00"+instance] = m
-		}
-		m[recipe] = clean
-		e.gitMem.mu.Unlock()
-	}
-	if len(clean) > 0 {
-		e.log("git fetch: %s learned %d dependenc(ies) from its default branch (%s): %s", repo, len(clean), recipe, strings.Join(clean, ", "))
-	}
-}
-
 // GitFetchFor mints the git fetch credentials for a launch on repo outside
 // a dispatch (a `conductor sandbox exec` hand-off in a workspace conductor
-// checked out of it): the repository and its learned dependencies.
+// checked out of it).
 func (e *Engine) GitFetchFor(ctx context.Context, repo string) []sandbox.GitAuth {
-	return e.gitFetchMint(ctx, repo, false)
-}
-
-// GitFetchTeach mints the git fetch credentials for a teaching launch on
-// repo (a default-branch checkout by a step other steps restore from): for
-// any repository on the host (the launch learns which).
-func (e *Engine) GitFetchTeach(ctx context.Context, repo string) []sandbox.GitAuth {
-	return e.gitFetchMint(ctx, repo, true)
+	return e.gitFetchMint(ctx, repo)
 }
 
 // gitFetchMint mints through the connector instance that last dispatched
 // trusted work on repo with a git fetch credential — none before such
 // work, and none once the instance no longer covers repo.
-func (e *Engine) gitFetchMint(ctx context.Context, repo string, learn bool) []sandbox.GitAuth {
+func (e *Engine) gitFetchMint(ctx context.Context, repo string) []sandbox.GitAuth {
 	instance, ok := e.gitFetchInstance(repo)
 	if !ok || e.connectors == nil {
 		return nil
@@ -306,7 +210,7 @@ func (e *Engine) gitFetchMint(ctx context.Context, repo string, learn bool) []sa
 			e.log("git fetch for %s: credential %s: %v", repo, cr.Name, err)
 			continue
 		}
-		out = append(out, e.gitAuths(sem, cr.Name, instance, repo, val, learn)...)
+		out = append(out, e.gitAuths(sem, cr.Name, instance, repo, val)...)
 	}
 	return out
 }

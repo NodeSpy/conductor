@@ -63,10 +63,6 @@ func forbiddenAgentAuthoredField(s *config.Step) (field, why string) {
 		// workspace.inputs: copies run artifacts onto this machine for the
 		// step — which artifacts a step gets is the operator's call too.
 		return "workspace.inputs:", "which artifacts a step is given is the operator's to configure"
-	case s.Cache != nil && s.Cache.Teach:
-		// teach: hands the launch a git fetch credential for any
-		// repository on the forge host: never the agent's to ask for.
-		return "cache.teach:", "teaching git dependencies (a credential for any repository on the host) is the operator's to grant"
 	case s.Cache != nil:
 		// cache: names the key a run publishes to — a write into a store
 		// other runs restore from. An agent choosing its own key could aim

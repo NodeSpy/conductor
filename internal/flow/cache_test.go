@@ -2,7 +2,6 @@ package flow
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"testing"
 
@@ -98,9 +97,6 @@ steps:
 	if len(top.RestoreFrom) != 1 || top.RestoreFrom[0].Value != "o/r" || top.RestoreFrom[0].Template != "{{.repo}}" {
 		t.Errorf("restore_from %+v", top.RestoreFrom)
 	}
-	if top.Teach || by["own"].Cache.Teach {
-		t.Error("a step that did not declare teach: teaches")
-	}
 	f := got()
 	for _, step := range []string{"plain", "own", "top"} {
 		if ok, seen := f[by[step].DispatchID]; !seen || !ok {
@@ -170,55 +166,6 @@ steps:
 				t.Fatalf("cache %+v", reqs)
 			}
 		})
-	}
-}
-
-// Only a step that declares cache: { teach: true } teaches; restoring from
-// a key no longer makes its runs teach (an implicit grant of a credential
-// for any repository on the host).
-func TestStepCacheTeachIsDeclared(t *testing.T) {
-	cfg := loadConfig(t, `
-connectors:
-  svc: { use: fake }
-sandbox:
-  caches: { enabled: true }
-workflows:
-  warm:
-    steps:
-      - { id: w, type: agent, name: a, prompt: p, cache: { key: "{{.repo}}" } }
-  teacher:
-    steps:
-      - { id: t, type: agent, name: a, prompt: p, cache: { key: "{{.repo}}", teach: true } }
-  fix:
-    steps:
-      - { id: f, type: agent, name: a, prompt: p, cache: { key: "pr-{{.repo}}", restore_from: ["{{.repo}}"] } }
-`)
-	reg := buildRegistry(t, cfg)
-	rig := newTestRunner(t, cfg, reg)
-	runTrigger(rig, newTrigger("ping", nil), mustSpec(t, `
-on: svc.ping
-steps:
-  - { id: a, workflow: warm }
-  - { id: b, workflow: teacher }
-  - { id: c, workflow: fix }
-`))
-	teach := map[string]bool{}
-	for _, r := range rig.Agents.requests() {
-		if r.Cache != nil {
-			teach[r.Step.ID] = r.Cache.Teach
-		}
-	}
-	if teach["w"] || !teach["t"] || teach["f"] {
-		t.Fatalf("teach %v, want only t", teach)
-	}
-}
-
-// An agent-authored step may never declare teach: (nor any cache:).
-func TestAgentAuthoredStepCannotTeach(t *testing.T) {
-	s := config.Step{ID: "x", Type: "agent", Prompt: "p", Cache: &config.StepCache{Key: "{{.repo}}", Teach: true}}
-	err := checkAgentAuthoredFields("plan", &s)
-	if err == nil || !strings.Contains(err.Error(), "cache.teach") {
-		t.Fatalf("an agent-authored step declared teach: %v", err)
 	}
 }
 

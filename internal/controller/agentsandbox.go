@@ -31,33 +31,19 @@ type SandboxWiring struct {
 	// session): `conductor sandbox exec --socket <control socket>`.
 	Exec []string
 	// GitFetch is sandbox.git_fetch: a dispatch's git fetch credentials
-	// (its connector's git_fetch) reach its launch's egress proxy, and a
-	// teaching launch's (agentsandbox.CacheBinding.Teach) come from
-	// TeachGitAuth.
+	// (its connector's git_fetch) reach its launch's egress proxy, for a
+	// launch already holding the same token (agentsandbox.Wrap).
 	GitFetch bool
 }
 
 // AgentSandbox is the wiring (nil = off).
 var AgentSandbox *SandboxWiring
 
-// Git fetch credentials beyond a dispatch's own (engine/gitfetch.go; nil:
-// none):
-//
-//   - TeachGitAuth mints a teaching launch's, for any repository on the
-//     host (engine.GitFetchTeach): a launch of a step that declared
-//     cache: { teach: true }, in conductor's checkout of the default
-//     branch's head (agentsandbox.CacheBinding.Teach). TeachGitLearned
-//     records what it fetched (engine.GitLearned) once its step succeeds,
-//     its cache is published and its checkout is still at that head
-//     (TaughtGit) — the only way a repository's learned dependencies
-//     change.
-//   - ScopedGitAuth mints a hand-off's: the repository and its learned
-//     dependencies (engine.GitFetchFor).
-var (
-	TeachGitAuth    func(ctx context.Context, repo string) []sandbox.GitAuth
-	TeachGitLearned func(repo, key string, fetched []string)
-	ScopedGitAuth   func(ctx context.Context, repo string) []sandbox.GitAuth
-)
+// ScopedGitAuth mints a hand-off's git fetch credentials beyond a
+// dispatch's own (engine.GitFetchFor; nil: none). Like a dispatch's, they
+// apply only to a launch already holding the same token
+// (agentsandbox.Wrap).
+var ScopedGitAuth func(ctx context.Context, repo string) []sandbox.GitAuth
 
 // agentLaunch marks a launch as an agent runtime's own (cli/acp), the
 // launches the agent sandbox covers.
@@ -210,12 +196,10 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	pol.Expose = append(pol.Expose, a.expose...)
 	if w.GitFetch && a.req != nil {
 		// Applied by the launch's egress proxy; never in the agent's env.
+		// Wrap keeps only those whose token the dispatch already granted
+		// this launch.
 		pol.GitAuth = a.req.Credentials.Git
-		if c := entry.Cache; c != nil && c.Teach && entry.Repo != "" && entry.Dispatch != "" && TeachGitAuth != nil {
-			if auth, ok := teachingGitAuth(entry); ok {
-				pol.GitAuth = auth
-			}
-		}
+		pol.GitHeld = grantedValues(a.req)
 	}
 	launch, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
 		SelfExe:           launchSelfExe,
@@ -445,6 +429,19 @@ func isWithin(p, dir string) bool {
 // lock) was given, so its publish leaves out any file holding one
 // (keycache.Manager.AddSecrets). nil: caches are off. Wired at boot.
 var CacheSecrets func(lock string, vals []string)
+
+// grantedValues are the credential values req granted its launch: its
+// env and template credentials (never its git fetch ones).
+func grantedValues(req *dispatch.Request) []string {
+	var out []string
+	for _, v := range req.Credentials.Env {
+		out = append(out, v)
+	}
+	for _, v := range req.Credentials.Templates {
+		out = append(out, v)
+	}
+	return out
+}
 
 // credentialEnvRE names an environment variable that carries a credential.
 var credentialEnvRE = regexp.MustCompile(`(?i)(token|secret|password|passwd|credential|api_?key|auth|private_?key|session)`)

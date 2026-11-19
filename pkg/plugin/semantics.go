@@ -463,12 +463,12 @@ type ConnSemantics struct {
 // fetches (smart HTTP, read only) on a host. An agent's sandbox holds no
 // credential and no SSH key: the host rewrites the SSH forms of the host's
 // URLs to HTTPS for the agent's git, and its egress proxy adds the
-// credential to fetches of the repositories conductor scopes it to — the
-// secret never enters the sandbox, and a push to the host is refused.
+// credential to fetches of any repository on the host — the secret never
+// enters the sandbox, and a push to the host is refused.
 //
-// The plugin declares the host and the credential only. Which repositories
-// a launch's credential covers is conductor's: the repository the work is
-// for, and the dependencies its default branch's cache warm fetched.
+// The plugin declares the host and the credential only. Conductor applies
+// it only to a launch already granted a credential with the same value: the
+// fetch reaches no further than what the launch holds.
 // Declaring git_fetch admits the host to every launch's egress for those
 // fetches; a build that adds or changes one is held for approval.
 type GitFetch struct {

@@ -32,7 +32,7 @@ workflows:
           key: "pr-{{.repo}}-{{.pr}}"         # this step's own cache
           restore_from: ["{{.repo}}"]          # read-only fallbacks, in order
   refresh:                                     # run on pushes to the default branch
-    cache: { key: "{{.repo}}", teach: true }  # default for the workflow's agent steps
+    cache: { key: "{{.repo}}" }                # default for the workflow's agent steps
     steps:
       - { id: build, type: agent, prompt: "Build and run the tests." }
 ```
@@ -43,9 +43,8 @@ workflows:
   published yet is shown the first of these that has. They are
   **read-only** to the step: what its run writes over them is published to
   the step's own key, never back to theirs.
-- `teach: true` lets a run of the step on the default branch learn the
-  repository's private git dependencies ([below](#private-git-dependencies)).
-  Off unless declared.
+- `teach:` is removed. A config or pack that still sets it loads, with a
+  warning, and the field is ignored ([below](#private-git-dependencies)).
 - A workflow's `cache:` is the default for its own agent steps. A step's own
   `cache:` wins. A called workflow does not inherit its caller's.
 - A step with no key gets no cache. So does a background (hand-off) step,
@@ -322,47 +321,22 @@ store, so `clear` sees them without asking the daemon.
 A dependency on another private repository by its SSH URL
 (`git+ssh://git@github.com/acme/dep.git`) is fetched the way an agent
 fetches it ([[Isolation#git-fetch]]). The run's git rewrites the SSH URL to
-HTTPS, and its egress proxy adds a git fetch credential. The credential
-comes from the connector that declares one (`git_fetch`). It is minted for
-the repository through the connector instance that last dispatched trusted
-work on it.
+HTTPS, and its egress proxy adds the git fetch credential of the connector
+that declares one (`git_fetch`).
 
-A launch's credential covers its repository plus the repository's
-**learned dependencies**. A **teaching** launch is what learns them. A
-launch teaches when all of these hold:
-
-- its step declares `cache: { teach: true }` (in your config or a pack's;
-  an agent-authored step can never set `cache:`, and a plan that tries is
-  refused);
-- it runs in a checkout conductor made fresh for it, at the head of the
-  repository's default branch (not a PR's checkout, not a workspace another
-  dispatch worked in, not an artifact);
-- its target is one the platform assigned.
-
-A teaching launch's credential covers any repository on the host. Each one
-the forge served it is recorded once its step succeeds and its cache is
-published, and only if the checkout is **still at the default branch head
-it started at** (a run that committed, or checked out another ref, teaches
-nothing). The set becomes the repository's learned dependencies for that
-key, replacing what that key's previous teaching run learned, so a
-dependency removed from the default branch drops off. If the step fails,
-nothing is learned. What a teaching dispatch has fetched so far is kept in
-conductor's state dir: a restart in the middle of it resumes the record
-rather than learning only what the launches after the restart fetched.
-
-Declare `teach:` only on a step whose prompt no event's sender writes,
-such as one triggered by a push to the default branch or a schedule. The
-launch holds a credential for every repository on the host while it
-follows its prompt: an issue- or comment-triggered step would follow text
-the sender wrote with that credential in hand.
-
-Every other launch on the repository (a PR's, a fixer's, a hand-off's) gets
-the repository plus those learned dependencies. A PR can never widen the
-set. A PR that adds a new private dependency fetches it once the change is
-on the default branch and a teaching run has fetched it. Until then, its
-launches' audit rows say the credential was withheld, and why. Nothing is
-configured, nothing is read from a lockfile, and the state lives in
-conductor's state dir, kept across restarts.
+The proxy adds it to a fetch of **any repository** on the connector's
+hosts, but only for a launch its dispatch already granted the **same
+token**: one of the launch's credentials has a value identical to the git
+fetch credential's. The values are compared at launch, in constant time;
+what a credential is named does not matter. When the connector's read
+token and the token a fixer's dispatch is granted are the same (both your
+own login, say), the fixer can fetch any private repository that token
+reads, including a dependency a PR adds for the first time. A launch
+granted a different token (the App's installation token while the fetch
+credential is your login's), or none, gets no git auth and its fetch
+fails. That fetch
+reaches nothing the agent's dispatch did not already hold. Nothing is
+learned, configured, or read from a lockfile.
 
 A repository no trusted work has ever run on gets no credential, and the
 fetch fails as it would without this:
@@ -382,8 +356,6 @@ together without any wiring.
 
 ## Limits
 
-- Teaching runs only in launches conductor runs itself (the `cli` and `acp`
-  runtimes). A paseo-run step publishes its cache but does not teach.
 - On macOS a process that moves itself to another process group and hides
   its environment from `ps` (a platform binary does) escapes the kill at the
   end of its launch, and may still write the home while it is published.

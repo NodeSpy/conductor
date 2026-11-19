@@ -83,7 +83,9 @@ func TestSandboxCachesRefused(t *testing.T) {
 	}
 }
 
-// A step's cache: and a workflow's default load, teach: with them.
+// A step's cache: and a workflow's default load. A removed teach: still
+// loads — ignored, with a warning naming where — never a failure (the
+// fleet auto-updates onto configs written for the old schema).
 func TestStepCacheLoads(t *testing.T) {
 	cfg, err := loadCfg(t, cacheBase+`workflows:
   warm:
@@ -107,11 +109,20 @@ func TestStepCacheLoads(t *testing.T) {
 	if s := cfg.Workflows["fix"].Steps[0]; s.Cache == nil || len(s.Cache.RestoreFrom) != 1 {
 		t.Fatalf("step cache %+v", s.Cache)
 	}
-	if s := cfg.Workflows["teacher"].Steps[0]; s.Cache == nil || !s.Cache.Teach {
-		t.Fatalf("teach: not loaded %+v", s.Cache)
+	if s := cfg.Workflows["teacher"].Steps[0]; s.Cache == nil || CacheTemplate(s.Cache.Key) != "{{.repo}}" {
+		t.Fatalf("a step with the removed teach: %+v", s.Cache)
 	}
-	if s := cfg.Workflows["fix"].Steps[0]; s.Cache.Teach || cfg.Workflows["warm"].Cache.Teach {
-		t.Fatal("teach: set where it was not declared")
+	w := cfg.RemovedFieldWarnings()
+	if len(w) != 1 || w[0] != "workflows.teacher.steps[0].cache.teach: "+TeachRemoved {
+		t.Fatalf("warnings %q", w)
+	}
+}
+
+// A pack manifest's step with the removed teach: is warned about too.
+func TestManifestTeachWarns(t *testing.T) {
+	w := manifestFolderWarnings([]byte("workflows:\n  warm:\n    steps:\n      - id: w\n        cache: { key: \"{{.repo}}\", teach: true }\n"), "p")
+	if len(w) != 1 || w[0] != "pack p: workflows.warm.steps[0].cache.teach: "+TeachRemoved {
+		t.Fatalf("warnings %q", w)
 	}
 }
 

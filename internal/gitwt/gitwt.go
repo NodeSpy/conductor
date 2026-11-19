@@ -83,9 +83,6 @@ type Provisioner struct {
 	mu     sync.Mutex
 	repoMu map[string]*sync.Mutex // per-repo lock over the base clone's shared state
 	live   map[string]string      // worktree path → its base clone dir
-	// onDefault are the live worktrees checked out at their repository's
-	// default branch head, as fetched (OnDefault).
-	onDefault map[string]bool
 }
 
 // New builds a Provisioner rooted at dir (the conductor state dir; "" resolves
@@ -95,20 +92,10 @@ func New(dir string) *Provisioner {
 		dir = config.StateDir()
 	}
 	return &Provisioner{
-		root:      dir,
-		repoMu:    map[string]*sync.Mutex{},
-		live:      map[string]string{},
-		onDefault: map[string]bool{},
+		root:   dir,
+		repoMu: map[string]*sync.Mutex{},
+		live:   map[string]string{},
 	}
-}
-
-// OnDefault reports whether wt is a live worktree this provisioner checked
-// out at its repository's default branch head (origin/HEAD as fetched for
-// it) — a branch-off from the default branch, never a PR head.
-func (p *Provisioner) OnDefault(wt string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.onDefault[filepath.Clean(wt)]
 }
 
 // CheckoutsDir is where the per-repo base clones live.
@@ -253,19 +240,7 @@ func (p *Provisioner) provision(ctx context.Context, repo, strategy string, req 
 	case "checkout-pr":
 		err = p.addPR(ctx, base, wt, req)
 	case "branch-off":
-		if err = p.addBranch(ctx, base, wt, req); err == nil {
-			// Read now, while the checkout is still conductor's own.
-			def, derr := p.defaultHead(ctx, base)
-			head, herr := p.git(ctx, wt, "rev-parse", "--verify", "HEAD^{commit}")
-			if derr == nil && herr == nil && strings.TrimSpace(head) == def {
-				p.mu.Lock()
-				if p.onDefault == nil {
-					p.onDefault = map[string]bool{}
-				}
-				p.onDefault[filepath.Clean(wt)] = true
-				p.mu.Unlock()
-			}
-		}
+		err = p.addBranch(ctx, base, wt, req)
 	}
 	if err != nil {
 		// Leave nothing half-made behind for the reaper to puzzle over.
@@ -293,7 +268,6 @@ func (p *Provisioner) RemoveWorktree(ctx context.Context, id string) error {
 	p.mu.Lock()
 	base, known := p.live[wt]
 	delete(p.live, wt)
-	delete(p.onDefault, wt)
 	p.mu.Unlock()
 	if !known {
 		// A worktree from a previous daemon life: recover its base clone from

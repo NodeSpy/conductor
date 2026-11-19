@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -33,13 +32,12 @@ func stepCacheManager(cfg *config.Config, logf func(string, ...any)) *keycache.M
 
 // wireStepCaches turns step caches on for the agent sandbox's launches: the
 // resolver restores them, a dispatch's step end publishes them, and the
-// manager evicts until ctx ends. gitProv tells a checkout of the default
-// branch's head (a teaching launch's, CacheBinding.Teach).
+// manager evicts until ctx ends.
 func wireStepCaches(ctx context.Context, cfg *config.Config, gitProv *gitwt.Provisioner, logf func(string, ...any)) (stop func()) {
 	m := stepCacheManager(cfg, logf)
 	if sandboxResolver.Load() == nil || m == nil {
 		stepCaches.Store(nil)
-		dispatch.CacheFinisher, dispatch.CheckoutOnDefault = nil, nil
+		dispatch.CacheFinisher = nil
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -47,15 +45,10 @@ func wireStepCaches(ctx context.Context, cfg *config.Config, gitProv *gitwt.Prov
 	stepCaches.Store(&stepCacheWiring{m: m, ctx: ctx, logf: logf})
 	dispatch.CacheFinisher = finishStepCache
 	controller.CacheSecrets = m.AddSecrets
-	controller.TeachLog = logf
-	controller.SetTeachStateDir(filepath.Join(config.StateDir(), "git-teaching"))
-	if gitProv != nil {
-		dispatch.CheckoutOnDefault = gitProv.OnDefault
-	}
 	logf("step caches: on (store %s, cap %s, learn %s in %d run(s))", m.Store.Dir, capString(m.MaxSize), keycache.HumanSize(m.MinSize), m.MinRuns)
 	return func() {
 		stepCaches.Store(nil)
-		dispatch.CacheFinisher, dispatch.CheckoutOnDefault = nil, nil
+		dispatch.CacheFinisher = nil
 		controller.CacheSecrets = nil
 		cancel()
 		select {
@@ -95,14 +88,11 @@ func restoreStepCache(req keycache.Request) keycache.Grant {
 func finishStepCache(ctx context.Context, dispatchID string, ok bool) {
 	w := stepCaches.Load()
 	if w == nil {
-		controller.TaughtGit(dispatchID, false)
 		return
 	}
-	pub, err := w.m.Finish(context.WithoutCancel(ctx), dispatchID, ok)
-	if err != nil {
+	if _, err := w.m.Finish(context.WithoutCancel(ctx), dispatchID, ok); err != nil {
 		w.logf("cache: %s: not published: %v", dispatchID, err)
 	}
-	controller.TaughtGit(dispatchID, pub != nil)
 }
 
 func capString(n int64) string {

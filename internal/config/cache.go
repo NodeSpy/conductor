@@ -14,7 +14,6 @@ import (
 //	cache:
 //	  key: "pr-{{.repo}}-{{.pr}}"      # this step's cache: restored from, and published to
 //	  restore_from: ["{{.repo}}"]      # read-only fallbacks, in order
-//	  teach: true                      # a default-branch run teaches the repo's git deps
 //
 // Each entry is a template over the step's facts, rendered the way a memory
 // scope key is (memory.RenderScopeKey). A step publishes only to its own
@@ -26,14 +25,9 @@ import (
 type StepCache struct {
 	Key         string   `yaml:"key"`
 	RestoreFrom []string `yaml:"restore_from,omitempty"`
-	// Teach: a run of this step in conductor's own fresh checkout of a
-	// trusted target's default branch head learns the repository's git
-	// fetch dependencies (docs/wiki/Step-Caches.md). The operator's (or a
-	// pack's) to declare: an agent-authored step can never set cache: at
-	// all. Teaching gives the launch a fetch credential for any repository
-	// on the forge host, so declare it only on a step whose prompt no
-	// event's sender writes.
-	Teach bool `yaml:"teach,omitempty"`
+	// Teach is removed (git dependencies are no longer learned): accepted
+	// and ignored, with a warning (TeachRemoved).
+	Teach RemovedField `yaml:"teach,omitempty"`
 }
 
 // maxRestoreFrom bounds a step's fallbacks.

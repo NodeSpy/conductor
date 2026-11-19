@@ -81,17 +81,16 @@ func sandboxPolicyResponse(conn net.Conn, req controlRequest, log func(string, .
 // applies it. Only this daemon's uid gets a policy (sandboxPolicyResponse);
 // the Policy itself never serializes the secret.
 type gitAuthWire struct {
-	Host     string   `json:"host"`
-	Repos    []string `json:"repos"`
-	For      string   `json:"for,omitempty"`
-	Username string   `json:"username"`
-	Secret   string   `json:"secret"`
+	Host     string `json:"host"`
+	For      string `json:"for,omitempty"`
+	Username string `json:"username"`
+	Secret   string `json:"secret"`
 }
 
 func gitAuthToWire(in []sandbox.GitAuth) []gitAuthWire {
 	var out []gitAuthWire
 	for _, g := range in {
-		out = append(out, gitAuthWire{Host: g.Host, Repos: g.Repos, For: g.For, Username: g.Username, Secret: g.Secret})
+		out = append(out, gitAuthWire{Host: g.Host, For: g.For, Username: g.Username, Secret: g.Secret})
 	}
 	return out
 }
@@ -99,7 +98,7 @@ func gitAuthToWire(in []sandbox.GitAuth) []gitAuthWire {
 func gitAuthFromWire(in []gitAuthWire) []sandbox.GitAuth {
 	var out []sandbox.GitAuth
 	for _, g := range in {
-		out = append(out, sandbox.GitAuth{Host: g.Host, Repos: g.Repos, For: g.For, Username: g.Username, Secret: g.Secret})
+		out = append(out, sandbox.GitAuth{Host: g.Host, For: g.For, Username: g.Username, Secret: g.Secret})
 	}
 	return out
 }
@@ -180,9 +179,9 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	}
 	if cfg.Sandbox.GitFetchOn() {
 		// A `conductor sandbox exec` launch in a workspace conductor checked
-		// out (a hand-off): the repository's git fetch credentials, minted
-		// for the repository and its learned dependencies
-		// (controller.ScopedGitAuth, once the engine runs).
+		// out (a hand-off): the repository's git fetch credentials
+		// (controller.ScopedGitAuth, once the engine runs), applied only
+		// when the exec process already holds the same token.
 		r.GitAuth = func(repo string) []sandbox.GitAuth {
 			f := controller.ScopedGitAuth
 			if f == nil {

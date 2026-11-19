@@ -87,14 +87,14 @@ func (r *gitFetchRig) dispatch(repo string) []sandbox.GitAuth {
 
 var forgeFetch = sdk.GitFetch{Credential: "read", Hosts: []string{"forge.example"}, Username: "x-access"}
 
-// A dispatch's credential covers its repository alone until a warm learns
-// its dependencies; work for a target the platform did not assign, or with
-// no repository, gets none.
+// A dispatch's credential is for its declared host (any repository on it:
+// the launch's held-token gate decides whether it applies, at launch);
+// work for a target the platform did not assign, or with no repository,
+// gets none.
 func TestGitFetchCredentials(t *testing.T) {
 	r := newGitFetchRig(t, "{ use: github }", forgeFetch)
 	g := r.dispatch("Org/App")
-	if len(g) != 1 || g[0].Host != "forge.example" || g[0].Secret != "tok-read_token" || g[0].Username != "x-access" ||
-		g[0].Learn || g[0].For != "Org/App" || !reflect.DeepEqual(g[0].Repos, []string{"/org/app"}) {
+	if len(g) != 1 || g[0].Host != "forge.example" || g[0].Secret != "tok-read_token" || g[0].Username != "x-access" || g[0].For != "Org/App" {
 		t.Fatalf("git = %+v", g)
 	}
 	if c, _ := r.e.declaredCredentials(context.Background(), core.Trigger{Instance: "i", Target: core.Target{Repo: "org/app"}}, "i", r.sem, false); len(c.Git) != 0 {
@@ -103,77 +103,15 @@ func TestGitFetchCredentials(t *testing.T) {
 	if c, _ := r.e.declaredCredentials(context.Background(), core.Trigger{Instance: "i", TargetTrusted: true}, "i", r.sem, false); len(c.Git) != 0 {
 		t.Fatalf("no repo: %+v", c.Git)
 	}
-	// A repository no trusted work ran on: nothing minted, for a warm or a
-	// hand-off.
+	// A repository no trusted work ran on: nothing minted for a hand-off.
 	r.minted = nil
-	if g := r.e.GitFetchTeach(context.Background(), "evil/repo"); len(g) != 0 || len(r.minted) != 0 {
-		t.Fatalf("unseen repo: %+v minted %v", g, r.minted)
-	}
 	if g := r.e.GitFetchFor(context.Background(), "evil/repo"); len(g) != 0 || len(r.minted) != 0 {
 		t.Fatalf("unseen repo: %+v minted %v", g, r.minted)
 	}
 }
 
-// LEARNED SCOPE. A default-branch warm's credential is for any repository
-// on the host; what it fetched becomes the repository's learned
-// dependencies — the scope of every other launch (a PR dispatch, a hand-off).
-// A later warm that no longer fetches one drops it; another recipe's stay;
-// a restart keeps them; nothing but a warm adds one.
-func TestGitFetchLearnedScope(t *testing.T) {
-	r := newGitFetchRig(t, "{ use: github }", forgeFetch)
-	scope := func(g []sandbox.GitAuth) []string {
-		t.Helper()
-		if len(g) != 1 {
-			t.Fatalf("credentials %+v", g)
-		}
-		return g[0].Repos
-	}
-	// A PR launch before any warm: the repository alone — an org's other
-	// repository is not in it.
-	if s := scope(r.dispatch("org/app")); !reflect.DeepEqual(s, []string{"/org/app"}) {
-		t.Fatalf("before a warm: %v", s)
-	}
-	// The warm: any repository on the host.
-	w := r.e.GitFetchTeach(context.Background(), "org/app")
-	if len(w) != 1 || !w[0].Learn || len(w[0].Repos) != 0 || w[0].Secret != "tok-read_token" {
-		t.Fatalf("warm: %+v", w)
-	}
-	r.e.GitLearned("org/app", "yarn", []string{"forge.example/org/dep", "forge.example/Other/Lib", "forge.example/org/app", "elsewhere.example/x/y", "forge.example/../etc"})
-	r.e.GitLearned("org/app", "go", []string{"forge.example/org/gomod"})
-	want := []string{"/org/app", "/org/dep", "/org/gomod", "/other/lib"}
-	if s := scope(r.dispatch("org/app")); !reflect.DeepEqual(s, want) {
-		t.Fatalf("after the warms: %v, want %v", s, want)
-	}
-	if s := scope(r.e.GitFetchFor(context.Background(), "org/app")); !reflect.DeepEqual(s, want) {
-		t.Fatalf("a hand-off: %v, want %v", s, want)
-	}
-	// Another repository's launch learns nothing from it.
-	if s := scope(r.dispatch("org/other")); !reflect.DeepEqual(s, []string{"/org/other"}) {
-		t.Fatalf("another repository: %v", s)
-	}
-	// A restart keeps them.
-	r.restart()
-	if s := scope(r.e.GitFetchFor(context.Background(), "org/app")); !reflect.DeepEqual(s, want) {
-		t.Fatalf("after a restart: %v, want %v", s, want)
-	}
-	b, _ := os.ReadFile(filepath.Join(r.dir, "git-learned.json"))
-	if !strings.Contains(string(b), "org/dep") || strings.Contains(string(b), "tok-") {
-		t.Fatalf("git-learned.json: %s", b)
-	}
-	// The yarn warm no longer fetches org/dep: it drops off; go's stays.
-	r.e.GitLearned("org/app", "yarn", []string{"forge.example/other/lib"})
-	if s := scope(r.dispatch("org/app")); !reflect.DeepEqual(s, []string{"/org/app", "/org/gomod", "/other/lib"}) {
-		t.Fatalf("after yarn dropped org/dep: %v", s)
-	}
-	r.e.GitLearned("org/app", "yarn", nil)
-	r.e.GitLearned("org/app", "go", nil)
-	if s := scope(r.dispatch("org/app")); !reflect.DeepEqual(s, []string{"/org/app"}) {
-		t.Fatalf("nothing learned: %v", s)
-	}
-}
-
-// A warm right after a restart mints exactly as before: the repository's
-// instance is kept in the state dir.
+// A hand-off right after a restart mints exactly as before: the
+// repository's instance is kept in the state dir, which holds no token.
 func TestGitFetchSurvivesRestart(t *testing.T) {
 	r := newGitFetchRig(t, "{ use: github }", forgeFetch)
 	if len(r.dispatch("org/app")) != 1 {
@@ -181,9 +119,9 @@ func TestGitFetchSurvivesRestart(t *testing.T) {
 	}
 	r.restart()
 	r.minted = nil
-	g := r.e.GitFetchTeach(context.Background(), "org/app")
-	if len(g) != 1 || g[0].Secret != "tok-read_token" || !g[0].Learn {
-		t.Fatalf("warm after restart: %+v", g)
+	g := r.e.GitFetchFor(context.Background(), "org/app")
+	if len(g) != 1 || g[0].Secret != "tok-read_token" {
+		t.Fatalf("hand-off after restart: %+v", g)
 	}
 	if !reflect.DeepEqual(r.minted, []string{"i.read_token:org/app"}) {
 		t.Fatalf("minted %v", r.minted)
@@ -225,7 +163,7 @@ func TestGitFetchHostFrom(t *testing.T) {
 }
 
 // The instance's own repo scope is re-checked at every use: a repository
-// removed from it gets no credential for a warm or a hand-off.
+// removed from it gets no credential for a hand-off.
 func TestGitFetchRechecksInstanceScope(t *testing.T) {
 	r := newGitFetchRig(t, "{ use: github, repos: ['Org/*'] }", forgeFetch)
 	if len(r.dispatch("org/app")) != 1 {
@@ -237,11 +175,8 @@ func TestGitFetchRechecksInstanceScope(t *testing.T) {
 	r.conn = "{ use: github, repos: ['other/*'] }"
 	r.restart()
 	r.minted = nil
-	if g := r.e.GitFetchTeach(context.Background(), "org/app"); len(g) != 0 || len(r.minted) != 0 {
-		t.Fatalf("warm of a repository the instance dropped: %+v minted %v", g, r.minted)
-	}
-	if g := r.e.GitFetchFor(context.Background(), "org/app"); len(g) != 0 {
-		t.Fatalf("hand-off of a repository the instance dropped: %+v", g)
+	if g := r.e.GitFetchFor(context.Background(), "org/app"); len(g) != 0 || len(r.minted) != 0 {
+		t.Fatalf("hand-off of a repository the instance dropped: %+v minted %v", g, r.minted)
 	}
 }
 
