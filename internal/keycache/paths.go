@@ -18,6 +18,11 @@ var alwaysProtected = []string{
 	".cargo/credentials", ".cargo/credentials.toml", ".m2/settings.xml", ".m2/settings-security.xml",
 	".gradle/gradle.properties", ".terraform.d", ".config/rclone", ".password-store",
 	"Library/Keychains",
+	// credentials kept beside a tool's bulk cache
+	".cache/huggingface/token", ".huggingface/token", ".pulumi/credentials.json",
+	".android/adbkey", ".android/adbkey.pub", ".config/op", ".op", ".config/glab-cli",
+	".local/share/keyrings", ".config/composer/auth.json", ".composer/auth.json",
+	".nuget/NuGet/NuGet.Config", ".config/NuGet/NuGet.Config",
 	// shell start-up files and history
 	".bashrc", ".bash_profile", ".bash_login", ".profile", ".zshrc", ".zshenv", ".zprofile", ".zlogin",
 	".config/fish", ".local/share/fish", ".bash_history", ".zsh_history", ".history", ".sh_history",

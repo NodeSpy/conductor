@@ -19,10 +19,10 @@ import (
 // Store is the on-disk cache store:
 //
 //	<dir>/keys/<id>/key.json             the key (namespace, template, value)
-//	<dir>/keys/<id>/learn.json           what runs of the key filled: learned paths
 //	<dir>/keys/<id>/<version>/meta.json  one published copy: when, which paths
 //	<dir>/keys/<id>/<version>/data/<rel> its content, home-relative
 //	<dir>/keys/<id>/<version>/.used      mtime = last restore
+//	<dir>/templates/<tid>/learn.json     what runs of the template's keys filled: learned paths
 //	<dir>/.layers/<launch>/lock, home, key, dispatch, uses, slots, ended, <slot>/{upper,work}
 //	                                     a launch's overlay layers and what it used
 //
@@ -38,6 +38,9 @@ type Store struct {
 	// KeepEnded is how long an ended launch's layers wait for its step to
 	// publish them (0: DefaultKeepEnded).
 	KeepEnded time.Duration
+	// KeyIdle is how long a key with no published version and no launch
+	// keeps its directory (0: DefaultKeyIdle).
+	KeyIdle time.Duration
 
 	mu sync.Mutex
 	// testHook is called at points tests interleave with.
@@ -73,14 +76,21 @@ func (e Entry) Lower(rel string) string {
 	return ""
 }
 
-const keysDirName = "keys"
+const (
+	keysDirName      = "keys"
+	templatesDirName = "templates"
+)
 
 var idRE = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var versionRE = regexp.MustCompile(`^v[0-9]{20}-[0-9a-f]{16}$`)
 
-func (s *Store) keysRoot() string           { return filepath.Join(s.Dir, keysDirName) }
-func (s *Store) keyDir(id string) string    { return filepath.Join(s.keysRoot(), id) }
-func (s *Store) learnFile(id string) string { return filepath.Join(s.keyDir(id), "learn.json") }
+func (s *Store) keysRoot() string        { return filepath.Join(s.Dir, keysDirName) }
+func (s *Store) keyDir(id string) string { return filepath.Join(s.keysRoot(), id) }
+func (s *Store) templatesRoot() string   { return filepath.Join(s.Dir, templatesDirName) }
+func (s *Store) templateDir(tid string) string {
+	return filepath.Join(s.templatesRoot(), tid)
+}
+func (s *Store) learnFile(tid string) string { return filepath.Join(s.templateDir(tid), "learn.json") }
 
 // Lookup finds the newest published version of a key.
 func (s *Store) Lookup(id string) (Entry, bool) {
@@ -266,14 +276,9 @@ func (s *Store) Remove(e Entry) error {
 	return RemoveAll(gone)
 }
 
-// Size is the store's total size.
-func (s *Store) Size() int64 {
-	var n int64
-	for _, e := range s.List() {
-		n += e.Size
-	}
-	return n
-}
+// Size is the disk the store's published versions take, each file
+// counted once (usage).
+func (s *Store) Size() int64 { return usageOf(s.List()).total }
 
 // Evict removes least-recently-used caches until the store is within max
 // bytes, never one inUse reports. It returns what it removed.
@@ -282,10 +287,7 @@ func (s *Store) Evict(max int64, inUse func(dir string) bool) []Entry {
 		max = 0 // the space left once scratch is counted: everything unused goes
 	}
 	all := s.List()
-	var total int64
-	for _, e := range all {
-		total += e.Size
-	}
+	u := usageOf(all)
 	// A version a newer one of its key superseded goes whatever the cap (no
 	// launch restores it again) once no launch uses it; then, over the cap,
 	// the least recently restored.
@@ -305,14 +307,14 @@ func (s *Store) Evict(max int64, inUse func(dir string) bool) []Entry {
 	var out []Entry
 	for _, e := range all {
 		superseded := e.Version != newest[e.ID]
-		if total <= max && !superseded {
+		if u.total <= max && !superseded {
 			break
 		}
 		if inUse != nil && inUse(e.Dir) {
 			continue
 		}
 		if s.Remove(e) == nil {
-			total -= e.Size
+			u.remove(e.Dir)
 			out = append(out, e)
 		}
 	}
@@ -335,6 +337,63 @@ func (s *Store) sweepTemp() {
 			}
 		}
 	}
+}
+
+// DefaultKeyIdle is how long an empty key's directory stays.
+const DefaultKeyIdle = 24 * time.Hour
+
+// touchKey records a launch of key id (its key.json's mtime): an empty
+// key's directory goes KeyIdle after its last launch.
+func (s *Store) touchKey(id string) {
+	now := time.Now()
+	_ = os.Chtimes(filepath.Join(s.keyDir(id), "key.json"), now, now)
+}
+
+// sweepKeys removes the directory of every key that has no published
+// version, no publish being built, and no launch entry naming it (named),
+// and was last launched more than KeyIdle ago: a key new for every run (a
+// per-PR key) leaves nothing behind once its versions are evicted. What
+// the key's template learned stays (templates/). The caller holds the
+// store's lock.
+func (s *Store) sweepKeys(named map[string]bool) int {
+	idle := s.KeyIdle
+	if idle == 0 {
+		idle = DefaultKeyIdle
+	}
+	ids, _ := os.ReadDir(s.keysRoot())
+	n := 0
+	for _, k := range ids {
+		id := k.Name()
+		if !k.IsDir() || !idRE.MatchString(id) || named[id] || len(s.versions(id)) > 0 {
+			continue
+		}
+		busy := false
+		ents, _ := os.ReadDir(s.keyDir(id))
+		for _, e := range ents {
+			if strings.HasPrefix(e.Name(), ".tmp-") || versionRE.MatchString(e.Name()) {
+				busy = true // a build in progress, or a version that did not read
+				break
+			}
+		}
+		if busy {
+			continue
+		}
+		last := time.Time{}
+		for _, f := range []string{filepath.Join(s.keyDir(id), "key.json"), s.keyDir(id)} {
+			if fi, err := os.Lstat(f); err == nil && fi.ModTime().After(last) {
+				last = fi.ModTime()
+			}
+		}
+		if time.Since(last) < idle {
+			continue
+		}
+		gone := filepath.Join(s.keysRoot(), ".gone-"+randHex())
+		if os.Rename(s.keyDir(id), gone) == nil {
+			_ = RemoveAll(gone)
+			n++
+		}
+	}
+	return n
 }
 
 // removeSuperseded removes the versions of a key older than its newest
@@ -370,18 +429,102 @@ func (s *Store) removeLegacy() []string {
 }
 
 // DiskUsage is the disk a tree takes (allocated blocks where the platform
-// reports them), never following a symlink.
+// reports them), never following a symlink: a file hard-linked more than
+// once inside the tree counts once.
 func DiskUsage(root string) int64 {
 	var n int64
+	seen := map[fileID]bool{}
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if fi, err := d.Info(); err == nil {
-			n += allocated(fi)
+		fi, err := d.Info()
+		if err != nil {
+			return nil
 		}
+		if id, links, ok := idOf(fi); ok && links > 1 && !fi.IsDir() {
+			if seen[id] {
+				return nil
+			}
+			seen[id] = true
+		}
+		n += allocated(fi)
 		return nil
 	})
+	return n
+}
+
+// usage is the disk a set of published versions takes, each file counted
+// once however many of them hold it: a version built over another (a
+// restore_from key's, or its own key's previous one) hard-links the
+// files it kept, and the store's cap is about the disk, not the sum.
+type usage struct {
+	total int64
+	// shared are files more than one link names: their size, and how
+	// many of the counted versions hold them.
+	shared map[fileID]*sharedFile
+	// holds are each version's shared files; own the bytes only it has.
+	holds map[string][]fileID
+	own   map[string]int64
+}
+
+type sharedFile struct {
+	size int64
+	refs int
+}
+
+// usageOf counts entries' disk.
+func usageOf(entries []Entry) *usage {
+	u := &usage{shared: map[fileID]*sharedFile{}, holds: map[string][]fileID{}, own: map[string]int64{}}
+	for _, e := range entries {
+		dir := e.Dir
+		mine := map[fileID]bool{}
+		_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			fi, err := d.Info()
+			if err != nil {
+				return nil
+			}
+			id, links, ok := idOf(fi)
+			if !ok || links <= 1 || fi.IsDir() {
+				u.own[dir] += allocated(fi)
+				u.total += allocated(fi)
+				return nil
+			}
+			if mine[id] {
+				return nil
+			}
+			mine[id] = true
+			u.holds[dir] = append(u.holds[dir], id)
+			sf := u.shared[id]
+			if sf == nil {
+				sf = &sharedFile{size: allocated(fi)}
+				u.shared[id] = sf
+				u.total += sf.size
+			}
+			sf.refs++
+			return nil
+		})
+	}
+	return u
+}
+
+// remove takes a version out of the count and returns the disk that frees.
+func (u *usage) remove(dir string) int64 {
+	n := u.own[dir]
+	delete(u.own, dir)
+	for _, id := range u.holds[dir] {
+		if sf := u.shared[id]; sf != nil {
+			if sf.refs--; sf.refs == 0 {
+				n += sf.size
+				delete(u.shared, id)
+			}
+		}
+	}
+	delete(u.holds, dir)
+	u.total -= n
 	return n
 }
 
@@ -436,7 +579,8 @@ func (s *Store) Publish(key Key, paths []string, fill func(data string) error) (
 	return e, err
 }
 
-// KeyEntry is a key the store knows: its identity and what it learned.
+// KeyEntry is a key the store knows: its identity and what its template
+// learned.
 type KeyEntry struct {
 	ID      string
 	Key     Key
@@ -456,7 +600,7 @@ func (s *Store) Keys() []KeyEntry {
 		if err != nil || json.Unmarshal(b, &k) != nil || k.ID() != d.Name() {
 			continue
 		}
-		out = append(out, KeyEntry{ID: d.Name(), Key: k, Learned: s.Learned(d.Name())})
+		out = append(out, KeyEntry{ID: d.Name(), Key: k, Learned: s.Learned(k.TemplateID())})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key.String() < out[j].Key.String() })
 	return out

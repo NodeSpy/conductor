@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -43,6 +44,9 @@ type Manager struct {
 
 	mu   sync.Mutex
 	pins map[string]int
+	// secrets are the credential values launches were given (AddSecrets),
+	// by launch directory.
+	secrets map[string]secretSet
 	// testHook is called at points tests interleave with.
 	testHook func(point string)
 }
@@ -163,6 +167,7 @@ func (m *Manager) Restore(ctx context.Context, r Request) (Grant, error) {
 			n++
 		}
 		m.unpin(j.e.Dir)
+		_ = os.Remove(filepath.Join(j.launch, launchCopyingFile))
 		if n > 0 {
 			note := ""
 			if why != "" {
@@ -177,9 +182,10 @@ func (m *Manager) Restore(ctx context.Context, r Request) (Grant, error) {
 // copyJob is a copy restore found under the store's lock (its version
 // pinned) and done after it.
 type copyJob struct {
-	e     Entry
-	kind  string
-	items []copyItem
+	e      Entry
+	kind   string
+	items  []copyItem
+	launch string
 }
 
 type copyItem struct {
@@ -198,11 +204,15 @@ func (m *Manager) restoreLocked(r Request, from []Key, overlay bool) (Grant, []c
 	if err := writeKeyFile(m.Store.keyDir(id), r.Key); err != nil {
 		return Grant{}, nil, fmt.Errorf("cache: %w", err)
 	}
+	m.Store.touchKey(id)
 	launch, err := m.Store.newLaunch(launchRecord{home: r.Home, key: id, dispatch: r.Dispatch})
 	if err != nil {
 		return Grant{}, nil, fmt.Errorf("cache: %w", err)
 	}
 	g := Grant{Lock: LaunchLock(launch)}
+	if prev, ok := m.resumes(r, id, launch); ok {
+		return m.takeOver(r, prev, launch, overlay, g)
+	}
 	var e Entry
 	found, kind := false, "hit"
 	for i, k := range from {
@@ -254,7 +264,15 @@ func (m *Manager) restoreLocked(r Request, from []Key, overlay bool) (Grant, []c
 		targets = append(targets, target)
 	}
 	if len(job.items) > 0 {
+		// Pinned in this process and on disk (the launch's entry, live
+		// through the copy): `caches clear` in another process sees it.
 		m.pin(e.Dir)
+		if err := writeAtomic(filepath.Join(launch, launchCopyingFile), []byte(e.Dir+"\n")); err != nil {
+			m.unpin(e.Dir)
+			_ = RemoveAll(launch)
+			return Grant{}, nil, err
+		}
+		job.launch = launch
 		copies = append(copies, job)
 		m.Store.Touch(e)
 	}
@@ -275,6 +293,95 @@ func (m *Manager) restoreLocked(r Request, from []Key, overlay bool) (Grant, []c
 		m.testHook("restored")
 	}
 	return g, copies, nil
+}
+
+// resumes finds the launch a new launch continues: an ended launch of the
+// same dispatch, in the same home, for the same key (a resumed session, an
+// output_schema re-run), no longer running. Its lock is returned held
+// exclusively, with its directory. The caller holds the store's lock.
+func (m *Manager) resumes(r Request, id, self string) (heldLaunch, bool) {
+	var found []string
+	for _, l := range m.Store.launches() {
+		if l.dir == self || l.ended.IsZero() {
+			continue
+		}
+		if readSmall(filepath.Join(l.dir, launchDispatchFile)) != r.Dispatch ||
+			readSmall(filepath.Join(l.dir, launchHomeFile)) != r.Home ||
+			readSmall(filepath.Join(l.dir, launchKeyFile)) != id {
+			continue
+		}
+		found = append(found, l.dir)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(found))) // the newest first
+	for _, d := range found {
+		if release, ok := tryLock(filepath.Join(d, launchLockFile)); ok {
+			return heldLaunch{dir: d, release: release}, true
+		}
+	}
+	return heldLaunch{}, false
+}
+
+// takeOver gives a new launch what the launch it continues (prev, held)
+// had: its overlay layers, moved over whole, so the new launch sees what
+// the first wrote and its step's end publishes both; and nothing restored
+// anew — a copy restore already put its cache in the home, and the run's
+// writes there are the run's. prev's entry is removed. The caller holds
+// the store's lock.
+func (m *Manager) takeOver(r Request, prev heldLaunch, launch string, overlay bool, g Grant) (Grant, []copyJob, error) {
+	defer prev.release()
+	var slots []slot
+	if b, err := os.ReadFile(filepath.Join(prev.dir, launchSlotsFile)); err == nil {
+		_ = json.Unmarshal(b, &slots)
+	}
+	var kept []slot
+	var used []string
+	for _, s := range slots {
+		if !overlay || !CheckHomePath(s.Path, m.Protected) || !within(s.Upper, prev.dir) || !within(s.Entry, m.Store.keysRoot()) {
+			continue
+		}
+		e, err := m.Store.read(filepath.Base(filepath.Dir(s.Entry)), filepath.Base(s.Entry))
+		if err != nil || e.Dir != s.Entry {
+			continue // its version is gone: the layer means nothing without it
+		}
+		lower := e.Lower(s.Path)
+		target := filepath.Join(r.Home, filepath.FromSlash(s.Path))
+		if lower == "" || prepareTarget(r.Home, target, false) != nil {
+			continue
+		}
+		name := filepath.Base(filepath.Dir(s.Upper))
+		sd := filepath.Join(launch, name)
+		if err := os.Rename(filepath.Join(prev.dir, name), sd); err != nil {
+			continue
+		}
+		// A fresh work directory: the old one is the overlay's scratch.
+		work := filepath.Join(sd, "work")
+		if err := RemoveAll(work); err != nil || os.Mkdir(work, 0o700) != nil {
+			continue
+		}
+		g.Mounts = append(g.Mounts, Mount{Target: target, Lower: lower, Upper: filepath.Join(sd, "upper"), Work: work})
+		kept = append(kept, slot{Path: s.Path, Entry: s.Entry, Upper: filepath.Join(sd, "upper")})
+		if !slices.Contains(used, s.Entry) {
+			used = append(used, s.Entry)
+		}
+	}
+	m.handSecrets(prev.dir, launch)
+	if len(kept) > 0 {
+		if err := writeUses(launch, used); err != nil {
+			_ = RemoveAll(launch)
+			return Grant{}, nil, err
+		}
+		b, _ := json.Marshal(kept)
+		if err := writeAtomic(filepath.Join(launch, launchSlotsFile), b); err != nil {
+			_ = RemoveAll(launch)
+			return Grant{}, nil, err
+		}
+	}
+	_ = RemoveAll(prev.dir)
+	m.logf("cache %s: continues launch %s, %d path(s) by overlay (run %s)", r.Key, filepath.Base(prev.dir), len(g.Mounts), r.Run)
+	if m.testHook != nil {
+		m.testHook("restored")
+	}
+	return g, nil, nil
 }
 
 func (m *Manager) overlay() (bool, string) {
@@ -307,30 +414,6 @@ func overlapsAny(p string, list []string) string {
 		}
 	}
 	return ""
-}
-
-// copyIn clones (or, under CopyMax, copies) a cache path into target,
-// below home, replacing what the target held. Its version is pinned by the
-// caller.
-func (m *Manager) copyIn(home, lower, target string) error {
-	if err := prepareTarget(home, target, true); err != nil {
-		return err
-	}
-	if err := os.Remove(target); err != nil {
-		return err
-	}
-	if cloneDir(lower, target) {
-		return nil
-	}
-	max := m.CopyMax
-	if max <= 0 {
-		max = 1 << 30
-	}
-	if err := copyTree(lower, target, max); err != nil {
-		_ = RemoveAll(target)
-		return err
-	}
-	return nil
 }
 
 func (m *Manager) pin(dir string) {
@@ -497,7 +580,7 @@ func (m *Manager) publish(ctx context.Context, launch string) (*Published, error
 	}
 	var learned []string
 	m.Store.Locked(func() {
-		learned = m.Store.learn(id, written, m.minSize(), m.minRuns(), m.Protected)
+		learned = m.Store.learn(key.TemplateID(), written, m.minSize(), m.minRuns(), m.Protected)
 	})
 	set := map[string]bool{}
 	for _, p := range learned {
@@ -511,18 +594,21 @@ func (m *Manager) publish(ctx context.Context, launch string) (*Published, error
 		m.logf("cache %s: nothing learned yet to publish (run %s)", key, filepath.Base(launch))
 		return nil, nil
 	}
-	// What the version would take, before anything is copied.
-	var est int64
+	// What the version would take, before anything is copied: whole, and
+	// new (what it holds of the version it restored is hard-linked, and
+	// that version is in use: counted already).
+	var est, fresh int64
 	for _, p := range paths {
-		est += m.estimate(home, p, bySlot)
+		w, f := m.estimate(home, p, bySlot)
+		est, fresh = est+w, fresh+f
 	}
 	if m.MaxSize > 0 {
 		if est > m.MaxSize {
 			m.logf("cache %s: %s is more than the store's cap (%s): not published", key, HumanSize(est), HumanSize(m.MaxSize))
 			return nil, nil
 		}
-		if room := m.room(); est > room {
-			m.logf("cache %s: %s is more than the room left beside the caches in use (%s): not published", key, HumanSize(est), HumanSize(max(room, 0)))
+		if room := m.room(); fresh > room {
+			m.logf("cache %s: %s is more than the room left beside the caches in use (%s): not published", key, HumanSize(fresh), HumanSize(max(room, 0)))
 			return nil, nil
 		}
 	}
@@ -553,6 +639,14 @@ func (m *Manager) publish(ctx context.Context, launch string) (*Published, error
 		}
 		built = append(built, p)
 	}
+	// What the run filled may hold a credential (secrets.go).
+	secrets, known := m.secretsFor(launch)
+	if !known {
+		st.abort()
+		m.logf("cache %s: the credentials run %s was given are not known to this conductor (it restarted): not published", key, filepath.Base(launch))
+		return nil, nil
+	}
+	built = m.screen(key, st.Data, built, secrets)
 	if len(built) == 0 {
 		st.abort()
 		return nil, nil
@@ -578,18 +672,23 @@ func (m *Manager) publish(ctx context.Context, launch string) (*Published, error
 	return &Published{Key: key, Entry: e, Home: home, Dispatch: readSmall(filepath.Join(launch, launchDispatchFile))}, nil
 }
 
-// estimate is what building p would take.
-func (m *Manager) estimate(home, p string, bySlot map[string]slot) int64 {
+// estimate is what building p would take: whole, and new (the restored
+// version's files it keeps are hard-linked, not copied).
+func (m *Manager) estimate(home, p string, bySlot map[string]slot) (whole, fresh int64) {
 	if s, ok := bySlot[p]; ok {
-		return DiskUsage(filepath.Join(s.Entry, "data", filepath.FromSlash(p))) + DiskUsage(s.Upper)
+		up := DiskUsage(s.Upper)
+		return DiskUsage(filepath.Join(s.Entry, "data", filepath.FromSlash(p))) + up, up
 	}
 	n := DiskUsage(filepath.Join(home, filepath.FromSlash(p)))
+	f := n
 	for q, s := range bySlot {
 		if strings.HasPrefix(q, p+"/") {
-			n += DiskUsage(filepath.Join(s.Entry, "data", filepath.FromSlash(q))) + DiskUsage(s.Upper)
+			up := DiskUsage(s.Upper)
+			n += DiskUsage(filepath.Join(s.Entry, "data", filepath.FromSlash(q))) + up
+			f += up
 		}
 	}
-	return n
+	return n, f
 }
 
 // build makes dst what the launch saw at ~/p: the overlay's merge where it
@@ -639,13 +738,13 @@ func lowerOf(s slot) string {
 // room is what the cap leaves beside the versions live launches use.
 func (m *Manager) room() int64 {
 	used := m.Store.Used()
-	var inUse int64
+	var inUse []Entry
 	for _, e := range m.Store.List() {
 		if used[e.Dir] || m.pinned(e.Dir) {
-			inUse += e.Size
+			inUse = append(inUse, e)
 		}
 	}
-	return m.MaxSize - inUse
+	return m.MaxSize - usageOf(inUse).total
 }
 
 // Evict trims the store to MaxSize: superseded versions first, then the
@@ -672,6 +771,11 @@ func (m *Manager) Evict() {
 			m.testHook("evict-used")
 		}
 		evicted = m.Store.Evict(limit, func(d string) bool { return m.pinned(d) || used[d] })
+		named := map[string]bool{}
+		for _, l := range m.Store.launches() {
+			named[readSmall(filepath.Join(l.dir, launchKeyFile))] = true
+		}
+		m.Store.sweepKeys(named)
 	})
 	for _, e := range evicted {
 		m.logf("cache %s: evicted %s (%s, last used %s)", e.Key, e.Version, HumanSize(e.Size), e.LastUsed.Format(time.RFC3339))

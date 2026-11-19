@@ -128,7 +128,7 @@ func TestLearnThresholdsAndExclusions(t *testing.T) {
 	if p := h.finish(t, "d1", true); p != nil {
 		t.Fatalf("published after one run of two: %+v", p)
 	}
-	if l := h.m.Store.Learned(k.ID()); len(l) != 0 {
+	if l := h.m.Store.Learned(k.TemplateID()); len(l) != 0 {
 		t.Fatalf("learned after one run: %v", l)
 	}
 	req, g = h.launch(t, "d2", k)
@@ -138,8 +138,8 @@ func TestLearnThresholdsAndExclusions(t *testing.T) {
 		t.Fatalf("nothing published after two runs\n%s", strings.Join(h.logs, "\n"))
 	}
 	want := []string{".cache/fake", ".cargo/registry"}
-	if !slices.Equal(p.Entry.Paths, want) || !slices.Equal(h.m.Store.Learned(k.ID()), want) {
-		t.Fatalf("paths %v learned %v, want %v", p.Entry.Paths, h.m.Store.Learned(k.ID()), want)
+	if !slices.Equal(p.Entry.Paths, want) || !slices.Equal(h.m.Store.Learned(k.TemplateID()), want) {
+		t.Fatalf("paths %v learned %v, want %v", p.Entry.Paths, h.m.Store.Learned(k.TemplateID()), want)
 	}
 	var found []string
 	_ = filepath.Walk(filepath.Join(p.Entry.Dir, "data"), func(q string, fi os.FileInfo, err error) error {
@@ -159,12 +159,12 @@ func TestLearnThresholdsAndExclusions(t *testing.T) {
 func TestLearnedStateCannotNameAProtectedPath(t *testing.T) {
 	h := newHarness(t, true)
 	k := key("forged")
-	if err := os.MkdirAll(h.m.Store.keyDir(k.ID()), 0o700); err != nil {
+	if err := os.MkdirAll(h.m.Store.templateDir(k.TemplateID()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	write(t, h.m.Store.learnFile(k.ID()), `{"paths":[".ssh",".claude","..","/etc",".cache/ok"]}`)
+	write(t, h.m.Store.learnFile(k.TemplateID()), `{"paths":[".ssh",".claude","..","/etc",".cache/ok"]}`)
 	h.m.Store.Locked(func() {
-		got := h.m.Store.learn(k.ID(), nil, 1, 1, h.m.Protected)
+		got := h.m.Store.learn(k.TemplateID(), nil, 1, 1, h.m.Protected)
 		if !slices.Equal(got, []string{".cache/ok"}) {
 			t.Fatalf("learned %v", got)
 		}
@@ -289,7 +289,7 @@ func TestFailedRunPublishesNothing(t *testing.T) {
 	if p := h.finish(t, "d1", false); p != nil {
 		t.Fatalf("published %+v", p)
 	}
-	if len(h.m.Store.versions(k.ID())) != 0 || len(h.m.Store.Learned(k.ID())) != 0 {
+	if len(h.m.Store.versions(k.ID())) != 0 || len(h.m.Store.Learned(k.TemplateID())) != 0 {
 		t.Fatal("a failed run published or taught")
 	}
 	if _, err := os.Lstat(filepath.Dir(g.Lock)); err == nil {

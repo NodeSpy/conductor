@@ -76,10 +76,13 @@ func mergeLayers(lower, upper, dst string, budget *int64) error {
 			if err := removeIfAny(t); err != nil {
 				return err
 			}
-			if err := os.Rename(p, t); err == nil {
-				return nil
+			if err := os.Rename(p, t); err != nil {
+				return copyFile(p, t, fi.Mode().Perm())
 			}
-			return copyFile(p, t, fi.Mode().Perm())
+			// What a published copy holds is plain files: no setuid,
+			// setgid or sticky bit survives the move in (copyFromHome
+			// masks the same way).
+			return os.Chmod(t, fi.Mode().Perm())
 		case d.Type()&os.ModeSymlink != 0:
 			l, err := os.Readlink(p)
 			if err != nil {

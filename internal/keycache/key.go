@@ -47,6 +47,19 @@ func (k Key) ID() string {
 	return hex.EncodeToString(h.Sum(nil)[:16])
 }
 
+// TemplateID names the key's template (its namespace and template, not
+// what it rendered to): what runs of the template's keys learn is kept
+// under it, so a key new for every run of a step (a per-PR key) starts
+// from what the step's earlier keys learned.
+func (k Key) TemplateID() string {
+	h := sha256.New()
+	h.Write([]byte("keycache/template/v1"))
+	for _, f := range []string{k.Namespace, k.Template} {
+		fmt.Fprintf(h, "\x00%d:%s", len(f), f)
+	}
+	return hex.EncodeToString(h.Sum(nil)[:16])
+}
+
 // String is the key as logs and the CLI show it.
 func (k Key) String() string {
 	if k.Namespace != "" {

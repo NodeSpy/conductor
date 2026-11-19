@@ -128,3 +128,22 @@ func cloneFd(src int, dst string, mode os.FileMode) bool {
 	}
 	return out.Close() == nil
 }
+
+// cloneTreeAt clones a whole tree in one call where the platform can
+// (macOS): never on Linux.
+func cloneTreeAt(src string, dfd int, name string) bool { return false }
+
+// cloneFileAt clones the open file src to name (absent) in dfd with
+// FICLONE; false when the filesystem cannot, with nothing left.
+func cloneFileAt(src, dfd int, name string, mode uint32) bool {
+	ofd, err := unix.Openat(dfd, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, mode)
+	if err != nil {
+		return false
+	}
+	if err := unix.IoctlFileClone(ofd, src); err != nil {
+		unix.Close(ofd)
+		_ = unix.Unlinkat(dfd, name, 0)
+		return false
+	}
+	return unix.Close(ofd) == nil
+}

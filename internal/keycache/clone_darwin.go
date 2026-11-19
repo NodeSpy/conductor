@@ -45,3 +45,22 @@ func cloneFd(src int, dst string, mode os.FileMode) bool {
 	_ = os.Chmod(dst, mode)
 	return true
 }
+
+// cloneTreeAt clones the tree src (a published version's: conductor's
+// own) to name (absent) in the directory dfd in one clonefileat(2): APFS
+// copies directories recursively, sharing every file's blocks. The
+// destination is named under dfd, never by a path through the home.
+func cloneTreeAt(src string, dfd int, name string) bool {
+	return unix.Clonefileat(unix.AT_FDCWD, src, dfd, name, unix.CLONE_NOFOLLOW) == nil
+}
+
+// cloneFileAt clones the open file src to name (absent) in dfd
+// (fclonefileat); false when the volume cannot, with nothing left.
+func cloneFileAt(src, dfd int, name string, mode uint32) bool {
+	if err := unix.Fclonefileat(src, dfd, name, unix.CLONE_NOFOLLOW); err != nil {
+		_ = unix.Unlinkat(dfd, name, 0)
+		return false
+	}
+	_ = unix.Fchmodat(dfd, name, mode, unix.AT_SYMLINK_NOFOLLOW)
+	return true
+}

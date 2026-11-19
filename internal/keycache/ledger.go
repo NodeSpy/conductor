@@ -41,6 +41,7 @@ const (
 	launchDispatchFile = "dispatch"
 	launchSlotsFile    = "slots"
 	launchEndedFile    = "ended"
+	launchCopyingFile  = "copying"
 )
 
 // DefaultLaunchGrace is how long a launch's entry counts as live before its
@@ -181,24 +182,28 @@ func (s *Store) launches() []launchEntry {
 	return out
 }
 
-// Used are the published caches a live launch's overlays sit on.
+// Used are the published caches a live launch's overlays sit on, or a
+// copy restore is reading.
 func (s *Store) Used() map[string]bool {
 	out := map[string]bool{}
 	for _, l := range s.launches() {
 		if !l.live {
 			continue
 		}
-		f, err := os.Open(filepath.Join(l.dir, launchUsesFile))
-		if err != nil {
-			continue
-		}
-		sc := bufio.NewScanner(io.LimitReader(f, 1<<20))
-		for sc.Scan() {
-			if t := strings.TrimSpace(sc.Text()); t != "" {
-				out[t] = true
+		// What its overlays sit on, and what a copy restore is reading.
+		for _, name := range []string{launchUsesFile, launchCopyingFile} {
+			f, err := os.Open(filepath.Join(l.dir, name))
+			if err != nil {
+				continue
 			}
+			sc := bufio.NewScanner(io.LimitReader(f, 1<<20))
+			for sc.Scan() {
+				if t := strings.TrimSpace(sc.Text()); t != "" {
+					out[t] = true
+				}
+			}
+			f.Close()
 		}
-		f.Close()
 	}
 	return out
 }

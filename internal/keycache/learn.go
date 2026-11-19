@@ -26,9 +26,13 @@ import (
 // subdirectories are the candidates instead, down to maxLearnDepth. A
 // candidate that is, or is inside, a protected path is never one.
 //
-// What makes a candidate a learned path: a run of the key wrote at least
-// MinSize there, in at least MinRuns successful runs of the key. Once
-// learned, a path stays learned for the key (its runs restore it and write
+// What makes a candidate a learned path: a run wrote at least MinSize
+// there, in at least MinRuns successful runs of the key's TEMPLATE (its
+// namespace and template text, whatever each run rendered it to). A step
+// whose key is new for every run (pr-{{.repo}}-{{.pr}}) does the same work
+// each time, so its first run of a new key publishes what the step's
+// earlier runs learned, and that key's next run gets a hit. Once learned,
+// a path stays learned for the template (its runs restore it and write
 // little more). A learned path inside another is dropped for the outer.
 
 // containers are the home-relative directories whose children are cache
@@ -105,28 +109,29 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// learnState is what a key's runs taught: how many successful runs filled
+// learnState is what a template's runs taught: how many successful runs filled
 // each candidate past the threshold, and the paths that made it.
 type learnState struct {
 	Seen  map[string]int `json:"seen,omitempty"`
 	Paths []string       `json:"paths,omitempty"`
 }
 
-func (s *Store) readLearn(id string) learnState {
+func (s *Store) readLearn(tid string) learnState {
 	var st learnState
-	if b, err := os.ReadFile(s.learnFile(id)); err == nil {
+	if b, err := os.ReadFile(s.learnFile(tid)); err == nil {
 		_ = json.Unmarshal(b, &st)
 	}
 	return st
 }
 
-// Learned is a key's learned paths.
-func (s *Store) Learned(id string) []string { return s.readLearn(id).Paths }
+// Learned is a template's learned paths (Key.TemplateID).
+func (s *Store) Learned(tid string) []string { return s.readLearn(tid).Paths }
 
 // learn records one successful run's writes (home-relative path → bytes)
-// and returns the key's learned paths. The caller holds the store's lock.
-func (s *Store) learn(id string, written map[string]int64, minSize int64, minRuns int, protected []string) []string {
-	st := s.readLearn(id)
+// under its key's template (tid, Key.TemplateID) and returns the
+// template's learned paths. The caller holds the store's lock.
+func (s *Store) learn(tid string, written map[string]int64, minSize int64, minRuns int, protected []string) []string {
+	st := s.readLearn(tid)
 	if st.Seen == nil {
 		st.Seen = map[string]int{}
 	}
@@ -155,8 +160,8 @@ func (s *Store) learn(id string, written map[string]int64, minSize int64, minRun
 		}
 	}
 	if b, err := json.Marshal(st); err == nil {
-		if os.MkdirAll(s.keyDir(id), 0o700) == nil {
-			_ = writeAtomic(s.learnFile(id), b)
+		if os.MkdirAll(s.templateDir(tid), 0o700) == nil {
+			_ = writeAtomic(s.learnFile(tid), b)
 		}
 	}
 	return st.Paths
