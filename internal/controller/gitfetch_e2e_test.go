@@ -257,11 +257,13 @@ command -v ssh >/dev/null && echo "has ssh" || true
 `
 
 // teachProbe is a teaching launch: a default-branch run of a teach: step
+// (its cache holds the dependency as a package manager unpacks it: no
+// .git, which a publish refuses)
 // whose tool fetches the private dependency and fills its cache.
 const teachProbe = `
 rm -rf "$TMPDIR/dep"
 if git clone -q git@forge.test:org/dep.git "$TMPDIR/dep" >"$TMPDIR/clone" 2>&1 && test -f "$TMPDIR/dep/index.js"; then echo "ok teaching clone"; else echo "FAIL teaching clone"; cat "$TMPDIR/clone"; fi
-mkdir -p ~/.cache/fake && cp -r "$TMPDIR/dep" ~/.cache/fake/dep && head -c 262144 /dev/zero >~/.cache/fake/blob
+mkdir -p ~/.cache/fake && cp -r "$TMPDIR/dep" ~/.cache/fake/dep && rm -rf ~/.cache/fake/dep/.git && head -c 262144 /dev/zero >~/.cache/fake/blob
 needle="s3cr3t-""forge"
 env | grep -q "$needle"; [ $? != 0 ]; if [ $? = 0 ]; then echo "ok the secret is not in the environment"; else echo "FAIL the secret is in the environment"; fi
 `
