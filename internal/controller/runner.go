@@ -86,6 +86,13 @@ type controllerRunner struct {
 	bound map[string]bool
 	// since: when each live session opened (LiveAgents).
 	since map[string]time.Time
+	// settled marks a foreground dispatch's sessions once Dispatch returned:
+	// their turn is over, whatever the outcome. They stay in live — Archive
+	// still closes them and releases their workspace (a failed step keeps
+	// its agent until then) — but they are no longer listed (LiveAgents)
+	// nor count toward the PR+kind gate (HasLiveAgent); byPR was already
+	// decremented for them.
+	settled map[string]bool
 	// byDispatch binds a dispatch id to the session it opened, and inflight
 	// marks a dispatch whose Dispatch call is still running: a step.done
 	// (token-bound to the dispatch id) resolves through them.
@@ -148,6 +155,16 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	}
 	tk := r.beginStart(req)
 	defer r.endStart(tk)
+	// A foreground dispatch's turn is over when Dispatch returns, on every
+	// path — success, a failed or refused turn, an output_schema failure
+	// after its corrective retry, a stop, an interruption, the resume
+	// fallback's fresh agent. Settle what it opened so a session the flow
+	// keeps (a failed step's) is not reported live — or gating its PR —
+	// until the daemon restarts.
+	var opened []string
+	if req.Wait && !req.Interactive {
+		defer func() { r.settle(opened...) }()
+	}
 	wsID, cwd, kept, fallback, err := r.workspace(ctx, req)
 	if err != nil {
 		// The workspace/worktree never came up — the dispatch never
@@ -177,6 +194,7 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	}
 
 	id := r.track(req, sess)
+	opened = append(opened, id)
 	ref.AgentID = id
 	if r.stopIfStopped(ctx, tk, id, sess) && !(req.Wait && !req.Interactive) {
 		// Nothing below waits for the turn: report the stop now.
@@ -211,6 +229,7 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 					return ref, dispatch.Unrecoverable(err)
 				}
 				id = r.track(req, sess)
+				opened = append(opened, id)
 				ref.AgentID = id
 				watchActivity(req, sess)
 				if w, ok := sess.(waiter); ok {
@@ -382,6 +401,9 @@ func (r *controllerRunner) LiveAgents() []LiveAgent {
 	}
 	out := make([]LiveAgent, 0, len(r.live))
 	for id := range r.live {
+		if r.settled[id] {
+			continue
+		}
 		target, kind, _ := strings.Cut(r.bucket[id], "\x00")
 		out = append(out, LiveAgent{ID: id, Runtime: r.c.Name(), Transport: string(r.c.Transport()),
 			Target: target, Kind: kind, Dispatch: disp[id], Since: r.since[id]})
@@ -542,6 +564,33 @@ func (r *controllerRunner) forget(id string) {
 	}
 	bucket := r.bucket[id]
 	delete(r.bucket, id)
+	if r.settled[id] {
+		// settle already took it out of the PR+kind count.
+		delete(r.settled, id)
+		return
+	}
+	r.unbucket(bucket)
+}
+
+// settle marks a foreground dispatch's sessions finished (see settled):
+// out of the listing and the PR+kind gate, still closable by Archive.
+func (r *controllerRunner) settle(ids ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, id := range ids {
+		if _, ok := r.live[id]; !ok || r.settled[id] {
+			continue
+		}
+		if r.settled == nil {
+			r.settled = map[string]bool{}
+		}
+		r.settled[id] = true
+		r.unbucket(r.bucket[id])
+	}
+}
+
+// unbucket drops one session from its PR+kind count. Caller holds r.mu.
+func (r *controllerRunner) unbucket(bucket string) {
 	if n := r.byPR[bucket]; n <= 1 {
 		delete(r.byPR, bucket)
 	} else {
