@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -97,8 +98,8 @@ steps:
 	if len(top.RestoreFrom) != 1 || top.RestoreFrom[0].Value != "o/r" || top.RestoreFrom[0].Template != "{{.repo}}" {
 		t.Errorf("restore_from %+v", top.RestoreFrom)
 	}
-	if top.Shared || by["own"].Cache.Shared {
-		t.Error("a key no step restores from is shared")
+	if top.Teach || by["own"].Cache.Teach {
+		t.Error("a step that did not declare teach: teaches")
 	}
 	f := got()
 	for _, step := range []string{"plain", "own", "top"} {
@@ -172,9 +173,10 @@ steps:
 	}
 }
 
-// A key another step restores from is shared (a default-branch run of it
-// may teach its repository's git dependencies); per namespace and template.
-func TestStepCacheShared(t *testing.T) {
+// Only a step that declares cache: { teach: true } teaches; restoring from
+// a key no longer makes its runs teach (an implicit grant of a credential
+// for any repository on the host).
+func TestStepCacheTeachIsDeclared(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
@@ -184,6 +186,9 @@ workflows:
   warm:
     steps:
       - { id: w, type: agent, name: a, prompt: p, cache: { key: "{{.repo}}" } }
+  teacher:
+    steps:
+      - { id: t, type: agent, name: a, prompt: p, cache: { key: "{{.repo}}", teach: true } }
   fix:
     steps:
       - { id: f, type: agent, name: a, prompt: p, cache: { key: "pr-{{.repo}}", restore_from: ["{{.repo}}"] } }
@@ -194,16 +199,26 @@ workflows:
 on: svc.ping
 steps:
   - { id: a, workflow: warm }
-  - { id: b, workflow: fix }
+  - { id: b, workflow: teacher }
+  - { id: c, workflow: fix }
 `))
-	shared := map[string]bool{}
+	teach := map[string]bool{}
 	for _, r := range rig.Agents.requests() {
 		if r.Cache != nil {
-			shared[r.Step.ID] = r.Cache.Shared
+			teach[r.Step.ID] = r.Cache.Teach
 		}
 	}
-	if !shared["w"] || shared["f"] {
-		t.Fatalf("shared %v", shared)
+	if teach["w"] || !teach["t"] || teach["f"] {
+		t.Fatalf("teach %v, want only t", teach)
+	}
+}
+
+// An agent-authored step may never declare teach: (nor any cache:).
+func TestAgentAuthoredStepCannotTeach(t *testing.T) {
+	s := config.Step{ID: "x", Type: "agent", Prompt: "p", Cache: &config.StepCache{Key: "{{.repo}}", Teach: true}}
+	err := checkAgentAuthoredFields("plan", &s)
+	if err == nil || !strings.Contains(err.Error(), "cache.teach") {
+		t.Fatalf("an agent-authored step declared teach: %v", err)
 	}
 }
 

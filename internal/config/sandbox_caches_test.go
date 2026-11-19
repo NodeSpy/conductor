@@ -83,13 +83,14 @@ func TestSandboxCachesRefused(t *testing.T) {
 	}
 }
 
-// A step's cache: and a workflow's default load; CacheShared knows a key
-// another step restores from, per namespace and by template.
-func TestStepCacheLoadsAndShared(t *testing.T) {
+// A step's cache: and a workflow's default load, teach: with them.
+func TestStepCacheLoads(t *testing.T) {
 	cfg, err := loadCfg(t, cacheBase+`workflows:
   warm:
     cache: { key: " {{.repo}} " }
     steps: [{ id: w, type: agent, prompt: warm }]
+  teacher:
+    steps: [{ id: t, type: agent, prompt: t, cache: { key: "{{.repo}}", teach: true } }]
   fix:
     steps:
       - id: f
@@ -106,11 +107,11 @@ func TestStepCacheLoadsAndShared(t *testing.T) {
 	if s := cfg.Workflows["fix"].Steps[0]; s.Cache == nil || len(s.Cache.RestoreFrom) != 1 {
 		t.Fatalf("step cache %+v", s.Cache)
 	}
-	if !cfg.CacheShared("", "{{.repo}}") || !cfg.CacheShared("", " {{.repo}}") {
-		t.Fatal("a restored-from key is not shared")
+	if s := cfg.Workflows["teacher"].Steps[0]; s.Cache == nil || !s.Cache.Teach {
+		t.Fatalf("teach: not loaded %+v", s.Cache)
 	}
-	if cfg.CacheShared("", "pr-{{.repo}}-{{.pr}}") || cfg.CacheShared("some-pack", "{{.repo}}") {
-		t.Fatal("shared beyond its template or namespace")
+	if s := cfg.Workflows["fix"].Steps[0]; s.Cache.Teach || cfg.Workflows["warm"].Cache.Teach {
+		t.Fatal("teach: set where it was not declared")
 	}
 }
 

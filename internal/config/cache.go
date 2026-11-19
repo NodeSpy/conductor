@@ -14,6 +14,7 @@ import (
 //	cache:
 //	  key: "pr-{{.repo}}-{{.pr}}"      # this step's cache: restored from, and published to
 //	  restore_from: ["{{.repo}}"]      # read-only fallbacks, in order
+//	  teach: true                      # a default-branch run teaches the repo's git deps
 //
 // Each entry is a template over the step's facts, rendered the way a memory
 // scope key is (memory.RenderScopeKey). A step publishes only to its own
@@ -25,6 +26,14 @@ import (
 type StepCache struct {
 	Key         string   `yaml:"key"`
 	RestoreFrom []string `yaml:"restore_from,omitempty"`
+	// Teach: a run of this step in conductor's own fresh checkout of a
+	// trusted target's default branch head learns the repository's git
+	// fetch dependencies (docs/wiki/Step-Caches.md). The operator's (or a
+	// pack's) to declare: an agent-authored step can never set cache: at
+	// all. Teaching gives the launch a fetch credential for any repository
+	// on the forge host, so declare it only on a step whose prompt no
+	// event's sender writes.
+	Teach bool `yaml:"teach,omitempty"`
 }
 
 // maxRestoreFrom bounds a step's fallbacks.
@@ -71,33 +80,3 @@ func (c *StepCache) validate() error {
 
 // CacheTemplate is a cache key template as its identity: trimmed.
 func CacheTemplate(t string) string { return strings.TrimSpace(t) }
-
-// CacheShared reports whether some step (or workflow default) of the
-// config lists the key template tmpl of namespace ns in its restore_from:
-// the key is one other runs trust to start from.
-func (c *Config) CacheShared(ns, tmpl string) bool {
-	tmpl = CacheTemplate(tmpl)
-	hit := func(sc *StepCache, pack string) bool {
-		if sc == nil || pack != ns {
-			return false
-		}
-		for _, r := range sc.RestoreFrom {
-			if CacheTemplate(r) == tmpl {
-				return true
-			}
-		}
-		return false
-	}
-	for _, wf := range c.Workflows {
-		if hit(wf.Cache, wf.PackInstance) {
-			return true
-		}
-	}
-	found := false
-	c.WalkSteps(func(_ IdentityScope, _ int, s *Step) {
-		if !found && hit(s.Cache, s.PackInstance) {
-			found = true
-		}
-	})
-	return found
-}

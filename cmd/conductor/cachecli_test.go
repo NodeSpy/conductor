@@ -34,7 +34,7 @@ func TestSandboxCachesListAndClear(t *testing.T) {
 	other := keycache.Key{Template: "{{.repo}}", Value: "acme/api"}
 	pub(shared)
 	inUse := pub(pr)
-	pub(other)
+	otherE := pub(other)
 	// A live launch overlays the PR's cache: conductor's ledger beside the
 	// store names what its overlays sit on. Named for when it was restored,
 	// so it is live within the grace.
@@ -71,6 +71,29 @@ func TestSandboxCachesListAndClear(t *testing.T) {
 	}
 	if len(st.List()) != 2 {
 		t.Fatalf("left %d", len(st.List()))
+	}
+	// A copy restore the daemon is doing right now pins its version on
+	// disk: clear sees it without asking the daemon.
+	copying := filepath.Join(store, ".layers", fmt.Sprintf("%d-r2", time.Now().UnixNano()))
+	if err := os.MkdirAll(copying, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for f, v := range map[string]string{"home": filepath.Join(root, "home2"), "key": other.ID(), "dispatch": "d2", "copying": otherE.Dir + "\n"} {
+		if err := os.WriteFile(filepath.Join(copying, f), []byte(v), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, _ = captureStdout(t, func() error {
+		if c := cmdSandboxCaches(append([]string{"clear"}, append(args, other.ID())...)); c != 1 {
+			t.Errorf("clear of a version being copied exit %d", c)
+		}
+		return nil
+	})
+	if !strings.Contains(out, "kept acme/api") {
+		t.Fatalf("clear removed a version the daemon is copying:\n%s", out)
+	}
+	if err := os.RemoveAll(copying); err != nil {
+		t.Fatal(err)
 	}
 	// --force removes it; another key is untouched.
 	captureStdout(t, func() error {

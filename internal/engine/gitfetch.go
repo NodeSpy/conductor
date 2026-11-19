@@ -25,11 +25,11 @@ import (
 //
 //   - A TEACHING launch of a repository may fetch any repository on the
 //     host the credential can read: a launch in conductor's own checkout of
-//     the default branch's head, by a step whose cache key another step
-//     restores from (agentsandbox.CacheBinding.Teach) — work whose output
-//     other runs already trust. The proxy hears each repository the forge
-//     served, and when the step succeeds and its cache is published that
-//     set replaces what the key's previous teaching run learned (a
+//     the default branch's head, by a step the operator (or a pack)
+//     declared cache: { teach: true } on (agentsandbox.CacheBinding.Teach).
+//     The proxy hears each repository the forge served, and when the step
+//     succeeds, its cache is published and its checkout is still at the
+//     head it started at, that set replaces what the key's previous teaching run learned (a
 //     dependency it no longer fetched drops off).
 //   - Every other launch (a dispatch on a PR branch, a review, a fixer, a
 //     `conductor sandbox exec` hand-off) gets the repository itself plus

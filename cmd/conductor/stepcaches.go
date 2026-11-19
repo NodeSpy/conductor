@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -45,6 +46,9 @@ func wireStepCaches(ctx context.Context, cfg *config.Config, gitProv *gitwt.Prov
 	done := m.Start(ctx)
 	stepCaches.Store(&stepCacheWiring{m: m, ctx: ctx, logf: logf})
 	dispatch.CacheFinisher = finishStepCache
+	controller.CacheSecrets = m.AddSecrets
+	controller.TeachLog = logf
+	controller.SetTeachStateDir(filepath.Join(config.StateDir(), "git-teaching"))
 	if gitProv != nil {
 		dispatch.CheckoutOnDefault = gitProv.OnDefault
 	}
@@ -52,6 +56,7 @@ func wireStepCaches(ctx context.Context, cfg *config.Config, gitProv *gitwt.Prov
 	return func() {
 		stepCaches.Store(nil)
 		dispatch.CacheFinisher, dispatch.CheckoutOnDefault = nil, nil
+		controller.CacheSecrets = nil
 		cancel()
 		select {
 		case <-done:

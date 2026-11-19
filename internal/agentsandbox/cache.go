@@ -11,7 +11,8 @@ type CacheBinding struct {
 	RestoreFrom []keycache.Key `json:"restore_from,omitempty"`
 	// Teach: a launch here learns the repository's git fetch dependencies
 	// (sandbox/gitauth.go). Set only for a trusted checkout that started at
-	// the repository's default branch head, by a step whose key another
-	// step restores from — work whose output other runs already trust.
+	// the repository's default branch head, by a step that declared
+	// cache: { teach: true } (the operator's or a pack's; never an
+	// agent-authored step's).
 	Teach bool `json:"teach,omitempty"`
 }

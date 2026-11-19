@@ -695,7 +695,9 @@ func startDetection(p Policy, self string, caps *sandbox.Spec, event func(string
 	diskOn := !p.Limits.Off && !p.Limits.DiskOff
 	if off {
 		removeTripwires(p.Home)
-		if !diskOn && unit == "" {
+		// A launch with caches always gets the closer: what it leaves
+		// running is killed before its step publishes what it filled.
+		if !diskOn && unit == "" && p.CacheLock == "" {
 			return "", nil, nil
 		}
 	}
@@ -768,6 +770,14 @@ func (d *detector) started(pid int) {
 		d.roots = map[int]uint64{}
 	}
 	d.roots[pid] = start
+	// A root that leads its own group (a cached macOS launch: RunPgroup)
+	// names the launch's group: killAll finds what it leaves running there
+	// even once the root is gone. Forgotten once the group is empty
+	// (noteGroups), and never the daemon's own (killAll).
+	if d.groups == nil {
+		d.groups = map[int]bool{}
+	}
+	d.groups[pid] = true
 }
 
 // launches are the running detectors, by marker.

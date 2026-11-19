@@ -84,6 +84,10 @@ func main() {
 	args := os.Args[2:]
 	var err error
 	switch cmd {
+	case agentsandbox.PgroupCommand:
+		// Internal: a cached macOS launch in a process group of its own
+		// (agentsandbox.RunPgroup).
+		os.Exit(agentsandbox.RunPgroup(args))
 	case "sandbox-net":
 		// Internal: the in-sandbox forwarder for enforced egress (#36 §15).
 		// Launched by conductor itself inside a namespace/container; not a

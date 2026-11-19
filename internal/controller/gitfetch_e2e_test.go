@@ -256,8 +256,8 @@ find "$HOME" "$TMPDIR" . -type f -exec grep -l "$needle" {} + 2>/dev/null | grep
 command -v ssh >/dev/null && echo "has ssh" || true
 `
 
-// teachProbe is a teaching launch: a default-branch run of a shared cache
-// key whose tool fetches the private dependency and fills its cache.
+// teachProbe is a teaching launch: a default-branch run of a teach: step
+// whose tool fetches the private dependency and fills its cache.
 const teachProbe = `
 rm -rf "$TMPDIR/dep"
 if git clone -q git@forge.test:org/dep.git "$TMPDIR/dep" >"$TMPDIR/clone" 2>&1 && test -f "$TMPDIR/dep/index.js"; then echo "ok teaching clone"; else echo "FAIL teaching clone"; cat "$TMPDIR/clone"; fi
@@ -275,7 +275,7 @@ env | grep -q "$needle"; [ $? != 0 ]; if [ $? = 0 ]; then echo "ok the secret is
 // only and refuses a push; the secret is never inside the sandbox. Without
 // one, the same launch fails as before. A dependency is learned only by a
 // teaching launch — conductor's own default-branch checkout running a step
-// whose cache key another step restores from — whose step succeeded and
+// that declared cache: { teach: true } — whose step succeeded and
 // published; a PR's launch never teaches, a failed step teaches nothing.
 func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	if testing.Short() {
@@ -358,7 +358,7 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	}
 	AgentSandbox = &SandboxWiring{Resolver: r, Relay: rel.Relay, GitFetch: true}
 
-	// The shared key a default-branch step publishes and PR steps restore
+	// The key a default-branch teach: step publishes and PR steps restore
 	// from; a PR step's own key.
 	shared := keycache.Key{Template: "{{.repo}}", Value: "acme/app"}
 	prKey := keycache.Key{Template: "pr-{{.repo}}-{{.pr}}", Value: "pr-acme/app-7"}
@@ -370,7 +370,7 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	defaultReq := func(id string) dispatch.Request {
 		req := dispatch.Request{DispatchID: id, Trigger: core.Trigger{TargetTrusted: true, Kind: "push",
 			Target: core.Target{Repo: "acme/app", BaseRef: "main"}},
-			Cache: &dispatch.CacheKeys{Key: shared, Shared: true}}
+			Cache: &dispatch.CacheKeys{Key: shared, Teach: true}}
 		req.Action.Checkout = "branch-off"
 		return req
 	}
@@ -429,7 +429,7 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		recMu.Lock()
 		defer recMu.Unlock()
 		for _, r := range recs {
-			if strings.Contains(r.Reason, "git credential withheld for "+repo+": not a learned dependency of acme/app; it is learned when a default-branch run of a shared cache key fetches it") {
+			if strings.Contains(r.Reason, "git credential withheld for "+repo+": not a learned dependency of acme/app; it is learned when a default-branch run of a step with cache: { teach: true } fetches it") {
 				return true
 			}
 		}

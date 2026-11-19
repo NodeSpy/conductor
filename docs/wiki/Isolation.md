@@ -208,13 +208,13 @@ conductor authenticates it:
   The connector declares only the host and the credential. Which
   repositories a launch's credential covers is conductor's:
   - A **teaching launch** ([[Step-Caches#private-git-dependencies]]) is a
-    run of a step whose cache key another step restores from, in a checkout
+    run of a step that declares `cache: { teach: true }`, in a checkout
     conductor made fresh at the head of the repository's **default
     branch**, for a target the platform assigned. Its credential covers any
     repository on the host the credential can read, and the proxy notes
     each one the forge served it. When its step succeeds and publishes its
-    cache, those are the repository's **learned dependencies** for that
-    key, replacing what the key's previous teaching run learned (a
+    cache, and the checkout is still at the head it started at, those are
+    the repository's **learned dependencies** for that key, replacing what the key's previous teaching run learned (a
     dependency the default branch dropped drops off). A failed step teaches
     nothing.
   - **Every other launch** — a dispatch on a PR branch, a review, a fixer,
@@ -224,13 +224,14 @@ conductor authenticates it:
     default branch and a teaching run learns it. Such a fetch goes without
     the credential, and its audit row says so: `git credential withheld for
     acme/newdep: not a learned dependency of acme/app; it is learned when a
-    default-branch run of a shared cache key fetches it`.
+    default-branch run of a step with cache: { teach: true } fetches it`.
 
   A teaching run runs the default branch's code, its dependencies' install
   scripts included: whatever that code fetches with the credential is
   learned. That is the trust you give your default branch anyway — it is
-  the code you deploy — and the trust every run that restores from the
-  key already gives what that step publishes. Repositories compare exactly, case-insensitively
+  the code you deploy. Declare `teach:` only on a step whose prompt no
+  event's sender writes (a push or schedule trigger): the launch holds a
+  credential for every repository on the host while it follows its prompt. Repositories compare exactly, case-insensitively
   (forges name them so), after the same checks as `https://` path entries:
   a dot segment, `//`, a backslash or a percent sign left after decoding
   never matches.

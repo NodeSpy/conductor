@@ -37,6 +37,10 @@ type toolInfo struct {
 	// seed are home-relative files copied once into a fresh identity home:
 	// the operator's settings for the tool (seedFilter drops history).
 	seed []string
+	// own are further home-relative paths the tool keeps (its native
+	// install, its logs): never created for it, but, like its state, never
+	// held or hidden by a step cache.
+	own []string
 	// endpoints are the hosts the tool's own model traffic needs — always
 	// allowed: a sandbox with no network is not one where the agent cannot
 	// think.
@@ -59,6 +63,7 @@ var tools = map[string]toolInfo{
 		state:     []string{".claude", ".claude.json", ".config/claude"},
 		login:     []string{".claude/.credentials.json"},
 		seed:      []string{".claude.json", ".claude/settings.json"},
+		own:       []string{".local/share/claude", ".cache/claude-cli-nodejs"},
 		endpoints: anthropicHosts,
 		baseEnv:   []string{"ANTHROPIC_BASE_URL"},
 		creds:     []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"},
@@ -140,7 +145,7 @@ func ToolStatePaths() []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, t := range tools {
-		for _, list := range [][]string{t.state, t.login, t.seed} {
+		for _, list := range [][]string{t.state, t.login, t.seed, t.own} {
 			for _, p := range list {
 				if !seen[p] {
 					seen[p] = true

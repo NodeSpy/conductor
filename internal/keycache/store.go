@@ -612,7 +612,21 @@ func (k KeyEntry) Matches(sel string) bool {
 	return sel == k.ID || sel == k.Key.Value || sel == k.Key.String()
 }
 
-// ClearKey removes a key whole — its versions and what it learned — when
+// ClearLearned removes what every template learned. The caller holds the
+// store's lock.
+func (s *Store) ClearLearned() error {
+	if _, err := os.Lstat(s.templatesRoot()); err != nil {
+		return nil
+	}
+	gone := filepath.Join(s.Dir, ".gone-templates-"+randHex())
+	if err := os.Rename(s.templatesRoot(), gone); err != nil {
+		return err
+	}
+	return RemoveAll(gone)
+}
+
+// ClearKey removes a key whole — its versions and its record (what its
+// template learned stays: ClearLearned) — when
 // no launch uses any of its versions (inUse), or regardless with force.
 // The caller holds the store's lock. kept: a version in use was left.
 func (s *Store) ClearKey(id string, inUse func(dir string) bool, force bool) (removed []Entry, kept bool, err error) {

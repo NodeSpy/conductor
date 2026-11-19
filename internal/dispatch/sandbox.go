@@ -212,11 +212,12 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 		}
 		if c := req.Cache; c != nil {
 			e.Cache = &agentsandbox.CacheBinding{Key: c.Key, RestoreFrom: c.RestoreFrom}
-			// Teaching the repository's git fetch dependencies is for work
-			// other runs already trust: a step whose key another step
-			// restores from, in conductor's own checkout of the default
-			// branch's head — never a PR's, never an artifact's.
-			e.Cache.Teach = c.Shared && e.Repo != "" && prev == nil && req.WorkspaceArchive == "" &&
+			// Teaching the repository's git fetch dependencies is for a step
+			// the operator (or a pack) declared teach: on, in conductor's
+			// own checkout of the default branch's head — never a PR's,
+			// never an artifact's. Its step's end checks the checkout is
+			// still at that head before anything is learned.
+			e.Cache.Teach = c.Teach && e.Repo != "" && prev == nil && req.WorkspaceArchive == "" &&
 				req.Trigger.TargetTrusted && CheckoutOnDefault != nil && CheckoutOnDefault(dir)
 		}
 		if layout.GitDir != "" || prev == nil {

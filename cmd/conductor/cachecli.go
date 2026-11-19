@@ -19,9 +19,11 @@ that declared it), the template, the paths it learned, the size of its
 newest published copy, when a launch last restored it, and whether a running
 launch uses it.
 
-clear removes a key whole: its published copies and the paths it learned
-(KEY is the key as shown, its rendered value, or its id). A copy a running
-launch has an overlay on is kept unless --force (the launch keeps the files
+clear removes a key whole: its published copies (KEY is the key as shown,
+its rendered value, or its id). What a key's template learned is shared by
+every key of the template and stays; clear --all removes it too. A copy a
+running launch has an overlay on, or that the daemon is copying into a
+launch's home right now, is kept unless --force (the launch keeps the files
 it has open; a later lookup in it fails).
 `
 
@@ -75,7 +77,10 @@ func cmdSandboxCaches(args []string) int {
 	}
 	n, kept, failed := 0, 0, false
 	// What is in use and its removal are one critical section with the
-	// daemon's restores: a launch never gets a copy being removed.
+	// daemon's restores: a launch never gets a copy being removed. In use
+	// is what the ledger on disk says — a live launch's overlays, and a
+	// copy restore in progress (the daemon pins its version there too) —
+	// so this process needs nothing of the daemon's memory.
 	st.Locked(func() {
 		used := st.Used()
 		for _, k := range st.Keys() {
@@ -104,6 +109,14 @@ func cmdSandboxCaches(args []string) int {
 			n++
 		}
 	})
+	if all && kept == 0 && !failed {
+		st.Locked(func() {
+			if err := st.ClearLearned(); err != nil {
+				fmt.Fprintf(os.Stderr, "conductor sandbox caches clear: learned paths: %v\n", err)
+				failed = true
+			}
+		})
+	}
 	if failed {
 		return 1
 	}

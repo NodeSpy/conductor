@@ -14,10 +14,10 @@ type CacheKeys struct {
 	Key keycache.Key `json:"key"`
 	// RestoreFrom are read-only fallbacks, in order.
 	RestoreFrom []keycache.Key `json:"restore_from,omitempty"`
-	// Shared: some step of the config restores from Key — other runs
-	// trust what this one publishes (the git fetch scope's teaching
-	// anchor, agentsandbox.Entry.Teach).
-	Shared bool `json:"shared,omitempty"`
+	// Teach: the step declared cache: { teach: true } — a default-branch
+	// run of it may teach its repository's git fetch dependencies
+	// (agentsandbox.CacheBinding.Teach).
+	Teach bool `json:"teach,omitempty"`
 }
 
 // CacheFinisher ends a dispatch's caching at its step's end (keycache

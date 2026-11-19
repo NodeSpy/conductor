@@ -598,6 +598,12 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		return nil, err
 	}
 	closers = append([]func(){wclean}, closers...)
+	if goos == "darwin" && cacheDone != nil {
+		// No pid namespace here: the launch gets a process group of its
+		// own, so what it leaves running is found by that group and
+		// killed (detection's closer) before its cache is published.
+		wrapped = append([]string{self, PgroupCommand, "--"}, wrapped...)
+	}
 	// Detection last: its closer runs first at cleanup — a final git check
 	// and the launch's leftover processes killed — before egress is cut.
 	marker, stopDetect, err := startDetection(p, self, spec, d.Event)

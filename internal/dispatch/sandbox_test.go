@@ -137,15 +137,14 @@ func TestReviewBy(t *testing.T) {
 	}
 }
 
-// A launch teaches its repository's git fetch dependencies only when it is
-// work other runs already trust: its step's key is one another step
-// restores from (Shared), in conductor's own fresh checkout of the default
-// branch's head, of a target the platform assigned. Each condition alone
+// A launch teaches its repository's git fetch dependencies only when its
+// step declared cache: { teach: true }, in conductor's own fresh checkout
+// of the default branch's head, of a target the platform assigned. Each condition alone
 // withholds it; the cache binding itself is kept.
 func TestRegisterSandboxWorkspaceTeachRule(t *testing.T) {
 	old := CheckoutOnDefault
 	t.Cleanup(func() { CheckoutOnDefault = old })
-	key := CacheKeys{Key: keycache.Key{Template: "{{.repo}}", Value: "a/b"}, Shared: true}
+	key := CacheKeys{Key: keycache.Key{Template: "{{.repo}}", Value: "a/b"}, Teach: true}
 	base := func() Request {
 		c := key
 		return Request{DispatchID: "d", Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "a/b"}}, Cache: &c}
@@ -157,13 +156,13 @@ func TestRegisterSandboxWorkspaceTeachRule(t *testing.T) {
 		prev  bool
 		teach bool
 	}{
-		"trusted default-branch run of a shared key": {def: onDefault, teach: true},
-		"a key no step restores from":                {mod: func(r *Request) { r.Cache.Shared = false }, def: onDefault},
-		"not on the default branch's head":           {def: func(string) bool { return false }},
-		"no provisioner to ask":                      {},
-		"a target the sender chose":                  {mod: func(r *Request) { r.Trigger.TargetTrusted = false }, def: onDefault},
-		"an artifact workspace":                      {mod: func(r *Request) { r.WorkspaceArchive = "/a.tar" }, def: onDefault},
-		"a workspace another dispatch worked in":     {def: onDefault, prev: true},
+		"trusted default-branch run of a teach: step": {def: onDefault, teach: true},
+		"a step that did not declare teach:":          {mod: func(r *Request) { r.Cache.Teach = false }, def: onDefault},
+		"not on the default branch's head":            {def: func(string) bool { return false }},
+		"no provisioner to ask":                       {},
+		"a target the sender chose":                   {mod: func(r *Request) { r.Trigger.TargetTrusted = false }, def: onDefault},
+		"an artifact workspace":                       {mod: func(r *Request) { r.WorkspaceArchive = "/a.tar" }, def: onDefault},
+		"a workspace another dispatch worked in":      {def: onDefault, prev: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			CheckoutOnDefault = tc.def

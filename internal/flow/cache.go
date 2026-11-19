@@ -61,7 +61,7 @@ func (r *Runner) stepCacheKeys(ctx context.Context, t core.Trigger, step config.
 		r.Log("%s step %s: no cache: %v", flowTag(t), id, err)
 		return nil
 	}
-	out := &dispatch.CacheKeys{Key: key, Shared: r.Cfg.CacheShared(ns, key.Template)}
+	out := &dispatch.CacheKeys{Key: key, Teach: sc.Teach}
 	for _, tmpl := range sc.RestoreFrom {
 		k, err := render(tmpl)
 		if err != nil {

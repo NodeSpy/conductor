@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
@@ -43,12 +44,13 @@ var AgentSandbox *SandboxWiring
 // none):
 //
 //   - TeachGitAuth mints a teaching launch's, for any repository on the
-//     host (engine.GitFetchTeach): a launch whose step's cache key another
-//     step restores from, in conductor's checkout of the default branch's
-//     head (agentsandbox.CacheBinding.Teach). TeachGitLearned records what
-//     it fetched (engine.GitLearned) once its step succeeds and its cache
-//     is published (TaughtGit) — the only way a repository's learned
-//     dependencies change.
+//     host (engine.GitFetchTeach): a launch of a step that declared
+//     cache: { teach: true }, in conductor's checkout of the default
+//     branch's head (agentsandbox.CacheBinding.Teach). TeachGitLearned
+//     records what it fetched (engine.GitLearned) once its step succeeds,
+//     its cache is published and its checkout is still at that head
+//     (TaughtGit) — the only way a repository's learned dependencies
+//     change.
 //   - ScopedGitAuth mints a hand-off's: the repository and its learned
 //     dependencies (engine.GitFetchFor).
 var (
@@ -210,7 +212,9 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 		// Applied by the launch's egress proxy; never in the agent's env.
 		pol.GitAuth = a.req.Credentials.Git
 		if c := entry.Cache; c != nil && c.Teach && entry.Repo != "" && entry.Dispatch != "" && TeachGitAuth != nil {
-			pol.GitAuth = teachingGitAuth(entry.Dispatch, entry.Repo, c.Key.ID())
+			if auth, ok := teachingGitAuth(entry); ok {
+				pol.GitAuth = auth
+			}
 		}
 	}
 	launch, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
@@ -229,6 +233,10 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	})
 	if err != nil {
 		return nil, "", nil, nil, fmt.Errorf("agent sandbox: %w — the agent is not launched unsandboxed", err)
+	}
+	if pol.CacheLock != "" && CacheSecrets != nil {
+		// What its step's end publishes is checked for these (keycache).
+		CacheSecrets(pol.CacheLock, launchSecrets(a.req, pol, launch.Env))
 	}
 	a.exposed = launch.Exposed
 	return launch.Argv, launch.Dir, launch.Env, launch.Cleanup, nil
@@ -431,4 +439,40 @@ func confinedEntry(dir string) (agentsandbox.Entry, error) {
 func isWithin(p, dir string) bool {
 	rel, err := filepath.Rel(dir, p)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
+}
+
+// CacheSecrets records the credential values a cached launch (its cache
+// lock) was given, so its publish leaves out any file holding one
+// (keycache.Manager.AddSecrets). nil: caches are off. Wired at boot.
+var CacheSecrets func(lock string, vals []string)
+
+// credentialEnvRE names an environment variable that carries a credential.
+var credentialEnvRE = regexp.MustCompile(`(?i)(token|secret|password|passwd|credential|api_?key|auth|private_?key|session)`)
+
+// launchSecrets are the credential values a launch was given: the
+// dispatch's credentials (env and template values, git fetch secrets), its
+// skill token, and any variable of its environment named like a
+// credential.
+func launchSecrets(req *dispatch.Request, pol agentsandbox.Policy, env []string) []string {
+	var out []string
+	if req != nil {
+		for _, v := range req.Credentials.Env {
+			out = append(out, v)
+		}
+		for _, v := range req.Credentials.Templates {
+			out = append(out, v)
+		}
+	}
+	for _, g := range pol.GitAuth {
+		out = append(out, g.Secret)
+	}
+	if pol.Token != "" {
+		out = append(out, pol.Token)
+	}
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && credentialEnvRE.MatchString(k) {
+			out = append(out, v)
+		}
+	}
+	return out
 }

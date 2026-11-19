@@ -297,7 +297,9 @@ func TestWrapDarwinIgnoresCacheOverlays(t *testing.T) {
 
 func TestToolStatePathsAreProtected(t *testing.T) {
 	ps := ToolStatePaths()
-	for _, want := range []string{".claude", ".codex"} {
+	// The agent's own install and logs too: an auto-update across two runs
+	// must never get the agent's binary learned and overlaid.
+	for _, want := range []string{".claude", ".codex", ".local/share/claude", ".cache/claude-cli-nodejs"} {
 		if !slices.Contains(ps, want) {
 			t.Errorf("%s missing from %v", want, ps)
 		}

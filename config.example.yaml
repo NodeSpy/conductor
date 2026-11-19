@@ -1541,8 +1541,9 @@ sandbox:
   #                             #   (`cache: { key: "pr-{{.repo}}-{{.pr}}", restore_from: ["{{.repo}}"] }`, on the
   #                             #   step or as its workflow's default) starts from the key's newest published copy,
   #                             #   by overlay (Linux) or clone (macOS); when its step succeeds, what its run filled
-  #                             #   is published to its own key only. What a key holds is learned, never agent
-  #                             #   state or credentials. The old recipe fields (autodetect, repo_file, warm_*,
+  #                             #   is published to its own key only. What a key holds is learned per template,
+  #                             #   never agent state, credentials or a git repository; `teach: true` on a
+  #                             #   default-branch step learns the repo's private git dependencies. The old recipe fields (autodetect, repo_file, warm_*,
   #                             #   recipes, defaults, repos) are ignored with a warning.
   #   enabled: false            # off by default; true needs the agent sandbox
   #   dir: ""                   # default <state dir>/repo-caches; never under an isolation fs: path

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -111,6 +112,7 @@ func TestPerRunKeyHitsOnItsSecondRun(t *testing.T) {
 // Store size counts a file hard-linked into several versions once: a key
 // built over its restore_from key's copy does not use the cap twice.
 func TestStoreSizeCountsHardLinksOnce(t *testing.T) {
+	needsMerge(t)
 	h := newHarness(t, true)
 	base := key("base")
 	req, g := h.launch(t, "a", base)
@@ -137,6 +139,7 @@ func TestStoreSizeCountsHardLinksOnce(t *testing.T) {
 // published copy (mergeLayers renames the file in, then masks it, as
 // copyFromHome does).
 func TestMergeDropsSetuid(t *testing.T) {
+	needsMerge(t)
 	h := newHarness(t, true)
 	k := key("s")
 	req, g := h.launch(t, "a", k)
@@ -219,6 +222,7 @@ func TestCopyRestoreRaceStaysInTheHome(t *testing.T) {
 // the first wrote under an overlaid path, and Finish publishes both
 // launches' writes.
 func TestResumeKeepsFirstLaunchOverlayWrites(t *testing.T) {
+	needsMerge(t)
 	h := newHarness(t, true)
 	k := key("resume")
 	req, g := h.launch(t, "seed", k)
@@ -369,5 +373,14 @@ func TestCopyRestorePinsOnDisk(t *testing.T) {
 	}
 	if other.Used()[p.Entry.Dir] {
 		t.Error("the version is still in use on disk after the copy")
+	}
+}
+
+// needsMerge skips where an overlay launch's layers are not merged on
+// publish (no overlay mounts but on Linux).
+func needsMerge(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("overlay layers are merged on Linux only")
 	}
 }
