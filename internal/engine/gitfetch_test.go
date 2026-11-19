@@ -106,7 +106,7 @@ func TestGitFetchCredentials(t *testing.T) {
 	// A repository no trusted work ran on: nothing minted, for a warm or a
 	// hand-off.
 	r.minted = nil
-	if g := r.e.GitFetchWarm(context.Background(), "evil/repo"); len(g) != 0 || len(r.minted) != 0 {
+	if g := r.e.GitFetchTeach(context.Background(), "evil/repo"); len(g) != 0 || len(r.minted) != 0 {
 		t.Fatalf("unseen repo: %+v minted %v", g, r.minted)
 	}
 	if g := r.e.GitFetchFor(context.Background(), "evil/repo"); len(g) != 0 || len(r.minted) != 0 {
@@ -134,7 +134,7 @@ func TestGitFetchLearnedScope(t *testing.T) {
 		t.Fatalf("before a warm: %v", s)
 	}
 	// The warm: any repository on the host.
-	w := r.e.GitFetchWarm(context.Background(), "org/app")
+	w := r.e.GitFetchTeach(context.Background(), "org/app")
 	if len(w) != 1 || !w[0].Learn || len(w[0].Repos) != 0 || w[0].Secret != "tok-read_token" {
 		t.Fatalf("warm: %+v", w)
 	}
@@ -181,7 +181,7 @@ func TestGitFetchSurvivesRestart(t *testing.T) {
 	}
 	r.restart()
 	r.minted = nil
-	g := r.e.GitFetchWarm(context.Background(), "org/app")
+	g := r.e.GitFetchTeach(context.Background(), "org/app")
 	if len(g) != 1 || g[0].Secret != "tok-read_token" || !g[0].Learn {
 		t.Fatalf("warm after restart: %+v", g)
 	}
@@ -237,7 +237,7 @@ func TestGitFetchRechecksInstanceScope(t *testing.T) {
 	r.conn = "{ use: github, repos: ['other/*'] }"
 	r.restart()
 	r.minted = nil
-	if g := r.e.GitFetchWarm(context.Background(), "org/app"); len(g) != 0 || len(r.minted) != 0 {
+	if g := r.e.GitFetchTeach(context.Background(), "org/app"); len(g) != 0 || len(r.minted) != 0 {
 		t.Fatalf("warm of a repository the instance dropped: %+v minted %v", g, r.minted)
 	}
 	if g := r.e.GitFetchFor(context.Background(), "org/app"); len(g) != 0 {

@@ -167,7 +167,7 @@ func TestGitFetchCredentialOnlyOnFetchesInScope(t *testing.T) {
 		withheld := false
 		for _, r := range rig.records() {
 			withheld = withheld || (strings.Contains(r.Path, "/org/other.git") &&
-				strings.Contains(r.Reason, "git credential withheld for org/other: not a learned dependency of org/app; it is learned when the default branch's cache warm fetches it"))
+				strings.Contains(r.Reason, "git credential withheld for org/other: not a learned dependency of org/app; it is learned when a default-branch run of a shared cache key fetches it"))
 		}
 		if !withheld {
 			t.Fatalf("broad=%v: no withheld reason: %+v", broad, rig.records())

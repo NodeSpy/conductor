@@ -83,6 +83,9 @@ type Provisioner struct {
 	mu     sync.Mutex
 	repoMu map[string]*sync.Mutex // per-repo lock over the base clone's shared state
 	live   map[string]string      // worktree path → its base clone dir
+	// onDefault are the live worktrees checked out at their repository's
+	// default branch head, as fetched (OnDefault).
+	onDefault map[string]bool
 }
 
 // New builds a Provisioner rooted at dir (the conductor state dir; "" resolves
@@ -92,10 +95,20 @@ func New(dir string) *Provisioner {
 		dir = config.StateDir()
 	}
 	return &Provisioner{
-		root:   dir,
-		repoMu: map[string]*sync.Mutex{},
-		live:   map[string]string{},
+		root:      dir,
+		repoMu:    map[string]*sync.Mutex{},
+		live:      map[string]string{},
+		onDefault: map[string]bool{},
 	}
+}
+
+// OnDefault reports whether wt is a live worktree this provisioner checked
+// out at its repository's default branch head (origin/HEAD as fetched for
+// it) — a branch-off from the default branch, never a PR head.
+func (p *Provisioner) OnDefault(wt string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.onDefault[filepath.Clean(wt)]
 }
 
 // CheckoutsDir is where the per-repo base clones live.
@@ -240,7 +253,19 @@ func (p *Provisioner) provision(ctx context.Context, repo, strategy string, req 
 	case "checkout-pr":
 		err = p.addPR(ctx, base, wt, req)
 	case "branch-off":
-		err = p.addBranch(ctx, base, wt, req)
+		if err = p.addBranch(ctx, base, wt, req); err == nil {
+			// Read now, while the checkout is still conductor's own.
+			def, derr := p.defaultHead(ctx, base)
+			head, herr := p.git(ctx, wt, "rev-parse", "--verify", "HEAD^{commit}")
+			if derr == nil && herr == nil && strings.TrimSpace(head) == def {
+				p.mu.Lock()
+				if p.onDefault == nil {
+					p.onDefault = map[string]bool{}
+				}
+				p.onDefault[filepath.Clean(wt)] = true
+				p.mu.Unlock()
+			}
+		}
 	}
 	if err != nil {
 		// Leave nothing half-made behind for the reaper to puzzle over.
@@ -268,6 +293,7 @@ func (p *Provisioner) RemoveWorktree(ctx context.Context, id string) error {
 	p.mu.Lock()
 	base, known := p.live[wt]
 	delete(p.live, wt)
+	delete(p.onDefault, wt)
 	p.mu.Unlock()
 	if !known {
 		// A worktree from a previous daemon life: recover its base clone from
@@ -1130,86 +1156,4 @@ func (p *Provisioner) defaultHead(ctx context.Context, base string) (string, err
 		return "", fmt.Errorf("origin/HEAD is %q", sha)
 	}
 	return sha, nil
-}
-
-// maxDefaultFile bounds DefaultBranchFile's read.
-const maxDefaultFile = 256 << 10
-
-// DefaultBranchFile reads the file name at the root of repo's default
-// branch, freshly fetched — never a PR head or a dispatch's branch: a file
-// whose content steers conductor (a repository's .conductor.yaml) is the
-// default branch's alone. nil data: no such file. A symlink or a directory
-// there is refused.
-func (p *Provisioner) DefaultBranchFile(ctx context.Context, repo, name string) ([]byte, string, error) {
-	if name == "" || strings.ContainsAny(name, "/\\\x00") || strings.HasPrefix(name, "-") {
-		return nil, "", fmt.Errorf("gitwt: %q is not a root file name", name)
-	}
-	mu := p.repoLock(repo)
-	mu.Lock()
-	defer mu.Unlock()
-	base, err := p.baseCloneLocked(ctx, repo, "")
-	if err != nil {
-		return nil, "", err
-	}
-	commit, err := p.defaultHead(ctx, base)
-	if err != nil {
-		return nil, "", err
-	}
-	out, err := p.git(ctx, base, "ls-tree", "--full-tree", commit, "--", name)
-	if err != nil {
-		return nil, commit, err
-	}
-	line := strings.TrimSpace(out)
-	if line == "" {
-		return nil, commit, nil
-	}
-	meta, _, _ := strings.Cut(line, "\t")
-	f := strings.Fields(meta)
-	if len(f) != 3 || f[1] != "blob" || f[0] == "120000" || !hexSHA(f[2]) {
-		return nil, commit, fmt.Errorf("gitwt: %s on the default branch is not a regular file", name)
-	}
-	size, err := p.git(ctx, base, "cat-file", "-s", f[2])
-	if err != nil {
-		return nil, commit, err
-	}
-	if n, perr := strconv.ParseInt(strings.TrimSpace(size), 10, 64); perr != nil || n > maxDefaultFile {
-		return nil, commit, fmt.Errorf("gitwt: %s on the default branch is larger than %d bytes", name, maxDefaultFile)
-	}
-	data, err := p.git(ctx, base, "cat-file", "blob", f[2])
-	if err != nil {
-		return nil, commit, err
-	}
-	return []byte(data), commit, nil
-}
-
-// DefaultBranchCheckout writes the files of repo's default branch, freshly
-// fetched, at dst (absent) and returns the commit: a plain tree, no git
-// dir — a warm step's workspace, never a PR head.
-func (p *Provisioner) DefaultBranchCheckout(ctx context.Context, repo, dst string) (string, error) {
-	if !filepath.IsAbs(dst) {
-		return "", fmt.Errorf("gitwt: %q is not absolute", dst)
-	}
-	mu := p.repoLock(repo)
-	mu.Lock()
-	defer mu.Unlock()
-	base, err := p.baseCloneLocked(ctx, repo, "")
-	if err != nil {
-		return "", err
-	}
-	commit, err := p.defaultHead(ctx, base)
-	if err != nil {
-		return "", err
-	}
-	// A linked worktree's checkout fetches a partial clone's missing blobs
-	// in one batch; its git link is then dropped and the bookkeeping pruned.
-	if _, err := p.git(ctx, base, "worktree", "add", "--detach", "--force", dst, commit); err != nil {
-		return "", err
-	}
-	if err := os.Remove(filepath.Join(dst, ".git")); err != nil {
-		return "", err
-	}
-	if _, err := p.git(ctx, base, "worktree", "prune"); err != nil {
-		p.logf("gitwt: prune after the default-branch checkout of %s: %v", repo, err)
-	}
-	return commit, nil
 }

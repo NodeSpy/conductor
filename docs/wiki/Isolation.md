@@ -207,26 +207,30 @@ conductor authenticates it:
 - **Scoped to what the repository depends on — learned, not configured.**
   The connector declares only the host and the credential. Which
   repositories a launch's credential covers is conductor's:
-  - A **cache warm** ([[Repo-Caches]]) runs the repository's **default
-    branch**, with the default branch's `.conductor.yaml`. Its credential
-    covers any repository on the host the credential can read, and the proxy
-    notes each one the forge served it. When the warm succeeds, those are
-    the repository's **learned dependencies** for that recipe, replacing
-    what its previous warm learned (a dependency the default branch dropped
-    drops off).
+  - A **teaching launch** ([[Step-Caches#private-git-dependencies]]) is a
+    run of a step whose cache key another step restores from, in a checkout
+    conductor made fresh at the head of the repository's **default
+    branch**, for a target the platform assigned. Its credential covers any
+    repository on the host the credential can read, and the proxy notes
+    each one the forge served it. When its step succeeds and publishes its
+    cache, those are the repository's **learned dependencies** for that
+    key, replacing what the key's previous teaching run learned (a
+    dependency the default branch dropped drops off). A failed step teaches
+    nothing.
   - **Every other launch** — a dispatch on a PR branch, a review, a fixer,
     a `conductor sandbox exec` hand-off — gets the repository it works on
     plus its learned dependencies, nothing more. A PR can never add one: a
     PR that adds a new private dependency cannot fetch it until it is on the
-    default branch and the next warm learns it. Such a fetch goes without
+    default branch and a teaching run learns it. Such a fetch goes without
     the credential, and its audit row says so: `git credential withheld for
-    acme/newdep: not a learned dependency of acme/app; it is learned when
-    the default branch's cache warm fetches it`.
+    acme/newdep: not a learned dependency of acme/app; it is learned when a
+    default-branch run of a shared cache key fetches it`.
 
-  A warm runs the default branch's install, its dependencies' install
+  A teaching run runs the default branch's code, its dependencies' install
   scripts included: whatever that code fetches with the credential is
   learned. That is the trust you give your default branch anyway — it is
-  the code you deploy. Repositories compare exactly, case-insensitively
+  the code you deploy — and the trust every run that restores from the
+  key already gives what that step publishes. Repositories compare exactly, case-insensitively
   (forges name them so), after the same checks as `https://` path entries:
   a dot segment, `//`, a backslash or a percent sign left after decoding
   never matches.
@@ -310,7 +314,7 @@ sandbox:
   #   required: false             # true: refuse a launch whose limits can't be applied
   #   off: false
   # persist: none                 # cache | home
-  # caches: { enabled: false }    # repository dependency caches, off by default (Repo-Caches.md)
+  # caches: { enabled: false }    # step caches, off by default (Step-Caches.md)
   # git: { shared: protected }    # direct
   # macos_posix_ipc: false
 ```
@@ -861,13 +865,16 @@ so the sandbox never shares one. `persist: cache` is the opt-in.
   keeps its identity's home.
 
 A fresh home does not have to mean downloading every dependency again.
-[Repository caches](Repo-Caches) restore a repository's module and build
-caches into the fresh home without copying them: an overlay on Linux whose
-read-only lower layer is the shared cache and whose upper layer is the run's
-own, kept beside the store where no agent can reach it, or a copy-on-write
-clone on macOS. Caches are off until `sandbox.caches.enabled: true`. A run never writes the shared
-copy. Only conductor publishes one, by running the cache's warm command in
-this same sandbox over a checkout of the repository's default branch.
+[Step caches](Step-Caches) restore what earlier runs of a step filled
+(module and build caches, package stores) into the fresh home without
+copying it: an overlay on Linux whose read-only lower layer is the published
+copy and whose upper layer is the run's own, kept beside the store where no
+agent can reach it, or a copy-on-write clone on macOS. A step names its
+cache with `cache: { key: … }`; which directories a key holds is learned
+from what its runs fill, never agent state or credentials. Caches are off
+until `sandbox.caches.enabled: true`. A run never writes a published copy:
+conductor publishes a new one from the run when its step succeeds, to the
+step's own key only.
 
 **IPC.** A Linux sandbox has its own System V IPC namespace. On macOS the
 agent's profile grants no POSIX shared memory or semaphores, because they are

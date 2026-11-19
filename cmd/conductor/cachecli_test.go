@@ -8,47 +8,44 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/conductor/internal/repocache"
+	"github.com/NodeSpy/conductor/internal/keycache"
 )
 
 func TestSandboxCachesListAndClear(t *testing.T) {
 	root := t.TempDir()
 	store := filepath.Join(root, "caches")
-	agentState := filepath.Join(root, "agent-state")
-	args := writeCfg(t, "connectors:\n  gh: { use: github }\nsandbox:\n  state_dir: "+agentState+"\n  caches:\n    dir: "+store+"\n")
-	st := &repocache.Store{Dir: store}
-	pub := func(repo, name, key string) repocache.Entry {
-		e, err := st.Publish(repocache.Meta{Repo: repo, Name: name, Key: key, Origin: repocache.OriginAutodetect, Paths: []string{"~/c"}, Created: time.Now()},
-			func(data string) error {
-				if err := os.MkdirAll(filepath.Join(data, "home", "c"), 0o700); err != nil {
-					return err
-				}
-				return os.WriteFile(filepath.Join(data, "home", "c", "f"), []byte(strings.Repeat("x", 8192)), 0o600)
-			})
+	args := writeCfg(t, "connectors:\n  gh: { use: github }\nsandbox:\n  state_dir: "+filepath.Join(root, "agent-state")+"\n  caches:\n    dir: "+store+"\n")
+	st := &keycache.Store{Dir: store}
+	pub := func(k keycache.Key) keycache.Entry {
+		e, err := st.Publish(k, []string{".cache/fake"}, func(data string) error {
+			d := filepath.Join(data, ".cache", "fake")
+			if err := os.MkdirAll(d, 0o700); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(d, "f"), []byte(strings.Repeat("x", 8192)), 0o600)
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return e
 	}
-	pub("acme/web", "go", "go-linux-aaa")
-	inUse := pub("acme/web", "npm", "npm-linux-bbb")
-	pub("acme/api", "go", "go-linux-ccc")
-	// A live launch overlays the npm cache: conductor's ledger beside the
-	// store names it and what its overlays sit on.
-	home := filepath.Join(agentState, ".dispatch-homes", "agent_x@d1")
-	// Named for when it was restored, so it is live within the grace.
+	shared := keycache.Key{Namespace: "autopilot", Template: "{{.repo}}", Value: "acme/web"}
+	pr := keycache.Key{Namespace: "autopilot", Template: "pr-{{.repo}}-{{.pr}}", Value: "pr-acme/web-12"}
+	other := keycache.Key{Template: "{{.repo}}", Value: "acme/api"}
+	pub(shared)
+	inUse := pub(pr)
+	pub(other)
+	// A live launch overlays the PR's cache: conductor's ledger beside the
+	// store names what its overlays sit on. Named for when it was restored,
+	// so it is live within the grace.
 	run := filepath.Join(store, ".layers", fmt.Sprintf("%d-r1", time.Now().UnixNano()))
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(run, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(run, "home"), []byte(home), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(run, "uses"), []byte(inUse.Dir+"\n"), 0o600); err != nil {
-		t.Fatal(err)
+	for f, v := range map[string]string{"home": filepath.Join(root, "home"), "key": pr.ID(), "dispatch": "d1", "uses": inUse.Dir + "\n"} {
+		if err := os.WriteFile(filepath.Join(run, f), []byte(v), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	out, _ := captureStdout(t, func() error {
@@ -57,68 +54,63 @@ func TestSandboxCachesListAndClear(t *testing.T) {
 		}
 		return nil
 	})
-	for _, want := range []string{"REPO", "acme/web", "go-linux-aaa", "npm-linux-bbb", "acme/api", "autodetect", "yes", "3 cache(s)"} {
+	for _, want := range []string{"KEY", "TEMPLATE", "autopilot:acme/web", "autopilot:pr-acme/web-12", "pr-{{.repo}}-{{.pr}}", "acme/api", "(learning)", "yes", "3 key(s)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list lacks %q:\n%s", want, out)
 		}
 	}
-	// Clearing a repository keeps what a running launch uses.
+	// Clearing keeps what a running launch uses.
 	out, _ = captureStdout(t, func() error {
-		if c := cmdSandboxCaches(append([]string{"clear"}, append(args, "acme/web")...)); c != 1 {
+		if c := cmdSandboxCaches(append([]string{"clear"}, append(args, "autopilot:acme/web", "pr-acme/web-12")...)); c != 1 {
 			t.Errorf("clear with a kept cache exit %d", c)
 		}
 		return nil
 	})
-	if !strings.Contains(out, "removed acme/web go go-linux-aaa") || !strings.Contains(out, "kept acme/web npm") {
+	if !strings.Contains(out, "cleared autopilot:acme/web") || !strings.Contains(out, "kept autopilot:pr-acme/web-12") {
 		t.Fatalf("clear:\n%s", out)
 	}
 	if len(st.List()) != 2 {
 		t.Fatalf("left %d", len(st.List()))
 	}
-	// --force removes it; another repository is untouched.
+	// --force removes it; another key is untouched.
 	captureStdout(t, func() error {
-		if c := cmdSandboxCaches(append([]string{"clear", "--force"}, append(args, "acme/web", "npm")...)); c != 0 {
+		if c := cmdSandboxCaches(append([]string{"clear", "--force"}, append(args, pr.ID())...)); c != 0 {
 			t.Errorf("forced clear exit %d", c)
 		}
 		return nil
 	})
-	if l := st.List(); len(l) != 1 || l[0].Repo != "acme/api" {
+	if l := st.List(); len(l) != 1 || l[0].ID != other.ID() {
 		t.Fatalf("left %+v", l)
-	}
-	// Clearing forgets that a key's warm was over the cap (it is warmed
-	// again); another repository's mark stays.
-	marks := filepath.Join(store, ".toobig")
-	if err := os.MkdirAll(marks, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range map[string]string{"a": "acme/api go go-linux-ccc 999999\n", "b": "acme/other go k 999999\n"} {
-		if err := os.WriteFile(filepath.Join(marks, name), []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
 	}
 	// Clear's in-use check and removal wait for the store's lock, held here
 	// as a daemon's restore would hold it (another process's flock).
 	held, release := make(chan struct{}), make(chan struct{})
-	go (&repocache.Store{Dir: store}).Locked(func() { close(held); <-release })
+	go (&keycache.Store{Dir: store}).Locked(func() { close(held); <-release })
 	<-held
 	start := time.Now()
 	time.AfterFunc(300*time.Millisecond, func() { close(release) })
 	captureStdout(t, func() error {
-		if c := cmdSandboxCaches(append([]string{"clear"}, append(args, "acme/api")...)); c != 0 {
-			t.Errorf("clear exit %d", c)
+		if c := cmdSandboxCaches(append([]string{"clear", "--all"}, args...)); c != 0 {
+			t.Errorf("clear --all exit %d", c)
 		}
 		return nil
 	})
 	if d := time.Since(start); d < 250*time.Millisecond {
 		t.Fatalf("clear did not wait for the store's lock (%v)", d)
 	}
-	if len(st.List()) != 0 {
-		t.Fatalf("left %+v", st.List())
+	if len(st.List()) != 0 || len(st.Keys()) != 0 {
+		t.Fatalf("left %+v %+v", st.List(), st.Keys())
 	}
-	if ents, _ := os.ReadDir(marks); len(ents) != 1 || ents[0].Name() != "b" {
-		t.Fatalf("over-cap marks after clear: %v", ents)
+	out, _ = captureStdout(t, func() error {
+		if c := cmdSandboxCaches(append([]string{"clear"}, append(args, "../etc")...)); c != 0 {
+			t.Errorf("no-match exit %d", c)
+		}
+		return nil
+	})
+	if !strings.Contains(out, "no matching cache") {
+		t.Fatalf("no-match:\n%s", out)
 	}
-	if c := cmdSandboxCaches(append([]string{"clear"}, append(args, "../etc")...)); c != 2 {
-		t.Fatalf("bad repo exit %d", c)
+	if c := cmdSandboxCaches(append([]string{"clear"}, args...)); c != 2 {
+		t.Fatalf("clear without a key exit %d", c)
 	}
 }

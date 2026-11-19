@@ -117,6 +117,9 @@ type Request struct {
 	// rendered from them when the session is minted (SkillIdentityFor).
 	// nil renders none — templated entries then admit nothing.
 	ScopeFacts map[string]any
+	// Cache is the step's rendered cache keys (keycache; nil: no cache):
+	// what its launches are shown, and the one key its run publishes to.
+	Cache *CacheKeys
 	// WorkspaceArchive is the on-disk path of the directory archive blob a
 	// `workspace: { from: … }` step starts in (resolved and authorized
 	// against the run by the flow layer): the provisioner unpacks a fresh

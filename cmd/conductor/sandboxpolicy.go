@@ -175,8 +175,8 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		// (wireHomeReclaim) and reclaimed, logged, when it ends.
 		RunLive: sandboxRunLive,
 		Log:     logf,
-		// Repository dependency caches (repocaches.go), once wired.
-		Caches: restoreRepoCaches,
+		// Step caches (stepcaches.go), once wired.
+		Caches: restoreStepCache,
 	}
 	if cfg.Sandbox.GitFetchOn() {
 		// A `conductor sandbox exec` launch in a workspace conductor checked

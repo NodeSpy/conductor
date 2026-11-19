@@ -10,12 +10,13 @@ import (
 // sandbox's view, never a credential:
 //
 //   - git-fetch.json: repo → the connector instance whose git fetch
-//     credential last covered trusted work on it, so a cache warm right
-//     after a restart mints through the same instance.
-//   - git-learned.json: (repo, instance) → per cache recipe, the
-//     repositories ("host/path") the latest successful default-branch warm
-//     of that recipe fetched with the credential — the repo's learned
-//     dependencies, the scope every other launch's credential gets.
+//     credential last covered trusted work on it, so a teaching launch
+//     right after a restart mints through the same instance.
+//   - git-learned.json: (repo, instance) → per label (a teaching run's
+//     cache key; an older conductor's warm recipe), the repositories
+//     ("host/path") that label's latest successful default-branch run
+//     fetched with the credential — the repo's learned dependencies, the
+//     scope every other launch's credential gets.
 
 // PutGitFetchInstance records repo's instance; persists only on a change.
 func (s *Store) PutGitFetchInstance(repo, instance string) error {
@@ -42,7 +43,7 @@ func (s *Store) GitFetchInstance(repo string) (string, bool) {
 
 func learnedKey(repo, instance string) string { return repo + "\x00" + instance }
 
-// PutGitLearned replaces what recipe's latest warm of repo learned through
+// PutGitLearned replaces what label recipe's latest run on repo learned through
 // instance: a dependency it no longer fetched drops off.
 func (s *Store) PutGitLearned(repo, instance, recipe string, fetched []string) error {
 	fetched = slices.Clone(fetched)

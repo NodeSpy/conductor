@@ -9,6 +9,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/keycache"
 )
 
 // A workspace its owner registered (a member, under its own identity) keeps
@@ -133,5 +134,62 @@ func TestReviewBy(t *testing.T) {
 		if ReviewRole(tc.req) != (tc.want != "") {
 			t.Errorf("ReviewRole disagrees with ReviewBy for %+v", tc.req.Step)
 		}
+	}
+}
+
+// A launch teaches its repository's git fetch dependencies only when it is
+// work other runs already trust: its step's key is one another step
+// restores from (Shared), in conductor's own fresh checkout of the default
+// branch's head, of a target the platform assigned. Each condition alone
+// withholds it; the cache binding itself is kept.
+func TestRegisterSandboxWorkspaceTeachRule(t *testing.T) {
+	old := CheckoutOnDefault
+	t.Cleanup(func() { CheckoutOnDefault = old })
+	key := CacheKeys{Key: keycache.Key{Template: "{{.repo}}", Value: "a/b"}, Shared: true}
+	base := func() Request {
+		c := key
+		return Request{DispatchID: "d", Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "a/b"}}, Cache: &c}
+	}
+	onDefault := func(string) bool { return true }
+	for name, tc := range map[string]struct {
+		mod   func(*Request)
+		def   func(string) bool
+		prev  bool
+		teach bool
+	}{
+		"trusted default-branch run of a shared key": {def: onDefault, teach: true},
+		"a key no step restores from":                {mod: func(r *Request) { r.Cache.Shared = false }, def: onDefault},
+		"not on the default branch's head":           {def: func(string) bool { return false }},
+		"no provisioner to ask":                      {},
+		"a target the sender chose":                  {mod: func(r *Request) { r.Trigger.TargetTrusted = false }, def: onDefault},
+		"an artifact workspace":                      {mod: func(r *Request) { r.WorkspaceArchive = "/a.tar" }, def: onDefault},
+		"a workspace another dispatch worked in":     {def: onDefault, prev: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			CheckoutOnDefault = tc.def
+			ws := linkedWorktree(t)
+			defer agentsandbox.Default.Forget(ws)
+			if tc.prev {
+				p := base()
+				p.DispatchID, p.Cache = "earlier", nil
+				if _, err := RegisterSandboxWorkspace(ws, "agent:x@a/b", "claude-code", &p); err != nil {
+					t.Fatal(err)
+				}
+			}
+			req := base()
+			if tc.mod != nil {
+				tc.mod(&req)
+			}
+			e, err := RegisterSandboxWorkspace(ws, "agent:x@a/b", "claude-code", &req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e.Cache == nil || e.Cache.Key != key.Key {
+				t.Fatalf("cache binding %+v", e.Cache)
+			}
+			if e.Cache.Teach != tc.teach {
+				t.Fatalf("teach = %v, want %v", e.Cache.Teach, tc.teach)
+			}
+		})
 	}
 }

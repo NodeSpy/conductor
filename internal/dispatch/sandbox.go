@@ -121,6 +121,11 @@ func SandboxIdentity(req Request, tool string) string {
 	return "agent:" + who
 }
 
+// CheckoutOnDefault reports whether dir is a checkout conductor made at
+// its repository's default branch head, as just fetched (gitwt): never a
+// PR head. nil: none is. Wired at boot.
+var CheckoutOnDefault func(dir string) bool
+
 // RegisterSandboxWorkspace records dir in the sandbox registry on the first
 // launch into it — while it is still conductor's own checkout — and returns
 // the entry: the git layout read now is what every later launch (a resume)
@@ -200,11 +205,19 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 		case prev != nil:
 			e.Repo = prev.Repo
 		case layout.GitDir != "":
-			// The repository whose dependency caches the launch is shown:
-			// one conductor checked out for a target it trusts.
+			// The repository conductor checked out, for a target it trusts.
 			if repo, err := CheckoutRepo(*req); err == nil {
 				e.Repo = repo
 			}
+		}
+		if c := req.Cache; c != nil {
+			e.Cache = &agentsandbox.CacheBinding{Key: c.Key, RestoreFrom: c.RestoreFrom}
+			// Teaching the repository's git fetch dependencies is for work
+			// other runs already trust: a step whose key another step
+			// restores from, in conductor's own checkout of the default
+			// branch's head — never a PR's, never an artifact's.
+			e.Cache.Teach = c.Shared && e.Repo != "" && prev == nil && req.WorkspaceArchive == "" &&
+				req.Trigger.TargetTrusted && CheckoutOnDefault != nil && CheckoutOnDefault(dir)
 		}
 		if layout.GitDir != "" || prev == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

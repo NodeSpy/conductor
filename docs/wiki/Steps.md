@@ -326,6 +326,7 @@ to execute belongs here.
 | `session` | This step's own session pool: `{ key, idle_ttl, max_lifetime, end_on }`, namespaced to its identity. A step with none joins the runtime's overall pool. See below. |
 | `skill` | Verb tools + the secret broker over the daemon socket: `{ verbs, secrets_via, allow_secrets, max_calls }`. See [[Agent-Skill]]. |
 | `isolation` | Per-dispatch sandboxing. Wins over the runtime's own; needs a runtime conductor launches itself (not paseo). See [[Isolation]]. |
+| `cache` | `{ key, restore_from }`: this step's cache (key templates over its facts). A launch starts from the key's newest published copy, else the first `restore_from` key's; when the step succeeds, what its run filled is published to its own key only. A workflow's `cache:` is the default for its own agent steps. Needs `sandbox.caches.enabled`; not settable by agent-authored steps. See [[Step-Caches]]. |
 | `outcome_feedback` | `true` appends this step's own track record to its guidance. See [[Outcomes]]. |
 | `outcome_key` | Override the track-record key (default: the identity), so several steps can pool one record. |
 

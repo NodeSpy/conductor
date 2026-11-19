@@ -934,7 +934,7 @@ func cmdRun(args []string) error {
 	}
 	eng := engine.New(engOpts)
 	// A cache warm's git fetch credentials (sandbox.git_fetch).
-	controller.WarmGitAuth, controller.WarmGitLearned, controller.ScopedGitAuth = eng.GitFetchWarm, eng.GitLearned, eng.GitFetchFor
+	controller.TeachGitAuth, controller.TeachGitLearned, controller.ScopedGitAuth = eng.GitFetchTeach, eng.GitLearned, eng.GitFetchFor
 	// Model selection (docs/design/runtimes-models-packs.md §2.3): the
 	// resolver owns the fleet ladder and the discovered rosters. Discovery
 	// is lazy and degrade-safe — a box that cannot enumerate simply bare
@@ -1134,8 +1134,8 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer stopSandbox()
-	// Repository dependency caches for the sandbox's launches (after it).
-	defer wireRepoCaches(ctx, cfg, gitProv, logf)()
+	// Step caches for the sandbox's launches (after it).
+	defer wireStepCaches(ctx, cfg, gitProv, logf)()
 	// The browser (after the sandbox, whose identities it serves).
 	browserLedger.Store(st)
 	defer wireBrowser(ctx, cfg, notifier, st.Audit, logf)()

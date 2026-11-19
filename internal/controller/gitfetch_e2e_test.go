@@ -32,7 +32,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/gitwt"
-	"github.com/NodeSpy/conductor/internal/repocache"
+	"github.com/NodeSpy/conductor/internal/keycache"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
@@ -240,7 +240,7 @@ func appOrigin(t *testing.T, root string, f *fakeForge, yarn string) string {
 	return bare
 }
 
-// gitFetchProbe is what a sandboxed agent (and a warm) runs: every line
+// gitFetchProbe is what a sandboxed agent runs: every line
 // "ok …" or "FAIL …".
 const gitFetchProbe = `
 say() { if [ "$1" = 0 ]; then echo "ok $2"; else echo "FAIL $2"; fi; }
@@ -256,14 +256,27 @@ find "$HOME" "$TMPDIR" . -type f -exec grep -l "$needle" {} + 2>/dev/null | grep
 command -v ssh >/dev/null && echo "has ssh" || true
 `
 
+// teachProbe is a teaching launch: a default-branch run of a shared cache
+// key whose tool fetches the private dependency and fills its cache.
+const teachProbe = `
+rm -rf "$TMPDIR/dep"
+if git clone -q git@forge.test:org/dep.git "$TMPDIR/dep" >"$TMPDIR/clone" 2>&1 && test -f "$TMPDIR/dep/index.js"; then echo "ok teaching clone"; else echo "FAIL teaching clone"; cat "$TMPDIR/clone"; fi
+mkdir -p ~/.cache/fake && cp -r "$TMPDIR/dep" ~/.cache/fake/dep && head -c 262144 /dev/zero >~/.cache/fake/blob
+needle="s3cr3t-""forge"
+env | grep -q "$needle"; [ $? != 0 ]; if [ $? = 0 ]; then echo "ok the secret is not in the environment"; else echo "FAIL the secret is in the environment"; fi
+`
+
 // TestGitSSHDependencyFetchedInTheSandbox: a repository whose package.json
 // names a private dependency by its SSH URL (the v0.102.0 failure: ssh in
-// the jail refused its config, the detector killed it as a tunnel tool,
-// the warm failed). With the forge connector's git fetch credential, a
-// real sandboxed agent launch and a real cache warm (yarn, when present)
-// fetch it over HTTPS through the egress proxy, which adds the credential
-// to fetches of org's repositories only and refuses a push; the secret is
-// never inside the sandbox. Without one, the same launch fails as before.
+// the jail refused its config, the detector killed it as a tunnel tool).
+// With the forge connector's git fetch credential, a real sandboxed agent
+// launch fetches it over HTTPS through the egress proxy, which adds the
+// credential to fetches of the repository and its learned dependencies
+// only and refuses a push; the secret is never inside the sandbox. Without
+// one, the same launch fails as before. A dependency is learned only by a
+// teaching launch — conductor's own default-branch checkout running a step
+// whose cache key another step restores from — whose step succeeded and
+// published; a PR's launch never teaches, a failed step teaches nothing.
 func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short")
@@ -278,38 +291,9 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	if r, err := filepath.EvalSymlinks(root); err == nil {
 		root = r
 	}
-	t.Cleanup(func() { _ = repocache.RemoveAll(root) })
+	t.Cleanup(func() { _ = keycache.RemoveAll(root) })
 	forge := newFakeForge(t, root)
 	yarn, _ := exec.LookPath("yarn")
-	if yarn == "" && os.Getenv("CONDUCTOR_REQUIRE_SANDBOX") == "1" && runtime.GOOS == "linux" {
-		t.Fatal("no yarn: the cache warm half of this test needs it")
-	}
-	// A yarn inside the operator's home (a macOS runner's ~/.yarn) is
-	// hidden from the sandbox, as it should be: the warm half needs one the
-	// sandbox shows.
-	// (HOME may be a test's temp dir here: check the real homes too.)
-	warmYarn := yarn
-	if yarn != "" {
-		h, _ := os.UserHomeDir()
-		if h == "" {
-			h = "/nonexistent"
-		}
-		inHome := func(p string) bool {
-			return strings.HasPrefix(p, h+"/") || (runtime.GOOS == "darwin" && strings.HasPrefix(p, "/Users/"))
-		}
-		for _, d := range filepath.SplitList(os.Getenv("PATH")) {
-			p := filepath.Join(d, "yarn")
-			if _, err := os.Stat(p); err != nil {
-				continue
-			}
-			if r, err := filepath.EvalSymlinks(p); err == nil {
-				p = r
-			}
-			if inHome(p) || inHome(filepath.Clean(d)+"/") {
-				warmYarn = ""
-			}
-		}
-	}
 	origin := appOrigin(t, root, forge, yarn)
 	forge.reset()
 
@@ -327,7 +311,7 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	var recMu sync.Mutex
 	var recs []sandbox.ConnRecord
 	pm.OnConn = func(r sandbox.ConnRecord) { recMu.Lock(); recs = append(recs, r); recMu.Unlock() }
-	oldU, oldA, oldUS, oldAS, oldSB, oldWG, oldWL := EgressProxyUnix, EgressProxyFor, EgressProxyUnixSession, EgressProxyForSession, AgentSandbox, WarmGitAuth, WarmGitLearned
+	oldU, oldA, oldUS, oldAS, oldSB, oldTG, oldTL, oldOD := EgressProxyUnix, EgressProxyFor, EgressProxyUnixSession, EgressProxyForSession, AgentSandbox, TeachGitAuth, TeachGitLearned, dispatch.CheckoutOnDefault
 	EgressProxyUnix, EgressProxyFor, EgressProxyUnixSession, EgressProxyForSession = pm.UnixEndpoint, pm.Endpoint, pm.UnixEndpointSession, pm.EndpointSession
 	rel, err := agentsandbox.NewRelayer()
 	if err != nil {
@@ -335,13 +319,14 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		launchSelfExe = oldSelf
-		EgressProxyUnix, EgressProxyFor, EgressProxyUnixSession, EgressProxyForSession, AgentSandbox, WarmGitAuth, WarmGitLearned = oldU, oldA, oldUS, oldAS, oldSB, oldWG, oldWL
+		EgressProxyUnix, EgressProxyFor, EgressProxyUnixSession, EgressProxyForSession, AgentSandbox, TeachGitAuth, TeachGitLearned, dispatch.CheckoutOnDefault = oldU, oldA, oldUS, oldAS, oldSB, oldTG, oldTL, oldOD
 		pm.Close()
 		rel.Close()
 	})
 	state := filepath.Join(root, "state")
 	gp := gitwt.New(state)
 	gp.RemoteURL = func(string) string { return origin }
+	dispatch.CheckoutOnDefault = gp.OnDefault
 	var logMu sync.Mutex
 	var logs []string
 	logf := func(f string, a ...any) {
@@ -351,11 +336,9 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		logs = append(logs, l)
 		t.Log(l)
 	}
-	m := &repocache.Manager{
-		Store: &repocache.Store{Dir: filepath.Join(state, "repo-caches")}, Recipes: repocache.Recipes(nil),
-		Autodetect: true, RepoFileOn: true, Protected: agentsandbox.ToolStatePaths(), MaxSize: 10 << 30,
-		DefaultFile: gp.DefaultBranchFile, Checkout: gp.DefaultBranchCheckout, Warm: RunCacheWarm,
-		WarmTimeout: 5 * time.Minute, Logf: logf,
+	m := &keycache.Manager{
+		Store: &keycache.Store{Dir: filepath.Join(state, "repo-caches")}, Protected: agentsandbox.ToolStatePaths(),
+		MaxSize: 10 << 30, MinSize: 64 << 10, MinRuns: 1, FinishWait: 5 * time.Second, Logf: logf,
 	}
 	// The egress allowlist names one unrelated path on the forge's host
 	// (and so its loopback address): the git fetches pass on the git
@@ -365,7 +348,7 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		Egress:  []string{"https://forge.test:" + forge.port + "/elsewhere/"},
 		Inspect: []sandbox.InspectHost{{Host: "forge.test", CA: forge.caFile}},
 		Env:     os.Environ(),
-		Caches: func(req repocache.Request) repocache.Grant {
+		Caches: func(req keycache.Request) keycache.Grant {
 			g, err := m.Restore(context.Background(), req)
 			if err != nil {
 				t.Errorf("restore: %v", err)
@@ -375,36 +358,60 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	}
 	AgentSandbox = &SandboxWiring{Resolver: r, Relay: rel.Relay, GitFetch: true}
 
-	launch := func(t *testing.T, id string, git []sandbox.GitAuth) string {
-		t.Helper()
-		req := dispatch.Request{DispatchID: id, Trigger: core.Trigger{TargetTrusted: true, Kind: "pr",
+	// The shared key a default-branch step publishes and PR steps restore
+	// from; a PR step's own key.
+	shared := keycache.Key{Template: "{{.repo}}", Value: "acme/app"}
+	prKey := keycache.Key{Template: "pr-{{.repo}}-{{.pr}}", Value: "pr-acme/app-7"}
+	prReq := func(id string, git []sandbox.GitAuth, cache *dispatch.CacheKeys) dispatch.Request {
+		return dispatch.Request{DispatchID: id, Trigger: core.Trigger{TargetTrusted: true, Kind: "pr",
 			Target: core.Target{Repo: "acme/app", PR: 7, Number: 7, BaseRef: "main"}, Context: map[string]any{"head_ref": "main"}},
-			Credentials: dispatch.Credentials{Git: git}}
+			Credentials: dispatch.Credentials{Git: git}, Cache: cache}
+	}
+	defaultReq := func(id string) dispatch.Request {
+		req := dispatch.Request{DispatchID: id, Trigger: core.Trigger{TargetTrusted: true, Kind: "push",
+			Target: core.Target{Repo: "acme/app", BaseRef: "main"}},
+			Cache: &dispatch.CacheKeys{Key: shared, Shared: true}}
+		req.Action.Checkout = "branch-off"
+		return req
+	}
+	launch := func(t *testing.T, req dispatch.Request, script string) string {
+		t.Helper()
 		_, wt, err := gp.ProvisionWorktree(context.Background(), req)
 		if err != nil {
 			t.Fatal(err)
 		}
-		argv, dir, env, cleanup, err := prepareAgentSandbox(wt, nil, []string{"sh", "-c", gitFetchProbe}, withAgent(launchOpts{}, "", &req, false))
+		argv, dir, env, cleanup, err := prepareAgentSandbox(wt, nil, []string{"sh", "-c", script}, withAgent(launchOpts{}, "", &req, false))
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer cleanup()
 		cmd := exec.Command(argv[0], argv[1:]...)
 		cmd.Dir = dir
 		cmd.Env = append(env, "FORGE_PORT="+forge.port)
 		out, _ := cmd.CombinedOutput()
+		cleanup()
 		return string(out)
 	}
+	// finish is the step's end (cmd/conductor finishStepCache): publish,
+	// then hand what a teaching launch fetched over — or drop it.
+	finish := func(t *testing.T, id string, ok bool) *keycache.Published {
+		t.Helper()
+		p, err := m.Finish(context.Background(), id, ok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		TaughtGit(id, p != nil)
+		return p
+	}
 
-	// WarmGitLearned is how a successful default-branch warm hands over
-	// what it fetched; nothing else may call it.
+	// TeachGitLearned is how a teaching launch whose step succeeded hands
+	// over what it fetched; nothing else may call it.
 	var learnMu sync.Mutex
 	var learnCalls [][]string
-	WarmGitLearned = func(repo, recipe string, fetched []string) {
+	TeachGitLearned = func(repo, key string, fetched []string) {
 		learnMu.Lock()
 		defer learnMu.Unlock()
-		if repo != "acme/app" || recipe != "yarn" {
-			t.Errorf("learned for %s %s", repo, recipe)
+		if repo != "acme/app" || key != "cache:"+shared.ID() {
+			t.Errorf("learned for %s %s", repo, key)
 		}
 		learnCalls = append(learnCalls, fetched)
 	}
@@ -413,11 +420,16 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		defer learnMu.Unlock()
 		return append([][]string(nil), learnCalls...)
 	}
+	var teachAsked []string
+	TeachGitAuth = func(_ context.Context, repo string) []sandbox.GitAuth {
+		teachAsked = append(teachAsked, repo)
+		return []sandbox.GitAuth{{Host: "forge.test:" + forge.port, Learn: true, For: "acme/app", Username: forgeUser, Secret: forgeSecret}}
+	}
 	withheld := func(t *testing.T, repo string) bool {
 		recMu.Lock()
 		defer recMu.Unlock()
 		for _, r := range recs {
-			if strings.Contains(r.Reason, "git credential withheld for "+repo+": not a learned dependency of acme/app; it is learned when the default branch's cache warm fetches it") {
+			if strings.Contains(r.Reason, "git credential withheld for "+repo+": not a learned dependency of acme/app; it is learned when a default-branch run of a shared cache key fetches it") {
 				return true
 			}
 		}
@@ -425,7 +437,7 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	}
 
 	t.Run("agent launch without a git fetch credential fails as before", func(t *testing.T) {
-		out := launch(t, "nocred", nil)
+		out := launch(t, prReq("nocred", nil, nil), gitFetchProbe)
 		t.Logf("probe:\n%s", out)
 		if !strings.Contains(out, "FAIL ls-remote of the ssh:// URL") || !strings.Contains(out, "FAIL clone of the scp-form URL") ||
 			strings.Contains(out, "FAIL the secret") || strings.Contains(out, "FAIL another owner") {
@@ -433,8 +445,10 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		}
 	})
 
-	t.Run("a PR launch gets no credential for a dependency not learned", func(t *testing.T) {
-		out := launch(t, "unlearned", []sandbox.GitAuth{forge.auth("/acme/app")})
+	t.Run("a PR launch gets no credential for a dependency not learned, and never teaches", func(t *testing.T) {
+		// Its step's key is even one that restores from the shared key; it
+		// is a PR's checkout, so it does not teach.
+		out := launch(t, prReq("unlearned", []sandbox.GitAuth{forge.auth("/acme/app")}, &dispatch.CacheKeys{Key: prKey, RestoreFrom: []keycache.Key{shared}}), gitFetchProbe)
 		t.Logf("probe:\n%s", out)
 		if !strings.Contains(out, "FAIL ls-remote of the ssh:// URL") || !strings.Contains(out, "FAIL clone of the scp-form URL") ||
 			strings.Contains(out, "FAIL the secret") || strings.Contains(out, "FAIL another owner") {
@@ -448,70 +462,58 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		if !withheld(t, "org/dep") {
 			t.Fatal("no record says why the credential was withheld")
 		}
-		if n := len(learnedCalls()); n != 0 {
-			t.Fatalf("a PR launch taught %d time(s)", n)
+		finish(t, "unlearned", true)
+		if n := len(learnedCalls()); n != 0 || len(teachAsked) != 0 {
+			t.Fatalf("a PR launch taught %d time(s) (teaching credential asked for %v)", n, teachAsked)
 		}
 	})
 
-	t.Run("cache warm without a credential fails as before", func(t *testing.T) {
-		if warmYarn == "" {
-			t.Skip("no yarn the sandbox shows")
+	t.Run("a teaching launch whose step fails teaches nothing", func(t *testing.T) {
+		forge.reset()
+		out := launch(t, defaultReq("teach-fails"), teachProbe)
+		t.Logf("probe:\n%s", out)
+		if !strings.Contains(out, "ok teaching clone") {
+			t.Fatalf("the teaching launch did not fetch the dependency:\n%s", out)
 		}
-		// A credential for another host: the ssh:// dependency still fails,
-		// and a failed warm teaches nothing.
-		WarmGitAuth = func(context.Context, string) []sandbox.GitAuth {
-			return []sandbox.GitAuth{{Host: "unrelated.test", Learn: true, For: "acme/app", Username: forgeUser, Secret: forgeSecret}}
+		if p := finish(t, "teach-fails", false); p != nil {
+			t.Fatal("a failed step published")
 		}
-		if err := m.WarmRepo(context.Background(), "acme/app"); err == nil {
-			t.Fatal("the warm fetched the ssh:// dependency with no credential")
-		} else {
-			t.Logf("warm without a credential: %v", err)
+		if n := len(learnedCalls()); n != 0 {
+			t.Fatalf("a failed step taught %d time(s)", n)
 		}
 		if l := m.Store.List(); len(l) != 0 {
 			t.Fatalf("published %+v", l)
 		}
-		if n := len(learnedCalls()); n != 0 {
-			t.Fatalf("a failed warm taught %d time(s)", n)
-		}
 	})
 
-	// The default branch's warm learns org/dep (where yarn runs here; else
-	// the learned scope it would have handed over).
+	// The default branch's teaching launch learns org/dep.
 	learned := []string{"forge.test:" + forge.port + "/org/dep"}
-	t.Run("cache warm learns the dependency", func(t *testing.T) {
-		if warmYarn == "" {
-			t.Skip("no yarn the sandbox shows: the warm's package manager")
-		}
+	t.Run("a teaching launch whose step succeeds learns the dependency", func(t *testing.T) {
 		forge.reset()
-		WarmGitAuth = func(_ context.Context, repo string) []sandbox.GitAuth {
-			if repo != "acme/app" {
-				t.Errorf("warm credential asked for %q", repo)
-				return nil
-			}
-			return []sandbox.GitAuth{{Host: "forge.test:" + forge.port, Learn: true, For: "acme/app", Username: forgeUser, Secret: forgeSecret}}
+		out := launch(t, defaultReq("teach"), teachProbe)
+		t.Logf("probe:\n%s", out)
+		if strings.Contains(out, "FAIL") || !strings.Contains(out, "ok teaching clone") {
+			t.Fatalf("the teaching launch:\n%s", out)
 		}
-		if err := m.WarmRepo(context.Background(), "acme/app"); err != nil {
-			t.Fatalf("warm: %v\nlogs: %v", err, logs)
-		}
-		list := m.Store.List()
-		if len(list) != 1 || list[0].Name != "yarn" {
-			t.Fatalf("published %+v (logs %v)", list, logs)
+		p := finish(t, "teach", true)
+		if p == nil || p.Key.ID() != shared.ID() {
+			t.Fatalf("published %+v (logs %v)", p, logs)
 		}
 		found := false
-		_ = filepath.Walk(list[0].Dir, func(p string, fi os.FileInfo, err error) error {
-			if err == nil && !fi.IsDir() && filepath.Base(p) == "index.js" {
-				b, _ := os.ReadFile(p)
+		_ = filepath.Walk(p.Entry.Dir, func(q string, fi os.FileInfo, err error) error {
+			if err == nil && !fi.IsDir() && filepath.Base(q) == "index.js" {
+				b, _ := os.ReadFile(q)
 				found = found || strings.Contains(string(b), "dep from the private forge")
 			}
 			if err == nil && !fi.IsDir() && fi.Size() < 1<<20 {
-				if b, _ := os.ReadFile(p); strings.Contains(string(b), forgeSecret) {
-					t.Errorf("the secret is in the published cache: %s", p)
+				if b, _ := os.ReadFile(q); strings.Contains(string(b), forgeSecret) {
+					t.Errorf("the secret is in the published cache: %s", q)
 				}
 			}
 			return nil
 		})
 		if !found {
-			t.Fatal("the private dependency is not in the published yarn cache")
+			t.Fatal("the private dependency is not in the published cache")
 		}
 		assertForgeHits(t, forge)
 		calls := learnedCalls()
@@ -532,7 +534,7 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		}
 		before := len(learnedCalls())
 		forge.reset()
-		out := launch(t, "cred", []sandbox.GitAuth{forge.auth(append([]string{"/acme/app"}, repos...)...)})
+		out := launch(t, prReq("cred", []sandbox.GitAuth{forge.auth(append([]string{"/acme/app"}, repos...)...)}, nil), gitFetchProbe)
 		t.Logf("probe:\n%s", out)
 		if strings.Contains(out, "FAIL") || strings.Count(out, "ok ") != 8 {
 			t.Fatalf("probe:\n%s", out)

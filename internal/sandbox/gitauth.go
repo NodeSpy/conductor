@@ -40,10 +40,10 @@ type GitAuth struct {
 	Username string `json:"username"`
 	// Secret is the credential. Never serialized.
 	Secret string `json:"-"`
-	// Learn: a default-branch cache warm's credential, used for a fetch
-	// of any repository on Host (Repos unused); OnFetch hears each one the
-	// forge served. Never serialized: no launch but a warm in this process
-	// holds one.
+	// Learn: a teaching launch's credential (a default-branch run of a
+	// shared cache key), used for a fetch of any repository on Host (Repos
+	// unused); OnFetch hears each one the forge served. Never serialized:
+	// no launch but a teaching one in this process holds one.
 	Learn   bool              `json:"-"`
 	OnFetch func(repo string) `json:"-"`
 }
@@ -210,7 +210,7 @@ func (s *Session) gitWithheld(target, repo string) string {
 		return "git credential withheld for " + strings.TrimPrefix(repo, "/") + ": not in this launch's scope"
 	}
 	return "git credential withheld for " + strings.TrimPrefix(repo, "/") + ": not a learned dependency of " + of +
-		"; it is learned when the default branch's cache warm fetches it"
+		"; it is learned when a default-branch run of a shared cache key fetches it"
 }
 
 // basicAuth is the Authorization header value for g.

@@ -65,6 +65,12 @@ func removedFolderWarnings(doc []byte) []string {
 	if mapValue(mapValue(n.Content[0], "sandbox"), "prefetch") != nil {
 		out = append(out, "sandbox.prefetch: "+PrefetchRemoved)
 	}
+	caches := mapValue(mapValue(n.Content[0], "sandbox"), "caches")
+	for _, k := range removedCacheFields {
+		if mapValue(caches, k) != nil {
+			out = append(out, "sandbox.caches."+k+": "+CachesRemoved)
+		}
+	}
 	if mapValue(mapValue(mapValue(n.Content[0], "sandbox"), "push"), "rebase") != nil {
 		out = append(out, "sandbox.push.rebase: "+PushRebaseRemoved)
 	}

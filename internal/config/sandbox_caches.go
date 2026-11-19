@@ -3,54 +3,54 @@ package config
 import (
 	"fmt"
 	"path/filepath"
-	"time"
-
-	"github.com/NodeSpy/conductor/internal/repocache"
 )
 
-// SandboxCaches is `sandbox.caches:`: per-repository dependency caches for
-// sandboxed agents (docs/wiki/Repo-Caches.md). A cache is named and keyed
-// by a template over the checkout's files; a launch in a checkout of the
-// repository gets the newest matching cache at its paths — an overlay on
-// the shared copy (Linux) or a copy-on-write clone (macOS), so the shared
-// copy is never written. Conductor alone publishes a cache: a warm step in
-// a checkout of the default branch, in the agent sandbox.
-//
-// Definitions come from, by name, highest first: repos[<owner/name>],
-// defaults, the repository's own .conductor.yaml (default branch only), and
-// the recipes autodetected in the checkout.
+// SandboxCaches is `sandbox.caches:`: step caches for sandboxed agents
+// (docs/wiki/Step-Caches.md). A step names its cache with a key template
+// (its `cache:` block, or its workflow's); a launch of the step is shown
+// the key's newest published copy, and a successful run publishes what it
+// filled — the directories under the home that runs of the key keep filling
+// (learned), never agent state or credentials.
 type SandboxCaches struct {
-	// Enabled turns caches on (default off: an upgrade never starts warms,
-	// disk use or fetches a config did not ask for). They need the agent
-	// sandbox.
+	// Enabled turns caches on (default off: an upgrade never uses disk a
+	// config did not ask for). They need the agent sandbox.
 	Enabled *bool `yaml:"enabled,omitempty"`
 	// Dir is the cache store (default <state dir>/repo-caches).
 	Dir string `yaml:"dir,omitempty" path:"local"`
-	// MaxSize caps the store, least recently used evicted first, never a
-	// cache a live run uses (default 10GiB; "off" = no cap).
+	// MaxSize caps the store, superseded and least recently used copies
+	// evicted first, never one a live run uses (default 10GiB; "off" = no
+	// cap).
 	MaxSize string `yaml:"max_size,omitempty"`
-	// Autodetect adds the recipes whose files the checkout has (default
-	// true).
-	Autodetect *bool `yaml:"autodetect,omitempty"`
-	// RepoFile reads the repository's .conductor.yaml from its default
-	// branch (default true).
-	RepoFile *bool `yaml:"repo_file,omitempty"`
-	// WarmOnMiss warms a repository's caches when a launch misses its key
-	// (default true).
-	WarmOnMiss *bool `yaml:"warm_on_miss,omitempty"`
-	// WarmEvery re-warms every known repository on a schedule ("" = never).
-	WarmEvery string `yaml:"warm_every,omitempty"`
-	// WarmTimeout bounds one warm command (default 20m).
-	WarmTimeout string `yaml:"warm_timeout,omitempty"`
-	// Recipes replace bundled recipes by name, or add new ones.
-	Recipes []repocache.Recipe `yaml:"recipes,omitempty"`
-	// Defaults are caches every repository gets.
-	Defaults []repocache.Cache `yaml:"defaults,omitempty"`
-	// Repos are caches for one repository (owner/name).
-	Repos map[string][]repocache.Cache `yaml:"repos,omitempty"`
+	// Learn is when a directory becomes one of a key's cached paths.
+	Learn *CacheLearn `yaml:"learn,omitempty"`
+
+	// Removed with the recipe caches (removed.go): accepted, ignored,
+	// warned about. A cache is a step's now, keyed by its own `cache:`.
+	Autodetect  RemovedField `yaml:"autodetect,omitempty"`
+	RepoFile    RemovedField `yaml:"repo_file,omitempty"`
+	WarmOnMiss  RemovedField `yaml:"warm_on_miss,omitempty"`
+	WarmEvery   RemovedField `yaml:"warm_every,omitempty"`
+	WarmTimeout RemovedField `yaml:"warm_timeout,omitempty"`
+	Recipes     RemovedField `yaml:"recipes,omitempty"`
+	Defaults    RemovedField `yaml:"defaults,omitempty"`
+	Repos       RemovedField `yaml:"repos,omitempty"`
 }
 
-// CachesOn reports repository caches on (they need the agent sandbox).
+// CacheLearn is `sandbox.caches.learn:`: a directory under the home becomes
+// one of a key's cached paths once min_runs successful runs of the key each
+// wrote at least min_size there.
+type CacheLearn struct {
+	MinSize string `yaml:"min_size,omitempty"`
+	MinRuns int    `yaml:"min_runs,omitempty"`
+}
+
+// Learning defaults (keycache.DefaultMinSize / DefaultMinRuns).
+const (
+	DefaultCacheLearnMinSize = 50 << 20
+	DefaultCacheLearnMinRuns = 2
+)
+
+// CachesOn reports step caches on (they need the agent sandbox).
 func (c *Config) CachesOn() bool {
 	if !c.AgentSandboxOn() {
 		return false
@@ -82,38 +82,24 @@ func (s *SandboxCaches) MaxSizeBytes() int64 {
 	return n
 }
 
-func boolOr(b *bool, def bool) bool {
-	if b == nil {
-		return def
+// LearnMinSize is learn.min_size in bytes.
+func (s *SandboxCaches) LearnMinSize() int64 {
+	if s == nil || s.Learn == nil || s.Learn.MinSize == "" {
+		return DefaultCacheLearnMinSize
 	}
-	return *b
+	n, _ := ParseByteSize(s.Learn.MinSize)
+	if n <= 0 {
+		return DefaultCacheLearnMinSize
+	}
+	return n
 }
 
-// AutodetectOn is autodetect (default true).
-func (s *SandboxCaches) AutodetectOn() bool { return s == nil || boolOr(s.Autodetect, true) }
-
-// RepoFileOn is repo_file (default true).
-func (s *SandboxCaches) RepoFileOn() bool { return s == nil || boolOr(s.RepoFile, true) }
-
-// WarmOnMissOn is warm_on_miss (default true).
-func (s *SandboxCaches) WarmOnMissOn() bool { return s == nil || boolOr(s.WarmOnMiss, true) }
-
-// WarmEveryDur is warm_every (0 = never).
-func (s *SandboxCaches) WarmEveryDur() time.Duration {
-	if s == nil || s.WarmEvery == "" {
-		return 0
+// LearnMinRuns is learn.min_runs.
+func (s *SandboxCaches) LearnMinRuns() int {
+	if s == nil || s.Learn == nil || s.Learn.MinRuns <= 0 {
+		return DefaultCacheLearnMinRuns
 	}
-	d, _ := time.ParseDuration(s.WarmEvery)
-	return d
-}
-
-// WarmTimeoutDur is warm_timeout (default 20m).
-func (s *SandboxCaches) WarmTimeoutDur() time.Duration {
-	if s == nil || s.WarmTimeout == "" {
-		return 20 * time.Minute
-	}
-	d, _ := time.ParseDuration(s.WarmTimeout)
-	return d
+	return s.Learn.MinRuns
 }
 
 func (s *SandboxCaches) validate() error {
@@ -126,63 +112,22 @@ func (s *SandboxCaches) validate() error {
 	if _, err := ParseByteSize(s.MaxSize); err != nil {
 		return fmt.Errorf("config: sandbox.caches.max_size: %w", err)
 	}
-	for k, v := range map[string]string{"warm_every": s.WarmEvery, "warm_timeout": s.WarmTimeout} {
-		if v == "" {
-			continue
-		}
-		if d, err := time.ParseDuration(v); err != nil || d <= 0 {
-			return fmt.Errorf("config: sandbox.caches.%s %q is not a positive duration", k, v)
-		}
-	}
-	if d := s.WarmEveryDur(); d > 0 && d < 10*time.Minute {
-		return fmt.Errorf("config: sandbox.caches.warm_every %s is under 10m", d)
-	}
-	recipes := repocache.Recipes(s.Recipes)
-	for i, r := range s.Recipes {
-		if r.Disabled {
-			continue
-		}
-		if r.Recipe != "" {
-			return fmt.Errorf("config: sandbox.caches.recipes[%d]: a recipe cannot reference another (recipe: %s)", i, r.Recipe)
-		}
-		if err := r.Validate(nil); err != nil {
-			return fmt.Errorf("config: sandbox.caches.recipes[%d]: %w", i, err)
-		}
-		if len(r.Detect) == 0 {
-			return fmt.Errorf("config: sandbox.caches.recipes[%d] (%s): no detect files", i, r.Name)
-		}
-	}
-	check := func(where string, list []repocache.Cache) error {
-		seen := map[string]bool{}
-		for i, c := range list {
-			defs, warn := repocache.Resolve(repocache.Sources{Repo: []repocache.Cache{c}, Recipes: recipes})
-			if len(warn) > 0 {
-				return fmt.Errorf("config: %s[%d]: %s", where, i, warn[0])
+	if l := s.Learn; l != nil {
+		if l.MinSize != "" {
+			if n, err := ParseByteSize(l.MinSize); err != nil || n <= 0 {
+				return fmt.Errorf("config: sandbox.caches.learn.min_size %q: want a size such as 50MiB", l.MinSize)
 			}
-			name := c.Name
-			if name == "" {
-				name = c.Recipe
-			}
-			if len(defs) == 0 && !c.Disabled {
-				return fmt.Errorf("config: %s[%d]: no cache defined", where, i)
-			}
-			if seen[name] {
-				return fmt.Errorf("config: %s: cache %q is defined twice", where, name)
-			}
-			seen[name] = true
 		}
-		return nil
-	}
-	if err := check("sandbox.caches.defaults", s.Defaults); err != nil {
-		return err
-	}
-	for repo, list := range s.Repos {
-		if err := repocache.CheckRepo(repo); err != nil {
-			return fmt.Errorf("config: sandbox.caches.repos: %w", err)
-		}
-		if err := check("sandbox.caches.repos."+repo, list); err != nil {
-			return err
+		if l.MinRuns < 0 {
+			return fmt.Errorf("config: sandbox.caches.learn.min_runs must be at least 1")
 		}
 	}
 	return nil
 }
+
+// CachesRemoved is the warning for a recipe-cache field still under
+// sandbox.caches.
+const CachesRemoved = "recipe caches were removed; this field is ignored and can be deleted (a step names its own cache with `cache: { key: … }`, and what it caches is learned — see Step-Caches)"
+
+// removedCacheFields are the sandbox.caches keys the recipe caches had.
+var removedCacheFields = []string{"autodetect", "repo_file", "warm_on_miss", "warm_every", "warm_timeout", "recipes", "defaults", "repos"}

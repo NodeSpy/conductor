@@ -23,16 +23,19 @@ import (
 // The plugin declares the host and the credential; the scope is
 // conductor's, LEARNED:
 //
-//   - A cache warm of a repository — always its default branch, with the
-//     default branch's recipe — may fetch any repository on the host the
-//     credential can read. The proxy hears each one the forge served, and
-//     when the warm succeeds that set replaces what the recipe's previous
-//     warm learned (a dependency it no longer fetched drops off).
+//   - A TEACHING launch of a repository may fetch any repository on the
+//     host the credential can read: a launch in conductor's own checkout of
+//     the default branch's head, by a step whose cache key another step
+//     restores from (agentsandbox.CacheBinding.Teach) — work whose output
+//     other runs already trust. The proxy hears each repository the forge
+//     served, and when the step succeeds and its cache is published that
+//     set replaces what the key's previous teaching run learned (a
+//     dependency it no longer fetched drops off).
 //   - Every other launch (a dispatch on a PR branch, a review, a fixer, a
 //     `conductor sandbox exec` hand-off) gets the repository itself plus
 //     its learned dependencies, and nothing a PR branch names: a PR that
 //     adds a new private dependency fetches it once the default branch has
-//     it and the next warm learns it.
+//     it and the next teaching run learns it.
 
 // gitFetchStore persists the repo → instance map and the learned sets
 // across restarts. *store.Store satisfies it.
@@ -74,7 +77,7 @@ func (e *Engine) gitFetchAuth(sem *sdk.ConnSemantics, name, instance, repo, val 
 	return out
 }
 
-// gitAuths builds the credentials; learn: a default-branch warm's, for any
+// gitAuths builds the credentials; learn: a teaching launch's, for any
 // repository on the host.
 func (e *Engine) gitAuths(sem *sdk.ConnSemantics, name, instance, repo, val string, learn bool) []sandbox.GitAuth {
 	if sem == nil || repo == "" || val == "" || strings.Contains(repo, "..") {
@@ -168,7 +171,7 @@ func (e *Engine) connectionSetting(instance, key string) any {
 }
 
 // recordGitFetch notes that instance's git fetch credential covered
-// trusted work on repo: a later warm or hand-off of repo — after a restart
+// trusted work on repo: a later teaching launch or hand-off of repo — after a restart
 // too — mints through it.
 func (e *Engine) recordGitFetch(repo, instance string) {
 	k := gitKey(repo)
@@ -214,9 +217,11 @@ func (e *Engine) gitLearned(repo, instance string) []string {
 	return out
 }
 
-// GitLearned records what a successful default-branch warm of repo's
-// recipe fetched with the credential ("host/path" each), replacing what
-// that recipe's previous warm learned. Only RunCacheWarm calls it.
+// GitLearned records what a successful teaching run of repo fetched with
+// the credential ("host/path" each), under its label (the run's cache key,
+// "cache:<id>"), replacing what that label's previous run learned. Only
+// controller.TaughtGit calls it. (A set an older conductor's recipe warm
+// recorded keeps its recipe's label, and stays learned.)
 func (e *Engine) GitLearned(repo, recipe string, fetched []string) {
 	instance, ok := e.gitFetchInstance(repo)
 	if !ok {
@@ -232,7 +237,7 @@ func (e *Engine) GitLearned(repo, recipe string, fetched []string) {
 	}
 	if gs := e.gitStore(); gs != nil {
 		if err := gs.PutGitLearned(k, instance, recipe, clean); err != nil {
-			e.log("git fetch: record what the %s warm of %s learned: %v", recipe, repo, err)
+			e.log("git fetch: record what %s of %s learned: %v", recipe, repo, err)
 		}
 	} else {
 		e.gitMem.mu.Lock()
@@ -248,7 +253,7 @@ func (e *Engine) GitLearned(repo, recipe string, fetched []string) {
 		e.gitMem.mu.Unlock()
 	}
 	if len(clean) > 0 {
-		e.log("git fetch: %s learned %d dependenc(ies) from its default branch's %s warm: %s", repo, len(clean), recipe, strings.Join(clean, ", "))
+		e.log("git fetch: %s learned %d dependenc(ies) from its default branch (%s): %s", repo, len(clean), recipe, strings.Join(clean, ", "))
 	}
 }
 
@@ -259,9 +264,10 @@ func (e *Engine) GitFetchFor(ctx context.Context, repo string) []sandbox.GitAuth
 	return e.gitFetchMint(ctx, repo, false)
 }
 
-// GitFetchWarm mints the git fetch credentials for a default-branch cache
-// warm of repo: for any repository on the host (the warm learns which).
-func (e *Engine) GitFetchWarm(ctx context.Context, repo string) []sandbox.GitAuth {
+// GitFetchTeach mints the git fetch credentials for a teaching launch on
+// repo (a default-branch checkout by a step other steps restore from): for
+// any repository on the host (the launch learns which).
+func (e *Engine) GitFetchTeach(ctx context.Context, repo string) []sandbox.GitAuth {
 	return e.gitFetchMint(ctx, repo, true)
 }
 
