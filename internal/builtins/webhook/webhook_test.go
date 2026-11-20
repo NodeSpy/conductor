@@ -762,3 +762,108 @@ func asError(err error, target **plugin.Error) bool {
 	}
 	return false
 }
+
+// A Google Calendar push channel: an EMPTY body, authenticated only by the
+// channel token it echoes in a header, routed by which channel fired. Scheme
+// "token" verifies the header against the secret; templates and the event
+// context see the other headers, never the token itself.
+func TestStartSourceTokenSchemeAndHeaders(t *testing.T) {
+	w := New()
+	addr := freeAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	emit, got := collectEvents()
+	go func() {
+		_ = w.StartSource(ctx, plugin.StartSourceRequest{
+			Instance: "wh",
+			Config: map[string]any{
+				"listen": addr,
+				"sources": map[string]any{
+					"gcal": map[string]any{
+						"path":  "/gcal",
+						"sign":  map[string]any{"header": "X-Goog-Channel-Token", "secret": "tok3n", "scheme": "token"},
+						"match": `{{if ne (index .headers "x-goog-resource-state") "sync"}}true{{end}}`,
+						"title": `{{index .headers "x-goog-channel-id"}}`,
+					},
+				},
+			},
+		}, emit)
+	}()
+	waitListening(t, addr)
+
+	hdrs := func(tok, state string) map[string]string {
+		return map[string]string{
+			"X-Goog-Channel-Token":  tok,
+			"X-Goog-Channel-Id":     "cal-ednition",
+			"X-Goog-Resource-State": state,
+			"Authorization":         "Bearer secret",
+		}
+	}
+
+	if code := postTo(t, "http://"+addr+"/gcal", "", hdrs("wrong", "exists")); code != http.StatusUnauthorized {
+		t.Fatalf("wrong token: status = %d", code)
+	}
+	if code := postTo(t, "http://"+addr+"/gcal", "", hdrs("", "exists")); code != http.StatusUnauthorized {
+		t.Fatalf("missing token: status = %d", code)
+	}
+	// The channel's initial "sync" ping is filtered out by match.
+	if code := postTo(t, "http://"+addr+"/gcal", "", hdrs("tok3n", "sync")); code != http.StatusAccepted {
+		t.Fatalf("sync ping: status = %d", code)
+	}
+	if code := postTo(t, "http://"+addr+"/gcal", "", hdrs("tok3n", "exists")); code != http.StatusAccepted {
+		t.Fatalf("valid token: status = %d", code)
+	}
+	select {
+	case ev := <-got:
+		if ev.Title != "cal-ednition" {
+			t.Fatalf("title from header = %q", ev.Title)
+		}
+		h, _ := ev.Context["headers"].(map[string]any)
+		if h["x-goog-resource-state"] != "exists" {
+			t.Fatalf("headers in context = %v", h)
+		}
+		for _, k := range []string{"x-goog-channel-token", "authorization"} {
+			if _, ok := h[k]; ok {
+				t.Fatalf("%s must be withheld from the event context: %v", k, h)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("valid token should emit")
+	}
+	select {
+	case ev := <-got:
+		t.Fatalf("only one delivery should emit, got another: %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestValidateSignBlock(t *testing.T) {
+	w := New()
+	for _, tc := range []struct {
+		name string
+		sign map[string]any
+		want string
+	}{
+		{"unknown scheme", map[string]any{"header": "X", "secret": "s", "scheme": "md5"}, "sources.a.sign.scheme"},
+		{"secret without header", map[string]any{"secret": "s", "scheme": "token"}, "sources.a.sign.header"},
+	} {
+		res, _ := w.Validate(context.Background(), plugin.ValidateRequest{Config: map[string]any{
+			"listen":  "127.0.0.1:0",
+			"sources": map[string]any{"a": map[string]any{"path": "/a", "sign": tc.sign}},
+		}})
+		found := false
+		for _, p := range res.Problems {
+			found = found || p.Path == tc.want
+		}
+		if !found {
+			t.Errorf("%s: want a problem at %s, got %+v", tc.name, tc.want, res.Problems)
+		}
+	}
+	res, _ := w.Validate(context.Background(), plugin.ValidateRequest{Config: map[string]any{
+		"listen":  "127.0.0.1:0",
+		"sources": map[string]any{"a": map[string]any{"path": "/a", "sign": map[string]any{"header": "X-Goog-Channel-Token", "secret": "s", "scheme": "token"}}},
+	}})
+	if len(res.Problems) != 0 {
+		t.Errorf("valid token sign block: %+v", res.Problems)
+	}
+}

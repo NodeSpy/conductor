@@ -198,6 +198,29 @@ re-POSTs an identical payload (a heartbeat/status webhook) is never silently
 dropped. Declare `dedup:` (a template over `{{.body...}}`) only when a
 retried/re-delivered body should collapse to one event.
 
+`webhook`'s `sign:` verifies each delivery before it fires. `scheme:` is
+`sha256`/`hex` (the default) or `base64` for an HMAC-SHA256 of the body in
+`header:`, or `token` for a shared secret the sender echoes verbatim in
+`header:`. Use `token` for senders that sign nothing, such as Google push
+channels (empty body, `X-Goog-Channel-Token`) and GitLab (`X-Gitlab-Token`).
+Templates (`match`, `title`, `dedup`, `repo`) see `{{.body}}` and
+`{{.headers}}`: request headers with lower-cased names, read as
+`{{index .headers "x-goog-resource-state"}}`. Triggers get the same map as
+`headers`. The `sign:` header, `Authorization`, `Proxy-Authorization` and
+`Cookie` are withheld, so a secret never lands in run history.
+
+```yaml
+gcal-push:
+  use: webhook
+  expose: funnel            # Google requires a public https URL
+  sources:
+    changed:
+      path: /gcal
+      sign: { header: X-Goog-Channel-Token, secret: ${GCAL_CHANNEL_TOKEN}, scheme: token }
+      match: '{{if ne (index .headers "x-goog-resource-state") "sync"}}true{{end}}'
+      title: '{{index .headers "x-goog-channel-id"}}'
+```
+
 Every `vaults:` entry also surfaces under its own name with `read` (all
 types) and `write` (writable types) verbs — values read there are tainted
 sensitive and redacted from logs/audit. See [[Secrets]].

@@ -201,6 +201,9 @@ connectors:
       cloudwatch:
         path: /hooks/cloudwatch
         sign: { header: X-Signature-256, secret: ${CW_SECRET}, scheme: sha256 }
+        # scheme: token -> the header carries the secret itself (Google push
+        # channels' X-Goog-Channel-Token, X-Gitlab-Token). Templates also see
+        # {{.headers}} (lower-cased; the sign header and credentials withheld).
         match: '{{if eq .body.detail.state "ALARM"}}true{{end}}'
         title: "{{.body.detail.alarmName}}"
         # dedup: is replay protection, nothing more — without it, EVERY

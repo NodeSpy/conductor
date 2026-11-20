@@ -25,6 +25,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -48,8 +49,8 @@ import (
 // every delivery regardless (see deliveryFallbackKey) — this id only ever
 // folds into the synthetic TARGET key alongside the body's own hash, purely
 // to give deliveries with distinct ids distinct targets. Operators who want
-// replay protection declare an explicit `dedup:` template over `{{.body...}}`
-// (dedup: templates only see the parsed body, not headers); without one,
+// replay protection declare an explicit `dedup:` template (over the body, or
+// over a header the `sign:` scheme does authenticate); without one,
 // conductor does not invent suppression from the body or this header behind
 // the operator's back.
 const deliveryIDHeader = "X-Delivery-Id"
@@ -79,18 +80,19 @@ func (*Webhook) Describe() plugin.Decl {
 			"expose":        {Type: "string", Desc: "an exposure connector (a tunnel or relay) that makes listen reachable from outside; the engine opens it at start"},
 			"path":          {Type: "string", Desc: "the relay path (default /): a delivery here is offered to every source, routed by match — where an exposure that replays to one path (a relay) delivers"},
 			"public_url":    {Type: "string", Desc: "filled in by the engine with the exposure's public URL; never set by hand"},
-			"sources":       {Type: "map", Required: true, Desc: "name -> { path, sign: {header,secret,scheme}, match, title, dedup, repo }. dedup: a template rendering the operator's own signature for replay protection; unset (the default) fires on EVERY delivery — no dedup check at all, so a sender that legitimately re-POSTs an identical payload (heartbeat/status webhooks) is never silently suppressed"},
+			"sources":       {Type: "map", Required: true, Desc: "name -> { path, sign: {header,secret,scheme}, match, title, dedup, repo }. sign.scheme: hex|sha256|base64 (HMAC-SHA256 of the body) or token (the header carries the secret itself — Google push channels' X-Goog-Channel-Token). Templates see {{.body}} and {{.headers}} (lower-cased names; the sign header, authorization and cookie headers are withheld). dedup: a template rendering the operator's own signature for replay protection; unset (the default) fires on EVERY delivery — no dedup check at all, so a sender that legitimately re-POSTs an identical payload (heartbeat/status webhooks) is never silently suppressed"},
 			"allow_private": {Type: "boolean", Desc: "permit webhook.post to reach loopback/private/link-local/CGNAT addresses (default false — blocked to prevent SSRF)"},
 			"allow_hosts":   {Type: "list", Desc: "specific hosts (by name) or exact IPs that webhook.post may reach even in an otherwise-blocked range"},
 		},
 		Events: []plugin.Event{{
 			Name: "<source>", Dynamic: true, Desc: "a configured source received a delivery",
 			Context: plugin.Schema{
-				"body":   {Type: "map"},
-				"kind":   {Type: "string"},
-				"title":  {Type: "string"},
-				"repo":   {Type: "string"},
-				"number": {Type: "integer"},
+				"body":    {Type: "map"},
+				"headers": {Type: "map", Desc: "request headers, lower-cased names (the sign header and credential headers withheld)"},
+				"kind":    {Type: "string"},
+				"title":   {Type: "string"},
+				"repo":    {Type: "string"},
+				"number":  {Type: "integer"},
 			},
 		}},
 		Verbs: []plugin.Verb{{
@@ -183,11 +185,12 @@ func (w *Webhook) DescribeInstance(_ context.Context, instance string, cfg map[s
 		d.Events = append(d.Events, plugin.Event{
 			Name: name, Desc: fmt.Sprintf("webhook source %q received a delivery", name),
 			Context: plugin.Schema{
-				"body":   {Type: "map"},
-				"kind":   {Type: "string"},
-				"title":  {Type: "string"},
-				"repo":   {Type: "string"},
-				"number": {Type: "integer"},
+				"body":    {Type: "map"},
+				"headers": {Type: "map", Desc: "request headers, lower-cased names (the sign header and credential headers withheld)"},
+				"kind":    {Type: "string"},
+				"title":   {Type: "string"},
+				"repo":    {Type: "string"},
+				"number":  {Type: "integer"},
 			},
 			Semantics: &plugin.EventSemantics{
 				Target: &plugin.TargetSemantics{
@@ -242,6 +245,14 @@ func (w *Webhook) Validate(_ context.Context, req plugin.ValidateRequest) (plugi
 		}
 		if expose != "" && sc.Match == "" && len(names) > 1 {
 			problems = append(problems, plugin.Problem{Path: p + ".match", Message: "required to route the relay path across multiple sources"})
+		}
+		switch sc.Sign.Scheme {
+		case "", "hex", "sha256", "base64", "token":
+		default:
+			problems = append(problems, plugin.Problem{Path: p + ".sign.scheme", Message: fmt.Sprintf("unknown scheme %q (hex, sha256, base64, or token)", sc.Sign.Scheme)})
+		}
+		if sc.Sign.Secret != "" && sc.Sign.Header == "" {
+			problems = append(problems, plugin.Problem{Path: p + ".sign.header", Message: "required with sign.secret"})
 		}
 		for field, tmpl := range map[string]string{"match": sc.Match, "title": sc.Title, "dedup": sc.Dedup, "repo": sc.Repo} {
 			if _, err := template.New("t").Parse(tmpl); err != nil {
@@ -312,11 +323,7 @@ func (w *Webhook) relayHandler(ctx context.Context, instance string, names []str
 		}
 		for _, name := range names {
 			sc := srcs[name]
-			sig := ""
-			if sc.Sign.Header != "" {
-				sig = r.Header.Get(sc.Sign.Header)
-			}
-			w.deliver(instance, name, sc, sig, body, true, seen, emit, r.Header.Get(deliveryIDHeader))
+			w.deliver(instance, name, sc, body, r.Header, true, seen, emit)
 		}
 		rw.WriteHeader(http.StatusAccepted)
 	}
@@ -335,11 +342,11 @@ func (w *Webhook) handler(ctx context.Context, instance, name string, sc sourceC
 			http.Error(rw, "read body", http.StatusBadRequest)
 			return
 		}
-		if sc.Sign.Secret != "" && !inbound.VerifyHMAC(sc.Sign.Secret, body, r.Header.Get(sc.Sign.Header), sc.Sign.Scheme) {
+		if !verify(sc.Sign, body, r.Header) {
 			http.Error(rw, "bad signature", http.StatusUnauthorized)
 			return
 		}
-		w.deliver(instance, name, sc, "", body, false, seen, emit, r.Header.Get(deliveryIDHeader))
+		w.deliver(instance, name, sc, body, r.Header, false, seen, emit)
 		rw.WriteHeader(http.StatusAccepted)
 	}
 }
@@ -355,12 +362,14 @@ func (w *Webhook) handler(ctx context.Context, instance, name string, sc sourceC
 // one — used only to help compute a distinct synthetic TARGET key for a
 // source that declares no `dedup:` template (below); it is never a dedup
 // gate.
-func (w *Webhook) deliver(instance, name string, sc sourceCfg, relaySig string, body []byte, viaRelay bool, seen *inbound.DeliveryDedup, emit func(any) error, deliveryID string) {
-	if viaRelay && sc.Sign.Secret != "" && !inbound.VerifyHMAC(sc.Sign.Secret, body, relaySig, sc.Sign.Scheme) {
+func (w *Webhook) deliver(instance, name string, sc sourceCfg, body []byte, hdr http.Header, viaRelay bool, seen *inbound.DeliveryDedup, emit func(any) error) {
+	if viaRelay && !verify(sc.Sign, body, hdr) {
 		return
 	}
+	deliveryID := hdr.Get(deliveryIDHeader)
 	parsed := parseBody(body)
-	data := map[string]any{"body": parsed}
+	headers := templateHeaders(hdr, sc.Sign.Header)
+	data := map[string]any{"body": parsed, "headers": headers}
 
 	if sc.Match != "" && strings.TrimSpace(render(sc.Match, data)) != "true" {
 		return // this delivery isn't for this source
@@ -410,7 +419,7 @@ func (w *Webhook) deliver(instance, name string, sc sourceCfg, relaySig string, 
 	_ = emit(plugin.SourceEvent{
 		Event: name, Instance: instance, Title: title, Dedup: dedup,
 		Target:  tgt,
-		Context: map[string]any{"body": parsed, "kind": name, "title": title, "repo": repo, "number": tgt.Number},
+		Context: map[string]any{"body": parsed, "headers": headers, "kind": name, "title": title, "repo": repo, "number": tgt.Number},
 	})
 }
 
@@ -423,6 +432,42 @@ func (w *Webhook) deliver(instance, name string, sc sourceCfg, relaySig string, 
 // (see the call site in deliver) — so a sender choosing what id (or none) to
 // send can influence the target a delivery lands on, but can never suppress
 // a delivery this way.
+// verify checks a delivery against a source's `sign:` block. No secret means
+// no verification configured (every delivery passes, as before). Scheme
+// "token" is a shared-secret header — the sender echoes the secret verbatim
+// (Google Calendar push channels' X-Goog-Channel-Token, GitLab's
+// X-Gitlab-Token); senders whose body is empty can be authenticated no other
+// way. Every other scheme is an HMAC-SHA256 of the body.
+func verify(sign signCfg, body []byte, hdr http.Header) bool {
+	if sign.Secret == "" {
+		return true
+	}
+	got := hdr.Get(sign.Header)
+	if sign.Scheme == "token" {
+		return got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(sign.Secret)) == 1
+	}
+	return inbound.VerifyHMAC(sign.Secret, body, got, sign.Scheme)
+}
+
+// withheldHeaders never reach templates or the event context: they carry
+// credentials, and the event context is persisted in run history.
+var withheldHeaders = map[string]bool{"authorization": true, "proxy-authorization": true, "cookie": true}
+
+// templateHeaders flattens the request headers for templates and the event
+// context: lower-cased names, first value. The source's own sign header is
+// withheld too — under scheme "token" it IS the secret.
+func templateHeaders(hdr http.Header, signHeader string) map[string]any {
+	out := make(map[string]any, len(hdr))
+	for k, v := range hdr {
+		lk := strings.ToLower(k)
+		if len(v) == 0 || withheldHeaders[lk] || (signHeader != "" && strings.EqualFold(k, signHeader)) {
+			continue
+		}
+		out[lk] = v[0]
+	}
+	return out
+}
+
 func deliveryFallbackKey(deliveryID string, body []byte) string {
 	key := "sha256:" + bodyHash(body)
 	if deliveryID != "" {
