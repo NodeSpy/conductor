@@ -466,9 +466,8 @@ type ConnSemantics struct {
 // credential to fetches of any repository on the host — the secret never
 // enters the sandbox, and a push to the host is refused.
 //
-// The plugin declares the host and the credential only. Conductor applies
-// it only to a launch already granted a credential with the same value: the
-// fetch reaches no further than what the launch holds.
+// The plugin declares the host and the credential only; it declares no
+// repositories.
 // Declaring git_fetch admits the host to every launch's egress for those
 // fetches; a build that adds or changes one is held for approval.
 type GitFetch struct {

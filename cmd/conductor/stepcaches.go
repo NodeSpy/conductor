@@ -7,7 +7,6 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/config"
-	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/gitwt"
 	"github.com/NodeSpy/conductor/internal/keycache"
@@ -44,12 +43,10 @@ func wireStepCaches(ctx context.Context, cfg *config.Config, gitProv *gitwt.Prov
 	done := m.Start(ctx)
 	stepCaches.Store(&stepCacheWiring{m: m, ctx: ctx, logf: logf})
 	dispatch.CacheFinisher = finishStepCache
-	controller.CacheSecrets = m.AddSecrets
 	logf("step caches: on (store %s, cap %s, learn %s in %d run(s))", m.Store.Dir, capString(m.MaxSize), keycache.HumanSize(m.MinSize), m.MinRuns)
 	return func() {
 		stepCaches.Store(nil)
 		dispatch.CacheFinisher = nil
-		controller.CacheSecrets = nil
 		cancel()
 		select {
 		case <-done:

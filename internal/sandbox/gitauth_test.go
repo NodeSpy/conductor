@@ -291,38 +291,3 @@ func TestGitRewriteEnv(t *testing.T) {
 		t.Fatalf("count set twice:\n%s", got)
 	}
 }
-
-// TestGitAuthHeld: a git fetch credential applies only to a launch that
-// was already granted its very token — by value, never by name; a
-// different token, a prefix, an extension or a token inside a longer value
-// is not the same token.
-func TestGitAuthHeld(t *testing.T) {
-	self := GitAuth{Host: "github.com", Username: "x-access-token", Secret: "ghu_selfSELFself0123456789"}
-	app := GitAuth{Host: "github.com", Username: "x-access-token", Secret: "ghs_appAPPapp0123456789"}
-	both := []GitAuth{self, app}
-	for name, c := range map[string]struct {
-		held []string
-		want []string
-	}{
-		"holds self":            {[]string{"/bin", self.Secret}, []string{self.Secret}},
-		"holds both":            {[]string{app.Secret, self.Secret}, []string{self.Secret, app.Secret}},
-		"holds a different one": {[]string{"ghs_other0123456789abcdef"}, nil},
-		"holds none":            {nil, nil},
-		"prefix":                {[]string{self.Secret[:len(self.Secret)-1]}, nil},
-		"extended":              {[]string{self.Secret + "x"}, nil},
-		"inside a longer value": {[]string{"Bearer " + self.Secret}, nil},
-		"case differs":          {[]string{strings.ToUpper(self.Secret)}, nil},
-		"empty value":           {[]string{""}, nil},
-	} {
-		var got []string
-		for _, g := range GitAuthHeld(both, c.held) {
-			got = append(got, g.Secret)
-		}
-		if strings.Join(got, ",") != strings.Join(c.want, ",") {
-			t.Errorf("%s: %v, want %v", name, got, c.want)
-		}
-	}
-	if g := GitAuthHeld([]GitAuth{{Host: "github.com", Username: "u"}}, []string{""}); len(g) != 0 {
-		t.Fatalf("an empty secret is held by an empty value: %+v", g)
-	}
-}

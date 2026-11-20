@@ -20,10 +20,7 @@ import (
 // to the agent.
 //
 // The plugin declares the hosts and the credential. The proxy adds it to a
-// fetch of any repository on those hosts, for a launch that already holds
-// the same token (sandbox.GitAuthHeld, at launch): the fetch reaches no
-// further than what the agent already could. A launch holding no such
-// token gets no git auth.
+// fetch of any repository on those hosts; pushes are refused.
 
 // gitFetchStore persists the repo → instance map across restarts.
 // *store.Store satisfies it.

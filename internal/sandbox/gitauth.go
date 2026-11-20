@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"net"
@@ -22,13 +21,10 @@ import (
 // hosts, and on each git fetch request — smart HTTP's upload-pack, read
 // only — it adds the credential itself, for any repository on the host.
 //
-// A launch gets a git fetch credential only when it already holds that
-// very token (GitAuthHeld): another credential it was granted carries the
-// identical value. The fetch then reaches nothing the agent could not
-// already reach with what it holds; a launch holding no such token gets no
-// git auth, and its fetch of a private repository fails. The proxy never
-// shows the credential to the sandbox. A push (receive-pack) to a declared
-// host is refused outright — conductor pushes, never the agent.
+// The credential is added only to a repository's smart-HTTP fetch paths
+// (gitFetchShape), never to any other request on the host, and the proxy
+// never shows it to the sandbox. A push (receive-pack) to a declared host
+// is refused outright — conductor pushes, never the agent.
 
 // GitAuth is one host's git fetch credential for a launch.
 type GitAuth struct {
@@ -41,29 +37,6 @@ type GitAuth struct {
 	Username string `json:"username"`
 	// Secret is the credential. Never serialized.
 	Secret string `json:"-"`
-}
-
-// GitAuthHeld is the auths whose Secret the launch already holds: equal,
-// byte for byte, to one of held (the credential values the launch was
-// granted). Compared in constant time; what a credential is named or for
-// never matters, only its value.
-func GitAuthHeld(auths []GitAuth, held []string) []GitAuth {
-	var out []GitAuth
-	for _, g := range auths {
-		if g.Secret == "" {
-			continue
-		}
-		has := 0
-		for _, v := range held {
-			if len(v) == len(g.Secret) {
-				has |= subtle.ConstantTimeCompare([]byte(v), []byte(g.Secret))
-			}
-		}
-		if has == 1 {
-			out = append(out, g)
-		}
-	}
-	return out
 }
 
 // Validate refuses a GitAuth the proxy cannot apply exactly.

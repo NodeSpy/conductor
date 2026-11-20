@@ -103,16 +103,11 @@ type Policy struct {
 	// GitAuth are the launch's git fetch credentials (sandbox.GitAuth): the
 	// SSH forms of each host's URLs are rewritten to HTTPS in the agent's
 	// git, each host is inspected, and the proxy adds the credential to
-	// fetches of any repository on the host. Wrap keeps only those whose
-	// token is one of GitHeld. The secrets never enter the sandbox, and
+	// fetches of any repository on the host. The secrets never enter the
+	// sandbox, and
 	// never travel with the policy (it carries none over the control
 	// socket).
 	GitAuth []sandbox.GitAuth `json:"-"`
-	// GitHeld are the credential values the launch was already granted (a
-	// dispatch's credentials; a `conductor sandbox exec` launcher's own
-	// environment): a git fetch credential applies only when its token is
-	// one of them (sandbox.GitAuthHeld).
-	GitHeld []string `json:"-"`
 	// Limits are the launch's resource limits and disk guard
 	// (sandbox.limits; the zero value is the default).
 	Limits LimitSpec `json:"limits,omitempty"`
@@ -448,10 +443,6 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	// only; the sandbox is shown the system roots plus its certificate.
 	var insp *sandbox.Inspector
 	var caDir string
-	// A git fetch credential applies only to a launch already holding
-	// its very token (sandbox.GitAuthHeld): the fetch reaches no further
-	// than what the agent holds.
-	p.GitAuth = sandbox.GitAuthHeld(p.GitAuth, p.GitHeld)
 	if len(p.GitAuth) > 0 {
 		// Git fetches over HTTPS through the proxy, which inspects each
 		// host to add the credential (sandbox/gitauth.go).

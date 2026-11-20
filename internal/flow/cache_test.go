@@ -97,14 +97,6 @@ steps:
 	if len(top.RestoreFrom) != 1 || top.RestoreFrom[0].Value != "o/r" || top.RestoreFrom[0].Template != "{{.repo}}" {
 		t.Errorf("restore_from %+v", top.RestoreFrom)
 	}
-	// Learning is kept per family: the key restored from first, else the
-	// key itself (keycache.Key.Family).
-	if len(top.RestoreFrom) > 0 && top.Key.Family != top.RestoreFrom[0].ID() {
-		t.Errorf("family %q, want the first restore_from key's %q", top.Key.Family, top.RestoreFrom[0].ID())
-	}
-	if own := by["own"].Cache; own == nil || len(own.RestoreFrom) != 0 || own.Key.Family != own.Key.ID() {
-		t.Errorf("a key restoring from none is not its own family: %+v", own)
-	}
 	f := got()
 	for _, step := range []string{"plain", "own", "top"} {
 		if ok, seen := f[by[step].DispatchID]; !seen || !ok {

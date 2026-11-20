@@ -37,6 +37,24 @@ What the agent sees:
 | the environment | a minimal one: `PATH`, locale, terminal, the gateway's URL and a per-launch token in place of the model key, your git name/email. No `GH_TOKEN`, `SSH_AUTH_SOCK`, cloud keys, or a launcher's own tokens. |
 | everything else | **absent** — your `~/.ssh`, `~/.aws`, `~/.config/gh`, other projects, conductor's state and config. Nothing is denied by a list: what is not shown is not there. |
 
+### What the sandbox guards {#what-the-sandbox-guards}
+
+The sandbox does not police what an agent does inside it: what it runs,
+downloads or writes in its own home and workspace is the agent's work,
+including workflows an agent writes for itself. It guards the exits:
+
+1. **Credentials never enter the sandbox.** Forge, cloud and model
+   credentials stay outside; the egress proxy and the model gateway add
+   them to requests on the way out.
+2. **Network egress reaches only allowed hosts**, through conductor's proxy.
+3. **Writes to the outside world go through conductor**: a push or a forge
+   or cloud write is a conductor verb, under the dispatch's policy. The
+   proxy refuses a git push from the sandbox.
+4. **Lower-trust work never feeds higher-trust work.** A run's [step
+   cache](Step-Caches#trust-model) is published only to its own step's key;
+   the keys it restores from are read-only to it; a step an agent wrote, or
+   one whose target the event's sender chose, gets no cache.
+
 An **identity** is who the agent is: for a dispatch, its profile per (trusted)
 repository — `agent:fixer@acme/app`; for a member, the member; for a directory
 conductor did not create, the directory itself. Every launch of an identity —
@@ -214,21 +232,11 @@ conductor authenticates it:
   pushes, never the agent. Every other request to the host (a web page, the
   dumb HTTP protocol, `git-upload-archive`, Git LFS) never carries the
   credential, and passes only if your egress allows it.
-- **Only for a launch that already holds the token.** The connector
-  declares only the hosts and the credential. The proxy applies it to a
-  launch only when the launch was already granted a credential whose value
-  is **identical** to the git fetch credential's: the dispatch's own
-  credentials (a fixer's `GH_TOKEN`, when the connector mints its read
-  and write tokens from the same login), or, for a `conductor sandbox exec`
-  hand-off, the exec process's own environment. The values are compared at
-  launch, in constant time; names and roles do not matter. The fetch then
-  reaches no further than what the launch already holds: that token can
-  already clone every repository it reads. A launch granted no such
-  credential (none, or a different token, such as the App's installation
-  token while `git_fetch` carries the operator's) gets no git auth: its
-  fetch goes out unauthenticated and fails as before. Nothing is learned,
-  listed, or read from a lockfile, so a PR that adds a new private
-  dependency fetches it on its first run.
+- **Any repository on the host.** The connector declares only the hosts
+  and the credential. The proxy adds it to a fetch of any repository on
+  those hosts, for every launch whose dispatch carries the connector's git
+  fetch credential. Nothing is learned, listed, or read from a lockfile, so
+  a PR that adds a new private dependency fetches it on its first run.
 - **Kept across restarts.** Which connector instance mints for each
   repository is in conductor's state dir (`git-fetch.json`: repository
   and instance names, never a credential), out of every sandbox's view.

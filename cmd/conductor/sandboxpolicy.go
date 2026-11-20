@@ -180,8 +180,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	if cfg.Sandbox.GitFetchOn() {
 		// A `conductor sandbox exec` launch in a workspace conductor checked
 		// out (a hand-off): the repository's git fetch credentials
-		// (controller.ScopedGitAuth, once the engine runs), applied only
-		// when the exec process already holds the same token.
+		// (controller.ScopedGitAuth, once the engine runs).
 		r.GitAuth = func(repo string) []sandbox.GitAuth {
 			f := controller.ScopedGitAuth
 			if f == nil {

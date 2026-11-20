@@ -263,6 +263,7 @@ if [ -d "$TMPDIR/dep/.git" ]; then
   ( cd "$TMPDIR/dep" && git -c user.name=a -c user.email=a@b commit -q --allow-empty -m x && git push -q origin HEAD:refs/heads/pushed ) >"$TMPDIR/push" 2>&1; [ $? != 0 ]; say $? "push is refused"
   grep -q "git push from the sandbox" "$TMPDIR/push"; say $? "push refused by the proxy"
 fi
+git ls-remote "https://forge.test:$FORGE_PORT/api/dep.git" >/dev/null 2>&1; [ $? != 0 ]; say $? "a forge API path gets no credential"
 git push -q ssh://git@forge.test/org/dep.git HEAD:refs/heads/pushed2 >"$TMPDIR/push2" 2>&1; [ $? != 0 ]; say $? "push of the checkout is refused"
 needle="s3cr3t-""forge"
 env | grep -q "$needle"; [ $? != 0 ]; say $? "the secret is not in the environment"
@@ -275,11 +276,10 @@ command -v ssh >/dev/null && echo "has ssh" || true
 // its config, the detector killed it as a tunnel tool). A real sandboxed
 // agent launch fetches it over HTTPS through the egress proxy, which adds
 // the connector's git fetch credential — for any repository on the host,
-// nothing learned beforehand — but only because the dispatch already
-// granted the launch that very token (by value; GH_TOKEN here). A launch
-// granted a different token (an App token while git_fetch is the
-// operator's own), or none, gets no git auth: its fetch fails as before.
-// A push is refused either way, and the secret never enters the sandbox.
+// never seen before, nothing learned or listed. A request on the host that
+// is not a repository's fetch (a forge API path that ends like one) gets
+// no credential. A push is refused, and the secret never enters the
+// sandbox. A launch without a git fetch credential fails as before.
 func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short")
@@ -369,7 +369,7 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		t.Helper()
 		t.Logf("probe:\n%s", out)
 		for _, l := range []string{"ok the checkout's package.json names the new dependency", "FAIL ls-remote of the ssh:// URL",
-			"FAIL clone of the scp-form URL", "FAIL ls-remote of another repository on the host", "ok push of the checkout is refused",
+			"FAIL clone of the scp-form URL", "FAIL ls-remote of another repository on the host", "ok a forge API path gets no credential", "ok push of the checkout is refused",
 			"ok the secret is not in the environment", "ok the secret is nowhere on disk the agent sees"} {
 			if !strings.Contains(out, l+"\n") {
 				t.Fatalf("want %q:\n%s", l, out)
@@ -403,24 +403,13 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		unauthenticated(t, launch(t, "nocred", map[string]string{"GH_TOKEN": forgeSecret}, nil))
 	})
 
-	t.Run("a launch not granted the token gets no git auth", func(t *testing.T) {
+	t.Run("a never-seen private dependency added by the PR fetches", func(t *testing.T) {
 		reset()
-		unauthenticated(t, launch(t, "notoken", nil, []sandbox.GitAuth{forge.auth()}))
-	})
-
-	t.Run("a launch granted only a different token gets no git auth", func(t *testing.T) {
-		// The dispatch's App token, while git_fetch carries the operator's
-		// own: not the same token, so not the same reach.
-		reset()
-		unauthenticated(t, launch(t, "apptoken", map[string]string{"GH_TOKEN": "ghs-app-installation-token"}, []sandbox.GitAuth{forge.auth()}))
-	})
-
-	t.Run("a launch granted the token fetches the PR's new private dependency", func(t *testing.T) {
-		reset()
-		// Named anything: the value is what counts.
-		out := launch(t, "held", map[string]string{"OPERATOR_TOKEN": forgeSecret}, []sandbox.GitAuth{forge.auth()})
+		// The dispatch grants the launch no token of its own: the proxy
+		// alone authenticates the fetch.
+		out := launch(t, "fetch", nil, []sandbox.GitAuth{forge.auth()})
 		t.Logf("probe:\n%s", out)
-		if strings.Contains(out, "FAIL") || strings.Count(out, "ok ") != 9 {
+		if strings.Contains(out, "FAIL") || strings.Count(out, "ok ") != 10 {
 			t.Fatalf("probe:\n%s", out)
 		}
 		if strings.Contains(out, "has ssh") {
@@ -436,6 +425,9 @@ func TestGitSSHDependencyFetchedInTheSandbox(t *testing.T) {
 		defer recMu.Unlock()
 		var credited, other, pushDenied bool
 		for _, r := range recs {
+			if strings.HasPrefix(r.Path, "/api/") && r.AllowedBy == "git fetch credential" {
+				t.Fatalf("an API path carried the git fetch credential: %+v", r)
+			}
 			if strings.Contains(r.Reason, forgeSecret) || strings.Contains(r.Path, forgeSecret) {
 				t.Fatalf("the secret was recorded: %+v", r)
 			}

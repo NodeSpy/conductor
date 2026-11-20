@@ -86,15 +86,11 @@ under its home. A directory becomes one of the key's **paths** once
 publishes it. Once a directory is learned, the directories inside it are
 part of it.
 
-Paths are learned per **template and family**, not per rendered key. A
-key's family is the first key it restores from (`restore_from[0]`), or the
-key itself when it restores from none. Runs of `pr-{{.repo}}-{{.pr}}` that
-restore from `{{.repo}}` count together for every PR of one repository, so
-a key that is new for every PR does not start learning from nothing. Once
-the family has learned its paths, a new PR's first successful run
-publishes, and its second run gets a hit. Another repository's runs are
-another family: they never count toward, or decide, its paths. The learned
-paths are kept across restarts.
+Paths are learned per **template**, not per rendered key: runs of
+`pr-{{.repo}}-{{.pr}}` count together for every PR, so a key that is new
+for every PR does not start learning from nothing. Once the template has
+learned its paths, a new PR's first successful run publishes, and its
+second run gets a hit. The learned paths are kept across restarts.
 
 **The granularity rule.** A candidate is a directory **directly inside**
 the home or one of these base directories: `~/.cache`, `~/.local`,
@@ -111,29 +107,21 @@ directory is never a candidate.
 
 - the agent tools' own state, login files, install and logs (`~/.claude`,
   `~/.codex`, `~/.local/share/claude`, `~/.cache/claude-cli-nodejs`, …)
-- credentials: `~/.ssh`, `~/.gnupg`, `~/.netrc`, `~/.aws`, `~/.azure`,
+- the credential and login files conductor shares or copies into a home:
+  `~/.ssh`, `~/.gnupg`, `~/.netrc`, `~/.aws`, `~/.azure`,
   `~/.config/gcloud`, `~/.docker`, `~/.kube`, `~/.config/gh`, git config,
   `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials*`, `~/.m2/settings.xml`,
-  `~/.gradle/gradle.properties`, `~/.terraform.d`, `~/Library/Keychains`,
-  and the ones tools keep beside a bulk cache: `~/.cache/huggingface/token`,
-  `~/.pulumi/credentials.json`, `~/.android/adbkey*`, `~/.config/op`,
-  `~/.config/glab-cli`, `~/.local/share/keyrings`, Composer's `auth.json`,
-  `NuGet.Config`, …
+  `~/.gradle/gradle.properties`, `~/.terraform.d`, `~/Library/Keychains`, …
 - shell start-up files and history
 - conductor's own files in the home (`~/.conductor`, `~/.tmp`)
 
 These are checked again whenever a cache is restored or published, so
 learning state edited on disk cannot name one either.
 
-A list always misses some, so what a publish is about to commit is also
-checked, from what conductor itself knows (see [Publishing](#publishing)):
-a file holding a credential conductor gave a run is left out, and so is a
-tree holding a git repository.
-
-These checks catch a credential a tool wrote by accident. They do not stop
-an agent that means to smuggle one out in an encoding conductor does not
-look for (gzip, a cipher). What decides whose runs may write a shared key
-is still [who writes a key](#publishing).
+What a run writes elsewhere in its learned paths is published as it is.
+Conductor does not scan a cache's content: a cache is kept from reaching
+runs of a different trust by its key ([who writes a key](#publishing)),
+not by what is inside it.
 
 ## How a run gets its cache
 
@@ -212,43 +200,7 @@ launch that ran (which, after a resume, holds both launches' writes):
    only its allocated blocks, against the store's cap: a sparse file is
    written out in full when it cannot be cloned, so it is refused before
    the copy rather than after.
-3. It checks what it built (each skipped file or path is logged by path,
-   never by content):
-   - a path holding a git repository is not published at all: a `.git`
-     anywhere in it, or a bare repository (`HEAD` and `config` beside
-     `objects/`, `refs/` or `hooks/`). A clone's config keeps the token it
-     was cloned with, and its hooks run code. The exception is a bare
-     repository in a version-control cache tools keep (Go's
-     `pkg/mod/cache/vcs`, Cargo's `git/db`) whose config carries no
-     credential (no user in a URL, no extra header, no credential helper)
-     and whose hooks are only git's samples;
-   - a credential **value** the launch holds, or another launch in the
-     last day or in the same home, is looked for: in each file's content,
-     in each entry's name and in each symlink's target, raw and as tools
-     encode it (base64 of the value, and of `user:value` as a Basic auth
-     header, docker's or npm's `auth` field keep it). The values are the
-     launch's environment (a variable named like a credential, and any
-     other value shaped like a token that conductor's own environment does
-     not carry), the `{{.secrets}}` and `{{.vaults}}` values its step could
-     render, the tokens in the login files shared or copied into its home,
-     the dispatch's credentials, git fetch credentials and its skill token.
-     An entry holding one is left out. Only the very files the copy kept
-     from the version it restored are not read again: they were checked
-     when that version was published. The scan reads in bounded chunks;
-   - a file named like a credential (`id_*`, `*.pem`, `*.key`,
-     `credentials*`, `*token*`, `adbkey*`) is left out when its content
-     looks like one too: a private key block, a forge or cloud token shape,
-     JSON with a token, secret or password key, or a single bare token.
-     Source and certificates with those names (`token.go`, `token.rs`,
-     `cacert.pem`) are kept, so a module cache is not broken;
-   - if conductor restarted while the launch ran, it no longer knows the
-     values the launch was given, and nothing is published. The same holds
-     for a launch that resumed one from before a restart, and for a home an
-     earlier conductor process gave runs credentials in (a resumed
-     dispatch's, or `persist: home`): its files may hold values nothing
-     can check for any more, so its publishes are refused until the home
-     is gone.
-   Merged files lose any setuid, setgid or sticky bit, and every file
+3. Merged files lose any setuid, setgid or sticky bit, and every file
    loses its extended attributes.
 4. It writes the copy to disk under a temporary name, then renames it into
    place as the key's newest version.
@@ -273,6 +225,19 @@ written only by the steps that declare that template as their own key.
 Give that key to steps whose runs you trust, such as runs on the default
 branch, and let PR steps `restore_from` it. A PR step then starts warm and
 publishes only to its own per-PR key.
+
+## Trust model
+
+The agent sandbox guards what leaves a run, not what the agent does inside
+it ([[Isolation#what-the-sandbox-guards]]). For caches that is one rule:
+lower-trust work never feeds higher-trust work.
+
+- A run publishes only to its own step's key; `restore_from` keys are
+  read-only to it.
+- A key's identity includes its namespace and template, so a value an
+  event's sender controls cannot land on another template's key.
+- A step an agent wrote, and a step whose target the event's sender chose,
+  gets no cache.
 
 ## Eviction
 
@@ -356,29 +321,10 @@ A dependency on another private repository by its SSH URL
 (`git+ssh://git@github.com/acme/dep.git`) is fetched the way an agent
 fetches it ([[Isolation#git-fetch]]). The run's git rewrites the SSH URL to
 HTTPS, and its egress proxy adds the git fetch credential of the connector
-that declares one (`git_fetch`).
-
-The proxy adds it to a fetch of **any repository** on the connector's
-hosts, but only for a launch its dispatch already granted the **same
-token**: one of the launch's credentials has a value identical to the git
-fetch credential's. The values are compared at launch, in constant time;
-what a credential is named does not matter. When the connector's read
-token and the token a fixer's dispatch is granted are the same (both your
-own login, say), the fixer can fetch any private repository that token
-reads, including a dependency a PR adds for the first time. A launch
-granted a different token (the App's installation token while the fetch
-credential is your login's), or none, gets no git auth and its fetch
-fails. That fetch
-reaches nothing the agent's dispatch did not already hold. Nothing is
-learned, configured, or read from a lockfile.
-
-A repository no trusted work has ever run on gets no credential, and the
-fetch fails as it would without this:
-
-```
-Bad owner or permissions on /etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf
-fatal: Could not read from remote repository.
-```
+that declares one (`git_fetch`) to fetches of any repository on the
+connector's hosts, including a dependency a PR adds for the first time.
+Nothing is learned, configured, or read from a lockfile. A push is
+refused.
 
 ## With the package proxy
 

@@ -72,11 +72,5 @@ func (r *Runner) stepCacheKeys(ctx context.Context, t core.Trigger, step config.
 			out.RestoreFrom = append(out.RestoreFrom, k)
 		}
 	}
-	// What the step's runs learn is kept per family: the key it restores
-	// from first, else its own (keycache.Key.Family).
-	out.Key.Family = key.ID()
-	if len(out.RestoreFrom) > 0 {
-		out.Key.Family = out.RestoreFrom[0].ID()
-	}
 	return out
 }

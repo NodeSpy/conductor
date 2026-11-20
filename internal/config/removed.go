@@ -20,7 +20,7 @@ import (
 
 // TeachRemoved is the warning for a step's `cache.teach:` still in a
 // config or a pack manifest.
-const TeachRemoved = "teach was removed; this field is ignored and can be deleted (a launch already granted the forge token its git_fetch credential carries fetches any repository that token reads; nothing is learned)"
+const TeachRemoved = "teach was removed; this field is ignored and can be deleted (the proxy adds the connector's git_fetch credential to fetches of any repository on its hosts; nothing is learned)"
 
 // FolderRemoved is the warning for a `folder:` still in a config.
 const FolderRemoved = "folders were removed; this field is ignored and can be deleted"

@@ -2,13 +2,10 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
@@ -33,8 +30,7 @@ type SandboxWiring struct {
 	// session): `conductor sandbox exec --socket <control socket>`.
 	Exec []string
 	// GitFetch is sandbox.git_fetch: a dispatch's git fetch credentials
-	// (its connector's git_fetch) reach its launch's egress proxy, for a
-	// launch already holding the same token (agentsandbox.Wrap).
+	// (its connector's git_fetch) reach its launch's egress proxy.
 	GitFetch bool
 }
 
@@ -42,9 +38,7 @@ type SandboxWiring struct {
 var AgentSandbox *SandboxWiring
 
 // ScopedGitAuth mints a hand-off's git fetch credentials beyond a
-// dispatch's own (engine.GitFetchFor; nil: none). Like a dispatch's, they
-// apply only to a launch already holding the same token
-// (agentsandbox.Wrap).
+// dispatch's own (engine.GitFetchFor; nil: none), applied the same way.
 var ScopedGitAuth func(ctx context.Context, repo string) []sandbox.GitAuth
 
 // agentLaunch marks a launch as an agent runtime's own (cli/acp), the
@@ -198,10 +192,7 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	pol.Expose = append(pol.Expose, a.expose...)
 	if w.GitFetch && a.req != nil {
 		// Applied by the launch's egress proxy; never in the agent's env.
-		// Wrap keeps only those whose token the dispatch already granted
-		// this launch.
 		pol.GitAuth = a.req.Credentials.Git
-		pol.GitHeld = grantedValues(a.req)
 	}
 	launch, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
 		SelfExe:           launchSelfExe,
@@ -219,10 +210,6 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	})
 	if err != nil {
 		return nil, "", nil, nil, fmt.Errorf("agent sandbox: %w — the agent is not launched unsandboxed", err)
-	}
-	if pol.CacheLock != "" && CacheSecrets != nil {
-		// What its step's end publishes is checked for these (keycache).
-		CacheSecrets(pol.CacheLock, launchSecrets(a.req, pol, launch.Env))
 	}
 	a.exposed = launch.Exposed
 	return launch.Argv, launch.Dir, launch.Env, launch.Cleanup, nil
@@ -425,157 +412,4 @@ func confinedEntry(dir string) (agentsandbox.Entry, error) {
 func isWithin(p, dir string) bool {
 	rel, err := filepath.Rel(dir, p)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
-}
-
-// CacheSecrets records the credential values a cached launch (its cache
-// lock) was given, so its publish leaves out any file holding one
-// (keycache.Manager.AddSecrets). nil: caches are off. Wired at boot.
-var CacheSecrets func(lock string, vals []string)
-
-// grantedValues are the credential values req granted its launch: its
-// env and template credentials (never its git fetch ones).
-func grantedValues(req *dispatch.Request) []string {
-	var out []string
-	for _, v := range req.Credentials.Env {
-		out = append(out, v)
-	}
-	for _, v := range req.Credentials.Templates {
-		out = append(out, v)
-	}
-	return out
-}
-
-// credentialEnvRE names an environment variable that carries a credential.
-var credentialEnvRE = regexp.MustCompile(`(?i)(token|secret|pass|credential|api_?key|auth|private_?key|session|cookie|(^|_)(key|keys|pat)($|_))`)
-
-// secretShapeRE is a value that looks like a credential whatever it is
-// named: 16 or more token characters, with letters and digits both.
-var secretShapeRE = regexp.MustCompile(`^[A-Za-z0-9._~+/=:@-]{16,}$`)
-
-// launchSecrets are the credential values a launch holds, for its
-// publish's scan (keycache.Manager.AddSecrets):
-//
-//   - its environment's: a variable named like a credential, and any
-//     other value shaped like one (secretShape) that conductor's own
-//     environment does not carry;
-//   - the named secrets and vault entries its step's templates could
-//     render ({{.secrets.x}}, {{.vaults.v.k}}) into its prompt or env;
-//   - the token values of the login files shared or copied into its home;
-//   - the dispatch's credentials (env and template values, git fetch
-//     secrets, with their HTTP usernames), and its skill token.
-func launchSecrets(req *dispatch.Request, pol agentsandbox.Policy, env []string) []string {
-	var out []string
-	if req != nil {
-		for _, v := range req.Credentials.Env {
-			out = append(out, v)
-		}
-		for _, v := range req.Credentials.Templates {
-			out = append(out, v)
-		}
-		for _, scope := range []string{"secrets", "vaults"} {
-			out = appendLeaves(out, req.Data[scope], 0)
-		}
-	}
-	for _, g := range pol.GitAuth {
-		out = append(out, g.Secret)
-		if g.Username != "" {
-			out = append(out, g.Username+":"+g.Secret)
-		}
-	}
-	if pol.Token != "" {
-		out = append(out, pol.Token)
-	}
-	base := map[string]bool{}
-	for _, kv := range os.Environ() {
-		if _, v, ok := strings.Cut(kv, "="); ok {
-			base[v] = true
-		}
-	}
-	for _, kv := range env {
-		k, v, ok := strings.Cut(kv, "=")
-		if !ok || v == "" {
-			continue
-		}
-		if credentialEnvRE.MatchString(k) || (!base[v] && secretShape(v)) {
-			out = append(out, v)
-		}
-	}
-	for _, l := range pol.Logins {
-		out = append(out, loginTokens(l.Src)...)
-	}
-	return out
-}
-
-// secretShape reports a value that looks like a credential: token
-// characters with letters and digits both, never a path or a plain URL.
-func secretShape(v string) bool {
-	if !secretShapeRE.MatchString(v) || strings.HasPrefix(v, "/") || strings.HasPrefix(v, "~") {
-		return false
-	}
-	if i := strings.Index(v, "://"); i >= 0 && !strings.Contains(v[i:], "@") {
-		return false
-	}
-	return strings.ContainsAny(v, "0123456789") && strings.IndexFunc(v, func(r rune) bool {
-		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
-	}) >= 0
-}
-
-// appendLeaves appends v's string leaves (a scope of named values).
-func appendLeaves(out []string, v any, depth int) []string {
-	if depth > 4 {
-		return out
-	}
-	switch t := v.(type) {
-	case string:
-		return append(out, t)
-	case map[string]any:
-		for _, x := range t {
-			out = appendLeaves(out, x, depth+1)
-		}
-	case map[string]string:
-		for _, x := range t {
-			out = append(out, x)
-		}
-	}
-	return out
-}
-
-// loginTokenKeyRE names a login file's field that holds a token.
-var loginTokenKeyRE = regexp.MustCompile(`(?i)(token|secret|key|password)`)
-
-// loginTokens are the token values of a login file (JSON): every string
-// under a key naming a token, 16 characters or more.
-func loginTokens(p string) []string {
-	f, err := os.Open(p)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	var v any
-	if json.NewDecoder(io.LimitReader(f, 1<<20)).Decode(&v) != nil {
-		return nil
-	}
-	var out []string
-	var walk func(v any, key string, depth int)
-	walk = func(v any, key string, depth int) {
-		if depth > 8 {
-			return
-		}
-		switch t := v.(type) {
-		case string:
-			if len(t) >= 16 && loginTokenKeyRE.MatchString(key) {
-				out = append(out, t)
-			}
-		case map[string]any:
-			for k, x := range t {
-				walk(x, k, depth+1)
-			}
-		case []any:
-			for _, x := range t {
-				walk(x, key, depth+1)
-			}
-		}
-	}
-	walk(v, "", 0)
-	return out
 }

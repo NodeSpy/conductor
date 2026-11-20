@@ -232,13 +232,6 @@ func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string, sock string) 
 		return nil, nil, err
 	}
 	home, _ := os.UserHomeDir()
-	// A git fetch credential applies only when this launcher already holds
-	// its very token (agentsandbox.Policy.GitHeld).
-	for _, kv := range os.Environ() {
-		if _, v, ok := strings.Cut(kv, "="); ok && v != "" {
-			pol.GitHeld = append(pol.GitHeld, v)
-		}
-	}
 	launch, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
 		SelfExe:           os.Executable,
 		EgressUnix:        pm.UnixEndpoint,

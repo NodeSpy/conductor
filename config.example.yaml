@@ -1489,9 +1489,7 @@ sandbox:
   # git_fetch: true             # a connector's declared git fetch credential (github: its read
   #                             #   token) authenticates the agent's git fetches of any repo on
   #                             #   its host, added by the egress proxy (never given to the
-  #                             #   agent), for a launch already granted that same token (by
-  #                             #   value); others get no git auth. SSH URLs are fetched over
-  #                             #   HTTPS. Pushes refused.
+  #                             #   agent). SSH URLs are fetched over HTTPS. Pushes refused.
   # (egress: entries also take exact names and CIDRs that reach private space, and
   #  http://host:port/prefix/ for a plain-HTTP mirror restricted to a path; an https:// path
   #  is a validate error unless the host is inspected. Isolation.md § A local package mirror.)
