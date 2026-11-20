@@ -1637,6 +1637,7 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	// name. Same root cause as the trigger-index bug; this is the call
 	// path that fix missed.
 	stepCtx := withIdentityScope(withCalledWorkflowIsolation(withDefaultGate(ctx, wf.Gate), packNarrowed(wf.Isolation, wf.PackInstance)), config.WorkflowScope(name))
+	stepCtx = withWorkflowCache(stepCtx, wf.Cache, wf.PackInstance)
 	if saved != nil {
 		stepCtx = context.WithValue(stepCtx, savedWFKey{}, name)
 	}
@@ -2242,6 +2243,11 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		ScopeFacts:       mfacts,
 		WorkspaceArchive: fromArchive,
 	}
+	if !shadow && !step.Background {
+		// A hand-off's agent outlives its step: it restores nothing and
+		// publishes nothing.
+		req.Cache = r.stepCacheKeys(ctx, t, step, mfacts, id)
+	}
 	if inputs != nil {
 		req.Inputs, req.InputsDir = inputs.list, inputs.dir
 	}
@@ -2254,6 +2260,12 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	settled := r.agentResume(ctx, t, id, &req)
 	ref, err := r.Agents.Dispatch(ctx, req)
 	settled()
+	if req.Cache != nil {
+		// The run's end, at its step's: what it filled is published to its
+		// key when it succeeded, and its layers go either way. Before the
+		// step returns, so its home is still there to read.
+		dispatch.FinishCache(ctx, req, err == nil)
+	}
 	// Consumed on every outcome so a mark never outlives its dispatch.
 	doneSignalled := r.Agents.TakeDone != nil && r.Agents.TakeDone(req.DispatchID)
 	archive := step.ArchivesWhenDone() || doneSignalled

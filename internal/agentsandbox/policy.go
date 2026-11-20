@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NodeSpy/conductor/internal/repocache"
+	"github.com/NodeSpy/conductor/internal/keycache"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
@@ -103,9 +103,10 @@ type Policy struct {
 	// GitAuth are the launch's git fetch credentials (sandbox.GitAuth): the
 	// SSH forms of each host's URLs are rewritten to HTTPS in the agent's
 	// git, each host is inspected, and the proxy adds the credential to
-	// fetches of repositories in scope. The secrets never enter the
-	// sandbox, and never travel with the policy (it carries none over the
-	// control socket).
+	// fetches of any repository on the host. The secrets never enter the
+	// sandbox, and
+	// never travel with the policy (it carries none over the control
+	// socket).
 	GitAuth []sandbox.GitAuth `json:"-"`
 	// Limits are the launch's resource limits and disk guard
 	// (sandbox.limits; the zero value is the default).
@@ -116,15 +117,16 @@ type Policy struct {
 	// ModelHosts are the egress entries added for the tool's model traffic
 	// (not the operator's): dropped when the gateway carries it all.
 	ModelHosts []string `json:"model_hosts,omitempty"`
-	// Caches are the repository's dependency caches shown to the launch
-	// (internal/repocache): each an overlay whose lower layer is the shared,
+	// Caches are the step's cache shown to the launch (internal/keycache):
+	// each an overlay whose lower layer is the shared,
 	// read-only cache and whose upper and work directories — every write —
 	// are the launch's own, beside the store, out of the agent's reach.
 	// Linux; macOS restores by clone before the launch.
-	Caches []repocache.Mount `json:"caches,omitempty"`
+	Caches []keycache.Mount `json:"caches,omitempty"`
 	// CacheLock is the launch's cache ledger lock: held shared while the
-	// launch runs (its caches are in use so long), and its directory — the
-	// launch's layers — removed when it ends.
+	// launch runs (its caches are in use so long), and marked ended when it
+	// stops — its step's end publishes what it filled, and removes its
+	// layers (the lock's directory).
 	CacheLock string `json:"cache_lock,omitempty"`
 	// Note is something the launcher should tell its operator about this
 	// policy (a scratch workspace in place of a refused directory).
@@ -186,7 +188,7 @@ func (p Policy) Validate() error {
 			return fmt.Errorf("agentsandbox: exposed address %q is not a loopback host:port", x)
 		}
 	}
-	if len(p.Caches) > 0 {
+	if len(p.Caches) > 0 || p.CacheLock != "" {
 		if !filepath.IsAbs(p.CacheLock) || filepath.Clean(p.CacheLock) != p.CacheLock {
 			return fmt.Errorf("agentsandbox: cache lock %q is not a clean absolute path", p.CacheLock)
 		}
@@ -368,22 +370,24 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	}
 	var cacheDone func()
 	cacheHanded := false
-	if goos != "darwin" && len(p.Caches) > 0 {
-		// The launch holds its cache ledger lock while it runs, and removes
-		// its layers when it ends. A lock that is gone (the layers swept: the
+	if p.CacheLock != "" {
+		// The launch holds its cache ledger lock while it runs, and marks it
+		// ended when it stops: its step's end then publishes what it filled
+		// and removes its layers. A lock that is gone (the layers swept: the
 		// launch came too late) means running without the caches.
-		if release, err := repocache.LockShared(p.CacheLock); err != nil {
+		if release, err := keycache.LockShared(p.CacheLock); err != nil {
 			p.Caches = nil
 		} else {
-			dir := filepath.Dir(p.CacheLock)
-			cacheDone = func() { _ = repocache.RemoveAll(dir); release() }
+			cacheDone = func() { keycache.EndLaunch(p.CacheLock); release() }
 			defer func() {
 				if !cacheHanded {
-					cacheDone()
+					release() // never launched: nothing to publish
 				}
 			}()
-			for _, c := range p.Caches {
-				binds = append(binds, sandbox.BindMount{Path: c.Target, Overlay: &sandbox.Overlay{Lower: c.Lower, Upper: c.Upper, Work: c.Work}})
+			if goos != "darwin" {
+				for _, c := range p.Caches {
+					binds = append(binds, sandbox.BindMount{Path: c.Target, Overlay: &sandbox.Overlay{Lower: c.Lower, Upper: c.Upper, Work: c.Work}})
+				}
 			}
 		}
 	}
@@ -595,6 +599,12 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		return nil, err
 	}
 	closers = append([]func(){wclean}, closers...)
+	if goos == "darwin" && cacheDone != nil {
+		// No pid namespace here: the launch gets a process group of its
+		// own, so what it leaves running is found by that group and
+		// killed (detection's closer) before its cache is published.
+		wrapped = append([]string{self, PgroupCommand, "--"}, wrapped...)
+	}
 	// Detection last: its closer runs first at cleanup — a final git check
 	// and the launch's leftover processes killed — before egress is cut.
 	marker, stopDetect, err := startDetection(p, self, spec, d.Event)
@@ -683,7 +693,7 @@ func withCAEnv(env []string, bundle string) []string {
 // own, under its cache lock's directory, and never anywhere the agent can
 // write or read; its lower layer is never anywhere the agent can write.
 // Grant paths are compared as given and with their symlinks resolved.
-func (p Policy) validateCache(c repocache.Mount) error {
+func (p Policy) validateCache(c keycache.Mount) error {
 	if !filepath.IsAbs(c.Target) || !(within(c.Target, p.Home) || within(c.Target, p.Workspace)) || c.Target == p.Home || c.Target == p.Workspace {
 		return fmt.Errorf("agentsandbox: cache target %q is not inside the home or the workspace", c.Target)
 	}
@@ -742,7 +752,7 @@ func overlapsGrant(p string, grants []string) string {
 // home, and the store's, where its cache overlays' writes land.
 func (p Policy) diskPaths() []string {
 	out := []string{p.Workspace, p.Home}
-	if len(p.Caches) > 0 && p.CacheLock != "" {
+	if p.CacheLock != "" {
 		out = append(out, filepath.Dir(p.CacheLock))
 	}
 	return out

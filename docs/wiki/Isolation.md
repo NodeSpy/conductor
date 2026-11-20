@@ -37,6 +37,24 @@ What the agent sees:
 | the environment | a minimal one: `PATH`, locale, terminal, the gateway's URL and a per-launch token in place of the model key, your git name/email. No `GH_TOKEN`, `SSH_AUTH_SOCK`, cloud keys, or a launcher's own tokens. |
 | everything else | **absent** — your `~/.ssh`, `~/.aws`, `~/.config/gh`, other projects, conductor's state and config. Nothing is denied by a list: what is not shown is not there. |
 
+### What the sandbox guards {#what-the-sandbox-guards}
+
+The sandbox does not police what an agent does inside it: what it runs,
+downloads or writes in its own home and workspace is the agent's work,
+including workflows an agent writes for itself. It guards the exits:
+
+1. **Credentials never enter the sandbox.** Forge, cloud and model
+   credentials stay outside; the egress proxy and the model gateway add
+   them to requests on the way out.
+2. **Network egress reaches only allowed hosts**, through conductor's proxy.
+3. **Writes to the outside world go through conductor**: a push or a forge
+   or cloud write is a conductor verb, under the dispatch's policy. The
+   proxy refuses a git push from the sandbox.
+4. **Lower-trust work never feeds higher-trust work.** A run's [step
+   cache](Step-Caches#trust-model) is published only to its own step's key;
+   the keys it restores from are read-only to it; a step an agent wrote, or
+   one whose target the event's sender chose, gets no cache.
+
 An **identity** is who the agent is: for a dispatch, its profile per (trusted)
 repository — `agent:fixer@acme/app`; for a member, the member; for a directory
 conductor did not create, the directory itself. Every launch of an identity —
@@ -194,47 +212,34 @@ conductor authenticates it:
   unchanged, and no ssh runs.
 - **The proxy adds the credential; the agent never holds it.** The launch's
   egress proxy [inspects](#tls-inspection) each declared host. On a git
-  **fetch** — `GET …/info/refs?service=git-upload-pack` or
-  `POST …/git-upload-pack` — of a repository in scope, it sets the
-  request's `Authorization` itself (replacing whatever the agent sent). The
-  secret is not in the agent's environment, files or the policy, and is never
-  logged; the audit row is marked `allowed_by: git fetch credential`.
+  **fetch** of a repository — exactly
+  `GET /<owner>/<name>[.git]/info/refs?service=git-upload-pack` or
+  `POST /<owner>/<name>[.git]/git-upload-pack`, with no other query — it
+  sets the request's `Authorization` itself (replacing whatever the agent
+  sent). The secret is not in the agent's environment, files or the policy,
+  and is never logged; the audit row is marked
+  `allowed_by: git fetch credential`.
+- **Repository paths only.** `<owner>` and `<name>` are plain names, and
+  `<owner>` is never one a forge serves something else under (`api`,
+  `login`, `graphql`, `site`, `_`, `-`, in any case): on GitHub Enterprise
+  Server the REST API is `/api/v3/…` on the git host itself, and a route
+  that merely ends in `git-upload-pack` gets no credential. Such a request,
+  a nested path (a GitLab subgroup's `/<group>/<sub>/<name>`) or an extra
+  query parameter is an ordinary request: the host's egress path entries
+  decide it.
 - **Read only.** A **push** to a declared host (`git-receive-pack`, either
-  request) is refused by the proxy with 403, whatever the scope: conductor
+  request) is refused by the proxy with 403: conductor
   pushes, never the agent. Every other request to the host (a web page, the
   dumb HTTP protocol, `git-upload-archive`, Git LFS) never carries the
   credential, and passes only if your egress allows it.
-- **Scoped to what the repository depends on — learned, not configured.**
-  The connector declares only the host and the credential. Which
-  repositories a launch's credential covers is conductor's:
-  - A **cache warm** ([[Repo-Caches]]) runs the repository's **default
-    branch**, with the default branch's `.conductor.yaml`. Its credential
-    covers any repository on the host the credential can read, and the proxy
-    notes each one the forge served it. When the warm succeeds, those are
-    the repository's **learned dependencies** for that recipe, replacing
-    what its previous warm learned (a dependency the default branch dropped
-    drops off).
-  - **Every other launch** — a dispatch on a PR branch, a review, a fixer,
-    a `conductor sandbox exec` hand-off — gets the repository it works on
-    plus its learned dependencies, nothing more. A PR can never add one: a
-    PR that adds a new private dependency cannot fetch it until it is on the
-    default branch and the next warm learns it. Such a fetch goes without
-    the credential, and its audit row says so: `git credential withheld for
-    acme/newdep: not a learned dependency of acme/app; it is learned when
-    the default branch's cache warm fetches it`.
-
-  A warm runs the default branch's install, its dependencies' install
-  scripts included: whatever that code fetches with the credential is
-  learned. That is the trust you give your default branch anyway — it is
-  the code you deploy. Repositories compare exactly, case-insensitively
-  (forges name them so), after the same checks as `https://` path entries:
-  a dot segment, `//`, a backslash or a percent sign left after decoding
-  never matches.
-- **Kept across restarts.** The learned sets and which connector instance
-  mints for each repository are in conductor's state dir
-  (`git-learned.json`, `git-fetch.json`: repository and instance names,
-  never a credential), out of every sandbox's view; a restart or an
-  auto-update keeps them.
+- **Any repository on the host.** The connector declares only the hosts
+  and the credential. The proxy adds it to a fetch of any repository on
+  those hosts, for every launch whose dispatch carries the connector's git
+  fetch credential. Nothing is learned, listed, or read from a lockfile, so
+  a PR that adds a new private dependency fetches it on its first run.
+- **Kept across restarts.** Which connector instance mints for each
+  repository is in conductor's state dir (`git-fetch.json`: repository
+  and instance names, never a credential), out of every sandbox's view.
 - **Reach.** Declaring `git_fetch` admits its host to every launch's
   egress for those fetches, even when the egress allowlist does not name
   it; so a plugin build that adds a `git_fetch` host, or changes one, is
@@ -244,7 +249,7 @@ conductor authenticates it:
 - **Which instance, and its scope at every use.** A dispatch's credential
   is the one its connector minted for its target, held by its own egress
   session and gone when the launch ends; a launch for a target the platform
-  did not assign gets none. A warm or a hand-off mints one through the
+  did not assign gets none. A hand-off mints one through the
   connector instance that last dispatched trusted work on the repository —
   and only while that instance still covers it: an instance whose `repos:`
   (its declared repository scope) no longer matches the repository mints
@@ -263,7 +268,7 @@ credentials); there is nothing to configure. `sandbox.git_fetch: false`
 turns it off for every launch. A `conductor sandbox exec` launch in a
 directory conductor never checked out (your own paseo workspace, an
 agent-deck session, a scratch dir) gets none: there is no trusted repository
-to scope it to.
+to mint it for.
 
 **The Verified badge.** Signatures verify `G` with your key locally. GitHub
 shows "Verified" on a pushed commit only when the signing key is registered on
@@ -310,7 +315,7 @@ sandbox:
   #   required: false             # true: refuse a launch whose limits can't be applied
   #   off: false
   # persist: none                 # cache | home
-  # caches: { enabled: false }    # repository dependency caches, off by default (Repo-Caches.md)
+  # caches: { enabled: false }    # step caches, off by default (Step-Caches.md)
   # git: { shared: protected }    # direct
   # macos_posix_ipc: false
 ```
@@ -861,13 +866,16 @@ so the sandbox never shares one. `persist: cache` is the opt-in.
   keeps its identity's home.
 
 A fresh home does not have to mean downloading every dependency again.
-[Repository caches](Repo-Caches) restore a repository's module and build
-caches into the fresh home without copying them: an overlay on Linux whose
-read-only lower layer is the shared cache and whose upper layer is the run's
-own, kept beside the store where no agent can reach it, or a copy-on-write
-clone on macOS. Caches are off until `sandbox.caches.enabled: true`. A run never writes the shared
-copy. Only conductor publishes one, by running the cache's warm command in
-this same sandbox over a checkout of the repository's default branch.
+[Step caches](Step-Caches) restore what earlier runs of a step filled
+(module and build caches, package stores) into the fresh home without
+copying it: an overlay on Linux whose read-only lower layer is the published
+copy and whose upper layer is the run's own, kept beside the store where no
+agent can reach it, or a copy-on-write clone on macOS. A step names its
+cache with `cache: { key: … }`; which directories a key holds is learned
+from what its runs fill, never agent state or credentials. Caches are off
+until `sandbox.caches.enabled: true`. A run never writes a published copy:
+conductor publishes a new one from the run when its step succeeds, to the
+step's own key only.
 
 **IPC.** A Linux sandbox has its own System V IPC namespace. On macOS the
 agent's profile grants no POSIX shared memory or semaphores, because they are

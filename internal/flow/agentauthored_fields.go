@@ -63,6 +63,11 @@ func forbiddenAgentAuthoredField(s *config.Step) (field, why string) {
 		// workspace.inputs: copies run artifacts onto this machine for the
 		// step — which artifacts a step gets is the operator's call too.
 		return "workspace.inputs:", "which artifacts a step is given is the operator's to configure"
+	case s.Cache != nil:
+		// cache: names the key a run publishes to — a write into a store
+		// other runs restore from. An agent choosing its own key could aim
+		// its writes at a key the operator's other steps trust.
+		return "cache:", "which cache a run publishes to is the operator's to configure"
 	case s.Skill != nil:
 		// The one that motivated this file. `skill:` is a CAPABILITY GRANT:
 		// it mints a broker claim/session token naming the verbs the agent
@@ -110,6 +115,7 @@ func checkAgentAuthoredFields(where string, s *config.Step) error {
 func sanitizeAgentAuthoredStep(s *config.Step) {
 	s.Skill = nil
 	s.Isolation = nil
+	s.Cache = nil
 	s.Detach = false
 	s.CheckoutPR = nil
 	s.Workspace.From = ""

@@ -502,7 +502,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, sess *Session) {
 				return
 			}
 			// Reached for the launch's git fetch credential alone: its
-			// git fetches in scope pass (inspectHandler), nothing else.
+			// git fetches pass (inspectHandler), nothing else.
 			prefixes = []string{}
 		}
 		if !inspected {

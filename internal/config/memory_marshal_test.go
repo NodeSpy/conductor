@@ -187,6 +187,10 @@ func TestMemoryPlaceholderExemptionIsMemoryOnly(t *testing.T) {
 		{"verb grant", "steps:\n  - skill: { verbs: { memory.remember: { scope: [\"standard:${repo}\"] } } }\n", kept},
 		{"verb grant glob", "steps:\n  - skill: { verbs: { memory.*: { scope: [\"${repo}\"] } } }\n", kept},
 		{"bot grant", "bots:\n  b:\n    skill: { verbs: { memory.remember: { scope: \"${repo}\" } } }\n", kept},
+		// Step cache keys render the same way.
+		{"step cache key", "steps:\n  - cache: { key: \"pr-${repo}\" }\n", kept},
+		{"step cache restore_from", "steps:\n  - cache:\n      key: k\n      restore_from: [\"${repo}\"]\n", kept},
+		{"cache key outside a step cache", "sandbox:\n  caches: { dir: \"/c/${repo}\" }\n", "from-env"},
 		// Everywhere else: the environment.
 		{"webhook url", "webhook:\n  url: https://example.com/${repo}\n", "from-env"},
 		{"prompt", "steps:\n  - prompt: \"${step}\"\n", "from-env"},

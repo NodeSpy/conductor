@@ -84,6 +84,10 @@ func main() {
 	args := os.Args[2:]
 	var err error
 	switch cmd {
+	case agentsandbox.PgroupCommand:
+		// Internal: a cached macOS launch in a process group of its own
+		// (agentsandbox.RunPgroup).
+		os.Exit(agentsandbox.RunPgroup(args))
 	case "sandbox-net":
 		// Internal: the in-sandbox forwarder for enforced egress (#36 §15).
 		// Launched by conductor itself inside a namespace/container; not a
@@ -933,8 +937,8 @@ func cmdRun(args []string) error {
 		cost.SetPricing(models, def)
 	}
 	eng := engine.New(engOpts)
-	// A cache warm's git fetch credentials (sandbox.git_fetch).
-	controller.WarmGitAuth, controller.WarmGitLearned, controller.ScopedGitAuth = eng.GitFetchWarm, eng.GitLearned, eng.GitFetchFor
+	// A hand-off's git fetch credentials (sandbox.git_fetch).
+	controller.ScopedGitAuth = eng.GitFetchFor
 	// Model selection (docs/design/runtimes-models-packs.md §2.3): the
 	// resolver owns the fleet ladder and the discovered rosters. Discovery
 	// is lazy and degrade-safe — a box that cannot enumerate simply bare
@@ -1134,8 +1138,8 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer stopSandbox()
-	// Repository dependency caches for the sandbox's launches (after it).
-	defer wireRepoCaches(ctx, cfg, gitProv, logf)()
+	// Step caches for the sandbox's launches (after it).
+	defer wireStepCaches(ctx, cfg, gitProv, logf)()
 	// The browser (after the sandbox, whose identities it serves).
 	browserLedger.Store(st)
 	defer wireBrowser(ctx, cfg, notifier, st.Audit, logf)()

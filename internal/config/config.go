@@ -1210,7 +1210,8 @@ var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 //
 //   - a step's memory selector, `…memory: { scope | scopes[] | extra_scopes[] }`
 //     (not the top-level `memory:` backend section);
-//   - a memory verb's scope grant, `…skill: { verbs: { memory.<op>: { scope: [] } } }`.
+//   - a memory verb's scope grant, `…skill: { verbs: { memory.<op>: { scope: [] } } }`;
+//   - a step's or workflow's cache key, `…cache: { key | restore_from[] }`.
 //
 // Anywhere else — and for any other name there — a reference is an ordinary
 // environment variable: substituted when set, a load error when not, exactly
@@ -1225,6 +1226,10 @@ func memoryScopeRef(name string, path []string) bool {
 		case "scope", "scopes", "extra_scopes":
 			return scopeAlias(name)
 		}
+	}
+	// A cache key is the same kind of template (StepCache).
+	if n >= 3 && path[n-2] == "cache" && (path[n-1] == "key" || path[n-1] == "restore_from") {
+		return scopeAlias(name)
 	}
 	return scopeAlias(name) && n >= 4 && path[n-1] == DimScope && strings.HasPrefix(path[n-2], "memory.") &&
 		path[n-3] == "verbs" && path[n-4] == "skill"

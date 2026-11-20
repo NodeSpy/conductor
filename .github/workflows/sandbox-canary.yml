@@ -44,7 +44,7 @@ jobs:
         env:
           CONDUCTOR_REQUIRE_SANDBOX: "1"
         run: |
-          go test -race -count=1 ./internal/sandbox/... ./internal/agentsandbox/... ./internal/gitpush/... ./internal/paseosetup/...
+          go test -race -count=1 ./internal/sandbox/... ./internal/agentsandbox/... ./internal/keycache/... ./internal/gitpush/... ./internal/paseosetup/...
           go test -race -count=1 -run 'TestConfinedGit|TestSandboxApplies|TestDispatchIdentity|TestNonCredentialEnv|TestControllerRunnerBinds|TestOpencodeSandboxed|TestAgentDeckSandboxed|TestDeckWrapper|TestGitSSHDependencyFetchedInTheSandbox' ./internal/controller/
       - name: plugin jail — a probe plugin gets exactly what it declares
         env:

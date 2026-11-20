@@ -18,6 +18,10 @@ import (
 // triggers.<name> (object or array form) — and, in a pack manifest, on its
 // workflows, triggers and bot templates.
 
+// TeachRemoved is the warning for a step's `cache.teach:` still in a
+// config or a pack manifest.
+const TeachRemoved = "teach was removed; this field is ignored and can be deleted (the proxy adds the connector's git_fetch credential to fetches of any repository on its hosts; nothing is learned)"
+
 // FolderRemoved is the warning for a `folder:` still in a config.
 const FolderRemoved = "folders were removed; this field is ignored and can be deleted"
 
@@ -65,11 +69,44 @@ func removedFolderWarnings(doc []byte) []string {
 	if mapValue(mapValue(n.Content[0], "sandbox"), "prefetch") != nil {
 		out = append(out, "sandbox.prefetch: "+PrefetchRemoved)
 	}
+	caches := mapValue(mapValue(n.Content[0], "sandbox"), "caches")
+	for _, k := range removedCacheFields {
+		if mapValue(caches, k) != nil {
+			out = append(out, "sandbox.caches."+k+": "+CachesRemoved)
+		}
+	}
 	if mapValue(mapValue(mapValue(n.Content[0], "sandbox"), "push"), "rebase") != nil {
 		out = append(out, "sandbox.push.rebase: "+PushRebaseRemoved)
 	}
+	walkTeach(n.Content[0], "", &out)
 	sort.Strings(out)
 	return out
+}
+
+// walkTeach finds every `cache:` mapping holding `teach:`, anywhere in a
+// document (a step of a workflow, a pack overlay's or a manifest's).
+func walkTeach(n *yaml.Node, where string, out *[]string) {
+	if n == nil {
+		return
+	}
+	switch n.Kind {
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k, v := n.Content[i].Value, n.Content[i+1]
+			at := k
+			if where != "" {
+				at = where + "." + k
+			}
+			if k == "cache" && mapValue(v, "teach") != nil {
+				*out = append(*out, at+".teach: "+TeachRemoved)
+			}
+			walkTeach(v, at, out)
+		}
+	case yaml.SequenceNode:
+		for i, it := range n.Content {
+			walkTeach(it, fmt.Sprintf("%s[%d]", where, i), out)
+		}
+	}
 }
 
 func walkConfigFolders(root *yaml.Node, out *[]string) {
@@ -123,6 +160,11 @@ func manifestFolderWarnings(doc []byte, pack string) []string {
 	eachItem(mapValue(root, "triggers"), func(label string, e *yaml.Node) {
 		hasFolder(e, "pack "+pack+": triggers"+label, &out)
 	})
+	var teach []string
+	walkTeach(root, "", &teach)
+	for _, w := range teach {
+		out = append(out, "pack "+pack+": "+w)
+	}
 	sort.Strings(out)
 	return out
 }

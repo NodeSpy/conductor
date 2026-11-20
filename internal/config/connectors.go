@@ -653,6 +653,9 @@ type WorkflowDef struct {
 	// the agent sandbox for the whole workflow. A pack cannot set it to
 	// loosen its own sandbox (see checkPackSandboxLoosening).
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// Cache is the default cache: for this workflow's agent steps (a step's
+	// own wins). See StepCache.
+	Cache *StepCache `yaml:"cache,omitempty"`
 	// Folder is removed (removed.go): accepted, ignored, warned about.
 	Folder RemovedField `yaml:"folder,omitempty"`
 	// PackInstance is the pack instance a workflow came from (display).
@@ -1352,6 +1355,10 @@ type Step struct {
 	// Isolation sandboxes this step's launches (#36 §15). Wins over the
 	// runtime's own isolation:.
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// Cache names this agent step's cache (StepCache): what its launch is
+	// shown, and the key its successful run publishes to. Unset: its
+	// workflow's, else none. An agent-authored step may not set it.
+	Cache *StepCache `yaml:"cache,omitempty"`
 	// Trust, on a code step a PACK ships, opts out of the confined-by-default
 	// sandbox: "full" runs the step's code with no synthesized isolation (the
 	// deliberate footgun); "" (default) keeps the least-privilege namespace

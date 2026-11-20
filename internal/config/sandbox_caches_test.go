@@ -1,43 +1,138 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
+const cacheBase = "connectors:\n  gh: { use: github, token: x, repos: [\"acme/*\"] }\n"
+
 func TestSandboxCachesDefaultsAndKnobs(t *testing.T) {
-	const base = "connectors:\n  gh: { use: github, token: x, repos: [\"acme/*\"] }\n"
-	cfg, err := loadCfg(t, base)
+	cfg, err := loadCfg(t, cacheBase)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var c *SandboxCaches
-	// Off unless configured: an upgrade never starts warms, disk use or
-	// fetches on a config that did not ask for them.
+	// Off unless configured: an upgrade never uses disk a config did not
+	// ask for.
 	if cfg.CachesOn() {
 		t.Fatal("caches on without sandbox.caches.enabled")
 	}
 	for _, y := range []string{"sandbox:\n  caches: {}\n", "sandbox:\n  caches: { max_size: 1GiB }\n", "sandbox:\n  caches: { enabled: false }\n"} {
-		if c2, err := loadCfg(t, base+y); err != nil || c2.CachesOn() {
+		if c2, err := loadCfg(t, cacheBase+y); err != nil || c2.CachesOn() {
 			t.Fatalf("%q: on=%v err=%v", y, c2 != nil && c2.CachesOn(), err)
 		}
 	}
-	if c2, err := loadCfg(t, base+"sandbox:\n  caches: { enabled: true }\n"); err != nil || !c2.CachesOn() {
+	if c2, err := loadCfg(t, cacheBase+"sandbox:\n  caches: { enabled: true }\n"); err != nil || !c2.CachesOn() {
 		t.Fatalf("enabled: true is off (%v)", err)
 	}
-	if !c.AutodetectOn() || !c.RepoFileOn() || !c.WarmOnMissOn() || c.MaxSizeBytes() != DefaultCachesMax ||
-		c.WarmEveryDur() != 0 || c.WarmTimeoutDur() != 20*time.Minute {
+	var c *SandboxCaches
+	if c.MaxSizeBytes() != DefaultCachesMax || c.LearnMinSize() != DefaultCacheLearnMinSize || c.LearnMinRuns() != DefaultCacheLearnMinRuns {
 		t.Fatal("defaults")
 	}
 	if cfg.CachesDir() != filepath.Join(filepath.Dir(cfg.Store.StateFile), "repo-caches") {
 		t.Fatalf("dir %s", cfg.CachesDir())
 	}
-	cfg, err = loadCfg(t, base+`sandbox:
+	cfg, err = loadCfg(t, cacheBase+`sandbox:
   caches:
+    enabled: true
     dir: /var/cache/conductor-caches
     max_size: 2GiB
+    learn: { min_size: 10MiB, min_runs: 3 }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c = cfg.Sandbox.Caches
+	if c.MaxSizeBytes() != 2<<30 || c.LearnMinSize() != 10<<20 || c.LearnMinRuns() != 3 || cfg.CachesDir() != "/var/cache/conductor-caches" {
+		t.Fatalf("knobs not read: %+v", c)
+	}
+	if sb, _ := loadCfg(t, cacheBase+"sandbox:\n  agents: off\n  caches: { enabled: true }\n"); sb.CachesOn() {
+		t.Fatal("caches without the sandbox")
+	}
+	if n, _ := loadCfg(t, cacheBase+"sandbox:\n  caches: { max_size: \"off\" }\n"); n.Sandbox.Caches.MaxSizeBytes() != 0 {
+		t.Fatal("max_size off")
+	}
+}
+
+func TestSandboxCachesRefused(t *testing.T) {
+	for name, body := range map[string]string{
+		"relative dir":  "sandbox:\n  caches: { dir: rel }\n",
+		"bad size":      "sandbox:\n  caches: { max_size: lots }\n",
+		"bad min_size":  "sandbox:\n  caches: { learn: { min_size: big } }\n",
+		"zero min_size": "sandbox:\n  caches: { learn: { min_size: \"0\" } }\n",
+		"neg min_runs":  "sandbox:\n  caches: { learn: { min_runs: -1 } }\n",
+		"learn typo":    "sandbox:\n  caches: { learn: { min_run: 2 } }\n",
+		"no key":        "workflows:\n  w:\n    steps: [{ id: a, type: agent, prompt: x, cache: { restore_from: [x] } }]\n",
+		"blank key":     "workflows:\n  w:\n    steps: [{ id: a, type: agent, prompt: x, cache: { key: \"  \" } }]\n",
+		"bad template":  "workflows:\n  w:\n    steps: [{ id: a, type: agent, prompt: x, cache: { key: \"{{.repo\" } }]\n",
+		"bad fallback":  "workflows:\n  w:\n    cache: { key: k, restore_from: [\"{{\"] }\n    steps: [{ id: a, type: agent, prompt: x }]\n",
+		"too many":      "workflows:\n  w:\n    steps: [{ id: a, type: agent, prompt: x, cache: { key: k, restore_from: [a, b, c, d, e, f, g, h, i] } }]\n",
+		"unknown field": "workflows:\n  w:\n    steps: [{ id: a, type: agent, prompt: x, cache: { key: k, paths: [~/.cache] } }]\n",
+	} {
+		cfg, err := loadCfg(t, cacheBase+body)
+		if err == nil {
+			err = cfg.Validate()
+		}
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+		} else if !strings.Contains(err.Error(), "cache") && !strings.Contains(err.Error(), "min_run") && !strings.Contains(err.Error(), "paths") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// A step's cache: and a workflow's default load. A removed teach: still
+// loads — ignored, with a warning naming where — never a failure (the
+// fleet auto-updates onto configs written for the old schema).
+func TestStepCacheLoads(t *testing.T) {
+	cfg, err := loadCfg(t, cacheBase+`workflows:
+  warm:
+    cache: { key: " {{.repo}} " }
+    steps: [{ id: w, type: agent, prompt: warm }]
+  teacher:
+    steps: [{ id: t, type: agent, prompt: t, cache: { key: "{{.repo}}", teach: true } }]
+  fix:
+    steps:
+      - id: f
+        type: agent
+        prompt: fix
+        cache: { key: "pr-{{.repo}}-{{.pr}}", restore_from: ["{{.repo}}"] }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wf := cfg.Workflows["warm"]; wf.Cache == nil || CacheTemplate(wf.Cache.Key) != "{{.repo}}" {
+		t.Fatalf("workflow cache %+v", wf.Cache)
+	}
+	if s := cfg.Workflows["fix"].Steps[0]; s.Cache == nil || len(s.Cache.RestoreFrom) != 1 {
+		t.Fatalf("step cache %+v", s.Cache)
+	}
+	if s := cfg.Workflows["teacher"].Steps[0]; s.Cache == nil || CacheTemplate(s.Cache.Key) != "{{.repo}}" {
+		t.Fatalf("a step with the removed teach: %+v", s.Cache)
+	}
+	w := cfg.RemovedFieldWarnings()
+	if len(w) != 1 || w[0] != "workflows.teacher.steps[0].cache.teach: "+TeachRemoved {
+		t.Fatalf("warnings %q", w)
+	}
+}
+
+// A pack manifest's step with the removed teach: is warned about too.
+func TestManifestTeachWarns(t *testing.T) {
+	w := manifestFolderWarnings([]byte("workflows:\n  warm:\n    steps:\n      - id: w\n        cache: { key: \"{{.repo}}\", teach: true }\n"), "p")
+	if len(w) != 1 || w[0] != "pack p: workflows.warm.steps[0].cache.teach: "+TeachRemoved {
+		t.Fatalf("warnings %q", w)
+	}
+}
+
+// The recipe caches' fields are gone: a config that still has them loads,
+// they are ignored, and each gets a one-line warning — never a crash (the
+// fleet auto-updates onto configs written for the old schema).
+func TestRemovedCacheFieldsWarnNotCrash(t *testing.T) {
+	cfg, err := loadCfg(t, cacheBase+`sandbox:
+  caches:
+    enabled: true
     autodetect: false
     repo_file: false
     warm_on_miss: false
@@ -48,65 +143,51 @@ func TestSandboxCachesDefaultsAndKnobs(t *testing.T) {
         detect: [deno.lock]
         key: 'deno-{{hash "deno.lock"}}'
         paths: [~/.cache/deno]
-        env: { DENO_DIR: "{{home}}/.cache/deno" }
-        warm: deno cache main.ts
     defaults:
       - recipe: go
     repos:
       acme/web:
         - recipe: npm
           warm: npm ci --ignore-scripts
-        - name: go
-          disabled: true
 `)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c = cfg.Sandbox.Caches
-	if c.AutodetectOn() || c.RepoFileOn() || c.WarmOnMissOn() || c.MaxSizeBytes() != 2<<30 || c.WarmEveryDur() != 12*time.Hour ||
-		c.WarmTimeoutDur() != 5*time.Minute || cfg.CachesDir() != "/var/cache/conductor-caches" || len(c.Repos["acme/web"]) != 2 {
-		t.Fatalf("knobs not read: %+v", c)
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
 	}
-	off, _ := loadCfg(t, base+"sandbox:\n  caches: { enabled: false }\n")
-	if off.CachesOn() {
-		t.Fatal("enabled: false")
+	if !cfg.CachesOn() {
+		t.Fatal("the removed fields turned caches off")
 	}
-	if sb, _ := loadCfg(t, base+"sandbox:\n  agents: off\n"); sb.CachesOn() {
-		t.Fatal("caches without the sandbox")
+	got := strings.Join(cfg.RemovedFieldWarnings(), "\n")
+	for _, k := range removedCacheFields {
+		if !strings.Contains(got, "sandbox.caches."+k+": "+CachesRemoved) {
+			t.Errorf("no warning for %s:\n%s", k, got)
+		}
 	}
-	if n, _ := loadCfg(t, base+"sandbox:\n  caches: { max_size: \"off\" }\n"); n.Sandbox.Caches.MaxSizeBytes() != 0 {
-		t.Fatal("max_size off")
+	if n := strings.Count(got, "\n") + 1; n != len(removedCacheFields) {
+		t.Errorf("%d warnings, want %d:\n%s", n, len(removedCacheFields), got)
+	}
+	if w, _ := loadCfg(t, cacheBase+"sandbox:\n  caches: { enabled: true }\n"); len(w.RemovedFieldWarnings()) != 0 {
+		t.Fatalf("warnings from a current config: %v", w.RemovedFieldWarnings())
 	}
 }
 
-func TestSandboxCachesRefused(t *testing.T) {
-	const base = "connectors:\n  gh: { use: github, token: x, repos: [\"acme/*\"] }\nsandbox:\n  caches:\n"
-	for name, body := range map[string]string{
-		"relative dir":     "    dir: rel\n",
-		"bad size":         "    max_size: lots\n",
-		"bad duration":     "    warm_every: soon\n",
-		"too frequent":     "    warm_every: 1m\n",
-		"secret path":      "    defaults: [{ name: x, key: k, paths: [~/.ssh] }]\n",
-		"outside path":     "    defaults: [{ name: x, key: k, paths: [/etc] }]\n",
-		"escaping path":    "    defaults: [{ name: x, key: k, paths: [../x] }]\n",
-		"proxy env":        "    defaults: [{ name: x, key: k, paths: [~/x], env: { HTTPS_PROXY: http://evil } }]\n",
-		"no key":           "    defaults: [{ name: x, paths: [~/x] }]\n",
-		"unknown recipe":   "    defaults: [{ recipe: nope }]\n",
-		"twice":            "    defaults: [{ recipe: go }, { recipe: go }]\n",
-		"bad repo":         "    repos: { \"not a repo\": [{ recipe: go }] }\n",
-		"recipe no detect": "    recipes: [{ name: x, key: k, paths: [~/x] }]\n",
-		"recipe ref":       "    recipes: [{ name: x, recipe: go, detect: [a] }]\n",
-		"unknown field":    "    defaults: [{ recipe: go, colour: blue }]\n",
-	} {
-		cfg, err := loadCfg(t, base+body)
-		if err == nil {
-			err = cfg.Validate()
-		}
-		if err == nil {
-			t.Errorf("%s: accepted", name)
-		} else if !strings.Contains(err.Error(), "cache") && !strings.Contains(err.Error(), "colour") {
-			t.Errorf("%s: %v", name, err)
-		}
+// The shipped example loads whole, with no warning.
+func TestConfigExampleLoads(t *testing.T) {
+	raw, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"GH_WEBHOOK_SECRET", "GH_SMEE_URL", "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "CW_SECRET", "CONDUCTOR_INVOKE_TOKEN", "CONDUCTOR_INVOKE_HMAC"} {
+		t.Setenv(v, "x")
+	}
+	cfg, err := loadCfg(t, string(raw))
+	if err != nil {
+		t.Fatalf("config.example.yaml: %v", err)
+	}
+	if w := cfg.RemovedFieldWarnings(); len(w) != 0 {
+		t.Fatalf("config.example.yaml warns: %v", w)
 	}
 }
 
@@ -114,7 +195,7 @@ func TestSandboxCachesRefused(t *testing.T) {
 // paths: a config whose fs: grant shows it (or a directory above it) to
 // launches — cached or not — is refused.
 func TestCachesDirUnderAnFSGrantIsRefused(t *testing.T) {
-	const base = "connectors:\n  gh: { use: github, token: x, repos: [\"acme/*\"] }\nsandbox:\n  caches: { enabled: true, dir: /srv/caches/store }\n"
+	const base = cacheBase + "sandbox:\n  caches: { enabled: true, dir: /srv/caches/store }\n"
 	if _, err := loadCfg(t, base+"engines: { e: { isolation: { mode: namespace, fs: [/srv/media] } } }\n"); err != nil {
 		t.Fatalf("an unrelated fs: grant: %v", err)
 	}
@@ -124,7 +205,6 @@ func TestCachesDirUnderAnFSGrantIsRefused(t *testing.T) {
 			t.Errorf("fs: [%s]: %v", grant, err)
 		}
 	}
-	// Caches off: nothing to protect.
 	off := strings.Replace(base, "enabled: true", "enabled: false", 1)
 	if _, err := loadCfg(t, off+"engines: { e: { isolation: { mode: namespace, fs: [/srv/caches] } } }\n"); err != nil {
 		t.Fatalf("caches off: %v", err)

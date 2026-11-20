@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,20 +19,17 @@ import (
 // HTTPS instead: the launch's git rewrites the SSH forms of the declared
 // hosts to https:// (GitRewriteEnv), the launch's proxy inspects those
 // hosts, and on each git fetch request — smart HTTP's upload-pack, read
-// only — for a repository in scope it adds the credential itself. The
-// credential never enters the sandbox: what an agent can do with it is
-// fetch the repositories in scope, through this proxy, while its launch
-// lasts. A push (receive-pack) to a declared host is refused outright —
-// conductor pushes, never the agent.
+// only — it adds the credential itself, for any repository on the host.
+//
+// The credential is added only to a repository's smart-HTTP fetch paths
+// (gitFetchShape), never to any other request on the host, and the proxy
+// never shows it to the sandbox. A push (receive-pack) to a declared host
+// is refused outright — conductor pushes, never the agent.
 
 // GitAuth is one host's git fetch credential for a launch.
 type GitAuth struct {
 	// Host is an exact host name, with :port when not 443.
 	Host string `json:"host"`
-	// Repos are the repositories on Host the credential is used for
-	// ("/org/repo"), each matched exactly — case-insensitively, as forges
-	// name them.
-	Repos []string `json:"repos"`
 	// For is the repository the launch's work is for (owner/name): what a
 	// refusal names.
 	For string `json:"for,omitempty"`
@@ -40,12 +37,6 @@ type GitAuth struct {
 	Username string `json:"username"`
 	// Secret is the credential. Never serialized.
 	Secret string `json:"-"`
-	// Learn: a default-branch cache warm's credential, used for a fetch
-	// of any repository on Host (Repos unused); OnFetch hears each one the
-	// forge served. Never serialized: no launch but a warm in this process
-	// holds one.
-	Learn   bool              `json:"-"`
-	OnFetch func(repo string) `json:"-"`
 }
 
 // Validate refuses a GitAuth the proxy cannot apply exactly.
@@ -62,14 +53,6 @@ func (g GitAuth) Validate() error {
 	}
 	if g.Secret == "" || strings.ContainsAny(g.Secret, "\r\n") {
 		return fmt.Errorf("sandbox: git credential for %s: no usable secret", g.Host)
-	}
-	if len(g.Repos) == 0 && !g.Learn {
-		return fmt.Errorf("sandbox: git credential for %s: no repositories in scope", g.Host)
-	}
-	for _, r := range g.Repos {
-		if !strings.HasPrefix(r, "/") || r == "/" || path.Clean(r) != r {
-			return fmt.Errorf("sandbox: git credential for %s: repository %q is not a clean path below /", g.Host, r)
-		}
 	}
 	return nil
 }
@@ -160,8 +143,44 @@ func gitOp(r *http.Request, p string) (op, repo string) {
 	default:
 		return gitNone, ""
 	}
-	return op, strings.TrimSuffix(repo, ".git")
+	repo = strings.TrimSuffix(repo, ".git")
+	if op == gitFetch && !gitFetchShape(r, p, repo) {
+		// Not a repository's smart-HTTP fetch: no credential, and the
+		// host's path allowlist decides it like any other request.
+		return gitNone, ""
+	}
+	return op, repo
 }
+
+// gitReserved are first path segments a forge serves something other than
+// a repository under (GitHub Enterprise Server's REST API is /api/v3 on the
+// git host itself): never a fetch the credential is added to.
+var gitReserved = map[string]bool{"api": true, "login": true, "graphql": true, "site": true, "_": true, "-": true}
+
+// gitFetchShape reports a fetch request that is exactly a repository's:
+// /owner/name[.git]/info/refs?service=git-upload-pack (GET or HEAD) or
+// /owner/name[.git]/git-upload-pack (POST, no query) — two plain segments,
+// the first not reserved. Anything else (an API route that merely ends in
+// git-upload-pack, an extra query parameter, a nested path) carries no
+// credential.
+func gitFetchShape(r *http.Request, p, repo string) bool {
+	segs := strings.Split(strings.TrimPrefix(repo, "/"), "/")
+	if len(segs) != 2 || !strings.HasPrefix(repo, "/") || gitReserved[strings.ToLower(segs[0])] {
+		return false
+	}
+	for _, s := range segs {
+		if !gitNameRE.MatchString(s) {
+			return false
+		}
+	}
+	if strings.HasSuffix(p, "/info/refs") {
+		return r.URL.RawQuery == "service=git-upload-pack"
+	}
+	return r.URL.RawQuery == ""
+}
+
+// gitNameRE is an owner or repository name as forges allow them.
+var gitNameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
 
 // gitAuths are the session's credentials for target (host:port).
 func (s *Session) gitAuths(target string) []GitAuth {
@@ -178,39 +197,15 @@ func (s *Session) gitAuths(target string) []GitAuth {
 }
 
 // gitCredentialFor is the credential a fetch of repo on target carries
-// (nil: none covers it). Repository paths compare case-insensitively.
+// (nil: none for target).
 func (s *Session) gitCredentialFor(target, repo string) *GitAuth {
 	if repo == "" {
 		return nil
 	}
-	lr := strings.ToLower(repo)
-	for _, g := range s.gitAuths(target) {
-		if g.Learn {
-			return &g
-		}
-		for _, r := range g.Repos {
-			if strings.ToLower(r) == lr {
-				return &g
-			}
-		}
+	if g := s.gitAuths(target); len(g) > 0 {
+		return &g[0]
 	}
 	return nil
-}
-
-// gitWithheld is why a fetch of repo on target carries no credential.
-func (s *Session) gitWithheld(target, repo string) string {
-	of := ""
-	for _, g := range s.gitAuths(target) {
-		if g.For != "" {
-			of = g.For
-			break
-		}
-	}
-	if of == "" {
-		return "git credential withheld for " + strings.TrimPrefix(repo, "/") + ": not in this launch's scope"
-	}
-	return "git credential withheld for " + strings.TrimPrefix(repo, "/") + ": not a learned dependency of " + of +
-		"; it is learned when the default branch's cache warm fetches it"
 }
 
 // basicAuth is the Authorization header value for g.

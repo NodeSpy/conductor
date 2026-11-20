@@ -59,9 +59,11 @@ type Entry struct {
 	// work an unpushed step end would lose.
 	StartHead string
 	// Repo is the repository (owner/name) the workspace is a checkout of,
-	// when conductor checked it out for a target it trusts ("" otherwise):
-	// the repository whose dependency caches the launch is shown.
+	// when conductor checked it out for a target it trusts ("" otherwise).
 	Repo string
+	// Cache is the dispatch's step cache (nil: none): what a launch here is
+	// shown, and the key its run publishes to.
+	Cache *CacheBinding
 	// Scope is what the dispatch's own scopes (its isolation: blocks, a
 	// pack grant) change of the sandbox; nil: nothing.
 	Scope *Scope
@@ -108,24 +110,25 @@ type Registry struct {
 // sandbox shape and its push target, but no token is minted for it, so it
 // has no conductor verbs until its dispatch registers it again.
 type persisted struct {
-	Workspace   string      `json:"workspace"`
-	Identity    string      `json:"identity"`
-	Tool        string      `json:"tool,omitempty"`
-	Model       string      `json:"model,omitempty"`
-	Dispatch    string      `json:"dispatch,omitempty"`
-	Home        string      `json:"home,omitempty"`
-	Egress      []string    `json:"egress,omitempty"`
-	ReadOnly    []string    `json:"read_only,omitempty"`
-	ReadWrite   []string    `json:"read_write,omitempty"`
-	Hide        []string    `json:"hide,omitempty"`
-	Env         []string    `json:"env,omitempty"`
-	Push        *PushTarget `json:"push,omitempty"`
-	StartHead   string      `json:"start_head,omitempty"`
-	Repo        string      `json:"repo,omitempty"`
-	Scope       *Scope      `json:"scope,omitempty"`
-	GitCommon   string      `json:"git_common,omitempty"`
-	GitWorktree string      `json:"git_worktree,omitempty"`
-	Session     *SessionRef `json:"session,omitempty"`
+	Workspace   string        `json:"workspace"`
+	Identity    string        `json:"identity"`
+	Tool        string        `json:"tool,omitempty"`
+	Model       string        `json:"model,omitempty"`
+	Dispatch    string        `json:"dispatch,omitempty"`
+	Home        string        `json:"home,omitempty"`
+	Egress      []string      `json:"egress,omitempty"`
+	ReadOnly    []string      `json:"read_only,omitempty"`
+	ReadWrite   []string      `json:"read_write,omitempty"`
+	Hide        []string      `json:"hide,omitempty"`
+	Env         []string      `json:"env,omitempty"`
+	Push        *PushTarget   `json:"push,omitempty"`
+	StartHead   string        `json:"start_head,omitempty"`
+	Repo        string        `json:"repo,omitempty"`
+	Cache       *CacheBinding `json:"cache,omitempty"`
+	Scope       *Scope        `json:"scope,omitempty"`
+	GitCommon   string        `json:"git_common,omitempty"`
+	GitWorktree string        `json:"git_worktree,omitempty"`
+	Session     *SessionRef   `json:"session,omitempty"`
 }
 
 // PersistTo loads the registry saved at path (entries whose workspace is
@@ -157,7 +160,7 @@ func (r *Registry) PersistTo(path string) error {
 			continue
 		}
 		ent := Entry{Workspace: ws, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch, Home: e.Home,
-			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Repo: e.Repo, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Repo: e.Repo, Cache: e.Cache, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
 			Session: loadedSession(e.Session, e.Dispatch)}
 		// The file is conductor's, but what it names is bound read-write
 		// into the next launch: re-checked as a fresh layout would be, and
@@ -194,7 +197,7 @@ func (r *Registry) saveLocked() {
 	list := make([]persisted, 0, len(r.byWS))
 	for _, e := range r.byWS {
 		list = append(list, persisted{Workspace: e.Workspace, Identity: e.Identity, Tool: e.Tool, Model: e.Model, Dispatch: e.Dispatch, Home: e.Home,
-			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Repo: e.Repo, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
+			Egress: e.Egress, ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env, Push: e.Push, StartHead: e.StartHead, Repo: e.Repo, Cache: e.Cache, Scope: e.Scope, GitCommon: e.GitCommon, GitWorktree: e.GitWorktree,
 			Session: savedSession(e.Session)})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Workspace < list[j].Workspace })

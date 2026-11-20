@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/NodeSpy/conductor/internal/repocache"
+	"github.com/NodeSpy/conductor/internal/keycache"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
@@ -66,12 +66,12 @@ type Resolver struct {
 	// Rescope recomputes a workspace's recorded scope from the live config
 	// (nil: the recorded scope as is).
 	Rescope func(*Scope) *Scope
-	// Caches restores a repository's dependency caches into a launch
-	// (internal/repocache): overlays, environment, and the directory the
-	// agent must not see. Called for a workspace conductor checked out of
-	// a repository it trusts (Entry.Repo); it logs its own failures, and a
-	// launch whose caches fail runs without them. nil: no caches.
-	Caches func(repocache.Request) repocache.Grant
+	// Caches restores a step's cache into a launch (internal/keycache):
+	// overlays, and the launch's ledger lock beside the store the agent
+	// must not see. Called for a workspace whose dispatch's step names a
+	// cache (Entry.Cache); it logs its own failures, and a launch whose
+	// cache fails runs without it. nil: no caches.
+	Caches func(keycache.Request) keycache.Grant
 	// GitAuth is the git fetch credentials (sandbox.GitAuth) for a launch
 	// in a workspace conductor checked out of repo, a repository it trusts
 	// (Entry.Repo) — a `conductor sandbox exec` launch's, whose proxy is
@@ -310,9 +310,9 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string, ro
 	// to the identity's kept cache dir: a cache path through it is then not
 	// restored). A cache that does not check out is dropped, logged: the
 	// launch runs without it, never fails for it.
-	if r.Caches != nil && e.Repo != "" {
-		g := r.Caches(repocache.Request{Repo: e.Repo, Workspace: canon(e.Workspace), Home: home, Run: firstNonEmpty(e.Dispatch, e.Identity)})
-		p.Env = append(append([]string(nil), p.Env...), g.Env...)
+	if r.Caches != nil && e.Cache != nil && e.Dispatch != "" {
+		g := r.Caches(keycache.Request{Workspace: canon(e.Workspace), Home: home, Run: firstNonEmpty(e.Dispatch, e.Identity),
+			Dispatch: e.Dispatch, Key: e.Cache.Key, RestoreFrom: e.Cache.RestoreFrom})
 		p.CacheLock = g.Lock
 		for _, c := range g.Mounts {
 			if err := p.validateCache(c); err != nil {
@@ -347,29 +347,4 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
-}
-
-// WarmPolicy is the policy a repository cache's warm step runs under
-// (internal/repocache): an agent's sandbox — the operator's egress, its
-// allowance, limits and detection — with no conductor socket or token, no
-// model endpoint and no login, in workspace (a checkout of the default
-// branch) with home (fresh). What it leaves at the cache's paths is what
-// conductor publishes, so it is never given more than an agent.
-func (r *Resolver) WarmPolicy(workspace, home, identity string) Policy {
-	p := Policy{
-		Identity: identity, Workspace: workspace, Home: home,
-		Egress: append([]string(nil), r.Egress...),
-		Detect: r.Detect, Limits: r.Limits, Run: identity,
-		ModelCredential: CredLoginCopy,
-		EgressAnyBytes:  r.EgressAnyBytes, EgressIdle: r.EgressIdle,
-		EgressUpload: r.EgressUpload, EgressDownload: r.EgressDownload,
-	}
-	// sandbox.inspect applies to every launch: a warm's https:// path
-	// entries, and the upstream CA a git fetch host (a private forge) is
-	// verified with.
-	for _, h := range r.Inspect {
-		p.Inspect = appendInspect(p.Inspect, h)
-	}
-	applyScope(&p, r.Allow, nil)
-	return p
 }
