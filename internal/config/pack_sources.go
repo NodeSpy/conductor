@@ -141,7 +141,8 @@ func sourceEvent(ref string) string {
 // config error naming the fix — guessing would silently point a pack's
 // triggers at the wrong account.
 func (st *packInstantiation) resolveSourceConnector(ns, srcType string, inst PackInstance, byType map[string][]string) (string, error) {
-	if pick, ok := inst.Connectors[srcType]; ok && pick != "" {
+	if b, ok := inst.Connectors[srcType]; ok && b.One != "" {
+		pick := b.One
 		if _, exists := st.cfg.ConnectorsMap[pick]; !exists {
 			return "", fmt.Errorf("pack %q: connectors: { %s: %s } names no connector in this config (defined: %s)",
 				ns, srcType, pick, st.cfg.connectorNames())

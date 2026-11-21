@@ -12,7 +12,7 @@ import (
 // universalKeys are addressable in every trigger scope regardless of event.
 var universalKeys = []string{
 	"repo", "owner", "name", "pr", "issue", "number", "head", "base", "url",
-	"kind", "title", "labels", "steps",
+	"kind", "title", "labels", "steps", "connector",
 }
 
 // credentialKeys are the template keys connectors declare for the
@@ -351,6 +351,20 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w, id string, 
 		stepScope.add("item")
 		stepScope.add("index")
 	}
+	if step.Over {
+		if stepScope == sc {
+			stepScope = sc.clone()
+		}
+		stepScope.add("member")
+	}
+	if err := checkMemberStep(w, step); err != nil {
+		return err
+	}
+	if step.Member != "" {
+		if err := checkRefs(w+" member", step.Member, stepScope); err != nil {
+			return err
+		}
+	}
 	if step.If != "" {
 		if err := checkCondRefs(w+" if", step.If, stepScope); err != nil {
 			return err
@@ -428,6 +442,15 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w, id string, 
 		in, ok := reg.Get(connName)
 		if !ok {
 			return fmt.Errorf("%s: `uses: %s` — unknown connector %q", w, step.Uses, connName)
+		}
+		for _, m := range step.Members {
+			mi, ok := reg.Get(m)
+			if !ok {
+				return fmt.Errorf("%s: members: unknown connector %q", w, m)
+			}
+			if mi.Decl != nil && in.Decl != nil && mi.Decl.Type != in.Decl.Type {
+				return fmt.Errorf("%s: members: %q is a %s connector and %q a %s one — every member must be one type", w, m, mi.Decl.Type, connName, in.Decl.Type)
+			}
 		}
 		vd, ok := in.Decl.FlowVerb(verb)
 		if !ok {
@@ -807,6 +830,15 @@ func stepOutputSchema(reg *connector.Registry, step config.Step) connector.Schem
 	if step.Uses == "" {
 		return nil
 	}
+	if step.Over {
+		// One call per member: the collected outputs, not the verb's own.
+		return connector.Schema{
+			"items":     connector.Field{Type: connector.TList},
+			"count":     connector.Field{Type: connector.TInt},
+			"by_member": connector.Field{Type: connector.TMap},
+			"stubbed":   connector.Field{Type: connector.TBool},
+		}
+	}
 	connName, verb, _ := strings.Cut(step.Uses, ".")
 	in, ok := reg.Get(connName)
 	if !ok {
@@ -1042,4 +1074,43 @@ func stripTemplateActions(s string) string {
 
 func isIdentStart(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// checkMemberStep validates the over:/member:/members: trio on one step:
+// they belong to a verb step whose `uses:` names one of its members, and
+// every member must be a connector of that same type (so the one verb and
+// its options, validated against uses:, hold for each).
+func checkMemberStep(w string, step config.Step) error {
+	if !step.Over && step.Member == "" && len(step.Members) == 0 {
+		return nil
+	}
+	if step.Uses == "" {
+		return fmt.Errorf("%s: over:/member:/members: need a verb step (uses:)", w)
+	}
+	if step.Over && step.Member != "" {
+		return fmt.Errorf("%s: over: and member: are exclusive", w)
+	}
+	if step.Over && step.ForEach != "" {
+		return fmt.Errorf("%s: over: already fans out over the members; drop for_each", w)
+	}
+	if len(step.Members) == 0 {
+		return fmt.Errorf("%s: over:/member: need a connector list — members: [..], or a pack list socket", w)
+	}
+	if !step.Over && step.Member == "" {
+		return fmt.Errorf("%s: members: is set but the step says neither over: true nor member:", w)
+	}
+	conn, _, _ := strings.Cut(step.Uses, ".")
+	if !slicesContains(step.Members, conn) {
+		return fmt.Errorf("%s: uses: %s names %q, which is not in members (%s)", w, step.Uses, conn, strings.Join(step.Members, ", "))
+	}
+	return nil
+}
+
+func slicesContains(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
 }

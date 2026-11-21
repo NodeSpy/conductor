@@ -96,10 +96,10 @@ type PackInstance struct {
 	// Connectors/Stores/Secrets/Handoffs are BIND-ONLY (environment): they map
 	// a pack `requires:` name to one of the consumer's own globals. A pack never
 	// ships these; the consumer always owns them.
-	Connectors map[string]string `yaml:"connectors,omitempty"`
-	Stores     map[string]string `yaml:"stores,omitempty"`
-	Secrets    map[string]string `yaml:"secrets,omitempty"`
-	Handoffs   map[string]string `yaml:"handoffs,omitempty"`
+	Connectors map[string]ConnBinding `yaml:"connectors,omitempty"`
+	Stores     map[string]string      `yaml:"stores,omitempty"`
+	Secrets    map[string]string      `yaml:"secrets,omitempty"`
+	Handoffs   map[string]string      `yaml:"handoffs,omitempty"`
 
 	// Policy deep-merges onto the pack's bundled policy (behavior override).
 	Policy map[string]any `yaml:"policy,omitempty"`

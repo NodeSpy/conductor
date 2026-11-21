@@ -36,11 +36,16 @@ type refRewriter struct {
 	// decide is the instance's `decide:` block, lowered onto every decide
 	// step the pack ships (observe store, escalation kill-switch).
 	decide *PackDecide
+	// listSockets are the manifest's declared list (many: true) sockets;
+	// listErrs collects misuse of them found while rewriting steps.
+	listSockets map[string]bool
+	listErrs    []string
 }
 
 func newRefRewriter(ns string, man *PackManifest, inst PackInstance, env envBindings) *refRewriter {
-	rw := &refRewriter{ns: ns, env: env, fleets: map[string]bool{}, decide: inst.Decide}
+	rw := &refRewriter{ns: ns, env: env, fleets: map[string]bool{}, decide: inst.Decide, listSockets: map[string]bool{}}
 	if man != nil {
+		rw.listSockets = listSocketNames(man.Pack.Requires.Connectors)
 		for name := range man.Models {
 			rw.fleets[name] = true
 		}
@@ -368,6 +373,11 @@ func (rw *refRewriter) rewriteStep(s *Step) {
 	rw.rewriteStepModel(s)
 	rw.rebindStep(s)
 	s.Workflow = rw.resolveWorkflowRef(s.Workflow)
+	if len(s.Members) > 0 {
+		rw.listErrs = append(rw.listErrs, fmt.Sprintf("step %q sets members: — a pack reaches a connector list only through a list socket (requires.connectors.<n>.many) the consumer binds", s.ID))
+	} else if err := rw.bindListStep(s); err != nil {
+		rw.listErrs = append(rw.listErrs, fmt.Sprintf("step %q: %v", s.ID, err))
+	}
 	s.Uses = rw.rebindVerb(s.Uses)
 	rw.rewriteWorkflowRefOptions(s.Uses, s.Options)
 	if s.Handoff != "" {

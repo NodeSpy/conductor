@@ -406,6 +406,11 @@ stays there; the run reports on its new start head from then on.
 ## Control flow
 
 - `if:` — skip the step when false (skips are audited).
+- `over: true` / `member: <name>` — run a verb step against each connector in
+  its `members:` list, or one of them, picked at run time and checked against
+  the list. Pack list sockets fill `members:` for you ([[Packs]], "List
+  sockets"). `{{.connector}}` in any trigger scope is the connector instance
+  the event came from.
 - `for_each: <ref>` — run the step once per element; `{{.item}}` and
   `{{.index}}` in scope; `parallel: true` fans iterations out concurrently
   (bounded). At runtime the collected outputs land under `{{.<id>.items}}` /

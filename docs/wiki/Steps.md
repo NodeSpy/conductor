@@ -298,6 +298,7 @@ to execute belongs here.
 | `id` | The step's slot: how outputs are addressed (`steps.<id>.outputs.*`), what a step reference points at, and — absent a `name:` — the structural half of its identity. |
 | `use` | The code ENGINE this step runs on (`run:` is the same key). See [[Code-Steps]]. |
 | `command` | The argv for `use: cli` and for `type: command` — a list of words, or one string split on whitespace (quotes honored, no shell). |
+| `over` / `member` / `members` | A verb step over a connector list: `over: true` runs once per member (`{{.member}}`), `member:` picks one by template, checked against `members:`. A pack list socket fills `members:`. See [[Packs]], "List sockets". |
 | `call` | A workflow to run as this step, with `with:` for its inputs. See [[Workflows]]. |
 | `sleep` | Pause the flow for a positive duration — a [helper step](#helper-steps), above. |
 | `log` | Render a message into the run log — a helper step. |

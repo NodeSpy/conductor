@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -999,11 +1000,118 @@ func (r *Runner) execStepWithFlow(ctx context.Context, t core.Trigger, step conf
 		return r.execBranches(ctx, t, step, id, slot, data, shadow)
 	}
 
+	if step.Over {
+		return r.execOverMembers(ctx, t, step, id, slot, data, shadow)
+	}
+
 	if step.ForEach != "" {
 		return r.execForEach(ctx, t, step, id, slot, data, shadow)
 	}
 
+	if step.Member != "" {
+		picked, err := pickMember(step, data)
+		if err != nil {
+			return nil, err
+		}
+		return r.execWithRetry(ctx, t, picked, id, slot, data, shadow)
+	}
+
 	return r.execWithRetry(ctx, t, step, id, slot, data, shadow)
+}
+
+// pickMember renders a step's `member:` and points its `uses:` at that
+// connector — only if it is one of the step's Members. The list is closed:
+// it was bound by the operator (a pack's list socket, or their own
+// `members:`), so a template that renders anything else fails the step
+// rather than reaching an arbitrary connector.
+func pickMember(step config.Step, data map[string]any) (config.Step, error) {
+	name, err := render(step.Member, data)
+	if err != nil {
+		return step, fmt.Errorf("member: %w", err)
+	}
+	name = strings.TrimSpace(name)
+	if !slices.Contains(step.Members, name) {
+		return step, fmt.Errorf("member: %q is not one of this step's connectors (%s)", name, strings.Join(step.Members, ", "))
+	}
+	_, verb, _ := strings.Cut(step.Uses, ".")
+	step.Uses = name + "." + verb
+	step.Member = ""
+	return step, nil
+}
+
+// execOverMembers runs a verb step once per member of its connector list,
+// {{.member}} in scope. Iterations are keyed by MEMBER NAME, not position,
+// so adding a connector to the list never re-identifies the others. With
+// parallel: true they run concurrently (bounded); continue_on_error applies
+// to the step as a whole. Outputs: { items (in member order), count,
+// by_member: { <member>: outputs } }.
+func (r *Runner) execOverMembers(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, error) {
+	members := step.Members
+	if len(members) == 0 {
+		return nil, fmt.Errorf("over: this step has no connector list (members)")
+	}
+	if r.Cfg != nil {
+		if max := r.Cfg.FlowMaxFanOut(); len(members) > max {
+			return nil, fmt.Errorf("over fans out to %d connectors, over policy.max_fan_out %d", len(members), max)
+		}
+	}
+	_, verb, _ := strings.Cut(step.Uses, ".")
+	results := make([]any, len(members))
+	byMember := make(map[string]any, len(members))
+	var mu sync.Mutex
+	var firstErr error
+	prog := progressFrom(ctx)
+	prog.fanOut(id, r.stepLabel(step, data), len(members))
+	defer prog.fanEnd(id)
+	runOne := func(i int) error {
+		m := members[i]
+		local := cloneData(data)
+		local["member"] = m
+		one := step
+		one.Over = false
+		one.Uses = m + "." + verb
+		out, err := r.execWithRetry(ctx, t, one, fmt.Sprintf("%s[%s]", id, m), fmt.Sprintf("%s[%s]", slot, m), local, shadow)
+		prog.fanItemDone(id)
+		if err != nil {
+			return fmt.Errorf("%s: %w", m, err)
+		}
+		mu.Lock()
+		results[i] = out
+		byMember[m] = out
+		mu.Unlock()
+		return nil
+	}
+	if step.Parallel != nil && step.Parallel.Concurrent {
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 8)
+		for i := range members {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				if err := runOne(i); err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
+				}
+			}(i)
+		}
+		wg.Wait()
+	} else {
+		for i := range members {
+			if err := runOne(i); err != nil {
+				firstErr = err
+				break
+			}
+		}
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return map[string]any{"items": results, "count": len(members), "by_member": byMember}, nil
 }
 
 // execBranches runs `parallel: [[…],[…]]` branch lists concurrently.
@@ -1088,7 +1196,16 @@ func (r *Runner) execForEach(ctx context.Context, t core.Trigger, step config.St
 		local := cloneData(data)
 		local["item"] = items[i]
 		local["index"] = i
-		out, err := r.execWithRetry(ctx, t, step, fmt.Sprintf("%s[%d]", id, i), fmt.Sprintf("%s[%d]", slot, i), local, shadow)
+		one := step
+		if step.Member != "" {
+			picked, perr := pickMember(step, local)
+			if perr != nil {
+				prog.fanItemDone(id)
+				return fmt.Errorf("item %d: %w", i, perr)
+			}
+			one = picked
+		}
+		out, err := r.execWithRetry(ctx, t, one, fmt.Sprintf("%s[%d]", id, i), fmt.Sprintf("%s[%d]", slot, i), local, shadow)
 		prog.fanItemDone(id)
 		if err != nil {
 			return fmt.Errorf("item %d: %w", i, err)
