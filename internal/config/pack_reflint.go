@@ -28,6 +28,9 @@ func (st *packInstantiation) lintPackRefs(ns string, man *PackManifest, env envB
 			names[k] = true
 		}
 	}
+	for k := range env.many {
+		names[k] = true
+	}
 
 	vaultSeen := false
 	codeHits := map[string]bool{} // name -> seen (dedup the warning)

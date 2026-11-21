@@ -126,7 +126,8 @@ type instantiateReq struct {
 	// connForward/storeForward/secretForward/handoffForward carry a parent's
 	// concrete environment bindings so a dependency's required environment can be
 	// forwarded down (the concrete binding only ever happens at the top).
-	connForward, storeForward, secretForward, handoffForward map[string]string
+	connForward                                 map[string]ConnBinding
+	storeForward, secretForward, handoffForward map[string]string
 }
 
 func (st *packInstantiation) instantiate(req instantiateReq) error {
@@ -219,7 +220,8 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// Resolve environment bindings for this node. A binding may be given
 	// concretely on this instance, or forwarded from a parent.
 	env := envBindings{
-		conn:    mergeStrMaps(req.connForward, req.inst.Connectors),
+		conn:    mergeStrMaps(singleBindings(req.connForward), singleBindings(req.inst.Connectors)),
+		many:    mergeListMaps(listBindings(req.connForward), listBindings(req.inst.Connectors)),
 		store:   mergeStrMaps(req.storeForward, req.inst.Stores),
 		secret:  mergeStrMaps(req.secretForward, req.inst.Secrets),
 		handoff: mergeStrMaps(req.handoffForward, req.inst.Handoffs),
@@ -229,6 +231,11 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// the consumer has exactly one of. Runs BEFORE validateRequires so the
 	// auto-bound entry is validated like an explicit one.
 	if err := st.autoBindConnectors(ns, man.Pack.Requires.Connectors, env); err != nil {
+		return err
+	}
+	// List sockets (many: true): validated, and moved out of env.conn so the
+	// 1:1 machinery below never sees them.
+	if err := st.resolveListSockets(ns, man.Pack.Requires.Connectors, env); err != nil {
 		return err
 	}
 
@@ -423,6 +430,12 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		func(i int) string { return triggerOverlayName(man.Triggers[i]) }); err != nil {
 		return err
 	}
+	// A trigger on a list socket fires for any member: expand it to one
+	// source per member BEFORE source binding, which then sees plain
+	// instance names and leaves them alone.
+	for i := range man.Triggers {
+		rw.expandListSources(&man.Triggers[i])
+	}
 	if err := st.bindPackSources(ns, man, req.inst, man.Triggers); err != nil {
 		return err
 	}
@@ -559,6 +572,9 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// Runs LAST, after every section (checks, workflows, triggers and their
 	// steps/hooks) has been through the rewriter, so rw.wfRefs is the complete
 	// set of workflow references this pack made. ----
+	if len(rw.listErrs) > 0 {
+		return fmt.Errorf("pack %q: %s", ns, strings.Join(rw.listErrs, "; "))
+	}
 	if problems := rw.checkOwnedWorkflowRefs(man); len(problems) > 0 {
 		return fmt.Errorf("pack %q: %s", ns, strings.Join(problems, "; "))
 	}
@@ -613,6 +629,9 @@ func (st *packInstantiation) validateRequires(ns string, man *PackManifest, inst
 		if IsPackSelfBindingConnector(name) {
 			continue
 		}
+		if req.Connectors[name].Many {
+			continue // resolveListSockets validated it
+		}
 		bound, ok := env.conn[name]
 		if !ok {
 			// A declared connector is REQUIRED by default: the pack says
@@ -635,6 +654,9 @@ func (st *packInstantiation) validateRequires(ns string, man *PackManifest, inst
 	// This GATES, it never fetches: a connector is bind-only, so the only
 	// question is whether what the consumer already has is compatible.
 	if err := st.checkConnectorVersions(ns, req.Connectors, env); err != nil {
+		return err
+	}
+	if err := st.checkListVersions(ns, req.Connectors, env); err != nil {
 		return err
 	}
 	// Stores.
@@ -865,6 +887,8 @@ func loadPackManifest(nodeDir string) (*PackManifest, error) {
 
 type envBindings struct {
 	conn, store, secret, handoff map[string]string
+	// many holds each list socket's bound members (requires.connectors.<n>.many).
+	many map[string][]string
 }
 
 func (c *Config) setFleet(name string, f FleetSpec) {

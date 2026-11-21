@@ -592,6 +592,57 @@ vendored tree + lockfile and tells you which `packs:` block to delete.
 Typical flow: edit `packs:` → `conductor init` → `conductor pack plan` → arm a
 trigger → `conductor validate`.
 
+
+### List sockets: several connectors of one type
+
+A socket holds one connector. When a pack works over a variable number of
+connectors in one role (every calendar that should receive busy blocks, every
+repo host to sweep), declare a **list socket**:
+
+```yaml
+requires:
+  connectors:
+    sources: { many: true, type: google-calendar, version: ">=1.2.0" }
+    targets: { many: true, min: 2, type: google-calendar }
+```
+
+The consumer binds it to a list, naming each connector:
+
+```yaml
+packs:
+  busy:
+    connectors:
+      sources: [gcal-gmail, gcal-tap]
+      targets: [gcal-work, gcal-side]
+```
+
+- **Never auto-bound.** Which connectors a pack may reach is yours to name,
+  so a list socket is never filled for you, even with one candidate. A plain
+  name (`sources: gcal-gmail`) is a list of one.
+- **Checked at load.** Every member must be a connector in your config, of the
+  socket's `type:` (or, without one, all of one type), listed once, at least
+  `min:` of them (default 1). Each member is version-gated like a single
+  connector.
+- **There is no pattern form.** A glob would let a connector added later join
+  the pack's reach without anyone naming it.
+
+**In steps, say which member.** A step that names a list socket must use one of:
+
+| step | does |
+|---|---|
+| `uses: targets.events, over: true` | runs the verb once per member, `{{.member}}` in scope; outputs `{ items, count, by_member: {<member>: …} }`. `parallel: true` runs members concurrently (bounded). |
+| `uses: targets.event_create, member: "{{.item.target}}"` | runs against ONE member, chosen by the template (often inside a `for_each`). The rendered name is checked at run time against the bound list: anything else fails the step. |
+
+A step naming a list socket without either is a load error, so one name never
+silently means "one connector" in one step and "each" in another. A pack may
+not write `members:` itself; the list is always the consumer's.
+
+**Triggers fire from every member.** `on: sources.changed` becomes one source
+per member, and `{{.connector}}` names the member that fired.
+
+The same fields work in your own config without a pack: give a verb step
+`members: [a, b]` (one connector type) with `over: true` or `member:`.
+
 ### The catalog
 
 `conductor pack search` lists the packs a registry offers (the official one

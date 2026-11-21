@@ -1260,7 +1260,22 @@ type Step struct {
 	IdleTimeout Duration `yaml:"idle_timeout,omitempty"`
 
 	// control flow
-	ForEach         string          `yaml:"for_each,omitempty"` // template resolving to a list; {{.item}} in scope
+	ForEach string `yaml:"for_each,omitempty"` // template resolving to a list; {{.item}} in scope
+	// Over runs a verb step once per member of its connector list (Members):
+	// a pack step naming a list socket (`requires.connectors.<n>.many`),
+	// or your own step with an explicit `members:`. {{.member}} is the
+	// member's connector name; outputs are { items, count, by_member }.
+	Over bool `yaml:"over,omitempty"`
+	// Member picks ONE member of Members for this call (templated). The
+	// rendered name is checked at run time: anything outside Members fails
+	// the step, so a template cannot reach a connector the list does not hold.
+	Member string `yaml:"member,omitempty"`
+	// Members is the closed set of connectors `over:`/`member:` may address.
+	// The pack loader fills it from a list socket's binding (a pack author
+	// may not write it); in your own config you may. `uses:` names one of
+	// them — every member must be the same connector type, so validation of
+	// the verb and its options against that one holds for all.
+	Members         []string        `yaml:"members,omitempty"`
 	Parallel        *ParallelSpec   `yaml:"parallel,omitempty"`
 	Retry           *RetrySpec      `yaml:"retry,omitempty"`
 	Timeout         Duration        `yaml:"timeout,omitempty"`

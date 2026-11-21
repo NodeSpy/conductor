@@ -40,6 +40,19 @@ import (
 type ConnectorReq struct {
 	Version  string
 	Required bool
+	// Many marks a LIST socket: the consumer binds it to one or more of their
+	// connector instances (`connectors: { targets: [a, b] }`), and the pack
+	// reaches a member only through a step that says which — `over: true`
+	// (once per member) or `member:` (one, checked at run time against the
+	// bound list). A list socket is never auto-bound: which connectors a pack
+	// may write to is the consumer's to name.
+	Many bool
+	// Min is the fewest members a list socket accepts (default 1).
+	Min int
+	// Type is the connector type every member must be (e.g.
+	// google-calendar). Optional; when unset the members must still all be
+	// one type, since the pack addresses them through one verb set.
+	Type string
 }
 
 // ConnectorReqs is the `requires.connectors` value: connector name → its
@@ -103,6 +116,9 @@ func (c *ConnectorReqs) UnmarshalYAML(n *yaml.Node) error {
 				var blk struct {
 					Version  string `yaml:"version,omitempty"`
 					Required *bool  `yaml:"required,omitempty"`
+					Many     bool   `yaml:"many,omitempty"`
+					Min      int    `yaml:"min,omitempty"`
+					Type     string `yaml:"type,omitempty"`
 				}
 				if err := strictNodeDecode(v, &blk); err != nil {
 					return fmt.Errorf("requires.connectors.%s: %w", name, err)
@@ -113,6 +129,13 @@ func (c *ConnectorReqs) UnmarshalYAML(n *yaml.Node) error {
 				if blk.Required != nil {
 					req.Required = *blk.Required
 				}
+				if blk.Min < 0 {
+					return fmt.Errorf("requires.connectors.%s: min must not be negative", name)
+				}
+				if blk.Min > 0 && !blk.Many {
+					return fmt.Errorf("requires.connectors.%s: min applies to a list socket — add many: true", name)
+				}
+				req.Many, req.Min, req.Type = blk.Many, blk.Min, strings.TrimSpace(blk.Type)
 			default:
 				return fmt.Errorf("requires.connectors.%s: want a version constraint or a { version, required } block", name)
 			}
@@ -133,7 +156,7 @@ func (c ConnectorReqs) MarshalYAML() (any, error) {
 	names := c.Names()
 	plain := true
 	for _, n := range names {
-		if c[n].Version != AnyVersion || !c[n].Required {
+		if c[n].Version != AnyVersion || !c[n].Required || c[n].Many || c[n].Type != "" {
 			plain = false
 			break
 		}
@@ -143,11 +166,24 @@ func (c ConnectorReqs) MarshalYAML() (any, error) {
 	}
 	out := make(map[string]any, len(c))
 	for n, r := range c {
-		if r.Required {
+		if r.Required && !r.Many && r.Type == "" {
 			out[n] = r.Version
 			continue
 		}
-		out[n] = map[string]any{"version": r.Version, "required": false}
+		blk := map[string]any{"version": r.Version}
+		if !r.Required {
+			blk["required"] = false
+		}
+		if r.Many {
+			blk["many"] = true
+			if r.Min > 0 {
+				blk["min"] = r.Min
+			}
+		}
+		if r.Type != "" {
+			blk["type"] = r.Type
+		}
+		out[n] = blk
 	}
 	return out, nil
 }
@@ -353,6 +389,9 @@ func (st *packInstantiation) autoBindConnectors(ns string, reqs ConnectorReqs, e
 		}
 		if IsPackSelfBindingConnector(name) {
 			continue // binds to itself; there is nothing to choose
+		}
+		if reqs[name].Many {
+			continue // a list is never auto-bound: the consumer names its members
 		}
 		var candidates []string
 		for instName, ref := range st.cfg.ConnectorsMap {

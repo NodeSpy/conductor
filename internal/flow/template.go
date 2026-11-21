@@ -553,6 +553,11 @@ func baseData(t core.Trigger, secrets map[string]string) map[string]any {
 			d[k] = v
 		}
 	}
+	// The connector instance the event came from — which member fired, for a
+	// trigger on several connectors. An event's own `connector` field wins.
+	if _, ok := d["connector"]; !ok && t.Instance != "" {
+		d["connector"] = t.Instance
+	}
 	if len(secrets) > 0 {
 		sm := make(map[string]any, len(secrets))
 		for k, v := range secrets {
