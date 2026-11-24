@@ -411,7 +411,17 @@ packs:
 > ```
 >
 > An unbound optional connector is a load notice, and the parts of the pack
-> that use it go dormant.
+> that use it go dormant:
+>
+> - a trigger that listens to it (`on: pagerduty.incident`);
+> - a workflow whose steps or hooks call it (`uses: pagerduty.page`), and
+>   every workflow that calls such a workflow;
+> - a trigger whose steps call it, directly or through one of those
+>   workflows.
+>
+> Dormant workflows and triggers are left out of the config entirely, and one
+> notice names them. Arming a dormant trigger is not an error; it starts
+> running once you bind the connector.
 
 ### Binding is automatic when there is only one candidate
 
