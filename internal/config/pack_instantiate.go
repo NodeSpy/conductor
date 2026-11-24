@@ -244,6 +244,10 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		return err
 	}
 
+	// Workflows and triggers that CALL an optional connector left unbound go
+	// dormant: they are not instantiated, and the rest of the pack loads.
+	dormantTriggers := st.dropDormantByOptional(ns, man, env)
+
 	// Build the rename/bind maps that namespace pack-local names and rebind
 	// environment references.
 	rw := newRefRewriter(ns, man, req.inst, env)
@@ -562,7 +566,7 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		if armName == ArmAll {
 			continue // names every trigger by construction
 		}
-		if !hasTrigger(man.Triggers, armName) {
+		if !hasTrigger(man.Triggers, armName) && !dormantTriggers[armName] {
 			return fmt.Errorf("pack %q: triggers: %q names no trigger shipped by this pack (shipped: %s)", ns, armName, triggerNames(man.Triggers))
 		}
 	}
@@ -1266,4 +1270,52 @@ func cloneTriggerSpec(t TriggerSpec) (TriggerSpec, error) {
 	}
 	out.PackInstance, out.Bot = t.PackInstance, t.Bot // not YAML: provenance
 	return out, nil
+}
+
+// dropDormantByOptional removes from the manifest every workflow and trigger
+// that calls an optional connector this instance left unbound, warns once
+// naming them, and returns the dropped triggers' names (arming one is not an
+// error: it is the consumer saying "run this once I bind the connector").
+func (st *packInstantiation) dropDormantByOptional(ns string, man *PackManifest, env envBindings) map[string]bool {
+	unbound := unboundOptional(man.Pack.Requires.Connectors, env)
+	wfs, trs := dormantByOptional(man, unbound)
+	dropped := map[string]bool{}
+	if len(wfs) == 0 && len(trs) == 0 {
+		return dropped
+	}
+	byConn := map[string][]string{}
+	for name, conns := range wfs {
+		delete(man.Workflows, name)
+		for _, c := range conns {
+			byConn[c] = append(byConn[c], "workflow "+name)
+		}
+	}
+	kept := man.Triggers[:0:0]
+	for _, t := range man.Triggers {
+		conns, dormant := trs[t.Name]
+		if !dormant {
+			kept = append(kept, t)
+			continue
+		}
+		dropped[t.Name] = true
+		if addr, handle := SplitInstanceName(t.Name); handle != "" {
+			dropped[addr] = true
+		}
+		for _, c := range conns {
+			byConn[c] = append(byConn[c], "trigger "+t.Name)
+		}
+	}
+	man.Triggers = kept
+	conns := make([]string, 0, len(byConn))
+	for c := range byConn {
+		conns = append(conns, c)
+	}
+	sort.Strings(conns)
+	for _, c := range conns {
+		parts := byConn[c]
+		sort.Strings(parts)
+		st.warnf("pack %q: optional connector %q is not bound, so what uses it is DORMANT: %s. Bind it with connectors: { %s: <your-connector> } to turn it on.",
+			ns, c, strings.Join(parts, ", "), c)
+	}
+	return dropped
 }
